@@ -8,17 +8,23 @@
 
 ## Current best
 
-**None yet.** This is the bootstrap round. Every first-round PR includes a vanilla baseline run (default Transolver + default hyperparameters, `--wandb_name <student>/<exp>-baseline`) to anchor the `val_avg/mae_surf_p` for this research track.
+**PR #3 — frieren: L1 loss with surf_weight=10**
+- **val_avg/mae_surf_p: 103.036** (lower is better)
+- W&B run: `w2jsabii` (`frieren/loss-l1-sw10`)
+- Best epoch: 14 (run timeout-bounded at 30 min; still improving)
+- test_avg/mae_surf_p: NaN (pre-existing +Inf bug in `test_geom_camber_cruise/000020.pt` — see [scoring bug issue](https://github.com/morganmcg1/tandemfoil2/issues))
 
-Reproduce command:
+### Per-split val surface-p MAE (best checkpoint)
 
-```bash
-cd target && python train.py \
-    --agent <student> \
-    --wandb_name "<student>/<experiment>-baseline"
-```
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 133.194 |
+| val_geom_camber_rc | 117.209 |
+| val_geom_camber_cruise | 70.109 |
+| val_re_rand | 91.634 |
+| **val_avg** | **103.036** |
 
-Default config:
+### Current default config (post-merge)
 
 | Param | Value |
 |-------|-------|
@@ -34,14 +40,35 @@ Default config:
 | mlp_ratio | 2 |
 | optimizer | AdamW |
 | scheduler | CosineAnnealingLR(T_max=epochs) |
-| loss | MSE (vol + surf_weight × surf) in normalized space |
+| **loss** | **L1 (abs, vol + surf_weight × surf) in normalized space** |
+
+Reproduce:
+```bash
+cd target && python train.py \
+    --agent <student> \
+    --loss_type l1 \
+    --surf_weight 10 \
+    --wandb_name "<student>/<experiment>"
+```
+
+---
+
+## Baseline history
+
+### 2026-04-23 21:40 — PR #3: frieren Huber/L1 loss reformulation
+
+- **val_avg/mae_surf_p: 103.036** (previous: no baseline on this track)
+- W&B run: `w2jsabii` (group: `frieren/loss-reformulation-v2`)
+- Change: L1 loss in normalized space instead of MSE. surf_weight=10 unchanged.
+- Delta: −21.9% vs MSE baseline at same run budget (131.985).
+- Wins uniformly: −27.7% in_dist, −29.8% camber_rc, −39.5% camber_cruise, −32.5% re_rand.
+
+---
 
 ## Primary metric
 
 - **Validation (checkpoint selection):** `val_avg/mae_surf_p` — equal-weight mean across four validation splits. Lower is better.
-- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits at the end of each run.
-
-Per-split diagnostics are logged for every run — see `program.md`.
+- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits. Currently blocked by +Inf bug in `test_geom_camber_cruise/000020.pt`.
 
 ## Update protocol
 
