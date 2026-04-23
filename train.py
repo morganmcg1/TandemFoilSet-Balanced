@@ -402,6 +402,8 @@ class Config:
     epochs: int = 50
     loss_type: str = "mse"  # mse | l1 | huber — applied in normalized space
     huber_delta: float = 1.0  # Huber transition point (normalized units)
+    amp: bool = False  # bf16 autocast on training forward/backward (val/test stay fp32)
+    grad_accum: int = 1  # accumulate gradients over N micro-batches before optimizer step
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -413,6 +415,8 @@ class Config:
 cfg = sp.parse(Config)
 if cfg.loss_type not in LOSS_TYPES:
     raise ValueError(f"--loss_type must be one of {LOSS_TYPES}, got {cfg.loss_type!r}")
+if cfg.grad_accum < 1:
+    raise ValueError(f"--grad_accum must be >=1, got {cfg.grad_accum}")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -421,6 +425,8 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 print(f"Loss: {cfg.loss_type}"
       + (f" (delta={cfg.huber_delta})" if cfg.loss_type == "huber" else "")
       + f"  surf_weight={cfg.surf_weight}")
+print(f"AMP (bf16): {cfg.amp}  |  grad_accum: {cfg.grad_accum}  "
+      f"|  effective batch: {cfg.batch_size * cfg.grad_accum}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -459,7 +465,11 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Cosine schedule spans the full set of *optimizer* steps (grad-accum aware)
+# so LR reaches its floor exactly at the configured epoch budget regardless of
+# accumulation depth. Stepped once per optimizer step, not per epoch.
+total_optimizer_steps = max(1, (len(train_loader) * MAX_EPOCHS) // cfg.grad_accum)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_optimizer_steps)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -473,6 +483,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "effective_batch_size": cfg.batch_size * cfg.grad_accum,
+        "total_optimizer_steps": total_optimizer_steps,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -483,6 +495,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lr_step", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -503,9 +516,14 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
-    n_batches = 0
+    n_micro = n_opt = 0
+    # Accumulators for one optimizer step (average across micro-batches at log time).
+    accum_vol = accum_surf = accum_loss = 0.0
+    optimizer.zero_grad(set_to_none=True)
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for micro_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -513,28 +531,51 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        per_elem = elementwise_loss(pred, y_norm, cfg.loss_type, cfg.huber_delta)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        # bf16 autocast wraps forward + loss; backward inherits the cast through
+        # the autograd graph. No GradScaler needed for bf16 (full fp32 exponent
+        # range, so no underflow — GradScaler is only required for fp16).
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.amp):
+            pred = model({"x": x_norm})["preds"]
+            per_elem = elementwise_loss(pred, y_norm, cfg.loss_type, cfg.huber_delta)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
-        epoch_vol += vol_loss.item()
-        epoch_surf += surf_loss.item()
-        n_batches += 1
+        # Scale by 1/grad_accum so accumulated gradient == mean-of-minibatches
+        # gradient (what you'd get at effective batch = batch_size * grad_accum).
+        (loss / cfg.grad_accum).backward()
 
-    scheduler.step()
-    epoch_vol /= max(n_batches, 1)
-    epoch_surf /= max(n_batches, 1)
+        accum_vol += vol_loss.item()
+        accum_surf += surf_loss.item()
+        accum_loss += loss.item()
+        n_micro += 1
+
+        is_last_micro = (micro_idx + 1) == len(train_loader)
+        if ((micro_idx + 1) % cfg.grad_accum == 0) or is_last_micro:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            scheduler.step()
+            global_step += 1
+            n_opt += 1
+
+            denom = cfg.grad_accum if not is_last_micro else ((micro_idx % cfg.grad_accum) + 1)
+            wandb.log({
+                "train/loss": accum_loss / denom,
+                "train/vol_loss_step": accum_vol / denom,
+                "train/surf_loss_step": accum_surf / denom,
+                "lr_step": scheduler.get_last_lr()[0],
+                "global_step": global_step,
+            })
+            epoch_vol += accum_vol
+            epoch_surf += accum_surf
+            accum_vol = accum_surf = accum_loss = 0.0
+
+    epoch_vol /= max(n_micro, 1)
+    epoch_surf /= max(n_micro, 1)
 
     # --- Validate ---
     model.eval()
