@@ -1,9 +1,18 @@
-# tandemfoil2
+# TandemFoilSet Balanced
 
 **[TandemFoilSet Paper](https://openreview.net/forum?id=4Z0P4Nbosn)**
 
 This repo contains a custom TandemFoilSet dataset split as well as a base set of files that the [senpai](https://github.com/wandb/senpai) autoresearch harness can use as input to try and improve performance.
 
+## Splits
+The goal behind the split is to be able to say:
+- The model is good/bad at generalizing to unseen geometries (train on low + high camber, val/test on moderate)
+- The same model works across different Reynolds numbers for both race car and cruise (train on low, med, high Re, val/test on low, moderate, high) - random split across all Re numbers
+- General single-foil random split as a sanity check
+
+See **[SPLITS.MD](https://github.com/morganmcg1/tandemfoil2/blob/main/data/SPLITS.md)** for a full description of the dataset splits
+
+## Targets
 
 CFD surrogate research target: predict the full velocity `(Ux, Uy)` and pressure `p` field on tandem-airfoil meshes from TandemFoilSet.
 
