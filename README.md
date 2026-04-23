@@ -1,5 +1,10 @@
 # tandemfoil2
 
+**[TandemFoilSet Paper](https://openreview.net/forum?id=4Z0P4Nbosn)**
+
+This repo contains a custom TandemFoilSet dataset split as well as a base set of files that the [senpai](https://github.com/wandb/senpai) autoresearch harness can use as input to try and improve performance.
+
+
 CFD surrogate research target: predict the full velocity `(Ux, Uy)` and pressure `p` field on tandem-airfoil meshes from TandemFoilSet.
 
 ## Layout
