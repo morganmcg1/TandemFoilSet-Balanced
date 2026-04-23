@@ -9,6 +9,36 @@
 | Test (4 x 200) | 800 | 29.6% |
 | **Total** | **2699** | **100%** |
 
+## Split Allocation
+
+The goal behind the split is to be able to say:
+- The model is good/bad at generalizing to unseen geometries (train on low + high camber, val/test on moderate)
+- The same model works across different Reynolds numbers for both race car and cruise (train on low, med, high Re, val/test on low, moderate, high) - random split across all Re numbers
+- General single-foil random split as a sanity check
+
+
+| File | Train | Val | Test | Holdout Reason |
+|------|-------|-----|------|----------------|
+| 0 (single) | 599 (67%) | 100 (11%) | 200 (22%) | Random holdout for in-dist sanity check |
+| 1 (rc P1) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
+| 2 (rc P2) | 0 (0%) | 100 (33%) | 200 (67%) | **Full holdout**: unseen front foil camber M=6-8 |
+| 3 (rc P3) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
+| 4 (cruise P1) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
+| 5 (cruise P2) | 0 (0%) | 100 (33%) | 200 (67%) | **Full holdout**: unseen front foil camber M=2-4 |
+| 6 (cruise P3) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
+
+
+## Val/Test Splits
+
+All splits are **balanced**: 100 val + 200 test each. Scored as equal-weight average Surface MAE.
+
+| Split | Source | Selection | What It Tests |
+|-------|--------|-----------|---------------|
+| val_single_in_dist | File 0 (random) | Random holdout | Sanity check: can the model reproduce single-foil flow it has seen? |
+| val_geom_camber_rc | File 2 (full holdout) | File-level | Camber interpolation: train sees M=2-5 and M=9, must predict M=6-8 |
+| val_geom_camber_cruise | File 5 (full holdout) | File-level | Camber interpolation: train sees M=0-2 and M=4-6, must predict M=2-4 |
+| val_re_rand | Files 1+3+4+6 (stratified) | Every 4th sample sorted by Re | Cross-regime generalization: random sample across full Re range from all tandem training domains |
+
 ## Design Rationale
 
 **Why full file holdouts for geometry?**
@@ -38,31 +68,3 @@ Simplicity. AoA extremes (deep stall, near-zero loading) are interesting but add
 - raceCar uses inverted foils with ground effect (slip wall BC). Cruise has freestream on all boundaries.
 - File 3 contains 150 NACA 9xxx + 150 non-NACA specials. Non-NACA foils return (0,0,0) from parse_naca().
 
-## Split Allocation
-
-The goal behind th split is to be able to say:
-- The model is good/bad at generalizing to unseen geometries (train on low + high camber, val/test on moderate)
-- The same model works across different Reynolds numbers for both race car and cruise (train on low, med, high Re, val/test on low, moderate, high) - random split across all Re numbers
-- General single-foil random split as a sanity check
-
-
-| File | Train | Val | Test | Holdout Reason |
-|------|-------|-----|------|----------------|
-| 0 (single) | 599 (67%) | 100 (11%) | 200 (22%) | Random holdout for in-dist sanity check |
-| 1 (rc P1) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
-| 2 (rc P2) | 0 (0%) | 100 (33%) | 200 (67%) | **Full holdout**: unseen front foil camber M=6-8 |
-| 3 (rc P3) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
-| 4 (cruise P1) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
-| 5 (cruise P2) | 0 (0%) | 100 (33%) | 200 (67%) | **Full holdout**: unseen front foil camber M=2-4 |
-| 6 (cruise P3) | ~225 (75%) | ~25 (8%) | ~50 (17%) | Partial: stratified Re holdout for val_re_rand |
-
-## Val/Test Splits
-
-All splits are **balanced**: 100 val + 200 test each. Scored as equal-weight average Surface MAE.
-
-| Split | Source | Selection | What It Tests |
-|-------|--------|-----------|---------------|
-| val_single_in_dist | File 0 (random) | Random holdout | Sanity check: can the model reproduce single-foil flow it has seen? |
-| val_geom_camber_rc | File 2 (full holdout) | File-level | Camber interpolation: train sees M=2-5 and M=9, must predict M=6-8 |
-| val_geom_camber_cruise | File 5 (full holdout) | File-level | Camber interpolation: train sees M=0-2 and M=4-6, must predict M=2-4 |
-| val_re_rand | Files 1+3+4+6 (stratified) | Every 4th sample sorted by Re | Cross-regime generalization: random sample across full Re range from all tandem training domains |
