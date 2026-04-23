@@ -632,6 +632,9 @@ def save_model_artifact(
         "epochs_configured": cfg.epochs,
         "y_norm": cfg.y_norm,
         "asinh_scale": cfg.asinh_scale,
+        "loss_type": cfg.loss_type,
+        "huber_delta": cfg.huber_delta,
+        "seed": cfg.seed,
     }
 
     description = (
@@ -698,6 +701,7 @@ class Config:
     # original physical space after inversion.
     y_norm: str = "zscore"  # zscore | asinh | robust | per_domain
     asinh_scale: float = 500.0  # asinh scale s for the p channel (orig units)
+    seed: int | None = None  # torch RNG seed; None => non-deterministic (default)
 
 
 def _run_training() -> None:
@@ -708,6 +712,8 @@ def _run_training() -> None:
     cfg = sp.parse(Config)
     if cfg.loss_type not in LOSS_TYPES:
         raise ValueError(f"--loss_type must be one of {LOSS_TYPES}, got {cfg.loss_type!r}")
+    if cfg.seed is not None:
+        torch.manual_seed(cfg.seed)
     MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
     MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -715,7 +721,8 @@ def _run_training() -> None:
     print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
     print(f"Loss: {cfg.loss_type}"
           + (f" (delta={cfg.huber_delta})" if cfg.loss_type == "huber" else "")
-          + f"  surf_weight={cfg.surf_weight}")
+          + f"  surf_weight={cfg.surf_weight}"
+          + (f"  seed={cfg.seed}" if cfg.seed is not None else ""))
 
     train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
     stats = {k: v.to(device) for k, v in stats.items()}
