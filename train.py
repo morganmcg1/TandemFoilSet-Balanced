@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import time
@@ -386,6 +387,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    ema_decay: float = 0.0  # Polyak averaging decay; 0.0 disables EMA
+    grad_clip: float = 0.0  # max L2 norm for clip_grad_norm_; 0.0 disables
 
 
 cfg = sp.parse(Config)
@@ -430,6 +433,19 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+use_ema = cfg.ema_decay > 0.0
+if use_ema:
+    ema_model = copy.deepcopy(model).eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(f"EMA enabled (decay={cfg.ema_decay}) — eval/checkpoint use EMA weights")
+else:
+    ema_model = None
+eval_model = ema_model if use_ema else model
+
+if cfg.grad_clip > 0:
+    print(f"Gradient clipping enabled (max_norm={cfg.grad_clip})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -476,6 +492,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_clipped = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -497,9 +515,32 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+
+        step_log = {"train/loss": loss.item()}
+        if cfg.grad_clip > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
+            gn = grad_norm.item() if torch.is_tensor(grad_norm) else float(grad_norm)
+            step_log["train/grad_norm"] = gn
+            step_log["train/grad_clipped"] = float(gn > cfg.grad_clip)
+            epoch_grad_norm_sum += gn
+            epoch_grad_clipped += int(gn > cfg.grad_clip)
+
         optimizer.step()
+
+        if use_ema:
+            with torch.no_grad():
+                d = cfg.ema_decay
+                for ep, p in zip(ema_model.parameters(), model.parameters()):
+                    ep.data.mul_(d).add_(p.data, alpha=1.0 - d)
+                for (_, eb), (_, b) in zip(ema_model.named_buffers(), model.named_buffers()):
+                    if eb.is_floating_point():
+                        eb.data.mul_(d).add_(b.data, alpha=1.0 - d)
+                    else:
+                        eb.data.copy_(b.data)
+
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        step_log["global_step"] = global_step
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -511,8 +552,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    # eval_model is `ema_model` when EMA enabled (already in eval mode), else `model`.
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -528,6 +570,9 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.grad_clip > 0 and n_batches > 0:
+        log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
+        log_metrics["train/grad_clip_rate"] = epoch_grad_clipped / n_batches
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -543,7 +588,8 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights when EMA is enabled, else the raw model weights.
+        torch.save(eval_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
