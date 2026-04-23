@@ -184,3 +184,37 @@
 ### Decision: **PARTIAL MERGE**
 - **Scoring.py fix cherry-picked** to advisor branch (commit 7d71abd). GH issue #10 closed. Unblocks test metrics for every in-flight and future PR.
 - **asinh hypothesis SENT BACK** for rebase on L1 + 3-seed compound sweep. Couldn't clean-merge the combined PR due to train.py conflict with L1. If thorfinn's L1+asinh replicates ≤103.036, the new baseline will shift.
+
+---
+
+## 2026-04-23 22:35 — PR #7: alphonse: Fourier PE on (x,z) + FiLM conditioning on log(Re) (round 1 / MSE)
+
+- **Branch:** `alphonse/fourier-pe-film-re`
+- **W&B group:** `alphonse/fourier-pe-film-re`
+- **Hypothesis:** Random Fourier features let coordinate-based MLPs resolve high-frequency boundary-layer structure; FiLM on log(Re) gives per-channel scale modulation to handle 10× per-Re y_std variance.
+
+### Results
+
+| Rank | Config (fourier/σ/m + FiLM) | n_params | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|------|-----------------------------|----------|---------------------|---------------------|---------|
+| 1 | fixed/1.0/10 | 667K | **116.73** | **105.67** | `2kxauwgi` |
+| 2 | learn/1.0/16 + FiLM | 704K | 116.92 | 107.47 | — |
+| 3 | fixed/1.0/10 + FiLM | 701K | 121.05 | 109.05 | — |
+| 4 | learn/1.0/16 | 671K | 124.41 | 114.85 | — |
+| 5 | baseline (no Fourier, no FiLM) | 662K | 128.87 | 115.39 | — |
+| 6 | fixed/10.0/10 | 667K | 129.31 | 120.13 | — |
+| 7 | fixed/10.0/10 + FiLM | 701K | 134.54 | 121.67 | — |
+| 8 | FiLM only | 696K | 136.09 | 120.89 | — |
+
+### Analysis
+
+- **Winner (Fourier σ=1, m=10, no FiLM) beats in-PR MSE baseline by −9.4% val, −8.4% test** — wins uniformly on most splits, with strongest gains on `val_single_in_dist` (−27%) and `val_geom_camber_rc` (−20%). Classic Tancik-2020 signal: Fourier features let the MLP represent sharper spatial gradients, which matters most at boundary layers and OOD geometries.
+- **vs track L1 baseline (103.036): +13% worse.** Not standalone-mergeable, but Fourier is orthogonal to loss shape → expected to compound with L1.
+- **σ=10 is too high-frequency** — 129.31 (ties MSE baseline). Optimum is around σ ≤ 1, suggesting fine sweep in σ ∈ {0.5, 1, 2}.
+- **FiLM alone HURTS** (+7.2 pts vs baseline). Single-point injection (after preprocess only) is underpowered — doesn't reach the deep layers where Re conditioning matters.
+- **Fourier + FiLM: inconsistent.** Helps on learnable-m16 (−7.5), hurts on fixed-σ=1 (+4.3). FiLM behaves like regularization that helps overparameterized paths, hurts lean ones. Real test needs **per-block FiLM** (canonical Perez-et-al placement).
+- Student independently implemented the scoring fix (same as commit 7d71abd) and provided finite test metrics.
+
+### Decision: **SENT BACK** to alphonse. Rebase on L1, fine σ sweep {0.5, 1, 2}, m sweep {10, 20, 40}, and proper per-block FiLM (separate MLP per block, γ/β modulation after LayerNorm). Drop σ=10.
+
+**Note:** Student flagged that `test_geom_camber_cruise/000020.pt` has Infs upstream of scoring; filed as low-priority data-quality issue #13 for the human team.

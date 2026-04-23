@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-23 22:20
+- **Updated:** 2026-04-23 22:35
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -27,7 +27,7 @@
 | fern     | WIP | #12: Throughput — AMP + grad accumulation | `fern/throughput-amp` |
 | tanjiro  | WIP (r2) | #5: Channel-weighting on top of L1 | `tanjiro/channel-weighted-loss` |
 | nezuko   | WIP (r2) | #6: 3-seed LR replay + WSD on L1 | `nezuko/lr-schedule-sweep` |
-| alphonse | WIP | #7: Fourier PE + FiLM on log(Re) | `alphonse/fourier-pe-film-re` |
+| alphonse | WIP (r2) | #7: Fourier σ-sweep + per-block FiLM on L1 | `alphonse/fourier-pe-film-re` |
 | edward   | WIP (r2) | #8: EMA + grad-clip (wider threshold sweep) on L1 | `edward/ema-gradclip-stability` |
 | thorfinn | WIP (r2) | #9: asinh-on-L1 compound + 3-seed replay | `thorfinn/pressure-target-reparam` |
 
@@ -51,16 +51,11 @@ None.
 | #12 | fern     | AMP (bf16) + grad accumulation to unlock 25–35 epochs vs current 14 | Beat 103.036 |
 | #5  | tanjiro  | Channel-weight fine sweep (psurf ∈ {14,17,20,23,27}) + vol_weight on L1 | Beat 103.036 |
 | #6  | nezuko   | 3-seed replay of LR floor + WSD scheduler on L1 | Beat 103.036 |
+| #7  | alphonse | Fourier σ-sweep {0.5,1,2} × m-sweep {10,20,40} + per-block FiLM on L1 | Beat 103.036 |
 | #8  | edward   | EMA + wider grad-clip sweep ({1,5,10,50}) on L1 | Beat 103.036 |
 | #9  | thorfinn | asinh-on-L1 + 3-seed replay around s=458 | Beat 103.036 |
 
-### Round 1 still in flight
-
-| PR | Student | Hypothesis |
-|----|---------|-----------|
-| #7  | alphonse | Fourier PE on (x,z) + FiLM conditioning on log(Re) |
-
-PR #7 started before L1 merged; verdict will be evaluated vs 103.036 when complete.
+All 7 PRs are round-2 (post-L1 rebase) now. No round-1 experiments still in flight.
 
 ---
 
@@ -72,6 +67,8 @@ PR #7 started before L1 merged; verdict will be evaluated vs 103.036 when comple
 - **2026-04-23 22:20** Cherry-picked scoring.py fix from PR #9 (commit 7d71abd). Closed GH issue #10.
 - **2026-04-23 22:20** Sent back PR #8 (edward): clip fires 100% — need higher thresholds; rebase on L1.
 - **2026-04-23 22:20** Sent back PR #9 (thorfinn): conflict with L1 merge; rebase + compound sweep on L1. **The asinh-s458 MSE result beats L1 baseline by 2.9% — if it replicates on L1 it'll be the new baseline.**
+- **2026-04-23 22:35** Sent back PR #7 (alphonse): Fourier σ=1 wins geometry splits (−27% in_dist, −20% camber_rc on MSE), but +13% vs L1 baseline. Rebase, σ-sweep around 1, proper per-block FiLM.
+- **2026-04-23 22:35** Filed low-priority data-quality issue #13 for upstream Inf values in `test_geom_camber_cruise/000020.pt`. Not blocking — scoring fix (7d71abd) sufficient for our purposes.
 
 ---
 
@@ -89,7 +86,7 @@ No human issues received as of 2026-04-23 22:20.
 
 2. **fern #12 (throughput/AMP)** — The hidden bottleneck. Every round-1 run stopped at epoch 14/50 due to 30-min wall-clock. Unlocking 25–35 epochs compounds with every other improvement. This is the force-multiplier experiment.
 
-3. **alphonse #7 (Fourier PE + FiLM)** — Feature conditioning. Expected to help most on OOD camber + re_rand splits. Fourier features address spatial sharpness (boundary layer), FiLM addresses per-Re scale drift.
+3. **alphonse #7 r2 (Fourier σ-sweep + per-block FiLM on L1)** — Fourier σ=1 already shows −9.4% on MSE with geometry-split dominance; on L1 the mechanism should compound orthogonally. Per-block FiLM (vs single-point) is the real test of Re-conditioning.
 
 **Medium-EV:**
 
