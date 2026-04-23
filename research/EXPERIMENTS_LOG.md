@@ -320,3 +320,56 @@
 ### Decision: **SENT BACK** to alphonse. Rebase on L1, fine σ sweep {0.5, 1, 2}, m sweep {10, 20, 40}, and proper per-block FiLM (separate MLP per block, γ/β modulation after LayerNorm). Drop σ=10.
 
 **Note:** Student flagged that `test_geom_camber_cruise/000020.pt` has Infs upstream of scoring; filed as low-priority data-quality issue #13 for the human team.
+
+---
+
+## 2026-04-23 22:50 — Round 3b reviews: PRs #6, #7, #9, #15 all SENT BACK
+
+All four reviews of this batch landed in the **same pattern**: strong mechanism signals, but three of four ran on `--surf_weight 10` (the argparse default) instead of the post-PR #11 `--surf_weight 1` track baseline. **Systemic footgun:** students rebased code but didn't pick up the runtime flag change. Flagging in CURRENT_RESEARCH_STATE.md. Every send-back explicitly asks for `--surf_weight 1`.
+
+### PR #6 nezuko (round 2, sw=10): LR floor + WSD on L1
+
+**Winner:** `l1-lr-floor-s42` val=98.19 (sw=10). vs track baseline (93.127): +5.4% — no merge.
+
+**Replicated effects:**
+- **min_lr=1e-5 floor:** 3-seed replay (42, 7, 99) = 98.19 / 100.09 / 102.07, mean 100.12 ± 1.94. ~2σ real but modest. Mechanism still unclear (LR at best_epoch is near-identical between floor=0 and floor=1e-5).
+- **WSD at lr=1e-3 beats cosine at lr=1e-3 by −6.6%** (101.12 vs 108.28). Cleanest new signal — high peak LR needs flat-plateau schedule.
+
+**Decision:** SENT BACK. Rerun on sw=1 testing the two confirmed effects individually + stacked (GPU 5 = WSD@1e-3 + floor=1e-5 is the combined bet).
+
+### PR #7 alphonse (round 2, sw=10): Fourier + per-block FiLM on L1
+
+**Winner:** `l1-fr-s1-m40` val=93.245 (sw=10). vs track baseline (93.127): +0.13% — nominal tie, no merge.
+
+**Clean signals:**
+- **σ=1 is still best on L1** at m=10 (σ=1 < σ=2 < σ=0.5).
+- **m is NOT saturated**: val monotonically improves m=10 (97.51) → m=20 (94.11) → m=40 (93.25). Obvious next step is m=80+.
+- **Per-block FiLM alone is a regressor** (114.53, +9.2% worse than baseline).
+- FiLM + Fourier stacks weakly positive at m=10 (−1.7%) but dominated by simply increasing m.
+
+**Decision:** SENT BACK. Rerun on sw=1, drop FiLM, extend m to {40, 80, 160}. Honest forecast: m=80+ Fourier-only on sw=1 should land val ≈ 88–91.
+
+### PR #9 thorfinn (round 2, sw=10): asinh + L1 compound sweep
+
+**Winner:** `l1-asinh-s350` val=92.676 / test=84.022 (sw=10). vs track baseline (93.127): −0.48% nominal, but single seed and on wrong sw.
+
+**Clean signals:**
+- **Asinh compounds with L1 within sw=10:** L1+zscore (101.78) → L1+asinh-s350 (92.68) = −9 val points.
+- **Seed variance at s=458 is substantial: val std 2.07** (3 seeds: 97.17, 100.93, 97.56). Round-1's 100.034 was within noise band — **partly coarse-sample luck**.
+- **L1 shifts the optimum**: s≈350 beats s=458 (which was optimal on MSE). Possibly lower than 350.
+
+**Open question:** does asinh compound with sw=1, or are the two redundant? Both rebalance surface↔volume residuals ~9 val points. If redundant, stacking gives nothing; if orthogonal, expect val ≈ 85–90.
+
+**Decision:** SENT BACK. sw=1 + 3-seed at s=350 + 2-seed at s=250 + probes at s=300, 458. Best single-round test of the orthogonality question.
+
+### PR #15 tanjiro (round 3): Horizontal-flip augmentation
+
+**No runs.** Student performed a physics sanity check before burning 8 GPU-hours and caught a sign error in the assignment. Correct invariants under x-flip (for this dataset where `Uy` = velocity z-component):
+- NEGATE: x(0), saf[0](2), AoA foil1(14), AoA foil2(18), stagger(23), output Ux(0)
+- KEEP: z(1), saf[1](3), dsdf(4–11), is_surface(12), log(Re)(13), NACA(15–17, 19–21), gap(22), output Uy(1), output p(2)
+
+Bonus insight: **x-flip is physics-exact for all three domains** (raceCar single, raceCar tandem, cruise tandem) — ground stays at z=0 under x→−x. No conditional flipping required.
+
+**Decision:** SENT BACK with confirmation + green-light to run. Explicitly asked for `--surf_weight 1`.
+
+**Student behavior commendation:** this is exactly the right way to handle a hypothesis with ambiguous physics — verify before burning compute. Worth emulating in future assignments.

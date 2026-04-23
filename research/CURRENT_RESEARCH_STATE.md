@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-23 (round 3)
+- **Updated:** 2026-04-23 (round 3b — post-review)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -23,15 +23,19 @@
 
 | Student | Status | PR | Branch |
 |---------|--------|----|--------|
-| frieren  | **IDLE** | #11 MERGED | — |
+| frieren  | WIP | #14: sub-1 surf_weight micro-sweep + AMP compound | `frieren/...` |
 | fern     | WIP (r3) | #12: AMP + accum rerun with surf_weight=1 | `fern/throughput-amp` |
-| tanjiro  | **IDLE** | #5 CLOSED | — |
-| nezuko   | WIP (r2) | #6: LR floor + WSD on L1 | `nezuko/lr-schedule-sweep` |
-| alphonse | WIP (r2) | #7: Fourier σ-sweep + per-block FiLM on L1 | `alphonse/fourier-pe-film-re` |
+| tanjiro  | WIP (r3b) | #15: H-flip augmentation (physics-confirmed, running next) | `tanjiro/horizontal-flip-augmentation` |
+| nezuko   | WIP (r3b) | #6: LR floor + WSD on **sw=1** (rerun) | `nezuko/lr-schedule-sweep` |
+| alphonse | WIP (r3b) | #7: Fourier m-extend {40,80,160} on **sw=1**, no FiLM | `alphonse/fourier-pe-film-re` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 | `edward/ema-gradclip-stability` |
-| thorfinn | WIP (r2) | #9: asinh-on-L1 compound | `thorfinn/pressure-target-reparam` |
+| thorfinn | WIP (r3b) | #9: asinh + **sw=1** 3-seed compound | `thorfinn/pressure-target-reparam` |
 
-**Idle students needing assignment:** frieren, tanjiro. Fern is WIP (r3 rerun).
+**Idle students needing assignment:** none. All 7 GPUs occupied.
+
+## ⚠️ Round-3 systemic footgun
+
+Argparse default for `surf_weight` is still `10.0` in train.py. PR #11 established sw=1 as the winning recipe but did NOT change the default (it passed `--surf_weight 1` at runtime). **Three of four round-3b submissions (PRs #6, #7, #9) silently ran on sw=10** because students rebased the code but didn't realize the flag change was load-bearing. Every send-back now explicitly asks for `--surf_weight 1`. Future assignment templates should include this flag in the reproduce command.
 
 ---
 
@@ -45,13 +49,13 @@ None at this time.
 
 | PR | Student | Hypothesis | Target |
 |----|---------|-----------|--------|
-| #12 | fern     | AMP (bf16) + grad_accum=2 compound with surf_weight=1 (new baseline) | Beat **93.127** |
-| #6  | nezuko   | 3-seed LR floor replay + WSD scheduler on L1 | Beat **93.127** |
-| #7  | alphonse | Fourier σ-sweep {0.5,1,2} × m-sweep {10,20,40} + per-block FiLM on L1 sw=1 | Beat **93.127** |
-| #8  | edward   | EMA 0.999 + wider grad-clip sweep ({1,5,10,50}) on L1 sw=1 | Beat **93.127** |
-| #9  | thorfinn | asinh-on-L1 (sw=1) + 3-seed replay around s=458 | Beat **93.127** |
-
-Note: All in-flight PRs were assigned against the old baseline of 103.036. After PR #11 merged, the target shifted to 93.127. Students may need to be reminded of this upon review.
+| #12 | fern     | AMP (bf16) + grad_accum=2 on **sw=1** | Beat **93.127** |
+| #14 | frieren  | surf_weight sub-1 micro-sweep {0.25, 0.5, 1} + AMP compound | Beat **93.127** |
+| #15 | tanjiro  | Horizontal-flip augmentation (x-flip, physics-confirmed) on **sw=1** | Beat **93.127** |
+| #6  | nezuko   | Rerun: WSD@1e-3 + floor=1e-5 stacked on **sw=1** (2-seed) | Beat **93.127** |
+| #7  | alphonse | Fourier m-saturation {40, 80, 160} at σ=1 on **sw=1**, no FiLM | Beat **93.127** |
+| #8  | edward   | EMA 0.999 + wider grad-clip ({1, 5, 10, 50}) on L1 sw=1 | Beat **93.127** |
+| #9  | thorfinn | asinh-on-**sw=1** 3-seed compound @ s∈{250,300,350,458} | Beat **93.127** |
 
 ---
 
@@ -66,6 +70,10 @@ Note: All in-flight PRs were assigned against the old baseline of 103.036. After
 - **Round 3:** Merged PR #11 (frieren surf_weight=1): **new baseline 93.127** (−9.62% vs prior).
 - **Round 3:** Closed PR #5 (tanjiro channel-weighting): dead end under L1. Tanjiro idle.
 - **Round 3:** Sent back PR #12 (fern AMP): 93.29 no longer beats new baseline; rerun with sw=1.
+- **Round 3b (22:50):** Sent back PRs #6 (nezuko), #7 (alphonse), #9 (thorfinn) — all ran on sw=10 argparse default, missed the PR #11 runtime flag. Sent back #15 (tanjiro) with physics sign correction (x-flip: negate Ux not Uy; student caught the assignment bug).
+- **Round 3b insight:** Asinh + L1 compound confirmed (−9 pts within sw=10). Seed variance at s=458 is std 2.07 — any effect < 3% needs multi-seed confirmation going forward.
+- **Round 3b insight:** Fourier m is NOT saturated on L1. Monotonic m=10→20→40 val improvement (97.51→94.11→93.25). m=80+ is the obvious next step.
+- **Round 3b insight:** Per-block FiLM alone is a regressor (−9.2% on sw=10); dropping it from next alphonse sweep.
 
 ---
 
