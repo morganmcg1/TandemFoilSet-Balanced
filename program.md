@@ -94,13 +94,13 @@ x, y, is_surface, mask = batch
 
 ### Dataset domains
 
-The training data spans three physical domains with different mesh sizes and flow regimes:
+The training data spans three physical domains with different mesh sizes and flow regimes (counts are exact from `meta.json`):
 
-| Domain | Samples | Mesh nodes (mean) | Description |
-|--------|---------|-------------------|-------------|
-| RaceCar single | ~688 train | ~86K  | Single airfoil, Re ~700K–2M, AoA ±10° |
-| RaceCar tandem | ~510 train | ~127K | Dual foils (Parts 1+3), Re ~700K–2M |
-| Cruise         | ~408 train | ~208K | Tandem cruise foils (Parts 1+3), Re 802K–1.475M |
+| Domain | Train samples | Mesh nodes (mean) | Description |
+|--------|---------------|-------------------|-------------|
+| RaceCar single | 599 | ~85K  | Single inverted airfoil with ground effect, Re 100K–5M, AoA -10° to 0° |
+| RaceCar tandem | 457 | ~127K | Dual inverted foils (raceCar Parts 1+3), Re 1M–5M, AoA -10° to 0° |
+| Cruise         | 443 | ~210K | Tandem freestream foils (cruise Parts 1+3), Re 110K–5M, AoA -5° to +6° |
 
 The three domains are **equally weighted** in training via a balanced sampler (`sample_weights` from `load_data`) — otherwise raceCar single would dominate.
 
@@ -121,29 +121,26 @@ Each sample is a 2D CFD simulation over an overset mesh with up to 3 zones:
 └─────────────────────────────────────────────────┘
 ```
 
-**Boundary types** in `is_surface`:
-- IDs 5, 6 = foil 1 surface (upper/lower)
-- ID 7 = foil 2 surface (tandem only)
-- IDs 0–4 = interior, inlet, outlet, top/bottom walls
+The raw dataset contains per-node boundary IDs (foil surfaces vs. interior / inlet / outlet / walls); in these preprocessed samples those are collapsed to a single boolean `is_surface` (True on either foil surface, False everywhere else). The model does not see a foil 1 vs. foil 2 distinction — use dims 18–23 of `x` (foil 2 AoA, NACA, gap, stagger) to tell tandem from single.
 
-**Value ranges** vary dramatically across domains:
+**Value ranges.** Target magnitudes vary dramatically across domains (summary from the single-file val holdouts):
 
-| Domain | Re range | y range (approx) | y std |
-|--------|----------|------------------|-------|
-| Cruise Part1 (Re=1.475M) | 1.475M  | [-1,278, 233]   | 55  |
-| Cruise Part2 (Re=4.445M) | 4.445M  | [-2,360, 2,118] | 304 |
-| Cruise Part3 (Re=802K)   | 802K    | [-300, 69]      | 17  |
-| RaceCar single           | ~700K–2M | [-874, 467]    | 141 |
-| RaceCar tandem           | ~700K–2M | [-4,277, 668]  | 235 |
+| Source split | Re range | y range (min, max) | Avg per-sample y std | Max per-sample y std |
+|--------------|----------|--------------------|----------------------|----------------------|
+| `val_single_in_dist` (raceCar single) | 104K–5M | (-29,136, +2,692) | 458 | 2,077 |
+| `val_geom_camber_rc` (raceCar tandem P2, M=6-8) | 1.0M–5M | (-10,312, +2,228) | 377 | 1,237 |
+| `val_geom_camber_cruise` (cruise tandem P2, M=2-4) | 122K–5M | (-7,648, +2,648) | 164 | 506 |
 
-The wide pressure range across Re numbers is a key challenge — the model must handle both low-Re (small values) and high-Re (extreme values) regimes.
+Within every split, high-Re samples drive the extremes — per-sample y std varies by an order of magnitude even inside one domain. The model must handle both low-Re (small values) and high-Re (extreme values) regimes.
 
 ### Parameter space
 
-- **Reynolds number**: 802K to 4.445M (training sees up to ~1.5M; Cruise Part2 at 4.445M is OOD).
-- **NACA profiles**: 4-digit codes encoding camber, position, thickness. Single-foil sweeps ~2205–2209; tandem has fixed front foils per Part (2412 / 6416 / 9412).
-- **AoA**: ±8° (cruise) to ±10° (raceCar), per-foil for tandem.
-- **Gap / stagger**: tandem geometry parameters — gap ~[-0.8, 1.3], stagger ~[0.7, 2.0].
+- **Reynolds number**: ~100K to ~5M across the whole corpus. Training sees the full range; there is no intentional OOD Re slice.
+- **NACA profiles**: 4-digit codes encoding camber (M), position (P), thickness (T). Features 15–17 are normalized to [0, 1]. Single-foil (file 0) sweeps M=2–9 plus a small "specials" cohort that encodes non-NACA foils as `(0, 0, 0)`. Tandem Parts partition the front-foil camber with no overlap:
+  - raceCar tandem: P1 M=2–5, P2 M=6–8 (**held out**), P3 M=9 + 5 non-NACA specials
+  - cruise tandem:  P1 M=0–2, P2 M=2–4 (**held out**), P3 M=4–6
+- **AoA**: raceCar -10° to 0° (inverted, negative loading); cruise -5° to +6°. Per-foil for tandem.
+- **Gap / stagger**: tandem geometry parameters — gap ~[-0.8, 1.6], stagger ~[0.0, 2.0]. Both are 0 for single-foil samples.
 
 ### Splits
 
