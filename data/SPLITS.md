@@ -1,4 +1,24 @@
-# TandemFoilSet Split Design (v2)
+# TandemFoilSet-Balanced Split Design 
+
+## Totals
+
+| | Samples | % |
+|---|---|---|
+| Train | 1499 | 55.5% |
+| Val (4 x 100) | 400 | 14.8% |
+| Test (4 x 200) | 800 | 29.6% |
+| **Total** | **2699** | **100%** |
+
+## Design Rationale
+
+**Why full file holdouts for geometry?**
+Files 2 and 5 contain front foil shapes with NACA camber values (M=6-8, M=2-4) that are completely absent from training. This is the cleanest possible separation — no leakage, no soft boundaries.
+
+**Why stratified Re sampling instead of threshold cuts?**
+We want to show a single model works across all Reynolds numbers. A stratified random holdout across the full Re range tests whether the model learns a smooth Re-dependent representation.
+
+**Why no AoA split?**
+Simplicity. AoA extremes (deep stall, near-zero loading) are interesting but add complexity without a clean physical boundary. AoA is implicitly tested within each split since AoA is uniformly distributed across the holdout samples.
 
 ## Dataset: File-by-File
 
@@ -46,23 +66,3 @@ All splits are **balanced**: 100 val + 200 test each. Scored as equal-weight ave
 | val_geom_camber_rc | File 2 (full holdout) | File-level | Camber interpolation: train sees M=2-5 and M=9, must predict M=6-8 |
 | val_geom_camber_cruise | File 5 (full holdout) | File-level | Camber interpolation: train sees M=0-2 and M=4-6, must predict M=2-4 |
 | val_re_rand | Files 1+3+4+6 (stratified) | Every 4th sample sorted by Re | Cross-regime generalization: random sample across full Re range from all tandem training domains |
-
-## Totals
-
-| | Samples | % |
-|---|---|---|
-| Train | 1499 | 55.5% |
-| Val (4 x 100) | 400 | 14.8% |
-| Test (4 x 200) | 800 | 29.6% |
-| **Total** | **2699** | **100%** |
-
-## Design Rationale
-
-**Why full file holdouts for geometry?**
-Files 2 and 5 contain front foil shapes with NACA camber values (M=6-8, M=2-4) that are completely absent from training. This is the cleanest possible separation — no leakage, no soft boundaries.
-
-**Why stratified Re sampling instead of threshold cuts?**
-We want to show a single model works across all Reynolds numbers. A stratified random holdout across the full Re range tests whether the model learns a smooth Re-dependent representation.
-
-**Why no AoA split?**
-Simplicity. AoA extremes (deep stall, near-zero loading) are interesting but add complexity without a clean physical boundary. AoA is implicitly tested within each split since AoA is uniformly distributed across the holdout samples.
