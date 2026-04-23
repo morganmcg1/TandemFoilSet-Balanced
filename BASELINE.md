@@ -8,21 +8,21 @@
 
 ## Current best
 
-**PR #3 — frieren: L1 loss with surf_weight=10**
-- **val_avg/mae_surf_p: 103.036** (lower is better)
-- W&B run: `w2jsabii` (`frieren/loss-l1-sw10`)
+**PR #11 — frieren: Fine surf_weight sweep on L1 loss (surf_weight=1 wins)**
+- **val_avg/mae_surf_p: 93.127** (lower is better)
+- W&B run: `yt7eup38` (`frieren/l1-sw1`)
 - Best epoch: 14 (run timeout-bounded at 30 min; still improving)
-- test_avg/mae_surf_p: NaN (pre-existing +Inf bug in `test_geom_camber_cruise/000020.pt` — see [scoring bug issue](https://github.com/morganmcg1/tandemfoil2/issues))
+- test_avg/mae_surf_p: NaN (pre-existing +Inf bug in `test_geom_camber_cruise/000020.pt`)
 
 ### Per-split val surface-p MAE (best checkpoint)
 
 | Split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist | 133.194 |
-| val_geom_camber_rc | 117.209 |
-| val_geom_camber_cruise | 70.109 |
-| val_re_rand | 91.634 |
-| **val_avg** | **103.036** |
+| val_single_in_dist | 106.92 |
+| val_geom_camber_rc | 106.14 |
+| val_geom_camber_cruise | 73.28 |
+| val_re_rand | 86.16 |
+| **val_avg** | **93.127** |
 
 ### Current default config (post-merge)
 
@@ -31,7 +31,7 @@
 | lr | 5e-4 |
 | weight_decay | 1e-4 |
 | batch_size | 4 |
-| surf_weight | 10.0 |
+| surf_weight | **1.0** |
 | epochs | 50 |
 | n_hidden | 128 |
 | n_layers | 5 |
@@ -47,13 +47,22 @@ Reproduce:
 cd target && python train.py \
     --agent <student> \
     --loss_type l1 \
-    --surf_weight 10 \
+    --surf_weight 1 \
     --wandb_name "<student>/<experiment>"
 ```
 
 ---
 
 ## Baseline history
+
+### 2026-04-23 — PR #11: frieren fine surf_weight sweep on L1 (surf_weight=1)
+
+- **val_avg/mae_surf_p: 93.127** (previous: 103.036, PR #3)
+- W&B run: `yt7eup38` (group: `frieren/l1-surf-weight-sweep`)
+- Change: surf_weight reduced from 10 → 1. Under L1 loss, volume supervision is load-bearing for surface-pressure prediction — excessive surface upweighting starves the shared feature extractor of volume gradient. sw=1 wins on every channel (surface and volume) simultaneously.
+- Delta: −9.62% vs previous baseline (103.036).
+- Wins on 3 of 4 splits: −20.0% in_dist, −9.5% camber_rc, +4.5% camber_cruise (slight regression), −6.0% re_rand.
+- Test 3-split avg (excl. NaN): 91.58 (sw=1) vs 105.48 (sw=10 control). Consistent with val.
 
 ### 2026-04-23 21:40 — PR #3: frieren Huber/L1 loss reformulation
 
