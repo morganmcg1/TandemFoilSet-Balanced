@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 (round 7 — post PR #14 close)
+- **Updated:** 2026-04-24 (round 8 — post PR #6/#17 reviews)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -32,8 +32,8 @@
 |---------|--------|----|--------|
 | frieren  | WIP (r7) | #21: Near-surface volume-band weighting (3-tier loss) | `frieren/near-surface-volume-band` |
 | fern     | WIP (r6) | #20: Fourier σ fine-sweep at m=160 + SwiGLU FFN | `fern/fourier-sigma-fine-swiglu` |
-| tanjiro  | WIP (r5) | #17: In-distribution input jitter (AoA/logRe/gap) | `tanjiro/input-feature-jitter` |
-| nezuko   | WIP (r5) | #6: AMP rebase + fixed WSD stack + cosine@1e-3 control | `nezuko/lr-schedule-sweep` |
+| tanjiro  | WIP (r8) | #17: Gap-only jitter σ-scan on Fourier baseline + tandem-gated AoA | `tanjiro/input-feature-jitter` |
+| nezuko   | WIP (r8) | #22: Attention temperature annealing (soft→sharp) | `nezuko/attn-temperature-annealing` |
 | alphonse | WIP (r6) | #19: Fourier m-extension {160, 320, 640} + learnable B + multi-seed | `alphonse/fourier-m-extension-learnable` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 | `edward/ema-gradclip-stability` |
 | thorfinn | WIP (r5) | #18: Cross-attention surface decoder head | `thorfinn/cross-attn-surface-decoder` |
@@ -53,10 +53,10 @@ None at this time.
 | PR | Student | Hypothesis | Target |
 |----|---------|-----------|--------|
 | #21 | frieren  | Near-surface volume-band 3-tier loss weighting | Beat **84.737** |
+| #22 | nezuko   | Attention temperature annealing (soft→sharp schedule) | Beat **84.737** |
 | #20 | fern     | Fourier σ fine-sweep + SwiGLU feedforward | Beat **84.737** |
 | #19 | alphonse | Fourier m-extension {160, 320, 640} + learnable B | Beat **84.737** |
-| #17 | tanjiro  | In-distribution input jitter (AoA/logRe/gap) on AMP + sw=1 | Beat **84.737** |
-| #6  | nezuko   | AMP rebase + fixed WSD + cosine@1e-3 control | Beat **84.737** |
+| #17 | tanjiro  | Gap-only jitter σ-scan + tandem-gated AoA on Fourier baseline | Beat **84.737** |
 | #8  | edward   | EMA 0.999 + wider grad-clip ({1, 5, 10, 50}) on L1 sw=1 | Beat **84.737** |
 | #18 | thorfinn | Cross-attention surface decoder head on AMP + sw=1 | Beat **84.737** |
 
@@ -68,6 +68,10 @@ None at this time.
 - **2026-04-23 (r6):** Closed PR #16 (fern capacity scaling): dead end confirmed second time. Capacity scaling is epoch-budget bound. All scaled-up variants underperformed baseline anchor; peak at h384-l5-s64 = 65.4% worse. VRAM was never the constraint.
 - **2026-04-24 (r7):** Closed PR #14 (frieren sw>1 at eff_bs=16). sw=2's round-4 win compressed from −11.8% at eff_bs=8 to −1.0% sub-1σ at eff_bs=16 — **grad-accum-specific effect, not loss-specific**. sw direction exhausted across 2 rounds. Noise floor on seeded AMP+accum=4: **2.5% val, 2.2% test** (multi-seed threshold for significance). Branch was pre-Fourier — any post-Fourier sw sweep would be a new hypothesis.
 - **2026-04-24 (r7):** Assigned frieren PR #21 (near-surface volume-band weighting) — 3-tier loss using dsdf to define BL band; orthogonal to all current improvements.
+- **2026-04-24 (r8):** Closed PR #6 (nezuko LR schedule): 3-round exhaustion confirmed. **Schedule effects don't transfer across regimes:** floor=1e-5 went −4.7% → −1.5% → +4.0% across (sw=10) → (sw=1) → (sw=1+AMP). WSD vs cosine similar sign flip. Nezuko reassigned to PR #22 (attention temperature annealing).
+- **2026-04-24 (r8):** Sent back PR #17 (tanjiro input jitter). **Real signal:** gap/stagger jitter σ=0.02 gives −5.89 val vs anchor. AoA/Re jitter neutral-to-harmful; full stack destructive. Student branch pre-Fourier (4th this round). Refined sweep: gap-only σ-scan + tandem-gated AoA (follow-up #3) on Fourier baseline.
+- **2026-04-24 (r8) insight:** Schedule effects are regime-specific artefacts, not universal regularizers. LR-schedule space now closed.
+- **2026-04-24 (r8) insight:** 8-parallel-run IO contention causes seed spread of 4.3–4.6% vs 2.5% on serial runs. Multi-seed claims need serial execution or tighter thresholds.
 - **Prior rounds:** See EXPERIMENTS_LOG.md for full history.
 
 ---

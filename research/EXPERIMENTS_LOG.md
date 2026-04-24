@@ -583,3 +583,77 @@ All three round-4 rerun submissions ran on **stale pre-AMP recipe** (branch fork
 
 - Any future sw work would need to be *post-Fourier* (Fourier PE rebalances surface/volume gradient flow), but that's a new hypothesis (sw × Fourier interaction), not a continuation of this PR.
 - Frieren reassigned to PR #21 (near-surface volume-band weighting) — a fresh loss-weighting direction using dsdf features to tier volume loss by proximity to surface.
+
+---
+
+## 2026-04-24 — PR #6 (round 5 rerun, v4): nezuko: LR + schedule sweep on L1+AMP — CLOSED
+
+- **Branch:** `nezuko/lr-schedule-sweep` (pre-Fourier PE — stale)
+- **W&B group:** `nezuko/lr-schedule-amp`
+- **Hypothesis:** WSD schedule + LR floor compound with AMP baseline; test floor+WSD stack properly (previous rounds had WSD construction bug).
+
+### Results (seeded 2-anchor sweep, 8 runs)
+
+| Rank | Config (lr / wu / min_lr / sched / seed) | val_avg | test_avg |
+|------|------------------------------------------|---------|----------|
+| 1 | 5e-4 / 0 / 0 / cos / seed=7 (anchor) | **90.86** | 81.92 |
+| 2 | 1e-3 / 5% / 0 / cos / 42 | 92.53 | 82.83 |
+| 3 | 5e-4 / 0 / 0 / cos / seed=42 (anchor) | 94.88 | 86.11 |
+| 4 | 1e-3 / 10% / 0 / wsd / 42 | 95.74 | 85.57 |
+| 4 | 1e-3 / 10% / 1e-5 / wsd / 42 (stack) | 95.74 | 85.57 (bit-exact) |
+| 6 | 5e-4 / 0 / 1e-5 / cos / 42 | 95.64 | 85.31 |
+| 7 | 5e-4 / 0 / 1e-5 / cos / 7 | 97.56 | 89.58 |
+| 8 | 2e-3 / 10% / 0 / wsd / 42 | 98.34 | 88.97 |
+
+### Analysis
+
+- **Branch stale (pre-Fourier PE from PR #7).** Comparison baseline is 88.268, not current 84.737. Winner (90.86) is still +2.9% worse than even the pre-Fourier baseline.
+- **CROSS-ROUND SIGN FLIPS — schedule effects don't transfer across regimes:**
+  - Floor=1e-5: v2 (sw=10) −4.7% better → v3 (sw=1) −1.5% noise → **v4 (sw=1+AMP) +4.0% worse** (paired-seed mean).
+  - WSD vs cosine at lr=1e-3: v2 WSD wins −6.6% → v4 cosine wins −3.4%.
+- **Stack test (floor+WSD) failed by construction AGAIN.** WSD bug fixed correctly by student, but at realized 19/50 epochs (38%), training ends before the decay phase begins at 40%. GPU 3 and GPU 5 produce bit-exact identical runs. Cannot test WSD+floor compounding at current budget.
+- **Seed variance at anchor: 4.4% val / 5.1% test** — wider than round-7's 2.5%. 8-parallel-run IO contention causing wider variance and slower epochs (16-19 vs expected 19+).
+- Student themselves asked for closure in follow-up #1.
+
+### Decision: **CLOSED.**
+
+Three rounds × many variants thoroughly map LR-schedule space. Key takeaways carried forward:
+1. Seed-anchor methodology (2-seed for claims <5%).
+2. WSD construction bug diagnosis (min_lr threading, phase-split vs realized-budget mismatch).
+3. Negative result: schedule effects are regime-specific artefacts, not universal regularizers.
+
+Nezuko reassigned to PR #22 (attention temperature annealing) — fresh architectural direction orthogonal to Fourier PE, AMP, loss shape.
+
+---
+
+## 2026-04-24 — PR #17 (round 5): tanjiro: In-distribution input jitter — SENT BACK
+
+- **Branch:** `tanjiro/input-feature-jitter` (pre-Fourier PE — stale)
+- **W&B group:** `tanjiro/input-jitter`
+- **Hypothesis:** Small Gaussian jitter on continuous input features (AoA, log(Re), gap, stagger) gives in-distribution augmentation without the AoA-OOD trap that killed PR #15.
+
+### Results (seeded sweep, 8 runs)
+
+| Rank | Config (aoa / logRe / gap / seed) | val_avg | test_avg |
+|------|-----------------------------------|---------|----------|
+| 1 | gap-only 0.02 (seed=42) | **89.880** | 80.992 |
+| 2 | anchor (seed=42) | 95.772 | 87.540 |
+| 3 | aoa-only 0.01 (seed=42) | 96.048 | 86.532 |
+| 4 | full-stack (seed=7) | 96.574 | 87.430 |
+| 5 | anchor (seed=7) | 99.949 | 90.151 |
+| 6 | Re-only 0.05 (seed=42) | 100.214 | 91.853 |
+| 7 | full-stack (seed=42) | 101.055 | 91.865 |
+| 8 | all-2× (seed=42) | 117.403 | 105.371 |
+
+### Analysis
+
+- **Branch pre-Fourier (4th student this round). Winner 89.88 vs 84.737 baseline = +6.1% worse.** But vs pre-Fourier 88.268 baseline, gap-only beats by 1.8 pts — a real signal.
+- **Gap/stagger jitter (σ=0.02) is the only real signal** (−5.89 pts vs anchor, winning single_in_dist −13.7 and camber_rc −9.6).
+- **AoA/Re jitter at suggested σ: neutral-to-harmful.** Re-only regressed by +4.44.
+- **Full stack is DESTRUCTIVE (+11.2 vs gap-only alone).** Mechanism: AoA2/gap/stagger are exactly zero on single-foil samples; adding noise to "0.0" nudges those samples slightly OOD, cancelling the gap-only gain. Student's follow-up #3 correctly identifies this.
+- **σ=2× probe catastrophic** (117.40, +21.6) — confirms 2× σ exits the in-distribution manifold.
+- **Seed spread: 4.3% at anchor, 4.6% at full stack** (vs calibrated 2.5% floor on single-run). 8-parallel IO contention is a confound.
+
+### Decision: **SENT BACK.**
+
+Refined sweep: gap-only σ-scan ∈ {0.01, 0.02, 0.03, 0.04} + 3-seed at σ=0.02 winner + tandem-gated AoA (follow-up #3), on Fourier baseline. Honest forecast: if gap-jitter is orthogonal to Fourier (different mechanisms: foil separation vs spatial bandwidth), val ~82–84 is achievable. If redundant, ~85.
