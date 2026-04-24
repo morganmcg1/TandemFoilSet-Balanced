@@ -15,6 +15,8 @@ TandemFoilSet-Balanced was created by:
 
 If you use this balanced split design or benchmark package, please cite:
 
+### BibTeX for TandemFoilSet-Balanced
+
 ```bibtex
 @misc{mcguire2026tandemfoilsetbalanced,
   title        = {{TandemFoilSet-Balanced}: Balanced Split Design and CFD Surrogate Benchmark Package},
@@ -27,6 +29,8 @@ If you use this balanced split design or benchmark package, please cite:
 ```
 
 For the underlying dataset, cite the original TandemFoilSet paper:
+
+### BibTeX for the original TandemFoilSet paper
 
 ```bibtex
 @inproceedings{lim2026tandemfoilset,
