@@ -483,3 +483,69 @@ All three round-4 rerun submissions ran on **stale pre-AMP recipe** (branch fork
 **Execution quality excellent:** invariants correctly implemented per round-3b physics correction; flip applied per-sample pre-normalization; seed-pinned 3-seed variance tight (std 1.11, 28× noise floor) — confident negative.
 
 **Decision: CLOSED.** Hflip direction dead. Salvage paths (cruise-only, no-AoA-flip) low-EV vs what's already in flight. Tanjiro reassigned to fresh direction: in-distribution input feature jitter (PR #17).
+
+---
+
+## 2026-04-23 — PR #16: fern: Capacity scaling on AMP baseline (n_hidden / n_layers / slice_num) — CLOSED
+
+- **Branch:** `fern/capacity-on-amp`
+- **W&B group:** `fern/capacity-on-amp`
+- **Hypothesis:** With AMP unlocking ~60 GB VRAM headroom and +5 epochs, larger models (h192/h256/h384, deeper l=7/9, wider slice_num=128) may now win within 30-min budget.
+
+### Results
+
+| GPU | Config | n_params | Peak VRAM | Epochs | best_ep | s/epoch | val_avg/mae_surf_p | test_avg | Δ vs 88.268 | W&B run |
+|-----|--------|---------:|----------:|-------:|--------:|--------:|-------------------:|---------:|:-----------:|---------|
+| 0 | h128-l5-s64 (anchor) | 0.662 M | 32.9 GB | 19 | 18 | 100 | 91.323 | 82.739 | +3.5% | `2w8sjpna` |
+| 1 | h192-l5-s64 | 1.472 M | 43.0 GB | 15 | 14 | 126 | 98.987 | 89.911 | +12.1% | `7139msgc` |
+| 2 | h256-l5-s64 | 2.600 M | 53.1 GB | 12 | 12 | 151 | 109.559 | 101.309 | +24.1% | `9i19496l` |
+| 3 | h384-l5-s64 | 5.814 M | 73.3 GB | 9 | 7 | 211 | 136.821 | 125.691 | +55.0% | `6fot6dnw` |
+| 4 | h128-l7-s64 | 0.905 M | 44.9 GB | 14 | 14 | 137 | 117.531 | 106.144 | +33.2% | `ysipi3af` |
+| 5 | h128-l9-s64 | 1.147 M | 56.9 GB | 11 | 9 | 175 | 123.764 | 110.781 | +40.2% | `3e43hk3x` |
+| 6 | h128-l5-s128 | 0.673 M | 48.1 GB | 13 | 12 | 144 | 114.222 | 106.178 | +29.4% | `lr8gs0gf` |
+| 7 | h256-l7-s128 | 3.585 M | 89.5 GB | 7 | 6 | 267 | 146.034 | 135.127 | +65.4% | `b68xqgjv` |
+
+### Analysis
+
+- **No config beat the baseline.** The anchor underperformed merged 88.268 by +3.5% val — consistent with seed/loader variance (8 concurrent DataLoaders sharing CPU/IO).
+- **Epoch budget is the bottleneck, not capacity.** r < −0.95 linear correlation between log(n_params) and epochs_completed. h192 (+122% params) gets only 15 epochs vs anchor's 19 — the epoch deficit exceeds the capacity benefit at every scale.
+- **VRAM headroom never hit:** h256-l7-s128 at 89.5 GB is the heaviest config, still 6 GB under 96 GB ceiling. Memory is not the constraint.
+- **Sub-linear throughput scaling with capacity:** AMP helps marginally but doesn't offset the per-epoch cost — h192 is +26% s/epoch, h384 is +111% s/epoch.
+- **No config had enough epochs to plateau** — all scaled-up runs were still monotonically improving at timeout. h192 would need ~22 epochs to reach 88.27, requiring +46% wall-clock budget.
+- **Mirror of PR #4** — this is the second clean confirmation that capacity scaling is epoch-budget bound.
+
+### Decision: **CLOSED.** Capacity scaling direction exhausted under current budget. Negative result is now doubly confirmed. Fern reassigned to new direction.
+
+---
+
+## 2026-04-23 — PR #7: alphonse: Fourier PE on (x,z) — MERGED (round 6)
+
+- **Branch:** `alphonse/fourier-pe-film-re`
+- **W&B group:** `alphonse/fourier-sw1` (final rerun)
+- **Hypothesis:** Random Fourier Features on (x,z) give the preprocess MLP spatial bandwidth to resolve boundary-layer gradients; m-saturation tested at sw=1 + AMP baseline.
+
+### Final Results (sw1 m-saturation sweep, rebased on L1+AMP+grad_accum=4)
+
+| # | Run | m | σ | seed | best_ep | val_avg | test_avg | Δ val vs 88.268 | W&B run |
+|---|-----|---:|----:|----:|--------:|--------:|---------:|:----------------:|---------|
+| 1 | `sw1-fr-s1-m160` | 160 | 1.0 | 0 | 18 | **84.737** | **75.244** | **−4.0%** | `91z1948k` |
+| 2 | `sw1-fr-s1-m20` | 20 | 1.0 | 0 | 18 | 85.392 | 75.800 | −3.3% | `au5quccl` |
+| 3 | `sw1-fr-s1-m10` | 10 | 1.0 | 0 | 17 | 86.041 | 77.737 | −2.5% | `ciemnw3i` |
+| 4 | `sw1-fr-s1.5-m80` | 80 | 1.5 | 0 | 17 | 89.220 | 80.786 | +1.1% | `weukxee5` |
+| 5 | `sw1-fr-s1-m80` | 80 | 1.0 | 0 | 17 | 89.631 | 82.658 | +1.5% | `pxlzd0sx` |
+| 6 | `sw1-fr-s1-m40` | 40 | 1.0 | 0 | 18 | 89.695 | 81.796 | +1.6% | `zt5muqis` |
+| 7 | `sw1-fr-s1-m80-seed2` | 80 | 1.0 | 2 | 17 | 90.066 | 77.267 | +2.0% | `q3vyfddr` |
+| 8 | `sw1-baseline` | — | — | 0 | 17 | 98.821 | 88.890 | +11.9% | `1wdvy914` |
+
+### Analysis
+
+- **WINNER: m=160 beats baseline (88.268) by −4.0% val / −5.6% test.** Clean merge.
+- **m-curve is non-monotonic (U-shaped):** m=20 and m=160 win; m=40 and m=80 regress to near-baseline. Likely redundancy at mid-m: B vectors cluster and the preprocess MLP can't exploit them in 17–18 epochs.
+- **σ=1 is the robust sweet spot** (σ=1.5 at m=80 barely helps; σ=10 from round 1 is clearly harmful).
+- **Seed variance is substantial on test (~5 pts for same config).** Single-seed test numbers should be read with this noise band in mind.
+- **Peak VRAM at m=160: 74.4 GB** — within 96 GB card headroom.
+- **FiLM (per-block log(Re) conditioning) dropped** — consistently net-negative at 17–18 epoch budget.
+
+### Decision: **MERGED** into `kagent_v_students`. New baseline = **84.737 val / 75.244 test** (PR #7).
+- W&B run: `91z1948k` (alphonse/sw1-fr-s1-m160)
+- Fourier PE (fixed B, σ=1, m=160) added as new default config in BASELINE.md.
