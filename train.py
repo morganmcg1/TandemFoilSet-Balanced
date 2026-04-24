@@ -547,7 +547,7 @@ elif per_coord:
 else:
     fourier_str = f"{cfg.fourier_features} (m={cfg.fourier_m}, σ={cfg.fourier_sigma})"
 print(f"Fourier: {fourier_str}  swiglu={cfg.swiglu}  slice_num={cfg.slice_num}  "
-      f"n_layers={cfg.n_layers}  seed={cfg.seed}")
+      f"n_layers={cfg.n_layers}  n_head={cfg.n_head}  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
