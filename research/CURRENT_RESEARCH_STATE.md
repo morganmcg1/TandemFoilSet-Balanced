@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 09:30 (round 22 — 3 closes, 3 assignments, mlp_ratio fix cherry-picked)
+- **Updated:** 2026-04-24 10:00 (round 23 — PR #39 merged nl=3/sn=8 val 49.44)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -9,24 +9,25 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 54.210 (best seed, s=1) / 54.476 (2-seed mean) — test 47.484 / 47.336** (PR #35, W&B group `nezuko/n-layers-sn32`)
-- Per-split val (s=1, ep=32): in_dist=61.24 | camber_rc=67.65 | camber_cruise=33.63 | re_rand=54.33
-- Config: **L1 + sw=1 + AMP + grad_accum=4 + Fourier PE fixed m=160 σ=0.7 + SwiGLU + slice_num=32 + n_layers=3**
-- Best epoch: 32 (both seeds at final epoch — headroom remains)
-- nl=3 2-seed std: 0.376 val (tight)
+**val_avg/mae_surf_p = 49.077 (best seed, s=1) / 49.443 (2-seed mean) — test 42.473 / 42.450** (PR #39, W&B group `nezuko/nl3-sn16-compound`)
+- Per-split test (s=1, ep=38): in_dist=49.18 | camber_rc=54.56 | camber_cruise=25.22 | re_rand=40.93
+- Config: **L1 + sw=1 + AMP + grad_accum=4 + Fourier PE fixed m=160 σ=0.7 + SwiGLU + slice_num=8 + n_layers=3**
+- Best epoch: 38 (both seeds at final epoch — headroom remains; sn floor not found)
+- nl=3/sn=8 2-seed std: 0.517 val
 
-**Round-22 outcomes (this round):**
-- Closed PR #36 (fern sn floor): null at nl=5; floor is sn=16, not lower. Capacity-bound, not throughput-bound.
-- Closed PR #37 (tanjiro n_head at sn=16): within-recipe nh=1 wins (2-seed mean 58.38 vs 62.46 anchor), but stale (+3.91 above current baseline). **n_head monotonic trend robust across sn=16 & sn=64.**
-- Closed PR #38 (frieren mlp_ratio): null (mr=2 wins). **Critical infrastructure fix: `--mlp_ratio` CLI was unwired; frieren's 2-line fix (commit b8330ac) cherry-picked.** PR #25's earlier mr=3 claim was silently using mr=2.
-- Assigned 3 fresh experiments on nl=3/sn=32 recipe (PR #40, #41, #42).
+**Round-23 takeaway (this round):** 🏆 **PR #39 merged** — nl=3/sn=8 wins big (−9.2% val, −10.3% test vs PR #35). **5th consecutive compute-reduction theme win.** Three monotonic trends all continue:
+- sn at nl=3: sn=32 (54.48) → sn=16 (51.98) → **sn=8 (49.44)**
+- Depth at sn=16: nl=5 (61.81) → nl=3 (51.98) → nl=2 (50.72, single-seed)
+- Test improves 20-25% on OOD splits vs PR #35
+
+**Floors NOT found. Immediate follow-up (PR #43 assigned to nezuko):** sn=4 probe, nl=2/sn=8 double compound, nl=1 depth probe.
 
 **Key prior insights still binding:**
-- L1 (PR #3), sw=1 (PR #11), AMP+grad_accum=4 (PR #12), Fourier PE σ=0.7 m=160 (PR #24), SwiGLU (PR #20), sn=32 (PR #27), nl=3 (PR #35). Seven compounding components.
-- **Compute-reduction theme has won 4×:** AMP, sn=32, sn=16, nl=3. n_hidden shrink untested.
-- **n_head monotonic trend robust (nh=1 < nh=2 < nh=4 << nh=8) across sn=16, sn=64, nl=5.** Alphonse's PR #32 r3 tests at nl=3/sn=32 — the critical compound.
-- **Noise floor recipe-dependent:** nl=3/sn=32 2-seed std 0.376 val (tight); earlier recipes wider.
-- `--mlp_ratio` CLI fix cherry-picked (commit b8330ac). All future flag values work.
+- L1 (PR #3), sw=1 (PR #11), AMP+grad_accum=4 (PR #12), Fourier PE σ=0.7 m=160 (PR #24), SwiGLU (PR #20), sn=32 (PR #27 → sn=16 PR #34 → **sn=8 PR #39**), nl=3 (PR #35). Eight compounding components.
+- **Compute-reduction theme has won 5×:** AMP, sn=32, sn=16, nl=3, sn=8. Budget-bound mechanism: shrinking model frees wall-clock for more epochs.
+- **n_head monotonic trend robust (nh=1 < nh=2 < nh=4 << nh=8) across sn=16, sn=64, nl=5.** Alphonse's PR #32 r3 tests at nl=3/sn=32.
+- **Noise floor recipe-dependent:** nl=3/sn=32 2-seed std 0.376 val; nl=3/sn=8 2-seed std 0.517 val; nl=3/sn=16 3-seed std 0.300 val. All tight.
+- `--mlp_ratio` CLI fix cherry-picked (commit b8330ac). `--n_layers` CLI correct (PR #35).
 
 ---
 
@@ -37,7 +38,7 @@
 | frieren  | WIP (r22) | #40: LR warmup + cosine-floor revival on nl=3 recipe | `frieren/lr-warmup-nl3` |
 | fern     | WIP (r22) | #41: n_hidden shrink sweep {64,96,128,160} on nl=3/sn=32 | `fern/n-hidden-shrink-sweep` |
 | tanjiro  | WIP (r22) | #42: Dropout + DropPath sweep on nl=3 (regularization) | `tanjiro/dropout-sweep-nl3` |
-| nezuko   | WIP (r21) | #39: nl=3 × sn=16 compound + sn=8 & nl=2 probes | `nezuko/nl3-sn16-compound` |
+| nezuko   | WIP (r23) | #43: floor-mapping — sn=4, nl=2/sn=8 double compound, nl=1 | `nezuko/sn-floor-nl-floor-sweep` |
 | alphonse | WIP (r21) | #32 r3: nh=1/nh=2 × nl=3/sn=32 compound + shape-preserving | `alphonse/n-head-sweep` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 — VERY STALE | `edward/ema-gradclip-stability` |
 | thorfinn | WIP (r13) | #29: Slice-bottleneck residual decoder — likely stale | `thorfinn/slice-bottleneck-decoder` |
@@ -56,15 +57,17 @@ None at this time.
 
 | PR | Student | Hypothesis | Target |
 |----|---------|-----------|--------|
-| #40 | frieren  | LR warmup + cosine-floor revival on nl=3 | Beat **54.48** (2-seed mean) |
-| #41 | fern     | n_hidden shrink sweep {64, 96, 128, 160} on nl=3/sn=32 | Beat **54.48** |
-| #42 | tanjiro  | Dropout + DropPath sweep on nl=3 (regularization opens up at 32 epochs) | Beat **54.48** |
-| #39 | nezuko   | nl=3 × sn=16 compound + sn=8 & nl=2 probes | Beat **54.48** |
-| #32 | alphonse | r3: nh=1/nh=2 × nl=3/sn=32 compound + shape-preserving control | Beat **54.48** |
+| #43 | nezuko   | Floor-mapping: sn=4, nl=2/sn=8 double compound, nl=1 probe | Beat **49.44** |
+| #40 | frieren  | LR warmup + cosine-floor revival (stale target — needs sn=8 rebase) | Beat **49.44** |
+| #41 | fern     | n_hidden shrink sweep (stale target — needs sn=8 rebase) | Beat **49.44** |
+| #42 | tanjiro  | Dropout + DropPath sweep (stale target — needs sn=8 rebase) | Beat **49.44** |
+| #32 | alphonse | r3: nh=1/nh=2 × nl=3/sn=32 (stale target — needs sn=8 rebase) | Beat **49.44** |
 | #8  | edward   | EMA 0.999 + wider grad-clip on L1 — VERY STALE | Will need full rebase |
 | #29 | thorfinn | Slice-bottleneck residual decoder — likely stale | Will need rebase |
 
-**Merge threshold:** winner 2-seed mean ≤ **54.10** for strict merge (nl=3 anchor std 0.376).
+**Merge threshold:** winner 2-seed mean ≤ ~**48.9** for strict merge (using nl=3/sn=8 anchor std 0.517 val).
+
+**Note:** 5 of 7 in-flight PRs are now stale-vs-baseline (assigned at 54.48; baseline moved to 49.44). They remain useful as single-axis knob sweeps on a fixed recipe but their winning candidates will need rebase + re-run on sn=8 before merging. Nezuko's PR #43 and PR #39 aside, the other knobs (LR, n_hidden, dropout, n_head) are orthogonal to sn and may still yield compound wins on the sn=8 recipe.
 
 ---
 

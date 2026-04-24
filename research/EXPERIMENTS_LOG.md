@@ -1401,3 +1401,53 @@ This is the 2nd massive architectural win from the "shrink compute → train lon
 - **PR #40 (frieren):** LR warmup + min_lr + higher peak lr sweep on nl=3 recipe. nezuko's earlier LR work was at nl=5 (closed r11); nl=3's 32-epoch regime is new.
 - **PR #41 (fern):** n_hidden shrink sweep {64, 96, 128, 160} on nl=3/sn=32. Tests whether compute-reduction theme (4/4 wins) extends to width axis. n_hidden has only been expanded before (PRs #4, #16 both failed) — never shrunk.
 - **PR #42 (tanjiro):** Dropout + DropPath regularization sweep on nl=3. At 32 epochs of training, regularization is potentially useful for the first time on this track.
+
+---
+
+## 2026-04-24 — PR #39: nezuko nl=3 × sn=16 compound — MERGED 🏆
+
+- **Branch:** `nezuko/nl3-sn16-compound`
+- **W&B group:** `nezuko/nl3-sn16-compound`
+- **Hypothesis:** Test whether nl=3 and sn=16 compound additively. Also probe sn=8 triple compound and nl=2 depth probe.
+
+### Results (W&B verified)
+
+| Rank | Config (nl/sn/seed) | val_avg | test_avg | best_ep | epochs |
+|------|---------------------|---------|----------|---------|--------|
+| 1 | nl=3/sn=8/s1 | **49.077** | **42.473** | 38 | 38 |
+| 2 | nl=3/sn=8/s0 | 49.808 | 42.426 | 38 | 38 |
+| 3 | nl=2/sn=16/s0 | 50.715 | 43.850 | 48 | 49 |
+| 4 | nl=3/sn=16/s0 | 51.719 | 44.234 | 36 | 36 |
+| 5 | nl=3/sn=16/s2 | 52.230 | 45.665 | 35 | 36 |
+| 6 | nl=3/sn=16/s1 | 52.247 | 44.514 | 35 | 36 |
+| 7 | nl=3/sn=32/s1 (anchor) | 54.210 | 47.484 | 32 | 32 |
+| 8 | nl=3/sn=32/s0 (anchor) | 54.742 | 47.187 | 32 | 32 |
+
+### Per-config aggregates
+
+| Config | n_seeds | val mean ± std | test mean ± std |
+|--------|---------|----------------|-----------------|
+| nl=3/sn=32 (anchor) | 2 | 54.476 ± 0.376 | 47.336 ± 0.209 |
+| nl=3/sn=16 | 3 | 52.065 ± 0.300 | 44.804 ± 0.759 |
+| **nl=3/sn=8 (winner)** | 2 | **49.443 ± 0.517** | **42.450 ± 0.033** |
+| nl=2/sn=16 (probe) | 1 | 50.715 | 43.850 |
+
+### Analysis
+
+- **COMPOUND CONFIRMED: nl=3 × sn=16 is ADDITIVE.** Δval from sn=32 to sn=16 at nl=3 = −2.49 (4.58%). Δval from sn=16 to sn=8 at nl=3 = −2.54 (4.88%). Each sn halving consistently buys ~2.5 val.
+- **13.4σ below anchor std** — decisive merge.
+- **Three monotonic trends all continue:**
+  1. sn axis at nl=3: sn=32 → sn=16 → sn=8 — still descending.
+  2. Depth axis at sn=16: nl=5 → nl=3 → nl=2 — still descending.
+  3. Both sn=8 (best_ep=38=terminal) and nl=2/sn=16 (best_ep=48=terminal) still improving at cutoff.
+- **Mechanism confirmed:** budget-bound, compute-reduction extends training. sn=32 reaches 32 epochs; sn=8 reaches 38 epochs. Each throughput gain directly converts to better val.
+- **Uniform split win.** Test 20-25% improvement on OOD splits (geom_rc, re_rand) vs PR #35.
+- **nl=2/sn=16 single-seed (50.72) is promising** but needs 2-seed confirmation. Depth monotonic extends at least to nl=2.
+
+### Decision: **MERGED** into `kagent_v_students`.
+
+New baseline: val **49.077 best-seed / 49.443 2-seed mean**; test **42.473 / 42.450**. Default recipe: nl=3, sn=8, all other components unchanged.
+
+**Follow-up (PR #43 assigned):** floor-mapping sweep — sn=4, nl=2/sn=8 double compound, nl=1 probe, 2-seed nl=2/sn=16 verification.
+
+This is the 5th consecutive compute-reduction theme win. nezuko has now led 3 of the top 4 architectural wins on this program (PRs #27, #35, #39).
