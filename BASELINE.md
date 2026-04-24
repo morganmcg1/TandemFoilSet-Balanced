@@ -8,31 +8,31 @@
 
 ## Current best
 
-**PR #12 — fern: Throughput scaling — AMP + grad accumulation to unlock more epochs**
-- **val_avg/mae_surf_p: 88.268** (lower is better)
-- W&B run: `n68w9q7o` (`fern/sw1-amp-accum4`)
-- Best epoch: 19 (timeout-bounded at ~31.5 min; AMP unlocked +5 epochs vs baseline)
-- test_avg/mae_surf_p: **79.733** (test_geom_camber_cruise +Inf bug now patched)
+**PR #7 — alphonse: Fourier PE on (x,z) + FiLM conditioning on log(Re)**
+- **val_avg/mae_surf_p: 84.737** (lower is better)
+- W&B run: `91z1948k` (`alphonse/sw1-fr-s1-m160`)
+- Best epoch: 18 (timeout-bounded at ~31 min; AMP+grad_accum=4 baseline)
+- test_avg/mae_surf_p: **75.244**
 
-### Per-split val surface-p MAE (best checkpoint, epoch 19)
+### Per-split val surface-p MAE (best checkpoint, epoch 18)
 
-| Split | mae_surf_p | vs PR #11 |
+| Split | mae_surf_p | vs PR #12 |
 |-------|-----------|-----------|
-| val_single_in_dist | 104.50 | −2.3% |
-| val_geom_camber_rc | 100.70 | −5.1% |
-| val_geom_camber_cruise | 65.19 | −11.0% |
-| val_re_rand | 82.69 | −4.0% |
-| **val_avg** | **88.268** | **−5.2%** |
+| val_single_in_dist | 103.90 | −0.6% |
+| val_geom_camber_rc | 94.07 | −6.6% |
+| val_geom_camber_cruise | 61.58 | −5.5% |
+| val_re_rand | 79.40 | −4.0% |
+| **val_avg** | **84.737** | **−4.0%** |
 
 ### Per-split test surface-p MAE (best checkpoint)
 
 | Split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist | 94.07 |
-| test_geom_camber_rc | 90.90 |
-| test_geom_camber_cruise | 56.18 |
-| test_re_rand | 77.78 |
-| **test_avg** | **79.733** |
+| test_single_in_dist | 90.58 |
+| test_geom_camber_rc | 83.39 |
+| test_geom_camber_cruise | 54.37 |
+| test_re_rand | 72.63 |
+| **test_avg** | **75.244** |
 
 ### Current default config (post-merge)
 
@@ -53,6 +53,9 @@
 | optimizer | AdamW |
 | scheduler | CosineAnnealingLR(T_max=total_optimizer_steps) |
 | loss | L1 (abs, vol + surf_weight × surf) in normalized space |
+| fourier_features | **fixed** |
+| fourier_m | **160** |
+| fourier_sigma | **1.0** |
 
 Reproduce:
 ```bash
@@ -63,12 +66,25 @@ cd target && python train.py \
     --amp true \
     --grad_accum 4 \
     --batch_size 4 \
+    --fourier_features fixed \
+    --fourier_m 160 \
+    --fourier_sigma 1.0 \
     --wandb_name "<student>/<experiment>"
 ```
 
 ---
 
 ## Baseline history
+
+### 2026-04-23 — PR #7: alphonse Fourier PE on (x,z) — fixed σ=1 m=160
+
+- **val_avg/mae_surf_p: 84.737** (previous: 88.268, PR #12)
+- W&B run: `91z1948k` (group: `alphonse/fourier-sw1`)
+- Change: Random Fourier Features on (x,z) coordinates: `γ(p) = [sin(2πBp), cos(2πBp)]` with B∈R^{m×2} from N(0,σ²=1), m=160 frequencies, concatenated to the input before the preprocess MLP. Gives the preprocess MLP the spatial bandwidth to resolve boundary-layer gradients (Tancik 2020 mechanism). surf_weight fixed to default 1.0. FiLM (per-block log(Re) conditioning) dropped — net-negative at this training budget.
+- Delta: −4.0% val / −5.6% test vs PR #12 baseline (88.268 / 79.733).
+- Wins across all splits: geom_camber_rc −6.6%, val_re_rand −4.0%, geom_camber_cruise −5.5%.
+- Peak VRAM: 74.4 GB (m=160), well within 96 GB headroom.
+- Note: m-curve is non-monotonic (U-shaped). m=20 is nearly tied (85.392 val / 75.800 test) — 10× fewer PE params. m=160 wins narrowly as the safe pick.
 
 ### 2026-04-23 — PR #12: fern throughput scaling (AMP bf16 + grad_accum=4)
 
@@ -100,7 +116,7 @@ cd target && python train.py \
 ## Primary metric
 
 - **Validation (checkpoint selection):** `val_avg/mae_surf_p` — equal-weight mean across four validation splits. Lower is better.
-- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits. Currently blocked by +Inf bug in `test_geom_camber_cruise/000020.pt`.
+- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits. Note: test_geom_camber_cruise sample 20 has inf GT values; patched in scoring.py (sample excluded from MAE aggregation).
 
 ## Update protocol
 
