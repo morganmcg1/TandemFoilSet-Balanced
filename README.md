@@ -19,21 +19,19 @@ If you use this balanced split design or benchmark package, please cite the **Bi
 }
 ```
 
-## Splits
-The goal behind the split is to be able to say:
-- The model is good/bad at generalizing to unseen geometries (train on low + high camber, val/test on moderate)
-- The same model works across different Reynolds numbers for both race car and cruise (train on low, med, high Re, val/test on low, moderate, high) - random split across all Re numbers
-- The model performs well on a single-foil random split as a sanity check
+## TandemFoilSet-Balanced Splits Rationale
+The goal behind this split is to be able to say:
+- The trained model is good/bad at generalizing to unseen geometries (train on low + high camber, val/test on moderate)
+- AND the same model works across different Reynolds numbers for both race car and cruise (train on low, med, high Re, val/test on low, moderate, high) - random split across all Re numbers
+- AND the model performs well on a single-foil random split as a sanity check
 
 See **[SPLITS.md](data/SPLITS.md)** for a full description of the dataset splits.
 
 ## Training Files
 
-### Targets
+Below are details of the training files that can be used in an autoresearch context. These provide an agent with a base train.py file as well as instructions of metrics to optimize, information about the dataset and file to preprocess the data and calculate results.
 
-CFD surrogate research target: predict the full velocity `(Ux, Uy)` and pressure `p` field on tandem-airfoil meshes from TandemFoilSet.
-
-### Layout
+### Files Layout
 
 ```
 .
@@ -55,7 +53,7 @@ CFD surrogate research target: predict the full velocity `(Ux, Uy)` and pressure
 
 ### Data
 
-Pre-processed samples live on the PVC at `/mnt/new-pvc/datasets/tandemfoil/splits_v2/`. Materialize them once from the manifest:
+Pre-processed samples live on the PVC at `/mnt/new-pvc/datasets/tandemfoil/splits_v2/` (private author-specific PVC, you'll have to download the dataset yourself to be able to run this code). Materialize them once from the manifest:
 
 ```
 python data/prepare_splits.py
@@ -63,7 +61,7 @@ python data/prepare_splits.py
 
 After that, `train.py` streams `.pt` samples directly — no re-preprocessing per run.
 
-See `program.md` for feature layout (24 input dims), target channels, split design, and the full metric contract.
+See `program.md` for input feature layout (24 input dims), target channels, split design, and the full metric contract.
 
 ### Training
 
