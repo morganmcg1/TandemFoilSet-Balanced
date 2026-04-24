@@ -136,6 +136,57 @@ class SwiGLUMLP(nn.Module):
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
 
 
+class ScaleHead(nn.Module):
+    """Tiny MLP log(Re) → predicted log(alpha) for sample-wise normalization.
+
+    ``alpha`` is the per-sample scale multiplier applied on top of the global
+    per-channel y_std normalization (so ``alpha ≈ 1`` for a typical sample,
+    >> 1 for high-Re outliers). Out-dim 3 ⇒ per-channel (Ux, Uy, p); out-dim 1
+    ⇒ a shared scalar multiplier.
+    """
+
+    def __init__(self, hidden: int = 32, out_dim: int = 3):
+        super().__init__()
+        self.out_dim = out_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(1, hidden), nn.GELU(),
+            nn.Linear(hidden, hidden), nn.GELU(),
+            nn.Linear(hidden, out_dim),
+        )
+
+    def forward(self, log_Re_norm: torch.Tensor) -> torch.Tensor:
+        # log_Re_norm: [B] — normalized (zero-mean, unit-std) log(Re)
+        return self.mlp(log_Re_norm.unsqueeze(-1))  # [B, out_dim]
+
+
+def per_sample_alpha(y_norm_g: torch.Tensor, mask: torch.Tensor,
+                     scale_out_dim: int, eps_floor: float):
+    """Empirical per-sample scale multiplier on top of global y_std normalization.
+
+    Computed as the per-sample std of ``y_norm_g`` around its own per-sample mean,
+    masked to valid nodes. Typical samples give ``alpha ≈ 1``; high-Re outliers
+    give ``alpha >> 1``.
+
+    Returns:
+        alpha_for_norm: [B, 3] if ``scale_out_dim == 3`` else [B, 1]
+            — broadcast-compatible with ``y_norm_g`` for per-sample renormalization.
+        alpha_target: [B, scale_out_dim]
+            — the value the scale head's aux loss should hit (before log).
+    """
+    mask_exp = mask.unsqueeze(-1).to(y_norm_g.dtype)
+    n_valid = mask.sum(dim=1).clamp(min=1).to(y_norm_g.dtype).unsqueeze(-1)  # [B, 1]
+    y_mean_s = (y_norm_g * mask_exp).sum(dim=1) / n_valid                     # [B, 3]
+    centered = (y_norm_g - y_mean_s.unsqueeze(1)) * mask_exp                   # [B, N, 3]
+    y_var_s = (centered ** 2).sum(dim=1) / n_valid                             # [B, 3]
+    alpha_emp = (y_var_s + 1e-6).sqrt().clamp(min=eps_floor)                   # [B, 3]
+
+    if scale_out_dim == 1:
+        # Geometric mean across channels = mean in log space.
+        alpha_shared = torch.exp(torch.log(alpha_emp).mean(dim=-1, keepdim=True))  # [B, 1]
+        return alpha_shared, alpha_shared
+    return alpha_emp, alpha_emp
+
+
 def apply_fourier_pe(x_norm: torch.Tensor, enc: "FourierEncoder | None") -> torch.Tensor:
     """Append Fourier PE of the leading (x, z) coords to the input features.
 
@@ -311,17 +362,35 @@ def elementwise_loss(pred: torch.Tensor, target: torch.Tensor, loss_type: str,
 
 def evaluate_split(model, loader, stats, surf_weight, device,
                    loss_type: str, huber_delta: float,
-                   fourier_enc: "FourierEncoder | None" = None) -> dict[str, float]:
+                   fourier_enc: "FourierEncoder | None" = None,
+                   scale_head: "ScaleHead | None" = None,
+                   sample_wise_renorm: bool = False,
+                   scale_out_dim: int = 3,
+                   scale_eps: float = 1e-3,
+                   log_re_mean: float = 0.0,
+                   log_re_std: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
-    ``loss`` is the normalized-space loss used for training monitoring; the MAE
-    channels are in the original target space and accumulated per organizer
+    ``loss`` is the normalized-space loss used for training monitoring (computed
+    against the *empirical* alpha when sample-wise renorm is on, matching the
+    training objective); MAE is computed in physical units after denormalization
+    through the *predicted* alpha (the realistic inference path), per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``sample_wise_renorm``, also accumulates alpha-head diagnostics
+    (``alpha_log_rmse``, ``alpha_log_r2``, ``alpha_pred_mean``, ``alpha_emp_mean``)
+    so the reporter can see how well log(Re)→log(alpha) is actually being learned.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+
+    # Scale-head diagnostics (log-space): accumulate per-sample log_pred and log_emp.
+    log_pred_all: list[torch.Tensor] = []
+    log_emp_all: list[torch.Tensor] = []
+    floor_hits = 0
+    total_samples = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -332,7 +401,30 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_aug = apply_fourier_pe(x_norm, fourier_enc)
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm_g = (y - stats["y_mean"]) / stats["y_std"]
+
+            if sample_wise_renorm:
+                # Empirical alpha (for training-equivalent normalized loss)
+                alpha_for_norm, alpha_target = per_sample_alpha(
+                    y_norm_g, mask, scale_out_dim, scale_eps)
+                y_norm = y_norm_g / alpha_for_norm.unsqueeze(1)
+
+                # Predicted alpha (for physical-space denormalization)
+                log_Re = x[:, 0, 13]
+                log_Re_norm = (log_Re - log_re_mean) / log_re_std
+                pred_log_alpha = scale_head(log_Re_norm)  # [B, scale_out_dim]
+                pred_alpha = torch.exp(pred_log_alpha)    # [B, scale_out_dim]
+
+                # Diagnostics (log space)
+                log_pred_all.append(pred_log_alpha.detach().float().cpu())
+                log_emp_all.append(torch.log(alpha_target + 1e-6).detach().float().cpu())
+                # Count fraction of samples where any channel hit the floor
+                floor_hits += (alpha_for_norm <= scale_eps * 1.01).any(dim=-1).sum().item()
+                total_samples += alpha_for_norm.shape[0]
+            else:
+                y_norm = y_norm_g
+                pred_alpha = None
+
             pred = model({"x": x_aug})["preds"]
 
             per_elem = elementwise_loss(pred, y_norm, loss_type, huber_delta)
@@ -348,7 +440,12 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if sample_wise_renorm:
+                # Denormalize through PREDICTED alpha (stage 2) then global y_std (stage 1)
+                pred_norm_g = pred * pred_alpha.unsqueeze(1)  # broadcasts: [B, N, 3] * [B, 1, 1 or 3]
+                pred_orig = pred_norm_g * stats["y_std"] + stats["y_mean"]
+            else:
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -358,6 +455,20 @@ def evaluate_split(model, loader, stats, surf_weight, device,
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+
+    if sample_wise_renorm and log_pred_all:
+        log_pred = torch.cat(log_pred_all, dim=0)   # [N_split, scale_out_dim]
+        log_emp = torch.cat(log_emp_all, dim=0)     # [N_split, scale_out_dim]
+        # Per-channel RMSE and R² in log space; average across channels for scalar.
+        resid = log_pred - log_emp                   # [N, C]
+        rmse = (resid ** 2).mean().sqrt().item()
+        emp_var = ((log_emp - log_emp.mean(dim=0, keepdim=True)) ** 2).mean().item()
+        r2 = 1.0 - ((resid ** 2).mean().item() / max(emp_var, 1e-12))
+        out["alpha_log_rmse"] = rmse
+        out["alpha_log_r2"] = r2
+        out["alpha_pred_mean"] = torch.exp(log_pred).mean().item()
+        out["alpha_emp_mean"] = torch.exp(log_emp).mean().item()
+        out["alpha_floor_frac"] = floor_hits / max(total_samples, 1)
     return out
 
 
@@ -446,6 +557,9 @@ def save_model_artifact(
     config_yaml = model_dir / "config.yaml"
     if config_yaml.exists():
         artifact.add_file(str(config_yaml), name="config.yaml")
+    scale_head_path = model_dir / "scale_head.pt"
+    if scale_head_path.exists():
+        artifact.add_file(str(scale_head_path), name="scale_head.pt")
 
     aliases = ["best", f"epoch-{best_metrics['epoch']}"]
     run.log_artifact(artifact, aliases=aliases)
@@ -486,6 +600,14 @@ class Config:
     fourier_sigma_x: float | None = None  # per-coord σ for x; both x & z must be set
     fourier_sigma_z: float | None = None  # per-coord σ for z; both x & z must be set
     swiglu: bool = False            # replace GELU-MLP with SwiGLU in each TransolverBlock
+    # Sample-wise re-normalization with an auxiliary Re→scale head.
+    # On top of the existing global per-channel y-norm, we divide by a per-sample
+    # multiplier (empirical at train time, predicted from log(Re) at inference).
+    sample_wise_renorm: bool = False
+    scale_out_dim: int = 3          # 3 = per-channel (Ux, Uy, p); 1 = shared scalar multiplier
+    scale_hidden: int = 32          # hidden width of the tiny log(Re)→log(alpha) MLP
+    lambda_scale: float = 0.1       # weight on aux-MSE(log alpha_pred, log alpha_emp)
+    scale_eps: float = 1e-3         # floor on empirical alpha to avoid log(0) / div-by-0
     seed: int = 0                   # RNG seed for torch / numpy / python random
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -509,6 +631,8 @@ if (cfg.fourier_sigma_x is None) != (cfg.fourier_sigma_z is None):
         "--fourier_sigma_x and --fourier_sigma_z must be set together "
         f"(got x={cfg.fourier_sigma_x!r}, z={cfg.fourier_sigma_z!r})"
     )
+if cfg.scale_out_dim not in (1, 3):
+    raise ValueError(f"--scale_out_dim must be 1 or 3, got {cfg.scale_out_dim}")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -585,14 +709,32 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 
-# Include learnable Fourier B in the parameter list so AdamW + cosine schedule
-# see it. Fixed Fourier B is a buffer and has no gradient, so nothing to add.
+# Scale-head for sample-wise renorm (tiny log(Re)→log(alpha) MLP).
+scale_head: ScaleHead | None = None
+if cfg.sample_wise_renorm:
+    scale_head = ScaleHead(hidden=cfg.scale_hidden, out_dim=cfg.scale_out_dim).to(device)
+
+# Normalization constants for log(Re) input to the scale head: reuse the same
+# stats the main model consumes on feature 13 so train/val/test are consistent.
+log_re_mean = float(stats["x_mean"].view(-1)[13].item())
+log_re_std = float(stats["x_std"].view(-1)[13].item())
+
+# Include learnable Fourier B and (if on) the scale head in the parameter list
+# so AdamW + cosine schedule see them. Fixed Fourier B is a buffer.
 trainable_params = list(model.parameters())
 if fourier_enc is not None and cfg.fourier_features == "learnable":
     trainable_params += list(fourier_enc.parameters())
+if scale_head is not None:
+    trainable_params += list(scale_head.parameters())
 n_params = sum(p.numel() for p in trainable_params)
+n_scale_params = sum(p.numel() for p in scale_head.parameters()) if scale_head is not None else 0
 print(f"Model: Transolver ({n_params/1e6:.2f}M params, "
-      f"space_dim={space_dim}, fourier={cfg.fourier_features})")
+      f"space_dim={space_dim}, fourier={cfg.fourier_features})"
+      + (f"  +scale_head({n_scale_params} params, out={cfg.scale_out_dim})"
+         if scale_head is not None else ""))
+if cfg.sample_wise_renorm:
+    print(f"Sample-wise renorm: out_dim={cfg.scale_out_dim}  λ_scale={cfg.lambda_scale}  "
+          f"eps={cfg.scale_eps}  log_Re_norm=({log_re_mean:.3f}, {log_re_std:.3f})")
 
 optimizer = torch.optim.AdamW(trainable_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 # Cosine schedule spans the full set of *optimizer* steps (grad-accum aware)
@@ -645,10 +787,12 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    if scale_head is not None:
+        scale_head.train()
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_micro = n_opt = 0
     # Accumulators for one optimizer step (average across micro-batches at log time).
-    accum_vol = accum_surf = accum_loss = 0.0
+    accum_vol = accum_surf = accum_loss = accum_aux = 0.0
     optimizer.zero_grad(set_to_none=True)
 
     for micro_idx, (x, y, is_surface, mask) in enumerate(
@@ -661,7 +805,22 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_aug = apply_fourier_pe(x_norm, fourier_enc)
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_norm_g = (y - stats["y_mean"]) / stats["y_std"]
+
+        # Sample-wise renorm + aux scale loss (fp32, outside autocast for log/exp).
+        if cfg.sample_wise_renorm:
+            alpha_for_norm, alpha_target = per_sample_alpha(
+                y_norm_g, mask, cfg.scale_out_dim, cfg.scale_eps)
+            y_norm = y_norm_g / alpha_for_norm.unsqueeze(1)
+
+            log_Re = x[:, 0, 13]
+            log_Re_norm = (log_Re - log_re_mean) / log_re_std
+            pred_log_alpha = scale_head(log_Re_norm)
+            target_log_alpha = torch.log(alpha_target + 1e-6)
+            aux_loss = F.mse_loss(pred_log_alpha, target_log_alpha)
+        else:
+            y_norm = y_norm_g
+            aux_loss = None
 
         # bf16 autocast wraps forward + loss; backward inherits the cast through
         # the autograd graph. No GradScaler needed for bf16 (full fp32 exponent
@@ -674,7 +833,9 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        loss = main_loss if aux_loss is None else main_loss + cfg.lambda_scale * aux_loss
 
         # Scale by 1/grad_accum so accumulated gradient == mean-of-minibatches
         # gradient (what you'd get at effective batch = batch_size * grad_accum).
@@ -683,6 +844,8 @@ for epoch in range(MAX_EPOCHS):
         accum_vol += vol_loss.item()
         accum_surf += surf_loss.item()
         accum_loss += loss.item()
+        if aux_loss is not None:
+            accum_aux += aux_loss.item()
         n_micro += 1
 
         is_last_micro = (micro_idx + 1) == len(train_loader)
@@ -694,25 +857,37 @@ for epoch in range(MAX_EPOCHS):
             n_opt += 1
 
             denom = cfg.grad_accum if not is_last_micro else ((micro_idx % cfg.grad_accum) + 1)
-            wandb.log({
+            log_payload = {
                 "train/loss": accum_loss / denom,
                 "train/vol_loss_step": accum_vol / denom,
                 "train/surf_loss_step": accum_surf / denom,
                 "lr_step": scheduler.get_last_lr()[0],
                 "global_step": global_step,
-            })
+            }
+            if cfg.sample_wise_renorm:
+                log_payload["train/aux_loss_step"] = accum_aux / denom
+            wandb.log(log_payload)
             epoch_vol += accum_vol
             epoch_surf += accum_surf
-            accum_vol = accum_surf = accum_loss = 0.0
+            epoch_aux += accum_aux
+            accum_vol = accum_surf = accum_loss = accum_aux = 0.0
 
     epoch_vol /= max(n_micro, 1)
     epoch_surf /= max(n_micro, 1)
+    epoch_aux /= max(n_micro, 1)
 
     # --- Validate ---
     model.eval()
+    if scale_head is not None:
+        scale_head.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.loss_type, cfg.huber_delta, fourier_enc=fourier_enc)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device,
+            cfg.loss_type, cfg.huber_delta, fourier_enc=fourier_enc,
+            scale_head=scale_head, sample_wise_renorm=cfg.sample_wise_renorm,
+            scale_out_dim=cfg.scale_out_dim, scale_eps=cfg.scale_eps,
+            log_re_mean=log_re_mean, log_re_std=log_re_std,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -728,11 +903,19 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.sample_wise_renorm:
+        log_metrics["train/aux_loss"] = epoch_aux
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if cfg.sample_wise_renorm:
+        for k in ("alpha_log_rmse", "alpha_log_r2", "alpha_pred_mean",
+                  "alpha_emp_mean", "alpha_floor_frac"):
+            vals = [m[k] for m in split_metrics.values() if k in m]
+            if vals:
+                log_metrics[f"val_avg/{k}"] = sum(vals) / len(vals)
     wandb.log(log_metrics)
 
     tag = ""
@@ -744,6 +927,8 @@ for epoch in range(MAX_EPOCHS):
             "per_split": split_metrics,
         }
         torch.save(model.state_dict(), model_path)
+        if scale_head is not None:
+            torch.save(scale_head.state_dict(), model_dir / "scale_head.pt")
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -769,6 +954,10 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+    if scale_head is not None:
+        scale_head.load_state_dict(
+            torch.load(model_dir / "scale_head.pt", map_location=device, weights_only=True))
+        scale_head.eval()
 
     test_metrics = None
     test_avg = None
@@ -780,8 +969,13 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.loss_type, cfg.huber_delta, fourier_enc=fourier_enc)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device,
+                cfg.loss_type, cfg.huber_delta, fourier_enc=fourier_enc,
+                scale_head=scale_head, sample_wise_renorm=cfg.sample_wise_renorm,
+                scale_out_dim=cfg.scale_out_dim, scale_eps=cfg.scale_eps,
+                log_re_mean=log_re_mean, log_re_std=log_re_std,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
