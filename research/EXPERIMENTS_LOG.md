@@ -925,3 +925,66 @@ Follow-up: fine σ sweep {0.5, 0.55, 0.6, 0.65, 0.75} to locate the true minimum
 ### Decision: **CLOSED.**
 
 Architectural-decoder direction NOT closed entirely — student's own follow-up #1 (slice-bottleneck decoder using `PhysicsAttention`) is the principled complexity fix. Reassigned as PR #29: slice-bottleneck matches trunk iter-speed at O(N·G·D).
+
+---
+
+## 2026-04-24 — PR #25: fern: SwiGLU refinements (mlp2 head + mlp_ratio) — CLOSED
+
+- **Branch:** `fern/swiglu-refinements` (pre-PR #24, 10th consecutive stale-rebase — σ=1.0 on all runs)
+- **W&B group:** `fern/swiglu-refinements`
+- **Hypothesis:** (A) Replace TransolverBlock's `mlp2` GELU-MLP with SwiGLU; (B) Expand SwiGLU `mlp_ratio` from 2 → {3, 4}.
+
+### Results
+
+| Rank | Config (mr / mlp2 / seed) | n_params | val_avg | test_avg | best_ep |
+|------|---------------------------|----------|---------|----------|---------|
+| 1 | 2 / SwiGLU / s0 | 0.793M | 72.503 | 65.408 | 17 |
+| 2 | 3 / GELU / s0 | 0.909M | 73.345 | 66.847 | 14 |
+| 3 | anchor (s0) | 0.743M | 73.660 | 63.983 | 17 |
+| 4 | anchor (s1) | 0.743M | 74.173 | 67.009 | 17 |
+| 5 | 4 / GELU / s0 | 1.073M | 75.282 | 65.190 | 14 |
+| 6 | 3 / SwiGLU / s1 | 0.959M | 77.816 | 68.613 | 15 |
+| 7 | 2 / SwiGLU / s1 | 0.793M | 80.373 | 68.232 | 16 |
+| 8 | 3 / SwiGLU / s0 | 0.959M | 82.352 | 75.198 | 15 |
+
+### Analysis
+
+- **mlp2-SwiGLU destabilizes training.** 2-seed spread at mr=2 with mlp2-SwiGLU: 72.50/80.37, mean 76.44, std 3.21 val (~15× anchor std 0.36). Student diagnosis correct: gated w3 projection × trunc_normal(0.02) init lacks LLaMA-style residual depth scaling (1/sqrt(2L)) → gradient variance blows up in 2 of 4 seeds.
+- **mlp_ratio=3 is a flat plateau** (73.35 vs anchor 73.66) — within noise.
+- **mlp_ratio=4 regresses** (+1.62) AND costs 3 epochs to timeout (best_ep 14 vs 17). Wider FFN doesn't help on this recipe — SwiGLU already captures most expressivity at mr=2.
+- **Compound (mr=3 + mlp2-SwiGLU) is the worst run** (82.35) — destructive interaction. Both refinements' seed instability stacks.
+- **Branch pre-PR #24** — runs on 73.66 baseline, not current 69.85. Nothing beats even the in-PR anchor on 2-seed mean.
+
+### Decision: **CLOSED.** Fern reassigned to PR #30 (per-block Fourier re-injection — novel direction in Fourier territory, zero-init for safety).
+
+---
+
+## 2026-04-24 — PR #26: frieren: Sample-wise normalization with Re-predicted scale — CLOSED
+
+- **Branch:** `frieren/sample-wise-renorm` (pre-PR #24, 10th consecutive — σ=1.0 on all runs)
+- **W&B group:** `frieren/sample-wise-renorm`
+- **Hypothesis:** Normalize y per-sample (by batch-computed y_std_per_sample), train main model in per-sample-normalized space, train auxiliary scale head h_scale(log_Re) → log(y_std) for inference-time denormalization.
+
+### Results
+
+| Rank | Config (out / λ / seed) | val_avg | test_avg | best_ep |
+|------|--------------------------|---------|----------|---------|
+| 1 | anchor (s0) | **73.660** | 63.983 | 17 |
+| 2 | anchor (s1) | 74.173 | 67.009 | 17 |
+| 3 | 1ch / 0.1 / s0 | 163.958 | 153.767 | 17 |
+| 4 | 3ch / 0.1 / s0 | 183.136 | 171.168 | 17 |
+| 5 | 3ch / 1.0 / s0 | 183.136 | 171.167 | 17 |
+| 6 | 3ch / 0.01 / s0 | 183.136 | 171.168 | 17 |
+| 7 | 3ch / 0.1 / s1 | 194.573 | 182.972 | 17 |
+| 8 | 3ch / 0.1 / s2 | 195.190 | 187.321 | 12 |
+
+### Analysis
+
+- **DECISIVE NEGATIVE.** Best SWR variant (1ch / λ=0.1) is +90 val vs in-PR anchor (~248σ of anchor std 0.363). Uniform 2–2.5× regression across EVERY split (not a differential effect).
+- **Scale head WORKS.** R² ∈ [0.85, 0.92] across 4 splits; α_log_RMSE ≈ 0.24–0.36 (~25% denorm error). Re → log(y_std) mapping is learnable from a single scalar.
+- **Main model can't retrain to the shifted target distribution in 30-min budget.** The sample-wise normalization requires the model to learn a fundamentally different mapping from scratch, and 17 epochs isn't enough.
+- **Mechanistic finding (saves future λ sweeps):** λ_scale ∈ {0.01, 0.1, 1.0} give **IDENTICAL** val to 5 decimals — because scale_head and main model share no parameters, λ only rescales the scale_head's gradients relative to itself. λ on a decoupled aux head is architecturally trivial.
+- **1ch > 3ch by 19 val.** 3-channel scale head destroys the per-channel magnitude ratios (Ux/Uy/p) the Transolver needs. Shared scalar is the right form.
+- **3-seed std at 3ch config: 6.79 val** (18× anchor std) — high-variance AND high-mean failure mode.
+
+### Decision: **CLOSED.** Reassigned to PR #31 (post-hoc scale correction — student's own follow-up #3): train main model in original normalized space (unchanged), apply Re-predicted scale correction only at inference. No retraining cost. Tests whether Re-conditioning adds anything post-hoc.

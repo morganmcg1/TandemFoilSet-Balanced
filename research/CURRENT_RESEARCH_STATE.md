@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 04:00 (round 13 — post PR #23 close)
+- **Updated:** 2026-04-24 04:30 (round 14 — post PR #25/#26 closes)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -30,8 +30,8 @@
 
 | Student | Status | PR | Branch |
 |---------|--------|----|--------|
-| frieren  | WIP (r10) | #26: Sample-wise normalization with Re-predicted scale | `frieren/sample-wise-renorm` |
-| fern     | WIP (r9) | #25: SwiGLU refinements (mlp2 head + mlp_ratio) | `fern/swiglu-refinements` |
+| frieren  | WIP (r14) | #31: Post-hoc Re-scale correction (inference-only) | `frieren/posthoc-re-scale` |
+| fern     | WIP (r14) | #30: Per-block Fourier re-injection (zero-init) | `fern/per-block-fourier` |
 | tanjiro  | WIP (r12) | #17 r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | `tanjiro/input-feature-jitter` |
 | nezuko   | WIP (r11) | #27: slice_num sweep on merged recipe | `nezuko/slice-num-sweep` |
 | alphonse | WIP (r12) | #28: Fine σ sweep {0.5, 0.55, 0.6, 0.65, 0.7, 0.75} + 2-seed | `alphonse/sigma-fine-sweep` |
@@ -52,8 +52,8 @@ None at this time.
 
 | PR | Student | Hypothesis | Target |
 |----|---------|-----------|--------|
-| #26 | frieren  | Sample-wise normalization with Re-predicted scale | Beat **70.67** (2-seed mean) |
-| #25 | fern     | SwiGLU refinements (mlp2 head SwiGLU + mlp_ratio expansion) | Beat **70.67** |
+| #31 | frieren  | Post-hoc Re-scale correction (inference-only; decoupled scale head) | Beat **70.67** (2-seed mean) |
+| #30 | fern     | Per-block Fourier re-injection (zero-init, shared projector) | Beat **70.67** |
 | #17 | tanjiro  | r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | Beat **70.67** |
 | #27 | nezuko   | slice_num sweep {32, 48, 64, 96, 128, 192} + 2-seed anchor | Beat **70.67** |
 | #28 | alphonse | Fine σ sweep {0.5, 0.55, 0.6, 0.65, 0.75} + 2-seed at winner | Beat **70.67** |
@@ -67,6 +67,11 @@ None at this time.
 - **Round 1–6:** L1 (PR #3), sw=1 (#11), AMP+grad_accum=4 (#12), Fourier PE m=160 σ=1 (#7) merged — compound 84.737 baseline.
 - **Round 7 (r7):** Closed PR #14 (sw>1 exhausted). Seed floor on seeded serial: 2.5%.
 - **Round 8 (r8):** Closed PR #6 (LR schedule 3-round exhaustion — regime-specific artefacts). Sent back #17 (gap-only jitter signal real). Assigned #22 (temp annealing).
+- **Round 14 (r14 — 2026-04-24 04:30):**
+  - **Closed PR #25 (fern SwiGLU refinements):** mlp2-SwiGLU destabilizes training (2-seed std 3.21 val, 15× anchor noise — student correctly diagnosed the gated w3 × trunc_normal(0.02) init without residual depth scaling). mlp_ratio=3 is a flat plateau (73.35 vs 73.66); mr=4 regresses (+1.62) and costs 3 epochs. Compound (mr=3 + mlp2-SwiGLU) is the worst run. Branch pre-PR #24 (10th consecutive stale-rebase). Reassigned to PR #30 (per-block Fourier re-injection).
+  - **Closed PR #26 (frieren sample-wise renorm):** decisive negative (+90 val vs in-PR anchor, ~248σ regression). Scale head learned log(Re) → log(y_std) cleanly (R² ≈ 0.9) but main-model retraining under shifted target distribution doesn't fit in 30-min budget — uniform 2–2.5× regression. Important mechanistic finding: λ_scale sweep architecturally uninformative because scale_head and main model share no parameters. Reassigned to PR #31 (post-hoc scale correction — student's own follow-up #3, inference-only, no retraining cost).
+  - **Lab-wide observation:** 10 consecutive students have had stale-rebase issues on pre-merge branches. The merged-recipe flags (`--fourier_sigma 0.7`, `--swiglu`, `--amp true`, `--grad_accum 4`) are the persistent footgun; students rebase code but not runtime-flag assumptions. Debug-run verification step is the only reliable mitigation.
+
 - **Round 13 (r13 — 2026-04-24 04:00):**
   - **Closed PR #23 (thorfinn zero-init residual decoder):** mechanism verified (surf_delta_step0=0 confirmed) but **budget-bound** — decoder ~2× slower than trunk, only reaches ep 6–9 vs anchor ep 17. ControlNet analogy fails when trunk is still training. Branch pre-PR #24 (9th stale-rebase). Student implementation textbook-correct (re-zero after `apply(_init_weights)` to defend against trunc_normal). Reassigned to PR #29 (slice-bottleneck decoder using `PhysicsAttention` — O(N·G·D) complexity matches trunk iter-speed).
   - **Insight:** zero-init residual salvages the "fresh head can't catch trunk" failure mode at init, but requires the refiner to not exceed the compute budget. Vanilla cross-attention on N=150K+ nodes is structurally too expensive; slice-bottleneck PhysicsAttention is the principled fix.
