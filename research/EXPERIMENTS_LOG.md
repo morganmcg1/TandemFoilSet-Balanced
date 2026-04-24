@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-04-24 08:30 — PR #34: frieren: slice_num lower sweep (sn∈{8,16,24} vs sn=32 anchor)
+
+- **Branch:** `frieren/slice-num-lower-sweep`
+- **W&B group:** `frieren/slice-num-lower` (project: `wandb-applied-ai-team/senpai-kagent-v-students`)
+- **Hypothesis:** The sn→val monotonic improvement trend (96→48→32 all winning) continues below sn=32. sn=16 should give more regularization + faster per-epoch time = more training budget.
+
+### Results
+
+| sn | seed | best_ep | val_avg | test_avg | peak_GB | trailing5_val | W&B ID |
+|---:|-----:|--------:|--------:|---------:|--------:|--------------:|:-------|
+| 32 | 0 | 18 | 70.454 | 63.318 | 31.6 | 75.52 | `hm7uf6ts` |
+| 32 | 1 | 19 | 68.420 | 60.364 | 31.6 | 73.64 | `tgex8ons` |
+| 32 | 2 | 20 | 67.186 | 58.358 | 31.6 | 76.38 | `2so1207i` |
+| 24 | 0 | 21 | 63.959 | 56.761 | 30.0 | 69.93 | `xx2fasp7` |
+| 24 | 1 | 19 | 72.538 | 62.966 | 30.0 | 75.34 | `de1cujja` |
+| **16** | 0 | **23** | **60.581** | **54.640** | 28.5 | 67.49 | `moydqx8l` |
+| **16** | 1 | **23** | 63.045 | 55.992 | 28.5 | 68.48 | `tkfnon33` |
+| 8 | 0 | 23 | 62.476 | 54.677 | 26.9 | **64.05** | `c6xqoc7b` |
+
+**Multi-seed statistics:**
+
+| sn | n | val_mean | val_std | Δval vs baseline |
+|---:|--:|---------:|--------:|-----------------:|
+| 32 | 3 | 68.687 | 1.650 | 0.000 (reproduces baseline) |
+| 24 | 2 | 68.249 | 6.066 | −0.44 (UNSTABLE — fails gate) |
+| **16** | **2** | **61.813** | **1.742** | **−6.87 (WINNER)** |
+| 8 | 1 | 62.476 | — | −6.21 (single-seed only) |
+
+### Analysis and Conclusions
+
+**Decisive win for sn=16.** 2-seed mean 61.813 vs baseline 68.687 = −10% val, −8.8% test. Both seeds hit best val at the final epoch (ep=23) — model is not converged, headroom remains.
+
+- **Monotonic trend continues:** 96→48→32→16 all improving. No floor yet.
+- **All splits improve:** largest gain on val_geom_camber_cruise (−17.9%) — consistent with stronger pooling regularization on OOD geometry.
+- **sn=24 is unstable:** 2-seed std=6.07 (3.7× anchor std). Appears to be a transition instability between the stable sn=16 and sn=32 regimes — token assignment degenerate mode.
+- **sn=8 tantalizing:** trailing-5=64.05 (lowest of any run), single seed 62.48. Floor not yet found.
+- **sn=32 anchor reproduces baseline exactly** (3-seed mean 68.687, std 1.650) — noise floor confirmed stable across hardware.
+
+### Decision: **MERGED** into `kagent_v_students`. New baseline = 60.581 best / 61.813 2-seed mean val; 54.640 / 55.316 test.
+
+---
+
 ## 2026-04-24 08:00 — PR #33: fern: α-gated per-block Fourier injection (magnitude-constrained, zero-init α)
 
 - **Branch:** `fern/alpha-gated-pbf`
