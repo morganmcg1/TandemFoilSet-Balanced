@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 04:30 (round 14 — post PR #25/#26 closes)
+- **Updated:** 2026-04-24 05:00 (round 15 — PR #27 sent back, PR #31 unblocked)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -33,7 +33,7 @@
 | frieren  | WIP (r14) | #31: Post-hoc Re-scale correction (inference-only) | `frieren/posthoc-re-scale` |
 | fern     | WIP (r14) | #30: Per-block Fourier re-injection (zero-init) | `fern/per-block-fourier` |
 | tanjiro  | WIP (r12) | #17 r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | `tanjiro/input-feature-jitter` |
-| nezuko   | WIP (r11) | #27: slice_num sweep on merged recipe | `nezuko/slice-num-sweep` |
+| nezuko   | WIP (r15) | #27 r2: slice_num refined {32, 48, 96} on σ=0.7 recipe (2-seed) | `nezuko/slice-num-sweep` |
 | alphonse | WIP (r12) | #28: Fine σ sweep {0.5, 0.55, 0.6, 0.65, 0.7, 0.75} + 2-seed | `alphonse/sigma-fine-sweep` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 | `edward/ema-gradclip-stability` |
 | thorfinn | WIP (r13) | #29: Slice-bottleneck residual decoder (PhysicsAttention) | `thorfinn/slice-bottleneck-decoder` |
@@ -55,7 +55,7 @@ None at this time.
 | #31 | frieren  | Post-hoc Re-scale correction (inference-only; decoupled scale head) | Beat **70.67** (2-seed mean) |
 | #30 | fern     | Per-block Fourier re-injection (zero-init, shared projector) | Beat **70.67** |
 | #17 | tanjiro  | r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | Beat **70.67** |
-| #27 | nezuko   | slice_num sweep {32, 48, 64, 96, 128, 192} + 2-seed anchor | Beat **70.67** |
+| #27 | nezuko   | r2: slice_num {32, 48, 96} on σ=0.7 recipe + 3-seed at sn=32 | Beat **70.67** |
 | #28 | alphonse | Fine σ sweep {0.5, 0.55, 0.6, 0.65, 0.75} + 2-seed at winner | Beat **70.67** |
 | #8  | edward   | EMA 0.999 + wider grad-clip on L1 | Beat **70.67** |
 | #29 | thorfinn | Slice-bottleneck residual decoder (PhysicsAttention, zero-init) | Beat **70.67** |
@@ -67,6 +67,11 @@ None at this time.
 - **Round 1–6:** L1 (PR #3), sw=1 (#11), AMP+grad_accum=4 (#12), Fourier PE m=160 σ=1 (#7) merged — compound 84.737 baseline.
 - **Round 7 (r7):** Closed PR #14 (sw>1 exhausted). Seed floor on seeded serial: 2.5%.
 - **Round 8 (r8):** Closed PR #6 (LR schedule 3-round exhaustion — regime-specific artefacts). Sent back #17 (gap-only jitter signal real). Assigned #22 (temp annealing).
+- **Round 15 (r15 — 2026-04-24 05:00):**
+  - **Sent back PR #27 (nezuko slice_num):** advisor-side error — my assignment body specified `--fourier_sigma 1.0` because PR #24 (σ=0.7) hadn't merged yet at round 11. Nezuko ran faithfully to spec. Their results are directionally real: sn=32 2-seed mean 71.996 beats σ=1 anchor by 1.92 val on both seeds (4/4 seed-paired comparisons favor sn=32). But against the current σ=0.7 baseline (70.667), sn=32 is +1.33 val above — not merge-eligible. Sent back with focused re-run on σ=0.7: sn={32, 48, 96} + 3-seed at sn=32 candidate. Cliff at sn≥128 dropped (epoch-budget-bound at current wall-clock).
+  - **PR #31 (frieren post-hoc rescale):** student preemptively marked ready to ask a clarification question. Review agent answered (option b for 1ch: preserve per-channel ratios via multiplicative correction `pred * y_std_global * (y_std_pred / y_std_global_geomean)`) and sent back to WIP. Student now unblocked.
+  - **Lab-wide observation:** round-11 stale-rebase was actually **my specification error** (assignment body had the wrong σ for the eventual baseline). Correction: when a merge lands during the assignment cycle, the advisor must either (a) retroactively update open-assignment bodies, or (b) explicitly tell students to treat their branch as baseline-at-assignment-time. Haven't done either; adding this as a process note.
+
 - **Round 14 (r14 — 2026-04-24 04:30):**
   - **Closed PR #25 (fern SwiGLU refinements):** mlp2-SwiGLU destabilizes training (2-seed std 3.21 val, 15× anchor noise — student correctly diagnosed the gated w3 × trunc_normal(0.02) init without residual depth scaling). mlp_ratio=3 is a flat plateau (73.35 vs 73.66); mr=4 regresses (+1.62) and costs 3 epochs. Compound (mr=3 + mlp2-SwiGLU) is the worst run. Branch pre-PR #24 (10th consecutive stale-rebase). Reassigned to PR #30 (per-block Fourier re-injection).
   - **Closed PR #26 (frieren sample-wise renorm):** decisive negative (+90 val vs in-PR anchor, ~248σ regression). Scale head learned log(Re) → log(y_std) cleanly (R² ≈ 0.9) but main-model retraining under shifted target distribution doesn't fit in 30-min budget — uniform 2–2.5× regression. Important mechanistic finding: λ_scale sweep architecturally uninformative because scale_head and main model share no parameters. Reassigned to PR #31 (post-hoc scale correction — student's own follow-up #3, inference-only, no retraining cost).

@@ -988,3 +988,37 @@ Architectural-decoder direction NOT closed entirely — student's own follow-up 
 - **3-seed std at 3ch config: 6.79 val** (18× anchor std) — high-variance AND high-mean failure mode.
 
 ### Decision: **CLOSED.** Reassigned to PR #31 (post-hoc scale correction — student's own follow-up #3): train main model in original normalized space (unchanged), apply Re-predicted scale correction only at inference. No retraining cost. Tests whether Re-conditioning adds anything post-hoc.
+
+---
+
+## 2026-04-24 — PR #27 (round 11): nezuko: slice_num sweep — SENT BACK (advisor-error stale assignment)
+
+- **Branch:** `nezuko/slice-num-sweep`
+- **W&B group:** `nezuko/slice-num-sweep`
+- **Hypothesis:** `slice_num=64` inherited from Transolver paper, never cleanly swept on merged recipe. Test {32, 48, 64, 96, 128, 192} with 2-seed anchor.
+
+### Results (on σ=1 recipe — advisor-error stale assignment)
+
+| Rank | slice_num / seed | val_avg | test_avg | best_ep | peak GB |
+|------|------------------|---------|----------|---------|---------|
+| 1 | 32 / s0 | **70.521** | 62.787 | 18 | 31.6 |
+| 2 | 96 / s0 | 71.842 | 65.014 | 14 | 44.6 |
+| 3 | 48 / s0 | 71.851 | 64.386 | 18 | 34.7 |
+| 4 | 32 / s1 | 73.472 | 64.606 | 21 | 31.6 |
+| 5 | 64 / s0 (anchor) | 73.660 | 63.983 | 17 | 37.8 |
+| 6 | 64 / s1 (anchor) | 74.173 | 67.009 | 17 | 37.8 |
+| 7 | 192 / s0 | 86.245 | 75.666 | 10 | 67.7 |
+| 8 | 128 / s0 | 86.942 | 75.769 | 12 | 52.3 |
+
+### Analysis
+
+- **Advisor-side specification error:** PR #27 assignment body (written at round 11 before PR #24 merged) pinned `--fourier_sigma 1.0`. Student ran faithfully. Results compare vs σ=1 anchor (73.917), not current σ=0.7 baseline (70.667).
+- **Real directional signal:** sn=32 beats sn=64 on BOTH seeds (70.52/73.47 vs 73.66/74.17). 4/4 seed-paired comparisons favor sn=32. 2-seed mean sn=32 = 71.996 beats σ=1 anchor by 1.92 val (~5σ of anchor std 0.362).
+- **But not merge-eligible on σ=0.7 baseline:** 71.996 is +1.33 val above current baseline 70.667. Needs re-verification on σ=0.7.
+- **Cliff at sn≥128 is epoch-budget-bound:** sn=128 only reaches ep 12, sn=192 only ep 10 (vs anchor 17). Not architecturally informative at current 30-min wall-clock.
+- **Param scaling near-constant** (0.74M → 0.76M across 32→192). VRAM scales linearly with slice_num as expected (31.6→67.7 GB). Slice_num is essentially a compute knob, not a capacity knob.
+- **Student execution exemplary:** flagged their own best-val-lucky-epoch-18 caveat (epoch-17-matched comparison flips to +0.76 worse). Honest self-analysis.
+
+### Decision: **SENT BACK** with focused re-sweep on σ=0.7: sn={32, 48, 96} + 2-seed at sn=64 anchor + 3-seed at sn=32 (the candidate winner). sn≥128 dropped.
+
+**Lab-wide process note:** round-11 advisor assignment body specified a value that later became stale when PR #24 merged mid-assignment-cycle. Going forward, when a merge lands during an in-flight assignment, the advisor must either retroactively update open-assignment bodies OR explicitly tell students to use their assignment-time baseline. Didn't catch this.
