@@ -122,14 +122,15 @@ def apply_fourier_pe(x_norm: torch.Tensor, enc: "FourierEncoder | None") -> torc
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 temp_init: float = 0.5):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * temp_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -176,13 +177,14 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 temp_init: float = 0.5):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, temp_init=temp_init,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -207,7 +209,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 temp_init: float = 0.5):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -228,6 +231,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                temp_init=temp_init,
             )
             for i in range(n_layers)
         ])
@@ -448,6 +452,9 @@ class Config:
     fourier_features: str = "none"  # "none" | "fixed" | "learnable"
     fourier_m: int = 10             # number of frequency bands (output dim = 2m)
     fourier_sigma: float = 1.0      # bandwidth for random B ~ N(0, σ²)
+    # PhysicsAttention slice-assignment softmax temperature schedule.
+    temp_init: float = 0.5          # initial per-head temperature. 0.5 = current behaviour.
+    temp_anneal_epochs: int = 0     # epochs to linearly anneal temp_init -> 0.5. 0 disables.
     seed: int = 0                   # RNG seed for torch / numpy / python random
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -466,6 +473,10 @@ if cfg.fourier_features not in ("none", "fixed", "learnable"):
     raise ValueError(
         f"--fourier_features must be one of none|fixed|learnable, got {cfg.fourier_features!r}"
     )
+if cfg.temp_init <= 0:
+    raise ValueError(f"--temp_init must be >0, got {cfg.temp_init}")
+if cfg.temp_anneal_epochs < 0:
+    raise ValueError(f"--temp_anneal_epochs must be >=0, got {cfg.temp_anneal_epochs}")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -487,6 +498,8 @@ print(f"Fourier: {cfg.fourier_features}"
       + (f" (m={cfg.fourier_m}, σ={cfg.fourier_sigma})"
          if cfg.fourier_features != "none" else "")
       + f"  seed={cfg.seed}")
+print(f"Temp: init={cfg.temp_init} anneal_epochs={cfg.temp_anneal_epochs}"
+      + (" (schedule active)" if cfg.temp_anneal_epochs > 0 else " (init-only)"))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -530,6 +543,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    temp_init=cfg.temp_init,
 )
 
 model = Transolver(**model_config).to(device)
@@ -591,6 +605,29 @@ for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    # Temperature anneal: linearly interpolate temp_init -> 0.5 over the first
+    # `temp_anneal_epochs` epochs. We freeze requires_grad during the anneal
+    # so AdamW cannot accumulate stale momentum (or apply weight decay)
+    # against a parameter whose .data we overwrite at every epoch boundary.
+    # At the release epoch, we snap to 0.5 and unfreeze — AdamW lazily
+    # initializes state on the first post-release optimizer step.
+    if cfg.temp_anneal_epochs > 0 and epoch < cfg.temp_anneal_epochs:
+        frac = epoch / cfg.temp_anneal_epochs
+        effective_temp = cfg.temp_init * (1 - frac) + 0.5 * frac
+        with torch.no_grad():
+            for m in model.modules():
+                if isinstance(m, PhysicsAttention):
+                    m.temperature.data.fill_(effective_temp)
+                    m.temperature.requires_grad_(False)
+        print(f"[temp-anneal] epoch {epoch}: T={effective_temp:.4f} (frozen)")
+    elif cfg.temp_anneal_epochs > 0 and epoch == cfg.temp_anneal_epochs:
+        with torch.no_grad():
+            for m in model.modules():
+                if isinstance(m, PhysicsAttention):
+                    m.temperature.data.fill_(0.5)
+                    m.temperature.requires_grad_(True)
+        print(f"[temp-anneal] epoch {epoch}: T=0.5000 (released to optimizer)")
 
     t0 = time.time()
     model.train()
@@ -682,6 +719,20 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # Log per-(layer, head) slice-softmax temperature so we can verify the
+    # anneal schedule and watch the learned steady-state after release.
+    temp_vals: list[float] = []
+    for li, block in enumerate(model.blocks):
+        t = block.attn.temperature.detach().float().view(-1)  # [heads]
+        for hi, v in enumerate(t.tolist()):
+            log_metrics[f"temp/layer{li}/head{hi}"] = v
+            temp_vals.append(v)
+    if temp_vals:
+        t_arr = torch.tensor(temp_vals)
+        log_metrics["temp/mean"] = t_arr.mean().item()
+        log_metrics["temp/min"] = t_arr.min().item()
+        log_metrics["temp/max"] = t_arr.max().item()
     wandb.log(log_metrics)
 
     tag = ""
