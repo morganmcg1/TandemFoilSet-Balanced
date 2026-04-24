@@ -486,6 +486,7 @@ class Config:
     fourier_sigma_x: float | None = None  # per-coord σ for x; both x & z must be set
     fourier_sigma_z: float | None = None  # per-coord σ for z; both x & z must be set
     swiglu: bool = False            # replace GELU-MLP with SwiGLU in each TransolverBlock
+    slice_num: int = 64             # number of slice tokens in PhysicsAttention softmax-over-nodes
     seed: int = 0                   # RNG seed for torch / numpy / python random
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -534,7 +535,7 @@ elif per_coord:
                    f"σ_x={cfg.fourier_sigma_x}, σ_z={cfg.fourier_sigma_z})")
 else:
     fourier_str = f"{cfg.fourier_features} (m={cfg.fourier_m}, σ={cfg.fourier_sigma})"
-print(f"Fourier: {fourier_str}  swiglu={cfg.swiglu}  seed={cfg.seed}")
+print(f"Fourier: {fourier_str}  swiglu={cfg.swiglu}  slice_num={cfg.slice_num}  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -576,7 +577,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
