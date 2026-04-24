@@ -8,31 +8,31 @@
 
 ## Current best
 
-**PR #7 — alphonse: Fourier PE on (x,z) + FiLM conditioning on log(Re)**
-- **val_avg/mae_surf_p: 84.737** (lower is better)
-- W&B run: `91z1948k` (`alphonse/sw1-fr-s1-m160`)
-- Best epoch: 18 (timeout-bounded at ~31 min; AMP+grad_accum=4 baseline)
-- test_avg/mae_surf_p: **75.244**
+**PR #20 — fern: Fourier σ=1.0 + SwiGLU feedforward**
+- **val_avg/mae_surf_p: 73.660** (lower is better)
+- W&B run: `eg6i88yf` (`fern/sigma1-swiglu`)
+- Best epoch: 17 (timeout-bounded at ~31 min)
+- test_avg/mae_surf_p: **63.983**
 
-### Per-split val surface-p MAE (best checkpoint, epoch 18)
+### Per-split val surface-p MAE (best checkpoint, epoch 17)
 
-| Split | mae_surf_p | vs PR #12 |
-|-------|-----------|-----------|
-| val_single_in_dist | 103.90 | −0.6% |
-| val_geom_camber_rc | 94.07 | −6.6% |
-| val_geom_camber_cruise | 61.58 | −5.5% |
-| val_re_rand | 79.40 | −4.0% |
-| **val_avg** | **84.737** | **−4.0%** |
+| Split | mae_surf_p | vs PR #7 |
+|-------|-----------|----------|
+| val_single_in_dist | 81.39 | −21.7% |
+| val_geom_camber_rc | 92.45 | −1.7% |
+| val_geom_camber_cruise | 50.31 | −18.3% |
+| val_re_rand | 70.50 | −11.2% |
+| **val_avg** | **73.660** | **−13.1%** |
 
 ### Per-split test surface-p MAE (best checkpoint)
 
-| Split | mae_surf_p |
-|-------|-----------|
-| test_single_in_dist | 90.58 |
-| test_geom_camber_rc | 83.39 |
-| test_geom_camber_cruise | 54.37 |
-| test_re_rand | 72.63 |
-| **test_avg** | **75.244** |
+| Split | mae_surf_p | vs PR #7 |
+|-------|-----------|----------|
+| test_single_in_dist | 73.20 | −19.2% |
+| test_geom_camber_rc | 76.82 | −7.9% |
+| test_geom_camber_cruise | 44.04 | −19.0% |
+| test_re_rand | 61.87 | −14.8% |
+| **test_avg** | **63.983** | **−15.0%** |
 
 ### Current default config (post-merge)
 
@@ -41,8 +41,8 @@
 | lr | 5e-4 |
 | weight_decay | 1e-4 |
 | batch_size | 4 |
-| grad_accum | **4** (effective bs=16) |
-| amp | **True** (bf16 autocast, no GradScaler) |
+| grad_accum | 4 (effective bs=16) |
+| amp | True (bf16 autocast) |
 | surf_weight | 1.0 |
 | epochs | 50 |
 | n_hidden | 128 |
@@ -53,9 +53,10 @@
 | optimizer | AdamW |
 | scheduler | CosineAnnealingLR(T_max=total_optimizer_steps) |
 | loss | L1 (abs, vol + surf_weight × surf) in normalized space |
-| fourier_features | **fixed** |
-| fourier_m | **160** |
-| fourier_sigma | **1.0** |
+| fourier_features | fixed |
+| fourier_m | 160 |
+| fourier_sigma | 1.0 |
+| **ffn** | **SwiGLU** (replaces standard MLP in TransolverBlock) |
 
 Reproduce:
 ```bash
@@ -69,6 +70,7 @@ cd target && python train.py \
     --fourier_features fixed \
     --fourier_m 160 \
     --fourier_sigma 1.0 \
+    --use_swiglu \
     --wandb_name "<student>/<experiment>"
 ```
 
@@ -76,47 +78,52 @@ cd target && python train.py \
 
 ## Baseline history
 
+### 2026-04-24 — PR #20: fern SwiGLU feedforward + Fourier σ=1.0 (σ fine-sweep)
+
+- **val_avg/mae_surf_p: 73.660** (previous: 84.737, PR #7)
+- W&B run: `eg6i88yf` (group: `fern/fourier-sigma-swiglu`)
+- Change: Replaced standard GELU MLP in every TransolverBlock with SwiGLU (SiLU-gated, three projections, 2/3 hidden-width to match param count). σ fine-sweep confirmed σ=1.0 remains the optimum among completed runs; per-coordinate anisotropic σ regresses.
+- Delta: **−13.1% val / −15.0% test** vs PR #7 baseline (84.737 / 75.244).
+- Wins uniformly across all 4 val splits and all 4 test splits. Biggest lift on `val_single_in_dist` (−21.7%) and `val_geom_camber_cruise` (−18.3%).
+- Peak VRAM: 37.8 GB (+2.9 GB vs PR #7), well within 96 GB headroom.
+- Best epoch 17 vs 18 baseline — negligible wall-clock cost.
+- Note: student's compound claim σ=0.7+SwiGLU at 71.49 was based on crashed W&B runs. Only the verified σ=1.0+SwiGLU result was merged; the σ×SwiGLU interaction requires a verified re-run.
+
 ### 2026-04-23 — PR #7: alphonse Fourier PE on (x,z) — fixed σ=1 m=160
 
 - **val_avg/mae_surf_p: 84.737** (previous: 88.268, PR #12)
 - W&B run: `91z1948k` (group: `alphonse/fourier-sw1`)
-- Change: Random Fourier Features on (x,z) coordinates: `γ(p) = [sin(2πBp), cos(2πBp)]` with B∈R^{m×2} from N(0,σ²=1), m=160 frequencies, concatenated to the input before the preprocess MLP. Gives the preprocess MLP the spatial bandwidth to resolve boundary-layer gradients (Tancik 2020 mechanism). surf_weight fixed to default 1.0. FiLM (per-block log(Re) conditioning) dropped — net-negative at this training budget.
-- Delta: −4.0% val / −5.6% test vs PR #12 baseline (88.268 / 79.733).
-- Wins across all splits: geom_camber_rc −6.6%, val_re_rand −4.0%, geom_camber_cruise −5.5%.
-- Peak VRAM: 74.4 GB (m=160), well within 96 GB headroom.
-- Note: m-curve is non-monotonic (U-shaped). m=20 is nearly tied (85.392 val / 75.800 test) — 10× fewer PE params. m=160 wins narrowly as the safe pick.
+- Change: Random Fourier Features on (x,z) coordinates: `γ(p) = [sin(2πBp), cos(2πBp)]` with B∈R^{m×2} from N(0,σ²=1), m=160 frequencies.
+- Delta: −4.0% val / −5.6% test vs PR #12.
+- Note (from later PR #19 multi-seed follow-up): the m=160 seed distribution has σ ≈ 8 pts; this 84.737 baseline sits ~1σ below the config's seed-mean. Still a valid pinned-seed reference.
 
 ### 2026-04-23 — PR #12: fern throughput scaling (AMP bf16 + grad_accum=4)
 
 - **val_avg/mae_surf_p: 88.268** (previous: 93.127, PR #11)
 - W&B run: `n68w9q7o` (group: `fern/throughput-amp-sw1`)
-- Change: Added `--amp true` (bf16 autocast) + `--grad_accum 4` (eff_bs=16). AMP cuts per-epoch time 132s→100s (+28% throughput), unlocking epoch 19 vs epoch 14 under the same 30-min budget. Grad-accum at eff_bs=16 via 4 micro-batches compresses noisy gradient steps without inflating VRAM (~33 GB peak).
-- Delta: −5.2% vs previous baseline (93.127). Uniform improvement across all 4 val splits (largest: camber_cruise −11.0%).
-- test_avg/mae_surf_p now finite (79.733) — test_geom_camber_cruise +Inf scoring bug patched in this PR.
+- Change: AMP (bf16) + grad_accum=4 (eff_bs=16). +28% throughput, +5 epochs in 30-min budget.
+- Delta: −5.2% val / −13.2% test.
 
 ### 2026-04-23 — PR #11: frieren fine surf_weight sweep on L1 (surf_weight=1)
 
 - **val_avg/mae_surf_p: 93.127** (previous: 103.036, PR #3)
 - W&B run: `yt7eup38` (group: `frieren/l1-surf-weight-sweep`)
-- Change: surf_weight reduced from 10 → 1. Under L1 loss, volume supervision is load-bearing for surface-pressure prediction — excessive surface upweighting starves the shared feature extractor of volume gradient. sw=1 wins on every channel (surface and volume) simultaneously.
-- Delta: −9.62% vs previous baseline (103.036).
-- Wins on 3 of 4 splits: −20.0% in_dist, −9.5% camber_rc, +4.5% camber_cruise (slight regression), −6.0% re_rand.
-- Test 3-split avg (excl. NaN): 91.58 (sw=1) vs 105.48 (sw=10 control). Consistent with val.
+- Change: surf_weight reduced from 10 → 1 under L1 loss.
+- Delta: −9.62%.
 
 ### 2026-04-23 21:40 — PR #3: frieren Huber/L1 loss reformulation
 
 - **val_avg/mae_surf_p: 103.036** (previous: no baseline on this track)
 - W&B run: `w2jsabii` (group: `frieren/loss-reformulation-v2`)
-- Change: L1 loss in normalized space instead of MSE. surf_weight=10 unchanged.
-- Delta: −21.9% vs MSE baseline at same run budget (131.985).
-- Wins uniformly: −27.7% in_dist, −29.8% camber_rc, −39.5% camber_cruise, −32.5% re_rand.
+- Change: L1 loss in normalized space instead of MSE.
+- Delta: −21.9% vs MSE baseline.
 
 ---
 
 ## Primary metric
 
 - **Validation (checkpoint selection):** `val_avg/mae_surf_p` — equal-weight mean across four validation splits. Lower is better.
-- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits. Note: test_geom_camber_cruise sample 20 has inf GT values; patched in scoring.py (sample excluded from MAE aggregation).
+- **Test (paper-facing):** `test_avg/mae_surf_p` — same quantity, computed from the best-val checkpoint on the four held-out test splits. Patched scoring.py excludes the one non-finite sample in `test_geom_camber_cruise`.
 
 ## Update protocol
 
