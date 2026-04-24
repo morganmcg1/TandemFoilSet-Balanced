@@ -1361,3 +1361,43 @@ Rebase + focused 5-seed nh=2 × sn=32 confirmation + nh=1 probe. If nh=2 × sn=3
 ### Decision: **MERGED** into `kagent_v_students`. New baseline = 54.48 val / 47.34 test (2-seed mean). Default recipe updates to `--n_layers 3 --slice_num 32` (reverted from 16 pending compound test).
 
 This is the 2nd massive architectural win from the "shrink compute → train longer" mechanism (after PR #12 AMP, PR #27 sn=32, PR #34 sn=16). The compute-constrained regime continues to reward shallower/sparser models.
+
+---
+
+## 2026-04-24 — Round 22 batch reviews — 3 closes + infrastructure cherry-pick
+
+### PR #36 (fern sn floor sweep {4, 6, 8} vs sn=16) — CLOSED (null)
+
+- Branch: `fern/slice-num-floor-sweep` (pre-PR #35, at nl=5/sn=16 recipe)
+- All 8 runs finished; full-fidelity metrics.
+- **sn=16 anchor 3-seed mean 62.455 val / 55.508 test** (reproduces PR #34 baseline exactly).
+- No sn<16 variant beats: sn=4 (62.705) / sn=6 (63.243) / sn=8 (63.573) — all statistically tied with sn=16.
+- PR #34's sn=8 single-seed win (62.476) was lucky — fern's s=1 reproduction hit 64.67.
+- sn=4 shows training instability (trailing-5 73.95, val spike to 97.91 at ep=23).
+- vs current track baseline (PR #35, nl=3/sn=32, val 54.48): +8+ val worse. Not mergeable.
+- **Conclusion:** sn floor at nl=5 is sn=16. Below sn=16 is capacity-bound (token count too small to represent pressure field reliably).
+
+### PR #37 (tanjiro n_head sweep at sn=16/nl=5) — CLOSED (stale)
+
+- Branch: `tanjiro/n-head-sweep-sn16` (pre-PR #35)
+- **nh=1 2-seed mean 58.381 val / 50.772 test** beats nh=4 anchor (3-seed mean 62.455) by **4.07 val (2.45σ)**.
+- **Monotonic trend at sn=16:** nh=1 (58.89 s0) < nh=2 (60.00) < nh=4 (60.58 s0) ≪ nh=8 (71.89).
+- **Cross-recipe consistency:** direction matches PR #32 at sn=64. Two-recipe support for "fewer heads wins at nl=5."
+- **Param confound:** nh=1 has +32.5% more params than nh=4 (`Linear(dim_head, slice_num)` scales with dim_head).
+- vs current track baseline (54.48): +3.91 val worse. Not mergeable.
+- Alphonse's PR #32 r3 (running now) tests nh=1/nh=2 at nl=3/sn=32 with shape-preserving control — that's the critical compound test.
+
+### PR #38 (frieren mlp_ratio sweep at sn=16/nl=5) — CLOSED + INFRASTRUCTURE FIX CHERRY-PICKED
+
+- Branch: `frieren/mlp-ratio-sweep-sn16` (pre-PR #35)
+- **Critical finding:** `--mlp_ratio` CLI flag was **UNWIRED** before this PR. Previous PR #25's mr=3 claim (+0.31 val) was silently running mr=2. Student's 2-line fix (commit 648042b) wires the flag into Config + model_config.
+- **Cherry-picked to advisor branch** (commit b8330ac). All future students can now use --mlp_ratio.
+- Sweep results (with the fix): mr=2 3-seed mean 62.455 ≈ mr=3 3-seed mean 64.097 (within noise, σ=2.20); mr=4 regresses cleanly (+5.42 val). mr=2 wins at nl=5/sn=16.
+- vs current track baseline (54.48): best single-run 60.58 is +6.10 val worse. Not mergeable.
+- PR #25's earlier "mr=3 is marginally better" claim is now understood as spurious (flag was unwired — all runs silently used mr=2).
+
+### Fresh assignments (nl=3/sn=32 baseline)
+
+- **PR #40 (frieren):** LR warmup + min_lr + higher peak lr sweep on nl=3 recipe. nezuko's earlier LR work was at nl=5 (closed r11); nl=3's 32-epoch regime is new.
+- **PR #41 (fern):** n_hidden shrink sweep {64, 96, 128, 160} on nl=3/sn=32. Tests whether compute-reduction theme (4/4 wins) extends to width axis. n_hidden has only been expanded before (PRs #4, #16 both failed) — never shrunk.
+- **PR #42 (tanjiro):** Dropout + DropPath regularization sweep on nl=3. At 32 epochs of training, regularization is potentially useful for the first time on this track.
