@@ -206,7 +206,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 swiglu=False):
+                 swiglu=False, use_swiglu_mlp2=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -222,10 +222,18 @@ class TransolverBlock(nn.Module):
                            n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if use_swiglu_mlp2:
+                # Symmetric with block FFN: SwiGLU(mlp_ratio=2, gate_hidden=int(h*2*2/3))
+                # followed by linear readout to out_dim.
+                self.mlp2 = nn.Sequential(
+                    SwiGLUMLP(hidden_dim, mlp_ratio=2),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+            else:
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
@@ -241,7 +249,8 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 swiglu: bool = False):
+                 swiglu: bool = False,
+                 use_swiglu_mlp2: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -262,7 +271,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                swiglu=swiglu,
+                swiglu=swiglu, use_swiglu_mlp2=use_swiglu_mlp2,
             )
             for i in range(n_layers)
         ])
@@ -485,7 +494,9 @@ class Config:
     fourier_sigma: float = 1.0      # isotropic bandwidth (ignored if per-coord σ set)
     fourier_sigma_x: float | None = None  # per-coord σ for x; both x & z must be set
     fourier_sigma_z: float | None = None  # per-coord σ for z; both x & z must be set
-    swiglu: bool = False            # replace GELU-MLP with SwiGLU in each TransolverBlock
+    use_swiglu: bool = False        # replace GELU-MLP with SwiGLU in each TransolverBlock
+    use_swiglu_mlp2: bool = False   # also replace the 2-layer GELU prediction head (mlp2) with SwiGLU+Linear
+    mlp_ratio: int = 2              # FFN/SwiGLU expansion ratio (applies to block mlp, not mlp2)
     seed: int = 0                   # RNG seed for torch / numpy / python random
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -534,7 +545,8 @@ elif per_coord:
                    f"σ_x={cfg.fourier_sigma_x}, σ_z={cfg.fourier_sigma_z})")
 else:
     fourier_str = f"{cfg.fourier_features} (m={cfg.fourier_m}, σ={cfg.fourier_sigma})"
-print(f"Fourier: {fourier_str}  swiglu={cfg.swiglu}  seed={cfg.seed}")
+print(f"Fourier: {fourier_str}  use_swiglu={cfg.use_swiglu}  "
+      f"use_swiglu_mlp2={cfg.use_swiglu_mlp2}  mlp_ratio={cfg.mlp_ratio}  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -577,10 +589,11 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
-    swiglu=cfg.swiglu,
+    swiglu=cfg.use_swiglu,
+    use_swiglu_mlp2=cfg.use_swiglu_mlp2,
 )
 
 model = Transolver(**model_config).to(device)
