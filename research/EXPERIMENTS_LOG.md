@@ -657,3 +657,105 @@ Nezuko reassigned to PR #22 (attention temperature annealing) — fresh architec
 ### Decision: **SENT BACK.**
 
 Refined sweep: gap-only σ-scan ∈ {0.01, 0.02, 0.03, 0.04} + 3-seed at σ=0.02 winner + tandem-gated AoA (follow-up #3), on Fourier baseline. Honest forecast: if gap-jitter is orthogonal to Fourier (different mechanisms: foil separation vs spatial bandwidth), val ~82–84 is achievable. If redundant, ~85.
+
+---
+
+## 2026-04-24 — PR #20: fern: Fourier σ fine-sweep + SwiGLU feedforward — MERGED
+
+- **Branch:** `fern/fourier-sigma-fine-swiglu`
+- **W&B group:** `fern/fourier-sigma-swiglu`
+- **Hypothesis:** σ fine-sweep at m=160 + SwiGLU replacement of standard MLP in TransolverBlock. Orthogonal mechanisms — spatial bandwidth vs gated FFN.
+
+### Results (verified only)
+
+| Rank | Config (σ / SwiGLU / seed) | val_avg | test_avg | W&B run |
+|------|----------------------------|---------|----------|---------|
+| 1 | σ=1.0 / SwiGLU / s0 | **73.660** | **63.983** | `eg6i88yf` |
+| 2 | σ=1.0 / None / s0 (anchor) | 84.737 | 75.244 | `2jd70vx1` (reproduces PR #7 exactly) |
+| 3 | σ_x=0.7 σ_z=1.3 / None | 85.773 | 75.140 | `lnwrwucf` |
+| 4 | σ=0.5 / None | 88.203 | 79.330 | `3gro8kvc` |
+| 5 | σ_x=0.5 σ_z=1.5 / None | 89.960 | 81.111 | `ejywoanq` |
+
+Unverified (W&B runs crashed, student-reported numbers don't exist as summary keys):
+- σ=0.7 / SwiGLU (student claimed 71.49 val; crashed epoch 11)
+- σ=0.7 / None (student claimed 86.54; crashed epoch 9)
+- σ=1.3 / None (student claimed 87.39; crashed epoch 9)
+
+### Analysis
+
+- **SwiGLU at σ=1.0 wins decisively: −13.1% val / −15.0% test vs PR #7.** Biggest lifts on `val_single_in_dist` (−21.7%) and `val_geom_camber_cruise` (−18.3%). Wins every split on both val and test.
+- **Per-coordinate σ anisotropy is a NET LOSS.** Both (σ_x=0.7, σ_z=1.3) and (σ_x=0.5, σ_z=1.5) regress. Isotropic σ=1.0 wins among verified configs.
+- **σ=0.5 regresses +4.1 % val.** Confirms σ ≥ ~0.7 is required; low-σ is too-smooth.
+- **SwiGLU implementation is textbook-correct:** three projections (gate, up, down), SiLU on gate, element-wise product, 2/3 hidden-width to match GELU MLP param count (744k vs 743k).
+- **Peak VRAM: 37.8 GB** (+2.9 GB vs PR #7). Best epoch 17 vs 18 baseline — negligible budget cost.
+- **Data-integrity issue:** student reported a σ=0.7+SwiGLU compound winner (val 71.49) that is not verifiable on W&B (run crashed mid-training, no summary keys written). Flagged in merge comment; re-assigned to alphonse PR #24 as a properly-seeded verified sweep.
+
+### Decision: **MERGED** σ=1.0 + SwiGLU. New baseline = 73.660 val / 63.983 test. SwiGLU FFN added to default recipe.
+
+---
+
+## 2026-04-24 — PR #18: thorfinn: Cross-attention surface decoder head — CLOSED
+
+- **Branch:** `thorfinn/cross-attn-surface-decoder` (pre-Fourier, stale)
+- **W&B group:** `thorfinn/surface-decoder`
+- **Hypothesis:** Dedicated cross-attention decoder for surface nodes (surface queries attend to full hidden state), replacing mlp2 for surface predictions.
+
+### Results
+
+| Rank | Config (L/h/seed) | val_avg | test_avg | W&B run |
+|------|-------------------|---------|----------|---------|
+| 1 | anchor (no decoder) / s7 | 90.86 | 81.92 | (in-PR anchor) |
+| 2 | anchor (no decoder) / s42 | 94.88 | 86.11 | — |
+| 3 | L1 / h=4 / s42 | 232.59 | 215.16 | — |
+| 4 | L2 / h=4 / s99 | 243.42 | 224.84 | — |
+| 5 | L2 / h=4 / s42 | 253.78 | 235.31 | — |
+| 6 | L2 / h=4 / s7 | 257.48 | 239.24 | — |
+| 7 | L2 / h=8 / s42 | 258.20 | 239.45 | — |
+| 8 | L3 / h=4 / s42 | 274.47 | 254.49 | — |
+
+### Analysis
+
+- **Decoder catastrophically fails:** best variant +175% worse than current track baseline (73.66 post-PR #20). Monotone regression with depth (+20–25 pts per layer) and width (+5 pts for h4→h8).
+- **3-seed variance at L2/h4: σ=5.88**. Decoder–anchor gap (158 pts) is ~27σ of decoder std and ~39σ of anchor spread. Cleanly outside noise.
+- **Mechanism refuted:** decoder hurts in-distribution MOST (`val_single_in_dist` +242%). Fresh untrained head cannot catch trunk's pretrained mlp2 in ~15 epochs. Budget loss (15 vs 19 epochs) is real but not load-bearing.
+- **Implementation was clean and correct** — pre-LN cross-attention, per-sample surface gather, padding handled via index restriction, SDPA direct call, residual+FFN, torch.where gating, AMP dtype probe.
+- 5th student this round with stale Fourier rebase (branch at `06e898d`). Anchor underperformance (~7% vs 84.737) confirms but isn't load-bearing given decoder loses by 175%.
+
+### Decision: **CLOSED.**
+
+**Salvage path for revival:** zero-init residual decoder. Decoder produces a delta (`preds = vol_preds + is_surface * surf_delta`) with the final output projection zero-initialized. At init, decoder invisible; can only improve from there by construction. Assigned as thorfinn PR #23.
+
+---
+
+## 2026-04-24 — PR #19: alphonse: Fourier m-extension + learnable B — CLOSED
+
+- **Branch:** `alphonse/fourier-m-extension-learnable`
+- **W&B group:** `alphonse/fourier-m-ext`
+- **Hypothesis:** Find m-saturation point above 160; test learnable vs fixed B; multi-seed m=20 vs m=160 to disambiguate PR #7's U-shaped curve.
+
+### Results
+
+| Rank | Config (feat / m / seed) | val_avg | test_avg | W&B run |
+|------|-------------------------|---------|----------|---------|
+| 1 | fixed / m=160 / s0 (anchor, reproduces PR #7) | 84.737 | 75.244 | `7kf0h22b` |
+| 2 | fixed / m=20 / s0 | 85.392 | 75.800 | `ukzmp8nt` |
+| 3 | fixed / m=20 / s1 | 88.383 | 80.760 | `wxrsg9xn` |
+| 4 | fixed / m=320 / s0 | 92.926 | 86.281 | `xz8b2lfu` |
+| 5 | fixed / m=160 / s1 | 96.668 | 87.075 | `sep9wl6e` |
+| 6 | learnable / m=320 / s0 | 97.000 | 87.900 | `vcqxn6u2` |
+| 7 | learnable / m=160 / s0 | 100.745 | 91.362 | `4eppk7o6` |
+| 8 | fixed / m=640 / s0 | 106.834 | 97.708 | `7q8swcdt` |
+
+### Analysis
+
+- **m=160 is the saturation point — past it is pure regression.** m=320 (+9.7%), m=640 (+26.1%). m=640 also loses 3 epochs to timeout due to more params. Fixed-B m-curve is inverted-U with peak at ~160.
+- **Learnable B clearly loses at this budget:** +11.1% at m=160, +4.4% at m=320. Optimizer doesn't have 19 epochs to improve over random σ=1 init; added parameter noise dominates. Kill until budget ≥ 35 epochs.
+- **BIGGEST FINDING — seed variance at m=160: σ ≈ 8 pts.** 2-seed means:
+  - m=20: mean 86.89 (s0=85.39, s1=88.38)
+  - m=160: mean 90.70 (s0=84.74, s1=96.67)
+  
+  **m=20 and m=160 have overlapping seed distributions.** The "U-shape" from PR #7 likely wasn't real — PR #7's 84.737 was a lucky s=0 tail; the m=160 config's **actual expected performance is ~90.70**, not 84.74. 84.737 is ~0.7σ below config-mean. It's a valid pinned-seed baseline but NOT representative.
+
+### Decision: **CLOSED.**
+
+Methodology win: establishes that **single-seed measurements of advances < ~5% are below noise floor.** Multi-seed protocol becomes mandatory for sub-5% merge claims. Alphonse reassigned to PR #24 (σ × SwiGLU seeded sweep) to run the first experiment under this tightened protocol.

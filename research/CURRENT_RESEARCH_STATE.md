@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 (round 8 — post PR #6/#17 reviews)
+- **Updated:** 2026-04-24 01:15 (round 9 — post SwiGLU merge)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -9,20 +9,19 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 84.737 / test_avg/mae_surf_p = 75.244** (PR #7, `alphonse/sw1-fr-s1-m160`, W&B run `91z1948k`)
-- Per-split val: in_dist=103.90 | camber_rc=94.07 | camber_cruise=61.58 | re_rand=79.40
-- Per-split test: in_dist=90.58 | camber_rc=83.39 | camber_cruise=54.37 | re_rand=72.63
-- Config: **L1 loss, surf_weight=1, AMP (bf16), grad_accum=4, Fourier PE fixed σ=1 m=160**, bs=4, n_hidden=128, n_layers=5, slice_num=64, lr=5e-4
-- Best epoch: 18 (timeout-bounded)
+**val_avg/mae_surf_p = 73.660 / test_avg/mae_surf_p = 63.983** (PR #20, `fern/sigma1-swiglu`, W&B run `eg6i88yf`)
+- Per-split val: in_dist=81.39 | camber_rc=92.45 | camber_cruise=50.31 | re_rand=70.50
+- Per-split test: in_dist=73.20 | camber_rc=76.82 | camber_cruise=44.04 | re_rand=61.87
+- Config: **L1 + sw=1 + AMP + grad_accum=4 + Fourier PE fixed σ=1 m=160 + SwiGLU FFN** in every TransolverBlock.
+- Best epoch: 17 (peak VRAM 37.8 GB of 96 GB).
 
-**Key insights binding the current operating point:**
-- L1 > MSE (PR #3), surf_weight=1 under L1 (PR #11), AMP+accum=4 unlocks +5 epochs (PR #12)
-- **NEW (PR #7, round 6):** Fourier PE (fixed B, σ=1, m=160) gives −4.0% val / −5.6% test vs AMP baseline. Tancik-2020 mechanism confirmed: spatial bandwidth resolves boundary-layer gradients.
-- **m-curve is U-shaped:** m=20 (85.39) nearly ties m=160 (84.74); m=40/80 regress. Non-monotonic structure — seed variance (~5 pts on test) partially accounts for this.
-- **σ=1 is the robust sweet spot:** σ=10 harmful, σ=1.5 marginal at m=80.
-- **FiLM (per-block log(Re) conditioning) consistently net-negative at 17–18 epoch budget.** Dropped.
-- **Capacity scaling is epoch-budget bound:** PR #4 and PR #16 both confirm — negative correlation r<−0.95 between n_params and epochs completed at 30-min budget.
-- **Seed noise floor on seeded AMP+accum=4 (round-7 measurement):** 2-seed spread at sw=1 is **2.38 val (2.5%), 1.86 test (2.2%)** — much tighter than the ~9% pre-seed floor. Multi-seed mandatory for claims under ~5%.
+**Round-9 takeaway:** SwiGLU compound with Fourier PE delivers −13.1 % val / −15.0 % test vs PR #7. Wins uniformly across all 8 splits. This is the single biggest architectural jump after PR #3 (L1).
+
+**Key prior insights still binding:**
+- L1 > MSE (PR #3), sw=1 under L1 (PR #11), AMP + grad_accum=4 +5 epochs (PR #12), Fourier PE fixed σ=1 m=160 (PR #7), SwiGLU FFN (PR #20). Five compounding components.
+- **Seed variance floor: σ ≈ 8 pts on no-pinned-seed runs; ~2.5% on seeded serial runs; 4-5% on 8-parallel-run IO-contended runs.**
+- **Multi-seed protocol:** 2-seed anchors mandatory for merge claims < 5% (established in rounds 7–8 from frieren + alphonse + nezuko data).
+- Schedule effects don't transfer across regimes (nezuko's 3-round finding). Capacity scaling is epoch-budget bound (fern PR #4/#16). sub-1 surf_weight is dead. Asinh is partially redundant with sw=1.
 
 ---
 
@@ -30,15 +29,15 @@
 
 | Student | Status | PR | Branch |
 |---------|--------|----|--------|
-| frieren  | WIP (r7) | #21: Near-surface volume-band weighting (3-tier loss) | `frieren/near-surface-volume-band` |
-| fern     | WIP (r6) | #20: Fourier σ fine-sweep at m=160 + SwiGLU FFN | `fern/fourier-sigma-fine-swiglu` |
-| tanjiro  | WIP (r8) | #17: Gap-only jitter σ-scan on Fourier baseline + tandem-gated AoA | `tanjiro/input-feature-jitter` |
-| nezuko   | WIP (r8) | #22: Attention temperature annealing (soft→sharp) | `nezuko/attn-temperature-annealing` |
-| alphonse | WIP (r6) | #19: Fourier m-extension {160, 320, 640} + learnable B + multi-seed | `alphonse/fourier-m-extension-learnable` |
+| frieren  | WIP (r7) | #21: Near-surface volume-band weighting | `frieren/near-surface-volume-band` |
+| fern     | WIP (r9) | #25: SwiGLU refinements (mlp2 head + mlp_ratio) | `fern/swiglu-refinements` |
+| tanjiro  | WIP (r8) | #17: Gap-only jitter σ-scan + tandem-gated AoA | `tanjiro/input-feature-jitter` |
+| nezuko   | WIP (r8) | #22: Attention temperature annealing | `nezuko/attn-temperature-annealing` |
+| alphonse | WIP (r9) | #24: σ × SwiGLU fine sweep (2-seed verified) | `alphonse/sigma-swiglu-sweep` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 | `edward/ema-gradclip-stability` |
-| thorfinn | WIP (r5) | #18: Cross-attention surface decoder head | `thorfinn/cross-attn-surface-decoder` |
+| thorfinn | WIP (r9) | #23: Zero-init residual surface decoder | `thorfinn/zeroinit-residual-decoder` |
 
-**Idle students needing new assignments:** none. Zero idle GPUs.
+**Idle students:** none. Zero idle GPUs.
 
 ---
 
@@ -52,66 +51,68 @@ None at this time.
 
 | PR | Student | Hypothesis | Target |
 |----|---------|-----------|--------|
-| #21 | frieren  | Near-surface volume-band 3-tier loss weighting | Beat **84.737** |
-| #22 | nezuko   | Attention temperature annealing (soft→sharp schedule) | Beat **84.737** |
-| #20 | fern     | Fourier σ fine-sweep + SwiGLU feedforward | Beat **84.737** |
-| #19 | alphonse | Fourier m-extension {160, 320, 640} + learnable B | Beat **84.737** |
-| #17 | tanjiro  | Gap-only jitter σ-scan + tandem-gated AoA on Fourier baseline | Beat **84.737** |
-| #8  | edward   | EMA 0.999 + wider grad-clip ({1, 5, 10, 50}) on L1 sw=1 | Beat **84.737** |
-| #18 | thorfinn | Cross-attention surface decoder head on AMP + sw=1 | Beat **84.737** |
+| #21 | frieren  | Near-surface volume-band 3-tier loss weighting | Beat **73.660** |
+| #25 | fern     | SwiGLU refinements (mlp2 head SwiGLU + mlp_ratio expansion) | Beat **73.660** |
+| #17 | tanjiro  | Gap-only jitter σ-scan + tandem-gated AoA | Beat **73.660** |
+| #22 | nezuko   | Attention temperature annealing (T₀∈{1.5,2}→0.5) | Beat **73.660** |
+| #24 | alphonse | σ × SwiGLU verified multi-seed sweep | Beat **73.660** |
+| #8  | edward   | EMA 0.999 + wider grad-clip on L1 | Beat **73.660** |
+| #23 | thorfinn | Zero-init residual surface decoder | Beat **73.660** |
 
 ---
 
-## Recent Decisions Log (round 6)
+## Recent Decisions Log
 
-- **2026-04-23 (r6):** Merged PR #7 (alphonse Fourier PE m=160): **new baseline 84.737 val / 75.244 test** (−4.0% val, −5.6% test vs prior 88.268).
-- **2026-04-23 (r6):** Closed PR #16 (fern capacity scaling): dead end confirmed second time. Capacity scaling is epoch-budget bound. All scaled-up variants underperformed baseline anchor; peak at h384-l5-s64 = 65.4% worse. VRAM was never the constraint.
-- **2026-04-24 (r7):** Closed PR #14 (frieren sw>1 at eff_bs=16). sw=2's round-4 win compressed from −11.8% at eff_bs=8 to −1.0% sub-1σ at eff_bs=16 — **grad-accum-specific effect, not loss-specific**. sw direction exhausted across 2 rounds. Noise floor on seeded AMP+accum=4: **2.5% val, 2.2% test** (multi-seed threshold for significance). Branch was pre-Fourier — any post-Fourier sw sweep would be a new hypothesis.
-- **2026-04-24 (r7):** Assigned frieren PR #21 (near-surface volume-band weighting) — 3-tier loss using dsdf to define BL band; orthogonal to all current improvements.
-- **2026-04-24 (r8):** Closed PR #6 (nezuko LR schedule): 3-round exhaustion confirmed. **Schedule effects don't transfer across regimes:** floor=1e-5 went −4.7% → −1.5% → +4.0% across (sw=10) → (sw=1) → (sw=1+AMP). WSD vs cosine similar sign flip. Nezuko reassigned to PR #22 (attention temperature annealing).
-- **2026-04-24 (r8):** Sent back PR #17 (tanjiro input jitter). **Real signal:** gap/stagger jitter σ=0.02 gives −5.89 val vs anchor. AoA/Re jitter neutral-to-harmful; full stack destructive. Student branch pre-Fourier (4th this round). Refined sweep: gap-only σ-scan + tandem-gated AoA (follow-up #3) on Fourier baseline.
-- **2026-04-24 (r8) insight:** Schedule effects are regime-specific artefacts, not universal regularizers. LR-schedule space now closed.
-- **2026-04-24 (r8) insight:** 8-parallel-run IO contention causes seed spread of 4.3–4.6% vs 2.5% on serial runs. Multi-seed claims need serial execution or tighter thresholds.
-- **Prior rounds:** See EXPERIMENTS_LOG.md for full history.
+- **Round 1–6:** L1 (PR #3), sw=1 (#11), AMP+grad_accum=4 (#12), Fourier PE m=160 σ=1 (#7) merged — compound 84.737 baseline.
+- **Round 7 (r7):** Closed PR #14 (sw>1 exhausted). Seed floor on seeded serial: 2.5%.
+- **Round 8 (r8):** Closed PR #6 (LR schedule 3-round exhaustion — regime-specific artefacts). Sent back #17 (gap-only jitter signal real). Assigned #22 (temp annealing).
+- **Round 9 (r9 — THIS ROUND):**
+  - **Merged PR #20 (fern SwiGLU + σ=1):** new baseline **73.660 val / 63.983 test** (−13.1% val / −15.0% test). Huge win. Unified SwiGLU implementation with 2/3 hidden-width to preserve param count. Anisotropic per-coord σ regressed; σ=1 is the robust optimum among completed runs.
+  - **Student's σ=0.7+SwiGLU compound claim (val 71.49) was based on crashed W&B runs** — unverified, not merged. Re-assigned to alphonse as verified multi-seed sweep (PR #24).
+  - **Closed PR #18 (thorfinn decoder):** catastrophic (+175% worse). Fresh-parameter head can't catch trunk in 15 epochs. Salvage path: zero-init residual decoder (assigned as PR #23).
+  - **Closed PR #19 (alphonse m-extension):** m=160 saturation confirmed; learnable B loses at this budget. Key finding: **seed variance at m=160 is σ ≈ 8 pts; 84.737 was ~1σ below config-mean**. Multi-seed protocol now mandatory.
 
 ---
 
 ## Most Recent Research Direction from Human Team
 
-No human issues received as of 2026-04-23 (checked round 6).
+No human issues received.
 
 ---
 
 ## Current Research Focus and Themes
 
-**New operating point:** L1 + sw=1 + AMP (bf16) + grad_accum=4 + **Fourier PE fixed σ=1 m=160**. This is a 4-component recipe that compounds across rounds.
+**Highest-EV in-flight experiments (vs new 73.66 baseline):**
 
-**Primary open questions to drive next experiments:**
-1. **Can Fourier m be extended further?** m=160 wins but m=20 nearly ties. Is there a true saturation point above m=160? Or is the U-shaped curve an artefact of single-seed variance? m=320 or a multi-seed test of m=160 vs m=20 is the highest-priority diagnostic.
-2. **Can Fourier features be made learnable at higher budget?** learnable B underperformed in early rounds at 12-13 epochs. At 18-19 epochs under AMP, learnable B has had more time. This is the next mechanism to probe.
-3. **Does σ have a meaningful optimum below 1?** σ=0.5 nearly tied σ=1 in round 3b (93.85 vs 93.59 at the time). With the new baseline recipe, σ ∈ {0.3, 0.5, 0.7, 1.0} is worth a targeted sweep.
-4. **Are there complementary architectural improvements?** Fourier PE only touches the input encoding. Architecture improvements to the attention mechanism (temperature, slice assignment) or output head (surface decoder) are orthogonal.
-5. **Can σ/m be conditioned on the coordinate scale?** If σ is the only knob, a per-coordinate learnable scale might outperform a global σ.
+1. **alphonse #24 (σ × SwiGLU seeded sweep)** — verifies whether fern's crashed σ=0.7+SwiGLU claim (71.49) is real or noise. First experiment to run under the strict 2-seed merge protocol. If σ<1 robustly wins, new baseline ~71. If σ=1 confirmed optimal, we close σ-tuning as a direction.
+
+2. **thorfinn #23 (zero-init residual surface decoder)** — PR #18 showed the decoder architecture is sound but the training protocol is wrong. Zero-init residual structure means the decoder starts invisible, can only improve. Targets surface pressure directly.
+
+3. **fern #25 (SwiGLU refinements)** — natural next step after PR #20. mlp2 head SwiGLU + mlp_ratio expansion {2, 3, 4}. Expected +1–4% per component.
+
+**Medium-EV:**
+
+4. **frieren #21 (near-surface volume-band weighting)** — 3-tier loss using dsdf to define BL band. Physics-motivated; orthogonal to everything.
+
+5. **nezuko #22 (attention temperature annealing)** — fresh architectural direction after 3 rounds of LR schedule work. Low complexity.
+
+6. **tanjiro #17 (gap-jitter σ-scan on Fourier baseline)** — gap-only signal replicated last round at −5.89 pts vs anchor. Needs verification on current baseline with tandem-gating.
+
+7. **edward #8 (EMA + clip on L1)** — long-running (r2); EMA is orthogonal to loss choice.
 
 ---
 
-## Potential Next Research Directions (Round 6+)
+## Potential Next Research Directions (Round 10+)
 
-### Immediate high-EV (for fern and alphonse)
+### High-EV if round 9 lands winners
+- **Warm-start from merged checkpoint** for architectural experiments (e.g., if thorfinn's zero-init residual decoder still underperforms, try warm-starting from the PR #20 checkpoint).
+- **Per-block Fourier injection** — condition mid-network features with frequency-varying codes (alphonse's suggested follow-up from PR #19).
+- **Pressure-gradient-weighted L1 loss** — focus loss on nodes where surface pressure varies steeply (boundary-layer regions inferred from dsdf or from |∇p| in training batches).
 
-- **Fourier m extension + learnable B comparison (alphonse):** m ∈ {160, 320, 640} on fixed B + learnable B at m=160 + multi-seed test. Answer: where does m saturate and does learnable B beat fixed at 19 epochs? Use `--wandb_group alphonse/fourier-m-ext`.
+### Novel physics-informed
+- **Kutta condition soft enforcement** at trailing edge (~150 LOC).
+- **Panel-method residual learning** — high complexity but direct OOD lift potential.
+- **Divergence-free regularization** on volume nodes via finite-difference.
 
-- **Fourier σ fine-sweep at m=160 + coordinate-specific σ (fern):** σ ∈ {0.3, 0.5, 0.7, 1.0, 1.3} at m=160; also test σ_x ≠ σ_z (separate bandwidths for chord vs thickness direction). Hypothesis: chord (x) needs lower σ (smoother), thickness (z) needs higher (sharper BL structure). Use `--wandb_group fern/fourier-sigma-fine`.
-
-- **Attention temperature annealing (fern or alphonse):** Anneal `self.temperature` from T₀=1.5 → 0.5 over first 30% of training via `--temp_warmup`. ~10 LOC. Inspired by how soft attention early in training lets the model explore slice assignments before hardening. Low-cost, orthogonal.
-
-- **SwiGLU feedforward in TransolverBlock:** Replace standard MLP with SwiGLU. ~30 LOC. Well-documented wins in transformers; orthogonal to Fourier/loss changes.
-
-### Mid-term architectural
-- **Near-surface volume-band weighting:** 3-tier loss (far-vol / near-vol / surf) — BL nodes get extra gradient. dsdf features already encode proximity-to-surface; use them to define the near-surface band mask.
-- **Learnable slice assignment (coordinate-based):** Replace random/learned slice tokens with coordinate-projected queries using (x, z, is_surface). More interpretable spatial partition; may improve OOD.
-- **Sample-wise per-sample normalization or re-centering:** Addresses 10× per-sample y_std variance. Keep global mean/std as baseline but add a per-sample re-centering step for the surface pressure channel.
-- **Kutta condition soft enforcement:** aux loss on |p_upper - p_lower| at trailing edge node. Physics-informed, ~150 LOC, directly targets the physical constraint the model is implicitly learning.
-
-### Compounding plan
-If PRs #14 (frieren sw>1), #17 (tanjiro jitter), #6 (nezuko WSD), #8 (edward EMA), or #18 (thorfinn cross-attn) merge, update the baseline and assign the next-round students to compound with the accumulated improvements.
+### Scale
+- **Capacity scaling on merged recipe** (h=128 → 192 with SwiGLU) — may finally succeed now that per-epoch efficiency is higher. Budget still marginal; needs ~20+ epochs at h=192.
