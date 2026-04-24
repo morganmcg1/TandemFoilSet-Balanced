@@ -6,9 +6,7 @@ This repo contains:
 
 ## Citation
 
-If you use this balanced split design or benchmark package, please cite:
-
-### BibTeX for TandemFoilSet-Balanced
+If you use this balanced split design or benchmark package, please cite the **BibTeX for TandemFoilSet-Balanced**
 
 ```bibtex
 @misc{mcguire2026tandemfoilsetbalanced,
