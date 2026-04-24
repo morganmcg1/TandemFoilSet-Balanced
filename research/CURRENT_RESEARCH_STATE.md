@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-24 07:00 (round 18 — PR #27 merged, PR #34 assigned, PR #35 assigned)
+- **Updated:** 2026-04-24 07:30 (round 19 — PR #32 sent back with nh=2/sn=32 confirmation)
 - **Advisor branch:** `kagent_v_students`
 - **Research tag:** `kagent-v-students-20260423-2055`
 - **W&B project:** `wandb-applied-ai-team/senpai-kagent-v-students`
@@ -37,7 +37,7 @@
 | fern     | WIP (r17) | #33: α-gated per-block Fourier (magnitude-constrained, zero-init α) | `fern/alpha-gated-pbf` |
 | tanjiro  | WIP (r12) | #17 r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | `tanjiro/input-feature-jitter` |
 | nezuko   | WIP (r18) | #35: n_layers depth sweep on sn=32 recipe {3,4,5,6,7} | `nezuko/n-layers-sweep-sn32` |
-| alphonse | WIP (r16) | #32: n_head sweep + 3-seed anchor recalibration | `alphonse/n-head-sweep` |
+| alphonse | WIP (r19) | #32 r2: nh=2/sn=32 5-seed compound + nh=1 probe (rebased) | `alphonse/n-head-sweep` |
 | edward   | WIP (r2) | #8: EMA + grad-clip on L1 | `edward/ema-gradclip-stability` |
 | thorfinn | WIP (r13) | #29: Slice-bottleneck residual decoder (PhysicsAttention) | `thorfinn/slice-bottleneck-decoder` |
 
@@ -59,7 +59,7 @@ None at this time.
 | #33 | fern     | α-gated per-block Fourier (per-block scalar α_i init=0, magnitude-constrained) | Beat **67.186** |
 | #17 | tanjiro  | r3: Gap σ-scan on SwiGLU baseline + tandem-gated AoA | Beat **67.186** |
 | #35 | nezuko   | n_layers depth sweep {3,4,5,6,7} on sn=32 recipe + 2-seed anchor recalibration | Beat **67.186** |
-| #32 | alphonse | n_head sweep {2, 4, 8, 16} + 3-seed anchor recalibration | Beat **67.186** (threshold recalibration this PR) |
+| #32 | alphonse | r2: nh=2 × sn=32 5-seed compound + 2-seed anchor + nh=1 probe (rebased) | Beat **68.687** (3-seed mean) |
 | #8  | edward   | EMA 0.999 + wider grad-clip on L1 | Beat **67.186** |
 | #29 | thorfinn | Slice-bottleneck residual decoder (PhysicsAttention, zero-init) | Beat **67.186** |
 
@@ -70,6 +70,10 @@ None at this time.
 - **Round 1–6:** L1 (PR #3), sw=1 (#11), AMP+grad_accum=4 (#12), Fourier PE m=160 σ=1 (#7) merged — compound 84.737 baseline.
 - **Round 7 (r7):** Closed PR #14 (sw>1 exhausted). Seed floor on seeded serial: 2.5%.
 - **Round 8 (r8):** Closed PR #6 (LR schedule 3-round exhaustion). Sent back #17 (gap-only jitter signal real). Assigned #22 (temp annealing).
+- **Round 19 (r19 — 2026-04-24 07:30):**
+  - **Sent back PR #32 (alphonse n_head + 3-seed anchor) with strong candidate signal:** nh=2 at sn=64 gave 2-seed mean val 66.372 (best single-seed 64.161 / test 55.337). Monotonic n_head landscape: nh=2 << nh=4 < nh=8 << nh=16 (catastrophic). **Cross-recipe comparison** (sn=64 nh=2 vs sn=32 nh=4 baseline 68.687) suggests −2.3 val compound win if it transfers — but branch is CONFLICTING (pre-PR #27, slice_num=64). Sent back for rebase + 5-seed nh=2/sn=32 confirmation + nh=1 probe.
+  - **3-seed anchor recalibration at sn=64: std 1.978 val** (range 3.937 val). Combined with PR #27's sn=32 3-seed std (1.650) and PR #28's σ=0.7 2-seed std (1.162), **noise floor is triangulated: ~1.0–2.0 val at σ=0.7 recipes**. The 0.362 era (from σ=1 sn=64) is definitively over. Multi-seed (≥3) protocol mandatory for close-call merges.
+
 - **Round 18 (r18 — 2026-04-24 07:00):**
   - **No new PRs for review.** All 7 students now active.
   - **Assigned PR #35 (nezuko n_layers depth sweep):** First n_layers sweep on the fully-merged recipe (sn=32). Hypothesis: sn=32's −20% per-epoch speedup enables deeper models (n_layers=6,7) to converge within budget. Sweep n_layers∈{3,4,5,6,7} with 2-seed at n_layers=5 anchor. Also recalibrates the noise floor post-sn=32 merge.

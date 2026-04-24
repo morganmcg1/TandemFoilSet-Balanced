@@ -1181,3 +1181,37 @@ Alphonse reassigned to PR #32: n_head sweep + 3-seed anchor recalibration to upd
 - **Directional signal:** sn monotonically improves from 96→48→32 at seed 0; sn=16/24 may go further.
 - **Decision: MERGED.** New baseline: val 68.687 (3-seed mean) / 67.186 (best seed). test 60.680 (3-seed mean).
 
+
+---
+
+## 2026-04-24 — PR #32: alphonse: n_head sweep + 3-seed anchor recalibration — SENT BACK (strong candidate)
+
+- **Branch:** `alphonse/n-head-sweep` (pre-PR #27 — slice_num=64, CONFLICTING)
+- **W&B group:** `alphonse/n-head-sweep`
+- **Hypothesis:** Test untested `n_head` architectural knob + recalibrate merge threshold with 3-seed anchor at current recipe.
+
+### Results (on sn=64 recipe)
+
+| Rank | name (nh/dh/seed) | val_avg | test_avg | best_ep | n_params |
+|------|-------------------|---------|----------|---------|----------|
+| 1 | nh=2 / dh=64 / s1 | **64.161** | **55.337** | 21 | 799,729 |
+| 2 | nh=2 / dh=64 / s0 | 68.584 | 60.028 | 21 | 799,729 |
+| 3 | nh=4 / dh=32 / s1 (anchor) | 69.845 | 62.778 | 17 | 743,419 |
+| 4 | nh=4 / dh=32 / s0 (anchor) | 71.489 | 62.603 | 16 | 743,419 |
+| 5 | nh=4 / dh=32 / s2 (anchor) | 73.782 | 66.686 | 16 | 743,419 |
+| 6 | nh=8 / dh=16 / s1 | 82.805 | 72.846 | 11 | 726,799 |
+| 7 | nh=8 / dh=16 / s0 | 85.865 | 76.692 | 12 | 726,799 |
+| 8 | nh=16 / dh=8 / s0 | 102.438 | 92.920 | 8 | 721,399 |
+
+### Analysis
+
+- **n_head landscape is monotonic and sharp:** nh=2 (66.37 mean) << nh=4 (71.71 mean) < nh=8 (84.33 mean) << nh=16 (102.44 single). Fewer/wider heads dominate. Strong candidate winner at nh=2.
+- **3-seed anchor at sn=64: mean 71.705, std 1.978 val, range 3.937.** This is the widest variance observed yet — combined with PR #27's sn=32 3-seed std 1.650 and PR #28's σ=0.7 2-seed std 1.162, the **noise floor at σ=0.7 recipes is ~1.0–2.0 val**. Anchor reproducibility verified: seeds 0 and 1 reproduce PR #24's `j12mrpeb` and `flgrjmte` bit-exactly.
+- **nh=8/nh=16 undertraining confound:** nh=16 reaches only 8 epochs (vs nh=2's 21) due to higher per-epoch cost. Part of the sharp cliff is budget-bound, but nh=2 beating nh=4 at MATCHED 17-18 epochs is genuinely architectural.
+- **Param count NOT shape-preserving:** nh=2 has 7.6% more params than nh=4 (`Linear(dim_head, slice_num)` scales with dim_head). Small confound in nh=2's favor, but the nh=8→nh=16 regression (0.7% param delta) shows the effect is primarily architectural, not capacity.
+- **Cross-recipe comparison:** nh=2 at sn=64 (best seed val 64.16 / test 55.34) beats current sn=32 baseline (67.19 / 58.36) by 3+ val. But not a like-for-like comparison — must verify nh=2 × sn=32 compound.
+- **Branch is CONFLICTING** (pre-PR #27; needs `--slice_num` CLI). Cannot direct-merge.
+
+### Decision: **SENT BACK.**
+
+Rebase + focused 5-seed nh=2 × sn=32 confirmation + nh=1 probe. If nh=2 × sn=32 5-seed mean lands ≤ ~67.0 val (1σ below sn=32 baseline 68.687), big compound merge. If 66–68, may merge depending on test improvement. If >68, compound anti-correlation and close.
