@@ -4,13 +4,6 @@
 
 This repo contains a custom TandemFoilSet dataset split as well as a base set of files that the [senpai](https://github.com/wandb/senpai) autoresearch harness can use as input to try and improve performance.
 
-## Authors
-
-TandemFoilSet-Balanced was created by:
-
-- Morgan McGuire
-- Thomas Capelle ([@tcapelle](https://github.com/tcapelle))
-
 ## Citation
 
 If you use this balanced split design or benchmark package, please cite:
