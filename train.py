@@ -431,7 +431,21 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Kendall homoscedastic multi-task uncertainty weighting (Kendall, Gal, Cipolla 2018).
+# Five learned log-variances auto-balance gradients across:
+#   [0] vol_Ux, [1] vol_Uy, [2] vol_p, [3] surf_UxUy, [4] surf_p
+LOSS_COMPONENT_NAMES = ["vol_Ux", "vol_Uy", "vol_p", "surf_UxUy", "surf_p"]
+log_sigmas = torch.nn.Parameter(torch.zeros(len(LOSS_COMPONENT_NAMES), device=device))
+
+# Separate parameter group with weight_decay=0 — AdamW would otherwise pull log_sigmas
+# toward 0 (sigma=1, equal weighting) and partially defeat the uncertainty-weighting purpose.
+optimizer = torch.optim.AdamW(
+    [
+        {"params": model.parameters(), "weight_decay": cfg.weight_decay},
+        {"params": [log_sigmas], "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -476,6 +490,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_components = torch.zeros(len(LOSS_COMPONENT_NAMES), device=device)
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -487,13 +502,33 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        vol_mask_f = vol_mask.unsqueeze(-1).float()
+        surf_mask_f = surf_mask.unsqueeze(-1).float()
+
+        def masked_mean(per_node, m):
+            return (per_node * m).sum() / m.sum().clamp(min=1.0)
+
+        # Five raw component losses (normalized space).
+        # Note: the surf_UxUy entry sums err_Ux^2 + err_Uy^2 over surface nodes and divides
+        # by n_surf (not 2*n_surf) — i.e. it is 2x the per-channel mean. This matches the PR
+        # spec; the uncertainty weighting will adapt log_sigma to whatever absolute scale.
+        L = torch.stack([
+            masked_mean(sq_err[..., 0:1], vol_mask_f),   # vol_Ux
+            masked_mean(sq_err[..., 1:2], vol_mask_f),   # vol_Uy
+            masked_mean(sq_err[..., 2:3], vol_mask_f),   # vol_p
+            masked_mean(sq_err[..., 0:2], surf_mask_f),  # surf_UxUy combined
+            masked_mean(sq_err[..., 2:3], surf_mask_f),  # surf_p (primary)
+        ])
+        precision = torch.exp(-2.0 * log_sigmas)
+        loss = (precision * L + log_sigmas).sum()
+
+        # Track legacy vol/surf losses for monitoring continuity with Trial A.
+        vol_loss = (sq_err * vol_mask_f).sum() / vol_mask_f.sum().clamp(min=1.0)
+        surf_loss = (sq_err * surf_mask_f).sum() / surf_mask_f.sum().clamp(min=1.0)
 
         optimizer.zero_grad()
         loss.backward()
@@ -503,6 +538,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_components += L.detach()
         n_batches += 1
 
     scheduler.step()
@@ -528,6 +564,17 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Uncertainty-weighting diagnostics: per-component log_sigma, effective weight,
+    # raw L_k (epoch mean), and post-weighting contribution.
+    epoch_components_mean = (epoch_components / max(n_batches, 1)).detach().cpu().numpy()
+    log_sigmas_np = log_sigmas.detach().cpu().numpy()
+    weights_np = (-2.0 * log_sigmas).exp().detach().cpu().numpy()
+    for i, name in enumerate(LOSS_COMPONENT_NAMES):
+        log_metrics[f"train/uncertainty/log_sigma_{name}"] = float(log_sigmas_np[i])
+        log_metrics[f"train/uncertainty/weight_{name}"] = float(weights_np[i])
+        log_metrics[f"train/uncertainty/L_{name}"] = float(epoch_components_mean[i])
+        log_metrics[f"train/uncertainty/weighted_{name}"] = float(weights_np[i] * epoch_components_mean[i])
+    log_metrics["train/uncertainty/weight_ratio_surf_p_to_vol_p"] = float(weights_np[4] / max(weights_np[2], 1e-12))
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -552,6 +599,11 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    weights_str = "  ".join(
+        f"{LOSS_COMPONENT_NAMES[i]}: w={weights_np[i]:.3f} L={epoch_components_mean[i]:.4f} (logσ={log_sigmas_np[i]:+.3f})"
+        for i in range(len(LOSS_COMPONENT_NAMES))
+    )
+    print(f"    uncertainty  {weights_str}")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -561,10 +613,19 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    final_log_sigmas = log_sigmas.detach().cpu().numpy()
+    final_weights = (-2.0 * log_sigmas).exp().detach().cpu().numpy()
+    summary_uncertainty = {}
+    for i, name in enumerate(LOSS_COMPONENT_NAMES):
+        summary_uncertainty[f"final_log_sigma/{name}"] = float(final_log_sigmas[i])
+        summary_uncertainty[f"final_weight/{name}"] = float(final_weights[i])
+    print("Final log_sigmas:", {n: f"{s:+.3f}" for n, s in zip(LOSS_COMPONENT_NAMES, final_log_sigmas)})
+    print("Final weights:   ", {n: f"{w:.3f}" for n, w in zip(LOSS_COMPONENT_NAMES, final_weights)})
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        **summary_uncertainty,
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
