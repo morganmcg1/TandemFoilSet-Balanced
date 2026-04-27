@@ -28,6 +28,8 @@ The Transolver baseline (5L × 128h × 4 heads × slice_num=64, mlp_ratio=2, lr=
 
 Each PR has a paired baseline trial in the same W&B group, so the round produces 8 baseline runs (variance estimate) + 8 interventions.
 
+**GitHub label-search indexing lag (2026-04-27 18:56 UTC):** All 8 PRs are correctly labeled (`status:wip` + advisor-branch + student) and visible via direct `gh pr view`, but `gh pr list --label …` and the REST `/issues?labels=…` endpoints both return 0 for these PRs. Label DELETE+POST nudges and PR body edits did not force reindexing. The same filter does return 26 other repo-wide `status:wip` PRs — so the indexer is alive but has not yet picked up these 8. Survey + student-pod polling depend on this filter; until the index catches up, the harness will report all 8 as idle. Do **not** re-create or duplicate these PRs; the labels are correct on the underlying objects.
+
 ## Potential next research directions (round 2+)
 
 **Heavy-tail / output parameterization**
