@@ -81,6 +81,55 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+# Global per-sample condition dims in x: log(Re), AoA1, NACA1[3], AoA2, NACA2[3], gap, stagger
+COND_DIMS = [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+
+def extract_cond(x_norm: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Per-sample masked mean over real (non-padded) nodes.
+
+    Global condition features are constant across real nodes for one sample,
+    so the masked mean recovers the per-sample condition without bias from
+    padded rows (post-normalization, padded rows = -x_mean/x_std, not 0).
+    """
+    cond_features = x_norm[:, :, COND_DIMS]
+    m = mask.unsqueeze(-1).to(cond_features.dtype)
+    return (cond_features * m).sum(dim=1) / m.sum(dim=1).clamp(min=1)
+
+
+class FiLMLayer(nn.Module):
+    """Per-block FiLM conditioning: scale + shift from a global condition vector.
+
+    Identity init: γ→0, β→0 so the model starts as an unmodified Transolver
+    and only learns non-trivial conditioning over training.
+    """
+
+    def __init__(self, cond_dim: int, hidden_dim: int):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(cond_dim, hidden_dim * 2),
+            nn.SiLU(),
+            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+        # Diagnostic stats captured per forward; read by trainer for wandb logging.
+        self._gamma_std: float = 0.0
+        self._beta_std: float = 0.0
+        self._gamma_mean: float = 0.0
+        self._beta_mean: float = 0.0
+
+    def forward(self, h: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        gb = self.mlp(cond)  # [B, 2D]
+        gamma, beta = gb.chunk(2, dim=-1)  # each [B, D]
+        with torch.no_grad():
+            self._gamma_std = gamma.std().item()
+            self._beta_std = beta.std().item()
+            self._gamma_mean = gamma.mean().item()
+            self._beta_mean = beta.mean().item()
+        return (1.0 + gamma.unsqueeze(1)) * h + beta.unsqueeze(1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -169,12 +218,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 cond_dim: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.cond_dim = cond_dim
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -193,8 +244,20 @@ class Transolver(nn.Module):
             )
             for i in range(n_layers)
         ])
+        # FiLM layers go after each non-last block; the last block is the output head.
+        if cond_dim > 0:
+            self.film_layers = nn.ModuleList([
+                FiLMLayer(cond_dim, n_hidden) for _ in range(n_layers - 1)
+            ])
+        else:
+            self.film_layers = None
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Re-zero FiLM final-linear weights/biases that _init_weights overwrote.
+        if self.film_layers is not None:
+            for film in self.film_layers:
+                nn.init.zeros_(film.mlp[-1].weight)
+                nn.init.zeros_(film.mlp[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,9 +270,12 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        cond = data.get("cond", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             fx = block(fx)
+            if self.film_layers is not None and cond is not None and i < len(self.film_layers):
+                fx = self.film_layers[i](fx, cond)
         return {"preds": fx}
 
 
@@ -238,7 +304,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            cond = extract_cond(x_norm, mask)
+            pred = model({"x": x_norm, "cond": cond})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -425,6 +492,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    cond_dim=len(COND_DIMS),
 )
 
 model = Transolver(**model_config).to(device)
@@ -456,6 +524,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("film/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -486,7 +555,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        cond = extract_cond(x_norm, mask)
+        pred = model({"x": x_norm, "cond": cond})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -533,6 +603,12 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if model.film_layers is not None:
+        for i, film in enumerate(model.film_layers):
+            log_metrics[f"film/layer_{i}/gamma_std"] = film._gamma_std
+            log_metrics[f"film/layer_{i}/beta_std"] = film._beta_std
+            log_metrics[f"film/layer_{i}/gamma_mean"] = film._gamma_mean
+            log_metrics[f"film/layer_{i}/beta_mean"] = film._beta_mean
     wandb.log(log_metrics)
 
     tag = ""
