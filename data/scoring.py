@@ -46,6 +46,11 @@ def accumulate_batch(
     vol_mask = effective & ~is_surface
 
     err = (pred_orig.double() - y.double()).abs()
+    # Zero out positions in non-finite samples before reduction.
+    # IEEE-754 has Inf*0 = NaN, so multiplying by surf_mask/vol_mask alone
+    # is not enough — non-finite GT entries poison the masked sum even when
+    # surf_mask is False there.
+    err = torch.where(sample_mask.unsqueeze(-1), err, torch.zeros_like(err))
     mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
     mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
     return int(surf_mask.sum().item()), int(vol_mask.sum().item())
