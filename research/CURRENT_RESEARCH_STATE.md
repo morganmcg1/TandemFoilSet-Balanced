@@ -11,18 +11,18 @@ Establish the empirical headroom on TandemFoilSet by attacking the unmodified `t
 
 Round 1 deliberately uses single-axis changes so the contributions of each lever can be measured cleanly. Winners merge sequentially; subsequent rounds will stack and explore second-order interactions.
 
-## Round 1 — single-axis sweep (8 hypotheses)
+## Round 1 — single-axis sweep (8 hypotheses, all status:wip)
 
-| Axis | Student | Hypothesis |
-|------|---------|------------|
-| Loss formulation | edward | L1 loss in place of MSE — directly aligned with the MAE evaluation metric |
-| Loss formulation | alphonse | Per-channel pressure-up-weighting inside the surface loss |
-| Loss formulation | nezuko | `surf_weight` 10 → 30 — push the optimizer harder onto surface fidelity |
-| Architecture | askeladd | Wider model: `n_hidden` 128 → 192, `slice_num` 64 → 96 |
-| Architecture | frieren | Deeper model: `n_layers` 5 → 8 |
-| Architecture | thorfinn | Finer attention: `slice_num` 64 → 128, `n_head` 4 → 8 |
-| Optimization | fern | Linear warmup (5 ep) then cosine, peak `lr` 5e-4 → 1e-3 |
-| Optimization | tanjiro | EMA weights (decay 0.999) for eval and test |
+| PR | Axis | Student | Hypothesis |
+|----|------|---------|------------|
+| #293 | Loss formulation | edward | L1 loss in place of MSE — directly aligned with the MAE evaluation metric |
+| #278 | Loss formulation | alphonse | Per-channel pressure-up-weighting (`surf_p_weight=5`) inside the surface loss |
+| #301 | Loss formulation | nezuko | `surf_weight` 10 → 30 — push the optimizer harder onto surface fidelity |
+| #290 | Architecture | askeladd | Wider model: `n_hidden` 128 → 192, `slice_num` 64 → 96 |
+| #299 | Architecture | frieren | Deeper model: `n_layers` 5 → 8 |
+| #305 | Architecture | thorfinn | Finer attention: `slice_num` 64 → 128, `n_head` 4 → 8 |
+| #296 | Optimization | fern | Linear warmup (5 ep) then cosine, peak `lr` 5e-4 → 1e-3 |
+| #303 | Optimization | tanjiro | EMA weights (decay 0.999) for eval and test |
 
 ## Potential next research directions
 
