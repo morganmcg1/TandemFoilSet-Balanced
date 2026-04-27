@@ -386,6 +386,59 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    cruise_flip_p: float = 0.5  # probability of z-reflection augmentation per cruise sample (0 disables)
+
+
+# ---------------------------------------------------------------------------
+# Cruise z-reflection augmentation
+# ---------------------------------------------------------------------------
+# Cruise tandem samples (files 4,5,6) have freestream BCs and are equivariant
+# under z-reflection: a sample at AoA α is physically equivalent to the same
+# foil at -α with z negated and Uy negated. raceCar samples have a slip-wall
+# ground plane (mesh nodes only at z >= 0), which breaks this symmetry, so
+# we MUST exclude them.
+#
+# Detection (verified empirically over the full train set, 1499 samples):
+#   - single-foil:  gap == 0          (n=602)
+#   - raceCar tandem: gap != 0, z.min() >= 0 (n=457)
+#   - cruise tandem:  gap != 0, z.min() < 0 (n=440, ground absent)
+#
+# Feature semantics under z-reflection (verified by correlation analysis):
+#   - x dim 1 (pos_z):       flip sign
+#   - x dim 3 (saf_z):       flip sign  (corr(saf3, pos_z) > 0.99)
+#   - x dim 14 (AoA1):       flip sign
+#   - x dim 18 (AoA2):       flip sign
+#   - x dims 4-11 (dsdf):    invariant (non-negative scalar distances)
+#   - y dim 1 (Uy / U_z):    flip sign
+#   - y dims 0,2 (Ux, p):    invariant
+
+
+def _is_cruise_sample(x_b: torch.Tensor, mask_b: torch.Tensor) -> bool:
+    """True iff sample is cruise tandem (freestream + tandem geometry)."""
+    z = x_b[mask_b, 1]
+    gap = x_b[0, 22]
+    return bool((gap.abs() > 1e-3) and (z.min() < -0.5))
+
+
+def cruise_z_reflection_(x: torch.Tensor, y: torch.Tensor, mask: torch.Tensor,
+                          p_flip: float) -> tuple[int, int]:
+    """In-place z-reflection augmentation. Returns (n_cruise, n_flipped)."""
+    if p_flip <= 0:
+        return 0, 0
+    n_cruise = n_flipped = 0
+    for b in range(x.shape[0]):
+        if not _is_cruise_sample(x[b], mask[b]):
+            continue
+        n_cruise += 1
+        if torch.rand(1).item() > p_flip:
+            continue
+        x[b, :, 1] *= -1     # pos_z
+        x[b, :, 3] *= -1     # saf_z
+        x[b, :, 14] *= -1    # AoA foil 1
+        x[b, :, 18] *= -1    # AoA foil 2
+        y[b, :, 1] *= -1     # Uy (z-velocity)
+        n_flipped += 1
+    return n_cruise, n_flipped
 
 
 cfg = sp.parse(Config)
@@ -476,6 +529,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_cruise = epoch_flipped = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -483,6 +537,10 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        n_cruise, n_flipped = cruise_z_reflection_(x, y, mask, cfg.cruise_flip_p)
+        epoch_cruise += n_cruise
+        epoch_flipped += n_flipped
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -499,7 +557,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/n_cruise_in_batch": n_cruise,
+            "train/n_flipped_in_batch": n_flipped,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -520,9 +583,13 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    flip_rate = epoch_flipped / epoch_cruise if epoch_cruise > 0 else 0.0
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/cruise_samples_per_epoch": epoch_cruise,
+        "train/flipped_per_epoch": epoch_flipped,
+        "train/cruise_flip_rate": flip_rate,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
