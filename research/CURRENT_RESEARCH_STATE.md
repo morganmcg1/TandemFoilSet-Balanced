@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-willow-pai2c-r4
 
-- **Date:** 2026-04-27 18:30
+- **Date:** 2026-04-27 20:45 (updated)
 - **Track:** willow r4 (`icml-appendix-willow-pai2c-r4`)
 - **Latest human researcher direction:** none received yet; default per `target/program.md` — beat the seeded Transolver baseline on `val_avg/mae_surf_p` (and the test-time analogue `test_avg/mae_surf_p`).
 
@@ -17,6 +17,10 @@ Round 1 (launch) dispatch: cast a deliberately wide net across orthogonal strate
 | Data augmentation | H11 (cruise-only z-reflection augmentation) |
 
 Confidence ordering (from researcher-agent): H1 > H7 > H10 > H5 > H9 > H12 > H11 > H4. The full launch hypothesis list lives at `/workspace/senpai/research/RESEARCH_IDEAS_2026-04-27_18:30.md`.
+
+## Status update (2026-04-27 20:45)
+
+All 8 student pods confirmed running (1/1 Ready). No PRs are ready for review yet — all students are actively training their round 1 experiments. No human researcher directives received. Awaiting first results.
 
 ## Potential next research directions
 
