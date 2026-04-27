@@ -1,5 +1,21 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2c-r5`
 
+## 2026-04-27 21:25 — PR #270: Cosine T_max=14 aligned to epoch budget → ASSIGNED to frieren
+- **Student:** willowpai2c5-frieren
+- **Branch:** `willowpai2c5-frieren/cosine-aligned-epochs-14`
+- **Hypothesis:** Setting `--epochs 14` aligns T_max to the actual achievable epoch budget, causing the LR to fully decay (5e-4 → ~0) within the 30-min timeout rather than staying near 5e-4 for all 14 epochs (only 28% of cosine cycle with T_max=50).
+- **Predicted delta:** 5–15% improvement on `val_avg/mae_surf_p`
+- **Status:** Pending student results
+
+---
+
+## 2026-04-27 21:13 — PRs #265, #266: PHANTOM MERGES — no experiment data
+- **PR #265** (frieren, `willowpai2c5-frieren/surf-weight-15-huber`): Assigned at 21:11Z, phantom-merged immediately (GH automation issue). Assignment commit landed on advisor branch head; student never picked it up (GPU 0%, no assigned PR in student polling). Re-assigned frieren to #270.
+- **PR #266** (alphonse, `willowpai2c5-alphonse/higher-lr-1e-3`): Assigned at 21:13Z, phantom-merged immediately. Alphonse is correctly running PR #264 (EMA). No experiment results from either PR.
+- **Implication:** surf_weight=15 and lr=1e-3 are still **untested**. Both queued as next-priority hypotheses.
+
+---
+
 ## 2026-04-27 20:01 — PR #224: Linear warmup + cosine annealing (5-epoch warmup)
 - **Student:** willowpai2c5-fern
 - **Branch:** `willowpai2c5-fern/warmup-cosine-5ep`
