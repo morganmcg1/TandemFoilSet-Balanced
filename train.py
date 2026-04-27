@@ -254,6 +254,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=2e4, neginf=-2e4)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -432,7 +433,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-warmup_epochs = 5
+warmup_epochs = 2
 warmup = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs
 )
