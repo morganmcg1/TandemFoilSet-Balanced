@@ -14,16 +14,18 @@ Huber loss, surface weight tuning — paired with a few well-known
 generalization levers (model scale, LR warmup, EMA + grad clip, Fourier
 features) so multiple ideas advance in parallel.
 
-## Themes in flight
+## Themes in flight (round 1, all assigned 2026-04-27)
 
-| Theme | Slot |
-|---|---|
-| Reference baseline (clean number to compare to) | alphonse |
-| Loss / metric alignment | askeladd, edward, thorfinn |
-| Capacity scaling | fern |
-| Optimization & schedule | frieren |
-| Stability / regularization | nezuko |
-| Spatial inductive bias | tanjiro |
+| Theme | Slot | PR |
+|---|---|---|
+| Reference baseline (Transolver default) | alphonse | #312 |
+| Loss / metric alignment — pressure-channel-weighted MSE (5x p) | askeladd | #313 |
+| Loss / metric alignment — SmoothL1/Huber instead of MSE | edward | #314 |
+| Capacity scaling — h=192, L=6, heads=6, slices=96 | fern | #318 |
+| Optimization & schedule — 5-epoch warmup + cosine to 0 (peak 1e-3) | frieren | #321 |
+| Stability / regularization — EMA(0.9999) + grad-clip(1.0) | nezuko | #324 |
+| Spatial inductive bias — Fourier features for (x, z) (K=8) | tanjiro | #327 |
+| Loss / metric alignment — surf_weight sweep ∈ {15, 25, 40} | thorfinn | #333 |
 
 ## Potential next directions (round 2+)
 
