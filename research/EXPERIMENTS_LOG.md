@@ -34,6 +34,31 @@
 
 ---
 
+## 2026-04-27 23:30 — PR #214: Per-channel pressure up-weighting in loss (3x on p channel) — CLOSED
+
+- **Branch**: charliepai2c3-tanjiro/pressure-channel-upweight-3x
+- **Hypothesis**: Up-weight the pressure channel 3× in MSE loss to directly optimize val_avg/mae_surf_p.
+- **Results**:
+
+| split | mae_surf_p | mae_surf_Ux | mae_surf_Uy | mae_vol_p |
+|---|---:|---:|---:|---:|
+| val_single_in_dist     | 164.23 | 2.46 | 1.14 | 180.74 |
+| val_geom_camber_rc     | 148.15 | 4.10 | 1.37 | 151.51 |
+| val_geom_camber_cruise | 105.28 | 1.93 | 0.79 |  99.07 |
+| val_re_rand            | 127.10 | 2.92 | 1.06 | 120.45 |
+| **val avg**            | **136.19** | 2.85 | 1.09 | 137.94 |
+| **test avg**           | **123.74** | 2.79 | 1.04 | 124.06 |
+
+- **Best epoch**: 14 (still improving, timeout-limited)
+- **Peak VRAM**: 42.12 GB
+- **Metric summary**: `models/model-charliepai2c3-tanjiro-pressure-channel-upweight-3x-20260427-200219/metrics.jsonl`
+
+**Commentary**: val_avg/mae_surf_p = 136.19 vs baseline 131.71 — 3.4% *worse*. The pressure up-weighting backfired. In normalized space, MSE with equal channel weights is already balanced; adding explicit 3x weight on pressure distorted gradient balance. Pressure and velocity are coupled (Navier-Stokes), so degrading velocity predictions indirectly hurts pressure. The higher velocity MAE (Ux: 2.85 vs baseline 2.30) reflects this gradient hijack. Direction explored and found to hurt.
+
+**Decision**: CLOSED. PR was in draft/WIP state with results posted. Direction is clearly worse — explicit pressure channel up-weighting in MSE hurts. Tanjiro reassigned to cosine schedule calibration experiment (#268).
+
+---
+
 ## 2026-04-27 20:18 — PR #209: EMA weight averaging (decay=0.999) — smoother generalization
 
 - **Branch**: charliepai2c3-nezuko/ema-weight-averaging
