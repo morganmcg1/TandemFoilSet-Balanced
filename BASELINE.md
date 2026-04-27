@@ -62,7 +62,7 @@
 | epochs | 50 |
 | n_hidden | 128 |
 | n_layers | 3 |
-| n_head | 4 |
+| **n_head** | **4** (use 1 for best results at sn=32; nh=1×sn=8 follow-up pending — see PR #32) |
 | **slice_num** | **8** ← new (PR #39) |
 | mlp_ratio | 2 |
 | optimizer | AdamW |
@@ -99,6 +99,18 @@ cd target && python train.py \
 ---
 
 ## Baseline history
+
+### 2026-04-27 — PR #32: alphonse n_head sweep + 3-seed anchor recalibration
+
+**Code merged; no baseline metric update (nh=1/sn=32/nl=3 does not beat PR #39 at sn=8).**
+
+- **val_avg/mae_surf_p (2-seed mean):** nh=1/sn=32/nl=3 = 49.72 (vs current best 49.443 — within noise, not a metric win)
+- **test_avg/mae_surf_p (2-seed mean):** nh=1/sn=32/nl=3 = 43.23
+- Triple compound probe nh=1/sn=16/nl=3 (single seed) = **48.13 val / 40.93 test** — lowest single-seed ever; needs multi-seed follow-up
+- Code changes: `--n_head` and `--dim_head` CLI flags plumbed through Transolver chain
+- Key finding: nh=1 is architecturally superior at sn=32 — shape-preserving control confirms inductive bias not capacity drives win
+- Key finding: noise floor wider at nh=1 (std ~0.92 val); multi-seed required
+- Merge rationale: architectural improvement + CLI infrastructure for nh=1×sn=8 compound follow-up
 
 ### 2026-04-24 — PR #39: nezuko nl=3 × sn=16 compound (sn=8 wins)
 
