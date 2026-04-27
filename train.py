@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -403,6 +404,14 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA-of-weights: validation and best-checkpoint selection use ema_model.
+# The live model continues to train normally; ema_model tracks an exponential
+# moving average of the live weights with decay=0.999 (transformer default).
+ema_model = copy.deepcopy(model)
+for p in ema_model.parameters():
+    p.requires_grad_(False)
+ema_decay = 0.999
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -463,6 +472,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        with torch.no_grad():
+            for ep, p in zip(ema_model.parameters(), model.parameters()):
+                ep.data.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+            for eb, b in zip(ema_model.buffers(), model.buffers()):
+                eb.data.copy_(b.data)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -471,10 +486,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate (EMA weights) ---
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -489,7 +504,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
