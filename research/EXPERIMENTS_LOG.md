@@ -36,6 +36,44 @@ re_rand 125.99.
   and test rankings agree, which is a useful sanity check on the four-track
   split design.
 
+## 2026-04-27 23:22 — PR #321 (round 1, sent back): 5-epoch LR warmup + cosine to 0 with peak lr=1e-3
+
+- branch: `willowpai2d1-frieren/lr-warmup-and-higher-peak`
+- hypothesis: warmup + higher peak lr (1e-3) improves over default no-warmup
+  cosine from 5e-4. Predicted -2% to -5% on `val_avg/mae_surf_p`.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| Best `val_avg/mae_surf_p` | **148.38** (epoch 14 of 14 completed) |
+| `test_avg/mae_surf_p` | NaN (scoring bug + non-finite cruise pred) |
+| Wall time | 30-min cap binding (~132 s/epoch) |
+| Peak GPU memory | 42.1 GB / 96 GB |
+| W&B run | `4ba8w3wb` (`warmup5-peak1e3`) |
+
+vs baseline (PR #312, 144.21): **+2.9% regression**. Under the 5% close
+threshold; sent back, not closed.
+
+### Analysis & conclusions
+
+- **Sent back** for variation: peak=7e-4 instead of 1e-3.
+- Frieren caught a real bug in my pseudocode (`LinearLR` requires
+  `end_factor ≤ 1`; my literal version would also leave cosine annealing
+  from `1e-5` to `0` due to base_lrs capture). Their reimplementation is
+  semantically correct.
+- The peak=1e-3 caused a val regression at epochs 6-7 right after warmup
+  ended (val: 178 → 254 → 259 → 178), which is exactly what the student
+  flagged as a likely problem. peak=7e-4 should be calmer.
+- Schedule never reached cosine tail (only 14/50 epochs ran, lr at end
+  was still ~9e-4). Throughput PRs (#359 bf16, #360 bsz=8) will let
+  warmup+cosine actually be evaluated to convergence in a future round.
+- Frieren also separately reported non-finite *predictions* on a cruise
+  test sample (vol_loss=inf in normalized space). The scoring fix in
+  b78f404 removes the test-cruise NaN from the *scoring*-side, but a
+  blown-up prediction is a separate model-stability concern that should
+  be calmer with a lower peak lr.
+
 ## 2026-04-27 23:16 — PR #318: Wider+deeper Transolver (h=192, L=6, heads=6, slices=96)
 
 - branch: `willowpai2d1-fern/wider-deeper-transolver` (deleted on close)
