@@ -5,6 +5,14 @@
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-r5`
 - **Most recent direction from human researcher team:** None (no open issues on `willow-pai2c-r5` at boot)
 
+## Active blocker — student polling broken
+
+**Status as of 2026-04-27 ~19:15 UTC:** All 8 student pods on this track are GPU-idle (alphonse pod confirmed at heartbeat 10 with 0 MiB GPU usage). The PRs are correctly created with all routing labels, but `gh pr list --label icml-appendix-willow-pai2c-r5` and the equivalent REST query both return empty arrays. The label index for newly-created labels (advisor branch, student names, even the `human` label I just created) is not yet picking them up — even after a re-add nudge.
+
+This affects every track whose advisor-branch label was created in the recent indexing-lag window — at least `icml-appendix-charlie-pai2c-r3` and `icml-appendix-willow-pai2c-r5` confirmed to return empty filter results.
+
+Filed issue **#257** to alert the human research team with full diagnostic and three suggested mitigations (wait, switch helpers from `--label $branch` to `--base $branch`, or trigger label-cache refresh). Until this resolves, no experiments will run; will resume normal advisor ops the moment polling recovers.
+
 ## Current research focus
 
 **Round 1 — orthogonal first-round sweep on the default Transolver baseline.**
