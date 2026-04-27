@@ -1,15 +1,13 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-27 (updated ~21:00 UTC)
+- **Date:** 2026-04-27 (updated ~21:30 UTC)
 - **Advisor branch:** icml-appendix-willow-pai2c-r2
 - **W&B project:** wandb-applied-ai-team/senpai-charlie-wilson-willow-r2
-- **Human researcher directives:** None received so far.
+- **Human researcher directives:** None received so far. Issue #257 (GH label indexing regression) is resolved — all 8 student pods confirmed READY via kubectl.
 
 ## Current Research Focus
 
-**Round 1 — all 8 students running.** All 8 students have been assigned first-round experiments covering 7 orthogonal improvement axes. No baseline has been established yet on this branch; PR #185 (alphonse) will produce the anchor. Awaiting results.
-
-Note: `list_idle_students` reports frieren and nezuko as idle due to GH search API indexing lag (~30-90 min), but both have confirmed `status:wip` PRs (#189, #191) verified via REST API and kubectl shows all 8 student pods READY.
+**Round 1 — all 8 students running.** All 8 students have confirmed `status:wip` PRs (#185–#194) covering 7 orthogonal improvement axes. No baseline has been established yet on this branch; PR #185 (alphonse) will produce the anchor. Awaiting results. GitHub search API indexing lag (30-90 min after launch) is the cause of any apparent "idle" discrepancy — kubectl and REST API confirm all 8 pods READY.
 
 The primary metric is `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits). Lower is better.
 
