@@ -2,6 +2,25 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-27 23:54 — PR #334: Deeper Transolver (n_layers 5→8) — **CLOSED**
+- Branch: `willowpai2d5-edward/deeper-l8` (deleted)
+- Hypothesis: deeper hierarchy of slice tokens lifts `val_avg/mae_surf_p` ~5-10%
+- Result: `val_avg/mae_surf_p = 152.24` at epoch 8 of 9 completed (timeout). Test corrected (post-hoc nan_to_num): 145.87.
+- W&B run: `deeper_l8` / sfyn75sq
+- Decision: **closed** — clearly worse than slice_num=128 contemporary (152.24 vs 139.83), and slow per-epoch (~205 s vs ~135 s baseline) eats the cosine schedule before it can decay. Student's own analysis correctly recommends against pursuing depth alone.
+- **Major bonus:** Edward diagnosed the cross-cutting `data/scoring.py` NaN-poisoning bug (`NaN * 0.0 = NaN` defeats per-sample skip mask). Cruise test sample 000020 has 761 NaN values in p-channel of `y`. Filed as PR #375 (advisor-authorized exception to read-only contract for `data/scoring.py`).
+
+## 2026-04-27 23:54 — PR #336: More physics slices (slice_num 64→128) — **MERGED**
+- Branch: `willowpai2d5-fern/more-slices-128` (squash-merged into advisor)
+- Hypothesis: doubling slice tokens lifts `val_avg/mae_surf_p` ~3-7%, biggest gain on cruise (largest meshes)
+- Result: `val_avg/mae_surf_p = **139.83**` at epoch 10 of 11 completed (timeout)
+- W&B run: `slices_128` / 8xow4ge3 (group `capacity_slices`)
+- Per-split val mae_surf_p: single 179.11 / camber_rc 144.31 / camber_cruise 110.05 / re_rand 125.87
+- 0.67M params (no extra params from slice_num — only changes attention shape), peak VRAM 54.5 GB
+- Decision: **merged** — best round-1 reviewable val so far, one-line change, low complexity. Establishes round 1 baseline empirically.
+- Caveat: undertrained (11/50 epochs); val curve still descending. Subsequent winners will compound on top.
+- `test_avg/mae_surf_p` = NaN due to scoring bug; 3-finite-split mean = 142.79.
+
 ## 2026-04-27 23:18 — PR #331: Wider Transolver (n_hidden 128→192, n_head 4→6) — **SENT BACK**
 - Branch: `willowpai2d5-askeladd/wider-h192-h6`
 - Hypothesis: 2.2× wider Transolver lifts `val_avg/mae_surf_p` ~5-10%

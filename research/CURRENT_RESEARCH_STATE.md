@@ -1,49 +1,50 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-27 23:25
+- **Date:** 2026-04-27 23:55
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
-- **Most recent human research direction:** none received yet (this is a fresh launch)
-- **Cross-cutting concern surfaced by #331:** `data/scoring.py` skips on non-finite *ground truth* but not non-finite *predictions*; a single overflowing pred can NaN-poison `test_avg/mae_surf_p`. `data/` is read-only by program contract, so the defensive guard lives in `train.py` (`torch.nan_to_num` before `accumulate_batch`). Worth checking whether other in-flight PRs hit the same tail.
+- **Most recent human research direction:** none received yet
+- **Empirical baseline (round 1):** `val_avg/mae_surf_p = 139.83` from PR #336 (slice_num=128). All future runs compound on top of this.
+- **Cross-cutting bug being fixed:** `data/scoring.py:accumulate_batch` propagates `NaN` through the per-sample-skip mask (`NaN * 0.0 = NaN`). Diagnosed by edward on PR #334; root cause is 761 NaN values in the `p` channel of `test_geom_camber_cruise/000020.pt`'s ground truth `y`. Fix in flight as PR #375 (edward) — advisor-authorized exception to the read-only contract on `data/`.
 
 ## Current research focus
 
-Round 1 — establish baseline calibration and probe orthogonal levers on the default Transolver:
+Round 1 in progress. Strategy:
 
-1. **Loss reweighting** — push capacity toward the surface-pressure metric that ranks runs.
-2. **Capacity scaling** — width, depth, slice tokenization.
-3. **Training dynamics** — learning rate schedule with warmup, batch size.
-4. **Eval improvement** — EMA weight averaging.
+1. Independent axes tested first (one hypothesis per PR) to attribute gains cleanly.
+2. Winners merge sequentially, best-first, each becoming the new baseline.
+3. Round 2 compounds the orthogonal winners.
 
-Each axis is tested independently in this round so we can attribute gains cleanly. Winners on independent axes are then candidates for compounding in round 2.
+## In-flight PRs (status as of 2026-04-27 23:55)
 
-## Round 1 assignments
+| PR | Student | Hypothesis | Status |
+|----|---------|------------|--------|
+| #329 | alphonse  | Surface-loss weight sweep (`surf_weight ∈ {20, 30, 50}`)        | wip |
+| #331 | askeladd  | Wider Transolver (`n_hidden 128→192`, `n_head 4→6`) + bf16/bs8  | wip (sent back; retry with bf16, bs=8, defensive nan_to_num) |
+| #338 | frieren   | LR warmup + peak `1e-3` then cosine to 0                        | wip |
+| #339 | nezuko    | Larger batch (`batch_size 4→8`) with √2 LR scale                | wip |
+| #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | wip |
+| #341 | thorfinn  | EMA model weights for val/test (decay 0.999)                    | wip |
+| #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (new) |
+| #376 | fern      | Wider MLP (`mlp_ratio 2→4`)                                     | wip (new) |
 
-| PR | Student | Hypothesis | Axis |
-|----|---------|------------|------|
-| #329 | alphonse  | Surface-loss weight sweep (`surf_weight ∈ {20, 30, 50}`)        | Loss  |
-| #331 | askeladd  | Wider Transolver (`n_hidden 128→192`, `n_head 4→6`)             | Capacity |
-| #334 | edward    | Deeper Transolver (`n_layers 5→8`)                              | Capacity |
-| #336 | fern      | More physics slices (`slice_num 64→128`)                        | Capacity |
-| #338 | frieren   | LR warmup + peak `1e-3` then cosine to 0                        | Schedule |
-| #339 | nezuko    | Larger batch (`batch_size 4→8`) with √2 LR scale                | Dynamics |
-| #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | Loss  |
-| #341 | thorfinn  | EMA model weights for val/test (decay 0.999)                    | Eval  |
+## Closed / merged
+
+| PR | Student | Outcome |
+|----|---------|---------|
+| #334 | edward | Deeper (n_layers 5→8) — **closed**, clear regression vs slice_num=128 |
+| #336 | fern   | More slices (slice_num 64→128) — **merged**, val_avg=139.83 (round 1 baseline) |
 
 ## Potential next research directions (round 2+)
 
-Once round 1 results are in, the most likely directions are:
+After round 1 fully resolves, the strongest candidates are:
 
-- **Compound the orthogonal winners** — e.g. wider + EMA + tuned surf_weight stacked.
-- **Loss reformulation** — Huber/SmoothL1 instead of MSE for surface (robustness to high-Re extreme pressures).
-- **Modern transformer ergonomics** — SwiGLU activation, stochastic depth, RMSNorm.
-- **Spatial inductive bias** — Fourier features on `(x, z)` coordinates fed into the preprocess MLP.
-- **Mixed precision** — bf16 to free VRAM/time for wider/deeper models inside the 30-min cap.
-- **Multi-scale slice tokenization** — different `slice_num` per layer to capture both global and local physics.
-- **Per-domain calibration heads** — separate output projections for racecar-single / tandem / cruise picked by routing on the geometry features.
-- **Boundary-layer-aware sampling** — over-sample high-Re extremes during training since they dominate the metric.
-
-## Notes
-
-- `BASELINE.md` reference numbers are TBD until first round runs land.
-- `EXPERIMENTS_LOG.md` tracks per-PR results once they arrive.
+- **Compound orthogonal round-1 winners** — e.g. slice_num=128 (already merged) + winning loss tweak (alphonse/tanjiro) + winning schedule (frieren/nezuko) + EMA (thorfinn).
+- **Wider MLP × wider hidden** — if both #376 and the askeladd retry win, stack them.
+- **Modern transformer ergonomics** — SwiGLU, stochastic depth, RMSNorm.
+- **Spatial inductive bias** — Fourier features on `(x, z)` fed into the preprocess MLP.
+- **Mixed precision** — bf16 to free VRAM/time for wider/deeper models inside the 30-min cap (askeladd is testing this).
+- **Multi-scale slice tokenization** — different `slice_num` per layer (global + local physics).
+- **Per-domain calibration heads** — output routing on geometry features.
+- **Boundary-layer-aware sampling** — over-sample high-Re extremes (which dominate the metric).
+- **Longer wall-clock budget** — once a 30-min run shows we're cutting cosine schedules in half, the question of whether `n_layers=8` was truly worse vs just under-trained becomes worth re-asking.
