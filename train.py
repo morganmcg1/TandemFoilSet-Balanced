@@ -136,6 +136,29 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class FiLMGenerator(nn.Module):
+    """Map a per-sample global condition vector to per-layer (gamma, beta).
+
+    Last layer is zero-init so initial gamma=0, beta=0 and the model starts
+    bit-identical to the FiLM-disabled baseline; it has to learn to deviate.
+    """
+    def __init__(self, cond_dim: int, n_hidden: int, n_layers: int, hidden_mult: int = 2):
+        super().__init__()
+        self.n_layers = n_layers
+        self.n_hidden = n_hidden
+        self.mlp = nn.Sequential(
+            nn.Linear(cond_dim, hidden_mult * n_hidden),
+            nn.GELU(),
+            nn.Linear(hidden_mult * n_hidden, 2 * n_hidden * n_layers),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, cond):  # cond: [B, cond_dim]
+        out = self.mlp(cond)
+        return out.view(cond.shape[0], self.n_layers, 2, self.n_hidden)  # [B, L, 2, H]
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -169,7 +192,10 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_film: bool = False,
+                 film_cond_idx: list[int] | None = None,
+                 film_hidden_mult: int = 2):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -196,6 +222,24 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        # FiLM modulation conditioned on per-sample global flow descriptors.
+        # Built AFTER apply() so its zero-init isn't overwritten by _init_weights.
+        self.use_film = use_film
+        self.film_cond_idx = list(film_cond_idx) if film_cond_idx else []
+        if self.use_film:
+            assert len(self.film_cond_idx) > 0, "use_film=True requires non-empty film_cond_idx"
+            self.film = FiLMGenerator(
+                cond_dim=len(self.film_cond_idx),
+                n_hidden=n_hidden,
+                n_layers=n_layers,
+                hidden_mult=film_hidden_mult,
+            )
+            self.register_buffer(
+                "_film_cond_idx_t",
+                torch.tensor(self.film_cond_idx, dtype=torch.long),
+                persistent=False,
+            )
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -208,8 +252,19 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        if self.use_film:
+            # Cond is constant per-node within a sample; node 0 is always real
+            # (pad_collate pads at the end), so we read it directly.
+            cond = x.index_select(-1, self._film_cond_idx_t)[:, 0, :]  # [B, cond_dim]
+            gammas_betas = self.film(cond)  # [B, L, 2, H]
+            for i, block in enumerate(self.blocks):
+                g = gammas_betas[:, i, 0, :].unsqueeze(1)  # [B, 1, H]
+                b = gammas_betas[:, i, 1, :].unsqueeze(1)
+                fx = fx * (1.0 + g) + b
+                fx = block(fx)
+        else:
+            for block in self.blocks:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -373,6 +428,12 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+FILM_COND_IDX_PRESETS = {
+    1: [13],                  # log_Re only
+    4: [13, 14, 18, 22],      # log_Re, AoA1, AoA2, gap
+}
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -386,6 +447,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    use_film: bool = False    # enable FiLM modulation of TransolverBlocks
+    film_cond_dim: int = 4    # 4=[log_Re,AoA1,AoA2,gap], 1=[log_Re]
 
 
 cfg = sp.parse(Config)
@@ -414,6 +477,12 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+if cfg.film_cond_dim not in FILM_COND_IDX_PRESETS:
+    raise ValueError(
+        f"film_cond_dim={cfg.film_cond_dim} not in presets {list(FILM_COND_IDX_PRESETS)}"
+    )
+film_cond_idx = FILM_COND_IDX_PRESETS[cfg.film_cond_dim]
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -425,6 +494,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_film=cfg.use_film,
+    film_cond_idx=film_cond_idx,
 )
 
 model = Transolver(**model_config).to(device)
