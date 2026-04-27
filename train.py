@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -45,6 +47,17 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+def seed_everything(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+seed = int(os.environ.get("SEED", 0))
+seed_everything(seed)
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -236,6 +249,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground truth has any non-finite value: scoring.py
+            # skip-by-sample logic still multiplies err by a 0/1 mask, and
+            # 0 * NaN = NaN propagates through the accumulator (and val_loss).
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -405,7 +430,10 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    g = torch.Generator()
+    g.manual_seed(seed)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds),
+                                    replacement=True, generator=g)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
@@ -442,6 +470,7 @@ run = wandb.init(
     tags=[cfg.agent] if cfg.agent else [],
     config={
         **asdict(cfg),
+        "seed": seed,
         "model_config": model_config,
         "n_params": n_params,
         "train_samples": len(train_ds),
