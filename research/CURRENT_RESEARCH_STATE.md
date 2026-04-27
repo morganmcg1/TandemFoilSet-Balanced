@@ -15,16 +15,16 @@
 
 ## Round 0 assignments (one per student)
 
-| Student | Hypothesis | Bucket | Predicted Δ |
-|---------|------------|--------|-------------|
-| alphonse | H1: per-sample y-std loss normalization | Loss reformulation | -8% to -18% |
-| askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% |
-| edward | H2: warmup + corrected cosine schedule | Optimization | -3% to -7% |
-| fern | H4: surface-only norm + distance feature | Target/feature engineering | -4% to -10% |
-| frieren | H7: z-mirror augmentation with sign flips | Regularization/sampling | -3% to -8% |
-| nezuko | H5: random Fourier features on (x, z) | Position handling | -2% to -8% |
-| tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% |
-| thorfinn | H8: slice_num scaling matrix (128/256) | Architecture | -2% to -7% |
+| PR | Student | Hypothesis | Bucket | Predicted Δ |
+|----|---------|------------|--------|-------------|
+| #342 | alphonse | H1: per-sample y-std loss normalization | Loss reformulation | -8% to -18% |
+| #343 | askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% |
+| #344 | edward | H2: warmup + corrected cosine schedule | Optimization | -3% to -7% |
+| #345 | fern | H4: surface-only norm + distance feature | Target/feature engineering | -4% to -10% |
+| #346 | frieren | H7: z-mirror augmentation with sign flips | Regularization/sampling | -3% to -8% |
+| #347 | nezuko | H5: random Fourier features on (x, z) | Position handling | -2% to -8% |
+| #348 | tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% |
+| #349 | thorfinn | H8: slice_num scaling matrix (128/256) | Architecture | -2% to -7% |
 
 ## Held in reserve for next round
 
