@@ -16,7 +16,6 @@ dependencies = [
     "simple-parsing",
     "tqdm",
     "rich",
-    "wandb",
     "pyyaml",
 ]
 

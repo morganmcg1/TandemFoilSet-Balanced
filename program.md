@@ -12,7 +12,7 @@ The baseline is a [Transolver](https://arxiv.org/abs/2402.02366) with physics-aw
 
 ## Codebase
 
-- `train.py` — trainer. Transolver model, training loop, validation, end-of-run test evaluation, W&B model-artifact upload. **Primary editable entrypoint.**
+- `train.py` — trainer. Transolver model, training loop, validation, end-of-run test evaluation, local checkpoint and metric summary. **Primary editable entrypoint.**
 - `data/loader.py` — `SplitDataset`, `TestDataset`, `load_data`, `load_test_data`, `pad_collate`. **Read-only during normal experiment PRs.**
 - `data/scoring.py` — MAE accumulation shared by val and test. **Read-only.**
 - `data/prepare_splits.py` — materializes per-sample `.pt` files on the PVC from `data/split_manifest.json`. Organizer script, run once. **Read-only.**
@@ -198,7 +198,7 @@ mae_surf_p(S) = Σ_{valid surface nodes in S} |p_pred - p_true| / n_surf_nodes
 - `{split}/mae_vol_{Ux, Uy, p}` — volume MAE per channel, physical units
 - `{split}/loss`, `{split}/vol_loss`, `{split}/surf_loss` — normalized-space losses used for training
 
-**Checkpoint selection.** Best checkpoint = lowest `val_avg/mae_surf_p`. That checkpoint is the one evaluated on the test splits at the end of training, and the one saved as a W&B model artifact (`model-<wandb_name-or-agent>-<run_id>` with aliases `best` and `epoch-N`).
+**Checkpoint selection.** Best checkpoint = lowest `val_avg/mae_surf_p`. That checkpoint is the one evaluated on the test splits at the end of training and saved under `models/<run>/checkpoint.pt` with `metrics.yaml`.
 
 Lower is better. For paper-facing numbers, the decision-driving quantity is `test_avg/mae_surf_p`. Surface pressure accuracy matters most.
 

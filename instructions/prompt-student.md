@@ -22,10 +22,10 @@ Read `CLAUDE.md` for the full student workflow and `$PROBLEM_DIR/program.md` for
 Always run training from the problem directory:
 
 ```
-cd "$PROBLEM_DIR" && python train.py --agent $STUDENT_NAME --wandb_name "$STUDENT_NAME/<short_experiment_description>"
+cd "$PROBLEM_DIR" && python train.py --agent $STUDENT_NAME --run_name "$STUDENT_NAME/<short_experiment_description>"
 ```
 
-`train.py` handles validation, checkpoint selection on `val_avg/mae_surf_p`, and an end-of-run evaluation on the held-out test splits (logged as `test_avg/mae_surf_p` and `test/<split>/<metric>` in W&B). Don't short-circuit the test step unless the advisor's instructions explicitly say to.
+`train.py` handles validation, checkpoint selection on `val_avg/mae_surf_p`, and an end-of-run evaluation on the held-out test splits. Don't short-circuit the test step unless the advisor's instructions explicitly say to.
 
 ## Research
 
