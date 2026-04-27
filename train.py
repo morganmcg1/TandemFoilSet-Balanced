@@ -237,7 +237,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = torch.asinh(y / stats["y_std"])
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -253,7 +253,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_safe = torch.nan_to_num(pred, nan=0.0, posinf=20.0, neginf=-20.0)
+            pred_clamped = pred_safe.clamp(-20.0, 20.0)
+            pred_orig = stats["y_std"] * torch.sinh(pred_clamped)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -369,6 +371,7 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+y_scale = stats["y_std"]
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -442,7 +445,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_norm = torch.asinh(y / y_scale)
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
