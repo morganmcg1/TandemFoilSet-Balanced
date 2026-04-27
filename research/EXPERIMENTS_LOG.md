@@ -61,6 +61,82 @@ Close. The configuration is fundamentally too slow per epoch to compete with the
 
 ---
 
+## 2026-04-27 23:35 — PR #301: Bump surf_weight 10 to 30 — **REQUEST CHANGES (rebase onto L1)**
+
+- Branch: `charliepai2d5-nezuko/surf-weight-30`
+- Hypothesis: push the surface/volume balance harder onto surface fidelity to align with the surface-only eval metric.
+
+### Results (on pre-L1 MSE baseline)
+
+| metric | value |
+|---|---:|
+| `val_avg/mae_surf_p` (best ep 14/50) | **141.556** |
+| `val_single_in_dist/mae_surf_p` | 156.905 |
+| `val_geom_camber_rc/mae_surf_p` | 148.448 |
+| `val_geom_camber_cruise/mae_surf_p` | 122.728 |
+| `val_re_rand/mae_surf_p` | 138.141 |
+| `test_avg/mae_surf_p` (4-split) | NaN |
+| `test_avg/mae_surf_p` (3 clean) | **141.27** |
+
+### Decision
+
+Worse than the L1 baseline of `101.87`, but the change was tested on MSE — we don't know what it does on top of L1. The hypothesis "more surface emphasis improves the surface-only metric" is plausibly orthogonal to the loss type (with L1, gradients are sign-based, so the optimal `surf_weight` may shift). Rebase onto `icml-appendix-charlie-pai2d-r5` (now has L1) and rerun with `--surf_weight 30.0`. Pure CLI flag — trivial rebase.
+
+Excellent independent diagnosis of the cruise NaN scoring path (`err * surf_mask` propagates `NaN * 0 = NaN`); same root cause as edward's PR #293 finding.
+
+---
+
+## 2026-04-27 23:35 — PR #290: Wider Transolver: n_hidden 128→192, slice_num 64→96 — **CLOSE**
+
+- Branch: `charliepai2d5-askeladd/wider-hidden-192`
+
+### Results (on pre-L1 MSE baseline)
+
+| metric | value |
+|---|---:|
+| `val_avg/mae_surf_p` (best ep 8/9 reached) | **152.238** |
+| `val_single_in_dist/mae_surf_p` | 198.823 |
+| `val_geom_camber_rc/mae_surf_p` | 155.683 |
+| `val_geom_camber_cruise/mae_surf_p` | 120.887 |
+| `val_re_rand/mae_surf_p` | 133.559 |
+| `test_avg/mae_surf_p` (3 clean) | **151.69** |
+
+### Analysis
+
+Per-epoch wall time was ~205 s vs ~131 s for the loss-formulation winners — the 30-min cap allowed only 9 epochs vs ~14 for the cheaper-per-epoch baselines. Best-val came at epoch 8, still descending, so this is an under-trained snapshot. Even projecting forward, the wider model is structurally penalized by the wall-clock budget: the L1 baseline reached `val_avg = 101.87` in 14 epochs at the same wall time, ~33% better than this wider 8-epoch number.
+
+### Decision
+
+Close. Capacity-heavy hypotheses cannot win in the current 30-min timeout regime — every minute of GPU spent on extra width is a minute not spent annealing through the cosine schedule. Reassigned askeladd to `drop-path 0.1` regularization (PR #369), which has zero per-epoch cost and is well-matched to the small-dataset regime.
+
+Independent NaN observation matches edward / alphonse / nezuko's diagnosis of the `data/scoring.py` bug.
+
+---
+
+## 2026-04-27 23:35 — PR #278: Pressure-channel surface weighting (surf_p_weight=5) — **REQUEST CHANGES (rebase onto L1)**
+
+- Branch: `charliepai2d5-alphonse/pressure-surface-weight`
+- Hypothesis: up-weight the pressure channel inside the surface loss by 5× to align gradients with the eval metric.
+
+### Results (on pre-L1 MSE baseline)
+
+| metric | value |
+|---|---:|
+| `val_avg/mae_surf_p` (best ep 12/50) | **156.16** |
+| `val_single_in_dist/mae_surf_p` | 195.74 |
+| `val_geom_camber_rc/mae_surf_p` | 162.81 |
+| `val_geom_camber_cruise/mae_surf_p` | 131.15 |
+| `val_re_rand/mae_surf_p` | 134.94 |
+| `test_avg/mae_surf_p` (3 clean) | **149.65** |
+
+### Decision
+
+Worse than L1 baseline of `101.87`, but the change was on MSE. The pressure-channel-weighting code is a per-element broadcast tensor that composes the same way regardless of whether `abs_err` comes from L1 or MSE — should rebase cleanly. Sent back: rebase onto `icml-appendix-charlie-pai2d-r5` (now has L1) and rerun.
+
+Best independent diagnosis of the cruise NaN bug — found that `test_geom_camber_cruise` sample 20 has `-inf` in 761 volume-cell pressure GT values, scoring path: `inf * 0 = NaN` in IEEE 754. Same root-cause edward identified; alphonse's writeup pinpoints volume-cell vs surface and the exact `data/scoring.py:49–50` lines.
+
+---
+
 ## 2026-04-27 23:30 — PR #296: Linear warmup then cosine, peak lr 1e-3 — **REQUEST CHANGES (send back)**
 
 - Branch: `charliepai2d5-fern/lr-warmup-1e3`
