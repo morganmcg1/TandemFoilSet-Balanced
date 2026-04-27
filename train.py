@@ -81,6 +81,25 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUMLP(nn.Module):
+    """SwiGLU feedforward: w3(silu(w1(x)) * w2(x)).
+
+    Three-linear gated variant in the style of PaLM/LLaMA. Replaces the
+    standard `Linear -> GELU -> Linear` MLP used for the Transolver block
+    feedforward; the gate (w2) acts as a learned soft-mask over hidden
+    features.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        self.w1 = nn.Linear(n_input, n_hidden)
+        self.w2 = nn.Linear(n_input, n_hidden)
+        self.w3 = nn.Linear(n_hidden, n_output)
+
+    def forward(self, x):
+        return self.w3(F.silu(self.w1(x)) * self.w2(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -138,7 +157,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 ff_type="mlp"):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -147,8 +167,11 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        if ff_type == "swiglu":
+            self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
+                           n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -169,7 +192,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 ff_type="mlp"):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +214,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                ff_type=ff_type,
             )
             for i in range(n_layers)
         ])
@@ -240,15 +265,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -386,6 +411,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    ff_type: str = "mlp"  # feedforward type in Transolver blocks: "mlp" (GELU) or "swiglu"
 
 
 cfg = sp.parse(Config)
@@ -425,6 +451,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    ff_type=cfg.ff_type,
 )
 
 model = Transolver(**model_config).to(device)
@@ -487,12 +514,12 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
