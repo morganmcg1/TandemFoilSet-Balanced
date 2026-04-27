@@ -446,6 +446,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "loss_form_vol": "mse",
+        "loss_form_surf": "smooth_l1_beta1.0",
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -487,12 +489,14 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # MSE for volume
+        abs_err = (pred - y_norm).abs()
+        huber = torch.where(abs_err < 1.0, 0.5 * sq_err, abs_err - 0.5)  # Smooth-L1, β=1.0
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
