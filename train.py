@@ -431,8 +431,31 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# LR schedule: 5-epoch linear warmup (START_LR -> PEAK_LR) + cosine decay to 0.
+# CosineAnnealingLR captures base_lr at construction, so the optimizer's
+# initial lr must equal PEAK_LR for cosine to decay from PEAK_LR rather than
+# from START_LR. Warmup then ramps in via start_factor = START_LR / PEAK_LR.
+WARMUP_EPOCHS = 5
+PEAK_LR = 1e-3
+START_LR = 1e-5
+
+cfg.lr = PEAK_LR  # keep wandb/artifact config in sync with the effective peak
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=PEAK_LR, weight_decay=cfg.weight_decay)
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=START_LR / PEAK_LR,
+    end_factor=1.0,
+    total_iters=WARMUP_EPOCHS,
+)
+cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=max(MAX_EPOCHS - WARMUP_EPOCHS, 1)
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_sched, cosine_sched],
+    milestones=[WARMUP_EPOCHS],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -446,6 +469,10 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "lr_schedule": "linear-warmup-then-cosine",
+        "warmup_epochs": WARMUP_EPOCHS,
+        "peak_lr": PEAK_LR,
+        "start_lr": START_LR,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
