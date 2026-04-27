@@ -386,6 +386,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    loss_mode: str = "baseline"  # baseline | uncertainty | fixed_upweight
+    p_upweight: float = 2.0  # multiplier on pressure channel (fixed_upweight mode)
+    log_sigma_clamp: float = 3.0  # clamp range for log_sigma (uncertainty mode)
 
 
 cfg = sp.parse(Config)
@@ -431,8 +434,29 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Per-channel learnable log-sigma (Kendall et al. 2017, "Multi-Task Learning Using
+# Uncertainty to Weigh Losses"). Only used when loss_mode == "uncertainty".
+# Channel order matches model_config["output_fields"]: [Ux, Uy, p].
+CHANNEL_NAMES = ["Ux", "Uy", "p"]
+log_sigma = nn.Parameter(torch.zeros(3, device=device))
+
+if cfg.loss_mode == "uncertainty":
+    # Separate param group: no weight decay on log_sigma (decay biases toward equal weights).
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
+            {"params": [log_sigma], "weight_decay": 0.0},
+        ],
+        lr=cfg.lr,
+    )
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+if cfg.loss_mode not in {"baseline", "uncertainty", "fixed_upweight"}:
+    raise ValueError(f"Unknown loss_mode: {cfg.loss_mode!r}")
+print(f"Loss mode: {cfg.loss_mode}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -491,15 +515,38 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Per-channel masked MSEs, shape [3]
+        vol_mse_per_ch = (sq_err * vol_mask.unsqueeze(-1)).sum(dim=[0, 1]) / vol_mask.sum().clamp(min=1)
+        surf_mse_per_ch = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=[0, 1]) / surf_mask.sum().clamp(min=1)
+
+        vol_loss = vol_mse_per_ch.sum()
+        surf_loss = surf_mse_per_ch.sum()
+
+        if cfg.loss_mode == "uncertainty":
+            log_sigma_c = log_sigma.clamp(-cfg.log_sigma_clamp, cfg.log_sigma_clamp)
+            precision = torch.exp(-2.0 * log_sigma_c)  # 1 / sigma^2
+            vol_loss_uw = (0.5 * precision * vol_mse_per_ch + log_sigma_c).sum()
+            surf_loss_uw = (0.5 * precision * surf_mse_per_ch + log_sigma_c).sum()
+            loss = vol_loss_uw + cfg.surf_weight * surf_loss_uw
+        elif cfg.loss_mode == "fixed_upweight":
+            # Multiply pressure channel (index 2) by p_upweight before summing
+            ch_w = torch.tensor([1.0, 1.0, cfg.p_upweight], device=device)
+            vol_loss_w = (vol_mse_per_ch * ch_w).sum()
+            surf_loss_w = (surf_mse_per_ch * ch_w).sum()
+            loss = vol_loss_w + cfg.surf_weight * surf_loss_w
+        else:  # baseline
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        log_step = {"train/loss": loss.item(), "global_step": global_step}
+        if cfg.loss_mode == "uncertainty":
+            for i, name in enumerate(CHANNEL_NAMES):
+                log_step[f"train/sigma_{name}"] = log_sigma[i].item()
+        wandb.log(log_step)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -561,11 +608,19 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
-    wandb.summary.update({
+    summary_update = {
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
-    })
+    }
+    if cfg.loss_mode == "uncertainty":
+        for i, name in enumerate(CHANNEL_NAMES):
+            summary_update[f"final/sigma_{name}"] = log_sigma[i].item()
+        print(
+            "Final log_sigma: "
+            + ", ".join(f"{name}={log_sigma[i].item():+.4f}" for i, name in enumerate(CHANNEL_NAMES))
+        )
+    wandb.summary.update(summary_update)
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
