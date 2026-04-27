@@ -46,6 +46,130 @@ from data import (
     pad_collate,
 )
 
+# Index of log(Re) in the input feature vector (constant within a sample).
+LOG_RE_DIM = 13
+
+
+def _y_std_for(x: torch.Tensor, stats: dict) -> torch.Tensor:
+    """Return y_std broadcastable to ``[B, N, 3]``.
+
+    With ``re_bins == 0`` (no per-sample normalization), returns the global
+    ``stats["y_std"]`` of shape ``[3]`` — broadcasts identically to the
+    pre-rescaling baseline.
+
+    With ``re_bins > 0``, looks up per-sample y_std using the sample's
+    log_Re via ``torch.bucketize`` over the inner bin edges. Out-of-range
+    log_Re values fall into the nearest end bin (no clamp needed).
+    """
+    bin_edges = stats.get("re_bin_edges")
+    bin_y_std = stats.get("re_bin_y_std")
+    if bin_edges is None or bin_y_std is None:
+        return stats["y_std"]
+    log_re = x[:, 0, LOG_RE_DIM]  # [B] — constant per sample
+    inner = bin_edges[1:-1]  # [n_bins - 1]
+    idx = torch.bucketize(log_re, inner)  # [B] in [0, n_bins-1]
+    return bin_y_std[idx].unsqueeze(1)  # [B, 1, 3] broadcasts over N
+
+
+def compute_re_bin_y_std(
+    train_ds,
+    n_bins: int,
+    cache_path: Path,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute per-Re-bin y_std on training data once, with on-disk cache.
+
+    Returns (bin_edges [n_bins+1], bin_y_std [n_bins, 3],
+             bin_counts [n_bins] sample counts, bin_log_re [n_bins, 2] (lo, hi)).
+    Empty bins fall back to the population y_std computed across all samples.
+    """
+    if cache_path.exists():
+        d = torch.load(cache_path, weights_only=True)
+        if d.get("n_bins") == n_bins and d.get("n_samples") == len(train_ds):
+            print(
+                f"Loaded Re-bin y_std cache: {cache_path} "
+                f"(n_bins={n_bins}, n_train={len(train_ds)})"
+            )
+            return d["bin_edges"], d["bin_y_std"], d["bin_counts"], d["bin_log_re"]
+
+    print(
+        f"Computing per-Re-bin y_std over {len(train_ds)} train samples "
+        f"with n_bins={n_bins}..."
+    )
+
+    log_re = torch.tensor(
+        [train_ds[i][0][0, LOG_RE_DIM].item() for i in range(len(train_ds))],
+        dtype=torch.float64,
+    )
+    bin_edges = torch.quantile(log_re, torch.linspace(0, 1, n_bins + 1, dtype=torch.float64))
+    inner = bin_edges[1:-1]
+
+    bin_sum = torch.zeros(n_bins, 3, dtype=torch.float64)
+    bin_sum_sq = torch.zeros(n_bins, 3, dtype=torch.float64)
+    bin_node_n = torch.zeros(n_bins, dtype=torch.long)
+    bin_sample_n = torch.zeros(n_bins, dtype=torch.long)
+    pop_sum = torch.zeros(3, dtype=torch.float64)
+    pop_sum_sq = torch.zeros(3, dtype=torch.float64)
+    pop_n = 0
+
+    for i in range(len(train_ds)):
+        _, y, _ = train_ds[i]
+        b = int(torch.bucketize(log_re[i].view(1), inner).item())
+        b = max(0, min(b, n_bins - 1))
+        y_d = y.double()
+        s = y_d.sum(dim=0)
+        ss = (y_d ** 2).sum(dim=0)
+        n = y.shape[0]
+        bin_sum[b] += s
+        bin_sum_sq[b] += ss
+        bin_node_n[b] += n
+        bin_sample_n[b] += 1
+        pop_sum += s
+        pop_sum_sq += ss
+        pop_n += n
+
+    pop_mean = pop_sum / max(pop_n, 1)
+    pop_var = pop_sum_sq / max(pop_n, 1) - pop_mean ** 2
+    pop_std = pop_var.clamp(min=1e-12).sqrt()
+
+    bin_y_std = torch.zeros(n_bins, 3, dtype=torch.float32)
+    for b in range(n_bins):
+        if bin_node_n[b] == 0:
+            print(f"  Bin {b}: empty -> falling back to population y_std")
+            bin_y_std[b] = pop_std.float()
+            continue
+        m = bin_sum[b] / bin_node_n[b]
+        v = bin_sum_sq[b] / bin_node_n[b] - m ** 2
+        bin_y_std[b] = v.clamp(min=1e-12).sqrt().float()
+
+    bin_log_re = torch.stack([bin_edges[:-1], bin_edges[1:]], dim=1).float()
+    bin_edges = bin_edges.float()
+    bin_counts = bin_sample_n.long()
+
+    print(f"  log_Re range: [{log_re.min():.4f}, {log_re.max():.4f}]")
+    for b in range(n_bins):
+        lo, hi = bin_log_re[b].tolist()
+        cnt = bin_counts[b].item()
+        std_ux, std_uy, std_p = bin_y_std[b].tolist()
+        print(
+            f"  Bin {b}: log_Re=[{lo:.4f}, {hi:.4f}]  n_samples={cnt:4d}  "
+            f"y_std=[Ux={std_ux:.2f}, Uy={std_uy:.2f}, p={std_p:.2f}]"
+        )
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "n_bins": n_bins,
+            "n_samples": len(train_ds),
+            "bin_edges": bin_edges,
+            "bin_y_std": bin_y_std,
+            "bin_counts": bin_counts,
+            "bin_log_re": bin_log_re,
+        },
+        cache_path,
+    )
+    print(f"Saved Re-bin y_std cache: {cache_path}")
+    return bin_edges, bin_y_std, bin_counts, bin_log_re
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -237,7 +361,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_std_b = _y_std_for(x, stats)
+            y_norm = (y - stats["y_mean"]) / y_std_b
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -253,7 +378,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred * y_std_b + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -386,6 +511,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    re_bins: int = 0  # 0 = global y_std (baseline); >0 = per-sample y_std via Re bins
+    re_bins_cache_dir: str = "models"  # cache dir for precomputed re_bin_y_std_*.pt
 
 
 cfg = sp.parse(Config)
@@ -397,6 +524,32 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+re_bin_info: dict | None = None
+if cfg.re_bins > 0:
+    cache_path = (
+        Path(cfg.re_bins_cache_dir)
+        / f"re_bin_y_std_{cfg.re_bins}_n{len(train_ds)}.pt"
+    )
+    bin_edges, bin_y_std, bin_counts, bin_log_re = compute_re_bin_y_std(
+        train_ds, cfg.re_bins, cache_path
+    )
+    stats["re_bin_edges"] = bin_edges.to(device)
+    stats["re_bin_y_std"] = bin_y_std.to(device)
+    re_bin_info = {
+        "n_bins": cfg.re_bins,
+        "bin_edges": bin_edges.tolist(),
+        "bin_y_std": bin_y_std.tolist(),
+        "bin_counts": bin_counts.tolist(),
+        "bin_log_re": bin_log_re.tolist(),
+        "y_std_global": stats["y_std"].detach().cpu().tolist(),
+    }
+    print(
+        f"Re-conditioned y_std active: {cfg.re_bins} bins. "
+        f"per-bin y_std_p range: "
+        f"[{bin_y_std[:, 2].min().item():.2f}, {bin_y_std[:, 2].max().item():.2f}] "
+        f"vs global y_std_p={stats['y_std'][2].item():.2f}"
+    )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -446,6 +599,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "re_bin_info": re_bin_info,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -485,7 +639,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_std_b = _y_std_for(x, stats)
+        y_norm = (y - stats["y_mean"]) / y_std_b
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
