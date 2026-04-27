@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-27 23:25
+- **Date:** 2026-04-27 23:35
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
@@ -8,7 +8,7 @@
 ## Current research focus
 Round 1 covers four orthogonal axes that compound well: loss formulation, loss weighting, architecture capacity, and optimization. The published Transolver in `train.py` is a small model (128 hidden, 5 layers) trained with MSE on normalized targets even though we evaluate on MAE — both gaps are obvious low-cost wins.
 
-**Open infrastructure issue:** edward's PR #300 review uncovered a NaN propagation bug in `data/scoring.py` (`inf * 0 = NaN` in the float-mask multiply when ground-truth y has inf). It poisons `test_geom_camber_cruise/mae_surf_p` for every experiment, so test-side rankings are blocked until the fix lands. PR #358 assigned to edward as a maintenance fix (use `torch.where` instead of multiply).
+**Resolved infrastructure issue:** PR #358 (edward) merged 2026-04-27 — `data/scoring.py` now uses `torch.where` masking instead of float-mask multiplication, so `inf * 0 = NaN` no longer poisons the float64 accumulator. New `data/test_scoring.py` has 4 surgical regression tests. Existing in-flight PRs branched **before** the merge will still produce NaN on `test_geom_camber_cruise/mae_surf_p`; we'll rebase or cherry-pick on a per-PR basis at review time. Future assignments branch from the post-fix advisor branch.
 
 ## Round 1 hypotheses
 | Student | PR | Slug | Axis | Predicted Δ | Status |
@@ -16,7 +16,8 @@ Round 1 covers four orthogonal axes that compound well: loss formulation, loss w
 | alphonse | #287 | surf-weight-up | Loss weighting (surf_weight 10→25) | -3% to -7% | WIP |
 | askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1/Huber) | -5% to -10% | WIP |
 | edward   | #300 | wider-model | Architecture width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 epochs at 30-min cap |
-| edward   | #358 | fix-scoring-nan-mask | Maintenance fix to data/scoring.py | n/a (unblocks test_avg) | WIP |
+| edward   | #358 | fix-scoring-nan-mask | Maintenance fix to data/scoring.py | n/a (unblocks test_avg) | **MERGED** 010235e |
+| edward   | TBD  | fourier-pos-encoding | Architecture/input (8-freq Fourier features on (x,z), fun_dim 22→54) | -3% to -8% | WIP |
 | fern     | #304 | deeper-model-droppath | Architecture depth (n_layers 5→8 + DropPath 0.1) | -3% to -8% | WIP |
 | frieren  | #307 | warmup-cosine-1e3 | Optimization (linear warmup + peak lr 1e-3) | -2% to -6% | WIP |
 | nezuko   | #308 | ema-grad-clip | Optimization (EMA decay 0.999 + grad clip 1.0) | -3% to -8% | WIP |
