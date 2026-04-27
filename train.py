@@ -298,6 +298,10 @@ def evaluate_split(
             with autocast_ctx:
                 pred = model({"x": _apply_fourier(x_norm, fourier)})["preds"]
             pred = pred.float()
+            # Padding nodes can carry NaN/Inf from AMP/bf16 overflow on
+            # non-physical inputs. Zero them so 0*NaN doesn't poison sums
+            # downstream (loss, vol_loss, surf_loss, MAE).
+            pred = torch.where(mask.unsqueeze(-1), pred, torch.zeros_like(pred))
 
             if loss_type == "l1":
                 err = (pred - y_norm).abs()
@@ -316,12 +320,6 @@ def evaluate_split(
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            # Padding nodes can carry NaN/Inf (e.g. AMP/bf16 overflow).
-            # accumulate_batch multiplies by 0/1 masks and 0*Inf=NaN poisons
-            # the entire channel sum. Zero padding positions before scoring.
-            pred_orig = torch.where(
-                mask.unsqueeze(-1), pred_orig, torch.zeros_like(pred_orig)
-            )
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
