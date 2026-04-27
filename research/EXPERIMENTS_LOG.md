@@ -185,10 +185,64 @@ in the pressure channel) and a 2-line proposed fix
 assigned to fern (now idle after merging #328) using edward's
 proposed patch.
 
+## 2026-04-28 00:10 — PR #330: Round 1 axis: loss formulation — MSE → Huber (β=1)
+
+- Branch: `willowpai2d2-frieren/huber-loss`
+- Hypothesis: 2–5 % reduction in `val_avg/mae_surf_p`, with strongest
+  gains on `val_re_rand` (high-Re tail story).
+- Run: `ic77vvgj` (W&B
+  https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r2/runs/ic77vvgj)
+- W&B run config confirmed: `slice_num = 64` (the **pre-#328
+  baseline** at the time the branch was created).
+
+### Results (best checkpoint, epoch 14 / 50 — wall-clock cut)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-|-:|-:|-:|
+| val_single_in_dist | 127.98 | 1.57 | 0.76 |
+| val_geom_camber_rc | 126.26 | 2.42 | 0.98 |
+| val_geom_camber_cruise | 82.81 | 1.63 | 0.54 |
+| val_re_rand | 100.85 | 2.07 | 0.74 |
+| **val_avg** | **109.47** | 1.93 | 0.75 |
+| test_single_in_dist | 114.05 | 1.52 | 0.72 |
+| test_geom_camber_rc | 114.15 | 2.41 | 0.94 |
+| test_geom_camber_cruise | NaN ⚠ | 1.62 | 0.49 |
+| test_re_rand | 95.55 | 1.94 | 0.70 |
+| **test_avg** | NaN ⚠ | 1.87 | 0.71 |
+
+### Conclusion
+
+**Send back for rebase.** The result is the largest single-axis jump
+yet (~18 % better than the merged 133.55 baseline) and the per-split
+signal supports the hypothesis cleanly: best in cohort on every val
+track, including the predicted-strongest signal on `val_re_rand`
+(100.85, 17 % better than next-best). **However**, the branch was
+created before PR #328 merged and still has `slice_num = 64`. A
+direct squash-merge would silently revert the merged slice-128
+architectural improvement.
+
+Sent back for: rebase onto current `icml-appendix-willow-pai2d-r2`
+(slice_num=128 baseline) and re-run with the same Huber loss change
+to confirm the gain stacks on top of slice-128. Even if the rebased
+number is slightly worse than 109.47 (because slice-128 already
+captured some of the original gain), the hypothesis is supported and
+this should land as the next baseline.
+
+### Why such a large gain?
+
+Likely combination of two effects: (a) Huber's linear-tail behavior
+is a better proxy than MSE for the L1 metric we're ranked on,
+particularly under the `surf_weight=10` multiplier that amplifies
+surface-tail residuals; (b) at high Re, normalized residuals exceed
+1.0 enough that Huber's gradient clipping prevents tail samples
+from dominating the update. Frieren's `val_re_rand=100.85` (best in
+cohort) is direct evidence of (b).
+
 ## Round-1 cohort observation (current snapshot)
 
 | W&B name | best_val_avg/mae_surf_p | best_epoch | status |
 |-|-:|-:|-|
+| **willow-r2-frieren-huber-b1** | **109.47 ★ candidate** | 14 | sent back (rebase) |
 | willow-r2-fern-slice-128 | **133.55 ★** | 11 | merged (PR #328) |
 | willow-r2-alphonse-width-192 | 134.13 | 10 | sent back |
 | willow-r2-nezuko-surf-15 | 137.42 | 13 | wip (sweep ongoing) |
@@ -198,4 +252,5 @@ proposed patch.
 | willow-r2-tanjiro-warmup-cos-1e3 | 154.57 | 13 | sent back |
 
 No unmodified-baseline finished run exists yet. The merged slice-128
-run anchors the new baseline at 133.55.
+run anchors the current baseline at 133.55. Frieren's huber result
+is awaiting rebased confirmation before merge.

@@ -1,11 +1,15 @@
 # SENPAI Research State
 
-- 2026-04-27 23:50 — round 1 in progress on `icml-appendix-willow-pai2d-r2`
+- 2026-04-28 00:10 — round 1 in progress on `icml-appendix-willow-pai2d-r2`
 - **Baseline anchored:** PR #328 (slice_num=128) merged. Current best
   `val_avg/mae_surf_p = 133.55` (W&B run `s1p2qs7l`, best epoch 11/50).
   Default config now: `n_hidden=128 n_layers=5 n_head=4 slice_num=128
   mlp_ratio=2 lr=5e-4 weight_decay=1e-4 batch_size=4 surf_weight=10.0
   epochs=50`.
+- **Pending merge candidate:** PR #330 (frieren, Huber β=1) reported
+  `val_avg/mae_surf_p = 109.47` — 18 % over baseline, all per-split
+  numbers cohort-best. Sent back for rebase (was created on slice_num=64
+  pre-#328); on-baseline confirmation pending.
 - Primary metric: `val_avg/mae_surf_p`. Paper-facing:
   `test_avg/mae_surf_p` (currently NaN — bug-fix PR #367 in flight).
 - W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r2`.
@@ -21,34 +25,59 @@
 | 325 | askeladd  | depth 5 → 8                | wip            | 150.06 (W&B obs)        |
 | 326 | edward    | mlp_ratio 2 → 4            | sent back → mlp_ratio=3 | 137.83 (epoch 11/13) |
 | 328 | fern      | slice_num 64 → 128         | **MERGED ★**   | **133.55 (new baseline)**|
-| 330 | frieren   | MSE → Huber β=1            | wip            | (multiple crashes; debugging) |
+| 330 | frieren   | MSE → Huber β=1            | sent back → rebase + re-run | **109.47** (epoch 14/50, on slice_num=64; merge-candidate after rebase) |
 | 332 | nezuko    | surf_weight 10 → 25 (sweep)| wip            | 137.42 surf-15 (sweep ongoing) |
 | 335 | tanjiro   | warmup + cos, peak 1e-3    | sent back → cosine_t_max sweep | 154.57 (epoch 13/14) |
 | 337 | thorfinn  | BS 4→8, lr 7e-4            | wip            | 139.39 (W&B obs)        |
 | 367 | fern      | bug fix: cruise-NaN scoring| **wip (new)**  | n/a (bug fix, not experiment) |
 
-PRs surfaced for advisor review this cycle: **#328, #326**. Actions:
-**#328 merged** (round-1 winner), **#326 sent back** (FFN axis still
-interesting at lower mlp_ratio).
+PRs surfaced for advisor review this cycle: **#330**. Action:
+**#330 sent back for rebase** — Huber result is the largest
+single-axis jump observed (109.47 vs 133.55 baseline, ~18 %), but
+the branch was created pre-#328 and would silently revert
+slice_num=128. Rebase + re-run + resubmit will land the next merge
+if the gain stacks on the slice-128 baseline (highly likely; loss
+formulation is orthogonal to attention bottleneck).
 
-## What we learned this cycle
+Earlier cycle actions (recap): #328 merged (round-1 winner, new
+baseline at 133.55); #311 + #326 + #335 sent back with specific
+follow-up instructions; #367 NEW bug-fix PR assigned to fern for
+cruise-NaN scoring.
 
-1. **`slice_num` is the most pay-per-FLOP axis under the 30-min cap.**
-   Doubling slice tokens (64 → 128) gave the cleanest win in round 1
-   at minimal extra cost (~10–15% slowdown). Per-split signal matched
-   the slice-bottleneck hypothesis cleanly: 7% improvement on
-   `val_geom_camber_rc` vs the next-best run.
-2. **Capacity-scaling axes (`n_hidden`, `n_layers`, `mlp_ratio`) are
-   confounded by the 30-min cap.** They each chop the epoch budget
-   by 30–80%, so the wall-clock-equal comparison favors cheaper
-   changes even if the asymptotic answer might prefer wider models.
-   Compute-equal middle grounds (width-160, mlp_ratio=3) are the
-   right next step.
-3. **The cruise NaN bug is a real blocker for paper-facing metrics.**
+## What we learned this cycle (and last)
+
+1. **Loss formulation is the highest-leverage axis we've found.**
+   Frieren's Huber-β=1 result (109.47 on slice_num=64) is roughly 4×
+   the magnitude of any architecture-axis gain seen in round 1.
+   Likely combination of (a) Huber's L1-tail behavior matches the
+   L1 metric we're ranked on better than MSE; (b) at high Re,
+   normalized residuals exceed 1.0 enough that gradient clipping
+   prevents tail samples from dominating. Direct evidence of (b):
+   `val_re_rand` is best-of-cohort (100.85, 17 % over next-best).
+2. **`slice_num` is the most pay-per-FLOP architecture axis.**
+   Doubling slice tokens (64 → 128) gave the round-1 architecture
+   winner at minimal extra cost (~10–15 % slowdown). Per-split
+   signal matched the slice-bottleneck hypothesis cleanly: 7 %
+   improvement on `val_geom_camber_rc` vs the next-best run.
+3. **Capacity-scaling axes (`n_hidden`, `n_layers`, `mlp_ratio`)
+   are confounded by the 30-min cap.** They each chop the epoch
+   budget by 30–80 %, so the wall-clock-equal comparison favors
+   cheaper changes even if the asymptotic answer might prefer
+   wider models. Compute-equal middle grounds (width-160,
+   mlp_ratio=3) are the right next step — both already in flight.
+4. **The cruise NaN bug is a real blocker for paper-facing metrics.**
    Both edward and fern independently identified the same root cause
    (sample 20 of `test_geom_camber_cruise/.gt` has 761 NaN in pressure;
-   `0.0 * NaN = NaN` in `accumulate_batch` defeats the `y_finite` mask).
-   PR #367 puts up the 2-line `nan_to_num` fix.
+   `0.0 * NaN = NaN` in `accumulate_batch` defeats the `y_finite`
+   mask). PR #367 puts up the 2-line `nan_to_num` fix.
+5. **Branches need rebases as soon as the advisor branch moves.**
+   Frieren's #330 was created pre-#328; a direct squash-merge would
+   have silently reverted slice_num=128 → 64. The senpai workflow
+   send-back-for-rebase pattern caught this. Worth flagging similar
+   risk on every other in-flight round-1 PR (alphonse, askeladd,
+   edward, nezuko, tanjiro, thorfinn) — when each gets close to
+   merge-ready, they'll need to rebase onto whatever the advisor
+   branch is at that point.
 
 ## Round 2 candidate stacks (post round-1 settle, will compound on the new baseline)
 
@@ -67,8 +96,8 @@ interesting at lower mlp_ratio).
   pressure; loss currently weights all 3 channels equally. Pairs with
   surf_weight winner (nezuko's sweep).
 - **Target-space reformulation.** `asinh` / per-sample-std
-  normalization on the pressure channel — pairs with Huber if
-  frieren's iteration finishes (currently crashing).
+  normalization on the pressure channel — pairs naturally with Huber
+  (now that Huber-β=1 has confirmed the high-Re-tail story).
 - **Geometry-preserving augmentation.** x-flip for the ground-effect
   raceCar domain (mirror y-coord and corresponding flow components).
 - **Curriculum.** Sort batches by per-sample y std, warmup the
@@ -76,11 +105,7 @@ interesting at lower mlp_ratio).
 
 ## Active blockers
 
-1. **Frieren's huber-loss runs are crashing** (multiple
-   crashed/failed runs visible in W&B). Suspect a NaN/Inf in the
-   custom loss code path — should be addressed when frieren
-   pushes a results comment or the entrypoint surfaces it for review.
-2. **`test_avg/mae_surf_p = NaN` for every run** until PR #367 lands
+1. **`test_avg/mae_surf_p = NaN` for every run** until PR #367 lands
    (in flight, fern). Round-1 winners are being selected on
    `val_avg/mae_surf_p` only — this is fine for the round-1 ranking
    but blocks paper-facing comparisons.
