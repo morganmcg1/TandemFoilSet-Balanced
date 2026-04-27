@@ -1,5 +1,28 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-27 23:55 — PR #309: More slice tokens: slice_num 64->128, n_head 4->8
+- Branch: `charliepai2d4-tanjiro/more-slices` (deleted on close)
+- Student: charliepai2d4-tanjiro
+- **Outcome: CLOSED** (slower per epoch and not better at equal-epoch comparison).
+- Hypothesis: doubling slice tokens + heads (with halved head_dim) gives more physical-regime "slots". Predicted Δ -3% to -7%.
+
+### Headline metrics (epoch 6 of 50, timeout-capped at 8 epochs / 33.4 min)
+| Metric | Value | vs. alphonse #287 baseline |
+|---|---|---|
+| `val_avg/mae_surf_p`  | 168.47 (epoch 6) | +33% vs 126.67 — but unfair due to fewer epochs |
+| `val_avg/mae_surf_p` (epoch 8 equal-budget) | 170.54 | +4.5% vs alphonse epoch 8 (163.24); alphonse used surf_weight=25 |
+| `test_avg/mae_surf_p` | 154.97 (post-fix scoring) | — |
+| Per-epoch time | **250 s** | vs alphonse 131 s — **~1.9× slower** |
+| Peak GPU memory | 82.3 GB | within budget but high |
+
+### Analysis
+- **Throughput is the kill criterion.** At 250 s/epoch only 8 epochs fit the 30-min cap (vs alphonse's 14). Even granting the full architectural advantage at equal-epoch (which doesn't show up — tanjiro is *worse* at epoch 8), the total run is fewer-epoch-and-no-better.
+- **Late-epoch instability:** epoch 6→7 jumped 168→197 then 170 at epoch 8. Plausibly head_dim=16 (n_head=8 with n_hidden=128) is too narrow.
+- **Independent bug diagnosis** matched edward's earlier finding on `data/scoring.py` (`inf * 0 = NaN`). Tanjiro applied a workaround in `train.py::evaluate_split` to drop bad samples before scoring; the proper fix landed in PR #358.
+- **Tanjiro's suggested decomposition** (slice-count alone vs head-count alone) is the right experimental design IF we ever return to this axis. Parking for now since the binding constraint is throughput, not slice count.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=309 records, 9 lines).
+
 ## 2026-04-27 23:50 — PR #287: surf_weight 10 -> 25 to refocus loss on surface MAE
 - Branch: `charliepai2d4-alphonse/surf-weight-up` (deleted on merge)
 - Student: charliepai2d4-alphonse
