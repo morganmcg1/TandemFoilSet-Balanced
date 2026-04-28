@@ -82,6 +82,23 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FourierFeatures(nn.Module):
+    """Random Fourier features (NeRF/SIREN-style) on raw spatial coordinates.
+
+    Projects in_dim coords through a fixed (non-learnable) Gaussian matrix
+    sampled at scale sigma, then returns sin/cos. Output dim is 2*num_freq.
+    """
+
+    def __init__(self, num_freq: int, sigma: float, in_dim: int = 2):
+        super().__init__()
+        B = torch.randn(num_freq, in_dim) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, x):
+        proj = 2 * math.pi * (x @ self.B.T)
+        return torch.cat([proj.sin(), proj.cos()], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -278,7 +295,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, fourier=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -308,6 +325,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y_clean - stats["y_mean"]) / stats["y_std"]
+            if fourier is not None:
+                fourier_feats = fourier(x[..., :2])
+                x_norm = torch.cat([x_norm, fourier_feats], dim=-1)
             pred = model({"x": x_norm})["preds"]
             # Defensive: zero out non-finite predictions so a stray NaN/inf
             # at any (sample, node, channel) position cannot propagate
@@ -466,6 +486,8 @@ class Config:
     film_re: bool = True  # FiLM modulation conditioned on log(Re), per-block
     film_hidden: int = 64  # hidden width of the FiLM MLP (1 → hidden → 2*L*H)
     seed: int | None = None  # if set, torch.manual_seed for variance checks
+    fourier_num_freq: int = 32  # number of random Fourier frequencies on (x, z)
+    fourier_sigma: float = 5.0  # std of Gaussian frequency matrix B ~ N(0, sigma^2)
 
 
 cfg = sp.parse(Config)
@@ -501,7 +523,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 2 * cfg.fourier_num_freq,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -515,8 +537,14 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+fourier = FourierFeatures(
+    num_freq=cfg.fourier_num_freq, sigma=cfg.fourier_sigma, in_dim=2
+).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(
+    f"Model: Transolver ({n_params/1e6:.2f}M params) | "
+    f"Fourier: num_freq={cfg.fourier_num_freq}, sigma={cfg.fourier_sigma}"
+)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
@@ -594,6 +622,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        fourier_feats = fourier(x[..., :2])
+        x_norm = torch.cat([x_norm, fourier_feats], dim=-1)
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
@@ -624,7 +654,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier=fourier)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -691,7 +721,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier=fourier)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
