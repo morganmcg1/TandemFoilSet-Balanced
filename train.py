@@ -217,7 +217,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,7 +240,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
+            err = pred - y_norm
+            if huber_delta > 0.0:
+                abs_err = torch.where(
+                    err.abs() <= huber_delta,
+                    0.5 * err.pow(2),
+                    huber_delta * (err.abs() - 0.5 * huber_delta),
+                )
+            else:
+                abs_err = err.abs()
+            abs_err = abs_err * channel_weights[None, None, :]
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -380,6 +389,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    huber_delta: float = 0.0  # 0.0 = disabled (L1 baseline); >0 = Huber with this delta
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -490,7 +500,17 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
+        err = pred - y_norm
+        if cfg.huber_delta > 0.0:
+            delta = cfg.huber_delta
+            abs_err = torch.where(
+                err.abs() <= delta,
+                0.5 * err.pow(2),
+                delta * (err.abs() - 0.5 * delta),
+            )
+        else:
+            abs_err = err.abs()
+        abs_err = abs_err * channel_weights[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -515,7 +535,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -583,7 +603,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
