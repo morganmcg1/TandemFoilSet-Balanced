@@ -509,6 +509,17 @@ if not cfg.debug:
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+# EMA shadow weights — implicit ensembling along the optimization trajectory.
+# Validation, best-checkpoint, and end-of-run test all use EMA weights.
+# decay=0.999: effective averaging window ~1k steps, fully warmed up well
+# before any plausible best epoch on this 7-37 epoch budget.
+# State is held against the underlying (uncompiled) module so artifacts stay
+# portable through the existing _orig_mod-aware save/load path.
+ema_decay = 0.999
+EMA_VAL_INTERVAL = 2  # EMA val every Nth epoch; raw val runs every epoch.
+_orig_module = getattr(model, "_orig_mod", model)
+ema_state = {k: v.detach().clone() for k, v in _orig_module.state_dict().items()}
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -526,6 +537,8 @@ run = wandb.init(
         "re_sampling_variant": re_sampling_variant,
         "re_weight_p10_p50_p90_per_domain": re_weight_diagnostics,
         "re_median_per_domain": re_median_per_domain,
+        "ema_decay": ema_decay,
+        "ema_val_interval": EMA_VAL_INTERVAL,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -533,8 +546,10 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("raw_val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"raw_{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -587,6 +602,18 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # EMA update — happens after optimizer.step() so the shadow tracks the
+        # post-step parameters. Read unprefixed keys via _orig_mod so the
+        # shadow is compile-agnostic; non-float buffers are copied verbatim.
+        with torch.no_grad():
+            msd = _orig_module.state_dict()
+            for k in ema_state:
+                if ema_state[k].dtype.is_floating_point:
+                    ema_state[k].mul_(ema_decay).add_(msd[k], alpha=1.0 - ema_decay)
+                else:
+                    ema_state[k].copy_(msd[k])
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         b_dt = time.time() - last_batch_end
@@ -603,15 +630,31 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Raw-weight validation (every epoch — diagnostic curves) ---
     model.eval()
-    split_metrics = {
+    raw_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    raw_val_avg = aggregate_splits(raw_split_metrics)
+    raw_avg_surf_p = raw_val_avg["avg/mae_surf_p"]
+    raw_val_loss_mean = sum(m["loss"] for m in raw_split_metrics.values()) / len(raw_split_metrics)
+
+    # --- EMA-weight validation (every Nth epoch — primary for best-tracking) ---
+    do_ema_val = (epoch + 1) % EMA_VAL_INTERVAL == 0
+    split_metrics = val_avg = avg_surf_p = val_loss_mean = None
+    if do_ema_val:
+        raw_state = {k: v.detach().clone() for k, v in _orig_module.state_dict().items()}
+        _orig_module.load_state_dict(ema_state)
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        _orig_module.load_state_dict(raw_state)
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
     dt = time.time() - t0
 
     # Compile diagnostic: distinguish first-batch (compile) from steady-state.
@@ -623,7 +666,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
-        "val/loss": val_loss_mean,
+        "raw_val/loss": raw_val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "train/first_batch_s": first_batch_s,
@@ -631,36 +674,55 @@ for epoch in range(MAX_EPOCHS):
         "train/steady_batch_max_s": steady_max_s,
         "global_step": global_step,
     }
-    for split_name, m in split_metrics.items():
+    for split_name, m in raw_split_metrics.items():
         for k, v in m.items():
-            log_metrics[f"{split_name}/{k}"] = v
-    for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+            log_metrics[f"raw_{split_name}/{k}"] = v
+    for k, v in raw_val_avg.items():
+        log_metrics[f"raw_val_{k}"] = v  # raw_val_avg/mae_surf_p etc.
+
+    if do_ema_val:
+        log_metrics["val/loss"] = val_loss_mean
+        for split_name, m in split_metrics.items():
+            for k, v in m.items():
+                log_metrics[f"{split_name}/{k}"] = v
+        for k, v in val_avg.items():
+            log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
     wandb.log(log_metrics)
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
+    if do_ema_val and avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        # save the underlying module's state_dict so the artifact stays
-        # portable regardless of whether the loader uses torch.compile
-        torch.save(getattr(model, "_orig_mod", model).state_dict(), model_path)
+        # Save EMA weights (already unprefixed) so the artifact + downstream
+        # test eval reflect EMA state. Loader is _orig_mod-aware in both
+        # compile-on and compile-off paths.
+        torch.save(ema_state, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
-        f"(max {steady_max_s:.3f}s)  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
-    )
-    for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+    if do_ema_val:
+        print(
+            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
+            f"(max {steady_max_s:.3f}s)  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"raw_val={raw_avg_surf_p:.4f} ema_val={avg_surf_p:.4f}{tag}"
+        )
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, split_metrics[name])
+    else:
+        print(
+            f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+            f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
+            f"(max {steady_max_s:.3f}s)  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"raw_val={raw_avg_surf_p:.4f} (ema val skipped)"
+        )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
