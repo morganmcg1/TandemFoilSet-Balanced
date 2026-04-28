@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.amp import autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -489,14 +490,21 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        ff = fourier_pos_features(x_norm[..., :2])
-        x_norm = torch.cat([x_norm, ff], dim=-1)
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        err = pred - y_norm
-        sq_err = err ** 2
-        abs_err = err.abs()
+        with autocast(device_type='cuda', dtype=torch.bfloat16):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            ff = fourier_pos_features(x_norm[..., :2])
+            x_norm = torch.cat([x_norm, ff], dim=-1)
+            pred = model({"x": x_norm})["preds"]
+
+        # FP32 guard on pressure channel: high-Re extreme pressures (max ±29,000 Pa)
+        # underflow BF16's 8-bit mantissa during the L1 surface reduction.
+        pred_p_fp32 = pred[..., 2].float()
+        y_p_fp32 = y_norm[..., 2].float()
+        abs_err_p = (pred_p_fp32 - y_p_fp32).abs()
+        abs_err_other = (pred[..., :2] - y_norm[..., :2]).abs()
+        abs_err = torch.cat([abs_err_other, abs_err_p.unsqueeze(-1)], dim=-1)
+        sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
