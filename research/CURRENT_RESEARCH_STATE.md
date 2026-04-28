@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 04:40
+- **Date:** 2026-04-28 04:45
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
 - **Most recent human research direction:** none received yet
@@ -18,17 +18,18 @@ Round 1 in progress. Strategy:
 2. Winners merge sequentially, best-first, each becoming the new baseline.
 3. Round 2 compounds the orthogonal winners.
 
-## In-flight PRs (status as of 2026-04-27 23:55)
+## In-flight PRs (status as of 2026-04-28 04:45)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #427 | frieren   | Budget-aware cosine (T_max matched to realised epochs)          | wip (sent back; 3 runs on OLD baseline confirmed mechanism, need rebase + 2-seed re-run with --cosine_t_max=19 on bf16 baseline) |
-| #413 | askeladd  | Huber loss for surface pressure (delta=1.0)                     | wip (sent back; pre-rebase 2-seed mean 118.47 = -15.3% vs slice=128 baseline; awaiting rebase + slice_num=64 confirmation, then merge) |
-| #505 | nezuko    | Lower LR exploration: `lr=3e-4` (2-seed for variance)           | wip (new; replaces closed #339 — bs=8 lost as binding constraint is wall-clock at our cap, lower LR is the orthogonal lever) |
+| #537 | alphonse  | AdamW β2=0.95 (transformer-recipe convention, 2-seed)          | wip (new; replaces merged #441 — orthogonal optimizer-internal axis, expected modest 1-4% gain) |
+| #413 | askeladd  | Huber loss for surface pressure (δ=1.0)                          | wip (sent back; pre-rebase 2-seed mean 118.47 = -15.3% vs OLD baseline; rebasing onto bf16 advisor + 1 confirmation run, then immediate merge) |
+| #427 | frieren   | Budget-aware cosine (T_max matched to realised epochs)          | wip (sent back; 3 OLD-baseline runs confirmed mechanism (-3 to -11% vs #336), need rebase + 2-seed re-run with --cosine_t_max=19 on bf16 baseline) |
+| #505 | nezuko    | Lower LR exploration: `lr=3e-4` (2-seed for variance)           | wip |
 | #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | wip |
-| #428 | thorfinn  | Multi-seed baseline calibration (3 seeds of default config)     | wip (new; replaces closed #341) |
-| #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (sent back; fix is bit-exact correct, but branch needs rebase before squash-merge to drop reverts to BASELINE.md / research/*.md) |
-| #434 | fern      | Gradient clipping (max_norm=1.0), 2-seed for variance measurement | wip (new; replaces closed #405) |
+| #428 | thorfinn  | Multi-seed baseline calibration (3 seeds of default config)     | wip |
+| #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (sent back; bit-exact correct fix, awaiting rebase before merge) |
+| #434 | fern      | Gradient clipping (max_norm=1.0), 2-seed for variance measurement | wip |
 
 ## Closed / merged
 
