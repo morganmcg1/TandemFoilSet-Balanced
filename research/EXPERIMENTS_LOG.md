@@ -1,5 +1,50 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 02:00 — PR #301 (rerun): surf_weight 10 → 30 on L1+warmup+Fourier — **MERGE (winner, new baseline)**
+
+- Branch: `charliepai2d5-nezuko/surf-weight-30` (rebased onto L1+warmup+Fourier)
+
+### Results
+
+| metric | value | vs PR #365 baseline (87.86 / 84.22) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | **76.68** | **−12.7%** ✓ |
+| `val_single_in_dist/mae_surf_p` | 87.59 | −16.2% |
+| `val_geom_camber_rc/mae_surf_p` | 88.15 | −15.6% |
+| `val_geom_camber_cruise/mae_surf_p` | 55.71 | −11.3% |
+| `val_re_rand/mae_surf_p` | 75.26 | −5.5% |
+| `test_avg/mae_surf_p` (3 clean) | **73.40** | **−12.9%** ✓ |
+| `val_avg/mae_vol_p` | 104.43 | **+13.2%** (regressed — tradeoff) |
+
+### Decision
+
+Merge — fourth orthogonal axis. Pure CLI flag → applied as Config default update on advisor (`surf_weight: float = 30.0`). The volume-pressure regression is a real tradeoff that's not ranked but worth tracking.
+
+Reassigned nezuko to **`surf_p_extra=3.0`** (PR #444) — additive boost on the surface-p channel only, leaving surface Ux/Uy gradients untouched. Designed to extract more pressure focus while reducing the volume regression. Per nezuko's own follow-up #2, but with a non-normalized formulation (avoids alphonse's earlier failure mode of starving Ux/Uy).
+
+---
+
+## 2026-04-28 01:55 — PR #385 (rerun #1, on Fourier): wd=5e-4 — **REQUEST CHANGES (sent back; nezuko merged ahead)**
+
+- Branch: `charliepai2d5-fern/weight-decay-5e-4` (on L1+warmup+Fourier)
+
+### Results
+
+| metric | value | vs PR #365 baseline (87.86 / 84.22) | vs new baseline post-#301 (76.68 / 73.40) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | **77.29** | **−12.0%** | +0.8% (very slightly worse) |
+| `test_avg/mae_surf_p` (3 clean) | **74.60** | **−11.4%** | +1.6% (slightly worse) |
+
+Train-vs-val gap widened from −0.185 (no Fourier) to −0.330 (with Fourier) — Fourier features gave the model more capacity that the same WD has to discipline harder. Suggests room for stronger regularization.
+
+Per-split gain pattern *flipped* with Fourier: original WD=5e-4 run had largest gain on `val_single_in_dist` (in-dist); rebased run had largest gain on `val_geom_camber_rc` (OOD camber holdout, −14.6%). Reading: with Fourier features encoding finer positional structure, the WD penalty disproportionately helps the OOD camber holdouts, which is where the original "WD targets OOD generalization" framing predicted gains.
+
+### Decision
+
+Send back. Result is excellent (−12% / −11.4% vs the Fourier baseline, comparable to nezuko's surf_weight=30 win on a different axis), but nezuko's PR #301 merged ahead. Fern's branch is now on a stale base — needs to rebase onto the new advisor (which has surf_weight=30 default) and rerun with `--weight_decay 5e-4 --epochs 14` to give us the **stacked sw=30 + wd=5e-4** measurement. The two axes are mechanically orthogonal (parameter-magnitude regularization vs surface-volume balance), so stacking should still help.
+
+---
+
 ## 2026-04-28 01:25 — PR #387: Gradient clipping `max_norm=1.0` — **REQUEST CHANGES (rebase mechanic, but standout result)**
 
 - Branch: `charliepai2d5-alphonse/grad-clip-1` (on L1+warmup, pre-Fourier)
