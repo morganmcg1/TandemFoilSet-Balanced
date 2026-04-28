@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 09:48 (advisor branch `icml-appendix-charlie-pai2d-r2`)
+- **Last update:** 2026-04-28 10:00 (advisor branch `icml-appendix-charlie-pai2d-r2`)
 - **Most recent human-team direction:** N/A — no open human-tagged issues at this time.
 - **Current baseline (directly measured, all standalone)**: `val_avg/mae_surf_p` = **`59.907`** (PR #630 cosine eta_min=2e-5, BEST) / `61.872` (PR #647 per-block temp) / `62.747` (PR #640 per-group wd) / `62.879` (PR #601 δ=0.1) / `63.131` (PR #635 lr=6e-4) / `63.222` (PR #636 decaying noise). Test_avg = 52.656 / 54.555 / 54.512 / 54.561 / 55.026 / 54.900. **Combined-stack measurement (all 6 levers compounded) pending; expected to compound below 59.907 if all levers orthogonal.**
 - **Stack throughput**: 17-18 epochs in 30-min budget under compile=True. Cosine T_max=11 → eta_min=0 at ep15, then cosine cycles back from ep16+.
@@ -41,27 +41,27 @@
 |----|---------|------|-------|--------|
 | #661 | alphonse | tf32-matmul-high | TF32 matmul precision (Blackwell tensor cores, single-line throughput) | WIP (just assigned) |
 | #697 | edward | cosine-tmax-14 | Cosine T_max 11 → 14 (align with realized 18-epoch compile budget) | WIP (just assigned) |
-| #682 | askeladd | slice-temp-per-block-steeper | Steeper per-block schedule [1.0, 1.5, 2.0, 2.5, 3.0] (range doubled, same mean) | WIP (just assigned) |
+| #708 | askeladd | slice-temp-per-block-cruise-anchor | Cruise-friendly anchor [1.0, 1.75, 2.5, 3.25, 4.0] (range=3.0, mean=2.5) | WIP (just assigned) |
 | #646 | fern | batch-size-6 | batch_size 4 → 6 with compile (rebase onto post-#647 stack) | WIP (sent back, rebase) |
-| #673 | tanjiro | per-group-wd-extreme | wd_attn 1e-4→3e-4, wd_mlp 1e-5→3e-6 (push asymmetry harder) | WIP (just assigned) |
+| #673 | tanjiro | per-group-wd-extreme | wd_attn 1e-4→3e-4, wd_mlp 1e-5→3e-6 (sent back: rebase onto post-#630 stack) | WIP (sent back, rebase) |
 | #696 | frieren | feature-noise-surface-only | Surface-only feature noise (dims 0-12 only, skip per-sample globals) | WIP (just assigned) |
 | #698 | nezuko | cosine-eta-min-5e-5 | cosine eta_min 2e-5 → 5e-5 (calibrate sweet spot, bigger rebound) | WIP (just assigned) |
-| #674 | thorfinn | huber-delta-0p05 | Huber δ=0.10 → 0.05 (push δ profile toward L1) | WIP (just assigned) |
+| #709 | thorfinn | huber-per-channel-delta | Per-channel δ (δ_p=0.05, δ_Ux=δ_Uy=0.10) | WIP (just assigned) |
 
 ## Current research focus
 
 **Hyperparameter closure + profile extension on multiple active axes.** The merged stack now includes 21 improvements (latest: PR #510 compile = +28.6% epochs in budget compounds with everything); we are bracketing the remaining open directions:
 
 1. **Cosine eta_min sweep** (nezuko #698, 5e-5): PR #630 just merged with -7.4% gain (val=59.907). Profile is (0 → 64.824, 2e-5 → 59.907, 5e-5 → ?). Mechanism finding: eta_min is NOT a floor, the cosine rebounds in second half-cycle and half the gain comes from the unintended SGDR-like rebound.
-2. **Huber δ profile push** (thorfinn #674, δ=0.05): δ=0.10 just merged with -3.00% same-stack gain; profile still descending. δ=0.05 should shift the linear-regime fraction from ~29% to ~50-60%, more outlier-robust gradient at risk of higher gradient noise.
+2. **Per-channel huber δ** (thorfinn #709): scalar δ axis saturated at 0.10 (PR #674); the `p` channel has lowest lin fraction (37% at thr=0.05). Apply δ_p=0.05 + δ_Ux=δ_Uy=0.10 to focus outlier downweighting where it matters most.
 3. **Surface-only feature noise** (frieren #696): apply decaying noise schedule only to per-node positional/SDF dims 0-12; skip per-sample globals (log_re, AoA, NACA, gap, stagger). Mechanism: per-sample noise on conditioning labels may have been destabilizing; isolating to geometry features may unlock more headroom.
 4. **Per-parameter-group wd** (tanjiro #640): single-scalar wd axis is closed at 3e-5; explore module-type-differential wd to capture the OOD asymmetry (attn higher to help camber_rc, mlp lower to help re_rand).
 5. **Batch-size gradient quality** (fern #646, batch=6 with compile): gradient noise reduction may compound with EMA averaging. Replaces closed warmup-aggressiveness axis.
 6. **Cosine T_max alignment** (edward #697, T_max=14): align cosine with realized 18-epoch compile budget. Currently cosine ends at ep14 then wraps; T_max=14 gives clean monotone descent through ep17.
-7. **Per-block slice-temp range push** (askeladd #682, [1.0..3.0]): per-block schedule just merged with -4.55% standalone gain; profile may have more headroom. Block-0 drift signal points to softer-than-1.5 equilibrium.
+7. **Per-block cruise-friendly anchor** (askeladd #708, [1.0, 1.75, 2.5, 3.25, 4.0]): combine block-0=1.0 (cruise benefit) with mean=2.5 (higher than #647's 2.25) and range=3.0 (wider). Disambiguates variance-vs-mean per PR #682's confound finding.
 8. **TF32 matmul precision** (alphonse #661): single-line `torch.set_float32_matmul_precision("high")` to use Blackwell TF32 tensor cores. Expected 1.5–2× matmul speedup → 25–40% epoch time reduction. Highest EV/effort ratio of the throughput follow-ups.
 
-**Closed axes**: EMA decay_target above 0.995 at warmup_steps=50 (cap doesn't bind within budget — PR #600); feature_noise_std (interior min at 0.0025, U-shaped — PR #595); surf_weight at 15 on huber-clip stack (clip absorbs the increase, single_in_dist vol_p degrades — PR #605); single-scalar wd (basin floor at 3e-5 on new stack; wd=0 regresses +2.75% — PR #554); LinearLR start_factor (sweet spot at 0.3, both 0.5 and 0.2 regress — PR #620); global slice-temp init (saturating at 2.0, camber_rc consistently regresses with sharper attention — PR #608); torch.compile reduce-overhead with naive fixed-shape padding (compute-bound at max-mesh shape, throughput regressed −22% — PR #629; bucketed batching is the right next probe); noise schedule magnitude above 0.0025 (base_std=0.005 destabilizes basin selection at peak LR via 90% clip rate — PR #669); lr peak above 6e-4 (clip not the bottleneck; high-LR phase doesn't extract more under merged regime — PR #668).
+**Closed axes**: EMA decay_target above 0.995 at warmup_steps=50 (cap doesn't bind within budget — PR #600); feature_noise_std (interior min at 0.0025, U-shaped — PR #595); surf_weight at 15 on huber-clip stack (clip absorbs the increase, single_in_dist vol_p degrades — PR #605); single-scalar wd (basin floor at 3e-5 on new stack; wd=0 regresses +2.75% — PR #554); LinearLR start_factor (sweet spot at 0.3, both 0.5 and 0.2 regress — PR #620); global slice-temp init (saturating at 2.0, camber_rc consistently regresses with sharper attention — PR #608); torch.compile reduce-overhead with naive fixed-shape padding (compute-bound at max-mesh shape, throughput regressed −22% — PR #629; bucketed batching is the right next probe); noise schedule magnitude above 0.0025 (base_std=0.005 destabilizes basin selection at peak LR via 90% clip rate — PR #669); lr peak above 6e-4 (clip not the bottleneck; high-LR phase doesn't extract more under merged regime — PR #668); scalar Huber δ below 0.10 (profile saturated, -0.19% step at 0.10→0.05 vs -3.00% at 0.25→0.10; converged residual distribution is invariant to δ — PR #674); per-block schedule range without higher mean (variance with lower mean costs val_avg; mean drop is load-bearing cost — PR #682).
 
 ## Most promising potential next research directions
 
