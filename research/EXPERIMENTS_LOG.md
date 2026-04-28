@@ -13,6 +13,92 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 05:30 — PR #478 (iter 1): curriculum learning by per-sample pressure y-std ❌ CLOSED
+
+- Branch: `willowpai2d2-fern/curriculum-y-std` (deleted on close).
+- Iteration: assigned as round-2 data-axis lever after closing #452.
+  Sweep `curriculum_warmup_epochs ∈ {3, 5, 8}` at fixed `min_quantile=0.5`.
+
+### Results (single seed each)
+
+| W | val_avg/mae_surf_p | val_single | val_camber_rc | val_camber_cruise | val_re_rand | run id |
+|-:|-:|-:|-:|-:|-:|-|
+| 3 | 116.90 | 148.10 | 131.90 | 83.18 | 104.44 | 6v60sktx |
+| 5 | 117.66 | 141.97 | 140.96 | 82.21 | 105.52 | my4wdf6k |
+| 8 | 129.61 | 185.72 | 146.26 | 91.39 | 109.80 | 7e4frsqm |
+
+vs 115.61 baseline: best W=3 = +1.1 % (inside ±10 % noise but slightly above);
+W=5 = +1.8 %; W=8 = +12.1 % (regression). Per the explicit decision rule
+(>115 → close), clean close.
+
+### Conclusion + LOAD-BEARING METHODOLOGY FINDING
+
+**Closed.** But fern's mechanism analysis is the most insightful round-2
+contribution to date — surfacing the dominant explanation for **why
+round-2 has been brutal across the board**:
+
+> **Huber's gradient clipping past |residual|=1 implicitly under-weights
+> raceCar relative to cruise.** raceCar samples have large normalized
+> residuals (high per-sample y_std → wide spread → far from `y_norm`
+> mean) → Huber clips them. Cruise samples have small normalized
+> residuals → Huber stays in quadratic regime. Cruise samples
+> structurally receive higher gradient share than raceCar samples.
+
+This explains every closed round-2 PR's per-distribution-shift signal:
+
+- alphonse #311 width-160: cruise -6.1 %, raceCar +17-20 %
+- tanjiro #335 lr=1e-3 schedule: cruise -8.1 %, single +12.8 %
+- edward #429 p_weight=2: cruise -10 %, raceCar +8 %
+- fern #478 curriculum W=3: cruise -15.8 %, raceCar +8-11 %
+- nezuko #332 surf_weight=25: partial — all splits regress, cruise least
+
+**Five out of five round-2 axes show the same per-distribution-shift sign.**
+The pattern is property-of-the-baseline (Huber-induced gradient imbalance),
+not perturbation-specific.
+
+### The corollary axis
+
+The fix: counter-balance Huber's cruise-favoring by **per-sample loss
+weighting proportional to y_std** — bigger weight for high-y_std
+(raceCar), smaller for cruise. This brings raceCar's gradient share back
+up. Assigned as PR #559.
+
+### Carry-forward contributions
+
+1. **`compute_per_sample_y_std` helper** stays in train.py (precompute
+   foundation for any data-or-loss-weighting axis).
+2. **Per-domain balance artifact diagnosis** + **mechanism analysis of
+   why Huber + perturbation = cruise dominates** are the dominant
+   round-2 methodology findings.
+3. **Curriculum trajectory verification logging** sets the methodology
+   precedent for "verify the intervention is engaging before drawing
+   metric conclusions."
+
+### Reassignment
+
+Fern → PR #559 (round-2 axis: per-sample loss weighting ∝ y_std).
+Detailed below.
+
+## 2026-04-28 05:30 — PR #559 (NEW, fern round 2): per-sample loss weighting ∝ y_std
+
+- Reassigning fern after closing #478.
+- Hypothesis: counter-balance Huber's implicit cruise-favoring gradient
+  share by per-sample loss weight `w_i = (y_std_i / median_y_std)^α`.
+  Higher α → stronger up-weighting of high-y_std (raceCar) samples,
+  down-weighting of low-y_std (cruise). The mechanism directly
+  addresses the **fifth-instance per-distribution-shift pattern**
+  surfaced from fern's own #478 mechanism analysis.
+- Predicted gain concentrated on `val_single_in_dist` and
+  `val_geom_camber_rc` (the splits regressing on every round-2
+  perturbation so far). 3–8 % reduction over 115.61 anchor.
+- Sweep: `y_std_weight_alpha ∈ {0.0, 0.5, 1.0}` with multi-seed at
+  the winner. Decision rule per new (tighter) noise floor: ≤102
+  single-seed (or ≤107 multi-seed mean) merges; at-baseline closes.
+- Implementation: ~30 LOC on top of fern's existing
+  `compute_per_sample_y_std`. Per-batch y_std computation from `y[..., 2]`
+  + per-sample weight applied to `sq_err` tensor.
+- Status: assigned, draft, status:wip.
+
 ## 2026-04-28 05:00 — PR #399 (rebased): bf16 mixed precision ★ INFRASTRUCTURE-MERGED ★
 
 - Branch: `willowpai2d2-askeladd/bf16-amp` (rebased onto post-Huber +

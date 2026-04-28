@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- 2026-04-28 05:15 — round 1 settled on `icml-appendix-willow-pai2d-r2`,
-  round 2 4th merge (bf16 infrastructure), 8 axes in flight, all hands on deck
+- 2026-04-28 05:30 — round 1 settled, round 2 mid-flight; 4 merges + 9 closes;
+  8 axes in flight including the new "counter-balance Huber" lever (#559); all hands on deck
 - **Baseline updated (4 merges total):** PR #328 + #330 + #367 + #399.
   Anchor val_avg/mae_surf_p = **115.61** (fp32 anchor, run `uip4q05z`).
   After #399 bf16 infrastructure merge: 3-seed bf16+Huber mean = 112.13
@@ -67,27 +67,32 @@
 | 457 | thorfinn  | round 2: EMA weight averaging | NEW assignment (status:wip) | n/a |
 | 367 | fern      | bug fix: cruise-NaN scoring| **MERGED ★** | rebased + verified on Huber baseline: test_avg: NaN → 117.59, cruise_p: NaN → 96.92 |
 | 452 | fern      | round 2: push slice_num to 192/256 | **closed** (slice-192 single-seed = 133.30, +15.3 % vs 115.61 baseline; per-split mechanism-inversion confirms slice-128 is the ceiling) | superseded |
-| 478 | fern      | round 2: curriculum by per-sample y-std | NEW assignment (status:wip) | n/a |
+| 478 | fern      | round 2: curriculum by per-sample y-std | **closed** (W=3 single-seed = 116.90 = +1.1 % vs baseline; mechanism: global y_std quantile filtering inadvertently flips domain balance and amplifies Huber's implicit cruise-favoring) | superseded |
+| 559 | fern      | round 2: per-sample loss weight ∝ y_std (counter-balance Huber) | NEW assignment (status:wip) | n/a |
 
-PRs surfaced for advisor review this cycle: **#399**. Action:
-**#399 MERGED ★ as infrastructure** — 4th merged PR in this round
-(after #328 + #330 + #367). 3-seed bf16+Huber mean 112.13 (σ=4.53)
-falls in [110, 121] band per the explicit infrastructure-merge rule.
-Throughput unlock real and stable (1.23×, +30 % epochs). Test_avg
-finite for the first time on this branch (101.82). Most importantly:
-**σ=4.53 on bf16+Huber vs σ=8.13 on bf16+MSE** — Huber tightens the
-seed-noise floor by ~half. Updated noise-floor anchor for round-2
-multi-seed budgeting: σ ≈ 4.5 / ~4 % (was ±10 %).
-**Reassigned askeladd to round-2 axis #553 (`torch.compile` on top
-of bf16)** — kernel fusion + Python-overhead elimination, predicted
-1.10–1.30× additional speedup (compounding with bf16 → ~1.4–1.6×
-total over fp32-eager). Variable mesh sizes (74K–242K nodes) need
-`dynamic=True` to avoid recompilation per batch. Sweep
-`compile_mode ∈ {"none", "default", "reduce-overhead"}` with
-multi-seed at the winner.
+PRs surfaced for advisor review this cycle: **#478**. Action:
+**#478 closed** — best-W=3 single-seed = 116.90 (+1.1 % vs 115.61
+baseline), past the >115 close threshold. **But fern's mechanism
+analysis is the most insightful round-2 contribution to date**:
+they identified that **Huber's gradient clipping past |residual|=1
+implicitly under-weights raceCar relative to cruise** (raceCar has
+high per-sample y_std → large normalized residuals → Huber clips →
+gradient share is low; cruise has small residuals → quadratic
+regime → gradient share is high). This **unifies the
+per-distribution-shift pattern across five round-2 PRs** — every
+intervention on top of Huber shows the same signal because Huber
+itself bakes in the cruise-favoring imbalance.
+**Reassigned fern to round-2 axis #559 (per-sample loss weighting
+∝ y_std) — the corollary axis that directly addresses the
+mechanism.** Counter-balance Huber's implicit cruise-favoring by
+weighting per-sample loss by `(y_std_i / median_y_std)^α`. Bigger
+weights for raceCar, smaller for cruise. Sweep α ∈ {0.0, 0.5, 1.0}
+with multi-seed at the winner. **First round-2 axis to directly
+address the per-distribution-shift pattern**; if this works, it's
+the cleanest round-2 win we've seen.
 
-Cycle 18 actions (recap): #429 closed (p_weight axis exhausted via
-Huber-absorbs mechanism), #547 assigned (edward LLRD).
+Cycle 19 actions (recap): #399 MERGED ★ infrastructure (bf16; 4th
+merge); #553 assigned (askeladd torch.compile).
 
 Earlier cycle actions:
 **#335 closed** — schedule axis doesn't stack on Huber+slice-128.
@@ -112,15 +117,15 @@ Cycle 16 actions (recap): #311 closed (width axis exhausted),
 **Four merges**: #328 (slice_num=128, anchored prior baseline at
 133.55) + #330 (Huber β=1, current anchor 115.61) + #367 (scoring
 NaN fix, infrastructure) + #399 (bf16, infrastructure with bf16+Huber
-mean 112.13 / first-finite-test_avg 101.82). **Eight closed axes**
+mean 112.13 / first-finite-test_avg 101.82). **Nine closed axes**
 (#311 width, #325 depth, #326 FFN, #332 surf_weight, #335 schedule,
-#337 BS+LR, #429 p_weight, #452 slice-192 — all axes that fight
-the 30-min cap or that overlap with Huber's implicit gradient
-shaping). **Eight round-2 axes currently in flight**: #415 frieren
-asinh-on-pressure, #457 thorfinn EMA, #472 nezuko Lion, #478 fern
-curriculum, #485 alphonse RMSNorm, #517 tanjiro DropPath, #547
-edward LLRD, #553 askeladd torch.compile. **All eight students
-busy on actionable WIP work.**
+#337 BS+LR, #429 p_weight, #452 slice-192, #478 curriculum — all
+axes that fight the 30-min cap or that overlap with Huber's implicit
+gradient shaping). **Eight round-2 axes currently in flight**: #415
+frieren asinh-on-pressure, #457 thorfinn EMA, #472 nezuko Lion,
+#485 alphonse RMSNorm, #517 tanjiro DropPath, #547 edward LLRD,
+#553 askeladd torch.compile, #559 fern y_std-weighting. **All eight
+students busy on actionable WIP work.**
 
 ## What we learned this cycle (and last)
 
@@ -170,25 +175,41 @@ busy on actionable WIP work.**
 
 7. **Huber absorbs small-effect optimization-axis levers** (the
    round-2 dominant lesson, surfaced from edward #429 + tanjiro #335
-   independently). Huber β=1's gradient clipping past |residual|=1
-   already implicitly does the work that several round-2 axes
-   tried to do explicitly:
+   independently, then refined by fern #478 to a deeper mechanism).
+   Huber β=1's gradient clipping past |residual|=1 already implicitly
+   does the work that several round-2 axes tried to do explicitly,
+   AND it bakes in a per-distribution gradient imbalance that any
+   subsequent perturbation amplifies:
    - **schedule** (cosine T_max=15) — closed; Huber's tail-clipping
      covers what late-epoch LR shrinkage was doing on MSE.
    - **per-channel weighting** (p_weight=2) — closed; Huber already
      up-weights the channel with the largest residuals (pressure on
      high-Re).
-   - **surf_weight=25** — closed; similar mechanism (already covered
-     at slice-128).
+   - **surf_weight=25** — closed; similar mechanism.
    - **batch+LR scaling** — closed (also hardware-blocked).
-   The corollary for round-2 axis selection: **only mechanisms that
-   are structurally orthogonal to gradient-magnitude shaping**
-   (target distribution via asinh, throughput via bf16,
-   parameter-noise via EMA, normalization via RMSNorm, regularization
-   via DropPath, data exposure via curriculum, update rule via Lion,
-   per-layer LR via LLRD) are likely to compound. The 8 in-flight
-   round-2 axes are intentionally selected to be in that orthogonal
-   set.
+   - **curriculum** — closed; global y_std filtering flips domain
+     balance and amplifies Huber's cruise-favoring.
+   The corollary for round-2 axis selection: only mechanisms that
+   are **structurally orthogonal** to gradient-magnitude shaping
+   are likely to compound (target distribution via asinh, throughput
+   via bf16/torch.compile, parameter-noise via EMA, normalization
+   via RMSNorm, regularization via DropPath, update rule via Lion,
+   per-layer LR via LLRD). **And one direct counter-axis**:
+   per-sample loss weighting ∝ y_std (#559) which targets Huber's
+   per-distribution gradient imbalance directly — first round-2 PR
+   to attack the per-distribution-shift pattern at the mechanism
+   level rather than working around it.
+
+8. **Per-distribution-shift pattern: 5 of 5 round-2 perturbations.**
+   alphonse #311 width-160, tanjiro #335 schedule, edward #429
+   p_weight, fern #478 curriculum, nezuko #332 surf_weight (partial).
+   All 5 show the same sign: cruise improves (or regresses least),
+   raceCar splits regress. **This is now anchored as a property of
+   Huber's gradient shape on the y_std-heterogeneous data
+   distribution**, not a perturbation-specific artifact. Per-sample
+   y_std-weighting (#559) is the first axis to address it directly.
+   Per-distribution architecture / loss specialization remains the
+   round-3 priority.
 6. **Interior hyperparameter optima are architecture-dependent.**
    nezuko #332 found a clean interior optimum at surf_weight=25 on
    slice_num=64 (sweep curve + val_vol_p secondary signal). It did
@@ -235,12 +256,17 @@ busy on actionable WIP work.**
   follow-up if asinh doesn't capture the gain.
 - **Geometry-preserving augmentation.** x-flip for the ground-effect
   raceCar domain (mirror y-coord and corresponding flow components).
-- **Curriculum learning.** ASSIGNED as PR #478 to fern: train on
-  bottom-50 % of pressure y_std first, ramp to full set over
-  `curriculum_warmup_epochs` (sweep {3, 5, 8}). Preserves domain
-  balancing. Targets the same high-Re-tail story Huber won on, from
-  the data-exposure side. ~50 LOC in train.py only — loaders stay
-  read-only.
+- **Curriculum learning.** CLOSED in #478 — global y_std quantile
+  filtering inadvertently flips domain balance and amplifies Huber's
+  implicit cruise-favoring. Per-domain stratified curriculum
+  remains a round-3 candidate.
+- **Per-sample loss weighting ∝ y_std (counter-balance Huber).**
+  ASSIGNED as PR #559 to fern: per-sample loss weight
+  `(y_std_i / median_y_std)^α` directly counter-balances Huber's
+  implicit cruise-favoring gradient share. **First round-2 axis to
+  address the per-distribution-shift pattern at the mechanism
+  level**, surfaced from fern's own #478 mechanism analysis.
+  Sweep α ∈ {0.0, 0.5, 1.0}.
 - **Weight averaging (EMA).** ASSIGNED as PR #457 to thorfinn:
   `torch.optim.swa_utils.AveragedModel` with custom EMA `avg_fn`,
   per-epoch dual val with best-of (live, EMA) checkpoint selection.
