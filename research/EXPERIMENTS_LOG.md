@@ -1896,3 +1896,39 @@ Train-loss/grad-norm/wall-clock all match baseline within 1 % (mechanism is shad
 |----|---------|------|-------|-----|
 | #681 | tanjiro | batch-8-on-compile | `batch_size = 4 → 8` on merged #394 baseline | Untouched batch axis under compile (was OOM under eager #546; b=6 fallback was Lion wash). Compile reduces memory pressure (peak 42 GB → ~75-80 GB at b=8, under 96 GB cap). Tests Lion's batch-invariance under new compute regime. Honest band −6 % to +7 %. |
 | #683 | frieren | stochastic-depth-0p05 | drop_path probability 0.05 in TransolverBlock residual branches on merged #394 baseline | Block-level regularization (drop entire residual branch with p=0.05) — structurally different from closed #483/#513 (MLP-internal dropout). Standard transformer regularization (Huang 2016). Implicit ensembling effect over sub-networks. Honest band −5 % to +7 %. |
+
+## 2026-04-28 08:55 — PR #651: surf_weight 10 → 7 (charliepai2d1-thorfinn) — **CLOSED (Pareto-trade wash; loss-form joint optimum locked)**
+- val=43.865 (+0.43 % wash), test=38.169 (+3.38 % real regression). **All 3 volume MAE channels improve cleanly** (~−3 %): mae_vol_p −3.06 %, mae_vol_Ux −2.59 %, mae_vol_Uy −3.38 %.
+- **Mechanism worked as designed**: vol gradient share rose 30 % → 38.2 % (verified from train_loss split at ep20: vol_loss=0.1451, surf_loss=0.0335, surf_weight=7 → vol/(vol + 7·surf) = 0.382).
+- **Predicted backbone-composition transfer to surface MAE did NOT materialize** — volume gradient share is load-bearing for volume MAE specifically, but shared backbone doesn't transfer to surface. **Pareto trade**, not shared-bottleneck unmasking.
+
+### Per-split signature confirms Pareto-trade reading
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| single_in_dist | +7.60 % | **−2.13 % (gain)** |
+| geom_camber_rc | **−7.11 %** (val win) | +5.88 % |
+| geom_camber_cruise | +1.83 % | +5.91 % |
+| re_rand | +2.42 % | +4.91 % |
+
+Single's test gain (less surf pressure → model fits high-residual split slightly better); rc's val gain (similar mechanism on val). Other 3 OOD test splits all regress.
+
+### Joint loss-form axis closure (with #624)
+
+| Surface β | Volume loss | surf_weight | val_avg | test_avg | Δ val vs #394 |
+|---|---|---:|---:|---:|---:|
+| 0.5 | MSE | 10 | **43.68** | **36.92** | 0.0 % (baseline) |
+| 0.5 | SmoothL1(0.5) | 10 | 43.71 | 37.95 | +0.07 % (#624 closed) |
+| **0.5** | **MSE** | **7** | **43.87** | **38.17** | **+0.43 %** (this #651) |
+
+Two opposite-axis perturbations to the same hypothesis ("volume gradient share is load-bearing for surface MAE") both produce wash on val, real regression on test. **`surf_weight=10 + MSE_vol` is the verified joint optimum** in (surf_weight × vol_loss_form) space — flat plateau on val_avg/mae_surf_p.
+
+### Decision: close
+- Wash on val, real test regression, mechanism didn't transfer to primary metric.
+- Joint loss-form axis closure with #624: durable appendix story.
+- Reassigned thorfinn to **PR #686 (bf16-autocast)** — pivoting back to throughput-axis where they delivered #394's biggest win. Third throughput multiplier candidate (after #491 TF32 + #394 compile).
+
+## 2026-04-28 08:58 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #686 | thorfinn | bf16-autocast | bf16 autocast wrapping forward + loss on merged #394 baseline | Third throughput multiplier candidate. TF32 (#491) + compile (#394) already merged; bf16 forward fuses Inductor kernels in lower precision. Lion's sign-update is robust to numerical imprecision (only direction matters). Risk: SmoothL1's small-residual gradient amplification at very small err may have precision issues — watch for cruise (smallest residuals) destabilization. Honest band −6 % to +14 %. |
