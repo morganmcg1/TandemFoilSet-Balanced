@@ -1,5 +1,36 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 08:45 — PR #627: Preprocess MLP depth +1 (pre-Lion baseline) — **REQUEST CHANGES (rebase to Lion + partial diagnostic)**
+
+- Branch: `charliepai2d5-edward/preprocess-depth-1` (status:wip rebasing)
+
+### Results (on pre-Lion AdamW baseline)
+
+| metric | value | vs PR #496 baseline (73.29 / 69.49) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/24) | **71.39** | **−2.59%** |
+| `val_single_in_dist/mae_surf_p` | 83.51 | **−4.12%** (largest val gain) |
+| `val_geom_camber_rc/mae_surf_p` | 81.85 | −3.75% |
+| `val_geom_camber_cruise/mae_surf_p` | 51.19 | +0.59% **(flat — partial refutation of LLRD-mirror prediction)** |
+| `val_re_rand/mae_surf_p` | 69.03 | −1.62% |
+| `test_avg/mae_surf_p` (3 clean) | 68.59 | −1.30% |
+| `test_single_in_dist/mae_surf_p` | 72.63 | **+2.35%** (regressed despite val improvement!) |
+
+### The LLRD-mirror prediction was only partially confirmed
+
+Predicted: "OOD wins, in-dist flat or slightly worse" (mirror of LLRD's failure pattern).
+Observed: "in-dist val wins big (but test regresses), rc/re_rand also win, cruise flat."
+
+**Key disconnect:** `val_geom_camber_cruise` (the LLRD-most-sensitive split, regressed by +25% under LLRD) did NOT improve here. If early-layer-expressivity were truly the limiter for cruise, we should have seen the largest gain on cruise — we didn't. So adding one residual hidden layer to the preprocess MLP doesn't address whatever cruise's bottleneck is.
+
+Student's reframing (recorded for future hypotheses): "adding capacity at the input boundary helps generic representation quality and the splits that share statistics with training (single, rc tandem). Cruise tandem is bottlenecked by something else — possibly attention slicing capacity for unseen geometries, or the absence of an explicit cruise-domain inductive bias, neither of which a deeper preprocess MLP can fix."
+
+### Decision
+
+Send back. Your branch is on the pre-Lion baseline (AdamW, val=73.29) — current Lion baseline is val=56.19 (PR #612 merged during your training queue). Squash-merging would revert Lion. Need to rebase + rerun to know if preprocess-depth-1 stacks with Lion's much better optimizer. The Lion improvement was uniform across splits (16-31% per-split), so it may have already captured what preprocess-depth was buying.
+
+
+
 ## 2026-04-28 08:35 — PR #637: Lion + `--epochs 22` (budget-matched cosine) — **CLOSE (mechanism confirmed but improvement below merge threshold)**
 
 - Branch: `charliepai2d5-alphonse/lion-epochs-22` (closed)
