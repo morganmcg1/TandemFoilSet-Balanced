@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -90,7 +91,8 @@ class PhysicsAttention(nn.Module):
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
+        self.attn_drop = nn.Dropout(dropout)
+        self.proj_drop = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -100,7 +102,7 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.to_out = nn.Linear(inner_dim, dim)
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -127,13 +129,13 @@ class PhysicsAttention(nn.Module):
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
             is_causal=False,
         )
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
-        return self.to_out(out_x)
+        return self.proj_drop(self.to_out(out_x))
 
 
 class TransolverBlock(nn.Module):
@@ -149,6 +151,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop = nn.Dropout(dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -157,8 +160,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -223,11 +226,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Both the loss and MAE accumulators rely on multiplicative masking
+    (``err * mask``) which silently produces NaN when the unmasked tensor
+    contains a non-finite entry (``0 * inf == NaN``). Some test-split samples
+    are known to contain ``inf`` in the GT ``y`` and a runaway prediction can
+    overflow ``pred_orig`` to ``inf``. We pre-sanitize both tensors and zero
+    the corresponding mask rows so a single bad sample does not poison the
+    entire split's metrics.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_skipped_nonfinite_y = n_skipped_nonfinite_pred = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -235,10 +247,31 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+            B = y.shape[0]
+
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.all():
+                n_skipped_nonfinite_y += int((~y_finite).sum().item())
+                y = y.clone()
+                mask = mask.clone()
+                y[~y_finite] = 0.0
+                mask[~y_finite] = False
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+
+            pred_finite = (
+                torch.isfinite(pred.reshape(B, -1)).all(dim=-1)
+                & torch.isfinite(pred_orig.reshape(B, -1)).all(dim=-1)
+            )
+            if not pred_finite.all():
+                n_skipped_nonfinite_pred += int((~pred_finite).sum().item())
+                pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+                pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=0.0, neginf=0.0)
+                mask = mask.clone() if mask.is_leaf else mask
+                mask[~pred_finite] = False
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -253,7 +286,6 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +293,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_skipped_nonfinite_y": n_skipped_nonfinite_y,
+           "n_skipped_nonfinite_pred": n_skipped_nonfinite_pred}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -423,6 +457,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -460,8 +495,14 @@ wandb.define_metric("lr", step_metric="global_step")
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+metrics_path = model_dir / "metrics.jsonl"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+
+def _write_jsonl(path: Path, record: dict) -> None:
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -534,6 +575,7 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
+    _write_jsonl(metrics_path, {"phase": "val", "epoch": epoch + 1, **log_metrics})
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -596,6 +638,14 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _write_jsonl(metrics_path, {
+            "phase": "test",
+            "best_epoch": best_metrics["epoch"],
+            "best_val_avg/mae_surf_p": best_avg_surf_p,
+            "total_train_minutes": total_time,
+            "peak_vram_gb": torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0,
+            **test_log,
+        })
 
     save_model_artifact(
         run=run,
