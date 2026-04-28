@@ -2,6 +2,28 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 06:10 — Triple review: #434 merged, #413 sent back, #537 closed
+
+### PR #434 (fern grad-clip, max_norm=1.0) — **MERGED** (commit 426b4c4)
+- Squash-merged into advisor as new round-1 baseline. Train.py diff was 4 lines.
+- 2-seed mean **100.44 ± 5.54** (-14.4% vs #441 bf16 baseline 117.37). Per-split improvement on every split, both seeds. Test 3-finite mean: 96.73.
+- Mechanism: 100% of steps clipped, median pre-clip grad-norm = 38 → effectively Lion-like normalized-gradient training.
+
+### PR #413 (askeladd Huber δ=1.0, post-bf16 rebase) — **SENT BACK (composition test)**
+- 2-seed mean on bf16 baseline: **100.58 ± 4.35** (-14.3% vs bf16 standalone — virtually tied with grad-clip)
+- Per-split improvement on every split, both seeds. Cross-term volume effect replicated at slice_num=64 (val_avg/mae_vol_p ~89-98 vs ~117 implied bf16). Test 3-finite mean: 95.30 (best seed).
+- Sent back: branch-was-against-bf16, but grad-clip just merged → need rebase against new baseline + 1-2 confirmation seeds. Decision pending: are Huber + grad-clip **complements** (stack to ~85-90) or **substitutes** (~100, no synergy)?
+
+### PR #537 (alphonse AdamW β2=0.95) — **CLOSED**
+- 2-seed mean **116.61 ± 4.89** (-0.65% vs bf16 baseline; mean within noise, **variance widened 5×** vs bf16's 0.85 std)
+- Mechanism analysis (alphonse): β2=0.95's responsive variance estimator strips the smoothing that produces bf16's tight ±0.85 — exposes underlying seed-dependent variance.
+- Decision: closed per student's own recommendation. Filed for round 2 with warmup pairing once frieren #427 lands a warmup arg.
+- Useful side-finding: volume-side seed std stayed tight (1.28) while surface-side blew up — variance amplification is loss-channel-specific (surf_weight=10 funnels surface gradient noise into optimizer state).
+
+### Reassignments
+- alphonse → **lr=1e-3 + bf16 + grad-clip (PR #586)** — grad-clip's normalized-gradient regime removes the amplification effect, so higher LR may compensate without destabilizing. 2-seed.
+- fern → **SwiGLU FFN replacement (PR #585)** — clean architectural axis; LLaMA/PaLM convention; ~zero-param overhead at standard 2/3 sizing. 2-seed.
+
 ## 2026-04-28 05:55 — PR #434: Gradient clipping (max_norm=1.0, 2-seed) — **SENT BACK (intent to merge)**
 - Branch: `willowpai2d5-fern/grad-clip` (post-bf16 advisor; train.py change is clean 4-line block, research/*.md staleness only)
 - Two seeds on bf16 advisor with `clip_grad_norm_(model.parameters(), max_norm=1.0)` after `loss.backward()`:

@@ -1,6 +1,8 @@
 # Baseline — TandemFoilSet (willow-pai2d-r5)
 
-**Status:** Round 1 in flight. PR #441 (bf16 standalone) merged on commit `b605b44` as the round-1 winner so far. 2-seed mean: **117.37 ± 0.85** at 19 epochs (vs ~131 implied pre-bf16 cluster, -10.4%). Multi-seed distribution being further calibrated by thorfinn's PR #428. Several round-2 stack candidates in flight (Huber #413, budget-aware cosine #427, grad-clip #434, lr=3e-4 #505).
+**Status:** Round 1 in flight. PR #441 (bf16) merged at commit `b605b44`, then PR #434 (gradient clipping max_norm=1.0) merged at commit `426b4c4` as the new round-1 baseline. 2-seed mean: **100.44 ± 5.54** at 19 epochs (vs ~117 pre-grad-clip, -14.4%). Multi-seed calibration in flight via PR #428 (thorfinn). Several round-2 stack candidates pending re-rebase: Huber #413 (rebased once, awaiting confirmation on bf16+grad-clip), budget-aware cosine #427, attention dropout #557.
+
+**Quirk note:** `max_norm=1.0` clips 100% of training steps at this regime (median pre-clip grad-norm ≈ 38). Effectively normalized-gradient training (Lion-like). Future students changing the optimizer or LR should be aware that the gradient-magnitude amplification effect is removed; lr values that would overshoot under unclipped MSE are safe here.
 
 ## Reference configuration (current `train.py` HEAD)
 
@@ -11,6 +13,8 @@ The baseline is the default Transolver in `train.py` at HEAD of `icml-appendix-w
 - **Schedule:** CosineAnnealingLR with `T_max=epochs`
 - **Batch size:** 4
 - **Loss:** MSE in normalized space, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight=10`
+- **Mixed precision:** bf16 autocast in train + eval, fp32 cast before squaring loss + before denormalization (PR #441)
+- **Gradient clipping:** `clip_grad_norm_(model.parameters(), max_norm=1.0)` after `loss.backward()` (PR #434)
 - **Training:** `epochs=50`, capped by `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Sampling:** `WeightedRandomSampler` over balanced domain weights
 
@@ -37,7 +41,8 @@ _(round 1 in flight; baseline distribution being established by thorfinn's PR #4
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#441** | **117.37 ± 0.85** (n=2) | 115.59 (3-finite-split) * | bf16 mixed precision standalone; 19 epochs reached vs ~14 fp32; CV ~0.7% — variance-tight |
+| **#434** | **100.44 ± 5.54** (n=2) | 96.73 (3-finite-split) * | bf16 + gradient clipping max_norm=1.0; -14.4% vs #441 baseline; 100% steps clipped, median pre-clip grad-norm ≈ 38 |
+| #441 | 117.37 ± 0.85 (n=2) | 115.59 (3-finite-split) * | bf16 mixed precision standalone; 19 epochs reached vs ~14 fp32; CV ~0.7% |
 
 \* `test_avg/mae_surf_p` 4-split mean is still NaN on cruise pending PR #375 (data/scoring.py fix). Per-channel test surf MAEs: single 122.76, geom_camber_rc 118.27, re_rand 105.73 (3-finite mean). Once #375 lands, can re-evaluate the saved bf16 artifacts (`model-bf16_seed0-cgitj1dc`, `model-bf16_seed1-i45ys5ih`) for canonical 4-split numbers.
 
