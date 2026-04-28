@@ -460,7 +460,7 @@ class Config:
     # Calibrate to ~15 so the cool-down completes by the actual exit,
     # with one full epoch of safety margin against OneCycleLR step-overflow.
     onecycle_total_epochs: int = 15
-    use_ema: bool = True
+    use_ema: bool = False  # was True; flipped because EMA hurts under OneCycle (PR #409 diagnostic, PR #671 confirmation)
     ema_decay: float = 0.999
     ema_warmup_steps: int = 100
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
