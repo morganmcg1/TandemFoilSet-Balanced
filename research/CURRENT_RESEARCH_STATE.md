@@ -7,16 +7,12 @@
 
 ## Current best (live)
 
-- **val_avg/mae_surf_p = 103.13** (W&B run `at52zeu5`, askeladd Huber surf loss v1, merged PR #814, 2026-04-28)
-- **test_avg/mae_surf_p = 92.99**
-- Beat-threshold for new PRs: **val_avg < 103.13**
-
-### Pending new best (awaiting 2nd rebase merge)
-
-- **val_avg/mae_surf_p = 92.63** (W&B run `tirux1y1`, tanjiro L1 surface MAE v1-rebased, PR #761)
+- **val_avg/mae_surf_p = 92.63** (W&B run `tirux1y1`, tanjiro L1 surface MAE v1-rebased, merged PR #761, 2026-04-28)
 - **test_avg/mae_surf_p = 82.83**
-- Blocked only by merge conflict (both #814 and #761 touched surface loss section); tanjiro sent back for 2nd rebase with explicit keep-L1 instruction.
-- **Once #761 merges, beat-threshold becomes: val_avg < 92.63**
+- Beat-threshold for new PRs: **val_avg < 92.63**
+
+### Prior best (for reference)
+- val_avg/mae_surf_p = 103.13 (askeladd Huber surf loss, merged PR #814) — superseded by L1
 
 ## Founding baseline (round 1 reference)
 
@@ -25,44 +21,49 @@
 - Round-1 noise band: 122–146 (single seed, 14-epoch budget)
 - PR #807 (NaN-safe masked accumulation) merged — all future runs produce finite `test_avg`
 
-## Round-1 summary (closed)
+## Progress summary
 
-| Student | PR | Outcome | val_avg |
-|---------|-----|---------|---------|
-| askeladd | #748 transolver-2x | Closed (under-trained, 4/50 epochs) | 203.16 |
-| askeladd | #807 scoring-fix | **MERGED** | — |
-| thorfinn | #762 boundary-layer-features | Closed (−13.3% WORSE: 138.43 vs 122.15) | 138.43 |
-| alphonse | #743 channel-weighted-3xp | Sent back (v2 pending) | 146.10 |
-| **tanjiro** | **#761 l1-surface-mae-loss** | **v1-rebased: val=92.63, test=82.83 — 2nd rebase in progress** | **92.63** |
-| **edward** | **#750 lr-warmup-cosine** | **v2 WINNER → rebase pending (was 135.89, now 111.12)** | **111.12** |
-| **frieren** | **#756 fourier-re-encoding** | **v2 WINNER → rebase pending (was 141.25, now 120.22)** | **120.22** |
-| nezuko | #759 ema-model-weights | **CLOSED** — EMA wrong-regime at 14-ep budget (val=124.51, +20.7% vs best) | — |
-| fern | #751 dropout-stochastic-depth | v1 mixed (val=138.81, OOD wins but in-dist regress) — **rebase + halve reg pending** | — |
+| PR | Title | Outcome | val_avg |
+|----|-------|---------|---------|
+| #807 | NaN-safe scoring fix | **MERGED** (infra) | — |
+| #814 | Huber surface loss (delta=1.0) | **MERGED** | 103.13 |
+| **#761** | **L1 surface MAE loss** | **MERGED — current best** | **92.63** |
+| #748 | Transolver 2x capacity | Closed (under-trained) | 203.16 |
+| #762 | Boundary-layer features | Closed (−13.3%) | 138.43 |
+| #759 | EMA model weights | Closed (wrong-regime) | 124.51 |
+| #743 | Channel-weighted 3xp | v2 sent back for L1 rebase | 99.21 |
+| #751 | Dropout + stoch-depth | v1 sent back (halve reg + rebase) | 138.81 |
+| #750 | LR warmup + cosine | v2 winner, rebase pending | 111.12 |
+| #756 | Fourier Re-encoding | v2 winner, rebase pending | 120.22 |
 
-## Round-2 assignments (active)
+## Active WIP PRs
 
-| Student | PR | Hypothesis | Angle | Status |
-|---------|-----|-----------|-------|--------|
-| askeladd | #814 | huber-surf-loss (delta=1.0) | Loss alignment | **MERGED** (val=103.13, test=92.99) |
-| askeladd | #847 | huber-delta-sweep (delta=0.5) | Loss alignment follow-up | WIP (informational — L1 at 92.63 is better than Huber 1.0 at 103.13; delta=0.5 result still interesting) |
-| thorfinn | #815 | film-re-conditioning (per-block log(Re) FiLM) | Architecture: regime adaptation | WIP |
-| nezuko | #858 | focal-surface-loss (gamma=1.0) | Loss: concentrate gradient on high-error nodes | WIP (updated spec: use abs_err not F.huber_loss as base) |
+| Student | PR | Hypothesis | Status |
+|---------|-----|-----------|--------|
+| askeladd | #847 | Huber delta=0.5 sweep | WIP (informational vs L1 win — delta→0 confirms L1 ordering) |
+| thorfinn | #815 | FiLM conditioning per-block on log(Re) | WIP |
+| nezuko | #858 | Focal surface loss gamma=1.0 (L1 base) | WIP |
+| fern | #751 | Dropout 0.05 + drop_path 0.05 (v2, rebase pending) | WIP |
+| edward | #750 | LR warmup + cosine v2 (rebase pending) | WIP |
+| frieren | #756 | Fourier Re-encoding v2 (rebase pending) | WIP |
+| alphonse | #743 | Channel-weighted L1 v3 (rebase onto post-#761) | WIP |
+| tanjiro | #869 | surf_weight sweep (3.0 and 5.0) | WIP |
 
 ## Cross-cutting findings
 
-- **Timeout is the binding constraint (~14 epochs at 30 min).** All assignments now include `--epochs 14` so cosine annealing completes rather than truncating mid-curve.
-- **NaN test poisoning FIXED** via PR #807 (torch.where pattern). All future runs produce finite `test_avg/mae_surf_p`.
-- **Round-1 noise band: 122–146.** Beat-threshold: `val_avg/mae_surf_p < 122.15`. Single-seed <5% gains are inconclusive; flag for multi-seed confirmation.
-- **Boundary-layer features falsified.** log(Re·|saf|) is redundant with existing dims 13+2:3; volume-node saf mismatch hurts in-dist. Surface-gated BL variants deferred to round 3.
-- **L1 > Huber(1.0) on surface pressure.** Tanjiro PR #761 v1-rebased: pure L1 (val=92.63) beats Huber(delta=1.0) (val=103.13) by 10.2%. Heavy-tailed pressure residuals respond better to always-linear gradient than Huber's smooth-near-zero quadratic region. Huber delta=0.5 result (#847 WIP) will inform optimal delta, but L1 is currently the clear winner.
+- **Timeout is the binding constraint (~14 epochs at 30 min).** All assignments include `--epochs 14` so cosine annealing completes.
+- **NaN test poisoning FIXED** via PR #807. All future runs produce finite `test_avg/mae_surf_p`.
+- **L1 > Huber(1.0) > MSE on surface pressure.** PR #761 confirms pure L1 (val=92.63) beats Huber(delta=1.0) (103.13) by 10.2%. Heavy-tailed pressure residuals respond better to always-linear gradient. Huber delta=0.5 (#847 WIP) will complete the ordering.
+- **Channel weighting stacks with Huber** (alphonse #743 v2: −3.8% on top of Huber). Pending whether it also stacks with L1 (v3 in progress).
+- **Surface dominates volume ~7:1 at L1 convergence** (tanjiro diagnosis). surf_weight=3.0 (#869) tests whether rebalancing frees volume capacity.
+- **Boundary-layer features falsified.** log(Re·|saf|) is redundant; volume-node saf mismatch hurts in-dist.
 
-## Potential round-2+ research directions
+## Potential next research directions
 
-1. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). Unassigned.
-2. **Focal-surface-loss** — top-N%-error-node up-weighting (concentrates gradient on stagnation/suction peak). **Assigned → nezuko PR #858** (updated: uses L1 base not Huber).
+1. **Stack L1 + FiLM** — if thorfinn #815 beats baseline, combining with L1 is the natural round-3 stack (orthogonal mechanisms: loss-shape vs hidden-state regime modulation). High EV.
+2. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). Unassigned.
 3. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
-4. **Stack round-2 winners** — L1 + FiLM if thorfinn #815 wins; both mechanisms orthogonal (loss-shape vs hidden-state modulation). High EV stack candidate.
-5. **surf_weight=3.0** — tanjiro's own diagnosis: surface gradient dominates volume ~7:1 at convergence with L1; lowering from 10 to 3 should free volume capacity. **Pre-authorized follow-up for tanjiro after #761 merges.**
-6. **Per-channel L1 on p only, MSE on Ux/Uy** — pressure-tail alignment without changing dynamics for better-behaved velocity channels. Tanjiro follow-up #2.
-7. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4` (matching 30-min ceiling for larger model). Deferred from askeladd #748.
-8. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored; reportedly +17% on PDE benchmarks. High EV, higher complexity.
+4. **Per-channel L1 on p only, MSE on Ux/Uy** — tanjiro follow-up #2; assign after #869 result.
+5. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4`. Deferred from askeladd #748.
+6. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored. High EV, higher complexity.
+7. **Compound: L1 + channel weighting + surf_weight rebalancing** — if all three win independently, round-3 stack.

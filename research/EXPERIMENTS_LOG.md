@@ -1,6 +1,6 @@
 # SENPAI Research Results — willow-pai2e-r3
 
-## 2026-04-28 22:10 — PR #761 v1-rebased (PENDING MERGE — conflict on 2nd rebase): L1 surface MAE loss
+## 2026-04-28 22:20 — PR #761 (MERGED): L1 surface MAE loss
 - **Branch:** `willowpai2e3-tanjiro/l1-surface-mae-loss`
 - **Hypothesis:** Replace surface MSE (then Huber) with pure L1 (MAE) to align training objective directly with `mae_surf_p` metric and exploit pressure's heavy-tailed residual distribution. Predicted −5 to −12% gain.
 - **Run (v1-rebased):** W&B `tirux1y1`, **14/14 epochs (clean finish, cosine → 0)**, best ckpt @ epoch 14, peak 42.1 GB.
@@ -19,9 +19,32 @@
 - L1 beats Huber(delta=1.0) by 10%: pure linear gradient on all surface residuals outperforms the smooth-near-zero Huber transition for this dataset's heavy-tailed pressure distribution.
 - V1-rebased vs v1-timeout: −15.4% val — bulk of gain is from completing the cosine LR schedule (v1 was at ~95% of peak LR at timeout; v1-rebased reached LR=0 at epoch 14). Loss-shape gain is real but proper schedule alignment amplified it.
 - `val_re_rand=87.33`, `test_re_rand=82.29` — exceptional regime-generalization numbers.
-- Surface loss dominates volume ~7:1 at convergence (tanjiro's own diagnosis). **Sent back for 2nd rebase** against current advisor (post-#814 Huber merge). Conflict resolution: keep L1 block, discard Huber block from #814. No re-run required if merge is clean.
-- **Pending new beat-threshold (post-merge): val_avg < 92.63**
-- **Queued round-3 follow-ups:** (1) `surf_weight=3.0` rebalancing; (2) per-channel L1 on p only, MSE on Ux/Uy.
+- Surface loss dominates volume ~7:1 at convergence (tanjiro's own diagnosis). 2nd rebase resolved cleanly — single block swap, no logic change. Merged 2026-04-28.
+- **New beat-threshold: val_avg < 92.63**
+- **Round-3 follow-up assigned: #869** (`surf_weight=3.0` rebalancing sweep; tanjiro).
+
+---
+
+## 2026-04-28 22:25 — PR #743 v2: Per-channel surface loss [1.0, 0.5, 2.0] on Huber base
+- **Branch:** `willowpai2e3-alphonse/channel-weighted-surface-loss`
+- **Hypothesis:** Apply per-channel weights `[Ux=1.0, Uy=0.5, p=2.0]` to the surface loss to align training emphasis with the `mae_surf_p` metric. v1 was blocked by NaN poisoning; v2 adds the Huber base (matching PR #814) with normalized channel weighting.
+- **Run:** W&B `2tj1e31r`, **14/14 epochs (clean)**, best ckpt @ epoch 14, peak 42.1 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 115.33 | 98.01 |
+| `*_geom_camber_rc` | 109.49 | 99.81 |
+| `*_geom_camber_cruise` | **77.86** | **66.60** |
+| `*_re_rand` | **94.18** | **89.40** |
+| **avg** | **99.21** | **88.45** |
+
+### Decision: SEND BACK FOR REBASE (onto post-L1-merge advisor)
+- **−3.80% val / −4.88% test vs Huber baseline (103.13 / 92.99)** — genuine compound gain over Huber.
+- BUT: new baseline is tanjiro L1 (92.63 / 82.83). Alphonse's 99.21 is +7.1% WORSE than L1 alone.
+- Channel weighting on top of Huber is confirmed to stack constructively. Natural v3 question: does it also compound on top of L1?
+- Prediction: if same -3.8% stacks on L1 → 92.63 × 0.962 ≈ 89.1 val — would be a meaningful improvement.
+- **Sent back** with instructions to: rebase onto post-#761 advisor; replace `F.huber_loss(reduction='none')` with per-element `abs_err * surf_chan_w` in both training loop and evaluate_split.
+- New beat-threshold for v3: **val_avg < 92.63**.
 
 ---
 
