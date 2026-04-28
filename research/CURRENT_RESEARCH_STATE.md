@@ -1,15 +1,15 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 04:05
+- **Date:** 2026-04-28 04:25
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
 
 ## Current research focus
 
-**Current best:** PR #289 (askeladd, Huber β=1.0 rebased onto post-#401 stack), merged commit 906a2c1. `val_avg/mae_surf_p = 63.33` (EMA-evaluated), `test_avg/mae_surf_p = 55.45`. **-5.31% over PR #401** which itself was -37.1% over #308. Cumulative **-53% from the published-baseline-equivalent**.
+**Current best:** PR #368 (edward, Fourier positional encoding + Huber + EMA + clip + bf16 + compile), merged commit 430cd62. `val_avg/mae_surf_p = 62.94` (EMA-evaluated), `test_avg/mae_surf_p = 54.73`. **-0.62% over PR #289 on val, -1.30% on test_avg.** Cumulative **-50.3% from PR #287's first baseline**, **-53% from the published-baseline-equivalent**.
 
-**Compounding evidence:** Huber on pre-#308 base gave -9.9% vs MSE; rebased onto post-#401 (compile + bf16 + EMA + clip), Huber gives -5.31%. Difference is the part of Huber's gain that EMA already absorbs (both dampen heavy-tail variance, partially overlap). Per-split mechanism preserved: val_single_in_dist (raceCar high-Re, heaviest pressure tails) gains most at -9.0%.
+**Compounding evidence accumulating across stacked levers**: Fourier (PR #368) + Huber (PR #289) + EMA + clip (PR #381) + compile (PR #401) + bf16 (PR #372) — six orthogonal levers all positive without observable interference. The Fourier contribution is dominantly **convergence acceleration in the warm-LR phase** (epoch 5: -14.4% vs #289 same-epoch); cosine decay narrows the gap by epoch 30. Test side stronger than val (-1.30% vs -0.62%), with gains concentrated on the hardest splits (single_in_dist -3.3%, geom_camber_rc -3.1%) where pressure tails are heaviest.
 
 **Open infrastructure issue:** 2 of 4 launches at the rebased compile + EMA + clip + bf16 stack crash with CUDAGraph private-pool blowup at variable mesh sizes. Alphonse's depth experiment (#435) hit the same OOM at depth=8, requiring `mode="default"` workaround (~10-15% throughput cost). PR #466 (alphonse) bundles the fix: `cudagraph_skip_dynamic_graphs=True` flag + cosine T_max retune to actually-reachable epoch count.
 
@@ -32,7 +32,8 @@
 | askeladd | #467 | huber-beta-sweep | Loss formulation (β ∈ {0.5, 1.0, 2.0} sweep) | β=0.5 predicted -1% to -4% | WIP |
 | edward   | #300 | wider-model | Width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 |
 | edward   | #358 | fix-scoring-nan-mask | Maintenance | n/a | **MERGED** 010235e |
-| edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | **SENT BACK AGAIN** — rebase to post-#401 + re-run; equal-epoch shows -11% compounding signal but lost 3 epochs to GPU contention |
+| edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | **MERGED** 430cd62 → val_avg=**62.94** (NEW BEST, -0.62% val / -1.30% test) |
+| edward   | #512 | fourier-nfreqs-sweep | Input (n_freqs ∈ {4, 6, 12} sweep on top of #368) | -1% to -3% | WIP |
 | fern     | #304 | deeper-model-droppath | Depth (5→8 + DropPath 0.1) | -3% to -8% | **CLOSED** — 210 s/epoch, 9/50 epochs, equal-epoch worse |
 | fern     | #388 | arcsinh-pressure | Heavy-tail (arcsinh on p target) | -5% to -15% | **CLOSED** — +15.1% regression; sinh decode amplifies tail errors |
 | fern     | #422 | pchannel-p-w05 | Loss weighting (per-channel w_p=0.5 to free velocity gradient) | -2% to -7% | **CLOSED** — same-epoch -1.85% (within noise); velocity -7 to -10% (mechanism supported) |
