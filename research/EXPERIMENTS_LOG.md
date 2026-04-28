@@ -13,6 +13,111 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 04:15 — PR #335 (iter 3): warmup+cosine_t_max=15 on Huber baseline (multi-seed) ❌ CLOSED
+
+- Branch: `willowpai2d2-tanjiro/warmup-cosine-1e3` (deleted on close).
+- Iteration: send-back asked for rebase + multi-seed at variant (b)
+  `lr=1e-3, cosine_t_max=15` on top of merged Huber + slice-128 baseline.
+- Branch was correctly rebased onto current advisor head (20533b1) —
+  picks up Huber (#330), slice-128 (#328), and scoring fix (#367).
+  Diff is exactly the three intended changes (cosine_t_max field,
+  SENPAI_SEED seeding, LinearLR + SequentialLR block).
+
+### Results — 3-seed multi-seed at lr=1e-3, cosine_t_max=15
+
+| seed | val_avg/mae_surf_p | val_re_rand | best_epoch | run id |
+|-:|-:|-:|-:|-|
+| 0 | 124.45 | 115.83 | 10 | r9uyjniz |
+| 1 | 119.61 ⭐ | 108.67 | 11 | pc2s5lum |
+| 2 | 123.08 | 114.03 | 11 | tlzzhtnl |
+| **mean** | **122.38** (range 4.84) | **112.84** | – | – |
+
+vs current Huber baseline 115.61: **+5.85 % on mean**, all 3 seeds
+above. val_re_rand also +4.6 % above baseline (107.89), so no
+stacking on the high-Re-tail signal Huber improved most.
+
+### Conclusion
+
+**Closed.** Per the explicit decision rule, multi-seed mean > 115
+falls in "Inside noise / above → close." Schedule axis does not
+stack on Huber + slice-128.
+
+### Critical methodology contribution: schedule × loss interaction
+
+| Setting | Schedule axis result | vs same-arch baseline |
+|-|-:|-:|
+| slice-64 + MSE (round-2 iter-2) | 113.96 | -26.2 % vs MSE 154.57 |
+| slice-128 + Huber (round-3 iter-3, this) | 122.38 mean | +5.85 % vs Huber 115.61 |
+
+Same recipe (`lr=1e-3, cosine_t_max=15, warmup=5`), different baseline,
+opposite signs. Two plausible mechanisms (per tanjiro's own analysis):
+
+1. **Huber's effective implicit gradient-shaping covers what cosine
+   decay was doing on MSE.** Huber β=1 caps gradient magnitude past
+   |residual|=1. On MSE, schedule had to do this via late-epoch LR
+   shrinkage; on Huber, the loss formulation does it implicitly.
+2. **Peak 1e-3 may overshoot at slice-128** (wider model wants
+   gentler LR). Per-split signal supports this: cruise improves
+   (-8.1 %) but in-dist regresses (+12.8 %) — same per-distribution-
+   shift pattern alphonse saw at width-160.
+
+### Third instance of "interior optima are architecture-dependent"
+
+After nezuko #332 (surf_weight=25 didn't transfer slice-64→slice-128)
+and alphonse #311 (width-160 hurts in-dist while helping cruise on
+slice-128+Huber), this is the **third independent confirmation** of
+the cross-cutting methodology finding: **a hyperparameter optimum
+found on one architecture / loss combination does not transfer to
+another without re-tuning**. Now load-bearing for round-3 stacking
+decisions.
+
+### Carry-forward contributions
+
+1. **Schedule infrastructure stays in `train.py`**: `cosine_t_max`
+   CLI flag + `LinearLR + SequentialLR` warmup-cosine block + the
+   `SENPAI_SEED` env-var seeding (now adopted by 7+ PRs as the de
+   facto multi-seed convention).
+2. **Per-split-shift signal at peak LR=1e-3 on slice-128** corroborates
+   alphonse's #311 closed observation. Two independent PRs showing
+   the same per-distribution-shift pattern strengthens
+   per-distribution architecture specialization as a round-3
+   candidate.
+3. **Seed-1's `test_geom_camber_cruise/mae_surf_p = NaN` despite
+   #367**. Edge case: non-finite *prediction* (Inf) propagating
+   through `nan_to_num(posinf=0)` followed by the masked sum
+   reduction still produces NaN somehow. Worth investigating in a
+   follow-up bug-fix PR if it surfaces on other students' runs.
+   Logged for awareness.
+
+### Reassignment
+
+Tanjiro → PR #517 (round-2 axis: stochastic depth / DropPath).
+Detailed below.
+
+## 2026-04-28 04:15 — PR #517 (NEW, tanjiro round 2): stochastic depth (DropPath)
+
+- Reassigning tanjiro after closing #335.
+- Hypothesis: apply DropPath to TransolverBlock residual contributions.
+  At training time, with probability `drop_prob`, the block's
+  attention or MLP residual is replaced with the identity (block
+  contribution zeroed); surviving residuals scaled by 1/(1-drop_prob).
+  Inference and validation use full depth. Implicit ensemble of
+  shallower networks during training. Modern transformer
+  regularization default (DeiT, Swin).
+- Sweep: `drop_path ∈ {0.0 baseline, 0.05, 0.1, 0.2}` with
+  linear-by-depth ramp (standard timm/DeiT recipe). Multi-seed at
+  the winner.
+- Implementation: ~15 LOC `DropPath` class + insert in
+  `TransolverBlock.forward` + linear-by-depth scaling in
+  `Transolver.__init__`. No new packages.
+- Predicted gain: 2–5 % over 115.61 baseline at the optimal
+  drop_prob. Slight throughput unlock during training (skipped
+  blocks → less compute per step).
+- Decision rule: ≤105 single-seed (or ≤110 multi-seed mean) merges
+  as metric+infra win; at-baseline-with-throughput-unlock merges
+  as infrastructure (same precedent as bf16 + RMSNorm).
+- Status: assigned, draft, status:wip.
+
 ## 2026-04-28 03:30 — PR #311 (iter 3): width-160 on slice-128 + Huber (multi-seed) ❌ CLOSED
 
 - Branch: `willowpai2d2-alphonse/width-192` (deleted on close).

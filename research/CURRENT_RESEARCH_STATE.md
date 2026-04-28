@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- 2026-04-28 03:30 — round 1 settled on `icml-appendix-willow-pai2d-r2`,
-  round 2 in flight (7 axes), scoring bug fix landed, all hands on deck
+- 2026-04-28 04:15 — round 1 settled on `icml-appendix-willow-pai2d-r2`,
+  round 2 in full swing (8 axes), scoring bug fix landed, all hands on deck
 - **Baseline updated:** PR #330 (frieren, Huber β=1) merged on top of
   PR #328. Current best `val_avg/mae_surf_p = 115.61` (W&B run
   `uip4q05z`, best epoch 11/50). −13.4 % over the prior baseline,
@@ -58,45 +58,44 @@
 | 415 | frieren   | round 2: asinh on pressure target | NEW assignment | n/a (assigned this cycle) |
 | 332 | nezuko    | surf_weight 10 → 25 (sweep)| **closed** (3-seed mean 151.94 on slice-128 = +13.8 %, ~11 SE outside noise; vol_p also up; val curve oscillation) | superseded |
 | 472 | nezuko    | round 2: Lion optimizer    | NEW assignment (status:wip) | n/a |
-| 335 | tanjiro   | warmup + cos, peak 1e-3    | sent back → rebase + on-baseline re-run | sweep done on slice-64+MSE: best **(b) 113.96** at lr=1e-3, T_max=15 (a tied at 115.15, c@135.24 likely seed-unlucky); needs on-baseline confirmation |
+| 335 | tanjiro   | warmup + cos, peak 1e-3    | **closed** (3-seed mean 122.38 on slice-128+Huber = +5.85 % vs 115.61 baseline; schedule axis doesn't stack with Huber's implicit gradient shaping) | superseded |
+| 517 | tanjiro   | round 2: stochastic depth (DropPath) | NEW assignment (status:wip) | n/a |
 | 337 | thorfinn  | BS 4→8, lr 7e-4            | **closed** (hardware-blocked at BS≥8 on slice-128; BS=6 3-seed mean 162.63 is 41 % worse than 115.61) | superseded |
 | 457 | thorfinn  | round 2: EMA weight averaging | NEW assignment (status:wip) | n/a |
 | 367 | fern      | bug fix: cruise-NaN scoring| **MERGED ★** | rebased + verified on Huber baseline: test_avg: NaN → 117.59, cruise_p: NaN → 96.92 |
 | 452 | fern      | round 2: push slice_num to 192/256 | **closed** (slice-192 single-seed = 133.30, +15.3 % vs 115.61 baseline; per-split mechanism-inversion confirms slice-128 is the ceiling) | superseded |
 | 478 | fern      | round 2: curriculum by per-sample y-std | NEW assignment (status:wip) | n/a |
 
-PRs surfaced for advisor review this cycle: **#311**. Action:
-**#311 closed** — width-160 multi-seed mean 126.76 (3 seeds:
-123.38 / 127.84 / 129.06; σ=2.99) is +9.6 % above 115.61 baseline,
-all 3 seeds above. Per-split signal interesting:
-`val_geom_camber_cruise` improves (−6.1 %, the largest meshes at
-~210K nodes) but `val_single_in_dist` (+17.3 %) and
-`val_geom_camber_rc` (+19.9 %) both regress. Logged as the
-cleanest piece of evidence so far that **per-distribution
-architecture specialization is a genuine round-3 axis**: capacity
-scaling has split-specific returns. Width axis exhausted at 30-min
-cap.
-**Reassigned alphonse to round-2 axis #485 (RMSNorm)** — replace
-`nn.LayerNorm` with `RMSNorm` throughout the model. The only
-architecture-axis lever that's *cheaper* per step than baseline
-(no mean-centering, ~5–10 % faster). Modern transformer default
-(LLaMA, Gemma, Falcon, Mistral). Plays to alphonse's
-precision-engineering strength. Decision rule allows infrastructure
-merge if at-baseline-with-throughput-unlock.
+PRs surfaced for advisor review this cycle: **#335**. Action:
+**#335 closed** — schedule axis doesn't stack on Huber+slice-128.
+3-seed mean 122.38 (seeds 124.45, 119.61, 123.08) vs 115.61
+baseline = +5.85 % on mean, all 3 above. Same per-distribution-shift
+pattern as alphonse #311 (cruise improves, in-dist regresses) —
+**third independent confirmation of "interior optima are
+architecture-dependent"** (after nezuko #332 + alphonse #311).
+Tanjiro's schedule infrastructure (`cosine_t_max` flag + warmup +
+SequentialLR + `SENPAI_SEED` seeding) stays in train.py for round-2
+reuse.
+**Reassigned tanjiro to round-2 axis #517 (stochastic depth /
+DropPath)** — drop entire TransolverBlock residual contributions
+during training with prob `drop_path` (linear-by-depth scaling per
+DeiT/Swin recipe). Sweep `drop_path ∈ {0.0, 0.05, 0.1, 0.2}` with
+multi-seed at the winner. Truly orthogonal regularization-axis
+lever (no other in-flight axis touches block-level dropout).
 
-Cycle 15 actions (recap): #452 closed (slice-192 above noise,
-mechanism inversion on val_geom_camber_rc), #478 assigned (fern
-curriculum by y-std).
+Cycle 16 actions (recap): #311 closed (width axis exhausted),
+#485 assigned (alphonse RMSNorm).
 
-Earlier cycle actions:
 #328 + #330 + #367 merged (slice-128 + Huber β=1 + scoring fix;
-current val baseline 115.61, test baseline 117.59); #335 + #399
-sent back; #311 + #325 + #326 + #332 + #337 + #452 closed
-(width, depth, FFN, surf_weight, BS+LR, slice-192 axes all
-exhausted under 30-min cap); **seven round-2 axes currently in
+current val baseline 115.61, test baseline 117.59); #399 sent back;
+**seven closed axes** (#311 width, #325 depth, #326 FFN, #332
+surf_weight, #335 schedule, #337 BS+LR, #452 slice-192 — all axes
+that fight the 30-min cap or that overlap with merged Huber's
+implicit gradient shaping); **eight round-2 axes currently in
 flight**: #399 askeladd bf16 [iter 2 rebasing], #415 frieren
-asinh-on-pressure, #429 edward p_weight, #457 thorfinn EMA,
-#472 nezuko Lion, #478 fern curriculum, #485 alphonse RMSNorm.
+asinh-on-pressure, #429 edward p_weight, #457 thorfinn EMA, #472
+nezuko Lion, #478 fern curriculum, #485 alphonse RMSNorm, #517
+tanjiro DropPath. **All eight students busy on actionable WIP work.**
 
 ## What we learned this cycle (and last)
 
@@ -204,6 +203,11 @@ asinh-on-pressure, #429 edward p_weight, #457 thorfinn EMA,
   replacement for `nn.LayerNorm`. Same param count, ~5–10 % faster
   per step (no mean-centering). The only architecture-axis lever
   that's cheaper than baseline. Modern transformer default.
+- **Stochastic depth (DropPath).** ASSIGNED as PR #517 to tanjiro:
+  drop entire `TransolverBlock` residual contributions during
+  training with prob `drop_path` (linear-by-depth scaling per
+  DeiT/Swin recipe). Sweep {0.0, 0.05, 0.1, 0.2}. Truly orthogonal
+  regularization-axis lever; modern transformer default.
 - **Per-distribution architecture specialization (round-3
   candidate).** Surfaced from alphonse's closed #311 iter-3
   per-split data: width-160 helps `val_geom_camber_cruise` (−6.1 %)
