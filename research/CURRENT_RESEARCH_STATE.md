@@ -11,6 +11,13 @@
 - **test_avg/mae_surf_p = 92.99**
 - Beat-threshold for new PRs: **val_avg < 103.13**
 
+### Pending new best (awaiting 2nd rebase merge)
+
+- **val_avg/mae_surf_p = 92.63** (W&B run `tirux1y1`, tanjiro L1 surface MAE v1-rebased, PR #761)
+- **test_avg/mae_surf_p = 82.83**
+- Blocked only by merge conflict (both #814 and #761 touched surface loss section); tanjiro sent back for 2nd rebase with explicit keep-L1 instruction.
+- **Once #761 merges, beat-threshold becomes: val_avg < 92.63**
+
 ## Founding baseline (round 1 reference)
 
 - val_avg/mae_surf_p = 122.15 (W&B run `8cvp4x6r`, unmodified Transolver)
@@ -26,7 +33,7 @@
 | askeladd | #807 scoring-fix | **MERGED** | — |
 | thorfinn | #762 boundary-layer-features | Closed (−13.3% WORSE: 138.43 vs 122.15) | 138.43 |
 | alphonse | #743 channel-weighted-3xp | Sent back (v2 pending) | 146.10 |
-| **tanjiro** | **#761 l1-surface-mae-loss** | **v1 WINNER → rebase pending (val_avg=109.53, test_avg=98.44)** | **109.53** |
+| **tanjiro** | **#761 l1-surface-mae-loss** | **v1-rebased: val=92.63, test=82.83 — 2nd rebase in progress** | **92.63** |
 | **edward** | **#750 lr-warmup-cosine** | **v2 WINNER → rebase pending (was 135.89, now 111.12)** | **111.12** |
 | **frieren** | **#756 fourier-re-encoding** | **v2 WINNER → rebase pending (was 141.25, now 120.22)** | **120.22** |
 | nezuko | #759 ema-model-weights | **CLOSED** — EMA wrong-regime at 14-ep budget (val=124.51, +20.7% vs best) | — |
@@ -37,9 +44,9 @@
 | Student | PR | Hypothesis | Angle | Status |
 |---------|-----|-----------|-------|--------|
 | askeladd | #814 | huber-surf-loss (delta=1.0) | Loss alignment | **MERGED** (val=103.13, test=92.99) |
-| askeladd | #847 | huber-delta-sweep (delta=0.5) | Loss alignment follow-up | WIP |
+| askeladd | #847 | huber-delta-sweep (delta=0.5) | Loss alignment follow-up | WIP (informational — L1 at 92.63 is better than Huber 1.0 at 103.13; delta=0.5 result still interesting) |
 | thorfinn | #815 | film-re-conditioning (per-block log(Re) FiLM) | Architecture: regime adaptation | WIP |
-| nezuko | #858 | focal-surface-loss (gamma=1.0) | Loss: concentrate gradient on high-error nodes | WIP |
+| nezuko | #858 | focal-surface-loss (gamma=1.0) | Loss: concentrate gradient on high-error nodes | WIP (updated spec: use abs_err not F.huber_loss as base) |
 
 ## Cross-cutting findings
 
@@ -47,13 +54,15 @@
 - **NaN test poisoning FIXED** via PR #807 (torch.where pattern). All future runs produce finite `test_avg/mae_surf_p`.
 - **Round-1 noise band: 122–146.** Beat-threshold: `val_avg/mae_surf_p < 122.15`. Single-seed <5% gains are inconclusive; flag for multi-seed confirmation.
 - **Boundary-layer features falsified.** log(Re·|saf|) is redundant with existing dims 13+2:3; volume-node saf mismatch hurts in-dist. Surface-gated BL variants deferred to round 3.
+- **L1 > Huber(1.0) on surface pressure.** Tanjiro PR #761 v1-rebased: pure L1 (val=92.63) beats Huber(delta=1.0) (val=103.13) by 10.2%. Heavy-tailed pressure residuals respond better to always-linear gradient than Huber's smooth-near-zero quadratic region. Huber delta=0.5 result (#847 WIP) will inform optimal delta, but L1 is currently the clear winner.
 
 ## Potential round-2+ research directions
 
 1. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). Unassigned.
-2. **Focal-surface-loss** — top-20%-error-node up-weighting (concentrates gradient on stagnation/suction peak). **Assigned → nezuko PR #858**.
+2. **Focal-surface-loss** — top-N%-error-node up-weighting (concentrates gradient on stagnation/suction peak). **Assigned → nezuko PR #858** (updated: uses L1 base not Huber).
 3. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
-4. **Stack round-2 winners** — if askeladd Huber + thorfinn FiLM both win, combine them in round 3 (orthogonal mechanisms).
-5. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4` (matching 30-min ceiling for larger model). Deferred from askeladd #748.
-6. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored; reportedly +17% on PDE benchmarks. High EV, higher complexity.
-7. **Mixed-precision (bf16/fp16)** — opens headroom for capacity scaling. More relevant for charlie branch; applicable here if VRAM becomes constraint.
+4. **Stack round-2 winners** — L1 + FiLM if thorfinn #815 wins; both mechanisms orthogonal (loss-shape vs hidden-state modulation). High EV stack candidate.
+5. **surf_weight=3.0** — tanjiro's own diagnosis: surface gradient dominates volume ~7:1 at convergence with L1; lowering from 10 to 3 should free volume capacity. **Pre-authorized follow-up for tanjiro after #761 merges.**
+6. **Per-channel L1 on p only, MSE on Ux/Uy** — pressure-tail alignment without changing dynamics for better-behaved velocity channels. Tanjiro follow-up #2.
+7. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4` (matching 30-min ceiling for larger model). Deferred from askeladd #748.
+8. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored; reportedly +17% on PDE benchmarks. High EV, higher complexity.

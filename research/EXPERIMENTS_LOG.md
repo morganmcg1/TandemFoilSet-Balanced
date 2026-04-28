@@ -1,5 +1,30 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-28 22:10 — PR #761 v1-rebased (PENDING MERGE — conflict on 2nd rebase): L1 surface MAE loss
+- **Branch:** `willowpai2e3-tanjiro/l1-surface-mae-loss`
+- **Hypothesis:** Replace surface MSE (then Huber) with pure L1 (MAE) to align training objective directly with `mae_surf_p` metric and exploit pressure's heavy-tailed residual distribution. Predicted −5 to −12% gain.
+- **Run (v1-rebased):** W&B `tirux1y1`, **14/14 epochs (clean finish, cosine → 0)**, best ckpt @ epoch 14, peak 42.1 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 109.65 | 96.33 |
+| `*_geom_camber_rc` | 101.17 | 90.80 |
+| `*_geom_camber_cruise` | **72.37** | **61.90** |
+| `*_re_rand` | **87.33** | **82.29** |
+| **avg** | **92.63** | **82.83** |
+
+### Decision: MERGE PENDING — 2nd rebase required (conflict with #814)
+- **−10.2% val vs Huber-merged baseline (103.13 → 92.63)** — new branch best.
+- **−10.9% test (92.99 → 82.83)** — new best test metric.
+- L1 beats Huber(delta=1.0) by 10%: pure linear gradient on all surface residuals outperforms the smooth-near-zero Huber transition for this dataset's heavy-tailed pressure distribution.
+- V1-rebased vs v1-timeout: −15.4% val — bulk of gain is from completing the cosine LR schedule (v1 was at ~95% of peak LR at timeout; v1-rebased reached LR=0 at epoch 14). Loss-shape gain is real but proper schedule alignment amplified it.
+- `val_re_rand=87.33`, `test_re_rand=82.29` — exceptional regime-generalization numbers.
+- Surface loss dominates volume ~7:1 at convergence (tanjiro's own diagnosis). **Sent back for 2nd rebase** against current advisor (post-#814 Huber merge). Conflict resolution: keep L1 block, discard Huber block from #814. No re-run required if merge is clean.
+- **Pending new beat-threshold (post-merge): val_avg < 92.63**
+- **Queued round-3 follow-ups:** (1) `surf_weight=3.0` rebalancing; (2) per-channel L1 on p only, MSE on Ux/Uy.
+
+---
+
 ## 2026-04-28 21:28 — PR #814 (MERGED): Huber surface loss (delta=1.0)
 - **Branch:** `willowpai2e3-askeladd/huber-surf-loss`
 - **Hypothesis:** Replace MSE surface loss with Huber(delta=1.0) to align training objective with MAE metric and gain robustness against heavy-tailed pressure errors. Predicted -5 to -10%.
