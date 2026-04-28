@@ -218,7 +218,62 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def _apply_asinh_p(y: torch.Tensor, scale: float) -> torch.Tensor:
+    """Apply ``asinh(p/scale)`` to the pressure channel (index 2). No-op if ``scale<=0``."""
+    if scale <= 0:
+        return y
+    y = y.clone()
+    y[..., 2] = torch.asinh(y[..., 2] / scale)
+    return y
+
+
+def _invert_asinh_p(pred_orig: torch.Tensor, scale: float) -> torch.Tensor:
+    """Invert the asinh transform on pred channel 2: ``scale * sinh(x)``.
+
+    Clamps the input to ``[-30, 30]`` before sinh — fp32 sinh overflows around
+    ``|x|=89``, but well-trained predictions should never come close. Clamping
+    is just a NaN guard for early epochs.
+    """
+    if scale <= 0:
+        return pred_orig
+    pred_orig = pred_orig.clone()
+    p = torch.nan_to_num(pred_orig[..., 2], nan=0.0, posinf=30.0, neginf=-30.0)
+    pred_orig[..., 2] = scale * torch.sinh(p.clamp(-30.0, 30.0))
+    return pred_orig
+
+
+def _sanitize_pred_norm(pred: torch.Tensor) -> torch.Tensor:
+    """Replace non-finite predictions with bounded finite values.
+
+    Predictions live in normalized space where targets are O(1); anything
+    outside ``[-100, 100]`` is already pathological. Without this, rare
+    fp32 overflows or NaN at inference (e.g. test split with mesh patterns
+    not seen at train time) propagate through ``0 * inf = nan`` masking and
+    poison the whole-split loss / MAE.
+    """
+    return torch.nan_to_num(pred, nan=0.0, posinf=100.0, neginf=-100.0)
+
+
+def compute_asinh_p_stats(train_ds, scale: float) -> tuple[float, float]:
+    """Mean and std of ``asinh(p/scale)`` over all training nodes (float64 accum)."""
+    loader = DataLoader(
+        train_ds, batch_size=1, shuffle=False,
+        collate_fn=lambda b: b[0], num_workers=4,
+    )
+    total_sum = 0.0
+    total_sumsq = 0.0
+    n = 0
+    for _x, y, _is in tqdm(loader, desc=f"asinh(p/{scale}) stats"):
+        p_t = torch.asinh(y[:, 2].to(torch.float64) / scale)
+        total_sum += p_t.sum().item()
+        total_sumsq += (p_t ** 2).sum().item()
+        n += p_t.numel()
+    mean = total_sum / max(n, 1)
+    var = max(total_sumsq / max(n, 1) - mean ** 2, 1e-12)
+    return float(mean), float(var ** 0.5)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, asinh_p_scale: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -238,8 +293,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            y_norm = (_apply_asinh_p(y, asinh_p_scale) - stats["y_mean"]) / stats["y_std"]
+            pred = _sanitize_pred_norm(model({"x": x_norm})["preds"])
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -255,6 +310,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = _invert_asinh_p(pred_orig, asinh_p_scale)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -387,6 +443,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    asinh_p_scale: float = 0.0  # if >0, apply asinh(p/scale) to pressure channel before normalization
 
 
 cfg = sp.parse(Config)
@@ -397,6 +454,16 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
+
+if cfg.asinh_p_scale > 0:
+    p_mean_a, p_std_a = compute_asinh_p_stats(train_ds, cfg.asinh_p_scale)
+    print(
+        f"asinh(p/{cfg.asinh_p_scale}) stats — mean={p_mean_a:.6f} std={p_std_a:.6f} "
+        f"(replacing y_mean[2]={stats['y_mean'][2].item():.4f}, y_std[2]={stats['y_std'][2].item():.4f})"
+    )
+    stats["y_mean"][2] = p_mean_a
+    stats["y_std"][2] = p_std_a
+
 stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
@@ -502,7 +569,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_norm = (_apply_asinh_p(y, cfg.asinh_p_scale) - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
 
@@ -529,7 +596,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.asinh_p_scale)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -607,7 +674,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.asinh_p_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
