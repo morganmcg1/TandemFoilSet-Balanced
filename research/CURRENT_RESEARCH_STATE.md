@@ -15,28 +15,29 @@ help across at least three of the four tracks.
 
 ## Round 3 focus
 
-**Current measured baseline (merged 2026-04-28 07:04):**
-PR #596 (askeladd) — **L1 + 12-freq spatial FF + EMA(0.997) + matched
-cosine + lr=7.5e-4 + grad clipping max_norm=5.0 + aux log-pressure
-(weight=0.25)**. `val_avg/mae_surf_p = 77.01`,
-`test_avg/mae_surf_p = 67.78`. Eleventh merge of round 3.
+**Current measured baseline (merged 2026-04-28 07:25):**
+PR #578 (thorfinn) — **L1 + 12-freq spatial FF + EMA(0.997) + matched
+cosine + lr=7.5e-4 + decoupled head LR (2× on `mlp2`+`ln_3`)**.
+`val_avg/mae_surf_p = 75.78`, `test_avg/mae_surf_p = 66.27`. Twelfth
+merge of round 3. **Largest single-knob improvement since the
+schedule × EMA fix**.
 
-**Cumulative round-3 improvement: −43.0% on val, −45.0% on test**
+**Cumulative round-3 improvement: −43.9% on val, −46.2% on test**
 from PR #306 reference.
 
-**Critical diagnostic from PR #596**: clip still fires on **100% of
-batches** at max_norm=5.0 (pre-clip mean 22-47 throughout). The
-previously-measured "narrow LR optimum at 7.5e-4" was a **clip × LR
-joint sensitivity** — loosening clip shifts the joint operating
-point. Round-5 may want to revisit LR / EMA-decay sensitivity at this
-new clip threshold.
+**Mechanistic insight from PR #578**: largest gains on
+`val_single_in_dist` (−7.18%) and `val_geom_camber_rc` (−5.45%) —
+opposite of the prior prediction (which expected OOD-camber-cruise
+to gain most). The askeladd PR #489 finding ("OOD-camber wants higher
+LR") was incomplete — the actual story is **the head fits in-dist
+patterns slowly under the conservative backbone LR**. Decoupling lets
+the head converge in matched-cosine epochs without dragging the
+backbone faster. `val_geom_camber_cruise` mildly regressed (+3.44%).
 
-**Caveat**: PR #596 measurement showed val −0.99% but test
-essentially flat (+0.10%). Per-split: val_single_in_dist −7.78%
-(largest gain), val_rc −3.65%, val_cruise +9.81% (regression),
-val_re_rand +3.06% (regression). Per-split tradeoff pattern repeats —
-the merge bakes in a configuration that helps in-dist and rc-camber
-at the cost of cruise and re_rand.
+**Caveat**: PR #578 was branched off pre-#572 advisor. Post-merge
+advisor stacks aux log-p (PR #572), max_norm=5.0 (PR #596), AND
+decoupled head LR (this PR). The actual joint config is untested but
+expected to land below 75.78.
 
 **Round-3 baseline lineage:**
 | Round | best val | best test | lever | Δ vs prior |
@@ -51,9 +52,10 @@ at the cost of cruise and re_rand.
 | PR #506 |  78.80 |  69.13 | + NUM_FOURIER_FREQS=12 | −1.57% / −1.30% |
 | PR #534 |  78.60 |  67.77 | + EMA_DECAY=0.997 | −0.25% / −1.97% |
 | PR #572 |  77.78 |  67.71 | + aux log-p (weight=0.25) | −1.06% / −0.09% |
-| **PR #596** | **77.01** | **67.78** | **+ max_norm=5.0** | **−0.99% / +0.10%** |
+| PR #596 |  77.01 |  67.78 | + max_norm=5.0 | −0.99% / +0.10% |
+| **PR #578** | **75.78** | **66.27** | **+ decoupled head LR (2×)** | **−1.60% / −2.23%** |
 
-**Round-3 proven levers (cumulative, ten stacked)**:
+**Round-3 proven levers (cumulative, eleven stacked)**:
 1. L1 surface loss (PR #280)
 2. 8→12-freq spatial FF (PR #400 → PR #506)
 3. Matched cosine `--epochs 14` (PR #389, CLI)
@@ -63,7 +65,9 @@ at the cost of cruise and re_rand.
 7. NUM_FOURIER_FREQS=12 (PR #506) — refinement of lever #2.
 8. EMA_DECAY=0.997 (PR #534) — refinement of lever #4.
 9. Auxiliary log-pressure loss weight=0.25 (PR #572).
-10. **max_norm=5.0** (PR #596) — refinement of lever #6.
+10. max_norm=5.0 (PR #596) — refinement of lever #6.
+11. **Decoupled head LR (2× on `mlp2`+`ln_3`)** (PR #578) — head adapts
+    faster than backbone.
 
 Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
 
@@ -165,11 +169,16 @@ composition even if they don't outright beat 102.64:**
      **n_head=8** — different attention compute structure.
    - PR #597 — tanjiro: L1+FF12+EMA + aux log-p **weight=0.10** —
      bracket aux dose downward from merged 0.25.
-   - PR (askeladd, new): L1+FF12+EMA + max_norm=**10.0** — continue
-     bracketing clip up; clip still firing on 100% of batches at 5.0.
-   - PR (fern, new): L1+FF12+EMA + cosine **eta_min=5e-5** — small
-     floor LR through cosine tail (vs default 0); addresses schedule
-     shape rather than averaging method.
+   - PR #616 — askeladd: L1+FF12+EMA + max_norm=**10.0** — continue
+     bracketing clip up.
+   - PR #617 — fern: L1+FF12+EMA + cosine **eta_min=5e-5**.
+   - PR (thorfinn, new): L1+FF12+EMA + decoupled head LR **3×** —
+     bracket head-LR multiplier upward from merged 2× (best-val at
+     ep 14/14 monotone-descending suggests optimum past 2×).
+   - PR (edward, new): L1+FF12+EMA + BF16 autocast + **broader FP32
+     pred cast for both surf_loss AND aux log-p** — addresses
+     loss-side precision path comprehensively (single-line guard
+     on PR #606 was insufficient).
    - PR (edward, new): **BF16 + FP32 surf_loss guard** — restore
      precision on the high-Re extreme pressure reduction while keeping
      the BF16 forward-pass speedup.

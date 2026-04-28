@@ -1,5 +1,126 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 07:25 — PR #578 (MERGED): decoupled head LR (2× on `mlp2`+`ln_3`)
+- Branch: `charliepai2d3-thorfinn/l1ff12-ema-cos14-lr-7p5e-4-decouple-head-2x`
+- Hypothesis: 2× head LR vs backbone — head adapts faster to OOD-camber.
+  Predicted −0.5% to −1.5%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #534 (assigned baseline 78.60) | vs current PR #596 (77.01) |
+|--------|--------:|------------------------------------:|---------------------------:|
+| `val_avg/mae_surf_p` | **75.78** | **−3.59%** ✓ 2.4× upper prediction | **−1.60%** |
+| `test_avg/mae_surf_p` | **66.27** | **−2.21%** | **−2.23%** |
+
+### Per-split val — opposite of predicted direction!
+
+| split | this PR | PR #534 | Δ |
+|-------|--------:|--------:|--:|
+| val_single_in_dist | 84.61 | 91.15 | **−7.18%** (largest gain — predicted neutral) |
+| val_geom_camber_rc | 85.83 | 90.78 | **−5.45%** |
+| val_geom_camber_cruise | 58.09 | 56.16 | +3.44% (mild regression) |
+| val_re_rand | 74.58 | 76.33 | −2.29% |
+
+### Mechanistic insight — corrects askeladd PR #489's interpretation
+
+PR #489 found `lr=1e-3` (uniform) gave OOD-camber-cruise gains and
+in-dist regression. Predicted from this: OOD-camber wants higher LR
+than in-dist.
+
+**Actual mechanism revealed by decoupled-head LR**: the head fits
+in-dist patterns slowly under the conservative 7.5e-4 backbone LR.
+Giving the head 2× lets it converge in matched-cosine epochs without
+dragging the backbone faster. **In-dist gained MOST** (−7.18%) — the
+opposite of the prior. The "OOD-camber needs higher LR" reading was
+mixing two effects: head-specific LR sensitivity and backbone LR
+sensitivity.
+
+### Decision
+
+**Merged.** Twelfth merge of round 3, eleventh proven stacked lever.
+Largest single-knob improvement since the schedule × EMA fix.
+
+### Caveat — measurement on pre-#572 advisor
+
+PR #578 was branched off the pre-#572 / pre-#596 advisor (no aux log-p,
+max_norm=1.0). Post-merge advisor stacks all three:
+- aux log-p (weight=0.25) from PR #572.
+- max_norm=5.0 from PR #596.
+- decoupled head LR (2×) from this PR.
+
+The actual joint config is untested but expected to land below 75.78
+since PR #572 and PR #596 both individually showed val improvements
+on their assigned baselines.
+
+### Round-3 baseline lineage updated (12 merges)
+
+| PR | val | test | lever |
+|----|----:|-----:|-------|
+| 280 | 102.64 | 97.73 | + L1 surface |
+| 400 | 91.87 | 81.11 | + 8-freq spatial FF |
+| 447 | 82.97 | 73.58 | + EMA(0.999) |
+| 461 | 80.28 | 70.92 | + lr=7.5e-4 |
+| 462 | 80.06 | 70.04 | + grad clipping (1.0) |
+| 506 | 78.80 | 69.13 | + FF=12 |
+| 534 | 78.60 | 67.77 | + EMA=0.997 |
+| 572 | 77.78 | 67.71 | + aux log-p (weight=0.25) |
+| 596 | 77.01 | 67.78 | + max_norm=5.0 |
+| **578** | **75.78** | **66.27** | + **decoupled head LR (2×)** |
+
+Cumulative −43.9% on val, −46.2% on test from PR #306 reference.
+
+Re-assigning thorfinn to **3× head LR multiplier** — best-val at ep
+14/14 monotone-descending suggests head-LR optimum is past 2×.
+
+---
+
+## 2026-04-28 07:19 — PR #606 (CLOSED, narrow guard insufficient): BF16 + FP32 surf_loss guard
+- Branch: `charliepai2d3-edward/l1ff12-ema-cos14-lr-7p5e-4-bf16-fp32guard` (deleted)
+- Hypothesis: FP32 cast on `pred[..., 2]` before L1 reduction
+  eliminates BF16 precision loss while preserving speedup.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #572 (77.78 / 67.71) | vs current PR #596 (77.01 / 67.78) |
+|--------|--------:|---------------------------:|------------------------------------:|
+| `val_avg/mae_surf_p` | 79.81 | +2.61% | +3.64% |
+| `test_avg/mae_surf_p` | 69.59 | +2.78% | +2.67% |
+| Per-epoch wallclock | 100.6 s | (vs 132 s, **−23.8%**) | |
+| Peak GPU memory | 33.47 GB | (vs 42.5 GB, **−21.3%**) | |
+
+### Per-split val — distributional regression (broader precision loss)
+
+| split | this PR | PR #572 | Δ |
+|-------|--------:|--------:|--:|
+| val_single_in_dist | 95.56 | 92.62 | +3.17% |
+| val_geom_camber_rc | 91.52 | 91.34 | +0.20% |
+| val_geom_camber_cruise | 55.97 | 52.94 | +5.72% (worst hit) |
+| val_re_rand | 76.17 | 74.21 | +2.64% |
+
+### Decision
+
+**Closed.** Targeted FP32 guard insufficient — precision loss is
+broader than the L1 reduction. Speedup preserved (−24% wallclock,
+−21% memory) confirms the FP32 cast doesn't introduce conversion
+costs.
+
+**Likely culprits** (per student's analysis):
+1. PhysicsAttention slice softmax: denominators accumulate over
+   `slice_num=64` × 242K nodes; BF16 8-bit mantissa too short.
+2. Aux log-p loss path: computed outside autocast but reads
+   `pred[..., 2]` (BF16) — gradient flows through BF16 attention.
+
+Cruise/re_rand backslide (the splits PR #572's aux log-p helped
+most) is consistent with the second culprit.
+
+Re-assigning edward to **broader FP32 `pred` cast for both surf_loss
+and aux log-p loss** (student's follow-up #2) — larger memory cost
+but addresses the loss-side precision path comprehensively.
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 07:04 — PR #596 (MERGED): max_norm=1.0 → 5.0 (loosened clipping)
 - Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-7p5e-4-clip5`
 - Hypothesis: loosen clip 5× to unlock real LR sensitivity dampened
