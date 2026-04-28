@@ -63,14 +63,13 @@ Per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`. Per-experiment JS
 
 
 
-## Round-6 in flight (2 students)
+## Round-6 in flight (1 student)
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
 | #510 | alphonse | torch-compile-baseline | Wrap model in `torch.compile(mode='reduce-overhead')` | −1% to −3% |
-| #511 | nezuko | adamw-beta2-090 | AdamW betas (0.9, 0.95) → (0.9, 0.90) — push β₂ profile further | −0.5% to −1.5% (could regress) |
 
-## Round-7 in flight (6 students)
+## Round-7 in flight (7 students)
 
 Built on the merged baseline. Conservative target val_avg < 72.414.
 
@@ -82,6 +81,7 @@ Built on the merged baseline. Conservative target val_avg < 72.414.
 | #525 | fern | cosine-warmup-tmax-aligned | 1-ep linear warmup + cosine T_max=13 (aligns LR decay with the 14-ep realistic budget) | −0.5% to −2% |
 | #526 | frieren | feature-noise-005 | Semantics-aware feature noise std 0.01 → 0.005 (sweep DOWN per #495 diagnosis) | −0.5% to −1.5% |
 | #527 | tanjiro | weight-decay-3e-5 | AdamW weight_decay 1e-4 → 3e-5 (sweep DOWN per #494 diagnosis) | −0.5% to −1.5% |
+| #540 | nezuko | ema-decay-target-095 | Bias-corrected EMA decay_target 0.99 → 0.95 (sweep weight-EMA asymptote, parallel to askeladd's warmup_steps sweep) | −0.5% to −1.5% (could regress) |
 
 ## Disconfirmed directions (do not retry on this branch)
 
