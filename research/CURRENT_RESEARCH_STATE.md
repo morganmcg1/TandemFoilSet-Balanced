@@ -10,7 +10,7 @@
 
 - **PR #782 (edward, GeGLU mlp_ratio=4)** — sent back. Confounded design (FFN ~3x larger than baseline). Re-run will use mlp_ratio≈8/3 to match FFN params. Best val_avg/mae_surf_p 109.89 / offline test_avg ~106.
 - **PR #784 (frieren, OneCycleLR epochs=50)** — sent back. Schedule never completed (32/50 epochs at timeout, LR floor never reached). Re-run will use `--epochs 28` to fit the 30-min budget. Best val_avg/mae_surf_p 91.72 / offline test_avg 81.62.
-- **Tooling debt**: cruise-split `+Inf` in target makes `test_avg/mae_surf_p` log as NaN for every run on this branch. Need to cherry-pick the `nan_to_num` guard from PR #797 (r4 branch) into `evaluate_split`. Until then students must compute clean test_avg offline.
+- **Tooling debt**: cruise-split `+Inf` in target makes `test_avg/mae_surf_p` log as NaN for every run on this branch (one cruise sample has 761 +Inf entries in `p`; the multiplicative mask in `data/scoring.py::accumulate_batch` turns `Inf × 0` into NaN, defeating the intended `y_finite` skip). Fix belongs in `train.py::evaluate_split` (zero out non-finite `pred_orig`/`y` before `accumulate_batch`, or use `torch.where`-based masking — `data/scoring.py` is read-only). Until then students must compute clean test_avg offline. Pick up as a small dedicated PR when a student frees up.
 
 ## Current research focus
 
