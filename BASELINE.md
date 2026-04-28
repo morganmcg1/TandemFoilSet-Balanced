@@ -1,6 +1,6 @@
 # Baseline — TandemFoilSet (willow-pai2d-r5)
 
-**Status:** Round 1 baseline empirically set by PR #336 (slice_num=128). Subsequent winners compound on top.
+**Status:** Round 1 in flight. PR #336 (slice_num 64→128) was reverted on commit `605b439` — direct apples-to-apples evidence showed slice_num=128 was a partial-credit merge inside the 30-min cap. Baseline distribution being calibrated by thorfinn's PR #428.
 
 ## Reference configuration (current `train.py` HEAD)
 
@@ -41,4 +41,4 @@ _(round 1 in flight; baseline distribution being established by thorfinn's PR #4
 
 ### Reverted
 
-- **PR #336** (slice_num 64→128, val_avg=139.83 single seed) was reverted on `<sha-after-merge>` after direct apples-to-apples evidence (PRs #329 and #338) showed slice_num=128 loses by 10-20 MAE inside the 30-min wall-clock cap. slice_num=128 may convert better with longer wall-clock; revisit in round 2 if `SENPAI_TIMEOUT_MINUTES` increases.
+- **PR #336** (slice_num 64→128, val_avg=139.83 single seed) was reverted on commit `605b439` after direct apples-to-apples evidence (PRs #329 and #338) showed slice_num=128 loses by 10-20 MAE inside the 30-min wall-clock cap. slice_num=128 may convert better with longer wall-clock; revisit in round 2 if `SENPAI_TIMEOUT_MINUTES` increases.
