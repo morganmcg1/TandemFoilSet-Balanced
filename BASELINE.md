@@ -32,32 +32,43 @@ The paper-facing rank is `test_avg/mae_surf_p`, computed once at the end of trai
 
 ## Best result
 
-**PR #496 — `bf16-amp-fp32-loss` (alphonse), merged 2026-04-28**
+**PR #612 — `lion-3e-4` (alphonse), merged 2026-04-28** — ⭐ largest single-PR delta
 
-- `val_avg/mae_surf_p` = **73.2916** (best epoch 18/24)
-- `test_avg/mae_surf_p` = **NaN** (4-split) / **69.493** (mean of 3 clean splits)
-- Per-split val: `val_single_in_dist=87.09`, `val_geom_camber_rc=85.04`, `val_geom_camber_cruise=50.89`, `val_re_rand=70.16`
-- Per-split test (3 clean): `test_single_in_dist=70.96`, `test_geom_camber_rc=75.62`, `test_re_rand=61.89`
-- **−0.83% val / −1.25% test** vs previous baseline (PR #464). All 3 clean test splits improved.
-- Change: bf16 mixed precision via `torch.autocast` wrapping **only** the model forward; `pred` cast back to fp32 before the loss accumulator. Backward, optimizer, and validation all stay in fp32. **Effectively reaches 18 epochs at the 30-min wall budget** (vs 14 in fp32 baseline) — 24% per-epoch speedup unlocks 4 extra cosine-decay epochs.
-- Two-attempt history: round-1 with all-bf16 (autocast wrapping forward+loss) had test regression of +1.59% from low-precision loss accumulation. Refinement (cast `pred` back to fp32 before `(pred - y_norm).abs()`) recovered the test improvement cleanly while preserving the speedup.
+- `val_avg/mae_surf_p` = **56.1948** (best epoch 18/24)
+- `test_avg/mae_surf_p` = **NaN** (4-split) / **53.330** (mean of 3 clean splits)
+- Per-split val: `val_single_in_dist=60.30`, `val_geom_camber_rc=71.06`, `val_geom_camber_cruise=37.01`, `val_re_rand=56.41`
+- Per-split test (3 clean): `test_single_in_dist=51.62`, `test_geom_camber_rc=61.95`, `test_re_rand=46.42`
+- **−23.3% val / −23.3% test** vs previous baseline (PR #496). **All four val splits and all three clean test splits improved by 16-31%.** Largest gain on `val_single_in_dist` (-30.8%), `val_geom_camber_cruise` (-27.3%), `test_single_in_dist` (-27.3%), `test_re_rand` (-25.0%).
+- Change: replace AdamW with **Lion optimizer** (Chen et al. 2023, sign-based update with momentum), `lr` 1e-3 → 3e-4 (Lion's standard ~3× smaller LR scaling). Per-epoch wall essentially unchanged (101.4s vs 100s).
 
-### Diagnostic finding (alphonse's per-split analysis)
+### Diagnostic finding (alphonse's analysis)
 
-The 2.0-point test improvement vs the all-bf16 round-1 mapped almost directly onto the splits *furthest from val*: `test_single_in_dist` −3.84, `test_geom_camber_rc` −1.84, `test_re_rand` −0.32. Consistent with the bf16-loss-accumulator-noise-acts-as-implicit-regularizer story — small per-step noise in the loss accumulator pushed the model toward a slightly different basin that underperformed on held-out foils. The fix removed that noise without changing model precision.
+**Why Lion crushes AdamW on this stack so dramatically (vs the typical 1-3% Lion paper bonus):**
 
-Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, `lr=1e-3` (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, `surf_weight=30.0`, `grad_clip_norm=0.5`, **`amp_bf16=True`** (bf16 forward, fp32 loss/backward), **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, **`--epochs 24`** (Config default; reaches ~18 epochs at 30-min wall budget), 8-band Fourier features on normalized `(x, z)`.
+Two layers of intuition:
+1. **L1 loss + sign-update + grad-clip-0.5 form a triple-quantized chain.** L1 produces unit-magnitude per-element gradients; clip-norm-0.5 caps total L2; Lion's `sign()` makes parameter updates unit-magnitude per param. Every weight gets the same per-step treatment — scale-invariant per parameter, composing naturally with the existing L1+clip regime.
+2. **AdamW's RMSProp normalization was redundant and noisy.** Under L1 loss, all per-element gradients have magnitude 1, so RMSProp's adaptive normalization is mostly idle and adds noise from its EMA estimate. Lion replaces this with `sign(momentum)` — exactly what RMSProp converges to in this regime, but cleaner.
+
+The val curve is visibly smoother than AdamW's (3 small bumps in 17 transitions vs typical AdamW wobble). Best epoch is the last reached (18/24), so still improving — Lion has more headroom with longer schedules.
+
+Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, **`lr=3e-4`** (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, `surf_weight=30.0`, `grad_clip_norm=0.5`, `amp_bf16=True`, **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, `--epochs 24`, 8-band Fourier features on normalized `(x, z)`, **`optimizer_name="lion"`** (Config default).
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
   --agent charliepai2d5-alphonse \
-  --experiment_name bf16-amp-fp32-loss
+  --experiment_name lion-3e-4
 ```
 
 (All knobs are Config defaults.)
 
 ### Previous best
+
+**PR #496 — `bf16-amp-fp32-loss` (alphonse), merged 2026-04-28**
+
+- `val_avg/mae_surf_p` = 73.2916 (best epoch 18/24)
+- `test_avg/mae_surf_p` (3-split mean) = 69.493
+- Change: bf16 mixed precision (forward only) with fp32 loss accumulator. 24% per-epoch speedup → 18 epochs reachable.
 
 **PR #464 — `grad-clip-0p5` (alphonse), merged 2026-04-28**
 
