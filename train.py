@@ -63,10 +63,7 @@ ACTIVATION = {
 }
 
 
-N_FREQS = 8
-
-
-def fourier_features(pos: torch.Tensor, n_freqs: int = N_FREQS) -> torch.Tensor:
+def fourier_features(pos: torch.Tensor, n_freqs: int) -> torch.Tensor:
     """Multi-scale sinusoidal encoding of a 2-D position vector.
 
     Args:
@@ -271,7 +268,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            ff = fourier_features(x_norm[..., :2], n_freqs=N_FREQS)
+            ff = fourier_features(x_norm[..., :2], n_freqs=cfg.n_freqs)
             x_in = torch.cat([x_norm, ff], dim=-1)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model({"x": x_in})["preds"]
@@ -395,6 +392,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    n_freqs: int = 8  # Fourier frequency bands per axis (4*n_freqs extra input dims)
 
 
 cfg = sp.parse(Config)
@@ -425,7 +423,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + 4 * N_FREQS,
+    fun_dim=X_DIM - 2 + 4 * cfg.n_freqs,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -518,7 +516,7 @@ for epoch in range(MAX_EPOCHS):
         if _first_fwd:
             torch.cuda.synchronize()
             _t_fwd0 = time.time()
-        ff = fourier_features(x_norm[..., :2], n_freqs=N_FREQS)
+        ff = fourier_features(x_norm[..., :2], n_freqs=cfg.n_freqs)
         x_in = torch.cat([x_norm, ff], dim=-1)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_in})["preds"]
