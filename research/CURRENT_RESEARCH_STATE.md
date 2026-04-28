@@ -24,7 +24,7 @@
 | ~~#354~~ | ~~frieren~~   | ~~slice-128-heads-8~~        | ~~Slice/head count (slice 64→128, n_head 4→8)~~ | **CLOSED 23:51**: val=156.48 (+18%), test=144.10 (+22%); throughput-bound (250 s/ep, 8/50 epochs) |
 | #355 | nezuko    | mlp-ratio-4              | MLP capacity (mlp_ratio 2→4) | **sent back, corrected 23:42**: val=129.24 raw (timeout-cut ep13/50) test NaN; rebase onto post-#356 + retain mlp_ratio=4 |
 | #356 | tanjiro   | ema-eval                 | EMA(0.999) shadow for val + checkpoint | **MERGED 23:42** as new baseline (val=132.276, test=118.041) |
-| #357 | thorfinn  | channel-weighted-loss    | Per-channel surface weights ([1,1,5] for Ux,Uy,p) | wip |
+| ~~#357~~ | ~~thorfinn~~  | ~~channel-weighted-loss~~    | ~~Per-channel surface weights ([1,1,5] for Ux,Uy,p)~~ | **CLOSED 04-28 00:18**: val=150.91 (+14.1 %), test=143.07 (+21.2 %); raw-vs-raw +10.5 %. Severe per-epoch oscillation; loss-shape lever (#352) dominates this direction by ~30 %. |
 
 ## Round 1.5 follow-up assignments (post-#356, all targeting `icml-appendix-charlie-pai2d-r1` baseline)
 
@@ -32,6 +32,7 @@
 |----|---------|------|-------|-----|
 | #373 | frieren | mixed-slice-last-layer | Last-layer-only `slice_num=128` (mixed slicing) | Replaces closed #354; pays slice cost only at the regression head — fits in 30-min budget |
 | #374 | tanjiro | grad-clip-1p0 | Gradient clipping at `max_norm=1.0` between backward and step | Variance-reduction lever complementary to EMA; pre-clip grad norm logged as diagnostic |
+| #394 | thorfinn | torch-compile-throughput | `torch.compile(model, ema_model)` mode=reduce-overhead, dynamic=True | Replaces closed #357; structural throughput improvement — every subsequent PR gets more epochs in the 30-min timeout |
 
 ## Updated picture from round-1 partial returns
 - **#356 (EMA) merged** as round-1 baseline at val=132.276 (−3.1% vs same-run best raw).

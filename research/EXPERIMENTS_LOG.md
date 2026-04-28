@@ -160,3 +160,36 @@
 - Re-run is required because the saved checkpoint was trained without EMA-shadow updates, so we can't reuse it under the new baseline.
 - Predicted post-rebase outcome: SmoothL1 + EMA likely lands near val ≈ 100–102, test ≈ 92–95 (assuming the EMA −3% delta from #356 applies on top of SmoothL1's −22.7%).
 - Will merge as new baseline once clean post-rebase numbers land.
+
+## 2026-04-28 00:18 — PR #357: channel-weighted surface loss `[1,1,5]` (charliepai2d1-thorfinn) — **CLOSED**
+- Branch: `charliepai2d1-thorfinn/channel-weighted-loss` (pre-EMA base; closed + branch deleted)
+- Hypothesis: up-weight pressure channel 5× inside surface MSE to align training signal with `mae_surf_p` ranking metric.
+
+### Headline metrics (best epoch = 12/14, run cut at 30-min timeout)
+| | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | **val_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 180.82 | 156.27 | 123.67 | 142.89 | **150.91** |
+
+| | test_single_in_dist | test_geom_camber_rc | test_geom_camber_cruise | test_re_rand | **test_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 169.78 | 147.89 | 110.76 | 143.85 | **143.07** |
+
+- Per-epoch wall clock ~131 s (similar to baseline). 14 of 50 epochs trained.
+- Δ vs baseline #356 (132.276 / 118.041): **val +14.1 %, test +21.2 %** — both >5 % regressions.
+- Δ raw-vs-raw vs tanjiro #356 best raw (136.53): **+10.5 %** — also a regression on the fair comparison.
+- Per-epoch val curve: 237 → 244 → 186 → 191 → 188 → 175 → 196 → 176 → 174 → 168 → 179 → **151*** → 172 → 161 — severe oscillation, channel weighting destabilizing training.
+
+### Analysis
+- The `[1, 1, 5]` MSE-style weighting is not an additive variance-reduction lever like channel-uniform `surf_weight=50` would be — it asymmetrically scales the gradient on a single channel, which combined with the existing `surf_weight=10` puts the surface-p gradient roughly an order of magnitude above velocity. Training oscillation suggests the optimizer is overshooting on p-channel-favorable directions.
+- **Side-by-side vs PR #352 (SmoothL1 β=1, same pre-EMA base, same wall budget) at val=105.56**: loss-form lever wins by ~30 % over channel-weighting. The loss-shape direction (MSE → SmoothL1 / L1) is far more impactful than per-channel re-weighting.
+- **Fourth independent rediscovery of the `data/scoring.py` `inf*0=NaN` bug.** Tanjiro's filter (now in baseline) supersedes thorfinn's; functionally equivalent.
+
+### Decision: close, reassign to torch-compile-throughput
+- Clear >5 % regression on both val and test, with no mechanistic path forward via a small variation (the oscillation shows the lever is destabilizing rather than focusing).
+- Reassigned to **PR #394 (torch-compile-throughput)** — high-leverage throughput PR. Predicted 20–35 % per-epoch speedup; if it lands, every subsequent experiment fits ~17 epochs in the 30-min timeout instead of ~13. Multiplied value across every round-2 experiment.
+
+## 2026-04-28 00:25 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #394 | thorfinn | torch-compile-throughput | `torch.compile(model, ema_model)` with `mode="reduce-overhead", dynamic=True` | Replaces closed #357; structural throughput improvement that helps every subsequent PR fit more epochs |
