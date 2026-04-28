@@ -1,5 +1,60 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 05:20 — PR #496: bf16 mixed precision + epochs=24 — **REQUEST CHANGES (refine to fp32 loss accumulator)**
+
+- Branch: `charliepai2d5-alphonse/bf16-amp` (status:wip rebasing)
+
+### Results
+
+| metric | value | vs current baseline (73.91 / 70.37) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/24) | **73.29** | **−0.84%** ✓ |
+| `test_avg/mae_surf_p` (3 clean) | **71.49** | **+1.59%** ✗ |
+| Median per-epoch wall (s) | 100.8 | **−24%** (real speedup) |
+| Epochs reached in 30-min cap | 18 | +4 vs baseline |
+| Pre-clip ‖∇‖ shape | matches fp32 baseline | no precision pathology in gradients |
+
+### Decision
+
+Send back. The bf16 mechanism is real and useful: 24% per-epoch speedup, 18 epochs reached, no NaN/instability, gradient norms identical to fp32. Val improved (small) but test regressed (small) — mixed signal in the ambiguous zone.
+
+The student's follow-up #3 (fp32 loss accumulator with bf16 matmuls only) is the right refinement: cast `pred` back to fp32 before the abs error and masked sums, keeping the matmul-heavy forward in bf16 for the speedup. Standard amp pattern. If the test regression goes away with that, we have a clean merge candidate (val ≤ 73.0 AND test ≤ 70.5 thresholds set).
+
+If test still regresses after fp32 loss, the bf16 issue is in the model forward itself and we close as "bf16 doesn't compose with this stack's precision needs."
+
+---
+
+## 2026-04-28 05:20 — PR #521: TTA via random node masking K=5 — **REQUEST CHANGES (test-eval only refinement)**
+
+- Branch: `charliepai2d5-nezuko/tta-k5-drop-0p1` (status:wip rebasing)
+
+### Results
+
+| metric | value | notes |
+|---|---:|---|
+| `val_avg/mae_surf_p` (TTA k=5, best ep 10/14) | 124.85 | run timed out at ep 11/14 due to TTA eval overhead |
+| `val_avg/mae_surf_p` (no TTA, same ckpt) | 141.21 | un-augmented eval of same partial ckpt |
+| **TTA effect on same ckpt** | **−11.6%** | mechanism real, well above predicted 0.5–2% |
+| `val_geom_camber_rc` TTA delta | −18.1% | large benefit |
+| `val_single_in_dist` TTA delta | −20.6% | largest benefit |
+| `val_geom_camber_cruise` TTA delta | **+6.4%** | TTA hurts smooth/small-scale split |
+| `val_re_rand` TTA delta | −2.6% | nearly neutral |
+
+### Decision
+
+Send back. **The TTA mechanism works** — 11.6% reduction on the same checkpoint is the largest single-axis effect we've measured this session — but the per-epoch eval overhead (+35s/epoch from K=5 forward passes on 4 val splits) caused the run to timeout at epoch 11/14, so the absolute val_avg=124.85 is un-converged and not comparable to baseline.
+
+Student's follow-up #2 is the clean fix: **TTA at test-eval only**, not per-epoch val. Training proceeds at baseline speed (14 epochs / 30 min); test eval gets the K=5 averaging once at the end. This:
+1. Keeps training fully converged
+2. Gives a clean test-side win if TTA transfers to the converged checkpoint
+3. Disambiguates "TTA helps checkpoint selection" from "TTA helps eval averaging"
+
+Decision criteria for the rerun: merge if `test_avg (3-clean) ≤ 68.5` (≥ 2.7% improvement); val_avg criterion doesn't apply since TTA isn't changing val.
+
+The split-by-split observation (TTA hurts cruise +6.4% but helps single +20.6% and camber_rc +18.1%) is useful diagnostic — implies the optimal `tta_drop` may be split-dependent, but that's a sweep for later.
+
+
+
 ## 2026-04-28 05:00 — PR #497: Mesh node random loss subsampling (keep 85%) — **CLOSE (3rd regularization-budget saturation)**
 
 - Branch: `charliepai2d5-fern/node-subsample-0p85` (closed)
