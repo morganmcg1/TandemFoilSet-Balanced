@@ -1,5 +1,43 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 02:35 — PR #387 (rerun): Gradient clipping `max_norm=1.0` on full stack — **MERGE (winner, new baseline)**
+
+- Branch: `charliepai2d5-alphonse/grad-clip-1` (rebased onto L1+warmup+Fourier+sw=30)
+
+### Results
+
+| metric | value | vs PR #301 (76.68 / 73.40) | vs PR #365 (87.86 / 84.22) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | **74.44** | **−2.92%** | −15.3% |
+| `val_single_in_dist/mae_surf_p` | 86.68 | −1.04% | — |
+| `val_geom_camber_rc/mae_surf_p` | 85.92 | −2.53% | — |
+| `val_geom_camber_cruise/mae_surf_p` | 53.29 | −4.34% | — |
+| `val_re_rand/mae_surf_p` | 71.88 | −4.49% | — |
+| `test_avg/mae_surf_p` (3 clean) | **72.14** | **−1.71%** | −14.3% |
+| Median per-epoch wall (s) | 131 | unchanged | — |
+
+All four val splits improved. Strict monotone val_avg descent across all 14 epochs (no oscillations).
+
+### Decision
+
+Merge — fifth orthogonal axis. Stack now: L1 × warmup → cosine × Fourier × sw=30 × grad-clip-1.0.
+
+### Critical diagnostic (alphonse's gradient-norm telemetry)
+
+Pre-clip ‖∇‖ went from peak 105.3 / end 25.2 (pre-Fourier) to peak **270.3** / end **63.0** (post-Fourier). Fourier features ~2.5× the gradient signal — **clipping is doing more work, not less, post-Fourier**. The clipping ratio is 63–270 : 1 throughout, well into pure direction-only mode. This motivates `grad_clip_norm=0.5` as the natural follow-up.
+
+### Why the gain is smaller than the pre-Fourier delta
+
+The pre-Fourier rerun (PR #387 first attempt) gave −13.5% val on the L1+warmup baseline. The rebased stacked version gives only −2.92% on the new sw=30 baseline. Two factors:
+1. **Baseline already moved** — sw=30 absorbed some of the headroom that grad-clip would otherwise have captured.
+2. **Partial overlap between regularizers** — Fourier improves input conditioning, which reduces some "bad-step" gradients that clipping used to fix. They share the trajectory-smoothing mechanism but Fourier also fixes input-side issues.
+
+The gradient-norm telemetry confirms clipping isn't redundant — it's still doing more work than before — but the ceiling is lower because Fourier already absorbed some noise.
+
+Reassigned alphonse to `grad_clip_norm=0.5` (PR #464) — natural follow-up motivated by the gradient-norm telemetry.
+
+
+
 ## 2026-04-28 02:25 — PR #364: Huber loss (smooth_l1, beta=1.0) — **REQUEST CHANGES (rebase + refined to beta=0.5)**
 
 - Branch: `charliepai2d5-edward/huber-loss` (on L1+warmup+pos-Fourier, pre-sw=30)

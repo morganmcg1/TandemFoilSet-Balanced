@@ -32,30 +32,39 @@ The paper-facing rank is `test_avg/mae_surf_p`, computed once at the end of trai
 
 ## Best result
 
-**PR #301 — `surf-weight-30-on-fourier` (nezuko), merged 2026-04-28**
+**PR #387 — `grad-clip-1-on-fourier` (alphonse), merged 2026-04-28**
 
-- `val_avg/mae_surf_p` = **76.6771** (best epoch 14/14)
-- `test_avg/mae_surf_p` = **NaN** (4-split) / **73.395** (mean of 3 clean splits — same pre-existing `test_geom_camber_cruise` GT-NaN)
-- Per-split val: `val_single_in_dist=87.59`, `val_geom_camber_rc=88.15`, `val_geom_camber_cruise=55.71`, `val_re_rand=75.26`
-- Per-split test (3 clean): `test_single_in_dist=77.73`, `test_geom_camber_rc=76.25`, `test_re_rand=66.20`
-- Stacks on top of L1 (PR #293), warmup+cosine (PR #296), and Fourier features (PR #365). **−12.7% val / −12.9% test** vs the L1+warmup+Fourier baseline.
-- Change: pure CLI/Config tweak — `surf_weight` 10.0 → 30.0. Triples the surface-loss weight in the training objective `loss = vol_loss + surf_weight * surf_loss`. Cost: zero per-epoch overhead.
-- Tradeoff: `val_avg/mae_vol_p` regressed by +13.2% (the model now spends more capacity on surface accuracy). Volume metrics aren't ranked, but worth tracking — too aggressive a `surf_weight` may eventually undermine the joint flow representation.
+- `val_avg/mae_surf_p` = **74.4437** (best epoch 14/14)
+- `test_avg/mae_surf_p` = **NaN** (4-split) / **72.137** (mean of 3 clean splits — same pre-existing `test_geom_camber_cruise` GT-NaN)
+- Per-split val: `val_single_in_dist=86.68`, `val_geom_camber_rc=85.92`, `val_geom_camber_cruise=53.29`, `val_re_rand=71.88`
+- Per-split test (3 clean): `test_single_in_dist=76.31`, `test_geom_camber_rc=76.96`, `test_re_rand=63.15`
+- Stacks on top of L1 (PR #293), warmup+cosine (PR #296), Fourier features (PR #365), and `surf_weight=30` (PR #301). **−2.92% val / −1.71% test** vs the previous baseline (PR #301). Strict monotone descent in val_avg across all 14 epochs (no oscillations).
+- Change: gradient clipping at `max_norm=1.0` between `loss.backward()` and `optimizer.step()`. Adds per-epoch grad-norm telemetry to JSONL. Zero per-epoch wall overhead.
 
-Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, `lr=1e-3` (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, **`surf_weight=30.0`**, **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, `--epochs 14`, **8-band Fourier features on normalized (x, z)**.
+### Diagnostic finding (alphonse's gradient-norm telemetry)
+
+Pre-clip ‖∇‖ values (without clipping, just measured): peak 270.3 at epoch 2 (warmup top), monotone decay to 63.0 at epoch 14. Clipping is in pure direction-only mode throughout (ratio 63–270 : 1 vs the threshold of 1.0). Compared to the pre-Fourier run (peak 105, end 25), Fourier features ~2.5× the gradient norms — the richer input representation produces larger gradient signals. **Clipping is doing more work, not less, post-Fourier.** Suggests `grad_clip_norm=0.5` may be a productive next axis once this merges.
+
+Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, `lr=1e-3` (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, `surf_weight=30.0`, `grad_clip_norm=1.0`, **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, `--epochs 14`, **8-band Fourier features on normalized (x, z)**.
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
-  --agent charliepai2d5-nezuko \
-  --experiment_name surf-weight-30-on-fourier \
-  --surf_weight 30.0 \
+  --agent charliepai2d5-alphonse \
+  --experiment_name grad-clip-1-on-fourier \
   --epochs 14
 ```
 
-(`--surf_weight 30.0` is now the Config default, but kept explicit in the reproduce command for clarity.)
+(All other knobs are Config defaults.)
 
 ### Previous best
+
+**PR #301 — `surf-weight-30-on-fourier` (nezuko), merged 2026-04-28**
+
+- `val_avg/mae_surf_p` = 76.6771 (best epoch 14/14)
+- `test_avg/mae_surf_p` (3-split mean) = 73.395
+- Change: `surf_weight: 10.0 → 30.0` (Config default).
+- Tradeoff: `val_avg/mae_vol_p` regressed by +13.2%.
 
 **PR #365 — `fourier-features-on-l1-warmup` (thorfinn), merged 2026-04-28**
 
