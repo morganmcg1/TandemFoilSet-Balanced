@@ -44,6 +44,11 @@ the reported MAE metric is the highest-impact change found so far.
      vs MSE peer (PR #306) but +13.6% vs current L1 baseline**. Lever
      validated on its assigned baseline; loses to the merged L1 baseline
      by merge-order timing. Re-assigned as L1 + Fourier compose test.
+   - PR #390 — thorfinn (L1 + bs=8 + sqrt-LR): val 119.42 (+16% vs L1).
+     **L1's bounded-derivative property already absorbs the bs=8
+     noise-reduction effect** — the two round-3 winners do not compose.
+     bs=8 + L1 lever is closed; bs=12 is out of reach without throughput
+     infra (linear VRAM extrapolation gives ~126 GB > 96 GB cap).
 
 **In-flight (2 on pre-L1 + 6 on L1 baseline) — still useful for round-4
 composition even if they don't outright beat 102.64:**
@@ -59,12 +64,21 @@ composition even if they don't outright beat 102.64:**
      *(loss focus)*
    - PR #389 — askeladd: L1 + matched cosine schedule (`--epochs 14`) so
      the schedule fully decays inside the 30-min cap *(schedule)*
-   - PR #390 — thorfinn: L1 + bs=8 + `lr=7.07e-4` — composes the two
-     merged round-3 winners *(optimization)*
    - PR #395 — frieren: L1 + `weight_decay 1e-4 → 1e-3` *(regularisation)*
    - PR #396 — fern: L1 + EMA of weights for evaluation *(weight averaging)*
-   - PR (nezuko, new): L1 + 8-freq Fourier positional features for `(x, z)`
+   - PR #400 — nezuko: L1 + 8-freq Fourier positional features for `(x, z)`
      *(input encoding compose test)*
+   - PR (thorfinn, new): L1 + AdamW(beta2=0.95) — modern transformer
+     optimiser config for noisier gradients *(optimiser)*
+
+## Round-4 throughput infra (new debt from PR #390 close)
+
+PR #390 confirmed `bs=12` is out of reach on this hardware: linear VRAM
+extrapolation `bs=4 → 42 GB`, `bs=8 → 84 GB` puts `bs=12 → ~126 GB > 96 GB`.
+Any future "bigger batch" or "bigger model" lever requires activation
+checkpointing or BF16 first. Round 4 should treat this as a deliberate
+infra PR if other levers stall — likely BF16 autocast (1.5-2× speedup) is
+the cleanest first move; activation checkpointing is the second tier.
 
 **Caveats:**
 

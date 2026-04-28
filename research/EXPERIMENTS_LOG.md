@@ -1,5 +1,60 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 01:05 — PR #390 (CLOSED): L1 baseline + bs=8 + sqrt LR (compose test)
+- Branch: `charliepai2d3-thorfinn/l1-bs8-sqrt-lr` (deleted on close)
+- Hypothesis: composing the two merged round-3 winners (PR #280 L1 +
+  PR #306 bs=8/sqrt-LR) on the L1 baseline; predicted −3% to −8%.
+- Config: L1 surface loss (already in advisor `train.py`), `bs=8`,
+  `lr=7.07e-4`, all other knobs at defaults.
+
+### Headline (best-val checkpoint, epoch 13/14)
+
+| Metric | This PR | vs L1 baseline (PR #280, 102.64) |
+|--------|--------:|---------------------------------:|
+| `val_avg/mae_surf_p`  | 119.42 | +16.4% (loses) |
+| `test_avg/mae_surf_p` | 105.92 | +8.4% (loses) |
+| Peak GPU memory       | 84.25 GB | 2.0× the L1 baseline at bs=4 |
+| Per-epoch wallclock   | ~130 s | ≈ same as L1 baseline |
+
+### Per-split val (best epoch 13)
+
+| split | this PR | vs L1 baseline (PR #280) |
+|-------|--------:|------------------------:|
+| val_single_in_dist     | 172.27 | +42.2% (much worse) |
+| val_geom_camber_rc     | 126.38 | +1.1% (≈ tie) |
+| val_geom_camber_cruise |  82.57 | +12.8% |
+| val_re_rand            |  96.45 | +5.8% |
+
+### Decision
+
+**Closed.** Clean negative — every split regressed, the smoothest split
+(`val_single_in_dist`) regressed the most. The student's analysis is the
+takeaway: **L1's bounded-derivative property already absorbs the bs=8
+noise-reduction effect**. The two round-3 winners are not orthogonal —
+bs=8 specifically suppressed the heavy-tailed *squared*-error gradient
+noise that L1 already bounds at ±1 per sample. Under a wallclock-iso
+budget bs=8 has half the optimizer steps of bs=4, so under cosine
+truncation it finishes less converged.
+
+### Round-4 implications
+
+- **bs=12 + sqrt(3) lr is not in reach** without throughput infra:
+  linear VRAM extrapolation gives `bs=12 → ~126 GB > 96 GB cap`.
+  Any "bigger batch" lever requires activation checkpointing or BF16
+  first.
+- **AdamW step-size scaling vs batch is not √2 for L1**. The √2-LR
+  scaling is the SGD-fixed-noise prescription; AdamW's effective step
+  for a bounded loss like L1 surface is closer to flat than to sqrt.
+  Round-4 if we revisit batch: try `bs=8, lr=5e-4` (no scaling) and
+  `bs=8, lr=6e-4` (geometric mean) as cheap intermediate runs.
+- **Closed lever**: bs=8 + L1 doesn't win. Don't compose with anything
+  else in round 4.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
 ## 2026-04-28 00:35 — PR #298 (CLOSED, positive on MSE / loses to L1): 8-freq Fourier positional features
 - Branch: `charliepai2d3-nezuko/fourier-pos-features` (deleted on close)
 - Hypothesis: Fourier positional encoding of `(x, z)` at 8 octave-spaced
