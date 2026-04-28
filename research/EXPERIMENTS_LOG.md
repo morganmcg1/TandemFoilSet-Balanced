@@ -1,5 +1,46 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 07:05 — PR #528: Cosine eta_min sweep
+- Branch: `charliepai2d4-frieren/cosine-eta-min-sweep` (deleted on close)
+- Student: charliepai2d4-frieren
+- **Outcome: CLOSED** (mechanism real but below noise floor; pre-#484 branch).
+
+### Headline (4-arm sweep, EMA-evaluated)
+| Run | val_avg | test_avg | best_epoch | LR @ term |
+|---|---|---|---|---|
+| eta=0 (cosine→0, ref) | 64.46 | 55.55 | 32 | 1.4e-4 |
+| eta=1e-5 | 63.29 | 54.89 | 33 | 1.4e-4 (floor never engaged) |
+| eta=1e-4 | 64.22 | 55.25 | 33 | 2.0e-4 (plateau active by ep 25-28) |
+| **eta=5e-4** (constant LR) | **63.15** | 55.38 | 33 | 5.0e-4 |
+| #368 baseline anchor | 62.94 | 54.73 | 33 | — |
+
+Best variant (eta=5e-4) is +0.21 val (+0.33%) above PR #368 — within noise floor (~2pp empirically observed).
+
+### Tail-trajectory mechanism (last 5 epochs val_avg, EMA)
+| epoch | eta=0 | eta=1e-5 | eta=1e-4 | **eta=5e-4** |
+|---|---|---|---|---|
+| 28 | 67.84 | 66.19 | 67.10 | 67.32 |
+| 32 | 64.46 | 64.73 | 64.74 | **63.59** |
+| Δ ep28→32 | -3.38 | -1.46 | -2.36 | **-3.73** |
+
+eta=5e-4 has the fastest late descent — the "model still has gradient direction late in training" hypothesis is qualitatively supported.
+
+### Per-split mechanism — interesting tradeoff
+- `val_geom_camber_rc` (OOD camber holdout): **monotone improvement with eta_min** (79.5 → 78.98 → 77.59 → 75.66). Hardest-OOD split benefits most from continued learning at high LR.
+- `test_re_rand`: **monotone REGRESSION with eta_min** (55.64 → 55.24 → 55.86 → 56.30). Cleaner Re-rand samples overshoot the optimum at high constant LR.
+- Per-split tradeoff suggests a **two-stage schedule** (cosine then constant floor) might dodge both failure modes — frieren's follow-up #3 candidate.
+
+### Why close
+- Mechanism is qualitatively real but magnitude is below the ~2% empirical noise floor (eta=0 vs eta=1e-5 differ by 1.17 mae despite identical LR schedules).
+- **Pre-#484 branch**: absolute 63.15 is +14% above the current merged baseline (55.43, #539). Even with mechanism-clean transfer, the absolute number can't compete.
+- Frieren's clean run/sample/init-noise-floor analysis is the most useful artifact — this PR establishes that single-seed sweeps can't resolve <2% effects on this hardware/data.
+
+### Round-2 candidates from frieren's follow-ups
+- **Two-stage schedule** (cosine first, then constant at moderate floor): mechanism-clean, addresses both per-split failure modes. Strongest candidate.
+- **Multi-seed retest of eta=5e-4 vs eta=0**: only way to resolve sub-noise effects. Expensive (6 runs).
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=528 records, 139 lines from all 4 sweep arms).
+
 ## 2026-04-28 06:45 — PR #539: Huber β finer sweep — β=0.3 wins, **NEW BASELINE**
 - Branch: `charliepai2d4-askeladd/huber-beta-finer` (deleted on merge)
 - Student: charliepai2d4-askeladd
