@@ -15,8 +15,8 @@ Round 1 (PRs #830-#837): 1 merged, 5 closed, 1 sent back. Round 2 partial (#831,
 
 | PR  | Student   | Hypothesis                                                       |
 |-----|-----------|------------------------------------------------------------------|
-| TBD | askeladd  | NEW: signed-log pressure target normalization (heavy-tail fix)   |
-| TBD | edward    | NEW: slice_num=128 + bf16 AMP on MAE baseline (clean re-run)     |
+| 905 | askeladd  | NEW: signed-log pressure target normalization (heavy-tail fix)   |
+| 903 | edward    | NEW: slice_num=128 + bf16 AMP on MAE baseline (clean re-run)     |
 | 887 | alphonse  | bf16 autocast + n_hidden=192/n_layers=6/n_head=6                 |
 | 889 | fern      | Fix cosine T_max=15 + 1-epoch linear warmup                      |
 | 890 | frieren   | Random Fourier features on (x, z) for camber generalization     |
