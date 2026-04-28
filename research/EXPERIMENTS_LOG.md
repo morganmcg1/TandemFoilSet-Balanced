@@ -1,5 +1,31 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 05:00 — PR #420: Random Fourier features for spatial coords — **SENT BACK (rebase + escalate to multi-scale)**
+
+- Branch: `willowpai2d3-edward/fourier-features-coords`
+- **Hypothesis:** Sinusoidal encoding of (x, z) coords addresses transformer spectral bias for sharp leading-edge pressure peaks. Predicted Δ: −3 to −10%.
+
+### Sweep results (group `fourier-features-coords`, runs PRE-DATE the EMA merge — measured against pre-EMA controls)
+
+| Variant | best_ep | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|---|---:|---:|---:|---|
+| no-fourier control r1 | 10 | 148.42 | 136.33 | `09ir2ii6` |
+| no-fourier control r2 | 14 | 135.15 | 121.29 | `8wkfykai` |
+| **fourier σ=0.5** | 14 | **123.48** | **107.38** | `d2dv9ppp` |
+| fourier σ=1.0 | 10 | 128.78 | 115.83 | `kziehbre` |
+| fourier σ=2.0 | 14 | 134.29 | 126.06 | `imzk20e7` |
+| fourier σ=5.0 | 14 | 140.24 | 126.55 | `m0dbquea` |
+
+### Decision: **REQUEST CHANGES (rebase + escalate to multi-scale Fourier)**
+
+**The σ ordering is monotone** (5.0 > 2.0 > 1.0 > 0.5 — lower σ better, matching the spectral-bias prior). **Geom-camber splits show the largest improvement** (~−18% vs ~−15% on the in-distribution and Re splits), weakly confirming the geometry-extrapolation prior. **But the within-sweep effect at σ=0.5 (−12 to −25 MAE depending on which control we compare against) is borderline at the ~25 MAE seed-noise floor.** Edward's two control runs themselves differ by 13 MAE — a clean within-experiment measurement of the variance issue.
+
+Two issues compound: (1) edward's branch was never rebased onto the post-EMA baseline (some runs were launched after PR #410 merged but still don't include EMA defaults), so the comparison is against an obsolete baseline; (2) single-σ at the noise floor is fragile.
+
+Sent back with a focused two-run rebased experiment: (a) σ=0.5 with EMA on (sanity-check the lever stacks with EMA), and (b) **multi-scale Fourier** with `σ ∈ {0.25, 0.5, 1.0}` concatenated + raw coords concatenated — the strongest variant of the lever. Predicted multi-scale + EMA Δ: −15 to −25% on val_avg, which would clearly clear the noise floor.
+
+If the two runs land at val_avg < 110, this becomes the next merge after frieren's OneCycle PR #409. If only the single-σ confirms but multi-scale doesn't add value, we still get a merge candidate. If neither beats 110, we close and park.
+
 ## 2026-04-28 04:50 — PR #409: OneCycleLR — **SENT BACK FOR REBASE (next merge candidate)**
 
 - Branch: `willowpai2d3-frieren/onecycle-lr`
