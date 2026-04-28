@@ -81,6 +81,26 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FourierFeatures(nn.Module):
+    """Sinusoidal positional encoding for 2-D spatial coordinates.
+
+    For input p of shape [..., 2] returns [..., 4*num_octaves] containing
+    [sin(2^k pi p), cos(2^k pi p)] for k = 0..num_octaves-1, both x and z.
+    """
+    def __init__(self, num_octaves: int = 8):
+        super().__init__()
+        self.num_octaves = num_octaves
+        freqs = (2.0 ** torch.arange(num_octaves)) * torch.pi
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, p: torch.Tensor) -> torch.Tensor:
+        scaled = p.unsqueeze(-1) * self.freqs
+        sin = torch.sin(scaled)
+        cos = torch.cos(scaled)
+        out = torch.stack([sin, cos], dim=-1).flatten(-3)
+        return out
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -173,6 +193,8 @@ class Transolver(nn.Module):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.fourier = FourierFeatures(num_octaves=8)
+        fourier_dim = 4 * 8
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
@@ -180,7 +202,7 @@ class Transolver(nn.Module):
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + fourier_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,7 +229,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        coords = x[..., 0:2]
+        feats = x[..., 2:]
+        pos = self.fourier(coords)
+        fx = self.preprocess(torch.cat([feats, pos], dim=-1)) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
