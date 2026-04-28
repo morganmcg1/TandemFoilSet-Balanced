@@ -1,5 +1,81 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 09:13 — PR #656 (CLOSED): head-only weight decay 5e-4 (5× backbone wd)
+- Branch: `charliepai2d3-thorfinn/l1ff12-ema-cos14-lr-7p5e-4-head-wd-5e-4` (deleted)
+- Hypothesis: keep PR #578's HEAD_LR_MULTIPLIER=2.0 and apply 5× wd on head only to absorb in-dist over-fit observed at 3× head LR (PR #625).
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | head wd 5e-4 | PR #578 baseline | Δ |
+|--------|-------------:|-----------------:|--:|
+| `val_avg/mae_surf_p` | 77.58 | 75.78 | **+2.40% REGRESSION** |
+| `test_avg/mae_surf_p` | 68.44 | 66.27 | +3.27% |
+
+### Per-split val (6th closed lever sharing the Pareto signature)
+
+| split | head wd | baseline | Δ% |
+|-------|--------:|---------:|---:|
+| val_single_in_dist | 88.27 | 84.61 | +4.33% |
+| val_geom_camber_rc | 90.70 | 85.83 | **+5.67% ↑** |
+| val_geom_camber_cruise | 56.34 | 58.09 | **−3.01%** ↓ |
+| val_re_rand | 75.00 | 74.58 | +0.56% (flat) |
+
+### Analysis (key mechanistic finding)
+
+Student's framing: head wd 5e-4 acts as a **magnitude-dependent compressor** — pulls predictions toward zero hard enough that low-magnitude targets (cruise, y_std≤506) win and high-magnitude targets (in-dist y_std up to 2,077) lose. **Not an over-fit/under-fit story but a signal-norm story**.
+
+This generalises across all 6 closed levers in the Pareto pattern (PR #616 max_norm=10, #607 anneal-noise, #617 eta_min=5e-5, #642 slice_num=32, #639 ext-head, #656 head-wd): each is a different mechanism that systematically advantages low-magnitude predictions at the cost of high-magnitude ones. **The round-3 stack is at a magnitude-balanced equilibrium**; any single-knob shift breaks the balance toward one regime or the other.
+
+### Decision: CLOSED
+
+Round-5 implication: **per-split or per-magnitude loss reweighting** is the natural next mechanism class. Not single-knob bracketing.
+
+Reassigning thorfinn to **Lion optimizer** (vs current AdamW) (PR #685) — sign-based update treats all parameters uniformly, potentially rebalancing the magnitude-dependent optimisation that AdamW exhibits. Mechanistically distinct from all prior levers.
+
+---
+
+## 2026-04-28 09:13 — PR #655 (CLOSED): BF16 + autocast(enabled=False) inside PhysicsAttention
+- Branch: `charliepai2d3-edward/l1ff12-ema-cos14-lr-7p5e-4-bf16-attnfp32` (deleted)
+- Hypothesis: BF16 autocast everywhere except inside PhysicsAttention.forward, where slice softmax + slice-token attention stay FP32. Tests if attention is the precision-loss site identified in PR #626.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | BF16+attn-FP32 | PR #578 baseline | Δ |
+|--------|---------------:|-----------------:|--:|
+| `val_avg/mae_surf_p` | 80.90 | 75.78 | **+6.76% REGRESSION (worst BF16 variant)** |
+| `test_avg/mae_surf_p` | 69.26 | 66.27 | +4.51% |
+| Wallclock per epoch | ~123 s | ~132 s | **−6.8%** (sub-10% threshold) |
+| Peak GPU memory | 35.18 GB | 42.51 GB | −17.2% |
+
+### Per-split val (ALL 4 splits regress including cruise)
+
+| split | this run | baseline | Δ% | PR #626 ref Δ |
+|-------|---------:|---------:|---:|--:|
+| val_single_in_dist | 94.46 | 84.61 | **+11.65%** | +6.99% |
+| val_geom_camber_rc | 92.00 | 85.83 | +7.19% | +6.64% |
+| val_geom_camber_cruise | 59.81 | 58.09 | **+2.96%** | **−5.53%** (lost the implicit-regulariser win) |
+| val_re_rand | 77.34 | 74.58 | +3.70% | (n/a) |
+
+### Analysis
+
+**Hypothesis rejected**: attention is NOT the binding precision-loss site. Attention-FP32 actually regresses MORE than full BF16 + broad pred-FP32 (PR #626, +2.94%). Reading: the dominant precision-sensitive ops sit in the **MLP path / residual stream / gradient flow back to mlp2 + ln_3** (still BF16 here). Double cast at the attention boundary may itself add round-trip noise.
+
+**Key new finding**: cruise's improvement in PR #626 (−5.53%) was a **precision-noise regularisation effect** generated INSIDE the attention path. Restoring FP32 there killed the gain. So PR #626's per-split signature wasn't a free lunch — it was implicit regularisation noise from BF16 attention.
+
+**BF16 axis fully bracketed across 4 closed PRs** (#587 full BF16, #606 narrow guard, #626 broad guard, #655 attn-FP32) — none recover FP32 baseline. Cost-benefit unfavourable across the family.
+
+### Decision: CLOSED
+
+Filing student's suggestions:
+1. Ship FP32 as default + look elsewhere for throughput — agreed.
+2. Softmax-only FP32 narrow guard — deferred.
+3. Head-FP32 hybrid — noted; cleanest minimal precision intervention if BF16 ever revisited.
+4. Round-trip-cast cost sanity check — noted.
+
+Reassigning edward to **1-epoch linear LR warmup + 13-epoch cosine** (PR #684) — schedule axis untouched on round-3 modern stack. Mechanistic motivation: head's 2× boost gives effective 1.5e-3 LR from epoch 0; warmup softens early-epoch instability that PR #625 (head LR 3×) flagged as the in-dist-regression failure mode.
+
+---
+
 ## 2026-04-28 08:55 — PR #639 (CLOSED): extended head LR 2× on full late-block MLP path
 - Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-7p5e-4-extended-head-2x` (deleted)
 - Hypothesis: width-bracket of PR #578's decoupled head LR — extend the head set from `mlp2 + ln_3` (6 params) to the full late-block MLP path `mlp2 + ln_3 + mlp + ln_2` (12 params), keeping multiplier at 2×. Tests if PR #578's effect is specific to post-attention head or generalises to whole late-block MLP path.

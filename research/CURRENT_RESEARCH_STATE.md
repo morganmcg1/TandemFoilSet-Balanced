@@ -175,14 +175,15 @@ Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
    follow-up to PR #642's per-split signal: cruise wants sharper
    routing, in-dist/rc-camber want full capacity. Tests whether
    depth-asymmetric routing captures both regimes.
-5. **PR #655** — edward: L1+FF12+EMA + BF16 autocast +
-   **`autocast(enabled=False)` inside PhysicsAttention.forward** —
-   keeps FP32 in slice softmax + slice-token attention, BF16 elsewhere.
-   Highest-EV BF16 follow-up after PR #626 ruled out loss-side guards.
-6. **PR #656** — thorfinn: L1+FF12+EMA + decoupled head LR 2× +
-   **head-only weight decay 5e-4** (5× backbone wd, with
-   HEAD_LR_MULTIPLIER=2.0 fixed at PR #578's optimum) — addresses the
-   in-dist over-fit signal observed at PR #625's 3× failure.
+5. **PR #684** — edward: L1+FF12+EMA + **1-epoch linear LR warmup +
+   13-epoch cosine** (schedule axis) — manages high effective head LR
+   (1.5e-3 with PR #578's 2× multiplier) at epoch 0; mechanistically
+   addresses PR #625's in-dist-regression failure mode at higher LR.
+6. **PR #685** — thorfinn: L1+FF12+EMA + **Lion optimizer**
+   (lr=7.5e-5 backbone, 1.5e-4 head, wd=1e-3) — sign-based update treats
+   all parameters uniformly, may rebalance the magnitude-dependent
+   optimisation that AdamW exhibits (the round-3 Pareto frontier
+   suggests Adam's adaptive scaling amplifies the magnitude imbalance).
 7. **PR #657** — fern: L1+FF12+EMA + **layer scale (CaiT-style
    residual gating, γ_init=1e-4)** — per-channel learnable scalars on
    each residual branch. Mechanistically distinct architectural axis
