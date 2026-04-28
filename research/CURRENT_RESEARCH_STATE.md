@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-04-28 22:50 UTC
+- **Last updated**: 2026-04-28 23:35 UTC
 - **Branch**: `icml-appendix-charlie-pai2e-r3`
 - **Most recent direction from human researcher team**: none on file. Default contract from `target/program.md` stands — drive `val_avg/mae_surf_p` (and the matching `test_avg/mae_surf_p` from best val checkpoint) down on the equal-weight 4-split mean.
 
@@ -9,14 +9,14 @@
 - **`val_avg/mae_surf_p` = 104.058** (from PR #835, nezuko, MAE/L1 loss; merged 2026-04-28).
 - **`test_avg/mae_surf_p` = 92.608** (NaN-sample-skipped workaround in train.py, also from #835).
 
-Round 1 (PRs #830-#837) reviewed: 1 merged, 5 closed, 1 sent back. See `EXPERIMENTS_LOG.md` for the full breakdown.
+Round 1 (PRs #830-#837): 1 merged, 5 closed, 1 sent back. Round 2 partial (#831, #832 carry-overs): both closed (130.63 and 122.96 — neither beat MAE baseline). See `EXPERIMENTS_LOG.md` for the full breakdown.
 
 ## Round 2 in flight (8 of 8 GPUs active)
 
 | PR  | Student   | Hypothesis                                                       |
 |-----|-----------|------------------------------------------------------------------|
-| 831 | askeladd  | (revising) surf_weight=50 — original ran on MSE; should re-run on MAE  |
-| 832 | edward    | (round 1 carry-over) slice_num 64 → 128                          |
+| TBD | askeladd  | NEW: signed-log pressure target normalization (heavy-tail fix)   |
+| TBD | edward    | NEW: slice_num=128 + bf16 AMP on MAE baseline (clean re-run)     |
 | 887 | alphonse  | bf16 autocast + n_hidden=192/n_layers=6/n_head=6                 |
 | 889 | fern      | Fix cosine T_max=15 + 1-epoch linear warmup                      |
 | 890 | frieren   | Random Fourier features on (x, z) for camber generalization     |
