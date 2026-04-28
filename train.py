@@ -47,20 +47,25 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
-# Fourier positional features
+# Fourier positional features (Gaussian RFF — Tancik et al. 2020)
 # ---------------------------------------------------------------------------
 
-FOURIER_K = 8
+FOURIER_K = 16
+FOURIER_SIGMA = 10.0
+FOURIER_VARIANT = "gaussian_rff"
+
+# Sample frequency matrix once at module load with a fixed seed for
+# reproducibility. Shape: [2 spatial dims, K random frequencies].
+_FF_GENERATOR = torch.Generator(device="cpu").manual_seed(42)
+FOURIER_B = torch.randn(2, FOURIER_K, generator=_FF_GENERATOR) * FOURIER_SIGMA
 
 
 def fourier_features(xz: torch.Tensor) -> torch.Tensor:
-    """xz: [..., 2] (the raw, *normalized* x and z columns).
-    Returns [..., 4*FOURIER_K] of sin/cos at 2^k * pi frequencies, k=0..K-1."""
-    freqs = (2.0 ** torch.arange(FOURIER_K, device=xz.device, dtype=xz.dtype)) * torch.pi
-    proj = xz.unsqueeze(-1) * freqs  # [..., 2, K]
-    sin = torch.sin(proj).flatten(-2)  # [..., 2*K]
-    cos = torch.cos(proj).flatten(-2)
-    return torch.cat([sin, cos], dim=-1)  # [..., 4*K]
+    """Gaussian RFF on (x, z). xz: [..., 2] (the raw, *normalized* x and z
+    columns). Returns [..., 2*FOURIER_K] of [sin(2π x B), cos(2π x B)]."""
+    B = FOURIER_B.to(xz.device, dtype=xz.dtype)
+    proj = 2.0 * torch.pi * (xz @ B)  # [..., K]
+    return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # [..., 2*K]
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +441,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + 4 * FOURIER_K,
+    fun_dim=X_DIM - 2 + 2 * FOURIER_K,  # 22 + 32 = 54 (unchanged from deterministic K=8)
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -471,7 +476,9 @@ run = wandb.init(
         "model_config": model_config,
         "n_params": n_params,
         "fourier_k": FOURIER_K,
-        "fourier_dims": 4 * FOURIER_K,
+        "fourier_dims": 2 * FOURIER_K,
+        "fourier_sigma": FOURIER_SIGMA,
+        "fourier_variant": FOURIER_VARIANT,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
