@@ -793,3 +793,34 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
 - **`val_geom_camber_rc` consistently regresses with sharper attention** (init=2.0 in PR #574: +2.0%, init=2.5 in this run: +2.60%). Sharper attention is a net loss for geometry-extrapolation OOD on rc-camber.
 - Decision: **CLOSE** — diminishing returns on slice-temp init axis (Δ=−0.327 here vs −3.77 cross-stack); test slightly regressed; camber_rc consistently regresses with sharper attention; cross-stack would be +1.74% regression. Some of the prior "huge jump" was confounded by orthogonal stack improvements (grad clip, noise=0.0025) that have since landed. Slice-temp init axis has run its course at the current stack.
 - Pivot askeladd to per-block slice-temp init schedule — variation along the block-depth axis rather than the global init scalar. The consistent camber_rc pattern suggests sharper attention helps later blocks (semantic refinement) but hurts earlier blocks (broad spatial pooling).
+
+## 2026-04-28 08:30 — PR #629: torch.compile mode="reduce-overhead" with fixed-shape padding (throughput follow-up)
+- Branch: `charliepai2d2-alphonse/reduce-overhead-fixed-padding` (artifact: `model-reduce-overhead-fixed-padding-20260428-075149`)
+- Hypothesis: fix the per-shape-CUDA-Graph OOM that defeated reduce-overhead in PR #510 by padding all batches to global max mesh size (N_MAX=242577). Expected another +10–20% wall-clock on top of mode="default".
+
+| metric | this run (reduce-overhead + fixed pad) | baseline (PR #510, compile=default) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **65.008** (epoch 14) | 64.824 (epoch 18) | +0.28% (~flat) |
+| `test_avg/mae_surf_p` | **56.178** | 56.391 | −0.38% (~flat) |
+| Epochs in 30-min cap | **14** | 18 | **−22% regression** |
+| Mean s/epoch | **135.6** | 103.4 | **+31% slower** |
+| Pre-warm s | 17.4 | n/a | one-time setup |
+| Peak VRAM | 42.67 GB | 42.6 GB | flat |
+
+- Mechanism analysis (per alphonse):
+  - reduce-overhead saves ~25% per-iter overhead by replaying one CUDA Graph (instead of relaunching kernels each step).
+  - Fixed padding to N_MAX=242577 inflates per-iter compute by ~60% (every batch does worst-case mesh work; cruise tandem 242K nodes vs typical batch ~150K average).
+  - Net per-iter wall-clock: +31% over compile=default's variable-padding baseline.
+  - Total compute essentially conserved: 14 × 135.6 = 1898 s ≈ 18 × 103.4 = 1861 s. Same work, bundled into fewer/larger epochs.
+- **Per-split signature**: mixed and cancelling. val_geom_camber_cruise improved most (−4.86%), val_single_in_dist regressed most (+3.27%), no clear OOD/in-dist pattern.
+- Compile-mode confirmation: reduce-overhead succeeded cleanly with fixed padding. One CUDA Graph for the single shape `[B=4, N=242577, *]`. No diagnostic warnings during 5236 training iterations. ~53 GB VRAM headroom on the 96 GB cap.
+- Decision: **CLOSE** — quality flat, throughput regressed −22%. The model is compute-bound at max-mesh shape, not launch-overhead-bound. Fixed padding overshoots; bucketed batching is the right next probe.
+- **Mechanistic findings unlocked**:
+  1. reduce-overhead is *feasible* on this codebase with fixed shapes (no graph-pool memory issue).
+  2. Pre-warm peak (~42.55 GB) and steady-state (~42.67 GB) leave ~53 GB headroom — bucketed batching is NOT memory-blocked, only throughput-uncertain.
+  3. The throughput bottleneck is *per-iter compute*, not *per-iter overhead*. CUDA Graph replay can save up to ~25% overhead, but only if per-iter compute is preserved.
+- Follow-ups (per alphonse):
+  1. **Bucketed batching + reduce-overhead** — sort/bucket samples by mesh size; pad each bucket to its bucket-max. ~4 buckets at 100K/150K/200K/245K → 4 CUDA Graphs (graph-pool overhead bounded). Mean per-batch compute stays close to variable-padding's ~150K. Predicted: this should be the configuration that actually moves throughput.
+  2. **reduce-overhead with `dynamic=True`** — keeps variable shapes but lets reduce-overhead share a graph across compatible shapes. Cheaper to implement.
+  3. **TF32 matmul precision** (`torch.set_float32_matmul_precision("high")`) — independent of compile mode; helps eager too.
+  4. **DropPath graph break removal** — replace `torch.rand(1).item()` with tensor-mask form. Few-percent win on top.
