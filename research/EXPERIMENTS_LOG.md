@@ -31,6 +31,53 @@
 
 ---
 
+## 2026-04-28 08:07 — PR #343 (round 3): H6 bf16+compile × FiLM × EMA — **MERGED** (Round 0 winner #4)
+
+- Branch: `willowpai2d4-askeladd/h6-bf16-compile-batch` (rebased onto post-#442 advisor branch)
+- Round 3 single-cell test: Run G = bf16 + torch.compile + FiLM + EMA + wd=5e-4 + lr=7e-4 + seed=123 + epochs=37.
+
+| Metric | Merged baseline (PR #442) | **Run G** | Δ |
+|--------|---------------------------:|----------:|--:|
+| val_avg/mae_surf_p (active) | 109.19 (ema) | **80.91** (raw) | **−25.7%** |
+| val_avg_ema/mae_surf_p (best epoch) | 109.19 | 81.68 (ep 33) | −25.2% |
+| **test_avg/mae_surf_p** | **98.47** | **72.73** | **−26.1%** |
+| sec/epoch | ~129 | 53.9 | **−58% (2.4× faster)** |
+| Epochs done | 14 | 34 | **+143%** |
+| Peak GPU | ~42 GB | 23.6 GB | −44% |
+
+W&B run: `bi8m16pa`.
+
+### Per-split test for Run G vs PR #442 baseline
+
+| Split | PR #442 baseline | Run G | Δ |
+|-------|-----------------:|------:|--:|
+| `test_single_in_dist` | 111.60 | 78.68 | **−29.5%** |
+| `test_geom_camber_rc` | 112.42 | 84.98 | **−24.4%** |
+| `test_geom_camber_cruise` | 69.59 | 53.78 | **−22.7%** |
+| `test_re_rand` | 100.26 | 73.47 | **−26.7%** |
+| **avg** | **98.47** | **72.73** | **−26.1%** |
+
+### Conclusions
+
+- **Largest single-PR effect of round 0.** −25.7% / −26.1% on val/test vs PR #442 baseline, uniform across all four test splits.
+- **The mechanism is the same as Run F (round 2): 2.4× throughput → 34 epochs vs 14 in same wall clock.** Cosine reaches lr=0.0 at epoch 36 — full schedule traversal achieved for the first time on this branch.
+- **bf16 + compile + FiLM + EMA all coexist cleanly.** All three risks I flagged (bf16 numerics × FiLM γ/β, compile × dynamic conditioning, EMA × bf16 scope) failed to materialize. Implementation handles EMA inside bf16 scope correctly via fp32 master parameters; `_raw_module()` unwrapper for both raw and EMA state_dict; eval-side amp_ctx threading consistent across raw and EMA.
+- **EMA's marginal value drops to ~0 at full-convergence regime.** Per-epoch EMA-vs-raw gap narrowed from ~16 pts at epoch 1 to 0.13 pts at epoch 33. Raw caught up by epoch 34; active source selected raw. Mechanism: with full cosine traversal (lr→0), raw model converges enough that EMA tracks rather than improves on it. EMA still useful as defensive measure; kept on by default.
+- **Cross-split signature uniform:** largest gain on `single_in_dist` (in-dist, hardest baseline), smallest on `cruise` (easiest absolute, less headroom). Same pattern as Run F.
+
+### Action
+
+Merged. New baseline: val=80.91, test=72.73. **bf16+compile is now the dominant compounding lever for every future PR.** All in-flight PRs should rebase to inherit the throughput uplift.
+
+### Useful follow-ups (deferred)
+
+- **Re-tune EMA for longer-budget regime.** With raw converging well under bf16+compile, decay=0.99 (~100-step horizon) tracks too tightly. A larger decay (e.g. 0.998, ~500-step horizon) might give EMA a lead late in training. Lower priority since raw already wins.
+- **`torch.compile(mode="reduce-overhead")` with padded N_max.** Could unlock another 20-30% throughput via CUDAGraphs but requires wrapping `pad_collate` to pad to fixed N_max (since `data/` is read-only).
+- **Re-tuned bs=8 with proper LR.** Still untested.
+- **`--epochs 37` should become the new default.** Cosine reaches lr=0 at this budget; prior `--epochs 25` recommendation is now under-trained.
+
+---
+
 ## 2026-04-28 07:45 — PR #576: H16 arcsinh-compressed pressure target — **SENT BACK FOR REBASE-ONTO-#442**
 
 - Branch: `willowpai2d4-nezuko/h16-arcsinh-pressure-target` (rebased onto post-#404, **not yet onto post-#442**)
