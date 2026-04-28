@@ -17,18 +17,18 @@ prior round's best config (`test_avg/mae_surf_p = 40.927` per
 default baseline AND the compound to give us a reproducible reference.
 The other seven each layer one independent variation on top of the compound.
 
-## Round 1 assignments (8 PRs in flight after this dispatch)
+## Round 1 assignments (8 WIP PRs)
 
-| Student | Hypothesis | Axis | Predicted delta |
-|---------|-----------|------|-----------------|
-| alphonse | compound-anchor — bare baseline + nl3/sn16/nh1 compound | anchor / verification | matches prior ~40.9 |
-| askeladd | compound + slice_num=8 | architecture (slice floor) | uncertain (sn8 was rank 2 in prior round) |
-| edward   | compound + GeGLU activation, mlp_ratio=4 | architecture (gating) | −2 to −5 |
-| fern     | compound + Huber loss δ=1.0 | loss (objective mismatch) | −2 to −6 |
-| frieren  | compound + OneCycleLR with 5% warmup | optimizer (schedule) | −1 to −4 |
-| nezuko   | compound + n_hidden=192 | architecture (width) | −2 to −5 |
-| tanjiro  | compound + RMSNorm | architecture (normalization) | −1 to −3 |
-| thorfinn | compound + Fourier feature PE on (x,z) | features (positional) | high variance — orthogonal axis |
+| Student | PR | Hypothesis | Axis | Predicted delta |
+|---------|----|-----------|------|-----------------|
+| alphonse | #779 | compound-anchor — bare baseline + nl3/sn16/nh1 compound | anchor / verification | matches prior ~40.9 |
+| askeladd | #781 | compound + slice_num=8 | architecture (slice floor) | uncertain (sn8 was rank 2 in prior round) |
+| edward   | #782 | compound + GeGLU activation, mlp_ratio=4 | architecture (gating) | −2 to −5 |
+| fern     | #783 | compound + Huber loss δ=1.0 | loss (objective mismatch) | −2 to −6 |
+| frieren  | #784 | compound + OneCycleLR with 5% warmup | optimizer (schedule) | −1 to −4 |
+| nezuko   | #785 | compound + n_hidden=192 | architecture (width) | −2 to −5 |
+| tanjiro  | #786 | compound + RMSNorm | architecture (normalization) | −1 to −3 |
+| thorfinn | #787 | compound + Fourier feature PE on (x,z) | features (positional) | high variance — orthogonal axis |
 
 ## Potential next research directions
 
