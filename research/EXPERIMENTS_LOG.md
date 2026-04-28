@@ -1,5 +1,34 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 00:38 — PR #323: FFN expressivity, mlp_ratio 2 → 4 — **SENT BACK FOR REBASE**
+
+- Branch: `willowpai2d3-thorfinn/mlp-ratio-4`
+- **Hypothesis:** Bumping the per-block FFN inner-dim ratio from 2 → 4 increases nonlinear capacity per layer; should help complex pressure pattern fitting.
+- **Predicted Δ on `val_avg/mae_surf_p`:** −3% to −7%.
+- **Observed in-sweep Δ vs ratio=2 control:** −4.7% (143.75 → 136.96). On test_avg, −6.0% (130.22 → 122.41 after the student's local NaN workaround). **Direction matches prediction.**
+
+### Sweep results (group `mlp-ratio-sweep`)
+
+| mlp_ratio | params | peak GB | epochs done | best ep | val_avg/mae_surf_p | W&B run |
+|---:|---:|---:|---:|---:|---:|---|
+| 2 (control) | 0.66M | 42.1 | 14 / 50 | 11 | 143.7474 | `f188eiwk` |
+| **4** | **0.99M** | 52.2 | 13 / 50 | 12 | **136.9640** | `a6v7k5zd` |
+| 6 | 1.32M | 63.1 | 11 / 50 | 10 | 150.8605 | `hj0hyhkb` |
+
+### Decision: **REQUEST CHANGES (rebase + re-run)**
+
+- The PR's runs were submitted **before PR #320 merged**, so they used the OLD baseline (`lr=5e-4`, no warmup). The `mlp_ratio=4` winner at 136.96 is *worse* than the new merged baseline (115.84). Merging would regress val_avg.
+- Sent back to thorfinn with instructions to rebase onto the merged advisor branch and re-run the sweep on top of `peak_lr=1e-3, warmup_epochs=2`. The lever direction is clean; we expect it to compound with warmup if FFN-expressivity is orthogonal to LR-schedule (the prior).
+- Also flagged: drop the local re-eval script (`target/sweep_logs/reeval_test.py`) — the train-side safety net for the NaN bug should live in the trainer, not a follow-up reanalysis.
+
+### Bug confirmation: NaN in `test_geom_camber_cruise`
+
+Thorfinn pinpointed the exact root cause that nezuko's PR #320 had only narrowed to "model emits NaN":
+
+- The offending file is **`test_geom_camber_cruise/000020.pt`** — 761 NaN values in the pressure channel of the **ground truth**, not the prediction.
+- `data/scoring.accumulate_batch` is supposed to skip samples with non-finite ground truth, but the implementation does this by zero-masking, and `0.0 * NaN == NaN` in IEEE 754. So the NaN propagates into the global accumulators for that split.
+- This means **the model is fine** — it's a scoring bug. The fix lives in the train-side wrapper since `data/scoring.py` is read-only. nezuko's PR #397 is in flight to land this safety net centrally.
+
 ## 2026-04-28 00:30 — PR #320: Linear warmup + higher peak LR (5e-4 → 1e-3, 2-epoch warmup) — **MERGED**
 
 - Branch: `willowpai2d3-nezuko/higher-lr-warmup`

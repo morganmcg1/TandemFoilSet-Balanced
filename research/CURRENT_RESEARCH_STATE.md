@@ -7,9 +7,11 @@
 
 ## Current research focus
 
-First Round-1 winner merged: **PR #320** (linear warmup + peak LR 1e-3) drops `val_avg/mae_surf_p` from 147.55 → **115.84** (−21.5%, uniform across all 4 val splits). This sets the in-track baseline. Other 7 Round-1 PRs (#294, #315, #316, #317, #319, #322, #323) are still in flight and will be reviewed against the 115.84 baseline.
+First Round-1 winner merged: **PR #320** (linear warmup + peak LR 1e-3) drops `val_avg/mae_surf_p` from 147.55 → **115.84** (−21.5%, uniform across all 4 val splits). This sets the in-track baseline.
 
-A pre-existing NaN failure in `test_geom_camber_cruise` (model emits non-finite pressure predictions on at least one test sample, regardless of LR) is now the bottleneck for paper-facing `test_avg/mae_surf_p`. Follow-up assigned to nezuko (PR #397).
+**Rebase warning is now active:** all in-flight Round-1 PRs were drafted against the OLD baseline (`lr=5e-4`, no warmup). PR #323 (thorfinn, mlp_ratio=4) just confirmed the lever direction is real (−4.7% vs ratio=2 in-sweep) but its absolute number 136.96 is below the new 115.84 bar — so it was sent back for rebase + re-run on top of the merged baseline. Expect the same need for the other six in-flight PRs once their results arrive: each must demonstrate that its lever still wins on top of `peak_lr=1e-3, warmup_epochs=2`.
+
+**Test-aggregate bottleneck:** thorfinn's NaN root-cause analysis was more precise — the offending file is `test_geom_camber_cruise/000020.pt` (761 NaN values in **ground-truth pressure**, not predictions). The bug is in `data/scoring.py`'s zero-mask-then-multiply pattern (`0.0 * NaN == NaN`) which fails to skip non-finite GT samples as documented. `data/scoring.py` is read-only, so the fix lives in the trainer's eval wrapper. nezuko PR #397 is in flight to land this safety net centrally.
 
 ## Round 1 — orthogonal axes assigned (2026-04-27)
 
@@ -22,7 +24,7 @@ A pre-existing NaN failure in `test_geom_camber_cruise` (model emits non-finite 
 | frieren | [#319](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/319) | **Depth** — `n_layers` 5 → 8 (sweep 6/8/10) | wip | — |
 | nezuko | [#320](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/320) | **LR schedule** — linear warmup + peak LR ∈ {5e-4, 1e-3, 2e-3} | **MERGED** | **−21.5%** (147.55 → 115.84); peak_lr=1e-3 wins |
 | tanjiro | [#322](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/322) | **Channel weighting** — upweight pressure in surface loss (sweep p_w ∈ {1, 2, 3, 5}) | wip | — |
-| thorfinn | [#323](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/323) | **FFN expressivity** — `mlp_ratio` 2 → 4 (sweep 2/4/6) | wip | — |
+| thorfinn | [#323](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/323) | **FFN expressivity** — `mlp_ratio` 2 → 4 (sweep 2/4/6) | **rebase + re-run** | In-sweep −4.7% (143.75→136.96, ratio=4 wins, ratio=6 regresses); abs below new bar — sent back to re-run on merged baseline |
 
 These eight axes were chosen for **orthogonality** so that improvements compound when winners are merged sequentially: loss function, width, slice count, surface/volume balance, depth, LR schedule, channel weighting, and FFN expressivity touch nearly disjoint parts of the model and training stack.
 
