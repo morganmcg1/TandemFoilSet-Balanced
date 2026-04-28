@@ -1,5 +1,51 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 01:50 — PR #327 (merged, NEW BASELINE): Sinusoidal Fourier features for (x, z), K=8
+
+- branch: `willowpai2d1-tanjiro/fourier-features-positions` (deleted on merge)
+- hypothesis: concatenate sinusoidal Fourier features
+  `[sin(2^k π x), cos(2^k π x), sin(2^k π z), cos(2^k π z)] for k=0..7` to
+  the per-node feature vector. Predicted -2 to -6%.
+
+### Results
+
+| Metric | Value | Δ vs prior baseline (PR #359, bf16) |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **106.9223** (epoch 19 of 19) | **−12.2%** |
+| `test_avg/mae_surf_p` | **96.8186** | **−12.9%** |
+| Per-epoch wall | 97-100 s (mean ~98) | ≈baseline (FF compute trivial) |
+| Peak GPU memory | 33.3 GB / 96 GB | +0.4 GB (negligible) |
+| Param count | 0.67 M | +0.01 M |
+| Epochs completed | 19 / 50 | same |
+| W&B run | `nbyicdne` (`ff-K8-bf16`) | — |
+
+### Per-split surface MAE (val, vs prior bf16 baseline)
+
+| Split | Δ |
+|---|---|
+| val_single_in_dist | **−17.0%** (141.24 → 117.22) |
+| val_geom_camber_rc | −3.3% (130.28 → 125.94) |
+| val_geom_camber_cruise | **−19.6%** (99.83 → 80.26) |
+| val_re_rand | −10.2% (116.04 → 104.27) |
+
+### Analysis & conclusions
+
+- **Merged. New round baseline.** Largest single win of the round so far.
+- Tanjiro rebased onto current advisor branch before running so this is
+  apples-to-apples vs the bf16 baseline. Excellent practice.
+- FF computed in fp32 *before* the bf16 autocast scope so sin/cos aren't
+  quantised. Right composition pattern.
+- Train loss drops faster per epoch with FF: by epoch 5 train_surf is ~0.41
+  vs ~0.50 for bf16-baseline at the same point. Canonical Tancik et al.
+  (2020) Fourier-features behaviour.
+- **Per-split asymmetry is informative:** cruise and single-in-dist
+  improve ~17–20%, val_re_rand 10%, but rc-camber held-out only 3-4%. The
+  rc holdout is bottlenecked by *camber → pressure mapping* under unseen
+  geometry, not by spatial-frequency representation. Targeted future
+  experiment direction.
+- Followup directions queued: Gaussian random Fourier features (Tancik's
+  variant, often beats deterministic ladder), K sweep, FF on saf/dsdf.
+
 ## 2026-04-28 01:03 — PR #393 (closed): Half-step capacity scale-up on bf16 (h=160, L=5, heads=5, slices=80)
 
 - branch: `willowpai2d1-alphonse/halfstep-capacity-on-bf16` (deleted on close)
