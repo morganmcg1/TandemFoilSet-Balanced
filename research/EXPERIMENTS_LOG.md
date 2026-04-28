@@ -1283,3 +1283,52 @@ Resolves the schedule-vs-optimizer interaction for the appendix: under AdamW (#3
 
 ### Reassignment
 - Fern stays on PR #560 — re-running on the rebased branch with corrected `betas=(0.9, 0.999)`. Single-knob discipline preserved (the only diff vs baseline is the scheduler line + lr-log capture).
+
+## 2026-04-28 06:35 — PR #567: SmoothL1 β = 0.5 → 0.25 (charliepai2d1-edward) — **sent back for rebase + re-run**
+- Run config: `beta = 0.5 → 0.25` in the SmoothL1/MSE-vol loss block. Branched from post-#535 baseline (lr=1.7e-4, β2=0.99, β=0.5). Single-line edit; clean diff.
+
+### Headline metrics (best EMA epoch=14/50, timeout-cut)
+| metric | this run | run base #535 | current baseline #571 |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | 54.896 | 61.508 (**−10.75 %**) | 52.116 (**+5.34 %**) |
+| `test_avg/mae_surf_p` | 47.503 | 52.336 (**−9.23 %**) | 45.413 (+4.61 %) |
+| raw val (best at best EMA ep) | 68.684 | — | — |
+| EMA−raw spread | +13.79 | — | — |
+
+### Per-split — broad-based gain on every split (vs run base #535)
+| Split | val Δ vs #535 | test Δ vs #535 |
+|---|---:|---:|
+| single_in_dist | **−11.70 %** | **−10.71 %** |
+| geom_camber_rc | −10.39 % | −5.94 % |
+| geom_camber_cruise | **−14.35 %** | **−13.11 %** |
+| re_rand | −7.52 % | −9.05 % |
+
+### Mechanism finding (durable for the appendix β-curve)
+
+**Loss-form β-axis fully mapped (1.0 → 0.5 → 0.25 monotone, no knee yet visible)**:
+
+| β | PR | val_avg | test_avg | dominant winner |
+|---|---|---:|---:|---|
+| 1.00 | #352 | 64.160 | 55.930 | cruise |
+| 0.50 | #535 | 61.508 | 52.336 | single_in_dist |
+| 0.25 | **#567 (this)** | **54.896** | **47.503** | single_in_dist amplified, cruise re-entered as second-largest gainer |
+
+The L1-tail-amplifies story scales further than predicted:
+- A narrower MSE-regime (`|err| < 0.25σ`) routes more residuals to the L1 asymptote.
+- Lion's sign-update preserves L1-asymptote gradient *direction* in its momentum buffer; under MSE the magnitude information is what changes, which Lion partially discards via the sign.
+- Cruise's *re-amplification* (predicted to regress) reveals: cruise's lower-magnitude residuals fall into the new (small-`β`) MSE-regime where small near-converged residuals get *amplified* by `2·err²/β`, helping rather than hurting.
+- grad_norm rise modest (+16 % vs #535's late-epoch); clip envelope at 0.5 absorbed the magnification cleanly.
+
+### Why send back, not close, not merge
+- Past close threshold (>5 %) only barely (+5.34 % val vs current).
+- Past merge gate vs current baseline (recorded 54.896 > 52.116).
+- **Branch has lr=1.7e-4 + β2=0.99**; squash-merge would compose β=0.25 cleanly (different code region from lr/β2) — predicted post-rebase val ~46–50 — but the recorded number doesn't beat baseline directly.
+- The β-axis mechanism (narrower MSE-regime + L1-tail amplification) is mechanically independent of lr (per-step size) and β2 (buffer smoothness); both moved baselines (#536 lr=2.5e-4, #571 β2=0.999) target different physical mechanisms. Predicted to stack.
+
+### Predicted re-run outcome
+- val ~46–50 (−4 to −12 % vs new baseline 52.116). The cleanest stack-test: loss-shape × Lion-buffer-history × Lion-lr.
+- If wins, the next bracket point is **β=0.125** (edward's suggested follow-up) — the β-curve has no knee yet visible.
+- If washes vs new baseline (val ~50–53), declares the L1-axis saturated under the new optimizer regime.
+
+### Reassignment
+- Edward stays on PR #567 — re-running on rebased branch (single-line edit; trivial rebase, no conflicts expected).
