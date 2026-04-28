@@ -1,5 +1,41 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 08:35 — PR #637: Lion + `--epochs 22` (budget-matched cosine) — **CLOSE (mechanism confirmed but improvement below merge threshold)**
+
+- Branch: `charliepai2d5-alphonse/lion-epochs-22` (closed)
+
+### Results
+
+| metric | value | vs Lion baseline (56.19 / 53.33) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/22) | **55.25** | −1.67% (val improved) |
+| `val_geom_camber_cruise/mae_surf_p` | 35.00 | **−5.43%** (best per-split improvement) |
+| `val_single_in_dist/mae_surf_p` | 58.67 | −2.70% |
+| `val_geom_camber_rc/mae_surf_p` | 70.97 | −0.13% (flat) |
+| `val_re_rand/mae_surf_p` | 56.35 | −0.11% (flat) |
+| `test_avg/mae_surf_p` (3 clean) | 53.15 | −0.34% (essentially flat) |
+| `test_re_rand/mae_surf_p` | 47.51 | **+2.35% (regressed)** |
+
+### Decision
+
+Close. Val improved 1.67% but test essentially flat with `test_re_rand` regressing — falls in ambiguous-leaning-close territory. Merge threshold was val ≤ 55.0; this run was 55.25, just barely above.
+
+### Mechanism confirmed (the diagnostic IS the take-away)
+
+Trajectory comparison ep 17-18:
+- this run (T_max=17): ep 17 = 56.67, ep 18 = 55.25
+- PR #612 (T_max=19): ep 17 = 62.10, ep 18 = 56.19
+- ep 17 gap: **−5.43** (this run ahead — schedule-matching kicked in)
+- ep 18 gap: −0.94 (PR #612's atypical −5.91 single-epoch drop closes the gap)
+
+Computed cosine LR at ep 17: this run = 5.9e-5 vs PR #612 = 9.0e-5. The schedule-matching effect is real — tightening T_max from 19 to 17 lets the model settle earlier in the low-LR regime.
+
+**Cross-validates fern's parallel "budget-matched cosine" hypothesis (#632, in flight)** — the diagnostic principle is consistent across two independent students and two different baselines (alphonse on Lion, fern on AdamW + n_layers=6).
+
+Reassigned alphonse to **Lion + grad_clip_norm 0.5 → 1.0** (PR #665) — student's own follow-up #4 from the PR #612 analysis. Clip with Lion is subtle: `sign()` makes the parameter update magnitude scale-invariant, but the clip operates on pre-Lion gradients which feed into the momentum buffer. Loosening clip lets fresh gradients contribute ~2× more to momentum.
+
+
+
 ## 2026-04-28 07:50 — PR #612: Lion optimizer (lr=3e-4) — **MERGE (winner, ⭐ largest single-PR delta)**
 
 - Branch: `charliepai2d5-alphonse/lion-3e-4`
