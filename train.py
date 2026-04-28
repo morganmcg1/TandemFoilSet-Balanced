@@ -117,37 +117,42 @@ class PhysicsAttention(nn.Module):
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
     def forward(self, x):
-        B, N, _ = x.shape
+        # Disable BF16 autocast for the entire attention block.
+        # Slice softmax and attention matmuls are precision-sensitive;
+        # PR #626 showed BF16 here erodes head's 2x LR gain.
+        with torch.amp.autocast(device_type='cuda', enabled=False):
+            x = x.float()
+            B, N, _ = x.shape
 
-        fx_mid = (
-            self.in_project_fx(x)
-            .reshape(B, N, self.heads, self.dim_head)
-            .permute(0, 2, 1, 3)
-            .contiguous()
-        )
-        x_mid = (
-            self.in_project_x(x)
-            .reshape(B, N, self.heads, self.dim_head)
-            .permute(0, 2, 1, 3)
-            .contiguous()
-        )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
-        slice_norm = slice_weights.sum(2)
-        slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
-        slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
+            fx_mid = (
+                self.in_project_fx(x)
+                .reshape(B, N, self.heads, self.dim_head)
+                .permute(0, 2, 1, 3)
+                .contiguous()
+            )
+            x_mid = (
+                self.in_project_x(x)
+                .reshape(B, N, self.heads, self.dim_head)
+                .permute(0, 2, 1, 3)
+                .contiguous()
+            )
+            slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+            slice_norm = slice_weights.sum(2)
+            slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
+            slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
-        v = self.to_v(slice_token)
-        out_slice = F.scaled_dot_product_attention(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            is_causal=False,
-        )
+            q = self.to_q(slice_token)
+            k = self.to_k(slice_token)
+            v = self.to_v(slice_token)
+            out_slice = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=False,
+            )
 
-        out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
-        out_x = rearrange(out_x, "b h n d -> b n (h d)")
-        return self.to_out(out_x)
+            out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
+            out_x = rearrange(out_x, "b h n d -> b n (h d)")
+            return self.to_out(out_x)
 
 
 class TransolverBlock(nn.Module):
@@ -507,11 +512,16 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        ff = fourier_pos_features(x_norm[..., :2])
-        x_norm = torch.cat([x_norm, ff], dim=-1)
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            ff = fourier_pos_features(x_norm[..., :2])
+            x_norm = torch.cat([x_norm, ff], dim=-1)
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+
+        # Broad FP32 guard for loss computation (per PR #626).
+        pred = pred.float()
+        y_norm = y_norm.float()
         err = pred - y_norm
         sq_err = err ** 2
         abs_err = err.abs()
