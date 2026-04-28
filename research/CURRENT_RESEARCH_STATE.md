@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- 2026-04-28 02:30 — round 1 mostly settled on `icml-appendix-willow-pai2d-r2`,
-  round 2 building momentum, scoring bug fix landed
+- 2026-04-28 02:45 — round 1 mostly settled on `icml-appendix-willow-pai2d-r2`,
+  round 2 in flight (5 axes), scoring bug fix landed
 - **Baseline updated:** PR #330 (frieren, Huber β=1) merged on top of
   PR #328. Current best `val_avg/mae_surf_p = 115.61` (W&B run
   `uip4q05z`, best epoch 11/50). −13.4 % over the prior baseline,
@@ -56,32 +56,39 @@
 | 415 | frieren   | round 2: asinh on pressure target | NEW assignment | n/a (assigned this cycle) |
 | 332 | nezuko    | surf_weight 10 → 25 (sweep)| sent back → rebase + on-baseline + multi-seed | sweep done: surf-15=137.42, **surf-25=133.19**, surf-40=142.59 (clean interior optimum at 25; absolute level inside ±10 % noise of baseline) |
 | 335 | tanjiro   | warmup + cos, peak 1e-3    | sent back → rebase + on-baseline re-run | sweep done on slice-64+MSE: best **(b) 113.96** at lr=1e-3, T_max=15 (a tied at 115.15, c@135.24 likely seed-unlucky); needs on-baseline confirmation |
-| 337 | thorfinn  | BS 4→8, lr 7e-4            | sent back → rebase + BS=16/lr=1e-3 (+ multi-seed if budget) | 139.39 / 153.19 (2-seed mean 146.29; ~9.5 % worse than baseline on mean) |
+| 337 | thorfinn  | BS 4→8, lr 7e-4            | **closed** (hardware-blocked at BS≥8 on slice-128; BS=6 3-seed mean 162.63 is 41 % worse than 115.61) | superseded |
+| 457 | thorfinn  | round 2: EMA weight averaging | NEW assignment (status:wip) | n/a |
 | 367 | fern      | bug fix: cruise-NaN scoring| **MERGED ★** | rebased + verified on Huber baseline: test_avg: NaN → 117.59, cruise_p: NaN → 96.92 |
 | 452 | fern      | round 2: push slice_num to 192/256 | NEW assignment (status:wip) | n/a |
 
-PRs surfaced for advisor review this cycle: **#367**. Action:
-**#367 MERGED ★** as the third merged PR in this round (after
-#328 + #330). Bug fix is clean: 2-line `nan_to_num` insertions on
-`accumulate_batch` and `evaluate_split`. Verification on run
-`fitecuaq` (slice-128 + Huber baseline + bug fix) yielded
-`test_avg/mae_surf_p = 117.59` (was NaN), `test_geom_camber_cruise/
-mae_surf_p = 96.92` (was NaN) — paper-facing primary metric is
-finite for the first time on this branch. Three independent root-
-cause confirmations across the round (edward, askeladd, fern) all
-converged on the same fix.
-**Reassigned fern to round-2 axis #452 (push slice_num to 192/256)**
-— natural continuation of fern's merged round-1 winner. Same
-mechanism (slice bottleneck on N=242K cruise meshes), just pushed
-further. Cost geometry favorable (slice² stays small relative to
-O(N · slice_num) einsums).
+PRs surfaced for advisor review this cycle: **#337**. Action:
+**#337 closed** — BS+LR scaling axis is hardware-blocked at slice-128
+(BS≥8 OOMs because slice-128 ate the 12 GB BS=8 headroom that
+existed at slice-64). Only BS=6 fits at 81.7 GB peak; 3-seed mean
+162.63 is 41 % worse than the merged 115.61 baseline. Student
+explicitly recommended closing in their suggested follow-up #1.
+**Reassigned thorfinn to round-2 axis #457 (EMA weight averaging)** —
+direct fit for the undertrained-at-30-min-cap regime, orthogonal
+to all loss/architecture/throughput axes in flight, plays to
+thorfinn's seed-variance methodology strength. Sweep `ema_decay ∈
+{0.9, 0.99, 0.999}`. Implementation: `torch.optim.swa_utils.
+AveragedModel` with custom `avg_fn`; per-epoch dual val (live +
+EMA), best-checkpoint selection picks per-epoch winner.
+
+Bonus methodology contributions from #337 carried forward:
+(a) `SENPAI_SEED` env-var pattern adopted by 5 PRs as the de facto
+multi-seed convention. (b) Third independent measurement of the
+±10 % single-seed noise floor (after thorfinn round 1 + edward #326
+control). (c) Hardware ceiling at slice-128 documented (BS ≤ 6),
+saving future iterations from re-running the OOM ladder.
 
 Earlier cycle actions (recap): #328 + #330 + #367 merged (slice-128 +
 Huber β=1 + scoring fix; current val baseline 115.61, test baseline
-117.59); #311 + #332 + #335 + #337 sent back; #325 + #326 closed
-(depth-8 + FFN axes exhausted at 30-min cap); #399 + #415 + #429 +
-#452 assigned (askeladd bf16, frieren asinh-on-pressure, edward
-p_weight, fern slice-push — four round-2 axes in flight).
+117.59); #311 + #332 + #335 sent back; #325 + #326 + #337 closed
+(depth-8, FFN, BS+LR axes exhausted at 30-min cap); #399 + #415 +
+#429 + #452 + #457 assigned (askeladd bf16, frieren asinh-on-p,
+edward p_weight, fern slice-push, thorfinn EMA — five round-2
+axes in flight).
 
 ## What we learned this cycle (and last)
 
@@ -164,6 +171,12 @@ p_weight, fern slice-push — four round-2 axes in flight).
   raceCar domain (mirror y-coord and corresponding flow components).
 - **Curriculum.** Sort batches by per-sample y std, warmup the
   model on low-magnitude samples first.
+- **Weight averaging (EMA).** ASSIGNED as PR #457 to thorfinn:
+  `torch.optim.swa_utils.AveragedModel` with custom EMA `avg_fn`,
+  per-epoch dual val with best-of (live, EMA) checkpoint selection.
+  Decay sweep {0.9, 0.99, 0.999}. Direct fit for the undertrained-
+  at-30-min-cap regime where every PR's val curve is still
+  descending at the wall-clock cut.
 
 ## Active blockers
 

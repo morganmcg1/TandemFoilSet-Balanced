@@ -13,6 +13,77 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 02:45 — PR #337 (iter 2): BS+LR scaling on slice-128 ❌ CLOSED
+
+- Branch: `willowpai2d2-thorfinn/batch-8-lr-7e4` (deleted on close).
+- Iteration: send-back asked for rebase + BS=16/lr=1e-3 (sqrt-rule)
+  primary, multi-seed where budget allows.
+- Branch was rebased onto slice-128 (good) but pre-#330 + pre-#367
+  (so MSE in train+eval, no scoring fix).
+
+### Results
+
+| BS | lr | seeds | val_avg/mae_surf_p | best_epoch | peak_GB |
+|-:|-:|-:|-:|-:|-:|
+| 16 | 1e-3 | – | OOM at batch 0 | – | – |
+| 12 | 9e-4 | – | OOM at batch 0 | – | – |
+| 10 | 8e-4 | – | OOM at startup | – | – |
+| 8  | 7e-4 | – | OOM at batch 1 (even with `expandable_segments`) | – | – |
+| **6** | **6e-4** | 0, 1, 2 | **156.15 / 174.69 / 157.05 → mean 162.63** | 8/10/11 | 81.7 |
+
+Cross-seed range 156–175 (~12 % spread) consistent with the ±10 %
+noise floor; mean is well outside the noise band on the wrong side.
+
+### Conclusion
+
+**Closed.** Hardware analysis is the most valuable single signal:
+slice-128's activation memory consumes the 12 GB BS=8 headroom that
+existed at slice-64 — only BS=4–6 fits at slice-128. The student's
+steps-vs-parallelism causal chain is correct: BS=6 trades 27 % of
+optimizer steps for parallelism that doesn't compensate at this
+model size on this hardware. Combined with the lever being
+hardware-blocked at BS≥8, the BS+LR scaling axis is exhausted on
+slice-128.
+
+vs the merged Huber baseline (115.61), the 3-seed mean (162.63) is
+**41 % worse** — far past the close threshold even ignoring the
+pre-#330 / pre-#367 reverts the branch was carrying.
+
+### Bonus methodology contributions carried forward
+
+- **`SENPAI_SEED` env-var seed-handling pattern** (committed to
+  thorfinn's branch, replicated by alphonse, nezuko, fern, edward,
+  thorfinn). Effectively the de facto multi-seed convention on
+  this branch.
+- **Third independent measurement of ±10 % noise floor** (after
+  thorfinn round-1 BS=8 replicate + edward #326 control re-run +
+  this 3-seed BS=6 cross-seed range). Methodology well-anchored.
+- **Hardware ceiling at slice-128**: BS ≤ 6 documented with
+  specific OOM ladder + `expandable_segments` test. Saves future
+  iterations from re-running the same experiment.
+
+### Reassignment
+
+Thorfinn → PR #457 (round-2 axis: EMA weight averaging via
+`torch.optim.swa_utils.AveragedModel` with custom EMA `avg_fn`).
+Detailed below.
+
+## 2026-04-28 02:45 — PR #457 (NEW, thorfinn round 2): EMA weight averaging
+
+- Reassigning thorfinn after closing #337.
+- Hypothesis: every PR on this branch trains 11–14 of 50 epochs
+  under the 30-min cap with val curves still descending steeply.
+  EMA averages model parameters across recent training steps,
+  reducing late-epoch variance — exactly where short-budget
+  training benefits most. Evaluated dual (live + EMA) per epoch;
+  best-checkpoint selection picks whichever wins per-epoch.
+  Predicted 2–6 % reduction over 115.61 baseline.
+- Sweep: `ema_decay ∈ {0.9, 0.99, 0.999}` on shared
+  `--wandb_group "willow-r2-thorfinn-ema"`.
+- Implementation: `torch.optim.swa_utils.AveragedModel` with custom
+  `avg_fn` for EMA. ~30 lines of train.py changes, no new packages.
+- Status: assigned, draft, status:wip.
+
 ## 2026-04-28 02:30 — PR #367 (rebased): Bug fix — guard against non-finite values ★ MERGED ★
 
 - Branch: `willowpai2d2-fern/scoring-nan-fix` (rebased onto post-Huber
@@ -817,7 +888,9 @@ acknowledged but kept out of scope — tanjiro is iterating on
 | willow-r2-edward-mlp-2-slice-128 (control) | 136.54 | 9 | **closed** (#326 — FFN axis exhausted) |
 | willow-r2-edward-mlp-3 | 139.79 | 10 | **closed** (#326 — FFN axis exhausted) |
 | willow-r2-edward-p-weight | – | – | NEW assignment (#429, round-2 axis) |
-| willow-r2-thorfinn-bs8-lr7e-4 | 139.39 / 153.19 (2 seeds) | 14 / 13 | sent back (rebase + BS=16) |
+| willow-r2-thorfinn-bs8-lr7e-4 | 139.39 / 153.19 (slice-64, 2 seeds) | 14 / 13 | superseded by iter 2 |
+| willow-r2-thorfinn-bs6-lr6e-4-slice128 (3 seeds) | 156.15 / 174.69 / 157.05 (mean 162.63) | 8/10/11 | **closed** (#337 — hardware-blocked at BS≥8) |
+| willow-r2-thorfinn-ema-weights | – | – | NEW assignment (#457, round-2 axis) |
 | willow-r2-askeladd-depth-8 | 150.06 / 162.05 | 9 / 8 | **closed** (#325 — 21 % regression at 30-min cap) |
 | willow-r2-askeladd-bf16-amp | – | – | NEW assignment (#399, round-2 axis) |
 | willow-r2-tanjiro-warmup-cos-1e3 | 154.57 | 13 | sent back |
