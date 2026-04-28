@@ -1,5 +1,47 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-28 21:45 — PR #818: SGDR Cosine Warm Restarts (T_0=10, T_mult=2) — **CLOSED**
+
+- Branch: `willowpai2e4-tanjiro/sgdr-warm-restarts` (deleted)
+- Student: willowpai2e4-tanjiro
+- W&B run: [`0e5uk8ux`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/0e5uk8ux)
+
+**Hypothesis.** Cosine Warm Restarts let the optimizer escape sharp minima
+and find flatter basins. T_0=10, T_mult=2 → cycle 1 ep 0–10, cycle 2 ep
+10–30, cycle 3 ep 30–70 (clipped at 50). Predicted −2 to −5%.
+
+**Results (best epoch 10/12, 30 min wall, on L1-only baseline)**
+
+| Metric | L1 baseline (`8lyryo5g`) | SGDR T_0=10 (`0e5uk8ux`) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.93 | 108.07 | **+6.04 worse** |
+| `val_single_in_dist` | 133.25 | 138.39 | +5.14 |
+| `val_geom_camber_rc` | 109.26 | 115.52 | +6.26 |
+| `val_geom_camber_cruise` | 76.13 | 80.95 | +4.82 |
+| `val_re_rand` | 89.07 | 97.43 | +8.36 |
+
+LR trace confirmed restart fired at exactly epoch 10 (3759 steps,
+LR 5e-6 → 5e-4). Best val landed at the **end of cycle 1** (epoch 10's
+eta_min=5e-6), not at any post-restart moment. Restart at epoch 11 wiped
+progress: val_avg jumped 108.07 → 133.49 → 147.17 in cycle 2's high-LR
+phase before timeout fired at epoch 12.
+
+**Analysis.** Mechanism worked exactly as designed but is **structurally
+mismatched to the budget**. With L1 baseline best at epoch 14 (the
+natural convergence point), placing the restart at epoch 10 wipes
+progress before convergence completes. Cycle-2 needed several more epochs
+of cosine decay to potentially escape, but at our 30-min/14-epoch
+effective budget cycle 2 cannot complete. Tanjiro's recommended T_0=20
+would have the same budget cliff (cycle 2 = ep 20–60, clipped at 50,
+natural convergence already in cycle 1).
+
+**Decision.** Closed as dead end — schedule is not where the headroom
+lives at this budget. Two consecutive negatives on schedule/LR levers
+(#758 lr+warmup, #818 SGDR) confirms this. Reassigned tanjiro to a
+different family: **Huber loss δ=1.0** (PR #851). Mechanistically
+orthogonal — reshapes per-element error magnitude function, not the
+training trajectory.
+
 ## 2026-04-28 21:11 — PR #754: Per-channel pressure weight 3× ON L1 — **MERGED**
 
 - Branch: `willowpai2e4-fern/p-channel-3x` (squashed)

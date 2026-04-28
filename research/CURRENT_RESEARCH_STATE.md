@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-28 ~21:30 (round 1 closed, round 2 fully launched)
+- **As of:** 2026-04-28 ~21:50 (round 2 mid-flight; one closed, one new family launched)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 99.226` (PR #754, L1 + ch=[1,1,3] merged)
@@ -33,10 +33,15 @@ weight signal.
 | PR | Student | Round-2 idea | Predicted impact |
 |---|---|---|---|
 | #816 | alphonse | FiLM conditioning of LayerNorm (#2) | -5 to -12% |
-| #818 | tanjiro | SGDR Cosine Warm Restarts (#9) | -2 to -5% |
+| #851 | tanjiro | Huber loss δ=1.0 (#5) — replaces #818 SGDR (closed) | -3 to -8% |
 | #819 | frieren | Relative L2 loss (per-sample norm) (#1) | -5 to -15% |
 | #820 | thorfinn | Fourier PE on (x, z) coords (#3) | -4 to -10% |
 | #829 | fern | Continuation: p-channel weight 5× / 10× sweep | -1 to -3% (5×); 10× could regress |
+
+**Closed in round 2:**
+- #818 tanjiro SGDR T_0=10 → +6% worse, structural budget mismatch
+  (restart fires at natural convergence epoch). Schedule lever family
+  exhausted at this budget — two negatives in a row (#758 + #818).
 
 ## Round 2 hypotheses ranked and ready
 
