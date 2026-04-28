@@ -2,9 +2,32 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 00:25 — PR #363: EMA of model weights (decay=0.999) for evaluation
+## 2026-04-28 01:20 — PR #391: SwiGLU MLP in TransolverBlock (LLaMA-style FFN)
 
-- **Best `val_avg/mae_surf_p`** (target to beat): **101.350** (epoch 14)
+- **Best `val_avg/mae_surf_p`** (target to beat): **88.227** (epoch 13)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **78.338**
+- **Per-split val MAE for `p`**:
+  - `val_single_in_dist`: 106.398 (−15.78% vs EMA)
+  - `val_geom_camber_rc`: 100.406 (−8.23% vs EMA — finally moved after being flat under EMA alone)
+  - `val_geom_camber_cruise`: 64.409 (−16.34% vs EMA)
+  - `val_re_rand`: 81.696 (−11.86% vs EMA)
+- **Per-split test MAE for `p`**:
+  - `test_single_in_dist`: 96.439
+  - `test_geom_camber_rc`: 88.064
+  - `test_geom_camber_cruise`: 54.011
+  - `test_re_rand`: 74.837
+- **Recipe**: huber(δ=1.0) + EMA(decay=0.999, eval+ckpt) + LLaMA-style SwiGLU FFN (gate × value, bias=False, intermediate=176) inside `TransolverBlock`. NaN-safe `evaluate_split` workaround active. All other defaults unchanged (lr=5e-4, wd=1e-4, batch_size=4, surf_weight=10, slice_num=64, n_layers=5, n_hidden=128, n_head=4, mlp_ratio=2). Param-matched (+1.3% n_params: 670K vs prior 660K).
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name swiglu-mlp --agent <name>
+  ```
+
+Loss curve was still descending monotonically at the 30-min cap — model is under-trained, more epochs likely give further gains.
+
+## 2026-04-28 00:25 — Previous baseline (PR #363, EMA-eval)
+
+- **Best `val_avg/mae_surf_p`**: 101.350 (epoch 14)
 - **`test_avg/mae_surf_p`** (paper-facing): pending finite re-measurement on the EMA-merged baseline (cruise NaN here because PR #361 had not landed when this run started); **3-split test mean = 100.030** — `single_in_dist=113.32, geom_camber_rc=97.44, re_rand=89.33`.
 - **Per-split val MAE for `p` (EMA, epoch 14)**:
   - `val_single_in_dist`: 126.323 (−5.76% vs huber)
