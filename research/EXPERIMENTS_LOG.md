@@ -1,5 +1,38 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 02:28 — PR #324 (sent back): EMA(0.9999) + grad-clip(1.0) on bf16
+
+- branch: `willowpai2d1-nezuko/ema-and-grad-clip` (in flight as draft after send-back)
+- hypothesis: EMA shadow weights + gradient clipping for stability and
+  small-data generalization. Predicted -1 to -4%.
+
+### Results
+
+| Metric | Value | vs PR #359 (bf16, rebase target) |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **301.99** (epoch 19 of 19) | **+147.8%** (terrible) |
+| `test_avg/mae_surf_p` | 285.33 | n/a |
+| Train loss curves | healthy (vol 1.81→0.32, surf 1.04→0.17) | normal |
+| Pre-clip grad norms | mean 35-116, peak 350-750 | clip firing every batch at 50-100× ratio |
+| W&B run | `xmo5f7x7` (`ema9999-clip1`) | |
+
+### Analysis & conclusions
+
+- **Sent back (not closed)** despite +148% regression — diagnosis is
+  exemplary and hypothesis isn't falsified.
+- **Root cause: EMA-warmup pathology**. At decay=0.9999 over 7,125 steps,
+  `0.9999^7125 ≈ 0.490` → ~49% of EMA shadow weights are still random
+  init at the "best" checkpoint. Linear-blend prediction
+  `0.49 × ~500 (random init val) + 0.51 × 121.85 ≈ 307` matches observed
+  302 within 2%. Textbook EMA-warmup failure on a too-short budget.
+- **Original PR violated one-hypothesis-per-PR.** My assignment bundled
+  EMA + grad_clip together. Send-back drops grad_clip so the EMA test
+  is clean; grad_clip alone could be a future experiment if EMA wins.
+- Send-back instructions: rebase onto FF, ema_decay=0.999 (window 1K
+  steps → 0.08% init contribution at 7125 steps), drop grad_clip.
+- Predicted rebased result: -0.5 to -3% on val_avg, ie around 103-106
+  on the FF baseline. Will become the new round baseline if it lands.
+
 ## 2026-04-28 01:58 — PR #416 (sent back): `torch.compile(dynamic=True)` pilot
 
 - branch: `willowpai2d1-alphonse/torch-compile-pilot` (in flight as draft after send-back)

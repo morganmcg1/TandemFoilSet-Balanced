@@ -34,7 +34,7 @@ Important falsified hypotheses now ruled out:
 | #314 | edward | Loss formulation | **SmoothL1/Huber β=1.0** — sent back to rebase onto FF baseline (high-priority) |
 | **#416** | **alphonse** | **Throughput** | **`torch.compile(dynamic=True)`** — sent back to rebase onto FF baseline (high-priority) |
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3) |
-| #324 | nezuko | Stability / regularization | EMA(0.9999) + grad-clip 1.0 |
+| #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** (sent back from 0.9999, dropped grad_clip — bundled hypothesis) |
 | #333 | thorfinn | Loss / metric alignment | surf_weight ∈ {15, 25, 40} sweep |
 | #407 | fern | Schedule (on bf16+FF) | Cosine T_max alignment via `--epochs 20` |
 | #416 | alphonse | Throughput (on bf16+FF) | `torch.compile(dynamic=True)` pilot |
@@ -56,6 +56,8 @@ Important falsified hypotheses now ruled out:
 | **#327** | **tanjiro** | **Merged (CURRENT BASELINE)** | **FF K=8: val_avg=106.92 (−12.2% vs bf16, −25.9% cumulative). Largest single win.** |
 | #313 v2 | askeladd | **Closed** | **+0.56% on bf16 / +14.6% vs FF.** Pressure weighting and bf16 not orthogonal as I'd assumed. Refined hypothesis (#451) assigned. |
 | #314 | edward | **Sent back** | **−14.4% vs bf16 / −2.5% vs FF on the wrong base. Stacking with FF predicted to give ~−15% on top.** |
+| #416 | alphonse | **Sent back** | **`torch.compile(dynamic=True)`: −28.4% vs bf16. 2.0× speedup, 37 epochs. Stack with FF predicted val_avg ≈ 80-85.** |
+| #324 | nezuko | **Sent back** | **+148% — EMA decay 0.9999 too slow for 7,125-step budget (49% random-init contamination at "best" ckpt). Rebase + decay=0.999 only.** |
 
 ## Throughput levers status
 
