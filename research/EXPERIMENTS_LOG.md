@@ -1,5 +1,28 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 09:20 — PR #618: UNet-style skip from preprocess into last block — **SENT BACK (negative result + clean diagnostic, iterate to ReZero-gated)**
+
+- Branch: `willowpai2d3-edward/unet-skip-preprocess`
+- **Hypothesis:** Skip connection from post-preprocess features into last block's residual stream addresses information bottleneck through deep slice-attention. Predicted Δ: −3 to −10%.
+
+### Sweep results (group `unet-skip-preprocess`, on the post-#294 baseline — predates OneCycle merge)
+
+| run | unet_skip | dropout | val_avg | test_avg | Δ val vs ctrl | skip-to-deep ratio | W&B |
+|---|---|---|---:|---:|---:|---:|---|
+| `unet-off-ctrl` | False | – | **94.36** | **83.71** | – | – | `y4d9aysm` |
+| `unet-skip-d0` | True | 0.0 | 96.04 | 85.32 | **+1.68** | 0.499 | `mx3q0xhe` |
+| `unet-skip-d0.1` | True | 0.1 | 98.04 | 87.58 | **+3.68** | 0.817 | `qqi08dix` |
+
+### Decision: **REQUEST CHANGES (iterate to ReZero-gated skip)**
+
+Negative result on simple concat+linear UNet skip. Edward's diagnostic is rigorous: the skip path is *actively used* (`skip_to_deep_ratio` ~0.5–0.8) but the random-init `skip_fuse: Linear(2H, H)` perturbs the well-trained deep path at step 0. The optimizer can't unlearn this perturbation in 14 epochs. Per-split deltas hit **`val_geom_camber_rc` worst** (the predicted-best-helped split) — the cleanest possible refutation of "lever doesn't help" interpretation; instead it says "the implementation initialization is wrong."
+
+The fix is edward's own follow-up #1 (and the researcher-agent's pre-implementation flag): **ReZero-gated skip** — `fx = fx + α·skip_proj(fx_skip)` with `α ∈ R` learnable, init **α=0**. At step 0 the model is identical to the control; the optimizer can lift α as it discovers value. Eliminates the init perturbation while preserving the lever.
+
+Also: edward flagged a second real bug — `train.py` line 451 has `huber_delta: float = 1.0`, but the merged baseline uses `huber_delta=0` (pure L1). All recent PRs had to pass `--huber_delta 0` explicitly. **Bundling the one-line default fix in the next iteration.**
+
+Edward stays on this lever for one focused iteration: control + ReZero-gated skip (drop the `dropout=0.1` variant given the monotonic-bad result). Two runs, decision tree spelled out — either α lifts and val_avg improves (ship), or α stays near zero or doesn't help (close and park, pivot to deeper output head MLP).
+
 ## 2026-04-28 08:53 — PR #409 (round 3): OneCycleLR rebased onto post-EMA+L1 baseline — **MERGED**
 
 - Branch: `willowpai2d3-frieren/onecycle-lr`
