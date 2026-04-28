@@ -2,11 +2,33 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 04:15 — PR #479: Bias-corrected EMA (decay_target=0.99, warmup_steps=10) — orthogonal compound lever
+## 2026-04-28 04:55 — PR #520: PhysicsAttention temperature init 0.5 → 1.0 — first directly-measured baseline
 
-- **Best `val_avg/mae_surf_p`** (target to beat — conservative): **72.414** (fern's δ=0.25 measurement on EMA(0.99)+SwiGLU pre-DropPath)
-- **Bias-corrected EMA standalone measurement**: 81.251 on EMA(0.99)+SwiGLU pre-DropPath baseline (−2.37% vs 83.223). Strict superset of the existing EMA(0.99) — `warmup_steps=0` reduces to current behavior.
-- **Recipe**: huber(δ=0.25) + **bias-corrected EMA (decay_target=0.99, warmup_steps=10)** + SwiGLU FFN + DropPath(0→0.1) + AdamW betas (0.9, 0.95) + NaN-safe. The EMA constructor signature changed to accept `warmup_steps`.
+- **Best `val_avg/mae_surf_p`** (target to beat): **71.6985** (epoch 14)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **62.5824**
+- **Per-split val MAE for `p`**:
+  - val_single_in_dist: 85.482 (−2.77% vs 72.414 reference)
+  - val_geom_camber_rc: 83.090 (−0.28%, flat)
+  - val_geom_camber_cruise: 50.527 (+0.61%, flat)
+  - val_re_rand: 67.694 (−0.74%)
+- **Per-split test MAE for `p`**:
+  - test_single_in_dist: 73.353 (−4.63% vs 63.082)
+  - test_geom_camber_rc: 75.546 (+3.84% — only split going backward)
+  - test_geom_camber_cruise: 41.805 (−0.83%)
+  - test_re_rand: 59.625 (−1.46%)
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(decay_target=0.99, warmup_steps=10) + SwiGLU FFN + DropPath(0→0.1) + AdamW betas (0.9, 0.95) + **PhysicsAttention temperature init=1.0** + NaN-safe. Single-token change vs prior baseline.
+- **Mechanism**: final per-block temperatures converged to [0.95, 0.99] — the 0.5 init was ~2× below equilibrium. Init=1.0 starts at optimum, so gradients fit data instead of un-doing init. This is an optimization-warmup phenomenon, not a capacity one.
+- **First directly measured combined-stack baseline.** Prior post-merge measurements (fern's 72.414 pre-DropPath, askeladd's 81.251, etc.) were on intermediate stacks; this run measures the full compound.
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name slice-temp-1p0 --agent <name>
+  ```
+
+## 2026-04-28 04:15 — Previous baseline (PR #479, bias-corrected EMA)
+
+- val_avg/mae_surf_p target: 72.414 (fern's δ=0.25 measurement, pre-DropPath)
+- Bias-corrected EMA standalone: 81.251 (EMA(0.99)+SwiGLU pre-DropPath, −2.37% vs 83.223)
 
 ## 2026-04-28 03:55 — PR #480: AdamW betas (0.9, 0.95) — earlier orthogonal compound
 
