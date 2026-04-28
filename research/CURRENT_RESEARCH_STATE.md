@@ -37,6 +37,7 @@
 | #847 | Huber delta sweep (0.5, 2.0) | Closed — flat in 0.5-2.0; L1 dominates by 9.9% | 102.97 |
 | #751 v2 | Dropout 0.05 + drop_path 0.05 on L1 | Closed — within noise (+0.6%, 93.16) | 93.16 |
 | #858 | Focal surface loss gamma=0.5/1.0 on L1 | Closed — γ=0.5 within noise, γ=1.0 +13.4% worse | 92.13 |
+| #884 | RevIN — per-sample y normalization (surface loss) | Closed — structural mismatch with absolute-MAE metric (+65%) | 152.64 |
 | #743 | Channel-weighted L1 (v3, rebase pending) | WIP | 99.21 (v2 ref) |
 | #750 | LR warmup + cosine v2 (rebase pending) | WIP | 111.12 (v1 ref) |
 | #756 | Fourier Re-encoding v2 (rebase pending) | WIP | 120.22 (v1 ref) |
@@ -45,7 +46,7 @@
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| askeladd | #884 | RevIN output normalization (per-sample y norm for cross-Re amplitude invariance) | WIP |
+| askeladd | #917 | Re-input noise augmentation (smooth FiLM via training-time log(Re) perturbation) | WIP — new assignment 2026-04-28 |
 | thorfinn | #909 | Pre-block FiLM: condition attention input rather than output | WIP — new assignment 2026-04-28 |
 | nezuko | #910 | Re-stratified batch sampling: Re-diverse mini-batches for FiLM+L1 | WIP — new assignment 2026-04-28 |
 | fern | #902 | Volume L1 (mirror surface L1 success on volume side) | WIP |
@@ -61,6 +62,7 @@
 - **L1 dominates the loss-shape sensitivity curve.** Full ordering confirmed (PRs #761, #814, #847): L1 (92.63) << Huber(0.5) (102.97) ≈ Huber(1.0) (103.13) < Huber(2.0) (106.78). The big lever is the Huber→L1 step (−9.9%).
 - **FiLM stacks cleanly with L1** (PR #815 v2-on-l1: −10.6% on top of L1). Orthogonal mechanisms confirmed: loss shape (L1) ⊥ hidden-state Re modulation (FiLM). All 4 val splits improved. FiLM gains biggest on Re-stratified and widest-Re-range splits (re_rand −9.2%, cruise −10.3%).
 - **Focal loss falsified on L1 base** (PR #858): high-error surface nodes are convergence-bottlenecked, not gradient-bottlenecked. Focal amplification slows convergence at this budget.
+- **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric (which is high-Re-dominated by Re² scaling). Falsifies the "amplitude rebalancing helps Re generalization" hypothesis at the loss level. The Re-axis lever is captured architecturally via FiLM, not via loss normalization.
 - **Channel weighting stacks with Huber** (alphonse #743 v2: −3.8% on top of Huber). Pending whether it also stacks with FiLM+L1 (v3 in progress).
 - **Surface dominates volume ~7:1 at L1 convergence** (tanjiro diagnosis). surf_weight=3.0 (#869) tests whether rebalancing frees volume capacity.
 - **Boundary-layer features falsified.** log(Re·|saf|) is redundant; volume-node saf mismatch hurts in-dist.
@@ -70,7 +72,7 @@
 
 1. **Pre-block FiLM** — condition attention Q/K/V on Re (before block, not after). **Assigned → thorfinn PR #909.**
 2. **Re-stratified batch sampling** — Re-diverse mini-batches to improve FiLM conditioning signal. **Assigned → nezuko PR #910.**
-3. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). **Assigned → askeladd PR #884.**
+3. **Re-input noise augmentation** — sigma=0.02-0.10 Gaussian noise on log(Re) at training to force smooth FiLM conditioning. **Assigned → askeladd PR #917.**
 4. **Volume L1** — mirror surface L1 mechanism on the volume loss (currently MSE). **Assigned → fern PR #902.**
 5. **surf_weight rebalancing** — rebalance surface/volume gradient ratio after FiLM merge. **Assigned → tanjiro PR #869.** May need re-sweep against new FiLM+L1 baseline.
 6. **Capacity scaling on FiLM+L1 base** — the model uses only 44.6GB of 96GB. 2× hidden size on the new best baseline is a fresh, high-EV direction.

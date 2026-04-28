@@ -73,6 +73,34 @@ Fern noted `test_geom_camber_cruise/vol_loss = Infinity` even with #807's torch.
 
 ---
 
+## 2026-04-28 23:50 — PR #884 (CLOSED): RevIN — per-sample y normalization for surface loss
+- **Branch:** `willowpai2e3-askeladd/revin-output-norm`
+- **Hypothesis:** Per-sample, per-channel target-stat normalization of pred and y before computing surface L1 loss. Goal: equalize per-Re-sample gradient contribution; predicted −3 to −10% with biggest gains on `val_re_rand`.
+- **Run (v1):** W&B `99ltqjj3`, **14/14 epochs (clean finish)**, val_avg still descending but converging slowly, peak 42.2 GB.
+
+| Split | val surf_p (RevIN) | val surf_p (L1 baseline) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 221.78 | 109.65 | **+102%** |
+| `geom_camber_rc` | 166.30 | 101.17 | +64% |
+| `geom_camber_cruise` | 98.42 | 72.37 | +36% |
+| `re_rand` | 124.04 | 87.33 | +42% |
+| **val_avg** | **152.64** | **92.63** | **+65%** |
+| **test_avg** | **141.19** | **82.83** | **+70%** |
+
+### Decision: CLOSE — structurally mismatched mechanism
+- **+65% val / +70% test vs L1 baseline** — not noise; clean failure.
+- **Mechanism falsified.** Student's own analysis: "RevIN's per-sample normalization breaks the agreement between optimizer and metric. The gradient now treats every sample as unit-variance, so the model under-fits the high-amplitude samples that the metric weights most."
+- The metric (`mae_surf_p`) is in physical units and high-Re-dominated by Re² scaling. Per-sample loss normalization decouples training gradient from metric weighting.
+- **Splits regress in proportion to amplitude** (single_in_dist +102% > re_rand +42% > cruise +36%) — diagnostic of the failure mode. High-amplitude splits suffer most because RevIN under-fits them most.
+- **Target-metric (`val_re_rand`) regressed +42%** — even on its own predicted-best signal, the mechanism failed.
+- RevIN paper assumed scale-invariant metric (relative RMSE, normalized error). For absolute physical-units MAE this approach is structurally incorrect.
+- **Closed 2026-04-28. Next assignment: #917 Re-input noise augmentation** (smooth FiLM conditioning via training-time log(Re) perturbation).
+
+### Side observation flagged
+Askeladd noted `test_geom_camber_cruise/loss = inf` artifact in `evaluate_split` (single test batch with tiny per-sample y_surf_var amplifying residual). Same vol_loss accumulator NaN-safety gap fern flagged earlier. Doesn't affect MAE metrics but worth a future hardening pass.
+
+---
+
 ## 2026-04-28 23:35 — PR #815 v2-on-l1 (MERGED): FiLM conditioning per-block on log(Re) + L1
 - **Branch:** `willowpai2e3-thorfinn/film-re-conditioning`
 - **Hypothesis:** FiLM (γ, β) per-block conditioning on log(Re), rebased onto post-#761 L1 advisor. Predicted stacking: L1 (loss shape) ⊥ FiLM (hidden-state Re modulation) → both gains compound.
