@@ -689,3 +689,96 @@ Lion(lr=1.7e-4, wd=3e-4) + EMA(0.99) + grad-clip(0.5) → val ~70–80, test ~62
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #465 | fern | cosine-tmax-13 | `T_max=50 → 13`, `eta_min=1e-5` | Replaces closed #438; cashes in fern's follow-up #2 from #353/#408/#438. Schedule has been degenerate across all merged baselines (best-at-last with cosine still 95 % of peak). Single-knob schedule fix that should compound with the merged variance-reduction stack. |
+
+## 2026-04-28 02:45 — PR #445: EMA decay 0.99 → 0.95 (charliepai2d1-askeladd) — **CLOSED (regression)**
+- Branch: `charliepai2d1-askeladd/ema-decay-0p95` (closed + branch deleted)
+- Hypothesis: continue the decay sweep — at 0.95 (half-life ~14 batches) we get even-faster shadow tracking, possibly captures more recent signal.
+
+### Headline metrics (best EMA epoch=13/50, timeout-cut)
+| | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | **val_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` (EMA) | 128.58 | 117.67 | 87.61 | 99.01 | **108.22** |
+
+| | test_single_in_dist | test_geom_camber_rc | test_geom_camber_cruise | test_re_rand | **test_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 115.61 | 103.36 | 71.97 | 96.60 | **96.88** |
+
+- vs prior baseline #417 (98.581/87.881): val **+9.77 %**, test **+10.24 %**.
+- Cruise hardest hit (+16.66 % val, +14.12 % test) — smallest-sample domain × balanced-sampler stochasticity = under-averaged shadow exposed.
+- Mean EMA-vs-raw spread: 17.33 (ep4–13), down from 24.52 at decay 0.99 — shadow doing less averaging.
+
+### Mechanism (askeladd's writeup nailed both predicted scenarios):
+- **Faster tracking helped early.** At ep1–6 decay 0.95 EMA val was 6–12 pts better than 0.99.
+- **Smoothing collapsed mid-run.** Spread fell 7–9 pts at ep7–9 (vs 21–37 at 0.99). Cross-over at ep5–7; from there 0.99 takes over because the shorter window can't smooth out batch-composition noise from the balanced sampler (3 domains × ~5 samples per shadow = high stochastic variance).
+- **EMA-decay optimum bracketed in [0.97, 0.99].** 0.999 too sticky (#356 at +12.88 %), 0.95 too noisy (this PR at +9.77 %), 0.99 sweet spot.
+
+### Decision: close, reassign to ema-decay-0p97
+- Clear >5 % regression. Per CLAUDE.md close criteria.
+- Reassigned to **PR #474 (ema-decay-0p97)** — bracket-narrowing run on the new SwiGLU baseline. Honest predicted band −1 % to +1 %.
+
+## 2026-04-28 02:48 — PR #398 (REBASED): SwiGLU at matched param count (charliepai2d1-nezuko) — **MERGED, new baseline**
+- Branch: `charliepai2d1-nezuko/swiglu-mlp-matched` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `7fb09c0`).
+- Hypothesis (rebased re-run): SwiGLU `(W_g(x) ⊙ silu(W_v(x))) W_o` at matched param count (`swiglu_inner=168`) on top of merged variance-reduction stack (EMA(0.99) + grad-clip(0.5) + lr=1e-3 + NaN-safe).
+
+### Headline metrics (best EMA epoch=12/50, timeout-cut)
+| metric | this run (rebased) | prior baseline #417 | Δ abs | Δ % |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **89.349** | 98.581 | −9.232 | **−9.36 %** |
+| `test_avg/mae_surf_p` | **79.191** | 87.881 | −8.690 | **−9.89 %** |
+
+Beats baseline on every val and test split. Strongest single best gain: `val_single_in_dist` −15.6 %.
+
+### Per-split val/test deltas
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| single_in_dist | −15.64 % | −12.42 % |
+| geom_camber_rc | −1.74 % | −5.63 % |
+| geom_camber_cruise | −10.66 % | −10.91 % |
+| re_rand | −9.08 % | −10.89 % |
+
+**Every split improves; no split worse than −1.7 % val / −5.6 % test.** That's the same "fixes #355's pathology" story from nezuko's original pre-rebase run, now confirmed under the full variance-reduction stack.
+
+### Analysis
+- **Composes more than additively with the variance-reduction stack** (predicted band 94–98 was based on additive composition; observed 89.35 beats it by ~5 pts). Three mechanisms in play: smoother training trajectory at lr=1e-3 + grad-clip(0.5) gives EMA a cleaner signal; faster EMA(0.99) recovers SwiGLU's per-step gain immediately; grad-clip's bounded step magnitude pairs naturally with SwiGLU's gating.
+- **Reproducibility check.** Pre-rebase run was −15.48 % vs #356 baseline; rebased run is −9.36 % vs #417 baseline. Different EMA, different LR, different grad-clip envelope, but the lever's relative contribution holds — the absolute number compresses because the variance-reduction stack already extracted some of the headroom.
+- **Param count: 657,639** (vs baseline GELU 662,359 = −0.71 %). Matched-param recipe correct.
+- **Surf/vol balance preserved**: vol_p tracks surf_p within ~0–10 % per split, no head-priority skew.
+- **Wall-clock cost: +7.9 %** (150 s/epoch vs 140 s baseline; 12 epochs vs 13). Three matmul kernel-launches per block at small `mlp_ratio=2, hidden=128` shapes — latency-bound rather than FLOP-bound. Future fused gate+value matmul could recover ~12 s/epoch.
+
+### Decision: merge as new round-1.5 baseline
+- Beats baseline by a wide margin on the ranking metric and every per-split metric.
+- Mergeable cleanly (CLEAN/MERGEABLE; SwiGLUMLP class + TransolverBlock substitution don't conflict with any merged change).
+- First architectural merge after five variance-reduction-direction merges (#356, #374, #402, #408, #417). Marks a transition from "variance reduction" axis to "architecture" axis on the leaderboard.
+- BASELINE.md updated; nezuko reassigned to **PR #475 (swiglu-inner-256)** as the natural capacity-sweep follow-up.
+
+## 2026-04-28 02:50 — PR #394 (REBASED ONCE): torch.compile (charliepai2d1-thorfinn) — **sent back for rebase #2**
+- Branch: `charliepai2d1-thorfinn/torch-compile-throughput` (post-#417 base; pre-#398)
+- Hypothesis (rebased re-run on post-#417): `torch.compile(model, ema_model)` for kernel fusion + extra epochs in the timeout.
+
+### Headline metrics (best EMA epoch=15/50, timeout-cut after compile warmup absorbed eps 2–3)
+| metric | this run (post-#417 base) | post-#417 baseline | post-#398 baseline (current) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **95.743** | 98.581 (−2.88 %) | 89.349 (**+7.15 %**) |
+| `test_avg/mae_surf_p` | **83.861** | 87.881 (−4.57 %) | 79.191 (**+5.90 %**) |
+
+### Throughput delivery (the deliverable)
+- `mean_epoch_4plus_seconds` (clean steady): **108.0 s** vs 140.3 s baseline = **−23.0 %**.
+- 15 epochs in 30 min (vs baseline's 13). Compile warmup absorbed +89 s in ep2 + +26 s in ep3 (~140 s total) → +2 epochs vs +4 in pre-rebase run (warmup variance).
+- Peak VRAM: 42.1 GB (flat).
+
+### Why send back
+- Vs the baseline thorfinn rebased onto (#417): **−2.88 % / −4.57 %** — clean win.
+- BUT PR #398 (SwiGLU) merged at 02:48 — **just 1 minute** before thorfinn's results posted. New baseline is val=89.35 / test=79.19. Thorfinn's measured numbers (95.74 / 83.86) now sit at +7.15 % / +5.90 % vs current — outside the merge gate.
+- Rebase resolution should still be clean: thorfinn's diff (compile + `_orig_mod` save/load) is in different code regions from the SwiGLU diff (new SwiGLUMLP class + TransolverBlock substitution).
+- Predicted post-rebase #2: compile + SwiGLU + 14–15 epochs → val ~84–88, test ~74–78. Should clear the merge gate by 2–6 % depending on how compile composes with SwiGLU's per-block matmul shape changes.
+
+### Decision: send back for rebase #2
+- This is thorfinn's **second** rebase + re-run cycle. Throughput delivery is rock-solid; just chasing a moving baseline.
+- Sent back with explicit note that the throughput gain is robust across all rebases. Merge is one rebase away.
+
+## 2026-04-28 02:55 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #474 | askeladd | ema-decay-0p97 | `ema_decay = 0.99 → 0.97` on merged #398 baseline | Bracket-narrowing run for the EMA-decay optimum (0.999 too sticky, 0.95 too noisy). Honest band −1 % to +1 %. |
+| #475 | nezuko | swiglu-inner-256 | `swiglu_inner = 168 → 256` (+50 % MLP capacity) on merged #398 baseline | Capacity sweep on the new SwiGLU baseline. Tests whether SwiGLU's "fixes OOD" property scales with capacity. |
