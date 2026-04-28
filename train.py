@@ -254,7 +254,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # Workaround for scoring.py Inf*0=NaN in the masked accumulator: drop
+            # samples whose ground-truth `y` has any non-finite value before scoring.
+            # accumulate_batch is documented to skip them per-sample, but the abs-error
+            # is computed before masking and IEEE 754 propagates Inf to the masked sum.
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.all():
+                if not y_finite.any():
+                    continue
+                ds, dv = accumulate_batch(
+                    pred_orig[y_finite], y[y_finite], is_surface[y_finite],
+                    mask[y_finite], mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -390,9 +404,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
+    n_hidden=192,
+    n_layers=6,
+    n_head=6,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
