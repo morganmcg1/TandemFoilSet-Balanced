@@ -31,6 +31,53 @@
 
 ---
 
+## 2026-04-28 07:11 — PR #343 (round 2): H6 bf16+compile × FiLM — **SENT BACK FOR REBASE-ONTO-#442**
+
+- Branch: `willowpai2d4-askeladd/h6-bf16-compile-batch` (rebased onto post-#404, **not yet onto post-#442**)
+- Round 2 single-cell test: Run F = bf16 + torch.compile + FiLM + wd=5e-4 + lr=7e-4 + seed=123 + epochs=37 (no EMA).
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | sec/epoch | epochs done | best epoch | peak GPU | W&B |
+|-----|--------|---------------------:|----------------------:|----------:|------------:|-----------:|---------:|-----|
+| Merged baseline (#404) | FiLM, no compile, fp32 | 119.36 | 107.54 | ~129 | 14 | 13 | ~42 GB | `p0a1daar` |
+| **F — bf16+compile + FiLM** | both | **79.90** | **72.36** | **50.4** | **36** | 34 | **23.6 GB** | `4g4lkk8b` |
+
+Δ vs PR #404 baseline: **−33.1% val / −32.7% test**, **2.6× throughput**, **−44% peak GPU**.
+Δ vs current PR #442 baseline (val_ema=109.19, test=98.47): **−26.8% val / −26.5% test** (still without EMA in this run).
+
+### Per-split test for Run F vs PR #404 baseline
+
+| Split | PR #404 baseline | Run F | Δ |
+|-------|-----------------:|------:|--:|
+| `test_single_in_dist` | 120.69 | 78.48 | **−35.0%** |
+| `test_geom_camber_rc` | 120.45 | 85.89 | **−28.7%** |
+| `test_geom_camber_cruise` | 80.70 | 51.90 | **−35.7%** |
+| `test_re_rand` | 108.32 | 73.17 | **−32.4%** |
+| **avg** | **107.54** | **72.36** | **−32.7%** |
+
+### Conclusions (provisional, pre-#442 rebase)
+
+- **The mechanism is unambiguous and robust.** 2.6× throughput from bf16+compile gets the model from 14 to 36 epochs in the same wall clock. The cosine reaches near zero at the end (last logged lr=0.0). Cross-split signature is uniform improvement (-28.7% to -35.7%).
+- **bf16 × FiLM is NOT antagonistic.** All three of my flagged risks (bf16 numerics × FiLM γ/β, torch.compile × dynamic conditioning, schedule scaling) failed to materialize. FiLM identity-init holds in bf16; compile dynamic=True handles per-block γ/β indexing fine; the rebased schedule scales cleanly. First-epoch overhead ~13s (compile warmup), then steady ~50s/epoch.
+- **Implementation is well-engineered.** bf16 fp32-fallback in `evaluate_split` for non-finite preds; `_raw_module()` unwrapper for torch.compile state_dict; per-optimizer-step scheduler correction (correct for any future grad-accum use).
+- **Branch is post-#404 / pre-#442.** Run F config does not include EMA. The current merged baseline (#442) is val_ema=109.19; squash-merging Run F's diff onto post-#442 advisor branch creates an untested combination (bf16+compile + EMA + FiLM).
+
+### Action
+
+Sent back for one focused **Run G — bf16+compile + FiLM + EMA on the merged config** (`--batch_size 4 --amp_dtype bf16 --compile True --film_re True --use_ema True --ema_decay 0.99 --ema_eval_every 2 --weight_decay 5e-4 --seed 123 --epochs 37 --lr 7e-4`).
+
+Decision rule on resubmit:
+- val_ema < 109.19 → merge as round-0 winner #4 (likely lands at val_ema 70-78, a 28%+ compound win)
+- val_ema ∈ [85, 109.19] → still a comfortable win; merge for the throughput compounding alone
+- val_ema > 109.19 → bf16+compile broke something with EMA; close cleanly and consider shipping bf16+compile-only via a follow-up PR
+
+### Useful follow-ups (deferred)
+
+- Longer wall-clock — gated on `SENPAI_TIMEOUT_MINUTES` cap.
+- `torch.compile(mode="reduce-overhead")` with padded N_max — requires touching `data/` (out of bounds).
+- Re-tuned bs=8 with proper LR — defer until base config lands.
+
+---
+
 ## 2026-04-28 06:51 — PR #442 (round 3): H12 EMA × FiLM — **MERGED** (Round 0 winner #3)
 
 - Branch: `willowpai2d4-thorfinn/h12-ema-weights` (rebased onto post-#404 advisor branch)
