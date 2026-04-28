@@ -2196,3 +2196,32 @@ At post-#686 (30-ep), half-life percentages shift slightly: 0.995 at 5.4 %, 0.99
 |----|---------|------|-------|-----|
 | #723 | edward | smoothl1-beta-1p0 | `beta = 0.5 → 1.0` on merged #686 baseline | Completes β-axis basin map upper edge under modern compute regime. Tests if basin extends to β=1.0 (broad-flat hypothesis) or cuts off in (0.75, 1.0]. Honest band −2 % to +10 %. |
 | #724 | askeladd | lion-beta2-0p9995 | Lion `betas[1] = 0.999 → 0.9995` on merged #686 baseline | Bracket midpoint between merged β2=0.999 (#571) and closed β2=0.9999 (#598 +21.6 %). At 30-ep budget, β2=0.9995 half-life is 54 % of run (1.85 half-lives — partial convergence). Tests if buffer-history basin shifts upward at longer budget. Honest band −4 % to +10 %. |
+
+## 2026-04-28 10:50 — PR #711: Lion grad-clip max_norm 0.5 → 1.0 (charliepai2d1-tanjiro) — **CLOSED (clip-axis basin inverts under Lion; durable mechanism)**
+- val=41.4485 (−3.98 % vs prior #675 baseline; +12.2 % vs current #686 baseline)
+- test=37.939 (+3.25 % / +25.1 %) — driven by single_in_dist outlier (val −7.74 %, test +12.21 % anti-correlation; surf_loss=2.024 on that split vs 0.03-0.07 elsewhere)
+
+### Clip-axis regime inversion (durable for the appendix)
+
+| Era | clip max_norm | val | result |
+|---|---:|---:|---|
+| AdamW (#374 merged) | 1.0 | 113.157 | (vs era's worse 132 baseline) |
+| AdamW (#402 merged) | 0.5 | 110.822 | **0.5 < 1.0** under AdamW ✓ |
+| Lion+compile+EMA(0.995) (this PR) | 1.0 | **41.449** | **1.0 < 0.5** under Lion ✓ (inverted) |
+| Lion+compile+EMA(0.995) (#675 baseline) | 0.5 | 43.165 | reference |
+
+**Mechanism**: under AdamW the clip envelope acts as an effective LR cap (because `update = lr × m_t / sqrt(v_t)` blows up at high gradient norms). Under Lion `update = lr × sign(c_t)` is bounded regardless — clip only smooths the buffer. Less-aggressive clip 1.0 lets more pre-clip gradient information flow into `m_t` → smoother `sign(c_t)` direction → faster val descent.
+
+Clip ratio shifted from ~14-18× (baseline) to ~7.7× at convergence. Per-split val: `geom_camber_rc` (high-gradient noisier split) is the largest gainer (−4.99 % val) — matches win-case prediction.
+
+### Decision: close (val gain doesn't carry over to current bf16 baseline)
+
+The +12.2 % regression vs current #686 baseline puts this past the close threshold. The val gain on prior #675 baseline is real and the mechanism is durable for the appendix (regime inversion AdamW → Lion). Validating at current baseline would require a re-run; not the highest-value next step.
+
+Reassigned tanjiro to **PR #729 (lr-warmup)** — complementary axis (warmup controls per-step movement during buffer warm-up phase; clip controls per-step gradient magnitude flowing into buffer).
+
+## 2026-04-28 10:55 — Round-2 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #729 | tanjiro | lr-warmup | 2-ep linear lr warmup before cosine on merged #686 baseline | Fresh untouched axis. Mechanism: ep1 grad-norm ~70 in #711 — large early gradients overweight buffer trajectory. Warmup linearly ramps lr from 2.5e-5 → 2.5e-4 over 2 epochs; after warmup, cosine T_max=48 takes over. Complementary to clip-axis. Honest band −5 % to +9 %. |
