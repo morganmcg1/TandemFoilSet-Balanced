@@ -1,5 +1,49 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 04:48 — PR #509 (closed): batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF
+
+- branch: `willowpai2d1-thorfinn/batch-size-8-on-compile-baseline` (deleted on close)
+- hypothesis: compile fuses kernels and changes the memory regime; bsz=8
+  with sqrt-scaled lr might amortize per-step compute and give a real
+  per-epoch speedup that PR #360 couldn't see. Predicted -1 to -5%.
+
+### Results
+
+| Metric | Value | vs PR #314 baseline (Huber+compile+FF, the rebase target) | vs PR #504 (pure L1, current baseline) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **74.02** (epoch 34 of 34) | **+6.0%** | **+29.2%** (regression) |
+| `test_avg/mae_surf_p` | 63.47 | +2.8% | +23.6% |
+| Per-epoch wall (mean) | **53.98 s** | **+10.2%** (slower!) | +10.2% (slower) |
+| Per-batch wall (steady) | 0.260 s | ×1.99 vs bsz=4 | n/a |
+| Peak GPU memory | 48.3 GB | ×2.00 vs bsz=4 | n/a |
+| Epochs completed | 34 / 50 | -2 | n/a |
+| W&B run | `48uy33yz` | | |
+
+### Analysis & conclusions
+
+- **Closed.** Decisive falsification with conclusive throughput data.
+  Per-batch time scaled ×1.99 with batch size doubling — kernel-launch
+  overhead was already negligible at bsz=4 with compile, so bsz=8 has no
+  amortization room. Peak memory scaled ×2.00 — compile fused autograd
+  intermediates intra-step but did not compress them across batch dim.
+- **Trainer is fundamentally HBM-bandwidth + padding-cost bound at every
+  baseline measured** (32.9 / 42 / 84 GB pre-compile, 24.1 / 48.3 GB on
+  compile). compile reduced the constant-factor of HBM traffic per token
+  but did not change linear scaling with token count.
+- Per-epoch wall going UP (not down) when batch-size doubled is the final
+  signature: with half as many batches × 2× per-batch cost, the integral
+  is slightly worse because validation pass + epoch-boundary overhead
+  amortize over fewer batches.
+- **Batch-size scaling is now permanently retired** as a throughput knob
+  for this trainer. Compile reduced its single-step cost but did not move
+  the bottleneck. If future throughput is wanted, **per-token cost
+  reduction** (variable-mesh attention kernel, sparser slice tokens,
+  reduce pad-mask waste) is the only remaining lever — substantial
+  implementation work, not on the immediate roadmap.
+- Reassigned thorfinn to **sw=15 on pure-L1 baseline** (PR #544): clean
+  re-test of their round-1 directional surf_weight finding on the new
+  best baseline (val_avg=57.29). No rebase, single-flag change.
+
 ## 2026-04-28 04:40 — PR #504 (merged, NEW BASELINE): Pure L1 loss replacing SmoothL1(β=1.0)
 
 - branch: `willowpai2d1-edward/pure-l1-loss` (deleted on merge)

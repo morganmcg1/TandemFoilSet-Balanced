@@ -22,7 +22,7 @@
 | #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** — rebase onto Huber baseline, +sw=15 single run |
 | #443 | tanjiro | Spatial features | Gaussian RFF K=16 σ=10 (was for compile+FF; rebase onto Huber+T_max=37 needed) |
 | **#541** | **edward** | **Schedule (with L1)** | **T_max sweep: --epochs 37 vs 50 with pure L1 (settles schedule alignment for L1)** |
-| #509 | thorfinn | Throughput | batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF (post-compile memory math is different) |
+| **#544** | **thorfinn** | **Loss / metric alignment** | **surf_weight=15 on pure-L1 baseline** (clean re-test of round-1 directional finding on new baseline) |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
 | **#531** | **fern** | **Sampling** | **Per-Re weighted sampling: weight ∝ sqrt(Re/Re_median[domain])** |
@@ -60,7 +60,7 @@
 - SmoothL1/Huber loss (β=1.0): MERGED → superseded by pure L1
 - **Pure L1 loss**: **MERGED** (replaced Huber, val_avg 69.83 → 57.29)
 - Cosine T_max alignment: loss-dependent (T_max=37 for Huber merged then superseded; T_max=50 likely better for L1, being verified in #541)
-- Larger batch size: ruled out *without* compile (#360); **revisit in flight** post-compile (#509)
+- Larger batch size: **PERMANENTLY RULED OUT** (#360 pre-compile, #509 post-compile both confirmed HBM-bandwidth bound at every baseline)
 - Domain-bucketed sampler: **RULED OUT**
 - Pressure weighting (uniform): **RULED OUT post-bf16**
 - Channel-weighted MSE (surface-only or volume-only): **RULED OUT** at convergence
