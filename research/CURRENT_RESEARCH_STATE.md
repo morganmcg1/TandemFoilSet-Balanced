@@ -24,7 +24,7 @@
 | **#584** | **edward** | **Schedule (with L1)** | **--epochs 70 probe — extends T_max=50 finding; tests if even longer schedule continues the trend** |
 | **#570** | **thorfinn** | **Loss / metric alignment** | **surf_weight=8 single probe on pure-L1** (followup from #544 close: 3-point monotonic curve under L1 suggests sw<10 may be optimum, single-flag test) |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
-| **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
+| #529 v2 | alphonse | Architecture | **Aux p head sent back: rebase + switch aux loss SmoothL1→L1.** Original run on PR #407 gave val=66.16 (-5.13%) with clean ablation (aux loss alone -1.9%, inference blend +3.3%). Orthogonal mechanism; predicted post-rebase val 51-53. |
 | **#591** | **fern** | **Sampling** | **Linear-Re bracket** (`weight ∝ Re/Re_median`, no sqrt) — followup #1 from PR #531 closing analysis ("we may not have saturated") |
 
 ## Reviewed (round 1+)

@@ -1,5 +1,70 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 06:13 — PR #529 (sent back): Surface-only auxiliary p head on PR #407 baseline
+
+- branch: `willowpai2d1-alphonse/surface-only-aux-p-head` (in flight as draft after send-back)
+- hypothesis: small aux MLP head trained on surface-pressure-only Huber
+  loss + inference blending of main and aux predictions on surface nodes.
+  Decouples extra surface-p signal from main loss gradient ratio.
+  Predicted -2 to -5%.
+
+### Results (vs PR #407 Huber+T_max=37 baseline; assignment-time)
+
+| Run | val_avg/mae_surf_p | Δ vs PR #407 | test_avg | Δ vs PR #407 | best ep | W&B |
+|---|---|---|---|---|---|---|
+| Full (aux loss + inference blend, α=0.5) | **66.16** | **−5.13%** | **58.44** | **−3.39%** | 36 | `8u8s1ecw` |
+| Ablation (aux loss only, no inference blend) | 68.44 | −1.86% | 60.03 | −0.74% | 33 | `wfjngkjo` |
+
+vs current baseline (PR #531 at val_avg=54.09): **+22.3%** — assignment-time
+goal-post shift; rebase needed.
+
+### Mechanism decomposition
+
+The clean ablation isolates two independent mechanisms:
+- **Aux loss term alone**: ~1.9% on val (better backbone representations
+  via additional supervisor on the surface-p subspace).
+- **Inference blend alone**: ~3.3% additional on top (main and aux heads
+  make different surface-p errors; averaging gives consistent gain).
+
+Volume MAE_p slightly *improved* (-1.6%) — confirms "more surface signal
+without distorting volume gradients" hypothesis.
+
+### Per-split structure
+
+- **Cruise benefits most from blend** (-8.1% surf_p val) — main and aux
+  heads make sufficiently different errors for averaging to help.
+- **rc essentially flat** — main and aux heads agree where they're both
+  wrong; rc remains representation-limited (consistent signal across
+  PR #503 closing, PR #527 schedule, PR #531 sampling).
+- single_in_dist -4.6%, val_re_rand modest improvement.
+
+### Capacity / cost
+
+| Metric | Baseline | This PR |
+|---|---|---|
+| Total params | 0.67 M | 0.69 M (+3%) |
+| Cold compile | ~10 s | 10.05 s (no extra recompiles) |
+| Per-epoch wall | ~49 s | ~50 s |
+| Peak GPU memory | 24.1 GB | 24.7 GB (+0.6 GB) |
+
+### Analysis & conclusions
+
+- **Sent back, not merged.** Same goal-post-shift situation as fern,
+  edward, nezuko, etc. — assignment-time baseline (PR #407) was
+  superseded by L1 (PR #504) → T_max=50 (PR #541) → per-Re sampling
+  (PR #531) during the run.
+- **Mechanism is orthogonal** to all three (loss formulation, schedule
+  shape, sampler weighting) so should still give a meaningful win on
+  the new baseline — though smaller than the 5.1% on Huber, since pure
+  L1 already addresses some of the small-residual fine-tuning the aux
+  head was previously helping with.
+- Send-back instructions: rebase onto current advisor branch + switch
+  aux loss from SmoothL1 to pure L1 (consistency with merged loss) +
+  use `--epochs 50` (matches T_max=50). Predicted post-rebase val_avg:
+  51-53 at 50-70% stacking efficiency.
+- Followups (aux_weight sweep, blend_alpha sweep, aux velocity head)
+  queued for after the rebased run lands.
+
 ## 2026-04-28 06:12 — PR #531 v2 (merged, NEW BASELINE): Per-Re sqrt sampling on pure L1
 
 - branch: `willowpai2d1-fern/per-re-weighted-sampling` (deleted on merge)
