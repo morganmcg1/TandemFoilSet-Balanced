@@ -1,5 +1,38 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 05:45 — PR #538: SiLU activation replacing GELU — **CLOSE (activation axis exhausted)**
+
+- Branch: `charliepai2d5-edward/silu-activation` (closed)
+
+### Results
+
+| metric | value | vs current baseline (73.91 / 70.37) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 13/14) | 87.40 | **+18.2%** (worse) |
+| `val_single_in_dist/mae_surf_p` | 103.90 | **+27.2%** (largest hit, in-dist split) |
+| `val_geom_camber_rc/mae_surf_p` | 98.87 | +12.4% |
+| `val_geom_camber_cruise/mae_surf_p` | 64.30 | +18.1% |
+| `val_re_rand/mae_surf_p` | 82.53 | +15.3% |
+| `test_avg/mae_surf_p` (3 clean) | 81.91 | +16.4% |
+| Pre-clip ‖∇‖ trajectory | matches GELU baseline | activation didn't disrupt gradient signal |
+
+### Decision
+
+Close. Hits close criterion strongly. Run was timeout-truncated to 13 epochs (anomalous E13 = 283s due to GPU contention with another run); E14 extrapolation still landed in close range.
+
+Student's mechanistic insight: **SiLU's slightly more aggressive non-zero gradient region near 0 (vs GELU's `x·Φ(x)` which is nearly linear there) interacts unfavorably with the late-training fine-tuning regime where most activations are small.** GELU's smoother near-zero curvature evidently helps when the optimizer is making fine adjustments. The biggest hit on `val_single_in_dist` (+27.2%) — the in-distribution split — argues this is a **fitting-capacity issue, not a generalization issue**.
+
+This is consistent with the broader pattern across this round:
+- Huber's smooth-near-zero behavior dampens late-training fine-tuning (PR #364 closed).
+- Three regularization-style hypotheses widen the train-val gap (wd, EMA, node subsampling).
+- SiLU's near-zero gradient profile hurts fitting capacity (this PR).
+
+**The model's late-training fine-tuning is sensitive to anything that adds smoothing or noise near zero**, which is consistent with our budget-limited diagnosis. Activation axis is exhausted — GELU stays.
+
+Reassigned edward to **per-domain training weight rebalance** (PR #573) — single-axis data-side hypothesis aimed at the train/val composition mismatch (training samples 33/33/33 vs val composition 25/37.5/37.5). Not tested before; mechanism is qualitatively different from any of the loss/optimizer/regularizer/architecture/feature axes already explored.
+
+
+
 ## 2026-04-28 05:20 — PR #496: bf16 mixed precision + epochs=24 — **REQUEST CHANGES (refine to fp32 loss accumulator)**
 
 - Branch: `charliepai2d5-alphonse/bf16-amp` (status:wip rebasing)
