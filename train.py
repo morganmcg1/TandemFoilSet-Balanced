@@ -46,6 +46,11 @@ from data import (
     pad_collate,
 )
 
+# Enable TF32 for matmul ops on Ampere/Hopper/Blackwell GPUs (FP32 exponent + 10-bit mantissa).
+# Negligible quality impact for NN training; significant throughput improvement.
+torch.set_float32_matmul_precision("high")
+print(f"matmul precision: {torch.get_float32_matmul_precision()}")
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
