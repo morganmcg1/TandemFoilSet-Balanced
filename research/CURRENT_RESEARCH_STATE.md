@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 08:55
+- **Date:** 2026-04-28 09:25
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
 - **Most recent human research direction:** none received yet
@@ -25,7 +25,7 @@ Round 1 in progress. Strategy:
 | #653 | alphonse  | lr=7e-4 with bf16+grad-clip+Huber baseline (2-seed)             | wip (new; replaces closed #586 — lr=7e-4 single-seed probe was promising; testing whether higher LR composes with Huber's smoother loss surface) |
 | #667 | askeladd  | SWA over last quarter of training (2-seed)                       | wip (new; replaces closed #622 — different mechanism than EMA, flat-mean over last-fraction weights for flatter-minima discovery) |
 | #427 | frieren   | Budget-aware cosine (T_max matched to realised epochs)          | wip (sent back; 3 OLD-baseline runs confirmed mechanism (-3 to -11% vs #336), need rebase + 2-seed re-run with --cosine_t_max=19 on bf16+grad-clip baseline) |
-| #610 | nezuko    | Higher weight decay (wd=5e-4, 2-seed)                            | wip (new; replaces closed #557 — deterministic regularizer alternative to dropout) |
+| #610 | nezuko    | Higher weight decay (wd=5e-4, 2-seed)                            | wip (sent back; pre-rebase 2-seed mean 94.84 ± 3.92 = -5.6% on bf16+grad-clip; rebase + 2-seed composition test on Huber baseline, then merge if ≤ 90) |
 | #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | wip |
 | #428 | thorfinn  | Multi-seed baseline calibration (3 seeds of default config)     | wip |
 | #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (sent back; bit-exact correct fix, awaiting rebase before merge) |

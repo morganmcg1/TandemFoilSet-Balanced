@@ -2,6 +2,25 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 09:20 — PR #610: Higher weight decay (wd=5e-4, 2-seed) — **SENT BACK (composition test on Huber baseline)**
+- Branch: `willowpai2d5-nezuko/weight-decay-5e-4` (pre-#413, train.py is pure CLI flag run with Huber-revert staleness only)
+- 2-seed run on bf16+grad-clip baseline (pre-Huber) + 1 sensitivity probe at wd=1e-3:
+
+| Run | val_avg/mae_surf_p | best epoch | epochs done | W&B id |
+|---|---:|---:|---:|---|
+| wd=5e-4 seed 0 (ntr7ud7w) | 92.06 | 19/19 | 19 | weight_decay |
+| wd=5e-4 seed 1 (mwqmoldt) | 97.61 | 18/19 | 19 | weight_decay |
+| **wd=5e-4 2-seed mean ± std** | **94.84 ± 3.92** | — | — | — |
+| wd=1e-3 seed 0 (1rm75ili) | 93.39 | 19/19 | 19 | weight_decay |
+
+- vs OLD bf16+grad-clip baseline (100.44): **-5.6% mean**, variance tightened 29% (5.54 → 3.92)
+- vs current bf16+grad-clip+Huber baseline (90.98): +4.2% — but composition with Huber is the actual question; wd is parameter-side regularization, Huber is loss-side, mechanisms are orthogonal.
+- Per-split deltas vs OLD baseline: **OOD splits gain MOST** — `val_geom_camber_rc` -9.4%, `val_re_rand` -6.8%, `val_single_in_dist` -3.7%, `val_geom_camber_cruise` -1% (already at floor)
+- This is the **cleanest "regularization-as-overfitting-cure" signal** in round 1 — opposite shape from dropout #557 (which had the OOD-helps prediction fail).
+- **Pattern preserved:** deterministic regularization (wd) tightens variance; stochastic regularization (dropout, β2=0.95) widens variance.
+- Sent back: branch needs rebase to drop Huber-revert staleness, then 2-seed re-run on bf16+grad-clip+Huber baseline. Predicted composition: 78%-additive at ~86.6 (clean win), 50%-additive at ~88.2 (still merge), 0%-additive at ~91 (close).
+- Also useful: wd=1e-3 single-seed probe (93.39) suggests the curve is still flat or improving — wd is meaningfully under-set in the round-1 default.
+
 ## 2026-04-28 08:50 — PR #622: Volume Huber (apply Huber to vol_loss too) — **CLOSED**
 - Branch: `willowpai2d5-askeladd/huber-volume` (deleted; train.py diff was clean 4-line edit on current advisor)
 - 2-seed run on bf16+grad-clip+Huber baseline:
