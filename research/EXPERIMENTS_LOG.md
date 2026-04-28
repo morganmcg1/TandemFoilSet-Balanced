@@ -1,5 +1,167 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-28 23:50 — PR #880: LinearNO ELU+1 linear attention — **CLOSED (clear regression)**
+
+- Branch: `willowpai2e4-tanjiro/linear-attention-elu1`
+- Student: willowpai2e4-tanjiro
+- W&B run: [`clwoyuwq`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/clwoyuwq)
+
+**Hypothesis.** Replace softmax slice attention with ELU+1 linear
+attention. Predicted −3 to −8% on val_avg/mae_surf_p via richer
+slice-pair information flow.
+
+**Results vs prior baseline 99.23 (pre-#820, L1+ch=[1,1,3]):**
+
+| Metric | Prior baseline | This run | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 99.23 | 106.10 | **+6.92%** ✗ |
+| `test_avg/mae_surf_p` | 92.61 | 95.60 | **+3.23%** ✗ |
+| Param count | 662 K | 662 K | parity (+0) |
+| Wall clock | parity | parity | parity |
+
+**Per-split val:**
+
+| Split | Δ |
+|---|---:|
+| `val_single_in_dist` | +11.0% ✗ |
+| `val_geom_camber_rc` | −0.5% ≈ |
+| `val_geom_camber_cruise` | **+15.1% ✗** |
+| `val_re_rand` | +4.3% ✗ |
+
+**Mechanism (Qin et al. 2022 attention dilution):** At S=64 with
+d_head=32, ELU+1 features become near-uniform, collapsing slice-
+pair information flow. Softmax's competitive sharpness was
+load-bearing for cruise/single splits where pressure dynamics
+span small numeric ranges and need crisp slice differentiation.
+
+**Three takeaways for the appendix:**
+1. Attention-kernel substitution is bounded by inductive-bias
+   requirements at small S. Cao 2021 Galerkin precedent applies
+   to *full-token* attention (large N), not slice-token (small S).
+2. Per-split signature confirms the dilution prediction —
+   smallest-magnitude splits (cruise, single) regress hardest.
+3. `test_single_in_dist` improvement (−1.7%) suggests uniform
+   smoothing helps tail outliers, but cost of losing peak focus
+   dominates everywhere else. MoE-style "linear-attention at
+   high-magnitude regions, softmax elsewhere" is a future direction.
+
+Implementation was correct (param parity, finite grads, healthy
+training). Failure was inductive-bias mismatch, not engineering.
+**Lever family ATTENTION-KERNEL-SUBSTITUTION exhausted at S=64.**
+
+## 2026-04-28 23:48 — PR #873: EMA Polyak averaging decay=0.99 (val=88.85, test=78.67) — **SENT BACK for rebase onto post-#820, predicted to merge as biggest single-lever win**
+
+- Branch: `willowpai2e4-edward/ema-weights-polyak`
+- Student: willowpai2e4-edward
+- W&B run: [`6vl5yguo`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/6vl5yguo)
+
+**Hypothesis.** EMA model weights with decay=0.99, eval and save
+checkpoint from EMA-swapped weights. Predicted −1 to −3%.
+
+**Results vs PRIOR baseline 99.23 (pre-#820, L1+ch=[1,1,3]):**
+
+| Metric | Prior baseline | This run | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 99.226 | **88.846** | **−10.46%** |
+| `test_avg/mae_surf_p` | 92.610 | **78.669** | **−15.06%** |
+| Best epoch | 12 | 14 (timeout) | +2 |
+| Wall clock | 30.77 min | 30.74 min | flat |
+
+**Per-split val (epoch 14, EMA weights):**
+
+| Split | Prior | This run | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 116.68 | 109.08 | **−6.51%** |
+| `val_geom_camber_rc` | 113.94 | **100.05** | **−12.18%** |
+| `val_geom_camber_cruise` | 75.02 | **64.75** | **−13.68%** |
+| `val_re_rand` | 91.28 | **81.49** | **−10.72%** |
+| **val_avg** | 99.23 | 88.85 | **−10.46%** |
+
+**Per-split test (final eval from saved EMA-best checkpoint):**
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 96.33 |
+| test_geom_camber_rc | 88.72 |
+| test_geom_camber_cruise | 54.52 |
+| test_re_rand | 75.11 |
+| **test_avg** | **78.67** |
+
+**vs CURRENT merged baseline (89.71/88.16, post-#820 Fourier PE):**
+val=88.85 already sits **−0.96% below**. test=78.67 is **−10.77%
+below 88.16**. Even if Fourier PE absorbs half the EMA gain, the
+PR merges. PR mergeable=UNKNOWN (likely no real conflict given
+EMA touches optimizer/eval, Fourier touches input).
+
+**4-5× larger effect than predicted.** Three observations from
+edward's analysis:
+1. **val→test tightening (+6.6 → +10.2 delta widening)** — EMA's
+   averaged minimum is *more* generalizing, not just better-on-
+   selection-target. Implicit-regularization signal is clean.
+2. **Per-split prediction was wrong (informatively).** Predicted
+   `val_single_in_dist` to gain most (heavy-tail jitter). Actual:
+   smallest gain (−6.5%) on that split, biggest gains on
+   geometry-extrapolation (cruise/rc) and Re-random (−12 to −14%).
+   EMA's gain is dominated by *generalization-direction smoothing*,
+   not batch-noise variance reduction.
+3. **Strictly monotonic per-epoch curve.** Every single epoch
+   improved on the previous. No jitter at all. Best-epoch shift
+   +2 (12 → 14) consistent with EMA needing warmup.
+
+**Decision.** **Send back for rebase onto post-#820 advisor branch
+HEAD.** Mechanistically orthogonal to Fourier PE (snapshot
+averaging vs input feature spectrum). Predicted compounded:
+val ≈ 80–83, test ≈ 70–73. **Strongest single-lever result of
+round 2.** Sent back at 23:48 with detailed instructions.
+
+## 2026-04-28 23:45 — PR #863: Seed determinism (askeladd, BIT-PERFECT achieved) — **SENT BACK for rebase + canonical seeded baseline run**
+
+- Branch: `willowpai2e4-askeladd/seed-determinism`
+- Student: willowpai2e4-askeladd
+- W&B runs: [`sk040lf3`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/sk040lf3) (Run A), [`gkqoo0v4`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/gkqoo0v4) (Run B)
+
+**Hypothesis.** Seed `random/numpy/torch/cuda` + pass `Generator`
+to `WeightedRandomSampler` and `DataLoader` to eliminate run-to-run
+val variance (~6% drift on unseeded runs).
+
+**Results.** **Bit-perfect determinism: 0.0000 absolute drift on
+every metric across all 14 epochs.** Run A and Run B produced
+identical val_avg, identical per-split val, identical test_avg,
+identical per-split test, identical per-epoch train losses. All
+match to 4 decimal places.
+
+| Metric | Run A | Run B | |A − B| |
+|---|---:|---:|---:|
+| `best val_avg/mae_surf_p` | 100.8022 | 100.8022 | **0.0000** |
+| `test_avg/mae_surf_p` | 90.1819 | 90.1819 | **0.0000** |
+| Mean epoch wall-clock | 132.3s | 132.3s | 0.0s |
+
+**Why bit-exact without `cudnn.deterministic`:** Transolver has no
+convolutions (the typical non-determinism source); all linear
+projections + softmax attention. Float32 end-to-end (no AMP).
+Reduction order in `torch.matmul` is fixed at single-GPU scale.
+Determinism comes "for free" without slowdown.
+
+**The `--seed 0` baseline value is val=100.80 / test=90.18 on the
+PRE-#820 model.** This sits between the two unseeded runs (99.23
+and 105.22), confirming those were lucky/unlucky draws around the
+seed-distribution mean.
+
+**Decision.** **Send back for rebase + canonical-baseline run.**
+Once rebased onto post-#820 (Fourier PE active), `--seed 0` will
+produce a different deterministic value (likely 88-90 range).
+That number becomes the new ranking quantity for all future PRs.
+
+**Why one more run, not two:** Bit-exactness was already proven
+on the pre-#820 model. Fourier PE is a deterministic prepend; no
+new randomness. Save the GPU slot. Sent back at 23:45 with
+detailed instructions.
+
+**Once merged**, BASELINE.md will document the seeded canonical
+baseline as the new ranking quantity. Borderline ablations (≤1%
+predicted effect) will use `--seed {0, 1, 2}` mean for paper-grade
+rigor.
+
 ## 2026-04-28 23:35 — PR #819: Relative L2 mix α=0.5 (retry on PRE-#820 base, val=98.01) — **SENT BACK for second rebase onto #820 baseline**
 
 - Branch: `willowpai2e4-frieren/relative-l2-loss`

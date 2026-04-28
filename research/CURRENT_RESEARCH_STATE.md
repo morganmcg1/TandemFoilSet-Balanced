@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-28 ~23:38 (Fourier PE K=4 merged at 89.71; #816 alphonse FiLM and #819 frieren rel-L2 mix both sent back for rebase #2 onto post-#820 baseline)
+- **As of:** 2026-04-28 ~23:55 (Fourier PE K=4 merged at 89.71; 4 PRs in rebase queue; #880 LinearNO closed; tanjiro reassigned #914 SwiGLU MLP; **#873 EMA is the predicted next big winner** at val=88.85/test=78.67 on pre-#820 base, awaiting compound-test on post-#820)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 89.714` (#820) and `3-split test mean = 88.16` (run `w9xbc0wl`)
@@ -37,13 +37,33 @@ on L1-only baseline). The compounding mechanism is well-understood.
 |---|---|---|---|---|
 | #816 | alphonse | FiLM conditioning of LayerNorm (#2) | -5 to -12% | **rebase #1 returned val=91.82 (-7.47%) on PRE-#820 baseline; sent back for rebase #2 onto post-Fourier-PE 89.71** |
 | #820 | thorfinn | Fourier PE on (x, z) coords (#3) | **−9.59%** | **MERGED — val baseline 89.71 (new best)** |
-| #863 | askeladd | Seed determinism PR (infra) — replaces merged #797 | infra: variance ↓ | wip |
+| #863 | askeladd | Seed determinism PR (infra) — bit-perfect proved (0.0000 drift) | infra: variance ↓ | **rebase + 1 canonical-baseline run on post-#820, then merge** |
 | #819 | frieren | Relative L2 mix α=0.5 (rebase #1 returned val=98.01 / test=88.78 on PRE-#820 base) | -1 to -4% target | **rebase #2 onto post-#820; predicted val ≤88.6 to merge** |
 | #888 | fern | Stratified vol subsample by distance-to-surface — replaces #861 (closed mask-only DropConnect) | -1 to -4% | wip |
 | #872 | nezuko | Domain-ID embedding 3-class (#8) — replaces #757 (closed) | -2 to -6% | wip |
-| #873 | edward | EMA model weights (Polyak) — replaces #753 (closed) | -1 to -3% | wip |
-| #880 | tanjiro | LinearNO ELU+1 linear attention (#6) — replaces #851 Huber (closed) | -3 to -8% | wip (needs rebase to 89.71) |
+| #873 | edward | EMA model weights (Polyak decay=0.99) — predicted -1 to -3%, ACTUAL **-10.46% val / -15.06% test** on pre-#820 baseline | -1 to -3% predicted; **4-5× actual** | **rebase to post-#820; predicted compounded val ≈ 80-83 / test ≈ 70-73 if compounds with Fourier PE** |
+| #880 | tanjiro | LinearNO ELU+1 linear attention | -3 to -8% predicted; +6.92% actual | **CLOSED — attention-kernel-substitution lever family exhausted at S=64** |
+| #914 | tanjiro | SwiGLU MLP swap (replaces #880 close) | -1 to -3% | wip (just assigned) |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} — follow-up to merged #820 | mapping optimum | wip |
+
+**Round 3 candidates (queued, contingent on round 2 outcomes):**
+
+- **EMA decay sweep at 0.995 and 0.97** — once #873 merges, the
+  optimum decay value is unknown. Edward's analysis: 0.995 likely
+  best (longer effective horizon ~200 steps); 0.97 likely worse
+  but maps the slope. Cheap follow-up.
+- **EMA × FiLM stack** — once both #873 and #816 (FiLM) merge,
+  stack them. Mechanisms are fully orthogonal (snapshot averaging
+  × in-block LN modulation). Predicted target: val ≈ 75-80.
+- **SwiGLU × EMA** — once #914 (tanjiro SwiGLU) and #873 (EMA)
+  both land, stack them. Both small-impact regularizers in
+  different parts of the pipeline.
+- **Multi-seed mean for borderline ablations** — once #863 merges,
+  use `--seed {0, 1, 2}` for ablations with predicted ≤1% effect.
+- **Per-channel relative L2 norm** (frieren's #2 follow-up) —
+  compute `y_rms_per_sample` per channel instead of jointly.
+  Pressure dominates the joint computation due to channel weight
+  3×; per-channel norm could be a different lever from α-mix.
 
 **Closed in round 2:**
 - #818 tanjiro SGDR T_0=10 → +6% worse, structural budget mismatch
@@ -64,6 +84,14 @@ on L1-only baseline). The compounding mechanism is well-understood.
   giving optimizer 3-10× weaker pressure on the residuals we want
   cleaned up. Direct mechanistic clash with L1+ch=[1,1,3] (whose merit
   is constant-magnitude gradient × per-channel weight).
+- #880 tanjiro LinearNO ELU+1 → +6.92% val, +3.23% test. **Attention-
+  kernel-substitution lever family exhausted at S=64.** ELU+1 features
+  become near-uniform at small S, collapsing slice-pair information
+  flow. Cao 2021 Galerkin precedent applies to full-token (large N)
+  attention, not slice-token (small S=64). cruise/single splits where
+  pressure dynamics span small numeric ranges regressed +11-15%.
+  Useful negative result: peak focus is load-bearing for slice
+  attention.
 - #861 fern uniform vol subsample keep_frac=0.15 → val +0.37% (wash),
   test −1.73% (DropConnect-style regularizer effect). Superseded by
   #820 merge (89.71 baseline) — runs against 99.23 are no longer
