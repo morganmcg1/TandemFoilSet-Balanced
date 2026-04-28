@@ -19,13 +19,16 @@ All subsequent runs produce finite `test_avg/mae_surf_p` numbers.
 
 ### Best round-1 val metric (single seed)
 
-| Run | Branch | val_avg/mae_surf_p | test_avg/mae_surf_p |
-|-----|--------|--------------------|----------------------|
-| `thnnvgaw` | edward/lr-warmup-cosine v1 | **135.89** | null (pre-fix; re-eval pending) |
-| `t0xgo0zv` | frieren/fourier-re-encoding v1 | 141.25 | null (pre-fix; re-eval pending) |
-| `zaqz12qi` | alphonse/channel-weighted-surface-loss v1 | 146.10 | **130.90** (re-eval via PR #807) |
+| Run | Branch | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
+|-----|--------|--------------------|----------------------|-------|
+| `8cvp4x6r` | thorfinn/unmodified-baseline (matched) | **122.15** | 118.01† | Best unmodified-model result; from PR #762 matched comparison |
+| `thnnvgaw` | edward/lr-warmup-cosine v1 | 135.89 | null (re-eval pending) | |
+| `t0xgo0zv` | frieren/fourier-re-encoding v1 | 141.25 | null (re-eval pending) | |
+| `zaqz12qi` | alphonse/channel-weighted-surface-loss v1 | 146.10 | **130.90** (re-eval via PR #807) | |
 
-Single-seed run-to-run variance ≈ ±10% at 14-epoch budget.
+† 3-split average (test_geom_camber_cruise NaN pre-fix); post-fix re-eval not yet run.
+
+Single-seed run-to-run noise band: **122–146** at 14-epoch budget (~±10%).
 
 ### Founding test baseline (clean number for paper-facing comparisons)
 
@@ -33,8 +36,8 @@ Single-seed run-to-run variance ≈ ±10% at 14-epoch budget.
 
 ### Beat-threshold for round 2+
 
-Future PRs must achieve **`val_avg/mae_surf_p < 135.89`** to demonstrate improvement above round-1 noise.
-For a merge decision: any val_avg below current best (135.89) merges; gains <5% at single seed will be flagged for multi-seed confirmation.
+Future PRs must achieve **`val_avg/mae_surf_p < 122.15`** to demonstrate improvement above the round-1 noise band.
+For a merge decision: any val_avg below 122.15 merges; gains <5% at single seed will be flagged for multi-seed confirmation.
 
 ---
 
