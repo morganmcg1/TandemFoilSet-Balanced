@@ -6,93 +6,99 @@
 
 ## Current research focus
 
-**Round baseline is PR #314 (edward, SmoothL1/Huber + compile + FF + bf16): val_avg = 69.83, test_avg = 61.72** — cumulative **−51.6% on val_avg / −53.0% on test_avg** vs the original PR #312 reference (144.21 → 69.83). Over half the metric is gone in a single round.
+**Round baseline is PR #407 (fern, cosine T_max=37 alignment): val_avg = 69.74, test_avg = 60.48** — cumulative **−51.7% / −53.9%** vs original PR #312 reference (144.21 → 69.74). Five merged interventions stack at ~91% efficiency: bf16 + FF K=8 + `torch.compile(dynamic=True)` + SmoothL1 β=1.0 + cosine T_max=37.
 
-The four merged mechanisms — bf16, FF K=8, `torch.compile(dynamic=True)`, SmoothL1(β=1.0) — sit on three distinct axes (execution / input feature / loss gradient profile) and compose at **~91% of sum-of-individuals** efficiency. That ratio held constant from 2-mechanism (FF + Huber) to 3-mechanism (compile + FF + Huber), which is a strong signal the next stacked intervention will retain its single-lever delta.
+**Capacity scale-up is now conclusively ruled out** (PR #393 on bf16 + PR #503 on compile+FF both regress +12%). Throughput frontier is exhausted (bf16, FF, compile all merged; bsz pre-compile, bucketing, reduce-overhead all closed). Round-3 priorities are now schedule + loss + regularization + features + sampling, not size.
 
-**Big open questions for round 3:**
-
-1. **Does pure L1 match SmoothL1?** Edward (#504, just-assigned) is testing. If yes, simpler formulation for the paper.
-2. **Does cosine T_max alignment add another small win?** Fern (#407) is testing `--epochs 37` on the (then-current) compile+FF baseline. Will need rebase onto Huber baseline.
-3. **Does EMA(0.999) stack with compile+FF?** Nezuko (#324, sent back). Will need rebase onto Huber baseline.
-4. **Does Gaussian RFF beat deterministic FF?** Tanjiro (#443).
-5. **Does half-step capacity finally win post-compile?** Alphonse (#503).
-6. **Does surface-only pressure-weighting recover the round-1 win?** Askeladd (#451).
+**rc-camber is not capacity-limited.** Cross-PR signal: FF helped least on rc (−3.3%), EMA helped most (−16%), capacity scale-up regressed (+14.9%). **rc-camber failure mode looks like a gradient-stability problem**, not representation or capacity. Targeted-architecture rc-camber experiments dequeued in favor of stability/regularization.
 
 ## In-flight PRs
 
 | PR | Student | Theme | Hypothesis |
 |---|---|---|---|
-| #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will likely need rebase onto Huber baseline) |
-| #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** — sent back AGAIN to rebase onto compile+FF (NOW will need to rebase onto Huber baseline) |
-| #509 | thorfinn | Throughput | **batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF** (PR #360 ruled out without compile; memory math fundamentally different now — 78 GB headroom) |
-| #407 | fern | Schedule | Cosine T_max alignment via `--epochs 37` (was for compile+FF; rebase onto Huber needed) |
-| #443 | tanjiro | Spatial features | Gaussian RFF K=16 σ=10 (was for compile+FF; rebase onto Huber needed) |
-| **#522** | **askeladd** | **Optimization tuning** | **lr=3e-4 on Huber+compile+FF** (single-flag test of askeladd's surface-gradient sharp-edge hypothesis from PR #451 closing analysis) |
-| #503 | alphonse | Capacity | Half-step Transolver h=160/L=5/heads=5/slices=80 on compile+FF (rebase onto Huber needed) |
-| **#504** | **edward** | **Loss formulation** | **Pure L1 on Huber+compile+FF baseline** (replace SmoothL1) |
+| #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
+| #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** — rebase onto Huber baseline, +sw=15 single run |
+| #443 | tanjiro | Spatial features | Gaussian RFF K=16 σ=10 (was for compile+FF; rebase onto Huber+T_max=37 needed) |
+| #504 | edward | Loss formulation | Pure L1 on Huber+compile+FF |
+| #509 | thorfinn | Throughput | batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF (post-compile memory math is different) |
+| #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
+| **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
+| **#531** | **fern** | **Sampling** | **Per-Re weighted sampling: weight ∝ sqrt(Re/Re_median[domain])** |
 
 ## Reviewed (round 1+)
 
 | PR | Student | Outcome | Headline |
 |---|---|---|---|
-| #312 | alphonse | Merged → superseded ×4 | Initial baseline: val_avg=144.21. + `data/scoring.py` `0*Inf=NaN` fix (b78f404). |
+| #312 | alphonse | Merged → superseded ×5 | Initial baseline: val_avg=144.21. + `data/scoring.py` `0*Inf=NaN` fix (b78f404). |
 | #318 | fern | Closed | +22% — wider+deeper untestable at old throughput. |
 | #321 | frieren | Sent back | +2.9%. peak=7e-4 in flight. |
-| #360 | fern | Closed | +3.12%. bsz=8 alone — trainer not launch-bound. (Memory math changed post-compile; queued for revisit.) |
+| #360 | fern | Closed | +3.12%. bsz=8 alone — trainer not launch-bound (memory math changed post-compile; thorfinn revisiting in #509). |
 | #359 | alphonse | Merged → superseded by #327 | bf16 autocast: val_avg=121.85 (−15.5%). |
-| #313 v2 | askeladd | Closed | +0.56%. Pressure weighting and bf16 not orthogonal. |
+| #313 v2 | askeladd | Closed | +0.56%. Channel-weighted MSE: not orthogonal to bf16. |
 | #384 | fern | Closed | +3.3%, +17% slower. Bucketing falsified. |
-| #393 | alphonse | Closed | +7.55%. Halfstep capacity confounded by T_max=50. **Now retesting (#503) with compile speedup.** |
+| #393 | alphonse | Closed | +7.55%. Halfstep capacity confounded by T_max=50. |
 | #327 | tanjiro | Merged → superseded by #416 | FF K=8: val_avg=106.92 (−12.2%). |
 | #324 v1 | nezuko | Sent back | +148% — EMA decay 0.9999 too slow. v2 sent back, v3 in flight. |
-| #314 v1+v2 | edward | Sent back ×2 | Huber on bf16: −14.4%. Huber on FF: −13.65%. Both sent back for rebase. |
+| #314 v1+v2 | edward | Sent back ×2 | Huber on bf16/FF: predicted to stack with compile. |
 | #416 | alphonse | Merged → superseded by #314 v3 | `torch.compile`+FF: val_avg=80.85 (−24.4%). |
 | #324 v2 | nezuko | Sent back AGAIN | −8.34% on FF (val_avg=98.00). EMA pathology fixed. compile merged simultaneously. |
-| #481 | alphonse | Closed | +4.27%. `mode="reduce-overhead"` ruled out (9 CUDAGraph captures eat the shave). |
-| **#314 v3** | **edward** | **Merged (CURRENT BASELINE)** | **Huber+compile+FF: val_avg=69.83 (−51.6% cumulative).** |
+| #481 | alphonse | Closed | +4.27%. `mode="reduce-overhead"` ruled out (CUDAGraph captures). |
+| #314 v3 | edward | Merged → superseded by #407 | Huber+compile+FF: val_avg=69.83 (−51.6% cumulative). |
+| #333 | thorfinn | Auto-closed by bot | Round-1 surf_weight sweep (sw=15 wins of {15,25,40}); reassigned to bsz=8 revisit. |
+| #451 | askeladd | Closed | +12.86%. Channel-weighted MSE family conclusively ruled out at convergence. |
+| #503 | alphonse | Closed | +12.07% on compile+FF. **Capacity scale-up conclusively ruled out** (2 independent runs at 2 different baselines). |
+| **#407** | **fern** | **Merged (CURRENT BASELINE)** | **T_max=37 alignment: val_avg=69.74 (−0.13% val / −2.0% test). Schedule mechanism worked exactly as predicted. Empty PR — CLI flag change.** |
 
 ## Throughput levers status
 
 - bf16 autocast: **MERGED**
 - Sinusoidal Fourier features (x,z) K=8: **MERGED**
 - `torch.compile(dynamic=True)`: **MERGED**
-- SmoothL1/Huber loss (β=1.0): **MERGED** (also a memory win post-compile)
-- Larger batch size: ruled out *without* compile (#360); **revisit in flight (#509, thorfinn)** post-compile (78 GB headroom)
+- SmoothL1/Huber loss (β=1.0): **MERGED**
+- Cosine T_max=37 alignment: **MERGED** (CLI-only)
+- Larger batch size: ruled out *without* compile (#360); **revisit in flight** post-compile (#509)
 - Domain-bucketed sampler: **RULED OUT**
 - Pressure weighting (uniform): **RULED OUT post-bf16**
-- Channel-weighted MSE (surface-only or volume-only): **RULED OUT** at convergence (askeladd PR #313 v2 + PR #451)
+- Channel-weighted MSE (surface-only or volume-only): **RULED OUT** at convergence
 - `mode="reduce-overhead"`: **RULED OUT**
-- Cosine T_max alignment: in flight (#407, fern, will need rebase onto Huber)
+- Capacity scale-up at h=160, L=5: **RULED OUT** (×2 baselines)
 
-## Stacking pattern
+**Throughput + capacity frontiers exhausted.** Remaining levers require novel architecture (auxiliary heads, mesh-aware encoders), sampler quality (per-Re weighting), or stability/regularization.
 
-Captured ratio held at **91%** through both 2-mechanism (FF+Huber) and 3-mechanism (compile+FF+Huber) stacks. Suggests round-3 interventions will retain their single-lever measured delta when stacked. Key implications:
+## Round-3 active themes
 
-- Pure L1 (edward #504): probably matches/closely-matches Huber. Decision is qualitative.
-- Cosine T_max alignment (fern #407): expected ~−1% to −3%; should retain when stacked.
-- EMA(0.999) (nezuko #324): expected ~−6% absolute on Huber baseline → val_avg ~64-65.
-- Gaussian RFF (tanjiro #443): may match deterministic FF; small delta.
-- Half-step capacity (alphonse #503): unknown; depends on whether the model is undercapacitied at the new baseline.
-- Surface-only pressure-weighting (askeladd #451): small, probably <2%.
+1. **Loss formulation refinement** — pure L1 (edward #504), lr tuning
+   (askeladd #522), warmup variation (frieren #321)
+2. **Stability / regularization** — EMA(0.999) (nezuko #324), grad-clip
+   alone queued for if EMA wins
+3. **Spatial features** — Gaussian RFF (tanjiro #443)
+4. **Throughput re-investigation** — bsz=8 post-compile (thorfinn #509)
+5. **Architecture** — surface-only aux p head (alphonse #529)
+6. **Sampling quality** — per-Re weighted sampling (fern #531)
 
 ## Potential next directions
 
-- **Re-investigate batch_size scaling.** PR #360 closed because trainer wasn't launch-bound and padding scales with B. With compile, both have changed: kernel fusion may unblock batch-size compute scaling, and padding cost is now amortized across more samples per Python-overhead unit. 78 GB headroom exists for bsz=8 or 16.
-- **Cosmetic NaN cleanup** in `train.py::evaluate_split` — flagged 6+ times.
-- **β sweep on Huber** (edward followup #1, queued for if pure L1 doesn't win).
-- **Round 2 ideas (kept warm):**
-  - Test-time augmentation.
-  - Per-Re weighting in sampler.
-  - Surface-only auxiliary head.
-  - Mesh-aware encoders.
-  - Gradient-based features.
+- **β sweep on Huber** (edward followup #1, queued for if pure L1 doesn't
+  win)
+- **grad_clip alone** (queued for if EMA wins)
+- **Auxiliary head variations** — surface-only (#529 in flight); could
+  follow with vol-pressure aux head, surface-velocity aux head if
+  surface-p version wins.
+- **Cosmetic NaN cleanup** in `train.py::evaluate_split` — flagged 7+
+  times.
+- **Round 3+ ideas (kept warm):**
+  - Mesh-aware encoders (kNN/GAT/PointNet) before slice attention.
+  - Gradient-based features: |∇x dsdf|, |∇z dsdf|.
+  - Geometry-conditioned attention bias.
   - Bigger architectural swings: GNO/GNOT, Galerkin Transformer.
+  - Test-time augmentation with cruise-AoA-aware caveats.
 
 ## Notes
 
-- 30-min wall-clock cap **still binding** at 36/50 epochs. Fern's T_max
-  alignment may release another small win.
+- 30-min wall-clock cap binding at 37/37 epochs (full schedule).
+- VRAM headroom 78 GB (24.1 / 102.6).
 - `data/scoring.py` patched (b78f404).
 - Cosmetic NaN in `train.py::evaluate_split` printed test loss is known.
+- `--epochs 37` is now the recommended default in BASELINE.md (Config
+  default is still 50; new experiments should explicitly pass it).
 - One hypothesis per PR. Sweeps allowed under one `--wandb_group`.

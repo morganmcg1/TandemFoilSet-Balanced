@@ -1,5 +1,94 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 04:27 — PR #407 (merged, NEW BASELINE): Cosine T_max alignment via `--epochs 37`
+
+- branch: `willowpai2d1-fern/cosine-tmax-alignment` (deleted on merge)
+- hypothesis: cosine T_max=epochs misaligned with achievable budget; align
+  via `--epochs 37` to let cosine actually decay. Predicted -1 to -3%.
+
+### Results
+
+| Metric | Value | Δ vs prior baseline (PR #314, T_max=50) |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **69.7385** (epoch 36 of 37 completed) | **−0.13%** |
+| `test_avg/mae_surf_p` | **60.4829** | **−2.0%** |
+| Per-epoch wall | ~49 s | same |
+| Epochs completed | 37 / 37 (full schedule!) | +1 from binding |
+| Peak GPU memory | 24.1 GB | same |
+| LR at best epoch | 3.6e-6 (0.72% of peak) | vs 9e-5 / ~18% under T_max=50 |
+| W&B run | `7xvc5hfl` | — |
+
+Cumulative improvement: **−51.7% val_avg / −53.9% test_avg** since PR #312.
+
+### Late-stage settle pattern (mechanism worked)
+
+Six consecutive epochs (31-36) each set a new best:
+71.69 → 71.00 → 70.56 → 70.45 → 69.82 → **69.74** → 69.76
+
+The model converged monotonically through the low-LR tail — exactly the
+schedule-shape behavior the hypothesis predicted.
+
+### Analysis & conclusions
+
+- **Merged. New round baseline at val_avg=69.74.** PR has zero file
+  changes — the experiment is a CLI-flag adjustment, not a code change.
+  Merged the empty branch (gives credit) and updated BASELINE.md to:
+  - Record new metric (val_avg=69.74, test_avg=60.48)
+  - Document `--epochs 37` as the recommended setting in the reproduce command
+  - Add fern's followup #1 as a checklist item: future merges that change
+    per-epoch wall need to re-evaluate `--epochs N`.
+  - Did **not** hardcode `epochs=37` into Config default — fragile to
+    future budget shifts.
+- **val gain (0.13%) is at noise level**, but the test gain (2.0%) is
+  consistent across all 4 splits and the qualitative cosine-tail
+  signature (6 consecutive epoch-bests in the low-LR tail) confirms the
+  schedule mechanism is doing real work.
+- The schedule-shape decision is downstream-relevant regardless of
+  magnitude: every future hypothesis on this branch can now be evaluated
+  on a properly-decaying schedule rather than the truncated cosine.
+- Two students caught baseline drift on this PR (tanjiro #443, fern
+  #407) by asking before running. Reinforces the rebase-discipline norm.
+
+## 2026-04-28 04:25 — PR #503 (closed): Half-step capacity (h=160, L=5, heads=5, slices=80) on compile+FF
+
+- branch: `willowpai2d1-alphonse/halfstep-capacity-on-compile-ff` (deleted on close)
+- hypothesis: with compile speedup + 70 GB VRAM headroom, the bigger
+  model that PR #393 couldn't test should now be feasible. Predicted
+  -2 to -5%.
+
+### Results
+
+| Metric | Value | vs PR #416 (compile+FF baseline) | vs PR #314 (Huber baseline, current) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **90.62** (epoch 27 of 27, still descending) | **+12.07%** | +29.8% |
+| `test_avg/mae_surf_p` | 82.40 | +12.24% | +33.5% |
+| Per-epoch wall | ~66 s | +35% | +35% |
+| Epochs completed | 27 / 50 | -10 | -10 |
+| Peak GPU memory | 31.6 GB | +31% | +31% |
+| Param count | 1.03 M | +54% | +54% |
+| W&B run | `12x5vmre` | | |
+
+### Analysis & conclusions
+
+- **Closed.** Capacity scale-up at this scale is now **conclusively ruled
+  out** for this trainer — two independent runs (PR #393 on bf16, this
+  PR on compile+FF) both regress to roughly the same +12% val band.
+- **Wall budget tax structurally larger than cosine-tail benefit.** The
+  bigger model is +35% slower per epoch even after compile fusion;
+  cosine T_max=epochs schedule means it gets less of the high-lr
+  exploration phase relative to its convergence needs, not more.
+- **rc-camber is not capacity-limited.** Was the OOD split the bigger
+  model was meant to help most with; regressed +14.9% / +21.0% (val/test).
+  Combined signal across PR #327 (FF: −3.3%), PR #324 v2 (EMA: −16%),
+  PR #503 (capacity: +14.9%) — rc-camber failure mode looks like a
+  **gradient-stability problem** (hence EMA helps), not representation
+  or capacity. **Targeted-architecture rc-camber experiments dequeued**.
+- **Capacity direction redirected** toward novel architecture (auxiliary
+  heads, mesh-aware encoders, geometry-conditioned attention), not
+  width/depth scaling.
+
+
+
 ## 2026-04-28 04:14 — PR #451 (closed): Surface-only pressure weighting (1, 1, 5) on surf_loss
 
 - branch: `willowpai2d1-askeladd/surface-only-pressure-weight` (deleted on close)
