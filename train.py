@@ -60,6 +60,17 @@ def fourier_pos_features(pos: torch.Tensor, num_freqs: int = NUM_FOURIER_FREQS) 
     angles = pos.unsqueeze(-1) * freqs  # [B, N, 2, num_freqs]
     return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1).reshape(*pos.shape[:-1], 4 * num_freqs)
 
+
+def fourier_log_re_features(log_re: torch.Tensor, num_freqs: int = NUM_FOURIER_FREQS) -> torch.Tensor:
+    """Multi-frequency sin/cos encoding of normalised log(Re).
+
+    log_re: [B, N] — single scalar normalised feature taken from x[..., 13].
+    out:    [B, N, 2*num_freqs]  (1 dim * num_freqs * sin+cos).
+    """
+    freqs = (2.0 ** torch.arange(num_freqs, dtype=log_re.dtype, device=log_re.device)) * math.pi
+    angles = log_re.unsqueeze(-1) * freqs  # [B, N, num_freqs]
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -251,8 +262,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            ff = fourier_pos_features(x_norm[..., :2])
-            x_norm = torch.cat([x_norm, ff], dim=-1)
+            ff_pos = fourier_pos_features(x_norm[..., :2])
+            ff_re = fourier_log_re_features(x_norm[..., 13])
+            x_norm = torch.cat([x_norm, ff_pos, ff_re], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -406,7 +418,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + 4 * NUM_FOURIER_FREQS,
+    fun_dim=X_DIM - 2 + 4 * NUM_FOURIER_FREQS + 2 * NUM_FOURIER_FREQS,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -460,8 +472,9 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        ff = fourier_pos_features(x_norm[..., :2])
-        x_norm = torch.cat([x_norm, ff], dim=-1)
+        ff_pos = fourier_pos_features(x_norm[..., :2])
+        ff_re = fourier_log_re_features(x_norm[..., 13])
+        x_norm = torch.cat([x_norm, ff_pos, ff_re], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         err = pred - y_norm
