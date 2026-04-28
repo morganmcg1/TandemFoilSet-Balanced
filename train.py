@@ -104,14 +104,15 @@ class SwiGLU_MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 slice_temp_init: float = 2.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 2.0)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * slice_temp_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -159,7 +160,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 drop_path: float = 0.0):
+                 drop_path: float = 0.0, slice_temp_init: float = 2.0):
         super().__init__()
         self.last_layer = last_layer
         self.drop_path = drop_path
@@ -167,6 +168,7 @@ class TransolverBlock(nn.Module):
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            slice_temp_init=slice_temp_init,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLU_MLP(hidden_dim, hidden_dim, hidden_dim, mlp_ratio=mlp_ratio)
@@ -211,12 +213,15 @@ class Transolver(nn.Module):
         self.n_hidden = n_hidden
         self.space_dim = space_dim
         drop_rates = torch.linspace(0.0, drop_path_max, n_layers).tolist()
+        slice_temp_inits = torch.linspace(1.5, 3.0, n_layers).tolist()
+        print(f"Per-block slice_temp_init schedule: {slice_temp_inits}")
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 drop_path=drop_rates[i],
+                slice_temp_init=slice_temp_inits[i],
             )
             for i in range(n_layers)
         ])
