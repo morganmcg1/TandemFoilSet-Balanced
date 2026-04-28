@@ -217,7 +217,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float = 0.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,15 +240,31 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            # Defensive: a sample whose prediction has any non-finite value is
+            # skipped (matches accumulate_batch's GT-skip semantics) so a single
+            # bad sample doesn't poison the whole split's MAE.
+            B = pred.shape[0]
+            pred_ok = torch.isfinite(pred).reshape(B, -1).all(dim=-1)  # [B]
+            if not pred_ok.all():
+                n_bad = int((~pred_ok).sum().item())
+                print(f"  [warn] {n_bad}/{B} sample(s) have non-finite predictions; skipping in MAE")
+                pred_ok_b = pred_ok.view(B, 1, 1)
+                pred = torch.where(pred_ok_b, pred, torch.zeros_like(pred))
+                y = torch.where(pred_ok_b, y, torch.full_like(y, float("nan")))
+                y_norm = torch.where(pred_ok_b, y_norm, torch.zeros_like(y_norm))
+
+            if huber_delta > 0:
+                err = F.huber_loss(pred, y_norm, reduction="none", delta=huber_delta)
+            else:
+                err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -386,6 +402,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    huber_delta: float = 0.0  # 0 = MSE (default); >0 = Huber with this delta
 
 
 cfg = sp.parse(Config)
@@ -487,12 +504,15 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.huber_delta > 0:
+            err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+        else:
+            err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -512,7 +532,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +600,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
