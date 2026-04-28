@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 10:25
+- **Date:** 2026-04-28 10:35
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
 - **Most recent human research direction:** none received yet
@@ -22,7 +22,7 @@ Round 1 in progress. Strategy:
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #653 | alphonse  | lr=7e-4 with bf16+grad-clip+Huber baseline (2-seed)             | wip (new; replaces closed #586 — lr=7e-4 single-seed probe was promising; testing whether higher LR composes with Huber's smoother loss surface) |
+| #720 | alphonse  | Lion optimizer (sign-based momentum, 2-seed)                    | wip (new; replaces closed #653 — distinct optimizer family from AdamW, tests whether sign-update finds different/better local optimum) |
 | #667 | askeladd  | SWA over last quarter of training (2-seed)                       | wip (sent back; pre-rebase 2-seed mean 83.95 ± 0.54 = -8.9% vs Huber baseline (pre-cosine); rebase + 2-seed composition test on cosine_tmax=19 baseline, then merge if ≤ 78) |
 | #706 | frieren   | Warmup on cosine stack (1 ep warmup + 18 cosine, 2-seed)        | wip (new; replaces merged #427 — frieren's own follow-up #1, tests if warmup adds residual value on the now-stable stack) |
 | #610 | nezuko    | Higher weight decay (wd=5e-4, 2-seed)                            | wip (sent back; pre-rebase 2-seed mean 94.84 ± 3.92 = -5.6% on bf16+grad-clip; rebase + 2-seed composition test on Huber baseline, then merge if ≤ 90) |
@@ -47,6 +47,7 @@ Round 1 in progress. Strategy:
 | #537 | alphonse | AdamW β2=0.95 — **closed**, mean 116.61 within bf16-baseline noise but variance widened 5×. Filed as round-2 candidate with warmup pairing. |
 | #557 | nezuko | Attention dropout = 0.1 — **closed**, mean +2.2% vs bf16-only baseline, variance widened 4×, OOD-better-than-in-dist prediction failed. Pattern: stochasticity-amplifying interventions hurt under short-training regime. |
 | #586 | alphonse | lr=1e-3 with bf16+grad-clip — **closed**, 2-seed mean 104.69 (+15% vs current Huber baseline). Single-seed lr=7e-4 probe at 96.35 was promising; reassigned to test composition with Huber on PR #653. Pre-clip grad-norm shifted only ~10% with 2× LR — `lr × max_norm` is the actual control variable. |
+| #653 | alphonse | lr=7e-4 with bf16+grad-clip+Huber — **closed**, 2-seed mean 95.18 ± 0.05 (CV 0.05% — clean overshoot, not noise). Compounds the PR #586 mechanism: 100% of steps clip in both regimes, post-clip direction is identical, only step magnitude differs. LR exploration at fixed max_norm=1.0 is exhausted; future work should be joint `lr × max_norm` sweep. |
 | #622 | askeladd | Volume-Huber — **closed**, 2-seed mean 96.00 ± 0.60 (+5.5% surface, +10.1% volume vs current). Cross-term effect from surface-Huber was NOT because volume needs Huber too — it was that surface-Huber freed encoder capacity. Pattern: stacking outlier-handling on the same gradient path doesn't compose, only on different gradient paths does. |
 | #376 | fern   | Wider MLP (mlp_ratio 2→4) — **closed**, +4.9% regression and OOD splits all worse |
 | #331 | askeladd | Wider (n_hidden 192, n_head 6) — **closed** after bf16+bs6 retry; v1=141.998 vs v2=163.280 reveals ±10-15% seed variance, no clean win |

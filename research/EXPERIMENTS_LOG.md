@@ -2,6 +2,24 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 10:30 — PR #653: lr=7e-4 with bf16+grad-clip+Huber baseline — **CLOSED**
+- Branch: `willowpai2d5-alphonse/lr-7e-4-with-huber` (deleted; clean train.py — pure CLI flag run with research/*.md staleness only)
+- 2-seed run on bf16+grad-clip+Huber baseline:
+
+| Seed | val_avg/mae_surf_p | best epoch | W&B id |
+|---|---:|---:|---|
+| 0 (to6mhiir) | 95.23 | 17 | lr_higher_with_huber |
+| 1 (9tlaji0e) | 95.14 | 19 | lr_higher_with_huber |
+| **2-seed mean ± std** | **95.18 ± 0.05** (CV 0.05%) | — | — |
+
+- vs current bf16+grad-clip+Huber baseline (90.98): **+4.20 (+4.6% worse)** — clean overshoot, NOT noise (CV 0.05%)
+- Per-split: OOD splits regress most (`val_geom_camber_rc` +12.5), `val_geom_camber_cruise` slightly improves (-2.3). Pattern: optimizer landing in basin that fits easier splits but generalizes worse.
+- **Critical mechanism finding:** 100% of steps clip at max_norm=1.0 in BOTH lr=5e-4 and lr=7e-4. Post-clip step *direction* is identical; only step *magnitude* differs (linearly via `lr × max_norm`). Huber's loss-smoothing benefit at higher LR is essentially zero on top of grad-clip — Huber addresses sharpness, but grad-clip already removed it.
+- **Pre-clip grad-norm shifts ~17% lower** at lr=7e-4 (mean 17.0 vs 20.7) — the model finds a slightly different operating point, but the unit-norm post-clip step is unchanged.
+- Decision: **closed** per stated rule (mean > 92).
+- Useful side-finding preserved: **`lr × max_norm` IS the actual control variable** in the grad-clip regime (compounds with PR #586 finding). Lr exploration is exhausted at fixed max_norm=1.0; future LR-axis work should be a joint `lr × max_norm` sweep.
+- Reassignment: alphonse → **Lion optimizer (PR #720)** — distinct mechanism family from AdamW (sign-based momentum), well-evidenced for transformer training. Tests whether sign-update finds a different/better local optimum than AdamW's `m / sqrt(v)`.
+
 ## 2026-04-28 10:20 — PR #667: SWA over last quarter (2-seed) — **SENT BACK (composition test on cosine baseline)**
 - Branch: `willowpai2d5-askeladd/swa-last-quarter` (pre-#427; train.py adds SWA but reverts cosine_t_max + completed_epochs)
 - 2-seed run on bf16+grad-clip+Huber baseline (PRE-cosine):
