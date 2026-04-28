@@ -31,7 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -45,6 +45,137 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# H4: surface-distance feature + surface-only normalization helpers
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def _sample_distance_to_surface(x: torch.Tensor, is_surface: torch.Tensor,
+                                device: torch.device, chunk: int = 8192) -> torch.Tensor:
+    """Per-node Euclidean distance to nearest surface node, normalized by bbox diagonal.
+
+    Operates on a single (unpadded) sample. Returns a [N, 1] tensor on CPU.
+    """
+    pos = x[..., :2].to(device)
+    surf_mask = is_surface.to(device)
+    sp = pos[surf_mask]
+    N = pos.shape[0]
+    if sp.numel() == 0:
+        d = torch.full((N,), 1e3, dtype=pos.dtype, device=device)
+    else:
+        d = torch.empty(N, dtype=pos.dtype, device=device)
+        for i in range(0, N, chunk):
+            d[i : i + chunk] = torch.cdist(pos[i : i + chunk], sp).min(dim=-1).values
+    bbox = pos.amax(dim=0) - pos.amin(dim=0)
+    diag = bbox.norm().clamp(min=1e-6)
+    return (d / diag).cpu().unsqueeze(-1)
+
+
+def precompute_distances(ds, device: torch.device, label: str = "split") -> list[torch.Tensor]:
+    """Precompute the surface-distance feature for every sample in a dataset."""
+    distances = []
+    for i in tqdm(range(len(ds)), desc=f"distance:{label}", leave=False):
+        item = ds[i]
+        x, _, is_surface = item[0], item[1], item[2]
+        distances.append(_sample_distance_to_surface(x, is_surface, device))
+    return distances
+
+
+class DistanceAugmentedDataset(Dataset):
+    """Wrap a SplitDataset/TestDataset and append precomputed distance as the 25th feature."""
+
+    def __init__(self, base_ds, distances: list[torch.Tensor]):
+        assert len(base_ds) == len(distances)
+        self.base_ds = base_ds
+        self.distances = distances
+
+    def __len__(self):
+        return len(self.base_ds)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base_ds[idx]
+        d = self.distances[idx]
+        x_aug = torch.cat([x, d], dim=-1)
+        return x_aug, y, is_surface
+
+
+def compute_surface_volume_stats(ds, max_samples: int = 200) -> dict[str, torch.Tensor]:
+    """Compute per-channel mean/std for surface and volume target nodes.
+
+    Iterates over up to ``max_samples`` of ``ds`` (works on the augmented or raw dataset
+    since y is unchanged) and returns ``{y_mean_surf, y_std_surf, y_mean_vol, y_std_vol}``.
+    """
+    sums_s = torch.zeros(3, dtype=torch.float64)
+    sumsq_s = torch.zeros(3, dtype=torch.float64)
+    n_s = 0
+    sums_v = torch.zeros(3, dtype=torch.float64)
+    sumsq_v = torch.zeros(3, dtype=torch.float64)
+    n_v = 0
+    n = min(len(ds), max_samples)
+    for i in range(n):
+        item = ds[i]
+        _, y, is_surface = item[0], item[1], item[2]
+        y = y.double()
+        y_s = y[is_surface]
+        y_v = y[~is_surface]
+        if y_s.numel() > 0:
+            sums_s += y_s.sum(0)
+            sumsq_s += (y_s ** 2).sum(0)
+            n_s += y_s.shape[0]
+        if y_v.numel() > 0:
+            sums_v += y_v.sum(0)
+            sumsq_v += (y_v ** 2).sum(0)
+            n_v += y_v.shape[0]
+    y_mean_s = sums_s / max(n_s, 1)
+    y_std_s = (sumsq_s / max(n_s, 1) - y_mean_s ** 2).clamp(min=1e-6).sqrt()
+    y_mean_v = sums_v / max(n_v, 1)
+    y_std_v = (sumsq_v / max(n_v, 1) - y_mean_v ** 2).clamp(min=1e-6).sqrt()
+    return {
+        "y_mean_surf": y_mean_s.float(),
+        "y_std_surf": y_std_s.float(),
+        "y_mean_vol": y_mean_v.float(),
+        "y_std_vol": y_std_v.float(),
+    }
+
+
+def per_node_y_stats(is_surface: torch.Tensor, surf_stats: dict[str, torch.Tensor]
+                     ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build [B, N, 3] per-node y_mean/y_std selecting between surface and volume stats."""
+    m = is_surface.unsqueeze(-1).to(surf_stats["y_mean_surf"].dtype)  # [B, N, 1]
+    one_minus_m = 1.0 - m
+    y_mean = (m * surf_stats["y_mean_surf"].view(1, 1, -1)
+              + one_minus_m * surf_stats["y_mean_vol"].view(1, 1, -1))
+    y_std = (m * surf_stats["y_std_surf"].view(1, 1, -1)
+             + one_minus_m * surf_stats["y_std_vol"].view(1, 1, -1))
+    return y_mean, y_std
+
+
+def sanitize_nonfinite_samples(y: torch.Tensor, mask: torch.Tensor
+                               ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Zero out y and mask for samples whose ground truth has any non-finite value.
+
+    Why: ``data/scoring.py`` computes ``err = |pred - y|`` and then masks out samples
+    whose y is non-finite. But IEEE 754 has ``inf * 0 = nan`` — so a single ``-inf``
+    in y (e.g. test_geom_camber_cruise sample 20 has 761 ``-inf`` in pressure from
+    fp16 overflow in the source data) poisons the entire metric with NaN even though
+    the per-sample skip mask is ``False`` for that sample. The same problem hits the
+    normalized-space squared-error loss computation in evaluate_split / training.
+
+    Workaround (since ``data/scoring.py`` is read-only): for any sample with a
+    non-finite y, replace its y with zeros and zero out its mask. The sample then
+    contributes 0 to every accumulator and is correctly excluded from node counts.
+    """
+    B = y.shape[0]
+    y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)  # [B]
+    if y_finite.all():
+        return y, mask
+    keep = y_finite.view(B, *([1] * (y.ndim - 1)))
+    y_clean = torch.where(keep, y, torch.zeros_like(y))
+    mask_clean = mask & y_finite.unsqueeze(-1)
+    return y_clean, mask_clean
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -138,9 +269,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_surface_norm=False):
         super().__init__()
         self.last_layer = last_layer
+        self.use_surface_norm = use_surface_norm and last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -151,16 +284,32 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            if self.use_surface_norm:
+                self.mlp2_surf = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+                self.mlp2_vol = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
+            else:
+                self.mlp2 = nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
-    def forward(self, fx):
+    def forward(self, fx, is_surface=None):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            fx = self.ln_3(fx)
+            if self.use_surface_norm:
+                out_surf = self.mlp2_surf(fx)
+                out_vol = self.mlp2_vol(fx)
+                m = is_surface.unsqueeze(-1).to(out_surf.dtype)
+                return m * out_surf + (1.0 - m) * out_vol
+            return self.mlp2(fx)
         return fx
 
 
@@ -169,12 +318,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_surface_norm: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_surface_norm = use_surface_norm
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -190,6 +341,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_surface_norm=use_surface_norm,
             )
             for i in range(n_layers)
         ])
@@ -207,9 +359,13 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            if self.use_surface_norm and i == len(self.blocks) - 1:
+                fx = block(fx, is_surface=is_surface)
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -217,12 +373,19 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   use_distance_feature: bool = False,
+                   surf_stats: dict[str, torch.Tensor] | None = None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``surf_stats`` is provided, surface and volume nodes are normalized with
+    their own per-channel mean/std (``y_mean_surf`` etc.) and the model is
+    expected to emit the matching gated prediction (``Transolver`` with
+    ``use_surface_norm=True``). Otherwise a single global ``stats`` is used.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -236,9 +399,30 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # Drop samples with non-finite y so Inf in y doesn't poison sums via inf*0=nan.
+            y, mask = sanitize_nonfinite_samples(y, mask)
+
+            if use_distance_feature:
+                x_norm = torch.cat(
+                    [(x[..., :X_DIM] - stats["x_mean"]) / stats["x_std"], x[..., X_DIM:]],
+                    dim=-1,
+                )
+            else:
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+            if surf_stats is not None:
+                y_mean_b, y_std_b = per_node_y_stats(is_surface, surf_stats)
+                y_norm = (y - y_mean_b) / y_std_b
+            else:
+                y_mean_b = stats["y_mean"]
+                y_std_b = stats["y_std"]
+                y_norm = (y - y_mean_b) / y_std_b
+
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
+            # Defense: occasionally a CUDA kernel produces a transient inf/nan
+            # under memory pressure. Zero those out so a single bad value does
+            # not poison the entire split via inf*0 = nan.
+            pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -253,7 +437,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred * y_std_b + y_mean_b
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -386,6 +570,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # H4 — surface-distance feature + surface-only normalization.
+    use_distance_feature: bool = False  # Component 1: append distance-to-surface as 25th feat
+    use_surface_norm: bool = False      # Component 2: per-head surface vs volume y-normalization
+    surface_stats_max_samples: int = 200  # samples for compute_surface_volume_stats
 
 
 cfg = sp.parse(Config)
@@ -397,6 +585,27 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+if cfg.use_distance_feature:
+    print("Precomputing distance-to-surface feature for train and val splits...")
+    t0 = time.time()
+    train_distances = precompute_distances(train_ds, device, label="train")
+    train_ds = DistanceAugmentedDataset(train_ds, train_distances)
+    val_distances = {}
+    for name, ds in val_splits.items():
+        val_distances[name] = precompute_distances(ds, device, label=name)
+        val_splits[name] = DistanceAugmentedDataset(ds, val_distances[name])
+    print(f"  Distance precompute done in {time.time() - t0:.1f}s")
+
+surf_stats = None
+if cfg.use_surface_norm:
+    print("Computing surface vs volume target normalization stats...")
+    surf_stats = compute_surface_volume_stats(train_ds, max_samples=cfg.surface_stats_max_samples)
+    surf_stats = {k: v.to(device) for k, v in surf_stats.items()}
+    print(f"  y_mean_surf={surf_stats['y_mean_surf'].tolist()} "
+          f"y_std_surf={surf_stats['y_std_surf'].tolist()}")
+    print(f"  y_mean_vol ={surf_stats['y_mean_vol'].tolist()} "
+          f"y_std_vol ={surf_stats['y_std_vol'].tolist()}")
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -414,9 +623,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fun_dim_extra = 1 if cfg.use_distance_feature else 0
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + fun_dim_extra,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -425,6 +635,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_surface_norm=cfg.use_surface_norm,
 )
 
 model = Transolver(**model_config).to(device)
@@ -446,6 +657,9 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "h4_surface_stats": (
+            {k: v.tolist() for k, v in surf_stats.items()} if surf_stats is not None else None
+        ),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -484,9 +698,25 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        # Defensive: train data is currently clean, but the same Inf-poisoning hazard
+        # would silently destroy gradients if a bad sample ever sneaks in.
+        y, mask = sanitize_nonfinite_samples(y, mask)
+
+        if cfg.use_distance_feature:
+            x_norm = torch.cat(
+                [(x[..., :X_DIM] - stats["x_mean"]) / stats["x_std"], x[..., X_DIM:]],
+                dim=-1,
+            )
+        else:
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+        if surf_stats is not None:
+            y_mean_b, y_std_b = per_node_y_stats(is_surface, surf_stats)
+            y_norm = (y - y_mean_b) / y_std_b
+        else:
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -512,7 +742,11 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(
+            model, loader, stats, cfg.surf_weight, device,
+            use_distance_feature=cfg.use_distance_feature,
+            surf_stats=surf_stats,
+        )
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -575,12 +809,21 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        if cfg.use_distance_feature:
+            print("Precomputing distance-to-surface feature for test splits...")
+            for name, ds in test_datasets.items():
+                test_distances = precompute_distances(ds, device, label=name)
+                test_datasets[name] = DistanceAugmentedDataset(ds, test_distances)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(
+                model, loader, stats, cfg.surf_weight, device,
+                use_distance_feature=cfg.use_distance_feature,
+                surf_stats=surf_stats,
+            )
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
