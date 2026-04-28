@@ -409,6 +409,7 @@ def save_model_artifact(
         "use_ema": cfg.use_ema,
         "ema_decay": cfg.ema_decay,
         "ema_warmup_steps": cfg.ema_warmup_steps,
+        "ema_eval_every": cfg.ema_eval_every,
     }
 
     description = (
@@ -475,6 +476,7 @@ class Config:
     use_ema: bool = True
     ema_decay: float = 0.999
     ema_warmup_steps: int = 100  # don't update EMA for the first N steps
+    ema_eval_every: int = 1      # run EMA validation every N epochs (1 = every epoch)
 
 
 cfg = sp.parse(Config)
@@ -669,7 +671,10 @@ for epoch in range(MAX_EPOCHS):
     val_avg_raw = aggregate_splits(split_metrics)
     raw_avg_surf_p = val_avg_raw["avg/mae_surf_p"]
 
-    if cfg.use_ema:
+    do_ema_eval = cfg.use_ema and (
+        epoch % cfg.ema_eval_every == 0 or epoch == MAX_EPOCHS - 1
+    )
+    if do_ema_eval:
         split_metrics_ema = {
             name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in val_loaders.items()
@@ -677,12 +682,12 @@ for epoch in range(MAX_EPOCHS):
         val_avg_ema = aggregate_splits(split_metrics_ema)
         ema_avg_surf_p = val_avg_ema["avg/mae_surf_p"]
     else:
-        split_metrics_ema = split_metrics
-        val_avg_ema = val_avg_raw
-        ema_avg_surf_p = raw_avg_surf_p
+        split_metrics_ema = None
+        val_avg_ema = None
+        ema_avg_surf_p = None
 
     # Pick the better of the two for tracking the best checkpoint and for the test eval.
-    if cfg.use_ema and ema_avg_surf_p < raw_avg_surf_p:
+    if do_ema_eval and ema_avg_surf_p < raw_avg_surf_p:
         active_metrics = split_metrics_ema
         active_avg_surf_p = ema_avg_surf_p
         active_state = ema_model.state_dict()
@@ -703,13 +708,14 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
         "val_active/source_is_ema": int(active_label == "ema"),
+        "val_active/ema_eval_done": int(do_ema_eval),
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg_raw.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
-    if cfg.use_ema:
+    if do_ema_eval:
         for split_name, m in split_metrics_ema.items():
             for k, v in m.items():
                 log_metrics[f"{split_name}_ema/{k}"] = v
@@ -734,10 +740,11 @@ for epoch in range(MAX_EPOCHS):
         tag = f" * [{active_label}]"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    ema_str = f"{ema_avg_surf_p:.4f}" if do_ema_eval else "skipped"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_raw={raw_avg_surf_p:.4f}  val_ema={ema_avg_surf_p:.4f}  active={active_label}{tag}"
+        f"val_raw={raw_avg_surf_p:.4f}  val_ema={ema_str}  active={active_label}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, active_metrics[name])
