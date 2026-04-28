@@ -275,7 +275,9 @@ def evaluate_split(
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             # Defensive: a sample whose prediction has any non-finite value is
             # skipped (matches accumulate_batch's GT-skip semantics) so a single
@@ -449,7 +451,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 16   # was 4 — peak mem at bs=4 was 21.4 GB on a 96 GB GPU; bs=16 should land in the 60–80 GB range.
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -561,21 +563,22 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        if cfg.loss_type == "relative_mae":
-            vol_loss = relative_mae_loss(pred, y_norm, vol_mask, eps=cfg.rel_mae_eps)
-            surf_loss = relative_mae_loss(pred, y_norm, surf_mask, eps=cfg.rel_mae_eps)
-        else:
-            if cfg.huber_delta > 0:
-                err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            if cfg.loss_type == "relative_mae":
+                vol_loss = relative_mae_loss(pred, y_norm, vol_mask, eps=cfg.rel_mae_eps)
+                surf_loss = relative_mae_loss(pred, y_norm, surf_mask, eps=cfg.rel_mae_eps)
             else:
-                err = (pred - y_norm) ** 2
-            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+                if cfg.huber_delta > 0:
+                    err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+                else:
+                    err = (pred - y_norm) ** 2
+                vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+                surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
