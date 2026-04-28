@@ -513,11 +513,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # Per-epoch validation runs without TTA (tta_k=1) to keep training within
+    # the 30-min wall-time budget. TTA is applied only at final test eval.
     model.eval()
     split_metrics = {
         name: evaluate_split(
             model, loader, stats, cfg.surf_weight, device,
-            tta_k=cfg.tta_k, tta_drop=cfg.tta_drop,
+            tta_k=1, tta_drop=0.0,
         )
         for name, loader in val_loaders.items()
     }
@@ -568,31 +570,33 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # TTA-variance check: re-eval val splits with tta_k=1 from same checkpoint,
-    # so we can see how much TTA actually moves the metric.
+    # TTA-variance check: re-eval val splits with TTA active from the best
+    # checkpoint (selected on no-TTA val), so we can see how much TTA moves
+    # the val metric. ``best_avg_surf_p`` is the no-TTA val_avg.
     if cfg.tta_k > 1:
-        print("\nTTA-variance check (tta_k=1 from best checkpoint)...")
-        no_tta_metrics = {
+        print(f"\nTTA-variance check (tta_k={cfg.tta_k} from best checkpoint)...")
+        tta_metrics = {
             name: evaluate_split(
-                model, loader, stats, cfg.surf_weight, device, tta_k=1, tta_drop=0.0,
+                model, loader, stats, cfg.surf_weight, device,
+                tta_k=cfg.tta_k, tta_drop=cfg.tta_drop,
             )
             for name, loader in val_loaders.items()
         }
-        no_tta_avg = aggregate_splits(no_tta_metrics)
+        tta_avg = aggregate_splits(tta_metrics)
         print(
-            f"  no-TTA val_avg/mae_surf_p={no_tta_avg['avg/mae_surf_p']:.4f} "
-            f"(TTA was {best_avg_surf_p:.4f}, delta={best_avg_surf_p - no_tta_avg['avg/mae_surf_p']:+.4f})"
+            f"  TTA val_avg/mae_surf_p={tta_avg['avg/mae_surf_p']:.4f} "
+            f"(no-TTA was {best_avg_surf_p:.4f}, delta={tta_avg['avg/mae_surf_p'] - best_avg_surf_p:+.4f})"
         )
         for name in VAL_SPLIT_NAMES:
-            print_split_metrics(name, no_tta_metrics[name])
+            print_split_metrics(name, tta_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "tta_variance_check",
             "best_epoch": best_metrics["epoch"],
             "tta_k": cfg.tta_k,
             "tta_drop": cfg.tta_drop,
-            "tta_val_avg/mae_surf_p": best_avg_surf_p,
-            "no_tta_val_avg/mae_surf_p": no_tta_avg["avg/mae_surf_p"],
-            "no_tta_val_splits": no_tta_metrics,
+            "no_tta_val_avg/mae_surf_p": best_avg_surf_p,
+            "tta_val_avg/mae_surf_p": tta_avg["avg/mae_surf_p"],
+            "tta_val_splits": tta_metrics,
         })
 
     test_metrics = None
