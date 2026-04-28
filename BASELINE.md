@@ -2,6 +2,30 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 10:20 — PR #696: Surface-only feature noise (dims 0-12 only, skip per-sample globals)
+
+- **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #647 baseline): **61.245** (epoch 18, **−1.01% vs 61.872**)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **53.605** (vs 54.555 prior, **−1.74%**)
+- **Per-split val MAE for `p`** (best epoch 18, compile=True):
+  - val_single_in_dist: 72.760 (−0.14%)
+  - val_geom_camber_rc: 73.481 (−0.42%)
+  - val_geom_camber_cruise: 41.306 (−1.92%)
+  - val_re_rand: **57.430 (−2.19%, biggest)**
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 63.162
+  - test_geom_camber_rc: 66.909
+  - test_geom_camber_cruise: 34.653
+  - test_re_rand: **49.698 (−3.80% vs PR #647)**
+- **Recipe**: huber(δ=0.10) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + per-parameter-group wd: attn=1e-4, mlp=1e-5, other=3e-5 + per-block PhysicsAttention temperature init [1.5, 1.875, 2.25, 2.625, 3.0] + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + eta_min=2e-5 + decaying noise std (linear: ep1=0.0025, ep14=0.000179, ep15+=0) + **surface-only noise injection (dims 0-12, skip per-sample globals dims 13-23)** + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True + lr=6e-4.
+- **Mechanism CONFIRMED**: per-sample noise on conditioning labels (log_re, AoA, NACA, gap, stagger) was **pure destabilization** with no offsetting regularization benefit. All 4 val + test splits improve, no regressions. re_rand is biggest gainer because it specifically tests OOD Reynolds — removing log_re noise produces a much cleaner conditional mapping. cruise benefit preserved — basin-selection signal lives in the per-node geometric arm.
+- **Compound expectation**: this run was on pre-#630 baseline. Surface-only noise is mechanically orthogonal to PR #630's eta_min/rebound mechanism — should compound below 61.245 on the combined stack.
+- **Metric summary**: `models/model-feature-noise-surface-only-20260428-093917/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name feature-noise-surface-only --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 09:45 — PR #630: Cosine eta_min 0 → 2e-5 (extract gain from late-epoch budget)
 
 - **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #562 baseline): **59.907** (epoch 18, **−7.40% vs 64.696, −3.18% vs current 61.872**)
