@@ -1,5 +1,61 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 00:25 — PR #308: EMA (decay 0.999) + grad clip max_norm 1.0 — **NEW BASELINE**
+- Branch: `charliepai2d4-nezuko/ema-grad-clip` (deleted on merge)
+- Student: charliepai2d4-nezuko
+- **Outcome: MERGED (squash, commit 5bdb284). NEW BASELINE: val_avg/mae_surf_p = 106.40, -16.2% vs PR #287.**
+
+### Headline metrics (epoch 13 of 14, EMA-evaluated)
+| Metric | Value | vs #287 baseline | vs published |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | **106.40** | **-16.2%** | best on branch |
+| `test_avg/mae_surf_p` (EMA) | **93.99**  | -18.2% (vs #287 114.88) | best on branch |
+| Wall-clock | ~33 min total | comparable | |
+| Peak GPU memory | 42.1 GB | unchanged | |
+
+### Per-split val (epoch 13, EMA)
+| Split | mae_surf_p | mae_vol_p |
+|---|---|---|
+| val_single_in_dist     | 130.44 | 133.99 |
+| val_geom_camber_rc     | 119.63 | 120.78 |
+| val_geom_camber_cruise |  80.75 |  74.44 |
+| val_re_rand            |  94.78 |  91.91 |
+
+### Per-split test (post-fix scoring, EMA)
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist     | 112.78 |
+| test_geom_camber_rc     | 103.87 |
+| test_geom_camber_cruise |  66.35 |
+| test_re_rand            |  92.98 |
+
+### Analysis
+- **Monotonically descending**: 322 → 106.40 across 13 epochs, every epoch a new best. No instability.
+- **EMA pays off late**: from epoch 10 onward EMA is consistently 13-20 units better than online weights (nezuko's own diagnostic). Epochs 1-4 the EMA lags online (decay=0.999 warmup).
+- **Crucial caveat — clipping is a hidden lr dampener.** `max_norm=1.0` clips 100% of batches; pre-clip gn_mean ≈ 50-100 vs threshold 1.0. So the optimizer is doing essentially unit-norm SGD on top of AdamW. The 16% gain therefore cannot be cleanly attributed to EMA alone. **Ablations queued.**
+- **Compounds with #287**: surf_weight=25 (alphonse) and EMA+clip (nezuko) are independent changes; combination is a clear round-2 candidate.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=308 records, 14 lines).
+
+## 2026-04-28 00:20 — PR #307: 5-epoch linear warmup + cosine schedule, peak lr 1e-3
+- Branch: `charliepai2d4-frieren/warmup-cosine-1e3` (deleted on close)
+- Student: charliepai2d4-frieren
+- **Outcome: CLOSED** (val_avg=134.58, ~26% worse than the new baseline 106.40).
+
+### Headline (epoch 13 of 14, timeout-capped)
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | 134.58 |
+| `test_avg/mae_surf_p` | 123.24 |
+
+### Analysis
+- **Warmup itself is stable** — 1e-3 with 5-epoch linear warmup did not diverge; only a small blip at epoch 5 when full lr fires (recovers in one epoch).
+- **Cosine never decays in the budget**: T_max=50 means lr only drops 1.0 → 0.924 across 14 epochs. The "warmup→peak→decay" cycle the hypothesis predicted never plays out — this run is essentially constant-peak-lr.
+- **Below baseline anyway**: even with stable warmup at 2× peak lr, the run lags the prior baseline (PR #287, 126.67) and far behind the new baseline (PR #308, 106.40).
+- Independent diagnosis of the same inf-y test bug (now fixed in PR #358).
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=307 records, 15 lines).
+
 ## 2026-04-28 00:05 — PR #310: Per-channel surface loss weights: 3x weight on surface pressure
 - Branch: `charliepai2d4-thorfinn/per-channel-surf-weights` (deleted on close)
 - Student: charliepai2d4-thorfinn
