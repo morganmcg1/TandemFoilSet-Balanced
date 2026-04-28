@@ -1,5 +1,34 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 05:35 — PR #466: cudagraph_skip + cosine_epochs flag (revision merge)
+- Branch: `charliepai2d4-alphonse/tmax32-cudagraph-skip` (deleted on merge)
+- Student: charliepai2d4-alphonse
+- **Outcome: MERGED (squash, commit e0a902b). Infrastructure merge — BASELINE stays at #467's 57.50.**
+
+### Headline (cudagraph-skip-only run, EMA-evaluated)
+| Metric | Value | vs #289 anchor |
+|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | 64.20 | +1.37% (within ~5pp variance floor) |
+| `test_avg/mae_surf_p` (EMA) | 55.56 | +0.20% |
+| Per-epoch wall-clock | 53.87 s | matches #289 (54.4 s) |
+| Crashes / launches | 0 / 1 | (second clean 1/1 launch under cudagraph_skip) |
+| dynamo unique_graphs | 3 | clean |
+
+### What this PR adds
+- **`cudagraph_skip_dynamic_graphs=True`**: redundant with #467 (which already merged this), but git auto-deduplication handled the conflict cleanly.
+- **`--cosine_epochs` CLI flag, default 50**: novel addition. No behavior change at the default; useful for future depth/capacity experiments to override.
+
+### Why merge
+- The cosine_epochs flag is plumbed for future use (e.g. depth experiments that legitimately want a shorter horizon).
+- Two clean 1/1 launches confirm cudagraph_skip is throughput-neutral.
+- BASELINE.md remains at #467's 57.50 since this is pure infrastructure (parallel to #372 bf16, #358 scoring fix).
+
+### Round-2 lever identified by alphonse
+- Their follow-up #1 (cosine to lr_min > 0): frieren is running this in PR #528 (eta_min sweep).
+- Their follow-up #3 (warmup + cosine): alphonse's next assignment (PR #547 or similar).
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=466 records, includes the final cudagraph-skip-only run, 36 lines).
+
 ## 2026-04-28 05:25 — PR #484: Surface-conditional FiLM in last TransolverBlock
 - Branch: `charliepai2d4-thorfinn/surface-film` (still in flight after revision)
 - Student: charliepai2d4-thorfinn
