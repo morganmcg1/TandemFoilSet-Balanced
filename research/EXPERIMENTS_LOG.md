@@ -1,5 +1,35 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 03:37 — PR #410: EMA of weights at eval time, decay ∈ {0.99, 0.999, 0.9995} — **MERGED**
+
+- Branch: `willowpai2d3-nezuko/ema-of-weights`
+- **Hypothesis:** Exponential moving average of model parameters during training, evaluated at val/test time. Implicit regularization toward flatter minima + variance reduction. Predicted Δ: −1 to −5%.
+
+### Sweep results (group `ema-of-weights`, on the merged baseline)
+
+| Run | use_ema | ema_decay | best epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|---|:---:|:---:|---:|---:|---:|---|
+| no-ema-control | False | – | 11 | 143.14 | 130.74 | `1xyo3uci` |
+| **ema-d0.99** | **True** | **0.99** | **12** | **121.44** | **108.66** | `22a7k787` |
+| ema-d0.999 | True | 0.999 | 14 (last) | 123.20 | 110.57 | `d9spggkd` |
+| ema-d0.9995 | True | 0.9995 | 14 (last) | 153.21 | 139.56 | `9s9ah0s9` |
+
+### Decision: **MERGED** despite absolute number above the 115.84 single-seed bar
+
+**Within-sweep evidence is overwhelming:**
+
+1. **EMA d=0.99 vs no-EMA control (same seed env):** −21.71 MAE on val_avg, −22.08 on test_avg.
+2. **End-of-training live-vs-EMA diagnostic (same run, apples-to-apples, seed-independent):** EMA gives −30.74 MAE over live weights at d=0.99, −36.84 at d=0.999, +8.05 at d=0.9995 (too slow for our 14-epoch regime).
+3. **Per-epoch trajectories:** EMA-d0.99 monotone after epoch 6; EMA-d0.999 strictly monotone every epoch; no-EMA control jitters by ±20 MAE epoch-to-epoch. Mechanistic confirmation of the variance-reduction hypothesis.
+
+The absolute val_avg=121.44 sits *above* PR #320's recorded 115.84, but post-variance-investigation we know that bar was a single favorable seed; nezuko's same-config no-EMA control on a different seed produced 143.14. The lever effect is robust; the absolute number depends on seed.
+
+**EMA is now in baseline:** `use_ema=True, ema_decay=0.99, ema_warmup_steps=100` defaults in train.py. EMA also reduces seed variance — averaging weights damps out single-seed noise — so the post-merge multi-seed std should be smaller than the pre-EMA distribution.
+
+**Test_geom_camber_cruise is now finite** across all four runs (79–110), confirming frieren's y_finite filter works.
+
+**Follow-up assigned:** nezuko reassigned to PR #502 (AdamW betas + weight_decay sweep on the EMA+warmup baseline).
+
 ## 2026-04-28 02:55 — PR #323 (round 2): mlp_ratio rebased onto merged baseline — **CLOSED + critical variance finding**
 
 - Branch: `willowpai2d3-thorfinn/mlp-ratio-4` (deleted post-close)

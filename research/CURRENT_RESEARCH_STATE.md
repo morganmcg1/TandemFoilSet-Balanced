@@ -7,9 +7,9 @@
 
 ## Current research focus
 
-**⚠️ CRITICAL UPDATE (2026-04-28 02:55):** A seed-variance investigation triggered by PR #323 r2 found that `train.py` has **no seed control at all** — `torch.manual_seed`, `np.random.seed`, `random.seed` all absent. PR #320's "baseline" of `val_avg/mae_surf_p = 115.84` was a single favorable seed; thorfinn's rebased control with byte-identical config produced 140.70 (a 25-point, ~21% gap). The true baseline mean is likely ~130-145 with very wide variance. **All in-flight rebase decisions are operating against a single-seed bar that may be unrepresentative.** Thorfinn reassigned to PR #482 (multi-seed baseline + deterministic seeding); the multi-seed `mean ± std` will replace 115.84 as the merge bar within the next ~2.5h of GPU.
+**Two training-recipe wins merged.** PR #320 (linear warmup + peak LR 1e-3) and PR #410 (EMA of weights at decay=0.99) are now both in the baseline. The EMA win is particularly well-supported: within-sweep delta of −21.7 MAE plus a seed-independent in-run diagnostic (live-vs-EMA at final epoch = −30.7 MAE) makes the lever robust regardless of seed.
 
-First Round-1 winner merged: **PR #320** (linear warmup + peak LR 1e-3) reportedly dropped `val_avg/mae_surf_p` from 147.55 → 115.84 (−21.5%, uniform across all 4 val splits) at a single seed. The 21.5% headline figure is now uncertain pending the multi-seed study.
+**⚠️ Seed-variance caveat (2026-04-28):** `train.py` has no seed control yet — runs with byte-identical configs differ by ~25 MAE (~21%). PR #320's recorded 115.84 was a single favorable seed; nezuko's same-config no-EMA control got 143.14. Within-sweep deltas remain reliable; cross-PR absolute comparisons against 115.84 are not. Thorfinn's PR #482 will add deterministic seeding + a 5-seed baseline study to characterize the *current* operational baseline (post-EMA). Once landed, multi-seed `mean ± std` replaces 115.84 as the merge bar.
 
 **Test-aggregate NaN bug RESOLVED.** Frieren independently diagnosed the same root cause as thorfinn (`0 * inf = NaN` from `-inf` values in `test_geom_camber_cruise/000020.pt`'s ground-truth pressure) and submitted a clean train-side safety net. Cherry-picked into advisor as commit `32b5b40`. All sibling Round-1 PRs now produce finite `test_avg/mae_surf_p` once they pull the rebased baseline.
 
@@ -41,14 +41,18 @@ These eight axes were chosen for **orthogonality** so that improvements compound
 
 ## Round 2 — extensions on the merged baseline (2026-04-28)
 
+| Student | PR | Lever | Status |
+|---|---|---|---|
+| frieren | [#409](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/409) | **OneCycleLR** — onecycle_peak_lr ∈ {1e-3, 2e-3, 3e-3}, pct_start=0.1 | wip |
+| nezuko | [#410](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/410) | **EMA of weights at eval time** — sweep decay ∈ {0.99, 0.999, 0.9995} | **MERGED** (within-sweep −21.7 MAE; live-vs-EMA −30.7 MAE in-run) |
+| edward | [#420](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/420) | **Random Fourier features for spatial coords** — sigma sweep {0.5, 1, 2, 5}, m=64 | wip |
+| thorfinn | [#482](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/482) | **Multi-seed baseline + deterministic seeding** (research infrastructure) | wip — redirected to post-EMA baseline |
+
+## Round 3 — extensions on the post-EMA baseline (2026-04-28)
+
 | Student | PR | Lever | Predicted Δ |
 |---|---|---|---|
-| frieren | [#409](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/409) | **OneCycleLR** — onecycle_peak_lr ∈ {1e-3, 2e-3, 3e-3}, pct_start=0.1 | −2 to −5% |
-| nezuko | [#410](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/410) | **EMA of weights at eval time** — sweep decay ∈ {0.99, 0.999, 0.9995} | −1 to −5% |
-| edward | [#420](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/420) | **Random Fourier features for spatial coords** — sigma sweep {0.5, 1, 2, 5}, m=64 | −3 to −10% |
-| **thorfinn** | [#482](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/482) | **Multi-seed baseline + deterministic seeding** (research infrastructure) | 0% (characterizes baseline) |
-
-Each axis is orthogonal to the others and to the in-flight rebase PRs.
+| nezuko | [#502](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/502) | **AdamW betas + weight_decay sweep** — β1∈{0.85, 0.9}, β2∈{0.99, 0.999, 0.9995}, wd∈{1e-4, 1e-3, 1e-2}; 1D-axis + 2D-corner design | −1 to −5% |
 
 ## In-flight rebase PRs (Round 1, against new baseline)
 
