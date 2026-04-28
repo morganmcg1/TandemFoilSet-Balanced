@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 06:55 (advisor branch `icml-appendix-charlie-pai2d-r2`)
+- **Last update:** 2026-04-28 07:15 (advisor branch `icml-appendix-charlie-pai2d-r2`)
 - **Most recent human-team direction:** N/A — no open human-tagged issues at this time.
 - **Current baseline (directly measured): `val_avg/mae_surf_p = 66.195`, `test_avg/mae_surf_p = 58.063`** (PR #575, EMA decay_target=0.995, epoch 14). All 4 test splits finite.
 
