@@ -155,16 +155,16 @@ class TransolverBlock(nn.Module):
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = nn.RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = nn.RMSNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = nn.RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -217,6 +217,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
