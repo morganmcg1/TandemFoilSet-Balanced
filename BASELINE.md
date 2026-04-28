@@ -2,6 +2,33 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 10:42 — PR #698: Cosine eta_min 2e-5 → 5e-5 (calibrate sweet spot)
+
+- **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #630 baseline): **58.742** (epoch 17, **−1.94% vs 59.907**)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **50.789** (vs 52.656 PR #630, **−3.55%**)
+- **Per-split val MAE for `p`** (best epoch 17, compile=True+TF32):
+  - val_single_in_dist: 69.815 (+0.07%, flat)
+  - val_geom_camber_rc: 71.289 (−2.74%)
+  - val_geom_camber_cruise: **37.267 (−5.44%, biggest)**
+  - val_re_rand: 56.597 (−0.97%)
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 60.548
+  - test_geom_camber_rc: 63.561
+  - test_geom_camber_cruise: 30.679
+  - test_re_rand: 48.367
+- **Recipe**: huber(δ=0.10) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + per-parameter-group wd: attn=1e-4, mlp=1e-5, other=3e-5 + per-block PhysicsAttention temperature init [1.5, 1.875, 2.25, 2.625, 3.0] + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + **eta_min=5e-5** (was 2e-5) + decaying noise std + surface-only noise injection + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True + lr=6e-4 + TF32 matmul.
+- **eta_min profile (monotone-improving)**: 0 → 64.696 (compile baseline), 2e-5 → 59.907 (PR #630), **5e-5 → 58.742 (this PR)**. Diminishing returns but still descending.
+- **LR-vs-epoch trajectory**: ep4=6.00e-4 (peak), ep15=5.00e-5 (cosine min), ep17=9.37e-5 (best), ep18=1.449e-4 (post-rebound).
+- **Mechanism shift from PR #630**: dominant gain came from **descent phase** (ep13→15 = −2.725 vs PR #630's −2.274), NOT rebound phase as predicted. Higher eta_min mostly bought descent budget here, not bigger rebound.
+- **First soft signal of approaching ceiling**: ep18 (58.756) slightly worse than ep17 (58.742) — first time the post-rebound epoch is worse. Rebound peak LR (1.449e-4) starting to overshoot the EMA-absorbed minimum.
+- **Compound expectation**: this run was on the post-#630 stack directly. eta_min=5e-5 IS the new baseline. Future PRs compare against val_avg < 58.742.
+- **Metric summary**: `models/model-charliepai2d2-nezuko-cosine-eta-min-5e-5-20260428-094948/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name cosine-eta-min-5e-5 --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 10:32 — PR #661: TF32 matmul precision (infrastructure: +16.7% epochs in budget)
 
 - **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #510 baseline): **60.5905** (epoch 19, **−6.5% vs 64.824**)
