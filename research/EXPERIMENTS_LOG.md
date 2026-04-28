@@ -429,6 +429,36 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Param-identical to baseline (1 learnable scalar tensor, just initialized differently). Zero compute / memory cost.
 - Decision: **MERGE.** New baseline `val_avg/mae_surf_p = 71.6985`, `test_avg/mae_surf_p = 62.5824`.
 
+## 2026-04-28 05:10 — PR #527: AdamW weight_decay 1e-4 → 3e-5 — **WIN as orthogonal compound**
+
+- Branch: `charliepai2d2-tanjiro/weight-decay-3e-5` — branched on the merged baseline pre-slice-temp; metrics committed.
+- Hypothesis: tanjiro's PR #494 (wd=3e-4) over-regularized; the under-regularized direction is the orthogonal lever still untested. With DropPath + huber-δ=0.25 + EMA + β₂=0.95 already providing implicit regularization, less L2 may let under-trained matrices fit better.
+- Result: best `val_avg/mae_surf_p = 70.814` at epoch 14. **−1.23% vs current 71.6985 baseline; −2.21% vs the 72.414 reference.** test_avg = 63.031 (essentially flat).
+- **wd profile is monotone over 3 measured points**: wd=3e-5 → 70.814; wd=1e-4 → 72.414; wd=3e-4 → 73.771. The merged stack is **over-regularized at wd=1e-4** — the orthogonal regularizers (DropPath + huber + EMA + β₂=0.95) are already doing the work.
+- Per-split val: 3/4 improved (single_in_dist −5.27%, camber_rc −1.61%, re_rand −2.00%); val_geom_camber_cruise +1.86% (only regression).
+- Mechanism: less L2 shrinkage → bigger AdamW updates per step → less under-fit at the 14-epoch budget on deeper/wider weight matrices (SwiGLU FFN intermediate=176, attn proj at 128).
+- Decision: **MERGE.** Orthogonal compound — wd is mechanistically independent of slice-temp init. tanjiro's run was branched pre-slice-temp; the merged stack will combine both. Single-line change, zero compute cost.
+
+## 2026-04-28 05:10 — PR #519: Multi-head attention 4 → 8 (head_dim 32 → 16)
+
+- Branch: `charliepai2d2-edward/n-head-8` — metrics committed.
+- Hypothesis: param-matched parallel attention paths. Predicted −0.5% to −1.5%.
+- Result: best `val_avg/mae_surf_p = 80.536` at epoch 10 (only 11/50 epochs in budget). **+12.3% regression vs current 71.6985 baseline; +14.0% vs slice-temp baseline.** test_avg = 71.204 (+13.8%).
+- **Critical infrastructure finding (the keeper)**: the PR's "param-matched" assumption was **wrong**. The codebase's `PhysicsAttention.to_q/to_k/to_v` are `Linear(dim_head, dim_head, bias=False)` — *head-shared* projections applied per-head via broadcast, NOT `Linear(inner_dim, inner_dim)` (true MHA). Shrinking dim_head 32→16 cuts these 4× per layer + `in_project_slice` 2×. Net: **−16,620 params (−2.48%)**, not param-matched.
+- **Wall-clock**: 173 s/epoch (n_head=8) vs 138 s/epoch (baseline) = **+25% slower**, +25% peak VRAM. SDPA on head_dim=16 is less compute-bound; reshape over 8 heads adds memory traffic. Got only 11 epochs vs baseline's 14.
+- **Per-epoch convergence is genuinely faster**: n_head=8 hit val=80.5 at epoch 10 vs n_head=4 reaching 81.3 at epoch 13 — same val number reached 3 epochs earlier. The architectural signal is real, just masked by the wall-clock penalty.
+- Per-split signature: hurts single+camber_rc, helps cruise+re_rand — opposite to LayerScale's signature, supporting the "more diverse attention paths help OOD" mechanism (when the wall-clock penalty doesn't dominate).
+- Decision: **CLOSE.** +12.3% regression on the headline metric is too large to merge despite the per-epoch architectural signal. Direction not dead — student's follow-up #3 (refactor `to_q/k/v` to true per-head MHA so n_head=8 actually adds capacity) or #4 (n_head=8 with larger n_hidden so head_dim stays at 24+) are reasonable paths if compute permits.
+
+## 2026-04-28 05:10 — PR #518: Bias-corrected EMA warmup_steps 10 → 50 — **WIN as orthogonal compound**
+
+- Branch: `charliepai2d2-askeladd/bias-corrected-ema-warmup-50` — metrics committed.
+- Hypothesis: extend the cold-start EMA ramp influence beyond the 13-epoch budget by raising warmup_steps. Predicted −0.5% to −1.5%.
+- Result: best `val_avg/mae_surf_p = 71.4284` at epoch 14. **−0.38% vs current 71.6985 baseline; −1.36% vs 72.414 reference.** test_avg = 63.4404 (+1.37% vs current — small regression).
+- **All 4 val splits improved** vs the 72.414 reference. The biggest gains are on **the splits that were flat under warmup_steps=10**: val_geom_camber_cruise (+0.47% → −2.06%) and val_re_rand (+0.52% → −3.14%). The 0.99 asymptote was NOT load-bearing.
+- Effective decay trajectory: clamps at 0.99 only at t ≈ 4901 — never reached in 13-epoch budget (max 0.988 at step 4000). EMA stayed permanently slightly faster than 0.99.
+- Decision: **MERGE.** Orthogonal compound to wd and slice-temp.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
