@@ -1,5 +1,36 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 03:30 — PR #431: Moderate widening (n_hidden 128→160) on bf16+EMA pre-#401
+- Branch: `charliepai2d4-frieren/wider160-bf16` (deleted on close)
+- Student: charliepai2d4-frieren
+- **Outcome: CLOSED** (within-noise vs same-pod baseline-ref; doesn't beat current merged baseline #289 at 63.33).
+
+### Headline (epoch 16 vs 18, EMA-evaluated, both runs in PR)
+| Run | Best epoch | val_avg/mae_surf_p (EMA) | Δ vs baseline-ref |
+|---|---|---|---|
+| baseline-ref (n_hidden=128) | 18 | **85.74** | (control) |
+| wider160 (n_hidden=160) | 16 | 87.89 | +2.51% (within noise) |
+
+### Same-epoch (16) per-split val (the load-bearing diagnostic)
+| Split | baseline-ref e16 | wider160 e16 | Δ |
+|---|---|---|---|
+| val_single_in_dist     | 100.85 | 99.78 | -1.07 |
+| val_geom_camber_rc     | 102.44 | 98.61 | **-3.83** (largest gain) |
+| val_geom_camber_cruise |  71.00 | 68.69 | -2.31 |
+| val_re_rand            |  87.22 | 84.49 | -2.73 |
+
+### Analysis
+- **Capacity hypothesis is supported at fixed-epoch budget**: wider160 beats baseline by uniform ~2.5 mae units across all splits from epoch ~5 onward, with held-out raceCar cambers gaining most (-3.83). This is the mechanism signature the PR predicted.
+- **Budget-bounded ranking favors the smaller model**: +14% per-epoch tax (117 s vs 103 s) costs 2 epochs of cosine tail decay. Those 2 missing epochs at low-LR pull baseline ~5 mae lower (epoch 16 → 18).
+- **Memory (38 GB) << prediction (50-65 GB)**: the bottleneck is compute, not memory. Future capacity experiments have lots of VRAM headroom.
+- **Useful seed/hardware noise floor estimate**: same-pod baseline-ref (85.74) was 13.2% better than the published #381 baseline (98.85). Most of that gap is the 5 extra epochs bf16 buys; some is run-to-run noise. Round-1 variance floor confirmed at ~5pp.
+
+### Pre-#401 / pre-#289 caveat
+- Branched after #372 (bf16) but before #401 (compile) and #289 (Huber). Absolute 87.89 is +39% above current merged baseline.
+- Frieren's follow-up #2 (n_hidden=144 with throughput recovery from compile) is the right next test — assigned next.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=431 records, 17 lines from wider160 run).
+
 ## 2026-04-28 03:10 — PR #289: Huber/SmoothL1 (β=1.0) rebased onto post-#401 — **NEW BASELINE**
 - Branch: `charliepai2d4-askeladd/huber-loss` (deleted on merge)
 - Student: charliepai2d4-askeladd
