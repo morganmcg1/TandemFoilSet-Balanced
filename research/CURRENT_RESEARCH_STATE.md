@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 05:50 UTC
+- **Date:** 2026-04-28 06:10 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2d-r4`
 - **Most recent human-team direction:** none received yet on this advisor branch
 - **Current best:** PR #404 (edward H11) merged. `val_avg/mae_surf_p=119.36`, `test_avg/mae_surf_p=107.54`. See BASELINE.md for full details and recommended config (`--film_re True --epochs 25 --lr 7e-4 --weight_decay 5e-4 --seed 123`).
@@ -24,10 +24,10 @@
 | PR | Student | Hypothesis | Bucket | Predicted Δ | Status |
 |----|---------|------------|--------|-------------|--------|
 | #342 | alphonse | H1: per-sample y-std loss normalization | Loss reformulation | -8% to -18% | wip (sent back for rebase + sw sweep on merged schedule; first round Run B at sw=5 gave clean −7.9% val on apples-to-apples pre-merge baseline, cross-split signature matched prediction precisely) |
-| #343 | askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% | wip |
+| #343 | askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% | wip (sent back round 1 — needs rebase onto #404; round 1 Run A was -32% / -25.4% vs current baseline, **largest single-PR effect of round 0 by far**; bs=8 hurts, bs=4+bf16+compile is the working config) |
 | #576 | nezuko | H16: arcsinh-compressed pressure target | Target transform | -2% to -6% | wip |
 | #348 | tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% | wip |
-| #442 | thorfinn | H12: EMA of model weights for evaluation | Optimization | -1% to -4% | wip (sent back for decay=0.99 + every-other-epoch EMA eval; first round confirmed EMA mechanism within-run but absolute test didn't beat baseline) |
+| #442 | thorfinn | H12: EMA of model weights for evaluation | Optimization | -1% to -4% | wip (sent back round 2 — needs rebase onto #404 + Run F to test EMA × FiLM compound; round 2 Run D at decay=0.99 confirmed mechanism triply validated with 9.2% within-run lift but absolute val_ema=121.24 ties PR #344 baseline within noise) |
 | #468 | fern | H9: surface-arc pressure-gradient penalty | Physics-aware | -2% to -5% | wip |
 | #561 | frieren | H15: test-time z-mirror augmentation (TTA) | Inference-time regularization | -1% to -3% | wip |
 | #523 | edward | H14: 5-D conditioning vector for FiLM | Feature engineering | -1% to -4% | wip |

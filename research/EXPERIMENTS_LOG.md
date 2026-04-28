@@ -31,6 +31,81 @@
 
 ---
 
+## 2026-04-28 06:04 — PR #343: H6 bf16 + torch.compile + larger batch — **SENT BACK FOR REBASE-ONTO-#404**
+
+- Branch: `willowpai2d4-askeladd/h6-bf16-compile-batch` (pre-#344, pre-#404; needs rebase onto current advisor branch)
+- Hypothesis: bf16 + torch.compile + larger effective batch should reduce `val_avg/mae_surf_p` by 3-9% via more epochs in the same wall clock.
+- 4-cell matrix in W&B group `h6-throughput`:
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | sec/epoch | epochs done | peak GPU | W&B |
+|-----|--------|---------------------:|----------------------:|----------:|------------:|---------:|-----|
+| Baseline (fp32, bs=4) | — | 131.47 | 119.73 | 132.6 | 14 | 42.1 GB | `fda9lzmd` |
+| **A — bs=4 + bf16 + compile** | — | **89.03** | **80.54** | 49.1 | **37** | **23.8 GB** | `b4xz4xsi` |
+| B — bs=8 + bf16 + compile | — | 98.63 | 89.09 | 53.9 | 34 | 47.6 GB | `w2xtok4w` |
+| C — bs=8 + bf16 + compile, --epochs 75 | — | 99.26 | 88.94 | 53.8 | 34 | 47.6 GB | `est8u5n0` |
+
+### Per-split test for Run A
+
+| Split | Pre-merge baseline | Run A | Δ |
+|-------|-------------------:|------:|--:|
+| `test_single_in_dist` | 127.87 | **90.78** | −29.0% |
+| `test_geom_camber_rc` | 138.44 | **92.51** | −33.2% |
+| `test_geom_camber_cruise` | 88.48 | **59.17** | −33.1% |
+| `test_re_rand` | 124.14 | **79.72** | −35.8% |
+
+### Conclusions (provisional, pre-rebase)
+
+- **Largest single-PR effect of round 0 — by a wide margin.** Run A's −32% / −33% improvement vs askeladd's pre-merge baseline (and **−25.4% / −25.1% vs the current PR #404 merged baseline**) is far above the predicted 3–9% band and well above the seed-variance floor.
+- **The mechanism is clean: 2.6× throughput → convergence.** 49.1 s/epoch (vs 132.6 s baseline) lets the model run 37 epochs in 30 min, vs 14 at fp32. Val curve was still descending steeply at the prior baseline's timeout — most of the MAE reduction comes from finally letting the model converge.
+- **bs=8 hurts.** Both bs=8 variants (B, C) regress by ~10 pts on val and ~9 pts on test vs Run A. WeightedRandomSampler at fixed 1500 samples/epoch means bs=8 → 187 optimizer steps vs bs=4 → 375; lr schedule wasn't re-tuned for the lower step count. bs=4 is the working config.
+- **Cross-split signature matches the prediction.** Improvement is uniform across the four splits with marginally larger gains on geom-OOD and Re-OOD (more epochs help generalization most).
+- **VRAM dropped 43%** (42 GB → 24 GB at bs=4). With 96 GB available, plenty of headroom for future model scaling.
+- **NaN fix in `data/scoring.py` correctly diagnosed.** Same root cause edward's PR #344 fix addressed; askeladd's `evaluate_split` workaround duplicates the now-merged version. Drop on rebase.
+- **Branch is pre-#344, so missing both schedule fixes and FiLM.** The published baseline askeladd compared against (val=131.47) is essentially the original round-0-setup baseline + seed variance; both PR #344 (val=120.97) and PR #404 (val=119.36) merged after his branch was cut.
+
+### Action
+
+Sent back for one focused **Run F — bf16+compile + FiLM merged + merged config** (`--batch_size 4 --amp_dtype bf16 --compile True --film_re True --weight_decay 5e-4 --seed 123 --lr 7e-4 --epochs 37`). Decision rule:
+- val < 110 (clear large-margin win): merge as the new baseline; redefines round 0
+- val ∈ [110, 119.36]: still a comfortable win, merge for the throughput compounding alone
+- val > 119.36: bf16+compile × FiLM antagonistic; close cleanly and consider fp32+compile-only or bf16-only fallbacks
+
+### Useful follow-ups (deferred)
+
+- **Re-tune lr/schedule for bs=8.** `lr ∝ √batch` heuristic suggests `lr=7e-4` for bs=8 (already at 7e-4 for bs=4 in merged baseline; would need re-investigation). Out of scope for current PR.
+- **`torch.compile(mode="reduce-overhead")` after fixing memory.** Would need padding to fixed N_max once at dataset prep time. Could unlock another 20-30% throughput from CUDAGraphs.
+- **Run for longer wall-clock** if SENPAI_TIMEOUT_MINUTES is ever raised — at 49 s/epoch even Run A's 37 epochs hadn't fully plateaued (best epoch was 36, the last one). 60-min budget would clarify whether the model keeps improving or starts to overfit.
+
+---
+
+## 2026-04-28 06:05 — PR #442 (resubmit): H12 EMA decay=0.99 — **SENT BACK FOR REBASE-ONTO-#404**
+
+- Branch: `willowpai2d4-thorfinn/h12-ema-weights` (pre-#404)
+- Run D: `--ema_decay 0.99 --ema_eval_every 2 --epochs 25 --lr 7e-4` on the post-#344 path.
+
+| Metric | Run D |
+|--------|------:|
+| W&B run | `a4s76abw` |
+| Best epoch | 11/14 |
+| `val_avg/mae_surf_p` (raw) | 133.55 |
+| `val_avg_ema/mae_surf_p` (best, source=ema) | **121.24** |
+| `test_avg/mae_surf_p` (eval source: ema) | 109.68 |
+
+### Conclusions (provisional, pre-rebase)
+
+- **EMA mechanism is now triply validated.** Run B (decay=0.999) had within-run lift 10.1%; Run D (decay=0.99) has 9.2%. EMA monotonically beats raw at every EMA-eval epoch from epoch 1 onward.
+- **Decay=0.99 is the best EMA config we've found.** Better absolute val_ema (121.24 vs Run B's 125.81), better test (109.68 vs 112.28). The lower decay tracks fast early improvement *and* smooths late oscillations — exactly the sweet spot.
+- **Eval-cost recovery worked exactly as predicted.** Run D got 14 epochs vs Run B's 13.
+- **Run D val_ema=121.24 is +0.22% above PR #344 baseline** (apples-to-apples for thorfinn's branch path, within seed-variance floor) and **+1.6% / +2.0% above current PR #404 merged baseline**. Per my decision rule, this should close — but EMA is a pure compounding lever, and the mechanism has been validated three times.
+
+### Action
+
+Sent back for one focused **Run F — EMA + FiLM on merged baseline** (`--use_ema True --ema_decay 0.99 --ema_eval_every 2 --film_re True --epochs 25 --lr 7e-4 --weight_decay 5e-4 --seed 123`). Decision rule: merge if val_ema < 119.36; close cleanly if ∈ [119.36, 121.0]; close if antagonistic.
+
+If FiLM produces a more stable training trajectory (plausible), the raw val on the merged path will likely be near 119.4, and applying EMA's ~9% lift could land in the 108-110 range — a real compound win.
+
+---
+
 ## 2026-04-28 05:41 — PR #347 (round 3): H5 Fourier features × FiLM stack — **CLOSED**
 
 - Branch: `willowpai2d4-nezuko/h5-fourier-features` (rebased onto post-#404 advisor branch with FiLM merged)
