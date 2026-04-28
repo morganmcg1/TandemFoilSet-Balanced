@@ -477,11 +477,19 @@ class Config:
     ema_decay: float = 0.999
     ema_warmup_steps: int = 100  # don't update EMA for the first N steps
     ema_eval_every: int = 1      # run EMA validation every N epochs (1 = every epoch)
+    n_hidden: int = 128          # Transolver hidden dim (must be divisible by n_head)
+    n_head: int = 4              # Transolver attention heads
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.n_hidden % cfg.n_head != 0:
+    raise ValueError(
+        f"n_hidden ({cfg.n_hidden}) must be divisible by n_head ({cfg.n_head}) "
+        f"for integer dim_head"
+    )
 
 if cfg.seed is not None:
     torch.manual_seed(cfg.seed)
@@ -514,9 +522,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     film_re=cfg.film_re,
@@ -527,7 +535,10 @@ model_config = dict(
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(
+    f"Model: Transolver ({n_params/1e6:.2f}M params) "
+    f"n_hidden={cfg.n_hidden} n_head={cfg.n_head} dim_head={cfg.n_hidden // cfg.n_head}"
+)
 
 if cfg.use_ema:
     ema_model = copy.deepcopy(model).to(device)
