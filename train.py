@@ -433,7 +433,7 @@ def feature_noise_std_schedule(epoch: int, base_std: float, decay_horizon: int) 
 class Config:
     lr: float = 6e-4   # was 5e-4 (1.2x peak under PR #562 3-ep warmup, start_factor=0.3)
     weight_decay: float = 3e-5   # was 1e-4
-    batch_size: int = 4
+    batch_size: int = 6
     surf_weight: float = 10.0
     epochs: int = 50
     drop_path_max: float = 0.1
