@@ -34,7 +34,7 @@ Themes in play:
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3) |
 | #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** (sent back from 0.9999, dropped grad_clip — bundled hypothesis) |
 | #333 | thorfinn | Loss / metric alignment | surf_weight ∈ {15, 25, 40} sweep |
-| #407 | fern | Schedule | Cosine T_max alignment via `--epochs 20` (was for FF baseline; will likely need adjustment to match new 37-epoch budget) |
+| #407 | fern | Schedule (on compile+FF) | Cosine T_max alignment via `--epochs 37` (matches achievable budget on compile+FF baseline; fern asked before running, advisor confirmed) |
 | #443 | tanjiro | Spatial features (on compile+bf16+FF) | Gaussian RFF K=16 σ=10 (rebase target updated to PR #416 baseline; tanjiro asked before running) |
 | #451 | askeladd | Loss formulation | Surface-only pressure weighting (1,1,5) on surf_loss only |
 | **#481** | **alphonse** | **Throughput** | **`torch.compile(mode="reduce-overhead")` pilot** |
