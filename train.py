@@ -240,7 +240,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            abs_err = (pred - y_norm).abs()
+            abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -395,6 +395,8 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device)  # Ux, Uy, p
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -446,6 +448,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "channel_weights": channel_weights.tolist(),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -487,7 +490,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()
+        abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
