@@ -444,6 +444,9 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     huber_delta: float = 1.0  # surface-loss Huber threshold (normalized space)
+    focal_gamma: float = 0.0  # focal-style per-node residual exponent on surface L1 loss
+                              # 0.0 = pure L1 (control); >0 amplifies hard residuals.
+                              # Only active when huber_delta <= 0 (pure L1 path).
     epochs: int = 50
     n_layers: int = 5
     use_ema: bool = True
@@ -577,6 +580,9 @@ for epoch in range(MAX_EPOCHS):
         # delta <= 0 degenerates to pure L1 (the standard Huber formula's
         # linear branch evaluates to 0 there, which would zero the surface
         # loss entirely).
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+        focal_w = None
         if cfg.huber_delta > 0:
             huber = torch.where(
                 abs_err < cfg.huber_delta,
@@ -585,9 +591,20 @@ for epoch in range(MAX_EPOCHS):
             )
         else:
             huber = abs_err
+            if cfg.focal_gamma > 0:
+                # Per-node focal reweighting: hard residuals get amplified.
+                # Detached so the gradient is `focal_w * sign(r)` — pure
+                # rescaling of L1 gradient direction, not a new loss term.
+                with torch.no_grad():
+                    r_surf = (
+                        (abs_err * surf_mask.unsqueeze(-1)).sum()
+                        / surf_mask.sum().clamp(min=1)
+                        / 3
+                    )
+                    r_ref = r_surf.clamp(min=1e-8)
+                    focal_w = (abs_err.detach() / r_ref) ** cfg.focal_gamma
+                huber = focal_w * huber
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -605,12 +622,25 @@ for epoch in range(MAX_EPOCHS):
             outlier_frac = (
                 ((abs_err >= cfg.huber_delta) & surf_mask_3).sum().float() / n_surf_elem
             ).item()
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/surf_huber_outlier_frac": outlier_frac,
             "lr": optimizer.param_groups[0]["lr"],
             "global_step": global_step,
-        })
+        }
+        if focal_w is not None:
+            with torch.no_grad():
+                focal_stats = focal_w[surf_mask_3.expand_as(focal_w)]
+                if focal_stats.numel() > 0:
+                    log_payload.update({
+                        "diag/focal_w_min": focal_stats.min().item(),
+                        "diag/focal_w_p50": focal_stats.median().item(),
+                        "diag/focal_w_p90": focal_stats.quantile(0.9).item(),
+                        "diag/focal_w_p99": focal_stats.quantile(0.99).item(),
+                        "diag/focal_w_max": focal_stats.max().item(),
+                        "diag/focal_w_mean": focal_stats.mean().item(),
+                    })
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
