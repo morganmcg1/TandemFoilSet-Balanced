@@ -1437,3 +1437,55 @@ Honest predicted band: **−15 % to +12 %** vs current 52.116. Combined with ask
 
 ### Reassignment
 - Tanjiro stays on PR #592 — re-running on rebased branch (lr line cleanly applied, β2=0.999 inherits from advisor).
+
+## 2026-04-28 07:15 — PR #598: Lion β2 0.999 → 0.9999 (charliepai2d1-frieren) — **CLOSED (clean lose case, β2 basin upper edge locked)**
+- Run config: `betas=(0.9, 0.999) → (0.9, 0.9999)` in optimizer line. **First measurement on the post-#571 LIVE config** (lr=2.5e-4 + β=0.5 + β2=0.9999).
+
+### Headline metrics (best EMA epoch=14/50, timeout-cut)
+| metric | this run | current baseline #571 |
+|---|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | 63.381 | 52.116 (**+21.62 %**) |
+| `test_avg/mae_surf_p` | 55.254 | 45.413 (+21.67 %) |
+| raw val (best at best EMA ep) | 77.351 | 59.097 (+30.89 %) |
+| Mean pre-clip grad-norm | 32.24 | 27.15 (+18.7 %) |
+
+### Per-split — broad-based regression on every split (NOT predicted tandem-first)
+| Split | val Δ vs #571 | test Δ vs #571 |
+|---|---:|---:|
+| single_in_dist | +24.74 % | +21.91 % |
+| geom_camber_rc | +18.93 % | +20.21 % |
+| geom_camber_cruise | **+27.04 %** | **+25.83 %** |
+| re_rand | +18.08 % | +20.53 % |
+
+Cruise hardest hit; single second; tandem (rc, re_rand) least affected. **Opposite of the predicted "tandem-first regression" signature** — broad-based pattern instead.
+
+### Mechanism re-interpretation (durable for the appendix β2 ablation)
+
+**Failure mode is buffer-warm-up-budget exhaustion, NOT buffer-biases-toward-init poisoning.**
+
+- β2=0.9999 buffer half-life ≈ **6,931 batches** ≫ **~1,190 batches** available in the 30-min TF32 budget.
+- The `(1-β2)·g_t = 1e-4·g_t` injection rate is too small to update the running average → buffer stays near its initialization phase across the entire training run.
+- **Best epoch = ep14 (timeout-cut) with monotone-descending raw val and train/surf** (no late-stage poisoning). Model is still learning at the end.
+- Mean grad-norm offset +18 % consistent with buffer too historical to track loss landscape; per-step direction is biased toward early-trajectory regime rather than current loss.
+- Per-split broad-based pattern (not tandem-first) confirms the failure is **global under-convergence**, not domain-specific responsiveness loss.
+
+### β2 axis basin map (locked end-to-end under current optimizer regime)
+
+| β2 | half-life | PR | val_avg/mae_surf_p | regime |
+|---|---:|---|---:|---|
+| 0.99 (default) | ~69 batches | implicit | ~60 (#536-era) | under-smoothed |
+| **0.999** | **~693 batches** | **#571 (merged)** | **52.116** | **optimum** |
+| 0.9999 | ~6,931 batches | #598 (this) | 63.381 | over-smoothed |
+
+**Basin optimum sits where buffer half-life ≈ training-budget-batches × ~0.6.** Future work at >2× larger budgets could revisit β2=0.9999 — the "buffer never converges" mechanism would be partly relieved.
+
+### Decision: close
+- Clear >5 % regression (+21.62 % val) past close threshold.
+- Mechanism story durable, well-attributed, and adds the β2-axis-locked finding for the appendix.
+- Reassigned frieren to **PR #621 (lion-beta1-0p85)** — responsiveness lower-edge symmetric probe of the β1 axis. β1 upper edge mapped at #545 (0.95 lose, single-first gain pattern); lower edge unmapped. β1=0.85 under β2=0.999 might compound (smoother buffer + more responsive sign-update).
+
+## 2026-04-28 07:20 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #621 | frieren | lion-beta1-0p85 | Lion `betas[0] = 0.9 → 0.85` on merged #571 baseline | Symmetric probe of β1 axis (lower edge / more responsiveness). Frieren's #545 mapped β1 upper edge (0.95 lose, single-first gain). β1=0.85 tests whether responsiveness compounds with β2=0.999's smoothing or re-introduces noise the buffer was meant to absorb. Honest band −6 % to +12 %. |
