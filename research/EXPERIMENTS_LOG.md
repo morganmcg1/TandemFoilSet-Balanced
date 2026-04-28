@@ -1,5 +1,32 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 02:10 — PR #414: Fourier on dsdf channels (4 freqs, dims 2–11) — **REQUEST CHANGES (rebase + iso-epoch concern)**
+
+- Branch: `charliepai2d5-thorfinn/fourier-on-dsdf` (on L1+warmup+pos-Fourier, pre-sw=30)
+
+### Results
+
+| metric | value | vs PR #365 baseline (87.86 / 84.22) | iso-epoch (12 vs 12) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 76.82 | −12.6% | **−1.8%** at epoch 12 |
+| `val_geom_camber_rc/mae_surf_p` | 89.03 | −14.8% | — |
+| `val_re_rand/mae_surf_p` | 72.63 | −8.8% | — |
+| `test_avg/mae_surf_p` (3 clean) | 74.14 | −12.0% | — |
+| Median per-epoch wall (s) | 134.1 | +1.0% | — |
+
+### Decision
+
+Send back. Student's honest at-iso-epoch analysis is the key signal: most of the headline −12.6% is from completing 2 more epochs that the baseline couldn't fit (the baseline run had GPU contention on epochs 7–8). The pure dsdf-Fourier benefit is at most ~2%, with +1% wall overhead. Combined with the rebase mechanic (branch reverts sw=30 if squash-merged), this needs a clean rerun on the post-#301 baseline.
+
+Decision criteria for the rerun communicated to thorfinn:
+- val_avg ≤ 75.0 (≥ 2.2% improvement over current 76.68): **merge**.
+- 75.0 < val_avg < 76.5: **need seed-stability cross-check**.
+- val_avg ≥ 76.5: **close** — dsdf-Fourier doesn't compose meaningfully with sw=30.
+
+Excellent diagnostic discipline from thorfinn — calling out the iso-epoch effect prevented over-claiming on a partly-artifactual headline number.
+
+---
+
 ## 2026-04-28 02:00 — PR #301 (rerun): surf_weight 10 → 30 on L1+warmup+Fourier — **MERGE (winner, new baseline)**
 
 - Branch: `charliepai2d5-nezuko/surf-weight-30` (rebased onto L1+warmup+Fourier)
