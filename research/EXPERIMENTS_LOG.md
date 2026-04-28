@@ -1546,3 +1546,41 @@ Send back — set `--epochs 14` so cosine T_max scales to the actually-reachable
 
 - Analysis: All four val splits and all three clean test splits regressed. Val curve smoothness: 3 bumps on Lookahead-on-Lion vs 3 bumps on Lion baseline — saturation confirmed. Lion's sign-quantized trajectory is already maximally smooth; the slow-weight pull has nothing to add. Structural test_single_in_dist regression confirmed on both AdamW (+11.27%) and Lion (+6.64%) — mechanism signature, not noise. Lookahead injects a fourth, non-quantized layer on a triple-quantized chain (L1+sign+clip), adding lag rather than helping. Axis closed: any future "active weight averaging during training" ideas (SWA, Polyak averaging) likely hit the same in-dist generalization cost.
 
+
+---
+
+## 2026-04-28 11:30 — PR #710: Cosine eta_min floor lift 0→5e-5 (tail floor probe from PR #680) — **CLOSE (dead end; +4.64% regression)**
+
+- Branch: `charliepai2d5-thorfinn/cosine-eta-min-5e-5` (closed)
+- Hypothesis: The PR #680 diagnostic identified that the cosine tail floor is the high-leverage optimization window for Lion on this problem. Raising eta_min from 0 to 5e-5 was predicted to keep meaningful gradient displacement in late epochs (ep 17-18 LR ~8.5e-5 vs baseline 6.7e-5), improving fine-scale settling.
+
+### Results (best epoch 18/24 — wall-time limited, timeout at ep 18)
+
+| metric | eta_min=5e-5 (ep18) | Baseline PR #627 (ep18) | delta |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **56.2935** | **53.7986** | **+2.4949 (+4.64%)** |
+| test_avg/mae_surf_p (3-clean) | 53.3389 | 52.165 | +1.1739 |
+
+Per-split val breakdown:
+
+| split | eta_min=5e-5 | baseline | delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 60.4628 | 54.3136 | +6.15 (worst) |
+| val_geom_camber_rc | 73.2398 | 70.8552 | +2.38 |
+| val_geom_camber_cruise | 35.8320 | 35.2098 | +0.62 |
+| val_re_rand | 55.6396 | 54.8159 | +0.82 |
+
+Per-epoch val_avg trajectory (ep 10-18):
+
+| epoch | val_avg (this) | tail delta |
+|:---:|---:|---:|
+| 15 | 64.52 | |
+| 16 | 61.85 | -2.67 |
+| 17 | 58.24 | -3.61 |
+| **18** | **56.29** | **-1.95** |
+
+Baseline ep 17→18 drop: -5.91. This run's ep 17→18 drop: -1.95 — floor lift produced shallower, not steeper tail descent. Opposite of hypothesis prediction.
+
+- Metrics: `models/model-cosine-eta-min-5e-5-20260428-100659/metrics.jsonl`
+- Analysis: Dead end. The eta_min=5e-5 floor lift hurt all four val splits. val_single_in_dist regressed most (+6.15) — the easy in-distribution split where fine late-epoch LR adjustment should help most. The predicted mechanism (floor lift → steeper tail descent → better final settling) was directly contradicted: the tail drop at ep 17→18 was shallower (-1.95) than baseline (-5.91). Two interpretations: (1) the run was timeout-clipped at ep 18/24, so the true deep-tail regime (ep 22-24 where eta_min dominates) was never reached; (2) even in the tested range, the floor lift created excessive perturbation on basins the model had already settled into — Lion's sign-magnitude update with the floor keeps models from reaching minima that zero-floor cosine allows. The schedule axis is effectively closed at the Lion baseline level: lr=3e-4, zero-floor cosine, 5-epoch warmup is optimal for the 30-min budget.
+
