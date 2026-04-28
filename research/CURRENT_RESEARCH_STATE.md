@@ -6,9 +6,9 @@
 
 ## Current research focus
 
-**Round baseline is PR #504 (edward, pure L1 loss): val_avg = 57.29, test_avg = 51.35** — cumulative **−60.3% / −60.9%** vs original PR #312 reference (144.21 → 57.29). Six merged interventions: bf16 + FF K=8 + `torch.compile(dynamic=True)` + pure L1 + cosine T_max alignment (loss-dependent: T_max=37 was right for Huber, T_max=50 may be right for L1 — being verified directly).
+**Round baseline is PR #541 (edward, T_max=50 confirmed for L1 + favorable seed): val_avg = 56.22, test_avg = 48.42** — cumulative **−61.0% / −63.1%** vs original PR #312 reference (144.21 → 56.22). Six merged interventions: bf16 + FF K=8 + `torch.compile(dynamic=True)` + pure L1 + cosine T_max=50 (confirmed correct for L1, **3.14% better than T_max=37**) + single-seed variance ≈ ±1%.
 
-**Schedule alignment story flipped between losses.** Huber's gradient vanishes at small residuals → T_max=37 (cosine reaches 0) helped settle late-stage. Pure L1 keeps unit-magnitude gradient at tiny residuals → T_max=50 (lr stays positive) lets L1 keep refining. Edward's #541 in flight to settle directly.
+**Schedule alignment for pure L1 confirmed**: T_max=50 wins by 3.14% over T_max=37. Mechanism is `sign(r)` constant-magnitude gradient + non-zero terminal LR = continued refinement. Per-epoch val jumps in last epochs are LARGEST of the run (epoch 36→37: -5.4%). **rc-camber is the only split unmoved by schedule** — rc is representation-limited, not residual-refinement-limited. Schedule + loss interventions can't move rc; need geometry-side or capacity-side experiments.
 
 **Capacity scale-up is now conclusively ruled out** (PR #393 on bf16 + PR #503 on compile+FF both regress +12%). Throughput frontier is exhausted (bf16, FF, compile all merged; bsz pre-compile, bucketing, reduce-overhead all closed). Round-3 priorities are now schedule + loss + regularization + features + sampling, not size.
 
@@ -21,7 +21,7 @@
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
 | #324 v4 | nezuko | Stability / regularization | EMA-only decay=0.999 with **every-2-epochs validation** to recover the 4 epochs lost to swap overhead (was schedule-budget-bound, mechanism confirmed: test_avg −2.23%, rc-camber test −6.07%) |
 | **#564** | **tanjiro** | **Spatial features (on pure L1)** | **FF on saf (dims 2-3) parallel to FF on (x, z) — followup #4 from PR #327** |
-| **#541** | **edward** | **Schedule (with L1)** | **T_max sweep: --epochs 37 vs 50 with pure L1 (settles schedule alignment for L1)** |
+| **#584** | **edward** | **Schedule (with L1)** | **--epochs 70 probe — extends T_max=50 finding; tests if even longer schedule continues the trend** |
 | **#570** | **thorfinn** | **Loss / metric alignment** | **surf_weight=8 single probe on pure-L1** (followup from #544 close: 3-point monotonic curve under L1 suggests sw<10 may be optimum, single-flag test) |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
@@ -50,7 +50,8 @@
 | #451 | askeladd | Closed | +12.86%. Channel-weighted MSE family conclusively ruled out at convergence. |
 | #503 | alphonse | Closed | +12.07% on compile+FF. **Capacity scale-up conclusively ruled out** (2 independent runs at 2 different baselines). |
 | #407 | fern | Merged → superseded by #504 | T_max=37 alignment with Huber: val_avg=69.74 (−0.13%). Empty PR — CLI flag change. |
-| **#504** | **edward** | **Merged (CURRENT BASELINE)** | **Pure L1 replacing SmoothL1: val_avg=57.29 (−17.96% vs Huber). Cumulative −60.3%. Used `--epochs 50` (T_max alignment for L1 may differ from Huber).** |
+| #504 | edward | Merged → superseded by #541 | Pure L1 replacing SmoothL1: val_avg=57.29 (−17.96% vs Huber). |
+| **#541** | **edward** | **Merged (CURRENT BASELINE)** | **T_max=50 confirmed for L1, fresh-seed rerun: val_avg=56.22 (−1.07% vs PR #504 same config). T_max=50 beats T_max=37 by 3.14%. Cumulative −61.0%.** |
 
 ## Throughput levers status
 

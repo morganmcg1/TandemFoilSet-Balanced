@@ -1,5 +1,60 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 06:01 — PR #541 (merged, NEW BASELINE): L1 T_max sweep — `--epochs 50` confirmed
+
+- branch: `willowpai2d1-edward/l1-tmax-sweep` (deleted on merge)
+- hypothesis: pure L1's constant-magnitude gradient predicts T_max=50
+  (lr stays positive throughout) beats T_max=37 (cosine→0). Two-run sweep
+  to settle the schedule alignment question for L1, predicted ~+0.5% to +2%
+  for T_max=37 vs T_max=50.
+
+### Results
+
+| Run | best_epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | end lr | W&B |
+|---|---|---|---|---|---|
+| `l1-tmax37` | 36 / 37 | **58.0402** | 49.6875 | 0 (cosine zero) | `6ihh5b0s` |
+| **`l1-tmax50-rerun`** | **37 / 37** | **56.2167** | **48.4232** | 7.89e-5 (~16% peak) | `pwi9gy9f` |
+
+Direct comparison: T_max=50 wins by **−1.8235 absolute, −3.14% relative**
+on val_avg vs T_max=37. Test gap: **−2.54%**. Exceeded predicted 0.5-2%.
+
+vs current PR #504 baseline (57.29):
+- tmax50-rerun: val_avg = 56.22 → **−1.07%** (fresh seed lined up favorably)
+- test_avg = 48.42 → **−5.70%** vs 51.35 baseline
+
+### Cumulative improvement
+
+**−61.0% on val_avg / −63.1% on test_avg** since original PR #312 reference
+(144.21 → 56.22, 131.18 → 48.42).
+
+### Analysis & conclusions
+
+- **Merged. New round baseline at val_avg=56.22.** Two findings:
+  1. T_max=50 confirmed correct for pure L1 (3.14% better than T_max=37).
+     Mechanism: L1's `sign(r)` constant-magnitude gradient keeps making
+     progress at small residuals; the late-training low-LR tail extracts
+     continued refinement rather than settling. T_max=37 zeroes lr
+     prematurely. **Per-epoch jumps in T_max=50's last few epochs are
+     the LARGEST of the run** (epoch 36→37: −5.4% in one epoch with
+     lr ≈ 8e-5).
+  2. **Single-seed variance ≈ 1%** (PR #504 yi5upb1e=57.29 vs PR #541
+     pwi9gy9f=56.22 same config, different seed). Future single-seed
+     <1% wins should be treated as noise; only ≥2% claims are robust.
+- **rc-camber barely moved** (−0.73% val / −0.17% test) — schedule
+  changes don't help rc, confirming **rc is representation-limited,
+  not residual-refinement-limited**. We need geometry-side or capacity-
+  side experiments for rc, not schedule/loss tweaks.
+- **Per-split structure matches mechanism**: cruise (-6.16%) and
+  single-in-dist (-3.54%) win biggest where small residuals dominate.
+  re_rand wins moderately (-3.69%). rc minimal.
+- BASELINE.md updated to recommend `--epochs 50` for pure L1 (was
+  `--epochs 37` from fern's PR #407 era when Huber was active).
+- Followup assigned: `--epochs 70` probe (PR #584) — tests if even
+  longer schedule continues the trend, with lr ≈ 45% of peak at the cap
+  vs T_max=50's ~16%.
+
+
+
 ## 2026-04-28 05:13 — PR #324 v3 (sent back): EMA decay=0.999 rebased on pure L1 baseline
 
 - branch: `willowpai2d1-nezuko/ema-and-grad-clip` (in flight as draft after send-back)
