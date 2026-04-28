@@ -1865,3 +1865,34 @@ Under the new regime, GELU produces noisier raw iterates that EMA must mask hard
 |----|---------|------|-------|-----|
 | #675 | askeladd | ema-decay-0p995 | `ema_decay = 0.99 → 0.995` on merged #394 baseline | Natural revisit of EMA-axis under new 20-ep budget. EMA(0.99) was tuned at 14-ep budget (5.8 % half-life of run); under 20-ep budget that's 4.1 % of run. EMA(0.995) gives 8.1 % half-life — better matched to new budget per Polyak-Ruppert literature. Honest band −4 % to +5 %. |
 | #676 | nezuko | n-head-8 | `n_head = 4 → 8` on merged #394 baseline | Last untouched architecture single-knob axis. Closed #354 paired n_head=8 + slice_num=128 throughput-bound at 250 s/ep eager; under compile + Lion isolates n_head. 16-dim per head (vs 32) tests whether Transolver's compact slice-token attention tolerates smaller per-head dim. Honest band −6 % to +10 % (widest band — high information value). |
+
+## 2026-04-28 08:42 — PR #652: Lion lr 2.5e-4 → 2.7e-4 (charliepai2d1-tanjiro) — **CLOSED (wash, locks 2.5e-4 as basin center)**
+- val=43.578 (−0.23 %, within seed noise), test=37.635 (+1.93 %). **Interfere per-split signature**: rc gains markedly (−5.46 % val), cruise regresses (+5.38 % val / +6.15 % test), single mildly regresses, re_rand washes. Late-epoch raw spikes ep17–18 (+11/+12), grad_norm 13.19 ex-ep1 (predicted 9.5–11.5), spread −11.17 ex-ep1 (predicted −5 to −9) all signal upper-edge proximity.
+
+### New-regime three-point Lion-lr basin map locked
+
+| lr | val_ema | Δ vs 43.677 | call | per-split signature |
+|---:|---:|---:|---|---|
+| 2.5e-4 (#394 merged) | 43.677 | 0 % | basin center | broad-based gain |
+| **2.7e-4 (#652 closed)** | **43.578** | **−0.23 %** | **upper edge** | **interfere** |
+| 2.85e-4 (#592 closed) | 44.621 | +2.16 % | lose | interfere |
+
+**New-regime basin upper edge** under (β2=0.999, compile, 20 ep) is at-or-just-below 2.7e-4 — much tighter than old regime where upper edge was past 2.85e-4. **2.5e-4 is the basin center.** Reassigned tanjiro to **PR #681 (batch-8-on-compile)** — untouched batch axis under compile.
+
+## 2026-04-28 08:43 — PR #643: EMA warmup-skip (charliepai2d1-frieren) — **CLOSED (mechanism real but washed at 20-ep budget)**
+- val=43.704 (+0.06 %, essentially identical), test=37.326 (+1.10 %). **Mechanism verified surgically**: ep1 EMA-vs-raw spread = 0.000 (vs baseline −17.288) — Polyak-Ruppert correction executed correctly. But random-init drag at ep20 is `0.99^1700 ≈ 1.4e-8` — fully absorbed by EMA(0.99) at 20-ep budget.
+
+### Durable appendix story (mechanism-real, application-conditional)
+
+**"Polyak-Ruppert bias correction matters when training is short relative to EMA half-life. Under our 20-ep budget with EMA(0.99) (~22 % warmup batches but ~1.4e-8 contribution to final shadow), random-init drag is fully absorbed — mechanism is mechanically real but washed at this regime."**
+
+Per-split signature is mixed (single val regress / test improve, rc inverse) — consistent with run-to-run noise rather than mechanism.
+
+Train-loss/grad-norm/wall-clock all match baseline within 1 % (mechanism is shadow-only path; verifies implementation surgical correctness). Reassigned frieren to **PR #683 (stochastic-depth-0p05)** — untouched block-level regularization axis (different mechanism from closed #483/#513 MLP-internal dropout).
+
+## 2026-04-28 08:45 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #681 | tanjiro | batch-8-on-compile | `batch_size = 4 → 8` on merged #394 baseline | Untouched batch axis under compile (was OOM under eager #546; b=6 fallback was Lion wash). Compile reduces memory pressure (peak 42 GB → ~75-80 GB at b=8, under 96 GB cap). Tests Lion's batch-invariance under new compute regime. Honest band −6 % to +7 %. |
+| #683 | frieren | stochastic-depth-0p05 | drop_path probability 0.05 in TransolverBlock residual branches on merged #394 baseline | Block-level regularization (drop entire residual branch with p=0.05) — structurally different from closed #483/#513 (MLP-internal dropout). Standard transformer regularization (Huang 2016). Implicit ensembling effect over sub-networks. Honest band −5 % to +7 %. |
