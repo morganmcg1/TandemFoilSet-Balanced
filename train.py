@@ -263,13 +263,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 sq_err = (pred - y_norm) ** 2
                 vol_mask = mask & ~is_surface
                 surf_mask = mask & is_surface
+                # Match training-loop weighting: pressure (1,1,5) on surf only,
+                # /3.0 rescale to keep surf_loss magnitude comparable; vol_loss
+                # unweighted.
+                surf_ch_w = torch.tensor(
+                    [1.0, 1.0, 5.0], device=sq_err.device, dtype=sq_err.dtype
+                )
+                surf_sq_err = sq_err * surf_ch_w
                 vol_loss_sum += (
                     (sq_err * vol_mask.unsqueeze(-1)).sum()
                     / vol_mask.sum().clamp(min=1)
                 ).item()
                 surf_loss_sum += (
-                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    (surf_sq_err * surf_mask.unsqueeze(-1)).sum()
                     / surf_mask.sum().clamp(min=1)
+                    / 3.0
                 ).item()
             n_batches += 1
 
@@ -451,6 +459,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# torch.compile pilot — dynamic=True for variable mesh sizes (PR #416).
+# Skipped under --debug so fast iteration stays cheap.
+if not cfg.debug:
+    model = torch.compile(model, dynamic=True)
+    print("Wrapped model with torch.compile(dynamic=True)")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -466,6 +480,9 @@ run = wandb.init(
         "n_params": n_params,
         "fourier_k": FOURIER_K,
         "fourier_dims": 4 * FOURIER_K,
+        "surf_channel_weights": [1.0, 1.0, 5.0],
+        "vol_channel_weights": [1.0, 1.0, 1.0],
+        "surf_channel_rescale": 3.0,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
@@ -499,6 +516,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    batch_times: list[float] = []
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    last_batch_end = time.time()
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -517,15 +538,26 @@ for epoch in range(MAX_EPOCHS):
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            # Surface only: pressure-weighted MSE (1, 1, 5) on (Ux, Uy, p),
+            # /3.0 keeps the surf_loss magnitude comparable to the unweighted
+            # mean so cfg.surf_weight stays calibrated.
+            surf_ch_w = torch.tensor([1.0, 1.0, 5.0], device=sq_err.device, dtype=sq_err.dtype)
+            surf_sq_err = sq_err * surf_ch_w
+            surf_loss = (surf_sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1) / 3.0
+            # Volume: unchanged from baseline (no channel weighting).
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        b_dt = time.time() - last_batch_end
+        last_batch_end = time.time()
+        batch_times.append(b_dt)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(), "train/batch_time_s": b_dt, "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -546,12 +578,21 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    # Compile diagnostic: distinguish first-batch (compile) from steady-state.
+    first_batch_s = batch_times[0] if batch_times else 0.0
+    steady_batches = batch_times[1:] if len(batch_times) > 1 else batch_times
+    steady_mean_s = sum(steady_batches) / max(len(steady_batches), 1)
+    steady_max_s = max(steady_batches) if steady_batches else 0.0
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "train/first_batch_s": first_batch_s,
+        "train/steady_batch_mean_s": steady_mean_s,
+        "train/steady_batch_max_s": steady_max_s,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
@@ -569,12 +610,16 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # save the underlying module's state_dict so the artifact stays
+        # portable regardless of whether the loader uses torch.compile
+        torch.save(getattr(model, "_orig_mod", model).state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
+        f"(max {steady_max_s:.3f}s)  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
@@ -593,7 +638,9 @@ if best_metrics:
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    getattr(model, "_orig_mod", model).load_state_dict(
+        torch.load(model_path, map_location=device, weights_only=True)
+    )
     model.eval()
 
     test_metrics = None
