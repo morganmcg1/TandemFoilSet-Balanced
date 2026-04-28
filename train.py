@@ -67,6 +67,50 @@ def set_seed(seed: int) -> torch.Generator:
     g.manual_seed(seed)
     return g
 
+
+# ---------------------------------------------------------------------------
+# EMA (Polyak averaging) helper
+# ---------------------------------------------------------------------------
+
+class WeightEMA:
+    """Exponential moving average of model parameters.
+
+    shadow = decay * shadow + (1 - decay) * model. Higher decay = slower /
+    smoother. With decay=0.99 the effective horizon is ~100 steps.
+    """
+
+    def __init__(self, model: nn.Module, decay: float):
+        self.decay = decay
+        self.shadow = {
+            name: p.detach().clone()
+            for name, p in model.named_parameters()
+            if p.requires_grad
+        }
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            self.shadow[name].mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+    @torch.no_grad()
+    def copy_to(self, model: nn.Module) -> dict:
+        backup = {}
+        for name, p in model.named_parameters():
+            if name not in self.shadow:
+                continue
+            backup[name] = p.detach().clone()
+            p.copy_(self.shadow[name])
+        return backup
+
+    @torch.no_grad()
+    def restore(self, model: nn.Module, backup: dict) -> None:
+        for name, p in model.named_parameters():
+            if name in backup:
+                p.copy_(backup[name])
+
+
 # ---------------------------------------------------------------------------
 # Input feature encoding
 # ---------------------------------------------------------------------------
@@ -439,11 +483,14 @@ def save_model_artifact(
         "model_config": model_config,
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_from_ema": bool(best_metrics.get("from_ema", False)),
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_decay": cfg.ema_decay,
+        "ema_eval": cfg.ema_eval,
     }
 
     description = (
@@ -507,6 +554,8 @@ class Config:
     use_swiglu: bool = False  # True = swap per-block MLP from GELU to SwiGLU
     seed: int = 0  # global seed for torch / numpy / random / sampler / DataLoader
     t_max: int = 0  # 0 = use cfg.epochs; >0 = override CosineAnnealing T_max (e.g., 13 for budget-matched)
+    ema_decay: float = 0.0   # Polyak EMA decay. 0.0 disables; 0.99 recommended.
+    ema_eval: bool = False   # When ema_decay>0, evaluate val/test from EMA weights.
 
 
 cfg = sp.parse(Config)
@@ -565,6 +614,15 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max = cfg.t_max if cfg.t_max > 0 else MAX_EPOCHS
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
+
+ema = WeightEMA(model, decay=cfg.ema_decay) if cfg.ema_decay > 0.0 else None
+if ema is not None:
+    print(
+        f"EMA: enabled decay={cfg.ema_decay} ema_eval={cfg.ema_eval} "
+        f"(shadow params={len(ema.shadow)})"
+    )
+else:
+    print("EMA: disabled")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -655,6 +713,8 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -667,7 +727,15 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
+    # When EMA is on: swap EMA shadow into model, evaluate, save best while
+    # EMA weights are still in `model` (so the saved checkpoint == EMA snapshot
+    # at the best epoch — fixes the "live-EMA vs best-epoch-EMA" issue), then
+    # restore raw weights so the next epoch's gradient step continues from the
+    # right point. EMA is a parallel snapshot, never a replacement.
     model.eval()
+    use_ema_for_eval = ema is not None and cfg.ema_eval
+    ema_backup = ema.copy_to(model) if use_ema_for_eval else None
+
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.fourier_bands)
         for name, loader in val_loaders.items()
@@ -684,6 +752,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ema_enabled": int(ema is not None),
+        "ema_eval_active": int(use_ema_for_eval),
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
@@ -699,15 +769,23 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "from_ema": use_ema_for_eval,
         }
+        # Save while EMA is swapped in (if active): the on-disk checkpoint is
+        # therefore the EMA snapshot at the best-EMA-val moment, exactly what
+        # the test eval needs to load at end of training.
         torch.save(model.state_dict(), model_path)
         tag = " *"
+
+    if ema_backup is not None:
+        ema.restore(model, ema_backup)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"{' [EMA]' if use_ema_for_eval else ''}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -722,6 +800,7 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "best_from_ema": bool(best_metrics.get("from_ema", False)),
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
