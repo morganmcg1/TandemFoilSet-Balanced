@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 01:35
+- **Date:** 2026-04-28 01:55
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
@@ -32,7 +32,8 @@
 | fern     | #388 | arcsinh-pressure | Heavy-tail (arcsinh on p target) | -5% to -15% | **CLOSED** — +15.1% regression; sinh decode amplifies tail errors |
 | fern     | #422 | pchannel-p-w05 | Loss weighting (per-channel w_p=0.5 to free velocity gradient) | -2% to -7% | WIP |
 | frieren  | #307 | warmup-cosine-1e3 | Optim (warmup + lr 1e-3) | -2% to -6% | **CLOSED** — 134.58, 26% worse than #308 |
-| frieren  | #382 | batch8-lr7e-4 | Throughput (larger batch + sqrt-lr) | -5% to -15% | WIP |
+| frieren  | #382 | batch8-lr7e-4 | Throughput (larger batch + sqrt-lr) | -5% to -15% | **CLOSED** — GPU compute-saturated at bs=4; +52% EMA artifact |
+| frieren  | #431 | wider160-bf16 | Architecture (n_hidden 128→160 under bf16) | -2% to -7% | WIP |
 | nezuko   | #308 | ema-grad-clip | Optim (EMA 0.999 + clip 1.0) | -3% to -8% | **MERGED** 5bdb284 → val_avg=106.40 |
 | nezuko   | #381 | ema995-gradclip10 | Ablation (EMA 0.995 + clip 10) | -3% to -10% | **MERGED** a620ba1 → val_avg=**98.85** (NEW BEST, -7.1%) |
 | nezuko   | #421 | ema995-noclip | Ablation (EMA 0.995, NO clip — clean isolation) | ±5% | WIP |
@@ -48,7 +49,8 @@
 - **EMA late-epoch smoothing is high-value** in this regime. PR #381 confirmed: decay=0.995 crosses online at epoch 2 vs ~10 at decay=0.999 (PR #308); 11 useful EMA epochs in the budget instead of 3.
 - **Aggressive grad clipping is implicit lr dampening** — at max_norm=1 (#308) 100% of batches fire; at max_norm=10 (#381) still 87-100% fire because gn_mean is 44-107. We don't yet have a clean EMA-only number; PR #421 (nezuko, no clip) is the isolation test.
 - **Heavy-tail target reparametrization (arcsinh)** — fundamentally wrong direction for an equal-weight physical-space MAE metric. Decode through nonlinear functions amplifies tail errors disproportionately. Per-channel scalar weights are the right lever.
-- **Architectural-scale changes need throughput-friendliness baked in** — wider (#300), more-slices (#309), and deeper (#304) all lost epochs to per-step compute. We've now closed three PRs on the same axis pattern; the lesson is firmly priced in.
+- **Architectural-scale changes need throughput-friendliness baked in** — wider (#300), more-slices (#309), and deeper (#304) all lost epochs to per-step compute. With bf16 (#372) now in the merged baseline, the throughput math has changed; frieren #431 retests moderate widening on top of bf16.
+- **Memory headroom does NOT translate to throughput on this hardware.** Frieren #382 confirmed: GPU is compute-saturated at bs=4. Doubling batch ≈ doubles per-step time → net flat. Memory headroom should go to capacity (n_hidden, n_layers) or be cashed via bf16 (which actually drops per-step compute), not via bigger batches.
 - **Independent diagnoses converged on the same scoring NaN bug** (6 students), now fixed (#358).
 - **Variance floor: ~5pp** between two Huber seeds (askeladd #289). Round-1 winners by less than ~5% on val_avg are within run-to-run noise.
 
