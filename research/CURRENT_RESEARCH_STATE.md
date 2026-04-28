@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-28 19:30
+- **Last updated:** 2026-04-28 20:50
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -38,7 +38,7 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | WIP | Huber loss |
 | nezuko | #742 | WIP | Dropout regularization |
-| tanjiro | #745 | WIP | Separate output heads |
+| tanjiro | #745 | WIP (rebase) | Heads on old code: Opt1=130.82 / Opt2=134.46. Sent back for Option 3 capacity-matched on rebased baseline. |
 | thorfinn | #763 | **Merged** | val_avg=141.42; features + NaN-safe eval |
 | thorfinn | #810 | WIP | EMA model checkpoint |
 
@@ -50,14 +50,14 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 - Trajectory suggests capacity is NOT the bottleneck at first contact — need to establish baseline first.
 - `test_geom_camber_cruise` NaN on under-trained large models; scoring.py NaN-pred gap confirmed (data/ read-only).
 
-**Awaiting:** edward, nezuko, askeladd, fern, frieren, tanjiro, thorfinn results to establish baseline architecture val_avg benchmark.
+**Awaiting:** edward, nezuko, frieren (Wave-1 tail; pre-merge code) + alphonse #796, fern #809, thorfinn #810, askeladd #811 (Wave-2; on rebased baseline) + tanjiro #745 re-iteration on Option 3.
 
 ## Current research themes
 
 1. **Merged baseline now has two stacked wins:** physics distance features (#763) + warmup+cosine LR (#737). val_avg=127.87. Next generation of runs starts from here.
 2. **Schedule sizing is a major lever.** T_max=50 with a 30-min (~14 epoch) wall-clock budget means the LR barely decays. PR #809 tests the obvious fix (epochs=14, warmup=2). Expect notable improvement.
 3. **Critical dataset bug resolved.** `test_geom_camber_cruise` sample 20 has 761 NaN y[:, 2] entries. NaN-safe `evaluate_split` workaround merged in #763. All future runs from the new baseline will report finite test_avg.
-4. **5 Wave-1 PRs still in-flight** (#733 #734 #739 #742 #745) — running against old baseline. When they submit, we evaluate whether their isolated intervention beats 127.87 after rebase.
+4. **3 Wave-1 PRs still in-flight against pre-merge code** (#734 #739 #742). When they submit, evaluate whether their isolated intervention beats 127.87 after rebase. PR #745 (tanjiro heads) just submitted at val_avg=130.82 against old code; sent back for capacity-matched Option 3 on rebased baseline. PR #733 closed (regression).
 5. **EMA (#810) and FiLM-Re (#796)** are the two highest-priority Wave-2 explorations: variance reduction and Re-regime conditioning respectively.
 
 ## Potential next research directions (Wave 2+ candidates)

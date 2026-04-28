@@ -111,3 +111,37 @@ Best epoch = 8 of 50 (30-min timeout). slice_num=256 fits in 82.3 GB VRAM. Per-e
 - **Throughput penalty is structural, not tunable.** ~2× per-epoch cost meant 8 epochs vs ~14 for baseline-config runs in the same 30-min cap. Val curve still steeply falling at cutoff (161→151 epochs 7→8), so even granting "256 needs more time," it's strictly worse for our compute budget. Would need a budget extension or a separate throughput improvement to revisit.
 - Student also flagged the same `test_geom_camber_cruise` NaN issue thorfinn diagnosed in #763 — but that's already fixed in the current merged baseline. Confirms the bug is global (not slice-num-specific).
 - Askeladd reassigned to `mixed-precision-bf16` (PR #811) — directly attacks the throughput constraint this PR exposed.
+
+---
+
+## 2026-04-28 20:45 — PR #745: Separate output heads for velocity (Ux/Uy) and pressure (p) — sent back
+
+- **Branch:** `willowpai2e5-tanjiro/separate-pressure-head` (sent back for rebase + Option 3)
+- **W&B runs:** `m5ydsa1t` (split_linear), `7aw36w9e` (split_mlp) — group `separate-pressure-head`
+- **Hypothesis:** Splitting the final output projection into two specialized MLPs (Ux/Uy and p) gives the model architectural capacity for pressure-specific feature detectors and directly improves `val_avg/mae_surf_p`.
+
+### Results (against PRE-merge code: no features, no warmup)
+
+| Option | head params | val_avg/mae_surf_p ↓ | test_avg/mae_surf_p ↓ |
+|--------|-------------|----------------------|-----------------------|
+| Option 1 — `split_linear` (two `Linear`) | 387 | **130.82** | **118.99** |
+| Option 2 — `split_mlp` (deeper, capacity-matched) | 16,707 | 134.46 | 123.79 |
+
+Per-split surf_p MAE for Option 1 (winner):
+
+| Split | val | test |
+|-------|------|------|
+| `val_single_in_dist` | 155.53 | 137.41 |
+| `val_geom_camber_rc` | 141.41 | 133.08 |
+| `val_geom_camber_cruise` | 104.96 | 86.68 |
+| `val_re_rand` | 121.37 | 118.81 |
+
+Best epoch = 12 of 50 (30-min timeout at epoch 14). Both runs hit timeout.
+
+### Commentary & Conclusions
+
+- **Comparison NOT fair against current baseline.** Student's run was on pre-merge code (no distance features from #763, no warmup+cosine from #737). Direct val_avg=130.82 looks like a 2.3% regression vs 127.87, but that's apples-to-oranges. Against the no-features/no-warmup reference points (alphonse #732 154.95, askeladd #733 151.50), 130.82 is a substantial improvement — head split appears to be a real signal.
+- **Option 1 winning is partially a smaller-head effect, not pure specialization.** Student correctly identified that the baseline's `mlp2` already had ~16.9k params; their "Option 1" actually shrinks the head 44× to 387 params. So Option 1 winning at 14 epochs may be undertraining favoring smaller-capacity heads, not pressure-specialization succeeding.
+- **Critical follow-up: Option 3 (capacity-matched split).** Student proposed `Linear(hidden,hidden)→GELU` shared first layer, then forked `Linear(hidden,2)` and `Linear(hidden,1)`. This isolates specialization from capacity. **Sent back to test this on the rebased baseline.**
+- **NaN bug.** Student found and patched the same `nan*0=nan` propagation bug thorfinn diagnosed in #763 (data/scoring.py masking via multiplication poisons the running sum when ground truth has NaN). Their patch was in train.py:evaluate_split, same approach as #763 (already merged). Duplicate work but confirms the fix is correct. Student also patched the W&B run summaries via wandb.Api() to retrofit clean test numbers.
+- **Decision: Sent back.** Rebase onto current baseline, run Option 3 only. If <127.872, merge.
