@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -386,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    metrics_dir: str = "metrics"  # local JSONL metrics directory
 
 
 cfg = sp.parse(Config)
@@ -434,6 +436,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+_default_wandb_mode = "online" if os.environ.get("WANDB_API_KEY") else "disabled"
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -447,8 +450,32 @@ run = wandb.init(
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
-    mode=os.environ.get("WANDB_MODE", "online"),
+    mode=os.environ.get("WANDB_MODE", _default_wandb_mode),
 )
+
+# --- Local JSONL metrics logging ---
+metrics_dir = Path(cfg.metrics_dir)
+metrics_dir.mkdir(parents=True, exist_ok=True)
+_metrics_tag = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "run")
+metrics_path = metrics_dir / f"{_metrics_tag}-{run.id}.jsonl"
+
+
+def _jsonl_write(record: dict) -> None:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+_jsonl_write({
+    "type": "config",
+    "config": asdict(cfg),
+    "model_config": model_config,
+    "n_params": n_params,
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+    "wandb_run_id": run.id,
+    "wandb_run_name": run.name,
+})
+print(f"Local metrics log: {metrics_path}")
 
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
@@ -534,6 +561,20 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
+    peak_gb_epoch = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _jsonl_write({
+        "type": "epoch",
+        "epoch": epoch + 1,
+        "global_step": global_step,
+        "epoch_time_s": dt,
+        "peak_gb": peak_gb_epoch,
+        "lr": scheduler.get_last_lr()[0],
+        "train/vol_loss": epoch_vol,
+        "train/surf_loss": epoch_surf,
+        "val/loss": val_loss_mean,
+        **{f"{split_name}/{k}": v for split_name, m in split_metrics.items() for k, v in m.items()},
+        **{f"val_{k}": v for k, v in val_avg.items()},
+    })
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -557,6 +598,7 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+_jsonl_write({"type": "train_done", "total_minutes": total_time})
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -565,6 +607,12 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+    })
+    _jsonl_write({
+        "type": "best",
+        "best_epoch": best_metrics["epoch"],
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_per_split": {k: dict(v) for k, v in best_metrics.get("per_split", {}).items()},
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
@@ -596,6 +644,11 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _jsonl_write({
+            "type": "test",
+            "test_metrics": {k: dict(v) for k, v in test_metrics.items()},
+            "test_avg": dict(test_avg),
+        })
 
     save_model_artifact(
         run=run,
