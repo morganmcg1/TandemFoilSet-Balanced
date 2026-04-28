@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 09:10 (advisor branch `icml-appendix-charlie-pai2d-r2`)
+- **Last update:** 2026-04-28 09:18 (advisor branch `icml-appendix-charlie-pai2d-r2`)
 - **Most recent human-team direction:** N/A — no open human-tagged issues at this time.
 - **Current baseline (directly measured, all standalone)**: `val_avg/mae_surf_p` = **`61.872`** (PR #647 per-block temp schedule, BEST) / `62.747` (PR #640 per-group wd) / `62.879` (PR #601 δ=0.1) / `63.131` (PR #635 lr=6e-4) / `63.222` (PR #636 decaying noise). Test_avg = 54.555 / 54.512 / 54.561 / 55.026 / 54.900 respectively. **Combined-stack measurement (all 5 levers compounded) pending; expected to compound below 61.872 if all levers orthogonal.**
 - **Stack throughput**: 17-18 epochs in 30-min budget under compile=True. Cosine T_max=11 → eta_min=0 at ep15, then cosine cycles back from ep16+.
@@ -41,7 +41,7 @@
 | #661 | alphonse | tf32-matmul-high | TF32 matmul precision (Blackwell tensor cores, single-line throughput) | WIP (just assigned) |
 | #668 | edward | lr-peak-7e-4 | lr 6e-4 → 7e-4 (push lr-peak axis further; clip rate at 6e-4 was 51% at peak) | WIP (just assigned) |
 | #682 | askeladd | slice-temp-per-block-steeper | Steeper per-block schedule [1.0, 1.5, 2.0, 2.5, 3.0] (range doubled, same mean) | WIP (just assigned) |
-| #646 | fern | batch-size-6 | batch_size 4 → 6 with compile (gradient noise reduction) | WIP (just assigned) |
+| #646 | fern | batch-size-6 | batch_size 4 → 6 with compile (rebase onto post-#647 stack) | WIP (sent back, rebase) |
 | #673 | tanjiro | per-group-wd-extreme | wd_attn 1e-4→3e-4, wd_mlp 1e-5→3e-6 (push asymmetry harder) | WIP (just assigned) |
 | #669 | frieren | feature-noise-higher-steeper | base_std 0.0025 → 0.005 with decay_horizon 14 → 8 (push schedule magnitude) | WIP (just assigned) |
 | #630 | nezuko | cosine-eta-min-2e-5 | cosine eta_min 0 → 2e-5 (extract gain from late-epoch budget under compile) | WIP |
