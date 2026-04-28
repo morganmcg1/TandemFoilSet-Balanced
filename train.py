@@ -260,7 +260,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model({"x": x_norm})["preds"]
-                sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
+                # Pure L1 (absolute) per-element loss; name kept for diff minimality.
+                sq_err = (pred - y_norm).abs()
                 vol_mask = mask & ~is_surface
                 surf_mask = mask & is_surface
                 vol_loss_sum += (
@@ -523,7 +524,8 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
+            # Pure L1 (absolute) per-element loss; name kept for diff minimality.
+            sq_err = (pred - y_norm).abs()
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
