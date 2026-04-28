@@ -1,9 +1,37 @@
 # Baseline — icml-appendix-charlie-pai2e-r3
 
 ## Current Best
-- **Source**: MAE/L1 loss replacing MSE (PR #835, nezuko)
-- **PR**: #835
-- **Primary**: `val_avg/mae_surf_p` = **104.058** (lower is better)
+- **Source**: Cosine T_max=15 + 1-epoch warmup for 30-min budget (PR #889, fern)
+- **PR**: #889
+- **Primary**: `val_avg/mae_surf_p` = **94.387** (lower is better)
+- **Test (3-split mean, excl. cruise NaN)**: `test_avg/mae_surf_p` = **92.232**
+
+### Best checkpoint metrics (val, epoch 14)
+
+| Split | mae_surf_p | mae_vol_p |
+|---|---|---|
+| val_single_in_dist | 118.130 | — |
+| val_geom_camber_rc | 100.284 | — |
+| val_geom_camber_cruise | 71.079 | — |
+| val_re_rand | 88.053 | — |
+| **val_avg** | **94.387** | — |
+
+### Test metrics (raw, NaN in cruise due to known 1-sample bug)
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 106.075 |
+| test_geom_camber_rc | 89.965 |
+| test_geom_camber_cruise | NaN (1-sample GT bug) |
+| test_re_rand | 80.655 |
+| **test_avg (3-split excl. cruise)** | **92.232** |
+
+- **Metric summary**: `target/runs/cosine-tmax-fix-warmup/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --lr 5e-4 --surf_weight 10 --batch_size 4 --epochs 50`
+  (T_max=15 + 1-epoch warmup hard-coded in train.py since PR #889)
+
+## Previous Best (PR #835)
+- **Primary**: `val_avg/mae_surf_p` = **104.058**
 - **Test (corrected, NaN-sample skipped)**: `test_avg/mae_surf_p` = **92.608**
 
 ### Best checkpoint metrics (val, from reeval_summary)
@@ -16,19 +44,7 @@
 | val_re_rand | 1.973 | 0.644 | 97.756 | 91.352 |
 | **val_avg** | **1.887** | **0.671** | **104.058** | **101.931** |
 
-### Test metrics (NaN-sample-skipped workaround, `test_clean_with_workaround`)
-
-| Split | mae_surf_p | mae_vol_p |
-|---|---|---|
-| test_single_in_dist | 108.838 | 121.768 |
-| test_geom_camber_rc | 105.324 | 102.900 |
-| test_geom_camber_cruise | 66.099 (1 sample skipped) | 58.095 |
-| test_re_rand | 90.170 | 85.656 |
-| **test_avg** | **92.608** | **92.105** |
-
-- **Metric summary**: `target/runs/mae-loss-metrics/metrics.jsonl`
 - **Reproduce**: `cd target/ && python train.py --lr 5e-4 --surf_weight 10 --batch_size 4 --epochs 50`
-  (MAE loss swap is hard-coded in train.py; no extra CLI flag needed)
 
 ## Default config (the bar this PR beat)
 ```
