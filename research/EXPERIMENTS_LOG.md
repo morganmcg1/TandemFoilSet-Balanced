@@ -1,5 +1,46 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 04:50 — PR #477: Conservative widening n_hidden=144 on post-#289 + compile
+- Branch: `charliepai2d4-frieren/wider144-compile` (deleted on close)
+- Student: charliepai2d4-frieren
+- **Outcome: CLOSED** (+6.4% vs paired baseline-ref; second paired-experiment confirmation that wider loses to budget on this 30-min frontier).
+
+### Headline (epoch 29 vs 33, EMA-evaluated, both runs in PR)
+| Run | Best epoch | val_avg | test_avg | per-epoch |
+|---|---|---|---|---|
+| baseline-ref (n=128) | 33 | **62.87** | **54.66** | 55.0 s |
+| wider144 (n=144) | 29 | 66.87 | 58.02 | 62.1 s (+13%) |
+| Δ | -4 epochs | **+6.4%** | +6.1% | |
+
+baseline-ref reproduced merged #289 (63.33) cleanly within run-to-run noise.
+
+### Same-epoch trajectory (capacity at fixed epoch IS gained, but offset by cosine-tail loss)
+| Epoch | baseline-ref | wider144 | Δ (wider − base) |
+|---|---|---|---|
+| 5  | 138.96 | 135.08 | -3.88 |
+| 10 | 103.85 | 100.79 | -3.06 |
+| 16 |  86.47 |  83.93 | -2.54 |
+| 20 |  79.57 |  77.25 | -2.32 |
+| 25 |  73.59 |  70.39 | -3.20 |
+| 29 |  68.03 |  **66.87** (its best) | -1.16 |
+| 30 |  65.78 | — | (wider stopped) |
+| 33 |  **62.87** (its best) | — | |
+
+Baseline-ref drops 5.16 mae across epochs 30-33 (cosine-tail), wiping out the 1-3 mae capacity advantage from earlier epochs.
+
+### Mechanism (the load-bearing finding)
+- **+13% per-epoch tax ≈ 12% share of cosine-tail epochs** (4/33). Frontier dead-on — this is not a measurement artifact.
+- **Two paired experiments now**: #431 (wider160, +14% tax → +2.5% val regression) and this PR (wider144, +13% tax → +6.4% val regression). Both confirm capacity > budget loses on this 30-min schedule.
+- **Capacity gain narrows over training**: epoch 5 advantage 3.88, epoch 29 only 1.16. Models converge toward similar regime; the wider model's extra capacity stops paying off in late training.
+
+### Lessons / next steps
+- **Don't chase wider** at this schedule (frieren's #1). 152/136 would land on the same frontier.
+- **Schedule changes are higher-leverage than capacity changes** at this budget. Specifically: eta_min > 0 (alphonse's #466 follow-up #1, frieren's #3) — let the cosine tail continue learning at low-but-nonzero lr instead of truncating to 0. **Assigning that to frieren next.**
+- Depth instead of width (frieren's #4): different compute frontier, parking.
+- Slice_num bump (frieren's #5): parking until cudagraph_skip lands.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=477 records, 31 lines from wider144 run).
+
 ## 2026-04-28 04:35 — PR #466: cosine T_max retune (32) + cudagraph_skip_dynamic_graphs flag
 - Branch: `charliepai2d4-alphonse/tmax32-cudagraph-skip` (still in flight after revision)
 - Student: charliepai2d4-alphonse
