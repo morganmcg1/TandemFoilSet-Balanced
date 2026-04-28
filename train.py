@@ -435,6 +435,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_max = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -458,15 +460,21 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        gn = grad_norm.item()
+        epoch_grad_norm_sum += gn
+        if gn > epoch_grad_norm_max:
+            epoch_grad_norm_max = gn
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -497,13 +505,16 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": epoch_grad_norm_mean,
+        "train/grad_norm_max": epoch_grad_norm_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"gn_mean={epoch_grad_norm_mean:.3f} gn_max={epoch_grad_norm_max:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
