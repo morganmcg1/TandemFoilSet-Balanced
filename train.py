@@ -380,6 +380,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_weight: float = 5.0
+    T_max: int | None = None
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -433,7 +435,10 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+T_max = cfg.T_max if cfg.T_max is not None else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
+
+channel_weights = torch.tensor([1.0, 1.0, cfg.p_weight], device=device)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -512,7 +517,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = ((pred - y_norm) ** 2) * channel_weights
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
