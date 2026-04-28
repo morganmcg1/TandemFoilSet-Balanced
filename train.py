@@ -169,6 +169,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 unet_skip: bool = False, unet_skip_dropout: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -195,6 +196,13 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.unet_skip = unet_skip
+        if unet_skip:
+            self.skip_fuse = nn.Sequential(
+                nn.Linear(2 * n_hidden, n_hidden),
+                nn.GELU(),
+                nn.Dropout(unet_skip_dropout),
+            )
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,10 +216,22 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        fx_skip = self.preprocess(x) + self.placeholder[None, None, :]
+        fx = fx_skip
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        if self.unet_skip:
+            if self.training and wandb.run is not None:
+                with torch.no_grad():
+                    skip_norm = fx_skip.norm(dim=-1).mean().item()
+                    deep_norm = fx.norm(dim=-1).mean().item()
+                    wandb.log({
+                        "diag/skip_norm": skip_norm,
+                        "diag/deep_norm": deep_norm,
+                        "diag/skip_to_deep_ratio": skip_norm / max(deep_norm, 1e-8),
+                    }, commit=False)
+            fx = self.skip_fuse(torch.cat([fx, fx_skip], dim=-1))
+        return {"preds": self.blocks[-1](fx)}
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +466,8 @@ class Config:
     huber_delta: float = 1.0  # surface-loss Huber threshold (normalized space)
     epochs: int = 50
     n_layers: int = 5
+    unet_skip: bool = True              # preprocess→last-block skip
+    unet_skip_dropout: float = 0.0      # dropout on skip-fuse path
     use_ema: bool = True
     ema_decay: float = 0.999
     ema_warmup_steps: int = 100
@@ -492,6 +514,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unet_skip=cfg.unet_skip,
+    unet_skip_dropout=cfg.unet_skip_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
