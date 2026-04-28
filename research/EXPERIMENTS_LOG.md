@@ -1,5 +1,77 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 04:14 — PR #499 (CLOSED, under-convergence cliff): max_norm=0.5
+- Branch: `charliepai2d3-edward/l1ff-ema-cos14-lr-7p5e-4-clip-0p5` (deleted on close)
+- Hypothesis: tighten gradient clipping `max_norm` from 1.0 to 0.5 on the
+  full lever stack (L1+FF+EMA + matched cosine + lr=7.5e-4). Predicted
+  −1% to −3%.
+- Config: post-#462 advisor, single-line code change `1.0 → 0.5`,
+  CLI `--epochs 14 --lr 7.5e-4`.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs current baseline (PR #462, 80.06) |
+|--------|--------:|-------------------------------------:|
+| `val_avg/mae_surf_p`  | 80.64 | **+0.72%** (marginal regression, within noise) |
+| `test_avg/mae_surf_p` | 70.62 | **+0.83%** |
+
+### Under-convergence cliff diagnostic
+
+Pre-clip grad-norm trajectory shows clip is firing on every batch:
+
+| epoch | val_avg | gn_mean | gn_max |
+|------:|--------:|--------:|-------:|
+| 1 | 330.53 | 46.20 | 139.30 |
+| 5 | 179.58 | 38.11 |  78.85 |
+| 14 |  80.64 | 22.85 |  54.07 |
+
+Pre-clip mean is **22-46 throughout training**, never below 0.5.
+`max_norm=0.5` is a **direction-only update regime** — every batch's
+gradient is rescaled to magnitude 0.5. Qualitatively different from
+`max_norm=1.0` (outlier-clip with bulk signal through; ~27× headroom).
+
+### Cliff signature
+
+| epoch | this PR (clip=0.5) | PR #462 baseline (clip=1.0) | gap |
+|------:|-------------------:|----------------------------:|----:|
+| 1 | 330.53 | 227.23 | +45% slower |
+| 5 | 179.58 | (~140) | +28% slower |
+| 14 | 80.64 | 80.06 | +0.7% |
+
+Cosine tail does most of the recovery work, but ep1-6 are starved of
+gradient magnitude. Net: training runs to completion, doesn't beat
+the 1.0 baseline.
+
+### Decision
+
+**Closed** with mechanistically-explained marginal regression.
+
+**Round-3 narrative addition**: tight clipping at 0.5 hits the same
+**aggressive-regulariser-overlap** family as wd=1e-3 (#437), beta2=0.95
+(#446), L1-volume + EMA (#492), and lr=1e-3 + EMA (#489). Once the
+stack already has FF+EMA+matched-cosine providing aggressive
+regularisation, additional aggressive regularisation **interferes
+with early-epoch convergence** rather than adding signal.
+
+The compose-failure family is now well-characterised:
+| failure mode | example PRs |
+|--|--|
+| Same regularisation axis × FF | #437 wd=1e-3, #446 beta2=0.95 |
+| Same noise-smoothing axis × EMA | #492 L1-vol, #489 lr=1e-3 |
+| Direction-only-update regime cliff | #499 (this PR, clip=0.5) |
+
+### Re-assignment
+
+The **canonical round-3-best 6-lever stack measurement** has never
+been done directly — every merge has been on a slightly different
+baseline (PR #389 no FF, #447 no matched cosine, #461 no EMA, #462
+no EMA + default lr, #499 clip=0.5 not 1.0). Edward re-assigned to
+the canonical clean run.
+
+Per-epoch metrics not centralised — branch deleted on close.
+
+---
+
 ## 2026-04-28 04:00 — PR #492 (CLOSED, L1-vol × EMA destructively overlap): L1 volume on full lever stack
 - Branch: `charliepai2d3-tanjiro/l1ff-ema-cos14-lr-7p5e-4-voll1` (deleted on close)
 - Hypothesis: stack the validated L1-volume lever (PR #448, −5.18% on

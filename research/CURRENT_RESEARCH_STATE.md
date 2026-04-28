@@ -147,22 +147,20 @@ composition even if they don't outright beat 102.64:**
      *(loss focus)* — branched off L1-only.
    - PR #476 — fern: L1+FF+EMA + `--epochs 14` — four-lever-stack
      confirmation on post-#447 advisor.
-   - PR #499 — edward: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **`max_norm=0.5`** — tighter clipping bracket.
    - PR #500 — frieren: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
      **`wd=5e-4`** — wd-sweet-spot compose on full proven-lever stack.
    - PR #501 — thorfinn: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
      **DropPath 0.1** — mechanistically-different regulariser.
    - PR #506 — nezuko: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
      **NUM_FOURIER_FREQS=12** — spatial FF frequency-count bracket.
-   - PR (askeladd, new): L1+FF+EMA + `--epochs 14` + **`lr=8e-4`** —
-     interior LR bracket point between 7.5e-4 (works) and 1e-3 (past
-     optimum, PR #489).
-   - PR (tanjiro, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **3× pressure-channel weight in volume loss** — different axis
-     than L1-volume (which overlapped with EMA in PR #492); tests
-     whether channel-weighting the volume MSE captures the heavy-tail
-     benefit without overlapping with EMA's noise smoothing.
+   - PR #515 — tanjiro: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **3× pressure-channel weight in volume loss**.
+   - PR #516 — askeladd: L1+FF+EMA + `--epochs 14` + **`lr=8e-4`** —
+     interior LR bracket point.
+   - PR (edward, new): **canonical round-3-best six-lever stack
+     measurement** — `--epochs 14 --lr 7.5e-4` on post-#462 advisor
+     (which has L1+FF+EMA+clip baked in). Pure measurement run, no
+     code changes.
 
 ## Compose pattern map — final round-3 picture
 
@@ -178,12 +176,30 @@ post-EMA stack. The pattern:
 | **Input encoding on already-rich features** | net-flat or regression | log(Re) FF (#432) | closed |
 | **Loss-shape regulariser** | overlaps with EMA | L1-volume × EMA (#492) | closed |
 | **LR overshoot on EMA stack** | regression | lr=1e-3 × EMA (#489) | closed |
+| **Direction-only-update regime cliff** | under-convergence | max_norm=0.5 × full stack (#499) | closed |
 
 **Generalisation observed across compose tests**: once one "noise/
 regularisation" lever is in the stack (FF, EMA), additional
 same-mechanism levers tend to interfere on the most-improved split.
 The pattern reproduces across magnitude-based (#437, #446), loss-shape
-(#492), and now LR-overshoot (#489) failure modes.
+(#492), LR-overshoot (#489), and direction-only-clipping (#499)
+failure modes.
+
+## Round-3-best 6-lever stack — pending canonical measurement
+
+Every round-3 merge has been on a slightly different baseline:
+- PR #389 (val 90.90): L1 + matched cosine — **no FF**
+- PR #447 (val 82.97): L1 + FF + EMA — **no matched cosine** (T_max=50)
+- PR #461 (val 80.28): L1+FF + matched cosine + lr=7.5e-4 — **no EMA**
+- PR #462 (val 80.06): L1+FF + matched cosine + clip=1.0 — **no EMA, lr=5e-4**
+
+The advisor `train.py` now bakes in L1 + FF + EMA + clipping. The
+recommended reproduce command is `--epochs 14 --lr 7.5e-4`. **The
+canonical six-lever-stack measurement on the post-#462 advisor is
+the missing reference number** — predicted ~76-78 if proven levers
+compose cleanly.
+
+Edward (post-#499 close) is assigned this canonical measurement run.
 
 **Input encoding compose insight (from PR #432 close)**: input-encoding
 levers compose with FF only when the targeted input dimension was
