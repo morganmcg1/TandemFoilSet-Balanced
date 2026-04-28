@@ -2,9 +2,17 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 04:55 — PR #520: PhysicsAttention temperature init 0.5 → 1.0 — first directly-measured baseline
+## 2026-04-28 05:15 — PRs #527 + #518 merged on top of #520 — two orthogonal compounds
 
-- **Best `val_avg/mae_surf_p`** (target to beat): **71.6985** (epoch 14)
+- **Best `val_avg/mae_surf_p`** (target to beat): conservative **71.6985** (PR #520 directly-measured); standalone wins on each compound:
+  - PR #527 (wd=3e-5 on pre-slice-temp baseline): val_avg = 70.814 (−1.23% vs current)
+  - PR #518 (warmup_steps=50 on pre-slice-temp baseline): val_avg = 71.4284 (−0.38% vs current)
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(decay_target=0.99, **warmup_steps=50**) + SwiGLU FFN + DropPath(0→0.1) + AdamW betas (0.9, 0.95), **wd=3e-5** + PhysicsAttention temperature init=1.0 + NaN-safe.
+- **Caveat**: combined-stack actual val_avg unmeasured. Both wd=3e-5 and warmup_steps=50 are mechanistically orthogonal to slice-temp and to each other (different mechanisms: L2 shrinkage, EMA cold-start, attention init). Future runs will measure the combined stack.
+
+## 2026-04-28 04:55 — Previous baseline (PR #520, slice-temp init 1.0)
+
+- **Best `val_avg/mae_surf_p`**: 71.6985 (epoch 14)
 - **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **62.5824**
 - **Per-split val MAE for `p`**:
   - val_single_in_dist: 85.482 (−2.77% vs 72.414 reference)
