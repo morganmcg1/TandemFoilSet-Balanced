@@ -1,5 +1,65 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 06:10 — PR #496 (round 2): bf16 mixed precision + fp32 loss accumulator — **MERGE (winner, new baseline)**
+
+- Branch: `charliepai2d5-alphonse/bf16-amp` (refined rerun on top of round-1 bf16 attempt)
+
+### Results
+
+| metric | value | vs PR #464 baseline (73.91 / 70.37) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/24) | **73.29** | **−0.83%** ✓ |
+| `val_single_in_dist/mae_surf_p` | 87.09 | (varied per-split; full breakdown in PR) |
+| `val_geom_camber_rc/mae_surf_p` | 85.04 | — |
+| `val_geom_camber_cruise/mae_surf_p` | 50.89 | — |
+| `val_re_rand/mae_surf_p` | 70.16 | — |
+| `test_avg/mae_surf_p` (3 clean) | **69.49** | **−1.25%** ✓ |
+| Median per-epoch wall (s) | 100.2 | **−24.1%** (real speedup preserved) |
+| Epochs reached in 30-min cap | 18 | +4 vs baseline |
+
+All three clean test splits improved relative to baseline.
+
+### Decision
+
+Merge — seventh orthogonal axis. The refinement (autocast wraps only model forward; `pred` cast back to fp32 before loss accumulator) was exactly the right fix. Stack now: L1 × warmup → cosine × Fourier × sw=30 × grad-clip=0.5 × **bf16 (forward only) + fp32 loss/optimizer**. Config defaults updated: `amp_bf16=True`, `epochs=24`.
+
+### Critical mechanistic finding
+
+The 2.0-point test improvement vs round-1's all-bf16 attempt mapped almost directly onto the splits *furthest from val*: `test_single_in_dist` −3.84, `test_geom_camber_rc` −1.84, `test_re_rand` −0.32. **bf16 mantissa noise in the loss accumulator was acting as an implicit per-step regularizer that hurt OOD-ish generalization more than ID generalization.** Casting `pred` back to fp32 before the masked sums removed that noise without changing model precision.
+
+This finding generalizes: **for any future amp/precision experiment on this stack, accumulate gradients/losses in fp32 even if the forward is in lower precision.** Standard amp pattern, but easy to miss in custom training loops.
+
+Reassigned alphonse to **n_hidden 128 → 160** (PR #589) — capacity bump now tractable with bf16 unlocking 4 extra epochs.
+
+---
+
+## 2026-04-28 06:10 — PR #530: RMSNorm replacing LayerNorm — **CLOSE (parity but not better)**
+
+- Branch: `charliepai2d5-thorfinn/rmsnorm` (closed)
+
+### Results
+
+| metric | value | vs PR #464 baseline (73.91 / 70.37) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 74.19 | +0.4% (worse, ambiguous band) |
+| `val_geom_camber_rc/mae_surf_p` | 85.16 | **−3.2%** (improved) |
+| `val_single_in_dist/mae_surf_p` | 85.70 | **+5.0%** (regressed) |
+| `test_avg/mae_surf_p` (3 clean) | 71.32 | +1.4% (worse) |
+| Median per-epoch wall (s) | 128.5 | −3% (faster, fused F.rms_norm) |
+
+### Decision
+
+Close — parity with LayerNorm but loses by a hair on the avg level. Mixed per-split: RMSNorm wins on `val_geom_camber_rc`, loses on `val_single_in_dist`. Net small regression. LayerNorm's recentering step is doing something small but real (~0.5% val signal).
+
+### Two valuable findings recorded
+
+1. **F.rms_norm fused kernel is 2.3× faster than manual `x * rsqrt(x.pow(2).mean(...))`** (37.4µs manual vs 16.4µs fused) — important detail for future RMSNorm work.
+2. **Median per-epoch wall: 128.5s vs 132.6s baseline (3% faster)** — RMSNorm is genuinely slightly cheaper than LayerNorm with the fused kernel. Free 3% buyback if a future hypothesis needs it.
+
+Reassigned thorfinn to **mlp_ratio 2 → 4** (PR #590) — third capacity hypothesis (alongside fern's n_layers=6 #550 and alphonse's n_hidden=160 #589) testing the underfitting-as-bottleneck story from independent angles (depth, width, MLP-ratio).
+
+
+
 ## 2026-04-28 05:50 — PR #542: bs=8 + lr=1.4e-3 (√2 LR scaling) — **CLOSE (batch-size axis exhausted)**
 
 - Branch: `charliepai2d5-tanjiro/bs8-lr1p4e3` (closed)
