@@ -2,6 +2,26 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 01:20 — PR #341: EMA model weights for val/test (decay 0.999) — **CLOSED**
+- Branch: `willowpai2d5-thorfinn/ema-eval` (deleted; pre-#336, slice_num=64)
+- Hypothesis: EMA(0.999) smooths small-LR cosine tail → 2-6% reduction
+- Result: ema_d999 val_avg = **131.16** (EMA) vs live = 168.04 at epoch 13/13 (timeout); test_avg = 117.90 with thorfinn's defensive guard
+- ema_d9995 val_avg = 166.37 (slower averaging window underperforms in 13-epoch regime)
+- W&B runs: dt2wml3c (d999), qd99j8bx (d9995)
+- EMA val curve strictly monotonic — implementation correct
+- Decision: **closed**. Per thorfinn's own analysis, the 37-MAE EMA-vs-live gap is dominated by EMA absorbing one large live oscillation at epoch 13, not the small-LR cosine tail (which we never reach inside 30-min cap). Combined with branch staleness (slice_num=64 vs current advisor 128), apparent +6 MAE win vs baseline 139.83 sits inside the ±10-15% seed variance band measured on PR #331.
+- Thorfinn's defensive `evaluate_split` y/pred-finite guard duplicates askeladd's #331 and edward's #375 canonical fix; not bringing forward.
+- Thorfinn reassigned to **multi-seed baseline calibration (#428)** — single highest-leverage round-1 task: establish round-1 baseline distribution to inform whether to revert #336.
+
+## 2026-04-28 01:18 — PR #338: LR warmup, post-rebase (slice_num=128 + warmup + lr=5e-4) — **CLOSED**
+- Branch: `willowpai2d5-frieren/lr-warmup-cosine` (deleted; rebased cleanly to advisor — diff was train.py-only)
+- Result on rebased config: val_avg = **143.90** at epoch 10/11 vs baseline #336 (139.83) → **+2.9% worse**
+- Per-split: `val_single_in_dist` -17.82 (improved), but all 3 OOD splits regress (`val_geom_camber_rc` +24.52)
+- W&B run: k75x13rh (group `lr_warmup_cosine`)
+- Decision: **closed** per frieren's own recommendation. Negative result on warmup-at-this-baseline. Slower epochs at slice_num=128 mean the 2-epoch warmup is 18% of the realized 11-epoch budget (vs 14% at slice_num=64 with 14 epochs).
+- **Critical cross-finding from this PR:** Frieren's two-config comparison (slice=128 vs slice=64, same warmup, same lr) shows **slice_num=64 wins by 13.5 MAE / 9.7%**. This is the cleanest direct evidence yet that PR #336 may have been a partial-credit merge — slice_num=128 may convert better with longer wall-clock but loses inside the 30-min cap. Decision pending alphonse's #329 rebased re-run + thorfinn's #428 baseline calibration.
+- Frieren reassigned to budget-aware cosine (T_max matched to realized epoch budget) — PR #427.
+
 ## 2026-04-28 00:58 — PR #331: Wider Transolver (h192, h6) bf16 retry — **CLOSED**
 - Branch: `willowpai2d5-askeladd/wider-h192-h6` (deleted; pre-#336, slice_num=64)
 - Hypothesis: 2.2× wider Transolver lifts `val_avg/mae_surf_p` ~5-10%
