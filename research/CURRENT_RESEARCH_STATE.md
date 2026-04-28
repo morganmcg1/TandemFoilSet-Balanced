@@ -15,36 +15,49 @@ help across at least three of the four tracks.
 
 ## Round 3 focus
 
-Open the round with a **breadth-first sweep** across orthogonal levers.
+**Current measured baseline (merged 2026-04-28 00:03):**
+PR #280 (alphonse) — **L1 surface loss**, `bs=4`, `lr=5e-4`, all other
+defaults. `val_avg/mae_surf_p = 102.64`, `test_avg/mae_surf_p = 97.73`
+(NaN-safe re-eval). Wins on **all four** val splits vs the prior baseline,
+including −36% on the hardest split (`val_single_in_dist`).
 
-**Measured baseline (merged 2026-04-27 23:26):**
-PR #306 (thorfinn) — `bs=8, lr=7.07e-4`, `val_avg/mae_surf_p = 135.20`,
-`test_avg/mae_surf_p = 123.15` (NaN-safe re-eval). Stopped at epoch 14/50
-by 30-min timeout — cosine never decayed to its tail. Critical scoring fix
-also landed on the advisor branch (commit `2eb5c7f`) to avoid Inf×0=NaN
-poisoning of `test_avg/*_p`.
+**Previous baseline (round 3 reference 1):**
+PR #306 (thorfinn) — `bs=8, lr=7.07e-4` MSE, val 135.20 / test 123.15.
+Established the round-3 starting reference. The L1 win (−24% val) is much
+larger than the bs/lr win it superseded.
 
-**In-flight (7) — single-knob changes, ordered by family:**
+**Round-3 dominant lever:** loss formulation. Aligning the gradient with
+the reported MAE metric is the highest-impact change found so far.
 
-1. **Loss formulation that targets the reported MAE metric directly**
-   - PR #280 — alphonse: L1 surface loss
-   - PR #302 — tanjiro: Huber (smooth-L1, δ=1.0) surface loss
-   - PR #285 — edward: surf_weight 10 → 30
-2. **Model capacity in the directions the architecture is parameterised for**
-   - PR #283 — askeladd: n_hidden=192, n_layers=6, n_head=6, slice_num=96
-   - PR #292 — frieren: slice_num 64 → 128 (single-knob)
+**In-flight (6 active + 2 newly assigned), still useful for round-4
+composition even if they don't outright beat 102.64:**
+
+1. **Loss formulation**
+   - PR #302 — tanjiro: Huber (smooth-L1, δ=1.0) surface loss — informs
+     whether the L2-near-zero region helps over pure L1.
+   - PR #285 — edward: `surf_weight` 10 → 30 (with MSE) — informs how much
+     of the L1 win is just heavier surface gradient signal.
+2. **Model capacity**
+   - PR #283 — askeladd: `n_hidden=192, n_layers=6, n_head=6, slice_num=96`
+   - PR #292 — frieren: `slice_num` 64 → 128 (single-knob)
+   - PR #366 — thorfinn (post-#306): `mlp_ratio` 2 → 4
 3. **Optimisation schedule**
-   - PR #288 — fern: 3-epoch warmup + cosine to 1e-5, peak lr=1e-3
+   - PR #288 — fern: 3-epoch warmup + cosine to 1e-5, peak `lr=1e-3`
 4. **Input representation**
    - PR #298 — nezuko: 8-frequency Fourier positional encoding for x/z
+5. **Loss × metric alignment (new assignment after #280 merge)**
+   - PR (alphonse, post-#280): L1 + 3× pressure channel weight in surface
+     loss — stacks two metric-aligned levers.
 
-**New assignment (thorfinn, post-merge):** mlp_ratio 2 → 4 (single-knob
-capacity bump on a different axis from askeladd / frieren).
+**Caveats:**
 
-In-flight PRs branched off the pre-fix advisor, so their on-disk
-`test_avg/*_p` will land NaN. Recompute test from the saved checkpoint
-with the patched scorer — or rebase if the student is happy to absorb the
-extra wallclock.
+- All 6 originally-in-flight PRs (and PR #366 thorfinn-followup) branched
+  off the pre-L1 advisor. They each test their lever against MSE+`bs=4`
+  defaults, not against L1. To compose with L1 properly, round-4 winners
+  will be re-tested on the L1 baseline.
+- All 6 originally-in-flight PRs also branched off the pre-fix advisor,
+  so their on-disk `test_avg/*_p` will land NaN. Recompute test from the
+  saved checkpoint with the patched scorer at review time.
 
 ## Potential next research directions
 

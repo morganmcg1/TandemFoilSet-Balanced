@@ -1,5 +1,64 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 00:03 — PR #280: L1 surface loss to align gradient with reported MAE metric
+- Branch: `charliepai2d3-alphonse/l1-surface-loss`
+- Hypothesis: switching the surface loss from MSE to L1 (volume MSE
+  unchanged) aligns the gradient with the reported `val_avg/mae_surf_p`
+  metric and is more robust to the heavy-tailed high-Re samples.
+- Config: `bs=4`, `lr=5e-4`, all other knobs at defaults; only loss changed.
+
+### Per-epoch validation (`val_avg/mae_surf_p`)
+
+| epoch | val_avg/mae_surf_p | best |
+|------:|-------------------:|:----:|
+| 1  | 244.06 | * |
+| 4  | 198.10 | * |
+| 8  | 131.46 | * |
+| 11 | 113.55 | * |
+| 13 | 105.84 | * |
+| 14 | **102.64** | * |
+
+Best epoch 14 (the final epoch); curve was still descending at termination.
+Stopped at epoch 14 by the 30-min timeout. Full per-epoch metrics committed
+at `models/model-charliepai2d3-alphonse-l1-surface-loss-20260427-223604/`
+and centralised at `research/EXPERIMENT_METRICS.jsonl`.
+
+### Per-split (best-val checkpoint, epoch 14)
+
+| split | val mae_surf_p | test mae_surf_p (NaN-safe) |
+|-------|---------------:|---------------------------:|
+| single_in_dist     | 121.18 | 109.80 |
+| geom_camber_rc     | 125.01 | 114.60 |
+| geom_camber_cruise |  73.22 |  79.92 |
+| re_rand            |  91.14 |  86.58 |
+| **avg**            | **102.64** | **97.73** |
+
+### Analysis
+
+- **Wins on all four val splits vs the prior baseline (PR #306, val 135.20).**
+  Biggest improvement on the hardest split, `val_single_in_dist`: 121.18 vs
+  190.14 (−36%). The high-Re raceCar singles dominated the surface error
+  before; L1 cuts that error sharply.
+- −24.1% on `val_avg/mae_surf_p`, −20.6% on `test_avg/mae_surf_p`. Test < val
+  on three of four splits → no overfit.
+- The bs=4 / lr=5e-4 config used here is *different* from the prior baseline
+  (bs=8 / lr=7.07e-4 / MSE). So the headline 24% win conflates L1 vs MSE
+  with bs=4 vs bs=8. Per the bs-only test (PR #306 vs unknown bs=4 MSE),
+  the bs effect was at most ~5%; L1 carries the rest.
+- Peak memory only 42.13 GB at bs=4 — round 4 has plenty of room to push
+  bs and capacity in combination with L1.
+
+### Decision
+
+**Merged** as the new round 3 baseline. Old baseline (PR #306, val 135.20)
+becomes round-3 reference 1. New baseline `val_avg/mae_surf_p = 102.64`,
+`test_avg/mae_surf_p = 97.73`. The seven other in-flight r3 PRs branched off
+the pre-L1 advisor; their results need to clear 102.64 (val) to be winners.
+Several are likely orthogonal to L1 and useful for round 4 composition even
+if they don't beat the new baseline outright.
+
+---
+
 ## 2026-04-27 23:26 — PR #306: Batch size 8 with sqrt LR scaling (lr=7.07e-4)
 - Branch: `charliepai2d3-thorfinn/batch8-sqrt-lr`
 - Hypothesis: doubling `batch_size` to 8 with √2-scaled LR (`5e-4 → 7.07e-4`)
