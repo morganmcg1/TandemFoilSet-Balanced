@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -432,7 +433,24 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+WARMUP_EPOCHS = 5
+scheduler_warmup = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=1e-5 / cfg.lr,
+    end_factor=1.0,
+    total_iters=WARMUP_EPOCHS,
+)
+scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=max(1, MAX_EPOCHS - WARMUP_EPOCHS),
+    eta_min=1e-5,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[scheduler_warmup, scheduler_cosine],
+    milestones=[WARMUP_EPOCHS],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -462,6 +480,24 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+metrics_jsonl_path = model_dir / "metrics.jsonl"
+
+def _jsonl_append(path: Path, row: dict) -> None:
+    with open(path, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+_jsonl_append(metrics_jsonl_path, {
+    "event": "run_start",
+    "config": asdict(cfg),
+    "model_config": model_config,
+    "n_params": n_params,
+    "max_epochs": MAX_EPOCHS,
+    "warmup_epochs": WARMUP_EPOCHS,
+    "scheduler": "linear_warmup_then_cosine",
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -535,6 +571,15 @@ for epoch in range(MAX_EPOCHS):
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
+    peak_gb_now = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _jsonl_append(metrics_jsonl_path, {
+        "event": "epoch",
+        "epoch": epoch + 1,
+        "epoch_time_s": dt,
+        "peak_gb": peak_gb_now,
+        **log_metrics,
+    })
+
     tag = ""
     if avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
@@ -597,6 +642,14 @@ if best_metrics:
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
+        _jsonl_append(metrics_jsonl_path, {
+            "event": "test",
+            "best_epoch": best_metrics["epoch"],
+            "best_val_avg/mae_surf_p": best_avg_surf_p,
+            "total_train_minutes": total_time,
+            **test_log,
+        })
+
     save_model_artifact(
         run=run,
         model_path=model_path,
@@ -611,5 +664,10 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+    _jsonl_append(metrics_jsonl_path, {
+        "event": "run_end",
+        "best_metrics": None,
+        "total_train_minutes": total_time,
+    })
 
 wandb.finish()
