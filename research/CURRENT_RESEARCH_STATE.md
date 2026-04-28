@@ -30,7 +30,7 @@
 | **edward** | **#750 lr-warmup-cosine** | **v2 WINNER → rebase pending (was 135.89, now 111.12)** | **111.12** |
 | **frieren** | **#756 fourier-re-encoding** | **v2 WINNER → rebase pending (was 141.25, now 120.22)** | **120.22** |
 | nezuko | #759 ema-model-weights | **CLOSED** — EMA wrong-regime at 14-ep budget (val=124.51, +20.7% vs best) | — |
-| fern | #751 dropout-stochastic-depth | In progress (status:wip) | — |
+| fern | #751 dropout-stochastic-depth | v1 mixed (val=138.81, OOD wins but in-dist regress) — **rebase + halve reg pending** | — |
 
 ## Round-2 assignments (active)
 

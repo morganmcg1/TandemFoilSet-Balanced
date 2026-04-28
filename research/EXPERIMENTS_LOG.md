@@ -243,3 +243,28 @@ Thorfinn independently identified the data/scoring.py NaN bug (same root cause a
 - **EMA is correctly motivated for a longer budget.** At ~50 epochs or with a lower LR tail, this hypothesis should be revisited. At current 14-epoch ceiling, EMA is a hindrance.
 - Notable: nezuko independently discovered a NaN-guard variant during implementation — good diagnostic instinct. That NaN-guard is covered by the already-merged PR #807 (torch.where pattern), so no further action needed on that front.
 - **Closed 2026-04-28. Next assignment: #858 focal-surface-loss (gamma=1.0).**
+
+## 2026-04-28 22:05 — PR #751: Dropout 0.1 + stochastic depth (regularization)
+- **Branch:** `willowpai2e3-fern/dropout-stochastic-depth`
+- **Hypothesis:** Add `dropout=0.1` (PhysicsAttention + post-MLP) and linear stochastic depth `0 → 0.1` across the 5 TransolverBlocks. Predicted −3 to −8% with bias toward `geom_camber` OOD splits. Round 1 — pre-#807, pre-#814.
+- **Run:** W&B `w5vmv84w` (v1) and `pv21nz5x` (matched baseline), 14/50 epochs (timeout), peak 43.4 GB.
+
+### Results — v1 vs fern's matched baseline (pre-Huber)
+
+| Split | Baseline `pv21nz5x` (val) | v1 `w5vmv84w` (val) | Δ val | Baseline (test) | v1 (test) | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| `single_in_dist` | **163.29** | 182.97 | **+12.0%** | **137.53** | 159.05 | **+15.6%** |
+| `geom_camber_rc` | 137.79 | **130.92** | **−5.0%** | 129.92 | **119.45** | **−8.0%** |
+| `geom_camber_cruise` | 117.49 | **111.63** | **−5.0%** | 99.89 | **93.99** | **−5.9%** |
+| `re_rand` | **128.30** | 129.72 | +1.1% | **127.65** | 128.90 | +1.0% |
+| **avg** | **136.72** | **138.81** | **+1.5%** | **123.75** | **125.35** | **+1.3%** |
+
+### Decision: SEND BACK FOR REBASE + WEAKEN REGULARIZATION
+- Hypothesis directionally confirmed on the OOD axis: `val_geom_camber_*` improves 5%, `test_geom_camber_*` improves 5.9–8%. That's exactly where regularization should help.
+- But the in-distribution `single_in_dist` track regresses 12–15.6% — `dropout=0.1, drop_path_max=0.1` is too strong for a 5-layer network at 1499-sample scale; stochastic depth dropping whole residual paths destabilizes the easy in-dist fit.
+- vs current best (PR #814 Huber, 103.13): v1 is +34.6% worse — a regression at the absolute level, BUT branch predates both #807 and #814 so the comparison isn't apples-to-apples.
+- **Sent back with feedback to:** (a) rebase onto current advisor (gets Huber baseline); (b) drop the redundant `evaluate_split` y-NaN guard (already covered by #807); (c) halve both regularizers — `dropout=0.05, drop_path_max=0.05`; (d) `--epochs 14` explicit so cosine completes.
+- v2 tests whether mild regularization compounds with Huber surface loss or whether the OOD-generalization signal is already saturated by the loss-shape change (Huber alone got `test_geom_camber_cruise` from 99.89 → 69.84).
+
+### Independent NaN-bug discovery (notable)
+Fern is the **fourth** student to independently identify the `data/scoring.py` NaN-poisoning bug (askeladd PR #807, tanjiro #761 inline guard, nezuko #759 inline guard, fern #751 inline guard). Fern's `evaluate_split` y-finite-per-sample mask uses a different surface (filter samples vs filter elements), but the underlying diagnosis matches. Cleanly handled at the `data/scoring.py` layer in #807 (now merged), so all student inline guards become redundant on rebase.
