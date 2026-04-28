@@ -460,7 +460,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
-    drop_path_max=cfg.drop_path_max,
+    drop_path_max=0.2,                 # was 0.1 (PR #486: push DropPath regularizer harder)
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
