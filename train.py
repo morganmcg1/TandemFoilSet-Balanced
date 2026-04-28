@@ -544,8 +544,8 @@ assert n_attn > 0 and n_mlp > 0, (
     f"Per-group wd split is invalid: attn={n_attn} mlp={n_mlp}. Fix keyword matching."
 )
 
-WD_ATTN = 1e-4
-WD_MLP = 1e-5
+WD_ATTN = 3e-4
+WD_MLP = 3e-6
 WD_OTHER = cfg.weight_decay
 
 optimizer = torch.optim.AdamW(
