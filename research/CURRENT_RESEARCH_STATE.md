@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 02:20 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
+- **Last update:** 2026-04-28 02:30 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
 - **Most recent human-team direction:** N/A — no team issues consulted (isolated replicate; only entrypoint-surfaced PRs in scope).
 - **Current baseline (merged): `val_avg/mae_surf_p = 83.223`, `test_avg/mae_surf_p = 73.904`** (PR #426 EMA(0.99) on SwiGLU baseline).
   - PR #282 — Huber loss (δ=1.0). val_avg = 105.999.
@@ -13,7 +13,7 @@
 
 Compound improvements on the round-1 huber baseline. Recover the paper-facing test metric. Test orthogonal levers (capacity, slice count, optimizer recipe, surface weighting, regularization, EMA, channel weighting) so round-3 can stack winners.
 
-## Outcomes to date (15 reviewed)
+## Outcomes to date (17 reviewed)
 
 | Rank | PR | Student | Slug | best `val_avg/mae_surf_p` | Δ vs 83.223 (current) | Decision |
 |------|----|---------|------|--------------------------:|----------------------:|----------|
@@ -22,7 +22,9 @@ Compound improvements on the round-1 huber baseline. Recover the paper-facing te
 | 3 | #363 | thorfinn | ema-eval | 101.350 | +21.8% | MERGED (intermediate) |
 | 4 | #282 | edward | huber-loss | 105.999 | +27.4% | MERGED (huber baseline) |
 | 4b | #361 | edward | nan-safe-eval | 108.103 (rerun) | n/a — RNG noise | MERGED (metric-pipeline fix) |
-| 5 | #424 | thorfinn | swiglu-head | 90.298 | +8.5% | CLOSED (head SwiGLU lacks residual buffer; OOD splits regress) |
+| 5 | #440 | tanjiro | silu-everywhere | 88.128 | +5.9% | CLOSED (null result; activation choice below noise floor) |
+| 5b | #424 | thorfinn | swiglu-head | 90.298 | +8.5% | CLOSED (head SwiGLU lacks residual buffer; OOD splits regress) |
+| 5c | #425 | frieren | input-noise-001 | 89.984 | +8.1% | CLOSED (per-node noise broke per-sample feature consistency on dims 13–23) |
 | 6 | #370 | askeladd | cosine-tmax-14 | 102.359 | +23.0% | CLOSED (T_max ↔ EMA non-additive) |
 | 7 | #412 | tanjiro | per-channel-heads | 105.580 | +26.9% | CLOSED (capacity-in-head falsified) |
 | 7b | #411 | fern | huber-delta-2 | 107.609 | +29.3% | CLOSED (δ=1 sweet spot) |
@@ -48,26 +50,26 @@ Per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`. Per-experiment JS
 |----|---------|------|-------|------------------------------------|
 | #371 | nezuko | grad-accum-2 | gradient accumulation 2 (effective batch 8) with √2 lr scaling — branched on huber pre-EMA, will be ranked against the EMA(0.99)+SwiGLU baseline (83.223) when it returns | −1% to −4% |
 
-## Round-4 in flight (4 students)
+## Round-4 in flight (2 students)
 
-Built on the merged SwiGLU baseline (88.227); will be ranked against the now-current EMA(0.99)+SwiGLU baseline (83.223) when they return.
+Branched off SwiGLU pre-EMA(0.99); will be ranked against the EMA(0.99)+SwiGLU baseline (83.223) when they return.
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
-| #425 | frieren | input-noise-001 | Input feature noise augmentation (Gaussian noise std=0.01 on fun-features only) | −1% to −3% |
 | #439 | fern | huber-delta-05 | huber `δ=1.0 → 0.5` — closer to L1 in normalized space | −1% to −3% |
-| #440 | tanjiro | silu-everywhere | switch GELU → SiLU in preprocess MLP and `mlp2` output head | −0.5% to −2% |
 | #450 | alphonse | rmsnorm-everywhere | replace `nn.LayerNorm` with `RMSNorm` in all 3 norm sites in `TransolverBlock` | −0.5% to −1.5% |
 
-## Round-5 just-assigned (3 students)
+## Round-5 in flight (5 students)
 
-Built on the merged EMA(0.99)+SwiGLU baseline (83.223). All single-axis tests targeting orthogonal levers.
+Built on the merged EMA(0.99)+SwiGLU baseline (83.223).
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
-| #454 | askeladd | ema-bias-correction | Adam-style EMA bias correction: decay_t = min(0.999, (1+t)/(10+t)) — keeps decay=0.999 asymptotic but ramps from cold start; student's own follow-up #1 from #426 | −1% to −3% |
-| #455 | thorfinn | stochastic-depth-01 | Stochastic depth (DropPath) with linear schedule 0 → 0.1 across 5 blocks; last block always kept. Targets generalization bottleneck on OOD-camber splits (frieren's diagnosis) | −1% to −3% |
-| #456 | edward | layerscale-1e4 | CaiT-style LayerScale: per-branch scalar gates (γ_attn, γ_mlp) initialized to 1e-4, multiplying each residual branch. Targets init-time gradient regime; should give cleaner early-epoch descent | −1% to −2% |
+| #454 | askeladd | ema-bias-correction | Adam-style EMA bias correction: `decay_t = min(0.999, (1+t)/(10+t))` — keeps decay=0.999 asymptotic but ramps from cold start | −1% to −3% |
+| #455 | thorfinn | stochastic-depth-01 | Stochastic depth (DropPath) with linear schedule 0 → 0.1 across 5 blocks | −1% to −3% |
+| #456 | edward | layerscale-1e4 | CaiT-style LayerScale: per-branch scalar gates initialized to 1e-4 | −1% to −2% |
+| #459 | tanjiro | swiglu-preprocess | replace preprocess MLP with `SwiGLU_MLP` (LLaMA-everywhere completion); per-token gating at the input projection | −0.5% to −2% |
+| #460 | frieren | per-sample-feature-noise | semantics-aware noise: per-node on dims 0–12 (positions, saf, dsdf, is_surface) + per-sample broadcast on dims 13–23 (per-sample globals: Re, AoA, NACA, gap, stagger). Direct correction of PR #425's failure mode | −1% to −3% |
 
 ## Disconfirmed directions (do not retry on this branch)
 
@@ -79,6 +81,8 @@ Built on the merged EMA(0.99)+SwiGLU baseline (83.223). All single-axis tests ta
 - **Huber `δ=2.0`** — PR #411 (+21.97% vs SwiGLU). At the high-error early-training regime we're stuck in, δ=2's quadratic region for moderate errors underweights the bulk. δ=1 is the sweet spot above; PR #439 testing whether δ<1 helps further.
 - **SwiGLU output head (`mlp2`)** — PR #424 (+2.35% vs SwiGLU FFN). Head has no residual buffer (unlike per-block FFN which sits inside `+fx`), so SwiGLU's gating non-linearity acts unbuffered and the 3× param count amplifies non-generalizing directions. Direction not dead at residual-SwiGLU-head, but that's a future fix.
 - **Fourier embedding of `log(Re)` standalone** — PRs #386 (bands=8, +23.7% vs SwiGLU) and #418 (bands=4, +16.6% vs SwiGLU). Real signal on `val_single_in_dist` (smooth low-freq Re-trend), but doesn't beat the SwiGLU lever. FiLM-style Re conditioning is a queued alternative.
+- **Activation choice (GELU vs SiLU)** — PR #440 (null result, −0.11% on val within noise; +1.06% on test). Below the noise floor at this scale (0.67M params, 1499 train samples). Don't sweep activation again unless model size doubles.
+- **Per-node Gaussian feature noise (uniform across all 24 dims)** — PR #425 (+1.76% vs SwiGLU; +8.1% vs current). Falsified because dims 13–23 are per-sample-constant globals (Re, AoA, NACA, gap, stagger) — per-node noise destroyed (geometry, flow conditions) → field map. **Semantics-aware version queued as PR #460.**
 
 ## Test-metric NaN (cross-PR issue)
 
