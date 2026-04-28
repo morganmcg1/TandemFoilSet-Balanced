@@ -434,7 +434,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 _wandb_mode = os.environ.get("WANDB_MODE")
 if _wandb_mode is None and not (os.environ.get("WANDB_API_KEY") or Path.home().joinpath(".netrc").exists()):
