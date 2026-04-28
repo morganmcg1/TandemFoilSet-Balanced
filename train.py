@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -375,7 +376,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -432,7 +433,15 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+warmup_epochs = 5
+def lr_lambda(epoch):
+    if epoch < warmup_epochs:
+        return (epoch + 1) / warmup_epochs
+    progress = (epoch - warmup_epochs) / max(1, MAX_EPOCHS - warmup_epochs)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
