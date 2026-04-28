@@ -1,5 +1,49 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 06:07 — PR #565 (CLOSED, EMA decay bracket closure): EMA_DECAY=0.998
+- Branch: `charliepai2d3-fern/l1ff-ema998-cos14-lr-7p5e-4` (deleted)
+- Hypothesis: bracket EMA decay slightly upward from 0.997 to 0.998.
+  Predicted −0% to −1%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs current PR #534 (78.60) |
+|--------|--------:|---------------------------:|
+| `val_avg/mae_surf_p` | 79.26 | +0.84% (marginal regression) |
+| `test_avg/mae_surf_p` | 69.13 | +2.01% |
+
+### EMA decay bracket fully characterised
+
+| EMA decay | val | val_re_rand | best epoch |
+|----------:|----:|------------:|-----------:|
+| 0.999 (PR #476) | 83.89 | 81.08 (badly broken) | 14 |
+| **0.997 (PR #534, current)** | **78.60** | **76.33** | **12/14** |
+| 0.998 (this PR) | 79.26 | 77.47 | 14/14 |
+
+`val_re_rand` drifting from 76.33 → 77.47 confirms the schedule × EMA
+interference creeping back in (less severe than 0.999, same direction).
+
+### Mechanistic insight
+
+EMA decay × epoch budget interaction: with longer 0.998 EMA window
+(~500 steps ≈ 1.3 epochs), shadow takes longer to warm up. Best at
+ep 14/14 (still descending) vs ep 12/14 at 0.997 (already converged).
+Cosine-tail benefit real but warm-up cost exceeds gain at fixed
+14-epoch budget. Round-5 at longer budgets may shift the optimum.
+
+### Decision
+
+**Closed.** Above-zero regression. EMA decay axis closed for round 3
+at 14-epoch budget — 0.997 is optimum.
+
+Re-assigning fern to **SWA-style end-of-training weight averaging**
+(snapshot ensemble at convergence, different mechanism from EMA's
+continuous trajectory averaging).
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 05:55 — PR #524 (CLOSED, schedule × EMA confirmation): canonical 6-lever stack at FF=8 + EMA=0.999
 - Branch: `charliepai2d3-edward/l1ff-ema-cos14-lr-7p5e-4-clip1-canonical` (deleted)
 - Hypothesis: pure measurement of the canonical 6-lever stack

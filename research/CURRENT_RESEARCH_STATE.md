@@ -155,13 +155,14 @@ composition even if they don't outright beat 102.64:**
    re-tested on the new advisor:
    - PR #383 — alphonse: L1 + 3× pressure channel weight in surface loss
      *(loss focus)* — branched off L1-only.
-   - PR (frieren, new): L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **n_head=8** — different attention compute structure than slice
-     tokens; tests attention parallelism axis.
-   - PR (edward, new): **BF16 autocast** — round-5 throughput
-     infrastructure to unlock currently-wallclock-blocked levers
-     (DropPath, slice_num=128, larger models). Code change ~5-10
-     lines (autocast wrap around forward pass).
+   - PR #583 — frieren: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **n_head=8** — different attention compute structure.
+   - PR #587 — edward: **BF16 autocast** (round-5 throughput infra).
+   - PR (fern, new): **SWA-style end-of-training weight averaging** —
+     average model weights from last 4 epochs (11-14) for test eval;
+     snapshot-ensemble mechanism distinct from EMA's continuous
+     averaging. Tests whether converged-weight averaging extracts
+     additional signal beyond EMA(0.997).
    - PR (fern, new): L1+FF12+EMA(0.998) + `--epochs 14` + `lr=7.5e-4`
      — bracket EMA decay slightly upward from 0.997 (window ~500 steps
      vs 333) toward the cosine tail.
