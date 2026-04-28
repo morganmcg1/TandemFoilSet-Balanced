@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -418,7 +419,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=256,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -462,6 +463,32 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+metrics_dir = Path("metrics")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+metrics_basename = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "run")
+metrics_path = metrics_dir / f"{metrics_basename}-{run.id}.jsonl"
+
+
+def _jsonl_append(record: dict) -> None:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps(record, default=float) + "\n")
+
+
+_jsonl_append({
+    "event": "config",
+    "agent": cfg.agent,
+    "wandb_name": cfg.wandb_name,
+    "wandb_run_id": run.id,
+    "git_commit": _git_commit_short(),
+    "n_params": n_params,
+    "model_config": model_config,
+    "config": asdict(cfg),
+    "max_epochs": MAX_EPOCHS,
+    "max_timeout_min": MAX_TIMEOUT_MIN,
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -555,6 +582,21 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    epoch_record = {
+        "event": "epoch",
+        "epoch": epoch + 1,
+        "global_step": global_step,
+        "lr": scheduler.get_last_lr()[0],
+        "epoch_time_s": dt,
+        "peak_gb": peak_gb,
+        "train": {"vol_loss": epoch_vol, "surf_loss": epoch_surf},
+        "val_avg": dict(val_avg),
+        "val_loss_mean": val_loss_mean,
+        "per_split": {name: dict(m) for name, m in split_metrics.items()},
+        "is_best": (avg_surf_p == best_avg_surf_p),
+    }
+    _jsonl_append(epoch_record)
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -564,6 +606,13 @@ if best_metrics:
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "total_train_minutes": total_time,
+    })
+    _jsonl_append({
+        "event": "best_summary",
+        "best_epoch": best_metrics["epoch"],
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_per_split": {name: dict(m) for name, m in best_metrics["per_split"].items()},
         "total_train_minutes": total_time,
     })
 
@@ -596,6 +645,11 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _jsonl_append({
+            "event": "test",
+            "test_avg": dict(test_avg),
+            "per_split": {name: dict(m) for name, m in test_metrics.items()},
+        })
 
     save_model_artifact(
         run=run,
@@ -611,5 +665,7 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+    _jsonl_append({"event": "no_checkpoint", "total_train_minutes": total_time})
 
 wandb.finish()
+print(f"\nWrote JSONL metrics to {metrics_path}")
