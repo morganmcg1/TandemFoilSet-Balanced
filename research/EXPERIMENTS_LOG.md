@@ -119,6 +119,35 @@
 - **Conflict:** branch predates PR #807; needs rebase. Sent back to rebase + re-run with same config (`--epochs 14`) to verify gain holds + pick up clean `test_avg`.
 - Notable: edward's parallel PR #750 v2 (lr-warmup-cosine) hits val_avg=111.12 — a *better* winner via LR schedule changes. The two are mechanism-orthogonal; both can compound. If edward's PR merges first, frieren's encoding contribution is measured on top of edward's optimizer fix.
 
+## 2026-04-28 21:09 — PR #761: L1 (MAE) surface loss aligned with metric
+- **Branch:** `willowpai2e3-tanjiro/l1-surface-mae-loss`
+- **Hypothesis:** Replace surface MSE with L1 (MAE) loss to align training objective directly with the `mae_surf_p` ranking metric and provide robustness to the heavy-tailed pressure distribution. Predicted -5 to -12% gain.
+- **Run:** W&B `ee9p55qd`, 14/50 epochs (timeout), best ckpt @ epoch 13, peak 42.1 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 149.36 | 128.91 |
+| `*_geom_camber_rc` | 107.87 | 100.02 |
+| `*_geom_camber_cruise` | 82.64 | **70.62** |
+| `*_re_rand` | **98.25** | **94.20** |
+| **avg** | **109.53** | **98.44** |
+
+### Decision: WINNER — but SEND BACK FOR REBASE (2026-04-28)
+- **−10.3% vs founding baseline (122.15 → 109.53)** — well outside round-1 noise band.
+- **Best winner on the branch**: ahead of edward (111.12) and frieren (120.22).
+- **First clean test_avg** beating founding baseline (130.90 → 98.44, −24.6%) — tanjiro bundled their own sample-level NaN-guard which works equivalently to #807.
+- Hypothesis directly confirmed: L1 metric-alignment + pressure-tail robustness. `val_re_rand=98.25` and `test_re_rand=94.20` are exceptional per-split numbers.
+- val curve still improving at epoch 13 (epoch 14 worsened so checkpoint at 13). Suggests headroom on a longer/better-tuned schedule.
+- Bundled NaN-guard in `evaluate_split` is redundant with #807's torch.where (and should be dropped on rebase).
+- **Conflict:** branch predates #807; touched same loss-computation lines. Sent back to rebase + re-run with `--epochs 14` (cosine T_max alignment, like edward/frieren).
+- Once rebased run lands at val_avg ≤ ~115, merge immediately. This is the single biggest gain on the branch.
+
+### Queued follow-ups (post-merge)
+1. surf_weight=3.0 — student's own diagnosis: L1 surface gradient currently dominates 10:1 vs vol_loss. Rebalancing should free volume capacity.
+2. L1 on p only, MSE on Ux/Uy — pressure-tail alignment without changing dynamics for the better-behaved velocity channels. Possibly stacks with alphonse's channel-weighted-3xp.
+
+---
+
 ## 2026-04-28 20:08 — PR #807 (MERGED): Bug fix — NaN-safe masked accumulation
 - **Branch:** `willowpai2e3-askeladd/scoring-nan-mask-fix`
 - **Type:** Infrastructure bug fix (not a hypothesis experiment)
