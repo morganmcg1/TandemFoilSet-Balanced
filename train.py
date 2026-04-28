@@ -443,6 +443,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    huber_delta: float = 1.0  # surface-loss Huber threshold (normalized space)
     epochs: int = 50
     n_layers: int = 5
     use_ema: bool = True
@@ -560,6 +561,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    epoch_surf_outlier_frac_sum = 0.0
+    epoch_surf_outlier_n = 0
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -570,11 +573,23 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
+        abs_err = (pred - y_norm).abs()
+        # delta <= 0 degenerates to pure L1 (the standard Huber formula's
+        # linear branch evaluates to 0 there, which would zero the surface
+        # loss entirely).
+        if cfg.huber_delta > 0:
+            huber = torch.where(
+                abs_err < cfg.huber_delta,
+                0.5 * sq_err,
+                cfg.huber_delta * (abs_err - 0.5 * cfg.huber_delta),
+            )
+        else:
+            huber = abs_err
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -583,14 +598,24 @@ for epoch in range(MAX_EPOCHS):
         if ema is not None:
             ema.update(model)
         global_step += 1
+
+        with torch.no_grad():
+            surf_mask_3 = surf_mask.unsqueeze(-1)
+            n_surf_elem = (surf_mask_3.sum() * 3).clamp(min=1)
+            outlier_frac = (
+                ((abs_err >= cfg.huber_delta) & surf_mask_3).sum().float() / n_surf_elem
+            ).item()
         wandb.log({
             "train/loss": loss.item(),
+            "train/surf_huber_outlier_frac": outlier_frac,
             "lr": optimizer.param_groups[0]["lr"],
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_outlier_frac_sum += outlier_frac
+        epoch_surf_outlier_n += 1
         n_batches += 1
 
     scheduler.step()
@@ -616,9 +641,15 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    epoch_outlier_frac = (
+        epoch_surf_outlier_frac_sum / epoch_surf_outlier_n
+        if epoch_surf_outlier_n
+        else 0.0
+    )
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/epoch_surf_huber_outlier_frac": epoch_outlier_frac,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
