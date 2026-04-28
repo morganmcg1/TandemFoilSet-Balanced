@@ -244,6 +244,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                                 enabled=torch.cuda.is_available()):
                 pred = model({"x": x_norm})["preds"]
             sq_err = (pred.float() - y_norm) ** 2
+            abs_err = (pred.float() - y_norm).abs()
+            delta = 1.0
+            huber_err = torch.where(
+                abs_err <= delta, 0.5 * sq_err, delta * (abs_err - 0.5 * delta)
+            )
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -251,7 +256,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (huber_err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -500,11 +505,16 @@ for epoch in range(MAX_EPOCHS):
             pred = model({"x": x_norm})["preds"]
         # Cast to fp32 before squaring — (bf16)**2 near 1e3 can overflow.
         sq_err = (pred.float() - y_norm) ** 2
+        abs_err = (pred.float() - y_norm).abs()
+        delta = 1.0
+        huber_err = torch.where(
+            abs_err <= delta, 0.5 * sq_err, delta * (abs_err - 0.5 * delta)
+        )
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
