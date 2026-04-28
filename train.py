@@ -456,11 +456,11 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-ema = WeightEMA(model, decay=0.999)
+ema = WeightEMA(model, decay=0.99)   # was 0.999 - shorter half-life (~0.2 epochs vs ~1.85 epochs)
 n_params = sum(p.numel() for p in model.parameters())
 swiglu_inter = model.blocks[0].mlp.intermediate
 print(
-    f"Model: Transolver ({n_params/1e6:.2f}M params) + EMA(decay=0.999) "
+    f"Model: Transolver ({n_params/1e6:.2f}M params) + EMA(decay=0.99) "
     f"[SwiGLU MLP intermediate={swiglu_inter}]"
 )
 
