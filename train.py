@@ -409,6 +409,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    feature_noise_std: float = 0.01  # train-time Gaussian noise std on normalized fun-features
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -503,6 +504,11 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if cfg.feature_noise_std > 0.0:
+            # Noise only on the function-feature channels (dims 2..23). Keep positions clean.
+            noise = torch.randn_like(x_norm)
+            noise[..., :2] = 0.0
+            x_norm = x_norm + cfg.feature_noise_std * noise
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         err = F.huber_loss(pred, y_norm, delta=1.0, reduction='none')
