@@ -1,10 +1,10 @@
 # SENPAI Research State
-- 2026-04-28 03:50 — round 1.5 active; **seven big wins merged** (5 variance-reduction + 1 architectural + **1 optimizer-family**): #356 (EMA, −3.1 %), #374 (grad-clip(1.0), −14.45 %), #402 (grad-clip(0.5), −2.07 %), #408 (lr=1e-3, −2.59 %), #417 (EMA(0.99), −8.69 %), #398 (SwiGLU, −9.36 %), **#430 (Lion, −24.19 %)**
+- 2026-04-28 04:40 — round 1.5 active; **eight big wins merged** (5 variance-reduction + 1 architectural + 1 optimizer-family + **1 loss-form**): #356, #374, #402, #408, #417, #398, #430, **#352 (SmoothL1, −5.28 %)**
 - Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four val splits); ranking final metric is `test_avg/mae_surf_p`
 
-## Current best (post-PR-#430)
-- **`val_avg/mae_surf_p` = 67.737** (EMA, ep12/50 timeout-cut)
-- **`test_avg/mae_surf_p` = 59.447**
+## Current best (post-PR-#352)
+- **`val_avg/mae_surf_p` = 64.1585** (EMA, ep12/50 timeout-cut)
+- **`test_avg/mae_surf_p` = 55.9296**
 - See `BASELINE.md` for the full per-split breakdown.
 - **Pending winners** (both rebasing onto post-#374):
   - **PR #352 (smoothl1-surface)**: raw run measured val=105.56, test=95.39 (−20.2 % / −19.2 % vs prior #356). Projected post-rebase: val ≈ 90, test ≈ 80 if SmoothL1 composes with EMA + grad-clip.
@@ -21,7 +21,7 @@
 |----|---------|------|-------|--------|
 | #350 | alphonse  | bigger-transolver-bf16   | Architecture (n_hidden 128→256, n_head 4→8) + bf16 | wip |
 | ~~#351~~ | ~~askeladd~~  | ~~surf-weight-50~~           | ~~Loss balance (10→50)~~ | **CLOSED 04-28 01:02**: re-run on post-#356 base gave val=131.02 (−0.95 % vs #356 / +15.8 % vs current #374), test=117.90 (−0.12 % vs #356 / +18.7 % vs #374). Within-noise gain on rebased baseline; grad-clip merged after rebase started. EMA absorbs most of the surface-signal gain. Reassigned to #417. |
-| #352 | edward    | smoothl1-surface         | Loss form (SmoothL1 β=1 on surface) | **Re-run on #417 base** delivered val=82.5432 (−16.27 % vs #417). **Sent back 03:48 for rebase #2** onto post-#430 — Lion merged before results posted. Open question: does SmoothL1 still help under Lion's sign-update? Honest band −1 % to +2 %. |
+| #352 | edward    | smoothl1-surface         | Loss form (SmoothL1 β=1 on surface) | **MERGED 04:33** as new baseline (val=64.158 / test=55.930; **−5.28 % / −5.92 % vs #430**). SmoothL1 survives Lion. PER-SPLIT GAIN REDISTRIBUTED: cruise/re_rand benefit most under Lion (sign-update absorbs high-Re tail). |
 | ~~#353~~ | ~~fern~~      | ~~warmup-cosine-1e3~~        | ~~LR schedule (5-ep warmup + cosine to 1e-5, peak 1e-3)~~ | **CLOSED 04-28 00:52**: pre-EMA/pre-grad-clip base; val=139.91 raw, +2.5% vs #356 raw best, +14.7% vs #374 raw. Schedule was degenerate (cosine T_max=50, only 7 decay epochs, LR barely fell). Peak lr=1e-3 trained stably but val oscillated — exactly the noise grad-clip damps. Reassigned to #408. |
 | ~~#354~~ | ~~frieren~~   | ~~slice-128-heads-8~~        | ~~Slice/head count (slice 64→128, n_head 4→8)~~ | **CLOSED 23:51**: val=156.48 (+18%), test=144.10 (+22%); throughput-bound (250 s/ep, 8/50 epochs) |
 | ~~#355~~ | ~~nezuko~~    | ~~mlp-ratio-4~~              | ~~MLP capacity (mlp_ratio 2→4)~~ | **CLOSED 04-28 00:30**: re-run on EMA baseline gave val=132.96 (+0.52 %), test=118.09 (+0.04 %) — wash. Real raw-vs-raw gain (−5.2 %) hidden by EMA at 12-ep budget. In-dist −2.7 % vs OOD +0.3 % to +2.1 % suggests capacity → in-dist memorization. Reassigned to #398 SwiGLU at matched params. |
@@ -49,9 +49,11 @@
 | ~~#475~~ | ~~nezuko~~ | ~~swiglu-inner-256~~ | ~~`swiglu_inner = 168 → 256` on merged #398 baseline~~ | **CLOSED 04-28 04:00**: val +5.08 % vs #398, **+38.6 % vs current #430**. Mechanism: training-budget starvation, not OOD-overfit. SwiGLU's gating-fixes-OOD is at matched-param count, not capacity-on-top. Reassigned to #514 (192). |
 | ~~#483~~ | ~~frieren~~ | ~~swiglu-mlp-dropout-0p1~~ | ~~Add `nn.Dropout(0.1)` inside `SwiGLUMLP.forward`~~ | **CLOSED 04-28 04:00**: +3.97 % val vs #398, **+37.18 % vs current #430**. Clean ep9 crossover (helps eps 1-8, hurts 10+). geom_camber_rc only split that improved (-0.5%). Reassigned to #513 (p=0.05). |
 | #491 | fern | tf32-matmul-precision | `torch.set_float32_matmul_precision('high')` on merged #398 baseline | **Throughput delivery confirmed −13 % per-epoch (130.83 s/ep, 14 epochs in 30 min). Sent back 04:00 for rebase** onto post-#430 — Lion baseline moved to val=67.737. Predicted post-rebase: val ~63–66, test ~55–58. |
-| #507 | tanjiro | lion-lr-3p3e-4 | `lr_lion = 1.7e-4 → 3.3e-4` on merged #430 baseline | Tanjiro's own follow-up #1; Lion's lr was sized for old AdamW recipe (5e-4). Current AdamW=1e-3 → Lion equivalent 3.3e-4. Single-knob continuation. |
+| ~~#507~~ | ~~tanjiro~~ | ~~lion-lr-3p3e-4~~ | ~~`lr_lion = 1.7e-4 → 3.3e-4` on merged #430 baseline~~ | **CLOSED 04-28 04:35**: val +8.45 % / test +6.10 % vs #430 (+14.5 % / +12.8 % vs current #352). Lose mechanism: raw floor rises faster than EMA can smooth at higher Lion lr. Bracket: 1.7e-4 in basin, 3.3e-4 past it. Reassigned to #536. |
 | #513 | frieren | swiglu-mlp-dropout-0p05 | Dropout p=0.1 → 0.05 in `SwiGLUMLP.forward` on merged #430 baseline | Replaces closed #483; narrows the dropout bracket. Predicted band −1 % to +1 %. |
 | #514 | nezuko | swiglu-inner-192 | `swiglu_inner = 168 → 192` (+14 % MLP / +7 % total) on merged #430 baseline | Replaces closed #475; narrows the SwiGLU capacity bracket. Tests whether *any* upward bump from 168 wins at this budget. |
+| #535 | edward | smoothl1-beta-0p5 | SmoothL1 β=1.0 → 0.5 on merged #352 baseline | Edward's own follow-up #1; β-sweep narrowing. Honest band −2 % to +2 %. |
+| #536 | tanjiro | lion-lr-2p5e-4 | Lion `lr=1.7e-4 → 2.5e-4` on merged #352 baseline | Tanjiro's bracket-narrowing midpoint. Honest band −2 % to +3 %. |
 
 ## Updated picture from round-1 returns
 - **#356 (EMA) merged** at val=132.276 (−3.1 % vs same-run best raw).

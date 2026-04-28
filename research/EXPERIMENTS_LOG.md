@@ -947,3 +947,51 @@ Beats every val and test split by ≥21 %; `geom_camber_cruise` jumps −31.0 % 
 |----|---------|------|-------|-----|
 | #513 | frieren | swiglu-mlp-dropout-0p05 | Dropout p=0.1 → 0.05 in `SwiGLUMLP.forward` on merged #430 baseline | Replaces closed #483; frieren's own follow-up #1. Narrows the dropout bracket — at p=0.05 the late-epoch noise penalty shrinks but the under-fit-regularization signal also shrinks. Predicted band −1 % to +1 %. |
 | #514 | nezuko | swiglu-inner-192 | `swiglu_inner = 168 → 192` (+14 % MLP / +7 % total) on merged #430 baseline | Replaces closed #475; nezuko's own follow-up #1. Smaller capacity bump than 256; tests whether *any* upward bump wins at this budget. |
+
+## 2026-04-28 04:33 — PR #352 (REBASED ONTO LION): SmoothL1 surface (charliepai2d1-edward) — **MERGED, new baseline**
+- Branch: `charliepai2d1-edward/smoothl1-surface` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `cb356ed`).
+- Hypothesis (rebased re-run): SmoothL1 (Huber β=1.0) on surface loss with Lion + SwiGLU(168) + EMA(0.99) + grad-clip(0.5).
+
+### Headline metrics (best EMA epoch=12/50, timeout-cut)
+| metric | this run | prior baseline #430 | Δ abs | Δ % |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **64.158** | 67.737 | −3.579 | **−5.28 %** |
+| `test_avg/mae_surf_p` | **55.930** | 59.447 | −3.517 | **−5.92 %** |
+
+Past merge gate cleanly. **Predicted band was −1 % to +2 %** (uncertain due to Lion's sign-update potentially subsuming SmoothL1's gradient-shaping). Actual −5.28 % beats the high end of the band by 3 pts.
+
+### Per-split — gain redistribution under Lion
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| single_in_dist | **−1.80 %** | **+1.05 %** |
+| geom_camber_rc | −7.29 % | −7.89 % |
+| geom_camber_cruise | **−8.44 %** | **−11.44 %** |
+| re_rand | −4.72 % | −7.97 % |
+
+**Mechanism shift**: under AdamW (post-#417 base), SmoothL1 helped `single_in_dist` most (−23.80 % val, the high-Re tail story). Under Lion, single_in_dist barely moves (the smallest val gainer); cruise becomes biggest beneficiary. **Lion's sign-update has already absorbed the high-Re-tail benefit** (per-param step is invariant to gradient magnitude). What's left is the camber-OOD generalization improvement, propagating through the *momentum buffer's sign trajectory* differently than MSE does. Clean second-order mechanism for the appendix.
+
+### Decision: merge as new round-1.5 baseline
+- Beats baseline on val (−5.28 %) and test (−5.92 %), no per-split val regression, only one tiny test regression (+1.05 % on single).
+- Mechanism story is durable and well-documented.
+- BASELINE.md updated; edward reassigned to **PR #535 (smoothl1-beta-0p5)** as the natural β-sweep continuation.
+
+## 2026-04-28 04:35 — PR #507: Lion lr 1.7e-4 → 3.3e-4 (charliepai2d1-tanjiro) — **CLOSED (regression)**
+- val=73.456 (+8.45 % vs #430), test=63.076 (+6.10 %). Vs current post-#352: val +14.5 %, test +12.8 %.
+- Predicted band was −2 % to −6 % (lose case identified honestly in PR body); actual was lose case.
+
+### Mechanism (tanjiro's writeup)
+- **Lion's basin is narrower than the AdamW-equivalent heuristic suggests.** `lr_lion = lr_adamw / 3` was based on AdamW lr=5e-4; at current AdamW=1e-3 the equivalent 3.3e-4 is past Lion's actual basin.
+- **Mean pre-clip grad-norm dropped −34 %** (29.65 vs 45.07) — Lion finds flatter regions even faster at higher lr, but the parameter trajectory lands in a worse basin.
+- **Lose mechanism**: raw floor rises faster than EMA can smooth. Spread widened (mean −18.5 vs #430's −15.7) — EMA does more variance-reduction work but can't overcome the higher iterate floor.
+- **No first-2-epoch divergence** at lr=3.3e-4 — Lion's bounded sign-update is robust across this lr range; what fails is *target quality*, not stability.
+
+### Decision: close, reassign to lion-lr-2p5e-4
+- Clear >5 % regression. Per CLAUDE.md close criteria.
+- Reassigned to **PR #536 (lion-lr-2p5e-4)** — bracket-narrowing midpoint between basin (1.7e-4) and lose (3.3e-4). Tests Lion's basin upper edge.
+
+## 2026-04-28 04:40 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #535 | edward | smoothl1-beta-0p5 | SmoothL1 β=1.0 → 0.5 on merged #352 baseline | Edward's own follow-up #1; β-sweep narrowing. Tests whether smaller β (more L1-regime fraction) amplifies the per-split gain pattern. |
+| #536 | tanjiro | lion-lr-2p5e-4 | `lr_lion = 1.7e-4 → 2.5e-4` on merged #352 baseline | Tanjiro's bracket-narrowing follow-up; midpoint between basin and lose. Tests Lion's basin upper edge. |
