@@ -19,13 +19,13 @@
 | PR | Student | Theme | Hypothesis |
 |---|---|---|---|
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
-| **#689** | **nezuko** | **Stability hyperparam (low-side bracket)** | **EMA decay=0.998 probe** — completes the bracket below 0.999. Tests if tighter decay trades variance reduction for sharper late-fit (rc-camber-targeted). |
+| **#717** | **nezuko** | **Operational variance characterization** | **Multi-seed of new wd=3e-4 baseline** — operational seed-variance characterization on the new canonical reference (51.42). Two seeds; result is the analysis. |
 | **#692** | **tanjiro** | **Operational / variance characterization** | **Multi-seed baseline confirmation** — 2 fresh seeds of canonical recipe to characterize seed variance precisely. Useful for paper-facing recipe documentation and interpreting future close calls. |
 | **#713** | **edward** | **Optimization tuning** | **weight_decay=1e-3 single probe** — completes wd bracket above 3e-4. Best epoch was still 36/50 at wd=3e-4 (no plateau), suggesting potential headroom; rc-camber +2.28% is the warning sign. |
 | **#678** | **thorfinn** | **Feature engineering (rc-targeted)** | **AoA × NACA-M interaction features** for tandem wake-coupling — followup #4 from PR #644 closing. Pivots from "camber dimension itself" to "AoA × camber interaction" which captures wake-structure for tandem foils. |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#645** | **alphonse** | **Optimizer hyperparam** | **AdamW beta1=0.95 probe** (default 0.9 since round 1; entire optimization landscape has shifted). Single-line change; lock-it-down experiment. |
-| #591 v2 | fern | Sampling | **Linear-Re sent back to rebase onto EMA+NaN-cleanup stack.** v1 on PR #531 base: val_avg=52.68 (-2.61%) with 2-seed replication ≤0.05%. Mechanism orthogonal to EMA; predicted post-rebase val 50-51. |
+| **#718** | **fern** | **Loss-side Re-emphasis (novel)** | **Per-sample Re-weighted loss** — followup #2 from PR #531 closing; orthogonal-to-sampler test. Tests whether EMA absorption applies to all Re-emphasis mechanisms or just sampler-side. |
 
 ## Reviewed (round 1+)
 

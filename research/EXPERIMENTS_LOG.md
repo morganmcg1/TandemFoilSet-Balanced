@@ -1,5 +1,111 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 10:18 — PR #689 (closed): EMA decay=0.998 single probe (low-side bracket)
+
+- branch: `willowpai2d1-nezuko/ema-decay-998-probe` (deleted on close)
+- hypothesis: tighter decay trades variance reduction for sharper late-fit;
+  predicted to help rc-camber. Two-way prediction.
+
+### Results
+
+| Metric | Value | vs PR #634 baseline |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | 52.58 | **+1.70%** |
+| `test_avg/mae_surf_p` | 44.46 | +1.01% |
+| W&B run | `jbn51day` | |
+
+### Per-split signature confirms variance-reduction mechanism
+
+| Split | Δ |
+|---|---|
+| val_single_in_dist | −0.05% (neutral) |
+| val_geom_camber_rc | **+2.29%** (regression) |
+| val_geom_camber_cruise | **+2.66%** (regression) |
+| val_re_rand | −0.93% (neutral) |
+
+**Hypothesis prediction was wrong**: tighter decay was supposed to help
+rc-camber via sharper late-fit. Reality: rc-camber + cruise (camber
+splits) regressed most under tighter decay, just like under longer
+decay (PR #666). **Camber generalization needs EMA's variance reduction,
+not late-fit sharpness.**
+
+### EMA decay bracket complete
+
+| decay | val_avg vs canonical 52.12 | mechanism |
+|---|---|---|
+| 0.9999 | +148% | catastrophic warmup |
+| 0.9995 | +6.6% | late-fit dilution |
+| **0.999** | **0% (locally optimal)** | sweet spot |
+| 0.998 | +0.89% | variance-reduction loss |
+
+Symmetric U-shape with minimum at 0.999. **EMA decay tuning fully settled.**
+
+### Useful round-3 finding
+
+**Camber splits care most about EMA's variance-reduction signal of all 4 splits.** Both decay extremes (0.9995 and 0.998) regressed camber most. The EMA mechanism is doing camber-specific generalization work that the rest of the stack can't substitute for.
+
+### Analysis & conclusions
+
+- **Closed.** decay=0.999 confirmed locally optimal; bracket complete.
+- Reassigned nezuko to **multi-seed of new wd=3e-4 baseline (#717)** —
+  operational characterization of seed variance on the new canonical
+  reference (paper-facing).
+
+## 2026-04-28 10:18 — PR #591 v2 (closed): linear-Re rebased onto EMA stack
+
+- branch: `willowpai2d1-fern/linear-re-sampling-bracket` (deleted on close)
+- hypothesis: linear-Re's −2.6% on sqrt baseline transfers at 70-90%
+  efficiency through EMA. Predicted post-rebase 50-51 range.
+
+### Results
+
+| Metric | Value | vs PR #634 baseline |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | 52.31 | **+1.17%** |
+| `test_avg/mae_surf_p` | 44.74 | +1.64% |
+| Transfer efficiency | **−45%** (sign-flipped!) | severe overlap |
+| W&B run | `t97y5tb5` | |
+
+### Sign-flip analysis (the keeper)
+
+| Split | v1 Δ (sqrt#531 → linear, no EMA) | v2 Δ (sqrt#634 → linear, on EMA) | Sign |
+|---|---|---|---|
+| val_re_rand | **−3.82%** (biggest winner) | **+2.72%** (biggest regressor) | **flipped** |
+| val_single_in_dist | −2.90% | −1.40% | preserved (smaller) |
+| val_geom_camber_rc | −2.10% | +2.44% | **flipped** |
+| val_geom_camber_cruise | −1.21% | +0.39% | flipped (small) |
+
+**val_re_rand is the diagnostic split** — Re-stratified holdout maximally
+overlaps with EMA's variance-reduction-via-trajectory-averaging.
+
+### Mechanism (the keeper)
+
+**EMA + linear-Re mechanisms substantially overlap, not orthogonal.**
+EMA's trajectory averaging already integrates over many minibatches,
+providing implicit reweighting toward stable solutions. Aggressive
+sampler-side reweighting on top over-corrects; the most-mixed-Re split
+(re_rand) shows the cleanest absorption signature.
+
+### Round-3 saturation pattern (third instance)
+
+| PR | "Orthogonal" intervention | Mechanism overlap with stack |
+|---|---|---|
+| #313 v2 / #451 | pressure-channel weighting | absorbed by bf16's high-Re-pressure handling |
+| #570 v2 | sw=8 | absorbed by per-Re sqrt sampling |
+| #529 v2 | aux head + L1 blend | absorbed by EMA + per-Re |
+| **#591 v2** | **linear-Re sampling** | **absorbed by EMA** |
+
+**The current stack has reached a regime where adding 'orthogonal'
+interventions on top often saturates or over-corrects.** Future round
+PRs should be diagnosed against the full stack, not isolated baselines.
+
+### Analysis & conclusions
+
+- **Closed.** Sampler-side per-Re weighting locked at sqrt.
+- Reassigned fern to **per-sample Re-weighted *loss* (#718)** — natural
+  orthogonal direction (loss-side rather than sampler-side); tests if
+  EMA absorption applies to all Re-emphasis mechanisms or just sampler.
+
 ## 2026-04-28 10:08 — PR #641 (merged, NEW BASELINE): weight_decay=3e-4
 
 - branch: `willowpai2d1-edward/weight-decay-3e-4-probe` (deleted on merge)
