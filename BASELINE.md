@@ -21,13 +21,26 @@ denormalized target space.
 
 ## Best so far
 
-_(No clean unmodified baseline run yet — first round. Reference numbers below are from modified configs.)_
+| PR   | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                                |
+|------|------------|---------------------|---------------------|--------------------------------------|
+| **#773** | [5yzk5722](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/5yzk5722) | **119.35** | **108.79** | EMA decay=0.99, epoch 13, **MERGED ✓** |
 
-| PR  | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                           |
-|-----|------------|---------------------|---------------------|---------------------------------|
-| #771 | [1tvvwlux](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/1tvvwlux) | 123.243 | 111.227 | UW (surf_weight=10), epoch 14/50 |
-| #771 | [6gjtvi4h](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/6gjtvi4h)  | 123.887 | 113.698 | UW (surf_weight=1), epoch 14/50  |
+**Note:** A clean unmodified-baseline run is still in flight (PR #846, willowpai2e1-edward). The EMA run beats the un-averaged live model at the same epoch (124.15) by 3.9% on val_avg.
 
-**Note:** These are the first numbers on the track but come from uncertainty-weighted training, not unmodified MSE. A proper unmodified baseline run is in flight (assigned to willowpai2e1-edward Round 2).
+## Per-split test metrics (current best — PR #773, EMA decay=0.99)
 
-Update this file as soon as a PR with a real `val_avg/mae_surf_p` lands.
+| Split                      | test/mae_surf_p |
+|----------------------------|----------------|
+| test_single_in_dist        | 122.60         |
+| test_geom_camber_rc        | 121.49         |
+| test_geom_camber_cruise    |  81.38         |
+| test_re_rand               | 109.69         |
+
+## Reproduce best checkpoint
+
+```bash
+cd target/
+python train.py --agent willowpai2e1-fern \
+    --wandb_group ema-decay-sweep --wandb_name ema-decay0.99 \
+    --ema_decay 0.99
+```
