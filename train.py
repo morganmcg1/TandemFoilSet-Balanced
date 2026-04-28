@@ -136,21 +136,33 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class RMSNorm(nn.Module):
+    """RMSNorm from Zhang & Sennrich 2019. Variance-only normalization, no bias."""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return x * rms * self.weight
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -204,6 +216,7 @@ class Transolver(nn.Module):
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+        # RMSNorm has its own init (ones for weight, no bias) — nothing to do
 
     def forward(self, data, **kwargs):
         x = data["x"]
@@ -235,6 +248,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # Per-sample skip for non-finite ground truth (matches the organizer
+            # scoring semantics in data/scoring.py). Sanitize y to zeros and zero
+            # out the mask for the affected samples *before* any arithmetic, to
+            # avoid 0*Inf=NaN propagation through the masked sums.
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not bool(y_finite.all()):
+                y = torch.where(y_finite[:, None, None], y, torch.zeros_like(y))
+                mask = mask & y_finite[:, None]
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -419,9 +442,9 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
+    n_layers=3,
+    n_head=1,
+    slice_num=16,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
