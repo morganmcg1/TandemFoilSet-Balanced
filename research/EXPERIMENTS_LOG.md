@@ -1,5 +1,158 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 04:19 — PR #476 (CLOSED, schedule × EMA interference): matched cosine + EMA
+- Branch: `charliepai2d3-fern/l1ff-ema-cos14` (deleted on close)
+- Hypothesis: stack matched cosine `--epochs 14` onto L1+FF+EMA(0.999).
+  Predicted −1% to −3%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #447 baseline (82.97) | vs current (PR #462, 80.06) |
+|--------|--------:|----------------------------:|----------------------------:|
+| `val_avg/mae_surf_p` | 83.89 | +1.11% | +4.78% |
+| `test_avg/mae_surf_p` | 74.53 | +1.29% | +6.41% |
+
+### Per-split val — schedule × averaging interference signature
+
+| split | this PR | PR #447 baseline | Δ |
+|-------|--------:|-----------------:|--:|
+| val_single_in_dist | 98.16 | 99.44 | **−1.29%** (in-dist liked the averaging) |
+| val_geom_camber_rc | 94.04 | 93.14 | +0.97% |
+| val_geom_camber_cruise | 62.26 | 61.06 | +1.97% |
+| val_re_rand | 81.08 | 78.22 | **+3.66%** (regression on cross-regime axis) |
+
+### Critical structural finding
+
+**Matched cosine × EMA(0.999) actively interfere when combined**.
+Mechanism (student's derivation):
+
+- EMA(0.999) averages over ~1000 steps ≈ 2.7 epochs ≈ last 19% of
+  training under either schedule.
+- Under T_max=50 (PR #447 baseline), the last 19% of training runs at
+  `lr ≈ cos(0.56π) × 5e-4 + 0.5 × 5e-4` (plateau of decay) — moderately-
+  decayed weights with residual exploration.
+- Under T_max=14 (this PR), the last 19% covers the **cosine tail**
+  where `lr → 0`. Weights have stopped exploring; they coalesce onto
+  a single basin.
+- EMA shadow over-specializes to in-dist (helps `val_single_in_dist`
+  by −1.29%) while removing OOD regularisation noise (hurts
+  `val_re_rand` +3.66%).
+
+This **contradicts the round-3 baseline lineage assumption** that
+PR #389 (matched cosine) and PR #447 (EMA) compose additively. Edward
+PR #524 (in flight) measures the canonical 6-lever stack and will
+clarify how much of the predicted ~76-78 stack number is dragged down
+by this interference.
+
+### Round-3 compose pattern map updated
+
+| failure mode | example PRs |
+|--|--|
+| Same regularisation axis × FF | #437 wd, #446 beta2 |
+| Same noise-smoothing axis × EMA | #492 L1-vol, #489 lr=1e-3 |
+| Direction-only-update regime cliff | #499 clip=0.5 |
+| **Schedule × averaging interference** | **#476 (this PR)** |
+
+### Decision
+
+**Closed.** Re-assigning fern to **EMA_DECAY=0.997** (window ~333
+steps ~ 0.9 epochs) — shorter than 0.999, ending the EMA averaging
+*before* the cosine tail's weight collapse. Tests whether tightening
+the EMA window restores the matched-cosine compose benefit.
+
+(Note: student's writeup recommended 0.99905 as "less aggressive",
+but 0.99905 is actually MORE aggressive than 0.999 — longer effective
+window. The right direction per their diagnostic is **shorter window**
+= lower decay, hence 0.997.)
+
+Per-epoch metrics not centralised — branch deleted on close.
+
+---
+
+## 2026-04-28 04:19 — PR #500 (CLOSED, no marginal value on full stack): wd=5e-4 + full stack
+- Branch: `charliepai2d3-frieren/l1ff-ema-cos14-lr-7p5e-4-wd-5e-4` (deleted on close)
+- Hypothesis: wd=5e-4 (validated as sweet spot in PR #469) composes
+  on the full 6-lever stack. Predicted −1% to −3%.
+
+### Headline
+
+| Metric | This PR | vs current (PR #462, 80.06) | vs PR #469 (wd=5e-4 standalone, 81.07) |
+|--------|--------:|----------------------------:|---------------------------------------:|
+| `val_avg/mae_surf_p` | 81.20 | +1.42% (regression) | +0.16% (≈ tied) |
+| `test_avg/mae_surf_p` | 71.37 | +1.90% | — |
+
+### Per-split val (mild uniform regression)
+
+| split | this PR | PR #462 | Δ |
+|-------|--------:|--------:|--:|
+| val_single_in_dist | 93.62 | 93.59 | +0.03% |
+| val_geom_camber_rc | 94.49 | 92.33 | +2.34% |
+| val_geom_camber_cruise | 59.45 | 57.74 | +2.96% |
+| val_re_rand | 77.25 | 76.57 | +0.89% |
+
+### Decision
+
+**Closed.** wd=5e-4 contributes **~0 marginal value** once EMA + clipping
+are present. The standalone wd=5e-4 win (PR #469, val 81.07) does not
+survive the full stack — wd's regularisation overlaps with EMA's
+trajectory averaging and clipping's stability work.
+
+`val_geom_camber_rc` regressed +2.34% (vs PR #469's −7.2% on the same
+split). The wd × EMA + clip interaction in the rc-camber regime is
+the most concrete signal of redundancy.
+
+Re-assigning frieren to NUM_FOURIER_FREQS=4 (FF dose downward bracket,
+complementing nezuko's #506 at 12 freqs).
+
+Per-epoch metrics not centralised — branch deleted on close.
+
+---
+
+## 2026-04-28 04:19 — PR #501 (CLOSED, under-convergence cliff): DropPath 0.1
+- Branch: `charliepai2d3-thorfinn/l1ff-ema-cos14-lr-7p5e-4-droppath-0p1` (deleted on close)
+- Hypothesis: DropPath 0.1 — mechanistically-different regulariser
+  than wd/beta2; tests whether residual-branch stochasticity bypasses
+  the FF interference pattern. Predicted −1% to −4%.
+
+### Headline (best-val checkpoint, epoch **13/14** — confounded)
+
+| Metric | This PR | vs current (PR #462, 80.06) |
+|--------|--------:|----------------------------:|
+| `val_avg/mae_surf_p` | 89.54 | +11.8% |
+| `test_avg/mae_surf_p` | 80.56 | +15.0% |
+
+### Confound
+
+DropPath added **+7% per-epoch overhead** (sampling + masked
+multiply on residual outputs), pushing 14-epoch total to ~32.7 min,
+**over the 30-min cap**. Only 13/14 epochs ran. Trajectory was still
+descending steeply (3-5% cuts in last few epochs) — model is
+**under-trained relative to its schedule**, not regularised
+differently.
+
+### Per-split — uniform regression
+
+| split | Δ vs baseline |
+|-------|---:|
+| val_single_in_dist | +11.1% |
+| val_geom_camber_rc | +9.9% (least-regressed split, *opposite* of FF-interference pattern) |
+| val_geom_camber_cruise | +15.0% |
+| val_re_rand | +12.6% |
+
+### Decision
+
+**Closed.** Confounded result — under-convergence dominates. The
+"DropPath bypasses magnitude-regulariser-FF interference" question
+remains unresolved.
+
+Re-assigning thorfinn to **DropPath 0.05** (their suggestion #1).
+Half the rate, less per-epoch overhead, 14 epochs should fit cleanly.
+Cleanly tests rate-vs-mechanism question.
+
+Per-epoch metrics not centralised — branch deleted on close.
+
+---
+
 ## 2026-04-28 04:14 — PR #499 (CLOSED, under-convergence cliff): max_norm=0.5
 - Branch: `charliepai2d3-edward/l1ff-ema-cos14-lr-7p5e-4-clip-0p5` (deleted on close)
 - Hypothesis: tighten gradient clipping `max_norm` from 1.0 to 0.5 on the

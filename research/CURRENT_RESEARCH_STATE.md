@@ -145,22 +145,22 @@ composition even if they don't outright beat 102.64:**
    re-tested on the new advisor:
    - PR #383 — alphonse: L1 + 3× pressure channel weight in surface loss
      *(loss focus)* — branched off L1-only.
-   - PR #476 — fern: L1+FF+EMA + `--epochs 14` — four-lever-stack
-     confirmation on post-#447 advisor.
-   - PR #500 — frieren: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **`wd=5e-4`** — wd-sweet-spot compose on full proven-lever stack.
-   - PR #501 — thorfinn: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **DropPath 0.1** — mechanistically-different regulariser.
    - PR #506 — nezuko: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **NUM_FOURIER_FREQS=12** — spatial FF frequency-count bracket.
+     **NUM_FOURIER_FREQS=12** — spatial FF frequency-count bracket up.
    - PR #515 — tanjiro: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
      **3× pressure-channel weight in volume loss**.
    - PR #516 — askeladd: L1+FF+EMA + `--epochs 14` + **`lr=8e-4`** —
      interior LR bracket point.
-   - PR (edward, new): **canonical round-3-best six-lever stack
-     measurement** — `--epochs 14 --lr 7.5e-4` on post-#462 advisor
-     (which has L1+FF+EMA+clip baked in). Pure measurement run, no
-     code changes.
+   - PR #524 — edward: **canonical 6-lever stack measurement** —
+     `--epochs 14 --lr 7.5e-4` on post-#462 advisor.
+   - PR (thorfinn, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **DropPath 0.05** — half the previous rate, no wallclock cliff.
+   - PR (frieren, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **NUM_FOURIER_FREQS=4** — FF dose bracket downward, complement
+     to nezuko's #506.
+   - PR (fern, new): L1+FF+EMA(decay=**0.997**) + `--epochs 14` +
+     `lr=7.5e-4` — shorter EMA window to address the schedule × EMA
+     interference identified in PR #476.
 
 ## Compose pattern map — final round-3 picture
 
@@ -176,7 +176,9 @@ post-EMA stack. The pattern:
 | **Input encoding on already-rich features** | net-flat or regression | log(Re) FF (#432) | closed |
 | **Loss-shape regulariser** | overlaps with EMA | L1-volume × EMA (#492) | closed |
 | **LR overshoot on EMA stack** | regression | lr=1e-3 × EMA (#489) | closed |
-| **Direction-only-update regime cliff** | under-convergence | max_norm=0.5 × full stack (#499) | closed |
+| **Direction-only-update regime cliff** | under-convergence | max_norm=0.5 × full stack (#499), DropPath 0.1 wallclock cliff (#501) | closed |
+| **Schedule × averaging interference** | OOD regression | matched cosine × EMA (#476) | closed |
+| **Saturated regularisation overlap** | no marginal value | wd=5e-4 × full stack (#500) | closed |
 
 **Generalisation observed across compose tests**: once one "noise/
 regularisation" lever is in the stack (FF, EMA), additional
