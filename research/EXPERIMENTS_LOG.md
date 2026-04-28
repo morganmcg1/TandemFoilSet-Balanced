@@ -418,6 +418,17 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Updated β₂ profile: 0.999 → 83.223 (pre-merge); 0.95 → 77.951 (PR #480 standalone, pre-DropPath/δ); 0.90 → 72.952 (this run, full merged stack — not apples-to-apples vs 0.95 since stack changed).
 - Decision: **CLOSE.** β₂ direction closed at 0.95. Don't sweep further (0.85, 0.80) — the saturation argument applies.
 
+## 2026-04-28 04:55 — PR #520: PhysicsAttention temperature init 0.5 → 1.0 — **WINNER on the merged baseline**
+
+- Branch: `charliepai2d2-thorfinn/slice-temp-1p0` — metrics committed.
+- Hypothesis: the slice-attention learnable temperature has a poor init (0.5) that's 2× sharper than the equilibrium the model wants. Under the 13-epoch budget, the init regime matters. Predicted −0.3% to −1.5%.
+- Result: best `val_avg/mae_surf_p = 71.6985` at epoch 14. **−0.99% vs the 72.414 reference; test_avg = 62.5824 (−0.79% vs 63.082)**. First PR to measurably beat the merged baseline.
+- Per-split val: single_in_dist 85.48 (−2.77%), camber_rc 83.09 (−0.28%, flat), cruise 50.53 (+0.61%, flat), re_rand 67.69 (−0.74%). Per-split test: test_single_in_dist (−4.63%) drives the gain; test_geom_camber_rc regressed +3.84% (only split going backward).
+- **Mechanism (definitive)**: Final temperature parameters at epoch 14 landed at **0.95–0.99 across all 5 blocks** (live and EMA both). The 0.5 init was ~2× below this equilibrium; under our 14-epoch budget the temperature only drifted ~0.5 → ~0.95 (live wouldn't even reach 0.95 at the original init). Init=1.0 starts essentially **at** the equilibrium, so every gradient step fits data instead of un-doing the init. **This is an optimization-warmup phenomenon**, not a capacity phenomenon — exactly as the PR predicted.
+- Across-block uniformity (all 5 blocks → ~0.95) means **per-block scheduled init isn't a useful axis at this depth**, but the *initial* sharpness is.
+- Param-identical to baseline (1 learnable scalar tensor, just initialized differently). Zero compute / memory cost.
+- Decision: **MERGE.** New baseline `val_avg/mae_surf_p = 71.6985`, `test_avg/mae_surf_p = 62.5824`.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
