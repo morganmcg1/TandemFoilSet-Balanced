@@ -1,5 +1,69 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 08:48 — PR #644 (closed): NACA camber-aware learnable embedding
+
+- branch: `willowpai2d1-thorfinn/naca-camber-bin-embedding` (deleted on close)
+- hypothesis: discrete bin embedding for NACA-M values helps rc-camber
+  generalization. Predicted -1 to +1%.
+
+### Results
+
+| Metric | Value | vs PR #324/634 baseline |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **54.31** (epoch 34) | **+4.22%** |
+| `test_avg/mae_surf_p` | 47.33 | +5.17% |
+| **val_geom_camber_rc** | 68.99 | **+5.98%** (the very split it was meant to help!) |
+| **val_geom_camber_cruise** | 37.33 | **+9.10%** |
+| Per-epoch wall | ~52 s | ~unchanged |
+| Peak GPU memory | 24.2 GB | ~unchanged |
+| Total params | 0.68 M | +10K from embedding + wider preprocess |
+| W&B run | `09lmvi5k` | |
+
+### Mechanism (the keeper)
+
+Three-part diagnosis:
+
+1. **Discrete bins lose smooth interpolation**: continuous camber feature
+   was a smooth interpolant via MLP-over-1D-input, naturally generalizing
+   to nearby unseen values. Discrete embedding loses this.
+2. **Wrong context transfer for rc**: bins 6/7/8 do get gradient from
+   raceCar single (M=2-9 sweep), but camber→pressure mapping differs in
+   single vs tandem context. The embedding learns single-foil-shaped
+   vector then queried in tandem.
+3. **Truly OOD bins for cruise**: bin 3 (M=3 in cruise P2 holdout) is
+   never seen — cruise has no single-foil counterpart. Random init at
+   inference.
+
+### Round-3 rc-camber consolidation
+
+This is **the third rc-targeted representational intervention to underperform**:
+
+| PR | Intervention | rc-camber Δ |
+|---|---|---|
+| #619 | FF K=4 vs K=12 sweep on (x,z) | confirmed K=8 is locally optimal |
+| #584 | Schedule extension (T_max=70) | +5.18% rc regression |
+| #644 | NACA camber bin embedding | +5.98% rc regression |
+
+**The camber dimension specifically is NOT the dominant failure component
+for rc on this stack.** rc's multi-component failure mode is more about:
+- schedule / parameter-trajectory variance (compile, EMA, T_max=50 each
+  contributed ~−5% on rc when applied)
+- Re-distribution emphasis (per-Re sqrt sampling: −5.0% rc on FF baseline)
+- AoA × camber × wake-coupling interactions (untested as of #644 close)
+
+### Analysis & conclusions
+
+- **Closed.** rc-camber is approaching its representation-limit floor on
+  the current model architecture for camber-targeted interventions.
+- **Useful negative result**: the ablation rules out the hypothesis that
+  rc-camber's failure is primarily about discrete-camber representation.
+- Reassigned thorfinn to **AoA × NACA-M interaction features** (#678) —
+  pivots from "camber dimension itself" to "AoA × camber wake-coupling
+  interaction" which captures tandem-foil structure differently.
+- Continuous-camber-MLP followup held — the existing encoder already
+  implements that on the continuous M input.
+- Domain-conditioned embeddings held for future rounds.
+
 ## 2026-04-28 08:41 — PR #634 (merged): cosmetic NaN cleanup in `train.py::evaluate_split`
 
 - branch: `willowpai2d1-nezuko/evaluate-split-nan-cleanup` (deleted on merge)

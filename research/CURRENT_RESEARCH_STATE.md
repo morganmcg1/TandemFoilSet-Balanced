@@ -22,7 +22,7 @@
 | **#666** | **nezuko** | **Stability hyperparam** | **EMA decay=0.9995 probe** — followup #1 from PR #324 v4. Tests if longer averaging window (1.2e-3 init contamination at 13.5K steps) helps or biases toward early high-LR weights. |
 | **#664** | **tanjiro** | **Spatial features (gated)** | **Surface-gated FF** — multiply FF×`is_surface.float()` so volume nodes see zeros. Tests if volume FF is dead weight or load-bearing. K=8 confirmed locally optimal in PR #619; this attacks the per-region mesh-density variation. |
 | **#641** | **edward** | **Optimization tuning** | **weight_decay=3e-4 single probe** (locks down wd hyperparameter on the heavily-tuned current stack — wd has been at round-1 default 1e-4 the whole round) |
-| **#644** | **thorfinn** | **Architecture (rc-targeted)** | **NACA camber-aware learnable embedding** for rc-camber bottleneck. Adds 11-bin embedding (32 dims total) for front+rear NACA-M; small architectural change targeting OOD-camber generalization gap. |
+| **#678** | **thorfinn** | **Feature engineering (rc-targeted)** | **AoA × NACA-M interaction features** for tandem wake-coupling — followup #4 from PR #644 closing. Pivots from "camber dimension itself" to "AoA × camber interaction" which captures wake-structure for tandem foils. |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#645** | **alphonse** | **Optimizer hyperparam** | **AdamW beta1=0.95 probe** (default 0.9 since round 1; entire optimization landscape has shifted). Single-line change; lock-it-down experiment. |
 | **#591** | **fern** | **Sampling** | **Linear-Re bracket** (`weight ∝ Re/Re_median`, no sqrt) — followup #1 from PR #531 closing analysis ("we may not have saturated") |
