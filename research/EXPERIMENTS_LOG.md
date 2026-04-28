@@ -2065,3 +2065,90 @@ Reassigned fern to **PR #712 (constant-lr)** — completes schedule-axis end-to-
 |----|---------|------|-------|-----|
 | #711 | tanjiro | lion-grad-clip-1p0 | grad-clip `max_norm = 0.5 → 1.0` on merged #675 baseline | Clip-axis untouched since AdamW era (#374 / #402 merged). Under Lion's `update = lr × sign(c_t)`, clip's role is fundamentally different — only smooths buffer, not per-step movement. Tests if clip basin shifted under new optimizer regime. Honest band −2.5 % to +6 %. |
 | #712 | fern | constant-lr | replace cosine scheduler with `LambdaLR(lambda epoch: 1.0)` on merged #675 baseline | Tests whether EMA(0.995) makes cosine schedule redundant. Two variance-reduction mechanisms in parallel; constant lr probes the limit of "less anneal". Completes schedule-axis end-to-end map. Honest band −3 % to +12 % (wide because schedule × EMA interaction is empirical). |
+
+## 2026-04-28 10:00 — PR #686: bf16 autocast for forward (charliepai2d1-thorfinn) — **MERGED, new baseline (massive win)**
+- Branch: `charliepai2d1-thorfinn/bf16-autocast` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `9ec6cc4`).
+- Hypothesis: bf16 forward pass + fp32 master weights as a 3rd throughput multiplier on top of compile + TF32. Predicted band: −6 % to +14 %.
+
+### Headline metrics (best EMA epoch=30/50, timeout-cut)
+| metric | this run | current baseline #675 (prior) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **36.931** | 43.165 | **−14.43 %** |
+| `test_avg/mae_surf_p` | **30.327** | 36.746 | **−17.46 %** |
+| best raw val (ep29) | 38.800 | — | — |
+| EMA−raw spread (late 5 ep) | −3.52 | — | — |
+| **Steady-state per-epoch** | **59.6 s** | 94 s | **−36.6 %** |
+| **Total epochs in budget** | **30** | 20 | **+50 %** |
+| **Peak memory** | **23.78 GB** | 41.93 GB | **−43.3 %** |
+
+### Per-split — broad-based gain on every val and test split
+| Split | val Δ vs #675 | test Δ vs #675 |
+|---|---:|---:|
+| single_in_dist | −15.48 % | **−19.13 %** |
+| geom_camber_rc | −11.46 % | −13.45 % |
+| **geom_camber_cruise** | **−21.24 %** (largest val) | **−23.71 %** (largest test) |
+| re_rand | −13.10 % | −17.34 % |
+
+### Mechanism (cleanest throughput → metric translation, mirrors #394 pattern)
+
+**Same per-step behavior at matched epochs**:
+- ep14 EMA: this run ≈ 50.50, prior #394 ep14 ≈ 51.55 — **near-identical**
+- ep20 EMA: this run ≈ 43.17, prior #394 ep20 = 43.68 (post-#675 baseline 43.165) — **near-identical**
+- Then: 10 extra cosine epochs (ep21–30) drop EMA 43.17 → 36.93. **The entire metric Δ comes from extra cosine descent** — bf16 didn't change per-step learning, it bought 50 % more iterations.
+
+**Lose-case predictions falsified**: bf16's 3-digit precision did NOT destabilize Lion or SmoothL1. Cruise (smallest residuals; precision-sensitive corner the watch list flagged) actually **gains MOST** (val −21.24 %, test −23.71 %). Mechanism:
+1. **Lion's sign-update is precision-robust**: `update = lr × sign(c_t)` cares only about gradient direction, not magnitude. bf16's 3-digit precision suffices.
+2. **SmoothL1 β=0.5 in normalized space**: residuals are not pathologically tiny (>1e-3 typically); bf16 maintains adequate precision.
+3. **fp32 master weights**: weights stay fp32; only forward + loss are bf16. Backward passes return fp32 gradients. Optimizer step is fp32. EMA shadow update is fp32.
+
+### Decision: merge as new baseline
+- Strict val-gate satisfied with massive margin (−14.43 % val).
+- 15th merge on this branch; **second throughput multiplier** (#491 TF32 first, #394 compile second, this is third in the throughput-axis).
+- Permanent floor for all subsequent PRs: every future PR has +50 % more epochs in budget. Future merge gates effectively widen.
+- All previously-mapped axes (lr, β2, EMA decay, surf_weight, β-form) need revisit under the new 30-ep compute regime.
+- Reassigned thorfinn to **PR #716 (bf16-eval)** — their suggested follow-up; bf16 also in evaluate_split for additional throughput.
+
+## 2026-04-28 10:05 — PR #683: Stochastic depth p=0.05 (charliepai2d1-frieren) — **CLOSED (block-level regularization fails on 5 layers)**
+- val=54.981 (+25.88 % vs prior #394; +48.9 % vs new #686 baseline 36.931), test=47.353 (+28.26 % / +56.1 %). Catastrophic regression.
+
+### Mechanism — block-level vs feature-level regularization (durable for the appendix)
+
+| PR | Mechanism | p | val Δ% | Comment |
+|---|---|---:|---:|---|
+| **#683 (this)** | **block-level (drop attn / mlp branches)** | **0.05** | **+25.9 %** | **Catastrophic on 5 layers** |
+| #513 | MLP-internal `nn.Dropout` | 0.05 | +1.27 % | Mild lose, stable |
+| #483 | MLP-internal `nn.Dropout` | 0.10 | +3.97 % | Mild lose, stable |
+
+**Block-level regularization at p=0.05 fails ~20× harder than MLP-internal dropout at matched p.** On a 5-layer network, even small p destroys per-pass capacity (20 % of total layer capacity dropped per pass).
+
+### Per-split signature SURPRISE (durable insight)
+
+Predicted: "rc largest loser (stiff split needs strong attention)." Observed: **rc smallest** relative regressor (+15.12 %); cruise (+35.73 %) and single_in_dist (+35.99 %) are **worst**.
+
+**Insight**: **regularization-noise scales with relative error magnitude** — low-error splits hurt most because added noise dominates already-tight residuals. Splits with high baseline error (rc 59.6) absorb noise more proportionally. This per-split inversion is the cleanest demonstration on this branch that regularization noise is regime-dependent.
+
+Best EMA at ep18, ep19 already regressing — over-regularization confirmed quantitatively.
+
+### Decision: close
+- Past close threshold by huge margin.
+- Block-level vs feature-level regularization story durable.
+- Reassigned frieren to **PR #715 (lion-lr-2p0e-4)** — basin lower-edge probe under new 30-ep compute. Continues regime-shift theme.
+
+## 2026-04-28 10:08 — Round-1.5 → 2 transition
+
+The bf16 win opens **+50 % more epochs in budget**. Combined with #675 EMA shift, this is the **second cleanly-merged regime change** of round 1.5. Going forward, **every previously-mapped axis basin needs revisit** under the new 30-ep compile + bf16 regime:
+
+- Lion lr basin: untested under 30-ep. Frieren #715 testing 2.0e-4 lower edge.
+- EMA decay: askeladd #699 testing 0.997 — at 30-ep budget, half-life % shifts; 0.997 is at 9.1 % which is still in Polyak-Ruppert sweet spot.
+- Surf_weight: untested under 30-ep.
+- Schedule: fern #712 testing constant lr; cosine T_max=50 partial-anneal still default, but 30-ep budget + 0.65 of peak at ep30 means optimum may be different.
+- β-form: edward #701 testing 0.75 — at 30-ep with smaller residuals, β-curve may shift further.
+- grad-clip: tanjiro #711 testing max_norm=1.0.
+- Architecture (n_head, capacity): nezuko #676, alphonse #350.
+
+## 2026-04-28 10:10 — Round-2 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #715 | frieren | lion-lr-2p0e-4 | Lion `lr = 2.5e-4 → 2.0e-4` on merged #686 baseline | Lion-lr basin lower-edge probe under new 30-ep compile + bf16 regime. Tests if basin shifted toward smaller peak lr with longer cosine descent. Honest band −5 % to +9 %. |
+| #716 | thorfinn | bf16-eval | bf16 autocast also wrapping `evaluate_split` forward pass on merged #686 baseline | Completion of bf16-axis study. Eval pass takes ~10 s/epoch (~17 % of budget). bf16 eval saves ~5 s/ep × 30 = 150 s = potentially 2-3 more train epochs. Watch for per-split MAE shift (must be <2 % to preserve metric consistency). Honest band −5 % to +9 %. |
