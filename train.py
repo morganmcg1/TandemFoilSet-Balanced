@@ -241,6 +241,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
+            abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             # torch.where, not multiplication: NaN*0 = NaN would poison the sum.
@@ -250,7 +251,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                torch.where(surf_mask.unsqueeze(-1), sq_err, zero_norm).sum()
+                torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -492,22 +493,14 @@ if __name__ == "__main__":
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             sq_err = (pred - y_norm) ** 2
+            abs_err = (pred - y_norm).abs()
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             # torch.where, not multiplication: NaN*0 = NaN would poison the loss.
             zero_norm = torch.zeros((), dtype=sq_err.dtype, device=sq_err.device)
             vol_loss = torch.where(vol_mask.unsqueeze(-1), sq_err, zero_norm).sum() / vol_mask.sum().clamp(min=1)
-            # Huber loss for surface (delta=1.0 in normalized space) — closer to MAE
-            # metric for outlier residuals while keeping MSE stability for small ones.
-            # Boolean indexing already excludes padding positions.
-            if surf_mask.any():
-                surf_loss = F.huber_loss(
-                    pred[surf_mask], y_norm[surf_mask],
-                    delta=cfg.surf_huber_delta, reduction="mean",
-                )
-            else:
-                surf_loss = torch.zeros((), dtype=pred.dtype, device=pred.device)
+            surf_loss = torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
             optimizer.zero_grad()
