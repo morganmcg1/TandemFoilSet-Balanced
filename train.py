@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -32,7 +33,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -368,6 +369,111 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stratified batch sampling
+# ---------------------------------------------------------------------------
+
+class StratifiedBatchSampler(Sampler):
+    """Yield batches with one sample per stratum, shuffled within each epoch.
+
+    ``batch_size`` is implicitly ``len(strata_indices)`` — each batch picks
+    one index from each stratum. ``n_batches`` defaults to
+    ``round(total_samples / num_strata)`` so the per-epoch gradient budget
+    matches the baseline (``WeightedRandomSampler(num_samples=N)`` with
+    ``batch_size=B`` yields ``N/B`` batches). Strata smaller than ``n_batches``
+    are cycled through with fresh shuffles (sampling without replacement
+    within each cycle), the way ``WeightedRandomSampler`` would oversample
+    them in expectation.
+    """
+
+    def __init__(
+        self,
+        strata_indices: list[list[int]],
+        n_batches: int | None = None,
+    ):
+        assert all(len(s) > 0 for s in strata_indices), (
+            f"empty stratum: {[len(s) for s in strata_indices]}"
+        )
+        self.strata = [list(s) for s in strata_indices]
+        if n_batches is None:
+            total = sum(len(s) for s in self.strata)
+            n_batches = round(total / len(self.strata))
+        self.n_batches = n_batches
+
+    def __iter__(self):
+        per_stratum: list[list[int]] = []
+        for s in self.strata:
+            seq: list[int] = []
+            while len(seq) < self.n_batches:
+                perm = torch.randperm(len(s)).tolist()
+                seq.extend(s[i] for i in perm)
+            per_stratum.append(seq[: self.n_batches])
+        for b in range(self.n_batches):
+            batch = [per_stratum[k][b] for k in range(len(self.strata))]
+            random.shuffle(batch)  # avoid positional bias inside the batch
+            yield batch
+
+    def __len__(self):
+        return self.n_batches
+
+
+def compute_regime_indices(
+    train_ds, splits_dir: str | Path
+) -> tuple[list[list[int]], dict[str, list[int]], dict]:
+    """Group training indices into 4 regimes: (single|tandem) x (lowRe|highRe).
+
+    The Re cutoff is the median ln(Re) within each geometry group, computed
+    online from the data — this guarantees non-empty bins (the PR's static
+    Re < 5e5 example would leave tandem-lowRe nearly empty since the tandem
+    domains start at ~1.5M Re). Returns ``(strata_list, strata_dict, info)``.
+    """
+    splits_dir = Path(splits_dir)
+    with open(splits_dir / "meta.json") as f:
+        meta = json.load(f)
+    single_idxs = set(meta["domain_groups"]["racecar_single"])
+
+    log_re = []
+    is_single_flags: list[bool] = []
+    print("Stratified sampling: scanning training samples for log(Re)...")
+    for i in tqdm(range(len(train_ds)), desc="Scanning Re"):
+        x, _, _ = train_ds[i]
+        log_re.append(float(x[0, 13].item()))
+        is_single_flags.append(i in single_idxs)
+
+    log_re_t = torch.tensor(log_re)
+    is_single_t = torch.tensor(is_single_flags)
+
+    single_log_re = log_re_t[is_single_t]
+    tandem_log_re = log_re_t[~is_single_t]
+    single_cut = float(single_log_re.median().item())
+    tandem_cut = float(tandem_log_re.median().item())
+
+    regimes: dict[str, list[int]] = {
+        "single_lowRe": [], "single_highRe": [],
+        "tandem_lowRe": [], "tandem_highRe": [],
+    }
+    for i, (lr, sg) in enumerate(zip(log_re, is_single_flags)):
+        if sg:
+            key = "single_lowRe" if lr < single_cut else "single_highRe"
+        else:
+            key = "tandem_lowRe" if lr < tandem_cut else "tandem_highRe"
+        regimes[key].append(i)
+
+    info = {
+        "cutoffs_log_Re": {"single": single_cut, "tandem": tandem_cut},
+        "cutoffs_Re": {"single": float(torch.exp(torch.tensor(single_cut))),
+                        "tandem": float(torch.exp(torch.tensor(tandem_cut)))},
+        "counts": {k: len(v) for k, v in regimes.items()},
+    }
+    print(
+        f"Regime cutoffs (median ln(Re)): single={single_cut:.3f} "
+        f"({info['cutoffs_Re']['single']:.0f}), tandem={tandem_cut:.3f} "
+        f"({info['cutoffs_Re']['tandem']:.0f})"
+    )
+    print(f"Regime counts: {info['counts']}")
+    return list(regimes.values()), regimes, info
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -387,6 +493,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    stratified_sampling: bool = False  # 4-regime (geom × Re) per-batch stratification
 
 
 cfg = sp.parse(Config)
@@ -402,9 +509,21 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+stratified_info: dict | None = None
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+elif cfg.stratified_sampling:
+    strata, _strata_dict, stratified_info = compute_regime_indices(train_ds, cfg.splits_dir)
+    assert len(strata) == cfg.batch_size, (
+        f"stratified_sampling: batch_size={cfg.batch_size} must equal "
+        f"num strata={len(strata)}"
+    )
+    train_loader = DataLoader(
+        train_ds,
+        batch_sampler=StratifiedBatchSampler(strata),
+        **loader_kwargs,
+    )
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
@@ -447,6 +566,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "stratified_info": stratified_info,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -486,6 +606,7 @@ _write_jsonl({
     "config": asdict(cfg),
     "max_epochs": MAX_EPOCHS,
     "max_timeout_min": MAX_TIMEOUT_MIN,
+    "stratified_info": stratified_info,
 })
 
 best_avg_surf_p = float("inf")
