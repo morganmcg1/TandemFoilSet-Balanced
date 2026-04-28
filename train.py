@@ -522,11 +522,12 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 
 # EMA shadow weights — implicit ensembling along the optimization trajectory.
 # Validation, best-checkpoint, and end-of-run test all use EMA weights.
-# decay=0.999: effective averaging window ~1k steps, fully warmed up well
-# before any plausible best epoch on this 7-37 epoch budget.
+# decay=0.9995: effective averaging window ~2k steps, longer integration
+# than 0.999 baseline. At 13.5K steps, 0.9995^13500 ≈ 1.2e-3 initial-weight
+# contamination — still negligible warmup on this 7-37 epoch budget.
 # State is held against the underlying (uncompiled) module so artifacts stay
 # portable through the existing _orig_mod-aware save/load path.
-ema_decay = 0.999
+ema_decay = 0.9995
 EMA_VAL_INTERVAL = 2  # EMA val every Nth epoch; raw val runs every epoch.
 _orig_module = getattr(model, "_orig_mod", model)
 ema_state = {k: v.detach().clone() for k, v in _orig_module.state_dict().items()}
