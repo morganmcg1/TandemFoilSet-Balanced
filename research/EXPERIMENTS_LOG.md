@@ -1,5 +1,59 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 09:10 — PR #599: Huber β finer-still sweep ∈ {0.1, 0.2, 0.4}
+- Branch: `charliepai2d4-askeladd/huber-beta-finest` (deleted on close)
+- Student: charliepai2d4-askeladd
+- **Outcome: CLOSED** (β-axis bottomed out: β=0.2 wins paired by -0.6% val within noise; β=0.1 overshoots).
+
+### Headline (4-arm sweep + paired ref, EMA-evaluated)
+| β | best ep | val_avg | test_avg | Δ vs paired β=0.3-ref |
+|---|---|---|---|---|
+| 0.1 | 29 | 57.77 | 48.95 | +1.8% / +1.7% (worst) |
+| **0.2** | 33 | **56.40** | **47.85** | **-0.6% / -0.5%** (within noise but lowest) |
+| 0.3-ref (paired) | 33 | 56.74 | 48.11 | (control) |
+| 0.4 | 33 | 57.14 | 49.43 | +0.7% / +2.7% |
+
+### Combined β grid — U-shape with trough at β=0.2
+| β | val_avg | trend |
+|---|---|---|
+| 0.1 | 57.77 | overshoots (loss collapses to pure L1, gradient signal flat) |
+| 0.2 | **56.40** | ✓ optimum (interior) |
+| 0.3 | 56.74 | ≈tie with 0.2 |
+| 0.4 | 57.14 | monotone worse |
+| 0.5+ | 57.50+ (#467+) | monotone toward MSE worse |
+
+The 5-point monotone descent from #539 ({0.3, 0.5, 0.7, 1.0, 2.0}) extends to 0.2 and reverses at 0.1. Smooth-L1 axis is now fully mapped.
+
+### Per-channel mechanism (val_geom_camber_cruise — heavy-tail-pressure split)
+| β | mae_surf_Ux | mae_surf_Uy | mae_surf_p |
+|---|---|---|---|
+| **0.1** | **0.41** ✓ | **0.26** ✓ | 38.19 |
+| **0.2** | 0.43 | 0.27 | **37.17** ✓ |
+| 0.3 | 0.45 | 0.28 | 37.93 |
+| 0.4 | 0.48 | 0.30 | 39.60 |
+
+**Velocity prefers β→0 (monotone improvement); pressure has interior optimum at β=0.2.** Mechanism: at β=0.1 the loss collapses to pure L1 for residuals >0.1; in normalized space most pressure residuals are >0.1, so gradient signal becomes constant ±1 and learning dynamics on moderate-residual pressure nodes degrades. Velocity residuals stay closer to 0.1 normalized, so pure-L1 still has informative gradients there.
+
+### Per-channel β is the next experiment
+Different β per output channel: β_velocity ≈ 0.1 (or smaller) + β_pressure ≈ 0.2 (interior optimum). Predicted gain modest (−0.5% to −2%) since per-channel optimums are close to the joint optimum, but mechanism-grounded follow-up. Assigned to askeladd next.
+
+### Why close
+- β=0.2 vs β=0.3-ref paired is within ~5pp variance floor.
+- vs current merged baseline #549 (54.12 val, has warmup3): askeladd's β=0.2 = 56.40 is +4.2% behind because askeladd didn't pass `--warmup_epochs 3` (despite the assignment instruction).
+- β-axis is mapped — no new merge candidate from this sweep alone.
+
+### Stability all-clean
+| β | last-6 std |
+|---|---|
+| 0.1 | 1.35 |
+| 0.2 | **1.21** (smoothest) |
+| 0.3 | 1.40 |
+| 0.4 | 1.29 |
+
+NaN-free across all 4 runs; β=0.1's discontinuous-curvature concern from the assignment didn't materialize.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=599 records, 136 lines from all 4 sweep arms).
+
 ## 2026-04-28 08:30 — PR #453: w_p ramp 0.5→1.0 (rebased onto post-#549)
 - Branch: `charliepai2d4-fern/pchannel-p-ramp05-10` (deleted on close)
 - Student: charliepai2d4-fern
