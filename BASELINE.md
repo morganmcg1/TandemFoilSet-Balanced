@@ -4,7 +4,7 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **109.5716** (PR #827 — Huber loss + surf_weight=30, epoch 13) |
+| `val_avg/mae_surf_p` | **104.1120** (PR #808 — bf16 + n_hidden=256 + n_head=8 + Huber + epochs=12, epoch 10) |
 | `test_avg/mae_surf_p` | **40.927** (prior competition best) |
 
 **Source:** README.md prior competition results — PR #32 (morganmcg1/tandemfoil2): "Single-head nl3/sn16 triple compound"
@@ -17,6 +17,26 @@
 **Config (best known):** n_layers=3, slice_num=16, n_hidden tuned
 
 ## Round 1 — Merged Winners
+
+### PR #808 — bf16 mixed precision + wider model (n_hidden=256, n_head=8) + Huber + epochs=12 (2026-04-28)
+**Student:** charliepai2e1-fern | **Branch:** charliepai2e1-fern/bf16-wider-model
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **104.1120** (epoch 10/12) |
+| `val_single_in_dist/mae_surf_p` | 121.3574 |
+| `val_geom_camber_rc/mae_surf_p` | 110.5814 |
+| `val_geom_camber_cruise/mae_surf_p` | 88.3729 |
+| `val_re_rand/mae_surf_p` | 96.1362 |
+| `test_avg/mae_surf_p` | 94.7010 |
+| `test_single_in_dist/mae_surf_p` | 109.1814 |
+| `test_geom_camber_rc/mae_surf_p` | 98.6706 |
+| `test_geom_camber_cruise/mae_surf_p` | 75.3729 |
+| `test_re_rand/mae_surf_p` | 95.5792 |
+
+**vs prior baseline (PR #827):** 104.11 vs 109.57 → **-4.97% improvement**
+**Metric summary:** `target/metrics/charliepai2e1-fern-bf16-wider-huber-ep12-rebased-jo0imdkm.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 12`
 
 ### PR #827 — Huber loss + surf_weight=30 (2026-04-28 22:57)
 **Student:** charliepai2e1-alphonse | **Branch:** charliepai2e1-alphonse/huber-surf-weight-sweep
@@ -66,7 +86,7 @@
 | #794 | tanjiro | LR warmup 5 epochs + cosine | Revision requested | -4.87% vs no-warmup but above Huber baseline. Shorten warmup to 2 epochs + stack on Huber. |
 | #792 | frieren | Deeper Transolver: n_layers=6, lr=3e-4 | Sent back | Depth inconclusive at budget (n=5: 109.62, n=6: 113.83 at equal wall-clock). Resubmit as Huber + grad_clip 1.0 (n=5 default). |
 | #789 | askeladd | Gradient clipping (max_norm=1.0) | **Rebase needed** | Winner: 114.3451. Merge conflict on advisor branch. Rebase + re-run. |
-| #808 | fern | bf16 mixed precision + wider model (n_hidden=256, n_head=8) | Revision requested | 128.5863 (MSE, missing Huber). Re-run with Huber + clean architecture + epochs=12. |
+| #808 | fern | bf16 mixed precision + wider model (n_hidden=256, n_head=8) | **MERGED** | val=104.1120 (PR #808 Round 3 with Huber+epochs=12). New best. |
 
 ## Round 1 — Closed
 
@@ -105,3 +125,4 @@
 - 2026-04-28 23:15: PR #795 R2 (Huber+PSN) reviewed — winner at 104.2271 but sent back for rebase after merge conflict.
 - 2026-04-28 23:30: PR #792 R2 reviewed — depth hypothesis inconclusive; hidden gem: n=5 + grad_clip achieves 109.62 (below Huber baseline); sent back for Huber+grad_clip focused retest. NaN fix infrastructure confirmed working.
 - 2026-04-28 22:57: PR #827 merged. Huber+surf_weight=30 sets new best val_avg/mae_surf_p = 109.5716 (-5.26% vs Huber baseline 115.6496). New compound baseline: --loss huber --huber_delta 1.0 --surf_weight 30.
+- 2026-04-28: PR #808 merged. bf16 + n_hidden=256 + n_head=8 + Huber + epochs=12 sets new best val_avg/mae_surf_p = 104.1120 (-4.97% vs PR #827 baseline 109.5716). New compound baseline: --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 12.
