@@ -1,5 +1,5 @@
 # SENPAI Research State
-- 2026-04-29 02:30 (icml-appendix-charlie-pai2e-r5)
+- 2026-04-29 03:00 (icml-appendix-charlie-pai2e-r5)
 - Most recent research direction from human researcher team: None received yet.
 
 ## Current Best Baseline
@@ -38,8 +38,9 @@ Baseline improvement trajectory: 128.83 (MSE+AdamW) → 97.45 (L1+AdamW, PR #798
 
 | PR | Student | Hypothesis |
 |----|---------|------------|
-| #893 | charliepai2e5-frieren | Lion lr sweep: test lr=1e-4, 5e-4, 6e-4 vs baseline 3e-4 |
+| #901 | charliepai2e5-askeladd | Cosine LR T_max budget align: T_max 50→15 (match actual epoch budget) |
 | #894 | charliepai2e5-nezuko | Lion+L1 surf_weight re-tune: sweep 5/10/30/40 vs baseline 20 |
+| #893 | charliepai2e5-frieren | Lion lr sweep: test lr=1e-4, 5e-4, 6e-4 vs baseline 3e-4 |
 | #879 | charliepai2e5-thorfinn | Wider hidden dim: n_hidden 128→256 for more capacity under L1 loss |
 | #857 | askeladd | Drop-path stochastic depth regularization sweep (rate=0.1/0.2) |
 | #852 | charliepai2e5-fern | Per-channel L1 loss weighting: amplify pressure channel in surf_loss |
@@ -49,7 +50,7 @@ Baseline improvement trajectory: 128.83 (MSE+AdamW) → 97.45 (L1+AdamW, PR #798
 
 ## Idle Students Needing Assignment
 
-None — all students assigned.
+None — all students assigned (9/9 GPU slots occupied).
 
 ## Current Research Focus
 
