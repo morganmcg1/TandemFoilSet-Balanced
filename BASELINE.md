@@ -2,10 +2,26 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-27 23:30 — PR #282: Replace MSE with Huber loss (delta=1.0) in normalized space
+## 2026-04-28 00:25 — PR #363: EMA of model weights (decay=0.999) for evaluation
 
-- **Best `val_avg/mae_surf_p`** (target to beat): **105.999** (epoch 14, original recipe)
-- **`test_avg/mae_surf_p`** (paper-facing): **97.957** — first finite measurement, from PR #361 rerun under same recipe + NaN-safe eval (val_avg drift to 108.103 there is RNG noise; recipe and val computation are byte-identical to the 105.999 high-water mark).
+- **Best `val_avg/mae_surf_p`** (target to beat): **101.350** (epoch 14)
+- **`test_avg/mae_surf_p`** (paper-facing): pending finite re-measurement on the EMA-merged baseline (cruise NaN here because PR #361 had not landed when this run started); **3-split test mean = 100.030** — `single_in_dist=113.32, geom_camber_rc=97.44, re_rand=89.33`.
+- **Per-split val MAE for `p` (EMA, epoch 14)**:
+  - `val_single_in_dist`: 126.323 (−5.76% vs huber)
+  - `val_geom_camber_rc`: 109.406 (−0.07%, flat)
+  - `val_geom_camber_cruise`: 76.988 (−6.93% vs huber)
+  - `val_re_rand`: 92.682 (−5.19% vs huber)
+- **Recipe**: huber(δ=1.0) loss in normalized space + EMA copy of weights (decay 0.999), checkpoint = EMA weights. All other defaults unchanged from the merged baseline.
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name ema-eval --agent <name>
+  ```
+
+## 2026-04-27 23:30 — Previous baseline (PR #282 + #361)
+
+- **Best `val_avg/mae_surf_p`**: 105.999 (PR #282 huber-loss)
+- **`test_avg/mae_surf_p`**: 97.957 (first finite measurement, PR #361 NaN-safe eval rerun)
 - **Per-split val surface MAE for `p`**:
   - `val_single_in_dist`: 134.048
   - `val_geom_camber_rc`: 109.479
