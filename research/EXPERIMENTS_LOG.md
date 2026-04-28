@@ -897,3 +897,28 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
 - **Loss-magnitude characterization at convergence**: only 29% of residuals are in the linear regime (vs predicted >95% if pseudo-L1). δ=0.1 is a **"better hybrid"**, not pseudo-L1: linearizes the heavy-tailed minority (~30%) while keeping ~70% in the smooth quadratic well.
 - **Same-stack effect grew** from −1.05% (pre-rebase) to −3.00% (post-rebase) — the longer 3-ep warmup + T_max=11 schedule extends the late-training fine-tune window where δ=0.1's better tail handling has more room to refine.
 - Decision: **MERGE**. Profile still monotone-descending toward L1; thorfinn's follow-up #1 (δ=0.05 probe) is the natural next step.
+
+## 2026-04-28 09:05 — PR #647: Per-block slice-temp init schedule [1.5, 1.875, 2.25, 2.625, 3.0]
+- Branch: `charliepai2d2-askeladd/slice-temp-per-block-schedule` (artifact: `model-charliepai2d2-askeladd-slice-temp-per-block-schedule-20260428-082258`)
+- Hypothesis: hierarchical sharpness — softer early blocks for spatial pooling, sharper later blocks for token refinement. Mechanism-driven by the consistent val_geom_camber_rc regression with sharper global init.
+
+| metric | this run (per-block schedule) | baseline (PR #510 compile = 64.824 / PR #562 eager = 64.696) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **61.872** (epoch 18) | 64.824 / 64.696 | **−4.55% / −4.37%** |
+| `test_avg/mae_surf_p` | **54.555** | 56.391 / 55.879 | **−3.26% / −2.37%** |
+
+- **All 4 val splits improved** vs PR #562: in_dist **−6.01%** (largest), camber_rc **−2.86%** (the predicted target — direction reversal!), camber_cruise **−4.78%**, re_rand **−3.85%**.
+- **All 4 test splits improved**.
+- **Final per-block temperatures (live=EMA, drift)**: block 0 = 1.456 (drift −0.044), block 1 = 1.777 (−0.098), block 2 = 2.175 (−0.075), block 3 = 2.546 (−0.079), block 4 = 2.914 (−0.086).
+- **Block 0 (softest) drifts LEAST** — closest to its equilibrium, suggesting block 0 *wants* to be soft. Confirms hierarchical sharpness is a true depth-specialization signal, not just a regularization effect.
+- **camber_rc direction reversal is the key diagnostic**: was regressing under sharper global init (init=2.0: +2.0%, init=2.5: +2.60%), now improves −2.86% under hierarchical schedule. The camber_rc/cruise tension was a **depth-specialization issue**, not a global capacity tradeoff.
+- **Variance across blocks is doing the work, not the higher mean**: schedule mean=2.25 vs prior global init=2.5 (mean=2.5) gave 65.822 worse by 4 absolute. The within-block variance (1.5→3.0) is the load-bearing piece.
+- **Per-block temperatures stay distinct**: adjacent block deltas (0.32-0.39) > drift magnitudes (0.04-0.10). Schedule is a stable equilibrium for these blocks.
+- Vs current baseline (post-PR #640 + #601 + #635 + #636 merges, ~62.747): val_avg 61.872 = **−1.4% additional gain**. Standalone but mechanically orthogonal compound.
+- Decision: **MERGE**. Outstanding mechanistic work that closes the camber_rc/sharper-attention puzzle from prior runs.
+- Suggested follow-ups (per askeladd):
+  1. **Steeper schedule** [1.0, 1.5, 2.0, 2.5, 3.0] — block 0 drift signal suggests pushing it below 1.5; mean stays at 2.0, range doubles.
+  2. Different curve shape (exp-spaced, two-step) — block-0 distinct from 1-4 hints that maybe blocks 1-4 don't need much variation.
+  3. Global init=1.5 (no schedule) — test if per-block parameters naturally find the asymmetry without an init prior.
+  4. Extend training budget (T_max=14 with same compile setup).
+  5. Per-head per-block init (5×4 separate scalars).
