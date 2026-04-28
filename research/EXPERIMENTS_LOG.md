@@ -1,5 +1,36 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 01:03 — PR #393 (closed): Half-step capacity scale-up on bf16 (h=160, L=5, heads=5, slices=80)
+
+- branch: `willowpai2d1-alphonse/halfstep-capacity-on-bf16` (deleted on close)
+- hypothesis: with bf16 throughput unlocked + ~63 GB headroom, the bigger
+  model that fern's #318 couldn't test is finally feasible. Predicted -2 to -7%.
+
+### Results
+
+| Metric | Value | vs PR #359 (bf16 baseline) |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **131.05** (epoch 11 of 14) | **+7.55%** |
+| `test_avg/mae_surf_p` | 114.89 | +3.37% |
+| Per-epoch wall (mean) | 135 s | +39% |
+| Peak GPU memory | 45.6 GB / 96 GB | +38.6% |
+| Param count | 1.02 M | +54% |
+| Epochs completed | 14 / 50 | -5 |
+| W&B run | `nbkqn78z` | — |
+
+### Analysis & conclusions
+
+- **Closed.** val regression past 5% threshold, but well-diagnosed —
+  schedule-budget mismatch dominates: best at epoch 11 of 14 with val
+  curve still descending; lr was still ~41% of peak at the timeout because
+  `T_max=50` doesn't decay in 14 epochs.
+- test_avg only +3.37% (vs val +7.55%) — the bigger model isn't
+  fundamentally worse, just under-converged.
+- **Capacity hypothesis parked, not abandoned.** Once fern's #407 cosine
+  T_max alignment lands, retest capacity against the proper schedule.
+- Per-epoch wall scales roughly linearly with parameter count (1.55× params
+  → 1.39× wall) — no compute pathology.
+
 ## 2026-04-28 00:49 — PR #384 (closed): Domain-bucketed batch sampler
 
 - branch: `willowpai2d1-fern/domain-bucketed-sampler` (deleted on close)
