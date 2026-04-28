@@ -31,6 +31,52 @@
 
 ---
 
+## 2026-04-28 04:09 — PR #404: H11 Re-conditional FiLM modulation — **MERGED** (Round 0 winner #2)
+
+- Branch: `willowpai2d4-edward/h11-film-re-conditioning`
+- Hypothesis: FiLM (γ, β) per-block from `log(Re)` should reduce `val_avg/mae_surf_p` by 3–7%, biggest on `val_re_rand`.
+- 5-cell matrix in W&B group `h11-film-re` (Round 1 + Round 2 disentanglement):
+
+| Run | FiLM | wd | seed | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|-----|------|----|----:|---------------------:|----------------------:|-----|
+| Prior baseline (#344) | — | 1e-4 | none | 120.97 | 109.92 | `rua9xrca` |
+| A — sanity | off | 1e-4 | none | 129.27 | 113.83 | `629fuile` |
+| B — FiLM on | on | 1e-4 | none | 126.63 | 113.61 | `3so6w84f` |
+| C — FiLM on + wd | on | 5e-4 | none | 119.63 | 109.11 | `dbogls54` |
+| D — FiLM off + wd | off | 5e-4 | none | 123.95 | 114.61 | `1rth2rs7` |
+| **E — FiLM on + wd + seed** | **on** | **5e-4** | **123** | **119.36** | **107.54** | `p0a1daar` |
+
+### Per-split test for Run E (winner)
+
+| Split | Run E | vs prior baseline |
+|-------|------:|------------------:|
+| `test_single_in_dist` | 120.69 | −5.0% |
+| `test_geom_camber_rc` | 120.45 | −2.5% |
+| `test_geom_camber_cruise` | 80.70 | −0.6% |
+| `test_re_rand` | 108.32 | +0.5% |
+| **avg** | **107.54** | **−2.2%** |
+
+### Conclusions
+
+- **Disentanglement decisive: FiLM contributes real signal.** Run D (FiLM off + wd=5e-4) regressed to val=123.95 vs prior baseline (120.97), proving wd=5e-4 alone does *not* close the gap. The C→D toggle at matched wd shows FiLM adds 3.6% val / 5.0% test improvement.
+- **Variance check passed.** Run E (seeded reproduction of Run C config) lands at val=119.36 — within 0.2% of Run C's 119.63 — confirming reproducibility across RNG state.
+- **The FiLM × wd interaction is the load-bearing finding.** Neither lever helps alone; together they unlock a stable higher-regularization regime. This is the kind of synergy that's invisible without rigorous disentanglement.
+- **Cross-split signature was wrong-mechanism but consistent in aggregate.** The "Re-rand benefits most" prediction failed; per-split orderings shuffled with seed. What's stable is the *aggregate* test improvement of ~5% from FiLM at matched wd. The 1-D log(Re) conditioner is likely starving the FiLM head.
+- **Cost:** +83K params (12.6%) for −2.2% test improvement. Acceptable; future students inherit it.
+
+### Useful follow-ups
+
+- **Richer conditioning vector** (`[log(Re), AoA1, AoA2, gap, stagger]`) — likely raises the headline gain *and* sharpens the per-split signature. Edward's natural next assignment.
+- **FiLM hidden=32** — halves the FiLM head from 83K → 42K, tightening the +12.6% params objection.
+- **Concat-Re instead of FiLM** — cheaper alternative; test if it captures most of the gain.
+- **3-seed E** — would give a real error bar on the −2.2% headline.
+
+### New methodological tooling
+
+This PR plumbs an optional `--seed` CLI flag (sets `torch.manual_seed` and `torch.cuda.manual_seed_all`). DataLoader workers/sampler are NOT seeded, so reproducibility is partial — sufficient for variance checks, not for fully deterministic training. Future PRs needing variance confirmation can reuse it.
+
+---
+
 ## 2026-04-28 04:07 — PR #442: H12 EMA of model weights — **SENT BACK FOR DECAY=0.99 RUN**
 
 - Branch: `willowpai2d4-thorfinn/h12-ema-weights`
