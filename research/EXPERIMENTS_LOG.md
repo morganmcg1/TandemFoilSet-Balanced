@@ -68,6 +68,54 @@ but throughput-wise are orthogonal (steady batch wall identical, peak GB
 
 
 
+## 2026-04-28 03:16 — PR #324 round-2 (sent back AGAIN): EMA decay=0.999 on FF (no compile)
+
+- branch: `willowpai2d1-nezuko/ema-and-grad-clip` (in flight as draft after second send-back)
+- hypothesis: EMA decay=0.999 (window matched to ~7K-step training budget)
+  with grad_clip dropped per one-hypothesis-per-PR. Predicted -1% to -4%.
+
+### Results (EMA on FF baseline, BEFORE compile merge)
+
+| Metric | Value | vs PR #327 (FF, prior baseline) | vs PR #416 (compile+FF, NEW baseline) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **98.0023** (epoch 19 of 19) | **−8.34%** | **+21.2%** (regression) |
+| `test_avg/mae_surf_p` | 88.1348 | −8.97% | +20.1% |
+| Per-epoch wall | ~97 s | ≈baseline | +2× (no compile speedup) |
+| Peak GPU memory | 33.3 GB | ≈baseline | n/a |
+| Best epoch | 19 of 19 (still improving at timeout) | | |
+| W&B run | `2xrtj5yt` (`ema999-only`) | | |
+
+### Per-split delta vs FF baseline (val)
+
+| Split | Δ |
+|---|---|
+| val_single_in_dist | −3.34% |
+| val_geom_camber_rc | **−16.00%** (the split FF struggled most with) |
+| val_geom_camber_cruise | −3.20% |
+| val_re_rand | −8.69% |
+
+### Analysis & conclusions
+
+- **Sent back again.** Result is a clean EMA win at val_avg=98.00 on the
+  FF baseline, but compile merged at `9b92e31` while nezuko was running
+  rebased to `0941a04` per my prior instructions. Now needs to rebase
+  onto compile+FF baseline.
+- **Predicted post-rebase val_avg: 70-77.** EMA gave −8.34% on FF; compile
+  gave −24.4% on FF. Mechanisms look orthogonal (compile=throughput +
+  extra cosine decay reaching the model; EMA=validation-time parameter
+  averaging). Stacking at ~80% efficiency lands near 70; mostly orthogonal
+  near 73.
+- **Useful per-split signal**: EMA preferentially helps rc-camber
+  (−16%) — exactly the split FF on its own (−3.3%) and even compile+FF
+  (−25.8%) don't fully resolve. EMA's variance reduction in parameter
+  space addresses a different rc-camber failure mode. Round-3 hint: full
+  4-stack (compile + FF + bf16 + EMA) may be particularly strong on
+  rc-camber.
+- v1 failure (decay=0.9999 → val=302 from random-init contamination) was
+  textbook EMA-warmup pathology; v2 fix is correct and produces clean
+  monotonic EMA val curve from epoch 1.
+- Followups (bias correction at higher decay, grad_clip alone) queued.
+
 ## 2026-04-28 02:54 — PR #314 round-2 (sent back again): SmoothL1/Huber + FF on bf16
 
 - branch: `willowpai2d1-edward/huber-loss` (in flight as draft after second send-back)

@@ -32,7 +32,7 @@ Themes in play:
 |---|---|---|---|
 | #314 | edward | Loss formulation | **SmoothL1/Huber β=1.0** — sent back AGAIN to rebase onto compile+FF baseline (was on FF: val_avg=92.32) |
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3) |
-| #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** (sent back from 0.9999, dropped grad_clip — bundled hypothesis) |
+| #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** — sent back AGAIN to rebase onto compile+FF (was on FF: val_avg=98.00) |
 | #333 | thorfinn | Loss / metric alignment | surf_weight ∈ {15, 25, 40} sweep |
 | #407 | fern | Schedule (on compile+FF) | Cosine T_max alignment via `--epochs 37` (matches achievable budget on compile+FF baseline; fern asked before running, advisor confirmed) |
 | #443 | tanjiro | Spatial features (on compile+bf16+FF) | Gaussian RFF K=16 σ=10 (rebase target updated to PR #416 baseline; tanjiro asked before running) |
@@ -55,6 +55,7 @@ Themes in play:
 | #324 v1 | nezuko | Sent back | +148% — EMA decay 0.9999 too slow for 7K-step budget. Rebase + decay=0.999. |
 | #314 v1 | edward | Sent back | −14.4% on bf16 alone. Sent back to rebase onto FF (then compile+FF). |
 | #314 v2 | edward | **Sent back AGAIN** | **−13.65% on FF (val_avg=92.32). compile+FF merged simultaneously.** |
+| #324 v2 | nezuko | **Sent back AGAIN** | **−8.34% on FF (val_avg=98.00). EMA-warmup pathology fixed; compile merged simultaneously. Per-split shows EMA hits rc-camber best (−16%).** |
 | **#416** | **alphonse** | **Merged (CURRENT BASELINE)** | **`torch.compile`+FF: val_avg=80.85 (−24.4% vs FF, cumulative −44.0%). 37 epochs in 30 min.** |
 
 ## Throughput levers status
