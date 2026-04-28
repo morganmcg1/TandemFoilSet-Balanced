@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -422,7 +423,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -462,6 +463,16 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+runs_dir = Path("runs")
+runs_dir.mkdir(parents=True, exist_ok=True)
+metrics_stem = cfg.wandb_name or cfg.agent or run.id
+metrics_jsonl_path = runs_dir / f"{metrics_stem}.metrics.jsonl"
+with open(metrics_jsonl_path, "w") as f:
+    json.dump({"event": "config", "wandb_name": cfg.wandb_name, "agent": cfg.agent,
+               "run_id": run.id, "n_params": n_params,
+               "model_config": model_config, "cfg": asdict(cfg)}, f)
+    f.write("\n")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -535,6 +546,10 @@ for epoch in range(MAX_EPOCHS):
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
+    with open(metrics_jsonl_path, "a") as f:
+        json.dump({"event": "epoch", "epoch": epoch + 1, **log_metrics}, f)
+        f.write("\n")
+
     tag = ""
     if avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
@@ -566,6 +581,12 @@ if best_metrics:
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
     })
+    with open(metrics_jsonl_path, "a") as f:
+        json.dump({"event": "best_val", "epoch": best_metrics["epoch"],
+                   "best_val_avg/mae_surf_p": best_avg_surf_p,
+                   "per_split": best_metrics["per_split"],
+                   "total_train_minutes": total_time}, f)
+        f.write("\n")
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -596,6 +617,10 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        with open(metrics_jsonl_path, "a") as f:
+            json.dump({"event": "test", **test_log}, f)
+            f.write("\n")
 
     save_model_artifact(
         run=run,
