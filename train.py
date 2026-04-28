@@ -186,11 +186,15 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Last-layer-only finer slicing: slice_num=128 in the regression-head block,
+        # slice_num=base everywhere else.
+        slice_nums = [slice_num] * n_layers
+        slice_nums[-1] = slice_num * 2  # 64 -> 128 in the final block
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_nums[i], last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
