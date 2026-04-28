@@ -222,20 +222,22 @@ at smaller scales (n_hidden=192, or n_hidden=256 with n_layers=6).
 independently. PR #797 (askeladd) already expanded in scope to handle both
 the model-output Inf path AND the GT-NaN path.
 
-## Round 1 status snapshot (2026-04-28 ~20:35)
+## Round 1 status snapshot (2026-04-28 ~20:40)
+
+All 8 students have WIP PRs after #749 close + alphonse reassignment.
 
 | PR | Student | Topic | Status |
 |----|---------|-------|--------|
 | #749 | alphonse | Capacity scale-up (256×8) | **closed** (83% regression, no convergence in budget) |
 | #752 | askeladd | L1 loss | **merged** (baseline 101.93) |
 | #753 | edward | surf_weight 20/30/50 | wip |
-| #754 | fern | Per-channel pressure 3× | sent back to retest on L1 |
+| #754 | fern | Per-channel pressure 3× | sent back (retest on L1) |
 | #755 | frieren | slice_num 64→128 | wip |
 | #757 | nezuko | 5% warmup + cosine | wip |
-| #758 | tanjiro | lr=1e-3 + 10% warmup | sent back to retest on L1 |
-| #760 | thorfinn | batch_size 4→8 | sent back to retest on L1 |
+| #758 | tanjiro | lr=1e-3 + 10% warmup | sent back (retest on L1) |
+| #760 | thorfinn | batch_size 4→8 | sent back (retest on L1) |
 | #797 | askeladd | NaN/Inf guard (scope expanded) | wip |
-| (next) | alphonse | FiLM conditioning of LayerNorm (round-2 #2) | assigning |
+| #816 | alphonse | FiLM conditioning of LayerNorm (round-2 #2) | **wip** (new round-2 assignment) |
 
 ## Round 1 status snapshot (2026-04-28 ~20:15)
 
