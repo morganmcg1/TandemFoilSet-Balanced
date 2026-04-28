@@ -381,7 +381,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    surf_huber_delta: float = 1.0  # delta for Huber surface loss (in normalized space)
+    surf_huber_delta: float = 0.5  # delta for Huber surface loss (in normalized space)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -498,7 +498,7 @@ if __name__ == "__main__":
             # torch.where, not multiplication: NaN*0 = NaN would poison the loss.
             zero_norm = torch.zeros((), dtype=sq_err.dtype, device=sq_err.device)
             vol_loss = torch.where(vol_mask.unsqueeze(-1), sq_err, zero_norm).sum() / vol_mask.sum().clamp(min=1)
-            # Huber loss for surface (delta=1.0 in normalized space) — closer to MAE
+            # Huber loss for surface (delta=0.5 in normalized space) — closer to MAE
             # metric for outlier residuals while keeping MSE stability for small ones.
             # Boolean indexing already excludes padding positions.
             if surf_mask.any():
