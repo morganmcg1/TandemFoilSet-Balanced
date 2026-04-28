@@ -32,3 +32,55 @@ Best epoch = 6 (final epoch before 30-min timeout). Training trajectory (val_avg
 ### Next step for this direction
 
 Revisit capacity scaling after (1) in-flight Wave-1 runs give us a baseline-architecture val number, (2) BF16 mixed-precision is available to reduce per-epoch time, and (3) gradient accumulation is verified to allow n_layers=7. Alphonse reassigned to `film-re-conditioning` (PR #796).
+
+---
+
+## 2026-04-28 20:15 — PR #763: Add physics-informed distance features to Transolver input
+
+- **Branch:** `willowpai2e5-thorfinn/feature-engineering` (merged)
+- **W&B run:** `072wo9xb` — group `feature-engineering`
+- **Hypothesis:** Appending dist_to_surface, log(1+dist_to_surface), and is_tandem as derived node features provides physically grounded inductive bias for boundary-layer gradients and tandem vs. single-foil regime.
+
+### Results
+
+| Split | val/mae_surf_p | test/mae_surf_p |
+|-------|----------------|-----------------|
+| `val_single_in_dist` | 177.0157 | 148.3098 |
+| `val_geom_camber_rc` | 157.4591 | 145.5500 |
+| `val_geom_camber_cruise` | 105.7864 | 91.0172 |
+| `val_re_rand` | 125.4113 | 121.3623 |
+| **avg** | **141.4181** | **126.5598** |
+
+Best epoch = 12 of 50 (30-min timeout). AUG_X_DIM=27, +768 params.
+
+### Commentary
+
+- **First PR with clean test_avg across all 4 splits.** Student correctly diagnosed the `test_geom_camber_cruise` NaN as a dataset-side issue (sample 20 has 761 NaN y[:, 2] entries) and implemented a NaN-safe `evaluate_split` workaround in `train.py` since `data/` is read-only. Critical fix — all future runs now report finite test_avg.
+- **Decision: Merged.** Beats #732 reference (154.95), produces clean test metrics. Features are physically motivated and low-risk.
+- Became new baseline at val_avg=141.42 before fern's #737 landed.
+
+---
+
+## 2026-04-28 20:25 — PR #737: Add 5-epoch linear warmup + peak lr=1e-3 before cosine decay
+
+- **Branch:** `willowpai2e5-fern/lr-warmup-cosine` (merged)
+- **W&B run:** `5b22tecz` — group `lr-warmup-cosine`
+- **Hypothesis:** Linear LR warmup (1e-4 → 1e-3, 5 epochs) followed by cosine decay to eta_min=1e-6 stabilises early training of slice-attention projections and allows a higher peak LR without instability.
+
+### Results
+
+| Split | val/mae_surf_p | test/mae_surf_p |
+|-------|----------------|-----------------|
+| `val_single_in_dist` | 149.241 | 126.021 |
+| `val_geom_camber_rc` | 146.033 | 129.155 |
+| `val_geom_camber_cruise` | 96.362 | NaN (pre-fix; ~91 expected) |
+| `val_re_rand` | 119.852 | 115.590 |
+| **avg** | **127.872** | NaN (3-split avg ≈ 123.59) |
+
+Best epoch = 14 of 50 (30-min timeout). LR at epoch 14 ≈ 8e-4 (barely into cosine decay).
+
+### Commentary
+
+- **Decision: Merged (current best).** val_avg=127.87 beats new baseline of 141.42 after #763 merged. Schedule change is orthogonal to features change — both merged cleanly.
+- **Critical gap identified:** T_max=50 with a 30-min (~14 epoch) budget means the LR never decays properly. Model was still at 80% of peak LR when cut off, trajectory still steeply descending (136→128 at epochs 13→14). Budget-matched re-run (epochs=14, warmup=2) assigned to fern as PR #809.
+- **test_avg is NaN** because #737 ran BEFORE #763's NaN fix was in the merged branch. Future runs will be clean.

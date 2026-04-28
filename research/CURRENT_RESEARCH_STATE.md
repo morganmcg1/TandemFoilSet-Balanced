@@ -29,17 +29,20 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 
 | Student | PR | Status | Result |
 |---------|----|--------|--------|
-| alphonse | #732 | **Closed** | val_avg=154.95 (6/50 epochs; 30-min OOM fallback to n_layers=6; test NaN) |
-| alphonse | #796 | **WIP** | FiLM-Re conditioning — new assignment |
-| askeladd | #733 | WIP | Mid-train |
-| edward | #734 | WIP | Mid-train; ~239 at step 1195 |
-| fern | #737 | WIP | Mid-train |
-| frieren | #739 | WIP | Mid-train |
-| nezuko | #742 | WIP | Mid-train; ~247 early |
-| tanjiro | #745 | WIP | Mid-train |
-| thorfinn | #763 | WIP | Mid-train |
+| alphonse | #732 | Closed | val_avg=154.95 ref; NaN test; 6/50 epochs |
+| alphonse | #796 | WIP | FiLM-Re conditioning |
+| askeladd | #733 | WIP | More slices (slice_num 64→256) |
+| edward | #734 | WIP | Higher surf_weight (10→50) |
+| fern | #737 | **Merged** | val_avg=127.87 ← best; warmup+cosine |
+| fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
+| frieren | #739 | WIP | Huber loss |
+| nezuko | #742 | WIP | Dropout regularization |
+| tanjiro | #745 | WIP | Separate output heads |
+| thorfinn | #763 | **Merged** | val_avg=141.42; features + NaN-safe eval |
+| thorfinn | #810 | WIP | EMA model checkpoint |
 
-**Current best val_avg/mae_surf_p:** 154.95 (alphonse #732, run pkyat9dy) — reference only, no baseline merged yet.
+**Current best val_avg/mae_surf_p:** 127.872 (fern #737, run 5b22tecz) — merged baseline.
+**test_avg/mae_surf_p:** 126.5598 (thorfinn #763, run 072wo9xb) — most recent clean test number.
 
 **Key learnings from Wave-1 so far:**
 - Throughput is binding: 0.93M-param baseline does ~20 epochs/30min; 3.01M-param does ~6 epochs. BF16/grad-checkpointing needed before scaling.
@@ -50,15 +53,11 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 
 ## Current research themes
 
-1. **Get the Transolver baseline tuned.** Wave 1 covers all the obvious
-   hyperparameter and loss levers. Whichever wins becomes part of the new
-   baseline; the rest tell us where the head-room *isn't*.
-2. **Surface-vs-volume balance.** `surf_weight` and tanjiro's separate-heads
-   experiment will tell us whether pressure and velocity benefit from
-   different optimization signal.
-3. **Generalization-axis split disagreement.** The four val splits will likely
-   disagree on which intervention helps. We treat that disagreement as
-   information about which physics axis is the binding constraint.
+1. **Merged baseline now has two stacked wins:** physics distance features (#763) + warmup+cosine LR (#737). val_avg=127.87. Next generation of runs starts from here.
+2. **Schedule sizing is a major lever.** T_max=50 with a 30-min (~14 epoch) wall-clock budget means the LR barely decays. PR #809 tests the obvious fix (epochs=14, warmup=2). Expect notable improvement.
+3. **Critical dataset bug resolved.** `test_geom_camber_cruise` sample 20 has 761 NaN y[:, 2] entries. NaN-safe `evaluate_split` workaround merged in #763. All future runs from the new baseline will report finite test_avg.
+4. **5 Wave-1 PRs still in-flight** (#733 #734 #739 #742 #745) — running against old baseline. When they submit, we evaluate whether their isolated intervention beats 127.87 after rebase.
+5. **EMA (#810) and FiLM-Re (#796)** are the two highest-priority Wave-2 explorations: variance reduction and Re-regime conditioning respectively.
 
 ## Potential next research directions (Wave 2+ candidates)
 
