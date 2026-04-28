@@ -1,5 +1,27 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 04:15 — PR #471: Attention dropout 0.05 in PhysicsAttention — **CLOSE (3rd regularization saturation)**
+
+- Branch: `charliepai2d5-nezuko/attn-dropout-0p05` (closed)
+
+### Results
+
+| metric | value | vs current baseline (73.91 / 70.37) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 75.44 | **+2.06%** (worse) |
+| `test_avg/mae_surf_p` (3 clean) | 71.57 | +1.7% (worse) |
+| Train-vs-val L1 gap (surf, vol) | +85% / +182% wider than baseline | artifact: train computed with dropout active is depressed |
+
+### Decision
+
+Close. Hits close criterion (val ≥ 75.0). Third regularization-style hypothesis to saturate on the full stack: **wd=5e-4 (#385), EMA (#303), and now attn-dropout** all worked on simpler stacks but neutral-to-bad once L1+warmup+Fourier+sw=30+grad-clip is in place. Student's analysis is consistent with the pattern: model isn't severely overfitting (~10–13% relative train-val gap), so adding more regularization noise hurts deterministic eval without unlocking generalization.
+
+The "gap widening with dropout" is itself a useful diagnostic: train loss measured *with* dropout active is artificially depressed (signal noise lowers reported train loss); this isn't real overfitting reduction.
+
+Reassigned nezuko to **TTA via random node masking (K=5 passes, drop=10%)** (PR #521) — eval-only intervention that doesn't compete with regularization budget. The model is permutation-invariant by design; averaging predictions across K masked-input passes reduces eval-time variance without affecting training. Different axis from the saturated regularizer family.
+
+
+
 ## 2026-04-28 03:35 — PR #470: Trainable random Fourier (Tancik 2020) σ=10 — **CLOSE (Fourier axis exhausted)**
 
 - Branch: `charliepai2d5-thorfinn/fourier-trainable-tancik` (closed)
