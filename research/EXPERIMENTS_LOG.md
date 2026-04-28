@@ -29,5 +29,42 @@
 ### Cross-cutting findings (apply to ALL round-1 students)
 
 - **Timeout is the binding constraint, not epoch count.** Plan for 14 epochs, not 50.
-- **NaN test poisoning is a systemic risk.** Likely to recur on other round-1 PRs as they submit. The `nan_to_num + clamp` defensive fix is the same one-line fix everywhere; will roll into baseline once first PR with the fix merges.
-- **Cruise OOD camber (M=2-4) is the most extrapolation-prone test split.** Whatever sample is causing the NaN pred there will probably keep biting. Worth investigating which sample(s) trigger it as a follow-up.
+- **NaN test poisoning is a real `data/scoring.py` bug, not a model issue.** Identified by askeladd in PR #748 (since closed): `accumulate_batch` does `err * mask` where `NaN * 0 = NaN` in IEEE-754. `test_geom_camber_cruise/sample 20` has 761 NaN values in the **ground truth** `p` channel. This poisons `mae_surf_p` for that split on every run regardless of model. Fix: `torch.where(mask, err, 0)`. Same pattern in `evaluate_split` for `vol_loss`/`surf_loss` produces `Infinity`. Assigned to askeladd as PR #807. Once that lands, all future runs will produce clean `test_avg` numbers.
+- **Cruise OOD camber (M=2-4)** is otherwise the most extrapolation-prone test split — already the hardest extrapolation track regardless of the NaN bug.
+
+## 2026-04-28 20:02 — PR #750: Linear warmup + cosine LR schedule (lr=1e-3, wd=5e-4)
+- **Branch:** `willowpai2e3-edward/lr-warmup-cosine`
+- **Hypothesis:** 500-step linear warmup + per-step cosine to 0, lr=1e-3, wd=5e-4 — should buy 3–8% over plain cosine.
+- **Run:** W&B `thnnvgaw`, 14/50 epochs (timeout), best ckpt @ epoch 12, peak 83.6 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 162.00 | 144.47 |
+| `*_geom_camber_rc` | 148.21 | 136.08 |
+| `*_geom_camber_cruise` | 102.53 | null (scoring bug) |
+| `*_re_rand` | 130.84 | 127.33 |
+| **avg** | **135.89** | **null** |
+
+### Decision: SEND BACK
+- 1.7% better than student's quoted baseline-mean reference (5 runs, range [124.6, 146.1]) — within noise; the hypothesized 3–8% gain isn't demonstrated.
+- Student's diagnosis is exactly right: cosine schedule with `T_max = 50 × 375 ≈ 18.7K steps` but only ~5.2K steps fit in 30 min — never reaches the low-LR fine-tuning regime.
+- Sent back: set `--epochs 14` explicitly so cosine actually anneals end-to-end; raise peak LR to `2e-3` (warmup makes higher peaks safe — that's where the standard transformer warmup gain lives).
+- (Branch hygiene: edward referenced 5 baseline runs t0xgo0zv/6zc9kq6x/6lj642bf/7qi7tbcy/zaqz12qi as a noise band; only zaqz12qi (alphonse v1) is from this advisor branch, the others are out-of-scope. The variance argument stands; the specific run-IDs do not.)
+
+## 2026-04-28 20:04 — PR #748: Transolver 2x capacity scale-up
+- **Branch:** `willowpai2e3-askeladd/transolver-2x-capacity`
+- **Hypothesis:** n_hidden=192, n_layers=8, n_head=8, slice_num=128, mlp_ratio=4 (3.42M params) — predicted 5–15% gain.
+- **Run:** W&B `p486z24b`, **4/50 epochs only** (timeout), best ckpt @ epoch 3, peak 82.5 GB.
+- **val_avg/mae_surf_p = 203.16** (raw); test_avg null (scoring bug); **test_avg corrected = 191.71** (offline re-eval with `torch.where`).
+
+### Decision: CLOSE
+- val_avg = 203 vs. round-1 baseline-range ~140 — clear regression at 4/50 epochs.
+- Approach not broken — it's that 50-epoch cosine schedule with only 4 epochs done means LR is still ~98% of peak. Model never reached convergence regime where 2× capacity is supposed to help.
+- **Critical bug discovery embedded in PR comments**: pinpointed the `data/scoring.py` NaN-mask bug, validated the fix offline. Spawned PR #807 to land the fix as their next assignment.
+- For round 2 capacity: budget-matched schedule (`--epochs 4` so cosine completes), or smaller capacity boost (n_layers=6 to fit ~8 epochs) — defer until scoring fix merges.
+
+## 2026-04-28 20:08 — PR #807 (assigned): Bug fix — NaN-safe masked accumulation
+- **Branch:** `willowpai2e3-askeladd/scoring-nan-mask-fix`
+- **Type:** Infrastructure bug fix (not a hypothesis experiment)
+- **Scope:** `data/scoring.py::accumulate_batch` (the read-only marker explicitly allows bug-fix PRs per CLAUDE.md cherry-pick guidance) and the matching `err * mask` pattern in `train.py::evaluate_split` and the training loop.
+- **Verification asks:** (1) `--debug` smoke run produces identical numbers on clean splits, (2) re-evaluate saved checkpoints `zaqz12qi` (alphonse v1) and `p486z24b` (askeladd transolver-2x) against the fixed scorer to retrieve corrected `test_avg/mae_surf_p` values without retraining.
