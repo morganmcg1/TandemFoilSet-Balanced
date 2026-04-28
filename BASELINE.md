@@ -2,13 +2,34 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 05:15 — PRs #527 + #518 merged on top of #520 — two orthogonal compounds
+## 2026-04-28 05:30 — PR #525 (cosine warmup + T_max=13) — **biggest single-PR delta since δ=0.25**
 
-- **Best `val_avg/mae_surf_p`** (target to beat): conservative **71.6985** (PR #520 directly-measured); standalone wins on each compound:
-  - PR #527 (wd=3e-5 on pre-slice-temp baseline): val_avg = 70.814 (−1.23% vs current)
-  - PR #518 (warmup_steps=50 on pre-slice-temp baseline): val_avg = 71.4284 (−0.38% vs current)
-- **Recipe**: huber(δ=0.25) + bias-corrected EMA(decay_target=0.99, **warmup_steps=50**) + SwiGLU FFN + DropPath(0→0.1) + AdamW betas (0.9, 0.95), **wd=3e-5** + PhysicsAttention temperature init=1.0 + NaN-safe.
-- **Caveat**: combined-stack actual val_avg unmeasured. Both wd=3e-5 and warmup_steps=50 are mechanistically orthogonal to slice-temp and to each other (different mechanisms: L2 shrinkage, EMA cold-start, attention init). Future runs will measure the combined stack.
+- **Best `val_avg/mae_surf_p`** (directly measured): **67.306** (epoch 14, fern's standalone run on the slice-temp baseline)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **59.296**
+- **Per-split val MAE for `p`**:
+  - val_single_in_dist: 77.660 (−11.66% vs 87.914 reference)
+  - val_geom_camber_rc: 80.690 (−3.16% vs 83.323)
+  - val_geom_camber_cruise: 46.877 (−6.66% vs 50.222)
+  - val_re_rand: 63.996 (−6.16% vs 68.199)
+- **Per-split test MAE for `p`**:
+  - test_single_in_dist: 68.728
+  - test_geom_camber_rc: 72.629
+  - test_geom_camber_cruise: 39.668
+  - test_re_rand: 56.158
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(decay_target=0.99, warmup_steps=50) + SwiGLU FFN + DropPath(0→0.1) + AdamW betas (0.9, 0.95), wd=3e-5 + PhysicsAttention temperature init=1.0 + **cosine schedule with 1-epoch linear warmup + cosine T_max=13** + **feature noise std=0.005** + NaN-safe.
+- **Mechanism**: late-epoch slope shallows from 4.3 → 0.7 pts/epoch as cosine LR decays toward zero — the model finally lands in a "fine-tuning regime" within the 14-epoch budget. Prior baselines were cut off mid-descent at 3–5 pts/epoch. PR #370's earlier T_max=14 attempt failed on EMA(0.99)+SwiGLU only because that stack saturated the fast-tracking benefit; the merged stack creates different basin geometry.
+- **Caveat**: 67.306 was measured on slice-temp baseline + the LR schedule fix only (fern branched before wd=3e-5, warmup_steps=50, and feature-noise=0.005 merged). The current advisor stack adds those compounds on top. Combined-stack actual val_avg is expected at-or-better than 67.306; future runs will refine.
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name cosine-warmup-tmax-aligned --agent <name>
+  ```
+
+## 2026-04-28 05:15 — Previous baselines (PRs #527 + #518 on top of #520)
+
+- val_avg target stays at conservative 71.6985 (PR #520 directly measured) for cross-PR ranking.
+- PR #527 (wd=3e-5): val_avg = 70.814 (−1.23%)
+- PR #518 (warmup_steps=50): val_avg = 71.4284 (−0.38%)
 
 ## 2026-04-28 04:55 — Previous baseline (PR #520, slice-temp init 1.0)
 
