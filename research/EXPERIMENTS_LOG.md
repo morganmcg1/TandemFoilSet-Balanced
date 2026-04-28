@@ -299,6 +299,35 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - **What killed the headline metric is wall-clock**: `nn.RMSNorm` in PyTorch 2.10 ran 16.9% slower per epoch (162.4s vs 138.9s) and used 11.9% more peak VRAM than `nn.LayerNorm`. This burned exactly one epoch under the 30-min cap (12 vs baseline's 13), and that final epoch is exactly where SwiGLU pulls away (92.27 → 88.23, a −5.4% jump in one step under the still-monotonically-descending curve). Almost certainly a kernel-dispatch issue with the ATen op on this Blackwell build; the LLM-style hand-written `nn.Module` RMSNorm should compile via TorchInductor and recover wall-clock parity.
 - Decision: **CLOSE this run** but the direction has clear signal. Re-run with the manual implementation (student's follow-up #1) is the queued reassignment. **The hypothesis is valid; the implementation choice was wrong.**
 
+## 2026-04-28 03:20 — PR #463: Huber loss with delta=0.25 — **MAJOR WINNER**
+
+- Branch: `charliepai2d2-fern/huber-delta-025` — branched on EMA(0.99)+SwiGLU (pre-DropPath); metrics committed.
+- Hypothesis: push δ profile from the saturation question raised by PR #439's δ=0.5 (1pt gain). Profile so far: δ=2→107.61, δ=1→88.23, δ=0.5→87.27 — flattening. Predicted at δ=0.25: −0.5% to −1.5% (could regress if profile saturated).
+- Result: **best `val_avg/mae_surf_p = 72.414`** at epoch 13. **−13.0% vs EMA(0.99)+SwiGLU baseline (83.223). −10.0% vs current merged DropPath baseline (80.480).** test_avg = 63.082 (−14.6% vs 73.904, −12.8% vs current 72.328). **Largest single-PR improvement of the entire research programme.**
+- Per-split val MAE for `p`: all four improved 10–18%. single_in_dist=87.91 (−11.03%), camber_rc=83.32 (−13.76%), camber_cruise=50.22 (−17.88%), re_rand=68.20 (−10.62%). The cruise canary (which slightly regressed at δ=0.5) gained the *most* at δ=0.25.
+- **The δ profile did NOT saturate at δ=0.5** — δ=0.25 delivered a much steeper gain than the δ=1→0.5 step did, on a different baseline. Updated profile: δ=2→107.6, δ=1→88.2 (pre-EMA); δ=1→83.2, **δ=0.25→72.4** (post-EMA(0.99)).
+- Validation curve: smooth monotonic descent through 13 epochs with one mild plateau tick at ep12 (+0.17, recovered fully at ep13). No L1-like instability surfaced within the budget.
+- **Mechanism**: smaller quadratic region (more L1-like) handles the heavy-tailed pressure error distribution better. EMA(0.99)'s fast tracking compounds especially well with a more L1-like loss because most of the loss surface is now linear-bounded gradient — the EMA averages over a less-jagged optimization trajectory.
+- Decision: **MERGE.** Squash-merging fern's δ change (`delta=1.0 → 0.25` at both call sites) on top of the current DropPath stack. The 72.414 measurement was on the pre-DropPath stack; the post-merge combined stack (δ=0.25 + DropPath + EMA(0.99) + SwiGLU + huber + NaN-safe) is expected to be at-or-better-than 72.414 since DropPath is orthogonal to loss reformulation. Future round-7 PRs will refine the post-merge baseline.
+
+## 2026-04-28 03:20 — PR #460: Per-sample feature noise (semantics-aware)
+
+- Branch: `charliepai2d2-frieren/per-sample-feature-noise` — branched on EMA(0.99)+SwiGLU pre-DropPath; metrics committed.
+- Hypothesis: replace per-node noise (PR #425) with semantics-aware noise — per-node on dims 0–12 (positions, saf, dsdf, is_surface) + per-sample broadcast on dims 13–23 (Re, AoA, NACA, gap, stagger). Direct correction of PR #425's failure mode. Predicted −1% to −3%.
+- Result: best `val_avg/mae_surf_p = 81.437` at epoch 12. **−2.15% vs EMA(0.99)+SwiGLU baseline (83.223), at the upper end of predicted range.** But +1.19% vs the now-current DropPath baseline (80.480). test_avg = 73.019 (−1.20% vs EMA, +0.95% vs current).
+- **Diagnosis from PR #425 fully confirmed**: the splits per-node noise broke (`val_geom_camber_rc` was +6.57%, `val_re_rand` was +9.18% under PR #425) flip cleanly: camber_rc now −3.27%, re_rand essentially flat (−0.03%). Per-sample broadcast preserves (geometry, flow conditions) consistency.
+- 3/4 test splits improved; test_camber_rc +1.22% (within run-to-run variance, opposite direction of val_camber_rc improvement).
+- Decision: **CLOSE** standalone — doesn't beat the current DropPath baseline (which hadn't merged when frieren ran). Direction is alive: per-sample feature noise is now a validated technique. Frieren's own follow-up #1 (sweep `feature_noise_std` higher) is queued, ideally on the post-fern-merge baseline.
+
+## 2026-04-28 03:20 — PR #459: SwiGLU preprocess MLP (LLaMA-everywhere)
+
+- Branch: `charliepai2d2-tanjiro/swiglu-preprocess` — branched on EMA(0.99)+SwiGLU pre-DropPath; metrics committed.
+- Hypothesis: replace preprocess MLP with `SwiGLU_MLP` to extend the per-block SwiGLU win (PR #391) to the input projection. Predicted −0.5% to −2%.
+- Result: best `val_avg/mae_surf_p = 88.299` at epoch 13. **+6.1% vs EMA(0.99)+SwiGLU baseline; +9.7% vs current DropPath baseline (80.480).** test_avg = 79.294 (+7.3%).
+- 3/4 val splits regressed 8–10%; only `val_geom_camber_rc` was flat (−0.61%).
+- **Student's mechanistic diagnosis (the keeper)**: per-block SwiGLU gates AFTER attention has mixed the residual stream — gating prunes redundancy in already-learned representations. **Input-projection SwiGLU gates BEFORE mixing**, so `silu(W1·x) * (W2·x)` chooses *which raw input channels survive* into the hidden space — and at the input layer, every raw feature (`log(Re)`, AoA, NACA digits, gap, stagger, positions, dsdf) carries irreducible physical information that the network needs later. **Gating at the input prunes signal.** Trajectory data supports this: this run matched baseline through epoch 5 (coarse structure phase) then fell behind as fine-detail learning kicks in.
+- Decision: **CLOSE.** "LLaMA-everywhere" breaks at the input projection — that's the definitive lesson. Adding to "Disconfirmed directions". Future input-layer capacity should reach for non-gated expansions (wider intermediate, more layers) before SwiGLU-style gating.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
