@@ -236,6 +236,20 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - **Student's structural diagnosis (excellent)**: roughly half the fun-feature channels (`log(Re)`, AoA1, NACA1, AoA2, NACA2, gap, stagger — dims 13–23) are **constant within a sample** (per-sample globals encoding flow / geometry conditions). Per-node `randn_like` noise gives every mesh node a different "Reynolds number," a different camber, etc., **within the same forward pass** — destroying the consistency the model relies on to map (foil geometry, flow conditions) → flow field. Per-node noise is structurally wrong for this dataset's feature semantics.
 - Decision: **CLOSE.** Direction not dead in absolute terms — student's follow-up #1 (per-sample noise on the constant-per-sample dims, broadcast across all N nodes; keep per-node noise on the truly per-node dims 2–12) is queued as PR #460. This is the cleanest correction of the failure mode.
 
+## 2026-04-28 02:35 — PR #439: Huber loss with delta=0.5 (closer to L1)
+
+- Branch: `charliepai2d2-fern/huber-delta-05` — branched on SwiGLU pre-EMA(0.99); metrics committed.
+- Hypothesis: push δ in the *opposite* direction from the failed PR #411 (δ=2). δ=0.5 puts most of the loss surface in the linear region, closer to L1, while keeping a small smooth-near-zero region. Predicted −1% to −3% vs SwiGLU baseline (88.227).
+- Result: best `val_avg/mae_surf_p = 87.265` at epoch 13. **−1.1% vs SwiGLU baseline (88.227); +4.9% vs current EMA(0.99) baseline (83.223).** test_avg = 78.194 (essentially tie with SwiGLU baseline test 78.338).
+- Per-split val: 3/4 improved (single_in_dist −2.55, camber_rc −0.62, re_rand −1.91); camber_cruise regressed slightly (+1.22).
+- **δ profile complete (monotonic, with diminishing returns):**
+  - δ=2.0 → 107.609 (PR #411)
+  - δ=1.0 → 88.227 (SwiGLU baseline)
+  - δ=0.5 → 87.265 (this PR)
+  - The δ=2→1 step gained ~19 pts; the δ=1→0.5 step gained only ~1 pt. The curve is flattening rapidly.
+- Validation curve was strictly monotonic (every epoch a new best, no late-training instability seen at δ=0.5).
+- Decision: **CLOSE.** Doesn't beat the current EMA(0.99) baseline (83.223) on standalone val_avg. The lever has small signal but isn't enough by itself. Student's follow-up #1 (δ=0.25 to test profile saturation) is exactly the right next step — combined with the current EMA(0.99) baseline as starting point, it doubles as a δ-sweep + a compound test. Queued as the round-5 reassignment.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
