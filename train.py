@@ -213,6 +213,32 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class ModelEMA:
+    """Exponential moving average of model parameters."""
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model):
+        for k, v in model.state_dict().items():
+            if v.dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v.detach())
+
+    def apply_to(self, model):
+        """Load shadow weights into model. Returns the original state_dict for restoration."""
+        backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow, strict=True)
+        return backup
+
+    @staticmethod
+    def restore(model, backup):
+        model.load_state_dict(backup, strict=True)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -223,11 +249,25 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Samples are excluded if predictions or ground truth are non-finite anywhere.
+    The scorer already handles non-finite ``y`` per-sample, but its mask is
+    applied via ``err * mask`` after ``err = |pred - y|``: when ``y`` is inf
+    that ``err`` is inf and ``inf * 0`` = nan in IEEE 754, which would poison
+    the float64 accumulator. We replace non-finite values with 0 before the
+    scorer call to avoid that, and incorporate the y-finite mask into our own
+    sample mask so the resulting counts and sums stay consistent.
+
+    Returns ``n_pred_skipped`` (samples with non-finite predictions; a model
+    failure mode) and ``n_y_skipped`` (samples with non-finite ground truth;
+    a data issue — observed: fp16 overflow in test_geom_camber_cruise sample
+    20 pressure channel) for diagnostic logging.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_pred_skipped = n_y_skipped = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -237,8 +277,26 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+
+            B = pred.shape[0]
+            sample_pred_finite = (
+                torch.isfinite(pred.reshape(B, -1)).all(dim=-1)
+                & torch.isfinite(pred_orig.reshape(B, -1)).all(dim=-1)
+            )
+            sample_y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            sample_finite = sample_pred_finite & sample_y_finite
+            n_pred_skipped += int((~sample_pred_finite).sum().item())
+            n_y_skipped += int((~sample_y_finite).sum().item())
+
+            # Replace non-finite values with 0 so masked-out positions don't
+            # propagate nan via ``inf * 0`` downstream.
+            pred = torch.where(torch.isfinite(pred), pred, torch.zeros_like(pred))
+            pred_orig = torch.where(torch.isfinite(pred_orig), pred_orig, torch.zeros_like(pred_orig))
+            y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+            mask = mask & sample_finite.unsqueeze(-1)
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -253,7 +311,6 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +318,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_pred_skipped": n_pred_skipped,
+           "n_y_skipped": n_y_skipped}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -358,11 +417,20 @@ def save_model_artifact(
 
 
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
+    n_pred = m.get("n_pred_skipped", 0)
+    n_y = m.get("n_y_skipped", 0)
+    skip_parts = []
+    if n_pred:
+        skip_parts.append(f"{n_pred} non-finite-pred")
+    if n_y:
+        skip_parts.append(f"{n_y} non-finite-y")
+    skip_tag = f"  [skipped: {', '.join(skip_parts)}]" if skip_parts else ""
     print(
         f"    {split_name:<26s} "
         f"loss={m['loss']:.4f}  "
         f"surf[p={m['mae_surf_p']:.4f} Ux={m['mae_surf_Ux']:.4f} Uy={m['mae_surf_Uy']:.4f}]  "
         f"vol[p={m['mae_vol_p']:.4f} Ux={m['mae_vol_Ux']:.4f} Uy={m['mae_vol_Uy']:.4f}]"
+        f"{skip_tag}"
     )
 
 
@@ -386,6 +454,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    ema_decay: float = 0.999
 
 
 cfg = sp.parse(Config)
@@ -430,6 +499,9 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema = ModelEMA(model, decay=cfg.ema_decay)
+print(f"EMA: decay={cfg.ema_decay}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -498,6 +570,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -511,12 +584,24 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    # Live-weights eval (for comparison vs EMA — advisor asked about divergence)
+    live_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_val_avg = aggregate_splits(live_split_metrics)
+
+    # EMA-weights eval (this is the metric used for checkpoint selection)
+    backup = ema.apply_to(model)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
+    ema.restore(model, backup)
+
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -533,6 +618,13 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    # Live-weights metrics for direct comparison
+    for split_name, m in live_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"live_{split_name}/{k}"] = v
+    for k, v in live_val_avg.items():
+        log_metrics[f"live_val_{k}"] = v
+    log_metrics["ema_minus_live_avg/mae_surf_p"] = avg_surf_p - live_avg_surf_p
     wandb.log(log_metrics)
 
     tag = ""
@@ -543,14 +635,16 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        backup = ema.apply_to(model)
         torch.save(model.state_dict(), model_path)
+        ema.restore(model, backup)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p(ema)={avg_surf_p:.4f}  live={live_avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
