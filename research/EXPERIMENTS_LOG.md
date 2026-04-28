@@ -490,7 +490,7 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Result: best `val_avg/mae_surf_p = 66.397` at epoch 15. **−1.35% vs current 67.306 baseline; −6.1% vs apples-to-apples eager run (70.700 at ep14).** test_avg = 60.398 (+1.86% vs current 59.296 — driven by RNG since seeds differ between runs).
 - **Wall-clock impact**: 103.6 s/epoch (−23.3% vs eager's 135.1 s/epoch). **17 epochs in 30-min cap vs 14 eager (+21%).** Compile cost: epoch 1 was +6 s warmup amortized across 16 fast subsequent epochs.
 - Per-split val MAE for `p` (compile run, all 4 improved vs eager): single_in_dist 79.83 (eager 87.50), camber_rc 76.52 (eager 81.02), cruise 45.78 (eager 48.46), re_rand 63.46 (eager 65.82).
-- Decision: **MERGE.** This is the round's most impactful merge despite a small val win — the wall-clock gain unlocks ~3 extra epochs for every future PR on this branch. Future cosine T_max may want re-tuning to use the new realistic budget (currently T_max=13, but effective budget is now ~17 epochs).
+- Decision: **SEND BACK FOR REBASE.** GraphQL merge-conflict error on squash: the branch is several merges behind advisor (fern #525, frieren #526, and others landed after the branch was created). Rebasing requires a re-run to measure on the now-stronger baseline. The val_avg=66.397 / test_avg=60.398 numbers are recorded here as alphonse's measurement on the slice-temp-only baseline; on the post-#525 baseline (val_avg=67.306) the compile run should land at-or-below 66.397 since the merged stack starts from a stronger basin.
 
 ## Test-metric NaN follow-up (cross-PR)
 
