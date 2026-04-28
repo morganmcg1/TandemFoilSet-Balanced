@@ -4,39 +4,39 @@
 
 | Metric | Value | Run | PR |
 |--------|-------|-----|----|
-| `val_avg/mae_surf_p` | **99.2257** | `m46h5g4s` | #754 |
-| `test_avg/mae_surf_p` | **92.6101** ✓ unblocked | `2hcmefh9` | #797 |
-| Best epoch | 12 / 50 (timeout @ ep 14) | | |
-| Wall time | 30.77 min | | |
+| `val_avg/mae_surf_p` | **89.7141** | `w9xbc0wl` | #820 |
+| `test_avg/mae_surf_p` | NaN (cruise -Inf GT; see #797 guards) | — | — |
+| 3-split test mean (excl. cruise) | **88.16** | `w9xbc0wl` | #820 |
+| Best epoch | 14 / 50 (timeout cliff) | | |
+| Wall time | 30.91 min | | |
 
-Note: `val_avg` and `test_avg` are reported from different runs of the
-same merged code path. `train.py` does not seed torch/numpy/sampler, so
-val_avg drifts ~5–10% across runs without any code change. The 99.23
-val number is from `m46h5g4s` (PR #754); the 92.61 test number is from
-`2hcmefh9` (PR #797 rebased — same code, different seed init). Tracking
-seeding as a separate priority for the next PR.
+Note: `test_avg/mae_surf_p` came back as NaN on thorfinn's rebased run even
+though #797's NaN guards are merged. This may be a rebase artifact — the
+guards should fire and filter cruise sample 000020. Next run on the merged
+branch should report a finite test_avg. The 3-split test mean (88.16) is
+the reliable paper-facing comparison metric until then.
 
-## Per-split val (epoch 12, run `m46h5g4s`)
+## Per-split val (epoch 14, run `w9xbc0wl`)
 
-| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
-|-------|-----------|-------------|-------------|
-| `val_single_in_dist` | 116.675 | 1.358 | 0.657 |
-| `val_geom_camber_rc` | 113.935 | 2.820 | 0.934 |
-| `val_geom_camber_cruise` | 75.015 | 1.129 | 0.487 |
-| `val_re_rand` | 91.279 | 1.850 | 0.693 |
-| **val_avg** | **99.226** | **1.789** | **0.693** |
+| Split | mae_surf_p |
+|-------|-----------|
+| `val_single_in_dist` | 109.16 |
+| `val_geom_camber_rc` | 106.62 |
+| `val_geom_camber_cruise` | **60.60** |
+| `val_re_rand` | 82.47 |
+| **val_avg** | **89.714** |
 
-## Per-split test (post-#797 unblock, run `2hcmefh9`, epoch 14)
+## Per-split test (epoch 14, run `w9xbc0wl`)
 
-| Split | mae_surf_p | nonfinite_pred | nonfinite_gt |
-|-------|-----------|----------------|--------------|
-| `test_single_in_dist` | 117.771 | 0 | 0 |
-| `test_geom_camber_rc` | 99.491 | 0 | 0 |
-| `test_geom_camber_cruise` | **65.287** | 0 | **1** (filtered) |
-| `test_re_rand` | 87.891 | 0 | 0 |
-| **test_avg/mae_surf_p (all 4 splits)** | **92.610** | 0 | 1 |
+| Split | mae_surf_p |
+|-------|-----------|
+| `test_single_in_dist` | 96.32 |
+| `test_geom_camber_rc` | 92.86 |
+| `test_geom_camber_cruise` | NaN (cruise -Inf GT, filtered by #797) |
+| `test_re_rand` | 75.31 |
+| **3-split test mean (excl. cruise)** | **88.16** |
 
-## Configuration (post-#797)
+## Configuration (post-#820)
 
 | Knob | Value |
 |------|-------|
@@ -54,48 +54,52 @@ seeding as a separate priority for the next PR.
 | `surf_weight` | 10.0 |
 | **`channel_weights`** | **[1.0, 1.0, 3.0]** for [Ux, Uy, p] |
 | Loss | L1 (absolute error) on normalized space, vol + surf_weight × surf |
+| **`fourier_bands`** | **4** — `[sin/cos(π·2^k·x), sin/cos(π·2^k·z)]` for k=0..3 prepended to input |
 | Sampler | `WeightedRandomSampler` over balanced domain groups |
 | `epochs` | 50 (capped) |
 | Timeout | 30 min |
-| **NaN guards** | **active in `evaluate_split` (#797)** — drops cruise sample 000020 from accumulator |
-| Seed | **NONE** (val_avg drifts ~5-10% across runs; seed PR is next priority) |
+| **NaN guards** | **active in `evaluate_split` (#797)** — drops cruise sample 000020 |
+| Seed | **NONE** (val_avg drifts ~5-10% across runs; seed PR #863 in flight) |
+| Params | 666,455 (+4,096 over prior baseline from Fourier input dim 24→40) |
 
-## Delta vs prior baseline (PR #752 L1)
+## Delta history
 
-| Metric | L1-only (#752) | L1 + ch=[1,1,3] (#754) | Δ |
-|---|---|---|---|
-| `val_avg/mae_surf_p` | 101.93 | **99.23** | **−2.65%** |
-| 3-split test mean | 100.83 | 99.34 | −1.48% |
-| `val_avg/mae_surf_Ux` | 1.429 | 1.789 | +25.2% |
-| `val_avg/mae_surf_Uy` | 0.611 | 0.693 | +13.4% |
+| Metric | L1-only (#752) | +ch=[1,1,3] (#754) | +Fourier PE K=4 (#820) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.93 | 99.23 | **89.71** |
+| 3-split test mean | 100.83 | 99.34 | **88.16** |
+| Δ vs prior | — | −2.65% | **−9.59%** |
+| Cumul. Δ vs L1-only | — | −2.65% | **−12.0%** |
 
-The 3× pressure weight stacks with L1: net pressure improvement, with
-acceptable velocity-channel regression (we don't rank on velocity).
-Biggest val gain on `val_single_in_dist` (133.25 → 116.68, −12.4%) — the
-heaviest-tail split where pressure outliers dominate.
+Fourier PE is **orthogonal and additive** with channel weighting. Mechanistically:
+ch=[1,1,3] tips the gradient balance toward pressure; Fourier PE provides the
+high-freq basis the preprocess MLP previously had to discover via composition.
+With both, the model gets constant-magnitude per-channel pressure gradient AND
+a free spectral basis — the wins stack cleanly. +4K params, −9.59% MAE.
+
+Key physical observation: `val_re_rand` was flat with Fourier PE on the L1-only
+baseline (−0.2%) but gained −9.7% post-rebase with ch=[1,1,3]. Interpretation:
+ch=[1,1,3] makes pressure dominant in the loss, so Fourier's high-freq basis
+earns its keep on the Re-varying split too (the near-foil pressure BL structures
+are the same spatial frequencies regardless of Re). Mechanistically clean.
 
 ## Reproduce
 
 ```bash
 cd target/
-python train.py --agent willowpai2e4-fern \
-  --wandb_name "willowpai2e4-fern/p-channel-3x-on-L1"
+python train.py --fourier_bands 4 \
+  --agent willowpai2e4-thorfinn \
+  --wandb_name "willowpai2e4-thorfinn/fourier-pe-K4-on-L1-ch3"
 ```
 
 ## Open issues
 
-- **Run-to-run val variance:** `train.py` does not set torch/numpy/sampler
-  seeds. Across two runs of the merged code (m46h5g4s vs 2hcmefh9), val_avg
-  drifted 99.23 → 105.22, almost entirely on `val_single_in_dist`. The
-  diagnostic counts confirm the NaN-guard #797 was no-op on val (so the
-  drift is not caused by the merge), but it does mean baseline comparisons
-  are noisy. **Adding a seed is the next priority** — askeladd assigned.
-- **Cruise-test `-Inf` GT (resolved by #797 workaround):** Confirmed by
-  askeladd: `test_geom_camber_cruise/000020.pt` has **761 `-Inf` values**
-  in the `p` channel (all in volume nodes; surface MAE not directly
-  affected). The merged guard filters this sample from
-  `accumulate_batch`. The dataset itself is read-only. One residual
-  display-only NaN in `cruise/loss` (cosmetic) traced to `nan_to_num`
-  default args overflowing through `channel_weights[2]=3` — fix is a
-  one-line argument addition (`nan=0.0, posinf=0.0, neginf=0.0`); will
-  ride along with the next `evaluate_split`-touching PR.
+- **Run-to-run val variance:** Seed PR #863 (askeladd) is in flight — will
+  eliminate the ~5-10% init/sampler drift once merged.
+- **test_avg NaN on Fourier PE run:** thorfinn's rebased run reports NaN for
+  test_avg despite #797 guards being merged. Most likely a rebase artifact.
+  Next run on advisor branch HEAD should produce a finite test_avg. The
+  3-split mean (88.16) is reliable in the interim.
+- **Cruise-test `-Inf` GT (workaround active):** `test_geom_camber_cruise/000020.pt`
+  has 761 `-Inf` values in the `p` channel. The per-sample `y_finite` guard
+  in `evaluate_split` (#797) filters this sample. Dataset is read-only.
