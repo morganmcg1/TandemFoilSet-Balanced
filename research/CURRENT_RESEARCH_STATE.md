@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 07:30
+- **Date:** 2026-04-28 07:40
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
 - **Most recent human research direction:** none received yet
@@ -29,7 +29,7 @@ Round 1 in progress. Strategy:
 | #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | wip |
 | #428 | thorfinn  | Multi-seed baseline calibration (3 seeds of default config)     | wip |
 | #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (sent back; bit-exact correct fix, awaiting rebase before merge) |
-| #585 | fern      | SwiGLU FFN replacement (LLaMA/PaLM-style, 2-seed)               | wip (new; replaces merged #434 — orthogonal architectural axis, ~zero param overhead) |
+| #585 | fern      | SwiGLU FFN replacement (LLaMA/PaLM-style, 2-seed)               | wip (sent back; standalone win 85.90 ± 4.93 (-14.5% vs pre-Huber baseline); rebase + 2-seed composition test on bf16+grad-clip+Huber baseline, then merge) |
 
 ## Closed / merged
 

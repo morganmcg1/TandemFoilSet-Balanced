@@ -2,6 +2,25 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 07:35 — PR #585: SwiGLU FFN replacement — **SENT BACK (composition test on new Huber baseline)**
+- Branch: `willowpai2d5-fern/swiglu-ffn` (pre-#413 fork; train.py adds SwiGLU + reverts Huber, research/*.md staleness)
+- 2-seed run on bf16+grad-clip baseline (pre-Huber):
+
+| Seed | val_avg/mae_surf_p | best epoch | epochs done | W&B id |
+|---|---:|---:|---:|---|
+| 0 (vdsffnoj) | 82.42 | 17/19 | 19 | swiglu |
+| 1 (pop98oet) | 89.38 | 15/19 | 19 | swiglu |
+| **mean ± std** | **85.90 ± 4.93** | — | — | — |
+
+- **vs OLD bf16+grad-clip baseline (100.44): -14.5%** (substantial standalone win, well above predicted 1-3%)
+- Per-split: every split improves 11.9-16.5%, OOD splits gain MOST (opposite of fern's earlier #405 Fourier features which had per-split inversion).
+- n_params 0.66M ≈ baseline 0.67M (2/3-sizing convention preserves param count to within 0.3%); peak VRAM 35.8 GB.
+- Sent back: branch was pre-#413 (Huber merge), so direct merge would un-revert Huber. Need rebase + 2-seed re-run on bf16+grad-clip+Huber baseline (90.98) to test SwiGLU+Huber composition. Mechanisms are orthogonal (FFN-architectural vs loss-surface), so additive composition expected; predicted ~80-84 if at ~78% efficiency (same as grad-clip+Huber stack).
+- Useful side-findings preserved:
+  - 2/3-sizing SwiGLU = same param count as standard FFN — genuinely free.
+  - Per-split improvement uniformity = strong signal against single-split overfit story.
+  - SwiGLU mechanism is opposite-shaped from Fourier features (#405): gating helps geometric generalization rather than hurting it.
+
 ## 2026-04-28 07:25 — PR #413: Huber surface loss δ=1.0 (post-grad-clip composition test) — **MERGED** (commit e35acdf)
 - Branch: `willowpai2d5-askeladd/huber-surface-loss` (squash-merged into advisor; deleted)
 - 2-seed run on bf16+grad-clip baseline:
