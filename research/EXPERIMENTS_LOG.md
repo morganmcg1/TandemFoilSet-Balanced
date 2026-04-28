@@ -2,6 +2,16 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 01:42 — PR #405: Fourier features for spatial coords (L=8) — **CLOSED**
+- Branch: `willowpai2d5-fern/fourier-spatial` (deleted; pre-#433, slice_num=128)
+- Hypothesis: NeRF-style Fourier features lift `val_avg/mae_surf_p` 4-8%, biggest gain on `val_geom_camber_*`
+- Result: val_avg = 141.92 at epoch 8/11 vs current baseline 139.83 → +1.5% worse (would be ~+8% vs corrected slice_num=64 baseline post-#433)
+- W&B run: f1dslwya (group `spatial_fourier`)
+- **Per-split inversion is the stronger refutation than the headline:** `val_single_in_dist` -12% (improved as predicted), but `val_geom_camber_rc` +14% and `val_re_rand` +10% (opposite of hypothesis). High-freq Fourier features overfit to training spatial signatures.
+- Decision: **closed** per fern's own exit criterion. Hypothesis refuted in shape, not just magnitude.
+- Side-finding preserved: `val_single_in_dist` gain is real (Fourier basis genuinely helps in-distribution local features). Round-2 stack candidate IF a configuration wins on OOD splits without re-triggering the OOD penalty.
+- Fern reassigned to **gradient clipping (#434)** — directly attacks the ±10-15% seed variance from PR #331, two-seed run for variance measurement.
+
 ## 2026-04-28 01:35 — PR #329 (rebased re-run): surf_weight=50 on slice_num=128 — **CLOSED (deciding evidence for #336 revert)**
 - Branch: `willowpai2d5-alphonse/surf-weight-sweep` (deleted; rebased cleanly to advisor HEAD; diff was empty — pure CLI flag run)
 - One run, 30-min timeout, 11 epochs, default config + `--surf_weight 50`

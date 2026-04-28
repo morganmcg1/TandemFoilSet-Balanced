@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 01:38
+- **Date:** 2026-04-28 01:45
 - **Advisor branch:** `icml-appendix-willow-pai2d-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r5`
 - **Most recent human research direction:** none received yet
@@ -29,7 +29,7 @@ Round 1 in progress. Strategy:
 | #340 | tanjiro   | Per-channel pressure-weighted surface loss (3× weight on `p`)   | wip |
 | #428 | thorfinn  | Multi-seed baseline calibration (3 seeds of default config)     | wip (new; replaces closed #341) |
 | #375 | edward    | Bugfix: nan_to_num in `data/scoring.py`                         | wip (sent back; fix is bit-exact correct, but branch needs rebase before squash-merge to drop reverts to BASELINE.md / research/*.md) |
-| #405 | fern      | Spatial Fourier features (NeRF-style, L=8 octaves)              | wip (new; replaces #376) |
+| #434 | fern      | Gradient clipping (max_norm=1.0), 2-seed for variance measurement | wip (new; replaces closed #405) |
 
 ## Closed / merged
 
@@ -42,6 +42,7 @@ Round 1 in progress. Strategy:
 | #338 | frieren | LR warmup post-rebase (slice_num=128) — **closed**, +2.9% regression; slice_num=64+warmup vs slice_num=128+warmup direct comparison shows slice_num=64 wins by 9.7% |
 | #341 | thorfinn | EMA(0.999) on slice_num=64 — **closed**, apparent win is single-oscillation absorption + slice_num confound; not statistically separated from baseline |
 | #329 | alphonse | surf_weight sweep — **closed** after rebased re-run; sw=50 on slice_num=128 hit 151.34 (+8.2% vs baseline). Direct evidence triggered #336 revert (PR #433). |
+| #405 | fern | Fourier features L=8 — **closed**, +1.5% regression but bigger refutation is per-split inversion (in-dist wins, OOD splits regress — opposite of hypothesis). |
 
 ## Potential next research directions (round 2+)
 
