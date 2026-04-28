@@ -12,20 +12,20 @@
 
 The val baseline (115.65) is what current WIP experiments must beat.
 
-## Active WIP PRs (9 students, all running)
+## Active WIP PRs (8 students, all running)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #789 | askeladd | Gradient clipping (max_norm=1.0) | Running |
+| #789 | askeladd | Gradient clipping (max_norm=1.0) | Running (⚠ missing Huber loss flag) |
 | #792 | frieren | n_layers=6 Transolver + grad clipping (NaN fix) | Running |
-| #793 | nezuko | Finer physics partitioning: slice_num 64→128 | Running |
-| #794 | tanjiro | LR warmup (2 epochs) + Huber loss | Revision of prior result |
-| #795 | thorfinn | Per-sample norm + Huber loss combined | Revision of prior result |
-| #808 | fern | bf16 mixed precision for wider model (n_hidden=256, n_head=8) | Running |
+| #793 | nezuko | Finer physics partitioning: slice_num 64→128 | Running (⚠ missing Huber loss flag) |
+| #794 | tanjiro | LR warmup (2 epochs) + Huber loss | Sent back: reduce warmup 5→2 epochs, add Huber |
+| #795 | thorfinn | Per-sample norm + Huber loss combined | Sent back: add Huber on top of per-sample norm |
+| #808 | fern | bf16 mixed precision for wider model (n_hidden=256, n_head=8) | Sent back: add Huber, revert split decoder, set epochs=12 |
 | #827 | alphonse | surf_weight sweep (20, 30, 50) on Huber baseline | Running |
 | #828 | edward | AdamW weight_decay sweep (1e-4, 1e-3, 1e-2) on Huber baseline | Running |
 
-Note: #791 (fern wider model) was sent back; follow-up is #808.
+Note: #791 (fern fp32 wider model) was CLOSED as superseded by #808 (bf16 follow-up). Infrastructure fixes from #791 (NaN guard, JSONL logger, CLI args) are retained in the codebase.
 
 ## Key Infrastructure Fix Applied
 
