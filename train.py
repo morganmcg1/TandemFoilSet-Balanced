@@ -452,7 +452,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 2.5e-4  # Lion: AdamW lr / 3
-    weight_decay: float = 3e-4  # Lion: AdamW wd * 3
+    weight_decay: float = 1e-4  # Lion: less regularization for under-converged 20-epoch budget
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
