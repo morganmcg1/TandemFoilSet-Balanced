@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -33,6 +35,12 @@ from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
+
+_SENPAI_SEED = int(os.environ.get("SENPAI_SEED", "0"))
+torch.manual_seed(_SENPAI_SEED)
+torch.cuda.manual_seed_all(_SENPAI_SEED)
+random.seed(_SENPAI_SEED)
+np.random.seed(_SENPAI_SEED)
 
 from data import (
     TEST_SPLIT_NAMES,
@@ -60,6 +68,25 @@ ACTIVATION = {
     "ELU": nn.ELU,
     "silu": nn.SiLU,
 }
+
+
+def _channel_weighted_huber(
+    pred: torch.Tensor,
+    y_norm: torch.Tensor,
+    p_weight: float,
+    beta: float = 1.0,
+) -> torch.Tensor:
+    """Per-element Huber loss with a multiplier on the pressure channel.
+
+    Returns a [..., 3] tensor with the pressure column scaled by ``p_weight``.
+    Downstream sum/mask reductions are unchanged — they still operate on a
+    per-element loss tensor of the same shape, just with the p column
+    pre-scaled before reduction. MAE is computed in physical units from
+    ``pred_orig`` and is not affected by this weighting.
+    """
+    sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=beta)
+    weights = torch.tensor([1.0, 1.0, p_weight], device=sq_err.device, dtype=sq_err.dtype)
+    return sq_err * weights
 
 
 class MLP(nn.Module):
@@ -217,7 +244,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, p_weight: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,7 +267,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
+            sq_err = _channel_weighted_huber(pred, y_norm, p_weight=p_weight)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -326,7 +353,9 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_weight": cfg.p_weight,
         "epochs_configured": cfg.epochs,
+        "senpai_seed": _SENPAI_SEED,
     }
 
     description = (
@@ -379,6 +408,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_weight: float = 2.0       # multiplier on the pressure (channel 2) loss term
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -446,6 +476,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "senpai_seed": _SENPAI_SEED,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -487,7 +518,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
+        sq_err = _channel_weighted_huber(pred, y_norm, p_weight=cfg.p_weight)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -512,7 +543,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, p_weight=cfg.p_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +611,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, p_weight=cfg.p_weight)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
