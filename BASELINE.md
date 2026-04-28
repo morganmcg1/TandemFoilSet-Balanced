@@ -2,39 +2,43 @@
 
 ## Current measured baseline
 
-PR #506 (charliepai2d3-nezuko) — **L1 surface loss + 12-frequency Fourier
-positional features + EMA(0.999) + matched cosine + lr=7.5e-4 + grad
-clipping (max_norm=1.0)**. Run with `--epochs 14 --lr 7.5e-4` on the
-post-merge advisor.
+PR #534 (charliepai2d3-fern) — **L1 + 12-freq spatial Fourier features
++ EMA(0.997) + matched cosine + lr=7.5e-4 + grad clipping
+(max_norm=1.0)**. Run with `--epochs 14 --lr 7.5e-4` on the post-merge
+advisor.
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` (best, epoch 14/14) | **78.80** |
-| `test_avg/mae_surf_p` (NaN-safe, best-val checkpoint) | **69.13** |
-| Per-epoch wallclock | ~133 s |
-| Peak GPU memory (batch=4) | 42.51 GB |
-| Wallclock total | 31.0 min |
-| Param count | 674,647 (+4,096 from FF=12 expansion) |
+| `val_avg/mae_surf_p` (best, epoch 12/14) | **78.60** |
+| `test_avg/mae_surf_p` (NaN-safe, best-val checkpoint) | **67.77** |
+| Per-epoch wallclock | ~132 s |
+| Peak GPU memory (batch=4) | 42.38 GB |
+| Wallclock total | ~30.4 min |
 
-Per-split val (best epoch 14):
+Per-split val (best epoch 12):
 
 | split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist     | 92.73 |
-| val_geom_camber_rc     | 89.86 |
-| val_geom_camber_cruise | 57.32 |
-| val_re_rand            | 75.30 |
-| **val_avg**            | **78.80** |
+| val_single_in_dist     | 91.15 |
+| val_geom_camber_rc     | 90.78 |
+| val_geom_camber_cruise | 56.16 |
+| val_re_rand            | 76.33 |
+| **val_avg**            | **78.60** |
 
 Per-split test (NaN-safe, best-val checkpoint):
 
 | split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist     | 78.60 |
-| test_geom_camber_rc     | 80.12 |
-| test_geom_camber_cruise | 49.29 |
-| test_re_rand            | 68.50 |
-| **test_avg**            | **69.13** |
+| test_single_in_dist     | 77.27 |
+| test_geom_camber_rc     | 78.98 |
+| test_geom_camber_cruise | 48.03 |
+| test_re_rand            | 66.80 |
+| **test_avg**            | **67.77** |
+
+**Caveat**: PR #534 was branched off pre-#506 advisor (FF=8). The
+post-merge advisor adds FF=12 from #506 + EMA=0.997 from this PR.
+The actual joint config (FF=12 + EMA=0.997) is **untested** but
+expected to land ≤ 78.60 since FF=12 was a +1.57% lever in PR #506.
 
 **Recommended reproduce command**:
 
@@ -59,9 +63,10 @@ grad clipping baked in. The two CLI flags supply matched cosine
 | PR #447 |  82.97 |  73.58 | + EMA(0.999) | **−8.7% / −9.0%** |
 | PR #461 |  80.28 |  70.92 | + lr=7.5e-4 (CLI) | −3.2% / −3.6% |
 | PR #462 |  80.06 |  70.04 | + grad clipping max_norm=1.0 | −0.27% / −1.24% |
-| **PR #506 (current)** | **78.80** | **69.13** | **+ NUM_FOURIER_FREQS=12** | **−1.57% / −1.30%** |
+| PR #506 |  78.80 |  69.13 | + NUM_FOURIER_FREQS=12 | −1.57% / −1.30% |
+| **PR #534 (current)** | **78.60** | **67.77** | **+ EMA_DECAY=0.997 (schedule × EMA fix)** | **−0.25% / −1.97%** |
 
-**Cumulative round-3 improvement: −41.7% on val, −43.9% on test.**
+**Cumulative round-3 improvement: −41.9% on val, −44.97% on test.**
 
 ## Round-3 proven levers (cumulative — seven stacked levers)
 
@@ -72,8 +77,9 @@ grad clipping baked in. The two CLI flags supply matched cosine
 5. **Peak LR `lr=7.5e-4`** (PR #461, CLI)
 6. **Gradient clipping max_norm=1.0** (PR #462)
 7. **NUM_FOURIER_FREQS=12** (PR #506) — refinement of lever #2.
+8. **EMA_DECAY=0.997** (PR #534) — schedule × EMA interference fix.
 
-The advisor `train.py` bakes in 1, 2, 4, 6, 7 by default. Levers 3
+The advisor `train.py` bakes in 1, 2, 4, 6, 7, 8 by default. Levers 3
 and 5 are CLI flags (`--epochs 14 --lr 7.5e-4`).
 
 ## Compose pattern map (round-3 finding, comprehensive)
@@ -117,7 +123,7 @@ Round-3 PRs revealed multiple compose patterns:
 | Schedule | CosineAnnealingLR(T_max=epochs) |
 | Loss | `vol_loss + 10.0 * surf_loss`, **MSE volume + L1 surface** |
 | Input encoding | raw 24-d `x` + 12-frequency Fourier of `(x, z)` |
-| Weight averaging | **EMA(decay=0.999)** at every step, swap for val/test eval |
+| Weight averaging | **EMA(decay=0.997)** at every step, swap for val/test eval |
 | Gradient clipping | **`clip_grad_norm_(max_norm=1.0)`** before optimiser step |
 | Sampler | `WeightedRandomSampler` (balanced over 3 train domains) |
 | Batch size | 4 |

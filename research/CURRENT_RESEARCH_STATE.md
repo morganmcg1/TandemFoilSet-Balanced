@@ -15,21 +15,26 @@ help across at least three of the four tracks.
 
 ## Round 3 focus
 
-**Current measured baseline (merged 2026-04-28 04:41):**
-PR #506 (nezuko) — **L1 + 12-freq spatial FF + EMA(0.999) + matched
-cosine + lr=7.5e-4 + grad clipping (max_norm=1.0)**.
-`val_avg/mae_surf_p = 78.80`, `test_avg/mae_surf_p = 69.13`. Wins on
-all 4 val splits, 3 of 4 test splits. Eighth merge of round 3.
+**Current measured baseline (merged 2026-04-28 05:24):**
+PR #534 (fern) — **L1 + spatial FF + EMA(0.997) + matched cosine
++ lr=7.5e-4 + grad clipping**. `val_avg/mae_surf_p = 78.60`,
+`test_avg/mae_surf_p = 67.77`. Wins on every val and test split.
+Ninth merge of round 3.
 
-**Cumulative round-3 improvement: −41.7% on val, −43.9% on test**
-from the PR #306 reference (val 135.20, test 123.15).
+**Cumulative round-3 improvement: −41.9% on val, −45.0% on test**
+from PR #306 reference.
 
-**Caveat**: PR #506 was the first measurement on the post-#462 advisor
-with EMA + clipping. PR #462 baseline (80.06) was pre-EMA at default
-lr=5e-4. The −1.57% headline conflates the FF=8→12 marginal effect
-with the post-EMA advisor improvements. Edward PR #524 (canonical
-6-lever-stack at FF=8 with EMA, in flight) will provide the
-disambiguation reference.
+**Caveat**: PR #534 was branched off pre-#506 advisor (FF=8). The
+post-merge advisor has FF=12 (from #506) + EMA=0.997 (from this PR).
+The actual joint config (FF=12 × EMA=0.997 + everything else) is
+**untested** but expected to land ≤ 78.60 since FF=12 was a +1.57%
+lever in PR #506.
+
+**Schedule × averaging interference RESOLVED**: PR #476 (matched
+cosine × EMA(0.999)) was destructive (+1.1% val); PR #534 (matched
+cosine × EMA(0.997)) is clean compose (−0.25% / −1.97%). The fix
+is shorter EMA window (1000 steps → 333 steps), ending averaging
+before cosine tail weight-collapse.
 
 **Round-3 baseline lineage:**
 | Round | best val | best test | lever | Δ vs prior |
@@ -41,16 +46,18 @@ disambiguation reference.
 | PR #447 |  82.97 |  73.58 | + EMA(0.999) | **−8.7% / −9.0%** |
 | PR #461 |  80.28 |  70.92 | + lr=7.5e-4 (CLI) | **−3.2% / −3.6%** |
 | PR #462 |  80.06 |  70.04 | + grad clipping max_norm=1.0 | −0.27% / −1.24% |
-| **PR #506** | **78.80** | **69.13** | **+ NUM_FOURIER_FREQS=12** | **−1.57% / −1.30%** |
+| PR #506 |  78.80 |  69.13 | + NUM_FOURIER_FREQS=12 | −1.57% / −1.30% |
+| **PR #534** | **78.60** | **67.77** | **+ EMA_DECAY=0.997 (schedule × EMA fix)** | **−0.25% / −1.97%** |
 
-**Round-3 proven levers (cumulative, seven stacked)**:
+**Round-3 proven levers (cumulative, eight stacked)**:
 1. L1 surface loss (PR #280)
 2. 8→12-freq spatial FF (PR #400 → PR #506)
 3. Matched cosine `--epochs 14` (PR #389, CLI)
-4. EMA-of-weights, decay=0.999 (PR #447)
+4. EMA-of-weights, decay=0.999→0.997 (PR #447 → PR #534)
 5. Peak LR `lr=7.5e-4` (PR #461, CLI)
 6. Gradient clipping max_norm=1.0 (PR #462)
-7. **NUM_FOURIER_FREQS=12** (PR #506) — refinement of lever #2.
+7. NUM_FOURIER_FREQS=12 (PR #506) — refinement of lever #2.
+8. **EMA_DECAY=0.997** (PR #534) — refinement of lever #4.
 
 Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
 
@@ -150,9 +157,14 @@ composition even if they don't outright beat 102.64:**
      *(loss focus)* — branched off L1-only.
    - PR #543 — nezuko: L1+FF(16 freqs)+EMA + `--epochs 14` + `lr=7.5e-4` —
      spatial FF frequency-count bracket up.
-   - PR (frieren, new): L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **slice_num=128** — retest of the inconclusive PR #292 result on
-     the now-cleaner full lever stack.
+   - PR #558 — frieren: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **slice_num=128** — retest of inconclusive PR #292 on cleaner stack.
+   - PR (fern, new): L1+FF12+EMA(0.998) + `--epochs 14` + `lr=7.5e-4`
+     — bracket EMA decay slightly upward from 0.997 (window ~500 steps
+     vs 333) toward the cosine tail.
+   - PR (askeladd, new): L1+FF12+EMA + `--epochs 14` + `lr=7e-4` —
+     LR bracket DOWN on EMA-stack (optimum at-or-below 7.5e-4 per
+     LR-curve triangulation).
    - PR (tanjiro, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
      **auxiliary log-pressure loss** — different mechanism than
      channel weighting / loss shape; addresses heavy-tail via

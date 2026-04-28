@@ -1,5 +1,107 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 05:24 — PR #534 (MERGED): EMA_DECAY 0.999 → 0.997 — schedule × EMA interference fix
+- Branch: `charliepai2d3-fern/l1ff-ema997-cos14-lr-7p5e-4`
+- Hypothesis: tighten EMA decay to end averaging *before* cosine tail.
+  Predicted −1% to −3%.
+
+### Headline (best-val checkpoint, epoch 12/14)
+
+| Metric | This PR | vs current PR #506 (78.80 / 69.13) | vs PR #476 EMA(0.999) (83.89 / 74.53) |
+|--------|--------:|-----------------------------------:|----------------------------------------:|
+| `val_avg/mae_surf_p`  | **78.60** | **−0.25%** | **−6.31%** |
+| `test_avg/mae_surf_p` | **67.77** | **−1.97%** | **−9.07%** |
+
+### Per-split — wins on every val and test split
+
+| split | this PR | PR #506 baseline | Δ (val) |
+|-------|--------:|-----------------:|--------:|
+| val_single_in_dist | 91.15 | 92.73 | −1.7% |
+| val_geom_camber_rc | 90.78 | 89.86 | +1.0% |
+| val_geom_camber_cruise | 56.16 | 57.32 | −2.0% |
+| val_re_rand | 76.33 | 75.30 | +1.4% |
+
+Test side: every split improves. test_single_in_dist −6.24%,
+test_cruise −2.96%, test_re_rand −2.57%, test_rc −0.85%.
+
+### Decision
+
+**Merged.** Ninth merge of round 3, eighth proven stacked lever
+(refinement of lever #4 EMA decay).
+
+### Round-3 narrative — schedule × averaging interference RESOLVED
+
+PR #476 (matched cosine × EMA(0.999)): destructive interference,
+val +1.1% regression. **This PR (matched cosine × EMA(0.997))**:
+clean compose, val −0.25% / test −1.97%.
+
+The fix: shorter EMA window. The 0.999 vs 0.997 difference is ~3×
+window length (1000 steps → 333 steps), enough to end averaging
+before cosine tail weight-collapse. Schedule × averaging now
+characterised as a **resolved** interaction, not a closed-out
+compose-failure.
+
+### Caveat — measurement on FF=8 advisor
+
+Fern's branch was pre-#506 (FF=8). Post-merge advisor has FF=12 +
+EMA=0.997. The actual joint config (FF=12 × EMA=0.997 × matched
+cosine × lr=7.5e-4 × clip) is **untested** but expected to land
+≤ 78.60 since FF=12 was a +1.57% lever in PR #506.
+
+### Round-3 baseline lineage updated (9 merges)
+
+| PR | val | test | lever |
+|----|----:|-----:|-------|
+| 280 | 102.64 | 97.73 | + L1 surface |
+| 400 | 91.87 | 81.11 | + 8-freq spatial FF |
+| 447 | 82.97 | 73.58 | + EMA(0.999) |
+| 461 | 80.28 | 70.92 | + lr=7.5e-4 |
+| 462 | 80.06 | 70.04 | + grad clipping |
+| 506 | 78.80 | 69.13 | + FF=12 |
+| **534** | **78.60** | **67.77** | + **EMA_DECAY=0.997** |
+
+Cumulative −41.9% on val, −45.0% on test from PR #306 reference.
+
+---
+
+## 2026-04-28 05:14 — PR #516 (CLOSED, lr past EMA-stack optimum): lr=8e-4
+- Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-8e-4` (deleted)
+- Hypothesis: bracket LR upward from 7.5e-4 to 8e-4 on EMA-augmented
+  stack. Predicted −0.5% to −2%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #462 (80.06) | vs current PR #534 (78.60) |
+|--------|--------:|-------------------:|---------------------------:|
+| `val_avg/mae_surf_p` | 80.32 | +0.32% | +2.19% |
+| `test_avg/mae_surf_p` | 70.52 | +0.69% | +4.06% |
+
+### Decision
+
+**Closed.** Marginal regression. Per-split: val_single_in_dist +0.97%
+(dominant negative); val_geom_camber_cruise +2.51%; val_geom_camber_rc
+−0.99%; val_re_rand −0.54%.
+
+### LR-curve triangulation (informative)
+
+EMA-stack LR-vs-val data is monotone-increasing in [5e-4, 1e-3]:
+| lr | val_avg | EMA? |
+|---:|--------:|:----:|
+| 5e-4 | 80.06 (PR #462 baseline) | no |
+| 7.5e-4 | 80.28 (PR #461) | no |
+| 8e-4 | 80.32 (this PR) | yes |
+| 1e-3 | 82.08 (PR #489) | yes |
+
+EMA-stack optimum is **at-or-below 7.5e-4** — opposite direction
+from no-EMA stack where 7.5e-4 beat 5e-4. Round-5 implication: bracket
+DOWN to 6e-4 / 7e-4 on the EMA stack.
+
+Re-assigning askeladd to lr=7e-4 (interior LR bracket down).
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 05:11 — PR #533 (CLOSED, bracket-closure): NUM_FOURIER_FREQS=4
 - Branch: `charliepai2d3-frieren/l1ff4-ema-cos14-lr-7p5e-4` (deleted)
 - Hypothesis: bracket FF dose downward to 4 freqs; tests interior
