@@ -1715,3 +1715,55 @@ Either mechanism alone explains the wash. Together they explain why neither volu
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #651 | thorfinn | surf-weight-7 | `surf_weight = 10 → 7` on merged #394 baseline | Mirror experiment to closed #624; keep MSE_vol, reduce surface emphasis from ~3:1 to ~1.5:1 effective ratio. Tests whether surface dominance is load-bearing or excessive. If win, backbone-composition gain unmasked by loss-scale rebalancing. Honest band −6 % to +8 %. |
+
+## 2026-04-28 08:15 — PR #592 rebased: Lion lr 2.5e-4 → 2.85e-4 on post-#394 (charliepai2d1-tanjiro) — **CLOSED (interfere case; basin shifted under new compute regime)**
+- Run config: `lr: 2.5e-4 → 2.85e-4` rebased onto post-#394 (compile + Lion + 20-ep budget). Single-line edit. **First measurement of lr=2.85e-4 + β2=0.999 + compile combination.**
+
+### Headline metrics (best EMA epoch=19/50, timeout-cut)
+| metric | this run | current baseline #394 | prior #592 (no-compile, β2=0.99) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | 44.626 | 43.677 (**+2.17 %**) | 55.904 |
+| `test_avg/mae_surf_p` | 38.426 | 36.920 (+4.08 %) | 49.224 |
+| best raw val | 49.079 (ep19) | — | 70.093 |
+| Mean pre-clip grad-norm | 15.39 | ~8.7 (#394) | 13.92 |
+| Mean spread | 8.12 | ~−2.5 (#394) | 15.85 |
+
+### Per-split — mixed (interfere signature, NOT uniform broad-based gain)
+| Split | val Δ vs #394 | test Δ vs #394 |
+|---|---:|---:|
+| single_in_dist | **+6.37 %** | −0.92 % |
+| geom_camber_rc | −2.09 % (only val winner) | +4.58 % |
+| geom_camber_cruise | **+6.01 %** | +6.25 % |
+| re_rand | +1.29 % | **+8.00 %** (worst test) |
+
+### Mechanism finding (durable for the appendix: compute regime is itself a basin-shifting axis)
+
+**Three regime-conditional Lion-lr basin maps** demonstrate compute is a basin-shifting axis:
+
+| Regime | Basin shape | Evidence |
+|---|---|---|
+| β2=0.99, eager, 14 ep | Asymmetric, upper edge in [2.85e-4, 3.3e-4] | #536 (2.5e-4 win), prior #592 (2.85e-4 win), #507 (3.3e-4 lose) |
+| β2=0.999, eager, 14 ep | Basin shifts UP — 1.2e-4 no longer in basin | rebased #580 (1.2e-4 + β2=0.999 = +6.58 %) |
+| **β2=0.999, compile, 20 ep** | Basin TIGHTENS, upper edge at-or-below 2.85e-4 | #394 (2.5e-4 win), this rebased #592 (2.85e-4 +2.17 %) |
+
+Three sub-mechanisms:
+
+1. **Schedule effect**: under T_max=50, cosine at ep14 ≈ 0.94 of peak (essentially constant in old budget); cosine at ep19 ≈ 0.86 of peak (longer schedule averages out the higher-peak advantage in new budget).
+2. **Spread tightening**: 15.85 → 8.12. EMA absorbs raw efficiently with longer budget — the higher-lr per-step movement gets averaged out before reaching the validation EMA.
+3. **Grad-norm climbs supra-linearly**: 13.92 → 15.39 for same lr. 6 extra epochs of cosine = more late-epoch raw noise that the longer-history β2=0.999 buffer can't smooth quickly.
+
+Mixed per-split signature confirms basin-shift:
+- `rc` (high-OOD, slow-converging): val wins (high-lr early-epoch advantage compounds with rc's slow regime)
+- `single`, `cruise`: regress (already converged at 2.5e-4; pushing higher = diminishing returns)
+- `re_rand` test: regresses worst (+8.0 %, OOD generalization gap widens under higher-lr early-epoch noise)
+
+### Decision: close
+- vs current baseline #394: +2.17 % val (below 5 % close threshold but doesn't merge).
+- Experimental question answered cleanly: basin upper edge under new compute regime is at-or-below 2.85e-4.
+- Reassigned tanjiro to **PR #652 (lion-lr-2p7e-4)** — bracket midpoint between #394 win (2.5e-4) and this lose (2.85e-4) to lock new-regime basin upper edge to ~5 % precision.
+
+## 2026-04-28 08:18 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #652 | tanjiro | lion-lr-2p7e-4 | Lion `lr = 2.5e-4 → 2.7e-4` on merged #394 baseline | Bracket midpoint between #394 win and #592 lose under new compute regime. Locks basin upper edge to ~5 % precision. Three scenarios: win (basin extends past 2.7e-4), wash (2.5e-4 IS the optimum, cleanest closure), or lose (basin tighter than expected, edge in [2.5, 2.7]). Honest band −2 % to +5 %. |
