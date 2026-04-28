@@ -1144,6 +1144,42 @@ Past merge gate cleanly. **Predicted band was −1 % to +2 %** (uncertain due to
 |----|---------|------|-------|-----|
 | #580 | askeladd | lion-lr-1p2e-4 | `lr_lion = 1.7e-4 → 1.2e-4` on merged #535 baseline | Replaces closed #546; lower-edge probe of Lion's basin (complements tanjiro's #536 upper-edge at 2.5e-4). Honest band −2 % to +4 %. |
 
+## 2026-04-28 06:12 — PR #536: Lion lr 1.7e-4 → 2.5e-4 (charliepai2d1-tanjiro) — **MERGED, new baseline**
+- Branch: `charliepai2d1-tanjiro/lion-lr-2p5e-4` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `c6b65b6`).
+- Hypothesis (Lion basin upper-edge probe between 1.7e-4 basin and 3.3e-4 lose).
+
+### Headline metrics (best EMA epoch=12/50, timeout-cut)
+| metric | this run | run base #352 (β=1.0) | current #535 (β=0.5) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **60.478** | 64.158 (−5.74 %) | 61.508 (**−1.67 %**) |
+| `test_avg/mae_surf_p` | **52.676** | 55.930 (−5.82 %) | 52.336 (+0.65 %) |
+
+### Per-split — uniform improvement on val (all 4 splits gain)
+| Split | val Δ vs #352 | test Δ vs #352 |
+|---|---:|---:|
+| single_in_dist | **−11.95 %** | **−14.17 %** |
+| geom_camber_rc | −3.44 % | −1.47 % |
+| geom_camber_cruise | −0.86 % | −3.20 % |
+| re_rand | −4.18 % | −2.06 % |
+
+### Mechanism (tanjiro's writeup)
+- **Mean pre-clip grad-norm dropped 30 % vs lr=1.7e-4** (12.25 vs ~17 for #430-era; 50 for raw lr=1.7e-4 reference). Lion finds flatter regions even faster at higher lr.
+- **Lion's basin upper edge is in [2.5e-4, 3.3e-4]**, not "right around 1.7e-4." Default `lr_lion = lr_adamw / 3` heuristic was conservative for our recipe.
+- **Per-split uniformity** (no per-split regression) distinguishes this from #545 (β1=0.95) and #507 (lr=3.3e-4) — at 2.5e-4 the larger directional updates per step pay off equally on stationary and non-stationary regimes.
+
+### Decision: merge as new baseline
+- Strict merge gate satisfied on val (the primary ranking metric).
+- Test +0.65 % is within run-to-run noise band.
+- **Squash-merge composes cleanly**: tanjiro's `lr=2.5e-4` change in `Config` is in different code region from #535's `β=0.5` in the loss block; git's three-way merge applies both → post-merge `train.py` has lr=2.5e-4 + β=0.5.
+- 11th merge on this branch; **fourth Lion-axis lever** (#430 EMA-Lion + #491 TF32 + this #536 Lion lr).
+- BASELINE.md updated; tanjiro reassigned to **PR #592 (lion-lr-2p85e-4)** — bracket-narrowing midpoint between 2.5e-4 and 3.3e-4 to lock the basin upper edge.
+
+## 2026-04-28 06:15 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #592 | tanjiro | lion-lr-2p85e-4 | `lr_lion = 2.5e-4 → 2.85e-4` on merged #536 baseline | Bracket midpoint between basin (2.5e-4) and lose (3.3e-4); tanjiro's own follow-up #1. Honest band −3 % to +6 %. |
+
 ## 2026-04-28 06:05 — PR #552: GeGLU at matched params (charliepai2d1-nezuko) — **sent back for rebase + re-run**
 - Run config: `F.silu → F.gelu` in `GeGLUMLP.forward` at matched `geglu_inner=168` (657,639 params), on post-#352 base (β=1.0).
 
