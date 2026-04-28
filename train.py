@@ -468,7 +468,7 @@ else:
 print(f"Optimizer: {cfg.optimizer_name}  (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 warmup_epochs = 5
 warmup = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
-cosine = CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+cosine = CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1), eta_min=5e-5)
 scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
