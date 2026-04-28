@@ -466,6 +466,7 @@ class Config:
     film_re: bool = True  # FiLM modulation conditioned on log(Re), per-block
     film_hidden: int = 64  # hidden width of the FiLM MLP (1 → hidden → 2*L*H)
     seed: int | None = None  # if set, torch.manual_seed for variance checks
+    lldr_decay: float = 1.0  # layer-wise lr decay; 1.0 disables, <1.0 lowers lr on early blocks
 
 
 cfg = sp.parse(Config)
@@ -518,7 +519,54 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+def build_lldr_param_groups(model: nn.Module, base_lr: float, decay: float, n_layers: int):
+    """Group model parameters by Transolver block index for layer-wise lr decay.
+
+    block 0 (closest to input)  → lr * decay^(n_layers-1)
+    block n_layers-1 (output)   → lr * decay^0 = base_lr
+    preprocess, placeholder      → block 0's lr (treated as input-most)
+    film (if present)            → block 0's lr (slow conditioning)
+    """
+    groups: list[dict] = []
+    names_assigned: set[str] = set()
+
+    def claim(prefix_match, lr_mult: float, group_name: str) -> None:
+        params = [p for n, p in model.named_parameters()
+                  if prefix_match(n) and n not in names_assigned]
+        for n, _ in model.named_parameters():
+            if prefix_match(n):
+                names_assigned.add(n)
+        if params:
+            groups.append({"params": params, "lr": base_lr * lr_mult, "name": group_name})
+
+    earliest_mult = decay ** (n_layers - 1)
+    claim(lambda n: n.startswith("preprocess"), earliest_mult, "preprocess")
+    claim(lambda n: n == "placeholder", earliest_mult, "placeholder")
+    claim(lambda n: n.startswith("film"), earliest_mult, "film")
+
+    for i in range(n_layers):
+        mult = decay ** (n_layers - 1 - i)
+        claim(lambda n, i=i: n.startswith(f"blocks.{i}."), mult, f"block_{i}")
+
+    # Defensive: anything not yet assigned (shouldn't happen) → full lr.
+    claim(lambda n: n not in names_assigned, 1.0, "other")
+    return groups
+
+
+if cfg.lldr_decay < 1.0:
+    param_groups = build_lldr_param_groups(
+        model, base_lr=cfg.lr, decay=cfg.lldr_decay, n_layers=model_config["n_layers"]
+    )
+    n_grouped = sum(len(g["params"]) for g in param_groups)
+    n_total = sum(1 for _ in model.parameters())
+    assert n_grouped == n_total, f"LLDR param-group coverage mismatch: {n_grouped} vs {n_total}"
+    print(f"LLDR: decay={cfg.lldr_decay}, {len(param_groups)} groups (n_layers={model_config['n_layers']})")
+    for g in param_groups:
+        print(f"  {g['name']:15s} lr={g['lr']:.6f}  ({len(g['params'])} params)")
+    optimizer = torch.optim.AdamW(param_groups, lr=cfg.lr, weight_decay=cfg.weight_decay)
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 # Per-step linear warmup + cosine-to-zero schedule. T_max is aligned to the
 # total step budget for the configured epoch count (so cosine actually reaches
@@ -564,6 +612,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lr/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -608,9 +657,12 @@ for epoch in range(MAX_EPOCHS):
         optimizer.step()
         scheduler.step()
         global_step += 1
+        # Under LLDR, param_groups have different base lrs but share the cosine
+        # factor. Track the largest group's lr so the W&B "lr" curve still
+        # reflects the canonical schedule (not the smallest decayed group).
         wandb.log({
             "train/loss": loss.item(),
-            "lr": scheduler.get_last_lr()[0],
+            "lr": max(g["lr"] for g in optimizer.param_groups),
             "global_step": global_step,
         })
 
@@ -644,6 +696,8 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    for i, group in enumerate(optimizer.param_groups):
+        log_metrics[f"lr/{group.get('name', f'g{i}')}"] = group["lr"]
     wandb.log(log_metrics)
 
     tag = ""
