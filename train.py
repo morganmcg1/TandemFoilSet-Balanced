@@ -266,7 +266,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, huber_beta=1.0) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_beta=1.0,
+                   ch_weights=None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -306,6 +307,8 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_beta=1.0) ->
             pred = pred.float()
 
             elem_loss = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=huber_beta)
+            if ch_weights is not None:
+                elem_loss = elem_loss * ch_weights
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -410,6 +413,21 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+W_P_START = 0.5
+W_P_END = 1.0
+
+
+def current_w_p(epoch_idx: int, total_epochs: int) -> float:
+    """Linear ramp from W_P_START at epoch 0 to W_P_END at total_epochs-1.
+
+    Uses the configured horizon (cfg.epochs) so the schedule is deterministic
+    even if a run is timeout-capped.
+    """
+    if total_epochs <= 1:
+        return W_P_END
+    progress = epoch_idx / (total_epochs - 1)
+    return W_P_START + (W_P_END - W_P_START) * progress
+
 
 @dataclass
 class Config:
@@ -427,6 +445,10 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     film: bool = True  # surface-conditional FiLM in last block (PR #484)
+    # Linear ramp w_p from W_P_START at epoch 0 to W_P_END at cfg.epochs-1.
+    # When False, train + eval use uniform [1,1,1] channel weights (matches
+    # the merged baseline objective). PR #453.
+    w_p_ramp: bool = False
 
 
 cfg = sp.parse(Config)
@@ -551,6 +573,15 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
+    # w_p schedule uses MAX_EPOCHS (configured horizon) so the ramp is
+    # deterministic even when timeout caps the run early. When the ramp is
+    # off (baseline-ref), ch_weights stay uniform.
+    if cfg.w_p_ramp:
+        w_p_now = current_w_p(epoch, MAX_EPOCHS)
+    else:
+        w_p_now = 1.0
+    ch_weights = torch.tensor([1.0, 1.0, w_p_now], device=device)
+
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
@@ -581,6 +612,7 @@ for epoch in range(MAX_EPOCHS):
             print(f"First compile+forward took {time.time() - _t_fwd0:.1f}s")
         pred = pred.float()
         elem_loss = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=cfg.huber_beta)
+        elem_loss = elem_loss * ch_weights
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -615,17 +647,21 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     # EMA is the primary metric (used for checkpoint selection & JSONL key);
     # the online model is evaluated alongside for divergence analysis.
+    # ch_weights mirrored into eval so logged val loss numbers stay
+    # apples-to-apples with the train objective.
     model.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                             cfg.huber_beta, ch_weights=ch_weights)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
 
     online_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.huber_beta, ch_weights=ch_weights)
         for name, loader in val_loaders.items()
     }
     online_val_avg = aggregate_splits(online_split_metrics)
@@ -650,6 +686,7 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr_post_step": lr_post_step,
+        "w_p": w_p_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": grad_norm_mean,
@@ -662,7 +699,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  w_p={w_p_now:.3f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
         f"gn_mean={grad_norm_mean:.3f} gn_max={grad_norm_max:.2f} clip%={grad_clipped_frac*100:.1f}]  "
         f"val_avg_surf_p[ema={avg_surf_p:.4f} online={online_avg_surf_p:.4f}]{tag}"
