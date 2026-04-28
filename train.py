@@ -17,9 +17,12 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
+import random
 import subprocess
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -31,7 +34,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data import (
@@ -399,16 +402,59 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+
+class DomainBucketedBatchSampler:
+    """Yield homogeneous-domain batches to keep ``pad_collate`` from padding
+    small-mesh samples up to the size of the largest sample in the batch.
+
+    Domain is chosen uniformly per batch, then ``batch_size`` indices are
+    sampled with replacement from that domain — preserving the prior
+    per-domain expected coverage (1/n_domains weight per domain) used by the
+    `WeightedRandomSampler` baseline, while making each batch pad to its own
+    domain's mesh size only.
+    """
+
+    def __init__(self, domain_indices, batch_size, num_batches, seed=0):
+        self.domains = list(domain_indices.keys())
+        self.indices = {k: list(v) for k, v in domain_indices.items()}
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.rng = random.Random(seed)
+        self.last_epoch_domain_counts: Counter = Counter()
+
+    def __iter__(self):
+        self.last_epoch_domain_counts = Counter()
+        for _ in range(self.num_batches):
+            d = self.rng.choice(self.domains)
+            batch = self.rng.choices(self.indices[d], k=self.batch_size)
+            self.last_epoch_domain_counts[d] += 1
+            yield batch
+
+    def __len__(self):
+        return self.num_batches
+
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+    batch_sampler = None
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    with open(Path(cfg.splits_dir) / "meta.json") as _f:
+        domain_indices = json.load(_f)["domain_groups"]
+    num_train_batches = len(train_ds) // cfg.batch_size
+    batch_sampler = DomainBucketedBatchSampler(
+        domain_indices, cfg.batch_size, num_train_batches, seed=42,
+    )
+    train_loader_kwargs = {k: v for k, v in loader_kwargs.items() if k != "batch_size"}
+    train_loader = DataLoader(train_ds, batch_sampler=batch_sampler, **train_loader_kwargs)
+    print(
+        f"Domain-bucketed sampler: {num_train_batches} batches/epoch, "
+        f"domains={list(domain_indices.keys())}, "
+        f"sizes={ {k: len(v) for k, v in domain_indices.items()} }"
+    )
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -536,6 +582,17 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if batch_sampler is not None:
+        for d, c in batch_sampler.last_epoch_domain_counts.items():
+            log_metrics[f"sampler/batches_{d}"] = c
+        if epoch == 0:
+            print(
+                "  domain batches: "
+                + ", ".join(
+                    f"{d}={c}"
+                    for d, c in sorted(batch_sampler.last_epoch_domain_counts.items())
+                )
+            )
     wandb.log(log_metrics)
 
     tag = ""
