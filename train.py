@@ -43,8 +43,61 @@ from data import (
     finalize_split,
     load_data,
     load_test_data,
-    pad_collate,
 )
+
+
+def make_fixed_pad_collate(n_max: int):
+    """Build a collate fn that always pads to ``n_max`` mesh nodes per sample.
+
+    Mirrors ``data.pad_collate`` but uses a fixed N axis so every batch has the
+    same tensor shape — required for ``torch.compile(mode='reduce-overhead')``
+    to capture exactly one CUDA Graph instead of one per per-batch shape.
+    """
+
+    def fixed_pad_collate(batch):
+        xs, ys, surfs = zip(*batch)
+        B = len(xs)
+        x_pad = torch.zeros(B, n_max, xs[0].shape[1])
+        y_pad = torch.zeros(B, n_max, ys[0].shape[1])
+        surf_pad = torch.zeros(B, n_max, dtype=torch.bool)
+        mask = torch.zeros(B, n_max, dtype=torch.bool)
+        for i, (x, y, sf) in enumerate(zip(xs, ys, surfs)):
+            n = x.shape[0]
+            x_pad[i, :n] = x
+            y_pad[i, :n] = y
+            surf_pad[i, :n] = sf
+            mask[i, :n] = True
+        return x_pad, y_pad, surf_pad, mask
+
+    return fixed_pad_collate
+
+
+class _MeshSizeScanDataset(torch.utils.data.Dataset):
+    """One-shot dataset returning ``x.shape[0]`` for files in a list."""
+
+    def __init__(self, files):
+        self.files = files
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, i):
+        s = torch.load(self.files[i], weights_only=True, map_location="cpu")
+        return int(s["x"].shape[0])
+
+
+def scan_max_n(file_lists, num_workers: int = 4) -> int:
+    all_files = []
+    for fl in file_lists:
+        all_files.extend(fl)
+    if not all_files:
+        return 0
+    ds = _MeshSizeScanDataset(all_files)
+    loader = torch.utils.data.DataLoader(
+        ds, batch_size=32, shuffle=False, num_workers=num_workers,
+        collate_fn=lambda b: max(b),
+    )
+    return max(loader)
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -445,16 +498,38 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+# Preload test datasets so we can scan their mesh sizes too — fixed-shape
+# padding has to use a single global N_MAX across train/val/test so every
+# batch through the compiled forward has identical shape.
+test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+
+print("Scanning global max mesh size for fixed-shape padding...")
+_t_scan = time.time()
+n_max_train = scan_max_n([train_ds.files])
+n_max_val = scan_max_n([ds.files for ds in val_splits.values()])
+n_max_test = scan_max_n([ds.x_files for ds in test_datasets.values()])
+N_MAX_GLOBAL = max(n_max_train, n_max_val, n_max_test)
+print(
+    f"Mesh-size scan ({time.time()-_t_scan:.1f}s): "
+    f"train={n_max_train}, val={n_max_val}, test={n_max_test}, "
+    f"GLOBAL N_MAX={N_MAX_GLOBAL}"
+)
+
+fixed_pad_collate = make_fixed_pad_collate(N_MAX_GLOBAL)
+
+loader_kwargs = dict(collate_fn=fixed_pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+# drop_last=True keeps every train batch at exactly cfg.batch_size so the
+# (B, N_MAX, ...) shape is identical across the run -- one CUDA Graph under
+# mode="reduce-overhead". Drops <= cfg.batch_size-1 samples / epoch.
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+                              shuffle=True, drop_last=True, **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+                              sampler=sampler, drop_last=True, **loader_kwargs)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -479,22 +554,34 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 swiglu_inter = model.blocks[0].mlp.intermediate
 
+# Fixed-shape padding -> mode="reduce-overhead" should capture a single CUDA
+# Graph and replay it. try/except falls back to mode="default" on any
+# synchronous setup failure; runtime CUDA-Graph OOM is caught by the pre-warm
+# probe below.
+compile_mode_used = "eager"
 if cfg.compile:
-    # NOTE: mode="reduce-overhead" OOMs on this codebase: pad_collate produces a
-    # different shape per batch, so CUDA Graphs records a fresh graph per shape
-    # and private pools blow past 90 GB within ~25 iters. mode="default" gives
-    # TorchInductor fusion without CUDA Graphs and trains within VRAM.
-    print("Wrapping model in torch.compile(mode='default')...")
-    model = torch.compile(model, mode="default")
+    print("Wrapping model in torch.compile(mode='reduce-overhead')...")
+    try:
+        model = torch.compile(model, mode="reduce-overhead")
+        compile_mode_used = "reduce-overhead"
+        print("Compiled with mode='reduce-overhead'.")
+    except Exception as e:
+        print(
+            f"FALLBACK: torch.compile(mode='reduce-overhead') setup failed "
+            f"({type(e).__name__}: {e}); retrying with mode='default'..."
+        )
+        base = model._orig_mod if hasattr(model, "_orig_mod") else model
+        model = torch.compile(base, mode="default")
+        compile_mode_used = "default"
+        print("Compiled with mode='default'.")
     # EMA's copy.deepcopy is brittle on compiled wrappers; build it from _orig_mod.
     ema = WeightEMA(model._orig_mod, decay_target=0.995, warmup_steps=50)
-    print("Compiled.")
 else:
     ema = WeightEMA(model, decay_target=0.995, warmup_steps=50)
 print(
     f"Model: Transolver ({n_params/1e6:.2f}M params) + EMA(decay_target=0.995, warmup_steps=50) "
     f"[SwiGLU MLP intermediate={swiglu_inter}]"
-    + (" [torch.compile default]" if cfg.compile else "")
+    + (f" [torch.compile {compile_mode_used}]" if cfg.compile else "")
 )
 
 optimizer = torch.optim.AdamW(
@@ -515,6 +602,53 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs],
 )
 
+# CUDA Graph capture happens lazily on the first forward+backward call. Run a
+# synthetic max-shape batch here to trigger capture *before* training so we can
+# fall back from "reduce-overhead" -> "default" without losing a real iteration
+# if the capture allocator OOMs.
+def _pre_warm_max_shape() -> None:
+    x_w = torch.zeros(cfg.batch_size, N_MAX_GLOBAL, X_DIM, device=device)
+    y_w = torch.zeros(cfg.batch_size, N_MAX_GLOBAL, 3, device=device)
+    mask_w = torch.ones(cfg.batch_size, N_MAX_GLOBAL, dtype=torch.bool, device=device)
+    x_norm_w = (x_w - stats["x_mean"]) / stats["x_std"]
+    y_norm_w = (y_w - stats["y_mean"]) / stats["y_std"]
+    pred_w = model({"x": x_norm_w})["preds"]
+    err_w = F.huber_loss(pred_w, y_norm_w, delta=0.25, reduction='none')
+    loss_w = (err_w * mask_w.unsqueeze(-1)).sum() / mask_w.sum().clamp(min=1)
+    loss_w.backward()
+    optimizer.zero_grad()
+
+if cfg.compile:
+    print(
+        f"Pre-warming compiled model (mode='{compile_mode_used}') "
+        f"with synthetic max-shape batch [B={cfg.batch_size}, N={N_MAX_GLOBAL}]..."
+    )
+    _t_warm = time.time()
+    try:
+        _pre_warm_max_shape()
+    except torch.cuda.OutOfMemoryError as e:
+        if compile_mode_used != "reduce-overhead":
+            raise
+        print(
+            f"FALLBACK: reduce-overhead pre-warm OOMed at first capture "
+            f"({type(e).__name__}: {e}); recompiling with mode='default'..."
+        )
+        import torch._dynamo as _dynamo
+        base_module = model._orig_mod
+        _dynamo.reset()
+        del model
+        torch.cuda.empty_cache()
+        model = torch.compile(base_module, mode="default")
+        compile_mode_used = "default"
+        # Retry pre-warm under default mode.
+        _pre_warm_max_shape()
+    peak_warm_gb = torch.cuda.max_memory_allocated() / 1e9
+    print(
+        f"Pre-warm OK with mode='{compile_mode_used}' "
+        f"({time.time()-_t_warm:.1f}s, peak={peak_warm_gb:.2f}GB)."
+    )
+    torch.cuda.reset_peak_memory_stats()
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -528,7 +662,22 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "compile_mode_used": compile_mode_used,
+        "n_max_global": int(N_MAX_GLOBAL),
+        "n_max_train": int(n_max_train),
+        "n_max_val": int(n_max_val),
+        "n_max_test": int(n_max_test),
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "compile_meta",
+    "compile": cfg.compile,
+    "compile_mode_used": compile_mode_used,
+    "n_max_global": int(N_MAX_GLOBAL),
+    "n_max_train": int(n_max_train),
+    "n_max_val": int(n_max_val),
+    "n_max_test": int(n_max_test),
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -680,7 +829,7 @@ if best_metrics:
     test_avg = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        # test_datasets was preloaded earlier (before fixed-pad scan) so reuse it here.
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
