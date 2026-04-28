@@ -2,6 +2,30 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 06:42 — PR #582: Gradient clipping max_norm=10 (under huber-δ=0.25)
+
+- **Best `val_avg/mae_surf_p`**: **66.149** (epoch 14, −0.07% vs 66.195 prior / −1.72% vs 67.306)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **57.654** (vs 58.063 prior, −0.70%)
+- **Per-split val MAE for `p`**:
+  - val_single_in_dist: 77.989
+  - val_geom_camber_rc: 77.651
+  - val_geom_camber_cruise: 46.373
+  - val_re_rand: 62.584
+- **Per-split test MAE for `p`**:
+  - test_single_in_dist: 67.262
+  - test_geom_camber_rc: 70.184
+  - test_geom_camber_cruise: 38.860
+  - test_re_rand: 54.310
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + wd=3e-5 + PhysicsAttention temperature init=2.0 + cosine 1-ep warmup + T_max=13 + feature noise std=0.005 + NaN-safe + **clip_grad_norm_(max_norm=10.0)**.
+- **Gradient norm diagnostics**: mean norm starts at ~19.5 epoch 1, decays to ~5 by late training; max norms 17–61 throughout; clip fired 85.6% of batches epoch 1 → ~8% epoch 14. huber-δ=0.25 does NOT bound total parameter gradient norms to <10 — the surf_weight=10 amplifier and model-size scaling keep norms in the 5–20 range throughout training.
+- **Mechanism**: aggressive early-epoch clipping (cap 85% of batches at norm 10) acts as a soft early-LR cap, stabilizing the high-curvature warmup phase. The mid-training clip rate of 6–14% removes occasional outlier batches that would otherwise destabilize fine-tuning. Net effect: smoother loss curve and better convergence within the 14-epoch budget.
+- **Metric summary**: `models/model-gradient-clip-norm-10-20260428-060150/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name gradient-clip-norm-10 --agent <name>
+  ```
+
 ## 2026-04-28 06:45 — PR #575: Bias-corrected EMA decay_target 0.99 → 0.995 (UP direction)
 
 - **Best `val_avg/mae_surf_p`**: **66.195** (epoch 14, −1.65% vs 67.306 reference / −0.98% vs #574's 66.847)
