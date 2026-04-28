@@ -169,6 +169,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 surf_head_hidden=128,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -195,7 +196,21 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Additive surface head: residual correction on top of the standard
+        # volume-head prediction. Operates on the pre-final-block hidden state
+        # (i.e. the input to the last TransolverBlock); its output is added to
+        # preds_vol only at surface nodes. Zero-init on the last linear gives
+        # epoch-1 parity with a vol-only model, so the head only learns the
+        # surface-specific *correction* (suction peaks, separation kinks).
+        self.surf_head = nn.Sequential(
+            nn.LayerNorm(n_hidden),
+            nn.Linear(n_hidden, surf_head_hidden),
+            nn.GELU(),
+            nn.Linear(surf_head_hidden, out_dim),
+        )
         self.apply(self._init_weights)
+        nn.init.zeros_(self.surf_head[-1].weight)
+        nn.init.zeros_(self.surf_head[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -208,10 +223,20 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        fx_pre_final = fx
+        preds_vol = self.blocks[-1](fx)
+        if is_surface is not None:
+            preds_surf = self.surf_head(fx_pre_final)
+            # Cast bool mask to preds_surf dtype (bf16 under autocast); the
+            # surface head only contributes at surface nodes.
+            preds = preds_vol + is_surface.unsqueeze(-1).to(preds_surf.dtype) * preds_surf
+        else:
+            preds = preds_vol
+        return {"preds": preds}
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +277,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
             pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
@@ -497,7 +522,7 @@ for epoch in range(MAX_EPOCHS):
             torch.cuda.synchronize()
             _t_fwd0 = time.time()
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         if _first_fwd:
             torch.cuda.synchronize()
             print(f"First compile+forward took {time.time() - _t_fwd0:.1f}s")
