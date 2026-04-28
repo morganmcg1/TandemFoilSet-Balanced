@@ -6,7 +6,7 @@
 
 ## Current research focus
 
-**Round baseline is PR #324 v4 (nezuko, EMA decay=0.999 every-2-epochs gating on per-Re sqrt L1): val_avg = 52.12, test_avg = 45.00** — cumulative **−63.9% / −65.7%** vs original PR #312 reference (144.21 → 52.12). Eight merged interventions: bf16 + FF K=8 + `torch.compile(dynamic=True)` + pure L1 + cosine T_max=50 + per-Re sqrt sampling + EMA(0.999) every-2-epochs.
+**Round baseline is PR #641 (edward, weight_decay=3e-4 on EMA + per-Re sqrt L1): val_avg = 51.42, test_avg = 43.88** — cumulative **−64.3% / −66.6%** vs original PR #312 reference (144.21 → 51.42). Nine merged interventions: bf16 + FF K=8 + `torch.compile(dynamic=True)` + pure L1 + cosine T_max=50 + per-Re sqrt sampling + EMA(0.999) every-2-epochs + cosmetic NaN cleanup + weight_decay=3e-4. **Train↔val gap collapsed from 1.49× to 0.99× (parity)** at wd=3e-4 — textbook L2 shrinkage signature.
 
 **Schedule alignment for pure L1 confirmed**: T_max=50 wins by 3.14% over T_max=37. Mechanism is `sign(r)` constant-magnitude gradient + non-zero terminal LR = continued refinement. Per-epoch val jumps in last epochs are LARGEST of the run (epoch 36→37: -5.4%). **rc-camber is the only split unmoved by schedule** — rc is representation-limited, not residual-refinement-limited. Schedule + loss interventions can't move rc; need geometry-side or capacity-side experiments.
 
@@ -21,7 +21,7 @@
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
 | **#689** | **nezuko** | **Stability hyperparam (low-side bracket)** | **EMA decay=0.998 probe** — completes the bracket below 0.999. Tests if tighter decay trades variance reduction for sharper late-fit (rc-camber-targeted). |
 | **#692** | **tanjiro** | **Operational / variance characterization** | **Multi-seed baseline confirmation** — 2 fresh seeds of canonical recipe to characterize seed variance precisely. Useful for paper-facing recipe documentation and interpreting future close calls. |
-| **#641** | **edward** | **Optimization tuning** | **weight_decay=3e-4 single probe** (locks down wd hyperparameter on the heavily-tuned current stack — wd has been at round-1 default 1e-4 the whole round) |
+| **#713** | **edward** | **Optimization tuning** | **weight_decay=1e-3 single probe** — completes wd bracket above 3e-4. Best epoch was still 36/50 at wd=3e-4 (no plateau), suggesting potential headroom; rc-camber +2.28% is the warning sign. |
 | **#678** | **thorfinn** | **Feature engineering (rc-targeted)** | **AoA × NACA-M interaction features** for tandem wake-coupling — followup #4 from PR #644 closing. Pivots from "camber dimension itself" to "AoA × camber interaction" which captures wake-structure for tandem foils. |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#645** | **alphonse** | **Optimizer hyperparam** | **AdamW beta1=0.95 probe** (default 0.9 since round 1; entire optimization landscape has shifted). Single-line change; lock-it-down experiment. |
@@ -53,7 +53,8 @@
 | #504 | edward | Merged → superseded by #541 | Pure L1 replacing SmoothL1: val_avg=57.29 (−17.96% vs Huber). |
 | #541 | edward | Merged → superseded by #531 | T_max=50 confirmed for L1, fresh-seed rerun: val_avg=56.22 (-1.07% vs PR #504 same config). |
 | #531 | fern | Merged → superseded by #324 | Per-Re sqrt sampling: val_avg=54.09 (-3.79% vs PR #541), test_avg=46.40 (-4.18%). Stacks at 94% efficiency. |
-| **#324 v4** | **nezuko** | **Merged (CURRENT BASELINE)** | **EMA(0.999) + every-2-epochs gating: val_avg=52.12 (-3.65%), test_avg=45.00 (-3.00%). Cumulative −63.9% / −65.7%. Four-version diagnostic-driven iteration arc.** |
+| #324 v4 | nezuko | Merged → superseded by #641 | EMA(0.999) + every-2-epochs gating: val_avg=52.12 (-3.65%), test_avg=45.00. Four-version diagnostic-driven arc. |
+| **#641** | **edward** | **Merged (CURRENT BASELINE)** | **weight_decay=3e-4: val_avg=51.42 (-1.34% vs canonical 52.12 / -0.55% vs PR #634 51.70), test_avg=43.88 (-2.50%). Train↔val gap 1.49×→0.99×. Cumulative −64.3% / −66.6%.** |
 
 ## Throughput levers status
 

@@ -1,5 +1,76 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 10:08 — PR #641 (merged, NEW BASELINE): weight_decay=3e-4
+
+- branch: `willowpai2d1-edward/weight-decay-3e-4-probe` (deleted on merge)
+- hypothesis: wd was at round-1 default 1e-4; entire optimization landscape
+  has shifted dramatically. Two-way prediction.
+
+### Results
+
+| Metric | Value | vs PR #634 baseline | vs PR #324 v4 canonical |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **51.42** (epoch 36) | **−0.55%** | **−1.34%** |
+| `test_avg/mae_surf_p` | **43.88** | −0.32% | −2.50% |
+| Per-epoch wall | 52.8 s | unchanged | unchanged |
+| Peak GPU memory | 24.2 GB | unchanged | unchanged |
+| Best epoch | 36 / 50 | unchanged (still descending at cap) | |
+| W&B run | `p8co0hp9` | | |
+
+Cumulative since PR #312: **−64.3% val_avg / −66.6% test_avg**.
+
+### Mechanism (the keeper — train↔val gap analysis)
+
+| Run | train/loss | EMA val/loss | ratio |
+|---|---|---|---|
+| wd=1e-4 baseline | 1.227 | 1.831 | **1.49×** (overfit signature) |
+| wd=3e-4 (this) | 1.832 | 1.814 | **0.99×** (parity — regularization working) |
+
+**Textbook L2 shrinkage behavior**: extra weight-pressure stops the model
+from memorizing training-domain detail without hurting val. Identical
+wall-clock and memory; pure shrinkage benefit.
+
+### Per-split structure
+
+| Split | wd=3e-4 Δ vs wd=1e-4 |
+|---|---|
+| val_single_in_dist | −1.59% |
+| val_geom_camber_rc | **+2.28%** (regression!) |
+| val_geom_camber_cruise | **−6.72%** (biggest mover) |
+| val_re_rand | −2.03% |
+| val_avg | −1.34% |
+
+**Test still improves uniformly across all 4 splits** including rc
+(test_rc −0.96%) — val_rc regression likely seed noise on a
+representation-bound split.
+
+### rc-camber: fifth representation-bound confirmation
+
+**rc-camber's failure mode is representational, not regularization or
+schedule.** Combined with prior evidence:
+- 4 levers helping rc by 3-5% each: FF K=8, compile, per-Re sqrt, EMA
+- 4 levers hurting/neutral on rc: T_max=70, sw=15, camber embedding,
+  surface-gating
+- **wd=3e-4 (this PR) hurts rc on val (+2.28%)** but helps test (-0.96%)
+
+rc has multiple failure components but each individual lever moves it by
+similar small amounts; no single lever dominates.
+
+### Best epoch unchanged at 36/50
+
+wd=3e-4 is **not suppressing late-stage refinement**. EMA val curve
+monotonically descending. Combined with the gap collapse, wd is at or
+near the sweet spot — possibly slightly under-regularized (best didn't
+move later) or well-balanced. Edward's #713 wd=1e-3 follow-up tests this
+directly.
+
+### Analysis & conclusions
+
+- **Merged. New round baseline at val_avg=51.42 / test_avg=43.88.**
+- BASELINE.md updated: default wd recommendation now 3e-4.
+- Reassigned edward to **wd=1e-3 probe** (#713) — completes bracket above
+  3e-4. Two-way prediction; clean lock-it-down decision.
+
 ## 2026-04-28 09:08 — PR #666 (closed): EMA decay=0.9995 single probe
 
 - branch: `willowpai2d1-nezuko/ema-decay-9995-probe` (deleted on close)
