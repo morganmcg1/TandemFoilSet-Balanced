@@ -20,3 +20,4 @@ models/
 .vscode/
 .idea/
 .DS_Store
+experiment_log/
