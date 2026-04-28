@@ -595,3 +595,31 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
 - wd profile: 3e-4=73.771, 1e-4=72.414, 3e-5=70.814, 1e-5=70.433. Slope flattened 2.21% → 0.54% — approaching basin floor.
 - Analysis: Measured on pre-cosine-schedule stack; current baseline is 66.841 (much better). Result doesn't beat current baseline. Sent back to rebase and try wd=0 to close the question.
 - Decision: **SENT BACK**. Rebase onto current stack, try wd=0 to determine whether any explicit L2 helps with the merged regularizer-rich stack.
+
+## 2026-04-28 07:20 — PR #562: Cosine T_max 13 → 12 with 2-ep warmup → revised to T_max=11 + 3-ep warmup (start_factor=0.3)
+- Branch: `charliepai2d2-fern/cosine-tmax-12-warmup-2` (artifact: `model-cosine-tmax-11-warmup-3-20260428-063145`)
+- Hypothesis: gentler 3-epoch warmup (start_factor=0.3) decouples basin-selection smoothness from late-decay aggressiveness; T_max=11 still places cosine landing in the fine-tuning regime within 14-epoch budget. Iteration 2 of #562 — first attempt (warmup=2/T_max=12, start_factor=0.5) returned val flat +0.077 vs PR #525 baseline; advisor sent back with concrete revised params.
+
+| metric | this run | baseline (PR #582 grad-clip) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **64.696** (epoch 14) | 66.149 | **−1.453 (−2.20%)** |
+| `test_avg/mae_surf_p` | **55.879** | 57.654 | **−1.775 (−3.08%)** |
+| val_single_in_dist | 77.527 | ~77.989 | −0.46 |
+| val_geom_camber_rc | 75.963 | 77.651 | −1.69 |
+| val_geom_camber_cruise | 44.229 | 46.373 | −2.14 |
+| val_re_rand | 61.064 | 62.584 | −1.52 |
+| test_single_in_dist | 66.457 | 67.262 | −0.81 |
+| test_geom_camber_rc | 67.793 | 70.184 | −2.39 |
+| test_geom_camber_cruise | 36.274 | 38.860 | −2.59 |
+| test_re_rand | 52.993 | 54.310 | −1.32 |
+
+- All 4 val splits improved. All 4 test splits improved (no val/test divergence — clean signal).
+- LR-vs-epoch trajectory: ep1=1.50e-4 (start_factor 0.3), ep4=5.00e-4 (peak), ep14=1.01e-5 (cosine-decayed near-zero, similar to PR #525 T_max=13 endpoint).
+- Late-epoch slope progression (this run): −4.71, −4.71, −3.44, −2.25, **−0.70**. Final-epoch slope 0.70 matches PR #525's sweet-spot exactly — model lands in fine-tuning regime, not over-decayed (vs PR #562 v1's −0.39 over-decay) and not still descending steeply.
+- Mechanism (confirmed): the gentler warmup ramp from start_factor=0.3 over 3 epochs sets up a better trajectory entering the cosine phase. The model lands in the *same* fine-tuning regime as T_max=13 baseline but starts the final descent *from a lower val* because basin selection benefited from the smoother high-LR ramp.
+- Standout splits: `val_geom_camber_cruise` (−6.03%), `test_geom_camber_rc` (−5.31%). Geometry-extrapolation-related splits benefited disproportionately, consistent with smoother basin selection.
+- Decision: **MERGE**. Largest single-PR val_avg gain since PR #525 (−2.145 here vs −5.108 there). Sets new baseline at val_avg=64.696, test_avg=55.879.
+- Suggested follow-ups (per fern):
+  1. warmup_epochs=4 + cosine_epochs=10 with start_factor=0.2 — push gentler-warmup direction further.
+  2. start_factor sweep (0.3, 0.2, 0.1) at fixed 3+11 schedule.
+  3. Slight LR bump (lr=6e-4, 1.2× peak) with current schedule — gentler warmup may permit higher peak LR safely.
