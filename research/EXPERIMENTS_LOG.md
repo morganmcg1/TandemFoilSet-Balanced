@@ -1,5 +1,54 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-28 21:55 — PR #816: FiLM-condition Transolver blocks on global scalars — **SENT BACK (rebase)**
+
+- Branch: `willowpai2e4-alphonse/film-conditioning`
+- Student: willowpai2e4-alphonse
+- W&B run: [`8pkn0ire`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/8pkn0ire)
+
+**Hypothesis.** Inject the 11 global scalars (log Re, AoAs, NACAs, gap,
+stagger) directly into each TransolverBlock via FiLM (AdaLN-Zero)
+modulation of LayerNorm. Predicted −5 to −12% on `val_avg/mae_surf_p`.
+
+**Results (best epoch 12/12, 30.27 min wall, on L1-only baseline)**
+
+| Metric | This run (`8pkn0ire`) | L1 baseline (`8lyryo5g`) | Current baseline (#754, `m46h5g4s`) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **96.61** | 101.93 | 99.23 |
+| 3-split test mean | **95.12** | 100.83 | 99.34 |
+| `val_single_in_dist` | 114.19 | 133.25 | 116.68 |
+| `val_geom_camber_rc` | 120.11 | 109.26 | 113.94 |
+| `val_geom_camber_cruise` | 64.87 | 76.13 | 75.02 |
+| `val_re_rand` | 87.26 | 89.07 | 91.28 |
+| Param count | 0.83 M | 0.66 M | 0.66 M |
+
+vs L1-only baseline: **−5.2%** (in predicted band, conservative end)
+vs current merged baseline (#754): **−2.6%** (still beats baseline)
+
+**Diagnostics (epoch 12).** FiLM-Zero invariant confirmed (epoch-1 metrics
+match baseline within ~2%). Per-block |gamma| grows 0.30 → 0.43, |beta|
+grows 0.16 → 0.35 — healthy gradient flow, deeper blocks pull more
+conditioning. `cond_mlp_last_w_norm` grew smoothly 0 → 20.6 with no
+spikes.
+
+**Per-split surprise.** Predicted biggest gains on OOD camber splits.
+Cruise was indeed the largest winner (−14.8%), but **camber_rc regressed
++9.9%** and `val_single_in_dist` (predicted flat) gained −14.3%. Student's
+mechanism hypothesis: in raceCar (single-foil) the foil-2 NACA / gap /
+stagger conditioning dims carry no real signal but the model learns
+spurious correlations on them. Cruise is tandem so all 11 scalars are
+meaningful there. Suggests masking inactive conditioning dims is a
+strong round-3 follow-up.
+
+**Decision.** Sent back for **rebase**. Branch was created from L1
+baseline #752 before the channel-weight #754 merged. PR is currently
+`CONFLICTING`. Asked alphonse to rebase, resolve the train-loop conflict
+(keep both: channel_weights in train loss AND FiLM-Zero hookpoints —
+they are orthogonal regions: loss formulation vs LayerNorm modulation),
+and re-run on top of L1+ch=[1,1,3]. Expected after rebase: val_avg
+beats 99.23 by a similar ~−2.6 to −5%. Will merge the moment the new
+run lands.
+
 ## 2026-04-28 21:45 — PR #818: SGDR Cosine Warm Restarts (T_0=10, T_mult=2) — **CLOSED**
 
 - Branch: `willowpai2e4-tanjiro/sgdr-warm-restarts` (deleted)

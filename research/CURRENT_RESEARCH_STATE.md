@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-28 ~21:50 (round 2 mid-flight; one closed, one new family launched)
+- **As of:** 2026-04-28 ~21:55 (round 2 mid-flight; FiLM #816 sent back for rebase)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 99.226` (PR #754, L1 + ch=[1,1,3] merged)
@@ -30,13 +30,13 @@ weight signal.
 
 ### Round 2 in flight (orthogonal, on top of L1 + ch=[1,1,3] = 99.23)
 
-| PR | Student | Round-2 idea | Predicted impact |
-|---|---|---|---|
-| #816 | alphonse | FiLM conditioning of LayerNorm (#2) | -5 to -12% |
-| #851 | tanjiro | Huber loss δ=1.0 (#5) — replaces #818 SGDR (closed) | -3 to -8% |
-| #819 | frieren | Relative L2 loss (per-sample norm) (#1) | -5 to -15% |
-| #820 | thorfinn | Fourier PE on (x, z) coords (#3) | -4 to -10% |
-| #829 | fern | Continuation: p-channel weight 5× / 10× sweep | -1 to -3% (5×); 10× could regress |
+| PR | Student | Round-2 idea | Predicted impact | Status |
+|---|---|---|---|---|
+| #816 | alphonse | FiLM conditioning of LayerNorm (#2) | -5 to -12% | rebase + rerun (96.61 on L1-only; -2.6% on new baseline if it holds) |
+| #851 | tanjiro | Huber loss δ=1.0 (#5) — replaces #818 SGDR (closed) | -3 to -8% | wip |
+| #819 | frieren | Relative L2 loss (per-sample norm) (#1) | -5 to -15% | wip |
+| #820 | thorfinn | Fourier PE on (x, z) coords (#3) | -4 to -10% | wip |
+| #829 | fern | Continuation: p-channel weight 5× / 10× sweep | -1 to -3% (5×); 10× could regress | wip |
 
 **Closed in round 2:**
 - #818 tanjiro SGDR T_0=10 → +6% worse, structural budget mismatch
