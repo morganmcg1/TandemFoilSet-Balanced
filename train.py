@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -376,11 +377,12 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 2e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_steps: int = 500
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -433,7 +435,20 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+steps_per_epoch = len(train_loader)
+total_steps = MAX_EPOCHS * steps_per_epoch
+warmup_steps = max(0, min(cfg.warmup_steps, total_steps - 1))
+
+
+def lr_lambda(current_step: int) -> float:
+    if current_step < warmup_steps:
+        return float(current_step) / float(max(1, warmup_steps))
+    progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+    return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -482,6 +497,9 @@ with open(metrics_dir / "config.json", "w") as f:
         "cfg": asdict(cfg),
         "max_epochs": MAX_EPOCHS,
         "max_timeout_min": MAX_TIMEOUT_MIN,
+        "steps_per_epoch": steps_per_epoch,
+        "total_steps": total_steps,
+        "warmup_steps": warmup_steps,
         "git_commit": _git_commit_short(),
     }, f, indent=2)
 train_metrics_fp = open(train_metrics_path, "w")
@@ -525,15 +543,19 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step()
         global_step += 1
+        current_lr = scheduler.get_last_lr()[0]
         wandb.log({"train/loss": loss.item(),
                    "train/grad_norm": grad_norm.item(),
+                   "lr": current_lr,
                    "global_step": global_step})
         train_metrics_fp.write(json.dumps({
             "global_step": global_step,
             "epoch": epoch + 1,
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "lr": current_lr,
         }) + "\n")
         train_metrics_fp.flush()
 
@@ -543,7 +565,6 @@ for epoch in range(MAX_EPOCHS):
         epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm.item())
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
