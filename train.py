@@ -250,7 +250,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 x, y, is_surface, mask = x[keep], y[keep], is_surface[keep], mask[keep]
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (encode_y(y) - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
@@ -266,7 +266,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_encoded = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = decode_y(pred_encoded)
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -359,6 +360,20 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+def encode_y(y: torch.Tensor) -> torch.Tensor:
+    """Apply arcsinh to the pressure channel; leave Ux/Uy linear."""
+    out = y.clone()
+    out[..., 2] = torch.asinh(out[..., 2])
+    return out
+
+
+def decode_y(y_enc: torch.Tensor) -> torch.Tensor:
+    """Invert encode_y: sinh on the pressure channel."""
+    out = y_enc.clone()
+    out[..., 2] = torch.sinh(out[..., 2])
+    return out
+
+
 @dataclass
 class Config:
     lr: float = 5e-4
@@ -385,6 +400,38 @@ stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
+
+# Compute encoded-y stats on the training set: pressure is arcsinh-transformed,
+# so the precomputed (physical-space) y_mean/y_std no longer match. We do a
+# single pass over the training data to derive (y_enc_mean, y_enc_std).
+print("Computing encoded-y stats on training set...")
+_t_stats = time.time()
+y_enc_sums = torch.zeros(3, dtype=torch.float64, device=device)
+y_enc_sqs = torch.zeros(3, dtype=torch.float64, device=device)
+n_total = torch.zeros(1, dtype=torch.float64, device=device)
+stats_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+for _x, _y, _is_surface, _mask in tqdm(stats_loader, desc="encoded-y stats"):
+    _y = _y.to(device, non_blocking=True)
+    _mask = _mask.to(device, non_blocking=True)
+    _y_enc = encode_y(_y)
+    _valid = _mask.unsqueeze(-1)
+    y_enc_sums += (_y_enc * _valid).sum(dim=(0, 1)).double()
+    y_enc_sqs += ((_y_enc ** 2) * _valid).sum(dim=(0, 1)).double()
+    n_total += _mask.sum().double()
+del stats_loader
+y_enc_mean = (y_enc_sums / n_total.clamp(min=1)).float()
+y_enc_var = ((y_enc_sqs / n_total.clamp(min=1)).float() - y_enc_mean ** 2).clamp(min=1e-6)
+y_enc_std = y_enc_var.sqrt()
+print(f"  y_enc_mean = {y_enc_mean.tolist()}")
+print(f"  y_enc_std  = {y_enc_std.tolist()}")
+print(f"  encoded-y stats took {time.time() - _t_stats:.1f}s")
+
+# Replace the y-stats used everywhere downstream with encoded-space stats.
+# All references to stats["y_mean"] / stats["y_std"] now live in encoded space;
+# y must be passed through encode_y() before normalization, and predictions
+# must be passed through decode_y() after denormalization.
+stats["y_mean"] = y_enc_mean
+stats["y_std"] = y_enc_std
 
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
@@ -473,7 +520,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_norm = (encode_y(y) - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
