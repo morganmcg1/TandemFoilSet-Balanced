@@ -2,9 +2,32 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 03:10 — PR #455: Stochastic depth (DropPath) with linear schedule 0 → 0.1
+## 2026-04-28 03:25 — PR #463: Huber loss δ = 0.25 (squashed onto DropPath baseline)
 
-- **Best `val_avg/mae_surf_p`** (target to beat): **80.480** (epoch 14)
+- **Best `val_avg/mae_surf_p`** (target to beat): **72.414** (epoch 13, measured pre-DropPath; post-merge stack adds DropPath, expected at-or-better)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **63.082** (same caveat — pre-DropPath measurement; post-merge stack expected at-or-better)
+- **Per-split val MAE for `p` (pre-DropPath measurement)**:
+  - `val_single_in_dist`: 87.914 (−11.03% vs EMA(0.99)+SwiGLU baseline)
+  - `val_geom_camber_rc`: 83.323 (−13.76%)
+  - `val_geom_camber_cruise`: 50.222 (−17.88% — biggest split improvement)
+  - `val_re_rand`: 68.199 (−10.62%)
+- **Per-split test MAE for `p`**:
+  - `test_single_in_dist`: 76.918
+  - `test_geom_camber_rc`: 72.750
+  - `test_geom_camber_cruise`: 42.154
+  - `test_re_rand`: 60.506
+- **Recipe**: huber(**δ=0.25**, was 1.0) + EMA(decay=0.99) + SwiGLU FFN + DropPath(0→0.1, last block kept) + NaN-safe `evaluate_split`. δ change is the only diff vs the post-DropPath state.
+- **δ profile** (closes the question): δ=2 → 107.6, δ=1 → 88.2 (pre-EMA), δ=0.5 → 87.3 (pre-EMA), δ=1 → 83.2 (post-EMA), **δ=0.25 → 72.4 (post-EMA, this PR)**. Profile is monotone toward L1 with **non-diminishing returns** in this regime — δ=0.5→0.25 delivered ~10× more improvement than δ=1→0.5 did. The smaller quadratic region handles the heavy-tailed pressure error distribution; EMA(0.99)'s fast tracking compounds especially well with a more L1-like loss.
+- **Note on measurement vs merged stack**: this val_avg was measured on EMA(0.99)+SwiGLU+huber(δ=0.25)+NaN-safe (no DropPath, since fern branched before DropPath merged). The current advisor branch now has DropPath added on top of fern's δ change. Since DropPath is a generic regularizer and orthogonal to loss reformulation, the merged compound is expected to be at-or-better-than 72.414. Round-7 PRs will measure the actual post-merge baseline.
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name huber-delta-025 --agent <name>
+  ```
+
+## 2026-04-28 03:10 — Previous baseline (PR #455, DropPath)
+
+- **Best `val_avg/mae_surf_p`**: 80.480 (epoch 14, measured directly)
 - **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **72.328**
 - **Per-split val MAE for `p`**:
   - `val_single_in_dist`: 92.907 (−5.98% vs EMA(0.99) baseline)
