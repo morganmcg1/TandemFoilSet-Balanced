@@ -31,6 +31,46 @@
 
 ---
 
+## 2026-04-28 02:36 — PR #345: H4 surface-only norm + signed distance feature — **CLOSED**
+
+- Branch: `willowpai2d4-fern/h4-surf-norm-distance` (cut before PR #344 merged)
+- Hypothesis: Surface-only normalization (split heads on `mlp2`) + a per-node distance-to-nearest-surface feature should reduce `val_avg/mae_surf_p` by 4–10%, biggest on geometry-OOD.
+- 2-cell matrix in W&B group `h4-surf-norm-distance`:
+
+| Run | Components | best epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|-----|------------|------------|---------------------|----------------------|-----|
+| A | C1 (distance feature only) | 14/14 | 134.91 | 122.63 | `9dvfrpke` |
+| **B** | **C1 + C2 full split heads** | **13/14** | **129.13** | **118.22** | `xdcv4qym` |
+
+### Per-split test/{split}/mae_surf_p (Run B vs Run A)
+
+| Split | Run A | Run B | Δ |
+|-------|------:|------:|--:|
+| `test_single_in_dist` | 144.94 | 136.70 | **−5.7%** |
+| `test_geom_camber_rc` | 152.93 | 134.67 | **−11.9%** |
+| `test_geom_camber_cruise` | 79.93 | 86.14 | **+7.8%** ❌ |
+| `test_re_rand` | 112.72 | 115.38 | **+2.4%** ❌ |
+
+### Conclusions
+
+- **Best run is +6.7% regression vs the merged baseline** (val=129.13 vs 120.97). Even on apples-to-apples pre-merge schedule (Edward Run A: val=125.17), Run B is still +3.2% worse — H4 underperforms even without the schedule fix.
+- **Cross-split signature is structurally split.** RaceCar geom-OOD improves dramatically (-11.9%) while cruise geom-OOD regresses (+7.8%). Same mechanism: per-head normalization rebalances loss in favor of the regimes whose surface and volume distributions differ most. RaceCar has y_std_surf ≈ 913 vs y_std_vol ≈ 786 (large gap) → benefits. Cruise has small surf-vs-vol gap → hurts.
+- **The mechanism that delivers the raceCar gain *is the same mechanism* that hurts cruise.** Rebasing won't fix this. The structural flaw is in the rebalancing direction itself, not in head capacity.
+- **C1 (distance feature) alone is only marginally informative** (Run A val=134.91); pays off only when paired with the head split, but the head split is what causes the cruise regression.
+- **NaN fix duplicated edward's** (already merged via #344).
+
+### Useful follow-ups (deferred)
+
+- **C2-Lite ablation** (per-node std rescale, no extra parameters) would decouple loss-rebalancing from capacity. Cruise structural penalty likely persists, but worth knowing whether the gain is purely from rebalancing.
+- **Multi-scale distance feature** (`log(1 + d/L_ref)` with dataset-wide reference) could give a more comparable signal across the three domains. Worth pairing with a *different* surface treatment in a later round.
+- **Per-domain or learned `surf_weight`** — closely related to frieren's H10 (in flight). If H10 lands, that's evidence for revisiting per-domain weighting.
+
+### Action
+
+Closed; reassigning fern to H9 (pressure-gradient penalty along surface) — physics-aware, plays to her diagnostic strength.
+
+---
+
 ## 2026-04-28 02:21 — PR #347: H5 random Fourier features on (x, z) — **SENT BACK FOR REBASE**
 
 - Branch: `willowpai2d4-nezuko/h5-fourier-features` (cut before PR #344 merged → missing the warmup+cosine schedule and NaN fix)

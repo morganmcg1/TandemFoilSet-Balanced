@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 02:30 UTC
+- **Date:** 2026-04-28 02:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2d-r4`
 - **Most recent human-team direction:** none received yet on this advisor branch
 - **Current best:** PR #344 (edward H2) merged. `val_avg/mae_surf_p=120.97`, `test_avg/mae_surf_p=109.92`. See BASELINE.md for full details and recommended config (`--epochs 25 --lr 7e-4`).
@@ -25,8 +25,8 @@
 |----|---------|------------|--------|-------------|--------|
 | #342 | alphonse | H1: per-sample y-std loss normalization | Loss reformulation | -8% to -18% | wip |
 | #343 | askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% | wip |
-| #345 | fern | H4: surface-only norm + distance feature | Target/feature | -4% to -10% | wip |
 | #347 | nezuko | H5: random Fourier features on (x, z) | Position | -2% to -8% | wip (rebase + re-run on merged schedule; first round σ-sweep ID'd σ=4 as winner) |
+| #468 | fern | H9: surface-arc pressure-gradient penalty | Physics-aware | -2% to -5% | wip |
 | #348 | tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% | wip |
 | #404 | edward | H11: Re-conditional FiLM modulation | Feature engineering | -3% to -7% | wip |
 | #406 | frieren | H10: surf_weight ramp curriculum (5→30) | Loss reformulation | -1% to -4% | wip |
@@ -39,14 +39,16 @@
 | #344 | edward | H2: warmup + corrected cosine | **merged** | 120.97 (Run C, –3.4% vs Run A) |
 | #346 | frieren | H7: z-mirror augmentation | closed (strict regression) | +231% at p=1.0 |
 | #349 | thorfinn | H8: slice_num scaling matrix | closed (regression vs baseline) | 148.65 (+23% vs baseline) |
+| #345 | fern | H4: surface-only norm + distance feature | closed (cruise OOD structural regression) | 129.13 (+6.7% vs baseline) |
 
 ## Held in reserve / promising follow-ups
 
-- **H9: pressure-gradient penalty along surface (∇_s p smoothness)** — physics-aware; assign next round if a student frees up.
 - **Edward's `--epochs 14` lr-frontier follow-up** — finish testing the schedule frontier on the merged code.
 - **Thorfinn's slice_num=96 follow-up** — never tested below the slice 128 winner; the 128→256 curve goes sharply up which hints 64 may already be slightly over-partitioned.
 - **Frieren's TTA (test-time augmentation) study** — evaluate predictions on (x, mirror(x)) at test time. Tests whether the symmetry exists in the trained model, divorced from training-time corruption.
 - **Frieren's domain-conditional augmentation** — restrict mirroring to cruise-only with proper gap sign-flip; small but clean physics.
+- **Fern's C2-Lite ablation + multi-scale distance feature** — milder loss-rebalancing variants that *might* dodge the cruise structural regression.
+- **Per-domain `surf_weight`** — if frieren's H10 (surf_weight ramp) lands, this is the natural next step.
 - **Compounding the round-0 winners** — once 2–3 separate ideas merge, run a combined-best PR to ensure their gains are additive.
 
 ## Potential next research directions (post round 0)
