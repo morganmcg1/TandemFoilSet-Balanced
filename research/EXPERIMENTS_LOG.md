@@ -865,3 +865,35 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
   2. Late-phase nonzero noise probe (stop at 0.0008 instead of 0). Tests whether tail-zero is necessary or just lower-noise tail.
   3. **Higher base_std=0.005 with steeper decay (decay_horizon=8)** — more early regularization, no late-phase cost.
   4. Match cruise win on camber_rc — variant with surface-only or per-sample-only noise schedules.
+
+## 2026-04-28 08:55 — PR #640: Per-parameter-group weight decay (attn=1e-4, mlp=1e-5, other=3e-5)
+- Branch: `charliepai2d2-tanjiro/per-group-wd` (artifact: `model-per-group-wd-20260428-081309`)
+- Hypothesis (from tanjiro's PR #554 close): the OOD asymmetry preserved across both stacks (lower wd helps re_rand, hurts camber_rc) suggests per-module-group wd captures both wins.
+
+| metric | this run (per-group wd) | baseline (PR #510 compile = 64.824 / PR #562 eager = 64.696) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **62.747** (epoch 17) | 64.824 / 64.696 | **−3.21% / −3.01%** |
+| `test_avg/mae_surf_p` | **54.512** | 56.391 / 55.879 | **−3.33% / −2.45%** |
+
+- Param groups: attn 273K (40.8% wd=1e-4), mlp 354K (52.9% wd=1e-5), other 42K (6.3% wd=3e-5).
+- **All 4 val splits improve**: in_dist −1.39%, camber_rc **−1.13%** (the predicted target OOD), camber_cruise **−9.24%** (biggest gain), re_rand **−3.61%** (the predicted target OOD).
+- All 4 test splits improve.
+- **OOD-asymmetry mechanism CONFIRMED**: both target splits (re_rand, camber_rc) improved as predicted with attn-higher / mlp-lower wd.
+- **Bonus finding**: uniform improvement across ALL splits, not just the OOD axes. The asymmetric regularization principle is broader than the specific OOD asymmetry — the model just operates better when attention and FFN modules are regularized differently.
+- Decision: **MERGE**. Profile still descending; tanjiro's follow-up #1 (push asymmetry harder: wd_attn=3e-4, wd_mlp=3e-6) is the natural next probe.
+
+## 2026-04-28 08:55 — PR #601: Huber δ=0.25 → 0.1 (rebased onto post-#562/#510 stack)
+- Branch: `charliepai2d2-thorfinn/huber-delta-0p1` (artifact: `model-huber-delta-0p1-rebased-20260428-075855`)
+- Hypothesis (from thorfinn's first run): δ profile monotone-descending toward L1; rebase to verify on current stack.
+
+| metric | this run (δ=0.1, rebased) | baseline (PR #510 compile = 64.824 / PR #562 eager = 64.696) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **62.879** (epoch 17) | 64.824 / 64.696 | **−3.00% / −2.81%** |
+| `test_avg/mae_surf_p` | **54.561** | 56.391 / 55.879 | **−3.25% / −2.36%** |
+
+- **All 4 val splits improve**: in_dist **−3.92%** (largest gainer; the in_dist regression from pre-rebase reverses entirely), camber_rc −2.19%, camber_cruise −3.39%, re_rand −2.60%.
+- All 4 test splits improve.
+- **Striking finding**: best epoch is 17 in the cosine schedule's **second half-cycle**. Cosine T_max=11 produces a second descent past ep14 (PyTorch CosineAnnealingLR continues past T_max as cos(πt/T_max) which goes negative then positive). EMA(0.995) + δ=0.1's smooth-near-zero gradient lets the model squeeze ~1.3 additional pts past the cosine-min minimum.
+- **Loss-magnitude characterization at convergence**: only 29% of residuals are in the linear regime (vs predicted >95% if pseudo-L1). δ=0.1 is a **"better hybrid"**, not pseudo-L1: linearizes the heavy-tailed minority (~30%) while keeping ~70% in the smooth quadratic well.
+- **Same-stack effect grew** from −1.05% (pre-rebase) to −3.00% (post-rebase) — the longer 3-ep warmup + T_max=11 schedule extends the late-training fine-tune window where δ=0.1's better tail handling has more room to refine.
+- Decision: **MERGE**. Profile still monotone-descending toward L1; thorfinn's follow-up #1 (δ=0.05 probe) is the natural next step.
