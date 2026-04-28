@@ -31,6 +31,40 @@
 
 ---
 
+## 2026-04-28 06:30 — PR #523: H14 5-D conditioning vector for FiLM — **CLOSED**
+
+- Branch: `willowpai2d4-edward/h14-film-cond5`
+- Hypothesis: Expanding FiLM conditioner from 1-D `log(Re)` to 5-D `[log(Re), AoA1, AoA2, gap, stagger]` should reduce `val_avg/mae_surf_p` by 1–4% with sharper per-split improvements on geom-OOD.
+- 3-cell matrix in W&B group `h14-film-cond5`:
+
+| Run | film_cond_dim | seed | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|-----|--------------:|-----:|---------------------:|----------------------:|-----|
+| **A — sanity** | 1 | 123 | **119.36** (matches baseline exactly to 4 sig figs) | **107.54** | `se3be70u` |
+| B — canonical | 5 | 123 | **115.87** (−2.93%) | **104.36** (−2.96%) | `cs2op6wt` |
+| C — variance check | 5 | 124 | 125.65 (+5.27%) | 111.49 (+3.67%) | `59ixyv9m` |
+
+### Conclusions
+
+- **Run A reproduces the merged baseline exactly** — the harness change is clean and FiLM identity-init still holds at cond_dim=1. Second `--seed 123` reproducibility check passing.
+- **Run B is inside the predicted band but Run C blows it.** B-C peak-to-peak at fixed cond_dim=5 is **8.1% on val, 6.7% on test** — *larger* than the B-vs-A signal. Mean(B, C) − A = +1.17% / +0.36% — essentially zero average effect.
+- **The 5-D conditioner is, at this scale, a wash.** Single-seed Run B looks like a win but isn't reproducible.
+- **`test_geom_camber_cruise` improvement DOES survive seed averaging** at -7.2% mean. The richer geometry conditioning helps cruise specifically.
+- **Run C's `val_single_in_dist` blowup (176.14)** likely caused by the artificial-zero failure mode — single-foil samples have AoA2=0, gap=0, stagger=0 in the 5-D conditioner, creating a regime change vs tandem.
+
+### Useful follow-ups (deferred)
+
+- **Run D = cond1, seed=124** would fully decouple seed from conditioning. Cheap.
+- **`nn.LayerNorm(cond_dim)` before the FiLM MLP** addresses uneven conditioner-input magnitudes.
+- **cond_dim=3** (`[log(Re), AoA1, AoA2]`) drops the zero-padded geometry channels.
+- **Multi-seed at cond5** (5+ seeds) would give a real distribution.
+- **Log gamma/beta magnitudes mid-training** as a diagnostic on whether FiLM head is doing meaningful work.
+
+### Action
+
+Closed; reassigning edward to H17 (layer-wise learning rate decay for Transolver blocks) — fresh optimization-bucket hypothesis, well-motivated for small-data short-training regimes (BeiT, ELECTRA, MAE), orthogonal to all in-flight hypotheses.
+
+---
+
 ## 2026-04-28 06:04 — PR #343: H6 bf16 + torch.compile + larger batch — **SENT BACK FOR REBASE-ONTO-#404**
 
 - Branch: `willowpai2d4-askeladd/h6-bf16-compile-batch` (pre-#344, pre-#404; needs rebase onto current advisor branch)

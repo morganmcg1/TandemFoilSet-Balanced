@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 06:10 UTC
+- **Date:** 2026-04-28 06:35 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2d-r4`
 - **Most recent human-team direction:** none received yet on this advisor branch
 - **Current best:** PR #404 (edward H11) merged. `val_avg/mae_surf_p=119.36`, `test_avg/mae_surf_p=107.54`. See BASELINE.md for full details and recommended config (`--film_re True --epochs 25 --lr 7e-4 --weight_decay 5e-4 --seed 123`).
@@ -30,7 +30,7 @@
 | #442 | thorfinn | H12: EMA of model weights for evaluation | Optimization | -1% to -4% | wip (sent back round 2 — needs rebase onto #404 + Run F to test EMA × FiLM compound; round 2 Run D at decay=0.99 confirmed mechanism triply validated with 9.2% within-run lift but absolute val_ema=121.24 ties PR #344 baseline within noise) |
 | #468 | fern | H9: surface-arc pressure-gradient penalty | Physics-aware | -2% to -5% | wip |
 | #561 | frieren | H15: test-time z-mirror augmentation (TTA) | Inference-time regularization | -1% to -3% | wip |
-| #523 | edward | H14: 5-D conditioning vector for FiLM | Feature engineering | -1% to -4% | wip |
+| #602 | edward | H17: layer-wise lr decay for Transolver blocks | Optimization | -1% to -4% | wip |
 
 ## Resolved this round
 
@@ -43,6 +43,7 @@
 | #406 | frieren | H10: surf_weight ramp curriculum | closed (within-experiment +4.3% vs A but +1.6% regression vs baseline; effect below seed-variance floor) | 122.90 (+1.6% vs baseline) |
 | #490 | frieren | H13: stochastic depth (DropPath) | closed (B-vs-A signature matched prediction strongly but absolute effect below noise floor) | 120.57 (+1.0% vs current baseline) |
 | #347 | nezuko | H5: Fourier features (× FiLM in round 3) | closed (Fourier × FiLM antagonistic at +8.5% regression; Fourier-only round 2 gave -3.14% on pre-#404 path but doesn't compound) | 129.49 (+8.5% vs current baseline) |
+| #523 | edward | H14: 5-D FiLM conditioner | closed (Run B at +seed=123 was -2.93% but Run C at seed=124 was +5.27%; mean(B,C) is essentially zero; cruise -7.2% survives seed-avg as the sole real signal) | mean 120.76 (+1.2% vs baseline) |
 | #404 | edward | H11: Re-conditional FiLM modulation | **merged** (after disentanglement) | **119.36** (Run E, −1.3% vs prior baseline) |
 
 ## Held in reserve / promising follow-ups
@@ -65,8 +66,9 @@ We have now seen single-run noise of **~6% peak-to-peak** across multiple PRs:
 - #406 (surf_weight ramp): Run A control 6% *worse* than baseline on equivalent code
 - #442 (EMA): Run A control 2.6% *better* than baseline on equivalent code
 - #490 (DropPath): Run A control 7.7% *worse* than baseline on equivalent code
+- #523 (FiLM cond5, seed pair): seed=123 vs seed=124 at fixed cond_dim=5 spread is 8.1% on val, 6.7% on test
 
-The variance is bidirectional and well-calibrated at ~6% peak-to-peak. **Predicted effect sizes <5% are below this noise floor by design.** Going forward:
+The variance is bidirectional and well-calibrated at ~6–8% peak-to-peak. The B/C seed pair on #523 was the cleanest demonstration to date: same code, same config, only seed differs, and the result swings from -2.93% to +5.27% on val. **Predicted effect sizes <5% are below this noise floor by design.** Going forward:
 - New small-effect hypotheses should plan multi-seed confirmation up front (PR #404 round 2 was the model — Run D for disentanglement + Run E with `--seed 123` for variance check).
 - The `--seed` CLI flag shipped via PR #404 makes seed-controlled comparisons cheap; future PRs that depend on small effects should reuse it.
 - Landing H6 (askeladd, throughput) so we can run more epochs per training is a strong argument for compounding effect-vs-noise improvements.
