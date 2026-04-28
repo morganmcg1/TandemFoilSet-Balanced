@@ -52,7 +52,7 @@ from data import (
 # Fourier positional features
 # ---------------------------------------------------------------------------
 
-FOURIER_K = 8
+FOURIER_K = 12
 
 
 def fourier_features(xz: torch.Tensor) -> torch.Tensor:
