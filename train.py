@@ -101,6 +101,16 @@ class SwiGLU_MLP(nn.Module):
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
 
 
+class RMSNorm(nn.RMSNorm):
+    """LLaMA-style RMS layer norm.
+
+    Subclasses ``torch.nn.RMSNorm`` (fused on PyTorch >= 2.4) so the kernel
+    matches LayerNorm's launch profile. Default ``eps=1e-6`` matches LLaMA.
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__(dim, eps=eps)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -161,15 +171,15 @@ class TransolverBlock(nn.Module):
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         self.mlp = SwiGLU_MLP(hidden_dim, hidden_dim, hidden_dim, mlp_ratio=mlp_ratio)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
