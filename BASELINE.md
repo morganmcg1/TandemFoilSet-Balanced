@@ -2,6 +2,31 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 08:44 — PR #635: lr peak bump 5e-4 → 6e-4 (gentler 3-ep warmup permits 1.2× peak)
+
+- **Best `val_avg/mae_surf_p`**: **63.131** (epoch 17, −2.42% vs 64.696 prior, −2.61% vs 64.824 compile prior)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **55.026** (vs 55.879 prior, −1.53%)
+- **Per-split val MAE for `p`** (best epoch 17, compile=True):
+  - val_single_in_dist: 73.993 (−4.56%)
+  - val_geom_camber_rc: 77.263 (+1.71% — only regression)
+  - val_geom_camber_cruise: 42.057 (−4.91%)
+  - val_re_rand: 59.209 (−3.04%)
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 64.501
+  - test_geom_camber_rc: 68.074
+  - test_geom_camber_cruise: 35.466
+  - test_re_rand: 52.064
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + wd=3e-5 + PhysicsAttention temperature init=2.0 + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + feature noise std=0.0025 + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True option + **lr=6e-4** (was 5e-4).
+- **LR-vs-epoch trajectory**: ep1=1.80e-4 (sf 0.3 × 6e-4), ep4=6.00e-4 (peak), ep14=1.21e-5 (cosine end), ep15=0 (eta_min), ep17=4.76e-5 (cosine wraparound).
+- **Grad-clip diagnostics**: ep1 mean=21.5 (+10% vs PR #582), max=81.5 (+33%), but **clip rate FELL to 82.7% (vs PR #582's 85.6%)** — the gentler 3-ep warmup means ep1 effective LR is only 1.80e-4. Clip rate at peak ep4=51.5% (well below saturation; more headroom for higher peak LR).
+- **Late-epoch slope shape changed**: model gets into fine-tuning regime SOONER. By ep12, val_avg=66.9 already close to final 63.13. Higher peak LR extracts more from the high-LR optimization phase (ep4–ep10).
+- **Metric summary**: `models/model-lr-peak-6e-4-20260428-075310/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name lr-peak-6e-4 --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 07:30 — PR #510: torch.compile mode="default" (infrastructure: +28.6% epochs in budget)
 
 - **Best `val_avg/mae_surf_p`**: **64.824** (epoch 18, on rebased post-#582 stack; vs eager-same-stack 66.149 = −2.0%)
