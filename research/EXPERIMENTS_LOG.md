@@ -250,6 +250,26 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Validation curve was strictly monotonic (every epoch a new best, no late-training instability seen at δ=0.5).
 - Decision: **CLOSE.** Doesn't beat the current EMA(0.99) baseline (83.223) on standalone val_avg. The lever has small signal but isn't enough by itself. Student's follow-up #1 (δ=0.25 to test profile saturation) is exactly the right next step — combined with the current EMA(0.99) baseline as starting point, it doubles as a δ-sweep + a compound test. Queued as the round-5 reassignment.
 
+## 2026-04-28 02:55 — PR #454: Adam-style EMA bias correction (decay_target=0.999, warmup_steps=10)
+
+- Branch: `charliepai2d2-askeladd/ema-bias-correction` — metrics committed.
+- Hypothesis: Adam-style ramp `decay_t = min(0.999, (1+t)/(10+t))` keeps EMA(0.999)'s late-training smoothing strength while removing the cold-start bias that hurt EMA(0.999) in the under-trained regime. Predicted −1% to −3%.
+- Result: best `val_avg/mae_surf_p = 84.6454` at epoch 13. **+1.71% vs current EMA(0.99) baseline (83.223).** test_avg = 75.0424 (+1.54%).
+- Per-split val: single_in_dist 97.44 (−1.40%), camber_rc 96.18 (−0.45%) — small wins; **cruise 65.47 (+7.04%) and re_rand 79.50 (+4.19%) regressed**, driving the net loss.
+- **Cold-start did improve** (ep1=183.4 vs EMA(0.99)'s 193 vs EMA(0.999)'s 333). The bias correction does what it's designed to do.
+- **Student's structural diagnosis (the keeper)**: under the 13-epoch timeout-bound regime, the dominant effect of EMA(0.99) is **continuous fast tracking** of the rapidly-improving live model, not just cold-start bias correction. The bias-corrected scheme reaches effective decay 0.977 by step 375 (~epoch 1) and 0.995 by step 1875 (~epoch 5), so outside the first ~50 steps it's essentially EMA(0.999) — which we already know lags by ~2 epochs of training progress. Cold-start and ongoing-tracking don't separate cleanly: the model is *always* in the rapidly-improving regime in this budget.
+- Decision: **CLOSE.** Direction not dead — student's follow-up #2 (decay_target=0.99 + warmup_steps=10) keeps the fast-tracking baseline while adding the cold-start bias correction layer. Queued as the round-5 reassignment.
+
+## 2026-04-28 02:55 — PR #371: Gradient accumulation 2 (effective batch 8) with √2 lr scaling
+
+- Branch: `charliepai2d2-nezuko/grad-accum-2` — student rebased onto SwiGLU baseline (88.227) before running; metrics committed.
+- Hypothesis: effective batch 8 via `grad_accum_steps=2` reduces gradient noise, smoothing late-training validation. Predicted −1% to −4%.
+- Result: best `val_avg/mae_surf_p = 123.997` at epoch 13. **+40.5% vs SwiGLU baseline (88.227); +49% vs current EMA(0.99) baseline (83.223).** test_avg = 113.745 (+45.2%).
+- Trajectory: trails the baseline at every single epoch (epoch 1: 355 vs 333; epoch 13: 124 vs 88).
+- **Student's structural diagnosis (excellent)**: grad-accum-2 halves the optimizer step count while keeping wall-clock fixed under the timeout. Under a 13-epoch budget where val is still descending ~5 pts/epoch, halving updates is catastrophic. The √2 lr scaling can't compensate because we never reach a plateau where the gradient-noise-reduction benefit of bigger effective batch could overtake the per-step efficiency loss. EMA also accumulates half as many ticks. At equal *optimizer-step* count, grad-accum-2 epoch-13 (124.00) ≈ baseline epoch-6 (157.45), so it's a tiny bit ahead per-step — but wall-clock dominates here.
+- Curve was strictly monotone (no spikes — smoothness prediction held), but post-EMA the baseline is also smooth, so smoothness alone wasn't a differentiator at this point in the research.
+- Decision: **CLOSE.** Hypothesis fundamentally requires equal optimizer-step count, which we don't have at fixed wall-clock. Worth revisiting if `SENPAI_TIMEOUT_MINUTES` ever doubles, or as a building block once the model converges within budget.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
