@@ -4,41 +4,41 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 
 ## Current best (this branch)
 
-- **PR**: #840 — "Per-sample relative MAE loss" (winner, pending rebase/merge — declared 2026-04-28)
-- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--huber_delta 1.0`
-- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **64.73**
-- **test_avg/mae_surf_p** (best checkpoint): **56.92** (finite across all 4 splits including cruise)
-- **W&B run**: `nz8eev8e` (group `compound-relative-mae`, project `senpai-charlie-wilson-willow-e-r2`)
+- **PR**: #840 — "Per-sample relative MAE loss" (merged 2026-04-28)
+- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--surf_weight 10.0`
+- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **64.16**
+- **test_avg/mae_surf_p** (best checkpoint): **55.73** (finite across all 4 splits including cruise)
+- **W&B run**: `t5p9xzxx` (group `compound-relative-mae`, project `senpai-charlie-wilson-willow-e-r2`) — rebased re-run
 - **Params**: 558,134 (unchanged) | **Epochs in 30 min**: ~32 (timed out at 32/50)
 
 ### Per-split val metrics (best checkpoint, epoch 32)
 
 | Split | val mae_surf_p |
 |-------|---------------|
-| `val_single_in_dist`     | 80.41  |
-| `val_geom_camber_rc`     | 78.51  |
-| `val_geom_camber_cruise` | 40.13  |
-| `val_re_rand`            | 60.73  |
-| **val_avg/mae_surf_p**   | **64.73** |
+| `val_single_in_dist`     | 77.07  |
+| `val_geom_camber_rc`     | 84.10  |
+| `val_geom_camber_cruise` | 36.86  |
+| `val_re_rand`            | 58.58  |
+| **val_avg/mae_surf_p**   | **64.16** |
 
 ### Per-split test metrics (from best checkpoint)
 
 | Split | test mae_surf_p |
 |-------|----------------|
-| `test_single_in_dist`       | 77.25  |
-| `test_geom_camber_rc`       | 67.74  |
-| `test_geom_camber_cruise`   | 32.35  |
-| `test_re_rand`              | 50.35  |
-| **test_avg/mae_surf_p**     | **56.92** |
+| `test_single_in_dist`       | 71.33  |
+| `test_geom_camber_rc`       | 70.62  |
+| `test_geom_camber_cruise`   | 30.92  |
+| `test_re_rand`              | 50.04  |
+| **test_avg/mae_surf_p**     | **55.73** |
 
-**Note**: Relative MAE loss fixed the cruise NaN — cruise test split is now finite (32.35). The gradient-equalization across Re regimes works as predicted: cruise (low-Re, small |y|) benefits most; single_in_dist (high-Re, large |y|) regresses slightly as expected.
+**Note**: Metrics from rebased re-run (W&B `t5p9xzxx`). Relative MAE loss fixed the cruise NaN — cruise test split is finite (30.92). The gradient-equalization across Re regimes works as predicted: cruise (low-Re, small |y|) benefits most.
 
-### Reproduce (once PR #840 merges)
+### Reproduce
 
 ```bash
 cd target && python train.py \
     --loss_type relative_mae \
-    --huber_delta 1.0 \
+    --surf_weight 10.0 \
     --epochs 50 \
     --wandb_group compound-relative-mae \
     --wandb_name compound-relative-mae \
@@ -53,6 +53,18 @@ slice_num=16,
 n_hidden=128,
 mlp_ratio=2,
 ```
+
+---
+
+## 2026-04-28 18:00 — PR #840: per-sample relative MAE (merged)
+
+- **val_avg/mae_surf_p:** 64.16 (epoch 32, timed out at 32/50 — still improving)
+- **test_avg/mae_surf_p:** 55.73 (finite across all 4 splits)
+- **Per-split val:** single=77.07, rc=84.10, cruise=36.86, re_rand=58.58
+- **Per-split test:** single=71.33, rc=70.62, cruise=30.92, re_rand=50.04
+- **Delta vs previous best (PR #783):** −11.77 (−15.5%) on val_avg/mae_surf_p
+- **W&B run:** t5p9xzxx (rebased re-run)
+- **Status:** Merged into advisor branch
 
 ---
 
