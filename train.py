@@ -404,9 +404,10 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 5e-4 * (2 ** 0.5)   # was 5e-4; scale by sqrt(grad_accum_steps=2) to match effective batch 8
     weight_decay: float = 1e-4
     batch_size: int = 4
+    grad_accum_steps: int = 2       # effective batch = batch_size * grad_accum_steps = 8
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -496,7 +497,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    optimizer.zero_grad()
+    for batch_idx, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -511,16 +513,24 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        loss = (vol_loss + cfg.surf_weight * surf_loss) / cfg.grad_accum_steps
 
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
-        ema.update(model)
+
+        if (batch_idx + 1) % cfg.grad_accum_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+            ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    # Flush leftover gradients if the epoch's last batch didn't trigger a step
+    if (n_batches % cfg.grad_accum_steps) != 0:
+        optimizer.step()
+        optimizer.zero_grad()
+        ema.update(model)
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
