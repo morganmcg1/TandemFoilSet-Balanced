@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -178,10 +179,10 @@ class Transolver(nn.Module):
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
-                                  n_layers=0, res=False, act=act)
+                                  n_layers=1, res=True, act=act)
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
-                                  n_layers=0, res=False, act=act)
+                                  n_layers=1, res=True, act=act)
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
@@ -463,6 +464,27 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+metrics_dir = Path("metrics")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+metrics_tag = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "run")
+metrics_path = metrics_dir / f"{metrics_tag}-{run.id}.jsonl"
+with open(metrics_path, "w") as f:
+    f.write(json.dumps({
+        "kind": "config",
+        "wandb_name": cfg.wandb_name,
+        "agent": cfg.agent,
+        "run_id": run.id,
+        "git_commit": _git_commit_short(),
+        "n_params": n_params,
+        "model_config": model_config,
+        "train_config": asdict(cfg),
+        "max_epochs": MAX_EPOCHS,
+        "max_timeout_min": MAX_TIMEOUT_MIN,
+        "train_samples": len(train_ds),
+        "val_samples": {k: len(v) for k, v in val_splits.items()},
+    }) + "\n")
+print(f"Metrics JSONL: {metrics_path}")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -535,6 +557,13 @@ for epoch in range(MAX_EPOCHS):
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps({
+            "kind": "epoch", "epoch": epoch + 1,
+            **{k: v for k, v in log_metrics.items() if k != "global_step"},
+            "global_step": global_step,
+        }) + "\n")
+
     tag = ""
     if avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
@@ -557,6 +586,15 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+with open(metrics_path, "a") as f:
+    f.write(json.dumps({
+        "kind": "train_end",
+        "total_minutes": total_time,
+        "best_epoch": best_metrics.get("epoch"),
+        "best_val_avg/mae_surf_p": best_avg_surf_p if best_metrics else None,
+        "peak_gb": (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else 0.0,
+    }) + "\n")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -596,6 +634,12 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps({
+                "kind": "test", "best_epoch": best_metrics["epoch"],
+                **test_log,
+            }) + "\n")
 
     save_model_artifact(
         run=run,
