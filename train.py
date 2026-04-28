@@ -403,6 +403,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    grad_clip_max_norm: float = 1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -539,6 +540,7 @@ run = wandb.init(
         "re_median_per_domain": re_median_per_domain,
         "ema_decay": ema_decay,
         "ema_val_interval": EMA_VAL_INTERVAL,
+        "grad_clip_max_norm": cfg.grad_clip_max_norm,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -573,6 +575,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
     batch_times: list[float] = []
+    grad_norms: list[float] = []  # pre-clip total grad norms, this epoch
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     last_batch_end = time.time()
@@ -601,6 +604,11 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # clip_grad_norm_ returns the *pre-clip* total norm (across all params).
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), max_norm=cfg.grad_clip_max_norm
+        )
+        grad_norms.append(total_norm.item())
         optimizer.step()
 
         # EMA update — happens after optimizer.step() so the shadow tracks the
@@ -620,7 +628,12 @@ for epoch in range(MAX_EPOCHS):
         last_batch_end = time.time()
         batch_times.append(b_dt)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "train/batch_time_s": b_dt, "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/batch_time_s": b_dt,
+            "train/grad_norm_pre_clip": total_norm.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -663,6 +676,21 @@ for epoch in range(MAX_EPOCHS):
     steady_mean_s = sum(steady_batches) / max(len(steady_batches), 1)
     steady_max_s = max(steady_batches) if steady_batches else 0.0
 
+    # Pre-clip gradient norm summary (this epoch). `total_norm` returned by
+    # clip_grad_norm_ is the L2 norm across ALL parameter grads BEFORE clipping —
+    # so >clip means the clipper actually scaled. Float64 percentiles for stable
+    # tail diagnostics on a 375-batch epoch.
+    grad_norms_t = torch.tensor(grad_norms, dtype=torch.float64)
+    grad_norm_mean = grad_norms_t.mean().item() if len(grad_norms) else 0.0
+    grad_norm_median = grad_norms_t.median().item() if len(grad_norms) else 0.0
+    grad_norm_p95 = (
+        grad_norms_t.quantile(torch.tensor(0.95, dtype=torch.float64)).item()
+        if len(grad_norms) else 0.0
+    )
+    grad_norm_max = grad_norms_t.max().item() if len(grad_norms) else 0.0
+    n_clipped = int((grad_norms_t > cfg.grad_clip_max_norm).sum().item())
+    clipped_frac = n_clipped / max(len(grad_norms), 1)
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -672,6 +700,12 @@ for epoch in range(MAX_EPOCHS):
         "train/first_batch_s": first_batch_s,
         "train/steady_batch_mean_s": steady_mean_s,
         "train/steady_batch_max_s": steady_max_s,
+        "train/grad_norm_epoch_mean": grad_norm_mean,
+        "train/grad_norm_epoch_median": grad_norm_median,
+        "train/grad_norm_epoch_p95": grad_norm_p95,
+        "train/grad_norm_epoch_max": grad_norm_max,
+        "train/grad_norm_epoch_n_clipped": n_clipped,
+        "train/grad_norm_epoch_clipped_frac": clipped_frac,
         "global_step": global_step,
     }
     for split_name, m in raw_split_metrics.items():
@@ -705,12 +739,17 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    grad_norm_summary = (
+        f"gn[mean={grad_norm_mean:.3f} med={grad_norm_median:.3f} "
+        f"p95={grad_norm_p95:.3f} max={grad_norm_max:.3f} clip={n_clipped}/{len(grad_norms)}]"
+    )
     if do_ema_val:
         print(
             f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
             f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
             f"(max {steady_max_s:.3f}s)  "
             f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"{grad_norm_summary}  "
             f"raw_val={raw_avg_surf_p:.4f} ema_val={avg_surf_p:.4f}{tag}"
         )
         for name in VAL_SPLIT_NAMES:
@@ -721,6 +760,7 @@ for epoch in range(MAX_EPOCHS):
             f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
             f"(max {steady_max_s:.3f}s)  "
             f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"{grad_norm_summary}  "
             f"raw_val={raw_avg_surf_p:.4f} (ema val skipped)"
         )
 
