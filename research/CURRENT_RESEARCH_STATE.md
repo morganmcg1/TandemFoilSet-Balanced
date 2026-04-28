@@ -1,72 +1,88 @@
-<!--
-SPDX-FileCopyrightText: 2026 CoreWeave, Inc.
-SPDX-License-Identifier: Apache-2.0
-SPDX-PackageName: senpai
--->
-
 # SENPAI Research State
+- 2026-04-29 02:30 (icml-appendix-charlie-pai2e-r5)
+- Most recent research direction from human researcher team: None received yet.
 
-- **Date:** 2026-04-28 (updated)
-- **Most recent research direction from human researcher team:** None (no GitHub Issues received)
-- **Track:** icml-appendix-charlie-pai2e-r5
-- **Current baseline:** `val_avg/mae_surf_p` = **97.4483** (PR #798, L1 loss, epoch 14)
+## Current Best Baseline
 
----
+**PR #799** — `val_avg/mae_surf_p` = **77.2954** (epoch 14/50, timeout-bound, still descending)
+Branch: `charliepai2e5-askeladd/lion-optimizer` (merged)
 
-## Current Research Focus and Themes
+Configuration: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **Lion** optimizer, lr=3e-4, wd=1e-2, surf_weight=20, batch_size=4, CosineAnnealingLR T_max=MAX_EPOCHS, **L1 loss** (vol + surf_weight * surf), grad_clip=1.0, no EMA, no bf16.
 
-The round just started. The foundational L1 loss alignment (PR #798, −24.4% improvement) was merged as the very first experiment. All 8 students are now running their first round of experiments testing orthogonal directions on top of L1.
+Per-split surf p MAE: single=92.02, camber_rc=87.77, camber_cruise=57.97, re_rand=71.42.
 
-### Active WIP Experiments (Round 2+)
+Baseline improvement trajectory: 128.83 (MSE+AdamW) → 97.45 (L1+AdamW, PR #798, −24.4%) → **77.30 (L1+Lion+clip, PR #799, −20.7%)**
 
-| PR | Student | Hypothesis | Theme |
-|----|---------|------------|-------|
-| #799 | askeladd | Lion optimizer (sign-based updates vs AdamW) | Optimizer |
-| #801 | edward | EMA model averaging (decay=0.995) | Regularization |
-| #806 | thorfinn | FiLM domain conditioning (single/rcTandem/cruise) | Architecture |
-| #817 | alphonse | surf_weight sweep {10, 15, 20, 25, 30} for L1 | Hyperparameter |
-| #822 | nezuko | SmoothL1/Huber loss (beta sweep 0.1/0.3/1.0) | Loss function |
-| #823 | tanjiro | asinh pressure target transform (scale sweep) | Target transform |
-| #824 | frieren | Gradient clipping + weight decay tuning (max_norm sweep) | Optimization stability |
-| #852 | fern | Per-channel L1 loss weighting: amplify pressure in surf_loss | Loss function |
-| #857 | askeladd (2nd slot) | Drop-path stochastic depth regularization sweep | Regularization |
+**All current experiments must rebase on the Lion+L1+clip recipe.**
 
----
+## Completed Experiments (this round)
 
-## Key Context
+### Merged (wins)
+| PR | Hypothesis | Result | Δ |
+|----|------------|--------|---|
+| #798 | L1 loss (align objective with metric) | 97.45 | −24.4% vs 128.83 |
+| #799 | Lion optimizer + L1 + clip=1.0 | 77.30 | −20.7% vs 97.45 |
 
-- **Training budget is tight**: baseline runs hit the 30-min wall-clock timeout at epoch 14/50. Models are NOT converging — training curves still trending down at epoch 14. This is a critical constraint: any experiment that can improve sample-per-second throughput (bf16, batch_size, data loading) has extra leverage here.
-- **NaN issue in test_geom_camber_cruise**: `test_avg/mae_surf_p` is partially NaN due to a pre-existing `data/scoring.py` bug where `0 * NaN = NaN` propagates through masked sums. Val metric is reliable; need to resolve this before paper-facing test numbers.
-- **surf_weight=20 was tuned for MSE**: the L1 switch likely shifts the optimal surf_weight. The alphonse sweep should resolve this.
-- **Domain imbalance**: 3 physical regimes (raceCar single, raceCar tandem, cruise) are equally weighted via the sampler, but cruise has much smaller magnitudes. L1 evened this out somewhat versus MSE.
+### Closed (dead ends)
+| PR | Hypothesis | Result | Reason |
+|----|------------|--------|--------|
+| #803 | Surface feature noise | 142.25 | +46% regression |
+| #804 | Cosine LR warmup (3-epoch) | 128.23 | +32% vs current baseline |
+| #805 | Preprocess MLP depth +1 residual layer | 138.60 | +42% regression |
+| #806 | FiLM domain conditioning | 106.49 | +9.3% regression |
+| #802 | bf16 autocast + TF32 + batch_size=8 | 129.14 | +32.5% regression |
+| #822 | SmoothL1/Huber loss (beta sweep) | 103.00 | +5.7% regression |
+| #824 | Gradient clipping at 0.5/1.0/5.0 | 101.23 | +3.9% regression (wrong regime — natural grad norm 85–115, not 1–10) |
 
----
+## Currently Running (status:wip)
+
+| PR | Student | Hypothesis |
+|----|---------|------------|
+| #893 | charliepai2e5-frieren | Lion lr sweep: test lr=1e-4, 5e-4, 6e-4 vs baseline 3e-4 |
+| #894 | charliepai2e5-nezuko | Lion+L1 surf_weight re-tune: sweep 5/10/30/40 vs baseline 20 |
+| #879 | charliepai2e5-thorfinn | Wider hidden dim: n_hidden 128→256 for more capacity under L1 loss |
+| #857 | askeladd | Drop-path stochastic depth regularization sweep (rate=0.1/0.2) |
+| #852 | charliepai2e5-fern | Per-channel L1 loss weighting: amplify pressure channel in surf_loss |
+| #823 | charliepai2e5-tanjiro | asinh pressure target transform: compress long-tailed p distribution |
+| #817 | charliepai2e5-alphonse | surf_weight sweep for L1 loss (values 10/15/20/25/30) |
+| #801 | charliepai2e5-edward | EMA model averaging (decay=0.995) for better generalization |
+
+## Idle Students Needing Assignment
+
+None — all students assigned.
+
+## Current Research Focus
+
+With the **Lion + L1 + clip** combination established as the new baseline (77.30), the remaining levers to investigate are:
+
+1. **Loss surface refinements on Lion+L1 base**: surf_weight re-tuning for Lion (not AdamW), per-channel pressure amplification, focal/hard-example mining
+2. **Architecture capacity**: n_hidden sweep, slice_num, additional attention layers
+3. **Regularization**: stochastic depth (in-flight #857), dropout variants compatible with Lion+L1
+4. **Training dynamics**: learning rate (Lion may prefer different lr than 3e-4), warmup shape, T_max re-tuning
+5. **Data pipeline**: asinh/sqrt pressure transform to compress heavy tails (in-flight #823)
+6. **Ensemble / test-time**: train multiple seeds, average predictions
 
 ## Potential Next Research Directions
 
-### High Priority (likely high-value)
-1. **Weighted surface pressure loss** — explicitly upweight the pressure channel within the surface loss beyond the current `surf_weight` scalar. Surface p is the primary metric but Ux/Uy still dilute gradients.
-2. **Larger model capacity** — n_hidden=256, n_layers=6, or n_head=8. The baseline is quite small (128 hidden, 5 layers). With 96GB VRAM there's headroom to go bigger.
-3. **Cosine warmup schedule** — the baseline LR schedule has no warmup; adding a 3-epoch linear warmup with eta_min=5e-5 could stabilize early L1 training which has sharper gradients near zero.
-4. **Per-channel normalization tuning** — `y_std` normalization is shared; channel-specific scaling might better balance Ux/Uy/p loss contributions.
-5. **Batch size increase** — current batch_size=4 is low; bf16 could enable batch_size=8, doubling throughput and getting more epochs in the timeout window.
+### High priority
+1. **Lion lr sweep**: Try lr=1e-4, 5e-4, 6e-4 for Lion — 3e-4 was chosen based on Lion paper recommendations but may not be optimal for this dataset. Lion is more sensitive to lr than AdamW.
+2. **surf_weight re-tune for Lion+L1**: The existing surf_weight=20 was optimized for AdamW+MSE then carried through. With Lion's sign-based updates the gradient magnitude scaling is fundamentally different — a sweep of 5/10/15/20/30 on the Lion+L1 base is required.
+3. **slice_num sweep (32/64/128)**: Physics-aware attention bottleneck — current 64 may not be optimal for L1+Lion regime.
+4. **n_layers depth sweep (4/5/6)**: Model depth hasn't been explored; 5 is the Transolver default but pressure modeling on complex tandem foil geometry may benefit from more depth.
+5. **Larger batch with gradient accumulation**: bs=1 or bs=2 with accumulation to bs=4 — smaller batches may improve Lion convergence (sign gradients are more informative with less averaging).
 
-### Medium Priority (architecture exploration)
-6. **FiLM conditioning** (in-flight, PR #806) — condition model on domain ID (single vs rcTandem vs cruise) to specialize internal representations.
-7. **Slice-aware attention** — vary slice_num (currently 64) to find better slice granularity for capturing foil surface detail.
-8. **Residual connections in preprocessing MLP** — additional MLP layers with residual skip might enrich feature embeddings for the complex 24-dim input space.
-9. **Graph-based foil 1/2 distinction** — currently the model can't distinguish foil 1 from foil 2 surface nodes; encoding this could help tandem predictions.
-10. **Attention over surface-only nodes** — dedicated attention pathway for the sparser surface node set, complementing volumetric attention.
+### Medium priority
+6. **Focal L1 / hard-example mining**: Weight loss by node-wise rolling error to chase the long pressure tail — especially valuable for camber_cruise split which still has large error.
+7. **Multi-step learning rate with Lion**: Try [1e-4, 3e-4, 1e-4] step schedule rather than cosine — Lion paper shows step LR often outperforms cosine.
+8. **bf16 at bs=4** (no batch increase): Pure throughput gain without batch-size penalty — previously tested at bs=8 which hurt; bs=4 with bf16 would give ~1.3x more epochs within timeout.
+9. **Temperature scaling on attention slices**: Learnable temperature τ per head for Transolver's slice attention.
+10. **Re-conditional normalization per sample**: Pass Re number through FiLM on the volume nodes only (not surface) — FiLM on surface hurt, but Re conditioning on the flow domain may help.
 
-### Bold/Risky Ideas
-11. **Physics-informed loss** — add a continuity equation residual term (div(U)=0 for incompressible flow) as an auxiliary loss on volume predictions.
-12. **Multi-scale Transolver** — process coarse/fine mesh scales with different attention modules, merging predictions.
-13. **Test-time normalization** — normalize per-sample rather than using global stats, which might reduce Re-regime bias.
-14. **Geometric augmentation** — small random perturbations to NACA parameters at training time for robustness.
-15. **NaN-fix in scoring.py** — separate fix to replace `0 * NaN` with `torch.where(mask, err, 0)`, enabling clean test_geom_camber_cruise pressure metrics.
+### Bigger swings (architecture/representation)
+11. **Position encoding on foil surface arc-length**: Explicit ordering of surface nodes by arc-length position as positional encoding.
+12. **Geometry-physics bottleneck**: Separate encoder for chord/camber/gap/stagger/Re → compact geometry token injected as cross-attention key/value.
+13. **Test-time ensemble (k=5 seeds)**: Trivial parallelism win if variance across seeds is high — average predictions at test time.
 
----
+## Known Issues
 
-## Summary
-
-9 students are actively running experiments covering optimizer, regularization, architecture, and loss-tuning angles simultaneously. Next round should focus on model capacity scaling (larger hidden dims, more layers) and cosine LR warmup once these results are in. The next advisor review will rank results and compound winners.
+- **`data/scoring.py:accumulate_batch` NaN bug**: `test_geom_camber_cruise/mae_surf_p` is NaN across all runs because the scoring code doesn't guard against non-finite model predictions (only non-finite ground truth). Affects test metrics, not val metrics. Three students have independently flagged this. Needs organizer fix in `data/scoring.py`.
