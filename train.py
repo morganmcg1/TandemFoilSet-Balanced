@@ -236,6 +236,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples with non-finite ground truth (e.g. one inf p sample
+            # in test_geom_camber_cruise/000020.pt). scoring.py's per-sample
+            # skip is correct in intent but `(err * mask).sum()` propagates NaN
+            # via 0*inf, contaminating the metric. Zero y for those samples
+            # and exclude them via mask so err stays finite.
+            y_finite = torch.isfinite(y).all(dim=-1).all(dim=-1)
+            if not y_finite.all():
+                y = torch.where(y_finite[:, None, None], y, torch.zeros_like(y))
+                mask = mask & y_finite[:, None]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -386,6 +396,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    n_hidden: int = 128
+    n_head: int = 4
+    slice_num: int = 64
 
 
 cfg = sp.parse(Config)
@@ -418,10 +431,10 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
-    slice_num=64,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
