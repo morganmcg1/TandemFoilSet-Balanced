@@ -1,5 +1,49 @@
 # SENPAI Research Results
 
+## 2026-04-28 ~15:00 — PR #784 round 2: OneCycleLR full-schedule 28 epochs [CLOSED]
+- Branch: `willowpai2e2-frieren/compound-onecycle` (closed, branch deleted)
+- Hypothesis (revision): Repeat OneCycleLR with `--epochs 28` so the full cosine-descent schedule completes within the 30-min wall clock. Test whether completing the low-LR fine-tuning phase unlocks a refinement win.
+- W&B run: `hw4400z4` (round 2); `icmk9yw4` (round 1 for comparison)
+
+| metric | round 2 (28 epochs, full schedule) | round 1 (50 epochs, 64% schedule) |
+|---|---:|---:|
+| best `val_avg/mae_surf_p` | 92.25 (epoch 28, last) | 91.72 (epoch 32, last) |
+| `test_single_in_dist/mae_surf_p` | 93.33 | 88.86 |
+| `test_geom_camber_rc/mae_surf_p` | 95.94 | 89.75 |
+| `test_geom_camber_cruise/mae_surf_p` | NaN (cruise bug) | NaN |
+| `test_re_rand/mae_surf_p` | 83.63 | 83.25 |
+| offline clean test_avg (3 finite) | 87.62 | 81.62 |
+| epochs | 28/28 ✅ | 32/50 ❌ |
+| LR at end | 2.0e-9 ✅ (floor reached) | 1.6e-4 ❌ (floor not reached) |
+| wall clock | 26.4 min | 30.1 min (timeout) |
+
+- Outcome: **Closed**. Round 2 cleanly tested the hypothesis — schedule completed, LR reached floor (2e-9). Result is slightly *worse* (92.25 vs 91.72) than the partial-schedule run. Both runs have best epoch = last epoch, confirming this is gradient-step-limited: the model benefits from more steps, not from completing the LR anneal. Additionally, Huber (PR #783, val=75.93) merged as a far stronger signal — neither OneCycleLR run survives comparison with the new baseline. Frieren reassigned to gradient accumulation throughput (#854).
+
+## 2026-04-28 ~14:30 — PR #783: Huber loss δ=1.0 on compound base [MERGED — NEW BASELINE]
+- Branch: `willowpai2e2-fern/compound-huber` (merged into `icml-appendix-willow-pai2e-r2`)
+- Hypothesis: MSE loss squares large residuals, so high-Re CFD samples dominate gradients. Huber loss linearizes above δ, giving medium-Re samples a fairer share of gradient signal. On this dataset (per-sample y-std spanning 164–2077), the effect should be large and uniform across splits.
+- W&B run: `2y1lj209` (group `compound-huber`, project `senpai-charlie-wilson-willow-e-r2`)
+
+| metric | compound + Huber δ=1.0 | compound anchor (PR #779) | Δ |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | **75.93** (epoch 32/50, timeout) | 96.80 (epoch 31) | **−20.87 (−21.6%)** |
+| `val_single_in_dist/mae_surf_p` | 85.84 | 107.38 | −21.54 |
+| `val_geom_camber_rc/mae_surf_p` | 91.20 | 107.06 | −15.86 |
+| `val_geom_camber_cruise/mae_surf_p` | 54.68 | 79.94 | −25.26 |
+| `val_re_rand/mae_surf_p` | 71.99 | 92.83 | −20.84 |
+| `test_single_in_dist/mae_surf_p` | 79.35 | 92.53 | −13.18 |
+| `test_geom_camber_rc/mae_surf_p` | 82.61 | 96.38 | −13.77 |
+| `test_geom_camber_cruise/mae_surf_p` | NaN (cruise bug) | NaN | — |
+| `test_re_rand/mae_surf_p` | 64.29 | 88.29 | −24.00 |
+| partial test_avg (3 finite) | 75.42 | 92.40 | −16.98 |
+| params | 558,134 | 558,134 | 0 |
+| peak VRAM | 21.6 GB | 21.6 GB | 0 |
+| wall clock | 30.2 min (timeout) | 30.0 min (timeout) | — |
+
+- Outcome: **Merged** as new baseline. All four val splits improve uniformly by 15–32%. Huber uniformly redistributes gradient signal away from catastrophic high-Re errors. The model was still improving at epoch 32 (timed out), suggesting significant remaining headroom. val_avg=75.93 is the new baseline.
+- Key analysis: Huber works because the compound base has to allocate capacity across a ~10× range of per-sample y-std. MSE squares high-Re residuals, letting a small fraction of batches dominate gradients. Huber linearizes at δ=1.0, giving low-Re samples a fairer share.
+- Next steps: δ sweep (0.5, 2.0) assigned to alphonse (#853); grad accumulation to frieren (#854); surf_weight sweep to fern (#855).
+
 ## 2026-04-28 22:30 — PR #787: Fourier feature PE on (x,z) — compound base [CLOSED]
 - Branch: `willowpai2e2-thorfinn/compound-fourier-pe` (closed, branch deleted)
 - Hypothesis: Gaussian random Fourier features (Tancik 2020), m=8, sigma=1.0 on (x,z), concatenated to input before preprocess MLP. Should help slice attention partition geometry by surface-aware frequencies.
