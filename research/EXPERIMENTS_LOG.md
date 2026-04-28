@@ -1,5 +1,24 @@
 # SENPAI Research Results
 
+## 2026-04-28 18:00 — PR #821: Tooling — AMP/bf16 + batch_size=16 + NaN-safe eval [SENT BACK — LR scaling fix needed]
+- Branch: `willowpai2e2-askeladd/tooling-amp-bs-nansafe`
+- Hypothesis (tooling): fp32/bs=4 at ~55s/epoch → 50 epochs needs 46 min, far past 30-min wall. Three fixes: (1) AMP/bf16 autocast on forward pass, (2) batch_size default 4→16, (3) NaN-safe `evaluate_split` guard to fix the cruise Inf→NaN accumulator bug.
+- W&B runs: `gjh93i2f` (tooling-validate-compound), `fogsv6hg` (tooling-validate-compound-seed42)
+
+| metric | run 1 (gjh93i2f) | run 2 (fogsv6hg) | acceptance |
+|---|---:|---:|---|
+| best `val_avg/mae_surf_p` | 159.51 | 124.01 | < 90 target ❌ |
+| `test_avg/mae_surf_p` | 136.33 | 110.77 | finite ✓ |
+| `test_geom_camber_cruise/mae_surf_p` | **58.77** | **58.54** | finite for 1st time ✓ |
+| `test_single_in_dist/mae_surf_p` | 265.50 | 182.09 | — |
+| `test_geom_camber_rc/mae_surf_p` | 141.23 | 119.75 | — |
+| `test_re_rand/mae_surf_p` | 79.81 | 82.69 | — |
+| completed epochs | 46/50 | 46/50 | 50/50 ❌ |
+| peak VRAM | 55.9 GB | 55.9 GB | — |
+
+- Outcome: **Sent back.** The three tooling changes work correctly — AMP/bf16 reduces epoch wall from ~55s to ~40s, NaN-safe eval permanently fixes the cruise NaN bug (landmark result: cruise test is finite for the first time). The blocking issue is batch-size/LR mismatch: bs=16 gives 4× fewer gradient steps/epoch; at the same lr=5e-4 convergence collapses (val 159/124 vs ~92 at fp32/bs=4). Fix: linear LR scaling, lr=5e-4 × (16/4) = 2e-3 as new default. Askeladd sent back to apply this single change and re-validate.
+- Key analysis: The AMP + NaN-safe changes are correct and should not be modified. Only the lr default needs changing. The inter-seed variance (35-point spread between runs 1 and 2) also reflects the LR mismatch — with correct LR, variance should drop to a few points.
+
 ## 2026-04-28 17:00 — PR #840: per-sample relative MAE loss [WINNER — pending rebase/merge]
 - Branch: `willowpai2e2-edward/compound-relative-mae`
 - Hypothesis: MSE and Huber losses weight gradient contribution proportional to |residual|², which biases toward high-Re/high-amplitude samples. Per-sample relative MAE normalizes each sample's contribution: L_rel = mean(|pred - target| / (mean(|target|) + ε)), equalizing gradient contribution across Re regimes. On a dataset where per-sample y-std spans 164–2077 (12× range), this should disproportionately benefit low-Re splits (cruise, re_rand).
