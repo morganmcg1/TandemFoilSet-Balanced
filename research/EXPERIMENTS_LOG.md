@@ -1,5 +1,44 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 07:00 — PR #589 (alphonse n_hidden=160) and PR #590 (thorfinn mlp_ratio=4) — **BOTH CLOSE; major systemic update**
+
+### Results
+
+| PR | Hypothesis | val_avg | test 3-clean | train_surf_loss vs baseline |
+|----|------------|--------:|---:|---|
+| #589 | n_hidden 128 → 160 | 79.98 (+9.1%) | 77.87 (+12.1%) | **slightly worse** at matched ep 16 |
+| #590 | mlp_ratio 2 → 4 | 73.05 (-0.33%, noise) | 71.24 (+2.52%) | **slightly worse** at every comparable epoch |
+
+### Decision
+
+**Both close. The systemic update is significant.**
+
+Combined with fern's earlier n_layers=6 result (PR #550, also closed), **all three capacity dimensions (width, depth, MLP-ratio) refute the underfitting hypothesis** that emerged from the regularization-saturation finding. The pattern is consistent across all three: **train_loss does NOT drop with extra capacity** — every capacity bump converges *slower per epoch*, not faster. There's no expressivity dividend to harvest.
+
+### Updated systemic finding
+
+| Hypothesis class | Status | Diagnostic |
+|---|---|---|
+| Regularization (wd, EMA, attn-dropout, node subsampling) | Saturated | Train-val gap *widened* under more regularization |
+| Capacity (n_hidden, n_layers, mlp_ratio) | **Refuted** | Train_loss didn't drop with extra capacity in any direction |
+| Pressure-channel emphasis | Falsified | Shared-backbone capacity gets pulled off other channels |
+| SGD dynamics (bs=8 alone, lr=2e-3 with clip, bs=8+lr=1.4e-3) | Exhausted | Step count is the binding constraint, not LR magnitude |
+
+The "underfitting" framing was wrong. The model has enough capacity; **the bottleneck is training steps to reach the late-cosine-tail regime where the bf16 baseline gets its win** (epochs 17-18 specifically). At matched epoch 16, n_hidden=160 and bf16 baseline have essentially identical val (81.19 vs 81.37). The bf16 baseline's win comes from epochs 17-18, which capacity bumps don't reach due to per-epoch wall increase.
+
+### Productive directions remaining
+
+- **Per-step training efficiency**: eta_min refinement (#604 in flight), LLRD (#603 in flight), schedule extensions
+- **Training-time data augmentation**: Re jittering (#593 in flight), AoA jittering (#613 just assigned)
+- **Optimizer alternatives**: Lion (#612 just assigned)
+- **Targeted hypotheses for specific failure modes** (val_geom_camber_rc geometry-extrapolation): still untested
+
+Reassigned alphonse to **Lion optimizer** (PR #612, lr=3e-4) — sign-based optimizer, naturally pairs with L1 loss; standard alternative to AdamW.
+
+Reassigned thorfinn to **AoA jittering augmentation** (PR #613, σ=0.02 rad) — analogous to nezuko's Re jittering (#593) but on different input axis. Targets `val_geom_camber_*` splits.
+
+
+
 ## 2026-04-28 06:40 — PR #579: Cosine eta_min = peak·0.1 (pre-bf16 baseline) — **CLOSE (mechanism works but ratio too aggressive)**
 
 - Branch: `charliepai2d5-tanjiro/eta-min-0p1` (closed)
