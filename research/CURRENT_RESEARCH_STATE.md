@@ -71,7 +71,7 @@ Per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`. Per-experiment JS
 |----|---------|------|-------|-------------------------------------|
 | #510 | alphonse | torch-compile-baseline | Wrap model in `torch.compile(mode='reduce-overhead')` | −1% to −3% |
 
-## Round-7 in flight (8 students)
+## Round-7 in flight (7 students)
 
 Built on the merged baseline. Conservative target val_avg < 72.414.
 
@@ -79,7 +79,6 @@ Built on the merged baseline. Conservative target val_avg < 72.414.
 |----|---------|------|-------|-------------------------------------|
 | #518 | askeladd | bias-corrected-ema-warmup-50 | EMA warmup_steps 10 → 50 | −0.5% to −1.5% |
 | #519 | edward | n-head-8 | Multi-head attention 4 → 8 (head_dim 32 → 16, param-matched) | −0.5% to −1.5% |
-| #520 | thorfinn | slice-temp-1p0 | PhysicsAttention temperature init 0.5 → 1.0 | −0.3% to −1.5% |
 | #525 | fern | cosine-warmup-tmax-aligned | 1-ep linear warmup + cosine T_max=13 (aligns LR decay with the 14-ep realistic budget) | −0.5% to −2% |
 | #526 | frieren | feature-noise-005 | Semantics-aware feature noise std 0.01 → 0.005 (sweep DOWN per #495 diagnosis) | −0.5% to −1.5% |
 | #527 | tanjiro | weight-decay-3e-5 | AdamW weight_decay 1e-4 → 3e-5 (sweep DOWN per #494 diagnosis) | −0.5% to −1.5% |
