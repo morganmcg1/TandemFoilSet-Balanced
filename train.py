@@ -560,8 +560,8 @@ for epoch in range(MAX_EPOCHS):
         sq_err = (pred - y_norm) ** 2
         abs_err = (pred - y_norm).abs()
         # SmoothL1 (Huber) on surface: MSE-like inside |err|<beta, L1-like outside.
-        # beta=1.0 in normalized space ≈ one std of the channel.
-        beta = 1.0
+        # beta=0.5 in normalized space (was 1.0 in #352).
+        beta = 0.5
         smooth_l1 = torch.where(abs_err < beta, 0.5 * sq_err / beta, abs_err - 0.5 * beta)
 
         vol_mask = mask & ~is_surface
