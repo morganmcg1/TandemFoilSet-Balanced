@@ -391,6 +391,51 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer (Zhang et al. 2019, "Lookahead Optimizer: k steps forward, 1 step back")
+# ---------------------------------------------------------------------------
+
+
+class Lookahead:
+    """Wrap an inner optimizer (e.g. AdamW). Every k inner steps blend slow weights
+    toward fast weights and pull fast back to slow.
+
+    The scheduler must be constructed against the inner optimizer (PyTorch's
+    LRScheduler does an isinstance(optimizer, Optimizer) check). Both objects
+    share the same param_groups, so LR updates propagate transparently.
+    """
+
+    def __init__(self, optimizer, k: int = 5, alpha: float = 0.5):
+        self.optimizer = optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_weights = [
+            [p.data.detach().clone() for p in g["params"]]
+            for g in optimizer.param_groups
+        ]
+        self.pulls = 0
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self):
+        self.optimizer.step()
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            with torch.no_grad():
+                for group_idx, group in enumerate(self.optimizer.param_groups):
+                    for param_idx, p in enumerate(group["params"]):
+                        slow = self.slow_weights[group_idx][param_idx]
+                        slow.add_(p.data - slow, alpha=self.alpha)
+                        p.data.copy_(slow)
+            self.pulls += 1
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -412,6 +457,9 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     amp_bf16: bool = True  # use bfloat16 autocast for model forward; loss accumulator stays in fp32
     optimizer_name: str = "lion"     # one of {"adamw", "lion"}
+    use_lookahead: bool = True  # wrap the inner optimizer with Lookahead
+    lookahead_k: int = 5
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -458,14 +506,19 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 if cfg.optimizer_name == "lion":
-    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    _inner_optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 else:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    _inner_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer_name}  (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
 warmup_epochs = 5
-warmup = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
-cosine = CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
-scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+warmup = LinearLR(_inner_optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
+cosine = CosineAnnealingLR(_inner_optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+scheduler = SequentialLR(_inner_optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+if cfg.use_lookahead:
+    optimizer = Lookahead(_inner_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"Lookahead enabled: k={cfg.lookahead_k}, alpha={cfg.lookahead_alpha}")
+else:
+    optimizer = _inner_optimizer
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -559,7 +612,7 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     avg_grad_norm = epoch_grad_norm_sum / max(n_batches, 1)
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -570,7 +623,11 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
-    })
+    }
+    if cfg.use_lookahead:
+        epoch_record["lookahead/pulls_total"] = optimizer.pulls
+        epoch_record["lookahead/steps_total"] = optimizer.step_count
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
