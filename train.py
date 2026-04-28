@@ -369,6 +369,7 @@ class Config:
     surf_weight: float = 30.0
     epochs: int = 50
     grad_clip_norm: float = 0.5  # max gradient L2 norm; set <=0 to disable
+    train_node_keep: float = 0.85  # fraction of mask-valid nodes kept in the training loss; 1.0 = no subsampling
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -460,6 +461,10 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        if cfg.train_node_keep < 1.0:
+            keep = torch.rand(mask.shape, device=device) < cfg.train_node_keep
+            mask = mask & keep
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
