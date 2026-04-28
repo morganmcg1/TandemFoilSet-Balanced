@@ -2,6 +2,23 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 08:50 — PR #622: Volume Huber (apply Huber to vol_loss too) — **CLOSED**
+- Branch: `willowpai2d5-askeladd/huber-volume` (deleted; train.py diff was clean 4-line edit on current advisor)
+- 2-seed run on bf16+grad-clip+Huber baseline:
+
+| Seed | val_avg/mae_surf_p | val_avg/mae_vol_p | best epoch | W&B id |
+|---|---:|---:|---:|---|
+| 1 (0hiprxbt) | 96.36 | — | 18 | volhuber |
+| 2 (7zpceki4) | 95.63 | — | 18 | volhuber |
+| **mean ± std** | **96.00 ± 0.60** | **94.05 ± 1.39** | — | — |
+
+- vs current baseline (90.98 ± 0.81): **surface +5.5%, volume +10.1%** — both regress, opposite of predicted -10-20% volume gain
+- val_single_in_dist worst regressor (+13.3%) — confirms heavier regularization hurts most where y-range is widest
+- Decision: **closed** per stated rule (surface mean > 93).
+- **Important mechanism finding:** the surface-Huber cross-term win (volume MAE drops alongside surface) was NOT because volume needs Huber too. It was because surface-Huber's bounded gradient on extreme samples freed encoder capacity for volume regression. Adding Huber to volume removes curvature signal where most volume residuals already sit (Huber linear regime O(1)) and kills the encoder updates that surface needs (volume outnumbers surface 10×).
+- Pattern: **stacking outlier-handling on the same gradient path doesn't compose; only on different gradient paths does** (grad-clip + surface-Huber composed at 78% additive because they're at different points in the training step).
+- Reassignment: askeladd → **SWA over last 25% of training (PR #667)**. Different mechanism than EMA (#341 closed) — flat arithmetic average of late-epoch weights for flatter-minima discovery.
+
 ## 2026-04-28 08:25 — PR #586: lr=1e-3 with bf16+grad-clip baseline — **CLOSED**
 - Branch: `willowpai2d5-alphonse/lr-1e-3-with-gradclip` (deleted; pre-#413, bf16+grad-clip-only baseline)
 - 3 runs total (2 seeds at lr=1e-3 + 1 sensitivity probe at lr=7e-4):
