@@ -1,5 +1,49 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 04:52 — PR #515 (CLOSED, EMA-overlap redundancy): 3× p-weight in vol_loss
+- Branch: `charliepai2d3-tanjiro/l1ff-ema-cos14-lr-7p5e-4-vol-pwt-3x` (deleted)
+- Hypothesis: 3× pressure-channel weight in volume MSE (different axis
+  from L1-vol — channel weighting vs loss shape) captures heavy-tail
+  benefit without overlapping EMA. Predicted −1% to −3%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs current PR #506 (78.80) | vs PR #462 (80.06) |
+|--------|--------:|---------------------------:|-------------------:|
+| `val_avg/mae_surf_p` | 81.71 | **+3.69%** | +2.06% |
+| `test_avg/mae_surf_p` | 71.92 | +4.04% | +2.69% |
+
+### Per-split val — uniform mild regression
+
+| split | this PR | PR #462 | Δ |
+|-------|--------:|--------:|--:|
+| val_single_in_dist | 94.84 | 93.59 | +1.34% |
+| val_geom_camber_rc | 94.06 | 92.33 | +1.87% |
+| val_geom_camber_cruise | 59.72 | 57.74 | +3.43% |
+| val_re_rand | 78.22 | 76.57 | +2.16% |
+
+### Decision
+
+**Closed.** Above-zero regression vs both current and PR #462
+baselines. The lever is the **fourth example** of the EMA-overlap
+compose-failure family (after #492 L1-vol, #500 wd=5e-4, #489 lr=1e-3).
+EMA's trajectory averaging on the volume p-channel absorbs the
+heavy-tail benefit that channel weighting would provide — adding an
+axis-redundant lever just disrupts surf↔vol balance.
+
+`train/vol_loss` ~2× the no-weight reference confirms the model got
+the gradient mass; the metric didn't improve from it. Per-split
+signal: `test_single_in_dist` only winning split (−2.30%), suggests
+small in-dist effect that's drowned by OOD regression at this dose.
+
+Re-assigning tanjiro to **auxiliary log-pressure loss** —
+mechanistically different (target-space rescaling, not channel
+weighting / loss shape / schedule manipulation).
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 04:41 — PR #506 (MERGED): NUM_FOURIER_FREQS 8 → 12
 - Branch: `charliepai2d3-nezuko/l1ff12-ema-cos14-lr-7p5e-4`
 - Hypothesis: bracket the proven spatial FF lever upward from 8 to 12

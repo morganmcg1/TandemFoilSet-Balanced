@@ -151,8 +151,11 @@ composition even if they don't outright beat 102.64:**
    - PR (nezuko, new): L1+FF(16 freqs)+EMA + `--epochs 14` + `lr=7.5e-4` —
      **NUM_FOURIER_FREQS=16** spatial FF frequency-count bracket
      further up (round-3-best is now FF=12; tests if 16 extracts more).
-   - PR #515 — tanjiro: L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **3× pressure-channel weight in volume loss**.
+   - PR (tanjiro, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **auxiliary log-pressure loss** — different mechanism than
+     channel weighting / loss shape; addresses heavy-tail via
+     target-space rescaling. Mechanistically distinct from EMA's
+     trajectory averaging.
    - PR #516 — askeladd: L1+FF+EMA + `--epochs 14` + **`lr=8e-4`** —
      interior LR bracket point.
    - PR #524 — edward: **canonical 6-lever stack measurement** —
@@ -183,6 +186,7 @@ post-EMA stack. The pattern:
 | **Direction-only-update regime cliff** | under-convergence | max_norm=0.5 × full stack (#499), DropPath 0.1 wallclock cliff (#501) | closed |
 | **Schedule × averaging interference** | OOD regression | matched cosine × EMA (#476) | closed |
 | **Saturated regularisation overlap** | no marginal value | wd=5e-4 × full stack (#500) | closed |
+| **Heavy-tail compose redundancy with EMA** | mild uniform regression | 3× p-weight in vol_loss × full stack (#515) | closed |
 
 **Generalisation observed across compose tests**: once one "noise/
 regularisation" lever is in the stack (FF, EMA), additional
