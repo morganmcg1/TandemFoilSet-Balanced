@@ -171,9 +171,10 @@ class TransolverBlock(nn.Module):
             )
 
         # Layer scale: per-channel learnable gating on each residual branch.
-        # Init at 1e-4 — near-identity early; learnable upward as needed.
-        self.gamma_attn = nn.Parameter(torch.ones(hidden_dim) * 1e-4)
-        self.gamma_mlp = nn.Parameter(torch.ones(hidden_dim) * 1e-4)
+        # Init at 1e-3 — vertical bracket UP from PR #657 (1e-4) to test
+        # whether faster γ engagement frees epochs for fine-tuning.
+        self.gamma_attn = nn.Parameter(torch.ones(hidden_dim) * 1e-3)
+        self.gamma_mlp = nn.Parameter(torch.ones(hidden_dim) * 1e-3)
 
     def forward(self, fx):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
