@@ -32,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -250,6 +251,17 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Pre-filter samples with non-finite ground truth: scoring.accumulate_batch
+            # masks them via 0 * err, but 0 * NaN = NaN in IEEE 754, so the NaN
+            # leaks into the accumulator. Drop these samples before any compute.
+            B = y.shape[0]
+            keep = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not keep.all():
+                if not keep.any():
+                    continue
+                x = x[keep]; y = y[keep]
+                is_surface = is_surface[keep]; mask = mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -394,6 +406,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    n_hidden: int = 128
+    n_head: int = 4
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -436,9 +450,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -451,6 +465,12 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# bf16 mixed precision (PR #808). GradScaler is included per the advisor's
+# instructions even though it's typically a no-op with bf16 — bf16 has the
+# same exponent range as fp32 so gradient underflow isn't a concern. Keeping
+# the recipe intact in case any ops go through fp16 fallback paths.
+scaler = GradScaler()
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -465,7 +485,7 @@ run = wandb.init(
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
-    mode=os.environ.get("WANDB_MODE", "online"),
+    mode=os.environ.get("WANDB_MODE", "disabled"),
 )
 
 wandb.define_metric("global_step")
@@ -500,7 +520,11 @@ _log_jsonl({
     "config": asdict(cfg),
     "model_config": model_config,
     "n_params": n_params,
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+    "git_commit": _git_commit_short(),
 })
+print(f"Metrics JSONL: {metrics_path}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -525,18 +549,20 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta)
-
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta)
+            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -574,17 +600,6 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
-    _log_jsonl({
-        "event": "epoch",
-        "epoch": epoch + 1,
-        "epoch_time_s": dt,
-        "lr": scheduler.get_last_lr()[0],
-        "train/vol_loss": epoch_vol,
-        "train/surf_loss": epoch_surf,
-        "val/loss": val_loss_mean,
-        **{f"{n}/{k}": v for n, m in split_metrics.items() for k, v in m.items()},
-        **{f"val_{k}": v for k, v in val_avg.items()},
-    })
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -605,6 +620,21 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    _log_jsonl({
+        "event": "epoch",
+        "epoch": epoch + 1,
+        "epoch_time_s": dt,
+        "lr": scheduler.get_last_lr()[0],
+        "peak_gb": peak_gb,
+        "is_best": tag == " *",
+        "global_step": global_step,
+        "train/vol_loss": epoch_vol,
+        "train/surf_loss": epoch_surf,
+        "val/loss": val_loss_mean,
+        **{f"{n}/{k}": v for n, m in split_metrics.items() for k, v in m.items()},
+        **{f"val_{k}": v for k, v in val_avg.items()},
+    })
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
@@ -655,19 +685,33 @@ if best_metrics:
             **test_log,
         })
 
-    save_model_artifact(
-        run=run,
-        model_path=model_path,
-        model_dir=model_dir,
-        cfg=cfg,
-        best_metrics=best_metrics,
-        best_avg_surf_p=best_avg_surf_p,
-        test_metrics=test_metrics,
-        test_avg=test_avg,
-        n_params=n_params,
-        model_config=model_config,
-    )
+    if os.environ.get("WANDB_MODE", "disabled") != "disabled":
+        save_model_artifact(
+            run=run,
+            model_path=model_path,
+            model_dir=model_dir,
+            cfg=cfg,
+            best_metrics=best_metrics,
+            best_avg_surf_p=best_avg_surf_p,
+            test_metrics=test_metrics,
+            test_avg=test_avg,
+            n_params=n_params,
+            model_config=model_config,
+        )
+
+    _log_jsonl({
+        "event": "done",
+        "best_epoch": best_metrics["epoch"],
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_per_split": {n: best_metrics["per_split"][n] for n in VAL_SPLIT_NAMES},
+        "test_per_split": test_metrics,
+        "test_avg": test_avg,
+        "total_train_minutes": total_time,
+        "peak_gb_final": torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0,
+        "model_path": str(model_path),
+    })
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+    _log_jsonl({"event": "done", "no_checkpoint": True, "total_train_minutes": total_time})
 
 wandb.finish()
