@@ -188,6 +188,36 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - **Independent NaN-fix rediscovery**: alphonse independently identified the `data/scoring.py` Inf*0=NaN propagation bug AND implemented a byte-identical workaround to edward's PR #361. (PR #361 is already merged on advisor — alphonse's tree-side fix is now harmless duplication, but the diagnosis is exactly right.)
 - Decision: **CLOSE.** Capacity scale-up at this depth/width is not testable under the 30-min wall-clock cap. Same finding as PR #297 — compute is binding for capacity experiments. The newly-merged SwiGLU win (PR #391) shows the actual lever is architectural quality at param-matched cost, not raw capacity.
 
+## 2026-04-28 02:10 — PR #426: EMA decay 0.999 → 0.99 (shorter half-life) — **WINNER**
+
+- Branch: `charliepai2d2-askeladd/ema-decay-099` — metrics committed.
+- Hypothesis: EMA(0.999) has half-life ~1.85 epochs at our batch count, so it's heavily anchored to random init for the first ~2 epochs of training. Decay=0.99 (half-life ~0.18 epochs) tracks the live model immediately. Predicted −0.5% to −2%.
+- Result: best `val_avg/mae_surf_p = 83.223` at epoch 13. **−5.67% vs SwiGLU baseline (88.227)**, materially larger than predicted. test_avg = 73.904 (−5.66% vs baseline 78.338).
+- Per-split val MAE for `p` (all improved): single_in_dist=98.82 (−7.13%), geom_camber_rc=96.61 (−3.78%), geom_camber_cruise=61.16 (−5.04%), re_rand=76.30 (−6.60%).
+- Per-split test MAE for `p` (all improved): single_in_dist=89.83 (−6.85%), geom_camber_rc=84.40 (−4.16%), geom_camber_cruise=50.84 (−5.86%), re_rand=70.54 (−5.74%).
+- Val curve trajectory: e1 baseline=333.4 → this run=193.2 (~140 pt gap), compresses to ~5 pt by epoch 13. Tiny non-monotone step at epoch 9→10 (+0.228), otherwise smooth.
+- **Mechanism (student's diagnosis):** the dominant effect is **EMA bias correction during the under-trained cold start**, NOT the cosine-tail interaction the original prediction emphasized. With T_max=50 cosine and only 13 epochs reached, lr stays near peak the whole run; EMA(0.999) lags badly because it's averaging over the random-init phase. Decay=0.99 captures the model's current capability instead of averaging over the cold start.
+- Decision: **MERGE.** New baseline `val_avg/mae_surf_p = 83.223`, `test_avg/mae_surf_p = 73.904`.
+
+## 2026-04-28 02:10 — PR #424: SwiGLU output head (mlp2) on top of SwiGLU FFN baseline
+
+- Branch: `charliepai2d2-thorfinn/swiglu-head` — metrics committed.
+- Hypothesis: SwiGLU in `mlp2` output head aligns the head's expressive form with the rest of the SwiGLU-FFN model. Predicted −0.5% to −2%.
+- Result: best `val_avg/mae_surf_p = 90.298` at epoch 13. **+2.35% vs SwiGLU baseline (88.227).** test_avg = 81.019 (+3.42%).
+- Per-split val MAE for `p`: single_in_dist=104.21 (−2.05%, in-dist improved), geom_camber_rc=107.03 (+6.60%), geom_camber_cruise=67.92 (+5.46%), re_rand=82.03 (+0.40%).
+- Pattern: head SwiGLU is **more expressive on familiar samples but generalizes worse to OOD**. The val_single_in_dist improvement (−2.05%) is real, but the camber-OOD splits regressed +5–7%.
+- **Student's structural diagnosis (excellent):** the per-block SwiGLU FFN is buffered by the residual connection (`fx = mlp(ln_2(fx)) + fx`), but the **last-layer head has no residual** (it's a direct projection to `out_dim=3`). The SwiGLU non-linearity acts unbuffered on the residual stream. Plus the head's gating channel `(W2·x)` can amplify directions in the residual stream that don't generalize cross-domain — explaining the +6.6%/+5.5% pattern on OOD splits. The head SwiGLU triples the param count (16.9K → 45.6K) but those extra params don't see enough data within 13 epochs to recover their cost on unseen-camber splits.
+- Decision: **CLOSE.** Head SwiGLU is structurally different from FFN SwiGLU; the residual buffer was load-bearing for the per-block win. Direction not dead in absolute terms — student's follow-up #2 (residual SwiGLU head: `mlp2(ln_3(fx)) + linear_skip(fx)`) is a clean fix, queued for if other levers stall. SwiGLU FFN stays as baseline; output head reverts to GELU.
+
+## 2026-04-28 02:10 — PR #418: Narrower Fourier embedding of log(Re): 4 bands [1,2,4,8]
+
+- Branch: `charliepai2d2-edward/re-fourier-4` — branched on EMA pre-SwiGLU; metrics committed.
+- Hypothesis: narrowing the Fourier band from 8 to 4 bands removes high-freq aliasing while preserving the low-frequency Re-trend that gave the bands=8 win on `val_single_in_dist`. Predicted −1% to −4% vs EMA baseline (101.350).
+- Result: best `val_avg/mae_surf_p = 102.916` at epoch 14. **+1.54% vs EMA baseline; +16.6% vs current SwiGLU baseline (88.227)**. test_avg = 93.217 (4-split finite, **−4.84% vs prior huber 4-split test 97.957** — paper-side this is a real anchor).
+- Per-split val vs EMA: single_in_dist=124.97 (**−1.07%**, win retained but attenuated from −3.86% at bands=8); geom_camber_rc=109.78 (flat); geom_camber_cruise=81.75 (+6.19%, recovered ~70% from bands=8's +20.1%); re_rand=95.16 (+2.67%, recovered ~80% from bands=8's +12.7%).
+- **Aliasing diagnosis is directionally correct but not the complete story**: substantial recovery on cruise and re_rand at bands=4 supports the high-freq-aliasing mechanism, but neither returned all the way to baseline. The residual harm at bands=4 (max freq=8, ~5 cycles across the 4-log-unit corpus) suggests either (a) even ~5 cycles still gives the model some Re-fingerprint structure, or (b) Fourier embedding intrinsically creates per-Re features that disrupt cruise/re_rand generalization regardless of frequency content.
+- Decision: **CLOSE.** Doesn't beat the SwiGLU baseline (88.227); the Fourier-Re direction has real signal on `val_single_in_dist` but doesn't compound enough to win overall. Student's follow-up #4 (FiLM-style scale-shift on input features by a small MLP of `log_re`) is a cleaner test of whether ANY Re-conditioning helps — queued.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
