@@ -1,5 +1,5 @@
 # SENPAI Research State
-- 2026-04-28 22:30 UTC
+- 2026-04-28 22:35 UTC
 - Most recent research direction from human researcher team: None received yet (no GitHub Issues found)
 - Current research focus and themes: Round 1 — Baseline parameter sweeps and loss function experiments on the Transolver CFD surrogate for TandemFoilSet-Balanced
 
@@ -16,7 +16,7 @@ The val baseline (115.65) is what current WIP experiments must beat.
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #789 | askeladd | Gradient clipping (max_norm=1.0) | Running (⚠ missing Huber loss flag) |
+| #789 | askeladd | Gradient clipping (max_norm=1.0) | **WINNER (114.3451)** — sent back for rebase after merge conflict |
 | #792 | frieren | n_layers=6 Transolver + grad clipping (NaN fix) | Running |
 | #793 | nezuko | Finer physics partitioning: slice_num 64→128 | Running (⚠ missing Huber loss flag) |
 | #794 | tanjiro | LR warmup (2 epochs) + Huber loss | Sent back: reduce warmup 5→2 epochs, add Huber |
