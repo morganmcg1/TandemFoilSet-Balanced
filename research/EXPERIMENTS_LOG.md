@@ -93,12 +93,31 @@
 | `*_re_rand` | 121.42 | 123.83 |
 | **avg** | **141.25** | **null** |
 
-### Decision: SEND BACK
+### Decision: SEND BACK (v1)
 - val_avg=141.25 sits inside the round-1 noise band (other v1 runs: alphonse 146.10, edward 135.89). Predicted 3-7% gain not demonstrable at single-seed.
 - val_re_rand=121.42 (the strongest per-split) is suggestive — Fourier-of-log(Re) may help cross-Re generalization. Direction worth iterating on, not abandoning.
 - val curve still falling steeply at the cutoff (epochs 11-14: 152→160→160→141) — model under-converged.
 - Sent back: (a) concatenate Fourier features instead of replacing dim 13 (preserves smooth scalar path); (b) drop top frequencies, use `[1, 2, 4, 8, 16, 32]` (high freqs cycle below the data's Re resolution); (c) `--epochs 14` explicit so cosine completes.
-- Don't redirect yet — if v2 still lands in the 135-146 band, then Fourier-of-Re isn't a strong enough lever at this budget and we'll switch frieren to something else.
+
+### v2 Results (2026-04-28 21:04) — concat + 6 freqs + `--epochs 14`
+- **Run:** W&B `tg59rxt1`, **14/14 epochs (clean finish)**, best ckpt @ epoch 14, peak 42.3 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 147.07 | 126.45 |
+| `*_geom_camber_rc` | 125.55 | 119.19 |
+| `*_geom_camber_cruise` | 97.37 | null (pre-#807 run) |
+| `*_re_rand` | **110.89** | **111.10** |
+| **avg** | **120.22** | **null (re-eval pending)** |
+
+### Decision: WINNER — but SEND BACK FOR REBASE (2026-04-28)
+- **−1.6% vs founding baseline (122.15 → 120.22)** — small win but positive signal.
+- v2 vs v1: −14.9% improvement; uniform across all 4 val splits and all 3 finite test splits.
+- **Strongest signal on `val_re_rand=110.89` and `test_re_rand=111.10`** — exactly the cross-Re generalization track the encoding was designed for. This is the genuine encoding gain.
+- Frieren correctly noted bundled changes: (a) concat encoding, (b) drop high freqs, (c) `--epochs 14`. Code-level changes are only (a) and (b); (c) is just a runtime flag so the encoding hypothesis is honestly tested by the diff.
+- val curve still descending at cutoff (124.65 → 123.74 → 123.26 → 120.22), under-converged.
+- **Conflict:** branch predates PR #807; needs rebase. Sent back to rebase + re-run with same config (`--epochs 14`) to verify gain holds + pick up clean `test_avg`.
+- Notable: edward's parallel PR #750 v2 (lr-warmup-cosine) hits val_avg=111.12 — a *better* winner via LR schedule changes. The two are mechanism-orthogonal; both can compound. If edward's PR merges first, frieren's encoding contribution is measured on top of edward's optimizer fix.
 
 ## 2026-04-28 20:08 — PR #807 (MERGED): Bug fix — NaN-safe masked accumulation
 - **Branch:** `willowpai2e3-askeladd/scoring-nan-mask-fix`

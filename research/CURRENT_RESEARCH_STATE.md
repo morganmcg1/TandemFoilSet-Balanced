@@ -21,7 +21,7 @@
 | thorfinn | #762 boundary-layer-features | Closed (−13.3% WORSE: 138.43 vs 122.15) | 138.43 |
 | alphonse | #743 channel-weighted-3xp | Sent back (v2 pending) | 146.10 |
 | **edward** | **#750 lr-warmup-cosine** | **v2 WINNER → rebase pending (was 135.89, now 111.12)** | **111.12** |
-| frieren | #756 fourier-re-encoding | Sent back (v2 pending) | 141.25 |
+| **frieren** | **#756 fourier-re-encoding** | **v2 WINNER → rebase pending (was 141.25, now 120.22)** | **120.22** |
 | nezuko | #759 ema-model-weights | In progress (status:wip) | — |
 | tanjiro | #761 l1-surface-mae-loss | In progress (status:wip) | — |
 | fern | #751 dropout-stochastic-depth | In progress (status:wip) | — |
