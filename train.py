@@ -419,7 +419,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=256,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -483,6 +483,7 @@ with open(metrics_dir / "config.json", "w") as f:
         "max_epochs": MAX_EPOCHS,
         "max_timeout_min": MAX_TIMEOUT_MIN,
         "git_commit": _git_commit_short(),
+        "amp_dtype": "bfloat16",
     }, f, indent=2)
 train_metrics_fp = open(train_metrics_path, "w")
 epoch_metrics_fp = open(epoch_metrics_path, "w")
@@ -512,14 +513,15 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -558,6 +560,7 @@ for epoch in range(MAX_EPOCHS):
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
+    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
 
     log_metrics = {
         "train/vol_loss": epoch_vol,
@@ -567,6 +570,7 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "peak_gb": peak_gb,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
@@ -581,6 +585,7 @@ for epoch in range(MAX_EPOCHS):
         "global_step": global_step,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "peak_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
@@ -607,7 +612,6 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
-    peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
@@ -663,6 +667,7 @@ if best_metrics:
                 "per_split": test_metrics,
                 "best_epoch": best_metrics["epoch"],
                 "best_val_avg/mae_surf_p": best_avg_surf_p,
+                "total_train_minutes": total_time,
             }, f, indent=2)
 
     save_model_artifact(
