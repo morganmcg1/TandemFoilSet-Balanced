@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -422,7 +423,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -462,6 +463,25 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+metrics_dir = Path("research/runs")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+metrics_stem = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or run.id)
+metrics_path = metrics_dir / f"{metrics_stem}-{run.id}.jsonl"
+with open(metrics_path, "w") as f:
+    f.write(json.dumps({
+        "event": "config",
+        "run_id": run.id,
+        "wandb_name": cfg.wandb_name,
+        "agent": cfg.agent,
+        "git_commit": _git_commit_short(),
+        "n_params": n_params,
+        "model_config": model_config,
+        "train_cfg": asdict(cfg),
+        "max_epochs": MAX_EPOCHS,
+        "max_timeout_min": MAX_TIMEOUT_MIN,
+    }) + "\n")
+print(f"Logging epoch metrics to {metrics_path}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -536,7 +556,8 @@ for epoch in range(MAX_EPOCHS):
     wandb.log(log_metrics)
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
+    is_best = avg_surf_p < best_avg_surf_p
+    if is_best:
         best_avg_surf_p = avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
@@ -545,6 +566,21 @@ for epoch in range(MAX_EPOCHS):
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
+
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps({
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "epoch_time_s": dt,
+            "lr": scheduler.get_last_lr()[0],
+            "train/vol_loss": epoch_vol,
+            "train/surf_loss": epoch_surf,
+            "val/loss": val_loss_mean,
+            "val_avg/mae_surf_p": avg_surf_p,
+            "val_avg": val_avg,
+            "per_split": split_metrics,
+            "is_best": is_best,
+        }) + "\n")
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
@@ -557,6 +593,7 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+peak_gb_final = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -596,6 +633,18 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps({
+            "event": "summary",
+            "best_epoch": best_metrics["epoch"],
+            "best_val_avg/mae_surf_p": best_avg_surf_p,
+            "best_per_split": best_metrics["per_split"],
+            "test_avg": test_avg,
+            "test_per_split": test_metrics,
+            "total_train_minutes": total_time,
+            "peak_vram_gb": peak_gb_final,
+        }) + "\n")
 
     save_model_artifact(
         run=run,
