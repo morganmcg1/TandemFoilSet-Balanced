@@ -1,51 +1,57 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 00:15
+- **Date:** 2026-04-28 00:30
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
 
 ## Current research focus
 
-**Round 1 status (in flight):** PR #287 (alphonse, surf_weight=25) merged as the first baseline → `val_avg/mae_surf_p = 126.67`, `test_avg/mae_surf_p = 114.88` at epoch 14/50 timeout-capped. Round 1 is effectively a **14-epoch ranking exercise** — the cosine schedule's tail is unreached for every PR. This makes throughput a first-class research lever, not just a hyperparameter knob.
+**Current best:** PR #308 (nezuko, EMA decay=0.999 + grad clip max_norm=1.0), merged commit 5bdb284. `val_avg/mae_surf_p = 106.40` (EMA-evaluated), `test_avg/mae_surf_p = 93.99`. **-16.2% over PR #287** (the prior baseline at surf_weight=25 → 126.67).
 
-**Round 1 covers four orthogonal axes:** loss formulation, loss weighting, architecture capacity, and optimization. The published Transolver in `train.py` is a small model (128 hidden, 5 layers) trained with MSE on normalized targets even though we evaluate on MAE — both gaps were obvious low-cost wins.
+**Critical attribution caveat:** nezuko's grad clip at `max_norm=1.0` fired on 100% of batches (pre-clip gn_mean ≈ 50-100 vs threshold 1.0), so it acted as implicit unit-norm SGD on top of AdamW rather than as outlier protection. The 16% gain is shared between EMA's late-epoch smoothing and the implicit-lr-dampener effect in unknown proportion. **Ablation queued (PR #381): EMA decay=0.995 + clip=10.0** to isolate.
 
-**New strategic axis (assigned to alphonse, PR #372):** training throughput. bf16 autocast is the first lever; downstream candidates are `torch.compile`, channels-last memory format, and larger batch sizes. Predicted Δ from autocast alone: -10% to -20% on val_avg/mae_surf_p simply from finishing more of the cosine schedule's tail. Critical because the gain compounds with every other in-flight experiment.
+**Round 1 status:** 8 PRs assigned across 4 axes (loss formulation, loss weighting, architecture, optimization). 5 closed/merged so far. Round 1 is a **14-epoch ranking exercise** — the 50-epoch cosine schedule's tail is unreached for every PR at the 30-min cap.
 
-**Resolved infrastructure issue:** PR #358 (edward) merged 2026-04-27 — `data/scoring.py` now uses `torch.where` masking instead of float-mask multiplication, so `inf * 0 = NaN` no longer poisons the float64 accumulator. New `data/test_scoring.py` has 4 surgical regression tests. Existing in-flight PRs branched **before** the merge will still produce NaN on `test_geom_camber_cruise/mae_surf_p`; we'll rebase or cherry-pick on a per-PR basis at review time. Future assignments branch from the post-fix advisor branch.
+**Throughput is a first-class research axis** going forward — alphonse (#372: bf16 autocast) and frieren (#382: larger batch) are testing the two main throughput levers in parallel. Both should compound with the existing wins from #287 and #308.
 
-## Round 1 hypotheses
+**Resolved infrastructure issue:** PR #358 (edward, commit 010235e) fixed `data/scoring.py` `inf * 0 = NaN` propagation via `torch.where`. New `data/test_scoring.py` has 4 surgical regression tests. PRs branched before that merge may still report NaN on `test_geom_camber_cruise/mae_surf_p`; we evaluate them on val_avg/mae_surf_p instead.
+
+## Round 1 PR roster
+
 | Student | PR | Slug | Axis | Predicted Δ | Status |
 |---|---|---|---|---|---|
-| alphonse | #287 | surf-weight-up | Loss weighting (surf_weight 10→25) | -3% to -7% | **MERGED** e4a0c18 → val_avg=126.67 (14/50 epochs) |
-| alphonse | #372 | bf16-autocast | Throughput (autocast forward in bf16) | -10% to -20% | WIP |
-| askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1/Huber) | -5% to -10% | WIP |
-| edward   | #300 | wider-model | Architecture width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 epochs at 30-min cap |
-| edward   | #358 | fix-scoring-nan-mask | Maintenance fix to data/scoring.py | n/a (unblocks test_avg) | **MERGED** 010235e |
-| edward   | #368 | fourier-pos-encoding | Architecture/input (8-freq Fourier features on (x,z), fun_dim 22→54) | -3% to -8% | WIP |
-| fern     | #304 | deeper-model-droppath | Architecture depth (n_layers 5→8 + DropPath 0.1) | -3% to -8% | WIP |
-| frieren  | #307 | warmup-cosine-1e3 | Optimization (linear warmup + peak lr 1e-3) | -2% to -6% | WIP |
-| nezuko   | #308 | ema-grad-clip | Optimization (EMA decay 0.999 + grad clip 1.0) | -3% to -8% | WIP |
-| tanjiro  | #309 | more-slices | Architecture (slice_num 64→128, n_head 4→8) | -3% to -7% | **CLOSED** — 2x slower per epoch and not better at equal-epoch |
-| tanjiro  | #378 | per-sample-relmse | Heavy-tail (per-sample y-variance normalization in loss) | -3% to -7% | WIP |
-| thorfinn | #310 | per-channel-surf-weights | Loss weighting (3× surface pressure) | -3% to -8% | **CLOSED** — +13% regression on val_avg |
-| thorfinn | #379 | surface-aware-decoder | Architecture (auxiliary surface-only MLP head, zero-init) | -3% to -7% | WIP |
+| alphonse | #287 | surf-weight-up | Loss weighting (10→25) | -3% to -7% | **MERGED** e4a0c18 → val_avg=126.67 |
+| alphonse | #372 | bf16-autocast | Throughput (bf16 autocast) | -10% to -20% | WIP |
+| askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1) | -5% to -10% | WIP |
+| edward   | #300 | wider-model | Width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 |
+| edward   | #358 | fix-scoring-nan-mask | Maintenance | n/a | **MERGED** 010235e |
+| edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | WIP |
+| fern     | #304 | deeper-model-droppath | Depth (5→8 + DropPath 0.1) | -3% to -8% | WIP |
+| frieren  | #307 | warmup-cosine-1e3 | Optim (warmup + lr 1e-3) | -2% to -6% | **CLOSED** — 134.58, 26% worse than #308 |
+| frieren  | #382 | batch8-lr7e-4 | Throughput (larger batch + sqrt-lr) | -5% to -15% | WIP |
+| nezuko   | #308 | ema-grad-clip | Optim (EMA 0.999 + clip 1.0) | -3% to -8% | **MERGED** 5bdb284 → val_avg=106.40 (NEW BEST) |
+| nezuko   | #381 | ema995-gradclip10 | Ablation (EMA 0.995 + clip 10) | -3% to -10% | WIP |
+| tanjiro  | #309 | more-slices | Architecture (128/8) | -3% to -7% | **CLOSED** — 2× slower, not better |
+| tanjiro  | #378 | per-sample-relmse | Heavy-tail (per-sample y-var) | -3% to -7% | WIP |
+| thorfinn | #310 | per-channel-surf-weights | Loss weighting (3× p) | -3% to -8% | **CLOSED** — +13% regression |
+| thorfinn | #379 | surface-aware-decoder | Architecture (aux surface MLP head) | -3% to -7% | WIP |
 
 ## Lessons from round 1 so far
-- **The 30-min cap is binding for everyone.** alphonse fits 14 epochs (small/baseline model) at 131 s/epoch; edward's wider hit only 9 epochs at 205 s/epoch. Compute, not memory, is the bottleneck (peak ~42-63 GB / 96).
-- **Round 1 is a 14-epoch ranking exercise**, not a 50-epoch one. The cosine schedule's tail is unreached. Decisions made in this round inherit that caveat — winners may need re-validation once we recover budget.
-- **Throughput is now a first-class research axis.** bf16 autocast (PR #372) is the first lever; success there compounds with every architecture/loss change we've assigned.
-- Two students independently diagnosed the `inf * 0 = NaN` mask trap in `data/scoring.py`; fixed in #358 (merged).
 
-## Potential next research directions (post-round 1)
-- **Compound round-1 winners** in a single PR after PR #372 lands — surf_weight=25 + bf16 autocast + (Huber if askeladd wins) + (EMA if nezuko wins) + (warmup if frieren wins). Each is independent and they should stack.
-- **Further throughput wins after bf16:** `torch.compile(model, mode="reduce-overhead")`, channels-last memory format, larger batch size enabled by halved activations.
-- Conservative widening that fits the 30-min budget: e.g. n_hidden=144, slice_num=80 — only meaningful once throughput is recovered.
-- Heavy-tail-aware pressure handling: per-sample y-std normalization, log-pressure target, or focal weighting on extreme |p|.
-- Fourier / RFF positional encoding on (x, z) to give the model multi-scale spatial frequency info — currently only raw position + signed-arc-length.
-- Surface-aware decoder: separate surface-only head with extra capacity, since `mae_surf_p` is what we're scored on.
-- Domain-conditional FiLM modulation of attention slices (single vs. raceCar tandem vs. cruise tandem) — the three regimes differ by orders of magnitude in y-std.
-- Gradient-aware loss scaling (GradNorm or DWA) across surface and volume to stop one branch dominating.
-- Test-time augmentation: average predictions from x↔−x flipped meshes (after re-orienting AoA / stagger).
-- Better val-track-aware checkpoint selection: weight `val_geom_camber_*` higher since they're the harder generalization tracks.
+- **The 30-min cap is binding** at ~14 epochs for the published Transolver. Compute, not memory, is the bottleneck (peak 42-82 GB / 96 across all runs).
+- **Round 1 is a 14-epoch ranking exercise** — the cosine schedule's tail is unreached. Round-1 winners may need re-validation under longer training.
+- **EMA late-epoch smoothing is high-value** in this regime (PR #308 hit best on every one of 13 epochs). Decay=0.999 has a slow warmup; decay=0.995 should pay off earlier in the budget.
+- **Aggressive grad clipping is implicit lr dampening** — useful side-effect, but worth attributing cleanly.
+- **Architectural-scale changes need throughput-friendliness baked in** — wider (#300) and more-slices (#309) both lost epochs to per-step compute.
+- **Independent diagnoses converged on the same scoring NaN bug** (4 students), now fixed (#358).
+
+## Potential next research directions
+
+- **Compound the wins so far** in a single PR (after #381 attribution returns): surf_weight=25 + EMA(0.995) + clip(10) + bf16 (when #372 lands) + larger batch (when #382 lands). Independent changes should stack.
+- **Further throughput levers after bf16 + larger batch:** `torch.compile(mode="reduce-overhead")`, channels-last memory format, mixed batch sizes via gradient accumulation across mesh-size buckets.
+- **Heavy-tail pressure handling beyond per-sample y-norm (#378):** arcsinh / log-pressure target reparametrization, focal-style weighting on extreme |p|, per-Re-bin loss balancing.
+- **Conservative widening that fits the budget**: revisit n_hidden=144 / slice_num=80 once throughput levers land.
+- **Domain-conditional FiLM** modulation across single / raceCar-tandem / cruise-tandem regimes (orders of magnitude difference in y-std).
+- **Better val-track-aware checkpoint selection**: weight `val_geom_camber_*` higher since they're the harder splits and currently lift `val_avg` the most.
+- **Test-time augmentation**: average predictions on x↔−x flipped meshes (with corresponding AoA / stagger flips).
