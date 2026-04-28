@@ -1,36 +1,42 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 07:50 UTC
+- **Date:** 2026-04-28 08:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2d-r4`
 - **Most recent human-team direction:** none received yet on this advisor branch
-- **Current best:** PR #442 (thorfinn H12) merged. `val_ema/mae_surf_p=109.19`, `test_avg/mae_surf_p=98.47`. See BASELINE.md for full details and recommended config (`--film_re True --use_ema True --ema_decay 0.99 --ema_eval_every 2 --epochs 25 --lr 7e-4 --weight_decay 5e-4 --seed 123`).
+- **Current best:** PR #343 (askeladd H6 bf16+compile × FiLM × EMA) merged. `val_avg/mae_surf_p=80.91`, `test_avg/mae_surf_p=72.73`. See BASELINE.md for full details and recommended config (`--batch_size 4 --amp_dtype bf16 --compile True --film_re True --use_ema True --ema_decay 0.99 --ema_eval_every 2 --epochs 37 --lr 7e-4 --weight_decay 5e-4 --seed 123`).
 
 ## Active research focus
 
-**Round 0 ongoing — three winners merged so far.** PR #344 (warmup + per-step cosine + NaN fix) merged first; PR #404 (Re-conditional FiLM + wd=5e-4) merged second after rigorous disentanglement; **PR #442 (EMA decay=0.99 + every-other-epoch eval) merged third** with a clean −8.5% / −8.4% compound on top of FiLM. The EMA × FiLM compound was decisive: val_raw exactly reproduced PR #404's baseline (119.36 to 4 sig figs), confirming the seed-controlled comparison protocol works at the program level; EMA layered a clean −8.5% on top across all four test splits.
+**Round 0 ongoing — four winners merged.** PR #344 (warmup+cosine+NaN fix), PR #404 (FiLM-on-Re + wd=5e-4), PR #442 (EMA decay=0.99 × FiLM), and now **PR #343 (bf16+torch.compile × FiLM × EMA)** — the largest single-PR effect of the round at −25.7% / −26.1% on top of the prior baseline. Cumulative round-0 progress vs original baseline: **−33% on val, −33% on test.**
+
+The bf16+compile mechanism is the dominant compounding lever. With 2.4× throughput we now train 34 epochs (vs 14 before) in the same 30-min budget; cosine reaches lr=0 at epoch 36 for the first time on this branch. Every in-flight PR should rebase to inherit this throughput uplift.
+
+**Notable side finding from PR #343:** EMA's marginal value drops to ~0 at full-convergence regime (per-epoch EMA-vs-raw gap narrowed from ~16 pts at epoch 1 to 0.13 pts at epoch 33; raw was selected as active checkpoint). EMA still useful as defensive measure for noisy training; kept on by default but don't expect it to add much when underlying training is already converged.
 
 ## Current themes
 
-1. **Scale-aware losses** — per-sample y-std varies ~40x; tested actively via H1 (alphonse, on rebase). Strong mechanistic signal in first round.
-2. **Throughput as a lever** — H6 (askeladd) tests bf16/compile/larger batch; once landed, every other hypothesis benefits from more epochs in the budget. **Highest-leverage in-flight item.**
-3. **Geometry-OOD generalization** — H5 (nezuko, Fourier features, on rebase), H9 (fern, surface-arc gradient penalty) hit this from different angles.
-4. **Re-conditioning** — H11 merged with 1-D log(Re) FiLM. H14 (edward, **NEW**) extends to a 5-D conditioner `[log(Re), AoA1, AoA2, gap, stagger]` to test whether per-split signature sharpens.
+1. **Scale-aware losses** — H1 (alphonse, on rebase) and H16 (nezuko, on rebase) attack heavy-tailed pressure from loss-space and target-space angles respectively.
+2. **Throughput as a lever** — H6 (askeladd, **MERGED**) is the dominant compounding lever. Now active by default for every future PR.
+3. **Geometry-OOD generalization** — H9 (fern, surface-arc gradient penalty) targets geom-OOD specifically.
+4. **Re-conditioning** — H11 merged with 1-D log(Re) FiLM. Richer conditioning (H14 cond5) closed as a wash at single-seed precision.
 5. **Loss alignment with metric** — H3 (tanjiro, Huber on surface) targets the MSE-vs-MAE mismatch on heavy-tailed pressure.
-6. **Optimization regularization** — H12 (thorfinn, EMA, sent back for decay=0.99) and H13 (frieren, stochastic depth) compound with everything.
-7. **Robustness** — defensive `nan_to_num` in `evaluate_split` shipped via #344; `--seed` CLI flag shipped via #404 for variance checks.
+6. **Optimization** — H17 (edward, layer-wise lr decay) and H19 (askeladd, **NEW**, Lion optimizer) test optimization-bucket hypotheses orthogonal to everything else.
+7. **Architectural scaling** — H18 (thorfinn, wider Transolver) tests whether the now-stable training unlocks more capacity.
+8. **Inference-time** — H15 (frieren, TTA) tests whether the trained model has learned z-symmetry on cruise samples (PR #561 entered review).
+9. **Robustness** — defensive `nan_to_num` (PR #344), `--seed` flag (PR #404), bf16 fp32-fallback (PR #343), `_raw_module()` for compile-aware state_dict (PR #343).
 
 ## Currently in flight
 
 | PR | Student | Hypothesis | Bucket | Predicted Δ | Status |
 |----|---------|------------|--------|-------------|--------|
 | #342 | alphonse | H1: per-sample y-std loss normalization | Loss reformulation | -8% to -18% | wip (sent back for rebase + sw sweep on merged schedule; first round Run B at sw=5 gave clean −7.9% val on apples-to-apples pre-merge baseline, cross-split signature matched prediction precisely) |
-| #343 | askeladd | H6: bf16 + torch.compile + larger batch | Throughput | -3% to -9% | wip (sent back round 2 — needs rebase onto #442 to add EMA; round 2 Run F was -33.1% val / -32.7% test vs PR #404, -26.8% / -26.5% vs current baseline. **The bf16 × FiLM combination is verified non-antagonistic; only EMA × bf16+compile combination remains untested**) |
-| #576 | nezuko | H16: arcsinh-compressed pressure target | Target transform | -2% to -6% | wip (sent back round 1 — needs rebase onto #442 for compound test; round 1 Run C was -19.6% val / -21.6% test vs PR #404 baseline, **second-largest single-mechanism effect of round 0** after H6 throughput; cross-split signature matched prediction; cruise -38% unexpected positive surprise) |
 | #348 | tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% | wip |
-| #611 | thorfinn | H18: wider Transolver (n_hidden=192, n_head=6) | Architecture | -3% to -7% | wip |
 | #468 | fern | H9: surface-arc pressure-gradient penalty | Physics-aware | -2% to -5% | wip |
-| #561 | frieren | H15: test-time z-mirror augmentation (TTA) | Inference-time regularization | -1% to -3% | wip |
+| #561 | frieren | H15: test-time z-mirror augmentation (TTA) | Inference-time | -1% to -3% | **review** (entered review during this loop) |
+| #576 | nezuko | H16: arcsinh-compressed pressure target | Target transform | -2% to -6% | wip (sent back round 1 — needs rebase onto #442 for compound test; round 1 Run C was -19.6% val / -21.6% test vs PR #404 baseline, **second-largest single-mechanism effect of round 0** after H6 throughput) |
 | #602 | edward | H17: layer-wise lr decay for Transolver blocks | Optimization | -1% to -4% | wip |
+| #611 | thorfinn | H18: wider Transolver (n_hidden=192, n_head=6) | Architecture | -3% to -7% | wip |
+| #650 | askeladd | H19: Lion optimizer | Optimization | -1% to -5% | wip |
 
 ## Resolved this round
 
@@ -40,45 +46,39 @@
 | #346 | frieren | H7: z-mirror augmentation | closed (strict regression) | +231% at p=1.0 |
 | #349 | thorfinn | H8: slice_num scaling matrix | closed (regression vs baseline) | 148.65 (+23% vs baseline) |
 | #345 | fern | H4: surface-only norm + distance feature | closed (cruise OOD structural regression) | 129.13 (+6.7% vs baseline) |
-| #406 | frieren | H10: surf_weight ramp curriculum | closed (within-experiment +4.3% vs A but +1.6% regression vs baseline; effect below seed-variance floor) | 122.90 (+1.6% vs baseline) |
-| #490 | frieren | H13: stochastic depth (DropPath) | closed (B-vs-A signature matched prediction strongly but absolute effect below noise floor) | 120.57 (+1.0% vs current baseline) |
-| #347 | nezuko | H5: Fourier features (× FiLM in round 3) | closed (Fourier × FiLM antagonistic at +8.5% regression; Fourier-only round 2 gave -3.14% on pre-#404 path but doesn't compound) | 129.49 (+8.5% vs current baseline) |
-| #523 | edward | H14: 5-D FiLM conditioner | closed (Run B at +seed=123 was -2.93% but Run C at seed=124 was +5.27%; mean(B,C) is essentially zero; cruise -7.2% survives seed-avg as the sole real signal) | mean 120.76 (+1.2% vs baseline) |
-| #404 | edward | H11: Re-conditional FiLM modulation | **merged** (after disentanglement) | **119.36** (Run E, −1.3% vs prior baseline) |
-| #442 | thorfinn | H12: EMA decay=0.99 × FiLM | **merged** (after EMA × FiLM compound test) | **val_ema=109.19** (Run F, −8.5% vs PR #404 baseline) |
+| #406 | frieren | H10: surf_weight ramp curriculum | closed (effect below seed-variance floor) | 122.90 (+1.6% vs baseline) |
+| #490 | frieren | H13: stochastic depth (DropPath) | closed (B-vs-A signature matched prediction strongly but absolute effect below noise floor) | 120.57 (+1.0% vs baseline) |
+| #347 | nezuko | H5: Fourier features (× FiLM in round 3) | closed (Fourier × FiLM antagonistic) | 129.49 (+8.5% vs PR #404 baseline) |
+| #523 | edward | H14: 5-D FiLM conditioner | closed (B vs C seed-pair spread > 8%; Mean(B,C) − A ≈ 0) | mean 120.76 (+1.2% vs PR #404 baseline) |
+| #404 | edward | H11: Re-conditional FiLM modulation | **merged** (after disentanglement) | **119.36** (Run E, −1.3% vs PR #344 baseline) |
+| #442 | thorfinn | H12: EMA decay=0.99 × FiLM | **merged** (after compound test) | **val_ema=109.19** (Run F, −8.5% vs PR #404 baseline) |
+| #343 | askeladd | H6: bf16+compile × FiLM × EMA | **merged** (after compound test) | **val=80.91** (Run G, **−25.7%** vs PR #442 baseline; largest single-PR effect of round 0) |
 
 ## Held in reserve / promising follow-ups
 
-- **Edward's `--epochs 14` lr-frontier follow-up** — finish testing the schedule frontier on the merged code.
-- **Thorfinn's slice_num=96 follow-up** — never tested below the slice 128 winner; the 128→256 curve goes sharply up which hints 64 may already be slightly over-partitioned.
-- ~~**Frieren's TTA (test-time augmentation) study**~~ — now in flight as PR #561 (H15).
+- **3-seed nail-down of the merged baseline (Run G config)** — would give a real error bar on the val=80.91 / test=72.73 floor. Useful for paper-confidence numbers.
+- **Re-tune EMA for longer-budget regime.** With raw converging well under bf16+compile, decay=0.99 (~100-step horizon) tracks too tightly. Larger decay (e.g. 0.998) might give EMA a lead late. Lower priority since raw already wins at full budget.
+- **`torch.compile(mode="reduce-overhead")` with padded N_max.** Could unlock another 20-30% throughput via CUDAGraphs — would require wrapping pad_collate to pad to fixed N_max.
+- **Re-tuned bs=8 with proper LR.** Still untested.
+- **Edward's `--epochs 14` lr-frontier follow-up** — outdated given longer training now possible.
+- **Thorfinn's slice_num=96 follow-up** — original H8 was on pre-merge; worth retesting on merged baseline if H18 wider underperforms.
 - **Frieren's domain-conditional augmentation** — restrict mirroring to cruise-only with proper gap sign-flip; small but clean physics.
 - **Fern's C2-Lite ablation + multi-scale distance feature** — milder loss-rebalancing variants that *might* dodge the cruise structural regression.
 - **Per-domain `surf_weight`** — closely related to H10's failure mode; revisit if H10 mechanism can be salvaged.
-- **FiLM hidden=32** — halve the FiLM head's 83K params from PR #404, tightening the +12.6% params objection.
-- **Concat-Re instead of FiLM** — cheaper alternative to FiLM if it captures most of the gain.
-- **3-seed nail-down of Run E (PR #404) and Run F (PR #442)** — would give real error bars on the merge headlines.
-- **EMA tighter decay sweep (decay=0.995)** — midpoint between 0.99 and 0.999; FiLM-stabilized training may benefit from longer averaging window. Marginal expected gain.
-- **`--ema_eval_every 1`** — every-epoch EMA eval on FiLM-merged path may catch better checkpointing decisions on odd epochs.
+- **FiLM hidden=32** — halve the FiLM head's 83K params, tightening the +12.6% params objection.
+- **Concat-Re instead of FiLM** — cheaper alternative.
+- **Stack the round-0 winners + an in-flight winner** — once H1 (alphonse) or H16 (nezuko) lands, run a combined-best PR to verify the round-0 winners are not at the upper bound of compounding.
 
 ## Open methodological note
 
-We have now seen single-run noise of **~6% peak-to-peak** across multiple PRs:
-- #404 (FiLM, round 1): Run A control 7% *worse* than baseline on equivalent code
-- #406 (surf_weight ramp): Run A control 6% *worse* than baseline on equivalent code
-- #442 (EMA): Run A control 2.6% *better* than baseline on equivalent code
-- #490 (DropPath): Run A control 7.7% *worse* than baseline on equivalent code
-- #523 (FiLM cond5, seed pair): seed=123 vs seed=124 at fixed cond_dim=5 spread is 8.1% on val, 6.7% on test
+Single-run noise floor on this branch is **~6–8% peak-to-peak**, well-calibrated across multiple PRs (#404, #406, #442, #490, #523). PR #523's seed pair was the cleanest demonstration: same code, same config, only seed differs, val swings from -2.93% to +5.27%. **Predicted effect sizes <5% are below this floor by design** and require multi-seed confirmation up front.
 
-The variance is bidirectional and well-calibrated at ~6–8% peak-to-peak. The B/C seed pair on #523 was the cleanest demonstration to date: same code, same config, only seed differs, and the result swings from -2.93% to +5.27% on val. **Predicted effect sizes <5% are below this noise floor by design.** Going forward:
-- New small-effect hypotheses should plan multi-seed confirmation up front (PR #404 round 2 was the model — Run D for disentanglement + Run E with `--seed 123` for variance check).
-- The `--seed` CLI flag shipped via PR #404 makes seed-controlled comparisons cheap; future PRs that depend on small effects should reuse it.
-- Landing H6 (askeladd, throughput) so we can run more epochs per training is a strong argument for compounding effect-vs-noise improvements.
+The `--seed 123` reproducibility protocol has been demonstrated four times now: PR #442 Run F, PR #523 Run A, PR #576 Run A, PR #343 Run G all reproduce their respective baselines to ~4 decimals. This is the strongest evidence we have that the seed-controlled comparison protocol works at the program level.
 
 ## Potential next research directions (post round 0)
 
-- **Once throughput lands (H6),** revisit larger architectures with H8 follow-ups and a wider `n_hidden`.
-- **If H1 (per-sample y-std) and H3 (Huber) both land,** combine them in one PR — they target different aspects of the heavy-tailed surface pressure regime.
-- **If geometry-OOD splits remain stubborn** after rounds 0/1, escalate to graph/edge-aware mesh modules or coordinate-network heads.
-- **If Re-OOD splits remain stubborn,** explore Re-conditional separate models or hierarchical heads beyond what FiLM provides.
-- **Best-checkpoint reproducibility** — at some point, lock in the best-known recipe and run a multi-seed reproducer to estimate variance for paper-ready numbers.
+- **Once H1 (alphonse) or H16 (nezuko) lands,** combine with the merged baseline for a "stack the round-0 winners" PR to verify additivity.
+- **If H18 (thorfinn, wider) lands cleanly,** revisit deeper architectures (n_layers=6 or 7).
+- **If geometry-OOD splits (camber_rc, cruise) remain stubborn,** escalate to graph/edge-aware mesh modules or coordinate-network heads.
+- **If Re-OOD splits remain stubborn,** explore Re-conditional separate models or hierarchical heads.
+- **Best-checkpoint multi-seed reproducibility** — at some point, lock in the best-known recipe and run a 5-seed reproducer to estimate variance for paper-ready numbers.
