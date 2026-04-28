@@ -1,15 +1,17 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 04:55
+- **Date:** 2026-04-28 05:10
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
 
 ## Current research focus
 
-**Current best:** PR #368 (edward, Fourier positional encoding + Huber + EMA + clip + bf16 + compile), merged commit 430cd62. `val_avg/mae_surf_p = 62.94` (EMA-evaluated), `test_avg/mae_surf_p = 54.73`. **-0.62% over PR #289 on val, -1.30% on test_avg.** Cumulative **-50.3% from PR #287's first baseline**, **-53% from the published-baseline-equivalent**.
+**Current best:** PR #467 (askeladd, Huber β=0.5 + Fourier + EMA + clip + bf16 + compile + cudagraph_skip), merged commit eb5168f. `val_avg/mae_surf_p = 57.50` (EMA-evaluated), `test_avg/mae_surf_p = 50.51`. **-8.65% over PR #368 on val, -7.71% on test** — strongest single-knob win since compile. Cumulative **-54.6% from PR #287's first baseline**, **-57.5% from the published-baseline-equivalent**.
 
-**Compounding evidence accumulating across stacked levers**: Fourier (PR #368) + Huber (PR #289) + EMA + clip (PR #381) + compile (PR #401) + bf16 (PR #372) — six orthogonal levers all positive without observable interference. The Fourier contribution is dominantly **convergence acceleration in the warm-LR phase** (epoch 5: -14.4% vs #289 same-epoch); cosine decay narrows the gap by epoch 30. Test side stronger than val (-1.30% vs -0.62%), with gains concentrated on the hardest splits (single_in_dist -3.3%, geom_camber_rc -3.1%) where pressure tails are heaviest.
+**Compounding evidence accumulating across stacked levers**: Huber β=0.5 (PR #467) + Fourier (PR #368) + Huber-β-1.0 base (PR #289) + EMA + clip (PR #381) + compile (PR #401) + bf16 (PR #372) — seven orthogonal levers all positive without observable interference. The β=0.5 contribution is the largest single-knob since compile: per-split monotone β order, cruise camber gains most (-12.1% val), per-channel breakdown shows velocity gains as much as pressure → loss-shape effect is fundamental, not just tail-dominance.
+
+**Open infrastructure note**: Config default still `huber_beta=1.0` (the value at #467's merge-base). Reproducing the merged baseline requires explicit `--huber_beta 0.5`. PR #539 (askeladd's β finer sweep) flips the Config default to 0.5 to keep β=0.5 as the lived-in baseline.
 
 **Open infrastructure issue:** 2 of 4 launches at the rebased compile + EMA + clip + bf16 stack crash with CUDAGraph private-pool blowup at variable mesh sizes. Alphonse's depth experiment (#435) hit the same OOM at depth=8, requiring `mode="default"` workaround (~10-15% throughput cost). PR #466 (alphonse) bundles the fix: `cudagraph_skip_dynamic_graphs=True` flag + cosine T_max retune to actually-reachable epoch count.
 
@@ -29,7 +31,8 @@
 | alphonse | #435 | deeper8-droppath01-compile | Architecture (n_layers 5→8 + DropPath 0.1) | -5% to -10% | **CLOSED** — +30% (cosine T_max=50 mismatched with 22 reached epochs) |
 | alphonse | #466 | tmax32-cudagraph-skip | Infra (cosine_epochs flag + cudagraph_skip robustness) | -1% to -5% | **SENT BACK** — cudagraph_skip clean win; cosine_epochs=32 regresses +6.7% (model still bulk-learning); revert default to 50 + re-submit |
 | askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1) | -5% to -10% | **MERGED** 906a2c1 → val_avg=**63.33** (NEW BEST, -5.31%) |
-| askeladd | #467 | huber-beta-sweep | Loss formulation (β ∈ {0.5, 1.0, 2.0} sweep) | β=0.5 predicted -1% to -4% | WIP |
+| askeladd | #467 | huber-beta-sweep | Loss formulation (β ∈ {0.5, 1.0, 2.0} sweep) | β=0.5 predicted -1% to -4% | **MERGED** eb5168f → val_avg=**57.50** (NEW BEST, -8.65% vs #368) |
+| askeladd | #539 | huber-beta-finer | Loss formulation (β ∈ {0.3, 0.5, 0.7} + flip Config default to 0.5) | -1% to -3% | WIP |
 | edward   | #300 | wider-model | Width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 |
 | edward   | #358 | fix-scoring-nan-mask | Maintenance | n/a | **MERGED** 010235e |
 | edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | **MERGED** 430cd62 → val_avg=**62.94** (NEW BEST, -0.62% val / -1.30% test) |
