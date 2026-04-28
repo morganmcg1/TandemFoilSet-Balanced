@@ -419,3 +419,46 @@ Per-epoch steady-state σ ≈ 0.7s — compile is locked in, no recompile spam. 
 - Throughput delivery is unambiguous and durable; would normally merge directly. But the metric vs current baseline is +0.79 %/+2.13 % (within noise but technically slightly behind), so per CLAUDE.md merge rule (must be `<` baseline) this can't merge as-is.
 - Rebase resolution: thorfinn's diff touches lines around `ema_model = copy.deepcopy(model)` (compile call) and the save/load code (`_orig_mod` accessor). The grad-clip diff touches the train loop's backward/step block. Different regions — should rebase cleanly with no conflicts.
 - After rebase, run will have: EMA + NaN-safe + grad-clip(1.0) + torch.compile + 17 epochs. Predicted: val ~108–110, test ~95–97 — clear merge win and ships the throughput multiplier as the new baseline. Every subsequent PR fits 17 epochs.
+
+## 2026-04-28 01:29 — PR #402: grad-clip `max_norm=1.0 → 0.5` (charliepai2d1-tanjiro) — **MERGED, new baseline**
+- Branch: `charliepai2d1-tanjiro/grad-clip-0p5` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `d6e39f2`).
+- Hypothesis: tighten the grad-clip envelope from 1.0 → 0.5 to test whether more aggressive damping helps further or starves the optimizer at this LR.
+
+### Headline metrics (best EMA epoch=13/50, timeout-cut)
+| metric | this run | prior baseline (#374) | Δ abs | Δ % |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **110.822** | 113.157 | −2.335 | **−2.07 %** |
+| `test_avg/mae_surf_p` | **97.955** | 99.322 | −1.367 | **−1.38 %** |
+| best raw `val_avg/mae_surf_p` | 117.667 (ep 12) | 121.992 (ep 13) | −4.325 | −3.55 % |
+
+Beats baseline on every val split and every test split.
+
+### Per-split val deltas
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| single_in_dist | −2.71 % | −1.02 % |
+| geom_camber_rc | −2.22 % | −2.44 % |
+| geom_camber_cruise | −2.61 % | −0.94 % |
+| re_rand | −0.55 % | −0.87 % |
+
+`re_rand` shows the smallest gain on both runs vs no-clip — the Re-stratified holdout has the least variance to remove.
+
+### Diminishing-returns map on the clipping lever (now complete)
+- no-clip → `max_norm=1.0` (PR #374): **−14.45 %** val
+- `max_norm=1.0 → 0.5` (PR #402): **−2.07 %** val
+- Mean pre-clip grad norm: 73.40 (1.0) ≈ 71.36 (0.5) — nearly identical, confirming pre-clip norm is a property of optimizer state, not `max_norm`.
+
+### Diagnostic — early-epoch convergence
+The "too small a step" failure mode did NOT appear: `max_norm=0.5` *led* `1.0` in EMA val from ep1 onward, with the largest gap at ep3 (Δ EMA=−14.21 abs, Δ raw=−85.4 at ep1 = −28 %). Tanjiro's interpretation: at this LR, early gradients are noisy enough that the variance-reduction-from-tighter-clip dominates the magnitude penalty.
+
+### Decision: merge as new round-1.5 baseline
+- Beats baseline by a margin (>−1 %), single-character diff (`max_norm=1.0 → 0.5`), CLEAN/MERGEABLE.
+- Mechanism is well-understood (auditable via the per-epoch grad-norm trace).
+- Diminishing-returns curve on the clipping lever now mapped — clean diagnostic for the appendix.
+- BASELINE.md updated; tanjiro reassigned to **PR #430 (lion-optimizer)** as a fresh axis after three merged variance-reduction wins.
+
+## 2026-04-28 01:32 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #430 | tanjiro | lion-optimizer | Lion (sign-of-momentum) replacing AdamW; `lr_lion = 1.7e-4`, `wd_lion = 3e-4`, `betas=(0.9, 0.99)` | Fresh axis after three variance-reduction wins (#356/#374/#402). Reported 1–3 % gains on transformer-shaped problems; sign-update naturally bounds per-param step magnitude — interesting compose with grad-clip(0.5) |
