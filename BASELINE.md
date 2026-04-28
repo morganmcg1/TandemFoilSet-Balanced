@@ -32,26 +32,36 @@ The paper-facing rank is `test_avg/mae_surf_p`, computed once at the end of trai
 
 ## Best result
 
-**PR #365 — `fourier-features-on-l1-warmup` (thorfinn), merged 2026-04-28**
+**PR #301 — `surf-weight-30-on-fourier` (nezuko), merged 2026-04-28**
 
-- `val_avg/mae_surf_p` = **87.8551** (best epoch 12/14)
-- `test_avg/mae_surf_p` = **NaN** (4-split) / **84.222** (mean of 3 clean splits — same pre-existing `test_geom_camber_cruise` GT-NaN)
-- Per-split val: `val_single_in_dist=104.53`, `val_geom_camber_rc=104.44`, `val_geom_camber_cruise=62.81`, `val_re_rand=79.64`
-- Per-split test (3 clean): `test_single_in_dist=91.09`, `test_geom_camber_rc=88.28`, `test_re_rand=73.29`
-- Stacks on top of L1 (PR #293) and warmup+cosine (PR #296). **−7.1% val / −8.3% test** vs the L1+warmup baseline.
-- Change: 8-band sinusoidal Fourier features (`sin/cos at frequencies π·{1, 2, 4, …, 128}`) on the **normalized** position channels (`x_norm[..., :2]`), concatenated to `x_norm` before the model. `model_config['fun_dim']` bumps from 22 → 54. Cost is essentially free: median per-epoch wall unchanged (132 s), peak GPU ~+0.6%, +1.5K params.
+- `val_avg/mae_surf_p` = **76.6771** (best epoch 14/14)
+- `test_avg/mae_surf_p` = **NaN** (4-split) / **73.395** (mean of 3 clean splits — same pre-existing `test_geom_camber_cruise` GT-NaN)
+- Per-split val: `val_single_in_dist=87.59`, `val_geom_camber_rc=88.15`, `val_geom_camber_cruise=55.71`, `val_re_rand=75.26`
+- Per-split test (3 clean): `test_single_in_dist=77.73`, `test_geom_camber_rc=76.25`, `test_re_rand=66.20`
+- Stacks on top of L1 (PR #293), warmup+cosine (PR #296), and Fourier features (PR #365). **−12.7% val / −12.9% test** vs the L1+warmup+Fourier baseline.
+- Change: pure CLI/Config tweak — `surf_weight` 10.0 → 30.0. Triples the surface-loss weight in the training objective `loss = vol_loss + surf_weight * surf_loss`. Cost: zero per-epoch overhead.
+- Tradeoff: `val_avg/mae_vol_p` regressed by +13.2% (the model now spends more capacity on surface accuracy). Volume metrics aren't ranked, but worth tracking — too aggressive a `surf_weight` may eventually undermine the joint flow representation.
 
-Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54` (was 22 before Fourier), `lr=1e-3` (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, `surf_weight=10.0`, **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, `--epochs 14`, **8-band Fourier features on normalized (x, z)**.
+Full reference config now: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, `lr=1e-3` (peak, linear warmup), `weight_decay=1e-4`, `batch_size=4`, **`surf_weight=30.0`**, **L1** loss in normalized space, **SequentialLR(LinearLR warmup × 5 ep, CosineAnnealingLR T_max=epochs−5)**, `--epochs 14`, **8-band Fourier features on normalized (x, z)**.
 
 Reproduce:
 ```bash
 cd target/ && python train.py \
-  --agent charliepai2d5-thorfinn \
-  --experiment_name fourier-features-on-l1-warmup \
+  --agent charliepai2d5-nezuko \
+  --experiment_name surf-weight-30-on-fourier \
+  --surf_weight 30.0 \
   --epochs 14
 ```
 
+(`--surf_weight 30.0` is now the Config default, but kept explicit in the reproduce command for clarity.)
+
 ### Previous best
+
+**PR #365 — `fourier-features-on-l1-warmup` (thorfinn), merged 2026-04-28**
+
+- `val_avg/mae_surf_p` = 87.8551 (best epoch 12/14)
+- `test_avg/mae_surf_p` (3-split mean) = 84.222
+- Change: 8-band sinusoidal Fourier features on normalized `(x, z)` positions.
 
 **PR #296 — `lr-warmup-1e3-budget` (fern), merged 2026-04-28**
 
