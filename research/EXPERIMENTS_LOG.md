@@ -307,3 +307,41 @@ Mean pre-clip `train/grad_norm` per epoch: 117 → 95 → 85 → 83 → 72 → 7
 |----|---------|------|-------|-----|
 | #402 | tanjiro | grad-clip-0p5 | More aggressive grad-clip: `max_norm=1.0 → 0.5` | Tanjiro's own follow-up; tests whether further damping at this LR helps or starves |
 | #403 | frieren | batch8-lr-sqrt2 | `batch_size=4 → 8`, `lr=5e-4 → 7e-4` (√2 scaling) | Variance reduction at gradient aggregation; compounds with EMA + grad-clip |
+
+## 2026-04-28 00:52 — PR #353: 5-ep warmup + cosine to 1e-5 with peak LR=1e-3 (charliepai2d1-fern) — **CLOSED**
+- Branch: `charliepai2d1-fern/warmup-cosine-1e3` (pre-EMA, pre-grad-clip base; closed + branch deleted)
+- Hypothesis: peak `lr=1e-3` with 5-epoch linear warmup + cosine to 1e-5; transformer-style schedule lets us safely raise peak LR.
+
+### Headline metrics (best ep=12/13, raw eval, no EMA)
+| | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | **val_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` (raw) | 172.00 | 150.07 | 105.48 | 132.10 | **139.91** |
+
+| | test_single_in_dist | test_geom_camber_rc | test_geom_camber_cruise | test_re_rand | **test_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 155.11 | 142.89 | NaN | 131.04 | NaN (3-split mean = 143.01) |
+
+- Per-epoch wall clock: 131 s (matches baseline). 13 of 50 epochs trained.
+- LR schedule fired exactly as specified: 1e-6 → 1e-3 over eps 1-5, cosine decay from 9.99e-4 (ep7) to 9.42e-4 (ep13).
+
+### Comparisons
+- vs #356 raw best (no warmup, lr=5e-4, no clip): 139.91 vs 136.53 = **+2.5 % worse**
+- vs #374 raw best (no warmup, lr=5e-4, +grad-clip): 139.91 vs 121.99 = **+14.7 % worse**
+
+The hypothesis didn't beat even the simplest raw baseline.
+
+### Analysis
+- **Cosine T_max=50 is degenerate at the 13-epoch budget.** Only 7 cosine epochs ran; LR at ep13 was still 9.42e-4 (only 6 % off peak). The intended "warmup → cosine to 1e-5" was effectively "warmup → flat-near-peak" — not the schedule the hypothesis tested.
+- **Peak LR=1e-3 without grad-clip was too hot for val noise.** Train loss descended monotonically (no instability) but val oscillated 215.96 → 180.31 → 152.23 → 177.97 → 220.09 → 155.81 → 139.91 → 191.12 across the on-peak/decaying-peak epochs. The val noise is exactly what grad-clip damps.
+- **Fourth independent rediscovery of the scoring NaN bug** (test_geom_camber_cruise idx 20 has fp16-underflow in y[p]). Tanjiro's pre-pass workaround is now in baseline; fern's run pre-dates that.
+
+### Decision: close, reassign to higher-lr-1e3 (single-knob)
+- Closed because raw vs raw lost to all prior baselines and the hypothesis (warmup → cosine-to-floor) was degenerate at the actual budget.
+- BUT fern's analysis correctly identified the right next experiment: pair higher LR with grad-clip. Tanjiro's #374 follow-up #2 says exactly the same thing from the opposite direction — two independent rediscoveries of the same compound lever.
+- Reassigned fern to **PR #408 (higher-lr-1e3)**: single-line `Config.lr = 5e-4 → 1e-3` on top of the merged grad-clip baseline. No warmup, no schedule changes. Cleanest single-knob test of "with grad-clip envelope, push LR 2×."
+
+## 2026-04-28 00:55 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #408 | fern | higher-lr-1e3 | `Config.lr = 5e-4 → 1e-3` on top of merged grad-clip baseline | Replaces closed #353; single-knob test of "grad-clip envelope makes 2× LR safe" — independently suggested by both fern (#353 follow-ups) and tanjiro (#374 follow-ups) |
