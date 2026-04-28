@@ -421,7 +421,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=128,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -462,6 +462,34 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+import json
+metrics_dir = Path("metrics")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+metrics_tag = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "run")
+metrics_path = metrics_dir / f"{metrics_tag}-{run.id}.jsonl"
+
+def _jsonl_append(record: dict) -> None:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+_jsonl_append({
+    "event": "config",
+    "wandb_name": cfg.wandb_name,
+    "agent": cfg.agent,
+    "run_id": run.id,
+    "model_config": model_config,
+    "lr": cfg.lr,
+    "weight_decay": cfg.weight_decay,
+    "batch_size": cfg.batch_size,
+    "surf_weight": cfg.surf_weight,
+    "epochs_configured": cfg.epochs,
+    "n_params": n_params,
+    "train_samples": len(train_ds),
+    "val_samples": {k: len(v) for k, v in val_splits.items()},
+    "git_commit": _git_commit_short(),
+})
+print(f"Metrics JSONL: {metrics_path}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -536,7 +564,8 @@ for epoch in range(MAX_EPOCHS):
     wandb.log(log_metrics)
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
+    is_best = avg_surf_p < best_avg_surf_p
+    if is_best:
         best_avg_surf_p = avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
@@ -547,6 +576,23 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    _jsonl_append({
+        "event": "epoch",
+        "epoch": epoch + 1,
+        "is_best": is_best,
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "epoch_time_s": dt,
+        "peak_gb": peak_gb,
+        "lr": scheduler.get_last_lr()[0],
+        "global_step": global_step,
+        "train/vol_loss": epoch_vol,
+        "train/surf_loss": epoch_surf,
+        "val/loss": val_loss_mean,
+        **{f"val_{k}": v for k, v in val_avg.items()},
+        **{f"{split_name}/{k}": v
+           for split_name, m in split_metrics.items()
+           for k, v in m.items()},
+    })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
@@ -557,6 +603,8 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+_jsonl_append({"event": "training_done", "total_train_minutes": total_time,
+               "epochs_completed": epoch + 1 if 'epoch' in dir() else 0})
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -596,6 +644,12 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _jsonl_append({
+            "event": "test",
+            "best_epoch": best_metrics["epoch"],
+            "best_val_avg/mae_surf_p": best_avg_surf_p,
+            **test_log,
+        })
 
     save_model_artifact(
         run=run,
