@@ -1,17 +1,17 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 02:55
+- **Date:** 2026-04-28 03:15
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
 
 ## Current research focus
 
-**Current best:** PR #401 (alphonse, torch.compile + bf16 + EMA + clip), merged commit 5f2edca. `val_avg/mae_surf_p = 66.89` (EMA-evaluated), `test_avg/mae_surf_p = 57.86`. **-37.1% over PR #308**, **-32.3% over PR #381**. Cumulative **-47% from the published-baseline-equivalent**.
+**Current best:** PR #289 (askeladd, Huber β=1.0 rebased onto post-#401 stack), merged commit 906a2c1. `val_avg/mae_surf_p = 63.33` (EMA-evaluated), `test_avg/mae_surf_p = 55.45`. **-5.31% over PR #401** which itself was -37.1% over #308. Cumulative **-53% from the published-baseline-equivalent**.
 
-**Mechanism is throughput-driven.** Compile dropped per-epoch from 141 s to 54.6 s (2.58×), pushing the budget from 13 epochs to 33. The cosine schedule's tail finally reachable + EMA gets 33 useful epochs instead of ~3. Per-split gains uniform 30-43% across all 4 val and 4 test splits — this is the cosine-tail + EMA combo finally getting room to operate, not a bias toward any particular split.
+**Compounding evidence:** Huber on pre-#308 base gave -9.9% vs MSE; rebased onto post-#401 (compile + bf16 + EMA + clip), Huber gives -5.31%. Difference is the part of Huber's gain that EMA already absorbs (both dampen heavy-tail variance, partially overlap). Per-split mechanism preserved: val_single_in_dist (raceCar high-Re, heaviest pressure tails) gains most at -9.0%.
 
-**Round 1 character changed:** "14-epoch ranking exercise" → "33-epoch ranking exercise". Architectural-scale PRs that previously closed for blowing per-epoch budget (wider #300, more-slices #309, deeper #304) should be revisited under the new regime. **PR #435 (alphonse, deeper-8 + DropPath)** is the first such revisit.
+**Open infrastructure issue:** 2 of 4 launches at the rebased compile + EMA + clip + bf16 stack crash with CUDAGraph private-pool blowup at variable mesh sizes. Alphonse's depth experiment (#435) hit the same OOM at depth=8, requiring `mode="default"` workaround (~10-15% throughput cost). PR #466 (alphonse) bundles the fix: `cudagraph_skip_dynamic_graphs=True` flag + cosine T_max retune to actually-reachable epoch count.
 
 **Round 1 status:** 8 PRs assigned across 4 axes (loss formulation, loss weighting, architecture, optimization). PR #372 (bf16) merged as infrastructure → **the 14-epoch ranking exercise is now a 19-epoch ranking exercise** in the same wall-clock budget (1.36× speedup). torch.compile (PR #401) targets another 1.2-1.5× on top, potentially pushing to 25-30 epochs.
 
@@ -26,8 +26,10 @@
 | alphonse | #287 | surf-weight-up | Loss weighting (10→25) | -3% to -7% | **MERGED** e4a0c18 → val_avg=126.67 |
 | alphonse | #372 | bf16-autocast | Throughput (bf16 autocast) | -10% to -20% | **MERGED** 91d8a4e (infra) → 1.36× speedup, 19/50 epochs |
 | alphonse | #401 | compile-bf16-emaclip | Throughput (torch.compile reduce-overhead, dynamic) | -5% to -15% | **MERGED** 5f2edca → val_avg=**66.89** (NEW BEST, -37.1%) |
-| alphonse | #435 | deeper8-droppath01-compile | Architecture (n_layers 5→8 + DropPath 0.1, revisit fern's #304 under compile) | -5% to -10% | WIP |
-| askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1) | -5% to -10% | **SENT BACK** — clean -9.9% on loss axis but pre-#308; rebase + re-run with EMA |
+| alphonse | #435 | deeper8-droppath01-compile | Architecture (n_layers 5→8 + DropPath 0.1) | -5% to -10% | **CLOSED** — +30% (cosine T_max=50 mismatched with 22 reached epochs) |
+| alphonse | #466 | tmax32-cudagraph-skip | Infra (cosine_epochs flag + cudagraph_skip_dynamic_graphs robustness) | -1% to -5% | WIP |
+| askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1) | -5% to -10% | **MERGED** 906a2c1 → val_avg=**63.33** (NEW BEST, -5.31%) |
+| askeladd | #467 | huber-beta-sweep | Loss formulation (β ∈ {0.5, 1.0, 2.0} sweep) | β=0.5 predicted -1% to -4% | WIP |
 | edward   | #300 | wider-model | Width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 |
 | edward   | #358 | fix-scoring-nan-mask | Maintenance | n/a | **MERGED** 010235e |
 | edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | **SENT BACK AGAIN** — rebase to post-#401 + re-run; equal-epoch shows -11% compounding signal but lost 3 epochs to GPU contention |
@@ -58,7 +60,9 @@
 - **Architectural-scale changes need throughput-friendliness baked in** — wider (#300), more-slices (#309), and deeper (#304) all lost epochs to per-step compute. With bf16 (#372) AND torch.compile (#401) now in the merged baseline, per-epoch dropped 141s→55s. **Architectural-scale PRs that previously closed for budget reasons should be revisited** under the new regime — alphonse #435 (deeper-8) and frieren #431 (wider-160) are the two retests in flight.
 - **Memory headroom does NOT translate to throughput on this hardware.** Frieren #382 confirmed: GPU is compute-saturated at bs=4. Doubling batch ≈ doubles per-step time → net flat. Memory headroom should go to capacity (n_hidden, n_layers) or be cashed via bf16/compile (which actually drop per-step compute), not via bigger batches.
 - **The compile-driven epoch-budget recovery is the dominant mechanism behind the -37% jump in #401.** With cosine-tail finally reachable, EMA gets enough useful epochs to do its job. Round-1 ranking is now a 33-epoch exercise, not a 13-epoch one — past results may need re-evaluation.
-- **Clip is load-bearing as a per-batch dampener** (PR #421 attribution). At max_norm=10 and our AdamW/lr settings, the clip isn't catching runaway gradients (gn_max stays in 344-767 band with or without clipping); it's per-batch dampening that materially helps generalization, especially on the smallest-magnitude split (cruise camber, +22% regression without clip). Round-2 compound: surf_weight=25 + EMA(0.995) + clip(10.0), all established as load-bearing.
+- **Clip is load-bearing as a per-batch dampener** (PR #421 attribution). At max_norm=10 and our AdamW/lr settings, the clip isn't catching runaway gradients (gn_max stays in 344-767 band with or without clipping); it's per-batch dampening that materially helps generalization, especially on the smallest-magnitude split (cruise camber, +22% regression without clip).
+- **Schedule mismatch is the next-largest source of suboptimality.** With compile-driven 33-epoch budget, the configured T_max=50 cosine never reaches its tail (LR ~0.27× peak at termination instead of ~0). Architectural-scale experiments are double-penalized: more wall per epoch + still-elevated LR at termination. PR #466 bundles the cosine T_max retune with the cudagraph robustness fix.
+- **Compile flakiness needs addressing.** 2 of 4 launches at the rebased stack crashed with CUDAGraph private-pool blowup. The fix (`cudagraph_skip_dynamic_graphs=True`) drops ~10-15% throughput but eliminates the failure mode — net positive given how much architectural-side work remains.
 - **Independent diagnoses converged on the same scoring NaN bug** (6 students), now fixed (#358).
 - **Variance floor: ~5pp** between two Huber seeds (askeladd #289). Round-1 winners by less than ~5% on val_avg are within run-to-run noise.
 
