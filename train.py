@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -31,7 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -45,6 +46,80 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Domain conditioning (FiLM)
+# ---------------------------------------------------------------------------
+
+DOMAIN_NAMES = ["racecar_single", "racecar_tandem", "cruise"]
+DOMAIN_NAME_TO_ID = {n: i for i, n in enumerate(DOMAIN_NAMES)}
+N_DOMAINS = len(DOMAIN_NAMES)
+
+VAL_SPLIT_DOMAIN: dict[str, int] = {
+    "val_single_in_dist": 0,
+    "val_geom_camber_rc": 1,
+    "val_geom_camber_cruise": 2,
+}
+TEST_SPLIT_DOMAIN: dict[str, int] = {
+    "test_single_in_dist": 0,
+    "test_geom_camber_rc": 1,
+    "test_geom_camber_cruise": 2,
+}
+
+
+def domain_from_x(x: torch.Tensor) -> int:
+    """Heuristic domain id for mixed splits (val_re_rand, test_re_rand).
+    raceCar tandem vs cruise overlap heavily in raw features; AoA1 sign is the
+    best single feature (~70% accurate vs meta.json on train)."""
+    gap = x[0, 22].item()
+    if abs(gap) < 1e-6:
+        return 0
+    aoa1 = x[0, 14].item()
+    return 2 if aoa1 > -0.06 else 1
+
+
+class DomainWrappedDataset(Dataset):
+    """Attach a per-sample domain id to the underlying (x, y, is_surface) tuple."""
+
+    def __init__(self, base, domain_ids: list[int]):
+        assert len(domain_ids) == len(base)
+        self.base = base
+        self.domain_ids = domain_ids
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, i):
+        x, y, sf = self.base[i]
+        return x, y, sf, self.domain_ids[i]
+
+
+def pad_collate_with_domain(batch):
+    """pad_collate variant that also returns batched domain ids."""
+    triples = [(x, y, sf) for x, y, sf, _ in batch]
+    x_pad, y_pad, surf_pad, mask = pad_collate(triples)
+    domain_ids = torch.tensor([d for *_, d in batch], dtype=torch.long)
+    return x_pad, y_pad, surf_pad, mask, domain_ids
+
+
+def build_train_domain_ids(meta: dict, n_train: int) -> list[int]:
+    """Map each train file index → domain id using meta.json ground truth.
+    File ordering is sequential (000000.pt, 000001.pt, ...) so the index in
+    meta.json's domain_groups matches the train_ds index directly."""
+    ids = [0] * n_train
+    for d_name, idxs in meta["domain_groups"].items():
+        d_id = DOMAIN_NAME_TO_ID[d_name]
+        for i in idxs:
+            if i < n_train:
+                ids[i] = d_id
+    return ids
+
+
+def build_split_domain_ids(name: str, ds, split_to_domain: dict[str, int]) -> list[int]:
+    """Constant domain id for single-domain splits, AoA heuristic for re_rand."""
+    if name in split_to_domain:
+        return [split_to_domain[name]] * len(ds)
+    return [domain_from_x(ds[i][0]) for i in range(len(ds))]
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -136,6 +211,26 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class FiLMLayer(nn.Module):
+    """Feature-wise Linear Modulation conditioned on a discrete domain id.
+
+    Embedding produces a per-domain (γ, β) pair. Output is x * (1 + γ) + β.
+    Zero-initialized so the layer is identity at the start of training and the
+    backbone is unchanged from baseline until gradients differentiate domains
+    (DiT recipe). Embedding output: [B, hidden_dim*2] → split into γ, β.
+    """
+
+    def __init__(self, hidden_dim, n_domains=3):
+        super().__init__()
+        self.embedding = nn.Embedding(n_domains, hidden_dim * 2)
+        nn.init.zeros_(self.embedding.weight)
+
+    def forward(self, x, domain_ids):
+        gb = self.embedding(domain_ids)
+        gamma, beta = gb.chunk(2, dim=-1)
+        return x * (1 + gamma.unsqueeze(1)) + beta.unsqueeze(1)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
@@ -169,7 +264,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 n_domains=N_DOMAINS):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -195,6 +291,8 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # FiLM is built after _init_weights so its zero-init survives.
+        self.film = FiLMLayer(n_hidden, n_domains=n_domains)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,9 +305,18 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        domain_ids = data["domain_ids"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        last = len(self.blocks) - 1
+        for i, block in enumerate(self.blocks):
+            if i == last:
+                # Last block: residual updates → FiLM → output projection.
+                fx = block.attn(block.ln_1(fx)) + fx
+                fx = block.mlp(block.ln_2(fx)) + fx
+                fx = self.film(fx, domain_ids)
+                fx = block.mlp2(block.ln_3(fx))
+            else:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -230,15 +337,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     n_surf = n_vol = n_batches = 0
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for x, y, is_surface, mask, domain_ids in loader:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+            domain_ids = domain_ids.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "domain_ids": domain_ids})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -398,7 +506,23 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
+# Attach per-sample domain ids so FiLM can condition on domain regime.
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _meta = json.load(_f)
+train_domain_ids = build_train_domain_ids(_meta, len(train_ds))
+train_ds = DomainWrappedDataset(train_ds, train_domain_ids)
+val_splits = {
+    name: DomainWrappedDataset(ds, build_split_domain_ids(name, ds, VAL_SPLIT_DOMAIN))
+    for name, ds in val_splits.items()
+}
+print(
+    "Train domain composition: "
+    + ", ".join(
+        f"{DOMAIN_NAMES[d]}={train_domain_ids.count(d)}" for d in range(N_DOMAINS)
+    )
+)
+
+loader_kwargs = dict(collate_fn=pad_collate_with_domain, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
 if cfg.debug:
@@ -423,6 +547,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    n_domains=N_DOMAINS,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -463,6 +588,29 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+# Local JSONL metrics file — committed alongside the PR for offline review.
+metrics_dir = Path("metrics")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+_metrics_tag = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "tandemfoil")
+metrics_path = metrics_dir / f"{_metrics_tag}-{run.id}.jsonl"
+with open(metrics_path, "w") as _mf:
+    _mf.write(json.dumps({
+        "event": "config",
+        "cfg": asdict(cfg),
+        "model_config": model_config,
+        "n_params": n_params,
+        "git_commit": _git_commit_short(),
+        "train_samples": len(train_ds),
+        "val_samples": {k: len(v) for k, v in val_splits.items()},
+    }) + "\n")
+print(f"Local metrics → {metrics_path}")
+
+
+def _append_jsonl(payload: dict) -> None:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps(payload) + "\n")
+
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -478,15 +626,16 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for x, y, is_surface, mask, domain_ids in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        domain_ids = domain_ids.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "domain_ids": domain_ids})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -534,6 +683,12 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
+    _append_jsonl({
+        "event": "epoch",
+        "epoch": epoch + 1,
+        "global_step": global_step,
+        **log_metrics,
+    })
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -575,6 +730,10 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        test_datasets = {
+            name: DomainWrappedDataset(ds, build_split_domain_ids(name, ds, TEST_SPLIT_DOMAIN))
+            for name, ds in test_datasets.items()
+        }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
@@ -596,6 +755,14 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _append_jsonl({"event": "test", **test_log})
+
+    _append_jsonl({
+        "event": "summary",
+        "best_epoch": best_metrics["epoch"],
+        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "total_train_minutes": total_time,
+    })
 
     save_model_artifact(
         run=run,
