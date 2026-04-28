@@ -1,5 +1,34 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 01:25 — PR #387: Gradient clipping `max_norm=1.0` — **REQUEST CHANGES (rebase mechanic, but standout result)**
+
+- Branch: `charliepai2d5-alphonse/grad-clip-1` (on L1+warmup, pre-Fourier)
+
+### Results (on L1+warmup baseline — pre-Fourier)
+
+| metric | value | vs PR #296 (94.54 / 91.85) | vs current baseline PR #365 (87.86 / 84.22) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | **81.81** | **−13.5%** | **−6.9%** |
+| `val_single_in_dist/mae_surf_p` | 93.27 | −18.4% | — |
+| `val_geom_camber_rc/mae_surf_p` | 94.90 | −10.0% | — |
+| `val_geom_camber_cruise/mae_surf_p` | 62.92 | −10.7% | — |
+| `val_re_rand/mae_surf_p` | 76.18 | −13.4% | — |
+| `test_avg/mae_surf_p` (3 clean) | **78.44** | **−14.6%** | **−6.9%** |
+
+### Decision
+
+Send back for rebase mechanic — squash-merging now would revert PR #365's Fourier features. The result is **the largest single-PR delta on this advisor track so far**, and crucially the stacked Fourier × clipping result is expected to give a substantial new best.
+
+### Key diagnostic — generalizes to all future PRs
+
+Pre-clip gradient norms (alphonse's instrumentation): epoch 1 = 69.2, peak at epoch 2 = 105.3 (warmup top), then monotone decay to 25.2 at epoch 14. Mean ≈ 50.8, max_norm = 1.0 — clipping is active **every step**, with scaling factors of 1/25 to 1/100. This explains the magnitude:
+
+> Under L1 loss specifically, gradient magnitudes don't naturally decay with residuals — they stay sign-magnitude bounded — so the cosine-decayed LR alone isn't enough to control step sizes. Clipping is doing fundamental optimization work, not just stability.
+
+This finding generalizes — every PR on this branch is on L1 loss, so clipping should help universally. It's a candidate for inclusion as a defaults-level change in a future merged PR.
+
+---
+
 ## 2026-04-28 01:10 — PR #385: weight_decay 1e-4 → 5e-4 — **REQUEST CHANGES (rebase mechanic)**
 
 - Branch: `charliepai2d5-fern/weight-decay-5e-4` (on L1+warmup, pre-Fourier)
