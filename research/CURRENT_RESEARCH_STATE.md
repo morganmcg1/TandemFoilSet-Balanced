@@ -1,14 +1,23 @@
 # SENPAI Research State
-- 2026-04-28 06:15 — round 1.5 active; **eleven big wins merged** (5 var-reduction + 1 architectural + 1 optimizer-family + 2 loss-form + 1 throughput + **1 Lion-lr**): #356, #374, #402, #408, #417, #398, #430, #352, #491, #535, **#536 (Lion lr=2.5e-4, −1.67 %)**
+- 2026-04-28 06:30 — round 1.5 active; **twelve big wins merged** (5 var-reduction + 1 architectural + 1 optimizer-family + 2 loss-form + 1 throughput + 1 Lion-lr + **1 Lion-β2**): #356, #374, #402, #408, #417, #398, #430, #352, #491, #535, #536, **#571 (Lion β2=0.999, −13.83 % val / −13.79 % test)**
 - Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four val splits); ranking final metric is `test_avg/mae_surf_p`
 
-## Current best (post-PR-#536)
-- **`val_avg/mae_surf_p` = 60.478** (EMA, ep12/50 timeout-cut)
-- **`test_avg/mae_surf_p` = 52.676**
+## Current best (post-PR-#571)
+- **`val_avg/mae_surf_p` = 52.116** (EMA, ep14/50 timeout-cut)
+- **`test_avg/mae_surf_p` = 45.413**
 - See `BASELINE.md` for the full per-split breakdown.
-- **Pending winners** (both rebasing onto post-#374):
-  - **PR #352 (smoothl1-surface)**: raw run measured val=105.56, test=95.39 (−20.2 % / −19.2 % vs prior #356). Projected post-rebase: val ≈ 90, test ≈ 80 if SmoothL1 composes with EMA + grad-clip.
-  - **PR #394 (torch.compile)**: confirmed −23.1 % per-epoch (17 vs 13 epochs in 30 min). Metric vs current #374 was +0.79 % / +2.13 % (run pre-dated grad-clip). Projected post-rebase: val ~108–110, test ~95–97 (compile + grad-clip + 17 epochs).
+- Live composed config: lr=2.5e-4 + β=0.5 + β2=0.999 + SwiGLU(168) + EMA(0.99) + grad-clip(0.5) + SmoothL1(β=0.5)/MSE-vol + TF32. The recorded baseline metrics are from frieren's run on lr=1.7e-4 + β=1.0 + β2=0.999 (pre-#535/#536 base); future re-runs of the unmodified live config may land slightly better.
+
+## Current research focus (round 1.5 in progress, Lion-axis basin-mapping ascendant)
+The Lion axis has now produced two compounding wins (lr=2.5e-4 in #536, β2=0.999 in #571), with #571 the largest single-PR delta since Lion adoption itself (#430). Frieren's β1 vs β2 mechanism distinction is the appendix-grade durable finding: **β1 trades responsiveness for direction smoothness (lose case in #545); β2 trades a few warm-up batches for persistent direction smoothness while retaining full responsiveness (clean broad-based win in #571)**. The buffer-history axis (β2) is now the dominant Lion-side lever; this loop is pushing it to the upper edge.
+
+Five active in-flight WIPs, four are basin-narrowing along established axes:
+- **Lion lr basin** (upper edge): tanjiro #592 lr=2.85e-4 (midpoint between #536 win at 2.5e-4 and #507 lose at 3.3e-4)
+- **Lion lr basin** (lower edge): askeladd #580 lr=1.2e-4 (probe lower bracket)
+- **Lion β2 basin** (upper edge, NEW): frieren #598 β2=0.9999 (push the buffer-history axis upper edge)
+- **SmoothL1 β** (further narrowing): edward #567 β=0.25 (bracket-narrow #535's β=0.5 win)
+- **GeGLU vs SwiGLU**: nezuko #552 (sent back for rebase onto post-#535/#536/#571 — activation shape × loss shape × β2 stack-test)
+- **Cosine schedule**: fern #560 (sent back for rebase onto post-#571 — schedule mechanism × β2 stack-test)
 
 ## Resolved: scoring NaN bug
 - **Root cause** (independently flagged by tanjiro on #356 and askeladd on #351): one sample (`test_geom_camber_cruise` idx 20) has non-finite `y[p]`. `data/scoring.py:accumulate_batch` builds the right per-sample mask but does `err = |pred − y|` *before* the masked sum, so IEEE-754 `NaN*0 = NaN` (and `inf*0 = NaN`) defeats it and poisons the float64 accumulator → `mae_surf_p`/`mae_vol_p` go NaN for the whole split.
@@ -56,12 +65,13 @@
 | #536 | tanjiro | lion-lr-2p5e-4 | Lion `lr=1.7e-4 → 2.5e-4` on merged #352 baseline | **MERGED 06:12** as new baseline (val=60.478 / test=52.676; −1.67 % val / +0.65 % test vs #535). Squash composed lr=2.5e-4 + β=0.5. Uniform per-split improvement; grad-norm −30 %. Lion basin in [2.5e-4, 3.3e-4]. |
 | ~~#545~~ | ~~frieren~~ | ~~lion-beta1-0p95~~ | ~~Lion `betas = (0.9, 0.99) → (0.95, 0.99)`~~ | **CLOSED 04-28 05:32**: val +6.55 % vs run-base / +11.15 % vs current. Win mechanism (smoother direction) confirmed; lose mechanism (slower convergence) dominated. Per-split: single_in_dist won, tandem splits lost. "Stationary regimes prefer inertia, non-stationary prefer responsiveness." Reassigned to #571. |
 | ~~#546~~ | ~~askeladd~~ | ~~lion-batch-8~~ | ~~`batch_size = 4 → 8`~~ | **CLOSED 04-28 05:55**: b=8 OOM'd at ~94.6 GB; b=6 fallback gave val +4.11 % / test +5.98 % vs current #535. **Durable Lion-vs-AdamW interaction effect**: under AdamW b=8 + √2-LR was catastrophic (+169 %); under Lion b=6 wash. Sign-update decouples per-step from batch size. Reassigned to #580. |
-| #552 | nezuko | geglu-mlp-matched | `silu(value) → gelu(value)` in gated MLP | **Sent back 06:05 for rebase**: clean win on run-base #352 (val −2.62 %, test −3.27 %); #535 merged before results landed → vs current +1.57 % / +3.37 % (within 5 % threshold). Per-split: single_in_dist −7.91 % val confirms **activation shape is load-bearing**, not just gating. Post-rebase tests compound/subsume/interfere with β=0.5. |
-| #560 | fern | cosine-tmax-14-on-lion | `T_max=50 → 14`, `eta_min=1e-5` on merged #491 baseline | Replaces fern's earlier closed #465 (T_max=13 under AdamW). Under Lion's bounded sign-update, late-epoch lr ~1e-5 still produces ~1e-5 per-param movement (no AdamW adaptive denominator collapse). Honest band −2 % to +2 %. |
+| #552 | nezuko | geglu-mlp-matched | `silu(value) → gelu(value)` in gated MLP | **Sent back 06:05 for rebase**: clean win on run-base #352 (val −2.62 %, test −3.27 %); #535 merged before results landed → vs current +1.57 % / +3.37 % (within 5 % threshold). Per-split: single_in_dist −7.91 % val confirms **activation shape is load-bearing**, not just gating. Post-rebase tests compound/subsume/interfere with β=0.5/β2=0.999. |
+| #560 | fern | cosine-tmax-14-on-lion | `T_max=50 → 14`, `eta_min=1e-5` on merged #491 baseline | **Sent back 06:30 for rebase + re-run**: clean win on run-base #491 (val=54.091, −14.44 %), but vs current #571 baseline 52.116 it's +3.79 %. Branch has lr=1.7e-4 + β=1.0 + β2=0.99 hardcoded; squash would revert merged β2=0.999 → 0.99. Mechanism (Lion + completed cosine anneal at low eta_min, no AdamW un-train pathology) is independent of lr/β/β2 axes — predicted to stack on the new baseline. Re-run band: −6 % to −12 % vs new 52.116. |
 | #567 | edward | smoothl1-beta-0p25 | SmoothL1 β=0.5 → 0.25 on merged #535 baseline | Edward's own follow-up #1; further β-axis bracket-narrowing. Tests whether L1-tail mechanism continues to scale or saturates. Honest band −2 % to +1 %. |
-| #571 | frieren | lion-beta2-0p999 | Lion `betas = (0.9, 0.99) → (0.9, 0.999)` on merged #535 baseline | Slower momentum buffer (10× more inertial); direction signal still responsive at β1=0.9. Tests buffer-side smoothing without responsiveness penalty. Honest band −2 % to +3 %. |
+| #571 | frieren | lion-beta2-0p999 | Lion `betas = (0.9, 0.99) → (0.9, 0.999)` on merged #535 baseline | **MERGED 06:23** as new baseline (val=52.116 / test=45.413; **−13.83 % / −13.79 % vs #536**). Largest single-PR delta since #430 Lion adoption. All 4 splits gain ≥10 %. **β1 vs β2 mechanism distinction** established: β1 zero-sum on responsiveness (lose case #545); β2 positive-sum on responsiveness (clean win) — durable appendix-grade finding. |
 | #580 | askeladd | lion-lr-1p2e-4 | `lr_lion = 1.7e-4 → 1.2e-4` on merged #535 baseline | Replaces closed #546; lower-edge probe of Lion's basin. (Note: #536 just merged with lr=2.5e-4 as new baseline; askeladd's lr=1.2e-4 vs new baseline is a 52 % reduction rather than 30 %.) Honest band −2 % to +4 %. |
 | #592 | tanjiro | lion-lr-2p85e-4 | Lion `lr=2.5e-4 → 2.85e-4` on merged #536 baseline | Bracket midpoint between basin (2.5e-4) and lose (3.3e-4); tanjiro's own follow-up #1. Locks the basin upper edge. Honest band −3 % to +6 %. |
+| #598 | frieren | lion-beta2-0p9999 | Lion `betas = (0.9, 0.999) → (0.9, 0.9999)` on merged #571 baseline | Frieren's own follow-up #1; β2-axis upper-edge probe. Buffer half-life ~6900 batches >> ~1190-batch budget — buffer never converges. Tests whether buffer-history gain saturates or continues. Honest band −6 % to +15 %. |
 
 ## Updated picture from round-1 returns
 - **#356 (EMA) merged** at val=132.276 (−3.1 % vs same-run best raw).

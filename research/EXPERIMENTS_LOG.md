@@ -1212,3 +1212,74 @@ The "any gating works" hypothesis is **falsified** by the per-split asymmetry; a
 - **Interfere**: val 62–64, slight regression.
 
 Honest predicted band: −5 % to +3 % vs current 61.508. Either result locks the activation-shape × loss-shape interaction story.
+
+## 2026-04-28 06:23 — PR #571: Lion β2 = 0.99 → 0.999 (charliepai2d1-frieren) — **MERGED, new baseline**
+- Branch: `charliepai2d1-frieren/lion-beta2-0p999` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `b347039`).
+- Hypothesis: longer-history momentum buffer (10× half-life: 69 → 693 batches) smooths sign(c_t) update direction without sacrificing responsiveness (β1=0.9 unchanged). Predicted band: −2 % to +3 %.
+
+### Headline metrics (best EMA epoch=14/50, timeout-cut)
+| metric | this run | current baseline #536 | run base (pre-#535/#536, lr=1.7e-4, β=1.0) |
+|---|---:|---:|---|
+| `val_avg/mae_surf_p` (EMA) | **52.116** | 60.478 (**−13.83 %**) | run on lr=1.7e-4 + β=1.0 + β2=0.999 |
+| `test_avg/mae_surf_p` | **45.413** | 52.676 (**−13.79 %**) | — |
+| raw val (best at best EMA ep) | 59.097 | — | — |
+
+### Per-split — broad-based gain on every split (≥10 %)
+| Split | val Δ vs #536 | test Δ vs #536 |
+|---|---:|---:|
+| single_in_dist | **−16.02 %** | **−13.74 %** |
+| geom_camber_rc | −10.16 % | −13.32 % |
+| geom_camber_cruise | −18.81 % | −14.32 % |
+| re_rand | −12.33 % | −14.09 % |
+
+### Mechanism (frieren's writeup — durable appendix-grade finding)
+**β1 vs β2 mechanism distinction.** The two Lion momentum knobs trade off symmetrically but at very different costs:
+- **β1 (direction-signal responsiveness)**: in the sign update `update = sign(β1·m + (1-β1)·g)`, raising β1 makes `sign(c_t)` more inertial. **#545 (β1=0.9 → 0.95) lost** — the sign-update can't track non-stationary gradient regimes (tandem foil interactions). Stationary single-foil split *gained* under inertia, all three tandem splits regressed → the lose case was specifically driven by responsiveness loss in non-stationary regimes.
+- **β2 (buffer-history)**: in the buffer update `m_{t+1} = β2·m + (1-β2)·g`, raising β2 makes the persistent buffer m smoother but doesn't directly affect the direction signal — `sign(c_t)` retains full responsiveness through `β1·m + (1-β1)·g`. **#571 (β2=0.99 → 0.999) won broadly** — every split gained ≥10 % including the tandem splits.
+
+**The trade-off is asymmetric**: β1 trades responsiveness for direction smoothness (zero-sum on responsiveness); β2 trades a few warm-up batches for persistent direction smoothness while retaining full responsiveness (positive-sum on responsiveness). This makes β2 the dominant lever on the Lion buffer-history axis.
+
+### Decision: merge as new baseline
+- Strict merge gate satisfied; **largest single-PR delta on this branch since #430 Lion adoption** (−24.19 % at the time).
+- Squash-merge composes: β2=0.999 (this PR, optimizer line) + lr=2.5e-4 (#536, Config line) + β=0.5 (#535, loss block). Three independent code regions; git's three-way merge applies all.
+- Recorded baseline metrics are from frieren's run on lr=1.7e-4 + β=1.0 + β2=0.999 (pre-#535/#536 base). The post-merge live config is lr=2.5e-4 + β=0.5 + β2=0.999 — likely lands slightly better since both lr and β were independently improved post-fork.
+- 12th merge on this branch; **fifth Lion-axis lever** (#430 Lion adoption + #491 TF32 + #536 Lion lr=2.5e-4 + this #571 Lion β2=0.999).
+- BASELINE.md updated; frieren reassigned to **PR #598 (lion-beta2-0p9999)** — bracket-narrowing the upper edge of β2 to lock the buffer-history axis.
+
+## 2026-04-28 06:30 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #598 | frieren | lion-beta2-0p9999 | Lion `betas[1] = 0.999 → 0.9999` on merged #571 baseline | Frieren's own follow-up #1; β2-axis upper-edge probe. With ~1190 batches in budget vs β2=0.9999 half-life ~6900 batches, buffer never fully converges — tests whether the buffer-history gain saturates or continues. Honest band −6 % to +15 %. |
+
+## 2026-04-28 06:30 — PR #560: Cosine T_max=14, eta_min=1e-5 under Lion (charliepai2d1-fern) — **sent back for rebase + re-run**
+- Run config: `T_max=MAX_EPOCHS → 14, eta_min=1e-5` in `CosineAnnealingLR(...)`, plus per-epoch lr logging. Branched from pre-#535/#536/#571 baseline (lr=1.7e-4, β=1.0, β2=0.99).
+
+### Headline metrics (best EMA epoch=14/50, timeout-cut)
+| metric | this run | run base #491 | current baseline #571 |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | 54.091 | 63.218 (**−14.44 %**) | 52.116 (**+3.79 %**) |
+| `test_avg/mae_surf_p` | 47.236 | 55.398 (**−14.73 %**) | 45.413 (+4.01 %) |
+| raw val (best at best EMA ep) | 55.911 | — | — |
+
+### Mechanism finding (durable for the appendix)
+**Cosine-to-`eta_min` under Lion completes cleanly within budget; the AdamW un-train pathology (#465) does NOT manifest under Lion's bounded sign-update.**
+- Lion's `update = lr × sign(c_t)` keeps per-param movement at exactly `lr / step` even at `lr=1.2e-5` (the `eta_min` floor at ep14). Per-param movement of 1.2e-5 / step is well above the noise floor — late-epoch refinement does real work rather than getting drowned by AdamW's adaptive denominator.
+- EMA−raw spread collapsed from ~−15 (T_max=50, no anneal) to **−1.82** (T_max=14, full anneal): late-epoch low-lr produces a stable iterate, EMA and raw nearly converge.
+- `is_best=True` at every epoch through ep14 with monotone descent — schedule helped to the very end; no late-epoch degradation.
+- Train loss did NOT reverse at ep11–14 (the canonical falsifier from #465).
+
+Resolves the schedule-vs-optimizer interaction for the appendix: under AdamW (#353/#438/#465) cosine-to-zero kills the model; under Lion + matched `T_max` + finite `eta_min` it's a clean −14 % win.
+
+### Why send back, not close, not merge
+- Past close threshold (>5 %) only barely (+3.79 % val vs current).
+- Past merge gate vs current baseline.
+- **Branch has lr=1.7e-4 + β=1.0 + β2=0.99 hardcoded** in optimizer line; squash-merge would inherit the schedule edit BUT also revert merged β2=0.999 → 0.99 (fern's hardcoded line is the override path), undoing #571's win.
+- The post-rebase question is rigorous and well-motivated: the schedule mechanism (Lion + completed anneal) is independent of lr/β/β2, so should stack. Predicted re-run band: val ~46–49 (−6 to −12 % vs new baseline 52.116).
+
+### Predicted re-run outcome
+- Mechanism predicts compounding (independent of lr/β/β2 axes). Post-rebase val ~46–49.
+- The cleanest stack-test for the appendix: schedule mechanism + Lion β2=0.999 + lr=2.5e-4 + β=0.5 → does the schedule still buy −10 %+ when the iterate is already smoother (β2=0.999) and the cosine anneals from a higher peak (2.5e-4)?
+
+### Reassignment
+- Fern stays on PR #560 — re-running on the rebased branch with corrected `betas=(0.9, 0.999)`. Single-knob discipline preserved (the only diff vs baseline is the scheduler line + lr-log capture).
