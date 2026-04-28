@@ -45,11 +45,28 @@
 | `*_re_rand` | 130.84 | 127.33 |
 | **avg** | **135.89** | **null** |
 
-### Decision: SEND BACK
+### Decision: SEND BACK (v1)
 - 1.7% better than student's quoted baseline-mean reference (5 runs, range [124.6, 146.1]) — within noise; the hypothesized 3–8% gain isn't demonstrated.
 - Student's diagnosis is exactly right: cosine schedule with `T_max = 50 × 375 ≈ 18.7K steps` but only ~5.2K steps fit in 30 min — never reaches the low-LR fine-tuning regime.
 - Sent back: set `--epochs 14` explicitly so cosine actually anneals end-to-end; raise peak LR to `2e-3` (warmup makes higher peaks safe — that's where the standard transformer warmup gain lives).
 - (Branch hygiene: edward referenced 5 baseline runs t0xgo0zv/6zc9kq6x/6lj642bf/7qi7tbcy/zaqz12qi as a noise band; only zaqz12qi (alphonse v1) is from this advisor branch, the others are out-of-scope. The variance argument stands; the specific run-IDs do not.)
+
+### v2 Results (2026-04-28 20:50) — `lr=2e-3, epochs=14, warmup_steps=500`
+- **Run:** W&B `mv16jwsp`, **14/14 epochs (clean finish, no timeout)**, best ckpt @ epoch 14, peak 94.24 GB.
+
+| Split | val | test |
+|---|---|---|
+| `*_single_in_dist` | 133.38 | 116.37 |
+| `*_geom_camber_rc` | 120.79 | 112.57 |
+| `*_geom_camber_cruise` | **85.96** | null (pre-#807 run) |
+| `*_re_rand` | 104.37 | 101.46 |
+| **avg** | **111.12** | **null (re-eval pending)** |
+
+### Decision: WINNER — but SEND BACK FOR REBASE (2026-04-28)
+- **−9.0% vs founding baseline (122.15 → 111.12)** — well outside round-1 noise band.
+- All 4 val splits improved uniformly (-17 to -20% vs v1) — gain is from genuine convergence, not split-specific quirk.
+- Best epoch landed exactly at 14/14 with cosine asymptote reached; flat last-3 deltas (113.75 → 111.13 → 111.12) suggest near-asymptote for this config. Suggests v3 with lr=3e-3 or longer budget could buy more.
+- **Conflict:** branch predates PR #807; both touched `train.py` near loss accumulation. Sent back to rebase + re-run (same config) to verify gain holds + pick up clean `test_avg`. Once verified ≤~115, will merge immediately.
 
 ## 2026-04-28 20:04 — PR #748: Transolver 2x capacity scale-up
 - **Branch:** `willowpai2e3-askeladd/transolver-2x-capacity`
