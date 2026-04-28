@@ -539,3 +539,59 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
 - One sample (`test_geom_camber_cruise` sample 20) has 761 non-finite values in `y[p]` volume nodes. Surface `p` is finite for that sample.
 - `data/scoring.py:accumulate_batch` is *intended* to skip samples with non-finite ground truth (`y_finite` mask), but the implementation computes `err = (pred - y).abs()` over the whole batch *before* masking. With IEEE 754, `Inf * 0 = NaN`, so the masked-out element still poisons the per-channel sum.
 - `data/scoring.py` is read-only per `program.md`. The cleanest workaround is in `train.py` `evaluate_split`: filter out samples with any non-finite `y` before calling `accumulate_batch`. We will route this fix through a round-2 PR (charliepai2d2-edward) so paper-facing `test_avg/mae_surf_p` becomes recoverable for all subsequent runs.
+
+## 2026-04-28 06:15 — PR #563: Semantics-aware feature noise std 0.005 → 0.0025
+
+- Branch: `charliepai2d2-frieren/feature-noise-0025`
+- Hypothesis: Feature noise profile is monotone-descending (0.005 < 0.01 original); push to 0.0025 to test if optimum is below 0.005 or the regularizer-rich stack wants near-zero explicit noise.
+- Results:
+
+| Metric | Value | vs prior (67.306) |
+|---|---|---|
+| best val_avg/mae_surf_p | **66.841** | −0.69% ✓ BEATS BASELINE |
+| test_avg/mae_surf_p | **58.488** | −1.36% |
+| val_single_in_dist | 79.768 | +2.71% (slight regression) |
+| val_geom_camber_rc | 78.262 | −3.01% (biggest gain) |
+| val_geom_camber_cruise | 47.065 | +0.40% (flat) |
+| val_re_rand | 62.268 | −2.70% |
+| test_single_in_dist | 68.487 | −0.35% |
+| test_geom_camber_rc | 71.596 | −1.42% |
+| test_geom_camber_cruise | 38.544 | −2.83% |
+| test_re_rand | 55.325 | −1.48% |
+
+- Metric paths: `models/model-feature-noise-0025-20260428-052613/metrics.jsonl`, `models/model-feature-noise-0025-20260428-052613/metrics.yaml`
+- Analysis: Profile confirmed monotone-descending (0.0025 < 0.005 < 0.01 < 0.02). The OOD splits (camber_rc −3.01%, re_rand −2.70%) drove the gain; in-dist regressed slightly (+2.71%). Mechanism: with DropPath+huber+EMA+wd providing heavy regularization, explicit feature noise mostly adds gradient noise in the cosine fine-tuning tail. Less noise = cleaner signal for OOD generalization.
+- Decision: **MERGED**. New baseline val_avg=66.841, test_avg=58.488. Noise profile not yet saturated — optimum may be in (0, 0.0025].
+
+## 2026-04-28 06:15 — PR #562: Cosine T_max 13 → 12 with 2-ep warmup
+
+- Branch: `charliepai2d2-fern/cosine-tmax-12-warmup-2`
+- Hypothesis: Tighter T_max=12 with 2-epoch warmup pushes LR decay more aggressively into the 14-epoch budget, giving more fine-tuning epochs.
+- Results:
+
+| Metric | Value | vs prior (67.306) |
+|---|---|---|
+| best val_avg/mae_surf_p | **67.383** | +0.077 (MISSES by tiny margin) |
+| test_avg/mae_surf_p | **58.603** | −1.17% (test WINS) |
+| val_single_in_dist | 80.044 | +2.384 |
+| val_geom_camber_rc | 80.727 | +0.037 (flat) |
+| val_geom_camber_cruise | 45.913 | −0.964 |
+| val_re_rand | 62.847 | −1.149 |
+
+- Analysis: Over-decay regime confirmed. Late-epoch slope 0.39 pts/epoch (vs 0.7 at T_max=13) — model more settled but in slightly worse basin. Test improved (-1.17%) despite val regression. Warmup/cosine tradeoff at tight budget is subtle.
+- Decision: **SENT BACK**. Requested 3-epoch warmup with T_max=11 (total=14, budget-aligned, softer start_factor=0.3). New baseline to beat: 66.841.
+
+## 2026-04-28 06:15 — PR #554: AdamW weight_decay 3e-5 → 1e-5
+
+- Branch: `charliepai2d2-tanjiro/weight-decay-1e-5`
+- Hypothesis: wd profile is monotone-descending (3e-5 < 1e-4 < 3e-4); push to 1e-5 to find basin floor.
+- Results (on pre-cosine stack):
+
+| Metric | Value | vs conservative #520 target (71.6985) |
+|---|---|---|
+| best val_avg/mae_surf_p | **70.4328** | −1.77% (beats conservative target) |
+| test_avg/mae_surf_p | **62.5571** | −0.04% vs #520 |
+
+- wd profile: 3e-4=73.771, 1e-4=72.414, 3e-5=70.814, 1e-5=70.433. Slope flattened 2.21% → 0.54% — approaching basin floor.
+- Analysis: Measured on pre-cosine-schedule stack; current baseline is 66.841 (much better). Result doesn't beat current baseline. Sent back to rebase and try wd=0 to close the question.
+- Decision: **SENT BACK**. Rebase onto current stack, try wd=0 to determine whether any explicit L2 helps with the merged regularizer-rich stack.
