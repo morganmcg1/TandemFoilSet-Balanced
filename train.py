@@ -540,6 +540,8 @@ best_metrics: dict = {}
 best_raw_avg_surf_p = float("inf")
 best_raw_epoch = 0
 train_start = time.time()
+ema_warmup_batches = None  # set after first epoch's batch count is known
+global_step = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -580,10 +582,18 @@ for epoch in range(MAX_EPOCHS):
         optimizer.step()
 
         with torch.no_grad():
-            for p_ema, p in zip(ema_model.parameters(), model.parameters()):
-                p_ema.mul_(ema_decay).add_(p.detach(), alpha=1 - ema_decay)
+            # Polyak-Ruppert warmup-skip: keep EMA shadow synced with current
+            # weights during ep0 to avoid random-init drag on the shadow.
+            if ema_warmup_batches is None or global_step < ema_warmup_batches:
+                for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+                    p_ema.copy_(p.detach())
+            else:
+                for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+                    p_ema.mul_(ema_decay).add_(p.detach(), alpha=1 - ema_decay)
             for b_ema, b in zip(ema_model.buffers(), model.buffers()):
                 b_ema.copy_(b)
+
+        global_step += 1
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -594,6 +604,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm /= max(n_batches, 1)
+
+    if epoch == 0 and ema_warmup_batches is None:
+        ema_warmup_batches = n_batches
+        print(f"EMA warmup-skip: shadow starts decaying at step {ema_warmup_batches} (= ep1 boundary)")
 
     # --- Validate (EMA shadow drives best-checkpoint selection) ---
     ema_model.eval()
