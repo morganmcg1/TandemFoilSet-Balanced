@@ -95,6 +95,26 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Volume MAE regressed +10–17% across all splits.
 - Decision: **CLOSE.** sw=25 over-corrects: surface gain is concentrated entirely on the in-distribution split while OOD splits regress. Volume context is starved, hurting cross-split generalization. Direction not dead — student's suggestion to try sw ∈ {12, 15, 18} (smaller bumps) is reasonable for round-3 if other levers stall, ideally with the now-merged EMA baseline.
 
+## 2026-04-28 00:55 — PR #377: Warmup + cosine to 1e-3 + betas (0.9,0.95) on Huber, no grad clip
+
+- Branch: `charliepai2d2-fern/warmup-cosine-1e3-no-clip` — metrics committed.
+- Hypothesis (two parts): (1) huber bounds per-element gradient enough that the round-1 `max_norm=1.0` clip was redundant; (2) the warmup+higher-lr+betas recipe gives −3% to −8% improvement on the merged huber baseline (105.999).
+- Result: best `val_avg/mae_surf_p = 116.352` at epoch 12. **+9.8% vs huber baseline; +14.8% vs new EMA baseline (101.350).**
+- Per-split val MAE for `p` (all 7–14% worse): single_in_dist=152.59, geom_camber_rc=118.24, geom_camber_cruise=88.91, re_rand=105.68.
+- test_avg = 105.715 (**finite** — surface MAE doesn't see the cruise *volume* Inf, so this paper-facing number is recoverable here even without #361 landing).
+- **Hypothesis 1 confirmed (clip was redundant):** grad norms decayed smoothly 56→9 mean over 14 epochs with no instability. Round-1 +16.2% degradation was indeed the clip dominating dynamics.
+- **Hypothesis 2 falsified (recipe doesn't help under truncated training):** the cosine `T_max=47` was sized for 50 epochs, but only 14 fit in the 30-min budget. So the model trained the entire run at near-peak lr (≈0.9 × 1e-3 throughout) and never got the fine-tuning phase. lr was simply too hot for the available budget.
+- Decision: **CLOSE.** This is a clean falsification of the "lr=1e-3 + warmup helps in this regime" hypothesis, dependent on the timeout-truncated training. Direction is not dead in absolute terms — askeladd's #370 (cosine T_max=14) directly addresses the LR-too-hot issue and should give a much fairer test of warmup+higher-lr.
+
+## 2026-04-28 00:55 — PR #362: Surface loss channel weights [0.5, 0.5, 2.5] on Huber baseline
+
+- Branch: `charliepai2d2-tanjiro/surf-channel-on-huber` — metrics committed.
+- Hypothesis: down-weight Ux/Uy (×0.5), up-weight p (×2.5) in surface loss to bias gradients toward the headline `p` channel; predicted −3% to −10%.
+- Result: best `val_avg/mae_surf_p = 107.920` at epoch 13. **+1.81% vs huber baseline; +6.5% vs new EMA baseline.**
+- Per-split val MAE for `p`: single_in_dist=138.13 (+3.05%), geom_camber_rc=111.78 (+2.10%), geom_camber_cruise=83.36 (+0.78%), re_rand=98.40 (+0.67%).
+- Per-channel val pattern: p +1.81%, Ux +5.07%, Uy +16.23% — the relative degradation IS consistent with the channel weighting tilting gradient toward `p`, but the absolute `mae_surf_p` got *worse*, not better.
+- Decision: **CLOSE.** Combined with round-1 PR #295 (`[1.0, 1.0, 2.5]` weights, also regressed at +23.5% vs MSE), this is now two independent confirmations that channel-weighting the surface loss toward `p` does NOT improve `mae_surf_p` on this problem. **Drop direction.** Future surf-rebalance attempts should use the `surf_weight` global scalar (e.g. modest bumps to 12–15 on the EMA baseline) rather than per-channel surface weights.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
