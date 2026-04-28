@@ -1,5 +1,37 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 08:10 — PR #597 (CLOSED): aux log-p weight=0.10 (bracket down from 0.25)
+- Branch: `charliepai2d3-tanjiro/l1ff-ema-cos14-lr-7p5e-4-logp-aux-0p10` (deleted)
+- Hypothesis: Bracket auxiliary log-pressure weight from 0.25 to 0.10 — if the non-monotone cruise behavior continues growing at lower weight, the optimum is below 0.25.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | weight=0.10 (this PR) | weight=0.25 PR #572 | vs current baseline PR #578 (75.78) |
+|--------|-----------------------:|--------------------:|------------------------------------:|
+| `val_avg/mae_surf_p` | 77.54 | 77.78 | **+2.32% REGRESSION** |
+| `test_avg/mae_surf_p` | 68.10 | 67.71 | +2.76% REGRESSION |
+
+### Per-split val
+
+| split | weight=0.25 (PR #572) | weight=0.10 (this PR) | Δ |
+|-------|---------------------:|-----------------------:|--:|
+| val_single_in_dist | 92.62 | **86.58** | −6.52% (gain!) |
+| val_geom_camber_rc | 91.34 | 90.74 | −0.66% |
+| val_geom_camber_cruise | 52.94 | **57.29** | **+8.22%** (regression) |
+| val_re_rand | 74.21 | 75.54 | +1.79% |
+
+### Analysis
+
+Polarity flip observed. At w=0.25: cruise improved −5.74% but single_in_dist regressed +1.61%. At w=0.10: exactly reversed — cruise regresses +8.22% while single_in_dist improves −6.52%. The aux log-p weight lever is a **capacity-redistribution knob between splits** with a polarity-flip somewhere in (0.10, 0.25). val_avg stays nearly flat (77.54 vs 77.78) because the per-split moves cancel.
+
+Critically, neither 0.10 nor 0.25 beat the current PR #578 baseline (75.78), which already includes decoupled head LR. The aux log-p lever appears orthogonal to or dominated by the head-LR mechanism.
+
+### Decision: CLOSED
+
+Closed as dead end vs current baseline (77.54 vs 75.78, −2.32% regression). The polarity-flip insight is mechanistically useful but the aux log-p family does not improve on the PR #578 baseline at any tested weight. Tanjiro re-assigned to a new direction.
+
+---
+
 ## 2026-04-28 07:25 — PR #578 (MERGED): decoupled head LR (2× on `mlp2`+`ln_3`)
 - Branch: `charliepai2d3-thorfinn/l1ff12-ema-cos14-lr-7p5e-4-decouple-head-2x`
 - Hypothesis: 2× head LR vs backbone — head adapts faster to OOD-camber.
