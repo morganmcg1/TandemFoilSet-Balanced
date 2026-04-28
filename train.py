@@ -49,14 +49,14 @@ from data import (
 
 
 def fourier_features(pos: torch.Tensor, num_freq: int = 8) -> torch.Tensor:
-    """Sinusoidal Fourier features for [B, N, 2] node positions.
+    """Sinusoidal Fourier features for [B, N, D] feature channels.
 
-    Returns [B, N, 4 * num_freq] features: sin/cos at frequency bands
+    Returns [B, N, 2 * D * num_freq] features: sin/cos at frequency bands
     1, 2, 4, ..., 2^(num_freq-1) cycles, scaled by pi.
     """
     freqs = (2.0 ** torch.arange(num_freq, device=pos.device, dtype=pos.dtype)) * torch.pi
-    proj = pos.unsqueeze(-1) * freqs                        # [B, N, 2, num_freq]
-    return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(-2)  # [B, N, 4 * num_freq]
+    proj = pos.unsqueeze(-1) * freqs                        # [B, N, D, num_freq]
+    return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(-2)  # [B, N, 2 * D * num_freq]
 
 
 # ---------------------------------------------------------------------------
@@ -251,8 +251,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            ff = fourier_features(x_norm[..., :2], num_freq=8)
-            x_norm = torch.cat([x_norm, ff], dim=-1)
+            ff_pos = fourier_features(x_norm[..., :2], num_freq=8)
+            ff_dsdf = fourier_features(x_norm[..., 2:12], num_freq=4)
+            x_norm = torch.cat([x_norm, ff_pos, ff_dsdf], dim=-1)
             pred = model({"x": x_norm})["preds"]
 
             abs_err = (pred - y_norm).abs()
@@ -403,7 +404,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + 4 * 8,
+    fun_dim=X_DIM - 2 + 4 * 8 + 2 * 4 * 10,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -461,8 +462,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        ff = fourier_features(x_norm[..., :2], num_freq=8)
-        x_norm = torch.cat([x_norm, ff], dim=-1)
+        ff_pos = fourier_features(x_norm[..., :2], num_freq=8)
+        ff_dsdf = fourier_features(x_norm[..., 2:12], num_freq=4)
+        x_norm = torch.cat([x_norm, ff_pos, ff_dsdf], dim=-1)
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
 
