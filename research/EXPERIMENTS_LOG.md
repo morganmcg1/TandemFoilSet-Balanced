@@ -2,6 +2,22 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 03:45 — PR #339: Larger batch (8) with sqrt(2) LR scaling — **CLOSED**
+- Branch: `willowpai2d5-nezuko/batch8-lr-sqrt2` (deleted; CLEAN diff — pure CLI flag run, no train.py changes)
+- Three runs on post-#433 advisor (slice_num=64):
+
+| Run | bs/lr | val_avg/mae_surf_p | epochs | W&B id |
+|---|---|---:|---:|---|
+| Headline | 8 / 7e-4 | 144.71 | 14 | psfu8y1d |
+| Fallback | 6 / 6e-4 | 146.31 | 11 | t5z48527 |
+| Control | 8 / 5e-4 (no scaling) | 162.10 | 14 | w6y33r0w |
+
+- Decision: **closed** — all three results regress vs same-baseline contemporaries on the post-revert advisor (bf16_seed0=116.77, huber_d1_seed2=113.17, cosine_tmax11=128.64 are all in the 113-135 band per W&B leaderboard).
+- **Key finding preserved:** sqrt(2) LR scaling rule is validated (bs=8/lr=7e-4 vs bs=8/lr=5e-4 = +18 MAE delta from the LR change alone) — useful for round-2 throughput stacking under bf16+longer-cap.
+- **Mechanism for the bs=8 regression:** at the 30-min cap, larger batch = same epoch count but half the SGD steps; val_single_in_dist (high-Re raceCar singles needing aggressive fitting) tanks at 201.11 vs ~170-180 for default. Wall-clock is the binding constraint.
+- bs=8 fits in 84.2 GB at slice_num=64 + fp32; bs=8+bf16 should fit comfortably for any future stacking.
+- Nezuko reassigned to **lr=3e-4 multi-seed (#505)** — opposite end of LR exploration, directly attacks the round-1 training-instability hypothesis.
+
 ## 2026-04-28 02:08 — PR #413: Huber loss for surface pressure (delta=1.0) — **SENT BACK (intent to merge)**
 - Branch: `willowpai2d5-askeladd/huber-surface-loss` (sits on pre-#433 commit, slice_num=128)
 - Two-seed run on slice_num=128 baseline:
