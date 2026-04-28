@@ -31,6 +31,33 @@
 
 ---
 
+## 2026-04-28 02:21 — PR #347: H5 random Fourier features on (x, z) — **SENT BACK FOR REBASE**
+
+- Branch: `willowpai2d4-nezuko/h5-fourier-features` (cut before PR #344 merged → missing the warmup+cosine schedule and NaN fix)
+- Hypothesis: Fourier features on raw (x, z) coords with `(num_freq, sigma)` tuned should reduce `val_avg/mae_surf_p` by 2–8%, primarily on geom-OOD splits.
+- 3-cell σ-sweep in W&B group `h5-fourier`:
+
+| Run | num_freq | σ | best epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|-----|----------|---|------------|---------------------|----------------------|-----|
+| A | 16 | 2.0 | 11 | 138.35 | 124.88 | `mo9w34bp` |
+| **B** | **32** | **4.0** | **14** | **127.06** | **112.52** | `o3uq5499` |
+| C | 64 | 8.0 | 11 | 132.93 | 123.15 | `bx35gs7g` |
+
+### Conclusions (provisional, pre-rebase)
+
+- **Run B (σ=4) is the clean U-shape winner** of the σ-sweep. Wins on every val/test split, confirming the predicted U-shape (σ=2 too low, σ=8 too high, σ=4 sweet spot).
+- **Vs. pre-merge baseline** (Edward Run A on equivalent schedule: val=125.17, test=113.85), Run B is approximately flat on val (+1.5%) and mildly better on test (-1.2%). Real but small.
+- **Vs. merged baseline** (PR #344, val=120.97, test=109.92), Run B is +5% / +2.4% — but Nezuko's branch is missing the warmup+cosine schedule fix that delivered ~3-5% on its own. Comparison is not apples-to-apples until rebased.
+- **Cross-split signature was wrong-mechanism.** Predicted strongest gain on geom-OOD splits; observed strongest gain on `single_in_dist`. The improvement is general spatial-representation quality, not a geometry-extrapolation regularizer.
+- **Run B is still descending at epoch 14** (the last actually-trained epoch) — the run is bottlenecked by the pre-merge per-epoch cosine schedule that PR #344 fixed.
+- **NaN fix in `evaluate_split` duplicated edward's** (already merged via #344). Drop it on rebase.
+
+### Action
+
+Sent back for rebase + tightened σ-sweep on the merged schedule. Decision rule on resubmit: if best rebased run beats `val_avg/mae_surf_p=120.97`, merge; else close cleanly. New runs use `--epochs 25 --lr 7e-4` and group `h5-fourier-rebased`, with σ ∈ {3, 4, 5} at num_freq=32 plus a (num_freq=64, σ=4) decoupling cell.
+
+---
+
 ## 2026-04-28 01:46 — PR #349: H8 slice_num scaling matrix — **CLOSED**
 
 - Branch: `willowpai2d4-thorfinn/h8-slice-num-scaling`
