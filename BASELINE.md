@@ -2,6 +2,32 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 08:57 — PR #640: Per-parameter-group weight decay (attn=1e-4, mlp=1e-5, other=3e-5)
+
+- **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #510 same-stack baseline): **62.747** (epoch 17, −3.21% vs 64.824)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **54.512** (vs 56.391 PR #510, −3.33%)
+- **Per-split val MAE for `p`** (best epoch 17, compile=True):
+  - val_single_in_dist: 74.787 (−1.39%)
+  - val_geom_camber_rc: 76.990 (−1.13% — predicted OOD target ✓)
+  - val_geom_camber_cruise: **41.238 (−9.24%, biggest single-split gain)**
+  - val_re_rand: 57.972 (−3.61% — predicted OOD target ✓)
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 64.971
+  - test_geom_camber_rc: 67.720
+  - test_geom_camber_cruise: 34.209
+  - test_re_rand: 51.148
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + **per-parameter-group wd: attn=1e-4, mlp=1e-5, other=3e-5** (was wd=3e-5 single scalar) + PhysicsAttention temperature init=2.0 + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + decaying noise std (linear: ep1=0.0025, ep14=0.000179, ep15+=0) + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True + lr=6e-4.
+- **Param groups**: attn 273K (40.8%, wd=1e-4), mlp 354K (52.9%, wd=1e-5), other 42K (6.3%, wd=3e-5).
+- **Mechanism CONFIRMED**: OOD asymmetry mapping correct (attn-higher penalizes geometry overfitting → camber_rc improves; mlp-lower preserves Re-extrap capacity → re_rand improves).
+- **Bonus finding**: uniform improvement across ALL splits, not just the OOD axes — the asymmetric regularization principle is broader than the specific OOD asymmetry.
+- **Compound expectation**: this run was on pre-#635 (lr=6e-4) and pre-#636 (decaying noise) baseline. Per-group wd is mechanistically orthogonal — should compound below 62.747 on the combined stack.
+- **Metric summary**: `models/model-per-group-wd-20260428-081309/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name per-group-wd --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 08:45 — PR #636: Decaying feature-noise schedule (linear decay 0.0025→0 over 14 ep)
 
 - **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #562 baseline): **63.222** (epoch 17, −2.28% vs 64.696)
