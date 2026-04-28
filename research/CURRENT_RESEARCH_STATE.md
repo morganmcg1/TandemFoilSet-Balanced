@@ -1,24 +1,31 @@
 # SENPAI Research State
-- 2026-04-28 07:20 — round 1.5 active; **twelve big wins merged** (5 var-reduction + 1 architectural + 1 optimizer-family + 2 loss-form + 1 throughput + 1 Lion-lr + 1 Lion-β2): #356, #374, #402, #408, #417, #398, #430, #352, #491, #535, #536, **#571 (Lion β2=0.999, −13.83 % val / −13.79 % test)**
-- **β2 basin under current optimizer regime now locked end-to-end** (#598 closed 07:15: 0.9999 over-smoothed +21.62 %; 0.999 optimum at #571; 0.99 under-smoothed implicit). Active mapping: lr basin (#580/#592 re-running on post-#571), β1 axis lower edge (#621 just assigned), schedule (#560 re-running), loss-form β-axis (#567 re-running), activation shape (#552 re-running), throughput (#394), capacity (#350).
+- 2026-04-28 07:25 — round 1.5 closing; **thirteen big wins merged** (5 var-reduction + 1 architectural + 1 optimizer-family + 2 loss-form + 1 throughput + 1 Lion-lr + 1 Lion-β2 + **1 compile-throughput**): #356, #374, #402, #408, #417, #398, #430, #352, #491, #535, #536, #571, **#394 (torch.compile rebased onto #571, −16.19 % val / −18.70 % test)**
+- **β2 basin locked end-to-end** under current optimizer regime; **+43 % more epochs in 30-min budget** under torch.compile + TF32 (20 epochs vs 14). Active mapping: lr basin (#580/#592 re-running on post-#571), β1 axis lower edge (#621), schedule (#560), loss-form surface β-axis (#567), volume β-axis (#624 just assigned to thorfinn), activation shape (#552), capacity (#350).
 - Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four val splits); ranking final metric is `test_avg/mae_surf_p`
 
-## Current best (post-PR-#571)
-- **`val_avg/mae_surf_p` = 52.116** (EMA, ep14/50 timeout-cut)
-- **`test_avg/mae_surf_p` = 45.413**
+## Current best (post-PR-#394)
+- **`val_avg/mae_surf_p` = 43.677** (EMA, ep20/50 timeout-cut)
+- **`test_avg/mae_surf_p` = 36.920**
 - See `BASELINE.md` for the full per-split breakdown.
-- Live composed config: lr=2.5e-4 + β=0.5 + β2=0.999 + SwiGLU(168) + EMA(0.99) + grad-clip(0.5) + SmoothL1(β=0.5)/MSE-vol + TF32. The recorded baseline metrics are from frieren's run on lr=1.7e-4 + β=1.0 + β2=0.999 (pre-#535/#536 base); future re-runs of the unmodified live config may land slightly better.
+- Live composed config: lr=2.5e-4 + β=0.5 + β2=0.999 + SwiGLU(168) + EMA(0.99) + grad-clip(0.5) + SmoothL1_surf(β=0.5)/MSE_vol + TF32 + **`torch.compile`**. **20 epochs in 30-min budget** at ~94 s/epoch steady-state. First clean direct measurement of post-#571 live config: thorfinn's eager run reached val=52.116 / test=45.413 at ep14, confirming #571's recorded baseline at the live config.
 
-## Current research focus (round 1.5 in progress, Lion-axis basin-mapping ascendant)
-The Lion axis has now produced two compounding wins (lr=2.5e-4 in #536, β2=0.999 in #571), with #571 the largest single-PR delta since Lion adoption itself (#430). Frieren's β1 vs β2 mechanism distinction is the appendix-grade durable finding: **β1 trades responsiveness for direction smoothness (lose case in #545); β2 trades a few warm-up batches for persistent direction smoothness while retaining full responsiveness (clean broad-based win in #571)**. The buffer-history axis (β2) is now the dominant Lion-side lever; this loop is pushing it to the upper edge.
+## Current research focus (round 1.5 closing, throughput + axis basin-mapping)
 
-Five active in-flight WIPs, four are basin-narrowing along established axes:
-- **Lion lr basin** (upper edge): tanjiro #592 lr=2.85e-4 (midpoint between #536 win at 2.5e-4 and #507 lose at 3.3e-4)
-- **Lion lr basin** (lower edge): askeladd #580 lr=1.2e-4 (probe lower bracket)
-- **Lion β2 basin** (upper edge, NEW): frieren #598 β2=0.9999 (push the buffer-history axis upper edge)
-- **SmoothL1 β** (further narrowing): edward #567 β=0.25 (bracket-narrow #535's β=0.5 win)
-- **GeGLU vs SwiGLU**: nezuko #552 (sent back for rebase onto post-#535/#536/#571 — activation shape × loss shape × β2 stack-test)
-- **Cosine schedule**: fern #560 (sent back for rebase onto post-#571 — schedule mechanism × β2 stack-test)
+Three big wins compounded in rapid sequence: **#536 (Lion lr=2.5e-4)** + **#571 (Lion β2=0.999, −13.83 %)** + **#394 (torch.compile rebased, −16.19 %)** — total round-1.5 progress: val 60.478 → 43.677 (−27.8 %) in ~75 minutes wall-clock advisor time. The new compile baseline gives every subsequent PR +43 % more epochs and a much lower floor.
+
+**Two durable mechanism stories** locked in this round:
+1. **β1 vs β2 mechanism distinction** (frieren #545, #571, #598): β1 trades responsiveness for direction smoothness (zero-sum on responsiveness, lose); β2 trades warm-up batches for persistent direction smoothness with full responsiveness retained (positive-sum, win at 0.999, lose at 0.9999 from buffer never converging in budget).
+2. **Compile + 8 orthogonal axes compose without interference** (thorfinn #394): torch.compile + Lion + SwiGLU + TF32 + EMA + grad-clip + SmoothL1 + (lr/β/β2) all stack. Same per-step behavior as eager baseline through ep14; entire metric Δ comes from extra ep15-20 of cosine descent. Cleanest possible throughput→metric demonstration.
+
+**Seven active WIPs, all basin-narrowing or stack-testing along established axes**:
+- **Lion lr basin under β2=0.999** (upper edge): tanjiro #592 lr=2.85e-4 (re-running on post-#571 + compile)
+- **Lion lr basin under β2=0.999** (lower edge): askeladd #580 lr=1.2e-4 (re-running on post-#571 + compile)
+- **Lion β1 lower edge** (NEW): frieren #621 β1=0.85 (responsiveness side symmetric probe)
+- **SmoothL1 β-axis** (surface): edward #567 β=0.25 (re-running on post-#571 + compile)
+- **SmoothL1 β-axis** (volume, NEW): thorfinn #624 β=0.5 on volume (extending edward's surface story to volume; +43% epoch budget gives more headroom)
+- **Cosine schedule**: fern #560 T_max=14 (re-running on post-#571 + compile)
+- **Activation shape**: nezuko #552 GeGLU (re-running on post-#571 + compile)
+- **Capacity**: alphonse #350 n_hidden=256 (long-running)
 
 ## Resolved: scoring NaN bug
 - **Root cause** (independently flagged by tanjiro on #356 and askeladd on #351): one sample (`test_geom_camber_cruise` idx 20) has non-finite `y[p]`. `data/scoring.py:accumulate_batch` builds the right per-sample mask but does `err = |pred − y|` *before* the masked sum, so IEEE-754 `NaN*0 = NaN` (and `inf*0 = NaN`) defeats it and poisons the float64 accumulator → `mae_surf_p`/`mae_vol_p` go NaN for the whole split.
@@ -74,6 +81,8 @@ Five active in-flight WIPs, four are basin-narrowing along established axes:
 | #592 | tanjiro | lion-lr-2p85e-4 | Lion `lr=2.5e-4 → 2.85e-4` on merged #536 baseline | **Sent back 06:55 for rebase + re-run**: clean win on run base #536 (val=55.904, −7.56 %, well past predicted band); appendix-grade upper-edge result. All 4 splits gain (rc laggard at −2.61 %, others ≥−9 %); spread narrowed (20.27 → 15.85, healthy descent), grad-norm sub-linear in lr. Basin upper edge under β2=0.99 locked in [2.85e-4, 3.3e-4]. vs current #571 baseline 52.116 it's +7.27 %. Re-run on post-#571 baseline maps upper edge under β2=0.999. Three hypotheses: compound (~48–50), subsume (~50–53), interfere (~54–58). Pairs with #580 lower-edge re-run to lock new-baseline basin. |
 | ~~#598~~ | ~~frieren~~ | ~~lion-beta2-0p9999~~ | ~~Lion `betas = (0.9, 0.999) → (0.9, 0.9999)` on merged #571 baseline~~ | **CLOSED 04-28 07:15**: val=63.381 (+21.62 %), test=55.254 (+21.67 %); broad-based regression (cruise +27 %, single +25 %, rc +19 %, re_rand +18 %) — NOT predicted tandem-first signature. Mechanism: buffer half-life 6931 ≫ 1190 budget batches → uniform under-convergence. β2 axis basin locked end-to-end (under-smoothed at 0.99, optimum at 0.999, over-smoothed at 0.9999). Reassigned frieren to **#621 (lion-beta1-0p85)** — responsiveness lower-edge symmetric probe. |
 | #621 | frieren | lion-beta1-0p85 | Lion `betas = (0.9, 0.999) → (0.85, 0.999)` on merged #571 baseline | Symmetric probe of β1 axis (lower edge / +50 % responsiveness). #545 mapped β1 upper edge (0.95 lose, single-first gain pattern); lower edge unmapped. Tests whether more responsiveness compounds with β2=0.999's buffer smoothing (predicted tandem-first gain) or re-introduces noise (broad-based regression). Honest band −6 % to +12 %. |
+| #394 | thorfinn | torch-compile-throughput | `torch.compile(model, ema_model)` on merged #571 baseline | **MERGED 07:23** as new baseline (val=43.677 / test=36.920; **−16.19 % / −18.70 % vs #571**). Throughput multiplier (+43 % more epochs in budget). Same per-step behavior as eager baseline through ep14; entire Δ comes from 6 extra epochs of cosine descent. Eight orthogonal levers compose without interference. Permanent floor for round-2. |
+| #624 | thorfinn | smoothl1-volume-beta-0p5 | `vol_loss = MSE → SmoothL1(β=0.5)` on merged #394 baseline | Thorfinn's own follow-up #1; extends edward's surface β-axis L1-tail mechanism to volume. Currently `MSE_vol + 10·SmoothL1_surf(β=0.5)`; new is `SmoothL1_vol(β=0.5) + 10·SmoothL1_surf(β=0.5)`. Single-line change. Indirect gain through shared backbone (primary metric is surface-only). Honest band −6 % to +9 %. |
 
 ## Updated picture from round-1 returns
 - **#356 (EMA) merged** at val=132.276 (−3.1 % vs same-run best raw).

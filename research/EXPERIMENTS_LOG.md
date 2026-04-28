@@ -1489,3 +1489,63 @@ Cruise hardest hit; single second; tandem (rc, re_rand) least affected. **Opposi
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #621 | frieren | lion-beta1-0p85 | Lion `betas[0] = 0.9 → 0.85` on merged #571 baseline | Symmetric probe of β1 axis (lower edge / more responsiveness). Frieren's #545 mapped β1 upper edge (0.95 lose, single-first gain). β1=0.85 tests whether responsiveness compounds with β2=0.999's smoothing or re-introduces noise the buffer was meant to absorb. Honest band −6 % to +12 %. |
+
+## 2026-04-28 07:23 — PR #394: torch.compile(model, ema_model) for 20-35% per-epoch speedup (charliepai2d1-thorfinn) — **MERGED, new baseline**
+- Branch: `charliepai2d1-thorfinn/torch-compile-throughput` (4th rebase, finally on post-#571 LIVE config) → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `1e27b99`).
+- Hypothesis: `torch.compile(model, mode="default", dynamic=True)` + `torch.compile(ema_model)` for kernel fusion → fewer launches → throughput multiplier. Predicted band: −15 % to −25 %.
+
+### Headline metrics (best EMA epoch=20/50, timeout-cut)
+| metric | this run | post-#571 baseline (eager ep14) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **43.677** | 52.116 | **−16.19 %** |
+| `test_avg/mae_surf_p` | **36.920** | 45.413 | **−18.70 %** |
+| raw val (best at best EMA ep) | 46.174 | 59.097 | −21.87 % |
+| EMA−raw spread | −2.5 (narrow!) | −7 to −10 | tighter (raw near convergence) |
+| epochs in 30-min budget | **20** | 14 | **+6 (+43 %)** |
+| steady-state per-epoch | **93.8 s** | 131.0 s | **−28.4 %** |
+
+### Per-split — broad-based gain on every val and test split
+| Split | val Δ vs #571 | test Δ vs #571 |
+|---|---:|---:|
+| single_in_dist | **−19.71 %** (largest val) | **−18.40 %** |
+| geom_camber_rc | −8.69 % (laggard) | −13.80 % |
+| geom_camber_cruise | **−22.75 %** | **−24.92 %** (largest test) |
+| re_rand | −17.47 % | −21.25 % |
+
+### Mechanism (the cleanest throughput → metric demonstration on this branch)
+
+**Same per-step behavior, more epochs of cosine descent**:
+- ep14 EMA in this run = 51.549, baseline ep14 EMA = 52.116. Difference is +0.6 (−1.1 %), within run-to-run noise. **Per-step training behavior is essentially identical to the eager baseline through the first 14 epochs.**
+- The entire metric Δ comes from the **6 extra epochs (15–20)** that compile bought. EMA descends 50.25 → 43.68 from ep15 to ep20 — pure throughput → metric translation.
+- **EMA−raw spread narrowed to −2.5** (vs −7 to −10 in prior compile runs at smaller epoch counts). Lion + β2=0.999 + 20 epochs of cosine descent puts raw very close to convergence → EMA's smoothing premium shrinks because there's less iterate noise to filter. Healthy convergence signal.
+
+### Eight-orthogonal-levers compose without interference
+
+torch.compile + Lion + SwiGLU + TF32 + EMA + grad-clip + SmoothL1 + (lr=2.5e-4 + β=0.5 + β2=0.999) all stack:
+- Zero graph-break warnings, zero recompile log spam, no NaN, no real OOM.
+- Tightest steady-state band of any compile run on this branch (σ ≈ 0.7 s over ep4–20).
+- ep1 was *negative* compile overhead (106.4 s vs eager-baseline 132.2 s) — compile warmup absorbed into the smaller TF32-baseline ep1.
+- Compile gain larger than prior runs (−28.4 % vs −23-25 %) because TF32 + SwiGLU's 3-projection layout + dynamic shapes give Inductor more launch overhead to fuse.
+
+### Decision: merge as new baseline
+- Strict merge gate satisfied with substantial margin (−16.19 % val).
+- 13th merge on this branch; **second throughput multiplier** (#491 TF32 was first, +14 % epochs; this is +43 % more on top).
+- BASELINE.md updated; thorfinn idle and needs reassignment for round 2.
+- Throughput delivery rock-solid across **four rebases** (post-#356 −23.1 %, post-#417 −23.0 %, post-#398 −25.7 %, post-#571 −28.4 %).
+- **Permanent floor for round-2**: every subsequent PR will have +43 % more epochs in the 30-min budget. Future merge gates effectively widen as the cosine schedule has more epochs to descend through.
+
+## 2026-04-28 07:25 — Round-1.5 → 2 transition
+
+The basin maps for the major axes are now well-developed:
+- **Lion lr basin** under β2=0.99: optimum < 1.7e-4, basin upper edge in [2.85e-4, 3.3e-4] (#580 + #592 + #507 closed). Under β2=0.999: in flight (#580 + #592 re-running).
+- **Lion β2 basin**: locked end-to-end (0.99 under-smoothed, 0.999 optimum, 0.9999 over-smoothed via #571 win + #598 lose).
+- **Lion β1 basin**: upper edge mapped (#545 lose); lower edge in flight (#621).
+- **SmoothL1 β-axis**: 1.0 → 0.5 → 0.25 monotone (#352 → #535 merged, #567 in re-run).
+- **Schedule axis**: cosine T_max=14 winning under Lion (#560 in re-run).
+- **Activation shape**: GeGLU vs SwiGLU in re-run (#552).
+- **Capacity**: SwiGLU(168) optimum (#475/#514 closed, all swiglu_inner sweeps lose).
+
+With 20-epoch budget unlocked, every in-flight PR's expected delta widens. Round 2 candidates beyond hyperparameter-basin work:
+- Architecture (slice number, attention head count, hidden dim) — most untouched under Lion+compile regime.
+- Loss formulation (channel weighting, volume SmoothL1, physics-informed regularization).
+- Data augmentation, multi-scale slice attention, per-domain conditioning.
