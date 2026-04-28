@@ -1,5 +1,30 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 08:50 — PR #628: Lookahead optimizer wrapping AdamW (k=5, α=0.5) — **REQUEST CHANGES (rebase to Lion + test_single_in_dist concern)**
+
+- Branch: `charliepai2d5-tanjiro/lookahead-k5` (status:wip rebasing)
+
+### Results (on pre-Lion AdamW baseline)
+
+| metric | value | vs PR #496 baseline (73.29 / 69.49) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/24) | **70.62** | **−3.65%** (clears merge threshold on PR #496) |
+| `val_single_in_dist/mae_surf_p` | 84.88 | −2.54% |
+| `val_geom_camber_rc/mae_surf_p` | 82.50 | −2.99% |
+| `val_geom_camber_cruise/mae_surf_p` | 47.82 | −6.04% (largest gain) |
+| `val_re_rand/mae_surf_p` | 67.28 | −4.11% |
+| `test_avg/mae_surf_p` (3 clean) | 70.38 | +1.27% (worse, mixed) |
+| `test_single_in_dist/mae_surf_p` | 78.96 | **+11.27%** (regressed sharply) |
+| Val curve bumps | **1** (ep 16) | vs baseline's 4 — smoothing mechanism confirmed |
+
+### Decision
+
+Send back. Same mechanic issue as PR #627 (edward, also pre-Lion). Lookahead's smoothing mechanism is confirmed (1 val bump vs 4 in baseline) but the key question is whether it stacks with Lion's already-clean trajectory. Plus the +11.27% regression on `test_single_in_dist` is a structural concern — the Lookahead slow-weight pulls push the model into a slightly different basin that improves harder splits at the cost of the easy in-dist split.
+
+The pre-Lion val_avg=70.62 looks great, but vs current Lion baseline (56.19) it's +25.7% worse. Need rebase + rerun on Lion baseline to see if Lookahead's smoothing has anywhere to go on Lion's already-smooth trajectory (Lion had only 3 bumps in 17 transitions).
+
+
+
 ## 2026-04-28 08:45 — PR #627: Preprocess MLP depth +1 (pre-Lion baseline) — **REQUEST CHANGES (rebase to Lion + partial diagnostic)**
 
 - Branch: `charliepai2d5-edward/preprocess-depth-1` (status:wip rebasing)
