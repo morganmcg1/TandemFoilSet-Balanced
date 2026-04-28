@@ -1,5 +1,47 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 09:30 — PR #623: Higher peak LR ∈ {7e-4, 1e-3} on top of warmup=3
+- Branch: `charliepai2d4-alphonse/higher-lr-warmup3` (deleted on close)
+- Student: charliepai2d4-alphonse
+- **Outcome: CLOSED** (paired lr=7e-4 wins -2.96% val real but within ~5pp noise floor; absolute lags merged baseline #549).
+
+### Headline (3-arm sweep, EMA-evaluated, paired in same PR)
+| Run | best ep | val_avg | test_avg | Δ paired vs lr=5e-4 | Δ vs #549 |
+|---|---|---|---|---|---|
+| baseline-ref-lr5e-4 (paired ref) | 33 | 57.51 | 50.03 | (control) | +6.27% / +5.24% |
+| **lr7e-4-warmup3** | 33 | **55.81** | **48.08** | **-2.96% / -3.89%** | +3.13% / +1.13% |
+| lr1e-3-warmup3 | 33 | 56.45 | 48.09 | -1.85% / -3.87% | +4.31% / +1.16% |
+
+### Critical finding: noise floor confirmed
+**alphonse's same-pod reproduce of #549 lands at 57.51 vs recorded 54.12** — a 3.4pt gap on val. Cross-run noise on this stack (compile + bf16 + dynamic shapes + cudagraphs, no seeding) is **~3-4pt on val_avg, ~2.5pt on test_avg** — exactly the magnitude of the predicted lr-effect. The "lr=7e-4 paired wins by 2.96%" claim is real on paired-noise (same hardware, same code, runs back-to-back) but indistinguishable from absolute baseline noise without multi-seed retests.
+
+### Mechanism: warmup absorbs higher LR cleanly (predicted, confirmed)
+Grad-norm trajectories epochs 1-5 are essentially identical across the 3 runs:
+| epoch | lr=5e-4 gn_mean | lr=7e-4 gn_mean | lr=1e-3 gn_mean |
+|---|---|---|---|
+| 1 | 18.5 | 21.4 | 17.3 |
+| 2 | 54.9 | 44.2 | 39.5 |
+| 5 | 27.8 | 23.1 | 18.5 |
+
+- No NaN, no explosion at lr=1e-3 (predicted catastrophic failure didn't materialize).
+- Counter-intuitively, lr=1e-3 has the LOWEST grad-clip fraction at epoch 5 (87% vs lr=5e-4's 93%) — higher peak LR pushes through the high-grad regime faster.
+- All 3 runs descending monotonically through ep33, no late-epoch overshoot at lr=1e-3.
+
+### Why close
+- Paired -2.96% is real but within the same-stack noise floor (~3-4pt).
+- Absolute lr=7e-4 = 55.81 vs merged #549 = 54.12 = +3.13% behind.
+- Merging would set a new default lr=7e-4 that REPRODUCES at 55.81, worse than #549's recorded 54.12.
+- Multi-seed retest could resolve, but expensive (3-6 runs).
+
+### Round-2 / immediate follow-ups
+- **Full-stack measurement** (alphonse's #2): warmup3 + β=0.3 + FiLM + lr=7e-4 — untested combined config, highest-EV single experiment. Assigned next.
+- **Multi-seed retest infrastructure** (alphonse's #1): plumb `--seed` flag, run 3-seed paired triplicates. Round-2 candidate if noise issues persist.
+
+### Cross-stack data point (warmup3 + β=0.5 + no FiLM)
+alphonse's lr=7e-4 reproduce-of-#549-stack lands at val=55.81, test=48.08. This is the first direct measurement of "warmup3 + β=0.5 + lr=7e-4 + no FiLM" — adds to our cross-config map.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=623 records, 105 lines from all 3 sweep arms).
+
 ## 2026-04-28 09:10 — PR #599: Huber β finer-still sweep ∈ {0.1, 0.2, 0.4}
 - Branch: `charliepai2d4-askeladd/huber-beta-finest` (deleted on close)
 - Student: charliepai2d4-askeladd
