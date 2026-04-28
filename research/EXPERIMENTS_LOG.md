@@ -291,3 +291,109 @@ Best epoch = 13/50 (30-min timeout); peak VRAM 42.2 GB (no BF16 in this run).
 - **Critical diagnostic from the student (worth recording):** With decay=0.999 and warmup_epochs=5, the shadow has effective memory ~1000 steps (~2.7 epochs). Of that, ~32% of the shadow mass at epoch 13 still sits on warmup-era weights (lr=1e-4 regime where the model is barely learning). The shadow is contaminated by warmup gibberish.
 - **Send-back instructions:** (1) defer EMA initialization until after warmup completes; (2) sweep decay ∈ {0.999, 0.995}; (3) rebase onto BF16 baseline (17 epochs instead of 14 = more post-warmup steps to amortize); (4) log both EMA and live val_avg per epoch to verify the gap closes.
 - **Implementation correctness verified:** deepcopy isolation, no live-model overwrite, EMA state correctly checkpointed.
+
+---
+
+## 2026-04-28 22:58 — PR #848: Scale batch_size 4→8/10/12 to use BF16 VRAM headroom — closed
+
+- **Branch:** `askeladd/larger-batch-size` (closed)
+- **W&B runs:** `0zt9fppw` (bs=8), `qt40qg9s` (bs=10), `l829jyzw` (bs=12 OOM); baseline `newqt8dd` (bs=4) — group `larger-batch-size`
+- **Hypothesis:** With BF16 freeing 63 GB VRAM, larger batches (8/12) increase samples/step + smoother gradients → faster convergence and better OOD generalization.
+
+### Results (against merged BF16 baseline #811)
+
+| batch_size | val_avg/mae_surf_p ↓ | test_avg/mae_surf_p ↓ | best epoch | s/epoch | Peak VRAM | Δ val |
+|------------|---------------------:|----------------------:|-----------:|--------:|----------:|------:|
+| **4 (baseline)** | **127.40** | **116.21** | 17 | 108.7 | 33.1 GB | — |
+| 8 | 142.51 | 131.81 | 12 | 117.1 | 66.1 GB | +11.9% (worse) |
+| 10 | 147.23 | 134.43 | 15 | 119.9 | 82.6 GB | +15.6% (worse) |
+| 12 | OOM | — | — | — | >95 GB | failed (epoch 1) |
+
+### Commentary & Conclusions
+
+- **Decision: Closed (clean negative result with strong mechanistic analysis).**
+- **Both halves of the hypothesis flipped or failed:**
+  1. Per-sample throughput *regressed* from 13.79 → 12.41 samples/sec (bs=4→10) — the `add_derived_features` Python loop with per-sample CPU sync (`mask[b].sum().item()`) plus chunked pairwise distance is now the dominant cost at high B. **Vectorizing this is a separate throughput-engineering target.**
+  2. Same LR + larger batch → drastically fewer optimizer steps under 30-min wall clock (bs=10 hits only 35% of baseline's 6,375 steps). Linear LR scaling was deferred — and is almost certainly required.
+- **Gradient noise smoothing did hold:** max grad norm collapsed from 1225 (bs=4 baseline, one >1000 spike) to 572 (bs=8) to 0 spikes at higher B. The gradient signal *is* richer per step; we just take fewer of those steps.
+- **Per-split mixing pattern at bs=10:** `val_geom_camber_rc` improved (147.90 → 136.53) while `val_single_in_dist` collapsed (151.79 → 209.05). Larger batches reshuffle which split is favored — likely a sampler/domain-balance interaction.
+- **Real bottleneck identified:** `add_derived_features` Python loop in `train.py:79-98`. Removing the CPU-sync `.item()` calls and vectorizing the chunked pairwise distance is the unblocking lever before batch_size scaling becomes useful.
+- **Askeladd reassigned** to Huber-delta sweep (#885) — the validated signal from #739 deserves a clean delta optimum.
+
+---
+
+## 2026-04-28 23:04 — PR #796: FiLM-condition TransolverBlocks on log(Re) — closed
+
+- **Branch:** `willowpai2e5-alphonse/film-re-conditioning` (closed)
+- **W&B runs:** `2pqqhqo6` (no FiLM control), `b6qc62sq` (FiLM log-Re); pre-fix runs `2nn5hiyh` and `23tdi1dg` produced NaN test metrics — group `film-re-conditioning`
+- **Hypothesis:** FiLM(log Re) per-block conditioning gives the model an explicit Reynolds-regime signal so cross-Re generalization improves on `val_re_rand` (predicted −5 to −15%).
+
+### Results — paired comparison (both runs hit 30-min wall clock at epoch 13/50)
+
+| Split (lower better) | Baseline (no FiLM) | FiLM (log Re) | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist`/`mae_surf_p` | 169.39 | 159.84 | −5.6% |
+| `val_geom_camber_rc`/`mae_surf_p` | 143.55 | 153.87 | +7.2% |
+| `val_geom_camber_cruise`/`mae_surf_p` | 106.06 | 106.97 | +0.9% |
+| `val_re_rand`/`mae_surf_p` | 122.42 | 121.38 | **−0.9%** (predicted −5 to −15%) |
+| **`val_avg/mae_surf_p`** | **135.35** | **135.51** | **+0.1% (tied)** |
+| `test_avg/mae_surf_p` | 119.71 | 125.08 | **+4.5% (worse)** |
+
+### FiLM diagnostics at end of run (FiLM run)
+
+| Metric | Value | Interpretation |
+|---|---:|---|
+| `film/last_weight_l2` | 18.58 | grew from 0 — net is actively learning |
+| `film/gamma_dev_mean` | 0.26 | gamma drifting ~26% off identity |
+| `film/beta_abs_mean` | 0.23 | non-trivial bias shift |
+
+### Commentary & Conclusions
+
+- **Decision: Closed (clean negative on the primary diagnostic).**
+- **The hypothesis's predicted mechanism didn't materialize.** FiLM is *alive* (non-trivial gamma/beta on log-Re sweep, weights grew from zero) but the val_re_rand improvement is essentially noise (−0.9% vs predicted −5 to −15%). The model is *not* using log-Re modulation to close the cross-Re gap — log-Re is already in the input feature vector and the attention is plausibly extracting it adequately without FiLM-style explicit conditioning.
+- **Test_avg regressed by 4.5%.** This combined with the val tie is a strong signal that the conditioning is adding noise without a generalization payoff at this training budget.
+- **Implementation deviations from spec — all justified:**
+  - Used `x[:, 0, 13:14]` not `x[:, :, 13].mean(...)` because pad_collate right-pads with zeros (mean would mix in padding).
+  - Added `--use_film` flag for clean paired comparison.
+  - Re-zeroed FiLM final layer after `_init_weights` (otherwise trunc_normal overrides identity init).
+- **Bug fix flagged:** Student also identified the `nan*0=nan` issue in `data/scoring.py` (separately fixed in train.py since `data/` is read-only). This is a known issue from #763.
+- **Alphonse reassigned** to per-sample y-normalization (#896) — direct attack on the high-Re-dominates-loss issue that FiLM was hoping to fix indirectly.
+
+---
+
+## 2026-04-28 23:30 — PR #739: Replace MSE with Huber loss (delta=1.0) — sent back for rebase
+
+- **Branch:** `willowpai2e5-frieren/huber-loss` (sent back; major win; needs rebase onto BF16 baseline)
+- **W&B run:** `z2a34zbu` (`willowpai2e5-frieren/huber-loss-d1.0`) — group `huber-loss`
+- **Hypothesis:** Huber loss with delta=1.0 caps influence of high-Re outlier samples (per-sample y_std varies 10×), reducing gradient noise and improving OOD generalization.
+
+### Results (against PRE-merge code — no BF16, no warmup; comparable baseline = #763 features-only val_avg=141.42)
+
+| Split | Huber (best epoch 14, last epoch) | BF16 baseline #811 (best epoch 17) | Δ vs BF16 baseline |
+|-------|-----------------------------------:|-----------------------------------:|-------------------:|
+| `val_single_in_dist` | 125.13 | 151.79 | **−17.6%** |
+| `val_geom_camber_rc` | 110.93 | 147.90 | **−25.0%** |
+| `val_geom_camber_cruise` | 79.69 | 93.73 | **−15.0%** |
+| `val_re_rand` | 99.79 | 116.19 | **−14.1%** |
+| **val_avg/mae_surf_p** | **103.89** | **127.40** | **−18.5%** |
+
+| Test split | Huber (epoch 14) | BF16 baseline #811 | Δ |
+|-----------|----------------:|-------------------:|------:|
+| `test_single_in_dist` | 108.45 | 141.14 | −23.2% |
+| `test_geom_camber_rc` | 102.57 | 134.12 | −23.5% |
+| `test_geom_camber_cruise` | NaN (data bug repro on pre-merge code) | 79.09 | — |
+| `test_re_rand` | 96.78 | 110.49 | −12.4% |
+| `test_avg/mae_surf_p` | NaN (cruise) — 3-split avg = 102.60 | 116.21 | −20.2% on 3-split |
+
+Best epoch 14 = LAST epoch (timeout cut-off); val_avg trajectory `224.75 → 262.81 → 177.70 → 179.66 → 146.75 → 198.43 → 160.12 → 125.46 → 137.59 → 132.87 → 162.95 → 129.82 → 124.26 → 103.89` — **steepest descent in the final 2 epochs (124.26 → 103.89, −16.4% in one epoch). 103.89 is a lower bound on Huber's potential.**
+
+### Commentary & Conclusions
+
+- **Decision: Sent back for rebase onto BF16 baseline.** Result is a major win (−18.5% val_avg) but is on pre-merge code. We need the result on the merged baseline (BF16 + features + warmup) to get the actual stack effect, and the BF16 platform gives 1.20× more epochs in the same wall clock — this should make the result *better*, not worse.
+- **The 4-split improvement is consistent and strong.** All splits improve 14–25%. This is the largest single-PR improvement seen in the program so far. OOD splits (rc, cruise, re_rand) all improve by 14–25% — Huber is *not* just a single_in_dist trick.
+- **Mechanism likely real:** with `surf_weight=10` and per-sample y_std varying 10×, MSE gradient is dominated by 1–2 high-Re samples per batch. Huber caps that contribution at delta=1.0, letting low-Re samples contribute usefully.
+- **Run did not converge.** 14/50 epochs at 30-min cap; val curve was descending fast at cutoff. The post-rebase BF16 run gets ~17 epochs in same wall clock — 3 more steep-descent epochs available.
+- **NaN test_geom_camber_cruise:** this is the known IEEE-754 padded-batch issue. Already fixed in BF16 baseline via NaN-safe eval (#763). The rebase will inherit the fix and produce a clean 4-split test_avg.
+- **Validated independent investigation by student:** ran `batch_size=1` inference on cruise to confirm the NaN is a padding-related issue in `PhysicsAttention` (no node mask in attention), not a Huber problem.
+- **Implication for #885 (askeladd Huber-delta-sweep):** delta=1.0 on pre-merge code already wins by 18.5%; sweep delta ∈ {0.3, 0.5, 1.0, 2.0} on BF16 baseline becomes the natural follow-up (already in flight as #885).
+- **Send-back instructions to frieren:** (1) rebase onto current `icml-appendix-willow-pai2e-r5` (BF16 + features + warmup); (2) re-run with same `delta=1.0`; (3) confirm the −18.5% holds on the merged baseline.
