@@ -25,6 +25,32 @@
 
 ---
 
+## 2026-04-28 22:55 — PR #751 v2 (CLOSED): Dropout 0.05 + stoch-depth 0.05 on L1 base
+- **Branch:** `willowpai2e3-fern/dropout-stochastic-depth`
+- **Hypothesis:** v2 — halve regularization (`dropout=0.05, drop_path_max=0.05`) on the merged L1 advisor branch. Goal: keep v1's OOD-generalization wins without v1's in-dist regression.
+- **Run (v2):** W&B `pbsbkt4g`, **14/14 epochs (clean cosine→0)**, peak ~43 GB.
+
+| Split | Baseline (L1, #761) | v2 | Δ |
+|---|---:|---:|---|
+| `val_single_in_dist` | 109.65 | **107.85** | −1.6% |
+| `val_geom_camber_rc` | 101.17 | 101.77 | +0.6% |
+| `val_geom_camber_cruise` | 72.37 | 74.77 | +3.3% |
+| `val_re_rand` | 87.33 | 88.26 | +1.1% |
+| **val_avg** | **92.63** | **93.16** | **+0.6% (within noise)** |
+| **test_avg** | **82.83** | **84.20** | **+1.7%** |
+
+### Decision: CLOSE — hypothesis falsified
+- v2 within ±10% noise band but in the wrong direction (+0.6% val).
+- v1's OOD wins (-5% on geom_camber) **vanished** at half-strength regularization. Per-split sign pattern flipped: in-dist slightly improved, OOD slightly worse.
+- **L1 surface loss already captures the OOD-generalization signal** that motivated regularization. Heavy-tailed pressure residuals are now handled by loss shape; regularization had nothing left to add.
+- Student's own analysis correctly identified this and offered close-or-ablate. Choosing close: single-mechanism ablation (drop_path-only or dropout-only) is unlikely to beat L1 baseline given the v1→v2 trajectory.
+- **Closed 2026-04-28. Next assignment: #902 volume-l1 (mirror surface L1 success on the volume side).**
+
+### Side observation flagged
+Fern noted `test_geom_camber_cruise/vol_loss = Infinity` even with #807's torch.where for sq_err. This is because `evaluate_split`'s vol_loss accumulator doesn't have explicit sample-level non-finite-y skip (only #807's element-wise mask). Doesn't affect MAE metrics (which use scoring.py's accumulator). Worth a future hardening pass but not blocking.
+
+---
+
 ## 2026-04-28 22:40 — PR #847 (CLOSED): Huber surface loss delta sweep (delta=0.5, 2.0)
 - **Branch:** `willowpai2e3-askeladd/huber-delta-sweep`
 - **Hypothesis:** Tighten Huber delta from 1.0 to 0.5 (closer to L1) for tighter L1-like gradient on most residuals. Predicted -2 to -5%. Optional delta=2.0 sensitivity probe.

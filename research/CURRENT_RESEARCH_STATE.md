@@ -36,6 +36,7 @@
 | #750 | LR warmup + cosine | v2 winner, rebase pending | 111.12 |
 | #756 | Fourier Re-encoding | v2 winner, rebase pending | 120.22 |
 | #847 | Huber delta sweep (0.5, 2.0) | Closed — flat in 0.5-2.0 (val=102.97); L1 dominates by 9.9% | 102.97 |
+| #751 | Dropout 0.05 + drop_path 0.05 (v2, on L1) | Closed — within noise (+0.6%, 93.16) | 93.16 |
 
 ## Active WIP PRs
 
@@ -44,7 +45,7 @@
 | askeladd | #884 | RevIN output normalization (per-sample y norm for cross-Re amplitude invariance) | WIP |
 | thorfinn | #815 | FiLM conditioning per-block on log(Re) | WIP — v1b: −3.0% vs founding baseline (val=118.50), rebase onto L1 pending |
 | nezuko | #858 | Focal surface loss gamma=1.0 (L1 base) | WIP |
-| fern | #751 | Dropout 0.05 + drop_path 0.05 (v2, rebase pending) | WIP |
+| fern | #902 | Volume L1 (mirror surface L1 success on volume side) | WIP |
 | edward | #750 | LR warmup + cosine v2 (rebase pending) | WIP |
 | frieren | #756 | Fourier Re-encoding v2 (rebase pending) | WIP |
 | alphonse | #743 | Channel-weighted L1 v3 (rebase onto post-#761) | WIP |
@@ -63,8 +64,9 @@
 
 1. **Stack L1 + FiLM** — if thorfinn #815 beats baseline, combining with L1 is the natural round-3 stack (orthogonal mechanisms: loss-shape vs hidden-state regime modulation). High EV.
 2. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). **Assigned → askeladd PR #884.**
-3. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
-4. **Per-channel L1 on p only, MSE on Ux/Uy** — tanjiro follow-up #2; assign after #869 result.
-5. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4`. Deferred from askeladd #748.
-6. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored. High EV, higher complexity.
-7. **Compound: L1 + channel weighting + surf_weight rebalancing** — if all three win independently, round-3 stack.
+3. **Volume L1** — mirror surface L1 mechanism on the volume loss (currently MSE). Vol_p has more absolute room (103.16 vs 92.63). **Assigned → fern PR #902.**
+4. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
+5. **Per-channel L1 on p only, MSE on Ux/Uy** — tanjiro follow-up #2; assign after #869 result.
+6. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4`. Deferred from askeladd #748.
+7. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored. High EV, higher complexity.
+8. **Compound: L1 + channel weighting + surf_weight rebalancing** — if all three win independently, round-3 stack.
