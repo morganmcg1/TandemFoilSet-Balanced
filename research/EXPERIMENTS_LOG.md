@@ -824,3 +824,44 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
   2. **reduce-overhead with `dynamic=True`** — keeps variable shapes but lets reduce-overhead share a graph across compatible shapes. Cheaper to implement.
   3. **TF32 matmul precision** (`torch.set_float32_matmul_precision("high")`) — independent of compile mode; helps eager too.
   4. **DropPath graph break removal** — replace `torch.rand(1).item()` with tensor-mask form. Few-percent win on top.
+
+## 2026-04-28 08:40 — PR #635: lr peak bump 5e-4 → 6e-4 (gentler 3-ep warmup permits 1.2× peak)
+- Branch: `charliepai2d2-edward/lr-peak-6e-4` (artifact: `model-lr-peak-6e-4-20260428-075310`)
+- Hypothesis (per fern's PR #562 follow-up #3): the gentler 3-ep warmup with start_factor=0.3 widens the safe-LR window; lr=6e-4 (1.2×) may train stably and extract more from the high-LR phase.
+
+| metric | this run (lr=6e-4) | baseline (PR #562 = 64.696 / PR #510 = 64.824) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **63.131** (epoch 17) | 64.696 / 64.824 | **−2.42% / −2.61%** |
+| `test_avg/mae_surf_p` | **55.026** | 55.879 | **−1.53%** |
+
+- Per-split val: in_dist **−4.56%**, camber_rc +1.71% (only regression), camber_cruise **−4.91%**, re_rand **−3.04%**.
+- Per-split test: in_dist 64.501, camber_rc 68.074, camber_cruise 35.466, re_rand 52.064 — all 4 improve vs eager baseline.
+- LR trajectory: ep1=1.80e-4, ep2=3.20e-4, ep3=4.60e-4, ep4=6.00e-4 (peak), cosine to ep15=0, then wraparound to ep17=4.76e-5.
+- Grad-clip diagnostics: ep1 mean=21.5 (+10% vs PR #582), max=81.5 (+33%), but clip rate FELL to 82.7% (vs PR #582's 85.6%) — because the gentler 3-ep warmup means ep1 effective LR is only 1.80e-4. Counter-intuitive but mechanistically clean.
+- **Late-epoch slope shape changed**: model gets into fine-tuning regime SOONER. By ep12, val_avg=66.9 already close to final 63.13. PR #562 was still mid-optimization at ep12 with much larger remaining drop.
+- Decision: **MERGE** as a clean orthogonal compound. Hypothesis confirmed; 3-ep warmup widens safe-LR window; clip absorbs modest grad-norm increase without saturating.
+- Suggested follow-ups (per edward):
+  1. **lr=7e-4 (1.4× original peak)** under same warmup — clip rate well-behaved, may have more headroom.
+  2. T_max=12 or 13 to push the peak-LR phase wider.
+  3. cosine eta_min > 0 to avoid the LR=0 wasted epoch (already nezuko's #630).
+  4. Investigate val_geom_camber_rc regression (consistent across multiple recent merges).
+
+## 2026-04-28 08:40 — PR #636: Decaying feature-noise schedule aligned with cosine LR
+- Branch: `charliepai2d2-frieren/feature-noise-decaying` (artifact: `model-charliepai2d2-frieren-feature-noise-decaying-20260428-075320`)
+- Hypothesis (per frieren's PR #595 follow-up #2): the fixed std=0.0025 has to compromise between basin-selection (early phase) and gradient-noise tax (fine-tuning tail). A schedule that decays noise to zero by epoch 14 should let early-phase regularization continue while leaving the tail clean.
+
+| metric | this run (decaying) | baseline (PR #562 = 64.696 / PR #510 = 64.824) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **63.222** (epoch 17) | 64.696 / 64.824 | **−2.28% / −2.47%** |
+| `test_avg/mae_surf_p` | **54.900** | 55.879 | **−1.75%** |
+
+- Per-split val: in_dist −1.60%, camber_rc +1.61%, **camber_cruise −8.89% (biggest single-split gain in this round)**, re_rand −3.19%.
+- Per-split test: all 4 improve. cruise **−6.47%** biggest.
+- Schedule trajectory (linear decay): ep1=0.0025, ep4=0.00196, ep11=0.000714, ep14=0.000179, ep15+=0.0 exactly (matches LR=0 at ep15).
+- **Late-epoch slope shape changed**: biggest single-epoch improvement now at ep12→13 (−3.00) when noise std drops from 0.000536 → 0.000357. Post-noise tail (ep15–17, std=0) keeps descending 0.5–0.6 pts/epoch — the cleaner signal *does* keep helping under the cosine LR cycle-back, confirming EMA was NOT fully absorbing late-phase noise.
+- Decision: **MERGE** as a clean orthogonal compound. Realized −2.28% exceeded the optimistic prediction (−1.0% to +0.3%). Cruise OOD split is disproportionately responsive to clean fine-tuning signal.
+- Suggested follow-ups (per frieren):
+  1. **Two-phase (step) schedule** — abrupt cutoff at ep≥11 instead of linear decay. Isolates whether ramp-down or just tail-zero is the active ingredient.
+  2. Late-phase nonzero noise probe (stop at 0.0008 instead of 0). Tests whether tail-zero is necessary or just lower-noise tail.
+  3. **Higher base_std=0.005 with steeper decay (decay_horizon=8)** — more early regularization, no late-phase cost.
+  4. Match cruise win on camber_rc — variant with surface-only or per-sample-only noise schedules.
