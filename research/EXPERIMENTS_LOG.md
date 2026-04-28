@@ -218,6 +218,24 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - **Aliasing diagnosis is directionally correct but not the complete story**: substantial recovery on cruise and re_rand at bands=4 supports the high-freq-aliasing mechanism, but neither returned all the way to baseline. The residual harm at bands=4 (max freq=8, ~5 cycles across the 4-log-unit corpus) suggests either (a) even ~5 cycles still gives the model some Re-fingerprint structure, or (b) Fourier embedding intrinsically creates per-Re features that disrupt cruise/re_rand generalization regardless of frequency content.
 - Decision: **CLOSE.** Doesn't beat the SwiGLU baseline (88.227); the Fourier-Re direction has real signal on `val_single_in_dist` but doesn't compound enough to win overall. Student's follow-up #4 (FiLM-style scale-shift on input features by a small MLP of `log_re`) is a cleaner test of whether ANY Re-conditioning helps — queued.
 
+## 2026-04-28 02:25 — PR #440: Switch GELU → SiLU in preprocess MLP and output head
+
+- Branch: `charliepai2d2-tanjiro/silu-everywhere` — metrics committed.
+- Hypothesis: consistent SiLU activation throughout the model (matching SwiGLU FFN's internal SiLU) gives small additional wins via consistent activation curvature. Predicted −0.5% to −2%.
+- Result: best `val_avg/mae_surf_p = 88.128` at epoch 13. **Null result**: −0.11% vs SwiGLU baseline (88.227, well within RNG noise); +1.06% on test (79.172 vs 78.338). Vs the now-current EMA(0.99) baseline (83.223): +5.9%.
+- Per-epoch trajectory was statistically indistinguishable from the SwiGLU baseline (within ~0.3 pts at every epoch).
+- Param-identical (670,679 = baseline exactly).
+- Decision: **CLOSE.** Activation choice (GELU vs SiLU) is below the noise floor at this scale (0.67M params, 1499 train samples). Student's recommendation to deprioritize activation sweeps is correct.
+
+## 2026-04-28 02:25 — PR #425: Input feature noise augmentation (std=0.01 on fun-features only)
+
+- Branch: `charliepai2d2-frieren/input-noise-001` — metrics committed.
+- Hypothesis: per-node Gaussian noise (std=0.01) on fun-feature channels (dims 2–23) targets the generalization bottleneck on OOD-camber and re_rand splits. Predicted −1% to −3% with disproportionate help on `val_geom_camber_rc` and `val_re_rand`.
+- Result: best `val_avg/mae_surf_p = 89.984` at epoch 13. **+1.76% vs SwiGLU baseline; +8.1% vs current EMA(0.99) baseline (83.223).** test_avg = 80.607 (+2.27%).
+- Per-split val: single_in_dist 105.62 (−0.73%), camber_rc 102.96 (**+2.55%**), camber_cruise 68.05 (+5.65%), re_rand 83.31 (**+1.97%**). **Both predicted-to-improve splits got worse** — exact opposite of the prediction.
+- **Student's structural diagnosis (excellent)**: roughly half the fun-feature channels (`log(Re)`, AoA1, NACA1, AoA2, NACA2, gap, stagger — dims 13–23) are **constant within a sample** (per-sample globals encoding flow / geometry conditions). Per-node `randn_like` noise gives every mesh node a different "Reynolds number," a different camber, etc., **within the same forward pass** — destroying the consistency the model relies on to map (foil geometry, flow conditions) → flow field. Per-node noise is structurally wrong for this dataset's feature semantics.
+- Decision: **CLOSE.** Direction not dead in absolute terms — student's follow-up #1 (per-sample noise on the constant-per-sample dims, broadcast across all N nodes; keep per-node noise on the truly per-node dims 2–12) is queued as PR #460. This is the cleanest correction of the failure mode.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
