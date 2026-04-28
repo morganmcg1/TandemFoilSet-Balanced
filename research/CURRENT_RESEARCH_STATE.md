@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-28 21:15
+- 2026-04-28 21:30
 - No recent research direction from human researcher team (no open GitHub issues found)
 - Current research focus and themes:
 
@@ -33,7 +33,7 @@ Every prior result needs to be re-judged against the new baseline. Specifically,
 | #767 | fern | surf_weight 10→50 | WIP (rebased on clipping baseline) |
 | #766 | edward | n_layers 5→8 | WIP |
 
-All 8 students have active WIP assignments. No idle students.
+All 8 students have active WIP assignments. No idle students. Checked 2026-04-28 21:30 — no PRs ready for review yet, all experiments still running.
 
 ## Potential Next Research Directions
 
