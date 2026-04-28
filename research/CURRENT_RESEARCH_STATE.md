@@ -25,7 +25,7 @@
 | **#544** | **thorfinn** | **Loss / metric alignment** | **surf_weight=15 on pure-L1 baseline** (clean re-test of round-1 directional finding on new baseline) |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
-| **#531** | **fern** | **Sampling** | **Per-Re weighted sampling: weight ∝ sqrt(Re/Re_median[domain])** |
+| #531 | fern | Sampling | Per-Re weighted sampling — sent back to rebase onto pure L1 baseline (val_avg=65.61 on Huber → +14.5% vs L1; mechanism is fully orthogonal so should stack) |
 
 ## Reviewed (round 1+)
 

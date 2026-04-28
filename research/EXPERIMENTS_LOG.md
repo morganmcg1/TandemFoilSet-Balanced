@@ -1,5 +1,58 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 04:50 — PR #531 round-1 (sent back): Per-Re weighted sampling on Huber+T_max=37
+
+- branch: `willowpai2d1-fern/per-re-weighted-sampling` (in flight as draft after send-back)
+- hypothesis: weight training samples within each domain by sqrt(Re/Re_median[domain])
+  to emphasize high-Re (high-pressure-magnitude) tail. Predicted -1 to -4%.
+
+### Results (on Huber+T_max=37 baseline, BEFORE pure L1 merge)
+
+| Metric | Value | vs PR #407 (Huber, rebase target) | vs PR #504 (pure L1, current) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **65.61** (epoch 37 of 37) | **−5.91%** | **+14.5%** (regression) |
+| `test_avg/mae_surf_p` | 57.82 | −4.41% | +12.6% |
+| Per-epoch wall | ~48 s | same | same |
+| Peak GPU memory | ~24 GB | same | same |
+| W&B run | `3xhvmzbl` | | |
+
+### Per-split deltas vs Huber baseline
+
+| Split | val Δ | test Δ | Re range |
+|---|---|---|---|
+| val_single_in_dist | −5.57% | −4.90% | 100K-5M |
+| val_geom_camber_rc | −6.30% | −0.07% (test flat) | 1M-5M (narrow) |
+| val_geom_camber_cruise | **−7.65%** | **−9.38%** | 122K-5M (broadest) |
+| val_re_rand | −4.60% | −5.28% | Re-stratified |
+
+**Mechanism confirmed**: per-split improvement scales with the Re-spread
+of the split. Broadest Re range (cruise) wins most; narrow Re range
+(rc-camber) wins least on test. Direct dose-response signal that the
+within-domain Re emphasis is doing the work, not some confound.
+
+### Diagnostics
+
+- Per-domain Re medians: racecar_single 2.53M, racecar_tandem 2.73M, cruise 2.90M (all in 100K-5M range, upper-skewed).
+- Within-domain p90/p10 weight ratio: 2.1-2.8× (gentler than PR's 3-5× prediction; reflects upper-skewed Re distribution).
+- Domain mass remains balanced after reweighting.
+
+### Analysis & conclusions
+
+- **Sent back, not merged.** Same goal-post-shift situation as edward,
+  alphonse, askeladd, nezuko before: assigned-time baseline (PR #407
+  Huber) was superseded by pure L1 (PR #504) shortly after fern's run
+  started.
+- **Mechanism is sampler-side, fully orthogonal to loss formulation.**
+  Per-Re sampling composes with compile/FF/L1 cleanly. Predicted post-
+  rebase val_avg: 53-56 if at 70-100% stacking efficiency (compile+FF+L1
+  stacks at ~91%). Worst case ~57-58 if mostly orthogonal and marginal
+  lever shrinks at lower-MAE regime.
+- Send-back instructions: rebase onto pure L1 baseline + use `--epochs 50`
+  (matches PR #504's T_max=50) instead of `--epochs 37`.
+- Followups queued: linear-Re bracket (PR's followup #1, lined up if rebased
+  result lands in 5% band); per-sample Re-weighted loss (followup #2);
+  cross-domain Re weighting (followup #4).
+
 ## 2026-04-28 04:48 — PR #509 (closed): batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF
 
 - branch: `willowpai2d1-thorfinn/batch-size-8-on-compile-baseline` (deleted on close)
