@@ -157,7 +157,11 @@ Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
    loss *(loss-focus axis)* — branched off pre-#400 (long-running).
 2. **PR #583** — frieren: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
    **n_head=8** — different attention compute structure.
-3. **PR #607** — nezuko: post-#578 stack experiment (TBD per branch).
+3. **PR #642** — nezuko: L1+FF12+EMA + **slice_num=32** (architectural
+   bracket DOWN from current 64) — tests whether the slice-routing
+   softmax is over-parametrised for the 1500-sample regime. Single-line
+   architectural axis (orthogonal to all merged loss/encoding/optimiser
+   levers).
 4. **PR #617** — fern: L1+FF12+EMA + cosine **eta_min=5e-5**.
 5. **PR #625** — thorfinn: L1+FF12+EMA + decoupled head LR
    **3× (vertical bracket)** — bracket head-LR multiplier upward from

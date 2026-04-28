@@ -1,5 +1,47 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 08:13 — PR #607 (CLOSED): annealed input noise sigma=0.05→0
+- Branch: `charliepai2d3-nezuko/l1ff12-ema-cos14-lr-7p5e-4-anneal-noise` (deleted)
+- Hypothesis: Linear-anneal input-space Gaussian noise (sigma 0.05 → 0 over 12 epochs, noise-free for ep13-14) front-loads regularisation while letting late-epoch fine-tuning converge cleanly. Addresses PR #569's "best epoch is final epoch" diagnostic.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | annealed (this PR) | branched-base PR #572 | current advisor PR #578 |
+|--------|------------------:|----------------------:|------------------------:|
+| `val_avg/mae_surf_p` | 78.30 | 77.78 (+0.67%) | 75.78 (**+3.32% REGRESSION**) |
+| `test_avg/mae_surf_p` | 68.44 | 67.71 (+1.08%) | 66.27 (+3.27%) |
+
+### Per-split val
+
+| split | branched base (#572) | this PR (annealed) | Δ |
+|-------|---------------------:|-------------------:|--:|
+| val_single_in_dist     | 92.62 | 92.69 | +0.08% (flat) |
+| val_geom_camber_rc     | 91.34 | 90.80 | **−0.59%** (mild win) |
+| val_geom_camber_cruise | 52.94 | 54.06 | +2.12% (regressed) |
+| val_re_rand            | 74.21 | 75.65 | +1.94% (regressed) |
+
+### Annealed vs PR #569 fixed σ=0.05
+
+| split | fixed σ (#569) | annealed (this PR) | shift |
+|-------|---------------:|-------------------:|-------|
+| val_single_in_dist     | −1.04% | +0.08% | won → flat (lost the win) |
+| val_geom_camber_rc     | +2.50% | −0.59% | **regression → win** |
+| val_geom_camber_cruise | +5.49% | +2.12% | **regression halved** |
+
+### Analysis
+
+Anneal partially validated the late-epoch hypothesis: rc-camber flipped from regression to win, cruise regression halved. **But** in-dist lost its win and re_rand regressed — net val_avg worsens. 3 of 4 splits regress or flat.
+
+Both PR #569 (fixed σ) and this PR (annealed σ) provide a **strong null on input-space additive noise** as a lever on this stack. The student's own conclusion: "input-noise lever appears to be at the regularisation knee on round-3's stack" (EMA + L1 + aux log-p + grad clipping is saturating the regularisation budget).
+
+### Decision: CLOSED
+
+Within-class brackets (anneal duration 6 vs 12 epochs, position-channel-only noise) deferred — per-split signal already characterised. Student's suggestion #3 (different regulariser class — SWA-style averaging beyond EMA, target-space transforms, physics-informed constraints) noted for round-5 mechanism-class change.
+
+Reassigning nezuko to **slice_num bracket downward (64 → 32)** — architectural axis untouched in round 3 except PR #292's bracket up (128, +45% regression). Mechanistically distinct from all merged levers (which are loss/encoding/optimisation, not architecture). Tests whether 64 slices over-parametrise the slice-routing softmax for 1500-sample regime.
+
+---
+
 ## 2026-04-28 08:02 — PR #616 (CLOSED): max_norm=10.0 (continue bracketing clip up)
 - Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-7p5e-4-clip10` (deleted)
 - Hypothesis: Continue bracketing clip from 5.0 → 10.0 to test whether clip-tightness optimum is at-or-below 5.0 or further loosening still helps.
