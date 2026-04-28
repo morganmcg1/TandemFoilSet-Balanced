@@ -1,5 +1,36 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 07:30 — PR #604 (tanjiro eta_min=0.05) and PR #603 (edward LLRD=0.9) — **BOTH CLOSE; key diagnostic on early-layer learning**
+
+### Results
+
+| PR | Hypothesis | val_avg | test 3-clean | Verdict |
+|----|------------|--------:|---:|---|
+| #604 | eta_min_ratio=0.05 (refined from 0.1) | 74.86 (+2.15%) | 72.04 (+3.66%) | Close — tail-only effect didn't materialize |
+| #603 | LLRD decay=0.9 | 78.26 (+6.78%) | 75.67 (+8.89%) | Close — but per-split pattern is the find of the round |
+
+### Decision
+
+Both close.
+
+**The eta_min axis is now settled across two PRs (#579 at 0.1, #604 at 0.05).** Both diverged from baseline before the schedule tail because the mid-cosine LR boost compounds across 9 cosine epochs. The cosine-to-zero schedule is doing the right thing on this stack.
+
+**Edward's LLRD result is the most informative finding of this round.** Per-split pattern:
+- val_geom_camber_cruise (hardest OOD): **+25.0%** (regressed sharply)
+- val_re_rand (OOD Re): +10.7%
+- val_geom_camber_rc (OOD geom): +2.1%
+- val_single_in_dist (in-dist): **−2.5%** (slightly improved)
+
+This is the exact signature of "early-layer learning is load-bearing for OOD generalization" — the slice-attention partition learned in `block_0` / `block_1` is what enables the model to handle unseen geometries. Underdriving those layers with LLRD's `0.656× lr` leaves the model with a partition tuned to the in-dist training data. Small train-vs-val gap (12% relative) rules out the "LLRD as regulariser" alternative — both train and val got worse.
+
+**Productive direction this opens:** *Increase* early-layer expressivity (rather than decrease early-layer LR). Edward's reassignment tests this directly.
+
+Reassigned tanjiro to **Lookahead optimizer** (PR #628) — wraps AdamW with periodic slow-weight pulls. Different mechanism from saturated EMA (Lookahead injects slow weights into active training trajectory; EMA was eval-only averaging).
+
+Reassigned edward to **Preprocess MLP depth +1 hidden residual layer** (PR #627) — directly tests the "more early-layer expressivity" hypothesis derived from the LLRD diagnostic. If the early-layer learning hypothesis is right, OOD splits should improve (mirror image of LLRD's regression pattern).
+
+
+
 ## 2026-04-28 07:00 — PR #589 (alphonse n_hidden=160) and PR #590 (thorfinn mlp_ratio=4) — **BOTH CLOSE; major systemic update**
 
 ### Results
