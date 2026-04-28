@@ -1,5 +1,48 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 00:49 — PR #384 (closed): Domain-bucketed batch sampler
+
+- branch: `willowpai2d1-fern/domain-bucketed-sampler` (deleted on close)
+- hypothesis: bucket batches by domain so each batch is homogeneous in mesh
+  size, cutting padding waste from `pad_collate`. Predicted ~1.2-1.5×
+  per-epoch speedup; predicted -2% to -6% on val_avg.
+
+### Results
+
+| Metric | Value | vs PR #359 baseline (bf16) |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **125.91** (epoch 15 of 16) | **+3.3%** (worse) |
+| `test_avg/mae_surf_p` | 115.40 | +3.8% (worse) |
+| Per-epoch wall (mean) | **115.2 s** | **+17%** (slower!) |
+| Peak GPU memory | **42.1 GB** | **+28%** (more) |
+| Epochs completed | 16 / 50 | -3 |
+| W&B run | `00fl62dc` | — |
+
+vs old (pre-bf16) baseline: −12.7%, but ranking is now against the new
+post-bf16 baseline.
+
+### Analysis & conclusions
+
+- **Closed.** Hypothesis falsified — bucketing made throughput *worse*, not
+  better. Two-mechanism explanation from fern is convincing:
+  1. **CUDA caching-allocator fragmentation.** Cycling between 3 max_n
+     shapes (4×210K, 4×127K, 4×85K) defeats the allocator's pool reuse —
+     the old WeightedRandomSampler had ~80% of batches padding to ~210K so
+     the allocator settled on a single dominant pool. Bucketing forces
+     three pools.
+  2. **Dataloader pipeline mismatch.** GPU step time varies ~2.5× across
+     domains while pad_collate worker time is roughly constant; bucketing
+     breaks the worker-GPU pipeline overlap.
+- The +28% memory regression is consistent with allocator fragmentation;
+  the +17% wall regression is consistent with both mechanisms.
+- **Throughput-via-sampler is ruled out** as a quick win on this trainer.
+  Future throughput attempts should look at `torch.compile`, attention
+  flavor swaps, or gradient checkpointing (when scaling capacity), not
+  sampler shape.
+- Followups parked: length-bucket only the cruise outlier, sort-and-bucket
+  NLP-style, memory_history diagnostic. None promising enough to assign
+  immediately.
+
 ## 2026-04-28 00:20 — PR #313 (sent back): Pressure-channel-weighted MSE (5x p)
 
 - branch: `willowpai2d1-askeladd/pressure-channel-loss-weight`
