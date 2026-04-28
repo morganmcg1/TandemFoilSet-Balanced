@@ -922,3 +922,23 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
   3. Global init=1.5 (no schedule) — test if per-block parameters naturally find the asymmetry without an init prior.
   4. Extend training budget (T_max=14 with same compile setup).
   5. Per-head per-block init (5×4 separate scalars).
+
+## 2026-04-28 09:15 — PR #646: batch_size 4 → 6 with compile (gradient noise reduction)
+- Branch: `charliepai2d2-fern/batch-size-6` (artifact: `model-batch-size-6-20260428-082139`)
+- Hypothesis: larger batch reduces gradient noise (variance ∝ 1/B); cleaner gradients may compound with EMA averaging at zero per-step throughput cost under compile.
+
+| metric | this run (batch=6) | baseline-at-run-time (PR #562 = 64.696 / PR #510 compile = 64.824) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **63.384** (epoch 18) | 64.696 / 64.824 | **−2.03% / −2.22%** |
+| `test_avg/mae_surf_p` | **55.317** | 55.879 / 56.391 | **−1.00% / −1.91%** |
+
+- Vs **current** baseline (post-PR #647 + #640 + #601 + #635 + #636 = 61.872): val_avg 63.384 = **+2.44% regression** (cross-stack).
+- Per-split val: in_dist +0.44, camber_rc +0.44 (both flat), camber_cruise **−3.21** (biggest gain), re_rand **−2.92**.
+- Per-split test: cruise 33.898, re_rand 51.015 (both improve).
+- Wall-clock: 101.6 s/epoch (slightly faster than batch=4 compile baseline 103.4 s/epoch); 250 batches/epoch (vs 375 at batch=4); peak VRAM 63.83 GB (matches predicted ~63 GB).
+- **Mechanism confirmed**: gradient-noise reduction (variance ratio 0.82× between batch=6 and batch=4) helps OOD splits most while in-dist splits are flat. Cleaner gradients matter more for OOD generalization than in-distribution fitting.
+- Decision: **SEND BACK FOR REBASE**. Standalone same-stack gain is real (-2% range) but vs current baseline (+2.44% regression) it doesn't merge directly. The advisor branch moved 4 points lower since fern branched. Critical question: linear-scaling rule says lr should scale with batch_size; with lr=6e-4 (PR #635) merged, the lr × batch interaction is uncharacterized. Rebased run will resolve both questions cleanly.
+- Suggested follow-ups (per fern):
+  1. **batch=8** — predicted peak VRAM ~85 GB still under 96 GB cap; variance ratio 1/√2 vs batch=4.
+  2. **batch=6 + lr scaling** — explicit lr scaling test (lr=6e-4 → 7.5e-4 with batch=6, linear scaling rule).
+  3. **Track gradient noise scale (GNS)** — instrumentation to predict optimal batch size analytically.
