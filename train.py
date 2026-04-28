@@ -477,7 +477,7 @@ _write_jsonl({
     "wandb_name": cfg.wandb_name,
     "agent": cfg.agent,
     "git_commit": _git_commit_short(),
-    "loss_kind": "mae",
+    "loss_kind": "smooth_l1_delta1.0",
     "config": asdict(cfg),
     "model_config": model_config,
     "n_params": n_params,
@@ -509,12 +509,19 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()
+        HUBER_DELTA = 1.0
+        err = pred - y_norm
+        abs_err = err.abs()
+        sl1_err = torch.where(
+            abs_err < HUBER_DELTA,
+            0.5 * err.pow(2) / HUBER_DELTA,
+            abs_err - 0.5 * HUBER_DELTA,
+        )
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (sl1_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (sl1_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
