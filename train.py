@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -214,6 +215,56 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# EMA of weights
+# ---------------------------------------------------------------------------
+
+
+class EMA:
+    """Exponential moving average of model parameters, evaluated at val/test time."""
+
+    def __init__(self, model: nn.Module, decay: float, warmup_steps: int):
+        self.decay = decay
+        self.warmup_steps = warmup_steps
+        self.step_count = 0
+        self.shadow = {
+            n: p.detach().clone()
+            for n, p in model.named_parameters()
+            if p.dtype.is_floating_point
+        }
+
+    def update(self, model: nn.Module) -> None:
+        self.step_count += 1
+        if self.step_count <= self.warmup_steps:
+            for n, p in model.named_parameters():
+                if n in self.shadow:
+                    self.shadow[n].copy_(p.detach())
+            return
+        d = self.decay
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                if n in self.shadow:
+                    self.shadow[n].mul_(d).add_(p.detach(), alpha=1 - d)
+
+    @contextmanager
+    def apply_to(self, model: nn.Module):
+        """Swap live weights with EMA weights for the duration of the block."""
+        backup = {
+            n: p.detach().clone()
+            for n, p in model.named_parameters()
+            if n in self.shadow
+        }
+        for n, p in model.named_parameters():
+            if n in self.shadow:
+                p.data.copy_(self.shadow[n])
+        try:
+            yield
+        finally:
+            for n, p in model.named_parameters():
+                if n in backup:
+                    p.data.copy_(backup[n])
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -336,6 +387,9 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "use_ema": cfg.use_ema,
+        "ema_decay": cfg.ema_decay,
+        "ema_warmup_steps": cfg.ema_warmup_steps,
     }
 
     description = (
@@ -391,6 +445,9 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     n_layers: int = 5
+    use_ema: bool = True
+    ema_decay: float = 0.999
+    ema_warmup_steps: int = 100
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -441,6 +498,10 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema = EMA(model, decay=cfg.ema_decay, warmup_steps=cfg.ema_warmup_steps) if cfg.use_ema else None
+if ema is not None:
+    print(f"EMA enabled: decay={cfg.ema_decay}, warmup_steps={cfg.ema_warmup_steps}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.peak_lr, weight_decay=cfg.weight_decay)
 
@@ -519,6 +580,8 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -534,12 +597,20 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
+    # --- Validate (using EMA weights when enabled) ---
+    if ema is not None:
+        with ema.apply_to(model):
+            model.eval()
+            split_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+    else:
+        model.eval()
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
@@ -568,7 +639,11 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        if ema is not None:
+            with ema.apply_to(model):
+                torch.save(model.state_dict(), model_path)
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -582,6 +657,34 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# --- Diagnostic: confirm EMA path is alive (EMA vs live on final-epoch val) ---
+if ema is not None:
+    print("\nDiagnostic: comparing EMA vs live weights on val splits...")
+    model.eval()
+    live_split = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_avg = aggregate_splits(live_split)
+    with ema.apply_to(model):
+        ema_split = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+    ema_avg = aggregate_splits(ema_split)
+    diag = {
+        "diag/val_avg_live_final": live_avg["avg/mae_surf_p"],
+        "diag/val_avg_ema_final": ema_avg["avg/mae_surf_p"],
+        "diag/val_avg_ema_minus_live": ema_avg["avg/mae_surf_p"] - live_avg["avg/mae_surf_p"],
+    }
+    wandb.log(diag)
+    wandb.summary.update(diag)
+    print(
+        f"  live={live_avg['avg/mae_surf_p']:.4f}  "
+        f"ema={ema_avg['avg/mae_surf_p']:.4f}  "
+        f"delta={diag['diag/val_avg_ema_minus_live']:+.4f}"
+    )
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
