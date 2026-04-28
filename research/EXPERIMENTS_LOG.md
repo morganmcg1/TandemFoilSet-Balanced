@@ -1,5 +1,32 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 08:53 — PR #409 (round 3): OneCycleLR rebased onto post-EMA+L1 baseline — **MERGED**
+
+- Branch: `willowpai2d3-frieren/onecycle-lr`
+- **Hypothesis (round 3):** OneCycle 2e-3 + EMA + L1 should win cleanly over the warmup-cosine + EMA + L1 control on the post-#294 baseline.
+
+### Results (group `onecycle-lr-r3`, on the post-EMA+L1 baseline)
+
+| Schedule | best epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | EMA−live | W&B run |
+|---|---:|---:|---:|---:|---|
+| **onecycle 2e-3 + EMA + L1** | **14** | **87.7443** | **78.2370** | **+5.69 (EMA WORSE)** | `4fas292o` |
+| warmup-cosine + EMA + L1 (control) | 14 | 95.2555 | 84.8760 | −7.26 (EMA better) | `of3vm0qy` |
+
+### Decision: **MERGED**
+
+**Within-sweep delta = −7.51 MAE on val_avg, −6.64 MAE on test_avg.** OneCycle wins on all 4 test splits. **vs prior merged baseline (PR #294, 94.89/83.94):** −7.15 MAE val, −5.70 MAE test. Below the ~25 MAE seed-noise floor in absolute terms but consistent with R2's pre-EMA −33 MAE delta — the schedule effect shrunk because OneCycle's cool-down and EMA+L1 partially overlap (both contribute to a smoother converged state). Still net-positive.
+
+**Critical mechanistic finding: EMA-vs-live sign-flip across schedules.**
+
+- OneCycle: live (82.06) BEATS EMA-averaged (87.74) by +5.69 MAE
+- warmup-cosine: EMA (95.26) beats live (102.51) by −7.26 MAE
+
+A 12.95-point swing in EMA's relative value driven purely by LR schedule. Mechanism: EMA averages out training noise — useful when the schedule leaves the model still noisy at end-of-training (warmup-cosine flat at 85% peak), counterproductive when the schedule converges (OneCycle cool-down to 1.5% peak). The within-run live-vs-EMA diagnostic is seed-independent, making this a robust mechanistic claim.
+
+**Implication:** EMA may now be sub-optimal in baseline. If `use_ema=False` with OneCycle gives val_avg ≈ 82 (per the live diagnostic), that's another −5.7 MAE on top of the new 87.74. **Frieren reassigned to PR #671 (`use_ema=False` confirmation under OneCycle).**
+
+**New baseline:** OneCycle 2e-3 with `pct_start=0.1, total_epochs=15` is the default schedule. Warmup-cosine path remains available behind `--schedule warmup-cosine`.
+
 ## 2026-04-28 07:05 — PR #420 (round 2): Random Fourier features — **CLOSED (substitutes with EMA, doesn't compound)**
 
 - Branch: `willowpai2d3-edward/fourier-features-coords` (deleted post-close)

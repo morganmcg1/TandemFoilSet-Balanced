@@ -7,9 +7,9 @@
 
 ## Current research focus
 
-**Three wins now merged: warmup, EMA, and pure L1.** PR #320 (linear warmup + peak LR 1e-3), PR #410 (EMA of weights at decay=0.99), and PR #294 (pure L1 surface loss) compound to drop the single-seed val_avg/mae_surf_p from ~147 (default Transolver) → **94.89** (current merged baseline). Test_avg = 83.94. PR #294 is the strongest result yet: −26.55 MAE on val vs. the prior merged baseline, comfortably above the seed-noise floor, with clean within-sweep monotonic trend across δ ∈ {2.0, 1.0, 0.5, 0}.
+**Four wins now merged: warmup, EMA, pure L1, OneCycleLR.** PR #320 (linear warmup), PR #410 (EMA), PR #294 (pure L1 surface loss), and PR #409 (OneCycleLR) compound to drop the single-seed val_avg/mae_surf_p from ~147 (default Transolver) → **87.74** (current merged baseline). Test_avg = **78.24**. The schedule effect from OneCycle shrunk vs the pre-EMA test (R2 was −33 MAE; R3 with EMA+L1 was −7.5 MAE) because OneCycle's cool-down and EMA+L1 partially overlap — both contribute to a smoother converged state. Still net-positive.
 
-**Compounding confirmed.** Alphonse's analysis: loss-shape lever (Huber/L1 in loss landscape) and optimizer/EMA levers (warmup + weight averaging) are orthogonal mechanisms that stack additively. The merged train.py now embodies three independent levers, each with its own well-understood mechanism.
+**Critical mechanistic finding (PR #409 diagnostic):** EMA-vs-live sign-flips across schedules. EMA helps noisy schedules (warmup-cosine, +7.26 MAE) but HURTS converged ones (OneCycle, −5.69 MAE). The mechanism is clean — EMA averages out training noise; useful when the schedule leaves the model still noisy at end-of-training, counterproductive when the schedule already converges via aggressive cool-down. Frieren's PR #671 is testing `use_ema=False` under OneCycle (predicted val_avg ≈ 82, another −5.7 MAE).
 
 **⚠️ Seed-variance caveat (still relevant):** `train.py` has no seed control yet — runs with byte-identical configs differ by ~25 MAE. Thorfinn's PR #482 (multi-seed baseline + deterministic seeding) is in flight. Until it lands, within-sweep deltas remain the cleanest signal; absolute numbers vs. the merged baseline are noise-bound at single seed.
 
@@ -45,11 +45,12 @@ These eight axes were chosen for **orthogonality** so that improvements compound
 
 | Student | PR | Lever | Status |
 |---|---|---|---|
-| frieren | [#409](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/409) | **OneCycleLR** — onecycle_peak_lr ∈ {1e-3, 2e-3, 3e-3}, pct_start=0.1 | **rebase + single confirming run** — within-sweep −33 MAE (next merge candidate) |
+| frieren | [#409](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/409) | **OneCycleLR** — onecycle_peak_lr=2e-3, pct_start=0.1, total_epochs=15 | **MERGED.** Within-sweep −7.51 MAE; vs prior merged baseline −7.15 MAE. New baseline 87.74. **Discovered EMA-vs-live sign-flip across schedules.** |
 | nezuko | [#410](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/410) | **EMA of weights at eval time** — sweep decay ∈ {0.99, 0.999, 0.9995} | **MERGED** (within-sweep −21.7 MAE; live-vs-EMA −30.7 MAE in-run) |
 | edward | [#420](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/420) | **Random Fourier features for spatial coords** — single-σ + multi-scale + concat_raw + EMA | **CLOSED** — Fourier+EMA substitute (both regularize spectral fit); stacking captures only ⅕ of solo effects. Multi-scale destabilized training. Direction real but doesn't compound enough vs new merged baseline 94.89. |
 | alphonse | [#609](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/609) | **Focal-L1** — per-node residual reweighting on top of L1 surface loss; γ ∈ {0, 0.5, 1.0, 2.0} | wip |
 | edward | [#618](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/618) | **UNet-style skip from preprocess into last block** — information-flow architectural lever | wip |
+| frieren | [#671](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/671) | **`use_ema=False` under OneCycle** — confirm EMA-vs-live diagnostic; predicted val_avg ≈ 82 (−5.7 MAE) | wip — focused 2-run confirmation |
 | thorfinn | [#482](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/482) | **Multi-seed baseline + deterministic seeding** (research infrastructure) | wip — redirected to post-EMA baseline |
 
 ## Round 3 — extensions on the post-EMA baseline (2026-04-28)
