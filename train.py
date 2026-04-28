@@ -63,15 +63,15 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
+        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn(), nn.Dropout(dropout))
         self.linear_post = nn.Linear(n_hidden, n_output)
         self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn(), nn.Dropout(dropout)) for _ in range(n_layers)]
         )
 
     def forward(self, x):
@@ -138,7 +138,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 mlp_dropout=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -148,7 +149,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, dropout=mlp_dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -168,6 +169,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 mlp_dropout=0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -190,6 +192,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                mlp_dropout=mlp_dropout,
             )
             for i in range(n_layers)
         ])
@@ -380,6 +383,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    mlp_dropout: float = 0.1
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -423,6 +427,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    mlp_dropout=cfg.mlp_dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
