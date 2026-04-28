@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- 2026-04-28 03:15 — round 1 mostly settled on `icml-appendix-willow-pai2d-r2`,
-  round 2 in flight (6 axes), scoring bug fix landed
+- 2026-04-28 03:30 — round 1 settled on `icml-appendix-willow-pai2d-r2`,
+  round 2 in flight (7 axes), scoring bug fix landed, all hands on deck
 - **Baseline updated:** PR #330 (frieren, Huber β=1) merged on top of
   PR #328. Current best `val_avg/mae_surf_p = 115.61` (W&B run
   `uip4q05z`, best epoch 11/50). −13.4 % over the prior baseline,
@@ -46,7 +46,8 @@
 
 | PR  | Student   | Axis                       | Status (now)   | Best val_avg/mae_surf_p |
 |-----|-----------|----------------------------|----------------|-------------------------|
-| 311 | alphonse  | width 128 → 192 → 160       | sent back → rebase + on-baseline (+ multi-seed if borderline) | width-160=**126.18** (epoch 11/50; inside ±10 % noise of baseline) |
+| 311 | alphonse  | width 128 → 192 → 160       | **closed** (3-seed mean 126.76 = +9.6 %, all 3 seeds above 115.61 baseline; per-split: cruise improves, in-dist + camber-rc regress — width-axis exhausted at 30-min cap) | superseded |
+| 485 | alphonse  | round 2: RMSNorm           | NEW assignment (status:wip) | n/a |
 | 325 | askeladd  | depth 5 → 8                | **closed** (21 % regression at 30-min cap) | 150.06 / 162.05 (two seeds) |
 | 399 | askeladd  | round 2: bf16 mixed precision | NEW assignment (status:wip) | n/a |
 | 326 | edward    | mlp_ratio 2 → 4            | **closed** (FFN axis exhausted; 21 % worse than new baseline) | mlp-3=139.79, mlp-2-control=136.54 (slice-128, MSE; monotone trend smaller-is-better) |
@@ -64,37 +65,38 @@
 | 452 | fern      | round 2: push slice_num to 192/256 | **closed** (slice-192 single-seed = 133.30, +15.3 % vs 115.61 baseline; per-split mechanism-inversion confirms slice-128 is the ceiling) | superseded |
 | 478 | fern      | round 2: curriculum by per-sample y-std | NEW assignment (status:wip) | n/a |
 
-PRs surfaced for advisor review this cycle: **#452**. Action:
-**#452 closed** — single-seed slice-192 = 133.30 (+15.3 % vs 115.61
-baseline, well outside the ±10 % noise band). Mechanism-inversion in
-the per-split signal: largest regression on `val_geom_camber_rc` (the
-very split that drove the round-1 #328 win), smallest on
-`val_geom_camber_cruise` (the largest meshes where the slice
-bottleneck argument should bind hardest). Combined with #328's
-slice-64→128 win, both endpoints of the axis are bracketed:
-**slice-128 is the architectural ceiling under the 30-min wall-clock
-contract**. Methodology contributions logged: first end-to-end-finite
-test_avg/mae_surf_p on a non-trivial run (123.10 — #367 verified);
-per-step-cost-vs-prediction calibration data (24 % actual vs
-predicted 10–15 %); mechanism-inversion-as-disconfirmation pattern.
-**Reassigned fern to round-2 axis #478 (curriculum learning by
-per-sample pressure y-std)** — data-axis lever, only un-tested
-round-2 axis category. Targets the same high-Re-tail story Huber
-addressed via gradient clipping (#330), but from the data-exposure
-side; should compound.
+PRs surfaced for advisor review this cycle: **#311**. Action:
+**#311 closed** — width-160 multi-seed mean 126.76 (3 seeds:
+123.38 / 127.84 / 129.06; σ=2.99) is +9.6 % above 115.61 baseline,
+all 3 seeds above. Per-split signal interesting:
+`val_geom_camber_cruise` improves (−6.1 %, the largest meshes at
+~210K nodes) but `val_single_in_dist` (+17.3 %) and
+`val_geom_camber_rc` (+19.9 %) both regress. Logged as the
+cleanest piece of evidence so far that **per-distribution
+architecture specialization is a genuine round-3 axis**: capacity
+scaling has split-specific returns. Width axis exhausted at 30-min
+cap.
+**Reassigned alphonse to round-2 axis #485 (RMSNorm)** — replace
+`nn.LayerNorm` with `RMSNorm` throughout the model. The only
+architecture-axis lever that's *cheaper* per step than baseline
+(no mean-centering, ~5–10 % faster). Modern transformer default
+(LLaMA, Gemma, Falcon, Mistral). Plays to alphonse's
+precision-engineering strength. Decision rule allows infrastructure
+merge if at-baseline-with-throughput-unlock.
 
-Cycle 14 actions (recap): #332 closed (surf_weight axis exhausted on
-slice-128), #399 sent back for rebase (bf16 throughput unlock at-
-baseline within noise), #472 assigned (nezuko Lion).
+Cycle 15 actions (recap): #452 closed (slice-192 above noise,
+mechanism inversion on val_geom_camber_rc), #478 assigned (fern
+curriculum by y-std).
 
 Earlier cycle actions:
 #328 + #330 + #367 merged (slice-128 + Huber β=1 + scoring fix;
-current val baseline 115.61, test baseline 117.59); #311 + #335 +
-#399 sent back; #325 + #326 + #332 + #337 + #452 closed (depth-8,
-FFN, surf_weight, BS+LR, slice-192 axes all exhausted under 30-min
-cap); **six round-2 axes currently in flight**: #399 askeladd bf16
-[iter 2 rebasing], #415 frieren asinh-on-pressure, #429 edward
-p_weight, #457 thorfinn EMA, #472 nezuko Lion, #478 fern curriculum.
+current val baseline 115.61, test baseline 117.59); #335 + #399
+sent back; #311 + #325 + #326 + #332 + #337 + #452 closed
+(width, depth, FFN, surf_weight, BS+LR, slice-192 axes all
+exhausted under 30-min cap); **seven round-2 axes currently in
+flight**: #399 askeladd bf16 [iter 2 rebasing], #415 frieren
+asinh-on-pressure, #429 edward p_weight, #457 thorfinn EMA,
+#472 nezuko Lion, #478 fern curriculum, #485 alphonse RMSNorm.
 
 ## What we learned this cycle (and last)
 
@@ -198,6 +200,18 @@ p_weight, #457 thorfinn EMA, #472 nezuko Lion, #478 fern curriculum.
   optimizer-state memory savings). 3-value LR sweep
   {3e-5, 1e-4, 3e-4}. Reported in literature to outperform AdamW
   on transformers at smaller LR.
+- **RMSNorm.** ASSIGNED as PR #485 to alphonse: drop-in
+  replacement for `nn.LayerNorm`. Same param count, ~5–10 % faster
+  per step (no mean-centering). The only architecture-axis lever
+  that's cheaper than baseline. Modern transformer default.
+- **Per-distribution architecture specialization (round-3
+  candidate).** Surfaced from alphonse's closed #311 iter-3
+  per-split data: width-160 helps `val_geom_camber_cruise` (−6.1 %)
+  but hurts `val_single_in_dist` and `val_geom_camber_rc`
+  (+17–20 %). Capacity scaling has split-specific returns at the
+  30-min cap. Future axes to explore: per-mesh-size-conditional MLP
+  scaling, or specialised heads per domain. Round-3 work after
+  AMP/bf16 throughput unlock makes wider models budget-feasible.
 
 ## Active blockers
 

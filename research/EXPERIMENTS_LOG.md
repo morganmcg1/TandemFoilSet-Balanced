@@ -13,6 +13,90 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 03:30 — PR #311 (iter 3): width-160 on slice-128 + Huber (multi-seed) ❌ CLOSED
+
+- Branch: `willowpai2d2-alphonse/width-192` (deleted on close).
+- Iteration: send-back asked for rebase + multi-seed at width-160 on
+  top of merged Huber + slice-128 baseline.
+- Branch was rebased onto 5975c81 (post-#330 but pre-#367), so
+  `data/scoring.py` and `evaluate_split` reverted the merged
+  `nan_to_num`. Hence student saw `test_geom_camber_cruise/mae_surf_p
+  = NaN` even though the bug fix is merged.
+
+### Results — 3-seed multi-seed at width-160
+
+| seed | val_avg/mae_surf_p | best_epoch | run id |
+|-:|-:|-:|-|
+| 0 | 123.38 | 9 | aw3avnj5 |
+| 1 | 127.84 | 9 | hsxma71y |
+| 2 | 129.06 | 9 | vvczi4b8 |
+| **mean** | **126.76** (σ=2.99) | – | – |
+
+Per-split deltas vs baseline (115.61):
+- val_single_in_dist: 137.21 → 160.91 (**+17.3 %**)
+- val_geom_camber_rc: 118.60 → 142.22 (**+19.9 %**)
+- val_geom_camber_cruise: 98.74 → 92.76 (**−6.1 %**)
+- val_re_rand: 107.89 → 111.16 (+3.0 %)
+
+### Conclusion
+
+**Closed.** Multi-seed mean **+9.6 %** above the 115.61 baseline,
+all 3 seeds above. By CLAUDE.md > 5 % regression threshold, this is
+a clean close. By the PR's own decision rule (mean ≤ 126 → merge),
+it's just past the bar. Student explicitly recommended closing.
+
+### Per-split signal: architecture-vs-distribution-shift
+
+Width-160 *helps* `val_geom_camber_cruise` (−6.1 %) and *hurts*
+`val_single_in_dist` (+17.3 %) and `val_geom_camber_rc` (+19.9 %).
+Net loss on the equal-weight average. The cruise improvement is not
+within noise — across all 3 seeds, cruise consistently improves
+~5–7 %. This is the cleanest piece of round-2 evidence that
+**per-distribution architecture specialization is a genuine round-3
+axis**: capacity scaling has split-specific returns, with cruise
+(largest meshes, ~210K nodes) benefiting and single-in-dist /
+camber-rc (smaller meshes) regressing. Round-3 candidate: per-mesh-
+size-conditional MLP scaling, or specialised heads.
+
+### Carry-forward contributions
+
+1. **fp16 → bf16 failure-mode diagnosis** (from iter 2) was
+   adopted into askeladd's #399 round-2 assignment. Loss-outside-
+   autocast pattern is the standard "scoped AMP" recipe now.
+2. **Per-split-shift observation** (cruise-helps / in-dist-hurts at
+   width-160) is the cleanest piece of evidence for per-distribution
+   architecture specialization as a round-3 axis.
+3. **Width-axis ceiling at slice-128 + Huber** under 30-min cap is
+   established. Future width-axis work should wait for AMP/bf16
+   throughput unlock.
+
+### Reassignment
+
+Alphonse → PR #485 (round-2 axis: RMSNorm). Detailed below.
+
+## 2026-04-28 03:30 — PR #485 (NEW, alphonse round 2): RMSNorm
+
+- Reassigning alphonse after closing #311.
+- Hypothesis: replace `nn.LayerNorm` with `RMSNorm` throughout the
+  Transolver model (11 LayerNorm sites across 5 TransolverBlocks).
+  RMSNorm drops mean-centering — same parameter count, ~5–10 %
+  faster per step. Modern transformer default (LLaMA, Gemma,
+  Falcon, Mistral). Throughput unlock translates to more epochs in
+  the 30-min cap; predicted 2–5 % reduction over 115.61.
+- The only architecture-axis lever that's *cheaper* than the
+  merged baseline (depth-8, width-192/160, slice-192, mlp_ratio=4
+  all paid more compute per step and lost the trade).
+- Implementation: ~15 LOC `RMSNorm` class + find/replace at 11
+  LayerNorm sites + update `_init_weights` type check. No new
+  packages, no model_config flag.
+- Sweep: single primary candidate first (single seed), then
+  multi-seed if budget allows. RMSNorm `eps` sweep deferred.
+- Decision rule: ≤105 single-seed (or ≤110 multi-seed mean) merges
+  as metric+infra win; at-baseline-with-throughput-unlock (110–121
+  multi-seed mean AND epoch_time_s ≥ 3 % faster) merges as
+  infrastructure (same precedent as bf16 #399).
+- Status: assigned, draft, status:wip.
+
 ## 2026-04-28 03:15 — PR #452 (iter 1): push slice_num to 192 ❌ CLOSED
 
 - Branch: `willowpai2d2-fern/slice-push` (deleted on close).
