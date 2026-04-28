@@ -29,7 +29,13 @@ larger than the bs/lr win it superseded.
 **Round-3 dominant lever:** loss formulation. Aligning the gradient with
 the reported MAE metric is the highest-impact change found so far.
 
-**In-flight (6 active + 2 newly assigned), still useful for round-4
+**Closed PRs (negative results, 2026-04-28):**
+   - PR #283 — askeladd (wider+deeper): val 166.64 (+62% vs L1 baseline);
+     compute-starvation under wallclock cap is structural.
+   - PR #366 — thorfinn (mlp_ratio=4): val 144.70 (+41% vs L1 baseline);
+     in-dist improved, all OOD axes regressed → generalisation-gap shift.
+
+**In-flight (5 originally + 3 newly assigned), still useful for round-4
 composition even if they don't outright beat 102.64:**
 
 1. **Loss formulation**
@@ -37,17 +43,19 @@ composition even if they don't outright beat 102.64:**
      whether the L2-near-zero region helps over pure L1.
    - PR #285 — edward: `surf_weight` 10 → 30 (with MSE) — informs how much
      of the L1 win is just heavier surface gradient signal.
-2. **Model capacity**
-   - PR #283 — askeladd: `n_hidden=192, n_layers=6, n_head=6, slice_num=96`
+2. **Model capacity (single-axis)**
    - PR #292 — frieren: `slice_num` 64 → 128 (single-knob)
-   - PR #366 — thorfinn (post-#306): `mlp_ratio` 2 → 4
 3. **Optimisation schedule**
    - PR #288 — fern: 3-epoch warmup + cosine to 1e-5, peak `lr=1e-3`
 4. **Input representation**
    - PR #298 — nezuko: 8-frequency Fourier positional encoding for x/z
-5. **Loss × metric alignment (new assignment after #280 merge)**
-   - PR (alphonse, post-#280): L1 + 3× pressure channel weight in surface
-     loss — stacks two metric-aligned levers.
+5. **L1-baseline composition (newly assigned, branch off post-#280
+   advisor with L1 already in train.py)**
+   - PR #383 — alphonse: L1 + 3× pressure channel weight in surface loss
+   - PR (askeladd, new): L1 + matched cosine schedule (`--epochs 14`) so
+     the schedule fully decays inside the 30-min cap.
+   - PR (thorfinn, new): L1 + bs=8 + `lr=7.07e-4` — composes the two
+     merged round-3 winners.
 
 **Caveats:**
 

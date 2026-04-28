@@ -1,5 +1,111 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 00:18 — PR #283 (CLOSED): Wider+deeper Transolver (h=192, l=6, head=6, slices=96)
+- Branch: `charliepai2d3-askeladd/wider-deeper-h192-l6-s96` (deleted on close)
+- Hypothesis: scale capacity along 4 axes simultaneously; predicted −3% to −8%.
+- Config: `bs=4`, `lr=5e-4`, all other knobs at defaults.
+
+### Headline (best-val checkpoint, epoch 7/7)
+
+| Metric | This PR | vs original baseline (PR #306, 135.20) | vs L1 baseline (PR #280, 102.64) |
+|--------|--------:|---------------------------------------:|---------------------------------:|
+| `val_avg/mae_surf_p`  | 166.64 | +23.3% | +62.4% |
+| `test_avg/mae_surf_p` | 155.95 | +26.6% | +59.6% |
+| Per-epoch wallclock   | 278 s  | 2.1× slower than baseline shape | — |
+| Peak GPU memory       | 83.84 GB | / 96 GB cap → 12 GB headroom | — |
+| Epochs in 30-min cap  | 7/50   | half of baseline shape | — |
+| Param count           | 1.72 M | +1.0 M vs baseline | — |
+
+### Per-split val (best epoch 7)
+
+| split | mae_surf_p |
+|-------|-----------:|
+| val_single_in_dist     | 198.42 |
+| val_geom_camber_rc     | 183.45 |
+| val_geom_camber_cruise | 140.69 |
+| val_re_rand            | 144.01 |
+
+### Decision
+
+**Closed.** >5% regression on val_avg/mae_surf_p vs both prior baselines.
+Per-epoch the bigger model is **12% better** than the round-3 baseline shape
+at matched epoch index (epoch 7: 166.64 vs 188.54), so the architecture has
+genuine merit — but the 2.1× per-epoch slowdown halves the cosine-anneal
+budget under the 30-min cap, wiping out the per-epoch gain. Compute
+starvation is structural; revisits blocked on throughput infra
+(mixed-precision / activation checkpointing).
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` — branch
+was deleted on close before metrics could be cherry-picked into the
+advisor branch. Headline numbers above are from the PR results comment.
+
+### Round-4 implications
+
+- Joint scaling on 4 axes is too coarse for clean attribution. Per-axis
+  PRs (frieren #292 slice_num, in flight) will give cleaner signals.
+- Drop "wider+deeper" from round-4 candidate set until throughput infra
+  lands — at that point a single-axis bigger-model PR is justified.
+- Student also flagged a pred-side `evaluate_split` y-finite bug fix
+  worth keeping in mind if any future PR produces NaN test averages
+  from clean GT (current scoring fix only handles GT-side non-finite).
+
+---
+
+## 2026-04-28 00:15 — PR #366 (CLOSED): mlp_ratio 2 → 4
+- Branch: `charliepai2d3-thorfinn/mlp-ratio-4` (deleted on close)
+- Hypothesis: doubling MLP per-token capacity inside each TransolverBlock;
+  predicted −3% to −8% on val_avg/mae_surf_p.
+- Config: bs=8 → bs=6 (OOM at bs=8 with the wider MLP), `lr=7.07e-4`
+  (kept from baseline PR #306 instructions).
+
+### Headline (best-val checkpoint, epoch 11/13)
+
+| Metric | This PR | vs PR #306 (135.20) | vs L1 baseline (PR #280, 102.64) |
+|--------|--------:|--------------------:|---------------------------------:|
+| `val_avg/mae_surf_p`  | 144.70 | +7.0%  | +41.0% |
+| `test_avg/mae_surf_p` | 132.44 | +7.5%  | +35.5% |
+| Peak GPU memory       | 78.16 GB | — | — |
+| Epochs in 30-min cap  | 13/50  | −1 epoch vs baseline | — |
+| Param count           | 0.99 M | +0.33 M  | — |
+
+### Per-split val (best epoch 11) — **revealing pattern**
+
+| split | This PR | vs PR #306 baseline |
+|-------|--------:|--------------------:|
+| val_single_in_dist     | 176.83 | **−7.0% (improved)** |
+| val_geom_camber_rc     | 159.32 | +15.1% |
+| val_geom_camber_cruise | 112.82 | +15.2% |
+| val_re_rand            | 129.81 | +13.6% |
+| **val_avg**            | 144.70 | +7.0% |
+
+### Decision
+
+**Closed.** >5% regression on val_avg/mae_surf_p vs both prior baselines.
+
+The split pattern is the takeaway: in-distribution improved (single-foil
+better fit), every OOD axis regressed. Classic generalisation-gap shift —
+extra MLP capacity is being spent memorising training-distribution
+structure that doesn't transfer to held-out cambers / Re. Validation
+peaked at epoch 11 then degraded (144.70 → 159.04 → 171.83 across epochs
+11→12→13), confirming overfit before the cosine could anneal.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` — branch
+was deleted on close. Headline numbers above are from the PR results
+comment.
+
+### Round-4 implications
+
+- mlp_ratio=4 dropped from candidate set per the standalone-loss rule.
+- Two follow-up directions remain interesting and would justify their own
+  PRs if revisited: (a) `mlp_ratio=4` only in last 1-2 blocks (asymmetric
+  capacity), (b) `mlp_ratio=4` paired with stronger regularisation
+  (`dropout=0.05` or `weight_decay=2e-4`) to test whether the
+  generalisation gap closes.
+- The OOM at bs=8 with +0.33 M params is a useful VRAM-headroom signal:
+  the bs=8 MSE baseline (PR #306) was running close to the limit.
+
+---
+
 ## 2026-04-28 00:03 — PR #280: L1 surface loss to align gradient with reported MAE metric
 - Branch: `charliepai2d3-alphonse/l1-surface-loss`
 - Hypothesis: switching the surface loss from MSE to L1 (volume MSE
