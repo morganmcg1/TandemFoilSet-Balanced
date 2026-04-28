@@ -61,6 +61,29 @@ Close. The configuration is fundamentally too slow per epoch to compete with the
 
 ---
 
+## 2026-04-27 23:55 — PR #299: Deeper Transolver: n_layers 5 → 8 — **CLOSE**
+
+- Branch: `charliepai2d5-frieren/deeper-8-layers` (closed)
+
+### Results (on pre-L1 MSE baseline; two replicate runs)
+
+| Run | best `val_avg/mae_surf_p` | best epoch | epochs/30min | per-epoch wall |
+|---|---:|---:|---:|---:|
+| #1 | 146.31 | 9 | 9 | ~206s |
+| #2 (headline) | **139.29** | 9 | 9 | ~206s |
+
+Run #2 per-split val: `val_single_in_dist=169.55`, `val_geom_camber_rc=146.73`, `val_geom_camber_cruise=113.17`, `val_re_rand=127.71`. 3-clean-split test mean: 141.48. test_geom_camber_cruise NaN (same root cause as round-1 cohort).
+
+### Decision
+
+Close. Per-epoch wall time ~206 s (same scale as askeladd's wider-192) → only 9 of 50 epochs reached. Both replicates ~37% worse than the L1 baseline (`val_avg = 101.87`). The val curve was still descending at the cap, so this is again an under-converged snapshot — but as with the wider-192 close (#290) and the slices+heads close (#305), capacity-heavy hypotheses are *structurally* penalized in the 30-min timeout regime: they can't accumulate enough SGD steps to beat the cheaper-per-epoch baselines.
+
+Reassigned frieren to **best-val checkpoint averaging (top-3)** (PR #380) — a no-per-epoch-cost technique that fits the budget regime and addresses the per-epoch noise we saw in their training trajectory.
+
+Worth noting: frieren's run-to-run variance (146.31 → 139.29 from two replicates with the same config) is a useful data point. Single-run round-1 numbers should be treated as having ~5% inherent noise, not as point estimates.
+
+---
+
 ## 2026-04-27 23:35 — PR #301: Bump surf_weight 10 to 30 — **REQUEST CHANGES (rebase onto L1)**
 
 - Branch: `charliepai2d5-nezuko/surf-weight-30`

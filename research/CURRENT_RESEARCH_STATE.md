@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-27 23:40
+- **Date:** 2026-04-28 00:00
 - **Advisor branch:** `icml-appendix-charlie-pai2d-r5`
 - **Cohort:** charlie-pai2d-r5 (8 students, 1 GPU each)
 - **Most recent human-team direction:** none on file.
@@ -38,10 +38,9 @@ The 30-min `SENPAI_TIMEOUT_MINUTES` cap is binding: only ~14 epochs of the confi
 
 | PR | Axis | Student | Hypothesis |
 |----|------|---------|------------|
-| #299 | Architecture | frieren | Deeper model: `n_layers` 5 → 8 |
 | #303 | Optim | tanjiro | EMA weights (decay 0.999) for eval and final checkpoint |
 
-These are still on the pre-L1 baseline. When they land, they'll be evaluated against the L1 baseline and likely sent back to rebase if the hypothesis is plausibly additive.
+This is still on the pre-L1 baseline. When it lands, it'll be evaluated against the L1 baseline and likely sent back to rebase since EMA is plausibly additive with L1.
 
 ### Round 2 (status:wip, on top of L1)
 
@@ -50,12 +49,14 @@ These are still on the pre-L1 baseline. When they land, they'll be evaluated aga
 | #364 | Loss | edward | Huber (smooth_l1, beta=1.0) — quadratic-near-zero on top of L1 |
 | #365 | Feature | thorfinn | Fourier positional features (8 freqs on normalized `x, z`) |
 | #369 | Regularization | askeladd | Drop-path 0.1 on attention + MLP residuals |
+| #380 | Checkpoint | frieren | Best-val checkpoint averaging (top-3, post-hoc) |
 
 ### Round 1 closed
 
 | PR | Student | Reason |
 |----|---------|--------|
 | #290 | askeladd | `n_hidden=192, slice_num=96` — per-epoch ~205s gave 9/50 epochs at 30-min cap; 33% worse than L1 at iso-wall-clock. Reassigned to drop-path (#369). |
+| #299 | frieren | `n_layers=8` — per-epoch ~206s gave 9/50 epochs; ~37% worse than L1 (best of 2 replicates: 139.29). Reassigned to checkpoint averaging (#380). |
 | #305 | thorfinn | `n_head=8, slice_num=128, dim_head=16` — per-epoch ~252s gave 8/50 epochs; dim_head=16 produced non-finite test predictions. Reassigned to Fourier features (#365). |
 
 ## Round-1 ranking (val_avg/mae_surf_p, all measured on pre-L1 MSE baseline)
@@ -64,11 +65,11 @@ These are still on the pre-L1 baseline. When they land, they'll be evaluated aga
 |---:|----|---------|------|---------:|---------|
 | 1 | #293 | edward | L1 loss | **101.87** | Merged |
 | 2 | #296 | fern | LR warmup 1e-3 | 137.32 | Sent back (schedule mismatched) |
-| 3 | #301 | nezuko | surf_weight=30 | 141.56 | Sent back (rebase to L1) |
-| 4 | #290 | askeladd | wider 192 | 152.24 | Closed (budget penalty) |
-| 5 | #278 | alphonse | surf_p_weight=5 | 156.16 | Sent back (rebase to L1) |
-| 6 | #305 | thorfinn | slices+heads 2x | 160.68 | Closed (budget + instability) |
-| ? | #299 | frieren | n_layers=8 | TBD | Running |
+| 3 | #299 | frieren | n_layers=8 (best of 2 runs) | 139.29 | Closed (budget penalty; var=146/139 across replicates) |
+| 4 | #301 | nezuko | surf_weight=30 | 141.56 | Sent back (rebase to L1) |
+| 5 | #290 | askeladd | wider 192 | 152.24 | Closed (budget penalty) |
+| 6 | #278 | alphonse | surf_p_weight=5 | 156.16 | Sent back (rebase to L1) |
+| 7 | #305 | thorfinn | slices+heads 2x | 160.68 | Closed (budget + instability) |
 | ? | #303 | tanjiro | EMA | TBD | Running |
 
 ## Potential next research directions
