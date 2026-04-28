@@ -218,7 +218,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, ch_weights, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -256,14 +256,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
+            sq_err_weighted = sq_err * ch_weights
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (sq_err_weighted * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err_weighted * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -418,6 +419,10 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Per-channel loss weights: [Ux, Uy, p]. Downweight pressure to free
+# gradient mass for velocity learning. PR #388 follow-up (#422).
+ch_weights = torch.tensor([1.0, 1.0, 0.5], device=device)
+
 # EMA of model weights — used for validation, checkpoint, and test eval.
 ema_decay = 0.995
 grad_clip_max_norm = 10.0
@@ -449,6 +454,9 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ch_weights": ch_weights.tolist(),
+        "ema_decay": ema_decay,
+        "grad_clip_max_norm": grad_clip_max_norm,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -480,11 +488,12 @@ for epoch in range(MAX_EPOCHS):
             pred = model({"x": x_norm})["preds"]
         pred = pred.float()
         sq_err = (pred - y_norm) ** 2
+        sq_err_weighted = sq_err * ch_weights
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (sq_err_weighted * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (sq_err_weighted * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -516,14 +525,14 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, ch_weights, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
 
     online_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, ch_weights, device)
         for name, loader in val_loaders.items()
     }
     online_val_avg = aggregate_splits(online_split_metrics)
@@ -589,7 +598,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, ch_weights, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
