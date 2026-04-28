@@ -158,6 +158,25 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - **Student's analytical insight (excellent)**: cosine T_max=14 and EMA(decay 0.999) interact non-additively. EMA half-life ≈ 693 steps ≈ 1.85 epochs at our batch count; with T_max=14, the last 5–7 epochs run at lr ≤ 28% of peak (and the final 2 at <2% of peak), so the EMA averages weights that are barely moving. We get the cosine sharp-minimum effect *and* the EMA smoothing, but the EMA contribution shrinks because there's nothing left for it to smooth. Levers are not orthogonal.
 - Decision: **CLOSE.** +1.00% vs current EMA baseline; further behind after the SwiGLU merge (would be ~+16% vs 88.227). Direction is not dead — student's follow-up #1 (smaller-decay EMA, e.g. 0.99, half-life ~0.2 epochs) would let cosine annealing's low-lr tail dominate the final EMA state without the "averaged stillness" effect — worth queuing if other levers stall.
 
+## 2026-04-28 01:45 — PR #412: Per-channel output heads for Ux, Uy, p
+
+- Branch: `charliepai2d2-tanjiro/per-channel-heads` — metrics committed.
+- Hypothesis: shared 3-channel `mlp2` is a capacity bottleneck (Ux/Uy and p have very different physics); decoupling into 3 per-channel heads should help, especially the previously-flat `val_geom_camber_rc`. Predicted −2% to −4%.
+- Result: best `val_avg/mae_surf_p = 105.580` at epoch 14. **+4.18% vs EMA baseline (101.350); +19.7% vs SwiGLU baseline (88.227).** test_avg = 95.213 (4-split, finite); 3-split excl. cruise: 104.139 (+4.11% vs baseline 100.030).
+- Per-split val MAE for `p`: single_in_dist=129.45 (+2.47%), geom_camber_rc=115.82 (+5.86%), geom_camber_cruise=81.09 (+5.32%), re_rand=95.97 (+3.55%).
+- **The canary split (`val_geom_camber_rc`) regressed MOST** — cleanly falsifies the shared-head-as-capacity-bottleneck hypothesis. The shared head's implicit cross-channel gradient coupling appears to be more useful than per-channel specialization at this budget.
+- Decision: **CLOSE.** Capacity in the output head is not the bottleneck. Combined with PR #392 (mlp_ratio=4 also failed via wrong-target capacity), this is now consistent evidence that **architectural form matters more than head/FFN capacity** here. Per-channel head direction is dead.
+
+## 2026-04-28 01:45 — PR #411: Huber loss with delta=2.0 (smoother near optimum)
+
+- Branch: `charliepai2d2-fern/huber-delta-2` — metrics committed.
+- Hypothesis: huber `δ=1.0 → 2.0` smooths the loss landscape near optimum (MSE-like for typical errors |e|<2), while keeping outlier robustness. Predicted −1% to −3%.
+- Result: best `val_avg/mae_surf_p = 107.609` at epoch 14. **+6.18% vs EMA baseline; +21.97% vs SwiGLU baseline.** test_avg = 97.529 (4-split, finite).
+- Per-split val MAE for `p`: all 4 regressed (+2.5% to +8.5%); OOD splits regressed worst (camber_cruise +8.54%, re_rand +7.99%, camber_rc +7.24%).
+- **Validation curve was monotonically decreasing every epoch** (smoothness prediction confirmed) but the absolute level is worse.
+- Student's mechanism: at the high-error training regime we're stuck in (val going 328→108 over 14 epochs, far from optimum), δ=2's quadratic region for |err|∈[1,2] *underweights* moderate errors relative to δ=1's bounded gradient, while giving 2× more pull to outliers. On a 14-epoch budget that's the wrong trade. δ=1 sits at a sweet spot. Pure MSE (δ→∞) was 105.999 without EMA; δ=1+EMA=101.350; δ=2+EMA=107.609 here — the curve is unimodal in δ.
+- Decision: **CLOSE.** δ=1.0 is the sweet spot for huber on this problem. Direction not dead at smaller δ — student's follow-up suggestion (`δ=0.5` or `δ=0.25`, pushing toward L1) is a valid one-line sweep, especially now that the SwiGLU baseline gives much smoother val curves.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
