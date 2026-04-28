@@ -5,25 +5,38 @@ The current research baseline on `icml-appendix-willow-pai2d-r2`.
 The primary ranking metric is `val_avg/mae_surf_p` — equal-weight mean surface
 pressure MAE across the four validation tracks. Lower is better.
 
-## 2026-04-28 01:30 — PR #330: Round 1 axis: loss formulation — MSE → Huber (β=1)
-
-Replaced per-element MSE with Huber (Smooth L1, β=1) loss in both the training
-loop and `evaluate_split`, applied via
-`F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)`. Stacks on top of
-the merged slice_num=128 architecture from PR #328.
+## Current configuration (after merging #328 + #330 + #367 + #399)
 
 ```
 lr=5e-4  weight_decay=1e-4  batch_size=4  surf_weight=10.0  epochs=50
 n_hidden=128  n_layers=5  n_head=4  slice_num=128  mlp_ratio=2
-loss=Huber(beta=1.0) on normalized residuals  (was MSE)
+optimizer=AdamW  loss=Huber(beta=1.0) on normalized residuals
+norm=LayerNorm  amp_dtype=bf16  scoring_guard=nan_to_num
 ```
 
-- **val_avg/mae_surf_p:** **115.61** (best epoch 11 of 50; run timed out at
-  31.5 min wall clock — undertrained, val curve still descending)
-- **val_avg/mae_surf_Ux:** 1.81
-- **val_avg/mae_surf_Uy:** 0.75
+### Anchored val metrics
 
-Per-split (best-val checkpoint):
+| Source | val_avg/mae_surf_p | best_epoch | seeds | notes |
+|-|-:|-:|-:|-|
+| **Anchor** — PR #330 fp32 (run `uip4q05z`) | **115.61** | 11 | 1 | Original Huber β=1 winner; pre-bf16 |
+| PR #399 bf16 (3-seed mean, σ=4.53) | 112.13 | 12-13 | 3 | Infrastructure merge; throughput unlock + finite test_avg |
+
+The **anchor remains 115.61** — that's the metric the round-2 decision rules
+compare against. The bf16 multi-seed mean (112.13) is at-baseline within the
+new tighter (σ=4.53) noise floor; the throughput unlock is what made bf16
+merge-worthy as infrastructure.
+
+### Anchored test metrics (now finite, post-#367)
+
+| Source | test_avg/mae_surf_p | seeds |
+|-|-:|-:|
+| PR #399 bf16 + post-#367 scoring (3-seed mean) | **101.82** | 3 |
+
+First end-to-end finite paper-facing metric on this branch. Per-split test:
+`test_single_in_dist=118.16, test_geom_camber_rc=107.52,
+test_geom_camber_cruise=79.13, test_re_rand=102.49` (3-seed means).
+
+### Per-split val (Huber + slice-128, fp32 anchor `uip4q05z`)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |-|-:|-:|-:|
@@ -32,29 +45,41 @@ Per-split (best-val checkpoint):
 | val_geom_camber_cruise | 98.74 | 1.28 | 0.55 |
 | val_re_rand | 107.89 | 2.00 | 0.74 |
 
-**Δ vs prior baseline (PR #328 slice_num=128, MSE @ 133.55): −13.4 %.** Outside
-the ±10 % single-seed noise floor (per thorfinn #337 replicate). Strongest
-per-split delta on `val_re_rand` (107.89 vs 125.66 = −14.1 %), confirming the
-high-Re-tail mechanism predicted in the original hypothesis.
+### Reproduce
 
-Test-side: `test_avg/mae_surf_p` is `NaN` due to the
-`test_geom_camber_cruise/.gt/000020.pt` non-finite-pressure scoring bug.
-Bug-fix PR #367 in flight (3 students independently confirmed the root cause
-and equivalent patch). Other test splits are clean:
-`test_single_in_dist/mae_surf_p=125.75`, `test_geom_camber_rc/mae_surf_p=108.59`,
-`test_re_rand/mae_surf_p=105.10`.
+```bash
+# Current default (= bf16 + Huber + slice-128 + scoring fix):
+python train.py --wandb_name "willow-r2-baseline-replication" --agent <your-agent>
+# All defaults: --lr 5e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10.0 --epochs 50
+```
 
-- **W&B run:** `uip4q05z` —
-  https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r2/runs/uip4q05z
-- **Reproduce:** `cd target/ && python train.py --wandb_name "willow-r2-frieren-huber-b1-on-slice128" --agent willowpai2d2-frieren`
+## Methodology constraints (load-bearing for round 2 decisions)
 
-## Prior baseline — PR #328 (slice_num=128, MSE)
+- **Wall-clock cap**: `SENPAI_TIMEOUT_MINUTES=30` per run. Empirically binds
+  at **11–14 epochs** for current configs (with bf16 enabling +30 % epoch
+  headroom). Every finished run is undertrained vs the configured 50.
+- **Single-seed noise floor**: ±10 % on fp32 (thorfinn replicate evidence);
+  σ ≈ 4.5 / ~4 % on bf16+Huber (askeladd's #399 multi-seed). Single-seed
+  deltas under ~10 % vs 115.61 require multi-seed replication; under ~5 %
+  vs 115.61 on bf16 require multi-seed.
+- **Huber absorbs small-effect optimization-axis levers** (round-2 dominant
+  finding, surfaced from edward #429 + tanjiro #335 independently):
+  Huber's gradient clipping past |residual|=1 already implicitly does
+  the work that schedule, channel-weighting, surf_weight, and BS-scaling
+  axes were trying to do explicitly on MSE. Round-2 axes that target the
+  same gradient-magnitude failure mode regress to baseline; only
+  structurally-orthogonal mechanisms (target distribution, throughput,
+  parameter-noise, normalization, regularization, data exposure,
+  update-rule, per-layer LR) compound.
 
-Doubled the Transolver `slice_num` from 64 to 128. All other knobs at original
-defaults.
+## Merge history
 
-- val_avg/mae_surf_p = 133.55 (best epoch 11/50, run `s1p2qs7l`)
-- Set the architectural baseline that frieren's Huber rebased onto.
+| PR | Date | Axis | Δ on val_avg/mae_surf_p |
+|-|-|-|-:|
+| #328 | 2026-04-27 23:50 | slice_num: 64 → 128 | (anchored at 133.55) |
+| #330 | 2026-04-28 01:30 | MSE → Huber (β=1) | **−13.4 %** → 115.61 |
+| #367 | 2026-04-28 02:30 | scoring NaN guard (`nan_to_num`) | (infrastructure: enables finite `test_avg`) |
+| #399 | 2026-04-28 05:00 | bf16 mixed precision | (infrastructure: 1.23× speedup, +30 % epoch headroom; mean 112.13 at-baseline) |
 
 ## Validation tracks
 
@@ -62,7 +87,3 @@ defaults.
 - `val_geom_camber_rc` — held-out raceCar tandem front-foil camber (M=6-8)
 - `val_geom_camber_cruise` — held-out cruise tandem front-foil camber (M=2-4)
 - `val_re_rand` — stratified Re holdout across all tandem domains
-
-The paper-facing test counterpart is `test_avg/mae_surf_p`, computed at the
-end of every run from the best validation checkpoint. Currently NaN until
-the cruise scoring bug fix (PR #367) lands.
