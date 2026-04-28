@@ -1,29 +1,36 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 03:00 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
+- **Last update:** 2026-04-28 03:15 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
 - **Most recent human-team direction:** N/A — no team issues consulted (isolated replicate; only entrypoint-surfaced PRs in scope).
-- **Current baseline (merged): `val_avg/mae_surf_p = 83.223`, `test_avg/mae_surf_p = 73.904`** (PR #426 EMA(0.99) on SwiGLU baseline).
+- **Current baseline (merged): `val_avg/mae_surf_p = 80.480`, `test_avg/mae_surf_p = 72.328`** (PR #455 DropPath on EMA(0.99)+SwiGLU baseline).
   - PR #282 — Huber loss (δ=1.0). val_avg = 105.999.
   - PR #361 — NaN-safe `evaluate_split` workaround. First finite test_avg = 97.957.
   - PR #363 — EMA(decay 0.999). val_avg = 101.350 (−4.39% vs huber).
-  - PR #391 — LLaMA-style SwiGLU FFN inside `TransolverBlock`. val_avg = 88.227 (−12.95% vs EMA). Param-matched.
-  - PR #426 — EMA decay 0.999 → 0.99 (shorter half-life). **val_avg = 83.223 (−5.67% vs SwiGLU), test_avg = 73.904 (−5.66%).** All 4 val + test splits improved uniformly. Mechanism: EMA bias correction during the under-trained cold start.
+  - PR #391 — LLaMA-style SwiGLU FFN. val_avg = 88.227 (−12.95% vs EMA). Param-matched.
+  - PR #426 — EMA decay 0.999 → 0.99. val_avg = 83.223 (−5.67% vs SwiGLU). Mechanism: cold-start bias correction.
+  - PR #455 — Stochastic depth (DropPath linear schedule 0→0.1, last block kept). **val_avg = 80.480 (−3.30% vs EMA(0.99)), test_avg = 72.328 (−2.13%).** Param-identical. Mechanism: generic regularization (uniform offset on val curve), NOT OOD-targeted as predicted.
 
 ## Current research focus
 
 Compound improvements on the round-1 huber baseline. Recover the paper-facing test metric. Test orthogonal levers (capacity, slice count, optimizer recipe, surface weighting, regularization, EMA, channel weighting) so round-3 can stack winners.
 
-## Outcomes to date (20 reviewed)
+## Outcomes to date (23 reviewed)
 
-| Rank | PR | Student | Slug | best `val_avg/mae_surf_p` | Δ vs 83.223 (current) | Decision |
+| Rank | PR | Student | Slug | best `val_avg/mae_surf_p` | Δ vs 80.480 (current) | Decision |
 |------|----|---------|------|--------------------------:|----------------------:|----------|
-| 1 | #426 | askeladd | ema-decay-099 | **83.223** | (current baseline, MERGED) | MERGED |
-| 2 | #391 | thorfinn | swiglu-mlp | 88.227 | +6.0% | MERGED (SwiGLU baseline) |
-| 3 | #363 | thorfinn | ema-eval | 101.350 | +21.8% | MERGED (intermediate) |
-| 4 | #282 | edward | huber-loss | 105.999 | +27.4% | MERGED (huber baseline) |
-| 4b | #361 | edward | nan-safe-eval | 108.103 (rerun) | n/a — RNG noise | MERGED (metric-pipeline fix) |
-| 4c | #454 | askeladd | ema-bias-correction (decay=0.999, warmup=10) | 84.645 | +1.71% | CLOSED (cold-start did improve but rest regressed; bias correction asymptotes to slow EMA(0.999)) |
-| 4d | #439 | fern | huber-delta-05 | 87.265 | +4.9% | CLOSED (-1.1% vs SwiGLU baseline 88.227, but +4.9% vs current; δ profile shows diminishing returns) |
+| 1 | #455 | thorfinn | stochastic-depth-01 | **80.480** | (current baseline, MERGED) | MERGED |
+| 2 | #426 | askeladd | ema-decay-099 | 83.223 | +3.4% | MERGED (intermediate) |
+| 3 | #456 | edward | layerscale-1e4 | 83.544 | +3.8% | CLOSED (gammas didn't reach specialization regime in 13 ep) |
+| 4 | #391 | thorfinn | swiglu-mlp | 88.227 | +9.6% | MERGED (SwiGLU baseline) |
+| 5 | #439 | fern | huber-delta-05 | 87.265 | +8.4% | CLOSED (δ profile diminishing returns) |
+| 6 | #454 | askeladd | ema-bias-correction (0.999) | 84.645 | +5.2% | CLOSED |
+| 7 | #440 | tanjiro | silu-everywhere | 88.128 | +9.5% | CLOSED |
+| 8 | #424 | thorfinn | swiglu-head | 90.298 | +12.2% | CLOSED |
+| 9 | #425 | frieren | input-noise-001 | 89.984 | +11.8% | CLOSED |
+| 10 | #450 | alphonse | rmsnorm-everywhere (nn.RMSNorm) | 91.342 | +13.5% | CLOSED (per-step quality won; nn.RMSNorm wall-clock penalty cost 1 epoch) |
+| 11 | #363 | thorfinn | ema-eval | 101.350 | +25.9% | MERGED (intermediate) |
+| 12 | #282 | edward | huber-loss | 105.999 | +31.7% | MERGED (huber baseline) |
+| 12b | #361 | edward | nan-safe-eval | 108.103 (rerun) | n/a — RNG | MERGED (metric-pipeline fix) |
 | 5 | #440 | tanjiro | silu-everywhere | 88.128 | +5.9% | CLOSED (null result; activation choice below noise floor) |
 | 5b | #424 | thorfinn | swiglu-head | 90.298 | +8.5% | CLOSED (head SwiGLU lacks residual buffer; OOD splits regress) |
 | 5c | #425 | frieren | input-noise-001 | 89.984 | +8.1% | CLOSED (per-node noise broke per-sample feature consistency on dims 13–23) |
@@ -48,26 +55,27 @@ Per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`. Per-experiment JS
 
 
 
-## Round-4 in flight (1 student)
+## Round-5 in flight (5 students)
+
+Branched on EMA(0.99)+SwiGLU baseline (83.223), pre-DropPath. Will be ranked against the now-current DropPath baseline (80.480) when they return.
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
-| #450 | alphonse | rmsnorm-everywhere | replace `nn.LayerNorm` with `RMSNorm` in all 3 norm sites in `TransolverBlock` (branched on SwiGLU pre-EMA(0.99); will be ranked against current 83.223) | −0.5% to −1.5% |
+| #459 | tanjiro | swiglu-preprocess | replace preprocess MLP with `SwiGLU_MLP` | −0.5% to −2% |
+| #460 | frieren | per-sample-feature-noise | semantics-aware noise (per-node dims 0–12, per-sample broadcast dims 13–23) | −1% to −3% |
+| #463 | fern | huber-delta-025 | huber `δ → 0.25` on previous baseline | −0.5% to −1.5% |
+| #479 | askeladd | bias-corrected-ema-099 | EMA `decay_target=0.99, warmup_steps=10` | −0.5% to −1.5% |
+| #480 | nezuko | adamw-betas-095 | AdamW betas (0.9, 0.999) → (0.9, 0.95) | −0.5% to −1.5% |
 
-## Round-5 in flight (8 students)
+## Round-6 just-assigned (3 students)
 
-Built on the merged EMA(0.99)+SwiGLU baseline (83.223).
+Built on the merged DropPath+EMA(0.99)+SwiGLU baseline (80.480). All single-axis tests; all are student-suggested follow-ups from their own diagnostic write-ups.
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
-| #454 | askeladd | ema-bias-correction | Adam-style EMA bias correction: `decay_t = min(0.999, (1+t)/(10+t))` — keeps decay=0.999 asymptotic but ramps from cold start | −1% to −3% |
-| #455 | thorfinn | stochastic-depth-01 | Stochastic depth (DropPath) with linear schedule 0 → 0.1 across 5 blocks | −1% to −3% |
-| #456 | edward | layerscale-1e4 | CaiT-style LayerScale: per-branch scalar gates initialized to 1e-4 | −1% to −2% |
-| #459 | tanjiro | swiglu-preprocess | replace preprocess MLP with `SwiGLU_MLP` (LLaMA-everywhere completion); per-token gating at the input projection | −0.5% to −2% |
-| #460 | frieren | per-sample-feature-noise | semantics-aware noise: per-node on dims 0–12 (positions, saf, dsdf, is_surface) + per-sample broadcast on dims 13–23 (per-sample globals: Re, AoA, NACA, gap, stagger). Direct correction of PR #425's failure mode | −1% to −3% |
-| #463 | fern | huber-delta-025 | huber `δ → 0.25` on EMA(0.99)+SwiGLU baseline. Tests whether the monotone δ profile (2→1→0.5: 107.6 → 88.2 → 87.3) saturates or keeps improving toward L1, and whether δ=0.25 stacks with EMA(0.99) | −0.5% to −1.5% (could regress if profile saturated) |
-| #479 | askeladd | bias-corrected-ema-099 | EMA `decay_target=0.99, warmup_steps=10` — keeps EMA(0.99)'s fast-tracking baseline AND layers Adam-style cold-start bias correction (his own follow-up #2 from #454) | −0.5% to −1.5% |
-| #480 | nezuko | adamw-betas-095 | AdamW betas (0.9, 0.999) → (0.9, 0.95) — transformer-style second-moment time constant; tracks rapidly-changing gradient distribution under our 13-epoch under-trained regime; orthogonal to step count | −0.5% to −1.5% |
+| #486 | thorfinn | drop-path-02 | Push `drop_path_max` 0.1 → 0.2; effective per-block drop rates `[0, 0.05, 0.1, 0.15, 0.0]` — ~2× more stochasticity. DeiT/Swin uses 0.2-0.4 routinely. | −0.5% to −2% |
+| #487 | edward | layerscale-1e2 | LayerScale init 1e-4 → 1e-2 (100× shorter trip from init to specialization regime); on top of merged DropPath. His own follow-up #2. | −0.5% to −1.5% |
+| #488 | alphonse | rmsnorm-manual | RMSNorm with **manual nn.Module** instead of nn.RMSNorm (which had a 16.9% wall-clock penalty as ATen op). Tests whether per-step quality lead carries to the headline. His own follow-up #1. | −0.5% to −1.5% |
 
 ## Disconfirmed directions (do not retry on this branch)
 
