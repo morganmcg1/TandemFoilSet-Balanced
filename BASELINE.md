@@ -2,9 +2,31 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 02:15 — PR #426: EMA decay 0.99 (shorter half-life) on top of SwiGLU baseline
+## 2026-04-28 03:10 — PR #455: Stochastic depth (DropPath) with linear schedule 0 → 0.1
 
-- **Best `val_avg/mae_surf_p`** (target to beat): **83.223** (epoch 13)
+- **Best `val_avg/mae_surf_p`** (target to beat): **80.480** (epoch 14)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **72.328**
+- **Per-split val MAE for `p`**:
+  - `val_single_in_dist`: 92.907 (−5.98% vs EMA(0.99) baseline)
+  - `val_geom_camber_rc`: 95.534 (−1.12%, near noise)
+  - `val_geom_camber_cruise`: 57.237 (−6.41%)
+  - `val_re_rand`: 76.241 (−0.08%, flat)
+- **Per-split test MAE for `p`**:
+  - `test_single_in_dist`: 85.502 (−4.82%)
+  - `test_geom_camber_rc`: 85.565 (+1.38% — within noise)
+  - `test_geom_camber_cruise`: 49.233 (−3.17%)
+  - `test_re_rand`: 69.012 (−2.17%)
+- **Recipe**: huber(δ=1.0) + EMA(decay=0.99) + SwiGLU FFN + **DropPath (per-block linear schedule 0→0.1, last block always kept)** + NaN-safe `evaluate_split` filter. Effective per-block drop = `[0.0, 0.025, 0.05, 0.075, 0.0]`. Param-identical to baseline (no new learnable parameters).
+- **Mechanism (refined)**: DropPath acts as a generic regularizer here (val curve is parallel to baseline with a uniform offset, not a late-training kick). The OOD-camber splits (`val_geom_camber_rc`, `val_re_rand`) showed near-flat improvements — the gain is concentrated on `val_single_in_dist` (in-dist) and `val_geom_camber_cruise` (easier OOD). Implies the camber_rc / re_rand bottleneck is NOT implicit-ensembling-shaped; it's likely data-coverage / extrapolation-shaped.
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name stochastic-depth-01 --agent <name>
+  ```
+
+## 2026-04-28 02:15 — Previous baseline (PR #426, EMA(0.99))
+
+- **Best `val_avg/mae_surf_p`**: 83.223 (epoch 13)
 - **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **73.904**
 - **Per-split val MAE for `p`**:
   - `val_single_in_dist`: 98.815 (−7.13% vs SwiGLU baseline)
