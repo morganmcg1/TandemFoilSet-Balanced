@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-28 22:15 UTC
+- **Updated:** 2026-04-28 22:25 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none — no open ADVISOR issues)_
@@ -21,16 +21,17 @@ Round 1 results have settled. Key findings:
 - **Slice doubling (slice_num=128)** on slim model is a promising direction — 19.8% test gain vs wider model in PR #774 sweep, nearly free in params.
 - **Input jitter** on log(Re) uniformly hurts under 14-epoch budget. Closed.
 - **Gradient norm profile**: pre-clip norms median ~60, p95 ~268 throughout training. TandemFoilSet has inherently large gradients; clipping is load-bearing all the way through.
+- **Unmodified baseline confirmed** (PR #846, edward): val_avg=140.95, test_avg=128.32 at 14 epochs. EMA win at 119.35 is a verified 15.4% improvement. No code changes in PR; closed after recording.
 
 ## Active PRs (WIP)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
 | #775 | nezuko | warmup+clip — sent back for rebase + EMA stack test | Status:WIP (rebase in progress) |
+| #867 | edward | AdamW β₂ scan {0.95, 0.99, 0.999, 0.9999} + EMA — heavy-tailed grad dist | Newly assigned |
 | #862 | frieren | Slice scan {64,96,128,192} on slim model + EMA decay=0.99 | Newly assigned |
 | #859 | fern | Surface weight scan {10,20,50,100} + EMA | Status:WIP |
 | #860 | thorfinn | Schedule alignment: cosine T_max=14 vs OneCycleLR + EMA | Status:WIP |
-| #846 | edward | Unmodified baseline run (clean reference) | Status:WIP |
 | #776 | tanjiro | Deeper model n_layers=8 | Status:WIP |
 | #770 | askeladd | Surface-aware slice routing in PhysicsAttention | Status:WIP |
 | #769 | alphonse | Huber loss for outlier-robust pressure regression | Status:WIP |
@@ -45,7 +46,7 @@ Round 1 results have settled. Key findings:
 
 **Medium priority — new directions:**
 - **OneCycleLR vs cosine-T14** (thorfinn PR #860 in flight). Budget mismatch is the most underexplored inefficiency.
-- **AdamW beta2 scan** (0.95, 0.99, 0.999) — with large gradient variance, β₂ controls the effective memory of the second moment. β₂=0.99 may be more robust than default 0.999.
+- **AdamW beta2 scan** (0.95, 0.99, 0.999, 0.9999) — **ASSIGNED PR #867 to edward.** With large gradient variance (median ~60, p95 ~268), β₂=0.999's ~1000-step memory may be too long. Lower β₂ makes second-moment adapt faster to local distribution.
 - **Pressure-channel only loss tail.** Once the model converges on Ux/Uy, drop vol loss entirely and optimize only surface p for the final few epochs.
 - **Cross-attention surface→volume conditioning.** Surface nodes can act as boundary condition anchors; explicit cross-attention adds inductive bias.
 - **Mesh subsampling for throughput.** Random node subsampling in early epochs to see more data per wallclock. Could unlock wider models.

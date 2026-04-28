@@ -24,8 +24,12 @@ denormalized target space.
 | PR   | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                                |
 |------|------------|---------------------|---------------------|--------------------------------------|
 | **#773** | [5yzk5722](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/5yzk5722) | **119.35** | **108.79** | EMA decay=0.99, epoch 13, **MERGED ✓** |
+| #846 (ref) | [bv3x1tp6](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/bv3x1tp6) | 140.95 | 128.32 | Unmodified default @ 14 ep — canonical reference |
 
-**Note:** A clean unmodified-baseline run is still in flight (PR #846, willowpai2e1-edward). The EMA run beats the un-averaged live model at the same epoch (124.15) by 3.9% on val_avg.
+**Pending wins (not yet baseline):**
+- PR #775 (nezuko warmup5-clip0.5): val_avg=115.01, test_avg=101.64 — beats baseline by 3.6%/6.6%, but built without EMA. Sent back for rebase + EMA stack test.
+
+**Validation:** EMA win is real — PR #773 at 119.35 beats the unmodified default (140.95) by 15.4% on val and 15.3% on test under matched 30-min budget.
 
 ## Per-split test metrics (current best — PR #773, EMA decay=0.99)
 

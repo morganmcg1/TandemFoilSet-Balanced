@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-04-28 22:20 — PR #846: Unmodified baseline run (canonical reference) ✓ CLOSED (results recorded)
+
+- Branch: `willowpai2e1-edward/unmodified-baseline`
+- Hypothesis: Establish the clean, unmodified default config baseline that all Round 1/2 experiments can compare against.
+
+| W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | Epoch | Notes |
+|---------|:------------------:|:-------------------:|:-----:|-------|
+| [bv3x1tp6](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/bv3x1tp6) | 140.95 | 128.32 | 14/50 | Timeout hit; no code changes |
+
+Per-split val: single=182.40, rc=162.60, cruise=103.93, re_rand=114.86  
+Per-split test: single=157.33, rc=145.12, cruise=90.01, re_rand=120.80  
+Per-epoch val_avg converged monotonically to best at epoch 14 (still descending — schedule never annealed below ~4.1e-4).
+
+**Analysis and conclusions:**
+
+Clean reference baseline confirmed: val_avg=140.95, test_avg=128.32 at 14 epochs (30-min wall clock). This validates all Round 1 wins:
+- EMA (PR #773) at val=119.35 is **15.4% better** than unmodified default — a real improvement.
+- nezuko's clip0.5 (PR #775, no EMA) at val=115.01 is **18.4% better** — even stronger.
+
+Key observation: per-epoch throughput is ~132s, confirming ~14 epochs per 30-min budget. The cosine LR at epoch 14 is still at 4.1e-4 (out of 50-epoch schedule) — strong evidence of schedule mismatch already under investigation by thorfinn PR #860.
+
+Notable: UW configs in PR #771 (val ~123–124 at epoch 14) were better than this clean unmodified baseline by ~17 val units. Most likely explanation is run-to-run variance or accidental beneficial effect of UW's different loss reparameterization — not enough samples to be conclusive.
+
+**PR closed** — no code to merge; results recorded as canonical reference in BASELINE.md.
+
+---
+
 ## 2026-04-28 19:30 — PR #771: Learnable per-channel uncertainty weighting (Kendall & Gal 2018)
 
 - Branch: `willowpai2e1-edward/uncertainty-weighting`
