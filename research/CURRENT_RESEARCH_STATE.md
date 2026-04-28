@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-28 21:30
+- 2026-04-28 21:40
 - No recent research direction from human researcher team (no open GitHub issues found)
 - Current research focus and themes:
 
@@ -24,16 +24,16 @@ Every prior result needs to be re-judged against the new baseline. Specifically,
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #826 | tanjiro | AdamW weight decay 1e-5→1e-2 | WIP |
-| #825 | askeladd | Per-sample loss normalization | WIP |
-| #800 | alphonse | n_hidden=256 + bf16 AMP | WIP (rebased on clipping baseline) |
-| #780 | thorfinn | mlp_ratio 2→4 | WIP |
-| #772 | nezuko | per-channel output affine | WIP |
-| #768 | frieren | lr=1e-4 + warmup | WIP (rebased on clipping baseline) |
-| #767 | fern | surf_weight 10→50 | WIP (rebased on clipping baseline) |
-| #766 | edward | n_layers 5→8 | WIP |
+| #826 | tanjiro | AdamW weight decay 1e-5→1e-2 | WIP — first run on clipping baseline, still running |
+| #825 | askeladd | Per-sample loss normalization | WIP — first run on clipping baseline, still running |
+| #800 | alphonse | n_hidden=256 + bf16 AMP | WIP — rebased on clipping baseline, re-running |
+| #780 | thorfinn | mlp_ratio 2→4 | WIP — reviewed 2026-04-28 21:35; sent back to rebase onto clipping baseline (prev result 135.296 without clipping) |
+| #772 | nezuko | per-channel output affine | WIP — reviewed 2026-04-28 21:35; sent back to rebase onto clipping baseline (prev result 138.497 without clipping) |
+| #768 | frieren | lr=1e-4 + warmup | WIP — rebased on clipping baseline, re-running |
+| #767 | fern | surf_weight 10→50 | WIP — rebased on clipping baseline, re-running |
+| #766 | edward | n_layers 5→8 | WIP — first run on clipping baseline, still running |
 
-All 8 students have active WIP assignments. No idle students. Checked 2026-04-28 21:30 — no PRs ready for review yet, all experiments still running.
+All 8 students have active WIP assignments. No idle students. Checked 2026-04-28 21:40 — PRs #780 and #772 reviewed and sent back for rebase onto clipping baseline; all 8 experiments now running.
 
 ## Potential Next Research Directions
 
@@ -44,7 +44,7 @@ Now that gradient clipping is in baseline, the search space opens up:
 3. **Surface-aware loss reformulation** — Huber/SmoothL1 on the surface channel (tail-robust); per-channel surf_weight tuning (Ux/Uy vs p).
 4. **AdamW + weight decay tuning** — current weight_decay=1e-5 is essentially zero; with stable gradients, WD=1e-2 or 1e-3 is now a reasonable target.
 5. **Cosine LR with restarts (SGDR)** — stable gradients permit aggressive schedules.
-6. **NaN bug in `data/scoring.py`** — `err * mask` with NaN preds yields `NaN * 0.0 = NaN`; poisons test_geom_camber_cruise pressure MAE on multiple runs. Fix needs a separate PR. (Note: data/ is read-only for experiment PRs — this is an organizer-level fix.)
+6. **NaN bug in `data/scoring.py`** — `err * mask` with NaN preds yields `NaN * 0.0 = NaN`; poisons test_geom_camber_cruise pressure MAE on multiple runs. Fix: `torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)` in `accumulate_batch`. Organizer-level fix required (data/ is read-only for experiment PRs).
 7. **Output head — separate per-channel** — pressure dynamics are dominated by extremes; a dedicated pressure head (deeper, with its own normalization) may help.
 8. **Larger batch via accumulation** — gradient accumulation + clipping = stable optimization at effective batch_size=16 or 32; less frequent updates, more stable signal.
 9. **Multi-scale attention** — combine coarse background zone with dense foil-zone features.

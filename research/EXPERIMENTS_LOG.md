@@ -94,6 +94,71 @@ A single line of code (`torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`
 
 ---
 
+## 2026-04-28 21:30 — PR #780: Higher MLP ratio: mlp_ratio 2→4 [SENT BACK]
+
+- **Branch:** `charliepai2e2-thorfinn/higher-mlp-ratio`
+- **Hypothesis:** Doubling the FFN expansion factor (mlp_ratio 2→4) gives the model more representational capacity per layer at minimal parameter cost (~2.6K extra params). Expected to lower val_avg/mae_surf_p.
+- **Outcome:** SENT BACK — val_avg/mae_surf_p = 135.296 at epoch 13/50. Beat old baseline (137.0013) narrowly but not the new clipping baseline (104.7457). Run was without gradient clipping.
+
+### Results Table (best checkpoint, epoch 13)
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_single_in_dist | 172.640 |
+| val_geom_camber_rc | 144.293 |
+| val_geom_camber_cruise | 99.672 |
+| val_re_rand | 124.578 |
+| **avg** | **135.296** |
+
+- Model size: 0.99M params (~+2.6K vs mlp_ratio=2)
+- Peak VRAM: 52.2 GB
+- Per-epoch time: ~148s, runtime 32.09 min
+- test_avg/mae_surf_p: NaN (test_geom_camber_cruise scoring bug; 3-split manual avg = 130.75)
+- W&B run_id: 496z6hmp
+
+### Analysis
+
+The val curve was monotonically descending (233.6 → 135.3) — no sign of overfitting or instability. The result narrowly beats the old baseline (137.0) but sits well above the new clipping baseline (104.7). This run was on the pre-clipping codebase. mlp_ratio=4 may still be a valid improvement once gradient clipping is in place — retest required. Student provided excellent NaN bug report corroborating fern and nezuko's findings.
+
+**Decision:** Sent back. Rebase onto clipping baseline (merge icml-appendix-charlie-pai2e-r2 which includes clip_grad_norm=1.0), keep mlp_ratio=4, re-run. Target: val_avg/mae_surf_p < 104.7457.
+
+---
+
+## 2026-04-28 21:35 — PR #772: Per-channel output affine: learnable scale+bias [SENT BACK]
+
+- **Branch:** `charliepai2e2-nezuko/per-channel-output-scale`
+- **Hypothesis:** Adding learnable per-channel scale and bias to the output head gives the model explicit calibration capacity per physical channel (Ux, Uy, p), potentially helping the pressure channel which operates on different physical scales.
+- **Outcome:** SENT BACK — val_avg/mae_surf_p = 138.497 at epoch 12/50. Above both old baseline (137.0013) and new clipping baseline (104.7457). Run was without gradient clipping.
+
+### Results Table (best checkpoint, epoch 12)
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_single_in_dist | 172.870 |
+| val_geom_camber_rc | 152.966 |
+| val_geom_camber_cruise | 107.674 |
+| val_re_rand | 120.478 |
+| **avg** | **138.497** |
+
+### Learned per-channel output affine (best checkpoint)
+
+| Channel | out_scale | out_bias |
+|---------|----------:|---------:|
+| Ux | 1.0203 | -0.0157 |
+| Uy | 1.0835 | -0.0293 |
+| p  | 1.0636 | -0.0258 |
+
+- Peak VRAM: 42.1 GB
+- test_avg/mae_surf_p: 125.331 (finite — student added NaN workaround in train.py filtering non-finite-y samples at evaluate_split)
+
+### Analysis
+
+The learned scales are non-trivial (2-8% above 1.0) — the model does exploit calibration capacity. However, without the clipping baseline, the result can't be fairly evaluated. The scale shift on Uy (1.084) > p (1.064) > Ux (1.020) pattern is interesting — all three shift in the same direction suggesting broad output amplification rather than per-channel decoupling. With stable gradients from clipping, the affine calibration may find more channel-specific corrections. Student also filed a detailed NaN bug report confirming the data/scoring.py root cause.
+
+**Decision:** Sent back. Rebase onto clipping baseline. Keep per-channel affine + NaN workaround in train.py. Target: val_avg/mae_surf_p < 104.7457.
+
+---
+
 ## 2026-04-28 21:00 — PR #800: n_hidden=256 + bf16 AMP [SENT BACK]
 
 - **Branch:** `charliepai2e2-alphonse/n-hidden-256-bf16`
