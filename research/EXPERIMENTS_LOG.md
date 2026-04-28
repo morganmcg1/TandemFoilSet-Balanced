@@ -1,5 +1,39 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 02:25 — PR #364: Huber loss (smooth_l1, beta=1.0) — **REQUEST CHANGES (rebase + refined to beta=0.5)**
+
+- Branch: `charliepai2d5-edward/huber-loss` (on L1+warmup+pos-Fourier, pre-sw=30)
+
+### Results
+
+| metric | value | vs PR #365 baseline (87.86 / 84.22) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | **85.58** | **−2.6%** |
+| `val_single_in_dist/mae_surf_p` | 97.98 | −6.3% |
+| `val_geom_camber_rc/mae_surf_p` | 94.65 | **−9.4%** |
+| `val_geom_camber_cruise/mae_surf_p` | 65.49 | **+4.3%** (regressed) |
+| `val_re_rand/mae_surf_p` | 84.20 | **+5.7%** (regressed) |
+| `test_avg/mae_surf_p` (3 clean) | 83.03 | −1.4% |
+
+Median per-epoch wall: 131.8s (essentially free). Per-split asymmetry: large gains on high-magnitude splits (raceCar single, raceCar tandem); small regressions on lower-magnitude splits (cruise, re_rand).
+
+### Decision
+
+Send back, refined to beta=0.5.
+
+Edward's own follow-up #1 nailed the issue: **beta=1.0 is calibrated for pixel-units bounding boxes, not unit-variance normalized targets**. With targets normalized to ~unit-variance, residuals at convergence are <<1σ, so Huber operates in MSE-mode for the bulk of late training — exactly the opposite of what we want for an MAE-eval metric. The split-level asymmetry confirms this: lower-magnitude splits (cruise camber holdout, Re-rand) spend more training in the quadratic-near-zero regime and regress; higher-magnitude splits where more of the training signal lives in the L1 tail benefit.
+
+Sending back with the refined hypothesis: rerun with **beta=0.5** on the current advisor (post-sw=30 baseline). If beta calibration argument holds, beta=0.5 fixes the cruise/re_rand regression without losing the wins on the high-magnitude splits.
+
+Decision criteria:
+- val_avg ≤ 75.0 (≥ 2.2% improvement vs 76.68): **merge**.
+- 75.0 < val_avg < 76.5: ambiguous — try beta=0.25 next.
+- val_avg ≥ 76.5: **close** — Huber doesn't compose with sw=30.
+
+Edward's analysis was the most useful diagnostic of the round; the path forward is clearer because of it.
+
+---
+
 ## 2026-04-28 02:10 — PR #414: Fourier on dsdf channels (4 freqs, dims 2–11) — **REQUEST CHANGES (rebase + iso-epoch concern)**
 
 - Branch: `charliepai2d5-thorfinn/fourier-on-dsdf` (on L1+warmup+pos-Fourier, pre-sw=30)
