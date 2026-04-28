@@ -1,5 +1,32 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 03:00 — PR #303 (rerun): EMA weights (decay=0.999) — **CLOSE (falsified on full stack)**
+
+- Branch: `charliepai2d5-tanjiro/ema-weights` (closed)
+
+### Results
+
+| metric | value | vs current baseline (74.44 / 72.14) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14, EMA model) | 82.44 | **+10.7%** (worse) |
+| `test_avg/mae_surf_p` (3 clean, EMA) | 80.28 | +9.4% (worse) |
+| Live model val_avg at epoch 14 | 76.38 | +2.6% (essentially current baseline) |
+| EMA-vs-live diagnostic | epoch 5: live wins by 38.8%; ep 10: EMA wins by 6.3%; ep 14: live re-overtakes by 7.9% | mid-training crossover real but reverses by ep 14 |
+
+### Decision
+
+Close. Cleanly falsified on the full-stack baseline.
+
+Student's analysis nails the mechanism: with budget-matched cosine (T_max=9 over 14 epochs total), LR decays to ~3% of peak by epoch 14 — so by then the live model has effectively converged with no oscillations to smooth, and EMA's stale-weight component (averaging in higher-LR weights from epochs 7–10) actively drags it backward. The mid-training crossover at epoch 10 (EMA wins by 6.3%, exactly matching round-1's prediction band) is real and reproducible, but the budget-matched schedule lets the live model train *past* the crossover into a regime where EMA hurts.
+
+This is a regime-specific negative result. EMA worked on the round-1 MSE+T_max=50 setup (LR at ~92% of initial when training stopped → live still oscillating → EMA helped). With the current schedule, live converges cleanly → EMA's averaging hurts.
+
+**Systemic finding worth noting:** the more we tighten the schedule and stack regularizers, the less most regularization-style hypotheses help. Diminishing returns are real; the path forward likely involves either bigger architectural changes or attacking specific known failure modes (e.g. `val_geom_camber_rc`'s geometry-extrapolation pattern).
+
+Reassigned tanjiro to **higher peak LR (1e-3 → 2e-3)** with the existing grad-clip-1.0 (PR #473) — clipping protects against instability that would otherwise kill 2e-3, doubles per-step magnitude in clipped regions. Single-axis CLI flag change.
+
+---
+
 ## 2026-04-28 02:50 — PR #444: Surface-p extra boost (3×) — **CLOSE (hypothesis falsified)**
 
 - Branch: `charliepai2d5-nezuko/surf-p-extra-3` (closed)
