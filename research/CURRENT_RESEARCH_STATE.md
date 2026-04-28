@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 09:35
+- **Date:** 2026-04-28 09:55
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
@@ -66,7 +66,8 @@
 | thorfinn | #436 | additive-surf-head | Architecture (additive surface head) | -2% to -7% | **CLOSED** — +3.47% (trunk interference is deeper bottleneck) |
 | thorfinn | #484 | surface-film | Architecture (surface-conditional FiLM in last block) | -1% to -4% | **MERGED** dc9e0e5 → val_avg=**57.37** (NEW BEST, -0.23% val / -3.06% test); paired -3.05%/-2.92% all 8 splits gain |
 | thorfinn | #594 | film-all-blocks | Architecture (FiLM at all 5 block boundaries) | -1% to -3% | **CLOSED** — wall-clock +2.12% (matched-epoch -1.92% but +5.7% throughput cost eats gain); OOD splits regress |
-| thorfinn | #633 | domain-film | Architecture (3-way domain FiLM at last-block decoder) | -1% to -3% | WIP |
+| thorfinn | #633 | domain-film | Architecture (3-way domain FiLM at last-block decoder) | -1% to -3% | **MERGED** 6b12744 (infra) — flag plumbed at default False; paired -7.36% vs surface-FiLM, all 8 splits gain |
+| thorfinn | #695 | hybrid-film | Architecture (6-way: 3 domains × {surface, volume} FiLM) | -1% to -4% | WIP |
 
 ## Lessons from round 1 so far
 
