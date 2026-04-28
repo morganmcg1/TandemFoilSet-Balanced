@@ -393,6 +393,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    y_std_weight_alpha: float = 0.0  # 0.0 = uniform (= baseline); typical 0.5–1.0
 
 
 cfg = sp.parse(Config)
@@ -498,7 +499,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for step, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -511,6 +512,30 @@ for epoch in range(MAX_EPOCHS):
         pred = pred.float()
         sq_err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
 
+        sample_weight_stats = None
+        if cfg.y_std_weight_alpha > 0:
+            # Per-sample pressure y_std on the physical-units target (channel 2),
+            # masked to valid nodes. Weight per sample = (y_std_i / median_y_std)^alpha.
+            y_p = y[..., 2:3]                                         # [B, N_max, 1]
+            mask_f = mask.unsqueeze(-1).float()                       # [B, N_max, 1]
+            n_valid = mask_f.sum(dim=1, keepdim=True).clamp(min=1)    # [B, 1, 1]
+            mean_p = (y_p * mask_f).sum(dim=1, keepdim=True) / n_valid
+            var_p = (((y_p - mean_p) ** 2) * mask_f).sum(dim=1, keepdim=True) / n_valid
+            y_std_per_sample = var_p.sqrt().squeeze(-1).squeeze(-1)   # [B]
+            median_y_std = y_std_per_sample.median().clamp(min=1e-8)
+            sample_weight = (y_std_per_sample / median_y_std).pow(cfg.y_std_weight_alpha)  # [B]
+            sq_err = sq_err * sample_weight.view(-1, 1, 1)
+            sample_weight_stats = {
+                "train/y_std_weight_mean": sample_weight.mean().item(),
+                "train/y_std_weight_max": sample_weight.max().item(),
+                "train/y_std_weight_min": sample_weight.min().item(),
+            }
+            if epoch == 0 and step < 3:
+                print(
+                    f"  [y_std_weight] step={step} y_std_per_sample={y_std_per_sample.tolist()} "
+                    f"weights={sample_weight.tolist()}"
+                )
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
@@ -521,7 +546,10 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        log_dict = {"train/loss": loss.item(), "global_step": global_step}
+        if sample_weight_stats is not None:
+            log_dict.update(sample_weight_stats)
+        wandb.log(log_dict)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
