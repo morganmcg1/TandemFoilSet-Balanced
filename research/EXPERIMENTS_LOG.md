@@ -13,13 +13,79 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
-## 2026-04-27 23:30 — PR #311: Round 1 axis: model width — n_hidden 128 → 192
+## 2026-04-28 00:50 — PR #311 (iter 2): width-160 follow-up + AMP-fp16 attempt
 
-- Branch: `willowpai2d2-alphonse/width-192`
-- Hypothesis: 3–7% reduction in `val_avg/mae_surf_p` from
-  `n_hidden 128 → 192` (+50% width, ~2.25× params).
-- Run: `oahab4iy` (W&B
-  https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r2/runs/oahab4iy)
+- Branch: `willowpai2d2-alphonse/width-192` (still pre-#328; same
+  rebase need as frieren #330 + thorfinn #337).
+- Iteration: my send-back asked for width-160 (compute-equal middle
+  ground) + optional AMP-fp16 baseline at width-128.
+
+### (a) width-160 — `qrmztk33`
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-|-:|-:|-:|
+| val_single_in_dist | 154.06 | 1.80 | 1.01 |
+| val_geom_camber_rc | 135.83 | 2.83 | 1.18 |
+| val_geom_camber_cruise | 96.45 | 1.47 | 0.64 |
+| val_re_rand | 118.38 | 2.46 | 0.90 |
+| **val_avg** | **126.18** | 2.14 | 0.94 |
+
+- Best epoch 11/50 (timeout). 166 s/epoch. Peak 50.1 GB / 96 GB
+  (52 %). Params 1.03 M (1.55× baseline).
+- W&B: https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r2/runs/qrmztk33
+
+**Width-160 dominates width-192 at 30-min cap on every dimension:**
+
+| variant | params | epochs in 30 min | best val_avg/mae_surf_p | peak GB |
+|-|-:|-:|-:|-:|
+| 160-d (this iter) | 1.03 M | 11 | **126.18** | 50.1 |
+| 192-d (prev iter) | 1.47 M | 10 | 134.13 | 88.8 |
+
+### (b) AMP-fp16 at width-128 — `qyfizq4i` (terminated)
+
+Diverged at epoch 3: train loss → NaN, val_avg → NaN, GradScaler
+permanently skipping steps. Student terminated mid-epoch 6.
+
+Pattern (per epoch):
+
+| Epoch | train[vol/surf] | val_avg_surf_p |
+|-|-|-|
+| 1 | 1.83 / 1.04 | 247.74 |
+| 2 | 1.10 / 0.64 | 245.50 |
+| 3 | nan / nan | nan |
+| 4–5 | nan / nan | nan |
+
+Speed gain real (~1.7× per step at width-128 fp16); memory 32.9 GB
+vs ~50 GB for width-160 fp32. Failure mode: `(pred - y_norm)²` term
+multiplied by `surf_weight=10` overflows fp16 dynamic range on
+surface residuals, especially during the high-loss early epochs.
+
+Student-proposed fixes (correct, deferred to dedicated round-2 PR):
+1. Compute the `sq_err` and per-mask sums in fp32, only the model
+   forward in fp16 (scoped autocast).
+2. Switch to `bfloat16` (no GradScaler needed on Hopper-class GPUs;
+   bf16 has fp32 dynamic range).
+
+### Conclusion
+
+**Send back for rebase + on-baseline re-run.** 126.18 single-seed is
+5.5 % under the merged baseline 133.55, but **inside the ±10 %
+single-seed noise floor** observed from thorfinn's replicate (#337).
+Cannot merge from a single-seed inside-noise number, especially
+because the branch would also silently revert slice_num=128 → 64.
+
+Sent back with:
+- Rebase onto current advisor (slice_num=128).
+- Re-run width-160 on top of the slice-128 baseline (single seed
+  is fine if the new number lands clearly outside ±10 % of 133.55,
+  i.e. ≤120; multi-seed required if borderline 120–130).
+- Optional: add `SENPAI_SEED` env-var seed handling for multi-seed.
+- Decision rule made explicit in the send-back comment so the
+  student can self-judge whether to push more seeds.
+
+bf16 AMP retry deferred to a dedicated round-2 PR.
+
+
 
 ### Results (best checkpoint, epoch 10 / 50 — wall-clock cut)
 
@@ -317,8 +383,9 @@ acknowledged but kept out of scope — tanjiro is iterating on
 | W&B name | best_val_avg/mae_surf_p | best_epoch | status |
 |-|-:|-:|-|
 | **willow-r2-frieren-huber-b1** | **109.47 ★ candidate** | 14 | sent back (rebase) |
+| willow-r2-alphonse-width-160 | **126.18** | 11 | sent back (rebase + on-baseline) |
 | willow-r2-fern-slice-128 | **133.55 ★** | 11 | merged (PR #328) |
-| willow-r2-alphonse-width-192 | 134.13 | 10 | sent back |
+| willow-r2-alphonse-width-192 | 134.13 | 10 | superseded by width-160 |
 | willow-r2-nezuko-surf-15 | 137.42 | 13 | wip (sweep ongoing) |
 | willow-r2-edward-mlp-ratio-4 | 137.83 | 11 | sent back |
 | willow-r2-thorfinn-bs8-lr7e-4 | 139.39 / 153.19 (2 seeds) | 14 / 13 | sent back (rebase + BS=16) |
