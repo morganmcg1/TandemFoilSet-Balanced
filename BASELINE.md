@@ -4,33 +4,47 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 
 ## Current best (this branch)
 
-- **PR**: #779 — "Round 1 anchor: bare baseline + nl3/sn16/nh1 compound" (merged 2026-04-28)
-- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2`
-- **val_avg/mae_surf_p** (best checkpoint, epoch 31): **96.80**
-- **W&B run**: `ez3f10h3` (group `compound-anchor`, project `senpai-charlie-wilson-willow-e-r2`)
-- **Params**: 558,134 | **Peak VRAM**: 21.6 GB | **Epochs in 30 min**: 32
+- **PR**: #783 — "Round 1: compound + Huber loss (delta=1.0)" (merged 2026-04-28)
+- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--huber_delta 1.0`
+- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **75.93**
+- **W&B run**: `2y1lj209` (group `compound-huber`, project `senpai-charlie-wilson-willow-e-r2`)
+- **Params**: 558,134 (unchanged) | **Peak VRAM**: 21.6 GB | **Epochs in 30 min**: 32
+
+### Per-split val metrics (best checkpoint, epoch 32)
+
+| Split | val mae_surf_p |
+|-------|---------------|
+| `val_single_in_dist`     | 85.84  |
+| `val_geom_camber_rc`     | 91.20  |
+| `val_geom_camber_cruise` | 54.68  |
+| `val_re_rand`            | 71.99  |
+| **val_avg/mae_surf_p**   | **75.93** |
 
 ### Per-split test metrics (from best checkpoint)
 
 | Split | test mae_surf_p |
 |-------|----------------|
-| `test_single_in_dist`       | 92.53  |
-| `test_geom_camber_rc`       | 96.38  |
+| `test_single_in_dist`       | 79.35  |
+| `test_geom_camber_rc`       | 82.61  |
 | `test_geom_camber_cruise`   | **NaN** (scoring bug — see note below) |
-| `test_re_rand`              | 88.29  |
+| `test_re_rand`              | 64.29  |
+| **partial test_avg (3 finite splits)** | **75.42** |
 | **test_avg/mae_surf_p**     | **NaN** (poisoned by cruise NaN) |
 
-**Cruise NaN note**: `data/scoring.py` only skips samples with non-finite *ground truth*; a single inf in the model's pressure prediction for one cruise test sample poisons the whole accumulator. The val cruise split was finite throughout training (val_geom_camber_cruise/mae_surf_p ≈ 78 at epoch 31). This is a scoring bug, not a model issue. A fix PR (adding a prediction-finiteness guard) has been green-lit.
+**Cruise NaN note**: `data/scoring.py` only skips samples with non-finite *ground truth*; a single inf in the model's pressure prediction for one cruise test sample (`test_geom_camber_cruise/000020.pt`, 761 Inf values in `p` channel) poisons the whole accumulator. The val cruise split was finite throughout training (val_geom_camber_cruise/mae_surf_p = 54.68 at epoch 32). This is a scoring bug, not a model issue. A fix PR (adding a prediction-finiteness guard in `train.py`) has been green-lit.
 
 ### Reproduce
 
 ```bash
-cd target && python train.py --epochs 50 \
-    --wandb_group compound-anchor --wandb_name compound-nl3-sn16-nh1 \
-    --agent willowpai2e2-alphonse
+cd target && python train.py \
+    --huber_delta 1.0 \
+    --epochs 50 \
+    --wandb_group compound-huber \
+    --wandb_name compound-huber-d1.0 \
+    --agent willowpai2e2-fern
 ```
 
-with `model_config` in `train.py` set to:
+with `model_config` in `train.py` set to (default after PR #779 merge):
 ```python
 n_layers=3,
 n_head=1,
@@ -38,6 +52,17 @@ slice_num=16,
 n_hidden=128,
 mlp_ratio=2,
 ```
+
+---
+
+## 2026-04-28 14:00 — PR #783: Huber loss δ=1.0 (new best)
+
+- **Surface MAE (val_avg):** 75.93 (epoch 32, timed out at 32/50 — still improving)
+- **Per-split val:** single=85.84, rc=91.20, cruise=54.68, re_rand=71.99
+- **Per-split test (finite):** single=79.35, rc=82.61, re_rand=64.29; cruise=NaN (scoring bug)
+- **Delta vs previous best:** −20.87 (−21.6%) on val_avg/mae_surf_p
+- **W&B run:** 2y1lj209
+- **Reproduce:** see above — add `--huber_delta 1.0` to the compound anchor command
 
 ---
 
