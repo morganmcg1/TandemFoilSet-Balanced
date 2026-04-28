@@ -1,5 +1,49 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 08:55 — PR #639 (CLOSED): extended head LR 2× on full late-block MLP path
+- Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-7p5e-4-extended-head-2x` (deleted)
+- Hypothesis: width-bracket of PR #578's decoupled head LR — extend the head set from `mlp2 + ln_3` (6 params) to the full late-block MLP path `mlp2 + ln_3 + mlp + ln_2` (12 params), keeping multiplier at 2×. Tests if PR #578's effect is specific to post-attention head or generalises to whole late-block MLP path.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | extended head 2× | PR #578 (narrow head 2×) | Δ |
+|--------|-----------------:|-------------------------:|--:|
+| `val_avg/mae_surf_p` | 77.53 | 75.78 | **+2.30% REGRESSION** |
+| `test_avg/mae_surf_p` | 68.13 | 66.27 | +2.80% |
+
+### Per-split val — same in-dist-worst-regressor pattern as PR #625
+
+| split | extended head | baseline | Δ% |
+|-------|--------------:|---------:|---:|
+| val_single_in_dist | 90.10 | 84.61 | **+6.49% ← worst regressor** |
+| val_geom_camber_rc | 89.86 | 85.83 | +4.70% |
+| val_geom_camber_cruise | 56.23 | 58.09 | **−3.20%** ↓ (mild win) |
+| val_re_rand | 73.92 | 74.58 | **−0.89%** ↓ (mild win) |
+
+### Analysis (key mechanistic refinement of PR #578)
+
+**Student's mechanistic insight is the most important finding**: PR #578's gain was specifically about the **output projection** being LR-starved (mlp2 maps deep features → 3 output channels — a *calibration* boost), NOT generic 'late-layer adaptation'. Extending 2× to mlp + ln_2 of block 4 is qualitatively different — it boosts a *feature transform layer* in the residual stream, which causes in-dist patterns to over-adapt because the late-block MLP chases fine in-dist detail.
+
+**Combined with PR #625** (vertical bracket: 3× also regressed with worst on in-dist):
+- Width axis: narrow (mlp2 + ln_3, 6 params) is the optimum.
+- Vertical axis: 2× is the multiplier optimum.
+- The head-LR axis is fully bracketed at PR #578's joint setting.
+
+**5th closed lever sharing the per-split Pareto signature** (cruise wins, in-dist + rc-camber lose). Joining: PR #616 max_norm=10, PR #607 anneal-noise, PR #617 eta_min=5e-5, PR #642 slice_num=32, this PR #639. **The round-3 stack is at a per-split Pareto frontier — single-knob bracketing won't break out**. Round-5 needs mechanism-class changes or per-split-aware levers (sample weighting, cluster-aware routing).
+
+### Decision: CLOSED
+
+Filing student's suggestions:
+1. ✓ Vertical bracket (PR #625) — already closed; 3× regressed similarly.
+2. Narrow-head + ln_2 only (mlp2+ln_3+ln_2 at 2×) — deferred (highly likely to regress per the mlp-as-feature-transform reading).
+3. Inverse: 0.5× on mlp + ln_2 — interesting but speculative; queue for round-5.
+4. Per-block bracketing — agreed dead.
+5. Per-split deltas should be standard reporting — agreed.
+
+Reassigning askeladd to **RMSNorm replace LayerNorm throughout** (PR #672) — mechanistically-distinct architectural axis. Modern recipe (LLaMA, T5, Mistral, Stable Diffusion 3); drops mean centering, keeps scale only. May help heavy-tail in-dist signal which is the dominant variance source under recent levers. ~5-line change.
+
+---
+
 ## 2026-04-28 08:50 — PR #642 (CLOSED): slice_num=32 (architectural bracket DOWN from 64)
 - Branch: `charliepai2d3-nezuko/l1ff12-ema-cos14-lr-7p5e-4-slice32` (deleted)
 - Hypothesis: slice-routing softmax over-parametrised at slice_num=64 for 1500-sample regime; halving may concentrate token mass and improve signal-to-noise.

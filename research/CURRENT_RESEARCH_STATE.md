@@ -25,19 +25,27 @@ schedule × EMA fix**.
 **Cumulative round-3 improvement: −43.9% on val, −46.2% on test**
 from PR #306 reference.
 
-**Mechanistic insight from PR #578**: largest gains on
-`val_single_in_dist` (−7.18%) and `val_geom_camber_rc` (−5.45%) —
-opposite of the prior prediction (which expected OOD-camber-cruise
-to gain most). The askeladd PR #489 finding ("OOD-camber wants higher
-LR") was incomplete — the actual story is **the head fits in-dist
-patterns slowly under the conservative backbone LR**. Decoupling lets
-the head converge in matched-cosine epochs without dragging the
-backbone faster. `val_geom_camber_cruise` mildly regressed (+3.44%).
+**Mechanistic insight (refined post-#578 / #625 / #639)**: The PR #578
+gain is **specifically about the output projection** (mlp2 + ln_3
+maps deep features → 3 output channels — a *calibration* boost to a
+LR-starved final stage). It is NOT generic "late-layer adaptation":
+- Vertical bracket (PR #625, 3× narrow head) regressed +3.06%, in-dist
+  worst (+5.84%). 2× is the multiplier optimum.
+- Width bracket (PR #639, 2× extended head incl. mlp + ln_2) regressed
+  +2.30%, in-dist worst (+6.49%). Boosting mlp (a feature transform
+  layer) over-adapts in-dist patterns. Narrow set is the width optimum.
 
-**Caveat**: PR #578 was branched off pre-#572 advisor. Post-merge
-advisor stacks aux log-p (PR #572), max_norm=5.0 (PR #596), AND
-decoupled head LR (this PR). The actual joint config is untested but
-expected to land below 75.78.
+**Round-3 head-LR axis is fully bracketed at PR #578's joint setting**
+(narrow head, multiplier 2×).
+
+**Per-split Pareto frontier (5 closed levers)**: PR #616 max_norm=10,
+#607 anneal-noise, #617 eta_min=5e-5, #642 slice_num=32, #639 ext-head
+all share the "cruise improves, in-dist + rc-camber regress, re_rand
+neutral" signature. The round-3 stack is **at a per-split frontier**:
+single-knob bracketing trades cruise (low-magnitude, easier-to-fit)
+against the high-magnitude in-dist + rc-camber splits. Round-5 needs
+mechanism-class changes or per-split-aware levers (sample weighting,
+cluster-aware routing, target-space transforms).
 
 **Round-3 baseline lineage:**
 | Round | best val | best test | lever | Δ vs prior |
@@ -157,10 +165,11 @@ Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
    loss *(loss-focus axis)* — branched off pre-#400 (long-running).
 2. **PR #583** — frieren: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
    **n_head=8** — different attention compute structure.
-3. **PR #639** — askeladd: L1+FF12+EMA + decoupled head LR
-   **2× on FULL late-block MLP path** (`mlp2 + ln_3 + mlp + ln_2`,
-   horizontal bracket) — tests whether PR #578's effect is specific to
-   post-attention head or generalises to whole late-block MLP path.
+3. **PR #672** — askeladd: L1+FF12+EMA + **RMSNorm replace LayerNorm**
+   throughout (architectural normalisation axis) — drops mean centering;
+   modern transformer default (LLaMA, T5, Mistral). May help heavy-tail
+   in-dist signal which is the dominant variance source under recent
+   levers (4 of last 5 closed PRs had in-dist as worst regressor).
 4. **PR #670** — nezuko: L1+FF12+EMA + **asymmetric slice budget
    `[64, 64, 64, 32, 32]`** (early broad, late sharp) — direct
    follow-up to PR #642's per-split signal: cruise wants sharper
