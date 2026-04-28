@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-28 21:35
+- **Last updated:** 2026-04-28 21:55
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -34,7 +34,8 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | askeladd | #733 | Closed | val_avg=151.50; +18.5% regression; throughput cost decisive |
 | askeladd | #811 | **Merged** | val_avg=127.402 ← best; test_avg=116.211 (clean); 1.20× speedup; 33 GB VRAM (63 GB free) |
 | askeladd | #848 | WIP | Larger batch size (batch_size=8→12) using 63 GB VRAM headroom |
-| edward | #734 | WIP | Higher surf_weight (10→50) |
+| edward | #734 | Closed | sw=10 wins (130.43); sw=50/100 regress 3.9-4.8%. Volume context informs surface — refutes the "more weight = more focus" hypothesis. |
+| edward | #850 | WIP | Lower-surf-weight sweep {3, 5, 7} on rebased baseline |
 | fern | #737 | **Merged** | val_avg=127.87 ← best; warmup+cosine |
 | fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | WIP | Huber loss |
@@ -52,7 +53,7 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 - `test_geom_camber_cruise` NaN on under-trained large models; scoring.py NaN-pred gap confirmed (data/ read-only). NaN-safe workaround in train.py merged (#763).
 - Three compounding baseline wins: distance features (#763) + warmup+cosine (#737) + BF16 (#811).
 
-**Awaiting:** edward #734, nezuko #742, frieren #739 (Wave-1 tail; pre-merge code) + alphonse #796, fern #809, thorfinn #810 (Wave-2) + tanjiro #745 (Option 3 rebase) + askeladd NEW (batch_size scaling).
+**Awaiting:** nezuko #742, frieren #739 (Wave-1 tail; pre-merge code) + alphonse #796, fern #809, thorfinn #810 (Wave-2) + tanjiro #745 (Option 3 rebase) + askeladd #848 (batch-size) + edward #850 (lower-surf-weight sweep).
 
 ## Current research themes
 

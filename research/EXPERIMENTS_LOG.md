@@ -185,3 +185,38 @@ Best epoch = 17 of 50. Gradient norm mean=69.6, max=1224.9 — isolated spike, n
 - **bf16 numerically clean.** Zero NaN/Inf events across 17 epochs / 6,381 steps. bf16's 8-bit exponent handles ±29K pressure range without issue; no GradScaler, no fp32 loss-cast needed.
 - **Next bottleneck: `add_derived_features` Python loop.** With matmul now faster, the non-matmul Python distance loop with `.item()` sync is the new dominant cost. Vectorizing it should push speedup closer to 1.5-2×.
 - **Askeladd reassigned** to batch_size scaling (leveraging the 63 GB headroom directly).
+
+---
+
+## 2026-04-28 21:30 — PR #734: Increase surf_weight from 10 to 50/100 to directly target surface pressure MAE — closed
+
+- **Branch:** `willowpai2e5-edward/higher-surf-weight` (closed)
+- **W&B runs:** `zi70jnyl` (sw=10 control), `srbt5u57` (sw=50), `24dctht8` (sw=100) — group `higher-surf-weight`
+- **Hypothesis:** Increasing surf_weight from 10 → 50/100 forces the model to prioritize fitting surface pressure during training, directly improving val_avg/mae_surf_p.
+
+### Results (against PRE-merge code)
+
+| surf_weight | val_avg/mae_surf_p ↓ | best epoch | Δ vs sw=10 |
+|-------------|----------------------|------------|------------|
+| **10 (control)** | **130.43** | 13 | — |
+| 50 | 135.56 | 14 | +3.9% (worse) |
+| 100 | 136.72 | 12 | +4.8% (worse) |
+
+Per-split val/mae_surf_p:
+
+| Split | sw=10 | sw=50 | sw=100 |
+|-------|-------|-------|--------|
+| `val_single_in_dist` | **157.32** | 178.62 (+13.5%) | 158.34 (+0.6%) |
+| `val_geom_camber_rc` | **139.59** | 139.07 (-0.4%) | 148.17 (+6.1%) |
+| `val_geom_camber_cruise` | **106.21** | 106.37 (+0.2%) | 108.81 (+2.4%) |
+| `val_re_rand` | **118.62** | 118.20 (-0.4%) | 131.57 (+10.9%) |
+
+All three runs hit 30-min timeout; peak VRAM 42.1 GB.
+
+### Commentary & Conclusions
+
+- **Decision: Closed (clean negative result).** Both up-direction values regress; no variation in the up direction is likely to flip this.
+- **Key mechanistic insight from the student:** "Volume residuals provide spatial context that the Transolver attention uses for surface predictions — they're not just regularization, they're informative." This explains why naively up-weighting surface fails — removing volume context starves the surface prediction of spatial information. The +13.5% single_in_dist regression at sw=50 is the cleanest demonstration: single-foil has highest pressure amplitude and most depends on volume context.
+- **The current `surf_weight=10` may already be past the optimum.** Surface nodes are ~1% of total but get 10× weight per node, ≈10% effective contribution to the gradient. Pushing further hits diminishing/negative returns.
+- **Edward reassigned** to lower-surf-weight sweep ({3, 5, 7}) on the merged baseline — direct test of the counter-hypothesis the student's analysis raises.
+- **Bug observation:** Student also flagged the `test_geom_camber_cruise` NaN issue. Already fixed in merged baseline (#763 NaN-safe eval).
