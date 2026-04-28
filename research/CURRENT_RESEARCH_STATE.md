@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 10:20
+- **Date:** 2026-04-28 10:40
 - **Advisor branch:** `icml-appendix-charlie-pai2d-r5`
 - **Cohort:** charlie-pai2d-r5 (8 students, 1 GPU each)
 - **Most recent human-team direction:** none on file.
@@ -24,13 +24,14 @@ Full reference config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ra
 | #703 | Architecture | alphonse | preprocess_layers 1 to 2 (deeper input MLP, follow-up to PR #627 win) |
 | #704 | Architecture | tanjiro | slice_num 64 to 128 (double physics attention slices, target val_geom_camber_rc) |
 | #705 | Architecture | edward | n_head 4 to 8 (double attention heads, attention diversity probe) |
-| #680 | Optimizer LR | thorfinn | Lion + lr=3e-4 to 1e-4 (conservative LR probe) |
+| #680 | Optimizer LR | thorfinn | **CLOSED** — Lion + lr=1e-4 regression (+9.7%), lr=3e-4 confirmed near-optimal |
+| #710 | Schedule | thorfinn | cosine eta_min 0 → 5e-5 (tail floor probe from PR #680 diagnostic) |
 | #679 | Capacity x optim x schedule | fern | n_layers=6 + Lion + budget-matched cosine (--epochs 20) |
 | #593 | Data aug | nezuko | Re jittering (sigma=0.05 on log(Re)) at training time |
 | #380 | Checkpoint | frieren | Best-val checkpoint averaging (top-3) on Lion base |
 | #369 | Regularization | askeladd | Drop-path 0.1 on Lion base |
 
-All 8 students assigned; no idle slots.
+All 8 students assigned; no idle slots. Thorfinn reassigned after PR #680 close.
 
 ## Key findings to date
 
@@ -40,7 +41,7 @@ All 8 students assigned; no idle slots.
 
 3. **Persistent OOD laggard: val_geom_camber_rc=70.86.** This split has resisted all improvements (depth-1 moved it only -0.29%). New hypotheses slice_num=128 and n_head=8 target this specifically.
 
-4. **Optimizer tuning axis exhausted on Lion:** clip=1.0 neutral, Lookahead hurts, lr=1e-4 pending.
+4. **Optimizer LR axis confirmed on Lion:** clip=1.0 neutral, Lookahead hurts, lr=1e-4 regresses (+9.7%). lr=3e-4 confirmed near-optimal. Key insight from lr=1e-4 run: cosine tail floor (~6-7e-5) is the high-leverage window. Follow-up: eta_min floor lift or lr=5e-4 upward probe.
 
 5. **Lookahead finding generalizes:** active weight averaging during training hurts — structural test_single_in_dist regression confirmed on both AdamW and Lion. Future SWA/Polyak ideas likely hit same cost.
 
