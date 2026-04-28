@@ -6,7 +6,9 @@
 
 ## Current research focus
 
-**Round baseline is PR #407 (fern, cosine T_max=37 alignment): val_avg = 69.74, test_avg = 60.48** — cumulative **−51.7% / −53.9%** vs original PR #312 reference (144.21 → 69.74). Five merged interventions stack at ~91% efficiency: bf16 + FF K=8 + `torch.compile(dynamic=True)` + SmoothL1 β=1.0 + cosine T_max=37.
+**Round baseline is PR #504 (edward, pure L1 loss): val_avg = 57.29, test_avg = 51.35** — cumulative **−60.3% / −60.9%** vs original PR #312 reference (144.21 → 57.29). Six merged interventions: bf16 + FF K=8 + `torch.compile(dynamic=True)` + pure L1 + cosine T_max alignment (loss-dependent: T_max=37 was right for Huber, T_max=50 may be right for L1 — being verified directly).
+
+**Schedule alignment story flipped between losses.** Huber's gradient vanishes at small residuals → T_max=37 (cosine reaches 0) helped settle late-stage. Pure L1 keeps unit-magnitude gradient at tiny residuals → T_max=50 (lr stays positive) lets L1 keep refining. Edward's #541 in flight to settle directly.
 
 **Capacity scale-up is now conclusively ruled out** (PR #393 on bf16 + PR #503 on compile+FF both regress +12%). Throughput frontier is exhausted (bf16, FF, compile all merged; bsz pre-compile, bucketing, reduce-overhead all closed). Round-3 priorities are now schedule + loss + regularization + features + sampling, not size.
 
@@ -19,7 +21,7 @@
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
 | #324 | nezuko | Stability / regularization | EMA-only **decay=0.999** — rebase onto Huber baseline, +sw=15 single run |
 | #443 | tanjiro | Spatial features | Gaussian RFF K=16 σ=10 (was for compile+FF; rebase onto Huber+T_max=37 needed) |
-| #504 | edward | Loss formulation | Pure L1 on Huber+compile+FF |
+| **#541** | **edward** | **Schedule (with L1)** | **T_max sweep: --epochs 37 vs 50 with pure L1 (settles schedule alignment for L1)** |
 | #509 | thorfinn | Throughput | batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF (post-compile memory math is different) |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |
 | **#529** | **alphonse** | **Architecture** | **Surface-only auxiliary p head + aux Huber loss + inference blending** |
@@ -47,15 +49,17 @@
 | #333 | thorfinn | Auto-closed by bot | Round-1 surf_weight sweep (sw=15 wins of {15,25,40}); reassigned to bsz=8 revisit. |
 | #451 | askeladd | Closed | +12.86%. Channel-weighted MSE family conclusively ruled out at convergence. |
 | #503 | alphonse | Closed | +12.07% on compile+FF. **Capacity scale-up conclusively ruled out** (2 independent runs at 2 different baselines). |
-| **#407** | **fern** | **Merged (CURRENT BASELINE)** | **T_max=37 alignment: val_avg=69.74 (−0.13% val / −2.0% test). Schedule mechanism worked exactly as predicted. Empty PR — CLI flag change.** |
+| #407 | fern | Merged → superseded by #504 | T_max=37 alignment with Huber: val_avg=69.74 (−0.13%). Empty PR — CLI flag change. |
+| **#504** | **edward** | **Merged (CURRENT BASELINE)** | **Pure L1 replacing SmoothL1: val_avg=57.29 (−17.96% vs Huber). Cumulative −60.3%. Used `--epochs 50` (T_max alignment for L1 may differ from Huber).** |
 
 ## Throughput levers status
 
 - bf16 autocast: **MERGED**
 - Sinusoidal Fourier features (x,z) K=8: **MERGED**
 - `torch.compile(dynamic=True)`: **MERGED**
-- SmoothL1/Huber loss (β=1.0): **MERGED**
-- Cosine T_max=37 alignment: **MERGED** (CLI-only)
+- SmoothL1/Huber loss (β=1.0): MERGED → superseded by pure L1
+- **Pure L1 loss**: **MERGED** (replaced Huber, val_avg 69.83 → 57.29)
+- Cosine T_max alignment: loss-dependent (T_max=37 for Huber merged then superseded; T_max=50 likely better for L1, being verified in #541)
 - Larger batch size: ruled out *without* compile (#360); **revisit in flight** post-compile (#509)
 - Domain-bucketed sampler: **RULED OUT**
 - Pressure weighting (uniform): **RULED OUT post-bf16**

@@ -1,5 +1,79 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 04:40 — PR #504 (merged, NEW BASELINE): Pure L1 loss replacing SmoothL1(β=1.0)
+
+- branch: `willowpai2d1-edward/pure-l1-loss` (deleted on merge)
+- hypothesis: pure L1 (`(pred - y_norm).abs()`) is simpler than
+  SmoothL1(β=1.0); should match or beat. Predicted Δ in [−1%, +1%].
+
+### Results
+
+| Metric | Value | Δ vs prior baseline (PR #407, T_max=37) | Δ vs PR #314 baseline (Huber, T_max=50) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **57.2858** (epoch 36 of 36 wall-cap) | **−17.86%** | **−17.96%** |
+| `test_avg/mae_surf_p` | **51.3504** | **−15.10%** | **−16.79%** |
+| Per-epoch wall | ~49 s | same | same |
+| Peak GPU memory | 24.1 GB | same | same |
+| Epochs completed | 36 / 50 | (note: this run used --epochs 50, not 37) | same |
+| W&B run | `yi5upb1e` | — | — |
+
+Cumulative improvement: **−60.3% val_avg / −60.9% test_avg** since original PR #312 reference (144.21 → 57.29, 131.18 → 51.35).
+
+### Per-split val deltas vs Huber baseline
+
+| Split | Δ |
+|---|---|
+| val_single_in_dist | **−18.6%** |
+| val_geom_camber_rc | −11.7% |
+| val_geom_camber_cruise | **−27.0%** |
+| val_re_rand | −17.8% |
+
+Pure L1 disproportionately helps the easier splits (cruise, single-in-dist)
+where residuals shrink fastest — exactly the regime where SmoothL1's
+gradient was vanishing.
+
+### Mechanism (the keeper insight from edward's writeup)
+
+> SmoothL1's gradient is `r/β` for `|r| < β`, which **vanishes** as
+> residuals shrink. Pure L1's gradient is `sign(r)` everywhere — full
+> unit magnitude even for tiny residuals. In normalized (unit-std)
+> space, once the model trains reasonably well, residuals are `|r| ≪ 1`,
+> so SmoothL1 spends most of training in its quadratic regime
+> (effectively a downweighted MSE), while pure L1 keeps pushing every
+> residual toward zero with the same step magnitude.
+
+The per-split asymmetry directly confirms this: cruise splits (easiest,
+fastest residual shrinkage) won most. Hardest split (rc-camber) won
+least — its residuals stay larger so SmoothL1 was already in its L1 tail.
+
+### Schedule alignment may have flipped for pure L1
+
+PR #407 merged `--epochs 37` (T_max=37, cosine reaches lr=0) for Huber.
+Pure L1 keeps gradient at unit magnitude even at tiny residuals, so it
+*can* keep refining at low LR — but it stops at lr=0. Mechanism predicts
+T_max=50 (lr at end ≈ 27% of peak) is better for pure L1 than T_max=37.
+
+The merged result (val_avg=57.29) used `--epochs 50` per the original
+assignment (which predated PR #407). BASELINE.md updated to recommend
+`--epochs 50` for reproduction.
+
+**edward PR #541 in flight**: direct two-run sweep `--epochs 37` vs
+`--epochs 50` with pure L1 to settle the schedule question.
+
+### Analysis & conclusions
+
+- **Merged. New round baseline at val_avg=57.29.** Biggest single-lever
+  win since compile (−24.4%). And it's the **simpler** formulation.
+- **The schedule-alignment story is loss-dependent.** What was right for
+  Huber (T_max=37, late-LR settle) may be wrong for L1 (T_max=50, lr stays
+  positive). Future stacked PRs need to track this.
+- Cumulative now ~60% improvement. Round 3 has been remarkably productive.
+- Followups assigned: T_max sweep with L1 (edward #541). β sweep on
+  Huber (queued, lower priority now that pure L1 won), seed-variance
+  multi-seed (queued, lower priority since qualitative win is robust).
+
+
+
 ## 2026-04-28 04:27 — PR #407 (merged, NEW BASELINE): Cosine T_max alignment via `--epochs 37`
 
 - branch: `willowpai2d1-fern/cosine-tmax-alignment` (deleted on merge)
