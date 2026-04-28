@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 00:05
+- **Date:** 2026-04-28 00:15
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
@@ -29,7 +29,8 @@
 | nezuko   | #308 | ema-grad-clip | Optimization (EMA decay 0.999 + grad clip 1.0) | -3% to -8% | WIP |
 | tanjiro  | #309 | more-slices | Architecture (slice_num 64→128, n_head 4→8) | -3% to -7% | **CLOSED** — 2x slower per epoch and not better at equal-epoch |
 | tanjiro  | #378 | per-sample-relmse | Heavy-tail (per-sample y-variance normalization in loss) | -3% to -7% | WIP |
-| thorfinn | #310 | per-channel-surf-weights | Loss weighting (3× surface pressure) | -3% to -8% | WIP |
+| thorfinn | #310 | per-channel-surf-weights | Loss weighting (3× surface pressure) | -3% to -8% | **CLOSED** — +13% regression on val_avg |
+| thorfinn | #379 | surface-aware-decoder | Architecture (auxiliary surface-only MLP head, zero-init) | -3% to -7% | WIP |
 
 ## Lessons from round 1 so far
 - **The 30-min cap is binding for everyone.** alphonse fits 14 epochs (small/baseline model) at 131 s/epoch; edward's wider hit only 9 epochs at 205 s/epoch. Compute, not memory, is the bottleneck (peak ~42-63 GB / 96).
