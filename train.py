@@ -237,9 +237,22 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
+            # Drop samples whose ground truth has any non-finite value before
+            # loss/MAE computation. data/scoring.py masks them too, but uses
+            # mul-by-mask which propagates Inf via Inf*0=NaN; one such sample
+            # exists in test_geom_camber_cruise/000020.pt.
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                pred = pred[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -421,7 +434,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=128,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
