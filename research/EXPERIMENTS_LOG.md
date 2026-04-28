@@ -1,5 +1,138 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 07:04 — PR #596 (MERGED): max_norm=1.0 → 5.0 (loosened clipping)
+- Branch: `charliepai2d3-askeladd/l1ff-ema-cos14-lr-7p5e-4-clip5`
+- Hypothesis: loosen clip 5× to unlock real LR sensitivity dampened
+  by aggressive clipping. Predicted ±1% (mostly diagnostic).
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #572 baseline (77.78 / 67.71) |
+|--------|--------:|-----------------------------------:|
+| `val_avg/mae_surf_p` | **77.01** | **−0.99%** |
+| `test_avg/mae_surf_p` | 67.78 | +0.10% (essentially flat) |
+
+### Per-split val (best epoch 14/14)
+
+| split | this PR | PR #572 baseline | Δ |
+|-------|--------:|-----------------:|--:|
+| val_single_in_dist | 85.42 | 92.62 | **−7.78%** (largest gain) |
+| val_geom_camber_rc | 88.01 | 91.34 | **−3.65%** |
+| val_geom_camber_cruise | 58.13 | 52.94 | +9.81% (regression) |
+| val_re_rand | 76.48 | 74.21 | +3.06% (regression) |
+
+### Critical diagnostic — clip still fires on 100% of batches
+
+Pre-clip mean grad-norm 22-47 throughout training, never drops near
+5.0. **The clip is still strictly active at max_norm=5.0** — just
+allows ~5× larger effective steps than at max_norm=1.0.
+
+This means the previously-measured "narrow LR optimum at 7.5e-4" was
+a **clip × LR joint sensitivity**. Loosening clip shifts the joint
+operating point: bigger steps via the clip, with the same LR.
+
+### Decision
+
+**Merged.** Eleventh merge of round 3. Val win at noise floor + test
+essentially flat. Follows the merge criterion ("lower than current
+baseline, even by a small amount").
+
+### Round-3 narrative
+
+Round-3 has now closed two interior optima that both turned out to
+be clip-coupled:
+- **LR optimum at 7.5e-4** (PR #461, #516, #566) — measured under
+  max_norm=1.0; turns out to be the clip-tightness joint optimum.
+- **EMA decay optimum at 0.997** (PR #534, #565) — similar story
+  may apply; round-5 should consider re-bracketing EMA decay at
+  the new clip threshold.
+
+### Best epoch shifted
+
+Best val landed at ep 14/14 (vs 12/14 at PR #534/#572). Looser clip
+allows continued progress through the cosine tail rather than
+plateauing earlier. May still have headroom at longer schedules.
+
+### Round-3 baseline lineage updated (11 merges)
+
+| PR | val | test | lever |
+|----|----:|-----:|-------|
+| 280 | 102.64 | 97.73 | + L1 surface |
+| 400 | 91.87 | 81.11 | + 8-freq spatial FF |
+| 447 | 82.97 | 73.58 | + EMA(0.999) |
+| 461 | 80.28 | 70.92 | + lr=7.5e-4 |
+| 462 | 80.06 | 70.04 | + grad clipping (max_norm=1.0) |
+| 506 | 78.80 | 69.13 | + FF=12 |
+| 534 | 78.60 | 67.77 | + EMA=0.997 |
+| 572 | 77.78 | 67.71 | + aux log-p (weight=0.25) |
+| **596** | **77.01** | **67.78** | + **max_norm=5.0 (loosen clip)** |
+
+Cumulative −43.0% on val, −45.0% on test from PR #306 reference.
+
+Re-assigning askeladd to **max_norm=10.0** — continue bracketing up
+toward the natural grad-norm scale.
+
+---
+
+## 2026-04-28 07:00 — PR #588 (CLOSED, SWA mechanistically unsound): SWA last-4-epochs
+- Branch: `charliepai2d3-fern/l1ff-ema-swa4-cos14-lr-7p5e-4` (deleted)
+- Hypothesis: SWA over last 4 epochs as snapshot-ensemble distinct
+  from EMA's continuous averaging. Predicted small effect on val,
+  larger on test.
+
+### Headline (best-val checkpoint, epoch 14/14, SWA-averaged for test)
+
+| Metric | This PR | vs PR #534 (78.60 / 67.77) |
+|--------|--------:|---------------------------:|
+| `val_avg/mae_surf_p` | 78.81 | +0.27% (within noise) |
+| `test_avg/mae_surf_p` | 69.64 | **+2.76% (regressed)** |
+
+### Per-split test (SWA-averaged) — OOD-camber-rc worst hit
+
+| split | this PR | PR #534 | Δ |
+|-------|--------:|--------:|--:|
+| test_single_in_dist | 77.31 | 77.27 | +0.05% (flat) |
+| test_geom_camber_rc | 83.25 | 78.98 | **+5.41%** (worst) |
+| test_geom_camber_cruise | 49.74 | 48.03 | +3.55% |
+| test_re_rand | 68.29 | 66.80 | +2.23% |
+
+### Decision
+
+**Closed.** Above-threshold test regression, mechanistically explained.
+
+### Mechanistic explanation
+
+Per-epoch val trajectory (this run): 82.78 → 80.70 → 79.40 → 78.81
+across epochs 11-14. Each step is ~1.5-2.5% improvement — the model
+is **still actively converging at the end of training**. SWA
+averages a mix of partly-trained and fully-trained weights, moving
+test backward.
+
+**SWA's classical regime (Izmailov et al. 2018) requires a flat or
+cyclic LR plateau where snapshots come from comparable basins**. Here
+we have the opposite — sharply annealed cosine schedule where epochs
+11-13 are demonstrably worse than epoch 14. SWA's 4-epoch window is
+too wide for this schedule.
+
+### Round-3 narrative
+
+Same mechanism family as PR #476 (matched cosine × EMA(0.999) → +5%
+rc-camber regression). The fix that worked there (EMA(0.997), shorter
+window) doesn't generalise to SWA — SWA's window is necessarily wider
+(epoch-level snapshots) than EMA's (step-level continuous averaging).
+
+EMA(0.997) keeps the prize on trajectory averaging because its window
+is short enough to track active convergence. SWA cannot get there
+without a constant-LR plateau in the schedule.
+
+Re-assigning fern to **eta_min=5e-5 in CosineAnnealingLR** —
+addresses the schedule shape (keeps a small floor LR through cosine
+tail) rather than the averaging method.
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 06:37 — PR #587 (CLOSED, BF16 precision regression): BF16 autocast
 - Branch: `charliepai2d3-edward/l1ff12-ema-cos14-lr-7p5e-4-bf16` (deleted)
 - Hypothesis: BF16 autocast for 1.5-2× speedup, ±0.5% headline.

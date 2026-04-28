@@ -2,52 +2,50 @@
 
 ## Current measured baseline
 
-PR #572 (charliepai2d3-tanjiro) — **L1 + 12-freq spatial FF +
-EMA(0.997) + matched cosine + lr=7.5e-4 + grad clipping (max_norm=1.0)
-+ auxiliary log-pressure loss (weight=0.25)**. Run with
-`--epochs 14 --lr 7.5e-4` on the post-merge advisor.
+PR #596 (charliepai2d3-askeladd) — **L1 + 12-freq spatial FF +
+EMA(0.997) + matched cosine + lr=7.5e-4 + grad clipping (max_norm=5.0)
++ aux log-p loss (weight=0.25)**. Run with `--epochs 14 --lr 7.5e-4`
+on the post-merge advisor.
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` (best, epoch 14/14) | **77.78** |
-| `test_avg/mae_surf_p` (NaN-safe, best-val checkpoint) | **67.71** |
+| `val_avg/mae_surf_p` (best, epoch 14/14) | **77.01** |
+| `test_avg/mae_surf_p` (NaN-safe, best-val checkpoint) | **67.78** |
 | Per-epoch wallclock | ~132 s |
-| Peak GPU memory (batch=4) | 42.53 GB |
-| Wallclock total | ~31.1 min |
+| Peak GPU memory (batch=4) | 42.52 GB |
+| Wallclock total | ~30.8 min |
 
 Per-split val (best epoch 14):
 
 | split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist     | 92.62 |
-| val_geom_camber_rc     | 91.34 |
-| val_geom_camber_cruise | 52.94 |
-| val_re_rand            | 74.21 |
-| **val_avg**            | **77.78** |
+| val_single_in_dist     | 85.42 |
+| val_geom_camber_rc     | 88.01 |
+| val_geom_camber_cruise | 58.13 |
+| val_re_rand            | 76.48 |
+| **val_avg**            | **77.01** |
 
 Per-split test (NaN-safe, best-val checkpoint):
 
 | split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist     | 79.52 |
-| test_geom_camber_rc     | 80.19 |
-| test_geom_camber_cruise | 45.97 |
-| test_re_rand            | 65.16 |
-| **test_avg**            | **67.71** |
+| test_single_in_dist     | 75.62 |
+| test_geom_camber_rc     | 76.83 |
+| test_geom_camber_cruise | 50.09 |
+| test_re_rand            | 68.59 |
+| **test_avg**            | **67.78** |
 
-**Per-split tradeoff caveat**: PR #572 introduces a per-split
-tradeoff pattern (different from the prior additive-distributional
-merges). Cruise/re_rand improve cleanly (val −5.74% / −2.78%, test
-−4.29% / −2.46%); single_in_dist/rc-camber regress mildly (val +1.61%
-/ +0.62%, test +2.91% / +1.53%). The val improvement (1.06%) is at
-the noise floor; the test win is essentially nil (0.09%). The per-
-split signal is consistent val/test, suggesting the lever is acting
-as a low-magnitude-pressure-emphasiser, not the originally-hypothesised
-heavy-tail emphasiser.
+**Critical diagnostic from PR #596**: clip still fires on **100% of
+batches** at max_norm=5.0 (pre-clip mean 22-47 throughout). This means
+the LR optimum at 7.5e-4 was a **clip × LR joint** sensitivity — the
+loosened clip allows ~5× larger effective steps. Round-5 may want to
+revisit LR sensitivity at this looser clip, OR continue bracketing
+clip upward.
 
-Future PRs branching off this advisor will inherit both the cruise/re_rand
-gains and the in-dist/rc regression. Round-5 may want to explore
-weight bracketing (0.10, 0.35) to find a Pareto-better dose.
+**Caveat**: PR #596 measurement showed val improvement (−1.59) but
+test essentially flat (+0.01). The val win is real but doesn't fully
+transfer to test. Per-split: val_single_in_dist −6.3% (huge),
+val_rc −3.1%, val_cruise +3.5% (regression), val_re_rand flat.
 
 **Recommended reproduce command**:
 
@@ -74,9 +72,10 @@ grad clipping baked in. The two CLI flags supply matched cosine
 | PR #462 |  80.06 |  70.04 | + grad clipping max_norm=1.0 | −0.27% / −1.24% |
 | PR #506 |  78.80 |  69.13 | + NUM_FOURIER_FREQS=12 | −1.57% / −1.30% |
 | PR #534 |  78.60 |  67.77 | + EMA_DECAY=0.997 (schedule × EMA fix) | −0.25% / −1.97% |
-| **PR #572 (current)** | **77.78** | **67.71** | **+ aux log-p loss (weight=0.25)** | **−1.06% / −0.09%** |
+| PR #572 |  77.78 |  67.71 | + aux log-p loss (weight=0.25) | −1.06% / −0.09% |
+| **PR #596 (current)** | **77.01** | **67.78** | **+ max_norm=5.0 (loosened clip)** | **−0.99% / +0.10%** |
 
-**Cumulative round-3 improvement: −42.5% on val, −45.0% on test.**
+**Cumulative round-3 improvement: −43.0% on val, −45.0% on test.**
 
 ## Round-3 proven levers (cumulative — seven stacked levers)
 
@@ -89,9 +88,10 @@ grad clipping baked in. The two CLI flags supply matched cosine
 7. **NUM_FOURIER_FREQS=12** (PR #506) — refinement of lever #2.
 8. **EMA_DECAY=0.997** (PR #534) — schedule × EMA interference fix.
 9. **Auxiliary log-pressure loss (weight=0.25)** (PR #572) — per-split tradeoff lever.
+10. **Loosened gradient clipping (max_norm=5.0)** (PR #596) — clip × LR joint optimum shift.
 
-The advisor `train.py` bakes in 1, 2, 4, 6, 7, 8, 9 by default. Levers
-3 and 5 are CLI flags (`--epochs 14 --lr 7.5e-4`).
+The advisor `train.py` bakes in 1, 2, 4, 6, 7, 8, 9, 10 by default.
+Levers 3 and 5 are CLI flags (`--epochs 14 --lr 7.5e-4`).
 
 ## Compose pattern map (round-3 finding, comprehensive)
 
@@ -135,7 +135,7 @@ Round-3 PRs revealed multiple compose patterns:
 | Loss | `vol_loss + 10.0 * surf_loss`, **MSE volume + L1 surface** |
 | Input encoding | raw 24-d `x` + 12-frequency Fourier of `(x, z)` |
 | Weight averaging | **EMA(decay=0.997)** at every step, swap for val/test eval |
-| Gradient clipping | **`clip_grad_norm_(max_norm=1.0)`** before optimiser step |
+| Gradient clipping | **`clip_grad_norm_(max_norm=5.0)`** before optimiser step |
 | Sampler | `WeightedRandomSampler` (balanced over 3 train domains) |
 | Batch size | 4 |
 | Default epochs | **50** (override with `--epochs 14` for matched cosine) |
