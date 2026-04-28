@@ -1,5 +1,52 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 02:50 — PR #444: Surface-p extra boost (3×) — **CLOSE (hypothesis falsified)**
+
+- Branch: `charliepai2d5-nezuko/surf-p-extra-3` (closed)
+
+### Results
+
+| metric | value | vs sw=30 baseline (76.68 / 73.40) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 77.92 | **+1.62%** (worse) |
+| `test_avg/mae_surf_p` (3 clean) | 76.41 | **+4.10%** (worse) |
+| `val_avg/mae_vol_p` | 132.38 | **+26.8%** (worse) |
+| `val_*/mae_surf_Ux` | — | **+11–29%** worse (all 4 splits) |
+| `val_*/mae_surf_Uy` | — | **+11–18%** worse (all 4 splits) |
+
+### Decision
+
+Close. Cleanly falsified. Student's analysis nails the mechanism: even without explicit per-channel starvation in the loss formulation (Ux/Uy stayed at 1× weighting), raising the *total* surface loss magnitude (effective ratio 30:1 → ~50:1) pulled the shared backbone capacity onto the surface-p subspace at the expense of every other output. So "no per-channel starvation" is necessary but not sufficient — gradient *budget* is finite even when individual channel weights stay at 1×.
+
+Combined with alphonse's earlier `surf_p_weight=5` falsification on L1 baseline (PR #278, closed), we now have two independent data points showing **targeting pressure-channel emphasis at the loss level fails on shared-backbone models**. Future work in this space would need a separate-decoder-head architecture, which is a much bigger swing.
+
+Reassigned nezuko to **attention dropout 0.05** in `PhysicsAttention` (PR #471) — cheap orthogonal regularizer.
+
+---
+
+## 2026-04-28 02:50 — PR #414 (rerun): Fourier on dsdf channels — **CLOSE (marginal benefit, doesn't beat current baseline)**
+
+- Branch: `charliepai2d5-thorfinn/fourier-on-dsdf` (closed)
+
+### Results (rebased onto sw=30 baseline)
+
+| metric | value | vs sw=30 baseline (76.68 / 73.40) | vs current baseline (74.44 / 72.14) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 76.17 | −0.66% | **+2.32%** (worse) |
+| `val_avg/mae_surf_p` (iso-epoch 12) | 83.75 | −3.47% | — |
+| `test_avg/mae_surf_p` (3 clean) | 72.78 | −0.84% | +0.89% |
+| Median per-epoch wall (s) | 133.76 | +1.5% (overhead) | — |
+
+### Decision
+
+Close. Marginal benefit on the rebased sw=30 baseline (−0.66% val) but doesn't beat the current advisor baseline of 74.44 (PR #387 alphonse grad-clip merged during the run). With +1.5% wall overhead and the iso-epoch advantage washing out by epoch 14 (cosine tail lets the no-dsdf baseline catch up), the cost-benefit doesn't justify a merge in the diminishing-returns regime.
+
+Student's iso-epoch analysis (−3.47% at epoch 12 collapsing to −0.66% at epoch 14) was the key diagnostic — protected the research direction from over-claiming on what was partly a schedule artifact.
+
+Reassigned thorfinn to **trainable random Fourier projection (Tancik 2020)** (PR #470) — same spectral-bias-relief mechanism with learned-random Gaussian frequency basis instead of fixed dyadic.
+
+---
+
 ## 2026-04-28 02:35 — PR #387 (rerun): Gradient clipping `max_norm=1.0` on full stack — **MERGE (winner, new baseline)**
 
 - Branch: `charliepai2d5-alphonse/grad-clip-1` (rebased onto L1+warmup+Fourier+sw=30)
