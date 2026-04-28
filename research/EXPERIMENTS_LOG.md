@@ -31,6 +31,46 @@
 
 ---
 
+## 2026-04-28 05:41 — PR #347 (round 3): H5 Fourier features × FiLM stack — **CLOSED**
+
+- Branch: `willowpai2d4-nezuko/h5-fourier-features` (rebased onto post-#404 advisor branch with FiLM merged)
+- Round 3 single-cell test: Run H = Fourier σ=5, num_freq=32, **+FiLM enabled** + merged config (`--epochs 25 --lr 7e-4 --weight_decay 5e-4 --seed 123`).
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | best epoch | W&B |
+|-----|--------|---------------------:|----------------------:|-----------:|-----|
+| Merged baseline (#404, FiLM only) | — | 119.36 | 107.54 | 13/14 | `p0a1daar` |
+| Round 2 Run F (Fourier only, pre-#404) | — | 117.17 | 106.46 | 14/14 | `dk13xxhh` |
+| **H — Fourier × FiLM** | both | **129.49** (+8.5%) | **118.34** (+10.0%) | 11/13 | `f3u9oemw` |
+
+### Per-split test for Run H
+
+| Split | FiLM-only baseline | Fourier-only Run F | **Run H (F + FiLM)** | H vs baseline |
+|-------|-------------------:|-------------------:|---------------------:|--------------:|
+| `test_single_in_dist` | 120.69 | 128.57 | **143.38** | **+18.8%** ❌ |
+| `test_geom_camber_rc` | 120.45 | 116.27 | **135.58** | **+12.6%** ❌ |
+| `test_geom_camber_cruise` | 80.70 | 74.09 | **80.39** | −0.4% (flat) |
+| `test_re_rand` | 108.32 | 106.93 | **113.99** | +5.2% ❌ |
+
+### Conclusions
+
+- **Per the advisor's decision rule (val > 121.0 → close), this is a clean close.** Run H val=129.49 is +8.5% above the merged baseline — well above threshold.
+- **Fourier × FiLM is antagonistic at this dataset/budget.** Run H is worse than EITHER mechanism alone. The geom-OOD gain that Fourier-only delivered (cruise -8.71% in Run F) collapses entirely under FiLM (Run H cruise basically matches baseline).
+- **Plausible mechanism (per nezuko's analysis):** FiLM's (γ, β) scales applied after `preprocess` re-weight the high-frequency content Fourier features just injected. The slice tokens (capacity-limited at slice_num=64) have to allocate representation between two conditioning channels (Re via FiLM, spatial via Fourier) instead of one. With identity-init and only ~13 epochs, FiLM doesn't have time to learn how to use the new feature mix.
+- **Val curve was unstable near convergence** (epoch 11=129.5, 12=129.6, 13=181.9), supporting the antagonism reading rather than a noise-floor wash.
+- **The mechanisms each work alone** — Fourier σ=5 was a real -3.14% / -3.15% improvement on the pre-#404 path (Run F), and FiLM is a real -1.3% / -2.2% improvement on the post-#344 path. They just don't compose.
+
+### Useful follow-ups (deferred)
+
+- **Don't bury Fourier features.** Future hypotheses that offer Re conditioning *via the Fourier pipeline* (e.g., log(Re) as input to Fourier projection, or σ-conditional Fourier features) may compose better than parallel FiLM-on-Re + Fourier-on-(x,z).
+- **σ-search above 5 with FiLM off.** Round 2's monotone-decreasing curve {3, 4, 5} is unverified above σ=5. A pre-#404 path (σ ∈ {6, 7, 8}) sweep would establish the right tail of the σ-curve. Out of scope for current branch but documented.
+- **Larger slice_num + Fourier + FiLM.** Nezuko's "slice tokens over-subscribed" hypothesis is testable: (slice_num=128, FiLM on, Fourier on) would isolate the capacity-limit reading.
+
+### Action
+
+Closed; reassigning nezuko to H16 (arcsinh-compressed pressure target). Plays to her sweep-design strength (3-cell scale sweep), addresses the heavy-tailed pressure issue head-on via target transformation rather than loss reweighting (orthogonal to alphonse's H1 in flight).
+
+---
+
 ## 2026-04-28 05:14 — PR #490: H13 stochastic depth (DropPath) on Transolver blocks — **CLOSED**
 
 - Branch: `willowpai2d4-frieren/h13-stochastic-depth`
