@@ -2,6 +2,16 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
+## 2026-04-28 01:35 — PR #329 (rebased re-run): surf_weight=50 on slice_num=128 — **CLOSED (deciding evidence for #336 revert)**
+- Branch: `willowpai2d5-alphonse/surf-weight-sweep` (deleted; rebased cleanly to advisor HEAD; diff was empty — pure CLI flag run)
+- One run, 30-min timeout, 11 epochs, default config + `--surf_weight 50`
+- Result: `val_avg/mae_surf_p = 151.34` at epoch 10/11 vs current baseline #336 (139.83) → **+8.2% worse**
+- W&B run: kv419s5t (`surf_w50_slice128`, group `surf_weight_sweep_v2`)
+- **Direct apples-to-apples vs prior slice_num=64 sw=50 run:** 130.55 (14 ep) vs 151.34 (11 ep) → slice_num=64 wins by **20.79 MAE / 15.9%**.
+- Decision: **closed** per alphonse's own recommendation. Combined with frieren PR #338's independent direct comparison (slice=64 vs slice=128, same warmup/lr → +13.47 MAE in favor of slice=64) and the cluster of five slice_num=64 round-1 runs at 130-132, we have unambiguous evidence that **PR #336 was a partial-credit merge** at the 30-min cap.
+- Per-epoch cost: slice_num=64 ≈ 131s, slice_num=128 ≈ 169s (+29% tax).
+- **Action triggered:** alphonse reassigned to revert-#336 PR (#433). After that lands, all in-flight PRs need rebase against the corrected slice_num=64 baseline.
+
 ## 2026-04-28 01:20 — PR #341: EMA model weights for val/test (decay 0.999) — **CLOSED**
 - Branch: `willowpai2d5-thorfinn/ema-eval` (deleted; pre-#336, slice_num=64)
 - Hypothesis: EMA(0.999) smooths small-LR cosine tail → 2-6% reduction
