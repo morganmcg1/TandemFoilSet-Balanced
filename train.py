@@ -374,7 +374,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
-    amp_bf16: bool = True  # use bfloat16 autocast for training forward + loss
+    amp_bf16: bool = True  # use bfloat16 autocast for model forward; loss accumulator stays in fp32
 
 
 cfg = sp.parse(Config)
@@ -469,12 +469,14 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cfg.amp_bf16):
             pred = model({"x": x_norm})["preds"]
-            abs_err = (pred - y_norm).abs()
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+        pred = pred.float()
+        abs_err = (pred - y_norm).abs()
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
