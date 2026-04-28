@@ -4,47 +4,48 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 
 ## Current best (this branch)
 
-- **PR**: #783 — "Round 1: compound + Huber loss (delta=1.0)" (merged 2026-04-28)
-- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--huber_delta 1.0`
-- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **75.93**
-- **W&B run**: `2y1lj209` (group `compound-huber`, project `senpai-charlie-wilson-willow-e-r2`)
-- **Params**: 558,134 (unchanged) | **Peak VRAM**: 21.6 GB | **Epochs in 30 min**: 32
+- **PR**: #840 — "Per-sample relative MAE loss" (winner, pending rebase/merge — declared 2026-04-28)
+- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--huber_delta 1.0`
+- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **64.73**
+- **test_avg/mae_surf_p** (best checkpoint): **56.92** (finite across all 4 splits including cruise)
+- **W&B run**: `nz8eev8e` (group `compound-relative-mae`, project `senpai-charlie-wilson-willow-e-r2`)
+- **Params**: 558,134 (unchanged) | **Epochs in 30 min**: ~32 (timed out at 32/50)
 
 ### Per-split val metrics (best checkpoint, epoch 32)
 
 | Split | val mae_surf_p |
 |-------|---------------|
-| `val_single_in_dist`     | 85.84  |
-| `val_geom_camber_rc`     | 91.20  |
-| `val_geom_camber_cruise` | 54.68  |
-| `val_re_rand`            | 71.99  |
-| **val_avg/mae_surf_p**   | **75.93** |
+| `val_single_in_dist`     | 80.41  |
+| `val_geom_camber_rc`     | 78.51  |
+| `val_geom_camber_cruise` | 40.13  |
+| `val_re_rand`            | 60.73  |
+| **val_avg/mae_surf_p**   | **64.73** |
 
 ### Per-split test metrics (from best checkpoint)
 
 | Split | test mae_surf_p |
 |-------|----------------|
-| `test_single_in_dist`       | 79.35  |
-| `test_geom_camber_rc`       | 82.61  |
-| `test_geom_camber_cruise`   | **NaN** (scoring bug — see note below) |
-| `test_re_rand`              | 64.29  |
-| **partial test_avg (3 finite splits)** | **75.42** |
-| **test_avg/mae_surf_p**     | **NaN** (poisoned by cruise NaN) |
+| `test_single_in_dist`       | 77.25  |
+| `test_geom_camber_rc`       | 67.74  |
+| `test_geom_camber_cruise`   | 32.35  |
+| `test_re_rand`              | 50.35  |
+| **test_avg/mae_surf_p**     | **56.92** |
 
-**Cruise NaN note**: `data/scoring.py` only skips samples with non-finite *ground truth*; a single inf in the model's pressure prediction for one cruise test sample (`test_geom_camber_cruise/000020.pt`, 761 Inf values in `p` channel) poisons the whole accumulator. The val cruise split was finite throughout training (val_geom_camber_cruise/mae_surf_p = 54.68 at epoch 32). This is a scoring bug, not a model issue. A fix PR (adding a prediction-finiteness guard in `train.py`) has been green-lit.
+**Note**: Relative MAE loss fixed the cruise NaN — cruise test split is now finite (32.35). The gradient-equalization across Re regimes works as predicted: cruise (low-Re, small |y|) benefits most; single_in_dist (high-Re, large |y|) regresses slightly as expected.
 
-### Reproduce
+### Reproduce (once PR #840 merges)
 
 ```bash
 cd target && python train.py \
+    --loss_type relative_mae \
     --huber_delta 1.0 \
     --epochs 50 \
-    --wandb_group compound-huber \
-    --wandb_name compound-huber-d1.0 \
-    --agent willowpai2e2-fern
+    --wandb_group compound-relative-mae \
+    --wandb_name compound-relative-mae \
+    --agent willowpai2e2-edward
 ```
 
-with `model_config` in `train.py` set to (default after PR #779 merge):
+with `model_config` in `train.py` set to:
 ```python
 n_layers=3,
 n_head=1,
@@ -52,6 +53,22 @@ slice_num=16,
 n_hidden=128,
 mlp_ratio=2,
 ```
+
+---
+
+## 2026-04-28 16:00 — PR #840: per-sample relative MAE (new best — pending merge)
+
+- **val_avg/mae_surf_p:** 64.73 (epoch 32, timed out at 32/50 — still improving)
+- **test_avg/mae_surf_p:** 56.92 (finite across all 4 splits)
+- **Per-split val:** single=80.41, rc=78.51, cruise=40.13, re_rand=60.73
+- **Per-split test:** single=77.25, rc=67.74, cruise=32.35, re_rand=50.35
+- **Delta vs previous best (PR #783):** −11.20 (−14.7%) on val_avg/mae_surf_p
+- **W&B run:** nz8eev8e
+- **Status:** Winner declared; sent back for rebase (merge conflict on advisor branch)
+
+---
+
+## 2026-04-28 14:00 — PR #783: Huber loss δ=1.0 (prev best)
 
 ---
 

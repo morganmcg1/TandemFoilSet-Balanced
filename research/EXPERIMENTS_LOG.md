@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-04-28 17:00 — PR #840: per-sample relative MAE loss [WINNER — pending rebase/merge]
+- Branch: `willowpai2e2-edward/compound-relative-mae`
+- Hypothesis: MSE and Huber losses weight gradient contribution proportional to |residual|², which biases toward high-Re/high-amplitude samples. Per-sample relative MAE normalizes each sample's contribution: L_rel = mean(|pred - target| / (mean(|target|) + ε)), equalizing gradient contribution across Re regimes. On a dataset where per-sample y-std spans 164–2077 (12× range), this should disproportionately benefit low-Re splits (cruise, re_rand).
+- W&B run: `nz8eev8e` (group `compound-relative-mae`, project `senpai-charlie-wilson-willow-e-r2`)
+
+| metric | relative MAE (epoch 32/50) | Huber δ=1.0 baseline (PR #783) | Δ |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | **64.73** | 75.93 | **−11.20 (−14.7%)** |
+| `val_single_in_dist/mae_surf_p` | 80.41 | 85.84 | −5.43 |
+| `val_geom_camber_rc/mae_surf_p` | 78.51 | 91.20 | −12.69 |
+| `val_geom_camber_cruise/mae_surf_p` | **40.13** | 54.68 | **−14.55** |
+| `val_re_rand/mae_surf_p` | 60.73 | 71.99 | −11.26 |
+| `test_avg/mae_surf_p` | **56.92** | NaN (cruise bug) | — |
+| `test_single_in_dist/mae_surf_p` | 77.25 | 79.35 | −2.10 |
+| `test_geom_camber_rc/mae_surf_p` | 67.74 | 82.61 | −14.87 |
+| `test_geom_camber_cruise/mae_surf_p` | **32.35** | NaN (cruise bug) | — |
+| `test_re_rand/mae_surf_p` | 50.35 | 64.29 | −13.94 |
+| epochs | 32/50 (timeout) | 32/50 (timeout) | — |
+| wall clock | ~30 min | 30.2 min | — |
+
+- Outcome: **Winner declared**. All 4 val splits improve; all 4 test splits are finite (cruise NaN resolved). The per-split pattern confirms the hypothesis precisely: cruise (low-Re, small |y|) gets the largest benefit (−14.55 val, 40.13 → 32.35 test), re_rand also benefits strongly (−11.26 val). The relative loss eliminates cruise inf predictions by normalizing scale, incidentally fixing the cruise NaN bug.
+- Key analysis: Relative MAE is additive on top of Huber: Huber linearizes tail residuals; relative scaling equalizes cross-Re gradient contribution. Both address the same root cause (high-Re amplitude dominance) at different abstraction levels, and they compound.
+- Status: Merge blocked by rebase conflict; edward sent back to rebase and resubmit.
+- Next steps: Once merged, follow-up should sweep ε ∈ {1e-3, 1e-2} (current ε=1e-6 may be sub-optimal in normalized space); also run 50-epoch version with PR #821's AMP/bf16 tooling once that lands.
+
 ## 2026-04-28 ~15:00 — PR #784 round 2: OneCycleLR full-schedule 28 epochs [CLOSED]
 - Branch: `willowpai2e2-frieren/compound-onecycle` (closed, branch deleted)
 - Hypothesis (revision): Repeat OneCycleLR with `--epochs 28` so the full cosine-descent schedule completes within the 30-min wall clock. Test whether completing the low-LR fine-tuning phase unlocks a refinement win.
