@@ -492,6 +492,26 @@ Round-1 reviews. Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 - Per-split val MAE for `p` (compile run, all 4 improved vs eager): single_in_dist 79.83 (eager 87.50), camber_rc 76.52 (eager 81.02), cruise 45.78 (eager 48.46), re_rand 63.46 (eager 65.82).
 - Decision: **SEND BACK FOR REBASE.** GraphQL merge-conflict error on squash: the branch is several merges behind advisor (fern #525, frieren #526, and others landed after the branch was created). Rebasing requires a re-run to measure on the now-stronger baseline. The val_avg=66.397 / test_avg=60.398 numbers are recorded here as alphonse's measurement on the slice-temp-only baseline; on the post-#525 baseline (val_avg=67.306) the compile run should land at-or-below 66.397 since the merged stack starts from a stronger basin.
 
+## 2026-04-28 05:45 — PR #548: Slice attention temperature init 1.0 → 1.5 — orthogonal compound
+
+- Branch: `charliepai2d2-thorfinn/slice-temp-1p5` — branched on slice-temp baseline pre-#525/#526; metrics committed.
+- Hypothesis: characterize equilibrium asymmetry. The PR predicted small regression because init=1.5 starts above the ~0.95 equilibrium and shouldn't drift fast enough to reach it in 14 epochs. Predicted Δ: −0.5% to +1%.
+- Result: best `val_avg/mae_surf_p = 70.6169` at epoch 14. **−1.51% vs slice-temp baseline (71.6985); −0.55% on test (62.5824 → 62.2381).** vs current 67.306 baseline: +4.92% (branched too early to reach this comparison).
+- Per-split val: val_geom_camber_rc −4.28% (biggest gain), val_re_rand −1.42%; single_in_dist and cruise flat (+0.07%, +0.27%).
+- **Final per-block temperatures**: [1.480, 1.429, 1.452, 1.450, 1.434] live, mean 1.449. Drift Δ ≈ −0.051 over 14 epochs — same magnitude as PR #520's 1.0 → 0.95 drift. The temperature is **stuck well above the supposed 0.95 equilibrium** yet still improves over init=1.0.
+- **Refutes the "stuck above is worse" hypothesis**: pushing init higher *helps*, even though gradients consistently push toward sharper attention at the same drift speed. The temperature has a **broad sweet spot in [1.0, 1.5]+** — the 0.95 "equilibrium" found in PR #520 is not the val-loss minimum; it's just where gradients stabilize at the 14-epoch budget.
+- Decision: **MERGE.** Replaces init=1.0 with init=1.5 in PhysicsAttention. Mechanistically orthogonal to the cosine LR fix, noise, EMA, etc. The +1.51% improvement on the slice-temp baseline should compound (or at minimum not regress) when stacked with the rest. Single-token change, zero compute cost.
+
+## 2026-04-28 05:45 — PR #540: Bias-corrected EMA decay_target 0.99 → 0.95
+
+- Branch: `charliepai2d2-nezuko/ema-decay-target-095` — metrics committed.
+- Hypothesis: parallel sweep on the weight-EMA decay axis (analogous to her β₂=0.95 win). Predicted Δ: −0.5% to −1.5% (could regress).
+- Result: best `val_avg/mae_surf_p = 75.655` at epoch 14. **+4.48% vs 72.414 reference; +12.4% vs current 67.306 baseline.** test +5.57% / +12.3%.
+- Per-split val: 3/4 regressed (single_in_dist +7.88%, camber_rc +5.91%, cruise +2.35%); val_re_rand essentially flat.
+- Effective decay trajectory: clamps at the asymptote (0.95) at step ~170 vs step ~891 for decay=0.99. 5× shorter late-training memory window (~14 steps vs ~70 steps).
+- **Mechanism (definitive)**: late-training smoothing IS load-bearing. The regression is concentrated on the splits where weight-space averaging matters most (single_in_dist, camber_rc — same splits DropPath improved). The OOD `val_re_rand` is unaffected, confirming that split's bottleneck is data-coverage rather than checkpoint smoothing.
+- Decision: **CLOSE.** EMA decay axis is closed in the DOWN direction. Student's follow-up #2 (decay=0.995, the UP direction — longer late-training memory) is the orthogonal next probe. Queued as round-7 reassignment.
+
 ## Test-metric NaN follow-up (cross-PR)
 
 All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the student diagnoses:
