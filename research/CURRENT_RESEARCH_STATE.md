@@ -164,13 +164,18 @@ composition even if they don't outright beat 102.64:**
      *(loss focus)* — branched off L1-only.
    - PR #583 — frieren: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
      **n_head=8** — different attention compute structure.
-   - PR #587 — edward: **BF16 autocast** (round-5 throughput infra).
    - PR #588 — fern: **SWA-style end-of-training weight averaging**.
    - PR #596 — askeladd: L1+FF12+EMA + `--epochs 14` + `lr=7.5e-4` +
      **max_norm=5.0** — loosen clip 5×.
-   - PR (tanjiro, new): L1+FF12+EMA + aux log-p **weight=0.10** —
-     bracket auxiliary dose downward from merged 0.25 (non-monotone
-     cruise behaviour suggests further headroom may exist below).
+   - PR #597 — tanjiro: L1+FF12+EMA + aux log-p **weight=0.10** —
+     bracket aux dose downward from merged 0.25.
+   - PR (edward, new): **BF16 + FP32 surf_loss guard** — restore
+     precision on the high-Re extreme pressure reduction while keeping
+     the BF16 forward-pass speedup.
+   - PR (nezuko, new): **Annealed input noise** (sigma 0.05 → 0
+     linearly) — front-loaded regularisation; tests if the lever
+     captures regularisation benefit without late-epoch convergence
+     drag.
    - PR (fern, new): L1+FF12+EMA(0.998) + `--epochs 14` + `lr=7.5e-4`
      — bracket EMA decay slightly upward from 0.997 (window ~500 steps
      vs 333) toward the cosine tail.
@@ -218,7 +223,8 @@ post-EMA stack. The pattern:
 | **Saturated regularisation overlap** | no marginal value | wd=5e-4 × full stack (#500) | closed |
 | **Heavy-tail compose redundancy with EMA** | mild uniform regression | 3× p-weight in vol_loss × full stack (#515) | closed |
 | **Capacity competition with main task** | mixed per-split tradeoffs | aux log-p at weight=0.5 (#551) | closed (re-assigned at weight=0.25) |
-| **Wallclock-binding overhead** | under-convergence at any rate | DropPath 0.05/0.1 per-sample mask (#501, #532), slice_num=128 (#292, #558) | closed (round-5 unblock requires throughput infra: BF16 autocast in-flight via #524 reassignment) |
+| **Wallclock-binding overhead** | under-convergence at any rate | DropPath 0.05/0.1 per-sample mask (#501, #532), slice_num=128 (#292, #558) | round-5 unblockable via BF16 (PR #587 measured 24% speedup; precision-guarded variant in flight) |
+| **Round-3 regularisation knee** | over-regularisation at any further dose | input noise sigma=0.05 (#569), DropPath 0.05+ (#532), wd × full stack (#500) | closed — round-3 stack is at regularisation optimum |
 
 **Generalisation observed across compose tests**: once one "noise/
 regularisation" lever is in the stack (FF, EMA), additional

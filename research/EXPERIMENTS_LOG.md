@@ -1,5 +1,99 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 06:37 — PR #587 (CLOSED, BF16 precision regression): BF16 autocast
+- Branch: `charliepai2d3-edward/l1ff12-ema-cos14-lr-7p5e-4-bf16` (deleted)
+- Hypothesis: BF16 autocast for 1.5-2× speedup, ±0.5% headline.
+  Round-5 throughput infrastructure.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #534 (78.60) | vs current PR #572 (77.78) |
+|--------|--------:|-------------------:|---------------------------:|
+| `val_avg/mae_surf_p` | 79.53 | +1.19% | +2.25% |
+| `test_avg/mae_surf_p` | 69.38 | +2.37% | +2.46% |
+| Per-epoch wallclock | 100 s | (vs 132 s, **−24%**) | |
+| Peak GPU memory | 33.4 GB | (vs 42.4 GB, **−21%**) | |
+
+### Diagnostic — partial speedup, precision regression
+
+- Speed unlock real but smaller than predicted (24% vs predicted 50-100%):
+  Transolver is **memory-bandwidth-bound**, not compute-bound — pointwise
+  ops on irregular meshes dominate.
+- Memory drop partial because FP32 master weights, gradients, optimiser
+  state, and pad-to-max-mesh batching aren't touched by autocast.
+- **`val_single_in_dist` regressed +1.7%** (vs +0.4% on cruise) —
+  high-Re extreme pressures (max ±29,000 Pa) lose precision in BF16's
+  reduced mantissa during surf_loss reduction.
+
+### Decision
+
+**Closed.** Above-zero regression on headline. Speed unlock alone
+doesn't justify merging; round-5 needs precision-guarded variant.
+
+### Round-5 unlock implications
+
+With ~7 min wallclock margin at 14 epochs, BF16 enables previously-
+blocked levers:
+- DropPath at 0.05 (was 13/14 at FP32): should fit 14/14 with margin.
+- slice_num=128 (was 11/14): should fit 14/14.
+- Wider+deeper partial unlock (8-10/50 epochs vs 7/50 prior).
+
+### Re-assignment
+
+edward → BF16 + **FP32 surf_loss guard** — keep autocast on forward
+pass, but cast `pred[..., 2]` (pressure channel) to FP32 before L1
+reduction. Surgical precision restoration without giving up speedup.
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
+## 2026-04-28 06:37 — PR #569 (CLOSED, over-regularisation): input-space Gaussian noise sigma=0.05
+- Branch: `charliepai2d3-nezuko/l1ff12-ema-cos14-lr-7p5e-4-input-noise-0p05` (deleted)
+- Hypothesis: input-space additive Gaussian noise for input-perturbation
+  robustness. Predicted −0.5% to −2%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs PR #534 (78.60) |
+|--------|--------:|-------------------:|
+| `val_avg/mae_surf_p` | 79.92 | +1.68% |
+| `test_avg/mae_surf_p` | 69.80 | +3.00% |
+
+### Per-split — noise over-regularises OOD
+
+| split | this PR | PR #534 | Δ |
+|-------|--------:|--------:|--:|
+| val_single_in_dist | 90.20 | 91.15 | **−1.04%** (only winner) |
+| val_geom_camber_rc | 93.05 | 90.78 | +2.50% |
+| val_geom_camber_cruise | 59.24 | 56.16 | **+5.49%** (worst hit) |
+| val_re_rand | 77.19 | 76.33 | +1.12% |
+
+### Mechanistic insight
+
+Sigma=0.05 in normalised input space perturbs spatial coordinates by
+~5% per step — **on the same order as camber-shift between cruise and
+raceCar foils**. Model has to learn the mapping AND denoise inputs
+simultaneously with only ~1500 samples. OOD camber extrapolation hurts
+because noised training landscape produces less reliable boundaries.
+
+### Decision
+
+**Closed.** Above-zero regression. Round-3 stack is at the
+**regularisation knee** — explains why several recent regularisation
+levers (wd, beta2, DropPath, channel weighting) have been redundant
+or destructive when stacked.
+
+### Re-assignment
+
+nezuko → **annealed input noise** (sigma 0.05 → 0 linearly across
+epochs, noise-free for last 2-3 epochs). Front-loads regularisation
+while letting late-epoch fine-tuning converge without noise.
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 06:28 — PR #572 (MERGED): aux log-pressure loss at weight=0.25
 - Branch: `charliepai2d3-tanjiro/l1ff-ema-cos14-lr-7p5e-4-logp-aux-0p25`
 - Hypothesis: half PR #551's weight (0.5 → 0.25) for a sweet spot
