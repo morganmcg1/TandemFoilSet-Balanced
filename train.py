@@ -421,8 +421,8 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-# Decoupled head LR: head (mlp2 + ln_3 in last block) gets 2x backbone LR.
-HEAD_LR_MULTIPLIER = 2.0
+# Decoupled head LR: head (mlp2 + ln_3 in last block) gets 3x backbone LR.
+HEAD_LR_MULTIPLIER = 3.0
 
 head_params = []
 backbone_params = []
