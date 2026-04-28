@@ -1,10 +1,11 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 00:15 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
+- **Last update:** 2026-04-28 00:30 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
 - **Most recent human-team direction:** N/A — no team issues consulted (isolated replicate; only entrypoint-surfaced PRs in scope).
-- **Current baseline (merged):**
-  - PR #282 — Huber loss (δ=1.0) on normalized targets. `val_avg/mae_surf_p = 105.999` (recipe high-water mark, target to beat).
-  - PR #361 — NaN-safe eval. `test_avg/mae_surf_p = 97.957` (first finite paper-facing measurement; same recipe, RNG-noise val drift to 108.103 not used as bar).
+- **Current baseline (merged): `val_avg/mae_surf_p = 101.350`** (PR #363 EMA-eval).
+  - PR #282 — Huber loss (δ=1.0) on normalized targets. `val_avg = 105.999`.
+  - PR #361 — NaN-safe eval workaround in `evaluate_split`. `test_avg = 97.957` (first finite measurement).
+  - PR #363 — EMA copy of weights (decay 0.999) for val/test eval. `val_avg = 101.350` (−4.39%); test_avg pending finite re-measurement post-merge (3-split mean was 100.03 with cruise NaN since #361 hadn't landed for that run).
 
 ## Current research focus
 
@@ -14,37 +15,44 @@ Compound improvements on the round-1 huber baseline. Recover the paper-facing te
 
 | Rank | PR | Student | Slug | best `val_avg/mae_surf_p` | Δ vs 105.999 | Decision |
 |------|----|---------|------|--------------------------:|-------------:|----------|
-| 1 | #282 | edward | huber-loss | **105.999** | (baseline) | **MERGED** |
-| 1b | #361 | edward | nan-safe-eval | 108.103 (rerun, RNG noise) | +1.99% | **MERGED** (metric-pipeline fix; unlocks finite `test_avg = 97.957`) |
-| 2 | #284 | fern | warmup-cosine-1e3 | 123.135 | +16.2% | CLOSED (clip masked recipe) |
-| 3 | #291 | nezuko | dropout-0p1 | 128.896 | +21.6% | CLOSED |
-| 4 | #295 | tanjiro | pressure-channel-weight | 130.916 | +23.5% | CLOSED |
-| 5 | #281 | askeladd | slice-128 | 154.594 | +45.8% | CLOSED |
-| 6 | #297 | thorfinn | depth-8 | 168.836 | +59.3% | CLOSED |
+| 1 | #363 | thorfinn | ema-eval | **101.350** | −4.39% (current baseline) | **MERGED** |
+| 2 | #282 | edward | huber-loss | 105.999 | (huber baseline) | **MERGED** |
+| 2b | #361 | edward | nan-safe-eval | 108.103 (rerun) | +1.99% RNG noise | **MERGED** (metric-pipeline fix; first finite `test_avg = 97.957`) |
+| 3 | #286 | frieren | surf-weight-25 | 108.222 | +2.10% | CLOSED |
+| 4 | #284 | fern | warmup-cosine-1e3 | 123.135 | +16.2% | CLOSED (clip masked recipe) |
+| 5 | #291 | nezuko | dropout-0p1 | 128.896 | +21.6% | CLOSED |
+| 6 | #295 | tanjiro | pressure-channel-weight | 130.916 | +23.5% | CLOSED |
+| 7 | #281 | askeladd | slice-128 | 154.594 | +45.8% | CLOSED |
+| 8 | #297 | thorfinn | depth-8 | 168.836 | +59.3% | CLOSED |
 
 Per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`. Per-experiment JSONL summaries in `research/student_metrics/` (note: nezuko, askeladd & fern did not commit their training metrics files; their PR-comment numbers are recorded as JSONL summaries instead).
 
-## Round-1 still WIP (2 students)
-
-These were branched off the **pre-huber** advisor and test isolated levers without huber. Their results will be evaluated against the new huber baseline (105.999) when they come back for review.
+## Round-1 still WIP (1 student)
 
 | PR | Student | Slug | Lever |
 |----|---------|------|-------|
-| #279 | alphonse | capacity-medium | n_hidden 128→192, n_layers 5→6, n_head 4→6 |
-| #286 | frieren | surf-weight-25 | surf_weight 10→25 |
+| #279 | alphonse | capacity-medium | n_hidden 128→192, n_layers 5→6, n_head 4→6 (branched off pre-huber; will be ranked against the EMA baseline 101.350) |
 
-## Round-2 in flight (6 students)
+## Round-2 in flight (4 students)
 
-All built on the merged huber baseline (PR #282 + #361).
+Branched off huber baseline (PR #282 + #361) **before** the EMA merge (#363). When they return, their absolute val_avg compares against the new EMA baseline (101.350); we will need to interpret carefully — a result < 101.350 wins; a result < 105.999 but > 101.350 means the lever helps on huber-no-EMA but doesn't beat huber+EMA, and would need to be retested as huber+EMA+lever to claim a compound win.
 
 | PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
 |----|---------|------|-------|-------------------------------------|
 | #362 | tanjiro | surf-channel-on-huber | per-channel surf loss weights `[0.5, 0.5, 2.5]` on top of huber | −3% to −10% |
-| #363 | thorfinn | ema-eval | EMA copy of weights (decay 0.999) for val/test evaluation | −2% to −5% |
 | #370 | askeladd | cosine-tmax-14 | align cosine `T_max` with actual budget; LR fully decays during 30-min run | −3% to −8% |
 | #371 | nezuko | grad-accum-2 | gradient accumulation 2 (effective batch 8) with √2 lr scaling | −1% to −4% |
 | #377 | fern | warmup-cosine-1e3-no-clip | round-1 warmup+cosine+lr=1e-3+betas recipe, **no grad clip** (huber bounds per-element gradient) | −3% to −8% |
 | #386 | edward | re-fourier-8 | Fourier embedding of `log(Re)` (8 bands → 16 dims) concatenated to input features inside the model | −2% to −5% (with disproportionate help on `val_re_rand` and `val_single_in_dist`) |
+
+## Round-3 just-assigned (2 students)
+
+Built on the merged EMA+huber+NaN-safe baseline (101.350).
+
+| PR | Student | Slug | Lever | Predicted Δ on `val_avg/mae_surf_p` |
+|----|---------|------|-------|-------------------------------------|
+| #391 | thorfinn | swiglu-mlp | LLaMA-style SwiGLU FFN inside `TransolverBlock` (replaces 2-linear GELU MLP); per-block gating | −1% to −3% |
+| #392 | frieren | mlp-ratio-4 | Standard transformer FFN expansion: `mlp_ratio` 2→4 (MLP hidden 256→512); pure capacity in the per-token mixing layer | −2% to −5% |
 
 ## Test-metric NaN (cross-PR issue)
 
