@@ -175,11 +175,14 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, return_hidden=False):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            out = self.mlp2(self.ln_3(fx))
+            if return_hidden:
+                return out, fx
+            return out
         return fx
 
 
@@ -213,6 +216,14 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Auxiliary surface-pressure head — taps the post-residual hidden state
+        # of the last block and predicts a refined surface-p. Trained with its
+        # own L1 loss on surface nodes; blended with the main head's p at eval.
+        self.aux_p_head = nn.Sequential(
+            nn.Linear(n_hidden, n_hidden),
+            nn.GELU(),
+            nn.Linear(n_hidden, 1),
+        )
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -227,21 +238,32 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        preds = None
+        hidden = None
         for block in self.blocks:
-            fx = block(fx)
-        return {"preds": fx}
+            if block.last_layer:
+                preds, hidden = block(fx, return_hidden=True)
+            else:
+                fx = block(fx)
+        aux_p = self.aux_p_head(hidden)
+        return {"preds": preds, "aux_p": aux_p}
 
 
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   blend_alpha: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``blend_alpha < 1.0``, the surface-pressure channel of ``preds`` is
+    replaced by ``blend_alpha * preds[..., 2] + (1 - blend_alpha) * aux_p`` on
+    surface nodes only. ``blend_alpha=1.0`` disables the blend (main head only).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -261,7 +283,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
 
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
+                out = model({"x": x_norm})
+                pred = out["preds"]
+                aux_p = out["aux_p"].squeeze(-1)
                 # Pure L1 (absolute) per-element loss; name kept for diff minimality.
                 sq_err = (pred - y_norm).abs()
                 vol_mask = mask & ~is_surface
@@ -276,7 +300,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 ).item()
             n_batches += 1
 
-            pred_orig = pred.float() * stats["y_std"] + stats["y_mean"]
+            pred = pred.float()
+            if blend_alpha < 1.0:
+                aux_p_f = aux_p.float()
+                pred_p_blended = blend_alpha * pred[..., 2] + (1.0 - blend_alpha) * aux_p_f
+                pred = pred.clone()
+                pred[..., 2] = torch.where(is_surface, pred_p_blended, pred[..., 2])
+
+            pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -350,6 +381,9 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "aux_weight": cfg.aux_weight,
+        "blend_alpha": cfg.blend_alpha,
+        "aux_blend_eval": cfg.aux_blend_eval,
     }
 
     description = (
@@ -409,6 +443,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    aux_weight: float = 0.5  # weight on the aux surface-pressure L1 loss
+    blend_alpha: float = 0.5  # inference blend: alpha*main + (1-alpha)*aux on surface p
+    aux_blend_eval: bool = True  # apply aux blend at eval/test (False = ablation)
 
 
 cfg = sp.parse(Config)
@@ -570,7 +607,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_batches = 0
     batch_times: list[float] = []
     if torch.cuda.is_available():
@@ -589,7 +626,9 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
 
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred = out["preds"]
+            aux_p = out["aux_p"].squeeze(-1)
             # Pure L1 (absolute) per-element loss; name kept for diff minimality.
             sq_err = (pred - y_norm).abs()
 
@@ -597,7 +636,12 @@ for epoch in range(MAX_EPOCHS):
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Aux surface-pressure-only L1 loss — matches the main loss's L1 form.
+            aux_p_err = (aux_p - y_norm[..., 2]).abs()
+            aux_p_loss = (aux_p_err * surf_mask).sum() / surf_mask.sum().clamp(min=1)
+
+            loss = vol_loss + cfg.surf_weight * surf_loss + cfg.aux_weight * aux_p_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -620,20 +664,29 @@ for epoch in range(MAX_EPOCHS):
         last_batch_end = time.time()
         batch_times.append(b_dt)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "train/batch_time_s": b_dt, "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/aux_p_loss": aux_p_loss.item(),
+            "train/batch_time_s": b_dt,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_p_loss.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
 
     # --- Raw-weight validation (every epoch — diagnostic curves) ---
+    eval_blend = cfg.blend_alpha if cfg.aux_blend_eval else 1.0
     model.eval()
     raw_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             blend_alpha=eval_blend)
         for name, loader in val_loaders.items()
     }
     raw_val_avg = aggregate_splits(raw_split_metrics)
@@ -647,7 +700,8 @@ for epoch in range(MAX_EPOCHS):
         raw_state = {k: v.detach().clone() for k, v in _orig_module.state_dict().items()}
         _orig_module.load_state_dict(ema_state)
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 blend_alpha=eval_blend)
             for name, loader in val_loaders.items()
         }
         _orig_module.load_state_dict(raw_state)
@@ -666,6 +720,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/epoch_aux_p_loss": epoch_aux,
         "raw_val/loss": raw_val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -710,7 +765,7 @@ for epoch in range(MAX_EPOCHS):
             f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
             f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
             f"(max {steady_max_s:.3f}s)  "
-            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f}]  "
             f"raw_val={raw_avg_surf_p:.4f} ema_val={avg_surf_p:.4f}{tag}"
         )
         for name in VAL_SPLIT_NAMES:
@@ -720,7 +775,7 @@ for epoch in range(MAX_EPOCHS):
             f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
             f"first_b={first_batch_s:.2f}s steady={steady_mean_s:.3f}s "
             f"(max {steady_max_s:.3f}s)  "
-            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+            f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f}]  "
             f"raw_val={raw_avg_surf_p:.4f} (ema val skipped)"
         )
 
@@ -751,7 +806,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 blend_alpha=eval_blend)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
