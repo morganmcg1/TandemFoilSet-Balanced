@@ -387,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    per_sample_norm: bool = True  # divide per-sample MSE by per-sample y_norm std
 
 
 cfg = sp.parse(Config)
@@ -502,6 +503,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
+    epoch_std_vals: list[float] = []
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -517,8 +519,27 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        if cfg.per_sample_norm:
+            with torch.no_grad():
+                per_sample_std_list = []
+                for i in range(x.shape[0]):
+                    valid_y = y_norm[i][mask[i]]  # [n_real_i, 3]
+                    s = valid_y.std().clamp(min=1e-6)
+                    per_sample_std_list.append(s)
+                per_sample_std = torch.stack(per_sample_std_list)  # [B]
+
+            vol_count = vol_mask.sum(dim=1).clamp(min=1)  # [B]
+            surf_count = surf_mask.sum(dim=1).clamp(min=1)  # [B]
+            vol_loss_per_sample = (sq_err * vol_mask.unsqueeze(-1)).sum(dim=(1, 2)) / vol_count
+            surf_loss_per_sample = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / surf_count
+            vol_loss = (vol_loss_per_sample / per_sample_std).mean()
+            surf_loss = (surf_loss_per_sample / per_sample_std).mean()
+            epoch_std_vals.extend(per_sample_std.detach().cpu().tolist())
+        else:
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -526,15 +547,27 @@ for epoch in range(MAX_EPOCHS):
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(),
-                   "train/grad_norm": grad_norm.item(),
-                   "global_step": global_step})
-        train_metrics_fp.write(json.dumps({
+        log_dict = {"train/loss": loss.item(),
+                    "train/grad_norm": grad_norm.item(),
+                    "global_step": global_step}
+        train_record = {
             "global_step": global_step,
             "epoch": epoch + 1,
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
-        }) + "\n")
+        }
+        if cfg.per_sample_norm:
+            std_min = per_sample_std.min().item()
+            std_max = per_sample_std.max().item()
+            std_mean = per_sample_std.mean().item()
+            log_dict["train/per_sample_std_min"] = std_min
+            log_dict["train/per_sample_std_max"] = std_max
+            log_dict["train/per_sample_std_mean"] = std_mean
+            train_record["train/per_sample_std_min"] = std_min
+            train_record["train/per_sample_std_max"] = std_max
+            train_record["train/per_sample_std_mean"] = std_mean
+        wandb.log(log_dict)
+        train_metrics_fp.write(json.dumps(train_record) + "\n")
         train_metrics_fp.flush()
 
         epoch_vol += vol_loss.item()
@@ -569,6 +602,16 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.per_sample_norm and epoch_std_vals:
+        sorted_stds = sorted(epoch_std_vals)
+        std_epoch_min = sorted_stds[0]
+        std_epoch_max = sorted_stds[-1]
+        std_epoch_median = sorted_stds[len(sorted_stds) // 2]
+        std_epoch_mean = sum(sorted_stds) / len(sorted_stds)
+        log_metrics["train/per_sample_std_epoch_min"] = std_epoch_min
+        log_metrics["train/per_sample_std_epoch_max"] = std_epoch_max
+        log_metrics["train/per_sample_std_epoch_median"] = std_epoch_median
+        log_metrics["train/per_sample_std_epoch_mean"] = std_epoch_mean
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -588,6 +631,11 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "val_avg/mae_surf_p": val_avg["avg/mae_surf_p"],
     }
+    if cfg.per_sample_norm and epoch_std_vals:
+        epoch_record["train/per_sample_std_epoch_min"] = std_epoch_min
+        epoch_record["train/per_sample_std_epoch_max"] = std_epoch_max
+        epoch_record["train/per_sample_std_epoch_median"] = std_epoch_median
+        epoch_record["train/per_sample_std_epoch_mean"] = std_epoch_mean
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             epoch_record[f"{split_name}/{k}"] = v
