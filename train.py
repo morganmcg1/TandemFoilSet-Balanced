@@ -430,6 +430,11 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 # without random-init drag. See PR #396 for derivation.
 EMA_DECAY = 0.997
 
+# Input-space additive Gaussian noise (training only). Operates on the
+# normalised 24-d x_norm before FF concat so noise propagates into the
+# spatial Fourier channels too.
+INPUT_NOISE_SIGMA = 0.05
+
 ema_state = {k: v.detach().clone() for k, v in model.state_dict().items()
              if v.dtype.is_floating_point}
 
@@ -490,6 +495,9 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if INPUT_NOISE_SIGMA > 0.0:
+            noise = torch.randn_like(x_norm) * INPUT_NOISE_SIGMA
+            x_norm = x_norm + noise * mask.unsqueeze(-1).to(x_norm.dtype)
         ff = fourier_pos_features(x_norm[..., :2])
         x_norm = torch.cat([x_norm, ff], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
