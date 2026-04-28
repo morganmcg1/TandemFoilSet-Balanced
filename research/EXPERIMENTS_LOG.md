@@ -345,3 +345,39 @@ The hypothesis didn't beat even the simplest raw baseline.
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #408 | fern | higher-lr-1e3 | `Config.lr = 5e-4 → 1e-3` on top of merged grad-clip baseline | Replaces closed #353; single-knob test of "grad-clip envelope makes 2× LR safe" — independently suggested by both fern (#353 follow-ups) and tanjiro (#374 follow-ups) |
+
+## 2026-04-28 01:02 — PR #351 (re-run): EMA + surf_weight=50 (charliepai2d1-askeladd) — **CLOSED (wash)**
+- Branch: `charliepai2d1-askeladd/surf-weight-50` (rebased onto post-#356; closed + branch deleted)
+- Hypothesis (re-run): retain `surf_weight=50` on the post-#356 baseline (EMA + NaN-safe pre-pass) to test compounding with EMA.
+
+### Headline metrics (best EMA epoch=13/50, run cut by 30-min timeout)
+| | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | **val_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` (EMA) | 165.35 | 142.63 | 100.50 | 115.60 | **131.02** |
+| `mae_surf_p` (raw, same epoch) | — | — | — | — | 176.74 |
+
+| | test_single_in_dist | test_geom_camber_rc | test_geom_camber_cruise | test_re_rand | **test_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 143.49 | 128.23 | 84.43 | 115.47 | **117.90** |
+
+### Comparisons
+- vs **prior baseline #356** (132.276 / 118.041): val −0.95 %, test −0.12 % — small win on val, wash on test.
+- vs **current baseline #374** (113.157 / 99.322): val **+15.8 %**, test **+18.7 %** — clear regression, but askeladd was rebased onto #356, not #374.
+
+### Analysis
+- **Predicted −5 % to −12 %, observed −0.95 % / −0.12 % vs the baseline they rebased onto.** EMA already absorbs most of the surface-signal gain; the marginal value of additionally re-weighting surface losses by 5× is small once EMA's smoothing is in place.
+- Volume MAE didn't blow up (single_in_dist surf=165 / vol=192 = +16 %; cruise surf=100 / vol=147 = +47 %) — model isn't catastrophically forgetting volume at `surf_weight=50`. Useful negative result for the loss-balance ablation table.
+- Per-split ranking: single_in_dist (165) > rc (143) > re_rand (116) > cruise (100). `single_in_dist` is the hardest and largest absolute contributor to `val_avg/mae_surf_p` — round 2 should optimize that split.
+- **Askeladd's own recommendation: don't merge.** "+0.95 % / +0.12 % wins are inside session-to-session noise."
+
+### Decision: close, reassign to ema-decay-0p99
+- Per CLAUDE.md merge rule (must be `<` current baseline), val=131.02 > 113.157 → no merge.
+- Even on the prior baseline, gains were within noise per askeladd's own analysis.
+- With grad-clip now in baseline absorbing additional variance, the marginal value of `surf_weight=50` is even smaller.
+- Reassigned askeladd to **PR #417 (ema-decay-0p99)**: single-line `ema_decay 0.999 → 0.99` to address nezuko's diagnostic ("EMA at this decay is too slow at the 13-epoch budget"). Honest predicted band −1 % to +3 %.
+
+## 2026-04-28 01:05 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #417 | askeladd | ema-decay-0p99 | `ema_decay = 0.999 → 0.99` | Replaces closed #351; tests whether the under-converged 13-epoch budget is being short-changed by an EMA shadow that averages over too many updates (nezuko's #355 diagnosis) |
