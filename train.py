@@ -238,22 +238,23 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model({"x": x_norm})["preds"]
+                sq_err = (pred - y_norm) ** 2
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_sum += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = pred.float() * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -486,14 +487,16 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
+
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
