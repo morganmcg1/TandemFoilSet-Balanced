@@ -95,6 +95,44 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms").
+
+    Sign-of-momentum update. Reference rescaling vs AdamW: lr ~10x smaller, wd ~10x larger.
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                # Decoupled weight decay
+                p.data.mul_(1.0 - lr * wd)
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                # Update direction: sign(beta1 * m_{t-1} + (1-beta1) * g_t)
+                update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.data.add_(update, alpha=-lr)
+                # Update momentum (with beta2)
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -432,13 +470,19 @@ for name, p in model.named_parameters():
     else:
         backbone_params.append(p)
 
-print(f"Optimiser: head_params={len(head_params)} (lr={cfg.lr * HEAD_LR_MULTIPLIER:.2e}), "
-      f"backbone_params={len(backbone_params)} (lr={cfg.lr:.2e})")
+# Lion paper rescaling vs AdamW: lr ~10x smaller, wd ~10x larger (sign update is unit-magnitude).
+LION_LR_RESCALE = 0.1
+LION_WD_RESCALE = 10.0
+backbone_lr = cfg.lr * LION_LR_RESCALE
+head_lr = cfg.lr * HEAD_LR_MULTIPLIER * LION_LR_RESCALE
+lion_wd = cfg.weight_decay * LION_WD_RESCALE
+print(f"Optimiser: head_params={len(head_params)} (lr={head_lr:.2e}), "
+      f"backbone_params={len(backbone_params)} (lr={backbone_lr:.2e})")
 
-optimizer = torch.optim.AdamW([
-    {"params": backbone_params, "lr": cfg.lr},
-    {"params": head_params, "lr": cfg.lr * HEAD_LR_MULTIPLIER},
-], weight_decay=cfg.weight_decay)
+optimizer = Lion([
+    {"params": backbone_params, "lr": backbone_lr},
+    {"params": head_params, "lr": head_lr},
+], weight_decay=lion_wd)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # --- EMA of weights ----------------------------------------------------
