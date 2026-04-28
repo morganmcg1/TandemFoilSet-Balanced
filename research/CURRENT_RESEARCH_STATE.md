@@ -1,15 +1,19 @@
 # SENPAI Research State
 
-- 2026-04-28 08:30 — round 1 settled, round 2 mid-flight; 4 merges + 12 closes;
-  8 axes in flight including counter-Huber (#559), LayerScale (#648), smoothness (#649); all hands on deck
-- **Baseline updated (4 merges total):** PR #328 + #330 + #367 + #399.
+- 2026-04-28 09:15 — round 2 nearing completion, round 3 starting;
+  **5 merges (compile is the round-2 winner)** + 13 closes; 8 axes in flight
+  including the first round-3 capacity-axis retry (#660); all hands on deck
+- **Baseline updated (5 merges total):** PR #328 + #330 + #367 + #399 + **#553
+  (torch.compile, the round-2 winner)**.
   Anchor val_avg/mae_surf_p = **115.61** (fp32 anchor, run `uip4q05z`).
-  After #399 bf16 infrastructure merge: 3-seed bf16+Huber mean = 112.13
-  (σ=4.53), test_avg = 101.82 (FINITE, first time on this branch).
-  Default config now: `n_hidden=128 n_layers=5 n_head=4 slice_num=128
-  mlp_ratio=2 lr=5e-4 weight_decay=1e-4 batch_size=4 surf_weight=10.0
-  epochs=50` + `loss=Huber(beta=1.0)` + `amp_dtype=bf16` +
-  `nan_to_num` scoring guard.
+  Operative baseline: **compile+bf16+Huber 3-seed mean = 80.70 (σ=2.20)**,
+  test_avg = **71.45 (σ=2.88)**. **−28 % vs bf16+Huber baseline (~14σ
+  outside noise)**, 2.23× speedup, 18 GB memory freed. Default config now:
+  `n_hidden=128 n_layers=5 n_head=4 slice_num=128 mlp_ratio=2 lr=5e-4
+  weight_decay=1e-4 batch_size=4 surf_weight=10.0 epochs=50` +
+  `loss=Huber(beta=1.0)` + `amp_dtype=bf16` + **`compile_mode=default`** +
+  `nan_to_num` scoring guard. **All round-2 PRs now compare against 80.70**.
+  Wall-clock cap allows ~29 epochs (vs 13 at bf16-only, vs 11 at fp32-eager).
 - **Round 2 candidates in flight:**
   - **PR #415** (frieren, asinh on pressure target): NEW
     assignment. Pairs with merged Huber β=1 — orthogonal
@@ -59,7 +63,8 @@
 | 328 | fern      | slice_num 64 → 128         | **MERGED ★**   | **133.55 (new baseline)**|
 | 330 | frieren   | MSE → Huber β=1            | **MERGED ★ (new baseline 115.61)** | rebased run = 115.61 (slice-128, epoch 11/50, run uip4q05z) |
 | 399 | askeladd  | round 2: bf16 mixed precision | **MERGED ★ infrastructure** | 3-seed bf16+Huber mean 112.13 (σ=4.53) on slice-128 — at-baseline within new noise floor; throughput unlock (1.23× / +30 % epochs); first finite test_avg=101.82 |
-| 553 | askeladd  | round 2: torch.compile on top of bf16 | NEW assignment (status:wip) | n/a |
+| 553 | askeladd  | round 2: torch.compile on top of bf16 | **MERGED ★ metric+infrastructure (round-2 winner)** | 3-seed mean 80.70 (σ=2.20); 2.23× speedup; +123 % epochs in budget; 18 GB memory freed; σ tightens 4.53 → 2.20 |
+| 660 | askeladd  | round 3: depth-8 on top of compile+bf16 (capacity retry) | NEW assignment (status:wip) | n/a — first round-3 capacity-axis re-validation |
 | 415 | frieren   | round 2: asinh on pressure target | NEW assignment | n/a (assigned this cycle) |
 | 332 | nezuko    | surf_weight 10 → 25 (sweep)| **closed** (3-seed mean 151.94 on slice-128 = +13.8 %, ~11 SE outside noise; vol_p also up; val curve oscillation) | superseded |
 | 472 | nezuko    | round 2: Lion optimizer    | NEW assignment (status:wip) | n/a |
@@ -71,31 +76,44 @@
 | 367 | fern      | bug fix: cruise-NaN scoring| **MERGED ★** | rebased + verified on Huber baseline: test_avg: NaN → 117.59, cruise_p: NaN → 96.92 |
 | 452 | fern      | round 2: push slice_num to 192/256 | **closed** (slice-192 single-seed = 133.30, +15.3 % vs 115.61 baseline; per-split mechanism-inversion confirms slice-128 is the ceiling) | superseded |
 | 478 | fern      | round 2: curriculum by per-sample y-std | **closed** (W=3 single-seed = 116.90 = +1.1 % vs baseline; mechanism: global y_std quantile filtering inadvertently flips domain balance and amplifies Huber's implicit cruise-favoring) | superseded |
-| 559 | fern      | round 2: per-sample loss weight ∝ y_std (counter-balance Huber) | NEW assignment (status:wip) | n/a |
+| 559 | fern      | round 2: per-sample loss weight ∝ y_std (counter-balance Huber) | **closed** (mechanism falsified: α=0.5 3-seed mean 136.48 ± 6.35 = +21.7 % vs baseline; α=1.0 catastrophic; predicted-to-improve splits regressed most) | superseded |
+| 659 | fern      | round 2: per-domain stratified data weighting | NEW assignment (status:wip) | n/a — fern's #559-closing follow-up #1 |
 
-PRs surfaced for advisor review this cycle: **#568, #517**. Actions:
-**#568 closed** — fp16 retry catastrophically diverged on all 3
-seeds (GradScaler scale → 0 within 5 epochs); throughput delta only
-+0.2 % over bf16 (no unlock at our scale on Blackwell tensor cores).
-Two independent reasons confirm **bf16 is the right precision for
-this branch**. Reassigned alphonse to **#648 (LayerScale)** — learned
-per-channel residual gain (CaiT/DeiT/ViT-S+ recipe), modest expected
-gain (1-3 %), truly orthogonal architecture-axis lever.
-**#517 closed** — DropPath multi-seed mean 122.61 ± 2.95 statistically
-null vs in-PR dp=0.0 control (122.93). Throughput regressed 3.5 %
-instead of unlocking. Depth=5 + 11 epochs is below the literature
-threshold for DropPath gains. **Per-split signal noteworthy**:
-DropPath is the FIRST round-2 axis to help `val_single_in_dist`
-(7th instance of the per-distribution-shift pattern, with reversed
-sign on raceCar single). Reassigned tanjiro to **#649 (smoothness
-regularization)** — auxiliary physics-informed loss penalizing
-prediction differences between random pairs of nearby mesh nodes.
-Truly novel orthogonal axis filling the un-claimed "auxiliary
-loss / physics prior" bucket.
+PRs surfaced for advisor review this cycle: **#553, #559**. Actions:
+**#553 (askeladd torch.compile) MERGED ★ as round-2 winner.**
+3-seed mean val_avg = 80.70 (σ=2.20), test_avg = 71.45 — **−28 %
+vs bf16+Huber baseline (~14σ outside noise)**. 2.23× speedup
+(63s/epoch vs 141s), 29 epochs in budget vs 13, 18 GB memory freed,
+σ tightens 4.53 → 2.20. Mechanism: small model + small batch → Python
+dispatch dominates → graph capture eliminates it; plus inductor's
+aggressive Blackwell kernel fusion; plus PhysicsAttention's small-
+tensor pointwise structure is exactly what `default` mode optimizes
+hardest. **Biggest single-axis win since Huber #330** (-13.4 % at
+the time of merge). **All round-2 PRs now compare against 80.70**.
+**Reassigned askeladd to #660 (depth-8 retry on top of compile)** —
+first round-3 capacity-axis re-validation. Closes the throughput-
+engineering loop: round-1 closed depth-8 because of budget
+confounding; round-2 unlocked the budget; now we test whether the
+budget-confounded round-1 axes converge cleanly with 29 epochs.
 
-Cycle 21 actions (recap): #485 closed (RMSNorm at-baseline; fused
-LayerNorm already optimal at this scale), #568 assigned (alphonse
-fp16-retry, now also closed this cycle).
+**#559 (fern y_std weighting) closed — mechanism falsified.**
+α=0.5 3-seed mean = 136.48 ± 6.35 (+21.7 %, ~3.1σ outside noise on
+wrong side); α=1.0 catastrophic. **Wrong splits regressed**:
+predicted-to-improve val_single_in_dist + val_geom_camber_rc
+regressed *most*; predicted-to-regress val_geom_camber_cruise
+regressed *least*. Up-weighting raceCar globally degraded raceCar's
+own held-out splits — Huber-clipping-induced cruise favoring is
+**not** the underlying cause of the per-distribution-shift pattern.
+**Reassigned fern to #659 (per-domain stratified data weighting)** —
+fern's own #559-closing follow-up #1. Tests whether the data-axis
+mechanism works when within-domain difficulty is decoupled from
+between-domain class structure. **Last data-axis lever** before
+round-3 axes pivot to per-region (spatial) or per-channel mechanisms.
+
+Cycle 22 actions (recap): #568 closed (fp16 catastrophic; bf16 stays
+right precision), #517 closed (DropPath statistically null at
+depth=5), #648 assigned (alphonse LayerScale), #649 assigned
+(tanjiro smoothness).
 
 Earlier cycle actions:
 **#335 closed** — schedule axis doesn't stack on Huber+slice-128.
@@ -117,20 +135,23 @@ lever (no other in-flight axis touches block-level dropout).
 Cycle 16 actions (recap): #311 closed (width axis exhausted),
 #485 assigned (alphonse RMSNorm).
 
-**Four merges**: #328 (slice_num=128, anchored prior baseline at
-133.55) + #330 (Huber β=1, current anchor 115.61) + #367 (scoring
-NaN fix, infrastructure) + #399 (bf16, infrastructure with bf16+Huber
-mean 112.13 / first-finite-test_avg 101.82). **Twelve closed axes**
-(#311 width, #325 depth, #326 FFN, #332 surf_weight, #335 schedule,
-#337 BS+LR, #429 p_weight, #452 slice-192, #478 curriculum, #485
-RMSNorm, #517 DropPath, #568 fp16-retry — all axes that fight the
-30-min cap, overlap with Huber's implicit gradient shaping, or are
-sub-literature-threshold at our depth=5/11-epoch scale).
-**Eight round-2 axes currently in flight**: #415 frieren
-asinh-on-pressure, #457 thorfinn EMA, #472 nezuko Lion, #547
-edward LLRD, #553 askeladd torch.compile, #559 fern y_std-weighting
-(counter-Huber), #648 alphonse LayerScale, #649 tanjiro smoothness-
-regularization. **All eight students busy on actionable WIP work.**
+**Five merges**: #328 (slice_num=128, anchored prior baseline at
+133.55) + #330 (Huber β=1, was anchor 115.61) + #367 (scoring NaN
+fix, infrastructure) + #399 (bf16, infrastructure mean 112.13) +
+**#553 (torch.compile, ROUND-2 WINNER, current operative baseline
+80.70 ± 2.20)**. **Thirteen closed axes** (#311 width, #325 depth,
+#326 FFN, #332 surf_weight, #335 schedule, #337 BS+LR, #429 p_weight,
+#452 slice-192, #478 curriculum, #485 RMSNorm, #517 DropPath, #559
+y_std-weighting, #568 fp16-retry — all axes that fight the 30-min
+cap, overlap with Huber's implicit gradient shaping, are sub-
+literature-threshold at our depth=5 scale, or operate at the wrong
+mechanism level for the per-distribution-shift pattern).
+**Eight axes currently in flight** (7 round-2 + 1 round-3):
+#415 frieren asinh-on-pressure, #457 thorfinn EMA, #472 nezuko Lion,
+#547 edward LLRD, #648 alphonse LayerScale, #649 tanjiro smoothness-
+regularization, #659 fern per-domain stratified weighting,
+**#660 askeladd depth-8 ON COMPILE (first round-3 capacity-axis
+retry)**. **All eight students busy on actionable WIP work.**
 
 ## What we learned this cycle (and last)
 
@@ -212,15 +233,33 @@ regularization. **All eight students busy on actionable WIP work.**
    DropPath. The first 6 share a sign (cruise improves / raceCar
    regresses); DropPath uniquely **reverses the sign on
    `val_single_in_dist`** (helps -3 to -5 %) while still hurting
-   `val_geom_camber_rc` (+3 to +4 %) — i.e., DropPath is the first
-   round-2 axis to help raceCar SINGLE specifically. **Anchored as
-   a property of Huber's gradient shape on the y_std-heterogeneous
-   data distribution**, not perturbation-specific. Per-sample
-   y_std-weighting (#559) is the first axis to address it directly
-   in aggregate. **Per-distribution regularization** (high DropPath
-   on single, low on OOD) is a round-3 stack candidate the DropPath
-   per-split signal points to. Per-distribution architecture /
-   loss specialization remains the round-3 priority.
+   `val_geom_camber_rc` (+3 to +4 %). **Anchored as a property of
+   the y_std-heterogeneous data distribution**, not perturbation-
+   specific. **Cause is NOT Huber-clipping** (falsified by fern #559;
+   per-sample y_std weighting against the predicted direction
+   degraded the predicted-to-improve splits most). Round-3 axes
+   should look at **per-region (spatial)** or **per-channel**
+   mechanisms instead — possibly surface-vs-volume per-region
+   weighting, or joint-channel y_std weighting, or per-domain
+   architecture specialization.
+
+9. **Throughput axis was the highest-leverage round-2 lever** (the
+   round-2 winner). bf16 (#399) + torch.compile (#553) compounded
+   multiplicatively (1.23× × 1.81× = 2.23×), and the extra epoch
+   budget converted directly to metric improvement (29 epochs →
+   80.70 vs 13 epochs → 112.13). The 30-min wall-clock cap was
+   the binding constraint across round 2; lifting it (via efficiency,
+   not by extending wall-clock) was the right move. **Round-3 should
+   re-validate the round-1 capacity-axis closes** (depth-8, width-160,
+   slice-256, mlp_ratio=4) because they were budget-confounded, not
+   architecturally unfit. First retry assigned (#660, askeladd
+   depth-8-on-compile).
+
+10. **Compile + Huber tightens the noise floor** σ ≈ 2.20 (down from
+    σ ≈ 4.53 at bf16+Huber, ±10 % at fp32-eager). Multi-seed runs
+    discriminate effects in fewer seeds. **Updated round-3 multi-seed
+    budgeting**: 3-seed σ ≈ 1.3, 2-seed σ ≈ 1.6 — small-effect axes
+    that were lost in fp32 noise should now be measurable.
 6. **Interior hyperparameter optima are architecture-dependent.**
    nezuko #332 found a clean interior optimum at surf_weight=25 on
    slice_num=64 (sweep curve + val_vol_p secondary signal). It did
@@ -241,12 +280,10 @@ regularization. **All eight students busy on actionable WIP work.**
 - **bf16 mixed precision.** **MERGED ★ as infrastructure (#399).**
   3-seed bf16+Huber mean 112.13 (σ=4.53), 1.23× speedup, +30 %
   epoch headroom, first finite test_avg=101.82.
-- **`torch.compile`.** ASSIGNED as PR #553 to askeladd: kernel
-  fusion + Python-overhead elimination on top of the just-merged
-  bf16 baseline. Predicted 1.10–1.30× additional speedup
-  (compounding with bf16). Sweep
-  `compile_mode ∈ {"none", "default", "reduce-overhead"}`.
-  Variable mesh-size handling via `dynamic=True`.
+- **`torch.compile`.** **MERGED ★ as round-2 winner (#553).**
+  3-seed compile+bf16+Huber mean **80.70 (σ=2.20)**, 2.23× total
+  speedup over fp32-eager, +123 % epochs in budget vs bf16-only,
+  18 GB memory freed by kernel fusion. Single biggest round-2 win.
 - **Schedule that fits the budget.** OneCycleLR over `total_steps`
   (not epochs) is robust to 30-min wall-clock cuts. May supersede
   `T_max=epochs` cosine entirely. Pending tanjiro's iteration.
@@ -272,12 +309,18 @@ regularization. **All eight students busy on actionable WIP work.**
   implicit cruise-favoring. Per-domain stratified curriculum
   remains a round-3 candidate.
 - **Per-sample loss weighting ∝ y_std (counter-balance Huber).**
-  ASSIGNED as PR #559 to fern: per-sample loss weight
-  `(y_std_i / median_y_std)^α` directly counter-balances Huber's
-  implicit cruise-favoring gradient share. **First round-2 axis to
-  address the per-distribution-shift pattern at the mechanism
-  level**, surfaced from fern's own #478 mechanism analysis.
-  Sweep α ∈ {0.0, 0.5, 1.0}.
+  CLOSED in #559 — **mechanism falsified**. α=0.5 3-seed mean
+  136.48 ± 6.35 (+21.7 %, ~3.1σ outside noise on wrong side); α=1.0
+  catastrophic. Wrong splits regressed (predicted-to-improve splits
+  regressed *most*). Up-weighting raceCar globally degrades
+  raceCar's own held-out splits — Huber-clipping is NOT the cause
+  of the per-distribution-shift pattern.
+- **Per-domain stratified data weighting.** ASSIGNED as PR #659 to
+  fern: weight per-sample loss by within-domain rank rather than
+  global rank. Fern's own #559-closing follow-up #1. Tests whether
+  data-axis-difficulty works when decoupled from between-domain
+  class structure. Last data-axis lever before pivot to per-region /
+  per-channel mechanisms.
 - **Weight averaging (EMA).** ASSIGNED as PR #457 to thorfinn:
   `torch.optim.swa_utils.AveragedModel` with custom EMA `avg_fn`,
   per-epoch dual val with best-of (live, EMA) checkpoint selection.
@@ -311,6 +354,27 @@ regularization. **All eight students busy on actionable WIP work.**
   distance). Truly novel orthogonal axis filling the un-claimed
   "auxiliary loss / physics prior" bucket. Random-pair sampling
   sidesteps O(N²) k-NN.
+
+## Round-3 capacity-axis retries (NEW WAVE — enabled by compile merge)
+
+The compile merge (#553) doubled the in-budget epoch count from 13 → 29
+and freed 18 GB of memory. Round-1 axes that closed because of budget
+confounding now have ~3× more training and ~2× more memory. **First
+retry assigned this cycle**:
+
+- **depth-8 retry on top of compile** (PR #660 to askeladd). Round-1
+  #325 closed at val=162.05 with 9/50 epochs. With 29 epochs in
+  budget at depth-5 (and ~18-22 expected at depth-8), depth-8 should
+  now have meaningfully more training. Tests "depth-8 was just
+  budget-confounded" hypothesis directly.
+
+Future round-3 retry candidates (assignment after current axes settle):
+- **width-160 retry on top of compile** (alphonse closed-and-
+  carried-forward axis from #311; multi-seed mean was 126.18).
+- **slice_num=256 retry on top of compile** (fern closed #452;
+  single-seed was 133.30).
+- **mlp_ratio=4 retry on top of compile** (edward closed #326;
+  multi-seed was 137.83).
 - **Stochastic depth (DropPath).** ASSIGNED as PR #517 to tanjiro:
   drop entire `TransolverBlock` residual contributions during
   training with prob `drop_path` (linear-by-depth scaling per

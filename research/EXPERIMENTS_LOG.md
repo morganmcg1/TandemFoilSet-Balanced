@@ -13,6 +13,140 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 09:00 — PR #553 (askeladd torch.compile) ★ MERGED ★ — biggest single-axis win since #330 Huber
+
+- Branch: `willowpai2d2-askeladd/torch-compile` (deleted on merge).
+- 5th merged PR: round-2 metric+infrastructure winner.
+
+### Multi-seed compile+bf16+Huber+slice-128
+
+| seed | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | total_epochs | epoch_time_s | peak_GB |
+|-:|-:|-:|-:|-:|-:|-:|
+| 0 | 78.39 | 68.92 | 29 | 29 | 63.01 | 29.79 |
+| 1 | 82.77 | 74.58 | 29 | 29 | 62.73 | 29.78 |
+| 2 | 80.95 | 70.84 | 28 | 29 | 62.06 | 29.79 |
+| **mean (σ)** | **80.70 (2.20)** | **71.45 (2.88)** | – | 29 | 62.60 | 29.79 |
+
+vs bf16+Huber baseline (#399 3-seed mean):
+- **Δval_avg = −31.43 (−28.0 %), ~14σ outside the bf16 noise floor**
+- **Δtest_avg = −30.37 (−29.8 %)**
+- **Throughput: 2.23× speedup** (63s vs 141s); **+123 % epochs in budget** (29 vs 13)
+- **Peak memory: 48 → 30 GB** (−38 %; kernel fusion frees 18 GB)
+- **σ tightened**: 4.53 (bf16) → 2.20 (compile+bf16) — ~half the noise floor
+
+### Per-split val (3-seed mean)
+
+| Split | mae_surf_p | σ |
+|-|-:|-:|
+| val_single_in_dist | 96.96 | 8.66 |
+| val_geom_camber_rc | 91.90 | 5.03 |
+| val_geom_camber_cruise | 58.23 | 1.08 |
+| val_re_rand | 75.72 | 1.03 |
+
+### Why 2.23× when prediction was 1.1–1.3×
+
+Three factors compounding on Blackwell:
+1. **Small model + small batch** (0.67M params, B=4): Python dispatch overhead dominates. Graph capture eliminates it.
+2. **Inductor's aggressive kernel fusion** at sm_100. Activation memory drop confirms heavy fusion.
+3. **PhysicsAttention is mostly small-tensor pointwise ops** (slice attention is over slice_num=128 tokens, not over 100K+ mesh nodes). Pointwise fusion is exactly what `default` mode optimizes hardest.
+
+### Key implementation moves (all in train.py only)
+
+- `--compile_mode {none, default, reduce-overhead}` config flag
+- `torch._dynamo.maybe_mark_dynamic(x_norm, 1)` for variable mesh handling
+- `dynamo.config.cache_size_limit=64` to allow shape-polymorphic graph reuse
+- `triton.cudagraph_skip_dynamic_graphs=True` for reduce-overhead mode
+- No "Recompiling" warnings observed — single graph reused across all batches
+- `compile_first_step_s` logged separately (9.2s for default, 33.2s for reduce-overhead)
+
+### Conclusion: round-2 paradigm shift
+
+The compile+bf16 stack changes the round-2 game completely. Previous baseline was
+112.13 ± 4.53 with 13 epochs. **New baseline is 80.70 ± 2.20 with 29 epochs.** Three
+implications for round-2 + round-3:
+
+1. **All round-2 axes now compare against 80.70**, not 115.61 or 112.13. The bar is much higher.
+2. **Capacity-axis levers that were budget-confounded at fp32 may now work**. Depth-8 (closed at val=162 with 9/50 epochs), width-160 (multi-seed 126.18), slice_num=256 (closed 133.30) — all closed because they were epoch-starved. With 29 epochs in budget and 18 GB more headroom, these become tractable. **First retry: askeladd #660 (depth-8-on-compile).**
+3. **Throughput axis was the highest-leverage round-2 lever**. The cap was the binding constraint; lifting it (via efficiency, not extending wall-clock) was the right move.
+
+## 2026-04-28 09:00 — PR #559 (fern y_std-weighting) ❌ CLOSED — mechanism falsified
+
+- Branch: `willowpai2d2-fern/y-std-weighting` (deleted on close).
+- Tested fern's #478-closing hypothesis: per-sample loss weighting ∝
+  y_std as counter-balance to Huber's implicit cruise-favoring gradient
+  share.
+
+### Sweep results
+
+| α | seeds | val_avg/mae_surf_p | comment |
+|-:|-:|-:|-|
+| 0.0 control | 1 | 106.92 | Baseline replication; clean implementation |
+| 0.5 | 3-seed mean | **136.48 ± 6.35** | +21.7 % vs 112.13 baseline (~3.1 σ outside noise) |
+| 1.0 | 1 | 254.18 | Catastrophic |
+
+**Decisive falsification of the mechanism.** Three independent observations rule out the Huber-clipping-causes-cruise-favoring hypothesis:
+
+1. **Monotonic degradation with α** — no interior optimum; bigger weighting just worse.
+2. **Wrong splits regressed** — predicted-to-improve splits (val_single_in_dist
+   +22 %, val_geom_camber_rc +27 %) regressed *most*; predicted-to-regress split
+   (val_geom_camber_cruise +8 %) regressed *least*. Sign opposite the prediction.
+3. **Up-weighting raceCar globally degrades raceCar's own held-out splits** — that's
+   not under-training; that's adding noise to the optimization.
+
+### Conclusion
+
+**Closed.** The per-distribution-shift pattern is real (7 of 7 round-2 axes show
+it), but **Huber-clipping-induced cruise favoring is not its cause**. Two
+candidate alternative mechanisms (per fern's closing analysis):
+
+- **Spatial gradient share** (surface-vs-volume per-region weighting; the
+  imbalance might be per-region, not per-sample).
+- **Channel-conditioned y_std on Ux/Uy alongside p** (joint-channel weighting;
+  speculative).
+
+### Carry-forward
+
+1. **Per-sample loss weighting axis is exhausted** (after edward #429 + this
+   PR). Round-3 axes that target the per-distribution-shift pattern have to
+   intervene at per-region or per-channel level, not per-sample.
+2. **`y_std_weight_alpha` config flag stays in `train.py`** for repurposing.
+3. **The `α=0.0` clean-control discipline** (running new code path with disabled
+   flag, confirming it matches baseline within noise) is methodology pattern other
+   PRs should adopt.
+
+### Reassignment
+
+Fern → PR #659 (round-2 axis: per-domain stratified data weighting).
+Fern's own follow-up #1 from #478 closing — preserves between-domain balance
+while applying within-domain difficulty signal. Tests interpretation 1 of
+why #559 failed (class-structure confound).
+
+## 2026-04-28 09:00 — PR #659 (NEW, fern round 2): per-domain stratified data weighting
+
+- Hypothesis: weight per-sample loss by within-domain rank rather than global
+  rank. Avoids the class-structure confound that #559 hit (global y_std ≡
+  domain). Predicted: if data-axis-difficulty is the right framing, per-domain
+  weighting helps; if it ALSO fails like #559, the data-axis category is
+  exhausted on this branch.
+- Sweep: `y_std_weight_alpha ∈ {0.0, 0.5, 1.0}` × `y_std_weight_per_domain=True`,
+  with #559 anchor (per_domain=False at α=0.5) for implementation verification.
+- Decision rule (vs new compile baseline 80.70 ± 2.20): ≤75 single-seed (or
+  ≤78 multi-seed mean) merges; at-baseline closes; >90 closes.
+
+## 2026-04-28 09:00 — PR #660 (NEW, askeladd round 3): depth-8 on top of compile+bf16
+
+- First round-3 capacity-axis re-validation. Hypothesis: depth-8 was
+  closed in round-1 (#325, val=162.05 at 9/50 epochs) only because of
+  budget confounding. With compile (#553) unlocking 29 epochs in budget
+  (~3.2× more training), depth-8 should now converge cleanly.
+- 1-line change: `model_config.n_layers = 5 → 8`.
+- Single-seed first; multi-seed only if seed-0 looks promising.
+- Decision rule (vs 80.70 baseline): ≤75 single-seed (or ≤78 multi-seed
+  mean) merges; at-baseline closes; >90 closes.
+- Total epochs at depth-8 expected ~18–22 (depth-8 is ~1.6× per-step cost
+  vs depth-5; compile keeps most of its speedup). Compared to round-1's 9
+  epochs, this is meaningful additional training.
+
 ## 2026-04-28 08:30 — PR #568 (fp16 retry, alphonse) ❌ CLOSED — fp16 catastrophically diverges + zero throughput delta over bf16
 
 - Branch: `willowpai2d2-alphonse/fp16-scoped` (deleted on close).
