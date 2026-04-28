@@ -1,8 +1,9 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 07:35 (advisor branch `icml-appendix-charlie-pai2d-r2`)
+- **Last update:** 2026-04-28 07:40 (advisor branch `icml-appendix-charlie-pai2d-r2`)
 - **Most recent human-team direction:** N/A — no open human-tagged issues at this time.
-- **Current baseline (directly measured): `val_avg/mae_surf_p = 64.696`, `test_avg/mae_surf_p = 55.879`** (PR #562 revision, cosine 3-ep warmup + T_max=11, start_factor=0.3, epoch 14). All 4 val and all 4 test splits finite.
+- **Current baseline (directly measured): `val_avg/mae_surf_p = 64.696` eager / `64.824` compile, `test_avg/mae_surf_p = 55.879` eager / `56.391` compile**. PR #562 (cosine 3-ep warmup + T_max=11) and PR #510 (torch.compile mode=default, +28.6% epochs in budget) both merged.
+- **Stack throughput**: 18 epochs in 30-min budget under compile=True (vs 14 eager). Cosine T_max=11 leaves epochs 12–18 at LR≈0 — 7 free EMA-stabilization epochs.
 
 ## Merged compound stack (current advisor branch)
 
@@ -25,33 +26,36 @@
 17. PR #574 — PhysicsAttention temperature init=2.0. val_avg = 66.847. test_avg = 58.112.
 18. PR #575 — EMA decay_target 0.99 → 0.995. val_avg = 66.195. test_avg = 58.063.
 19. PR #582 — Gradient clipping max_norm=10. val_avg = 66.149. test_avg = 57.654.
-20. **PR #562 — Cosine schedule revision (3-ep warmup + T_max=11, start_factor=0.3). val_avg = 64.696. test_avg = 55.879. CURRENT BASELINE.**
+20. PR #562 — Cosine schedule revision (3-ep warmup + T_max=11, start_factor=0.3). val_avg = 64.696. test_avg = 55.879.
+21. **PR #510 — torch.compile mode="default" (infrastructure: +28.6% epochs / −23.1% wall-clock). val_avg = 64.824 at 18 epochs (compile-on-same-stack). CURRENT BASELINE.**
 
 ## Active experiments (WIP)
 
 | PR | Student | Slug | Lever | Status |
 |----|---------|------|-------|--------|
-| #510 | alphonse | torch-compile-baseline | torch.compile(model) speed-up | WIP — long-running |
+| #629 | alphonse | reduce-overhead-fixed-padding | Fixed-shape padding for torch.compile mode="reduce-overhead" (throughput) | WIP (just assigned) |
 | #605 | edward | surf-weight-15 | surf_weight 10 → 15 (target primary metric) | WIP |
-| #608 | askeladd | slice-temp-2p5 | PhysicsAttention temperature init 2.0 → 2.5 (extend profile) | WIP (just assigned) |
-| #620 | fern | cosine-start-factor-02 | LinearLR start_factor 0.3 → 0.2 (push gentler-warmup direction) | WIP (just assigned) |
+| #608 | askeladd | slice-temp-2p5 | PhysicsAttention temperature init 2.0 → 2.5 (extend profile) | WIP |
+| #620 | fern | cosine-start-factor-02 | LinearLR start_factor 0.3 → 0.2 (push gentler-warmup direction) | WIP |
 | #554 | tanjiro | weight-decay-1e-5 | AdamW wd=3e-5 → 1e-5 (push wd profile) | WIP (sent back, rebase) |
 | #595 | frieren | feature-noise-zero-vs-schedule | feature noise std=0.0 (close direction) | WIP |
-| #600 | nezuko | ema-decay-target-0999 | EMA decay_target 0.995 → 0.999 (bracket UP direction) | WIP |
-| #601 | thorfinn | huber-delta-0p1 | Huber δ=0.25 → 0.1 (push toward pseudo-L1) | WIP |
+| #630 | nezuko | cosine-eta-min-2e-5 | cosine eta_min 0 → 2e-5 (extract gain from late-epoch budget under compile) | WIP (just assigned) |
+| #601 | thorfinn | huber-delta-0p1 | Huber δ=0.25 → 0.1 (rebase onto post-#562/#510 stack) | WIP (sent back, rebase) |
 
 ## Current research focus
 
-**Hyperparameter closure + profile extension on multiple active axes.** The merged stack now includes 20 improvements (latest: PR #562 cosine revision = biggest win since PR #525); we are bracketing the remaining open directions:
+**Hyperparameter closure + profile extension on multiple active axes.** The merged stack now includes 21 improvements (latest: PR #510 compile = +28.6% epochs in budget compounds with everything); we are bracketing the remaining open directions:
 
-1. **EMA decay profile** (nezuko #600, 0.999): profile 0.95→75.655, 0.99→67.306, 0.995→66.195 is still descending — 0.999 brackets the upper end.
-2. **Huber δ profile** (thorfinn #601, 0.1): profile monotone toward L1 with non-diminishing returns. δ=0.1 is pseudo-L1 for ~95% of training gradients. NOTE: earlier test of δ=0.1 (PR #493) tied δ=0.25 on the pre-stack; on the full merged stack the result may differ.
+1. **Cosine LR floor** (nezuko #630, eta_min=2e-5): replaces closed EMA-decay-target axis. Probe whether epochs 12–18 (now at LR≈0 under compile + T_max=11) extract more gain when LR has a positive floor.
+2. **Huber δ profile** (thorfinn #601, 0.1): standalone -1.05% on PR #575 stack; rebasing onto post-#562/#510 stack to verify on current schedule.
 3. **Feature noise std** (frieren #595, 0.0): close direction to zero; optimum may be in (0, 0.0025].
 4. **Weight decay** (tanjiro #554, 1e-5): wd profile — 1e-4→70.814, 3e-5→66.149; 1e-5 continues the sweep.
 5. **Warmup ramp aggressiveness** (fern #620, start_factor=0.2): direct probe of warmup-axis headroom following PR #562's revision win at start_factor=0.3.
 6. **surf_weight sweep** (edward #605, 15): primary surface pressure lever, not swept since early rounds.
 7. **Slice temperature init** (askeladd #608, 2.5): profile 1.0→71.699, 1.5→70.617, 2.0→66.847 shows accelerating improvement. Optimum not bracketed from above.
-8. **torch.compile throughput** (alphonse #510): speed multiplier enabling more epochs per budget.
+8. **Reduce-overhead throughput** (alphonse #629, fixed-shape padding): infrastructure follow-up — fix the per-shape-CUDA-Graph OOM that defeated mode="reduce-overhead" in PR #510. Expected another +10–20% wall-clock if it lands.
+
+**Closed axes**: EMA decay_target above 0.995 at warmup_steps=50 (cap doesn't bind within budget — PR #600).
 
 ## Most promising potential next research directions
 
@@ -79,7 +83,7 @@
 
 ## Disconfirmed directions (do not retry)
 
-Per-channel surface loss weighting, per-channel output heads, depth-8, balanced capacity scale-up, max_norm=1.0 grad clipping under MSE, Fourier Re embedding standalone, activation choice (GELU vs SiLU), per-node Gaussian feature noise (semantics-unaware), SwiGLU preprocess MLP at input projection, huber δ=2.0, SwiGLU output head (no residual buffer).
+Per-channel surface loss weighting, per-channel output heads, depth-8, balanced capacity scale-up, max_norm=1.0 grad clipping under MSE, Fourier Re embedding standalone, activation choice (GELU vs SiLU), per-node Gaussian feature noise (semantics-unaware), SwiGLU preprocess MLP at input projection, huber δ=2.0, SwiGLU output head (no residual buffer), torch.compile mode="reduce-overhead" with variable-shape padding (OOMs from per-shape CUDA Graph accumulation; revisit only with fixed-shape padding or bucketing), EMA decay_target > 0.995 at warmup_steps=50 (cap doesn't bind within 14-epoch budget; trajectories are mathematically identical for any decay_target ≥ 0.995).
 
 ## Constraints / guardrails
 
