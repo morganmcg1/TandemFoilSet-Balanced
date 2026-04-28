@@ -520,7 +520,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
         optimizer.step()
         ema_update()
 
@@ -528,7 +528,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_grad_sum += gn
         if gn > epoch_grad_max:
             epoch_grad_max = gn
-        if gn > 5.0:
+        if gn > 10.0:
             epoch_grad_clip_fired += 1
 
         epoch_vol += vol_loss.item()
