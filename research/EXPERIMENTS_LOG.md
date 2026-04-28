@@ -1,5 +1,67 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 01:58 — PR #416 (sent back): `torch.compile(dynamic=True)` pilot
+
+- branch: `willowpai2d1-alphonse/torch-compile-pilot` (in flight as draft after send-back)
+- hypothesis: torch.compile(dynamic=True) gives single-graph dynamic-shape
+  handling for variable mesh sizes; expected 1.3-1.7× speedup on top of
+  bf16. Predicted -2 to -5% on val_avg.
+
+### Results (vs bf16 baseline; ran on pre-FF advisor branch)
+
+| Metric | Value | vs PR #359 (bf16, rebase target) | vs PR #327 (FF, current baseline) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **87.2042** (epoch 37 of 37 completed) | **−28.4%** | **−18.5% (still beats FF baseline!)** |
+| `test_avg/mae_surf_p` | **78.4099** | **−29.5%** | **−19.0%** |
+| Per-epoch wall (steady) | **48.6 s** mean | **−50%** (2.0× speedup) | −50% |
+| Epochs completed | **37 / 50** | **+18** | +18 |
+| Peak GPU memory | **23.8 GB** | **−9.1 GB** (less!) | less |
+| W&B run | `bpkl3tch` (`compile-bf16-bsz4`) | | |
+
+### Compile diagnostics (clean signal)
+
+| Quantity | Value |
+|---|---|
+| First batch wall (cold compile) | 9.26 s |
+| Steady-state batch wall | mean 0.119 s, max 0.156 s |
+| Recompiles in entire 30-min run | **1** (one-time, `grad_mode` flip at first val) |
+| Shape recompiles | **None** despite 74K-242K node range |
+| Graph breaks / eager fallbacks | None observed |
+
+### Per-split val (best epoch 37)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| val_single_in_dist | 97.02 | 1.18 | 0.64 |
+| val_geom_camber_rc | 99.04 | 1.94 | 0.82 |
+| val_geom_camber_cruise | 67.35 | 0.84 | 0.49 |
+| val_re_rand | 85.41 | 1.41 | 0.65 |
+| **val_avg** | **87.20** | 1.34 | 0.65 |
+
+### Analysis & conclusions
+
+- **Sent back, not merged.** alphonse's branch was created off the
+  pre-FF advisor branch (between bf16 and FF merges), so this run is
+  bf16 + compile, **no FF**. Even so, val_avg=87.20 already beats the
+  current FF baseline 106.92 by 18.5%. Compile is the largest single
+  lever found in the round so far.
+- **Mechanism is mostly the cosine schedule, not the compile itself.**
+  2.0× per-epoch speedup → 37 epochs → cosine decays to ~16% of peak lr
+  vs ~78% at the bf16-baseline best epoch. Compile is the lever that
+  exposes the schedule. The student called this out clearly in the
+  analysis.
+- Implementation gem: the `_orig_mod.` prefix strip on `state_dict()`
+  save/load — without that fix, the W&B model artifact would be silently
+  unloadable into a non-compiled module. Exactly the right level of
+  detail for shipping torch.compile to production training.
+- Peak VRAM dropped 9.1 GB from kernel fusion. Capacity scale-up just
+  got more headroom (~72 GB free).
+- The right next test is **compile + FF stacked**. Mechanisms look
+  orthogonal (throughput vs feature representation). Predicted val_avg
+  in the 80-85 range after rebase + re-run.
+- Other queued followups: `mode="reduce-overhead"` (CUDA Graphs), capacity
+  scale-up revisited, cosine T_max alignment compose with compile.
+
 ## 2026-04-28 01:54 — PR #314 (sent back): SmoothL1 / Huber loss (β=1.0)
 
 - branch: `willowpai2d1-edward/huber-loss` (in flight as draft after send-back)

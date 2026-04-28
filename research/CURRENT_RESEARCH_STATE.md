@@ -8,7 +8,11 @@
 
 Round baseline is **PR #327 (tanjiro, FF K=8 on bf16): val_avg=106.92, test_avg=96.82** — cumulative **−25.9%** vs the original PR #312 reference (144.21).
 
-**Big incoming**: edward's PR #314 (SmoothL1/Huber loss on bf16, no FF) landed val_avg=104.27 — *better than the FF baseline*. Sent back to rebase onto FF and re-run; if Huber stacks with FF (mechanisms look orthogonal), val_avg ≈ 90 is the predicted next baseline. **Huber emerges as the next biggest lever after FF.**
+**Two big incomings, both being rebased onto FF:**
+- **edward PR #314** (SmoothL1/Huber on bf16, no FF) → val_avg=104.27 on bf16-only base. Stacked with FF predicted ~90.
+- **alphonse PR #416** (`torch.compile(dynamic=True)` on bf16, no FF) → **val_avg=87.20** on bf16-only base — biggest single result on the branch. 2.0× per-epoch speedup gets 37 epochs in 30 min and lets cosine actually decay. Stacked with FF predicted **80-85**.
+
+If both rebased runs stack cleanly (mechanisms orthogonal: compile=throughput, FF=features, Huber=outlier-robust loss), the round 3 baseline could land near val_avg ≈ 75-80 — cumulative ~50% improvement over the original PR #312 reference (144.21).
 
 Themes in play:
 
@@ -28,6 +32,7 @@ Important falsified hypotheses now ruled out:
 | PR | Student | Theme | Hypothesis |
 |---|---|---|---|
 | #314 | edward | Loss formulation | **SmoothL1/Huber β=1.0** — sent back to rebase onto FF baseline (high-priority) |
+| **#416** | **alphonse** | **Throughput** | **`torch.compile(dynamic=True)`** — sent back to rebase onto FF baseline (high-priority) |
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3) |
 | #324 | nezuko | Stability / regularization | EMA(0.9999) + grad-clip 1.0 |
 | #333 | thorfinn | Loss / metric alignment | surf_weight ∈ {15, 25, 40} sweep |
