@@ -748,3 +748,48 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
   1. wd=1e-5 on new stack to localize basin floor between (0, 3e-5] — but expected gain is ≤0.3% based on profile shape.
   2. **Per-parameter-group wd** — split AdamW groups by module type (attention out-projection vs MLP vs others) with different wd values. Mechanism-driven by the OOD asymmetry: attention should keep higher wd (camber_rc benefits), MLP should have lower wd (re_rand benefits). Captures both wins simultaneously.
   3. NaN-safe eval loss bug fix in `evaluate_split` (cosmetic; loss=NaN on test_geom_camber_cruise while MAEs are finite).
+
+## 2026-04-28 08:10 — PR #620: cosine LinearLR start_factor 0.3 → 0.2 (push gentler-warmup direction)
+- Branch: `charliepai2d2-fern/cosine-start-factor-02` (artifact: `model-cosine-start-factor-02-20260428-072324`)
+- Hypothesis: gentler warmup ramp may extract more headroom; profile last measured at start_factor=0.3 as PR #562 winner.
+
+| metric | this run (sf=0.2) | baseline (PR #562, sf=0.3) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **65.611** (epoch 14) | 64.696 | **+0.915 (+1.41%) regression** |
+| `test_avg/mae_surf_p` | **57.022** | 55.879 | **+1.143 (+2.05%) regression** |
+
+- Per-split val: in_dist +3.017, camber_rc +2.457 (both regress), camber_cruise −1.525, re_rand −0.287 (improve slightly).
+- Per-split test: in_dist +1.101, camber_rc +3.898 (regress most), cruise −0.441, re_rand +0.011.
+- LR trajectory matched expected exactly (ep1=1.00e-4, ep4=5.00e-4 peak, ep14=1.01e-5).
+
+### Trajectory comparison vs PR #562
+
+| ep | sf=0.3 (#562) | sf=0.2 (this) | Δ (this − #562) |
+|---|---|---|---|
+| 1 | 178.78 | 197.93 | +19.15 (softer warmup → much weaker ep1) |
+| 4 | 131.56 | 126.99 | **−4.57 (briefly better at peak LR ep4)** |
+| 7 | 96.15 | 97.58 | +1.43 (lead reverses) |
+| 14 | **64.70** | **65.61** | **+0.92** |
+
+- **Interesting wrinkle**: sf=0.2 was ahead by −4.57 at ep4 (peak LR), confirming the gentler-warmup mechanism is real and active. But the lead reversed by ep7 and gap widened during cosine — the sf=0.2 trajectory was less optimized at ep4 (which is why it appeared "ahead"), but the underlying basin selection during ep1–3 was suboptimal. Once LR began decaying, the worse basin couldn't keep up with sf=0.3's cleaner trajectory.
+- Final-epoch slope similar (−0.875 vs −0.701) — same fine-tuning regime, different starting position.
+- Decision: **CLOSE** — start_factor profile is **non-monotone with sweet spot at 0.3**. Both adjacent points regress (sf=0.5 was worse historically; sf=0.2 worse here). Lock in 0.3 as warmup-aggressiveness sweet spot.
+- Fern's recommendation: do NOT push to sf=0.1; profile saturated past 0.3.
+
+## 2026-04-28 08:10 — PR #608: PhysicsAttention slice temperature init 2.0 → 2.5
+- Branch: `charliepai2d2-askeladd/slice-temp-2p5` (artifact: `model-slice-temp-2p5-20260428-073130`)
+- Hypothesis: slice-temp profile still descending; init=2.5 should bracket the optimum from above.
+
+| metric | this run (init=2.5) | baseline-at-run-time (PR #582, init=2.0) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **65.822** (epoch 14) | 66.149 | **−0.50%** (small same-stack win) |
+| `test_avg/mae_surf_p` | **57.834** | 57.654 | +0.31% (slight regression) |
+
+- Vs **current** baseline (post-PR #562 / #510 = 64.696): val_avg 65.822 = **+1.74% regression** (cross-stack).
+- Per-split val: in_dist −0.19% (~flat), **camber_rc +2.60% regression**, cruise −2.33%, re_rand −3.35% (biggest improvement).
+- Per-split test: in_dist +1.92%, camber_rc +1.76%, cruise **−5.95%** (biggest improvement), re_rand +0.93%.
+- Final per-block learned temperatures: live=[2.47, 2.40, 2.43, 2.44, 2.43] mean=2.436. Drift over 14 epochs ≈ −0.066 (matches prior runs at lower init).
+- **Slice-temp profile (current full stack)**: init=2.0 → 66.149, init=2.5 → 65.822 (Δ=−0.327, much smaller than the cross-stack 1.5→2.0 step of −3.77). Profile approaching saturation.
+- **`val_geom_camber_rc` consistently regresses with sharper attention** (init=2.0 in PR #574: +2.0%, init=2.5 in this run: +2.60%). Sharper attention is a net loss for geometry-extrapolation OOD on rc-camber.
+- Decision: **CLOSE** — diminishing returns on slice-temp init axis (Δ=−0.327 here vs −3.77 cross-stack); test slightly regressed; camber_rc consistently regresses with sharper attention; cross-stack would be +1.74% regression. Some of the prior "huge jump" was confounded by orthogonal stack improvements (grad clip, noise=0.0025) that have since landed. Slice-temp init axis has run its course at the current stack.
+- Pivot askeladd to per-block slice-temp init schedule — variation along the block-depth axis rather than the global init scalar. The consistent camber_rc pattern suggests sharper attention helps later blocks (semantic refinement) but hurts earlier blocks (broad spatial pooling).
