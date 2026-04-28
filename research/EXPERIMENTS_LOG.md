@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-04-28 22:45 — PR #769: Huber loss for outlier-robust pressure regression ✓ MERGED
+
+- Branch: `willowpai2e1-alphonse/huber-loss`
+- Hypothesis: Replacing MSE with Huber loss (quadratic for small residuals, linear for large) will reduce the outsized influence of high-Re outlier batches on gradient direction, particularly for the pressure channel which has the heaviest-tailed residual distribution.
+
+| Delta | val_avg/mae_surf_p | Δ vs EMA baseline | test_avg/mae_surf_p | Δ vs EMA baseline | Epoch | W&B run |
+|------:|-------------------:|:-----------------:|--------------------:|:-----------------:|:-----:|---------|
+| **0.5** | **102.86** | **−13.8%** | **94.83** | **−12.8%** | 14 | [hp87pun7](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/hp87pun7) |
+| 1.0 | 108.49 | −9.1% | 98.25 | −9.7% | 14 | [ph6zmlfa](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/ph6zmlfa) |
+| 2.0 | 126.53 | +6.0% (worse) | 114.39 | +5.1% (worse) | 11 | [9r4h4s1g](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/9r4h4s1g) |
+
+All three runs: no EMA; compared against EMA-only baseline PR #773 (val=119.35, test=108.79).
+
+Per-split test (δ=0.5): single=109.68, rc=99.91, cruise=76.12, re_rand=93.62  
+Biggest gains: rc −17.8%, re_rand −14.7% — exactly the heavy-tailed OOD splits the hypothesis targeted.
+
+**Analysis and conclusions:**
+
+Huber loss works exactly as hypothesized. The monotone ordering (δ=0.5 > 1.0 >> 2.0) and the concentration of gains on OOD heavy-tailed splits (rc, re_rand) confirm the heavy-tail story. δ=2.0 regresses because typical normalized pressure residuals are ≤2 σ-units, so the linear-penalty regime barely activates — essentially MSE in practice.
+
+Key empirical insight: δ=0.5 was still trending downward at epoch 14 (val_avg had dropped 124→119→102 in the last 5 epochs). More epochs would likely yield further gains. The win is also WITHOUT EMA (student confirmed the EMA merge landed after their runs started). Huber+EMA stack is the natural follow-up.
+
+Note: the student independently found and fixed the same NaN propagation bug (in evaluate_split, zeroing pred at masked positions), corroborating the earlier fix in commit 49c55ed. The advisor's nan_to_num guard in current train.py covers both prediction and GT NaN.
+
+**New baseline: val_avg/mae_surf_p = 102.86, test_avg/mae_surf_p = 94.83. Merged into advisor branch.**
+
+---
+
 ## 2026-04-28 22:20 — PR #846: Unmodified baseline run (canonical reference) ✓ CLOSED (results recorded)
 
 - Branch: `willowpai2e1-edward/unmodified-baseline`
