@@ -248,17 +248,21 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, surf_chan_w) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+    ``surf_chan_w`` is a [3] tensor giving per-channel weights inside the surface
+    L1 monitor; volume loss is unaffected. The accumulator divides by mean(w) so
+    overall surf_loss magnitude is comparable to the unweighted baseline.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    surf_chan_w_mean = surf_chan_w.mean()
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -282,8 +286,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm).sum()
-                / surf_mask.sum().clamp(min=1)
+                (torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm) * surf_chan_w).sum()
+                / (surf_mask.sum().clamp(min=1) * surf_chan_w_mean)
             ).item()
             n_batches += 1
 
@@ -431,6 +435,17 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+    # Per-channel weights inside the SURFACE L1 loss only ([Ux, Uy, p]).
+    # Pressure has y_std ~30x larger than Ux and ~70x larger than Uy. Boosting
+    # `p` and damping `Uy` (not in the ranking metric, smaller magnitude) tilts
+    # the surface gradient toward the channel that drives `mae_surf_p`. Division
+    # by mean(w) keeps surf_loss magnitude comparable to the unweighted L1
+    # baseline so `surf_weight=10` retains its interpretation. Volume loss is
+    # unchanged.
+    SURF_CHAN_W = [1.0, 0.5, 2.0]
+    surf_chan_w = torch.tensor(SURF_CHAN_W, device=device)
+    surf_chan_w_mean = surf_chan_w.mean()
+
     train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
     stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -482,6 +497,7 @@ if __name__ == "__main__":
             "n_params": n_params,
             "train_samples": len(train_ds),
             "val_samples": {k: len(v) for k, v in val_splits.items()},
+            "surf_chan_w": SURF_CHAN_W,
         },
         mode=os.environ.get("WANDB_MODE", "online"),
     )
@@ -531,7 +547,10 @@ if __name__ == "__main__":
             # torch.where, not multiplication: NaN*0 = NaN would poison the loss.
             zero_norm = torch.zeros((), dtype=sq_err.dtype, device=sq_err.device)
             vol_loss = torch.where(vol_mask.unsqueeze(-1), sq_err, zero_norm).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm).sum() / surf_mask.sum().clamp(min=1)
+            surf_loss = (
+                (torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm) * surf_chan_w).sum()
+                / (surf_mask.sum().clamp(min=1) * surf_chan_w_mean)
+            )
             loss = vol_loss + cfg.surf_weight * surf_loss
 
             optimizer.zero_grad()
@@ -551,7 +570,7 @@ if __name__ == "__main__":
         # --- Validate ---
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surf_chan_w)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -619,7 +638,7 @@ if __name__ == "__main__":
                 for name, ds in test_datasets.items()
             }
             test_metrics = {
-                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surf_chan_w)
                 for name, loader in test_loaders.items()
             }
             test_avg = aggregate_splits(test_metrics)
