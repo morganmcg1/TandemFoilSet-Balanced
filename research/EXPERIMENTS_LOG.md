@@ -1048,3 +1048,37 @@ All three reviewed PRs report `test_avg/mae_surf_p = NaN`. Root cause from the s
 - All 4 test splits improve.
 - Profile still descending; both target OOD splits improved as predicted.
 - Decision: **SEND BACK FOR REBASE**. Standalone is robust on the post-#640 stack but this is a magnitude-push of an already-merged lever (#640) — needs current-stack verification. The asymmetry-magnitude may saturate under the heavier round-10 stack (huber δ=0.10 + per-block temp + eta_min=2e-5 rebound).
+
+## 2026-04-28 10:20 — PR #696: Surface-only feature noise (dims 0-12 only, skip per-sample globals)
+- Branch: `charliepai2d2-frieren/feature-noise-surface-only` (artifact: `model-feature-noise-surface-only-20260428-093917`)
+- Hypothesis: per-sample noise on conditioning labels (log_re, AoA, NACA, gap, stagger) may have been destabilizing; isolating to per-node positional/SDF features (dims 0-12) may unlock more headroom.
+
+| metric | this run | PR #647 baseline | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` | **61.245** (epoch 18) | 61.872 | **−1.01% WIN** |
+| `test_avg/mae_surf_p` | **53.605** | 54.555 | **−1.74% WIN** |
+
+- **All 4 val splits and all 4 test splits improve** (no regressions): in_dist −0.104, camber_rc −0.313, camber_cruise −0.809, **re_rand −1.283 (biggest)**.
+- **Mechanism CONFIRMED**: per-sample noise on conditioning labels was **pure destabilization** with no offsetting regularization benefit. re_rand is the cleanest signature — removing log_re noise lets the model trust the Reynolds label, producing much cleaner conditional mapping. cruise benefit preserved (basin-selection signal lives in per-node geometric primitives, not per-sample labels).
+- Decision: **MERGE** — clean orthogonal compound. Mechanically separate from all 6 round-10 levers (lr peak, decaying noise schedule, per-group wd, huber δ, per-block temp init, eta_min/rebound).
+- Suggested follow-ups (per frieren):
+  1. **`feature_noise_std=0.005` surface-only** — primary follow-up. With per-sample destabilizing arm removed, magnitude can probably push higher.
+  2. Asymmetric per-node noise scales (positions vs SDF vs is_surface).
+  3. Decay-horizon tuning under surface-only.
+  4. Fix loss NaN bug in eval (separate cleanup PR).
+
+## 2026-04-28 10:20 — PR #697: Cosine T_max 11 → 14 (align with realized 18-epoch compile budget)
+- Branch: `charliepai2d2-edward/cosine-tmax-14` (artifact: `model-cosine-tmax-14-20260428-094042`)
+- Hypothesis: align cosine with realized 18-epoch compile budget. Currently cosine ends at ep14 then wraps; T_max=14 gives clean monotone descent through ep17.
+
+| metric | this run | PR #647 baseline | current PR #630 | Δ |
+|---|---|---|---|---|
+| best `val_avg/mae_surf_p` | **61.390** (epoch 17) | 61.872 | 59.907 | **−0.78% / +2.48% cross-stack** |
+| `test_avg/mae_surf_p` | **52.710** | 54.555 | 52.656 | **−3.38% / +0.10% cross-stack** |
+
+- Per-split val: in_dist −0.07, camber_rc +1.26 (slight regression), camber_cruise −1.40, re_rand −1.72. 3/4 improve.
+- All 4 test splits improve.
+- Best epoch shifted from 18 (PR #647) to 17 (this run).
+- LR-vs-epoch confirmed: ep1=1.80e-4, ep4=6.00e-4 (peak), ep17=7.52e-6, **ep18=0 (eta_min reached)**. No second cycle.
+- **Edward's analysis claim**: "second cycle was apparently a workaround for the misaligned schedule, not load-bearing". **This DIRECTLY CONFLICTS with PR #630's finding** that the T_max=11 cosine rebound was the load-bearing mechanism (-2.49 cumulative gain at ep16-18 when LR rebounded 2e-5 → 1.03e-4).
+- Decision: **SEND BACK FOR REBASE**. The T_max × eta_min interaction is critical: T_max=14 + eta_min=0 gives clean monotone descent; T_max=11 + eta_min=2e-5 gives rebound. Under PR #630 (current merged), the rebound is real. T_max=14 removes the rebound. Need clean current-stack measurement to disambiguate which mechanism is dominant.
