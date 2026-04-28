@@ -397,3 +397,36 @@ Best epoch 14 = LAST epoch (timeout cut-off); val_avg trajectory `224.75 → 262
 - **Validated independent investigation by student:** ran `batch_size=1` inference on cruise to confirm the NaN is a padding-related issue in `PhysicsAttention` (no node mask in attention), not a Huber problem.
 - **Implication for #885 (askeladd Huber-delta-sweep):** delta=1.0 on pre-merge code already wins by 18.5%; sweep delta ∈ {0.3, 0.5, 1.0, 2.0} on BF16 baseline becomes the natural follow-up (already in flight as #885).
 - **Send-back instructions to frieren:** (1) rebase onto current `icml-appendix-willow-pai2e-r5` (BF16 + features + warmup); (2) re-run with same `delta=1.0`; (3) confirm the −18.5% holds on the merged baseline.
+
+---
+
+## 2026-04-28 23:40 — PR #739 (rebased): Huber loss δ=1.0 on BF16 baseline — **MERGED**
+
+- **Branch:** `willowpai2e5-frieren/huber-loss` (merged)
+- **W&B run:** `l95azbnv` (`willowpai2e5-frieren/huber-loss-d1.0-rebased`) — group `huber-loss`
+- **Hypothesis:** Same as pre-rebase #739 above; now on merged BF16 + features + warmup baseline.
+
+### Results (rebased onto BF16 baseline #811; best epoch 16 of 17 completed)
+
+| Split | val/mae_surf_p | test/mae_surf_p |
+|-------|----------------|-----------------|
+| `val_single_in_dist` | 130.87 | 124.544 |
+| `val_geom_camber_rc` | 115.14 | 99.385 |
+| `val_geom_camber_cruise` | 92.61 | 80.195 |
+| `val_re_rand` | 103.76 | 101.070 |
+| **avg** | **110.594** | **101.299** |
+
+vs BF16 baseline #811 (val_avg=127.40, test_avg=116.21):
+- val_avg: **−13.2%**; test_avg: **−12.8%**
+- Per-split improvement: rc −22.1% / sid −13.8% / re_rand −10.7% / cruise −1.2% (val)
+- All 4 test splits finite (NaN-safe eval inherited from baseline)
+- Peak VRAM 33.1 GB (unchanged), 30.0 min wall clock
+
+### Commentary & Conclusions
+
+- **Decision: Merged. New baseline.** Four compounding wins: distance features (#763) + warmup+cosine (#737) + BF16 (#811) + Huber δ=1.0 (#739). New floor: val_avg=110.594, test_avg=101.299.
+- **Mechanism validated.** Huber caps gradient contribution of high-Re outlier samples (per-sample y_std varies 10×, surf_weight=10 amplifies the imbalance). All 4 splits improve, OOD splits (rc −22.1%, re_rand −10.7%) benefit most.
+- **Gain is slightly attenuated vs pre-rebase (−13.2% vs −18.5%).** This is consistent with run-to-run variance (~8% across 3 Huber runs). The direction and approximate magnitude robustly replicate. Also, the rebased run started from a harder baseline (127.40 vs 141.42 before warmup).
+- **Still timeout-limited at epoch 16/17.** Val curve descending at cutoff (epoch 15→16: 125 → 110). Convergence floor not reached.
+- **`val_geom_camber_cruise` stagnated.** Only −1.2% val (vs −15% pre-rebase on older baseline). cruise test slightly worse (+1.4%). Frieren diagnosed the likely cause: `PhysicsAttention` distributes softmax mass over padded positions — cruise has the most geometric diversity (most variable mesh sizes) → worst padding ratio per batch. **Assigned frieren to fix this (#915).**
+- **Askeladd #885 now the right follow-up.** Sweep δ ∈ {0.3, 0.5, 1.0, 2.0} on top of this merged baseline.
