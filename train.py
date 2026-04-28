@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -391,6 +393,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     n_layers: int = 5
+    seed: int = 0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -400,11 +403,20 @@ class Config:
 
 
 cfg = sp.parse(Config)
+
+# Seed every RNG that drives training trajectory: model init, dropout, the
+# WeightedRandomSampler, DataLoader shuffling, augmentations. Without this the
+# same config produces wildly different val curves run-to-run (#482).
+torch.manual_seed(cfg.seed)
+np.random.seed(cfg.seed)
+random.seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
