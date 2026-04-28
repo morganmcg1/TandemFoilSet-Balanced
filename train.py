@@ -417,6 +417,7 @@ class Config:
     ema_decay: float = 0.999  # Polyak/EMA decay; 0.999 → ~1000-step half-life
     ema_warmup_epochs: int = 5  # epochs to skip EMA accumulation (avoid pulling toward random init)
     huber_delta: float = 0.0  # Huber loss transition point in normalized space; 0 → MSE
+    n_layers: int = 5  # number of Transolver blocks
 
 
 cfg = sp.parse(Config)
@@ -450,7 +451,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
