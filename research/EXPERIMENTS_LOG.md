@@ -13,6 +13,67 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 02:00 — PR #335 (iter 2): LR schedule — cosine_t_max sweep on slice-64 + MSE
+
+- Branch: `willowpai2d2-tanjiro/warmup-cosine-1e3` (pre-#328 AND
+  pre-#330; reverts both `slice_num=128` and `F.smooth_l1_loss` in
+  train.py).
+- Iteration: send-back asked for `cosine_t_max` CLI flag + 3-variant
+  sweep on shared `--wandb_group "willow-r2-tanjiro-sched-v2"`.
+- Three runs, single seed each, all 14/50 epochs (timeout):
+
+| variant | lr | cosine_t_max | val_avg/mae_surf_p | run id |
+|-|-:|-:|-:|-|
+| (a) | 7e-4 | 18 | 115.15 | `2h6hkjqk` |
+| **(b)** | **1e-3** | **15** | **113.96** | **`haitynmt`** |
+| (c) | 8e-4 | 18 | 135.24 | `snbb8nnd` |
+
+(a) and (b) are statistically tied (~1 % apart at single seed,
+inside the ±10 % noise floor). (c) is plausibly seed-unlucky per
+tanjiro's own analysis — the bowl shape disqualifies a structural
+explanation since 8e-4 sits between 7e-4 and 1e-3.
+
+### Conclusion
+
+**Send back for rebase + on-baseline re-run.** Qualitatively, the
+schedule-fitting hypothesis is decisively confirmed: both
+budget-matched variants beat the round-1 cohort middle (133-138)
+by ~15 %. The largest single signal in this iteration was the
+mechanism — fitting cosine `T_max` to the achievable epoch budget
+unlocks late-epoch LR shrinkage that was missing in the original
+plain-cosine `T_max=50` schedule.
+
+But: the run was on **slice-64 + MSE** (the pre-#328-#330 baseline
+state, since the branch hadn't been rebased). Direct comparison of
+113.96 vs the current Huber baseline 115.61 conflates the LR axis
+with architecture-and-loss reverts. We need the schedule axis
+re-run on top of the merged `slice_num=128 + Huber β=1` baseline
+to attribute cleanly.
+
+Sent back with: rebase (preserve `cosine_t_max` flag + warmup +
+SequentialLR scheduler; take advisor's `slice_num=128` and
+`F.smooth_l1_loss(...)`; discard doc reverts) → re-run variant (b)
+`lr=1e-3, cosine_t_max=15` on top of merged baseline → optional
+2 more seeds.
+
+Decision rule on the rebased re-run, with bar at 115.61:
+- ≤105 single-seed (or ≤110 multi-seed mean): merge.
+- 105–115: multi-seed required.
+- > 115: schedule axis doesn't stack on Huber cleanly — close, but
+  the `cosine_t_max` infrastructure carried forward is still useful
+  for round-2 work.
+
+### Methodological note
+
+The "warmup + flat 1e-3 vs warmup + actual cosine" causal chain
+from round-1 (154.57) to round-2 (113.96) is the cleanest
+attribution on this PR — same nominal hypothesis, two very
+different empirical outcomes, with the `cosine_t_max` parameter
+turning out to be the binding lever. Worth flagging this as a
+methodology pattern: for any schedule we adopt going forward, the
+cosine `T_max` should be tuned against the achievable wall-clock
+horizon (~14 epochs for slice-128 + Huber), not the planned 50.
+
 ## 2026-04-28 01:45 — PR #367: Bug fix — guard accumulate_batch + evaluate_split against non-finite values
 
 - Branch: `willowpai2d2-fern/scoring-nan-fix` (created post-#328 but
