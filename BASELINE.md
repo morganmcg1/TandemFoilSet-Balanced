@@ -2,9 +2,15 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
-## 2026-04-28 05:30 — PR #525 (cosine warmup + T_max=13) — **biggest single-PR delta since δ=0.25**
+## 2026-04-28 05:50 — PR #548 merged on top of #525 (slice-temp init 1.5 replaces 1.0)
 
-- **Best `val_avg/mae_surf_p`** (directly measured): **67.306** (epoch 14, fern's standalone run on the slice-temp baseline)
+- **Best `val_avg/mae_surf_p`** (last directly measured): **67.306** (PR #525 with slice-temp=1.0). Post-#548 measurement pending; thorfinn's standalone showed slice-temp=1.5 beats slice-temp=1.0 by −1.51% on the same starting baseline (71.6985 → 70.617), so combined-stack expected to be at-or-below 67.306.
+- **Recipe**: huber(δ=0.25) + bias-corrected EMA(0.99, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + wd=3e-5 + **PhysicsAttention temperature init=1.5** (was 1.0) + cosine 1-ep warmup + T_max=13 + feature noise std=0.005 + NaN-safe.
+- **Slice-temp profile** (now 3 measured points): init=0.5 (original) underperforms; init=1.0 → 71.6985; init=1.5 → 70.617 (this run). Drift Δ ≈ −0.05 over 14 epochs in both directions, suggesting the temperature has a broad sweet spot in [1.0, 1.5]+ and the 0.95 "equilibrium" found in the live parameters is an artifact of the 14-epoch drift speed, not the val-loss minimum.
+
+## 2026-04-28 05:30 — Previous baseline (PR #525, cosine warmup + T_max=13)
+
+- **Best `val_avg/mae_surf_p`** (directly measured): 67.306 (epoch 14, with slice-temp=1.0)
 - **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **59.296**
 - **Per-split val MAE for `p`**:
   - val_single_in_dist: 77.660 (−11.66% vs 87.914 reference)
