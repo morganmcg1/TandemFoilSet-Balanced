@@ -2,7 +2,31 @@
 
 Per-PR experiment log. New entries are appended chronologically; the latest entries are at the top.
 
-## 2026-04-28 04:25 — PR #441: bf16 mixed precision standalone (2-seed) — **SENT BACK (intent to merge)**
+## 2026-04-28 04:35 — PR #441: bf16 mixed precision standalone (2-seed) — **MERGED** (commit b605b44)
+- Branch: `willowpai2d5-alphonse/bf16-standalone` (squash-merged into advisor; deleted)
+- Pure ergonomics PR — bf16 autocast in train + eval, fp32 cast before squaring & before denormalization, seed flag, peak VRAM logging
+- 2-seed mean **117.37 ± 0.85** at 19 epochs (vs ~131 implied pre-bf16 cluster, -10.4%)
+- CV ~0.7% — round-1 variance-tight winner
+- New advisor baseline. All other in-flight PRs will pick up bf16 on rebase, getting 5 extra epochs at the same wall-clock cap.
+- Setup for round 2: orthogonal axes (Huber #413, budget-aware cosine #427, grad-clip #434, lr=3e-4 #505) now all rebase against bf16 — composition tests become decisive.
+
+## 2026-04-28 04:30 — PR #427: Budget-aware cosine (T_max matched to realised epochs) — **SENT BACK (rebase + re-run on bf16)**
+- Branch: `willowpai2d5-frieren/budget-aware-cosine` (sits on pre-#433 + pre-#441 commit; train.py change is small but research/*.md staleness + reverts of bf16 + slice_num)
+- Three runs on **OLD baseline** (slice_num=128 + fp32):
+
+| Run | T_max | val_avg/mae_surf_p | Δ vs old #336 (139.83) |
+|---|---:|---:|---:|
+| cosine_tmax11 | 11 | 133.42 | -4.6% |
+| cosine_tmax13 | 13 | 135.24 | -3.3% |
+| cosine_tmax11_seed2 | 11 | 123.77 | -11.5% |
+
+- 9.7-point spread between two same-config T_max=11 runs reproduces the ±10-15% MSE-baseline seed variance (alphonse PR #441 measured this on bf16 at much tighter ±0.7%).
+- Mechanism confirmed: cosine annealing to 0 by termination wins on the OLD baseline. But all three runs are pre-bf16; need to re-test composition on the post-bf16 baseline (where realised epochs is ~19, not 11, so matching `T_max=19`).
+- Decision: sent back for rebase + 2-seed re-run with `--cosine_t_max 19` on current bf16 baseline. Composition test: does annealing-to-zero compose additively with bf16's extra-cosine-arc-traversal effect? Predicted yes; tighter band of 108-114 if it does.
+- Off-by-one in `realised_epochs` log identified by frieren — fix included in send-back.
+- Useful side-finding preserved: `T_max=13` sensitivity (-3.3%) shows the optimum is at the realised budget, not strictly under.
+
+## 2026-04-28 04:25 — PR #441: bf16 mixed precision standalone (2-seed) — pre-merge tracking entry (superseded by merge entry above)
 - Branch: `willowpai2d5-alphonse/bf16-standalone` (sits on intermediate advisor commit; train.py diff clean, research/*.md staleness only)
 - Two seeds on advisor HEAD (slice_num=64) with bf16 autocast in train + eval, fp32 upcast before squaring & before denormalization
 

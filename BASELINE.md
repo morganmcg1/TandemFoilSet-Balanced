@@ -1,6 +1,6 @@
 # Baseline — TandemFoilSet (willow-pai2d-r5)
 
-**Status:** Round 1 in flight. PR #336 (slice_num 64→128) was reverted on commit `605b439` — direct apples-to-apples evidence showed slice_num=128 was a partial-credit merge inside the 30-min cap. Baseline distribution being calibrated by thorfinn's PR #428.
+**Status:** Round 1 in flight. PR #441 (bf16 standalone) merged on commit `b605b44` as the round-1 winner so far. 2-seed mean: **117.37 ± 0.85** at 19 epochs (vs ~131 implied pre-bf16 cluster, -10.4%). Multi-seed distribution being further calibrated by thorfinn's PR #428. Several round-2 stack candidates in flight (Huber #413, budget-aware cosine #427, grad-clip #434, lr=3e-4 #505).
 
 ## Reference configuration (current `train.py` HEAD)
 
@@ -37,7 +37,9 @@ _(round 1 in flight; baseline distribution being established by thorfinn's PR #4
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| —  | TBD (round 1)      | —                   | Baseline distribution being calibrated |
+| **#441** | **117.37 ± 0.85** (n=2) | 115.59 (3-finite-split) * | bf16 mixed precision standalone; 19 epochs reached vs ~14 fp32; CV ~0.7% — variance-tight |
+
+\* `test_avg/mae_surf_p` 4-split mean is still NaN on cruise pending PR #375 (data/scoring.py fix). Per-channel test surf MAEs: single 122.76, geom_camber_rc 118.27, re_rand 105.73 (3-finite mean). Once #375 lands, can re-evaluate the saved bf16 artifacts (`model-bf16_seed0-cgitj1dc`, `model-bf16_seed1-i45ys5ih`) for canonical 4-split numbers.
 
 ### Reverted
 
