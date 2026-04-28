@@ -2023,3 +2023,45 @@ Per-split signature: val win concentrated in `rc` (the noisier tandem split wher
 |----|---------|------|-------|-----|
 | #699 | askeladd | ema-decay-0p997 | `ema_decay = 0.995 → 0.997` on merged #675 baseline | Lock the new-budget EMA basin upper edge. Tests if 0.997 (half-life ~13.6 % of run) is past the basin or still in. Honest band −4 % to +6 %. |
 | #701 | edward | smoothl1-beta-0p75 | `beta = 0.5 → 0.75` on merged #675 baseline | β-axis curve inverted at compile baseline (#567 closed). Tests if optimum shifted upward to ≥0.75 (wider MSE-quadratic regime, less small-residual amplification). Honest band −5 % to +5 %. |
+
+## 2026-04-28 09:50 — PR #681: batch_size 4 → 8 on compile (charliepai2d1-tanjiro) — **CLOSED (step-count starvation)**
+- val=54.287 (+24.3 % vs #394 / +25.7 % vs current #675 baseline 43.165), test=46.639 (+26.3 % / +26.9 %). Catastrophic regression. Memory feasibility resolved (83.86 GB peak, under 96 GB cap); step-count starvation (3572 steps vs ~7520 baseline = −52.5 %) breaks late-stage convergence.
+- **Best EMA at ep19 (last reached) — model never plateaued.** Smoking gun for step-count starvation.
+- Lion's batch-invariance confirmed (grad-norm trajectory matches baseline within ~+15 %, no instability). Signal quality is fine; signal *quantity* breaks.
+
+### Batch-axis closure across all regimes
+
+| optimizer | batch | budget compensation | result |
+|---|---:|---|---|
+| AdamW | 4 | (baseline) | (baseline-era) |
+| AdamW | 8 + sqrt(2) lr | none | catastrophic instability (#403 closed) |
+| Lion | 4 | (baseline) | merged baseline |
+| Lion | 6 | none | wash (#546 closed) |
+| **Lion** | **8** | **none** | **step-count starvation +24 % val (this #681)** |
+
+**Batch-axis closes at b=4 under all regimes (compile, eager, AdamW, Lion).** Reopening requires budget compensation (longer training to equalize step counts). Reassigned tanjiro to **PR #711 (lion-grad-clip-1p0)** — revisit clip-axis under Lion regime (axis untouched since AdamW era).
+
+## 2026-04-28 09:52 — PR #560 rebased: cosine T_max=20 (charliepai2d1-fern) — **CLOSED (completed-anneal mechanism doesn't transfer to compile)**
+- val=45.536 (+5.49 % vs current #675 baseline), test=39.303 (+6.96 %, past close threshold). Per-split: cruise +15.78 % val (worst), re_rand +8.71 %, single +0.85 %, rc −1.47 %. Mixed but average regresses.
+- **EMA−raw spread collapses to −0.28 at ep19** — mechanism (schedule completes under Lion's bounded sign-update) IS real.
+- **But under compile, T_max=50 baseline reaches lr~1.55e-4 by ep20 (62 % of peak)**. "Partial-anneal at higher lr through full budget" empirically beats "completed anneal to 1e-5".
+- **Mild train-loss reversal at ep16-17** contradicts fern's prior "Lion fully prevents reversal" claim. Bounded sign-update reduces but doesn't eliminate the AdamW-style un-train pathology (#465). **Honest correction to the appendix story.**
+
+### Schedule-axis basin map under compile + 20-ep budget
+
+| T_max | ep20 lr (% of peak) | val_avg | mechanism |
+|---:|---:|---:|---|
+| 14 | cycles back up (CosineAnnealingLR after T_max) | not run | clear lose by hypothesis |
+| **20 (this PR)** | **6 % (1.6e-5)** | **45.54** | **over-anneal on small-residual splits (cruise)** |
+| 50 (current optimum) | 62 % (1.55e-4) | 43.165 | partial-anneal through full budget |
+| 100 | ~88 % | not tested | predicted near-constant lr |
+| ∞ (constant) | 100 % | TBD (#712 in flight) | tests schedule × EMA(0.995) redundancy |
+
+Reassigned fern to **PR #712 (constant-lr)** — completes schedule-axis end-to-end map under compile + 20-ep. Tests whether EMA(0.995) shadow makes the cosine schedule redundant.
+
+## 2026-04-28 09:55 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #711 | tanjiro | lion-grad-clip-1p0 | grad-clip `max_norm = 0.5 → 1.0` on merged #675 baseline | Clip-axis untouched since AdamW era (#374 / #402 merged). Under Lion's `update = lr × sign(c_t)`, clip's role is fundamentally different — only smooths buffer, not per-step movement. Tests if clip basin shifted under new optimizer regime. Honest band −2.5 % to +6 %. |
+| #712 | fern | constant-lr | replace cosine scheduler with `LambdaLR(lambda epoch: 1.0)` on merged #675 baseline | Tests whether EMA(0.995) makes cosine schedule redundant. Two variance-reduction mechanisms in parallel; constant lr probes the limit of "less anneal". Completes schedule-axis end-to-end map. Honest band −3 % to +12 % (wide because schedule × EMA interaction is empirical). |
