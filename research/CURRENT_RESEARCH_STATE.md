@@ -5,54 +5,47 @@
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r3`
 - **Most recent human researcher direction:** *(none — issue queue empty)*
 
-## Current research focus
+## Founding baseline (established round 1)
 
-This is **round 1** of the willow-pai2e-r3 advisor branch. There is no committed `BASELINE.md` yet — the comparison target is the default `train.py` Transolver:
-- 5 layers, hidden_dim=128, n_head=4, slice_num=64, mlp_ratio=2 (~1M params)
-- AdamW lr=5e-4, weight_decay=1e-4, batch_size=4, surf_weight=10.0
-- 50 epochs, plain cosine annealing, MSE loss in normalized space
+- **val_avg/mae_surf_p = 122.15** (W&B run `8cvp4x6r`, thorfinn matched baseline, unmodified Transolver)
+- **test_avg/mae_surf_p = 130.90** (W&B run `zaqz12qi`, alphonse channel-weighted v1, re-evaluated with PR #807 scoring fix)
+- Round-1 noise band: 122–146 (single seed, 14-epoch budget)
+- PR #807 (NaN-safe masked accumulation) merged — all future runs produce finite `test_avg`
 
-**Primary metric:** `val_avg/mae_surf_p` — equal-weight mean surface pressure MAE across the 4 validation splits. Test mirror: `test_avg/mae_surf_p`. Lower is better.
+## Round-1 summary (closed)
 
-**Key dataset insight (driving round-1 hypothesis selection):** Pressure has `y_std=679`, ~30× larger than `Ux` (`y_std=22`) and ~70× larger than `Uy` (`y_std=10`). The current uniform-weighted MSE under-emphasizes the channel that drives the metric. Several round-1 experiments target this directly (channel-weighted loss, L1 surface loss).
+| Student | PR | Outcome | val_avg |
+|---------|-----|---------|---------|
+| askeladd | #748 transolver-2x | Closed (under-trained, 4/50 epochs) | 203.16 |
+| askeladd | #807 scoring-fix | **MERGED** | — |
+| thorfinn | #762 boundary-layer-features | Closed (−13.3% WORSE: 138.43 vs 122.15) | 138.43 |
+| alphonse | #743 channel-weighted-3xp | Sent back (v2 pending) | 146.10 |
+| edward | #750 lr-warmup-cosine | Sent back (v2 pending) | 135.89 |
+| frieren | #756 fourier-re-encoding | Sent back (v2 pending) | 141.25 |
+| nezuko | #759 ema-model-weights | In progress (status:wip) | — |
+| tanjiro | #761 l1-surface-mae-loss | In progress (status:wip) | — |
+| fern | #751 dropout-stochastic-depth | In progress (status:wip) | — |
 
-## Round-1 hypothesis matrix (8 students, all assigned)
+## Round-2 assignments (active)
 
-Diverse first-principles set, designed to span loss / optimization / architecture / input-engineering / regularization angles so we surface multiple orthogonal levers at once.
+| Student | PR | Hypothesis | Angle |
+|---------|-----|-----------|-------|
+| askeladd | #814 | huber-surf-loss (delta=1.0) | Loss alignment |
+| thorfinn | #815 | film-re-conditioning (per-block log(Re) FiLM) | Architecture: regime adaptation |
 
-| Student | PR | Hypothesis | Predicted Δ | Angle |
-|---------|----|-----------|-------------|-------|
-| thorfinn | [#762](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/762) | boundary-layer-features (`log(Re·\|saf\|)`) | -10 to -25% | Input physics |
-| askeladd | [#748](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/748) | transolver-2x-capacity (h=192, L=8, slice=128) | -5 to -15% | Architecture scale |
-| tanjiro | [#761](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/761) | l1-surface-mae-loss | -5 to -12% | Loss alignment |
-| alphonse | [#743](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/743) | channel-weighted-surface-loss (3× p) | -5 to -10% | Loss weighting |
-| thorfinn (FiLM moved → boundary-layer) | — | — | — | Replaced |
-| nezuko | [#759](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/759) | ema-model-weights (decay=0.999) | -3 to -8% | Training stability |
-| edward | [#750](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/750) | lr-warmup-cosine (lr=1e-3, wd=5e-4, 500-step warmup) | -3 to -8% | Optimizer |
-| fern | [#751](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/751) | dropout-stochastic-depth (0.1 / linear-scaled) | -3 to -8% | Regularization |
-| frieren | [#756](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/756) | fourier-re-encoding (16 sin/cos features) | -3 to -7% | Input encoding |
+## Cross-cutting findings
 
-## Potential next research directions (round 2+)
+- **Timeout is the binding constraint (~14 epochs at 30 min).** All assignments now include `--epochs 14` so cosine annealing completes rather than truncating mid-curve.
+- **NaN test poisoning FIXED** via PR #807 (torch.where pattern). All future runs produce finite `test_avg/mae_surf_p`.
+- **Round-1 noise band: 122–146.** Beat-threshold: `val_avg/mae_surf_p < 122.15`. Single-seed <5% gains are inconclusive; flag for multi-seed confirmation.
+- **Boundary-layer features falsified.** log(Re·|saf|) is redundant with existing dims 13+2:3; volume-node saf mismatch hurts in-dist. Surface-gated BL variants deferred to round 3.
 
-Pulled from `RESEARCH_IDEAS_2026-04-28_FIRST.md` — the researcher-agent's top ideas not yet assigned:
+## Potential round-2+ research directions
 
-1. **Huber-surf-loss (delta=1.0)** — robust regression for heavy-tailed pressure; complements L1 if L1 wins.
-2. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored attention; reportedly +17% on PDE benchmarks.
-3. **RevIN output normalization** — reversible per-sample amplitude normalization on `y` before loss; targets the 10× intra-split y_std variation across Re.
-4. **Re-stratified oversampling** — within-domain oversample top Re-quintile samples; addresses gradient under-coverage of high-Re extremes.
-5. **Focal-surface-loss** — top-20%-error-node up-weighting; concentrates gradient on stagnation point / leading edge / suction peak.
-6. **Stack winners** — round-2 should bundle round-1 winners (channel-weighted + L1 + EMA + warmup are largely orthogonal).
-7. **FiLM conditioning** — global flow-condition modulation per Transolver block (deferred from round 1 in favor of boundary-layer features, both target similar conditioning gap).
-8. **Mixed-precision (bf16/fp16)** — opens headroom for capacity scaling under timeout cap.
-
-## Compute state
-
-- All 8 student pods (`willowpai2e3-*`) are running, polling for assignments.
-- Per-run timeout: 30 minutes wall clock (default `SENPAI_TIMEOUT_MINUTES`).
-- Per-run epoch cap: 50 epochs (default) — **but timeout binds first**: PR #743 hit timeout at exactly 14 epochs (~131 s/epoch). Plan for ~14 epochs at current model size; future hypotheses should set `--epochs 14` so cosine annealing reaches the end of its curve.
-
-## Cross-cutting findings from round 1
-
-- **NaN test poisoning is a `data/scoring.py` bug** (root-caused by askeladd in PR #748): `accumulate_batch` does `err * mask`, and `NaN * 0 = NaN` in IEEE-754. **The NaN is in ground-truth `y`, not in pred** — `test_geom_camber_cruise/sample 20` has 761 NaN values in the `p` channel of `y`. So my earlier conjecture (defensive `nan_to_num + clamp` on pred) was a workaround; the real fix is `torch.where(mask, err, 0)` in `data/scoring.py` and the matching pattern in `train.py::evaluate_split`'s `vol_loss/surf_loss` (where `(NaN)^2 * 0 = Inf` analogously). Assigned to askeladd as PR #807. Once that lands, all future test_avg numbers will be clean.
-- **Cruise OOD camber (M=2-4)** is the most extrapolation-prone test split — already the hardest extrapolation track regardless of the NaN bug.
-- **Run-to-run variance is high** at the 14-epoch timeout-capped budget: edward's quoted reference range was [124.6, 146.1] across 5 runs (~±10%). Single-seed comparisons cannot demonstrate <10% gains reliably. Future round-2 hypotheses with predicted deltas in that range may need 2–3 seeds to be conclusive.
+1. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). Unassigned.
+2. **Focal-surface-loss** — top-20%-error-node up-weighting (concentrates gradient on stagnation/suction peak). Unassigned.
+3. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
+4. **Stack round-2 winners** — if askeladd Huber + thorfinn FiLM both win, combine them in round 3 (orthogonal mechanisms).
+5. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4` (matching 30-min ceiling for larger model). Deferred from askeladd #748.
+6. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored; reportedly +17% on PDE benchmarks. High EV, higher complexity.
+7. **Mixed-precision (bf16/fp16)** — opens headroom for capacity scaling. More relevant for charlie branch; applicable here if VRAM becomes constraint.

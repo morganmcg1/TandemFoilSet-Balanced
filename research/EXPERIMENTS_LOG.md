@@ -83,8 +83,55 @@
 - Sent back: (a) concatenate Fourier features instead of replacing dim 13 (preserves smooth scalar path); (b) drop top frequencies, use `[1, 2, 4, 8, 16, 32]` (high freqs cycle below the data's Re resolution); (c) `--epochs 14` explicit so cosine completes.
 - Don't redirect yet — if v2 still lands in the 135-146 band, then Fourier-of-Re isn't a strong enough lever at this budget and we'll switch frieren to something else.
 
-## 2026-04-28 20:08 — PR #807 (assigned): Bug fix — NaN-safe masked accumulation
+## 2026-04-28 20:08 — PR #807 (MERGED): Bug fix — NaN-safe masked accumulation
 - **Branch:** `willowpai2e3-askeladd/scoring-nan-mask-fix`
 - **Type:** Infrastructure bug fix (not a hypothesis experiment)
-- **Scope:** `data/scoring.py::accumulate_batch` (the read-only marker explicitly allows bug-fix PRs per CLAUDE.md cherry-pick guidance) and the matching `err * mask` pattern in `train.py::evaluate_split` and the training loop.
-- **Verification asks:** (1) `--debug` smoke run produces identical numbers on clean splits, (2) re-evaluate saved checkpoints `zaqz12qi` (alphonse v1) and `p486z24b` (askeladd transolver-2x) against the fixed scorer to retrieve corrected `test_avg/mae_surf_p` values without retraining.
+- **Scope:** `data/scoring.py::accumulate_batch`, `train.py::evaluate_split`, training-loop loss accumulation.
+
+### Results
+
+Fix: replaced `(err * mask).sum()` with `torch.where(mask, err, zero).sum()` in all three locations. Mathematically equivalent for finite y; zeroes out NaN contributions rather than propagating them.
+
+**Re-evaluated checkpoints (no retraining):**
+
+| Run | Old test_avg/mae_surf_p | New (corrected) test_avg/mae_surf_p | Notes |
+|-----|------------------------|--------------------------------------|-------|
+| `zaqz12qi` (alphonse channel-weighted v1) | null | **130.897** | test_geom_camber_cruise=92.66 |
+| `p486z24b` (askeladd transolver-2x) | null | 192.259 | test_geom_camber_cruise=175.62 (under-trained) |
+
+`--debug` smoke test: identical outputs pre/post fix on clean training splits. New `scripts/reeval_artifact.py` helper included.
+
+### Decision: MERGED (2026-04-28)
+- Infrastructure fix unblocking finite `test_avg/mae_surf_p` for all future runs.
+- Founding baseline established: `zaqz12qi` val_avg=146.10 / test_avg=130.897.
+- Also added BASELINE.md to advisor branch anchored by thorfinn's matched-baseline run (8cvp4x6r, val_avg=122.15 — best unmodified model result in round 1).
+
+---
+
+## 2026-04-28 20:31 — PR #762 (CLOSED): Boundary-layer feature: log(Re·|saf|) as input
+- **Branch:** `willowpai2e3-thorfinn/boundary-layer-features`
+- **Hypothesis:** Add `log(Re·|saf|)` as a 25th input dimension to give an explicit local Re_x boundary-layer signal. Predicted -10 to -25% gain, strongest on `val_re_rand`.
+- **Run:** W&B `7qi7tbcy` (BL feature), `8cvp4x6r` (matched baseline), 14/50 epochs (timeout), same GPU back-to-back.
+
+### Results
+
+| Split | Baseline (8cvp4x6r) | +log(Re·|saf|) (7qi7tbcy) | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 143.36 | 180.55 | **+25.9%** |
+| `val_geom_camber_rc` | 124.20 | 159.73 | **+28.6%** |
+| `val_geom_camber_cruise` | 109.42 | **95.96** | -12.3% |
+| `val_re_rand` | 111.63 | 117.47 | +5.2% |
+| **val_avg** | **122.15** | **138.43** | **+13.3% (WORSE)** |
+
+Test splits: both have test_avg null (pre-fix runs); 3-split avg: baseline 118.01, BL 139.50 (+18.2% worse).
+
+### Analysis & decision: CLOSE
+- Consistent negative across 3/4 val splits and all 3 finite test splits. Cruise is the only win.
+- **Information redundancy diagnosis (thorfinn):** dim-13 log(Re) and dims 2:3 saf are already in x; MLP preprocess can construct their product for free. Explicit feature likely competes with rather than augments existing capacity.
+- **Volume-node saf mismatch:** saf is arc-length on surface nodes but undefined/different off-surface; broadcasting `log(Re·|saf|)` to all nodes injects physically wrong signal for volume nodes.
+- Cruise improvement (-12.3%) is real but isolated (100 samples, test NaN-poisoned, single seed) and insufficient to outweigh the other regressions.
+- **Exceeds the >5% close threshold** (13.3% regression). Closed 2026-04-28.
+- Matched baseline `8cvp4x6r` (val_avg=122.15) promoted to BASELINE.md as best clean unmodified-model result.
+
+### Cross-cutting: thorfinn's matched-baseline methodology
+Thorfinn independently identified the data/scoring.py NaN bug (same root cause as askeladd). Excellent experimental practice: ran matched baseline side-by-side, produced full split breakdown, conducted 3-cause analysis. The matched baseline (122.15) reshapes our noise estimate — round-1 noise band is now 122–146, not 135–146.
