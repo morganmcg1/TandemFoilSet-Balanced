@@ -2,6 +2,31 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 09:45 — PR #630: Cosine eta_min 0 → 2e-5 (extract gain from late-epoch budget)
+
+- **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #562 baseline): **59.907** (epoch 18, **−7.40% vs 64.696, −3.18% vs current 61.872**)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **52.656** (vs 55.879 prior, **−5.77%**; vs 56.391 PR #510 compile, −6.62%)
+- **Per-split val MAE for `p`** (best epoch 18, compile=True):
+  - val_single_in_dist: 69.764 (**−10.01%** vs PR #562)
+  - val_geom_camber_rc: 73.298 (−3.51%)
+  - val_geom_camber_cruise: **39.410 (−10.90%, biggest)**
+  - val_re_rand: 57.154 (−6.40%)
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 62.955
+  - test_geom_camber_rc: 66.248
+  - test_geom_camber_cruise: 32.300
+  - test_re_rand: 49.122
+- **Recipe**: huber(δ=0.10) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + per-parameter-group wd: attn=1e-4, mlp=1e-5, other=3e-5 + per-block PhysicsAttention temperature init [1.5, 1.875, 2.25, 2.625, 3.0] + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + **eta_min=2e-5** (was 0) + decaying noise std (linear: ep1=0.0025, ep14=0.000179, ep15+=0) + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True + lr=6e-4.
+- **LR-vs-epoch trajectory**: ep1=1.50e-4, ep4=5.00e-4 (peak), ep15=2.00e-5 (cosine min — note: NOT a floor!), ep16=2.97e-5, ep17=5.81e-5, **ep18=1.03e-4 (post-rebound)**.
+- **CRITICAL mechanism finding**: `CosineAnnealingLR` is **periodic, not a floor**. Formula `η_min + (η_max−η_min)·(1+cos(πt/T_max))/2` is symmetric around T_max — after ep15 hits the minimum 2e-5, LR rebounds in the second half-cycle. **Half the gain (-2.49) comes from the unintended ascending half-cycle** (ep16-18) acting like a SGDR warm-restart half-cycle. The model + EMA(0.995) absorbs the higher-LR steps and continues improving monotonically through ep18.
+- **Compound expectation**: this run was on pre-#635/#636/#640/#601/#647 baseline. eta_min/cosine-rebound is mechanically orthogonal to other levers — should compound below 59.907 on the combined stack.
+- **Metric summary**: `models/model-cosine-eta-min-2e-5-20260428-085728/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name cosine-eta-min-2e-5 --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 09:09 — PR #647: Per-block slice-temp init schedule [1.5, 1.875, 2.25, 2.625, 3.0]
 
 - **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #510 same-stack baseline): **61.872** (epoch 18, −4.55% vs 64.824)
