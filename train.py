@@ -431,7 +431,18 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Learnable per-channel log-variance for uncertainty weighting (Kendall & Gal 2018,
+# arXiv:1705.07115). Order matches output channels: [Ux, Uy, p].
+log_var = torch.nn.Parameter(torch.zeros(3, device=device))
+
+# Two param groups so weight decay is not applied to log_var (would bias σ²→1).
+optimizer = torch.optim.AdamW(
+    [
+        {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
+        {"params": [log_var], "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -456,6 +467,8 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("log_var/*", step_metric="global_step")
+wandb.define_metric("precision/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -487,17 +500,26 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
+
+        # Uncertainty-weighted per-element loss: precision*sq_err + log_var.
+        # Divisor `* 3` keeps the per-element scaling consistent with channel
+        # mean (vs. the old sum-over-channels). evaluate_split keeps the old
+        # form so val curves stay comparable across runs.
+        precision = torch.exp(-log_var)  # [3]
+        weighted = sq_err * precision[None, None, :] + log_var[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum().clamp(min=1) * 3)
+        surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * 3)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        with torch.no_grad():
+            log_var.clamp_(-10.0, 10.0)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -526,6 +548,12 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "log_var/Ux": log_var[0].item(),
+        "log_var/Uy": log_var[1].item(),
+        "log_var/p": log_var[2].item(),
+        "precision/Ux": float(torch.exp(-log_var[0]).item()),
+        "precision/Uy": float(torch.exp(-log_var[1]).item()),
+        "precision/p": float(torch.exp(-log_var[2]).item()),
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
@@ -542,14 +570,17 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "log_var": log_var.detach().tolist(),
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    lv = log_var.detach().tolist()
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"log_var[Ux={lv[0]:+.3f} Uy={lv[1]:+.3f} p={lv[2]:+.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
@@ -565,6 +596,12 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "best_log_var/Ux": best_metrics["log_var"][0],
+        "best_log_var/Uy": best_metrics["log_var"][1],
+        "best_log_var/p": best_metrics["log_var"][2],
+        "final_log_var/Ux": log_var[0].item(),
+        "final_log_var/Uy": log_var[1].item(),
+        "final_log_var/p": log_var[2].item(),
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
