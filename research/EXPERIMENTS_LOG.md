@@ -1,5 +1,56 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 05:41 — PR #551 (CLOSED, weight too high): aux log-pressure loss at 0.5 weight
+- Branch: `charliepai2d3-tanjiro/l1ff-ema-cos14-lr-7p5e-4-logp-aux-0p5` (deleted)
+- Hypothesis: auxiliary `L1(sign(p)·log1p(|p|))` loss on surface nodes
+  with weight=0.5 — different mechanism from channel weighting / loss
+  shape / EMA. Predicted −1% to −3%.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs current PR #534 (78.60 / 67.77) |
+|--------|--------:|-----------------------------------:|
+| `val_avg/mae_surf_p` | 78.94 | +0.43% (within noise) |
+| `test_avg/mae_surf_p` | 69.22 | +2.14% |
+
+### Per-split — clean tradeoff signature (NOT uniform pattern)
+
+| split | val Δ | test Δ | direction |
+|-------|------:|------:|-----------|
+| single_in_dist | −0.41 | +2.37 | inconsistent (val small win, test loss) |
+| geom_camber_rc | +1.72 | +1.70 | capacity competition (regression) |
+| geom_camber_cruise | **−1.58** | **−2.08** | clean win (low-mag p compression helps) |
+| re_rand | +0.83 | −1.64 | inconsistent |
+
+### Decision
+
+**Closed.** Above-zero regression on test, mixed signal on val.
+
+### Round-3 narrative — first lever with clean per-split tradeoffs
+
+This is the **first round-3 lever to show clean per-split tradeoffs**
+rather than uniform improvement / regression. The auxiliary log-
+pressure loss has a real axis distinct from EMA's mechanism — at
+weight 0.5 the heavy-tail benefit on cruise (low-mag pressure
+compression) is real but the OOD-camber-rc capacity competition
+trades against it.
+
+The auxiliary lever may have a sweet spot at lower weight. Re-
+assigning tanjiro to **weight=0.25** (half the dose) to test.
+
+### Round-3 mechanism map updated
+
+The auxiliary log-pressure loss is **not in the EMA-overlap failure
+family** (#492, #500, #489, #515): the per-split signature differs,
+the auxiliary trace is healthy, and `train/log_p_aux` decreases
+smoothly. The compose pattern is **capacity competition with the
+main task** at weight 0.5 — different from the saturating-overlap
+patterns documented elsewhere.
+
+Per-epoch metrics not centralised — branch deleted.
+
+---
+
 ## 2026-04-28 05:24 — PR #543 (CLOSED, FF upper-bracket closure): NUM_FOURIER_FREQS=16
 - Branch: `charliepai2d3-nezuko/l1ff16-ema-cos14-lr-7p5e-4` (deleted)
 - Hypothesis: bracket FF dose upward from 12 to 16 freqs. Predicted

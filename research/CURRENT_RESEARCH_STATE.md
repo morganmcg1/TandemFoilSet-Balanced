@@ -168,10 +168,10 @@ composition even if they don't outright beat 102.64:**
      regularisation axis than FF; tests input-perturbation robustness
      as a mechanistically-novel lever for round 5.
    - PR (tanjiro, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
-     **auxiliary log-pressure loss** — different mechanism than
-     channel weighting / loss shape; addresses heavy-tail via
-     target-space rescaling. Mechanistically distinct from EMA's
-     trajectory averaging.
+     **auxiliary log-pressure loss at weight=0.25** (half the dose
+     of PR #551 which was a wash) — tests whether aux lever has
+     sweet spot below 0.5 where heavy-tail benefit survives without
+     capacity competition.
    - PR #516 — askeladd: L1+FF+EMA + `--epochs 14` + **`lr=8e-4`** —
      interior LR bracket point.
    - PR #524 — edward: **canonical 6-lever stack measurement** —
@@ -203,6 +203,7 @@ post-EMA stack. The pattern:
 | **Schedule × averaging interference** | OOD regression | matched cosine × EMA (#476) | closed |
 | **Saturated regularisation overlap** | no marginal value | wd=5e-4 × full stack (#500) | closed |
 | **Heavy-tail compose redundancy with EMA** | mild uniform regression | 3× p-weight in vol_loss × full stack (#515) | closed |
+| **Capacity competition with main task** | mixed per-split tradeoffs | aux log-p at weight=0.5 (#551) | closed (re-assigned at weight=0.25) |
 
 **Generalisation observed across compose tests**: once one "noise/
 regularisation" lever is in the stack (FF, EMA), additional
