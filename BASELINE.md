@@ -1,40 +1,40 @@
 # Baseline — icml-appendix-charlie-pai2d-r4
 
-**Status:** Round 1 in flight. PR #467 (Huber β=0.5 + Fourier + EMA + clip + bf16 + compile) is the current best.
+**Status:** Round 1 in flight. PR #484 (FiLM + Huber β=0.5 + Fourier + EMA + clip + bf16 + compile) is the current best.
 
 > **Round-1 budget caveat (revised after #401).** `SENPAI_TIMEOUT_MINUTES=30` is still binding, but with `torch.compile(mode=reduce-overhead, dynamic=True)` on top of bf16, per-epoch wall-clock dropped from 141 s → 55 s. **Round 1 is now a ~33-epoch ranking exercise** — the cosine schedule actually enters its decay tail and EMA has time to do its job. The bottleneck has shifted from "compute-bound" to "architecture and effective EMA horizon". Future architectural-scale PRs (wider, deeper) that previously couldn't fit the budget should be revisited.
 
-## Current best (PR #467, askeladd, merged 2026-04-28)
+## Current best (PR #484, thorfinn, merged 2026-04-28)
 
 | Metric | Value | Epoch |
 |---|---|---|
-| `val_avg/mae_surf_p`  | **57.50** (EMA-evaluated) | 34 / 50 (timeout-capped, still descending) |
-| `test_avg/mae_surf_p` | **50.51** (EMA-evaluated) | best ckpt = epoch 34 |
-| Per-epoch wall-clock | 54.1 s (median) | matches #289/#368 |
-| Total epochs in budget | 34 | (1 more than #368, +cudagraph_skip applied) |
-| Peak GPU memory | 23.8 GB | unchanged |
+| `val_avg/mae_surf_p`  | **57.37** (EMA-evaluated) | 33 / 50 (timeout-capped) |
+| `test_avg/mae_surf_p` | **48.96** (EMA-evaluated) | best ckpt = epoch 33 |
+| Per-epoch wall-clock | 54.2 s (median) | matches #467 |
+| Total epochs in budget | 33 | (1 fewer than #467 — within run-to-run noise) |
+| Peak GPU memory | 24.2 GB | unchanged |
 
-> **IMPORTANT — reproduce requires `--huber_beta 0.5`:** the train.py Config default is still `huber_beta=1.0` (the value at merge-base). Reproducing the merged baseline requires explicit `--huber_beta 0.5`. Askeladd's next PR (β finer sweep) will flip the Config default to 0.5.
+> **IMPORTANT — reproduce requires `--huber_beta 0.5 --film`:** the train.py Config defaults are `huber_beta=1.0` and `film=False` (need explicit override). Askeladd's PR #539 (β finer sweep) will flip `huber_beta` default to 0.5; thorfinn's next PR may flip `film` default to True.
 
-### Per-split val (epoch 34, EMA weights, β=0.5)
+### Per-split val (epoch 33, EMA weights, β=0.5 + FiLM)
 | Split | mae_surf_p |
 |---|---|
-| val_single_in_dist     |  64.77 |
-| val_geom_camber_rc     |  70.21 |
-| val_geom_camber_cruise |  38.46 |
-| val_re_rand            |  56.57 |
+| val_single_in_dist     |  61.46 |
+| val_geom_camber_rc     |  71.06 |
+| val_geom_camber_cruise |  39.71 |
+| val_re_rand            |  57.23 |
 
-### Per-split test (best EMA checkpoint, post-fix scoring, β=0.5)
+### Per-split test (best EMA checkpoint, post-fix scoring, β=0.5 + FiLM)
 | Split | mae_surf_p |
 |---|---|
-| test_single_in_dist     |  57.26 |
-| test_geom_camber_rc     |  63.95 |
-| test_geom_camber_cruise |  32.27 |
-| test_re_rand            |  48.58 |
+| test_single_in_dist     |  53.21 |
+| test_geom_camber_rc     |  61.83 |
+| test_geom_camber_cruise |  33.28 |
+| test_re_rand            |  47.54 |
 
 ## Configuration of the current best
 
-Reproduce: `cd target && python train.py --epochs 50 --huber_beta 0.5` (Fourier + Huber β=0.5 + EMA + clip + bf16 + compile + cudagraph_skip all stacked).
+Reproduce: `cd target && python train.py --epochs 50 --huber_beta 0.5 --film` (Fourier + Huber β=0.5 + surface-conditional FiLM + EMA + clip + bf16 + compile + cudagraph_skip all stacked).
 
 | Setting | Value |
 |---|---|
@@ -51,9 +51,11 @@ Reproduce: `cd target && python train.py --epochs 50 --huber_beta 0.5` (Fourier 
 | **bf16 autocast** | wraps `model({"x":x_in})["preds"]` in train + eval (from #372) |
 | **torch.compile** | `mode="reduce-overhead", dynamic=True` (from #401) |
 | **cudagraph_skip** | `torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True` (from #467, eliminates per-shape CUDAGraph private-pool flakiness; throughput-neutral) |
+| **Surface-conditional FiLM** | learned `(γ_surf, β_surf)` vs `(γ_vol, β_vol)` modulating the LayerNorm output before `mlp2` in last TransolverBlock (from #484). Identity init (γ=1, β=0). +512 params (4×n_hidden). Domain-conditional decoder with no parallel pathway. |
+| **`--cosine_epochs` flag** | plumbed at default 50 (from #466), available for explicit override |
 | Eval | MAE in physical space, primary metric `val_avg/mae_surf_p` |
 
-JSONL: `models/model-beta0.5-20260428-032300/metrics.jsonl`
+JSONL: `models/model-film-beta05-20260428-053236/metrics.jsonl`
 
 > **Known compile flakiness:** 2 of 4 launches at this stack crashed before completion, both with CUDAGraph private-pool blowup at variable mesh sizes. Setting `torch._inductor.config.triton.cudagraph_skip_dynamic_graphs = True` would eliminate this failure mode at ~10-15% throughput cost. Queued as a small infrastructure PR.
 
@@ -74,4 +76,6 @@ PR #287 (surf_weight=25) was merged independently before #308 landed; the artifa
 | #401 (merged) | 66.89 | torch.compile(reduce-overhead, dynamic) + bf16 + EMA + clip. 33/50 epochs in budget. -37.1% vs #308, -32.3% vs #381. Throughput-budget recovery is dominant mechanism. |
 | #289 (merged) | 63.33 | SmoothL1/Huber β=1.0 loss replacing MSE. 32/50 epochs in budget. -5.31% vs #401. Per-split mechanism preserved. |
 | #368 (merged) | 62.94 | 8-freq Fourier positional encoding on (x, z) input. 33/50 epochs. -0.62% vs #289 on val, -1.30% on test_avg. Mechanism: Fourier accelerates convergence in warm-LR phase. |
-| #467 (merged) | **57.50** | **Huber β=0.5** (from default β=1.0) + cudagraph_skip robustness flag. 34/50 epochs. **-8.65% val, -7.71% test vs #368** — strongest single-knob win since compile. Strict monotone β order (0.5 < 1.0 < 2.0) on every val + test split + every channel. Cruise gains most (-12% val) — sharper-near-zero helps low-amplitude splits. **Note**: Config default still β=1.0; reproduce requires `--huber_beta 0.5`. |
+| #467 (merged) | 57.50 | Huber β=0.5 + cudagraph_skip robustness flag. -8.65% val, -7.71% test vs #368 — strongest single-knob win since compile. |
+| #466 (merged, infrastructure) | 64.20 (reproduce-of-#289) | --cosine_epochs flag plumbed at default 50 (no behavior change; available for explicit override). cudagraph_skip auto-deduped. |
+| #484 (merged) | **57.37** | **Surface-conditional FiLM** (learned γ_surf/γ_vol/β_surf/β_vol modulating last LayerNorm output before mlp2). +512 params. -0.23% val vs #467, **-3.06% test (50.51→48.96)**. Paired -3.05% val, -2.92% test, all 8 splits gain. Volume MAE also improves (trunk/decoder separation works for both modes). |

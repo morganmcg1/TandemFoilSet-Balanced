@@ -1,5 +1,71 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 06:15 — PR #484: Surface-conditional FiLM rebased onto post-#467 — **NEW BASELINE**
+- Branch: `charliepai2d4-thorfinn/surface-film` (deleted on merge)
+- Student: charliepai2d4-thorfinn
+- **Outcome: MERGED (squash, commit dc9e0e5). NEW BASELINE: val_avg=57.37, -0.23% vs #467 on val, -3.06% on test_avg.**
+
+### Headline (epoch 33, EMA-evaluated, both runs in PR)
+| Run | val_avg | test_avg | params |
+|---|---|---|---|
+| baseline-ref-beta05 (paired) | 59.17 | 50.44 | 670,551 |
+| **film-beta05** | **57.37** | **48.96** | 671,063 (+512) |
+| Δ vs paired | **-3.05%** | **-2.92%** | +0.08% |
+| vs merged #467 | -0.23% | **-3.06%** | — |
+
+### Per-split val (4/4 gain at β=0.5 — vs 3/4 at β=1.0 in pre-rebase)
+| Split | Δ |
+|---|---|
+| val_single_in_dist     | **-3.65%** |
+| val_geom_camber_rc     | **-3.51%** (was +0.65% noise at β=1.0; now clean gain) |
+| val_geom_camber_cruise | -1.30% |
+| val_re_rand            | -3.01% |
+
+### Per-split test (4/4 gain)
+| Split | Δ |
+|---|---|
+| test_single_in_dist     | -1.71% |
+| test_geom_camber_rc     | -1.94% |
+| test_geom_camber_cruise | -3.92% |
+| test_re_rand            | **-4.79%** (largest test gain) |
+
+### Volume MAE (replicates the trunk/decoder-separation finding)
+| Split | mae_vol_p Δ |
+|---|---|
+| val_single_in_dist     | -4.92% |
+| val_geom_camber_rc     | -1.15% |
+| val_geom_camber_cruise | -2.03% |
+| val_re_rand            | -1.70% |
+
+Smaller magnitude than at β=1.0 (-11.4% on single_in_dist there) because β=0.5 already sharpens the volume head — exactly the redundancy predicted in the send-back. Mechanism unchanged: shared trunk → tiny domain-conditional decoder → no interference cost.
+
+### Analysis
+- **Mechanism survives β=0.5 cleanly**: paired -3.05% gain comparable to the pre-rebase -2.34% at β=1.0. FiLM's specialization is roughly **additive in absolute MAE units** with whatever β=0.5 already delivered.
+- **Predicted compounding range was 55-57; landed at 57.37** — upper bound. Partial redundancy (FiLM and β=0.5 both operate on heavy-tailed-pressure regions but via different mechanisms: affine modulation vs loss curve shape).
+- **All 4 val splits gain** (vs 3/4 at β=1.0) — even camber_rc, which had a tiny noise regression before, now gains -3.51% cleanly.
+- **+0.5% wall-clock + 512 params** is essentially free. Compile diagnostics clean (3 unique graphs, no recompile spiral, no CUDAGraph OOM since cudagraph_skip is in baseline).
+- **Compounding evidence: 7 stacked levers** all positive — Fourier + Huber β=0.5 + EMA + clip + bf16 + compile + FiLM.
+
+### Cumulative round-1 trajectory
+| PR | val_avg | Δ from prior best |
+|---|---|---|
+| #287 | 126.67 | (first baseline) |
+| #308 | 106.40 | -16.2% |
+| #381 |  98.85 |  -7.1% |
+| #401 |  66.89 | -32.3% |
+| #289 |  63.33 |  -5.3% |
+| #368 |  62.94 |  -0.6% |
+| #467 |  57.50 |  -8.7% |
+| #484 |  **57.37** |  -0.2% (val); -3.1% (test_avg, 50.51 → 48.96) |
+| **Cumulative** | | **-54.7% from #287, -57.6% from published-baseline-equivalent** |
+
+### Open follow-ups identified
+- **FiLM at all 5 block boundaries** (~5×512 = 2,560 params, mid-network specialization). Strongest extension; assigned next.
+- **Surface-only vs symmetric FiLM ablation** — with vol MAE also improving, the symmetric form is now the expected default. Ablation cleanly answers whether vol_film is doing real work.
+- **Stack with fern's #453 (per-channel surf_weight ramp) once it lands** — three orthogonal surface-mechanism levers.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=484 records, 35 lines from final film-beta05 run).
+
 ## 2026-04-28 05:35 — PR #466: cudagraph_skip + cosine_epochs flag (revision merge)
 - Branch: `charliepai2d4-alphonse/tmax32-cudagraph-skip` (deleted on merge)
 - Student: charliepai2d4-alphonse
