@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 08:15 (advisor branch `icml-appendix-charlie-pai2d-r2`)
+- **Last update:** 2026-04-28 08:35 (advisor branch `icml-appendix-charlie-pai2d-r2`)
 - **Most recent human-team direction:** N/A — no open human-tagged issues at this time.
 - **Current baseline (directly measured): `val_avg/mae_surf_p = 64.696` eager / `64.824` compile, `test_avg/mae_surf_p = 55.879` eager / `56.391` compile**. PR #562 (cosine 3-ep warmup + T_max=11) and PR #510 (torch.compile mode=default, +28.6% epochs in budget) both merged.
 - **Stack throughput**: 18 epochs in 30-min budget under compile=True (vs 14 eager). Cosine T_max=11 leaves epochs 12–18 at LR≈0 — 7 free EMA-stabilization epochs.
@@ -33,7 +33,7 @@
 
 | PR | Student | Slug | Lever | Status |
 |----|---------|------|-------|--------|
-| #629 | alphonse | reduce-overhead-fixed-padding | Fixed-shape padding for torch.compile mode="reduce-overhead" (throughput) | WIP |
+| #661 | alphonse | tf32-matmul-high | TF32 matmul precision (Blackwell tensor cores, single-line throughput) | WIP (just assigned) |
 | #635 | edward | lr-peak-6e-4 | lr 5e-4 → 6e-4 (gentler 3-ep warmup permits higher peak LR) | WIP (just assigned) |
 | #647 | askeladd | slice-temp-per-block-schedule | Per-block slice-temp init schedule [1.5..3.0] linear (hierarchical sharpness) | WIP (just assigned) |
 | #646 | fern | batch-size-6 | batch_size 4 → 6 with compile (gradient noise reduction) | WIP (just assigned) |
@@ -53,9 +53,9 @@
 5. **Batch-size gradient quality** (fern #646, batch=6 with compile): gradient noise reduction may compound with EMA averaging. Replaces closed warmup-aggressiveness axis.
 6. **LR peak bump** (edward #635, lr=6e-4): direct probe of whether gentler 3-ep warmup permits 1.2× higher peak LR safely.
 7. **Per-block slice-temp init schedule** (askeladd #647, [1.5, 1.875, 2.25, 2.625, 3.0]): hierarchical sharpness — softer early blocks for spatial pooling, sharper later blocks for token refinement. Replaces saturated global-init axis.
-8. **Reduce-overhead throughput** (alphonse #629, fixed-shape padding): infrastructure follow-up — fix the per-shape-CUDA-Graph OOM that defeated mode="reduce-overhead" in PR #510. Expected another +10–20% wall-clock if it lands.
+8. **TF32 matmul precision** (alphonse #661): single-line `torch.set_float32_matmul_precision("high")` to use Blackwell TF32 tensor cores. Expected 1.5–2× matmul speedup → 25–40% epoch time reduction. Highest EV/effort ratio of the throughput follow-ups.
 
-**Closed axes**: EMA decay_target above 0.995 at warmup_steps=50 (cap doesn't bind within budget — PR #600); feature_noise_std (interior min at 0.0025, U-shaped — PR #595); surf_weight at 15 on huber-clip stack (clip absorbs the increase, single_in_dist vol_p degrades — PR #605); single-scalar wd (basin floor at 3e-5 on new stack; wd=0 regresses +2.75% — PR #554); LinearLR start_factor (sweet spot at 0.3, both 0.5 and 0.2 regress — PR #620); global slice-temp init (saturating at 2.0, camber_rc consistently regresses with sharper attention — PR #608).
+**Closed axes**: EMA decay_target above 0.995 at warmup_steps=50 (cap doesn't bind within budget — PR #600); feature_noise_std (interior min at 0.0025, U-shaped — PR #595); surf_weight at 15 on huber-clip stack (clip absorbs the increase, single_in_dist vol_p degrades — PR #605); single-scalar wd (basin floor at 3e-5 on new stack; wd=0 regresses +2.75% — PR #554); LinearLR start_factor (sweet spot at 0.3, both 0.5 and 0.2 regress — PR #620); global slice-temp init (saturating at 2.0, camber_rc consistently regresses with sharper attention — PR #608); torch.compile reduce-overhead with naive fixed-shape padding (compute-bound at max-mesh shape, throughput regressed −22% — PR #629; bucketed batching is the right next probe).
 
 ## Most promising potential next research directions
 
