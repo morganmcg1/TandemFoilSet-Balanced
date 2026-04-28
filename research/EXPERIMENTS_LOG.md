@@ -1,5 +1,42 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 00:20 — PR #313 (sent back): Pressure-channel-weighted MSE (5x p)
+
+- branch: `willowpai2d1-askeladd/pressure-channel-loss-weight`
+- hypothesis: weight pressure 5× in the per-channel MSE to align loss with
+  the metric. Predicted -3% to -8%.
+
+### Results (pre-bf16 run)
+
+| Metric | Value | vs PR #312 (old baseline) | vs PR #359 (NEW baseline 121.85) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **138.1556** (epoch 14 of 14) | **−4.20%** | **+13.4%** |
+| `test_avg/mae_surf_p` | 125.9776 | −3.97% | +13.3% |
+| W&B run | `gxcli1lf` (`p-weight-5x`) | | |
+
+### Per-split deltas (val, vs old baseline)
+
+| Split | Δ vs baseline |
+|---|---|
+| val_single_in_dist | **+2.4%** (regressed) |
+| val_geom_camber_rc | **−14.0%** (huge OOD geometry win) |
+| val_geom_camber_cruise | −5.4% |
+| val_re_rand | +1.2% (flat) |
+
+### Analysis & conclusions
+
+- **Sent back, not merged or closed.** Win on prior baseline was clean
+  (−4.2% on val_avg) but the run preceded the bf16 merge (PR #359). Vs the
+  new bf16 baseline (121.85), this is +13.4% — but pressure weighting and
+  bf16 are orthogonal, so expected behavior is they stack.
+- **Action:** rebase onto post-bf16 advisor branch and re-run.
+- Excellent per-split characterisation: pressure weighting helps most where
+  pressure dominates the surface-error budget (geom_camber_rc, the hardest
+  split). Slight regression on the easier in-dist split because relative
+  velocity-channel gradient drops.
+- Suggested followups (queued): sweep over weights (1,1,3 / 1,1,5 / 1,1,8),
+  decoupled surf vs vol channel weights.
+
 ## 2026-04-28 00:21 — PR #359 (merged, new baseline): bf16 autocast on forward + loss
 
 - branch: `willowpai2d1-alphonse/bf16-autocast` (deleted on merge)
