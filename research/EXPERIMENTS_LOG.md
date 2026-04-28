@@ -1,5 +1,45 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 07:50 — PR #612: Lion optimizer (lr=3e-4) — **MERGE (winner, ⭐ largest single-PR delta)**
+
+- Branch: `charliepai2d5-alphonse/lion-3e-4`
+
+### Results
+
+| metric | value | vs PR #496 baseline (73.29 / 69.49) |
+|---|---:|---|
+| `val_avg/mae_surf_p` (best ep 18/24) | **56.19** | **−23.3%** ✓✓ |
+| `val_single_in_dist/mae_surf_p` | 60.30 | **−30.8%** |
+| `val_geom_camber_rc/mae_surf_p` | 71.06 | −16.4% |
+| `val_geom_camber_cruise/mae_surf_p` | 37.01 | **−27.3%** |
+| `val_re_rand/mae_surf_p` | 56.41 | −19.6% |
+| `test_avg/mae_surf_p` (3 clean) | **53.33** | **−23.3%** ✓✓ |
+| Median per-epoch wall (s) | 101.4 | +1.4% (essentially unchanged) |
+
+### Decision
+
+Merge — eighth orthogonal axis stacked: L1 × warmup → cosine × Fourier × sw=30 × grad-clip=0.5 × bf16+fp32-loss × **Lion optimizer (lr=3e-4)**. Largest single-PR delta on this advisor track, by a wide margin.
+
+### Critical mechanistic finding
+
+**Why Lion crushes AdamW on this stack so dramatically (vs the typical 1-3% Lion paper bonus):**
+
+1. **L1 loss + sign-update + grad-clip-0.5 form a triple-quantized chain.** L1 produces unit-magnitude per-element gradients; clip-norm-0.5 caps total L2; Lion's `sign()` makes parameter updates unit-magnitude per param. Every weight gets the same per-step treatment — scale-invariant per parameter, composing naturally with the existing L1+clip regime.
+
+2. **AdamW's RMSProp normalization was redundant and noisy on this stack.** Under L1 loss, all per-element gradients have magnitude 1, so RMSProp's adaptive normalization is mostly idle and adds noise from its EMA estimate. Lion replaces this with `sign(momentum)` — exactly what RMSProp converges to in this regime, but cleaner.
+
+The val curve is visibly smoother than AdamW's (3 small bumps in 17 transitions vs typical AdamW wobble). Best epoch is the last reached (18/24) — Lion is still descending steeply at the budget cap (ep 17→18 dropped 5.91 absolute, the largest single-epoch drop in the run).
+
+This is the diagnostic spine that the entire round was building toward: regularization saturation → underfitting framing → capacity refutation on width/MLP-ratio → eta_min closure → LLRD's early-layer finding → "the optimizer is doing the wrong thing on this loss landscape." The Lion swap directly addresses that.
+
+Reassigned alphonse to **Lion + `--epochs 22`** (PR #637) — best-epoch-at-last says the cosine still has unused tail. Matching T_max=17 to actually-reachable ~18-19 epochs gives stronger late-epoch settling (LR ≈ 3.9e-5 at ep 18 vs current 1.13e-4).
+
+### Updated reference config
+
+`n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`, `fun_dim=54`, **`lr=3e-4`** (Config default updated), `weight_decay=1e-4`, `batch_size=4`, `surf_weight=30.0`, `grad_clip_norm=0.5`, `amp_bf16=True`, **`optimizer_name='lion'`** (Config default updated), L1 loss, warmup → cosine, `--epochs 24`, 8-band Fourier features.
+
+
+
 ## 2026-04-28 07:35 — PR #550 (rerun on bf16): n_layers=6 — **CLOSE; updates capacity systemic finding**
 
 - Branch: `charliepai2d5-fern/n-layers-6` (closed)
