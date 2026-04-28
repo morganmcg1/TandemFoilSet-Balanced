@@ -465,11 +465,17 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     film_re: bool = True  # FiLM modulation conditioned on log(Re), per-block
     film_hidden: int = 64  # hidden width of the FiLM MLP (1 → hidden → 2*L*H)
+    seed: int | None = None  # if set, torch.manual_seed for variance checks
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+
+if cfg.seed is not None:
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    print(f"Seed: {cfg.seed}")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
