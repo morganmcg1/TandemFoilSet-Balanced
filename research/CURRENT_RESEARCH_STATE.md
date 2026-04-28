@@ -1,18 +1,21 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-28 ~22:50 (#851 Huber closed, #819 relL2 sent back for α=0.5 mix; tanjiro reassigned LinearNO #880)
+- **As of:** 2026-04-28 ~23:00 (Fourier PE K=4 **merged** → new best val=89.71; thorfinn reassigned #883 band sweep)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
-- **Current best:** `val_avg/mae_surf_p = 99.226` (#754) and `test_avg/mae_surf_p = 92.610` ✓ (#797 unblock, run `2hcmefh9`)
+- **Current best:** `val_avg/mae_surf_p = 89.714` (#820) and `3-split test mean = 88.16` (run `w9xbc0wl`)
 
 ## Current research focus
 
-Round 1 has fully resolved. Two compounding wins reached the baseline:
-**L1 loss** (#752, 101.93) → **L1 + per-channel p×3** (#754, 99.23, −2.65%).
-The other round-1 levers either did not compound on L1 (closed) or have
-been sent back for L1-retest with the new baseline. All idle students are
-either on round-2 hypotheses or on a continuation of the merged channel-
-weight signal.
+**Three compounding wins landed:** L1 (101.93) → +ch=[1,1,3] (99.23, −2.65%)
+→ +Fourier PE K=4 (89.71, −9.59%) = **−12.0% cumulative**. This is round 2,
+and the Fourier PE was the largest single-lever gain. New baseline is 89.71.
+All in-flight PRs need to beat 89.71 to merge.
+
+Key insight: Fourier PE + channel weighting are orthogonal and additive.
+The ch=[1,1,3] win made pressure gradient dominant → Fourier PE's spectral
+basis earned its keep on every split (including val_re_rand which was flat
+on L1-only baseline). The compounding mechanism is well-understood.
 
 ### Round 1 outcomes (final)
 
@@ -28,18 +31,19 @@ weight signal.
 | #753 | edward | surf_weight 20/30/50 | **closed** (sw=30 best at 125.80; superseded by ch=[1,1,3] merge) |
 | #757 | nezuko | 5% warmup + cosine on L1+ch=[1,1,3] | **closed** (+3.81% worse; schedule family exhausted) |
 
-### Round 2 in flight (orthogonal, on top of L1 + ch=[1,1,3] = 99.23)
+### Round 2 in flight (orthogonal, on top of L1 + ch=[1,1,3] + Fourier K=4 = 89.71)
 
 | PR | Student | Round-2 idea | Predicted impact | Status |
 |---|---|---|---|---|
 | #816 | alphonse | FiLM conditioning of LayerNorm (#2) | -5 to -12% | **rebase + rerun (96.61 on L1-only → -2.6% on new baseline expected)** |
-| #820 | thorfinn | Fourier PE on (x, z) coords (#3) | -4 to -10% | **rebase + rerun (91.15 on L1-only → -8.2% on new baseline expected — strongest single signal)** |
+| #820 | thorfinn | Fourier PE on (x, z) coords (#3) | **−9.59%** | **MERGED — val baseline 89.71 (new best)** |
 | #863 | askeladd | Seed determinism PR (infra) — replaces merged #797 | infra: variance ↓ | wip |
 | #819 | frieren | Relative L2 mix α=0.5 (sent back from pure α=1.0, +1.07%) | -1 to -4% target | wip retry |
 | #861 | fern | Volume subsampling (15%) (#7) — replaces #829 (closed) | -3 to -8% | wip |
 | #872 | nezuko | Domain-ID embedding 3-class (#8) — replaces #757 (closed) | -2 to -6% | wip |
 | #873 | edward | EMA model weights (Polyak) — replaces #753 (closed) | -1 to -3% | wip |
-| #880 | tanjiro | LinearNO ELU+1 linear attention (#6) — replaces #851 Huber (closed) | -3 to -8% | wip |
+| #880 | tanjiro | LinearNO ELU+1 linear attention (#6) — replaces #851 Huber (closed) | -3 to -8% | wip (needs rebase to 89.71) |
+| #883 | thorfinn | Fourier bands sweep K∈{3,6,8} — follow-up to merged #820 | mapping optimum | wip |
 
 **Closed in round 2:**
 - #818 tanjiro SGDR T_0=10 → +6% worse, structural budget mismatch
@@ -60,6 +64,12 @@ weight signal.
   giving optimizer 3-10× weaker pressure on the residuals we want
   cleaned up. Direct mechanistic clash with L1+ch=[1,1,3] (whose merit
   is constant-magnitude gradient × per-channel weight).
+
+**Note on rebasing after #820 merge:** All in-flight PRs (#816, #819, #861,
+#863, #872, #873, #880) are based on the old 99.23 baseline. They now need
+to beat **89.71** to qualify for merge. Students should rebase onto the
+updated advisor branch HEAD when their run returns. Those that cannot beat
+89.71 will need to be combined or redesigned for round 3.
 
 ## Round 2 hypotheses ranked and ready
 

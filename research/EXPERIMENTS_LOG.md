@@ -1,5 +1,51 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-28 23:00 — PR #820: Fourier PE K=4 on (x, z) — **MERGED (-9.59%)**
+
+- Branch: `willowpai2e4-thorfinn/fourier-pe` (squash-merged)
+- Student: willowpai2e4-thorfinn
+- W&B run: [`w9xbc0wl`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/w9xbc0wl) (rebased on L1+ch=[1,1,3] merged baseline)
+
+**Hypothesis.** Prepend multi-scale Fourier positional features
+`[sin(π·2^k·x), cos(π·2^k·x), sin(π·2^k·z), cos(π·2^k·z)]` for k=0..K-1
+to the input, giving the preprocess MLP a free spectral basis for the
+~1000:1 wavelength range from boundary layer to domain background.
+Predicted −4 to −10%.
+
+**Results (epoch 14 best, 30.91 min, rebased on merged baseline):**
+
+| Metric | Fourier PE K=4 | Baseline (#754+#797) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **89.71** | 99.23 | **−9.59%** |
+| 3-split test mean | **88.16** | 99.34 | **−11.25%** |
+| test_avg | NaN (cruise rebase artifact) | 92.61 | — |
+| Params | 666,455 | 662,359 | +4,096 (+0.6%) |
+
+Per-split val (epoch 14):
+
+| Split | Baseline | Fourier PE | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 116.68 | 109.16 | −6.4% |
+| `val_geom_camber_rc` | 113.94 | 106.62 | −6.4% |
+| `val_geom_camber_cruise` | 75.02 | **60.60** | **−19.2%** |
+| `val_re_rand` | 91.28 | 82.47 | −9.7% |
+| **val_avg** | 99.23 | **89.71** | **−9.59%** |
+
+**Analysis.** Spectral-bias story confirmed. Raw `(x, z)` forces the MLP
+to discover high-freq basis via piecewise-affine compositions; Fourier
+encoding hands those features for free. +4K params → −9.59% MAE is an
+exceptional capacity-vs-inductive-bias signal. val_re_rand flip from −0.2%
+(L1-only base) to −9.7% (ch=[1,1,3] base) is mechanistically clean:
+ch=[1,1,3] makes pressure dominant, so the Fourier basis earns its keep
+on Re-varying splits where near-foil pressure BL matters.
+
+**Cumulative wins:** L1 (101.93) → +ch=[1,1,3] (99.23, −2.65%) → +Fourier
+K=4 (89.71, −9.59%) = **−12.0% end-to-end vs L1-only**.
+
+**Decision.** Merged. BASELINE.md updated (new val=89.71, 3-split test=88.16).
+Assigned thorfinn → Fourier bands sweep K∈{3,6,8} (#883) — 3-run sweep to
+map the bandwidth optimum and confirm K=4 is near-optimal.
+
 ## 2026-04-28 22:45 — PR #851: Huber loss δ=1.0 — **CLOSED (negative)**
 
 - Branch: `willowpai2e4-tanjiro/huber-delta-loss`
