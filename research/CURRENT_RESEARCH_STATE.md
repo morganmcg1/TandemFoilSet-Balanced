@@ -19,8 +19,8 @@
 | PR | Student | Theme | Hypothesis |
 |---|---|---|---|
 | #321 | frieren | Optimization & schedule | warmup + cosine peak=7e-4 (sent back from peak=1e-3; will need rebase onto new T_max=37 baseline) |
-| **#666** | **nezuko** | **Stability hyperparam** | **EMA decay=0.9995 probe** — followup #1 from PR #324 v4. Tests if longer averaging window (1.2e-3 init contamination at 13.5K steps) helps or biases toward early high-LR weights. |
-| **#664** | **tanjiro** | **Spatial features (gated)** | **Surface-gated FF** — multiply FF×`is_surface.float()` so volume nodes see zeros. Tests if volume FF is dead weight or load-bearing. K=8 confirmed locally optimal in PR #619; this attacks the per-region mesh-density variation. |
+| **#689** | **nezuko** | **Stability hyperparam (low-side bracket)** | **EMA decay=0.998 probe** — completes the bracket below 0.999. Tests if tighter decay trades variance reduction for sharper late-fit (rc-camber-targeted). |
+| **#692** | **tanjiro** | **Operational / variance characterization** | **Multi-seed baseline confirmation** — 2 fresh seeds of canonical recipe to characterize seed variance precisely. Useful for paper-facing recipe documentation and interpreting future close calls. |
 | **#641** | **edward** | **Optimization tuning** | **weight_decay=3e-4 single probe** (locks down wd hyperparameter on the heavily-tuned current stack — wd has been at round-1 default 1e-4 the whole round) |
 | **#678** | **thorfinn** | **Feature engineering (rc-targeted)** | **AoA × NACA-M interaction features** for tandem wake-coupling — followup #4 from PR #644 closing. Pivots from "camber dimension itself" to "AoA × camber interaction" which captures wake-structure for tandem foils. |
 | #522 | askeladd | Optimization tuning | lr=3e-4 on Huber+compile+FF (sharp-edge hypothesis) |

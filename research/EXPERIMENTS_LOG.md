@@ -1,5 +1,96 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 09:08 — PR #666 (closed): EMA decay=0.9995 single probe
+
+- branch: `willowpai2d1-nezuko/ema-decay-9995-probe` (deleted on close)
+- hypothesis: longer averaging window helps. Predicted -1.5 to +1.5%.
+
+### Results
+
+| Metric | Value | vs PR #634 baseline |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **55.58** (epoch 36) | **+7.5%** |
+| `test_avg/mae_surf_p` | 47.26 | +7.4% |
+| All splits regressed | uniformly 4-8% | textbook global mechanism |
+| W&B run | `55udj9br` | |
+
+### EMA decay bracket complete
+
+| decay | val_avg vs baseline | mechanism |
+|---|---|---|
+| 0.9999 (PR #324 v1) | +148% | catastrophic warmup at 7-epoch budget |
+| **0.999 (current)** | **51.70 (locally optimal)** | sweet spot |
+| 0.9995 (this PR) | +6.6% | late-fit dilution from early-weight contamination |
+
+decay=0.9995 → 1.2e-3 init contamination (3 orders of magnitude more
+than 0.999's 1.4e-6) drags EMA shadow toward epochs 5-15 high-LR weights,
+diluting late-stage refinement. **The wall-budget interaction is the
+deciding factor**: under unlimited budget, 0.9995 would catch up with
+0.999 once enough late-stage steps overwhelmed the early-weight
+contamination; under 30-min cap, slower convergence dominates.
+
+### Analysis & conclusions
+
+- **Closed.** decay=0.999 confirmed locally optimal.
+- **The 0.9999 followup is dead** — monotonic mechanism would make it
+  strictly worse.
+- **EMA decay=0.998 probe (low-side bracket)** assigned next (#689) —
+  tests if tighter decay trades variance reduction for sharper late-fit.
+  rc-camber +7.8% regression at 0.9995 suggests rc-camber is most
+  sensitive to late-stage refinement loss, so tighter decay might
+  preferentially help rc.
+
+## 2026-04-28 09:01 — PR #664 (closed): surface-gated FF (FF × is_surface)
+
+- branch: `willowpai2d1-tanjiro/surface-gated-ff` (deleted on close)
+- hypothesis: volume FF is dead weight; gating frees capacity. Predicted
+  -2 to +2%.
+
+### Results
+
+| Metric | Value | vs PR #324 v4 baseline |
+|---|---|---|
+| Best `val_avg/mae_surf_p` | **54.04** (epoch 36) | **+3.68%** |
+| `test_avg/mae_surf_p` | 46.01 | +2.23% |
+| **rc-camber val** | 69.60 | **+6.92%** (worst) |
+| W&B run | `tqwstwg5` | |
+
+### Mechanism (the keeper)
+
+**Volume FF is load-bearing, not dead weight.** The encoder MLP wasn't
+wasting capacity de-weighting volume FF channels — it was using them.
+The (x, z) Fourier basis on volume nodes carries useful information:
+bulk-flow gradients, advection patterns, pressure-field harmonics.
+
+**rc-camber regresses worst** because it has the highest-density
+mesh with the most volume nodes — and therefore the most reliant on the
+volume spatial-frequency basis. Consistent with PR #619 K-sweep finding
+that K=12 helps rc-camber (more volume frequencies). Surface-only gating
+amputates that exact signal.
+
+### Round-3 FF design rules (consolidated)
+
+Combined with PR #327 (FF win), PR #443 (Gaussian RFF lost), PR #564
+(FF on saf lost), PR #619 (K-sweep), PR #664 (surface-gating lost):
+
+1. **Axis-aligned deterministic ladder** for axis-aligned foil geometry
+2. **Densely-populated everywhere-meaningful coordinates only** (x, z;
+   not saf; not dsdf)
+3. **K=8 is locally optimal** for this dataset's 5× mesh-density variation
+4. **Apply uniformly to all nodes** — no surface-only gating
+
+This is the **paper-facing recipe finding** for FF design on this dataset.
+
+### Analysis & conclusions
+
+- **Closed.** Uniform K=8 deterministic FF on (x, z) confirmed as the
+  recipe.
+- The encoder is not over-parameterized for this stack (no spare capacity
+  to "free up" by gating).
+- Reassigned tanjiro to **multi-seed baseline confirmation** (#692) —
+  operational characterization of seed variance, useful for the paper
+  and for interpreting future close calls.
+
 ## 2026-04-28 08:53 — PR #591 (sent back): linear-Re sampling on pre-EMA stack
 
 - branch: `willowpai2d1-fern/linear-re-sampling-bracket` (in flight as draft after send-back)
