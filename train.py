@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -432,7 +433,26 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+WARMUP_EPOCHS = 3
+warmup_scheduler = LinearLR(
+    optimizer,
+    start_factor=1e-3,
+    end_factor=1.0,
+    total_iters=WARMUP_EPOCHS,
+)
+cosine_scheduler = CosineAnnealingLR(
+    optimizer,
+    T_max=max(1, MAX_EPOCHS - WARMUP_EPOCHS),
+    eta_min=5e-5,
+)
+scheduler = SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[WARMUP_EPOCHS],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -462,6 +482,37 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+metrics_tag = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "run")
+metrics_dir = Path("metrics")
+metrics_dir.mkdir(parents=True, exist_ok=True)
+metrics_path = metrics_dir / f"{metrics_tag}-{run.id}.jsonl"
+
+
+def _write_jsonl(record: dict) -> None:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps(record, default=float) + "\n")
+
+
+_write_jsonl({
+    "type": "config",
+    "agent": cfg.agent,
+    "wandb_name": cfg.wandb_name,
+    "wandb_run_id": run.id,
+    "git_commit": _git_commit_short(),
+    "n_params": n_params,
+    "model_config": model_config,
+    "config": asdict(cfg),
+    "max_epochs": MAX_EPOCHS,
+    "max_timeout_min": MAX_TIMEOUT_MIN,
+    "scheduler": {
+        "type": "warmup_linear+cosine",
+        "warmup_epochs": WARMUP_EPOCHS,
+        "warmup_start_factor": 1e-3,
+        "cosine_eta_min": 5e-5,
+        "cosine_T_max": max(1, MAX_EPOCHS - WARMUP_EPOCHS),
+    },
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -535,6 +586,16 @@ for epoch in range(MAX_EPOCHS):
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
+    _write_jsonl({
+        "type": "epoch",
+        "epoch": epoch + 1,
+        "epoch_time_s": dt,
+        "lr": scheduler.get_last_lr()[0],
+        "train": {"vol_loss": epoch_vol, "surf_loss": epoch_surf},
+        "val_avg": val_avg,
+        "val_splits": split_metrics,
+    })
+
     tag = ""
     if avg_surf_p < best_avg_surf_p:
         best_avg_surf_p = avg_surf_p
@@ -596,6 +657,15 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        _write_jsonl({
+            "type": "test",
+            "best_epoch": best_metrics["epoch"],
+            "best_val_avg/mae_surf_p": best_avg_surf_p,
+            "test_avg": test_avg,
+            "test_splits": test_metrics,
+            "total_train_minutes": total_time,
+        })
 
     save_model_artifact(
         run=run,
