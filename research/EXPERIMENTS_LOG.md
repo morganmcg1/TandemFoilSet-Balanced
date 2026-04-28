@@ -782,3 +782,37 @@ Beats baseline on every val and test split. Strongest single best gain: `val_sin
 |----|---------|------|-------|-----|
 | #474 | askeladd | ema-decay-0p97 | `ema_decay = 0.99 → 0.97` on merged #398 baseline | Bracket-narrowing run for the EMA-decay optimum (0.999 too sticky, 0.95 too noisy). Honest band −1 % to +1 %. |
 | #475 | nezuko | swiglu-inner-256 | `swiglu_inner = 168 → 256` (+50 % MLP capacity) on merged #398 baseline | Capacity sweep on the new SwiGLU baseline. Tests whether SwiGLU's "fixes OOD" property scales with capacity. |
+
+## 2026-04-28 03:00 — PR #458: weight_decay 1e-4 → 5e-4 (charliepai2d1-frieren) — **CLOSED (regression)**
+- Branch: `charliepai2d1-frieren/weight-decay-5e-4` (closed + branch deleted)
+- Hypothesis: stronger weight decay as Tikhonov regularization, plausibly helping OOD splits where capacity bumps showed in-dist-helps / OOD-regresses pattern.
+
+### Headline metrics (best EMA epoch=13/50, timeout-cut)
+| | val_single_in_dist | val_geom_camber_rc | val_geom_camber_cruise | val_re_rand | **val_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` (EMA) | 125.94 | 115.99 | 75.99 | 95.18 | **103.27** |
+
+| | test_single_in_dist | test_geom_camber_rc | test_geom_camber_cruise | test_re_rand | **test_avg** |
+|---|---:|---:|---:|---:|---:|
+| `mae_surf_p` | 108.11 | 103.08 | 62.77 | 89.08 | **90.76** |
+
+- vs prior baseline #417 (run base): val +4.76 %, test +3.28 %.
+- vs current baseline #398 (post-SwiGLU): val **+15.59 %**, test **+14.61 %**.
+- Per-epoch wall clock: 141 s (matches baseline). Peak VRAM: 42.11 GB.
+
+### Frieren's analysis (the smoking gun)
+- **Worst regressor is `geom_camber_rc`** (+8.14 % val) — the highest-loss / hardest split, the most under-fit one. If WD were trading in-dist over-fitting for OOD generalization, the easy splits would degrade and hard ones would gain. We see the opposite: capacity is being shrunk away from where the model needs more, not less.
+- **Train losses still falling fast at ep13** (15 % step from ep12 → ep13 on `train/surf_loss`). The model is nowhere near convergence. Nothing was over-fit to regularize against — the *lose* mechanism dominated, exactly as the PR body's honest band predicted.
+- **EMA-vs-raw gap widened to 33.25 pts** (raw 136.52 vs EMA 103.27 at ep13). WD shrinks param magnitudes mechanically, reducing grad norms; the raw iterate lagged baseline trajectory and EMA inherited the lag.
+
+### Decision: close, reassign to dropout
+- Clear >5 % regression vs current baseline. Per CLAUDE.md close criteria.
+- **WD bump direction fully mapped at this budget**: 1e-4 sweet spot, 5e-4 too aggressive, 2e-4 likely a wash (not worth a run).
+- `geom_camber_rc` now established as the canary for under-converged regularization in the appendix.
+- Reassigned to **PR #483 (swiglu-mlp-dropout-0p1)** — frieren's own follow-up #4. Dropout adds training-time stochasticity rather than parameter-norm penalty, attacks per-split asymmetry without slowing convergence (the WD failure mode). Honest predicted band −1 % to +2 %.
+
+## 2026-04-28 03:02 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #483 | frieren | swiglu-mlp-dropout-0p1 | Add `nn.Dropout(0.1)` inside `SwiGLUMLP.forward` on merged #398 baseline | Replaces closed #458; tests training-time stochasticity as alternative regularizer to WD. Frieren's own follow-up #4. Honest band −1 % to +2 %. |
