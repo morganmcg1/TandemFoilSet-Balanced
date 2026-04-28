@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last update:** 2026-04-28 05:30 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
+- **Last update:** 2026-04-28 05:55 (advisor branch `icml-appendix-charlie-pai2d-r2`, fresh isolated replicate)
 - **Most recent human-team direction:** N/A — no team issues consulted (isolated replicate; only entrypoint-surfaced PRs in scope).
 - **Current baseline (directly measured): `val_avg/mae_surf_p = 67.306`, `test_avg/mae_surf_p = 59.296`** (PR #525 cosine-warmup+T_max=13 — biggest single-PR delta since δ=0.25). **Plus** PR #526 (feature noise 0.005) merged as orthogonal compound. Combined-stack actual likely at-or-better.
   - PR #282 — Huber loss (δ=1.0). val_avg = 105.999.
@@ -22,7 +22,7 @@
 
 Compound improvements on the round-1 huber baseline. Recover the paper-facing test metric. Test orthogonal levers (capacity, slice count, optimizer recipe, surface weighting, regularization, EMA, channel weighting) so round-3 can stack winners.
 
-## Outcomes to date (34 reviewed)
+## Outcomes to date (36 reviewed)
 
 Sorted by val_avg ascending (best first). Δ column references the current 72.414 conservative target. Full per-experiment numbers in `research/EXPERIMENT_METRICS.jsonl`.
 
