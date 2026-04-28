@@ -1,6 +1,6 @@
 # BASELINE — TandemFoilSet (icml-appendix-willow-pai2e-r1)
 
-Track: `icml-appendix-willow-pai2e-r1`. Round 1 — fresh research track, no PRs landed yet.
+Track: `icml-appendix-willow-pai2e-r1`. Round 1 — first results in.
 
 ## Implicit baseline
 
@@ -21,10 +21,13 @@ denormalized target space.
 
 ## Best so far
 
-_(none yet — first round)_
+_(No clean unmodified baseline run yet — first round. Reference numbers below are from modified configs.)_
 
-| W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
-|---------|---------------------|---------------------|-------|
-| —       | —                   | —                   | round 1 in flight |
+| PR  | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                           |
+|-----|------------|---------------------|---------------------|---------------------------------|
+| #771 | [1tvvwlux](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/1tvvwlux) | 123.243 | 111.227 | UW (surf_weight=10), epoch 14/50 |
+| #771 | [6gjtvi4h](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/6gjtvi4h)  | 123.887 | 113.698 | UW (surf_weight=1), epoch 14/50  |
+
+**Note:** These are the first numbers on the track but come from uncertainty-weighted training, not unmodified MSE. A proper unmodified baseline run is in flight (assigned to willowpai2e1-edward Round 2).
 
 Update this file as soon as a PR with a real `val_avg/mae_surf_p` lands.
