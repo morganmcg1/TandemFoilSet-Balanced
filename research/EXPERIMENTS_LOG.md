@@ -1421,3 +1421,58 @@ The hypothesis is reasonable but the schedule isn't matched to the budget: `cosi
 ### Decision
 
 Send back — set `--epochs 14` so cosine T_max scales to the actually-reachable budget and we get a clean read on the schedule. Same student branch, same hypothesis, just a one-line config tweak.
+
+## 2026-04-28 10:15 — PR #627: Preprocess MLP depth +1 hidden residual layer (Lion baseline) — **MERGE (new best)**
+
+- Branch: `charliepai2d5-edward/preprocess-depth-1` (merged)
+- Hypothesis: Add 1 residual hidden layer to the preprocess MLP (n_layers=0→1, res=True) to increase early-layer expressivity at the input boundary. Motivated by the LLRD diagnostic that early-layer learning is load-bearing for OOD generalization.
+
+| metric | Lion baseline (PR #612) | This PR | delta |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 56.1948 | **53.7986** | **-4.27%** |
+| test_avg/mae_surf_p (3-clean) | 53.330 | **52.165** | **-2.18%** |
+
+| split | baseline | this PR | delta |
+|---|---:|---:|---:|
+| val_single_in_dist | 60.30 | 54.3136 | -9.93% |
+| val_geom_camber_rc | 71.06 | 70.8552 | -0.29% |
+| val_geom_camber_cruise | 37.01 | 35.2098 | -4.86% |
+| val_re_rand | 56.41 | 54.8159 | -2.83% |
+
+| test split | baseline | this PR | delta |
+|---|---:|---:|---:|
+| test_single_in_dist | 51.62 | 47.9103 | -7.19% |
+| test_geom_camber_rc | 61.95 | 63.2333 | +2.07% |
+| test_re_rand | 46.42 | 45.3507 | -2.30% |
+
+- Metrics: `target/models/model-preprocess-depth-1-on-lion-20260428-084755/metrics.jsonl`
+- Analysis: Clear win. Early-layer expressivity stacks with Lion. val_single_in_dist biggest winner (-9.93% val, -7.19% test). val_geom_camber_cruise improved (-4.86% val) — notably this was flat on the AdamW run, confirming that Lion's cleaner trajectory lets the preprocess-depth benefit reach cruise. val_geom_camber_rc essentially flat (-0.29%), test_geom_camber_rc slightly regressed (+2.07%) — only ambiguous direction. +65,792 params (+9.8%), per-epoch wall flat (+2.6%), run wall-time bound at epoch 18/24 with val still falling. New baseline: val_avg=53.7986, test_avg=52.165.
+
+---
+
+## 2026-04-28 10:15 — PR #665: Lion + loosened grad_clip_norm 0.5→1.0 — **CLOSE (neutral)**
+
+- Branch: `charliepai2d5-alphonse/lion-clip-1p0` (closed)
+- Hypothesis: Loosening clip from 0.5→1.0 lets fresh gradients contribute ~2x more to Lion's momentum buffer, potentially improving convergence.
+
+| metric | clip=0.5 (baseline) | clip=1.0 | delta |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 56.1948 | 56.1475 | -0.08% |
+| test_avg/mae_surf_p (3-clean) | 53.33 | 54.018 | +1.29% |
+
+- Analysis: Outcome 2 confirmed — neutral. val moved -0.08% (within noise floor), test regressed +1.29%. Lion's sign() washed out the clip-magnitude change exactly as predicted. Per-split: val_geom_camber_cruise improved most (-2.13%) while test_single_in_dist and test_geom_camber_rc both worsened. Early-epoch bump at ep7→8 (+11.72, larger than any clip=0.5 bump) indicates noisier momentum from looser clip. clip=0.5 confirmed as optimal Lion default. Axis closed.
+
+---
+
+## 2026-04-28 10:15 — PR #628: Lookahead optimizer wrapping Lion (k=5, α=0.5) — **CLOSE (hurts)**
+
+- Branch: `charliepai2d5-tanjiro/lookahead-k5` (closed, rebased to Lion)
+- Hypothesis: Lookahead wrapping Lion with periodic slow-weight pulls every k=5 steps would damp oscillation in the cosine-decay tail.
+
+| metric | Lion baseline (PR #612) | Lookahead on Lion | delta |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 56.19 | 58.7983 | +4.63% |
+| test_avg/mae_surf_p (3-clean) | 53.33 | 56.293 | +5.56% |
+
+- Analysis: All four val splits and all three clean test splits regressed. Val curve smoothness: 3 bumps on Lookahead-on-Lion vs 3 bumps on Lion baseline — saturation confirmed. Lion's sign-quantized trajectory is already maximally smooth; the slow-weight pull has nothing to add. Structural test_single_in_dist regression confirmed on both AdamW (+11.27%) and Lion (+6.64%) — mechanism signature, not noise. Lookahead injects a fourth, non-quantized layer on a triple-quantized chain (L1+sign+clip), adding lag rather than helping. Axis closed: any future "active weight averaging during training" ideas (SWA, Polyak averaging) likely hit the same in-dist generalization cost.
+
