@@ -7,11 +7,13 @@
 
 ## Current best (live)
 
-- **val_avg/mae_surf_p = 92.63** (W&B run `tirux1y1`, tanjiro L1 surface MAE v1-rebased, merged PR #761, 2026-04-28)
-- **test_avg/mae_surf_p = 82.83**
-- Beat-threshold for new PRs: **val_avg < 92.63**
+- **val_avg/mae_surf_p = 82.77** (W&B run `mfjoux5g`, thorfinn FiLM v2-on-l1, merged PR #815, 2026-04-28)
+- **test_avg/mae_surf_p = 72.27**
+- Per-split val: single_in_dist=95.54, geom_camber_rc=91.38, geom_camber_cruise=64.90, re_rand=79.26
+- Beat-threshold for new PRs: **val_avg < 82.77**
 
-### Prior best (for reference)
+### Prior bests (for reference)
+- val_avg/mae_surf_p = 92.63 (tanjiro L1 surface MAE, merged PR #761) — superseded by FiLM+L1
 - val_avg/mae_surf_p = 103.13 (askeladd Huber surf loss, merged PR #814) — superseded by L1
 
 ## Founding baseline (round 1 reference)
@@ -27,46 +29,51 @@
 |----|-------|---------|---------|
 | #807 | NaN-safe scoring fix | **MERGED** (infra) | — |
 | #814 | Huber surface loss (delta=1.0) | **MERGED** | 103.13 |
-| **#761** | **L1 surface MAE loss** | **MERGED — current best** | **92.63** |
+| #761 | L1 surface MAE loss | **MERGED** | 92.63 |
+| **#815** | **FiLM+L1 (per-block Re conditioning)** | **MERGED — current best** | **82.77** |
 | #748 | Transolver 2x capacity | Closed (under-trained) | 203.16 |
 | #762 | Boundary-layer features | Closed (−13.3%) | 138.43 |
 | #759 | EMA model weights | Closed (wrong-regime) | 124.51 |
-| #743 | Channel-weighted 3xp | v2 sent back for L1 rebase | 99.21 |
-| #751 | Dropout + stoch-depth | v1 sent back (halve reg + rebase) | 138.81 |
-| #750 | LR warmup + cosine | v2 winner, rebase pending | 111.12 |
-| #756 | Fourier Re-encoding | v2 winner, rebase pending | 120.22 |
-| #847 | Huber delta sweep (0.5, 2.0) | Closed — flat in 0.5-2.0 (val=102.97); L1 dominates by 9.9% | 102.97 |
-| #751 | Dropout 0.05 + drop_path 0.05 (v2, on L1) | Closed — within noise (+0.6%, 93.16) | 93.16 |
+| #847 | Huber delta sweep (0.5, 2.0) | Closed — flat in 0.5-2.0; L1 dominates by 9.9% | 102.97 |
+| #751 v2 | Dropout 0.05 + drop_path 0.05 on L1 | Closed — within noise (+0.6%, 93.16) | 93.16 |
+| #858 | Focal surface loss gamma=0.5/1.0 on L1 | Closed — γ=0.5 within noise, γ=1.0 +13.4% worse | 92.13 |
+| #743 | Channel-weighted L1 (v3, rebase pending) | WIP | 99.21 (v2 ref) |
+| #750 | LR warmup + cosine v2 (rebase pending) | WIP | 111.12 (v1 ref) |
+| #756 | Fourier Re-encoding v2 (rebase pending) | WIP | 120.22 (v1 ref) |
 
 ## Active WIP PRs
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
 | askeladd | #884 | RevIN output normalization (per-sample y norm for cross-Re amplitude invariance) | WIP |
-| thorfinn | #815 | FiLM conditioning per-block on log(Re) | WIP — v1b: −3.0% vs founding baseline (val=118.50), rebase onto L1 pending |
-| nezuko | #858 | Focal surface loss gamma=1.0 (L1 base) | WIP |
+| thorfinn | #909 | Pre-block FiLM: condition attention input rather than output | WIP — new assignment 2026-04-28 |
+| nezuko | #910 | Re-stratified batch sampling: Re-diverse mini-batches for FiLM+L1 | WIP — new assignment 2026-04-28 |
 | fern | #902 | Volume L1 (mirror surface L1 success on volume side) | WIP |
-| edward | #750 | LR warmup + cosine v2 (rebase pending) | WIP |
-| frieren | #756 | Fourier Re-encoding v2 (rebase pending) | WIP |
-| alphonse | #743 | Channel-weighted L1 v3 (rebase onto post-#761) | WIP |
+| edward | #750 | LR warmup + cosine v2 (rebase pending onto FiLM+L1) | WIP |
+| frieren | #756 | Fourier Re-encoding v2 (rebase pending onto FiLM+L1) | WIP |
+| alphonse | #743 | Channel-weighted L1 v3 (rebase onto post-#761; now needs rebase onto FiLM+L1 too) | WIP |
 | tanjiro | #869 | surf_weight sweep (3.0 and 5.0) | WIP |
 
 ## Cross-cutting findings
 
 - **Timeout is the binding constraint (~14 epochs at 30 min).** All assignments include `--epochs 14` so cosine annealing completes.
 - **NaN test poisoning FIXED** via PR #807. All future runs produce finite `test_avg/mae_surf_p`.
-- **L1 dominates the loss-shape sensitivity curve.** Full ordering now confirmed (PRs #761, #814, #847): L1 (92.63) << Huber(0.5) (102.97) ≈ Huber(1.0) (103.13) < Huber(2.0) (106.78). Within Huber regime (0.5-2.0), trend is monotonic but flat (3.6% spread). The big lever is the Huber→L1 step (−9.9%). Heavy-tailed pressure residual diagnosis confirmed all the way to the L1 limit.
-- **Channel weighting stacks with Huber** (alphonse #743 v2: −3.8% on top of Huber). Pending whether it also stacks with L1 (v3 in progress).
+- **L1 dominates the loss-shape sensitivity curve.** Full ordering confirmed (PRs #761, #814, #847): L1 (92.63) << Huber(0.5) (102.97) ≈ Huber(1.0) (103.13) < Huber(2.0) (106.78). The big lever is the Huber→L1 step (−9.9%).
+- **FiLM stacks cleanly with L1** (PR #815 v2-on-l1: −10.6% on top of L1). Orthogonal mechanisms confirmed: loss shape (L1) ⊥ hidden-state Re modulation (FiLM). All 4 val splits improved. FiLM gains biggest on Re-stratified and widest-Re-range splits (re_rand −9.2%, cruise −10.3%).
+- **Focal loss falsified on L1 base** (PR #858): high-error surface nodes are convergence-bottlenecked, not gradient-bottlenecked. Focal amplification slows convergence at this budget.
+- **Channel weighting stacks with Huber** (alphonse #743 v2: −3.8% on top of Huber). Pending whether it also stacks with FiLM+L1 (v3 in progress).
 - **Surface dominates volume ~7:1 at L1 convergence** (tanjiro diagnosis). surf_weight=3.0 (#869) tests whether rebalancing frees volume capacity.
 - **Boundary-layer features falsified.** log(Re·|saf|) is redundant; volume-node saf mismatch hurts in-dist.
+- **IMPORTANT:** Most WIP PRs (#743 channel-weighted, #750 LR warmup, #756 Fourier) were designed against the L1 baseline (92.63). They now need to beat **82.77**. When they come in for review, if they beat their own baseline but not 82.77, send back for a rebase onto the FiLM+L1 advisor.
 
 ## Potential next research directions
 
-1. **Stack L1 + FiLM** — if thorfinn #815 beats baseline, combining with L1 is the natural round-3 stack (orthogonal mechanisms: loss-shape vs hidden-state regime modulation). High EV.
-2. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). **Assigned → askeladd PR #884.**
-3. **Volume L1** — mirror surface L1 mechanism on the volume loss (currently MSE). Vol_p has more absolute room (103.16 vs 92.63). **Assigned → fern PR #902.**
-4. **Re-stratified oversampling** — within-domain oversample top Re-quintile; addresses high-Re gradient under-coverage. Unassigned.
-5. **Per-channel L1 on p only, MSE on Ux/Uy** — tanjiro follow-up #2; assign after #869 result.
-6. **Budget-matched capacity scaling** — revisit 2× capacity with `--epochs 4`. Deferred from askeladd #748.
-7. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored. High EV, higher complexity.
-8. **Compound: L1 + channel weighting + surf_weight rebalancing** — if all three win independently, round-3 stack.
+1. **Pre-block FiLM** — condition attention Q/K/V on Re (before block, not after). **Assigned → thorfinn PR #909.**
+2. **Re-stratified batch sampling** — Re-diverse mini-batches to improve FiLM conditioning signal. **Assigned → nezuko PR #910.**
+3. **RevIN output normalization** — per-sample amplitude normalization of y before loss (targets 10× intra-split y_std variation across Re). **Assigned → askeladd PR #884.**
+4. **Volume L1** — mirror surface L1 mechanism on the volume loss (currently MSE). **Assigned → fern PR #902.**
+5. **surf_weight rebalancing** — rebalance surface/volume gradient ratio after FiLM merge. **Assigned → tanjiro PR #869.** May need re-sweep against new FiLM+L1 baseline.
+6. **Capacity scaling on FiLM+L1 base** — the model uses only 44.6GB of 96GB. 2× hidden size on the new best baseline is a fresh, high-EV direction.
+7. **Per-channel L1 on p only, MSE on Ux/Uy** — tanjiro follow-up; assign after #869 result.
+8. **Low-rank slice attention (LRSA)** — replace S×S slice-token self-attention with rank-16 factored. High EV, higher complexity.
+9. **Compound: FiLM + channel weighting + RevIN + Re-stratify** — if any 3+ win independently, round-4 stack.

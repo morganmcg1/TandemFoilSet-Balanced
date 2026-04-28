@@ -73,6 +73,56 @@ Fern noted `test_geom_camber_cruise/vol_loss = Infinity` even with #807's torch.
 
 ---
 
+## 2026-04-28 23:35 — PR #815 v2-on-l1 (MERGED): FiLM conditioning per-block on log(Re) + L1
+- **Branch:** `willowpai2e3-thorfinn/film-re-conditioning`
+- **Hypothesis:** FiLM (γ, β) per-block conditioning on log(Re), rebased onto post-#761 L1 advisor. Predicted stacking: L1 (loss shape) ⊥ FiLM (hidden-state Re modulation) → both gains compound.
+- **Run (v2-on-l1):** W&B `mfjoux5g`, **14/14 epochs (clean finish)**, val_avg still falling at epoch 14 (new best at final epoch), peak 44.6 GB. +42.5K params (+6.4%).
+
+| Split | L1 baseline `tirux1y1` | FiLM v2 `mfjoux5g` | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 109.65 | **95.54** | **−12.9%** |
+| `val_geom_camber_rc` | 101.17 | **91.38** | **−9.7%** |
+| `val_geom_camber_cruise` | 72.37 | **64.90** | **−10.3%** |
+| `val_re_rand` | 87.33 | **79.26** | **−9.2%** |
+| **val_avg** | **92.63** | **82.77** | **−10.6%** |
+| **test_avg** | **82.83** | **72.27** | **−12.7%** |
+
+### Decision: MERGED (2026-04-28) — new branch best
+- **−10.6% val (92.63 → 82.77)** — beats advisor's predicted target of 89.85 by 7.9%. Every split improved.
+- **−12.7% test (82.83 → 72.27)** — new test best.
+- **All 4 val splits improved this time** — including `val_geom_camber_rc` (+9.7%), which regressed in v1b. v1b regression was single-seed noise or a Huber/L1 interaction; L1 removed it.
+- `val_re_rand` −9.2%, `val_geom_camber_cruise` −10.3% — FiLM-targeted splits still show strongest relative gains (widest Re ranges), confirming the per-block Re-modulation mechanism.
+- L1 + FiLM stack constructively as predicted (orthogonal mechanisms: loss shape vs hidden-state Re conditioning).
+- `(1+γ)·h+β` zero-init worked perfectly — stable training throughout, FiLM started as identity.
+- **New beat-threshold: val_avg < 82.77**
+- **Follow-up assigned: #909** (pre-block FiLM: condition attention input rather than output; thorfinn).
+
+---
+
+## 2026-04-28 23:35 — PR #858 (CLOSED): Focal surface loss gamma=1.0 (L1 base)
+- **Branch:** `willowpai2e3-nezuko/focal-surface-loss`
+- **Hypothesis:** Apply focal-style node weighting `(per-node-err/mean-err)^gamma` on top of L1 surface loss to concentrate gradient on high-error surface nodes (stagnation, suction peak, leading-edge curvature). Predicted −2 to −7%.
+- **Runs (v1-l1-gamma05 and v1-l1-gamma10):** W&B `6f8lwss4` (γ=0.5) and `ulobuh9d` (γ=1.0), 14/14 epochs both.
+
+| gamma | val_avg/mae_surf_p | vs L1 baseline | conclusion |
+|---|---|---|---|
+| 1.0 | 105.06 | **+13.4%** | substantially worse |
+| 0.5 | 92.13 | −0.5% | within noise |
+| **L1 baseline (#761)** | **92.63** | — | reference |
+
+Per-split val (gamma=0.5): single_in_dist=105.07, geom_camber_rc=100.80, cruise=74.90, re_rand=87.74.
+
+### Decision: CLOSE — mechanism falsified
+- **gamma=0.5 (92.13) is within single-seed noise** — not a reliable improvement. The −0.5% delta is well within the ±10% single-seed noise band.
+- **gamma=1.0 is substantially worse** (+13.4%): ~10% of nodes get >2× weight, worst single node ~35×. Noisy minibatch gradients on nodes the model cannot yet drive to zero slows convergence.
+- **Mechanism is incorrect at this budget**: high-error nodes are not gradient-bottlenecked; they are capacity/convergence-time-bottlenecked. Focal amplification makes convergence worse, not better.
+- Student's own diagnosis nailed it: "amplifying their loss only makes that worse." Clean mechanistic falsification.
+- **Additional decisive point:** PR #815 just merged at val_avg=82.77 — gamma=0.5's 92.13 is now +11.3% above new baseline.
+- **Focal-weight distribution stats** (student measured): gamma=0.5 max=4.7×, p99=2.4×, frac>2×=2.3%; gamma=1.0 max=34.9×, p99=8.2×, frac>2×=10.3%. Stats confirm the tail is moderately concentrated but not gradient-starved.
+- **Closed 2026-04-28. Next assignment: #910 Re-stratified batch sampling.**
+
+---
+
 ## 2026-04-28 22:30 — PR #815 v1b: FiLM conditioning per-block on log(Re)
 - **Branch:** `willowpai2e3-thorfinn/film-re-conditioning`
 - **Hypothesis:** Add FiLM (γ, β) conditioning on log(Re) to each Transolver block — explicit per-layer regime adaptation across Reynolds ranges. Predicted −5 to −15% with biggest gains on Re-stratified and OOD-camber splits.
