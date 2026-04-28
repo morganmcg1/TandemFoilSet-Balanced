@@ -1,5 +1,103 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 02:15 — PR #401: torch.compile + bf16 + EMA + clip — **NEW BASELINE (huge jump)**
+- Branch: `charliepai2d4-alphonse/compile-bf16-emaclip` (deleted on merge)
+- Student: charliepai2d4-alphonse
+- **Outcome: MERGED (squash, commit 5f2edca). NEW BASELINE: val_avg/mae_surf_p = 66.89, -37.1% vs #308, -32.3% vs #381.**
+
+### Headline (epoch 33 of 50, EMA-evaluated)
+| Metric | Value | vs #308 | vs #381 |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | **66.89** | **-37.1%** | -32.3% |
+| `test_avg/mae_surf_p` (EMA) | **57.86** | -38.4% | -34.1% |
+| Median per-epoch | **54.6 s** | 2.58× faster | 2.6× faster |
+| Total epochs | **33** | +20 | +20 |
+| Peak GPU memory | 23.8 GB | -43% (lots of headroom) | -43% |
+| First compile overhead | 8.8 s | (well below 60-180 s prediction) | |
+
+### Per-split val (epoch 33, EMA)
+| Split | mae_surf_p | Δ vs #308 |
+|---|---|---|
+| val_single_in_dist     | 75.99 | -41.7% |
+| val_geom_camber_rc     | 77.53 | -35.2% |
+| val_geom_camber_cruise | 48.50 | -39.9% |
+| val_re_rand            | 65.51 | -30.9% |
+
+### Per-split test (post-fix scoring, EMA)
+| Split | mae_surf_p | Δ vs #308 |
+|---|---|---|
+| test_single_in_dist     | 63.90 | -43.3% |
+| test_geom_camber_rc     | 70.64 | -32.0% |
+| test_geom_camber_cruise | 40.68 | -38.7% |
+| test_re_rand            | 56.21 | -39.5% |
+
+### Compile diagnostics (the key win)
+- **Only 3 unique dynamo graphs** under `dynamic=True` — one set covers all 74K-242K mesh sizes. The 'dynamic-mode recompilation eats the speedup' worry didn't materialize.
+- **Per-epoch dropped 141 s → 54.6 s** (PR #308 vs this). That's **2.58×**. With 30-min cap, total epochs went 13 → 33.
+- **No graph breaks, no eager fallback.** `torch._dynamo.utils.counters['stats']['unique_graphs']=3, frames.total=3, frames.ok=3`.
+- **CUDA Graph re-recording** (`cudagraph_recorded_non_static_inputs=5838`) runs per concrete shape but is much cheaper than dynamo recompilation; peak memory bounded at 23.8 GB.
+
+### Analysis
+- **Cosine schedule's tail finally reachable.** PR #308 stopped at epoch 13 with cosine still near peak; #401 reaches epoch 33, well into the decay regime. EMA + small lr is the dominant late-training mechanism, and we've finally given it room to operate.
+- **Best epoch = 33 = last epoch.** Curve was still descending. There's likely more available with longer wall-clock; round 2 may want to revisit budget allocation.
+- **Implementation choices were all correct**: hold `_model_base`/`_ema_base` references for parameters/state_dict (avoids `_orig_mod.` prefix), `dynamic=True` collapses mesh-size variation cleanly, `reduce-overhead` was the right mode.
+- **Round-1 character changed.** "14-epoch ranking exercise" → "33-epoch ranking exercise". Architectural-scale PRs that previously busted budget (wider, deeper) should be revisited.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=401 records, 35 lines).
+
+## 2026-04-28 02:10 — PR #379: Surface-aware decoder head (substitutive design)
+- Branch: `charliepai2d4-thorfinn/surface-aware-decoder` (deleted on close)
+- Student: charliepai2d4-thorfinn
+- **Outcome: CLOSED** (-0.52% vs own baseline-ref — within noise; +94% vs new merged baseline 66.89).
+
+### Headline (epoch 14, EMA-evaluated, both runs in PR)
+| Run | val_avg | test_avg | Δ |
+|---|---|---|---|
+| baseline-ref | 129.13 | 117.97 | (matched control) |
+| surface-aware decoder | 128.46 | 117.30 | -0.52% / -0.57% (within ~5pp variance floor) |
+
+### Per-split val (surf-decoder − baseline-ref)
+| Split | Δ |
+|---|---|
+| val_single_in_dist     | **-5.93%** (helps) |
+| val_geom_camber_rc     | -2.36% (helps) |
+| val_geom_camber_cruise | **+8.58%** (hurts) |
+| val_re_rand            | +1.73% (hurts) |
+
+### Analysis
+- **Mechanism identified by thorfinn**: substitutive design (`torch.where(is_surface, surf_pred, vol_pred)`) plus zero-init wastes the volume head's pretrained signal on surface nodes. The surface head has to re-derive what the backbone already knows; at 14 epochs that re-derivation eats most of the gain.
+- **Per-split pattern is informative**: surface decoder helps high-amplitude raceCar splits (where surface pressure has sharp suction peaks needing extra capacity), hurts low-amplitude cruise splits (where the volume head's prediction was already correct and the surface head erased it).
+- **Right idea, wrong design**: thorfinn's suggested fix is additive (`preds = preds_vol + is_surface[..., None] * preds_surf`). Cleaner test of the same hypothesis. Assigned as follow-up.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=379 records, 15 lines).
+
+## 2026-04-28 02:08 — PR #368: Fourier positional encoding (rebased onto post-#308) — sent back AGAIN
+- Branch: `charliepai2d4-edward/fourier-pos-encoding` (still in flight)
+- Student: charliepai2d4-edward
+- **Outcome: SENT BACK** (rebase to post-#401 + re-run; under-trained at 10 epochs due to GPU contention).
+
+### Headline (epoch 10 of 14, EMA-evaluated)
+| Metric | Value | Notes |
+|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | 110.89 | (10 epochs only, +4.2% vs #308 at 13 epochs) |
+| `test_avg/mae_surf_p` (EMA) | 100.61 | |
+| Per-epoch (clean) | ~141 s | matches #308 — Fourier features add ~8K params, negligible cost |
+
+### Equal-epoch comparison vs PR #308 (the load-bearing data)
+| Epoch | PR #308 EMA+clip | Fourier+EMA+clip | Δ |
+|---|---|---|---|
+| 5  | 194.60 | 183.99 | -5.4% |
+| 7  | 156.64 | 144.33 | -7.9% |
+| 9  | 132.65 | 119.60 | -9.8% |
+| **10** | **124.63** | **110.89** | **-11.0%** |
+
+### Analysis
+- **Compounding signal is real.** Equal-epoch trajectory diverges in Fourier's favor from epoch 3 onward, gap grows to -11.0% at epoch 10. Extrapolating the same e10→e13 trajectory to PR #308's 13 epochs would land at ~92-95 — well beating the 106.40 baseline at #308's time.
+- **GPU contention robbed 3 epochs.** First 3 epochs at 302/299/256s instead of 141s due to a sibling launch's orphan run (acknowledged in edward's writeup; per launch-isolation rules I won't reuse that run's number).
+- **Decision: send back, NOT merge** — at 10 epochs the absolute number doesn't beat baseline, and we now have a much stronger baseline (PR #401, 66.89). Edward's branch needs to rebase onto post-#401 to fairly evaluate Fourier+compile+EMA. If the equal-epoch pattern holds with compile's 33-epoch budget, the rebased run could land in the 58-64 range.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=368 records, 11 lines).
+
 ## 2026-04-28 01:50 — PR #382: Larger batch (bs=8) + sqrt-scaled lr (7e-4)
 - Branch: `charliepai2d4-frieren/batch8-lr7e-4` (deleted on close)
 - Student: charliepai2d4-frieren
