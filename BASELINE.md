@@ -12,9 +12,10 @@ cosine T_max=50 + per-Re sqrt sampling. Validation, checkpoint, and test
 eval all use EMA weights. Every-2-epochs gating recovers the schedule
 budget that v3's swap-validate-swap was eating.
 
-- **`val_avg/mae_surf_p` = 51.7020** at epoch 36 (of 36 completed, wall-cap, post-NaN-cleanup)
-- **`test_avg/mae_surf_p` = 44.0183** (best EMA val checkpoint, post-NaN-cleanup)
-- W&B run (post-NaN-cleanup): [`69l1661r` / `evaluate-split-finite-y-filter`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r1/runs/69l1661r)
+- **`val_avg/mae_surf_p` = 51.4165** at epoch 36 (of 36 completed, wall-cap)
+- **`test_avg/mae_surf_p` = 43.8779** (best EMA val checkpoint)
+- W&B run: [`p8co0hp9` / `wd-3e-4-on-current`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r1/runs/p8co0hp9)
+- **Train↔val gap collapsed**: wd=1e-4 had ratio 1.49× (overfit signature); wd=3e-4 has ratio 0.99× (regularization working)
 - W&B run (pre-NaN-cleanup, same recipe modulo the cosmetic fix): [`qsplc76j` / `ema999-on-l1-every2-rebased`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-d-r1/runs/qsplc76j) — val_avg=52.1155, test_avg=45.0018
 
 **Note on the 52.12 → 51.70 shift:** PR #634 (cosmetic NaN cleanup in
@@ -64,10 +65,10 @@ recipe is identical.
 | PR #531 (fern): + per-Re sqrt sampling | 54.09 | −3.79% |
 | **PR #324 (nezuko): + EMA decay=0.999 every-2-epochs gating** | **52.12** | **−3.65%** |
 | PR #634 (nezuko): + cosmetic NaN cleanup in `evaluate_split` | 51.70 | seed-variance shift, metric-invariant |
+| **PR #641 (edward): + weight_decay=3e-4** | **51.42** | **−0.55%** (-1.34% canonical; train↔val gap fixed) |
 
-Cumulative: **−63.9% on val_avg / −65.7% on test_avg** since PR #312
-(treating 52.12 ± 1% as the canonical reference; with the PR #634
-post-cleanup measurement, **−64.1% / −66.5%**).
+Cumulative: **−64.3% on val_avg / −66.6% on test_avg** since PR #312
+(treating 52.12 ± 1% as the canonical reference).
 
 ### EMA mechanism
 
@@ -102,9 +103,10 @@ FF), high-Re distributional emphasis (per-Re sampling helps), and
 parameter-trajectory variance (EMA helps). Each lever moves rc somewhat
 but none dominates.
 
-## Default config (matches PR #324)
+## Default config (matches PR #641)
 
-- `lr=5e-4`, `weight_decay=1e-4`, `batch_size=4`, `surf_weight=10.0`
+- `lr=5e-4`, **`weight_decay=3e-4`** (was 1e-4; PR #641 closed the
+  train↔val gap from 1.49× → 0.99×), `batch_size=4`, `surf_weight=10.0`
 - **`--epochs 50`** (T_max=50; lr ends at ~16% of peak which pure L1 uses
   productively)
 - **EMA decay=0.999** with every-2-epochs validation gating (`ema_val_interval=2`)
@@ -129,10 +131,10 @@ but none dominates.
 ```bash
 cd target && python train.py \
   --epochs 50 --batch_size 4 --lr 5e-4 \
-  --surf_weight 10.0 --weight_decay 1e-4 \
+  --surf_weight 10.0 --weight_decay 3e-4 \
   --agent baseline \
-  --wandb_group baseline-ema-l1-rew \
-  --wandb_name baseline-ema-l1-rew
+  --wandb_group baseline-ema-l1-rew-wd3e4 \
+  --wandb_name baseline-ema-l1-rew-wd3e4
 ```
 
 ## Notes
