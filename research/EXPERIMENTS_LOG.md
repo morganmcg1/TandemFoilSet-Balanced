@@ -44,6 +44,43 @@
 - Key analysis: Huber works because the compound base has to allocate capacity across a ~10× range of per-sample y-std. MSE squares high-Re residuals, letting a small fraction of batches dominate gradients. Huber linearizes at δ=1.0, giving low-Re samples a fairer share.
 - Next steps: δ sweep (0.5, 2.0) assigned to alphonse (#853); grad accumulation to frieren (#854); surf_weight sweep to fern (#855).
 
+## 2026-04-28 16:30 — PR #841: slice_num=4 extreme compression on compound base [CLOSED]
+- Branch: `willowpai2e2-thorfinn/compound-sn4` (closed, branch deleted)
+- Hypothesis: Push slice-token compression to the extreme floor — slice_num=4 on compound base (n_layers=3, n_head=1, n_hidden=128, mlp_ratio=2). Probes whether fewer, coarser slice tokens still capture enough physics structure to generalize.
+- W&B run: in PR comment (project `senpai-charlie-wilson-willow-e-r2`)
+
+| metric | compound-sn4 | compound-sn16 baseline | Δ |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | **98.25** | 96.80 | +1.45 (+1.5%) |
+| wall clock | ~30 min (timeout) | — | — |
+
+- Outcome: **Closed** — decisive negative. sn=4 regresses vs sn=16 (98.25 vs 96.80), and both are blown away by the Huber baseline (75.93). This confirms sn=16 is the effective compression floor for this dataset — at sn=4 the coarse slice partitioning loses too much surface-structure fidelity. When comparing against the Huber baseline of 75.93, sn=4 falls 29% behind. The slice-floor question is now definitively settled: do not go below sn=16. Prior sn=8 runs (PR #781) at val≈92.5 also confirm the same direction. Thorfinn reassigned.
+
+## 2026-04-28 16:30 — PR #786: RMSNorm replacing LayerNorm on compound base [CLOSED]
+- Branch: `willowpai2e2-tanjiro/compound-rmsnorm` (closed, branch deleted)
+- Hypothesis: Swap all three LayerNorm slots (ln_1, ln_2, ln_3 in TransolverBlock) to RMSNorm (Zhang & Sennrich 2019). Removes mean-centering and bias terms, reducing per-norm parameters slightly. Hypothesis: at shallow (3-layer) depth, variance-only normalization may regularize better than full LN and free capacity.
+- W&B run: in PR comment (project `senpai-charlie-wilson-willow-e-r2`)
+- Includes bug fix: evaluate_split NaN sanitization patch for cruise split poisoning (requested as standalone PR)
+
+| metric | compound + RMSNorm | compound + Huber baseline | Δ |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | **109.17** | 75.93 | +33.24 (+43.8%) |
+| test_avg (3 finite splits) | 98.91 | 75.42 | +23.49 |
+
+- Outcome: **Closed** — decisive negative. RMSNorm catastrophically regresses vs both the LayerNorm anchor (96.80) and the Huber baseline (75.93). At H=128 with only 3 layers, mean-centering provided by LayerNorm appears to be load-bearing — residual activations likely have non-zero mean due to the asymmetric CFD pressure distribution (surface vs. interior), so removing it destabilizes normalization. The per-sample scale variation in CFD data (y-std spans 164–2077) makes bias-free normalization especially problematic. Mean-centering variants are ruled out for this architecture at this scale. **Important: tanjiro's PR also included a valuable evaluate_split NaN fix — requested as standalone bugfix PR.**
+
+## 2026-04-28 16:30 — PR #785: n_hidden=192 (width increase) on compound base [CLOSED]
+- Branch: `willowpai2e2-nezuko/compound-nh192` (closed, branch deleted)
+- Hypothesis: Increase hidden width from 128→192 on the compound base (n_layers=3, n_head=1, slice_num=16, mlp_ratio=2). Hypothesis: the compound model is capacity-limited; more width should improve generalization, especially on OOD splits (rc, cruise).
+- W&B run: in PR comment (project `senpai-charlie-wilson-willow-e-r2`)
+
+| metric | compound + n_hidden=192 | compound baseline | Δ |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | **119.40** (epoch 18/50) | 96.80 | +22.60 (+23.3%) |
+| wall clock | ~30 min (timeout, 18 epochs only) | — | — |
+
+- Outcome: **Closed** — budget-bound negative. Only 18/50 epochs completed; the wider model runs ~67% slower per epoch due to VRAM/compute overhead at H=192. val=119.40 at epoch 18 is almost certainly still descending (like the Huber model at ep32), but the throughput tax is severe enough that we cannot make a fair comparison. More importantly, the Huber win (75.93) demonstrates that loss reformulation beats width-scaling here. With AMP/bf16 (PR #821) potentially enabling the wider model to reach more epochs, this direction could be revisited — but not before the throughput bottleneck is fixed. Nezuko reassigned to a direction that works within the current throughput constraints.
+
 ## 2026-04-28 22:30 — PR #787: Fourier feature PE on (x,z) — compound base [CLOSED]
 - Branch: `willowpai2e2-thorfinn/compound-fourier-pe` (closed, branch deleted)
 - Hypothesis: Gaussian random Fourier features (Tancik 2020), m=8, sigma=1.0 on (x,z), concatenated to input before preprocess MLP. Should help slice attention partition geometry by surface-aware frequencies.
