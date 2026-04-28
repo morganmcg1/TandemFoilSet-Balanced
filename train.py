@@ -63,6 +63,26 @@ ACTIVATION = {
 }
 
 
+N_FREQS = 8
+
+
+def fourier_features(pos: torch.Tensor, n_freqs: int = N_FREQS) -> torch.Tensor:
+    """Multi-scale sinusoidal encoding of a 2-D position vector.
+
+    Args:
+        pos: [..., 2] position tensor (normalized to roughly [-1, 1] is fine).
+        n_freqs: number of frequency bands; output dim is ``4 * n_freqs``.
+
+    Returns:
+        [..., 4 * n_freqs] tensor concatenating sin and cos of pos at
+        frequencies pi * 2^k for k in 0..n_freqs-1, per axis.
+    """
+    freqs = (2.0 ** torch.arange(n_freqs, device=pos.device, dtype=pos.dtype)) * torch.pi
+    angles = pos.unsqueeze(-1) * freqs                # [..., 2, n_freqs]
+    encoded = torch.cat([angles.sin(), angles.cos()], dim=-1)  # [..., 2, 2*n_freqs]
+    return encoded.flatten(-2)                        # [..., 4*n_freqs]
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -251,8 +271,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            ff = fourier_features(x_norm[..., :2], n_freqs=N_FREQS)
+            x_in = torch.cat([x_norm, ff], dim=-1)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
+                pred = model({"x": x_in})["preds"]
             pred = pred.float()
 
             elem_loss = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=1.0)
@@ -403,7 +425,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 4 * N_FREQS,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -496,8 +518,10 @@ for epoch in range(MAX_EPOCHS):
         if _first_fwd:
             torch.cuda.synchronize()
             _t_fwd0 = time.time()
+        ff = fourier_features(x_norm[..., :2], n_freqs=N_FREQS)
+        x_in = torch.cat([x_norm, ff], dim=-1)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_in})["preds"]
         if _first_fwd:
             torch.cuda.synchronize()
             print(f"First compile+forward took {time.time() - _t_fwd0:.1f}s")
