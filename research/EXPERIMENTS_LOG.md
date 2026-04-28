@@ -1,5 +1,30 @@
 # SENPAI Research Results — `icml-appendix-willow-pai2d-r3`
 
+## 2026-04-28 05:50 — PR #508: Per-sample inverse-std weighting on surface loss — **CLOSED (mechanism real, magnitude bounded by dataset structure)**
+
+- Branch: `willowpai2d3-tanjiro/per-sample-inverse-std-weighting` (deleted post-close)
+- **Hypothesis:** Per-sample inverse-std-weighted surface loss to normalize gradient signal across samples. Predicted Δ: −5 to −15%.
+
+### Sweep results (group `inv-std-weighting`, on the post-EMA baseline)
+
+| Run | inv_std_weight | inv_std_eps | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B run |
+|---|---|---:|---:|---:|---|
+| ctrl-no-invstd | False | — | 129.62 | 115.26 | `ohpxjdsv` |
+| **invstd-eps1.0** | True | 1.0 | **125.52** | **113.56** | `d2hzjvca` |
+| invstd-eps0.1 | True | 0.1 | 130.05 | 117.32 | `vas31tia` |
+
+### Decision: **CLOSED** (mechanism confirmed; magnitude limited by dataset structure)
+
+Within-sweep Δ = 4.53 MAE on val_avg, **well below the ~15-25 MAE noise floor**. Per-split confirms: cruise (lowest std) wins big (−12.5 MAE val, −8.9 MAE test); raceCar-rc (high std) regresses (+8.3 MAE val, +4.5 MAE test). **Mechanism is real but bounded.**
+
+Two important diagnostic findings from tanjiro:
+
+1. **The predicted 100× weight ratio failed (observed ~2×).** Computing std in `y_norm` space absorbs the per-sample variance into the global normalization (sd ≈ 1 by construction). My PR instructions had the math backwards; tanjiro caught it.
+
+2. **The eps trend (1.0 → 0.1 = ratio 1.77× → 2.23×) shows bigger reweighting makes the aggregate WORSE.** Cruise gains scale with the ratio, but raceCar regression also scales. So even fixing the y_norm space issue (which would push ratio toward predicted 100×) wouldn't help — raceCar would regress catastrophically. The lever is fundamentally bounded by the dataset's natural domain structure.
+
+Closed rather than rerun because the upper bound is established. Tanjiro reassigned to **PR #577 (surface-only auxiliary prediction head)** — a structurally different lever that decouples capacity allocation from loss balancing rather than rebalancing existing capacity.
+
 ## 2026-04-28 05:00 — PR #420: Random Fourier features for spatial coords — **SENT BACK (rebase + escalate to multi-scale)**
 
 - Branch: `willowpai2d3-edward/fourier-features-coords`

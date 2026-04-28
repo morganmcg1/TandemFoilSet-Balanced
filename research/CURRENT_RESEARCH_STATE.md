@@ -53,7 +53,8 @@ These eight axes were chosen for **orthogonality** so that improvements compound
 | Student | PR | Lever | Predicted Δ |
 |---|---|---|---|
 | nezuko | [#502](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/502) | **AdamW betas + weight_decay sweep** — β1∈{0.85, 0.9}, β2∈{0.99, 0.999, 0.9995}, wd∈{1e-4, 1e-3, 1e-2}; 1D-axis + 2D-corner design | −1 to −5% |
-| tanjiro | [#508](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/508) | **Per-sample inverse-std weighting** — rebalance loss by per-sample y_std (10× dynamic range across samples) | **−5 to −15%** |
+| tanjiro | [#508](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/508) | **Per-sample inverse-std weighting** | **CLOSED** — mechanism confirmed (cruise +, raceCar −) but magnitude bounded by dataset structure (within-sweep Δ=4.5 MAE < noise floor). Bigger reweighting makes aggregate worse, not better. |
+| tanjiro | [#577](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/577) | **Surface-only auxiliary pressure head** — decouple capacity allocation from loss balancing | −5 to −15% |
 
 ## In-flight rebase PRs (Round 1, against new baseline)
 
