@@ -1,5 +1,69 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 01:30 — PR #381: EMA decay 0.995 + grad clip 10.0 — **NEW BASELINE**
+- Branch: `charliepai2d4-nezuko/ema995-gradclip10` (deleted on merge)
+- Student: charliepai2d4-nezuko
+- **Outcome: MERGED (squash, commit a620ba1). NEW BASELINE: val_avg/mae_surf_p = 98.85, -7.1% vs #308.**
+
+### Headline metrics (epoch 13 of 13, EMA-evaluated)
+| Metric | Value | vs #308 baseline |
+|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | **98.85** | **-7.10%** |
+| `test_avg/mae_surf_p` (EMA) | **87.81** | -6.58% |
+| All 4 splits improve | -3.6% to -10.3% | (cleanest gain on val_single_in_dist and val_geom_camber_cruise) |
+
+### EMA crossover
+| Epoch | EMA−online | Notes |
+|---|---|---|
+| 1 | +5.23 | EMA lags |
+| **2** | **−15.83** | **First crossover** (vs ~epoch 10 in #308) |
+| 5 | −57.46 | EMA leads strongly |
+| 13 | −15.13 | EMA settled in lead |
+
+### Clip behavior at max_norm=10
+| Epoch | gn_mean | gn_max | clip% |
+|---|---|---|---|
+| 1 | 107.55 | 484.51 | 99.5% |
+| 7 |  66.59 | 719.29 | 97.1% |
+| 13 |  44.16 | 406.11 | 87.5% |
+
+### Analysis
+- **Faster EMA decay clearly works**: crossover at epoch 2 vs ~10 in #308. The EMA spends 11 epochs in the useful lagging-but-leading regime instead of ~3.
+- **Clip is NOT cleanly released**: at max_norm=10, clip% is 87-100%. So the −7.1% win is the joint effect of (faster EMA) + (10× looser dampening), not pure EMA. Attribution is still ambiguous.
+- **Clip role qualitatively shifted**: at threshold 10, gn_mean (44-107) is mostly above the threshold but gn_max (344-767) is dramatically above — so most batches are dampened lightly and rare outliers are dampened hard. Closer to clip's intended outlier-protection role than #308's blanket unit-norm at threshold=1.
+- **Mechanism hypothesis confirmed**: nezuko predicted faster decay would push EMA into useful regime sooner; the EMA−online divergence trace (down to −57 at epoch 5) is direct evidence.
+
+### Attribution still open — ablation queued
+PR (nezuko's next) will run **EMA-only (decay=0.995, no clip)** to isolate EMA's standalone contribution. If 98.85 holds without clip, EMA is doing the work; if it tanks, clip-as-dampener is doing more than expected.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=381 records, 14 lines).
+
+## 2026-04-28 01:25 — PR #388: Arcsinh pressure target reparametrization
+- Branch: `charliepai2d4-fern/arcsinh-pressure` (deleted on close)
+- Student: charliepai2d4-fern
+- **Outcome: CLOSED** (+15.1% regression on val_avg, +17.5% on test_avg).
+
+### Headline (epoch 13 of 13, EMA-evaluated, on post-#308 baseline)
+| Metric | Value | vs #308 baseline |
+|---|---|---|
+| `val_avg/mae_surf_p` | 122.50 | **+15.1% worse** |
+| `test_avg/mae_surf_p` | 110.40 | +17.5% worse |
+
+### Per-split val Δ vs PR #308
+| Split | Δ |
+|---|---|
+| val_single_in_dist     | **+28.4% worse** |
+| val_geom_camber_rc     | **+22.2% worse** |
+| val_geom_camber_cruise | **-10.3% better** |
+| val_re_rand            | +9.6% worse |
+
+### Analysis
+- **Mechanism identified by fern**: encoded-space loss precision doesn't translate to physical-space MAE precision uniformly across the |p| range. For p=2000 (raceCar high-Re), encoded p=8.29; a 0.1 normalized-encoded error decodes through `sinh` (Jacobian ≈ |p| at large |p|) to ~190 physical MAE.
+- **Trade is fundamentally wrong-direction for the metric**: equal-weight 4-split MAE has 3 of 4 splits dominated by raceCar, so amplifying tail precision losses there sinks val_avg.
+- **Clean negative result with sharp post-mortem.** Fern's three suggested follow-ups all useful: (1) per-channel y_std rescale w_p<1 — assigned next; (2) per-sample target normalization — overlaps with tanjiro's #378; (3) per-split-weighted checkpoint selection — parking as round-2 lever.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=388 records, 14 lines).
+
 ## 2026-04-28 01:05 — PR #372: bf16 autocast on forward (throughput infrastructure)
 - Branch: `charliepai2d4-alphonse/bf16-autocast` (deleted on merge)
 - Student: charliepai2d4-alphonse
