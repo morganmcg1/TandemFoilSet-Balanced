@@ -228,6 +228,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    clamp_count = 0
+    y_skip_count = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -238,9 +240,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16,
+                                enabled=torch.cuda.is_available()):
+                pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            # Cast to fp32 before squaring — (bf16)**2 near 1e3 can overflow.
+            sq_err = (pred.float() - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -253,15 +258,28 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            pred_orig = pred.float() * stats["y_std"] + stats["y_mean"]
+            # Defensive guard: a single overflowing sample shouldn't poison MAE.
+            non_finite = (~torch.isfinite(pred_orig)) & mask.unsqueeze(-1)
+            clamp_count += int(non_finite.sum().item())
+            pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=1e6, neginf=-1e6)
+            # data/scoring.py intends to per-sample-skip non-finite-y samples,
+            # but `0.0 * NaN = NaN` leaks NaN through its mask multiplication.
+            # Pre-clean y and zero `mask` for bad samples so the skip is honored.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            y_skip_count += int((~y_finite_per_sample).sum().item())
+            clean_mask = mask & y_finite_per_sample.view(-1, 1)
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface, clean_mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "clamp_count": clamp_count,
+           "y_skip_count": y_skip_count}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -358,12 +376,17 @@ def save_model_artifact(
 
 
 def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
-    print(
+    line = (
         f"    {split_name:<26s} "
         f"loss={m['loss']:.4f}  "
         f"surf[p={m['mae_surf_p']:.4f} Ux={m['mae_surf_Ux']:.4f} Uy={m['mae_surf_Uy']:.4f}]  "
         f"vol[p={m['mae_vol_p']:.4f} Ux={m['mae_vol_Ux']:.4f} Uy={m['mae_vol_Uy']:.4f}]"
     )
+    if m.get("clamp_count", 0) > 0:
+        line += f"  WARN clamp_count={m['clamp_count']}"
+    if m.get("y_skip_count", 0) > 0:
+        line += f"  WARN y_skip_count={m['y_skip_count']}"
+    print(line)
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +509,11 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16,
+                            enabled=torch.cuda.is_available()):
+            pred = model({"x": x_norm})["preds"]
+        # Cast to fp32 before squaring — (bf16)**2 near 1e3 can overflow.
+        sq_err = (pred.float() - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
