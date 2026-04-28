@@ -1,5 +1,34 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 02:35 — PR #421: EMA(0.995) + NO clip (attribution ablation)
+- Branch: `charliepai2d4-nezuko/ema995-noclip` (deleted on close)
+- Student: charliepai2d4-nezuko
+- **Outcome: CLOSED** (val_avg=109.99 vs #381's 98.85 = +11.3%, well outside variance floor).
+
+### Headline (epoch 18 of 50, EMA-evaluated, no compile — branch predates #401)
+| Metric | This run | PR #381 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (EMA) | 109.99 | 98.85 | **+11.3% worse** |
+| `test_avg/mae_surf_p` (EMA) | 98.58 | 87.81 | +12.3% worse |
+| Per-epoch | ~104 s | 142 s | (bf16 from #372 stacked, just no compile) |
+| Total epochs | 18 | 13 | (more epochs, still worse) |
+
+### Per-split val Δ vs PR #381 (no-clip − clip=10)
+| Split | Δ |
+|---|---|
+| val_single_in_dist     | +10.2% |
+| val_geom_camber_rc     | +5.5% |
+| val_geom_camber_cruise | **+22.1%** (largest hit) |
+| val_re_rand            | +11.3% |
+
+### Attribution conclusion (the load-bearing finding)
+1. **gn_max with no clipping doesn't explode** (max 564 vs #381's 767). Clip's role was NOT runaway-gradient suppression at our AdamW/lr/loss settings.
+2. **Clip is acting as a per-batch dampener** that materially helps generalization. Removing it regresses broadly across all 8 splits, largest on the smallest-magnitude cruise camber split (+22%) — overshoot signature.
+3. **EMA alone (decay=0.995, no clip) gives 109.99** — worse than even #308's 106.40 (decay=0.999, clip=1.0). The two stabilizers compose; neither alone reproduces the joint effect.
+4. **Round-2 compound is clear**: surf_weight=25 (alphonse #287) + EMA(0.995) + clip(10.0) (#381) all established as load-bearing. PR #437 assigned to nezuko to test the compound.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=421 records, 19 lines).
+
 ## 2026-04-28 02:15 — PR #401: torch.compile + bf16 + EMA + clip — **NEW BASELINE (huge jump)**
 - Branch: `charliepai2d4-alphonse/compile-bf16-emaclip` (deleted on merge)
 - Student: charliepai2d4-alphonse
