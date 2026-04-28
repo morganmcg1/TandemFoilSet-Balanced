@@ -4,7 +4,7 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **115.6496** (PR #788 — Huber loss, epoch 10) |
+| `val_avg/mae_surf_p` | **109.5716** (PR #827 — Huber loss + surf_weight=30, epoch 13) |
 | `test_avg/mae_surf_p` | **40.927** (prior competition best) |
 
 **Source:** README.md prior competition results — PR #32 (morganmcg1/tandemfoil2): "Single-head nl3/sn16 triple compound"
@@ -17,6 +17,27 @@
 **Config (best known):** n_layers=3, slice_num=16, n_hidden tuned
 
 ## Round 1 — Merged Winners
+
+### PR #827 — Huber loss + surf_weight=30 (2026-04-28 22:57)
+**Student:** charliepai2e1-alphonse | **Branch:** charliepai2e1-alphonse/huber-surf-weight-sweep
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **109.5716** (epoch 13/14) |
+| `val_single_in_dist/mae_surf_p` | 125.7142 |
+| `val_geom_camber_rc/mae_surf_p` | 128.1718 |
+| `val_geom_camber_cruise/mae_surf_p` | 84.5458 |
+| `val_re_rand/mae_surf_p` | 99.8546 |
+| `test_single_in_dist/mae_surf_p` | 114.7811 |
+| `test_geom_camber_rc/mae_surf_p` | 111.9464 |
+| `test_re_rand/mae_surf_p` | 96.7687 |
+
+**vs Huber baseline (PR #788):** 109.57 vs 115.65 → **-5.26% improvement**
+**Metric summaries:**
+- `target/metrics/charliepai2e1-alphonse-huber-surf30-cy8mg2si.jsonl`
+- `target/metrics/charliepai2e1-alphonse-huber-surf20-n6axj9cr.jsonl`
+- `target/metrics/charliepai2e1-alphonse-huber-surf50-5i468c21.jsonl`
+**Reproduce:** `cd target/ && python train.py --loss huber --huber_delta 1.0 --surf_weight 30`
 
 ### PR #788 — Huber loss instead of MSE (2026-04-28 20:49)
 **Student:** charliepai2e1-alphonse | **Branch:** charliepai2e1-alphonse/l1-huber-loss
@@ -60,7 +81,7 @@
 | #882 | nezuko | EMA model weights (decay=0.999) on Huber baseline | Running (first time) |
 | #794 | tanjiro | LR warmup (2 epochs) + Huber | Revision in progress |
 | #795 | thorfinn | Huber + per-sample norm — rebase + re-run | Awaiting rebase |
-| #827 | alphonse | surf_weight sweep (20/30/50) on Huber baseline | Running (first time) |
+| #827 | alphonse | surf_weight sweep (20/30/50) on Huber baseline | **MERGED** — surf=30 wins (109.5716) |
 | #828 | edward | AdamW weight_decay sweep (1e-4/1e-3/1e-2) on Huber baseline | Running (first time) |
 
 ### Key Infrastructure Fix (PR #792 Round 2)
@@ -83,3 +104,4 @@
 - 2026-04-28 22:00: Round 1 review cycle completed. PRs #794 and #795 sent back for revision; PR #790 closed. New assignments: PR #827 (alphonse, surf_weight+Huber), PR #828 (edward, weight_decay).
 - 2026-04-28 23:15: PR #795 R2 (Huber+PSN) reviewed — winner at 104.2271 but sent back for rebase after merge conflict.
 - 2026-04-28 23:30: PR #792 R2 reviewed — depth hypothesis inconclusive; hidden gem: n=5 + grad_clip achieves 109.62 (below Huber baseline); sent back for Huber+grad_clip focused retest. NaN fix infrastructure confirmed working.
+- 2026-04-28 22:57: PR #827 merged. Huber+surf_weight=30 sets new best val_avg/mae_surf_p = 109.5716 (-5.26% vs Huber baseline 115.6496). New compound baseline: --loss huber --huber_delta 1.0 --surf_weight 30.
