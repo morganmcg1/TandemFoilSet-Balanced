@@ -44,12 +44,12 @@ Lower is better on **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure 
   - Compounding confirmed: pure L1 stacks with the warmup+EMA baseline. The mechanisms are orthogonal (loss landscape vs. optimizer schedule + weight averaging) so gains add roughly additively.
   - The largest absolute gains land on the high-residual splits: `val_single_in_dist` (148.90 → 115.49, −33.41 MAE) and `val_geom_camber_rc` (130.69 → 107.52, −23.17). Cruise and re_rand also improve cleanly.
   - Mechanism check via `train/surf_huber_outlier_frac` confirms the lever is doing what it should: at δ=0 every surface element is in the linear regime by construction (outlier_frac = 1.0); at δ=2.0 it stays near 0 (essentially MSE-on-surface).
-  - Hyperparameter snapshot: `peak_lr=1e-3, warmup_epochs=2, weight_decay=1e-4, batch_size=4, surf_weight=10.0, huber_delta=0, epochs=50, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, use_ema=True, ema_decay=0.99, ema_warmup_steps=100`.
+  - Hyperparameter snapshot: `peak_lr=1e-3, warmup_epochs=2, weight_decay=1e-4, batch_size=4, surf_weight=10.0, huber_delta=0, epochs=50, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, use_ema=True, ema_decay=0.999, ema_warmup_steps=100`.
 
 ## 2026-04-28 03:37 — PR #410: EMA of weights at eval time (decay=0.99, warmup_steps=100)
 
 - Branch: `willowpai2d3-nezuko/ema-of-weights` (squash-merged)
-- **Recipe addition:** `use_ema=True, ema_decay=0.99, ema_warmup_steps=100` now defaults in `train.py`. EMA-averaged weights are saved as the best-val checkpoint and evaluated on test.
+- **Recipe addition:** `use_ema=True, ema_decay=0.999, ema_warmup_steps=100` now defaults in `train.py`. EMA-averaged weights are saved as the best-val checkpoint and evaluated on test.
 - **Best val avg surface MAE:** `val_avg/mae_surf_p = 121.4387` (epoch 12, run `22a7k787`).
 - **Within-sweep delta (apples-to-apples, same seed env):** EMA d=0.99 vs. no-EMA control = **−21.71 MAE** (143.14 → 121.44). End-of-training live-vs-EMA diagnostic = **−30.74 MAE within the same run** (live=153.94, ema=123.20). Both are seed-independent measurements that confirm the lever is robust.
 - **Per-split val MAE on best-val checkpoint:**
@@ -83,7 +83,7 @@ Lower is better on **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure 
 - **Notes:**
   - The 121.44 absolute number sits *above* PR #320's recorded 115.84 — but that was a single favorable seed; nezuko's no-EMA control on a different seed produced 143.14. The EMA lever effect is reliable; the absolute number depends on seed.
   - Test_geom_camber_cruise NaN is no longer present in the test eval — frieren's y_finite filter (cherry-picked into baseline at commit `32b5b40`) drops the one bad sample (`test_geom_camber_cruise/000020.pt` has `±inf` GT pressure values) before scoring.
-  - Hyperparameter snapshot: `peak_lr=1e-3, warmup_epochs=2, weight_decay=1e-4, batch_size=4, surf_weight=10.0, epochs=50, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, use_ema=True, ema_decay=0.99, ema_warmup_steps=100`.
+  - Hyperparameter snapshot: `peak_lr=1e-3, warmup_epochs=2, weight_decay=1e-4, batch_size=4, surf_weight=10.0, epochs=50, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, use_ema=True, ema_decay=0.999, ema_warmup_steps=100`.
 
 ## 2026-04-28 00:30 — PR #320: Linear warmup + higher peak LR (5e-4 → 1e-3, 2-epoch warmup)
 
