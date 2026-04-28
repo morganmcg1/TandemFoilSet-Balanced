@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -31,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -380,12 +382,14 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    metrics_path: str | None = None  # JSONL metrics output path
 
 
 cfg = sp.parse(Config)
@@ -432,7 +436,21 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+warmup_epochs = min(cfg.warmup_epochs, max(MAX_EPOCHS - 1, 0))
+if warmup_epochs > 0:
+    warmup_scheduler = LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, total_iters=warmup_epochs,
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1), eta_min=0,
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
+else:
+    scheduler = CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -462,6 +480,32 @@ model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
+
+if cfg.metrics_path:
+    metrics_path = Path(cfg.metrics_path)
+else:
+    metrics_path = model_dir / "metrics.jsonl"
+metrics_path.parent.mkdir(parents=True, exist_ok=True)
+metrics_fh = open(metrics_path, "a")
+
+
+def _jsonl_log(record: dict) -> None:
+    metrics_fh.write(json.dumps(record) + "\n")
+    metrics_fh.flush()
+
+
+_jsonl_log({
+    "type": "config",
+    "config": asdict(cfg),
+    "model_config": model_config,
+    "n_params": n_params,
+    "wandb_run_id": run.id,
+    "wandb_run_name": run.name,
+    "max_epochs": MAX_EPOCHS,
+    "warmup_epochs": warmup_epochs,
+    "timeout_min": MAX_TIMEOUT_MIN,
+})
+print(f"Local metrics: {metrics_path}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -536,7 +580,8 @@ for epoch in range(MAX_EPOCHS):
     wandb.log(log_metrics)
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
+    is_best = avg_surf_p < best_avg_surf_p
+    if is_best:
         best_avg_surf_p = avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
@@ -555,6 +600,23 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    _jsonl_log({
+        "type": "epoch",
+        "epoch": epoch + 1,
+        "lr": scheduler.get_last_lr()[0],
+        "epoch_time_s": dt,
+        "peak_gb": peak_gb,
+        "global_step": global_step,
+        "train": {"vol_loss": epoch_vol, "surf_loss": epoch_surf},
+        "val": {
+            "loss": val_loss_mean,
+            "avg/mae_surf_p": avg_surf_p,
+            **{f"avg/{k.split('/')[-1]}": v for k, v in val_avg.items() if k != "avg/mae_surf_p"},
+        },
+        "splits": split_metrics,
+        "is_best": is_best,
+    })
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
@@ -564,6 +626,13 @@ if best_metrics:
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "total_train_minutes": total_time,
+    })
+    _jsonl_log({
+        "type": "best",
+        "epoch": best_metrics["epoch"],
+        "val_avg/mae_surf_p": best_avg_surf_p,
+        "per_split": best_metrics["per_split"],
         "total_train_minutes": total_time,
     })
 
@@ -596,6 +665,12 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        _jsonl_log({
+            "type": "test",
+            "test_avg/mae_surf_p": test_avg["avg/mae_surf_p"],
+            "test_avg": test_avg,
+            "per_split": test_metrics,
+        })
 
     save_model_artifact(
         run=run,
@@ -612,4 +687,5 @@ if best_metrics:
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
 
+metrics_fh.close()
 wandb.finish()
