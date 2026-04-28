@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-04-28 03:15 UTC
+- **Date:** 2026-04-28 03:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2d-r4`
 - **Most recent human-team direction:** none received yet on this advisor branch
 - **Current best:** PR #344 (edward H2) merged. `val_avg/mae_surf_p=120.97`, `test_avg/mae_surf_p=109.92`. See BASELINE.md for full details and recommended config (`--epochs 25 --lr 7e-4`).
@@ -29,8 +29,8 @@
 | #468 | fern | H9: surface-arc pressure-gradient penalty | Physics-aware | -2% to -5% | wip |
 | #348 | tanjiro | H3: Smooth L1 (Huber) on surface pressure | Loss reformulation | -2% to -6% | wip |
 | #404 | edward | H11: Re-conditional FiLM modulation | Feature engineering | -3% to -7% | wip (sent back for FiLM-vs-wd disentanglement + seed repeat; first round Run C gave +0.7% test improvement but within noise) |
-| #406 | frieren | H10: surf_weight ramp curriculum (5→30) | Loss reformulation | -1% to -4% | wip |
 | #442 | thorfinn | H12: EMA of model weights for evaluation | Optimization | -1% to -4% | wip |
+| #490 | frieren | H13: stochastic depth (DropPath) on Transolver blocks | Architectural regularization | -1% to -4% | wip |
 
 ## Resolved this round
 
@@ -40,6 +40,7 @@
 | #346 | frieren | H7: z-mirror augmentation | closed (strict regression) | +231% at p=1.0 |
 | #349 | thorfinn | H8: slice_num scaling matrix | closed (regression vs baseline) | 148.65 (+23% vs baseline) |
 | #345 | fern | H4: surface-only norm + distance feature | closed (cruise OOD structural regression) | 129.13 (+6.7% vs baseline) |
+| #406 | frieren | H10: surf_weight ramp curriculum | closed (within-experiment +4.3% vs A but +1.6% regression vs baseline; effect below seed-variance floor) | 122.90 (+1.6% vs baseline) |
 
 ## Held in reserve / promising follow-ups
 
@@ -50,6 +51,10 @@
 - **Fern's C2-Lite ablation + multi-scale distance feature** — milder loss-rebalancing variants that *might* dodge the cruise structural regression.
 - **Per-domain `surf_weight`** — if frieren's H10 (surf_weight ramp) lands, this is the natural next step.
 - **Compounding the round-0 winners** — once 2–3 separate ideas merge, run a combined-best PR to ensure their gains are additive.
+
+## Open methodological note
+
+We have now seen single-run noise of ~6–7% on multiple PRs (#404, #406) where same-config control runs landed materially worse than the published baseline. **Predicted effect sizes <5% are below this noise floor by design.** Future small-effect hypotheses should plan multi-seed confirmation up front, or be pursued only when stacked on top of larger-effect winners. This is also a strong argument for landing H6 (askeladd, throughput) so we can run more epochs per training and reduce training-time variance.
 
 ## Potential next research directions (post round 0)
 

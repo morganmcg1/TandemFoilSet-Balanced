@@ -31,6 +31,45 @@
 
 ---
 
+## 2026-04-28 03:13 — PR #406: H10 surf_weight ramp curriculum — **CLOSED**
+
+- Branch: `willowpai2d4-frieren/h10-surf-weight-ramp`
+- Hypothesis: Linear ramp `surf_weight` 5→30 across training should reduce `val_avg/mae_surf_p` by 1–4%.
+- 4-cell matrix in W&B group `h10-surf-weight-ramp` (all on the merged schedule, `--epochs 25 --lr 7e-4`):
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | W&B |
+|-----|--------|---------------------:|----------------------:|-----|
+| Merged baseline (#344) | const 10 | **120.97** | **109.92** | `rua9xrca` |
+| A (control) | const 10 | 128.40 | 116.08 | `5pcbzekv` |
+| **B (canonical)** | **ramp 5→30** | **122.90** | **111.13** | `22fojpui` |
+| C (gentler) | ramp 5→20 | 125.37 | 112.95 | `3s26f5bt` |
+| D (high-start) | ramp 10→30 | 125.04 | 112.41 | `gr3jb66w` |
+
+### Conclusions
+
+- **Vs merged baseline, Run B regresses +1.6% / +1.1%.** Headline number doesn't beat baseline.
+- **Within-experiment, Run B beats control A by 4.3% on val and test_avg** — squarely inside the predicted 1–4% band, ranking is clean (B > D > C > A).
+- **Run A control landed 6% worse than merged baseline on equivalent code paths.** Same noise floor as Edward's PR #404 — single-run comparisons aren't trustworthy below ~6% effect size at this scale.
+- **Run B beats Run D despite both ending at sw=30.** This isolates the *ramp* effect from "higher final weight" — curriculum mechanism appears real.
+- **No volume regression — Run B's vol_p is *better* than control on every split** (-3.6 single, -3.8 rc, -1.6 cruise, -5.6 re_rand). The PR's "late-training surface emphasis bleeds into volume" failure mode did not materialize.
+- **Cross-split signature was opposite of predicted.** Predicted strongest gain on `val_single_in_dist`; observed strongest gains on `test_re_rand` (-14.5 vs A) and `test_geom_camber_cruise` (-12.5 vs A), with `test_single_in_dist` regressing (+4.8 vs A). Different theory: ramped late-training surface emphasis helps OOD distribution shift, slightly overfits in-dist surface noise.
+
+### Useful follow-ups (deferred, may be revisited under multi-seed protocol)
+
+- **Cosine ramp shape** (more high-surf-weight time at the end, may amplify curriculum effect).
+- **Reverse ramp (30→5)** as ablation — should regress meaningfully if curriculum mechanism is the right story.
+- **Per-domain `surf_weight` or per-split early stopping** — the `test_single_in_dist` regression is consistent across all ramped variants.
+
+### Action
+
+Closed; reassigning frieren to H13 (stochastic depth on Transolver blocks) — fresh architectural-regularization bucket, orthogonal to everything in flight.
+
+### Note on seed-variance floor
+
+This is the second PR (after #404) where same-config control runs land ~6–7% worse than the published baseline. Future predicted-<5% effects should plan multi-seed confirmation up front.
+
+---
+
 ## 2026-04-28 03:02 — PR #342: H1 per-sample y-std loss normalization — **SENT BACK FOR REBASE**
 
 - Branch: `willowpai2d4-alphonse/h1-per-sample-ystd-loss` (cut before PR #344 merged → missing the warmup+cosine schedule and NaN fix)
