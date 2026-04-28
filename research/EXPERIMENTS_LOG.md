@@ -1,5 +1,60 @@
 # SENPAI Research Results — willow-pai2d-r1
 
+## 2026-04-28 04:14 — PR #451 (closed): Surface-only pressure weighting (1, 1, 5) on surf_loss
+
+- branch: `willowpai2d1-askeladd/surface-only-pressure-weight` (deleted on close)
+- hypothesis: restrict (1,1,5) channel weighting to surf_loss only (vol_loss
+  unchanged) to recover the cruise/re_rand wins from PR #313 v1 without the
+  Ux/Uy starvation that ruined PR #313 v2. Predicted -1 to -4%.
+
+### Results (vs PR #416 baseline, before Huber merge)
+
+| Metric | Value | vs PR #416 (compile+FF, rebase target) | vs PR #314 (Huber+compile+FF, current) |
+|---|---|---|---|
+| Best `val_avg/mae_surf_p` | **91.25** (epoch 36 of 37) | **+12.86%** (regression) | +30.7% (much worse) |
+| `test_avg/mae_surf_p` | 81.16 | +10.55% | +31.5% |
+| Surface Ux MAE (val_avg) | 1.76 | **+37.3%** | n/a |
+| Surface Uy MAE (val_avg) | 0.87 | **+38.3%** | n/a |
+| W&B run | `64c83ffi` | | |
+
+### Per-split val deltas vs PR #416 baseline
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| val_single_in_dist | +17.83% | **+33.7%** | **+46.5%** |
+| val_geom_camber_rc | +10.42% | **+41.5%** | +35.8% |
+| val_geom_camber_cruise | +13.71% | +36.2% | +38.5% |
+| val_re_rand | +9.78% | +35.5% | +33.7% |
+
+### Analysis & conclusions
+
+- **Closed.** All 8 splits (4 val + 4 test) regressed 9-18%. Decisive
+  falsification.
+- **Mechanism (askeladd's diagnosis):** surface velocity and surface
+  pressure share gradient structure through the boundary layer / pressure-
+  coefficient relation. The (1, 1, 5) weighting on surf_loss makes pressure
+  dominate the surface-node gradient by 5×, starving surface Ux/Uy. Worse
+  surface velocity prediction → worse surface pressure prediction
+  (geometric coupling), which shows up *as* a surface-pressure regression
+  at the metric we rank on.
+- **Channel-weighted MSE family conclusively ruled out** at convergence:
+  - PR #313 v1: hurt volume velocity (vol_loss weighted)
+  - PR #313 v2: didn't transfer post-bf16 (small wins were schedule
+    artifacts that disappeared at convergence)
+  - PR #451 (this run): hurt surface velocity (surf_loss weighted)
+- The original PR #313 v1 cruise + re_rand wins were **schedule-truncation
+  artifacts**, not real wins from the (1,1,5) ratio. At 14 epochs the model
+  never converged, so distorted gradient ratios produced different (and
+  seemingly better) trajectories. With compile-unlocked 37-epoch budget,
+  those trajectories converge to a worse local optimum at every channel-
+  weight ratio.
+- Reassigned askeladd to lr=3e-4 (their followup #4): tests whether the
+  surface-gradient sharp-edge implication of this PR's failure mode also
+  applies to the unweighted baseline.
+- Auxiliary surface-pressure loss term (askeladd's followup #2) — *adding*
+  a pressure term rather than reweighting — queued for a future slot if
+  lr-tuning doesn't move the metric.
+
 ## 2026-04-28 03:52 — PR #333 (closed by student-bot after send-back)
 
 After my send-back at 03:50, the student-bot (morganmcg1) auto-closed

@@ -28,7 +28,7 @@ The four merged mechanisms — bf16, FF K=8, `torch.compile(dynamic=True)`, Smoo
 | #509 | thorfinn | Throughput | **batch_size=8 + lr=7.07e-4 revisit on Huber+compile+FF** (PR #360 ruled out without compile; memory math fundamentally different now — 78 GB headroom) |
 | #407 | fern | Schedule | Cosine T_max alignment via `--epochs 37` (was for compile+FF; rebase onto Huber needed) |
 | #443 | tanjiro | Spatial features | Gaussian RFF K=16 σ=10 (was for compile+FF; rebase onto Huber needed) |
-| #451 | askeladd | Loss formulation | Surface-only pressure weighting (1,1,5) on surf_loss only |
+| **#522** | **askeladd** | **Optimization tuning** | **lr=3e-4 on Huber+compile+FF** (single-flag test of askeladd's surface-gradient sharp-edge hypothesis from PR #451 closing analysis) |
 | #503 | alphonse | Capacity | Half-step Transolver h=160/L=5/heads=5/slices=80 on compile+FF (rebase onto Huber needed) |
 | **#504** | **edward** | **Loss formulation** | **Pure L1 on Huber+compile+FF baseline** (replace SmoothL1) |
 
@@ -61,6 +61,7 @@ The four merged mechanisms — bf16, FF K=8, `torch.compile(dynamic=True)`, Smoo
 - Larger batch size: ruled out *without* compile (#360); **revisit in flight (#509, thorfinn)** post-compile (78 GB headroom)
 - Domain-bucketed sampler: **RULED OUT**
 - Pressure weighting (uniform): **RULED OUT post-bf16**
+- Channel-weighted MSE (surface-only or volume-only): **RULED OUT** at convergence (askeladd PR #313 v2 + PR #451)
 - `mode="reduce-overhead"`: **RULED OUT**
 - Cosine T_max alignment: in flight (#407, fern, will need rebase onto Huber)
 
