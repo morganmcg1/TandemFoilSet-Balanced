@@ -421,13 +421,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-# Decoupled head LR: head (mlp2 + ln_3 in last block) gets 2x backbone LR.
+# Decoupled head LR: head (full late-block MLP path of last block) gets 2x backbone LR.
 HEAD_LR_MULTIPLIER = 2.0
+HEAD_PATTERNS = ["blocks.4.mlp2", "blocks.4.ln_3",
+                 "blocks.4.mlp", "blocks.4.ln_2"]
 
 head_params = []
 backbone_params = []
 for name, p in model.named_parameters():
-    if "mlp2" in name or "ln_3" in name:
+    if any(pat in name for pat in HEAD_PATTERNS):
         head_params.append(p)
     else:
         backbone_params.append(p)
