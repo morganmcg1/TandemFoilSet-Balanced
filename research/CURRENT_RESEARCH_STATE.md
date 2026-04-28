@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-28 01:00 — round 1 in progress on `icml-appendix-willow-pai2d-r2`
+- 2026-04-28 01:15 — round 1 in progress on `icml-appendix-willow-pai2d-r2`
 - **Baseline anchored:** PR #328 (slice_num=128) merged. Current best
   `val_avg/mae_surf_p = 133.55` (W&B run `s1p2qs7l`, best epoch 11/50).
   Default config now: `n_hidden=128 n_layers=5 n_head=4 slice_num=128
@@ -38,7 +38,8 @@
 | PR  | Student   | Axis                       | Status (now)   | Best val_avg/mae_surf_p |
 |-----|-----------|----------------------------|----------------|-------------------------|
 | 311 | alphonse  | width 128 → 192 → 160       | sent back → rebase + on-baseline (+ multi-seed if borderline) | width-160=**126.18** (epoch 11/50; inside ±10 % noise of baseline) |
-| 325 | askeladd  | depth 5 → 8                | wip            | 150.06 (W&B obs)        |
+| 325 | askeladd  | depth 5 → 8                | **closed** (21 % regression at 30-min cap) | 150.06 / 162.05 (two seeds) |
+| 399 | askeladd  | round 2: bf16 mixed precision | NEW assignment (status:wip) | n/a |
 | 326 | edward    | mlp_ratio 2 → 4            | sent back → mlp_ratio=3 | 137.83 (epoch 11/13) |
 | 328 | fern      | slice_num 64 → 128         | **MERGED ★**   | **133.55 (new baseline)**|
 | 330 | frieren   | MSE → Huber β=1            | sent back → rebase + re-run | **109.47** (epoch 14/50, on slice_num=64; merge-candidate after rebase) |
@@ -47,17 +48,22 @@
 | 337 | thorfinn  | BS 4→8, lr 7e-4            | sent back → rebase + BS=16/lr=1e-3 (+ multi-seed if budget) | 139.39 / 153.19 (2-seed mean 146.29; ~9.5 % worse than baseline on mean) |
 | 367 | fern      | bug fix: cruise-NaN scoring| **wip (new)**  | n/a (bug fix, not experiment) |
 
-PRs surfaced for advisor review this cycle: **#332**. Action:
-**#332 sent back** — surf_weight sweep is qualitatively excellent
-(clean interior optimum at 25 with val_vol_p as independent
-secondary signal) but quantitatively inside-noise (0.27 % over
-merged baseline). Branch pre-#328 (rebase needed). Asked for:
-rebase + re-run surf_weight=25 on slice-128 + optional 2 more
-seeds. Same decision rule as alphonse #311.
+PRs surfaced for advisor review this cycle: **#325**. Action:
+**#325 closed** (21 % regression at 30-min cap; depth axis is
+fundamentally compute-disadvantaged at fixed wall-clock).
+**Reassigned askeladd to round-2 axis #399 (bf16 mixed precision)** —
+the next-tier throughput unlock identified by alphonse, building
+on alphonse's careful failure-mode diagnosis at fp16. If bf16 lands
+cleanly, it unblocks every heavier round-2 stack (deeper / wider /
+larger batch).
+
+Bonus: askeladd's cruise-NaN debug + patch in #325 was the third
+independent confirmation of the same root cause (after edward and
+fern). Strong cross-validation that #367 is correct.
 
 Earlier cycle actions (recap): #328 merged (round-1 winner, new
-baseline 133.55); #326 + #335 + #330 + #337 + #311 sent back with
-specific follow-up instructions; #367 NEW bug-fix PR assigned to
+baseline 133.55); #326 + #335 + #330 + #337 + #311 + #332 sent back
+with specific follow-up instructions; #367 bug-fix PR assigned to
 fern for cruise-NaN scoring (in flight).
 
 ## What we learned this cycle (and last)
@@ -116,13 +122,12 @@ fern for cruise-NaN scoring (in flight).
 - **Stack slice-128 + width.** alphonse's width axis on top of the
   merged slice-128 baseline — directly tests the
   arch-stack hypothesis. Pending alphonse's width-160 result first.
-- **AMP / mixed precision.** Alphonse's fp16 attempt diverged at
-  epoch 3 from `(pred-y_norm)² · surf_weight=10` overflowing fp16
-  dynamic range during early high-loss epochs. Two clear fixes
-  identified: (i) scoped autocast — model forward in fp16, loss in
-  fp32; (ii) bfloat16 (Hopper-class GPUs, no GradScaler needed,
-  fp32-equivalent dynamic range). Both unblock the AMP unlock for
-  any wider/deeper round-2 stack.
+- **AMP / mixed precision.** ASSIGNED as PR #399 to askeladd:
+  bf16 autocast around the model forward (loss kept in fp32),
+  building on alphonse's fp16-failure-mode diagnosis. Expected to
+  give 1.4–1.8× per-step speedup with no dynamic-range collapse.
+  If clean, makes all heavier round-2 stacks viable inside the
+  30-min cap.
 - **Schedule that fits the budget.** OneCycleLR over `total_steps`
   (not epochs) is robust to 30-min wall-clock cuts. May supersede
   `T_max=epochs` cosine entirely. Pending tanjiro's iteration.

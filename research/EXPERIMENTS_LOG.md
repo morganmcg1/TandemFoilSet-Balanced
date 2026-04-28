@@ -13,6 +13,62 @@ in the pressure channel; `accumulate_batch` masks the sample but
 fern** with the 2-line `nan_to_num` patch — once it lands, every
 round-1 run can recompute a finite `test_avg/mae_surf_p` from W&B.
 
+## 2026-04-28 01:15 — PR #325: Round 1 axis: model depth — n_layers 5 → 8 ❌ CLOSED
+
+- Branch: `willowpai2d2-askeladd/depth-8` (deleted on close)
+- Hypothesis: 3–6 % reduction in `val_avg/mae_surf_p` from
+  `n_layers 5 → 8`.
+- Run: `eo8zq50l`
+
+### Result (best checkpoint, epoch 8 / 9 — wall-clock cut)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-|-:|-:|-:|
+| val_single_in_dist | 202.92 | 2.15 | 1.06 |
+| val_geom_camber_rc | 176.90 | 3.66 | 1.27 |
+| val_geom_camber_cruise | 129.89 | 1.75 | 0.81 |
+| val_re_rand | 138.50 | 2.59 | 1.01 |
+| **val_avg** | **162.05** | 2.54 | 1.04 |
+
+**21.3 % regression vs merged baseline (133.55) — well outside ±10 %
+noise band on a single seed. Closed.**
+
+### Why depth-8 doesn't pay at the 30-min cap
+
+- 9 epochs / 50 reached (vs ~14 for baseline-equivalent at depth-5).
+- Each epoch ~206 s vs baseline's ~120 s.
+- Val curve broadly descending but with high epoch-to-epoch variance
+  (228 → 263 → 219 → 225 → 234 → 183 → 197 → 162 → 170): could
+  reach competitive numbers given enough compute, but cannot at
+  fixed 30-min wall clock.
+- Same compute disadvantage as width-192: capacity scaling consumes
+  the budget faster than additional epochs can recover the gap.
+
+Depth axis is **deferred to round 2**, after AMP/bf16 unlocks more
+throughput per cycle. At that point a deeper net inside the same
+wall-clock becomes feasible — askeladd's val-trajectory data here
+will be useful round-2 reference.
+
+### Bonus: third independent confirmation of cruise-NaN bug
+
+Askeladd independently identified the `nan * 0 = nan` propagation
+in `accumulate_batch`, recomputed `test_avg/mae_surf_p = 148.72`
+offline by patching with `torch.where(effective.unsqueeze(-1), err,
+torch.zeros_like(err))`. Three students (edward, fern, askeladd)
+have now converged on the same root cause and equivalent patches —
+strong cross-validation that PR #367 is correct.
+
+## 2026-04-28 01:15 — PR #399 (NEW): Round 2 axis: bf16 mixed precision
+
+- Branch: `willowpai2d2-askeladd/bf16-amp`
+- Reassigning askeladd to a higher-leverage axis after closing #325.
+- Hypothesis: bf16 autocast around the model forward (loss kept in
+  fp32) gives ~1.4–1.8× per-step speedup with no dynamic-range
+  collapse (avoiding alphonse's fp16 failure mode), enabling
+  20–25 epochs in budget vs current ~14. Predicted 3–8 % reduction
+  in `val_avg/mae_surf_p` from extra training alone.
+- Status: assigned, draft, status:wip.
+
 ## 2026-04-28 01:00 — PR #332: Round 1 axis: surface-vs-volume weight — surf_weight 10 → 25 (sweep)
 
 - Branch: `willowpai2d2-nezuko/surf-weight-25` (pre-#328; same
@@ -452,7 +508,8 @@ acknowledged but kept out of scope — tanjiro is iterating on
 | willow-r2-nezuko-surf-40 | 142.59 | 12 | sweep complete (past optimum) |
 | willow-r2-edward-mlp-ratio-4 | 137.83 | 11 | sent back |
 | willow-r2-thorfinn-bs8-lr7e-4 | 139.39 / 153.19 (2 seeds) | 14 / 13 | sent back (rebase + BS=16) |
-| willow-r2-askeladd-depth-8 | 150.06 | 9 | wip |
+| willow-r2-askeladd-depth-8 | 150.06 / 162.05 | 9 / 8 | **closed** (#325 — 21 % regression at 30-min cap) |
+| willow-r2-askeladd-bf16-amp | – | – | NEW assignment (#399, round-2 axis) |
 | willow-r2-tanjiro-warmup-cos-1e3 | 154.57 | 13 | sent back |
 
 **Noise floor:** ±10 % at single seed (thorfinn replicate evidence).
