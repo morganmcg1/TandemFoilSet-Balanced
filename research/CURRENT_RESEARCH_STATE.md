@@ -69,6 +69,23 @@ regime specifically.
      Per-split signal confirms the regularisation hypothesis exactly —
      `val_geom_camber_rc` −11.9%, `val_single_in_dist` +6.2%. Same
      merge-order story as PR #298. Re-assigned as L1+FF + wd compose test.
+   - PR #302 — tanjiro (Huber surface δ=1.0 on MSE): val 105.53 (+2.8%
+     vs L1, +14.9% vs L1+FF). Wins narrowly on raceCar tandem
+     (`val_geom_camber_rc` −8.9%) but loses on cruise (+21%) and re_rand
+     (+7%). δ=1.0 too generous; lever range bracketed (δ→0 = L1).
+   - PR #419 — thorfinn (L1 + AdamW beta2=0.95): val 99.70 (−2.87% vs
+     L1, in predicted band) but +8.5% vs L1+FF baseline. **Same
+     OOD-camber improvement signature** as PR #395 and PR #400 —
+     dominant win on `val_geom_camber_rc` (−13.6%). Three different
+     mechanisms (regularisation / input encoding / optimiser
+     second-moment), same direction. Compose test will reveal
+     additivity. Re-assigned.
+   - PR #396 — fern (L1 + EMA decay=0.9999): canonical value broken
+     (val 317.92, averaging window ≫ optimizer step count). Follow-up
+     `EMA_DECAY=0.999` got val 92.00 (essentially tied with current
+     L1+FF baseline). Student derived **budget-aware EMA rule**
+     `EMA_DECAY = 1 − 1/(0.2 × total_steps) ≈ 0.999` for this 5K-step
+     budget. Re-assigned as L1+FF + EMA(0.999) compose test.
 
 **In-flight (1 on pre-L1 + 7 on L1 baseline) — still useful for round-4
 composition even if they don't outright beat 102.64:**
@@ -83,21 +100,39 @@ composition even if they don't outright beat 102.64:**
    with the new PR #400 baseline (val 91.87), winners will need to be
    re-tested on the new advisor:
    - PR #383 — alphonse: L1 + 3× pressure channel weight in surface loss
-     *(loss focus)*
+     *(loss focus)* — branched off L1-only.
    - PR #389 — askeladd: L1 + matched cosine schedule (`--epochs 14`) so
-     the schedule fully decays inside the 30-min cap *(schedule)*
-   - PR #396 — fern: L1 + EMA of weights for evaluation *(weight averaging)*
-   - PR #419 — thorfinn: L1 + AdamW(beta2=0.95) — modern transformer
-     optimiser config for noisier gradients *(optimiser)*
+     the schedule fully decays inside the 30-min cap *(schedule)* —
+     branched off L1-only.
    - PR #423 — edward: L1 + gradient clipping `max_norm=1.0` *(stability)*
-   - PR #432 — nezuko: L1 + spatial FF + **`log(Re)` Fourier features**
-     — extends the proven FF lever to the scalar log-Re input, targets
-     the cross-regime axis where `val_re_rand` improved less than camber
-     splits *(input encoding extension)* — already on the post-#400 (L1+FF)
+     — branched off L1-only.
+   - PR #432 — nezuko: L1+FF + **`log(Re)` Fourier features** *(input
+     encoding extension)* — on post-#400 advisor.
+   - PR #437 — frieren: L1+FF + `weight_decay 1e-3` *(regularisation
+     compose)* — on post-#400 advisor.
+   - PR (thorfinn, new): L1+FF + AdamW(beta2=0.95) *(optimiser compose)*
+     — on post-#400 advisor.
+   - PR (fern, new): L1+FF + EMA(decay=0.999) *(weight averaging compose
+     with budget-aware decay)* — on post-#400 advisor.
+   - PR (tanjiro, new): L1+FF + L1 volume loss *(loss formulation
+     extension — does L1 dominance extend to volume?)* — on post-#400
      advisor.
-   - PR (frieren, new): L1+FF + `weight_decay 1e-3` — compose test of
-     the OOD-camber-improving wd lever onto the L1+FF baseline (does FF
-     leave wd headroom or take it?) *(regularisation compose)*
+
+## Convergent OOD-camber generalisation signal
+
+Three closed PRs (#395 wd=1e-3, #419 beta2=0.95) and one merged PR (#400
+spatial FF) all produced the **same per-split signature**: dominant
+win on `val_geom_camber_rc` (−11.9% / −13.6% / −20.8% respectively),
+flat-or-mild on in-dist / re_rand. Three different mechanisms
+(regularisation / optimiser second-moment / input encoding), same
+direction of effect on OOD-camber generalisation.
+
+Round-4 compose tests (#437 wd, new thorfinn beta2, new nezuko log(Re))
+will reveal whether the levers each hit independent paths to the same
+generalisation gain (additive — round-5 stack of all four) or share a
+common dynamic (diminishing — only one of the three matters once
+combined). Round-5 priority depends entirely on which of these compose
+tests cleanly beat the new baseline.
 
 ## Round-4 throughput infra (new debt from PR #390 close)
 

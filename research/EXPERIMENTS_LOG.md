@@ -1,5 +1,161 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 01:50 — PR #302 (CLOSED): Huber (smooth-L1, δ=1.0) surface loss
+- Branch: `charliepai2d3-tanjiro/huber-surf-loss` (deleted on close)
+- Hypothesis: Huber on surface loss bounds gradient on heavy-tailed
+  high-Re extremes while keeping L2 smoothness near zero; predicted
+  −3% to −10% on val_avg/mae_surf_p.
+- Config: pre-L1 advisor (MSE volume, MSE surface). PR replaced surface
+  MSE with Huber(δ=1.0). Volume MSE unchanged.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs L1 baseline (PR #280, 102.64) | vs current L1+FF baseline (PR #400, 91.87) |
+|--------|--------:|---------------------------------:|-------------------------------------------:|
+| `val_avg/mae_surf_p`  | 105.53 | +2.8% | +14.9% |
+| `test_avg/mae_surf_p` |  97.41 | −0.3% (near-tie) | +20.0% |
+
+### Per-split val (best epoch 14) — narrow regime-specific effect
+
+| split | this PR | L1 baseline | Δ |
+|-------|--------:|------------:|--:|
+| val_single_in_dist     | 121.89 | 121.18 | +0.6% |
+| val_geom_camber_rc     | 113.93 | 125.01 | **−8.9% (Huber wins)** |
+| val_geom_camber_cruise |  88.62 |  73.22 | +21.0% (worse) |
+| val_re_rand            |  97.67 |  91.14 | +7.2% (worse) |
+
+### Decision
+
+**Closed.** Net regression on the primary metric. The lever has narrow
+regime-specific effect (high-Re raceCar tandem) but doesn't cleanly
+improve the headline. Student's analysis: δ=1.0 is too generous —
+post-warmup most residuals are already inside ±1 std, so Huber acts
+nearly identically to MSE on the bulk of nodes, losing the L1 alignment
+with MAE on splits where outliers aren't the bottleneck. δ→0 is L1
+(current baseline), so the lever range is bracketed and the maximum
+useful effect is bounded.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
+## 2026-04-28 01:48 — PR #396 (CLOSED, broken canonical / 0.999 follow-up tied): EMA of weights
+- Branch: `charliepai2d3-fern/l1-ema-d9999` (deleted on close)
+- Hypothesis: maintain EMA shadow weights, evaluate val/test under EMA;
+  predicted −1% to −3% on val_avg/mae_surf_p.
+- Config: L1 baseline (PR #280), EMA every step + swap for eval. The
+  canonical committed value was `EMA_DECAY=0.9999`; student also ran
+  follow-up `EMA_DECAY=0.999`.
+
+### Headline
+
+| Metric | EMA 0.9999 (canonical) | EMA 0.999 (follow-up) | vs L1 (102.64 / 97.73) | vs L1+FF (91.87 / 81.11) |
+|--------|----------------------:|---------------------:|----------------------:|-------------------------:|
+| `val_avg/mae_surf_p`  | **317.92 (BROKEN)** | 92.00 | 0.999: **−10.4%** ✓ | 0.999: +0.14% (tie) |
+| `test_avg/mae_surf_p` | 300.79 (BROKEN) | 82.54 | 0.999: **−15.5%** ✓ | 0.999: +1.76% |
+
+### Why 0.9999 was broken — student diagnosis
+
+`EMA_DECAY=0.9999` averages over ~10K steps. The 30-min wallclock cap
+allows ~5K optimizer steps (14 epochs × 375 batches). EMA shadow is
+dominated by random init throughout: at step 5,300, ~59% of the
+shadow is still init weight. The val curve under 0.9999 EMA descends
+monotonically (387.9 → 317.9) but never escapes the random-init basin.
+
+**Budget-aware EMA rule** (student's derivation): `EMA_DECAY = 1 − 1/N`
+with `N ≈ 0.2 × total_steps`. For 5,300 steps, `N ≈ 1,000`,
+`EMA_DECAY ≈ 0.999` — which is exactly the value that worked. Round-5
+should bake this rule into the train.py.
+
+### Per-split val (best epoch 14, EMA 0.999 — uniform improvement)
+
+| split | EMA 0.999 | L1 baseline | Δ |
+|-------|----------:|------------:|--:|
+| val_single_in_dist     | 108.20 | 121.18 | −10.7% |
+| val_geom_camber_rc     | 103.76 | 125.01 | −17.0% |
+| val_geom_camber_cruise |  70.22 |  73.22 |  −4.1% |
+| val_re_rand            |  85.84 |  91.14 |  −5.8% |
+
+### Decision
+
+**Closed.** Two reasons:
+1. The committed canonical value (0.9999) is broken — merging would
+   actively harm the baseline. The working value (0.999) was a
+   reverted local edit, not in the diff.
+2. EMA 0.999 result (val 92.00) is essentially tied with the current
+   L1+FF baseline (91.87, ~0.14% gap, well within seed noise). Even if
+   the diff were rewritten to canonical 0.999, the win vs the current
+   baseline is not clean.
+
+Re-assigning to fern as a compose test on L1+FF with `EMA_DECAY=0.999`
+baked in canonically. Predicted small win on val (uniform smoothing
+benefit), bigger on test (the per-split late-trajectory smoothing
+showed a −25.8% test cruise improvement on L1).
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
+## 2026-04-28 01:48 — PR #419 (CLOSED, validated on L1 / loses to L1+FF): AdamW(beta2=0.95)
+- Branch: `charliepai2d3-thorfinn/l1-adamw-beta2-0-95` (deleted on close)
+- Hypothesis: change AdamW `beta2` from 0.999 to 0.95 (transformer
+  convention); averages squared gradients over ~20 steps not ~1000;
+  predicted −1% to −4%.
+- Config: L1 baseline (PR #280), single keyword arg added to AdamW.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs L1 (PR #280, 102.64) | vs L1+FF (PR #400, 91.87) |
+|--------|--------:|------------------------:|--------------------------:|
+| `val_avg/mae_surf_p`  | 99.70 | **−2.87%** ✓ in band | +8.5% (loses) |
+| `test_avg/mae_surf_p` | 91.50 | **−6.37%** ✓ above band | +12.8% (loses) |
+
+### Per-split val (best epoch 14) — OOD-camber dominant
+
+| split | this PR | L1 baseline | Δ |
+|-------|--------:|------------:|--:|
+| val_single_in_dist     | 123.33 | 121.18 | +1.77% |
+| val_geom_camber_rc     | 108.01 | 125.01 | **−13.60%** |
+| val_geom_camber_cruise |  77.82 |  73.22 | +6.28% |
+| val_re_rand            |  89.65 |  91.14 | −1.63% |
+
+### Per-split test (NaN-safe, best-val checkpoint)
+
+| split | this PR | L1 baseline | Δ |
+|-------|--------:|------------:|--:|
+| test_single_in_dist     | 110.64 | 109.80 | +0.77% |
+| test_geom_camber_rc     |  99.77 | 114.60 | **−12.94%** |
+| test_geom_camber_cruise |  66.89 |  79.92 | **−16.30%** |
+| test_re_rand            |  88.70 |  86.58 | +2.45% |
+
+### Decision
+
+**Closed.** Same merge-order pattern as PR #298 (FF on MSE), PR #395
+(wd on L1) — validated on assigned baseline, loses to current. The
+per-split signal is a clean OOD-geometry generalisation story (held-out
+camber tracks dominate the win, while in-dist and re_rand are roughly
+flat). Mechanistic read: the long-window squared-grad average
+(beta2=0.999) over-dampens nominally-larger off-distribution gradients;
+beta2=0.95 lets the second-moment respond to those signals within
+~20 steps.
+
+**Notable convergent signal**: PR #395 (wd=1e-3), PR #400 (spatial FF),
+and PR #419 (beta2=0.95) all hit the same OOD-camber-improvement
+pattern (`val_geom_camber_rc` -11.9% / -20.8% / -13.6% respectively).
+Three different mechanisms (regularisation / input encoding / optimiser
+second-moment), same direction of effect. The compose tests will
+reveal whether they each hit independent paths to the same
+generalisation gain (additive) or share a common dynamic (diminishing).
+
+Re-assigning thorfinn to L1+FF + AdamW(beta2=0.95) compose test.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
 ## 2026-04-28 01:35 — PR #395 (CLOSED, validated on L1 / loses to L1+FF): weight_decay 1e-4 → 1e-3
 - Branch: `charliepai2d3-frieren/l1-wd-1e-3` (deleted on close)
 - Hypothesis: 10× weight_decay bump on the L1 baseline addresses
