@@ -1,6 +1,6 @@
 # SENPAI Research State — icml-appendix-charlie-pai2d-r4
 
-- **Date:** 2026-04-28 08:35
+- **Date:** 2026-04-28 09:15
 - **Track:** charlie-pai2d-r4 (TandemFoilSet — Transolver CFD surrogate)
 - **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits)
 - **Test metric:** `test_avg/mae_surf_p` (same 4-axis structure)
@@ -37,7 +37,8 @@
 | askeladd | #289 | huber-loss | Loss formulation (MSE→SmoothL1) | -5% to -10% | **MERGED** 906a2c1 → val_avg=**63.33** (NEW BEST, -5.31%) |
 | askeladd | #467 | huber-beta-sweep | Loss formulation (β ∈ {0.5, 1.0, 2.0} sweep) | β=0.5 predicted -1% to -4% | **MERGED** eb5168f → val_avg=**57.50** (NEW BEST, -8.65% vs #368) |
 | askeladd | #539 | huber-beta-finer | Loss formulation (β ∈ {0.3, 0.5, 0.7} + flip Config default to 0.5) | -1% to -3% | **MERGED** 893ea4c → val_avg=**55.43** (NEW BEST, β=0.3 wins -3.4% vs #484) |
-| askeladd | #599 | huber-beta-finest | Loss formulation (β ∈ {0.1, 0.2, 0.4} on top of merged β=0.3) | -1% to -3% if optimum is sub-0.3, else within noise | WIP |
+| askeladd | #599 | huber-beta-finest | Loss formulation (β ∈ {0.1, 0.2, 0.4}) | -1% to -3% | **CLOSED** — β=0.2 wins paired -0.6% (within noise); β=0.1 overshoots; per-channel mechanism identified |
+| askeladd | #677 | huber-per-channel-beta | Loss formulation (β_p=0.2 + β_velocity=0.1) | -0.5% to -2% | WIP |
 | edward   | #300 | wider-model | Width (192/96) | -5% to -10% | **CLOSED** — under-trained 9/50 |
 | edward   | #358 | fix-scoring-nan-mask | Maintenance | n/a | **MERGED** 010235e |
 | edward   | #368 | fourier-pos-encoding | Input (8-freq Fourier on (x,z)) | -3% to -8% | **MERGED** 430cd62 → val_avg=**62.94** (NEW BEST, -0.62% val / -1.30% test) |
