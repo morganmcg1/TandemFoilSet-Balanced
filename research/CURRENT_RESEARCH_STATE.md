@@ -1,22 +1,37 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-28 19:10 UTC
+- **Updated:** 2026-04-28 21:58 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none yet — no GitHub issues)_
 
+## Current best
+
+**PR #773 (EMA decay=0.99) — MERGED:** `val_avg/mae_surf_p = 119.35`, `test_avg/mae_surf_p = 108.79`  
+EMA is now part of the advisor baseline. All future student runs will use `--ema_decay 0.99` by default.
+
 ## Current research focus
 
-Round 1 of a fresh research track. Goal is to beat the unmodified Transolver baseline (`n_hidden=128, n_layers=5, n_head=4, slice_num=64`, AdamW lr=5e-4, MSE, surf_weight=10, batch_size=4) on `val_avg/mae_surf_p` and the corresponding `test_avg/mae_surf_p` across the four validation/test tracks (`single_in_dist`, `geom_camber_rc`, `geom_camber_cruise`, `re_rand`).
+Round 1 results are coming in. Two PRs reviewed this cycle:
+- **PR #773 (fern — EMA):** MERGED. EMA decay=0.99 beats live-model selection by +6% on val_avg across all 4 splits. Geometry OOD splits benefit most. New baseline.
+- **PR #777 (thorfinn — log-Re jitter):** CLOSED. Input augmentation slows convergence; in our 14-epoch budget the regularization benefit never materializes. Control (no-jitter) wins on all splits including the targeted val_re_rand.
 
-Round 1 deploys 8 hypotheses spanning four diverse strategy categories so that even if any single category is unproductive, we learn quickly:
+**Budget insight:** Every run so far times out at epoch 13-14 (30-min wall clock). The EMA decay=0.99 is optimal for this budget because it has a fast-enough half-life to integrate useful signal. All future hypotheses should be evaluated with `--ema_decay 0.99` as the default, and schedule/optimizer hypotheses should account for the mismatch between the 50-epoch cosine schedule and the ~14-epoch actual run.
 
-1. **Loss reformulation** (alphonse — Huber; edward — learnable uncertainty per channel)
-2. **Architecture / capacity** (frieren — width=256, slices=128; tanjiro — depth=8/10; askeladd — surface-aware slice routing)
-3. **Optimization / training stability** (nezuko — LR warmup + grad clip; fern — EMA weights)
-4. **Data augmentation** (thorfinn — log(Re) jitter)
+**Still in flight (WIP):**
 
-Surface-pressure MAE is the ranking metric, so each hypothesis is scored against effect on `val_avg/mae_surf_p` and follow-up paper-facing `test_avg/mae_surf_p`. Per-split disagreements are flagged as information (which split a hypothesis helps tells us about its mechanism).
+1. **alphonse #769** — Huber loss (loss reformulation)
+2. **askeladd #770** — surface-aware slice routing (architecture)
+3. **edward #846** — unmodified baseline reference
+4. **frieren #774** — wider model (n_hidden=256, slice_num=128)
+5. **nezuko #775** — LR warmup + grad clip (optimization)
+6. **tanjiro #776** — deeper model (n_layers=8)
+
+**Newly assigned (this cycle):**
+- **fern** — surface weight scan (surf_weight ∈ {20, 50, 100}) with EMA decay=0.99
+- **thorfinn** — schedule alignment: shorten cosine T_max to match actual budget (~14 epochs) and OneCycleLR comparison
+
+Once the unmodified baseline (PR #846) lands, all Round 1 results will have a valid reference number.
 
 ## Potential next research directions (Round 2+)
 

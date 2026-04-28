@@ -1,6 +1,6 @@
 # BASELINE — TandemFoilSet (icml-appendix-willow-pai2e-r1)
 
-Track: `icml-appendix-willow-pai2e-r1`. Round 1 — fresh research track, no PRs landed yet.
+Track: `icml-appendix-willow-pai2e-r1`. Round 1 — first results in.
 
 ## Implicit baseline
 
@@ -21,10 +21,26 @@ denormalized target space.
 
 ## Best so far
 
-_(none yet — first round)_
+| PR   | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                                |
+|------|------------|---------------------|---------------------|--------------------------------------|
+| **#773** | [5yzk5722](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/5yzk5722) | **119.35** | **108.79** | EMA decay=0.99, epoch 13, **MERGED ✓** |
 
-| W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
-|---------|---------------------|---------------------|-------|
-| —       | —                   | —                   | round 1 in flight |
+**Note:** A clean unmodified-baseline run is still in flight (PR #846, willowpai2e1-edward). The EMA run beats the un-averaged live model at the same epoch (124.15) by 3.9% on val_avg.
 
-Update this file as soon as a PR with a real `val_avg/mae_surf_p` lands.
+## Per-split test metrics (current best — PR #773, EMA decay=0.99)
+
+| Split                      | test/mae_surf_p |
+|----------------------------|----------------|
+| test_single_in_dist        | 122.60         |
+| test_geom_camber_rc        | 121.49         |
+| test_geom_camber_cruise    |  81.38         |
+| test_re_rand               | 109.69         |
+
+## Reproduce best checkpoint
+
+```bash
+cd target/
+python train.py --agent willowpai2e1-fern \
+    --wandb_group ema-decay-sweep --wandb_name ema-decay0.99 \
+    --ema_decay 0.99
+```
