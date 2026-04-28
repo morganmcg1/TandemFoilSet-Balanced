@@ -34,28 +34,33 @@ the reported MAE metric is the highest-impact change found so far.
      compute-starvation under wallclock cap is structural.
    - PR #366 — thorfinn (mlp_ratio=4): val 144.70 (+41% vs L1 baseline);
      in-dist improved, all OOD axes regressed → generalisation-gap shift.
+   - PR #292 — frieren (slice_num=128): val 149.08 (+45% vs L1 baseline);
+     ~4% seed-noise floor swamped the predicted effect — not ruled out
+     for round 4 with seeded runs / larger slice bumps.
+   - PR #288 — fern (warmup + lr=1e-3): val 147.50 (+44% vs L1 baseline);
+     mean of 3 seeded runs 143.2±5.7 — schedule mismatched with wallclock
+     cap (warmup eats 21% of actual epoch budget).
 
-**In-flight (5 originally + 3 newly assigned), still useful for round-4
-composition even if they don't outright beat 102.64:**
+**In-flight (3 originally on pre-L1 + 5 on L1 baseline) — still useful for
+round-4 composition even if they don't outright beat 102.64:**
 
-1. **Loss formulation**
+1. **Loss formulation (pre-L1 baseline)**
    - PR #302 — tanjiro: Huber (smooth-L1, δ=1.0) surface loss — informs
      whether the L2-near-zero region helps over pure L1.
    - PR #285 — edward: `surf_weight` 10 → 30 (with MSE) — informs how much
      of the L1 win is just heavier surface gradient signal.
-2. **Model capacity (single-axis)**
-   - PR #292 — frieren: `slice_num` 64 → 128 (single-knob)
-3. **Optimisation schedule**
-   - PR #288 — fern: 3-epoch warmup + cosine to 1e-5, peak `lr=1e-3`
-4. **Input representation**
+2. **Input representation (pre-L1 baseline)**
    - PR #298 — nezuko: 8-frequency Fourier positional encoding for x/z
-5. **L1-baseline composition (newly assigned, branch off post-#280
-   advisor with L1 already in train.py)**
+3. **L1-baseline composition (post-#280 merge, with L1 already in
+   `train.py`):**
    - PR #383 — alphonse: L1 + 3× pressure channel weight in surface loss
-   - PR (askeladd, new): L1 + matched cosine schedule (`--epochs 14`) so
-     the schedule fully decays inside the 30-min cap.
-   - PR (thorfinn, new): L1 + bs=8 + `lr=7.07e-4` — composes the two
-     merged round-3 winners.
+     *(loss focus)*
+   - PR #389 — askeladd: L1 + matched cosine schedule (`--epochs 14`) so
+     the schedule fully decays inside the 30-min cap *(schedule)*
+   - PR #390 — thorfinn: L1 + bs=8 + `lr=7.07e-4` — composes the two
+     merged round-3 winners *(optimization)*
+   - PR (frieren, new): L1 + `weight_decay 1e-4 → 1e-3` *(regularisation)*
+   - PR (fern, new): L1 + EMA of weights for evaluation *(weight averaging)*
 
 **Caveats:**
 

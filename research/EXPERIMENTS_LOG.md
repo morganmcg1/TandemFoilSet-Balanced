@@ -1,5 +1,104 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 00:30 — PR #288 (CLOSED): 3-epoch warmup + cosine to 1e-5, peak lr=1e-3
+- Branch: `charliepai2d3-fern/lr-warmup-peak1e3` (deleted on close)
+- Hypothesis: warmup unlocks higher peak LR; cosine to `eta_min=1e-5`
+  preserves late-training fine-tune; predicted −2% to −5%.
+- Config: MSE surface loss (pre-L1 advisor), `bs=4`, `lr=1e-3`,
+  3-epoch LinearLR warmup with `start_factor=0.1`, then
+  `CosineAnnealingLR(T_max=47, eta_min=1e-5)`.
+- Diff: ~6 lines of imports + scheduler swap in `train.py`.
+
+### Headline (best-val checkpoint, run 3 of 3 seeded re-runs)
+
+| Metric | This PR | vs PR #306 baseline (135.20) | vs L1 baseline (PR #280, 102.64) |
+|--------|--------:|-----------------------------:|---------------------------------:|
+| `val_avg/mae_surf_p` (best, epoch 13/14) | 147.50 | +9.1% | +43.7% |
+| `test_avg/mae_surf_p` | 130.55 | +6.0% | +33.5% |
+| Peak GPU memory       | 42.11 GB | — | — |
+| Per-epoch wallclock   | ~131 s   | — | — |
+
+### Cross-run variance (3 unseeded runs)
+
+| run | best epoch | best val_avg/mae_surf_p |
+|-----|---------:|-----------------------:|
+| v1  | 12       | 136.88 |
+| v2  | 9        | 145.12 |
+| v3 (canonical) | 13 | 147.50 |
+| **mean ± std** | — | **143.2 ± 5.7** |
+
+Even the **best** run (136.88) does not beat the prior MSE baseline
+(135.20). Cross-run std ~5.7 is large enough to swamp ~5% schedule
+effects — flagged as round-4 infra debt (seed pinning).
+
+### Decision
+
+**Closed.** >5% regression on the primary ranking metric across 3 seeded
+re-runs. The student's analysis nailed the failure mode: this is a
+long-horizon optimizer change being evaluated under a short-horizon
+wallclock cap. Three structural problems compound:
+
+1. Warmup eats 21% of the actual epoch budget (3/14, vs the 6% the
+   schedule was designed for).
+2. Higher peak LR amplifies seed noise at bs=4 — bouncy descent shows
+   the optimizer can't settle in 11 post-warmup epochs.
+3. `eta_min=1e-5` is irrelevant — the LR is still ~9e-4 at the timeout.
+
+The corrective experiment (matched-cosine `T_max=14`) is being run by
+askeladd in PR #389 on the L1 baseline. A "1-epoch warmup + matched
+cosine" variant would be a reasonable round-5 PR if #389 wins.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
+## 2026-04-28 00:30 — PR #292 (CLOSED): slice_num 64 → 128
+- Branch: `charliepai2d3-frieren/slice-num-128` (deleted on close)
+- Hypothesis: doubling PhysicsAttention slice tokens halves the
+  per-token mesh-node neighborhood and lets the slice basis represent
+  finer flow structure; predicted −3% to −8%.
+- Config: MSE surface loss (pre-L1 advisor), all other knobs at
+  defaults. Single-line diff: `slice_num=128`.
+
+### Headline (best-val checkpoint, epoch 9/11)
+
+| Metric | This PR | vs PR #306 baseline (135.20) | vs L1 baseline (PR #280, 102.64) |
+|--------|--------:|-----------------------------:|---------------------------------:|
+| `val_avg/mae_surf_p`  | 149.08 | +10.3% | +45.3% |
+| `test_avg/mae_surf_p` | 136.85 | +11.1% | +40.0% |
+| Peak GPU memory       | 54.5 GB | — | — |
+| Param count           | 0.67 M | +2% vs slice_num=64 | — |
+| Epochs in 30-min cap  | 11/50 | — | — |
+
+### Per-split val (best epoch 9)
+
+| split | mae_surf_p |
+|-------|-----------:|
+| val_single_in_dist     | 193.75 |
+| val_geom_camber_rc     | 160.05 |
+| val_geom_camber_cruise | 109.81 |
+| val_re_rand            | 132.70 |
+
+### Decision
+
+**Closed.** The student's variance observation is the key takeaway: a
+separate identical-config run hit val 142.76 at epoch 11 vs 149.08 here
+— ~4% spread from sampler/init noise alone, comparable to the predicted
+effect size. With only 11 of 50 epochs and the cosine never decaying,
+the signal-to-noise ratio for slice count vs noise was too low to
+attribute anything cleanly.
+
+slice_num=128 is **not ruled out** for round 4 — it just needs either
+tighter variance control (seeded runs) or a much larger expected effect.
+The +2% param bump and 54.5 GB peak memory at slice_num=128 confirm
+plenty of headroom for slice_num=256 once throughput is unlocked.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
 ## 2026-04-28 00:18 — PR #283 (CLOSED): Wider+deeper Transolver (h=192, l=6, head=6, slices=96)
 - Branch: `charliepai2d3-askeladd/wider-deeper-h192-l6-s96` (deleted on close)
 - Hypothesis: scale capacity along 4 axes simultaneously; predicted −3% to −8%.
