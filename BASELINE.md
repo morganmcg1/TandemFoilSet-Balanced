@@ -2,6 +2,33 @@
 
 Lower is better. Primary ranking metric is `val_avg/mae_surf_p` (mean surface pressure MAE across the four val splits). Paper-facing metric is `test_avg/mae_surf_p` from the best-val checkpoint.
 
+## 2026-04-28 10:32 — PR #661: TF32 matmul precision (infrastructure: +16.7% epochs in budget)
+
+- **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #510 baseline): **60.5905** (epoch 19, **−6.5% vs 64.824**)
+- **`test_avg/mae_surf_p`** (paper-facing, all 4 splits finite): **53.404** (vs 56.391 PR #510, **−5.3%**)
+- **Per-split val MAE for `p`** (best epoch 19, compile=True+TF32):
+  - val_single_in_dist: 71.013 (−6.4%)
+  - val_geom_camber_rc: 72.572 (−6.8%)
+  - val_geom_camber_cruise: **39.933 (−12.1%, biggest)**
+  - val_re_rand: 58.845 (−2.2%)
+- **Per-split test MAE for `p`** (best ckpt):
+  - test_single_in_dist: 63.481
+  - test_geom_camber_rc: 65.552
+  - test_geom_camber_cruise: 33.441
+  - test_re_rand: 51.142
+- **Recipe**: huber(δ=0.10) + bias-corrected EMA(0.995, warmup=50) + SwiGLU + DropPath(0.1) + AdamW betas (0.9, 0.95) + per-parameter-group wd: attn=1e-4, mlp=1e-5, other=3e-5 + per-block PhysicsAttention temperature init [1.5, 1.875, 2.25, 2.625, 3.0] + cosine 3-ep warmup (start_factor=0.3) + T_max=11 + eta_min=2e-5 + decaying noise std + surface-only noise injection (dims 0-12) + NaN-safe + clip_grad_norm_(max_norm=10.0) + compile=True + lr=6e-4 + **`torch.set_float32_matmul_precision("high")`** (TF32 matmul on Blackwell tensor cores).
+- **Throughput**: 21 epochs in 30-min budget (vs 18 prior), 86.8 s/epoch mean post-warmup (vs ~102.3 s eager). **+16.7% epochs / -15.1% wall-clock per-iter under compile**. Eager TF32 also helps -12.4% (16 vs 14 epochs).
+- **Mechanism**: TF32 keeps FP32 exponent (8-bit) but reduces mantissa to 10 bits for matmul ops. Negligible quality impact on neural network matmuls (intermediate accumulation handles precision). Independent of compile mode.
+- **Throughput diagnostics (per alphonse)**: gain came in at lower bound of predicted band (15.1% vs 25-40%). Matmul fraction is ~50-60%, not the 70-85% predicted — slice-attention softmax + LayerNorm + GELU are bigger non-matmul fractions than typical transformers.
+- **Quality compounding**: +3 extra epochs land in LR≈0 EMA-tail under T_max=11. val_avg keeps descending into them.
+- **Compound expectation**: TF32 throughput is hardware-deterministic and compounds with every future PR. Vs current baseline (post-PR #630 + #696 = 59.907 / 61.245), val_avg cross-stack is +1.14% / -1.07%. Throughput is the headline.
+- **Metric summary**: `models/model-tf32-matmul-high-20260428-085927/metrics.jsonl`
+- **Reproduce**:
+  ```bash
+  cd target
+  python train.py --epochs 50 --experiment_name tf32-matmul-high --agent <name> --compile=True
+  ```
+
 ## 2026-04-28 10:20 — PR #696: Surface-only feature noise (dims 0-12 only, skip per-sample globals)
 
 - **Best `val_avg/mae_surf_p`** (this PR's standalone measurement, on PR #647 baseline): **61.245** (epoch 18, **−1.01% vs 61.872**)
