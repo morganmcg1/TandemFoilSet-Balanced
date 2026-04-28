@@ -1,5 +1,31 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 05:50 — PR #542: bs=8 + lr=1.4e-3 (√2 LR scaling) — **CLOSE (batch-size axis exhausted)**
+
+- Branch: `charliepai2d5-tanjiro/bs8-lr1p4e3` (closed)
+
+### Results
+
+| metric | value | vs current baseline (73.91 / 70.37) | vs bs=8+lr=1e-3 (#498) |
+|---|---:|---|---|
+| `val_avg/mae_surf_p` (best ep 14/14) | 82.18 | **+11.2%** (worse) | −2.27% |
+| `test_avg/mae_surf_p` (3 clean) | 78.74 | +11.9% | — |
+| `val_single_in_dist/mae_surf_p` | 104.97 | +28.55% (largest hit) | — |
+
+### Decision
+
+Close. Hits close criterion. Student's analysis is decisive:
+
+> "Step count, not LR magnitude, is the binding constraint at the 14-epoch budget."
+
+√2 LR scaling closes only **19%** of the bs=8 deficit (1.91 / 10.18). Pre-clip ‖∇‖ ≫ 0.5 throughout training, so the *clipped* step is `LR × 0.5` regardless. Increasing LR by √2 scales the clipped step by √2 (~14–15% per-step boost), not the 100% needed to match bs=4 step count.
+
+**The batch-size axis is now thoroughly ruled out for this stack** at the 14-epoch budget — three independent PRs (#498 bs=8, #473 lr=2e-3, #542 bs=8+lr=1.4e-3) all confirm bs=4 is at the sweet spot.
+
+Reassigned tanjiro to **cosine eta_min = peak·0.1** (PR #579) — student's own follow-up #3. The val curve still descending at ep14 says the cosine schedule kills the LR too aggressively at budget end. Setting `eta_min = 1e-4` keeps learning at meaningful rate through the final epoch. Single-axis change orthogonal to all explored axes; addresses the "still descending" diagnosis directly.
+
+
+
 ## 2026-04-28 05:45 — PR #538: SiLU activation replacing GELU — **CLOSE (activation axis exhausted)**
 
 - Branch: `charliepai2d5-edward/silu-activation` (closed)
