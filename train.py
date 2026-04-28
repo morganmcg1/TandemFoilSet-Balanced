@@ -369,6 +369,11 @@ class Config:
     surf_weight: float = 30.0
     epochs: int = 50
     grad_clip_norm: float = 0.5  # max gradient L2 norm; set <=0 to disable
+    # Per-domain target sampler weights. Defaults match the val_avg composition
+    # (25 / 37.5 / 37.5). Setting all three to 1/3 reproduces 33/33/33 balanced.
+    weight_racecar_single: float = 0.25
+    weight_racecar_tandem: float = 0.375
+    weight_cruise: float = 0.375
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -385,6 +390,27 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# Rescale loader's 1/group_size weights by target/(1/3) to set per-epoch
+# composition to (single, racecar_tandem, cruise) = configured target.
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _domain_groups = json.load(_f)["domain_groups"]
+_idx_to_group = {i: name for name, idxs in _domain_groups.items() for i in idxs}
+_target_weight = {
+    "racecar_single": cfg.weight_racecar_single,
+    "racecar_tandem": cfg.weight_racecar_tandem,
+    "cruise": cfg.weight_cruise,
+}
+_scale = torch.tensor(
+    [_target_weight[_idx_to_group[i]] / (1.0 / 3.0) for i in range(len(train_ds))],
+    dtype=torch.float64,
+)
+sample_weights = sample_weights * _scale
+print(
+    f"Domain weights: single={cfg.weight_racecar_single:.4f}, "
+    f"racecar_tandem={cfg.weight_racecar_tandem:.4f}, "
+    f"cruise={cfg.weight_cruise:.4f}"
+)
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
