@@ -857,3 +857,67 @@ The cosine-to-zero recipe assumes a local minimum has been reached by anneal tim
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #491 | fern | tf32-matmul-precision | `torch.set_float32_matmul_precision('high')` on merged #398 baseline | Replaces closed #465; throughput PR. SwiGLU baseline is matmul-heavy (3 matmuls/block × 5 blocks). Predicted ~10–20 % per-epoch wall-clock reduction, free accuracy-neutral on Blackwell. |
+
+## 2026-04-28 03:46 — PR #430 (REBASED): Lion optimizer (charliepai2d1-tanjiro) — **MERGED, new baseline**
+- Branch: `charliepai2d1-tanjiro/lion-optimizer` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `5b2f7b2`).
+- Hypothesis (rebased re-run): replace AdamW with inline Lion (sign-of-momentum) on top of the now-stacked variance-reduction + SwiGLU baseline.
+
+### Headline metrics (best EMA epoch=12/50, timeout-cut) — **biggest single-PR delta on this branch**
+| metric | this run | prior baseline #398 | Δ abs | Δ % |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **67.737** | 89.349 | −21.612 | **−24.19 %** |
+| `test_avg/mae_surf_p` | **59.447** | 79.191 | −19.744 | **−24.94 %** |
+
+Beats every val and test split by ≥21 %; `geom_camber_cruise` jumps −31.0 % val / −29.9 % test (consistent with Lion's #430-v1 result that cruise benefits most).
+
+### Per-split breakdown
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| single_in_dist | −22.28 % | −24.45 % |
+| geom_camber_rc | −23.05 % | −21.41 % |
+| geom_camber_cruise | **−31.02 %** | **−29.88 %** |
+| re_rand | −22.45 % | −26.07 % |
+
+### Mechanism (tanjiro's writeup)
+- **EMA-Lion interaction did NOT shrink at decay 0.99** — it **improved**. Advisor predicted shrinkage; the opposite happened. With EMA(0.999) the slow shadow lagged Lion's raw improvement so badly that EMA was *worse* than raw in early epochs (Lion-v1 ep1: EMA 315.45 / raw 197.39). With EMA(0.99) the fast shadow keeps up *and* averages Lion's substantial epoch-to-epoch raw variance — raw bounces 87.96 → 97.01 → 84.73 → 82.58 in eps 9–12 while EMA descends monotonically 74.75 → 72.04 → 72.75 → 67.74.
+- **Lion's lr=1.7e-4 still in basin** even though it was sized for the *old* AdamW recipe (lr=5e-4). With current AdamW lr=1e-3 the equivalent would be ~3.3e-4 — 2× larger. Single-knob non-tuned Lion delivered −24.19 %; the lr sweep is where the next gain lives.
+- **Wall-clock parity**: 151.2 s/epoch vs 150.0 s baseline = +0.8 %. Lion's missing second-moment buffer (~2.6 MB on a 657K-param model) is rounding error; the optimizer-family change is essentially compute-free.
+
+### Decision: merge as new round-1.5 baseline
+- Beats baseline by a wide margin on ranking metric and every per-split metric.
+- Mechanism is well-understood (sign-update + EMA(0.99) interaction; bounded per-param step magnitude composes naturally with grad-clip envelope).
+- **Biggest single-PR delta on this branch** (−24.19 % on val).
+- BASELINE.md updated; tanjiro reassigned to **PR #507 (lion-lr-3p3e-4)** as the natural lr-sweep continuation.
+
+## 2026-04-28 03:48 — PR #394 (REBASED #2): torch.compile rebased onto post-#398 SwiGLU (charliepai2d1-thorfinn) — **sent back for rebase #3**
+- Branch: `charliepai2d1-thorfinn/torch-compile-throughput` (post-#398 base; pre-#430)
+- Hypothesis (re-run): `torch.compile` on top of SwiGLU baseline.
+
+### Headline metrics (best EMA epoch=17/50, timeout-cut after compile warmup)
+- val=**77.275** (−13.51 % vs #398 base; +14.08 % vs current #430), test=**67.499** (−14.77 % vs #398; +13.55 % vs current).
+- Throughput: **−25.7 % steady-state per-epoch** (111.6 s vs ~150 s eager), **17 epochs in 30-min budget** vs baseline's 12. Tightest steady-state band of any compile run on this branch (σ ≈ 0.6 s).
+- Compile + SwiGLU compose more than additively — kernel fusion saves more launches on SwiGLU's 3-matmul block than on GELU's 2-matmul.
+
+### Decision: send back for rebase #3
+- Lion (#430) merged ~5 minutes after results posted, moving baseline to val=67.737. Vs current, this run is +14 % — outside merge gate.
+- Throughput delivery is durable across all three rebases (post-#356 −23.1 %, post-#417 −23.0 %, post-#398 −25.7 %).
+- Predicted post-#430 rebase: val ~58–63, test ~52–56. Compile is one rebase away from being the new throughput floor for every round-2 PR.
+
+## 2026-04-28 03:48 — PR #352 (REBASED): SmoothL1 surface (charliepai2d1-edward) — **sent back for rebase #2 onto Lion**
+- Branch: `charliepai2d1-edward/smoothl1-surface` (post-#417 base; pre-#398, pre-#430)
+- Hypothesis (re-run): SmoothL1 (Huber, β=1.0) on surface loss with EMA(0.99) + grad-clip(0.5) + lr=1e-3 stack.
+
+### Headline metrics (best EMA epoch=12/50, timeout-cut)
+- val=**82.5432** (−16.27 % vs #417 base, **−7.61 % vs #398**, +22.04 % vs current #430), test=**72.9777** (−16.96 % / **−7.85 %** / +22.78 %).
+- All four val and test splits improve, no regressions; volume MAE not regressed despite keeping volume as MSE.
+
+### Decision: send back for rebase + re-run on Lion baseline
+- Lion (#430) merged ~7 minutes before results posted; current baseline 67.737.
+- **Open question**: does SmoothL1 still help on Lion baseline? Lion's sign-update is invariant to gradient magnitude on each step, so MSE vs SmoothL1 differ only through the momentum buffer's accumulation. Honest predicted band on Lion baseline: −1 % to +2 %.
+- Even a wash is informative for the appendix's loss-form ablation table.
+
+## 2026-04-28 03:50 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #507 | tanjiro | lion-lr-3p3e-4 | `lr_lion = 1.7e-4 → 3.3e-4` on merged #430 baseline | Tanjiro's own follow-up #1; Lion lr was sized for old AdamW recipe. Current AdamW=1e-3 → Lion equivalent 3.3e-4. Single-knob continuation. Predicted band −2 % to −6 %. |
