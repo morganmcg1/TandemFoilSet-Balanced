@@ -427,6 +427,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     film: bool = True  # surface-conditional FiLM in last block (PR #484)
+    adamw_beta2: float = 0.999  # AdamW second-moment EMA decay; PyTorch default
 
 
 cfg = sp.parse(Config)
@@ -507,7 +508,12 @@ def update_ema() -> None:
         ep.mul_(ema_decay).add_(mp.detach(), alpha=1.0 - ema_decay)
 
 
-optimizer = torch.optim.AdamW(_model_base.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    _model_base.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adamw_beta2),
+)
 if cfg.warmup_epochs > 0:
     # Linear warmup from lr*1e-3 → lr over warmup_epochs, then cosine over the
     # remainder. Cosine T_max = cosine_epochs - warmup_epochs so the cosine tail
