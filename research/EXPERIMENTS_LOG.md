@@ -1,5 +1,59 @@
 # SENPAI Research Results — charlie-pai2d-r3
 
+## 2026-04-28 03:15 — PR #448 (CLOSED, validated on L1+FF / loses to current): L1 volume loss
+- Branch: `charliepai2d3-tanjiro/l1ff-vol-l1` (deleted on close)
+- Hypothesis: replace MSE volume loss with L1 volume loss — does L1
+  dominance extend symmetrically to the volume term? Pre-registered
+  three decision branches.
+- Config: post-#400 advisor (L1+FF, MSE volume), changed vol_loss
+  from sq_err to abs_err in train.py. Two-line code diff.
+
+### Headline (best-val checkpoint, epoch 14/14)
+
+| Metric | This PR | vs L1+FF baseline (PR #400, 91.87) | vs current baseline (PR #461, 80.28) |
+|--------|--------:|-----------------------------------:|-------------------------------------:|
+| `val_avg/mae_surf_p`  | 87.11 | **−5.18%** ✓ above predicted band | +8.5% (loses) |
+| `test_avg/mae_surf_p` | 78.90 | **−2.73%** ✓ in band | +11.2% (loses) |
+
+### Per-split val (best epoch 14) — uniform improvement on 3 of 4 splits
+
+| split | L1+FF baseline | this PR | Δ |
+|-------|---------------:|--------:|--:|
+| val_single_in_dist     | 117.24 | 106.17 | **−9.44%** (largest gain — exactly the heavy-tail-dominated split) |
+| val_geom_camber_rc     |  98.99 |  94.86 | −4.18% |
+| val_geom_camber_cruise |  68.61 |  63.84 | −6.95% (refutes "MSE smoothing useful on cruise") |
+| val_re_rand            |  82.64 |  83.57 | +1.13% (within seed noise) |
+
+### Decision
+
+**Closed** per the >5% regression rule vs current baseline. **But the
+lever is genuinely validated** on the assigned baseline — largest
+single-knob lever validation since PR #280 (L1 surface loss).
+
+The student's pre-registered hypothesis branches:
+- (1) L1 dominance extends symmetrically → uniform improvement ✓ FIRED
+- (2) MSE-volume was doing useful smoothing → cruise regresses ✗ REFUTED
+- (3) L1 helps mainly on heavy-tail samples → in-dist disproportionate ✓ FIRED
+
+Reproducibility: second seed at val 86.45 / test 78.27 (slightly more
+favourable than the canonical 87.11). The win is robust.
+
+**Cumulative L1 story**: L1-everywhere is strictly better than mixed
+L1-surface/MSE-volume. PR #280's finding that "L1's noise robustness
+is the dominant effect" generalises symmetrically to volume.
+
+### Re-assignment
+
+Tanjiro re-assigned to test L1 volume as a compose test on the new
+post-#461 advisor (L1+FF+EMA + matched cosine + lr=7.5e-4). If L1-
+volume composes additively with the other four proven levers, the
+result lands around 76 — a meaningful round-3 close.
+
+Per-epoch metrics not centralised in `EXPERIMENT_METRICS.jsonl` —
+branch deleted on close.
+
+---
+
 ## 2026-04-28 03:11 — PR #461 (MERGED): L1+FF + matched cosine + lr=7.5e-4
 - Branch: `charliepai2d3-askeladd/l1ff-cos14-lr-7p5e-4`
 - Hypothesis: bump peak LR from `5e-4` to `7.5e-4` on the L1+FF +

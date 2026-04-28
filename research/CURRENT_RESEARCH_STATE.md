@@ -95,6 +95,12 @@ Recommended reproduce: `python train.py --epochs 14 --lr 7.5e-4`.
      destructively on rc-camber (+11.8% regression), compose additively
      on cruise-camber (−11.5%) and sign-flip on in-dist (−7.5% vs
      +6.2% under L1-only). See "Convergent OOD-camber narrative" section.
+   - PR #448 — tanjiro (L1+FF + L1 volume loss): val 87.11
+     (**−5.18% vs L1+FF baseline**, +8.5% vs current). Largest
+     single-knob lever validation since PR #280; pre-registered branches
+     fired cleanly (uniform improvement across 3 of 4 splits, biggest
+     gain on val_single_in_dist −9.44% — exactly heavy-tail-dominated).
+     Re-assigned compose test on post-#461 advisor.
    - PR #302 — tanjiro (Huber surface δ=1.0 on MSE): val 105.53 (+2.8%
      vs L1, +14.9% vs L1+FF). Wins narrowly on raceCar tandem
      (`val_geom_camber_rc` −8.9%) but loses on cruise (+21%) and re_rand
@@ -131,9 +137,6 @@ composition even if they don't outright beat 102.64:**
      encoding extension)* — on post-#400 advisor.
    - PR #446 — thorfinn: L1+FF + AdamW(beta2=0.95) *(optimiser compose)*
      — on post-#400 advisor.
-   - PR #448 — tanjiro: L1+FF + L1 volume loss *(loss formulation
-     extension — does L1 dominance extend to volume?)* — on post-#400
-     advisor.
    - PR #462 — edward: L1+FF + `--epochs 14` + grad clipping
      `max_norm=1.0` — three-lever stack *(stability × schedule × FF)*.
    - PR #469 — frieren: L1+FF + `--epochs 14` + `wd=5e-4`
@@ -141,8 +144,11 @@ composition even if they don't outright beat 102.64:**
      cruise/in-dist compose without rc-camber regression.
    - PR #476 — fern: L1+FF+EMA + `--epochs 14` — four-lever-stack
      confirmation on post-#447 advisor.
-   - PR (askeladd, new): L1+FF+EMA + `--epochs 14` + `lr=1e-3` —
+   - PR #489 — askeladd: L1+FF+EMA + `--epochs 14` + `lr=1e-3` —
      LR bracket upper end (round-3-best config plus LR bump).
+   - PR (tanjiro, new): L1+FF+EMA + `--epochs 14` + `lr=7.5e-4` +
+     **L1 volume loss** — compose test of validated L1-volume lever
+     on the new advisor (predicted ~76 if additive).
 
 ## Convergent OOD-camber narrative — partially refuted by PR #437
 
