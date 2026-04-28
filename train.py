@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -463,6 +464,29 @@ model_path = model_dir / "checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
+metrics_tag = cfg.wandb_name or cfg.agent or run.id
+metrics_tag = _sanitize_artifact_token(metrics_tag)
+metrics_dir = Path("metrics") / metrics_tag
+metrics_dir.mkdir(parents=True, exist_ok=True)
+train_metrics_path = metrics_dir / "train_steps.jsonl"
+epoch_metrics_path = metrics_dir / "epochs.jsonl"
+test_metrics_path = metrics_dir / "test.json"
+with open(metrics_dir / "config.json", "w") as f:
+    json.dump({
+        "agent": cfg.agent,
+        "wandb_name": cfg.wandb_name,
+        "wandb_group": cfg.wandb_group,
+        "run_id": run.id,
+        "n_params": n_params,
+        "model_config": model_config,
+        "cfg": asdict(cfg),
+        "max_epochs": MAX_EPOCHS,
+        "max_timeout_min": MAX_TIMEOUT_MIN,
+        "git_commit": _git_commit_short(),
+    }, f, indent=2)
+train_metrics_fp = open(train_metrics_path, "w")
+epoch_metrics_fp = open(epoch_metrics_path, "w")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
@@ -476,6 +500,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_max = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -497,17 +523,30 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(),
+                   "train/grad_norm": grad_norm.item(),
+                   "global_step": global_step})
+        train_metrics_fp.write(json.dumps({
+            "global_step": global_step,
+            "epoch": epoch + 1,
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
+        }) + "\n")
+        train_metrics_fp.flush()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm_sum += grad_norm.item()
+        epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm.item())
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -523,6 +562,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
+        "train/grad_norm_epoch_max": epoch_grad_norm_max,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -534,6 +575,26 @@ for epoch in range(MAX_EPOCHS):
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
+
+    epoch_record = {
+        "epoch": epoch + 1,
+        "global_step": global_step,
+        "lr": scheduler.get_last_lr()[0],
+        "epoch_time_s": dt,
+        "train/vol_loss": epoch_vol,
+        "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
+        "train/grad_norm_epoch_max": epoch_grad_norm_max,
+        "val/loss": val_loss_mean,
+        "val_avg/mae_surf_p": val_avg["avg/mae_surf_p"],
+    }
+    for split_name, m in split_metrics.items():
+        for k, v in m.items():
+            epoch_record[f"{split_name}/{k}"] = v
+    for k, v in val_avg.items():
+        epoch_record[f"val_{k}"] = v
+    epoch_metrics_fp.write(json.dumps(epoch_record) + "\n")
+    epoch_metrics_fp.flush()
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -596,6 +657,13 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+        with open(test_metrics_path, "w") as f:
+            json.dump({
+                "test_avg": test_avg,
+                "per_split": test_metrics,
+                "best_epoch": best_metrics["epoch"],
+                "best_val_avg/mae_surf_p": best_avg_surf_p,
+            }, f, indent=2)
 
     save_model_artifact(
         run=run,
@@ -612,4 +680,6 @@ if best_metrics:
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
 
+train_metrics_fp.close()
+epoch_metrics_fp.close()
 wandb.finish()
