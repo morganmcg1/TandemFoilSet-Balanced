@@ -1,5 +1,36 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2d-r4
 
+## 2026-04-28 00:50 — PR #368: Fourier positional encoding on (x,z): 8-freq sin/cos
+- Branch: `charliepai2d4-edward/fourier-pos-encoding` (sent back to draft)
+- Student: charliepai2d4-edward
+- **Outcome: SENT BACK** (rebase to post-#308 advisor + re-run with EMA+clip).
+
+### Headline (epoch 14 of 14, timeout-capped)
+| Metric | Value | vs equal-config baseline |
+|---|---|---|
+| `val_avg/mae_surf_p` | 117.68 | better than alphonse #287 at epoch 14 (126.67) — Fourier features show positive signal |
+| `val_avg/mae_surf_p` vs current baseline | 117.68 | +10.6% worse than #308 (106.40) — but the comparison isn't fair (no EMA/clip on this branch) |
+| `test_avg/mae_surf_p` | 108.69 | post-#358 scoring fix → all 4 splits finite |
+| Per-epoch time | 132 s | comparable to baseline (141 s) |
+| Peak GPU memory | 42.5 GB | unchanged |
+| n_params | 670,551 (+8K vs baseline from wider preprocess) | within budget |
+
+### Per-split val (epoch 14)
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist     | 133.28 |
+| val_geom_camber_rc     | 127.03 |
+| val_geom_camber_cruise |  93.21 |
+| val_re_rand            | 117.18 |
+
+### Analysis
+- **Fourier features showed positive signal**: 117.68 at epoch 14 beats alphonse #287's 126.67 at the same epoch on the same surf_weight=10 config (~7% gain).
+- **Branch predates the new baseline:** edward branched after #358 but before #308. So this run lacks EMA + grad clip. Merging Fourier features with the post-#308 train.py is exactly the experiment we need.
+- **Edward identified an open follow-up bug**: normalized-space loss in `evaluate_split` propagates NaN on the cruise test split for losses, even though the MAE side is now clean post-#358. Cosmetic for ranking but worth fixing eventually.
+- **Sent back rather than closed**: the rebased run is a clean test of "do Fourier features compound with EMA?" Expected outcome range: 95-110 if compounding works, ~110-115 if EMA was doing all the work.
+
+JSONL: `research/EXPERIMENT_METRICS.jsonl` (PR=368 records, 15 lines from initial run; rebased run will produce a new set).
+
 ## 2026-04-28 00:40 — PR #304: Deeper Transolver: n_layers 5->8 with DropPath 0.1
 - Branch: `charliepai2d4-fern/deeper-model-droppath` (deleted on close)
 - Student: charliepai2d4-fern
