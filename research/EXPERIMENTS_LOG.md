@@ -133,6 +133,110 @@ masked-sum accumulator. PR #797 (askeladd, NaN guard) has been expanded to
 handle both bugs — drop samples with non-finite GT before `accumulate_batch`,
 in addition to the original `nan_to_num` on `pred`.
 
+## 2026-04-28 20:35 — PR #760: batch_size 4→8 — **SENT BACK**
+
+- Branch: `willowpai2e4-thorfinn/batch-size-8`
+- Student: willowpai2e4-thorfinn
+- W&B run: [`nvpb4uam`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/nvpb4uam)
+
+**Hypothesis.** Default `batch_size=4` underutilizes 96 GB VRAM; doubling to 8
+should reduce gradient variance with marginal wall-clock cost. Predicted
+−2 to −7%.
+
+**Implementation.** `--batch_size 8` flag, no other changes. (MSE-era run,
+predates the L1 merge.)
+
+**Results (best epoch 10, 30.4 min wall, ran on MSE before L1 merge)**
+
+| Metric | thorfinn BS=8 (MSE) |
+|---|---|
+| `val_avg/mae_surf_p` | 153.68 |
+| `test_avg/mae_surf_p` | NaN (cruise bug) |
+| 3-split test mean | 156.4 |
+| Peak VRAM | 84.2 GB |
+| Step time | ~130 s/epoch |
+| Epochs at timeout | 14/50 |
+
+**Analysis.** Worse than L1 baseline (101.93) by ~50%, but the run was MSE-based.
+Sits in the middle of the round-1 MSE pack (151–162). BS=8 trains stably,
+peak VRAM 84.2 GB (much higher than my predicted ~24 GB — slice attention
+buffers dominate). BS=16 not viable on this GPU without mixed precision.
+Independent confirmation of the GT-NaN scoring bug (third hit, after fern + alphonse).
+
+**Decision.** Sent back. Asked thorfinn to rebase onto L1 baseline and re-run
+with `--batch_size 8`. The two changes are orthogonal — should be a clean
+rebase. If BS=8 + L1 beats 101.93, merge; else close.
+
+## 2026-04-28 20:35 — PR #749: Capacity scale-up (256×8) — **CLOSED**
+
+- Branch: `willowpai2e4-alphonse/capacity-256x8` (deleted)
+- Student: willowpai2e4-alphonse
+- W&B run: [`p4syry7v`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/p4syry7v)
+
+**Hypothesis.** Scale Transolver to `n_hidden=256, n_layers=8, n_head=8`
+(~3.94M params, ~7.7× baseline) to exploit unused VRAM. Predicted −5 to −15%.
+
+**Implementation.** Three model_config changes plus three infra additions
+(necessary to fit — first attempt OOM'd at 94 GB on cruise sample): bf16
+autocast, gradient checkpointing per TransolverBlock, and
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+
+**Results (best epoch 4 of 5, 30.3 min wall, MSE pre-L1)**
+
+| Metric | alphonse 256×8 (MSE+bf16) |
+|---|---|
+| `val_avg/mae_surf_p` | 186.40 |
+| `test_avg/mae_surf_p` | 174.29 (with bug-skipped sample, fp32 reeval) |
+| Peak VRAM | 24.7 GB (post-infra fixes) |
+| Step time | ~6 min/epoch |
+| Epochs at timeout | 5/50 |
+
+| Epoch | val_avg/mae_surf_p |
+|---|---|
+| 1 | 367.98 |
+| 2 | 224.81 |
+| 3 | 209.78 |
+| 4 | **186.40** (best) |
+| 5 | 208.83 |
+
+**Analysis.** 83% worse than L1 baseline (101.93) and not viable in our
+budget envelope: ~6 min/epoch means only 5 epochs fit vs ~50 for baseline,
+so the model never converges. Trajectory shows decay 367 → 186 over 4 epochs
+— even extrapolating linearly we wouldn't catch baseline inside the cap.
+The capacity hypothesis at this size needs >30 min wall-clock to be testable.
+
+**Decision.** Closed. Asked alphonse to:
+1. Open a separate infra-only PR with bf16 + grad checkpointing +
+   expandable_segments on top of L1 baseline (genuinely valuable infra,
+   wrong vehicle bundled with the capacity bump)
+2. Move to FiLM conditioning of LayerNorm (round-2 idea #2) as the next
+   experiment — orthogonal to L1, addresses the structural issue of global
+   scalars being diluted across 100K+ nodes.
+
+The capacity question isn't dead — once the infra PR lands, we can revisit
+at smaller scales (n_hidden=192, or n_hidden=256 with n_layers=6).
+
+**Important diagnostic surfaced (third independent confirmation).**
+`test_geom_camber_cruise/000020.pt` has 761 NaN values in GT `p` channel
+(out of 225,077 nodes; ~0.34%). Confirmed by alphonse, fern, and thorfinn
+independently. PR #797 (askeladd) already expanded in scope to handle both
+the model-output Inf path AND the GT-NaN path.
+
+## Round 1 status snapshot (2026-04-28 ~20:35)
+
+| PR | Student | Topic | Status |
+|----|---------|-------|--------|
+| #749 | alphonse | Capacity scale-up (256×8) | **closed** (83% regression, no convergence in budget) |
+| #752 | askeladd | L1 loss | **merged** (baseline 101.93) |
+| #753 | edward | surf_weight 20/30/50 | wip |
+| #754 | fern | Per-channel pressure 3× | sent back to retest on L1 |
+| #755 | frieren | slice_num 64→128 | wip |
+| #757 | nezuko | 5% warmup + cosine | wip |
+| #758 | tanjiro | lr=1e-3 + 10% warmup | sent back to retest on L1 |
+| #760 | thorfinn | batch_size 4→8 | sent back to retest on L1 |
+| #797 | askeladd | NaN/Inf guard (scope expanded) | wip |
+| (next) | alphonse | FiLM conditioning of LayerNorm (round-2 #2) | assigning |
+
 ## Round 1 status snapshot (2026-04-28 ~20:15)
 
 | PR | Student | Topic | Status |
