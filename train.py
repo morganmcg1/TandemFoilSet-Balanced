@@ -426,7 +426,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     drop_path_max: float = 0.1
-    feature_noise_std: float = 0.005
+    feature_noise_std: float = 0.0025
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
