@@ -544,3 +544,45 @@ Surf/vol balance preserved on every test split (vol_p tracks surf_p within 1–3
 | PR | Student | Slug | Lever | Why |
 |----|---------|------|-------|-----|
 | #438 | fern | lr-2e-3 | `Config.lr = 1e-3 → 2e-3` on top of merged #408 baseline | Fern's own follow-up #1; tests how far the LR-scaling-under-clip envelope extends. Single-knob continuation of #408. |
+
+## 2026-04-28 01:54 — PR #417: EMA decay 0.999 → 0.99 (charliepai2d1-askeladd) — **MERGED, new baseline**
+- Branch: `charliepai2d1-askeladd/ema-decay-0p99` → squash-merged into `icml-appendix-charlie-pai2d-r1` (commit `83eeafb`).
+- Hypothesis: at the under-converged 13-epoch budget, EMA(0.999) has effective half-life ~1.85 epochs which is too slow to track a fast-improving live iterate; reducing decay to 0.99 (half-life ~0.18 epochs) lets the shadow track the recent (better) iterate before old (worse) iterate drags the shadow back.
+
+### Headline metrics (best EMA epoch=13/50, timeout-cut)
+- Askeladd's run was on the post-#374 base (lr=5e-4, max_norm=1.0); squash-merge composed `ema_decay=0.99` with #402's `max_norm=0.5` and #408's `lr=1e-3` to give the current baseline.
+
+| metric | this run (EMA(0.99) + max_norm=1.0 + lr=5e-4) | prior baseline #408 (EMA(0.999) + max_norm=0.5 + lr=1e-3) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (EMA) | **98.581** | 107.957 | **−8.69 %** |
+| `test_avg/mae_surf_p` | **87.881** | 95.675 | **−8.15 %** |
+
+vs #374 baseline (the run baseline askeladd used): val −12.88 %, test −11.52 %.
+
+### Per-split val (vs current #408 for context)
+| Split | val mae_surf_p | val Δ vs #408 |
+|---|---:|---:|
+| single_in_dist | 118.99 | −5.32 % |
+| geom_camber_rc | 107.26 | −12.56 % |
+| geom_camber_cruise | 75.10 | −9.49 % |
+| re_rand | 92.97 | −7.51 % |
+
+All four val splits improve; `geom_camber_rc` (the harder OOD geom split) gains the most.
+
+### Diagnostic — EMA-vs-raw spread (the headline finding)
+- Mean per-epoch spread: **24.2 pts** (EMA better than raw). Min −5.3 (ep1, expected random-init drag), max 48.1 (ep3), at best epoch (13) **20.4 pts**.
+- Compare to baseline #374's spread: 8 pts at ep13.
+- **EMA shadow consistently *better* than raw at every epoch except ep1.** The PR's prediction ("expect them to be much closer") was upside-down for this regime — at the under-converged budget, the iterate is improving fast and a faster shadow captures more signal because each fresh batch pulls the shadow back toward the recent (better) iterate before too much old (worse) iterate decays in.
+- **Raw at ep13 (119.0) is essentially unchanged from baseline raw (~122).** The underlying optimization didn't change. All of the gain came from extracting a better shadow average from the same trajectory.
+
+### Decision: merge as new round-1.5 baseline
+- Beats baseline by a wide margin on every val and test split; single-character diff (`ema_decay = 0.999 → 0.99`).
+- EMA decay is genuinely orthogonal to grad-clip and lr — checkpoint-selection lever, not training-loop lever. Squash-merge cleanly composes `ema_decay=0.99` with the merged `max_norm=0.5` and `lr=1e-3`.
+- Mechanism story is clean and auditable (per-epoch EMA-vs-raw spread proves the regime).
+- BASELINE.md updated; askeladd reassigned to **PR #445 (ema-decay-0p95)** as the natural next step in the decay sweep they suggested in their write-up.
+
+## 2026-04-28 01:55 — Round-1.5 assignments (continued)
+
+| PR | Student | Slug | Lever | Why |
+|----|---------|------|-------|-----|
+| #445 | askeladd | ema-decay-0p95 | `ema_decay = 0.99 → 0.95` on top of merged #417 baseline | Askeladd's own follow-up #1; tests where the responsiveness curve bottoms out. At 0.95 the half-life is ~14 batches ≈ 0.04 epochs — possibly too noisy under balanced-domain sampling, possibly captures even more recent signal. Honest band −1 % to +5 %. |

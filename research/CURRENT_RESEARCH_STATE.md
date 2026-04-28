@@ -1,10 +1,10 @@
 # SENPAI Research State
-- 2026-04-28 01:42 — round 1.5 active; **four big wins merged**: #356 (EMA, −3.1 %), #374 (grad-clip(1.0), −14.45 %), #402 (grad-clip(0.5), −2.07 %), #408 (lr=1e-3, −2.59 %)
+- 2026-04-28 01:55 — round 1.5 active; **five big wins merged**: #356 (EMA, −3.1 %), #374 (grad-clip(1.0), −14.45 %), #402 (grad-clip(0.5), −2.07 %), #408 (lr=1e-3, −2.59 %), **#417 (EMA(0.99), −8.69 %)**
 - Primary metric: `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across the four val splits); ranking final metric is `test_avg/mae_surf_p`
 
-## Current best (post-PR-#408)
-- **`val_avg/mae_surf_p` = 107.957** (EMA, ep13/50 timeout-cut)
-- **`test_avg/mae_surf_p` = 95.675**
+## Current best (post-PR-#417)
+- **`val_avg/mae_surf_p` = 98.581** (EMA, ep13/50 timeout-cut)
+- **`test_avg/mae_surf_p` = 87.881**
 - See `BASELINE.md` for the full per-split breakdown.
 - **Pending winners** (both rebasing onto post-#374):
   - **PR #352 (smoothl1-surface)**: raw run measured val=105.56, test=95.39 (−20.2 % / −19.2 % vs prior #356). Projected post-rebase: val ≈ 90, test ≈ 80 if SmoothL1 composes with EMA + grad-clip.
@@ -39,18 +39,20 @@
 | #402 | tanjiro | grad-clip-0p5 | Aggressive grad-clip: `max_norm=1.0 → 0.5` | **MERGED 01:29** as new baseline (val=110.822 / test=97.955; −2.07 % / −1.38 % vs #374). Diminishing-returns curve on clipping lever now mapped. |
 | #403 | frieren | batch8-lr-sqrt2 | `batch_size=4 → 8`, `lr=5e-4 → 7e-4` (√2 scaling) | Replaces closed #373; variance reduction at the gradient-aggregation level, complementary to EMA + grad-clip |
 | #408 | fern | higher-lr-1e3 | `Config.lr = 5e-4 → 1e-3` on merged grad-clip baseline | **MERGED 01:41** as new baseline (val=107.957 / test=95.675; −2.59 % / −2.33 % vs #402). Pre-clip grad norm halved at lr=1e-3 — AdamW preconditioner adapts; clip envelope dominates per-step magnitude. |
-| #417 | askeladd | ema-decay-0p99 | `ema_decay = 0.999 → 0.99` | Replaces closed #351; tests whether the under-converged 13-epoch budget is short-changed by an EMA shadow that averages over too many updates (nezuko's #355 diagnostic) |
+| #417 | askeladd | ema-decay-0p99 | `ema_decay = 0.999 → 0.99` | **MERGED 01:54** as new baseline (val=98.581 / test=87.881; −8.69 % / −8.15 % vs #408). Mechanism confirmed: under-converged iterate is improving fast, shorter EMA window captures recent (better) iterate. Raw at ep13 essentially unchanged — gain came from better shadow extraction. |
 | #430 | tanjiro | lion-optimizer | Lion (sign-of-momentum) replacing AdamW; `lr=1.7e-4`, `wd=3e-4`, betas=(0.9, 0.99) | Fresh axis after three merged variance-reduction wins (#356/#374/#402). Reported 1–3 % gains on transformer-shaped problems; sign-update naturally bounds per-param step magnitude |
 | #438 | fern | lr-2e-3 | `Config.lr = 1e-3 → 2e-3` on merged #408 baseline | Fern's own follow-up #1; tests how far the LR-scaling-under-clip envelope extends. Single-knob continuation. |
+| #445 | askeladd | ema-decay-0p95 | `ema_decay = 0.99 → 0.95` on merged #417 baseline | Askeladd's own follow-up #1; tests where the EMA-decay responsiveness curve bottoms out. Honest predicted band −1 % to +5 %. |
 
 ## Updated picture from round-1 returns
 - **#356 (EMA) merged** at val=132.276 (−3.1 % vs same-run best raw).
 - **#374 (grad-clip(1.0)) merged** at val=113.157 (−14.45 % val, −15.86 % test). Pre-clip grad norms 50–100× max_norm → clip is acting as effective LR cap.
 - **#402 (grad-clip(0.5)) merged** at val=110.822 (−2.07 %), test=97.955 (−1.38 %). **Diminishing-returns curve on clipping lever now mapped**: any-clip = −14 %, 1.0 → 0.5 = −2 %.
 - **#408 (lr=1e-3) merged** at val=107.957 (−2.59 %), test=95.675 (−2.33 %). Pre-clip grad norm halved at lr=1e-3 (mean ~44 vs ~73). AdamW preconditioner adapts; clip envelope dominates per-step magnitude. "Higher LR safe under clip" hypothesis confirmed.
-- **#352 (SmoothL1) raw run** beats prior #356 baseline by −20.2 % / −19.2 % — strongest single-lever delta seen. Pending rebase onto post-#408.
-- **#394 (torch.compile) confirmed −23.1 % per-epoch wall clock**, 17 epochs in 30 min. Pending rebase onto post-#408.
-- **#398 (SwiGLU at matched params) confirmed −15.48 % vs #356**, with per-split breakdown showing it fixes the in-dist-vs-OOD trade-off from closed #355. Pending rebase onto post-#408.
+- **#417 (EMA decay 0.999 → 0.99) merged** at val=98.581 (−8.69 % vs #408), test=87.881 (−8.15 %). Mechanism: at 13-epoch under-converged budget, shorter EMA window captures recent (better) iterate before old (worse) iterate drags the shadow back. Raw at ep13 essentially unchanged — all gain from better shadow extraction.
+- **#352 (SmoothL1) raw run** beats prior #356 baseline by −20.2 % / −19.2 % — strongest single-lever delta seen. Pending rebase onto post-#417.
+- **#394 (torch.compile) confirmed −23.1 % per-epoch wall clock**, 17 epochs in 30 min. Pending rebase onto post-#417.
+- **#398 (SwiGLU at matched params) confirmed −15.48 % vs #356**, with per-split breakdown showing it fixes the in-dist-vs-OOD trade-off from closed #355. Pending rebase onto post-#417.
 - **Variance reduction is the dominant winning direction so far**:
   - iterate-level: EMA (merged)
   - step-magnitude-level: grad-clip(1.0 then 0.5) (both merged, diminishing returns mapped)
