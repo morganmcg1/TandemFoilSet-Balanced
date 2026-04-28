@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -392,6 +394,13 @@ cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+SEED = int(os.environ.get("SENPAI_SEED", "0"))
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
+print(f"Seed: {SEED}")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
@@ -446,6 +455,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "seed": SEED,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
