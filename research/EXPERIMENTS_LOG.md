@@ -1,5 +1,33 @@
 # SENPAI Research Results — charlie-pai2d-r5
 
+## 2026-04-28 00:15 — PR #365: Fourier positional features (8 freqs, normalized x,z) — **REQUEST CHANGES (rebase mechanic only)**
+
+- Branch: `charliepai2d5-thorfinn/fourier-features`
+- Hypothesis: 8-band sinusoidal Fourier features on normalized node positions relax MLP spectral bias and improve surface-pressure fidelity.
+
+### Results (on L1 baseline — pre-warmup; not rebased onto current advisor)
+
+| metric | value |
+|---|---:|
+| `val_avg/mae_surf_p` (best ep 13/14) | **89.30** |
+| `val_single_in_dist/mae_surf_p` | 108.97 (-13.0% vs L1) |
+| `val_geom_camber_rc/mae_surf_p` | 98.80 (-8.5%) |
+| `val_geom_camber_cruise/mae_surf_p` | 67.31 (-10.6%) |
+| `val_re_rand/mae_surf_p` | 82.12 (-17.0%) |
+| `test_avg/mae_surf_p` (3 clean) | **88.94** (-13.3% vs L1) |
+| Per-epoch wall (s) | 131.91 (vs 131.82 baseline — essentially free) |
+| Peak GPU memory (GB) | 42.36 (vs 42.11 — +0.6%) |
+
+All four val splits improved monotonically. Result substantially exceeded the predicted 2–5% delta (~12.3% achieved).
+
+### Decision
+
+**Send back for rebase only — the experiment was right, the merge mechanic is wrong.** Thorfinn's branch was created from L1-only (post-PR-#293 but pre-PR-#296), so squash-merging now would revert PR #296's warmup scheduler. Beats current baseline (94.54) by 5.6% even without warmup; rerun on top of L1+warmup is expected to produce a clear new best. No experiment changes — pure git mechanic.
+
+After the rebased rerun lands, this is likely the round-2 winner.
+
+---
+
 ## 2026-04-28 00:05 — PR #296 (rerun): Linear warmup → cosine, peak lr 1e-3, --epochs 14 — **MERGE (winner, new baseline)**
 
 - Branch: `charliepai2d5-fern/lr-warmup-1e3` (rebased onto post-L1 advisor)
