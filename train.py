@@ -218,13 +218,17 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float = 0.0) -> dict[str, float]:
+def evaluate_split(
+    model, loader, stats, surf_weight, device,
+    huber_delta: float = 0.0, use_bf16: bool = False,
+) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
     ``huber_delta`` mirrors the training loss: 0 → MSE, >0 → Huber.
+    ``use_bf16`` mirrors the training autocast: forward pass runs in BF16.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -254,7 +258,9 @@ def evaluate_split(model, loader, stats, surf_weight, device, huber_delta: float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             # Guard against NaN in GT (e.g. test_geom_camber_cruise sample 20):
             # NaN in y_norm propagates into sq_err and then into the loss sum.
@@ -419,6 +425,8 @@ class Config:
     ema_decay: float = 0.999  # Polyak/EMA decay; 0.999 → ~1000-step half-life
     ema_warmup_epochs: int = 5  # epochs to skip EMA accumulation (avoid pulling toward random init)
     huber_delta: float = 0.0  # Huber loss transition point in normalized space; 0 → MSE
+    use_bf16: bool = False  # BF16 autocast for faster forward/backward passes (no GradScaler needed)
+    n_layers: int = 5  # Transolver depth (number of TransolverBlocks)
     eval_checkpoint: str | None = None  # if set, skip training; load checkpoint and run test eval only
     slice_num: int = 64  # PhysicsAttention slice token count per layer
 
@@ -454,7 +462,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
@@ -547,7 +555,8 @@ if cfg.eval_checkpoint:
         for name, ds in test_datasets.items()
     }
     test_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.huber_delta, cfg.use_bf16)
         for name, loader in test_loaders.items()
     }
     test_avg = aggregate_splits(test_metrics)
@@ -574,6 +583,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    amp_ctx = torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.use_bf16)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -581,24 +591,25 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.huber_delta > 0.0:
-            _abs = (pred - y_norm).abs()
-            sq_err = torch.where(
-                _abs < cfg.huber_delta,
-                0.5 * _abs ** 2,
-                cfg.huber_delta * (_abs - 0.5 * cfg.huber_delta),
-            )
-        else:
-            sq_err = (pred - y_norm) ** 2
+        with amp_ctx:
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            if cfg.huber_delta > 0.0:
+                _abs = (pred - y_norm).abs()
+                sq_err = torch.where(
+                    _abs < cfg.huber_delta,
+                    0.5 * _abs ** 2,
+                    cfg.huber_delta * (_abs - 0.5 * cfg.huber_delta),
+                )
+            else:
+                sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -629,7 +640,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     ema_model.eval()
     live_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.huber_delta, cfg.use_bf16)
         for name, loader in val_loaders.items()
     }
     live_val_avg = aggregate_splits(live_split_metrics)
@@ -637,7 +649,8 @@ for epoch in range(MAX_EPOCHS):
 
     if ema_active:
         ema_split_metrics = {
-            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                                 cfg.huber_delta, cfg.use_bf16)
             for name, loader in val_loaders.items()
         }
         ema_val_avg = aggregate_splits(ema_split_metrics)
@@ -736,7 +749,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_delta)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 cfg.huber_delta, cfg.use_bf16)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
