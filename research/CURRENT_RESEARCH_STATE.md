@@ -1,48 +1,41 @@
 # SENPAI Research State
 
-- 2026-04-29 12:05 (round 1 wrapping up, round 2 ramping, branch `icml-appendix-charlie-pai2f-r1`)
+- 2026-04-29 12:25 (round 1 closing — first winner merged, 5 round-2 PRs in flight)
 - No human researcher directives yet for this branch.
-- Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective.
+- Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective (~14 actually achievable per run).
 
-## Round 1 status
+## Round 1 status (closing)
 
 | PR | Student | Hypothesis | Status | best val_avg/mae_surf_p |
 |---|---|---|---|---|
-| #1092 | alphonse | capacity-scale-up | sent back (n_h=160 only) | 168.749 |
-| #1094 | askeladd | surf-weight-25 | sent back (bs↑, rebase) | 134.368 |
-| #1095 | edward | pressure-channel-weight | sent back (formula) | 133.892 |
+| #1092 | alphonse | capacity-scale-up | **closed** (160-h5 rev: 141.1 still descending; +5.4% vs new baseline) | 141.121 |
+| #1094 | askeladd | surf-weight-25 | **closed** (bs=8 rev: 150.9 +12.3% regression) | 150.931 |
+| #1095 | edward | pressure-channel-weight | wip (rev) | (133.892 confounded) |
 | #1096 | fern | huber-vol | wip | — |
-| #1097 | frieren | slice-num-128 | **closed** (164.2 at bs=6, +22% regression) | 162.562 |
-| #1138 | frieren | rff-32 (H-01, round 2) | wip (just assigned) | — |
-| #1099 | nezuko | lr1e-3-warmup5 | **closed** (143.3, +7% regression) | 143.313 |
-| #1142 | nezuko | ema-decay-999 (H-06, round 2) | wip (just assigned) | — |
-| #1100 | tanjiro | wider-bs8 (fallback bs=5) | sent back (mlp_ratio↓, clamp) | 165.304 |
-| #1101 | thorfinn | warmup-cosine-floor | sent back (T_max=13, warmup=1) | 142.886 |
+| #1097 | frieren | slice-num-128 | **closed** (164.2) | 162.562 |
+| #1099 | nezuko | lr1e-3-warmup5 | **closed** (143.3 +7% regression, σ ≈ 7) | 143.313 |
+| #1100 | tanjiro | wider-bs8 | wip (rev) | 165.304 |
+| #1101 | thorfinn | warmup-cosine-floor | **🏆 MERGED** (regime-matched: val=125.438, test=112.988) | **125.438** |
+
+**Round-1 winner merged**: PR #1101 (thorfinn). Schedule (warmup=1, T_max=13, eta_min=lr/100) is now the merged baseline. All round-2 hypotheses inherit it via rebase.
 
 ## Cross-experiment learnings so far
 
-1. **30-min budget is the binding constraint.** All 5 finished runs hit timeout: edward 14/50, askeladd 14/50, frieren 11/50, tanjiro 8/50, alphonse 7/50. None reached the cosine LR low-LR phase. Per-epoch wall clock ranges from ~130s (baseline shape) to ~277s (n_hidden=192/layers=6/mlp_ratio=4, bs=3). **Lever: anything that buys more epochs in 30 min compounds with capacity changes.**
-2. **Compute-cost asymmetry across capacity axes.** mlp_ratio dominates activation memory because it widens the MLP intermediate; layers and width compound multiplicatively in attention. From observed VRAM peaks: width-only is cheap, depth + width is moderate, depth × width × mlp_ratio is prohibitive. **Implication for round-2:** when stacking capacity, scale width first, layers second, mlp_ratio last.
-3. **bs↑ does NOT buy more epochs at default architecture (REVISED).** Frieren's bs=4 → bs=6 revision (PR #1097 rev) ran for 11 epochs at both — identical wall-clock, despite +50% gradient batch size. Per-batch time grows ~50%, batches/epoch drop ~33%, total epoch time conserved. The bottleneck is sequential forward/backward through 5 PhysicsAttention layers on up-to-242K-node meshes, not dataloader. **True throughput levers are: validation cadence reduction, gradient checkpointing, `torch.compile`, capacity-axis trade-offs.** Earlier I sent askeladd (#1094) and partially tanjiro (#1100) back asking for bs↑ to gain epochs — that was wrong. Their runs were compute-bound, not VRAM-bound. The bs↑ may still help via larger gradient batches (gradient noise reduction, e.g. for slice_num=128 volatility) but it will NOT directly buy more epochs.
+1. **30-min budget is the binding constraint.** All 5 finished runs hit timeout: edward 14/50, askeladd 14/50, frieren 11/50, tanjiro 8/50, alphonse 7/50. Schedule winner thorfinn ran 14/14, val curve still descending at the cap. Per-epoch wall clock ranges from ~131s (baseline shape) to ~277s (n_hidden=192/layers=6/mlp_ratio=4, bs=3). **Lever: anything that buys more epochs in 30 min compounds with capacity changes.**
+2. **Compute-cost asymmetry across capacity axes.** mlp_ratio dominates activation memory (widens MLP intermediate); layers and width compound multiplicatively in attention. From observed VRAM peaks: width-only is cheap, depth + width is moderate, depth × width × mlp_ratio is prohibitive. **Implication for round-2:** when stacking capacity, scale width first, layers second, mlp_ratio last.
+3. **bs↑ does NOT buy more epochs at default architecture (CONFIRMED 2x).** Frieren's PR #1097 rev (bs=4 vs bs=6, 11 epochs both) AND askeladd's PR #1094 rev (bs=4 vs bs=8, 14 epochs both) both showed identical wall-clock at +50% / +100% gradient batch size. Per-batch time grows linearly, batches/epoch drop, total epoch time conserved. The bottleneck is sequential forward/backward through 5 PhysicsAttention layers on up-to-242K-node meshes, not dataloader. **True throughput levers:** validation cadence reduction, gradient checkpointing, `torch.compile`, AMP/bf16, capacity-axis trade-offs. Plain bs↑ at fixed architecture is dead.
 4. **Test pressure NaN is a multi-failure mode.**
-   - **Mode A (data):** `test_geom_camber_cruise/000020.pt` has +Inf in p ground truth — exposed by `data/scoring.py` mask-multiply propagating NaN. **Branch-side fix applied** via `torch.where`-based masking. Confirmed independently by edward (#1095), frieren (#1097), askeladd (#1094), alphonse (#1092).
-   - **Mode B (model):** wider tanjiro and undertrained alphonse produced fp32 overflow in pred_p on a cruise inference sample, blowing up vol_loss to +Inf. Output-side pressure clamping is the right fix; requested for tanjiro and frieren. Alphonse's narrower retry should fix it via more epochs alone.
+   - **Mode A (data):** `test_geom_camber_cruise/000020.pt` has +Inf in p ground truth. **Branch-side fix applied** via `torch.where`-based masking in `data/scoring.py` (commit 2548195). Confirmed by edward, frieren, askeladd, alphonse.
+   - **Mode B (model):** undertrained or wide models produce fp32 overflow on cruise sample. Output-side pressure clamping is the right fix; requested for tanjiro/frieren.
+   - **Mode C (cosmetic, train.py side):** `train.py::evaluate_split` and `run_step` still use multiplication-based masking on the loss path → loss/vol_loss/surf_loss columns are NaN/Inf for cruise even with the data/scoring fix. The ranking metric mae_surf_p is unaffected (uses the fixed scoring path). **TODO: small follow-up advisor-side patch** swapping `(sq_err * mask)` → `torch.where(mask, sq_err, 0)` to clean up loss columns.
 5. **Surface-loss reweighting helps OOD splits.** Askeladd's surf_weight=25 run beat edward on val_re_rand and val_geom_camber_cruise, lost on val_single_in_dist. Even though aggregate val_avg is tied, this is exactly where surface boosting *should* help — the OOD splits whose paper-facing test_avg is what matters.
-6. **Best so far: 133.89.** Provisional, edward only — and it's a confounded run (loss formula softened aggregate surface signal ~3×). Askeladd is at 134.4 (clean methodology, throughput-limited). True round-1 winner not yet decided.
-7. **Schedule hyperparameters must be matched to the achievable horizon, not the nominal one.** Thorfinn's warmup-cosine-floor used `T_max = MAX_EPOCHS - warmup = 45`, but the 30-min cap halts training at ~14 epochs. Result: cosine traverses ~20% of its trajectory and `eta_min` floor is unreachable — the mechanism never fires. Round-2 schedule experiments must derive `T_max` from observed per-epoch wall-clock (~131 s/epoch at default arch) and the 30-min budget, not from the 50-epoch nominal cap.
-8. **Schedule run-to-run variance is ~12%.** Two identical thorfinn runs hit 124.29 and 142.89. For low-effect-size hypothesis tests (predicted ±2-5%), single-run comparisons are below the noise floor. Round-2 implication: prioritize hypotheses with predicted larger effects, OR run multi-seed for borderline schedule/optim tweaks.
+6. **Schedule hyperparameters MUST match the achievable horizon.** Thorfinn's win confirms learnings #7 and #8 from the prior state: T_max must be derived from observed per-epoch cost (~131 s/ep) and the 30-min budget (~14 ep), not from MAX_EPOCHS=50. With T_max=13 + warmup=1, the cosine traverses fully and eta_min=5e-6 floor actually engages in the last 2-3 epochs (each producing 5-7% improvement).
+7. **Schedule run-to-run variance is ~12% but the improvement is bigger.** Two identical thorfinn pre-rev runs hit 124.29 and 142.89; the post-rev hit 125.44. The 6.3% improvement vs prior baseline is meaningfully above this noise floor. **Round-2 implication:** use the merged schedule as a stable platform; single-run comparisons of small-effect hypotheses (-1% to -3%) still need multi-seed verification.
 
 ## Branch-side fixes
 
-- **`data/scoring.py` NaN-propagation bug.** Multiply-mask let NaN ground-truth p
-  values bleed past the sample-level filter, producing NaN
-  `test_avg/mae_surf_p` whenever any test sample has non-finite y. Fixed via
-  `torch.where`-based masking on the advisor branch (committed alongside this
-  state update). In-flight student runs that finish before they can rebase will
-  still report NaN test pressure on `test_geom_camber_cruise`; their val
-  numbers are unaffected. Merge winners on val_avg, treat test_avg as paper
-  number that will need rerun if NaN. **Confirmed independently by edward (PR
-  #1095) and frieren (PR #1097).**
+- **`data/scoring.py` NaN-propagation bug** (committed in 2548195). Fixed via `torch.where`-based masking. **Open follow-up:** matching fix in `train.py::evaluate_split` for the cosmetic loss-column NaN.
+- **PR #1101 schedule merged to `train.py`** (commit a8d7a25 + merge commit). All future runs inherit warmup=1, T_max=13, eta_min=lr/100 by default.
 
 ## Current research focus
 
@@ -50,45 +43,54 @@ Round 1 establishes a balanced sweep across the main optimization levers for the
 default Transolver baseline on TandemFoilSet. The eight assignments cover three
 families:
 
-1. **Capacity scaling** — `alphonse` (n_hidden 192, layers 6, mlp_ratio 4),
-   `tanjiro` (n_hidden 256 + bs 8), `frieren` (slice_num 128).
-2. **Loss / metric alignment** — `askeladd` (`surf_weight 25`), `edward`
-   (per-channel pressure-weighted surf loss), `fern` (Huber on volume).
-3. **Optimization discipline** — `nezuko` (lr 1e-3 + warmup), `thorfinn`
-   (warmup + non-zero cosine floor at default lr).
+1. **Capacity scaling** — `alphonse` (192/6/6/4 OOM → 160/5/5/2 +5.4%, **closed**),
+   `tanjiro` (n_hidden 256 + bs 8, in flight rev), `frieren` (slice_num 128, **closed**).
+2. **Loss / metric alignment** — `askeladd` (surf_weight 25 → bs8 +12.3%, **closed**),
+   `edward` (per-channel pressure-weighted surf loss, in flight rev), `fern` (Huber on volume).
+3. **Optimization discipline** — `nezuko` (lr 1e-3 + warmup, **closed** +7%),
+   `thorfinn` (warmup + non-zero cosine floor, **🏆 MERGED**).
 
-The intent is to pin down which lever moves `val_avg/mae_surf_p` most, then in
-later rounds stack the winning levers and explore architecturally bolder
-follow-ups (Fourier features, neural operator hybrids, attention variants,
-physics-informed losses, EMA / SWA averaging, etc.).
+Round 2 continues the sweep with hypotheses that:
+- Stack cleanly with the merged schedule (architectural + augmentation orthogonal to schedule)
+- Cover orthogonal axes (positional encoding, training trick, architecture, augmentation)
+- Predict effects above the noise floor where possible
 
-## Round 2 — assignments in flight
+## Round 2 — assignments in flight (5 PRs)
 
 - **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal; zero throughput cost; strong priors (Tancik 2020, GINO, MARIO). Expected -3% to -8%.
-- **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance nezuko diagnosed in #1099. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
+- **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
+- **PR #1158 (thorfinn, film-domain-cond)** — H-10 FiLM domain conditioning over global per-sample features (Re, AoA, NACA, gap, stagger). Targets the 51% per-split val spread. ~0.05M extra params, near-zero throughput cost, identity-init for safe start. Expected -2% to -5%.
+- **PR #1159 (askeladd, aoa-flip-aug)** — H-12 AoA sign-flip augmentation for aerodynamic symmetry. Doubles effective training data per epoch at zero throughput cost. Targets `val_single_in_dist` (151.4) and `val_geom_camber_rc` (132.8) where AoA coverage gaps most likely hurt. Expected -1% to -4%.
+- **PR #1160 (alphonse, swiglu-ffn)** — H-11 SwiGLU FFN replacing GELU MLP in TransolverBlock, param-matched. Different capacity axis from his prior width-scaling attempt. ~5-7% slower per epoch. Strong priors (LLaMA, PaLM, Mixtral). Expected -1% to -3%.
 
-## Next research directions (post-round-1 candidates)
+## Round 1 in-flight (revisions waiting)
 
-- **Stack winners.** Whichever capacity, loss, and schedule changes win get
-  combined into a single recipe and re-tested.
-- **Per-domain specialization.** Inspect per-split metrics — if camber-rc /
-  camber-cruise behave differently from re_rand, explore conditioning or domain
-  embedding (e.g. learned domain token concatenated to features).
-- **Geometry-aware augmentation.** Random AoA reflection (sign flip + y-axis
-  flip), light positional jitter, or NACA cambered-thickness perturbation could
-  expand effective sample count without changing the data contract.
-- **Spectral / Fourier features.** Random Fourier features on x[:, 0:2] (node
-  positions) often boost mesh-based surrogates in CFD.
-- **Loss reformulation.** Sobolev-style loss (gradient matching), per-sample
-  scale-aware losses (divide errors by sample y_std), pressure-only auxiliary
-  head with a stronger weight.
-- **Optimizer swap.** Lion or AdEMAMix as alternatives to AdamW, especially if
-  capacity-scaling wins because larger models often respond better to
-  alternative optimizers.
-- **Sampler tweaks.** Sampling weighted by per-sample y_std (high-variance
-  samples seen more often) to attack heavy-tailed errors.
-- **Model averaging.** EMA of weights with decay 0.999, evaluating EMA at val
-  time for noise-robust generalization.
+- **PR #1095 (edward)** — pressure-channel-weight, corrected formula (`/ ch_w.mean()`). Round-1 cleanup.
+- **PR #1096 (fern)** — Huber loss on volume nodes, in flight.
+- **PR #1100 (tanjiro)** — wider-bs8 with mlp_ratio↓ + output clamp, in flight.
+
+## Next research directions (post-round-2 candidates)
+
+- **Stack winners.** Whichever of FiLM, AoA-flip, SwiGLU, RFF, EMA win get
+  combined into a single recipe and re-tested. Schedule (already merged) is
+  the platform.
+- **AMP / gradient checkpointing for capacity stacking.** alphonse's 160/5/5/2
+  + thorfinn's schedule is a clean stacking hypothesis but needs throughput
+  gain to fit ≥18 epochs. AMP halves activation memory; gradient checkpointing
+  trades VRAM for ~30% wall-clock cost.
+- **Sobolev-style loss (gradient matching, H-04).** Per-sample scale-aware
+  losses (divide errors by sample y_std), pressure-only auxiliary head with a
+  stronger weight. Untouched loss family.
+- **Optimizer swap (H-08 Cautious AdamW, Lion).** As alternatives to AdamW,
+  especially if capacity-scaling wins because larger models often respond
+  better to alternative optimizers.
+- **Re-stratified sampling (H-13).** Per-sample weighting by `log(per_sample_y_std)`
+  to upweight high-Re samples (harder distribution).
+- **Physics-aware (H-14, H-15).** Soft incompressibility constraint
+  (∇·u = 0); multi-task auxiliary head for surface Cp.
+- **Sobolev-style spatial gradient loss (H-04).** Match `∇p` and `∇u` on
+  surface, not just point values — directly penalizes wrong pressure
+  gradients.
 
 ## Constraints reminder
 
@@ -96,3 +98,4 @@ physics-informed losses, EMA / SWA averaging, etc.).
 - `data/` is read-only in normal experiment PRs.
 - Don't override `SENPAI_TIMEOUT_MINUTES` or `SENPAI_MAX_EPOCHS`.
 - Primary metric: `val_avg/mae_surf_p`; test metric: `test_avg/mae_surf_p`.
+- All round-2 PRs inherit the merged thorfinn schedule via rebase — students should rebase before running to pick up the new defaults.

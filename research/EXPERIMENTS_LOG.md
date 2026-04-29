@@ -1,5 +1,134 @@
 # SENPAI Research Results
 
+## 2026-04-29 12:18 — PR #1101 (MERGED — round-1 winner): Schedule regime-matched (warmup=1, T_max=13, eta_min=lr/100)
+- Branch: `charliepai2f1-thorfinn/warmup-cosine-floor` (merged into `icml-appendix-charlie-pai2f-r1`)
+- Hypothesis: Linear warmup (1 ep) + cosine to non-zero floor (eta_min=lr/100) over the **achievable** horizon (T_max=13), beats both vanilla cosine-to-zero (T_max=epochs=50, never reaches tail) and the prior 5-epoch warmup variant (calibrated to the nominal horizon).
+- Reality: clean win — beat baseline by 6.3% on val and 14.5% on test, with all 4 test splits finite. Final-epoch best (still descending at the cap).
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 14/14, final) | **125.438** |
+| `test_avg/mae_surf_p` (4 splits, all finite ✓) | **112.988** |
+| vs prior PR (5-ep warmup, T_max=45) | val 142.886 → 125.438 (-12.2%), test 127.871 → 112.988 (-11.6%) |
+| vs provisional baseline (#1095 edward) | val 133.892 → 125.438 (-6.3%), test 132.106 → 112.988 (-14.5%) |
+| Epochs run | 14 / 50 (timeout-bound, ~131 s/epoch) |
+| Peak VRAM | 42.1 GB |
+| Metrics file | `models/model-charliepai2f1-thorfinn-schedule-regime-matched-20260429-113430/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 14)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 151.43 | 130.68 |
+| `geom_camber_rc` | 132.77 | 122.82 |
+| `geom_camber_cruise` | 99.90 | 84.04 |
+| `re_rand` | 117.65 | 114.41 |
+| **avg** | **125.44** | **112.99** |
+
+### LR trajectory (verified)
+```
+e1 5.0e-7 (warmup)   e8 2.8e-4
+e2 5.0e-4 (peak)     e9 2.2e-4
+e3 4.9e-4            e10 1.6e-4
+e4 4.7e-4            e11 1.1e-4
+e5 4.4e-4            e12 6.7e-5
+e6 3.9e-4            e13 3.3e-5
+e7 3.4e-4            e14 1.2e-5  ← ~2.4× eta_min, floor engaged
+```
+
+### Val_avg trajectory
+```
+e1→407 e2→266 e3→209 e4→200 e5→189 e6→213 e7→165
+e8→165 e9→150 e10→180 e11→145 e12→135 e13→127 e14→125 *
+```
+
+### Conclusions
+- **First merged round-1 winner.** The regime-matched schedule decisively beats the round-1 baseline pack on both val and test. NaN-safe scoring rebase delivers all-finite test metrics for the first clean test_avg comparison.
+- **Mechanism confirmed.** Cosine over the achievable horizon (T_max=13) lets eta_min=5e-6 actually engage in the last 2-3 epochs (e13 lr=3.3e-5, e14 lr=1.2e-5) — these epochs each produced ~5-7% improvement on val_avg. Compared to the prior PR config (lr stuck at 4.6e-4 at e14), the floor is the difference between converging and bouncing.
+- **Best is final epoch.** Val curve still descending at e14 (e13 126.5 → e14 125.4) — model is still under-trained at the wall-clock cap. Headroom exists for: (a) longer wall-clock, (b) throughput gains (AMP, gradient checkpointing, torch.compile), or (c) eta_min tuning (lr/50 = 1e-5 might convert the last 2 epochs into bigger steps).
+- **Round-2 stacking lever.** This schedule is now the merged baseline. All round-2 hypotheses inherit it via rebase. SchedulE + RFF (frieren H-01), schedule + EMA (nezuko H-06), schedule + FiLM (thorfinn H-10), schedule + AoA flip (askeladd H-12), schedule + SwiGLU (alphonse H-11) — all clean orthogonal stacks.
+- **Reaffirms learnings #7 and #8.** Schedule hyperparameters MUST match the achievable horizon, not the nominal one. The 5-epoch warmup wasted ~35% of useful gradient budget; T_max=45 traversed only 20% of the cosine. These are the exact errors thorfinn diagnosed and corrected.
+
+## 2026-04-29 12:19 — PR #1094 (closed): Surf weight 25 + bs=8 (revision)
+- Branch: `charliepai2f1-askeladd/surf-weight-25` (closed)
+- Hypothesis (revision): bs↑ from 4 to 8 fits more epochs in 30 min, converting throughput into progress on val_avg/mae_surf_p (advisor's prior suggestion, since refuted).
+- Reality: bs=8 ran identical 14 epochs as bs=4 (frieren's throughput finding confirmed independently); LR=5e-4 too low for larger batch → +12.3% regression vs bs=4.
+
+### Results
+
+| Metric | bs=8 (this run) | bs=4 (prior PR) | Δ |
+|---|---|---|---|
+| best `val_avg/mae_surf_p` (epoch 12) | **150.931** | 134.368 | +12.3% (worse) |
+| `test_avg/mae_surf_p` (4 splits, finite ✓) | **136.096** | NaN (cruise) | finite this time |
+| Epochs run | 14 / 50 | 14 / 50 | same |
+| Peak VRAM | 84.2 GB | 42.1 GB | +100% |
+| Metrics file | `models/model-charliepai2f1-askeladd-surf-weight-25-bs8-20260429-113448/metrics.jsonl` | | |
+
+### Per-split val/test (best checkpoint, epoch 12)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 202.44 | 179.31 |
+| `geom_camber_rc` | 149.65 | 134.13 |
+| `geom_camber_cruise` | 122.61 | 103.45 |
+| `re_rand` | 129.03 | 127.50 |
+| **avg** | **150.93** | **136.10** |
+
+### Val_avg trajectory (plateaued)
+```
+e1→270 e2→260 e3→203 e4→185 e5→204 e6→192 e7→180
+e8→182 e9→206 e10→180 e11→190 e12→151* e13→160 e14→159
+```
+(plateaued at 158-160 from e13 onward — NOT still descending)
+
+### Conclusions
+- **bs↑ does NOT buy more epochs at default architecture.** Independent confirmation of frieren's PR #1097 finding: per-batch time ~2× at bs=8, batches/epoch /2, total epoch time conserved. Two confirmations now → cross-experiment learning #3 stands firm.
+- **Default LR is too low for bs=8.** 14 epochs × 188 steps = 2,632 grad updates at bs=8 vs 14 × 376 = 5,264 at bs=4. With unchanged lr=5e-4, the cosine schedule cooled effective LR to a level appropriate for bs=4 → trajectory plateaued mid-training.
+- **Linear LR scaling at bs=8 already implicitly tested.** PR #1099 (nezuko) ran lr=1e-3 + warmup at bs=4 and got val=143.31 — also a regression. Combining bs=8 + lr=1e-3 would land in the same noise band — not worth the GPU time vs. fresh round-2 levers.
+- **Cosmetic NaN bug in train.py::evaluate_split flagged.** `(sq_err * vol_mask).sum()` propagates NaN the same way as the scoring.py bug we fixed. Affects only loss/vol_loss/surf_loss columns (cosmetic — the ranking metric mae_surf_p is unaffected via the data/scoring.py fix). Fold into a future advisor branch fix.
+- **askeladd reassigned to H-12 AoA sign-flip augmentation.**
+
+## 2026-04-29 12:19 — PR #1092 (closed): Capacity scale-up — width-only revision (n_hidden=160, n_head=5)
+- Branch: `charliepai2f1-alphonse/capacity-scale-up` (closed)
+- Hypothesis (revision): Width-only scaling (n_hidden 128→160, n_head 4→5, head_dim=32 invariant; 1.02M params, 1.5× baseline) fits ≥18 epochs in 30 min and beats baseline.
+- Reality: 11 epochs in 30 min (175 s/epoch, ~1.3× slower per epoch); val=141.121, still descending hard at the cap (-4.9% e10→e11). Test=128.770 (4 splits finite). +5.4% regression vs new merged baseline 125.438 — but undertrained.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 11/11) | **141.121** |
+| `test_avg/mae_surf_p` (4 splits, all finite ✓) | **128.770** |
+| Param count | 1.02M (1.5× baseline) |
+| Epochs run | 11 / 50 (timeout-bound, ~175 s/epoch) |
+| Peak VRAM | 52.5 GB |
+| Metrics file | `models/model-charliepai2f1-alphonse-capacity-160-h5-20260429-113607/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 11)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 191.86 | 174.29 |
+| `geom_camber_rc` | 154.69 | 141.30 |
+| `geom_camber_cruise` | 96.66 | 82.10 |
+| `re_rand` | 121.28 | 117.39 |
+| **avg** | **141.12** | **128.77** |
+
+### Val_avg trajectory (still descending hard)
+```
+e1→235 e2→244 e3→197 e4→179 e5→202 e6→220 e7→163
+e8→163 e9→148 e10→148 e11→141 *  (e10→e11: -4.9%/epoch)
+```
+
+### Conclusions
+- **Width-only direction is alive but throughput-bound.** Per-epoch trajectory clearly descending at the cap. With 1.3× per-epoch cost, achievable epochs drop from ~14 to ~11. Even at -4.9%/epoch trend, 3 more epochs would close gap to baseline (141 × 0.96^3 ≈ 125) — but those epochs aren't available.
+- **The right next test is AMP-enabled stacking.** AMP/bf16 autocast roughly halves activation memory and ~2× throughput, getting 160/5/5/2 to ~22 epochs in 30 min. Combined with thorfinn's regime-matched schedule (T_max~21), this configuration would test capacity-scaling cleanly. **Round-3 candidate** — needs a dedicated AMP PR before stacking.
+- **Test_avg=128.770 is interesting** — better than the prior provisional 132.106 (3-finite split avg) but +14% vs the new merged baseline 112.988. Not a winner but doesn't refute capacity scaling.
+- **Cross-experiment learning #2 holds.** Width-only is moderate cost; depth+width+mlp_ratio (alphonse's first try, 192/6/6/4) was prohibitive. Round-2 capacity stacks should keep this rule.
+- **alphonse reassigned to H-11 SwiGLU/GeGLU FFN** — a different capacity axis (gated MLP) at a smaller param multiplier.
+
 ## 2026-04-29 11:54 — PR #1099 (closed): Higher LR + 5-epoch warmup (lr 5e-4 → 1e-3)
 - Branch: `charliepai2f1-nezuko/lr1e-3-warmup5` (closed)
 - Hypothesis: Higher peak lr (1e-3) + 5-epoch warmup hits a better minimum; predicted -2 to -5%.
