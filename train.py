@@ -423,6 +423,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     bf16: bool = False  # enable bfloat16 autocast for ~1.3x throughput gain
+    T_max: int = 15  # CosineAnnealingLR T_max — align to actual epoch budget
 
 
 cfg = sp.parse(Config)
@@ -473,7 +474,7 @@ if amp_dtype is not None:
     print(f"AMP: bf16 autocast enabled (dtype={amp_dtype})")
 
 optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.T_max)
 
 ema = EMA(model, decay=0.995)
 
@@ -522,6 +523,7 @@ _log_jsonl({
     "grad_clip_max_norm": 1.0,
     "ema_decay": 0.995,
     "bf16": cfg.bf16,
+    "T_max": cfg.T_max,
     "amp_dtype": str(amp_dtype) if amp_dtype is not None else None,
     "config": asdict(cfg),
     "model_config": model_config,
