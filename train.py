@@ -555,7 +555,7 @@ if __name__ == "__main__":
         fun_dim=X_DIM - 2,
         out_dim=3,
         n_hidden=128,
-        n_layers=5,
+        n_layers=7,
         n_head=4,
         slice_num=64,
         mlp_ratio=2,
