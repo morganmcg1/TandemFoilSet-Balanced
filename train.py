@@ -195,6 +195,7 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.re_embed = nn.Linear(1, n_hidden)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,7 +209,11 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        log_re = data.get("log_re")  # (B,) — log(Re) per sample, or None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if log_re is not None:
+            re_bias = self.re_embed(log_re.unsqueeze(-1))  # (B, n_hidden)
+            fx = fx + re_bias.unsqueeze(1)                 # broadcast over nodes
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -239,7 +244,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            log_re = x[:, 0, 13]  # x dim 13 is log(Re), shared across all nodes
+            pred = model({"x": x_norm, "log_re": log_re})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -507,6 +513,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
+    epoch_re_embed_grad_norm_sum = 0.0
     epoch_re_weight_min_sum = 0.0
     epoch_re_weight_max_sum = 0.0
     epoch_re_weight_ratio_max = 0.0
@@ -527,7 +534,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "log_re": log_re_per_sample})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -548,6 +555,10 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        re_embed_grad_norm = (
+            model.re_embed.weight.grad.norm().item()
+            if model.re_embed.weight.grad is not None else 0.0
+        )
         optimizer.step()
         global_step += 1
         rw_min = re_weight.min().item()
@@ -555,6 +566,7 @@ for epoch in range(MAX_EPOCHS):
         rw_ratio = rw_max / max(rw_min, 1e-12)
         wandb.log({"train/loss": loss.item(),
                    "train/grad_norm": grad_norm.item(),
+                   "train/grad_norm_re_embed": re_embed_grad_norm,
                    "train/re_weight_min": rw_min,
                    "train/re_weight_max": rw_max,
                    "train/re_weight_ratio": rw_ratio,
@@ -564,6 +576,7 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/grad_norm_re_embed": re_embed_grad_norm,
             "train/re_weight_min": rw_min,
             "train/re_weight_max": rw_max,
             "train/re_weight_ratio": rw_ratio,
@@ -574,6 +587,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         epoch_grad_norm_sum += grad_norm.item()
         epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm.item())
+        epoch_re_embed_grad_norm_sum += re_embed_grad_norm
         epoch_re_weight_min_sum += rw_min
         epoch_re_weight_max_sum += rw_max
         epoch_re_weight_ratio_max = max(epoch_re_weight_ratio_max, rw_ratio)
@@ -583,6 +597,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
+    epoch_re_embed_grad_norm_mean = epoch_re_embed_grad_norm_sum / max(n_batches, 1)
     epoch_re_weight_min_mean = epoch_re_weight_min_sum / max(n_batches, 1)
     epoch_re_weight_max_mean = epoch_re_weight_max_sum / max(n_batches, 1)
 
@@ -602,6 +617,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
         "train/grad_norm_epoch_max": epoch_grad_norm_max,
+        "train/grad_norm_re_embed_epoch_mean": epoch_re_embed_grad_norm_mean,
         "train/re_weight_min_epoch_mean": epoch_re_weight_min_mean,
         "train/re_weight_max_epoch_mean": epoch_re_weight_max_mean,
         "train/re_weight_ratio_epoch_max": epoch_re_weight_ratio_max,
@@ -626,6 +642,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
         "train/grad_norm_epoch_max": epoch_grad_norm_max,
+        "train/grad_norm_re_embed_epoch_mean": epoch_re_embed_grad_norm_mean,
         "train/re_weight_min_epoch_mean": epoch_re_weight_min_mean,
         "train/re_weight_max_epoch_mean": epoch_re_weight_max_mean,
         "train/re_weight_ratio_epoch_max": epoch_re_weight_ratio_max,
@@ -657,6 +674,7 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"re_w[min={epoch_re_weight_min_mean:.4f} max={epoch_re_weight_max_mean:.4f} "
         f"max_ratio={epoch_re_weight_ratio_max:.2f}]  "
+        f"re_embed_grad={epoch_re_embed_grad_norm_mean:.4f}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
