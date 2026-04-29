@@ -432,7 +432,35 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Decoupled weight decay: exclude bias, LayerNorm, temperature, placeholder from WD.
+decay_params, no_decay_params = [], []
+decay_names, no_decay_names = [], []
+for name, param in model.named_parameters():
+    if not param.requires_grad:
+        continue
+    if (name.endswith(".bias")
+            or "ln_" in name
+            or name == "placeholder"
+            or "temperature" in name):
+        no_decay_params.append(param)
+        no_decay_names.append(name)
+    else:
+        decay_params.append(param)
+        decay_names.append(name)
+
+n_decay_w = sum(p.numel() for p in decay_params)
+n_no_decay_w = sum(p.numel() for p in no_decay_params)
+print(f"Optimizer param groups: decay={len(decay_params)} tensors / {n_decay_w} weights, "
+      f"no_decay={len(no_decay_params)} tensors / {n_no_decay_w} weights")
+assert len(decay_params) > 0 and len(no_decay_params) > 0, "Param groups must be non-empty"
+
+optimizer = torch.optim.AdamW(
+    [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
 
 run = wandb.init(
@@ -483,6 +511,10 @@ with open(metrics_dir / "config.json", "w") as f:
         "max_epochs": MAX_EPOCHS,
         "max_timeout_min": MAX_TIMEOUT_MIN,
         "git_commit": _git_commit_short(),
+        "optimizer_param_groups": {
+            "decay": {"n_tensors": len(decay_params), "n_weights": n_decay_w, "names": decay_names},
+            "no_decay": {"n_tensors": len(no_decay_params), "n_weights": n_no_decay_w, "names": no_decay_names},
+        },
     }, f, indent=2)
 train_metrics_fp = open(train_metrics_path, "w")
 epoch_metrics_fp = open(epoch_metrics_path, "w")
