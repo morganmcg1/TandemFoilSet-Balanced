@@ -17,10 +17,12 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -309,6 +311,7 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    avg_ckpt: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -336,6 +339,20 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    if avg_ckpt is not None:
+        summary["avg_ckpt/n_checkpoints"] = avg_ckpt["n_checkpoints"]
+        summary["avg_ckpt/source_epochs"] = avg_ckpt["source_epochs"]
+        if avg_ckpt.get("val_aggregate"):
+            summary["avg_ckpt/val_avg/mae_surf_p"] = avg_ckpt["val_aggregate"]["avg/mae_surf_p"]
+            for split_name, m in avg_ckpt["val_splits"].items():
+                for k, v in m.items():
+                    summary[f"avg_ckpt/val/{split_name}/{k}"] = v
+        if avg_ckpt.get("test_aggregate"):
+            summary["avg_ckpt/test_avg/mae_surf_p"] = avg_ckpt["test_aggregate"]["avg/mae_surf_p"]
+            for split_name, m in avg_ckpt["test_splits"].items():
+                for k, v in m.items():
+                    summary[f"avg_ckpt/test/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -441,6 +458,11 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+# Rolling buffer of the last K best checkpoint state_dicts (CPU-stored deepcopies)
+# for post-training Stochastic Weight Averaging (Izmailov et al., 2018).
+CKPT_BUFFER_K = 3
+ckpt_buffer: deque[dict] = deque(maxlen=CKPT_BUFFER_K)
+ckpt_buffer_epochs: deque[int] = deque(maxlen=CKPT_BUFFER_K)
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -504,6 +526,11 @@ for epoch in range(MAX_EPOCHS):
             "per_split": split_metrics,
         }
         torch.save(model.state_dict(), model_path)
+        # Buffer a CPU deepcopy of this checkpoint for post-training SWA.
+        ckpt_buffer.append(copy.deepcopy(
+            {k: v.detach().cpu() for k, v in model.state_dict().items()}
+        ))
+        ckpt_buffer_epochs.append(epoch + 1)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -566,6 +593,7 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    test_loaders = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -588,6 +616,69 @@ if best_metrics:
             "test_splits": test_metrics,
         })
 
+    # --- Stochastic Weight Averaging across the last K best checkpoints ---
+    avg_ckpt_summary = None
+    if len(ckpt_buffer) >= 2:
+        n_avg = len(ckpt_buffer)
+        source_epochs = list(ckpt_buffer_epochs)
+        print(f"\nAveraging last {n_avg} best checkpoints (epochs {source_epochs})...")
+
+        # Element-wise average each parameter tensor in float32, cast back to original dtype.
+        avg_state: dict = {}
+        for k in ckpt_buffer[0].keys():
+            original_dtype = ckpt_buffer[0][k].dtype
+            stacked = torch.stack([sd[k].to(device=device, dtype=torch.float32) for sd in ckpt_buffer])
+            avg_state[k] = stacked.mean(dim=0).to(original_dtype)
+
+        model.load_state_dict(avg_state)
+        model.eval()
+
+        avg_val_splits = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        avg_val_aggregate = aggregate_splits(avg_val_splits)
+        print(f"\n  AVG_CKPT VAL  avg_surf_p={avg_val_aggregate['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, avg_val_splits[name])
+
+        avg_test_splits = None
+        avg_test_aggregate = None
+        if test_loaders is not None:
+            avg_test_splits = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            avg_test_aggregate = aggregate_splits(avg_test_splits)
+            print(f"\n  AVG_CKPT TEST  avg_surf_p={avg_test_aggregate['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, avg_test_splits[name])
+
+        avg_ckpt_record = {
+            "event": "avg_ckpt",
+            "n_checkpoints": n_avg,
+            "source_epochs": source_epochs,
+            "avg_ckpt/val_avg/mae_surf_p": avg_val_aggregate["avg/mae_surf_p"],
+            "avg_val_aggregate": avg_val_aggregate,
+            "avg_val_splits": avg_val_splits,
+        }
+        if avg_test_aggregate is not None:
+            avg_ckpt_record["avg_ckpt/test_avg/mae_surf_p"] = avg_test_aggregate["avg/mae_surf_p"]
+            avg_ckpt_record["avg_test_aggregate"] = avg_test_aggregate
+            avg_ckpt_record["avg_test_splits"] = avg_test_splits
+        append_metrics_jsonl(metrics_jsonl_path, avg_ckpt_record)
+
+        avg_ckpt_summary = {
+            "n_checkpoints": n_avg,
+            "source_epochs": source_epochs,
+            "val_aggregate": avg_val_aggregate,
+            "val_splits": avg_val_splits,
+            "test_aggregate": avg_test_aggregate,
+            "test_splits": avg_test_splits,
+        }
+    else:
+        print(f"\nSkipping checkpoint averaging (buffer has {len(ckpt_buffer)} checkpoints, need >=2).")
+
     write_experiment_summary(
         model_path=model_path,
         model_dir=model_dir,
@@ -598,6 +689,7 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        avg_ckpt=avg_ckpt_summary,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
