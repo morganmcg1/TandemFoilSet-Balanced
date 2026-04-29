@@ -46,7 +46,7 @@ Test metrics (best epoch 16 checkpoint):
 | `slice_num` | 64 |
 | `mlp_ratio` | 2 |
 | `lr` | 5e-4 |
-| `weight_decay` | 1e-5 |
+| `weight_decay` | 1e-4 |
 | `batch_size` | 4 |
 | `surf_weight` | 10.0 |
 | `T_max` | 15 |

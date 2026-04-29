@@ -7,6 +7,38 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-04-29 06:15 — PR #1055: Learned Re-embedding: log(Re) as node conditioning bias (FiLM-style) [CLOSED — DEAD END]
+
+- **Branch:** `charliepai2e2-thorfinn/learned-re-embedding` (CLOSED)
+- **Hypothesis:** Inject log(Re) as a learned additive bias on all node features after the preprocess MLP via `self.re_embed = nn.Linear(1, n_hidden)`. The idea was that multiplicative Re-weighting (already in baseline) rescales loss gradients but does not change the latent representation — learned Re-embedding would give the model an explicit learned feature-space shift per Reynolds number regime, enabling it to internally modulate activations by flow regime.
+
+### Results Table
+
+| Split | Baseline (PR #1001) | Learned Re-embed (ep16) | Delta |
+|-------|--------------------:|------------------------:|------:|
+| val_single_in_dist | 104.94 | 136.50 | +31.56 |
+| val_geom_camber_rc | 102.21 | 125.84 | +23.63 |
+| val_geom_camber_cruise | 74.27 | 90.56 | +16.29 |
+| val_re_rand | 91.02 | 104.83 | +13.81 |
+| **val_avg** | **93.1083** | **114.4325** | **+21.32 (+23%) WORSE** |
+| test_avg | 82.37 | 103.83 | +21.46 |
+
+Training trajectory (epochs 13→16): 118.66 → 116.26 → 115.22 → 114.43 — still descending but ~20 epochs behind baseline. re_embed grad norm ~3.5 throughout.
+
+### Analysis & Conclusions
+
+Three root causes identified:
+
+1. **Scale mismatch**: log(Re) ≈ 13 at typical Re=500k. A zero-init Linear(1, 128) emits ~13 × N(0, 1/128) ≈ ±1.1 initial bias per hidden dim. This is large relative to the ~0.5 pre-norm hidden-state scale, causing a large additive perturbation at every forward pass before the network has learned to counteract it.
+
+2. **N-fold gradient accumulation onto re_embed**: The bias is broadcast to every node in the mesh (typically ~3000 nodes per sample). The gradient of the loss w.r.t. re_embed weights sums over all nodes, producing gradients ~N_nodes × larger than any other weight in the model. This creates severe effective LR mismatch for the re_embed layer vs the rest of the network.
+
+3. **Redundant conditioning**: log(Re) is already present as a raw feature at x[:,0,13]. The preprocess MLP can already learn arbitrary functions of it. Adding a separate conditioning pathway duplicates this information and must compete with the existing representation during training.
+
+**Decision:** CLOSED. Remediation approaches (scale-down init, per-param LR, layer norm on Re) were not explored — the 3-way structural problem suggests this direction is not cost-effective relative to other hypotheses. Student's suggestions noted: (a) SwiGLU at mlp_ratio=2, (b) Re-conditioning via cross-attention, (c) spectral normalization.
+
+---
+
 ## 2026-04-29 06:00 — PR #1036: mlp_ratio=3: wider MLP feedforward per Transolver block [CLOSED — DEAD END]
 
 - **Branch:** `charliepai2e2-alphonse/mlp-ratio-3` (CLOSED)
