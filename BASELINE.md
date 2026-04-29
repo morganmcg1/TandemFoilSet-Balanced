@@ -2,43 +2,59 @@
 
 ## Current Best Result
 
-**Source:** PR #1104 — FiLM global conditioning: inject Re/AoA/NACA via scale+shift (charliepai2f3-edward)
+**Source:** PR #1208 — Extended training 75ep + T_max=75 on FiLM+Fourier baseline (charliepai2f3-frieren)
 
-**Primary metric:** `val_avg/mae_surf_p = 39.9450`
+**Primary metric:** `val_avg/mae_surf_p = 35.8406`
 
-**Configuration:** Lion optimizer + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=15) + grad_clip=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
+**Configuration:** Lion optimizer + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=75, single full-cycle decay) + grad_clip=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + epochs=75 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
+
+**Note:** Training was cut at ep57/75 by 30-min wall-clock timeout — model still improving at cutoff. No warmup in this run (multi-cycle cosine from the PR #1104 config). The longer T_max=75 horizon keeps LR meaningfully nonzero throughout, making the full-cycle decay the primary driver.
 
 **Per-split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist | 38.3034 |
-| val_geom_camber_rc | 56.1374 |
-| val_geom_camber_cruise | 22.9918 |
-| val_re_rand | 42.3473 |
-| **val_avg** | **39.9450** |
+| val_single_in_dist | 33.7806 |
+| val_geom_camber_rc | 51.6584 |
+| val_geom_camber_cruise | 19.6970 |
+| val_re_rand | 38.2266 |
+| **val_avg** | **35.8406** |
 
 **Test split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist | 32.0588 |
-| test_geom_camber_rc | 49.6238 |
-| test_geom_camber_cruise | 18.9013 |
-| test_re_rand | 33.7205 |
-| **test_avg** | **33.5761** |
+| test_single_in_dist | 29.8002 |
+| test_geom_camber_rc | 44.5661 |
+| test_geom_camber_cruise | 16.0529 |
+| test_re_rand | 29.2713 |
+| **test_avg** | **29.9226** |
 
-**Training:** ~22.8 min, 50 epochs (best epoch 49), batch_size=4, Peak VRAM: 9.89 GB, n_params: 252,487
+**Training:** ~30.33 min (wall-clock timeout at ep57/75), best epoch 57 (still improving), batch_size=4, Peak VRAM: 9.89 GB, n_params: 252,487
 
-**Metrics path:** `target/models/model-charliepai2f3-edward-film-extended-fourier-rebased-20260429-140420/metrics.jsonl`
+**Metrics path:** `target/models/model-charliepai2f3-frieren-extended-training-film-75ep-20260429-154641/metrics.jsonl`
 
 ## Run Command
 
 ```bash
-cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 3e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 15 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 64 --mlp_ratio 2 --batch_size 4 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
+cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 3e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 75 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 64 --mlp_ratio 2 --batch_size 4 --epochs 75 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
 ```
 
-Note: FiLM conditioning injects global physics scalars (dims 13–23 of x: log(Re), AoA1, NACA1(3d), AoA2, NACA2(3d), gap, stagger) as learned scale+shift (γ, β) applied to each TransolverBlock. The FiLMConditioner uses DiT/AdaLN-Zero initialization so all blocks start as identity and FiLM activates gradually. The Fourier positional encoding appends sin(f*pi*xy) and cos(f*pi*xy) for freqs in (1,2,4,8,16,32,64), expanding spatial input from 2-dim to 30-dim. Input feature dim becomes 52. Adding freq=128 regresses (Nyquist aliasing).
+Note: Extended to 75 epochs with T_max=75 single-decay cosine. Key insight: longer T_max keeps the LR meaningfully nonzero throughout training — at ep49 (same count as previous baseline), this run already achieved val_avg=37.21 vs 39.95, a −6.86% gain from the schedule change alone. Extra epochs 50–57 added another −3.27%. Best epoch=57 was the final epoch reached (wall-clock limited) — model was still improving with a steeply downward val curve. FiLM conditioning is the default in codebase after PR #1104.
 
 ## Merge History
+
+### 2026-04-29 — PR #1208: Extended training 75ep + T_max=75 on FiLM+Fourier baseline (charliepai2f3-frieren)
+- Previous: `val_avg/mae_surf_p = 37.0739` (PR #1175, FiLM+Fourier+warmup, T_max=45, 50 epochs)
+- New best: `val_avg/mae_surf_p = 35.8406` (improvement: −1.2333, −3.33%)
+- Test: `test_avg/mae_surf_p = 29.9226` (improvement vs previous test_avg 31.3474: −1.4248, −4.55%)
+- Student: charliepai2f3-frieren
+- Key finding: T_max=75 (single full-cycle cosine) is the primary driver — at ep49 alone this yielded val_avg=37.21 (−6.86% vs PR #1104 baseline), confirming LR horizon matters more than epoch count. Wall-clock timeout cut at ep57/75; model still improving steeply. Best epoch = 57 = last epoch, no plateau. All 4 val splits improved. Test_avg broke below 30 for the first time.
+
+### 2026-04-29 — PR #1175: LR warmup + single-decay cosine on FiLM+Fourier baseline (charliepai2f3-thorfinn)
+- Previous: `val_avg/mae_surf_p = 39.9450` (PR #1104, FiLM+Fourier, T_max=15 multi-cycle, no warmup)
+- New best: `val_avg/mae_surf_p = 37.0739` (improvement: −2.8711, −7.19%)
+- Test: `test_avg/mae_surf_p = 31.3474` (improvement vs previous test_avg 33.5761: −2.2287, −6.64%)
+- Student: charliepai2f3-thorfinn
+- Key finding: 5-epoch linear warmup (start_factor=1/30 → 3e-4) stabilizes Lion optimizer initialization. Single-decay cosine (T_max=45) avoids LR restarts that bounce model out of good basins. Best epoch=50 — model still improving at timeout, indicating more training could help. Both val and test improved across all 4 splits. Run 1 (warmup=10, multi-cycle T_max=15) also beat baseline at val_avg=38.9454, confirming warmup is the key driver.
 
 ### 2026-04-29 — PR #1196: Single-decay cosine schedule (T_max=50) on Fourier pos enc baseline (charliepai2f3-frieren)
 - Context: Tested against PR #1148 baseline (val_avg=43.9575); current best is PR #1104 (val_avg=39.9450 with FiLM)
