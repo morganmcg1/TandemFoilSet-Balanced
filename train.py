@@ -422,6 +422,7 @@ class Config:
     huber_delta: float = 1.0  # delta for Huber loss in normalized target space
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
+    per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
 
 
 cfg = sp.parse(Config)
@@ -552,6 +553,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_per_stds: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -567,9 +569,34 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta)
-            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            if cfg.per_sample_norm:
+                B = pred.size(0)
+                batch_vol_loss = pred.new_zeros((), dtype=torch.float32)
+                batch_surf_loss = pred.new_zeros((), dtype=torch.float32)
+                valid_samples = 0
+                for i in range(B):
+                    m_i = mask[i]
+                    vol_i = vol_mask[i]
+                    surf_i = surf_mask[i]
+                    if vol_i.sum() == 0:
+                        continue
+                    per_std = y_norm[i][m_i].std().clamp(min=1e-6)
+                    epoch_per_stds.append(per_std.item())
+                    vol_err = per_element_loss(pred[i][vol_i], y_norm[i][vol_i],
+                                               cfg.loss, cfg.huber_delta)
+                    batch_vol_loss = batch_vol_loss + vol_err.mean() / per_std
+                    if surf_i.sum() > 0:
+                        surf_err = per_element_loss(pred[i][surf_i], y_norm[i][surf_i],
+                                                    cfg.loss, cfg.huber_delta)
+                        batch_surf_loss = batch_surf_loss + surf_err.mean() / per_std
+                    valid_samples += 1
+                denom = max(valid_samples, 1)
+                vol_loss = batch_vol_loss / denom
+                surf_loss = batch_surf_loss / denom
+            else:
+                err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta)
+                vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+                surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         scaler.scale(loss).backward()
@@ -611,6 +638,12 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if cfg.per_sample_norm and epoch_per_stds:
+        std_t = torch.tensor(epoch_per_stds)
+        log_metrics["train/per_std_min"] = std_t.min().item()
+        log_metrics["train/per_std_max"] = std_t.max().item()
+        log_metrics["train/per_std_mean"] = std_t.mean().item()
+        log_metrics["train/per_std_median"] = std_t.median().item()
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -639,7 +672,7 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
-    _log_jsonl({
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "epoch_time_s": dt,
@@ -652,7 +685,14 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         **{f"{n}/{k}": v for n, m in split_metrics.items() for k, v in m.items()},
         **{f"val_{k}": v for k, v in val_avg.items()},
-    })
+    }
+    if cfg.per_sample_norm and epoch_per_stds:
+        std_t = torch.tensor(epoch_per_stds)
+        epoch_record["train/per_std_min"] = std_t.min().item()
+        epoch_record["train/per_std_max"] = std_t.max().item()
+        epoch_record["train/per_std_mean"] = std_t.mean().item()
+        epoch_record["train/per_std_median"] = std_t.median().item()
+    _log_jsonl(epoch_record)
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
