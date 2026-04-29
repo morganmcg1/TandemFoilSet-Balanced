@@ -4,8 +4,8 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **90.4014** (PR #795 — per-sample loss norm on compound stack, epoch 12) |
-| `test_avg/mae_surf_p` | **80.3748** (PR #795) |
+| `val_avg/mae_surf_p` | **66.8085** (PR #1015 — longer training epochs=24, epoch 22/24) |
+| `test_avg/mae_surf_p` | **58.7266** (PR #1015) |
 
 **Source:** README.md prior competition results — PR #32 (morganmcg1/tandemfoil2): "Single-head nl3/sn16 triple compound"
 - W&B run: [ip8hn4tx](https://wandb.ai/wandb-applied-ai-team/senpai-kagent-v-students/runs/ip8hn4tx)
@@ -17,6 +17,36 @@
 **Config (best known):** n_layers=3, slice_num=16, n_hidden tuned
 
 ## Round 1 — Merged Winners
+
+### PR #1015 — Longer training: epochs=24 on compound stack (2026-04-28)
+**Student:** charliepai2e1-edward | **Branch:** charliepai2e1-edward/longer-training-epochs-24
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **66.8085** (epoch 22/24 — terminated by 30-min timeout) |
+| `val_single_in_dist/mae_surf_p` | 73.9641 |
+| `val_geom_camber_rc/mae_surf_p` | 79.1014 |
+| `val_geom_camber_cruise/mae_surf_p` | 48.9877 |
+| `val_re_rand/mae_surf_p` | 65.1809 |
+| `val_avg/mae_surf_Ux` | 0.9857 |
+| `val_avg/mae_surf_Uy` | 0.4870 |
+| `val_avg/mae_vol_p` | 73.0050 |
+| `test_avg/mae_surf_p` | **58.7266** |
+| `test_single_in_dist/mae_surf_p` | 67.5104 |
+| `test_geom_camber_rc/mae_surf_p` | 70.2042 |
+| `test_geom_camber_cruise/mae_surf_p` | 40.5897 |
+| `test_re_rand/mae_surf_p` | 56.6022 |
+| `test_avg/mae_surf_Ux` | 0.9206 |
+| `test_avg/mae_surf_Uy` | 0.4514 |
+| `test_avg/mae_vol_p` | 65.1125 |
+
+**vs prior baseline (PR #795):** 66.8085 vs 90.4014 → **-26.1% val improvement**
+**Test improvement:** 58.7266 vs 80.3748 → **-27.0% test improvement**
+**Model parameters:** 1,606,219 | **Peak VRAM:** 30.45 GB | **Train time:** 30.42 min (hit 30-min timeout, val still falling at epoch 22)
+**Note:** Run without `--per_sample_norm`; still decisively beat PSN compound baseline across all 4 val+test splits. LR at 8.5e-6 by epoch 22 (1.7% of initial 5e-4). Follow-up: add PSN + epochs=30–36.
+**Metric summary:** `target/metrics/charliepai2e1-edward-longer-training-epochs-24-gfqkz5lj.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 24 --grad_clip 1.0 --ema_decay 0.999`
+*(Note: n_layers=3, slice_num=16 are hardcoded in model_config dict in train.py)*
 
 ### PR #795 — Per-sample loss normalization on compound stack (2026-04-28)
 **Student:** charliepai2e1-thorfinn | **Branch:** charliepai2e1-thorfinn/per-sample-loss-norm
@@ -172,13 +202,13 @@
 
 | PR | Student | Hypothesis | Notes |
 |----|---------|------------|-------|
-| #998 | frieren | slice_num 64→128 on compound baseline (n_hidden=256, wider PhysicsAttn) | New assignment |
-| #1011 | alphonse | surf_weight sub-10 sweep (1/3/5/7) on compound baseline | New assignment (follow-up to PR #960 monotone signal) |
-| #942 | nezuko | EMA decay sweep: 0.99/0.995 vs 0.999 on compound | Running |
-| #904 | fern | Huber delta sweep: 0.25/0.5/1.0/2.0 on wider-model baseline | Running |
+| #998 | frieren | slice_num 64→128 on compound baseline (n_hidden=256, wider PhysicsAttn) | Running (vs new baseline 66.8085) |
+| #1011 | alphonse | surf_weight sub-10 sweep (1/3/5/7) on compound baseline | Running (vs new baseline 66.8085) |
+| #942 | nezuko | EMA decay sweep: 0.99/0.995 vs 0.999 on compound | Running (vs new baseline 66.8085; needs --per_sample_norm rerun) |
+| #904 | fern | Huber delta sweep: 0.25/0.5/1.0/2.0 on wider-model baseline | Running (vs new baseline 66.8085) |
 | #794 | tanjiro | LR warmup + Huber | Revision in progress |
-| #795 | thorfinn | Huber + per-sample norm — MERGED | val=90.4014 (-4.50% vs #1005) |
-| #789 | askeladd | Gradient clipping (max_norm=1.0) | Awaiting rebase (winner 114.35) |
+| #789 | askeladd | Gradient clipping (max_norm=1.0) | Awaiting rebase (winner 114.35 — likely stale vs new baseline) |
+| #1015 | edward | Longer training epochs=24 — **MERGED** | val=66.8085 (-26.1% vs PR #795). edward now idle. |
 
 ### Key Infrastructure Fix (PR #792 Round 2)
 - `--grad_clip 1.0` + upstream pred/GT sanitization in `evaluate_split` resolves NaN propagation on `test_geom_camber_cruise`.
@@ -210,3 +240,4 @@
 - 2026-04-29: PR #960 (alphonse, surf_weight sweep 20/30/50) closed — clean monotone degradation: sw=20 (+2.59%), sw=30 (+5.04%), sw=50 (+5.30%). Optimal surf_weight has shifted below default 10 on compound stack. Re-assigned as PR #1011 (sub-10 sweep: sw=1/3/5/7).
 - 2026-04-29: PR #1005 merged. n_layers=3, slice_num=16 reference architecture sets new best val_avg/mae_surf_p = 94.6541 (-8.31% vs PR #882 baseline 103.2182), test_avg = 83.7608 (-9.43%). Largest single-PR gain since Huber loss. Val curve still decreasing at epoch 12 — longer training is a strong next candidate.
 - 2026-04-28: PR #795 merged (R5 final). Per-sample loss normalization (normalize each sample's Huber loss by per-sample std before averaging) sets new best val_avg/mae_surf_p = 90.4014 (-4.50% vs PR #1005 baseline 94.6541), test_avg = 80.3748 (-4.05%). Acts on an independent failure mode (15× Reynolds-number std spread) from all prior winners. thorfinn now idle.
+- 2026-04-28: PR #1015 merged. Longer training (epochs=24) sets new best val_avg/mae_surf_p = 66.8085 (-26.1% vs PR #795 baseline 90.4014), test_avg = 58.7266 (-27.0%). Run without --per_sample_norm; still decisively beats PSN compound baseline across all 4 splits. Val curve still falling at epoch 22 when 30-min timeout hit (LR=8.5e-6). New compound baseline: --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 24 --grad_clip 1.0 --ema_decay 0.999. edward now idle — reassign with PSN + epochs 30–36.
