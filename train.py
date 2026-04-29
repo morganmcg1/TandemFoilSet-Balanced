@@ -441,6 +441,8 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_surf_weight": cfg.p_surf_weight,
+        "vel_surf_weight": cfg.vel_surf_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -493,7 +495,9 @@ class Config:
     lr: float = 1e-3  # peak LR after warmup (was 5e-4 baseline; warmup+cosine variant raises peak)
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 3.0   # was 10.0; merged from #850 (sw=3 + Huber stack)
+    surf_weight: float = 3.0   # was 10.0; merged from #850 (sw=3 + Huber stack); now only used by evaluate_split for loss logging
+    p_surf_weight: float = 3.0    # Huber weight for surface pressure channel (channel index 2)
+    vel_surf_weight: float = 3.0  # Huber weight for surface velocity channels (indices 0,1)
     epochs: int = 50
     warmup_epochs: int = 5
     warmup_start_lr: float = 1e-4
@@ -621,6 +625,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_surf_vel = epoch_surf_p = 0.0
     n_batches = 0
 
     nan_inf_events = 0
@@ -639,9 +644,14 @@ for epoch in range(MAX_EPOCHS):
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            surf_mask_f = surf_mask.float()
+            surf_count = surf_mask_f.sum().clamp(min=1)
+            # Split surface loss by channel: velocity (Ux=0, Uy=1) vs pressure (p=2)
+            surf_loss_vel = (huber_err[..., :2] * surf_mask_f.unsqueeze(-1)).sum() / surf_count
+            surf_loss_p   = (huber_err[..., 2:3] * surf_mask_f.unsqueeze(-1)).sum() / surf_count
             vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_count
+            loss = vol_loss + cfg.vel_surf_weight * surf_loss_vel + cfg.p_surf_weight * surf_loss_p
 
         optimizer.zero_grad()
         loss.backward()                # bf16 gradients flow back; no GradScaler needed for bf16
@@ -655,16 +665,22 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/surf_loss_vel": surf_loss_vel.item(),
+            "train/surf_loss_p": surf_loss_p.item(),
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_surf_vel += surf_loss_vel.item()
+        epoch_surf_p += surf_loss_p.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_surf_vel /= max(n_batches, 1)
+    epoch_surf_p /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -682,6 +698,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_loss_vel_epoch": epoch_surf_vel,
+        "train/surf_loss_p_epoch": epoch_surf_p,
         "train/nan_inf_events": nan_inf_events,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
