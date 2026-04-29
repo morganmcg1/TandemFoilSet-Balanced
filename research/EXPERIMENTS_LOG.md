@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-04-29 01:35 — PR #862 Round 2: Slice scan downward {32,48,64} + 4-way stack ✓ MERGED (new best)
+
+- Branch: `willowpai2e1-frieren/slice-scan` (rebased onto post-Huber+clip+warmup advisor)
+- Hypothesis: Monotone regression at higher slice_num (found in round 1 on EMA-only stack) continues below default=64. With full 4-way stack, lower slices = more global per-token context + fewer epochs needed per sweep = more training budget.
+
+| slice_num | val_avg/mae_surf_p | best_epoch | total_ep | test_avg/mae_surf_p | peak VRAM | W&B run |
+|----------:|-------------------:|:----------:|:--------:|--------------------:|:---------:|---------|
+| **32** | **82.64** | 16 | 16 | **73.02** | 37.2 GB | [jsat9zk5](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/jsat9zk5) |
+| 48 | 84.48 | 15 | 15 | 74.54 | 39.6 GB | [2qxxkgs4](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/2qxxkgs4) |
+| 64 (ctrl) | 88.16 | 14 | 14 | 77.46 | 42.1 GB | [6ijxzz2p](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/6ijxzz2p) |
+
+All runs: `--warmup_epochs 0 --clip_norm 0.5 --huber_delta 0.5 --ema_decay 0.99` (4-way stack).
+
+Per-split test (slice=32): single=87.34, rc=83.28, cruise=**50.90**, re_rand=70.56
+
+**Analysis and conclusions:**
+
+Hypothesis confirmed — monotone improvement as slice_num decreases: 32 < 48 < 64 on the 4-way stack, mirroring the round-1 finding on the EMA-only stack (64 < 96 < 128 < 192). This is a robust, stack-independent architectural win.
+
+**Two effects compound:** (1) each slice token covers ~6K nodes at slice=32 vs ~3K at slice=64 → coarser but more globally-informed representation (consistent with long-range wake-coupling in tandem foil); (2) lower per-epoch compute allows 16 epochs vs 14, giving EMA more averaging steps. At slice=32, 37.2 GB VRAM (vs 42.1) leaves headroom for batch size increases or n_layers experiments.
+
+slice=32 beats the current PR #881 baseline (val=85.23) by 3.0% val / 4.7% test. Both represent partial stacks — the combination (slice=32 + δ=0.1) is likely the next big win. Frieren assigned PR #1004 to test {slice 8, 16, 24, 32} on δ=0.1 + EMA.
+
+**New best: val=82.64, test=73.02. Merged. `--slice_num 32` is now the architectural default.**
+
+---
+
 ## 2026-04-29 01:20 — PR #881: Huber δ-scan + EMA stack ✓ MERGED (new best — massive win)
 
 - Branch: `willowpai2e1-alphonse/huber-ema-stack`

@@ -1,39 +1,47 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-29 01:25 UTC
+- **Updated:** 2026-04-29 01:40 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none — no open ADVISOR issues)_
 
 ## Current best
 
-**PR #881 (Huber δ=0.1 + EMA=0.99, no clip, no warmup) — MERGED:**  
-`val_avg/mae_surf_p = 85.23`, `test_avg/mae_surf_p = 76.64`  
-**−39.5% val / −40.3% test vs unmodified default (140.95/128.32).**
+**PR #862 Round 2 (slice=32 + Huber δ=0.5 + EMA + clip + warmup=0) — MERGED:**  
+`val_avg/mae_surf_p = 82.64`, `test_avg/mae_surf_p = 73.02`  
+**−41.4% val / −43.1% test vs unmodified default (140.95/128.32).**
 
-This beats the prior 4-way stack (PR #775, val=96.54) by 11.7%. δ=0.1 is the dominant lever.
-
-Minimum required flags: `--huber_delta 0.1 --ema_decay 0.99`  
-Whether clip+warmup=0 help at δ=0.1 is actively being tested (alphonse PR #957).
+Beats PR #881 (val=85.23, δ=0.1 + EMA at slice=64) by 3.0% val / 4.7% test.
 
 **Milestone chain:**
 - Unmodified default: val=140.95 (PR #846)
 - EMA alone: val=119.35 (PR #773)
 - Huber δ=0.5 alone: val=102.86 (PR #769)
 - 4-way stack (δ=0.5+EMA+clip+w0): val=96.54 (PR #775)
-- **Huber δ=0.1 + EMA: val=85.23 (PR #881) ← current best**
+- Huber δ=0.1 + EMA (slice=64): val=85.23 (PR #881)
+- **slice=32 + 4-way stack (δ=0.5): val=82.64 (PR #862) ← current best**
+
+**Two parallel winning directions** (not yet combined):
+1. **Lower δ (PR #881):** δ=0.1 + EMA at slice=64 → val=85.23
+2. **Lower slice_num (PR #862):** slice=32 + 4-way stack → val=82.64
+The combination (slice=32 + δ=0.1 + EMA ± clip) is the obvious next milestone, being tested now.
 
 ## Current research focus
 
-**Phase: δ-floor + 5-way stack confirmation**
+**Phase: convergence of δ-floor + slice-floor + combination**
 
-The δ=0.1 finding is the biggest win so far. Three key open questions:
+Two independent architectural/loss wins now confirmed on their respective stacks. The convergence zone:
+- **δ-floor:** δ=0.1 wins over δ=0.5 at slice=64; δ=0.05/0.025 being tested (alphonse #957)
+- **slice-floor:** slice=32 wins monotonically; slice=16 being tested on δ=0.1 (frieren #1004)
+- **Combination:** slice=32 + δ=0.1 predicted val ~76–79 — likely the next major milestone
 
-1. **Does δ=0.1 still improve with clip+warmup=0 on top?** (alphonse #957) The 4-way stack logic still applies, but the interaction at δ=0.1 is untested.
-2. **Is there more headroom below δ=0.1?** (alphonse #957, tests δ=0.05 and δ=0.025) The curve is monotone, still descending.
-3. **Can BF16 mixed precision give us more epochs per 30-min budget?** (tanjiro #959) All models are still descending at epoch 14; throughput is the binding constraint.
+Three key open questions:
 
-**Secondary focus:** validating remaining in-flight directions (OneCycle scheduling, slice scan, surf_weight scan, per-channel Huber δ) on the new δ=0.1 default. These PRs are in rebase or running on outdated δ=0.5 assumptions and will compare against val=85.23.
+1. **Does slice=32 + δ=0.1 combine for a new record?** (frieren #1004, includes slice=32-delta0.1 run)
+2. **Does δ < 0.1 improve further, and does clip compound?** (alphonse #957 — 2D scan)
+3. **Can BF16 give us more epochs per 30-min budget?** (tanjiro #959) All models still descending at final epoch — throughput is binding.
+
+**Secondary:** surf_weight (fern #859), OneCycle scheduling (thorfinn #860), per-channel Huber δ (edward #951), and clip fine-scan (nezuko #944) remain in flight on outdated baselines. Results will be informative even so; if any beat val=82.64, merge and re-evaluate.
 
 ## Active PRs (WIP)
 
@@ -45,20 +53,21 @@ The δ=0.1 finding is the biggest win so far. Three key open questions:
 | #951 | edward | Per-channel Huber δ (δ_p ∈ {0.1,0.25,0.5,1.0} vs δ_vel=0.5) on full stack | Status:WIP |
 | #859 | fern | Surface weight scan sw ∈ {10,15,20,30} on full stack | Status:WIP (rebase) |
 | #860 | thorfinn | OneCycle schedule on full 4-way stack | Status:WIP (rebase) |
-| #862 | frieren | Slice scan downward {32,48,64} on full 4-way stack | Status:WIP (rebase) |
+| #1004 | frieren | Slice scan {16,24,32,64} on δ=0.1 + EMA — find slice-floor at new loss | Status:WIP |
 | #770 | askeladd | Surface-aware slice routing in PhysicsAttention | Status:WIP |
 
 **Note on outdated PRs:** #944, #859, #860, #862 are running or rebasing with δ=0.5 as base. Their results will be valid signals at δ=0.5 but need re-testing at δ=0.1 if they win. The new baseline to beat is val=85.23.
 
 ## Key pending questions
 
-1. **Does clip+warmup=0 stack with δ=0.1?** (alphonse #957 — top priority)
-2. **Does δ < 0.1 improve further?** (alphonse #957)
-3. **Does BF16 give ≥1.5× throughput?** (tanjiro #959 — if yes, unlocks depth=8 and ~20 epochs/run)
-4. **Does OneCycle help on the full stack?** (thorfinn #860 rebase)
-5. **Does lower slice_num {32,48} beat 64 on full stack?** (frieren #862 rebase)
-6. **Does per-channel Huber δ_p < δ_vel help?** (edward #951)
-7. **Does clip norm tuning matter at the new δ?** (nezuko #944 — partially answered by alphonse #957)
+1. **Does slice=32 + δ=0.1 combine for a new record?** (frieren #1004 — top priority, predicted val ~76–79)
+2. **Does slice < 32 improve further at δ=0.1?** (frieren #1004, tests slice=16)
+3. **Does clip+warmup=0 stack with δ=0.1?** (alphonse #957)
+4. **Does δ < 0.1 improve further?** (alphonse #957, tests δ=0.05 and 0.025)
+5. **Does BF16 give ≥1.5× throughput?** (tanjiro #959 — unlocks depth=8 and ~18-20 epochs/run)
+6. **Does OneCycle help on the full stack?** (thorfinn #860 rebase)
+7. **Does per-channel Huber δ_p < δ_vel help?** (edward #951)
+8. **Does surf_weight tuning help on full stack?** (fern #859 rebase)
 
 ## Potential next research directions
 
@@ -87,6 +96,7 @@ The δ=0.1 finding is the biggest win so far. Three key open questions:
 - 96 GB VRAM per GPU, batch_size=4 default; meshes up to 242K nodes.
 - No edits to `data/`. All augmentation/sampling in `train.py`.
 - One hypothesis per PR. Compound only after isolated wins verified.
-- **Minimum flags for all future runs: `--huber_delta 0.1 --ema_decay 0.99`**
+- - **Minimum flags for new experiments: `--huber_delta 0.1 --ema_decay 0.99 --slice_num 32`** (three confirmed wins)
+- clip+warmup interaction at δ=0.1 is still being investigated — do NOT mandate `--clip_norm 0.5 --warmup_epochs 0` until alphonse #957 confirms
 - NaN guard (commit 49c55ed) is in advisor — all new branches get it for free.
-- CLI flags available: `--warmup_epochs`, `--clip_norm`, `--huber_delta`, `--ema_decay`, `--slice_num`, `--n_layers`, `--surf_weight`, `--beta2`
+- CLI flags available: `--warmup_epochs`, `--clip_norm`, `--huber_delta`, `--ema_decay`, `--slice_num`, `--n_layers`, `--surf_weight`, `--beta2`, `--use_bf16`
