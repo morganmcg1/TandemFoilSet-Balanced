@@ -484,22 +484,22 @@ optimizer = torch.optim.AdamW(
     weight_decay=cfg.weight_decay,
     betas=(0.9, cfg.adamw_beta2),
 )
-if cfg.warmup_epochs > 0:
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.01, end_factor=1.0, total_iters=cfg.warmup_epochs,
-    )
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs), eta_min=0.0,
-    )
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[cfg.warmup_epochs],
-    )
-    print(f"LR schedule: linear warmup over {cfg.warmup_epochs} epochs "
-          f"(start_factor=0.01 → 1.0), then cosine over "
-          f"{max(1, MAX_EPOCHS - cfg.warmup_epochs)} epochs (eta_min=0)")
-else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+steps_per_epoch = len(train_loader)
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=2e-3,
+    total_steps=MAX_EPOCHS * steps_per_epoch,
+    pct_start=0.3,
+    anneal_strategy="cos",
+    div_factor=25.0,
+    final_div_factor=1e4,
+)
+print(
+    f"LR schedule: OneCycleLR max_lr=2e-3, total_steps={MAX_EPOCHS * steps_per_epoch} "
+    f"(epochs={MAX_EPOCHS} × steps_per_epoch={steps_per_epoch}), "
+    f"pct_start=0.3, div_factor=25.0, final_div_factor=1e4 "
+    f"(initial_lr=8e-5, final_lr=8e-9)"
+)
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
@@ -627,6 +627,7 @@ for epoch in range(MAX_EPOCHS):
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         scaler.step(optimizer)
         scaler.update()
+        scheduler.step()
         if ema_model is not None:
             ema_model.update_parameters(model)
         global_step += 1
@@ -636,7 +637,6 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
