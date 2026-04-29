@@ -400,6 +400,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     grad_clip: float = 1.0  # 0.0 disables clipping
+    eta_min: float = 0.0  # CosineAnnealingLR floor; 1e-5 keeps the last epoch productive
     epochs: int = 50
     n_hidden: int = 128
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -454,7 +455,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -628,8 +629,10 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    cur_lr = scheduler.get_last_lr()[0]
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"lr={cur_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
