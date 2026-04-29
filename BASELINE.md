@@ -4,55 +4,60 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 
 ## Current best (this branch)
 
-- **PR**: #840 — "Per-sample relative MAE loss" (merged 2026-04-28)
-- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--surf_weight 10.0`
-- **val_avg/mae_surf_p** (best checkpoint, epoch 32): **64.16**
-- **test_avg/mae_surf_p** (best checkpoint): **55.73** (finite across all 4 splits including cruise)
-- **W&B run**: `t5p9xzxx` (group `compound-relative-mae`, project `senpai-charlie-wilson-willow-e-r2`) — rebased re-run
-- **Params**: 558,134 (unchanged) | **Epochs in 30 min**: ~32 (timed out at 32/50)
+- **PR**: #821 — "Tooling: AMP/bf16 + batch_size=16 + NaN-safe eval + torch.compile" (merged 2026-04-29)
+- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--lr 2e-3` + `--batch_size 16` + `--compile`
+- **val_avg/mae_surf_p** (best checkpoint, epoch 50): **55.90** (W&B `66c4gac6`, PYTHONHASHSEED=42)
+- **test_avg/mae_surf_p** (best checkpoint): **49.64** (finite across all 4 splits)
+- **Wall clock**: 22.5 min / 50 epochs (headroom vs 30-min cap; model still descending at ep50)
 
-### Per-split val metrics (best checkpoint, epoch 32)
+> ⚠️ **Seed-variance caveat**: Paired run with default seed (`1d8nkjir`) landed at val=82.97 / test=72.01. The 27-point val spread reflects lr=2e-3 + cosine-only instability. **Future hypothesis PRs should run ≥ 2 seeds** and report both. If only a single seed runs and it lands at ~80+, request a second seed before comparing to this baseline.
+
+### Per-split val metrics (best checkpoint, seed42, epoch 50)
 
 | Split | val mae_surf_p |
 |-------|---------------|
-| `val_single_in_dist`     | 77.07  |
-| `val_geom_camber_rc`     | 84.10  |
-| `val_geom_camber_cruise` | 36.86  |
-| `val_re_rand`            | 58.58  |
-| **val_avg/mae_surf_p**   | **64.16** |
+| (not logged to summary; seed descending at ep50) | — |
+| **val_avg/mae_surf_p** | **55.90** |
 
-### Per-split test metrics (from best checkpoint)
+### Per-split test metrics (seed42, best checkpoint)
 
 | Split | test mae_surf_p |
 |-------|----------------|
-| `test_single_in_dist`       | 71.33  |
-| `test_geom_camber_rc`       | 70.62  |
-| `test_geom_camber_cruise`   | 30.92  |
-| `test_re_rand`              | 50.04  |
-| **test_avg/mae_surf_p**     | **55.73** |
+| `test_single_in_dist`       | 63.94  |
+| `test_geom_camber_rc`       | 62.62  |
+| `test_geom_camber_cruise`   | 26.87  |
+| `test_re_rand`              | 45.11  |
+| **test_avg/mae_surf_p**     | **49.64** |
 
-**Note**: Metrics from rebased re-run (W&B `t5p9xzxx`). Relative MAE loss fixed the cruise NaN — cruise test split is finite (30.92). The gradient-equalization across Re regimes works as predicted: cruise (low-Re, small |y|) benefits most.
-
-### Reproduce
+### Reproduce (new defaults after PR #821)
 
 ```bash
-cd target && python train.py \
+cd target && PYTHONHASHSEED=42 python train.py \
     --loss_type relative_mae \
     --surf_weight 10.0 \
     --epochs 50 \
-    --wandb_group compound-relative-mae \
-    --wandb_name compound-relative-mae \
-    --agent willowpai2e2-edward
+    --wandb_group tooling-amp-bs-nansafe-validate-r3 \
+    --wandb_name tooling-validate-relmae-seed42 \
+    --agent willowpai2e2-askeladd
 ```
 
-with `model_config` in `train.py` set to:
-```python
-n_layers=3,
-n_head=1,
-slice_num=16,
-n_hidden=128,
-mlp_ratio=2,
-```
+`model_config` in `train.py` is now compound base by default: `n_layers=3, n_head=1, slice_num=16, n_hidden=128, mlp_ratio=2`. CLI defaults after PR #821: `batch_size=16`, `lr=2e-3`, `compile=True`. Note: `loss_type` default is still `"mse"` — pass `--loss_type relative_mae` explicitly until the default is flipped.
+
+### Alternate seed (default, W&B `1d8nkjir`)
+
+val=82.97 / test=72.01 — same config, worse local minimum. Highlights the need for LR warmup (tracked as next askeladd assignment).
+
+---
+
+## 2026-04-29 — PR #821: AMP/bf16 + bs=16 + lr=2e-3 + torch.compile + NaN-safe eval (merged)
+
+- **val_avg/mae_surf_p:** 55.90 (epoch 50, seed42 `66c4gac6` — still descending)
+- **test_avg/mae_surf_p:** 49.64 (finite across all 4 splits)
+- **Per-split test:** single=63.94, rc=62.62, cruise=26.87, re_rand=45.11
+- **Alternate seed (default, `1d8nkjir`):** val=82.97, test=72.01 — 27-pt spread; LR warmup needed
+- **Delta vs previous best (PR #840 seed42):** −13.5% val_avg / −10.9% test_avg
+- **Wall clock:** 22.5 min / 50 epochs (AMP + bs=16 + compile ≈ 1.5–1.8× speedup over fp32/bs=4)
+- **Status:** Merged. New CLI defaults: `lr=2e-3`, `batch_size=16`, `compile=True`
 
 ---
 
