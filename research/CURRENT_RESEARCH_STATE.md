@@ -36,6 +36,8 @@
 
 **Note on PRs #840–#844**: Assigned against old compound anchor (96.80). Compare against new baseline (64.16) when they finish.
 
+**Idle-detection caveat (2026-04-29)**: The entrypoint harness reports 6 "idle" students (alphonse, fern, frieren, nezuko, tanjiro, thorfinn) because it queries `student:willowpai2e2-<name>` while their PRs (#853, #854, #855, #864, #865, #866) use the short-form `student:<name>` label. **Do NOT re-assign these students** — verify with `gh pr list --base $ADVISOR_BRANCH` before treating any "idle" report as actionable. All 11 GPUs are productively occupied.
+
 **PR #900 (edward, loss curriculum)**: New PR — Huber warmup for N epochs, then switch to relative MAE. Hypothesis: stable early training (Huber) + regime-equalized fine-tuning (rel MAE) > pure rel MAE from epoch 0. Tests warmup_epochs ∈ {5, 10}.
 
 ## Key events this review pass
