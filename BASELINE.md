@@ -209,6 +209,7 @@
 | #794 | tanjiro | LR warmup + Huber | Revision in progress |
 | #789 | askeladd | Gradient clipping (max_norm=1.0) | Awaiting rebase (winner 114.35 — likely stale vs new baseline) |
 | #1015 | edward | Longer training epochs=24 — **MERGED** | val=66.8085 (-26.1% vs PR #795). edward now idle. |
+| #1062 | thorfinn | Stack --per_sample_norm + epochs=30 on compound baseline | Running (vs baseline 66.8085) |
 
 ### Key Infrastructure Fix (PR #792 Round 2)
 - `--grad_clip 1.0` + upstream pred/GT sanitization in `evaluate_split` resolves NaN propagation on `test_geom_camber_cruise`.
@@ -240,4 +241,5 @@
 - 2026-04-29: PR #960 (alphonse, surf_weight sweep 20/30/50) closed — clean monotone degradation: sw=20 (+2.59%), sw=30 (+5.04%), sw=50 (+5.30%). Optimal surf_weight has shifted below default 10 on compound stack. Re-assigned as PR #1011 (sub-10 sweep: sw=1/3/5/7).
 - 2026-04-29: PR #1005 merged. n_layers=3, slice_num=16 reference architecture sets new best val_avg/mae_surf_p = 94.6541 (-8.31% vs PR #882 baseline 103.2182), test_avg = 83.7608 (-9.43%). Largest single-PR gain since Huber loss. Val curve still decreasing at epoch 12 — longer training is a strong next candidate.
 - 2026-04-28: PR #795 merged (R5 final). Per-sample loss normalization (normalize each sample's Huber loss by per-sample std before averaging) sets new best val_avg/mae_surf_p = 90.4014 (-4.50% vs PR #1005 baseline 94.6541), test_avg = 80.3748 (-4.05%). Acts on an independent failure mode (15× Reynolds-number std spread) from all prior winners. thorfinn now idle.
-- 2026-04-28: PR #1015 merged. Longer training (epochs=24) sets new best val_avg/mae_surf_p = 66.8085 (-26.1% vs PR #795 baseline 90.4014), test_avg = 58.7266 (-27.0%). Run without --per_sample_norm; still decisively beats PSN compound baseline across all 4 splits. Val curve still falling at epoch 22 when 30-min timeout hit (LR=8.5e-6). New compound baseline: --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 24 --grad_clip 1.0 --ema_decay 0.999. edward now idle — reassign with PSN + epochs 30–36.
+- 2026-04-28: PR #1015 merged. Longer training (epochs=24) sets new best val_avg/mae_surf_p = 66.8085 (-26.1% vs PR #795 baseline 90.4014), test_avg = 58.7266 (-27.0%). Run without --per_sample_norm; still decisively beats PSN compound baseline across all 4 splits. Val curve still falling at epoch 22 when 30-min timeout hit (LR=8.5e-6). New compound baseline: --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 24 --grad_clip 1.0 --ema_decay 0.999.
+- 2026-04-29: PR #1062 assigned to thorfinn. Stack --per_sample_norm + epochs=30 on current compound baseline to extend training budget and equalize Re-regime gradients simultaneously.
