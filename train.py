@@ -444,6 +444,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_std_min = float("inf")
+    epoch_std_max = float("-inf")
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -459,8 +461,29 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+
+        # Per-sample y std on unnormalized targets across all valid nodes (mask)
+        # for use as the scale-normalization denominator. clamp(min=1.0) prevents
+        # division by zero on uniform samples.
+        C = y.shape[-1]
+        mask_3d = mask.unsqueeze(-1).to(y.dtype)
+        n_valid_elem = (mask.sum(dim=1).to(y.dtype) * C).clamp(min=1.0)  # [B]
+        y_zeroed = y * mask_3d
+        y_mean_per_sample = y_zeroed.sum(dim=(1, 2)) / n_valid_elem  # [B]
+        y_centered_sq = (y - y_mean_per_sample[:, None, None]) ** 2
+        y_var_per_sample = (y_centered_sq * mask_3d).sum(dim=(1, 2)) / n_valid_elem
+        per_sample_std = y_var_per_sample.sqrt().clamp(min=1.0)  # [B]
+
+        # Per-sample volume / surface MSE (in normalized space) before averaging.
+        n_vol_elem = (vol_mask.sum(dim=1).to(sq_err.dtype) * C).clamp(min=1.0)  # [B]
+        n_surf_elem = (surf_mask.sum(dim=1).to(sq_err.dtype) * C).clamp(min=1.0)
+        vol_loss_per_sample = (sq_err * vol_mask.unsqueeze(-1)).sum(dim=(1, 2)) / n_vol_elem
+        surf_loss_per_sample = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(1, 2)) / n_surf_elem
+
+        # Scale-normalize each sample's loss by its own y std, then mean across
+        # the batch — every sample contributes equally in *relative* terms.
+        vol_loss = (vol_loss_per_sample / per_sample_std).mean()
+        surf_loss = (surf_loss_per_sample / per_sample_std).mean()
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -469,6 +492,8 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_std_min = min(epoch_std_min, per_sample_std.min().item())
+        epoch_std_max = max(epoch_std_max, per_sample_std.max().item())
         n_batches += 1
 
     current_lr = optimizer.param_groups[0]["lr"]
@@ -506,13 +531,16 @@ for epoch in range(MAX_EPOCHS):
         "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/per_sample_std_min": epoch_std_min,
+        "train/per_sample_std_max": epoch_std_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.2e}  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} "
+        f"std=({epoch_std_min:.1f}, {epoch_std_max:.1f})]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
