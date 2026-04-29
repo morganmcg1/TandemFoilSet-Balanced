@@ -4,20 +4,21 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **47.4955** (PR #1242 — lr=7e-4 on beta2=0.985 stack) |
-| `test_avg/mae_surf_p` | **41.2226** (PR #1242) |
-| `test_single_in_dist/mae_surf_p` | 44.0112 |
-| `test_geom_camber_rc/mae_surf_p` | 56.3252 |
-| `test_geom_camber_cruise/mae_surf_p` | 25.1105 |
-| `test_re_rand/mae_surf_p` | 39.4435 |
+| `val_avg/mae_surf_p` | **46.1994** (PR #1311 — huber_delta=0.12 on lr=7e-4+beta2=0.985 stack) |
+| `test_avg/mae_surf_p` | **40.9102** (PR #1311) |
+| `test_single_in_dist/mae_surf_p` | 45.6550 |
+| `test_geom_camber_rc/mae_surf_p` | 55.2315 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.6194 |
+| `test_re_rand/mae_surf_p` | 38.1350 |
 
-**Source:** PR #1242 — lr=7e-4 (was 5e-4) on the full beta2=0.985 compound stack. Uses SequentialLR (warmup_epochs=3 LinearLR + CosineAnnealingLR over remaining 29 epochs).
-- Branch: `charliepai2f5-fern/lr-7e-4-beta2-0.985`
-- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
-- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited)
-- Peak VRAM: 20.97 GB, Wall-clock: 29.88 min, Run ID: qgzkwssf
+**Source:** PR #1311 — huber_delta=0.12 (was 0.1) on full lr=7e-4+beta2=0.985 compound stack. Val improved -2.73%, test improved -0.76% vs PR #1242. **COMPETE TARGET BEATEN for the first time** (test_avg=40.9102 < 40.93 target, gap = -0.0198).
+- Branch: `charliepai2f5-frieren/huber-delta-0.12`
+- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.12, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
+- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited, val slope ~-0.15/epoch at termination)
+- Peak VRAM: 20.98 GB, Wall-clock: 30.0 min, Run ID: 1xe586da
+- Metrics JSONL: `metrics/charliepai2f5-frieren-huber-delta-0.12-1xe586da.jsonl`
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — currently +0.71% above target (gap = **0.2926**, down from 0.3953 — 26% of remaining gap closed by lr=7e-4).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-0.0198**, i.e. 0.05% below target).
 
 ## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + lr=7e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
