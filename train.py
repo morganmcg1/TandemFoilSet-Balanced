@@ -400,6 +400,32 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# Domain re-weighting: amplify raceCar (single + tandem) samples relative to
+# cruise. The two hardest val splits are raceCar (val_single_in_dist 91.33,
+# val_geom_camber_rc 91.01) while val_geom_camber_cruise is near-solved
+# (60.42). Boosting raceCar weight steers training toward the harder
+# negative-AoA / ground-effect surface-pressure regime.
+#
+# Source of truth for domain membership is meta.json's domain_groups (the
+# same map load_data uses to build the per-sample weights), so we use it
+# directly instead of inferring from features.
+RACECAR_BOOST = 2.0
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _meta = json.load(_f)
+_racecar_idxs = set(_meta["domain_groups"]["racecar_single"]) | set(
+    _meta["domain_groups"]["racecar_tandem"]
+)
+_boost_mask = torch.tensor(
+    [i in _racecar_idxs for i in range(len(train_ds))], dtype=torch.bool
+)
+sample_weights = sample_weights.clone()
+sample_weights[_boost_mask] *= RACECAR_BOOST
+print(
+    f"Domain re-weighting: boost={RACECAR_BOOST}x on "
+    f"{int(_boost_mask.sum())} raceCar samples / "
+    f"{len(train_ds) - int(_boost_mask.sum())} cruise samples"
+)
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
