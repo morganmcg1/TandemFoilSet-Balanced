@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-29 06:50 — Methodological note: seed variance is large
+
+Discovered via askeladd's #1031 sweep: **δ=0.1 single-seed numbers vary by 3.2pt val / 5.8pt test** between independent runs. Specifically:
+
+- #885 single-seed (run `nffbil1x`): val=96.866 / test=87.348
+- #1031 seed2 same config (run `o6liykzm`): val=93.624 / test=81.589
+
+This invalidates many small-margin "win" claims in past PRs. From now on:
+
+- Single-seed wins under **5pt test_avg** are not decisive — require a second seed.
+- Larger wins (e.g. #986's 24-pt drop) are robust to seed noise.
+- Past close-call merges (#850, #885) likely benefitted from lucky seeds; their true mean is somewhat higher than recorded. Future winners are easier to demonstrate but need to clear a higher bar.
+- This affects how we interpret the askeladd #1031 and edward #1019 results below — both showed gains at the seed-noise boundary on the OBSOLETE eager+δ=0.1 baseline, so verification on the new compile baseline is needed.
+
+---
+
 ## 2026-04-28 19:51 — PR #732: Scale Transolver to n_hidden=256, n_layers=7, n_head=8
 
 - **Branch:** `willowpai2e5-alphonse/larger-model-capacity` (closed)
@@ -945,3 +961,87 @@ Nezuko → #1072 (larger-batch + linear-LR scaling). Mechanism distinct from com
 - **frieren #943 (per-channel surf weight rebase)** — anchored sweep, orthogonal to compile.
 - **thorfinn #810 (EMA rebase)** — orthogonal; EMA quality lever still applies.
 - **tanjiro #745 (separate pressure head rebase)** — orthogonal; capacity-on-output question still open.
+
+---
+
+## 2026-04-29 06:45 — PR #1031: Huber δ floor sweep below 0.1 — SENT BACK FOR COMPILE VERIFY
+
+- **Branch:** `willowpai2e5-askeladd/huber-delta-floor-below-0.1` (rebase pending)
+- **W&B runs:** `du4fvvv8` (δ=0.01), `s34n4sa5` (δ=0.03), `x8acbc5e` (δ=0.05), `o6liykzm` (δ=0.1 seed2) — all on eager+δ=0.1 baseline (17 epochs)
+- **Hypothesis:** Push Huber δ below 0.1 to find where the trend bottoms out. Three predictions: floor at 0.05–0.1, floor below 0.05, or training instability at extreme δ.
+
+### Results (against single-seed #885 baseline val=96.87 / test=87.35)
+
+| δ | val_avg | test_avg | best_epoch | W&B |
+|---|--------:|---------:|-----------:|-----|
+| 0.1 (seed2 same config) | **93.62** | **81.59** | 16 | o6liykzm |
+| 0.05 | 96.81 | 87.88 | 16 | x8acbc5e |
+| 0.03 | **91.96** | **80.91** | 16 | s34n4sa5 |
+| 0.01 | 91.20 | 82.25 | 17 | du4fvvv8 |
+
+### Two findings
+
+**Finding 1 (BIG): seed variance is ~3.2pt val / 5.8pt test on δ=0.1.** The δ=0.1 seed2 run hit val=93.62 / test=81.59 vs #885's reported val=96.87 / test=87.35. Same config. This is the most important methodological insight from the sweep — past single-seed wins under 5pt test_avg are at the noise boundary. **Future merge decisions on small-margin wins now require a confirmation seed.**
+
+**Finding 2: δ=0.03 wins on test_avg (80.91)** but only by 3.6pt vs δ=0.1 seed-mean (84.47) — within seed-variance band. δ=0.01 has best val (91.20) but worst sid regression (test_sid 95.26 → 108.27 from δ=0.03 → 0.01); the sweep is non-monotone past δ=0.03 due to under-fitting hard in-distribution shapes. δ=0.05 disappears into seed noise.
+
+### Per-split test pattern (vs δ=0.1 seed2)
+
+- **rc:** keeps winning bigger as δ shrinks (94.78 → 93.71 → 90.60 from δ=0.1 → 0.03 → 0.01) — geometry-OOD samples benefit from L1 outlier-capping.
+- **cruise:** modest wins (54.48 → 58.21 → 52.32 — weakly non-monotone, settling on improvement).
+- **sid:** monotone improvement to δ=0.03 (99.92 → 100.98 → 95.26), then sharp REVERSAL at δ=0.01 (108.27).
+- **re_rand:** modest wins (77.16 → 76.45 → 77.80, essentially noise-tied).
+
+### Decision: SEND BACK for compile verify
+
+The single most important issue: **all runs are on the obsolete pre-#986 baseline (peak GPU 33.1 GB, 17-epoch budget).** Current baseline is now compile + δ=0.1 at val=68.65 / test=62.53 (29 epochs). δ=0.03's val=91.96 is 23pt WORSE than current baseline.
+
+The δ-floor question must be re-asked at the new operating point: with 29-epoch budget and the curve still descending at termination, the loss-shape × budget interaction may yield a different optimum.
+
+Sent back for ONE decisive verification: δ=0.03 + compile vs current baseline. If it beats current by >5pt test (past seed noise), merge as 8th compounding win. If <2pt or negative, close direction with clean conclusion.
+
+### Reassignment
+
+Askeladd remains on #1031 for the compile verification round.
+
+---
+
+## 2026-04-29 06:45 — PR #1019: Loss-weighted hard-negative sampling — SENT BACK FOR COMPILE VERIFY
+
+- **Branch:** `willowpai2e5-edward/loss-weighted-hard-negative-sampling` (rebase pending)
+- **W&B runs:** `awapotmi` (α=0.5 winner), `1avytlb3` (α=1.0), `lwv3eytx` (control) — all on eager+#850 baseline (17 epochs)
+- **Hypothesis:** WeightedRandomSampler with weights ∝ per-sample EMA loss focuses optimization on samples the model is currently failing on. Mechanistically distinct from sw, per-sample-norm, or boundary-layer weighting.
+
+### Results (against #850 baseline val=101.56 / test=89.92)
+
+| Run | val_avg | test_avg | best_epoch | final_w_max | W&B |
+|-----|--------:|---------:|-----------:|------------:|-----|
+| Control (no HNS) | 111.81 | 102.61 | 15 | n/a | lwv3eytx |
+| α=0.5, floor=0.1 | **97.59** | **88.98** | 17 | 5.85× | awapotmi |
+| α=1.0, floor=0.1 | 101.09 | 94.11 | 18 | 23.91× | 1avytlb3 |
+
+### Per-split val/test (α=0.5 vs #850 baseline)
+
+| Split | val Δ | test Δ |
+|-------|------:|-------:|
+| `single_in_dist` | −6.61 | −0.25 |
+| `geom_camber_rc` | −1.02 | **+11.01** |
+| `geom_camber_cruise` | **−8.64** | **−8.70** |
+| `re_rand` | +0.36 | **−5.81** |
+| **avg** | **−3.97** | **−0.94** |
+
+### Mechanism diagnostics
+
+- α=0.5 concentrated max 5.85× on hardest sample; α=1.0 concentrated max 23.91× — α=1.0 is "noise amplification" mode that the PR explicitly warned about. Per-split test shows the regression: `test_re_rand` and `test_cruise` both worsen ~10pt vs Run B at α=1.0 — concrete evidence that α<1 is correct.
+- `loss_ema_p95` monotonically decreased in all runs — the sampler IS doing what it should (concentrating on the tail, then the tail shrinks).
+- Per-split anomaly: `test_geom_camber_rc` worsens +11pt at α=0.5. The training-data geometry (`P1: M=2-5, P3: M=9 + 5 specials, P2: M=6-8 held out`) is the most adversarial OOD split. Loss-weighted sampling may amplify rc training samples whose geometry interpolates poorly to the held-out test set. Edward's suggestion: per-domain loss EMA — strong follow-up if the mechanism stacks with compile.
+
+### Decision: SEND BACK for compile verify
+
+Same issue as #1031: runs are all on obsolete pre-#986 baseline. Run B's val=97.59 is 29pt worse than current compile baseline (val=68.65). The 4pt val / 0.94pt test win against #850 is also right at the seed-variance boundary (3.2pt val / 5.8pt test on δ=0.1 alone).
+
+Sent back for ONE decisive verification: α=0.5 + compile vs current baseline. Mechanism is throughput-orthogonal (compile changes WHEN you visit samples, HNS changes WHICH samples) so the gain SHOULD stack additively. The 29-epoch budget also gives the per-sample loss EMA more time to settle (24 effective epochs of weighting vs 12 before). Both effects favor a stacked win.
+
+### Reassignment
+
+Edward remains on #1019 for the compile verification round.

@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 06:30
+- **Last updated:** 2026-04-29 06:50
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -37,11 +37,12 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | askeladd | #733 | Closed | val_avg=151.50; throughput cost decisive |
 | askeladd | #811 | **Merged** | val_avg=127.402; BF16 1.20× speedup |
 | askeladd | #848 | Closed | bs={8,10}: regressed; bs=12 OOM; `add_derived_features` loop bottleneck |
-| askeladd | #885 | **Merged** | δ=0.1 + sw=3: **val_avg=96.866 (−4.62%), test_avg=87.348 (−2.86%)**. δ=0.3+sw=3 collapsed to noise (mechanism overlap with sw=3). δ=0.1 attacks volume residual heavy tail. Default huber_delta now 0.1. W&B: `nffbil1x`. |
+| askeladd | #885 | **Merged** | δ=0.1 + sw=3: **val_avg=96.866 (−4.62%), test_avg=87.348 (−2.86%)**. δ=0.3+sw=3 collapsed to noise (mechanism overlap with sw=3). δ=0.1 attacks volume residual heavy tail. Default huber_delta now 0.1. W&B: `nffbil1x`. NOTE: subsequent δ=0.1 seed2 (#1031) hit val=93.62/test=81.59 — single-seed numbers carry 3.2pt val / 5.8pt test variance. |
+| askeladd | #1031 | **WIP (rebase)** | δ-floor sweep on EAGER baseline: δ=0.03 won test (80.91), δ=0.01 best val (91.20) but sid regression. Discovered seed variance 3.2pt val / 5.8pt test on δ=0.1 alone. Sent back for compile verify of δ=0.03. |
 | edward | #734 | Closed | sw=10 wins; sw=50/100 regress |
 | edward | #850 | **Merged** | sw=3 + Huber: **val_avg=101.563 (−8.17%), test_avg=89.918 (−11.24%)**. All 4 splits improved. Default surf_weight changed to 3.0 in Config. W&B: `6rh7dzkx`. |
 | edward | #953 | **Closed** | sw=0.5 won val_avg=99.185 (-2.34%) but test essentially tied at 90.293 (+0.42%); sw=1, sw=2 much worse (non-monotone). Split-trade in test (sid+rc regress, cruise+re_rand improve). sw-tuning lever exhausted. |
-| edward | #1019 | **WIP** | Loss-weighted hard-negative sampling — per-sample EMA loss → re-weighted sampler each epoch. Sweep alpha ∈ {0.5, 1.0} with floor=0.1 + control. Mechanistically distinct from sw and per-sample-norm. |
+| edward | #1019 | **WIP (rebase)** | Loss-weighted hard-negative sampling on EAGER baseline: α=0.5 won val=97.59/test=88.98 vs #850 (101.56/89.92) by 4pt val / 0.94pt test (at seed-noise boundary). α=1.0 too aggressive (23.9× weight concentration → noise amplification). Sent back for compile verify. |
 | fern | #737 | **Merged** | val_avg=127.87; warmup+cosine |
 | fern | #809 | **WIP** | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
@@ -79,13 +80,21 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
   pending. Stale-baseline numbers showed promise on cruise/re_rand. Need to verify against new
   baseline (96.87/87.35).
 
-**All 8 GPUs in use:** alphonse #1045 (per-channel sigma normalization — refines #896 after
-sigma-was-pressure-dominated diagnosis), askeladd #1031 (δ-floor sweep below 0.1), edward #1019
-(loss-weighted hard-negative sampling — per-sample EMA loss → resampling), fern #809
-(schedule-budget — NOTE: hypothesis now obsolete since compile budget changed 17 → 29 epochs;
-should send back when fern resubmits), frieren #943 (per-channel surf rebase + anchored p_surf
-sweep with vel_surf=3), **nezuko #1072 (larger batch + linear LR scaling)**, tanjiro #745 (heads
-Option 3 rebase), thorfinn #810 (EMA rebase + δ=0.1 verify).
+**All 8 GPUs in use:** alphonse #1045 (per-channel sigma normalization), askeladd #1031 (δ-floor
+sweep — sent back for compile verify of δ=0.03), edward #1019 (HNS — sent back for compile verify
+of α=0.5), fern #809 (schedule-budget — hypothesis obsolete after compile, will send back when
+fern resubmits), frieren #943 (per-channel surf rebase + anchored p_surf sweep), nezuko #1072
+(larger batch + linear LR scaling), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA
+rebase + δ=0.1 verify).
+
+## Methodological insight (2026-04-29 06:50)
+
+**Seed variance is large.** Discovered via askeladd's #1031: δ=0.1 single-seed numbers vary by 3.2pt val / 5.8pt test between independent runs (#885 reported val=96.87/test=87.35; seed2 hit val=93.62/test=81.59 same config). This means:
+
+- Single-seed wins under 5pt test_avg are at the noise boundary; require a confirmation seed
+- Past close-call merges (#850, #885) likely benefited from lucky seeds — true mean is somewhat higher
+- Large wins (e.g. #986's 24pt drop) are robust
+- Two outstanding PRs (#1031 δ=0.03, #1019 α=0.5) showed wins at the seed-noise boundary on the OLD eager baseline — sent back for verification on compile baseline where the test is decisive
 
 ## Current research themes
 
