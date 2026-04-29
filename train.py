@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -32,7 +33,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +47,66 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+# ---------------------------------------------------------------------------
+# Re-stratified sampler
+# ---------------------------------------------------------------------------
+
+
+class ReStratifiedSampler(torch.utils.data.Sampler):
+    """Joint Re x domain stratified batch sampler.
+
+    Sorts training samples into (domain, Re-quintile) cells, then round-robins
+    across the cells so every batch spans the Re range while preserving domain
+    balance over the epoch.
+    """
+
+    def __init__(self, log_re_vals, domain_labels, batch_size, n_quintiles=5, seed=42):
+        self.batch_size = batch_size
+        self.n_quintiles = n_quintiles
+
+        log_re_vals = np.asarray(log_re_vals)
+        domain_labels = np.asarray(domain_labels)
+
+        qs = np.quantile(log_re_vals, np.linspace(0, 1, n_quintiles + 1))
+        re_quintile = np.searchsorted(qs[1:-1], log_re_vals)
+
+        unique_domains = sorted(set(domain_labels.tolist()))
+        self.cells = []
+        for d in unique_domains:
+            for q in range(n_quintiles):
+                idx = np.where((domain_labels == d) & (re_quintile == q))[0].tolist()
+                if idx:
+                    self.cells.append(idx)
+
+        self.rng = np.random.default_rng(seed)
+
+    def __iter__(self):
+        # Equal-cell exposure with within-cell replacement: every (domain,
+        # Re-quintile) cell is visited the same number of times per epoch.
+        # Each round visits all cells in a shuffled order, so consecutive
+        # batch_size-sized windows draw from batch_size distinct cells
+        # (Re-diverse + domain-mixed). When a cell is exhausted, its queue
+        # is reshuffled (with-replacement at the cell level) — same spirit
+        # as the original WeightedRandomSampler with replacement=True.
+        n_cells = len(self.cells)
+        total = sum(len(c) for c in self.cells)
+        n_rounds = total // n_cells
+        cell_queues = [list(self.rng.permutation(c)) for c in self.cells]
+        indices = []
+        for _ in range(n_rounds):
+            order = self.rng.permutation(n_cells).tolist()
+            for ci in order:
+                if not cell_queues[ci]:
+                    cell_queues[ci] = list(self.rng.permutation(self.cells[ci]))
+                indices.append(int(cell_queues[ci].pop()))
+        return iter(indices)
+
+    def __len__(self):
+        n_cells = len(self.cells)
+        total = sum(len(c) for c in self.cells)
+        return ((total // n_cells) * n_cells // self.batch_size) * self.batch_size
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -399,6 +460,15 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# log(Re) per training sample (dim 13 of x features, broadcast across nodes).
+log_re_train = np.array([
+    train_ds[i][0][0, 13].item()
+    for i in range(len(train_ds))
+])
+
+# Domain labels recovered from sample_weights: each unique weight = one domain group.
+unique_ws, domain_labels_train = np.unique(sample_weights.numpy(), return_inverse=True)
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
@@ -406,7 +476,10 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler = ReStratifiedSampler(
+        log_re_train, domain_labels_train,
+        batch_size=cfg.batch_size, n_quintiles=5, seed=42,
+    )
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
@@ -512,11 +585,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_re_weight_ratio_max = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch_idx, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # First batch of each epoch: log Re diversity inside the batch
+        # (sanity check that the stratified sampler is producing Re-spread batches).
+        if batch_idx == 0:
+            log_re_batch_np = x[:, 0, 13].detach().cpu().numpy()
+            wandb.log({
+                "train/batch_log_re_std": float(log_re_batch_np.std()),
+                "train/batch_log_re_range": float(log_re_batch_np.max() - log_re_batch_np.min()),
+                "global_step": global_step,
+            })
 
         # Per-sample Re-based weight: downweight high-Re samples.
         # x dim 13 is log(Re), shared across all nodes of a sample.
