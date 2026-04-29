@@ -1,6 +1,36 @@
 # Baseline — icml-appendix-charlie-pai2e-r3
 
 ## Current Best
+- **Source**: Compound Multi-scale RFF (σ₁=1.0, σ₂=5.0, num_freq=32) + OneCycleLR (max_lr=1e-3, ONECYCLE_EPOCHS=15, pct_start=0.3) + EMA decay=0.99 (PR #984, thorfinn)
+- **PR**: #984
+- **Primary**: `val_avg/mae_surf_p` = **73.159** (lower is better)
+- **Test (3-split mean, excl. cruise NaN)**: `test_avg/mae_surf_p` = **72.058**
+
+### Best checkpoint metrics (val, best EMA checkpoint, epoch 13)
+
+| Split | mae_surf_p | Δ vs PR #928 |
+|---|---|---|
+| val_single_in_dist | 82.191 | -17.28% |
+| val_geom_camber_rc | 85.919 | -8.46% |
+| val_geom_camber_cruise | 53.760 | -10.88% |
+| val_re_rand | 70.765 | -11.34% |
+| **val_avg** | **73.159** | **-12.21%** |
+
+### Test metrics (best-val checkpoint, epoch 13; EMA weights; NaN in cruise due to known 1-sample bug)
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | (see metrics JSONL) |
+| test_geom_camber_rc | (see metrics JSONL) |
+| test_geom_camber_cruise | NaN (1-sample GT bug) |
+| test_re_rand | (see metrics JSONL) |
+| **test_avg (3-split excl. cruise)** | **72.058** |
+
+- **Metric summary**: `target/runs/compound-rff-onecycle-ema099/metrics.jsonl`
+- **Reproduce**: `cd target/ && CUDA_VISIBLE_DEVICES=0 EMA_DECAY=0.99 WANDB_MODE=offline python train.py --lr 5e-4 --surf_weight 10 --batch_size 4 --epochs 50`
+  (Multi-scale RFF σ₁=1.0, σ₂=5.0, num_freq=32, normalized coords; OneCycleLR max_lr=1e-3, ONECYCLE_EPOCHS=15, pct_start=0.3, anneal_strategy='cos', div_factor=25.0, final_div_factor=1e4; EMA decay=0.99; per-sample Re-aware RMS normalization; wall-clock 31.5 min, peak VRAM 42.7 GB)
+
+## Previous Best (PR #928)
 - **Source**: Multi-scale RFF (σ₁=1.0, σ₂=5.0, num_freq=32) on normalized (x,z) coords + EMA decay=0.99 + per-sample Re-aware RMS loss normalization (PR #928, frieren)
 - **PR**: #928
 - **Primary**: `val_avg/mae_surf_p` = **83.338** (lower is better)
