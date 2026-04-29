@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-04-29 04:05 — PR #859 Round 2: surf_weight scan at δ=0.1 + EMA — CLOSED (negative)
+
+- Branch: `willowpai2e1-fern/surf-weight-scan` (rebased to PR #881 stack with δ=0.1)
+- Hypothesis: surf_weight=20 won at MSE+EMA; does it still win under Huber δ=0.1 + EMA?
+
+| surf_weight | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs ctrl | W&B run |
+|------------:|-------------------:|--------------------:|:---------:|---------|
+| 10 (control) | 87.66 | 78.15 | — | [vgt6z4jh](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/vgt6z4jh) |
+| **15** | **87.23** | **78.07** | **−0.49% / −0.11%** | [emykm84n](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/emykm84n) |
+| 20 | 91.65 | 82.90 | +4.55% / +6.07% | [oe0yis0o](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/oe0yis0o) |
+| 30 | 88.69 | 79.63 | +1.18% / +1.89% | [q6sc7i22](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/q6sc7i22) |
+
+All runs: `--huber_delta 0.1 --ema_decay 0.99` at slice=64 default. No variant beats current best (val=79.82 after PR #959).
+
+Mechanism check: vol_loss degrades monotonically (+24% from sw=10→30), surf_loss flat — same pattern as no-Huber sweep but sw=20 is now *harmful*.
+
+**Analysis and conclusions:**
+
+**SW=10 (default) is optimal at δ=0.1.** The advisor's mechanism prediction confirmed: Huber δ=0.1 already attenuates large volume residuals aggressively, effectively raising the implicit surface emphasis. The surf_weight=20 win from the MSE sweep reversed completely — sw=20 regresses +4.55% val / +6.07% test vs control.
+
+SW=15 ties SW=10 within noise (−0.49% val, −0.11% test) — not significant.
+
+**Decision: CLOSED.** Clean negative result. Surf_weight is now a settled knob — keep at default=10 for all future experiments. No need to retest with BF16 or slice=32; the mechanism clearly shows saturation under δ=0.1.
+
+Fern assigned follow-up PR #1027: EMA decay scan {0.99, 0.995, 0.999} on BF16 + slice=32 + δ=0.1 stack.
+
+---
+
 ## 2026-04-29 03:50 — PR #959: BF16 mixed precision for throughput ✓ MERGED (new best)
 
 - Branch: `willowpai2e1-tanjiro/bf16-mixed-precision`

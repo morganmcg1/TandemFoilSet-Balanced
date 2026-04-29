@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-29 03:55 UTC
+- **Updated:** 2026-04-29 04:10 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none — no open ADVISOR issues)_
@@ -50,11 +50,11 @@ Key open questions in priority order:
 | #1004 | frieren | Slice scan {8,16,24,32,64} on δ=0.1 + EMA | Status:WIP |
 | #944 | nezuko | clip=0.25 vs clip=0.5 head-to-head at slice=32 | Status:WIP |
 | #951 | edward | Asymmetric δ_p ∈ {0.1,0.05} + δ_vel=0.5 at slice=32 | Status:WIP |
-| #859 | fern | Surface weight scan on full stack | Status:WIP |
+| #1027 | fern | EMA decay scan {0.99, 0.995, 0.999} on BF16+slice32+δ=0.1 stack | Status:WIP (NEW) |
 | #860 | thorfinn | OneCycle + slice=32 on 4-way stack | Status:WIP |
 | #770 | askeladd | Surface-aware slice routing in PhysicsAttention | Status:WIP |
 
-**Note on outdated PRs:** #957, #1004, #860, #944, #951, #859 are running on stacks without `--use_bf16`. Their results will be valid signals on FP32 stacks but all will need re-testing with BF16 when they return, as BF16 is now the required minimum.
+**Note on outdated PRs:** #957, #1004, #860, #944, #951 are running on stacks without `--use_bf16`. Their results will be valid signals on FP32 stacks but all will need re-testing with BF16 when they return, as BF16 is now the required minimum.
 
 ## Key pending questions
 
@@ -65,7 +65,7 @@ Key open questions in priority order:
 5. **Does OneCycle stack with slice=32?** (thorfinn #860 round 3, predicted val ~80 on FP32)
 6. **Does clip=0.25 transfer to slice=32?** (nezuko #944 round 3)
 7. **Does asymmetric δ_p=0.05 push below uniform δ floor?** (edward #951 round 3)
-8. **Does surf_weight tuning help on full stack?** (fern #859 rebase)
+8. **Does longer EMA half-life help on BF16+slice32 stack?** (fern #1027 — ema_decay ∈ {0.99, 0.995, 0.999})
 
 ## Potential next research directions
 
@@ -88,6 +88,12 @@ Key open questions in priority order:
 - MAE loss (δ→0 limit): if δ=0.025 still wins, MAE may be the asymptotic optimum
 - Cross-attention surface↔volume: physics inductive bias for boundary conditions
 - Galerkin attention swap (askeladd's architecture lane)
+
+## Settled knobs (no further tuning needed)
+
+- **surf_weight=10**: PR #859 closed — SW=10 is optimal at δ=0.1. Huber already provides implicit surface emphasis; higher SW over-suppresses volume.
+- **n_layers=5**: PR #776 closed — n_layers=8 under-converges within 30-min budget even with BF16 (156.6s/epoch at n=8 vs 101.6s at n=5).
+- **AdamW β₂**: PR #867 closed — β₂=0.999 default is already optimal.
 
 ## Standing constraints
 
