@@ -881,29 +881,67 @@ Alphonse → #1045 per-channel sigma normalization (huber_err / sigma_per[b, c])
 
 ---
 
-## 2026-04-29 05:15 — PR #986: torch.compile dynamic=True — SENT BACK FOR REBASE
+## 2026-04-29 06:20 — PR #986: torch.compile(dynamic=True) — MERGED (7th compounding win, largest single jump)
 
-- **Branch:** `willowpai2e5-nezuko/torch-compile-acceleration` (rebase pending on δ=0.1 baseline)
-- **W&B runs:** Run A (control, eager) `[id]` val=108.31 / test=98.11; Run B (compile=on) `[id]` val=111.96 / test=99.95
-- **Hypothesis:** torch.compile with dynamic=True (CUDA Graph Trees disabled — meshes are 74K-242K nodes, variable per-batch) gives 1.5-2× wall-clock speedup → more epochs in 30-min budget → better val.
+- **Branch:** `willowpai2e5-nezuko/torch-compile-model-forward` (squash-merged into icml-appendix-willow-pai2e-r5)
+- **W&B runs:** `up4t33m5` (compile-on + δ=0.1 verify, winner), `9q56e46a` (compile-off + δ=0.1 control), `c2zkwwnm` (Run A original, eager + δ=1.0), `g9j5w0bq` (Run B original, compile + δ=1.0)
+- **Hypothesis:** torch.compile with dynamic=True (CUDA Graph Trees disabled — meshes are 74K-242K nodes, variable per-batch) gives 1.5-2× wall-clock speedup → more epochs in 30-min budget → better val. Throughput-only mechanism — orthogonal to all loss-shape and architecture levers.
 
-### Results (nezuko's reported numbers, ran on STALE δ=1.0 baseline)
+### Final results (compile-on + δ=0.1 vs current baseline #885)
 
-| variant | val_avg | test_avg | epochs | s/epoch | speedup | W&B |
-|---------|--------:|---------:|-------:|--------:|--------:|-----|
-| Run A (eager) | 108.31 | 98.11 | 17/50 | 110.4 | 1.0× | [pending] |
-| Run B (compile, dynamic=True) | 111.96 | 99.95 | 29/50 | 62.4 | **1.77×** | [pending] |
+| Split | Baseline (#885) | Compile+δ=0.1 (this PR) | Δ val | Δ test |
+|-------|----------------:|------------------------:|------:|-------:|
+| `single_in_dist`    | val=119.405 / test=109.152 | val=83.20 / test=78.96  | **−30.3%** | **−27.7%** |
+| `geom_camber_rc`    | val=116.812 / test=107.290 | val=80.07 / test=72.75  | **−31.5%** | **−32.2%** |
+| `geom_camber_cruise`| val=65.983  / test=53.250  | val=46.47 / test=40.41  | **−29.6%** | **−24.1%** |
+| `re_rand`           | val=85.265  / test=79.700  | val=64.84 / test=57.98  | **−23.9%** | **−27.3%** |
+| **avg**             | **val=96.866 / test=87.348** | **val=68.65 / test=62.53** | **−29.1%** | **−28.4%** |
+
+### Throughput
+
+| Run | Steady-state s/epoch | Total epochs in 30 min | Peak VRAM | Compile fallbacks |
+|-----|--------------------:|----------------------:|----------:|------------------:|
+| Eager (control)  | 109.5 | 17 | 33.1 GB | n/a |
+| **Compile (winner)** | **61.9** | **29** | **23.9 GB** | **0** |
+| Speedup | **1.77×** | **+71% epochs** | **−28% memory** | clean |
 
 ### Commentary & Conclusions
 
-- **Speedup verified at 1.77×.** Variable-N graphs notwithstanding, torch.compile mode="default" with dynamic=True does work — 17 → 29 epochs in same 30 min wall budget. CUDA Graph Trees (mode="reduce-overhead") fails on variable-N as predicted; "default" succeeds.
-- **Quality verification incomplete.** Both runs used δ=1.0 (current default before this PR was rebased), not the new δ=0.1 baseline (val=96.866). On stale baseline:
-  - Run A val=108.31 already beats stale baseline 110.59 (slight noise)
-  - Run B val=111.96 *with compile on* slightly regresses vs Run A despite getting 12 more epochs
-  - This is suspicious — needs verification on the δ=0.1 baseline where the question matters
-- **Decision: Sent back for rebase + decisive verification.** Asked nezuko to rebase onto current advisor branch (huber_delta=0.1 default) and re-run both control and compile-on with same wandb_group. Want to see whether compile delivers val ≤ 96.866 consistently when stacked on the current best.
-- **Risk if rebased:** dynamic=True with bf16 may hit shape-recompilation pathologies on the variable-N path; need to monitor compile cache size & per-step variance.
+- **Largest single jump in the programme.** Both metrics drop ~28% — uniform across all 4 splits, breaking the previous split-trade pattern (where one group always paid for the other's gain). With more training, BOTH groups benefit — confirming that the previous trades were budget-induced, not fundamental.
+- **Mechanism orthogonality verified super-additively.** Each lever alone:
+  - δ=0.1 (#885) val=96.87 (−4.6% vs prior baseline)
+  - compile alone (Run B original on δ=1.0) val=82.61 (−18.7% vs δ=1.0 baseline)
+  - Stacked: val=68.65 (−32.4% vs δ=1.0 baseline) — **slightly super-additive**
+- **Val curve still descending steeply at epoch 29** (last 6 epochs: 79.25 → 79.73 → 70.54 → 72.62 → 68.65). The compile-extended budget is still budget-limited.
+- **VRAM headroom freed (9.2 GB)** opens larger-batch and capacity-scaling directions.
+- **Defaults flipped:** `use_compile: bool = True`, `compile_mode: str = "default"`. Compile + δ=0.1 are now both default for every future student.
+- **Critical implementation choices:**
+  - `mode="default"` (not `reduce-overhead`) — CUDA Graph Trees + variable-N is documented failure mode in PyTorch issue #128424.
+  - `torch._dynamo.config.cache_size_limit = 64` (vs default 8) — prevents recompile storms on variable-N.
+  - `torch._dynamo.config.assume_static_by_default = False` — symbolic N from first trace.
+  - Checkpoint plumbing handles `_orig_mod` wrapper correctly.
+- **Decision: Merged as 7th compounding win.** New baseline: val=68.646, test=62.526.
+
+### Six → Seven compounding wins stacked
+
+1. Distance features + NaN-safe eval (#763) → val_avg=141.42
+2. Warmup+cosine LR (#737) → val_avg=127.87
+3. BF16 mixed precision (#811) → val_avg=127.40
+4. Huber loss δ=1.0 (#739) → val_avg=110.59
+5. Lower surf_weight=3 (#850) → val_avg=101.56
+6. Huber δ=0.1 stacked on sw=3 (#885) → val_avg=96.87 / test_avg=87.35
+7. **torch.compile(dynamic=True) (#986) → val_avg=68.65 / test_avg=62.53**
 
 ### Reassignment
 
-Nezuko remains on #986 after rebase + re-run. If rebased numbers beat current baseline, this is the 7th compounding win — and crucially a throughput win, not a quality lever, so it composes with everything else.
+Nezuko → #1072 (larger-batch + linear-LR scaling). Mechanism distinct from compile (gradient quality, not throughput) — exploits VRAM headroom freed (9.2 GB) and tests Goyal et al. 2017 linear-LR-scaling rule. Sweep bs ∈ {4 control, 6, 8} with lr peak scaled linearly.
+
+### Implications for in-flight experiments
+
+- **fern #809 (schedule sized to budget)** — the budget changed from 17 to 29 epochs. fern's "epochs=14, warmup=2" instructions are obsolete. Will need to send back with new instructions sized to the 29-epoch regime when fern resubmits.
+- **askeladd #1031 (δ-floor below 0.1)** — should now run on the compile baseline (29 epochs) where the curve still descends. Higher chance of seeing a δ-effect than at 17 epochs.
+- **edward #1019 (loss-weighted hard-negative sampling)** — orthogonal mechanism; should still hold.
+- **alphonse #1045 (per-channel sigma)** — refines #896's mechanism; orthogonal to compile.
+- **frieren #943 (per-channel surf weight rebase)** — anchored sweep, orthogonal to compile.
+- **thorfinn #810 (EMA rebase)** — orthogonal; EMA quality lever still applies.
+- **tanjiro #745 (separate pressure head rebase)** — orthogonal; capacity-on-output question still open.

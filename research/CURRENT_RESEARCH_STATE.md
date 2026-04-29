@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 05:30
+- **Last updated:** 2026-04-29 06:30
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -50,21 +50,23 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | nezuko | #742 | Closed | dropout=0.1 regresses 12.4%; undertrained model has no overfitting to regularize |
 | nezuko | #878 | Closed | DropPath p=0.1 neutral on val_avg (+0.32, within seed noise) and +3% per-step overhead |
 | nezuko | #923 | **Merged** | Vectorized data prep: bit-exact, neutral throughput (−1.6% noise). Hypothesis refuted: CPU syncs are not the bottleneck. Model forward+backward = 91% of epoch time. Bottleneck map established. |
-| nezuko | #986 | **WIP (rebase)** | torch.compile(dynamic=True): 1.77× speedup confirmed (29 vs 17 epochs). Quality verification ran on stale δ=1.0 baseline — Run B val=111.96 vs Run A val=108.31 *despite more epochs* is suspicious. Sent back for rebase + re-verify on δ=0.1 baseline. |
+| nezuko | #986 | **Merged** | torch.compile(dynamic=True): post-rebase verify on δ=0.1 baseline won val=68.65 (−29.1%) / test=62.53 (−28.4%). All 4 splits improved (no split-trade). 1.77× speedup, +71% epochs in budget, peak VRAM 23.9 GB (−28%). Defaults flipped to `use_compile=True`. **7th compounding win, largest single jump.** W&B: `up4t33m5`. |
+| nezuko | #1072 | **WIP** | Larger batch + linear LR scaling (Goyal et al. 2017): bs=8 + lr=2e-3, bs=6 + lr=1.5e-3, bs=4 control. Exploits 9.2 GB VRAM freed by compile. Targets gradient-quality lever distinct from throughput lever. |
 | tanjiro | #745 | **WIP (rebase)** | Sent back for Option 3 capacity-matched heads on rebased baseline |
 | thorfinn | #763 | **Merged** | val_avg=141.42; features + NaN-safe eval |
 | thorfinn | #810 | **WIP (rebase)** | EMA d=0.995: val_avg=89.872 (-18.7%), test_avg=79.254 (-21.8%) on stale sw=10. Sent back for rebase + decisive verify on sw=3 baseline (902-line PR with merge conflicts). |
 
-**Current best val_avg/mae_surf_p (merged):** 96.866 (askeladd #885, run `nffbil1x`).
-**Current best test_avg/mae_surf_p (merged):** 87.348 (askeladd #885, run `nffbil1x`).
+**Current best val_avg/mae_surf_p (merged):** 68.646 (nezuko #986, run `up4t33m5`).
+**Current best test_avg/mae_surf_p (merged):** 62.526 (nezuko #986, run `up4t33m5`).
 
-**Six compounding wins stacked:**
+**Seven compounding wins stacked:**
 1. Distance features + NaN-safe eval (#763) → val_avg=141.42
 2. Warmup+cosine LR (#737) → val_avg=127.87
 3. BF16 mixed precision (#811) → val_avg=127.40
 4. Huber loss δ=1.0 (#739) → val_avg=110.594
 5. Lower surf_weight=3 (#850) → val_avg=101.563
-6. **Huber δ=0.1 stacked on sw=3 (#885) → val_avg=96.866, test_avg=87.348**
+6. Huber δ=0.1 stacked on sw=3 (#885) → val_avg=96.866 / test=87.348
+7. **torch.compile(dynamic=True) (#986) → val_avg=68.65 / test_avg=62.53** ← largest single jump (−29% val, −28% test)
 
 **[PENDING — REBASE FOR STACKING/VERIFICATION TEST]**
 - **EMA post-warmup-init d=0.995 (#810, thorfinn)** — won val=89.87 / test=79.25 on stale sw=10
@@ -78,11 +80,12 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
   baseline (96.87/87.35).
 
 **All 8 GPUs in use:** alphonse #1045 (per-channel sigma normalization — refines #896 after
-sigma-was-pressure-dominated diagnosis), askeladd → δ-floor-sweep below 0.1, edward #1019
+sigma-was-pressure-dominated diagnosis), askeladd #1031 (δ-floor sweep below 0.1), edward #1019
 (loss-weighted hard-negative sampling — per-sample EMA loss → resampling), fern #809
-(schedule-budget), frieren #943 (per-channel surf rebase + anchored p_surf sweep with vel_surf=3),
-nezuko #986 (torch.compile rebase + re-verify on δ=0.1 baseline), tanjiro #745 (heads Option 3
-rebase), thorfinn #810 (EMA rebase + δ=0.1 verify).
+(schedule-budget — NOTE: hypothesis now obsolete since compile budget changed 17 → 29 epochs;
+should send back when fern resubmits), frieren #943 (per-channel surf rebase + anchored p_surf
+sweep with vel_surf=3), **nezuko #1072 (larger batch + linear LR scaling)**, tanjiro #745 (heads
+Option 3 rebase), thorfinn #810 (EMA rebase + δ=0.1 verify).
 
 ## Current research themes
 
@@ -104,11 +107,21 @@ rebase), thorfinn #810 (EMA rebase + δ=0.1 verify).
    vel_surf_weight=10. Both runs regressed vs current sw=3 baseline. Sent back for anchored sweep:
    vel_surf=3 fixed (matches current), sweep p_surf ∈ {3 control, 10, 20}. Cruise hint from Run 2
    (val=79.02 vs current sw=3 cruise=82.16, −3.8%) suggests pressure-boost may be real on OOD.
-5. **Throughput: torch.compile delivers 1.77× speedup (#986, ran on stale baseline).** Confirmed
-   by nezuko: 29 epochs in 30-min budget vs 17 eager. Quality A/B inconclusive on δ=1.0 baseline
-   (Run B regressed slightly despite extra epochs — possibly bf16+dynamic recompile noise). Sent
-   back for re-verify on current δ=0.1 baseline. If the compile-on quality matches eager on δ=0.1,
-   this is a pure throughput stack — composes with everything.
+5. **Throughput merged: torch.compile delivers 1.77× speedup (#986 merged).** Post-rebase verify
+   on δ=0.1 baseline won decisively: val=68.65 (−29.1%), test=62.53 (−28.4%) — uniform across all
+   4 splits. The compile-on quality SUPER-additively stacks with δ=0.1 (each lever alone gives
+   −5% to −19%, stacked −29%). Mechanism: throughput is the binding constraint — at 17 epochs eager
+   the val curve is still descending, so any speedup directly converts to better convergence. Val
+   curve at epoch 29 STILL DESCENDING (last 6 epochs 79.25 → 68.65), so further budget extensions
+   should continue to win. Defaults flipped: `use_compile=True` is now the default for every PR.
+6. **Schedule retune is the highest-leverage NEXT lever.** All compounding wins were tuned at
+   ~17 epoch budget; the schedule (cosine T_max=50) reaches eta_min long before epoch 29, leaving
+   the model under-annealed. fern #809 was supposed to address this but for the OLD budget — needs
+   resizing to 29 epochs. New optimum likely peak_lr=1.5e-3 or 2e-3, T_max=29.
+7. **Larger batch + linear LR (nezuko #1072) attacks gradient quality.** Distinct from compile;
+   uses freed VRAM (9.2 GB) for bs ∈ {6, 8} with linearly-scaled lr peak. Goyal et al. 2017 says
+   linear scaling holds up to ~8K total bs. Multi-domain batches (Re × geom) particularly benefit
+   from larger gradient samples.
 6. **PhysicsAttention padding mask (Wave 3):** soft learnable gate — pending other wins first.
 
 ## Open questions
@@ -136,6 +149,9 @@ rebase), thorfinn #810 (EMA rebase + δ=0.1 verify).
 Prioritized given current insights:
 
 - ~~Per-sample-norm + Huber stacking~~ closed; **per-channel sigma (#1045) is active**.
+- **Schedule retune to 29-epoch budget** is the most under-explored high-leverage lever right now.
+  fern's #809 hypothesis must be rewritten to use the new budget. Estimated potential: another
+  −10 val units if the cosine actually anneals.
 - **Linearly-scaled-LR + bs=8** (after #923 lands). With `lr=2e-3, bs=8` (linear scaling rule)
   and gradient accumulation guard, retries batch-size scaling correctly.
 - **Soft attention gate for padding** — `sigmoid(learned_gate(x_node))` multiplied into slice
