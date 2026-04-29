@@ -65,6 +65,23 @@ ACTIVATION = {
 }
 
 
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample during training."""
+
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor = torch.floor(random_tensor + keep_prob)
+        return x * random_tensor / keep_prob
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -141,7 +158,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -152,6 +170,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -160,8 +179,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -172,7 +191,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -188,11 +208,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear stochastic-depth schedule: layer 0 has no drop, last layer
+        # has the full drop_path_rate. With n_layers=1 there is no schedule.
+        if n_layers > 1:
+            dpr = [drop_path_rate * i / (n_layers - 1) for i in range(n_layers)]
+        else:
+            dpr = [0.0]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -423,6 +450,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
+    drop_path_rate: float = 0.0  # stochastic depth: max layer-drop probability (linearly scaled across blocks)
 
 
 cfg = sp.parse(Config)
@@ -464,6 +492,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path_rate=cfg.drop_path_rate,
 )
 
 model = Transolver(**model_config).to(device)
