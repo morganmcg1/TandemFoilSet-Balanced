@@ -2,45 +2,52 @@
 
 ## Current Best Result
 
-**Source:** PR #1258 — lr=1.5e-4 finer LR sweep on full FiLM+Fourier+warmup+T_max=100 config (charliepai2f3-nezuko)
+**Source:** PR #1285 — slice_num sweep {32,64,96,128}: Transolver mesh partition granularity (charliepai2f3-askeladd)
 
-**Primary metric:** `val_avg/mae_surf_p = 33.1552`
+**Primary metric:** `val_avg/mae_surf_p = 31.9819`
 
-**Configuration:** Lion optimizer (lr=1.5e-4) + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=100, single full-cycle decay) + 5-epoch linear warmup (start_factor=0.0333) + grad_clip=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + batch_size=4 + epochs=100 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
+**Configuration:** Lion optimizer (lr=1.5e-4) + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=100, single full-cycle decay) + 5-epoch linear warmup (start_factor=0.0333) + grad_clip=1.0 + n_hidden=128 + n_head=4 + **slice_num=32** + mlp_ratio=2 + batch_size=4 + epochs=100 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
 
-**Note:** Training cut at ep66/100 by 30-min wall-clock timeout — model still strictly improving at cutoff (LR ~0.35× peak = 5.25e-5 at ep66). Lion sign-based optimizer benefits from lower peak LR (1.5e-4 vs 3e-4): smaller, less noisy parameter updates over entire wall-clock budget. Consistent improvements across all 4 val splits and all 4 test splits. The optimal Lion LR on this schedule appears to be below 2e-4; frieren's lr=2e-4 result (PR #1250) still pending.
+**Note:** Training cut at ep78/100 by 30-min wall-clock timeout — model still improving at cutoff. slice_num=32 (half the previous default of 64) reduces attention compute per epoch, allowing ~78 epochs in the 30-min budget vs ~66 for slice_num=64. Coarser slicing is not under-expressive for TandemFoilSet's mesh: each slice averages ~3,750 mesh points even at 32 slices, still capturing local pressure structure well. Monotonic trend confirmed: 32 < 64 < 96 < 128 for val_avg/mae_surf_p. Suggests sweep below 32 (e.g. {8, 16, 24}) as next step.
 
 **Per-split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist | 32.1133 |
-| val_geom_camber_rc | 47.2012 |
-| val_geom_camber_cruise | 17.1896 |
-| val_re_rand | 36.1165 |
-| **val_avg** | **33.1552** |
+| val_single_in_dist | 30.1206 |
+| val_geom_camber_rc | 46.8202 |
+| val_geom_camber_cruise | 16.8458 |
+| val_re_rand | 34.1409 |
+| **val_avg** | **31.9819** |
 
 **Test split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist | 27.8899 |
-| test_geom_camber_rc | 43.2971 |
-| test_geom_camber_cruise | 14.3845 |
-| test_re_rand | 26.8917 |
-| **test_avg** | **28.1158** |
+| test_single_in_dist | 26.2549 |
+| test_geom_camber_rc | 42.6807 |
+| test_geom_camber_cruise | 13.4041 |
+| test_re_rand | 26.5104 |
+| **test_avg** | **27.2125** |
 
-**Training:** ~30 min (wall-clock timeout at ep66/100), best epoch 66 (still improving), batch_size=4, n_params: 252,487
+**Training:** ~30 min (wall-clock timeout at ep78/100), best epoch 78 (still improving), batch_size=4, n_params: 251,431
 
-**Metrics path:** `target/models/model-charliepai2f3-nezuko-lr-1p5e-4-tmax100-warmup5-100ep-20260429-184943/metrics.jsonl`
+**Metrics path:** `target/models/model-charliepai2f3-askeladd-slice_num_32-20260429-205725/metrics.jsonl`
 
 ## Run Command
 
 ```bash
-cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 1.5e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 100 --warmup_epochs 5 --warmup_start_factor 0.0333 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 64 --mlp_ratio 2 --batch_size 4 --epochs 100 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
+cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 1.5e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 100 --warmup_epochs 5 --warmup_start_factor 0.0333 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 32 --mlp_ratio 2 --batch_size 4 --epochs 100 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
 ```
 
-Note: Halving LR from 3e-4 to 1.5e-4 improves generalization with Lion sign-based optimizer. All 4 val splits and all 4 test splits improved. Largest gains on val_geom_camber_cruise (−6.77%) and test_single_in_dist (−5.87%). Best epoch=66 was the final epoch reached (wall-clock limited) — model was still improving.
+Note: Reducing slice_num from 64 to 32 cuts attention compute per epoch, enabling ~12 more epochs within the 30-min wall-clock budget. The cosine schedule's fine-tuning phase (ep67-78) provides additional improvement. Coarser slicing not under-expressive for this mesh density. All 4 val splits and all 4 test splits improved.
 
 ## Merge History
+
+### 2026-04-29 — PR #1285: slice_num sweep {32,64,96,128}: Transolver mesh partition granularity (charliepai2f3-askeladd)
+- Previous: `val_avg/mae_surf_p = 33.1552` (PR #1258, slice_num=64)
+- New best: `val_avg/mae_surf_p = 31.9819` (improvement: −1.1733, −3.54%)
+- Test: `test_avg/mae_surf_p = 27.2125` (improvement vs previous test_avg 28.1158: −0.9033, −3.21%)
+- Student: charliepai2f3-askeladd
+- Key finding: slice_num=32 wins via compute efficiency — fewer slices per epoch = more epochs in 30-min budget. At iso-epoch both 32 and 64 perform equivalently (33.57 vs 33.52), so the gain is from 12 extra epochs of cosine fine-tuning. Monotonic trend: smaller slice_num strictly better across the sweep. Suggests testing even smaller values {8, 16, 24}. n_params drops slightly from 252,487 to 251,431.
 
 ### 2026-04-29 — PR #1258: lr=1.5e-4 finer LR sweep on full FiLM+Fourier+warmup+T_max=100 config (charliepai2f3-nezuko)
 - Previous: `val_avg/mae_surf_p = 34.3851` (PR #1226, lr=3e-4)
