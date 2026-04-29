@@ -1,5 +1,37 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #993 (CLOSED): TTA with vertical flip — equivariance prerequisite violated by dataset asymmetry
+- **Branch:** `frieren/tta-vflip`
+- **Hypothesis:** y-mirror symmetric incompressible 2D flow → eval-time vflip + averaging halves variance of asymmetric error component. Predicted −1 to −3% on val_avg.
+- **Run:** W&B `rwhif8qa`, 12/14 epochs, group `tta-vflip`, peak 54.6 GB
+
+| Metric | TTA-on (this run) | TTA-off (same checkpoint) | Baseline (PR #961 SwiGLU) |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **133.00** (+114%) | n/a (TTA on at val) | **62.20** |
+| test_avg/mae_surf_p | **126.22** (+129%) | **58.09** (+5.5%, ~noise) | **55.04** |
+
+### Decision: CLOSED — equivariance prerequisite violated; flip implementation IS correct
+- TTA-on val_avg = **133.00**, +114% vs current best 62.20. Same-checkpoint TTA-off test 58.09 (~baseline noise) — **regression entirely from inference-time mirror pass**, not from training.
+- **Flip implementation is the most correct possible** (frieren's offline ablation table). `pos_y`, `saf[1]` (verified y-signed via `corr(pos_y, saf[1])=+0.99`), `dsdf` angle-mirror permutation `[0°, 45°, ..., 315°] → [4, 11, 10, 9, 8, 7, 6, 5]`, AoA1/AoA2 sign-flip, pred_Uy un-flip — all correct. Each component *reduces* pred1↔pred2 disagreement when added.
+- **Genuine new dataset finding (frieren's diagnostic):** dataset is structurally y-asymmetric:
+  - **~54% of training samples are half-domain meshes** (y > 0 only — CFD efficiency trick exploiting bilateral symmetry).
+  - **Single-foil AoA range = `[-9.99°, 0°]`** — only negative; under y-flip → strictly positive AoA, never seen.
+  - **Stagger range = `[0, +2.0]`** — strictly positive; under y-flip → negative, never seen.
+  - **`dsdf` is angle-mirror permuted, not magnitude** — a non-trivial structural property.
+- Model trained on this asymmetric distribution **has no incentive to learn y-equivariance**. Pred(flip(x)) is essentially independent of pred(x) — going severely OOD on flipped input. Averaging halves the squared error of pred(x) but adds a pred(flip(x))-magnitude OOD error that dominates.
+- **Per-split signal corroborates:** `geom_camber_cruise` is the most bilateral split (sample 0: 162K positive y, 57K negative) → smallest TTA delta (+47.5 vs single-in-dist +85.0, rc +72.5). The more bilateral the mesh, the closer flipped input is to in-distribution.
+- **Implications for PR #969 (nezuko vflip-aug)**: training-time vflip will produce ~OOD configurations (positive single-foil AoA, negative stagger). May need to subset to bilateral samples OR pair with re-meshing. Will discuss on #969 review.
+- **Methodology insight (frieren's #4):** TTA-aware checkpoint selection — best-ckpt should be selected on TTA-off val, not TTA-on, to avoid contamination by mirror-pass quality.
+- **Updated DATASET_ANALYSIS.md** with the y-asymmetry findings (new section).
+- **Follow-up assigned:** frieren → PR #1016 (bf16 mixed precision training — strategic infra unlock + likely direct gain from recovered cosine epochs).
+
+---
+
+## 2026-04-29 — Assignment: PR #1016 (frieren bf16 mixed precision)
+- **PR #1016** (`frieren/bf16`): bf16 autocast for forward+backward on full SwiGLU stack; weights/optimizer stay fp32. Targets the wall-clock binding constraint (SwiGLU truncated cosine schedule at 12/14). Predicted ~30-40% per-epoch speedup → recovers 2 lost epochs of LR-decayed training. Strategic infra unlock — reopens depth/width experiments (PR #936 depth-scaling closed for wall-clock-incompat in fp32).
+
+---
+
 ## 2026-04-29 — PR #970 (CLOSED): Shared FiLM head — rank-reduction probe of FiLM conditioning manifold
 - **Branch:** `thorfinn/shared-film`
 - **Hypothesis:** Replace 5 independent per-block FiLM heads with one shared FiLM head reused at all blocks. Tests whether per-block FiLM specialization carries information vs is just redundant capacity. Saves ~34K params (~5% of model). Match-or-better → Pareto win.

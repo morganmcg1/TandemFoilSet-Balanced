@@ -74,6 +74,36 @@ Existing inputs cover global state (Re, AoA, NACA, gap, stagger) and per-node ge
 - **Read-only data loaders.** Any new sampling strategy or feature transform goes in `train.py`, not `data/`.
 - **No new packages** outside `pyproject.toml` without including the dep in the same PR.
 
+## Y-axis asymmetry — important for vflip/symmetry experiments (PR #993 finding)
+
+Discovered by frieren in PR #993 (TTA-vflip diagnostic, 2026-04-29). The dataset is **structurally y-asymmetric** despite the underlying physics being y-symmetric. This violates the equivariance prerequisite for any naive y-flip data augmentation.
+
+| Property | Asymmetry |
+|----------|-----------|
+| **Half-domain meshes** | ~54% of training samples store only y > 0 nodes (CFD efficiency trick exploiting bilateral symmetry of single-foil cases). Random survey of 50 train samples: 27 y > 0 only, 23 spanning both. |
+| **Single-foil AoA range** | `[-9.99°, 0°]` — **only negative**. Under y-flip → strictly positive AoA, **never seen as a training label**. |
+| **Stagger range** | `[0, +2.0]` — **strictly positive**. Under y-flip → negative stagger, never in training. |
+| **Tandem AoA** | Spans both signs — bilaterally OK in this regard, but mesh orientation is fixed for a given (AoA, stagger) pair. |
+
+### Input-column flip semantics under y-mirror (verified by frieren)
+
+| Column | Index | Flip semantics |
+|--------|-------|----------------|
+| `pos_y` | 1 | sign-flip (y-coordinate) |
+| `saf[1]` | 3 | **sign-flip** (verified `corr(pos_y, saf[1])=+0.99`) — saf[1] is y-signed, not magnitude |
+| `dsdf` | 4-11 | **angle-mirror permutation** `[0°, 45°, 90°, ..., 315°]` → `[4, 11, 10, 9, 8, 7, 6, 5]` — not magnitudes |
+| `AoA1, AoA2` | 14, 18 | sign-flip (angles negate) |
+| `pred[Uy]` | 1 | sign-flip (cross-stream velocity) |
+| Others | — | unchanged |
+
+### Implications
+
+1. **Naive eval-time vflip TTA fails catastrophically** (PR #993: +114% val regression). The model has no incentive to learn y-equivariance from this asymmetric data and goes severely OOD on flipped input.
+2. **Training-time vflip augmentation (PR #969 nezuko) needs care** — even at training time, vflipped half-domain meshes may produce ~OOD configurations (positive single-foil AoA, negative stagger). Consider subsetting to bilateral-mesh samples OR pairing vflip with re-meshing to expand half-domain to full-domain.
+3. **`geom_camber_cruise` is the most bilateral split** — cruise samples observed to span both `y > 0` and `y < 0` (sample 0: 162K positive, 57K negative). Single-foil and rc samples skew toward half-domain. Consistent with cruise being least-hit on TTA (delta +47.5 vs single +85.0, rc +72.5).
+4. **Any TTA-style symmetry exploitation needs equivariance verification first** — measure `pred(flip(x))` vs `flip(pred(x))` agreement before averaging.
+5. **TTA-aware checkpoint selection** — for any future TTA experiment, best-ckpt should be selected on TTA-off val to avoid contamination by mirror-pass quality.
+
 ## Open dataset questions (for future analysis)
 
 - Do high-Re samples (Re > 1M) genuinely dominate the validation MAE? If yes, robust losses (Huber, focal) gain more.
