@@ -465,6 +465,7 @@ class Config:
     rel_mae_eps: float = 1e-6  # additive epsilon in the relative MAE denominator
     compile: bool = True  # torch.compile(model) for extra throughput; pass --compile=false to disable
     warmup_epochs: int = 5  # epochs of linear LR warmup (start_factor=0.05) before cosine decay; 0 disables
+    grad_clip_max_norm: float = 0.0  # 0 = disabled (current behavior); positive = max gradient norm (clip_grad_norm_)
 
 
 cfg = sp.parse(Config)
@@ -608,9 +609,13 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip_max_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip_max_norm)
+        else:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(), "train/grad_norm": grad_norm.item(), "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
