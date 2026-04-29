@@ -425,11 +425,14 @@ class Config:
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 disables warmup)
     adamw_beta2: float = 0.999  # AdamW beta2 (second moment decay). Default 0.999 (PyTorch default).
+    accumulation_steps: int = 1  # gradient accumulation: effective batch = batch_size * accumulation_steps
 
 
 cfg = sp.parse(Config)
 if cfg.loss not in ("mse", "huber"):
     raise ValueError(f"--loss must be 'mse' or 'huber', got '{cfg.loss}'")
+if cfg.accumulation_steps < 1:
+    raise ValueError(f"--accumulation_steps must be >= 1, got {cfg.accumulation_steps}")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
@@ -477,6 +480,12 @@ if cfg.ema_decay > 0.0:
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay))
     print(f"EMA enabled (decay={cfg.ema_decay})")
 val_eval_model = ema_model if ema_model is not None else model
+
+if cfg.accumulation_steps > 1:
+    print(
+        f"Gradient accumulation: {cfg.accumulation_steps} micro-batches per optimizer step "
+        f"(effective batch_size={cfg.batch_size * cfg.accumulation_steps})"
+    )
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -575,9 +584,14 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    n_optim_steps = 0
     epoch_per_stds: list[float] = []
+    n_micro = len(train_loader)
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    optimizer.zero_grad(set_to_none=True)
+    for batch_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -588,7 +602,6 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
 
-        optimizer.zero_grad()
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             if cfg.per_sample_norm:
@@ -621,14 +634,24 @@ for epoch in range(MAX_EPOCHS):
                 surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
-        scaler.scale(loss).backward()
-        if cfg.grad_clip > 0.0:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
-        if ema_model is not None:
-            ema_model.update_parameters(model)
+        backward_loss = loss / cfg.accumulation_steps
+        scaler.scale(backward_loss).backward()
+
+        is_accum_step = (
+            ((batch_idx + 1) % cfg.accumulation_steps == 0)
+            or ((batch_idx + 1) == n_micro)
+        )
+        if is_accum_step:
+            if cfg.grad_clip > 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+            if ema_model is not None:
+                ema_model.update_parameters(model)
+            optimizer.zero_grad(set_to_none=True)
+            n_optim_steps += 1
+
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -702,6 +725,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_gb": peak_gb,
         "is_best": tag == " *",
         "global_step": global_step,
+        "n_micro_batches": n_batches,
+        "n_optim_steps": n_optim_steps,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
