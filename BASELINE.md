@@ -1,13 +1,47 @@
 # Baseline (icml-appendix-charlie-pai2f-r1)
 
-Three winners merged into `train.py`:
+Four winners merged into `train.py`:
 - **PR #1101 (thorfinn)** — regime-matched schedule (warmup=1, T_max=13, eta_min=lr/100)
 - **PR #1138 (frieren)** — Random Fourier Features on (x, z), n_freq=32, sigma=1.0
 - **PR #1160 (alphonse)** — SwiGLU FFN replacing GELU MLP in TransolverBlocks (param-matched, ~0.689M)
+- **PR #1158 (thorfinn)** — FiLM domain conditioning: per-sample global features → (γ,β) scale/shift on all LayerNorms
 
 All subsequent experiments compare against this stacked baseline.
 
-## Current best (round-3 winner — merged 2026-04-29)
+## Current best (round-4 winner — merged 2026-04-29)
+
+| Metric | Value | PR | Notes |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **84.371** (epoch 12/12, still descending) | #1158 | FiLM domain conditioning on SwiGLU+RFF baseline |
+| `test_avg/mae_surf_p` | **75.076** (4 splits, all finite MAE) | #1158 | `test_geom_camber_cruise` vol_loss=inf but MAE valid |
+
+Per-split val (epoch 12):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `val_single_in_dist` | 94.827 | 1.118 | 0.550 |
+| `val_geom_camber_rc` | 93.435 | 1.924 | 0.802 |
+| `val_geom_camber_cruise` | 66.861 | 0.799 | 0.492 |
+| `val_re_rand` | 82.361 | 1.364 | 0.652 |
+| **avg** | **84.371** | 1.251 | 0.624 |
+
+Per-split test (best epoch 12):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `test_single_in_dist` | 81.519 | 1.098 | 0.518 |
+| `test_geom_camber_rc` | 87.961 | 1.883 | 0.754 |
+| `test_geom_camber_cruise` | 55.295 | 0.757 | 0.427 |
+| `test_re_rand` | 75.529 | 1.223 | 0.612 |
+| **avg** | **75.076** | 1.240 | 0.578 |
+
+Notes:
+- `test_geom_camber_cruise` vol_loss=inf is a pre-existing dataset issue (extreme residuals in 1 sample); MAE is valid.
+- Best checkpoint is epoch 12 (model still descending under 30-min cap; ran 12 epochs at ~155s/epoch).
+- FiLMNet: Linear(11,256)+GELU+Linear(256,2560), zero-init last layer → identity at init; ~0.66M extra params.
+- Total params: ~1,349,943; Peak VRAM: 51.14 GB.
+
+## Previous best (round-3 winner — merged 2026-04-29)
 
 | Metric | Value | PR | Notes |
 |---|---|---|---|
@@ -80,11 +114,12 @@ Notes:
 | Provisional round-1 best (confounded) | 133.892 | 132.106 (3 finite) | #1095 (sent back) |
 | Round-1 winner: regime-matched schedule | 125.438 | 112.988 | #1101 ← merged |
 | Round-2 winner: RFF (on top of schedule) | 108.543 | 96.942 | #1138 ← merged |
-| Round-3 winner: SwiGLU FFN (on top of RFF) | **97.981** | **86.303** | #1160 ← merged |
+| Round-3 winner: SwiGLU FFN (on top of RFF) | 97.981 | 86.303 | #1160 ← merged |
+| Round-4 winner: FiLM domain conditioning | **84.371** | **75.076** | #1158 ← merged |
 
-Round-1→Round-3 cumulative improvement: **-26.9% on val, -23.6% on test**.
+Round-1→Round-4 cumulative improvement: **-32.7% on val, -33.6% on test**.
 
-## Default config (`train.py` at HEAD, post-merge of #1160)
+## Default config (`train.py` at HEAD, post-merge of #1158)
 
 | Setting | Value |
 |---|---|
@@ -92,11 +127,11 @@ Round-1→Round-3 cumulative improvement: **-26.9% on val, -23.6% on test**.
 | Scheduler | LinearLR warmup (1 ep, 5e-7 → 5e-4) + CosineAnnealingLR (T_max=13, eta_min=5e-6) |
 | Batch size | 4 |
 | Surf weight (loss) | 10.0 |
-| Epochs | 50 (capped by `SENPAI_TIMEOUT_MINUTES=30` ≈ 14 effective epochs) |
+| Epochs | 50 (capped by `SENPAI_TIMEOUT_MINUTES=30` ≈ 12-14 effective epochs) |
 | Sampler | WeightedRandomSampler (balanced across 3 domains) |
 | Loss | MSE on normalized targets, vol + surf_weight·surf |
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0**, **SwiGLU FFN** |
-| Params | ~0.689M (SwiGLU param-matched to GELU MLP) |
+| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0**, **SwiGLU FFN**, **FiLM domain conditioning** |
+| Params | ~1.35M (0.689M base + 0.66M FiLMNet) |
 
 Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 Test-time metric for paper: `test_avg/mae_surf_p`.
