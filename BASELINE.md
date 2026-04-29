@@ -1,12 +1,45 @@
 # Baseline (icml-appendix-charlie-pai2f-r1)
 
-Two winners merged into `train.py`:
+Three winners merged into `train.py`:
 - **PR #1101 (thorfinn)** — regime-matched schedule (warmup=1, T_max=13, eta_min=lr/100)
 - **PR #1138 (frieren)** — Random Fourier Features on (x, z), n_freq=32, sigma=1.0
+- **PR #1160 (alphonse)** — SwiGLU FFN replacing GELU MLP in TransolverBlocks (param-matched, ~0.689M)
 
 All subsequent experiments compare against this stacked baseline.
 
-## Current best (round-2 winner — merged 2026-04-29 12:42)
+## Current best (round-3 winner — merged 2026-04-29)
+
+| Metric | Value | PR | Notes |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **97.981** (epoch 13/13, still descending) | #1160 | SwiGLU FFN on RFF baseline |
+| `test_avg/mae_surf_p` | **86.303** (4 splits, all finite MAE) | #1160 | `test_geom_camber_cruise` vol_loss=inf but MAE valid |
+
+Per-split val (epoch 13):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `val_single_in_dist` | 112.728 | 1.386 | 0.676 |
+| `val_geom_camber_rc` | 108.895 | 2.079 | 0.868 |
+| `val_geom_camber_cruise` | 76.103 | 0.905 | 0.528 |
+| `val_re_rand` | 94.199 | 1.495 | 0.706 |
+| **avg** | **97.981** | 1.466 | 0.695 |
+
+Per-split test (best epoch 13):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `test_single_in_dist` | 95.408 | 1.328 | 0.628 |
+| `test_geom_camber_rc` | 95.916 | 1.993 | 0.811 |
+| `test_geom_camber_cruise` | 64.418 | 0.869 | 0.478 |
+| `test_re_rand` | 89.468 | 1.326 | 0.688 |
+| **avg** | **86.303** | 1.379 | 0.651 |
+
+Notes:
+- `test_geom_camber_cruise` loss=NaN/vol_loss=inf is a pre-existing dataset issue (extreme residuals in 1 sample); MAE is valid.
+- Best checkpoint is the **final** epoch (epoch 13) — model still descending under the 30-min cap.
+- SwiGLU gates: silu(W_gate·x) × W_up·x, replaces GELU MLP in all 5 TransolverBlocks.
+
+## Previous best (round-2 winner — merged 2026-04-29 12:42)
 
 | Metric | Value | PR | Notes |
 |---|---|---|---|
@@ -46,11 +79,12 @@ Notes:
 |---|---|---|---|
 | Provisional round-1 best (confounded) | 133.892 | 132.106 (3 finite) | #1095 (sent back) |
 | Round-1 winner: regime-matched schedule | 125.438 | 112.988 | #1101 ← merged |
-| Round-2 winner: RFF (on top of schedule) | **108.543** | **96.942** | #1138 ← merged |
+| Round-2 winner: RFF (on top of schedule) | 108.543 | 96.942 | #1138 ← merged |
+| Round-3 winner: SwiGLU FFN (on top of RFF) | **97.981** | **86.303** | #1160 ← merged |
 
-Round-1→Round-2 cumulative improvement: **-19.0% on val, -14.2% on test**.
+Round-1→Round-3 cumulative improvement: **-26.9% on val, -23.6% on test**.
 
-## Default config (`train.py` at HEAD, post-merge of #1138)
+## Default config (`train.py` at HEAD, post-merge of #1160)
 
 | Setting | Value |
 |---|---|
@@ -61,8 +95,8 @@ Round-1→Round-2 cumulative improvement: **-19.0% on val, -14.2% on test**.
 | Epochs | 50 (capped by `SENPAI_TIMEOUT_MINUTES=30` ≈ 14 effective epochs) |
 | Sampler | WeightedRandomSampler (balanced across 3 domains) |
 | Loss | MSE on normalized targets, vol + surf_weight·surf |
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0** |
-| Params | ~0.68M (RFF preprocess MLP slightly wider than baseline 0.66M) |
+| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0**, **SwiGLU FFN** |
+| Params | ~0.689M (SwiGLU param-matched to GELU MLP) |
 
 Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 Test-time metric for paper: `test_avg/mae_surf_p`.
