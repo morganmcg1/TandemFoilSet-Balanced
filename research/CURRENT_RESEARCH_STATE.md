@@ -76,7 +76,7 @@
 |---------|-----|-----------|--------|
 | alphonse | #1020 | **Ultra-thin SwiGLU (intermediate=85, 0.54M params) — paper-efficiency** | **SENT BACK 2026-04-29** — Pareto-flat win on SwiGLU stack (val=62.69 vs 62.74 paired); needs RMSNorm canonical paired A/B |
 | askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | **SENT BACK 2nd time 2026-04-29** — v2 paired SwiGLU val=61.01 vs 61.28 (Δ−0.44% within noise; test Δ−1.67%); cross-stack γ shrinkage 34% with AoA orthogonal addition; needs v3 RMSNorm paired A/B |
-| thorfinn | #1057 | **NACA_M FiLM: condition FiLM on (log_Re, NACA_M1) — geometry-aware modulation targeting camber OOD splits** | WIP — new 2026-04-29 |
+| thorfinn | #1076 | **Coordinate-frame canonicalization (rotate (x,y) by -AoA1) — physics-informed inductive bias targeting camber OOD** | WIP — new 2026-04-29 (replaced #1057 NACA_M FiLM which CLOSED) |
 | nezuko | #1021 | **slice_num sweep {32, 64, 96, 128} — physics-attention spatial resolution ablation** | **SENT BACK 2026-04-29** — sn=32 wins decisively on SwiGLU stack (val=59.57, −5.0%); monotonic trend; cruise −10.3%; needs RMSNorm paired A/B + optional sn=16 |
 | fern | #1029 | **Surface loss reweighting by per-node pressure quantile (within-sample, target-value-gated; sweep top10/α=2, top20/α=2, top10/α=3)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | edward | #1061 | **NACA_M1-stratified batch sampling — camber-axis gradient equalization targeting geom_camber_rc** | WIP — new 2026-04-29 (replaced #975 DropPath which closed) |
@@ -126,9 +126,10 @@
 6. **Ultra-thin SwiGLU (mlp_ratio=2/3, 0.51M params)** — paper-efficiency extension of gating-mechanism thesis. **Assigned → alphonse PR #1020.**
 7. **slice_num sweep {32, 64, 96, 128}** — physics-attention spatial resolution ablation. **Assigned → nezuko PR #1021.**
 8. **LR sweep (lr=2e-4, 5e-4 ref, 1e-3)** — optimizer axis untouched since round 1; SwiGLU bilinear gating + RMSNorm change loss landscape curvature. **Assigned → tanjiro PR #1056.**
-9. **NACA_M FiLM (geometry-aware conditioning)** — extend FiLM to (log_Re, NACA_M1) — front foil camber magnitude. Directly targets hardest OOD splits (geom_camber_rc M=6-8, geom_camber_cruise M=2-4). Complementary to AoA-FiLM. **Assigned → thorfinn PR #1057.**
+9. ~~**NACA_M FiLM (geometry-aware conditioning)**~~ — **CLOSED (PR #1057 2026-04-29): val_avg=60.68 +4.7%; γ_naca grows monotonically but cos(γ_re_aligned, γ_naca)→0.997 in deep blocks (NACA absorbed onto Re-axis); held-out M values cannot be extrapolated by linear FiLM projection.** Multi-variable FiLM with held-out geometric axes is now declared closed. **Follow-up: thorfinn → PR #1076 (coordinate-frame canonicalization, input-side physics-informed inductive bias).**
 
 - ~~**DropPath (stochastic depth)**~~ — **Closed (PR #975 2026-04-29): all 3 rates >81, best epoch=last for all, geom_camber_rc regressed** — FiLM modulation chain disruption. Paper-quality ablation negative result.
+- ~~**NACA_M FiLM (geometry-aware multi-variable conditioning)**~~ — **Closed (PR #1057 2026-04-29): val_avg +4.7%; γ-norm cosine-similarity diagnostic shows NACA absorbed onto Re-axis in deep blocks (cos→0.997); linear FiLM projection cannot extrapolate to held-out M values.** Multi-variable FiLM with held-out geometric axes declared closed.
 
 ### Closed directions (this round)
 - ~~**SwiGLU MLP**~~ — **MERGED (PR #961, val=62.20 −21.8%). New canonical.** Paper ablation **MERGED (PR #983, ratio=1 canonical).** Gating mechanism is primary driver (~97% of gain).

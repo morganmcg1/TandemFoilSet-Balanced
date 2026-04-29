@@ -1,5 +1,29 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #1057 (CLOSED): NACA_M FiLM — multi-variable conditioning with held-out geometric axis fails on OOD extrapolation
+- **Branch:** `thorfinn/naca-film`
+- **Hypothesis:** Extend FiLM cond from 1-d (log_Re) to 2-d (log_Re, NACA_M1) — geometry-aware modulation targeting `geom_camber_rc` (M=6-8 held out) and `geom_camber_cruise` (M=2-4 held out).
+
+| Metric | RMSNorm baseline (`6krvx540`) | naca_film v1 (`xew2iqbz`) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **57.9550** | 60.6816 | **+4.71%** ❌ |
+| **test_avg/mae_surf_p** | 51.17 | 53.24 | +4.03% ❌ |
+| val_single_in_dist | 61.93 | 64.69 | +4.46% |
+| val_geom_camber_rc (target) | 72.84 | 74.20 | +1.87% |
+| val_geom_camber_cruise (target) | 40.39 | 42.88 | +6.16% |
+| val_re_rand | 56.66 | 60.96 | +7.59% |
+
+- **Gold-standard γ-norm cosine-similarity diagnostic:** γ_naca grows monotonically (b0: 0.09→0.27, b4: 0.15→0.46) — NACA_M IS being learnt — BUT `cos(γ([1,-1]), γ([1,+1]))` stays at **0.997 in blocks 2-4** (NACA_M absorbed onto Re-axis), only block 0 shows orthogonal modulation (cos=0.57). Effective NACA modulation lives in block 0 only.
+- **Mechanism (thorfinn's analysis):** Three converging hypotheses — (1) capacity dilution (32-unit FiLM head shared between Re, NACA), (2) **OOD extrapolation limit (linear projection cannot extrapolate γ_naca to held-out M values — gradients never reach those normalized values**), (3) shallow-block-only effective use.
+- **Cumulative FiLM-axis falsifications:** PR #934 (last-2 FiLM +2.8%), #937 (dual FiLM +3.5%), #756 (Fourier Re +3.0%), #970 (shared head +5.0%), now #1057 (NACA_M +4.7%). 5 of 6 multi-FiLM probes failed; only AoA-FiLM (#976, in flight on RMSNorm) shows marginal positive on flow conditions (continuous training distribution, no held-out values).
+
+### Decision: CLOSED — multi-variable FiLM with held-out geometric variables is a closed direction. Cannot extrapolate.
+- **Closing principle:** FiLM-on-held-out-geometric-variables fails because the linear conditioning projection cannot extrapolate to OOD normalized values; gradient never reaches held-out range. AoA-FiLM works (marginally) because flow conditions interpolate across continuous training distributions.
+- **Paper finding:** Cross-stack γ-norm cosine-similarity diagnostic is novel methodology (b0=0.57 vs b2-4=0.997 split distinguishes "axis is learned" from "axis is independently used").
+- **Follow-up:** thorfinn → PR #1076 (coordinate-frame canonicalization — rotate (x, y) by -AoA1, physics-informed inductive bias targeting same OOD camber bottleneck via input-side rather than conditioning-side).
+
+---
+
 ## 2026-04-29 — PRs #1021 (SENT BACK), #1020 (SENT BACK), #976 (SENT BACK 2nd): all need RMSNorm rebase before merge
 - Three review-ready PRs all ran on SwiGLU+ratio=1 WITHOUT RMSNorm. PR #999 RMSNorm merged at `321c1db` while these were in flight, advancing canonical to val_avg=57.9550.
 - **PR #1021 (nezuko slice_num):** sn=32 wins decisively on SwiGLU stack (val=59.5744 vs PR #983 ratio=1 baseline 62.74 = **−5.0%**). Monotonic trend across {32, 64, 96, 128} — every step finer is worse. Largest gain on `geom_camber_cruise` (val −10.3%, test −9.8%). Wall-clock 14% faster. **Doesn't beat current RMSNorm canonical (57.95).** Mechanism (slice-token regularization + tighter aggregation) is RMSNorm-independent — predicted compound: 57.95 × 0.95 ≈ 55 (potential major new best). Sent back for paired A/B sn32+RMSNorm vs sn64+RMSNorm. Optional sn=16 extension probe.
