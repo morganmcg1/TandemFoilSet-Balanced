@@ -479,6 +479,14 @@ class Config:
     amp: bool = True
     amp_dtype: str = "bf16"   # "bf16" or "fp16"; bf16 strongly preferred for our extreme y values
     huber_delta: float = 1.0  # Huber loss threshold in normalized space; <1.0 = MSE, >=1.0 = L1
+    # Per-sample y normalization: rescale residuals by per-sample y_std so each
+    # sample contributes equally to the loss regardless of Re regime (PR #896).
+    per_sample_norm: bool = True
+    # Gradient clip max-norm. Default inf preserves the BF16 baseline (no clipping).
+    # PR #896: per-sample norm amplifies gradients ~1/sigma_per for low-Re samples
+    # (sigma_per ~0.23 in normalized space), so without clipping the run diverges
+    # at epoch 5 when warmup ends. grad_clip=1.0 stabilises it.
+    grad_clip: float = float("inf")
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -613,7 +621,28 @@ for epoch in range(MAX_EPOCHS):
             x_aug = add_derived_features(x_norm, x, is_surface, mask)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_aug})["preds"]
-            huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+
+            if cfg.per_sample_norm:
+                # Per-sample y normalization: rescale pred and target by
+                # per-sample y_std (over real mesh nodes, all 3 channels) so
+                # every sample contributes a unit-variance residual to the
+                # Huber loss regardless of Re regime. sigma_per is computed
+                # from y only and does not flow grads.
+                with torch.no_grad():
+                    mask_f = mask.float()                                          # [B, N_max]
+                    n_nodes = mask_f.sum(dim=1, keepdim=True).clamp(min=1)         # [B, 1]
+                    y_mean_per = (y_norm * mask_f.unsqueeze(-1)).sum(dim=1) / n_nodes  # [B, 3]
+                    y_var_per = (
+                        ((y_norm - y_mean_per.unsqueeze(1)) ** 2)
+                        * mask_f.unsqueeze(-1)
+                    ).sum(dim=1) / n_nodes                                         # [B, 3]
+                    sigma_per = y_var_per.mean(dim=1, keepdim=True).sqrt().clamp(min=1e-6)  # [B, 1]
+                pred_scaled = pred / sigma_per.unsqueeze(1)
+                y_scaled = y_norm / sigma_per.unsqueeze(1)
+                huber_err = F.huber_loss(pred_scaled, y_scaled, reduction="none", delta=cfg.huber_delta)
+            else:
+                sigma_per = None
+                huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -624,17 +653,23 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()                # bf16 gradients flow back; no GradScaler needed for bf16
         # Track gradient norm to surface bf16 reduction blow-ups (per PR failure-mode notes).
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf"))
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         loss_finite = torch.isfinite(loss).item()
         if not loss_finite or not torch.isfinite(grad_norm).item():
             nan_inf_events += 1
         optimizer.step()
         global_step += 1
-        wandb.log({
+        log_step = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if sigma_per is not None:
+            sigma_flat = sigma_per.detach().float().flatten()
+            log_step["train/sigma_per_mean"] = sigma_flat.mean().item()
+            log_step["train/sigma_per_min"] = sigma_flat.min().item()
+            log_step["train/sigma_per_max"] = sigma_flat.max().item()
+        wandb.log(log_step)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
