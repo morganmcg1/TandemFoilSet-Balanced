@@ -534,6 +534,7 @@ class Config:
     re_stratify_seed: int = 42
     swiglu_ratio: int = 2  # mlp_ratio for SwiGLU intermediate dim (2 = current merged baseline; 1 = parameter-matched ablation)
     rms_norm: bool = False  # use RMSNorm instead of LayerNorm in TransolverBlock
+    slice_num: int = 64  # number of physics-attention slice tokens (PhysicsAttention spatial resolution)
 
 
 if __name__ == "__main__":
@@ -595,7 +596,7 @@ if __name__ == "__main__":
         n_hidden=128,
         n_layers=5,
         n_head=4,
-        slice_num=64,
+        slice_num=cfg.slice_num,
         mlp_ratio=cfg.swiglu_ratio,
         output_fields=["Ux", "Uy", "p"],
         output_dims=[1, 1, 1],
@@ -604,7 +605,7 @@ if __name__ == "__main__":
 
     model = Transolver(**model_config).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+    print(f"Model: Transolver ({n_params/1e6:.2f}M params, slice_num={cfg.slice_num})")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
