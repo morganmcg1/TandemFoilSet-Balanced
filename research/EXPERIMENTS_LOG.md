@@ -7,6 +7,36 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-04-29 05:00 — PR #1009: Relative MAE on surface pressure (eps=0.1, node-level Re-normalization) [CLOSED — DEAD END]
+
+- **Branch:** `charliepai2e2-fern/relative-mae-pressure-loss` (CLOSED)
+- **Hypothesis:** Apply relative MAE loss on the surface pressure channel: `|pred_p - y_p| / (|y_p| + eps)` with eps=0.1. Hypothesis was that percentage-error training provides intrinsic Re-regime normalization, reducing the dominance of high-Re high-pressure samples and improving OOD generalization across Re regimes.
+- **Outcome:** DEAD END — val_avg=102.45 vs baseline 93.1083 (+9.34, +10% WORSE). All splits degraded.
+
+### Results Table (best epoch)
+
+| Split | Baseline (PR #1001) | This run | Delta |
+|-------|--------------------:|----------:|------:|
+| val_single_in_dist | 104.94 | 128.51 | +23.57 |
+| val_geom_camber_rc | 102.21 | 112.54 | +10.33 |
+| val_geom_camber_cruise | 74.27 | 77.28 | +3.01 |
+| val_re_rand | 91.02 | 91.47 | +0.45 |
+| **val_avg** | **93.1083** | **102.45** | **+10.0%** |
+| test_avg | 82.37 | 93.79 | +11.4 |
+
+surf_loss_pres / surf_loss_vel ratio: 3.80× (pressure channel dominated training signal)
+
+### Why the Hypothesis Failed
+
+1. **Objective misalignment**: Training optimizes percentage error; evaluation measures absolute MAE. Minimizing relative error on low-pressure nodes (near-zero) does not minimize absolute error on high-pressure nodes (leading-edge suction peaks), which dominate mae_surf_p.
+2. **Near-zero amplification**: eps=0.1 is insufficient for surface points where |y_p| ≈ 0.1–1.0; those nodes dominate gradients with artificially amplified terms.
+3. **Pressure channel dominance**: surf_loss_pres/vel ratio ballooned to 3.8× vs ~1× at baseline — relative MAE on pressure channel overwhelms velocity loss.
+4. **Re-weight double-compression**: Per-sample Re-weighting already suppresses high-Re samples; relative MAE further suppresses the high-pressure gradients on those same samples, compounding the mismatch.
+
+**Decision:** CLOSED — objective misalignment is structural. Any relative-error loss must be carefully calibrated against the absolute-MAE eval metric. If revisited: consider hybrid alpha*MSE + (1-alpha)*rMAE with alpha≈0.7–0.8 to maintain gradient direction from the dominant absolute-error term.
+
+---
+
 ## 2026-04-29 03:00 — PR #965: Relative MAE surf-p loss (auto Re-regime normalization) [CLOSED — DEAD END]
 
 - **Branch:** `charliepai2e2-edward/relative-mae-surf-p-loss`

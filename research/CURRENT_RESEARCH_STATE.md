@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-29 (round 4 late-cycle; 2 PRs closed: #978 LR-floor falsified, #1012 slice_num=128 budget failure; 8 students now active)
+- 2026-04-29 05:30 (round 5 ongoing; PR #1009 CLOSED — relative MAE dead end, fern reassigned to #1044 AdamW beta2=0.99; 8 students active)
 - No recent research direction from human researcher team (no open GitHub issues found)
 
 ## Current Focus
@@ -45,7 +45,7 @@ ckpt_avg (epochs 14-15-16) = 93.45 — slightly degrades vs best single (ckpt_av
 | #1037 | charliepai2e2-nezuko | n_layers=6 (one extra Transolver block) | Depth test with compound stack; T_max=15 still applies; ~17% slower epochs → ~12 in budget |
 | #1036 | charliepai2e2-alphonse | mlp_ratio=3 (wider MLP feedforward) | MLPblock capacity increase; baseline mlp_ratio=2; orthogonal to head count |
 | #1034 | charliepai2e2-edward | n_head=1 (single widest head, dim_head=128) | Continue head sweep: n_head=8 (+15.2%), n_head=4 baseline, n_head=2 (-1.76%); test extreme of single head |
-| #1009 | charliepai2e2-fern | Relative MAE on surface pressure (eps=0.1) | Node-level normalization; retries PR #965 failure (P_EPS=1.0 exploded) with proper eps |
+| #1044 | charliepai2e2-fern | AdamW beta2=0.99 (faster gradient variance adaptation) | 1-line change: betas=(0.9, 0.99) vs default (0.9, 0.999); targets convergence speed in ~16-epoch budget |
 | #1041 | charliepai2e2-thorfinn | SGDR warm restarts T_0=5, T_mult=2 | Two cosine cycles within budget (restarts ~epochs 5 and 15); optimizer escape from narrow minima |
 | #1042 | charliepai2e2-askeladd | Multi-task Re aux head (lambda=0.1) | Force Re/geometry disentanglement; expect val_re_rand improvement; multi-task regularization |
 
@@ -55,6 +55,7 @@ ckpt_avg (epochs 14-15-16) = 93.45 — slightly degrades vs best single (ckpt_av
 
 | PR | Hypothesis | Outcome |
 |----|------------|---------|
+| #1009 | charliepai2e2-fern: Relative MAE surface pressure (eps=0.1) | CLOSED: val_avg=102.45 (+10% regression). Objective misalignment — percentage error training down-weights high-pressure nodes, which are most important for absolute mae_surf_p eval. surf_loss_pres/vel ratio 3.8×. Dead end. |
 | #1012 | charliepai2e2-thorfinn: slice_num=128 | CLOSED: Wall-clock budget failure; only 11/16 epochs (+31% per-epoch overhead). Per-epoch signal at ep11 real (+3.5 pts) but single_in_dist regression +5.63; frieren retesting with slice_num=96 |
 | #978 | charliepai2e2-askeladd: T_max=20 on compound baseline | CLOSED: LR-floor hypothesis falsified; T_max=20→95.84, T_max=18→99.54; both fail. Mechanism confirmed: ckpt_avg K=3 anti-correlates with in-flight LR motion; T_max=15 optimal because last 3 epochs near-frozen |
 | #997 | charliepai2e2-edward: Huber loss on pressure (delta=1.0) | ACCIDENTAL MERGE — no experiment ran; baseline unchanged |
@@ -76,7 +77,7 @@ ckpt_avg (epochs 14-15-16) = 93.45 — slightly degrades vs best single (ckpt_av
 
 2. **Loss reformulation** — building on per-sample Re-weighting win (PR #931):
    - Huber loss: #1040 (delta=1000 — robust to pressure extremes)
-   - Relative MAE: #1009 (eps=0.1 — node-level pressure normalization)
+   - Relative MAE: #1009 CLOSED (eps=0.1 — objective misalignment; +10% regression)
    - Multi-task Re aux: #1042 (lambda=0.1 — forces Re/geometry disentanglement)
 
 3. **Training dynamics** — LR schedule exploration:
@@ -97,6 +98,6 @@ ckpt_avg (epochs 14-15-16) = 93.45 — slightly degrades vs best single (ckpt_av
 
 1. **Input feature dropout (geometry dropout)** — zero foil-2 geometry features with p=0.2; may improve val_geom_camber splits.
 2. **U-Net style skip connections** — residual connections between Transolver layers 1↔5, 2↔4 to preserve low-frequency flow features.
-3. **slice_num=32 (lower bound ablation)** — test if slice_num=64 is over-sliced for some mesh sizes.
-4. **AdamW bias/LayerNorm decoupling + WD sweet spot** — closed #985 originally; wasn't run (accidentally empty). Proper parameter group decoupling still untested.
-5. **Re-weighting alpha sweep: alpha=1.25** — bridge gap between winning alpha=1 and dead-end alpha=2; tanjiro #992 covered 1.25 and 1.5 but may not have completed.
+3. **AdamW beta2=0.99** — ASSIGNED to fern (#1044). 1-line change targeting convergence speed in tight epoch budget.
+4. **slice_num=32 (lower bound ablation)** — test if slice_num=64 is over-sliced for some mesh sizes.
+5. **Pre-norm → post-norm transformer variant** — pre-LayerNorm (RMSNorm before attention/MLP) more stable in short training runs.
