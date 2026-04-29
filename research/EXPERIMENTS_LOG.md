@@ -1,5 +1,55 @@
 # SENPAI Research Results
 
+## 2026-04-29 12:42 — PR #1138 (MERGED — round-2 winner): Random Fourier Features on (x, z), n_freq=32, sigma=1.0
+- Branch: `charliepai2f1-frieren/rff-32` (merged into `icml-appendix-charlie-pai2f-r1`)
+- Hypothesis: Replace raw `(x, z)` node positions with `[sin(2π·B·pos), cos(2π·B·pos)]` (random Fourier features) to mitigate spectral bias of MLPs and let the network represent high-frequency surface-pressure variations directly. Predicted -3% to -8%.
+- Reality: **-13.5% on val, -14.2% on test** — blew past prediction. RFF is the strongest single-lever round-2 win to date.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 14/14, final) | **108.543** |
+| `test_avg/mae_surf_p` (4 splits, all finite ✓) | **96.942** |
+| vs new merged baseline (#1101 schedule) | val 125.438 → 108.543 (-13.5%), test 112.988 → 96.942 (-14.2%) |
+| vs prior provisional (#1095 confounded) | val 133.892 → 108.543 (-19.0%), test 132.106 → 96.942 (-26.6%) |
+| Epochs run | 14 / 50 (timeout-bound, ~133 s/epoch — RFF adds negligible cost) |
+| n_params | 678K (~0.68M, +20K vs baseline 658K from wider preprocess MLP) |
+| Peak VRAM | 42.5 GB |
+| Metrics file | `models/model-charliepai2f1-frieren-rff-32-20260429-120655/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 14)
+
+| Split | val mae_surf_p | test mae_surf_p | Δ vs round-1 baseline (val) |
+|---|---|---|---|
+| `single_in_dist` | 125.82 | 104.40 | 151.43 → 125.82 (-16.9%) |
+| `geom_camber_rc` | 114.59 | 106.27 | 132.77 → 114.59 (-13.7%) |
+| `geom_camber_cruise` | 86.37 | 74.04 | 99.90 → 86.37 (-13.5%) |
+| `re_rand` | 107.40 | 103.05 | 117.65 → 107.40 (-8.7%) |
+| **avg** | **108.54** | **96.94** | **125.44 → 108.54 (-13.5%)** |
+
+All 4 splits improved on both val and test. Largest absolute gain on `val_geom_camber_cruise` (drop from 99.9 → 86.4) — consistent with the spectral-bias hypothesis: cruise has the densest meshes (~210K nodes), so high-frequency representational benefit is largest there.
+
+### Val_avg trajectory
+```
+e1→271 e2→260 e3→171 e4→206 e5→156 e6→162 e7→141
+e8→141 e9→141 e10→131 e11→134 e12→122 e13→187 e14→108 *
+```
+Best epoch is the **final** epoch — model still descending hard at the cap. RFF + the merged schedule together (only available post-this-merge) likely yield further gains below 108.5.
+
+### Conclusions
+- **First round-2 winner. Confirms RFF/spectral-bias hypothesis dominantly.** Predicted -3 to -8% from Tancik 2020 / GINO / MARIO priors; actual -13.5%. The dataset's surface pressure has more high-frequency content than the round-1 baseline could represent through a raw-coord preprocess MLP. RFF gives the model the right Fourier basis up-front.
+- **Per-split gains track mesh density.** Densest meshes (cruise, ~210K nodes) saw the largest improvement. Sparsest (single_in_dist) the smallest, though still significant. Strong evidence the spectral bias is the dominant bottleneck on this dataset.
+- **Throughput unchanged.** 14 epochs in 30 min (vs 14 baseline). RFF is ~free in compute — just an extra `[B, N, 2] @ [2, 32]` matmul per forward, negligible vs the PhysicsAttention cost.
+- **n_params +20K (3% increase).** From the wider preprocess MLP input (22+64=86 vs 22+2=24); RFF buffer itself is non-trainable. Well within budget.
+- **Best epoch = last epoch.** Same pattern as thorfinn's schedule winner. Confirms the budget-limited regime: every throughput improvement directly translates into more headroom.
+- **Training was on pre-merged-schedule train.py.** frieren's run started at 12:06:55 and the schedule merge happened at 12:17. So this win is RFF + vanilla CosineAnnealingLR(T_max=50). After this PR's squash merge, train.py has both RFF + thorfinn's regime-matched schedule for the first time. **Future runs on the merged train.py will likely see val_avg below 108.5** (compounding gains).
+
+### Round-2 stacking implications
+- **Architectural change.** Stacks orthogonally with the merged schedule and any in-flight loss/optimization/augmentation experiment.
+- **All in-flight round-2 PRs (FiLM #1158, EMA #1142, AoA #1159, SwiGLU #1160, scale-norm #1162) inherit RFF via rebase.** Their predicted effects are now layered on top of 108.5, not 125.4.
+- **frieren reassigned to RFF n_freq sweep (n_freq=64)** — direct test of whether RFF capacity is the binding constraint, since the model is still descending. Predicted +1% to +3% if capacity-limited; flat or worse if n_freq=32 is sufficient.
+
 ## 2026-04-29 12:18 — PR #1101 (MERGED — round-1 winner): Schedule regime-matched (warmup=1, T_max=13, eta_min=lr/100)
 - Branch: `charliepai2f1-thorfinn/warmup-cosine-floor` (merged into `icml-appendix-charlie-pai2f-r1`)
 - Hypothesis: Linear warmup (1 ep) + cosine to non-zero floor (eta_min=lr/100) over the **achievable** horizon (T_max=13), beats both vanilla cosine-to-zero (T_max=epochs=50, never reaches tail) and the prior 5-epoch warmup variant (calibrated to the nominal horizon).

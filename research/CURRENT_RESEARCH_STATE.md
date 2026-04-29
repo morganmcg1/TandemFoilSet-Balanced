@@ -1,8 +1,18 @@
 # SENPAI Research State
 
-- 2026-04-29 12:25 (round 1 closing — first winner merged, 5 round-2 PRs in flight)
+- 2026-04-29 12:48 (round 2 in progress — TWO winners merged: schedule + RFF)
 - No human researcher directives yet for this branch.
 - Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective (~14 actually achievable per run).
+
+## Cumulative progress
+
+| Stage | val_avg | test_avg | PR | Δ |
+|---|---|---|---|---|
+| Provisional round-1 best (confounded) | 133.892 | 132.106 (3-finite) | #1095 (sent back) | — |
+| Round-1 winner: regime-matched schedule | 125.438 | 112.988 | **#1101 ← merged** | -6.3% / -14.5% |
+| Round-2 winner: RFF (n_freq=32, σ=1.0) | **108.543** | **96.942** | **#1138 ← merged** | -13.5% / -14.2% |
+
+**Cumulative round-1→round-2: -19.0% on val, -26.6% on test** vs starting provisional.
 
 ## Round 1 status (closing)
 
@@ -31,11 +41,13 @@
 5. **Surface-loss reweighting helps OOD splits.** Askeladd's surf_weight=25 run beat edward on val_re_rand and val_geom_camber_cruise, lost on val_single_in_dist. Even though aggregate val_avg is tied, this is exactly where surface boosting *should* help — the OOD splits whose paper-facing test_avg is what matters.
 6. **Schedule hyperparameters MUST match the achievable horizon.** Thorfinn's win confirms learnings #7 and #8 from the prior state: T_max must be derived from observed per-epoch cost (~131 s/ep) and the 30-min budget (~14 ep), not from MAX_EPOCHS=50. With T_max=13 + warmup=1, the cosine traverses fully and eta_min=5e-6 floor actually engages in the last 2-3 epochs (each producing 5-7% improvement).
 7. **Schedule run-to-run variance is ~12% but the improvement is bigger.** Two identical thorfinn pre-rev runs hit 124.29 and 142.89; the post-rev hit 125.44. The 6.3% improvement vs prior baseline is meaningfully above this noise floor. **Round-2 implication:** use the merged schedule as a stable platform; single-run comparisons of small-effect hypotheses (-1% to -3%) still need multi-seed verification.
+8. **RFF dominated its prediction window by ~2×.** Frieren's PR #1138 (n_freq=32, σ=1.0) hit -13.5% on val and -14.2% on test — predicted -3% to -8%. Best epoch = last epoch (still descending under the 30-min cap). **Two implications:** (a) the spectral-bias fix is unusually strong on this dataset, suggesting the baseline was meaningfully under-representing high-frequency surface pressure structure; (b) the RFF capacity ceiling is unverified — frieren's PR #1165 (n_freq=64) directly tests this. (c) RFF was run on PRE-thorfinn-merge train.py; the merged train.py now has BOTH RFF + schedule, so the post-merge baseline may compound below 108.5 in subsequent runs.
 
 ## Branch-side fixes
 
 - **`data/scoring.py` NaN-propagation bug** (committed in 2548195). Fixed via `torch.where`-based masking. **Open follow-up:** matching fix in `train.py::evaluate_split` for the cosmetic loss-column NaN.
 - **PR #1101 schedule merged to `train.py`** (commit a8d7a25 + merge commit). All future runs inherit warmup=1, T_max=13, eta_min=lr/100 by default.
+- **PR #1138 RFF merged to `train.py`** (squash merge 2026-04-29 12:42). All future runs inherit `RFFEncoder(in_dim=2, n_freq=32, sigma=1.0)` on (x, z) by default. Combined with thorfinn's schedule, the merged train.py is now the strongest stacked baseline for round-3 hypotheses.
 
 ## Current research focus
 
@@ -57,12 +69,12 @@ Round 2 continues the sweep with hypotheses that:
 
 ## Round 2 — assignments in flight (6 PRs)
 
-- **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal; zero throughput cost; strong priors (Tancik 2020, GINO, MARIO). Expected -3% to -8%.
 - **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
 - **PR #1158 (thorfinn, film-domain-cond)** — H-10 FiLM domain conditioning over global per-sample features (Re, AoA, NACA, gap, stagger). Targets the 51% per-split val spread. ~0.05M extra params, near-zero throughput cost, identity-init for safe start. Expected -2% to -5%.
 - **PR #1159 (askeladd, aoa-flip-aug)** — H-12 AoA sign-flip augmentation for aerodynamic symmetry. Doubles effective training data per epoch at zero throughput cost. Targets `val_single_in_dist` (151.4) and `val_geom_camber_rc` (132.8) where AoA coverage gaps most likely hurt. Expected -1% to -4%.
 - **PR #1160 (alphonse, swiglu-ffn)** — H-11 SwiGLU FFN replacing GELU MLP in TransolverBlock, param-matched. Different capacity axis from his prior width-scaling attempt. ~5-7% slower per epoch. Strong priors (LLaMA, PaLM, Mixtral). Expected -1% to -3%.
 - **PR #1162 (fern, scale-norm-loss)** — H-03 Per-sample scale-normalized loss. Divides each sample's training loss by its own y_std before averaging — directly addresses the 10× per-sample y_std spread documented in DATASET_ANALYSIS.md. Zero throughput cost. Expected -2% to -6%.
+- **PR #1165 (frieren, rff-64)** — RFF n_freq sweep follow-up to merged #1138. Tests if RFF is capacity-limited at n_freq=32. Single-variable ablation: same RFF, same sigma, just doubled frequency components. Best-epoch=last on the merged baseline → model still hungry; +0.03M params, zero throughput cost. Expected -1% to -3% if capacity-limited; flat otherwise.
 
 ## Round 1 in-flight (revisions waiting)
 
