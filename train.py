@@ -515,6 +515,7 @@ class Config:
     scheduler: str = "cosine"     # "cosine" | "none"
     T_max: int = 15               # cosine scheduler T_max (post-warmup if warmup_epochs > 0)
     warmup_epochs: int = 0        # linear warmup epochs before cosine; 0 = no warmup
+    warmup_start_factor: float = 1.0 / 30  # LR multiplier at warmup start (lr * start_factor)
     fourier_pos_enc: bool = False  # apply Fourier features to (x, z) dims
     fourier_freqs: list[float] = field(default_factory=lambda: [1.0, 2.0, 4.0, 8.0, 16.0])
 
@@ -577,7 +578,7 @@ if cfg.scheduler == "cosine":
     if cfg.warmup_epochs > 0:
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
-            start_factor=1.0 / 30,
+            start_factor=cfg.warmup_start_factor,
             end_factor=1.0,
             total_iters=cfg.warmup_epochs,
         )
