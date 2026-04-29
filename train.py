@@ -386,11 +386,40 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # ------------------------------------------------------------------
+    # Architecture knobs (default == previous hard-coded baseline).
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
+    # ------------------------------------------------------------------
+    # Training extras
+    # scheduler: 'cosine' (per-epoch) or 'onecycle' (per-step, OneCycleLR)
+    lr_scheduler: str = "cosine"
+    onecycle_pct_start: float = 0.1
+    max_grad_norm: float = 0.0  # 0 disables grad clipping
+    loss_kind: str = "mse"  # 'mse' or 'huber'
+    huber_beta: float = 1.0
+    # Per-channel weights for the (Ux, Uy, p) targets in normalized space.
+    w_ux: float = 1.0
+    w_uy: float = 1.0
+    w_p: float = 1.0
+    # Hard wall-clock cap (minutes). 0 means use SENPAI_TIMEOUT_MINUTES env.
+    max_minutes: float = 0.0
+    # Random seed for reproducible runs across the sweep.
+    seed: int = 42
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+MAX_TIMEOUT_MIN = cfg.max_minutes if cfg.max_minutes > 0 else DEFAULT_TIMEOUT_MIN
+
+import random as _random
+import numpy as _np
+torch.manual_seed(cfg.seed)
+_np.random.seed(cfg.seed)
+_random.seed(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -418,11 +447,11 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -432,7 +461,24 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.lr_scheduler.lower() == "onecycle":
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.lr,
+        epochs=MAX_EPOCHS,
+        steps_per_epoch=len(train_loader),
+        pct_start=cfg.onecycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=25.0,
+        final_div_factor=1e4,
+    )
+    SCHED_PER_STEP = True
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    SCHED_PER_STEP = False
+
+# Pre-compute per-channel loss weight tensor (broadcast across [B, N, 3]).
+ch_w = torch.tensor([cfg.w_ux, cfg.w_uy, cfg.w_p], device=device, dtype=torch.float32).view(1, 1, 3)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -487,25 +533,43 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.loss_kind.lower() == "huber":
+            err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=cfg.huber_beta)
+        else:
+            err = (pred - y_norm) ** 2
+        err = err * ch_w  # per-channel weighting (default 1.0/1.0/1.0)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Sum across channels first, then average across valid nodes.
+        err_sum = err.sum(dim=-1)
+        vol_loss = (err_sum * vol_mask).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err_sum * surf_mask).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.max_grad_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+        else:
+            grad_norm = torch.tensor(0.0, device=device)
         optimizer.step()
+        if SCHED_PER_STEP:
+            scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": float(grad_norm.item()),
+            "lr_step": optimizer.param_groups[0]["lr"],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not SCHED_PER_STEP:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
