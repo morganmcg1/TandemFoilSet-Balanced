@@ -1,5 +1,34 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #937 (CLOSED): Dual FiLM (pre-block + post-block per block)
+- **Branch:** `willowpai2e3-nezuko/dual-film`
+- **Hypothesis:** Two FiLM heads per block — pre-block FiLM modulates attention input (regime-aware Q/K/V), post-block FiLM modulates output magnitude. Should give independent control over attention patterns vs scaling.
+- **Run:** W&B (single seed, 14/14 epochs, group `dual-film`)
+- val_avg/mae_surf_p = 82.36 vs current best 79.54 → **+3.5% regression**
+- **Mechanism falsified:** dual FiLM doubles Re-conditioning capacity (5 × 2 = 10 FiLM heads, ~85K params → +12% params), but the Re-stratify+pre-block stack already saturates the Re-axis modulation lever. Adding redundant capacity slows convergence and amplifies early-epoch errors. Per-split signal: in-dist regressed most (+5%), Re-targeted splits flat — the opposite of what the hypothesis predicted.
+- Confirms the emerging pattern across 3 independent FiLM-redistribution attempts (#934 last-2 FiLM, #937 dual FiLM, #756 Fourier): **the Re-conditioning lever is architecturally saturated** at the current pre-block-FiLM design.
+- **Follow-up assigned:** nezuko → PR #969 (geometric vertical-flip data augmentation — opens a fresh **geometric-symmetry axis** orthogonal to FiLM/Re-stratify).
+
+---
+
+## 2026-04-29 — PR #934 (CLOSED): Layer-targeted FiLM (last 2 blocks only)
+- **Branch:** `willowpai2e3-thorfinn/film-last2`
+- **Hypothesis:** Pre-block FiLM on the last 2 blocks only — early blocks process geometry-dominant features, late blocks integrate flow-regime context. Targeted conditioning should reduce over-conditioning on early geometry features.
+- **Run:** W&B (single seed, 14/14 epochs, group `film-last2`)
+- val_avg/mae_surf_p = 81.74 vs current best 79.54 → **+2.8% regression**
+- **Mechanism falsified:** removing FiLM from blocks 0–2 removes useful Re-conditioning capacity rather than reducing "over-conditioning". Early-layer FiLM signals propagate forward and inform attention patterns at every depth — pruning them reduces the effective conditioning budget. Per-split: re_rand and cruise (Re-targeted splits) both regressed, contradicting the "early blocks don't need Re" prediction.
+- All 5 blocks contribute to FiLM modulation; pruning by depth was the wrong axis.
+- **Follow-up assigned:** thorfinn → PR #970 (shared FiLM head — one head reused at all 5 blocks). This was thorfinn's own suggested follow-up #1 and tests **rank-reduction** of the FiLM conditioning manifold — the right axis for redistribution.
+
+---
+
+## 2026-04-29 — Assignments: PR #969 (nezuko vflip), PR #970 (thorfinn shared-FiLM)
+- **PR #969** (`nezuko/vflip-augmentation`): random vertical flip data augmentation (y → -y, Uy → -Uy, p unchanged) at p=0.5 per sample. Exploits known physical symmetry of incompressible 2D flow to effectively double training set on a **geometric** axis. Predicted strongest gains on `geom_camber_rc` (the hardest split, currently val=92.95) and `single_in_dist` (camber asymmetry).
+- **PR #970** (`thorfinn/shared-film`): single FiLMLayer reused across all 5 blocks (vs 5 independent heads). Rank-reduction probe — directly tests whether per-block FiLM specialization carries information after the saturation evidence from #934/#937/#756. Saves ~34K params (~5% of model). Match-or-better is mergeable as Pareto win; clean win unlocks more capacity per FiLM head at same param budget.
+- Both opened off current best (79.54). Beat-threshold: val_avg/mae_surf_p < 79.54.
+
+---
+
 ## 2026-04-29 — PR #910 (MERGED): Re-stratified batch sampling
 - **Branch:** `willowpai2e3-nezuko/re-stratified-sampling`
 - **Hypothesis:** Partition training set into Re quintiles; ensure every mini-batch contains samples from each quintile (round-robin). Gives FiLM conditioning consistent Re-diverse training signal; also equalizes the high-Re gradient dominance under L1 loss.
