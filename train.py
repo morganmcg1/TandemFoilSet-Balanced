@@ -108,6 +108,27 @@ class SharedFiLMGenerator(nn.Module):
         return pairs
 
 
+class OutputDecoderFiLMGenerator(nn.Module):
+    """FiLM generator for the final output MLP decoder."""
+
+    def __init__(self, n_hidden: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(1, n_hidden),
+            nn.GELU(),
+            nn.Linear(n_hidden, n_hidden * 2),
+        )
+        self.n_hidden = n_hidden
+
+    def forward(self, log_re: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if log_re.dim() == 1:
+            log_re = log_re.unsqueeze(-1)
+        out = self.net(log_re)
+        gamma = out[:, : self.n_hidden]
+        beta = out[:, self.n_hidden :]
+        return gamma, beta
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -184,15 +205,21 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
+            self.decoder_film_ln = nn.LayerNorm(hidden_dim)
 
-    def forward(self, fx, film=None):
+    def forward(self, fx, film=None, film_decoder=None):
         fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
         if film is not None:
             gamma, beta = film
             fx = fx * (1 + gamma.unsqueeze(1)) + beta.unsqueeze(1)
         fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            fx_out = self.ln_3(fx)
+            if film_decoder is not None:
+                gamma_d, beta_d = film_decoder
+                fx_out = fx_out * (1 + gamma_d.unsqueeze(1)) + beta_d.unsqueeze(1)
+                fx_out = self.decoder_film_ln(fx_out)
+            return self.mlp2(fx_out)
         return fx
 
 
@@ -229,8 +256,14 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.film_generator = SharedFiLMGenerator(n_hidden=n_hidden, n_layers=n_layers)
+        self.decoder_film_generator = OutputDecoderFiLMGenerator(n_hidden=n_hidden)
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # adaLN-Zero style: zero-init the decoder FiLM generator's last linear so
+        # gamma=beta=0 at step 0 → identity start, matching DiT/Unisolver pattern
+        # for stable conditioned output projection.
+        nn.init.zeros_(self.decoder_film_generator.net[-1].weight)
+        nn.init.zeros_(self.decoder_film_generator.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -245,9 +278,15 @@ class Transolver(nn.Module):
         x = data["x"]
         log_re_sample = x[:, 0, 13].unsqueeze(-1)  # [B, 1] normalized log(Re) per sample
         film_pairs = self.film_generator(log_re_sample)
+        decoder_film = self.decoder_film_generator(log_re_sample)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for i, block in enumerate(self.blocks):
-            fx = block(fx, film=film_pairs[i])
+            is_last = i == len(self.blocks) - 1
+            fx = block(
+                fx,
+                film=film_pairs[i],
+                film_decoder=decoder_film if is_last else None,
+            )
         return {"preds": fx}
 
 
