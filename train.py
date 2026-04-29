@@ -120,6 +120,38 @@ class SwiGLU(nn.Module):
         return self.w_down(self.act(self.w_gate(x)) * self.w_up(x))
 
 
+class FiLMNet(nn.Module):
+    """FiLM (Feature-wise Linear Modulation) generator.
+
+    Maps per-sample global features (Re, AoA, NACA, gap, stagger) to (γ, β)
+    shift/scale parameters for each Transolver block's LayerNorms.
+    Final linear is zero-initialised so the modulation starts at identity
+    (γ=0, β=0; apply-time uses (1.0 + γ) so γ=0 → multiplier 1).
+    """
+
+    def __init__(self, cond_dim: int = 11, n_hidden: int = 128, n_layers: int = 5,
+                 n_norms_per_block: int = 2, hidden_mult: int = 2):
+        super().__init__()
+        self.n_layers = n_layers
+        self.n_norms_per_block = n_norms_per_block
+        self.n_hidden = n_hidden
+        out_dim = n_layers * n_norms_per_block * 2 * n_hidden
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, n_hidden * hidden_mult),
+            nn.GELU(),
+            nn.Linear(n_hidden * hidden_mult, out_dim),
+        )
+        last_linear = self.net[-1]
+        nn.init.zeros_(last_linear.weight)
+        nn.init.zeros_(last_linear.bias)
+
+    def forward(self, cond: torch.Tensor) -> torch.Tensor:
+        out = self.net(cond)
+        return out.view(
+            -1, self.n_layers, self.n_norms_per_block, 2, self.n_hidden
+        )
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -194,9 +226,17 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+    def forward(self, fx, film=None):
+        h_attn = self.ln_1(fx)
+        if film is not None:
+            gamma, beta = film[:, 0, 0, :], film[:, 0, 1, :]
+            h_attn = (1.0 + gamma).unsqueeze(1) * h_attn + beta.unsqueeze(1)
+        fx = self.attn(h_attn) + fx
+        h_mlp = self.ln_2(fx)
+        if film is not None:
+            gamma, beta = film[:, 1, 0, :], film[:, 1, 1, :]
+            h_mlp = (1.0 + gamma).unsqueeze(1) * h_mlp + beta.unsqueeze(1)
+        fx = self.mlp(h_mlp) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -236,7 +276,13 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        self.film_net = FiLMNet(
+            cond_dim=11, n_hidden=n_hidden, n_layers=n_layers,
+            n_norms_per_block=2, hidden_mult=2,
+        )
         self.apply(self._init_weights)
+        nn.init.zeros_(self.film_net.net[-1].weight)
+        nn.init.zeros_(self.film_net.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -249,13 +295,15 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        cond = x[:, 0, 13:24]
+        film_all = self.film_net(cond)
         pos = x[..., :2]
         feat = x[..., 2:]
         rff = self.rff(pos)
         x = torch.cat([rff, feat], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            fx = block(fx, film=film_all[:, i])
         return {"preds": fx}
 
 
