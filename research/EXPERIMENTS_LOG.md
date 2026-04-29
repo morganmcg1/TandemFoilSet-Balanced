@@ -47,4 +47,49 @@ The first run was misconfigured (surf_weight=10, T_max=50 for 9 actual epochs). 
 
 Run 1 was misconfigured (surf_weight=10, T_max=50). After corrections (surf_weight=20, T_max=12), the 7-layer model still failed to beat baseline. The core issue: n_layers=7 costs ~180s/epoch vs ~131s/epoch for baseline (43% overhead), so only 10 epochs fit in the 30-min budget vs ~14 for the 5-layer model. Even with proper LR schedule calibration (LR decayed to 3.35e-5 = 7% of start by epoch 10), the model was still descending at termination (142.28 → 135.90 in last 2 epochs), suggesting it needed more epochs. Under fixed wall-clock, depth loses to baseline depth. The depth hypothesis is rejected at this compute budget. Per-split heterogeneity remains substantial (val_single_in_dist=168.52 vs val_geom_camber_cruise=106.95, a 62-point spread), echoing the finding from PR #735 and suggesting data regime heterogeneity is the primary lever to address.
 
+## 2026-04-29 03:00 — PR #935: Extended training epochs=18, T_max=18 on current best: per_sample_norm_mse + lr=2e-4
+
+- **Branch:** charliepai2e4-frieren/extended-epochs-18-per-sample-norm-lr-2e-4
+- **Hypothesis:** Extending epochs from 14→18 with T_max=18 keeps a positive learning rate at epoch 14 (the 30-min timeout cutoff), allowing continued gradient flow vs T_max=14 which parks LR≈0 at that epoch. Architecture change: spatial_bias input 2D→4D (adding saf_0 and saf_1 shape coordinates).
+- **Results (best checkpoint, epoch 14/18, wall-clock timeout):**
+
+| Split | mae_surf_Ux | mae_surf_Uy | mae_surf_p | mae_vol_Ux | mae_vol_Uy | mae_vol_p |
+|-------|-------------|-------------|------------|------------|------------|-----------|
+| val_single_in_dist     | 1.2984 | 0.6816 | 109.0267 | 4.9698 | 2.1102 | 144.2117 |
+| val_geom_camber_rc     | 1.9591 | 0.8680 | 108.3369 | 5.1580 | 2.7046 | 115.3989 |
+| val_geom_camber_cruise | 0.7416 | 0.4688 |  73.1648 | 3.1743 | 1.2715 |  79.3267 |
+| val_re_rand            | 1.1660 | 0.7089 |  88.2387 | 4.1590 | 1.8454 |  92.1751 |
+| **avg**                | **1.2913** | **0.6843** | **94.6918** | **4.3653** | **1.9829** | **110.2781** |
+
+- **Primary metric:** `val_avg/mae_surf_p = 94.6918` vs baseline 95.6617 — **WINNER (−1.01%)**
+- **Metric summary:** `target/metrics/charliepai2e4-frieren-extended-epochs-18-per-sample-norm-lr-2e-4-alsxfigk.jsonl`
+- **Decision:** MERGED as winner.
+
+### Analysis and Conclusions
+
+Two changes contributed: (1) T_max=18 cosine schedule shape — at epoch 14 (timeout), LR is still at ~16% of peak (~3.2e-5) rather than ≈0 under T_max=14, giving continued gradient signal. (2) 4D spatial bias using saf_0/saf_1 coordinates alongside x/y provides richer shape-aware context to the attention bias. Best=last pattern confirmed again — the model continues improving through the full 30-min budget. val_single_in_dist (109.03) remains the hardest split, but the gap to val_geom_camber_rc (108.34) narrowed vs PR #871, suggesting the 4D spatial bias helps with geometry-OOD generalization.
+
+The improvement is modest at −1.01%, but compounding. The T_max schedule shape insight is reusable: setting T_max > achievable_epochs is a low-cost way to maintain gradient flow at the timeout boundary.
+
+## 2026-04-29 03:05 — PR #932: Zero weight_decay (0.0) on current best: per_sample_norm_mse + lr=2e-4
+
+- **Branch:** charliepai2e4-edward/zero-weight-decay-per-sample-norm-lr-2e-4
+- **Hypothesis:** Per_sample_norm_mse normalizes per-sample gradient scale, potentially making explicit L2 regularization redundant.
+- **Results (best checkpoint):**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_single_in_dist     | ~127.27 |
+| val_geom_camber_rc     | ~115.50 |
+| val_geom_camber_cruise | ~75.89 |
+| val_re_rand            | ~78.38 |
+| **avg** | **99.2564** |
+
+- **Primary metric:** `val_avg/mae_surf_p = 99.2564` vs baseline 95.6617 — **FAILED (+3.77%)**
+- **Decision:** CLOSED as dead end.
+
+### Analysis and Conclusions
+
+Removing weight_decay causes mild overfitting at lr=2e-4: training loss is lower but validation surface pressure MAE regresses by 3.77% vs the best stack. The per_sample_norm loss normalizes gradient scale across Re-regimes but does NOT replace L2 regularization. At lr=2e-4 with gradient clipping active, weight_decay=1e-4 contributes meaningful regularization. The experiment confirms weight_decay=1e-4 should remain fixed in the best-stack config.
+
 <!-- Format: ## <YYYY-MM-DD HH:MM> — PR #<number>: <title> -->
