@@ -446,10 +446,16 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_mask = is_surface & mask
+        vol_mask = (~is_surface) & mask
+
+        n_surf = surf_mask.sum().clamp(min=1).float()
+        n_vol = vol_mask.sum().clamp(min=1).float()
+        n_total = (surf_mask | vol_mask).sum().clamp(min=1).float()
+        surf_oversample = n_total / n_surf
+
+        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / n_vol
+        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / n_surf * surf_oversample
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
