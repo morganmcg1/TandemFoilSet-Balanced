@@ -357,6 +357,8 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
+WARMUP_EPOCHS = 2  # warm-up epochs used to estimate the timeout-aware cosine budget
+LR_ETA_MIN = 1e-6
 
 
 @dataclass
@@ -364,7 +366,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 25.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -417,7 +419,9 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Cosine scheduler is initialized after WARMUP_EPOCHS once we have a wall-clock
+# estimate, so the cosine decay actually finishes within the timeout budget.
+scheduler: torch.optim.lr_scheduler.CosineAnnealingLR | None = None
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -473,7 +477,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if scheduler is not None:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -499,11 +504,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -511,12 +518,38 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    # After warm-up, build a cosine scheduler whose decay window matches the
+    # remaining wall-clock budget so the LR actually anneals to eta_min before
+    # the timeout fires.
+    if scheduler is None and (epoch + 1) >= WARMUP_EPOCHS:
+        elapsed_secs = time.time() - train_start
+        per_epoch_secs = elapsed_secs / (epoch + 1)
+        remaining_secs = max(MAX_TIMEOUT_MIN * 60.0 - elapsed_secs, 0.0)
+        remaining_epochs = max(int(remaining_secs // per_epoch_secs), 1)
+        remaining_epochs = min(remaining_epochs, MAX_EPOCHS - (epoch + 1))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=remaining_epochs, eta_min=LR_ETA_MIN,
+        )
+        print(
+            f"  -> Cosine schedule: T_max={remaining_epochs}, eta_min={LR_ETA_MIN:g} "
+            f"(per_epoch={per_epoch_secs:.1f}s, remaining_budget={remaining_secs:.0f}s)"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "schedule_init",
+            "after_epoch": epoch + 1,
+            "warmup_epochs": WARMUP_EPOCHS,
+            "per_epoch_seconds": per_epoch_secs,
+            "remaining_seconds": remaining_secs,
+            "cosine_T_max": remaining_epochs,
+            "eta_min": LR_ETA_MIN,
+        })
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
