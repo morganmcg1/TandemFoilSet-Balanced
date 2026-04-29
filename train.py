@@ -187,7 +187,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
-        max_drop_path = 0.1
+        max_drop_path = 0.2
         drop_path_rates = [x.item() for x in torch.linspace(0, max_drop_path, n_layers)]
         self.blocks = nn.ModuleList([
             TransolverBlock(
