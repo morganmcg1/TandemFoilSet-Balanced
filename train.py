@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -217,7 +218,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, autocast_ctx=contextlib.nullcontext) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -238,7 +239,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            with autocast_ctx():
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -314,6 +317,9 @@ def write_experiment_summary(
         "epochs_configured": cfg.epochs,
         "cosine_tmax": cfg.cosine_tmax,
         "cosine_eta_min": cfg.cosine_eta_min,
+        "amp": cfg.amp,
+        "amp_dtype": cfg.amp_dtype,
+        "n_hidden": cfg.n_hidden,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -353,10 +359,18 @@ class Config:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 5.0
     epochs: int = 50
     cosine_tmax: int = 15  # CosineAnnealingLR T_max — match realised epoch budget
     cosine_eta_min: float = 1e-6
+    n_hidden: int = 160
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
+    dropout: float = 0.1
+    amp: bool = True
+    amp_dtype: str = "bfloat16"  # "bfloat16" or "float16"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -394,12 +408,12 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
-    dropout=0.1,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -407,6 +421,19 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+_AMP_DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16}
+amp_dtype = _AMP_DTYPES[cfg.amp_dtype] if cfg.amp else None
+use_scaler = cfg.amp and amp_dtype == torch.float16
+scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+print(f"AMP: enabled={cfg.amp} dtype={cfg.amp_dtype} scaler={use_scaler}")
+
+
+def amp_autocast():
+    if cfg.amp:
+        return torch.amp.autocast(device_type="cuda", dtype=amp_dtype)
+    return contextlib.nullcontext()
+
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -456,20 +483,17 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
-
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
 
         # Per-sample Re-adaptive loss weighting: 1/σ on GT surface pressure.
-        # GT (not pred) avoids gameable-divisor + cold-start collapse;
-        # clamp(0.2) is at p25 of normalized GT σ_p — caps weight dynamic
-        # range at 25× without losing the high-Re equalization signal;
-        # 1/σ (not 1/σ²) matches heteroscedastic regression and avoids
-        # over-stripping gradient from high-σ samples; mean-1 norm keeps
-        # the gradient scale comparable to baseline.
-        B = sq_err.shape[0]
+        # Computed in fp32 for numerical stability; broadcasts into the
+        # autocast region below where sq_err is in low precision.
+        # GT-std (not pred-std) avoids gameable-divisor / cold-start collapse;
+        # clamp(0.2) ≈ p25 of normalized GT σ_p — caps weight dynamic range;
+        # 1/σ (not 1/σ²) matches heteroscedastic regression; mean-1 norm
+        # keeps gradient scale comparable to baseline.
+        vol_mask = mask & ~is_surface
+        surf_mask = mask & is_surface
+        B = x_norm.shape[0]
         surf_mask_f = surf_mask.float()
         surf_count = surf_mask.sum(dim=1).clamp(min=1).float()
         surf_p_gt = y_norm[..., 2]
@@ -481,10 +505,13 @@ for epoch in range(MAX_EPOCHS):
         inv_std = 1.0 / surf_p_std
         weights = inv_std / inv_std.mean().clamp(min=1e-6)
 
-        sq_err_w = sq_err * weights.view(B, 1, 1)
-        vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        with amp_autocast():
+            pred = model({"x": x_norm})["preds"]
+            sq_err = (pred - y_norm) ** 2
+            sq_err_w = sq_err * weights.view(B, 1, 1)
+            vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         epoch_std_mean += surf_p_std.mean().item()
         epoch_std_min = min(epoch_std_min, surf_p_std.min().item())
@@ -493,9 +520,16 @@ for epoch in range(MAX_EPOCHS):
         epoch_w_min = min(epoch_w_min, weights.min().item())
 
         optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        if use_scaler:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -509,7 +543,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_autocast)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -575,7 +609,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_autocast)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
