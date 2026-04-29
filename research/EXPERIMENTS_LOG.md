@@ -67,3 +67,42 @@ Follow-up: edward is testing timeout-aware CosineAnnealingLR (T_max=14 to match 
 Not a fair comparison. The n_hidden=256 model runs at ~258s/epoch vs. baseline's ~131s/epoch, so in the 30-minute timeout, it only completed 7/50 epochs vs. baseline's ~14. The LR was still near its peak (cosine annealing with T_max=50 had only annealed ~5%). The training curve was monotonically improving at epoch 6 (173.99), with epoch 7 showing instability (213.43) from high LR. Additional issue: NaN in test_geom_camber_cruise pressure — same corrupted GT sample as other experiments; not unique to this model.
 
 **Sent back with instruction to try n_hidden=192, n_head=6 (keeping head_dim=32) with surf_weight=25, which should bring per-epoch time closer to 200s and allow ~9 epochs within the timeout with better LR annealing. Also instructed to add nan_to_num guard.**
+
+---
+
+## 2026-04-29 12:15 — PR #1102: MLP ratio 2→4: wider feedforward sublayer for richer local physics
+
+- charliepai2f2-thorfinn/mlp-ratio-expansion
+- **Hypothesis**: Expanding the MLP feedforward ratio from 2× to 4× (standard transformer ratio) increases capacity for capturing local physics relationships, improving surface pressure prediction.
+- **Outcome**: **CLOSED** — experiment did not beat baseline; regression on primary metric.
+
+### Results (both runs hit 30-min wall-clock timeout)
+
+| Config | n_params | Best Epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | VRAM | Time/epoch |
+|---|---:|---:|---:|---:|---:|---:|
+| mlp_ratio=2 (within-PR baseline) | 0.66M | 14 | 130.53 | 117.20 | 42.1 GB | 132s |
+| mlp_ratio=4 (experiment) | 0.99M | 13 | 136.16 | 125.17 | 52.2 GB | 148s |
+| **Current baseline** (PR #1088) | — | — | **127.67** | — | — | — |
+
+Per-split val mae_surf_p:
+
+| Split | mlp=2 | mlp=4 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 154.90 | 164.96 | +10.06 |
+| val_geom_camber_rc | 129.52 | 143.57 | +14.05 |
+| val_geom_camber_cruise | 112.62 | 109.42 | −3.20 |
+| val_re_rand | 125.07 | 126.70 | +1.63 |
+
+Metric files:
+- Baseline: `models/model-charliepai2f2-thorfinn-mlp-ratio-2-baseline-20260429-105629/metrics.jsonl`
+- Experiment: `models/model-charliepai2f2-thorfinn-mlp-ratio-4-20260429-113117/metrics.jsonl`
+
+### Analysis
+
+Hypothesis was not validated. mlp_ratio=4 is 4.3% worse on val_avg/mae_surf_p than the within-PR baseline, and clearly worse than the true baseline (127.67). The primary failure mode: ~1.5K training samples and ~14 effective epochs cannot productively use the extra ~660K parameters added by the wider MLP. At this data/budget scale the 0.66M baseline model is already at the Pareto frontier.
+
+The timeout asymmetry identified by the student (mlp=4 is 12% slower per epoch, getting one fewer epoch, and that epoch happens to be when cosine LR kicks in hard) partially explains the gap, but even correcting for this, 3 of 4 splits still regress.
+
+Only `val_geom_camber_cruise` benefited (−3.2), consistent with the hypothesis that wider MLPs help OOD generalization on low-magnitude domains — but not enough to override the overall regression.
+
+**Key side contribution: bug fix.** Student identified and fixed a critical correctness bug: `test_geom_camber_cruise` had `inf` in ground truth `y`. The masked accumulation `err * mask` after `err = (pred - y).abs()` produces `inf * 0 = NaN`. Fix: drop non-finite-y samples before computing predictions. This fix should be propagated to all future experiments to ensure clean test_geom_camber_cruise metrics.
