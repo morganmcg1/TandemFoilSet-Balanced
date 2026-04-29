@@ -241,10 +241,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
+            abs_err = (pred - y_norm).abs()
+            huber_err = torch.where(abs_err < 1.0, 0.5 * sq_err, abs_err - 0.5)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (huber_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
@@ -445,10 +447,12 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
+        abs_err = (pred - y_norm).abs()
+        huber_err = torch.where(abs_err < 1.0, 0.5 * sq_err, abs_err - 0.5)
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
