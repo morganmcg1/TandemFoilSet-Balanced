@@ -1,71 +1,91 @@
 # SENPAI Research State
-- 2026-04-29 18:00 (branch: icml-appendix-charlie-pai2f-r4)
+- 2026-04-29 18:30 (branch: icml-appendix-charlie-pai2f-r4)
 - No human researcher team directives received yet.
+- 2026-04-29: Stale-baseline audit complete. PRs #1193, #1137, #1117, #1111, #1110 all sent back to rebase on PR #1197 recipe (AMP bfloat16 + n_hidden=160 + lr=1e-3 + CosineAnnealingLR T_max=15 + grad_clip=1.0; target val_avg/mae_surf_p < 75.750). PRs #1186, #1114, #1213 already aligned.
 
 ## Current Research Focus
 
 **Target:** TandemFoilSet CFD surrogate — predict (Ux, Uy, p) at every mesh node.
 **Primary metric:** `val_avg/mae_surf_p` — equal-weight mean surface-pressure MAE across 4 val splits (lower is better).
 **Model:** Transolver with physics-aware attention over irregular meshes.
-**Status:** Round 4+. Baseline now improved to 124.727 from PR #1128 (edward's per-sample Re-adaptive loss). 8 experiments currently in-flight exploring diverse improvement vectors.
+**Status:** Round 5/5. Best result: PR #1197 (alphonse, AMP bfloat16 + n_hidden=160) at **val_avg/mae_surf_p=75.750**.
 
 ## Baseline
 
 | Metric | Value | PR |
 |--------|-------|----|
-| **val_avg/mae_surf_p** | **124.727** | #1128 (edward, per-sample Re-adaptive loss) |
+| **val_avg/mae_surf_p** | **75.750** | #1197 (alphonse, AMP bfloat16 + n_hidden=160, epoch 15/50) |
 
-Prior baseline history:
-- 129.531 — PR #1112 (attention dropout=0.1)
-- 124.727 — PR #1128 (per-sample Re-adaptive loss) CURRENT
+Per-split val breakdown (PR #1197):
+- val_single_in_dist: 78.755
+- val_geom_camber_rc: 88.578
+- val_geom_camber_cruise: 61.344
+- val_re_rand: 74.322
 
-Note: `test_avg/mae_surf_p = NaN` due to corrupt `test_geom_camber_cruise/000020.pt` (761 inf values in ground-truth). Valid test splits show 139.9 / 138.8 / 111.0 for single_in_dist, geom_camber_rc, re_rand respectively.
+Test results (PR #1197):
+- test_single_in_dist: 67.414
+- test_geom_camber_rc: 72.814
+- test_geom_camber_cruise: 50.498
+- test_re_rand: 69.206
+- test_avg/mae_surf_p: 64.983
 
-## Active Experiments (Round 4+)
+Metric summary: `models/model-charliepai2f1-alphonse-amp-capacity-scaling-20260429-150349/metrics.yaml`
 
-| PR   | Student    | Status | Hypothesis |
-|------|------------|--------|-----------|
-| #1193 | tanjiro   | WIP | Random Fourier Features (n_rff=16, rff_scale=10.0) for multi-scale positional encoding |
-| #1187 | fern      | WIP | Gradient clipping max_norm=1.0 + raised LR 8e-4 for faster convergence |
-| #1186 | edward    | WIP | Combine surf_weight=5 with per-sample Re-adaptive loss |
-| #1137 | nezuko    | WIP | Scale Transolver to n_hidden=256, n_layers=8 for high-Re splits |
-| #1117 | thorfinn  | WIP | Re-conditioned output scale head for magnitude adaptation |
-| #1114 | frieren   | WIP (sent back 2x) | Curriculum surf_weight ramp — ablating flat surf_weight=3/4 |
-| #1111 | askeladd  | WIP | Layer-wise LR decay for geometry-stable representations |
-| #1110 | alphonse  | WIP | Log-modulus transform on pressure channel loss |
+## Active Experiments (Round 5)
 
-Last checked: 2026-04-29 18:00.
+| PR    | Student    | Status | Hypothesis |
+|-------|------------|--------|-----------|
+| #1186 | edward     | WIP | Combine surf_weight=5 with per-sample Re-adaptive loss — rebased on AMP/n_hidden=160 recipe, target <75.750 |
+| #1193 | tanjiro    | WIP | Random Fourier Features for multi-scale node positional encoding (n_rff=16, rff_scale=10.0) |
+| #1137 | nezuko     | WIP | Scale Transolver to n_hidden=256, n_layers=8 for high-Re splits |
+| #1117 | thorfinn   | WIP | Re-conditioned output scale head for magnitude adaptation |
+| #1114 | frieren    | WIP | surf_weight=4 + grad_clip_max_norm=1.0 + lr=8e-4 (surf_weight sweep complete; now combining with best training recipe) |
+| #1111 | askeladd   | WIP | Layer-wise LR decay for geometry-stable representations |
+| #1110 | alphonse   | WIP | Log-modulus transform on pressure channel loss |
+| #1213 | fern       | WIP | Batch size 8 + linear LR scale (2e-3) for gradient quality — VRAM headroom (42→~65 GB) |
+
+Recently merged:
+- PR #1197 (alphonse): AMP bfloat16 + n_hidden=160 → 75.750 (**current baseline**, -17.9% vs prior)
+- PR #1201 (fern): CosineAnnealingLR T_max=15 + LR 1e-3 → 92.170
+- PR #1187 (fern): Gradient clipping (max_norm=1.0) + LR 8e-4 → 102.080
+- PR #1128 (edward): Per-sample Re-adaptive loss 1/σ → 124.727
+- PR #1112 (edward): Attention dropout=0.1 → 129.531
+
+## Key Findings So Far
+
+1. **AMP bfloat16 + n_hidden=160**: best single change to date, 92.170→75.750 (PR #1197) — 17.9% improvement + faster epochs (~124s) + 53% more parameters within VRAM budget
+2. **CosineAnnealingLR T_max=15 matched to budget**: 102.080→92.170 (PR #1201) — matching T_max to actual epochs is critical; T_max=50 left LR never entering fine-tuning phase
+3. **Gradient clipping + raised LR 8e-4**: 124.727→102.080 (PR #1187) — 18.2% improvement; gradient clipping enabled higher LR
+4. **Per-sample Re-adaptive loss** (1/σ weighting): 129.531→124.727 (PR #1128)
+5. **Attention dropout=0.1**: established 129.531 at round 4 start
+6. **surf_weight optimum at sw=4-5 (non-monotonic)**: full sweep sw=3→134.91, sw=4→126.49, sw=5→126.93, sw=6→132.90; standalone sw=4 doesn't beat baseline; needs combination with grad clip + LR=8e-4
+7. **VRAM headroom**: peak 42.29 GB of 96 GB — ~54 GB unused; room for batch_size doubling
+8. **Training budget**: ~15 epochs of 50 configured with AMP; convergence speed and throughput are primary levers
+
+## Key Dataset Observations
+
+- Cruise split (61.344) dramatically easier than raceCar splits (~74-88): multi-domain difficulty imbalance
+- Per-sample pressure std varies by order of magnitude within a split (high-Re drives extremes)
+- VRAM: peaked 42.29 GB of 96 GB available — substantial headroom for scaling
+- Timeout: ~30 min wall-clock → ~15 epochs with AMP bfloat16; LR schedule / convergence speed is major lever
+- test_geom_camber_cruise/000020.pt has 761 +Inf values in ground-truth pressure (scoring returns NaN for this split without AMP fix)
 
 ## Research Themes Being Explored
 
-1. **Loss formulation**: Curriculum surface weight ramp (sent back — too slow for budget); log-modulus pressure transform (PR #1110); Re-adaptive loss normalization (merged — current baseline PR #1128); sw=5 + adaptive combination (PR #1186)
-2. **LR scheduling**: OneCycleLR (closed — budget mismatch); layer-wise LR decay (PR #1111); gradient clipping + higher LR (PR #1187)
-3. **Architecture additions**: Re-conditioned output scale head (PR #1117); scaled model capacity n_hidden=256, n_layers=8 (PR #1137); Random Fourier Features for multi-scale geometry encoding (PR #1193)
-4. **Regularization**: Attention dropout for OOD robustness (merged — prior baseline PR #1112)
-5. **Closed/failed**: OneCycleLR (never peaks in ~30-min budget), slice-num-128 (per-epoch slowdown kills epoch count), learnable domain embedding (PR #1113 closed)
+1. **Convergence speed / LR scheduling**: T_max=15 fix + LR 1e-3 (merged baseline); batch_size=8 + LR 2e-3 (fern #1213 new); layer-wise LR decay (#1111)
+2. **Loss formulation**: surf_weight reduction + adaptive loss (edward #1186); log-modulus pressure transform (#1110)
+3. **Architecture**: Re-conditioned output scale head (#1117); scale to n_hidden=256/n_layers=8 (#1137)
+4. **Positional encoding**: Random Fourier Features for multi-scale encoding (#1193)
+5. **Regularization**: attention dropout=0.1 (merged baseline)
+6. **Throughput / capacity**: AMP bfloat16 (merged); batch_size scaling (fern #1213)
+7. **Closed directions**: OneCycleLR (budget mismatch), slice_num=128 (VRAM/epoch regression), domain embedding (implicit in geometry), aux pressure head (gradient budget dominated)
 
-## Key Observations
+## Potential Next Research Directions (Post Round 5)
 
-- Attention dropout=0.1 achieves val_avg/mae_surf_p=129.531 at epoch 13/50 (training timed out ~14 epochs, ~133s/epoch)
-- Per-sample Re-adaptive loss normalization (PR #1128) improved baseline to 124.727 — a 3.7% improvement
-- Cruise split is much easier (~88-93) than raceCar splits (~150-160), suggesting multi-domain difficulty imbalance
-- Single_in_dist val is consistently worse than geom_camber_rc — unusual for the "easiest" split
-- VRAM usage peaked at 42.73 GB (well under 96 GB cap); significant room to scale model capacity
-- Training timed out at epoch 14, best at epoch 13 — models under-trained; convergence speed is critical
-- **slice-num-128 insight**: val_geom_camber_rc improved -11.6 MAE with 128 slices despite overall regression — physics token diversity helps raceCar tandem but per-epoch cost too high
-- **Budget constraint**: ~30 min timeout means ~14 epochs at 133s/epoch. Per-epoch cost is as important as architecture quality
-- **OneCycleLR lesson**: LR schedulers configured over full 50 epochs are fatally incompatible with the budget. Must configure over the realistic ~14 epoch window
-- Re-adaptive loss works by normalizing per-sample pressure scale — suggests the model struggles with varying Re-dependent pressure magnitudes across the dataset
-
-## Potential Next Research Directions
-
-After round 4+ results are in, priority areas to explore:
-- **Physics-informed losses**: Divergence-free velocity constraint (nabla u = 0 for incompressible); pressure-velocity coupling (Poisson-style penalty)
-- **Spectral/frequency features**: Apply RFF to encode leading/trailing edge positions at multiple scales (being tested by tanjiro, PR #1193)
-- **Convergence acceleration**: Warm restarts after first 5 epochs; gradient clipping + higher LR (being tested by fern, PR #1187)
-- **Loss combination**: Re-adaptive + higher surf_weight (being tested by edward, PR #1186)
-- **Ensemble / multi-head outputs**: Separate prediction heads per domain (raceCar single, raceCar tandem, cruise)
-- **Higher resolution surface loss**: Weight loss proportional to local curvature (leading/trailing edge gets more weight)
-- **Graph neural message passing**: Augment transformer with local neighborhood message passing for better surface gradient propagation
-- **Stochastic weight averaging (SWA)**: Average weights over last few epochs to smooth out noise in under-trained models
-- **Mixed precision / larger batches**: Increase batch size within VRAM budget to see more samples per epoch
+1. **curvature-weighted-surf-loss**: Weight surface nodes by arc-length proximity to leading/trailing edge — physics-motivated, focuses on aerodynamically critical regions
+2. **divergence-free-penalty**: Approximate ∇·u=0 constraint penalty (lambda=0.01) — physics-informed regularization
+3. **per-channel-output-head**: Three separate 1-output linear layers for Ux, Uy, p — simple but may reduce channel interference
+4. **Warm restart LR** (CosineAnnealingWarmRestarts, T_0=7): 2 full cycles within ~15-epoch budget — natural follow-on if T_max=15 fix works
+5. **Lower surf_weight sw=3**: frieren's monotonic trend suggests sw=3 may beat sw=5; worth confirming with grad clip + LR=8e-4
+6. **n_hidden=192**: Intermediate capacity scaling step between 160 (current) and 256 (nezuko's experiment); safer VRAM profile
+7. **Larger slice_num with AMP**: slice_num=128 was closed due to VRAM/epoch regression — but AMP may now make it viable with batch_size=4; revisit
