@@ -449,7 +449,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 2e-3   # was 5e-4 — scaled linearly with batch_size 4→16
     weight_decay: float = 1e-4
     batch_size: int = 16   # was 4 — peak mem at bs=4 was 21.4 GB on a 96 GB GPU; bs=16 should land in the 60–80 GB range.
     surf_weight: float = 10.0
@@ -463,6 +463,7 @@ class Config:
     huber_delta: float = 0.0  # 0 = MSE (default); >0 = Huber with this delta
     loss_type: str = "mse"  # "mse" (default; uses huber_delta to switch MSE/Huber) or "relative_mae"
     rel_mae_eps: float = 1e-6  # additive epsilon in the relative MAE denominator
+    compile: bool = True  # torch.compile(model) for extra throughput; pass --compile=false to disable
 
 
 cfg = sp.parse(Config)
@@ -507,6 +508,12 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+if cfg.compile:
+    # dynamic=True so the symbolic mesh dim from pad_collate doesn't trigger a
+    # recompile every time the batch's max-N changes.
+    model = torch.compile(model, dynamic=True)
+    print("torch.compile(model, dynamic=True) enabled")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
