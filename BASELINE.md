@@ -4,48 +4,54 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 
 ## Current best (this branch)
 
-- **PR**: #821 — "Tooling: AMP/bf16 + batch_size=16 + NaN-safe eval + torch.compile" (merged 2026-04-29)
-- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `--loss_type relative_mae` + `--lr 2e-3` + `--batch_size 16` + `--compile`
-- **val_avg/mae_surf_p** (best checkpoint, epoch 50): **55.90** (W&B `66c4gac6`, PYTHONHASHSEED=42)
-- **test_avg/mae_surf_p** (best checkpoint): **49.64** (finite across all 4 splits)
-- **Wall clock**: 22.5 min / 50 epochs (headroom vs 30-min cap; model still descending at ep50)
+- **PR**: #971 — "LR warmup (5ep linear) + flip loss_type default to relative_mae" (merged 2026-04-29)
+- **Config**: `n_layers=3, slice_num=16, n_head=1, n_hidden=128, mlp_ratio=2` + `loss_type=relative_mae` (default) + `lr=2e-3` + `batch_size=16` + `compile=True` + `warmup_epochs=5`
+- **val_avg/mae_surf_p** (best checkpoint, epoch 49): **54.70** (W&B `1xfcb5h5`, default seed — no `PYTHONHASHSEED` env var)
+- **test_avg/mae_surf_p** (best checkpoint): **48.15** (finite across all 4 splits)
+- **Wall clock**: 22.4 min / 50 epochs
 
-> ⚠️ **Seed-variance caveat**: Paired run with default seed (`1d8nkjir`) landed at val=82.97 / test=72.01. The 27-point val spread reflects lr=2e-3 + cosine-only instability. **Future hypothesis PRs should run ≥ 2 seeds** and report both. If only a single seed runs and it lands at ~80+, request a second seed before comparing to this baseline.
+> ⚠️ **Seed-swap caveat (read carefully)**: Under the new warmup schedule, the seed-to-best-basin mapping has flipped. The default seed (no `PYTHONHASHSEED`) is now the better seed (val=54.70); seed42 lands at val=67.28 — opposite of the round-3 PR #821 baseline. **Do NOT pin `PYTHONHASHSEED=42` when reproducing the new baseline.** Future PRs should run ≥ 2 seeds (default + seed42) and report both — a single seed of warmup vs. no-warmup is no longer a reliable A/B because warmup re-randomizes basin assignment per seed.
+>
+> Variance reduction is real but incomplete: 2-seed spread narrowed from 27.07 → 12.58, mean improved 8.4 pts. A 3rd seed is the next priority before letting other PRs benchmark against this number.
 
-### Per-split val metrics (best checkpoint, seed42, epoch 50)
-
-| Split | val mae_surf_p |
-|-------|---------------|
-| (not logged to summary; seed descending at ep50) | — |
-| **val_avg/mae_surf_p** | **55.90** |
-
-### Per-split test metrics (seed42, best checkpoint)
+### Per-split test metrics (default seed `1xfcb5h5`, best checkpoint)
 
 | Split | test mae_surf_p |
 |-------|----------------|
-| `test_single_in_dist`       | 63.94  |
-| `test_geom_camber_rc`       | 62.62  |
-| `test_geom_camber_cruise`   | 26.87  |
-| `test_re_rand`              | 45.11  |
-| **test_avg/mae_surf_p**     | **49.64** |
+| `test_single_in_dist`       | 67.22  |
+| `test_geom_camber_rc`       | 60.38  |
+| `test_geom_camber_cruise`   | 23.79  |
+| `test_re_rand`              | 41.20  |
+| **test_avg/mae_surf_p**     | **48.15** |
 
-### Reproduce (new defaults after PR #821)
+### Reproduce (new defaults after PR #971)
 
 ```bash
-cd target && PYTHONHASHSEED=42 python train.py \
-    --loss_type relative_mae \
-    --surf_weight 10.0 \
+cd target && python train.py \
     --epochs 50 \
-    --wandb_group tooling-amp-bs-nansafe-validate-r3 \
-    --wandb_name tooling-validate-relmae-seed42 \
+    --wandb_group lr-warmup-5ep \
+    --wandb_name lr-warmup-5ep-default \
     --agent willowpai2e2-askeladd
 ```
 
-`model_config` in `train.py` is now compound base by default: `n_layers=3, n_head=1, slice_num=16, n_hidden=128, mlp_ratio=2`. CLI defaults after PR #821: `batch_size=16`, `lr=2e-3`, `compile=True`. Note: `loss_type` default is still `"mse"` — pass `--loss_type relative_mae` explicitly until the default is flipped.
+`model_config` in `train.py` is now compound base by default: `n_layers=3, n_head=1, slice_num=16, n_hidden=128, mlp_ratio=2`. CLI defaults after PR #971: `batch_size=16`, `lr=2e-3`, `compile=True`, `loss_type="relative_mae"`, `warmup_epochs=5`. Schedule = `LinearLR(0.05→1.0)` for the first 5 epochs, then `CosineAnnealingLR(T_max=45, eta_min=1e-6)` for the remaining 45.
 
-### Alternate seed (default, W&B `1d8nkjir`)
+### Paired seed (seed42, W&B `9a9di1dz`)
 
-val=82.97 / test=72.01 — same config, worse local minimum. Highlights the need for LR warmup (tracked as next askeladd assignment).
+val=67.28 / test=57.80 — same config, worse local minimum under warmup. The warmup ramp moved seed42 from the round-3 "good basin" (55.90) into a different basin. Spread vs default seed = 12.58.
+
+---
+
+## 2026-04-29 — PR #971: LR warmup (5-epoch linear) + flip loss_type default to relative_mae (merged)
+
+- **val_avg/mae_surf_p:** 54.70 (best epoch 49, default seed `1xfcb5h5`)
+- **test_avg/mae_surf_p:** 48.15 (finite across all 4 splits)
+- **Per-split test:** single=67.22, rc=60.38, cruise=23.79, re_rand=41.20
+- **Paired seed (seed42, `9a9di1dz`):** val=67.28, test=57.80 — seed-swap vs round-3
+- **Variance:** 2-seed spread 12.58 (was 27.07), mean 60.99 (was 69.43) → narrowed and improved
+- **Delta vs previous best (PR #821 seed42):** −1.20 (−2.1%) val_avg / −1.49 (−3.0%) test_avg
+- **Wall clock:** 22.4 min / 50 epochs
+- **Status:** Merged. New CLI defaults: `loss_type="relative_mae"`, `warmup_epochs=5`. Schedule = `SequentialLR(LinearLR(start=0.05) for 5ep, then CosineAnnealingLR(T_max=45, eta_min=1e-6))`.
 
 ---
 
