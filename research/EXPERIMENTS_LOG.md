@@ -1,5 +1,63 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 01:30 — PR #920: Per-block coord skip-connection — **CLOSED (+4.1% val on pre-#914 baseline; mechanism active but biases against low-frequency splits)**
+
+- Branch: `willowpai2e4-fern/coord-skip-perblock`
+- Student: willowpai2e4-fern
+- W&B run: [`8w8fpnf6`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/8w8fpnf6)
+
+**Hypothesis.** Re-inject Fourier-encoded coords at each Transolver block via
+zero-init learnable projection per block. Predicted −1 to −3% (asymmetric
+upside argued from zero-init guarantee).
+
+**Results vs pre-#914 baseline 89.71 (and the new post-#914 baseline 81.81):**
+
+| Metric | pre-#914 baseline | this run | Δ vs pre-#914 | Δ vs post-#914 (81.81) |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` (best ep 11) | 89.714 | **93.349** | **+4.1%** ✗ | **+14.4%** ✗✗ |
+| 3-split test mean | 88.16 | 93.24 | +5.8% ✗ | +14.7% ✗ |
+
+**Per-split val (best ep 11) — diagnostic gold:**
+
+| Split | this run | pre-#914 baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 106.62 | 109.16 | **−2.3%** ✓ |
+| `val_geom_camber_rc` | 105.43 | 106.62 | −1.1% ✓ |
+| `val_geom_camber_cruise` | 70.01 | 60.60 | **+15.5%** ✗ |
+| `val_re_rand` | 91.34 | 82.47 | **+10.8%** ✗ |
+
+**Per-block coord-skip weight norms (final, all 5 blocks):**
+
+| Block | 0 | 1 | 2 | 3 | 4 |
+|---|---:|---:|---:|---:|---:|
+| Norm | 1.168 | 1.246 | 1.215 | 1.117 | 1.171 |
+
+All blocks grew monotonically from zero-init across training. **The model
+learned to use the skip — and it hurt.**
+
+**Mechanism (per-split asymmetric):** The two splits that *improved* slightly
+(single_in_dist −2.3%, camber_rc −1.1%) are high-Re raceCar regimes where
+high-frequency near-foil pressure dominates. The two splits that *regressed
+sharply* (cruise +15.5%, re_rand +10.8%) are low-Re/global-flow regimes where
+coherent low-frequency reasoning matters. Re-injecting Fourier features at
+every block biases the residual stream toward spatial-frequency features at
+the cost of low-frequency global features.
+
+**Three takeaways:**
+1. The per-block weight-norm sparkline (uniform 1.12-1.25) refutes the
+   "depth-dilutes-spatial-signal" framing. Spatial signal isn't actually
+   decaying with depth — the block-wise re-injection is over-emphasizing it.
+2. Same split asymmetry as #888 (vol-mask subsample): the four splits live on
+   different ends of the local/global-feature spectrum. Levers that amplify
+   one end systematically hurt the other.
+3. Post-#914 (SwiGLU at 81.81), the coord-skip's "engineered per-feature
+   amplification" is partially redundant with SwiGLU's data-driven per-feature
+   gating — making this PR's framing further misaligned with current arch.
+
+**Lever family COORD-INJECTION exhausted** (zero-injection baseline,
+all-blocks-additive coord-skip). Gated coord-skip with σ=0 init is a round-3
+candidate but redundant with SwiGLU. fern reassigned PR #949 (LayerScale γ_init=1e-4).
+
 ## 2026-04-29 01:00 — PR #819: Relative L2 α=0.5 (rebase #2 + Fourier PE) — **CLOSED (washed; Fourier PE absorbs equalization gain)**
 
 - Branch: `willowpai2e4-frieren/relative-l2-loss`

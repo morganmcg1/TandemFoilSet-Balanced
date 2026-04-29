@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~01:05 (**SwiGLU merged at 81.81 / test 73.04** — new best; #819 closed (washed), #914 merged; tanjiro→#938 RFF-σ10, frieren→#939 n_layers=6; **#873 EMA is the predicted next BIG compounded winner** on SwiGLU baseline, awaiting rebase)
+- **As of:** 2026-04-29 ~01:35 (**SwiGLU baseline 81.81 / test 73.04** holds; #920 closed (fern coord-skip +4.1% val, +14.4% vs post-#914), fern→#949 LayerScale γ=1e-4; #863 askeladd sent back for rebase #3 onto post-#914 + canonical seeded baseline run; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 89.714` (#820) and `3-split test mean = 88.16` (run `w9xbc0wl`)
@@ -40,18 +40,19 @@ on L1-only baseline). The compounding mechanism is well-understood.
 |---|---|---|---|---|
 | #816 | alphonse | FiLM conditioning of LayerNorm | -5 to -12% | **needs rebase onto post-#914 (81.81)** |
 | #820 | thorfinn | Fourier PE K=4 | −9.59% | **MERGED — val 89.71** |
-| #863 | askeladd | Seed determinism (infra) | variance ↓ | **needs rebase onto post-#914 + 1 canonical run** |
+| #863 | askeladd | Seed determinism (infra) | variance ↓ | **rebase #3 in progress onto post-#914 + 1 canonical seeded run** |
 | #819 | frieren | Relative L2 α=0.5 (rebase #2) | washed +0.27% | **CLOSED — Fourier PE absorbs equalization; camber_rc −4.59% orthogonal** |
 | #888 | fern | Stratified vol subsample | +3.77% actual | **CLOSED — VOLUME-MASK-SUBSAMPLING exhausted** |
-| #920 | fern | Per-block coord skip-connection | -1 to -3% | **wip (needs rebase onto #914)** |
+| #920 | fern | Per-block coord skip-connection | -1 to -3% predicted | **CLOSED +4.1% val (vs pre-#914) / +14.4% vs post-#914; mechanism active but cruise/re_rand regress sharply; COORD-INJECTION exhausted** |
 | #872 | nezuko | Domain-ID 3-class additive | +3.1% actual | **CLOSED — additive categorical fights LN** |
 | #929 | nezuko | DropPath rate=0.1 linear | -1 to -3% | **wip (needs rebase onto #914)** |
 | #873 | edward | EMA Polyak decay=0.99 | −10.46% val on pre-#820 | **needs rebase onto post-#914; predicted compound val ≈ 70-75** |
 | #880 | tanjiro | LinearNO ELU+1 | +6.92% actual | **CLOSED — attention-kernel-substitution exhausted** |
 | #914 | tanjiro | SwiGLU MLP swap | **−8.81% val, test 73.04** | **MERGED — new baseline 81.81** |
-| #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% | wip (just assigned) |
-| #939 | frieren | n_layers=6 (one extra block) | -1 to -3% | wip (just assigned) |
+| #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% | wip |
+| #939 | frieren | n_layers=6 (one extra block) | -1 to -3% | wip |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | mapping optimum | **wip (needs rebase onto #914)** |
+| #949 | fern | LayerScale γ_init=1e-4 (CaiT) | -1 to -3% | wip (just assigned, post-#914) |
 
 **Round 3 candidates (queued, contingent on round 2 outcomes):**
 
@@ -62,15 +63,39 @@ on L1-only baseline). The compounding mechanism is well-understood.
   val ≈ 72-76 if orthogonal. Bar is 81.81.
 - **EMA + FiLM + SwiGLU triple stack** — if both #873 and #816 land,
   combine. Three orthogonal levers. Predicted val ≈ 63-70.
+- **LayerScale × SwiGLU** (#949 in flight). Per-channel residual gate
+  vs per-feature FFN gate — should be orthogonal. Predicted val ≈ 79-81
+  if it works alone. Round-3 candidate to stack with EMA/FiLM if all land.
+- **LayerScale × DropPath** stack (#949 + #929) — deterministic γ-soft-start
+  + stochastic block dropping. CaiT-XL precedent. Round-3 only if both work
+  alone first.
 - **EMA decay sweep {0.995, 0.97}** — once #873 merges on SwiGLU.
 - **Categorical-FiLM (multiplicative)** — round-3 follow-up once #816 lands.
 - **n_layers sweep {4, 7}** — extends frieren's #939. Maps depth curve.
 - **RFF σ sweep {5, 20}** — extends tanjiro's #938. Cheap follow-up.
+- **Per-channel output heads** (Ux/Uy/p separate decoder MLP). Decouples
+  decoder pathways for the channel-weighted [1,1,3] target distribution.
+  Predicted -2 to -4%.
+- **Gated coord-skip with σ=0 init** (round-3 follow-up to closed #920) —
+  sigmoid gate on per-block coord re-injection. Lets the model self-suppress
+  on splits where the skip hurts. Likely redundant with SwiGLU's per-feature
+  gating; deprioritize unless SwiGLU's gates show coord-relevant features.
 - **GeGLU ablation** (F.silu → F.gelu in gate). ±0.5%, confirms paper
   citation choice. Low-priority.
 - **Multi-seed mean** — once #863 merges, seeds {0,1,2} for ≤1% ablations.
+  Askeladd's queued post-merge assignment.
 
 **Closed in round 2:**
+- #920 fern per-block coord skip-connection → val +4.1% (vs pre-#914) /
+  +14.4% (vs post-#914). Mechanism active: block norms grew uniformly to
+  1.12-1.25 across all 5 blocks (refutes the "depth dilutes spatial signal"
+  framing). Per-split asymmetry: high-Re raceCar splits (single_in_dist
+  −2.3%, camber_rc −1.1%) marginally improved; low-Re/global-flow splits
+  (cruise +15.5%, re_rand +10.8%) regressed sharply. Re-injecting Fourier
+  features at every block over-emphasizes spatial-frequency at the cost of
+  low-frequency global features. Same split asymmetry as #888 (vol-mask).
+  Post-#914, redundant with SwiGLU's per-feature gating. **Lever family
+  COORD-INJECTION exhausted.**
 - #819 frieren Relative L2 α=0.5 (rebase #2) → val +0.27% (washed), test
   +2.2%. Fourier PE absorbs the per-sample gradient equalization on heavy-tail
   samples. camber_rc exception: −4.59% (absolute-loss gradient on
@@ -132,11 +157,13 @@ on L1-only baseline). The compounding mechanism is well-understood.
   ADDITIVE-CATEGORICAL-CONDITIONING exhausted; multiplicative
   variants remain candidates.
 
-**Note on rebasing after #914 merge:** All in-flight PRs (#816, #863, #873,
-#883, #920, #929) are based on pre-SwiGLU baselines. They now need to beat
-**81.81** to qualify for merge. Students should rebase onto the updated
-advisor branch HEAD. Those that cannot beat 81.81 will be redesigned for
-round 3.
+**Note on rebasing after #914 merge:** Round-2 in-flight PRs based on
+pre-SwiGLU baselines (#816 FiLM, #863 seed determinism, #873 EMA, #883
+Fourier sweep, #929 DropPath) need rebase onto post-#914 advisor HEAD —
+they all need to beat **81.81** to qualify for merge. PRs assigned post-#914
+(#938 RFF, #939 n_layers=6, #949 LayerScale) are already on the current
+baseline. Closed in round 2 from rebase requirements: #920 fern coord-skip
+(+4.1% on pre-#914; mechanism actively biased away from low-frequency splits).
 
 ## Round 2 hypotheses ranked and ready
 
