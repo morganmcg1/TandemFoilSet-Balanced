@@ -262,6 +262,17 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Numerical sanitisation: ``data/scoring.accumulate_batch`` skips a sample
+    only if its ground truth ``y`` is fully finite, but it then computes
+    ``err * mask`` to enforce the skip — and ``0 * nan = nan`` in IEEE 754, so
+    a single non-finite y entry pollutes the entire split MAE. (One sample in
+    ``test_geom_camber_cruise`` has 761 NaN pressure values in y.)  We mirror
+    the intended per-sample skip *before* calling ``accumulate_batch``: rows
+    of ``mask`` for samples with any non-finite y are zeroed, then y is
+    replaced with finite values so the masked product is finite.  Predictions
+    are clipped to a wide-but-finite range as a defensive measure against
+    rare model overflow on extreme samples.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -275,9 +286,24 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Per-sample y-finiteness mirroring the scorer.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)  # [B]
+            keep = y_finite_per_sample.unsqueeze(-1)  # [B, 1]
+            mask = mask & keep
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Replace non-finite values so masked products are finite.
+            y_norm = torch.where(torch.isfinite(y_norm), y_norm, torch.zeros_like(y_norm))
+            y_safe = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             pred = model({"x": x_norm})["preds"]
+            # Defensive: bound pred so a rare overflow on one node cannot
+            # poison the whole split. ``y_norm`` is roughly N(0,1) so ±100 is
+            # never a real value.
+            pred = torch.where(torch.isfinite(pred), pred, torch.zeros_like(pred))
+            pred = pred.clamp(min=-100.0, max=100.0)
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -293,7 +319,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
