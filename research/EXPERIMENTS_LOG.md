@@ -1,5 +1,34 @@
 # SENPAI Research Results
 
+## 2026-04-29 20:15 — PR #1256: CosineAnnealingLR T_max=12 recalibration (alphonse) — MERGED (round-11 winner)
+
+- charliepai2f1-alphonse/cosine-schedule-recalibration-tmax12
+- Hypothesis: T_max=13 in CosineAnnealingLR was calibrated for ~15-epoch budgets, but the round-9+ stack (n_hidden=192) only completes 12 epochs in 30 min. The cosine is truncated at ~85% completion (LR ~3.04e-4 at the final epoch), wasting potential annealing benefit. Recalibrating T_max to match the actual epoch budget should bring the LR to near eta_min at the end of training without other changes. Two trials: T_max=11 (over-decay — LR climbs past eta_min by ep 12) and T_max=12 (clean fix — cosine reaches near eta_min exactly at ep 12).
+
+| Metric | PR #1256 trial B (T_max=12) | PR #1256 trial A (T_max=11) | Baseline (#1236) | Delta (B vs baseline) |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **58.332** (ep 12/12) | 59.570 (ep 12/12) | **59.121** | **-0.789 (-1.33%, improvement)** |
+| `test_avg/mae_surf_p` | **51.802** (4 splits, all finite) | — | **51.170** | +0.632 (+1.23%) — slight test regression |
+| Params | 3.47M | 3.47M | 3.47M | — |
+| VRAM | 57 GB | 57 GB | 57 GB | — |
+
+Per-split val (trial B, best epoch 12): in_dist=56.747, geom_camber_rc=73.626, geom_camber_cruise=44.084, re_rand=58.872 → avg=58.332.
+Per-split test (trial B, best epoch 12): in_dist=53.126, geom_camber_rc=64.840, geom_camber_cruise=36.136, re_rand=53.106 → avg=51.802.
+
+- Analysis: **MERGED — round-11 winner.** Pure scheduler hyperparameter recalibration with zero architecture risk: -1.3% val improvement at no compute cost. Two-trial sweep cleanly bracketed the optimum: T_max=11 over-decays past eta_min (LR rebound destabilizes late training, val=59.570, +0.4%); T_max=12 hits eta_min exactly at the final epoch (val=58.332, -1.3%). 3/4 val splits improved (in_dist, geom_cruise, re_rand); `val_geom_camber_rc` regressed (+2.0). Test metric regressed slightly (+0.6 paper-facing, +1.2%) — primarily on `geom_camber_rc` test (+2.5). val/test divergence on geom_camber_rc suggests this split is highly sensitive to schedule tail. New CLI flag `--cosine_t_max` added (default 12). Round-1→Round-11 cumulative: -56.6% val, -54.1% test.
+- Metric summary: `target/models/model-charliepai2f1-alphonse-cosine-schedule-recalibration-tmax12-20260429-192928/metrics.yaml`
+- Reproduce: `cd target/ && python train.py --agent charliepai2f1-alphonse --experiment_name "charliepai2f1-alphonse/cosine-schedule-recalibration-tmax12" --cosine_t_max 12`
+
+---
+
+## 2026-04-29 20:00 — PR #1236: Sobolev surface gradient auxiliary loss surf_grad_weight=10.0 (askeladd) — MERGED (round-10 winner)
+
+- charliepai2f1-askeladd/surf-grad-w10-r9
+- Hypothesis: Surface pressure errors along foil nodes are spatially correlated — a Sobolev-style auxiliary loss penalizing arc-length finite-difference pressure gradient errors should sharpen local gradient fidelity beyond what point-wise MAE/MSE can achieve. weight=10.0 scales gradient term to ~10% of total loss.
+- Result: val=59.121 (-0.34% vs round-9 #1244), test=51.170 (-1.43% vs #1244). MERGED as round-10 winner.
+
+---
+
 ## 2026-04-29 15:15 — NEW ASSIGNMENTS: PR #1197 (alphonse) AMP capacity scaling; PR #1198 (askeladd) online EMA loss importance sampling
 - **alphonse** (idle after round-3 PR #1160 merged): Assigned `amp-n160-capacity-scaling` (PR #1197). Hypothesis: AMP (fp16/bf16) should halve activation memory, enabling a wider model (n_hidden=160 vs 128) to fit in 30-min budget without losing epochs. Expected: ~20M more params at same ~0.689M+; more expressive; likely -2% to -5% on val if AMP is stable.
 - **askeladd** (idle after PR #1176 closed): Assigned `online-loss-importance-sampling` (PR #1198). Hypothesis: use per-sample model loss from the previous epoch as dynamic difficulty signal for WeightedRandomSampler, updated each epoch. Avoids double-counting failure of p_std version (#1176 — p_std correlated with surf_weight=10 weighting, degraded cruise coverage). Expected: -2% to -4% on val via better hard-sample utilization.
