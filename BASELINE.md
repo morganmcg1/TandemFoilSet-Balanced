@@ -1,6 +1,6 @@
 # Baseline (icml-appendix-charlie-pai2f-r1)
 
-Eight winners merged into `train.py`:
+Nine winners merged into `train.py`:
 - **PR #1101 (thorfinn)** — regime-matched schedule (warmup=1, T_max=13, eta_min=lr/100)
 - **PR #1138 (frieren)** — Random Fourier Features on (x, z), n_freq=32, sigma=1.0
 - **PR #1160 (alphonse)** — SwiGLU FFN replacing GELU MLP in TransolverBlocks (param-matched, ~0.689M)
@@ -9,10 +9,47 @@ Eight winners merged into `train.py`:
 - **PR #1198 (askeladd)** — Online loss-weighted curriculum: EMA per-sample importance weighting in loss (not sampler), ema_alpha=0.3, temperature=0.3 pow scaling, 3-epoch warmup
 - **PR #1221 (thorfinn)** — Wider FiLMNet: Linear(11→512)→GELU→Linear(512→3200), 2.70M total params
 - **PR #1183 (edward)** — Cautious AdamW: sign-agreement mask on momentum updates, rescaled by 1/mask.mean() to preserve update norm
+- **PR #1244 (edward)** — n_hidden=160→192 capacity probe: +20% hidden width, 3.47M params (+28.5%), VRAM 57 GB (vs 42 GB), 12 epochs/30-min
 
 All subsequent experiments compare against this stacked baseline.
 
-## Current best (round-8 winner — merged 2026-04-29)
+## Current best (round-9 winner — merged 2026-04-29)
+
+| Metric | Value | PR | Notes |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **59.321** (epoch 12/12, still descending) | #1244 | n_hidden=192 capacity probe; 3.47M params; VRAM 57 GB |
+| `test_avg/mae_surf_p` | **51.915** (4 splits, all finite MAE) | #1244 | `test_geom_camber_cruise` vol_loss=inf but MAE valid |
+
+Per-split val (best epoch 12):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `val_single_in_dist` | 60.116 | 0.660 | 0.388 |
+| `val_geom_camber_rc` | 71.231 | 1.267 | 0.586 |
+| `val_geom_camber_cruise` | 45.380 | 0.489 | 0.323 |
+| `val_re_rand` | 60.556 | 0.887 | 0.450 |
+| **avg** | **59.321** | 0.826 | 0.437 |
+
+Per-split test (best epoch 12):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| `test_single_in_dist` | 54.255 | 0.640 | 0.381 |
+| `test_geom_camber_rc` | 62.688 | 1.212 | 0.548 |
+| `test_geom_camber_cruise` | 38.629 | 0.457 | 0.299 |
+| `test_re_rand` | 52.089 | 0.752 | 0.416 |
+| **avg** | **51.915** | 0.765 | 0.411 |
+
+Notes:
+- n_hidden scaled 160→192 (+20%). Params: 3.47M (+28.5% vs 2.70M). VRAM peak: 57.0 GB (vs 42 GB).
+- 30-min budget now yields 12 epochs (vs 13 at n_hidden=160) — model still descending at timeout.
+- `geom_camber_rc` slightly regressed vs baseline (+0.840 on val, +1.449 on test), but 3/4 splits improved on both val and test.
+- Schedule mismatch: T_max=13 calibrated for 15 epochs but run stops at 12 — cosine still has headroom, recalibrating T_max is a candidate next experiment.
+- Improvement vs round-8 baseline: -2.2% on val (59.321 vs 60.685), -1.1% on test (51.915 vs 52.498).
+- Metric summary: `models/model-charliepai2f1-edward-n_hidden-192-capacity-probe-20260429-175705/metrics.yaml`
+- Reproduce: `cd target/ && python train.py --agent charliepai2f1-edward --experiment_name "charliepai2f1-edward/n_hidden-192-capacity-probe"`
+
+## Previous best (round-8 winner — merged 2026-04-29)
 
 | Metric | Value | PR | Notes |
 |---|---|---|---|
@@ -194,11 +231,12 @@ Notes:
 | Round-5 winner: AMP + n_hidden=160 capacity scaling | 75.750 | 64.983 | #1197 ← merged |
 | Round-6 winner: Online loss-weighted curriculum | 66.636 | 57.355 | #1198 ← merged |
 | Round-7 winner: Wider FiLMNet MLP 512 | 61.114 | 52.989 | #1221 ← merged |
-| Round-8 winner: Cautious AdamW | **60.685** | **52.498** | #1183 ← merged |
+| Round-8 winner: Cautious AdamW | 60.685 | 52.498 | #1183 ← merged |
+| Round-9 winner: n_hidden=192 capacity probe | **59.321** | **51.915** | #1244 ← merged |
 
-Round-1→Round-8 cumulative improvement: **-54.5% on val, -60.2% on test**.
+Round-1→Round-9 cumulative improvement: **-55.7% on val, -60.7% on test**.
 
-## Default config (`train.py` at HEAD, post-merge of #1183)
+## Default config (`train.py` at HEAD, post-merge of #1244)
 
 | Setting | Value |
 |---|---|
@@ -210,8 +248,9 @@ Round-1→Round-8 cumulative improvement: **-54.5% on val, -60.2% on test**.
 | Sampler | WeightedRandomSampler (balanced across 3 domains) |
 | Loss | MSE on normalized targets, vol + surf_weight·surf; **online EMA per-sample curriculum weighting** (ema_alpha=0.3, temp=0.3, 3-ep warmup) |
 | AMP | bfloat16 autocast + GradScaler + clip_grad_norm(max_norm=1.0) |
-| Model | Transolver, **n_hidden=160**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0**, **SwiGLU FFN**, **FiLM domain conditioning (wider: 512 hidden)** |
-| Params | ~2.70M (1.054M base + 1.646M FiLMNet with 512 hidden) |
+| Model | Transolver, **n_hidden=192**, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **RFF on (x,z) n_freq=32 sigma=1.0**, **SwiGLU FFN**, **FiLM domain conditioning (wider: 512 hidden)** |
+| Params | ~3.47M (+28.5% vs 2.70M at n_hidden=160) |
+| VRAM | ~57 GB (vs 42 GB at n_hidden=160) |
 
 Primary ranking metric: `val_avg/mae_surf_p` (lower is better).
 Test-time metric for paper: `test_avg/mae_surf_p`.
