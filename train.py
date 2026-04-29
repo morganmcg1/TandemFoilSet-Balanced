@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -165,6 +166,25 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+class FourierFeatures(nn.Module):
+    """Random Fourier feature encoder for 2D node coordinates.
+
+    Maps [N, 2] -> [N, 2 * num_freq] via a fixed random projection
+    B ~ N(0, sigma^2). B is registered as a buffer (not a parameter) so it
+    survives state_dict save/load but is not optimized.
+    """
+
+    def __init__(self, num_freq: int = 16, sigma: float = 5.0, seed: int = 1234):
+        super().__init__()
+        g = torch.Generator().manual_seed(seed)
+        B = torch.randn(2, num_freq, generator=g) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, xy: torch.Tensor) -> torch.Tensor:
+        proj = 2 * math.pi * (xy @ self.B)
+        return torch.cat([proj.sin(), proj.cos()], dim=-1)
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -218,17 +238,42 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def build_model_input(x: torch.Tensor, x_norm: torch.Tensor, fourier_enc: nn.Module | None) -> torch.Tensor:
+    """Build the augmented model input.
+
+    When fourier_enc is provided, the spatial dims are replaced by
+    ``[x_norm[..., :2], fourier_enc(x[..., :2])]`` (raw coords feed the
+    Fourier projection so the projection acts on physical-scale coordinates),
+    and the non-spatial features (dims 2..23) are appended unchanged from
+    ``x_norm``. When fourier_enc is None, this is a no-op returning ``x_norm``.
+    """
+    if fourier_enc is None:
+        return x_norm
+    xy_raw = x[..., :2]
+    xy_features = torch.cat([x_norm[..., :2], fourier_enc(xy_raw)], dim=-1)
+    return torch.cat([xy_features, x_norm[..., 2:]], dim=-1)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, fourier_enc=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    Implements the NaN workaround from PR #835's ``test_clean_with_workaround``
+    locally in train.py (``data.scoring`` is read-only). One test sample in
+    ``test_geom_camber_cruise`` has non-finite ground-truth on the ``p``
+    channel; ``data.scoring.accumulate_batch`` sets that sample's mask to False
+    but ``NaN * 0`` still poisons the masked sum. Here we replicate the
+    accumulator inline with ``torch.nan_to_num`` on the per-position error so
+    the bad sample is excluded cleanly across all three channels.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_skipped_samples = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -237,32 +282,48 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)  # [B]
+            n_skipped_samples += int((~y_finite_per_sample).sum().item())
+            sample_keep = y_finite_per_sample.unsqueeze(-1).expand(-1, mask.shape[-1])  # [B, N]
+            mask_kept = mask & sample_keep
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            x_in = build_model_input(x, x_norm, fourier_enc)
+            pred = model({"x": x_in})["preds"]
 
-            abs_err = (pred - y_norm).abs()
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            # Normalized-space loss (training monitoring metric).
+            abs_err_norm = (pred - y_norm).abs()
+            abs_err_norm = torch.nan_to_num(abs_err_norm, nan=0.0, posinf=0.0, neginf=0.0)
+            vol_mask = mask_kept & ~is_surface
+            surf_mask = mask_kept & is_surface
             vol_loss_sum += (
-                (abs_err * vol_mask.unsqueeze(-1)).sum()
+                (abs_err_norm * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (abs_err * surf_mask.unsqueeze(-1)).sum()
+                (abs_err_norm * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
+            # MAE accumulation in the original (denormalized) space — replicates
+            # ``data.scoring.accumulate_batch`` semantics with the NaN-poison
+            # workaround. Non-finite samples never contribute to mae_surf/n_surf.
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            err = (pred_orig.double() - y.double()).abs()
+            err = torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)
+            mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+            mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+            n_surf += int(surf_mask.sum().item())
+            n_vol += int(vol_mask.sum().item())
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_skipped_samples": float(n_skipped_samples)}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -387,6 +448,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # Re-evaluate a saved checkpoint on val + test splits, skipping training.
+    # Useful for re-evaluating with a fixed scoring path (NaN workaround) or
+    # validating a checkpoint without burning the full 30-min budget.
+    test_only_checkpoint: str | None = None
 
 
 cfg = sp.parse(Config)
@@ -415,8 +480,11 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+NUM_FOURIER_FREQ = 16
+FOURIER_SIGMA = 5.0
+
 model_config = dict(
-    space_dim=2,
+    space_dim=2 + 2 * NUM_FOURIER_FREQ,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
@@ -426,11 +494,19 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    fourier_num_freq=NUM_FOURIER_FREQ,
+    fourier_sigma=FOURIER_SIGMA,
 )
 
-model = Transolver(**model_config).to(device)
+# fourier_* keys are recorded into wandb config / model_config but not passed to
+# the Transolver constructor.
+_transolver_kwargs = {k: v for k, v in model_config.items()
+                      if k not in ("fourier_num_freq", "fourier_sigma")}
+model = Transolver(**_transolver_kwargs).to(device)
+fourier_enc = FourierFeatures(num_freq=NUM_FOURIER_FREQ, sigma=FOURIER_SIGMA).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: Transolver ({n_params/1e6:.2f}M params), "
+      f"FourierFeatures num_freq={NUM_FOURIER_FREQ} sigma={FOURIER_SIGMA}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -490,6 +566,64 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# --- Test-only re-eval mode ---
+# Load the provided checkpoint, run val + test eval with the current
+# evaluate_split (NaN workaround), write a `reeval_summary` JSONL record, exit.
+if cfg.test_only_checkpoint:
+    ckpt_path = Path(cfg.test_only_checkpoint)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"--test_only_checkpoint not found: {ckpt_path}")
+    print(f"Loading checkpoint for re-eval: {ckpt_path}")
+    state = torch.load(ckpt_path, map_location=device, weights_only=True)
+    model.load_state_dict(state)
+    model.eval()
+
+    print("Re-evaluating validation splits...")
+    val_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+        for name, loader in val_loaders.items()
+    }
+    val_avg_reeval = aggregate_splits(val_split_metrics)
+    print(f"\n  VAL  avg_surf_p={val_avg_reeval['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, val_split_metrics[name])
+
+    test_metrics_re = None
+    test_avg_re = None
+    if not cfg.skip_test:
+        print("\nRe-evaluating held-out test splits...")
+        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        test_loaders = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in test_datasets.items()
+        }
+        test_metrics_re = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+            for name, loader in test_loaders.items()
+        }
+        test_avg_re = aggregate_splits(test_metrics_re)
+        print(f"\n  TEST  avg_surf_p={test_avg_re['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, test_metrics_re[name])
+
+    _write_jsonl({
+        "type": "reeval_summary",
+        "checkpoint_path": str(ckpt_path),
+        "note": "Re-evaluated saved checkpoint with NaN-skip workaround in evaluate_split.",
+        "val_per_split": {
+            name: {k: float(v) for k, v in m.items()}
+            for name, m in val_split_metrics.items()
+        },
+        "val_avg": {k: float(v) for k, v in val_avg_reeval.items()},
+        "test_per_split": (
+            {name: {k: float(v) for k, v in m.items()} for name, m in test_metrics_re.items()}
+            if test_metrics_re is not None else None
+        ),
+        "test_avg": {k: float(v) for k, v in test_avg_re.items()} if test_avg_re is not None else None,
+    })
+    wandb.finish()
+    raise SystemExit(0)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -508,7 +642,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        x_in = build_model_input(x, x_norm, fourier_enc)
+        pred = model({"x": x_in})["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
@@ -534,7 +669,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -606,7 +741,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
