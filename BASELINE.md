@@ -368,3 +368,49 @@ cd target/ && python train.py \
   --grad_clip 1.0
 # FourierPosEncoder(n_octaves=8) replacing raw (x,z); FiLM Re-conditioning; BF16 AMP; OneCycleLR max_lr=1.2e-3; surf_weight=25.0; DropPath(0→0.1)
 ```
+
+---
+
+## 2026-04-29 23:10 — PR #1314: Fourier pos enc: normalize coords + concat raw (x,z) for aliasing fix
+
+- **Student**: charliepai2f2-nezuko
+- **Branch**: charliepai2f2-nezuko/fourier-coord-norm-concat
+- **Change**: Two correctness fixes to `FourierPosEncoder`: (1) normalize input coords to `[-1,1]` via `coord_scale=3.0` before frequency encoding, eliminating aliasing in upper octaves; (2) concatenate raw `(x,z)` alongside 32-D Fourier features (NeRF recipe) to restore the DC channel. Preprocess MLP input grows from 54-D to 56-D (`2 raw + 32 Fourier + 22 other`). Full PR #1300 stack preserved unchanged.
+
+### Best Validation Metrics (epoch 18, 30-min timeout)
+
+| Metric | Value | vs prior baseline (PR #1300) |
+|--------|-------|------------------------------|
+| **val_avg/mae_surf_p** (PRIMARY) | **69.07** | **-2.73 (-3.8%)** |
+| **test_avg/mae_surf_p** | **59.63** | **-2.96 (-4.7%)** |
+| val_avg/mae_surf_Ux | 0.911 (single_in_dist) | — |
+| val_avg/mae_surf_Uy | 0.488 (single_in_dist) | — |
+
+Per-split surface pressure MAE:
+
+| Split | val mae_surf_p | test mae_surf_p | val baseline | test baseline |
+|-------|---------------:|----------------:|-------------:|--------------:|
+| single_in_dist     | 72.49 | 62.58 | 72.78 | 63.89 |
+| geom_camber_rc     | 83.24 | 72.60 | 84.26 | 74.44 |
+| geom_camber_cruise | **51.69** | **42.11** | 56.03 | 47.11 |
+| re_rand            | **68.87** | 61.24 | 74.14 | 64.91 |
+| **avg**            | **69.07** | **59.63** | **71.80** | **62.59** |
+
+### Context
+- 18 epochs / 50 configured (hit SENPAI_TIMEOUT_MINUTES=30 at ~105s/epoch); best at epoch 18/18 (final, still descending)
+- Largest gains on OOD geometry (`geom_camber_cruise` -7.7% val, -10.6% test) and OOD Re (`re_rand` -7.1% val, -5.7% test) — consistent with the aliasing-fix hypothesis
+- Peak GPU memory: ~35.8 GB (essentially identical to PR #1300; only +2 input dims to first preprocess linear)
+- **Params: 836,183 (+768 vs 835,415 baseline)** — wider preprocess Linear(56→256) vs Linear(54→256)
+- `coord_scale=3.0` is a hard-coded constant; no new CLI flag needed
+- Metrics JSONL: `target/models/model-charliepai2f2-nezuko-fourier-coord-norm-concat-20260429-220329/metrics.jsonl`
+- Metrics YAML: `target/models/model-charliepai2f2-nezuko-fourier-coord-norm-concat-20260429-220329/metrics.yaml`
+
+### Reproduce
+```bash
+cd target/ && python train.py \
+  --agent charliepai2f2-nezuko \
+  --experiment_name "charliepai2f2-nezuko/fourier-coord-norm-concat" \
+  --grad_clip 1.0
+# FourierPosEncoder(n_octaves=8, coord_scale=3.0); raw (x,z) CONCATENATED with 32-D Fourier → 56-D preprocess input
+# Full PR #1264/PR #1300 stack: FiLM Re-conditioning, BF16 AMP, OneCycleLR(max_lr=1.2e-3, pct_start=0.3), DropPath(0→0.1), surf_weight=25
+```
