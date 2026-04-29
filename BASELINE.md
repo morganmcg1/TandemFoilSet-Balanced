@@ -4,8 +4,8 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **66.8085** (PR #1015 — longer training epochs=24, epoch 22/24) |
-| `test_avg/mae_surf_p` | **58.7266** (PR #1015) |
+| `val_avg/mae_surf_p` | **61.5855** (PR #1050 — PSN+epochs=30 stack, epoch 22/30) |
+| `test_avg/mae_surf_p` | **54.3573** (PR #1050) |
 
 **Source:** README.md prior competition results — PR #32 (morganmcg1/tandemfoil2): "Single-head nl3/sn16 triple compound"
 - W&B run: [ip8hn4tx](https://wandb.ai/wandb-applied-ai-team/senpai-kagent-v-students/runs/ip8hn4tx)
@@ -17,6 +17,36 @@
 **Config (best known):** n_layers=3, slice_num=16, n_hidden tuned
 
 ## Round 1 — Merged Winners
+
+### PR #1050 — PSN + epochs=30 stack (2026-04-29)
+**Student:** charliepai2e1-edward | **Branch:** charliepai2e1-edward/psn-plus-epochs-30
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **61.5855** (epoch 22/30 — terminated by 30-min timeout, still falling) |
+| `val_single_in_dist/mae_surf_p` | 67.2228 |
+| `val_geom_camber_rc/mae_surf_p` | 73.6675 |
+| `val_geom_camber_cruise/mae_surf_p` | 43.2827 |
+| `val_re_rand/mae_surf_p` | 62.1688 |
+| `val_avg/mae_surf_Ux` | 0.9138 |
+| `val_avg/mae_surf_Uy` | 0.4435 |
+| `val_avg/mae_vol_p` | 66.1165 |
+| `test_avg/mae_surf_p` | **54.3573** |
+| `test_single_in_dist/mae_surf_p` | 59.0436 |
+| `test_geom_camber_rc/mae_surf_p` | 69.5540 |
+| `test_geom_camber_cruise/mae_surf_p` | 35.8769 |
+| `test_re_rand/mae_surf_p` | 52.9545 |
+| `test_avg/mae_surf_Ux` | 0.8589 |
+| `test_avg/mae_surf_Uy` | 0.4120 |
+| `test_avg/mae_vol_p` | 59.5769 |
+
+**vs prior baseline (PR #1015):** 61.5855 vs 66.8085 → **-7.81% val improvement**
+**Test improvement:** 54.3573 vs 58.7266 → **-7.44% test improvement**
+**Model parameters:** 1,606,219 | **Peak VRAM:** 30.44 GB | **Train time:** 30.93 min (hit 30-min timeout, val still falling at epoch 22, LR=8.27e-5)
+**Note:** PSN (--per_sample_norm) stacked on epochs=30 delivers additive improvement over PR #1015 (no PSN). Strongest gains on test_single_in_dist (-12.5%) and test_geom_camber_cruise (-11.6%). Val curve still trending down at termination (~3%/epoch) — more training headroom exists. PSN value appears to *grow* with training length.
+**Metric summary:** `target/metrics/charliepai2e1-edward-psn-plus-epochs-30-bmlhzm78.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 30 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm`
+*(Note: n_layers=3, slice_num=16 are hardcoded in model_config dict in train.py)*
 
 ### PR #1015 — Longer training: epochs=24 on compound stack (2026-04-28)
 **Student:** charliepai2e1-edward | **Branch:** charliepai2e1-edward/longer-training-epochs-24
