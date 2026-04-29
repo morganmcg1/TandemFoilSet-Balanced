@@ -1,50 +1,77 @@
 # SENPAI Research State
-- 2026-04-29 (updated 2026-04-29 01:20) (branch: icml-appendix-charlie-pai2e-r3)
-- No recent directives from human researcher team (checked 2026-04-29 01:20)
+- 2026-04-29 (updated post-PR#947-review)
+- No recent directives from human researcher team
+- Branch: icml-appendix-charlie-pai2e-r3
 
 ## Current Baseline
-- **Source**: Per-sample Re-aware loss normalization (PR #919, fern)
-- **val_avg/mae_surf_p = 87.614** (lower is better)
-- **test_avg/mae_surf_p = 84.461** (3-split mean, cruise excluded due to known 1-sample GT bug)
-- Per-split val: single_in_dist=104.985, geom_camber_rc=95.516, geom_camber_cruise=66.346, re_rand=83.608
-- Config: Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2), AdamW(lr=5e-4, wd=1e-4), CosineAnnealingLR(T_max=15 + 1-epoch warmup), batch_size=4, surf_weight=10, epochs=50, per-sample Re-aware RMS normalization
+- **Source**: EMA weights decay=0.99 (PR #895, thorfinn) — MERGED
+- **val_avg/mae_surf_p = 87.233** (lower is better)
+- **test_avg/mae_surf_p = 85.166** (3-split mean, cruise excluded due to known 1-sample GT bug)
+- Per-split val: single_in_dist=104.130, geom_camber_rc=97.553, geom_camber_cruise=64.943, re_rand=82.304
+- Config: Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2), AdamW(lr=5e-4, wd=1e-4), CosineAnnealingLR(T_max=15 + 1-epoch warmup), batch_size=4, surf_weight=10, epochs=50, EMA decay=0.99
+- Reproduce: `cd target/ && python train.py --lr 5e-4 --surf_weight 10 --batch_size 4 --epochs 50`
 
-## Key Pending Results (confirmed winners awaiting rebase)
-- **PR #892 (tanjiro, OneCycleLR, max_lr=1e-3)**: val_avg=82.019 on OLD baseline (94.387); sent back for rebase. Merge immediately on resubmission.
-- **PR #928 (frieren, Multi-scale RFF σ=1,5 on normalized coords)**: val_avg=84.105 on OLD baseline (94.387); still beats new baseline (87.614). Sent back for rebase 2026-04-29. Merge immediately on resubmission.
+## Merged Baseline History
+| PR  | Student   | Technique                              | val_avg/mae_surf_p |
+|-----|-----------|----------------------------------------|-------------------|
+| #835| nezuko    | MAE/L1 loss (baseline from MSE)        | 104.058            |
+| #889| fern      | CosineAnnealingLR T_max=15 + 1-ep warmup | 94.387           |
+| #919| fern      | Per-sample Re-aware RMS loss norm      | 87.614             |
+| **#895**| **thorfinn** | **EMA weights decay=0.99**       | **87.233** ← current best |
+
+## Confirmed Winners Pending Rebase
+All three beat the baseline (87.233) but have merge conflicts:
+
+| PR  | Student   | Technique                              | val_avg result | Status |
+|-----|-----------|----------------------------------------|---------------|--------|
+| **#928** | frieren | Multi-scale RFF σ=(1,5) on normalized coords | **80.274** | Sent back for rebase |
+| **#892** | tanjiro | OneCycleLR max_lr=1e-3, ONECYCLE_EPOCHS=15 | **81.018** | Sent back for rebase |
+| **#947** | alphonse | OneCycleLR schedule tuning (16ep, pct_start=0.3) | **79.331** | Sent back for rebase |
+
+Merge order when clean: #947 first (79.331), #928 second (80.274), #892 third (81.018).
+Expected new baseline once all merged: ~79 or below.
 
 ## Current WIP Experiments
 
-| PR  | Student    | Hypothesis                                                      | Status |
-|-----|------------|-----------------------------------------------------------------|--------|
-| #950 | fern      | OneCycleLR + batch_size=8 with sqrt-scaled max_lr=1.41e-3      | WIP (just assigned) |
-| #947 | alphonse  | OneCycleLR schedule tuning: ONECYCLE_TOTAL_EPOCHS=16 and pct_start=0.2 variants | WIP (just assigned) |
-| #928 | frieren   | Multi-scale RFF (σ=1,5) on normalized coords                    | WIP (rebase pending) |
-| #925 | nezuko    | FiLM conditioning on log(Re) for Re-aware representations       | WIP    |
-| #905 | askeladd  | Signed-log pressure target normalization for heavy-tail Re      | WIP    |
-| #903 | edward    | slice_num=128 + bf16 AMP + NaN-safe eval on MAE baseline        | WIP    |
-| #895 | thorfinn  | EMA of model weights (decay=0.999) for evaluation               | WIP    |
-| #892 | tanjiro   | OneCycleLR (max_lr=1e-3) — WINNER, pending rebase              | WIP (rebase) |
+| PR  | Student    | Hypothesis                                                       | Status |
+|-----|------------|------------------------------------------------------------------|--------|
+| #984 | thorfinn  | Combine Multi-scale RFF + OneCycleLR (compound bet)             | WIP    |
+| #982 | askeladd  | Increase RFF num_freq 32→64 for higher spectral resolution      | WIP    |
+| #950 | fern      | OneCycleLR + batch_size=8 with sqrt-scaled max_lr=1.41e-3       | WIP    |
+| #947 | alphonse  | OneCycleLR schedule tuning (sent back for rebase)               | WIP (rebase) |
+| #928 | frieren   | Multi-scale RFF (sent back for 2nd rebase)                      | WIP (rebase) |
+| #925 | nezuko    | FiLM conditioning on log(Re) for Re-aware representations        | WIP    |
+| #892 | tanjiro   | OneCycleLR (sent back for 2nd rebase)                           | WIP (rebase) |
 
 ## Current Research Themes
 
-1. **LR scheduling** (most impactful direction): OneCycleLR (PR #892, confirmed winner), OneCycleLR schedule tuning (PR #947), EMA weights (PR #895), OneCycleLR + batch=8 (PR #950)
-2. **Positional encoding / input representation**: Multi-scale RFF (PR #928, confirmed winner on old baseline, pending rebase), FiLM log(Re) conditioning (PR #925)
-3. **Loss function engineering**: Per-sample Re normalization (merged PR #919), signed-log pressure transform (PR #905)
-4. **Architecture/capacity**: slice_num=128 with AMP (PR #903)
+1. **LR scheduling** (most impactful direction so far): OneCycleLR confirmed winner on 3 independent experiments (PRs #892, #947), schedule tuning confirms cycle_length = realized_epochs+1 is the key knob
+2. **Positional encoding / input representation**: Multi-scale RFF confirmed winner (#928), RFF num_freq scaling (#982), FiLM log(Re) conditioning (#925)
+3. **Loss function engineering**: Per-sample Re normalization (merged #919), EMA weights (merged #895) — confirmed orthogonal wins
+4. **Compound bets**: Multi-scale RFF + OneCycleLR together (#984, thorfinn)
 
-## Compound Wins Expected
-Once PR #892 (OneCycleLR) and PR #928 (Multi-scale RFF) rebase and merge sequentially, the expected new baseline will be in the low-80s or below. Both techniques are orthogonal (schedule vs input representation) and should compound.
+## Key Research Insights
+1. MAE loss > MSE for high-Re pressure surrogate (merged #835)
+2. CosineAnnealingLR T_max=15 >> T_max=50 for 14-epoch budget (merged #889)
+3. Per-sample Re-aware loss normalization improves cross-Re generalization (merged #919)
+4. EMA weights decay=0.99: implicit ensembling, orthogonal gain (merged #895)
+5. Multi-scale RFF encoding at σ=1,5: spectral bias inductive bias, ~8% improvement (pending #928)
+6. OneCycleLR max_lr=1e-3, 16ep cycle: ~9% improvement via deeper annealing phase (pending #947)
+7. The OneCycleLR mechanism: cycle_length = realized_budget+2 keeps final epoch in steep cosine descent
+8. Camber-holdout splits (geom_camber_rc) are hardest — biggest room for improvement
 
 ## Potential Next Research Directions
 
-1. **OneCycleLR schedule tuning on current baseline**: pct_start=0.2 (shorter warmup, more annealing time), ONECYCLE_TOTAL_EPOCHS=16/17 — assigned PR #947
-2. **OneCycleLR + batch_size=8 with sqrt-scaled max_lr=1.41e-3**: More samples per step, higher peak LR — assigned PR #950
-3. **Multi-scale RFF + OneCycleLR combination**: Once both are individually merged, combine for compound gain
-4. **Increase RFF num_freq from 32→64**: Frieren's own suggestion; Aero-Nef uses 64-128, cheap to try
-5. **Three-scale RFF (σ=0.3, 1.0, 5.0)**: Add very-low-frequency global structure encoding
-6. **surf_weight re-sweep with OneCycleLR**: surf_weight=10 was optimal for cosine; deeper cool-down may shift optimum. Sweep {5, 10, 20, 30}
-7. **Geometry encoding**: Dedicated encoding of NACA parameters (camber M, position P, thickness T) as positional features — relevant for camber-holdout generalization
-8. **Adaptive surf_weight curriculum**: Ramp surf_weight from 10→30 as training converges; synergizes with OneCycleLR's deep annealing phase
-9. **KNN/physics-aware attention bias**: Bias Transolver attention by mesh distance to concentrate capacity near foil surface
-10. **Learnable RFF basis (SAFE-NET style)**: Make B1, B2 learnable rather than fixed; frieren's suggestion from PR #928
+### High priority (once rebase winners merge)
+1. **OneCycleLR cycle=17, pct_start=0.3**: Alphonse's own suggestion — epoch-14 LR was still 7.7e-5, one more epoch pushes it further down the slope. Low risk, cheap.
+2. **max_lr sweep around 1e-3**: Variants: {8e-4, 1.2e-3, 1.5e-3} with the confirmed 16ep cycle shape.
+3. **Compound: RFF + OneCycle + EMA all together** (once #928 and #947 merged individually).
+
+### Near-term
+4. **surf_weight re-sweep with OneCycleLR**: surf_weight=10 tuned for cosine; OneCycleLR's higher peak LR may shift optimum. Sweep {5, 10, 15, 20}.
+5. **Geometry-aware NACA features + RFF encoding**: NACA parameters (dims 15-21) could benefit from RFF encoding alongside (x,z). Critical for camber-holdout generalization.
+6. **Three-scale RFF (σ=0.3, 1.0, 5.0)**: Add very-low-frequency global structure encoding.
+7. **Learnable RFF basis (SAFE-NET style)**: Make B1, B2 learnable rather than fixed.
+8. **Adaptive surf_weight curriculum**: Ramp surf_weight from 5→20 as training converges.
+9. **EMA decay sweep with OneCycleLR**: Optimal EMA decay may shift under OneCycleLR (shorter effective training horizon).
+10. **Pressure-specific architecture**: separate MLP head for pressure channel.

@@ -107,6 +107,30 @@ Two carry-over PRs from round 1 returned; neither beat the merged MAE baseline (
 - Branch: `charliepai2e3-askeladd/higher-surf-weight` (closed)
 - Result: 122.96 val. Originally sent back from round 1 for an MAE-based variation, but askeladd and advisor agreed the MAE/L1 loss change in #835 already addresses the high-Re pressure outlier concern that motivated higher surf_weight. **Closed**, no re-run needed.
 
+## 2026-04-29 — PR #947: OneCycleLR schedule tuning (alphonse) — SENT BACK FOR REBASE
+
+- Branch: `charliepai2e3-alphonse/onecycle-schedule-tuning`
+- Hypothesis: OneCycleLR with ONECYCLE_TOTAL_EPOCHS slightly above realized epoch budget (~14) keeps final epochs in steepest cosine descent. Variant A: epochs=16, pct_start=0.3; Variant B: epochs=15, pct_start=0.2.
+
+| Metric                  | Baseline #895 | Variant A (16ep, pct_start=0.3) | Variant B (15ep, pct_start=0.2) |
+|-------------------------|---------------|----------------------------------|----------------------------------|
+| val_avg/mae_surf_p      | 87.233        | **79.331** (-9.05%)              | 80.761 (-7.40%)                  |
+| val_single_in_dist      | 104.130       | 94.176                           | 89.578                           |
+| val_geom_camber_rc      | 97.553        | 90.853                           | 91.268                           |
+| val_geom_camber_cruise  | 64.943        | 58.714                           | 62.267                           |
+| val_re_rand             | 82.304        | 73.581                           | 79.933                           |
+| test_avg (3-split)      | 85.166        | **78.063**                       | 78.208                           |
+| Best epoch              | —             | 14                               | 14                               |
+| Wall-clock (min)        | —             | 31.0                             | 31.2                             |
+
+- Metrics paths: `target/runs/onecycle-tuning-variant-a/metrics.jsonl`, `target/runs/onecycle-tuning-variant-b/metrics.jsonl`
+
+**Analysis:** Strong result — Variant A (16ep, pct_start=0.3) achieves val_avg=79.331, beating the current best (87.233) by 9.05%. This confirms the original PR #892 OneCycleLR insight holds on the current baseline and the cycle-length hypothesis: setting total_epochs one above the realized budget keeps the final epoch in the steep descent region. Variant B (epoch-14 LR near floor) confirms the mechanism — once the LR plateaus too early, convergence stalls.
+
+Key LR trajectory insight: Variant A epoch-14 LR=7.74e-5 (still descending), Variant B epoch-14 LR=1.79e-5 (near floor). The gradient signal difference fully explains the performance gap.
+
+**Decision: SENT BACK FOR REBASE** — merge conflict because the advisor branch was updated (PR #895 merged after this PR was created). Alphonse must rebase onto icml-appendix-charlie-pai2e-r3, re-run, and resubmit. Target: val_avg < 87.233. Expected outcome: confirmed win at ~79.3.
+
 ### Cross-cutting findings from Round 1
 1. **MAE loss is a clean win** — every future experiment must build on it. The fix is in `train.py`.
 2. **The 30-min/14-epoch budget is the binding constraint.** Schedules tuned for 50 epochs (cosine T_max=50, 5-epoch warmup) are mistuned. Future experiments must adjust schedules to the realized ~14-epoch budget.
