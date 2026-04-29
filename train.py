@@ -258,15 +258,85 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Test-time augmentation (vertical flip)
+# ---------------------------------------------------------------------------
+
+# dsdf (cols 4-11) encodes 8 ray-cast distances at angles {0,45,...,315}°.
+# Under y -> -y, each direction maps to its y-mirror partner. Verified by
+# matching mirror-pair nodes in cruise samples (ch1 negates, ch3 negates,
+# ch4/ch8 self-fix, ch5<->ch11, ch6<->ch10, ch7<->ch9).
+DSDF_YFLIP_PERM = [4, 11, 10, 9, 8, 7, 6, 5]
+
+_TTA_SANITY_PRINTED = False
+
+
+def vflip_input(x_raw: torch.Tensor) -> torch.Tensor:
+    """Apply the vertical-flip (y -> -y) symmetry transform to raw inputs.
+
+    Flips: pos_y (1), saf[1] (3, found y-signed, |corr(pos_y)|=0.99),
+    dsdf 8-direction permutation (4-11), AoA1 (14), AoA2 (18). All other
+    columns (saf[0], is_surface, log_Re, NACA, gap, stagger) are y-invariant.
+    """
+    x_flipped = x_raw.clone()
+    x_flipped[..., 1] *= -1
+    x_flipped[..., 3] *= -1
+    x_flipped[..., 4:12] = x_raw[..., DSDF_YFLIP_PERM]
+    x_flipped[..., 14] *= -1
+    x_flipped[..., 18] *= -1
+    return x_flipped
+
+
+def tta_predict(model, x_raw: torch.Tensor, x_norm: torch.Tensor,
+                stats: dict) -> torch.Tensor:
+    """Forward + averaged-mirror prediction. Returns normalized [B, N, 3]."""
+    global _TTA_SANITY_PRINTED
+    pred1 = model({"x": x_norm})["preds"]
+
+    x_flip = vflip_input(x_raw)
+    x_flip_norm = (x_flip - stats["x_mean"]) / stats["x_std"]
+    pred2 = model({"x": x_flip_norm})["preds"]
+    pred2 = pred2.clone()
+    pred2[..., 1] *= -1  # un-flip Uy back to original frame
+
+    if not _TTA_SANITY_PRINTED:
+        print("\n=== TTA sanity check (first batch) ===")
+        print(f"  Sample 0, node 0:")
+        print(f"    pos        : ({x_raw[0,0,0].item():+.4f}, {x_raw[0,0,1].item():+.4f})"
+              f" -> ({x_flip[0,0,0].item():+.4f}, {x_flip[0,0,1].item():+.4f})")
+        print(f"    saf        : [{x_raw[0,0,2].item():+.4f}, {x_raw[0,0,3].item():+.4f}]"
+              f" -> [{x_flip[0,0,2].item():+.4f}, {x_flip[0,0,3].item():+.4f}]")
+        print(f"    dsdf raw   : {[f'{v:+.2f}' for v in x_raw[0,0,4:12].tolist()]}")
+        print(f"    dsdf flip  : {[f'{v:+.2f}' for v in x_flip[0,0,4:12].tolist()]}")
+        print(f"    AoA1, AoA2 : ({x_raw[0,0,14].item():+.4f}, {x_raw[0,0,18].item():+.4f})"
+              f" -> ({x_flip[0,0,14].item():+.4f}, {x_flip[0,0,18].item():+.4f})")
+        print(f"  pred1[0,0]: Ux={pred1[0,0,0].item():+.4f} "
+              f"Uy={pred1[0,0,1].item():+.4f} p={pred1[0,0,2].item():+.4f}")
+        print(f"  pred2[0,0] (Uy un-flipped): Ux={pred2[0,0,0].item():+.4f} "
+              f"Uy={pred2[0,0,1].item():+.4f} p={pred2[0,0,2].item():+.4f}")
+        avg = 0.5 * (pred1 + pred2)
+        print(f"  avg [0,0] : Ux={avg[0,0,0].item():+.4f} "
+              f"Uy={avg[0,0,1].item():+.4f} p={avg[0,0,2].item():+.4f}")
+        print(f"  finite check: pred1={torch.isfinite(pred1).all().item()} "
+              f"pred2={torch.isfinite(pred2).all().item()}")
+        _TTA_SANITY_PRINTED = True
+
+    return 0.5 * (pred1 + pred2)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   tta: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``tta`` is True, predictions are averaged with the vertical-flipped
+    forward pass (zero-training-cost variance reduction via y-mirror symmetry).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -282,7 +352,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = (
+                tta_predict(model, x, x_norm, stats) if tta
+                else model({"x": x_norm})["preds"]
+            )
 
             sq_err = (pred - y_norm) ** 2
             abs_err = (pred - y_norm).abs()
@@ -509,6 +582,7 @@ class Config:
     re_stratify: bool = True  # round-robin Re-quintile mini-batches (overrides domain-balanced sampler)
     n_re_quintiles: int = 5
     re_stratify_seed: int = 42
+    tta: bool = False  # test-time augmentation: average pred(x) and pred(vflip(x)) at val/test
 
 
 if __name__ == "__main__":
@@ -673,7 +747,8 @@ if __name__ == "__main__":
         # --- Validate ---
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 tta=cfg.tta)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -741,11 +816,13 @@ if __name__ == "__main__":
                 for name, ds in test_datasets.items()
             }
             test_metrics = {
-                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                     tta=cfg.tta)
                 for name, loader in test_loaders.items()
             }
             test_avg = aggregate_splits(test_metrics)
-            print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+            print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}"
+                  f"{' [TTA]' if cfg.tta else ''}")
             for name in TEST_SPLIT_NAMES:
                 print_split_metrics(name, test_metrics[name])
 
@@ -757,6 +834,31 @@ if __name__ == "__main__":
                 test_log[f"test_{k}"] = v
             wandb.log(test_log)
             wandb.summary.update(test_log)
+
+            # Same-checkpoint TTA-off comparison: re-evaluate test without TTA
+            # so we can attribute any delta cleanly to the inference-time avg.
+            if cfg.tta:
+                print("\n  Re-evaluating test without TTA (same checkpoint, baseline comparison)...")
+                test_metrics_no_tta = {
+                    name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                         tta=False)
+                    for name, loader in test_loaders.items()
+                }
+                test_avg_no_tta = aggregate_splits(test_metrics_no_tta)
+                print(f"  TEST (no-TTA) avg_surf_p={test_avg_no_tta['avg/mae_surf_p']:.4f}  "
+                      f"vs TTA={test_avg['avg/mae_surf_p']:.4f}  "
+                      f"(delta={test_avg['avg/mae_surf_p']-test_avg_no_tta['avg/mae_surf_p']:+.4f})")
+                for name in TEST_SPLIT_NAMES:
+                    print_split_metrics(name, test_metrics_no_tta[name])
+
+                no_tta_log: dict[str, float] = {}
+                for split_name, m in test_metrics_no_tta.items():
+                    for k, v in m.items():
+                        no_tta_log[f"test_no_tta/{split_name}/{k}"] = v
+                for k, v in test_avg_no_tta.items():
+                    no_tta_log[f"test_no_tta_{k}"] = v
+                wandb.log(no_tta_log)
+                wandb.summary.update(no_tta_log)
 
         save_model_artifact(
             run=run,
