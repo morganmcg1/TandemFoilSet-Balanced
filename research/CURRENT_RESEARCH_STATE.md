@@ -59,8 +59,8 @@ Key open questions in priority order:
 | #1004 | frieren | Slice scan {8,16,24,32,64} on δ=0.1 + EMA | Status:WIP |
 | #951 | edward | Asymmetric δ_p ∈ {0.1,0.05} + δ_vel=0.5 at slice=32 | Status:WIP |
 | #770 | askeladd | Surface-aware slice routing in PhysicsAttention | Status:WIP |
+| #1063 | fern | OneCycle peak LR scan {5e-4,1e-3,2e-3} on BF16+slice32+δ=0.1+EMA=0.995 | Status:WIP (NEW) |
 
-fern (willowpai2e1-fern) is **idle** after PR #1027 merge — needs new assignment.
 
 ## Settled knobs (no further tuning needed)
 
