@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~02:55 (**SwiGLU unseeded best 81.81 / test 73.04** holds; **#863 MERGED — canonical seeded baseline `--seed 0 = 85.14`, bit-perfect determinism on single-GPU**; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, mechanism diagnosed: no low-freq channel); #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #883 closed (Fourier K-axis settled), thorfinn→#955 per-channel heads; #920 closed (coord-skip), fern→#949 LayerScale; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase; askeladd→3-seed mean follow-up assigned. **NEW THEME: schedule-budget mismatch from #939 affects ALL pre-#914 PRs that were "still descending" at timeout. NEW INFRA: borderline-ablation contract — PRs with <2% predicted Δ must run `--seed {0,1,2}` mean ± std.**)
+- **As of:** 2026-04-29 ~03:15 (**SwiGLU unseeded best 81.81 / test 73.04** holds; **#863 MERGED — canonical seeded baseline `--seed 0 = 85.14`, bit-perfect determinism**; **#955 closed (per-channel heads +2.7% val / +4.1% test; cross-channel coupling load-bearing for single_in_dist), thorfinn→#979 pressure-only-head variant**; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, mechanism diagnosed: no low-freq channel); #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #920 closed (coord-skip), fern→#949 LayerScale; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase; askeladd→#972 3-seed mean follow-up assigned. **NEW THEME: schedule-budget mismatch from #939 affects ALL pre-#914 PRs that were "still descending" at timeout. NEW INFRA: borderline-ablation contract — PRs with <2% predicted Δ must run `--seed {0,1,2}` mean ± std.**)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best (unseeded):** `val_avg/mae_surf_p = 81.81` (#914), `test_avg = 73.04` (4-split, finite), `3-split test mean = 81.28` (run `2akpdg9t`)
@@ -54,7 +54,8 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #939 | frieren | n_layers=6 (one extra block) | -1 to -3% predicted | **CLOSED +4.7% val (85.65); under-trained at timeout (11/11 epochs), not under-capacity; CAPACITY-WITHIN-BUDGET-DEPTH-AXIS exhausted at this budget** |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | mapping optimum | **CLOSED — K=8 −0.43% noise-bounded; K=4 settled; FOURIER-BAND-SWEEP-AXIS-ALIGNED exhausted** |
 | #949 | fern | LayerScale γ_init=1e-4 (CaiT) | -1 to -3% | wip |
-| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | wip |
+| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | **CLOSED +2.7% val / +4.1% test; mechanism active (head_p ×2.22 vs Ux ×1.57) but cross-channel coupling load-bearing for single_in_dist (+13% val regression); thorfinn→#979 pressure-only variant** |
+| #979 | thorfinn | Pressure-only head (decouple only p, keep Ux+Uy shared) | -1 to -3% | wip (just assigned, post-#914+#863) |
 | #963 | frieren | Schedule-to-budget T_max=13 (cosine match horizon) | -1 to -3% | wip (just assigned, post-#914) |
 | #972 | askeladd | 3-seed mean canonical (--seed {0,1,2}) | replace single-seed noise → tight ranking quantity | wip (just assigned, post-#863+#914) |
 
@@ -93,9 +94,16 @@ on L1-only baseline). The compounding mechanism is well-understood.
   follow-up #2 from #938 rebase #1). Keep the 4 axis-aligned octaves AND
   add 8 random freqs at σ=10 on top. Tests whether RFF can *augment*
   rather than *replace*. Only if RFF-as-replacement fails on σ∈{2,5}.
-- **Per-channel output heads** (Ux/Uy/p separate decoder MLP). Decouples
-  decoder pathways for the channel-weighted [1,1,3] target distribution.
-  Predicted -2 to -4%. **In flight: thorfinn #955 (post-#914 baseline).**
+- **Per-channel output heads (full Ux/Uy/p decoupling)** — **CLOSED #955
+  +2.7% val / +4.1% test**. Mechanism active (head_p specialized ×2.22 vs
+  Ux ×1.57) but cross-channel coupling was load-bearing for single_in_dist
+  generalization. Lever family DECODER-PER-CHANNEL-FULL exhausted.
+- **Pressure-only head decoupling** — **NEW round-3 candidate, IN FLIGHT
+  as #979 (thorfinn)**. Decouple ONLY head_p; keep Ux+Uy on shared
+  2-channel head. Tests whether pressure-specific capacity benefit can
+  be preserved without Ux/Uy over-specialization. +16K params (half of
+  #955's footprint). If this also fails, broader DECODER-DECOUPLING
+  family is settled.
 - **Gated coord-skip with σ=0 init** (round-3 follow-up to closed #920) —
   sigmoid gate on per-block coord re-injection. Lets the model self-suppress
   on splits where the skip hurts. Likely redundant with SwiGLU's per-feature

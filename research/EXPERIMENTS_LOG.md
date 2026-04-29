@@ -1,5 +1,63 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 03:10 — PR #955: Per-channel output heads — **CLOSED (val +2.7% / test +4.1%; mechanism active but cross-channel coupling load-bearing)**
+
+- Branch: `willowpai2e4-thorfinn/per-channel-output-heads`
+- Student: willowpai2e4-thorfinn
+- W&B run: [`xeq35njb`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/xeq35njb)
+
+**Hypothesis.** Replace shared 2-layer output MLP with 3 separate
+per-channel heads (Ux/Uy/p). Predicted −2 to −4% val. Actual: **+2.7%
+val / +4.1% test regression**.
+
+**Results vs unseeded best 81.81 / test 73.04 (`2akpdg9t`):**
+
+| Metric | Baseline | PCH | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.81 | 84.03 | +2.7% ✗ |
+| `test_avg/mae_surf_p` | 73.04 | 76.05 | +4.1% ✗ |
+| Param count | 661,735 | 694,759 | +33,024 (+5.0%) |
+| Wall time | 30.6 min | 31.5 min | +2.9% |
+
+**Per-split (split-level prediction inverted):**
+
+| Split | val Δ | test Δ | predicted | actual |
+|---|---:|---:|---|---|
+| `single_in_dist` | +13.10% ✗ | +18.45% ✗ | gain (modest) | worst regression |
+| `geom_camber_rc` | +0.57% ≈ | +3.66% ≈ | gain MOST | flat |
+| `geom_camber_cruise` | **−6.29%** ✓ | **−6.83%** ✓ | smallest gain | only winner |
+| `re_rand` | −0.93% ≈ | −5.30% ✓ | modest gain | mild gain |
+
+**Mechanism (mostly landed, but partly inverted):**
+
+- Per-head specialization IS real: head_p `linear_2` ×2.22 vs head_Ux
+  ×1.57 (1.41× ratio, in predicted band 1.3-1.8×). ✓
+- BUT velocity heads specialized just as aggressively: head_Uy
+  `linear_2` ×2.05. ✗
+- **Shared decoder was acting as cross-channel regularization.**
+  Removing it let *every* channel pull capacity to itself, not just
+  pressure. On single_in_dist (high-magnitude pressure samples), the
+  velocity-head over-specialization hurt: test Ux MAE went 1.354 →
+  1.820 (+34%).
+- Cruise improvement (−6.3% val / −6.8% test) is real, but driven by
+  raw decoder capacity (+33K params) on the smooth-pressure regime,
+  not by specialization-for-generalization (val/test gap unchanged
+  22.5% → 23.2%).
+
+**Decision: CLOSE — but mechanism diagnostic remains live.**
+Lever family DECODER-PER-CHANNEL-FULL exhausted. Student's #1
+follow-up — **DECODER-PER-CHANNEL-PRESSURE-ONLY** — assigned as PR
+#979: decouple ONLY head_p, keep Ux+Uy on shared 2-channel head.
+Tests whether "pressure-specific capacity" benefit can be preserved
+without "Ux/Uy over-specialization" hurting single_in_dist. Predicted
+−1 to −3% val. Real chance of winning with a smaller blast radius
+(+16K params instead of +33K). If this also fails, the broader
+DECODER-DECOUPLING family is settled.
+
+**Run was on pre-#863 tree (unseeded).** Comparison was vs unseeded
+best 81.81. Future PRs (including thorfinn's #979) will use `--seed 0`
+and compare against canonical seeded baseline 85.14 (`j1r5y758`).
+
 ## 2026-04-29 02:50 — PR #863 (rebase #3 results): Seed determinism — **MERGED as canonical infra (val=85.14 @ seed=0)**
 
 - Branch: `willowpai2e4-askeladd/seed-determinism`
