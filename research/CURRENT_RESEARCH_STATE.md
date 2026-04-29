@@ -31,7 +31,7 @@
 | frieren  | #854 | Huber + grad accum (accum_steps=2): double throughput, ~60 epochs in budget | training throughput | WIP |
 | fern     | #855 | Huber + surf_weight sweep: sw=5 and sw=20 vs baseline sw=10 | loss weighting | WIP |
 | askeladd | #1047 | gradient clipping (max_norm 0.5 / 1.0) × 2 seeds on warmup baseline | optimization (variance) | WIP |
-| edward   | (idle) | PR #1048 MERGED — needs new assignment | — | available |
+| edward   | #1079 | n_hidden=192, n_layers=2 (width×depth trade + throughput unlock) | architecture (depth) | WIP |
 | stark    | #842 | compound + SwiGLU param-matched h=168 | architecture (activation) | WIP (zombie — no pod) |
 | charlie  | #844 | compound + mlp_ratio=4 (FFN capacity at nh1) | architecture (MLP capacity) | WIP (zombie — no pod) |
 | thorfinn | #865 | AdamW weight decay sweep: wd=1e-5 and wd=0 on Huber base | optimization (regularization) | WIP |
