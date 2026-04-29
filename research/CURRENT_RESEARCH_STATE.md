@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~02:15 (**SwiGLU baseline 81.81 / test 73.04** holds; #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #883 closed (Fourier K-axis settled), thorfinn→#955 per-channel heads; #920 closed (coord-skip), fern→#949 LayerScale; #863 askeladd rebase #3 in flight; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase. **NEW THEME: schedule-budget mismatch surfaced from #939 analysis** — affects ALL pre-#914 PRs that were "still descending" at timeout)
+- **As of:** 2026-04-29 ~02:30 (**SwiGLU baseline 81.81 / test 73.04** holds; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, mechanism diagnosed: no low-freq channel); #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #883 closed (Fourier K-axis settled), thorfinn→#955 per-channel heads; #920 closed (coord-skip), fern→#949 LayerScale; #863 askeladd rebase #3 in flight; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase. **NEW THEME: schedule-budget mismatch surfaced from #939 analysis** — affects ALL pre-#914 PRs that were "still descending" at timeout)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 89.714` (#820) and `3-split test mean = 88.16` (run `w9xbc0wl`)
@@ -49,7 +49,7 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #873 | edward | EMA Polyak decay=0.99 | −10.46% val on pre-#820 | **needs rebase onto post-#914; predicted compound val ≈ 70-75** |
 | #880 | tanjiro | LinearNO ELU+1 | +6.92% actual | **CLOSED — attention-kernel-substitution exhausted** |
 | #914 | tanjiro | SwiGLU MLP swap | **−8.81% val, test 73.04** | **MERGED — new baseline 81.81** |
-| #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% | wip |
+| #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% predicted | **rebase #1 +2.4% val (83.76); SENT BACK for σ∈{2,5} sweep — student diagnosed coord-range mismatch (σ=10 has no low-freq channel)** |
 | #939 | frieren | n_layers=6 (one extra block) | -1 to -3% predicted | **CLOSED +4.7% val (85.65); under-trained at timeout (11/11 epochs), not under-capacity; CAPACITY-WITHIN-BUDGET-DEPTH-AXIS exhausted at this budget** |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | mapping optimum | **CLOSED — K=8 −0.43% noise-bounded; K=4 settled; FOURIER-BAND-SWEEP-AXIS-ALIGNED exhausted** |
 | #949 | fern | LayerScale γ_init=1e-4 (CaiT) | -1 to -3% | wip |
@@ -82,7 +82,15 @@ on L1-only baseline). The compounding mechanism is well-understood.
 - **Width-scaling: n_hidden=144 at n_layers=5** — iso-param to n_layers=6
   (~+170K params) but with no extra block depth. Tests width vs depth at
   same capacity. Round-3 candidate.
-- **RFF σ sweep {5, 20}** — extends tanjiro's #938. Cheap follow-up.
+- **RFF σ sweep {2, 5}** — in flight as #938 rebase #2 (skipping σ=20 per
+  student's coord-range diagnosis). σ=2 matches baseline's k=0 octave;
+  σ=5 fills the gap between baseline's π and 4π bands. If both lose,
+  RFF-as-replacement is settled and we move to hybrid axis-aligned+RFF
+  for round 3.
+- **Hybrid axis-aligned + RFF concatenation** (round-3 candidate; tanjiro's
+  follow-up #2 from #938 rebase #1). Keep the 4 axis-aligned octaves AND
+  add 8 random freqs at σ=10 on top. Tests whether RFF can *augment*
+  rather than *replace*. Only if RFF-as-replacement fails on σ∈{2,5}.
 - **Per-channel output heads** (Ux/Uy/p separate decoder MLP). Decouples
   decoder pathways for the channel-weighted [1,1,3] target distribution.
   Predicted -2 to -4%. **In flight: thorfinn #955 (post-#914 baseline).**

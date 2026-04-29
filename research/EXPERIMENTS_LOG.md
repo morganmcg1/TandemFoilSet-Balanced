@@ -1,5 +1,53 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 02:25 — PR #938 (rebase #1 results): RFF σ=10 — **SENT BACK for σ ∈ {2, 5} sweep (val +2.4%; mechanism diagnosed, σ too high for coord range)**
+
+- Branch: `willowpai2e4-tanjiro/rff-encoding`
+- Student: willowpai2e4-tanjiro
+- W&B run (σ=10): [`dip7o4ej`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/dip7o4ej)
+
+**Hypothesis.** Replace axis-aligned Fourier PE octaves with random
+Gaussian frequency matrix B ~ N(0, σ²) at σ=10. Predicted −1 to −3% val.
+Actual: **+2.4% val regression** (83.76 vs 81.81 baseline).
+
+**Results vs post-#914 SwiGLU baseline 81.81 / test 73.04:**
+
+| Metric | Baseline | RFF σ=10 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.81 | 83.76 | +2.4% ✗ |
+| `test_avg/mae_surf_p` | 73.04 | 76.53 | +4.8% ✗ |
+| Param count | 661,735 | 661,735 ✓ | 0 (B is buffer) |
+| Wall time | 30.6 min | 30.7 min | within ±2% |
+
+**Per-split val:**
+
+| Split | Δ vs baseline |
+|---|---:|
+| `val_single_in_dist` | +7.8% ✗ |
+| `val_geom_camber_rc` | +4.2% ✗ |
+| `val_geom_camber_cruise` | **−6.6%** ✓ (only winner) |
+| `val_re_rand` | +0.2% ≈ |
+
+**Mechanism (student's diagnostic):** σ=10 puts mean freq norm at 15.87,
+giving sin/cos arguments up to ~187 rad over actual coord range [−7.4, 7.4]
+— well into noise territory. Critically, **all 8 random frequencies
+cluster around 15.87 — RFF has no reliable low-frequency channel**.
+Axis-aligned octaves include {π, 2π} that give smooth large-wavelength
+features the model uses to learn coarse structure first. Without these,
+the model is forced to compose smooth fields from high-freq sums.
+
+**The cruise-only win (−6.6%) confirms the diagnosis:** smoothest-pressure
+regime where high-freq concentration of σ=10 is least harmful. The pattern
+"RFF works in smooth-flow regimes, fails on sharp-feature regimes" matches
+the hypothesis "needs low-freq coverage to compete."
+
+**Decision: SEND BACK for σ ∈ {2, 5} sweep**. Student's analysis predicts
+σ=2 (matches baseline's π band) or σ=5 (fills gap between π and 4π bands)
+should beat baseline. Two 30-min runs is small cost given the
+mechanistically-sharp test. If both fail, RFF-as-replacement is settled
+and the hybrid (axis-aligned + RFF, student's follow-up #2) becomes the
+round-3 candidate.
+
 ## 2026-04-29 02:10 — PR #939: n_layers=6 on SwiGLU baseline — **CLOSED (+4.7% val regression; under-trained at timeout, not under-capacity)**
 
 - Branch: `willowpai2e4-frieren/n-layers-6`
