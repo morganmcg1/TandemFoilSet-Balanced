@@ -81,6 +81,22 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class RFFEncoder(nn.Module):
+    """Random Fourier Features for spatial coordinates.
+
+    Replaces input dims 0:2 (spatial position) with [sin(2π·B·pos), cos(2π·B·pos)]
+    where B ~ N(0, σ²). Fixed (non-learned) projection. Output dim is 2 * n_freq.
+    """
+    def __init__(self, in_dim: int = 2, n_freq: int = 32, sigma: float = 1.0):
+        super().__init__()
+        self.register_buffer("B", torch.randn(in_dim, n_freq) * sigma)
+        self.n_freq = n_freq
+
+    def forward(self, pos: torch.Tensor) -> torch.Tensor:
+        proj = 2.0 * torch.pi * (pos @ self.B)
+        return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -168,6 +184,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 rff_n_freq: int = 32, rff_sigma: float = 1.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -176,11 +193,14 @@ class Transolver(nn.Module):
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.rff = RFFEncoder(in_dim=2, n_freq=rff_n_freq, sigma=rff_sigma)
+        rff_out_dim = 2 * rff_n_freq
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + rff_out_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,6 +227,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        pos = x[..., :2]
+        feat = x[..., 2:]
+        rff = self.rff(pos)
+        x = torch.cat([rff, feat], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
