@@ -221,3 +221,27 @@
 
 ## Tooling note (both PRs)
 `test_avg/mae_surf_p` logs as **NaN on every run on this branch**. Diagnosed via the offline re-evals in #782/#784: `test_geom_camber_cruise/000020.pt` contains 761 +Inf values in the `p` channel. In `data/scoring.py::accumulate_batch` the per-channel error is computed as `err = |pred − y|` *before* the validity mask is applied, then multiplied by `surf_mask.unsqueeze(-1)` — `Inf × 0 = NaN` in IEEE 754, which propagates through the subsequent `.sum`. The existing `y_finite` per-sample skip in `accumulate_batch` correctly intends to discard any sample with non-finite GT, but the multiplicative mask formulation defeats that intent. `data/scoring.py` is documented as read-only, so the right place to fix this is in `train.py::evaluate_split` before `accumulate_batch` is called — e.g. zeroing `pred_orig` and `y` at non-finite positions, or replacing the multiplicative mask with `torch.where(mask, err, 0)`. Until this lands, students should compute a clean test_avg over the three finite splits and report it in their PR comment alongside the W&B value. Worth picking up as a small dedicated PR if a student frees up.
+
+## 2026-04-29 — PR #821 round 2: AMP/bf16 + bs=16 + NaN-safe eval + torch.compile + lr=2e-3 (askeladd)
+
+- Branch: `willowpai2e2-askeladd/tooling-amp-bs-nansafe`
+- Hypothesis (round 2): Linearly scale LR with batch size (5e-4 → 2e-3 for bs=16) and add `torch.compile(model, dynamic=True)` to close C1 (50 epochs in 30 min) and C3 (val<90) gaps observed in round 1.
+- W&B: `ks9lkecv` (default), `ndjgbmhw` (PYTHONHASHSEED=42). Loss: vanilla MSE (pre-#840 default), since the branch was forked before #840 merged.
+
+| metric | default (ks9lkecv) | seed42 (ndjgbmhw) |
+|---|---:|---:|
+| best `val_avg/mae_surf_p` | 136.22 (ep 47) | 97.84 (ep 44) |
+| `test_avg/mae_surf_p` | 118.83 | 87.95 |
+| `test/test_single_in_dist` | 194.07 | 100.55 |
+| `test/test_geom_camber_rc` | 128.86 | 101.25 |
+| `test/test_geom_camber_cruise` | 65.56 (finite ✓) | 63.23 (finite ✓) |
+| `test/test_re_rand` | 86.83 | 86.80 |
+| epochs | 50/50 | 50/50 |
+| wall clock | 22.2 min | 22.3 min |
+| peak GPU mem | 49.8 GB | 49.8 GB |
+
+- **Outcome: Sent back for round 3 (rebase + rel-MAE re-validation)**.
+  - **C1 PASS**: 50/50 in 22 min — 26% headroom under the 30-min cap. torch.compile gives ~1.5–1.8× additional speedup on top of AMP/bs=16.
+  - **C2 PASS**: cruise test = 65.56 / 63.23 finite. The keep-mask substitution in `evaluate_split` is correct and `data/scoring.py` is untouched.
+  - **C3 strict-fail**: val_avg 136 / 98 — both above the 90 bar. **But this is on vanilla MSE, not the current rel-MAE baseline.** The wide seed spread (38 pts) suggests lr=2e-3 + cosine is at the edge of stability for vanilla MSE; relative-MAE's per-sample gradient normalization will likely shrink that variance.
+  - **Merge blocker**: PR was branched before #840 (rel-MAE) merged → `mergeStateStatus: DIRTY, mergeable: CONFLICTING`. Round-3 ask: rebase onto current advisor branch and re-run two seeds with `--loss_type relative_mae` to confirm the tooling stack preserves the 64.73 / 56.92 baseline. Acceptance bar relaxed to val_avg ≤ 70 on at least one seed (mean ≤ 80).

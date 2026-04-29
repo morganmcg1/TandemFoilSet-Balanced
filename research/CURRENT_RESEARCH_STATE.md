@@ -1,14 +1,14 @@
 # SENPAI Research State
 
-- **Updated**: 2026-04-29 00:30 UTC
+- **Updated**: 2026-04-29 (post-#821 round 2 review)
 - **Branch**: `icml-appendix-willow-pai2e-r2`
 - **Tag**: `willow-pai2e-r2`
 - **Most recent human researcher direction**: none; no GitHub Issues open.
 - **Lab**: 11 students, 1 GPU each (96 GB), 30 min wall-clock, 50 epochs cap.
 
-## Current baseline
+## Current baseline (MERGED)
 
-**PR #840 (edward, per-sample relative MAE) — WINNER, pending rebase/merge**
+**PR #840 (edward, per-sample relative MAE) — MERGED 2026-04-28T23:11Z**
 - `val_avg/mae_surf_p` = **64.73** at epoch 32/50 (timed out, still improving)
 - Per-split val: single=80.41, rc=78.51, cruise=40.13, re_rand=60.73
 - Per-split test (all finite!): single=77.25, rc=67.74, cruise=32.35, re_rand=50.35
@@ -16,7 +16,7 @@
 - W&B: `nz8eev8e`; Config: compound base + `--loss_type relative_mae --huber_delta 1.0 --surf_weight 10 --lr 5e-4`
 - Delta vs PR #783: −11.20 (−14.7%) on val_avg/mae_surf_p
 
-**Previous merged baseline**: PR #783 (fern, Huber δ=1.0) — val=75.93 (superseded)
+**Earlier merged baseline**: PR #783 (fern, Huber δ=1.0) — val=75.93 (superseded by #840)
 
 ## Current assignments (active WIP PRs)
 
@@ -25,7 +25,7 @@
 | alphonse | #853 | Huber δ sweep: δ=0.5 and δ=2.0 on compound+Huber base | loss (δ tuning) | WIP |
 | frieren  | #854 | Huber + grad accum (accum_steps=2): double throughput, ~60 epochs in budget | training throughput | WIP |
 | fern     | #855 | Huber + surf_weight sweep: sw=5 and sw=20 vs baseline sw=10 | loss weighting | WIP |
-| askeladd | #821 | tooling: AMP/bf16 + batch_size=16 + NaN-safe eval (sent back: lr=2e-3 fix) | infrastructure | WIP (sent back) |
+| askeladd | #821 | tooling: AMP/bf16 + batch_size=16 + NaN-safe eval + torch.compile (round 2 done, sent back: rebase + rel-MAE re-validation) | infrastructure | WIP (sent back, round 3) |
 | edward   | #900 | Loss curriculum: Huber warmup (N epochs) → relative MAE — follow-up to #840 winner | loss (curriculum) | WIP |
 | stark    | #842 | compound + SwiGLU param-matched h=168 | architecture (activation) | WIP |
 | himmel   | #843 | compound + gradient norm clipping (max_norm sweep 0.5 / 1.0) | optimization (stability) | WIP |
@@ -42,21 +42,20 @@
 
 ## Key events this review pass
 
-1. **PR #840 declared winner** (val=64.73, test=56.92 — all splits finite). Relative MAE loss compounds on top of Huber: gradient equalization across Re regimes works exactly as predicted. Cruise split is now our best split (40.13 val / 32.35 test). Merge blocked by rebase conflict — edward sent back to rebase and resubmit.
+1. **PR #840 (relative MAE) MERGED** as new baseline (val=64.73, test=56.92 — all splits finite).
 
-2. **PR #821 reviewed, sent back for LR fix**: AMP/bf16 and NaN-safe eval both confirmed working. Cruise test split is finite (58.77 / 58.54) — **first time on this branch** (landmark). The only blocker: bs=16 without LR scaling gives 4× fewer gradient steps/epoch → val 159/124 (far above ~92 baseline). Fix: lr default 5e-4 → 2e-3 (linear scaling: 5e-4 × 16/4). Askeladd sent back for this single change.
-
-## Tooling debt
-
-- **PR #821 (askeladd)**: Almost done — NaN-safe eval and AMP work. Only pending: lr=2e-3 fix for bs=16. Once merged, ALL subsequent PRs benefit from throughput + finite test metrics.
-- **PR #840 (edward)**: Winner awaiting rebase onto current advisor branch.
-- **Throughput note**: fp32/bs=4 → ~56s/epoch → ~32/50 epochs in budget. PR #821 (once merged) will drop this to ~40s/epoch + bs=16 → ~94 batches/epoch. All undertrained runs (#854, etc.) should be re-run post-#821.
+2. **PR #821 round 2 reviewed, sent back for round 3**: lr=2e-3 + torch.compile + bs=16 + AMP delivered:
+   - C1 PASS: 50/50 epochs in 22.2 / 22.3 min (~26% headroom).
+   - C2 PASS: cruise test=65.56 / 63.23 finite (3rd & 4th time on branch).
+   - C3 strict-fail: val_avg=136.22 / 97.84 with vanilla MSE loss. Wide seed spread (38 pts).
+   - **Reason for send-back**: PR was branched pre-#840, so train.py has merge conflicts AND validation used vanilla MSE (not the now-canonical relative-MAE loss). Round-3 ask: rebase + re-validate with `--loss_type relative_mae` to confirm the tooling stack preserves the 64.73 / 56.92 baseline.
+   - The torch.compile addition (~1.5–1.8× speedup on top of AMP) was an unexpected upside.
 
 ## Current research focus
 
 **The relative-MAE mechanism is working.** Both Huber (PR #783) and relative MAE (PR #840) attack the same root cause — high-Re tail dominance — at different abstraction levels, and they compound. The test_avg has improved from NaN (cruise bug) to 56.92 (all splits finite) with a clear path to the reference target of 40.93.
 
-**Key hypothesis for next round**: relative-MAE + Huber combo + AMP throughput = potentially sub-50 val. The 64.73 is undertrained (32/50 epochs). Once PR #821 lands with lr=2e-3 and 50 epochs complete, re-run relative-MAE with full budget.
+**Key hypothesis for next round**: relative-MAE + AMP throughput + 50 epochs at lr=2e-3 = potentially sub-50 val. The 64.73 is undertrained (32/50 epochs at lr=5e-4 / bs=4). Once PR #821 round 3 lands with the full tooling stack on top of relative-MAE, run a fresh hypothesis stack on the new defaults.
 
 Current open questions:
 1. How much headroom remains in relative-MAE at 50 epochs? (gap from 64.73 to sub-60)
