@@ -157,11 +157,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, return_hidden=False):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            hidden = self.ln_3(fx)
+            out = self.mlp2(hidden)
+            if return_hidden:
+                return out, hidden
+            return out
         return fx
 
 
@@ -206,12 +210,19 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, return_hidden=False, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        hidden = None
         for block in self.blocks:
-            fx = block(fx)
-        return {"preds": fx}
+            if block.last_layer and return_hidden:
+                fx, hidden = block(fx, return_hidden=True)
+            else:
+                fx = block(fx)
+        out = {"preds": fx}
+        if return_hidden:
+            out["hidden"] = hidden
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +443,23 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Multi-task auxiliary Re-prediction head.
+# Reads the post-LN hidden state from the final TransolverBlock (pre-mlp2),
+# masked-mean-pooled over real nodes, and predicts normalized log(Re).
+# Forces gradient through the encoder so it must preserve Re-relevant features.
+LAMBDA_AUX = 0.1
+re_aux_head = nn.Sequential(
+    nn.Linear(model_config["n_hidden"], 64),
+    nn.GELU(),
+    nn.Linear(64, 1),
+).to(device)
+n_params_aux = sum(p.numel() for p in re_aux_head.parameters())
+print(f"Re aux head: {n_params_aux/1e3:.1f}K params (LAMBDA_AUX={LAMBDA_AUX})")
+
+optimizer = torch.optim.AdamW(
+    list(model.parameters()) + list(re_aux_head.parameters()),
+    lr=cfg.lr, weight_decay=cfg.weight_decay,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15, eta_min=1e-6)
 
 run = wandb.init(
@@ -505,6 +532,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux_loss_sum = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_re_weight_min_sum = 0.0
@@ -527,7 +555,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        out = model({"x": x_norm}, return_hidden=True)
+        pred = out["preds"]
+        hidden = out["hidden"]  # [B, N, n_hidden] post-LN final-block hidden
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -543,17 +573,32 @@ for epoch in range(MAX_EPOCHS):
         )  # [B]
         vol_loss = (per_sample_vol_loss * re_weight).sum()
         surf_loss = (per_sample_surf_loss * re_weight).sum()
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Aux Re loss: masked-mean pool over real nodes, predict normalized log(Re).
+        mask_f = mask.float()  # [B, N]
+        n_valid = mask_f.sum(dim=1, keepdim=True).clamp_min(1)  # [B, 1]
+        pooled_hidden = (hidden * mask_f.unsqueeze(-1)).sum(dim=1) / n_valid  # [B, n_hidden]
+        re_pred = re_aux_head(pooled_hidden).squeeze(-1)  # [B]
+        log_re_norm = x_norm[:, 0, 13]  # [B], normalized log(Re), node 0 is always real
+        aux_loss = F.mse_loss(re_pred, log_re_norm.detach())
+
+        loss = main_loss + LAMBDA_AUX * aux_loss
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            list(model.parameters()) + list(re_aux_head.parameters()),
+            max_norm=5.0,
+        )
         optimizer.step()
         global_step += 1
         rw_min = re_weight.min().item()
         rw_max = re_weight.max().item()
         rw_ratio = rw_max / max(rw_min, 1e-12)
         wandb.log({"train/loss": loss.item(),
+                   "train/main_loss": main_loss.item(),
+                   "train/aux_re_loss": aux_loss.item(),
                    "train/grad_norm": grad_norm.item(),
                    "train/re_weight_min": rw_min,
                    "train/re_weight_max": rw_max,
@@ -563,6 +608,8 @@ for epoch in range(MAX_EPOCHS):
             "global_step": global_step,
             "epoch": epoch + 1,
             "train/loss": loss.item(),
+            "train/main_loss": main_loss.item(),
+            "train/aux_re_loss": aux_loss.item(),
             "train/grad_norm": grad_norm.item(),
             "train/re_weight_min": rw_min,
             "train/re_weight_max": rw_max,
@@ -572,6 +619,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux_loss_sum += aux_loss.item()
         epoch_grad_norm_sum += grad_norm.item()
         epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm.item())
         epoch_re_weight_min_sum += rw_min
@@ -582,6 +630,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux_loss = epoch_aux_loss_sum / max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
     epoch_re_weight_min_mean = epoch_re_weight_min_sum / max(n_batches, 1)
     epoch_re_weight_max_mean = epoch_re_weight_max_sum / max(n_batches, 1)
@@ -600,6 +649,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_re_loss_epoch": epoch_aux_loss,
         "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
         "train/grad_norm_epoch_max": epoch_grad_norm_max,
         "train/re_weight_min_epoch_mean": epoch_re_weight_min_mean,
@@ -624,6 +674,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_re_loss_epoch": epoch_aux_loss,
         "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
         "train/grad_norm_epoch_max": epoch_grad_norm_max,
         "train/re_weight_min_epoch_mean": epoch_re_weight_min_mean,
@@ -654,7 +705,7 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux_re={epoch_aux_loss:.4f}]  "
         f"re_w[min={epoch_re_weight_min_mean:.4f} max={epoch_re_weight_max_mean:.4f} "
         f"max_ratio={epoch_re_weight_ratio_max:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
