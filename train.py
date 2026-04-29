@@ -476,7 +476,7 @@ if cfg.ema_decay > 0.0:
     print(f"EMA enabled (decay={cfg.ema_decay})")
 val_eval_model = ema_model if ema_model is not None else model
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
