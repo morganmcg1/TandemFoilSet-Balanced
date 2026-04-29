@@ -82,13 +82,23 @@ class MLP(nn.Module):
 
 
 class PhysicsAttention(nn.Module):
-    """Physics-aware attention for irregular meshes."""
+    """Physics-aware attention for irregular meshes.
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    Optional Transolver++ improvements (https://arxiv.org/abs/2502.02414):
+        * ``ada_temp``  — learnable per-point softmax temperature
+                          τ_i = τ_0 + Linear(x_i)
+        * ``gumbel``    — Gumbel-Softmax slice weights
+                          Rep-Slice(x, τ) = Softmax((Linear(x) - log(-log ε)) / τ)
+                          (only sampled at training time; deterministic at eval).
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 ada_temp: bool = False, gumbel: bool = False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -101,6 +111,14 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+
+        self.ada_temp = ada_temp
+        self.gumbel = gumbel
+        if ada_temp:
+            # Per-point temperature offset shared across slices/heads.
+            self.temp_offset = nn.Linear(dim_head, 1)
+            nn.init.zeros_(self.temp_offset.weight)
+            nn.init.zeros_(self.temp_offset.bias)
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -117,7 +135,18 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+
+        slice_logits = self.in_project_slice(x_mid)  # [B, H, N, G]
+        if self.ada_temp:
+            tau = self.temperature + self.temp_offset(x_mid).clamp(min=-1.0, max=1.0)
+        else:
+            tau = self.temperature
+        if self.gumbel and self.training:
+            # Gumbel noise -log(-log(eps)) — eidetic eq.8 in Transolver++
+            eps = torch.empty_like(slice_logits).uniform_(1e-9, 1.0)
+            gumbel_noise = -torch.log(-torch.log(eps))
+            slice_logits = slice_logits + gumbel_noise
+        slice_weights = self.softmax(slice_logits / tau)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -138,13 +167,15 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 ada_temp: bool = False, gumbel: bool = False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            ada_temp=ada_temp, gumbel=gumbel,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -169,7 +200,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 ada_temp: bool = False, gumbel: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +222,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                ada_temp=ada_temp, gumbel=gumbel,
             )
             for i in range(n_layers)
         ])
@@ -386,11 +419,29 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # Model architecture knobs
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
+    # Transolver++ improvements (https://arxiv.org/abs/2502.02414)
+    ada_temp: bool = False  # learnable per-point softmax temperature
+    gumbel: bool = False  # Gumbel-Softmax slice weights (eidetic discrete assignment)
+    # Optimization
+    schedule: str = "cosine"  # cosine | onecycle
+    warmup_epochs: int = 0
+    grad_clip: float = 0.0  # 0 disables clipping
+    # Time budget override (minutes). Set <=0 to use SENPAI_TIMEOUT_MINUTES env var.
+    timeout_min: float = 0.0
+    # Test-time evaluation control
+    final_eval_batch_size: int = 0  # if >0 use this for val/test eval
+    seed: int = 0
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+MAX_TIMEOUT_MIN = cfg.timeout_min if cfg.timeout_min and cfg.timeout_min > 0 else DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -409,8 +460,9 @@ else:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
+_eval_bs = cfg.final_eval_batch_size if cfg.final_eval_batch_size > 0 else cfg.batch_size
 val_loaders = {
-    name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+    name: DataLoader(ds, batch_size=_eval_bs, shuffle=False, **loader_kwargs)
     for name, ds in val_splits.items()
 }
 
@@ -418,21 +470,50 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    ada_temp=cfg.ada_temp,
+    gumbel=cfg.gumbel,
 )
+
+if cfg.seed:
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: Transolver ({n_params/1e6:.2f}M params) — "
+      f"n_hidden={cfg.n_hidden} n_layers={cfg.n_layers} n_head={cfg.n_head} "
+      f"slice_num={cfg.slice_num} mlp_ratio={cfg.mlp_ratio} "
+      f"ada_temp={cfg.ada_temp} gumbel={cfg.gumbel}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+steps_per_epoch = max(len(train_loader), 1)
+total_steps = steps_per_epoch * MAX_EPOCHS
+
+if cfg.schedule == "onecycle":
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=cfg.lr, total_steps=total_steps,
+        pct_start=max(0.05, cfg.warmup_epochs / max(MAX_EPOCHS, 1)),
+        anneal_strategy="cos",
+    )
+    scheduler_step_per_batch = True
+elif cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1))
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs])
+    scheduler_step_per_batch = False
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler_step_per_batch = False
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -497,7 +578,11 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
+        if scheduler_step_per_batch:
+            scheduler.step()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -505,7 +590,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not scheduler_step_per_batch:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -576,7 +662,7 @@ if best_metrics:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            name: DataLoader(ds, batch_size=_eval_bs, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
