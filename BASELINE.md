@@ -186,6 +186,52 @@ cd target/ && python train.py \
 
 ---
 
+## 2026-04-29 15:35 — PR #1195: OneCycleLR superconvergence: replace cosine anneal within 14-epoch budget
+
+- **Student**: charliepai2f2-nezuko
+- **Branch**: charliepai2f2-nezuko/onecyclelr-superconvergence
+- **Change**: Replace budget-aware CosineAnnealingLR with `OneCycleLR(max_lr=1.2e-3, pct_start=0.3, total_steps=5625, div_factor=25, final_div_factor=1e4, anneal_strategy='cos', cycle_momentum=False)` stepping per-batch. All other settings unchanged from PR #1098 stack (lr=1e-3 base, grad_clip=1.0, DropPath 0→0.1, surf_weight=25, batch=4).
+
+### Best Validation Metrics (epoch 14/50, 30-min timeout)
+
+| Metric | Value | vs prior baseline (PR #1184) |
+|--------|-------|------------------------------|
+| **val_avg/mae_surf_p** (PRIMARY) | **97.0209** | +8.02 (this PR built on PR #1098 stack, not BF16) |
+| val_avg/mae_vol_p | 110.5413 | — |
+| val_avg/mae_surf_Ux | 1.4259 | — |
+| val_avg/mae_surf_Uy | 0.6977 | — |
+| val_avg/mae_vol_Ux | 4.4613 | — |
+| val_avg/mae_vol_Uy | 2.1546 | — |
+
+Per-split surface pressure MAE:
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|----------------|-----------------|
+| single_in_dist | 114.4687 | 98.7505 |
+| geom_camber_rc | 107.1299 | 95.8526 |
+| geom_camber_cruise | 73.8442 | 62.4759 |
+| re_rand | 92.6409 | 85.8037 |
+| **avg** | **97.0209** | **85.7207** |
+
+### Context
+- 14 epochs / 50 configured (hit SENPAI_TIMEOUT_MINUTES=30 at ~135s/epoch); best at epoch 14
+- OneCycleLR peak at epoch ~4.5 (step 1687 of 5625), deep anneal to lr=2.65e-05 by epoch 14
+- Peak GPU memory: 42.12 GB
+- Params: 662,359
+- Metrics JSONL: `target/models/model-charliepai2f2-nezuko-onecyclelr-superconvergence-20260429-145319/metrics.jsonl`
+- Metrics YAML: `target/models/model-charliepai2f2-nezuko-onecyclelr-superconvergence-20260429-145319/metrics.yaml`
+- Model config: n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
+
+### Reproduce
+```bash
+cd target/ && python train.py --agent charliepai2f2-nezuko \
+  --experiment_name "charliepai2f2-nezuko/onecyclelr-superconvergence" \
+  --grad_clip 1.0
+# OneCycleLR stepping per-batch; lr=1e-3, surf_weight=25.0, DropPath(0→0.1)
+```
+
+---
+
 ## Notes on NaN in test_geom_camber_cruise
 
 One corrupted GT sample (`000020.pt`) in `.test_geom_camber_cruise_gt/` has NaN in the pressure channel. `data/scoring.py:accumulate_batch` propagates this NaN because `NaN * 0.0 = NaN` in IEEE float — the mask does not fully guard it. Since `data/scoring.py` is read-only, future experiments should apply `nan_to_num()` or clamp predictions in train.py before the scoring call, or report 3-split test averages when test_geom_camber_cruise is corrupted.
