@@ -461,6 +461,7 @@ class Config:
     huber_delta: float = 0.0  # 0 = MSE (default); >0 = Huber with this delta
     loss_type: str = "mse"  # "mse" (default; uses huber_delta to switch MSE/Huber) or "relative_mae"
     rel_mae_eps: float = 1e-6  # additive epsilon in the relative MAE denominator
+    loss_warmup_epochs: int = 0  # epochs of Huber warmup before switching to relative_mae (0 = disabled)
 
 
 cfg = sp.parse(Config)
@@ -553,6 +554,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    # Loss curriculum: use Huber warmup for first N epochs, then switch to primary loss
+    effective_loss_type = cfg.loss_type
+    if cfg.loss_type == "relative_mae" and epoch < cfg.loss_warmup_epochs:
+        effective_loss_type = "huber_warmup"
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -565,10 +571,12 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        if cfg.loss_type == "relative_mae":
+
+        if effective_loss_type == "relative_mae":
             vol_loss = relative_mae_loss(pred, y_norm, vol_mask, eps=cfg.rel_mae_eps)
             surf_loss = relative_mae_loss(pred, y_norm, surf_mask, eps=cfg.rel_mae_eps)
         else:
+            # huber_warmup or plain MSE/Huber
             if cfg.huber_delta > 0:
                 err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
             else:
@@ -610,6 +618,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/effective_loss_relative_mae": int(effective_loss_type == "relative_mae"),
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
