@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 03:15
+- **Last updated:** 2026-04-29 03:25
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -44,7 +44,7 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | fern | #809 | **WIP** | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
 | frieren | #915 | **Closed** | PhysicsAttention padding mask — cruise improved −14% test (as predicted) but rc regressed +30.8% test; net test +3.3% worse. Binary post-softmax mask disrupts attention on dense-mesh rc geometries. |
-| frieren | #943 | **WIP** | Per-channel surface loss weights: p_surf_weight ∈ {3, 20} vs vel_surf_weight=10 |
+| frieren | #943 | **WIP (rebase)** | Per-channel surf-weight: p=20/vel=10 won val=107.5/test=98.4 vs stale baseline but regressed vs current sw=3 (+5.9% val, +9.5% test). Sent back for rebase + anchored sweep with vel_surf=3 fixed, sweep p_surf ∈ {3 control, 10, 20}. |
 | nezuko | #742 | Closed | dropout=0.1 regresses 12.4%; undertrained model has no overfitting to regularize |
 | nezuko | #878 | Closed | DropPath p=0.1 neutral on val_avg (+0.32, within seed noise) and +3% per-step overhead |
 | nezuko | #923 | **Merged** | Vectorized data prep: bit-exact, neutral throughput (−1.6% noise). Hypothesis refuted: CPU syncs are not the bottleneck. Model forward+backward = 91% of epoch time. Bottleneck map established. |
@@ -75,8 +75,8 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 
 **All 8 GPUs in use:** alphonse #980 (boundary-layer vol-loss sweep), askeladd #885 (δ=0.3
 rebase + stacking test), edward #953 (sw-below-3 sweep), fern #809 (schedule-budget), frieren
-#943 (per-channel-surf-weight), nezuko #986 (torch.compile A/B), tanjiro #745 (heads Option 3
-rebase), thorfinn #810 (EMA rebase + sw=3 verify).
+#943 (per-channel rebase + anchored p_surf sweep with vel_surf=3), nezuko #986 (torch.compile
+A/B), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase + sw=3 verify).
 
 ## Current research themes
 
@@ -88,9 +88,10 @@ rebase), thorfinn #810 (EMA rebase + sw=3 verify).
    distinct mechanism using dist_to_surface feature to weight near-wall volume nodes more.
 3. **Loss-balance (sw) floor still unknown.** Edward #953 sweeps sw ∈ {0.5, 1.0, 2.0}.
    The val curve was still descending at epoch 17 with sw=3 — lower sw may continue the trend.
-4. **Per-channel surface loss weighting (#943, frieren)** — tests whether splitting surface loss
-   into channel-specific terms (p vs velocity) improves over uniform sw=3. Run 1 (p=3, vel=10)
-   effectively raises velocity supervision above baseline; Run 2 (p=20, vel=10) boosts pressure.
+4. **Per-channel surface loss weighting (#943, frieren)** — first sweep was confounded by stale
+   vel_surf_weight=10. Both runs regressed vs current sw=3 baseline. Sent back for anchored sweep:
+   vel_surf=3 fixed (matches current), sweep p_surf ∈ {3 control, 10, 20}. Cruise hint from Run 2
+   (val=79.02 vs current sw=3 cruise=82.16, −3.8%) suggests pressure-boost may be real on OOD.
 5. **Throughput: model FLOPs = actual bottleneck.** #923 (merged) established the cost map:
    model forward+backward = 91% of epoch time, data prep = 9%. torch.compile is the correct lever
    (#986, nezuko). Expected: 19-22 effective epochs in budget (vs 17 today) if 1.2-1.5× speedup lands.
@@ -105,9 +106,9 @@ rebase), thorfinn #810 (EMA rebase + sw=3 verify).
   exploiting volume signal, the per-sample-norm mechanism may partially overlap.
 - What is the optimal Huber δ? Askeladd #885 sweep {0.3, 0.5, 1.0, 2.0} will answer this. With
   sw=3 now the default, the outlier distribution seen by the loss is different — optimal δ may shift.
-- Does frieren's per-channel split (#943) reveal that velocity surface supervision (now at w=3)
-  was the hidden bottleneck? Run 1 (p=3, vel=10) effectively raises velocity weight above sw=3
-  baseline — if it wins, velocity surface weight was too low.
+- Does frieren's per-channel split (#943) win once anchored to sw=3 baseline? First sweep (vel=10)
+  regressed because raising velocity surface weight above current sw=3 hurts. Anchored sweep
+  (vel=3 fixed, p ∈ {3, 10, 20}) directly tests whether pressure-only boost helps OOD.
 - Does EMA (#810, d=0.995) still win on the new sw=3 baseline? Stale-baseline numbers were
   exceptional (val −18.7%, test −21.8%). EMA mechanism (logit averaging across last ~2k steps
   with d=0.995) should be orthogonal to loss-weighting, so the gain should hold. Verification run

@@ -701,3 +701,36 @@ Vs current sw=3+Huber baseline (val_avg=101.563, test_avg=89.918): d=0.995 wins 
 - **Clean implementation per prior advisor feedback:** deferred init after warmup, dual-flavor checkpointing, best_flavor=ema selected from epoch 6 onward.
 - **PR is in CONFLICTING state.** 902 additions / 99 deletions across 4 files. Created before #850 (sw=3 default) and #923 (vectorized data prep) merged. Merge conflicts in train.py loss block + Config + add_derived_features.
 - **Decision: Sent back for rebase + decisive verification run on sw=3 baseline.** EMA mechanism is orthogonal to surf_weight, so the gain should hold — but a 902-line PR is too valuable to merge with conflicts. Asked thorfinn to rerun d=0.995 only on rebased code (skip d=0.999 to save GPU time). If rebased d=0.995 lands within ~1% of stale-baseline winning numbers (val ≈ 90, test ≈ 79), this becomes the **6th compounding win**.
+
+---
+
+## 2026-04-29 03:25 — PR #943: Per-channel surface loss weights — sent back for rebase + anchored sweep
+
+- **Branch:** `willowpai2e5-frieren/per-channel-surf-weight` (sent back, merge state DIRTY)
+- **W&B runs:** `u2tmgfwk` (Run 1: p=3, vel=10), `3qewws8e` (Run 2: p=20, vel=10)
+- **Hypothesis:** Splitting surface loss into per-channel weights for pressure (p_surf_weight) vs velocity (vel_surf_weight) lets us steer pressure supervision independently from velocity, exploiting the fact that paper-facing metric is surface pressure only.
+
+### Results vs stale Huber-only baseline (val_avg=110.594, test_avg=101.299)
+
+| Split | Stale Huber baseline | Run 1 (p=3, vel=10) | Run 2 (p=20, vel=10) |
+|-------|---------------------:|--------------------:|---------------------:|
+| `val_single_in_dist`     | 130.87 | 155.954 | 140.201 |
+| `val_geom_camber_rc`     | 115.14 | 117.384 | 116.203 |
+| `val_geom_camber_cruise` |  92.61 |  82.827 |  79.022 |
+| `val_re_rand`            | 103.76 |  99.380 |  94.747 |
+| **val_avg**              | **110.594** | **113.886** | **107.543** |
+| **test_avg**             | **101.299** | **99.866** | **98.422** |
+
+### Vs CURRENT sw=3+Huber baseline (val_avg=101.563, test_avg=89.918) — paper-facing comparison
+
+| Run | val_avg Δ | test_avg Δ | Verdict |
+|-----|----------:|-----------:|---------|
+| Run 1 (p=3, vel=10)  | **+12.1%** | **+11.1%** | clear regression |
+| Run 2 (p=20, vel=10) | **+5.9%**  | **+9.5%**  | regression |
+
+### Commentary & Conclusions
+
+- **Both runs regress vs current baseline** because both raise vel_surf_weight from 3 (current) to 10 (stale code default). The velocity weight change confounds the per-channel mechanism.
+- **Pressure boost mechanism may be real, but masked.** Run 2 cruise val=79.022 vs current sw=3 cruise val=82.16 → −3.8% on the most paper-facing OOD split. Could indicate pressure supervision boost helps OOD generalization through better boundary-layer fitting.
+- **PR in CONFLICTING state.** Loss block in train.py was changed by #850 (surf_weight default 10→3), conflicting with frieren's per-channel rewrite.
+- **Decision: Sent back for rebase + anchored 3-point sweep.** Asked frieren to: (a) rebase, (b) run control p=3/vel=3 (must reproduce 101.5 baseline), (c) sweep p_surf ∈ {10, 20} with vel_surf=3 fixed. This isolates the pressure boost mechanism cleanly. If Run B (p=10) or Run C (p=20) beats 101.563 → real per-channel win.
