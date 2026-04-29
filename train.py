@@ -202,6 +202,27 @@ class TransolverBlock(nn.Module):
         return fx
 
 
+def compute_arc_length(pos: torch.Tensor, is_surface: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Normalized cumulative arc-length [0,1] along surface nodes; volume nodes get 0."""
+    B, N, _ = pos.shape
+    arc_s = torch.zeros(B, N, device=pos.device, dtype=pos.dtype)
+    for b in range(B):
+        surf_idx = (is_surface[b] & mask[b]).nonzero(as_tuple=True)[0]
+        if surf_idx.numel() < 2:
+            continue
+        pts = pos[b, surf_idx]
+        seg_lengths = (pts[1:] - pts[:-1]).norm(dim=-1)
+        cumlen = torch.cat([
+            torch.zeros(1, device=pos.device, dtype=pos.dtype),
+            seg_lengths.cumsum(0),
+        ])
+        total = cumlen[-1]
+        if total > 0:
+            cumlen = cumlen / total
+        arc_s[b, surf_idx] = cumlen
+    return arc_s
+
+
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
@@ -247,12 +268,19 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, is_surface=None, mask=None, **kwargs):
         x = data["x"]
         pos = x[..., :2]
         feat = x[..., 2:]
         rff = self.rff(pos)
-        x = torch.cat([rff, feat], dim=-1)
+
+        B, N, _ = pos.shape
+        if is_surface is not None and mask is not None:
+            arc_s = compute_arc_length(pos, is_surface, mask)
+        else:
+            arc_s = torch.zeros(B, N, device=pos.device, dtype=pos.dtype)
+
+        x = torch.cat([rff, feat, arc_s.unsqueeze(-1)], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -284,7 +312,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm}, is_surface=is_surface, mask=mask)["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -434,7 +462,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 1,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -500,7 +528,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm}, is_surface=is_surface, mask=mask)["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
