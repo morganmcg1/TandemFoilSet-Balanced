@@ -33,7 +33,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.cuda.amp import GradScaler
-from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
+from torch.optim.swa_utils import AveragedModel, SWALR, get_ema_multi_avg_fn, update_bn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -478,6 +478,12 @@ if cfg.ema_decay > 0.0:
     print(f"EMA enabled (decay={cfg.ema_decay})")
 val_eval_model = ema_model if ema_model is not None else model
 
+# PR #1233: SWA (Stochastic Weight Averaging) over the final 10 epochs.
+# Hardcoded SWA_START=22 (0-indexed) per advisor instructions: epochs 23..32 (1-indexed).
+SWA_START = 22
+swa_model = AveragedModel(model)
+print(f"SWA enabled: start at epoch {SWA_START + 1} (1-indexed); window covers final {max(0, MAX_EPOCHS - SWA_START)} epochs")
+
 optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
@@ -500,6 +506,10 @@ if cfg.warmup_epochs > 0:
           f"{max(1, MAX_EPOCHS - cfg.warmup_epochs)} epochs (eta_min=0)")
 else:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# PR #1233: SWALR anneals from current LR to swa_lr over anneal_epochs, then holds.
+swa_scheduler = SWALR(optimizer, swa_lr=5e-5, anneal_epochs=5, anneal_strategy="cos")
+print("SWA scheduler: SWALR(swa_lr=5e-5, anneal_epochs=5, anneal_strategy='cos')")
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
@@ -636,7 +646,18 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    # PR #1233: at end of each epoch, update SWA model and step SWA scheduler
+    # once we've entered the SWA window. Outside the window, step the main scheduler.
+    # update_parameters consumes the EMA-smoothed weights (per advisor instructions:
+    # "average the EMA weights, not the raw model weights" for stacked EMA+SWA smoothing).
+    # We pass ema_model.module (unwrapped Transolver) — passing the AveragedModel wrapper
+    # would mismatch buffer counts (its `n_averaged` buffer has no counterpart).
+    if epoch >= SWA_START:
+        swa_source = ema_model.module if ema_model is not None else model
+        swa_model.update_parameters(swa_source)
+        swa_scheduler.step()
+    else:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -728,8 +749,54 @@ if best_metrics:
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    # PR #1233: if SWA was activated, swap model with swa_model for final eval and
+    # save the SWA state as the checkpoint. Fall back to best-EMA otherwise.
+    swa_n_averaged = int(swa_model.n_averaged.item())
+    swa_active = swa_n_averaged > 0
+    swa_val_avg = None
+    swa_val_split_metrics = None
+    if swa_active:
+        print(f"\nSWA active: averaged {swa_n_averaged} epoch snapshots. Running update_bn...")
+        update_bn(train_loader, swa_model)
+        swa_model.eval()
+
+        print("Evaluating SWA model on val splits...")
+        swa_val_split_metrics = {
+            name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, device,
+                                 cfg.loss, cfg.huber_delta)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_val_split_metrics)
+        print(f"  SWA val_avg/mae_surf_p = {swa_val_avg['avg/mae_surf_p']:.4f}  "
+              f"(best EMA was {best_avg_surf_p:.4f})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_split_metrics[name])
+
+        # Save SWA state as the checkpoint (overrides best-EMA snapshot per PR instructions).
+        torch.save(swa_model.module.state_dict(), model_path)
+
+        swa_val_log = {
+            f"swa_val/{name}/{k}": v
+            for name, m in swa_val_split_metrics.items() for k, v in m.items()
+        }
+        swa_val_log.update({f"swa_val_{k}": v for k, v in swa_val_avg.items()})
+        wandb.log(swa_val_log)
+        wandb.summary.update({**swa_val_log, "swa_n_averaged": swa_n_averaged, "swa_active": True})
+        _log_jsonl({
+            "event": "swa_val",
+            "swa_n_averaged": swa_n_averaged,
+            "swa_val_avg/mae_surf_p": swa_val_avg["avg/mae_surf_p"],
+            "best_ema_val_avg/mae_surf_p": best_avg_surf_p,
+            **swa_val_log,
+        })
+
+        # Replace `model` with `swa_model` so subsequent test eval uses SWA weights.
+        model = swa_model
+        model.eval()
+    else:
+        print("\nSWA not activated (epoch never reached SWA_START). Using best EMA checkpoint.")
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+        model.eval()
 
     test_metrics = None
     test_avg = None
@@ -784,6 +851,10 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "best_per_split": {n: best_metrics["per_split"][n] for n in VAL_SPLIT_NAMES},
+        "swa_active": swa_active,
+        "swa_n_averaged": swa_n_averaged,
+        "swa_val_avg/mae_surf_p": swa_val_avg["avg/mae_surf_p"] if swa_active else None,
+        "swa_val_per_split": swa_val_split_metrics,
         "test_per_split": test_metrics,
         "test_avg": test_avg,
         "total_train_minutes": total_time,
