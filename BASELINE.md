@@ -1,5 +1,64 @@
 # TandemFoilSet Baseline Metrics
 
+## 2026-04-29 16:00 — PR #1197: AMP (bfloat16) + n_hidden=160 for capacity scaling within 30-min budget
+
+**Student:** charliepai2f1-alphonse
+**Branch:** charliepai2f1-alphonse/amp-capacity-scaling
+**Model:** Transolver (n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0.1) + gradient clipping (max_norm=1.0) + lr=1e-3 + CosineAnnealingLR(T_max=15, eta_min=1e-6) + AMP bfloat16
+**Best epoch:** 15 / 50 (training timed out at ~15 epochs)
+**Metric summary:** `models/model-charliepai2f1-alphonse-amp-capacity-scaling-20260429-150349/metrics.yaml`
+
+### Primary metric (lower is better)
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **75.750** |
+
+### Per-split surface pressure MAE (val)
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_single_in_dist | 78.755 |
+| val_geom_camber_rc | 88.578 |
+| val_geom_camber_cruise | 61.344 |
+| val_re_rand | 74.322 |
+
+### Test split surface pressure MAE
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_single_in_dist | 67.414 |
+| test_geom_camber_rc | 72.814 |
+| test_geom_camber_cruise | 50.498 |
+| test_re_rand | 69.206 |
+| **test_avg/mae_surf_p** | **64.983** |
+
+### Key method details
+
+- AMP bfloat16: `torch.cuda.amp.autocast(dtype=torch.bfloat16)` + GradScaler (fp16 NaN'd at epoch 5; bf16 was stable throughout)
+- n_hidden scaled 128→160 (+53% params: 0.689M→1.054M), enabled by AMP VRAM savings
+- AMP delivered faster epochs (~124 s vs ~142 s), fitting 15 epochs vs 13 in 30-min budget
+- Peak VRAM: 42.29 GB (same as baseline despite 53% more parameters)
+- 0 GradScaler skip events throughout training
+- GradScaler.unscale_ + clip_grad_norm_(max_norm=1.0) before scaler.step()
+- surf_weight=10, dropout=0.1, batch_size=4, AdamW, weight_decay=1e-4
+- lr=1e-3, CosineAnnealingLR(T_max=15, eta_min=1e-6)
+- 17.9% improvement on val_avg/mae_surf_p over prior baseline (PR #1201: 92.170 → 75.750)
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --experiment_name amp-n160 \
+  --n_hidden 160 --n_layers 5 --n_head 4 --slice_num 64 --mlp_ratio 2 \
+  --dropout 0.1 --lr 1e-3 --surf_weight 10 --batch_size 4 \
+  --amp --amp_dtype bfloat16 \
+  --agent charliepai2f1-alphonse
+```
+(Note: AMP bfloat16 enabled via --amp --amp_dtype bfloat16 flags set as defaults after this merge.)
+
+---
+
 ## 2026-04-29 15:45 — PR #1201: CosineAnnealingLR T_max=15 + LR 1e-3 for matched convergence
 
 **Student:** charliepai2f4-fern
