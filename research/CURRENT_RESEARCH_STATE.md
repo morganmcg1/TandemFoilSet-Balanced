@@ -1,7 +1,9 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~05:30
+- **As of:** 2026-04-29 ~08:00
 - **#963 MERGED** — T_max=13 schedule fix: val 81.81 → **64.91** (−20.66%), test 73.04 → **57.25** (−21.62%); largest single-PR win; run `j8yi780z`
+- **#1006 CLOSED** — n_layers=6 retest at T_max=11 clean negative (+9.16% val, +8.26% test); 30-min budget binds depth choice
+- **#972 CLOSED** — 3-seed mean at T_max=50 methodology valid but obsolete regime; seed=2 beats unseeded best 4.3%; askeladd→#1022 retest at T_max=13
 - **#929 CLOSED** — DropPath@0.1 clean negative (+9.5–19.6% val regression, budget-binding, 3 seeds)
 - **#949 SENT BACK** — LayerScale −4.58% gain was under T_max=50; retest required at T_max=13 (new baseline 64.91)
 - **Most recent human direction:** none
@@ -72,12 +74,14 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | +2.7% actual | **CLOSED — cross-channel coupling load-bearing; DECODER-DECOUPLING exhausted** |
 | #963 | frieren | Schedule-to-budget T_max=13 | **−20.66% val / −21.62% test** | **MERGED — new baseline 64.91** |
 | #979 | thorfinn | Pressure-only head (decouple only p) | +0.61% val (seed noise); −2.45% 3-split test | **CLOSED — new baseline supersedes; DECODER-DECOUPLING exhausted; thorfinn→#1006** |
-| #972 | askeladd | 3-seed mean canonical | variance floor | **WIP — must rerun with --t_max 13 for T_max=13 era canonical** |
+| #972 | askeladd | 3-seed mean canonical (T_max=50) | variance floor | **CLOSED — methodology valid, regime obsolete; askeladd→#1022** |
 | #1000 | frieren | T_max sweep {10,12,13,16} at seed=0 | map LR optimum + seeded canonical | **WIP** |
 | #1002 | nezuko | DropPath@0.05 + T_max=13 | +2.0% actual | **CLOSED — convergence drag; DROPPATH exhausted; nezuko→#1017** |
-| #1017 | nezuko | Channel-weight re-tune: p-weight sweep {2,4,6} at T_max=13 | 0 to −3% | **WIP (just assigned)** |
-| #1006 | thorfinn | n_layers=6 retest at T_max=11 | −2 to −7% predicted | **WIP (just assigned)** |
-| #1007 | tanjiro | RFF hybrid: axis-aligned + σ=10 RFF concat at T_max=13 | 0 to −3% | **WIP (just assigned)** |
+| #1017 | nezuko | Channel-weight re-tune: p-weight sweep {2,4,6} at T_max=13 | 0 to −3% | **WIP** |
+| #1006 | thorfinn | n_layers=6 retest at T_max=11 | +9.16% actual | **CLOSED — compute-starved at 30-min; DEPTH-VIA-MORE-BLOCKS exhausted; thorfinn→#1023** |
+| #1007 | tanjiro | RFF hybrid: axis-aligned + σ=10 RFF concat at T_max=13 | 0 to −3% | **WIP** |
+| #1022 | askeladd | 3-seed mean at T_max=13 (paper-facing canonical, current regime) | std ↓ vs T_max=50 | **WIP (just assigned)** |
+| #1023 | thorfinn | Peak LR sweep at T_max=13: lr ∈ {3e-4, 5e-4, 7.5e-4, 1e-3} | 0 to −7% | **WIP (just assigned)** |
 
 **Round 3 candidates (queued):**
 
@@ -86,9 +90,20 @@ on L1-only baseline). The compounding mechanism is well-understood.
 - **T_max sweep {10,12,13,16} at seed=0** — IN FLIGHT as frieren #1000. Maps
   LR-schedule optimum AND establishes seeded T_max=13 canonical. Predicted:
   T_max ∈ {12, 13} near-optimal; T_max=10 cuts too early; T_max=16 under-anneals.
-- **n_layers=6 retest at T_max=11** — **IN FLIGHT as thorfinn #1006.** 6-block
-  per-epoch cost ~168s → ~11 epochs per 30-min budget → T_max=11 budget-matched.
-  Expected val ≈ 60–65 (−2 to −7% vs 64.91).
+- **n_layers=6 retest at T_max=11** — **CLOSED #1006 +9.16% val / +8.26% test.**
+  Schedule fix worked (LR landed 0 at E11); model still descending at E11 with
+  steeper-than-expected slope → compute-starved. 30-min budget binds depth.
+  DEPTH-VIA-MORE-BLOCKS exhausted under current compute envelope.
+- **Peak LR sweep at T_max=13** — **IN FLIGHT as thorfinn #1023.** Sweep
+  lr ∈ {3e-4, 5e-4, 7.5e-4, 1e-3} at fixed T_max=13, seed=0. Tests if peak LR
+  was tuned to T_max=50 era (lr=5e-4 inherited from pre-#820). Predicted:
+  lr=7.5e-4 likely winner via "schedule-LR product is constant" heuristic
+  (lr × √T_max conserves cumulative-step magnitude); lr=1e-3 speculative
+  high-end. Orthogonal to frieren #1000 (varies T_max at fixed lr=5e-4).
+- **3-seed mean at T_max=13** — **IN FLIGHT as askeladd #1022.** Reissue of
+  closed #972 under post-#963 regime. Predicted val mean ≈ 63-67, std < 3.74
+  (proper convergence tightens basin selection). Produces actual paper-facing
+  canonical for current era; replaces "unseeded best 64.91" in BASELINE.md.
 - **EMA × T_max=13 compound** (#873 needs rebase onto post-#963). EMA −10.46%
   on pre-#820; T_max=13 −20.66%. If orthogonal, compound val ≈ 44-50. **Highest-
   priority architectural stack candidate.**
@@ -96,7 +111,7 @@ on L1-only baseline). The compounding mechanism is well-understood.
 - **EMA + FiLM + T_max=13 triple stack** — if both land, combine.
 - **LayerScale × T_max=13** — IN FLIGHT as fern #949 retest. Sent back with
   `--t_max 13 --seed 0` instructions.
-- **DropPath@0.05 × T_max=13** — CLOSED (#1002, +2.0% regression). Lever family DROPPATH-AT-N-LAYERS-5 exhausted. Revisit at n_layers=6 if #1006 lands.
+- **DropPath@0.05 × T_max=13** — CLOSED (#1002, +2.0% regression). Lever family DROPPATH-AT-N-LAYERS-5 exhausted. n_layers=6 retest also closed (#1006), so no headroom to revisit.
 - **Channel-weight re-tune at T_max=13** — IN FLIGHT as nezuko #1017. ch=[1,1,3] was tuned under T_max=50; p-weight sweep {2,4,6} at T_max=13 re-validates.
 - **RFF hybrid concat (axis-aligned + σ=10 RFF)** — IN FLIGHT as tanjiro #1007. σ=10 won cruise (−6.6%) and re_rand in replacement mode; concat mode lets axis-aligned hold structured backbone.
 - **EMA decay sweep {0.995, 0.97}** at T_max=13 — once #873 lands.

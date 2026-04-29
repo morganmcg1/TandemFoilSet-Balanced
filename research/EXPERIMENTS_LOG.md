@@ -1,5 +1,111 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 08:00 — PR #1006: n_layers=6 retest at T_max=11 — **CLOSED — clean negative; depth=6 doesn't fit 30-min budget**
+
+- Branch: `willowpai2e4-thorfinn/nlayers6-tmax11-retest`
+- Student: willowpai2e4-thorfinn
+- W&B run: [`mk5cub6j`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/mk5cub6j)
+- Status: **CLOSED**
+
+**Hypothesis.** Reissue of #939 (n_layers=6 closed as under-trained at T_max=50) with budget-matched schedule T_max=11 (6-block per-epoch 167s → ~11 epochs/30 min). Predicted val 60–65 (−2 to −7% vs baseline 64.91). Schedule fix should claw back the loss #939 left on the table.
+
+**Results vs baseline 64.91 (run `j8yi780z`):**
+
+| Metric | 6-block T_max=11 | Baseline (5L T_max=13) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **70.8591** | 64.9148 | **+9.16%** ✗ |
+| `test_avg/mae_surf_p` | **61.9769** | 57.2466 | **+8.26%** ✗ |
+| Best epoch | 11/11 | 13/13 | — |
+| Final LR | 0 ✓ | ≈0 ✓ | — |
+| Params | 781,947 | 661,735 | +120,212 |
+| Wall-clock per epoch | 166.6s | 142.3s | +17.1% |
+
+**Per-split breakdown (mae_surf_p):**
+
+| Split | Val 6L | Val 5L | Δ% | Test 6L | Test 5L | Δ% |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist     | 79.68 | 71.86 | +10.89% | 70.41 | 64.75 | +8.74% |
+| geom_camber_rc     | 81.02 | 76.45 | +5.99%  | 71.04 | 69.21 | +2.65% |
+| geom_camber_cruise | 55.04 | 46.54 | +18.26% | 44.63 | 39.29 | +13.58% |
+| re_rand            | 67.69 | 64.81 | +4.44%  | 61.83 | 55.74 | +10.94% |
+
+**Val curve at last 3 epochs (still descending — not plateau):**
+
+| Epoch | val_avg | LR | Δ |
+|---:|---:|---:|---:|
+| 9 | 75.59 | 3.97e-5 | −7.74 |
+| 10 | 73.48 | 1.01e-5 | −2.10 |
+| 11 | **70.86** | **0** | **−2.62** |
+
+**Three-signature compute-starvation (student's excellent diagnosis):**
+1. **Val curve still aggressively descending at LR=0.** Slope at E10→E11 (−2.62) is *steeper* than E9→E10 (−2.10) — the *opposite* of a converged cosine-annealed run.
+2. **OOD prediction contradicted.** Mechanism story was "depth helps OOD via longer-range spatial dependency." `geom_camber_cruise` (the easiest OOD split, where 5L was strongest at 46.54) regressed *most* (+18.26% val, +13.58% test). No split benefits.
+3. **Schedule-fix premium constant across depth.** #939 (broken schedule, 6L T_max=50) hit val=85.65 at E11; #1006 (proper schedule, 6L T_max=11) hit val=70.86 at E11 — 17% improvement, ballpark of the 5-block T_max=13 fix. Schedule fix is constant additive correction across depth, not depth-dependent multiplier.
+
+**Comparison with #939 (closed pre-T_max-fix):**
+
+| Run | Schedule | Val at E11 | Verdict |
+|---|---|---:|---|
+| #939 (frieren) | T_max=50, no seed | 85.65 | broken schedule + under-train |
+| #1006 (thorfinn) | T_max=11, seed=0 | 70.86 | proper schedule, still under-train |
+| Baseline (5L) | T_max=13, no seed | 64.91 | proper schedule, converged |
+
+**Mechanism settled.** The 5-block at T_max=13 has 13 epochs of fully-annealed training; the 6-block at T_max=11 has 11 epochs of fully-annealed training. The 2-epoch budget deficit costs more than one extra block of capacity buys at this compute envelope. **30-min wall-clock is a binding constraint on architecture choice.**
+
+**What this rules out:**
+- n_layers=6 at the 30-min budget is dead (3 independent attempts now bound by wall-clock).
+- DropPath@0.05 family on n_layers=6 is also dead (no headroom to revisit).
+
+**What's still open:**
+- Capacity-via-width (mlp_ratio sweep, n_head sweep, slice_num retest at T_max=13) — different lever than depth.
+- Higher peak LR with n_layers=6 — *plausible* but I'm spending the LR-sweep budget on the 5-block instead (cleaner signal). Assigned thorfinn to LR sweep at T_max=13 (#1023) on the 5-block.
+
+**Decision: CLOSED.** Lever family DEPTH-VIA-MORE-BLOCKS settled negative under the 30-min constraint. Thorfinn reassigned to peak LR sweep at T_max=13 (#1023).
+
+---
+
+## 2026-04-29 08:00 — PR #972: 3-seed mean canonical baseline at T_max=50 — **CLOSED — methodology validated, regime obsolete**
+
+- Branch: `willowpai2e4-askeladd/3-seed-mean-postSwiGLU`
+- Student: willowpai2e4-askeladd
+- W&B runs: `ifjgmuog` (seed 0), `0lmdqfuc` (seed 1), `pwh6vknd` (seed 2) — group `willowpai2e4-askeladd/3-seed-mean-postSwiGLU`
+- Status: **CLOSED**
+
+**Hypothesis.** Produce the paper-facing 3-seed mean ± std at the post-#914 canonical config (T_max=50, fourier_bands=4, use_swiglu) using `--seed {0, 1, 2}`. The merge criterion was "all 3 runs complete and reported" — not a numerical-improvement bar.
+
+**Why closed (not merged) despite delivering on the contract:** PR #963 merged a few hours after #972 was launched, dropping the baseline from 81.81 → 64.91 at T_max=13. The 3-seed mean **val=82.63 ± 3.74 sits +27.3% above the new baseline** — the entire 3σ band [71.4, 93.9] is worse than 64.91. Cannot serve as paper-facing canonical for the post-#963 era.
+
+**Results (all 3 seeds completed cleanly, 30.5–30.8 min wall-clock each, peak GPU 45.4 GB):**
+
+| Metric | seed=0 | seed=1 | seed=2 | **mean** | **std** | min | max |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | 85.1370 | 84.4213 | 78.3344 | **82.6309** | **3.7380** | 78.3344 | 85.1370 |
+| `test_avg/mae_surf_p` (4-split) | 78.9686 | 75.8750 | 68.8736 | **74.5724** | **5.1720** | 68.8736 | 78.9686 |
+| 3-split test mean (excl. cruise) | 86.7822 | 84.7991 | 74.6785 | **82.0866** | **6.4917** | 74.6785 | 86.7822 |
+
+`std/mean` ratios: 4.52% (val) / 6.94% (test, 4-split) / 7.91% (3-split). All under the 10% rule; test wider than val because test_single_in_dist carries most of the seed variance.
+
+**Per-split val (mae_surf_p at best epoch=13, T_max=50 schedule):**
+
+| Split | seed=0 | seed=1 | seed=2 | mean | std |
+|---|---:|---:|---:|---:|---:|
+| `val_single_in_dist` | 109.20 | 116.83 | 92.14 | **106.06** | **12.64** |
+| `val_geom_camber_rc` | 91.50 | 90.83 | 85.44 | **89.26** | **3.32** |
+| `val_geom_camber_cruise` | 65.09 | 56.13 | 60.83 | **60.68** | **4.48** |
+| `val_re_rand` | 74.77 | 73.89 | 74.93 | **74.53** | **0.56** |
+
+**Findings worth keeping (recorded as historical reference):**
+
+1. **Bit-exact reproduction of `j1r5y758` confirmed.** seed=0 → val_avg=85.1370 ≡ j1r5y758's 85.14 to 4 decimal places. The seed determinism merged in #863 survives every rebase since.
+2. **Wall-clock variance: 0.18 s/epoch** across 3 runs (140.86, 140.93, 141.20). Hardware-determinism solid.
+3. **σ floor under T_max=50: 3.74 val / 5.17 test (4-split).** The borderline-ablation contract was calibrated against this.
+4. **Seed=2 (78.33) BEATS unseeded best (81.81) by 4.3%.** A genuinely interesting finding: the unseeded "best" was *not* the upper-tail draw — at least one un-explored seed finds genuinely better minima at the same compute. Population is multi-modal in basin selection.
+5. **`val_re_rand` is essentially seed-invariant (σ=0.56)** — the cross-Re generalization metric is the most stable across seeds. **`val_single_in_dist` carries most of the seed variance (σ=12.64)** — the in-distribution random-100 holdout is the noisiest split. Worth remembering for future ablation reading.
+
+**Decision: CLOSED.** Methodology delivered; measurement at obsolete regime. Askeladd reassigned to **3-seed mean at T_max=13** (#1022) — same methodology, current regime, produces the actual paper-facing canonical.
+
+---
+
 ## 2026-04-29 07:15 — PR #1002: DropPath rate=0.05 + T_max=13 — **CLOSED — convergence drag confirmed; DROPPATH-AT-N-LAYERS-5 exhausted**
 
 - Branch: `willowpai2e4-nezuko/droppath-0.05-tmax13`
