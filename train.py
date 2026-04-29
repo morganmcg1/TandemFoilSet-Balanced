@@ -234,13 +234,28 @@ def fourier_pos_enc(xy: torch.Tensor, freqs=FOURIER_FREQS) -> torch.Tensor:
     return torch.cat(enc, dim=-1)
 
 
+def fourier_dsdf_encode(x: torch.Tensor, freqs=FOURIER_FREQS) -> torch.Tensor:
+    """Append sin/cos Fourier features for the 8-dim dsdf descriptor (dims 4-11).
+
+    x: [..., 24] — normalized input feature vector
+    returns: [..., 24 + 16*len(freqs)] — original x with dsdf sin/cos appended at the end
+    """
+    dsdf = x[..., 4:12]  # [..., 8]
+    enc_parts = [x]
+    for f in freqs:
+        enc_parts.append(torch.sin(f * math.pi * dsdf))
+        enc_parts.append(torch.cos(f * math.pi * dsdf))
+    return torch.cat(enc_parts, dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
                    bf16: bool = False, use_fourier: bool = False,
-                   fourier_freqs=FOURIER_FREQS) -> dict[str, float]:
+                   fourier_freqs=FOURIER_FREQS,
+                   use_fourier_dsdf: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -272,6 +287,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            if use_fourier_dsdf:
+                x_norm = fourier_dsdf_encode(x_norm, freqs=fourier_freqs)
             if use_fourier:
                 xy_norm = x_norm[..., :2]
                 xy_enc = fourier_pos_enc(xy_norm, freqs=fourier_freqs)
@@ -455,6 +472,7 @@ class Config:
     scheduler: str = "cosine"     # "cosine" | "none"
     T_max: int = 15               # cosine scheduler T_max
     fourier_pos_enc: bool = False  # apply Fourier features to (x, z) dims
+    fourier_dsdf_enc: bool = False  # apply Fourier features to dsdf dims (4-11)
     fourier_freqs: list[float] = field(default_factory=lambda: [1.0, 2.0, 4.0, 8.0, 16.0])
 
 
@@ -485,9 +503,12 @@ val_loaders = {
 }
 
 pos_enc_dim = 2 + 4 * len(cfg.fourier_freqs) if cfg.fourier_pos_enc else 2
+# Fourier dsdf appends 8*2*len(freqs) features at the end of the input.
+dsdf_enc_extra = 16 * len(cfg.fourier_freqs) if cfg.fourier_dsdf_enc else 0
+fun_dim = (X_DIM - 2) + dsdf_enc_extra
 model_config = dict(
     space_dim=pos_enc_dim,
-    fun_dim=X_DIM - 2,
+    fun_dim=fun_dim,
     out_dim=3,
     n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
@@ -503,7 +524,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(
     f"  fourier_pos_enc={cfg.fourier_pos_enc} space_dim={pos_enc_dim} "
-    f"input_dim={pos_enc_dim + (X_DIM - 2)}"
+    f"fourier_dsdf_enc={cfg.fourier_dsdf_enc} dsdf_extra={dsdf_enc_extra} "
+    f"input_dim={pos_enc_dim + fun_dim}"
 )
 
 if cfg.optimizer == "lion":
@@ -561,6 +583,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if cfg.fourier_dsdf_enc:
+            x_norm = fourier_dsdf_encode(x_norm, freqs=cfg.fourier_freqs)
         if cfg.fourier_pos_enc:
             xy_norm = x_norm[..., :2]
             xy_enc = fourier_pos_enc(xy_norm, freqs=cfg.fourier_freqs)
@@ -607,6 +631,7 @@ for epoch in range(MAX_EPOCHS):
             eval_model, loader, stats, cfg.surf_weight, device,
             bf16=cfg.bf16, use_fourier=cfg.fourier_pos_enc,
             fourier_freqs=cfg.fourier_freqs,
+            use_fourier_dsdf=cfg.fourier_dsdf_enc,
         )
         for name, loader in val_loaders.items()
     }
@@ -670,6 +695,7 @@ if best_metrics:
                 eval_model_for_test, loader, stats, cfg.surf_weight, device,
                 bf16=cfg.bf16, use_fourier=cfg.fourier_pos_enc,
                 fourier_freqs=cfg.fourier_freqs,
+                use_fourier_dsdf=cfg.fourier_dsdf_enc,
             )
             for name, loader in test_loaders.items()
         }
