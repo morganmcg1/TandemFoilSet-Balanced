@@ -29,7 +29,7 @@
 | frieren  | #854 | Huber + grad accum (accum_steps=2): double throughput, ~60 epochs in budget | training throughput | WIP |
 | fern     | #855 | Huber + surf_weight sweep: sw=5 and sw=20 vs baseline sw=10 | loss weighting | WIP |
 | askeladd | #1008 | 3rd-seed (seed7) at warmup=5 + warmup sweep warmup_epochs∈{3,10} | variance (seed budget) | WIP |
-| edward   | #940 | Relative MAE ε sweep: ε ∈ {1e-3, 1e-2, 1e-1} vs default 1e-6 | loss (ε tuning) | WIP |
+| edward   | #940 | round-2: rebase + ε=1e-3 only at 2 seeds on new tooling (winner ε=1e-3 at val=58.74 sent back due to tooling shift) | loss (ε tuning) | WIP (round 2) |
 | stark    | #842 | compound + SwiGLU param-matched h=168 | architecture (activation) | WIP |
 | himmel   | #843 | compound + gradient norm clipping (max_norm sweep 0.5 / 1.0) | optimization (stability) | WIP |
 | charlie  | #844 | compound + mlp_ratio=4 (FFN capacity at nh1) | architecture (MLP capacity) | WIP |

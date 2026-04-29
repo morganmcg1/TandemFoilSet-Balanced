@@ -1,5 +1,20 @@
 # SENPAI Research Results
 
+## 2026-04-29 03:30 — PR #940 round 1: Relative MAE ε sweep on PR #840 baseline [SENT BACK — rebase onto new tooling]
+- Branch: `willowpai2e2-edward/compound-relmae-eps-sweep`
+- Hypothesis: ε=1e-6 in `relative_mae_loss = mean(|pred - target| / (mean(|target|) + ε))` lets near-zero-target samples (cruise) hijack the gradient via huge `1/scale` weights, starving rc and single splits. Increasing ε softens this without abandoning relative weighting, redistributing optimizer budget toward under-weighted splits.
+- W&B runs (group `compound-relmae-eps-sweep`): `vevw6ksl` (ε=1e-3), `sl0udyi7` (ε=1e-2), `e272627k` (ε=1e-1)
+
+| variant | best epoch | val_avg | test_avg | best per-split val (rc, single, cruise, re_rand) |
+|---|---:|---:|---:|---|
+| baseline ε=1e-6 (PR #840 `t5p9xzxx`) | 32 | 64.16 | 55.73 | 84.10, 77.07, 36.86, 58.58 |
+| **ε=1e-3** (`vevw6ksl`) | 32 | **58.74** | **52.66** | 75.52, 68.63, 35.03, 55.77 |
+| ε=1e-2 (`sl0udyi7`) | 30 | 61.68 | 55.41 | 75.29, 77.05, 38.57, 55.80 |
+| ε=1e-1 (`e272627k`) | 31 | 60.52 | 53.17 | 73.32, 74.86, 36.61, 57.29 |
+
+- Outcome: **Sent back for rebase.** Hypothesis validated — ε=1e-3 strictly dominates ε=1e-6 on the same tooling stack (−5.42 val, −3.07 test). The non-monotone curve (ε=1e-3 < ε=1e-1 < ε=1e-2) is interesting and suggests the rc/single-vs-cruise tradeoff only kicks in at ε ≥ 1e-2. **But** runs were branched pre-tooling: fp32/bs=4/lr=5e-4, timed out at epoch 30–32 (still descending). Compared to current PR #971 baseline (val=54.70/test=48.15 with AMP/bs=16/lr=2e-3/compile/warmup), ε=1e-3's val=58.74 is +4.04 — not because ε=1e-3 is wrong but because old tooling never got 50 epochs. Send-back ask: rebase, run ε=1e-3 only at 2 seeds with new defaults (warmup=5, relative_mae default), and flip `Config.rel_mae_eps` default 1e-6 → 1e-3 in the rebased branch. Decision criteria: best-seed val ≤ 54.70 OR test ≤ 48.15 → merge.
+- Key analysis: cruise *did not pay the predicted cost*. At ε=1e-3, cruise actually improves slightly (val 36.86 → 35.03, test 30.92 → 29.37), suggesting cruise was being hurt by gradient noise from the 1/scale spike on small-magnitude samples rather than benefiting from over-weighting. ε=1e-3 wins on 6 of 8 per-split metrics.
+
 ## 2026-04-29 03:00 — PR #971: LR warmup (5ep linear) + flip loss_type default to relative_mae [WINNER — MERGED]
 - Branch: `willowpai2e2-askeladd/lr-warmup-default-relmae`
 - Hypothesis: PR #821 round-3 showed a 27-point val spread between seeds (default=82.97 vs seed42=55.90) at lr=2e-3 cosine-only on bs=16. The likely cause is early-epoch overshooting at the linearly-scaled lr — some seeds overshoot into a worse basin at epoch 1 and never recover. A 5-epoch linear LR warmup (0.05 × lr → lr) provides a ramp-up buffer that should narrow the seed variance and improve the typical-seed outcome. Secondary change: flip the `loss_type` default from `"mse"` to `"relative_mae"` for branch reproducibility.
