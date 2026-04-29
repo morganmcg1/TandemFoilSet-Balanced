@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 00:18
+- **Last updated:** 2026-04-29 01:25
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -31,61 +31,87 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 |---------|----|--------|--------|
 | alphonse | #732 | Closed | val_avg=154.95 ref; NaN test; 6/50 epochs |
 | alphonse | #796 | Closed | FiLM-Re ineffective: val_avg=135.51 vs 135.35 control; test +4.5% |
-| alphonse | #896 | **WIP** | Per-sample y-normalization (`sigma_per`-batch) |
+| alphonse | #896 | **WIP (rebase)** | Per-sample y-norm won on MSE (val=105.45, −4.7% vs Huber best); merge conflict with Huber #739 → sent back to rebase on Huber baseline and stack both |
 | askeladd | #733 | Closed | val_avg=151.50; throughput cost decisive |
 | askeladd | #811 | **Merged** | val_avg=127.402; BF16 1.20× speedup |
 | askeladd | #848 | Closed | bs={8,10}: regressed; bs=12 OOM; `add_derived_features` loop bottleneck |
 | askeladd | #885 | **WIP** | Huber delta sweep ∈ {0.3, 0.5, 1.0, 2.0} on BF16 baseline |
 | edward | #734 | Closed | sw=10 wins; sw=50/100 regress |
-| edward | #850 | WIP (rebase) | Sweep {3, 5, 7} on pre-Huber code: sw=3 won internally (val=124.05, -2.6% vs 127.40) but worse than current Huber baseline (110.59). Sent back for sw=3 + Huber stack on merged baseline. Mechanism: lower sw boosts vol signal informativeness (vol_p -22% at sw=3 vs 7) — partially complementary to Huber. |
+| edward | #850 | **WIP (rebase)** | sw=3 won internally (val=124.05, −2.6% vs 127.40) but on pre-Huber code. Sent back for single decisive sw=3 + Huber run on rebased baseline. |
 | fern | #737 | **Merged** | val_avg=127.87; warmup+cosine |
-| fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
+| fern | #809 | **WIP** | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
-| frieren | #915 | **WIP** | PhysicsAttention padding mask — silence padded nodes before slice softmax |
+| frieren | #915 | **Closed** | PhysicsAttention padding mask — cruise improved −14% test (as predicted) but rc regressed +30.8% test; net test +3.3% worse. Binary post-softmax mask disrupts attention on dense-mesh rc geometries. |
+| frieren | #943 | **WIP** | Per-channel surface loss weights: p_surf_weight ∈ {3, 20} vs vel_surf_weight=10 |
 | nezuko | #742 | Closed | dropout=0.1 regresses 12.4%; undertrained model has no overfitting to regularize |
-| nezuko | #878 | Closed | DropPath p=0.1 neutral on val_avg (+0.32, within seed noise) and +3% per-step overhead. Confirms model is undertrained, not overfit. |
+| nezuko | #878 | Closed | DropPath p=0.1 neutral on val_avg (+0.32, within seed noise) and +3% per-step overhead |
 | nezuko | #923 | **WIP** | Vectorize `add_derived_features` — remove per-sample Python loop + `.item()` CPU sync; throughput unblock |
-| tanjiro | #745 | WIP (rebase) | Sent back for Option 3 capacity-matched heads on rebased baseline |
+| tanjiro | #745 | **WIP (rebase)** | Sent back for Option 3 capacity-matched heads on rebased baseline |
 | thorfinn | #763 | **Merged** | val_avg=141.42; features + NaN-safe eval |
-| thorfinn | #810 | WIP (rebase) | EMA post-warmup-init + decay sweep on BF16 baseline |
+| thorfinn | #810 | **WIP (rebase)** | EMA post-warmup-init + decay sweep on BF16 baseline |
 
 **Current best val_avg/mae_surf_p (merged):** 110.594 (frieren #739, run `l95azbnv`).
 **Current best test_avg/mae_surf_p (merged):** 101.299 (frieren #739, run `l95azbnv`).
 
-**Four compounding wins stacked:**
+**Five compounding wins stacked:**
 1. Distance features + NaN-safe eval (#763) → val_avg=141.42
 2. Warmup+cosine LR (#737) → val_avg=127.87
 3. BF16 mixed precision (#811) → val_avg=127.40
 4. Huber loss δ=1.0 (#739) → **val_avg=110.594**
 
-**All 8 GPUs in use:** alphonse #896 (per-sample-y-norm), askeladd #885 (Huber-δ sweep), edward #850 (lower-sw), fern #809 (schedule-budget), frieren #915 (PhysicsAttention mask), nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA post-warmup rebase).
+**[PENDING MERGE]** Per-sample y-norm (#896, alphonse) — val=105.45, test=93.81 on MSE baseline;
+needs rebase onto Huber + rerun to confirm stacking.
+
+**All 8 GPUs in use:** alphonse #896 (per-sample-y-norm rebase), askeladd #885 (Huber-δ sweep),
+edward #850 (lower-sw rebase), fern #809 (schedule-budget), frieren #943 (per-channel-surf-weight),
+nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase).
 
 ## Current research themes
 
-1. **Four compounding wins now stacked (val_avg=110.594).** Next frontier: fix the remaining structural sources of error: padding attention contamination (#915), Re-imbalance from the target side (#896), and optimal loss threshold (#885).
-2. **PhysicsAttention padding mask (#915) is the highest-priority structural fix.** `val_geom_camber_cruise` barely improved with Huber (+1.2% val / −1.4% test). Frieren diagnosed the root: padded zero-vector nodes contaminate slice tokens via unmasked softmax. Cruise has the most variable mesh sizes → worst padding ratio → most contamination. Fix is exact and contained (5 surgical changes in train.py).
-3. **Re-imbalance attacks from two complementary angles in-flight:** per-sample y-norm (#896, alphonse — target-space normalization) and Huber-δ-sweep (#885, askeladd — loss-space). Both should complete soon. If they stack, the combined gain could be substantial.
-4. **Throughput bottleneck = `add_derived_features` Python loop.** Per-sample `.item()` CPU-sync + chunked pairwise distance prevent batch-size scaling. **Now in flight (#923, nezuko)** — vectorization should free 5-15% wall-clock and unblock batch-size scaling.
-5. **Wave-2 still in-flight:** EMA post-warmup (#810), tanjiro Option 3 heads (#745), schedule-budget (#809), DropPath (#878), lower-sw sweep (#850). These should all be evaluated against the new 110.594 floor.
-
-## Potential next research directions (Wave 3+)
-
-Prioritized given Huber's mechanism is now validated:
-
-- **Linearly-scaled-LR + bs=8** (after #923 lands). With `lr=1e-3 * (bs/4)` = `lr=2e-3, bs=8` and gradient accumulation guard, this retries batch-size scaling correctly. Now unblocked by nezuko's #923.
-- **`torch.compile` on the model forward.** Suggested by nezuko in #878 follow-ups. Could give 1.2-1.5× speedup on entire forward+backward, but requires care with dynamic mesh sizes.
-- **Scale-aware pressure output** — per-Re rescaling or log-magnitude head for the pressure channel specifically. If per-sample y-norm wins, this is the natural follow-on.
-- **Capacity scaling to n_hidden=192** — with 17 epochs available in BF16+Huber, ~1.5M params might fit. Particularly interesting for cruise/rc splits that require tandem interactions.
-- **Hard negative mining / Re-weighted sampler** — `WeightedRandomSampler` with weights ∝ Re or per-sample loss magnitude. Alternative attack on Re-imbalance.
-- **Architecture pivot** if tuning saturates: GINOs/FNOs (spectral), MeshGraphNets (explicit edges), equivariant attention, neural operator transformers.
-- **Boundary-layer auxiliary loss** (heteroscedastic head or gradient reweighting on `is_surface` nodes).
-
-Full literature bank in `research/RESEARCH_IDEAS_2026-04-28_19:30.md`.
+1. **Four compounding wins stacked (val_avg=110.594).** Per-sample y-norm (#896) appears decisive
+   (−4.7% even on MSE baseline) but needs rebase to confirm stacking with Huber.
+2. **Re-imbalance: two attacks in-flight.** Target-space: per-sample y-norm (#896 rebasing, alphonse).
+   Loss-space: Huber-δ sweep (#885, askeladd). Both may stack — they address different aspects of
+   the high-Re outlier problem (sigma rescaling vs gradient clipping).
+3. **Per-channel surface loss weighting (#943, frieren)** — new hypothesis motivated by:
+   (a) edward's observation that low surf_weight helps surf_p via volume-driven inference;
+   (b) the physical insight that pressure is determined globally (Poisson equation), not just locally
+   at surface nodes. Two competing directions: lower p_surf_weight=3 (volume-driven) vs
+   higher p_surf_weight=20 (direct boost). Run p=3 first.
+4. **Throughput bottleneck = `add_derived_features` Python loop (#923, nezuko).** Vectorization
+   should free 5-15% wall-clock and unblock batch-size scaling.
+5. **PhysicsAttention padding mask insight (#915 closed):** Binary post-softmax mask confirmed
+   mechanism on cruise (−14% test) but disrupted dense-mesh rc geometries (+31% test). A soft
+   learnable gate (sigmoid(MLP(x))) could capture the cruise benefit without the rc regression —
+   Wave 3 candidate.
 
 ## Open questions
 
-- Does the PhysicsAttention padding mask (#915) explain the cruise split stagnation? Are the other splits also affected?
+- Does per-sample y-norm (#896) still win when stacked on top of Huber δ=1.0? The MSE-only run
+  won (val=105.45), but the rc split regressed (+12.6% test). With Huber already capping rc
+  outlier gradients, per-sample-norm + Huber might partially cancel on rc.
 - What is the optimal Huber δ? Askeladd #885 sweep {0.3, 0.5, 1.0, 2.0} will answer this.
-- Do per-sample y-norm (#896) and Huber δ=1.0 stack (complementary mechanisms) or cancel (same lever)?
-- Does EMA (#810) work properly after post-warmup init? Test improvement from #810 pre-fix was already −4.3 points.
-- Will the val curve continue descending rapidly post-epoch-17 if we could run longer? (We can't change the timeout, but throughput improvements increase effective epochs.)
+- Does lower p_surf_weight (→3 volume-driven) outperform direct boost (→20) for surf_p MAE?
+- Does EMA (#810) work properly after post-warmup init?
+- Will surf_weight=3 + Huber (edward #850) beat the current 110.594 baseline?
+
+## Potential next research directions (Wave 3+)
+
+Prioritized given current insights:
+
+- **Per-sample-norm + Huber confirmed stacking** → then per-channel sigma (normalize each of Ux,
+  Uy, p separately, so pressure doesn't dominate sigma_per scalar).
+- **Linearly-scaled-LR + bs=8** (after #923 lands). With `lr=2e-3, bs=8` (linear scaling rule)
+  and gradient accumulation guard, retries batch-size scaling correctly.
+- **Soft attention gate for padding** — `sigmoid(learned_gate(x_node))` multiplied into slice
+  weights rather than hard 0/1 mask. Captures cruise benefit without rc regression.
+- **`torch.compile` on model forward.** 1.2-1.5× speedup candidate but requires care with
+  dynamic mesh sizes.
+- **Capacity scaling to n_hidden=192** — with 17 epochs available in BF16+Huber, ~1.5M params
+  might fit. Particularly interesting for cruise/rc splits.
+- **Hard negative mining / Re-weighted sampler** — `WeightedRandomSampler` with weights ∝ Re or
+  per-sample loss magnitude. Direct attack on Re-imbalance (alternative to per-sample-norm).
+- **Architecture pivot** if tuning saturates: GINOs/FNOs (spectral), MeshGraphNets (explicit
+  edges), equivariant attention, neural operator transformers.
+
+Full literature bank in `research/RESEARCH_IDEAS_2026-04-28_19:30.md`.

@@ -491,3 +491,68 @@ vs BF16 baseline #811 (val_avg=127.40, test_avg=116.21):
 - **Stale baseline issue:** all three runs predate the Huber merge (sw=3 created at 22:25, Huber merged at 23:40). Current best is now 110.594, so sw=3's 124.05 looks worse than baseline. But Huber and sw-lowering attack different mechanisms: Huber caps high-Re gradient contribution, low-sw boosts volume informativeness. They MAY stack.
 - **Send-back instructions:** Single re-run with `--surf_weight 3.0` on rebased branch (Huber δ=1.0 is now default). If beats 110.594 → merge as new baseline. If lands 105-115 → marginal. If >115 → Huber already captured this lever.
 - **Future PR (per-channel surface weights):** student suggested `surf_weight_p=3, surf_weight_uv=10` to keep velocity accuracy while gaining pressure improvement — clever, hold for follow-up if this PR wins.
+
+---
+
+## 2026-04-29 01:15 — PR #915: Mask padded nodes in PhysicsAttention slice aggregation — closed (mixed result)
+
+- **Branch:** `willowpai2e5-frieren/physics-attention-padding-mask` (closed)
+- **W&B run:** `msywsg7o`
+- **Hypothesis:** Padded zero-vector nodes contaminate slice tokens via unmasked softmax in PhysicsAttention. Masking them out (post-softmax zero) should improve predictions, especially on cruise geometries with variable mesh sizes / high padding ratio.
+
+### Results vs Huber baseline (val_avg=110.594, test_avg=101.299)
+
+| Split | val/mae_surf_p (base) | val/mae_surf_p (mask) | Δ val | test/mae_surf_p (base) | test/mae_surf_p (mask) | Δ test |
+|-------|----------------------:|-----------------------:|------:|------------------------:|------------------------:|-------:|
+| `single_in_dist`    | 130.87 | ~130.2 | ~−0.5% | 124.544 | ~127.7 | ~+2.5% |
+| `geom_camber_rc`    | 115.14 | ~118.6 | ~+3.0% | 99.385  | ~130.0 | **+30.8%** |
+| `geom_camber_cruise`| 92.61  | ~79.6  | **−14.1%** | 80.195  | ~68.7  | **−14.3%** |
+| `re_rand`           | 103.76 | ~104.1 | ~+0.3% | 101.070 | ~102.5 | ~+1.4% |
+| **avg**             | **110.594** | **~108.1** | **−0.6%** (noise) | **101.299** | **~107.2** | **+3.3%** |
+
+(Approximate per-split numbers reconstructed from PR comment; W&B run `msywsg7o` confirmed.)
+
+### Commentary & Conclusions
+
+- **Mechanism confirmed on cruise** (−14.3% test, −14.1% val) exactly as predicted. Cruise has the most variable mesh sizes and highest padding ratio → most contamination from padded zero-nodes in the slice-softmax.
+- **RC split regressed sharply** (+30.8% test). RC geometries (raceCar tandem, M=6-8) have denser, more uniform meshes → lower padding ratio → the hard binary post-softmax mask zeroes real attention weight, disrupting tandem-wake slice tokens.
+- **Net aggregate:** val_avg −0.6% (within ~5-unit seed noise), test_avg +3.3% worse. The cruise gain and rc regression approximately cancel; aggregate is negative.
+- **Why the binary mask fails on rc:** The fix patches symptom (padded nodes contaminating slices) but breaks mechanism (slice assignment flexibility) on dense-mesh geometries. A soft learnable gate (sigmoid(MLP(x))) would preserve attention on dense meshes while suppressing true padding — this is a Wave 3 idea.
+- **Decision: Closed.** Mechanism insight is valuable but the binary mask is not a net improvement. Redirecting frieren to per-channel surface loss weighting (#943).
+
+---
+
+## 2026-04-29 01:20 — PR #896: Per-sample y-normalization — sent back for rebase on Huber baseline
+
+- **Branch:** `willowpai2e5-alphonse/per-sample-y-normalization` (sent back, merge conflict with #739)
+- **W&B run:** `5ihd38bk` (winning run: `per-sample-y-norm-clip1`)
+- **Hypothesis:** Normalize each sample's residual by its per-sample standard deviation (sigma_per) before computing the loss, equalizing Re-regime contributions. High-Re samples (large sigma_per) are effectively down-weighted; low-Re samples (small sigma_per) get amplified. This is a target-space fix vs Huber's loss-space fix — potentially complementary.
+
+### Results vs current Huber baseline (val_avg=110.594, test_avg=101.299)
+
+| Split | Huber baseline | Per-sample-norm (MSE) | Δ vs Huber |
+|-------|---------------:|----------------------:|------------|
+| `single_in_dist`    | 130.87 | **131.105** | +0.2% |
+| `geom_camber_rc`    | 115.14 | **128.262** | +11.4% |
+| `geom_camber_cruise`| 92.61  | **72.292**  | **−21.9%** |
+| `re_rand`           | 103.76 | **90.152**  | **−13.1%** |
+| **val_avg**         | **110.594** | **105.453** | **−4.7%** |
+
+| Split | Huber baseline | Per-sample-norm (MSE) | Δ vs Huber |
+|-------|---------------:|----------------------:|------------|
+| `test_single_in_dist`    | 124.544 | **117.075** | −6.0% |
+| `test_geom_camber_rc`    | 99.385  | **111.894** | **+12.6%** |
+| `test_geom_camber_cruise`| 80.195  | **60.451**  | **−24.6%** |
+| `test_re_rand`           | 101.070 | **85.834**  | **−15.1%** |
+| **test_avg**             | **101.299** | **93.814** | **−7.4%** |
+
+Note: alphonse's PR compared against the pre-Huber #811 baseline (127.402), not the current Huber best. Even vs current Huber baseline, this is still a clear winner on average.
+
+### Commentary & Conclusions
+
+- **Per-sample-norm is a decisive win on cruise and re_rand** (both OOD Re splits). Cruise −24.6% test, re_rand −15.1% test — the Re-normalization is directly attacking the generalization failure mode.
+- **RC regression at +12.6% test** is concerning. RC has dense meshes, tighter Re range — sigma_per may be less variable for RC samples, so per-sample-norm doesn't help and possibly adds noise.
+- **Average win is clear** (−4.7% val, −7.4% test) despite the RC regression, because cruise and re_rand dominate by sheer magnitude.
+- **Important:** ran WITHOUT Huber loss (huber_delta=None). The per-sample-norm mechanism supersedes Huber for Re-imbalance but may stack with it. Merge conflict with Huber code (different edit points in the loss computation) — sent back for rebase.
+- **Grad_clip=1.0** added by student (undocumented in original PR instructions) — correct decision for stability with large per-sample weight variation.
+- **Decision: Sent back for rebase on Huber baseline.** When rebased, instruct alphonse to stack both: the sq_err normalization by sigma_per should be applied to the huber_err tensor (not a raw sq_err) — i.e., compute `huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)` then divide by `sigma_per.unsqueeze(1)` before weighting by surf/vol masks.
