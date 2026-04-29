@@ -2,45 +2,52 @@
 
 ## Current Best Result
 
-**Source:** PR #1208 — Extended training 75ep + T_max=75 on FiLM+Fourier baseline (charliepai2f3-frieren)
+**Source:** PR #1226 — Extended training 100ep + T_max=100 + warmup=5 on FiLM+Fourier baseline (charliepai2f3-frieren)
 
-**Primary metric:** `val_avg/mae_surf_p = 35.8406`
+**Primary metric:** `val_avg/mae_surf_p = 34.3851`
 
-**Configuration:** Lion optimizer + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=75, single full-cycle decay) + grad_clip=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + epochs=75 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
+**Configuration:** Lion optimizer + L1 loss + EMA(0.995) + bf16 autocast + n_layers=1 + surf_weight=28 + cosine scheduler (T_max=100, single full-cycle decay) + 5-epoch linear warmup (start_factor=1/30) + grad_clip=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + batch_size=4 + epochs=100 + Fourier positional encoding on (x,z) with freqs=(1,2,4,8,16,32,64) + FiLM global conditioning (scale+shift per TransolverBlock conditioned on Re/AoA/NACA regime vector, DiT/AdaLN-Zero init)
 
-**Note:** Training was cut at ep57/75 by 30-min wall-clock timeout — model still improving at cutoff. No warmup in this run (multi-cycle cosine from the PR #1104 config). The longer T_max=75 horizon keeps LR meaningfully nonzero throughout, making the full-cycle decay the primary driver.
+**Note:** Training was cut at ep66/100 by 30-min wall-clock timeout — model still strictly improving at cutoff (LR ~0.35× peak at ep66 under T_max=100 cosine). Adding `--warmup_start_factor` as explicit CLI flag (backward-compatible). The longer T_max=100 horizon provides even gentler LR decay, keeping the model in productive learning territory throughout the budget.
 
 **Per-split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| val_single_in_dist | 33.7806 |
-| val_geom_camber_rc | 51.6584 |
-| val_geom_camber_cruise | 19.6970 |
-| val_re_rand | 38.2266 |
-| **val_avg** | **35.8406** |
+| val_single_in_dist | 33.2342 |
+| val_geom_camber_rc | 48.3516 |
+| val_geom_camber_cruise | 18.4376 |
+| val_re_rand | 37.5171 |
+| **val_avg** | **34.3851** |
 
 **Test split breakdown:**
 | Split | mae_surf_p |
 |-------|-----------|
-| test_single_in_dist | 29.8002 |
-| test_geom_camber_rc | 44.5661 |
-| test_geom_camber_cruise | 16.0529 |
-| test_re_rand | 29.2713 |
-| **test_avg** | **29.9226** |
+| test_single_in_dist | 29.6291 |
+| test_geom_camber_rc | 43.9391 |
+| test_geom_camber_cruise | 15.1660 |
+| test_re_rand | 27.2856 |
+| **test_avg** | **29.0050** |
 
-**Training:** ~30.33 min (wall-clock timeout at ep57/75), best epoch 57 (still improving), batch_size=4, Peak VRAM: 9.89 GB, n_params: 252,487
+**Training:** ~30 min (wall-clock timeout at ep66/100), best epoch 66 (still improving), batch_size=4, n_params: 252,487
 
-**Metrics path:** `target/models/model-charliepai2f3-frieren-extended-training-film-75ep-20260429-154641/metrics.jsonl`
+**Metrics path:** `target/models/model-charliepai2f3-frieren-extended-100ep-tmax100-warmup5-20260429-164337/metrics.jsonl`
 
 ## Run Command
 
 ```bash
-cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 3e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 75 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 64 --mlp_ratio 2 --batch_size 4 --epochs 75 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
+cd target/ && python train.py --n_layers 1 --bf16 True --surf_weight 28.0 --optimizer lion --lr 3e-4 --weight_decay 1e-2 --loss l1 --scheduler cosine --T_max 100 --warmup_epochs 5 --warmup_start_factor 0.0333 --clip_grad_norm 1.0 --n_hidden 128 --n_head 4 --slice_num 64 --mlp_ratio 2 --batch_size 4 --epochs 100 --fourier_pos_enc --fourier_freqs 1 2 4 8 16 32 64
 ```
 
-Note: Extended to 75 epochs with T_max=75 single-decay cosine. Key insight: longer T_max keeps the LR meaningfully nonzero throughout training — at ep49 (same count as previous baseline), this run already achieved val_avg=37.21 vs 39.95, a −6.86% gain from the schedule change alone. Extra epochs 50–57 added another −3.27%. Best epoch=57 was the final epoch reached (wall-clock limited) — model was still improving with a steeply downward val curve. FiLM conditioning is the default in codebase after PR #1104.
+Note: Extended to 100 epochs with T_max=100 single-decay cosine + 5-epoch linear warmup. Key insight: longer T_max=100 keeps LR at ~0.35× peak even at ep66 (cutoff), maintaining productive learning throughout the entire wall-clock budget. All 4 val splits improved over baseline. Best epoch=66 was the final epoch reached (wall-clock limited) — model was still improving.
 
 ## Merge History
+
+### 2026-04-29 — PR #1226: Extended training 100ep + T_max=100 + warmup=5 on FiLM+Fourier baseline (charliepai2f3-frieren)
+- Previous: `val_avg/mae_surf_p = 35.8406` (PR #1208, T_max=75, 75ep, no warmup)
+- New best: `val_avg/mae_surf_p = 34.3851` (improvement: −1.4555, −4.06%)
+- Test: `test_avg/mae_surf_p = 29.0050` (improvement vs previous test_avg 29.9226: −0.9176, −3.07%)
+- Student: charliepai2f3-frieren
+- Key finding: T_max=100 (single full-cycle cosine) with 5-epoch warmup extends productive training deeper into the wall-clock budget — LR still ~0.35× peak at ep66 cutoff. All 4 val splits and all 4 test splits improved. test_avg now at 29.005.
 
 ### 2026-04-29 — PR #1208: Extended training 75ep + T_max=75 on FiLM+Fourier baseline (charliepai2f3-frieren)
 - Previous: `val_avg/mae_surf_p = 37.0739` (PR #1175, FiLM+Fourier+warmup, T_max=45, 50 epochs)
