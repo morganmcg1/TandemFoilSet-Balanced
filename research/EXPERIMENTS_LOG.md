@@ -23,9 +23,33 @@ Gradient-ratio diagnostics confirmed rebalancing occurred: sw=10→sw=5 shifted 
 
 ---
 
-## 2026-04-29 — Assignments: PR #1056 (tanjiro LR sweep), PR #1057 (thorfinn NACA_M FiLM)
+## 2026-04-29 — PR #975 (CLOSED): DropPath rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify
+- **Branch:** `edward/drop-path-sweep`
+- **Hypothesis:** DropPath on FiLM stack forces each block to be independently Re-aware; FiLM ensemble argument — DropPath stochastically trains sub-networks where each must carry the FiLM modulation independently. Rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify.
+
+| Rate | val_avg/mae_surf_p | Δ vs baseline (79.54) | test_avg | W&B run |
+|---|---|---|---|---|
+| 0 (ref) | **79.54** | — | 70.26 | `wakfw4uy` |
+| 0.05 | 83.81 | **+5.4%** | 73.73 | `jxckpnfe` |
+| 0.10 | 84.24 | **+5.9%** | 74.54 | `y4ehh4cr` |
+| 0.15 | 88.86 | **+11.7%** | 79.44 | `t2q49zn5` |
+
+Note: run on OLD canonical (pre-SwiGLU, pre-RMSNorm) stack.
+
+- **Key finding:** All 3 rates regress monotonically with rate. Best epoch = 14 (last) for all runs, with val still descending at ~1-2/epoch. DropPath is *delaying convergence*, not improving generalization, under the fixed 14-epoch budget. The `geom_camber_rc` target didn't improve at any rate (92.95 → 94.42 / 95.22 / 99.41).
+- **Mechanism (edward's analysis):** DropPath randomly drops residual branches, interrupting the FiLM `(1+γ)·h + β` modulation chain — the conditioned `h` no longer gets attn/MLP refinement it was conditioned for. Higher rate → more disruption → slower convergence. Inverts the original "FiLM-ensemble" argument.
+- **Generalization:** Mechanism likely amplified on new SwiGLU+RMSNorm canonical (bilinear gating amplifies sensitivity to consistent gradient flow). No re-run on new canonical justified.
+
+### Decision: CLOSED — all 3 rates >81 (close criterion hit); DropPath is a convergence-disruptor not a regularizer on this FiLM stack.
+- **DropPath declared closed as a lever.** Paper-quality negative result for ablation table.
+- **Follow-up:** edward → PR #1061 (NACA_M1-stratified batch sampling — camber-axis gradient equalization, mirrors Re-stratify mechanism on the hardest OOD split axis).
+
+---
+
+## 2026-04-29 — Assignments: PR #1056 (tanjiro LR sweep), PR #1057 (thorfinn NACA_M FiLM), PR #1061 (edward NACA_M stratify)
 - **PR #1056** (`tanjiro/lr-sweep`): Three-run sweep lr ∈ {2e-4, 5e-4 (reference), 1e-3} with wd=1e-4 on canonical stack (SwiGLU+ratio=1+RMSNorm+FiLM-pre+L1+Re-stratify). Optimizer axis never re-tuned since founding baseline; SwiGLU bilinear gating + RMSNorm change loss landscape curvature, optimal LR may have shifted.
 - **PR #1057** (`thorfinn/naca-film`): Extend FiLM input from 1-d (log_Re) to 2-d (log_Re, NACA_M1 — front foil camber magnitude, dim 15). Directly targets `geom_camber_rc` (M=6-8 held out) and `geom_camber_cruise` (M=2-4 held out) — the hardest OOD splits. NACA_M is literally the held-out variable. Complementary to askeladd's AoA-FiLM (flow conditions vs geometry conditioning). γ-norm diagnostics protocol per thorfinn's RMSNorm gold standard.
+- **PR #1061** (`edward/naca-m-stratify`): NACA_M1-stratified batch sampling — mirrors ReStratifiedSampler (which won PR #910 −2.5%) but on the front-foil camber axis. v1: NACA_M only (no Re-stratify). v2: NACA_M + Re. NacaMStratifiedSampler uses dim 15 (`x[0, 15]`), 5 quintiles, round-robin. Directly targets `geom_camber_rc` (held-out M=6-8) and `geom_camber_cruise` (held-out M=2-4). Orthogonal to thorfinn's NACA_M FiLM (data-side vs model-side).
 
 ---
 
