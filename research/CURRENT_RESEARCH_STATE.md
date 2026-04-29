@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-28 23:48
+- **Last updated:** 2026-04-29 00:08
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -42,8 +42,9 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
 | frieren | #915 | **WIP** | PhysicsAttention padding mask — silence padded nodes before slice softmax |
-| nezuko | #742 | Closed | dropout=0.1 regresses 12.4% |
-| nezuko | #878 | WIP | DropPath/stochastic depth (drop_path_max=0.1) |
+| nezuko | #742 | Closed | dropout=0.1 regresses 12.4%; undertrained model has no overfitting to regularize |
+| nezuko | #878 | Closed | DropPath p=0.1 neutral on val_avg (+0.32, within seed noise) and +3% per-step overhead. Confirms model is undertrained, not overfit. |
+| nezuko | #923 | **WIP** | Vectorize `add_derived_features` — remove per-sample Python loop + `.item()` CPU sync; throughput unblock |
 | tanjiro | #745 | WIP (rebase) | Sent back for Option 3 capacity-matched heads on rebased baseline |
 | thorfinn | #763 | **Merged** | val_avg=141.42; features + NaN-safe eval |
 | thorfinn | #810 | WIP (rebase) | EMA post-warmup-init + decay sweep on BF16 baseline |
@@ -57,22 +58,22 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 3. BF16 mixed precision (#811) → val_avg=127.40
 4. Huber loss δ=1.0 (#739) → **val_avg=110.594**
 
-**All 8 GPUs in use:** alphonse #896 (per-sample-y-norm), askeladd #885 (Huber-δ sweep), edward #850 (lower-sw), fern #809 (schedule-budget), frieren #915 (PhysicsAttention mask), nezuko #878 (DropPath), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA post-warmup rebase).
+**All 8 GPUs in use:** alphonse #896 (per-sample-y-norm), askeladd #885 (Huber-δ sweep), edward #850 (lower-sw), fern #809 (schedule-budget), frieren #915 (PhysicsAttention mask), nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA post-warmup rebase).
 
 ## Current research themes
 
 1. **Four compounding wins now stacked (val_avg=110.594).** Next frontier: fix the remaining structural sources of error: padding attention contamination (#915), Re-imbalance from the target side (#896), and optimal loss threshold (#885).
 2. **PhysicsAttention padding mask (#915) is the highest-priority structural fix.** `val_geom_camber_cruise` barely improved with Huber (+1.2% val / −1.4% test). Frieren diagnosed the root: padded zero-vector nodes contaminate slice tokens via unmasked softmax. Cruise has the most variable mesh sizes → worst padding ratio → most contamination. Fix is exact and contained (5 surgical changes in train.py).
 3. **Re-imbalance attacks from two complementary angles in-flight:** per-sample y-norm (#896, alphonse — target-space normalization) and Huber-δ-sweep (#885, askeladd — loss-space). Both should complete soon. If they stack, the combined gain could be substantial.
-4. **Throughput bottleneck = `add_derived_features` Python loop.** Per-sample `.item()` CPU-sync + chunked pairwise distance prevent batch-size scaling. Vectorizing this is the highest-leverage systems engineering next step once a suitable student is idle.
+4. **Throughput bottleneck = `add_derived_features` Python loop.** Per-sample `.item()` CPU-sync + chunked pairwise distance prevent batch-size scaling. **Now in flight (#923, nezuko)** — vectorization should free 5-15% wall-clock and unblock batch-size scaling.
 5. **Wave-2 still in-flight:** EMA post-warmup (#810), tanjiro Option 3 heads (#745), schedule-budget (#809), DropPath (#878), lower-sw sweep (#850). These should all be evaluated against the new 110.594 floor.
 
 ## Potential next research directions (Wave 3+)
 
 Prioritized given Huber's mechanism is now validated:
 
-- **Vectorize `add_derived_features`** — remove Python loop + `.item()` CPU sync. Unblocks batch-size scaling. One student slot when someone becomes idle.
-- **Linearly-scaled-LR + bs=8** (after vectorization). With `lr=1e-3 * (bs/4)` = `lr=2e-3, bs=8` and gradient accumulation guard, this retries batch-size scaling correctly.
+- **Linearly-scaled-LR + bs=8** (after #923 lands). With `lr=1e-3 * (bs/4)` = `lr=2e-3, bs=8` and gradient accumulation guard, this retries batch-size scaling correctly. Now unblocked by nezuko's #923.
+- **`torch.compile` on the model forward.** Suggested by nezuko in #878 follow-ups. Could give 1.2-1.5× speedup on entire forward+backward, but requires care with dynamic mesh sizes.
 - **Scale-aware pressure output** — per-Re rescaling or log-magnitude head for the pressure channel specifically. If per-sample y-norm wins, this is the natural follow-on.
 - **Capacity scaling to n_hidden=192** — with 17 epochs available in BF16+Huber, ~1.5M params might fit. Particularly interesting for cruise/rc splits that require tandem interactions.
 - **Hard negative mining / Re-weighted sampler** — `WeightedRandomSampler` with weights ∝ Re or per-sample loss magnitude. Alternative attack on Re-imbalance.

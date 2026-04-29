@@ -430,3 +430,30 @@ vs BF16 baseline #811 (val_avg=127.40, test_avg=116.21):
 - **Still timeout-limited at epoch 16/17.** Val curve descending at cutoff (epoch 15→16: 125 → 110). Convergence floor not reached.
 - **`val_geom_camber_cruise` stagnated.** Only −1.2% val (vs −15% pre-rebase on older baseline). cruise test slightly worse (+1.4%). Frieren diagnosed the likely cause: `PhysicsAttention` distributes softmax mass over padded positions — cruise has the most geometric diversity (most variable mesh sizes) → worst padding ratio per batch. **Assigned frieren to fix this (#915).**
 - **Askeladd #885 now the right follow-up.** Sweep δ ∈ {0.3, 0.5, 1.0, 2.0} on top of this merged baseline.
+
+---
+
+## 2026-04-29 00:05 — PR #878: DropPath/stochastic depth on residual branches — closed
+
+- **Branch:** `willowpai2e5-nezuko/drop-path` (closed)
+- **W&B runs:** `zrpxz35j` (control p=0.0), `vixyda0y` (p=0.1) — group `drop-path`
+- **Hypothesis:** DropPath at p_max=0.1 (linear schedule across 5 layers) provides implicit ensembling regularization, frees per-step compute (skipped residual branches), and shifts best_epoch later → better generalization on undertrained model.
+
+### Results (against BF16 baseline `newqt8dd`, before Huber merge)
+
+| drop_path | val_avg/mae_surf_p (best) | test_avg/mae_surf_p | best_epoch | s/epoch | epochs in 30 min |
+|-----------|--------------------------:|--------------------:|-----------:|--------:|-----------------:|
+| **0.0 (control)** | **131.89** | **121.64** | 16 | 110.0 | **17** |
+| 0.1 | 132.22 | 122.19 | 12 | 113.2 | 16 |
+
+(both runs worse than current Huber baseline 110.594, but the comparison is internal to this PR)
+
+### Commentary & Conclusions
+
+- **Decision: Closed. Clean negative with excellent mechanistic analysis.** All three pillars of the hypothesis falsified.
+- **No regularization benefit:** val_avg delta (+0.32) is well within seed noise (~4–5 units). Per-split redistribution exists (rc −10.9, cruise +14.6) but net-cancels. Implicit-ensembling claim does not survive at one-seed precision.
+- **Wall-clock argument falsified:** per-epoch time *increased* by +3% (113.2 vs 110.0 s/epoch). The per-sample mask construction and division cost across 10 residual branches per step exceeds the autograd savings on n_layers=5 × n_hidden=128. DropPath wall-clock benefits show up at ViT scale (12+ layers, 384+ hidden), not here.
+- **best_epoch moved earlier (16 → 12):** opposite direction from the predicted later-best-epoch signature. Adding noise to an undertrained model finds the optimum sooner and then plateaus — the opposite of "regularization extending useful training horizon".
+- **Joint with #742 (per-activation dropout):** two negative results in a row with the same mechanistic root cause — the model is undertrained, not overfit. Standard transformer regularizers do not pay rent in this regime.
+- **Student's diagnosis is correct:** the dominant constraint is wall-clock, not regularization. Their #1 follow-up suggestion (`torch.compile`) and the broader throughput direction are exactly right.
+- **Nezuko reassigned** to vectorize `add_derived_features` (#923) — the per-sample CPU-sync Python loop identified by askeladd in #848 as the throughput bottleneck. This is an exact, contained, deterministic optimization that should free 5–15% wall-clock.
