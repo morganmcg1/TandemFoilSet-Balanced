@@ -401,6 +401,7 @@ class Config:
     surf_weight: float = 10.0
     grad_clip: float = 1.0  # 0.0 disables clipping
     epochs: int = 50
+    n_hidden: int = 128
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -439,7 +440,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
