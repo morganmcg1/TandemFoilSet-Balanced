@@ -1,5 +1,47 @@
 # SENPAI Research Results
 
+## 2026-04-29 21:45 — PR #1297: Per-block FiLM generators — CLOSED (negative result)
+
+- charliepai2f2-edward/per-block-film-generators
+- **Hypothesis**: Replace `SharedFiLMGenerator` (one shared MLP for all 5 blocks) with 5 independent `PerBlockFiLMGenerator` instances (each `Linear(1,128) → GELU → Linear(128,256)` per block). Hypothesis was that per-block specialization allows each TransolverBlock to apply distinct Re conditioning patterns.
+- **Status**: CLOSED — clear regression, all splits worse
+
+| Split | Baseline (PR #1264) | PR #1297 val | Δ |
+|-------|---------------------|--------------|---|
+| single_in_dist     | 82.09 | 85.46 | +3.37 (+4.1%) |
+| geom_camber_rc     | 85.31 | 91.12 | +5.81 (+6.8%) |
+| geom_camber_cruise | 55.67 | 58.39 | +2.72 (+4.9%) |
+| re_rand            | 74.38 | 77.34 | +2.96 (+4.0%) |
+| **avg**            | **74.36** | **78.40** | **+4.04 (+5.4%)** |
+
+17 epochs at ~104s/epoch. Params: 828,759 (+1,024 vs baseline — essentially same total).
+
+**Root cause**: The shared generator acts as a useful inductive bias with only ~1,500 training samples. Each block independently learning a 1-D log(Re) mapping wastes capacity — the shared bottleneck forces coordinated Re conditioning across all 5 TransolverBlocks. At this data scale, parameter efficiency matters more than per-block specialization. Student's analysis correct and thorough.
+
+**Follow-up**: PR #1309 assigned to edward — deeper shared MLP (2-layer: 1→128→128→1280) retains shared bottleneck but increases the generator's non-linear capacity. This is the correct direction motivated directly by the PR #1297 failure analysis.
+
+---
+
+## 2026-04-29 22:00 — PR #1295: n_layers 5→6 on BF16+FiLM+OneCycleLR stack
+
+- charliepai2f2-alphonse/n-layers-6-film-bf16-stack
+- **Hypothesis**: Adding a 6th TransolverBlock on the FiLM+BF16+OneCycleLR stack to test whether more depth improves CFD feature extraction. Previously failed at FP32 (PR #1161) due to VRAM. Now with 60 GB headroom, architecture may be viable.
+- **Status**: CLOSED — undertrained (epoch-budget mismatch, not a genuine architecture failure)
+
+| Split | Baseline val (PR #1264) | PR #1295 val | Δ |
+|-------|------------------------|--------------|---|
+| single_in_dist     | 82.09 | ~97 (est) | +18% |
+| geom_camber_rc     | 85.31 | ~100 (est) | +17% |
+| geom_camber_cruise | 55.67 | ~65 (est)  | +17% |
+| re_rand            | 74.38 | ~87 (est)  | +17% |
+| **avg**            | **74.36** | **87.42** | **+17.6%** |
+
+**Root cause**: `ONECYCLE_PER_EPOCH_SEC_ESTIMATE=100.0` assumed 100 s/epoch but n_layers=6 actual wall-clock was ~124 s/epoch. This caused `budgeted_epochs_lr=19` but only ~15 epochs fit in 30 min. The OneCycleLR schedule never reached its annealing tail — model was still in the cosine descent phase at cutoff, losing ~12 pts/epoch improvement. This is *not* a genuine architecture failure; it's a timing/budget mismatch. The hypothesis remains open for a corrected re-run.
+
+**Follow-up**: charliepai2f2-alphonse assigned corrected n_layers=6 re-test with `ONECYCLE_PER_EPOCH_SEC_ESTIMATE=125` so `budgeted_epochs_lr≈14-15`, schedule properly anneals within 30-min budget.
+
+---
+
 ## 2026-04-29 16:30 — PR #1207: batch_size=8 — Larger batch with BF16 VRAM headroom
 
 - charliepai2f2-askeladd/batch-size-8
@@ -450,3 +492,45 @@ Fern also implemented a valuable **sample-level NaN filter** in `evaluate_split`
 Not a fair comparison. The n_hidden=256 model runs at ~258s/epoch vs. baseline's ~131s/epoch, so in the 30-minute timeout, it only completed 7/50 epochs vs. baseline's ~14. The LR was still near its peak (cosine annealing with T_max=50 had only annealed ~5%). The training curve was monotonically improving at epoch 6 (173.99), with epoch 7 showing instability (213.43) from high LR. Additional issue: NaN in test_geom_camber_cruise pressure — same corrupted GT sample as other experiments; not unique to this model.
 
 **Sent back with instruction to try n_hidden=192, n_head=6 (keeping head_dim=32) with surf_weight=25, which should bring per-epoch time closer to 200s and allow ~9 epochs within the timeout with better LR annealing. Also instructed to add nan_to_num guard.**
+
+---
+
+## 2026-04-29 18:02 — PR #1211: BF16 + OneCycleLR (1-cycle schedule over 19-epoch BF16 budget)
+
+- **Branch**: charliepai2f2-nezuko/bf16-onecycle-combined
+- **Hypothesis**: Combine BF16 AMP (PR #1184, 19 epochs) with OneCycleLR (PR #1195, schedule shape) to compound throughput + schedule gains. max_lr=1.2e-3, pct_start=0.3, total_steps = steps_per_epoch * 19.
+- **Outcome**: **MERGED — new baseline (val=80.53, -9.5%)**
+
+### Results
+
+| Split | val mae_surf_p | test mae_surf_p |
+|-------|---------------:|----------------:|
+| single_in_dist     | 91.33 | 80.43 |
+| geom_camber_rc     | 91.01 | 83.65 |
+| geom_camber_cruise | 60.42 | 50.04 |
+| re_rand            | 79.36 | 70.80 |
+| **avg**            | **80.53** | **71.23** |
+
+- Metrics JSONL: `target/models/model-charliepai2f2-nezuko-bf16-onecycle-combined-20260429-154838/metrics.jsonl`
+- Wall: 31.4 min, peak GPU memory 32.96 GB, 19 epochs at 98–100 s/epoch, best checkpoint = final epoch
+- Schedule fully annealed to min_lr ≈ 4.9e-9; classic 1-cycle convergence pattern (val drops monotonically from epoch 6 onwards)
+
+### Analysis
+
+The two improvements were nearly additive: PR #1184 alone gave 89.00 (BF16 throughput), PR #1195 alone gave a ~14% improvement over CosineAnnealing at the older baseline. Together they yield 80.53. Best checkpoint at the final epoch indicates no overshoot — schedule is well-sized but might still be slightly under-budgeted. Suggested follow-ups (max_lr {1.0e-3, 1.5e-3}, pct_start=0.2, 20-epoch budget, surf_weight×OneCycle interaction) become high-priority next experiments.
+
+---
+
+## 2026-04-29 18:21 — Round 4 closed experiments (negative results)
+
+| PR | Student | Hypothesis | val_avg/mae_surf_p | vs PR #1184 baseline | Disposition |
+|----|---------|-----------|--------------------:|----------------------|-------------|
+| #1207 | askeladd | batch_size=8 with BF16 VRAM headroom | 112.62 | +26.5% | Closed — halved gradient steps in 30-min budget |
+| #1206 | edward   | mlp_ratio=2→3 (wider FFN) | 95.31 | +7.1% | Closed — model still descending at epoch 18, underfit |
+| #1204 | alphonse | Re noise std=0.05 | 99.99 (baseline 100.41 stale) | n/a | Closed — implementation bug (per-node not per-sample); idea sound, retry on full stack with `torch.randn(B,1,1)*0.05` |
+| #1203 | fern     | Checkpoint averaging K=3 (SWA) | 102.98 | +15.7% | Closed — all 3 averaged checkpoints from cosine eta_min tail; no diversity to average |
+| #1199 | tanjiro  | FiLM conditioning on log(Re) | 92.20 | +3.6% | Closed — fair test impossible (no BF16, only 13 epochs); retry as lightweight shared FiLM on BF16+OneCycle stack |
+| #1152 | thorfinn | CosineAnnealingLR eta_min=1e-5 | 92.28 | +3.7% | Closed — eta_min=1e-6 default better; finer late-training updates win in cosine tail |
+
+All six experiments produced clean negative results with clear root-cause analyses from students. Lessons logged into `CURRENT_RESEARCH_STATE.md` insights 1, 8, 9, 10.
+
