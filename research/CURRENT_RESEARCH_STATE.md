@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 03:25
+- **Last updated:** 2026-04-29 03:45
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -39,7 +39,8 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | askeladd | #885 | **WIP (rebase)** | δ sweep done on sw=10: **δ=0.3 wins** (val=97.96, test=87.78 — beats current best 101.56/89.92 alone). PR conflicts with merged Huber #739 + sw=3 #850. Sent back for rebase + decisive δ=0.3+sw=3 stacking run + δ=0.1 trend test. |
 | edward | #734 | Closed | sw=10 wins; sw=50/100 regress |
 | edward | #850 | **Merged** | sw=3 + Huber: **val_avg=101.563 (−8.17%), test_avg=89.918 (−11.24%)**. All 4 splits improved. Default surf_weight changed to 3.0 in Config. W&B: `6rh7dzkx`. |
-| edward | #953 | **WIP** | Sweep surf_weight ∈ {0.5, 1.0, 2.0} — find floor below sw=3. Val still descending at timeout in #850; lower sw may continue trend. |
+| edward | #953 | **Closed** | sw=0.5 won val_avg=99.185 (-2.34%) but test essentially tied at 90.293 (+0.42%); sw=1, sw=2 much worse (non-monotone). Split-trade in test (sid+rc regress, cruise+re_rand improve). sw-tuning lever exhausted. |
+| edward | #1019 | **WIP** | Loss-weighted hard-negative sampling — per-sample EMA loss → re-weighted sampler each epoch. Sweep alpha ∈ {0.5, 1.0} with floor=0.1 + control. Mechanistically distinct from sw and per-sample-norm. |
 | fern | #737 | **Merged** | val_avg=127.87; warmup+cosine |
 | fern | #809 | **WIP** | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
@@ -74,9 +75,10 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
   dual-flavor live/ema checkpointing).
 
 **All 8 GPUs in use:** alphonse #980 (boundary-layer vol-loss sweep), askeladd #885 (δ=0.3
-rebase + stacking test), edward #953 (sw-below-3 sweep), fern #809 (schedule-budget), frieren
-#943 (per-channel rebase + anchored p_surf sweep with vel_surf=3), nezuko #986 (torch.compile
-A/B), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase + sw=3 verify).
+rebase + stacking test), edward #1019 (loss-weighted hard-negative sampling — per-sample EMA
+loss → resampling), fern #809 (schedule-budget), frieren #943 (per-channel rebase + anchored
+p_surf sweep with vel_surf=3), nezuko #986 (torch.compile A/B), tanjiro #745 (heads Option 3
+rebase), thorfinn #810 (EMA rebase + sw=3 verify).
 
 ## Current research themes
 
@@ -86,8 +88,10 @@ A/B), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase + sw=3 ver
 2. **Per-sample y-norm (alphonse) is exhausted as a standalone lever.** It's a substitute for
    Huber+sw=3 rather than a complement. Closed #896. Assigned #980 (boundary-layer vol-loss) —
    distinct mechanism using dist_to_surface feature to weight near-wall volume nodes more.
-3. **Loss-balance (sw) floor still unknown.** Edward #953 sweeps sw ∈ {0.5, 1.0, 2.0}.
-   The val curve was still descending at epoch 17 with sw=3 — lower sw may continue the trend.
+3. **Loss-balance (sw) lever exhausted.** Edward #953 sweep closed: sw=0.5 wins val (-2.34%) but
+   test essentially tied (+0.42%); sw=1, sw=2 much worse. Non-monotone curve + split-trade pattern
+   (sid+rc regress, cruise+re_rand improve at sw=0.5) suggests sw=0.5 is a different regime, not a
+   smooth extension of the volume-driven mechanism. sw=3 is a stable, defensible default.
 4. **Per-channel surface loss weighting (#943, frieren)** — first sweep was confounded by stale
    vel_surf_weight=10. Both runs regressed vs current sw=3 baseline. Sent back for anchored sweep:
    vel_surf=3 fixed (matches current), sweep p_surf ∈ {3 control, 10, 20}. Cruise hint from Run 2
@@ -99,8 +103,8 @@ A/B), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase + sw=3 ver
 
 ## Open questions
 
-- Where does the sw floor sit? sw=3 is still descending at timeout; sw=1 or sw=2 may be better.
-  sw=0.5 (near-pure volume) may degrade — watching for a reversal in edward's sweep (#953).
+- ~~Where does the sw floor sit?~~ **Resolved by #953 (closed):** sw=0.5 lowers val 2.3% but test
+  ties (+0.42%) with split-trade (sid/rc regress, cruise/re_rand improve). sw=3 stays as default.
 - Does per-sample y-norm (#896) still win when stacked on top of Huber + sw=3? The MSE+sw=10 run
   won by −4.7% val / −7.4% test, but the new baseline is already much lower. With sw=3 already
   exploiting volume signal, the per-sample-norm mechanism may partially overlap.

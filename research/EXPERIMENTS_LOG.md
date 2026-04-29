@@ -734,3 +734,42 @@ Vs current sw=3+Huber baseline (val_avg=101.563, test_avg=89.918): d=0.995 wins 
 - **Pressure boost mechanism may be real, but masked.** Run 2 cruise val=79.022 vs current sw=3 cruise val=82.16 → −3.8% on the most paper-facing OOD split. Could indicate pressure supervision boost helps OOD generalization through better boundary-layer fitting.
 - **PR in CONFLICTING state.** Loss block in train.py was changed by #850 (surf_weight default 10→3), conflicting with frieren's per-channel rewrite.
 - **Decision: Sent back for rebase + anchored 3-point sweep.** Asked frieren to: (a) rebase, (b) run control p=3/vel=3 (must reproduce 101.5 baseline), (c) sweep p_surf ∈ {10, 20} with vel_surf=3 fixed. This isolates the pressure boost mechanism cleanly. If Run B (p=10) or Run C (p=20) beats 101.563 → real per-channel win.
+
+---
+
+## 2026-04-29 03:40 — PR #953: Sweep surf_weight ∈ {0.5, 1.0, 2.0} — closed (sw lever exhausted)
+
+- **Branch:** `willowpai2e5-edward/surf-weight-below-3-sweep` (closed, branch deleted)
+- **W&B runs:** `uy9csp5x` (sw=0.5 winner), `arebv1r0` (sw=1.0), `8u2vzihj` (sw=2.0)
+- **Hypothesis:** Lower surf_weight below 3 may continue the volume-driven pressure mechanism from #850. Val curve was still descending at sw=3 timeout — sw=1 or below might be the true floor.
+
+### Results vs current sw=3 baseline (val_avg=101.563, test_avg=89.918)
+
+| surf_weight | val_avg | Δ val | test_avg | Δ test | best_epoch | W&B |
+|------------:|--------:|------:|---------:|-------:|-----------:|-----|
+| 0.5 | **99.185** | **−2.34%** | 90.293 | +0.42% | 15/17 | uy9csp5x |
+| 1.0 | 109.032 | +7.35% | 98.849 | +9.93% | 16/17 | arebv1r0 |
+| 2.0 | 114.243 | +12.49% | 105.999 | +17.88% | 11/17 | 8u2vzihj |
+| 3.0 (baseline) | 101.563 | — | 89.918 | — | 17/17 | 6rh7dzkx |
+
+### Per-split test (current baseline → sw=0.5 winner)
+
+| Split | Baseline | sw=0.5 | Δ |
+|-------|---------:|-------:|--:|
+| `single_in_dist` | 102.85 | 112.81 | **+9.96 worse** |
+| `geom_camber_rc` | 94.35  | 102.39 | **+8.04 worse** |
+| `geom_camber_cruise` | 70.13 | 60.44 | **−9.69 better** |
+| `re_rand` | 92.35 | 85.53 | **−6.82 better** |
+| **avg** | **89.92** | **90.29** | **+0.42% essentially tied** |
+
+### Commentary & Conclusions
+
+- **Test correctly evaluated at best checkpoint.** Verified train.py line 730 reloads `model_path` (best val checkpoint) before test eval. The +0.42% test result is real.
+- **Val improvement does not transfer to test.** Despite val_avg dropping 2.34%, test_avg ties. Per-split test shows split-trade: 2 splits improve (cruise/re_rand by ~7-10%), 2 splits regress (sid/rc by ~8-10%).
+- **Non-monotone sweep is a strong red flag.** sw=2 worse than sw=1 worse than sw=0.5 doesn't fit a simple "lower-is-better" or "higher-is-better" story. Suggests sw=0.5 is exploring a different local basin (volume-dominated regime) rather than smoothly extending the sw=3 mechanism.
+- **Non-Pareto improvement.** The split-trade indicates sw=0.5 puts the model in a regime that helps smoother fields (cruise/re_rand) but hurts sharper-gradient ones (sid/rc). Not stackable safely.
+- **Decision: Closed. sw lever exhausted.** sw=3 is stable and defensible as default. No multi-seed verification needed — the val gain doesn't transfer to test, which is the paper-facing decision metric.
+
+### Reassignment
+
+Edward → #1019 (loss-weighted hard-negative sampling). Mechanistically distinct from sw (per-sample EMA loss → resampling weights, not loss-magnitude scaling).
