@@ -472,7 +472,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-EMA_DECAY = 0.999
+EMA_DECAY = float(os.environ.get("EMA_DECAY", "0.999"))
 ema = ModelEMA(model, decay=EMA_DECAY)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)

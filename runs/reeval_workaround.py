@@ -5,7 +5,10 @@ baseline — fixes the `0 * NaN = NaN` poisoning in `data/scoring.py` by
 filtering out samples whose ground truth has non-finite values BEFORE the
 subtraction, instead of relying on a post-hoc mask multiply.
 
-Loads the saved EMA checkpoint, runs the four test splits, and appends a
+Usage:
+  python runs/reeval_workaround.py --checkpoint <path> [--ema_decay <f>] [--metrics <path>]
+
+Loads the saved checkpoint, runs the four test splits, and appends a
 ``test_clean_with_workaround`` record to the run's ``metrics.jsonl``.
 
 Standalone (does not import train.py because train.py has top-level training
@@ -183,8 +186,14 @@ class Transolver(nn.Module):
 
 
 def main():
-    CHECKPOINT = TARGET_DIR / "models" / "model-403ah6s8" / "checkpoint.pt"
-    METRICS = TARGET_DIR / "models" / "model-403ah6s8" / "metrics.jsonl"
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint", type=str, required=True)
+    ap.add_argument("--metrics", type=str, default="")
+    ap.add_argument("--ema_decay", type=float, default=0.999)
+    args = ap.parse_args()
+    CHECKPOINT = Path(args.checkpoint)
+    METRICS = Path(args.metrics) if args.metrics else CHECKPOINT.parent / "metrics.jsonl"
     SPLITS_DIR = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -226,11 +235,15 @@ def main():
     print(f"\n  test_avg/mae_surf_p = {test_avg['avg/mae_surf_p']:.4f}")
     print(f"  test_avg/mae_vol_p  = {test_avg['avg/mae_vol_p']:.4f}")
 
+    try:
+        ckpt_str = str(CHECKPOINT.resolve().relative_to(TARGET_DIR))
+    except ValueError:
+        ckpt_str = str(CHECKPOINT)
     record = {
         "type": "test_clean_with_workaround",
         "note": "Test eval with per-sample y-NaN skip (mirrors PR #835 workaround). EMA checkpoint.",
-        "checkpoint": str(CHECKPOINT.relative_to(TARGET_DIR)),
-        "ema_decay": 0.999,
+        "checkpoint": ckpt_str,
+        "ema_decay": args.ema_decay,
         "test": {name: {k: float(v) for k, v in m.items()} for name, m in test_metrics.items()},
         "test_avg": {k: float(v) for k, v in test_avg.items()},
     }

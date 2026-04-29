@@ -1,0 +1,15 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Loaded checkpoint models/model-ma3v4n4x/checkpoint.pt
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+  Eval test_single_in_dist...
+    test_single_in_dist             surf_p=92.4690  vol_p=107.6783  skipped=0
+  Eval test_geom_camber_rc...
+    test_geom_camber_rc             surf_p=86.4909  vol_p=95.2695  skipped=0
+  Eval test_geom_camber_cruise...
+    test_geom_camber_cruise         surf_p=55.1668  vol_p=54.3913  skipped=1
+  Eval test_re_rand...
+    test_re_rand                    surf_p=76.5385  vol_p=76.6968  skipped=0
+
+  test_avg/mae_surf_p = 77.6663
+  test_avg/mae_vol_p  = 83.5090
+Appended test_clean_with_workaround record to models/model-ma3v4n4x/metrics.jsonl
