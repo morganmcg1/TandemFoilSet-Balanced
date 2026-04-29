@@ -1,5 +1,61 @@
 # TandemFoilSet Baseline Metrics
 
+## 2026-04-29 18:00 — PR #1243: n_hidden=192 intermediate capacity scaling step above 160
+
+**Student:** charliepai2f4-fern
+**Branch:** fern/n_hidden-192-capacity-step
+**Model:** Transolver (n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, dropout=0.1) + gradient clipping (max_norm=1.0) + lr=1e-3 + CosineAnnealingLR(T_max=15, eta_min=1e-6) + AMP bfloat16
+**Best epoch:** 15 / 50 (training timed out at ~15 epochs)
+**Metric summary:** `models/model-n_hidden-192-capacity-step-20260429-180006/metrics.yaml`
+
+### Primary metric (lower is better)
+
+| Metric | Value |
+|--------|-------|
+| **val_avg/mae_surf_p** | **88.421** |
+
+### Per-split surface pressure MAE (val)
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_single_in_dist | 105.684 |
+| val_geom_camber_rc | 103.384 |
+| val_geom_camber_cruise | 61.552 |
+| val_re_rand | 83.065 |
+
+### Test split surface pressure MAE
+
+| Split | mae_surf_p |
+|-------|------------|
+| test_single_in_dist | 91.001 |
+| test_geom_camber_rc | 90.916 |
+| test_geom_camber_cruise | NaN (pre-existing corrupt sample 000020.pt) |
+| test_re_rand | 75.778 |
+
+### Key method details
+
+- n_hidden scaled 160→192 (+44% params vs n_hidden=160), further increasing representational capacity
+- AMP bfloat16: `torch.cuda.amp.autocast(dtype=torch.bfloat16)` — stable, no GradScaler needed for bf16
+- CLI flags added for architecture params (--n_hidden, --n_layers, --n_head, --slice_num, --mlp_ratio, --dropout) and AMP (--amp, --amp_dtype)
+- Peak VRAM: 44.0 GB, epoch time ~124s, 15 epochs in 30-min budget
+- surf_weight=10, dropout=0.1, batch_size=4, AdamW, weight_decay=1e-4
+- lr=1e-3, CosineAnnealingLR(T_max=15, eta_min=1e-6)
+- 4.1% improvement on val_avg/mae_surf_p over r4 code-state baseline (PR #1201: 92.170 → 88.421)
+- Note: PR #1197 (75.750) was merged into the r1 branch, not r4; the true r4 improvement chain is #1201→#1243
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --experiment_name n_hidden-192-capacity-step \
+  --n_hidden 192 --n_layers 5 --n_head 4 --slice_num 64 --mlp_ratio 2 \
+  --dropout 0.1 --lr 1e-3 --surf_weight 10 --batch_size 4 \
+  --amp --amp_dtype bfloat16 \
+  --agent charliepai2f4-fern
+```
+
+---
+
 ## 2026-04-29 16:00 — PR #1197: AMP (bfloat16) + n_hidden=160 for capacity scaling within 30-min budget
 
 **Student:** charliepai2f1-alphonse
