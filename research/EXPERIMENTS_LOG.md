@@ -1,5 +1,55 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 02:10 — PR #939: n_layers=6 on SwiGLU baseline — **CLOSED (+4.7% val regression; under-trained at timeout, not under-capacity)**
+
+- Branch: `willowpai2e4-frieren/n-layers-6`
+- Student: willowpai2e4-frieren
+- W&B run: [`skpbuh14`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/skpbuh14)
+
+**Hypothesis.** Add one Transolver block on SwiGLU baseline. Predicted
+−1 to −3% val. Actual: **+4.7% val regression** (85.65 vs 81.81 baseline).
+
+**Results vs post-#914 SwiGLU baseline 81.81 / test 73.04:**
+
+| Metric | Baseline | n_layers=6 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` (best ep 11) | 81.81 | **85.65** | **+4.7%** ✗ |
+| `test_avg/mae_surf_p` (4-split) | 73.04 | 75.99 | +4.0% ✗ |
+| Best epoch | 12 / 13 | 11 / 11 (timeout) | converged 1+ epoch *less* |
+| Param count | 661,735 | 781,947 | +120K (+18.2%) |
+| Wall-clock per epoch | 132s | 167s | +26% |
+
+**Per-split val (best ep 11):** all 4 splits regressed:
+
+| Split | Δ vs baseline |
+|---|---:|
+| `val_single_in_dist` | +2.8% |
+| `val_geom_camber_rc` | +5.6% |
+| `val_geom_camber_cruise` | +6.2% |
+| `val_re_rand` | +4.8% |
+
+**Per-split test:** only `test_geom_camber_rc` marginal win (−0.5%) —
+the predicted cross-foil-reasoning gain on raceCar tandem. Within
+noise but correct sign.
+
+**Mechanistic read (student diagnostic, accepted):** The +18% wall-clock
+penalty cost LR-schedule progress — model trained for 11 epochs (vs 13
+for baseline) and was still aggressively descending (epoch-10→11 dropped
+val by 11.7 points, far above mean per-epoch improvement). Pattern is
+"under-trained, not under-capacity." All-splits-regress (rather than
+subset-regress) is mechanistically consistent with mid-training, not
+wrong-inductive-bias.
+
+**The schedule mismatch surfaced.** Frieren's analysis flagged "cosine
+annealing tail not fully exploited" — at T_max=50 with 13-epoch budget,
+cosine never decays below 65% of peak. This is a structural baseline-wide
+issue, not just a depth-experiment artifact. **Round-3 follow-up: depth
+sweep at extended budget (60 min) — or width-scaling at iso-param.**
+
+**Reassigned frieren PR #963 (schedule-to-budget T_max=13).** Direct
+follow-on to their own diagnostic — addresses the LR-schedule mismatch
+that limits ALL current PRs at this budget.
+
 ## 2026-04-29 01:50 — PR #883: Fourier bands sweep K∈{3,6,8} — **CLOSED (lever settled at K=4; K=8 marginal −0.43% noise-bounded by timeout cliff)**
 
 - Branch: `willowpai2e4-thorfinn/fourier-bands-sweep`

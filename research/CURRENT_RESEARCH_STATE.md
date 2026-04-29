@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~01:55 (**SwiGLU baseline 81.81 / test 73.04** holds; #883 closed (thorfinn Fourier sweep K=8 −0.43% noise-bounded), thorfinn→#955 per-channel output heads; #920 closed (fern coord-skip +4.1% val), fern→#949 LayerScale γ=1e-4; #863 askeladd rebase #3 in flight; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase)
+- **As of:** 2026-04-29 ~02:15 (**SwiGLU baseline 81.81 / test 73.04** holds; #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #883 closed (Fourier K-axis settled), thorfinn→#955 per-channel heads; #920 closed (coord-skip), fern→#949 LayerScale; #863 askeladd rebase #3 in flight; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase. **NEW THEME: schedule-budget mismatch surfaced from #939 analysis** — affects ALL pre-#914 PRs that were "still descending" at timeout)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
 - **Current best:** `val_avg/mae_surf_p = 89.714` (#820) and `3-split test mean = 88.16` (run `w9xbc0wl`)
@@ -50,10 +50,11 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #880 | tanjiro | LinearNO ELU+1 | +6.92% actual | **CLOSED — attention-kernel-substitution exhausted** |
 | #914 | tanjiro | SwiGLU MLP swap | **−8.81% val, test 73.04** | **MERGED — new baseline 81.81** |
 | #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% | wip |
-| #939 | frieren | n_layers=6 (one extra block) | -1 to -3% | wip |
+| #939 | frieren | n_layers=6 (one extra block) | -1 to -3% predicted | **CLOSED +4.7% val (85.65); under-trained at timeout (11/11 epochs), not under-capacity; CAPACITY-WITHIN-BUDGET-DEPTH-AXIS exhausted at this budget** |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | mapping optimum | **CLOSED — K=8 −0.43% noise-bounded; K=4 settled; FOURIER-BAND-SWEEP-AXIS-ALIGNED exhausted** |
 | #949 | fern | LayerScale γ_init=1e-4 (CaiT) | -1 to -3% | wip |
-| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | wip (just assigned, post-#914) |
+| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | wip |
+| #963 | frieren | Schedule-to-budget T_max=13 (cosine match horizon) | -1 to -3% | wip (just assigned, post-#914) |
 
 **Round 3 candidates (queued, contingent on round 2 outcomes):**
 
@@ -72,7 +73,15 @@ on L1-only baseline). The compounding mechanism is well-understood.
   alone first.
 - **EMA decay sweep {0.995, 0.97}** — once #873 merges on SwiGLU.
 - **Categorical-FiLM (multiplicative)** — round-3 follow-up once #816 lands.
-- **n_layers sweep {4, 7}** — extends frieren's #939. Maps depth curve.
+- **n_layers=4** (the opposite direction from #939) — at ~115 s/epoch
+  → ~15 epochs in budget. Tests whether depth-budget tradeoff favors
+  shallow side. Counterfactual to #939.
+- **n_layers=6 with extended 60-min budget** (round-3 retest if budget
+  envelope lifts) — disentangle "depth doesn't help" from "depth needs
+  more steps." #939's result strongly suggests this would land negative-Δ.
+- **Width-scaling: n_hidden=144 at n_layers=5** — iso-param to n_layers=6
+  (~+170K params) but with no extra block depth. Tests width vs depth at
+  same capacity. Round-3 candidate.
 - **RFF σ sweep {5, 20}** — extends tanjiro's #938. Cheap follow-up.
 - **Per-channel output heads** (Ux/Uy/p separate decoder MLP). Decouples
   decoder pathways for the channel-weighted [1,1,3] target distribution.
@@ -87,6 +96,20 @@ on L1-only baseline). The compounding mechanism is well-understood.
   Askeladd's queued post-merge assignment.
 
 **Closed in round 2:**
+- #939 frieren n_layers=6 → val +4.7% (85.65), test +4.0% (75.99). The
+  +18% wall-clock per epoch cost LR-schedule progress: model ran 11
+  epochs vs baseline 13 and was still aggressively descending (epoch-10
+  → 11 dropped val by 11.7 points, far above mean per-epoch improvement).
+  Pattern: **under-trained, not under-capacity.** All-splits-regress is
+  consistent with mid-training, not wrong-inductive-bias. Only signal
+  in correct direction: test_geom_camber_rc −0.5% (cross-foil reasoning
+  marginal gain). **Lever family CAPACITY-WITHIN-BUDGET-DEPTH-AXIS
+  exhausted at 30-min budget** — extended-budget retest deferred to
+  round 3.
+
+  **Surfaced theme: schedule-budget mismatch.** Cosine T_max=50 with
+  13-epoch budget means LR never decays below 65% of peak — affects
+  ALL current PRs that hit timeout. frieren reassigned PR #963 to fix.
 - #883 thorfinn Fourier bands sweep K∈{3,6,8} → K=8 −0.43% val (89.32),
   −1.40% test 3-split (86.93); K=3, K=6 both regress vs K=4. K=8 win
   is single-epoch variance at the timeout cliff (val 94→116→89 in
