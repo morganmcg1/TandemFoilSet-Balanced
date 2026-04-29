@@ -1,5 +1,29 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2f-r3
 
+## 2026-04-29 23:30 — PR #1257: T_max=200 extreme slow decay (charliepai2f3-fern) — CLOSED DEAD END
+
+- Branch: charliepai2f3-fern/grad-accum-effective-batch16-tmax100-warmup5 (closed)
+- Hypothesis: T_max=200 (vs T_max=100) keeps LR ~54% of peak at ep66 cutoff vs ~35%, potentially extending productive learning further into wall-clock budget.
+- Result: val_avg/mae_surf_p = 36.8593 — **+7.19% worse** than baseline 34.3851. Best epoch 61, then oscillation/regression.
+- Commentary: LR stays too high throughout the budget — model oscillates after ep61 without converging. The opposite signal (lower LR via halving lr to 1.5e-4 at T_max=100) won instead in PR #1258. Confirms T_max=100 is the right horizon for this 30-min budget; further LR-horizon extensions are not productive without also reducing peak LR.
+
+## 2026-04-29 23:30 — PR #1258: lr=1.5e-4 finer LR sweep on full FiLM+Fourier+warmup+T_max=100 config (charliepai2f3-nezuko) — MERGED, NEW BEST
+
+- Branch: charliepai2f3-nezuko/lr-1p5e-4-tmax100-warmup5-100ep (squash-merged into icml-appendix-charlie-pai2f-r3)
+- Hypothesis: Halve peak LR from 3e-4 to 1.5e-4 with Lion sign-based optimizer on the current best schedule. Sign-based optimizer benefits from lower peak: smaller, less noisy parameter updates over the wall-clock budget.
+- Result: val_avg/mae_surf_p = **33.1552** — **−3.58%** vs baseline 34.3851. test_avg/mae_surf_p = 28.1158 (vs 29.0050: −3.07%). Best epoch=66/100 (wall-clock limited), still strictly improving at cutoff.
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|-------|----------------|-----------------|
+| single_in_dist | 32.1133 | 27.8899 |
+| geom_camber_rc | 47.2012 | 43.2971 |
+| geom_camber_cruise | 17.1896 | 14.3845 |
+| re_rand | 36.1165 | 26.8917 |
+| **avg** | **33.1552** | **28.1158** |
+
+- Commentary: All 4 val splits and all 4 test splits improved. Largest val gain on val_geom_camber_cruise (−6.77%), largest test gain on test_single_in_dist (−5.87%). LR ~5.25e-5 (≈0.35× peak) at ep66 — same fraction-of-peak as previous best; the win is from lower absolute LR magnitude, not from horizon. Confirms the Lion-sign-update intuition: lower magnitude per step is favored for this architecture/budget. Brackets the optimum below 2e-4. frieren's lr=2e-4 (PR #1250) and the upcoming finer sweep should narrow this further.
+- Metrics path: target/models/model-charliepai2f3-nezuko-lr-1p5e-4-tmax100-warmup5-100ep-20260429-184943/metrics.jsonl
+
 ## 2026-04-29 10:52 — PR #1093: Compound baseline anchor (Lion+L1+EMA+bf16+n_layers=1+sw=28+cosine+clip)
 - charliepai2f3-alphonse/compound-baseline-lion-l1-ema-bf16-n1
 - Hypothesis: re-run the charlie-pai2e-r5 compound recipe as a clean anchor on the new round, so subsequent experiments measure against a freshly executed baseline rather than a referenced number.
