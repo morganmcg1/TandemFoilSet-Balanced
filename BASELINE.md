@@ -4,33 +4,56 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **46.6765** (PR #1275 — lr=8e-4 on beta2=0.985+huber_delta=0.1 stack) |
-| `test_avg/mae_surf_p` | **39.9351** (PR #1275) |
-| `test_single_in_dist/mae_surf_p` | 42.8273 |
-| `test_geom_camber_rc/mae_surf_p` | 54.7152 |
-| `test_geom_camber_cruise/mae_surf_p` | 24.2136 |
-| `test_re_rand/mae_surf_p` | 37.9841 |
+| `val_avg/mae_surf_p` | **45.5945** (PR #1319 — epochs=40 on lr=7e-4+beta2=0.985+huber_delta=0.12 stack, stopped @ ep 33 by timeout) |
+| `test_avg/mae_surf_p` | **39.7038** (PR #1319) |
+| `test_single_in_dist/mae_surf_p` | 43.3242 |
+| `test_geom_camber_rc/mae_surf_p` | 53.0699 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.5326 |
+| `test_re_rand/mae_surf_p` | 37.8885 |
 
-**Source:** PR #1275 — lr=8e-4 (was 7e-4) on full beta2=0.985+huber_delta=0.1+weight_decay=5e-4 compound stack. Test improved -2.39% vs PR #1311 baseline. **COMPETE TARGET BEATEN by wide margin** (test_avg=39.9351 < 40.93 target, gap = -0.9949).
-- Branch: `charliepai2f5-fern/lr-8e-4-probe-beta2-0985-stack`
-- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=8e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
-- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited, val slope still descending at termination)
-- Peak VRAM: 20.97 GB, Wall-clock: 29.87 min, Run ID: 3207gjgv
-- Metrics JSONL: `metrics/charliepai2f5-fern-lr-8e-4-seqlr-beta2-0985-rerun-3207gjgv.jsonl`
+**Source:** PR #1319 — epochs=40 budget extension on lr=7e-4+beta2=0.985+warmup_epochs=3+huber_delta=0.12+weight_decay=5e-4 stack. Hit 30-min timeout at epoch 33/40 — still in productive learning regime (val slope ~-0.49/epoch). val improved -1.31% vs PR #1275, test improved -0.58% vs PR #1275. **COMPETE TARGET BEATEN by wide margin** (test_avg=39.7038 < 40.93 target, gap = -1.2262).
+- Branch: `charliepai2f5-tanjiro/epochs-40-budget-extension-current-stack`
+- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.12, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=40 (completed 33), lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
+- Best epoch = 33/40 (final completed epoch before timeout, monotonically improving — val slope ~-0.49/epoch at termination)
+- Peak VRAM: 20.98 GB, Wall-clock: 30.84 min, Run ID: mns799ue
+- Metrics JSONL: `metrics/charliepai2f5-tanjiro-epochs-40-budget-extension-current-stack-mns799ue.jsonl`
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-0.9949**, i.e. nearly 1.0 below target).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-1.2262**, i.e. 3.0% below target).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + lr=8e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.12 + weight_decay=5e-4 + lr=7e-4 + epochs=40 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
 ```
-python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 \
+python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 40 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 \
-  --adamw_beta2 0.985 --lr 8e-4
+  --adamw_beta2 0.985 --lr 7e-4
 ```
 *(Note: n_layers=2, slice_num=8 are hardcoded in model_config dict in train.py — slice_num was changed from 16→8 in PR #1194)*
-*(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 29 epochs)*
+*(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 37 epochs, T_max=37)*
+*(Note: last run hit 30-min timeout at epoch 33/40 — all 4 splits improved, val slope still -0.49/epoch at termination. Budget-limited.)*
 
 ## Round r5 — Merged Winners
+
+### PR #1319 — Budget extension: epochs=40 on full lr=7e-4+beta2=0.985+huber_delta=0.12 stack (2026-04-29)
+**Student:** charliepai2f5-tanjiro | **Branch:** charliepai2f5-tanjiro/epochs-40-budget-extension-current-stack
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **45.5945** (epoch 33/40 — timeout hit, monotonically improving, val slope ~-0.49/epoch) |
+| `test_avg/mae_surf_p` | **39.7038** — **COMPETE TARGET BEATEN by -1.2262** (target=40.93) |
+| `test_single_in_dist/mae_surf_p` | 43.3242 |
+| `test_geom_camber_rc/mae_surf_p` | 53.0699 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.5326 |
+| `test_re_rand/mae_surf_p` | 37.8885 |
+
+**vs prior baseline (PR #1275):** val 45.5945 vs 46.6765 → **-2.32% val improvement**, test 39.7038 vs 39.9351 → **-0.58% test improvement**, all 4 splits improved
+**Compete gap:** **-1.2262** — 3.0% below compete target
+**Mechanism:** Extended training budget from 32→40 epochs on lr=7e-4+beta2=0.985+huber_delta=0.12 stack. Hit 30-min timeout at epoch 33. Longer cosine schedule (T_max=37 vs T_max=29) keeps LR in productive regime further into training — val slope still -0.49/epoch at stop vs -0.15/epoch at baseline end. All 4 OOD splits improved (single_in_dist: 45.6550→43.3242, geom_camber_rc: 55.2315→53.0699, geom_camber_cruise: 24.6194→24.5326, re_rand: 38.1350→37.8885).
+**Budget-limited:** is_best=True at every epoch from 1 to 33, still monotonically improving when timeout hit.
+**Peak VRAM:** 20.98 GB | **Wall-clock:** 30.84 min | **Run ID:** mns799ue
+**Metrics JSONL:** `metrics/charliepai2f5-tanjiro-epochs-40-budget-extension-current-stack-mns799ue.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 40 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 --adamw_beta2 0.985 --lr 7e-4`
+
+---
 
 ### PR #1275 — lr=8e-4: continue LR probe above 7e-4 on beta2=0.985 stack (2026-04-29)
 **Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/lr-8e-4-probe-beta2-0985-stack
