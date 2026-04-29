@@ -1,72 +1,78 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-29 00:35 UTC
+- **Updated:** 2026-04-29 01:05 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none — no open ADVISOR issues)_
 
 ## Current best
 
-**PR #769 (Huber δ=0.5, no EMA) — MERGED:** `val_avg/mae_surf_p = 102.86`, `test_avg/mae_surf_p = 94.83`  
-**−13.8% val / −12.8% test vs EMA-only baseline.** Largest single win on the track.  
-Future runs must include `--huber_delta 0.5`. For maximum effect, also add `--ema_decay 0.99` (stack TBD).
+**PR #775 Round 2 (warmup=0 + clip=0.5 + Huber δ=0.5 + EMA=0.99) — MERGED:**  
+`val_avg/mae_surf_p = 96.54`, `test_avg/mae_surf_p = 85.33`  
+**−31.5% val / −33.5% test vs unmodified default (140.95/128.32).**
 
-**Previous baseline (PR #773, EMA-only):** val=119.35, test=108.79 — still merged, still useful if Huber doesn't stack.
+Default flags for ALL future runs: `--warmup_epochs 0 --clip_norm 0.5 --huber_delta 0.5 --ema_decay 0.99`
+
+**Previous milestone (PR #769, Huber δ=0.5 alone):** val=102.86, test=94.83  
+**Previous milestone (PR #773, EMA alone):** val=119.35, test=108.79
 
 ## Current research focus
 
-Two large independent wins confirmed — now testing whether they compound:
-- **Huber δ=0.5 (PR #769, MERGED):** −13.8% val. Outlier robustness via linear penalty for large residuals. Gains concentrate on heavy-tailed OOD splits (rc −17.8%, re_rand −14.7% on test). δ monotone: smaller is better up to at least 0.5; δ<0.5 unexplored.
-- **EMA decay=0.99 (PR #773, MERGED):** −15.4% vs unmodified default. Weight averaging for flatter minima.
-- **Gradient norms** are persistently large (pre-clip median ~60, p95 ~268 throughout training). Clipping is load-bearing — confirmed by nezuko's PR #775 sweep.
-- **Budget:** 14 epochs / 30 min. Cosine LR at epoch 14 is only at 4.1e-4 / 50-ep schedule = massive mismatch. Schedule alignment (thorfinn #860) is a key pending test.
+Four independent wins are now stacked and confirmed. The core stack is:
+1. **Huber δ=0.5 (PR #769):** −13.8% val. Outlier robustness via linear penalty for large residuals.
+2. **EMA decay=0.99 (PR #773):** −15.4% vs unmodified default. Weight averaging for flatter minima.
+3. **clip=0.5 + warmup=0 (PR #775):** −6.1% on top of Huber alone. Clipping acts as continuous gradient regularizer (100% of steps clipped throughout, median pre-clip ~45-60). Dropping warmup recovers ~5 epochs of optimization budget.
+
+**The current phase is: validating remaining independent directions on the full 4-way stack.**
+- All pre-stack experiments (alphonse #881, edward #867, fern #859, thorfinn #860, frieren #862) are being rebased and re-run with the full stack.
+- Any win on EMA-alone or Huber-alone baselines is valid signal but not yet confirmed on the full stack.
 
 ## Active PRs (WIP)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #881 | alphonse | Huber δ ∈ {0.1,0.25,0.5} + EMA stack — confirm compound | Status:WIP |
-| #775 | nezuko | warmup+clip — rebase + EMA stack test (clip0.5 won without EMA) | Status:WIP (rebase) |
-| #859 | fern | Surface weight scan — rebase + Huber+EMA stack {sw∈10,15,20,30} | Status:WIP (rebase) |
-| #867 | edward | AdamW β₂ scan {0.95,0.99,0.999,0.9999} + EMA | Status:WIP |
-| #862 | frieren | Slice scan {64,96,128,192} on slim model + EMA | Status:WIP |
-| #860 | thorfinn | Schedule alignment: cosine T_max=14 vs OneCycleLR + EMA | Status:WIP |
+| #881 | alphonse | Huber δ ∈ {0.1,0.25,0.5} + EMA stack (no clip — pre-stack) | Status:WIP |
+| #867 | edward | AdamW β₂ scan {0.95,0.99,0.999,0.9999} + EMA (no clip — pre-stack) | Status:WIP |
+| #859 | fern | Surface weight scan sw ∈ {10,15,20,30} + Huber+EMA+clip full stack | Status:WIP (rebase) |
+| #860 | thorfinn | OneCycle schedule on full 4-way stack (cosine vs onecycle + full stack) | Status:WIP (rebase) |
+| #862 | frieren | Slice scan downward {32,48,64} + full 4-way stack | Status:WIP (rebase) |
 | #776 | tanjiro | Deeper model n_layers=8 | Status:WIP |
 | #770 | askeladd | Surface-aware slice routing in PhysicsAttention | Status:WIP |
+| #944 | nezuko | Clip norm fine-scan {0.1,0.25,0.5,1.0} on full 4-way stack | Status:WIP |
 
-## Key pending questions (expected within 2 poll cycles)
+## Key pending questions (expected within 2-3 poll cycles)
 
-1. **Do Huber + EMA stack?** (alphonse PR #881). If yes, expected ~95-98 val.
-2. **Does clip=0.5 stack with Huber + EMA?** (nezuko PR #775 rebase). If both wins stack, expected ~88-93 val.
-3. **Does sw=20 stack with Huber + EMA?** (fern PR #859 rebase). Huber may already upweight surface effectively (volume residuals are larger → more Huber attenuation), so optimum sw might shift down.
-4. **Is δ < 0.5 better?** (alphonse PR #881 tests 0.25, 0.1). δ trend is monotone; unexplored below 0.5.
-5. **Does schedule alignment help?** (thorfinn PR #860). LR never anneals below 4.1e-4 in current budget; cosine-T14 or OneCycle may release 3-8% more gains.
-6. **Is slice_num > 64 better with EMA + Huber?** (frieren PR #862). 2x-slices win was pre-EMA and worse than EMA; need a clean comparison with EMA on.
+1. **Does Huber δ < 0.5 improve further with EMA+clip?** (alphonse #881 — running without clip; need clip version). δ trend was monotone downward without EMA; with clip in place the effective gradient scale is reduced, so optimal δ may shift.
+2. **Does clip=0.25 outperform clip=0.5 on full stack?** (nezuko #944). Round-2 showed warmup=5/clip=0.25 slightly beat warmup=5/clip=0.5 (97.85 vs 99.47); warmup=0/clip=0.5 beat both at 96.54. Now need warmup=0/clip=0.25.
+3. **Does OneCycle schedule help on full 4-way stack?** (thorfinn #860 rebase). OneCycle gave +5.3% over EMA-only; needs retest on full stack. This is likely the most impactful pending question.
+4. **Does lower slice_num {32,48} beat 64 on full stack?** (frieren #862 rebase). Monotone regression at higher slices suggests 32 or 48 may win; each step also frees VRAM.
+5. **Does surf_weight scan help with full stack?** (fern #859 rebase). Huber may already implicitly upweight surface vs volume (volume residuals are larger → more linear attenuation); optimum sw may shift from 20 toward 10 or 15.
+6. **Does β₂ < 0.999 help?** (edward #867). With persistent heavy-tailed grads (median pre-clip ~45-60), faster second-moment adaptation is theoretically motivated.
 
 ## Potential next research directions
 
-**Confirmed wins to compound further:**
-- Huber+EMA+clip triple-stack (pending validation from #881 + #775)
-- Huber δ scan continues below 0.5 — δ=0.25 may yield another 2-4%
-- Per-channel δ: δ_p smaller than δ_Ux/Uy (pressure tails are wider than velocity tails)
+**Immediate:**
+- δ < 0.5 + clip: alphonse's sweep has EMA but not clip; if it shows δ=0.25 helps, request a full-stack clip+δ=0.25 test
+- OneCycle + lower peak_lr: thorfinn's result shows 1e-3 works; exploring 1.5×/3× base_lr sensitivity (thorfinn follow-up #1)
+- clip=0.25 with warmup=0: nezuko's new PR #944 covers this
 
-**New directions (not yet tested):**
-- **AdamW β₂ scan** (edward PR #867 in flight) — heavy-tailed grads motivate faster second-moment
-- **Pressure-channel-only loss tail** — drop Ux/Uy loss in final epochs once those channels converge
-- **Cross-attention surface↔volume** — boundary condition inductive bias
-- **Mesh subsampling for throughput** — more data per wallclock; could unlock wider/deeper models
-- **Inverse channel weighting** (explicit upweight surface p vs Ux/Uy) — flagged in UW closure
+**After current wave completes:**
+- **Per-channel Huber δ**: δ_p smaller than δ_Ux/Uy (pressure residuals have different tail shape)
+- **AdamW β₂ with clip in place**: edward's scan is without clip; clip bounds Adam's input, so β₂ sensitivity may change (edward suggested this in his follow-up)
+- **EMA decay scan with full stack**: PR #773 fixed decay=0.99 without clip; clip smooths per-step gradients, so longer EMA half-lives (0.995, 0.999) may benefit
+- **OneCycle peak_lr and pct_start tuning**: thorfinn's follow-ups #1–#3
 
-**Architectural:**
+**Architectural (after hyperparameter space exhausted):**
+- Deeper model n_layers=8 (tanjiro #776 in flight)
+- Surface-aware routing in PhysicsAttention (askeladd #770 in flight)
 - Multi-task curriculum (Ux/Uy first, freeze, fine-tune p)
-- Mixed precision + gradient accumulation for larger effective batch
 - Galerkin attention swap
 
 ## Standing constraints
 
-- 30 min wall-clock per run (`SENPAI_TIMEOUT_MINUTES`), 50-epoch cap.
+- 30 min wall-clock per run (`SENPAI_TIMEOUT_MINUTES`), 50-epoch cap (budget truncates at ~14 epochs).
 - 96 GB VRAM per GPU, batch_size=4 default; meshes up to 242K nodes.
 - No edits to `data/`. All augmentation/sampling in `train.py`.
 - One hypothesis per PR. Compound only after isolated wins verified.
-- **Default flags for all future runs: `--huber_delta 0.5 --ema_decay 0.99`** (both wins merged).
+- **Default flags for all future runs: `--warmup_epochs 0 --clip_norm 0.5 --huber_delta 0.5 --ema_decay 0.99`**
 - NaN guard (commit 49c55ed) is in advisor — all new branches get it for free.
