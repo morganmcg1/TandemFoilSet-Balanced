@@ -220,20 +220,37 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def per_element_loss(pred, target, loss_type: str, huber_delta: float = 1.0):
+def per_element_loss(pred, target, loss_type: str, huber_delta: float = 1.0,
+                     huber_delta_p: float | None = None,
+                     huber_delta_uv: float | None = None):
     """Elementwise regression loss, no reduction.
 
     For ``"huber"`` returns ``F.huber_loss(reduction='none')`` with the given
     delta — 0.5*x^2 for |x|<delta, delta*(|x|-0.5*delta) otherwise. For
     ``"mse"`` returns the unreduced squared error matching the original baseline.
+
+    When ``loss_type == "huber"``, ``huber_delta_p`` and ``huber_delta_uv``
+    optionally override ``huber_delta`` for the pressure channel (index 2) and
+    Ux/Uy velocity channels (indices 0, 1). The trailing dimension of ``pred``
+    and ``target`` must be 3 in that case.
     """
     if loss_type == "huber":
-        return F.huber_loss(pred, target, reduction="none", delta=huber_delta)
+        delta_uv = huber_delta_uv if huber_delta_uv is not None else huber_delta
+        delta_p = huber_delta_p if huber_delta_p is not None else huber_delta
+        if delta_uv == delta_p:
+            return F.huber_loss(pred, target, reduction="none", delta=delta_uv)
+        loss_uv = F.huber_loss(pred[..., :2], target[..., :2],
+                               reduction="none", delta=delta_uv)
+        loss_p = F.huber_loss(pred[..., 2:3], target[..., 2:3],
+                              reduction="none", delta=delta_p)
+        return torch.cat([loss_uv, loss_p], dim=-1)
     return (pred - target) ** 2
 
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_type: str = "mse", huber_delta: float = 1.0) -> dict[str, float]:
+                   loss_type: str = "mse", huber_delta: float = 1.0,
+                   huber_delta_p: float | None = None,
+                   huber_delta_uv: float | None = None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -270,7 +287,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             if not torch.isfinite(pred).all():
                 pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
 
-            err = per_element_loss(pred, y_norm, loss_type, huber_delta)
+            err = per_element_loss(pred, y_norm, loss_type, huber_delta,
+                                   huber_delta_p, huber_delta_uv)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -420,6 +438,8 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss: str = "mse"  # "mse" or "huber"
     huber_delta: float = 1.0  # delta for Huber loss in normalized target space
+    huber_delta_p: float | None = None  # per-channel Huber delta for pressure (channel 2); falls back to huber_delta
+    huber_delta_uv: float | None = None  # per-channel Huber delta for Ux/Uy (channels 0,1); falls back to huber_delta
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
@@ -599,18 +619,21 @@ for epoch in range(MAX_EPOCHS):
                     per_std = y_norm[i][m_i].std().clamp(min=1e-6)
                     epoch_per_stds.append(per_std.item())
                     vol_err = per_element_loss(pred[i][vol_i], y_norm[i][vol_i],
-                                               cfg.loss, cfg.huber_delta)
+                                               cfg.loss, cfg.huber_delta,
+                                               cfg.huber_delta_p, cfg.huber_delta_uv)
                     batch_vol_loss = batch_vol_loss + vol_err.mean() / per_std
                     if surf_i.sum() > 0:
                         surf_err = per_element_loss(pred[i][surf_i], y_norm[i][surf_i],
-                                                    cfg.loss, cfg.huber_delta)
+                                                    cfg.loss, cfg.huber_delta,
+                                                    cfg.huber_delta_p, cfg.huber_delta_uv)
                         batch_surf_loss = batch_surf_loss + surf_err.mean() / per_std
                     valid_samples += 1
                 denom = max(valid_samples, 1)
                 vol_loss = batch_vol_loss / denom
                 surf_loss = batch_surf_loss / denom
             else:
-                err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta)
+                err = per_element_loss(pred, y_norm, cfg.loss, cfg.huber_delta,
+                                       cfg.huber_delta_p, cfg.huber_delta_uv)
                 vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
                 surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
@@ -638,7 +661,8 @@ for epoch in range(MAX_EPOCHS):
     val_eval_model.eval()
     split_metrics = {
         name: evaluate_split(val_eval_model, loader, stats, cfg.surf_weight, device,
-                             cfg.loss, cfg.huber_delta)
+                             cfg.loss, cfg.huber_delta,
+                             cfg.huber_delta_p, cfg.huber_delta_uv)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -736,7 +760,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.loss, cfg.huber_delta)
+                                 cfg.loss, cfg.huber_delta,
+                                 cfg.huber_delta_p, cfg.huber_delta_uv)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
