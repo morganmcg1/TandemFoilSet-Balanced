@@ -477,7 +477,9 @@ if cfg.ema_decay > 0.0:
 val_eval_model = ema_model if ema_model is not None else model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=15, T_mult=1, eta_min=0
+)
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
@@ -614,7 +616,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    scheduler.step(epoch + 1)
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
