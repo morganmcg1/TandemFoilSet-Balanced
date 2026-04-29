@@ -229,4 +229,38 @@ For a merge decision: any val_avg below 122.15 merges; gains <5% at single seed 
 
 ---
 
+## 2026-04-29 — PR #983: SwiGLU mlp_ratio ablation — bilinear gating vs. capacity
+
+**Canonical config update (parameter-efficient merge) — merged 2026-04-29.**
+
+- **val_avg/mae_surf_p: 62.74** (paired same-day comparison wins vs ratio=2 at 64.46; within single-seed noise of PR #961's 62.20 — see note)
+- **test_avg/mae_surf_p: 55.04** (matches PR #961 exactly — paper-facing metric)
+- **W&B run:** `3m9a8l02` (alphonse, swiglu-ablation v2-ratio1)
+- **Note on leaderboard low-water-mark:** PR #961 produced val=62.20 (lucky seed). Today's same-day ratio=2 replication drifted to 64.46 (+3.6% single-seed variance). The ratio=1 result (62.74) wins the paired same-day comparison by 2.7% val / 3.9% test, matches test exactly, and is strictly more efficient (29% fewer params, 9% faster). The leaderboard low is still 62.20 (PR #961 snapshot). Future PRs should beat 62.20.
+- **Per-split:**
+
+| Split | val surf_p | test surf_p |
+|---|---|---|
+| `single_in_dist` | 66.27 | 59.03 |
+| `geom_camber_rc` | 74.60 | 67.99 |
+| `geom_camber_cruise` | 47.51 | 39.28 |
+| `re_rand` | 62.57 | 53.86 |
+| **avg** | **62.74** | **55.04** |
+
+- **Config:** SwiGLU with `mlp_ratio=1` (intermediate_dim=128 vs 256). **0.62M params** (−29% vs ratio=2's 0.87M). 3 linear layers at 128-dim per block vs 2 at 256-dim. Stack: L1 + FiLM-pre + Re-stratify + SwiGLU(ratio=1). surf_weight=10.0, AdamW lr=5e-4, wd=1e-4, **14/14 epochs** (138s/epoch — fits comfortably in 30-min budget).
+- **Key finding:** Bilinear gating mechanism (not added capacity) accounts for ~97% of SwiGLU's +21.8% gain. SwiGLU at mlp_ratio=1 (0.62M params, *fewer* than GELU baseline's 0.70M) still achieves val=62.74 — a clear beat of old GELU baseline (79.54) by −21.1% val / −21.7% test. Capacity contribution bounded to |62.74 − 62.20| / (79.54 − 62.20) ≈ 3% of the SwiGLU gain. **Canonical config is now mlp_ratio=1** — 14/14 epochs fit budget, 0.25M params freed for downstream experiments.
+- **Reproduce (canonical going forward):**
+  ```bash
+  cd target/ && python train.py \
+    --epochs 14 \
+    --re_stratify \
+    --swiglu_ratio 1 \
+    --wandb_group swiglu-ablation \
+    --wandb_name v2-ratio1 \
+    --agent willowpai2e3-alphonse
+  ```
+- **Beat-threshold going forward:** `val_avg/mae_surf_p < 62.20` (leaderboard low from PR #961 snapshot)
+
+---
+
 *This file is updated after each merge. Entries are cumulative — do not delete prior entries.*
