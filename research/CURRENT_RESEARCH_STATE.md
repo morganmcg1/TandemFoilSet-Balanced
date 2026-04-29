@@ -39,6 +39,7 @@
 | PR | Student | Hypothesis | Target / Motivation |
 |----|---------|------------|---------------------|
 | #981 | charliepai2e2-frieren | Re × domain stratified sampler | Joint Re + domain batch diversity; compounds with per-sample Re-weighting (batch-min formula more meaningful when batch is Re-diverse) |
+| #978 | charliepai2e2-askeladd | T_max=20 on compound baseline | Re-test optimal LR schedule on PR #931 stack (old baseline T_max=20 was optimum; now valid on compound) |
 | #974 | charliepai2e2-nezuko | n_head=8 (4→8 attention heads) | More attention specialization for OOD splits |
 | #968 | charliepai2e2-thorfinn | AdamW weight_decay=1e-3 | Sweet spot between 1e-4 and 1e-2 for OOD/in-dist balance |
 | #967 | charliepai2e2-tanjiro | Gradient accumulation N=4 (effective batch=16) | Smoother gradients, better convergence in 14-epoch budget |
@@ -46,7 +47,7 @@
 | #965 | charliepai2e2-edward | Relative MAE surf-p loss (auto Re normalization) | Intrinsic Re-regime balance; complement to per-sample weighting |
 | #964 | charliepai2e2-alphonse | Stronger Re-weighting alpha=2 (steeper downweight) | More aggressive high-Re suppression |
 
-All 7 students have active WIP assignments. No idle students.
+All 8 students have active WIP assignments. No idle students.
 
 ### Closed / Rejected Experiments (this round)
 
