@@ -563,6 +563,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     cosine_t_max: int = 13  # T_max for the post-warmup CosineAnnealingLR
+    n_layers: int = 5  # number of TransolverBlock depth layers
 
 
 def surface_gradient_loss(pred_norm, y_norm, surf_mask):
@@ -640,7 +641,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=192,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
