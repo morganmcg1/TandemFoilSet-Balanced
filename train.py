@@ -89,6 +89,61 @@ def fourier_encode_coords(coords: torch.Tensor, num_bands: int) -> torch.Tensor:
     )
 
 
+class RandomFourierEncoding(nn.Module):
+    """Random Fourier Features (Tancik et al. 2020).
+
+    Fixed Gaussian frequency matrix B ~ N(0, sigma^2), shape [2, n_freqs].
+    forward(coords, include_coords=True): [coords, sin(coords @ B), cos(coords @ B)]
+    forward(coords, include_coords=False): [sin(coords @ B), cos(coords @ B)]
+    The include_coords=False mode is used in hybrid concat with axis-aligned PE
+    so the raw coords are not duplicated.
+    """
+
+    def __init__(self, n_freqs: int, sigma: float = 10.0, seed: int = 42):
+        super().__init__()
+        g = torch.Generator()
+        g.manual_seed(seed)
+        B = torch.randn(2, n_freqs, generator=g) * sigma
+        self.register_buffer("B", B)  # [2, n_freqs] — fixed, not trained
+
+    def forward(self, coords: torch.Tensor, include_coords: bool = True) -> torch.Tensor:
+        angles = coords @ self.B  # [..., n_freqs]
+        if include_coords:
+            return torch.cat([coords, angles.sin(), angles.cos()], dim=-1)
+        return torch.cat([angles.sin(), angles.cos()], dim=-1)
+
+
+def encode_input_features(
+    x_norm: torch.Tensor,
+    fourier_bands: int,
+    rff_encoder: "RandomFourierEncoding | None",
+    rff_concat_with_axis: bool,
+) -> torch.Tensor:
+    """Build the input feature tensor x_in from normalized x.
+
+    Modes:
+      - no PE (fourier_bands==0, no rff): x_in = x_norm
+      - axis-aligned PE only: prepend [coords, sin/cos*K]
+      - RFF replacement: prepend [coords, sin/cos] from RFF (no axis-aligned)
+      - hybrid concat: prepend [coords, axis sin/cos, rff sin/cos] — coords
+        appear once (carried by axis-aligned PE), RFF contributes only sin/cos
+    """
+    if fourier_bands == 0 and rff_encoder is None:
+        return x_norm
+    coords = x_norm[..., :2]
+    rest = x_norm[..., 2:]
+    if rff_encoder is not None and rff_concat_with_axis:
+        encoded = torch.cat([
+            fourier_encode_coords(coords, fourier_bands),
+            rff_encoder(coords, include_coords=False),
+        ], dim=-1)
+    elif rff_encoder is not None:
+        encoded = rff_encoder(coords)
+    else:
+        encoded = fourier_encode_coords(coords, fourier_bands)
+    return torch.cat([encoded, rest], dim=-1)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -286,7 +341,9 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device, fourier_bands: int = 0) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, fourier_bands: int = 0,
+                   rff_encoder: nn.Module | None = None,
+                   rff_concat_with_axis: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -309,12 +366,9 @@ def evaluate_split(model, loader, stats, surf_weight, device, fourier_bands: int
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            if fourier_bands > 0:
-                coords = x_norm[..., :2]
-                rest = x_norm[..., 2:]
-                x_in = torch.cat([fourier_encode_coords(coords, fourier_bands), rest], dim=-1)
-            else:
-                x_in = x_norm
+            x_in = encode_input_features(
+                x_norm, fourier_bands, rff_encoder, rff_concat_with_axis,
+            )
             pred = model({"x": x_in})["preds"]
 
             # Bug 1 guard: replace +inf / -inf / NaN predictions in normalized
@@ -507,6 +561,11 @@ class Config:
     use_swiglu: bool = False  # True = swap per-block MLP from GELU to SwiGLU
     seed: int = 0  # global seed for torch / numpy / random / sampler / DataLoader
     t_max: int = 0  # 0 = use cfg.epochs; >0 = override CosineAnnealing T_max (e.g., 13 for budget-matched)
+    use_rff_encoding: bool = False  # True = enable Random Fourier Features encoding
+    rff_sigma: float = 10.0  # Gaussian frequency matrix std for RFF (B ~ N(0, sigma^2))
+    rff_seed: int = 42  # seed for the fixed RFF frequency matrix
+    rff_n_freqs: int = 8  # number of RFF frequencies; output sin/cos = 2*n_freqs dims
+    rff_concat_with_axis: bool = False  # concat RFF with axis-aligned PE instead of replacing
 
 
 cfg = sp.parse(Config)
@@ -544,8 +603,18 @@ val_loaders = {
 }
 
 EXTRA_FOURIER_DIMS = 4 * cfg.fourier_bands  # 4 = (sin+cos) * (x, z)
+if cfg.use_rff_encoding and cfg.rff_concat_with_axis:
+    # Hybrid: axis-aligned PE (raw coords + 4*K sin/cos) + RFF (2*n_freqs sin/cos, no raw coords)
+    SPACE_DIM = 2 + EXTRA_FOURIER_DIMS + 2 * cfg.rff_n_freqs
+elif cfg.use_rff_encoding:
+    # RFF replacement: raw coords + 2*n_freqs sin/cos
+    SPACE_DIM = 2 + 2 * cfg.rff_n_freqs
+else:
+    # Axis-aligned only or no PE
+    SPACE_DIM = 2 + EXTRA_FOURIER_DIMS
+
 model_config = dict(
-    space_dim=2 + EXTRA_FOURIER_DIMS,
+    space_dim=SPACE_DIM,
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
@@ -561,6 +630,25 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+rff_encoder: nn.Module | None = None
+if cfg.use_rff_encoding:
+    if cfg.fourier_bands == 0 and cfg.rff_concat_with_axis:
+        raise ValueError(
+            "rff_concat_with_axis=True requires fourier_bands>0 (axis-aligned PE to concat with)"
+        )
+    rff_encoder = RandomFourierEncoding(
+        n_freqs=cfg.rff_n_freqs, sigma=cfg.rff_sigma, seed=cfg.rff_seed,
+    ).to(device)
+    mode = "hybrid_concat" if cfg.rff_concat_with_axis else "rff_replace"
+    print(
+        f"RFF encoding [{mode}]: n_freqs={cfg.rff_n_freqs} sigma={cfg.rff_sigma} "
+        f"seed={cfg.rff_seed} (B mean-norm={rff_encoder.B.norm(dim=0).mean().item():.3f})"
+    )
+else:
+    print(f"Encoding: axis-aligned only (fourier_bands={cfg.fourier_bands})")
+print(f"space_dim = {SPACE_DIM} (raw coords 2 + axis {EXTRA_FOURIER_DIMS} + "
+      f"rff {2 * cfg.rff_n_freqs if (cfg.use_rff_encoding and cfg.rff_concat_with_axis) else 0})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 t_max = cfg.t_max if cfg.t_max > 0 else MAX_EPOCHS
@@ -598,6 +686,36 @@ wandb.log({
     "scheduler/max_epochs_configured": MAX_EPOCHS,
     "scheduler/budget_matched": int(cfg.t_max > 0),
 })
+
+# Encoding-mode summary + wandb log so future analysis can split runs by mode
+if cfg.use_rff_encoding:
+    encoding_mode = "hybrid_concat" if cfg.rff_concat_with_axis else "rff_replace"
+elif cfg.fourier_bands > 0:
+    encoding_mode = "axis_only"
+else:
+    encoding_mode = "none"
+axis_dim = EXTRA_FOURIER_DIMS  # sin/cos channels excluding raw coords
+rff_dim = 2 * cfg.rff_n_freqs if (cfg.use_rff_encoding and cfg.rff_concat_with_axis) else 0
+wandb.summary["encoding/mode"] = encoding_mode
+wandb.summary["encoding/space_dim"] = SPACE_DIM
+wandb.summary["encoding/axis_dim"] = axis_dim
+wandb.summary["encoding/rff_dim"] = rff_dim
+wandb.log({
+    "encoding/space_dim": SPACE_DIM,
+    "encoding/axis_dim": axis_dim,
+    "encoding/rff_dim": rff_dim,
+})
+
+if rff_encoder is not None:
+    freq_norms = rff_encoder.B.norm(dim=0)  # [n_freqs]
+    wandb.summary["rff/sigma"] = cfg.rff_sigma
+    wandb.summary["rff/n_freqs"] = int(rff_encoder.B.shape[1])
+    wandb.summary["rff/seed"] = cfg.rff_seed
+    wandb.summary["rff/freq_norm_mean"] = freq_norms.mean().item()
+    wandb.summary["rff/freq_norm_std"] = freq_norms.std().item()
+    wandb.summary["rff/freq_norm_max"] = freq_norms.max().item()
+    wandb.summary["rff/freq_norm_min"] = freq_norms.min().item()
+    wandb.summary["rff/B_abs_mean"] = rff_encoder.B.abs().mean().item()
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -637,12 +755,9 @@ for epoch in range(MAX_EPOCHS):
             wandb.summary["coord_abs_max_first_batch"] = coord_abs_max
             wandb.summary["coord_abs_p99_first_batch"] = coord_abs_p99
             logged_coord_range = True
-        if cfg.fourier_bands > 0:
-            coords = x_norm[..., :2]
-            rest = x_norm[..., 2:]
-            x_in = torch.cat([fourier_encode_coords(coords, cfg.fourier_bands), rest], dim=-1)
-        else:
-            x_in = x_norm
+        x_in = encode_input_features(
+            x_norm, cfg.fourier_bands, rff_encoder, cfg.rff_concat_with_axis,
+        )
         pred = model({"x": x_in})["preds"]
         abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
 
@@ -669,7 +784,9 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.fourier_bands)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.fourier_bands, rff_encoder=rff_encoder,
+                             rff_concat_with_axis=cfg.rff_concat_with_axis)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -737,7 +854,9 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.fourier_bands)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.fourier_bands, rff_encoder=rff_encoder,
+                             rff_concat_with_axis=cfg.rff_concat_with_axis)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
