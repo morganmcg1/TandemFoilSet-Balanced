@@ -65,16 +65,18 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #873 | edward | EMA Polyak decay=0.99 | −10.46% val on pre-#820 | **needs rebase onto post-#963; predicted compound val ≈ 40-50** |
 | #880 | tanjiro | LinearNO ELU+1 | +6.92% actual | **CLOSED — attention-kernel-substitution exhausted** |
 | #914 | tanjiro | SwiGLU MLP swap | **−8.81% val** | **MERGED — val 81.81** |
-| #938 | tanjiro | Random Fourier Features σ∈{2,5} | -1 to -3% | **SENT BACK for σ∈{2,5} sweep — needs retest vs new 64.91 baseline with --t_max 13** |
-| #939 | frieren | n_layers=6 | +4.7% actual | **CLOSED — under-trained; HIGH-PRIORITY RETEST at T_max=13** |
+| #938 | tanjiro | RFF σ sweep {2,5,10} | +2.4–7.3% actual | **CLOSED — RFF-as-replacement settled negative; tanjiro→#1007 hybrid concat** |
+| #939 | frieren | n_layers=6 | +4.7% actual | **CLOSED — under-trained; thorfinn→#1006 retest at T_max=11** |
 | #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | K=4 settled | **CLOSED** |
 | #949 | fern | LayerScale γ_init=1e-4 (CaiT) | −4.58% under T_max=50 | **SENT BACK — retest at T_max=13 required; new baseline 64.91** |
-| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | +2.7% actual | **CLOSED — cross-channel coupling load-bearing; thorfinn→#979** |
+| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | +2.7% actual | **CLOSED — cross-channel coupling load-bearing; DECODER-DECOUPLING exhausted** |
 | #963 | frieren | Schedule-to-budget T_max=13 | **−20.66% val / −21.62% test** | **MERGED — new baseline 64.91** |
-| #979 | thorfinn | Pressure-only head (decouple only p) | −1 to −3% predicted | **WIP — must rebase onto post-#963** |
+| #979 | thorfinn | Pressure-only head (decouple only p) | +0.61% val (seed noise); −2.45% 3-split test | **CLOSED — new baseline supersedes; DECODER-DECOUPLING exhausted; thorfinn→#1006** |
 | #972 | askeladd | 3-seed mean canonical | variance floor | **WIP — must rerun with --t_max 13 for T_max=13 era canonical** |
-| #1000 | frieren | T_max sweep {10,12,13,16} at seed=0 | map LR optimum + seeded canonical | **WIP (just assigned)** |
-| #1002 | nezuko | DropPath@0.05 + T_max=13 | 0 to −5% | **WIP (just assigned)** |
+| #1000 | frieren | T_max sweep {10,12,13,16} at seed=0 | map LR optimum + seeded canonical | **WIP** |
+| #1002 | nezuko | DropPath@0.05 + T_max=13 | 0 to −5% | **WIP** |
+| #1006 | thorfinn | n_layers=6 retest at T_max=11 | −2 to −7% predicted | **WIP (just assigned)** |
+| #1007 | tanjiro | RFF hybrid: axis-aligned + σ=10 RFF concat at T_max=13 | 0 to −3% | **WIP (just assigned)** |
 
 **Round 3 candidates (queued):**
 
@@ -83,9 +85,9 @@ on L1-only baseline). The compounding mechanism is well-understood.
 - **T_max sweep {10,12,13,16} at seed=0** — IN FLIGHT as frieren #1000. Maps
   LR-schedule optimum AND establishes seeded T_max=13 canonical. Predicted:
   T_max ∈ {12, 13} near-optimal; T_max=10 cuts too early; T_max=16 under-anneals.
-- **n_layers=6 retest at T_max=13** — **HIGH PRIORITY**. #939 closed as
-  "under-trained at timeout". With T_max=13 now standard, the 6-layer model may
-  fit the budget if per-epoch cost ≤23 min (13 ep × ~107s). High-value retest.
+- **n_layers=6 retest at T_max=11** — **IN FLIGHT as thorfinn #1006.** 6-block
+  per-epoch cost ~168s → ~11 epochs per 30-min budget → T_max=11 budget-matched.
+  Expected val ≈ 60–65 (−2 to −7% vs 64.91).
 - **EMA × T_max=13 compound** (#873 needs rebase onto post-#963). EMA −10.46%
   on pre-#820; T_max=13 −20.66%. If orthogonal, compound val ≈ 44-50. **Highest-
   priority architectural stack candidate.**
@@ -94,6 +96,7 @@ on L1-only baseline). The compounding mechanism is well-understood.
 - **LayerScale × T_max=13** — IN FLIGHT as fern #949 retest. Sent back with
   `--t_max 13 --seed 0` instructions.
 - **DropPath@0.05 × T_max=13** — IN FLIGHT as nezuko #1002.
+- **RFF hybrid concat (axis-aligned + σ=10 RFF)** — IN FLIGHT as tanjiro #1007. σ=10 won cruise (−6.6%) and re_rand in replacement mode; concat mode lets axis-aligned hold structured backbone.
 - **EMA decay sweep {0.995, 0.97}** at T_max=13 — once #873 lands.
 - **Categorical-FiLM (multiplicative)** at T_max=13 — round-3 follow-up once #816 lands.
 - **RFF σ sweep {2, 5}** — in flight as #938 rebase #2 (compare vs T_max=13 baseline).

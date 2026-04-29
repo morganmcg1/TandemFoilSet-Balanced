@@ -1,5 +1,84 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 06:30 — PR #938: RFF σ sweep {2, 5, 10} — **CLOSED — RFF-as-replacement settled negative; spectral coverage uniformity beats single-σ Gaussian**
+
+- Branch: `willowpai2e4-tanjiro/rff-encoding`
+- Student: willowpai2e4-tanjiro
+- W&B runs: `dip7o4ej` (σ=10), `9d78bkzi` (σ=5), `lhqlqynf` (σ=2)
+- Status: **CLOSED**
+
+**Hypothesis.** Random Fourier Features (RFF) encoding replacing axis-aligned Fourier PE, sweeping σ ∈ {2, 5, 10} to find the optimal frequency distribution. Predicted −1 to −3% on val_avg.
+
+**Results (all vs old unseeded baseline 81.81):**
+
+| σ | W&B | val_avg | Δ | test_avg | Δ |
+|---|---|---:|---:|---:|---:|
+| 2 | `lhqlqynf` | 85.47 | **+4.5%** ✗ | 76.01 | +4.1% |
+| 5 | `9d78bkzi` | 87.74 | **+7.3%** ✗ | 76.16 | +4.3% |
+| 10 | `dip7o4ej` | 83.76 | **+2.4%** ✗ | 76.53 | +4.8% |
+| Baseline | `2akpdg9t` | **81.81** | — | **73.04** | — |
+
+**Per-split val (best of σ=10, epoch 13):**
+
+| Split | σ=10 | σ=5 | σ=2 | Baseline | σ=10 Δ |
+|---|---:|---:|---:|---:|---:|
+| `val_single_in_dist` | 105.15 | 107.11 | **94.77** | 97.53 | +7.8% |
+| `val_geom_camber_rc` | 98.14 | 100.36 | 95.86 | 94.17 | +4.2% |
+| `val_geom_camber_cruise` | **55.25** | 60.33 | 69.58 | 59.18 | **−6.6%** ✓ |
+| `val_re_rand` | 76.51 | 83.18 | 81.66 | 76.36 | +0.2% |
+
+**Mechanism (student's excellent diagnosis):**
+1. **No single σ beats axis-aligned** because spectral coverage structure, not isotropy, is the bottleneck. Axis-aligned grid places one channel per frequency decade ({π, 2π, 4π, 8π}); single-σ Gaussian concentrates 8 samples near one spectral peak.
+2. **Non-monotone σ-vs-val curve falsifies 'no low-freq channel' story.** σ=5 (mean freq 7.94, between baseline's k=1 and k=2 bands) is the *worst* variant — if low-freq coverage were the bottleneck, it should be better than σ=10. It isn't.
+3. **Per-split per-σ structure exposes the actual bottleneck.** σ=2 wins single_in_dist (low-freq sufficient), σ=10 wins cruise (high-freq, smooth-magnitude tolerant), σ=5 wins nothing. Each σ concentration serves one split at the cost of others.
+4. **σ=10 wins cruise (−6.6% val, −3.3% test re_rand)** → angular isotropy at high frequencies helps smooth-regime oblique gradients. This is the partial success that motivates hybrid concat.
+
+**Decision: CLOSED.** Lever family RFF-AS-REPLACEMENT settled negative. Tanjiro reassigned to **RFF-as-addition hybrid** (#1007): keep axis-aligned backbone, concatenate σ=10 RFF channels, space_dim 18 → 34.
+
+---
+
+## 2026-04-29 06:15 — PR #979: Pressure-only head — **CLOSED — val within seed noise (+0.61%), mechanism confirmed; new baseline supersedes**
+
+- Branch: `willowpai2e4-thorfinn/pressure-only-head`
+- Student: willowpai2e4-thorfinn
+- W&B run: [`ryp4uj3v`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/ryp4uj3v)
+- Status: **CLOSED**
+
+**Hypothesis.** Decouple only the pressure output head (keep Ux+Uy on shared 2-channel decoder); gives pressure its own pathway without losing cross-channel velocity coupling. Predicted val 82.5–84.0 on seeded canonical (−1 to −3% vs 85.14). Run at T_max=50 unseeded, seed=0 (pre-#963 merge).
+
+**Results vs seeded canonical 85.14 (run `j1r5y758`):**
+
+| Metric | This run | Seeded canonical | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 85.66 | 85.14 | **+0.61%** (within seed noise) |
+| `test_avg/mae_surf_p` | 77.91 | 78.97 | **−1.34%** (soft positive) |
+| 3-split test mean | 84.65 | 86.78 | **−2.45%** |
+| Params | 678,247 | 661,735 | +16,512 (+2.49%) |
+
+**Per-split val (epoch 13):**
+
+| Split | This run | Baseline | Δ | Predicted |
+|---|---:|---:|---:|---|
+| `val_single_in_dist` | 102.69 | 109.20 | **−5.96%** ✓ | flat to −2% |
+| `val_geom_camber_rc` | 92.91 | 91.50 | +1.54% | flat |
+| `val_geom_camber_cruise` | 69.06 | 65.09 | **+6.10%** ✗ | −3 to −5% |
+| `val_re_rand` | 77.96 | 74.77 | +4.27% | flat |
+
+**Mechanism confirmed (in predicted band):**
+- head_p linear_2: ×2.29 (predicted ×2.0–2.5) ✓
+- uxy linear_2: ×1.88 (predicted ×1.5–1.8, slightly above upper) ✓
+- p/uxy ratio: 1.22× (vs #955 full per-channel 1.41× — gap is smaller, confirming that keeping Ux+Uy shared reduces their cross-channel pull while still preserving pressure specialization)
+
+**Key validation:**
+- **single_in_dist flipfed cleanly.** #955 (full per-channel) → +13% val, this PR → −5.96%. Confirms: Ux+Uy velocity coupling was load-bearing for high-magnitude single_in_dist. Keeping them shared fixed the regression.
+- **Cruise reversed the prediction.** #955 gained cruise (−6.3%) via joint decoupling + raw capacity. This PR's cruise gain (+6.10%) shows the cruise effect in #955 was not pressure-head specialization — it was the joint decoder +33K params. This PR's +16K params aren't enough.
+
+**Critical context: T_max=13 (#963) merged.** New baseline is val=64.91. This PR's val=85.66 is ~32% worse in absolute terms. Even if T_max=13 gives 'free' ~20% improvement, the lever's residual signal is too soft to prioritize retest over higher-expected-value experiments.
+
+**Decision: CLOSED.** Lever family DECODER-DECOUPLING exhausted across #955 (full per-channel) and #979 (pressure-only). Soft-positive test signal noted (−2.45% 3-split) but not load-bearing for merge. Thorfinn reassigned to n_layers=6 retest at T_max=11 (#1006).
+
+---
+
 ## 2026-04-29 05:30 — PR #929: DropPath rate=0.1 linear schedule — **CLOSED — clean negative (+9.5–19.6% val regression, budget-binding)**
 
 - Branch: `willowpai2e4-nezuko/drop-path`
