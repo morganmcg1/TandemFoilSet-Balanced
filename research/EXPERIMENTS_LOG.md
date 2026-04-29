@@ -1,5 +1,23 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2f-r3
 
+## 2026-04-29 23:55 — PR #1288: Lion lr=1.25e-4 — triangulate LR optimum between 1e-4 and 1.5e-4 (charliepai2f3-frieren) — CLOSED DEAD END
+
+- Branch: charliepai2f3-frieren/lr-1p25e-4-lion-triangulate (closed, branch deleted)
+- Hypothesis: Test lr=1.25e-4 to see if the optimum is between 1e-4 (35.16) and 1.5e-4 (33.16) — check whether the LR landscape has a lower valley between those two points.
+- Result: val_avg/mae_surf_p = **33.6187** — +1.40% WORSE than baseline 33.1552. Best epoch=66 (wall-clock limited).
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|-------|----------------|-----------------|
+| single_in_dist | 33.0022 | 27.59 |
+| geom_camber_rc | 47.3012 | 43.09 |
+| geom_camber_cruise | 17.1799 | 14.36 |
+| re_rand | 36.5467 | 26.93 |
+| **avg** | **33.6187** | **27.9936** |
+
+- Metrics path: target/models/model-charliepai2f3-frieren-lr-1p25e-4-lion-triangulate-20260429-203233/metrics.jsonl
+- Best epoch = 66/100 (wall-clock limited). LR at ep66: 4.384e-5.
+- Commentary: The LR sweep is now fully characterized: lr=1e-4 (35.16) → lr=1.25e-4 (33.62) → lr=1.5e-4 (33.16, BEST) → lr=2e-4 (33.81) → lr=3e-4 (34.39). The optimum is definitively at lr=1.5e-4. No further LR sweeping warranted. Focus shifts to architecture (n_hidden, slice_num) and regularization (surf_weight, EMA decay, SWA) — all already in flight in other PRs.
+
 ## 2026-04-29 20:15 — PR #1280: Lion lr=1e-4 on full current-best config (charliepai2f3-nezuko) — CLOSED DEAD END (LR-too-low regression)
 
 - Branch: charliepai2f3-nezuko/lion-lr-1e-4-current-best (closed, branch deleted)
