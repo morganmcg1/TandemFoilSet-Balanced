@@ -55,18 +55,19 @@ Round 2 continues the sweep with hypotheses that:
 - Cover orthogonal axes (positional encoding, training trick, architecture, augmentation)
 - Predict effects above the noise floor where possible
 
-## Round 2 — assignments in flight (5 PRs)
+## Round 2 — assignments in flight (6 PRs)
 
 - **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal; zero throughput cost; strong priors (Tancik 2020, GINO, MARIO). Expected -3% to -8%.
 - **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
 - **PR #1158 (thorfinn, film-domain-cond)** — H-10 FiLM domain conditioning over global per-sample features (Re, AoA, NACA, gap, stagger). Targets the 51% per-split val spread. ~0.05M extra params, near-zero throughput cost, identity-init for safe start. Expected -2% to -5%.
 - **PR #1159 (askeladd, aoa-flip-aug)** — H-12 AoA sign-flip augmentation for aerodynamic symmetry. Doubles effective training data per epoch at zero throughput cost. Targets `val_single_in_dist` (151.4) and `val_geom_camber_rc` (132.8) where AoA coverage gaps most likely hurt. Expected -1% to -4%.
 - **PR #1160 (alphonse, swiglu-ffn)** — H-11 SwiGLU FFN replacing GELU MLP in TransolverBlock, param-matched. Different capacity axis from his prior width-scaling attempt. ~5-7% slower per epoch. Strong priors (LLaMA, PaLM, Mixtral). Expected -1% to -3%.
+- **PR #1162 (fern, scale-norm-loss)** — H-03 Per-sample scale-normalized loss. Divides each sample's training loss by its own y_std before averaging — directly addresses the 10× per-sample y_std spread documented in DATASET_ANALYSIS.md. Zero throughput cost. Expected -2% to -6%.
 
 ## Round 1 in-flight (revisions waiting)
 
 - **PR #1095 (edward)** — pressure-channel-weight, corrected formula (`/ ch_w.mean()`). Round-1 cleanup.
-- **PR #1096 (fern)** — Huber loss on volume nodes, in flight.
+- **PR #1096 (fern)** — Huber loss on volume nodes — **closed** (val=143.1, +6.9% regression). fern reassigned to PR #1162 (scale-norm-loss).
 - **PR #1100 (tanjiro)** — wider-bs8 with mlp_ratio↓ + output clamp, in flight.
 
 ## Next research directions (post-round-2 candidates)
