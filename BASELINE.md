@@ -1,6 +1,36 @@
 # Baseline — icml-appendix-charlie-pai2e-r3
 
 ## Current Best
+- **Source**: EMA of model weights (decay=0.99) for evaluation (PR #895, thorfinn)
+- **PR**: #895
+- **Primary**: `val_avg/mae_surf_p` = **87.233** (lower is better)
+- **Test (3-split mean, excl. cruise NaN)**: `test_avg/mae_surf_p` = **85.166**
+
+### Best checkpoint metrics (val, epoch 13)
+
+| Split | mae_surf_p | Δ vs PR #919 |
+|---|---|---|
+| val_single_in_dist | 104.130 | -0.81% |
+| val_geom_camber_rc | 97.553 | +2.14% |
+| val_geom_camber_cruise | 64.943 | -2.11% |
+| val_re_rand | 82.304 | -1.56% |
+| **val_avg** | **87.233** | **-0.44%** |
+
+### Test metrics (raw, NaN in cruise due to known 1-sample bug)
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 92.469 |
+| test_geom_camber_rc | 86.491 |
+| test_geom_camber_cruise | NaN (1-sample GT bug) |
+| test_re_rand | 76.539 |
+| **test_avg (3-split excl. cruise)** | **85.166** |
+
+- **Metric summary**: `target/runs/ema-decay-0.99/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --lr 5e-4 --surf_weight 10 --batch_size 4 --epochs 50`
+  (EMA decay=0.99, per-sample Re-aware RMS normalization, T_max=15 + 1-epoch warmup)
+
+## Previous Best (PR #919)
 - **Source**: Per-sample Re-aware loss normalization (PR #919, fern)
 - **PR**: #919
 - **Primary**: `val_avg/mae_surf_p` = **87.614** (lower is better)
