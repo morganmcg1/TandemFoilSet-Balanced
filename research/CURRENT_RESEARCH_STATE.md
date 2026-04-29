@@ -1,68 +1,81 @@
 # SENPAI Research State
-- 2026-04-28 23:00 UTC (last updated)
+- 2026-04-29 01:20 UTC (last updated)
 - Most recent research direction from human researcher team: None received yet (no GitHub Issues found)
-- Current research focus and themes: Round 1 — Baseline parameter sweeps and loss function experiments on the Transolver CFD surrogate for TandemFoilSet-Balanced
+- Current research focus and themes: Round 1 — Compound baseline refinement: stacking orthogonal improvements (Huber loss + wider model + EMA + surf_weight + grad_clip) on Transolver CFD surrogate for TandemFoilSet-Balanced
 
 ## Current Baseline
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| `val_avg/mae_surf_p` | **115.6496** | PR #788 — Huber loss, epoch 10 |
-| `test_avg/mae_surf_p` | **40.927** | Prior competition best (nl=3, sn=16) |
+| `val_avg/mae_surf_p` | **103.2182** | PR #882 — EMA(0.999) + bf16 + n_hidden=256 + n_head=8 + Huber + epochs=12 + grad_clip=1.0 |
+| `test_avg/mae_surf_p` | **92.4867** | PR #882 |
 
-The val baseline (115.65) is what current WIP experiments must beat.
+**Best reproduce command:**
+```bash
+cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 12 --grad_clip 1.0 --ema_decay 0.999
+```
 
 ## Active WIP PRs (8 students, all running)
 
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
-| #789 | askeladd | Gradient clipping (max_norm=1.0) | **WINNER (114.3451)** — sent back for rebase after merge conflict |
-| #792 | frieren | n_layers=6 Transolver + grad clipping (NaN fix) | Running |
-| #793 | nezuko | Finer physics partitioning: slice_num 64→128 | Running (⚠ missing Huber loss flag) |
-| #794 | tanjiro | LR warmup (2 epochs) + Huber loss | Sent back: reduce warmup 5→2 epochs, add Huber |
-| #795 | thorfinn | Per-sample norm + Huber loss combined | Sent back: add Huber on top of per-sample norm |
-| #808 | fern | bf16 mixed precision for wider model (n_hidden=256, n_head=8) | Sent back: add Huber, revert split decoder, set epochs=12 |
-| #827 | alphonse | surf_weight sweep (20, 30, 50) on Huber baseline | Running |
+| #954 | alphonse | surf_weight=30 stacked on compound baseline (n_hidden=256, EMA, grad_clip) | Just assigned — most promising next step |
+| #942 | nezuko | EMA decay sweep: 0.99/0.995 vs 0.999 on compound baseline | Running |
+| #904 | fern | Huber delta sweep: 0.25/0.5/1.0/2.0 on wider-model baseline | Running |
 | #828 | edward | AdamW weight_decay sweep (1e-4, 1e-3, 1e-2) on Huber baseline | Running |
+| #795 | thorfinn | Per-sample loss normalization to equalize Re-regime gradients | Running |
+| #794 | tanjiro | Linear LR warmup (5 epochs) before cosine annealing | Running |
+| #792 | frieren | Deeper Transolver: n_layers 5→8, lr 5e-4→3e-4 | Running (revision round) |
+| #789 | askeladd | Add gradient clipping (max_norm=1.0) for training stability | Running (revision round) |
 
-Note: #791 (fern fp32 wider model) was CLOSED as superseded by #808 (bf16 follow-up). Infrastructure fixes from #791 (NaN guard, JSONL logger, CLI args) are retained in the codebase.
+## Merged Winners (Round 1)
 
-## Key Infrastructure Fix Applied
+| PR | Hypothesis | val_avg/mae_surf_p | vs prior | 
+|----|------------|-------------------|----------|
+| #882 | EMA(0.999) on compound baseline | **103.2182** | -0.86% |
+| #808 | bf16 + n_hidden=256 + n_head=8 + Huber + epochs=12 | 104.1120 | -4.97% |
+| #827 | Huber loss + surf_weight=30 | 109.5716 | -5.26% |
+| #788 | Huber loss (delta=1.0) | 115.6496 | -8.85% |
 
-- `accumulate_batch` NaN bug: `0 * NaN = NaN` in IEEE 754 in `evaluate_split` — **fixed** in all subsequent PRs following PR #791.
-- Known pre-existing bug: `test_geom_camber_cruise/mae_surf_p` returns NaN for some models. Under investigation — `data/scoring.py` doesn't guard non-finite predictions.
+## Closed Dead Ends
 
-## Round 1 Summary
+| PR | Hypothesis | Why Closed |
+|----|------------|------------|
+| #886 | Pressure-channel loss weighting (p_weight=2/3/5) | All variants 6-22% worse than baseline; surf_weight already captures pressure focus |
+| #790 | surf_weight 10→30/50 on MSE | MSE results 11.5% above Huber baseline |
 
-### Merged Winners
-1. **PR #788** — Huber loss (delta=1.0): val_avg/mae_surf_p = 115.65 vs MSE baseline 126.88 (-8.85%)
+## Key Infrastructure Fixes Applied
 
-### Sent Back for Revision
-- **PR #795** (thorfinn): Per-sample normalization alone — above Huber baseline. Re-running with Huber+norm combined.
-- **PR #794** (tanjiro): LR warmup 5 epochs + cosine — above Huber baseline. Re-running with 2-epoch warmup + Huber.
+1. **NaN propagation fix** (PR #791): `accumulate_batch` 0*NaN=NaN bug fixed in `evaluate_split`
+2. **eval sanitization** (PR #792): `--grad_clip 1.0` + upstream pred/GT sanitization resolves NaN propagation
+3. **Test split data bug** (PR #792): `test_geom_camber_cruise/000020.pt` has 761 Inf values in p — correctly skipped
+4. All new PRs must include both fixes
 
-### Closed Dead Ends
-- **PR #790** (edward): surf_weight 10→30/50 on MSE — 128.98, above Huber baseline. Re-assigned as #828 using Huber foundation.
+## Key Research Insights
 
-## Key Research Insights So Far
+1. **Compound improvements stack well** — Huber → surf_weight=30 → wider model → EMA each added 0.86–8.85%
+2. **surf_weight=30 on narrow model gave -5.26%** — has NEVER been tested on wide model (n_hidden=256). PR #954 closes this gap
+3. **Channel-level pressure weighting (p_weight) is harmful** — surf_weight=30 at node level already routes gradient to pressure; stacking channel reweighting is redundant and degrades performance
+4. **Deeper models (n_layers>5) are impractical** within epoch budget — 2.4x slowdown prevents convergence
+5. **bf16 doubles throughput** — enables more epochs for wider models in 30-min budget
+6. **EMA(0.999) gives marginal but consistent benefit** — small smoothing gain at zero cost
+7. **Huber loss is the foundation** — all experiments should build on it
 
-1. **Huber loss is the new foundation** — 8.85% improvement. All future experiments should build on Huber loss.
-2. **Wider models may overfit or be epoch-starved within timeout** — #791 showed limited epochs due to budget constraints.
-3. **bf16 doubles throughput** — should allow ~2x epochs for wider models within the 30-min budget.
-4. **Deeper models (n_layers>5) are impractical** — 2.4x slowdown per epoch makes convergence impossible in budget.
-5. **From prior competition**: n_layers=3 + slice_num=16 was the winning config — should be explicitly tested here with Huber.
+## Potential Next Research Directions (Post-Round-1 completion)
 
-## Potential Next Research Directions (Post-Round-1)
+Priority order (based on orthogonality and prior evidence):
 
-Priority order:
-
-1. **Reproduce prior competition winner explicitly**: n_layers=3, slice_num=16, SwiGLU+Fourier, Huber loss — HIGHEST PRIORITY
-2. **SwiGLU activation** — contributed to prior competition win; test on Huber baseline
-3. **Fourier positional encoding (sigma=0.7)** — prior competition showed benefit
-4. **n_layers=3 + slice_num=16 combo** on this new track with Huber loss as foundation
-5. **Cosine annealing without warmup** (vs current schedule) — clean comparison
-6. **Pressure-only output head** — dual head: shared trunk for Ux/Uy, specialized head for p
-7. **High-Re weighting** — per-sample weight by Re to stress-test high-Re regimes
-8. **Separate surface/volume loss** — stronger weight on surface nodes in the combined loss
-9. **Node subsampling during training** — keep all surface nodes, randomly subsample interior to speed training
-10. **Geometry-aware positional encoding** — directly encode chord, gap, stagger into node features before attention
+1. **SwiGLU activation** (from prior competition win) — test on current compound baseline, especially if orthogonal to loss/weight changes
+2. **Fourier positional encoding (sigma=0.7)** — contributed to prior competition winner; test on Huber baseline
+3. **n_layers=3 + slice_num=16** (prior competition winning config) — explicit test with Huber loss on this track
+4. **Cosine annealing without warmup** — vs current warmup+cosine schedule; clean comparison on compound baseline
+5. **Longer training if budget allows** — epochs=12 may still be epoch-starved; test epochs=15-20 with early stopping
+6. **Geometry-aware positional encoding** — encode chord, gap, stagger into node features before attention
+7. **Reynolds number conditioning** — add Re as a global conditioning variable (film conditioning or prefix token)
+8. **Node subsampling during training** — keep all surface nodes, randomly subsample interior volume nodes to speed training
+9. **Learning rate schedule tuning** — 1cycle vs cosine vs warmup+cosine; optimizer momentum/beta sweeps
+10. **Label noise / augmentation** — simulate Reynolds number perturbation, small geometric jitter
+11. **Ensemble of EMA + final checkpoint** — free metric gain if inference budget permits
+12. **Higher EMA decay** — try 0.9999 on compound baseline if 0.999 was marginal
+13. **Separate surface/volume prediction heads** — shared trunk, specialized head for surface p vs volume fields
+14. **Sparse attention** over geometry graph — prune long-range edges using physical distance thresholds
