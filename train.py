@@ -169,12 +169,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_domain_embed: bool = False, n_domains: int = 3):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_domain_embed = use_domain_embed
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -194,6 +196,9 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        if self.use_domain_embed:
+            self.domain_embed = nn.Embedding(n_domains, n_hidden)
+            nn.init.normal_(self.domain_embed.weight, std=0.02)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -208,6 +213,8 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.use_domain_embed and "domain_ids" in data:
+            fx = fx + self.domain_embed(data["domain_ids"]).unsqueeze(1)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -217,7 +224,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   use_domain_embed: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -230,15 +238,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     n_surf = n_vol = n_batches = 0
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for x, y, is_surface, mask, domain_ids in loader:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+            domain_ids = domain_ids.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            model_input = {"x": x_norm}
+            if use_domain_embed:
+                model_input["domain_ids"] = domain_ids
+            pred = model(model_input)["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -358,6 +370,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    use_domain_embed: bool = True  # learnable 3-way domain tag added after preprocess
 
 
 cfg = sp.parse(Config)
@@ -397,6 +410,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_domain_embed=cfg.use_domain_embed,
 )
 
 model = Transolver(**model_config).to(device)
@@ -435,15 +449,19 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for x, y, is_surface, mask, domain_ids in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+        domain_ids = domain_ids.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        model_input = {"x": x_norm}
+        if cfg.use_domain_embed:
+            model_input["domain_ids"] = domain_ids
+        pred = model(model_input)["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -467,7 +485,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             use_domain_embed=cfg.use_domain_embed)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +544,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 use_domain_embed=cfg.use_domain_embed)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
