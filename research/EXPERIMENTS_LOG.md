@@ -1,5 +1,40 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #976 (SENT BACK): AoA-FiLM v1 — strong mechanism win on pre-SwiGLU stack; rebase onto SwiGLU+ratio=1 HEAD required
+- **Branch:** `askeladd/aoa-film`
+- **Hypothesis:** Extending FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2) tests whether multi-variable conditioning compounds. AoA is a primary flow parameter modulating stagnation point, lift coefficient, wake interaction.
+- **Run:** W&B `tevsj514`, 14/14 epochs, 31.8 min, 44.7 GB peak, group `aoa-film` (pre-SwiGLU stack — `swiglu` key absent from config)
+
+| Split | val pre-SwiGLU baseline | val v1 (`tevsj514`) | val Δ | test pre-SwiGLU baseline | test v1 | test Δ |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 84.70 | 87.97 | +3.86% | 73.79 | 76.62 | +3.83% |
+| `geom_camber_rc` | 92.95 | 91.32 | −1.76% | 83.50 | 80.86 | −3.16% |
+| `geom_camber_cruise` | 63.49 | **58.75** | **−7.46%** | 52.45 | **50.17** | −4.36% |
+| `re_rand` | 77.02 | 76.30 | −0.94% | 71.29 | 68.44 | −4.00% |
+| **avg** | **79.54** | **78.58** | **−1.21%** | **70.26** | **69.02** | **−1.76%** |
+
+### γ-norm diagnostics (epoch 14, paper-quality mechanism evidence)
+| Block | γ-norm full | γ-norm Re-only | γ-norm AoA-only |
+|---|---|---|---|
+| 0 | 0.302 | 0.280 | 0.266 |
+| 1 | 0.622 | 0.415 | 0.504 |
+| 2 | 0.854 | 0.627 | 0.493 |
+| 3 | 0.827 | 0.753 | 0.496 |
+| 4 | 0.887 | 0.805 | 0.499 |
+| **mean** | **0.698** | **0.576** | **0.452** |
+
+- AoA-only γ-norm grew monotonically from 0.20 (epoch 1) to 0.45 (epoch 14) — model is actively learning AoA conditioning, not falling back to Re-only.
+- Re still dominates deeper blocks (Re-only γ rises 0.28→0.80); AoA stays ~0.50 from block 1 onward — plausibly a global stagnation-point/lift correction applied uniformly across depth.
+
+### Decision: SENT BACK — rebase onto SwiGLU+ratio=1 HEAD; paired A/B v2-aoa vs v2-baseline
+- **Mechanism is real** on pre-SwiGLU stack: cruise −7.5% is the largest single-split improvement since FiLM-pre-block landed; AoA γ being learned monotonically; predicted-flat re_rand confirmed (−0.9%).
+- **Cannot directly stack on SwiGLU's gain** — bilinear gating (silu * up) and FiLM-pre are both multiplicative on hidden state; could compound or interfere. fern PR #927 cross-stack mechanism reversal (vol_p shrunk −9.0%→−4.2%, surf_p flipped +4.77% post-SwiGLU) is direct precedent for SwiGLU absorbing channel-rebalancing levers.
+- **Single-seed noise band on SwiGLU stack ~3.6%** (62.20→64.46 same-day, PR #983) — paired A/B same-day is the only way to robustly separate AoA-FiLM signal from drift on the new baseline.
+- **Send-back protocol:** rebase `askeladd/aoa-film` onto current HEAD (SwiGLU+ratio=1+L1+FiLM-pre+Re-stratify all merged), run paired v2-aoa (with `--aoa_film`) and v2-baseline (without) in `wandb_group=aoa-film-on-swiglu`. Re-log γ-norm diagnostics — especially interesting whether γ-norms collapse on SwiGLU (capacity overlap signature).
+- **Decision criteria on rebased run:** merge if v2-aoa val_avg < min(v2-baseline, 62.20) AND cruise reproduces direction. Strong-win <60 opens 4-d FiLM (Re, AoA1, AoA2, gap). Send-back-again if within ±0.5 of v2-baseline + cruise improves → wider FiLM hidden Linear(3, 64) is next probe.
+
+---
+
 ## 2026-04-29 — PR #927 (CLOSED): Per-channel volume-loss weights — mechanism absorbed by SwiGLU
 - **Branch:** `fern/per-channel-vol-l1`
 - **Hypothesis:** v1 result on pre-SwiGLU stack: `vol_w_p=2.0` gave −9.0% on `val_avg/vol_p` with neutral surf_p. Fern requested rebase onto SwiGLU (post-PR #961 #983) to test whether the volume-pressure mechanism survived the bilinear-gating MLP.

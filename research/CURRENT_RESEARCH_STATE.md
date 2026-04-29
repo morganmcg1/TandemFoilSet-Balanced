@@ -67,7 +67,7 @@
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
 | alphonse | #1020 | **Ultra-thin SwiGLU (mlp_ratio=2/3, intermediate=85, 0.51M params) — paper-efficiency extension** | WIP — new 2026-04-29 (post-SwiGLU) |
-| askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | WIP — new 2026-04-29 |
+| askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | **SENT BACK 2026-04-29** — pre-SwiGLU mechanism win (val=78.58 < 79.54 old; cruise −7.5%, γ-norms growing); rebase onto SwiGLU+ratio=1 HEAD, paired v2-aoa vs v2-baseline |
 | thorfinn | #999 | **RMSNorm replacing LayerNorm — canonical SwiGLU pairing (LLaMA/Mistral-style normalization)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | nezuko | #1021 | **slice_num sweep {32, 64, 96, 128} — physics-attention spatial resolution ablation** | WIP — new 2026-04-29 (post-SwiGLU) |
 | fern | #1029 | **Surface loss reweighting by per-node pressure quantile (within-sample, target-value-gated; sweep top10/α=2, top20/α=2, top10/α=3)** | WIP — new 2026-04-29 (post-SwiGLU) |
