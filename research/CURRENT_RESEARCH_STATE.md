@@ -1,7 +1,7 @@
 # SENPAI Research State
-- 2026-04-29 19:45
+- 2026-04-29 20:30
 - No recent research directions from human researcher team (no GitHub issues found)
-- Current research focus: FiLM Re conditioning merged (PR #1264, val=74.36). Re conditioning with a shared generator MLP proved effective across all 4 splits (+7.7% improvement). Now exploring FiLM variants, schedule tuning, augmentation, and domain re-weighting.
+- Current research focus: FiLM Re conditioning merged (PR #1264, val=74.36). Now exploring FiLM variants (zero-init, deeper generator, post-FFN placement), model width, LR schedule tuning, geometry augmentation, per-field heads, and lower LR probes. Key unsolved gap: raceCar splits (82-85 val) vs cruise (55-56 val) — 30-point spread dominates improvement opportunity.
 
 ## Current Baseline
 
@@ -42,19 +42,23 @@ Volume context is essential for OOD surface prediction.
 
 **7. Weight decay wd=1e-4 confirmed optimal; wd=1e-3 over-regularizes (PR #1178)**
 
-**8. Key per-split gap**: raceCar splits (single_in_dist=91.33, geom_camber_rc=91.01) vs cruise (60.42). The ~31 point gap between raceCar and cruise is the dominant improvement opportunity.
+**8. Key per-split gap**: raceCar splits (single_in_dist=82.09, geom_camber_rc=85.31) vs cruise (55.67). The ~30 point gap between raceCar and cruise is the dominant improvement opportunity.
+
+**9. FiLM Re conditioning is highly effective (MERGED PR #1264)**
+SharedFiLMGenerator(1→128→1280) conditioning all 5 TransolverBlocks on log(Re): 80.53 → 74.36 (-7.7%). Uniform improvement across all 4 splits. FiLM zero-init, deeper generator, and multi-scalar conditioning are natural next steps.
 
 ## Active Experiments
 
 | PR | Student | Hypothesis | Key Config | Status |
 |----|---------|-----------|------------|--------|
-| #1090 | frieren | Per-field output heads (Ux, Uy, p separate MLP decoders) | 3 separate heads on last block | Running (stale baseline — assess on absolute val) |
-| #1259 | askeladd | OneCycleLR max_lr 1.2e-3→1.5e-3: higher peak | ONECYCLE_MAX_LR=1.5e-3 | Running |
-| #1261 | alphonse | Re noise augmentation: corrected per-sample implementation | RE_NOISE_STD=0.05, per-sample scalar | Running |
-| #1262 | edward | OneCycleLR 20-epoch budget: lower per-epoch estimate to 94s | ONECYCLE_PER_EPOCH_SEC_ESTIMATE=94.0 | Running |
-| #1263 | fern | Domain re-weighting: boost raceCar samples 2x | RACECAR_BOOST=2.0 via heuristic AoA<-0.01 | Running |
-| #1265 | tanjiro | OneCycleLR pct_start 0.3→0.2: shorter warmup | ONECYCLE_PCT_START=0.2 | Running |
-| #1266 | thorfinn | Geometry augmentation: AoA+NACA per-sample noise | GEOM_AUG_AOA_STD=0.03, GEOM_AUG_NACA_STD=0.05 | Running |
+| #1265 | charliepai2f2-tanjiro | OneCycleLR pct_start 0.3→0.2: shorter warmup | ONECYCLE_PCT_START=0.2 | Running |
+| #1266 | charliepai2f2-thorfinn | Geometry augmentation: AoA+NACA per-sample noise | GEOM_AUG_AOA_STD=0.03, GEOM_AUG_NACA_STD=0.05 | Running |
+| #1273 | charliepai2f2-frieren | Per-field output heads (Ux/Uy/p) on BF16+OneCycle stack | 3 separate heads on last block | Running |
+| #1278 | askeladd | OneCycleLR max_lr 1.2e-3→1.0e-3: lower peak LR probe | ONECYCLE_MAX_LR=1.0e-3 | Running |
+| #1289 | nezuko | FiLM zero-init output proj: identity start for Re conditioning | Zero-init output Linear in SharedFiLMGenerator | Running |
+| #1290 | edward | Deliberate LR clamping tail: 150s epoch estimate | ONECYCLE_PER_EPOCH_SEC_ESTIMATE=150.0 | Running |
+| #1291 | alphonse | Wider model n_hidden=160, n_head=5 on FiLM BF16 stack | n_hidden=160, n_head=5 | Running |
+| #1292 | fern | Deeper FiLM generator 1→128→128→1280 with residual | 3-layer FiLM generator + residual skip | Running |
 
 ## Merged Winners (Chronological)
 
@@ -83,20 +87,24 @@ Volume context is essential for OOD surface prediction.
 - PR #1126 (edward): T_max=14 — superseded
 - PR #1166 (edward): LR warmup + cosine — superseded
 - PR #1199 (tanjiro): FiLM Re conditioning (full, unfair test) — ran without BF16, only 13 epochs; lightweight variant re-tested as PR #1264
-- PR #1203 (fern): checkpoint averaging (last K=3) — awaiting results; not yet closed
+- PR #1203 (fern): checkpoint averaging (last K=3) — no improvement
 - PR #1204 (alphonse): Re noise augmentation (buggy per-node) — implementation bug fixed in PR #1261
 - PR #1206 (edward): mlp_ratio=3 — superseded by PR #1262
 - PR #1207 (askeladd): batch_size=8 — superseded by PR #1259
 - PR #1152 (thorfinn): CosineAnnealingLR eta_min=1e-5 (stale baseline) — superseded
+- PR #1259 (askeladd): OneCycleLR max_lr 1.5e-3 — closed (did not beat baseline)
+- PR #1261 (alphonse): Re noise augmentation corrected — closed (did not beat baseline)
+- PR #1262 (edward): OneCycleLR 20-epoch budget (94s estimate) — closed (did not beat baseline)
+- PR #1263 (fern): Domain re-weighting racecar 2x boost — closed (did not beat baseline)
 
 ## Potential Next Research Directions
 
 After current WIPs resolve:
-1. **Ensemble / checkpoint averaging**: Average last 3 best checkpoints (PR #1203 in flight)
-2. **max_lr=1.0e-3**: Lower peak test (if 1.5e-3 works, compare both sides of 1.2e-3)
-3. **Adaptive loss weighting (Kendall & Gal)**: Learn log-variance per output channel — balances Ux, Uy, p gradients dynamically
-4. **Fourier positional features for mesh coords**: Random Fourier features for node x,y positions; improves spatial awareness in irregular mesh
-5. **Cross-attention surface↔volume**: Dedicated attention stream for surface-to-volume interaction; addresses raceCar surface gap
-6. **n_hidden=160, n_head=5**: Intermediate width avoiding epoch starvation seen at 192
-7. **Higher surf_weight on raceCar only**: Conditional surf_weight boost (2x for raceCar samples) — more targeted than global reweighting
-8. **Spectral/frequency features**: FFT-based features on boundary curves may capture camber shape more effectively
+1. **Multi-scalar FiLM conditioning**: Add AoA as second input to SharedFiLMGenerator (1→2 inputs) — Re + AoA jointly condition the model
+2. **FiLM post-FFN placement**: Currently post-norm on self-attention; try applying FiLM after FFN layer in each block
+3. **Conditional surf_weight for raceCar**: Higher surf_weight (e.g. 40) for raceCar samples only — addresses the 30-point raceCar/cruise gap more directly
+4. **Adaptive loss weighting (Kendall & Gal)**: Learn log-variance per output channel — balances Ux, Uy, p gradients dynamically
+5. **Fourier positional features for mesh coords**: Random Fourier features for node x,y positions; improves spatial awareness
+6. **Cross-attention surface↔volume**: Dedicated attention stream for surface-to-volume interaction; addresses raceCar surface gap
+7. **Spectral/frequency features**: FFT-based features on boundary curves may capture camber shape more effectively
+8. **max_lr=0.8e-3**: Continue LR probing below 1.0e-3 if PR #1278 shows that direction is promising
