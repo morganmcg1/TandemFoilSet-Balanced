@@ -71,28 +71,50 @@ def add_derived_features(
 
     Padding rows receive 0 for all derived features; ``mask`` excludes them
     from the loss/metrics downstream.
+
+    Per-sample CPU syncs are eliminated: one bulk d2h transfer pulls all
+    per-sample sizes at once (vs B individual ``int(.item())`` calls), and
+    surface indices come from a single ``topk`` over ``(B, N)`` (vs
+    per-sample ``nonzero`` whose output shape is data-dependent). The Python
+    loop that remains is over B (=4) and just dispatches the per-sample
+    chunked pairwise distance — its overhead is negligible. Numerically
+    bit-exact with the old per-sample loop (verified in PR #923).
     """
     B, N, _ = x_norm.shape
     device = x_norm.device
-    pos = x_norm[..., :2]
+    pos = x_norm[..., :2]                              # (B, N, 2)
+    surf_real = is_surface & mask                      # (B, N) bool
 
-    # Per-sample chunked pairwise distance — at 242K nodes × ~5K surface nodes
-    # the full pairwise diff would be ~9 GB, so we chunk over real nodes.
+    sizes = torch.stack(
+        [mask.sum(dim=-1), surf_real.sum(dim=-1)], dim=0
+    ).cpu().tolist()
+    n_per_b, s_per_b = sizes[0], sizes[1]
+    S_max = max(s_per_b)
+
+    if S_max == 0:
+        zeros = torch.zeros(B, N, 3, device=device, dtype=pos.dtype)
+        return torch.cat([x_norm, zeros], dim=-1)
+
+    # topk on a 0/1 int tensor gives the True indices in the first s_b
+    # positions; per-sample we slice ``top_idx[b, :s]``. Output shape
+    # ``(B, S_max)`` is known up front, so no data-dependent-shape sync.
+    _, top_idx = surf_real.int().topk(S_max, dim=-1)   # (B, S_max)
+
+    # Per-sample chunked pairwise distance. The compute is B × n_b × s_b
+    # (no wasted compute on padded rows), chunked over the query dim to cap
+    # peak intermediate memory at C × s_b × 2 floats.
     CHUNK = 8192
-    dist_to_surf = torch.zeros(B, N, device=device)
+    dist_to_surf = torch.zeros(B, N, device=device, dtype=pos.dtype)
     for b in range(B):
-        n = int(mask[b].sum().item())
-        if n == 0:
+        n = n_per_b[b]
+        s = s_per_b[b]
+        if n == 0 or s == 0:
             continue
-        s_flag = is_surface[b, :n]
-        surf_idx = s_flag.nonzero(as_tuple=True)[0]
-        if surf_idx.numel() == 0:
-            continue
-        real_pos = pos[b, :n]                       # [M, 2]
-        surf_pos = real_pos[surf_idx]               # [S, 2]
+        real_pos = pos[b, :n]                          # (n, 2)
+        surf_pos_b = pos[b, top_idx[b, :s]]            # (s, 2) — gather, no sync
         for start in range(0, n, CHUNK):
-            chunk = real_pos[start:start + CHUNK]   # [C, 2]
-            diff = chunk.unsqueeze(1) - surf_pos.unsqueeze(0)  # [C, S, 2]
+            chunk = real_pos[start:start + CHUNK]      # (C, 2)
+            diff = chunk.unsqueeze(1) - surf_pos_b.unsqueeze(0)  # (C, s, 2)
             dist_to_surf[b, start:start + chunk.shape[0]] = (
                 diff.norm(dim=-1).min(dim=-1).values
             )
