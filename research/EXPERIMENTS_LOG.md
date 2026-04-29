@@ -1,5 +1,51 @@
 # SENPAI Research Results
 
+## 2026-04-29 11:45 — PR #1097 (revision, then closed): slice_num=128 with bs=6 + clamp + NaN-safe filter
+- Branch: `charliepai2f1-frieren/slice-num-128` (closed)
+- Revision: bs 4 → 6 (bs=8 OOMed at predicted ~109 GB peak), output pressure clamp + GT-finite filter added.
+
+### Results
+
+| Metric | bs=4 (prior) | bs=6 (revision) |
+|---|---|---|
+| best `val_avg/mae_surf_p` | 162.562 (e10) | **164.209** (e7) |
+| `test_avg/mae_surf_p` | NaN (cruise) | **150.714** (all 4 splits finite ✓) |
+| Epochs run | 11 / 50 | 11 / 50 |
+| Peak VRAM | 54.5 GB | 81.7 GB (86%) |
+| Per-epoch wall-clock | ~173 s | ~176 s |
+
+### Per-split val/test (bs=6, best epoch 7)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 235.91 | 208.20 |
+| `geom_camber_rc` | 163.03 | 146.26 |
+| `geom_camber_cruise` | 124.27 | **104.36** *(was NaN)* |
+| `re_rand` | 133.63 | 144.04 |
+| **avg** | **164.21** | **150.71** |
+
+### Critical cross-experiment finding (frieren's analysis)
+
+**Per-epoch wall-clock is NOT bound by batching overhead at default architecture.** Going from bs=4 → bs=6:
+- Per-step batches: 375 → 250 (-33%)
+- Per-batch time: +50%
+- Total epoch time: roughly conserved (~173s → ~176s)
+- Epochs in 30 min: **11 in both cases**
+
+The bottleneck is sequential forward/backward through 5 PhysicsAttention layers on up-to-242K-node meshes, not dataloader. **bs↑ does NOT buy more epochs at default architecture.** True throughput levers are:
+1. Validation cadence reduction (4 splits × 100 samples per epoch)
+2. Gradient checkpointing (smaller activations enabling true bs↑)
+3. `torch.compile`
+4. Capacity-axis trade-offs that reduce per-step compute
+
+This invalidates the bs↑ recommendation I sent to askeladd (PR #1094) and partially to tanjiro (PR #1100). Their runs at 42 GB peak weren't VRAM-headroom-blocked from more epochs — they're compute-bound. Implication for round-2: prioritize architectural levers that improve sample efficiency (RFF, FiLM, EMA) over bs↑ for throughput.
+
+### Analysis & conclusions
+
+- **+22% vs provisional best 133.9** — clear regression confirmed across two runs (162.56 and 164.21 are within run-to-run noise of each other and far above baseline).
+- **Cruise NaN is now resolved** at the model side via output clamping. Combined with the advisor branch's `data/scoring.py` fix, this is belt-and-suspenders coverage for the cruise corruption.
+- **Closed.** slice_num=128 doesn't pull its weight at default config and bs↑ doesn't open a path to fix it. Frieren reassigned to **H-01 RFF** (PR #1138) — architecturally orthogonal, zero throughput cost, strong literature priors.
+
 ## 2026-04-29 11:27 — PR #1101: Warmup + cosine with non-zero floor (eta_min=lr/100)
 - Branch: `charliepai2f1-thorfinn/warmup-cosine-floor`
 - Hypothesis: 5-epoch linear warmup + cosine to `eta_min=lr/100=5e-6` preserves a small but useful tail-LR vs vanilla cosine to 0; predicted -2% to -5%.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-29 11:30 (round 1 in flight, branch `icml-appendix-charlie-pai2f-r1`)
+- 2026-04-29 11:55 (round 1 in flight, round 2 starting, branch `icml-appendix-charlie-pai2f-r1`)
 - No human researcher directives yet for this branch.
 - Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective.
 
@@ -12,7 +12,8 @@
 | #1094 | askeladd | surf-weight-25 | sent back (bs↑, rebase) | 134.368 |
 | #1095 | edward | pressure-channel-weight | sent back (formula) | 133.892 |
 | #1096 | fern | huber-vol | wip | — |
-| #1097 | frieren | slice-num-128 | sent back (bs↑, clamp) | 162.562 |
+| #1097 | frieren | slice-num-128 | **closed** (164.2 at bs=6, +22% regression) | 162.562 |
+| #1138 | frieren | rff-32 (H-01, round 2) | wip (just assigned) | — |
 | #1099 | nezuko | lr1e-3-warmup5 | wip | — |
 | #1100 | tanjiro | wider-bs8 (fallback bs=5) | sent back (mlp_ratio↓, clamp) | 165.304 |
 | #1101 | thorfinn | warmup-cosine-floor | sent back (T_max=13, warmup=1) | 142.886 |
@@ -21,7 +22,7 @@
 
 1. **30-min budget is the binding constraint.** All 5 finished runs hit timeout: edward 14/50, askeladd 14/50, frieren 11/50, tanjiro 8/50, alphonse 7/50. None reached the cosine LR low-LR phase. Per-epoch wall clock ranges from ~130s (baseline shape) to ~277s (n_hidden=192/layers=6/mlp_ratio=4, bs=3). **Lever: anything that buys more epochs in 30 min compounds with capacity changes.**
 2. **Compute-cost asymmetry across capacity axes.** mlp_ratio dominates activation memory because it widens the MLP intermediate; layers and width compound multiplicatively in attention. From observed VRAM peaks: width-only is cheap, depth + width is moderate, depth × width × mlp_ratio is prohibitive. **Implication for round-2:** when stacking capacity, scale width first, layers second, mlp_ratio last.
-3. **VRAM utilization varies wildly.** Edward and askeladd at default architecture used ~42 GB of 95 GB; frieren used 54 GB at slice_num=128. Tanjiro hit 92 GB at n_hidden=256+bs=5; alphonse hit 92 GB at 192/6/6/4 + bs=4. **Default architecture has roughly 2× bs headroom** that nobody is using — this is the highest-leverage round-1 fix for non-capacity hypotheses.
+3. **bs↑ does NOT buy more epochs at default architecture (REVISED).** Frieren's bs=4 → bs=6 revision (PR #1097 rev) ran for 11 epochs at both — identical wall-clock, despite +50% gradient batch size. Per-batch time grows ~50%, batches/epoch drop ~33%, total epoch time conserved. The bottleneck is sequential forward/backward through 5 PhysicsAttention layers on up-to-242K-node meshes, not dataloader. **True throughput levers are: validation cadence reduction, gradient checkpointing, `torch.compile`, capacity-axis trade-offs.** Earlier I sent askeladd (#1094) and partially tanjiro (#1100) back asking for bs↑ to gain epochs — that was wrong. Their runs were compute-bound, not VRAM-bound. The bs↑ may still help via larger gradient batches (gradient noise reduction, e.g. for slice_num=128 volatility) but it will NOT directly buy more epochs.
 4. **Test pressure NaN is a multi-failure mode.**
    - **Mode A (data):** `test_geom_camber_cruise/000020.pt` has +Inf in p ground truth — exposed by `data/scoring.py` mask-multiply propagating NaN. **Branch-side fix applied** via `torch.where`-based masking. Confirmed independently by edward (#1095), frieren (#1097), askeladd (#1094), alphonse (#1092).
    - **Mode B (model):** wider tanjiro and undertrained alphonse produced fp32 overflow in pred_p on a cruise inference sample, blowing up vol_loss to +Inf. Output-side pressure clamping is the right fix; requested for tanjiro and frieren. Alphonse's narrower retry should fix it via more epochs alone.
@@ -59,6 +60,10 @@ The intent is to pin down which lever moves `val_avg/mae_surf_p` most, then in
 later rounds stack the winning levers and explore architecturally bolder
 follow-ups (Fourier features, neural operator hybrids, attention variants,
 physics-informed losses, EMA / SWA averaging, etc.).
+
+## Round 2 — first assignment
+
+- **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal to capacity / loss / schedule; zero throughput cost; strong literature priors (Tancik 2020, GINO, MARIO). Expected -3% to -8% on `val_avg/mae_surf_p`.
 
 ## Next research directions (post-round-1 candidates)
 
