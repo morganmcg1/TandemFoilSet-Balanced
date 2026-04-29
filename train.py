@@ -364,11 +364,11 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 # full wall-clock budget. We pick total_steps from a conservative per-epoch
 # estimate so it is always >= the actual number of optimizer steps taken
 # (else OneCycleLR raises "Tried to step too many times"). With BF16 AMP
-# active the per-epoch time is ~98.5s on H100, so a 100s estimate plus the
-# +1 epoch headroom budgets 19 epochs in a 30-min timeout — matching the
-# observed BF16 training duration and letting the schedule anneal to min_lr
-# right as training ends.
-ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 100.0
+# active the per-epoch time is ~98.5s on H100, so a 94s estimate plus the
+# +1 epoch headroom budgets 20 epochs in a 30-min timeout — sized so the
+# schedule anneals to min_lr right as the actual ~19-20 epochs of training
+# finish rather than annealing too fast.
+ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 94.0
 ONECYCLE_MAX_LR = 1.2e-3
 ONECYCLE_PCT_START = 0.3
 ONECYCLE_DIV_FACTOR = 25.0
