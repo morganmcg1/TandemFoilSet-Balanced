@@ -1,5 +1,57 @@
 # SENPAI Research Results
 
+## 2026-04-29 11:27 — PR #1101: Warmup + cosine with non-zero floor (eta_min=lr/100)
+- Branch: `charliepai2f1-thorfinn/warmup-cosine-floor`
+- Hypothesis: 5-epoch linear warmup + cosine to `eta_min=lr/100=5e-6` preserves a small but useful tail-LR vs vanilla cosine to 0; predicted -2% to -5%.
+- Reality: hypothesis as written was mismatched with the regime — cosine's `T_max=45` traverses only ~20% of trajectory in the 14 achievable epochs, so floor never engages.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 11) | **142.886** |
+| `test_avg/mae_surf_p` (4 splits, finite physical-units MAE) | 127.871 |
+| Epochs run | 14 / 50 (timeout-bound, ~131 s/epoch) |
+| Peak VRAM | 42.11 GB (huge headroom) |
+| Wall clock | 30.7 min |
+| Params | 0.66M (baseline shape) |
+| Metrics file | `models/model-charliepai2f1-thorfinn-warmup-cosine-floor-20260429-104906/metrics.jsonl` |
+
+### LR trajectory (verified from metrics)
+
+```
+e1: 5.000e-07     e6: 5.000e-04 (peak)     e11: 4.620e-04
+e2: 1.004e-04     e7: 4.994e-04            e12: ~4.6e-4
+e3: 2.003e-04     ...                      e13: ~4.6e-4
+e4: 3.002e-04                              e14: 4.620e-04
+e5: 4.001e-04
+```
+
+### Per-split val (best epoch 11) / test (best ckpt)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 186.159 | 159.570 |
+| `geom_camber_rc` | 152.401 | 141.602 |
+| `geom_camber_cruise` | 104.590 | 86.724 |
+| `re_rand` | 128.394 | 123.588 |
+| **avg** | **142.886** | **127.871** |
+
+### Val_avg trajectory
+
+```
+e1→387.1 e2→242.0 e3→246.7 e4→240.7 e5→178.1 e6→220.9 e7→184.6
+e8→173.3 e9→159.4 e10→161.2 e11→142.9* e12→180.1 e13→143.3 e14→160.6
+```
+
+### Analysis & conclusions
+
+- **+6.7% vs provisional best 133.9**, but borderline regression — within close-threshold (>5%). Sent back, not closed, because the diagnosis is clean and the hypothesis is testable under a regime-matched schedule.
+- **The mechanism was unobservable.** With `T_max=45 - warmup=5 = 40` cosine epochs but only 14 achievable, the cosine reaches lr ≈ 4.6e-4 at termination — never approaches `eta_min=5e-6`. Whatever benefit the floor confers happens entirely in the unreachable epoch 30+ tail.
+- **The 5-epoch warmup hurts the budget.** Epochs 1–5 average lr ≈ 2e-4, vs default's full-peak start. Effective near-peak-lr epochs: ~9 (vs baseline's 14) — a 35% reduction in useful gradient updates.
+- **Run-to-run variance is ~12%** (student notes prior identical run got 124.29). This is significant for low-effect-size schedule comparisons but smaller than the gap to the provisional best (~7%).
+- **Sent back** with: `warmup_epochs=1`, `T_max=13` (matches achievable horizon), keep `eta_min=5e-6`. This makes the floor actually engage and preserves nearly all useful gradient updates — a fair test of the hypothesis.
+
 ## 2026-04-29 11:21 — PR #1092: Capacity scale-up: n_hidden=192, layers=6, mlp_ratio=4
 - Branch: `charliepai2f1-alphonse/capacity-scale-up`
 - Hypothesis: ~4× larger Transolver (192/6/6/4 = 2.60M params) closes underfit; predicted -10% to -20% on `val_avg/mae_surf_p`.

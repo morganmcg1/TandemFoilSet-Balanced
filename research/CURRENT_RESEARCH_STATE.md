@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-29 11:25 (round 1 in flight, branch `icml-appendix-charlie-pai2f-r1`)
+- 2026-04-29 11:30 (round 1 in flight, branch `icml-appendix-charlie-pai2f-r1`)
 - No human researcher directives yet for this branch.
 - Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective.
 
@@ -15,7 +15,7 @@
 | #1097 | frieren | slice-num-128 | sent back (bs↑, clamp) | 162.562 |
 | #1099 | nezuko | lr1e-3-warmup5 | wip | — |
 | #1100 | tanjiro | wider-bs8 (fallback bs=5) | sent back (mlp_ratio↓, clamp) | 165.304 |
-| #1101 | thorfinn | warmup-cosine-floor | wip | — |
+| #1101 | thorfinn | warmup-cosine-floor | sent back (T_max=13, warmup=1) | 142.886 |
 
 ## Cross-experiment learnings so far
 
@@ -27,6 +27,8 @@
    - **Mode B (model):** wider tanjiro and undertrained alphonse produced fp32 overflow in pred_p on a cruise inference sample, blowing up vol_loss to +Inf. Output-side pressure clamping is the right fix; requested for tanjiro and frieren. Alphonse's narrower retry should fix it via more epochs alone.
 5. **Surface-loss reweighting helps OOD splits.** Askeladd's surf_weight=25 run beat edward on val_re_rand and val_geom_camber_cruise, lost on val_single_in_dist. Even though aggregate val_avg is tied, this is exactly where surface boosting *should* help — the OOD splits whose paper-facing test_avg is what matters.
 6. **Best so far: 133.89.** Provisional, edward only — and it's a confounded run (loss formula softened aggregate surface signal ~3×). Askeladd is at 134.4 (clean methodology, throughput-limited). True round-1 winner not yet decided.
+7. **Schedule hyperparameters must be matched to the achievable horizon, not the nominal one.** Thorfinn's warmup-cosine-floor used `T_max = MAX_EPOCHS - warmup = 45`, but the 30-min cap halts training at ~14 epochs. Result: cosine traverses ~20% of its trajectory and `eta_min` floor is unreachable — the mechanism never fires. Round-2 schedule experiments must derive `T_max` from observed per-epoch wall-clock (~131 s/epoch at default arch) and the 30-min budget, not from the 50-epoch nominal cap.
+8. **Schedule run-to-run variance is ~12%.** Two identical thorfinn runs hit 124.29 and 142.89. For low-effect-size hypothesis tests (predicted ±2-5%), single-run comparisons are below the noise floor. Round-2 implication: prioritize hypotheses with predicted larger effects, OR run multi-seed for borderline schedule/optim tweaks.
 
 ## Branch-side fixes
 
