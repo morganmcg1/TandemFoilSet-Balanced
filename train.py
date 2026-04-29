@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from einops import rearrange
-from timm.layers import trunc_normal_
+from timm.layers import trunc_normal_, DropPath
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -138,7 +138,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -149,6 +150,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -157,8 +159,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -185,11 +187,14 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        max_drop_path = 0.1
+        drop_path_rates = [x.item() for x in torch.linspace(0, max_drop_path, n_layers)]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=drop_path_rates[i],
             )
             for i in range(n_layers)
         ])
@@ -235,6 +240,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # Drop samples whose ground-truth has any non-finite value, and
+            # neutralize NaN/Inf in y so that masked-out positions can't
+            # propagate NaN through `0 * NaN = NaN` into loss/MAE accumulators.
+            B = y.shape[0]
+            y_finite_per_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            mask = mask & y_finite_per_sample.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -344,6 +357,8 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
+WARMUP_EPOCHS = 2  # warm-up epochs used to estimate the timeout-aware cosine budget
+LR_ETA_MIN = 1e-6
 
 
 @dataclass
@@ -404,7 +419,9 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Cosine scheduler is initialized after WARMUP_EPOCHS once we have a wall-clock
+# estimate, so the cosine decay actually finishes within the timeout budget.
+scheduler: torch.optim.lr_scheduler.CosineAnnealingLR | None = None
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -460,7 +477,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if scheduler is not None:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -486,11 +504,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -498,12 +518,38 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
     })
     print(
-        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
+        f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.2e}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    # After warm-up, build a cosine scheduler whose decay window matches the
+    # remaining wall-clock budget so the LR actually anneals to eta_min before
+    # the timeout fires.
+    if scheduler is None and (epoch + 1) >= WARMUP_EPOCHS:
+        elapsed_secs = time.time() - train_start
+        per_epoch_secs = elapsed_secs / (epoch + 1)
+        remaining_secs = max(MAX_TIMEOUT_MIN * 60.0 - elapsed_secs, 0.0)
+        remaining_epochs = max(int(remaining_secs // per_epoch_secs), 1)
+        remaining_epochs = min(remaining_epochs, MAX_EPOCHS - (epoch + 1))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=remaining_epochs, eta_min=LR_ETA_MIN,
+        )
+        print(
+            f"  -> Cosine schedule: T_max={remaining_epochs}, eta_min={LR_ETA_MIN:g} "
+            f"(per_epoch={per_epoch_secs:.1f}s, remaining_budget={remaining_secs:.0f}s)"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "schedule_init",
+            "after_epoch": epoch + 1,
+            "warmup_epochs": WARMUP_EPOCHS,
+            "per_epoch_seconds": per_epoch_secs,
+            "remaining_seconds": remaining_secs,
+            "cosine_T_max": remaining_epochs,
+            "eta_min": LR_ETA_MIN,
+        })
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
