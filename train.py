@@ -400,6 +400,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    ckpt_avg_k: int = 5  # Average last K epoch checkpoints. 0 disables averaging.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -602,6 +603,10 @@ for epoch in range(MAX_EPOCHS):
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # Save per-epoch checkpoint for the last K epochs (for end-of-run averaging).
+    if cfg.ckpt_avg_k > 0 and (epoch + 1) > MAX_EPOCHS - cfg.ckpt_avg_k:
+        torch.save(model.state_dict(), model_dir / f"ckpt_avg_{epoch + 1}.pt")
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -615,6 +620,8 @@ total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
+test_metrics: dict | None = None
+test_avg: dict | None = None
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
@@ -626,8 +633,6 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    test_metrics = None
-    test_avg = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -676,5 +681,95 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+
+# --- Checkpoint averaging: average the last K epoch checkpoints and re-evaluate ---
+if cfg.ckpt_avg_k > 0:
+    avg_ckpt_paths = sorted(
+        model_dir.glob("ckpt_avg_*.pt"),
+        key=lambda p: int(p.stem.split("_")[-1]),
+    )
+    if len(avg_ckpt_paths) >= 2:
+        epochs_used = [int(p.stem.split("_")[-1]) for p in avg_ckpt_paths]
+        print(f"\nCheckpoint averaging across {len(avg_ckpt_paths)} epochs: {epochs_used}")
+
+        state_dicts = [
+            torch.load(p, map_location=device, weights_only=True)
+            for p in avg_ckpt_paths
+        ]
+        avg_state: dict[str, torch.Tensor] = {}
+        for key in state_dicts[0]:
+            stacked = torch.stack([sd[key].float() for sd in state_dicts], dim=0)
+            avg_state[key] = stacked.mean(dim=0).to(state_dicts[0][key].dtype)
+
+        avg_state_path = model_dir / "ckpt_averaged.pt"
+        torch.save(avg_state, avg_state_path)
+
+        model.load_state_dict(avg_state)
+        model.eval()
+
+        avg_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        avg_val = aggregate_splits(avg_split_metrics)
+        avg_surf_p_avg = avg_val["avg/mae_surf_p"]
+        print(f"  avg_ckpt val_avg/mae_surf_p = {avg_surf_p_avg:.4f} "
+              f"(vs best single {best_avg_surf_p:.4f})")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, avg_split_metrics[name])
+
+        avg_log: dict[str, float] = {}
+        for split_name, m in avg_split_metrics.items():
+            for k, v in m.items():
+                avg_log[f"avg_ckpt/{split_name}/{k}"] = v
+        for k, v in avg_val.items():
+            avg_log[f"avg_ckpt/val_{k}"] = v
+        wandb.log(avg_log)
+        wandb.summary.update(avg_log)
+        wandb.summary["avg_ckpt/n_checkpoints"] = len(avg_ckpt_paths)
+        wandb.summary["avg_ckpt/epochs_used_min"] = min(epochs_used)
+        wandb.summary["avg_ckpt/epochs_used_max"] = max(epochs_used)
+
+        avg_test_metrics: dict | None = None
+        avg_test_avg: dict | None = None
+        if not cfg.skip_test and "test_loaders" in globals():
+            print("\nEvaluating averaged checkpoint on held-out test splits...")
+            avg_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            avg_test_avg = aggregate_splits(avg_test_metrics)
+            print(f"\n  avg_ckpt TEST avg_surf_p={avg_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, avg_test_metrics[name])
+
+            avg_test_log: dict[str, float] = {}
+            for split_name, m in avg_test_metrics.items():
+                for k, v in m.items():
+                    avg_test_log[f"avg_ckpt/test/{split_name}/{k}"] = v
+            for k, v in avg_test_avg.items():
+                avg_test_log[f"avg_ckpt/test_{k}"] = v
+            wandb.log(avg_test_log)
+            wandb.summary.update(avg_test_log)
+
+        _write_jsonl({
+            "type": "ckpt_averaging",
+            "n_checkpoints": len(avg_ckpt_paths),
+            "epochs_averaged": epochs_used,
+            "best_single": {
+                "epoch": best_metrics.get("epoch") if best_metrics else None,
+                "val_avg/mae_surf_p": best_avg_surf_p,
+                "test_avg": test_avg,
+            },
+            "averaged": {
+                "val_avg/mae_surf_p": avg_surf_p_avg,
+                "val_avg": avg_val,
+                "val_splits": avg_split_metrics,
+                "test_avg": avg_test_avg,
+                "test_splits": avg_test_metrics,
+            },
+        })
+    else:
+        print(f"\nckpt_avg_k={cfg.ckpt_avg_k} but only {len(avg_ckpt_paths)} per-epoch checkpoints saved. Skipping averaging.")
 
 wandb.finish()
