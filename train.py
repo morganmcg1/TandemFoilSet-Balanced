@@ -423,6 +423,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
+    warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 disables warmup)
 
 
 cfg = sp.parse(Config)
@@ -477,7 +478,22 @@ if cfg.ema_decay > 0.0:
 val_eval_model = ema_model if ema_model is not None else model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.01, end_factor=1.0, total_iters=cfg.warmup_epochs,
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs), eta_min=0.0,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"LR schedule: linear warmup over {cfg.warmup_epochs} epochs "
+          f"(start_factor=0.01 → 1.0), then cosine over "
+          f"{max(1, MAX_EPOCHS - cfg.warmup_epochs)} epochs (eta_min=0)")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
