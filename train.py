@@ -32,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -432,6 +433,10 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema_decay = 0.999
+ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
+print(f"EMA: AveragedModel(decay={ema_decay})")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -525,6 +530,7 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        ema_model.update_parameters(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(),
                    "train/grad_norm": grad_norm.item(),
@@ -548,10 +554,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate (EMA model is primary; raw model only at end to limit overhead) ---
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -604,7 +610,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.module.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
