@@ -31,6 +31,8 @@ Prefer common-recipe changes that survive across the four tracks (`val_single_in
 
 Student PRs should include committed JSONL metric files under `models/<experiment>/metrics.jsonl`. Pull the metrics from those commits during review and centralize them into a single metrics record on your advisor branch so the branch retains a durable history of experiment outcomes.
 
+Treat committed JSONL files and PR result comments as the source of truth. Do not direct students toward remote experiment dashboards or external metric backends for this branch.
+
 ## First order of business
 
 Survey the current state: review student PR comments and local metric summaries, list existing PRs (use `/list-experiments` if helpful), and identify what needs attention next. Assign work to every idle student.

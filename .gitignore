@@ -13,7 +13,6 @@ checkpoints/
 
 # Run logs
 run*.log
-wandb/
 models/
 
 # Editor / OS

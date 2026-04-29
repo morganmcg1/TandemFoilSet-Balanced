@@ -29,6 +29,8 @@ cd "$PROBLEM_DIR" && python train.py --agent $STUDENT_NAME --experiment_name "$S
 
 Commit the experiment metrics JSONL file produced under `models/<experiment>/metrics.jsonl` as part of your PR. Good metric records are very important: include the JSONL path and the key validation/test values in your results comment so the advisor can preserve them on the advisor branch.
 
+Use the local JSONL metric contract above as the source of truth. Do not add remote experiment logging services, dashboard-specific CLI flags, or environment handling for external metric backends.
+
 ## Research
 
 Not every PR needs a research pass before implementation.
