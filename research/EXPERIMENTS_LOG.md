@@ -1,5 +1,41 @@
 # SENPAI Research Results
 
+## 2026-04-29 04:00 — PR #1008: 3rd-seed verification + warmup-length sweep [CLOSED — informational, no code change]
+- Branch: `willowpai2e2-askeladd/seed3-warmup-sweep`
+- Hypothesis: (a) 3rd seed at warmup=5 (PYTHONHASHSEED=7) confirms the 12.58 val-spread is representative; (b) warmup_epochs ∈ {3, 5, 10} bracket at default seed identifies whether 5 is optimal.
+- W&B runs (group `lr-warmup-3rd-seed-sweep`): `qznce19f` (warmup5-seed7), `re4i40ft` (warmup3-default), `ciabcxxu` (warmup10-default)
+
+| run | best epoch | val_avg | test_avg |
+|---|---:|---:|---:|
+| warmup=5, seed=7 (`qznce19f`) | 50 | 57.52 | 50.19 |
+| warmup=3, default (`re4i40ft`) | 48 | 55.80 | 48.75 |
+| warmup=5, default (`1xfcb5h5` baseline) | 49 | 54.70 | 48.15 |
+| warmup=10, default (`ciabcxxu`) | 43 | 64.77 | 55.86 |
+
+3-seed corridor at warmup=5: spread (max−min) = 12.58 val, 9.65 test. Mean = 59.83 val, 52.05 test (was 60.99/52.98 with 2 seeds — barely moved).
+
+- Outcome: **CLOSED.** No code changes to merge (warmup_epochs flag was already auto-bound by `simple_parsing.parse(Config)`). Two findings promoted to "settled" status in BASELINE.md:
+  1. **3-seed corridor confirmed at val-spread 12.58 / test-spread 9.65.** Single-seed screening convention adopted: future small-delta PRs may use 1 seed for screening; final candidate before merge requires 2 seeds; claims of < 6 val pt improvement require 2 seeds.
+  2. **warmup_epochs=5 is the right default.** warmup=3 (+1.10 val) is within seed noise; warmup=10 (+10.07 val) is decisively worse with best epoch sliding 49 → 43 (under-decay). U-shape with soft minimum at 5.
+- Key analysis: warmup=10's `test_single_in_dist` blew up to 89.35 (vs 67.22 at warmup=5) — under-decay shows up most in the in-distribution split, consistent with the model still oscillating around a high-detail minimum.
+
+## 2026-04-29 04:00 — PR #940 round 2: ε=1e-3 + warmup (rebased onto current tooling) [CLOSED — settled negative]
+- Branch: `willowpai2e2-edward/rel-mae-eps-sweep`
+- Hypothesis: ε=1e-3 (winner from PR #940 round 1, pre-warmup) composes with the new tooling stack (warmup + AMP + bs=16 + compile + lr=2e-3) to push below val=54.70.
+- W&B runs (group `compound-relmae-eps-1e3-rebased`): `d0v5ezta` (eps1e3-default), `jpjldfml` (eps1e3-seed42)
+
+| | ε=1e-6 + warmup (current best) | ε=1e-3 + warmup | Δ |
+|---|---:|---:|---:|
+| Default-seed val | 54.70 (`1xfcb5h5`) | 69.45 (`d0v5ezta`) | **+14.75** |
+| seed42 val | 67.28 (`9a9di1dz`) | 61.62 (`jpjldfml`) | −5.67 |
+| 2-seed mean val | 60.99 | 65.53 | **+4.54** |
+| 2-seed spread val | 12.58 | 7.83 | −4.75 |
+| Best-seed test | 48.15 | 53.93 | **+5.78** |
+
+- Outcome: **CLOSED — settled negative.** Best-seed val=61.62 is +6.92 above current best (54.70). 2-seed mean regresses by +4.54. Spread does narrow (12.58 → 7.83) but at the cost of moving both seeds to worse plateaus rather than rescuing the worse seed.
+- Key analysis (from edward's diagnosis, confirmed): ε=1e-3 was protecting against early-training instability under fp32/bs=4/no-warmup. Once warmup itself protects against early instability, ε=1e-3 just becomes a regularization term that biases toward absolute MAE, erasing useful signal that the larger, smoother bf16/bs=16 step can otherwise exploit. The `single_in_dist` channel inversion is decisive evidence: this was the channel that benefited *most* from ε=1e-3 in round 1 (round 1 single 77 → 68 val); under warmup it blows up by +33 pts (default seed) — sign reversal.
+- Settled fact: **ε ≠ 1e-6 does not compose with warmup**. Future relative-MAE PRs should not re-test this lever unless the warmup default itself changes.
+
 ## 2026-04-29 03:30 — PR #940 round 1: Relative MAE ε sweep on PR #840 baseline [SENT BACK — rebase onto new tooling]
 - Branch: `willowpai2e2-edward/compound-relmae-eps-sweep`
 - Hypothesis: ε=1e-6 in `relative_mae_loss = mean(|pred - target| / (mean(|target|) + ε))` lets near-zero-target samples (cruise) hijack the gradient via huge `1/scale` weights, starving rc and single splits. Increasing ε softens this without abandoning relative weighting, redistributing optimizer budget toward under-weighted splits.

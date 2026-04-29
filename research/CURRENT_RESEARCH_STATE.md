@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated**: 2026-04-29 (PR #971 MERGED — new best val=54.70/test=48.15 default seed; askeladd → next: 3rd-seed verification)
+- **Updated**: 2026-04-29 04:00 (PR #1008 + PR #940 round 2 closed; askeladd → grad clipping; edward → n_hidden=192)
 - **Branch**: `icml-appendix-willow-pai2e-r2`
 - **Tag**: `willow-pai2e-r2`
 - **Most recent human researcher direction**: none; no GitHub Issues open.
@@ -28,10 +28,10 @@
 | alphonse | #853 | Huber δ sweep: δ=0.5 and δ=2.0 on compound+Huber base | loss (δ tuning) | WIP |
 | frieren  | #854 | Huber + grad accum (accum_steps=2): double throughput, ~60 epochs in budget | training throughput | WIP |
 | fern     | #855 | Huber + surf_weight sweep: sw=5 and sw=20 vs baseline sw=10 | loss weighting | WIP |
-| askeladd | #1008 | 3rd-seed (seed7) at warmup=5 + warmup sweep warmup_epochs∈{3,10} | variance (seed budget) | WIP |
-| edward   | #940 | round-2: rebase + ε=1e-3 only at 2 seeds on new tooling (winner ε=1e-3 at val=58.74 sent back due to tooling shift) | loss (ε tuning) | WIP (round 2) |
+| askeladd | TBD | gradient clipping (max_norm sweep 0.5 / 1.0) on top of warmup baseline | optimization (variance) | pending assignment |
+| edward   | TBD | n_hidden=192 + relative_mae + warmup (architecture width with AMP throughput) | architecture (width scaling) | pending assignment |
 | stark    | #842 | compound + SwiGLU param-matched h=168 | architecture (activation) | WIP |
-| himmel   | #843 | compound + gradient norm clipping (max_norm sweep 0.5 / 1.0) | optimization (stability) | WIP |
+| himmel   | (closed) | compound + gradient norm clipping — closed PR #843 (no pod), reassigned to askeladd | optimization (stability) | hypothesis re-routed |
 | charlie  | #844 | compound + mlp_ratio=4 (FFN capacity at nh1) | architecture (MLP capacity) | WIP |
 | thorfinn | #865 | AdamW weight decay sweep: wd=1e-5 and wd=0 on Huber base | optimization (regularization) | WIP |
 | tanjiro  | #864 | Bugfix: sanitize GT y in evaluate_split (cruise NaN poison fix) | infrastructure | WIP |
@@ -41,19 +41,21 @@
 
 **Idle-detection caveat (2026-04-29)**: The entrypoint harness reports 6 "idle" students (alphonse, fern, frieren, nezuko, tanjiro, thorfinn) because it queries `student:willowpai2e2-<name>` while their PRs (#853, #854, #855, #864, #865, #866) use the short-form `student:<name>` label. **Do NOT re-assign these students** — verify with `gh pr list --base $ADVISOR_BRANCH` before treating any "idle" report as actionable.
 
-**Zombie-PR caveat (2026-04-29)**: PRs #842 (stark), #843 (himmel), #844 (charlie) reference students whose pods are NOT deployed in the willow-pai2e-r2 cluster (verified via `kubectl get deployments -l app=senpai`). Only 8 willowpai2e2 student pods exist: alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn. These 3 PRs have been WIP for ~4.5h with no compute to pick them up. The hypotheses (SwiGLU, grad-clip, mlp_ratio=4) are still scientifically valid and could be re-routed to a deployed student if one becomes idle. Effective active GPU count: **8**, not 11.
+**Zombie-PR caveat (2026-04-29)**: PRs #842 (stark), #844 (charlie) reference students whose pods are NOT deployed in the willow-pai2e-r2 cluster (verified via `kubectl get deployments -l app=senpai`). Only 8 willowpai2e2 student pods exist: alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn. PR #843 (himmel grad-clip) was closed and re-routed to askeladd. PRs #842/#844 (SwiGLU, mlp_ratio=4) remain valid hypotheses for future re-routing. Effective active GPU count: **8**, not 11.
 
 **PR #940 (edward, ε sweep)**: ε=1e-6 (default) may over-weight cruise/low-magnitude samples, starving rc/single splits. Testing ε ∈ {1e-3, 1e-2, 1e-1} to soften the small-denominator dominance and recover the 84.10 rc / 77.07 single headroom.
 
 ## Key events this review pass
 
-1. **PR #971 (askeladd, LR warmup + flip relative_mae default) MERGED** — NEW BEST: val=54.70/test=48.15 (default seed `1xfcb5h5`, best epoch 49). 2-seed spread narrowed from 27.07 → 12.58, mean improved 69.43 → 60.99 (−8.4 pts). Per-split wins on rc, cruise, re_rand; single regresses ~3 pts. **Seed-swap discovery**: under warmup, default seed is now best (was seed42 in round-3). Askeladd → 3rd-seed verification + warmup-length sweep (next assignment).
+1. **PR #1008 (askeladd, 3rd-seed + warmup sweep) CLOSED — informational.** Confirmed 3-seed corridor at val-spread=12.58, test-spread=9.65 (3rd seed val=57.52, inside corridor). Confirmed warmup_epochs=5 is the right default (warmup=3: +1.10 val noise; warmup=10: +10.07 val under-decay). Single-seed screening convention adopted in BASELINE.md.
 
-2. **PR #821 (askeladd, tooling stack) MERGED** — prior baseline: val=55.90/test=49.64 (seed42). Full tooling stack on advisor branch: AMP/bf16, bs=16, lr=2e-3, torch.compile, NaN-safe eval. Superseded by #971.
+2. **PR #940 round 2 (edward, ε=1e-3 + warmup) CLOSED — settled negative.** ε=1e-3 does not compose with warmup. Best-seed val=61.62 (+6.92 vs baseline 54.70), driven by `single_in_dist` channel inversion. Edward's diagnosis: ε=1e-3 was protecting against early-training instability under fp32/bs=4/no-warmup; under warmup, ε=1e-3 just becomes a regularization term that biases toward absolute MAE and erases useful signal.
 
-3. **PR #840 (relative MAE) MERGED** as earlier baseline (val=64.16, test=55.73 — superseded by #821).
+3. **PR #843 (himmel grad-clip) CLOSED — zombie re-route.** himmel has no pod deployed; hypothesis re-routed to askeladd's next PR.
 
-4. **PR #900 (edward, loss curriculum) CLOSED**: Hard Huber→rel-MAE curriculum rejected. 10ep (+0.38 val, +1.73 test) and 20ep (+1.54, +1.95) both regress. Root causes: optimizer-reset stall at switch-over, plus Huber pre-training builds high-Re biased representations. Edward reassigned to ε sweep (#940).
+4. **PR #971 (askeladd, LR warmup + flip relative_mae default) MERGED** — NEW BEST: val=54.70/test=48.15 (default seed `1xfcb5h5`, best epoch 49). 2-seed spread narrowed from 27.07 → 12.58, mean improved 69.43 → 60.99. **Seed-swap**: under warmup, default seed is now best (was seed42 in round-3).
+
+5. **PR #821 (askeladd, tooling stack) MERGED** — prior baseline: val=55.90/test=49.64 (seed42). Full tooling stack on advisor branch: AMP/bf16, bs=16, lr=2e-3, torch.compile, NaN-safe eval. Superseded by #971.
 
 ## Current research focus
 
@@ -88,7 +90,10 @@ Current open questions:
 - FiLM conditioning — failed in prior round
 - OneCycleLR — PR #784 round 2, val=92.25; gradient-step-limited
 - slice_num=4 — PR #841, val=98.25, floor at sn=16
-- n_hidden=192 without AMP — throughput-blocked; re-test after #821 lands
+- n_hidden=192 without AMP — throughput-blocked; eligible for re-test now (PR #821 landed AMP)
+- Hard Huber→relative_mae curriculum — PR #900, optimizer-reset stall + feature-bias mismatch
+- ε ≠ 1e-6 with warmup — PR #940 round 2, settled negative; ε=1e-3 + warmup regresses single_in_dist
+- warmup_epochs=10 — PR #1008, +10.07 val due to under-decay; warmup_epochs=5 is the floor
 
 ## Pending new assignments (all students active)
 

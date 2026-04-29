@@ -10,9 +10,23 @@ Active branch: `icml-appendix-willow-pai2e-r2`.
 - **test_avg/mae_surf_p** (best checkpoint): **48.15** (finite across all 4 splits)
 - **Wall clock**: 22.4 min / 50 epochs
 
-> ⚠️ **Seed-swap caveat (read carefully)**: Under the new warmup schedule, the seed-to-best-basin mapping has flipped. The default seed (no `PYTHONHASHSEED`) is now the better seed (val=54.70); seed42 lands at val=67.28 — opposite of the round-3 PR #821 baseline. **Do NOT pin `PYTHONHASHSEED=42` when reproducing the new baseline.** Future PRs should run ≥ 2 seeds (default + seed42) and report both — a single seed of warmup vs. no-warmup is no longer a reliable A/B because warmup re-randomizes basin assignment per seed.
+> ⚠️ **Seed-swap caveat (read carefully)**: Under the new warmup schedule, the seed-to-best-basin mapping has flipped. The default seed (no `PYTHONHASHSEED`) is now the better seed (val=54.70); seed42 lands at val=67.28 — opposite of the round-3 PR #821 baseline. **Do NOT pin `PYTHONHASHSEED=42` when reproducing the new baseline.**
+
+### 3-seed variance corridor (confirmed via askeladd's PR #1008)
+
+| Seed | W&B | best val_avg | test_avg | best epoch |
+|------|-----|-------------:|---------:|-----------:|
+| default | `1xfcb5h5` | **54.70** | **48.15** | 49 |
+| 42 | `9a9di1dz` | 67.28 | 57.80 | 43 |
+| 7 | `qznce19f` | 57.52 | 50.19 | 50 |
+| **mean** | | **59.83** | **52.05** | |
+| **spread (max−min)** | | **12.58** | **9.65** | |
+
+> **Single-seed screening convention** (settled 2026-04-29 via PR #1008): With 3-seed val-spread bounded at 12.58 and test-spread at 9.65, future hypothesis PRs may use a single default-seed run for screening. A 2nd seed is required only for the final candidate before merge. PRs claiming improvements smaller than ~6 val pts must run ≥ 2 seeds.
 >
-> Variance reduction is real but incomplete: 2-seed spread narrowed from 27.07 → 12.58, mean improved 8.4 pts. A 3rd seed is the next priority before letting other PRs benchmark against this number.
+> **Settled negative**: ε ≠ 1e-6 (`rel_mae_eps`) does NOT compose with warmup. PR #940 round 2 ran ε=1e-3 + warmup at 2 seeds and regressed: best-seed val=61.62 (vs 54.70 baseline, +6.92), driven by `single_in_dist` channel inversion. Future relative-MAE PRs should not re-test this lever unless the warmup default itself changes.
+>
+> **Settled negative**: warmup_epochs=10 hurts (val=64.77 vs 54.70 at warmup=5, best epoch 43 due to under-decay). warmup_epochs=3 (val=55.80) is within seed noise of warmup=5 — both are acceptable but 5 is slightly better.
 
 ### Per-split test metrics (default seed `1xfcb5h5`, best checkpoint)
 
@@ -38,7 +52,7 @@ cd target && python train.py \
 
 ### Paired seed (seed42, W&B `9a9di1dz`)
 
-val=67.28 / test=57.80 — same config, worse local minimum under warmup. The warmup ramp moved seed42 from the round-3 "good basin" (55.90) into a different basin. Spread vs default seed = 12.58.
+val=67.28 / test=57.80 — same config, worse local minimum under warmup. The warmup ramp moved seed42 from the round-3 "good basin" (55.90) into a different basin. 3-seed corridor (default + seed42 + seed7) is documented above.
 
 ---
 
