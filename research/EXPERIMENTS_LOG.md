@@ -1,5 +1,102 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 05:30 — PR #929: DropPath rate=0.1 linear schedule — **CLOSED — clean negative (+9.5–19.6% val regression, budget-binding)**
+
+- Branch: `willowpai2e4-nezuko/drop-path`
+- Student: willowpai2e4-nezuko
+- W&B runs: `2on3jxq1` (best, val=98.25), `kzz6rxyy` (val=101.03), `qrv5ithh` (val=107.34)
+- Status: **CLOSED**
+
+**Hypothesis.** DropPath stochastic depth at rate=0.1 (linear schedule across 5 blocks → [0.0, 0.025, 0.05, 0.075, 0.1]) as convergence-budget-aware regularization. Predicted −1 to −3% val.
+
+**Results vs unseeded best 89.71 (pre-#820 baseline used for comparison):**
+
+| Run | best_epoch | val_avg | Δ vs baseline | test_avg | 3-split test |
+|---|---:|---:|---:|---:|---:|
+| `2on3jxq1` (best) | 12/50 | 98.25 | **+9.5%** ✗ | 89.47 | 99.16 |
+| `kzz6rxyy` | 11/50 | 101.03 | +12.6% ✗ | 92.63 | 103.78 |
+| `qrv5ithh` | 11/50 | 107.34 | +19.6% ✗ | 97.84 | 105.67 |
+| Param Δ | — | — | 0 (DropPath parameter-free) | — | — |
+
+**Best-run per-split (run `2on3jxq1`, epoch 12):**
+
+| Split | DropPath@0.1 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 135.26 | 109.16 | **+23.9%** ✗ |
+| `val_geom_camber_rc` | 104.12 | 106.62 | −2.3% (flat) |
+| `val_geom_camber_cruise` | 69.41 | 60.60 | **+14.5%** ✗ |
+| `val_re_rand` | 84.23 | 82.47 | +2.1% |
+
+**Mechanism (student's clean diagnosis):**
+1. DropPath@0.1 slows convergence via reduced effective gradient per step (keep-prob ~0.9 at deepest block).
+2. 30-min wall-clock cap binds at epoch 11-12 — well before convergence recovery.
+3. Train loss elevated (under-fit), not depressed (over-fit) — canonical "under-trained" signature.
+4. Geom_camber_rc roughly flat (−2.3%) while single_in_dist +24%: model never gets to specialize on in-dist.
+5. **Note:** Also ran under T_max=50 (under-trained regime) — additional schedule drag on top of DropPath drag.
+
+**Three seeded runs all land in same regression band (9.5–19.6%)** — not one-shot bad luck.
+
+**Decision: CLOSED.** DropPath@0.1 is wrong rate for our budget. Mechanism (stochastic regularization) not broken — context (tight budget × mismatched schedule × aggressive rate) was wrong. Nezuko reassigned to **DropPath@0.05 + T_max=13** (#1002).
+
+---
+
+## 2026-04-29 05:00 — PR #963: Schedule-to-budget T_max=13 — **MERGED — val −20.66% (81.81→64.91), test −21.62% (73.04→57.25). LARGEST SINGLE-PR WIN.**
+
+- Branch: `willowpai2e4-frieren/tmax-13-budget-matched` (merged after clean rebase onto post-#863)
+- Student: willowpai2e4-frieren
+- W&B run: [`j8yi780z`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/j8yi780z)
+- Status: **MERGED**
+
+**Hypothesis.** CosineAnnealingLR T_max=50 mismatches the actual 30-min training budget (~13 epochs). Setting T_max=13 gives the optimizer the full cosine annealing tail (LR→0) within the budget. One CLI flag change, zero params, zero wall-clock cost.
+
+**Results vs unseeded best 81.8075 (run `2akpdg9t`, PR #914):**
+
+| Metric | Baseline | T_max=13 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.8075 | **64.9148** | **−20.66%** ✓ |
+| `test_avg/mae_surf_p` | 73.04 | **57.2466** | **−21.62%** ✓ |
+| Param count | 661,735 | 661,735 | 0 |
+| Wall time | 30.6 min | 30.6 min | identical |
+| Best epoch | 12/13 (still descending) | 13/13 (plateau, Δ=−0.70) | val curve shape changed ✓ |
+
+**Per-split val (epoch 13, run `j8yi780z`):**
+
+| Split | Baseline | T_max=13 | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 97.53 | **71.86** | **−26.3%** ✓ |
+| `val_geom_camber_rc` | 94.17 | **76.45** | **−18.8%** ✓ |
+| `val_geom_camber_cruise` | 59.18 | **46.54** | **−21.4%** ✓ |
+| `val_re_rand` | 76.36 | **64.81** | **−15.1%** ✓ |
+
+**Mechanism (validated):**
+- Baseline ran effective constant LR ~4.25e-4 (cosine at 13/50 = 85% of peak). Never reached annealing tail.
+- T_max=13: LR decays from 5e-4 to ≈0 over 13 epochs. Epoch 13 Δ = −0.70 vs baseline epoch 13 bounce +3.94 — clean convergence signature.
+- All splits improved proportionally. Worst-fit splits (single_in_dist, cruise) improved most (−26.3%, −21.4%).
+- **Key insight:** Every prior gain (Fourier PE, channel weights, SwiGLU) was real but understated — all measured under constant ~4.25e-4 LR. T_max=13 is the "convergence debt" collected across all prior PRs.
+
+**Decision: MERGED.** New baseline: val=64.91, test=57.25 (unseeded). Frieren reassigned to T_max sweep {10, 12, 13, 16} at `--seed 0` to produce seeded canonical (#1000).
+
+---
+
+## 2026-04-29 04:30 — PR #949: LayerScale γ_init=1e-4 — **SENT BACK for T_max=13 retest (was val −4.58% under T_max=50 under-training)**
+
+- Branch: `willowpai2e4-fern/layerscale-1e-4`
+- Student: willowpai2e4-fern
+- W&B run: [`qb4jaqe1`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/qb4jaqe1)
+- Status: **SENT BACK** — need retest at T_max=13 (new baseline 64.91)
+
+**Original result (T_max=50, unseeded):**
+
+| Metric | Baseline (81.81) | LayerScale | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.8075 | 78.0627 | **−4.58%** |
+| `test_avg/mae_surf_p` | 73.04 | 70.5286 | **−3.43%** |
+| Param count | 661,735 | 663,015 | +1,280 |
+
+**Why sent back:** Measurement was under T_max=50 under-training. PR #963 fixed the schedule (new baseline 64.91). LayerScale's gain (per-channel residual stabilization) may be larger, smaller, or absent under proper LR annealing. Cannot fairly attribute the −4.58% to LayerScale vs schedule-regime effects.
+
+**Retest instructions:** Rebase onto post-#963, run `--t_max 13 --use_layer_scale --layer_scale_init 1e-4 --seed 0`. New baseline to beat: val=64.91.
+
 ## 2026-04-29 03:55 — PR #949: LayerScale γ_init=1e-4 — **PENDING REBASE (then MERGE) — val −4.58% (81.81→78.06), test −3.43% (73.04→70.53)**
 
 - Branch: `willowpai2e4-fern/layerscale-1e-4` (sent back for rebase onto post-#863)

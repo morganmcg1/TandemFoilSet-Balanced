@@ -1,11 +1,14 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~04:00 (**🚨 TWO WINS PENDING REBASE: #963 T_max=13 VERIFIED at val=64.91 / test=57.25 (−20.66% / −21.62%), and #949 LayerScale VERIFIED at val=78.06 / test=70.53 (−4.58% / −3.43%) — both blocked by Config hunk-shift on post-#863, mechanical rebase only**; **#863 MERGED — canonical seeded baseline `--seed 0 = 85.14`**; **#955 closed (per-channel heads +2.7% val / +4.1% test), thorfinn→#979 pressure-only variant**; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, no low-freq channel); #920 closed (coord-skip); **#873 EMA awaiting rebase, predicted compound winner**; askeladd→#972 3-seed mean. **CRITICAL PROGRAMME REFRAMING: every prior gain was measured under T_max=50 under-training. T_max=13 is a free 20% improvement that retroactively reframes all prior comparisons. After both pending merges land, new floor: val ≈ 64.91 unseeded (T_max=13 alone) or possibly even lower (LayerScale × T_max=13 stack, predicted compound).**)
-- **Most recent human direction:** none yet for this track
+- **As of:** 2026-04-29 ~05:30
+- **#963 MERGED** — T_max=13 schedule fix: val 81.81 → **64.91** (−20.66%), test 73.04 → **57.25** (−21.62%); largest single-PR win; run `j8yi780z`
+- **#929 CLOSED** — DropPath@0.1 clean negative (+9.5–19.6% val regression, budget-binding, 3 seeds)
+- **#949 SENT BACK** — LayerScale −4.58% gain was under T_max=50; retest required at T_max=13 (new baseline 64.91)
+- **Most recent human direction:** none
 - **Branch:** `icml-appendix-willow-pai2e-r4`
-- **Current best (unseeded, pre-#963 merge):** `val_avg/mae_surf_p = 81.81` (#914), `test_avg = 73.04` (4-split, finite), `3-split test mean = 81.28` (run `2akpdg9t`)
-- **Pending new best (after #963 merges):** `val_avg = 64.91`, `test_avg = 57.25` (run `j8yi780z`, unseeded, T_max=13)
-- **Seeded canonical at T_max=50 (`--seed 0`):** `val_avg = 85.14`, `test_avg = 78.97`, `3-split = 86.78` (run `j1r5y758`, post-#914+#863) — will be superseded by seeded T_max=13 canonical once frieren maps T_max sweep
+- **Current best (unseeded):** `val_avg = 64.91`, `test_avg = 57.25` (run `j8yi780z`, PR #963, T_max=13)
+- **Seeded canonical at T_max=13:** TBD — frieren #1000 (T_max sweep {10,12,13,16} at seed=0) in flight
+- **Prior seeded canonical (T_max=50, obsolete for ranking):** val=85.14 (run `j1r5y758`, PR #863) — same architecture, wrong schedule regime
 
 ## Current research focus
 
@@ -45,60 +48,52 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #753 | edward | surf_weight 20/30/50 | **closed** (sw=30 best at 125.80; superseded by ch=[1,1,3] merge) |
 | #757 | nezuko | 5% warmup + cosine on L1+ch=[1,1,3] | **closed** (+3.81% worse; schedule family exhausted) |
 
-### Round 2 in flight (on top of L1 + ch=[1,1,3] + Fourier K=4 + SwiGLU = 81.81)
+### Round 2 in flight (on top of L1 + ch=[1,1,3] + Fourier K=4 + SwiGLU + T_max=13 = **64.91**)
 
-**All PRs must beat val=81.81 / test=73.04 to merge.**
+**All PRs must beat val=64.91 / test=57.25 to merge. All new runs must include `--t_max 13`.**
 
 | PR | Student | Idea | Predicted impact | Status |
 |---|---|---|---|---|
-| #816 | alphonse | FiLM conditioning of LayerNorm | -5 to -12% | **needs rebase onto post-#914 (81.81)** |
+| #816 | alphonse | FiLM conditioning of LayerNorm | -5 to -12% | **needs rebase onto post-#963 (64.91)** |
 | #820 | thorfinn | Fourier PE K=4 | −9.59% | **MERGED — val 89.71** |
-| #863 | askeladd | Seed determinism (infra) | variance ↓ | **MERGED — bit-perfect; canonical `--seed 0 = 85.14`; askeladd→3-seed mean follow-up** |
-| #819 | frieren | Relative L2 α=0.5 (rebase #2) | washed +0.27% | **CLOSED — Fourier PE absorbs equalization; camber_rc −4.59% orthogonal** |
+| #863 | askeladd | Seed determinism (infra) | variance ↓ | **MERGED — bit-perfect; canonical `--seed 0 = 85.14` (T_max=50 era, superseded)** |
+| #819 | frieren | Relative L2 α=0.5 (rebase #2) | washed +0.27% | **CLOSED — Fourier PE absorbs equalization** |
 | #888 | fern | Stratified vol subsample | +3.77% actual | **CLOSED — VOLUME-MASK-SUBSAMPLING exhausted** |
-| #920 | fern | Per-block coord skip-connection | -1 to -3% predicted | **CLOSED +4.1% val (vs pre-#914) / +14.4% vs post-#914; mechanism active but cruise/re_rand regress sharply; COORD-INJECTION exhausted** |
+| #920 | fern | Per-block coord skip-connection | +4.1% actual | **CLOSED — COORD-INJECTION exhausted** |
 | #872 | nezuko | Domain-ID 3-class additive | +3.1% actual | **CLOSED — additive categorical fights LN** |
-| #929 | nezuko | DropPath rate=0.1 linear | -1 to -3% | **wip (needs rebase onto #914)** |
-| #873 | edward | EMA Polyak decay=0.99 | −10.46% val on pre-#820 | **needs rebase onto post-#914; predicted compound val ≈ 70-75** |
+| #929 | nezuko | DropPath rate=0.1 linear | +9.5–19.6% actual | **CLOSED — budget-binding; nezuko→#1002 DropPath@0.05+T_max=13** |
+| #873 | edward | EMA Polyak decay=0.99 | −10.46% val on pre-#820 | **needs rebase onto post-#963; predicted compound val ≈ 40-50** |
 | #880 | tanjiro | LinearNO ELU+1 | +6.92% actual | **CLOSED — attention-kernel-substitution exhausted** |
-| #914 | tanjiro | SwiGLU MLP swap | **−8.81% val, test 73.04** | **MERGED — new baseline 81.81** |
-| #938 | tanjiro | Random Fourier Features σ=10 | -1 to -3% predicted | **rebase #1 +2.4% val (83.76); SENT BACK for σ∈{2,5} sweep — student diagnosed coord-range mismatch (σ=10 has no low-freq channel)** |
-| #939 | frieren | n_layers=6 (one extra block) | -1 to -3% predicted | **CLOSED +4.7% val (85.65); under-trained at timeout (11/11 epochs), not under-capacity; CAPACITY-WITHIN-BUDGET-DEPTH-AXIS exhausted at this budget** |
-| #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | mapping optimum | **CLOSED — K=8 −0.43% noise-bounded; K=4 settled; FOURIER-BAND-SWEEP-AXIS-ALIGNED exhausted** |
-| #949 | fern | LayerScale γ_init=1e-4 (CaiT) | −4.58% val / −3.43% test VERIFIED | **PENDING MERGE — mechanical rebase onto post-#863 (Config hunk-shift); no re-run** |
-| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | **CLOSED +2.7% val / +4.1% test; mechanism active (head_p ×2.22 vs Ux ×1.57) but cross-channel coupling load-bearing for single_in_dist (+13% val regression); thorfinn→#979 pressure-only variant** |
-| #979 | thorfinn | Pressure-only head (decouple only p, keep Ux+Uy shared) | -1 to -3% | wip (just assigned, post-#914+#863) |
-| #963 | frieren | Schedule-to-budget T_max=13 (cosine match horizon) | −20.66% val / −21.62% test VERIFIED | **PENDING MERGE — mechanical rebase onto post-#863 needed (Config hunk-shift); no re-run** |
-| #972 | askeladd | 3-seed mean canonical (--seed {0,1,2}) | replace single-seed noise → tight ranking quantity | wip (just assigned, post-#863+#914) |
+| #914 | tanjiro | SwiGLU MLP swap | **−8.81% val** | **MERGED — val 81.81** |
+| #938 | tanjiro | Random Fourier Features σ∈{2,5} | -1 to -3% | **SENT BACK for σ∈{2,5} sweep — needs retest vs new 64.91 baseline with --t_max 13** |
+| #939 | frieren | n_layers=6 | +4.7% actual | **CLOSED — under-trained; HIGH-PRIORITY RETEST at T_max=13** |
+| #883 | thorfinn | Fourier bands sweep K∈{3,6,8} | K=4 settled | **CLOSED** |
+| #949 | fern | LayerScale γ_init=1e-4 (CaiT) | −4.58% under T_max=50 | **SENT BACK — retest at T_max=13 required; new baseline 64.91** |
+| #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | +2.7% actual | **CLOSED — cross-channel coupling load-bearing; thorfinn→#979** |
+| #963 | frieren | Schedule-to-budget T_max=13 | **−20.66% val / −21.62% test** | **MERGED — new baseline 64.91** |
+| #979 | thorfinn | Pressure-only head (decouple only p) | −1 to −3% predicted | **WIP — must rebase onto post-#963** |
+| #972 | askeladd | 3-seed mean canonical | variance floor | **WIP — must rerun with --t_max 13 for T_max=13 era canonical** |
+| #1000 | frieren | T_max sweep {10,12,13,16} at seed=0 | map LR optimum + seeded canonical | **WIP (just assigned)** |
+| #1002 | nezuko | DropPath@0.05 + T_max=13 | 0 to −5% | **WIP (just assigned)** |
 
-**Round 3 candidates (queued, contingent on round 2 outcomes):**
+**Round 3 candidates (queued):**
 
-⚠️ **CRITICAL: After #963 merges, ALL round-3 experiments MUST add `--t_max 13`
-to their reproduce commands. Prior predictions below use old baselines (81.81) —
-targets must be updated to beat T_max=13 baseline (~64.91 unseeded or TBD seeded).**
+⚠️ **ALL round-3 experiments MUST include `--t_max 13` and beat val=64.91.**
 
-- **T_max sweep {10, 12, 13, 16} on `--seed 0`** — frieren's immediate
-  follow-up assignment after #963 rebase. Maps the LR-schedule optimum AND
-  establishes the canonical seeded baseline at T_max=13. Predicted: T_max ∈
-  {12, 13} will be near-optimal; T_max=10 may cut too early; T_max=16 will
-  slightly under-anneal. Each is 1 × 30-min run. 4 runs total.
-- **n_layers=6 retest at T_max=13** — **HIGH PRIORITY**. #939 was closed as
-  "under-trained at timeout" (11 epochs at 141s/epoch). With T_max=13,
-  the LR schedule is now right-sized even for the slower 6-block model.
-  The original prediction (−1 to −3% vs 5-layer) may now land because the
-  capacity has enough training steps to manifest. High-value round-3 retest.
-- **EMA × SwiGLU × T_max=13 compound** (#873 rebased onto post-#963 baseline).
-  EMA gave −10.46% on pre-#820; SwiGLU gave −8.81%; T_max=13 gave −20.66%.
-  If orthogonal, compound val could reach ~44-50. **Highest-priority stack.**
-- **FiLM × SwiGLU × T_max=13 compound** (#816 rebased onto post-#963). Predicted
-  val improvement ~15% over new baseline. Bar is now 64.91.
-- **EMA + FiLM + SwiGLU + T_max=13 quadruple stack** — if both #873 and #816
-  land at T_max=13, combine. Four orthogonal levers. Could reach val < 40.
-- **LayerScale × T_max=13** (#949 in flight). Re-evaluate once #963 merges;
-  student may want to rebase and re-run. Predicted: mechanism (per-channel
-  residual gate) is orthogonal to schedule, should compound.
-- **DropPath × T_max=13** (#929 in flight, needs rebase). DropPath stochastic
-  regularization at properly-annealed convergence may compound more.
+- **T_max sweep {10,12,13,16} at seed=0** — IN FLIGHT as frieren #1000. Maps
+  LR-schedule optimum AND establishes seeded T_max=13 canonical. Predicted:
+  T_max ∈ {12, 13} near-optimal; T_max=10 cuts too early; T_max=16 under-anneals.
+- **n_layers=6 retest at T_max=13** — **HIGH PRIORITY**. #939 closed as
+  "under-trained at timeout". With T_max=13 now standard, the 6-layer model may
+  fit the budget if per-epoch cost ≤23 min (13 ep × ~107s). High-value retest.
+- **EMA × T_max=13 compound** (#873 needs rebase onto post-#963). EMA −10.46%
+  on pre-#820; T_max=13 −20.66%. If orthogonal, compound val ≈ 44-50. **Highest-
+  priority architectural stack candidate.**
+- **FiLM × T_max=13** (#816 needs rebase onto post-#963). Bar is 64.91.
+- **EMA + FiLM + T_max=13 triple stack** — if both land, combine.
+- **LayerScale × T_max=13** — IN FLIGHT as fern #949 retest. Sent back with
+  `--t_max 13 --seed 0` instructions.
+- **DropPath@0.05 × T_max=13** — IN FLIGHT as nezuko #1002.
 - **EMA decay sweep {0.995, 0.97}** at T_max=13 — once #873 lands.
 - **Categorical-FiLM (multiplicative)** at T_max=13 — round-3 follow-up once #816 lands.
 - **RFF σ sweep {2, 5}** — in flight as #938 rebase #2 (compare vs T_max=13 baseline).
