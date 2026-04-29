@@ -1,5 +1,33 @@
 # SENPAI Research Results
 
+## 2026-04-29 05:38 — PR #1028 CLOSED (thorfinn): Huber delta sweep under --per_sample_norm
+- charliepai2e1-thorfinn/huber-delta-sweep-per-sample-norm
+- Hypothesis: δ=1.0 was tuned for un-normalized loss scale; under `--per_sample_norm` the per-sample stds compress/expand losses, shifting the optimal L1/L2 boundary. A 4-point sweep (δ ∈ {0.25, 0.5, 1.0, 2.0}) at PSN + epochs=12 should reveal the new optimum.
+
+### Results (epochs=12, --per_sample_norm, n_hidden=256, n_head=8, grad_clip=1.0, ema_decay=0.999)
+
+| δ | val_avg/mae_surf_p | val_in_dist | val_camber_rc | val_camber_cruise | val_re_rand | test_avg | run id |
+|--:|-------------------:|------------:|--------------:|------------------:|------------:|---------:|--------|
+| **0.25** | **86.4029** | 100.6876 | 97.3554 | 67.5579 | 80.0106 | **76.7112** | 1it38zru |
+| 0.5  | 87.1093 | 98.6997  | 97.8057  | 68.6284 | 83.3034 | 78.2793 | ubvje3kn |
+| 1.0 (control) | 90.1318 | 104.1030 | 103.2382 | 68.7142 | 84.4717 | 80.3893 | 1rfp3afx |
+| 2.0  | 93.3613 | 106.8282 | 105.4629 | 72.6727 | 88.4813 | 82.3513 | 1m17adch |
+
+Metrics JSONL files (committed on the student branch before deletion):
+- `metrics/charliepai2e1-thorfinn-huber-delta-sweep-d0.25-1it38zru.jsonl`
+- `metrics/charliepai2e1-thorfinn-huber-delta-sweep-d0.5-ubvje3kn.jsonl`
+- `metrics/charliepai2e1-thorfinn-huber-delta-sweep-d1.0-1rfp3afx.jsonl`
+- `metrics/charliepai2e1-thorfinn-huber-delta-sweep-d2.0-1m17adch.jsonl`
+
+### Analysis & decision
+- **Hypothesis confirmed (direction):** under PSN the optimum δ shifts *down*, monotonically across all four sweep points. δ=0.25 wins on val_avg by 3.73 points and on test_avg by 3.68 points vs the δ=1.0 control. Per-sample std distribution: median ≈ 0.67, mean ≈ 0.90, max ≈ 4.85 — heavy right tail explains why a smaller δ (more L1, more robust) helps the typical-and-large-std samples that PSN inflates past the old L1/L2 boundary.
+- **Control sanity:** δ=1.0+PSN reproduces PR #795 within 0.3 (90.13 vs 90.40 expected) — clean sweep.
+- **Does NOT beat baseline:** 86.40 vs current best 66.81 (PR #1015) → ~29% worse. PSN at epochs=12 cannot compete with no-PSN at epochs=24. The value of this sweep is purely as input for PSN+longer-training experiments.
+- **Decision: closed.** δ=0.25 finding is captured for downstream use. PR #1050 (edward) is already running PSN at epochs=24 — once that lands we'll know whether PSN is viable at all, and we'll have δ=0.25 ready as the right setting.
+- **Routed signal:** if PR #1050 returns positive, immediately stack δ=0.25 on top via a follow-up trial. Trend hadn't bottomed out at δ=0.25 — sub-0.25 (δ ∈ {0.05, 0.1, 0.15}) and adaptive/scale-aware δ are open follow-ups.
+
+---
+
 ## 2026-04-29 10:30 — PR #1015 ASSIGNED (edward): epochs=24 on nl3/sn16 compound baseline
 - charliepai2e1-edward/longer-training-epochs-24-compound
 - Hypothesis: Val curve was monotonically decreasing through ep12 in PR #1005 (94.7 at epoch 12/12). The model had not converged. Doubling the training budget to 24 epochs on the same compound config (nl3/sn16, n_hidden=256, n_head=8, Huber δ=1.0, EMA=0.999, grad_clip=1.0) should push val_avg/mae_surf_p meaningfully below 94.65.
