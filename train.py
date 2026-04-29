@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -225,10 +226,15 @@ def per_element_loss(pred, target, loss_type: str, huber_delta: float = 1.0):
 
     For ``"huber"`` returns ``F.huber_loss(reduction='none')`` with the given
     delta — 0.5*x^2 for |x|<delta, delta*(|x|-0.5*delta) otherwise. For
-    ``"mse"`` returns the unreduced squared error matching the original baseline.
+    ``"log_cosh"`` returns ``log(cosh(pred-target))`` via the numerically
+    stable form ``logaddexp(x, -x) - log(2)`` (naive ``log(cosh(x))`` overflows
+    for |x| > ~88 in fp32). For ``"mse"`` returns the unreduced squared error.
     """
     if loss_type == "huber":
         return F.huber_loss(pred, target, reduction="none", delta=huber_delta)
+    if loss_type == "log_cosh":
+        x = pred - target
+        return torch.logaddexp(x, -x) - math.log(2.0)
     return (pred - target) ** 2
 
 
@@ -418,7 +424,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    loss: str = "mse"  # "mse" or "huber"
+    loss: str = "mse"  # "mse", "huber", or "log_cosh"
     huber_delta: float = 1.0  # delta for Huber loss in normalized target space
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
@@ -428,8 +434,8 @@ class Config:
 
 
 cfg = sp.parse(Config)
-if cfg.loss not in ("mse", "huber"):
-    raise ValueError(f"--loss must be 'mse' or 'huber', got '{cfg.loss}'")
+if cfg.loss not in ("mse", "huber", "log_cosh"):
+    raise ValueError(f"--loss must be 'mse', 'huber', or 'log_cosh', got '{cfg.loss}'")
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
