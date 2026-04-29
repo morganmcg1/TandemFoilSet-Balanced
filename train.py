@@ -101,7 +101,11 @@ class PhysicsAttention(nn.Module):
         self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Higher initial temperature when ada_temp/gumbel are on, so that
+        # ``logits/τ`` stays in a numerically safe range even with the long-tail
+        # Gumbel noise; the network can drive τ smaller again if it wants.
+        temp_init = 1.0 if (ada_temp or gumbel) else 0.5
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * temp_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -138,15 +142,17 @@ class PhysicsAttention(nn.Module):
 
         slice_logits = self.in_project_slice(x_mid)  # [B, H, N, G]
         if self.ada_temp:
-            tau = self.temperature + self.temp_offset(x_mid).clamp(min=-1.0, max=1.0)
+            # τ_i = τ_0 + Δτ(x_i), bounded so it stays safely positive.
+            tau = (self.temperature + self.temp_offset(x_mid).clamp(min=-0.4, max=0.4)).clamp(min=0.1)
         else:
             tau = self.temperature
         if self.gumbel and self.training:
             # Gumbel noise -log(-log(eps)) — eidetic eq.8 in Transolver++
-            eps = torch.empty_like(slice_logits).uniform_(1e-9, 1.0)
+            eps = torch.empty_like(slice_logits).uniform_(1e-6, 1.0 - 1e-6)
             gumbel_noise = -torch.log(-torch.log(eps))
             slice_logits = slice_logits + gumbel_noise
-        slice_weights = self.softmax(slice_logits / tau)
+        # Clamp pre-softmax magnitude to avoid fp32 overflow.
+        slice_weights = self.softmax((slice_logits / tau).clamp(min=-30.0, max=30.0))
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -432,6 +438,13 @@ class Config:
     schedule: str = "cosine"  # cosine | onecycle
     warmup_epochs: int = 0
     grad_clip: float = 0.0  # 0 disables clipping
+    # Per-channel surface-loss weighting: multiplies the squared error of each
+    # output channel inside the surface mask. ``surf_w_p`` lets us focus the
+    # model on surface pressure (the primary metric) without changing volume
+    # supervision. 1.0 = no per-channel reweight (default).
+    surf_w_p: float = 1.0
+    surf_w_Ux: float = 1.0
+    surf_w_Uy: float = 1.0
     # Time budget override (minutes). Set <=0 to use SENPAI_TIMEOUT_MINUTES env var.
     timeout_min: float = 0.0
     # Test-time evaluation control
@@ -484,6 +497,13 @@ model_config = dict(
 if cfg.seed:
     torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
+
+# Per-channel surface weight tensor (Ux, Uy, p). Defaults to ones so no behaviour
+# change when flags are unset.
+surf_ch_w = torch.tensor(
+    [cfg.surf_w_Ux, cfg.surf_w_Uy, cfg.surf_w_p],
+    device=device, dtype=torch.float32,
+).view(1, 1, 3)
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -568,12 +588,16 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = (pred - y_norm) ** 2  # [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
+        # Volume loss: equal-weight across channels (matches eval ranking).
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Surface loss: optional per-channel reweight to emphasise pressure
+        # while keeping eval semantics unchanged.
+        sq_err_surf = sq_err * surf_ch_w  # broadcast [1,1,3]
+        surf_loss = (sq_err_surf * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
