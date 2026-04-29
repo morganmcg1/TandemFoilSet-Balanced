@@ -1,5 +1,74 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 01:00 — PR #819: Relative L2 α=0.5 (rebase #2 + Fourier PE) — **CLOSED (washed; Fourier PE absorbs equalization gain)**
+
+- Branch: `willowpai2e4-frieren/relative-l2-loss`
+- Student: willowpai2e4-frieren
+- W&B run: [`j26mhmv1`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/j26mhmv1)
+
+**Results vs post-#820 baseline 89.71:**
+
+| Metric | Baseline | α=0.5+FourierPE | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 89.71 | **89.95** | **+0.27%** (flat/washed) |
+| 3-split test mean | 88.16 | **90.13** | **+2.2%** ✗ |
+
+| Split | Δ | (pre-Fourier was) |
+|---|---:|---:|
+| `val_single_in_dist` | +0.3% | (−11.6% win) |
+| `val_geom_camber_rc` | **−4.59% ✓** | (−2.0% win, strengthened) |
+| `val_geom_camber_cruise` | +5.99% ✗ | (−1.7% win) |
+| `val_re_rand` | +2.31% ✗ | (−2.6% win) |
+
+**Mechanistic read:** Fourier PE absorbed the per-sample gradient equalization.
+Diagnostic: `vol_loss_rel ≈ vol_loss_abs` by end-of-training (vs rel < abs
+throughout pre-#820) — the model fits spatial structure better with Fourier PE,
+so per-sample residuals equalize and the relative term adds nothing new.
+camber_rc exception holds and strengthened: absolute-loss gradient on
+high-magnitude geometric-outlier samples is orthogonal to Fourier PE.
+
+**Takeaways:** (1) Per-sample equalization and Fourier PE target the same
+gradient-distribution problem — they substitute, not compound. (2) camber_rc
+exception: the absolute-loss mechanism for geometric-outlier gradient signal is
+distinct. (3) y_rms_per_sample heterogeneity is data-intrinsic (range 15×),
+unchanged by Fourier PE — the relative-loss mechanism is made redundant, not
+the data heterogeneity.
+
+**Lever family LOSS-FUNCTION-EQUALIZATION exhausted.** frieren reassigned
+PR #939 (n_layers=6).
+
+## 2026-04-29 00:50 — PR #914: SwiGLU MLP swap — **MERGED (−8.81% val, new baseline 81.81 / test 73.04)**
+
+- Branch: `willowpai2e4-tanjiro/swiglu-mlp`
+- Student: willowpai2e4-tanjiro
+- W&B run: [`2akpdg9t`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/2akpdg9t)
+
+**Hypothesis.** Replace per-block GELU FFN with SwiGLU (SiLU-gated linear
+unit with 2/3 hidden-dim trick for param parity). Predicted −1 to −3%.
+
+**Results vs baseline 89.71 (post-#820):**
+
+| Metric | Baseline | SwiGLU | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 89.7141 | **81.8075** | **−8.81%** ✓✓ |
+| 4-split `test_avg/mae_surf_p` | NaN | **73.04** | first finite 4-split test |
+| 3-split test mean | 88.16 | **81.28** | −7.81% ✓ |
+| Best epoch | 14 / 50 | 12 / 13 (timeout) | converged 2 epochs faster |
+| Param count | 666,455 | **661,735** | −4,720 (−0.72%) |
+
+**Per-split val:** all 4 splits improved (−10.66%, −11.68%, −2.34%, −7.41%).
+
+**Why 3–9× larger than predicted:** CFD feature scale heterogeneity (pressure
+dominates Ux/Uy by 10–100×) makes SwiGLU's per-feature gate more load-bearing
+than in NLP. At mlp_ratio=2 the bottleneck amplifies the gating benefit.
+Converged 2 epochs faster — inductive bias matched the task.
+
+**First finite 4-split `test_avg` (73.04)** — NaN guards + SwiGLU confirmed
+working end-to-end. New cumulative improvement: −19.7% vs L1-only baseline.
+
+**tanjiro reassigned PR #938: Random Fourier Features σ=10.** frieren
+reassigned PR #939: n_layers=6.
+
 ## 2026-04-29 00:25 — PR #872: Domain-ID embedding (3-class additive) — **CLOSED (regression on 3 of 4 val splits)**
 
 - Branch: `willowpai2e4-nezuko/domain-id-embedding`
