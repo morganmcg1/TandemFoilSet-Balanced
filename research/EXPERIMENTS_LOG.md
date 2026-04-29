@@ -256,3 +256,30 @@ Note: All three runs WITHOUT `--fourier_pos_enc`. Current baseline is 44.4154 (P
 | 3 | 56.0444 | ~22 | Overtfit from ep 22, monotonically worse after |
 
 - Commentary: **CLOSED — DECISIVE NEGATIVE.** n_layers=3 is unambiguous: overfits at epoch 22 (training stable, validation diverges) on 1499 training samples. n_layers=2 hit the wall-clock timeout at best epoch ~42; even if fully converged, trajectory projects to ~44.0-45.0 — well above 39.9450 and no path to beating baseline. The TandemFoilSet-Balanced training set (1499 samples) does not support deeper Transolver stacking. The n_layers=1 model benefits more from capacity additions through width (FiLM adds 67k params as conditioning network, Fourier expands spatial input) than through depth. Fern reassigned to n_hidden=192 width scaling on FiLM+Fourier config (PR #1202).
+
+## 2026-04-29 17:30 — PR #1218: SWA late-epoch averaging on FiLM+Fourier+warmup baseline — CLOSED
+
+- Branch: charliepai2f3-askeladd/swa-late-epoch-averaging
+- Hypothesis: Stochastic Weight Averaging over the last 15 epochs (ep36–50) would beat the EMA checkpoint because the model is not converged at ep50 of the warmup+T_max=45 recipe (PR #1175 baseline).
+- Implementation: `torch.optim.swa_utils.AveragedModel` with epoch-level equal-weight averaging from `swa_start_epoch = max(1, epochs-15)`. Evaluated separately from EMA. No BN update needed (LayerNorm only).
+- Results:
+
+| Strategy | val_avg/mae_surf_p | best_epoch |
+|----------|--------------------|------------|
+| EMA (decay=0.995) | **36.3455** | ep49 |
+| SWA (15 snapshots) | 36.7199 | (avg) |
+| Current baseline (PR #1208) | 35.8406 | — |
+
+- Commentary: **CLOSED — neither beats current baseline 35.8406.** Both methods beat the assigned PR #1175 baseline (37.0739) but the frontier had moved during the experiment. Strong mechanistic finding: under cycling cosine annealing without SWALR, equal-weight averaging across the swa_window pulls in higher-LR/noisier early-window snapshots (ep36 LR ≈ 6× ep50 LR), so EMA's exponential weighting dominates. Confirms that the gain in PR #1208 came from longer LR horizon, not from late-epoch averaging. Open follow-ups (logged for potential next round): SWA+SWALR with proper restart, EMA-of-checkpoints. Reassigned to compose-warmup+T_max=60 (#1231).
+
+## 2026-04-29 17:30 — PR #1167: FiLM + Fourier on best baseline (alphonse) — CLOSED SUPERSEDED
+
+- Branch: charliepai2f3-alphonse/film-fourier-combined
+- Hypothesis: combine FiLM global conditioning with Fourier positional encoding on (x,z), originally on the pre-FiLM baseline.
+- Long PR history: multiple rebase cycles. Final pivot was single-decay cosine (T_max=50) on FiLM+Fourier → val_avg=38.0015, test_avg=31.2265.
+- Commentary: **CLOSED — superseded.** The hypothesis itself was already validated and merged via PR #1104 (edward, FiLM, val_avg=39.9450) and refined by PR #1175 (thorfinn, warmup+T_max=45, 37.0739) and PR #1208 (frieren, 75ep+T_max=75, 35.8406). Final result 38.0015 well above current baseline. Many observations from this PR (T_max=50 single-decay benefit, longer-horizon cosine helps) directly informed the merged thorfinn/frieren chain. Student recommended closure. Reassigned (after one more redirect — see #1232 below) to batch size sweep (#1234).
+
+## 2026-04-29 17:30 — PR #1232: surf_weight sweep (alphonse) — CLOSED BEFORE START (DUPLICATE)
+
+- Branch: charliepai2f3-alphonse/surf-weight-sweep
+- Closed at assignment time as a duplicate of PR #1173 (nezuko, surf_weight sweep on Fourier baseline). PR #1173 already established sw=28-32 as the optimum and sw≥40 as decisively worse. Re-running on FiLM+Fourier offered insufficient information value. Reassigned to batch size + LR sweep (#1234).
