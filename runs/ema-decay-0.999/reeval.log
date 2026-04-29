@@ -1,0 +1,15 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Loaded checkpoint /workspace/senpai/target/models/model-403ah6s8/checkpoint.pt
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+  Eval test_single_in_dist...
+    test_single_in_dist             surf_p=115.9822  vol_p=126.0938  skipped=0
+  Eval test_geom_camber_rc...
+    test_geom_camber_rc             surf_p=94.7647  vol_p=102.4337  skipped=0
+  Eval test_geom_camber_cruise...
+    test_geom_camber_cruise         surf_p=62.5287  vol_p=61.1674  skipped=1
+  Eval test_re_rand...
+    test_re_rand                    surf_p=86.3512  vol_p=86.5399  skipped=0
+
+  test_avg/mae_surf_p = 89.9067
+  test_avg/mae_vol_p  = 94.0587
+Appended test_clean_with_workaround record to /workspace/senpai/target/models/model-403ah6s8/metrics.jsonl

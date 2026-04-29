@@ -47,6 +47,46 @@ from data import (
     pad_collate,
 )
 
+
+class ModelEMA:
+    """Exponential Moving Average of model weights.
+
+    Usage:
+        ema = ModelEMA(model, decay=0.999)
+        ...
+        loss.backward(); optimizer.step()
+        ema.update(model)
+        ...
+        ema.apply_to(model)   # evaluation context
+        ...validate...
+        ema.restore(model)    # back to training weights
+    """
+
+    def __init__(self, model, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()
+                       if v.dtype.is_floating_point}
+        self.backup: dict = {}
+
+    def update(self, model):
+        for k, v in model.state_dict().items():
+            if k in self.shadow:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+
+    def apply_to(self, model):
+        self.backup = {k: v.detach().clone() for k, v in model.state_dict().items()
+                       if k in self.shadow}
+        sd = model.state_dict()
+        for k, v in self.shadow.items():
+            sd[k].copy_(v)
+
+    def restore(self, model):
+        sd = model.state_dict()
+        for k, v in self.backup.items():
+            sd[k].copy_(v)
+        self.backup = {}
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -432,6 +472,9 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+EMA_DECAY = 0.999
+ema = ModelEMA(model, decay=EMA_DECAY)
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 # 1-epoch linear warmup, then cosine to ~0 over T_max=15 epochs.
@@ -488,6 +531,7 @@ _write_jsonl({
     "agent": cfg.agent,
     "git_commit": _git_commit_short(),
     "loss_kind": "mae",
+    "ema_decay": EMA_DECAY,
     "config": asdict(cfg),
     "model_config": model_config,
     "n_params": n_params,
@@ -530,6 +574,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -543,13 +588,36 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    split_metrics = {
+    raw_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    raw_val_avg = aggregate_splits(raw_split_metrics)
+
+    ema.apply_to(model)
+    try:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            # Save EMA weights (model.state_dict() is currently EMA-applied)
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+    finally:
+        ema.restore(model)
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -564,28 +632,24 @@ for epoch in range(MAX_EPOCHS):
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc. (EMA weights)
+    # Raw (non-EMA) metrics for sanity comparison
+    for split_name, m in raw_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"raw_{split_name}/{k}"] = v
+    for k, v in raw_val_avg.items():
+        log_metrics[f"raw_val_{k}"] = v  # raw_val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
 
     epoch_record = {"type": "epoch", "epoch": epoch + 1, **log_metrics}
     _write_jsonl(epoch_record)
 
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
-        }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
-
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    raw_avg_surf_p = raw_val_avg["avg/mae_surf_p"]
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p[ema={avg_surf_p:.4f} raw={raw_avg_surf_p:.4f}]{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
