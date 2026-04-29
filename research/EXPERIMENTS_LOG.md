@@ -43,6 +43,27 @@
 
 ---
 
+## 2026-04-29 — PR #927 (SENT BACK): Per-channel volume loss v1 (L1 on p only, MSE on Ux/Uy)
+- **Branch:** `willowpai2e3-fern/per-channel-vol-loss`
+- **Run (v1):** W&B `b47cu99c`, 14 epochs, 32.3 min, group `volume-l1-channel v1-p-only`, peak 44.6 GB
+
+| Metric | FiLM+L1 baseline | v1-p-only | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 82.77 | 82.24 | −0.6% |
+| **val_avg/mae_vol_p** | 97.33 | **88.60** | **−9.0%** |
+| test_avg/mae_surf_p | 72.27 | 72.60 | +0.5% |
+| test_avg/mae_vol_p | 86.60 | 78.45 | **−9.4%** |
+
+### Decision: SENT BACK — mechanism works on vol_p but doesn't beat current best on primary metric
+- val_avg/mae_surf_p=82.24 doesn't beat current best 79.54 (PR #910 Re-stratified merged after this PR was assigned).
+- vol_p gain is real and substantial (−9.0% val / −9.4% test) — heavy-tail mechanism captured on vol_p as predicted.
+- Surf_p flat (within noise) on FiLM+L1 baseline; mechanism is orthogonal to surface improvements.
+- Largest vol_p gain on `val_geom_camber_cruise` (−16.9%) — channel-localized heavy-tail benefit.
+- Ux/Uy preserved (mechanism check passed; MSE on Ux/Uy preserves gradient profile).
+- **v2 plan:** rebase onto current HEAD (FiLM pre-block + Re-stratify), re-run with `--vol_l1_p_only`, also run paired `--novol_l1_p_only` baseline for clean A/B on current stack.
+
+---
+
 ## 2026-04-29 — PR #756 (SENT BACK): Fourier Re-encoding v2-rebased
 - **Branch:** `willowpai2e3-frieren/fourier-re-encoding`
 - **Run (v2-rebased):** W&B `zyyswd05`, 13 epochs (timeout at 30.1 min), group `fourier-re-encoding v2-rebased`

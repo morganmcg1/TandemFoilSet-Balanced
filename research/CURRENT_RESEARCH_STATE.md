@@ -53,7 +53,7 @@
 | askeladd | #917 | Re-input noise augmentation (smooth FiLM via training-time log(Re) perturbation) | WIP |
 | thorfinn | #934 | Layer-targeted FiLM: pre-block conditioning on last 2 blocks only | WIP — new 2026-04-29 |
 | nezuko | #937 | Dual FiLM: pre-block + post-block Re conditioning per block | WIP — new 2026-04-29 |
-| fern | #927 | Per-channel volume loss (L1 on p only, MSE on Ux/Uy) | WIP |
+| fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
 | edward | #924 | Per-channel output heads (Ux/Uy/p) — decouple decoder pathways | WIP |
 | frieren | #756 | Fourier Re-encoding v3 (rebase onto FiLM+pre-block+Re-stratify stack) | WIP — sent back 2026-04-29 |
 | alphonse | #936 | Depth scaling: n_layers=7 on full FiLM+L1+Re-stratify stack | WIP — new 2026-04-29 |
@@ -68,6 +68,7 @@
 - **Pre-block FiLM marginally better than post-block** (PR #909: −1.5% val vs post-block baseline). Mixed per-split: Re-targeted splits (re_rand, cruise) improved, in-dist/rc slightly regressed. Mechanism: pre-block modulates Q/K/V attention computation (regime-aware attention patterns) vs post-block modulation which only scales outputs.
 - **Re-stratified batch sampling stacks with FiLM+pre-block** (PR #910: −2.5% val). Largest surprise: single_in_dist −9.6% val (not re_rand as predicted). Gradient equalizes high-Re bias under L1. `--re_stratify` now defaults to True.
 - **`geom_camber_rc` is the hardest split** (92.95 val at current best) — consistently the most resistant to improvement. Potential next target.
+- **Per-channel vol-L1 (p only) works on vol_p** (PR #927 v1: −9% val_vol_p / −9.4% test_vol_p on FiLM+L1 baseline). Surf_p flat — mechanism orthogonal to surface improvements. v2 rebase onto current stack pending.
 - **Channel weighting falsified on FiLM+L1 stack** (PR #743 v3: +1.1% worse). FiLM's hidden-state modulation already captures the per-channel gradient lever. Channel weighting was genuine at Huber stage (−3.8%) but FiLM makes it redundant.
 - **Focal loss falsified on L1 base** (PR #858): high-error nodes are convergence-bottlenecked, not gradient-bottlenecked.
 - **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric.
