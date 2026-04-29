@@ -508,6 +508,73 @@ def extract_train_log_re(train_ds, num_workers: int = 4) -> np.ndarray:
     return out
 
 
+class NacaMStratifiedSampler(Sampler[int]):
+    """Round-robin sampler over NACA_M1 (front-foil camber) quintile buckets.
+
+    Mirrors ReStratifiedSampler but stratifies on front-foil max camber
+    (feature dim 15) rather than log(Re). Equalizes the training gradient
+    across the M distribution, targeting the geom_camber_rc / geom_camber_cruise
+    OOD splits where the held-out variable is exactly NACA_M1.
+    """
+
+    def __init__(self, naca_m_vals: np.ndarray, batch_size: int,
+                 n_quintiles: int = 5, seed: int = 42):
+        self.batch_size = batch_size
+        self.n_quintiles = n_quintiles
+        edges = np.quantile(naca_m_vals, np.linspace(0.0, 1.0, n_quintiles + 1))
+        labels = np.clip(
+            np.searchsorted(edges[1:-1], naca_m_vals), 0, n_quintiles - 1
+        )
+        self.buckets = [
+            np.where(labels == q)[0].tolist() for q in range(n_quintiles)
+        ]
+        self.bucket_sizes = [len(b) for b in self.buckets]
+        self.bucket_edges = edges.tolist()
+        self.rng = np.random.default_rng(seed)
+
+    def __iter__(self):
+        shuffled = [self.rng.permutation(b).tolist() for b in self.buckets]
+        iters = [iter(b) for b in shuffled]
+        active = list(range(self.n_quintiles))
+        indices: list[int] = []
+        while active:
+            new_active = []
+            for q in active:
+                try:
+                    indices.append(next(iters[q]))
+                    new_active.append(q)
+                except StopIteration:
+                    pass
+            active = new_active
+        n_full = (len(indices) // self.batch_size) * self.batch_size
+        return iter(indices[:n_full])
+
+    def __len__(self) -> int:
+        total = sum(self.bucket_sizes)
+        return (total // self.batch_size) * self.batch_size
+
+
+def extract_train_naca_m(train_ds, num_workers: int = 4) -> np.ndarray:
+    """One-time scan of the training set to extract per-sample NACA_M1.
+
+    NACA_M1 (front-foil camber, feature dim 15) is broadcast across all nodes
+    of a sample, so we read x[0, 15]. Uses a parallel DataLoader to amortize
+    per-file I/O.
+    """
+    loader = DataLoader(
+        train_ds, batch_size=8, shuffle=False,
+        num_workers=num_workers, collate_fn=lambda b: b,
+    )
+    out = np.empty(len(train_ds), dtype=np.float64)
+    idx = 0
+    for batch in loader:
+        for x, _y, _surf in batch:
+            out[idx] = float(x[0, 15].item())
+            idx += 1
+    assert idx == len(train_ds)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -532,6 +599,8 @@ class Config:
     re_stratify: bool = True  # round-robin Re-quintile mini-batches (overrides domain-balanced sampler)
     n_re_quintiles: int = 5
     re_stratify_seed: int = 42
+    naca_m_stratify: bool = False  # round-robin NACA_M1-quintile mini-batches (takes precedence over re_stratify)
+    n_naca_m_quintiles: int = 5
     swiglu_ratio: int = 2  # mlp_ratio for SwiGLU intermediate dim (2 = current merged baseline; 1 = parameter-matched ablation)
     rms_norm: bool = False  # use RMSNorm instead of LayerNorm in TransolverBlock
 
@@ -550,9 +619,35 @@ if __name__ == "__main__":
     loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                          persistent_workers=True, prefetch_factor=2)
 
-    re_stratify_active = cfg.re_stratify and not cfg.debug
+    naca_m_stratify_active = cfg.naca_m_stratify and not cfg.debug
+    re_stratify_active = cfg.re_stratify and not cfg.debug and not naca_m_stratify_active
     sampler_info: dict = {"sampler": "shuffle" if cfg.debug else "weighted_domain"}
-    if re_stratify_active:
+    if naca_m_stratify_active:
+        t0_m = time.time()
+        naca_m_train = extract_train_naca_m(train_ds, num_workers=4)
+        naca_m_sampler = NacaMStratifiedSampler(
+            naca_m_train, batch_size=cfg.batch_size,
+            n_quintiles=cfg.n_naca_m_quintiles, seed=cfg.re_stratify_seed,
+        )
+        print(
+            f"NACA_M-stratified sampler: {cfg.n_naca_m_quintiles} quintiles, "
+            f"bucket sizes={naca_m_sampler.bucket_sizes}, "
+            f"bucket edges={['%.4f' % e for e in naca_m_sampler.bucket_edges]}, "
+            f"len(sampler)={len(naca_m_sampler)} (extracted NACA_M in {time.time()-t0_m:.1f}s)"
+        )
+        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+                                  sampler=naca_m_sampler, drop_last=True,
+                                  **loader_kwargs)
+        sampler_info = {
+            "sampler": "naca_m_stratified",
+            "n_naca_m_quintiles": cfg.n_naca_m_quintiles,
+            "bucket_sizes": naca_m_sampler.bucket_sizes,
+            "bucket_edges": naca_m_sampler.bucket_edges,
+            "naca_m_min": float(naca_m_train.min()),
+            "naca_m_max": float(naca_m_train.max()),
+            "naca_m_mean": float(naca_m_train.mean()),
+        }
+    elif re_stratify_active:
         t0_re = time.time()
         log_re_train = extract_train_log_re(train_ds, num_workers=4)
         re_sampler = ReStratifiedSampler(
@@ -678,13 +773,17 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
             global_step += 1
-            # Per-batch log(Re) diversity (confirms stratified sampler is doing its job).
+            # Per-batch log(Re) and NACA_M1 diversity (confirms stratified sampler is doing its job).
             log_re_batch = x[:, 0, 13]
+            naca_m_batch = x[:, 0, 15]
             wandb.log({
                 "train/loss": loss.item(),
                 "train/batch_log_re_mean": log_re_batch.mean().item(),
                 "train/batch_log_re_std": log_re_batch.std(unbiased=False).item(),
                 "train/batch_log_re_range": (log_re_batch.max() - log_re_batch.min()).item(),
+                "train/batch_naca_m_mean": naca_m_batch.mean().item(),
+                "train/batch_naca_m_std": naca_m_batch.std(unbiased=False).item(),
+                "train/batch_naca_m_range": (naca_m_batch.max() - naca_m_batch.min()).item(),
                 "global_step": global_step,
             })
 
