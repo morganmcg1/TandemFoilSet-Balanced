@@ -401,6 +401,9 @@ class Config:
     surf_weight: float = 10.0
     grad_clip: float = 1.0  # 0.0 disables clipping
     epochs: int = 50
+    use_sgdr: bool = False  # CosineAnnealingWarmRestarts vs CosineAnnealingLR
+    sgdr_t0: int = 7  # SGDR first restart period in epochs
+    sgdr_t_mult: int = 1  # SGDR T multiplier after each restart
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -453,7 +456,14 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.use_sgdr:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=cfg.sgdr_t0, T_mult=cfg.sgdr_t_mult, eta_min=0.0,
+    )
+    print(f"Scheduler: CosineAnnealingWarmRestarts(T_0={cfg.sgdr_t0}, T_mult={cfg.sgdr_t_mult}, eta_min=0.0)")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"Scheduler: CosineAnnealingLR(T_max={MAX_EPOCHS})")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -520,6 +530,8 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    lr_at_epoch_start = optimizer.param_groups[0]["lr"]
+    print(f"Epoch {epoch+1}/{MAX_EPOCHS} starting LR: {lr_at_epoch_start:.6e}")
     model.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
@@ -590,6 +602,7 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_clip_frac": epoch_grad_clip_frac,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
+        "lr_at_epoch_start": lr_at_epoch_start,
         "epoch_time_s": dt,
         "global_step": global_step,
     }
@@ -605,6 +618,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "epoch_time_s": dt,
         "lr": scheduler.get_last_lr()[0],
+        "lr_at_epoch_start": lr_at_epoch_start,
         "train": {
             "vol_loss": epoch_vol,
             "surf_loss": epoch_surf,
