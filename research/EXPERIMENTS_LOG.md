@@ -106,3 +106,85 @@ The timeout asymmetry identified by the student (mlp=4 is 12% slower per epoch, 
 Only `val_geom_camber_cruise` benefited (−3.2), consistent with the hypothesis that wider MLPs help OOD generalization on low-magnitude domains — but not enough to override the overall regression.
 
 **Key side contribution: bug fix.** Student identified and fixed a critical correctness bug: `test_geom_camber_cruise` had `inf` in ground truth `y`. The masked accumulation `err * mask` after `err = (pred - y).abs()` produces `inf * 0 = NaN`. Fix: drop non-finite-y samples before computing predictions. This fix should be propagated to all future experiments to ensure clean test_geom_camber_cruise metrics.
+
+---
+
+## 2026-04-29 14:00 — PR #1126: Timeout-aware cosine LR: T_max=14 to fully anneal within 30-min cap
+
+- charliepai2f2-edward/timeout-aware-cosine-lr
+- **Hypothesis**: Setting `T_max=14` (matching actual epoch count from timeout) allows the cosine schedule to fully anneal vs. T_max=50 which barely moves in 14 epochs.
+- **Outcome**: **CLOSED (SUPERSEDED)** — experiment produced val_avg/mae_surf_p=123.79 (-3% vs. its own reference baseline of 127.67), but the current baseline had already advanced to 100.41 by the time results arrived.
+
+### Results (epoch 13 best checkpoint)
+
+| Metric | Baseline Ref (T_max=50) | This run (T_max=14) | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** (PRIMARY) | **127.67** | **123.79** | **-3.04%** |
+| val_avg/mae_vol_p | 139.94 | 145.05 | +3.66% |
+| val_avg/mae_surf_Ux | 2.2548 | 2.0005 | -11.28% |
+| val_avg/mae_surf_Uy | 0.9431 | 0.8666 | -8.11% |
+
+Per-split val mae_surf_p:
+
+| Split | T_max=50 | T_max=14 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 157.82 | 147.09 | -6.83 |
+| val_geom_camber_rc | 135.65 | 133.72 | -1.93 |
+| val_geom_camber_cruise | 99.26 | 98.84 | -0.42 |
+| val_re_rand | 117.94 | 115.53 | -2.41 |
+
+LR trajectory: 5e-4 → 7.26e-6 over 14 epochs (fully annealed as designed). Best checkpoint at epoch 13.
+
+- Metrics JSONL: `target/models/model-charliepai2f2-edward-timeout-aware-cosine-lr-rerun-20260429-121954/metrics.jsonl`
+
+### Analysis
+
+The hypothesis was confirmed: proper budget-aware LR annealing does improve surface pressure MAE by ~3%. The LR trajectory shows a clear inflection in improvement at low-LR epochs 11-13 (7.4 point drop in val_avg_surf_p). However, the T_max budget-awareness insight was independently captured in PR #1091 (nezuko's stochastic depth + budget-aware cosine) which ran earlier, and when combined with lr=1e-3 + grad_clip in PR #1098, achieved 100.41. This experiment's result of 123.79 never beat the current baseline.
+
+Student also correctly identified the pre-existing NaN/inf issue in test_geom_camber_cruise scoring and provided a root cause analysis. Key detail: `err = (pred - y).abs()` followed by `err * surf_mask` produces `inf * 0 = NaN` for the corrupted sample 000020.pt. The pred-side nan_to_num guard requested by the advisor doesn't fully fix this.
+
+Student's follow-up (PR #1166) targeting lr=1e-3 + grad_clip + 2-epoch linear warmup is already running on the 100.41 baseline — that's the right direction.
+
+---
+
+## 2026-04-29 14:30 — PR #1185: SGDR warm restarts: escape local minima for better OOD generalization
+
+- charliepai2f2-nezuko/warm-restarts-sgdr
+- **Hypothesis**: CosineAnnealingWarmRestarts (T_0=5, T_mult=1, eta_min=1e-6) replaces single-cycle cosine. Periodic LR restarts (every 5 epochs back to lr_max=1e-3) escape local minima, improving OOD generalization vs. single monotonic anneal.
+- **Outcome**: **CLOSED** — negative result. val_avg/mae_surf_p = 108.69 vs. baseline 100.41 (-8.24% regression).
+
+### Results (epoch 14 best, full 14 epochs run)
+
+| Metric | Baseline (PR #1098) | This run (SGDR) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** (PRIMARY) | **100.41** | **108.69** | +8.24% |
+| test_avg/mae_surf_p | 88.58 | 97.54 | +10.12% |
+
+Per-split val mae_surf_p (epoch 14):
+
+| Split | Baseline | SGDR | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 120.68 | 130.79 | +10.11 |
+| val_geom_camber_rc | 111.80 | 119.12 | +7.32 |
+| val_geom_camber_cruise | 75.99 | 82.74 | +6.75 |
+| val_re_rand | 93.15 | 102.10 | +8.95 |
+
+LR restart spike trajectory:
+
+| Epoch | val_avg/mae_surf_p | LR | Note |
+|---:|---:|---:|---|
+| 5 (end cycle 1) | 146.87 | 1e-3 | bottom of cycle 1 |
+| 6 (restart) | 169.33 | 1e-3 | +22 from cycle 1 end |
+| 10 (end cycle 2) | 121.10 | 1e-3 | bottom of cycle 2 |
+| 11 (restart) | 168.13 | 1e-3 | +47 from cycle 2 end |
+| 14 (best) | 108.69 | low | end of cycle 3 |
+
+- Metrics JSONL: `target/models/model-charliepai2f2-nezuko-warm-restarts-sgdr-20260429-134725/metrics.jsonl`
+
+### Analysis
+
+Hypothesis rejected. SGDR's restart mechanism is structurally incompatible with the 14-epoch budget. With T_0=5/T_mult=1, only ~3 cycles fit in the timeout window. Each restart spikes val by 22-47 points and burns ~3 epochs re-converging to where the single-cycle cosine baseline spends in low-LR fine-tuning. The final cycle simply doesn't have enough low-LR epochs to recover.
+
+Key insight: warm restarts presume the budget can absorb the disruption — true at 50+ epochs, false at 14. Single-cycle cosine with T_max matched to actual epoch count remains optimal. The "OOD escape" benefit of restarts wasn't observed: every split (in-dist and OOD) regressed equally, suggesting the model wasn't stuck in a bad local minimum to escape from in the first place.
+
+This closes a major branch of the LR-schedule research direction. Future LR experiments should focus on within-single-cycle refinements (warmup length, eta_min floor, OneCycle policy) rather than multi-cycle approaches at this budget scale.
