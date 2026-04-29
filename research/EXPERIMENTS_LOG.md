@@ -1,5 +1,49 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 03:55 — PR #949: LayerScale γ_init=1e-4 — **PENDING REBASE (then MERGE) — val −4.58% (81.81→78.06), test −3.43% (73.04→70.53)**
+
+- Branch: `willowpai2e4-fern/layerscale-1e-4` (sent back for rebase onto post-#863)
+- Student: willowpai2e4-fern
+- W&B run: [`qb4jaqe1`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/qb4jaqe1)
+- Status: **MERGE PENDING** — Config dataclass hunk-shift from #863 seed fields. No semantic conflict. No re-run needed. W&B verified (all 18 metrics match).
+
+**Hypothesis.** Per-channel learnable residual scaling γ ∈ ℝ^d at γ_init=1e-4 on every block's attn and mlp residual. CaiT precedent. Predicted −1 to −3% val. **Actual: −4.58% val / −3.43% test** (better than top of predicted range).
+
+**Results vs unseeded best 81.81 / test 73.04 (`2akpdg9t`):**
+
+| Metric | Baseline | LayerScale | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.8075 | **78.0627** | **−4.58%** ✓ |
+| `test_avg/mae_surf_p` | 73.04 | **70.5286** | **−3.43%** ✓ |
+| Param count | 661,735 | 663,015 | +1,280 (+0.2%, exact prediction 2×5×128) |
+| Wall time | 30.6 min | 30.1 min | −1.6% |
+| Best epoch | 12/13 | 11/13 | −1 |
+
+**Per-split val (epoch 11):**
+
+| Split | Baseline | LayerScale | Δ | Predicted |
+|---|---:|---:|---:|---|
+| `val_single_in_dist` | 97.53 | **89.35** | **−8.4%** ✓ | gain most |
+| `val_geom_camber_rc` | 94.17 | **86.99** | **−7.6%** ✓ | gain most |
+| `val_geom_camber_cruise` | 59.18 | 61.69 | **+4.2%** ✗ | flat or small gain |
+| `val_re_rand` | 76.36 | **74.23** | **−2.8%** ✓ | modest gain |
+
+Per-split test even better on the harder splits (camber_rc −10.4%, single_in_dist −7.7%) but cruise regresses +11.3% test. Net win because absolute gain on hard splits exceeds absolute loss on cruise.
+
+**Mechanism (rich diagnostic):**
+
+- **γ grew 130-420×** from init (1e-4 → 0.14-0.48 final). Soft-start framing held.
+- **MLP γ uniform across blocks** (~0.46 ± 3%). Every block's FFN contributes equally to residual stream.
+- **Attn γ depth-graded** (block 0: 0.190 → block 4: 0.265). Deeper attention does more heavy lifting.
+- **MLP γ ~2.4× larger than attn γ** on average. FFN residual dominates attn residual.
+- **γ_attn means near zero** (e.g., block 0 mean=0.00132 vs norm=0.190) — bidirectional per-channel gating. MLP appears more uniformly amplifying.
+
+**Cruise regression hypothesis (student's #3 follow-up):** LayerScale's per-channel calibration may be over-amplifying pressure features in high-Re regime that doesn't actually need them on cruise. ch=[1,1,3] already up-weights pressure; LayerScale doubles down. Testable via LayerScale × ch=[1,1,1] uniform weighting. Filed for round-3.
+
+**Decision: PENDING MERGE (pending rebase).** Sent back for mechanical rebase onto post-#863. No re-run needed. Win verified.
+
+**Note on stacking with #963:** #963 (T_max=13) is pending merge with bigger gain (val=64.91, test=57.25). After both merge, LayerScale × T_max=13 retest is high-priority round-3 stack candidate. fern's next assignment (γ_init sweep {1e-3, 1e-5}) will land at T_max=13 once #963 lands.
+
 ## 2026-04-29 03:30 — PR #963: Schedule-to-budget T_max=13 — **PENDING REBASE (then MERGE) — val −20.66% (81.81→64.91), test −21.62% (73.04→57.25). LARGEST SINGLE-PR WIN.**
 
 - Branch: `willowpai2e4-frieren/tmax-13-budget-matched` (sent back for rebase onto post-#863)
