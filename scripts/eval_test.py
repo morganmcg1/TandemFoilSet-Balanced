@@ -176,10 +176,22 @@ class Transolver(nn.Module):
 # ---- Eval helper ----------------------------------------------------------
 
 def evaluate(model, loader, stats, surf_weight, device):
+    """Same semantics as train.py.evaluate_split, but pre-filters batches that
+    contain samples whose ground truth has any non-finite value.
+
+    Why: scoring.accumulate_batch correctly *skips* such samples via its
+    ``y_finite`` check, but the elementwise computation ``err * surf_mask``
+    propagates ``Inf * 0 -> NaN`` and contaminates the running sum. The
+    test_geom_camber_cruise split has one sample (000020.pt) with Inf in p.
+    Dropping such samples at the batch boundary keeps results identical to the
+    organizer scorer for the remaining samples and avoids the NaN explosion.
+    """
+
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_skipped = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -187,6 +199,19 @@ def evaluate(model, loader, stats, surf_weight, device):
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+
+            # Drop samples whose ground truth contains non-finite values
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.all():
+                n_skipped += int((~y_finite).sum().item())
+                if not y_finite.any():
+                    continue
+                idx = y_finite.nonzero().squeeze(-1)
+                x = x[idx]
+                y = y[idx]
+                is_surface = is_surface[idx]
+                mask = mask[idx]
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -207,6 +232,9 @@ def evaluate(model, loader, stats, surf_weight, device):
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
+
+    if n_skipped:
+        print(f"  [eval] skipped {n_skipped} sample(s) with non-finite ground truth")
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
