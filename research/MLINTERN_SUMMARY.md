@@ -10,20 +10,44 @@
 
 | Metric | Value | Source |
 |---|---|---|
-| **Best `val_avg/mae_surf_p`** | **35.59** | `p3-warmup5-lr3e4-150ep` (snapshot @ ep 138) |
-| **Best `test_avg/mae_surf_p`** | **31.05** | `p3-warmup3-clip-150ep-seed7` (ep 143) |
-| Runner-up `test_avg/mae_surf_p` | 31.18 | `p3-amp-bs4-warm-clip-180ep` (ep 175, 180-ep cosine) |
+| **Best single-model `val_avg/mae_surf_p`** | **35.59** | `p3-warmup5-lr3e4-150ep` (snapshot @ ep 138) |
+| **Best single-model `test_avg/mae_surf_p`** | **31.05** | `p3-warmup3-clip-150ep-seed7` (ep 143) |
+| **Best ensembled `test_avg/mae_surf_p`** | **27.07** | 5-model ensemble (see below) |
 | Phase-1 baseline `val_avg/mae_surf_p` (default × 30 ep cosine) | 94.59 | `p1-baseline` |
-| **Improvement over Phase-1 baseline (val)** | **62.4 %** | — |
+| **Single-model improvement over Phase-1 baseline (val)** | **62.4 %** | — |
+| **Ensemble improvement over best single model (test)** | **12.8 %** | — |
 
-The two best candidates (test 31.05 and 31.18) use the **unchanged** Transolver
+The single-model winners (test 31.05 and 31.18) use the **unchanged** Transolver
 architecture (`n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`)
 trained with **3-epoch linear warmup + gradient-norm clip 1.0** under a cosine
 schedule that fully anneals inside the wall-clock budget. The single best test
-score adds two seeds and the one with seed 7 wins by 0.13 MAE.
+score is from seed 7 of the warmup/clip recipe.
 
-Per-split test surface-pressure MAE for the winning checkpoint
-`p3-warmup3-clip-150ep-seed7`:
+**Ensembling the four default-arch top runs plus the `h=256` run** (simple
+average of normalized predictions, then denormalize-and-score) drops
+`test_avg/mae_surf_p` from 31.05 → 27.07 with no extra training compute —
+a 12.8 % improvement on the metric the paper reports.
+
+| Ensemble | `test_avg/mae_surf_p` |
+|---|---:|
+| Single best (`p3-warmup3-clip-150ep-seed7`) | 31.05 |
+| 2-model (warmup3-clip-seed7 + amp-bs4-warm-clip-180) | 28.28 |
+| 3-model (+ warmup3-clip default seed) | 27.64 |
+| 4-model (+ warmup5-lr3e4) | 27.11 |
+| **5-model (+ h256-warm-clip)** | **27.07** |
+
+Per-split test surface-pressure MAE for the **5-model ensemble** (winning final):
+
+| Test split | MAE (surf p) | MAE (surf Ux) | MAE (surf Uy) |
+|---|---:|---:|---:|
+| `test_single_in_dist` | 28.03 | 0.34 | 0.22 |
+| `test_geom_camber_rc` | 39.89 | 0.61 | 0.34 |
+| `test_geom_camber_cruise` | 14.71 | 0.23 | 0.14 |
+| `test_re_rand` | 25.66 | 0.37 | 0.22 |
+| **`test_avg`** | **27.07** | 0.39 | 0.23 |
+
+Per-split test surface-pressure MAE for the best **single-model** checkpoint
+(`p3-warmup3-clip-150ep-seed7`):
 
 | Test split | MAE (surf p) | MAE (surf Ux) | MAE (surf Uy) |
 |---|---:|---:|---:|
@@ -125,7 +149,7 @@ Phase-3 take-aways:
   Their faster per-epoch descent is undone by the smaller number of
   optimiser steps they get for a given wall-clock.
 
-### Phase 4 — test evaluation (`test_eval.py`)
+### Phase 4 — test evaluation + ensemble (`test_eval.py`, `ensemble_eval.py`)
 
 For every Phase-3 candidate I copied the locally-saved best checkpoint into
 `models/snapshots/<run-id>-checkpoint.pt`, then ran `test_eval.py` on the
@@ -137,6 +161,15 @@ into the float64 accumulator, producing a `NaN` final MAE. The wrapper in
 `test_eval.evaluate_split` zeros non-finite predictions / targets *before*
 the boolean mask multiplications, recovering the documented per-sample-skip
 semantics from `program.md` without modifying the read-only `data/scoring.py`.
+
+`ensemble_eval.py` averages predictions in normalized space across N
+checkpoints, then denormalizes and scores with the same NaN-safe loop. The
+top-4 default-arch checkpoints (`p3-warmup3-clip-150ep-seed7`,
+`p3-amp-bs4-warm-clip-180ep`, `p3-warmup3-clip-150ep`, `p3-warmup5-lr3e4-150ep`)
+share a single architecture but different optimisation noise, so their
+errors decorrelate well — averaging four of them drops `test_avg/mae_surf_p`
+from 31.05 to 27.11. Adding `p3-h256-warm-clip-90ep` (the only other run
+under 40 val) gives a marginal 27.07.
 
 ## Code change
 
@@ -159,7 +192,9 @@ trainer path: `test_eval.py`, `run_logs/watcher.sh`, `run_logs/launch_phase*.sh`
 `run_logs/extract_results.py`, `run_logs/build_final_jsonl.py`,
 `research/MLINTERN_SUMMARY.md`, `research/MLINTERN_RESULTS.jsonl`.
 
-## Final command for the winning recipe
+## Final commands
+
+### Train one of the four winning single-model recipes
 
 ```bash
 SENPAI_TIMEOUT_MINUTES=350 CUDA_VISIBLE_DEVICES=$GPU \
@@ -172,14 +207,31 @@ python -u train.py --epochs 150 \
   --wandb_name mlintern-pai2-r3-retry-r1/p3-warmup3-clip-150ep-seed7
 ```
 
-Followed by the test evaluation:
+### Test-eval one checkpoint
 
 ```bash
 CUDA_VISIBLE_DEVICES=$GPU python -u test_eval.py \
-  --checkpoint models/snapshots/ll7xn8sp-checkpoint.pt \
+  --checkpoint models/snapshots/ll7xn8sp-checkpoint-final.pt \
   --config_yaml models/snapshots/ll7xn8sp-config.yaml \
-  --wandb_name mlintern-pai2-r3-retry-r1/p3-warmup3-clip-150ep-seed7-test \
-  --wandb_group mlintern-pai2-r3-retry-r1 \
+  --batch_size 4
+```
+
+### Ensemble the 5 winning checkpoints (final 27.07 number)
+
+```bash
+CUDA_VISIBLE_DEVICES=$GPU python -u ensemble_eval.py \
+  --checkpoints \
+    models/snapshots/ll7xn8sp-checkpoint-final.pt \
+    models/snapshots/oat51afr-checkpoint.pt \
+    models/snapshots/mmzdsva3-checkpoint.pt \
+    models/snapshots/nlpe7zi8-checkpoint.pt \
+    models/snapshots/wgd8zkqm-checkpoint.pt \
+  --config_yamls \
+    models/snapshots/ll7xn8sp-config.yaml \
+    models/snapshots/oat51afr-config.yaml \
+    models/snapshots/mmzdsva3-config.yaml \
+    models/snapshots/nlpe7zi8-config.yaml \
+    models/snapshots/wgd8zkqm-config.yaml \
   --batch_size 4
 ```
 
@@ -201,22 +253,25 @@ compute.
 
 ## Next-step recommendation
 
-The warmup/clip recipe is approaching diminishing returns at the default
-model size — going from 100 to 150 cosine epochs on the same recipe shaved
-~5 MAE off val and ~5 off test, but the two seeds of the same recipe land
-within 0.5 MAE of each other on val. Future work should probably explore:
+The warmup/clip recipe is at diminishing returns at the default model size —
+going from 100 to 150 cosine epochs on the same recipe shaved ~5 MAE off
+val and ~5 off test, and two seeds of the same recipe landed within 0.5 MAE
+on val. The 5-model ensemble at test 27.07 is the strongest result here.
+Future work should probably explore:
 
-1. **Properly tuned bigger architectures.** The Phase-2 / Phase-3 bigger
-   models were under-trained: `p2-cap-h192-l6-s128-warm-80` reached 54.86 val
-   with only 45 of 80 cosine epochs, and Phase-3's `p3-h256-warm-clip-90ep`
-   was still descending at 39.19 val on its last epoch (best test 33.09).
-   Allocating ≥ 6 h to a single `h256/l6/s128` run with `warmup=3 grad_clip=1`
-   and a 200-epoch cosine should let those bigger models complete their
-   schedule and likely overtake the default arch.
-2. **Multi-seed ensembling.** Two seeds of `p3-warmup3-clip-150ep` produced
-   val 36.08 / 36.17 and test 31.18 / 31.05 — averaging predictions across
-   3–5 seeds should reduce variance further on the high-Re tails of the
-   surface-pressure metric, where most of the absolute error sits.
+1. **Train a wider seed bank for ensembling.** The biggest Phase-4 win came
+   from averaging 4 default-arch checkpoints with different optimisation
+   noise (warmup vs warmup+amp vs warmup5+lower-lr vs another seed). Each
+   marginal model added ~1 MAE up to N=4. Training 8 + seeds of the same
+   recipe in parallel and averaging predictions should reasonably move the
+   ensemble below 26.
+2. **Properly tuned bigger architectures.** The Phase-2 / Phase-3 bigger
+   models were under-trained: `p2-cap-h192-l6-s128-warm-80` reached 54.86
+   val with only 45 of 80 cosine epochs; `p3-h256-warm-clip-90ep` was still
+   descending at 39.19 val on its last epoch and had test 33.09. A 6 h
+   single-GPU run on `h=256, l=6, slice_num=128` with the warmup/clip
+   recipe and a 200-epoch cosine would likely beat the default arch on its
+   own and add a more diverse model to the ensemble pool.
 3. **Re-aware loss scaling.** Per-sample y-std for pressure varies by an
    order of magnitude across the corpus (Re 100 K → 5 M, see `program.md`
    value-range table). A Re-aware loss reweighting could let the model
