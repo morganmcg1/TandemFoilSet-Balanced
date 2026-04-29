@@ -83,22 +83,22 @@ class MLP(nn.Module):
 
 
 class SharedFiLMGenerator(nn.Module):
-    """Single shared FiLM generator: scalar log(Re) → (gamma, beta) for all layers."""
+    """Single shared FiLM generator: 5-D Re feature vector → (gamma, beta) for all layers."""
 
-    def __init__(self, n_hidden: int, n_layers: int):
+    def __init__(self, n_hidden: int, n_layers: int, in_dim: int = 5):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(1, n_hidden),
+            nn.Linear(in_dim, n_hidden),
             nn.GELU(),
             nn.Linear(n_hidden, n_hidden * 2 * n_layers),
         )
         self.n_hidden = n_hidden
         self.n_layers = n_layers
 
-    def forward(self, log_re: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        if log_re.dim() == 1:
-            log_re = log_re.unsqueeze(-1)
-        out = self.net(log_re)
+    def forward(self, re_feat: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        if re_feat.dim() == 1:
+            re_feat = re_feat.unsqueeze(-1)
+        out = self.net(re_feat)
         pairs = []
         for i in range(self.n_layers):
             offset = i * self.n_hidden * 2
@@ -268,8 +268,17 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        log_re_sample = x[:, 0, 13].unsqueeze(-1)  # [B, 1] normalized log(Re) per sample
-        film_pairs = self.film_generator(log_re_sample)
+        log_re = x[:, 0, 13].unsqueeze(-1)  # [B, 1] normalized log(Re) per sample
+        # Build 5-D Re feature vector: [log_re, log_re², 1/log_re, sin(2π·log_re/LOG_RE_MAX), cos(2π·log_re/LOG_RE_MAX)]
+        log_re_sq = log_re ** 2
+        inv_log_re = 1.0 / (log_re + 1e-6)
+        LOG_RE_MAX = 15.4  # log(5e6) ≈ 15.4 — fixed scale for sin/cos period
+        sin_re = torch.sin(2 * torch.pi * log_re / LOG_RE_MAX)
+        cos_re = torch.cos(2 * torch.pi * log_re / LOG_RE_MAX)
+        re_feat = torch.cat([log_re, log_re_sq, inv_log_re, sin_re, cos_re], dim=-1)  # [B, 5]
+        # Per-batch standardization to ~zero mean / unit std before MLP
+        re_feat = (re_feat - re_feat.mean(dim=0, keepdim=True)) / (re_feat.std(dim=0, keepdim=True) + 1e-6)
+        film_pairs = self.film_generator(re_feat)
         xy = x[:, :, :2]
         fourier_feats = self.fourier_pos(xy)
         x_aug = torch.cat([fourier_feats, x[:, :, 2:]], dim=-1)
