@@ -424,6 +424,7 @@ class Config:
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 disables warmup)
+    adamw_beta1: float = 0.9  # AdamW beta1 (first moment decay). Default 0.9 (PyTorch default).
     adamw_beta2: float = 0.999  # AdamW beta2 (second moment decay). Default 0.999 (PyTorch default).
     one_cycle_lr: bool = False  # opt-in: use OneCycleLR instead of SequentialLR/CosineAnnealingLR
     one_cycle_max_lr: float = 2e-3  # OneCycleLR max_lr (only used when --one_cycle_lr)
@@ -485,7 +486,7 @@ optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, cfg.adamw_beta2),
+    betas=(cfg.adamw_beta1, cfg.adamw_beta2),
 )
 steps_per_epoch = len(train_loader)
 if cfg.one_cycle_lr:
