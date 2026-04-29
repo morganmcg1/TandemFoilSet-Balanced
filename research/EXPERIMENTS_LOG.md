@@ -2,6 +2,45 @@
 
 <!-- This log is maintained by the advisor. Each entry records a reviewed experiment PR. -->
 
+## 2026-04-29 06:00 — PR #1013: n_layers=1 + bf16 depth floor (MERGED — LANDMARK NEW BEST 47.7385, −24.3%)
+- Branch: charliepai2e5-tanjiro/n-layers-2-bf16-depth-floor (squash-merged into icml-appendix-charlie-pai2e-r5)
+- Hypothesis: Continue depth-shallowing below n_layers=3; test n_layers=2 and n_layers=1 with bf16 to find the generalization floor. The monotonic depth-shallowing trend (n_layers=6→3 showed consistent wins) suggests n_layers=1 may be optimal for this small dataset.
+- Results (rebased on PR #913 config: bf16 + Lion + L1 + clip=1.0 + T_max=15 + EMA=0.995 + sw=28):
+
+  | Config | Best epoch | val_avg/mae_surf_p | Δ vs baseline 63.0588 |
+  |--------|------------|-------------------:|----------------------:|
+  | **n_layers=1+bf16** ⭐ | **50** | **47.7385** | **−24.3%** |
+  | n_layers=2+bf16 | ~50 | 47.9732 | −23.9% |
+  | n_layers=3+bf16 (baseline PR #913) | 29 | 63.0588 | — |
+
+  Per-split at n_layers=1 (best result):
+
+  | Split | surf Ux | surf Uy | surf p |
+  |-------|--------:|--------:|-------:|
+  | val_single_in_dist | — | — | 49.6805 |
+  | val_geom_camber_rc | — | — | 60.8209 |
+  | val_geom_camber_cruise | — | — | 30.5543 |
+  | val_re_rand | — | — | 49.8983 |
+  | **avg** | — | — | **47.7385** |
+
+  Metric files: `metrics/` (student branch, squash-merged)
+
+- Analysis: **LANDMARK WIN — Merged as new baseline (47.7385, −24.3% vs 63.0588).** Three critical findings:
+
+  1. **Depth-shallowing trend is monotonic and continues past n_layers=3**: Full trajectory: n_layers=6 (~70.x) → n=5 (67.25) → n=4 (65.37) → n=3 (63.06) → n=2 (47.97) → **n=1 (47.74)**. The jump from n=3→n=2 is the single largest gain (−24.3%) — not just another incremental improvement.
+
+  2. **n_layers=1 and n_layers=2 nearly tied** (47.74 vs 47.97, only 0.23 difference). This suggests the minimum has been found at depth — the Transolver with a single transformer block is the correct inductive bias for TandemFoilSet's ~1.5K samples. The dataset is severely over-parameterized at depth.
+
+  3. **T_max critical misalignment revealed**: T_max=15 was calibrated for 14 fp32 epochs. n_layers=1 with bf16 runs ~50 epochs in the same wall-clock budget — the cosine schedule now cycles 3× over training. n_layers=1 best epoch is 50 (reached full budget, still improving), whereas n_layers=3 best was epoch 29. T_max=50 is the correct target for single-cycle alignment at n_layers=1 — this is the highest-priority unresolved misalignment. PR #1014 (askeladd) must extend sweep to T_max=50.
+
+  4. **9 GB VRAM peak at n_layers=1** (vs 96 GB available): Massive headroom for width expansion. n_hidden 128→256 or 512 is the next architectural lever. The model likely needs width to compensate for the expressiveness lost from depth reduction.
+
+  5. **camber_rc still the hardest split** (60.82 vs 30.55 for camber_cruise): −22% improvement vs old 77.69 (PR #913) — depth reduction helps OOD generalization, but the gap is still large. Focal L1 (#1035 alphonse) specifically targets this split.
+
+  **New baseline: val_avg/mae_surf_p = 47.7385.**
+  **All subsequent experiments must rebase on: n_layers=1 + bf16 + Lion + L1 + clip=1.0 + T_max=15 + EMA=0.995 + sw=28.**
+  **URGENT: T_max=15 is now misaligned (3× cycles over 50 epochs) — T_max=50 is the correct target.**
+
 ## 2026-04-29 04:00 — PR #913: n_layers depth sweep + bf16 autocast (MERGED — NEW BEST 63.0588)
 - Branch: charliepai2e5-tanjiro/n-layers-depth-sweep (squash-merged into icml-appendix-charlie-pai2e-r5)
 - Hypothesis: Shallower Transolver (fewer layers) may generalize better on this dataset; combined with bf16 autocast for ~1.7× throughput gain, enabling more epochs within the wall-clock budget.
