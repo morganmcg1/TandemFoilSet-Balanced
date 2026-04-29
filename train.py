@@ -21,7 +21,7 @@ import json
 import os
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import simple_parsing as sp
@@ -218,12 +218,22 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def per_sample_norm_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+def per_sample_norm_mse(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    channel_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
     """MSE normalized per sample by the target's per-sample std.
 
     pred, target: [B, N, C]; mask: [B, N] (True for real nodes).
     Each sample's MSE is divided by its own ``target.std()**2`` so high-Re
     and low-Re samples contribute equally to the gradient.
+
+    If ``channel_weights`` is provided ([C]), per-channel squared errors are
+    multiplied by the channel weight before the mean reduction. This lets us
+    bias the gradient signal toward a particular output channel (e.g. pressure)
+    while preserving the per-sample variance normalization.
     """
     B = pred.shape[0]
     losses = []
@@ -232,7 +242,10 @@ def per_sample_norm_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Te
         p = pred[b][m]
         t = target[b][m]
         t_std = t.std().clamp(min=1e-6)
-        sample_loss = ((p - t) ** 2).mean() / (t_std ** 2)
+        err_sq = (p - t) ** 2
+        if channel_weights is not None:
+            err_sq = err_sq * channel_weights[None, :]
+        sample_loss = err_sq.mean() / (t_std ** 2)
         losses.append(sample_loss)
     return torch.stack(losses).mean()
 
@@ -406,14 +419,24 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    channel_weights: list[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+if len(cfg.channel_weights) != 3:
+    raise ValueError(
+        f"--channel_weights must have exactly 3 values (Ux, Uy, p); got {cfg.channel_weights}"
+    )
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Channel weights (Ux, Uy, p): {cfg.channel_weights}")
+channel_w_tensor: torch.Tensor | None = None
+if any(w != 1.0 for w in cfg.channel_weights):
+    channel_w_tensor = torch.tensor(cfg.channel_weights, device=device, dtype=torch.float32)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -537,8 +560,8 @@ for epoch in range(MAX_EPOCHS):
         # target std^2 so high-Re (large-y) and low-Re (small-y) samples
         # contribute equally to the gradient (analogous to relative L2 in FNO).
         surf_mask = mask & is_surface.bool()
-        vol_loss = per_sample_norm_mse(pred, y_norm, mask)
-        surf_loss = per_sample_norm_mse(pred, y_norm, surf_mask)
+        vol_loss = per_sample_norm_mse(pred, y_norm, mask, channel_w_tensor)
+        surf_loss = per_sample_norm_mse(pred, y_norm, surf_mask, channel_w_tensor)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
