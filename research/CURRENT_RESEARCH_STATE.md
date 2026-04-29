@@ -7,9 +7,12 @@
 **val_avg/mae_surf_p = 47.3987** (PR #1093, merged 2026-04-29)
 Configuration: Lion + L1 + EMA(0.995) + bf16 + n_layers=1 + surf_weight=28 + cosine T_max=15 + clip_grad=1.0 + n_hidden=128 + n_head=4 + slice_num=64 + mlp_ratio=2 + batch_size=4 + 50 epochs
 
-## First confirmed signal of round 3
+## Confirmed signals of round 3 (both pending rebase)
 
-PR #1106 (frieren — Fourier positional encoding on (x, z), freqs `{1, 2, 4, 8, 16}×π`) reached **val_avg/mae_surf_p = 45.3304** against the previous reference (47.7385), still descending at epoch 50. test_avg/mae_surf_p = 38.1284. Sent back for rebase onto #1093 anchor before merging; expected to land if the rebased run reproduces ≤ ~46. Same PR ships a critical NaN guard in `evaluate_split` (sample 20 of `test_geom_camber_cruise` has 761 inf ground-truth entries that contaminate bf16 test metrics via `inf * 0`); this fix needs to land regardless of the experiment outcome.
+1. **PR #1104 — edward, FiLM global conditioning (Re/AoA/NACA)** — `val_avg/mae_surf_p = 42.3822` against reference 47.7385 (−11.2%) and against the new anchor 47.3987 (−10.6%). All four val splits improve. test_avg (post-fix rerun) = 35.8802 bf16 / 35.8504 fp32. Best epoch = 50 (still descending). DiT-style zero-init, scale+shift on both attn and MLP sublayers, conditioning read from node 0. Top priority of the round; sent back for rebase. Gate to merge: val_avg ≤ ~45.
+2. **PR #1106 — frieren, Fourier positional encoding on (x, z)** — `val_avg/mae_surf_p = 45.3304` against reference 47.7385 (−5.05%) and against the new anchor 47.3987 (−4.36%). 3/4 splits improve, val_geom_camber_rc flat. test_avg/mae_surf_p = 38.1284. Best epoch = 50 (still descending). Sent back for rebase. Gate to merge: val_avg ≤ ~46.
+
+Both PRs ship a fix for the same critical NaN-leak bug in `evaluate_split` (sample 20 of `test_geom_camber_cruise` has 761 inf ground-truth entries that contaminate bf16 test metrics via `inf * 0`); the fix needs to land regardless of which experiment lands first.
 
 ## Current Research Focus
 
@@ -22,7 +25,7 @@ charlie-pai2f round 3: build on the newly merged compound baseline (PR #1093). B
 | PR   | Student   | Hypothesis                                                        | Status |
 |------|-----------|-------------------------------------------------------------------|--------|
 | #1103 | askeladd  | `slice_num` sweep {32, 64, 128}                                  | wip |
-| #1104 | edward    | FiLM global conditioning (Re/AoA/NACA via scale+shift on hidden states) | wip |
+| #1104 | edward    | FiLM global conditioning (Re/AoA/NACA via scale+shift on hidden states) — **REBASE** | wip (draft, sent back) |
 | #1105 | fern      | Per-channel pressure weight W_p sweep {2, 3, 5}                  | wip |
 | #1106 | frieren   | Fourier positional encoding on (x,z) — REBASE                    | wip (draft, sent back) |
 | #1107 | nezuko    | EMA decay sweep {0.99, 0.995, 0.999}                             | wip |
@@ -32,9 +35,9 @@ charlie-pai2f round 3: build on the newly merged compound baseline (PR #1093). B
 
 ## Current Research Themes
 
-1. **Positional / geometric representation** — Fourier positional encoding (frieren, leading signal). Natural follow-ups: frequency-count sweep, learnable Gaussian frequencies (Tancik et al. 2020), Fourier expansion of the 8-dim `dsdf` distance descriptor.
-2. **Architecture capacity** — slice_num (askeladd), n_hidden width (tanjiro)
-3. **Physics conditioning** — FiLM global conditioning (edward), boundary-layer features (thorfinn)
+1. **Physics conditioning** — FiLM global conditioning (edward, **leading signal at −10.6%**), boundary-layer features (thorfinn). Strongest current direction.
+2. **Positional / geometric representation** — Fourier positional encoding (frieren, second-strongest signal at −4.4%). Natural follow-ups: frequency-count sweep, learnable Gaussian frequencies (Tancik et al. 2020), Fourier expansion of the 8-dim `dsdf` distance descriptor.
+3. **Architecture capacity** — slice_num (askeladd), n_hidden width (tanjiro)
 4. **Training dynamics** — EMA decay (nezuko), extended training/schedule shape (alphonse)
 5. **Loss weighting** — Per-channel pressure weight W_p sweep (fern)
 
