@@ -75,6 +75,7 @@ Round 2 continues the sweep with hypotheses that:
 - **PR #1160 (alphonse, swiglu-ffn)** — H-11 SwiGLU FFN replacing GELU MLP in TransolverBlock, param-matched. Different capacity axis from his prior width-scaling attempt. ~5-7% slower per epoch. Strong priors (LLaMA, PaLM, Mixtral). Expected -1% to -3%.
 - **PR #1162 (fern, scale-norm-loss)** — H-03 Per-sample scale-normalized loss. Divides each sample's training loss by its own y_std before averaging — directly addresses the 10× per-sample y_std spread documented in DATASET_ANALYSIS.md. Zero throughput cost. Expected -2% to -6%.
 - **PR #1165 (frieren, rff-64)** — RFF n_freq sweep follow-up to merged #1138. Tests if RFF is capacity-limited at n_freq=32. Single-variable ablation: same RFF, same sigma, just doubled frequency components. Best-epoch=last on the merged baseline → model still hungry; +0.03M params, zero throughput cost. Expected -1% to -3% if capacity-limited; flat otherwise.
+- **PR #1176 (askeladd, re-stratified-sampler)** — H-13 Re-stratified sampling. Replace domain-balanced sampler with one that multiplies domain weights by `log(1 + per_sample_y_std_p)` (normalized to unit mean). Upweights hard high-Re samples within each domain, focusing the limited 14-epoch budget on gradient-rich samples. Zero throughput cost. Orthogonal to RFF and schedule. Expected -2% to -5%.
 
 ## Round 1 in-flight (revisions waiting)
 
