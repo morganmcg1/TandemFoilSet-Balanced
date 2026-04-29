@@ -151,3 +151,34 @@ Primary metric: `val_avg/mae_surf_p` (lower is better)
 - Architecture unchanged: `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, 0.66M params.
 - Optimizer: AdamW, `lr=2e-4`, `weight_decay=1e-4`, `surf_weight=20.0`, cosine T_max=14.
 - `test_geom_camber_cruise` p NaN is pre-existing scoring pipeline issue.
+
+---
+
+## 2026-04-29 — PR #871: Grad-clip + lr=2e-4 + per-sample norm: triple stabilization
+
+- **Branch:** askeladd/grad-clip-per-sample-norm-lr2e4
+- **Best epoch:** 14 of 14 (final epoch best — model still improving, clipping active 100% of batches)
+- **Surface MAE (val, best ckpt):** Ux=1.4046, Uy=0.6882, **p=95.6617**
+- **Volume MAE (val, best ckpt):** Ux=4.4974, Uy=2.1069, p=112.3271
+- **val_avg/mae_surf_p: 95.6617** ← current best (was 102.9421, **−7.1%** — sub-100 achieved)
+- **Metric summary:** `metrics/charliepai2e4-askeladd-grad-clip-lr2e4-per-sample-norm-surf20-ufu7itlb.jsonl`
+- **Reproduce:** `cd target/ && python train.py --surf_weight 20.0 --lr 2e-4 --grad_clip 1.0 --loss_kind per_sample_norm_mse --epochs 14`
+
+### Per-split breakdown
+
+| Split | surf Ux | surf Uy | surf p | vol Ux | vol Uy | vol p |
+|---|---:|---:|---:|---:|---:|---:|
+| val_single_in_dist     | 1.3427 | 0.6899 | 115.2536 | 5.1963 | 2.2326 | 148.4179 |
+| val_geom_camber_rc     | 2.0870 | 0.9032 | 104.6421 | 5.3562 | 2.8916 | 120.9540 |
+| val_geom_camber_cruise | 0.7879 | 0.4812 |  73.5144 | 3.3225 | 1.3328 |  81.4751 |
+| val_re_rand            | 1.4008 | 0.6785 |  89.2369 | 4.1147 | 1.9706 |  98.4614 |
+| **avg**                | **1.4046** | **0.6882** | **95.6617** | **4.4974** | **2.1069** | **112.3271** |
+
+### Notes
+- Gradient clipping (max_norm=1.0) confirmed critical: pre-clip norms were 35–105× above max_norm throughout training (grad_clip_frac=1.0 every epoch).
+- Achieves the sub-100 stretch goal: val_avg/mae_surf_p = 95.66 < 100.
+- Best epoch = last epoch: model still improving at epoch 14 — T_max=14 LR schedule fully annealed to 0.
+- Pre-clip grad norm declines monotonically: 105.7 (ep1) → 36.8 (ep14) — clipping reduces gradient scale steadily.
+- Test results: `test_geom_camber_cruise` p NaN (pre-existing scoring pipeline overflow); `test_single_in_dist` p=99.98; `test_geom_camber_rc` p=92.41; `test_re_rand` p=85.15.
+- Architecture unchanged: `n_hidden=128`, `n_layers=5`, `n_head=4`, `slice_num=64`, `mlp_ratio=2`, 662K params.
+- Optimizer: AdamW, `lr=2e-4`, `weight_decay=1e-4`, `surf_weight=20.0`, `grad_clip=1.0`, cosine T_max=14.
