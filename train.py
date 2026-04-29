@@ -202,9 +202,11 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 use_swiglu: bool = False):
+                 use_swiglu: bool = False,
+                 use_layerscale: bool = False, layerscale_init: float = 1e-4):
         super().__init__()
         self.last_layer = last_layer
+        self.use_layerscale = use_layerscale
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -216,6 +218,9 @@ class TransolverBlock(nn.Module):
         else:
             self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                            n_layers=0, res=False, act=act)
+        if self.use_layerscale:
+            self.gamma_attn = nn.Parameter(torch.ones(hidden_dim) * layerscale_init)
+            self.gamma_mlp  = nn.Parameter(torch.ones(hidden_dim) * layerscale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -224,8 +229,12 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        if self.use_layerscale:
+            fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
+            fx = self.gamma_mlp  * self.mlp(self.ln_2(fx)) + fx
+        else:
+            fx = self.attn(self.ln_1(fx)) + fx
+            fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -237,7 +246,8 @@ class Transolver(nn.Module):
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None,
-                 use_swiglu: bool = False):
+                 use_swiglu: bool = False,
+                 use_layerscale: bool = False, layerscale_init: float = 1e-4):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -259,6 +269,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 use_swiglu=use_swiglu,
+                use_layerscale=use_layerscale, layerscale_init=layerscale_init,
             )
             for i in range(n_layers)
         ])
@@ -507,6 +518,8 @@ class Config:
     use_swiglu: bool = False  # True = swap per-block MLP from GELU to SwiGLU
     seed: int = 0  # global seed for torch / numpy / random / sampler / DataLoader
     t_max: int = 0  # 0 = use cfg.epochs; >0 = override CosineAnnealing T_max (e.g., 13 for budget-matched)
+    use_layerscale: bool = False  # CaiT-style per-channel learnable residual scaling
+    layerscale_init: float = 1e-4  # gamma initialization (1e-4 from CaiT-S)
 
 
 cfg = sp.parse(Config)
@@ -556,6 +569,8 @@ model_config = dict(
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
     use_swiglu=cfg.use_swiglu,
+    use_layerscale=cfg.use_layerscale,
+    layerscale_init=cfg.layerscale_init,
 )
 
 model = Transolver(**model_config).to(device)
@@ -589,6 +604,28 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+if cfg.use_layerscale:
+    wandb.define_metric("layerscale/*", step_metric="global_step")
+
+
+def collect_layerscale_stats(prefix: str) -> dict[str, float]:
+    """Per-block gamma_attn / gamma_mlp norms + max-channel magnitudes."""
+    stats_out: dict[str, float] = {}
+    for i, blk in enumerate(model.blocks):
+        ga, gm = blk.gamma_attn.detach(), blk.gamma_mlp.detach()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_attn_norm"] = ga.norm().item()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_mlp_norm"]  = gm.norm().item()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_attn_max"]  = ga.abs().max().item()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_mlp_max"]   = gm.abs().max().item()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_attn_mean"] = ga.mean().item()
+        stats_out[f"layerscale/{prefix}/block_{i}/gamma_mlp_mean"]  = gm.mean().item()
+    return stats_out
+
+
+if cfg.use_layerscale:
+    init_stats = collect_layerscale_stats("init")
+    init_stats["global_step"] = 0
+    wandb.log(init_stats)
 
 wandb.summary["scheduler/t_max"] = t_max
 wandb.summary["scheduler/max_epochs_configured"] = MAX_EPOCHS
@@ -690,6 +727,8 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    if cfg.use_layerscale:
+        log_metrics.update(collect_layerscale_stats("epoch"))
     wandb.log(log_metrics)
 
     tag = ""
@@ -714,6 +753,18 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if cfg.use_layerscale:
+    final_stats = collect_layerscale_stats("final")
+    wandb.log(final_stats)
+    wandb.summary.update(final_stats)
+    print("\nFinal LayerScale gamma norms (per-block):")
+    for i in range(len(model.blocks)):
+        ga_n = final_stats[f"layerscale/final/block_{i}/gamma_attn_norm"]
+        gm_n = final_stats[f"layerscale/final/block_{i}/gamma_mlp_norm"]
+        ga_x = final_stats[f"layerscale/final/block_{i}/gamma_attn_max"]
+        gm_x = final_stats[f"layerscale/final/block_{i}/gamma_mlp_max"]
+        print(f"  block {i}: gamma_attn[norm={ga_n:.4f} max={ga_x:.4f}]  gamma_mlp[norm={gm_n:.4f} max={gm_x:.4f}]")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
