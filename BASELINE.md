@@ -23,7 +23,8 @@ denormalized target space.
 
 | PR   | W&B run    | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes                                |
 |------|------------|---------------------|---------------------|--------------------------------------|
-| **#881** | [jej4y8gt](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/jej4y8gt) | **85.23** | **76.64** | Huber δ=0.1 + EMA=0.99, no clip/warmup, epoch 14, **MERGED ✓** |
+| **#862** | [jsat9zk5](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/jsat9zk5) | **82.64** | **73.02** | slice=32 + 4-way stack (δ=0.5+EMA+clip+w0), epoch 16, **MERGED ✓** |
+| #881 | [jej4y8gt](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/jej4y8gt) | 85.23 | 76.64 | Huber δ=0.1 + EMA=0.99, no clip/warmup, **MERGED ✓** |
 | #775 | [h22uwyy3](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/h22uwyy3) | 96.54 | 85.33 | warmup=0 + clip=0.5 + Huber δ=0.5 + EMA=0.99, **MERGED ✓** |
 | #769 | [hp87pun7](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/hp87pun7) | 102.86 | 94.83 | Huber δ=0.5, no clip, no EMA, **MERGED ✓** |
 | #773 | [5yzk5722](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/5yzk5722) | 119.35 | 108.79 | EMA decay=0.99, no Huber, **MERGED ✓** |
@@ -33,32 +34,40 @@ denormalized target space.
 - EMA alone (PR #773): −15.4% val / −15.3% test
 - Huber δ=0.5 alone (PR #769): −27.0% val / −26.2% test
 - clip=0.5 + warmup=0 + Huber δ=0.5 + EMA=0.99 (PR #775): −31.5% val / −33.5% test
-- **Huber δ=0.1 + EMA=0.99 (PR #881): −39.5% val / −40.3% test** — *new best*
+- Huber δ=0.1 + EMA=0.99 (PR #881): −39.5% val / −40.3% test
+- **slice=32 + 4-way stack (PR #862): −41.4% val / −43.1% test** — *new best*
 
-**Note on δ=0.1 vs full 4-way stack:** PR #881 (δ=0.1 + EMA, no clip) beats PR #775 (δ=0.5 + EMA + clip + warmup=0) by 11.7% val. This does NOT mean clip/warmup hurt — it means δ=0.1 is the dominant lever. Whether δ=0.1 + clip + warmup=0 + EMA (5-way stack) improves further is an open question assigned to alphonse (PR in flight).
+**Note on parallel branches:** PR #862 (val=82.64) is on δ=0.5 + clip + EMA + slice=32. PR #881 (val=85.23) is on δ=0.1 + EMA only (no clip, no slice change). The slice=32 + δ=0.1 combination is untested — frieren's follow-up will probe it.
 
-## Per-split test metrics (current best — PR #881, Huber δ=0.1 + EMA=0.99)
+## Per-split test metrics (current best — PR #862, slice=32 + 4-way stack)
 
 | Split                      | test/mae_surf_p |
 |----------------------------|----------------|
-| test_single_in_dist        | 94.31          |
-| test_geom_camber_rc        | 86.19          |
-| test_geom_camber_cruise    | **53.08**      |
-| test_re_rand               | 72.97          |
+| test_single_in_dist        | 87.34          |
+| test_geom_camber_rc        | 83.28          |
+| test_geom_camber_cruise    | **50.90**      |
+| test_re_rand               | 70.56          |
 
-Biggest gain: cruise −30.3% vs Huber-δ=0.5-alone (76.12→53.08).
+Biggest gain: cruise 50.90 (vs 53.08 PR #881, vs 76.12 Huber-δ=0.5-alone).
 
 ## Reproduce best checkpoint
 
 ```bash
 cd target/
-python train.py --agent willowpai2e1-alphonse \
-    --wandb_group huber-ema-stack --wandb_name huber0.1-ema0.99 \
-    --huber_delta 0.1 --ema_decay 0.99
+python train.py --agent willowpai2e1-frieren \
+    --wandb_group slice-scan-v2 --wandb_name slice32-fullstack \
+    --warmup_epochs 0 --clip_norm 0.5 --huber_delta 0.5 --ema_decay 0.99 \
+    --slice_num 32
 ```
 
 **Minimum required flags for all future experiments:**
 ```
---huber_delta 0.1 --ema_decay 0.99
+--huber_delta 0.1 --ema_decay 0.99    (or --huber_delta 0.5 --clip_norm 0.5 --warmup_epochs 0 --ema_decay 0.99 if slice=32)
+--slice_num 32                        (clear architectural win on full stack)
 ```
-Whether clip+warmup=0 helps on top of δ=0.1 is under active investigation (5-way stack test in flight).
+
+**Two parallel best stacks:**
+1. **PR #862:** slice=32 + δ=0.5 + clip=0.5 + warmup=0 + EMA=0.99 → val=82.64 / test=73.02
+2. **PR #881:** slice=64 + δ=0.1 + EMA=0.99 (no clip/warmup) → val=85.23 / test=76.64
+
+The fully-merged combination (slice=32 + δ=0.1 + ...) is being tested next.
