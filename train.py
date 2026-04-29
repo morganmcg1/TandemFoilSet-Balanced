@@ -401,7 +401,31 @@ if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    # Re-stratified sampling: upweight hard samples by log(1 + per-sample p_std)
+    # while preserving domain balance from sample_weights.
+    t_pstd = time.time()
+    train_p_stds = []
+    for i in tqdm(range(len(train_ds)), desc="Precompute p_std", leave=False):
+        sample = train_ds[i]
+        x = sample[0]
+        y = sample[1]
+        surf_mask = x[:, 12].bool()
+        p_surf = y[surf_mask, 2]
+        std_val = p_surf.std().item() if p_surf.numel() > 1 else 1.0
+        train_p_stds.append(max(std_val, 1e-6))
+    train_p_stds = torch.tensor(train_p_stds, dtype=torch.float64)
+
+    importance_weights = torch.log1p(train_p_stds)
+    importance_weights = importance_weights / importance_weights.mean()
+    combined_weights = sample_weights * importance_weights
+
+    print(
+        f"[sampler] p_std range: {train_p_stds.min():.2f} – {train_p_stds.max():.2f}, "
+        f"importance weight range: {importance_weights.min():.3f} – {importance_weights.max():.3f} "
+        f"(precompute {time.time() - t_pstd:.1f}s)"
+    )
+
+    sampler = WeightedRandomSampler(combined_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
