@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated:** 2026-04-29 01:05 UTC
+- **Updated:** 2026-04-29 01:10 UTC
 - **Track:** `icml-appendix-willow-pai2e-r1` (TandemFoilSet ICML appendix, Willow PAI2E Round 1)
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1`
 - **Most recent direction from human researcher team:** _(none — no open ADVISOR issues)_
@@ -32,7 +32,7 @@ Four independent wins are now stacked and confirmed. The core stack is:
 | PR | Student | Hypothesis | Status |
 |----|---------|------------|--------|
 | #881 | alphonse | Huber δ ∈ {0.1,0.25,0.5} + EMA stack (no clip — pre-stack) | Status:WIP |
-| #867 | edward | AdamW β₂ scan {0.95,0.99,0.999,0.9999} + EMA (no clip — pre-stack) | Status:WIP |
+| #951 | edward | Per-channel Huber δ: δ_p ∈ {0.1,0.25,0.5,1.0} vs δ_vel=0.5 on full stack | Status:WIP |
 | #859 | fern | Surface weight scan sw ∈ {10,15,20,30} + Huber+EMA+clip full stack | Status:WIP (rebase) |
 | #860 | thorfinn | OneCycle schedule on full 4-way stack (cosine vs onecycle + full stack) | Status:WIP (rebase) |
 | #862 | frieren | Slice scan downward {32,48,64} + full 4-way stack | Status:WIP (rebase) |
@@ -47,7 +47,7 @@ Four independent wins are now stacked and confirmed. The core stack is:
 3. **Does OneCycle schedule help on full 4-way stack?** (thorfinn #860 rebase). OneCycle gave +5.3% over EMA-only; needs retest on full stack. This is likely the most impactful pending question.
 4. **Does lower slice_num {32,48} beat 64 on full stack?** (frieren #862 rebase). Monotone regression at higher slices suggests 32 or 48 may win; each step also frees VRAM.
 5. **Does surf_weight scan help with full stack?** (fern #859 rebase). Huber may already implicitly upweight surface vs volume (volume residuals are larger → more linear attenuation); optimum sw may shift from 20 toward 10 or 15.
-6. **Does β₂ < 0.999 help?** (edward #867). With persistent heavy-tailed grads (median pre-clip ~45-60), faster second-moment adaptation is theoretically motivated.
+6. **Does per-channel Huber δ (δ_p < δ_vel) help?** (edward #951). Pressure has heaviest residual tails — per-channel δ_p=0.25 vs δ_vel=0.5 should concentrate pressure outlier robustness where it matters most. (**β₂ scan closed as dead end** — β₂=0.999 is already optimal; β₂=0.95 ties at best.)
 
 ## Potential next research directions
 
@@ -58,7 +58,7 @@ Four independent wins are now stacked and confirmed. The core stack is:
 
 **After current wave completes:**
 - **Per-channel Huber δ**: δ_p smaller than δ_Ux/Uy (pressure residuals have different tail shape)
-- **AdamW β₂ with clip in place**: edward's scan is without clip; clip bounds Adam's input, so β₂ sensitivity may change (edward suggested this in his follow-up)
+- **AdamW β₂ with clip** (low priority): β₂=0.999 is at the optimum without clip (PR #867 closed). β₂=0.95 ties the control, so the interaction with clip is marginal. Defer unless other directions stall.
 - **EMA decay scan with full stack**: PR #773 fixed decay=0.99 without clip; clip smooths per-step gradients, so longer EMA half-lives (0.995, 0.999) may benefit
 - **OneCycle peak_lr and pct_start tuning**: thorfinn's follow-ups #1–#3
 

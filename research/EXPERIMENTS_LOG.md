@@ -1,5 +1,34 @@
 # SENPAI Research Results
 
+## 2026-04-29 01:05 — PR #867: AdamW β₂ scan with EMA ✗ CLOSED (hypothesis rejected)
+
+- Branch: `willowpai2e1-edward/beta2-scan`
+- Hypothesis: Heavy-tailed gradient distribution (median pre-clip ~60, p95 ~268) makes AdamW's default β₂=0.999 suboptimal — stale large-gradient second moments keep per-parameter step size artificially small. Lower β₂ (0.95, 0.99) makes second moments adapt faster.
+
+| β₂ | val_avg/mae_surf_p | Δ vs control | test_avg/mae_surf_p | Δ vs control | best_epoch | W&B run |
+|----|-------------------:|:------------:|--------------------:|:------------:|:----------:|---------|
+| 0.999 (ctrl) | **110.09** | — | **98.23** | — | 14 | [sniqfdpt](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/sniqfdpt) |
+| 0.95 | 110.38 | +0.3% | **98.07** | −0.2% | 14 | [oj773wzh](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/oj773wzh) |
+| 0.99 | 115.30 | +4.7% | 104.12 | +6.0% | 14 | [4wor9sf7](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/4wor9sf7) |
+| 0.9999 | 120.38 | +9.3% | 107.64 | +9.6% | 12 | [z9baj5zl](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/z9baj5zl) |
+
+All runs: EMA=0.99, no Huber, no clip. Best of β₂=0.999 control at val=110.09 doesn't beat new 4-way stack baseline (96.54).
+
+Per-split val (β₂=0.999 control): single=129.31, rc=121.72, cruise=87.77, re_rand=101.57
+Per-split test (β₂=0.95, test-best): single=110.07, rc=111.00, cruise=72.34, re_rand=98.87
+
+**Diagnostic (v_mean/v_p99 at run end):** confirmed mechanical effect of β₂ — β₂=0.95 produces ~3× smaller v_mean (0.33 vs 1.03) and ~5× smaller v_p99 (1.16 vs 5.49). Mechanism works as expected; gain just doesn't materialize as val improvement.
+
+**Analysis and conclusions:**
+
+Hypothesis rejected. β₂=0.999 is already at the optimum for this regime. β₂=0.95 ties the control; β₂=0.99 regresses 5%; β₂=0.9999 regresses 10% (only 12 epochs, bias-correction lag). The non-monotone β₂=0.99 result (worse than both 0.95 and 0.999) is surprising but explainable: it sits in a "responsiveness vs stability" trough — fast enough to be whiplashed but not fast enough to forget quickly.
+
+The PR's own failure-mode prediction was accurate: "if the spread is <2 val units, β₂ should be tuned *after* clipping." The control is ~2 val units better than β₂=0.95, confirming this. The diagnostic confirms clipping changes what Adam's second-moment estimator sees — β₂ tuning *with* clip is a valid future probe but low priority given the tiny expected gain. Runs predated Huber+clip merges so the absolute values are not competitive.
+
+**Closed. Note: the --beta2 flag implementation remains on the student branch and can be cherry-picked if needed.**
+
+---
+
 ## 2026-04-29 00:30 — PR #859: Surface weight scan ↩ SENT BACK (rebase + Huber stack)
 
 - Branch: `willowpai2e1-fern/surf-weight-scan`
