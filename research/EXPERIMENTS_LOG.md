@@ -43,6 +43,29 @@
 
 ---
 
+## 2026-04-29 — PR #936 (CLOSED): Depth scaling n_layers=7 — wall-clock incompatible
+- **Branch:** `alphonse/depth-scaling`
+- **Run:** W&B `6ugjdhi2`, 10/14 epochs (timeout-cut), 30.9 min, group `depth-scaling`, peak 60.6 GB
+- val_avg/mae_surf_p = 91.74 vs current best 79.54 → **+15.3% regression**
+- **Mechanism:** budget-incompatible, not capacity verdict. n=7 takes ~185s/epoch (+41% vs baseline ~131s) and only 10/14 epochs fit in 30-min timeout. Val curve still falling monotonically at epoch 10 (220 → 91); model never reached late-cosine annealing where baseline does its big drop (87.7 → 82.8 at ep14).
+- Memory was as predicted (60.6 GB ≈ 62.5 GB est, well under 90 GB cap), no instability.
+- **Conclusion:** Pure depth scaling cannot be tested fairly under 30-min wall-clock cap. Would need bf16, torch.compile, or grad-checkpointing to be viable.
+- **Follow-up assigned:** alphonse → PR #961 (SwiGLU MLP — strict expressivity gain at near-same FLOPs).
+
+---
+
+## 2026-04-29 — PR #756 v3 (CLOSED): Fourier Re-encoding on FiLM+Re-stratify stack
+- **Branch:** `willowpai2e3-frieren/fourier-re-encoding`
+- **Run (v3):** W&B `g40h7vvp`, 14/14 epochs (clean finish), 31.5 min, group `fourier-re-encoding v3-film-restrat-base`, peak 44.9 GB
+- val_avg/mae_surf_p = 81.96 vs current best 79.54 → **+3.0% regression**
+- test_avg/mae_surf_p = 73.31 vs 70.26 → +4.3%
+- **Mechanism falsified:** Fourier encoding is redundant with FiLM. FiLM injects log(Re) into hidden state at every block via 1→32 SiLU →2×n_hidden non-linear transformations; Re-stratify ensures FiLM sees full Re distribution per batch. A 12-d fixed Fourier basis at the input layer is strictly less expressive than what FiLM is already learning end-to-end.
+- Per-split: regressions on the encoding-targeted splits (val_re_rand +4.8%, val_geom_camber_cruise +5.1%) — exactly where input-side Fourier should help. The encoding lever is saturated by FiLM.
+- **Conclusion:** Once a conditional-modulation primitive (FiLM) is in the network, input-side fixed-frequency encoding adds only redundant signal + extra preprocess parameters. Matches the literature pattern: NeRF-style input encoding helps when conditioning has no other path; here it doesn't.
+- **Follow-up assigned:** frieren → PR #962 (EMA model weights on FiLM+L1+Re-stratify — revisits prior #759 close in correct regime).
+
+---
+
 ## 2026-04-29 — PR #924 (CLOSED): Per-channel output heads (Ux/Uy/p — decouple decoder)
 - **Branch:** `willowpai2e3-edward/per-channel-head`
 - **Run:** W&B `0fik93c4`, 13/14 epochs (timeout-cut), 30.6 min, group `per-channel-head`, peak 46.6 GB

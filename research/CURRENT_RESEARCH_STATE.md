@@ -46,6 +46,8 @@
 | #902 | Volume L1 (mirror surface L1 on vol side) | Closed — gradient rebalancing hurts surf_p (+4.2%) | 96.52 |
 | #743 v3 | Channel-weighted L1 [1.0,0.5,2.0] on FiLM+L1 | Closed — mechanism falsified on FiLM+L1 (+1.1%) | 83.69 |
 | #924 | Per-channel output heads (3 independent decoders) | Closed — slows convergence, loses 1 epoch to timeout (+5.8% vs current best) | 84.16 |
+| #936 | Depth scaling n_layers=7 | Closed — wall-clock incompatible (10/14 epochs, +15.3%) | 91.74 |
+| #756 v3 | Fourier Re-encoding on FiLM+Re-stratify stack | Closed — mechanism redundant with FiLM (+3.0%) | 81.96 |
 
 ## Active WIP PRs
 
@@ -56,8 +58,8 @@
 | nezuko | #937 | Dual FiLM: pre-block + post-block Re conditioning per block | WIP — new 2026-04-29 |
 | fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
 | edward | #952 | Wider single output head (128→256→3) — capacity vs independence | WIP — new 2026-04-29 |
-| frieren | #756 | Fourier Re-encoding v3 (rebase onto FiLM+pre-block+Re-stratify stack) | WIP — sent back 2026-04-29 |
-| alphonse | #936 | Depth scaling: n_layers=7 on full FiLM+L1+Re-stratify stack | WIP — new 2026-04-29 |
+| frieren | #962 | EMA model weights on FiLM+L1+Re-stratify (revisit #759 in new regime) | WIP — new 2026-04-29 |
+| alphonse | #961 | SwiGLU MLP: replace GELU MLP with Swish-gated linear unit | WIP — new 2026-04-29 |
 | tanjiro | #869 | surf_weight sweep (sw=5 wins on L1 base); v2 rebase onto FiLM+L1 pending | WIP |
 
 ## Cross-cutting findings
@@ -70,6 +72,8 @@
 - **Re-stratified batch sampling stacks with FiLM+pre-block** (PR #910: −2.5% val). Largest surprise: single_in_dist −9.6% val (not re_rand as predicted). Gradient equalizes high-Re bias under L1. `--re_stratify` now defaults to True.
 - **`geom_camber_rc` is the hardest split** (92.95 val at current best) — consistently the most resistant to improvement. Potential next target.
 - **Per-channel vol-L1 (p only) works on vol_p** (PR #927 v1: −9% val_vol_p / −9.4% test_vol_p on FiLM+L1 baseline). Surf_p flat — mechanism orthogonal to surface improvements. v2 rebase onto current stack pending.
+- **Depth scaling wall-clock incompatible** (PR #936: n_layers=7 → 185s/epoch +41%, only 10/14 epochs fit in 30-min timeout, +15.3% regression). Not a capacity verdict; would need bf16 or torch.compile to test fairly.
+- **Fourier encoding redundant with FiLM** (PR #756 v3: +3.0% on full stack). FiLM is a strict generalization of fixed-frequency input encoding. The Re-axis lever is saturated architecturally; no benefit from input-side encoding.
 - **Channel weighting falsified on FiLM+L1 stack** (PR #743 v3: +1.1% worse). FiLM's hidden-state modulation already captures the per-channel gradient lever. Channel weighting was genuine at Huber stage (−3.8%) but FiLM makes it redundant.
 - **Focal loss falsified on L1 base** (PR #858): high-error nodes are convergence-bottlenecked, not gradient-bottlenecked.
 - **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric.
@@ -81,12 +85,12 @@
 
 1. **Layer-targeted FiLM (last 2 blocks only)** — reduces over-conditioning on early geometry features. **Assigned → thorfinn PR #934.**
 2. **Dual FiLM (pre-block + post-block per block)** — pre-block adapts attention patterns, post-block adapts output magnitudes. **Assigned → nezuko PR #937.**
-3. **Depth scaling (n_layers=7)** — 2 extra Transolver blocks within 96GB budget (~62GB est). **Assigned → alphonse PR #936.**
+3. **SwiGLU MLP** — replace GELU MLP with Swish-gated linear unit; strict expressivity gain at near-same FLOPs. **Assigned → alphonse PR #961.**
 4. **Re-input noise augmentation** — sigma=0.05 Gaussian noise on log(Re). **Assigned → askeladd PR #917.**
 5. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
 6. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
 7. **Wider single output head (128→256→3)** — tests decoder capacity (vs the decoupling falsified in #924). **Assigned → edward PR #952.**
-8. **Fourier Re-encoding v3** — concatenate scalar + 12 Fourier features, rebase onto current stack. **Assigned → frieren PR #756.**
+8. **EMA model weights** — exponential moving average for evaluation; revisit prior close (#759) in correct regime. **Assigned → frieren PR #962.**
 9. **Width scaling (n_hidden=192)** — if depth (#936) stalls, try 1.5× width (~66GB est). Slightly riskier than depth.
 10. **Low-rank slice attention (LRSA)** — replace S×S (64×64) slice-token self-attention with rank-16 factored. Reduces compute, possibly improves regularization.
 11. **Compound: FiLM + Re-stratify + depth + Re-noise** — if 3+ win independently, round-4 stack.
