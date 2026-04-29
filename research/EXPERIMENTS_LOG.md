@@ -130,6 +130,48 @@ Key implementation note from student: checkpoint saves `ema_model.module.state_d
 
 ---
 
+## 2026-04-29 01:00 — PR #775 Round 2: warmup=0 + clip=0.5 + EMA + Huber stack ✓ MERGED (new best)
+
+- Branch: `willowpai2e1-nezuko/warmup-grad-clip` (rebased post-Huber+EMA advisor)
+- Hypothesis: Dropping warmup (warmup_epochs=0) with clip_norm=0.5 + EMA=0.99 + Huber δ=0.5 forms a 4-way stack. The original round-1 winner was warmup5-clip0.5 (no EMA); this round tested all permutations with EMA on.
+
+| Variant | best_val_avg/mae_surf_p | Δ vs Huber baseline | test_avg/mae_surf_p | best_epoch | W&B run |
+|---------|------------------------:|:-------------------:|--------------------:|:----------:|---------|
+| **w0-clip0.5-ema0.99** | **96.54** | **−6.1%** | **85.33** | 14 | [h22uwyy3](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/h22uwyy3) |
+| w5-clip0.25-ema0.99 | 97.85 | −4.9% | 86.98 | 14 | [xncrhud8](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/xncrhud8) |
+| w5-clip0.1-ema0.99 | 98.48 | −4.3% | 87.87 | 14 | [cvbk5249](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/cvbk5249) |
+| warmup5-clip0.5-ema0.99 | 99.47 | −3.3% | 89.38 | 14 | [z2gglbld](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/z2gglbld) |
+
+Huber baseline (PR #769): val=102.86, test=94.83
+
+Per-split val (w0-clip0.5-ema0.99):
+
+| Split | val/mae_surf_p |
+|-------|---------------:|
+| single_in_dist | 112.12 |
+| geom_camber_rc | 114.30 |
+| geom_camber_cruise | **70.72** |
+| re_rand | **89.02** |
+
+Per-split test (w0-clip0.5-ema0.99):
+
+| Split | test/mae_surf_p |
+|-------|----------------:|
+| single_in_dist | 97.91 |
+| geom_camber_rc | 100.57 |
+| geom_camber_cruise | **58.92** |
+| re_rand | **83.91** |
+
+Gradient norm pre-clip summary (w0 run): median=45.6, p95=202.0, p99=354.3, max=841.7 — 100% of steps clipped. Notably ~25% lower median than all warmup=5 variants.
+
+**Analysis and conclusions:**
+
+The four-way stack (Huber + EMA + clip + warmup=0) is confirmed: −31.5% vs unmodified default (140.95), −6.1% vs Huber-alone baseline. The critical finding is that **warmup=0 outperforms warmup=5** with all other factors equal. The warmup variants showed that clip=0.25 slightly beat clip=0.5 (97.85 vs 99.47 val), but warmup=0 with clip=0.5 beats both. Mechanistically: with clip dominant from step 1, the optimizer immediately enters a stable low-lr-effective-step regime that warmup was meant to achieve gradually. Dropping warmup recovers ~5 epochs of optimization budget with no early instability (lower pre-clip median confirms this). Cruise split benefit is largest (test 58.92 vs Huber-alone 76.12 = −22.7%), consistent with high-Re cruise samples driving the biggest gradients.
+
+**New best: val=96.54, test=85.33. Merged. New default flags: --warmup_epochs 0 --clip_norm 0.5 --huber_delta 0.5 --ema_decay 0.99**
+
+---
+
 ## 2026-04-28 22:10 — PR #775: Linear LR warmup + gradient norm clipping ↩ SENT BACK (rebase required)
 
 - Branch: `willowpai2e1-nezuko/warmup-grad-clip`
@@ -153,6 +195,55 @@ Key empirical finding: gradient norms pre-clip are consistently large throughout
 Warmup alone (noclip-warmup5=132.75) contributes little. Longer warmup (warmup10) is actively harmful — 5 warmup epochs eat into the cosine schedule's convergence window. Clipping is the dominant lever; shorter warmup may even be redundant once clip is in place.
 
 **PR sent back for rebase + EMA stack test.** Requested: rebase onto advisor, re-run `warmup5-clip0.5` with `--ema_decay 0.99`, then sweep clip ∈ {0.1, 0.25, 0.5} + warmup_epochs=0 to measure diminishing returns and EMA interaction.
+
+---
+
+## 2026-04-29 01:00 — PR #860: OneCycle LR schedule alignment ↩ SENT BACK (rebase + full stack)
+
+- Branch: `willowpai2e1-thorfinn/schedule-alignment`
+- Hypothesis: The default CosineAnnealingLR(T_max=50) barely anneals within the 14-epoch budget. Aligning T_max=14 or switching to OneCycleLR should release 3–8% more gains.
+
+| Variant | val_avg/mae_surf_p | Δ vs EMA baseline | test_avg/mae_surf_p | W&B run |
+|---------|-------------------:|:-----------------:|--------------------:|---------|
+| **onecycle-T14-ema0.99** | **112.98** | **−5.3%** | **100.67** | [qjdthms4](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/qjdthms4) |
+| cosine-T14-ema0.99 | 117.44 | −1.6% | 106.21 | [or22h0fu](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/or22h0fu) |
+| cosine-T50-ema0.99 (control) | 119.99 | +0.5% | 107.93 | [a58tmier](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/a58tmier) |
+
+EMA baseline (PR #773): val=119.35, test=108.79. All runs: no Huber, no clip.
+
+Per-split test (onecycle-T14-ema0.99): single=116.37, rc=110.38, cruise=74.15, re_rand=101.77. OneCycle wins on all 4 test splits.
+
+**Analysis and conclusions:**
+
+Schedule alignment hypothesis confirmed: OneCycle −5.3% val / −7.5% test over EMA-only baseline. OneCycle does more than cosine-T14 alone (−3.8% extra): the slow warmup ramps from base_lr/25=4e-5 over 4.2 epochs, avoiding early noisy gradient steps, then the faster cool-down with EMA accumulation yields better generalization. The cruise split recovered the most (74.15 vs 81.38 test for EMA baseline).
+
+**However, runs predate PR #769 (Huber) and PR #775 (clip+warmup) merges.** OneCycle on EMA-alone baseline (val=112.98) does NOT beat the new 4-way stack baseline (val=96.54). The direction is promising — schedule alignment is an orthogonal lever that may compound with the 4-way stack. **Sent back for full-stack test.**
+
+---
+
+## 2026-04-29 01:00 — PR #862: Slice token scan {64,96,128,192} with EMA ↩ SENT BACK (downward scan + full stack)
+
+- Branch: `willowpai2e1-frieren/slice-scan`
+- Hypothesis: More slice tokens give PhysicsAttention richer mesh decomposition. PR #774 showed slim+2x-slices config (slice=128) won on the pre-EMA baseline. Scan ∈ {64, 96, 128, 192} with EMA to find the true optimum.
+
+| slice_num | val_avg/mae_surf_p | best_epoch | test_avg/mae_surf_p | peak VRAM | W&B run |
+|----------:|-------------------:|:----------:|--------------------:|:---------:|---------|
+| **64** | **111.85** | 14 | **99.99** | 42.1 GB | [lrcnin0y](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/lrcnin0y) |
+| 96 | 119.24 | 11 | 107.45 | 47.6 GB | [ciehqon3](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/ciehqon3) |
+| 128 | 136.41 | 11 | 124.14 | 54.5 GB | [68hlrshj](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/68hlrshj) |
+| 192 | 137.45 | 9 | 123.00 | 68.4 GB | [sn2akl99](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r1/runs/sn2akl99) |
+
+EMA baseline (PR #773, val=119.35). All runs: no Huber, no clip.
+
+Per-split (slice64): val: single=135.03, rc=121.20, cruise=87.30, re_rand=103.87. Test: single=116.44, rc=109.75, cruise=74.30, re_rand=99.47.
+
+**Analysis and conclusions:**
+
+val_avg vs slice_num is **monotonically increasing (worse)** — opposite of the original PR #774 hypothesis. The pre-EMA slim+2x result was misleading (fewer epochs, different baseline). Under the same EMA + wall-clock budget, slice count above 64 both uses more memory and reaches fewer epochs before timeout. Slice attention compute grows O(slice_num × N), costing ~3 extra epochs at slice128 and ~5 at slice192 vs slice64.
+
+The optimum is at the **lower boundary of the scan** — strongly suggesting {32, 48} are worth exploring. Lower slice_num = coarser mesh tokenization = more nodes per slice token = more global context per token. With Huber+EMA+clip already handling the training dynamics, the model may not need fine-grained slice resolution. Also: lower slice count frees VRAM (42 vs 68 GB) that could be reinvested in batch_size or n_layers.
+
+**However, runs predate PR #769 (Huber) and PR #775 (clip+warmup) merges.** slice64+EMA at val=111.85 does NOT beat the 4-way stack baseline (96.54). **Sent back for downward scan {32, 48, 64} on full stack.**
 
 ---
 
