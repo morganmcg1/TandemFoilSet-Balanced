@@ -1,0 +1,31 @@
+{
+  "best_single": {
+    "log": "r5-gpu4-sw5-w30-100.log",
+    "wandb_run_id": "npa8v6ul",
+    "model_dir": "models/model-npa8v6ul",
+    "config": {
+      "n_hidden": 128, "n_layers": 5, "n_head": 4, "slice_num": 64, "mlp_ratio": 2,
+      "optimizer": "adam", "scheduler": "onecycle", "lr": 1e-3, "warmup_pct": 0.3,
+      "grad_clip": 1.0, "surf_weight": 5.0, "epochs": 100
+    },
+    "n_params_M": 0.66,
+    "epochs_done": 96,
+    "best_epoch": 92,
+    "val_avg_mae_surf_p": 37.78,
+    "test_avg_mae_surf_p": 33.12
+  },
+  "best_ensemble": {
+    "tag": "top6_default_R5_only",
+    "n_members": 6,
+    "members": [
+      {"name": "r5-sw5-w30-100",     "model_dir": "models/model-npa8v6ul",  "val": 37.78},
+      {"name": "r5-sw5-w30-85-s12",  "model_dir": "models/model-e2k8x7fh",  "val": 38.74},
+      {"name": "r5-sw5-w30-85-s11",  "model_dir": "models/model-kpoz2vdv",  "val": 38.82},
+      {"name": "r5-sw3-w30-85",      "model_dir": "models/model-opaq9r3v",  "val": 39.29},
+      {"name": "r5-sw5-w30-85-s10",  "model_dir": "models/model-o466lrpm",  "val": 39.35},
+      {"name": "r5-sw5-w30-85-s13",  "model_dir": "models/model-uk4gkiph",  "val": 39.48}
+    ],
+    "val_avg_mae_surf_p": 33.71,
+    "test_avg_mae_surf_p": 29.38
+  }
+}

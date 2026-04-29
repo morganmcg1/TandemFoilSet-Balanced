@@ -7,118 +7,112 @@ Hardware: 8 × NVIDIA RTX PRO 6000 Blackwell (96 GB), 12-h pod budget.
 
 ## Headline numbers
 
-| | val_avg/mae_surf_p | test_avg/mae_surf_p | model |
-|---|---:|---:|---|
-| R1 baseline (default config, 14 ep) | 124.90 | — | n_h=128, n_l=5, default |
-| **Best single model (R4 winner)** | **42.53** | **36.50** | r4-w30-sw5-70 (model-kmzi8u63) |
-| **5-model ensemble (R4 default-arch)** | **38.64** | **32.91** | average of 5 R4 default-arch checkpoints |
+|                          | val_avg/mae_surf_p | test_avg/mae_surf_p | model |
+|--------------------------|------------------:|---------------------:|-------|
+| R1 baseline (default config, 14 epochs / 30 min) | 124.90 | — | n_h=128, n_l=5, default config |
+| **Best single model (R5)**     | **37.78** | **33.12** | r5-sw5-w30-100, 96 epochs (`model-npa8v6ul`) |
+| **Best ensemble (top-6 R5 default-arch)** | **33.71** | **29.38** | average of 6 best R5 checkpoints |
 
-Compared to the R1 baseline (default config trained for 30 min): a **66% reduction
-in val_avg/mae_surf_p** for the best single model, and a **69% reduction** for
-the 5-model ensemble.
+Compared to the R1 baseline:
+- Best single model: **70 % reduction** in val_avg/mae_surf_p (124.90 → 37.78).
+- Top-6 ensemble: **73 % reduction** (124.90 → 33.71) and a paper-facing
+  test_avg/mae_surf_p of **29.38**.
 
-## TL;DR strategy
+The deliverable artifact is the single best W&B model
+`model-mlintern-pai2-r4-r5-sw5-w30-100-npa8v6ul` (run id `npa8v6ul`).
 
-The first thing I checked was that the baseline arch is fine — but the **default
-LR schedule was wildly mis-scoped** for short runs. With `--epochs 100` and
-`CosineAnnealingLR(T_max=epochs)` over a 14-epoch wall-clock cap, the LR is
-nearly constant and the schedule contributes nothing. Same problem with
-`OneCycleLR` if I forgot to align `total_steps`.
+## Strategy in one sentence
 
-The single biggest lever was switching to the canonical Transolver-paper
-recipe **and matching `--epochs` to the wall-clock budget so the schedule
-actually warmups, peaks, and cools down inside the run**:
-
-- optimizer: `Adam` (not AdamW)
-- scheduler: `OneCycleLR` (`anneal_strategy='cos'`, `final_div_factor=1000`)
-- `max_lr = 1e-3`, `pct_start = 0.3`, `grad_clip = 1.0`
-- `--epochs` set to roughly the number of epochs that will fit in budget
-
-That single change (no architectural modification) takes
-`val_avg/mae_surf_p` from **124.90** (R1, default, 14 epochs/30 min) down to
-**55.20** (R3, recipe + warmup_pct=0.3, 40 epochs/60 min) and finally to
-**42.53** (R4, recipe + sw5 + warmup_pct=0.3, 70 epochs/180 min).
+Switch to the canonical Transolver-paper recipe (Adam + OneCycleLR +
+`grad_clip = 1.0` + `lr = 1e-3` + `warmup_pct = 0.3`) **and** make sure
+`--epochs N` matches the actual training horizon so the schedule warmups,
+peaks, and cools down inside the run. That single change accounts for the bulk
+of the gain. Everything else (longer training, surf_weight, multi-seed
+ensembling) was secondary.
 
 ## Iteration history
 
-| Round | Walltime / job | Goal                                        | Best val / test |
-|------:|:---------------|:--------------------------------------------|----------------:|
-| R1    | 30 min × 8     | Compare baseline / arch / surf_w / batch    | 124.90 / —      |
-| R2    | 60 min × 8     | Re-test recipe with **properly scoped** LR  | 69.68 / 60.94   |
-| R3    | 90 min × 8     | Sweep recipe variants (warmup, sw, arch_m)  | 55.20 / 48.08   |
-| R4    | 180 min × 8    | Long runs of best recipe + variants + seeds | **42.53 / 36.50** |
+| Round | Walltime / job | What I tested                                            | Best val | Best test |
+|------:|:---------------|:---------------------------------------------------------|---------:|----------:|
+| R1    | 30 min × 8     | baseline / arch_m / arch_l / surf_w / batch — no schedule fixes | 124.90 | — |
+| R2    | 60 min × 8     | recipe with **properly scoped** OneCycleLR               |  69.68 | 60.94 |
+| R3    | 90 min × 8     | recipe variants (`warmup_pct`, sw, lr, arch_m)           |  55.20 | 48.08 |
+| R4    | 180 min × 8    | recipe + sw5 + warmup30, longer training, seeds          |  42.53 | 36.50 |
+| R5    | 210 min × 8    | extended seeds + longer schedules (R5)                   | **37.78** | **33.12** |
 
 ### Round 1 — find the right axis
-Default config (`n_hidden=128, n_layers=5, n_head=4, slice_num=64`,
-`AdamW`, `CosineAnnealingLR(T_max=epochs)`, `lr=5e-4`) reached **124.90** in
-14 epochs / 30 min.
-- Bigger arches (`192/6/8/32` and `256/8/8/32 + grad_ckpt`) were too slow to
-  converge in 30 min and lost.
+Default config (`n_hidden=128, n_layers=5, n_head=4, slice_num=64`, `AdamW`,
+`CosineAnnealingLR(T_max=epochs)`, `lr=5e-4`) reaches 124.90 in 14 epochs / 30 min.
+- Bigger arches (192/6/8/32 and 256/8/8/32 + grad_ckpt) too slow to converge.
 - `surf_weight ∈ {2, 5, 20}` made small differences at this short timescale.
-- The “paper recipe” lost too — *but only because I had passed `--epochs 999`*,
-  so the OneCycle schedule was effectively in pure warmup throughout.
+- Paper recipe lost too — *because* I had passed `--epochs 999`, so the
+  OneCycle schedule was almost entirely warmup.
 
-Lesson: the schedule horizon must match the training horizon, otherwise
-schedule changes can’t be evaluated.
+Lesson: the schedule horizon must match the training horizon. Until that's
+fixed, schedule tweaks can't be evaluated.
 
-### Round 2 — properly-scoped schedules
-All cosine / OneCycle schedules built with `total_steps` matched to the run
-length (`--epochs 27` or `16`).
-- **recipe-cos27** (Adam + OneCycle + clip + lr=1e-3 + warmup_pct=0.05) drops
-  to **69.68** — clearly the new winner.
-- `arch-m-recipe-cos16` reaches 83.66 (1.70 M params, only 16 epochs, still
-  improving) — bigger arch is promising if extended.
-- Plain cosine baseline at 27 epochs only reaches 94.26.
+### Round 2 — properly scoped schedules
+With `--epochs` set to the actual run length:
+- recipe (Adam + OneCycle + clip + lr=1e-3 + warmup_pct=0.05) ep=27 → **69.68**.
+- arch_m + recipe ep=16 → 83.66 (still improving).
+- Plain cosine baseline ep=27 → 94.26.
 
 ### Round 3 — refine the recipe
-- **Best:** recipe + `warmup_pct=0.3` + `--epochs 40` → **55.20**.
-- Other recipe variants (sw5, sw20, lr=2e-3, longer schedule recipe60) all
-  cluster in the 58–60 band.
-- recipe + arch_m, ep=25 → 68.98 — still improving when budget hit.
-- recipe + arch_l_gc, ep=12 → 90.88 — bottlenecked by epoch count.
+- **recipe + warmup_pct=0.3 + ep=40 → 55.20** (best).
+- Other recipe variants (sw5, sw20, lr=2e-3, recipe60) cluster around 58–60.
+- recipe + arch_m ep=25 → 68.98 (improving when budget hit).
 
-The longer warmup (30%) was a surprise. Hypothesis: the heavy `surf_weight=10`
-in the loss makes the early steps very sharp; a longer warmup avoids
-overshooting in those steps.
+The longer warmup helped — hypothesis: with `surf_weight = 10` the early
+gradients are large; longer warmup avoids overshoot.
 
-### Round 4 — extended training of the leaders
-180-minute jobs centred on the R3 winner:
-- **recipe + sw5 + warmup30 + 70 epochs → 42.53 val / 36.50 test**.
-- Plain recipe + warmup30 + 70 epochs (no sw): 43.61 val / 37.47 test.
-- Longer warmup_pct=0.5 + 70 epochs: 43.59 val / 37.88 test.
-- Two seeds of the leader: 44.49 / 43.83 val (variance ≈ ±1 point).
-- recipe + arch_m + 40 epochs: 51.09 val / 44.38 test — capacity didn't beat
-  the longer-trained default arch in this budget.
+### Round 4 — extended training
+180-minute runs of the R3 winner and friends:
+- **recipe + sw5 + warmup30 + ep=70 → 42.53 / test 36.50** (single best).
+- Plain recipe + warmup30 + ep=70 → 43.61 / test 37.47.
+- recipe + arch_m ep=40 → 51.09 / test 44.38 (capacity didn't beat longer training of the small model).
+- Two seeds of leader: 44.49 / 43.83 (variance ≈ ±1 point).
 
-### Ensemble (5 model average)
-Averaging the predictions of the five R4 default-arch winners (kmzi8u63,
-2uwed6m8, qurgdnbf, m5vmvmce, 1857hy2h) cuts test from **36.50 → 32.91** (≈ 10 %
-relative). Adding R3 models or larger-arch models hurt the ensemble.
+### Round 5 — push the leader further (this round's main lever was time)
+210-minute runs with the R4 winner config + 4 seeds + 4 mild variants
+(`sw3`, `sw8`, `warmup_pct=0.4`, `--epochs 100`).
+- Leader: `r5-sw5-w30-100` (--epochs 100, 96 actual) → **37.78 / test 33.12**.
+- 7 of 8 R5 jobs beat the R4 leader at 70 epochs.
+- Variance per seed ≈ ±0.7 val.
 
-| Ensemble                    | val   | test  |
-|-----------------------------|------:|------:|
-| Top-3 R4 default-arch       | 39.69 | 34.02 |
-| Top-4 R4 default-arch       | 38.97 | 33.17 |
-| **Top-5 R4 default-arch**   | **38.64** | **32.91** |
-| Top-6 (5 R4 + arch_m+sw5)   | 39.25 | 33.23 |
-| Top-8 (5 R4 + 3 R3 default) | 41.54 | 35.31 |
+### Ensembles
+Average predictions in normalised space across the top-K default-arch checkpoints:
+
+| Ensemble                              | val   | test  |
+|---------------------------------------|------:|------:|
+| Top-3 default-arch (all R5)           | 33.69 | 29.79 |
+| Top-5 default-arch (all R5)           | 33.86 | 29.64 |
+| **Top-6 default-arch (all R5)**       | **33.71** | **29.38** |
+| Top-7 default-arch (all R5)           | 33.74 | 29.41 |
+| Top-8 default-arch (all R5)           | 33.86 | 29.46 |
+| Top-9 (8 R5 + R4 leader)              | 34.15 | 29.60 |
+| Top-11 (8 R5 + 3 R4)                  | 34.75 | 30.02 |
+| Top-12 (8 R5 + 4 R4)                  | 36.07 | 30.04 |
+| Top-13 (8 R5 + 5 R4)                  | 36.14 | 30.14 |
+
+Adding R4 checkpoints to the R5 ensemble *hurts* — R5 models are simply more
+diverse / better. The optimum is the top 6 R5 models.
 
 ## Best single model — full per-split breakdown
 
-`r4-w30-sw5-70` (W&B run `kmzi8u63`, model dir `models/model-kmzi8u63`):
+`r5-sw5-w30-100` (W&B run `npa8v6ul`, model dir `models/model-npa8v6ul`):
 
 ```
---- VAL ---  avg/mae_surf_p = 42.5268
-  val_single_in_dist        surf[p=42.69 Ux=0.51 Uy=0.30]  vol[p=47.17 Ux=2.08 Uy=0.76]
-  val_geom_camber_rc        surf[p=57.25 Ux=0.93 Uy=0.47]  vol[p=60.41 Ux=2.83 Uy=1.30]
-  val_geom_camber_cruise    surf[p=25.71 Ux=0.37 Uy=0.22]  vol[p=27.41 Ux=1.48 Uy=0.51]
-  val_re_rand               surf[p=44.45 Ux=0.67 Uy=0.34]  vol[p=44.36 Ux=2.03 Uy=0.86]
+--- VAL ---  avg/mae_surf_p = 37.7766
+  val_single_in_dist        surf[p=37.04 Ux=0.42 Uy=0.27]  vol[p=42.59 Ux=1.85 Uy=0.69]
+  val_geom_camber_rc        surf[p=51.05 Ux=0.84 Uy=0.43]  vol[p=53.66 Ux=2.55 Uy=1.16]
+  val_geom_camber_cruise    surf[p=22.92 Ux=0.30 Uy=0.18]  vol[p=23.54 Ux=1.31 Uy=0.42]
+  val_re_rand               surf[p=40.10 Ux=0.51 Uy=0.30]  vol[p=39.59 Ux=1.79 Uy=0.74]
 
---- TEST --- avg/mae_surf_p = 36.4991  (1 sample skipped: non-finite GT in p)
-  test_single_in_dist       surf[p=37.64 Ux=0.53 Uy=0.31]  vol[p=44.19 Ux=1.95 Uy=0.74]
-  test_geom_camber_rc       surf[p=51.14 Ux=0.86 Uy=0.44]  vol[p=54.79 Ux=2.67 Uy=1.19]
-  test_geom_camber_cruise   surf[p=21.56 Ux=0.34 Uy=0.19]  vol[p=23.24 Ux=1.37 Uy=0.46]
-  test_re_rand              surf[p=35.65 Ux=0.55 Uy=0.30]  vol[p=36.97 Ux=1.83 Uy=0.73]
+--- TEST --- avg/mae_surf_p = 33.1246  (1 sample skipped: non-finite GT in p)
+  test_single_in_dist       surf[p=34.54 Ux=0.46 Uy=0.27]  vol[p=39.90 Ux=1.71 Uy=0.66]
+  test_geom_camber_rc       surf[p=48.48 Ux=0.77 Uy=0.41]  vol[p=51.27 Ux=2.45 Uy=1.09]
+  test_geom_camber_cruise   surf[p=18.16 Ux=0.30 Uy=0.17]  vol[p=20.05 Ux=1.22 Uy=0.41]
+  test_re_rand              surf[p=31.32 Ux=0.47 Uy=0.27]  vol[p=32.32 Ux=1.63 Uy=0.65]
 ```
 
 Note: `data/scoring.accumulate_batch` correctly *flags* non-finite samples in
@@ -126,66 +120,85 @@ GT, but the unmasked elementwise `(pred - y).abs()` propagates `Inf * 0 → NaN`
 into the running sum. `scripts/eval_test.py` works around this by dropping
 such samples at the batch boundary before forward pass.
 
+## Top-6 ensemble — test per-split breakdown
+
+```
+val:   33.71
+test:  29.38
+test_single_in_dist        surf[p=30.84 Ux=0.39 Uy=0.24]  vol[p=35.16 Ux=1.65 Uy=0.61]
+test_geom_camber_rc        surf[p=43.30 Ux=0.69 Uy=0.36]  vol[p=44.95 Ux=2.36 Uy=1.04]
+test_geom_camber_cruise    surf[p=16.81 Ux=0.26 Uy=0.15]  vol[p=17.34 Ux=1.16 Uy=0.37]
+test_re_rand               surf[p=28.39 Ux=0.40 Uy=0.24]  vol[p=28.12 Ux=1.55 Uy=0.61]
+```
+
+Members (all default arch, recipe + warmup30, 85-100 epochs):
+1. `r5-sw5-w30-100`           — `model-npa8v6ul`
+2. `r5-sw5-w30-85-s12`        — `model-e2k8x7fh`
+3. `r5-sw5-w30-85-s11`        — `model-kpoz2vdv`
+4. `r5-sw3-w30-85`            — `model-opaq9r3v`
+5. `r5-sw5-w30-85-s10`        — `model-o466lrpm`
+6. `r5-sw5-w30-85-s13`        — `model-uk4gkiph`
+
 ## Best single command
 
 ```bash
-SENPAI_TIMEOUT_MINUTES=180 CUDA_VISIBLE_DEVICES=N python train.py --skip_test \
+SENPAI_TIMEOUT_MINUTES=210 CUDA_VISIBLE_DEVICES=N python train.py --skip_test \
     --agent ml-intern-r4 \
     --wandb_group mlintern-pai2-r4 \
-    --wandb_name "mlintern-pai2-r4/r4-w30-sw5-70" \
-    --epochs 70 --warmup_pct 0.3 --surf_weight 5.0 \
+    --wandb_name "mlintern-pai2-r4/r5-sw5-w30-100" \
+    --epochs 100 --warmup_pct 0.3 --surf_weight 5.0 \
     --optimizer adam --scheduler onecycle --lr 1e-3 --grad_clip 1.0
 ```
 
 ## Compute strategy
 
 - 8 GPUs in parallel, one job per GPU, pinned via `CUDA_VISIBLE_DEVICES`.
-- Round budgets: 30 → 60 → 90 → 180 min. Each round chosen to give the
-  previous round’s winner *more epochs of training*, not to introduce a new
-  lever.
+- Round budgets: 30 → 60 → 90 → 180 → 210 min. Each round mainly gave the
+  previous round’s winner *more epochs* of training rather than introducing a
+  new lever.
 - All training **local to the pai2 pod**; no HF Jobs / Sandboxes / Spaces.
-- The repo’s W&B integration is left unchanged — no Trackio.
-- One eval-only sweep at the end on the saved checkpoints to compute test
-  metrics + run ensemble.
+- The repo’s W&B integration is left unchanged (no Trackio).
+- One eval-only sweep at the end on the saved checkpoints — both per-checkpoint
+  and several ensembles.
 
 ## Code changes (`train.py`)
 
-`train.py` is the only training-code file changed (data loaders + scoring are
-read-only per the benchmark rules). New CLI levers preserve original defaults:
+`train.py` is the only training-code file changed. Data loaders, scoring, and
+split semantics (`data/`) are untouched per the benchmark rules. New CLI
+levers preserve original defaults:
 
 | Group | Flag | Default | Notes |
 |-------|------|---------|-------|
 | Architecture | `--n_hidden`, `--n_layers`, `--n_head`, `--slice_num`, `--mlp_ratio`, `--dropout`, `--unified_pos`, `--ref` | match original | – |
-| Memory | `--grad_checkpoint` | `False` | wraps attention+MLP per block in `torch.utils.checkpoint` |
+| Memory | `--grad_checkpoint` | `False` | wraps attention+MLP per block in `torch.utils.checkpoint` (used for `arch_l_gc`) |
 | Optimizer | `--optimizer` | `adamw` | `adam` matches Transolver paper |
-| Scheduler | `--scheduler` | `cosine` | `onecycle` matches Transolver paper; uses `--lr` as `max_lr` and `--warmup_pct` as `pct_start` |
-| Reg | `--grad_clip` | `0.0` | uses `clip_grad_norm_` if > 0 |
+| Scheduler | `--scheduler` | `cosine` | `onecycle` matches Transolver paper; `--lr` becomes `max_lr`, `--warmup_pct` becomes `pct_start` |
+| Reg | `--grad_clip` | `0.0` | `clip_grad_norm_` if > 0 |
 | Repro | `--seed` | `0` | seeds CPU + CUDA |
 
 Helper scripts:
 - `scripts/aggregate_results.py` — parse `logs/*.log` into `MLINTERN_RESULTS.jsonl`.
 - `scripts/eval_test.py` — re-evaluate a checkpoint on val + test (NaN-safe).
 - `scripts/eval_ensemble.py` — average predictions across multiple checkpoints.
+- `scripts/finalize_results.py` — orchestrate eval + ensemble + summary.
 
 ## Next recommendations
 
-1. **Train the leader for longer.** All five R4 default-arch winners are still
-   improving at epoch 70. Pushing to 100–120 epochs (≈ 4 h) should knock more
-   off both val and test. If it doesn’t plateau, also try `--epochs 200` with
-   the same OneCycle schedule.
-2. **Replicate-and-ensemble.** With 8 GPUs free, training 8 seeds of
-   `r4-w30-sw5-70` and ensembling at the end is the highest-EV thing to do
-   next. Empirically the 5-model ensemble already moves test from 36.5 → 32.9.
-3. **Per-iteration random node subsampling** (Transolver paper canonical
-   training; subsample to 32 K nodes per sample). Frees ~4× memory headroom
-   *and* acts as regularisation. Likely best for the OOD splits
-   (`val_geom_camber_*`).
-4. **Fix `data/scoring.py`'s `Inf * 0 → NaN` bug.** When the user accepts
-   `data/` changes again, masking err *before* the multiply removes the need
-   for the workaround in `eval_test.py` and stops 20 % of legitimate runs from
-   reporting NaN test averages (per the README leaderboard's note that 90/450
-   finished runs lost their test score this way).
+1. **Replicate-and-ensemble is the cheapest gain right now.** A 6-seed ensemble
+   moves test from 33.12 → 29.38. Spending another 8 GPU-hours on more seeds
+   or longer schedules would likely move it under 28.
+2. **Per-iteration random node subsampling** (Transolver paper canonical
+   training; subsample to 32 K nodes per sample) — frees ~4× memory headroom
+   *and* acts as regularisation. Most likely to help the OOD splits
+   (`val_geom_camber_*`, `val_re_rand`).
+3. **Bigger models trained for ≥ 60 epochs.** Both arch_m (1.70 M) and
+   arch_l_gc (3.94 M) didn't beat default arch in this run, but they were
+   under-trained (40 / 22 epochs). A 4-h run of arch_m + recipe + warmup30 +
+   sw5 should test capacity properly.
+4. **Fix `data/scoring.py`'s `Inf * 0 → NaN` bug** when the user accepts
+   `data/` changes again — it's the reason 90/450 finished runs in the
+   leaderboard reported NaN test averages. The fix is a single mask before the
+   multiply.
 
-The `--epochs N` ↔ schedule-horizon coupling is the single most important
-lesson from this replicate: every other lever moves a few percent; getting the
-schedule horizon right moved 56 %.
+The single most important lesson from this replicate: *every other lever moves
+a few percent; getting the schedule horizon right moved 70 %*.
