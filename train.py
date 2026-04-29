@@ -130,20 +130,15 @@ class FiLMNet(nn.Module):
     """
 
     def __init__(self, cond_dim: int = 11, n_hidden: int = 128, n_layers: int = 5,
-                 n_norms_per_block: int = 2, hidden_mult: int = 2):
+                 n_norms_per_block: int = 2):
         super().__init__()
         self.n_layers = n_layers
         self.n_norms_per_block = n_norms_per_block
         self.n_hidden = n_hidden
         out_dim = n_layers * n_norms_per_block * 2 * n_hidden
-        self.net = nn.Sequential(
-            nn.Linear(cond_dim, n_hidden * hidden_mult),
-            nn.GELU(),
-            nn.Linear(n_hidden * hidden_mult, out_dim),
-        )
-        last_linear = self.net[-1]
-        nn.init.zeros_(last_linear.weight)
-        nn.init.zeros_(last_linear.bias)
+        self.net = nn.Linear(cond_dim, out_dim)
+        nn.init.zeros_(self.net.weight)
+        nn.init.zeros_(self.net.bias)
 
     def forward(self, cond: torch.Tensor) -> torch.Tensor:
         out = self.net(cond)
@@ -278,11 +273,11 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.film_net = FiLMNet(
             cond_dim=11, n_hidden=n_hidden, n_layers=n_layers,
-            n_norms_per_block=2, hidden_mult=2,
+            n_norms_per_block=2,
         )
         self.apply(self._init_weights)
-        nn.init.zeros_(self.film_net.net[-1].weight)
-        nn.init.zeros_(self.film_net.net[-1].bias)
+        nn.init.zeros_(self.film_net.net.weight)
+        nn.init.zeros_(self.film_net.net.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
