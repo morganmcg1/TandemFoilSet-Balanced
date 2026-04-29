@@ -1,5 +1,46 @@
 # SENPAI Research Results
 
+## 2026-04-29 11:03 — PR #1094: Surface weight boost: surf_weight 10 → 25
+- Branch: `charliepai2f1-askeladd/surf-weight-25`
+- Hypothesis: Raise surface-loss weight from 10 → 25 to bias capacity toward `mae_surf_p`; predicted -3% to -7%.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 14) | **134.368** |
+| `test_avg/mae_surf_p` (3 finite splits) | 134.164 |
+| `test_avg/mae_surf_p` (as reported, 4 splits) | NaN — scoring bug, see PR #1095 fix |
+| Epochs run | 14 / 50 (timeout-bound) |
+| Peak VRAM | 42.11 GB (huge headroom) |
+| Wall clock | ~30 min |
+| Metrics file | `models/model-charliepai2f1-askeladd-surf-weight-25-20260429-102854/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 14)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 174.756 | 154.746 |
+| `geom_camber_rc` | 147.615 | 132.749 |
+| `geom_camber_cruise` | 98.786 | NaN (cruise GT corruption) |
+| `re_rand` | 116.314 | 114.997 |
+| **avg** | **134.368** | NaN (134.164 over 3 finite splits) |
+
+### Val_avg trajectory
+
+```
+e1→238.4 e2→236.1 e3→213.8 e4→226.2 e5→181.8 e6→160.0 e7→181.3
+e8→165.4 e9→179.2 e10→164.2 e11→208.8 e12→184.6 e13→140.8 e14→134.4
+```
+
+### Analysis & conclusions
+
+- **Essentially tied** with the provisional best (134.4 vs 133.9, +0.36% — well within noise).
+- **Per-split signature is informative.** vs edward's confounded run, askeladd is **better on val_re_rand (116.3 vs 127.0) and val_geom_camber_cruise (98.8 vs 102.7)** and worse on val_single_in_dist. That is exactly where surface boosting should help — the OOD splits whose paper-facing test_avg is what matters.
+- **Throughput-limited.** Last two epochs dropped val_avg from 184.6 → 140.8 → 134.4 — the trajectory was still in steep descent at the wall-clock cap. Strong evidence that the bs=4 run is undertrained.
+- **VRAM heavily underutilized** (42 GB of 95 GB) — bs↑ is the obvious next move.
+- **Sent back** with: keep surf_weight=25, raise bs to 8, rebase to pick up the NaN-safe scoring fix. Goal: 25+ epochs and finite test_avg.
+
 ## 2026-04-29 10:48 — PR #1097: More physics slices: slice_num 64 → 128
 - Branch: `charliepai2f1-frieren/slice-num-128`
 - Hypothesis: Doubling Transolver `slice_num` from 64 → 128 gives finer learnable mesh partitions and more capacity in the slice-routing path; predicted -3% to -6% on `val_avg/mae_surf_p`.
