@@ -1,5 +1,30 @@
 # SENPAI Research Results
 
+## 2026-04-29 03:00 — PR #971: LR warmup (5ep linear) + flip loss_type default to relative_mae [WINNER — MERGED]
+- Branch: `willowpai2e2-askeladd/lr-warmup-default-relmae`
+- Hypothesis: PR #821 round-3 showed a 27-point val spread between seeds (default=82.97 vs seed42=55.90) at lr=2e-3 cosine-only on bs=16. The likely cause is early-epoch overshooting at the linearly-scaled lr — some seeds overshoot into a worse basin at epoch 1 and never recover. A 5-epoch linear LR warmup (0.05 × lr → lr) provides a ramp-up buffer that should narrow the seed variance and improve the typical-seed outcome. Secondary change: flip the `loss_type` default from `"mse"` to `"relative_mae"` for branch reproducibility.
+- W&B runs: `1xfcb5h5` (lr-warmup-5ep-default), `9a9di1dz` (lr-warmup-5ep-seed42), both `senpai-charlie-wilson-willow-e-r2`
+
+| metric | round-3 no warmup | round-4 warmup=5ep | Δ |
+|---|---:|---:|---:|
+| default-seed `val_avg` | 82.97 (`1d8nkjir`) | **54.70** (`1xfcb5h5`) | **−28.27** |
+| seed42 `val_avg`       | 55.90 (`66c4gac6`) | 67.28 (`9a9di1dz`)   | +11.38 |
+| 2-seed mean            | 69.43 | **60.99** | **−8.44** |
+| 2-seed spread          | 27.07 | **12.58** | **−14.49** |
+| best test_avg (best-seed) | 49.64 | **48.15** | **−1.49** |
+
+| split (best-seed test) | round-3 seed42 | round-4 default | Δ |
+|---|---:|---:|---:|
+| `test_single_in_dist`     | 63.94 | 67.22 | +3.28 |
+| `test_geom_camber_rc`     | 62.62 | 60.38 | −2.24 |
+| `test_geom_camber_cruise` | 26.87 | 23.79 | −3.08 |
+| `test_re_rand`            | 45.11 | 41.20 | −3.91 |
+| `test_avg`                | 49.64 | **48.15** | **−1.49** |
+
+- Outcome: **MERGED.** Best-seed beats baseline on val (−1.20, −2.1%) and test (−1.49, −3.0%). Mean across seeds improved 8.4 pts and spread narrowed by half (27 → 13). 3 of 4 test splits improve (rc, cruise, re_rand); single regresses ~3 pts. Per-split test wins on the OOD camber and Re-stratified splits are the most encouraging — those are the harder generalization tracks.
+- Key analysis: warmup didn't just shift the unlucky seed up — it reshaped the loss-landscape exploration trajectory enough that basin assignment per seed effectively re-randomized. The default seed (round-3 "bad basin", val=82.97) is now the better seed (val=54.70), while seed42 (round-3 "good basin", val=55.90) is now worse (val=67.28). **This means seed-pinned reproduction is no longer reliable** — future PRs must run ≥ 2 seeds and report the spread. The 12.58-point residual variance is small enough to make A/B claims feasible but still material — a 3rd seed is the next priority before letting other PRs benchmark against this number.
+- New defaults landed: `loss_type="relative_mae"`, `warmup_epochs=5`. Schedule = `SequentialLR(LinearLR(start_factor=0.05) for 5ep, then CosineAnnealingLR(T_max=45, eta_min=1e-6))`. LR sanity-checked: ramps 4.80e-4 → 2.00e-3 over epochs 0–4, then cosine-decays cleanly.
+
 ## 2026-04-28 18:00 — PR #821: Tooling — AMP/bf16 + batch_size=16 + NaN-safe eval [SENT BACK — LR scaling fix needed]
 - Branch: `willowpai2e2-askeladd/tooling-amp-bs-nansafe`
 - Hypothesis (tooling): fp32/bs=4 at ~55s/epoch → 50 epochs needs 46 min, far past 30-min wall. Three fixes: (1) AMP/bf16 autocast on forward pass, (2) batch_size default 4→16, (3) NaN-safe `evaluate_split` guard to fix the cruise Inf→NaN accumulator bug.

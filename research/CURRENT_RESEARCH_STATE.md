@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Updated**: 2026-04-29 (PR #821 MERGED — new best val=55.90/test=49.64; askeladd → #971 LR warmup)
+- **Updated**: 2026-04-29 (PR #971 MERGED — new best val=54.70/test=48.15 default seed; askeladd → next: 3rd-seed verification)
 - **Branch**: `icml-appendix-willow-pai2e-r2`
 - **Tag**: `willow-pai2e-r2`
 - **Most recent human researcher direction**: none; no GitHub Issues open.
@@ -8,15 +8,17 @@
 
 ## Current baseline (MERGED)
 
-**PR #821 (askeladd, tooling stack) — MERGED 2026-04-29** ← NEW BEST
-- `val_avg/mae_surf_p` = **55.90** at epoch 50 (seed42 `66c4gac6`, still descending!)
-- Per-split test: single=63.94, rc=62.62, cruise=26.87, re_rand=45.11
-- `test_avg/mae_surf_p` = **49.64** (all 4 splits finite)
-- Config: compound base + `--loss_type relative_mae --lr 2e-3 --batch_size 16 --compile`
-- Wall: 22.5 min / 50 epochs (vs prior 30.4 min / 32 epochs)
-- ⚠️ Seed-variance caveat: default seed landed val=82.97 / test=72.01 (27-pt spread). Future PRs: run ≥ 2 seeds.
+**PR #971 (askeladd, LR warmup + relative_mae default) — MERGED 2026-04-29** ← NEW BEST
+- `val_avg/mae_surf_p` = **54.70** at best epoch 49 (default seed `1xfcb5h5`)
+- Per-split test: single=67.22, rc=60.38, cruise=23.79, re_rand=41.20
+- `test_avg/mae_surf_p` = **48.15** (all 4 splits finite)
+- Config: compound base + new defaults (no flags needed): `loss_type="relative_mae"`, `warmup_epochs=5`, lr=2e-3, bs=16, compile=True
+- Schedule: `SequentialLR(LinearLR(start=0.05) for 5ep → CosineAnnealingLR(T_max=45, eta_min=1e-6))`
+- Wall: 22.4 min / 50 epochs
+- ⚠️ Seed-swap caveat: paired seed42 `9a9di1dz` landed at val=67.28 / test=57.80. Spread narrowed from 27→13 but still material — 3rd seed is the next priority. **Do NOT pin PYTHONHASHSEED=42** when reproducing the new baseline.
 
-**Prior baseline**: PR #840 (edward, rel MAE) — val=64.16, test=55.73 (superseded)
+**Prior baseline**: PR #821 (askeladd, tooling stack) — val=55.90, test=49.64 (superseded)
+**Earlier**: PR #840 (edward, rel MAE) — val=64.16, test=55.73 (superseded)
 **Earlier**: PR #783 (fern, Huber δ=1.0) — val=75.93 (superseded)
 
 ## Current assignments (active WIP PRs)
@@ -26,7 +28,7 @@
 | alphonse | #853 | Huber δ sweep: δ=0.5 and δ=2.0 on compound+Huber base | loss (δ tuning) | WIP |
 | frieren  | #854 | Huber + grad accum (accum_steps=2): double throughput, ~60 epochs in budget | training throughput | WIP |
 | fern     | #855 | Huber + surf_weight sweep: sw=5 and sw=20 vs baseline sw=10 | loss weighting | WIP |
-| askeladd | #971 | LR warmup (5ep linear, 0→2e-3) + flip loss_type default to relative_mae | optimization (stability) | WIP |
+| askeladd | TBD | 3rd-seed verification of new baseline + warmup-length sweep | variance (seed budget) | pending assignment |
 | edward   | #940 | Relative MAE ε sweep: ε ∈ {1e-3, 1e-2, 1e-1} vs default 1e-6 | loss (ε tuning) | WIP |
 | stark    | #842 | compound + SwiGLU param-matched h=168 | architecture (activation) | WIP |
 | himmel   | #843 | compound + gradient norm clipping (max_norm sweep 0.5 / 1.0) | optimization (stability) | WIP |
@@ -45,31 +47,29 @@
 
 ## Key events this review pass
 
-1. **PR #821 (askeladd, tooling stack) MERGED** — NEW BEST: val=55.90/test=49.64 (seed42). Full tooling stack now on advisor branch: AMP/bf16, bs=16, lr=2e-3, torch.compile, NaN-safe eval. All 4 test splits finite. 50 epochs in 22.5 min. Askeladd assigned to LR warmup PR #971 to address 27-pt seed variance.
+1. **PR #971 (askeladd, LR warmup + flip relative_mae default) MERGED** — NEW BEST: val=54.70/test=48.15 (default seed `1xfcb5h5`, best epoch 49). 2-seed spread narrowed from 27.07 → 12.58, mean improved 69.43 → 60.99 (−8.4 pts). Per-split wins on rc, cruise, re_rand; single regresses ~3 pts. **Seed-swap discovery**: under warmup, default seed is now best (was seed42 in round-3). Askeladd → 3rd-seed verification + warmup-length sweep (next assignment).
 
-2. **PR #840 (relative MAE) MERGED** as prior baseline (val=64.16, test=55.73 — superseded by #821).
+2. **PR #821 (askeladd, tooling stack) MERGED** — prior baseline: val=55.90/test=49.64 (seed42). Full tooling stack on advisor branch: AMP/bf16, bs=16, lr=2e-3, torch.compile, NaN-safe eval. Superseded by #971.
 
-3. **PR #900 (edward, loss curriculum) CLOSED**: Hard Huber→rel-MAE curriculum rejected. 10ep (+0.38 val, +1.73 test) and 20ep (+1.54, +1.95) both regress. Root causes: optimizer-reset stall at switch-over, plus Huber pre-training builds high-Re biased representations. Edward reassigned to ε sweep (#940).
+3. **PR #840 (relative MAE) MERGED** as earlier baseline (val=64.16, test=55.73 — superseded by #821).
 
-4. **PR #821 round 3**: rebase + rel-MAE re-validation. C1+C2+C3 all pass. Seed42: val=55.90, test=49.64. Default seed: val=82.97, test=72.01. 27-pt spread → LR warmup follow-up.
-   - C1 PASS: 50/50 epochs in 22.2 / 22.3 min (~26% headroom).
-   - C2 PASS: cruise test=65.56 / 63.23 finite (3rd & 4th time on branch).
-   - C3 strict-fail: val_avg=136.22 / 97.84 with vanilla MSE loss. Wide seed spread (38 pts).
-   - **Reason for send-back**: PR was branched pre-#840, so train.py has merge conflicts AND validation used vanilla MSE (not the now-canonical relative-MAE loss). Round-3 ask: rebase + re-validate with `--loss_type relative_mae` to confirm the tooling stack preserves the 64.73 / 56.92 baseline.
-   - The torch.compile addition (~1.5–1.8× speedup on top of AMP) was an unexpected upside.
+4. **PR #900 (edward, loss curriculum) CLOSED**: Hard Huber→rel-MAE curriculum rejected. 10ep (+0.38 val, +1.73 test) and 20ep (+1.54, +1.95) both regress. Root causes: optimizer-reset stall at switch-over, plus Huber pre-training builds high-Re biased representations. Edward reassigned to ε sweep (#940).
 
 ## Current research focus
 
-**The relative-MAE mechanism is working.** Both Huber (PR #783) and relative MAE (PR #840) attack the same root cause — high-Re tail dominance — at different abstraction levels, and they compound. The test_avg has improved from NaN (cruise bug) to 56.92 (all splits finite) with a clear path to the reference target of 40.93.
+**Warmup landed. Variance is materially lower but not zero.** PR #971 narrowed the 2-seed spread from 27 → 13 and improved mean by 8.4 pts. Best test=48.15 puts us within 7.2 pts of the reference target 40.93. The seed-swap behavior (default seed best under warmup, opposite of round-3) is real — basin assignment per seed effectively re-randomized under the new schedule. **Single-seed comparisons are no longer reliable** for ranking small architectural deltas.
 
-**The tooling stack has landed.** val=55.90/test=49.64 (seed42, 50 epochs). The model was still descending at epoch 50 — more wall-clock budget would help. Reference target of 40.93 is now realistically in reach. Next hypothesis priority: stabilize the LR warmup so all seeds land close to 55.90, then push on loss (ε sweep, surf_weight) and architecture (n_hidden=192 now feasible with AMP).
+**Top-of-stack priority is variance reduction.** Until we have ≥ 3 seeds at the new baseline, hypothesis PRs that beat 54.70 by less than ~5 pts on a single seed cannot be confidently ranked. A 3rd seed for the new baseline is the immediate next step (askeladd's pending assignment).
+
+**Secondary push is loss / regularization combinations on top of warmup.** All hypothesis PRs (#853, #854, #855, #864, #865, #866, #940) were branched before warmup landed, so they will collide with the warmup default. They should still work (warmup composes with loss/regularization changes) but their effect sizes will need to be measured against the 54.70 anchor, not the older 55.90 or 64.16 numbers.
 
 Current open questions:
-1. Does 5-epoch LR warmup narrow the seed spread from 27 pts to ≤ 15 pts? (PR #971 in-flight)
-2. Does ε tuning (1e-6 → 1e-2/1e-1) help rc/single at cruise's expense? (PR #940 in-flight)
-3. What happens with the full hyperparam stack (Huber δ #853, surf_weight #855, grad clip #843, EMA #866) on top of the new tooling defaults?
-4. Can n_hidden=192 + AMP/bs=16 now fit in budget? (VRAM was 49.8 GB with bs=16; n_hidden 128→192 adds ~40% params; should still fit at 96 GB)
-5. Can we break below the prior-round reference of 40.93 with the full 50-epoch budget?
+1. Does a 3rd seed at the warmup baseline confirm the 12.58 spread or widen it? (askeladd next assignment)
+2. Does longer warmup (3 vs 5 vs 10 epochs) further damp variance, or does 5 already eat too much of the cosine budget?
+3. Does ε tuning (1e-6 → 1e-2/1e-1) help rc/single at cruise's expense? (PR #940 in-flight, branched pre-warmup)
+4. What happens with the full hyperparam stack (Huber δ #853, surf_weight #855, grad clip #843, EMA #866) on top of warmup defaults?
+5. Can n_hidden=192 + AMP/bs=16 fit in budget? (VRAM was 49.8 GB; n_hidden 128→192 adds ~40% params; should still fit at 96 GB)
+6. Can we break below the prior-round reference of 40.93?
 
 ## Settled facts from this round
 
