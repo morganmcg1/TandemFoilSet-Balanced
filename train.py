@@ -157,12 +157,52 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+    def forward(self, fx, modulation=None):
+        if modulation is None:
+            fx = self.attn(self.ln_1(fx)) + fx
+            fx = self.mlp(self.ln_2(fx)) + fx
+        else:
+            # DiT-style adaLN-Zero: modulate normalized input before each sublayer.
+            gamma1, beta1, gamma2, beta2 = modulation
+            x_mod = gamma1.unsqueeze(1) * self.ln_1(fx) + beta1.unsqueeze(1)
+            fx = self.attn(x_mod) + fx
+            x_mod = gamma2.unsqueeze(1) * self.ln_2(fx) + beta2.unsqueeze(1)
+            fx = self.mlp(x_mod) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+
+class FiLMConditioner(nn.Module):
+    """Produces per-block FiLM (gamma1, beta1, gamma2, beta2) from global flow scalars.
+
+    DiT-style adaLN-Zero: zero-init final layer means init modulation is identity
+    (gamma=1, beta=0) so training starts from the unconditioned baseline.
+    """
+
+    def __init__(self, cond_dim: int, hidden: int, n_blocks: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, 4 * hidden * n_blocks),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+        self.n_blocks = n_blocks
+        self.hidden = hidden
+
+    def forward(self, cond: torch.Tensor) -> list[tuple]:
+        out = self.net(cond)
+        out = out.view(cond.size(0), self.n_blocks, 4, self.hidden)
+        modulations = []
+        for i in range(self.n_blocks):
+            gamma1 = 1.0 + out[:, i, 0]
+            beta1 = out[:, i, 1]
+            gamma2 = 1.0 + out[:, i, 2]
+            beta2 = out[:, i, 3]
+            modulations.append((gamma1, beta1, gamma2, beta2))
+        return modulations
 
 
 class Transolver(nn.Module):
@@ -170,7 +210,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 film_cond_dim: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -197,6 +238,14 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        self.film_cond_dim = film_cond_dim
+        if film_cond_dim > 0:
+            self.film = FiLMConditioner(
+                cond_dim=film_cond_dim, hidden=n_hidden, n_blocks=n_layers,
+            )
+        else:
+            self.film = None
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -209,8 +258,13 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        modulations = None
+        if self.film is not None:
+            cond = data["film_cond"]
+            modulations = self.film(cond)
+        for i, block in enumerate(self.blocks):
+            block_modulation = modulations[i] if modulations is not None else None
+            fx = block(fx, modulation=block_modulation)
         return {"preds": fx}
 
 
@@ -240,7 +294,8 @@ def fourier_pos_enc(xy: torch.Tensor, freqs=FOURIER_FREQS) -> torch.Tensor:
 
 def evaluate_split(model, loader, stats, surf_weight, device,
                    bf16: bool = False, use_fourier: bool = False,
-                   fourier_freqs=FOURIER_FREQS) -> dict[str, float]:
+                   fourier_freqs=FOURIER_FREQS,
+                   film_conditioning: bool = False) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -278,8 +333,11 @@ def evaluate_split(model, loader, stats, surf_weight, device,
                 x_in = torch.cat([xy_enc, x_norm[..., 2:]], dim=-1)
             else:
                 x_in = x_norm
+            data = {"x": x_in}
+            if film_conditioning:
+                data["film_cond"] = x_norm[:, 0, 13:24]
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
-                pred = model({"x": x_in})["preds"]
+                pred = model(data)["preds"]
             pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
@@ -456,6 +514,7 @@ class Config:
     T_max: int = 15               # cosine scheduler T_max
     fourier_pos_enc: bool = False  # apply Fourier features to (x, z) dims
     fourier_freqs: list[float] = field(default_factory=lambda: [1.0, 2.0, 4.0, 8.0, 16.0])
+    film_conditioning: bool = False  # FiLM conditioning on global flow scalars (dims 13-23)
 
 
 cfg = sp.parse(Config)
@@ -485,6 +544,7 @@ val_loaders = {
 }
 
 pos_enc_dim = 2 + 4 * len(cfg.fourier_freqs) if cfg.fourier_pos_enc else 2
+FILM_COND_DIM = 11  # x[:, 13:24] = log(Re), AoA1, NACA1×3, AoA2, NACA2×3, gap, stagger
 model_config = dict(
     space_dim=pos_enc_dim,
     fun_dim=X_DIM - 2,
@@ -496,6 +556,7 @@ model_config = dict(
     mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    film_cond_dim=FILM_COND_DIM if cfg.film_conditioning else 0,
 )
 
 model = Transolver(**model_config).to(device)
@@ -503,7 +564,8 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(
     f"  fourier_pos_enc={cfg.fourier_pos_enc} space_dim={pos_enc_dim} "
-    f"input_dim={pos_enc_dim + (X_DIM - 2)}"
+    f"input_dim={pos_enc_dim + (X_DIM - 2)} "
+    f"film_conditioning={cfg.film_conditioning}"
 )
 
 if cfg.optimizer == "lion":
@@ -567,8 +629,11 @@ for epoch in range(MAX_EPOCHS):
             x_in = torch.cat([xy_enc, x_norm[..., 2:]], dim=-1)
         else:
             x_in = x_norm
+        train_data = {"x": x_in}
+        if cfg.film_conditioning:
+            train_data["film_cond"] = x_norm[:, 0, 13:24]
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.bf16):
-            pred = model({"x": x_in})["preds"]
+            pred = model(train_data)["preds"]
 
         if cfg.loss == "l1":
             err = torch.abs(pred.float() - y_norm)
@@ -607,6 +672,7 @@ for epoch in range(MAX_EPOCHS):
             eval_model, loader, stats, cfg.surf_weight, device,
             bf16=cfg.bf16, use_fourier=cfg.fourier_pos_enc,
             fourier_freqs=cfg.fourier_freqs,
+            film_conditioning=cfg.film_conditioning,
         )
         for name, loader in val_loaders.items()
     }
@@ -670,6 +736,7 @@ if best_metrics:
                 eval_model_for_test, loader, stats, cfg.surf_weight, device,
                 bf16=cfg.bf16, use_fourier=cfg.fourier_pos_enc,
                 fourier_freqs=cfg.fourier_freqs,
+                film_conditioning=cfg.film_conditioning,
             )
             for name, loader in test_loaders.items()
         }
