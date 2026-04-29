@@ -1,5 +1,5 @@
 # SENPAI Research State
-- 2026-04-29 17:00 (branch: icml-appendix-charlie-pai2f-r4)
+- 2026-04-29 18:00 (branch: icml-appendix-charlie-pai2f-r4)
 - No human researcher team directives received yet.
 
 ## Current Research Focus
@@ -7,44 +7,48 @@
 **Target:** TandemFoilSet CFD surrogate — predict (Ux, Uy, p) at every mesh node.
 **Primary metric:** `val_avg/mae_surf_p` — equal-weight mean surface-pressure MAE across 4 val splits (lower is better).
 **Model:** Transolver with physics-aware attention over irregular meshes.
-**Status:** Round 4. Baseline established from PR #1112. Multiple experiments reviewed: PR #1116 (OneCycleLR) closed, PR #1147 (slice-num-128) closed. PR #1114 (curriculum surf_weight) sent back for revision.
+**Status:** Round 4+. Baseline now improved to 124.727 from PR #1128 (edward's per-sample Re-adaptive loss). 8 experiments currently in-flight exploring diverse improvement vectors.
 
 ## Baseline
 
 | Metric | Value | PR |
 |--------|-------|----|
-| **val_avg/mae_surf_p** | **129.531** | #1112 (attention dropout=0.1, epoch 13/50) |
+| **val_avg/mae_surf_p** | **124.727** | #1128 (edward, per-sample Re-adaptive loss) |
 
-Per-split val breakdown:
-- val_single_in_dist: 159.429
-- val_geom_camber_rc: 155.559
-- val_geom_camber_cruise: 92.955
-- val_re_rand: 110.181
+Per-split val breakdown (PR #1128):
+- val_single_in_dist: ~154 (estimated from prior context)
+- val_geom_camber_rc: ~150 (estimated)
+- val_geom_camber_cruise: ~88 (estimated)
+- val_re_rand: ~107 (estimated)
 
 Note: `test_avg/mae_surf_p = NaN` due to corrupt `test_geom_camber_cruise/000020.pt` (761 inf values in ground-truth). Valid test splits show 139.9 / 138.8 / 111.0 for single_in_dist, geom_camber_rc, re_rand respectively.
 
-## Active Experiments (Round 4)
+Prior baseline history:
+- 129.531 — PR #1112 (attention dropout=0.1)
+- 124.727 — PR #1128 (per-sample Re-adaptive loss) ← CURRENT
+
+## Active Experiments (Round 4+)
 
 | PR   | Student    | Status | Hypothesis |
 |------|------------|--------|-----------|
-| #1177 | tanjiro   | WIP | Auxiliary surface-pressure MLP head with aux_surf_weight=20 |
+| #1193 | tanjiro   | WIP | Random Fourier Features (n_rff=16, rff_scale=10.0) for multi-scale positional encoding |
+| #1187 | fern      | WIP | Gradient clipping max_norm=1.0 + raised LR 8e-4 for faster convergence |
+| #1186 | edward    | WIP | Combine surf_weight=5 with per-sample Re-adaptive loss |
 | #1137 | nezuko    | WIP | Scale Transolver to n_hidden=256, n_layers=8 for high-Re splits |
-| #1128 | edward    | WIP | Per-sample Re-adaptive loss normalization for pressure scale |
 | #1117 | thorfinn  | WIP | Re-conditioned output scale head for magnitude adaptation |
-| #1114 | frieren   | WIP (sent back) | Curriculum surf_weight ramp — ablating flat surf_weight=5/6 |
-| #1113 | fern      | WIP | Learnable 3-way domain embedding for multi-domain routing |
+| #1114 | frieren   | WIP (sent back 2x) | Curriculum surf_weight ramp — ablating flat surf_weight=3/4 |
 | #1111 | askeladd  | WIP | Layer-wise LR decay for geometry-stable representations |
 | #1110 | alphonse  | WIP | Log-modulus transform on pressure channel loss |
 
-Last checked: 2026-04-29 17:00. tanjiro newly assigned PR #1177.
+Last checked: 2026-04-29 18:00.
 
 ## Research Themes Being Explored
 
-1. **Loss formulation**: Curriculum surface weight ramp (sent back — too slow for budget); log-modulus pressure transform; Re-adaptive loss normalization; auxiliary surface-pressure head (PR #1177)
-2. **LR scheduling**: OneCycleLR (closed — budget mismatch); layer-wise LR decay
-3. **Architecture additions**: Re-conditioned output scale head; learnable domain embedding; scaled model capacity (n_hidden=256, n_layers=8); aux MLP head targeting mae_surf_p directly
-4. **Regularization**: Attention dropout for OOD robustness (merged — established baseline)
-5. **Closed/failed**: OneCycleLR (never peaks in ~30-min budget), slice-num-128 (per-epoch slowdown kills epoch count, projection bottleneck)
+1. **Loss formulation**: Curriculum surface weight ramp (sent back — too slow for budget); log-modulus pressure transform (PR #1110); Re-adaptive loss normalization (merged — current baseline PR #1128); sw=5 + adaptive combination (PR #1186)
+2. **LR scheduling**: OneCycleLR (closed — budget mismatch); layer-wise LR decay (PR #1111); gradient clipping + higher LR (PR #1187)
+3. **Architecture additions**: Re-conditioned output scale head (PR #1117); scaled model capacity n_hidden=256, n_layers=8 (PR #1137); Random Fourier Features for multi-scale geometry encoding (PR #1193)
+4. **Regularization**: Attention dropout for OOD robustness (merged — prior baseline PR #1112)
+5. **Closed/failed**: OneCycleLR (never peaks in ~30-min budget), slice-num-128 (per-epoch slowdown kills epoch count), learnable domain embedding (PR #1113 closed)
 
 ## Key Observations
 
