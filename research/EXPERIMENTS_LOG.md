@@ -1,5 +1,25 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #970 (CLOSED): Shared FiLM head — rank-reduction probe of FiLM conditioning manifold
+- **Branch:** `thorfinn/shared-film`
+- **Hypothesis:** Replace 5 independent per-block FiLM heads with one shared FiLM head reused at all blocks. Tests whether per-block FiLM specialization carries information vs is just redundant capacity. Saves ~34K params (~5% of model). Match-or-better → Pareto win.
+- **Run:** W&B (single seed, 14/14 epochs, group `shared-film`)
+- val_avg/mae_surf_p = **83.55** vs old baseline (when assigned) 79.54 → **+5.0% regression**; vs current SwiGLU baseline 62.20 → **+34.3% regression**.
+
+### Decision: CLOSED — depth-specialization confirmed; 4th FiLM-redistribution failure
+- **Per-block FiLM specialization carries non-trivial information.** The 5 independent FiLM heads aren't redundant — collapsing to a single shared head loses 34K params *and* hurts val_avg by 5% on old baseline. The conditioning manifold is genuinely depth-rank-5, not depth-rank-1.
+- **Per-split signal:** regression magnitude grows with the Re-range width of each split — `re_rand` regressed most (where Re distribution is widest, requiring most depth-specialized conditioning). `single_in_dist` (narrow Re range) regressed least. Direct evidence of depth-specialization in the Re-conditioning function.
+- **Operator-class argument:** at each block, FiLM head must compose (1+γ_l)·h_l + β_l with the **already-modulated** input from prior blocks. Sharing means same (γ, β) applied at multiple compositional depths — non-equivalent operations even at identical Re. Compounding effect explains why per-split regression scales with Re-range.
+- **Fourth FiLM-redistribution probe to fail.** With #934 (last-2 only), #937 (dual FiLM), #756 (Fourier features), and now #970 (shared head) all clustering at +2-5% regression, the FiLM-axis is **architecturally saturated** in the redistribution sense. Further FiLM-redistribution experiments would be redundant.
+- **Follow-up assigned:** thorfinn → PR #999 (RMSNorm replacing LayerNorm — canonical SwiGLU pairing). Pivot off FiLM axis to normalization axis. RMSNorm is the LLaMA/Mistral-canonical normalization for SwiGLU stacks; LayerNorm pairing is leaving a small clean win on the table.
+
+---
+
+## 2026-04-29 — Assignment: PR #999 (thorfinn RMSNorm replacing LayerNorm)
+- **PR #999** (`thorfinn/rmsnorm`): RMSNorm (root mean square norm — LayerNorm without mean-centering) replaces LayerNorm in all 3 block normalization sites (pre-attn / pre-mlp / pre-head). Canonical pairing with SwiGLU in modern transformers (LLaMA, Mistral, PaLM). RMSNorm preserves scale (the statistic SwiGLU's bilinear gate is sensitive to) while dropping centering (one fewer cross-dimension correlation). Modest expected gain (−0.5 to −2%); paper-friendly architectural simplification with clean methods-section alibi. Stack: L1 + FiLM-pre + Re-stratify + SwiGLU + **RMSNorm**.
+
+---
+
 ## 2026-04-29 — PR #962 (CLOSED): EMA model weights on FiLM+L1+Re-stratify (revisit #759 in new regime)
 - **Branch:** `frieren/ema-weights`
 - **Hypothesis:** EMA decay=0.999 shadow weights for evaluation; revisit prior PR #759 close in correct regime (post-L1+FiLM+Re-stratify).

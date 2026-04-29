@@ -11,7 +11,7 @@
 - **test_avg/mae_surf_p = 55.04**
 - Per-split val: single_in_dist=74.96, geom_camber_rc=73.39, geom_camber_cruise=42.66, re_rand=57.81
 - Beat-threshold for new PRs: **val_avg < 62.20**
-- **Note:** SwiGLU ran 12/14 epochs due to +12.6% per-epoch wall-clock cost. All active WIP branches (#869, #927, #962, #969, #970, #975, #976) were cut from the pre-SwiGLU baseline (79.54). If any shows improvement over old baseline (79.54) but not new (62.20), it will be sent back to rebase onto SwiGLU HEAD and re-run.
+- **Note:** SwiGLU ran 12/14 epochs due to +12.6% per-epoch wall-clock cost. All active WIP branches (#869, #927, #969, #975, #976) were cut from the pre-SwiGLU baseline (79.54). If any shows improvement over old baseline (79.54) but not new (62.20), it will be sent back to rebase onto SwiGLU HEAD and re-run. New post-SwiGLU assignments (#983, #993, #999) build directly on the SwiGLU HEAD.
 
 ### Prior bests (for reference)
 - val_avg/mae_surf_p = 79.54 (nezuko Re-stratified batch sampling, merged PR #910) — superseded by SwiGLU
@@ -55,6 +55,8 @@
 | #952 | Wider single output head (128→256→3) | Closed — decoder capacity not the lever (+2.5%); two probes now falsified | 81.52 |
 | #917 | Re-input noise σ sweep {0.02, 0.05, 0.10} | Closed — mechanism real but small (+0.4% on old baseline); Re-axis saturated by Re-stratify on current stack | 83.08 |
 | #962 | EMA model weights (decay=0.999) on FiLM+L1+Re-stratify | Closed — wrong-regime smoothing on non-converged trajectory (+13.1% on old baseline; +44.7% vs new SwiGLU best) | 89.99 |
+| #970 | Shared FiLM head — rank-reduction probe | Closed — depth-specialization confirmed; per-block FiLM heads carry information, not redundant capacity (+5.0% on old / +34.3% vs new SwiGLU best); 4th FiLM-redistribution falsification | 83.55 |
+| **#961** | **SwiGLU MLP — replace GELU MLP with Swish-gated linear unit** | **MERGED — current best** | **62.20** |
 
 ## Active WIP PRs
 
@@ -62,7 +64,7 @@
 |---------|-----|-----------|--------|
 | alphonse | #983 | **SwiGLU mlp_ratio ablation (ratio=1 vs 2) — bilinear gating vs capacity; paper ablation** | WIP — new 2026-04-29 |
 | askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | WIP — new 2026-04-29 |
-| thorfinn | #970 | Shared FiLM head: one head reused at all 5 blocks (rank-reduction probe) | WIP — new 2026-04-29 |
+| thorfinn | #999 | **RMSNorm replacing LayerNorm — canonical SwiGLU pairing (LLaMA/Mistral-style normalization)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | nezuko | #969 | Vertical-flip data augmentation (geometric symmetry: y → -y, Uy → -Uy) | WIP — new 2026-04-29 |
 | fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
 | edward | #975 | DropPath rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify | WIP — new 2026-04-29 |
@@ -82,13 +84,13 @@
 - **Depth scaling wall-clock incompatible** (PR #936: n_layers=7 → 185s/epoch +41%, only 10/14 epochs fit in 30-min timeout, +15.3% regression). Not a capacity verdict; would need bf16 or torch.compile to test fairly.
 - **Fourier encoding redundant with FiLM** (PR #756 v3: +3.0% on full stack). FiLM is a strict generalization of fixed-frequency input encoding. The Re-axis lever is saturated architecturally; no benefit from input-side encoding.
 - **Channel weighting falsified on FiLM+L1 stack** (PR #743 v3: +1.1% worse). FiLM's hidden-state modulation already captures the per-channel gradient lever. Channel weighting was genuine at Huber stage (−3.8%) but FiLM makes it redundant.
-- **FiLM redistribution attempts saturated** — three independent redistribution probes (PR #934 last-2 FiLM +2.8%, PR #937 dual FiLM +3.5%, PR #756 Fourier +3.0%) all regress vs the current pre-block-FiLM design. **The Re-conditioning lever is architecturally saturated** at this design; future FiLM-axis work should be **rank-reduction** (shared head, PR #970) rather than redistribution.
+- **FiLM redistribution attempts saturated — including rank-reduction** — four independent FiLM-redistribution probes now falsified (PR #934 last-2 FiLM +2.8%, PR #937 dual FiLM +3.5%, PR #756 Fourier +3.0%, PR #970 shared head +5.0%). **The Re-conditioning lever is architecturally saturated** in *both* directions — neither redistribution nor rank-reduction wins. Per-block FiLM specialization carries information (depth-specialized conditioning); the 5 heads aren't redundant capacity. FiLM-axis work is closed for this round; future probes should be on different axes (multi-variable FiLM input PR #976 is the only remaining FiLM-axis lever).
 - **Re-input-noise saturated by Re-stratify** (PR #917 σ-sweep). Mechanism confirmed (val_re_rand −2.1% at σ=0.05) but small absolute effect; Re-stratify already achieves val_re_rand=77.02 < σ=0.05's 77.58. The Re-axis input-side smoothing lever is gone.
 - **Decoder capacity is not a lever** — two falsifications: PR #924 per-channel heads (+5.8%) and PR #952 wider single head (+2.5%). All 3 channels regress uniformly, decoder isn't bottlenecked at this depth/width budget. **One preserved signal: `geom_camber_rc` improved on PR #952 (−4.2% val).** Suggests rc-bottleneck is representational, not capacity-uniform — open question for future rc-targeted intervention.
 - **Training-time weight smoothing is wrong-regime** for this short-budget schedule (PR #962 EMA decay=0.999 +13.1%). 14-epoch budget never enters a stationary regime; EMA / SWA / warmup variants all fail for the same reason (averaging stale non-converged weights). Pivot: inference-time augmentation (TTA, #993) bypasses the non-stationarity issue.
 - **FiLM input axis is single-variable now; AoA-FiLM probe (PR #976) opens multi-variable conditioning** as a fresh axis. AoA is a primary flow parameter the model has zero conditioning-awareness of. If AoA-FiLM wins, opens 4-d (Re, AoA1, AoA2, gap) and beyond.
-- **SwiGLU is the new canonical MLP architecture** (PR #961, merged 2026-04-29, val 79.54→62.20 −21.8%). All future experiments build on L1 + FiLM-pre + Re-stratify + SwiGLU. Active WIP branches (#869, #927, #962, #969, #970, #975, #976) were cut from the pre-SwiGLU baseline — if any beats old baseline (79.54) but not new (62.20), it will be sent back to rebase onto SwiGLU HEAD.
-- **Off-Re axes underway:** geometric symmetry (vflip #969), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), evaluation smoothing (EMA #962), volume-side per-channel loss (#927), rank-reduction (shared FiLM #970). SwiGLU paper ablation (#983).
+- **SwiGLU is the new canonical MLP architecture** (PR #961, merged 2026-04-29, val 79.54→62.20 −21.8%). All future experiments build on L1 + FiLM-pre + Re-stratify + SwiGLU. Active pre-SwiGLU WIP branches (#869, #927, #969, #975, #976) — if any beats old baseline (79.54) but not new (62.20), they will be sent back to rebase onto SwiGLU HEAD. Post-SwiGLU assignments (#983, #993, #999) build directly on SwiGLU HEAD.
+- **Off-Re axes underway:** geometric symmetry (vflip #969), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), volume-side per-channel loss (#927), inference-time augmentation (TTA-vflip #993), normalization canonical (RMSNorm #999). SwiGLU paper ablation (#983).
 - **Focal loss falsified on L1 base** (PR #858): high-error nodes are convergence-bottlenecked, not gradient-bottlenecked.
 - **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric.
 - **LR warmup mechanism baked into baseline** (PR #750): schedule-budget alignment principle survives as a convention.
@@ -98,13 +100,14 @@
 ## Potential next research directions
 
 1. **Vertical-flip data augmentation (geometric symmetry)** — y → -y, Uy → -Uy at p=0.5. Opens a fresh axis (geometric symmetry) orthogonal to FiLM/Re-stratify. **Assigned → nezuko PR #969.**
-2. **Shared FiLM head** — single FiLMLayer reused at all 5 blocks. Rank-reduction probe; tests whether per-block FiLM specialization carries information. **Assigned → thorfinn PR #970.**
+2. ~~**Shared FiLM head**~~ — single FiLMLayer reused at all 5 blocks. **Closed (PR #970): depth-specialization confirmed** (+5.0% on old / +34.3% vs new SwiGLU best). Per-block FiLM specialization carries non-trivial information; FiLM-redistribution axis fully saturated.
 3. **AoA-FiLM (multi-variable conditioning)** — extend FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2). Tests whether multi-variable conditioning compounds. **Assigned → askeladd PR #976.**
 4. **DropPath rate sweep** — stochastic depth on FiLM+L1+Re-stratify stack {0.05, 0.10, 0.15}. Regularization axis. **Assigned → edward PR #975.**
 5. **SwiGLU MLP** — ~~replace GELU MLP with Swish-gated linear unit~~ **MERGED (PR #961, val=62.20 −21.8%). New canonical architecture.**
 6. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
 7. **TTA (test-time augmentation) with vertical flip** — inference-time symmetry exploit; zero training cost. Orthogonal to vflip-training (#969). **Assigned → frieren PR #993.**
 8. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
+9. **RMSNorm replacing LayerNorm** — canonical SwiGLU pairing (LLaMA/Mistral-style). Removes mean-centering from norm; preserves scale (the SwiGLU bilinear-gate-relevant statistic). Modest expected gain (−0.5 to −2%); paper-friendly architectural simplification. **Assigned → thorfinn PR #999.**
 
 ### Off-the-Re-axis ideas (Re-conditioning lever saturated; pivot to fresh axes)
 9. **Horizontal-flip + rotation augmentation (conditional on vflip #969 result)** — if vflip wins, test horizontal-flip (x → -x, Ux → -Ux) and small-angle rotation. Domain-aware augmentation pipeline.
