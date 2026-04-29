@@ -425,6 +425,9 @@ class Config:
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 disables warmup)
     adamw_beta2: float = 0.999  # AdamW beta2 (second moment decay). Default 0.999 (PyTorch default).
+    one_cycle_lr: bool = False  # use OneCycleLR (per-step) instead of SequentialLR/CosineAnnealingLR
+    one_cycle_max_lr: float = 2e-3  # OneCycleLR peak LR
+    one_cycle_pct_start: float = 0.3  # OneCycleLR fraction of steps spent ramping up
 
 
 cfg = sp.parse(Config)
@@ -485,21 +488,39 @@ optimizer = torch.optim.AdamW(
     betas=(0.9, cfg.adamw_beta2),
 )
 steps_per_epoch = len(train_loader)
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimizer,
-    max_lr=2e-3,
-    total_steps=MAX_EPOCHS * steps_per_epoch,
-    pct_start=0.3,
-    anneal_strategy="cos",
-    div_factor=25.0,
-    final_div_factor=1e4,
-)
-print(
-    f"LR schedule: OneCycleLR max_lr=2e-3, total_steps={MAX_EPOCHS * steps_per_epoch} "
-    f"(epochs={MAX_EPOCHS} × steps_per_epoch={steps_per_epoch}), "
-    f"pct_start=0.3, div_factor=25.0, final_div_factor=1e4 "
-    f"(initial_lr=8e-5, final_lr=8e-9)"
-)
+if cfg.one_cycle_lr:
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.one_cycle_max_lr,
+        total_steps=MAX_EPOCHS * steps_per_epoch,
+        pct_start=cfg.one_cycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=25.0,
+        final_div_factor=1e4,
+    )
+    print(
+        f"LR schedule: OneCycleLR max_lr={cfg.one_cycle_max_lr}, "
+        f"total_steps={MAX_EPOCHS * steps_per_epoch} "
+        f"(epochs={MAX_EPOCHS} × steps_per_epoch={steps_per_epoch}), "
+        f"pct_start={cfg.one_cycle_pct_start}, div_factor=25.0, final_div_factor=1e4"
+    )
+elif cfg.warmup_epochs > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.01, end_factor=1.0, total_iters=cfg.warmup_epochs,
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs), eta_min=0.0,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"LR schedule: linear warmup over {cfg.warmup_epochs} epochs "
+          f"(start_factor=0.01 → 1.0), then cosine over "
+          f"{max(1, MAX_EPOCHS - cfg.warmup_epochs)} epochs (eta_min=0)")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"LR schedule: CosineAnnealingLR T_max={MAX_EPOCHS}")
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
@@ -627,7 +648,8 @@ for epoch in range(MAX_EPOCHS):
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         scaler.step(optimizer)
         scaler.update()
-        scheduler.step()
+        if cfg.one_cycle_lr:
+            scheduler.step()
         if ema_model is not None:
             ema_model.update_parameters(model)
         global_step += 1
@@ -639,6 +661,8 @@ for epoch in range(MAX_EPOCHS):
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    if not cfg.one_cycle_lr:
+        scheduler.step()
 
     # --- Validate ---
     val_eval_model.eval()
