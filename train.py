@@ -137,6 +137,38 @@ ACTIVATION = {
 }
 
 
+class MultiScaleRFF(nn.Module):
+    """Random Fourier Features for normalized 2D node coords at two frequency scales.
+
+    σ₁=1.0 captures global / low-frequency flow structure; σ₂=5.0 captures
+    near-wall / high-frequency boundary-layer structure. Buffers are frozen.
+    Coords are passed in already normalized (matches PR #928 recipe).
+    """
+
+    def __init__(self, num_freq: int = 32, sigma1: float = 1.0,
+                 sigma2: float = 5.0, seed: int = 42):
+        super().__init__()
+        rng = torch.Generator()
+        rng.manual_seed(seed)
+        B1 = torch.randn(2, num_freq, generator=rng) * sigma1
+        B2 = torch.randn(2, num_freq, generator=rng) * sigma2
+        self.register_buffer("B1", B1)
+        self.register_buffer("B2", B2)
+
+    def forward(self, x_coord):
+        # x_coord: [B, N, 2] — normalized (x, z) node positions
+        proj1 = 2 * math.pi * (x_coord @ self.B1)
+        proj2 = 2 * math.pi * (x_coord @ self.B2)
+        return torch.cat(
+            [
+                x_coord,
+                torch.cos(proj1), torch.sin(proj1),
+                torch.cos(proj2), torch.sin(proj2),
+            ],
+            dim=-1,
+        )
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -244,18 +276,26 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 rff_num_freq: int = 32, rff_sigma1: float = 1.0,
+                 rff_sigma2: float = 5.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        # Multi-scale RFF on the (already-normalized) (x, z) coords.
+        # Expands the 2 spatial dims to 2 + 4*num_freq.
+        self.rff = MultiScaleRFF(num_freq=rff_num_freq, sigma1=rff_sigma1,
+                                 sigma2=rff_sigma2)
+        rff_dim = 2 + 4 * rff_num_freq
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + rff_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -282,7 +322,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        coords = x[..., :2]              # normalized (x, z) coords: [B, N, 2]
+        rff_out = self.rff(coords)       # [B, N, 2 + 4*num_freq]
+        x_in = torch.cat([rff_out, x[..., 2:]], dim=-1)  # [B, N, 152]
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -527,6 +570,9 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    rff_num_freq=32,
+    rff_sigma1=1.0,
+    rff_sigma2=5.0,
 )
 
 model = Transolver(**model_config).to(device)
@@ -542,15 +588,20 @@ ema = ModelEMA(model, decay=EMA_DECAY)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-# 1-epoch linear warmup, then cosine to ~0 over T_max=15 epochs.
-WARMUP_EPOCHS = 1
-COSINE_T_MAX = 15  # tuned for SENPAI_TIMEOUT_MINUTES=30 wall-clock cap (~13-14 realized epochs)
-warmup = torch.optim.lr_scheduler.LinearLR(
-    optimizer, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_EPOCHS
-)
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=COSINE_T_MAX, eta_min=1e-6)
-scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer, schedulers=[warmup, cosine], milestones=[WARMUP_EPOCHS]
+# OneCycleLR — per-step schedule fits the 30-min cap (~13-14 realized epochs of 15).
+# max_lr=1e-3 is 2x the AdamW init lr; div_factor=25 / final_div_factor=1e4 give
+# initial lr=4e-5 and final lr=4e-9 (deep cool-down).
+ONECYCLE_EPOCHS = 15
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=1e-3,
+    steps_per_epoch=len(train_loader),
+    epochs=ONECYCLE_EPOCHS,
+    pct_start=0.3,
+    anneal_strategy="cos",
+    div_factor=25.0,
+    final_div_factor=1e4,
+    cycle_momentum=False,  # AdamW has no momentum buffer
 )
 
 run = wandb.init(
@@ -661,15 +712,22 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        # OneCycleLR is per-step. Past epoch 15 the schedule is exhausted —
+        # swallow the ValueError and let lr stay at the final value.
+        try:
+            scheduler.step()
+        except ValueError:
+            pass
         ema.update(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(),
+                   "train/lr": optimizer.param_groups[0]["lr"],
+                   "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -711,7 +769,7 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
-        "lr": scheduler.get_last_lr()[0],
+        "lr": optimizer.param_groups[0]["lr"],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
