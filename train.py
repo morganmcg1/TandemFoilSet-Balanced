@@ -23,6 +23,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -31,7 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -401,6 +402,78 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Re-stratified batch sampling
+# ---------------------------------------------------------------------------
+
+class ReStratifiedSampler(Sampler[int]):
+    """Round-robin sampler over log(Re) quintile buckets.
+
+    Partitions the training set into ``n_quintiles`` log(Re) strata using
+    training-set quantile boundaries. Each epoch shuffles each stratum
+    independently, then interleaves them in round-robin order. With
+    ``n_quintiles > batch_size`` (e.g. 5 vs 4), each batch sees a sliding
+    window of consecutive strata, so the "skipped" stratum rotates across
+    batches and every quintile gets equal coverage over an epoch — the
+    epoch-level balance that matters for FiLM's conditioning gradient.
+    """
+
+    def __init__(self, log_re_vals: np.ndarray, batch_size: int,
+                 n_quintiles: int = 5, seed: int = 42):
+        self.batch_size = batch_size
+        self.n_quintiles = n_quintiles
+        edges = np.quantile(log_re_vals, np.linspace(0.0, 1.0, n_quintiles + 1))
+        labels = np.clip(
+            np.searchsorted(edges[1:-1], log_re_vals), 0, n_quintiles - 1
+        )
+        self.buckets = [
+            np.where(labels == q)[0].tolist() for q in range(n_quintiles)
+        ]
+        self.bucket_sizes = [len(b) for b in self.buckets]
+        self.rng = np.random.default_rng(seed)
+
+    def __iter__(self):
+        shuffled = [self.rng.permutation(b).tolist() for b in self.buckets]
+        iters = [iter(b) for b in shuffled]
+        active = list(range(self.n_quintiles))
+        indices: list[int] = []
+        while active:
+            new_active = []
+            for q in active:
+                try:
+                    indices.append(next(iters[q]))
+                    new_active.append(q)
+                except StopIteration:
+                    pass
+            active = new_active
+        n_full = (len(indices) // self.batch_size) * self.batch_size
+        return iter(indices[:n_full])
+
+    def __len__(self) -> int:
+        total = sum(self.bucket_sizes)
+        return (total // self.batch_size) * self.batch_size
+
+
+def extract_train_log_re(train_ds, num_workers: int = 4) -> np.ndarray:
+    """One-time scan of the training set to extract per-sample log(Re).
+
+    log(Re) is broadcast across all nodes of a sample (feature dim 13), so
+    we read x[0, 13]. Uses a parallel DataLoader to amortize per-file I/O.
+    """
+    loader = DataLoader(
+        train_ds, batch_size=8, shuffle=False,
+        num_workers=num_workers, collate_fn=lambda b: b,
+    )
+    out = np.empty(len(train_ds), dtype=np.float64)
+    idx = 0
+    for batch in loader:
+        for x, _y, _surf in batch:
+            out[idx] = float(x[0, 13].item())
+            idx += 1
+    assert idx == len(train_ds)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -421,6 +494,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    re_stratify: bool = True  # round-robin Re-quintile mini-batches (overrides domain-balanced sampler)
+    n_re_quintiles: int = 5
+    re_stratify_seed: int = 42
 
 
 if __name__ == "__main__":
@@ -437,7 +513,32 @@ if __name__ == "__main__":
     loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                          persistent_workers=True, prefetch_factor=2)
 
-    if cfg.debug:
+    re_stratify_active = cfg.re_stratify and not cfg.debug
+    sampler_info: dict = {"sampler": "shuffle" if cfg.debug else "weighted_domain"}
+    if re_stratify_active:
+        t0_re = time.time()
+        log_re_train = extract_train_log_re(train_ds, num_workers=4)
+        re_sampler = ReStratifiedSampler(
+            log_re_train, batch_size=cfg.batch_size,
+            n_quintiles=cfg.n_re_quintiles, seed=cfg.re_stratify_seed,
+        )
+        print(
+            f"Re-stratified sampler: {cfg.n_re_quintiles} quintiles, "
+            f"bucket sizes={re_sampler.bucket_sizes}, "
+            f"len(sampler)={len(re_sampler)} (extracted log_re in {time.time()-t0_re:.1f}s)"
+        )
+        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+                                  sampler=re_sampler, drop_last=True,
+                                  **loader_kwargs)
+        sampler_info = {
+            "sampler": "re_stratified",
+            "n_re_quintiles": cfg.n_re_quintiles,
+            "bucket_sizes": re_sampler.bucket_sizes,
+            "log_re_min": float(log_re_train.min()),
+            "log_re_max": float(log_re_train.max()),
+            "log_re_mean": float(log_re_train.mean()),
+        }
+    elif cfg.debug:
         train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                                   shuffle=True, **loader_kwargs)
     else:
@@ -482,6 +583,7 @@ if __name__ == "__main__":
             "n_params": n_params,
             "train_samples": len(train_ds),
             "val_samples": {k: len(v) for k, v in val_splits.items()},
+            "sampler_info": sampler_info,
         },
         mode=os.environ.get("WANDB_MODE", "online"),
     )
@@ -538,7 +640,15 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
             global_step += 1
-            wandb.log({"train/loss": loss.item(), "global_step": global_step})
+            # Per-batch log(Re) diversity (confirms stratified sampler is doing its job).
+            log_re_batch = x[:, 0, 13]
+            wandb.log({
+                "train/loss": loss.item(),
+                "train/batch_log_re_mean": log_re_batch.mean().item(),
+                "train/batch_log_re_std": log_re_batch.std(unbiased=False).item(),
+                "train/batch_log_re_range": (log_re_batch.max() - log_re_batch.min()).item(),
+                "global_step": global_step,
+            })
 
             epoch_vol += vol_loss.item()
             epoch_surf += surf_loss.item()
