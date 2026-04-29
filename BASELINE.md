@@ -6,6 +6,48 @@ SPDX-PackageName: senpai
 
 # Baseline Metrics — TandemFoilSet (pai2e-r5)
 
+## 2026-04-29 01:00 — PR #801: EMA model averaging (decay=0.995) for better generalization (NEW BEST)
+
+- **Surface MAE:** Ux=0.8997, Uy=0.4874, p=**70.3212** (val_avg, best checkpoint epoch 14)
+- **val_avg/mae_surf_p:** 70.3212 — **−1.36% vs previous best (71.2882)**
+- **Metric summary:** `metrics/charliepai2e5-edward-ema-decay-0.995-q7m9lxrl.jsonl`
+- **Reproduce:** `cd target/ && python train.py --surf_weight 20.0`
+  *(EMA decay=0.995 applied on top of Lion+L1+clip+CosineAnnealingLR T_max=15 baseline)*
+
+### Per-split validation (best checkpoint, epoch 14)
+
+| Split | surf Ux | surf Uy | surf p | vol Ux | vol Uy | vol p |
+|-------|--------:|--------:|-------:|-------:|-------:|------:|
+| val_single_in_dist     | 0.7521 | 0.4461 |  74.0550 | 3.7432 | 1.6326 | 106.1984 |
+| val_geom_camber_rc     | 1.4649 | 0.6900 |  87.1819 | 5.0641 | 2.5006 | 103.4538 |
+| val_geom_camber_cruise | 0.4522 | 0.3227 |  51.8277 | 2.4878 | 1.0466 |  55.9177 |
+| val_re_rand            | 0.9295 | 0.4907 |  68.2204 | 3.5078 | 1.6900 |  76.9039 |
+| **avg**                | **0.8997** | **0.4874** | **70.3212** | **3.7007** | **1.7174** | **85.6185** |
+
+### Model configuration
+
+| Parameter | Value |
+|-----------|-------|
+| n_hidden | 128 |
+| n_layers | 5 |
+| n_head | 4 |
+| slice_num | 64 |
+| mlp_ratio | 2 |
+| optimizer | Lion |
+| lr | 3e-4 |
+| weight_decay | 1e-2 |
+| surf_weight | 20.0 |
+| batch_size | 4 |
+| loss | L1 (vol + surf_weight * surf) |
+| scheduler | CosineAnnealingLR T_max=15 |
+| gradient clipping | clip_grad_norm max_norm=1.0 |
+| **EMA** | **decay=0.995** |
+| bf16 | None |
+
+**Improvement over previous baseline (PR #901):** 71.2882 → 70.3212 (−1.36%)
+
+---
+
 ## 2026-04-28 23:59 — PR #901: Cosine LR T_max budget align: T_max 50→15 (NEW BEST)
 
 - **Surface MAE:** Ux=0.9077, Uy=0.4877, p=**71.2882** (val_avg, best checkpoint epoch 13)
