@@ -407,6 +407,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     ema_decay: float = 0.999  # Polyak/EMA decay; 0.999 → ~1000-step half-life
     ema_warmup_epochs: int = 5  # epochs to skip EMA accumulation (avoid pulling toward random init)
+    beta2: float = 0.999  # AdamW second-moment decay
 
 
 cfg = sp.parse(Config)
@@ -461,7 +462,12 @@ print(
     f"— first update at start of epoch {cfg.ema_warmup_epochs + 1}"
 )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.beta2),
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -537,7 +543,15 @@ for epoch in range(MAX_EPOCHS):
         if epoch >= cfg.ema_warmup_epochs:
             ema_model.update_parameters(model)
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        step_log = {"train/loss": loss.item(), "global_step": global_step}
+        if global_step % 100 == 0:
+            for s in optimizer.state.values():
+                if "exp_avg_sq" in s:
+                    v = s["exp_avg_sq"]
+                    step_log["diag/v_mean"] = v.mean().item()
+                    step_log["diag/v_p99"] = v.flatten().quantile(0.99).item()
+                    break
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
