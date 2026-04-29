@@ -1,5 +1,32 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #961 (MERGED): SwiGLU MLP — replace GELU MLP with Swish-gated linear unit
+- **Branch:** `alphonse/swiglu-mlp`
+- **Hypothesis:** SwiGLU's bilinear gating (`silu(gate) * up`) lets each MLP output unit express a learnable bilinear form over its inputs, vs GELU's single-path nonlinear projection. Nat-fit for PDE surrogates due to advection-like bilinear structure in flow physics.
+- **Run:** W&B `sv9ktfk3`, 12/14 epochs (30-min env timeout; +12.6% per epoch → 152s), group `swiglu-mlp`, 0.87M params (+24%), peak 54.6 GB
+
+| Split | val baseline (Re-strat+FiLM) | val SwiGLU | Δ_val | test baseline | test SwiGLU | Δ_test |
+|---|---|---|---|---|---|---|
+| `single_in_dist` | 84.70 | **74.96** | −11.5% | 73.79 | **65.07** | −11.8% |
+| `geom_camber_rc` | 92.95 | **73.39** | **−21.0%** | 83.50 | **67.47** | **−19.2%** |
+| `geom_camber_cruise` | 63.49 | **42.66** | **−32.8%** | 52.45 | **35.67** | **−32.0%** |
+| `re_rand` | 77.02 | **57.81** | **−24.9%** | 71.29 | **51.93** | **−27.2%** |
+| **avg** | **79.54** | **62.20** | **−21.8%** | **70.26** | **55.04** | **−21.7%** |
+
+### Decision: MERGED — new best, largest single-PR improvement in round 3
+- val_avg = **62.20** (−21.8%) vs prior baseline 79.54; test = 55.04 (−21.7%) vs 70.26. Every split improves.
+- **Largest gains on OOD-extrapolation splits:** geom_camber_cruise −32.8%, re_rand −24.9%, geom_camber_rc −21.0%. SwiGLU's bilinear forms help most where the model has to extrapolate — consistent with bilinear interaction terms approximating advection-like flow physics (`u·∇u`, pressure-gradient products).
+- Wall-clock real (+12.6%/epoch, 12/14 epochs at budget). Epoch 12 SwiGLU (62.20) already 25.5% better than baseline epoch 12 (83.56). Gain is not explained by convergence.
+- **Open question for paper:** gain from bilinear gating or added parameters (+24%)? → assigned alphonse PR #983 (mlp_ratio ablation).
+- **New beat-threshold: val_avg/mae_surf_p < 62.20**
+
+---
+
+## 2026-04-29 — Assignment: PR #983 (alphonse SwiGLU mlp_ratio ablation)
+- **PR #983** (`alphonse/swiglu-ablation`): SwiGLU with `mlp_ratio=1` (intermediate_dim=128 vs 256). Parameter-matched ablation — SwiGLU at ratio=1 has ~49.5K params/block vs GELU at ratio=2 with ~66K/block. **Fewer params** than old GELU baseline. If ratio=1 clearly beats old GELU baseline (79.54), bilinear gating is the primary driver, not capacity. Paper-critical control.
+
+---
+
 ## 2026-04-29 — PR #952 (CLOSED): Wider single output head (128→256→3) — capacity vs independence
 - **Branch:** `edward/wider-output-head`
 - **Hypothesis:** PR #924 (per-channel heads) failed: was the bottleneck channel decoupling or sheer head capacity? Test capacity-only by widening the single channel-coupled head from 128→128→3 to 128→256→3.

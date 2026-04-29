@@ -7,12 +7,14 @@
 
 ## Current best (live)
 
-- **val_avg/mae_surf_p = 79.54** (W&B run `wakfw4uy`, nezuko Re-stratified batch sampling, merged PR #910, 2026-04-29)
-- **test_avg/mae_surf_p = 70.26**
-- Per-split val: single_in_dist=84.70, geom_camber_rc=92.95, geom_camber_cruise=63.49, re_rand=77.02
-- Beat-threshold for new PRs: **val_avg < 79.54**
+- **val_avg/mae_surf_p = 62.20** (W&B run `sv9ktfk3`, alphonse SwiGLU MLP, merged PR #961, 2026-04-29)
+- **test_avg/mae_surf_p = 55.04**
+- Per-split val: single_in_dist=74.96, geom_camber_rc=73.39, geom_camber_cruise=42.66, re_rand=57.81
+- Beat-threshold for new PRs: **val_avg < 62.20**
+- **Note:** SwiGLU ran 12/14 epochs due to +12.6% per-epoch wall-clock cost. All active WIP branches (#869, #927, #962, #969, #970, #975, #976) were cut from the pre-SwiGLU baseline (79.54). If any shows improvement over old baseline (79.54) but not new (62.20), it will be sent back to rebase onto SwiGLU HEAD and re-run.
 
 ### Prior bests (for reference)
+- val_avg/mae_surf_p = 79.54 (nezuko Re-stratified batch sampling, merged PR #910) — superseded by SwiGLU
 - val_avg/mae_surf_p = 81.55 (thorfinn pre-block FiLM, merged PR #909) — superseded by Re-stratify
 - val_avg/mae_surf_p = 82.77 (thorfinn FiLM v2-on-l1, merged PR #815) — superseded by pre-block FiLM
 - val_avg/mae_surf_p = 92.63 (tanjiro L1 surface MAE, merged PR #761) — superseded by FiLM+L1
@@ -57,13 +59,13 @@
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| askeladd | #976 | **AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2)** | WIP — new 2026-04-29 |
+| alphonse | #983 | **SwiGLU mlp_ratio ablation (ratio=1 vs 2) — bilinear gating vs capacity; paper ablation** | WIP — new 2026-04-29 |
+| askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | WIP — new 2026-04-29 |
 | thorfinn | #970 | Shared FiLM head: one head reused at all 5 blocks (rank-reduction probe) | WIP — new 2026-04-29 |
 | nezuko | #969 | Vertical-flip data augmentation (geometric symmetry: y → -y, Uy → -Uy) | WIP — new 2026-04-29 |
 | fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
-| edward | #975 | **DropPath rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify** | WIP — new 2026-04-29 |
+| edward | #975 | DropPath rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify | WIP — new 2026-04-29 |
 | frieren | #962 | EMA model weights on FiLM+L1+Re-stratify (revisit #759 in new regime) | WIP — new 2026-04-29 |
-| alphonse | #961 | SwiGLU MLP: replace GELU MLP with Swish-gated linear unit | WIP — new 2026-04-29 |
 | tanjiro | #869 | surf_weight sweep (sw=5 wins on L1 base); v2 rebase onto FiLM+L1 pending | WIP |
 
 ## Cross-cutting findings
@@ -83,7 +85,8 @@
 - **Re-input-noise saturated by Re-stratify** (PR #917 σ-sweep). Mechanism confirmed (val_re_rand −2.1% at σ=0.05) but small absolute effect; Re-stratify already achieves val_re_rand=77.02 < σ=0.05's 77.58. The Re-axis input-side smoothing lever is gone.
 - **Decoder capacity is not a lever** — two falsifications: PR #924 per-channel heads (+5.8%) and PR #952 wider single head (+2.5%). All 3 channels regress uniformly, decoder isn't bottlenecked at this depth/width budget. **One preserved signal: `geom_camber_rc` improved on PR #952 (−4.2% val).** Suggests rc-bottleneck is representational, not capacity-uniform — open question for future rc-targeted intervention.
 - **FiLM input axis is single-variable now; AoA-FiLM probe (PR #976) opens multi-variable conditioning** as a fresh axis. AoA is a primary flow parameter the model has zero conditioning-awareness of. If AoA-FiLM wins, opens 4-d (Re, AoA1, AoA2, gap) and beyond.
-- **Off-Re axes underway:** geometric symmetry (vflip #969), MLP architecture (SwiGLU #961), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), evaluation smoothing (EMA #962), volume-side per-channel loss (#927), rank-reduction (shared FiLM #970). These should compose more cleanly than within-Re-axis variants.
+- **SwiGLU is the new canonical MLP architecture** (PR #961, merged 2026-04-29, val 79.54→62.20 −21.8%). All future experiments build on L1 + FiLM-pre + Re-stratify + SwiGLU. Active WIP branches (#869, #927, #962, #969, #970, #975, #976) were cut from the pre-SwiGLU baseline — if any beats old baseline (79.54) but not new (62.20), it will be sent back to rebase onto SwiGLU HEAD.
+- **Off-Re axes underway:** geometric symmetry (vflip #969), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), evaluation smoothing (EMA #962), volume-side per-channel loss (#927), rank-reduction (shared FiLM #970). SwiGLU paper ablation (#983).
 - **Focal loss falsified on L1 base** (PR #858): high-error nodes are convergence-bottlenecked, not gradient-bottlenecked.
 - **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric.
 - **LR warmup mechanism baked into baseline** (PR #750): schedule-budget alignment principle survives as a convention.
@@ -96,7 +99,7 @@
 2. **Shared FiLM head** — single FiLMLayer reused at all 5 blocks. Rank-reduction probe; tests whether per-block FiLM specialization carries information. **Assigned → thorfinn PR #970.**
 3. **AoA-FiLM (multi-variable conditioning)** — extend FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2). Tests whether multi-variable conditioning compounds. **Assigned → askeladd PR #976.**
 4. **DropPath rate sweep** — stochastic depth on FiLM+L1+Re-stratify stack {0.05, 0.10, 0.15}. Regularization axis. **Assigned → edward PR #975.**
-5. **SwiGLU MLP** — replace GELU MLP with Swish-gated linear unit; strict expressivity gain at near-same FLOPs. **Assigned → alphonse PR #961.**
+5. **SwiGLU MLP** — ~~replace GELU MLP with Swish-gated linear unit~~ **MERGED (PR #961, val=62.20 −21.8%). New canonical architecture.**
 6. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
 7. **EMA model weights** — exponential moving average for evaluation; revisit prior close (#759) in correct regime. **Assigned → frieren PR #962.**
 8. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
