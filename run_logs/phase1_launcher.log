@@ -1,0 +1,25 @@
+[GPU 0] CUDA_VISIBLE_DEVICES=0 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 30          --wandb_name mlintern-pai2-r3-retry-r1/p1-baseline
+    -> run_logs/phase1/p1-baseline.log
+    PID=2453
+[GPU 1] CUDA_VISIBLE_DEVICES=1 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 22     --n_hidden 256     --wandb_name mlintern-pai2-r3-retry-r1/p1-wider-h256
+    -> run_logs/phase1/p1-wider-h256.log
+    PID=2779
+[GPU 2] CUDA_VISIBLE_DEVICES=2 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 22     --n_layers 8     --wandb_name mlintern-pai2-r3-retry-r1/p1-deeper-l8
+    -> run_logs/phase1/p1-deeper-l8.log
+    PID=3106
+[GPU 3] CUDA_VISIBLE_DEVICES=3 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 28     --slice_num 256     --wandb_name mlintern-pai2-r3-retry-r1/p1-slice-256
+    -> run_logs/phase1/p1-slice-256.log
+    PID=3433
+[GPU 4] CUDA_VISIBLE_DEVICES=4 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 18     --n_hidden 192 --n_layers 6 --slice_num 128     --wandb_name mlintern-pai2-r3-retry-r1/p1-cap-h192-l6-s128
+    -> run_logs/phase1/p1-cap-h192-l6-s128.log
+    PID=3766
+[GPU 5] CUDA_VISIBLE_DEVICES=5 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 30     --surf_weight 30     --wandb_name mlintern-pai2-r3-retry-r1/p1-surf-w30
+    -> run_logs/phase1/p1-surf-w30.log
+    PID=4094
+[GPU 6] CUDA_VISIBLE_DEVICES=6 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 30     --warmup_epochs 2 --lr 8e-4     --wandb_name mlintern-pai2-r3-retry-r1/p1-warmup-lr8e4
+    -> run_logs/phase1/p1-warmup-lr8e4.log
+    PID=4420
+[GPU 7] CUDA_VISIBLE_DEVICES=7 SENPAI_TIMEOUT_MINUTES=80     python -u train.py --epochs 30 --skip_test true --agent ml-intern-r1 --wandb_group mlintern-pai2-r3-retry-r1 --epochs 60     --use_amp true --batch_size 8     --wandb_name mlintern-pai2-r3-retry-r1/p1-amp-bs8
+    -> run_logs/phase1/p1-amp-bs8.log
+    PID=4750
+Phase 1 complete

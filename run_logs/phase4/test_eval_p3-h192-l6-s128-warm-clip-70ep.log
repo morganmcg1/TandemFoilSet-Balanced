@@ -1,0 +1,9 @@
+Device: cuda
+wandb: 🚀 View run at https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern/runs/qy65he2l
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+    test_single_in_dist        loss=1.0335  surf[p=40.1661 Ux=0.5214 Uy=0.2972]  vol[p=52.4854 Ux=2.2324 Uy=0.8619]
+    test_geom_camber_rc        loss=0.7104  surf[p=50.9604 Ux=0.8795 Uy=0.4318]  vol[p=57.8035 Ux=2.8888 Uy=1.2873]
+    test_geom_camber_cruise    loss=0.1229  surf[p=21.8507 Ux=0.3376 Uy=0.1900]  vol[p=25.3044 Ux=1.5034 Uy=0.4921]
+    test_re_rand               loss=0.3596  surf[p=35.5036 Ux=0.5381 Uy=0.2990]  vol[p=39.1287 Ux=2.0027 Uy=0.7930]
+wandb: Run summary:
+wandb: 🚀 View run mlintern-pai2-r3-retry-r1/p3-h192-l6-s128-warm-clip-70ep-test at: https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern/runs/qy65he2l

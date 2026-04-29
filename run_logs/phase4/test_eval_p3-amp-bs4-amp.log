@@ -1,0 +1,9 @@
+Device: cuda
+wandb: 🚀 View run at https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern/runs/pn6poomx
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+    test_single_in_dist        loss=0.9336  surf[p=32.8887 Ux=0.4365 Uy=0.2523]  vol[p=41.8748 Ux=1.8002 Uy=0.7044]
+    test_geom_camber_rc        loss=0.6021  surf[p=46.6143 Ux=0.7183 Uy=0.3785]  vol[p=50.9761 Ux=2.4605 Uy=1.1143]
+    test_geom_camber_cruise    loss=nan  surf[p=nan Ux=0.2837 Uy=0.1540]  vol[p=nan Ux=1.2408 Uy=0.4236]
+    test_re_rand               loss=0.2776  surf[p=28.5229 Ux=0.4314 Uy=0.2458]  vol[p=31.8352 Ux=1.6363 Uy=0.6646]
+wandb: Run summary:
+wandb: 🚀 View run mlintern-pai2-r3-retry-r1/p3-amp-bs4-warm-clip-180ep-test-amp at: https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern/runs/pn6poomx

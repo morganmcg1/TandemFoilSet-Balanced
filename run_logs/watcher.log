@@ -1,0 +1,9 @@
+15:31:16 [GPU 4] launching p3-warmup3-clip-150ep (epochs=150, timeout=350min)
+15:38:35 [GPU 1] launching p3-warmup3-clip-150ep-seed7 (epochs=150, timeout=350min)
+15:40:16 [GPU 2] launching p3-h192-l6-s128-warm-clip-70ep (epochs=70, timeout=350min)
+15:51:41 [GPU 6] launching p3-h192-l6-s128-warm-clip-70ep-seed7 (epochs=70, timeout=350min)
+15:52:19 [GPU 0] launching p3-h256-warm-clip-90ep (epochs=90, timeout=350min)
+15:52:28 [GPU 5] launching p3-amp-bs4-warm-clip-180ep (epochs=180, timeout=350min)
+16:06:28 [GPU 7] launching p3-warmup5-lr3e4-150ep (epochs=150, timeout=350min)
+16:09:40 [GPU 3] launching p3-h128-l8-warm-clip-90ep (epochs=90, timeout=350min)
+16:10:19 Queue empty, watcher exiting
