@@ -43,6 +43,18 @@
 
 ---
 
+## 2026-04-29 — PR #924 (CLOSED): Per-channel output heads (Ux/Uy/p — decouple decoder)
+- **Branch:** `willowpai2e3-edward/per-channel-head`
+- **Run:** W&B `0fik93c4`, 13/14 epochs (timeout-cut), 30.6 min, group `per-channel-head`, peak 46.6 GB
+- val_avg/mae_surf_p = 84.16 vs current best 79.54 → **+5.8% regression** (close criterion met)
+- Mechanism: 3 independent heads (Linear(128,128) → GELU → Linear(128,1) × 3) vs shared Linear(128,128) → GELU → Linear(128,3). +33K params (~+4.7%) → ~141s/epoch vs baseline ~131s/epoch.
+- **Per-epoch revealed nuance:** at epoch 13, per-chan (84.16) was *better* than baseline at epoch 13 (87.68). Baseline did its big drop on epoch 14 (87.68 → 82.77). Per-chan lost epoch 14 to 30-min timeout.
+- All 3 channels regressed: surf_p +1.7%, surf_Ux +4.2%, surf_Uy +5.4% (val avg).
+- Conclusion: at this budget, decoupling the decoder slows convergence enough to lose 1 effective epoch — net regression. Mechanism interesting but not viable at 30-min timeout.
+- **Follow-up assigned:** edward → PR #952 (wider single head 128→256→3) — tests "decoder capacity vs decoder independence" with same param budget but no per-epoch wall-clock cost.
+
+---
+
 ## 2026-04-29 — PR #927 (SENT BACK): Per-channel volume loss v1 (L1 on p only, MSE on Ux/Uy)
 - **Branch:** `willowpai2e3-fern/per-channel-vol-loss`
 - **Run (v1):** W&B `b47cu99c`, 14 epochs, 32.3 min, group `volume-l1-channel v1-p-only`, peak 44.6 GB

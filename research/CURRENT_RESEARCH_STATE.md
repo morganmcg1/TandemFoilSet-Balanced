@@ -45,6 +45,7 @@
 | #750 v2-rebased | LR warmup + cosine on FiLM+L1 | Closed — mechanism baked in (+2.78%) | 85.07 |
 | #902 | Volume L1 (mirror surface L1 on vol side) | Closed — gradient rebalancing hurts surf_p (+4.2%) | 96.52 |
 | #743 v3 | Channel-weighted L1 [1.0,0.5,2.0] on FiLM+L1 | Closed — mechanism falsified on FiLM+L1 (+1.1%) | 83.69 |
+| #924 | Per-channel output heads (3 independent decoders) | Closed — slows convergence, loses 1 epoch to timeout (+5.8% vs current best) | 84.16 |
 
 ## Active WIP PRs
 
@@ -54,7 +55,7 @@
 | thorfinn | #934 | Layer-targeted FiLM: pre-block conditioning on last 2 blocks only | WIP — new 2026-04-29 |
 | nezuko | #937 | Dual FiLM: pre-block + post-block Re conditioning per block | WIP — new 2026-04-29 |
 | fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
-| edward | #924 | Per-channel output heads (Ux/Uy/p) — decouple decoder pathways | WIP |
+| edward | #952 | Wider single output head (128→256→3) — capacity vs independence | WIP — new 2026-04-29 |
 | frieren | #756 | Fourier Re-encoding v3 (rebase onto FiLM+pre-block+Re-stratify stack) | WIP — sent back 2026-04-29 |
 | alphonse | #936 | Depth scaling: n_layers=7 on full FiLM+L1+Re-stratify stack | WIP — new 2026-04-29 |
 | tanjiro | #869 | surf_weight sweep (sw=5 wins on L1 base); v2 rebase onto FiLM+L1 pending | WIP |
@@ -84,7 +85,7 @@
 4. **Re-input noise augmentation** — sigma=0.05 Gaussian noise on log(Re). **Assigned → askeladd PR #917.**
 5. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
 6. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
-7. **Per-channel output heads** — decouple Ux/Uy/p decoder pathways. **Assigned → edward PR #924.**
+7. **Wider single output head (128→256→3)** — tests decoder capacity (vs the decoupling falsified in #924). **Assigned → edward PR #952.**
 8. **Fourier Re-encoding v3** — concatenate scalar + 12 Fourier features, rebase onto current stack. **Assigned → frieren PR #756.**
 9. **Width scaling (n_hidden=192)** — if depth (#936) stalls, try 1.5× width (~66GB est). Slightly riskier than depth.
 10. **Low-rank slice attention (LRSA)** — replace S×S (64×64) slice-token self-attention with rank-16 factored. Reduces compute, possibly improves regularization.
