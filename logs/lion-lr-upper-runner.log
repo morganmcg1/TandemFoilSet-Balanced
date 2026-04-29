@@ -1,0 +1,7 @@
+[runner] starting control-3e-4 (lr=3e-4) at Wed Apr 29 04:41:32 UTC 2026
+[runner] finished control-3e-4 (lr=3e-4) at Wed Apr 29 05:15:14 UTC 2026 status=0
+[runner] starting upper1-4e-4 (lr=4e-4) at Wed Apr 29 05:15:14 UTC 2026
+[runner] finished upper1-4e-4 (lr=4e-4) at Wed Apr 29 05:49:02 UTC 2026 status=0
+[runner] starting upper2-5e-4 (lr=5e-4) at Wed Apr 29 05:49:02 UTC 2026
+[runner] finished upper2-5e-4 (lr=5e-4) at Wed Apr 29 06:22:46 UTC 2026 status=0
+[runner] ALL DONE at Wed Apr 29 06:22:46 UTC 2026
