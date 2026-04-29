@@ -163,16 +163,28 @@ class TransolverBlock(nn.Module):
         self.mlp = SwiGLU(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
+            # Per-channel output heads (Ux, Uy, p): each [hidden_dim → hidden_dim → 1]
+            # avoids channel interference from a shared projection across
+            # incompatible scales (p std ~100–2000 vs U std ~1–5).
+            self.mlp2_ux = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+                nn.Linear(hidden_dim, 1),
+            )
+            self.mlp2_uy = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                nn.Linear(hidden_dim, 1),
+            )
+            self.mlp2_p = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                nn.Linear(hidden_dim, 1),
             )
 
     def forward(self, fx):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            return torch.cat([self.mlp2_ux(h), self.mlp2_uy(h), self.mlp2_p(h)], dim=-1)
         return fx
 
 
