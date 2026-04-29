@@ -1,5 +1,45 @@
 # SENPAI Research Results
 
+## 2026-04-29 11:21 — PR #1092: Capacity scale-up: n_hidden=192, layers=6, mlp_ratio=4
+- Branch: `charliepai2f1-alphonse/capacity-scale-up`
+- Hypothesis: ~4× larger Transolver (192/6/6/4 = 2.60M params) closes underfit; predicted -10% to -20% on `val_avg/mae_surf_p`.
+- Reality: bs=4 OOMs at 92 GB peak; bs=3 fits but only 7 epochs in 30 min.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 7, bs=3) | **168.749** |
+| `test_avg/mae_surf_p` (3 finite splits) | 173.4 |
+| `test_avg/mae_surf_p` (as reported, 4 splits) | NaN (cruise GT corruption + undertrained model output) |
+| Epochs run | 7 / 50 (timeout-bound, ~277 s/epoch) |
+| Peak VRAM | 69.18 GB at bs=3; 92.17 GB at bs=4 (OOMed during epoch 7) |
+| Params | 2.60M (~4× baseline 0.65M) |
+| Metrics file | `models/model-charliepai2f1-alphonse-capacity-scale-up-20260429-095515/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 7, bs=3)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 211.82 | 193.26 |
+| `geom_camber_rc` | 170.95 | 166.22 |
+| `geom_camber_cruise` | 132.11 | NaN (cruise GT) |
+| `re_rand` | 160.12 | 160.82 |
+| **avg** | **168.749** | NaN (173.4 over 3 finite splits) |
+
+### Val_avg trajectory (bs=3)
+
+```
+e1→241.8 e2→221.2 e3→241.8 e4→179.3 e5→177.9 e6→176.5 e7→168.7
+```
+
+### Analysis & conclusions
+
+- **+26% vs provisional best 133.9** — clearly a regression, but driven entirely by undertraining. Curve still in steep descent at e7 cap.
+- **Capacity scaling has a wall-clock × architecture cost that this hypothesis underweighted.** 192/6/6/4 multiplies activation memory ~4× (mlp_ratio compounds with width and layers in the MLP intermediate). At 277 s/epoch, bs=3 only buys 7 epochs vs the baseline shape's 14.
+- **bs=4 OOM at 92 GB during epoch 7** — fragmentation pushed it past the limit on a larger-mesh batch. No margin at this capacity.
+- **Sent back** with a narrower bump: `n_hidden 128 → 160` (width-only, ~1.5× params, n_head=5 keeps head dim 32). Keep bs=4. Rebase for NaN-safe scoring. Goal: ≥18 epochs in 30 min and a finite test_avg.
+
 ## 2026-04-29 11:03 — PR #1094: Surface weight boost: surf_weight 10 → 25
 - Branch: `charliepai2f1-askeladd/surf-weight-25`
 - Hypothesis: Raise surface-loss weight from 10 → 25 to bias capacity toward `mae_surf_p`; predicted -3% to -7%.
