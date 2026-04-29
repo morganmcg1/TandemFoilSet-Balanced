@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 01:25
+- **Last updated:** 2026-04-29 01:50
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -37,7 +37,7 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | askeladd | #848 | Closed | bs={8,10}: regressed; bs=12 OOM; `add_derived_features` loop bottleneck |
 | askeladd | #885 | **WIP** | Huber delta sweep ∈ {0.3, 0.5, 1.0, 2.0} on BF16 baseline |
 | edward | #734 | Closed | sw=10 wins; sw=50/100 regress |
-| edward | #850 | **WIP (rebase)** | sw=3 won internally (val=124.05, −2.6% vs 127.40) but on pre-Huber code. Sent back for single decisive sw=3 + Huber run on rebased baseline. |
+| edward | #850 | **WINNING — pending default-change push** | sw=3 + Huber stacked: val_avg=**101.563** (−8.17%), test_avg=**89.918** (−11.24%). All 4 val and 4 test splits improve. PR diff was empty (CLI-only run); sent back for one-line `surf_weight: float = 3.0` default change in Config so the baseline propagates to future runs. No re-run required. W&B: `6rh7dzkx`. |
 | fern | #737 | **Merged** | val_avg=127.87; warmup+cosine |
 | fern | #809 | **WIP** | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
@@ -53,31 +53,38 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 **Current best val_avg/mae_surf_p (merged):** 110.594 (frieren #739, run `l95azbnv`).
 **Current best test_avg/mae_surf_p (merged):** 101.299 (frieren #739, run `l95azbnv`).
 
-**Five compounding wins stacked:**
+**[PENDING MERGE — DEFAULT-CHANGE PUSH]** Edward #850: sw=3 + Huber → **val_avg=101.563 (−8.17%),
+test_avg=89.918 (−11.24%)**. W&B run `6rh7dzkx`. Will become new baseline once edward pushes
+the one-line default change.
+
+**Five compounding wins stacked (when #850 merges):**
 1. Distance features + NaN-safe eval (#763) → val_avg=141.42
 2. Warmup+cosine LR (#737) → val_avg=127.87
 3. BF16 mixed precision (#811) → val_avg=127.40
-4. Huber loss δ=1.0 (#739) → **val_avg=110.594**
+4. Huber loss δ=1.0 (#739) → val_avg=110.594
+5. Lower surf_weight=3 (#850, pending) → **val_avg=101.563**
 
 **[PENDING MERGE]** Per-sample y-norm (#896, alphonse) — val=105.45, test=93.81 on MSE baseline;
 needs rebase onto Huber + rerun to confirm stacking.
 
 **All 8 GPUs in use:** alphonse #896 (per-sample-y-norm rebase), askeladd #885 (Huber-δ sweep),
-edward #850 (lower-sw rebase), fern #809 (schedule-budget), frieren #943 (per-channel-surf-weight),
-nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase), thorfinn #810 (EMA rebase).
+edward #850 (default-change push pending), fern #809 (schedule-budget), frieren #943
+(per-channel-surf-weight), nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase),
+thorfinn #810 (EMA rebase).
 
 ## Current research themes
 
-1. **Four compounding wins stacked (val_avg=110.594).** Per-sample y-norm (#896) appears decisive
-   (−4.7% even on MSE baseline) but needs rebase to confirm stacking with Huber.
-2. **Re-imbalance: two attacks in-flight.** Target-space: per-sample y-norm (#896 rebasing, alphonse).
-   Loss-space: Huber-δ sweep (#885, askeladd). Both may stack — they address different aspects of
-   the high-Re outlier problem (sigma rescaling vs gradient clipping).
-3. **Per-channel surface loss weighting (#943, frieren)** — new hypothesis motivated by:
-   (a) edward's observation that low surf_weight helps surf_p via volume-driven inference;
-   (b) the physical insight that pressure is determined globally (Poisson equation), not just locally
-   at surface nodes. Two competing directions: lower p_surf_weight=3 (volume-driven) vs
-   higher p_surf_weight=20 (direct boost). Run p=3 first.
+1. **Loss-balance is a major lever.** Edward #850 (sw=3 + Huber) gives val_avg=101.56 / test_avg=89.92
+   — third major compounding win after Huber. Mechanism: lowering surface weight forces volume
+   signal to inform surface predictions through Transolver attention, exploiting the global
+   pressure-Poisson relationship. **Pending default-change push to merge.**
+2. **Re-imbalance: two stackable attacks in-flight.** Target-space: per-sample y-norm (#896
+   rebasing, alphonse — MSE-only result was val=105.45). Loss-space: Huber-δ sweep (#885, askeladd).
+   Both should be evaluated against the new sw=3 baseline once #850 lands.
+3. **Per-channel surface loss weighting (#943, frieren)** — refines edward's lever. Tests whether
+   volume-driven pressure mechanism (low p_surf_weight, high vel_surf_weight) preserves velocity
+   accuracy while gaining surf_p. The interplay with the new sw=3 baseline is interesting —
+   frieren's Run 1 (p=3, vel=10) is closer to the new baseline on pressure but boosts velocity.
 4. **Throughput bottleneck = `add_derived_features` Python loop (#923, nezuko).** Vectorization
    should free 5-15% wall-clock and unblock batch-size scaling.
 5. **PhysicsAttention padding mask insight (#915 closed):** Binary post-softmax mask confirmed
@@ -87,13 +94,18 @@ nezuko #923 (vectorize data prep), tanjiro #745 (heads Option 3 rebase), thorfin
 
 ## Open questions
 
-- Does per-sample y-norm (#896) still win when stacked on top of Huber δ=1.0? The MSE-only run
+- Does per-sample y-norm (#896) still win when stacked on top of Huber + sw=3? The MSE-only run
   won (val=105.45), but the rc split regressed (+12.6% test). With Huber already capping rc
-  outlier gradients, per-sample-norm + Huber might partially cancel on rc.
-- What is the optimal Huber δ? Askeladd #885 sweep {0.3, 0.5, 1.0, 2.0} will answer this.
+  outlier gradients AND sw=3 reducing surface emphasis, per-sample-norm + new baseline might
+  partially cancel on rc.
+- What is the optimal Huber δ? Askeladd #885 sweep {0.3, 0.5, 1.0, 2.0} will answer this. Note:
+  if optimal δ shifts with sw=3 (less surface dominance → less outlier amplification), askeladd
+  may need to re-sweep on the new baseline.
 - Does lower p_surf_weight (→3 volume-driven) outperform direct boost (→20) for surf_p MAE?
+  Per-channel split lets us decouple the lever edward exploited.
+- Will sweeping below sw=3 (e.g., sw=1, sw=2) push baseline further? Edward suggested this as a
+  follow-up.
 - Does EMA (#810) work properly after post-warmup init?
-- Will surf_weight=3 + Huber (edward #850) beat the current 110.594 baseline?
 
 ## Potential next research directions (Wave 3+)
 
