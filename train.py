@@ -46,6 +46,54 @@ from data import (
     pad_collate,
 )
 
+
+# ---------------------------------------------------------------------------
+# Domain-ID derivation
+# ---------------------------------------------------------------------------
+
+def derive_domain_id(x_norm: torch.Tensor, x_mean: torch.Tensor, x_std: torch.Tensor) -> torch.Tensor:
+    """Derive a 3-class domain ID per sample from the global scalars in x.
+
+    Classes (data-grounded; see PR #872 for rationale):
+      0 = single foil        — gap == 0 AND stagger == 0 (no foil 2)
+      1 = tandem racecar     — foil 2 present, AoA1 != AoA2 (per-foil AoA pair)
+      2 = tandem cruise      — foil 2 present, AoA1 == AoA2 (shared AoA)
+
+    Empirically (verified across train + 4 val splits) the cruise tandem regime
+    sets AoA1 == AoA2 sample-by-sample while the racecar tandem regime always
+    has distinct per-foil AoA. This gives a perfect classifier on the
+    single-regime val splits (single_in_dist, geom_camber_rc, geom_camber_cruise)
+    and a clean rc/cruise split on val_re_rand. The PR's original AoA1 > 5°
+    threshold was based on incorrect units (data is in radians, not degrees) and
+    misclassified ~half of cruise tandem samples.
+
+    Reads ORIGINAL (un-normalized) values: x_norm * x_std + x_mean. Globals are
+    constant across mesh nodes, so we read node 0 (always a real node, never
+    padding).
+
+    Returns: LongTensor[B] with values in {0, 1, 2}.
+    """
+    g_norm = x_norm[:, 0, :]                    # [B, 24]
+    g_orig = g_norm * x_std + x_mean            # un-normalize globals; broadcasts [B,24]*[24]+[24]
+
+    aoa1 = g_orig[:, 14]                        # AoA foil 1 (radians, original units)
+    aoa2 = g_orig[:, 18]                        # AoA foil 2 (radians, 0 for single-foil)
+    gap = g_orig[:, 22]                         # gap (0 for single-foil)
+    stagger = g_orig[:, 23]                     # stagger (0 for single-foil)
+
+    is_single = (gap.abs() < 1e-3) & (stagger.abs() < 1e-3)
+    is_cruise = (aoa1 - aoa2).abs() < 1e-4      # cruise: foil 1 and foil 2 share an AoA
+
+    zeros = torch.zeros_like(aoa1, dtype=torch.long)
+    ones = torch.ones_like(zeros)
+    twos = 2 * torch.ones_like(zeros)
+    domain_id = torch.where(
+        is_single, zeros,
+        torch.where(is_cruise, twos, ones),
+    )
+    return domain_id  # [B]
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -169,7 +217,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 n_domains: int = 0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -185,6 +234,9 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.n_domains = n_domains
+        if n_domains > 0:
+            self.domain_emb = nn.Embedding(n_domains, n_hidden)
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -195,6 +247,10 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        if n_domains > 0:
+            # Zero-init AFTER apply() so initial training matches baseline; the
+            # model learns to use the domain channel during training.
+            nn.init.zeros_(self.domain_emb.weight)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -208,6 +264,9 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.n_domains > 0 and "domain_id" in data:
+            dom_emb = self.domain_emb(data["domain_id"])  # [B, n_hidden]
+            fx = fx + dom_emb.unsqueeze(1)                # broadcast over node dim
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -217,7 +276,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, use_domain_id: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,7 +299,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            data_in = {"x": x_norm}
+            if use_domain_id:
+                data_in["domain_id"] = derive_domain_id(x_norm, stats["x_mean"], stats["x_std"])
+            pred = model(data_in)["preds"]
 
             # Bug 1 guard: replace +inf / -inf / NaN predictions in normalized
             # space with 0 (the per-channel mean post-standardization), so a
@@ -428,6 +490,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    domain_id_embedding: bool = False  # PR #872: 3-class domain-ID embedding (single / rc / cruise)
 
 
 cfg = sp.parse(Config)
@@ -469,6 +532,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    n_domains=3 if cfg.domain_id_embedding else 0,
 )
 
 model = Transolver(**model_config).to(device)
@@ -531,7 +595,14 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        data_in = {"x": x_norm}
+        if cfg.domain_id_embedding:
+            data_in["domain_id"] = derive_domain_id(x_norm, stats["x_mean"], stats["x_std"])
+            if epoch == 0 and n_batches == 0:
+                counts = torch.bincount(data_in["domain_id"], minlength=3)
+                print(f"[domain-id] first batch counts: single={counts[0].item()}, "
+                      f"rc={counts[1].item()}, cruise={counts[2].item()}")
+        pred = model(data_in)["preds"]
         abs_err = (pred - y_norm).abs() * channel_weights[None, None, :]
 
         vol_mask = mask & ~is_surface
@@ -557,7 +628,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_domain_id=cfg.domain_id_embedding)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -615,6 +686,16 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
+    if cfg.domain_id_embedding and getattr(model, "n_domains", 0) > 0:
+        emb_norms = model.domain_emb.weight.norm(dim=1).detach().cpu().tolist()
+        print(f"[domain-id] learned domain_emb row-norms (best ckpt): "
+              f"single={emb_norms[0]:.4f}, rc={emb_norms[1]:.4f}, cruise={emb_norms[2]:.4f}")
+        wandb.summary.update({
+            "domain_emb_norm_single": emb_norms[0],
+            "domain_emb_norm_rc": emb_norms[1],
+            "domain_emb_norm_cruise": emb_norms[2],
+        })
+
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
@@ -625,7 +706,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, use_domain_id=cfg.domain_id_embedding)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
