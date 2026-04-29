@@ -1,5 +1,5 @@
 # SENPAI Research State
-- 2026-04-29 (updated: PR #948 n_hidden=192 merged — new best 93.0126, sub-93 is next target; 6 new experiments assigned to all students)
+- 2026-04-29 (updated: PR #948 n_hidden=192 merged — new best 93.0126, sub-93 is next target; 8 active WIP experiments across all students)
 - No directives from the human researcher team
 - **Current research focus**: Round 4 — stacked wins: `surf_weight=20` + `per_sample_norm_mse` + `lr=2e-4` + `grad_clip=1.0` + `n_hidden=192`. Current best is PR #948 at **93.0126**. Active experiments probe weight decay sensitivity, depth scaling (n_layers=6/7), surf_weight tuning, and output clamping for the val_single_in_dist bottleneck. **Sub-90 is the next target.**
 - **Pre-flight checklist for new assignments**: branch must be cut from advisor HEAD (post-#948) so `--n_hidden` arg exists; reproduce command must explicitly include `--surf_weight 20.0 --lr 2e-4 --grad_clip 1.0 --loss_kind per_sample_norm_mse --n_hidden 192`.
@@ -38,6 +38,8 @@
 | #991 | alphonse | surf_weight=25 on n_hidden=192 best config — surface/volume trade-off with wider model | wip |
 | #994 | fern     | Output clamping ±6σ on n_hidden=192 best config — targets val_single_in_dist 107.8467 bottleneck | wip |
 | #995 | nezuko   | n_layers=7 on n_hidden=192 best config (epochs=8) — deeper capacity test with wider hidden dim | wip |
+| #1024 | thorfinn | n_head=4 → 8 attention heads on n_hidden=192 best config — finer-grained attention partitioning | wip |
+| #973 | askeladd | eta_min=1e-5/1e-6 cosine annealing — keep final epoch productive (NOTE: assigned vs PR#871 baseline, now outdated; results will be compared against #948's 93.01) | wip |
 
 ## Merged / Closed History
 
