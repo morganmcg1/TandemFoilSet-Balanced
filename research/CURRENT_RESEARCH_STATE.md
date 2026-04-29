@@ -1,18 +1,30 @@
 # SENPAI Research State — willow-pai2e-r4
 
-- **As of:** 2026-04-29 ~03:15 (**SwiGLU unseeded best 81.81 / test 73.04** holds; **#863 MERGED — canonical seeded baseline `--seed 0 = 85.14`, bit-perfect determinism**; **#955 closed (per-channel heads +2.7% val / +4.1% test; cross-channel coupling load-bearing for single_in_dist), thorfinn→#979 pressure-only-head variant**; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, mechanism diagnosed: no low-freq channel); #939 closed (frieren n_layers=6 +4.7% under-trained), frieren→#963 schedule-to-budget T_max=13; #920 closed (coord-skip), fern→#949 LayerScale; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase; askeladd→#972 3-seed mean follow-up assigned. **NEW THEME: schedule-budget mismatch from #939 affects ALL pre-#914 PRs that were "still descending" at timeout. NEW INFRA: borderline-ablation contract — PRs with <2% predicted Δ must run `--seed {0,1,2}` mean ± std.**)
+- **As of:** 2026-04-29 ~03:35 (**🚨 CRITICAL WIN PENDING: #963 T_max=13 VERIFIED at val=64.91 / test=57.25 (−20.66% / −21.62%), pending mechanical rebase onto post-#863**; **#863 MERGED — canonical seeded baseline `--seed 0 = 85.14`, bit-perfect determinism**; **#955 closed (per-channel heads +2.7% val / +4.1% test; cross-channel coupling load-bearing for single_in_dist), thorfinn→#979 pressure-only-head variant**; #938 sent back for σ∈{2,5} sweep (RFF σ=10 +2.4%, mechanism diagnosed: no low-freq channel); #920 closed (coord-skip), fern→#949 LayerScale; **#873 EMA is the predicted next BIG compounded winner**, awaiting rebase; askeladd→#972 3-seed mean follow-up assigned. **CRITICAL PROGRAMME REFRAMING: every prior gain was measured under T_max=50 under-training. T_max=13 is a free 20% improvement that retroactively reframes all prior comparisons. Prior architectural wins are ALL real but were conservatively measured. New floor after merge: val ≈ 64.91, test ≈ 57.25.**)
 - **Most recent human direction:** none yet for this track
 - **Branch:** `icml-appendix-willow-pai2e-r4`
-- **Current best (unseeded):** `val_avg/mae_surf_p = 81.81` (#914), `test_avg = 73.04` (4-split, finite), `3-split test mean = 81.28` (run `2akpdg9t`)
-- **Seeded canonical (`--seed 0` PR-to-PR ranking):** `val_avg = 85.14`, `test_avg = 78.97`, `3-split = 86.78` (run `j1r5y758`, post-#914+#863)
+- **Current best (unseeded, pre-#963 merge):** `val_avg/mae_surf_p = 81.81` (#914), `test_avg = 73.04` (4-split, finite), `3-split test mean = 81.28` (run `2akpdg9t`)
+- **Pending new best (after #963 merges):** `val_avg = 64.91`, `test_avg = 57.25` (run `j8yi780z`, unseeded, T_max=13)
+- **Seeded canonical at T_max=50 (`--seed 0`):** `val_avg = 85.14`, `test_avg = 78.97`, `3-split = 86.78` (run `j1r5y758`, post-#914+#863) — will be superseded by seeded T_max=13 canonical once frieren maps T_max sweep
 
 ## Current research focus
 
-**Four compounding wins:** L1 (101.93) → +ch=[1,1,3] (99.23, −2.65%)
+**REFRAMING EVENT:** T_max=13 (one-line schedule fix) delivered −20.66% val /
+−21.62% test in a single PR. The "still descending at timeout" pattern across
+all of round 2 was a schedule artifact. **Prior architectural wins (Fourier PE
+−9.6%, ch-weights −2.7%, SwiGLU −8.8%) were ALL real but measured under constant
+~4.25e-4 LR, not fully annealed. At T_max=13, these stacks will compound even
+further.** New projected floor (once stacks are re-tested at T_max=13): val < 50.
+
+**Five compounding wins:** L1 (101.93) → +ch=[1,1,3] (99.23, −2.65%)
 → +Fourier PE K=4 (89.71, −9.59%) → +SwiGLU MLP (81.81, **−8.81%**)
-= **−19.7% cumulative**. SwiGLU is the second-largest single-lever gain.
-New baseline: **val=81.81 / test=73.04 (4-split, first finite)**.
-All in-flight PRs need to beat **81.81** to merge.
+→ +T_max=13 (64.91, **−20.66%**) = **−36.3% cumulative**.
+T_max=13 is the **largest single-PR gain in the project**. Zero parameter
+cost. Zero wall-clock cost. Pure schedule right-sizing.
+
+**All in-flight PRs should use `--t_max 13` and `--seed 0` for fair comparison.
+New target to beat: val=64.91 (unseeded) or val=(TBD, seeded T_max=13 from
+frieren's next run).**
 
 Key insight: Fourier PE + channel weighting are orthogonal and additive.
 The ch=[1,1,3] win made pressure gradient dominant → Fourier PE's spectral
@@ -56,44 +68,45 @@ on L1-only baseline). The compounding mechanism is well-understood.
 | #949 | fern | LayerScale γ_init=1e-4 (CaiT) | -1 to -3% | wip |
 | #955 | thorfinn | Per-channel output heads (Ux/Uy/p) | -2 to -4% | **CLOSED +2.7% val / +4.1% test; mechanism active (head_p ×2.22 vs Ux ×1.57) but cross-channel coupling load-bearing for single_in_dist (+13% val regression); thorfinn→#979 pressure-only variant** |
 | #979 | thorfinn | Pressure-only head (decouple only p, keep Ux+Uy shared) | -1 to -3% | wip (just assigned, post-#914+#863) |
-| #963 | frieren | Schedule-to-budget T_max=13 (cosine match horizon) | -1 to -3% | wip (just assigned, post-#914) |
+| #963 | frieren | Schedule-to-budget T_max=13 (cosine match horizon) | −20.66% val / −21.62% test VERIFIED | **PENDING MERGE — mechanical rebase onto post-#863 needed (Config hunk-shift); no re-run** |
 | #972 | askeladd | 3-seed mean canonical (--seed {0,1,2}) | replace single-seed noise → tight ranking quantity | wip (just assigned, post-#863+#914) |
 
 **Round 3 candidates (queued, contingent on round 2 outcomes):**
 
-- **EMA × SwiGLU compound** (#873 rebased onto post-#914 baseline 81.81).
-  EMA gave −10.46% on pre-#820; SwiGLU gave −8.81%. Predicted compound
-  val ≈ 70-75. **Highest-priority pending experiment.**
-- **FiLM × SwiGLU compound** (#816 rebased onto post-#914). Predicted
-  val ≈ 72-76 if orthogonal. Bar is 81.81.
-- **EMA + FiLM + SwiGLU triple stack** — if both #873 and #816 land,
-  combine. Three orthogonal levers. Predicted val ≈ 63-70.
-- **LayerScale × SwiGLU** (#949 in flight). Per-channel residual gate
-  vs per-feature FFN gate — should be orthogonal. Predicted val ≈ 79-81
-  if it works alone. Round-3 candidate to stack with EMA/FiLM if all land.
-- **LayerScale × DropPath** stack (#949 + #929) — deterministic γ-soft-start
-  + stochastic block dropping. CaiT-XL precedent. Round-3 only if both work
-  alone first.
-- **EMA decay sweep {0.995, 0.97}** — once #873 merges on SwiGLU.
-- **Categorical-FiLM (multiplicative)** — round-3 follow-up once #816 lands.
-- **n_layers=4** (the opposite direction from #939) — at ~115 s/epoch
-  → ~15 epochs in budget. Tests whether depth-budget tradeoff favors
-  shallow side. Counterfactual to #939.
-- **n_layers=6 with extended 60-min budget** (round-3 retest if budget
-  envelope lifts) — disentangle "depth doesn't help" from "depth needs
-  more steps." #939's result strongly suggests this would land negative-Δ.
-- **Width-scaling: n_hidden=144 at n_layers=5** — iso-param to n_layers=6
-  (~+170K params) but with no extra block depth. Tests width vs depth at
-  same capacity. Round-3 candidate.
-- **RFF σ sweep {2, 5}** — in flight as #938 rebase #2 (skipping σ=20 per
-  student's coord-range diagnosis). σ=2 matches baseline's k=0 octave;
-  σ=5 fills the gap between baseline's π and 4π bands. If both lose,
-  RFF-as-replacement is settled and we move to hybrid axis-aligned+RFF
-  for round 3.
-- **Hybrid axis-aligned + RFF concatenation** (round-3 candidate; tanjiro's
-  follow-up #2 from #938 rebase #1). Keep the 4 axis-aligned octaves AND
-  add 8 random freqs at σ=10 on top. Tests whether RFF can *augment*
-  rather than *replace*. Only if RFF-as-replacement fails on σ∈{2,5}.
+⚠️ **CRITICAL: After #963 merges, ALL round-3 experiments MUST add `--t_max 13`
+to their reproduce commands. Prior predictions below use old baselines (81.81) —
+targets must be updated to beat T_max=13 baseline (~64.91 unseeded or TBD seeded).**
+
+- **T_max sweep {10, 12, 13, 16} on `--seed 0`** — frieren's immediate
+  follow-up assignment after #963 rebase. Maps the LR-schedule optimum AND
+  establishes the canonical seeded baseline at T_max=13. Predicted: T_max ∈
+  {12, 13} will be near-optimal; T_max=10 may cut too early; T_max=16 will
+  slightly under-anneal. Each is 1 × 30-min run. 4 runs total.
+- **n_layers=6 retest at T_max=13** — **HIGH PRIORITY**. #939 was closed as
+  "under-trained at timeout" (11 epochs at 141s/epoch). With T_max=13,
+  the LR schedule is now right-sized even for the slower 6-block model.
+  The original prediction (−1 to −3% vs 5-layer) may now land because the
+  capacity has enough training steps to manifest. High-value round-3 retest.
+- **EMA × SwiGLU × T_max=13 compound** (#873 rebased onto post-#963 baseline).
+  EMA gave −10.46% on pre-#820; SwiGLU gave −8.81%; T_max=13 gave −20.66%.
+  If orthogonal, compound val could reach ~44-50. **Highest-priority stack.**
+- **FiLM × SwiGLU × T_max=13 compound** (#816 rebased onto post-#963). Predicted
+  val improvement ~15% over new baseline. Bar is now 64.91.
+- **EMA + FiLM + SwiGLU + T_max=13 quadruple stack** — if both #873 and #816
+  land at T_max=13, combine. Four orthogonal levers. Could reach val < 40.
+- **LayerScale × T_max=13** (#949 in flight). Re-evaluate once #963 merges;
+  student may want to rebase and re-run. Predicted: mechanism (per-channel
+  residual gate) is orthogonal to schedule, should compound.
+- **DropPath × T_max=13** (#929 in flight, needs rebase). DropPath stochastic
+  regularization at properly-annealed convergence may compound more.
+- **EMA decay sweep {0.995, 0.97}** at T_max=13 — once #873 lands.
+- **Categorical-FiLM (multiplicative)** at T_max=13 — round-3 follow-up once #816 lands.
+- **RFF σ sweep {2, 5}** — in flight as #938 rebase #2 (compare vs T_max=13 baseline).
+- **Hybrid axis-aligned + RFF concatenation** (round-3 candidate; only if
+  RFF-as-replacement fails on σ∈{2,5}).
+- **Pressure-only head** at T_max=13 (rebase #979 once #963 merges). Per-#955
+  analysis, mechanism may work better with proper convergence — a positive
+  result at T_max=13 would settle the DECODER-DECOUPLING family.
 - **Per-channel output heads (full Ux/Uy/p decoupling)** — **CLOSED #955
   +2.7% val / +4.1% test**. Mechanism active (head_p specialized ×2.22 vs
   Ux ×1.57) but cross-channel coupling was load-bearing for single_in_dist

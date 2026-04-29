@@ -1,5 +1,73 @@
 # SENPAI Research Results — willow-pai2e-r4
 
+## 2026-04-29 03:30 — PR #963: Schedule-to-budget T_max=13 — **PENDING REBASE (then MERGE) — val −20.66% (81.81→64.91), test −21.62% (73.04→57.25). LARGEST SINGLE-PR WIN.**
+
+- Branch: `willowpai2e4-frieren/tmax-13-budget-matched` (sent back for rebase onto post-#863)
+- Student: willowpai2e4-frieren
+- W&B run: [`j8yi780z`](https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r4/runs/j8yi780z)
+- Status: **MERGE PENDING** — conflict is hunk-shift on Config dataclass (frieren's `t_max: int = 0` + #863's `seed: int = 0` at nearby lines). No semantic conflict. No re-run needed. W&B verified.
+
+**Hypothesis.** Current `CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS=50)` with 13-epoch actual training → LR decays only to ~85% of peak. Effectively training at constant 4.25e-4 LR. Setting `T_max=13` gives proper cosine geometry (LR → 0 at final epoch). Predicted −1 to −3% val. **Actual: −20.66% val / −21.62% test.**
+
+**Results vs unseeded best 81.81 / test 73.04 (`2akpdg9t`):**
+
+| Metric | Baseline | T_max=13 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 81.8075 | **64.9148** | **−20.66%** ✓ |
+| `test_avg/mae_surf_p` | 73.04 | **57.2466** | **−21.62%** ✓ |
+| Param count | 661,735 | 661,735 | **0** (scheduler-only) |
+| Wall time | 30.6 min | 30.6 min | **unchanged** |
+| Best epoch | 12/13 | 13/13 (plateau forming) | +1 |
+| Final LR | ~4.25e-4 | **0** (cosine endpoint) | — |
+
+**Per-split val (epoch 13) — all splits improved:**
+
+| Split | Baseline | T_max=13 | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 97.53 | **71.86** | **−26.31%** |
+| `val_geom_camber_rc` | 94.17 | **76.45** | **−18.83%** |
+| `val_geom_camber_cruise` | 59.18 | **46.54** | **−21.36%** |
+| `val_re_rand` | 76.36 | **64.81** | **−15.13%** |
+| **val_avg** | **81.81** | **64.91** | **−20.66%** |
+
+**Per-split test (best ckpt, epoch 13) — test gains exceed val gains:**
+
+| Split | Baseline | T_max=13 | Δ |
+|---|---:|---:|---:|
+| `test_single_in_dist` | 86.73 | **64.75** | **−25.34%** |
+| `test_geom_camber_rc` | 85.54 | **69.21** | **−19.09%** |
+| `test_geom_camber_cruise` | 48.32 | **39.29** | **−18.69%** |
+| `test_re_rand` | 71.57 | **55.74** | **−22.12%** |
+| **test_avg** | **73.04** | **57.25** | **−21.62%** |
+
+**Mechanism — fully confirmed:**
+
+- **Val curve shape changed** from monotone-descending-at-cliff to plateau
+  forming: epoch-13 delta = −0.70 (epoch-12 delta was −3.42). Last 2-epoch
+  deceleration confirms cosine tail landed in the right window.
+- **Baseline curve (T_max=50):** epoch-12 val=81.81 → epoch-13 val=85.75 (+3.94
+  bounce), because LR was still ~85% of peak and optimizer overshot.
+  T_max=13 eliminates that bounce.
+- **LR trajectory verified**: W&B `lr=0` at end of run. LR at epoch 6-7 was
+  ~50% of peak (2.5e-4) — consistent with half-cosine geometry.
+
+**Reframing observation (student's key insight):** "Every gain we measured
+was an under-trained gain. T_max=13 is approximately a free 20% improvement
+that retroactively reframes prior comparisons." This means:
+1. Prior architectural wins (Fourier PE −9.6%, channel weights −2.7%, SwiGLU
+   −8.8%) are real but were measured under-trained. They'll compound even
+   more strongly at T_max=13.
+2. Several closed PRs (especially n_layers=6, #939) may be worth re-testing
+   at T_max=13 — they were closed as "under-trained" but now T_max=13 is
+   available.
+3. The new absolute performance floor is much better than expected — val=64.91
+   from the simplest possible change (one CLI flag).
+
+**Decision: PENDING MERGE (pending rebase).** Sent back for mechanical rebase
+onto post-#863 HEAD. No re-run needed. Will merge immediately on resubmission.
+frieren's next assignment after merge: T_max sweep {10, 12, 13, 16} on
+`--seed 0` to establish seeded canonical baseline AND find the optimum.
+
 ## 2026-04-29 03:10 — PR #955: Per-channel output heads — **CLOSED (val +2.7% / test +4.1%; mechanism active but cross-channel coupling load-bearing)**
 
 - Branch: `willowpai2e4-thorfinn/per-channel-output-heads`
