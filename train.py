@@ -462,7 +462,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     huber_delta: float = 0.0  # 0 = MSE (default); >0 = Huber with this delta
     loss_type: str = "relative_mae"  # "mse" (uses huber_delta to switch MSE/Huber) or "relative_mae" (default — branch standard)
-    rel_mae_eps: float = 1e-6  # additive epsilon in the relative MAE denominator
+    rel_mae_eps: float = 1e-3  # additive epsilon in the relative MAE denominator (winning value from PR #940 ε sweep, pre-warmup)
     compile: bool = True  # torch.compile(model) for extra throughput; pass --compile=false to disable
     warmup_epochs: int = 5  # epochs of linear LR warmup (start_factor=0.05) before cosine decay; 0 disables
 
