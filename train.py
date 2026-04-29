@@ -423,6 +423,11 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     bf16: bool = False  # enable bfloat16 autocast for ~1.3x throughput gain
+    # Focal L1 / hard-example mining: weight per-node L1 by detached |residual|,
+    # normalized to mean=1 over real nodes and clamped to [0.1, 10.0]. focal_decay
+    # blends with the previous batch's weights when shapes match (rare under
+    # variable-mesh padding). 0.0 disables (plain L1, baseline behaviour).
+    focal_decay: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -567,6 +572,12 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# Focal L1 hard-example-mining state. Stores the previous batch's detached
+# per-node weight tensor; only blended into the current batch when shapes match
+# (varies per-batch under pad_collate, so EMA blends rarely fire).
+focal_state: dict = {"prev_weights": None}
+focal_blend_count = 0  # diagnostic: how many batches actually used EMA blend
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -597,9 +608,32 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
+        # Unweighted vol/surf L1 — kept for logging continuity with the baseline.
         vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+
+        if cfg.focal_decay > 0:
+            # Self-weighting within batch: detached per-node mean |residual|, normalized
+            # to mean=1 over real nodes, clamped to [0.1, 10.0]. Optional EMA blend
+            # with previous batch's weights when shapes match.
+            mask_f = mask.float()
+            per_node_w = (abs_err.detach().mean(dim=-1) * mask_f)
+            n_real = mask_f.sum().clamp(min=1)
+            mean_w = per_node_w.sum() / n_real
+            per_node_w = (per_node_w / mean_w.clamp(min=1e-6)).clamp(min=0.1, max=10.0)
+
+            prev = focal_state["prev_weights"]
+            if prev is not None and prev.shape == per_node_w.shape:
+                per_node_w = cfg.focal_decay * prev + (1 - cfg.focal_decay) * per_node_w
+                focal_blend_count += 1
+            focal_state["prev_weights"] = per_node_w.detach()
+
+            weighted_err = abs_err * per_node_w.unsqueeze(-1)
+            vol_l1_w = (weighted_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_l1_w = (weighted_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_l1_w + cfg.surf_weight * surf_l1_w
+        else:
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -638,6 +672,9 @@ for epoch in range(MAX_EPOCHS):
             "epoch_time_s": dt,
             "global_step": global_step,
         }
+        if cfg.focal_decay > 0:
+            log_metrics["train/focal_blend_count"] = focal_blend_count
+            log_metrics["train/focal_blend_frac"] = focal_blend_count / max(global_step, 1)
         for split_name, m in split_metrics.items():
             for k, v in m.items():
                 log_metrics[f"{split_name}/{k}"] = v
