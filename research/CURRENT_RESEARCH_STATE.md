@@ -1,20 +1,55 @@
 # SENPAI Research State
 
-- 2026-04-29 13:35 (round 2 in progress — TWO winners merged: schedule + RFF; PRs #1095, #1159, #1162 closed; PRs #1158, #1160 sent back for rebase+rerun on RFF baseline; new assignments: fern→#1179, edward→#1183; askeladd #1176 label fixed — all 8 students active)
-- No human researcher directives yet for this branch.
-- Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective (~14 actually achievable per run).
+- 2026-04-29 (round 5 in progress — FOUR winners merged: schedule + RFF + SwiGLU + FiLM; all 8 students active; thorfinn just assigned lean-film-conditioner PR #1205)
+- No human researcher directives for this branch.
+- Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, ~12-14 effective epochs per run.
 
 ## Cumulative progress
 
 | Stage | val_avg | test_avg | PR | Δ |
 |---|---|---|---|---|
-| Provisional round-1 best (confounded) | 133.892 | 132.106 (3-finite) | #1095 (sent back) | — |
+| Provisional round-1 best (confounded) | 133.892 | 132.106 (3-finite) | #1095 (closed) | — |
 | Round-1 winner: regime-matched schedule | 125.438 | 112.988 | **#1101 ← merged** | -6.3% / -14.5% |
-| Round-2 winner: RFF (n_freq=32, σ=1.0) | **108.543** | **96.942** | **#1138 ← merged** | -13.5% / -14.2% |
+| Round-2 winner: RFF (n_freq=32, σ=1.0) | 108.543 | 96.942 | **#1138 ← merged** | -13.5% / -14.2% |
+| Round-3 winner: SwiGLU FFN (param-matched) | 97.981 | 86.303 | **#1160 ← merged** | -9.7% / -11.0% |
+| Round-4 winner: FiLM domain conditioning | **84.371** | **75.076** | **#1158 ← merged** | -13.9% / -13.0% |
 
-**Cumulative round-1→round-2: -19.0% on val, -26.6% on test** vs starting provisional.
+**Cumulative round-1→round-4: -32.7% on val, -33.6% on test** vs starting provisional.
 
-## Round 1 status (closing)
+## Round 5 — current research focus
+
+Four winners now stacked on the baseline (val=84.371, test=75.076). FiLM domain conditioning merged as round-4 winner with -13.9% val improvement. The FiLMNet (Linear(11,256)+GELU+Linear(256,2560)) adds ~0.66M params (total ~1.35M). Key open questions for round 5:
+
+1. **Is FiLM's gain from signal or capacity?** thorfinn (#1205) — lean FiLM ablation: replace 2-layer MLP with single Linear(11→2560), ~0.03M vs ~0.66M params. Cleanest possible ablation.
+2. **Can AMP buy more capacity/epochs?** alphonse (#1197) tests n_hidden=160 with AMP — if VRAM savings let us fit 16-18 epochs with a wider model, we may gain substantially.
+3. **Can dynamic curriculum beat static sampling?** askeladd (#1198) tests online EMA loss weights — directly improves on the failed p_std proxy in #1176 using actual model loss per sample.
+4. **Is RFF capacity-limited at n_freq=32?** frieren (#1165) — n_freq=64 is a single clean ablation.
+5. **Does cautious AdamW reduce variance?** edward (#1183 v3) — reduces sign-conflicting gradient updates; must rebase onto FiLM+SwiGLU+RFF baseline (val=84.371).
+6. **Gradient-norm loss** fern (#1179) — spatial gradient weighting to target leading-edge pressure peaks.
+7. **EMA weight averaging** nezuko (#1142) — prediction variance reduction.
+
+Beat target: `val_avg/mae_surf_p` < **84.371**
+
+## Closed / merged history (all rounds)
+
+| PR | Student | Hypothesis | Outcome | val_avg |
+|---|---|---|---|---|
+| #1092 | alphonse | capacity-scale-up | closed +5.4% | 141.121 |
+| #1094 | askeladd | surf-weight-25 | closed +12.3% | 150.931 |
+| #1095 | edward | pressure-channel-weight | closed +7.8% | 117.0 |
+| #1096 | fern | huber-vol | closed +6.9% | 143.1 |
+| #1097 | frieren | slice-num-128 | closed +29.8% | 162.562 |
+| #1099 | nezuko | lr1e-3 | closed +7.0% | 143.313 |
+| #1101 | thorfinn | warmup-cosine-floor | **MERGED round-1** | 125.438 |
+| #1138 | frieren | rff-n32 | **MERGED round-2** | 108.543 |
+| #1158 | thorfinn | film-domain-cond v2 | **MERGED round-4** (val=84.371, test=75.076) | **84.371** |
+| #1159 | askeladd | aoa-flip | closed +20.3% | 117.5 |
+| #1160 | alphonse | swiglu-ffn | **MERGED round-3** | 97.981 |
+| #1162 | fern | scale-norm-loss | closed +12.8% | 122.4 |
+| #1176 | askeladd | re-stratified-sampler | closed +1.6% vs old baseline; double-counting | 110.263 |
+| #1183 | edward | cautious-adamw v1 | sent back (pre-SwiGLU baseline; beat old but not new) | 104.740 |
+
+## Round 1 status (all closed)
 
 | PR | Student | Hypothesis | Status | best val_avg/mae_surf_p |
 |---|---|---|---|---|
@@ -67,16 +102,18 @@ Round 2 continues the sweep with hypotheses that:
 - Cover orthogonal axes (positional encoding, training trick, architecture, augmentation)
 - Predict effects above the noise floor where possible
 
-## Round 2 — assignments in flight (8 PRs, post-#1158/#1095 review)
+## Round 5 — assignments in flight (7 PRs WIP)
 
-- **PR #1100 (tanjiro, wider-bs8 rev)** — round-1 capacity scaling + bs=8 + mlp_ratio↓ + output clamp, in flight on rebased branch.
-- **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
-- **PR #1158 (thorfinn, film-domain-cond v2)** — H-10 FiLM domain conditioning. v1 ran on PRE-#1138 baseline: -12.0%/-12.4% vs schedule-only but +1.6%/+2.2% vs current RFF baseline (108.5/96.9). **SENT BACK 2026-04-29 13:30** for rebase + rerun on current merged baseline. FiLM+RFF untested; predicted to stack orthogonally (FiLM=per-sample regime conditioning, RFF=spatial spectral). Expected val=95-105 if stacks; flat otherwise.
-- **PR #1160 (alphonse, swiglu-ffn)** — H-11 SwiGLU FFN replacing GELU MLP in TransolverBlock, param-matched. **SENT BACK** — same pattern as #1158, ran without RFF, beat old baseline by -12.4% but is +1.2% worse than current RFF baseline. Must rebase + rerun. SwiGLU+RFF untested.
-- **PR #1165 (frieren, rff-64)** — RFF n_freq sweep follow-up to merged #1138. Tests if RFF is capacity-limited at n_freq=32. Single-variable ablation: same RFF, same sigma, just doubled frequency components. Best-epoch=last on the merged baseline → model still hungry; +0.03M params, zero throughput cost. Expected -1% to -3% if capacity-limited; flat otherwise.
-- **PR #1176 (askeladd, re-stratified-sampler)** — H-13 Re-stratified sampling. Replace domain-balanced sampler with one that multiplies domain weights by `log(1 + per_sample_y_std_p)` (normalized to unit mean). Upweights hard high-Re samples within each domain. Zero throughput cost. Orthogonal to RFF and schedule. Expected -2% to -5%.
-- **PR #1179 (fern, gradient-norm-loss)** — Spatial gradient-magnitude weighted surface loss. Weights each surface node's loss by |Δp_i| (discrete first-order pressure gradient along node sequence). Directly targets leading-edge/suction-peak/TE-wake regions that dominate mae_surf_p. Addresses the failure mode of #1162. Expected -2% to -5%.
-- **PR #1183 (edward, cautious-adamw)** — **NEW (assigned 2026-04-29 13:35)** — H-08 Cautious AdamW (Liang et al. 2024). One-line drop-in optimizer change: mask updates where `sign(u) ≠ sign(g)` to skip stale-momentum-conflicting steps. Zero extra params, ~2% per-step overhead. Direct attack on σ ≈ 7 run-to-run variance from WeightedRandomSampler. Stacks orthogonally with everything else. Expected -1% to -3%.
+| PR | Student | Hypothesis | Status | Notes |
+|---|---|---|---|---|
+| #1100 | tanjiro | wider-bs8 | WIP | Round-1 carry-over; must rebase on FiLM+SwiGLU+RFF baseline |
+| #1142 | nezuko | ema-decay-999 | WIP | EMA weight averaging, decay=0.999, 5-ep warmup |
+| #1165 | frieren | rff-n64 | WIP | RFF n_freq=64, tests capacity ceiling of RFF at n_freq=32 |
+| #1179 | fern | gradient-norm-loss | WIP | Spatial gradient-magnitude weighted surface loss |
+| #1183 | edward | cautious-adamw v3 | WIP (sent back) | Must rebase onto HEAD (FiLM+SwiGLU+RFF, val=84.371); run as v3 |
+| #1197 | alphonse | amp-capacity-scaling | WIP | AMP + n_hidden=160; capacity scaling within 30-min budget |
+| #1198 | askeladd | online-loss-importance-sampling | WIP | Online EMA loss curriculum; dynamic sampling weights per epoch |
+| **#1205** | **thorfinn** | **lean-film-conditioner** | **NEW (round 5)** | Lean FiLM: Linear(11→2560) ablation; ~0.03M vs ~0.66M params |
 
 ## Round 1 in-flight (revisions waiting)
 
@@ -84,28 +121,13 @@ Round 2 continues the sweep with hypotheses that:
 - **PR #1096 (fern)** — Huber loss on volume nodes — **closed** (val=143.1, +6.9% regression). fern reassigned to PR #1162 (scale-norm-loss → also closed → now PR #1179).
 - **PR #1100 (tanjiro)** — wider-bs8 with mlp_ratio↓ + output clamp, in flight on rebased branch (now part of round-2 in-flight above).
 
-## Next research directions (post-round-2 candidates)
+## Next research directions (post-round-4 candidates)
 
-- **Stack winners.** Whichever of FiLM, AoA-flip, SwiGLU, RFF, EMA win get
-  combined into a single recipe and re-tested. Schedule (already merged) is
-  the platform.
-- **AMP / gradient checkpointing for capacity stacking.** alphonse's 160/5/5/2
-  + thorfinn's schedule is a clean stacking hypothesis but needs throughput
-  gain to fit ≥18 epochs. AMP halves activation memory; gradient checkpointing
-  trades VRAM for ~30% wall-clock cost.
-- **Sobolev-style loss (gradient matching, H-04).** Per-sample scale-aware
-  losses (divide errors by sample y_std), pressure-only auxiliary head with a
-  stronger weight. Untouched loss family.
-- **Optimizer swap (H-08 Cautious AdamW, Lion).** As alternatives to AdamW,
-  especially if capacity-scaling wins because larger models often respond
-  better to alternative optimizers.
-- **Re-stratified sampling (H-13).** Per-sample weighting by `log(per_sample_y_std)`
-  to upweight high-Re samples (harder distribution).
-- **Physics-aware (H-14, H-15).** Soft incompressibility constraint
-  (∇·u = 0); multi-task auxiliary head for surface Cp.
-- **Sobolev-style spatial gradient loss (H-04).** Match `∇p` and `∇u` on
-  surface, not just point values — directly penalizes wrong pressure
-  gradients.
+- **Sobolev-style spatial gradient loss (H-04).** Match `∇p` on surface, not just point values. Complementary to fern's gradient-norm-loss (#1179) which weights nodes by |Δp|; H-04 would instead directly penalize wrong pressure gradient vectors. Untouched.
+- **Lion optimizer.** As an alternative to AdamW: uses only sign-based updates, potentially lower memory and better generalization. Orthogonal to cautious-AdamW.
+- **Gradient checkpointing alone** (if AMP capacity test fails). If AMP causes instability, gradient checkpointing alone buys VRAM headroom at ~30% wall-clock cost.
+- **Physics-aware auxiliary head (H-15).** Soft incompressibility constraint (∇·u ≈ 0) as a regularization term. Purely additive, zero inference cost.
+- **Label smoothing / uncertainty weighting on surface loss.** Weight surface nodes not just by gradient magnitude but by predicted epistemic uncertainty from an MC-Dropout pass. Complex but targets the hardest predictions directly.
 
 ## Constraints reminder
 
