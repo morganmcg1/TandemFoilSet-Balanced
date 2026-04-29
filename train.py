@@ -151,10 +151,15 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            # Per-channel output heads — one independent decoder per output channel
+            # (Ux, Uy, p), instead of a single shared MLP. Decouples decoder pathways.
+            self.mlp2_per_chan = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                    nn.Linear(hidden_dim, 1),
+                )
+                for _ in range(out_dim)
+            ])
 
     def forward(self, fx, gamma=None, beta=None):
         fx = self.attn(self.ln_1(fx)) + fx
@@ -163,7 +168,8 @@ class TransolverBlock(nn.Module):
         if gamma is not None:
             fx = (1.0 + gamma.unsqueeze(1)) * fx + beta.unsqueeze(1)
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            return torch.cat([head(h) for head in self.mlp2_per_chan], dim=-1)
         return fx
 
 
