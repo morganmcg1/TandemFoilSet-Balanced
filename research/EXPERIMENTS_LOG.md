@@ -1,5 +1,45 @@
 # SENPAI Research Results
 
+## 2026-04-29 11:54 — PR #1099 (closed): Higher LR + 5-epoch warmup (lr 5e-4 → 1e-3)
+- Branch: `charliepai2f1-nezuko/lr1e-3-warmup5` (closed)
+- Hypothesis: Higher peak lr (1e-3) + 5-epoch warmup hits a better minimum; predicted -2 to -5%.
+- Reality: predicted effect dwarfed by run-to-run variance.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| best `val_avg/mae_surf_p` (epoch 14) | **143.313** |
+| `test_avg/mae_surf_p` (4 splits, all finite ✓) | 133.082 |
+| Three-trial spread (val_avg) | 152.16 / 135.43 / 143.31 (σ ≈ 7) |
+| Epochs run | 14 / 50 (timeout-bound, ~131 s/epoch) |
+| Peak VRAM | 42.1 GB (huge headroom) |
+| Metrics file | `models/model-charliepai2f1-nezuko-lr1e-3-warmup5-20260429-111721/metrics.jsonl` |
+
+### Per-split val/test (best checkpoint, epoch 14)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| `single_in_dist` | 174.76 | 156.41 |
+| `geom_camber_rc` | 160.36 | 147.54 |
+| `geom_camber_cruise` | 101.79 | 91.88 |
+| `re_rand` | 136.33 | 136.50 |
+| **avg** | **143.31** | **133.08** |
+
+### Val_avg trajectory
+
+```
+e1→399.3 e2→234.2 e3→222.1 e4→216.9 e5→216.8 e6→191.3 e7→180.0
+e8→182.0 e9→168.0 e10→163.3 e11→148.4 e12→194.5 e13→150.6 e14→143.3
+```
+
+### Analysis & conclusions
+
+- **+7% vs provisional best 133.9** — clear regression on the primary metric, even though `test_avg = 133.08` is competitive with edward's clean 132.10 (3-finite splits avg). val_avg is the ranking metric.
+- **Run-to-run variance σ ≈ 7** confirms the small predicted effect (-2 to -5% ≈ ±3-7 absolute units) is below noise floor. Three independent runs of identical recipe spanned 135-152.
+- **Bug fix bundled.** Student independently rediscovered the NaN propagation issue and patched `train.py::evaluate_split` with sample-level filter — runs in parallel to the `data/scoring.py` `torch.where` fix already on advisor branch (commit `2548195`). Belt-and-suspenders coverage.
+- **Closed.** Lever is too small for the noise floor; assigned **H-06 EMA** as a direct intervention against the variance issue (PR #1142).
+
 ## 2026-04-29 11:45 — PR #1097 (revision, then closed): slice_num=128 with bs=6 + clamp + NaN-safe filter
 - Branch: `charliepai2f1-frieren/slice-num-128` (closed)
 - Revision: bs 4 → 6 (bs=8 OOMed at predicted ~109 GB peak), output pressure clamp + GT-finite filter added.

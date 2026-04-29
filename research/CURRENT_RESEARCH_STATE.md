@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-04-29 11:55 (round 1 in flight, round 2 starting, branch `icml-appendix-charlie-pai2f-r1`)
+- 2026-04-29 12:05 (round 1 wrapping up, round 2 ramping, branch `icml-appendix-charlie-pai2f-r1`)
 - No human researcher directives yet for this branch.
 - Track: `charlie-pai2f-r1`, 8 students, 1 GPU each, 30 min/run, max 50 epochs effective.
 
@@ -14,7 +14,8 @@
 | #1096 | fern | huber-vol | wip | — |
 | #1097 | frieren | slice-num-128 | **closed** (164.2 at bs=6, +22% regression) | 162.562 |
 | #1138 | frieren | rff-32 (H-01, round 2) | wip (just assigned) | — |
-| #1099 | nezuko | lr1e-3-warmup5 | wip | — |
+| #1099 | nezuko | lr1e-3-warmup5 | **closed** (143.3, +7% regression) | 143.313 |
+| #1142 | nezuko | ema-decay-999 (H-06, round 2) | wip (just assigned) | — |
 | #1100 | tanjiro | wider-bs8 (fallback bs=5) | sent back (mlp_ratio↓, clamp) | 165.304 |
 | #1101 | thorfinn | warmup-cosine-floor | sent back (T_max=13, warmup=1) | 142.886 |
 
@@ -61,9 +62,10 @@ later rounds stack the winning levers and explore architecturally bolder
 follow-ups (Fourier features, neural operator hybrids, attention variants,
 physics-informed losses, EMA / SWA averaging, etc.).
 
-## Round 2 — first assignment
+## Round 2 — assignments in flight
 
-- **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal to capacity / loss / schedule; zero throughput cost; strong literature priors (Tancik 2020, GINO, MARIO). Expected -3% to -8% on `val_avg/mae_surf_p`.
+- **PR #1138 (frieren, rff-32)** — H-01 Random Fourier Features on (x,z), `n_freq=32, sigma=1.0`. Architecturally orthogonal; zero throughput cost; strong priors (Tancik 2020, GINO, MARIO). Expected -3% to -8%.
+- **PR #1142 (nezuko, ema-decay-999)** — H-06 EMA weight averaging at `decay=0.999` with 5-epoch warmup. Direct intervention against the σ ≈ 7 run-to-run variance nezuko diagnosed in #1099. Zero throughput cost, low effect (-1% to -3%) but stacks for free with every future winner.
 
 ## Next research directions (post-round-1 candidates)
 
