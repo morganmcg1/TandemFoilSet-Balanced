@@ -4,15 +4,45 @@ Lower `val_avg/mae_surf_p` is better.
 
 ---
 
+## 2026-04-29 04:10 — PR #885: Huber δ=1.0 → 0.1 stacked on sw=3+BF16
+
+- **val_avg/mae_surf_p:** 96.866 ← **current best**
+- **val per-split surf p MAE:**
+  - `val_single_in_dist`: 119.405
+  - `val_geom_camber_rc`: 116.812
+  - `val_geom_camber_cruise`: 65.983
+  - `val_re_rand`: 85.265
+- **test_avg/mae_surf_p:** 87.348 ← **best clean 4-split test**
+- **test per-split surf p MAE:**
+  - `test_single_in_dist`: 109.152
+  - `test_geom_camber_rc`: 107.290
+  - `test_geom_camber_cruise`: 53.250
+  - `test_re_rand`: 79.700
+- **Best epoch:** 16 of 16 (30-min timeout; val still descending at cutoff)
+- **Model:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (663K params + distance features)
+- **Training:** `lr=1e-3 (peak), warmup_epochs=5, warmup_start_lr=1e-4, eta_min=1e-6, weight_decay=1e-4, batch_size=4, surf_weight=3.0, epochs=50, amp=True, amp_dtype=bf16, huber_delta=0.1`
+- **Changes vs prior:** `huber_delta` lowered from 1.0 to 0.1. Tighter quadratic-to-linear transition: at sw=3, the loss is already volume-dominated, so the volume residual heavy tail (high-Re outliers) is the new noise source. Capping volume gradient magnitude at small δ stabilizes training.
+- **Trade-off:** Per-split test shows split-trade — sid+rc regress (+6%, +14%), cruise+re_rand improve (-24%, -14%). Same pattern as sw=0.5 (#953, closed) but aggregate is net-positive here while sw=0.5 was tied.
+- **W&B run:** `nffbil1x`
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --agent willowpai2e5-askeladd \
+    --amp --amp_dtype bf16 \
+    --wandb_name "willowpai2e5-askeladd/d0.1-sw3" \
+    --wandb_group huber-delta-stack-with-sw3
+  ```
+
+---
+
 ## 2026-04-29 01:55 — PR #850: Lower surf_weight 10→3 on Huber+BF16 stack
 
-- **val_avg/mae_surf_p:** 101.563 ← **current best**
+- **val_avg/mae_surf_p:** 101.563
 - **val per-split surf p MAE:**
   - `val_single_in_dist`: 120.51
   - `val_geom_camber_rc`: 107.95
   - `val_geom_camber_cruise`: 82.16
   - `val_re_rand`: 95.64
-- **test_avg/mae_surf_p:** 89.918 ← **best clean 4-split test**
+- **test_avg/mae_surf_p:** 89.918
 - **test per-split surf p MAE:**
   - `test_single_in_dist`: 102.846
   - `test_geom_camber_rc`: 94.352
@@ -42,7 +72,7 @@ Lower `val_avg/mae_surf_p` is better.
   - `val_geom_camber_rc`: 115.14
   - `val_geom_camber_cruise`: 92.61
   - `val_re_rand`: 103.76
-- **test_avg/mae_surf_p:** 101.299 ← **best clean 4-split test**
+- **test_avg/mae_surf_p:** 101.299
 - **test per-split surf p MAE:**
   - `test_single_in_dist`: 124.544
   - `test_geom_camber_rc`: 99.385
@@ -73,7 +103,7 @@ Lower `val_avg/mae_surf_p` is better.
   - `val_geom_camber_rc`: 147.898
   - `val_geom_camber_cruise`: 93.729
   - `val_re_rand`: 116.189
-- **test_avg/mae_surf_p:** 116.211 ← **best clean 4-split test**
+- **test_avg/mae_surf_p:** 116.211
 - **test per-split surf p MAE:**
   - `test_single_in_dist`: 141.142
   - `test_geom_camber_rc`: 134.121
