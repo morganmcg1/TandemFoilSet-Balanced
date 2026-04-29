@@ -518,10 +518,10 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        # Per-sample Re-based weight: downweight high-Re samples.
+        # Per-sample Re-based weight: downweight high-Re samples (alpha=2).
         # x dim 13 is log(Re), shared across all nodes of a sample.
         log_re_per_sample = x[:, 0, 13]  # [B]
-        re_weight = 1.0 / (log_re_per_sample - log_re_per_sample.min() + 1.0)  # [B]
+        re_weight = 1.0 / (log_re_per_sample - log_re_per_sample.min() + 1.0) ** 2  # [B]
         re_weight = re_weight / re_weight.sum()  # normalize to sum=1
         re_weight = re_weight.detach()
 
