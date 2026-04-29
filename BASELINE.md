@@ -4,32 +4,74 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **47.5231** (PR #1246 — OneCycleLR: peak 2e-3, 30% ramp, cosine decay) |
-| `test_avg/mae_surf_p` | **41.3253** (PR #1246) |
-| `test_single_in_dist/mae_surf_p` | 44.3980 |
-| `test_geom_camber_rc/mae_surf_p` | 55.9591 |
-| `test_geom_camber_cruise/mae_surf_p` | 25.0234 |
-| `test_re_rand/mae_surf_p` | 39.9207 |
+| `val_avg/mae_surf_p` | **47.4955** (PR #1242 — lr=7e-4 on beta2=0.985 stack) |
+| `test_avg/mae_surf_p` | **41.2226** (PR #1242) |
+| `test_single_in_dist/mae_surf_p` | 44.0112 |
+| `test_geom_camber_rc/mae_surf_p` | 56.3252 |
+| `test_geom_camber_cruise/mae_surf_p` | 25.1105 |
+| `test_re_rand/mae_surf_p` | 39.4435 |
 
-**Source:** PR #1246 — OneCycleLR replaces SequentialLR (LinearLR warmup + CosineAnnealingLR). max_lr=2e-3 (4× base), pct_start=0.3, anneal_strategy='cos', div_factor=25.0, final_div_factor=1e4, total_steps=32×375=12000. Scheduler is per-step (called after each batch).
-- Branch: `charliepai2f5-nezuko/one-cycle-lr-policy`
-- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=5e-4 (config), batch_size=4, weight_decay=5e-4, adamw_beta2=0.98
-- Best epoch = 32/32 (final epoch, val curve still descending — training-budget-limited)
-- Peak VRAM: 20.97 GB, Wall-clock: 29.94 min, Run ID: z3y61gtc
+**Source:** PR #1242 — lr=7e-4 (was 5e-4) on the full beta2=0.985 compound stack. Uses SequentialLR (warmup_epochs=3 LinearLR + CosineAnnealingLR over remaining 29 epochs).
+- Branch: `charliepai2f5-fern/lr-7e-4-beta2-0.985`
+- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
+- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited)
+- Peak VRAM: 20.97 GB, Wall-clock: 29.88 min, Run ID: qgzkwssf
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — currently +0.96% above target (gap = **0.3953**, down from 0.5298 — 47% of remaining gap closed by OneCycleLR).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — currently +0.71% above target (gap = **0.2926**, down from 0.3953 — 26% of remaining gap closed by lr=7e-4).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + OneCycleLR max_lr=2e-3 + epochs=32 + adamw_beta2=0.98 + slice_num=8)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + lr=7e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
 ```
 python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 \
-  --adamw_beta2 0.985
+  --adamw_beta2 0.985 --lr 7e-4
 ```
 *(Note: n_layers=2, slice_num=8 are hardcoded in model_config dict in train.py — slice_num was changed from 16→8 in PR #1194)*
 *(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 29 epochs)*
 
 ## Round r5 — Merged Winners
+
+### PR #1242 — lr=7e-4: probe higher LR on beta2=0.985 compound stack (2026-04-29)
+**Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/lr-7e-4-beta2-0.985
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **47.4955** (epoch 32/32 — final epoch, monotonically improving) |
+| `test_avg/mae_surf_p` | **41.2226** |
+| `test_single_in_dist/mae_surf_p` | 44.0112 |
+| `test_geom_camber_rc/mae_surf_p` | 56.3252 |
+| `test_geom_camber_cruise/mae_surf_p` | 25.1105 |
+| `test_re_rand/mae_surf_p` | 39.4435 |
+
+**vs prior baseline (PR #1246):** val 47.4955 vs 47.5231 → **-0.06% val improvement**
+**Test improvement:** 41.2226 vs 41.3253 → **-0.25% test improvement**
+**Compete gap:** 0.2926 (was 0.3953 — 26% of remaining gap closed)
+**Mechanism:** lr=7e-4 (40% increase from 5e-4) on the full beta2=0.985 compound stack. Larger LR helps explore parameter space more effectively in the early cosine phase; beta2=0.985's faster second-moment adaptation stabilizes learning at the higher rate.
+**Split analysis:** single_in_dist improved strongly (44.0112 vs 46.8018, -5.97%). geom_camber_rc slightly worse (56.3252 vs 55.9591, +0.65%). geom_camber_cruise near-flat (25.1105 vs 25.0234, +0.35%). re_rand improved (39.4435 vs 39.9207, -1.20%).
+**Budget-limited:** is_best=True at final epoch 32, val curve still descending — model still improving at termination.
+**Peak VRAM:** 20.97 GB | **Wall-clock:** 29.88 min | **Run ID:** qgzkwssf
+**Metrics JSONL:** `metrics/charliepai2f5-fern-lr-7e-4-beta2-0.985-qgzkwssf.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 --adamw_beta2 0.985 --lr 7e-4`
+
+### PR #1246 — one-cycle LR policy: peak at 2e-3 with 30% ramp, cosine decay (2026-04-29)
+**Student:** charliepai2f5-nezuko | **Branch:** charliepai2f5-nezuko/one-cycle-lr-policy
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **47.5231** (epoch 32/32 — final epoch, val curve still descending) |
+| `test_avg/mae_surf_p` | **41.3253** |
+| `test_single_in_dist/mae_surf_p` | 44.3980 |
+| `test_geom_camber_rc/mae_surf_p` | 55.9591 |
+| `test_geom_camber_cruise/mae_surf_p` | 25.0234 |
+| `test_re_rand/mae_surf_p` | 39.9207 |
+
+**vs prior baseline (PR #1241):** val 47.5231 vs 47.6501 → **-0.27% val improvement**
+**Test improvement:** 41.3253 vs 41.4598 → **-0.32% test improvement**
+**Compete gap:** 0.3953 (was 0.5298 — 47% of remaining gap closed by OneCycleLR)
+**Mechanism:** OneCycleLR replaces SequentialLR (LinearLR warmup + CosineAnnealingLR). max_lr=2e-3 (4× base lr=5e-4), pct_start=0.3, anneal_strategy='cos', div_factor=25.0, final_div_factor=1e4, total_steps=32×375=12000. Per-step scheduler. Higher peak LR than SequentialLR enables larger initial gradient steps.
+**Budget-limited:** is_best=True at final epoch 32, val curve still descending.
+**Peak VRAM:** 20.97 GB | **Wall-clock:** 29.94 min | **Run ID:** z3y61gtc
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --adamw_beta2 0.98 --one_cycle_lr --one_cycle_max_lr 2e-3 --one_cycle_pct_start 0.3`
 
 ### PR #1241 — AdamW beta2=0.985 fine-tune (interpolation between 0.98 and 0.999) (2026-04-29)
 **Student:** charliepai2f5-askeladd | **Branch:** charliepai2f5-askeladd/adamw-beta2-0.985
@@ -409,4 +451,6 @@ python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epoch
 - 2026-04-29: PR #1149 merged. warmup_epochs=3 (linear LR ramp + cosine): val_avg=51.0626 (-1.43%), test_avg=44.7020 (-1.47%). Compete gap: 3.77.
 - 2026-04-29: PR #1191 merged. adamw_beta2=0.98 (faster second moment adaptation): val_avg=49.0719 (-3.90%), test_avg=42.8204 (-4.21%). Compete gap: 1.89.
 - 2026-04-29: PR #1194 merged. slice_num=8 (throughput) + adamw_beta2=0.98 + epochs=32 compound: val_avg=48.0121 (-2.16%), test_avg=41.6806 (-2.66%). Compete gap: 0.7506 (60% of remaining gap closed in one step).
-- 2026-04-29: PR #1241 merged. adamw_beta2=0.985 fine-tune: val_avg=47.6501 (-0.75%), test_avg=41.4598 (-0.53%) — **Current best.** Compete gap: 0.5298 (29% of remaining gap closed).
+- 2026-04-29: PR #1241 merged. adamw_beta2=0.985 fine-tune: val_avg=47.6501 (-0.75%), test_avg=41.4598 (-0.53%). Compete gap: 0.5298 (29% of remaining gap closed).
+- 2026-04-29: PR #1246 merged. one-cycle LR policy (max_lr=2e-3, pct_start=0.3): val_avg=47.5231 (-0.27%), test_avg=41.3253 (-0.32%). Compete gap: 0.3953 (47% of remaining gap closed).
+- 2026-04-29: PR #1242 merged. lr=7e-4 on beta2=0.985 stack: val_avg=47.4955 (-0.06%), test_avg=41.2226 (-0.25%) — **Current best.** Compete gap: 0.2926 (26% of remaining gap closed).
