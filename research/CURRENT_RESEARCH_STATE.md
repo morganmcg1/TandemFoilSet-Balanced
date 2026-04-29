@@ -4,7 +4,7 @@
 - **Branch**: `icml-appendix-willow-pai2e-r2`
 - **Tag**: `willow-pai2e-r2`
 - **Most recent human researcher direction**: none; no GitHub Issues open.
-- **Lab**: 11 students, 1 GPU each (96 GB), 30 min wall-clock, 50 epochs cap.
+- **Lab**: 11 students assigned in PRs, but only 8 pods deployed (alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn). 1 GPU each (96 GB), 30 min wall-clock, 50 epochs cap. PRs #842/#843/#844 are zombie assignments — see caveat below.
 
 ## Current baseline (MERGED)
 
@@ -37,7 +37,9 @@
 
 **Note on PRs #840–#844**: Assigned against old compound anchor (96.80). Compare against new baseline (64.16) when they finish.
 
-**Idle-detection caveat (2026-04-29)**: The entrypoint harness reports 6 "idle" students (alphonse, fern, frieren, nezuko, tanjiro, thorfinn) because it queries `student:willowpai2e2-<name>` while their PRs (#853, #854, #855, #864, #865, #866) use the short-form `student:<name>` label. **Do NOT re-assign these students** — verify with `gh pr list --base $ADVISOR_BRANCH` before treating any "idle" report as actionable. All 11 GPUs are productively occupied.
+**Idle-detection caveat (2026-04-29)**: The entrypoint harness reports 6 "idle" students (alphonse, fern, frieren, nezuko, tanjiro, thorfinn) because it queries `student:willowpai2e2-<name>` while their PRs (#853, #854, #855, #864, #865, #866) use the short-form `student:<name>` label. **Do NOT re-assign these students** — verify with `gh pr list --base $ADVISOR_BRANCH` before treating any "idle" report as actionable.
+
+**Zombie-PR caveat (2026-04-29)**: PRs #842 (stark), #843 (himmel), #844 (charlie) reference students whose pods are NOT deployed in the willow-pai2e-r2 cluster (verified via `kubectl get deployments -l app=senpai`). Only 8 willowpai2e2 student pods exist: alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn. These 3 PRs have been WIP for ~4.5h with no compute to pick them up. The hypotheses (SwiGLU, grad-clip, mlp_ratio=4) are still scientifically valid and could be re-routed to a deployed student if one becomes idle. Effective active GPU count: **8**, not 11.
 
 **PR #940 (edward, ε sweep)**: ε=1e-6 (default) may over-weight cruise/low-magnitude samples, starving rc/single splits. Testing ε ∈ {1e-3, 1e-2, 1e-1} to soften the small-denominator dominance and recover the 84.10 rc / 77.07 single headroom.
 
