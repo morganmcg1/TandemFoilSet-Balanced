@@ -1,5 +1,33 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PR #927 (CLOSED): Per-channel volume-loss weights — mechanism absorbed by SwiGLU
+- **Branch:** `fern/per-channel-vol-l1`
+- **Hypothesis:** v1 result on pre-SwiGLU stack: `vol_w_p=2.0` gave −9.0% on `val_avg/vol_p` with neutral surf_p. Fern requested rebase onto SwiGLU (post-PR #961 #983) to test whether the volume-pressure mechanism survived the bilinear-gating MLP.
+- **Runs:** W&B `aa6mch9c` (v2-rebased, vol_w_p=2.0) and `qwzljf64` (v2-baseline, vol_w_p=1.0), both 14/14 epochs, group `per-channel-vol-l1-v2`
+
+| Metric | v2-baseline (vol_w_p=1.0) | v2-rebased (vol_w_p=2.0) | Δ v2 | v1 (pre-SwiGLU) |
+|---|---|---|---|---|
+| **val_avg/mae_surf_p** | **62.60** | **65.59** | **+4.77%** | ~neutral |
+| val_avg/mae_vol_p | 0.475 | 0.455 | −4.21% | −9.0% |
+| test_avg/mae_surf_p | 56.20 | 58.30 | +3.74% | n/a |
+
+### Decision: CLOSED — mechanism absorbed by SwiGLU; cross-stack mechanism reversal documented
+- **The vol_p mechanism shrunk from −9.0% (v1, GELU) to −4.2% (v2, SwiGLU)** — bilinear gating absorbs much of the per-channel residual-balance effect. Surf_p flipped from neutral to clear regression (+4.77%).
+- **Fern's paired A/B was the right protocol** — v2-baseline at 62.60 (vs PR #961's 62.20) became a third SwiGLU canonical noise data point alongside 64.46 (PR #983 ratio=2 same-day) — single-seed band ~62.20–64.46, range 3.6%. v2-rebased at 65.59 falls *outside* the noise band, confirming the regression is real not noise.
+- **Cross-stack mechanism reversal:** explicit dampening of channel competition is a substitute for SwiGLU's bilinear gating, not a complement. With gating already in place, hard-coded dampening over-constrains.
+- **Volume-loss-shape direction declared closed at this architecture.** Future channel-rebalancing should target node-level (within-channel) rather than channel-level reweighting.
+- **Follow-up assigned:** fern → PR #1029 (surface loss reweighting by per-node pressure quantile — heavy-tail-targeted, within-sample within-channel reweighting, completely orthogonal to all current stack components).
+
+---
+
+## 2026-04-29 — Assignment: PR #1029 (fern surface quantile-reweight)
+- **PR #1029** (`fern/surface-quantile-reweight`): Per-node loss reweighting on surface pressure, gated by absolute target value. CLI flags `--surf_p_quantile_topk` (fraction of top-|p| nodes) and `--surf_p_quantile_alpha` (multiplicative weight). Three-run sweep: v1 (top10, α=2), v2 (top20, α=2), v3 (top10, α=3).
+- **Mechanism orthogonal to all current stack components:** L1 (uniform across surface nodes), FiLM-pre (Re conditioning), Re-stratify (between-sample), SwiGLU (MLP architecture), mlp_ratio=1 (capacity). This experiment differentiates *within* sample.
+- **Distinct from PR #743 (channel-weighted) and PR #858 (focal):** static within-sample reweighting by `|y_p|`, not by channel and not by current model error. Cleaner attribution than focal.
+- **Predicted delta:** −1 to −4% on val_avg (62.20 → 60–61.5). Largest gains expected on `single_in_dist` (highest absolute pressure) and `geom_camber_rc` (currently hardest at val=74.60).
+
+---
+
 ## 2026-04-29 — PR #969 (CLOSED): Vertical-flip data augmentation — NACA M hidden asymmetry breaks mechanism
 - **Branch:** `nezuko/vflip-augmentation`
 - **Hypothesis:** y-mirror incompressible 2D flow symmetry → p=0.5 vflip aug effectively doubles training data for bilateral-mesh samples. Domain-gated (raceCar-single excluded via `min(pos_y) < -0.5` filter).

@@ -58,6 +58,7 @@
 | #970 | Shared FiLM head — rank-reduction probe | Closed — depth-specialization confirmed; per-block FiLM heads carry information, not redundant capacity (+5.0% on old / +34.3% vs new SwiGLU best); 4th FiLM-redistribution falsification | 83.55 |
 | #993 | TTA with vertical flip on SwiGLU stack | Closed — equivariance prerequisite violated by dataset asymmetry (~54% half-domain meshes; single-foil AoA strictly negative; stagger strictly positive); flip impl correct; +114% val | 133.00 |
 | #969 | Vertical-flip data augmentation (training-time, domain-gated) | Closed — NACA M not flipped → mesh-vs-metadata contradictions; sign-reversed per-split signal (cruise +18.8% worst, not best); two independent y-symmetry falsifications | 86.68 |
+| #927 v2 | Per-channel volume L1 (vol_w_p=2.0) v2 rebased onto SwiGLU | Closed — mechanism absorbed by SwiGLU; vol_p gain shrunk −9.0% → −4.2%; surf_p flipped neutral → +4.77% regression; volume-loss-shape direction declared closed at this architecture | 65.59 |
 | #983 | SwiGLU mlp_ratio ablation (ratio=1 vs ratio=2) | **MERGED** — canonical config switched to mlp_ratio=1; gating-mechanism is primary driver (~97% of gain), capacity contribution ~3%; 0.62M params, 14/14 epochs | 62.74 (paired; test=55.04) |
 | **#961** | **SwiGLU MLP — replace GELU MLP with Swish-gated linear unit** | **MERGED — leaderboard low-water-mark** | **62.20** |
 
@@ -69,7 +70,7 @@
 | askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | WIP — new 2026-04-29 |
 | thorfinn | #999 | **RMSNorm replacing LayerNorm — canonical SwiGLU pairing (LLaMA/Mistral-style normalization)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | nezuko | #1021 | **slice_num sweep {32, 64, 96, 128} — physics-attention spatial resolution ablation** | WIP — new 2026-04-29 (post-SwiGLU) |
-| fern | #927 | Per-channel vol loss v2 (rebase onto FiLM+pre-block+Re-stratify; paired A/B) | WIP — sent back 2026-04-29 |
+| fern | #1029 | **Surface loss reweighting by per-node pressure quantile (within-sample, target-value-gated; sweep top10/α=2, top20/α=2, top10/α=3)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | edward | #975 | DropPath rate sweep {0.05, 0.10, 0.15} on FiLM+L1+Re-stratify | WIP — new 2026-04-29 |
 | frieren | #1016 | **bf16 mixed precision training — wall-clock unlock + cosine recovery** | WIP — new 2026-04-29 (post-SwiGLU) |
 | tanjiro | #869 | surf_weight sweep (sw=5 wins on L1 base); v2 rebase onto FiLM+L1 pending | WIP |
@@ -94,7 +95,8 @@
 - **TTA-by-symmetry equivariance prerequisite violated by dataset asymmetry** (PR #993 +114%). Eval-time vflip averaging fails because the dataset is structurally y-asymmetric: ~54% of training samples are half-domain meshes (y > 0 only), single-foil AoA range strictly negative, stagger range strictly positive. Model has no incentive to learn y-equivariance and goes severely OOD on flipped input. **Flip implementation was correct** (column-by-column verified). New finding documented in research/DATASET_ANALYSIS.md. Has implications for PR #969 (training-time vflip-aug) — may need to subset bilateral-mesh samples or pair with re-meshing.
 - **FiLM input axis is single-variable now; AoA-FiLM probe (PR #976) opens multi-variable conditioning** as a fresh axis. AoA is a primary flow parameter the model has zero conditioning-awareness of. If AoA-FiLM wins, opens 4-d (Re, AoA1, AoA2, gap) and beyond.
 - **SwiGLU is the new canonical MLP architecture** (PR #961, merged 2026-04-29, val 79.54→62.20 −21.8%). All future experiments build on L1 + FiLM-pre + Re-stratify + SwiGLU. Active pre-SwiGLU WIP branches (#869, #927, #969, #975, #976) — if any beats old baseline (79.54) but not new (62.20), they will be sent back to rebase onto SwiGLU HEAD. Post-SwiGLU assignments (#983, #999, #1016) build directly on SwiGLU HEAD.
-- **Off-Re axes underway:** physics-attention resolution (slice_num #1021), parameter-efficiency push (ultra-thin SwiGLU #1020), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), volume-side per-channel loss (#927), normalization canonical (RMSNorm #999), wall-clock infrastructure (bf16 #1016). [SwiGLU paper ablation #983 MERGED].
+- **Off-Re axes underway:** physics-attention resolution (slice_num #1021), parameter-efficiency push (ultra-thin SwiGLU #1020), regularization (DropPath #975), conditioning multi-variable (AoA-FiLM #976), within-sample heavy-tail surface reweight (#1029), normalization canonical (RMSNorm #999), wall-clock infrastructure (bf16 #1016). [SwiGLU paper ablation #983 MERGED, vol-channel #927 CLOSED].
+- **Volume-loss-shape direction closed at SwiGLU stack** (PR #927 v2): vol_w_p mechanism shrunk −9.0% → −4.2% post-SwiGLU; surf_p flipped neutral → +4.77% regression. SwiGLU's bilinear gating absorbs the channel-residual-balance lever; explicit channel-rebalancing now competes rather than complements. Cross-stack mechanism reversal — node-level reweight is the next refinement direction (fern #1029).
 - **Y-symmetry axis fully closed:** two independent probes both falsified on dataset-asymmetry grounds (TTA frieren #993 — equivariance prerequisite; training-aug nezuko #969 — NACA M hidden asymmetry). Documented in DATASET_ANALYSIS.md. To retry: must also flip NACA M (col 15, 19) AND subset to bilateral-mesh samples.
 - **Canonical config update:** mlp_ratio=1 is now the merged default. All 14 epochs fit 30-min budget. 0.62M params (−29% vs ratio=2).
 - **Focal loss falsified on L1 base** (PR #858): high-error nodes are convergence-bottlenecked, not gradient-bottlenecked.
@@ -105,32 +107,29 @@
 
 ## Potential next research directions
 
-1. ~~**Vertical-flip data augmentation**~~ — **Closed (PR #969): NACA M asymmetry breaks mechanism** (+9.0% val; sign-reversed cruise split). Must also flip NACA M cols 15,19 for self-consistency. Not retrying until higher-EV axes exhausted.
-2. ~~**Shared FiLM head**~~ — **Closed (PR #970): depth-specialization confirmed** (+5.0%). FiLM-redistribution axis fully saturated (4 probes).
-3. **AoA-FiLM: extend FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2).** Tests whether multi-variable conditioning compounds. **Assigned → askeladd PR #976.**
-4. **DropPath rate sweep {0.05, 0.10, 0.15}** on full SwiGLU stack. Regularization axis. **Assigned → edward PR #975.**
-5. ~~**SwiGLU MLP**~~ — **MERGED (PR #961, val=62.20 −21.8%). New canonical.** Paper ablation **MERGED (PR #983, ratio=1 canonical).** Gating mechanism is primary driver.
-6. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
-7. ~~**TTA (test-time augmentation) with vertical flip**~~ — **Closed (PR #993): equivariance prerequisite violated** (dataset y-asymmetry).
+### Active assignments (2026-04-29)
+1. **Surface loss reweighting by per-node pressure quantile** — within-sample heavy-tail-targeted gradient direction. Three-run sweep top10/α=2, top20/α=2, top10/α=3. **Assigned → fern PR #1029.**
+2. **AoA-FiLM (multi-variable conditioning)** — extend FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2). Tests whether multi-variable conditioning compounds. **Assigned → askeladd PR #976.**
+3. **DropPath rate sweep {0.05, 0.10, 0.15}** on full SwiGLU stack. Regularization axis. **Assigned → edward PR #975.**
+4. **RMSNorm replacing LayerNorm** — canonical SwiGLU pairing (LLaMA/Mistral-style). Removes mean-centering; preserves scale (the bilinear-gate-relevant statistic). Modest expected gain (−0.5 to −2%); paper-friendly architectural simplification. **Assigned → thorfinn PR #999.**
+5. **bf16 mixed precision training** — wall-clock unlock + cosine recovery; once landed, opens width-scaling and longer schedules. **Assigned → frieren PR #1016.**
+6. **Ultra-thin SwiGLU (mlp_ratio=2/3, 0.51M params)** — paper-efficiency extension of gating-mechanism thesis. **Assigned → alphonse PR #1020.**
+7. **slice_num sweep {32, 64, 96, 128}** — physics-attention spatial resolution ablation. **Assigned → nezuko PR #1021.**
 8. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
-9. **RMSNorm replacing LayerNorm** — canonical SwiGLU pairing. **Assigned → thorfinn PR #999.**
-10. **bf16 mixed precision training** — wall-clock unlock + cosine recovery. **Assigned → frieren PR #1016.**
-11. **Ultra-thin SwiGLU (mlp_ratio=2/3, 0.51M params)** — paper-efficiency extension of gating-mechanism thesis. **Assigned → alphonse PR #1020.**
-12. **slice_num sweep {32, 64, 96, 128}** — physics-attention spatial resolution ablation. **Assigned → nezuko PR #1021.**
-3. **AoA-FiLM (multi-variable conditioning)** — extend FiLM input from 1-d (log_Re) to 3-d (log_Re, AoA1, AoA2). Tests whether multi-variable conditioning compounds. **Assigned → askeladd PR #976.**
-4. **DropPath rate sweep** — stochastic depth on FiLM+L1+Re-stratify stack {0.05, 0.10, 0.15}. Regularization axis. **Assigned → edward PR #975.**
-5. **SwiGLU MLP** — ~~replace GELU MLP with Swish-gated linear unit~~ **MERGED (PR #961, val=62.20 −21.8%). New canonical architecture.**
-6. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined vol-L1. **Assigned → fern PR #927.**
-7. ~~**TTA (test-time augmentation) with vertical flip**~~ — **Closed (PR #993): equivariance prerequisite violated by dataset asymmetry** (+114% val). New dataset finding documented: ~54% of training samples are half-domain meshes; single-foil AoA strictly negative; stagger strictly positive. Will need training-time augmentation (#969) to teach model y-equivariance first; TTA can then compose.
-8. **surf_weight rebalancing** — test surf_weight=5 on FiLM+L1 (tanjiro PR #869 v2 rebase pending).
-9. **RMSNorm replacing LayerNorm** — canonical SwiGLU pairing (LLaMA/Mistral-style). Removes mean-centering from norm; preserves scale (the SwiGLU bilinear-gate-relevant statistic). Modest expected gain (−0.5 to −2%); paper-friendly architectural simplification. **Assigned → thorfinn PR #999.**
+
+### Closed directions (this round)
+- ~~**SwiGLU MLP**~~ — **MERGED (PR #961, val=62.20 −21.8%). New canonical.** Paper ablation **MERGED (PR #983, ratio=1 canonical).** Gating mechanism is primary driver (~97% of gain).
+- ~~**Per-channel volume L1 (vol_w_p=2.0)**~~ — **Closed (PR #927 v2): mechanism absorbed by SwiGLU** (+4.77% surf_p; vol_p gain shrunk −9.0% → −4.2%). Volume-loss-shape direction closed at this architecture.
+- ~~**Vertical-flip data augmentation**~~ — **Closed (PR #969): NACA M asymmetry breaks mechanism** (+9.0% val; sign-reversed cruise split). Must also flip NACA M cols 15,19 for self-consistency. Not retrying until higher-EV axes exhausted.
+- ~~**TTA with vertical flip**~~ — **Closed (PR #993): equivariance prerequisite violated by dataset asymmetry** (+114% val). ~54% half-domain meshes; single-foil AoA strictly negative; stagger strictly positive. Documented in DATASET_ANALYSIS.md.
+- ~~**Shared FiLM head (rank-reduction)**~~ — **Closed (PR #970): depth-specialization confirmed** (+5.0%). FiLM-redistribution axis fully saturated (4 probes).
 
 ### Off-the-Re-axis ideas (Re-conditioning lever saturated; pivot to fresh axes)
-9. **Horizontal-flip + rotation augmentation (conditional on vflip #969 result)** — if vflip wins, test horizontal-flip (x → -x, Ux → -Ux) and small-angle rotation. Domain-aware augmentation pipeline.
-10. **rc-targeted intervention** — `geom_camber_rc` improved isolated on PR #952 (−4.2%). Probe: rc-aware loss reweighting OR a small geometry-domain conditioning head. Currently the hardest split (92.95).
-11. **Slice-token reduction / LRSA** — replace S×S (64×64) slice-token self-attention with rank-16 factored. Reduces compute, possibly improves regularization, frees budget for more width.
-12. **Width scaling with bf16** — n_hidden=192 plus mixed precision to fit the wall-clock budget that depth-scaling broke. **bf16 infra-piece assigned → frieren PR #1016**; once that lands, width-scaling becomes feasible.
+9. **Horizontal-flip + rotation augmentation** — conditional on a successful y-symmetry breakthrough (currently 0/2 probes). Domain-aware augmentation pipeline; need NACA-M and bilateral-mesh subset machinery first.
+10. **rc-targeted intervention** — `geom_camber_rc` improved isolated on PR #952 (−4.2%). Probe: rc-aware loss reweighting OR a small geometry-domain conditioning head. Currently the hardest split (74.60 val on SwiGLU stack).
+11. **Slice-token reduction / LRSA** — replace S×S (64×64) slice-token self-attention with rank-16 factored. Reduces compute, possibly improves regularization, frees budget for more width. Conditional on slice_num #1021 result.
+12. **Width scaling with bf16** — n_hidden=192 plus mixed precision to fit the wall-clock budget that depth-scaling broke. Conditional on bf16 #1016 landing.
 13. **Geometric pre-training / SSL** — pretrain on vflip-augmented data with masked-node reconstruction, fine-tune on pressure prediction.
 14. **4-d FiLM (Re, AoA1, AoA2, gap)** — conditional on PR #976 (AoA-FiLM) result. If multi-variable wins, extend to 4-d.
-15. ~~**Test-time augmentation (TTA) with vflip**~~ — **Closed (PR #993): equivariance prerequisite violated** (see entry 7).
-16. **Compound 4-way stack** — FiLM-pre + Re-stratify + vflip (if #969 wins) + best-of: SwiGLU, EMA, shared-FiLM, DropPath, AoA-FiLM. Round-4 candidate.
+15. **Per-node loss reweighting variants** — conditional on fern #1029 result. If quantile-reweight wins: try non-static weight schedules (warmup-then-up), error-bucketed reweighting, surface-curvature reweighting.
+16. **Compound stack frontier** — FiLM-pre + Re-stratify + SwiGLU + best-of post-SwiGLU winners (RMSNorm, AoA-FiLM, DropPath, slice_num, surf-quantile, bf16). Round-4 candidate.
