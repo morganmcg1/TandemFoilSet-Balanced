@@ -261,7 +261,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, vol_l1_p_only=False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -290,8 +290,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             surf_mask = mask & is_surface
             # torch.where, not multiplication: NaN*0 = NaN would poison the sum.
             zero_norm = torch.zeros((), dtype=sq_err.dtype, device=sq_err.device)
+            if vol_l1_p_only:
+                # MSE on chans 0,1 (Ux,Uy); L1 on chan 2 (p).
+                vol_err = torch.empty_like(sq_err)
+                vol_err[..., 0:2] = sq_err[..., 0:2]
+                vol_err[..., 2:3] = abs_err[..., 2:3]
+            else:
+                vol_err = sq_err
             vol_loss_sum += (
-                torch.where(vol_mask.unsqueeze(-1), sq_err, zero_norm).sum()
+                torch.where(vol_mask.unsqueeze(-1), vol_err, zero_norm).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
@@ -499,6 +506,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     surf_huber_delta: float = 1.0  # delta for Huber surface loss (in normalized space)
+    vol_l1_p_only: bool = True  # apply L1 only to volume pressure (channel 2); MSE on Ux/Uy
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -644,7 +652,14 @@ if __name__ == "__main__":
             surf_mask = mask & is_surface
             # torch.where, not multiplication: NaN*0 = NaN would poison the loss.
             zero_norm = torch.zeros((), dtype=sq_err.dtype, device=sq_err.device)
-            vol_loss = torch.where(vol_mask.unsqueeze(-1), sq_err, zero_norm).sum() / vol_mask.sum().clamp(min=1)
+            if cfg.vol_l1_p_only:
+                # MSE on chans 0,1 (Ux,Uy); L1 on chan 2 (p).
+                vol_err = torch.empty_like(sq_err)
+                vol_err[..., 0:2] = sq_err[..., 0:2]
+                vol_err[..., 2:3] = abs_err[..., 2:3]
+            else:
+                vol_err = sq_err
+            vol_loss = torch.where(vol_mask.unsqueeze(-1), vol_err, zero_norm).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = torch.where(surf_mask.unsqueeze(-1), abs_err, zero_norm).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
@@ -673,7 +688,7 @@ if __name__ == "__main__":
         # --- Validate ---
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.vol_l1_p_only)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -741,7 +756,7 @@ if __name__ == "__main__":
                 for name, ds in test_datasets.items()
             }
             test_metrics = {
-                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.vol_l1_p_only)
                 for name, loader in test_loaders.items()
             }
             test_avg = aggregate_splits(test_metrics)
