@@ -161,9 +161,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_coord_skip=False, n_fourier_in=16):
         super().__init__()
         self.last_layer = last_layer
+        self.use_coord_skip = use_coord_skip
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -172,6 +174,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        if self.use_coord_skip:
+            # Zero-init guarantees baseline-equivalence at training start.
+            self.coord_skip = nn.Linear(n_fourier_in, hidden_dim, bias=False)
+            nn.init.zeros_(self.coord_skip.weight)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -179,9 +185,12 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, fourier_feat=None):
         fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        if self.use_coord_skip and fourier_feat is not None:
+            fx = self.mlp(self.ln_2(fx)) + fx + self.coord_skip(fourier_feat)
+        else:
+            fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -192,12 +201,15 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_coord_skip=False, n_fourier_in=16):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_coord_skip = use_coord_skip
+        self.n_fourier_in = n_fourier_in
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -213,11 +225,16 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_coord_skip=use_coord_skip, n_fourier_in=n_fourier_in,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        if self.use_coord_skip:
+            # Re-zero coord_skip after _init_weights, which trunc-normal-inits all Linear.
+            for block in self.blocks:
+                nn.init.zeros_(block.coord_skip.weight)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -230,9 +247,17 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # Input layout when fourier_bands>0: [raw_coords (2), spectral sin/cos (4*K), rest (22)].
+        # Re-inject the spectral slice at each block; raw coords stay in the residual stream
+        # via the preprocess projection.
+        fourier_feat = (
+            x[..., 2:2 + self.n_fourier_in]
+            if self.use_coord_skip
+            else None
+        )
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, fourier_feat=fourier_feat)
         return {"preds": fx}
 
 
@@ -458,6 +483,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_bands: int = 0  # 0 = disabled, baseline behavior
+    use_coord_skip: bool = False  # re-inject Fourier-encoded coords at each block
 
 
 cfg = sp.parse(Config)
@@ -489,6 +515,8 @@ val_loaders = {
 }
 
 EXTRA_FOURIER_DIMS = 4 * cfg.fourier_bands  # 4 = (sin+cos) * (x, z)
+if cfg.use_coord_skip and cfg.fourier_bands == 0:
+    raise ValueError("--use_coord_skip requires --fourier_bands > 0 (re-injects the spectral slice)")
 model_config = dict(
     space_dim=2 + EXTRA_FOURIER_DIMS,
     fun_dim=X_DIM - 2,
@@ -500,6 +528,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_coord_skip=cfg.use_coord_skip,
+    n_fourier_in=EXTRA_FOURIER_DIMS,
 )
 
 model = Transolver(**model_config).to(device)
@@ -554,6 +584,14 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+
+    if cfg.use_coord_skip:
+        coord_skip_logs = {
+            f"coord_skip/block_{i}_norm": block.coord_skip.weight.norm().item()
+            for i, block in enumerate(model.blocks)
+        }
+        coord_skip_logs["global_step"] = global_step
+        wandb.log(coord_skip_logs)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
