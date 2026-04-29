@@ -73,6 +73,29 @@ Fern noted `test_geom_camber_cruise/vol_loss = Infinity` even with #807's torch.
 
 ---
 
+## 2026-04-29 00:10 — PR #902 (CLOSED): Volume L1 — mirror surface L1 mechanism on volume side
+- **Branch:** `willowpai2e3-fern/volume-l1`
+- **Hypothesis:** Switch volume loss from MSE to L1 to mirror PR #761 surface success. Volume pressure has heavy-tailed residuals (boundary layer spikes, wake structure); predicted −2 to −7% on val_avg with bigger gain on val_vol_p.
+- **Run (v1):** W&B `p4wzubwe`, **14/14 epochs (clean cosine→0)**, val curve flat by ep 12-13, peak ~92.1 GB. Run on L1 baseline (pre-FiLM).
+
+| Metric | L1 baseline `tirux1y1` | v1 `p4wzubwe` | Δ |
+|---|---|---|---|
+| **val_avg/mae_surf_p** | **92.63** | **96.52** | **+4.2%** |
+| val_avg/mae_vol_p | 103.16 | 101.36 | −1.7% (within noise) |
+| **test_avg/mae_surf_p** | **82.83** | **87.14** | **+5.2%** |
+
+### Decision: CLOSE — mechanism falsified
+- **Surface metric regresses uniformly** across all 4 splits (single_in_dist +7.4%, geom_camber_rc +3.5%, cruise +2.1%, re_rand +2.8%).
+- **Volume gain only +1.7%** — well within ±10% single-seed noise band. The heavy-tailed-volume-pressure hypothesis is not supported.
+- Val curve flat by epoch 12-13 — not under-trained.
+- **Mechanism: gradient-magnitude rebalancing.** Switching vol loss from MSE (proportional gradient) to L1 (constant gradient) shifts the relative surf/vol contribution at fixed surf_weight=10. Surface optimization suffers because the gradient balance the optimizer was tuned to is broken.
+- **Plus** the bulk of volume nodes are far-field/smooth-wake (Gaussian-ish residuals), where MSE is theoretically optimal. L1 wastes gradient on these well-behaved regions; the heavy-tail sliver (BL, stagnation streamlines) is too small to offset the damage.
+- Plus: PR #815 FiLM+L1 merged at 82.77; v1 result 96.52 is +16.6% above current best — clear regression even if v1's L1-baseline criteria had been met.
+- Student's analysis was decisive and lays out four candidate refinements; we're picking #4 (per-channel volume L1) as next assignment.
+- **Closed 2026-04-29. Next assignment: #927 per-channel volume loss** (L1 on p only, MSE on Ux/Uy — isolates heavy-tail to channel where it might matter, preserves MSE balance on Gaussian-ish velocity channels).
+
+---
+
 ## 2026-04-29 00:00 — PR #869 v1: surf_weight sweep (sw=3, sw=5) on L1 baseline
 - **Branch:** `willowpai2e3-tanjiro/surf-weight-sweep`
 - **Hypothesis:** Reduce `surf_weight` from 10.0 → 3.0 (and 5.0 bracket) to rebalance surface/volume gradient ratio. Predicted: −1 to −4% val_avg; volume-side gain larger.

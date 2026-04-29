@@ -39,6 +39,7 @@
 | #858 | Focal surface loss gamma=0.5/1.0 on L1 | Closed — γ=0.5 within noise, γ=1.0 +13.4% worse | 92.13 |
 | #884 | RevIN — per-sample y normalization (surface loss) | Closed — structural mismatch with absolute-MAE metric (+65%) | 152.64 |
 | #750 v2-rebased | LR warmup + cosine on FiLM+L1 (lr=2e-3) | Closed — schedule mechanism baked into baseline (+2.78%) | 85.07 |
+| #902 | Volume L1 (mirror surface L1 success on vol side) | Closed — gradient rebalancing hurts surf_p (+4.2%); vol_p only −1.7% | 96.52 |
 | #743 | Channel-weighted L1 (v3, rebase pending) | WIP | 99.21 (v2 ref) |
 | #750 | LR warmup + cosine v2 (rebase pending) | WIP | 111.12 (v1 ref) |
 | #756 | Fourier Re-encoding v2 (rebase pending) | WIP | 120.22 (v1 ref) |
@@ -50,7 +51,7 @@
 | askeladd | #917 | Re-input noise augmentation (smooth FiLM via training-time log(Re) perturbation) | WIP — new assignment 2026-04-28 |
 | thorfinn | #909 | Pre-block FiLM: condition attention input rather than output | WIP — new assignment 2026-04-28 |
 | nezuko | #910 | Re-stratified batch sampling: Re-diverse mini-batches for FiLM+L1 | WIP — new assignment 2026-04-28 |
-| fern | #902 | Volume L1 (mirror surface L1 success on volume side) | WIP |
+| fern | #927 | Per-channel volume loss (L1 on p only, MSE on Ux/Uy) | WIP — new assignment 2026-04-29 |
 | edward | #924 | Per-channel output heads (Ux/Uy/p) — decouple decoder pathways | WIP — new assignment 2026-04-29 |
 | frieren | #756 | Fourier Re-encoding v2 (rebase pending onto FiLM+L1) | WIP |
 | alphonse | #743 | Channel-weighted L1 v3 (rebase onto post-#761; now needs rebase onto FiLM+L1 too) | WIP |
@@ -66,6 +67,7 @@
 - **RevIN structurally mismatched** (PR #884): per-sample loss normalization decouples gradient from absolute-MAE metric (which is high-Re-dominated by Re² scaling). Falsifies the "amplitude rebalancing helps Re generalization" hypothesis at the loss level. The Re-axis lever is captured architecturally via FiLM, not via loss normalization.
 - **LR warmup mechanism baked into baseline** (PR #750): pre-rebase 19.6% gain came from fixing schedule mismatch (cosine over 50ep but timeout at 14ep). Now that `--epochs 14` is standard, the gain is gone. Higher peak LR (lr=2e-3) interacts poorly with FiLM's modulation, especially on `val_geom_camber_rc` (+7.9%). The schedule-budget alignment principle survives as a convention.
 - **surf_weight=5 on L1 base** (PR #869 v1): rebalancing thesis directionally confirmed — vol_p −10.4%, surf_p −1.6%. Need v2 rebase onto FiLM+L1 to test whether mechanism stacks (different) or overlaps (FiLM also strengthens volume features).
+- **Full vol-L1 falsified** (PR #902): mirror of surface-L1 doesn't transfer because (a) volume bulk is Gaussian-ish far-field where MSE is theoretically optimal, (b) gradient-magnitude rebalancing across surf/vol shifts when both are L1, hurting surface (+4.2%). Refined version (per-channel vol L1 on p only) assigned via #927 to isolate the heavy-tail mechanism without breaking the velocity-channel MSE balance.
 - **Channel weighting stacks with Huber** (alphonse #743 v2: −3.8% on top of Huber). Pending whether it also stacks with FiLM+L1 (v3 in progress).
 - **Surface dominates volume ~7:1 at L1 convergence** (tanjiro diagnosis). surf_weight=3.0 (#869) tests whether rebalancing frees volume capacity.
 - **Boundary-layer features falsified.** log(Re·|saf|) is redundant; volume-node saf mismatch hurts in-dist.
@@ -76,7 +78,7 @@
 1. **Pre-block FiLM** — condition attention Q/K/V on Re (before block, not after). **Assigned → thorfinn PR #909.**
 2. **Re-stratified batch sampling** — Re-diverse mini-batches to improve FiLM conditioning signal. **Assigned → nezuko PR #910.**
 3. **Re-input noise augmentation** — sigma=0.02-0.10 Gaussian noise on log(Re) at training to force smooth FiLM conditioning. **Assigned → askeladd PR #917.**
-4. **Volume L1** — mirror surface L1 mechanism on the volume loss (currently MSE). **Assigned → fern PR #902.**
+4. **Per-channel volume loss (L1 on p only, MSE on Ux/Uy)** — refined version of failed #902 vol-L1; isolates heavy-tail mechanism to pressure channel without breaking velocity MSE balance. **Assigned → fern PR #927.**
 5. **surf_weight rebalancing** — rebalance surface/volume gradient ratio after FiLM merge. **Assigned → tanjiro PR #869.** May need re-sweep against new FiLM+L1 baseline.
 6. **Capacity scaling on FiLM+L1 base** — the model uses only 44.6GB of 96GB. 2× hidden size on the new best baseline is a fresh, high-EV direction.
 7. **Per-channel output heads** — decouple Ux/Uy/p decoder pathways; targets the per-channel statistics imbalance (pressure ~10²-10⁴ vs velocity ~1-10²). **Assigned → edward PR #924.**
