@@ -457,3 +457,37 @@ vs BF16 baseline #811 (val_avg=127.40, test_avg=116.21):
 - **Joint with #742 (per-activation dropout):** two negative results in a row with the same mechanistic root cause — the model is undertrained, not overfit. Standard transformer regularizers do not pay rent in this regime.
 - **Student's diagnosis is correct:** the dominant constraint is wall-clock, not regularization. Their #1 follow-up suggestion (`torch.compile`) and the broader throughput direction are exactly right.
 - **Nezuko reassigned** to vectorize `add_derived_features` (#923) — the per-sample CPU-sync Python loop identified by askeladd in #848 as the throughput bottleneck. This is an exact, contained, deterministic optimization that should free 5–15% wall-clock.
+
+---
+
+## 2026-04-29 00:14 — PR #850: Lower surf_weight sweep {3, 5, 7} — sent back for sw=3 + Huber stack
+
+- **Branch:** `willowpai2e5-edward/lower-surf-weight` (sent back; result is internally clean but compared against pre-Huber baseline)
+- **W&B runs:** `2sv6lptb` (sw=3), `ge7sjn6i` (sw=5), `rnhf5mmx` (sw=7) — group `lower-surf-weight`. **All three runs used `huber_delta=None` (MSE; pre-#739 merge code).**
+- **Hypothesis:** Lowering surf_weight (counter to refuted #734 going up) lets the volume residuals contribute more spatial context, which the Transolver attention propagates back to surface predictions.
+
+### Results (against BF16 baseline #811 val_avg=127.40, BEFORE Huber merged)
+
+| sw | val_avg/mae_surf_p | test_avg/mae_surf_p | best epoch |
+|----|--------------------:|--------------------:|-----------:|
+| 10 (baseline) | 127.402 | 116.211 | 17 |
+| **3** | **124.053 (-2.6%)** | **112.563 (-3.1%)** | 13 |
+| 5 | 125.837 (-1.2%) | 115.176 (-0.9%) | 17 (still descending) |
+| 7 | 142.777 (+12.0%) | 133.367 (+14.7%) | 17 (plateau) |
+
+### Per-channel diagnostic (val avg)
+
+| sw | surf_p ↓ | surf_Ux | surf_Uy | vol_p ↓ |
+|----|---------:|--------:|--------:|--------:|
+| 3 | **124.05** | 2.41 | 0.89 | **111.31** |
+| 7 | 142.78 | **2.00** | **0.85** | 136.10 |
+
+### Commentary & Conclusions
+
+- **Decision: Sent back for re-run on Huber baseline.** The mechanism is real and partially complementary to Huber — needs a single decisive sw=3 + Huber run.
+- **Mechanism validated within sweep:**
+  1. Lower sw → substantial improvement in vol_p (sw=3: 111.31 vs sw=7: 136.10, -22%). Volume signal is informative for surface prediction; weakening it hurts surface predictions too.
+  2. Counter-intuitive trade: surf_p improves at sw=3 but surf_Ux/Uy degrade. Pressure has fat-tailed magnitudes (high-Re outliers); strong surface emphasis amplifies gradient noise on `p` more than on velocity.
+- **Stale baseline issue:** all three runs predate the Huber merge (sw=3 created at 22:25, Huber merged at 23:40). Current best is now 110.594, so sw=3's 124.05 looks worse than baseline. But Huber and sw-lowering attack different mechanisms: Huber caps high-Re gradient contribution, low-sw boosts volume informativeness. They MAY stack.
+- **Send-back instructions:** Single re-run with `--surf_weight 3.0` on rebased branch (Huber δ=1.0 is now default). If beats 110.594 → merge as new baseline. If lands 105-115 → marginal. If >115 → Huber already captured this lever.
+- **Future PR (per-channel surface weights):** student suggested `surf_weight_p=3, surf_weight_uv=10` to keep velocity accuracy while gaining pressure improvement — clever, hold for follow-up if this PR wins.

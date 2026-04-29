@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2e-r5
 
-- **Last updated:** 2026-04-29 00:08
+- **Last updated:** 2026-04-29 00:18
 - **Advisor branch:** `icml-appendix-willow-pai2e-r5`
 - **Track tag:** `willow-pai2e-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-e-r5`
@@ -37,7 +37,7 @@ magnitude even inside one domain, so high-Re samples drive the extremes.
 | askeladd | #848 | Closed | bs={8,10}: regressed; bs=12 OOM; `add_derived_features` loop bottleneck |
 | askeladd | #885 | **WIP** | Huber delta sweep ∈ {0.3, 0.5, 1.0, 2.0} on BF16 baseline |
 | edward | #734 | Closed | sw=10 wins; sw=50/100 regress |
-| edward | #850 | WIP | Lower-surf-weight sweep {3, 5, 7} |
+| edward | #850 | WIP (rebase) | Sweep {3, 5, 7} on pre-Huber code: sw=3 won internally (val=124.05, -2.6% vs 127.40) but worse than current Huber baseline (110.59). Sent back for sw=3 + Huber stack on merged baseline. Mechanism: lower sw boosts vol signal informativeness (vol_p -22% at sw=3 vs 7) — partially complementary to Huber. |
 | fern | #737 | **Merged** | val_avg=127.87; warmup+cosine |
 | fern | #809 | WIP | Schedule sized to budget (epochs=14, warmup=2) |
 | frieren | #739 | **Merged** | Huber d=1.0: **val_avg=110.594 (−13.2%)**, test_avg=101.299 (−12.8%); new best. All 4 test splits finite. |
