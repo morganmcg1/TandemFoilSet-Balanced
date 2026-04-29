@@ -32,7 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, Sampler, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +46,86 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+# ---------------------------------------------------------------------------
+# Vertical-flip augmentation (geometric symmetry)
+# ---------------------------------------------------------------------------
+#
+# 2D incompressible flow is invariant under (y -> -y, Uy -> -Uy) provided the
+# *boundary conditions* are also y-symmetric. The 24-d input layout (from
+# data/prepare_splits.py) is:
+#   [pos(2), saf(2), dsdf(8), is_surface(1), log_Re(1),
+#    AoA0(1), NACA0(3), AoA1(1), NACA1(3), gap(1), stagger(1)]
+#
+# Y-direction-sensitive features that must flip sign on a vertical reflection:
+#   col  1: pos[:, 1]  (mesh y-coord)
+#   col  3: saf[:, 1]  (background-mesh y-coord; >0.99 corr with pos[:, 1])
+#   col 14: AoA0       (geometry rotates about chord => angle flips)
+#   col 18: AoA1
+#   col 22: gap        (vertical separation between front/back foils; signed)
+# Target:
+#   y[:, 1]: Uy
+#
+# Features that stay the same:
+#   col 0,2: x-coordinates
+#   col 4-11: dsdf (scalar unsigned distance descriptors, all >= 0)
+#   col 12: is_surface, col 13: log(Re)
+#   col 15-17,19-21: NACA M-P-T magnitudes (camber direction is implicit in
+#                    AoA sign — flipping AoA preserves the encoding)
+#   col 23: stagger (horizontal offset, range [0, 2.0])
+#   y[:, 0]: Ux, y[:, 2]: pressure (scalar)
+#
+# DOMAIN-AWARE GATING. The dataset mixes ground-effect raceCar samples (pos_y
+# bounded below at y=0) and freestream samples (pos_y centered ~0). Vertical
+# reflection is only physically valid for samples whose mesh extends below
+# the foil — i.e. no implicit ground wall at y=0. A sample is eligible iff
+# ``x[:, 1].min() < VFLIP_ELIGIBILITY_THRESHOLD``. Asymmetric samples are
+# returned unchanged. This excludes 100% of raceCar single (always y>=0) and
+# the ~half of raceCar tandem and cruise samples that bottom out at y~0.
+
+VFLIP_ELIGIBILITY_THRESHOLD = -0.5
+
+_VFLIP_X_COLS = (1, 3, 14, 18, 22)  # pos_y, saf_y, AoA0, AoA1, gap
+_VFLIP_Y_COLS = (1,)                # Uy
+
+
+def apply_vflip_inplace(x: torch.Tensor, y: torch.Tensor) -> None:
+    """Apply vertical-flip augmentation to one sample, in place."""
+    for c in _VFLIP_X_COLS:
+        x[..., c] *= -1
+    for c in _VFLIP_Y_COLS:
+        y[..., c] *= -1
+
+
+def is_vflip_eligible(x: torch.Tensor) -> bool:
+    """A sample is eligible iff its mesh extends below y=0 (no ground wall)."""
+    return bool(x[:, 1].min().item() < VFLIP_ELIGIBILITY_THRESHOLD)
+
+
+class VFlipDataset(Dataset):
+    """Wrap a base dataset and apply per-sample vertical flip with prob ``p``.
+
+    Only samples that satisfy the symmetry condition (mesh extends below y=0,
+    so no implicit ground wall) are eligible. Ineligible samples (raceCar
+    with ground effect, or domains bounded below at y=0) are returned
+    unchanged. Augmentation is training-only; val/test wrap raw datasets.
+    """
+
+    def __init__(self, base: Dataset, p: float = 0.5):
+        self.base = base
+        self.p = p
+
+    def __len__(self) -> int:
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y, is_surface = self.base[idx]
+        if is_vflip_eligible(x) and torch.rand(()).item() < self.p:
+            x = x.clone()
+            y = y.clone()
+            apply_vflip_inplace(x, y)
+        return x, y, is_surface
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -496,6 +576,8 @@ class Config:
     re_stratify: bool = True  # round-robin Re-quintile mini-batches (overrides domain-balanced sampler)
     n_re_quintiles: int = 5
     re_stratify_seed: int = 42
+    vflip_aug: bool = False  # enable vertical-flip data augmentation (geometric symmetry)
+    vflip_p: float = 0.5     # per-sample probability of applying vertical flip
 
 
 if __name__ == "__main__":
@@ -514,6 +596,7 @@ if __name__ == "__main__":
 
     re_stratify_active = cfg.re_stratify and not cfg.debug
     sampler_info: dict = {"sampler": "shuffle" if cfg.debug else "weighted_domain"}
+    # Extract log(Re) from raw train_ds (col 13 is invariant under vflip).
     if re_stratify_active:
         t0_re = time.time()
         log_re_train = extract_train_log_re(train_ds, num_workers=4)
@@ -526,9 +609,6 @@ if __name__ == "__main__":
             f"bucket sizes={re_sampler.bucket_sizes}, "
             f"len(sampler)={len(re_sampler)} (extracted log_re in {time.time()-t0_re:.1f}s)"
         )
-        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                                  sampler=re_sampler, drop_last=True,
-                                  **loader_kwargs)
         sampler_info = {
             "sampler": "re_stratified",
             "n_re_quintiles": cfg.n_re_quintiles,
@@ -537,12 +617,54 @@ if __name__ == "__main__":
             "log_re_max": float(log_re_train.max()),
             "log_re_mean": float(log_re_train.mean()),
         }
+
+    # Wrap with vflip augmentation (training only, validation/test are raw).
+    train_ds_for_loader: Dataset = train_ds
+    vflip_info: dict = {"vflip_aug": False}
+    if cfg.vflip_aug:
+        # One-pass eligibility scan: count samples where min(pos_y) < threshold
+        # (i.e. no implicit ground wall). Uses the same parallel loader trick as
+        # extract_train_log_re to amortize per-file I/O.
+        t0_elig = time.time()
+        elig_loader = DataLoader(
+            train_ds, batch_size=8, shuffle=False, num_workers=4,
+            collate_fn=lambda b: b,
+        )
+        n_eligible = 0
+        for batch in elig_loader:
+            for x, _y, _surf in batch:
+                if is_vflip_eligible(x):
+                    n_eligible += 1
+        del elig_loader
+        train_ds_for_loader = VFlipDataset(train_ds, p=cfg.vflip_p)
+        vflip_info = {
+            "vflip_aug": True,
+            "vflip_p": cfg.vflip_p,
+            "vflip_x_cols": list(_VFLIP_X_COLS),
+            "vflip_y_cols": list(_VFLIP_Y_COLS),
+            "vflip_eligibility_threshold": VFLIP_ELIGIBILITY_THRESHOLD,
+            "vflip_n_eligible": n_eligible,
+            "vflip_n_total": len(train_ds),
+            "vflip_eligible_frac": n_eligible / max(len(train_ds), 1),
+        }
+        print(
+            f"Vflip augmentation: p={cfg.vflip_p}, "
+            f"eligible {n_eligible}/{len(train_ds)} "
+            f"({n_eligible/max(len(train_ds),1):.1%}) samples (min pos_y < "
+            f"{VFLIP_ELIGIBILITY_THRESHOLD}), flipping x cols {list(_VFLIP_X_COLS)}, "
+            f"y cols {list(_VFLIP_Y_COLS)} (eligibility scan {time.time()-t0_elig:.1f}s)"
+        )
+
+    if re_stratify_active:
+        train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
+                                  sampler=re_sampler, drop_last=True,
+                                  **loader_kwargs)
     elif cfg.debug:
-        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+        train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
                                   shuffle=True, **loader_kwargs)
     else:
         sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-        train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+        train_loader = DataLoader(train_ds_for_loader, batch_size=cfg.batch_size,
                                   sampler=sampler, **loader_kwargs)
 
     val_loaders = {
@@ -583,6 +705,7 @@ if __name__ == "__main__":
             "train_samples": len(train_ds),
             "val_samples": {k: len(v) for k, v in val_splits.items()},
             "sampler_info": sampler_info,
+            "vflip_info": vflip_info,
         },
         mode=os.environ.get("WANDB_MODE", "online"),
     )
