@@ -66,13 +66,13 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, dropout=0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
-        self.linear_post = nn.Linear(n_hidden, n_output)
+        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn(), nn.Dropout(dropout))
+        self.linear_post = nn.Sequential(nn.Linear(n_hidden, n_output), nn.Dropout(dropout))
         self.linears = nn.ModuleList(
             [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
         )
@@ -151,7 +151,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, dropout=dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -423,6 +423,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
+    dropout: float = 0.0  # dropout p in Transolver attention + MLP sublayers (0 disables)
 
 
 cfg = sp.parse(Config)
@@ -462,6 +463,7 @@ model_config = dict(
     n_head=cfg.n_head,
     slice_num=16,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
