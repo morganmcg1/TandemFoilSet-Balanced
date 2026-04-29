@@ -40,6 +40,13 @@ Note: FiLM conditioning injects global physics scalars (dims 13–23 of x: log(R
 
 ## Merge History
 
+### 2026-04-29 — PR #1196: Single-decay cosine schedule (T_max=50) on Fourier pos enc baseline (charliepai2f3-frieren)
+- Context: Tested against PR #1148 baseline (val_avg=43.9575); current best is PR #1104 (val_avg=39.9450 with FiLM)
+- Result: `val_avg/mae_surf_p = 42.4863` (vs stale baseline −1.4712, −3.35%; vs current best: +2.5413, regresses from 39.9450)
+- Test: `test_avg/mae_surf_p = 35.6687`
+- Key finding: Single-decay cosine (T_max=50) confirms the LR-cycling failure mode. This improvement on the non-FiLM branch is real but the FiLM path (PR #1104) is already significantly ahead. The T_max=50 improvement should be adopted in the FiLM branch experiments.
+- Note: Merged against stale baseline — current best remains PR #1104 at val_avg=39.9450.
+
 ### 2026-04-29 — PR #1104: FiLM global conditioning: inject Re/AoA/NACA via scale+shift (charliepai2f3-edward)
 - Previous: `val_avg/mae_surf_p = 43.9575` (PR #1148, Fourier freqs=(1,2,4,8,16,32,64))
 - New best: `val_avg/mae_surf_p = 39.9450` (improvement: −4.0125, −9.13%)
