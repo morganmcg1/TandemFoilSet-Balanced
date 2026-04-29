@@ -1,5 +1,16 @@
 # SENPAI Research Results — willow-pai2e-r3
 
+## 2026-04-29 — PRs #1021 (SENT BACK), #1020 (SENT BACK), #976 (SENT BACK 2nd): all need RMSNorm rebase before merge
+- Three review-ready PRs all ran on SwiGLU+ratio=1 WITHOUT RMSNorm. PR #999 RMSNorm merged at `321c1db` while these were in flight, advancing canonical to val_avg=57.9550.
+- **PR #1021 (nezuko slice_num):** sn=32 wins decisively on SwiGLU stack (val=59.5744 vs PR #983 ratio=1 baseline 62.74 = **−5.0%**). Monotonic trend across {32, 64, 96, 128} — every step finer is worse. Largest gain on `geom_camber_cruise` (val −10.3%, test −9.8%). Wall-clock 14% faster. **Doesn't beat current RMSNorm canonical (57.95).** Mechanism (slice-token regularization + tighter aggregation) is RMSNorm-independent — predicted compound: 57.95 × 0.95 ≈ 55 (potential major new best). Sent back for paired A/B sn32+RMSNorm vs sn64+RMSNorm. Optional sn=16 extension probe.
+- **PR #1020 (alphonse ultra-thin SwiGLU):** intermediate=85 (ratio=2/3) lands paired-flat vs ratio=1 (62.69 vs 62.74) at **0.54M params (−13% vs ratio=1, −23% vs old GELU baseline)**. Pareto-efficiency claim. Cruise improved further (val −4.4%). **Doesn't beat RMSNorm canonical.** Sent back for paired ratio=2/3+RMSNorm vs ratio=1+RMSNorm A/B verification — most likely outcome is Pareto-flat merge as new param-efficient canonical.
+- **PR #976 (askeladd AoA-FiLM, 2nd send-back):** v2 paired on SwiGLU+ratio=1 gave v2-aoa val=61.008 vs v2-baseline 61.276 (Δ=−0.44% within noise; test Δ=−1.67%). Cross-stack γ-norm diagnostic gold-standard: full γ shrunk 34% (0.698→0.460) but AoA-only γ orthogonal addition lifted full γ +6.5% over v2-baseline (Re-only γ within 1% of baseline). Cruise direction reproduces (val −4.0%, test −4.4%). Sent back for v3 paired A/B on RMSNorm canonical. Mechanism trajectory: v1 (GELU) −1.2% → v2 (SwiGLU) −0.4% → v3 (RMSNorm) ?? → quantifies "canonical absorbs multiplicative-modulation work."
+
+### Process learning: RMSNorm-merge timing affected 4 in-flight PRs (#1016, #1021, #1020, #976)
+All four students started on the SwiGLU+ratio=1 stack before RMSNorm landed at `321c1db`. Each result is leaderboard-stale for the same reason (canonical advanced mid-flight). **Going forward**, when a major canonical-changing PR merges, immediately notify all in-flight students to expect a rebase. Cost is low (~65 min paired A/B) but unavoidable for clean attribution.
+
+---
+
 ## 2026-04-29 — PR #869 (CLOSED): surf_weight sweep v2 on SwiGLU stack — mechanism absorbed by bilinear gating
 - **Branch:** `willowpai2e3-tanjiro/surf-weight-sweep`
 - **Hypothesis:** Lower surf_weight from 10.0 to 5.0/7.0 rebalances L1 gradient ratio (7:1 → 4:1 surf/vol), freeing gradient budget for volume features and improving shared backbone representations.

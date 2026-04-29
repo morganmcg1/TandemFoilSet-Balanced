@@ -14,7 +14,10 @@
 - **Note:** PR #999 (thorfinn, merged 2026-04-29) added RMSNorm as canonical normalization. Current canonical stack: SwiGLU(ratio=1) + RMSNorm + FiLM-pre(log_Re) + L1 + Re-stratify, 0.619M params, 14/14 epochs at 148-150s/epoch. All new experiments build on this HEAD.
 
 ### Pending re-run on new canonical (RMSNorm+ratio=1 stack)
-- **PR #1016 bf16 mixed precision:** Original headline `extyiumn` val_avg=58.49 was on OLD canonical (ratio=2 + LayerNorm). Against new RMSNorm canonical (57.95), that result is +0.94% — not a strong win. Frieren sent back to run one full canonical+bf16 compound: `--epochs 14 --re_stratify --swiglu_ratio 1 --rms_norm --bf16`. Predicted compound: val_avg ~56-57. Wall-clock projection ~26 min (RMSNorm+bf16 ≈ 110s/epoch × 14).
+- **PR #1016 bf16 mixed precision:** Original headline `extyiumn` val_avg=58.49 was on OLD canonical (ratio=2 + LayerNorm). Against new RMSNorm canonical (57.95), that result is +0.94% — not a strong win. Frieren sent back to run one full canonical+bf16 compound: `--epochs 14 --re_stratify --swiglu_ratio 1 --rms_norm --bf16`. Predicted compound: val_avg ~56-57.
+- **PR #1021 slice_num=32 (nezuko):** Won −5.0% on SwiGLU+ratio=1 stack (val=59.57). Monotonic trend across {32, 64, 96, 128}. Predicted compound on RMSNorm canonical: ~55 if mechanism additive. Sent back for paired sn32+RMSNorm vs sn64+RMSNorm A/B. Optional sn=16 extension probe.
+- **PR #1020 ultra-thin SwiGLU (alphonse):** Pareto-flat at ratio=2/3 (intermediate=85, 0.54M params), val=62.69 vs ratio=1 62.74. Sent back for ratio=2/3+RMSNorm vs ratio=1+RMSNorm paired A/B. Most likely outcome: Pareto-flat merge as new param-efficient canonical.
+- **PR #976 AoA-FiLM (askeladd, 2nd send-back):** v2 paired on SwiGLU+ratio=1 gave −0.44% val / −1.67% test (within noise band). γ-norm diagnostic shows AoA orthogonal axis added (Re-only γ unchanged, AoA-only γ adds +0.33). Cross-stack mechanism shrinkage: v1 −1.2% → v2 −0.4% → v3 ? Sent back for paired RMSNorm A/B.
 
 ### Prior bests (for reference)
 - val_avg/mae_surf_p = 79.54 (nezuko Re-stratified batch sampling, merged PR #910) — superseded by SwiGLU
@@ -71,13 +74,13 @@
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| alphonse | #1020 | **Ultra-thin SwiGLU (mlp_ratio=2/3, intermediate=85, 0.51M params) — paper-efficiency extension** | WIP — new 2026-04-29 (post-SwiGLU) |
-| askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | **SENT BACK 2026-04-29** — pre-SwiGLU mechanism win (val=78.58 < 79.54 old; cruise −7.5%, γ-norms growing); rebase onto SwiGLU+ratio=1 HEAD, paired v2-aoa vs v2-baseline |
+| alphonse | #1020 | **Ultra-thin SwiGLU (intermediate=85, 0.54M params) — paper-efficiency** | **SENT BACK 2026-04-29** — Pareto-flat win on SwiGLU stack (val=62.69 vs 62.74 paired); needs RMSNorm canonical paired A/B |
+| askeladd | #976 | AoA-FiLM: extend FiLM input from 1-d log_Re to 3-d (log_Re, AoA1, AoA2) | **SENT BACK 2nd time 2026-04-29** — v2 paired SwiGLU val=61.01 vs 61.28 (Δ−0.44% within noise; test Δ−1.67%); cross-stack γ shrinkage 34% with AoA orthogonal addition; needs v3 RMSNorm paired A/B |
 | thorfinn | #1057 | **NACA_M FiLM: condition FiLM on (log_Re, NACA_M1) — geometry-aware modulation targeting camber OOD splits** | WIP — new 2026-04-29 |
-| nezuko | #1021 | **slice_num sweep {32, 64, 96, 128} — physics-attention spatial resolution ablation** | WIP — new 2026-04-29 (post-SwiGLU) |
+| nezuko | #1021 | **slice_num sweep {32, 64, 96, 128} — physics-attention spatial resolution ablation** | **SENT BACK 2026-04-29** — sn=32 wins decisively on SwiGLU stack (val=59.57, −5.0%); monotonic trend; cruise −10.3%; needs RMSNorm paired A/B + optional sn=16 |
 | fern | #1029 | **Surface loss reweighting by per-node pressure quantile (within-sample, target-value-gated; sweep top10/α=2, top20/α=2, top10/α=3)** | WIP — new 2026-04-29 (post-SwiGLU) |
 | edward | #1061 | **NACA_M1-stratified batch sampling — camber-axis gradient equalization targeting geom_camber_rc** | WIP — new 2026-04-29 (replaced #975 DropPath which closed) |
-| frieren | #1016 | **bf16 mixed precision training — wall-clock unlock + cosine recovery** | **PENDING REBASE → MERGE 2026-04-29** — strong win val_avg=58.49, test_avg=51.50, 14/14 epochs in 26.1 min, sanity instrumentation clean; sent back for mechanical rebase only |
+| frieren | #1016 | **bf16 mixed precision training — wall-clock unlock + cosine recovery** | **SENT BACK 2nd time 2026-04-29** — original v1 (val=58.49) was on OLD canonical (ratio=2 + LayerNorm); +0.94% vs new RMSNorm 57.95 — needs canonical+bf16 compound run |
 | tanjiro | #1056 | **LR sweep (lr=2e-4, 5e-4 ref, 1e-3) — optimizer axis not touched since round 1; RMSNorm+SwiGLU change loss landscape** | WIP — new 2026-04-29 |
 
 ## Cross-cutting findings
