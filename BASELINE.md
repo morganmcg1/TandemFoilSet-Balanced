@@ -263,4 +263,38 @@ For a merge decision: any val_avg below 122.15 merges; gains <5% at single seed 
 
 ---
 
+## 2026-04-29 — PR #999: RMSNorm replacing LayerNorm — canonical SwiGLU pairing
+
+**New best — merged 2026-04-29.**
+
+- **val_avg/mae_surf_p: 57.9550** (best seed v2; two-seed mean 58.30; −6.8% vs prior best 62.20)
+- **test_avg/mae_surf_p: 51.1735** (best seed v2; two-seed mean 51.51; −7.0% vs prior test 55.04)
+- **W&B runs:** `6krvx540` (v2, best), `82kvdhbn` (v3, second seed); group `rmsnorm`
+- **Two-seed reproducibility:** val_avg std=0.34, test_avg std=0.33 — well inside noise band.
+- **Per-split (v2 best):**
+
+| Split | val surf_p | test surf_p |
+|---|---|---|
+| `single_in_dist` | 61.9326 | 55.7699 |
+| `geom_camber_rc` | 72.8394 | 66.3573 |
+| `geom_camber_cruise` | 40.3873 | 32.8797 |
+| `re_rand` | 56.6607 | 49.6871 |
+| **avg** | **57.9550** | **51.1735** |
+
+- **Config:** SwiGLU(ratio=1 default) + RMSNorm (replace all LayerNorm with `F.rms_norm(x, (n_hidden,), weight, eps=1e-6)`, scale-only, no bias) + FiLM-pre + L1 + Re-stratify. **0.619M params** (−1,408 vs LN due to removed β bias vectors). 14/14 epochs, 148–150s/epoch (~5% faster than LayerNorm — fits comfortably in 30-min budget).
+- **Key findings:** (1) RMSNorm + SwiGLU is the canonical LLaMA/Mistral-style normalization-activation pairing — scale-only norm preserves the bilinear-gate-relevant statistic. (2) Largest gain on `single_in_dist` (−17.2% val) — opposite of prediction; SwiGLU had already captured most Re-extrapolation headroom; RMSNorm's benefit is cleaner gradient flow on in-distribution variation. (3) Pareto win on simplicity: fewer params, fewer FLOPs, simpler definition.
+- **Reproduce (best seed):**
+  ```bash
+  cd target/ && python train.py \
+    --epochs 14 \
+    --re_stratify \
+    --rms_norm \
+    --wandb_group rmsnorm \
+    --wandb_name v2 \
+    --agent willowpai2e3-thorfinn
+  ```
+- **Beat-threshold going forward:** `val_avg/mae_surf_p < 57.9550`
+
+---
+
 *This file is updated after each merge. Entries are cumulative — do not delete prior entries.*
