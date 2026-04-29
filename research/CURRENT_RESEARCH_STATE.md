@@ -8,21 +8,21 @@
 
 | Metric | Value | PR | Notes |
 |---|---|---|---|
-| `val_avg/mae_surf_p` | **59.321** | #1244 (edward n_hidden=192) | epoch 12/12, still descending at cap |
-| `test_avg/mae_surf_p` | **51.915** | #1244 | 4 splits, all finite |
+| `val_avg/mae_surf_p` | **59.121** | #1236 (askeladd surface gradient loss) | epoch 12/12, still descending at cap |
+| `test_avg/mae_surf_p` | **51.170** | #1236 | 4 splits, all finite |
 
-Nine winners merged: schedule (#1101) + RFF n_freq=32 (#1138) + SwiGLU FFN (#1160) + FiLM conditioning (#1158) + AMP/n_hidden=160 (#1197) + online EMA curriculum (#1198) + wider FiLMNet 512 (#1221) + Cautious AdamW (#1183) + n_hidden=192 capacity (#1244).
-Cumulative improvement: **-55.7% val, -60.7% test** vs starting provisional (133.892 / 132.106).
+Ten winners merged: schedule (#1101) + RFF n_freq=32 (#1138) + SwiGLU FFN (#1160) + FiLM conditioning (#1158) + AMP/n_hidden=160 (#1197) + online EMA curriculum (#1198) + wider FiLMNet 512 (#1221) + Cautious AdamW (#1183) + n_hidden=192 capacity (#1244) + Sobolev surface gradient loss (#1236, surf_grad_weight=10.0).
+Cumulative improvement: **-55.9% val, -61.3% test** vs starting provisional (133.892 / 132.106).
 
 Per-split val baseline (epoch 12):
 
 | Split | mae_surf_p |
 |---|---|
-| `val_single_in_dist` | 60.116 |
-| `val_geom_camber_rc` | 71.231 |
-| `val_geom_camber_cruise` | 45.380 |
-| `val_re_rand` | 60.556 |
-| **avg** | **59.321** |
+| `val_single_in_dist` | 59.445 |
+| `val_geom_camber_rc` | 71.611 |
+| `val_geom_camber_cruise` | 45.249 |
+| `val_re_rand` | 60.178 |
+| **avg** | **59.121** |
 
 ## Round 10 — active experiments (all WIP, beat target val < 59.321)
 
@@ -30,12 +30,12 @@ Per-split val baseline (epoch 12):
 |---|---|---|---|
 | #1142 | nezuko | ema-decay-999 | EMA weight averaging (decay=0.999) for variance reduction |
 | #1165 | frieren | rff-n64 | RFF n_freq=64; tests capacity ceiling above merged n_freq=32 |
-| #1215 | fern | multi-scale-rff | Sent back: needs rerun on n_hidden=192 baseline; try sigma={0.5,2.0} dual bank |
+| #1215 | fern | multi-scale-rff | Dual RFF bank sigma={1.0,2.0}; re-run on n_hidden=192 baseline |
 | #1225 | tanjiro | lion-optimizer | Lion (sign-based momentum); three-config sweep A/B/C around lion_lr=1.5e-4 wd=1.0 |
-| #1236 | askeladd | surface-gradient-loss | Penalize ∇p errors along foil surface, not just point values |
 | #1256 | alphonse | cosine-schedule-recalibration | T_max recalibration (13→11/12) to fix schedule mismatch at 12 epochs/run |
-| #1260 | thorfinn | n-hidden-224-capacity-probe | n_hidden=192→224 scaling; ~4.29M params, ~66-70 GB VRAM |
-| #1267 | edward | surf-weight-tuning | Sweep surf_weight={5.0,15.0,20.0} vs baseline 10.0; single scalar, cheap win candidate |
+| #1270 | edward | n-head-slice-sweep | n_head=4→8 on full compound baseline (+ bonus n_head=8/slice_num=128) |
+| #1283 | thorfinn | wider-film-net-768-1024 | FiLMNet hidden 512→768 or 1024; near-free capacity in ~39 GB VRAM headroom |
+| #1287 | askeladd | surf-grad-weight-sweep | surf_grad_weight sweep {2.0, 5.0, 20.0} vs baseline 10.0 (from merged #1236) |
 
 ## Current research focus
 
