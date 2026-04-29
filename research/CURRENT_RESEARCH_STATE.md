@@ -35,7 +35,7 @@ cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_del
 | #904 | fern | Huber delta sweep (0.25/0.5/1.0/2.0) on compound | Running | Finer Huber delta tuning on full compound stack |
 | #795 | thorfinn | Per-sample loss normalization + Huber (rebase) | Awaiting rebase | R3 result: 93.3991 (-9.5% vs #808). Must rebase onto post-#1005 baseline + re-run |
 | #794 | tanjiro | LR warmup (2 epochs) + Huber (rebase) | Awaiting rebase/revision | Warmup benefit confirmed (-4.87%); revise to 2-epoch warmup + full compound stack |
-| #789 | askeladd | Gradient clipping (max_norm=1.0) (rebase) | Awaiting rebase | v3 result: 109.6719 vs OLD Huber baseline. Must re-run on full compound |
+| #1018 | askeladd | LR sweep on nl3/sn16 compound: 1e-3 / 2e-4 / 5e-4 | Running | Reference config LR investigation — optimal LR likely shifted with nl3/sn16 architecture |
 
 ## Key Technical Insights
 
