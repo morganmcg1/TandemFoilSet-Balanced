@@ -264,9 +264,24 @@ def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype=None) ->
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            # NaN safety: scoring.accumulate_batch is intended to skip samples whose
+            # ground-truth has non-finite values, but the in-batch (mask * err) sum
+            # propagates NaN through `0 * NaN`. To preserve the read-only scoring
+            # code's intended semantics for non-finite y, call it per-sample so bad
+            # samples cleanly return (0, 0). Numerically identical otherwise.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                for b in range(y.shape[0]):
+                    ds, dv = accumulate_batch(
+                        pred_orig[b:b+1], y[b:b+1], is_surface[b:b+1], mask[b:b+1],
+                        mae_surf, mae_vol,
+                    )
+                    n_surf += ds
+                    n_vol += dv
+            else:
+                ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+                n_surf += ds
+                n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
