@@ -217,7 +217,14 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+class _NullCtx:
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, amp_dtype=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -238,7 +245,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            _ctx = torch.amp.autocast("cuda", dtype=amp_dtype) if amp_dtype is not None else _NullCtx()
+            with _ctx:
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -409,6 +419,8 @@ class Config:
     max_minutes: float = 0.0
     # Random seed for reproducible runs across the sweep.
     seed: int = 42
+    # Mixed precision dtype: 'fp32', 'bf16', or 'fp16'.
+    amp_dtype: str = "fp32"
 
 
 cfg = sp.parse(Config)
@@ -480,6 +492,13 @@ else:
 # Pre-compute per-channel loss weight tensor (broadcast across [B, N, 3]).
 ch_w = torch.tensor([cfg.w_ux, cfg.w_uy, cfg.w_p], device=device, dtype=torch.float32).view(1, 1, 3)
 
+# AMP setup: autocast model forward + loss in bf16/fp16 to save memory.
+_AMP_DTYPE_MAP = {"fp32": None, "bf16": torch.bfloat16, "fp16": torch.float16}
+amp_dtype = _AMP_DTYPE_MAP.get(cfg.amp_dtype.lower())
+if amp_dtype is not None:
+    print(f"AMP enabled: {cfg.amp_dtype}")
+amp_scaler = torch.amp.GradScaler("cuda") if cfg.amp_dtype.lower() == "fp16" else None
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -532,28 +551,40 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.loss_kind.lower() == "huber":
-            err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=cfg.huber_beta)
-        else:
-            err = (pred - y_norm) ** 2
-        err = err * ch_w  # per-channel weighting (default 1.0/1.0/1.0)
+        ctx = torch.amp.autocast("cuda", dtype=amp_dtype) if amp_dtype is not None else _NullCtx()
+        with ctx:
+            pred = model({"x": x_norm})["preds"]
+            if cfg.loss_kind.lower() == "huber":
+                err = F.smooth_l1_loss(pred, y_norm, reduction="none", beta=cfg.huber_beta)
+            else:
+                err = (pred - y_norm) ** 2
+            err = err * ch_w  # per-channel weighting (default 1.0/1.0/1.0)
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        # Sum across channels first, then average across valid nodes.
-        err_sum = err.sum(dim=-1)
-        vol_loss = (err_sum * vol_mask).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (err_sum * surf_mask).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            # Sum across channels first, then average across valid nodes.
+            err_sum = err.sum(dim=-1)
+            vol_loss = (err_sum * vol_mask).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err_sum * surf_mask).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
-        loss.backward()
-        if cfg.max_grad_norm > 0:
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+        if amp_scaler is not None:
+            amp_scaler.scale(loss).backward()
+            if cfg.max_grad_norm > 0:
+                amp_scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            else:
+                grad_norm = torch.tensor(0.0, device=device)
+            amp_scaler.step(optimizer)
+            amp_scaler.update()
         else:
-            grad_norm = torch.tensor(0.0, device=device)
-        optimizer.step()
+            loss.backward()
+            if cfg.max_grad_norm > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            else:
+                grad_norm = torch.tensor(0.0, device=device)
+            optimizer.step()
         if SCHED_PER_STEP:
             scheduler.step()
         global_step += 1
@@ -576,7 +607,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -644,7 +675,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_dtype)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
