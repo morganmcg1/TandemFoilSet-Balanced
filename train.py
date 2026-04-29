@@ -98,6 +98,36 @@ class RFFEncoder(nn.Module):
         return torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
 
+class EMA:
+    """Exponential moving average of model parameters.
+
+    Maintains a shadow copy of ``model.state_dict()`` updated each training
+    step. Use ``apply()`` / ``restore()`` to temporarily swap EMA weights into
+    the model for evaluation.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.997):
+        self.decay = decay
+        self.shadow = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        self.backup: dict[str, torch.Tensor] = {}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            if v.dtype.is_floating_point:
+                self.shadow[k].mul_(self.decay).add_(v.detach(), alpha=1.0 - self.decay)
+            else:
+                self.shadow[k].copy_(v.detach())
+
+    def apply(self, model: nn.Module) -> None:
+        self.backup = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.shadow, strict=True)
+
+    def restore(self, model: nn.Module) -> None:
+        model.load_state_dict(self.backup, strict=True)
+        self.backup = {}
+
+
 class SwiGLU(nn.Module):
     """SwiGLU FFN: gated FFN as in LLaMA / PaLM (Shazeer 2020, arxiv:2002.05202).
 
@@ -563,6 +593,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     cosine_t_max: int = 13  # T_max for the post-warmup CosineAnnealingLR
+    ema_decay: float = 0.997
+    ema_warmup_epochs: int = 5
 
 
 def surface_gradient_loss(pred_norm, y_norm, surf_mask):
@@ -652,6 +684,9 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema = EMA(model, decay=cfg.ema_decay)
+print(f"EMA: decay={cfg.ema_decay}, warmup_epochs={cfg.ema_warmup_epochs}")
+
 optimizer = CautiousAdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scaler = GradScaler()
 warmup_epochs = 1
@@ -739,8 +774,11 @@ for epoch in range(MAX_EPOCHS):
         prev_scale = scaler.get_scale()
         scaler.step(optimizer)
         scaler.update()
-        if scaler.get_scale() < prev_scale:
+        step_skipped = scaler.get_scale() < prev_scale
+        if step_skipped:
             n_skipped_steps += 1
+        elif epoch >= cfg.ema_warmup_epochs:
+            ema.update(model)
 
         # Update per-sample surface MAE EMA (in normalized space).
         with torch.no_grad():
@@ -771,10 +809,15 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    use_ema_for_val = epoch >= cfg.ema_warmup_epochs
+    if use_ema_for_val:
+        ema.apply(model)
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
+    if use_ema_for_val:
+        ema.restore(model)
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
@@ -787,7 +830,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        if use_ema_for_val:
+            ema.apply(model)
+            torch.save(model.state_dict(), model_path)
+            ema.restore(model)
+        else:
+            torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -825,6 +873,9 @@ for epoch in range(MAX_EPOCHS):
         "curriculum/warmup_epochs": curriculum_warmup_epochs,
         "curriculum/ema_alpha": ema_alpha,
         "curriculum/weight_temperature": weight_temperature,
+        "weight_ema/decay": cfg.ema_decay,
+        "weight_ema/warmup_epochs": cfg.ema_warmup_epochs,
+        "weight_ema/active": use_ema_for_val,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.2e}  "
