@@ -423,6 +423,7 @@ class Config:
     grad_clip: float = 0.0  # max grad norm (0 disables clipping)
     ema_decay: float = 0.0  # EMA decay (0 disables EMA tracking)
     per_sample_norm: bool = False  # divide each sample's loss by its per-sample y_norm std
+    eta_min: float = 0.0  # minimum LR for cosine annealing (0 = standard cosine to 0)
 
 
 cfg = sp.parse(Config)
@@ -477,7 +478,7 @@ if cfg.ema_decay > 0.0:
 val_eval_model = ema_model if ema_model is not None else model
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min)
 
 # bf16 mixed precision (PR #808). GradScaler is included per the advisor's
 # instructions even though it's typically a no-op with bf16 — bf16 has the
