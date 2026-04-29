@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -261,7 +262,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, bf16: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -282,7 +283,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            amp_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if bf16 else nullcontext()
+            with amp_ctx:
+                pred = model({"x": x_norm})["preds"]
+            # Cast model output to fp32 for precision-stable loss/metric reductions.
+            if bf16:
+                pred = pred.float()
 
             sq_err = (pred - y_norm) ** 2
             abs_err = (pred - y_norm).abs()
@@ -510,6 +516,7 @@ class Config:
     n_re_quintiles: int = 5
     re_stratify_seed: int = 42
     swiglu_ratio: int = 2  # mlp_ratio for SwiGLU intermediate dim (2 = current merged baseline; 1 = parameter-matched ablation)
+    bf16: bool = False  # bf16 mixed precision (autocast forward; fp32 weights, loss, metrics)
 
 
 if __name__ == "__main__":
@@ -519,6 +526,11 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+    if cfg.bf16:
+        if not (torch.cuda.is_available() and torch.cuda.is_bf16_supported()):
+            raise RuntimeError("--bf16 requested but CUDA bf16 is not supported on this device")
+        print("bf16 mixed precision: ON (autocast forward; fp32 weights, loss, metrics)")
 
     train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
     stats = {k: v.to(device) for k, v in stats.items()}
@@ -629,7 +641,10 @@ if __name__ == "__main__":
         epoch_vol = epoch_surf = 0.0
         n_batches = 0
 
-        for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        n_batches_total = len(train_loader)
+        for batch_idx, (x, y, is_surface, mask) in enumerate(
+            tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+        ):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -637,7 +652,14 @@ if __name__ == "__main__":
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            amp_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if cfg.bf16 else nullcontext()
+            with amp_ctx:
+                pred = model({"x": x_norm})["preds"]
+            fwd_dtype = pred.dtype  # bf16 inside autocast, fp32 otherwise
+            # Loss in fp32: cast bf16 model output before reductions for precision-stable
+            # accumulation over up to 200K nodes per sample x batch.
+            if cfg.bf16:
+                pred = pred.float()
             sq_err = (pred - y_norm) ** 2
             abs_err = (pred - y_norm).abs()
 
@@ -651,6 +673,28 @@ if __name__ == "__main__":
 
             optimizer.zero_grad()
             loss.backward()
+
+            # Sanity instrumentation for bf16: epoch 0 first batch + epoch 1 last batch.
+            sanity_print = cfg.bf16 and (
+                (epoch == 0 and batch_idx == 0)
+                or (epoch == 1 and batch_idx == n_batches_total - 1)
+            )
+            if sanity_print:
+                grad_sq = 0.0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        grad_sq += p.grad.detach().pow(2).sum().item()
+                grad_norm = grad_sq ** 0.5
+                w_dtype = model.blocks[0].mlp.w_gate.weight.dtype
+                pred_sample = pred[0, :3, :].detach().float().cpu().tolist()
+                finite = bool(torch.isfinite(pred).all().item()) and bool(torch.isfinite(loss).item())
+                print(
+                    f"  [bf16-sanity epoch={epoch} batch={batch_idx}] "
+                    f"loss={loss.item():.6f}  grad_norm={grad_norm:.4f}  "
+                    f"weight_dtype={w_dtype}  fwd_dtype={fwd_dtype}  "
+                    f"finite={finite}  pred[0,:3]={pred_sample}"
+                )
+
             optimizer.step()
             global_step += 1
             # Per-batch log(Re) diversity (confirms stratified sampler is doing its job).
@@ -674,7 +718,7 @@ if __name__ == "__main__":
         # --- Validate ---
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, bf16=cfg.bf16)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -742,7 +786,7 @@ if __name__ == "__main__":
                 for name, ds in test_datasets.items()
             }
             test_metrics = {
-                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device, bf16=cfg.bf16)
                 for name, loader in test_loaders.items()
             }
             test_avg = aggregate_splits(test_metrics)
