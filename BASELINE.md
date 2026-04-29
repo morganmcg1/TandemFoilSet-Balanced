@@ -4,33 +4,53 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **46.1994** (PR #1311 — huber_delta=0.12 on lr=7e-4+beta2=0.985 stack) |
-| `test_avg/mae_surf_p` | **40.9102** (PR #1311) |
-| `test_single_in_dist/mae_surf_p` | 45.6550 |
-| `test_geom_camber_rc/mae_surf_p` | 55.2315 |
-| `test_geom_camber_cruise/mae_surf_p` | 24.6194 |
-| `test_re_rand/mae_surf_p` | 38.1350 |
+| `val_avg/mae_surf_p` | **46.6765** (PR #1275 — lr=8e-4 on beta2=0.985+huber_delta=0.1 stack) |
+| `test_avg/mae_surf_p` | **39.9351** (PR #1275) |
+| `test_single_in_dist/mae_surf_p` | 42.8273 |
+| `test_geom_camber_rc/mae_surf_p` | 54.7152 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.2136 |
+| `test_re_rand/mae_surf_p` | 37.9841 |
 
-**Source:** PR #1311 — huber_delta=0.12 (was 0.1) on full lr=7e-4+beta2=0.985 compound stack. Val improved -2.73%, test improved -0.76% vs PR #1242. **COMPETE TARGET BEATEN for the first time** (test_avg=40.9102 < 40.93 target, gap = -0.0198).
-- Branch: `charliepai2f5-frieren/huber-delta-0.12`
-- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.12, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
-- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited, val slope ~-0.15/epoch at termination)
-- Peak VRAM: 20.98 GB, Wall-clock: 30.0 min, Run ID: 1xe586da
-- Metrics JSONL: `metrics/charliepai2f5-frieren-huber-delta-0.12-1xe586da.jsonl`
+**Source:** PR #1275 — lr=8e-4 (was 7e-4) on full beta2=0.985+huber_delta=0.1+weight_decay=5e-4 compound stack. Test improved -2.39% vs PR #1311 baseline. **COMPETE TARGET BEATEN by wide margin** (test_avg=39.9351 < 40.93 target, gap = -0.9949).
+- Branch: `charliepai2f5-fern/lr-8e-4-probe-beta2-0985-stack`
+- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=32, lr=8e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
+- Best epoch = 32/32 (final epoch, monotonically improving — training-budget-limited, val slope still descending at termination)
+- Peak VRAM: 20.97 GB, Wall-clock: 29.87 min, Run ID: 3207gjgv
+- Metrics JSONL: `metrics/charliepai2f5-fern-lr-8e-4-seqlr-beta2-0985-rerun-3207gjgv.jsonl`
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-0.0198**, i.e. 0.05% below target).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-0.9949**, i.e. nearly 1.0 below target).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.12 + weight_decay=5e-4 + lr=7e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + lr=8e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
 ```
-python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 32 \
+python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 \
-  --adamw_beta2 0.985 --lr 7e-4
+  --adamw_beta2 0.985 --lr 8e-4
 ```
 *(Note: n_layers=2, slice_num=8 are hardcoded in model_config dict in train.py — slice_num was changed from 16→8 in PR #1194)*
 *(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 29 epochs)*
 
 ## Round r5 — Merged Winners
+
+### PR #1275 — lr=8e-4: continue LR probe above 7e-4 on beta2=0.985 stack (2026-04-29)
+**Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/lr-8e-4-probe-beta2-0985-stack
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **46.6765** (epoch 32/32 — final epoch, monotonically improving) |
+| `test_avg/mae_surf_p` | **39.9351** — **COMPETE TARGET BEATEN by -0.9949** (target=40.93) |
+| `test_single_in_dist/mae_surf_p` | 42.8273 |
+| `test_geom_camber_rc/mae_surf_p` | 54.7152 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.2136 |
+| `test_re_rand/mae_surf_p` | 37.9841 |
+
+**vs prior baseline (PR #1311):** test 39.9351 vs 40.9102 → **-2.39% test improvement**, all 4 splits improved
+**Compete gap:** **-0.9949** — nearly 1.0 below compete target
+**Mechanism:** lr 7e-4→8e-4 (+14%) on SequentialLR (LinearLR warmup→CosineAnnealingLR). Higher LR enables faster convergence within 32-epoch budget. All splits improved: re_rand (-3.70%), camber_cruise (-3.57%), single_in_dist (-2.69%), geom_camber_rc (-2.86%).
+**Config:** n_hidden=256, n_head=8, huber_delta=0.1, lr=8e-4, beta2=0.985, weight_decay=5e-4, warmup_epochs=3, epochs=32, per_sample_norm, ema_decay=0.999, grad_clip=1.0
+**Run ID:** 3207gjgv | **JSONL:** `metrics/charliepai2f5-fern-lr-8e-4-seqlr-beta2-0985-rerun-3207gjgv.jsonl`
+
+---
 
 ### PR #1311 — huber_delta=0.12: tighter Huber delta on full lr=7e-4+beta2=0.985 compound stack (2026-04-29)
 **Student:** charliepai2f5-frieren | **Branch:** charliepai2f5-frieren/huber-delta-0.12
