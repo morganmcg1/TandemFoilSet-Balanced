@@ -46,6 +46,9 @@ from data import (
     pad_collate,
 )
 
+# Per-channel weights for surface loss (Ux, Uy, p). Pressure is the ranked metric.
+SURF_CHANNEL_WEIGHTS = torch.tensor([1.0, 1.0, 4.0])
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -271,9 +274,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
+            ch_w = SURF_CHANNEL_WEIGHTS.to(sq_err.device, dtype=sq_err.dtype)
+            weighted_sq = sq_err * ch_w
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
+                (weighted_sq * surf_mask.unsqueeze(-1)).sum()
+                / (surf_mask.sum().clamp(min=1) * ch_w.sum())
             ).item()
             n_batches += 1
 
@@ -484,7 +489,9 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        ch_w = SURF_CHANNEL_WEIGHTS.to(sq_err.device, dtype=sq_err.dtype)
+        weighted_sq = sq_err * ch_w
+        surf_loss = (weighted_sq * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * ch_w.sum())
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
