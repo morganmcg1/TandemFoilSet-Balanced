@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import time
@@ -294,6 +295,33 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class EMAModel:
+    """Exponential moving average of model weights for lower-variance checkpointing.
+
+    Maintains a shadow copy updated as ``shadow_k = decay * shadow_{k-1} + (1 - decay) * param_k``
+    after every optimizer step. Validation/checkpointing use the shadow weights, training
+    continues unchanged on the live model.
+
+    Initialise *after* warmup so the shadow does not get contaminated by the slow
+    early-LR weights (see PR #810 first-iteration analysis).
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {k: v.clone().detach().float() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        d = self.decay
+        for k, v in model.state_dict().items():
+            self.shadow[k].mul_(d).add_(v.float(), alpha=1.0 - d)
+
+    def apply_to(self, model: nn.Module):
+        """Load EMA weights into ``model`` (in-place). Caller must save the live state first if it wants to restore."""
+        ema_state = {k: v.to(next(model.parameters()).device) for k, v in self.shadow.items()}
+        model.load_state_dict(ema_state, strict=True)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -441,6 +469,8 @@ def save_model_artifact(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "ema_decay": cfg.ema_decay,
+        "best_flavor": best_metrics.get("flavor", "live"),
         "epochs_configured": cfg.epochs,
     }
 
@@ -501,6 +531,7 @@ class Config:
     amp: bool = True
     amp_dtype: str = "bf16"   # "bf16" or "fp16"; bf16 strongly preferred for our extreme y values
     huber_delta: float = 1.0  # Huber loss threshold in normalized space; <1.0 = MSE, >=1.0 = L1
+    ema_decay: float = 0.995  # EMA shadow decay; effective memory ~1/(1-decay) optimizer steps. d=0.995 won iter 2.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -598,6 +629,7 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("val_avg/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
@@ -610,8 +642,19 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+best_flavor: str = ""  # "live" or "ema" — which weights produced the best checkpoint
 global_step = 0
 train_start = time.time()
+
+# Deferred-EMA: initialise the shadow only after warmup completes, so it does
+# not get contaminated by warmup-era (slow-LR) weights. Effective memory at
+# decay=0.995 is ~200 steps; at decay=0.999 ~1000 steps. Warmup is 5 epochs ×
+# ~375 steps = 1875 steps, so without deferral the warmup weights would
+# dominate the shadow under the timeout-bounded regime.
+ema: EMAModel | None = None
+warmup_steps = warmup_iters * len(train_loader)
+print(f"EMA: deferred init at step {warmup_steps} (after {warmup_iters} warmup epochs), decay={cfg.ema_decay}")
+step_count = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -652,6 +695,15 @@ for epoch in range(MAX_EPOCHS):
             nan_inf_events += 1
         optimizer.step()
         global_step += 1
+        step_count += 1
+
+        # Initialise EMA shadow exactly once, when warmup completes.
+        if ema is None and step_count >= warmup_steps:
+            ema = EMAModel(model, decay=cfg.ema_decay)
+            print(f"  [EMA] shadow initialised at step {step_count}")
+        elif ema is not None:
+            ema.update(model)
+
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
@@ -666,16 +718,48 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate live model ---
     model.eval()
-    split_metrics = {
+    live_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
                              amp=cfg.amp, amp_dtype=AMP_DTYPE,
                              huber_delta=cfg.huber_delta)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    live_avg = aggregate_splits(live_split_metrics)
+    live_avg_surf_p = live_avg["avg/mae_surf_p"]
+
+    # --- Validate EMA model (if shadow has been initialised) ---
+    ema_split_metrics: dict | None = None
+    ema_avg: dict | None = None
+    ema_avg_surf_p: float | None = None
+    if ema is not None:
+        ema_model = copy.deepcopy(model)
+        ema.apply_to(ema_model)
+        ema_model.eval()
+        ema_split_metrics = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                                 amp=cfg.amp, amp_dtype=AMP_DTYPE,
+                                 huber_delta=cfg.huber_delta)
+            for name, loader in val_loaders.items()
+        }
+        ema_avg = aggregate_splits(ema_split_metrics)
+        ema_avg_surf_p = ema_avg["avg/mae_surf_p"]
+        del ema_model
+
+    # Pick the better-of-{live, ema} for primary checkpointing — see PR #810
+    # iter-2 follow-up. Saves whichever flavour wins this epoch and tracks it.
+    if ema_avg_surf_p is not None and ema_avg_surf_p < live_avg_surf_p:
+        flavor = "ema"
+        avg_surf_p = ema_avg_surf_p
+        split_metrics = ema_split_metrics
+        val_avg = ema_avg
+    else:
+        flavor = "live"
+        avg_surf_p = live_avg_surf_p
+        split_metrics = live_split_metrics
+        val_avg = live_avg
+
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -684,13 +768,24 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/nan_inf_events": nan_inf_events,
         "val/loss": val_loss_mean,
+        "val_avg/live/mae_surf_p": live_avg_surf_p,
+        "val_avg/flavor_is_ema": int(flavor == "ema"),
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if ema_avg_surf_p is not None:
+        log_metrics["val_avg/ema/mae_surf_p"] = ema_avg_surf_p
+        log_metrics["val_avg/ema_minus_live"] = ema_avg_surf_p - live_avg_surf_p
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
+    # Per-split EMA & live metrics for diagnostic comparison.
+    for split_name, m in live_split_metrics.items():
+        log_metrics[f"{split_name}/live/mae_surf_p"] = m["mae_surf_p"]
+    if ema_split_metrics is not None:
+        for split_name, m in ema_split_metrics.items():
+            log_metrics[f"{split_name}/ema/mae_surf_p"] = m["mae_surf_p"]
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
     wandb.log(log_metrics)
@@ -702,15 +797,25 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "flavor": flavor,
         }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
+        best_flavor = flavor
+        # Save whichever flavour produced the better val.
+        if flavor == "ema":
+            ema_state = {k: v.to(device) for k, v in ema.shadow.items()}
+            torch.save(ema_state, model_path)
+        else:
+            torch.save(model.state_dict(), model_path)
+        tag = f" *[{flavor}]"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    ema_str = (
+        f" ema_avg_surf_p={ema_avg_surf_p:.4f}" if ema_avg_surf_p is not None else " ema=warmup"
+    )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"live_avg_surf_p={live_avg_surf_p:.4f}{ema_str}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -720,10 +825,11 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val: epoch {best_metrics['epoch']} ({best_flavor}), val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_flavor": best_flavor,
         "total_train_minutes": total_time,
     })
 
