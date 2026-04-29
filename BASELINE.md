@@ -4,27 +4,56 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **58.4790** (PR #1121 — huber_delta=0.1, epoch 22/30) |
-| `test_avg/mae_surf_p` | **51.3554** (PR #1121) |
+| `val_avg/mae_surf_p` | **56.4257** (PR #1120 — n_layers=2 + huber_delta=1.0, epoch 26/30) |
+| `test_avg/mae_surf_p` | **49.6211** (PR #1120) |
 
-**Source:** PR #1121 — Tighter Huber loss (huber_delta=0.1) on compound PSN stack
-- Branch: `charlie5-fern/huber-delta-0.1`
-- Config: n_layers=3, slice_num=16, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=30, lr=5e-4, batch_size=4, surf_weight=10.0
-- Val still falling ~2.9%/epoch at epoch 22 when 30-min timeout hit (LR=8.27e-5)
+**Source:** PR #1120 — Shallower model (n_layers=2) — measured on the old huber_delta=1.0 stack but compounded into the train.py code with PR #1121's huber_delta=0.1 win available via CLI flag.
+- Branch: `charlie5-nezuko/n-layers-2`
+- Config (as run): n_layers=2 (now hardcoded), slice_num=16, n_hidden=256, n_head=8, loss=huber, huber_delta=1.0 (in this run), ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=30, lr=5e-4, batch_size=4, surf_weight=10.0
+- Val still falling at epoch 26/30 (LR=2.16e-5 — deep into cosine cooldown)
+- 1,141,299 params (-29%), Peak VRAM 22.22 GB (-27% vs PR #1121)
+
+**IMPORTANT — compound recommendation:** The merged code now hardcodes `n_layers=2`. The recommended round-r5 baseline command should ALSO add `--huber_delta 0.1` (PR #1121's win) so the two improvements compound. We have not yet verified the compound result; new experiments should adopt this as the working baseline command.
 
 **Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference)
 
-## Round r5 — Starting Point
-
-All students start from the compound charlie config with huber_delta=0.1 (PR #1121 winner):
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1)
 
 ```
 python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 30 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm
 ```
-*(Note: n_layers=3, slice_num=16 are hardcoded in model_config dict in train.py)*
+*(Note: n_layers=2 (NEW), slice_num=16 are hardcoded in model_config dict in train.py)*
 
 ## Round r5 — Merged Winners
+
+### PR #1120 — Shallower model: n_layers=2 (2026-04-29)
+**Student:** charliepai2f5-nezuko | **Branch:** charlie5-nezuko/n-layers-2
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **56.4257** (epoch 26/30 — terminated by 30-min timeout, still falling) |
+| `val_single_in_dist/mae_surf_p` | 59.6760 |
+| `val_geom_camber_rc/mae_surf_p` | 70.4189 |
+| `val_geom_camber_cruise/mae_surf_p` | 38.6126 |
+| `val_re_rand/mae_surf_p` | 56.9952 |
+| `test_avg/mae_surf_p` | **49.6211** |
+| `test_single_in_dist/mae_surf_p` | 53.4660 |
+| `test_geom_camber_rc/mae_surf_p` | 64.1098 |
+| `test_geom_camber_cruise/mae_surf_p` | 32.8067 |
+| `test_re_rand/mae_surf_p` | 48.1021 |
+| `test_avg/mae_surf_Ux` | 0.7912 |
+| `test_avg/mae_surf_Uy` | 0.3831 |
+| `test_avg/mae_vol_p` | 55.7155 |
+
+**vs prior baseline (PR #1121):** 56.4257 vs 58.4790 → **-3.51% val improvement**
+**Test improvement:** 49.6211 vs 51.3554 → **-3.38% test improvement**
+**Run config:** n_layers=2, but huber_delta=1.0 (NOT 0.1 — student branched from #1050 era).
+**Model parameters:** 1,141,299 (-29% vs #1121) | **Peak VRAM:** 22.22 GB (-27%) | **Train time:** 30.81 min (timeout)
+**Note:** Throughput win — 26 epochs in 30 min vs 22 for n_layers=3. Val monotone-decreasing every epoch, still falling at termination. Consider `--huber_delta 0.1` to compound with PR #1121.
+**Metrics JSONL:** `metrics/charliepai2f5-nezuko-n-layers-2-93bfb7ek.jsonl`
+**Reproduce (run-as-merged):** `python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 1.0 --epochs 30 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm`
+**Reproduce (recommended compound):** `python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 30 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm`
 
 ### PR #1121 — Tighter Huber loss: huber_delta=0.1 (2026-04-29)
 **Student:** charliepai2f5-fern | **Branch:** charlie5-fern/huber-delta-0.1
@@ -195,4 +224,5 @@ python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epoch
 - 2026-04-28: PR #1015 merged. Epochs=24: val_avg=66.8085 (-26.1%).
 - 2026-04-29: PR #1050 merged. PSN+epochs=30: val_avg=61.5855 (-7.8%).
 - 2026-04-29: Round r5 launched on icml-appendix-charlie-pai2f-r5.
-- 2026-04-29: PR #1121 merged. huber_delta=0.1: val_avg=58.4790 (-5.04%), test_avg=51.3554 (-5.52%). **Current best.**
+- 2026-04-29: PR #1121 merged. huber_delta=0.1: val_avg=58.4790 (-5.04%), test_avg=51.3554 (-5.52%).
+- 2026-04-29: PR #1120 merged. n_layers=2: val_avg=56.4257 (-3.51%), test_avg=49.6211 (-3.38%) — **Current best.** Compound recommendation: combine with --huber_delta 0.1.
