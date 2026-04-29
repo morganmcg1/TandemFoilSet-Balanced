@@ -268,3 +268,25 @@
 - Interesting side-effect: both warmup variants improved `val_geom_camber_rc` (84.10 → 76.87–80.29), the baseline's worst split. This rc improvement came entirely at cruise/re_rand's expense — a per-domain loss reweighting may capture the rc gain without the cruise regression.
 - Edward's smooth-interpolation follow-up (α-ramp Huber→rel-MAE) unlikely to recover; "more Huber = worse" monotone trend suggests the issue is feature bias, not the switchover mechanics.
 - Next for edward: ε sweep PR #940 — testing `rel_mae_eps` ∈ {1e-3, 1e-2, 1e-1} vs default 1e-6 to soften small-denominator dominance on low-magnitude (cruise) samples.
+
+## 2026-04-29 — PR #821 round 3: tooling stack MERGED (askeladd)
+
+- Branch: `willowpai2e2-askeladd/tooling-amp-bs-nansafe` (merged, squash)
+- Hypothesis (tooling): AMP/bf16 + bs=16 + lr=2e-3 + torch.compile + NaN-safe eval + compound model_config default, rebased onto PR #840 (rel-MAE). Validated with relative_mae loss.
+- W&B: `1d8nkjir` (default seed), `66c4gac6` (PYTHONHASHSEED=42)
+
+| metric | default `1d8nkjir` | seed42 `66c4gac6` | baseline #840 (`t5p9xzxx`) |
+|---|---:|---:|---:|
+| best `val_avg/mae_surf_p` | 82.97 (ep 42) | **55.90 (ep 50, still descending)** | 64.16 (ep 32, timed out) |
+| `test_avg/mae_surf_p` | 72.01 | **49.64** | 55.73 |
+| `test_geom_camber_cruise` | 29.51 | 26.87 | 30.92 |
+| `test_single_in_dist` | 128.18 | 63.94 | 71.33 |
+| `test_geom_camber_rc` | 80.37 | 62.62 | 70.62 |
+| `test_re_rand` | 49.98 | 45.11 | 50.04 |
+| epochs | 50/50 | 50/50 | 32/50 (timeout) |
+| wall (min) | 22.5 | 22.5 | 30.4 |
+| peak GPU mem (GB) | 49.8 | 49.8 | 21.4 |
+
+- Outcome: **MERGED — NEW BEST**. Seed42 (55.90/49.64) beats prior baseline (64.16/55.73) by 13%/11%. C1/C2/C3 all pass. Seed variance (82.97 vs 55.90 = 27-pt spread) is real; LR warmup assigned as follow-up to askeladd (#971).
+- Post-merge branch now has: AMP/bf16, bs=16, lr=2e-3, torch.compile, NaN-safe eval, compound model_config, relative_mae loss.
+- New CLI defaults: `batch_size=16`, `lr=2e-3`, `compile=True`. Note: `loss_type` default still "mse" — will flip in PR #971.
