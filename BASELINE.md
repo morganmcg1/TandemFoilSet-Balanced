@@ -4,27 +4,53 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **51.8005** (PR #1154 — epochs=35, T_max=35 cosine, epoch 27/35 budget-limited) |
-| `test_avg/mae_surf_p` | **45.3699** (PR #1154) |
+| `val_avg/mae_surf_p` | **51.0626** (PR #1149 — warmup_epochs=3 + wd=5e-4 + epochs=30, full cosine completion) |
+| `test_avg/mae_surf_p` | **44.7020** (PR #1149) |
 
-**Source:** PR #1154 — Extended training: epochs=35 with T_max=35 cosine schedule — cut at epoch 27/35 by 30-min timeout (LR=6.2e-5), still budget-limited.
-- Branch: `charliepai2f5-nezuko/epochs-35-budget-extension`
-- Config: n_layers=2 (hardcoded), slice_num=16, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=35, lr=5e-4, batch_size=4, weight_decay=5e-4
-- Run cut at 27/35 epochs; LR=6.2e-5 at termination (cosine not completed). Best epoch = 27 (model still improving at termination — training-budget-limited)
-- 1,141,299 params, Peak VRAM 22.225 GB, Run ID: l5g7r4k9
+**Source:** PR #1149 — 3-epoch linear LR warmup before cosine decay, on top of PR #1136 compound (wd=5e-4 + epochs=30).
+- Branch: `charliepai2f5-fern/warmup-lr-schedule`
+- Config: n_layers=2 (hardcoded), slice_num=16, n_hidden=256, n_head=8, loss=huber, huber_delta=0.1, ema_decay=0.999, grad_clip=1.0, per_sample_norm, warmup_epochs=3, epochs=30, lr=5e-4, batch_size=4, weight_decay=5e-4
+- Best epoch = 30/30 (full cosine completion, LR=0.0, model monotonically improving every epoch)
+- 1,141,299 params, Peak VRAM 22.22 GB, Run ID: vvp4agqj
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — currently +10.8% above target (gap closed from 5.22 to 4.44 vs prior best).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — currently +9.2% above target (gap closed from 4.44 to 3.77 vs prior best).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + epochs=35)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + warmup_epochs=3 + epochs=30)
 
 ```
-python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 35 \
-  --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4
+python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 30 \
+  --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3
 ```
 *(Note: n_layers=2, slice_num=16 are hardcoded in model_config dict in train.py)*
-*(Note: Training will be cut at ~epoch 27 by 30-min timeout — cosine schedule not fully completed)*
+*(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 27 epochs)*
 
 ## Round r5 — Merged Winners
+
+### PR #1149 — warmup-lr-schedule: 3-epoch linear LR warmup before cosine decay (2026-04-29)
+**Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/warmup-lr-schedule
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **51.0626** (epoch 30/30 — full cosine completion, LR=0.0) |
+| `val_single_in_dist/mae_surf_p` | 55.9743 |
+| `val_geom_camber_rc/mae_surf_p` | 66.0244 |
+| `val_geom_camber_cruise/mae_surf_p` | 31.0014 |
+| `val_re_rand/mae_surf_p` | 51.2500 |
+| `test_avg/mae_surf_p` | **44.7020** |
+| `test_single_in_dist/mae_surf_p` | 51.3552 |
+| `test_geom_camber_rc/mae_surf_p` | 59.8370 |
+| `test_geom_camber_cruise/mae_surf_p` | 25.6420 |
+| `test_re_rand/mae_surf_p` | 41.9738 |
+
+**vs prior baseline (PR #1154):** 51.0626 vs 51.8005 → **-1.43% val improvement**
+**Test improvement:** 44.7020 vs 45.3699 → **-1.47% test improvement**
+**vs paper target:** compete gap 3.77 (from 4.44 prior best)
+**Run config:** n_layers=2 (hardcoded), huber_delta=0.1, weight_decay=5e-4, warmup_epochs=3, epochs=30 (full completion), lr=5e-4, batch_size=4, grad_clip=1.0, ema_decay=0.999, per_sample_norm
+**Key win:** warmup stacks cleanly on wd=5e-4 — biggest gain on geom_camber_cruise (val -8.89%, test -9.57%). Warmup provides complementary mechanism (gentler initialization) to weight_decay (regularization).
+**Best epoch:** 30/30 — model still monotonically improving at final epoch, cosine-decayed to LR=0.0. Still training-budget-limited.
+**Peak VRAM:** 22.22 GB | **Wall-clock:** 30.00 min | **Run ID:** vvp4agqj
+**Metrics JSONL:** `metrics/charliepai2f5-fern-warmup-lr-schedule-wd5e-4-vvp4agqj.jsonl`
+**Reproduce:** `python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 30 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3`
 
 ### PR #1154 — Extended training epochs=35 (budget-limited to epoch 27) (2026-04-29)
 **Student:** charliepai2f5-nezuko | **Branch:** charliepai2f5-nezuko/epochs-35-budget-extension
