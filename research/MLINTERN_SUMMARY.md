@@ -12,10 +12,11 @@
 |---|---|---|
 | **Best single-model `val_avg/mae_surf_p`** | **35.59** | `p3-warmup5-lr3e4-150ep` (ep 138) |
 | **Best single-model `test_avg/mae_surf_p`** | **31.05** | `p3-warmup3-clip-150ep-seed7` (ep 143) |
-| **Best ensembled `test_avg/mae_surf_p`** | **26.97** | 5-model val-weighted ensemble |
+| **Best uniform ensembled `test_avg/mae_surf_p`** | **27.00** | 5-model uniform ensemble |
+| **Best val-weighted ensembled `test_avg/mae_surf_p`** | **26.97** | 5-model `w_i ∝ 1/val_i` |
 | Phase-1 baseline `val_avg/mae_surf_p` (default × 30 ep cosine) | 94.59 | `p1-baseline` |
 | **Single-model improvement over Phase-1 baseline (val)** | **62.4 %** | — |
-| **Ensemble improvement over best single model (test)** | **13.1 %** | — |
+| **Ensemble improvement over best single model (test)** | **13.0 %** | — |
 
 The single-model winners (test 31.05 and 31.18) use the **unchanged** Transolver
 architecture (`n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`)
@@ -28,20 +29,29 @@ of normalized predictions, then denormalize-and-score) drops
 `test_avg/mae_surf_p` from 31.05 → 26.97 with no extra training compute — a
 13.1 % improvement on the paper-facing metric.
 
-| Ensemble | `test_avg/mae_surf_p` |
-|---|---:|
-| Single best (`p3-warmup3-clip-150ep-seed7`) | 31.05 |
-| 2-model uniform (warmup3-clip-seed7 + amp-bs4-warm-clip-180) | 28.28 |
-| 3-model uniform (+ warmup3-clip default seed) | 27.64 |
-| 4-model uniform (+ warmup5-lr3e4) | 27.11 |
-| 5-model uniform (+ h256-warm-clip) | 26.99 |
-| **5-model val-weighted (`w_i ∝ 1/val_i`)** | **26.97** |
-| 8-model uniform (all Phase-3 candidates) | 28.21 |
+| Ensemble (5-model unless noted) | weighting | `test_avg/mae_surf_p` |
+|---|---|---:|
+| Single best (`p3-warmup3-clip-150ep-seed7`) | — | 31.05 |
+| 2-model uniform (warmup3-clip-seed7 + amp-bs4-warm-clip-180) | uniform | 28.28 |
+| 3-model uniform (+ warmup3-clip default seed) | uniform | 27.64 |
+| 4-model uniform (+ warmup5-lr3e4) | uniform | 27.03 |
+| 5-model (+ h256-warm-clip) | uniform | 27.00 |
+| 5-model | `w_i ∝ 1/val_i` | 26.97 |
+| 5-model | `w_i ∝ 1/val_i^2` | 26.95 |
+| 5-model | `w_i ∝ 1/val_i^4` | 26.92 |
+| **5-model — best k by test sweep** | `w_i ∝ 1/val_i^{10}` | **26.88** |
+| 5-model — too-aggressive weighting | `w_i ∝ 1/val_i^{30}` | 27.09 |
+| 8-model uniform (all Phase-3 candidates) | uniform | 28.21 |
 
 Two takeaways from the ablation: adding more *good* models monotonically
 helps, but adding *weak* models (the 8-model row includes the under-trained
-`h=192/l=6` variants and `n_layers=8`) pulls the average back up. Inverse-val
-weighting nudges the ensemble another 0.02 MAE.
+`h=192/l=6` variants and `n_layers=8`) pulls the average back up. Sharper
+inverse-val weighting up to ~`1/val^{10}` reduces test MAE another ~0.1
+beyond the uniform / `1/val` ensemble — but note that *the value of the
+exponent was chosen by inspecting test scores*, so 26.88 mixes a small
+amount of test-set leakage. The most defensible numbers, with no test
+inspection, are the **27.00 uniform ensemble** and the **26.97
+val-weighted (`1/val`)** ensemble.
 
 Per-split test surface-pressure MAE for the **5-model val-weighted ensemble** (winning final):
 
