@@ -310,8 +310,7 @@ def write_experiment_summary(
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
-        "surf_weight_start": SURF_WEIGHT_START,
-        "surf_weight_end": SURF_WEIGHT_END,
+        "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -352,6 +351,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
+    surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -363,12 +363,6 @@ class Config:
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
-
-# Linear curriculum on the surface-loss weight: start equal-ish to vol, end at
-# heavy surface emphasis. Ramps over the configured MAX_EPOCHS so the model
-# first stabilises the global field, then increasingly prioritises surface p.
-SURF_WEIGHT_START = 1.0
-SURF_WEIGHT_END = 20.0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -436,9 +430,6 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
-    progress = epoch / max(MAX_EPOCHS - 1, 1)
-    current_surf_weight = SURF_WEIGHT_START + progress * (SURF_WEIGHT_END - SURF_WEIGHT_START)
-
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
@@ -459,7 +450,7 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + current_surf_weight * surf_loss
+        loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -476,7 +467,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, current_surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -500,7 +491,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
-        "surf_weight": current_surf_weight,
+        "surf_weight": cfg.surf_weight,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -535,7 +526,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, SURF_WEIGHT_END, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
