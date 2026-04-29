@@ -20,10 +20,10 @@
 
 **Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-0.0198**, i.e. 0.05% below target).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.1 + weight_decay=5e-4 + lr=7e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.12 + weight_decay=5e-4 + lr=7e-4 + epochs=32 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
 ```
-python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epochs 32 \
+python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 32 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 \
   --adamw_beta2 0.985 --lr 7e-4
 ```
@@ -31,6 +31,28 @@ python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epoch
 *(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 29 epochs)*
 
 ## Round r5 — Merged Winners
+
+### PR #1311 — huber_delta=0.12: tighter Huber delta on full lr=7e-4+beta2=0.985 compound stack (2026-04-29)
+**Student:** charliepai2f5-frieren | **Branch:** charliepai2f5-frieren/huber-delta-0.12
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **46.1994** (epoch 32/32 — final epoch, monotonically improving) |
+| `test_avg/mae_surf_p` | **40.9102** — **COMPETE TARGET BEATEN** (target=40.93) |
+| `test_single_in_dist/mae_surf_p` | 45.6550 |
+| `test_geom_camber_rc/mae_surf_p` | 55.2315 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.6194 |
+| `test_re_rand/mae_surf_p` | 38.1350 |
+
+**vs prior baseline (PR #1242):** val 46.1994 vs 47.4955 → **-2.73% val improvement**
+**Test improvement:** 40.9102 vs 41.2226 → **-0.76% test improvement**
+**Compete gap:** **-0.0198** — FIRST TIME BELOW COMPETE TARGET (test_avg=40.9102 < 40.93)
+**Mechanism:** huber_delta 0.1→0.12 (20% increase). Slightly looser Huber clamp allows gradient signal from moderate outliers to flow through, improving balance between precision and robustness. Benefits geom_camber_rc (-1.95%), geom_camber_cruise (-1.96%), re_rand (-3.30%). single_in_dist regressed (+3.73% test) — potential tradeoff between IND and OOD performance.
+**Split analysis:** 3 of 4 test splits improved. geom_camber_cruise: 25.1105→24.6194 (-1.96%), re_rand: 39.4435→38.1350 (-3.30%), geom_camber_rc: 56.3252→55.2315 (-1.95%). single_in_dist: 44.0112→45.6550 (+3.73% — only regression).
+**Budget-limited:** is_best=True at final epoch 32, val slope ~-0.15/epoch at termination — still improving.
+**Peak VRAM:** 20.98 GB | **Wall-clock:** 30.0 min | **Run ID:** 1xe586da
+**Metrics JSONL:** `metrics/charliepai2f5-frieren-huber-delta-0.12-1xe586da.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 32 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 --adamw_beta2 0.985 --lr 7e-4`
 
 ### PR #1242 — lr=7e-4: probe higher LR on beta2=0.985 compound stack (2026-04-29)
 **Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/lr-7e-4-beta2-0.985
@@ -454,4 +476,5 @@ python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.1 --epoch
 - 2026-04-29: PR #1194 merged. slice_num=8 (throughput) + adamw_beta2=0.98 + epochs=32 compound: val_avg=48.0121 (-2.16%), test_avg=41.6806 (-2.66%). Compete gap: 0.7506 (60% of remaining gap closed in one step).
 - 2026-04-29: PR #1241 merged. adamw_beta2=0.985 fine-tune: val_avg=47.6501 (-0.75%), test_avg=41.4598 (-0.53%). Compete gap: 0.5298 (29% of remaining gap closed).
 - 2026-04-29: PR #1246 merged. one-cycle LR policy (max_lr=2e-3, pct_start=0.3): val_avg=47.5231 (-0.27%), test_avg=41.3253 (-0.32%). Compete gap: 0.3953 (47% of remaining gap closed).
-- 2026-04-29: PR #1242 merged. lr=7e-4 on beta2=0.985 stack: val_avg=47.4955 (-0.06%), test_avg=41.2226 (-0.25%) — **Current best.** Compete gap: 0.2926 (26% of remaining gap closed).
+- 2026-04-29: PR #1242 merged. lr=7e-4 on beta2=0.985 stack: val_avg=47.4955 (-0.06%), test_avg=41.2226 (-0.25%). Compete gap: 0.2926 (26% of remaining gap closed).
+- 2026-04-29: PR #1311 merged. huber_delta=0.12 on full lr=7e-4+beta2=0.985 stack: val_avg=46.1994 (-2.73%), test_avg=40.9102 (-0.76%) — **COMPETE TARGET BEATEN** (gap=-0.0198). **Current best.**
