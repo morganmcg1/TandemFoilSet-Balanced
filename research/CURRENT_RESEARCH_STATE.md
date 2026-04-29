@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-04-28 UTC
+- **Last updated**: 2026-04-29 UTC
 - **Branch**: `icml-appendix-charlie-pai2e-r3`
 - **Most recent direction from human researcher team**: none on file. Default contract from `target/program.md` stands — drive `val_avg/mae_surf_p` (and the matching `test_avg/mae_surf_p` from best val checkpoint) down on the equal-weight 4-split mean.
 
@@ -26,12 +26,13 @@ Config: Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2
 | 919 | fern      | Per-sample Re-aware loss normalization (gradient equity)            | WIP          |
 | 905 | askeladd  | Signed-log pressure target normalization for heavy-tail Re          | WIP          |
 | 903 | edward    | slice_num=128 + bf16 AMP + NaN-safe eval on MAE baseline            | WIP          |
-| 895 | thorfinn  | EMA of model weights (decay=0.999) for evaluation                   | WIP          |
+| 895 | thorfinn  | EMA of model weights (decay=0.999) — rebasing on PR #889 codebase  | WIP (sent back) |
 | 892 | tanjiro   | OneCycleLR (max_lr=1e-3) for short-budget super-convergence         | WIP          |
-| 890 | frieren   | Random Fourier features on (x,z) for camber generalization          | WIP          |
+| 928 | frieren   | Multi-scale RFF (σ=1,5) on normalized coords                        | WIP (new)    |
 | 925 | nezuko    | FiLM conditioning on log(Re) for Re-aware representations           | WIP (new)    |
 
-Closed this review cycle:
+Reviewed this cycle:
+- PR #895 (thorfinn, EMA decay=0.999): SENT BACK — val_avg 100.058 (+3.84% vs PR #835 baseline). Does not beat current best (94.387). Was run on old PR #835 codebase; rebasing on PR #889 (cosine T_max=15 + warmup) and re-running.
 - PR #891 (nezuko, Smooth-L1 δ=1.0): CLOSED — val_avg 109.065, +15.5% vs baseline. L2-like quadratic regime dominates in normalized space; re-introduces MSE's high-Re tail pathology.
 
 Round 4 spans 3 core themes:
