@@ -105,8 +105,6 @@
 | #795 R2 | thorfinn | Huber + per-sample loss norm combined | **Rebase needed** | Winner: 104.2271 (-9.9% vs Huber baseline). Merge conflict after PR #788. Rebase onto advisor branch + re-run. |
 | #795 R1 | thorfinn | Per-sample loss normalization (MSE) | Revision requested | -11.5% vs MSE but above Huber baseline 115.65. Re-run with Huber+norm combined (done, see R2). |
 | #794 | tanjiro | LR warmup 5 epochs + cosine | Revision requested | -4.87% vs no-warmup but above Huber baseline. Shorten warmup to 2 epochs + stack on Huber. |
-| #792 R4 | frieren | Huber + grad_clip 1.0 on rebased compound (post-#808) | **Rebase needed** | **Winner: val_avg=90.7796 (-12.0% vs PR #882)**. Wins all 4 val + 4 test splits (test_avg=81.12). Merge conflict on advisor branch (post-#882). Rebase + re-run on full compound w/ EMA. |
-| #792 R2 | frieren | Deeper Transolver: n_layers=6, lr=3e-4 | Sent back | Depth inconclusive at budget. Hidden gem: n=5 + grad_clip 109.62. Redirected to Huber+grad_clip. |
 | #789 | askeladd | Gradient clipping (max_norm=1.0) | **Rebase needed** | Winner: 114.3451. Merge conflict on advisor branch. Rebase + re-run. |
 | #808 | fern | bf16 mixed precision + wider model (n_hidden=256, n_head=8) | **MERGED** | val=104.1120 (PR #808 Round 3 with Huber+epochs=12). |
 | #882 | nezuko | EMA model weights (decay=0.999) on compound | **MERGED** | val=103.2182. Current best baseline. |
@@ -115,6 +113,7 @@
 
 | PR | Student | Hypothesis | Decision | Notes |
 |----|---------|------------|----------|-------|
+| #792 | frieren | Deeper Transolver n_layers=8, grad_clip (5 rounds) | Closed | R5 rebase produced 107.54 — above current baseline (103.22). Core contribution (grad_clip) was already absorbed into compound baseline via PR #882. Train-loss NaN guard never fires with grad_clip active. Branch deleted. |
 | #790 | edward | surf_weight 10→30/50 (MSE) | Closed | Best 128.98 — 11.5% above Huber baseline. Re-assigned: surf_weight on Huber (PR #827). |
 
 ## Round 1 — Active WIPs (Running)
@@ -127,7 +126,6 @@
 | #828 | edward | AdamW weight_decay sweep (1e-4/1e-3/1e-2) on Huber baseline | Running |
 | #794 | tanjiro | LR warmup + Huber | Revision in progress |
 | #795 | thorfinn | Huber + per-sample norm — rebase + re-run | Awaiting rebase (R3 winner 93.40) |
-| #792 | frieren | Huber + grad_clip 1.0 on rebased compound | Awaiting rebase (R4 winner 90.78) |
 | #789 | askeladd | Gradient clipping (max_norm=1.0) | Awaiting rebase (winner 114.35) |
 
 ### Key Infrastructure Fix (PR #792 Round 2)
@@ -156,3 +154,4 @@
 - 2026-04-29: PR #792 R4 reviewed — outstanding result (val_avg=90.7796, -12.0% vs #882, wins on every val+test split) but merge-conflicted; sent back for rebase onto post-#882 advisor branch.
 - 2026-04-29: PR #954 (alphonse, surf_weight=30 on compound) prematurely closed without running results; re-assigned as PR #960 (surf_weight 20/30/50 sweep on compound + grad_clip).
 - 2026-04-29: Fixed label mismatch on PR #942 (`student:nezuko` → `student:charliepai2e1-nezuko`).
+- 2026-04-29: PR #792 closed after 5 rounds. R5 rebase run produced val_avg=107.54 — above current baseline (103.22). grad_clip already in compound baseline via #882; unique delta (train-loss NaN guard) provides no measurable gain with grad_clip active.
