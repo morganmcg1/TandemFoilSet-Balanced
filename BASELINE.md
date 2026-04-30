@@ -4,34 +4,56 @@
 
 | Metric | Value |
 |--------|-------|
-| `val_avg/mae_surf_p` | **45.5945** (PR #1319 — epochs=40 on lr=7e-4+beta2=0.985+huber_delta=0.12 stack, stopped @ ep 33 by timeout) |
-| `test_avg/mae_surf_p` | **39.7038** (PR #1319) |
-| `test_single_in_dist/mae_surf_p` | 43.3242 |
-| `test_geom_camber_rc/mae_surf_p` | 53.0699 |
-| `test_geom_camber_cruise/mae_surf_p` | 24.5326 |
-| `test_re_rand/mae_surf_p` | 37.8885 |
+| `val_avg/mae_surf_p` | **45.4969** (PR #1330 — lr=9e-4 on epochs=40+huber_delta=0.12+beta2=0.985 stack, stopped @ ep 33 by timeout) |
+| `test_avg/mae_surf_p` | **39.1814** (PR #1330) |
+| `test_single_in_dist/mae_surf_p` | 42.7645 |
+| `test_geom_camber_rc/mae_surf_p` | 51.9828 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.8582 |
+| `test_re_rand/mae_surf_p` | 37.1200 |
 
-**Source:** PR #1319 — epochs=40 budget extension on lr=7e-4+beta2=0.985+warmup_epochs=3+huber_delta=0.12+weight_decay=5e-4 stack. Hit 30-min timeout at epoch 33/40 — still in productive learning regime (val slope ~-0.49/epoch). val improved -1.31% vs PR #1275, test improved -0.58% vs PR #1275. **COMPETE TARGET BEATEN by wide margin** (test_avg=39.7038 < 40.93 target, gap = -1.2262).
-- Branch: `charliepai2f5-tanjiro/epochs-40-budget-extension-current-stack`
-- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.12, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=40 (completed 33), lr=7e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
-- Best epoch = 33/40 (final completed epoch before timeout, monotonically improving — val slope ~-0.49/epoch at termination)
-- Peak VRAM: 20.98 GB, Wall-clock: 30.84 min, Run ID: mns799ue
-- Metrics JSONL: `metrics/charliepai2f5-tanjiro-epochs-40-budget-extension-current-stack-mns799ue.jsonl`
+**Source:** PR #1330 — lr=9e-4 probe on PR #1319 stack (epochs=40, huber_delta=0.12, beta2=0.985, warmup_epochs=3, weight_decay=5e-4). Hit 30-min timeout at epoch 33/40 — monotonically improving all 33 epochs (is_best=True every epoch). val improved -0.21% vs PR #1319, test improved -1.32% vs PR #1319. **COMPETE TARGET BEATEN by wider margin** (test_avg=39.1814 < 40.93 target, gap = -1.7486).
+- Branch: `charliepai2f5-fern/lr-9e-4-probe`
+- Config: n_layers=2 (hardcoded), slice_num=8, n_hidden=256, n_head=8, loss=huber, huber_delta=0.12, ema_decay=0.999, grad_clip=1.0, per_sample_norm, epochs=40 (completed 33), lr=9e-4, batch_size=4, weight_decay=5e-4, warmup_epochs=3, adamw_beta2=0.985
+- Best epoch = 33/40 (final completed epoch before timeout, monotonically improving — is_best=True every epoch 1→33)
+- Peak VRAM: 20.98 GB, Wall-clock: 30.80 min, Run ID: opx9iiiy
+- Metrics JSONL: `metrics/charliepai2f5-fern-lr-9e-4-stack1319-opx9iiiy.jsonl`
 
-**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-1.2262**, i.e. 3.0% below target).
+**Compete target:** `test_avg/mae_surf_p` = 40.93 (Transolver paper reference) — **BEATEN** (gap = **-1.7486**, i.e. 4.27% below target).
 
-## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.12 + weight_decay=5e-4 + lr=7e-4 + epochs=40 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
+## Round r5 — Recommended Working Baseline (compound n_layers=2 + huber_delta=0.12 + weight_decay=5e-4 + lr=9e-4 + epochs=40 + adamw_beta2=0.985 + warmup_epochs=3 + slice_num=8)
 
 ```
 python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 40 \
   --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 \
-  --adamw_beta2 0.985 --lr 7e-4
+  --adamw_beta2 0.985 --lr 9e-4
 ```
 *(Note: n_layers=2, slice_num=8 are hardcoded in model_config dict in train.py — slice_num was changed from 16→8 in PR #1194)*
 *(Note: warmup_epochs=3 activates SequentialLR: LinearLR 3 epochs ramp + CosineAnnealingLR over remaining 37 epochs, T_max=37)*
-*(Note: last run hit 30-min timeout at epoch 33/40 — all 4 splits improved, val slope still -0.49/epoch at termination. Budget-limited.)*
+*(Note: last run hit 30-min timeout at epoch 33/40 — is_best=True every epoch from 1→33, monotonically improving. Budget-limited.)*
 
 ## Round r5 — Merged Winners
+
+### PR #1330 — lr=9e-4 probe on PR #1319 stack (2026-04-30)
+**Student:** charliepai2f5-fern | **Branch:** charliepai2f5-fern/lr-9e-4-probe
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` | **45.4969** (epoch 33/40 — timeout hit, monotonically improving, is_best=True every epoch) |
+| `test_avg/mae_surf_p` | **39.1814** — **COMPETE TARGET BEATEN by -1.7486** (target=40.93) |
+| `test_single_in_dist/mae_surf_p` | 42.7645 |
+| `test_geom_camber_rc/mae_surf_p` | 51.9828 |
+| `test_geom_camber_cruise/mae_surf_p` | 24.8582 |
+| `test_re_rand/mae_surf_p` | 37.1200 |
+
+**vs prior baseline (PR #1319):** val 45.4969 vs 45.5945 → **-0.21% val improvement**, test 39.1814 vs 39.7038 → **-1.32% test improvement**, 3/4 splits improved (only geom_camber_cruise +1.33%)
+**Compete gap:** **-1.7486** — 4.27% below compete target
+**Mechanism:** lr 7e-4→9e-4 (+28.6%) on PR #1319 stack (huber_delta=0.12, epochs=40, beta2=0.985). Both runs hit timeout at epoch 33/40 — apples-to-apples comparison. Higher LR throughout the cosine schedule. Largest gains on hardest OOD splits: geom_camber_rc (-2.05%), re_rand (-2.03%), single_in_dist (-1.29%). LR sweep slope still negative — optimum not yet found.
+**Budget-limited:** is_best=True at every epoch from 1 to 33, still monotonically improving when timeout hit.
+**Peak VRAM:** 20.98 GB | **Wall-clock:** 30.80 min | **Run ID:** opx9iiiy
+**Metrics JSONL:** `metrics/charliepai2f5-fern-lr-9e-4-stack1319-opx9iiiy.jsonl`
+**Reproduce:** `cd target/ && python train.py --n_hidden 256 --n_head 8 --loss huber --huber_delta 0.12 --epochs 40 --grad_clip 1.0 --ema_decay 0.999 --per_sample_norm --weight_decay 5e-4 --warmup_epochs 3 --adamw_beta2 0.985 --lr 9e-4`
+
+---
 
 ### PR #1319 — Budget extension: epochs=40 on full lr=7e-4+beta2=0.985+huber_delta=0.12 stack (2026-04-29)
 **Student:** charliepai2f5-tanjiro | **Branch:** charliepai2f5-tanjiro/epochs-40-budget-extension-current-stack
