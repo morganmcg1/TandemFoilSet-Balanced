@@ -563,6 +563,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     cosine_t_max: int = 13  # T_max for the post-warmup CosineAnnealingLR
+    cosine_t0: int = 0  # if > 0, use CosineAnnealingWarmRestarts(T_0=cosine_t0, T_mult=1) instead of CosineAnnealingLR
 
 
 def surface_gradient_loss(pred_norm, y_norm, surf_mask):
@@ -659,12 +660,23 @@ min_lr = cfg.lr / 100.0
 warmup = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_epochs
 )
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=max(1, cfg.cosine_t_max), eta_min=min_lr
-)
+if cfg.cosine_t0 > 0:
+    cosine = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=cfg.cosine_t0, T_mult=1, eta_min=min_lr
+    )
+else:
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, cfg.cosine_t_max), eta_min=min_lr
+    )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs]
 )
+scheduler_name = (
+    f"CosineAnnealingWarmRestarts(T_0={cfg.cosine_t0},T_mult=1)"
+    if cfg.cosine_t0 > 0
+    else f"CosineAnnealingLR(T_max={cfg.cosine_t_max})"
+)
+print(f"Scheduler: {scheduler_name}, eta_min={min_lr}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
