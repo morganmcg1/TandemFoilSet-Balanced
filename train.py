@@ -168,6 +168,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 slice_nums: list[int] | None = None,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -185,11 +186,17 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Per-layer slice config: if slice_nums provided, use it; else replicate slice_num
+        if slice_nums is None:
+            slice_nums = [slice_num] * n_layers
+        assert len(slice_nums) == n_layers, (
+            f"slice_nums length {len(slice_nums)} must match n_layers {n_layers}"
+        )
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                slice_num=slice_num, last_layer=(i == n_layers - 1),
+                slice_num=slice_nums[i], last_layer=(i == n_layers - 1),
             )
             for i in range(n_layers)
         ])
@@ -236,27 +243,64 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Some test samples have non-finite (Inf) values in y (e.g. test_geom_camber_cruise
+            # sample 000020). data/scoring.py is supposed to skip these via its sample_mask,
+            # but the err = (pred - inf).abs() = inf computed BEFORE masking propagates NaN
+            # via inf * 0.0 = NaN inside the masked sum. We pre-filter the batch to only
+            # contain finite-y samples; scoring.py then runs over a clean batch and produces
+            # clean accumulators. The skipped sample is correctly excluded from the metric.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)  # [B]
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
-            n_batches += 1
+            # Loss / MAE computations restricted to finite-y samples
+            if y_finite_per_sample.all():
+                # fast path
+                sq_err = (pred - y_norm) ** 2
+                vol_mask = mask & ~is_surface
+                surf_mask = mask & is_surface
+                vol_loss_sum += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
+                n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
+                ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+                n_surf += ds
+                n_vol += dv
+            elif y_finite_per_sample.any():
+                # filter batch to good samples only — y_norm rows of bad samples may contain
+                # +/-inf, so we slice them out before any err computation
+                good_idx = torch.where(y_finite_per_sample)[0]
+                pred_g = pred[good_idx]
+                y_norm_g = y_norm[good_idx]
+                y_g = y[good_idx]
+                is_surf_g = is_surface[good_idx]
+                mask_g = mask[good_idx]
+                sq_err = (pred_g - y_norm_g) ** 2
+                vol_mask = mask_g & ~is_surf_g
+                surf_mask = mask_g & is_surf_g
+                vol_loss_sum += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
+                n_batches += 1
+
+                pred_g_orig = pred_g * stats["y_std"] + stats["y_mean"]
+                ds, dv = accumulate_batch(pred_g_orig, y_g, is_surf_g, mask_g, mae_surf, mae_vol)
+                n_surf += ds
+                n_vol += dv
+            # else: all samples in this batch are bad — skip entirely
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
@@ -386,11 +430,49 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # --- Model architecture ---
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
+    dropout: float = 0.0
+    unified_pos: bool = False
+    # --- Optimizer / schedule ---
+    optimizer: str = "adamw"  # 'adamw'
+    grad_clip: float = 0.0  # 0 = disabled
+    warmup_frac: float = 0.0  # warmup fraction of total epochs
+    # --- Training tweaks ---
+    seed: int = 42
+    timeout_min: float | None = None  # override env SENPAI_TIMEOUT_MINUTES if set
+    # --- Loss tweaks ---
+    loss_kind: str = "mse"  # 'mse', 'l1', 'rel_l2' (per-sample relative L2)
+    p_weight: float = 1.0  # extra weight on pressure channel in normalized loss (default 1.0 = equal)
+    Ux_weight: float = 1.0  # extra weight on Ux channel
+    Uy_weight: float = 1.0  # extra weight on Uy channel
+    input_noise_sigma: float = 0.0  # gaussian noise added to normalized inputs (frac of std=1 since pre-normalized)
+    # --- Mixed precision ---
+    amp: bool = False  # bf16 mixed precision (autocast)
+    # --- Optimizer details ---
+    beta2: float = 0.999  # AdamW beta2
+    lr_schedule: str = "cosine"  # 'cosine', 'onecycle', 'flat'
+    # --- Feature engineering ---
+    bl_mask_feat: bool = False  # add boundary layer mask feature derived from is_surface (replaces is_surface dim)
+    # --- Multiscale slice config (override slice_num for specific layers) ---
+    multiscale_slice: str = ""  # e.g. "64,64,32,32,16,16,8,8" - one slice_num per layer; empty = use slice_num
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
-MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
+MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN if cfg.timeout_min is None else cfg.timeout_min
+
+# seed
+import random
+import numpy as np
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
@@ -414,25 +496,68 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+slice_nums_list: list[int] | None = None
+if cfg.multiscale_slice:
+    slice_nums_list = [int(s) for s in cfg.multiscale_slice.split(",")]
+    assert len(slice_nums_list) == cfg.n_layers, (
+        f"multiscale_slice has {len(slice_nums_list)} values but n_layers={cfg.n_layers}"
+    )
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    slice_nums=slice_nums_list,
+    mlp_ratio=cfg.mlp_ratio,
+    dropout=cfg.dropout,
+    unified_pos=cfg.unified_pos,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: Transolver ({n_params/1e6:.2f}M params)  cfg: nL={cfg.n_layers} nH={cfg.n_hidden} nHead={cfg.n_head} sN={cfg.slice_num} mlpR={cfg.mlp_ratio}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay,
+                              betas=(0.9, cfg.beta2))
+# Schedule: cosine (epoch-step), onecycle (batch-step), or flat
+steps_per_epoch = max(1, len(train_loader))
+total_steps = MAX_EPOCHS * steps_per_epoch
+schedule_per_step = False  # whether scheduler.step() is called per batch (vs per epoch)
+
+if cfg.lr_schedule == "onecycle":
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=cfg.lr, total_steps=total_steps,
+        pct_start=max(cfg.warmup_frac, 0.05), anneal_strategy="cos",
+    )
+    schedule_per_step = True
+elif cfg.lr_schedule == "cosine":
+    if cfg.warmup_frac > 0.0:
+        warmup_epochs = max(1, int(MAX_EPOCHS * cfg.warmup_frac))
+        cosine_epochs = max(1, MAX_EPOCHS - warmup_epochs)
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_epochs)
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+elif cfg.lr_schedule == "flat":
+    # Constant LR with optional warmup
+    if cfg.warmup_frac > 0.0:
+        warmup_steps = max(1, int(total_steps * cfg.warmup_frac))
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps)
+        schedule_per_step = True
+    else:
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+else:
+    raise ValueError(f"Unknown lr_schedule {cfg.lr_schedule!r}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -478,7 +603,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    iter_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False,
+                      disable=os.environ.get("TQDM_DISABLE", "0") == "1", mininterval=10)
+    # per-channel weight tensor [Ux, Uy, p]
+    chan_weights = torch.tensor([cfg.Ux_weight, cfg.Uy_weight, cfg.p_weight], device=device)
+    amp_dtype = torch.bfloat16 if cfg.amp else torch.float32
+    for x, y, is_surface, mask in iter_train:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -486,26 +616,54 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        # Optional input noise (in normalized space)
+        if cfg.input_noise_sigma > 0.0 and model.training:
+            x_norm = x_norm + torch.randn_like(x_norm) * cfg.input_noise_sigma
+        with torch.amp.autocast(device_type="cuda", dtype=amp_dtype, enabled=cfg.amp):
+            pred = model({"x": x_norm})["preds"]
+            err = pred.float() - y_norm.float()  # [B, N, 3]
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+
+            if cfg.loss_kind == "mse":
+                base = err * err * chan_weights
+                vol_loss = (base * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+                surf_loss = (base * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            elif cfg.loss_kind == "l1":
+                base = err.abs() * chan_weights
+                vol_loss = (base * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+                surf_loss = (base * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            elif cfg.loss_kind == "rel_l2":
+                # Per-sample, per-region relative L2 averaged over batch
+                # vol part
+                err_w = err * chan_weights.sqrt()  # apply chan weight equivalently
+                num_vol = (err_w.pow(2) * vol_mask.unsqueeze(-1)).sum(dim=(1,2))  # [B]
+                den_vol = (y_norm.float().pow(2) * vol_mask.unsqueeze(-1)).sum(dim=(1,2)) + 1e-8
+                vol_loss = (num_vol / den_vol).mean()
+                num_surf = (err_w.pow(2) * surf_mask.unsqueeze(-1)).sum(dim=(1,2))
+                den_surf = (y_norm.float().pow(2) * surf_mask.unsqueeze(-1)).sum(dim=(1,2)) + 1e-8
+                surf_loss = (num_surf / den_surf).mean()
+            else:
+                raise ValueError(f"Unknown loss_kind {cfg.loss_kind!r}")
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
+        if cfg.grad_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
         optimizer.step()
         global_step += 1
+        if schedule_per_step:
+            scheduler.step()
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not schedule_per_step:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
