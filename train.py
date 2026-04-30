@@ -421,14 +421,14 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 # OneCycleLR superconvergence: peak then aggressive cosine anneal across the
-# full wall-clock budget. We pick total_steps from a conservative per-epoch
-# estimate so it is always >= the actual number of optimizer steps taken
-# (else OneCycleLR raises "Tried to step too many times"). With BF16 AMP
-# active the per-epoch time is ~98.5s on H100, so a 100s estimate plus the
-# +1 epoch headroom budgets 19 epochs in a 30-min timeout — matching the
-# observed BF16 training duration and letting the schedule anneal to min_lr
-# right as training ends.
-ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 100.0
+# full wall-clock budget. Deliberate underestimate of per-epoch wall time so
+# total_steps overshoots the actual optimizer steps taken — the schedule
+# clamps at min_lr before timeout, and the trailing actual epochs run as a
+# low-noise fine-tune tail at lr ≈ max_lr/(div_factor*final_div_factor).
+# With FiLM+Fourier ~105s/epoch on H100, a 90s estimate plus the +1 epoch
+# headroom budgets 21 scheduled epochs vs ~17–18 actual epochs in a 30-min
+# timeout, leaving the final epochs at the OneCycleLR min_lr to polish.
+ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 90.0
 ONECYCLE_MAX_LR = 1.2e-3
 ONECYCLE_PCT_START = 0.3
 ONECYCLE_DIV_FACTOR = 25.0
