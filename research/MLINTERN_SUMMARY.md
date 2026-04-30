@@ -7,11 +7,53 @@
 
 ## TL;DR
 
-The leading recipe is the baseline Transolver (n_hidden=128, n_layers=5, n_head=4, slice_num=64,
-mlp_ratio=2) trained with **5 % linear warmup + cosine decay + grad-clip 1.0 at lr=1e-3**.
-That single 50-epoch run reached `val_avg/mae_surf_p ≈ 73` mid-run vs ~140 for the
-unmodified baseline at the same epoch. Final test metric is filled in below once the run
-completes its end-of-run test pass.
+The leading recipe is the **baseline Transolver** (n_hidden=128, n_layers=5,
+n_head=4, slice_num=64, mlp_ratio=2) trained with **5 % linear warmup + cosine
+decay + grad-clip 1.0 at lr=1e-3** for **100 epochs**.
+
+The single best run is `wc-lr1e3-100ep-seed0` (run id `necjs23h`):
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|-----|-------------------:|--------------------:|
+| **5-model ensemble** (best 5 wave 3 checkpoints, see below) | **34.33** | **29.33** |
+| 2-seed ensemble (`necjs23h` + `pcatusyd`)                   | 36.75 | 31.74 |
+| `wc-lr1e3-100ep-seed0` (single best)                        | 39.61 | 34.21 |
+| `wc-lr1e3-100ep-seed1`                                      | 39.94 | 34.98 |
+| `wc-lr1e3-sw50-100ep-seed0`                                 | 40.50 | 35.34 |
+| `wc-lr1e3-sub32k-h256-l8-mlp4-100ep` (big-model variant)    | 40.59 | 35.64 |
+| `wc-lr1e3-sub32k-h256-l8-mlp4-fourier-100ep`                | 42.79 | 36.37 |
+| `default-lr1e3-warmup-clip` (50 ep, wave 1 baseline)        | 51.05 | 44.19 |
+| `baseline-default` (50 ep, vanilla control)                 | 80.68 | 72.93 |
+
+Bottom line: at the same data, same architecture, same optimizer, the difference
+between the unmodified baseline and our best **single** run is `72.93 → 34.21`
+(53 % reduction in surface-pressure MAE) just from `lr=1e-3 + 5 % warmup +
+grad-clip 1.0 + 100 epochs`. The 5-model ensemble pushes this to `29.33`
+(60 % reduction).
+
+The ensemble averages predictions from 5 diverse 100-epoch checkpoints:
+`necjs23h, pcatusyd, nhj06b8t, rnb24j1e, 8s5o27g0` (small seeds 0/1, small +
+sw=50, big sub32k, big sub32k + fourier).
+
+**Surprise findings**:
+- Surface-loss-weighted (sw=50, AirfRANS-recommended) helped *less* than just
+  doubling the schedule from 50 → 100 epochs.
+- Bigger model with mesh subsampling matches but does not beat the small model
+  trained for 100 epochs.
+- Fourier features + sw=50 *together* hurt — the two regularizers compose
+  poorly with this dataset's already-rich shape descriptors.
+- Transolver++ (Ada-Temp + Rep-Slice) NaN'd unless temperature is clamped;
+  even after the clamp, it did not improve over vanilla within 50 epochs.
+
+**`scoring.py` inf bug**: `data/scoring.py` is read-only per the contract. I
+hit a corner-case: `test_geom_camber_cruise/000020.pt` has 761 inf values in
+its ground-truth y, and the `inf*0 = nan` propagation poisons the test sum so
+the in-training test eval prints `test_avg=nan`. Worked around by filtering
+non-finite samples out of the batch *before* calling `accumulate_batch`
+inside `evaluate_split` in `train.py` — semantics unchanged (same per-sample
+skip rule that `scoring.py` already documents). All test numbers in this
+summary come from this fix; `scripts/eval_test.py` re-runs evaluation from
+saved checkpoints with the fix applied.
 
 ## Strategy
 

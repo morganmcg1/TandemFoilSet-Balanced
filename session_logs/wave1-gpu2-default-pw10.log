@@ -1,0 +1,23 @@
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+wandb: W&B API key is configured. Use `wandb login --relogin` to force relogin
+wandb: setting up run fc1sfw9u
+wandb: Tracking run with wandb version 0.25.1
+wandb: Run data is saved locally in /workspace/ml-intern-benchmark/target/wandb/run-20260429_184320-fc1sfw9u
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run mlintern-pai2-24h-v2-r1/default-pw10
+wandb: ⭐️ View project at https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern
+wandb: 🚀 View run at https://wandb.ai/wandb-applied-ai-team/senpai-v1-ml-intern/runs/fc1sfw9u
+Device: cuda
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Model: Transolver (0.66M params)
+Epoch   1 (140s) [46.6GB]  train[vol=3.0759 surf=7.3398]  val_avg_surf_p=311.3390 *  lr=5.00e-04
+    val_single_in_dist         loss=20.1447  surf[p=322.4516 Ux=6.8826 Uy=2.3800]  vol[p=511.6559 Ux=14.7283 Uy=6.0163]
+    val_geom_camber_rc         loss=18.6880  surf[p=384.0418 Ux=7.7760 Uy=2.9557]  vol[p=660.2414 Ux=16.9070 Uy=6.8816]
+    val_geom_camber_cruise     loss=9.2082  surf[p=235.9791 Ux=7.7040 Uy=1.3490]  vol[p=294.2957 Ux=11.4650 Uy=3.5539]
+    val_re_rand                loss=14.0619  surf[p=302.8835 Ux=7.8505 Uy=1.9749]  vol[p=434.8835 Ux=13.6398 Uy=4.8080]
+Epoch   2 (135s) [47.1GB]  train[vol=2.2638 surf=4.8649]  val_avg_surf_p=228.9791 *  lr=4.98e-04
+    val_single_in_dist         loss=17.9653  surf[p=279.2376 Ux=6.7568 Uy=2.2710]  vol[p=356.2405 Ux=13.7164 Uy=5.3071]
+    val_geom_camber_rc         loss=11.3197  surf[p=243.4714 Ux=7.6091 Uy=2.4524]  vol[p=347.8017 Ux=16.0729 Uy=5.7526]
+    val_geom_camber_cruise     loss=6.2374  surf[p=185.9353 Ux=5.7145 Uy=1.4374]  vol[p=200.1898 Ux=10.4971 Uy=3.6508]
+    val_re_rand                loss=7.9684  surf[p=207.2723 Ux=6.1779 Uy=1.7439]  vol[p=223.5938 Ux=12.5100 Uy=4.2921]
+Epoch   3 (137s) [47.1GB]  train[vol=1.8613 surf=5.1827]  val_avg_surf_p=255.6079  lr=4.96e-04

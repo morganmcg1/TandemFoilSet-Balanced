@@ -156,6 +156,24 @@ def main():
         except Exception as e:
             print(f"warn: failed to parse {log}: {e}", file=sys.stderr)
 
+    # Merge in offline eval_*.json results (these have the inf-fix applied, so
+    # their test_avg is correct even for runs that had nan in the in-training
+    # test eval). Match by wandb_run_id.
+    eval_dir = Path("research")
+    if eval_dir.is_dir():
+        for ef in eval_dir.glob("eval_*.json"):
+            try:
+                ed = json.loads(ef.read_text())
+                rid = ed.get("run_id")
+                # Find matching row(s)
+                for r in rows:
+                    if r.get("wandb_run_id") == rid:
+                        r["fixed_test_avg_mae_surf_p"] = ed.get("test_avg", {}).get("avg/mae_surf_p")
+                        r["fixed_val_avg_mae_surf_p"] = ed.get("val_avg", {}).get("avg/mae_surf_p")
+                        r["fixed_test_per_split"] = ed.get("test_per_split")
+            except Exception as e:
+                print(f"warn: failed eval merge {ef}: {e}", file=sys.stderr)
+
     with out.open("w") as f:
         for r in rows:
             f.write(json.dumps(r, default=str) + "\n")
@@ -163,18 +181,21 @@ def main():
 
     # Print summary
     print("\nRun summary:")
-    print(f"{'Run':50s}  {'Status':10s}  {'Best val_avg/mae_surf_p':>22s}  {'Test avg':>9s}  {'Epochs':>6s}")
+    print(f"{'Run':50s}  {'Status':10s}  {'Best val_avg/mae_surf_p':>22s}  {'Test avg (fix)':>14s}  {'Epochs':>6s}")
     rows.sort(key=lambda r: (r.get("best") or {}).get("val_avg_mae_surf_p") or 1e18)
     for r in rows:
         best = r.get("best") or {}
         bvp = best.get("val_avg_mae_surf_p")
         bvp_s = f"{bvp:.3f}" if bvp is not None else "—"
         ep = best.get("epoch") or 0
-        tasp = r.get("test_avg_mae_surf_p")
+        # Prefer the inf-safe re-eval if present, fall back to the in-training test_avg.
+        tasp = r.get("fixed_test_avg_mae_surf_p")
+        if tasp is None:
+            tasp = r.get("test_avg_mae_surf_p")
         tasp_s = f"{tasp:.3f}" if tasp is not None else "—"
         n_ep = r.get("n_epochs_completed") or 0
         name = r.get("short_name", r["run_name"])[:50]
-        print(f"{name:50s}  {r['status']:10s}  {bvp_s:>14s} ep{ep:<3d}  {tasp_s:>9s}  {n_ep:>6d}")
+        print(f"{name:50s}  {r['status']:10s}  {bvp_s:>14s} ep{ep:<3d}  {tasp_s:>14s}  {n_ep:>6d}")
 
 
 if __name__ == "__main__":
