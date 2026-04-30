@@ -429,12 +429,12 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 # OneCycleLR superconvergence: peak then aggressive cosine anneal across the
 # full wall-clock budget. We pick total_steps from a conservative per-epoch
 # estimate so it is always >= the actual number of optimizer steps taken
-# (else OneCycleLR raises "Tried to step too many times"). With BF16 AMP
-# active the per-epoch time is ~98.5s on H100, so a 100s estimate plus the
-# +1 epoch headroom budgets 19 epochs in a 30-min timeout — matching the
-# observed BF16 training duration and letting the schedule anneal to min_lr
-# right as training ends.
-ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 100.0
+# (else OneCycleLR raises "Tried to step too many times"). With BF16 AMP +
+# torch.compile(mode='reduce-overhead') the per-epoch time is ~52s on
+# Blackwell (PR #1325), so a 55s estimate plus the +1 epoch headroom budgets
+# ~33 epochs in a 30-min timeout — matching the observed compiled training
+# duration and letting the schedule anneal to min_lr right as training ends.
+ONECYCLE_PER_EPOCH_SEC_ESTIMATE = 55.0
 ONECYCLE_MAX_LR = 1.2e-3
 ONECYCLE_PCT_START = 0.3
 ONECYCLE_DIV_FACTOR = 25.0
@@ -499,6 +499,27 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# torch.compile for kernel fusion and Python dispatch elimination.
+# Validated in PR #1325: 'reduce-overhead' on Blackwell + PyTorch 2.10 cuts
+# epoch time ~50% (105s -> 52s) and VRAM ~33% (35.8GB -> 23.9GB). Variable
+# mesh sizes (74K-242K nodes) make shapes dynamic, so we keep a graceful
+# fallback to 'default' (dynamic=True) in case reduce-overhead ever errors.
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+compile_mode = "reduce-overhead"
+try:
+    model = torch.compile(model, mode=compile_mode)
+    print(f"torch.compile: mode='{compile_mode}'")
+except Exception as e:
+    print(f"torch.compile mode='{compile_mode}' failed: {e}; falling back to 'default'.")
+    compile_mode = "default"
+    try:
+        model = torch.compile(model, mode=compile_mode, dynamic=True)
+        print(f"torch.compile: mode='{compile_mode}', dynamic=True")
+    except Exception as e2:
+        print(f"torch.compile mode='{compile_mode}' also failed: {e2}; running uncompiled.")
+        compile_mode = "none"
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 # OneCycleLR schedule fitted to the wall-clock budget. We size total_steps
@@ -562,6 +583,7 @@ append_metrics_jsonl(metrics_jsonl_path, {
     "steps_per_epoch": steps_per_epoch,
     "budgeted_epochs": budgeted_epochs_lr,
     "total_steps": total_steps,
+    "torch_compile_mode": compile_mode,
 })
 
 best_avg_surf_p = float("inf")
