@@ -82,16 +82,32 @@ class MLP(nn.Module):
 
 
 class PhysicsAttention(nn.Module):
-    """Physics-aware attention for irregular meshes."""
+    """Physics-aware attention for irregular meshes.
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    Optional Transolver++ (arXiv:2502.02414) extensions:
+      - ``ada_temp``: per-point learnable temperature τ_i = τ₀ + Linear(x_i)
+        prevents attention degeneration in deep models.
+      - ``rep_slice``: Gumbel-Softmax (Rep-Slice) for sharper, more diverse
+        slice assignment during training; falls back to plain softmax at eval.
+    """
+
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 ada_temp=False, rep_slice=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.ada_temp = ada_temp
+        self.rep_slice = rep_slice
+        if ada_temp:
+            # Per-point temperature delta, shape ends up [B, H, N, 1]
+            self.temp_delta = nn.Linear(dim_head, 1, bias=True)
+            nn.init.zeros_(self.temp_delta.weight)
+            nn.init.zeros_(self.temp_delta.bias)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -117,7 +133,22 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # Slice logits: [B, H, N, slice_num]
+        slice_logits = self.in_project_slice(x_mid)
+        # Effective temperature: scalar τ₀ + per-point delta if ada_temp.
+        # Use clamp(min=eps) so we never divide by zero / negative temp.
+        temp = self.temperature
+        if self.ada_temp:
+            delta = self.temp_delta(x_mid)  # [B, H, N, 1]
+            temp = (temp + delta).clamp(min=1e-2)
+        if self.rep_slice and self.training:
+            # Gumbel-Softmax (Rep-Slice): adds Gumbel noise before softmax
+            # for sharper, more diverse slicing during training.
+            eps = 1e-9
+            u = torch.rand_like(slice_logits).clamp_(eps, 1 - eps)
+            gumbel = -torch.log(-torch.log(u))
+            slice_logits = slice_logits + gumbel
+        slice_weights = self.softmax(slice_logits / temp)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -138,13 +169,15 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 ada_temp=False, rep_slice=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            ada_temp=ada_temp, rep_slice=rep_slice,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -169,7 +202,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 ada_temp: bool = False, rep_slice: bool = False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -190,6 +224,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                ada_temp=ada_temp, rep_slice=rep_slice,
             )
             for i in range(n_layers)
         ])
@@ -208,8 +243,12 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        if getattr(self, "grad_checkpoint", False) and self.training:
+            for block in self.blocks:
+                fx = torch.utils.checkpoint.checkpoint(block, fx, use_reentrant=False)
+        else:
+            for block in self.blocks:
+                fx = block(fx)
         return {"preds": fx}
 
 
@@ -386,6 +425,21 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    # ---- Model architecture overrides ----
+    n_hidden: int = 128
+    n_layers: int = 5
+    n_head: int = 4
+    slice_num: int = 64
+    mlp_ratio: int = 2
+    dropout: float = 0.0
+    # ---- Training tweaks ----
+    grad_clip: float = 0.0  # 0 disables
+    warmup_epochs: int = 0
+    quiet: bool = False  # suppress tqdm progress bars
+    grad_checkpoint: bool = False  # checkpoint each Transolver block
+    grad_accum: int = 1  # accumulate gradients across iters
+    ada_temp: bool = False  # Transolver++ adaptive temperature
+    rep_slice: bool = False  # Transolver++ Gumbel-Softmax (Rep-Slice)
 
 
 cfg = sp.parse(Config)
@@ -418,21 +472,36 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
-    n_layers=5,
-    n_head=4,
-    slice_num=64,
-    mlp_ratio=2,
+    n_hidden=cfg.n_hidden,
+    n_layers=cfg.n_layers,
+    n_head=cfg.n_head,
+    slice_num=cfg.slice_num,
+    mlp_ratio=cfg.mlp_ratio,
+    dropout=cfg.dropout,
+    ada_temp=cfg.ada_temp,
+    rep_slice=cfg.rep_slice,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
+model.grad_checkpoint = bool(cfg.grad_checkpoint)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"Model: Transolver ({n_params/1e6:.2f}M params)  grad_checkpoint={model.grad_checkpoint}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-3, end_factor=1.0, total_iters=cfg.warmup_epochs,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(MAX_EPOCHS - cfg.warmup_epochs, 1),
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[cfg.warmup_epochs],
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -478,7 +547,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    iter_obj = train_loader if cfg.quiet else tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    for x, y, is_surface, mask in iter_obj:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -495,9 +565,13 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        loss_eff = loss / max(cfg.grad_accum, 1)
+        loss_eff.backward()
+        if (n_batches + 1) % max(cfg.grad_accum, 1) == 0:
+            if cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            optimizer.step()
+            optimizer.zero_grad()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
