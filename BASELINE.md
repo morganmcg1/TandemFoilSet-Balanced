@@ -100,4 +100,5 @@ cd target && python train.py \
 - Regression on `val_geom_camber_rc` (+6.84%); three other splits improved substantially.
 - Total params: 0.669M (Transolver 0.643M + SurfaceCorrection 0.026M).
 - **All future PRs must beat `val_avg/mae_surf_p < 119.2987` to merge.**
-- Test NaN infrastructure issue remains until PR #1527 merges.
+- Test NaN infrastructure fixed in PR #1527 (merged) — `evaluate_split` now `nan_to_num`-guards both `pred_orig` and `y` before `accumulate_batch`, and passes an explicit `_y_ok` finite-sample mask. From PR #1527 forward, expect all four test split `mae_surf_p` values to be finite.
+- Indicative test_avg from tanjiro's BIVW-only PR #1527 run (`dg5xbm6g`, no surf-head): `test_avg/mae_surf_p = 119.7792` with `test_geom_camber_cruise = 81.42`. Actual test_avg for BIVW+surf-head+fix combo pending next merged run.

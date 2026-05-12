@@ -48,6 +48,45 @@ Per-split test surface-p MAE (3 of 4 clean):
 
 ---
 
+## 2026-05-12 20:55 — PR #1527: Fix test NaN — guard evaluate_split against non-finite GT/pred (MERGED)
+
+- **Branch:** `willowpai2g48h4-tanjiro/fix-test-nan-scoring` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B run:** `dg5xbm6g`
+- **Hypothesis:** Pipeline fix — `data/scoring.py:accumulate_batch` computes `err = |pred - y|` before applying the per-sample finite mask, so `inf × 0 = NaN` poisons the accumulator. Since `data/scoring.py` is read-only, the fix is in `train.py:evaluate_split` via `nan_to_num` pre-filter + explicit `_y_ok` mask.
+
+### Results
+
+| Metric | Pre-fix baseline (`e72nzxo5`) | Post-fix run (`dg5xbm6g`) |
+|--------|------------------------------|---------------------------|
+| `val_avg/mae_surf_p` | 126.0751 | 129.6761 (+2.86%, stochastic) |
+| `test_avg/mae_surf_p` | **NaN** | **119.7792** ✓ |
+| Best epoch | 14 | 11 |
+
+Per-split test (first time all four finite):
+
+| Split | mae_surf_p |
+|-------|-----------|
+| `test_single_in_dist` | 150.59 |
+| `test_geom_camber_rc` | 133.77 |
+| `test_geom_camber_cruise` | **81.42** (was NaN) |
+| `test_re_rand` | 113.34 |
+| **test_avg** | **119.78** |
+
+### Analysis and Conclusions
+
+**Pipeline fix merged.** Despite val_avg drift, this is essential infrastructure: paper-facing metrics now report finite values for all four test splits.
+
+**val drift correctly attributed to stochasticity, not the guard.** Tanjiro proved the guard is val-neutral: baseline val splits have no non-finite GT (else baseline val_avg would have been NaN too), so `_y_ok` is all-True and `nan_to_num` is a no-op on already-finite tensors. Without a fixed seed, run-to-run variance commonly hits 1–3% on individual splits. PR was based on BIVW only (#1502), not the current advisor branch (BIVW + surf-head, #1528), so its val=129.68 doesn't compare directly with the current 119.30 baseline.
+
+**Cruise pressure split now reports 81.42** — lowest of the 4 test splits, mirroring the val cruise behaviour (85.98 in #1528). Confirms the fix surfaces the model's actual cruise performance, which was previously hidden behind NaN.
+
+**Tanjiro also cleaned up two orphan GPU processes** from prior wake-up cycles. Operationally hygienic.
+
+**Next merged training run should show:** val_avg ≈ 119.30 (BIVW+surf-head baseline) + finite test_avg ≈ 119+. The next experiment to merge (likely fern's rebase #1499 or thorfinn's Huber #1558) will give us the true paper-facing test number.
+
+---
+
 ## 2026-05-12 21:00 — PR #1500: n_hidden 128 → 256, n_head 4 → 8 (CLOSED — budget failure)
 
 - **Branch:** `willowpai2g48h4-frieren/larger-hidden-dim` (closed)
