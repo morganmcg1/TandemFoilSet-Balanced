@@ -20,13 +20,30 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1386 Fourier pos encoding L=6 mf32 BF16 | **103.24** | **90.83** | All 4 test splits improve; -14.8% test vs prior best |
+| #1357 Huber δ=1.0 (on Fourier base) | **98.79** | **88.90** | -4.31% val, -2.13% test vs Fourier baseline |
+| #1386 Fourier pos encoding L=6 mf32 BF16 | 103.24 | 90.83 | All 4 test splits improve |
 | #1541 Scoring fix + BF16 rerun | 120.40 | 106.67 | All 4 test splits now finite |
 
 ### Note on test_avg/mae_surf_p — now FIXED
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-12 23:55 — PR #1357: Huber loss δ=1.0 (askeladd)
+
+- **val_avg/mae_surf_p (best epoch 18):** 98.7905
+- **test_avg/mae_surf_p:** 88.8965
+- **Per-test-split:** single_in_dist=103.88, geom_camber_rc=96.54, geom_camber_cruise=66.61, re_rand=88.55
+- **Per-val-split:** single_in_dist=117.40, geom_camber_rc=107.57, geom_camber_cruise=76.87, re_rand=93.32
+- **Epochs completed:** 18 in ~30.75 min; peak VRAM 90.7 GB / 96 GB (high — possible allocator artifact, worth investigating later)
+- **W&B run:** `m733u17z`
+- **Reproduce:** `cd "target/" && python train.py --agent willowpai2g24h5-askeladd --wandb_name "willowpai2g24h5-askeladd/huber-delta-1-bf16" --wandb_group "willow-pai2g-24h-r5-huber-loss"`
+
+**Key change:** Replace MSE with `F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)` in both training loop and `evaluate_split`. `huber_delta` default = 1.0 (1σ in normalized space). Per-split improvements concentrate on high-Re tail (re_rand, single_in_dist) as the hypothesis predicted.
+
+**Note:** Student's reported run `m733u17z` shows `fun_dim=22` in W&B config (pre-Fourier dim), so the val=98.79 number itself was from a Huber-alone run on the pre-Fourier base. The squash-merge applied Huber on top of the current Fourier base — the merged code is the Fourier+Huber compound. Compound performance to be verified by next clean baseline run.
 
 ---
 
