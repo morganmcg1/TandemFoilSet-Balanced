@@ -512,7 +512,7 @@ for epoch in range(MAX_EPOCHS):
         log_re = (x[:, :, 13:14] * m_b).sum(dim=1) / denom                  # [B, 1]
         # Shift so all values are >= 1 (prevents divide-by-near-zero and keeps weights positive).
         log_re_shifted = log_re - log_re.min().detach() + 1.0               # [B, 1]
-        re_weight = 1.0 / log_re_shifted                                    # [B, 1]
+        re_weight = 1.0 / torch.sqrt(log_re_shifted)                        # [B, 1] — sharper curve
         # Normalize so per-batch sample weights mean to 1.0.
         re_weight = re_weight * (re_weight.shape[0] / re_weight.sum().clamp(min=1e-8))
         re_weight_expanded = re_weight.unsqueeze(-1)                        # [B, 1, 1]
