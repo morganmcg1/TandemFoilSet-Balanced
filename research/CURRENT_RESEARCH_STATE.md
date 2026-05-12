@@ -7,21 +7,27 @@
 - **Most recent human directive:** None — fresh launch, no human issues in
   the queue.
 
-## Round-1 leader (as of 20:15 UTC, not yet merged)
+## Current best (as of 20:52 UTC) — BASELINE ESTABLISHED
 
-| Rank | PR | Student | Lever | val_avg/mae_surf_p | Notes |
-|------|----|---------|-------|---------------------|-------|
-| 1 | #1393 | frieren | OneCycleLR peak=1e-3 | **111.30** | Sent back to push branch (terminal result posted but no commits) |
-| 2 | #1399 | nezuko | surf_w=10, CHANNEL_W=[1,1,2] | 111.80 | Sent back (loss-magnitude bug — effective surf_w≈3.3) |
-| 3 | #1393 | frieren | OneCycleLR peak=5e-4 | 113.84 | (within-PR control arm) |
-| 4 | #1399 | nezuko | surf_w=20, CHANNEL_W=[1,1,2] | 126.30 | (within-PR control arm) |
-| 5 | #1389 | fern | n_layers=8, lr=3e-4, 9ep | 147.40 | Sent back for Arm C `--epochs 9` — schedule mismatch contaminates |
-| 6 | #1389 | fern | n_layers=8, lr=5e-4, 9ep | 153.48 | (within-PR control arm) |
+**Merged:** PR #1355 alphonse — Pure L1 loss on normalized residuals  
+`val_avg/mae_surf_p = 94.291` | `test_avg_3of4 = 91.859` | best epoch 14/15
 
-The frieren OneCycle Arm A becomes the new `val_avg/mae_surf_p` floor *as
-soon as it is pushed* (currently the branch has no diff — see operational
-notes). Once pushed, BASELINE.md flips to 111.30 (val) / 107.54 (3-of-4
-test mean).
+Per-split val: cruise=71.66, re_rand=87.50, single=110.41, rc=107.60
+
+**All downstream experiments must use `--loss l1`.**
+
+## Round-1 leaderboard (as of 20:52 UTC)
+
+| Rank | PR | Student | Lever | val_avg/mae_surf_p | Status |
+|------|----|---------|-------|---------------------|--------|
+| 1 | **#1355** | alphonse | Pure L1 loss | **94.291** ✅ **MERGED** — new baseline |
+| 2 | #1355 | alphonse | Smooth L1 / Huber β=1.0 | 97.791 | (within-PR, not merged standalone) |
+| 3 | #1393 | frieren | OneCycleLR peak=1e-3 (MSE era) | 111.30 | Closed — superseded by loss change |
+| 4 | #1399 | nezuko | surf_w=10, CHANNEL_W=[1,1,2] (bugged) | 111.80 | Sent back (loss-magnitude bug) |
+| 5 | #1393 | frieren | OneCycleLR peak=5e-4 (MSE era) | 113.84 | Closed — superseded |
+| 6 | #1399 | nezuko | surf_w=20, CHANNEL_W=[1,1,2] (bugged) | 126.30 | Sent back |
+| 7 | #1389 | fern | n_layers=8, lr=3e-4, 9ep realized | 147.40 | Sent back — Arm C (`--epochs 9`) in progress |
+| 8 | #1389 | fern | n_layers=8, lr=5e-4, 9ep realized | 153.48 | (within-PR) |
 
 ## Round-1 operational notes
 
@@ -117,19 +123,25 @@ If round 2 also plateaus, escalate to deeper architectural changes
 (Geo-FNO, GNO, mesh-graph-net) and explore self-supervised pretext
 losses on the volume field as auxiliary heads.
 
-## Active in-flight PRs (round 1)
+## Active in-flight PRs (round 1+2)
 
-Status as of 20:15 UTC:
+Status as of 20:52 UTC:
 
 | PR | Student | Hypothesis | State |
 |----|---------|-----------|-------|
-| #1355 | alphonse | Smooth L1 / pure L1 vs MSE on normalized residuals | Trained smooth-L1 17:59, posted NaN diagnosis 19:06; advisor reply 19:55 with recovery + 3-of-4 reporting convention. Awaiting student response. |
-| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Picked up 19:50; training in progress (no commits or comments yet) |
-| #1385 | edward | Finer physics attention: slice_num 64→128, n_head 4→8 | Picked up 19:53; training in progress |
-| #1389 | fern | Deeper Transolver: n_layers 5→8 | Terminal SENPAI-RESULT 20:02 (val 147.4, regression). Sent back 20:13 to push branch + run Arm C (`--epochs 9` so cosine T_max matches realized epochs). |
-| #1393 | frieren | OneCycleLR with warmup replacing CosineAnnealingLR | Terminal SENPAI-RESULT 20:04 (val **111.30**, round-1 leader). Sent back 20:11 to push branch (rate-limit aftermath — comment posted but no commits). Will merge as new baseline once pushed. |
-| #1399 | nezuko | Surface loss: pressure channel weight 2× + surf_weight sweep | First sweep done 19:09 (val 111.80), sent back for `.mean()`-denominator 3-arm replan; now actively training (GPU 99%) |
-| #1405 | tanjiro | bfloat16 autocast + batch_size 8 + sqrt-scaled lr | Picked up 19:48; training in progress |
-| #1410 | thorfinn | Multi-scale Fourier features for (x,z) coords | Picked up 19:52; training in progress |
+| ~~#1355~~ | ~~alphonse~~ | ~~Pure L1 loss~~ | **MERGED** — new baseline 94.291 |
+| ~~#1393~~ | ~~frieren~~ | ~~OneCycleLR (MSE era)~~ | Closed — superseded by loss change |
+| **#1581** | **frieren** | **L1 + OneCycleLR compound (peak_lr 1e-3 vs 2e-3)** | Round-2 assignment, just dispatched |
+| **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 assignment, just dispatched |
+| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Training in progress (picked up ~19:50) |
+| #1385 | edward | Finer physics attention: slice_num 64→128, n_head 4→8 | Training in progress (picked up ~19:53) |
+| #1389 | fern | Deeper Transolver: n_layers 5→8 | Sent back for Arm C (`--epochs 9`, cosine T_max aligned). Awaiting push + rerun. |
+| #1399 | nezuko | Surface channel weight sweep (corrected denominator) | 3-arm replan with `CHANNEL_W=[1,1,1]` control, `[1,1,2]`, `[1,1,3]`; actively training |
+| #1405 | tanjiro | bfloat16 autocast + batch_size 8 + sqrt-scaled lr | Training in progress (picked up ~19:48) |
+| #1410 | thorfinn | Multi-scale Fourier features for (x,z) coords | Training in progress (picked up ~19:52) |
 
-**Action items:** (1) wait for frieren #1393 push → merge as new baseline. (2) wait for fern #1389 Arm C result → close or salvage the depth lever. (3) wait for remaining 5 students' first training runs. No idle students at the moment.
+**IMPORTANT for in-flight PRs:** All round-1 PRs were dispatched against an MSE baseline. Results
+should be compared against the new L1 baseline (94.29). If any in-flight student's result beats
+94.29, merge and update. The round-2 PRs (#1581, #1582) explicitly use `--loss l1`.
+
+**Action items:** wait for in-flight PRs; prioritize merge of any that beat 94.29; review fern Arm C when it lands.

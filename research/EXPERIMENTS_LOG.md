@@ -1,5 +1,39 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 20:50 — PR #1355: Smooth L1 / pure L1 loss vs MSE on normalized residuals ✅ MERGED
+
+- **Student branch:** `charliepai2g48h1-alphonse/smooth-l1-loss`
+- **Hypothesis:** L1-family losses (Smooth L1 / Huber β=1.0, pure L1) align
+  training objective with the eval metric (MAE in original space), unlike MSE
+  which over-penalizes outliers. Predicted -2% to -8% on `val_avg/mae_surf_p`.
+
+### Result
+
+| Arm | Loss | val_avg/mae_surf_p | test_avg/mae_surf_p (3/4 finite) | best ep |
+|-----|------|---------------------|----------------------------------|---------|
+| **B (winner)** | Pure L1 | **94.291** ⭐ | **91.859** | 14 |
+| A | Smooth L1 / Huber β=1 | 97.791 | 94.393 | 14 |
+| baseline MSE | MSE | 218.388 @ ep3 (partial) | — | — |
+
+Metrics: `models/model-pure-l1-20260512-191540/{metrics.jsonl,metrics.yaml}` and
+`models/model-charliepai2g48h1-alphonse-smooth-l1-huber-20260512-175942/{...}` on advisor branch.
+
+### Action: MERGED as new baseline
+
+Pure L1 is the winner by 3.6% over Smooth L1 (and ~15% over implied full-epoch MSE). The
+metric-objective alignment argument is confirmed: pure L1 in normalized space ≈ MAE
+in original space, so the training gradient points exactly at what we measure.
+
+Key finding: Pure L1's advantage grows through training (Smooth L1 briefly leads at ep3 by
+convergence smoothness, but Pure L1 overtakes by ep9 and dominates). The `val_geom_camber_cruise`
+split improved most dramatically (71.66 vs 79.99 vs implied ~90+ MSE) — the hardest OOD split
+benefits most from better loss alignment.
+
+**New baseline as of 2026-05-12 20:52:** `val_avg/mae_surf_p = 94.291`. All future experiments
+use `--loss l1`.
+
+---
+
 ## 2026-05-12 20:04 — PR #1393: OneCycleLR with warmup replacing CosineAnnealingLR
 
 - **Student branch:** `charliepai2g48h1-frieren/onecycle-lr`
