@@ -2,6 +2,54 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-12 21:48 — PR #1374: [huber-loss] Smooth L1 (Huber) instead of MSE in normalized space — **STRONGEST LEVER ON BRANCH**
+- Student branch: `charliepai2g48h4-edward/huber-loss`
+- Hypothesis: per-sample target std spans ~10× even within one validation split, so MSE's squared gradient over-emphasizes high-Re/large-magnitude samples and biases the model. Replacing MSE with Smooth L1 (Huber, beta=1.0) caps outlier gradients while preserving quadratic behavior near zero.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 13/14) | **112.06** — **BEST RESULT ON BRANCH (default config)** |
+| `test_avg/mae_surf_p` | NaN (cruise[20] sample triggered pre-merge scoring bug — fixed by #1512 on advisor) |
+| `test_avg/mae_surf_p` (3-split, excl cruise) | **107.52** |
+| `val_single_in_dist/mae_surf_p`     | 147.10 |
+| `val_geom_camber_rc/mae_surf_p`     | 115.27 |
+| `val_geom_camber_cruise/mae_surf_p` |  85.33 |
+| `val_re_rand/mae_surf_p`            | 100.56 |
+| Wall clock | 30.8 min |
+| Peak VRAM | 42.12 GB |
+| Params | 0.66 M |
+| Run-to-run variance | ~3 pts (3 trials: 109.33, 112.06, 112.33) |
+| Metrics path | `models/model-charliepai2g48h4-edward-huber-loss-20260512-205528/metrics.jsonl` |
+
+**Analysis.** **Largest single-lever improvement found on this branch so far.** -9.6% vs default baseline (123.99); -7.5% vs prior single-lever best (askeladd EMA 121.16). Three independent trials at 109.33–112.33 — variance ~3 pts vs improvement ~12 pts — signal-to-noise ratio is very strong. The mechanism is exactly as hypothesized: under our ~10× dynamic-range regime, MSE gradients are dominated by a small set of large-magnitude samples; Huber's linear-tail behavior re-balances the gradient budget across the sample distribution.
+
+**Decision.** Sent back for rebase + rerun on merged recipe. Train.py change (8/8) is mechanical but conflicts with the 4 merged PRs. The merged scoring-fix (#1512) will resolve the test NaN automatically. After rerun, this is the strongest merge candidate by margin.
+
+**Suggested follow-ups (high priority):**
+1. **Huber beta sweep** {0.5, 1.0, 2.0} — find optimal transition point. Default 1.0 is at normalized-residual scale; smaller beta shifts more samples to the linear regime, larger beta keeps quadratic over a wider range.
+2. **Log-cosh as alternative** — differentiable everywhere, no threshold hyperparameter, similar tail-capping behavior.
+3. **Huber + EMA stack** — two strongest levers, both targeting variance/robustness. Orthogonal mechanisms (sample-level vs weight-level).
+4. **Huber + T_max=15 stack** — orthogonal: loss shape vs lr schedule.
+
+## 2026-05-12 21:00 — PR #1570: [surf-weight-20-stack] surf_weight=20 on merged unified_pos+bf16 recipe — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-fern/surf-weight-20-stack`
+- Hypothesis: surf_weight=20 (askeladd #1369 on old recipe) stacks additively with unified_pos+bf16 to push val below 120.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 17/18) | 127.86 (vs 123.99 default, **+3.1% worse**) |
+| `test_avg/mae_surf_p` | 119.28 (vs 110.97 default, **+7.5% worse**) |
+| `test_geom_camber_cruise/mae_surf_p` | 90.14 (vs 76.78 default, **+17.4% worse**) |
+| Wall clock | 30.9 min (18 epochs at ~103 s/epoch — bf16 speedup confirmed) |
+| Peak VRAM | 33.90 GB |
+| Metrics path | `models/model-charliepai2g48h4-fern-surf-weight-20-stack-20260512-205042/metrics.jsonl` |
+
+**Analysis.** Hypothesis falsified. surf_weight=20 stacked on merged recipe gives the same number (~127.9) as on the OLD recipe — unified_pos+bf16 don't help loss-weight-axis benefit. Volume MAE on cruise climbed (the gradient budget went to surface at the cost of volume). Combined with PR #1533 (3× weight, +25% regression) and #1369 (2× on old recipe, 127.94 within noise), three points along the loss-weight axis are now mapped — surf_weight=10 is at or near the minimum on this budget.
+
+**Important meta-observation:** The fact that the merged recipe gives val=127.86 (vs 123.99 default + scoring-fix) suggests the merged recipe may itself be a slight regression vs default. Need alphonse seeded baseline (#1577) to confirm cleanly.
+
+**Decision.** CLOSED. Clear regression (>5% on test), and the lever is now mapped — no need to explore further surf_weight values. Reassigned fern to a new hypothesis.
+
 ## 2026-05-12 20:53 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max from 50 to 15 to anneal inside cap
 - Student branch: `charliepai2g48h4-nezuko/cosine-trunc-t15`
 - Hypothesis: under the 30-min cap only ~14 epochs land; `CosineAnnealingLR(T_max=50)` keeps lr at ~92% of initial throughout. Truncating to `T_max=15` gives a real late-training fine-tuning regime (lr → ~0 by the last 1–2 epochs).
