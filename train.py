@@ -407,6 +407,8 @@ class Config:
     surf_weight: float = 10.0
     huber_delta: float = 1.0
     epochs: int = 50
+    dropout: float = 0.1
+    clip_grad_norm: float = 1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -455,6 +457,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -539,12 +542,18 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
+        if cfg.clip_grad_norm > 0:
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_grad_norm)
+        else:
+            grad_norm = torch.tensor(0.0)
         scaler.step(optimizer)
         scaler.update()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_scale": scaler.get_scale() if amp_enabled else 1.0,
+            "train/grad_norm": grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm),
             "global_step": global_step,
         })
 
