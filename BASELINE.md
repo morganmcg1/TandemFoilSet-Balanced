@@ -20,12 +20,26 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1541 Scoring fix + BF16 rerun | **120.40** | **106.67** | All 4 test splits now finite |
+| #1386 Fourier pos encoding L=6 mf32 BF16 | **103.24** | **90.83** | All 4 test splits improve; -14.8% test vs prior best |
+| #1541 Scoring fix + BF16 rerun | 120.40 | 106.67 | All 4 test splits now finite |
 
 ### Note on test_avg/mae_surf_p — now FIXED
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-12 23:05 — PR #1386: Fourier positional encoding L=6 mf32 BF16 (nezuko)
+
+- **val_avg/mae_surf_p (best epoch 18):** 103.2393
+- **test_avg/mae_surf_p:** 90.828
+- **Per-test-split:** single_in_dist=105.79, geom_camber_rc=102.99, geom_camber_cruise=64.21, re_rand=90.31
+- **Epochs completed:** 18 in 30 min; peak VRAM ~33 GB / 96 GB
+- **W&B run:** `bpbykd9z` (L=6 primary), `qwmh06uh` (L=4 secondary)
+- **Reproduce:** `cd "target/" && python train.py --agent willowpai2g24h5-nezuko --wandb_name "willowpai2g24h5-nezuko/fourier-L6-mf32-bf16" --wandb_group "willow-pai2g-24h-r5-fourier-pos"`
+
+**Key change:** Replace raw (x,z) coords with Fourier features — L=6 log-spaced frequencies, min_freq=1.0, max_freq=32.0, positions standardized before encoding. `fun_dim` updated from `X_DIM-2` to `X_DIM-2+4*L`. L=6 beats L=4 by ~3.9 points on test (-14.8% vs -11.2% vs baseline).
 
 ---
 
