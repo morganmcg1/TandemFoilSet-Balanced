@@ -411,6 +411,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
     epochs: int = 50
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
@@ -525,8 +526,12 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            # Channel weights: [Ux, Uy, p] — upweight pressure to prioritize the ranking metric
+            ch_weights = torch.tensor(
+                [1.0, 1.0, cfg.p_weight], device=device, dtype=torch.float32
+            )
             # Loss in float32 for numerical stability
-            sq_err = (pred.float() - y_norm.float()) ** 2
+            sq_err = (pred.float() - y_norm.float()) ** 2 * ch_weights[None, None, :]
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -538,11 +543,13 @@ for epoch in range(MAX_EPOCHS):
 
         is_step = ((step_idx + 1) % cfg.grad_accum == 0) or ((step_idx + 1) == len(train_loader))
         if is_step:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
             global_step += 1
             # Log the un-scaled loss for human readability
             wandb.log({"train/loss": loss.item() * cfg.grad_accum,
+                       "train/grad_norm": grad_norm.item(),
                        "global_step": global_step})
 
         epoch_vol += vol_loss.item()
