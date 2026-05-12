@@ -352,6 +352,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    surf_p_weight: float = 1.0  # per-channel weight on pressure within surface loss (1.0 = equal channels = baseline)
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -403,6 +404,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Per-channel surface loss weights: [Ux, Uy, p]; pressure channel weighted by cfg.surf_p_weight.
+# Normalisation by surf_channel_weights.mean() keeps the overall surf_loss scale comparable
+# to the baseline so cfg.surf_weight retains its meaning.
+surf_channel_weights = torch.tensor([1.0, 1.0, cfg.surf_p_weight], device=device)
+surf_channel_weights_mean = surf_channel_weights.mean()
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -449,7 +456,10 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_sq_err_w = sq_err * surf_channel_weights[None, None, :]
+        surf_loss = (surf_sq_err_w * surf_mask.unsqueeze(-1)).sum() / (
+            surf_mask.sum().clamp(min=1) * surf_channel_weights_mean
+        )
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
