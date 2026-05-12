@@ -1,5 +1,32 @@
 # SENPAI Research Results
 
+## 2026-05-12 19:30 — PR #1468: surf_weight 10 → 30 (surface loss emphasis)
+
+- Branch: `charliepai2g24h2-askeladd/surf-weight-30`
+- Hypothesis: Increasing surf_weight from 10 to 30 corrects the imbalance where vol_loss dominates despite surface nodes being a small fraction of total nodes
+- Artifacts: `models/model-charliepai2g24h2-askeladd-surf-weight-30-20260512-180309/metrics.jsonl`
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy | mae_vol_p |
+|---|---:|---:|---:|---:|
+| val_single_in_dist     | 181.99 | 2.01 | 0.99 | 190.74 |
+| val_geom_camber_rc     | 173.61 | 3.18 | 1.26 | 184.65 |
+| val_geom_camber_cruise | 133.91 | 1.76 | 0.76 | 159.82 |
+| val_re_rand            | 142.96 | 2.38 | 0.99 | 158.10 |
+| **val_avg**            | **158.12** |     |     |       |
+| test_single_in_dist    | 168.46 | 1.99 | 0.94 |       |
+| test_geom_camber_rc    | 155.70 | 3.17 | 1.18 |       |
+| test_geom_camber_cruise| NaN   | 1.67 | 0.72 |       |
+| test_re_rand           | 140.25 | 2.25 | 0.98 |       |
+| 3-split test avg       | 154.80 |      |      |       |
+
+**Config:** surf_weight=30, bs=4, lr=5e-4, all other defaults. 14 epochs (30 min timeout-cut, best at epoch 11). Peak VRAM 42.1 GB.
+
+**Decision: CLOSED — val_avg=158.12 is 18% worse than floor=133.94 and 10% worse than previous floor=143.15.**
+
+**Analysis:** Increasing surf_weight uniformly for all surface channels harms optimization at 14 epochs. The channel weighting approach (chan_w=[1,1,5]) is a more surgical lever — it targets specifically the pressure channel rather than uniformly upweighting the surface. Both levers act on the same axis (loss alignment with primary metric) but channel weighting is strictly better. Student produced an excellent bug report on the 0×NaN propagation in test eval — assigned follow-up PR #1536 to apply the train.py guard and give us the first ever clean test_avg.
+
+---
+
 ## 2026-05-12 19:15 — PR #1464: Per-channel loss weighting (pressure ×5)
 
 - Branch: `charliepai2g24h2-alphonse/channel-weight-p5`
