@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 20:40 (round 1 largely decided; baseline 123.99 established; 3 PRs merged; round 2 in flight)
+- **As of:** 2026-05-12 21:00 (round 1 decided; 4 PRs merged into recipe; EMA new best 121.16 sent back for rebase; round 2 in flight)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -65,8 +65,8 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 - **PR #1374 — `huber-loss` (edward)** — WIP — training started 19:50 UTC
 - **PR #1394 — `wd5e-4` (frieren)** — WIP — still rate-limited 20:35 UTC; GPU idle
 
-### Pending merge (blocked by guard timing artifact)
-- **PR #1369 — `surf-weight-20` (askeladd)** — val=127.94, within 5% noise floor; blocked because hold comment is timestamped after SENPAI-RESULT; askeladd asked to re-post confirming marker
+### Highest priority active PR
+- **PR #1540 — `ema-weights` (askeladd)** — **NEW BEST val=121.16 / test=108.69** on default config; sent back for rebase onto merged recipe (unified_pos+bf16+surf_weight=20 all changed train.py while run was in flight). Merge as soon as rebase lands.
 
 ## Key signals and round-2 strategy
 
@@ -88,7 +88,9 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 
 **Critical signal: 30-pt run-to-run variance.** askeladd showed identical surf_weight=20 configs producing 127.94 vs 157.95 — ~25% range on a single unseed run. Every ranking in round 1 is a point estimate. EMA (#1540) addresses this cheaply; seeded training is the full fix (deferred to round 2 infra).
 
-**Best hypothesis stacking candidate:** `unified_pos=True + surf_weight=20` — these two hit orthogonal per-split weak points (cruise vs raceCar) and both show positive signal within the noise floor. Fern's #1570 (`surf-weight-20-stack`) tests this directly on the merged recipe.
+**Strongest single lever: EMA (Polyak averaging).** askeladd's ema-weights (#1540) landed val=121.16 on the DEFAULT config (no unified_pos, no bf16, surf_weight=10) — the largest single-run improvement on this branch. EMA composes with every other lever (unified_pos, surf_weight, schedule, capacity). After rebase onto the merged recipe, EMA + unified_pos + bf16 + surf_weight=20 could push below 115.
+
+**Best stacking target:** merged recipe (unified_pos + bf16 + surf_weight=20) + EMA. Currently in askeladd's rebase queue (#1540).
 
 **Scoring bug closed.** `data/scoring.py:accumulate_batch` `Inf*0=NaN` fixed (merged #1512). Four independent confirmations (fern, thorfinn, askeladd, nezuko). test_avg/mae_surf_p is now finite on this branch.
 

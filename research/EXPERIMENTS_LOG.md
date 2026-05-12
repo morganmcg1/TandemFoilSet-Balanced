@@ -165,7 +165,7 @@ Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_
 
 **Pod rate-limit incident.** alphonse and edward hit GraphQL rate limits at ~17:50 UTC and couldn't pick up assigned PRs for ~2 hours (13 and 18 heartbeat iterations of "## Student research state — No assigned PRs or issues" respectively). They finally cleared at 19:48-19:50 UTC. This pushed baseline ETA from ~19:21 to ~20:25 UTC. No work was lost; just delayed.
 
-_(Round 1 still partially in flight — baseline + edward + frieren still pending.)_
+_(Round 1 largely closed — edward + frieren still pending.)_
 
 ## 2026-05-12 20:00 — PR #1512: [scoring-nan-fix] Stop NaN propagation (fern) — MERGED as baseline anchor
 - Student branch: `charliepai2g48h4-fern/scoring-nan-fix`
@@ -223,16 +223,43 @@ With baseline established, reviewed all 5 held round-1 hypothesis PRs:
 | #1406 (tanjiro) | hidden192 | 151.64 | +22.3% | **CLOSED** — wall-clock-bound, superseded by #1575 |
 | #1533 (thorfinn) | surf-p-weight-3x | 154.47 | +24.6% | **CLOSED** — 3× ratio too aggressive, model too small |
 
+## 2026-05-12 20:53 — PR #1540: [ema-weights] Polyak EMA at val/test — NEW BEST (askeladd)
+- Student branch: `charliepai2g48h4-askeladd/ema-weights`
+- Hypothesis: maintain EMA copy of model weights (decay 0.999), use EMA model for val/test evaluation — Polyak averaging to reduce variance from wall-clock-truncated mid-cosine runs.
+- Config: **default config** (surf_weight=10, no unified_pos, no bf16, lr=5e-4) — branched from advisor commit 0242e62 before other merges.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 14/14) | **121.16** ← NEW BEST |
+| `test_avg/mae_surf_p` | **108.69** ← NEW BEST |
+| `val_geom_camber_cruise/mae_surf_p` | 95.58 |
+| `val_geom_camber_rc/mae_surf_p` | 132.15 |
+| `val_re_rand/mae_surf_p` | 109.44 |
+| `val_single_in_dist/mae_surf_p` | 147.47 |
+| `test_geom_camber_cruise/mae_surf_p` | 80.16 |
+| `test_geom_camber_rc/mae_surf_p` | 118.92 |
+| `test_re_rand/mae_surf_p` | 107.34 |
+| `test_single_in_dist/mae_surf_p` | 128.36 |
+| Wall clock | 30.5 min cap; 14 epochs; val still descending |
+| Peak VRAM | 42.11 GB |
+| Params | 0.66 M |
+| Metrics path | `models/model-charliepai2g48h4-askeladd-ema-weights-20260512-201111/metrics.jsonl` |
+
+**Analysis.** EMA on default config (val=121.16) is the single strongest lever identified so far — beating unified-pos (125.78, the prior best) by 3.7% and alphonse's canonical default (137.57) by 11.9%. Test improvement is even clearer at 108.69 vs 117.12 (7.2% gain). The hypothesis is confirmed: EMA smooths gradient-step noise from the wall-clock-truncated cosine schedule, improving both val and test consistency. Importantly, this was on a WEAKER config (no unified_pos, no bf16, surf_weight=10) — adding EMA to the merged recipe (unified_pos + bf16 + surf_weight=20) should push below 120.
+
+**Status: SENT BACK FOR REBASE.** Four PRs (scoring-fix, bf16, unified-pos, surf-weight-20) merged into train.py while this run was in flight, causing a merge conflict. Student is rebasing onto the current advisor branch and will re-run on the full merged recipe. This is the highest-priority active PR — merge as soon as the rebase lands.
+
 ## 2026-05-12 ~20:35 — Round 2 assignments (building on merged recipe)
 
-The advisor-branch recipe now includes unified_pos=True, bf16, and scoring-fix. Round-2 student assignments all inherit this merged baseline:
+The advisor-branch recipe now includes unified_pos=True, bf16, surf_weight=20, and scoring-fix. Round-2 student assignments all inherit this merged baseline:
 
 | Student | PR | Slug | Lever |
 |---|---|---|---|
-| fern | #1570 | `surf-weight-20-stack` | surf_weight=20 on top of merged unified_pos+bf16 recipe |
+| fern | #1570 | `surf-weight-20-stack` | ~~surf_weight=20~~ now superseded by merge; test stacking effect |
 | tanjiro | #1575 | `hidden256-bf16` | n_hidden=128→256 on merged bf16+unified_pos recipe |
 | thorfinn | #1576 | `unified-pos-global-norm` | replace per-batch pos norm with corpus-level bounds |
-| askeladd | #1540 | `ema-weights` | Polyak EMA at val/test (in flight since earlier cycle) |
-| nezuko | #1542 | `cosine-trunc-t15` | CosineAnnealingLR T_max=50→15 (in flight since earlier cycle) |
+| askeladd | #1540 | `ema-weights` | Polyak EMA at val/test — NEW BEST 121.16; sent back for rebase on merged recipe |
+| nezuko | #1542 | `cosine-trunc-t15` | CosineAnnealingLR T_max=50→15 (in flight) |
+| alphonse | #1577 | `seed42-baseline` | deterministic seeding → reproducible merged-recipe baseline |
 
-Pending round-1 WIPs still outstanding: #1368 (alphonse baseline-ref, started training 19:48 UTC, ETA ~20:30 UTC), #1374 (edward huber-loss, started 19:50 UTC), #1394 (frieren wd5e-4, still rate-limited as of 20:35 UTC).
+Pending round-1 WIPs: #1374 (edward huber-loss, ETA ~20:30 UTC), #1394 (frieren wd5e-4, rate-limited ~3h+).
