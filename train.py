@@ -320,6 +320,7 @@ def write_experiment_summary(
         "onecycle_div_factor": cfg.onecycle_div_factor,
         "onecycle_final_div_factor": cfg.onecycle_final_div_factor,
         "ema_decay": cfg.ema_decay,
+        "use_logcosh": cfg.use_logcosh,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -368,6 +369,7 @@ class Config:
     onecycle_div_factor: float = 10.0  # initial_lr = max_lr / this
     onecycle_final_div_factor: float = 100.0  # min_lr = initial_lr / this
     ema_decay: float = 0.999  # EMA of model weights for eval (0.0 disables)
+    use_logcosh: bool = False  # log-cosh loss instead of MSE
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -474,6 +476,8 @@ if cfg.ema_decay > 0.0:
         p.requires_grad_(False)
     print(f"EMA: enabled (decay={cfg.ema_decay})")
 
+print(f"Loss: {'log-cosh' if cfg.use_logcosh else 'MSE'}")
+
 
 def update_ema(model: nn.Module, ema_model: nn.Module, decay: float) -> None:
     with torch.no_grad():
@@ -522,7 +526,11 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.use_logcosh:
+            residual = pred - y_norm
+            sq_err = torch.log(torch.cosh(residual))
+        else:
+            sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -595,6 +603,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
+        "use_logcosh": cfg.use_logcosh,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
