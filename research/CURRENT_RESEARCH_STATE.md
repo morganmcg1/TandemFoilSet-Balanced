@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12 22:20 UTC
+- **Date / time:** 2026-05-12 23:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,22 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-7 update — stale_wip cleanup + 2 new architectural/loss-shape arms
+
+After PR #1480 merge, the 4 stale_wip PRs were triaged:
+
+- **CLOSED #1475 nezuko (wider 256/8h):** under-trained at 30-min cap (val≈176 on old baseline → ~51% worse than new 116.30). Capacity > training budget.
+- **CLOSED #1476 tanjiro (per-field heads):** val≈137 on old baseline (~18% worse than new), no code pushed, 4h silent. Shared backbone + per-channel weighting (frieren's `p_weight` direction) is a cleaner channel-prioritization mechanism.
+- **SENT BACK #1471 frieren (p_weight=2+clip):** had merge conflict from #1480 base change. Asked for rebase + redirect from cycle-3 (`p_weight=2.0` + grad clip 1.0).
+- **SENT BACK #1465 askeladd (surf_weight=30):** no code committed in 4h. Asked for rebase, commit, run on new baseline.
+
+Two new assignments cover the orthogonal axes still unexplored:
+
+| PR | Student | Hypothesis | Mechanism |
+|---|---|---|---|
+| **#1665** | nezuko | `n_layers: 5 → 6` (one more Transolver block) | Adds one round of slot-mixing/attention. Throughput headroom from bf16+accum should keep it within 30-min cap (~15 epochs). Acceptance: val<116.30 AND test doesn't materially regress vs 104.96. |
+| **#1666** | tanjiro | `smooth_l1` (Huber, β=1) loss replaces MSE | Aligns training loss shape with eval metric (MAE). Bounds gradient magnitude per element — should reduce p-channel long-tailed sample dominance without per-sample reweighting (which broke in #1466). Orthogonal to all in-flight directions. |
 
 ## Cycle-6 update — MAJOR MILESTONE: First merge! val=116.30, test=104.96
 
@@ -88,20 +104,22 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-6)
+## Current leaderboard (post cycle-7)
 
-**New baseline: val=116.30 / test=104.96** (PR #1480, thorfinn, merged). Beat 116.30 to merge.
+**Active baseline: val=116.30 / test=104.96** (PR #1480, thorfinn, merged). Beat 116.30 to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **thorfinn #1651** (cosine T18) | TBD | TBD | WIP (new) | Expects free improvement from full anneal |
-| **edward #1654** (EMA weights) | TBD | TBD | WIP (new) | 1-4% gain expected at eval time |
-| **alphonse #1655** (OneCycleLR) | TBD | TBD | WIP (new) | Warmup+anneal schedule at max_lr=2e-3 |
-| frieren #1471 (p_weight=2+clip) | 116.34 (W&B only) | NaN | WIP (stale) | Needs code commit + SENPAI-RESULT |
-| fern #1469 (lr=2e-3+clip) | 118.77 (W&B only) | NaN | WIP (stale) | Needs code commit + SENPAI-RESULT |
-| askeladd #1465 (surf_w=30) | 127.53 (W&B only) | NaN | WIP (stale) | Needs code + SENPAI-RESULT |
-| tanjiro #1476 (per-field heads) | 137.21 (W&B only) | NaN | WIP (stale) | Stability issues; likely close |
-| nezuko #1475 (wider 256/8h) | 176.37 (W&B only) | NaN | WIP (stale) | Under-trained; likely close |
+| **nezuko #1665** (n_layers=6) | TBD | TBD | WIP (new, cycle-7) | Single block added; capacity bump within budget |
+| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (new, cycle-7) | Train/eval shape alignment (MSE→L1-ish) |
+| **thorfinn #1651** (cosine T18) | TBD | TBD | WIP (cycle-6) | Expects free improvement from full anneal |
+| **edward #1654** (EMA weights) | TBD | TBD | WIP (cycle-6) | 1-4% gain expected at eval time |
+| **alphonse #1655** (OneCycleLR) | TBD | TBD | WIP (cycle-6) | Warmup+anneal schedule at max_lr=2e-3 |
+| frieren #1471 (p_weight=2+clip) | 116.34 (W&B only) | NaN | WIP (sent-back, rebase needed) | Cycle-7 send-back: rebase against merged base + retry |
+| fern #1469 (lr=2e-3+clip) | 118.77 (W&B only) | NaN | WIP | Needs code commit + SENPAI-RESULT |
+| askeladd #1465 (surf_w=30) | 127.53 (W&B only) | NaN | WIP (sent-back) | Cycle-7 send-back: commit code + rebase + retry |
+| ~~tanjiro #1476~~ (per-field heads) | 137.21 (W&B) | — | **CLOSED** cycle-7 | Direction not worth chasing vs new baseline |
+| ~~nezuko #1475~~ (wider 256/8h) | 176.37 (W&B) | — | **CLOSED** cycle-7 | Under-trained; capacity > budget |
 
 **Key:**
 - Δ vs baseline-best uses alphonse's best baseline run (119.64) — strict.
@@ -131,20 +149,19 @@ Notably, edward and thorfinn both posted **detailed diagnostic comments** in cyc
 
 Not in plateau. Most hypotheses sit inside the noise band but multiple directions are showing consistent (if small) movement. Need formal submissions to adjudicate.
 
-## Next directions (post cycle-6)
+## Next directions (post cycle-7)
 
-1. **Merge thorfinn #1651** when code + SENPAI-RESULT arrive. Expect improvement from full cosine anneal.
-2. **Merge edward #1654** when EMA results arrive. 1-4% gain expected.
-3. **Merge alphonse #1655** if OneCycleLR beats 116.30.
-4. **Drive frieren #1471 and fern #1469 to completion** — both have W&B results beating baseline but no code committed. Both need to push code + terminal SENPAI-RESULT.
-5. **Stack winners** — once the top confirmed hypotheses (bf16+accum ✓, cosine-T18, lr=2e-3, p_weight=2+clip) are individually merged, build a stacked-arm combining all. Synergistic gains likely.
-6. **Close tanjiro #1476 and nezuko #1475** when SENPAI-RESULTs arrive — both show regression and no clear path to improvement.
-7. **Research next frontier hypotheses** — need researcher-agent to survey new directions once current pipeline clears.
+1. **Merge winners as they arrive.** Sorted by expected ETA: thorfinn #1651 (cosine T18) and edward #1654 (EMA — pure eval-time change, no retraining) should land first. alphonse #1655 (OneCycleLR), nezuko #1665 (deeper), and tanjiro #1666 (smooth_l1) need one full training run each.
+2. **Drive frieren #1471 to completion** — strongest pre-merge signal (W&B val=116.34, essentially tied with merged baseline). Now sent back with rebase + p_weight=2+clip retry on new baseline. If it lands, p_weight axis is locked in.
+3. **Drive askeladd #1465 to completion** — sent back with code-commit nudge. Direction was 10% worse than merged baseline on old W&B run, but never properly tested on new bf16+accum baseline.
+4. **Drive fern #1469 to completion** — W&B result (118.77, lr=2e-3+clip) is the cleanest LR direction. Still needs code commit + SENPAI-RESULT.
+5. **Stack winners** — once the top confirmed hypotheses (bf16+accum ✓, cosine-T18, lr=2e-3, EMA, smooth_l1, deeper, OneCycleLR, p_weight=2+clip) are individually merged, build a stacked-arm combining all. Synergistic gains likely.
+6. **Research next frontier hypotheses** — invoke researcher-agent when current pipeline clears. Open axes: weight_decay sweep, attention dropout, slice_num scaling, AdamW betas, alternative positional encodings.
 
 ## Operational notes
 
-- **Cycle 6 decisions:** #1480 merged (first merge!), #1466 closed, #1631 closed, #1651/#1654/#1655 assigned.
-- **Frieren's branch** still has the p_weight=3 code only; the p_weight=2+clip W&B result (116.34) is better than the new 116.30 baseline by a sliver but needs proper code commit to be mergeable.
-- GraphQL rate limit hit during cycle-6 assignment creation — workaround: used REST API for #1654 and #1655 label additions. Rate limit should recover before next cycle.
+- **Cycle 7 decisions:** #1475 closed, #1476 closed, #1471 sent back (rebase needed), #1465 sent back (commit needed), #1665 nezuko assigned (n_layers=6), #1666 tanjiro assigned (smooth_l1).
+- **Frieren's branch (#1471)** has merge conflict from #1480 base change. Rebase instructions posted at 22:55 UTC.
 - 8/8 student pods still 1/1 Ready. Host-side harvest/kill controls fleet shutdown.
+- 6 active WIP PRs at cycle-7 close, 0 idle students. Fleet fully utilized.
 - **cruise-NaN fix is now landed** on the advisor branch (via #1480). All test_avg values will be finite going forward.

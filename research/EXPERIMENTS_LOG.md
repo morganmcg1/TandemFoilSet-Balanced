@@ -6,8 +6,26 @@ SPDX-PackageName: senpai
 
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
-Primary metric: `val_avg/mae_surf_p` (lower is better; baseline ~132).
-Test metric (`test_avg/mae_surf_p`) is structurally NaN on this branch due to a cruise-test overflow systemic to the codebase; rankings use val_avg + the three finite per-test-split metrics.
+Primary metric: `val_avg/mae_surf_p` (lower is better).
+**Active baseline (PR #1480 merged):** `val_avg/mae_surf_p=116.30`, `test_avg/mae_surf_p=104.96` (run `5wvm7na2`, bf16+grad_accum=2). The cruise-NaN `train.py:evaluate_split` workaround is now landed, so `test_avg/mae_surf_p` is finite for all future runs on this branch.
+
+---
+
+## 2026-05-12 22:55 — Cycle 7: stale_wip cleanup + 2 new assignments
+
+Post-merge of PR #1480, the 4 remaining stale_wip PRs were triaged:
+
+- **PR #1475 nezuko (wider 256/8h):** CLOSED. Direction was under-trained at val≈176 against the old baseline; against new merged baseline 116.30 the gap is ~51%. Wider-with-30-min-cap is fundamentally a training-budget bind; no path to recovery within constraints.
+- **PR #1476 tanjiro (per-field heads):** CLOSED. Direction landed at val≈137 against old baseline (~18% worse than new merged 116.30). No code pushed, no terminal SENPAI-RESULT, 4h silent. Channel-prioritization via shared backbone + per-channel loss weighting (frieren's `p_weight` direction) is the better mechanism for this axis.
+- **PR #1471 frieren (p_weight=2+clip):** SENT BACK with rebase instructions. Branch had merge conflict because #1480 modified train.py. Asked frieren to rebase, apply the redirect from cycle-3 (p_weight=2.0 + grad clip 1.0), and re-run on the new bf16+accum baseline. Acceptance bar updated to val<116.30 + no test-split regression.
+- **PR #1465 askeladd (surf_weight=30):** SENT BACK with nudge. No code committed in 4h despite a clear hypothesis. Asked askeladd to rebase against the merged base, commit the surf_weight change, and run on the new baseline.
+
+Two new assignments after closing nezuko/tanjiro:
+
+- **PR #1665 nezuko — `n_layers: 5 → 6` (deeper Transolver):** single config-field change, expected to fit in 30 min budget (~15-16 epochs at 1.2× compute) thanks to the bf16+accum throughput head-room. Tests whether one more block of slot-mixing/attention improves capacity within the existing footprint.
+- **PR #1666 tanjiro — `smooth_l1` (Huber β=1) loss replaces MSE:** addresses the eval/train mismatch (train MSE, eval MAE). Bounds gradient magnitude per element, which should help with the p-channel's long-tailed errors without per-sample reweighting (which already failed catastrophically in edward's #1466).
+
+Active in-flight after cycle 7 (6 WIP PRs): #1469 fern (lr=2e-3+clip, active), #1465 askeladd (surf_w=30, sent-back), #1471 frieren (p_w=2+clip, sent-back), #1651 thorfinn (cosine T18, new), #1654 edward (EMA weights, new), #1655 alphonse (OneCycleLR, new), #1665 nezuko (deeper, new), #1666 tanjiro (smooth_l1, new). 0 idle students.
 
 ---
 
