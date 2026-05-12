@@ -99,3 +99,46 @@ Monotonic from epoch 7 onward, one tiny spike epoch 4→5. Final epoch is the be
 - **Hypothesis confirmed pattern-wise:** the two splits predicted to benefit most from outlier capping (`val_re_rand`, `val_geom_camber_cruise`) are the two lowest absolute MAEs. The two non-high-Re-dominated splits (`val_single_in_dist`, `val_geom_camber_rc`) are the highest.
 - **vs. tanjiro PR #1454:** 111.06 (frieren) vs. 147.65 (tanjiro) on val_avg/mae_surf_p, ~25% lower. Frieren wins on a loss-function change, tanjiro on a positional encoding change. These are orthogonal — they could stack in wave 2.
 - **β sweep is a natural follow-up:** β=1.0 was a guess; values in {0.1, 0.3, 1.0, 3.0} could be tested. Lower β acts more like L1 (more aggressive outlier capping); higher β acts more like MSE.
+
+---
+
+## 2026-05-12 19:16 — PR #1455: Batch=8, lr=7.1e-4 (sqrt(2)-scaled)
+
+- **Branch:** `willowpai2g48h2-thorfinn/batch-8-lr-up`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Doubling batch size 4→8 with sqrt-scaled lr (5e-4→7.1e-4) reduces gradient noise and improves convergence at no VRAM cost. Predicted −2 to −6% on val_avg/mae_surf_p.
+
+### Result table (W&B run `2glb7y77`, student-reported)
+
+| Metric | Value | Note |
+|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 10) | **162.39** | weakest of the three completed wave-1 PRs |
+| `val_single_in_dist` surf p | (not posted per-split for val) | |
+| Test 3-split avg (ex. cruise) | 162.63 | tracks val — good gen |
+| `test_single_in_dist` surf p | 212.97 | highest test split |
+| `test_geom_camber_rc` surf p | 155.35 | |
+| `test_geom_camber_cruise` surf p | **NaN** | same scoring bug |
+| `test_re_rand` surf p | 119.56 | lowest |
+| `test_avg/mae_surf_p` (4-split) | **NaN** | merge-blocker |
+| Peak VRAM | 84.2 GB / 96 GB | room for batch=10/12 |
+| Run time | 21.7 min, 10 epochs | val still improving at last epoch |
+| Params | 0.66M | baseline architecture |
+
+### Standings after 3 completed wave-1 PRs
+
+| PR | Hypothesis | val_avg/mae_surf_p |
+|---|---|---|
+| #1452 frieren | Smooth-L1 (Huber β=1) | **111.06** |
+| #1454 tanjiro | unified-pos ref=8 | 147.65 |
+| #1455 thorfinn | batch=8, lr=7.1e-4 | 162.39 |
+
+### Decision
+
+- **Sent back to student** for (a) same one-line `data/scoring.py` NaN-safe fix as #1452/#1454 (parallel race), (b) re-run at `--epochs=15` since val was still descending at the last epoch (164.75 → 162.39 over the final 2 epochs), (c) keep `--batch_size=8 --lr=7.1e-4` to give the original hypothesis a fair training budget.
+- **Operational note:** GraphQL API rate limit was exhausted during the send-back. Comment posted and label swapped via REST; PR draft conversion deferred to next invocation (after GraphQL reset at 19:48 UTC). Student poll uses labels only (not isDraft), so thorfinn will pick up the work regardless.
+
+### Analysis
+
+- batch+lr scaling at sqrt(2) underperforms relative to Huber loss and unified-pos in the same wave. Possible explanations: (a) larger batch reduces gradient noise — but the surface loss component is computed over a tiny fraction of nodes, where averaging across more samples might *under-emphasize* surface signal; (b) lr=7.1e-4 is mostly held near peak across the 10-epoch cosine (only ~10% lower than peak at epoch 5), so the sqrt(2) scaling is essentially never compensated by anneal-late convergence.
+- Generalization is healthy — test 3-split avg (162.63) ≈ val (162.39), so the model isn't overfitting; it's just a less-good optimum than the other variants. 
+- If the 15-epoch rerun still lands far above frieren's 111, this is a clean negative for batch+lr scaling and we'd close it. Worth one more shot first.

@@ -15,7 +15,11 @@ None received. Last issue check: 2026-05-12 (post-first-review), zero open issue
 
 ## ⚠ Active infrastructure issue
 
-`data/scoring.py` `accumulate_batch` propagates NaN/Inf from a corrupt GT sample (`test_geom_camber_cruise/000020.pt`, contains `-inf` in 761 nodes of the `p` channel) into the channel-level test surface-pressure MAE — making `test_avg/mae_surf_p` come back as NaN. Discovered independently by PRs #1454 and #1452. The fix is one line (`torch.where(mask, err, 0.0)` or equivalent `nan_to_num`). Both tanjiro and frieren are now executing the fix in parallel as part of their re-runs; whichever lands first wins, the other rebases trivially. **All wave-1 results will likely have NaN `test_avg/mae_surf_p` until this lands.**
+`data/scoring.py` `accumulate_batch` propagates NaN/Inf from a corrupt GT sample (`test_geom_camber_cruise/000020.pt`, contains `-inf` in 761 nodes of the `p` channel) into the channel-level test surface-pressure MAE — making `test_avg/mae_surf_p` come back as NaN. Discovered independently by PRs #1454, #1452, and #1455. The fix is one line (`torch.where(mask, err, 0.0)` or equivalent `nan_to_num`). Three students (tanjiro, frieren, thorfinn) now executing the fix in parallel as part of their re-runs; whichever lands first wins, the others rebase trivially. **All wave-1 results will likely have NaN `test_avg/mae_surf_p` until this lands.**
+
+## ⚠ Active operational issue
+
+GraphQL API for the GH token is rate-limited (5000 / 5000 used at 19:25 UTC; resets ~19:48 UTC). Comments and label swaps work via REST. PR #1455 send-back was completed via REST (comment + label swap) but the `gh pr ready --undo` draft conversion is still pending — will retry on next invocation. Student poll only checks labels (not isDraft), so thorfinn will pick up the rerun regardless.
 
 There is also a constructor bug in `Transolver` where the `unified_pos=True` branch was a 3D-Transolver copy (`ref**3`) that the 2D forward pass never built encoding for. Tanjiro's PR also includes the train.py fix for this (switch to `ref**2`, add `forward`-side encoding, plumb `mask`). Lands together with the scoring fix.
 
@@ -36,7 +40,7 @@ The most consequential observation from inspecting `train.py`: cosine `CosineAnn
 | #1452 | frieren | `smooth-l1-loss` | Robust loss (Huber) | −3 to −10% (mostly val_re_rand) — **first result: val=111.06 (leader), test=NaN (sent back for scoring fix + 15 epochs)** |
 | #1453 | nezuko | `wider-n-hidden-192` | Width capacity | −3 to −7% |
 | #1454 | tanjiro | `unified-pos-ref8` | Positional encoding | −3 to −8% (esp. geom-OOD) — **first result: val=147.65, test=NaN (sent back for scoring fix + 15 epochs)** |
-| #1455 | thorfinn | `batch-8-lr-up` | Effective batch + sqrt-scaled lr | −2 to −6% |
+| #1455 | thorfinn | `batch-8-lr-up` | Effective batch + sqrt-scaled lr | −2 to −6% — **first result: val=162.39 (weakest of 3 done), test=NaN (sent back for scoring fix + 15 epochs)** |
 
 Coverage axes: schedule, attention granularity, loss weighting, robust loss, width, FFN ratio, positional encoding, batch+lr. Capacity along depth (`n_layers`) is intentionally left for wave 2 once wave 1 reveals which capacity dimensions actually move the metric.
 
