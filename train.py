@@ -47,6 +47,20 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Signed log1p target reparameterization (H11)
+# ---------------------------------------------------------------------------
+
+def signed_log1p(y: torch.Tensor) -> torch.Tensor:
+    """Sign-preserving log1p compression: y -> sign(y) * log(1 + |y|)."""
+    return torch.sign(y) * torch.log1p(y.abs())
+
+
+def signed_expm1(y_log: torch.Tensor) -> torch.Tensor:
+    """Exact inverse of signed_log1p: y_log -> sign(y_log) * (exp(|y_log|) - 1)."""
+    return torch.sign(y_log) * torch.expm1(y_log.abs())
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -245,7 +259,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_log = signed_log1p(y)
+            y_norm = (y_log - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             abs_err = (pred - y_norm).abs()
@@ -261,7 +276,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_log = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = signed_expm1(pred_log)
             B = y.shape[0]
             finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
             if finite_sample.any():
@@ -403,6 +419,35 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# Recompute target stats in signed-log1p space. One-time pass over the train
+# loader (cost ~30s at startup). The model learns to predict
+# (signed_log1p(y) - log_y_mean) / log_y_std and we invert before metric
+# computation in evaluate_split.
+print("Recomputing target stats in signed-log1p space...")
+_stats_start = time.time()
+with torch.no_grad():
+    _log_y_sum = torch.zeros(3, device=device, dtype=torch.float64)
+    _log_y_sq_sum = torch.zeros(3, device=device, dtype=torch.float64)
+    _n_obs = 0.0
+    for _x, _y, _is_surf, _mask in train_loader:
+        _y = _y.to(device, non_blocking=True)
+        _mask = _mask.to(device, non_blocking=True)
+        _y_log = signed_log1p(_y).to(torch.float64)
+        _m = _mask.unsqueeze(-1).to(torch.float64)
+        _log_y_sum += (_y_log * _m).sum(dim=(0, 1))
+        _log_y_sq_sum += (_y_log.pow(2) * _m).sum(dim=(0, 1))
+        _n_obs += _m.sum().item()
+    _log_y_mean = _log_y_sum / max(_n_obs, 1.0)
+    _log_y_var = _log_y_sq_sum / max(_n_obs, 1.0) - _log_y_mean.pow(2)
+    _log_y_std = _log_y_var.clamp(min=1e-8).sqrt()
+    stats["y_mean"] = _log_y_mean.to(stats["y_mean"].dtype)
+    stats["y_std"] = _log_y_std.to(stats["y_std"].dtype)
+print(
+    f"  log_y_mean = {stats['y_mean'].tolist()}\n"
+    f"  log_y_std  = {stats['y_std'].tolist()}\n"
+    f"  ({time.time() - _stats_start:.1f}s, {int(_n_obs)} valid nodes)"
+)
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -459,7 +504,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_log = signed_log1p(y)
+        y_norm = (y_log - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
 
