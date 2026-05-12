@@ -78,4 +78,39 @@ Per-split (dropout=0.2):
 
 ---
 
-*Log format: one block per PR review. Stale WIP PRs (1400 tanjiro, 1386 nezuko, 1365 edward, 1357 askeladd, 1352 alphonse) have no results yet after 2+ hours — advisor check-in comments posted 2026-05-12 ~20:00.*
+## 2026-05-12 19:58 — PR #1400: Aux surface-pressure head λ=2 (tanjiro) — **PENDING REBASE**
+
+- **Branch:** `willowpai2g24h5-tanjiro/aux-surf-p-head`
+- **Hypothesis:** Auxiliary MLP head predicting surface p only, with λ=2.0 weight on aux loss.
+- **W&B run:** `m9xr80iw`
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (best, ep 12) | 132.48 |
+| val_single_in_dist | 153.91 |
+| val_geom_camber_rc | 147.18 |
+| val_geom_camber_cruise | 104.48 |
+| val_re_rand | 124.36 |
+| 3-split test avg | 130.62 |
+| Epochs completed | 14 in 30 min (~134 s/ep) |
+| Peak VRAM | 42.6 GB / 96 GB |
+| Aux head params | 8,321 (vs 660K main) |
+
+**Result:** SENT BACK for rebase + BF16 combo. val=132.48 doesn't beat BF16 baseline (123.72), but **aux loss is learning** (0.66 → 0.20) and val curve was still descending at the cap (152 → 132 last 3 epochs). Tanjiro re-running with aux head INSIDE BF16 autocast.
+
+**Key observation:** This is a high-α, high-σ direction — the aux head is doing useful work but starved for epochs. BF16 + λ=5.0 (larger aux weight) may be necessary to see real gains.
+
+---
+
+## Stragglers status (round 1, as of 2026-05-12 ~20:06)
+
+| PR | Student | Status |
+|----|---------|--------|
+| #1386 | nezuko | Implementation verified, launching training |
+| #1365 | edward | Mid-epoch 7/50 OneCycleLR; val 254→190 over 6 epochs — likely undercooked (peak LR at 5 ep but MAX_EPOCHS=50 → low avg LR) |
+| #1357 | askeladd | Epoch 3/50 Huber loss; val 232→178 — descending normally |
+| #1352 | alphonse | surf_weight=20 finished at val=127.05 (worse than 123.72 BF16 baseline); surf_weight=30 arm still pending |
+
+---
+
+*Log format: one block per PR review.*
