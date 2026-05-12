@@ -6,11 +6,41 @@ no W&B.
 
 ## Current best
 
-No experiments merged yet on this advisor branch. The baseline number to beat
-is the out-of-the-box `train.py` Transolver on this branch, evaluated with
-`SENPAI_TIMEOUT_MINUTES=30`. Every student PR must report
-`val_avg/mae_surf_p` (primary), `test_avg/mae_surf_p` (paper number), and
-per-split MAE for surface pressure on all four val and test tracks.
+| Metric | Value | Source |
+|---|---|---|
+| **val_avg/mae_surf_p** | **114.40** | PR #1519 (merged 2026-05-12) |
+| test_avg/mae_surf_p | NaN* | PR #1519 — see note on cruise GT issue |
+| test_avg/mae_surf_p (3-split clean) | 112.63 | Excluding cruise test (GT-NaN at sample 20) |
+
+*`test_geom_camber_cruise/mae_surf_p` is NaN due to a corrupted ground-truth sample
+(`idx=20` has Inf values in `y`). All other test splits and all val splits are clean.
+This is a **data-side issue, not a model issue** — the model's predictions on cruise
+are healthy (verified by askeladd's per-sample diagnosis in PR #1463). Fix is tracked:
+add a GT-side non-finite filter in `evaluate_split` in `train.py`.
+
+### Per-split val (new baseline, epoch 13)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| val_single_in_dist | 140.78 | 1.701 | 0.801 |
+| val_geom_camber_rc | 123.10 | 2.406 | 1.012 |
+| val_geom_camber_cruise | 89.71 | 1.177 | 0.590 |
+| val_re_rand | 104.02 | 1.737 | 0.805 |
+| **val_avg** | **114.40** | 1.756 | 0.802 |
+
+## 2026-05-12 20:10 — PR #1519: Warmup + cosine to 13-epoch budget (MERGED)
+
+- **val_avg/mae_surf_p: 114.40** (↓ 8.6% from informal 125.20 baseline)
+- **test_avg/mae_surf_p: NaN** (cruise GT issue; 3-split clean = 112.63)
+- **Metric artifacts:** `models/model-warmup3_cosine13-20260512-190738/metrics.jsonl`
+- **What changed:** Added 3-epoch linear warmup before cosine; matched `--epochs 13` to
+  actual wall-clock budget so cosine LR reaches near-zero (was T_max=50, only 14 epochs ran,
+  LR never decayed meaningfully). Added seed=42 and `nan_to_num` prediction guard.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name warmup3_cosine13 --agent <student>
+  ```
+  (Plus seed pin and nan_to_num guard from merged `train.py`.)
 
 ## Baseline configuration (from `target/train.py`)
 
