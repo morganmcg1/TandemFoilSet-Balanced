@@ -24,6 +24,35 @@ Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
 
+### 2026-05-12 21:56 — PR #1584: torch.compile(model, dynamic=True) — free throughput (on top of bf16 + slice_num=128)
+
+- **val_avg/mae_surf_p:** **76.4310** (best epoch 27 of 29 completed) ✓ NEW BASELINE
+- **test_avg/mae_surf_p (4-split, bf16 eval):** 68.7604 (cruise node posinf zeroed by scoring fix — biased low; fp32 eval follow-up in progress via #1556)
+- **Test 3-split mean (excl. cruise):** 74.84
+- **Per-split val surface MAE (best epoch 27):**
+  - `val_single_in_dist`: p=99.46, Ux=1.158, Uy=0.632
+  - `val_geom_camber_rc`: p=93.02, Ux=1.700, Uy=0.750
+  - `val_geom_camber_cruise`: p=51.21, Ux=0.698, Uy=0.422
+  - `val_re_rand`: p=73.14, Ux=1.191, Uy=0.582
+- **Per-split test (bf16 eval):** test_single_in_dist=74.40, test_geom_camber_rc=82.96, test_re_rand=67.16, test_geom_camber_cruise=50.53 (bf16 inf zeroed by scoring fix)
+- **W&B run:** `t0zwgi1n`
+- **Peak GPU:** 50.78 GB | **Sec/epoch:** ~62.6s (median, epochs 3+) | **Epochs:** 29/50 (30-min cap, epoch 27 best)
+- **Model diff vs prior baseline (bf16 + slice_num=128):**
+  - `model = torch.compile(model, mode="default", dynamic=True)` immediately after `.to(device)`
+  - Everything else identical: bf16 autocast in train forward, bf16 autocast in eval forward, grad_clip_norm=1.0, slice_num=128, T_max=50
+- **Throughput:** 1.58× speedup (compile amortized over 29 epochs; 1-time ~12s overhead in epoch 1 only)
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --wandb_name willow-r4-thorfinn-compile --agent willowpai2g24h4-thorfinn
+  ```
+
+**Note on test_avg:** bf16 eval still in place (same cruise overflow zeroing as PR #1415). Frieren's #1556 (fp32 eval every N epochs) will recover the faithful 4-split test_avg on top of this baseline.
+
+**Next target:** beat val_avg/mae_surf_p = 76.4310
+
+---
+
 ### 2026-05-12 20:XX — PR #1415: bf16 mixed precision + grad_clip (on top of slice_num=128 + scoring fix)
 
 - **val_avg/mae_surf_p:** **98.7664** (best epoch 18 of 18 completed) ✓ NEW BASELINE
