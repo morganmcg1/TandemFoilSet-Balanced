@@ -37,6 +37,34 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 23:25 — PR #1693: SwiGLU FFN (tanjiro) — WIP (assigned)
+**Branch:** `charliepai2g24h3-tanjiro/swiglu-ffn` | **Status: WIP**
+
+- **Hypothesis:** Replace standard 2-layer GELU/SiLU MLP in each TransolverBlock with SwiGLU (gated linear unit) — Shazeer 2020. Used in LLaMA, PaLM, Mistral. Content-dependent feature selection via gating.
+- **Why orthogonal:** frieren #1492 tests *wider* FFN (mlp_ratio 2→4) on width axis; SwiGLU tests *structurally different* FFN at same hidden dim. Edward #1490 is width on attention. Stackable in principle with all loss/augment/scheduler work.
+- **Config:** `--use_swiglu True --use_onecycle False --ema_decay 0.0 --augment True --epochs 14` (cosine T_max=14, the proven recipe from #1495).
+- **Pass criterion:** val_avg < 103.10 AND test 4-split safe re-eval < 94.76.
+- **Predicted Δ:** −2 to −5% on val_avg. Param count ~1.0M → ~1.16M (16% more in FFN).
+- **Artifacts:** TBD
+
+---
+
+### 2026-05-12 23:20 — PR #1494 v3: FiLM on log(Re) (tanjiro) — CLOSED (regression on fair comparison)
+**Branch:** `charliepai2g24h3-tanjiro/re-film-conditioning` | **Status: CLOSED**
+
+- **Hypothesis:** Feature-wise Linear Modulation per TransolverBlock, conditioned on log(Re), gives the model an explicit route to specialize per Reynolds regime. Predicted −5 to −12% on val_avg, especially on val_re_rand split.
+- **Arm A (full stack, OneCycle ep=50 + EMA + augment + FiLM):** val_avg = **118.27** (+14.7% over baseline 103.10), test_avg = **110.02**. OneCycle still at 88% of peak LR at e13 (mismatched to 13-epoch budget) — same scheduling bug as PR #1574.
+- **Arm B (cosine T_max=14 + augment + FiLM — FAIR COMPARISON to #1495):** val_avg = **104.98** (+1.8% over baseline 103.10), test_avg = **98.59** (+4.0% over baseline 94.76).
+- **Per-split (Arm B):** single=125.67 (tie), rc=118.70 (+3.8%), cruise=78.05 (tie), **re_rand=97.51 (+3.6% worse — opposite of predicted direction!)**.
+- **Root cause (student diagnosed):** (1) `log(Re)` already at input dim 13, processed by same input MLP as coords — FiLM adds redundant route to same signal. (2) Augmentation + per-block FiLM compete on small (1499-train) dataset; FiLM gives Re-specialisation shortcut that fights augment's regularising effect. FiLM weights saturated cleanly at ~4.7 norm by e7 — conditioning IS being learned, it just doesn't add value on top of augmentation.
+- **v2 vs v3 reconciliation:** v2 headline 100.99 (no augment) was dominated by cosine-fix + rebase, NOT by FiLM itself. v3 Arm B factors that out cleanly.
+- **Why closed (not sent back):** Pre-registered pass criterion failed under the exact #1495 protocol with FiLM as the only delta. Hypothesis cleanly disproved.
+- **Bonus:** Arm A independently confirms PR #1574 OneCycleLR scheduling bug. Student's FiLM weight-norm growth diagnostic is the cleanest write-up of mis-scheduled OneCycle.
+- **Suggested follow-ups (logged, not picked up):** Drop log(Re) from input + FiLM (test info-overlap hypothesis); input-only FiLM (smaller hypothesis); wider conditioning vector (Re, AoA1, AoA2, gap, stagger).
+- **Artifacts:** `models/model-film-full-stack-v3-20260512-215615/{metrics.jsonl,metrics.yaml,test_safe_eval.{jsonl,log}}` and `models/model-film-augment-cosine-v3-20260512-223010/{metrics.jsonl,metrics.yaml,test_safe_eval.{jsonl,log}}`
+
+---
+
 ### 2026-05-12 23:08 — PR #1686: Two-stage surf_weight curriculum (thorfinn) — WIP (assigned)
 **Branch:** `charliepai2g24h3-thorfinn/two-stage-surf-weight-curriculum` | **Status: WIP**
 
