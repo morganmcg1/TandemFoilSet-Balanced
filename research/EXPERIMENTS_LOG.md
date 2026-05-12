@@ -148,3 +148,29 @@ The wins concentrate on geometry-OOD splits (single_in_dist −10.47%, geom_camb
 Practical constraint: at bs=8+bf16+n_hidden=192 the model OOMs at 94GB (≥96GB cap). Forced fallback to bs=4 which halves throughput. The wider+bs=4 config still wins, so the headline result holds.
 
 **Action**: Holding merge pending edward's #1591 landing first (bigger win). After edward merges, askeladd to rebase + retest on schedule-aligned baseline (which will have epochs=18 default). Expected: width may compound with schedule, or may plateau — that's the test.
+
+## 2026-05-12 22:30 — PR #1578: Polyak EMA at evaluation (decay=0.999, warmup=200 steps)
+- Branch: willowpai2g48h1-tanjiro/ema-eval-weights
+- Hypothesis: Polyak averaging of model weights during training; evaluate with the EMA copy. Should denoise late-training oscillation and improve generalization.
+- W&B run: `nh3l7psd` (trial-1 on PR #1391 baseline, not yet schedule-aligned)
+- Status: **CLOSED ✗ (dead end on this config — redirected as PR #1664)**
+
+| Metric | EMA eval | Baseline (#1391) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 148.92 | 133.75 | +11.3% (worse) |
+| **test_avg/mae_surf_p** | **141.87** | 121.28 | **+17.0%** (worse) |
+| Epochs completed | 17 | 17 | — |
+
+**Analysis** (student's diagnostic was excellent): Classical Polyak EMA failed for two compounding reasons:
+1. **EMA lags a still-descending model in undertrained regime.** With only 17 epochs and no schedule alignment, the model is still descending fast at termination — the EMA average sits behind the current weights, not at a flatter optimum.
+2. **Random-init contamination.** With ~3000 update steps and decay=0.999, the EMA still carries ~`0.999^3000 ≈ 5%` of the random initialization — substantial pollution. Adam-style bias correction (`ema / (1 - decay^t)`) cancels this analytically.
+
+The hypothesis is correct in principle but tested on the wrong baseline. Polyak works when late-training is in low-LR oscillation around a basin — exactly the regime that schedule-aligned baseline (PR #1591, final LR 5e-6) creates.
+
+**Action**: Closed #1578. Reassigned tanjiro to PR #1664 — bias-corrected EMA on schedule-aligned baseline.
+
+## 2026-05-12 22:45 — PR #1664 (NEW, assigned): Bias-corrected Polyak EMA on schedule-aligned baseline
+- Branch: willowpai2g48h1-tanjiro/ema-bias-corrected
+- Hypothesis: EMA failure modes from #1578 are config-specific, not fundamental. Schedule-aligned baseline gives Polyak its proper conditions (low-LR oscillation), and Adam-style bias correction (`ema / (1 - decay^t)`) cancels random-init contamination.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-12 22:10 — willow-pai2g-48h-r1, round 1 complete, round 2 in progress
+- 2026-05-12 22:45 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
 ## Current baseline (PR #1591 merged)
@@ -23,7 +23,8 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
 | tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
-| tanjiro | #1578 | ema-eval-weights | wip (new) | Assigned: Polyak EMA at eval on top of bf16 baseline. Branch conflict fixed. |
+| tanjiro | #1578 | ema-eval-weights | **CLOSED** ✗ | test 141.87 (+17.0% vs old baseline) — classical Polyak failed: (a) EMA lagged still-descending model in undertrained regime, (b) random-init contamination ~5% via 0.999^3000 |
+| tanjiro | #1664 | ema-bias-corrected | wip (new) | Assigned: Adam-style bias-corrected EMA on schedule-aligned baseline. Decay=0.999, warmup=200, eval divides by (1-decay**t). Target test < 111.98. |
 | thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
 ## Key research findings so far
@@ -40,10 +41,12 @@ All stale students (fern, frieren, thorfinn) were nudged with comments pointing 
 **Key note for askeladd**: n_hidden=192 + bs=8 + bf16 OOM'd at 94GB. Fell back to bs=4. This means the wider model can't use the bf16+batch-8 throughput advantage; its epoch budget reverts to ~14 epochs. This is an important constraint for the width hypothesis.
 
 ## Emerging round-2 hypotheses
-After edward's schedule-alignment merge lands (new baseline test ≈ 111.98), priorities:
+On the schedule-aligned baseline (test 111.98):
 - **Width × schedule**: askeladd's wider-192 → retest on schedule-aligned baseline. Wins may compound or plateau.
 - **Fourier × schedule**: nezuko's fourier-pos (val 119.70 was best round-1 val signal) → retest on new baseline.
 - **lr-warmup × schedule**: alphonse's lr=1e-3 + warmup → may stack with proper cosine decay.
+- **MLP capacity × schedule** (assigned edward #1643): mlp_ratio=2→4 quadruples FFN hidden, tests whether per-block capacity is the bottleneck on schedule-aligned baseline.
+- **Bias-corrected EMA × schedule** (assigned tanjiro #1664): Adam-style EMA correction on aligned baseline where late-training is in low-LR oscillation — gives Polyak its proper conditions.
 - **Sweep --epochs near the cliff** (16, 17, 18, 19): edward's run hit timeout end of ep 17; finer alignment could squeeze more.
 - **Width-split asymmetry**: investigate why n_hidden=192 helps in_dist/rc but hurts cruise/re_rand — may suggest depth (more layers) > width for cross-domain generalization.
 - **Deeper model (7 layers) + schedule fix**: fern's result pending — depth × low-LR may compound especially well.
