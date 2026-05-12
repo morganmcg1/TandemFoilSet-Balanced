@@ -46,6 +46,45 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 19:59 — PR #1495: AoA + NACA camber jitter v2 (thorfinn) — rebase
+**Branch:** `charliepai2g24h3-thorfinn/geometry-aoa-augmentation` | **Status: MERGED** ⭐
+
+- **Hypothesis:** Online ±0.5° AoA jitter + ±0.002 NACA camber jitter on training inputs should improve OOD camber generalization.
+- **val_avg/mae_surf_p: 103.100** (epoch 14/14) — **−8.4% vs PR #1520 baseline 112.546**.
+- **Per-split:** single=125.91, rc=114.35, **cruise=77.99** (best split, exactly as hypothesized), re_rand=94.15.
+- **Test (safe re-eval, 4-split):** single=105.14, rc=100.58, cruise=83.48 (199/200), re_rand=89.83 → **94.757**.
+- **Test (3-split proxy):** 98.520.
+- **Analysis:** Augmentation behaves as predicted on camber-OOD: cruise (M=2-4 held out) interpolates cleanly at 77.99 (best of all splits). val curve was monotone descending (244 → 195 → 183 → ... → 103). Ran with cosine T_max=14 (no OneCycleLR/EMA), so the merged baseline number 103.10 is for this specific config. Composability with OneCycleLR+EMA is untested. Thorfinn also wrote a reusable safe re-eval side script (`safe_re_eval.py`) that is now canonical for paper-facing test reporting.
+- **Artifacts:** `models/model-geom-aoa-augment-r2-20260512-190924/{metrics.jsonl,metrics.yaml,test_safe_eval.{jsonl,log},safe_re_eval.py}`
+
+---
+
+### 2026-05-12 20:02 — PR #1494: FiLM conditioning v2 (tanjiro) — SENT BACK (best raw result)
+**Branch:** `charliepai2g24h3-tanjiro/re-film-conditioning` | **Status: SENT BACK**
+
+- **Hypothesis:** FiLM (γ·h + β) per TransolverBlock conditioned on log(Re) for cross-regime generalization.
+- **val_avg/mae_surf_p: 100.987** (epoch 14/14) — best raw number this track has produced. 12.6% better than #1520, 2.1% better than current #1495 baseline.
+- **Per-split:** single=122.17, rc=112.23, cruise=76.64, **re_rand=92.90** (best split, exactly as hypothesized).
+- **Test (safe re-eval):** single=108.58, rc=99.88, cruise=63.97 (199/200), re_rand=88.70 → **90.281**.
+- **FiLM diagnostics:** Block0 weight norm 0 → 4.38, block4 0 → 2.09 over 14 epochs. Conditioning is being learned (monotonic growth). Earlier blocks acquire larger modulation. Train grad_clip_fire_rate stayed at 1.0 (max_norm=1.0 actively binding).
+- **Why sent back:** mergeStateStatus=DIRTY/CONFLICTING. Branch rebased on c7f371c (pre-#1520); missing OneCycleLR+EMA (#1520) AND augmentation (#1495). Need v3 rebase onto post-#1495 base + run two arms: (A) full stack including augmentation+OneCycleLR+EMA, (B) FiLM + augmentation cosine T_max=14 matching #1495 setup.
+- **Artifacts:** `models/model-re-film-conditioning-v2-20260512-191851/{metrics.jsonl,metrics.yaml,test_safe_eval.log}`
+
+---
+
+### 2026-05-12 19:58 — PR #1488: Decoupled per-channel heads + surf_weight_p=20 (askeladd)
+**Branch:** `charliepai2g24h3-askeladd/decoupled-channel-heads` | **Status: SENT BACK**
+
+- **Hypothesis:** Replace shared mlp2 with three independent linear heads (Ux, Uy, p) + per-channel surface weights `[10, 10, 20]` to amplify pressure gradient signal.
+- **val_avg/mae_surf_p: 132.340** (epoch 13/14) — 28% WORSE than current baseline 103.10.
+- **Per-split:** single=158.49, rc=152.18, cruise=99.93, re_rand=118.75.
+- **Test (3-split proxy):** ~119.81. Cruise NaN per usual.
+- **Analysis:** Ran on pre-#1491 base (no grad_clip+wd, no OneCycleLR+EMA, no augmentation). Cosine T_max=50 mismatch caused noisy val curve (oscillating around minimum: 202 → 152 → 132 → 163). Architecture itself (decoupled heads, −16K params from removing mlp2) is fine; the bad result is the missing optimization stack + scheduler mismatch, not the head decoupling. Askeladd correctly identified the literal /3 normalization in instructions would have given effective `[3.33, 3.33, 6.67]` weights and made the right judgment call to drop /3 — implementation was `[10, 10, 20]` as intended. Also included a non-finite-y pre-filter in evaluate_split (parallel to thorfinn's safe re-eval).
+- **Why sent back:** Need rebase + re-run with full merged stack (two arms: A=full stack, B=cosine T_max=14 matching #1495). Behavior of decoupled heads cannot be assessed until the optimization stack is matched.
+- **Artifacts:** `models/model-charliepai2g24h3-askeladd-decoupled-heads-surf-p20-20260512-190233/{metrics.jsonl,metrics.yaml}`
+
+---
+
 ## Round 1 — broad coverage (assigned 2026-05-12)
 
 Hypotheses sourced from `/research/RESEARCH_IDEAS_2026-05-12_18:00.md`.
