@@ -1,5 +1,53 @@
 # SENPAI Research Results
 
+## 2026-05-12 23:10 — PR #1485 (round 2): slice_num 64 → 128, rebased on chan_w+warmup+lr=1e-3
+
+- Branch: `charliepai2g24h2-nezuko/slice-num-128-stacked`
+- Hypothesis: Slice_num=128 finer physics-token resolution compounds with chan_w+warmup stack
+- Artifacts: `models/model-charliepai2g24h2-nezuko-slice-num-128-stacked-20260512-215215/metrics.jsonl`
+
+| Split | mae_surf_p (slice_num=128) | Floor #1482 (slice_num=64) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 197.96 | 162.05 | +22.2% |
+| val_geom_camber_rc     | 177.32 | 137.15 | +29.3% |
+| val_geom_camber_cruise | 123.28 | 101.34 | +21.6% |
+| val_re_rand            | 144.12 | 111.83 | +28.9% |
+| **val_avg**            | **160.67** | **128.09** | **+25.4%** |
+| test_avg               | NaN    | NaN    | — |
+
+**Config:** slice_num=128, chan_w=[1,1,5], lr=1e-3, 3-ep warmup + cosine(T_max=47), bs=4, wd=1e-4. 11 epochs in 30 min (timeout). Peak VRAM 54.51 GB (vs 42.1 GB at slice_num=64, +30%).
+
+**Decision: CLOSED — +25.4% regression on stacked floor. Worsened across all splits. Student recommended close.**
+
+**Analysis:** Doubled slice_num doubles attention cost in `Slice_Attn` (O(N × slice_num) per head × layers): VRAM +30% and epochs drop from ~14 to ~11. Warmup consumes 3 of 11 epochs at reduced LR — a larger fraction than at slice_num=64. Model still descending at epoch 10 but timeout kills the run before it can compound. Root cause is wall-clock budget, not capacity inadequacy. **Revisit only if** fern's AMP (#1477) doubles throughput — slice_num=128 at bf16 would fit in ~27 GB and allow ~20 epochs in 30 min.
+
+---
+
+## 2026-05-12 23:10 — PR #1536: NaN guard + clean floor rerun (askeladd, sent back)
+
+- Branch: `charliepai2g24h2-askeladd/scoring-nan-guard`
+- Hypothesis: One-line train.py guard zeros out non-finite GT samples before sq_err, fixing `0×NaN` propagation
+- Artifacts: `models/model-charliepai2g24h2-askeladd-scoring-nan-guard-20260512-221647/metrics.jsonl` (and -200506, -205715)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | test_geom_camber_cruise |
+|---|---:|---:|---:|
+| -200506 | 138.52 | 126.66 | 93.66 |
+| -205715 | 141.41 | 130.16 | 86.55 |
+| -221647 | 144.41 | **133.04** | 94.41 |
+| **mean ± σ** | **141.4 ± 3.0** | **130.0 ± 3.2** | **91.5 ± 4.3** |
+| **Floor #1482** | **128.09** | NaN | NaN |
+
+**Config:** chan_w=[1,1,5] (from branch default), lr=5e-4 (NOT 1e-3), cosine-only (NO warmup), bs=4. 14 epochs (timeout).
+
+**Decision: SENT BACK — two blockers.**
+
+1. **Code not pushed**: Student posted results but didn't commit NaN guard code — no `isfinite` in pushed train.py.
+2. **Branch pre-warmup reversion**: Branch base is pre-#1482. Merging would REVERT the warmup scheduler (val=141.4 mean confirms this — matches cosine-only at lr=5e-4 config, not lr=1e-3+warmup floor).
+
+**Key finding:** test_avg=133.04 and test_geom_camber_cruise=94.41 are the **first finite test metrics** on this branch. NaN guard logic is correct. Askeladd needs to rebase on current advisor branch, push the NaN guard code, and re-run with `--lr 1e-3` to confirm val_avg ~128 (within noise of floor) with clean test_avg.
+
+---
+
 ## 2026-05-12 21:20 — PR #1526: Intermediate model scaling n_hidden=224, n_layers=7, n_head=8 (~2.67M)
 
 - Branch: `charliepai2g24h2-edward/model-224-7-8`
