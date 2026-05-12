@@ -3,67 +3,80 @@
 - **Date:** 2026-05-12
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
-- **Latest direction from human team:** none yet — controlled 24h/48h Charlie-vs-Willow
-  logging ablation. Local JSONL metrics only.
+- **Latest direction from human team:** none yet — controlled 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
 - **Per-run wall-clock cap:** 30 minutes (`SENPAI_TIMEOUT_MINUTES=30`).
 
-## Current focus
+## Current baseline
 
-Round 1 — seeding eight diverse, high-leverage single-variable hypotheses on
-the stock Transolver baseline. The primary ranking metric is
-`val_avg/mae_surf_p` and the test-time metric is `test_avg/mae_surf_p`.
+**`val_avg/mae_surf_p` = 128.127** (n_layers=6, mlp_ratio=4, epoch 12, PR #1392)
 
-Hypotheses span five distinct axes so each result is informative regardless of
-sign:
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 159.746 |
+| val_geom_camber_rc | 136.513 |
+| val_geom_camber_cruise | 102.432 |
+| val_re_rand | 113.819 |
+| **val_avg** | **128.127** |
 
-| Axis | Idea | Student |
-|------|------|---------|
-| Loss alignment | L1 (MAE) loss in normalized space — directly optimize the ranking metric | alphonse |
-| Generalization | EMA-of-weights for validation/test evaluation | askeladd |
-| Width capacity | `n_hidden` 128 → 192 | edward |
-| Physics attention bottleneck | `slice_num` 64 → 128 | fern |
-| Surface focus | `surf_weight` 10 → 25 | frieren |
-| Depth capacity | `n_layers` 5 → 8 | nezuko |
-| LR schedule | Linear warmup (3 ep) + cosine, peak `lr=1e-3` | tanjiro |
-| MLP capacity | `mlp_ratio` 2 → 4 | thorfinn |
+Key: `val_single_in_dist` (159.7) and `val_geom_camber_rc` (136.5) are the hardest splits. Cruise (102.4) and re_rand (113.8) are relatively easier.
 
-## Why these eight
+## Round 1 outcomes (complete)
 
-The 30-minute per-run cap rewards cheap, single-knob changes that produce a
-clear val signal in 4–8 epochs. Splitting the round across loss / generalization
-/ capacity / schedule / architecture gives us the most information per GPU
-hour, and avoids "two-of-the-same-flavor" outcomes where one regression refutes
-multiple hypotheses at once. Each PR tests **one** change vs. stock baseline.
+| Axis | Student | Result |
+|------|---------|--------|
+| MLP capacity | thorfinn (mlp_ratio=4) | **MERGED** −5.0% → 141.356 |
+| Depth capacity | nezuko (n_layers=6) | **MERGED** −9.4% → 128.127 |
+| Width capacity | edward (n_hidden=192) | CLOSED: −6.3% worse (slow/epoch) |
+| Depth capacity | nezuko (n_layers=8) | SENT BACK: too slow/epoch |
+| Surface focus | frieren (surf_weight=25) | SENT BACK: rerun on new arch |
+| LR schedule | tanjiro (warmup+lr=1e-3) | SENT BACK: rerun with T_max fix |
+| Channel weights | edward (p×3) | CLOSED: 18.8% worse |
+| EMA eval | askeladd | CLOSED: stale draft (no results) |
+| L1 loss | alphonse | WIP (#1358) |
+| slice_num=128 | fern | WIP (#1370) |
+| Fourier features | thorfinn | WIP (#1525) |
 
-## Potential next directions
+## Active experiments (in-flight)
 
-After round 1 we will know:
+| Student | PR | Hypothesis | Status |
+|---------|-----|------------|--------|
+| alphonse | #1358 | L1 (MAE) loss in normalized space | WIP |
+| fern | #1370 | slice_num 64 → 128 | WIP |
+| thorfinn | #1525 | Fourier positional features (x,z), L=4 | WIP |
+| frieren | #1384 | surf_weight 10 → 25 (rebase+rerun) | Sent back |
+| tanjiro | #1401 | warmup+lr=1e-3, T_max=15 (rebase+rerun) | Sent back |
+| edward | #1562 | n_layers 6 → 7 (depth sweet spot) | New assignment |
+| askeladd | #1563 | EMA weights (decay=0.999) for val/test | New assignment |
 
-1. Whether the baseline is undersized (width vs. depth vs. mlp_ratio).
-2. Whether the loss/schedule is leaving improvement on the table (L1, warmup,
-   surface weight).
-3. Whether cheap inference-time tricks (EMA) help generalization.
+## Research themes emerging from round 1
 
-Probable round-2 directions, conditional on round-1 signal:
+1. **Depth scaling works well** (−9.4% from 5→6). n_layers=7 now being tested to find sweet spot.
+2. **Width scaling loses at fixed wall-clock** (slower per-epoch kills it). Avoid width-only expansions.
+3. **LR schedule has untapped potential** — warmup+1e-3 on old arch got within 1.4% of new baseline. T_max=15 rerun likely to win.
+4. **surf_weight interaction with arch** — surf_weight=25 needs clean test on new baseline.
+5. **Orthogonal wins can stack** — mlp_ratio and n_layers are independent; so are EMA, LR schedule, surf_weight.
 
-- **Compound winners.** Stack the orthogonal winners (e.g. L1 loss + EMA +
-  larger slice_num) into a single follow-up.
-- **Input feature engineering.** Fourier positional features on `(x,z)`,
-  `unified_pos=True`, log(Re) embedding into slice token conditioning.
-- **Loss reformulation.** Channel-aware (down-weight Ux/Uy vol, up-weight p
-  surf), Huber on p, gradient-smoothness regularizer.
-- **Optimization.** EMA-only, SWA at end of training, gradient clipping, lr
-  re-tuning if width/depth wins.
-- **Augmentation / sampling.** Mesh-coarsening as augmentation, mesh-size-aware
-  batching to cut padding waste.
-- **Bigger architecture swings.** If we hit a plateau, move to a different
-  backbone family (GNO, PointNet++, GraphCast-style message passing, or a
-  hybrid GNN-attention).
+## Open questions being tested now
 
-## Open questions
+- Does n_layers=7 improve further over 6, or is 6 the sweet spot?
+- Does EMA weight averaging reduce val noise at these small split sizes (100 samples)?
+- What does L1 (alphonse) vs MSE loss do to surface pressure convergence?
+- Does slice_num=128 help the cruise and RC camber splits which have dense meshes?
+- Do Fourier positional features improve OOD geometry generalization?
+- Does warmup+lr=1e-3 with correct T_max (15 instead of 50) beat baseline?
+- Does surf_weight=25 on the new arch improve surface pressure focus?
 
-- What does 30 minutes of training actually buy in epochs at baseline? (Round 1
-  will answer.)
-- Is the loss/metric mismatch (MSE-train / MAE-eval) costing >2% on the primary
-  metric?
-- Are 64 slices enough to model 242K-node cruise meshes?
+## Probable round 3 directions (conditional on round 2 signal)
+
+- **Compound winners**: Stack orthogonal wins (e.g. EMA + correct LR schedule + depth)
+- **Input features**: unified_pos=True, log(Re) embedding into slice conditioning
+- **Loss reformulation**: L1 in physical space (not normalized), Huber on p, channel-aware weighting in physical units
+- **Longer training**: If we could extend to 60-90 min, most models were still improving at cutoff
+- **n_layers=8 revisit**: With correct LR schedule + warmup, epoch-8 oscillations from n_layers=8 may stabilize
+- **Architecture swings**: If plateau after round 2, try GNO, PointNet++, or GNN-attention hybrid
+
+## Key constraints
+
+- 30 min / run cap is hard; ~12 epochs at baseline speed (~156 s/epoch for n_layers=6)
+- test_avg/mae_surf_p is always NaN due to scorer bug (GT sample 20 in test_geom_camber_cruise has -inf). Use val_avg/mae_surf_p exclusively for ranking.
+- frieren's train.py NaN-fix (skip non-finite GT in evaluate_split) produces clean test metrics — should be adopted when frieren's rerun PR lands.
