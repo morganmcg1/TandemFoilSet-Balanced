@@ -236,19 +236,41 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Defensive: a sample in test_geom_camber_cruise has non-finite y
+            # (inf in pressure). accumulate_batch intends to skip such samples
+            # but its mask-multiplied sum is broken by 0*inf=nan whenever the
+            # batch mixes finite and non-finite samples. Zero out the bad
+            # sample's contribution here so both loss and MAE stay finite.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_finite_per_sample.unsqueeze(-1)
+            y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            m_real = mask.unsqueeze(-1).float()
+            n_real = m_real.sum(dim=1, keepdim=True).clamp(min=1.0)
+            y_mu = (y_norm * m_real).sum(dim=1, keepdim=True) / n_real
+            y_var = ((y_norm - y_mu) ** 2 * m_real).sum(dim=1, keepdim=True) / n_real
+            y_scale = y_var.sqrt().clamp(min=1e-4)
+
+            res = (pred - y_norm) / y_scale
+            delta = 1.0
+            abs_res = res.abs()
+            huber = torch.where(
+                abs_res <= delta,
+                0.5 * res ** 2,
+                delta * (abs_res - 0.5 * delta),
+            )
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (huber * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (huber * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -476,6 +498,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_yscale_mean = epoch_yscale_min = 0.0
+    epoch_clip_frac = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -487,27 +511,60 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+
+        # Per-sample, per-channel scale normalization (real nodes only,
+        # detached from autograd so the scaling doesn't carry gradient).
+        with torch.no_grad():
+            m_real = mask.unsqueeze(-1).float()
+            n_real = m_real.sum(dim=1, keepdim=True).clamp(min=1.0)
+            y_mu = (y_norm * m_real).sum(dim=1, keepdim=True) / n_real
+            y_var = ((y_norm - y_mu) ** 2 * m_real).sum(dim=1, keepdim=True) / n_real
+            y_scale = y_var.sqrt().clamp(min=1e-4)
+
+        res = (pred - y_norm) / y_scale
+        delta = 1.0
+        abs_res = res.abs()
+        huber = torch.where(
+            abs_res <= delta,
+            0.5 * res ** 2,
+            delta * (abs_res - 0.5 * delta),
+        )
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (huber * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+
+        with torch.no_grad():
+            real_3d = mask.unsqueeze(-1).expand_as(abs_res)
+            clip_frac = ((abs_res > delta) & real_3d).float().sum() / real_3d.float().sum().clamp(min=1)
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/y_scale_mean": y_scale.mean().item(),
+            "train/y_scale_min": y_scale.min().item(),
+            "train/clip_frac": clip_frac.item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_yscale_mean += y_scale.mean().item()
+        epoch_yscale_min += y_scale.min().item()
+        epoch_clip_frac += clip_frac.item()
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_yscale_mean /= max(n_batches, 1)
+    epoch_yscale_min /= max(n_batches, 1)
+    epoch_clip_frac /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -523,6 +580,9 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/y_scale_mean_epoch": epoch_yscale_mean,
+        "train/y_scale_min_epoch": epoch_yscale_min,
+        "train/clip_frac_epoch": epoch_clip_frac,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
