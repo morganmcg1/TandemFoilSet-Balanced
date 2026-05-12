@@ -48,6 +48,47 @@ Per-split test surface-p MAE (3 of 4 clean):
 
 ---
 
+## 2026-05-12 21:00 — PR #1500: n_hidden 128 → 256, n_head 4 → 8 (CLOSED — budget failure)
+
+- **Branch:** `willowpai2g48h4-frieren/larger-hidden-dim` (closed)
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** `ocxqv6a9` (best), `nnjrx4p3` (replicate)
+- **Hypothesis:** Doubling hidden dimension from 128→256 and n_head 4→8 quadruples attention capacity and doubles MLP capacity, targeting model capacity as the bottleneck.
+
+### Results
+
+| Metric | Run `ocxqv6a9` | Run `nnjrx4p3` |
+|--------|---------------|---------------|
+| `val_avg/mae_surf_p` | **158.7552** | 163.2345 |
+| Best epoch | 8 / 50 | 8 / 50 |
+| Training time | 33.1 min | 33.4 min |
+| n_params | 2.54M | 2.54M |
+| Peak VRAM | 42.0 GB | ~42 GB |
+
+Per-split val (best run `ocxqv6a9`):
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|-------|-----------|------------|------------|
+| `val_single_in_dist` | 185.92 | 2.27 | 0.99 |
+| `val_geom_camber_rc` | 178.98 | 3.37 | 1.29 |
+| `val_geom_camber_cruise` | 121.34 | 1.81 | 0.76 |
+| `val_re_rand` | 148.79 | 2.73 | 1.01 |
+| **val_avg** | **158.76** | 2.54 | 1.01 |
+
+### Analysis and Conclusions
+
+**Closed — budget failure, not a model quality signal.** val_avg=158.76 vs baseline 119.30 (+33%), but this is entirely because the model only ran 8 of 50 epochs at 3.7 min/epoch vs the expected 0.85 min/epoch. Training loss was still descending monotonically at cap (val 240→168→159 over epochs 1→5→8).
+
+**Critical diagnostics (will inform future experiments):**
+1. **Wall-clock 4× slower than predicted** — slice-attention temporaries (`fx_mid`, `slice_weights`, `bhnc/bhng` einsum) dominate both VRAM and compute at N=242K nodes. Not captured in `[B,N,hidden]×layers` activation estimate.
+2. **VRAM 42 GB vs predicted 5 GB** — off by ~8×; the dominant term is attention intermediates, not activations.
+3. **Params 2.54M not 9.4M** — PhysicsAttention keeps `to_q/k/v` at `dim_head→dim_head`, so param count scales ~3·dim² not ~4·dim².
+4. **Test cruise NaN is prediction overflow**, not GT corruption — different cause from #1502/#1528. The ~epoch-8 undertrained model overflows fp32 on cruise pressure at large N.
+
+**Fix:** BF16/AMP would roughly halve VRAM and speed up forward pass ~1.5×, allowing n_hidden=256 to reach ~20 epochs in 30 min. Assigned to frieren as PR #1559.
+
+---
+
 ## 2026-05-12 20:30 — PR #1528: BIVW + zero-init surface correction head (MERGED)
 
 - **Branch:** `willowpai2g48h4-thorfinn/surf-head-on-bivw` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
