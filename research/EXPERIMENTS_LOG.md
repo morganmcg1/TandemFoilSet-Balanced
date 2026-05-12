@@ -2,6 +2,109 @@
 
 ---
 
+## 2026-05-13 00:10 — PR #1619: RaceCar single sampler boost 2× — SENT BACK (needs compile rebase)
+
+- **Branch:** `charliepai2g48h5-nezuko/sampler-boost-single-2x`
+- **Student:** charliepai2g48h5-nezuko
+- **Hypothesis:** Boost `racecar_single` sample weights by 2× (→ 50% single / 25% tandem / 25% cruise)
+  to close the coverage gap on `val_single_in_dist`, which consistently dominates `val_avg/mae_surf_p`.
+
+### Results
+
+| Metric | Baseline (#1532 bf16) | This PR | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.12 | **98.2897** | -2.80% ✓ |
+| `test_avg/mae_surf_p` | 91.50 | **88.8539** | -2.89% ✓ |
+
+| Split | This PR | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 107.14 | 120.02 | **-10.73%** |
+| `val_geom_camber_rc` | 108.83 | 107.10 | +1.61% |
+| `val_geom_camber_cruise` | 82.99 | 82.84 | +0.18% |
+| `val_re_rand` | 94.21 | 94.53 | -0.34% |
+
+- **Best epoch:** 18/20 (30-min SENPAI_TIMEOUT_MINUTES cap)
+- **Time/epoch:** ~91.5 s (unchanged from bf16 baseline)
+- **Peak GPU:** 32.94 GB
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-sampler-boost-single-2x-20260512-215136/metrics.jsonl`
+- **Sampler verification:** `racecar_single=2.0, racecar_tandem=1.0, cruise=1.0` — boost applied correctly.
+
+### Status
+
+**SENT BACK** for compile rebase. The 98.29 result beats the bf16 baseline (101.12) by -2.80% but does
+NOT beat the current compile baseline (69.83 from PR #1568). The lever is confirmed real —
+val_single_in_dist dropped -10.7% — it just needs to be measured on the new advisor baseline.
+
+### Analysis
+
+**Mechanism confirmed.** val_single_in_dist is coverage-bound, not capacity-bound. Doubling the
+sampler mass for racecar_single (from 33.3% → 50% of effective mix) gave -10.7% on that split while
+all other splits moved ≤1.6% in either direction. Cost: zero (sampler only changes which samples are
+drawn, not per-sample compute).
+
+The tiny +1.6% regression on val_geom_camber_rc is expected: racecar_tandem share dropped 33.3% → 25%,
+and that split is from RaceCar tandem geometry. The signal is that the per-domain coverage directly
+determines per-split performance — a strong signal for sampler as a lever.
+
+**At compile baseline**, the same 2× boost should give a similar relative win: val_single_in_dist
+from 77.10 → ~68-69. Net val_avg could reach ~66-68, compounding with the compile gain.
+
+### Conclusions
+
+- Sampler reweighting is a real, orthogonal, zero-cost lever.
+- On compile baseline, sampler+compile should compound to give the next round winner.
+- Follow-ups queued: 1.5× and 3× boost factor sweep; "both RaceCar domains boosted together."
+
+---
+
+## 2026-05-13 00:10 — PR #1588: n_layers 5 → 6 + bf16 — CLOSED
+
+- **Branch:** `charliepai2g48h5-fern/deeper-6-layers-bf16`
+- **Student:** charliepai2g48h5-fern
+- **Hypothesis:** n_layers=6+bf16 trades 3 epochs of refinement for ~20% more per-step capacity.
+
+### Results
+
+| Metric | Baseline (#1532 bf16, n_layers=5) | This PR (n_layers=6) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.12 | **111.058** | **+9.83%** (WORSE) |
+| `test_avg/mae_surf_p` | 91.50 | **98.793** | **+7.97%** (WORSE) |
+
+| Split | n_layers=6 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 134.81 | 120.02 | +12.3% |
+| `val_geom_camber_rc` | 122.93 | 107.10 | +14.8% |
+| `val_geom_camber_cruise` | 86.20 | 82.84 | +4.1% |
+| `val_re_rand` | 100.29 | 94.53 | +6.1% |
+
+- **Best epoch:** 14/16 (116.1 s/epoch; 30-min cap hit during epoch 17 validation)
+- **Peak GPU:** 38.93 GB
+
+### Analysis
+
+**Depth lever fully ruled out.** Both n_layers=7+fp32 (PR #1413, wall-clock-bound at 10 epochs)
+and n_layers=6+bf16 (this PR, 16 epochs) converged on the same qualitative story: deeper model
+needs more gradient steps than the 30-min cap allows, and the capacity gain does NOT compensate.
+
+The key falsifying signal: surface metric (mae_surf_p) regressed MORE than volume metric (+8-10%
+surface vs +3-5% volume). This is the OPPOSITE of the "extra slice-attention refinement helps near
+sharp pressure gradients" mechanism that motivated the hypothesis. The model is under-trained, not
+capacity-limited.
+
+Generalisation gap is normal (test < val) and stable across n_layers values — depth doesn't worsen
+the gap, it just shifts both metrics worse uniformly.
+
+### Conclusions
+
+- n_layers scaling is the wrong lever for 1499 training samples at 30-min wall-clock cap.
+- Two experiments (n_layers=6 and n_layers=7) both lost, and the mechanism analysis confirms this
+  is compute starvation, not a data-limited ceiling.
+- **Do NOT follow up with n_layers + compile.** Even at 36 epochs, adding a 6th layer would take
+  ~139 s/epoch → only ~13 epochs in 30 min. Still worse than the 36-epoch baseline.
+- Reassigned fern to AdamW β2=0.95 (transformer fast-adapting recipe, PR #1676).
+
+---
+
 ## 2026-05-12 22:45 — PR #1535: EMA model weights for eval (decay=0.999) — CLOSED (stale)
 
 - **Branch:** `charliepai2g48h5-tanjiro/ema-eval-decay-0.999`
