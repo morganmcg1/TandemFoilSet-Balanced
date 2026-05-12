@@ -1,46 +1,45 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12
+- **Date:** 2026-05-12 19:00
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2)
-- **Idle students:** 0/8 after round-1 assignments
 - **Most recent human researcher direction:** none on this branch
 
-## Current research focus
+## Current floor
 
-This is a fresh-track round-1 launch. No prior experiments on this advisor branch — the first round establishes which lever (loss, optimization, capacity, training-efficiency, augmentation) has the largest impact on `val_avg/mae_surf_p` for the Transolver baseline on TandemFoilSet.
+**val_avg/mae_surf_p = 143.15** (PR #1486, merged)  
+Config: bs=8/lr=7e-4/baseline-model, 14 epochs in 30 min (timeout-cut, still improving)  
+Note: floor was set by a fallback run (bs=16 OOMed) — true bs=4 baseline value unknown.
 
-Hard constraints: each training execution capped at 30 min wall clock. Local JSONL metrics only — no W&B/wandb experiment logging. 1 GPU per student, 96 GB VRAM (heavily underutilized at the bs=4 baseline).
+**Known test NaN bug:** `test_geom_camber_cruise/000020.pt` has NaN p-channel GT. The `0 * NaN = NaN` mask propagation in `data/scoring.py` makes `test_avg/mae_surf_p` NaN for all experiments. Val metrics are clean (4 splits all finite). Ranking on `val_avg/mae_surf_p` is unaffected.
 
-## Round-1 portfolio (assigned 2026-05-12)
+## Active experiments (WIP)
 
-Eight complementary hypotheses spanning five levers. Each is intentionally isolated so a winning result attributes cleanly to a single mechanism.
+| PR | Student | Hypothesis | Lever |
+|---|---|---|---|
+| #1464 | alphonse | Per-channel loss weighting (pressure ×5) | Loss alignment |
+| #1468 | askeladd | surf_weight 10 → 30 | Loss alignment |
+| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency |
+| #1482 | frieren | 3-epoch warmup + peak lr=1e-3 + cosine | Optimization |
+| #1485 | nezuko | slice_num 64 → 128 | Physics-token resolution |
+| #1489 | thorfinn | AoA-sign flip augmentation (50% prob) | OOD geometry generalization |
+| #1524 | tanjiro | Gradient accumulation (accum=4, eff_bs=16) | Gradient quality |
+| #1526 | edward | Model scaling: n_hidden=224, n_layers=7 (~3.4M) | Capacity |
 
-| Student | Hypothesis | Lever |
-|---|---|---|
-| alphonse | per-channel loss weighting (p × 5, Ux/Uy × 1) | loss alignment with metric |
-| askeladd | surf_weight 10 → 30 | loss alignment with metric |
-| edward | larger Transolver (n_hidden=256, n_layers=8, n_head=8) | capacity scaling |
-| fern | AMP bf16 + gradient clipping (max_norm=1.0) | training efficiency |
-| frieren | 3-epoch linear warmup + peak lr=1e-3 | optimization trajectory |
-| nezuko | slice_num 64 → 128 | physics-token resolution |
-| tanjiro | batch_size 4 → 16 + scaled lr=1e-3 | training efficiency / gradient noise |
-| thorfinn | AoA-sign flip augmentation (50% prob, raceCar + cruise) | OOD geometry generalization |
+## Key findings from round 1 (first completions)
 
-## Potential next research directions (round 2 candidates)
+1. **pad_collate is the memory bottleneck for batch scaling** — bs=8 peaks at 84 GB; bs=16 OOMs. Gradient accumulation is the correct way to test effective batch scaling.
+2. **256-8-8 doesn't fit at bs=4** — activation memory fills 94 GB. Must use bs=2 or AMP to try the full-size model.
+3. **Test NaN bug** — `test_geom_camber_cruise/000020.pt` has corrupt p GT. Needs fix in scoring or data.
 
-- Stack the round-1 winners (orthogonal levers should compound: e.g. AMP + warmup + channel weighting).
-- Dual surface/volume output heads (AB-UPT style, Alkin et al. 2025) — only if metric alignment hasn't already saturated.
-- Fourier positional encoding for (x, z) before preprocess MLP (FNO / NeRF-style).
-- Surface-only loss as a discriminating diagnostic if surf_weight monotonically improves results.
-- Larger slice_num (192 / 256) if H6 (slice 128) is the best round-1 lever.
-- Per-domain loss reweighting if val_geom_camber_cruise and val_geom_camber_rc errors diverge.
-- Huber loss for the high-Re outliers (per-sample y std spans 10x within each split).
-- Random horizontal-flip augmentation if AoA flip pays off.
+## Potential next research directions (round 3 candidates)
 
-## Notes
-
-- Baseline (`train.py` defaults) records `val_avg/mae_surf_p` but no measured floor exists on this branch yet — first terminal `SENPAI-RESULT` defines the floor.
-- Researcher-agent ideas log: `research/RESEARCH_IDEAS_2026-05-12_initial.md`.
+- **Stack round-1 winners**: AMP + warmup + channel weighting should compound if orthogonal.
+- If AMP wins: re-attempt 256-8-8 at bs=4 with bf16 (halves activation memory).
+- **NaN guard fix**: add `nan_to_num` or sample-skip in `evaluate_split` for clean test metrics.
+- **Sort-by-size sampler**: batch similar mesh sizes to reduce padding waste (frees VRAM headroom).
+- Dual surface/volume output heads (AB-UPT style) — if loss alignment levers are exhausted.
+- Fourier positional encoding of (x, z).
+- surf_weight > 30 if askeladd's result wins cleanly.
+- Larger slice_num (192/256) if nezuko (128) wins cleanly.
 </content>
-</invoke>
