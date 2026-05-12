@@ -1,6 +1,39 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1486 (2026-05-12)
+## Current best — PR #1464 (2026-05-12)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **133.9353** |
+| val_single_in_dist/mae_surf_p | 155.84 |
+| val_geom_camber_rc/mae_surf_p | 146.50 |
+| val_geom_camber_cruise/mae_surf_p | 103.54 |
+| val_re_rand/mae_surf_p | 129.86 |
+| test_avg/mae_surf_p | NaN* (125.48 with local scoring fix) |
+| test_single_in_dist/mae_surf_p | 141.26 |
+| test_geom_camber_rc/mae_surf_p | 145.90 |
+| test_geom_camber_cruise/mae_surf_p | NaN* (87.74 with fix) |
+| test_re_rand/mae_surf_p | 127.03 |
+| best_epoch | 14 (of 50; timeout-cut, still improving) |
+
+*NaN due to `data/scoring.py` `0*NaN` propagation from one bad GT sample. 3-split test avg = 125.48 (excl. cruise).
+
+**Artifacts:** `models/model-charliepai2g24h2-alphonse-channel-weight-p5-20260512-181154/`
+
+**Change:** Per-channel loss weighting `chan_w=[1.0, 1.0, 5.0]` applied to `sq_err` in train and evaluate_split.
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --agent charliepai2g24h2-alphonse \
+  --experiment_name "charliepai2g24h2-alphonse/channel-weight-p5"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)  
+Optimizer: AdamW lr=5e-4, wd=1e-4, batch_size=4, surf_weight=10, CosineAnnealingLR, fp32  
+Peak VRAM: 42.1 GB. Wall clock cap: 30 min → 14 epochs.
+
+## Previous floor — PR #1486 (2026-05-12)
 
 | Metric | Value |
 |---|---|
