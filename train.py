@@ -218,12 +218,13 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, ch_surf_w, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
-    ``loss`` is the normalized-space loss used for training monitoring; the MAE
-    channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``loss`` is the normalized-space loss used for training monitoring (matches
+    the per-channel weighted training loss); the MAE channels are in the
+    original target space and accumulated per organizer ``score.py`` (float64,
+    non-finite samples skipped).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -237,6 +238,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -249,7 +260,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * surf_mask.unsqueeze(-1) * ch_surf_w[None, None, :]).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -262,7 +273,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -312,6 +323,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_weight_p": cfg.surf_weight_p,
+        "surf_weight_uv": cfg.surf_weight_uv,
         "epochs_configured": cfg.epochs,
         "grad_clip": cfg.grad_clip,
         "use_onecycle": cfg.use_onecycle,
@@ -359,7 +372,9 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-3
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 10.0          # legacy scalar, kept for config/summary
+    surf_weight_p: float = 20.0        # surface weight for pressure channel
+    surf_weight_uv: float = 10.0       # surface weight for Ux/Uy channels
     epochs: int = 50
     grad_clip: float = 1.0
     use_onecycle: bool = True  # OneCycleLR instead of CosineAnnealingLR
@@ -404,6 +419,11 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+ch_surf_w = torch.tensor(
+    [cfg.surf_weight_uv, cfg.surf_weight_uv, cfg.surf_weight_p],
+    dtype=torch.float32, device=device,
+)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -527,8 +547,10 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        surf_loss = (
+            sq_err * surf_mask.unsqueeze(-1) * ch_surf_w[None, None, :]
+        ).sum() / surf_mask.sum().clamp(min=1)
+        loss = vol_loss + surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -559,7 +581,7 @@ for epoch in range(MAX_EPOCHS):
     eval_model = ema_model if ema_model is not None else model
     eval_model.eval()
     split_metrics = {
-        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, ch_surf_w, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -624,7 +646,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, ch_surf_w, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)

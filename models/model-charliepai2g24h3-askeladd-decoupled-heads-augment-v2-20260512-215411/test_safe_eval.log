@@ -1,0 +1,26 @@
+Safe re-eval of test metrics (zero-fill non-finite y before subtraction)
+========================================================================
+
+test_single_in_dist: 200 samples, 0 skipped (non-finite y)
+  mae_surf  p=115.2309  Ux=1.4942  Uy=0.7732
+  mae_vol   p=138.8782  Ux=5.1502  Uy=2.1651
+
+test_geom_camber_rc: 200 samples, 0 skipped (non-finite y)
+  mae_surf  p=99.8272  Ux=2.5144  Uy=1.0098
+  mae_vol   p=115.8003  Ux=5.6950  Uy=2.7373
+
+test_geom_camber_cruise: 200 samples, 1 skipped (non-finite y)
+  mae_surf  p=81.9930  Ux=1.0209  Uy=0.5866
+  mae_vol   p=92.0703  Ux=3.4068  Uy=1.4171
+
+test_re_rand: 200 samples, 0 skipped (non-finite y)
+  mae_surf  p=90.2398  Ux=1.5152  Uy=0.7734
+  mae_vol   p=101.7268  Ux=4.2039  Uy=1.9320
+
+Aggregated (equal-weight mean across 4 splits):
+  avg/mae_surf_Ux: 1.6362
+  avg/mae_surf_Uy: 0.7858
+  avg/mae_surf_p: 96.8227
+  avg/mae_vol_Ux: 4.6139
+  avg/mae_vol_Uy: 2.0629
+  avg/mae_vol_p: 112.1189
