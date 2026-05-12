@@ -113,3 +113,59 @@ The 5 other in-flight stale_wip PRs (#1505-1509, #1511) and #1589 are running on
 ### Follow-ups (for alphonse's next assignment)
 
 Alphonse becomes idle on merge. Next axis: `mlp_ratio` (FFN capacity per block) — the one architectural lever not in flight in round 1 (width, depth, slice count all already assigned).
+
+## 2026-05-12 22:14 — PR #1589 sent back: AdamW betas (0.9, 0.95)
+
+- **Student:** willowpai2g48h3-tanjiro
+- **Branch:** willowpai2g48h3-tanjiro/adamw-betas-09-095
+- **W&B run:** `ih1petdz`
+
+### Results (pre-merge code, single seed)
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| `single_in_dist` | 159.03 | 144.59 |
+| `geom_camber_rc` | 156.57 | 126.13 |
+| `geom_camber_cruise` | 103.27 | **NaN** ⚠️ |
+| `re_rand` | 128.17 | 121.15 |
+| **`avg`** | **132.33** | NaN (3-split mean 130.62) |
+
+Best epoch 12 of 14 (hit 30-min cap). Training curve smooth and clean, mild val-overfit signature after epoch 12.
+
+### Decision: send back for rebase
+
+The result is on **pre-merge** code (no mask-aware fix). Val 132.33 doesn't beat the new merged baseline (119.45), but it beats other unmasked baselines (140-153 range), suggesting the betas tweak gives a real ~−5-10% on a fair (masked) baseline. The cruise NaN is the expected pre-merge failure mode (now confirmed: 2-of-2 reproduction across Fourier #1510 and AdamW #1589 → generic baseline issue, fully fixed in merged code).
+
+Sent back with instructions to rebase onto merged baseline and re-run with 2 seeds.
+
+### Cross-PR heads-up posted
+
+Heads-up comment posted on 6 other in-flight stale_wip PRs (#1505, #1506, #1508, #1509, #1511) informing students of the new merged baseline and the cruise NaN fix. Not a send-back — students are mid-iteration; comment instructs them to finish their current run cleanly, then rebase + re-run on merged code before flipping to ready-for-review.
+
+## 2026-05-12 23:08 — PR #1507 closed: slice_num=128 (compute-bound)
+
+- **Student:** willowpai2g48h3-fern
+- **Branch:** willowpai2g48h3-fern/slice-num-128
+- **W&B runs:** `judaj6n1` (merged-code), `pemgig8k` (pre-merge data point)
+
+### Results (merged-code, `judaj6n1`)
+
+| Split | val mae_surf_p | test mae_surf_p | Δ vs baseline test |
+|---|---:|---:|---:|
+| `single_in_dist` | 191.73 | 176.47 | +42.4% |
+| `geom_camber_rc` | 162.68 | 153.05 | +25.5% |
+| `geom_camber_cruise` | 114.24 | 95.28 | +17.5% |
+| `re_rand` | 138.72 | 138.49 | +24.0% |
+| **`avg`** | **151.84** | **140.82** | **+28.4%** |
+
+### Conclusion
+
+**Closed — dead end on this axis.** slice_num=128 is +27-28% worse on val and test. Student's diagnosis is right: compute-bound undertraining, not a representational ceiling. Doubling slice_num costs +50% per-epoch wall-clock, cutting from 14-16 epochs to 10 epochs — at epoch 7 (best-val) the model is still in early convergence (`val_avg` was 244 → 152 in 7 epochs, still descending).
+
+Interesting partial signal: cruise test split (95.28 vs 81.06 baseline) closed more of the gap than the other splits, consistent with finer slices helping curvature-dominated regions. Not enough to overcome the wall-clock tax.
+
+All four test splits finite — the mask plumbing from PR #1504 carried through cleanly in the rebased code. Good clean rebase work from fern.
+
+### Follow-up
+
+Fern reassigned to PR #1692 (gradient clipping max_norm=1.0) — the last untested optimizer-side knob, pairs with the cruise-stability story (mask fix removed structural NaN source; grad clip is the dynamics-side complement).
