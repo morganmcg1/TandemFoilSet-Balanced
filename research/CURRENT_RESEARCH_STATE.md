@@ -11,9 +11,15 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Round 1 — in flight
+## Round 1 — in flight (first two reviews completed)
 
-Broad sweep over orthogonal levers. All 8 students assigned, no PRs yet review-ready. Each PR targets `icml-appendix-willow-pai2g-48h-r5`.
+Broad sweep over orthogonal levers. First two PRs landed and were sent back (#1427, #1451) due to a `data/scoring.py` NaN-propagation bug that NaN-poisons `test_avg/mae_surf_p`. Both showed promising val signals (134.14 and 136.69 respectively at incomplete epoch budgets). All 8 students currently have WIP PRs. Each PR targets `icml-appendix-willow-pai2g-48h-r5`.
+
+### Active issue: `data/scoring.py` NaN propagation
+
+- `.test_geom_camber_cruise_gt/000020.pt` has NaN in y[:, 2]. Scoring's intended sample-skipping is poisoned by IEEE `NaN * 0 = NaN`.
+- Workaround (in `train.py` only — `data/` is read-only): pre-mask non-finite samples + `nan_to_num(y, ...)` before `accumulate_batch`. Snippet broadcast to all WIP PRs.
+- Val is unaffected; only the end-of-run test eval needs the fix.
 
 | Student | PR | Hypothesis | Lever |
 |---------|----|-----------|-------|

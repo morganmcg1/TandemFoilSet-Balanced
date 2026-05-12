@@ -25,6 +25,49 @@ This log records experiment outcomes for the willow-pai2g-48h-r5 track. New entr
 
 - Val numbers all confirmed against W&B summary.
 - Direction is promising — val moves cleanly in the expected direction on all four splits. But `test_avg/mae_surf_p` is NaN-poisoned by one numerically-bad prediction on `test_geom_camber_cruise`, which violates the program.md "finite paper-facing test metric required" contract.
-- Sent back with instructions to add a single defensive `pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)` line in `evaluate_split` and rerun. The fix is measurement-only; it does not change training dynamics or the hypothesis. Val should remain ~134; test should become finite.
-- This NaN failure mode may affect other round-1 PRs that also evaluate the same cruise tandem test samples — will keep an eye on incoming reviews for the same symptom and apply the same fix instruction if it recurs.
+- Sent back with instructions to add a defensive NaN-clean in `evaluate_split` and rerun. Initially I advised cleaning `pred`; corrected after thorfinn's diagnosis (next entry) to clean `y` instead — see below for the correct workaround.
+
+## 2026-05-12 19:01 — PR #1451: thorfinn `slice_num=128` (review 1, sent back) + scoring bug diagnosis
+
+- Branch: `willowpai2g48h5-thorfinn/slice-num-128`
+- Hypothesis: `slice_num=64 → 128` in PhysicsAttention for finer attention partitioning.
+- W&B run: `jxu2le44` (11 of 30 epochs; hit 30-min cap at 31.5 min)
+- Deviation from PR: `--batch_size 2` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` after first launch OOMed at batch_size=4 (peak ~86 GB on 95 GB GPU; slice_num doubling pushed activation memory over the edge on the largest cruise tandem meshes).
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 10) | **136.69** |
+| `val/single_in_dist/mae_surf_p` | 176.53 |
+| `val/geom_camber_rc/mae_surf_p` | 139.40 |
+| `val/geom_camber_cruise/mae_surf_p` | 106.37 |
+| `val/re_rand/mae_surf_p` | 124.47 |
+| `test_avg/mae_surf_p` | **NaN** (same scoring bug as #1427) |
+| `test_avg/mae_surf_p` (3-split mean, info only) | 132.59 |
+| Peak GPU memory | 27.3 GB at batch_size=2 |
+| Params | 1.86M (slice_num=128 adds ~25k vs slice_num=64) |
+
+### Infrastructure bug — `data/scoring.py` NaN propagation (root cause for both #1427 and #1451)
+
+Thorfinn diagnosed and reported a real bug in the scoring path:
+
+- `.test_geom_camber_cruise_gt/000020.pt` contains NaN in `y[:, 2]` (p channel).
+- `data/scoring.py` does compute a sample-level `y_finite` mask intended to exclude such samples.
+- But the err computation is `err = abs(pred - y).double()` *before* masking — so `err` itself has NaN entries at those positions.
+- Under IEEE 754, `NaN * 0 = NaN`, so `(err * mask.unsqueeze(-1)).sum()` propagates NaN into the channel sums even though the mask is 0 for the bad sample.
+- Affected metrics: `test_geom_camber_cruise/mae_surf_p`, `test_geom_camber_cruise/mae_vol_p` (both NaN) and the equal-weight averages that include them.
+
+**Decision:** Fix lives in `train.py` (per the `data/` read-only contract). The workaround in `evaluate_split`:
+
+```python
+sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)   # [B]
+mask_eff = mask & sample_finite.unsqueeze(-1)
+y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
+```
+
+This preserves scoring's intended sample-skipping semantics without the `NaN * 0` IEEE footgun. Val is unaffected (val GT is clean).
+
+- Sent #1451 back with the corrected fix instruction + rerun at the same batch_size=2 / expandable_segments config.
+- Sent a correction to #1427 (askeladd) replacing my earlier (wrong) `nan_to_num(pred, ...)` advice with the same `y`-side fix.
+- Broadcast a heads-up comment to the six in-flight WIP PRs (#1419, #1430, #1436, #1442, #1445, #1447) so they can apply the fix preemptively if their final `test_avg/mae_surf_p` comes out NaN.
 
