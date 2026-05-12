@@ -352,6 +352,8 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    # Surface per-channel weights "Ux,Uy,p". Default [1,1,1] recovers baseline magnitude exactly.
+    surf_channel_weight: str = "1.0,1.0,1.0"
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -367,8 +369,12 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
-# Surface per-channel weights: [Ux, Uy, p].  Pressure is the ranking metric.
-surf_channel_weight = torch.tensor([1.0, 1.0, 2.0], device=device).view(1, 1, 3)
+# Surface per-channel weights: [Ux, Uy, p]. Pressure is the ranking metric.
+# Parsed from --surf_channel_weight CLI arg. Default [1,1,1] recovers baseline magnitude.
+_channel_w_list = [float(x) for x in cfg.surf_channel_weight.split(",")]
+assert len(_channel_w_list) == 3, f"Expected 3 channel weights, got {len(_channel_w_list)}: {_channel_w_list}"
+surf_channel_weight = torch.tensor(_channel_w_list, device=device).view(1, 1, 3)
+print(f"Surface per-channel weights [Ux, Uy, p] = {_channel_w_list}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -453,8 +459,9 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         # Per-channel weighted surface loss (broadcasts over [B, N, 3]).
+        # Divide by surf_channel_weight.mean() so [1,1,1] exactly recovers baseline magnitude.
         weighted_surf_sq = sq_err * surf_channel_weight
-        surf_loss = (weighted_surf_sq * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * surf_channel_weight.sum()).clamp(min=1)
+        surf_loss = (weighted_surf_sq * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * surf_channel_weight.mean()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
