@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -46,6 +47,28 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Fourier positional encoding (Tancik et al., NeurIPS 2020)
+# ---------------------------------------------------------------------------
+
+def fourier_encode_positions(x: torch.Tensor, L: int, min_freq: float, max_freq: float) -> torch.Tensor:
+    """Replace dims 0-1 (node x,z) with Fourier features, keep dims 2+ unchanged.
+
+    Expects positions in dims 0-1 to already be standardized (mean 0, unit std).
+    Input:  x  [B, N, 24]  (dims 0-1 normalized; dims 2+ normalized)
+    Output: x' [B, N, 4L + 22]
+    """
+    pos = x[..., :2]   # [B, N, 2]  — normalized (x_coord, z_coord)
+    rest = x[..., 2:]  # [B, N, 22] — normalized non-position features
+    freqs = torch.logspace(
+        math.log10(min_freq), math.log10(max_freq), L, device=x.device, dtype=x.dtype
+    )  # [L]
+    angles = pos.unsqueeze(-1) * freqs  # [B, N, 2, L]
+    enc = torch.cat([angles.sin(), angles.cos()], dim=-1)  # [B, N, 2, 2L]
+    enc = enc.flatten(-2)  # [B, N, 4L]
+    return torch.cat([enc, rest], dim=-1)  # [B, N, 4L + 22]
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -218,7 +241,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   fourier_L: int, fourier_min_freq: float, fourier_max_freq: float) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -237,7 +261,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_std_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = fourier_encode_positions(x_std_norm, fourier_L, fourier_min_freq, fourier_max_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -388,6 +413,9 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     amp: bool = True  # BF16 autocast
+    fourier_L: int = 6        # number of frequency octaves for Fourier pos encoding
+    fourier_min_freq: float = 1.0   # min frequency (rad/unit on standardized coords)
+    fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
 
 
 cfg = sp.parse(Config)
@@ -416,9 +444,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fourier_extra = 4 * cfg.fourier_L - 2   # replaces raw 2D coords with 4L dims
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + fourier_extra,   # Fourier encoding adds 4L − 2 extra channels
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -491,7 +520,12 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         with autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp_enabled):
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # Standardize all input features first, then Fourier-encode dims 0-1
+            # (positions in standardized space → Fourier features in [-1, 1]).
+            x_std_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = fourier_encode_positions(
+                x_std_norm, cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq
+            )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             sq_err = (pred - y_norm) ** 2
@@ -524,7 +558,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -592,7 +627,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
