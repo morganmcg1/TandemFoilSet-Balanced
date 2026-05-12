@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -313,6 +314,12 @@ def write_experiment_summary(
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
         "grad_clip": cfg.grad_clip,
+        "use_onecycle": cfg.use_onecycle,
+        "onecycle_max_lr_mult": cfg.onecycle_max_lr_mult,
+        "onecycle_pct_start": cfg.onecycle_pct_start,
+        "onecycle_div_factor": cfg.onecycle_div_factor,
+        "onecycle_final_div_factor": cfg.onecycle_final_div_factor,
+        "ema_decay": cfg.ema_decay,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -355,6 +362,12 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     grad_clip: float = 1.0
+    use_onecycle: bool = True  # OneCycleLR instead of CosineAnnealingLR
+    onecycle_max_lr_mult: float = 10.0  # peak_lr = lr * this
+    onecycle_pct_start: float = 0.05  # fraction of total steps used for warmup
+    onecycle_div_factor: float = 10.0  # initial_lr = max_lr / this
+    onecycle_final_div_factor: float = 100.0  # min_lr = initial_lr / this
+    ema_decay: float = 0.999  # EMA of model weights for eval (0.0 disables)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -406,7 +419,43 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+steps_per_epoch = (len(train_ds) + cfg.batch_size - 1) // cfg.batch_size
+if cfg.use_onecycle:
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.lr * cfg.onecycle_max_lr_mult,
+        epochs=MAX_EPOCHS,
+        steps_per_epoch=steps_per_epoch,
+        pct_start=cfg.onecycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=cfg.onecycle_div_factor,
+        final_div_factor=cfg.onecycle_final_div_factor,
+    )
+    scheduler_step_per_batch = True
+    print(
+        f"Scheduler: OneCycleLR peak={cfg.lr * cfg.onecycle_max_lr_mult:.2e} "
+        f"warmup_steps={int(steps_per_epoch * MAX_EPOCHS * cfg.onecycle_pct_start)} "
+        f"total_steps={steps_per_epoch * MAX_EPOCHS}"
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler_step_per_batch = False
+    print(f"Scheduler: CosineAnnealingLR T_max={MAX_EPOCHS}")
+
+ema_model = None
+if cfg.ema_decay > 0.0:
+    ema_model = copy.deepcopy(model)
+    ema_model.eval()
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    print(f"EMA: enabled (decay={cfg.ema_decay})")
+
+
+def update_ema(model: nn.Module, ema_model: nn.Module, decay: float) -> None:
+    with torch.no_grad():
+        for p, ep in zip(model.parameters(), ema_model.parameters()):
+            ep.data.mul_(decay).add_(p.data, alpha=1.0 - decay)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -465,26 +514,33 @@ for epoch in range(MAX_EPOCHS):
             if gn > cfg.grad_clip:
                 epoch_grad_clip_fires += 1
         optimizer.step()
+        if scheduler_step_per_batch:
+            scheduler.step()
+        if ema_model is not None:
+            update_ema(model, ema_model, cfg.ema_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not scheduler_step_per_batch:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
     epoch_grad_clip_fire_rate = epoch_grad_clip_fires / max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate (use EMA weights for evaluation if available) ---
+    eval_model = ema_model if ema_model is not None else model
+    eval_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
+    current_lr = optimizer.param_groups[0]["lr"]
 
     tag = ""
     if avg_surf_p < best_avg_surf_p:
@@ -494,7 +550,8 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        save_state = ema_model.state_dict() if ema_model is not None else model.state_dict()
+        torch.save(save_state, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -503,6 +560,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": epoch_grad_norm_mean,
@@ -510,6 +568,8 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "ema_decay": cfg.ema_decay,
+        "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
