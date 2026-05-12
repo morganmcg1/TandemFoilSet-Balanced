@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 (round 1 start)
+- **As of:** 2026-05-12 18:35 (round 1 in flight, 1/8 returned)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -24,16 +24,20 @@ Round 1 is a screening sweep that runs 1 baseline reference plus 7 isolated sing
 
 See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 
-| Student | Slug | Lever |
-|---|---|---|
-| alphonse | baseline-ref | Control (no changes) |
-| askeladd | surf-weight-20 | Loss balancing |
-| edward | huber-loss | Loss robustness |
-| fern | lr1e3-warmup-cosine | Higher peak lr + warmup |
-| frieren | wd5e-4 | Regularization |
-| nezuko | slice128 | Physics-attention granularity |
-| tanjiro | hidden192 | Model capacity |
-| thorfinn | unified-pos | Positional encoding |
+| Student | Slug | Lever | Status |
+|---|---|---|---|
+| alphonse | baseline-ref | Control (no changes) | WIP (#1368) |
+| askeladd | surf-weight-20 | Loss balancing | WIP (#1369) |
+| edward | huber-loss | Loss robustness | WIP (#1374) |
+| fern | lr1e3-warmup-cosine | Higher peak lr + warmup | **Returned (#1376)** — `val_avg/mae_surf_p = 147.26`, held pending baseline |
+| frieren | wd5e-4 | Regularization | WIP (#1394) |
+| nezuko | slice128 | Physics-attention granularity | WIP (#1402) |
+| tanjiro | hidden192 | Model capacity | WIP (#1406) |
+| thorfinn | unified-pos | Positional encoding | WIP (#1416) |
+
+## Follow-on: scoring bug fix — assigned to fern as PR #1512
+
+`data/scoring.py:accumulate_batch` propagates NaN through `inf * 0 = NaN` when test/val GT contains non-finite values (concretely `test_geom_camber_cruise` sample 20 has `y_p = -inf`). Every test eval on this codebase reports NaN for `test_avg/mae_surf_p`. Surgical one-line fix: `torch.nan_to_num(err, ...)` after computing `err`. Advisor-authorized deviation from the `data/scoring.py` read-only convention.
 
 ## Potential follow-up directions (after round 1)
 
