@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 18:35 (round 1 in flight, 1/8 returned)
+- **As of:** 2026-05-12 18:58 (round 1 in flight, 2/8 returned + 2 follow-ons assigned)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -32,10 +32,20 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 | fern | lr1e3-warmup-cosine | Higher peak lr + warmup | **Returned (#1376)** — `val_avg/mae_surf_p = 147.26`, held pending baseline |
 | frieren | wd5e-4 | Regularization | WIP (#1394) |
 | nezuko | slice128 | Physics-attention granularity | WIP (#1402) |
-| tanjiro | hidden192 | Model capacity | WIP (#1406) |
+| tanjiro | hidden192 | Model capacity | **Returned (#1406)** — `val_avg/mae_surf_p = 151.64`, held pending baseline; reassigned to `bf16-autocast` (#1513) |
 | thorfinn | unified-pos | Positional encoding | WIP (#1416) |
 
-## Follow-on: scoring bug fix — assigned to fern as PR #1512
+## Follow-ons assigned this cycle
+
+- **PR #1512 — `scoring-nan-fix` (fern)** — surgical `nan_to_num` in `data/scoring.py:accumulate_batch` to stop NaN propagation when test/val GT contains non-finite values. Advisor-authorized deviation from the `data/scoring.py` read-only convention. Without this, every test eval on this codebase reports NaN for `test_avg/mae_surf_p`.
+- **PR #1513 — `bf16-autocast` (tanjiro)** — wrap forward+backward in `torch.cuda.amp.autocast(dtype=torch.bfloat16)`. Tests whether throughput is the binding constraint at the 30-min cap. Predicted 30-50% per-epoch wall-clock reduction; if it works, future capacity experiments become viable.
+
+## Round 1 emerging signal
+
+Both returned runs show the same per-split structure: cruise-camber OOD is *easier* than in-dist sanity; the dominating contributor to `val_avg/mae_surf_p` is `val_single_in_dist` (raceCar single, ~210K nodes, ground effect). Round 2 should consider levers that specifically attack large-mesh single-foil pressure regression:
+- per-channel surface weighting (weight p > Ux/Uy on surface, especially for single-foil)
+- physical-units loss for surface pressure
+- mesh-size-aware sampling / sample weighting
 
 `data/scoring.py:accumulate_batch` propagates NaN through `inf * 0 = NaN` when test/val GT contains non-finite values (concretely `test_geom_camber_cruise` sample 20 has `y_p = -inf`). Every test eval on this codebase reports NaN for `test_avg/mae_surf_p`. Surgical one-line fix: `torch.nan_to_num(err, ...)` after computing `err`. Advisor-authorized deviation from the `data/scoring.py` read-only convention.
 
