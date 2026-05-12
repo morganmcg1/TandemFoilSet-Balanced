@@ -148,3 +148,68 @@ Also explicitly authorized alphonse's `test_avg/mae_surf_p_excluding_bad_sample`
 ### No formal decisions / merges this cycle
 
 No PRs marked ready for review; no merges, closes, or send-backs (beyond the advisor comment on #1461 acknowledging alphonse's flag, which is informational, not a state change).
+
+---
+
+## 2026-05-12 22:00 — Cycle-5 reviews: #1480 thorfinn + #1461 alphonse
+
+Two PRs reached review-ready state this cycle.
+
+### PR #1480 thorfinn — bf16 autocast + grad accumulation=2
+
+**SENPAI-RESULT (terminal, run `5wvm7na2`):**
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | **116.2965** |
+| `test_avg/mae_surf_p` | **104.9554** (finite — bug fix included!) |
+| Epochs in 30 min | 18 |
+| `test_geom_camber_cruise/mae_surf_p` | 80.35 |
+
+Per-split test `mae_surf_p`:
+
+| Split | test |
+|---|---|
+| `single_in_dist` | 115.83 |
+| `geom_camber_rc` | 117.06 |
+| `geom_camber_cruise` | **80.35** (1 sample skipped) |
+| `re_rand` | 106.58 |
+
+**Analysis:** This is exceptional. val_avg=116.30 beats every other run in the cohort (frieren's 116.34 is essentially tied, one run). More importantly, `test_avg=104.96` is the **first finite test_avg in the project** — enabled by thorfinn's `train.py:evaluate_split` per-sample pre-filter workaround. The throughput hypothesis confirmed: 18 epochs vs ~14 baseline in 30 min. bf16 + grad_accum=2 is a robust win.
+
+**Decision: SENT BACK.** The branch (`willowpai2g24h2-thorfinn/bf16-amp-grad-accum-2`) has only the empty `assign` commit — no code. All W&B runs were from locally-applied changes that were never pushed. Cannot merge an empty PR; the squash-merge would not carry bf16/grad_accum/bug-fix onto the advisor branch. Student must commit and push the three changes (bf16 autocast, grad_accum=2 loop, evaluate_split workaround) then re-mark for review.
+
+**This is the highest-priority merge in the round** once the code is committed. It simultaneously lands the throughput win and the cruise-NaN workaround for all subsequent PRs.
+
+### PR #1461 alphonse — stock-config baseline
+
+**SENPAI-RESULT (terminal, run `ztb0ri42`):**
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | 140.01 (epoch 13 / 30.9 min) |
+| `test_avg/mae_surf_p` | NaN (as expected — no code fix in this PR) |
+| `test_avg/mae_surf_p_excluding_bad_sample` | **126.20** (workaround recompute) |
+
+Per-split test `mae_surf_p`:
+
+| Split | test (raw) | test (excl. 000020) |
+|---|---|---|
+| `single_in_dist` | 143.45 | 143.45 |
+| `geom_camber_rc` | 135.17 | 135.17 |
+| `geom_camber_cruise` | NaN | **98.06** (199/200) |
+| `re_rand` | 128.13 | 128.13 |
+
+**Analysis:** Baseline delivered as promised. The val_avg=140.01 is the worst of the 4 stock baseline runs, confirming the ~17% noise band. The `_excluding_bad_sample=126.20` is the canonical pre-fix test comparator for the round. Alphonse also ran a full data scan: 000020.pt is the only bad file across all 1000 val/test samples. Third independent cruise-NaN diagnosis.
+
+**Decision: CLOSED.** No code on the branch (correctly — stock config baseline). Deliverables (baseline measurement + workaround comparator + data scan + diagnostic) are fully in the comments and recorded in BASELINE.md. BASELINE.md updated.
+
+### New assignment issued
+
+Alphonse was immediately re-assigned **PR #1631** (`cruise-nan-eval-fix`): implement the `train.py:evaluate_split` sanitize-and-gate workaround (per-sample keep=pred_finite & y_finite), run stock-config baseline, produce the first advisor-merged finite `test_avg/mae_surf_p`. Once #1631 lands, all subsequent PRs get finite test_avg for free.
+
+### Updated BASELINE.md
+
+- Noise band updated: 4 baseline runs, 119.64–140.01 (~17%)
+- Canonical pre-fix test comparator: `test_avg/mae_surf_p_excluding_bad_sample = 126.20`
+- Thorfinn's 104.96 noted as "pending merge" — highest-priority once code is committed

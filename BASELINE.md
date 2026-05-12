@@ -36,27 +36,49 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-Baseline measured from two alphonse stock-config runs (W&B `hqj9bt84`, `89653mip`); the spread between them is the noise floor for single-run comparisons.
+Baseline measured from four alphonse stock-config runs. The spread across all four is the noise floor.
 
-- `val_avg/mae_surf_p`: **131.79 / 132.73** (~132, ±~0.5%)
-- `test_avg/mae_surf_p`: **NaN** in both — cruise test split's pressure channel overflowed and propagated NaN through the test_avg aggregator. **This NaN is systemic: nearly every finished run in the project has NaN test_avg, including baseline.** Decisions on this branch are made on val_avg + the three finite per-test-split numbers below.
+- `val_avg/mae_surf_p` (best): **119.64** (3rd run); full noise band: 119.64 → 131.79 → 132.73 → 140.01 (~17% range)
+- `test_avg/mae_surf_p`: **NaN** (systemic cruise overflow). Pre-fix comparator below.
 
-Per-split `mae_surf_p` (best of `hqj9bt84` baseline):
+### Pre-fix test comparator (excluding the one bad sample)
 
-| Split | val | test |
-|---|---|---|
-| `single_in_dist` | 136.34 | 152.32 *(rerun read; may differ slightly)* |
-| `geom_camber_rc` | 129.59 | TBD from per-split test logs |
-| `geom_camber_cruise` | 117.71 | **NaN** (systemic) |
-| `re_rand` | 121.79 / 117.71 *(varies)* | TBD from per-split test logs |
+Alphonse (#1461, run `ztb0ri42`) reloaded the best checkpoint and manually excluded `test_geom_camber_cruise/000020.pt`. This is the canonical baseline test number for this round:
 
-Best W&B baseline run: `hqj9bt84` (alphonse, `r2-baseline`, 14 epochs / 30.7 min / val_avg=131.79)
-Backup baseline: `89653mip` (alphonse, `r2-baseline`, 12 epochs / 30.8 min / val_avg=132.73)
+- **`test_avg/mae_surf_p_excluding_bad_sample`: 126.20**
+
+Per-split test `mae_surf_p` (run `ztb0ri42`, best checkpoint epoch 13):
+
+| Split | val | test (raw) | test (excluding bad sample) |
+|---|---|---|---|
+| `single_in_dist` | 166.27 | 143.45 | 143.45 |
+| `geom_camber_rc` | 151.02 | 135.17 | 135.17 |
+| `geom_camber_cruise` | 113.54 | **NaN** | **98.06** (199/200 samples) |
+| `re_rand` | 129.21 | 128.13 | 128.13 |
+| **avg** | **140.01** | **NaN** | **126.20** |
+
+Note: `ztb0ri42` is the 4th baseline run (val_avg=140.01, worst of the 4). The three finite test splits are the most reliable test comparators.
+
+All stock-config baseline runs (for noise band reference):
+
+| W&B run | val_avg/mae_surf_p | epochs | notes |
+|---|---|---|---|
+| `z2ls7ol1` (alphonse, 3rd) | **119.64** | best in cohort | from cycle-2 W&B survey |
+| `hqj9bt84` (alphonse, 1st) | 131.79 | 14 | canonical baseline |
+| `89653mip` (alphonse, 2nd) | 132.73 | 12 | backup |
+| `ztb0ri42` (alphonse, 4th) | 140.01 | 13 | per-split test numbers logged |
+
+**Merge bar:** any hypothesis is a winner if `val_avg/mae_surf_p` beats 131.79 by a margin exceeding the noise band (~17% → effectively need to beat ~119 to be unambiguously out of noise). Frieren (116.34) currently leads and is outside the noise band.
+
+### First finite test_avg (pending merge)
+
+Thorfinn (#1480, run `5wvm7na2`) reported `test_avg/mae_surf_p = 104.96` using the `train.py:evaluate_split` cruise-NaN workaround. This PR has been sent back to add code commits — once merged it will land the workaround for the whole round and set the new baseline.
 
 ## Notes for students
 
-- **Single-run noise floor is ~0.5–1%** based on the two baseline reps. A hypothesis needs to clear that bar to be a clean winner.
-- **Primary decision metric on this branch is `val_avg/mae_surf_p`** (lower is better). Aim to beat ~132 by a margin larger than noise.
-- **`test_avg/mae_surf_p` will be NaN for almost all runs** until someone fixes the cruise overflow upstream. Until then, decisions are made on val_avg plus the three finite per-test-split metrics (`test_single_in_dist`, `test_geom_camber_rc`, `test_re_rand`) — those three should not regress meaningfully.
-- Every PR should report `val_avg/mae_surf_p` and all four per-test-split `mae_surf_p` values (even if cruise is NaN — log the NaN explicitly).
+- **Single-run noise floor is ~17%** — four stock-baseline runs span 119.64–140.01. A hypothesis must beat 131.79 (or ideally 119.64) to be a clean winner above noise.
+- **Primary decision metric on this branch is `val_avg/mae_surf_p`** (lower is better).
+- **`test_avg/mae_surf_p` will be NaN until the cruise-NaN workaround PR lands.** PR #1631 (alphonse) and #1480 (thorfinn, sent back) both target this. Once one lands, all subsequent runs get finite `test_avg` for free.
+- Use `test_avg/mae_surf_p_excluding_bad_sample = 126.20` as the canonical pre-fix test comparator.
+- Report all four per-test-split `mae_surf_p` values; cruise pressure will be NaN until the workaround lands.
 - Per-split metrics matter for diagnosis — flag splits where your change helps or hurts disproportionately.
