@@ -254,7 +254,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 
@@ -403,7 +412,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Kendall et al. homoscedastic uncertainty parameters.
+# log_sigma=0 -> sigma=1 -> effective per-task weight = 1 at init (equivalent to surf_weight=1).
+log_sigma_vol  = nn.Parameter(torch.zeros(1, device=device))
+log_sigma_surf = nn.Parameter(torch.zeros(1, device=device))
+
+optimizer = torch.optim.AdamW(
+    list(model.parameters()) + [log_sigma_vol, log_sigma_surf],
+    lr=cfg.lr, weight_decay=cfg.weight_decay,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -450,11 +467,20 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        # Kendall homoscedastic uncertainty: precision_i = exp(-2 * log_sigma_i) = 1/sigma_i^2
+        precision_vol  = torch.exp(-2.0 * log_sigma_vol)
+        precision_surf = torch.exp(-2.0 * log_sigma_surf)
+        loss = (
+            precision_vol  * vol_loss  + log_sigma_vol
+          + precision_surf * surf_loss + log_sigma_surf
+        ).squeeze()
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        with torch.no_grad():
+            log_sigma_vol.clamp_(-3.0, 3.0)
+            log_sigma_surf.clamp_(-3.0, 3.0)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -493,6 +519,11 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/log_sigma_vol":  log_sigma_vol.item(),
+        "train/log_sigma_surf": log_sigma_surf.item(),
+        "train/effective_surf_weight": float(
+            torch.exp(2.0 * (log_sigma_vol - log_sigma_surf)).item()
+        ),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
