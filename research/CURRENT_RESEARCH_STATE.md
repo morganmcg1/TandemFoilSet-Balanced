@@ -1,11 +1,27 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 (last update 19:55 UTC)
+- **Date:** 2026-05-12 (last update 20:15 UTC)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r1`
 - **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm,
   48h run)
 - **Most recent human directive:** None — fresh launch, no human issues in
   the queue.
+
+## Round-1 leader (as of 20:15 UTC, not yet merged)
+
+| Rank | PR | Student | Lever | val_avg/mae_surf_p | Notes |
+|------|----|---------|-------|---------------------|-------|
+| 1 | #1393 | frieren | OneCycleLR peak=1e-3 | **111.30** | Sent back to push branch (terminal result posted but no commits) |
+| 2 | #1399 | nezuko | surf_w=10, CHANNEL_W=[1,1,2] | 111.80 | Sent back (loss-magnitude bug — effective surf_w≈3.3) |
+| 3 | #1393 | frieren | OneCycleLR peak=5e-4 | 113.84 | (within-PR control arm) |
+| 4 | #1399 | nezuko | surf_w=20, CHANNEL_W=[1,1,2] | 126.30 | (within-PR control arm) |
+| 5 | #1389 | fern | n_layers=8, lr=3e-4, 9ep | 147.40 | Sent back for Arm C `--epochs 9` — schedule mismatch contaminates |
+| 6 | #1389 | fern | n_layers=8, lr=5e-4, 9ep | 153.48 | (within-PR control arm) |
+
+The frieren OneCycle Arm A becomes the new `val_avg/mae_surf_p` floor *as
+soon as it is pushed* (currently the branch has no diff — see operational
+notes). Once pushed, BASELINE.md flips to 111.30 (val) / 107.54 (3-of-4
+test mean).
 
 ## Round-1 operational notes
 
@@ -14,10 +30,16 @@
   "GraphQL: API rate limit already exceeded" on `gh pr list` for ~80 min and
   were unable to see their assignments during that window. Effect: 5/8
   round-1 students (askeladd, edward, fern, tanjiro, thorfinn) did not start
-  training until 19:50+. Frieren and alphonse trained but couldn't push
-  results before the rate-limit window ended — local metrics may have been
-  lost on the next `git reset`. Nezuko completed and pushed their first
-  2-arm sweep at 19:09 (before the worst of the rate limit hit).
+  training until 19:50+. Nezuko was unaffected (pushed first sweep at 19:09).
+- **"Comment-posted but branch-empty" failure mode (frieren #1393, fern
+  #1389).** Both students trained locally during the rate-limit storm,
+  recovered enough to post terminal SENPAI-RESULTs at 20:02–20:04 UTC via
+  `gh pr comment` (which retries the GraphQL call). But the separate
+  `git push` for `train.py` + `models/model-*/` artifacts never landed — so
+  the PR branches contain only the original `assign` commit. The
+  SENPAI-RESULT metrics are coherent and consistent across arms, but the
+  PRs are not merge-eligible until the diff is pushed. Both sent back at
+  20:11–20:13 UTC with explicit push commands.
 - **Pre-existing data/scoring NaN.** Alphonse diagnosed (PR #1355 comment):
   sample `test_geom_camber_cruise/.test_geom_camber_cruise_gt/000020.pt`
   contains `+Inf` in the pressure channel of `y`. The scoring code masks
@@ -97,17 +119,17 @@ losses on the volume field as auxiliary heads.
 
 ## Active in-flight PRs (round 1)
 
-Status as of 19:55 UTC:
+Status as of 20:15 UTC:
 
 | PR | Student | Hypothesis | State |
 |----|---------|-----------|-------|
-| #1355 | alphonse | Smooth L1 / pure L1 vs MSE on normalized residuals | Trained smooth-L1 17:59, posted NaN-bug diagnosis 19:06; advisor reply 19:55 with recovery instructions and 3-of-4 reporting convention |
-| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Just picked up assignment 19:50; training pending |
-| #1385 | edward | Finer physics attention: slice_num 64→128, n_head 4→8 | Just picked up assignment 19:53; training pending |
-| #1389 | fern | Deeper Transolver: n_layers 5→8 | Just picked up assignment 19:50; training pending |
-| #1393 | frieren | OneCycleLR with warmup replacing CosineAnnealingLR | Trained 18:02–18:31; Claude student turn stuck since 18:51 (watchdog reports poll-failed → leaving Claude running); local result may need re-run |
-| #1399 | nezuko | Surface loss: pressure channel weight 2× + surf_weight sweep | First sweep finished 19:09 (val_avg 111.80 winner), sent back for fixed `.mean()`-denominator 3-arm replan; now actively training (GPU 99%) |
-| #1405 | tanjiro | bfloat16 autocast + batch_size 8 + sqrt-scaled lr | Just picked up assignment ~19:48; training pending |
-| #1410 | thorfinn | Multi-scale Fourier features for (x,z) coords | Just picked up assignment 19:52; training pending |
+| #1355 | alphonse | Smooth L1 / pure L1 vs MSE on normalized residuals | Trained smooth-L1 17:59, posted NaN diagnosis 19:06; advisor reply 19:55 with recovery + 3-of-4 reporting convention. Awaiting student response. |
+| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Picked up 19:50; training in progress (no commits or comments yet) |
+| #1385 | edward | Finer physics attention: slice_num 64→128, n_head 4→8 | Picked up 19:53; training in progress |
+| #1389 | fern | Deeper Transolver: n_layers 5→8 | Terminal SENPAI-RESULT 20:02 (val 147.4, regression). Sent back 20:13 to push branch + run Arm C (`--epochs 9` so cosine T_max matches realized epochs). |
+| #1393 | frieren | OneCycleLR with warmup replacing CosineAnnealingLR | Terminal SENPAI-RESULT 20:04 (val **111.30**, round-1 leader). Sent back 20:11 to push branch (rate-limit aftermath — comment posted but no commits). Will merge as new baseline once pushed. |
+| #1399 | nezuko | Surface loss: pressure channel weight 2× + surf_weight sweep | First sweep done 19:09 (val 111.80), sent back for `.mean()`-denominator 3-arm replan; now actively training (GPU 99%) |
+| #1405 | tanjiro | bfloat16 autocast + batch_size 8 + sqrt-scaled lr | Picked up 19:48; training in progress |
+| #1410 | thorfinn | Multi-scale Fourier features for (x,z) coords | Picked up 19:52; training in progress |
 
-**Action items:** wait for round-1 training to complete; review and merge/send-back as terminal SENPAI-RESULTs land. No idle students at the moment.
+**Action items:** (1) wait for frieren #1393 push → merge as new baseline. (2) wait for fern #1389 Arm C result → close or salvage the depth lever. (3) wait for remaining 5 students' first training runs. No idle students at the moment.

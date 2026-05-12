@@ -1,5 +1,91 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 20:04 — PR #1393: OneCycleLR with warmup replacing CosineAnnealingLR
+
+- **Student branch:** `charliepai2g48h1-frieren/onecycle-lr`
+- **Hypothesis:** OneCycleLR (warmup → peak → cosine wind-down, per-batch
+  stepping) at peak_lr=1e-3 should beat vanilla CosineAnnealingLR for short
+  (14-epoch) training runs. Predicted -2% to -6% on `val_avg/mae_surf_p`.
+
+### Result
+
+| Arm | peak_lr | epochs | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p (3/4 splits) |
+|-----|---------|--------|---------|---------------------|----------------------------------|
+| **A (winner)** | 1e-3 | 14 / 15 | 14 | **111.2984** ⭐ | 107.54 |
+| B   | 5e-4 | 14 / 15 | 14 | 113.8337            | 108.63                           |
+
+Per-epoch ~131 s, peak GPU memory 42.12 GB. Per-batch LR stepping confirmed
+firing as intended (lr 4e-5 → 9.97e-4 by ep2 warmup → 1.34e-5 by ep14 for
+Arm A). Arm A wins by 2.5 points (-2.2% rel) — well inside the predicted
+band. The full 15-epoch schedule didn't complete because the 30-min cap
+cut at epoch 14 (~7% of schedule tail wasted, but LR was already in deep
+decay so unlikely to matter much).
+
+### Action: SEND BACK to push (not yet mergeable)
+
+**The student branch is empty.** Only the `assign` commit is on
+`charliepai2g48h1-frieren/onecycle-lr` — no `train.py` diff, no
+`models/model-onecycle-*` artifacts. Cause: the GitHub API rate-limit
+storm (18:30–19:50 UTC) let `gh pr comment` retries succeed (the
+SENPAI-RESULT comment posted at 20:04Z), but the separate `git push` for
+code + metrics artifacts never landed and was not retried. The result is
+real and the methodology checks out — but the PR has no diff to merge.
+
+Sent back at 20:0Xz with concrete push commands. Will merge as new
+baseline once the diff is on the branch (this is the first cleanly
+terminal round-1 result with no loss-formulation caveat — Arm A becomes
+the new `val_avg/mae_surf_p` floor).
+
+### Pre-existing issue (not this PR)
+
+`test_geom_camber_cruise/mae_surf_p` came back NaN on **both** arms; pre-existing
+(reproduces identically across arms, confirmed by alphonse PR #1355). Same
+`+Inf in y` sample 000020.pt. `data/scoring.py` stays read-only.
+
+---
+
+## 2026-05-12 20:02 — PR #1389: Deeper Transolver (n_layers 5 → 8)
+
+- **Student branch:** `charliepai2g48h1-fern/deeper-8-layers`
+- **Hypothesis:** Going from 5 → 8 layers gives more iterations of slice
+  attention → MLP refinement. Predicted -2% to -6% on `val_avg/mae_surf_p`,
+  bigger gains on tandem OOD splits.
+
+### Result
+
+| Arm | lr | epochs | best ep | val_avg/mae_surf_p | test_avg (3/4 splits, fern's local recompute) |
+|-----|------|--------|---------|---------------------|------------------------------------------------|
+| A   | 5e-4 | 9 / 15 | 8       | 153.4759            | 139.91                                         |
+| B   | 3e-4 | 9 / 15 | 8       | **147.3969**        | 134.38                                         |
+
+Per-epoch ~205 s (≈55% slower than baseline due to extra blocks), peak GPU
+memory 64.5 GB. `n_params=1,025,827` (~1.0M, lower than the predicted
+1.6-1.8M because Transolver blocks add ~125k each, not 200k). **Both arms
+realized only 9 of the 15 configured epochs** before the 30-min cap → the
+cosine schedule was set for T_max=15 so the LR decayed for 60% of where it
+"thought" it was → effective LR was still elevated at the cut.
+
+### Action: SEND BACK with push + Arm C (not a winner at current state)
+
+**Same push problem as #1393** — the branch has no `train.py` diff, no
+metrics. Need the push first regardless of merge decision.
+
+On the result itself: Arm B's 147.40 is ~32% worse than the round-1 leader
+(frieren OneCycle Arm A: 111.30). But the comparison is contaminated by the
+schedule mismatch (cosine T_max=15 vs realized 9 epochs). Asked fern to run
+one more arm with `--epochs 9` so the cosine fully completes within the
+wall-clock — that isolates "does depth help once the schedule matches
+realized epochs?" from "did the depth lever just get a half-decayed LR?".
+
+If Arm C lands at <120 then depth is salvageable for round 2 compounding;
+if it stays >135 we close the depth lever as a confirmed regression.
+
+The hypothesis-aligned finding (Arm B improves `val_geom_camber_rc` by 42.5
+over Arm A) is genuine and consistent with the "more layers help tandem
+OOD" theory — it's just dominated by the schedule artifact in the average.
+
+---
+
 ## 2026-05-12 19:09 — PR #1399: Surface loss pressure-channel weight 2× + surf_weight sweep
 
 - **Student branch:** `charliepai2g48h1-nezuko/surf-channel-pressure-weight`
