@@ -452,12 +452,20 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        sq_err = (pred - y_norm) ** 2
+        vol_mask = (mask & ~is_surface).unsqueeze(-1)
+        surf_mask = (mask & is_surface).unsqueeze(-1)
+
+        # Per-sample relative L2 (squared-ratio form, joint over Ux/Uy/p channels).
+        # Each sample contributes ||pred - y||^2 / ||y||^2 — equal weight regardless
+        # of physical scale. Clamp denominators at 1e-6 to guard near-uniform samples.
+        vol_sq = (sq_err * vol_mask).sum(dim=(1, 2))
+        vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+        surf_sq = (sq_err * surf_mask).sum(dim=(1, 2))
+        surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
+        vol_loss = (vol_sq / vol_denom).mean()
+        surf_loss = (surf_sq / surf_denom).mean()
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
