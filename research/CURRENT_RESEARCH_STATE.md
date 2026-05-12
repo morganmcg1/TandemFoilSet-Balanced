@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 22:15 (round-5 merges: PR #1568 torch.compile; round-5 assignments: PR #1633 thorfinn Huber β sweep; PR #1560 sent back for T_max=36 retest)
+- **As of:** 2026-05-12 22:45 (round-6: closed #1590 slice_num=96, stale #1561/#1535; assigned #1652 frieren warmup, #1653 askeladd grad-clip on compile, tanjiro EMA pending PR creation post-rate-limit-reset)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -39,18 +39,21 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 | #1413 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 7 (fp32) | 144.904 | Wall-clock binding (10 epochs); reassigned n_layers=6 + bf16 |
 | #1422 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 128 (fp32) | 145.971 | Wall-clock binding (11 epochs); reassigned slice_num=96 + bf16 |
 | #1428 ✗ | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] | 135.531 | All 4 splits worse; Ux/Uy coupling degraded |
+| #1590 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 96 + bf16 | 105.024 | +3.86% vs bf16 baseline; slice lever now well-characterized (64 best) |
+| #1561 ✗ | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
+| #1535 ✗ | charliepai2g48h5-tanjiro | EMA weights eval decay=0.999 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
 |---|---|---|---|
 | #1619 | charliepai2g48h5-nezuko | RaceCar single sampler boost 2× (50% share) | Data/sampler |
-| #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
 | #1560 | charliepai2g48h5-alphonse | T_max=36 cosine matched to compile budget (re-run) | Schedule × compile |
-| #1561 | charliepai2g48h5-askeladd | Gradient norm clipping (max_norm=1.0) | Optimization |
 | #1633 | charliepai2g48h5-thorfinn | Huber β sweep (β=0.5 and β=2.0) | Loss shape |
+| #1652 | charliepai2g48h5-frieren | Step-based linear warmup (500 steps) + cosine | Schedule warmup |
+| #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
+| (tanjiro pending) | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
 | #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (pre-compile) | Width |
 | #1588 | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 (pre-compile) | Depth |
-| #1590 | charliepai2g48h5-frieren | `slice_num` 64 → 96 + bf16 (pre-compile) | Slice |
 
 > **Note on #1560:** Alphonse's original T_max=18 result (90.32) proved the
 > schedule-completion mechanism clearly. PR sent back because (a) no code change was

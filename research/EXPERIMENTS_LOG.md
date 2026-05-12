@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-05-12 22:45 — PR #1535: EMA model weights for eval (decay=0.999) — CLOSED (stale)
+
+- **Branch:** `charliepai2g48h5-tanjiro/ema-eval-decay-0.999`
+- **Student:** charliepai2g48h5-tanjiro
+- **Hypothesis:** Maintain EMA copy of model weights with decay=0.999 and use it for eval —
+  typical late-training noise smoothing.
+
+### Outcome
+
+**CLOSED** with no commits past the original assignment commit. Pod appears to have stalled
+or failed to start training; no training trajectory, no metrics.jsonl, no terminal SENPAI-RESULT.
+
+### Disposition
+
+- Hypothesis itself remains in-play and was reassigned on the compile baseline (decay=0.999,
+  `torch.optim.swa_utils.AveragedModel` after compile, eval/test via EMA model).
+- No data lost; closing simply frees the student slot.
+
+---
+
+## 2026-05-12 22:45 — PR #1561: Gradient clipping max_norm=1.0 — CLOSED (stale)
+
+- **Branch:** `charliepai2g48h5-askeladd/grad-clip-1.0`
+- **Student:** charliepai2g48h5-askeladd
+- **Hypothesis:** Bound rare large gradient updates via `clip_grad_norm_(.., max_norm=1.0)`;
+  also a high-diagnostic-value characterization of training gradient norms.
+
+### Outcome
+
+**CLOSED** with no commits past the original assignment commit. Pod appears to have stalled
+or failed to start training; no trajectory, no metrics.jsonl, no terminal SENPAI-RESULT.
+
+### Disposition
+
+- Hypothesis reassigned on the compile baseline with the per-epoch grad-norm aggregation
+  (min/p50/mean/max/clip_frac) added so we still get the diagnostic value regardless of
+  whether clipping wins on validation.
+
+---
+
+## 2026-05-12 22:45 — PR #1590: slice_num 64 → 96 + bf16 — CLOSED
+
+- **Branch:** `charliepai2g48h5-frieren/slice-num-96-bf16`
+- **Student:** charliepai2g48h5-frieren
+- **Hypothesis:** Increase Transolver slice_num from 64 → 96 paired with bf16 AMP. With
+  bf16's ~2× throughput we can afford the slightly more expensive forward and still complete
+  full training; more slices = finer flow-field tokenization.
+
+### Results
+
+| Metric | Baseline (#1532 bf16) | This PR (#1590) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.12 | **105.024** | +3.86% (WORSE) |
+
+- **Status:** CLOSED — does not beat bf16 baseline, well behind the new compile baseline (69.83).
+- **Metric artifacts:** PR comment; trajectory shows monotone-worse vs slice_num=64 within
+  the same epoch budget.
+
+### Analysis
+
+Combined with the round-3 fp32 result (slice_num=128 → val=145.97 at 11 epochs, wall-clock-bound)
+and the bf16 result here (slice_num=96 → 105.02 at full budget), the slice_num lever is now
+well-characterized:
+
+| slice_num | regime | val_avg/mae_surf_p |
+|---:|---|---:|
+| 64 | bf16 (baseline) | 101.12 |
+| 96 | bf16 | 105.02 (+3.86%) |
+| 128 | fp32 (epoch-bound) | 145.97 |
+
+Monotone-worse with slice count. The 64-slice default appears near-optimal for this dataset
+size — adding slices adds capacity that overfits or simply costs throughput without finding
+useful additional flow-field structure. **slice_num is a dead lever upward**; downward
+(slice_num=32 or 48) would be a separate experiment but is a low-priority swing.
+
+### Conclusions
+
+- slice_num=64 is the right value for the current data + architecture.
+- Closing this arm; do NOT pair slice_num=96 with compile (no signal it would help).
+- Round-6 reassignment: frieren → step-based linear warmup + cosine on compile baseline.
+
+---
+
 ## 2026-05-12 22:10 — PR #1568: torch.compile + bf16 AMP for additional throughput — MERGED ✓
 
 - **Branch:** `charliepai2g48h5-thorfinn/torch-compile-bf16`
