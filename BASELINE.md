@@ -38,3 +38,42 @@ cd "target/" && python train.py \
 ```
 
 *(Config defaults in `train.py` now include `lr=7e-4`, `batch_size=8`, bf16 autocast, and the scoring-bug workaround — no extra flags needed.)*
+
+## 2026-05-12 22:06 — PR #1591: Cosine schedule aligned to 30-min budget: epochs=18
+
+**Changes merged:** `epochs: int = 18` (was 50) in `Config` dataclass — aligns cosine T_max to the realistic 30-min budget. The merged baseline ran 17 epochs with final LR ≈ 6.2e-4 (barely decayed); this change lets cosine reach ~5e-6 final LR, giving the model the low-LR weight-space refinement phase it was missing. One-line diff in `train.py`, zero-overhead change.
+
+### Primary metrics (best val checkpoint, epoch 15 of 17)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **125.3551** | −6.27% |
+| **test_avg/mae_surf_p** | **111.9787** | **−7.67%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| test_single_in_dist | 148.79 | — | — |
+| test_geom_camber_rc | 117.15 | — | — |
+| test_geom_camber_cruise | 77.85 | — | — |
+| test_re_rand | 104.13 | — | — |
+
+### Run info
+
+- **W&B run:** `h7w6skh8` — group `cosine-aligned-epochs`
+- **Epochs:** 17 / 18 (30-min timeout, ~106 s/epoch)
+- **Final LR:** 5.32e-6 (full cosine decay confirmed)
+- **Peak GPU memory:** 82.68 GB
+- **Model config:** n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.67M params)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(No `--epochs` flag needed — default is now 18. All other defaults: `lr=7e-4`, `batch_size=8`, bf16 autocast, scoring-bug workaround.)*
