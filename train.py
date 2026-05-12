@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -354,6 +355,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
+    ema_decay: float = 0.999  # EMA of model weights; updated every step, used for eval
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -403,6 +405,14 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+ema_model = AveragedModel(
+    model,
+    multi_avg_fn=get_ema_multi_avg_fn(decay=cfg.ema_decay),
+    use_buffers=True,
+)
+ema_model.to(device)
+print(f"EMA: decay={cfg.ema_decay} (updated every optimizer step)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -464,6 +474,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema_model.update_parameters(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -473,10 +484,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (EMA model) ---
     model.eval()
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -491,7 +503,11 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save({
+            "model": model.state_dict(),
+            "ema_model": ema_model.state_dict(),
+            "ema_decay": cfg.ema_decay,
+        }, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -521,20 +537,23 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    ema_model.load_state_dict(ckpt["ema_model"])
     model.eval()
+    ema_model.eval()
 
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (EMA model)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
