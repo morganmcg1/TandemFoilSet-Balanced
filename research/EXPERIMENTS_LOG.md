@@ -8,6 +8,44 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 20:02 — PR #1514: Ada-Temp per-point adaptive slice temperature — **REQUEST CHANGES** (sent back to alphonse for v2)
+
+- Branch: `charliepai2g24h4-alphonse/ada-temp`
+- Hypothesis: H1 from round-2 list. Replace scalar `self.temperature` with
+  `τᵢ = τ₀ + Linear(dim, heads)(xᵢ)`, zero-init the projection so the model
+  starts identical to baseline (Transolver++, arXiv 2502.02414).
+
+| Metric | This PR | L1 baseline (#1397) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 13/14) | 101.770 | 100.957 | +0.81% (slightly worse) |
+| test_avg/mae_surf_p (3-split, ex-cruise) | 100.825 | 100.831 | -0.007 (effectively flat) |
+| test_avg/mae_surf_p (4-split) | NaN (no NaN-safe fix in v1) | NaN | — |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 118.023 / 114.128 / 78.348 / 96.582 | 127.371 / 110.832 / 77.353 / 88.273 | **-9.3 / +3.3 / +1.0 / +8.3** |
+
+- **Per-split signal is the key story.** Ada-Temp helps single-foil in-distribution
+  by ~9.3 (~7.3% gain) but regresses on val_re_rand by ~8.3 (~9.4% loss). The
+  geometry-camber splits drift slightly worse. Net val_avg is essentially flat
+  (slight regression) and test 3-split mean is statistically indistinguishable.
+- **Implementation contribution worth recording**: alphonse identified that
+  `Transolver.__init__` calls `self.apply(self._init_weights)` *after* `temp_proj`
+  is zero-initialized, and `_init_weights` re-initializes every `nn.Linear` with
+  `trunc_normal_(std=0.02)`. This silently breaks the "Δτ = 0 at step 0" invariant.
+  Fix: re-zero loop after `self.apply(...)`. Without the fix an earlier run
+  diverged from baseline from epoch 1. The committed run is the corrected version.
+- **Diagnosis (student): extra per-head Δτ capacity hurts cross-regime transfer**
+  inside a 30-min wall-clock budget. Single-foil in-dist benefits from sharper
+  slice attention; tandem-flow OOD distributions cannot afford the extra
+  capacity that lets the temperature head co-adapt to training-set spurious cues.
+- **Action: sent back with v2 spec** — drop `temp_proj` from `Linear(dim, heads)`
+  to `Linear(dim, 1)` (shared-across-heads Δτ), which cuts Ada-Temp's added
+  capacity by ~75% (2,580 → 645 params). Direct test of the student's own
+  capacity-overfit hypothesis. Also adds the NaN-safe pre-filter so v2 will
+  report a finite 4-split test mean. Student suggested 4 follow-ups; v2 picks
+  #2 (shared-across-heads), with #3 (last-blocks-only) as a stack-on if v2
+  partially works and #4 (combine with Eidetic Slice Embedding) as a
+  wave-3 candidate if v2 fails. Suggestion #1 (length-budgeted retest)
+  is not actionable (`SENPAI_TIMEOUT_MINUTES` is a hard bound).
+
 ## 2026-05-12 19:55 — Stale-WIP closures: 5 PRs branched off pre-L1 MSE base
 
 Five round-1 PRs (#1407 wider/deeper, #1411 slice_num=128, #1417 lr-warmup=1e-3,
