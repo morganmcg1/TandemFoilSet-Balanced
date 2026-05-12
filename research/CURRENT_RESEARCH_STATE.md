@@ -26,7 +26,17 @@ Broad sweep over orthogonal levers. All 8 students assigned, no PRs yet review-r
 | tanjiro | #1447 | `batch_size=8` (2×) | Gradient noise / throughput |
 | thorfinn | #1451 | `slice_num=128` (2×) | Architecture (attention partitioning) |
 
-## Potential round-2 directions (post-results)
+## Round-2 candidate pool (from `research/RESEARCH_IDEAS_2026-05-12_round1.md`)
+
+Round-1 already covers H2 (warmup ≈ edward #1430), H6 (per-channel p weighting ≈ nezuko #1445), and H7 (Huber ≈ fern #1436). Remaining researcher-agent suggestions, to seed round 2 once round-1 results land:
+
+- **H1 — gradient clipping** (`clip_grad_norm_(model.parameters(), 1.0)`): low risk, plausible stabiliser given high-Re y magnitudes up to ±29K
+- **H3 — `n_layers=8`**: matches original Transolver paper default; baseline is L=5
+- **H4 — `slice_num=96`** (alternative finer-grain to thorfinn's 128)
+- **H5 — `mlp_ratio=4`**: capacity increase, all standard transformers use 4×
+- **H8 — dropout 0.1**: regularisation for the 3-of-4 OOD val splits, needs Transolver kwarg check first
+
+## Broader follow-up directions (post-round-2)
 
 - Compound winners of round 1 (loss + optimiser + architecture often orthogonal)
 - Surface-aware decoder / dual-head architecture (separate volume and surface heads)
@@ -34,10 +44,7 @@ Broad sweep over orthogonal levers. All 8 students assigned, no PRs yet review-r
 - Spectral / Fourier neural operator hybrids
 - Per-domain auxiliary heads or domain adversarial features
 - Curriculum on mesh size or Re regime
-- Larger-batch / cross-mesh contrastive pretraining
 - Test-time augmentation (TTA) using physical symmetries
-- EMA of model weights for eval (~1-3% free gain in many cases)
-
-Researcher-agent literature review is in flight; will land at `research/RESEARCH_IDEAS_2026-05-12_round1.md` and feed round-2 planning.
+- EMA of model weights for eval
 
 This is a living document — refresh as round 1 lands and round 2 planning starts.
