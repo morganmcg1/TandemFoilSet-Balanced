@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-05-12 22:55 — Race-condition send-backs (3 PRs on stale baseline)
+
+After SOAP merged at 22:30 as new baseline (42.4015), three PRs completed concurrently on the pre-SOAP base. None directly comparable to current baseline; all sent back for SOAP-rebased re-test.
+
+| PR | Student | Slug | Final val (stale base) | Decision |
+|----|---------|------|------------------------|----------|
+| #1456 | alphonse | bf16-amp | 83.9115 (18 epochs, +29% throughput) | Send back: rebase + T_max=17 |
+| #1599 | fern | re-conditioned-scaling | 92.4482 (scale corr +0.92 with log_Re) | Send back: rebase + test compound |
+| #1630 | tanjiro | sgdr-restarts | 90.6703 (restart cost ~4 epochs) | Send back: pivot to monotone cosine + eta_min=1e-5 |
+
+**Mechanism evidence preserved**:
+- **bf16-amp**: 18 epochs vs 14 in same wall-clock = +29% throughput confirmed. Compounds cleanly with SOAP since SOAP only got 13 epochs (val still falling).
+- **re-conditioned-scaling**: ReScaleHead worked mechanically (scale correlation with log_Re reached +0.92, exactly as predicted) but didn't beat AdamW baseline. SOAP compound test will reveal: stacks, redundant, or conflicts.
+- **sgdr-restarts**: Restart at epoch 8 fired correctly per design but cost ~4 epochs of re-convergence with no better basin. Pivot to tanjiro's own follow-up suggestion (monotone cosine + eta_min=1e-5 floor) — same intent (preserve late-epoch step magnitude) without the restart penalty.
+
+All 3 students now have active rebases against the SOAP baseline. PR #1630 had a code-block truncation in the send-back comment; corrected via follow-up comment.
+
+---
+
 ## 2026-05-12 22:xx — PR #1613: [soap-optimizer] SOAP quasi-Newton optimizer
 
 - **Branch**: thorfinn/soap-optimizer
