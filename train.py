@@ -312,6 +312,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_mode": cfg.ema_mode,
+        "ema_decay": cfg.ema_decay,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -358,6 +360,10 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    # EMA settings. mode="adaptive" uses timm-style decay = min(ema_decay, (1+step)/(10+step));
+    # mode="fixed" uses the constant ema_decay value.
+    ema_mode: str = "adaptive"
+    ema_decay: float = 0.99
 
 
 cfg = sp.parse(Config)
@@ -404,12 +410,15 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 # EMA shadow weights — updated every training step, used for all val/test eval.
-ema_decay = 0.999
+# Mode "adaptive": decay = min(cfg.ema_decay, (1+step)/(10+step)) — timm-style warmup.
+# Mode "fixed":    decay = cfg.ema_decay (constant).
+assert cfg.ema_mode in ("adaptive", "fixed"), f"invalid ema_mode {cfg.ema_mode!r}"
 ema_params = {
     k: v.detach().clone().float()
     for k, v in model.state_dict().items()
     if v.is_floating_point()
 }
+ema_step = 0
 
 
 def apply_ema(model, ema_params, device):
@@ -441,7 +450,6 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "ema_decay": ema_decay,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -479,10 +487,15 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        ema_step += 1
+        if cfg.ema_mode == "adaptive":
+            cur_decay = min(cfg.ema_decay, (1.0 + ema_step) / (10.0 + ema_step))
+        else:
+            cur_decay = cfg.ema_decay
         with torch.no_grad():
             for k, v in model.state_dict().items():
                 if k in ema_params:
-                    ema_params[k].mul_(ema_decay).add_(v.detach().float(), alpha=1 - ema_decay)
+                    ema_params[k].mul_(cur_decay).add_(v.detach().float(), alpha=1 - cur_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -538,7 +551,21 @@ for epoch in range(MAX_EPOCHS):
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
-print(f"\nTraining done in {total_time:.1f} min")
+if cfg.ema_mode == "adaptive":
+    final_decay = min(cfg.ema_decay, (1.0 + ema_step) / (10.0 + ema_step)) if ema_step > 0 else 0.0
+else:
+    final_decay = cfg.ema_decay
+print(
+    f"\nTraining done in {total_time:.1f} min  "
+    f"[ema_mode={cfg.ema_mode} ema_step={ema_step} final_decay={final_decay:.6f}]"
+)
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "ema_summary",
+    "ema_mode": cfg.ema_mode,
+    "ema_decay_cfg": cfg.ema_decay,
+    "ema_step": ema_step,
+    "final_decay": final_decay,
+})
 
 # --- Test evaluation + local summary ---
 if best_metrics:
