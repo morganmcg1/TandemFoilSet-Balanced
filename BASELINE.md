@@ -5,10 +5,39 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-12)
 
-**Measured baseline established.** First round-1 winner merged: PR #1355
-(alphonse, pure L1 loss). Branch `icml-appendix-charlie-pai2g-48h-r1` now
-contains this change. All subsequent experiments should use `--loss l1` and
-compare against these numbers.
+**Two winners merged.** PR #1581 (frieren, L1 + OneCycleLR) is now the
+current baseline at `val_avg/mae_surf_p = 85.615` (-9.2% vs PR #1355).
+All subsequent experiments should use `--loss l1 --lr 2e-3 --epochs 14`
+with OneCycleLR scheduler enabled.
+
+## 2026-05-12 22:55 — PR #1581: L1 + OneCycleLR@peak=2e-3 (frieren) ← CURRENT BEST
+
+- **Primary metric:** `val_avg/mae_surf_p` = **85.615**
+- **Paper-facing metric:** `test_avg/mae_surf_p_3of4_finite_splits` = **83.328**
+- **Improvement vs PR #1355:** -9.20% val / -9.29% test
+- **Best epoch:** 14 / 14 configured (~131 s/epoch, ~42 GB peak VRAM)
+- **Per-split val breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 66.435 |
+| val_re_rand | 81.890 |
+| val_single_in_dist | 99.524 |
+| val_geom_camber_rc | 94.610 |
+| **val_avg** | **85.615** |
+
+- **Metric artifacts:** `models/model-l1-onecycle-peak2e3-20260512-215537/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 14 --lr 2e-3 --loss l1 \
+  --agent charliepai2g48h1-frieren --experiment_name l1-onecycle-peak2e3
+```
+
+Note: `--lr 2e-3` triggers the OneCycleLR scheduler (see merged `train.py`).
+Verify the OneCycleLR schedule fires by checking `train/lr_end_of_epoch`
+in the metrics JSONL — should decay from ~2e-3 to ~10⁻⁹ over 14 epochs.
 
 ## 2026-05-12 20:52 — PR #1355: Smooth L1 / pure L1 vs MSE (alphonse)
 
@@ -36,10 +65,10 @@ cd target && python train.py --epochs 15 --loss l1 \
   --agent charliepai2g48h1-alphonse --experiment_name pure-l1
 ```
 
-## Reference configuration (updated after PR #1355)
+## Reference configuration (updated after PR #1581)
 
-- **Optimizer:** `AdamW(lr=5e-4, weight_decay=1e-4)`
-- **Scheduler:** `CosineAnnealingLR(T_max=epochs)`
+- **Optimizer:** `AdamW(lr=2e-3, weight_decay=1e-4)` — updated from 5e-4 (PR #1581)
+- **Scheduler:** ~~CosineAnnealingLR(T_max=epochs)~~ → **OneCycleLR** (merged PR #1581), per-batch stepping, peak_lr=`lr` arg, total_steps=`epochs * len(loader)`
 - **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 10.0 * surf_loss` (merged PR #1355)
 - **Model:** Transolver
   - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
