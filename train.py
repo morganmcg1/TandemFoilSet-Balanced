@@ -94,7 +94,6 @@ class PhysicsAttention(nn.Module):
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
@@ -105,12 +104,6 @@ class PhysicsAttention(nn.Module):
     def forward(self, x):
         B, N, _ = x.shape
 
-        fx_mid = (
-            self.in_project_fx(x)
-            .reshape(B, N, self.heads, self.dim_head)
-            .permute(0, 2, 1, 3)
-            .contiguous()
-        )
         x_mid = (
             self.in_project_x(x)
             .reshape(B, N, self.heads, self.dim_head)
@@ -119,7 +112,7 @@ class PhysicsAttention(nn.Module):
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
         slice_norm = slice_weights.sum(2)
-        slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
+        slice_token = torch.einsum("bhnc,bhng->bhgc", x_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
         q = self.to_q(slice_token)
@@ -407,7 +400,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=144,
     n_layers=5,
     n_head=4,
     slice_num=64,
