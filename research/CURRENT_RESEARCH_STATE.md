@@ -1,40 +1,57 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-12 (launch start)
+- **Date:** 2026-05-12 ~20:00 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock. Treat experiments as isolated for git and experiment artifacts; do not cross-reference unrelated branches.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
 
-## Current research focus
+## Current baseline
 
-This branch starts from the unmodified `train.py` baseline (Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; AdamW lr=5e-4 wd=1e-4; CosineAnnealingLR; weighted MSE with surf_weight=10). With a hard 30-min per-run cap, we'll get only ~3–6 full epochs per arm, so the first round prioritizes **changes that show signal early and have low per-step overhead**:
+| Config | val_avg/mae_surf_p | test_avg/mae_surf_p | PR |
+|--------|-------------------|--------------------|----|
+| BF16 autocast (merged) | **123.72** | NaN* | #1371 |
 
-1. **Loss-formulation levers** that re-weight surface pressure (which dominates the ranking metric) without changing capacity or schedule.
-2. **Optimization-schedule levers** (LR shape, warmup) that change where the optimizer ends up after 3–6 epochs.
-3. **Light architectural/feature additions** that fit in the 30-min budget — input encodings, dropout, small width/depth bumps only with care.
-4. **Throughput levers** (mixed precision) that buy more epochs in the same wall-clock.
+*NaN due to pre-existing data bug in `test_geom_camber_cruise/000020.pt` — frieren fixing in PR #1541.
 
-## Open hypothesis families (round 1)
+## Round 1 results so far
 
-| Student | Family | Why |
-|---------|--------|-----|
-| alphonse | `surf_weight=30` | Surface pressure is the ranking metric; the default 10 likely underweights it relative to volume. |
-| askeladd | Huber loss (δ=1.0) replacing MSE | y has 4 orders of magnitude; Huber should be more robust on Re extremes (esp. re_rand). |
-| edward   | OneCycleLR (max_lr=1e-3, pct_start=0.1) | Higher peak LR with warmup tends to escape sharp minima; cosine alone may under-explore. |
-| fern     | Dropout=0.1 + grad-clip 1.0 | Light regularization to improve OOD generalization on the unseen-camber tracks. |
-| frieren  | bf16 autocast | Free speed-up → more epochs in the 30-min cap → better convergence at fixed cost. |
-| nezuko   | Fourier positional encoding on (x,z) | Spatial coords are continuous; Fourier features help models learn high-freq pressure patterns. |
-| tanjiro  | Auxiliary surface-pressure head (separate MLP, λ=2) | Specialized capacity on the metric-driving channel without disturbing the main head. |
-| thorfinn | Warmup 3 epochs then cosine for the rest | Smoother early steps with 5e-4 peak; cheap to test and orthogonal to OneCycleLR. |
+| PR | Student | Config | val_avg | 3-split test | Status |
+|----|---------|--------|---------|-------------|--------|
+| #1371 | frieren | BF16 autocast | **123.72** | 121.90 | ✅ MERGED — new baseline |
+| #1367 | fern | Dropout=0.2+clip=1.0 | **113.86** | 114.77 | ♻ Rebasing (conflict w/ #1371) |
+| #1412 | thorfinn | Warmup-5ep+cosine | 135.37 | 131.12 | ♻ Rebasing to add BF16+warmup combo |
+| #1357-#1400 | others | 5 hypotheses | — | — | WIP/no results yet (2+ hr) |
 
-## Potential next research directions
+**fern dropout=0.2** (113.86) is the current leading unmerged result — 7.7% below the BF16 baseline and still descending at the cap. Priority merge candidate when rebase lands.
 
-- **Output-space transforms:** asinh / log-magnitude on `p` to compress the high-Re tail before the loss.
-- **Per-sample y normalization:** divide each sample's targets by its own y_std to remove the Re-driven scale variance.
-- **Slice-count sweep:** Transolver's `slice_num` (64 default) controls the number of physical "tokens" — likely a high-leverage axis.
-- **Sample weights tweak:** the balanced sampler equalizes domains; try domain-weighted loss with extra weight on cruise (largest meshes, smallest y).
-- **EMA evaluation:** track an exponential moving average of weights and evaluate on it.
-- **Residual / SwiGLU MLPs in TransolverBlock** if simpler wins land.
-- **Sobolev / divergence-free penalty** on (Ux, Uy) — physics-informed aux loss.
+## Key findings from round 1
 
-The list above is the queue for round 2 (assignment after round 1 results land).
+1. **BF16 buys ~4 extra epochs** (18 vs ~14) in the 30-min window — free gains
+2. **Dropout=0.2** unexpectedly improves every split, not just OOD — likely acting as loss-landscape smoother in the low-epoch regime rather than classic regularization
+3. **Warmup=5 > warmup=3** across 3/4 splits (−6.3% on val_avg). Untested with BF16
+4. **Critical bug:** `data/scoring.py` + bad GT in `test_geom_camber_cruise/000020.pt` poisons test_avg — fix in progress (#1541)
+
+## Active experiments
+
+| PR | Student | Hypothesis | Expected ETA |
+|----|---------|-----------|-------------|
+| #1541 | frieren | Fix scoring.py NaN + BF16 baseline rerun | ~30 min |
+| #1367 | fern | Dropout=0.2 + BF16 (rebase) | ~30 min |
+| #1412 | thorfinn | Warmup-5 + BF16 combo | ~30 min |
+| #1352 | alphonse | surf_weight=30 | still running? |
+| #1357 | askeladd | Huber loss δ=1.0 | still running? |
+| #1365 | edward | OneCycleLR max_lr=1e-3 | still running? |
+| #1386 | nezuko | Fourier pos encoding | still running? |
+| #1400 | tanjiro | Aux surf-p head | still running? |
+
+## Potential next research directions (round 2+)
+
+- **dropout sweep around 0.2:** fern confirmed 0.2 > 0.1; try 0.15, 0.25, 0.3 to find the optimum
+- **dropout=0.2 + warmup-5 + BF16 triple combo:** after each lands, combine them
+- **slice_num sweep (64→96→128):** Transolver "physics tokens" count is likely high-leverage; VRAM permits (frieren only used 33 GB with BF16)
+- **Bigger model n_hidden=192 or 256:** BF16 at 33 GB leaves 63 GB free; a 2× wider model is possible
+- **Output-space transforms:** asinh on p target to compress high-Re tail
+- **Per-sample y normalization:** divide each sample's y by its own std before loss
+- **Sobolev / divergence-free penalty** on (Ux, Uy)
+- **EMA model** for evaluation — averages out the noise in the short 30-min runs
+- **surf_weight tune** combined with dropout: both work in the same direction (emphasize surface)
