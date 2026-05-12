@@ -228,6 +228,21 @@ Per-split (dropout=0.2):
 
 ---
 
+## 2026-05-12 23:20 — PR #1624: AdamW betas (0.9,0.95) and (0.9,0.98) (frieren) — **CLOSED**
+
+- **Branch:** `willowpai2g24h5-frieren/adamw-betas-ema`
+- **Hypothesis:** Tuning beta2 from 0.999→0.95 or 0.98 to reduce second-moment memory horizon for short training.
+- **W&B runs:** `geuztn5g` (beta2=0.95, val=141.04), `a2h9i5t3` (beta2=0.98, running at val=175 mid-training)
+
+| Arm | val_avg/mae_surf_p | vs Baseline (103.24) |
+|-----|-------------------|---------------------|
+| betas=(0.9, 0.95) | 141.04 | +36.6% worse |
+| betas=(0.9, 0.98) | mid-training ~175 | clearly worse |
+
+**Result:** CLOSED. Both arms substantially worse than baseline. Beta2 reduction removes gradient history too aggressively for 18-epoch training — the standard 0.999 maintains a longer moving average that works better with cosine annealing.
+
+---
+
 ## 2026-05-12 22:53 — PR #1386: Fourier positional encoding L=6 mf32 BF16 (nezuko) — **MERGED**
 
 - **Branch:** `willowpai2g24h5-nezuko/fourier-position-encoding`
