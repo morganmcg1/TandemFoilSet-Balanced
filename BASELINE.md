@@ -15,7 +15,11 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 - **Metric artifacts:** `models/model-charliepai2g48h4-fern-scoring-nan-fix-20260512-185620/metrics.jsonl`
 - **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-fern --experiment_name "charliepai2g48h4-fern/scoring-nan-fix"`
 
-**Note on variance:** Run-to-run noise on the default config is large (askeladd ran identical surf_weight=20 config twice and got val_avg=127.94 vs 157.95, a ~30-pt spread). A single baseline run is therefore a point estimate with ±~15 uncertainty. Alphonse's #1368 baseline-ref PR will provide a second sample; once it lands, the variance-adjusted baseline estimate will be updated here.
+**Two-point default-config baseline estimate (2026-05-12 20:43):**
+- fern scoring-fix run: val_avg = **123.99** (this PR)
+- alphonse baseline-ref (#1368): val_avg = **137.57**
+- Two-run mean: ~**130.8**; σ ≈ **6.8**; peak-to-peak range: **13.6 pts (~10%)**
+- Practical comparison threshold: differences < ~10 pts are inconclusive on a single unseeded run.
 
 **Note on test metric:** `test_avg/mae_surf_p = 110.97` is the first clean test number on this branch — the scoring-nan-fix PR is what made it possible. All prior test numbers (NaN) were the result of the `Inf * 0 = NaN` propagation bug in `data/scoring.py::accumulate_batch` now fixed in this merge.
 
