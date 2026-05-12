@@ -1,29 +1,42 @@
 # SENPAI Research State
 
-- 2026-05-12 — willow-pai2g-48h-r1 launch
-- No directives from human researcher team yet.
-- No baseline run on `icml-appendix-willow-pai2g-48h-r1` yet; the unmodified Transolver in `train.py` is the implicit starting point (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2; AdamW lr=5e-4, wd=1e-4, batch=4, surf_weight=10, cosine over 50 epochs, hard 30-min wall clock per run).
+- 2026-05-12 20:10 — willow-pai2g-48h-r1, round 1 in progress
+- No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
-## Research focus
-Round 1 establishes the lay of the land across orthogonal levers for `val_avg/mae_surf_p` and the matching `test_avg/mae_surf_p`. Each hypothesis targets a different axis so we can pick the best directions for round 2 without redundant work.
+## Current baseline (PR #1391 merged)
+**test_avg/mae_surf_p = 121.28** | val_avg/mae_surf_p = 133.75
+Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, cosine over 50 epochs, 30-min cap.
 
-## Round 1 hypothesis matrix (8 students)
-| Student | Slug | Lever | Predicted delta on val_avg/mae_surf_p |
-|---------|------|-------|---------------------------------------|
-| alphonse | `lr-warmup-1e-3` | Optimization schedule | -5 to -10% |
-| askeladd | `wider-hidden-192` | Width capacity | -3 to -7% |
-| edward | `more-slices-128` | Physics-token resolution | -2 to -6% |
-| fern | `deeper-7-layers` | Depth capacity | -3 to -6% |
-| frieren | `surf-weight-25` | Loss balance to primary metric | -2 to -6% |
-| nezuko | `fourier-pos-features` | Input representation | -5 to -10% |
-| tanjiro | `bf16-batch-8` | Throughput → more effective epochs | -3 to -7% |
-| thorfinn | `lion-optimizer` | Optimizer geometry | -2 to -5% |
+## Round-1 status
+| Student | PR | Hypothesis | Status | Result |
+|---------|-----|-----------|--------|--------|
+| alphonse | #1359 | lr-warmup-1e-3 | stale_wip | No result yet |
+| askeladd | #1361 | wider-hidden-192 | wip (retrying) | val 140-148 (NaN test fixed) → rebase+retest |
+| edward | #1362 | more-slices-128 | wip (retrying) | test 129.60 (worse than baseline) → rebase+retest |
+| fern | #1364 | deeper-7-layers | stale_wip | No result yet |
+| frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
+| nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
+| tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
+| thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
-## Potential round-2 directions (informed by round-1 outcomes)
-- If width/depth helps: scale further and combine with throughput-enabling changes (bf16 + larger batch).
-- If surface-weight helps: try per-channel scaling (push p relative to Ux/Uy) and surface-aware loss masks (e.g. log-loss or huber).
-- If Fourier features help: try learned Fourier (NeRF-style) and combine with unified-pos grid.
-- If slice_num helps: vary heads and dim_head together; try slice annealing (start small, grow).
-- Optimizer winners motivate trying schedule-free, AdEMAMix, or curvature-aware variants.
-- Cross-split disagreements (Re vs geom-camber tracks) → consider domain-conditional heads or auxiliary classifier features.
-- Plateau Protocol: switch tier — multiscale physics (graph-conv local mixing + Transolver global), spectral decoders, or PDE-residual auxiliaries.
+## Key research findings so far
+1. **Throughput matters more than architecture at 30-min budget**: bf16+batch-8 gets 17 epochs vs 10-11 epochs, that alone was enough for the current best test score.
+2. **Fourier features show strongest val signal** (119.70 vs baseline 133.75 val), but needs proper test comparison — sending back for rebase.
+3. **Undertraining is the main confound**: cosine T_max=50 barely decays in 10-17 epochs; all round-1 models are severely undertrained.
+4. **Critical data bug found**: `test_geom_camber_cruise/000020.pt` has 761 inf in ground-truth `p`; scorig workaround now in baseline.
+
+## Active research priorities for pending students
+Students still stale (alphonse, fern, frieren, thorfinn) need to complete their round-1 runs and rebase onto the new baseline before submitting.
+
+## Emerging round-2 hypotheses
+- **Fourier + bf16**: Most promising combo given nezuko's val signal and tanjiro's throughput win
+- **Wider model (192) + bf16**: Width hypothesis needs a fair test on the new baseline
+- **Cosine schedule fix**: T_max aligned to actual epoch budget (key undertraining mitigation — alphonse's `lr-warmup-1e-3` directly tests this)
+- **More physics tokens (slice_num=128) + bf16**: Edward's hypothesis needs fair test on new baseline
+- **Combined wins**: After confirming which individual changes work, combine the winners for round 3+
+- **Deeper model (7 layers)**: Fern's result pending — depth may compound well with throughput improvements
+
+## Next milestones
+- Get clean results from the 4 stale_wip students (alphonse, fern, frieren, thorfinn)
+- Get rebase+retest results from askeladd, edward, nezuko on new baseline
+- Identify whether Fourier features beat bf16 baseline (key question for round 2 direction)

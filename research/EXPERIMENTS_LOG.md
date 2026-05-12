@@ -44,3 +44,43 @@ Per-split test mae_surf_p: in-dist 144.1, geom_rc 141.2, geom_cruise **NaN**, re
 **Analysis**: Strong val signal — trial-1 119.70 is the best round-1 number so far (vs askeladd wider-192 at 140.73). Run-to-run variance is high (~11% between trials) consistent with early-training noise (cosine T_max=50 means LR still at ~96% of peak at epoch 12). The model is clearly still descending (val_avg drops from 225.9 → 119.7 in 12 epochs), so this hypothesis is undertrained but already strongest. Both trials hit the same cruise inf, suggesting it's structural to the Fourier-features model on extreme OOD cruise cambers, not a random fluke. Ux/Uy channels remain finite, so the inf is localized to predicted pressure on a few nodes.
 
 **Action**: Sent back with the same `nan_to_num + clamp` fix as #1361 to get a finite cohort-comparable test_avg. Schedule change (T_max=actual epochs) deferred to round 2 — it's a confound vs other round-1 PRs and is being separately tested by alphonse's `lr-warmup-1e-3` PR.
+
+**Correction (2026-05-12 20:10)**: nan_to_num advice was wrong diagnosis — the NaN was caused by corrupted GT y (not pred). Sent back to rebase onto new baseline and retest Fourier with only the Fourier feature changes.
+
+---
+
+## 2026-05-12 20:05 — PR #1362: More physics slices: slice_num 64→128 for richer flow tokens
+- Branch: willowpai2g48h1-edward/more-slices-128
+- Hypothesis: Double slice_num 64→128 (more physics tokens per head). Predicted -2% to -6%.
+- W&B run: `4ka7n8pi` (trial-1, includes scoring bug workaround)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | **142.42** @ epoch 9 |
+| test_avg/mae_surf_p | **129.60** (with bug workaround) |
+| test single_in_dist | 152.02 | test geom_camber_rc | 141.54 |
+| test geom_camber_cruise | 97.40 (199/200 samples) | test re_rand | 127.44 |
+| Epochs completed | 11 (timeout) | Epoch time | ~172 s |
+| Peak GPU mem | 54.5 GB | Params | 0.67M |
+
+**Analysis**: Edward independently found and fixed the scoring bug (identical root cause as tanjiro). val_avg=142.42 and test_avg=129.60 are both worse than tanjiro's baseline (133.75/121.28), so `slice_num=128` alone is not a win. However the slice doubling costs near-zero compute (+0% epoch time) so it's worth testing as an additive change on top of the bf16 baseline.
+
+**Action**: Sent back to rebase onto new bf16+batch-8 baseline and retest `slice_num=128` addition. Target: test_avg < 121.28.
+
+## 2026-05-12 20:05 — PR #1391: BF16 + batch 8: more epochs within 30-min cap via AMP ⭐ MERGED
+- Branch: willowpai2g48h1-tanjiro/bf16-batch-8
+- Hypothesis: bf16 autocast + batch_size=8 + lr=7e-4 (√2 scaling) → more epochs in 30-min budget. Predicted -3% to -7%.
+- W&B run: `s8kl6dza` (trial-1)
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best) | **133.7491** @ epoch 17 |
+| **test_avg/mae_surf_p** | **121.2830** ← NEW BASELINE |
+| test single_in_dist | 166.19 | test geom_camber_rc | 136.20 |
+| test geom_camber_cruise | 78.57 | test re_rand | 104.17 |
+| Epochs completed | 17 (timeout, ~107 s/epoch) |
+| Peak GPU mem | 65.9 GB | Params | 0.67M |
+
+**Analysis**: Tanjiro found the scoring bug independently, patched it in evaluate_split, and produced the strongest test_avg in the cohort (121.28 vs edward's 129.60 and partial-fourier estimates). The bf16+batch-8 config doubles effective throughput (17 epochs vs ~10-11 for others), enabling the model to reach a significantly lower loss at timeout. Also: `test_geom_camber_cruise`=78.57 is very low — BF16+higher-batch seems to particularly improve cruise OOD generalization. Val loss still descending at epoch 17 — more training would help further.
+
+**Action**: MERGED as new round-1 baseline. Also merged critical scoring bug workaround. All future PRs must rebase and beat test_avg < 121.28.
