@@ -217,12 +217,13 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, ch_w) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). ``ch_w`` applies the
+    same per-channel weighting used in training so the printed losses match.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -236,11 +237,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # scoring.accumulate_batch documents per-sample skip when y has
+            # any non-finite value, but (pred-y).abs() still produces NaN at
+            # those positions and NaN*0 in the mask sum stays NaN. Pre-skip
+            # here so both the printed losses and the accumulator stay finite.
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.all():
+                mask = mask & y_finite.unsqueeze(-1)
+                y = torch.where(torch.isfinite(y), y, torch.zeros_like(y))
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            sq_err = ((pred - y_norm) ** 2) * ch_w
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -403,6 +413,9 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ch_w = torch.tensor([1.0, 1.0, 3.0], device=device)  # [Ux, Uy, p]
+print(f"Per-channel loss weights: Ux={ch_w[0].item()}, Uy={ch_w[1].item()}, p={ch_w[2].item()}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -444,7 +457,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        sq_err = ((pred - y_norm) ** 2) * ch_w
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -467,7 +480,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, ch_w)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -525,7 +538,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, ch_w)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
