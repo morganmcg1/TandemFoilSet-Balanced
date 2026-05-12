@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -403,8 +404,21 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+PEAK_LR = 1e-3
+WARMUP_EPOCHS = 3
+COSINE_MIN_RATIO = 0.01
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=PEAK_LR, weight_decay=cfg.weight_decay)
+
+
+def lr_lambda(epoch):
+    if epoch < WARMUP_EPOCHS:
+        return (epoch + 1) / WARMUP_EPOCHS
+    progress = (epoch - WARMUP_EPOCHS) / max(MAX_EPOCHS - WARMUP_EPOCHS, 1)
+    return 0.5 * (1.0 + math.cos(math.pi * progress)) * (1.0 - COSINE_MIN_RATIO) + COSINE_MIN_RATIO
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -419,6 +433,13 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "scheduler": {
+            "type": "warmup_cosine",
+            "peak_lr": PEAK_LR,
+            "warmup_epochs": WARMUP_EPOCHS,
+            "cosine_min_ratio": COSINE_MIN_RATIO,
+            "max_epochs": MAX_EPOCHS,
+        },
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -432,6 +453,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    epoch_lr = optimizer.param_groups[0]["lr"]
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
@@ -491,6 +513,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": epoch_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
