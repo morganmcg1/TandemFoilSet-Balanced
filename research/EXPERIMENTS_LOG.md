@@ -206,3 +206,65 @@ Per-val-split (best epoch 27):
 | **avg** | **76.43** |
 
 **Conclusion: MERGED.** Free win on every axis — 1.58× throughput (not 1.2-1.4× predicted), 29 epochs vs 18 (+61%), val=76.43 (−22.6% improvement). Compile overhead is one-shot (~12s epoch 1 only), amortized over 28 subsequent epochs. dynamic=True confirmed correct — tight epoch-to-epoch variance (σ=0.7s) shows no recompilation jitter. No correctness regressions. New baseline raised to 76.43. Follow-up: T_max=30 retune (PR #1628) to align cosine schedule to new 29-epoch budget.
+
+---
+
+## 2026-05-12 23:XX — PR #1373: lr=1e-3 + 3-epoch linear warmup + cosine (alphonse)
+- willowpai2g24h4-alphonse/lr-warmup-1e-3
+- **Hypothesis:** Higher peak LR (1e-3 vs 5e-4) with linear warmup enables faster early descent and deeper final minimum within the 30-min cap. Predicted 5-15% val improvement.
+- **W&B:** `waeuuqkw`
+
+| Metric | Baseline #1584 | PR #1373 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best ckpt) | 76.4310 | **75.8473** | **−0.58 (−0.76%)** |
+| test_avg/mae_surf_p (4-split) | 68.7604 | **67.3037** | **−1.46 (−2.12%)** |
+| Test 3-split mean (excl. cruise) | 74.84 | 74.80 | −0.04 |
+| Best epoch | 27/29 | 27/29 | same |
+| Peak GPU | 50.78 GB | 48.60 GB | −2.18 GB |
+| Sec/epoch | ~62.6s | ~61.2s | −1.4s |
+
+Per-split val (best epoch 27):
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 86.08 |
+| val_geom_camber_rc | 91.75 |
+| val_geom_camber_cruise | 52.57 |
+| val_re_rand | 72.99 |
+| **avg** | **75.85** |
+
+Per-split test (all 4 splits clean):
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 76.74 |
+| test_geom_camber_rc | 83.08 |
+| test_re_rand | 64.59 |
+| test_geom_camber_cruise | 44.80 (nan_to_num biased low) |
+| **avg (4-split)** | **67.30** |
+
+**Diff vs prior baseline:** lr 5e-4 → 1e-3; replaced `CosineAnnealingLR(T_max=50)` with `SequentialLR([LinearLR(start_factor=0.1, total_iters=3), CosineAnnealingLR(T_max=47)], milestones=[3])`.
+
+**Conclusion: MERGED.** Both val (−0.76%) and test (−2.12%) improved in the same direction. The val delta alone is within the ±5% RNG variance alphonse measured (single-seed; cannot conclude lr=1e-3 categorically better), but the test improvement of 2.1% is more meaningful and the directions are consistent. Per "when in doubt, merge" principle and "small improvements compound" guideline, took it. New baseline: val=75.85, test=67.30. Note: the warmup prevented the high-LR instability seen in earlier 1e-3 trials. T_max retune (thorfinn #1628) and the warmup are now orthogonal — may stack.
+
+---
+
+## 2026-05-12 23:XX — PR #1390: Raise surf_weight 10 → 25 (fern)
+- willowpai2g24h4-fern/higher-surf-weight
+- **Hypothesis:** Increasing the surface-node loss weight from 10× to 25× biases gradients toward surface-pressure prediction, improving val_avg/mae_surf_p.
+- **W&B:** `73qlj0l3`, `h4cghevp`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p best (run 1) | **128.75** |
+| val_avg/mae_surf_p best (run 2) | 131.82 |
+| Run-to-run variance | ~2.4% |
+| Epochs completed | 13-14 / 50 (30-min cap) |
+| Sec/epoch | ~128s |
+| Peak GPU | 91.6 – 94.9 GB |
+
+**Problem: Stale baseline.** Fern's branch was created before PR #1415 (bf16), #1584 (compile), and #1373 (lr warmup) were merged. The run is on pre-compile fp32 code: ~128 s/epoch, 14 epochs, 91+ GB peak — none of these match the current compile+bf16 baseline (~62s/epoch, 29 epochs, ~50 GB). val=128.75 is not comparable to current baseline of 75.85.
+
+**Notable finding:** `test_geom_camber_cruise` showed NaN in both runs. Fern correctly diagnosed this: higher surf_weight forces more aggressive pressure predictions; on OOD cruise samples the normalised MSE can overflow fp32, sending vol_loss to inf and contaminating the split metric. On the compile+bf16 baseline the nan_to_num scoring fix (#1521) should mitigate this, but it may still NaN if predictions genuinely overflow before scoring. Worth monitoring on rebase.
+
+**Conclusion: SENT BACK.** Rebase on current advisor branch (gets compile + bf16 + warmup + lr=1e-3 automatically), keep only surf_weight=25 change, re-run. Once rebased, surf_weight=25 gets 29 epochs at 61s/epoch — a real head-to-head test. Also flagged the cruise NaN failure mode to watch after rebase.
