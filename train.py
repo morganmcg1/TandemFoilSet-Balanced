@@ -102,7 +102,7 @@ class PhysicsAttention(nn.Module):
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -118,6 +118,11 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if mask is not None:
+            # Zero out padded positions so they contribute nothing to slice_token / slice_norm.
+            # We mask AFTER softmax: masking before with -inf produces all-(-inf) rows for
+            # padded nodes (softmax is over slice_num, not N), which softmaxes to NaN.
+            slice_weights = slice_weights * mask[:, None, :, None].to(slice_weights.dtype)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -156,8 +161,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, mask=None):
+        fx = self.attn(self.ln_1(fx), mask=mask) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -207,9 +212,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        mask = data.get("mask")  # [B, N] bool or None
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, mask=mask)
         return {"preds": fx}
 
 
@@ -236,9 +242,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Exclude samples with non-finite ground truth (e.g. test cruise
+            # sample 20 has inf in pressure). scoring.py tries to skip such
+            # samples but `0 * inf = NaN` propagates through the mask multiply
+            # and breaks mae_surf_p; mirror the same defensive cleanup here for
+            # the loss accumulators.
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_sample.all():
+                y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+                mask = mask & y_finite_sample[:, None]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -486,7 +502,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "mask": mask})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
