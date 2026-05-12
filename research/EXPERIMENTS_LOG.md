@@ -8,6 +8,57 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 19:10 — PR #1423: Enable unified_pos=True with ref=8 — **CLOSED, worse than L1**
+
+- Branch: `charliepai2g24h4-tanjiro/unified-pos`
+- Hypothesis: Switch `unified_pos=False → True, ref=8` — add learned ref-grid
+  positional features (Gaussian-RBF over an 8×8 grid in the (x, z) plane,
+  repeat-interleaved to fill `ref**3 = 512`) before the preprocess MLP.
+- Student noted real implementation concerns: `ref**3 = 512` packing inflates 2D
+  features 8× (only 64 distinct grid cells); grid bounds were adjusted to
+  `[-7, 7]` to match the actual data range. Proposed multi-scale RBFs and
+  asymmetric per-axis grid bounds as round-2 follow-ups.
+
+| Metric | Value |
+|---|---:|
+| val_avg/mae_surf_p (best @ ep 14/14) | 118.605 |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 109.159 |
+| L1 baseline (PR #1397) | 100.957 / 100.831 |
+| Delta vs L1 baseline | +17.5% **worse** |
+
+- Note: trained on MSE base (branched before L1 merge), so this is MSE+unified_pos
+  rather than L1+unified_pos. Comparison is contaminated. Closed without rebase
+  because (a) the absolute number is ~17% worse than L1, (b) re-running would
+  consume 30 min for a hypothesis whose own author flagged implementation
+  concerns, and (c) higher-EV ideas are queued. Multi-scale RBF variant may
+  resurface later.
+- Student also flagged the pre-existing `data/scoring.py` NaN-propagation bug
+  (same one alphonse flagged in #1397) and committed a clean workaround in
+  `evaluate_split`. We're propagating that workaround into all subsequent
+  round-2 assignments.
+
+## 2026-05-12 19:08 — PR #1403: Bump surf_weight 10 → 30 — **CLOSED, worse than L1**
+
+- Branch: `charliepai2g24h4-askeladd/surf-weight-30`
+- Hypothesis: Increase `surf_weight` from 10 → 30 to focus optimizer pressure on
+  the surface field that drives the primary metric.
+
+| Metric | Value |
+|---|---:|
+| val_avg/mae_surf_p (best @ ep 12/14) | 133.386 |
+| test_avg/mae_surf_p (4-split, NaN-safe re-eval) | 120.962 |
+| L1 baseline (PR #1397) | 100.957 / 100.831 |
+| Delta vs L1 baseline | +32.1% **worse** |
+
+- Trained on MSE base (branched before L1 merge), so this is MSE+surf_weight=30.
+  Under L1 (less outlier-sensitive than MSE) the optimal `surf_weight` is unlikely
+  to be larger than the default 10. Closed without rebase: re-running would burn
+  30 min on a single-value HP sweep when L1 already wins by 30%+. A proper
+  L1+surf_weight sweep (10/15/25/50) is a small follow-up worth considering only
+  if other levers stop moving.
+- Student also flagged the pre-existing `data/scoring.py` NaN bug and produced an
+  independent NaN-safe re-evaluation script. Confirmed root cause.
+
 ## 2026-05-12 19:05 — PR #1397: L1 (MAE) loss replaces MSE in normalized-space training — **MERGED, new baseline**
 
 - Branch: `charliepai2g24h4-alphonse/l1-loss`
