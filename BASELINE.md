@@ -8,13 +8,15 @@
 | | |
 |---|---|
 | Optimizer | AdamW |
-| LR | 5e-4 |
+| LR | 1e-3 (+ 3-epoch linear warmup) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
 | Epochs | 50 (capped at 30 min wall) |
-| Scheduler | CosineAnnealingLR(T_max=epochs) |
+| Scheduler | SequentialLR: LinearLR(3 ep) → CosineAnnealingLR(T_max=47) |
 | Loss | MSE, `vol_loss + 10 * surf_loss` |
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 |
+| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=128, mlp_ratio=2 |
+| Compile | torch.compile(model, mode="default", dynamic=True) |
+| Precision | bf16 autocast train+eval, grad_clip_norm=1.0 |
 
 ## Primary ranking metric
 
@@ -23,6 +25,35 @@
 Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
+
+### 2026-05-12 23:XX — PR #1373: lr=1e-3 + 3-epoch linear warmup + cosine (on top of compile + bf16 + slice_num=128)
+
+- **val_avg/mae_surf_p:** **75.8473** (best epoch 27 of 29 completed) ✓ NEW BASELINE
+- **test_avg/mae_surf_p (4-split):** **67.3037** (all 4 splits clean; cruise biased low by nan_to_num zeroing)
+- **Test 3-split mean (excl. cruise):** 74.80
+- **Per-split val surface MAE (best epoch 27):**
+  - `val_single_in_dist`: p=86.08, Ux=1.099, Uy=0.581
+  - `val_geom_camber_rc`: p=91.75, Ux=1.795, Uy=0.744
+  - `val_geom_camber_cruise`: p=52.57, Ux=0.669, Uy=0.398
+  - `val_re_rand`: p=72.99, Ux=1.138, Uy=0.558
+- **Per-split test:** test_single_in_dist=76.74, test_geom_camber_rc=83.08, test_re_rand=64.59, test_geom_camber_cruise=44.80
+- **W&B run:** `waeuuqkw`
+- **Peak GPU:** 48.60 GB | **Sec/epoch:** ~61.2s | **Epochs:** 29/50 (30-min cap, epoch 27 best)
+- **Model diff vs prior baseline (torch.compile + bf16 + slice_num=128):**
+  - `lr: 5e-4 → 1e-3`
+  - `SequentialLR([LinearLR(start_factor=0.1, total_iters=3), CosineAnnealingLR(T_max=47)], milestones=[3])` replaces single `CosineAnnealingLR(T_max=50)`
+- **vs prior baseline (#1584):** val −0.58 (−0.76%), test −1.46 (−2.12%)
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --wandb_name willow-r4-alphonse-lr1e3-warmup-compile --agent willowpai2g24h4-alphonse
+  ```
+
+**Note on test_avg:** test_geom_camber_cruise result (44.80) reflects nan_to_num zeroing of bf16-overflow cruise predictions — biased low. Faithful fp32-eval follow-up in progress via #1556.
+
+**Next target:** beat val_avg/mae_surf_p = 75.8473 / test_avg/mae_surf_p = 67.3037
+
+---
 
 ### 2026-05-12 21:56 — PR #1584: torch.compile(model, dynamic=True) — free throughput (on top of bf16 + slice_num=128)
 
