@@ -35,16 +35,22 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (rebasing) | pinged with Huber+bf16 baseline; rebase requested |
-| edward | #1648 | SiLU activation (replace GELU) | Activation function | WIP | SiLU already in ACTIVATION registry; one-line model_config change |
+| edward | #1669 | EMA decay=0.9995 (longer half-life, 3.7 epochs) | EMA variant | WIP | flag-only change; tests wider averaging window |
 | fern | #1626 | EMA without diagnostic pass (more epochs) | Training efficiency | WIP | −25 s/epoch → 21-22 epochs vs 17; EMA mechanism confirmed |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
-| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP (rebasing) | pinged with Huber+bf16 baseline; rebase requested |
+| nezuko | #1672 | Linear LR warmup 1 epoch before cosine | LR schedule | WIP | SequentialLR warmup; targets EMA early-lag and gradient instability |
 | tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebased 21:18) | v2 rerun on bf16+Huber+EMA |
 | thorfinn | #1629 | Dropout=0.1 | OOD regularization | WIP | H8 from round-1 pool; first regularization direction tested |
 
 **Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 92.3452` to merge directly. PRs started against the bf16-only (109.29) or Huber+bf16 (96.49) baseline will need rebase + retest if they fall between those thresholds.
 
-## Closed hypotheses (architecture / capacity)
+## Closed hypotheses (all rounds)
+
+### Loss / feature engineering
+- **per-channel surface weights (0.5, 0.5, 2.0)** (#1445 v2, nezuko) — val=93.60 (+1.4% worse). p already dominates gradient signal; re-weighting backfired, U down-weighting removed geometric regularization.
+- **SiLU activation** (#1648, edward) — val=96.99 (+5.0% worse). "Smoother but slower" trajectory; GELU/lr=5e-4 is well-tuned for this regime.
+
+### Architecture / capacity
 
 - **n_layers=8** (#1546, edward) — val=136.50 (+24.9% vs bf16 baseline). 155 s/epoch → 12 epochs. All splits worse; OOD worst (+37 camber_rc). Classic underfitting: deeper model needs more steps to converge; budget prevents it.
 - **mlp_ratio=4** (#1544, alphonse) — val=115.04 (+5.3% vs bf16 baseline). 108 s/epoch → 17 epochs. 3 of 4 splits worse. Conventional ratio is over-parameterized for 1500-sample dataset at 30-min cap.

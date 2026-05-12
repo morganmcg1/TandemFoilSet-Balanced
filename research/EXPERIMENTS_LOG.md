@@ -362,3 +362,39 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Architectural note**: conventional ML uses `mlp_ratio=4` for large datasets (ImageNet, language); TandemFoilSet has 1500 samples with batch_size=4. Wider MLP adds params without enough optimizer steps to benefit. mlp_ratio=2 is correctly sized for our regime.
 - **Decision: CLOSE.** Assigning alphonse to LR schedule alignment (T_max=18).
 
+## 2026-05-12 22:57 — PR #1648: edward SiLU activation (review 1, closed)
+
+- Branch: `willowpai2g48h5-edward/silu-activation`
+- W&B run: `y57lkrh4` (17 epochs; 110 s/epoch — identical to baseline)
+
+| Metric | SiLU | EMA baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 96.9905 | 92.3452 | +4.65 (+5.0%) |
+| `test_avg/mae_surf_p` | 88.4942 | 81.6297 | +6.86 (+8.4%) |
+| `test/test_single_in_dist/mae_surf_p` | 103.84 | 95.30 | +8.54 |
+| `test/test_geom_camber_rc/mae_surf_p` | 97.07 | 91.93 | +5.15 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 63.30 | 58.72 | +4.58 |
+| `test/test_re_rand/mae_surf_p` | 89.77 | 80.58 | +9.19 |
+
+- **All 4 splits worse.** No throughput penalty (110 s/epoch both). Sanity check confirmed SiLU was active in model.
+- **"Smoother but slower" trajectory**: val curve was less noisy but descended more slowly. SiLU's gentler negative-tail gradient reduces training signal at lr=5e-4 — not what we need.
+- **Decision: CLOSE.** GELU is correctly tuned for this optimizer/LR setup. Activation function is not a productive direction. Assigning edward to EMA decay=0.9995 sweep.
+
+## 2026-05-12 22:57 — PR #1445 v2: nezuko per-channel surface weights (0.5, 0.5, 2.0) (review 1, closed)
+
+- Branch: `willowpai2g48h5-nezuko/surf-channel-weights`
+- W&B run: `yrb605fb` (17 epochs; ~110 s/epoch; rebased on EMA+Huber+bf16 baseline)
+
+| Metric | Per-channel (yrb605fb) | EMA baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 93.6036 | 92.3452 | +1.26 (+1.4%) |
+| `test_avg/mae_surf_p` | 83.7590 | 81.6297 | +2.13 (+2.6%) |
+| `test/test_single_in_dist/mae_surf_p` | 98.54 | 95.30 | +3.25 |
+| `test/test_geom_camber_rc/mae_surf_p` | 94.37 | 91.93 | +2.44 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 59.84 | 58.72 | +1.12 |
+| `test/test_re_rand/mae_surf_p` | 82.29 | 80.58 | +1.71 |
+
+- **All 4 splits regressed.** EMA-vs-live gap preserved (−8.32) — not an EMA artifact.
+- **Root cause**: p already dominates gradient signal (high variance in normalized space); doubling its weight was redundant. U-channel down-weighting removed implicit geometric regularization.
+- **Decision: CLOSE.** Per-channel weighting is not effective on top of EMA+Huber baseline. The optimizer is already attending to p. Assigning nezuko to linear LR warmup.
+
