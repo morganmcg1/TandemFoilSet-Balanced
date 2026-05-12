@@ -14,6 +14,33 @@ Stock `train.py` on `icml-appendix-willow-pai2g-48h-r5` — Transolver with the 
 **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across the 4 val splits).
 **Paper-facing metric:** `test_avg/mae_surf_p` (computed at end of run from the best-val checkpoint).
 
+## 2026-05-13 00:05 — PR #1689: fern Huber β=0.5 (tighter MAE alignment)
+
+Merged. Smooth L1 / Huber loss transition point reduced from β=1.0 → β=0.5 in both the training inner loop and `evaluate_split`. At β=0.5 the quadratic region covers only `|x| < 0.5` (in normalized space, the near-zero small-error regime), while moderate errors (0.5–1.0 MAE range) now receive a linear (L1-like) gradient. This directly aligns with the MAE primary metric over the bulk of the loss density, where most surface-pressure normalized errors live. EMA shadow absorbs the L1 kink noise near zero.
+
+**New best (lower is better):**
+
+| Metric | Value | vs PR #1606 |
+|--------|-------|-------------|
+| `val_avg/mae_surf_p` | **85.9197** | −6.43 (−6.96%) |
+| `test_avg/mae_surf_p` | **76.5495** | −5.08 (−6.22%) |
+
+**Per-split test (best-val checkpoint, epoch 17):**
+
+| Split | mae_surf_p |
+|-------|----------:|
+| `test_single_in_dist` | 88.0317 |
+| `test_geom_camber_rc` | 85.4633 |
+| `test_geom_camber_cruise` | 56.3982 |
+| `test_re_rand` | 76.3047 |
+| **test_avg** | **76.5495** |
+
+- **All 4 splits improved** (in_dist −7.6%, camber_rc −7.0%, camber_cruise −3.9%, re_rand −5.3%)
+- **EMA-vs-live gap preserved:** EMA val=85.92 vs live val=96.41 (−10.5 MAE)
+- **Code change:** `beta=1.0` → `beta=0.5` in two `F.smooth_l1_loss(...)` calls (train loop + evaluate_split)
+- **W&B run:** `liurnqyo`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+
 ## 2026-05-12 22:10 — PR #1606: fern EMA of model weights (decay=0.999)
 
 Merged. EMA shadow copy of model parameters updated after every optimizer step (`ema = 0.999 * ema + 0.001 * model`). Val and test evaluation uses EMA weights instead of live weights. EMA lags during warmup but consistently outperforms the live model from epoch 9 onward; the gap widens late in training as cosine LR anneals but SGD noise persists.
