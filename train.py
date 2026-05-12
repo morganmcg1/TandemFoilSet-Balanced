@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -338,6 +340,7 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "seed": cfg.seed,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -379,6 +382,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    seed: int = 42
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -390,8 +394,23 @@ cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+# Deterministic seeding so val_avg/mae_surf_p is reproducible run-to-run.
+random.seed(cfg.seed)
+np.random.seed(cfg.seed)
+torch.manual_seed(cfg.seed)
+torch.cuda.manual_seed_all(cfg.seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -399,13 +418,23 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+train_generator = torch.Generator()
+train_generator.manual_seed(cfg.seed)
+
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+                              shuffle=True,
+                              generator=train_generator,
+                              worker_init_fn=seed_worker,
+                              **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds),
+                                    replacement=True, generator=train_generator)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+                              sampler=sampler,
+                              generator=train_generator,
+                              worker_init_fn=seed_worker,
+                              **loader_kwargs)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
