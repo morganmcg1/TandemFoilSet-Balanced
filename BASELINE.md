@@ -19,6 +19,8 @@ winner sets the first numeric reference value.
 - **Optimizer**: AdamW (`lr = 5e-4`, `weight_decay = 1e-4`)
 - **LR schedule**: CosineAnnealingLR with `T_max = MAX_EPOCHS`
 - **Loss**: **L1 (MAE) in normalized target space**, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0` _(updated 2026-05-12 by PR #1397)_
+- **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
+- **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -30,6 +32,50 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-12 20:52 — PR #1552 (`charliepai2g24h4-frieren/stoch-depth-0.1`)
+
+Stochastic depth (Huang et al., ECCV 2016) added to the 5-layer Transolver
+with linearly increasing per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]`.
+At eval/test time it is a no-op (all blocks always used). Also bundles the
+NaN-safe pre-filter in `evaluate_split` that produces the first finite
+4-split `test_avg/mae_surf_p` on this branch.
+
+- **`val_avg/mae_surf_p`** = **98.353** (best @ epoch 15, last epoch before 30 min timeout)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **87.995** — first finite 4-split test
+  reference on this branch; new paper-facing baseline.
+
+Per-split surface pressure MAE at the best val checkpoint:
+
+| Split | mae_surf_p (val) | mae_surf_p (test) |
+|-------|-----------:|-----------:|
+| single_in_dist     | 119.159 | 104.953 |
+| geom_camber_rc     | 111.093 | 101.883 |
+| geom_camber_cruise |  73.323 |  62.243 |
+| re_rand            |  89.837 |  82.901 |
+| **avg**            | **98.353** |  **87.995** |
+
+vs. L1 baseline (PR #1397):
+- val_avg: 100.957 → 98.353 (**-2.58% improvement**)
+- val_single_in_dist: -6.45% / val_geom_camber_cruise: -5.21% (largest gains)
+- val_geom_camber_rc: +0.24% (flat) / val_re_rand: +1.77% (small regression)
+
+The OOD-specific framing was only half-supported — the biggest gain landed
+on `val_single_in_dist` (in-distribution), not the camber OOD splits as
+predicted. Stoch-depth's implicit ensemble flattened split-specific overfit
+modes regardless of OOD axis. Best epoch landed at the wall-clock cap
+(epoch 15), so more training time would likely extend the gain.
+
+Caveat: `loss`/`surf_loss` aggregates for `test_geom_camber_cruise` still
+show NaN/Inf in `metrics.yaml` because the normalized-space loss path
+runs before the §3 pre-filter; the §3 fix only protects `accumulate_batch`.
+All four `mae_surf_p`/`mae_vol_p` channels are finite, so the primary
+ranking metric is clean.
+
+- **Metric artifacts**:
+  `models/model-charliepai2g24h4-frieren-stoch-depth-0.1-20260512-201730/metrics.jsonl`
+  and `metrics.yaml`.
+- **n_params**: 0.66M (unchanged), **peak GPU memory**: 42.1 GB, **wall time**: 30 min (cap).
 
 ### 2026-05-12 19:05 — PR #1397 (`charliepai2g24h4-alphonse/l1-loss`)
 
