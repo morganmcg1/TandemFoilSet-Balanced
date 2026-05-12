@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 22:45 (round-6: closed #1590 slice_num=96, stale #1561/#1535; assigned #1652 frieren warmup, #1653 askeladd grad-clip on compile, tanjiro EMA pending PR creation post-rate-limit-reset)
+- **As of:** 2026-05-12 23:15 (round-6 fully assigned: closed #1590 slice_num=96, stale #1561/#1535; new assignments #1652 frieren warmup, #1653 askeladd grad-clip on compile, #1660 tanjiro EMA. All 8 students active.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -51,7 +51,7 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 | #1633 | charliepai2g48h5-thorfinn | Huber β sweep (β=0.5 and β=2.0) | Loss shape |
 | #1652 | charliepai2g48h5-frieren | Step-based linear warmup (500 steps) + cosine | Schedule warmup |
 | #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
-| (tanjiro pending) | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
+| #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
 | #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (pre-compile) | Width |
 | #1588 | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 (pre-compile) | Depth |
 
