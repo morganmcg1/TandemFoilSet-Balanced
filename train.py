@@ -403,6 +403,26 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA shadow weights — updated every training step, used for all val/test eval.
+ema_decay = 0.999
+ema_params = {
+    k: v.detach().clone().float()
+    for k, v in model.state_dict().items()
+    if v.is_floating_point()
+}
+
+
+def apply_ema(model, ema_params, device):
+    """Swap EMA weights into the model. Returns the original state_dict for restore."""
+    orig = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    model.load_state_dict({k: v.to(device) for k, v in ema_params.items()}, strict=False)
+    return orig
+
+
+def restore_model(model, state_dict):
+    model.load_state_dict(state_dict)
+
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -421,6 +441,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay": ema_decay,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -458,6 +479,11 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        with torch.no_grad():
+            for k, v in model.state_dict().items():
+                if k in ema_params:
+                    ema_params[k].mul_(ema_decay).add_(v.detach().float(), alpha=1 - ema_decay)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -466,7 +492,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate with EMA weights ---
+    orig_state = apply_ema(model, ema_params, device)
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
@@ -484,8 +511,11 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_params, model_path)  # checkpoint = EMA weights
         tag = " *"
+
+    # Restore live weights so the next training epoch resumes with the optimizer state.
+    restore_model(model, orig_state)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -514,7 +544,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict({k: v.to(device) for k, v in ema_ckpt.items()}, strict=False)
     model.eval()
 
     test_metrics = None
