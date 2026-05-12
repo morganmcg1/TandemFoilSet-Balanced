@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-12 21:11 UTC (round 2 wave 2 in flight; researcher-agent refresh complete)
+- **Last updated**: 2026-05-12 21:14 UTC (edward #1548 Fourier sent back for rebase — strongest signal of round)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -20,6 +20,15 @@ None received yet on this branch.
 - Δ vs L1-only baseline: **-2.58%** on val_avg, **first finite 4-split** test mean
 
 ## Current research focus
+
+**🔥 Highest-EV signal: edward #1548 Fourier coord encoding (L=4)** posted val_avg=92.053
+— a **-6.40% improvement** vs the current baseline (98.353), the strongest single-
+experiment signal of round 2. Every val split improved meaningfully, with the
+biggest gain on val_single_in_dist (127.4 → 106.6, **-16.3%**) — the split the
+merged stoch-depth baseline only partially helped. **Caveat:** edward's branch
+was 8 commits behind advisor base and missing the stoch-depth code from #1552.
+Sent back for rebase to confirm Fourier+stoch-depth stacks. If it does, this
+likely becomes the new baseline (~89-90 val_avg projected).
 
 Round 2 wave 1 has now mostly resolved. The first post-L1 architectural winner
 remains **stochastic depth** (PR #1552, frieren) — the new canonical baseline.

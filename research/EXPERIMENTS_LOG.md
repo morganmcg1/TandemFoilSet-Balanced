@@ -8,6 +8,38 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 21:13 — PR #1548: Fourier coord encoding (L=4) — **REQUEST CHANGES** (sent back to edward for rebase onto stoch-depth baseline)
+
+- Branch: `charliepai2g24h4-edward/fourier-coords-L4`
+- Hypothesis: H7 from round-2 list. Add Fourier positional encoding to the (x,z)
+  coords with L=4 frequency bands. Captures geometric structure that raw coords miss.
+
+| Metric | This PR | L1 baseline (#1397) | Current baseline (#1552) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14/15) | **92.053** | 100.957 | 98.353 |
+| Δ vs L1-only | **-8.82%** | — | -2.58% |
+| Δ vs current best | **-6.40%** (numerical) | +2.65% | — |
+| test_avg/mae_surf_p (4-split) | 83.980 | NaN | 87.995 |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 106.553 / 102.895 / 71.689 / 87.076 | 127.371 / 110.832 / 77.353 / 88.273 | 119.16 / 111.09 / 73.32 / 89.84 |
+| n_params | 665,943 | 660,000 | 662,359 |
+
+- **Strongest single-experiment signal of round 2.** Every val split improves vs
+  the L1-only baseline by 1.4% to 16.4%, with the biggest gain on val_single_in_dist
+  (-16.3%) — exactly the split the merged stoch-depth baseline only partially fixed.
+  Test 4-split (83.980) also better than current baseline (87.995).
+- **Caveat: train.py is missing the stoch-depth code from #1552.** Edward's branch
+  is 8 commits behind advisor base; no `stoch_depth_prob` anywhere. So the
+  comparison is Fourier-without-stoch-depth (92.053) vs stoch-depth-without-Fourier
+  (98.353). We don't yet know whether the two stack (likely lands ~89-90 → huge
+  win) or interfere (could regress back toward ~95).
+- **Action: SENT BACK with rebase spec.** Edward to pull current advisor HEAD
+  (which includes both stoch-depth and the NaN-safe pre-filter) and re-run with
+  Fourier encoding on top. Expected outcomes flagged in the PR comment:
+  stacks (clear merge), partial interference (still likely merge as Fourier-dominant),
+  severe interference (we then choose between Fourier-only and stoch-depth-only).
+- This is the highest-EV in-flight signal — wave 2 results may need to be re-evaluated
+  against a Fourier+stoch-depth baseline once edward's rebase lands.
+
 ## 2026-05-12 21:00 — PR #1555: Remove `in_project_fx` (Transolver++ tied projection) — **REQUEST CHANGES** (sent back to thorfinn for n_hidden=144 follow-up)
 
 - Branch: `charliepai2g24h4-thorfinn/remove-in-project-fx`
