@@ -447,6 +447,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    pos_n_freq=6,
+    pos_scale=0.1,
 )
 
 model = Transolver(**model_config).to(device)
