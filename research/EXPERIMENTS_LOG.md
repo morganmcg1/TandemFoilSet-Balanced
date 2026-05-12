@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-12 22:xx — PR #1613: [soap-optimizer] SOAP quasi-Newton optimizer
+
+- **Branch**: thorfinn/soap-optimizer
+- **Hypothesis**: SOAP (Shampoo as Adam's Preconditioner) provides Kronecker-factored quasi-Newton curvature estimates that condition gradient steps — addressing the root cause of the LR ceiling (poor first-order curvature model), not just its symptoms.
+- **Status**: MERGED — new baseline 42.4015 (**largest single improvement in programme**)
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 13) | **42.4015** |
+| val_single_in_dist | 46.09 |
+| val_geom_camber_rc | 55.98 |
+| val_geom_camber_cruise | **24.32** |
+| val_re_rand | 43.22 |
+| test_avg/mae_surf_p (4-split) | **36.4017** |
+| test_single_in_dist | 41.76 |
+| test_geom_camber_rc | 48.10 |
+| test_geom_camber_cruise | 19.79 |
+| test_re_rand | 35.97 |
+| Epochs | 13 (~30-min cap, SOAP overhead) |
+| grad_norm_mean trace | 38.87 → 9.16 (4.2× reduction) |
+| clip_frac trace | 1.000 (ep 1-10) → 0.987 → 0.984 |
+| Baseline | 89.3940 |
+| Delta | **-52.6%** |
+
+**Analysis**: SOAP's Kronecker-factored preconditioner transforms convergence speed. The 4.2× grad norm reduction (38.87 → 9.16 across 13 epochs) is direct evidence that the preconditioner is working — each step is better conditioned. All 4 val splits improved dramatically (cruise: 66→24, rc: 101→56, re_rand: 81→43, single_in_dist: 109→46). Val was still falling at ep 13 — the model has not converged, suggesting bf16-amp compound would be major.
+
+**Critical diagnostic**: clip_frac=0.984 at ep 13 means SOAP is still being clipped ~9× per step (grad_norm_mean=9.16 vs clip=1.0). This is the basis for the next experiment (soap-relax-clip, PR #1668).
+
+**SOAP install**: pip unavailable; vendored as `soap.py` (upstream commit `a1e553530fde97d0e6b307d7c82ac6d38b072340`).
+
+**Artifacts**: `models/model-charliepai2g24h1-thorfinn-soap-optimizer-20260512-220030/metrics.jsonl`
+
+---
+
 ## 2026-05-12 22:xx — PR #1473: [huber-loss v3] Huber(δ=0.1) on relative-L2 normalized residuals
 
 - **Branch**: charliepai2g24h1-tanjiro/huber-loss
