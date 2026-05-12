@@ -92,6 +92,9 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temp_proj = nn.Linear(dim, heads)
+        nn.init.zeros_(self.temp_proj.weight)
+        nn.init.zeros_(self.temp_proj.bias)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -117,7 +120,10 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        delta_temp = self.temp_proj(x)                            # [B, N, heads]
+        delta_temp = delta_temp.permute(0, 2, 1).unsqueeze(-1)    # [B, heads, N, 1]
+        local_temp = (self.temperature + delta_temp).clamp(min=1e-3)
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / local_temp)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -195,6 +201,12 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Ada-Temp: restore zero-init for temp_proj (apply() above overwrites
+        # the PhysicsAttention init with trunc_normal_, breaking the
+        # "identical to baseline at step 0" property).
+        for block in self.blocks:
+            nn.init.zeros_(block.attn.temp_proj.weight)
+            nn.init.zeros_(block.attn.temp_proj.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
