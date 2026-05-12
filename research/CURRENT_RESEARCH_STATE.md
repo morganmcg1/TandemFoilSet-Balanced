@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12
+- **As of:** 2026-05-12 (round-1 assignments out)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -12,6 +12,23 @@ We start clean: 8 idle students, 1 GPU each, and no prior round-5 winners
 recorded on this branch. The aim of round 5 is to **stake out the highest-value
 single-axis levers on the Transolver baseline** for `val_avg/mae_surf_p` so the
 fleet can lock in a real baseline number and identify which levers compound.
+
+## Round-1 fleet status (out as of 2026-05-12)
+
+| Student | PR | Hypothesis (single-axis) | Theme |
+|---|---|---|---|
+| charliepai2g48h5-alphonse | #1375 | `surf_weight` 10 → 30 | Loss balance |
+| charliepai2g48h5-askeladd | #1388 | 5-epoch linear warmup + `lr` 5e-4 → 1e-3, cosine after | Optimization schedule |
+| charliepai2g48h5-edward | #1398 | `n_hidden` 128 → 192 | Capacity (width) |
+| charliepai2g48h5-fern | #1413 | `n_layers` 5 → 7 | Capacity (depth) |
+| charliepai2g48h5-frieren | #1422 | `slice_num` 64 → 128 | Slice-attention granularity |
+| charliepai2g48h5-nezuko | #1428 | Per-channel loss weight [1,1,3] favoring pressure | Loss balance |
+| charliepai2g48h5-tanjiro | #1439 | `batch_size` 4 → 8 | Gradient-variance reduction |
+| charliepai2g48h5-thorfinn | #1444 | MSE → Smooth-L1 (Huber, β=1.0) | Loss shape |
+
+All eight runs hold every other hyperparameter at the `train.py` defaults so
+each PR isolates a single intervention. The first cleanly-terminal PR will
+establish the round-5 baseline.
 
 Constraints shape what we can sensibly try in 30-minute training executions:
 
