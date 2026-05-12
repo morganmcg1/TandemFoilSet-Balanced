@@ -2,6 +2,52 @@
 
 Track: `willow-pai2g-24h-r1` | Advisor branch: `icml-appendix-willow-pai2g-24h-r1`
 
+## 2026-05-12 20:35 — PR #1515 (SENT BACK): grad-clip max_norm=1.0
+- Branch: `willowpai2g24h1-frieren/grad-clip-1.0`
+- Hypothesis: `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)` between `loss.backward()` and `optimizer.step()` will damp the per-batch outliers that produce non-finite pressure predictions on `test_geom_camber_cruise`.
+- Single isolated change: insert grad-clip + a `grad_norm` W&B log key.
+
+| Metric | Value | Notes |
+|---|---|---|
+| val_avg/mae_surf_p (best, epoch 13) | **115.78** | **strongest reading on the fleet** |
+| test_avg/mae_surf_p | **NaN** | confirmed data bug (see #1377 and #1567), NOT a model failure |
+| test_avg/mae_surf_p (partial 3 of 4) | 114.96 | excluding cruise-p split |
+| Params | 0.66 M | unchanged |
+| Peak VRAM | 42.1 GB / 96 GB | comfortable |
+| Epochs completed | 14 / 50 | hit `SENPAI_TIMEOUT_MINUTES=30` cap |
+| Per-epoch | ~131–134 s | comparable to baseline (~120 s) |
+| W&B run id | `53avo9qv` | group `stability` |
+
+- Per-split val (epoch 13): single_in_dist clean, geom_camber_rc clean, **geom_camber_cruise=85.58 (clean)**, re_rand clean.
+- Per-split test (best-val checkpoint @ epoch 13): single_in_dist=119.72 · geom_camber_rc=122.09 · geom_camber_cruise=**NaN** (data bug) · re_rand=103.08.
+
+**Grad-norm distribution over 5255 train steps (pre-clip):** min=2.37, p1=6.00, p10=13.45, **p50=44.68**, mean=64.57, p90=136.41, p99=332.30, p99.9=502.62, max=940.84. **100% of steps clipped.** Effective per-step LR shrink ~1/45 on average → effective LR ≈ 1.1e-5. So the "occasional outlier" hypothesis was wrong: every step's gradient is being divided by a large constant, and the val win likely comes from this global LR-shrink (combined with adaptive damping of the long tail).
+
+**Status — SENT BACK for one more iteration.** This is the strongest val signal on the fleet (115.78 vs 149.40 prior best on the same branch), but `test_avg/mae_surf_p = NaN` blocks the paper-facing merge. The NaN is the fleet-wide data bug nezuko diagnosed in #1377 (`test_geom_camber_cruise/000020.pt` has `y` containing `+inf`; `data/scoring.py` propagates it via `inf * 0 = NaN`), not a model failure. Since `data/` and `data/scoring.py` are read-only, the workaround is a train.py-side filter that drops samples with non-finite GT before `accumulate_batch`. Sending the PR back to frieren to bundle that ~10-line filter into the same PR — bundle is justified because the hypothesis cannot be evaluated on the paper-facing metric without the filter. Issue #1567 filed with the human research team.
+
+## 2026-05-12 20:30 — PR #1377 (CLOSED): mlp_ratio 2 -> 4 (hidden FFN 256 -> 512)
+- Branch: `willowpai2g24h1-nezuko/mlp-ratio-4`
+- Hypothesis: doubling FFN hidden dim expands capacity per Transolver block, especially helpful on geometric OOD splits.
+- Single isolated change: `model_config["mlp_ratio"]: 2 → 4` in `train.py`.
+
+| Metric | Value | Notes |
+|---|---|---|
+| val_avg/mae_surf_p (best, epoch 13) | 146.34 | mildly better than round-1 trio (149–155) |
+| test_avg/mae_surf_p | **NaN** | same fleet-wide data bug |
+| test_avg/mae_surf_p (partial 3 of 4) | 146.32 | excluding cruise-p split |
+| Params | 0.99 M | ~+29% vs baseline |
+| Peak VRAM | 54.5 GB / 96 GB | comfortable |
+| Epochs completed | 13 / 50 | hit `SENPAI_TIMEOUT_MINUTES=30` cap |
+| Per-epoch | ~148 s | ~+25% vs baseline-implied |
+| W&B run id | `u4meqcav` | group `mlp-ratio-sweep` |
+
+- Per-split val (epoch 13): single_in_dist=197.11 · geom_camber_rc=151.28 · geom_camber_cruise=112.87 · re_rand=124.08.
+- Per-split test: single_in_dist=183.17 · geom_camber_rc=132.25 · geom_camber_cruise=**NaN** · re_rand=123.54.
+
+**Conclusion — CLOSED (superseded on val).** mlp_ratio=4 lands at val=146.34, marginally ahead of the round-1 trio but well behind #1515 grad-clip-1.0 (val=115.78). The +29% params and +25% per-epoch cost convert wall-clock into latency without commensurate val improvement under the 30-min cap. mlp_ratio=4 is plausibly viable once tanjiro's bf16 throughput fix (#1516) makes more epochs available — kept as a future revisit candidate.
+
+**Critical bug diagnosis (the headline contribution of this PR).** Nezuko identified that `test_geom_camber_cruise/000020.pt` has `y` containing `+inf` in the hidden pressure GT. `data/scoring.py::accumulate_batch` intends to skip non-finite-GT samples via `sample_mask`, but does `err = (pred - y).abs()` (→ inf for that sample) before applying the mask, and `err * surf_mask = inf * 0 = NaN`. This is the only sample with non-finite GT across all 8 val/test splits. The diagnosis explains the NaN test_avg pattern in **every** completed PR on this fleet (#1372, #1378, #1382, #1377, #1515) and reframes them all from "model-stability failure" to "data infrastructure issue, model otherwise fine." Filed as issue #1567 for the human research team; bundled into #1515 rework as a train.py-side workaround.
+
 ## 2026-05-12 19:30 — PR #1382 (CLOSED): AdamW weight_decay 1e-4 -> 3e-4
 - Branch: `willowpai2g24h1-thorfinn/wd-3e-4`
 - Hypothesis: Stronger weight decay regularizes toward lower-norm solutions, expected to improve OOD splits at minor cost on in-distribution split.

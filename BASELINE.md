@@ -36,25 +36,46 @@ variants of the default `train.py` configuration.
 
 Lower is better.
 
-## Current frontier (round 1 partial)
+## Current frontier (round 2 partial — data-bug diagnosed)
 
-No clean settled baseline yet — every completed run so far has hit the 30-min
-cap at 10–11 epochs (out of `--epochs 50`) and produced non-finite pressure
-on `test_geom_camber_cruise` so `test_avg/mae_surf_p` cannot be computed.
+No clean settled baseline yet. The fleet-wide NaN on `test_avg/mae_surf_p` is
+now confirmed to be a **data bug**, not a model failure: nezuko (PR #1377)
+found that `test_geom_camber_cruise/000020.pt` has `y` containing `+inf` in
+the hidden pressure GT, and `data/scoring.py::accumulate_batch` propagates the
+inf into `mae_surf` via `inf * 0 = NaN`. This is the only such sample across
+all 8 val/test splits, but it makes `test_avg/mae_surf_p = NaN` for **every**
+PR on this fleet regardless of model quality. Filed as issue #1567.
+
+`data/` and `data/scoring.py` are read-only per `program.md`, so the fix is a
+train.py-side filter that drops samples with non-finite `y` **before**
+`accumulate_batch`. Frieren is implementing this in the #1515 rework.
 
 Best validation reading observed so far (informational only — not a merged
-baseline because test_avg is NaN):
+baseline because test_avg is NaN until the train.py filter lands):
 
-| Source | val_avg/mae_surf_p | partial test_avg (3 of 4 splits) | Notes |
+| Source | val_avg/mae_surf_p | partial test_avg (3 of 4) | Notes |
 |---|---:|---:|---|
-| #1382 (wd=3e-4, closed) | **149.40** | 153.20 | 10/50 epochs, cruise-test pressure inf |
-| #1372 (n_head=8, closed) | 153.84 | 141.53 | 11/50 epochs, cruise-test pressure inf |
-| #1378 (n_hidden=192, closed) | 155.16 | 159.62 | 10/50 epochs, cruise-test pressure inf |
+| **#1515 (grad-clip-1.0, sent back for filter)** | **115.78** | **114.96** | 14/50 epochs, 100% steps clipped, effective LR ≈ 1.1e-5 |
+| #1377 (mlp_ratio=4, closed) | 146.34 | 146.32 | 13/50 epochs, found the data bug |
+| #1382 (wd=3e-4, closed) | 149.40 | 153.20 | 10/50 epochs |
+| #1372 (n_head=8, closed) | 153.84 | 141.53 | 11/50 epochs |
+| #1378 (n_hidden=192, closed) | 155.16 | 159.62 | 10/50 epochs |
 
-Round 2 priorities — fix the blockers before retrying capacity changes:
-- gradient clipping (frieren #1515) to address the cruise-test pressure inf
-- bf16 autocast (tanjiro #1516) to attack throughput so more epochs fit
-- Huber-on-volume loss (thorfinn, queued) for robustness against high-Re outliers
+#1515's `val_avg=115.78` is the strongest reading on the fleet by a wide
+margin. Frieren's grad-norm analysis showed median pre-clip grad norm = 44.68
+and 100% of steps clipped — so `max_norm=1.0` is acting as a global ~45×
+LR-shrink, not "occasional outlier damping". Effective LR ≈ 1.1e-5. Whether
+the win is fundamentally LR-scale-driven or adaptive-damping-driven is the
+next question to test.
+
+Round 2 priorities:
+- frieren #1515 (rework): grad-clip-1.0 + train.py-side bad-sample filter →
+  unblock paper-facing `test_avg/mae_surf_p` and merge as the round-2 anchor.
+- tanjiro #1516: bf16 autocast for ~1.3–1.8× throughput → more epochs/run.
+- thorfinn #1538: Huber loss on volume term for robustness against high-Re
+  pressure extremes.
+- nezuko (incoming): direct lr=1e-5 test to disentangle LR-shrink vs adaptive
+  damping in grad-clip's win.
 
 ## Reproduce command
 
