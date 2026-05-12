@@ -37,12 +37,16 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-12 20:XX — PR #1543: Log-cosh loss on merged stack (fern)
-**Branch:** `charliepai2g24h3-fern/logcosh-loss` | **Status: WIP (assigned)**
+### 2026-05-12 20:55 — PR #1543: Log-cosh loss on merged stack v1 (fern) — SENT BACK
+**Branch:** `charliepai2g24h3-fern/logcosh-loss` | **Status: SENT BACK**
 
-- **Hypothesis:** Log-cosh loss [smooth, threshold-free heavy-tail robustification] is a cleaner alternative to Huber (no delta tuning, no gradient discontinuity). `L(r) = log(cosh(r))` → gradient = tanh(r) → saturates to ±1 for large residuals automatically.
-- **Expected delta:** −3% to −8% on val_avg/mae_surf_p vs baseline 112.546.
-- **Artifacts:** TBD
+- **Hypothesis:** Log-cosh loss is a smooth, threshold-free Huber alternative. Expected −3 to −8% on val_avg.
+- **val_avg/mae_surf_p: 106.682** (epoch 14/14) — **−5.21% vs PR #1520 (112.55)**, but **+3.5% over current merged baseline 103.10 (PR #1495)**.
+- **Per-split:** single=124.05, rc=129.81, **cruise=75.92** (best split — gradient saturation effect on high-Re), re_rand=96.95.
+- **Test (4-split safe re-eval):** **100.373**.
+- **Analysis:** Effect shape matches hypothesis exactly. Cruise (high-Re heavy-tail) gets the biggest gain (−12.0%), single_in_dist (mid-magnitude residuals) barely moves (−0.8%). Gradient saturation via `tanh(r)` is doing what Huber does, without the δ knob. BUT run was on `git_commit=29893da` (post-#1520, pre-#1495) — 6 min after #1495 merged. Stale base.
+- **Why sent back:** Result doesn't beat current baseline 103.10. Log-cosh effect likely orthogonal to augmentation (different mechanism — loss-curvature vs data-OOD). Rebase + re-run with augmentation default ON should land near 97-100 if the effects compound. Single-arm rerun instructed.
+- **Artifacts:** `models/model-logcosh-onecycle-ema-20260512-200805/{metrics.jsonl,metrics.yaml,safe_eval.json,config.yaml}`
 
 ---
 

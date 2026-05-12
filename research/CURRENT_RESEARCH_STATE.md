@@ -20,6 +20,8 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 
 **Best raw number observed (but not merged):** 100.987 — PR #1494 v2 (tanjiro, FiLM on log(Re), rebased onto #1491 only, without augmentation). Sent back to rebase onto post-#1495 base.
 
+**Strong loss-curvature signal (sent back):** PR #1543 v1 (fern) log-cosh @ 106.68 on PR #1520 base — clean −5.21% vs #1520, cruise split gets −12.0%. Doesn't beat 103.10 baseline (no augmentation); sent back for log-cosh + augmentation rerun.
+
 ## Current student assignments
 
 | Student | PR | Slug | Status |
@@ -27,7 +29,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 | alphonse | #1484 | `huber-pressure-loss` | WIP — rebase: Huber d=0.5+d=1.0 on full merged stack (2 arms) |
 | askeladd | #1488 | `decoupled-channel-heads` | WIP — rebase: decoupled heads on full merged stack (2 arms) |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
-| fern | #1543 | `logcosh-loss` | WIP — log-cosh on full merged stack |
+| fern | #1543 | `logcosh-loss` | WIP — sent back v1 (106.68 vs baseline 103.10), rebase + re-run with augmentation default ON |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1493 | `more-slices-128-v2` | WIP — rebase: slice_num=128 |
 | tanjiro | #1494 | `re-film-conditioning-v3` | WIP — rebase: FiLM on top of augmentation (2 arms) |
