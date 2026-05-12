@@ -67,6 +67,87 @@ Decouple channel weighting: apply [1,1,3] only to surf loss, vol loss keeps unif
 
 ---
 
+## 2026-05-12 21:00 — PR #1414: Smooth L1 (Huber β=0.1) loss in normalized space
+
+- **Branch:** `charliepai2g48h2-alphonse/smooth-l1-loss`
+- **Hypothesis:** Replace MSE with Smooth L1 (Huber β=0.1) in normalized space. MSE minimizes mean-squared residuals, which only matches MAE when residuals are symmetric and tight. Smooth L1 → L1 above β=0.1, and L1 minimizes MEDIAN absolute error — i.e., directly matches the eval metric.
+- **Status:** SENT BACK for rebase + re-run on top of #1418 (was branched from pre-#1418 code; needs to stack with channel weighting)
+
+### Results (on pre-#1418 codebase, uniform channels)
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 14) | **90.5853** | **−26.1% BETTER** 🏆 |
+| test_avg/mae_surf_p (full 4-split, clean) | 81.5392 | — (baseline NaN) |
+| val_single_in_dist | 108.878 | −25.4% |
+| val_geom_camber_rc | 98.268 | −28.7% |
+| val_geom_camber_cruise | 71.492 | −24.6% |
+| val_re_rand | 83.703 | −25.2% |
+| Epochs completed | 14/20 | (timeout) |
+
+### Commentary
+
+The biggest single-axis result seen in this round. The win is uniform across ALL splits (−24% to −29%), not just one outlier. Mechanism is principled: Smooth L1 β=0.1 in normalized space puts most residuals in the L1 (linear) regime (student notes: training loss in linear regime all the way). L1 minimizes median absolute error, which IS the MAE eval criterion. MSE trains the model to minimize mean-squared residuals, which over-weights outlier (high-Re, OOD) samples.
+
+**Key insight**: "match training loss to eval metric" is a classic Kaggle result, well-known for regression tasks. The 26% improvement validates this intuition strongly.
+
+The run was on pre-#1418 code (uniform channels, no channel weighting). If the two axes are independent — and they should be, as channel weighting is a per-channel reweight inside the loss and Smooth L1 changes the loss *shape* — the combined result should be similar or better.
+
+### Incidental fixes
+
+Student also added NaN-skip fix in `train.py:evaluate_split` — same fix as tanjiro (#1432) and thorfinn (#1435), but alphonse's formulation uses `torch.nan_to_num` on `y_safe` before accumulation. Enables clean 4-split test_avg (81.54).
+
+### Follow-up direction
+
+Rebase onto current advisor branch (which has #1418 channel_weights=[1,1,3]) and re-run with both Smooth L1 AND channel weighting stacked. Beta sweep (β ∈ {0.05, 0.02, 1.0}) after stacked baseline confirmed.
+
+---
+
+## 2026-05-12 21:00 — PR #1426: Widen Transolver (n_hidden 128→192, n_head 4→6)
+
+- **Branch:** `charliepai2g48h2-frieren/hidden-192-head-6`
+- **Hypothesis:** Widen token dimension to 192 and attention heads to 6. Hypothesis: more capacity → better generalization on geometry-OOD splits.
+- **Status:** CLOSED — result significantly worse (+12.81%) and model doesn't fit 30-min budget
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 9) | 138.31 | **+12.81% worse** |
+| test_avg/mae_surf_p (3-split partial) | 139.05 | — |
+| Epochs completed | 9/15 | (timeout) |
+| Epoch time | ~3.4 min/epoch | +55% over baseline |
+| Peak memory | 63.0 GB | |
+
+### Commentary
+
+The widened model (1.45M params, 2.2× baseline) is trainable and stable, but costs 3.4 min/epoch — only 9 epochs fit the 30-min cap, and cosine LR was still in high-LR regime. Not a fair comparison. The widening hypothesis is correct in principle but the 30-min budget makes it unworkable. Frieren's follow-up suggestion #4 (depth vs width) is the right next test.
+
+Frieren also provided an excellent independent diagnosis of the `test_geom_camber_cruise` NaN bug (identical to BASELINE.md and other students' reports).
+
+---
+
+## 2026-05-12 21:00 — PR #1429: Double slice tokens (slice_num 64→128) and MLP ratio (2→4)
+
+- **Branch:** `charliepai2g48h2-nezuko/slice-128-mlp-4`
+- **Hypothesis:** Simultaneously double slice_num and mlp_ratio. More slice tokens → finer mesh partitioning; wider MLP → more expressive token features.
+- **Status:** CLOSED — result worse (+6.97%) and numerical instability at test time
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 10) | 131.18 | **+6.97% worse** |
+| test_avg/mae_surf_p | NaN | (model output overflow + GT NaN) |
+| Epochs completed | 10/20 | (timeout, 3.1 min/epoch) |
+| Peak memory | 62.5 GB | |
+
+### Commentary
+
+Only 10/20 epochs completed (3.1 min/epoch). val_cruise shows signal (99.2 vs baseline 94.9 — actually 4.5% worse still; val_single is 168 vs 145, much worse). Test-time overflow: slice_num=128 with current softmax temperature dynamics produces near-zero `slice_norm` on OOD inputs → prediction → ~1e20. The two axes were confounded; nezuko's follow-up #3 (decouple mlp_ratio=4 alone) is the right next step.
+
+---
+
 ## 2026-05-12 20:54 — PR #1435: Unified positional encoding (ref=8, 8×8 soft Gaussian grid)
 
 - **Branch:** `charliepai2g48h2-thorfinn/unified-pos-ref8`
