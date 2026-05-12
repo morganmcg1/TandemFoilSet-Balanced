@@ -8,28 +8,43 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **114.40** | PR #1519 (merged 2026-05-12) |
-| **test_avg/mae_surf_p** | **107.57** | PR #1564 (merged 2026-05-12) — GT-NaN fix |
+| **val_avg/mae_surf_p** | **105.46** | PR #1483 (merged 2026-05-12) — grad clip + warmup+cosine |
+| test_avg/mae_surf_p | TBD* | PR #1483 reported test NaN due to source-branch lacking GT-NaN fix; merged code now has both grad_clip AND GT-NaN fix — re-measure on next run |
 
-### Per-split val (epoch 13)
+*PR #1483's source branch did not include the GT-NaN fix from PR #1564, so its test_avg was NaN. The merged code combines `clip_grad_norm_(max=1.0)` (from #1483) with warmup+cosine schedule (from #1519) and the GT-NaN evaluate_split filter (from #1564). The next reproduce run will produce a finite test_avg.
 
-| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
-|---|---:|---:|---:|
-| val_single_in_dist | 140.78 | 1.701 | 0.801 |
-| val_geom_camber_rc | 123.10 | 2.406 | 1.012 |
-| val_geom_camber_cruise | 89.71 | 1.177 | 0.590 |
-| val_re_rand | 104.02 | 1.737 | 0.805 |
-| **val_avg** | **114.40** | 1.756 | 0.802 |
-
-### Per-split test (epoch 13, best checkpoint)
+### Per-split val (PR #1483, epoch 13, **note: ran on pre-warmup baseline**)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---:|---:|---:|
-| test_single_in_dist | 122.65 | 1.663 | 0.769 |
-| test_geom_camber_rc | 111.09 | 2.332 | 0.942 |
-| test_geom_camber_cruise | 92.41 | 1.179 | 0.612 |
-| test_re_rand | 104.14 | 1.595 | 0.775 |
-| **test_avg** | **107.57** | 1.692 | 0.775 |
+| val_single_in_dist | 112.93 | 1.445 | 0.699 |
+| val_geom_camber_rc | 122.87 | 2.467 | 0.957 |
+| val_geom_camber_cruise | 83.98 | 1.001 | 0.556 |
+| val_re_rand | 102.08 | 1.763 | 0.745 |
+| **val_avg** | **105.46** | 1.669 | 0.739 |
+
+### Per-split test (PR #1483, partial — cruise NaN under source branch's old eval code)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| test_single_in_dist | 107.65 | 1.521 | 0.675 |
+| test_geom_camber_rc | 106.42 | 2.324 | 0.881 |
+| test_geom_camber_cruise | NaN | 0.980 | 0.514 |
+| test_re_rand | 97.10 | 1.495 | 0.703 |
+| **test_avg (3-split clean)** | **103.72** | — | — |
+
+## 2026-05-12 21:55 — PR #1483: Gradient clipping max_norm=1.0 (MERGED)
+
+- **val_avg/mae_surf_p: 105.46** (↓ 7.8% from 114.40 — biggest single-step gain this round)
+- **test_avg/mae_surf_p:** Reported NaN by source branch (lacked GT-NaN fix). Merged code now has both fixes — re-measure on next run.
+- **Metric artifacts:** `models/model-grad_clip_1-20260512-210428/metrics.jsonl`
+- **What changed:** Added `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` between `loss.backward()` and `optimizer.step()` — 1 line in train.py.
+- **Why it worked (per tanjiro's analysis):** Pre-clip grad norms are 45–112 throughout training, all well above max_norm=1.0. Clipping fires on EVERY step → effectively renormalises every gradient to unit norm. This is much stronger than "tame occasional outliers" — it's closer to "Adam on g/‖g‖". The largest gains are on splits with highest target magnitudes (val_single_in_dist −34.4%, val_geom_camber_rc −29.2%) — consistent with a Re-rebalancing interpretation: extreme-Re samples no longer dominate gradient steps.
+- **Note on baseline measurement:** PR #1483 measured 105.46 against the OLD baseline (no warmup+cosine, no GT-NaN fix), reporting a 26.7% within-PR improvement. The merged code now stacks: warmup+cosine + GT-NaN fix + grad_clip. Composed val_avg may differ slightly from 105.46; next experiments to verify.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name baseline_check --agent <student>
+  ```
 
 ## 2026-05-12 21:05 — PR #1564: GT-NaN fix in evaluate_split (MERGED)
 
