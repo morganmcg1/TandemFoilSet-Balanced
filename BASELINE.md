@@ -1,40 +1,53 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-Fresh research track. No prior experiments merged on this branch yet.
+## Current best — PR #1486 (2026-05-12)
 
-## Reference baseline (target/train.py defaults)
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **143.1450** |
+| val_single_in_dist/mae_surf_p | 179.61 |
+| val_geom_camber_rc/mae_surf_p | 151.83 |
+| val_geom_camber_cruise/mae_surf_p | 114.07 |
+| val_re_rand/mae_surf_p | 127.06 |
+| test_avg/mae_surf_p | NaN* |
+| test_single_in_dist/mae_surf_p | 156.25 |
+| test_geom_camber_rc/mae_surf_p | 148.55 |
+| test_geom_camber_cruise/mae_surf_p | NaN* |
+| test_re_rand/mae_surf_p | 137.14 |
+| best_epoch | 14 (of 50; timeout-cut — still improving) |
 
-The first winning PR establishes the empirical baseline. Until then, the **reference baseline** for hypothesis comparison is the unmodified Transolver in `train.py`:
+*NaN on test_geom_camber_cruise due to non-finite GT in sample 000020.pt (p channel). Remaining 3 test splits are clean. 3-split test avg = 147.31.
+
+**Artifacts:** `models/model-charliepai2g24h2-tanjiro-batch-size-8-fallback-20260512-180842/`
+
+**Config run (CLI flags, train.py defaults unchanged):**
+```bash
+cd target && python train.py --batch_size 8 --lr 7e-4 \
+  --agent charliepai2g24h2-tanjiro \
+  --experiment_name "charliepai2g24h2-tanjiro/batch-size-8-fallback"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~1.4M params)  
+Optimizer: AdamW lr=7e-4, wd=1e-4, batch_size=8, surf_weight=10, CosineAnnealingLR, fp32  
+Wall-clock cap: SENPAI_TIMEOUT_MINUTES=30 — timeout-cut at 14 epochs
+
+> Note: train.py defaults remain **lr=5e-4, batch_size=4**. This floor was measured at bs=8/lr=7e-4 (fallback after bs=16 OOM). Future PRs testing default config (bs=4/lr=5e-4) may improve on this.
+
+## Reference baseline (target/train.py defaults — unmeasured on this branch)
+
+The unmodified `train.py` defaults represent the canonical configuration to beat:
 
 | Field | Value |
 |---|---|
-| Model | Transolver |
-| n_hidden | 128 |
-| n_layers | 5 |
-| n_head | 4 |
-| slice_num | 64 |
-| mlp_ratio | 2 |
-| params | ~1.4M |
-| optimizer | AdamW |
-| lr | 5e-4 |
-| weight_decay | 1e-4 |
-| batch_size | 4 |
-| surf_weight | 10.0 |
-| epochs (config) | 50 |
-| timeout (env) | SENPAI_TIMEOUT_MINUTES=30 |
-| scheduler | CosineAnnealingLR(T_max=MAX_EPOCHS) |
-| sampler | WeightedRandomSampler (domain-balanced) |
-| loss | MSE in normalized space: vol_loss + surf_weight * surf_loss |
-| precision | fp32 |
-| amp | none |
-| grad_clip | none |
+| Model | Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~1.4M params) |
+| Optimizer | AdamW lr=5e-4, wd=1e-4 |
+| Training | bs=4, surf_weight=10, CosineAnnealingLR, 50 epochs, fp32 |
+| Wall-clock cap | SENPAI_TIMEOUT_MINUTES=30 |
 
-Primary metric: `val_avg/mae_surf_p` (equal-weight surface pressure MAE across 4 val splits). Test-time metric for paper-facing comparisons: `test_avg/mae_surf_p` from the best validation checkpoint.
-
-No measured value on this branch yet. The first hypothesis that produces terminal `SENPAI-RESULT` with a primary metric value sets the floor.
+Primary metric: `val_avg/mae_surf_p` (lower is better). Test-time metric for paper-facing comparisons: `test_avg/mae_surf_p`.
 
 ## Update protocol
 
-When a PR is merged and beats the current floor, replace the value here with `{val_metric, test_metric, pr_number}`.
+When a PR beats the current floor (143.1450), update the table above and append a historical entry below.
 </content>
 </invoke>
