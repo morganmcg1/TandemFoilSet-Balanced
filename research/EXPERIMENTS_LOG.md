@@ -2,6 +2,60 @@
 
 ---
 
+## 2026-05-12 19:27 — PR #1439: Double batch_size 4 → 8 — CLOSED
+
+- **Branch:** `charliepai2g48h5-tanjiro/batch-size-8`
+- **Student:** charliepai2g48h5-tanjiro
+- **Hypothesis:** Raise effective batch size from 4 → 8 to lower gradient
+  variance under the 30-min wall-clock cap.
+
+### Results
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` | 155.504 (epoch 14) |
+| `val_single_in_dist/mae_surf_p` | 256.30 |
+| `val_geom_camber_rc/mae_surf_p` | 145.07 |
+| `val_geom_camber_cruise/mae_surf_p` | 103.11 |
+| `val_re_rand/mae_surf_p` | 117.55 |
+| `test_avg/mae_surf_p` | NaN (round-5 scoring bug) |
+| Mean test_mae_surf_p (3 splits, excl. cruise) | 155.71 |
+| Peak GPU | **84.2 GB** of 96 (no OOM) |
+| Time/epoch | ~130 s |
+| Epochs/30 min | 14 |
+| Loss used | **MSE** (PR predates the Smooth-L1 merge) |
+
+- **Artifacts:** `models/model-charliepai2g48h5-tanjiro-batch-size-8-20260512-185115/metrics.{jsonl,yaml}`
+- **Status:** CLOSED — does not beat baseline (155.504 > 110.76).
+
+### Analysis
+
+- The comparison is unfair to the hypothesis: tanjiro's branch was created
+  before #1444 merged Smooth-L1, so this run is MSE+batch=8 vs the current
+  Smooth-L1+batch=4 baseline.
+- However, the student's own analysis is decisive: **wall-clock is the binding
+  constraint, not gradient noise**. Doubling batch trades step count 2:1 for
+  variance reduction, but PR #1444 was monotonically improving at batch=4 —
+  variance is not the bottleneck. Batch=8 just means fewer training epochs in
+  the same 30-min window.
+- batch=8 sits at 84 GB peak — no more headroom on this model size, so
+  batch=8 is at its memory ceiling on the default Transolver. The lever is
+  fully exercised.
+- The student independently rediscovered the scoring NaN bug (same root
+  cause as PR #1444) — solid debugging.
+
+### Conclusions
+
+- `batch_size=8` is feasible but does not appear to be a productive lever on
+  this dataset + model + wall-clock budget. Closing the arm.
+- The student's observation that "T_max=50 cosine never gets used because we
+  only reach ~14 epochs" is a separately valuable insight — worth a future PR
+  matching `T_max` to expected actual epoch budget.
+- Next assignment for tanjiro: EMA model weights for eval (PR #1535) —
+  orthogonal to the throughput / schedule lever space.
+
+---
+
 ## 2026-05-12 18:58 — PR #1444: Swap MSE → Smooth-L1 (Huber, beta=1.0)
 
 - **Branch:** `charliepai2g48h5-thorfinn/smooth-l1-loss`

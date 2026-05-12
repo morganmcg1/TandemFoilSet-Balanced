@@ -25,7 +25,12 @@ fleet can lock in a real baseline number and identify which levers compound.
 > Note: `test_avg/mae_surf_p` is NaN for all PRs in round 5 due to a data
 > corruption bug in `test_geom_camber_cruise/000020.pt` interacting with
 > `data/scoring.py`'s masking logic (`0 × Inf = NaN`). Round-5 ranking is
-> by `val_avg/mae_surf_p` only.
+> by `val_avg/mae_surf_p` only. Workaround landing via PR #1532.
+
+### Closed (not winners)
+| PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
+|---|---|---|---|---|
+| #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Worse than baseline; wall-clock is binding constraint, not gradient noise |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
@@ -36,14 +41,24 @@ fleet can lock in a real baseline number and identify which levers compound.
 | #1413 | charliepai2g48h5-fern | `n_layers` 5 → 7 | Depth |
 | #1422 | charliepai2g48h5-frieren | `slice_num` 64 → 128 | Slice granularity |
 | #1428 | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | Loss channel |
-| #1439 | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | Gradient variance |
+| #1532 | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN workaround | Throughput + infra |
+| #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
 
-### thorfinn — next assignment
-Next experiment: **bf16 mixed precision (bfloat16 AMP)** in `train.py`. The
-model reached epoch 14 of 50 at the 30-min cap. If AMP halves step time we get
-~28 epochs, which is substantial additional convergence under the same budget.
-Also includes the `evaluate_split` scoring-fix workaround (filter bad sample
-before calling `accumulate_batch`) to recover finite `test_avg/mae_surf_p`.
+## Open research questions (post-PR-1439)
+
+Two insights surfaced from PR #1439's analysis are worth queuing as future arms
+once current in-flight work settles:
+
+1. **`T_max` matched to actual epoch budget.** PR #1439 noted that the
+   `CosineAnnealingLR(T_max=50)` schedule never reaches its late-phase low LR
+   because only ~14 epochs fit under the 30-min cap. Shortening `T_max` to
+   match expected actual epochs (e.g., 14-20) lets the schedule complete and
+   may improve final convergence. Distinct from PR #1388 (warmup+peak-lr).
+
+2. **`val_single_in_dist` dominates the cross-split mean.** Its surf_p MAE is
+   roughly 2× the others' (135 vs 77-101). A loss/sampler tweak that improves
+   only that split would dominate `val_avg/mae_surf_p`. Worth probing later
+   with single-domain-aware loss reweighting or domain-aware sampler tweaks.
 
 Constraints shape what we can sensibly try in 30-minute training executions:
 
