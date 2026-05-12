@@ -436,11 +436,15 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    act="silu",
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
+assert isinstance(model.blocks[0].mlp.linear_pre[1], nn.SiLU), \
+    f"Expected SiLU but got {type(model.blocks[0].mlp.linear_pre[1])}"
+print(f"Activation: SiLU confirmed in model.blocks[0].mlp")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
