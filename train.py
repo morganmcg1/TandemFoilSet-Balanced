@@ -229,10 +229,14 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, return_hidden=False, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            if return_hidden and i == len(self.blocks) - 1:
+                fx_hidden = fx  # pre-last-block hidden state (n_hidden-dim)
+                fx = block(fx)
+                return {"preds": fx, "hidden": fx_hidden}
             fx = block(fx)
         return {"preds": fx}
 
@@ -406,6 +410,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    aux_surf_p_weight: float = 2.0  # auxiliary surface-pressure head loss weight
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -462,11 +467,22 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+aux_surf_p = nn.Sequential(
+    nn.Linear(model_config["n_hidden"], 64),
+    nn.GELU(),
+    nn.Linear(64, 1),
+).to(device)
+n_aux_params = sum(p.numel() for p in aux_surf_p.parameters())
+print(f"Aux surface-p head: {n_aux_params} params (lambda={cfg.aux_surf_p_weight})")
+
 amp_enabled = cfg.amp and device.type == "cuda"
 scaler = GradScaler(device="cuda", enabled=amp_enabled)
 print(f"BF16 autocast: {'enabled' if amp_enabled else 'disabled'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    list(model.parameters()) + list(aux_surf_p.parameters()),
+    lr=cfg.lr, weight_decay=cfg.weight_decay,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -510,8 +526,11 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    aux_surf_p.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_aux = 0.0
     n_batches = 0
+    use_aux = cfg.aux_surf_p_weight > 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -527,14 +546,32 @@ for epoch in range(MAX_EPOCHS):
                 x_std_norm, cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq
             )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm}, return_hidden=use_aux)
+            pred = out["preds"]
             sq_err = (pred - y_norm) ** 2
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+            if use_aux:
+                aux_p_pred = aux_surf_p(out["hidden"]).squeeze(-1)  # [B, N]
+
+        # Aux loss aggregation in FP32 for numerical stability
+        if use_aux and surf_mask.any():
+            aux_p_pred_fp32 = aux_p_pred.float()
+            y_p_norm = y_norm[..., 2].float()  # pressure channel
+            aux_loss = (
+                ((aux_p_pred_fp32 - y_p_norm) ** 2 * surf_mask).sum()
+                / surf_mask.sum().clamp(min=1)
+            )
+            loss = main_loss + cfg.aux_surf_p_weight * aux_loss
+            aux_loss_item = aux_loss.item()
+        else:
+            loss = main_loss
+            aux_loss_item = 0.0
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -543,17 +580,21 @@ for epoch in range(MAX_EPOCHS):
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
+            "train/main_loss": main_loss.item(),
+            "train/aux_surf_p_loss": aux_loss_item,
             "train/grad_scale": scaler.get_scale() if amp_enabled else 1.0,
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += aux_loss_item
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -570,6 +611,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_surf_p_loss_epoch": epoch_aux,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
