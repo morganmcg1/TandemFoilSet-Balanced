@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 21:00 (round-3 closures: capacity arms; round-3 assignments out for edward, fern, frieren)
+- **As of:** 2026-05-12 21:35 (round-4 closure: PR #1428 nezuko per-channel weights; round-4 assignment: PR #1619 nezuko sampler boost)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -36,11 +36,12 @@ fleet can lock in a real baseline number and identify which levers compound.
 | #1398 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 192 | 138.138 | Wall-clock binding (10/50 epochs); reassigned milder n_hidden=160 + bf16 |
 | #1413 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 7 | 144.904 | Wall-clock binding (10/50 epochs); reassigned milder n_layers=6 + bf16 |
 | #1422 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 128 | 145.971 | Wall-clock binding (11/50 epochs); reassigned milder slice_num=96 + bf16 |
+| #1428 ✗ | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | 135.531 | All 4 splits worse; fp32 budget + channel weighting distorts Ux/Uy coupling; reassigned sampler boost |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
 |---|---|---|---|
-| #1428 | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | Loss channel |
+| #1619 | charliepai2g48h5-nezuko | RaceCar single sampler boost 2× (50% share) | Data/sampler |
 | #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
 | #1560 | charliepai2g48h5-alphonse | T_max=14 cosine matched to actual epochs | Schedule |
 | #1561 | charliepai2g48h5-askeladd | Gradient norm clipping (max_norm=1.0) | Optimization |
@@ -106,7 +107,10 @@ Constraints shape what we can sensibly try in 30-minute training executions:
 1. **Loss reformulation** (cheap, high expected value):
    - Smooth-L1 vs MSE: **WON (PR #1444, merged)** — this is the baseline now.
    - Surface weight tuning: refuted (PR #1375).
-   - Per-channel reweighting: in flight (PR #1428).
+   - Per-channel reweighting [1,1,3]: refuted (PR #1428) — distorts velocity/pressure coupling.
+
+6. **Data / sampler** (round-4 addition, targeting val_single_in_dist):
+   - RaceCar single 2× sampler boost: in flight (PR #1619).
 
 2. **Optimization schedule** (cheap, high expected value):
    - Higher peak lr (1e-3 + warmup): refuted (PR #1388).
@@ -125,7 +129,7 @@ Constraints shape what we can sensibly try in 30-minute training executions:
    - EMA weights for eval: in flight (PR #1535).
    - Gradient clipping (max_norm=1.0): in flight (PR #1561 round-2 reassign).
 
-## What has been ruled out (rounds 2 + 3 closures)
+## What has been ruled out (rounds 2 + 3 + 4 closures)
 
 - **Higher peak lr (1e-3 with warmup) — refuted by PR #1388.** Schedule is well
   tuned at lr=5e-4. Pushing lr higher is unproductive at this wall-clock budget.
@@ -137,10 +141,16 @@ Constraints shape what we can sensibly try in 30-minute training executions:
   Width=192, depth=7, slice_num=128 each fit only 10-11 epochs vs baseline's
   19 — undertrained at timeout. Capacity lever requires bf16 throughput
   compensation (in flight: #1587, #1588, #1590) before final verdict.
+- **Per-channel loss weights [1,1,3] — refuted by PR #1428.** All four
+  val splits regressed (val_avg=135.53 vs 101.12 baseline). Physical
+  coupling between velocity and pressure means 3× pressure gradient
+  distorts Ux/Uy, which feeds back negatively into pressure accuracy. Even
+  on val_geom_camber_cruise (easiest split) only reached 103.33 at epoch 13.
+  Milder weights ([1,1,2], [1,1,1.5]) remain speculative but deprioritized.
 
 Cheap lever space is mostly explored. Remaining cheap-lever candidates:
-schedule shape (T_max #1560), gradient stabilization (#1561), per-channel
-loss weighting (#1428), EMA (#1535).
+schedule shape (T_max #1560), gradient stabilization (#1561), domain-aware
+sampler reweighting (#1619), EMA (#1535).
 
 ## Potential next research directions (round 3+ once current arms settle)
 
@@ -159,9 +169,8 @@ loss weighting (#1428), EMA (#1535).
 - **Re-aware feature normalization or log-magnitude head** — high-Re samples
   drive extremes; explicit Re-conditioning of the output scale may reduce
   loss-channel coupling.
-- **Domain-aware sampler tweak** — up-weight `RaceCar single` training samples
-  (currently equal-weighted in `sample_weights`) since `val_single_in_dist` is
-  the hardest split. Override `sample_weights` in `train.py` (read-only data/).
+- **Domain-aware sampler tweak (in flight PR #1619).** `RaceCar single` up-weighted
+  2× in `train.py` before WeightedRandomSampler. If 2× wins, sweep to 1.5× and 3×.
 - **Huber β sweep.** Try β=0.5 (sharper) and β=2.0 (smoother) to find the
   Huber transition that matches the dataset's residual distribution.
 - **Auxiliary divergence or gradient penalty losses** — incompressible flow

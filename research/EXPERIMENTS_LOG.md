@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-12 21:30 — PR #1428: Per-channel loss weights [1,1,3] favoring pressure — CLOSED
+
+- **Branch:** `charliepai2g48h5-nezuko/pressure-channel-weight`
+- **Student:** charliepai2g48h5-nezuko
+- **Hypothesis:** Reweight loss channels [1,1,3] so the pressure channel (the
+  one we're scored on) carries 3× the gradient signal of Ux/Uy. Expected
+  -5% to -12% delta on `val_avg/mae_surf_p`.
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **135.5317** (epoch 13 best) |
+| `val_single_in_dist` | 167.07 |
+| `val_geom_camber_rc` | 143.28 |
+| `val_geom_camber_cruise` | 103.33 |
+| `val_re_rand` | 128.44 |
+| `test_avg/mae_surf_p` | **122.2302** (finite — student applied scoring workaround) |
+| Best epoch | 13 |
+| Epochs reached | 14 (timeout-bound, ~131 s/epoch, fp32 — pre-bf16) |
+| Peak GPU | 42.1 GB |
+| Loss used | **MSE** (pre-Smooth-L1 branch, pre-bf16) |
+
+- **Status:** CLOSED — +34.1% worse than bf16 baseline 101.12.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-pressure-channel-weight-20260512-200303/metrics.jsonl`
+
+### Analysis
+
+Two compounding factors explain the poor result:
+
+1. **Wall-clock disparity.** Branch predates PR #1532 — 14 fp32 epochs at
+   ~131 s/epoch vs baseline's ~19 bf16 epochs at ~98 s/epoch. Partially
+   accounts for the gap (maybe 50%?).
+
+2. **Channel weighting fundamentally wrong at 3×.** All four val splits
+   regressed — including val_geom_camber_cruise (103.33 vs 82.84 at
+   baseline). The only mechanistic explanation for regression on ALL splits
+   simultaneously is that [1,1,3] distorted the optimization geometry.
+   With 3× pressure gradient, the model optimizes pressure at the expense
+   of Ux/Uy, but pressure predictions depend on accurate velocity (physical
+   coupling), so the interference cascades back to `mae_surf_p`. Even on
+   the "easiest" split (`val_geom_camber_cruise`) only reached ~25% above
+   the baseline's full-budget performance at epoch 13.
+
+3. **Student's diagnostic insight for `val_single_in_dist`.** Student noted
+   this split (RaceCar single random hold-out) is the hardest despite being
+   in-distribution — suggesting the WeightedRandomSampler may be
+   under-covering that domain. This is the seed for the reassignment below.
+
+### Conclusions
+
+- Per-channel reweighting at [1,1,3] is ruled out — too aggressive, harms Ux/Uy
+  via physical coupling, all-split regression.
+- Milder weights ([1,1,2] or [1,1,1.5]) might be worth revisiting after
+  other improvements are stacked, but the priority is the sampler direction.
+- **New assignment for nezuko (PR #1619): domain-aware sampler reweighting** —
+  boost RaceCar single sample weights 2× (→ 50% share) to directly attack
+  `val_single_in_dist` coverage deficit. Inherits bf16 AMP + scoring fix.
+
+---
+
 ## 2026-05-12 20:55 — PR #1422: slice_num 64 → 128 — CLOSED
 
 - **Branch:** `charliepai2g48h5-frieren/slice-num-128`
