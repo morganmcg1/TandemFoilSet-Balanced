@@ -353,6 +353,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -444,7 +445,15 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.loss == "mse":
+            sq_err = (pred - y_norm) ** 2
+        elif cfg.loss == "smooth_l1":
+            abs_err = (pred - y_norm).abs()
+            sq_err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
+        elif cfg.loss == "l1":
+            sq_err = (pred - y_norm).abs()
+        else:
+            raise ValueError(f"Unknown loss: {cfg.loss!r} (expected one of: mse, smooth_l1, l1)")
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
