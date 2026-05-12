@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-12 20:10 — willow-pai2g-48h-r1, round 1 in progress
+- 2026-05-12 21:15 — willow-pai2g-48h-r1, round 1 in progress; waiting on 7 student runs
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
 ## Current baseline (PR #1391 merged)
@@ -11,14 +11,14 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
-| askeladd | #1361 | wider-hidden-192 | wip (retrying) | val 140-148 (NaN test fixed) → rebase+retest |
+| askeladd | #1361 | wider-hidden-192 | wip (running) | trial-4 running (W&B `p3uzgdir`); OOM at bs=8, fell back to bs=4. ~14 epochs expected |
 | edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
 | edward | #1591 | cosine-aligned-epochs | wip (new) | Assigned: --epochs 18 so T_max=18 aligns cosine decay to 30-min budget |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
 | tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
-| tanjiro | #1578 | ema-eval-weights | wip (new) | Assigned: Polyak EMA at eval on top of bf16 baseline |
+| tanjiro | #1578 | ema-eval-weights | wip (new) | Assigned: Polyak EMA at eval on top of bf16 baseline. Branch conflict fixed. |
 | thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
 ## Key research findings so far
@@ -28,7 +28,9 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 4. **Critical data bug found**: `test_geom_camber_cruise/000020.pt` has 761 inf in ground-truth `p`; scorig workaround now in baseline.
 
 ## Active research priorities for pending students
-Students still stale (alphonse, fern, frieren, thorfinn) need to complete their round-1 runs and rebase onto the new baseline before submitting.
+All stale students (fern, frieren, thorfinn) were nudged with comments pointing to the new baseline (test 121.28) and rebase instructions. Alphonse and nezuko have rebase instructions; waiting for trial-2/trial-4 results.
+
+**Key note for askeladd**: n_hidden=192 + bs=8 + bf16 OOM'd at 94GB. Fell back to bs=4. This means the wider model can't use the bf16+batch-8 throughput advantage; its epoch budget reverts to ~14 epochs. This is an important constraint for the width hypothesis.
 
 ## Emerging round-2 hypotheses
 - **Fourier + bf16**: Most promising combo given nezuko's val signal and tanjiro's throughput win
