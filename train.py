@@ -228,9 +228,11 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    pred_abs_max = 0.0
+    offending_batch_idx = -1
 
     with torch.no_grad():
-        for x, y, is_surface, mask in loader:
+        for batch_idx, (x, y, is_surface, mask) in enumerate(loader):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             is_surface = is_surface.to(device, non_blocking=True)
@@ -254,6 +256,11 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            batch_abs_max = (pred_orig * mask.unsqueeze(-1)).abs().max().item()
+            if batch_abs_max > pred_abs_max:
+                pred_abs_max = batch_abs_max
+                if batch_abs_max > 1e6:
+                    offending_batch_idx = batch_idx
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -261,7 +268,9 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "pred_abs_max": pred_abs_max,
+           "offending_batch_idx": offending_batch_idx}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -394,7 +403,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -506,6 +515,11 @@ for epoch in range(MAX_EPOCHS):
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+        if split_metrics[name].get("pred_abs_max", 0.0) > 1e6:
+            print(
+                f"    !! {name} pred_abs_max={split_metrics[name]['pred_abs_max']:.3e} "
+                f"offending_batch_idx={split_metrics[name]['offending_batch_idx']}"
+            )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
