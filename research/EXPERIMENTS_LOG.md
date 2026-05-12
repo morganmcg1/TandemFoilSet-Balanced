@@ -1,5 +1,48 @@
 # SENPAI Research Results
 
+## 2026-05-12 21:20 — PR #1526: Intermediate model scaling n_hidden=224, n_layers=7, n_head=8 (~2.67M)
+
+- Branch: `charliepai2g24h2-edward/model-224-7-8`
+- Hypothesis: Transolver at ~3.4M params should lower floor by 5–15%; capacity bottleneck at 0.66M
+- Artifacts: `models/model-charliepai2g24h2-edward-model-224-7-8-20260512-201457/metrics.jsonl`
+
+| Split | mae_surf_p (224-7-8, bs=2, 5 ep) | Baseline #1482 (128-5-4, bs=4, 14 ep) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 237.30 | 162.05 | +46.4% |
+| val_geom_camber_rc     | 182.12 | 137.15 | +32.8% |
+| val_geom_camber_cruise | 142.15 | 101.34 | +40.3% |
+| val_re_rand            | 151.40 | 111.83 | +35.4% |
+| **val_avg**            | **178.24** | **128.09** | **+39.2%** |
+
+**Config:** n_hidden=224, n_layers=7, n_head=8, slice_num=64, mlp_ratio=2 (~2.67M actual params). bs=4 OOMed at 94.67 GB → fell back to bs=2 (51.5 GB peak). Only 6 epochs in 30 min (~325 s/epoch). lr=5e-4 (default).
+
+**Decision: CLOSED — severely undertrained (6 ep at bs=2 vs 14 ep at bs=4 for baseline). Architecturally inconclusive.**
+
+**Analysis:** bs=4 OOM was due to activation memory underestimate: slice_token [B, slice_num, 224], slice_weights [B, N_max, head, slice_num] across 7 layers at N_max≈242k far exceeds 35 GB at fp32. bs=2 fallback ran but cut epochs from 14 to 6, and curve was still descending at epoch 5 (187→178). The +39% regression is undertraining, not architectural failure. **Path forward:** wait for fern's AMP bf16 result (#1477 WIP); if bf16 wins, activation memory roughly halves → 224-7-8 should fit at bs=4 for a fair test.
+
+---
+
+## 2026-05-12 21:20 — PR #1485: Increase slice_num 64 → 128 for finer physics tokens (round 1)
+
+- Branch: `charliepai2g24h2-nezuko/slice-num-128`
+- Hypothesis: Finer physics-token resolution improves pressure prediction; slice_num=128 is the most direct lever
+- Artifacts: `models/model-charliepai2g24h2-nezuko-slice-num-128-20260512-195113/metrics.jsonl` (best run); `-180850/`, `-185210/` (others)
+
+| Run | Best epoch | val_avg/mae_surf_p | Epochs | Peak VRAM |
+|---|---:|---:|---:|---:|
+| 20260512-195113 | 11 | **135.76** | 11/50 | 54.51 GB |
+| 20260512-180850 | 9  | 140.90     | 11/50 | 54.51 GB |
+| 20260512-185210 | 11 | 148.55     | 11/50 | 54.51 GB |
+| **Mean** | — | **141.74** | — | — |
+
+Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135.76 = −5.2%.
+
+**Decision: SENT BACK for rebase + stack. Runs were on pre-merge base (no chan_w, no warmup). vs current floor 128.09 the best run is +6% WORSE. Needs rebase.**
+
+**Analysis:** Three independent runs show genuine −5.2% signal on the old base and seed variance ±4.6%. Per-epoch wall time ~172 s vs ~150 s for slice_num=64 (+15% slower) limits run to 11 epochs. The training T_max=50 cosine barely decays in 11 epochs — another confound. Also confirmed the data/scoring.py 0×NaN bug independently (askeladd #1536 is the fix). **Rerun instructions:** rebase, use `--lr 1e-3`, compare to 128.09.
+
+---
+
 ## 2026-05-12 20:20 — PR #1482: 3-epoch warmup + cosine + peak lr=1e-3
 
 - Branch: `charliepai2g24h2-frieren/warmup-cosine-lr1e-3`

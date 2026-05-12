@@ -1,8 +1,8 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 20:25
+- **Date:** 2026-05-12 21:25
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
-- **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2)
+- **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
 
 ## Current floor
@@ -12,22 +12,20 @@ Config: 3-ep warmup + lr=1e-3 + cosine(T_max=47, eta_min=1e-6), bs=4, ~0.66M mod
 Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); bs=1 test_avg = 117.40  
 **Note:** Measured WITHOUT chan_w (pre-#1464 base). Advisor branch now has BOTH chan_w + warmup. True stacked floor unmeasured — expected < 128.09.
 
-**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Documented by 2 students (alphonse + thorfinn). Fix = one line in `data/scoring.py` (protected file) — will address in a dedicated bug-fix PR.
+**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Documented by 3 students (alphonse + thorfinn + nezuko). Fix = one line in `data/scoring.py` (protected file) — being addressed in PR #1536 (askeladd) via train.py guard.
 
 ## Active experiments (WIP)
 
-| PR | Student | Hypothesis | Lever | Round |
-|---|---|---|---|---|
 | PR | Student | Hypothesis | Lever | Round |
 |---|---|---|---|---|
 | #1536 | askeladd | NaN guard fix + clean floor rerun | Bug fix / measurement | 2 |
 | #1559 | alphonse | Decoupled surf/vol chan_w: [1,1,5] surf, [1,1,1] vol | Loss alignment | 3 |
 | #1524 | tanjiro | Stack chan_w + grad-accum=4 + lr=1e-3 + T_max=14 | Stacking / opt | 2-revised |
 | #1489 | thorfinn | Stack chan_w + per-sample AoA flip p=0.25 | Stacking / aug | 2-revised |
-| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (WIP — gpu 89 GB active) |
+| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (GPU active) |
 | #1573 | frieren | Warmup + lr=7.5e-4 + gradient clipping | Stability / optimization | 3 |
-| #1485 | nezuko | slice_num 64 → 128 | Physics-token resolution | 1 (WIP — gpu 85 GB active) |
-| #1526 | edward | Model scaling: n_hidden=224, n_layers=7 (~3.4M) | Capacity | 2 |
+| #1485 | nezuko | slice_num 64 → 128, rebased on chan_w+warmup | Physics-token resolution | 1-revised |
+| #1603 | edward | EMA weights (decay=0.999) for noise-free eval | Inference-time averaging | 3 |
 
 ## Key findings so far
 
@@ -40,29 +38,28 @@ Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); 
 7. **Per-sample AoA flip p=0.25 fixes Uy regression** (−50%). Primary metric flat without chan_w stack. Stacking in progress (#1489 revised).
 8. **Cosine T_max=50 barely decays in 14-epoch budget** — set T_max≈14 for meaningful LR decay.
 9. **pad_collate makes batch scaling expensive** — bs=8 uses 84 GB. Grad-accum is the correct lever.
-10. **256-8-8 OOMs at bs=4**; 224-7-8 (~3.4M) is the correct intermediate test for model capacity.
+10. **224-7-8 model at bs=2 only reached 6 epochs — undertrained, inconclusive** (PR #1526 closed). Retry after fern's AMP/bf16 result.
 11. **Test NaN Type 1** (data bug): 0×NaN from 000020.pt corrupt p-channel. Fix in train.py evaluate_split (#1536).
-12. **Test NaN Type 2** (numerical): lr=1e-3 causes non-finite attention weights for specific bs=4 batch compositions in test_geom_camber_cruise. Fix: lr=7.5e-4 + gradient clipping (#frieren follow-up).
-13. **VRAM budget:** bs=4 baseline uses ~42 GB. bf16 (fern, WIP at 89 GB) is actively running.
+12. **Test NaN Type 2** (numerical): lr=1e-3 causes non-finite attention weights for specific bs=4 batch compositions in test_geom_camber_cruise. Fix: lr=7.5e-4 + gradient clipping (#1573 frieren).
+13. **VRAM budget:** bs=4 baseline uses ~42 GB. bf16 (fern, GPU 99% active) expected ~21-25 GB.
+14. **slice_num=128 shows −5.2% on old base** (3 runs, mean 141.74, seed variance ±4.6%). Needs rerun stacked on chan_w+warmup+lr=1e-3 (#1485 sent back for rebase).
 
-## Round-2 hypothesis pipeline
+## Round-3 hypothesis pipeline
 
 ### High priority (stack winners)
-- **alphonse decoupled surf/vol chan_w** (#1559): apply [1,1,5] only to surface portion of sq_err — addresses Ux degradation seen in p=10 sweep. Expected −2% to −7% on floor.
-- **tanjiro chan_w + grad-accum + T_max=14** (#1524 revised): stack two orthogonal levers + fix LR decay schedule. Highest expected value of WIPs.
+- **askeladd NaN guard + clean rerun** (#1536): first confirmed clean test_avg measurement. Critical unlock.
+- **alphonse decoupled surf/vol chan_w** (#1559): [1,1,5] surf only — addresses Ux degradation at p=10. Expected −2% to −7%.
+- **tanjiro chan_w + grad-accum + T_max=14** (#1524 revised): stack two orthogonal levers + fix LR decay. Highest expected value.
 - **thorfinn chan_w + per-sample AoA flip** (#1489 revised): orthogonal stacking — input distribution × gradient direction.
-- **askeladd scoring-nan-guard** (#1536): applies 3-line train.py mask, reruns floor config → first clean test_avg. High-value measurement unlock.
+- **frieren lr=7.5e-4 + gradclip** (#1573): fix test NaN Type 2 while staying near peak LR. Cleaner test_avg unlock.
+- **nezuko slice_num=128 rebased** (#1485 revised): stack finer physics tokens on chan_w+warmup. Expected 121-128 range.
+- **edward EMA weights decay=0.999** (#1603): zero-cost inference trick, 1-3% gain expected.
+- **fern AMP bf16** (#1477 GPU active): unlock 2x faster training → more epochs in budget. Enables 224-7-8 retry.
 
-### Medium priority
-- **tanjiro grad-accum**: once confirmed, effective bs=16 should compound with any loss/architecture change.
-- **edward model-224-7-8**: if 3.4M params improve on 0.66M, the capacity bottleneck is confirmed.
-
-### Potential round-3 directions
-- If AMP (fern) wins: retry 256-8-8 with bf16 (activations halved, ~47 GB → fits).
-- Stack best winners: chan_w=[1,1,5|10] + warmup (if frieren wins) + AMP (if fern wins).
-- Sort-by-size sampler (batching by mesh size reduces pad_collate waste).
-- If augmentation pays off: per-sample per-domain AoA flip at p=0.25.
-- Dual surface/volume heads (AB-UPT style) if loss-alignment levers saturate.
-- Fourier positional encoding for (x, z).
+### Next round priorities (if current WIPs complete)
+- If AMP (fern) wins: retry 224-7-8 with bf16 (activations halved, ~50 GB at bs=4 — fits).
+- Stack best winners: chan_w + warmup + AMP + EMA (if wins).
+- Sort-by-size sampler (batching by mesh size reduces pad_collate waste — reduces VRAM, enables higher bs).
 - If NaN guard (#1536) merges cleanly, propagate train.py fix to all future PRs via baseline.
-</content>
+- Dual surface/volume heads (AB-UPT style) if loss-alignment levers saturate.
+- Fourier positional encoding for (x, z) coordinates.
