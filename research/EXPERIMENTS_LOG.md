@@ -424,3 +424,80 @@ New baseline (102.85) renders this isolated experiment non-competitive. Resource
 Direction is still worth pursuing: faster convergence under the 30-min cap is genuinely valuable. Refinement: peak LR 7e-4 (20% increase over baseline), 2-epoch warmup, gradient clipping at 1.0.
 
 ---
+
+## 2026-05-12 23:01 — PR #1597: Depth experiment: n_layers 5→6 (frieren)
+
+- **Branch:** `charliepai2g48h2-frieren/depth-6-layers`
+- **Hypothesis:** Adding a 6th Transolver block increases representational capacity for camber-OOD splits with manageable compute overhead.
+- **Status:** CLOSED ❌ — dead end (+5.91% worse than baseline #1418; +36% worse than current baseline 95.336)
+
+### Results
+
+| Run | val_avg/mae_surf_p | Note |
+|---|---|---|
+| ep12 contingency (T_max=12 matched budget) | **129.889** | +5.91% vs #1418 baseline, +36% vs current 95.336 |
+| ep20 sanity (T_max=20, only 12 epochs fit) | 157.140 | confirms T_max must match epochs |
+| Param count | 783.5K (was 662K) | +121K from 6th block |
+| Epoch time | 154-158s | vs baseline 131s |
+
+**Per-split (ep12 best):**
+- val_single_in_dist: 154.907 (+6.16%)
+- val_geom_camber_rc: 137.211 (-0.50%)  ← only neutral split
+- val_geom_camber_cruise: 108.299 (+14.16%)  ← worst regression
+- val_re_rand: 119.141 (+6.49%)
+
+### Commentary
+
+Depth 5→6 at width 128 regresses ~5.9% — the model is NOT capacity-bottlenecked on this 1500-sample dataset. Extra block burns ~121K params and ~26s/epoch without recovering fit. Per-split pattern contradicted a-priori hypothesis ("strongest signal on camber-OOD"): cruise regressed +14%, rc was neutral. At fixed compute, trading 1 epoch (~20% of 12-epoch cosine schedule) for more capacity is the wrong direction.
+
+### Key finding for advisor
+
+**Frieren's sharp insight**: T_max must match feasible epoch count under the 30-min cap. The 20-epoch sanity run with truncated cosine confirms this — T_max=20 leaves LR at ~50% peak when training ends, dramatically worse than T_max=12 with the same wall-clock. **This is an immediately actionable lever** — assigning frieren to test T_max alignment directly.
+
+### Why closed
+
+Capacity axis exhausted. Frieren's suggestion #3 (pivot to data/loss/training axes, not capacity probing) is well-supported. Reassigning frieren to T_max alignment experiment.
+
+---
+
+## 2026-05-12 22:57 — PR #1432: Wall-distance feature rebased + stacked (tanjiro)
+
+- **Branch:** `charliepai2g48h2-tanjiro/wall-distance-feature` (rebased onto #1418 + #1424)
+- **Hypothesis:** Wall-distance (-0.96% on pre-#1418) should stack additively with channel_weights=[1,1,3] + warmup/clip (#1424). Expected -1.5% to -3% combined gain.
+- **Status:** CLOSED ❌ — dead end (negative stacking: +4.59% worse than #1424 baseline; +12.8% worse than current 95.336)
+
+### Results
+
+| Metric | Value | vs Baseline #1424 |
+|---|---|---|
+| val_avg/mae_surf_p (best ep 14) | **107.5735** | +4.59% worse |
+| test_avg/mae_surf_p (clean 4-split via NaN-skip) | 95.0447 | — |
+| Epochs completed | 14/14 (30-min cap) | |
+| Param count | 662,615 | unchanged |
+| Epoch time | ~136s | vs baseline ~131s |
+
+**Per-split val (vs #1424):**
+- val_single_in_dist: 128.722 (+7.56%)
+- val_geom_camber_rc: 126.387 (+11.52%)
+- **val_geom_camber_cruise: 76.680 (-6.59%)** ✓ ← only beneficial split
+- val_re_rand: 98.504 (+2.29%)
+
+### Commentary
+
+**Negative stacking confirmed.** Wall-distance + channel_weights+warmup interact destructively on 3 of 4 splits. Tanjiro's analysis is correct:
+
+1. **Capacity competition** at preprocess MLP (25→128 with biased gradient toward pressure)
+2. **Per-batch standardization noise** is amplified in steeper warmed-up loss landscape
+3. **Cruise-only benefit** (-6.59%) suggests wall-distance helps where boundary layer is well-resolved AND geometry is in-distribution; elsewhere it adds noise
+
+### Why closed
+
+- The signal that initially looked promising on uniform channels disappears under the new training regime.
+- The NaN-skip fix tanjiro pioneered was already incorporated into PR #1414 (Smooth L1) and merged — that fix is now canonical on the advisor branch.
+- Tanjiro's per-sample standardization variant or capacity-widening variant remain as potential follow-ups, but lower priority than fresh directions (β sweep, pure L1, T_max alignment).
+
+### Lifted artifact
+
+NaN-skip pattern (`y_finite` + `nan_to_num(y)`) pioneered in this PR is now canonical via #1414. Tanjiro is being reassigned to a fresh direction.
+
+---
