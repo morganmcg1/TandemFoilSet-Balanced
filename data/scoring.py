@@ -46,8 +46,12 @@ def accumulate_batch(
     vol_mask = effective & ~is_surface
 
     err = (pred_orig.double() - y.double()).abs()
-    mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
-    mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
+    # Use torch.where so positions masked out via mask/sample_mask do not
+    # become nan via inf*0 when y (or pred) has non-finite entries at those
+    # positions — a multiply-by-bool-cast-to-float would propagate the nan.
+    zero = torch.zeros_like(err)
+    mae_surf += torch.where(surf_mask.unsqueeze(-1), err, zero).sum(dim=(0, 1))
+    mae_vol += torch.where(vol_mask.unsqueeze(-1), err, zero).sum(dim=(0, 1))
     return int(surf_mask.sum().item()), int(vol_mask.sum().item())
 
 
