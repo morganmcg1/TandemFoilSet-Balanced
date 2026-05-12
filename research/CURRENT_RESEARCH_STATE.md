@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 23:25 (T_max=15 merged: val=114.81 new best; wd5e-4 closed; 6 effective merges on advisor)
+- **As of:** 2026-05-12 23:32 (nezuko #1695 tmax-18 assigned; frieren #1696 grad-clip-1.0 assigned; all 8 students now active)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -56,8 +56,8 @@ Six merges (after surf_weight=20 effectively reverted):
 - **PR #1576 — `unified-pos-global-norm` (thorfinn)** — **WIP (sent back)** — seeded rerun required
 - **PR #1635 — `log-cosh-loss` (fern)** — **WIP** — log-cosh alt to Huber
 - **PR #1685 — `seed7-variance` (alphonse)** — **WIP** — cross-seed σ check
-- **PR TBD — `tmax-18` (nezuko)** — **WIP** — follow-up to #1542
-- **PR TBD — `grad-clip-1.0` (frieren)** — **WIP** — gradient clipping regularizer
+- **PR #1695 — `tmax-18` (nezuko)** — **WIP** — follow-up to #1542, T_max=15→18 to match achievable epoch count
+- **PR #1696 — `grad-clip-1.0` (frieren)** — **WIP** — gradient clipping max_norm=1.0 as principled regularizer
 
 ## Closed / dead ends
 - wd5e-4 (#1394): regression on val_avg (+9.2%); mixed per-split signal not net positive
