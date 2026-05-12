@@ -81,6 +81,32 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class FourierCoordEnc(nn.Module):
+    """Replace the 2 normalized coord dims with 2*2*n_freqs Fourier features.
+
+    Input  shape: [B, N, in_dim]  where in_dim = X_DIM (raw 24-dim feature vector,
+                                  already normalized by stats["x_mean"], stats["x_std"]).
+    Output shape: [B, N, in_dim + (4*n_freqs - 2)]  -- 2 coord dims replaced by 4*n_freqs
+                                                       Fourier features.
+    """
+
+    def __init__(self, n_freqs: int = 4):
+        super().__init__()
+        self.n_freqs = n_freqs
+        freqs = 2.0 ** torch.arange(n_freqs).float()
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        coords = x[..., :2]
+        angles = coords.unsqueeze(-1) * self.freqs[None, None, None, :] * torch.pi
+        sin_feats = torch.sin(angles)
+        cos_feats = torch.cos(angles)
+        fourier = torch.cat([sin_feats, cos_feats], dim=-1).reshape(
+            *x.shape[:-1], 4 * self.n_freqs
+        )
+        return torch.cat([fourier, x[..., 2:]], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -245,6 +271,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -403,9 +430,12 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+N_FREQS = 4
+fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -459,6 +489,7 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
