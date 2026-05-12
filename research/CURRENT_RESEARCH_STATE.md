@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12 21:00 UTC
+- **Date / time:** 2026-05-12 21:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -19,18 +19,29 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
-## Live W&B observations (3h into launch)
+## Cycle-3 update — cruise-test NaN root cause + workaround discovered
 
-| Student | Best val_avg | Δ vs baseline-best (119.64) | Δ vs baseline-median (~131) | Code committed? | Notes |
-|---|---|---|---|---|---|
-| frieren (p_weight) | **116.34** | -2.8% | -11.0% | partial (only p_weight=3 arm, not the re-run code) | Best in cohort; re-run with p_weight=2 + clip succeeded |
-| fern (lr=2e-3+clip) | 118.77 | -0.7% | -9.3% | no | 2 new arms launched ~20:51 UTC, still running |
-| alphonse (baseline) | 119.64 | reference | reference | no | 3 baseline runs span 13 points |
-| thorfinn (bf16+accum) | 124.60 | +4.1% | -4.9% | no | More epochs/30min as designed; first arm was 118.17 |
-| askeladd (surf_w=30) | 127.53 | +6.6% | -2.6% | no | Improving across retries |
-| tanjiro (per-field heads) | 137.21 | +14.7% | +4.7% | no | 3 of 7 runs crashed — stability issues |
-| nezuko (wider 256/8h) | 176.37 | +47.4% | +34.6% | no | 1 currently running; capacity hurt under 30-min cap |
-| edward (Huber per-sample) | 275.04 | +130.0% | +110.0% | no | Direction is broken; close on submission |
+Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf_p = NaN` issue in PR comments at ~21:00 UTC:
+
+- **#1466 (edward)** and **#1480 (thorfinn)**: `data/scoring.py:accumulate_batch` propagates `0 * Inf = NaN` when a batch contains a sample with non-finite `y` values. Specifically, `test_geom_camber_cruise` sample 20 has 761 nodes with `y_p = -Inf`. The per-sample skip path in `accumulate_batch` is defeated by the trailing masked-multiply.
+- Both implemented identical workarounds in `train.py:evaluate_split` (sanitize `y` and gate `mask` per-sample before calling `accumulate_batch`).
+- **`data/scoring.py` is read-only per `program.md`** — neither student modified it. Both fixes live in `train.py`.
+- Edward verified on run `wxpj1e4u`: `test_avg/mae_surf_p = 257.22` (was NaN), `test_geom_camber_cruise/mae_surf_p = 156.58` (was NaN).
+
+**Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
+
+## Live W&B observations (3.5h into launch)
+
+| Student | Best val_avg | Δ vs baseline-best (119.64) | Δ vs baseline-median (~131) | Code committed? | Currently running | Notes |
+|---|---|---|---|---|---|---|
+| frieren (p_weight) | **116.34** | -2.8% | -11.0% | partial (only p_weight=3 arm, not the re-run code) | `fshtpt6z` (new arm) | Best in cohort; re-run with p_weight=2 + clip succeeded |
+| fern (lr=2e-3+clip) | 118.77 | -0.7% | -9.3% | no | `2ny5alj3` | Crash on `j6ugv3ik` then follow-up launched |
+| alphonse (baseline) | 119.64 | reference | reference | no | `7uv601md` | Crash on `ytujykqu` then follow-up launched |
+| thorfinn (bf16+accum) | 124.60 | +4.1% | -4.9% | no | `5wvm7na2` | First arm was 118.17; cruise-NaN workaround diagnosed |
+| askeladd (surf_w=30) | 127.53 | +6.6% | -2.6% | no | `3cv4bxtr` + `qhnzquax` | Improving across retries |
+| tanjiro (per-field heads) | 137.21 | +14.7% | +4.7% | no | `2wlx399x` | 3 of 7 runs crashed earlier — stability issues |
+| nezuko (wider 256/8h) | 176.37 | +47.4% | +34.6% | no | `wp67vqws` | Capacity hurt under 30-min cap |
+| edward (Huber per-sample) | 275.04 | +130.0% | +110.0% | no | `4bplylk3` | Direction broken; cruise-NaN workaround diagnosed; close on submission |
 
 **Key:**
 - Δ vs baseline-best uses alphonse's best baseline run (119.64) — strict.
@@ -39,7 +50,9 @@ Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-poin
 
 ## Workflow observation — stale_wip PRs
 
-All 7 non-frieren PRs are flagged `stale_wip`. Root cause: students ran training in W&B but did not commit/push their `train.py` modifications. The pods are alive (kubectl confirms 1/1 Ready) and polling, but each iteration is hitting GraphQL API rate limits (visible in pod logs: "API rate limit already exceeded for user ID …", retrying for ~90s per iteration). The host-side harvest workflow is expected to drive completion. No advisor nudges this cycle — they would compete for the same rate-limited tokens.
+All 7 non-frieren PRs remain `stale_wip` through cycle 3. Root cause: students ran training in W&B but did not commit/push their `train.py` modifications. The pods are alive (kubectl confirms 1/1 Ready) and polling, but each iteration is hitting GraphQL API rate limits (visible in pod logs: "API rate limit already exceeded for user ID …", retrying for ~90s per iteration). The host-side harvest workflow is expected to drive completion. No advisor nudges this or last cycle — they would compete for the same rate-limited tokens.
+
+Notably, edward and thorfinn both posted **detailed diagnostic comments** in cycle 3 identifying the cruise-test NaN root cause, but neither has committed the workaround code yet. The commenting traffic seems to use a different rate-limit lane than the harvest workflow — students can still push prose updates even while the harvest is throttled.
 
 ## Themes
 
@@ -60,16 +73,18 @@ Not in plateau. Most hypotheses sit inside the noise band but multiple direction
 
 ## Next directions (r3 candidates)
 
-Same as previous cycle, with new priorities given cycle-2 observations:
+Updated for cycle 3:
 
-1. **Repeat-runs for variance estimation** — give the top 3 hypotheses (frieren-p_weight=2+clip, fern-lr=2e-3+clip, thorfinn-bf16+accum) a 2nd or 3rd seed to separate signal from noise. The ~10% noise band on baseline means single-run wins are unsafe.
-2. **Stack winners** — once the top 3 hypotheses are independently confirmed, build a single stacked-arm PR combining bf16+accum + lr=2e-3+clip + surf_weight=30 (+ optional p_weight=2). Test compound improvement.
-3. **Diagnose cruise-test NaN** — fix the overflow in `accumulate_batch` so `test_avg/mae_surf_p` becomes reportable. Either: clamp predictions before accumulation, or replace the inf-prone arithmetic. This unlocks paper-facing numbers.
+1. **Cherry-pick the cruise-test NaN fix** — `train.py:evaluate_split` sanitize-and-gate workaround (independently posted on #1466 and #1480). This is hypothesis-agnostic baseline hardening that unlocks the paper-facing `test_avg` for every future run. Highest-leverage cherry-pick on the table once a student actually commits it.
+2. **Repeat-runs for variance estimation** — give the top 3 hypotheses (frieren-p_weight=2+clip, fern-lr=2e-3+clip, thorfinn-bf16+accum) a 2nd or 3rd seed to separate signal from noise. The ~10% noise band on baseline means single-run wins are unsafe.
+3. **Stack winners** — once the top 3 hypotheses are independently confirmed, build a single stacked-arm PR combining bf16+accum + lr=2e-3+clip + surf_weight=30 (+ optional p_weight=2). Test compound improvement.
 4. **OneCycleLR + high peak** as a schedule alternative.
 5. **Surface-aware sampling**, **EMA weights**, **slice_num sweep** — held back from r2.
 
 ## Operational notes
 
-- Cycle 2 had no PRs marked ready for review and no idle students. No merges/closes possible this cycle.
+- Cycle 3 had no PRs marked ready for review and no idle students. No merges/closes possible this cycle.
 - Frieren PR #1471 was sent back ~20:02 UTC; student completed the re-run in W&B (116.34) but hasn't committed the updated code or marked ready.
+- All 8 students currently have active W&B runs as of 21:30 UTC; 2 crashes since 20:00 UTC (fern `j6ugv3ik`, alphonse `ytujykqu`) both already followed by new launches.
+- Edward and thorfinn both posted full root-cause diagnostics for the cruise-test NaN bug but neither has committed the fix.
 - The host-side harvest/kill is expected to manage final fleet shutdown after pods are Ready.

@@ -71,3 +71,42 @@ The 3 alphonse baseline runs span 119.64–132.73 (13 points, ~10%). The previou
 ### No formal decisions made this cycle
 
 No PRs were marked ready for review. No merges, send-backs, or closes happened (beyond the pre-existing frieren send-back from cycle 1). The advisor branch was updated with the recalibrated noise floor and cycle-2 W&B observations.
+
+---
+
+## 2026-05-12 21:30 — Cycle-3 observations
+
+### Important discovery: cruise-test NaN root cause + workaround
+
+Two students independently diagnosed the systemic `test_geom_camber_cruise/mae_surf_p = NaN` issue in detailed PR comments:
+
+- **#1466 (edward)** at 21:00 UTC and **#1480 (thorfinn)** at 20:56 UTC both identified that `data/scoring.py:accumulate_batch` has a `0 * Inf = NaN` propagation bug when a batch contains a sample with non-finite `y` values. Specifically: `test_geom_camber_cruise` sample 20 has 761 nodes with `y_p = -Inf`. The per-sample skip logic in `accumulate_batch` is defeated by the masked-multiply at the end.
+
+- Both students implemented identical workarounds in `train.py:evaluate_split` (sanitize `y` and gate `mask` per-sample before calling `accumulate_batch`).
+
+- Edward verified the workaround on their best checkpoint (run `wxpj1e4u`): `test_avg/mae_surf_p = 257.22` (was NaN), `test_geom_camber_cruise/mae_surf_p = 156.58` (was NaN).
+
+- **`data/scoring.py` is read-only per `program.md`** — neither student modified it. Both fixes live in `train.py`.
+
+**Implication:** when these fixes are committed and merged, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val.
+
+### Cycle-3 leaderboard (live W&B, unchanged in ranks since cycle 2)
+
+| Student | Best val_avg | Δ vs best baseline (119.64) | Running now |
+|---|---|---|---|
+| frieren | 116.34 | -2.8% | fshtpt6z (new arm) |
+| fern | 118.77 | -0.7% | 2ny5alj3 (after j6ugv3ik crash) |
+| alphonse | 119.64 | reference | 7uv601md (after ytujykqu crash) |
+| thorfinn | 124.60 | +4.1% | 5wvm7na2 |
+| askeladd | 127.53 | +6.6% | 3cv4bxtr + qhnzquax (2 arms) |
+| tanjiro | 137.21 | +14.7% | 2wlx399x |
+| nezuko | 176.37 | +47.4% | wp67vqws |
+| edward | 275.04 | +130% | 4bplylk3 |
+
+- All 8 students have currently-running W&B runs (active iteration).
+- 2 crashes since 20:00 UTC: `j6ugv3ik` (fern), `ytujykqu` (alphonse). Both already have follow-up arms running.
+- No new finished runs have produced a finite `test_avg` yet — the bug fixes haven't been committed/pushed to PR branches, so new training runs aren't using the workaround.
+
+### No decisions this cycle
+
+All 8 PRs remain draft `status:wip`. No code commits on 7 of 8 branches (frieren has a partial commit). No SENPAI-RESULT terminal markers. Advisor held back on per-student nudge comments to avoid further burning the shared GraphQL rate-limit budget (visible in pod logs as 6-retry token exhaustion per heartbeat).
