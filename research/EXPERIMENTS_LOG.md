@@ -304,3 +304,45 @@ Per-split val surface-p MAE at best checkpoint:
 **Robustness improvement noted.** Thorfinn recommended replacing `delta * is_surface.float()` with `torch.where(is_surface, delta, zero)` to avoid `NaN × 0 = NaN` contamination from volume-node overflows. Incorporated into the composition PR #1528 instructions.
 
 **Test NaN (additional cause).** Unlike tanjiro's data-corruption root cause, thorfinn's test NaN was caused by the base Transolver overflowing to non-finite values on one test cruise sample. The guard fix in PR #1527 will address both causes.
+
+---
+
+## 2026-05-12 23:00 — PR #1580: Per-channel BIVW (CLOSED — 29.6% regression)
+
+- **Branch:** `willowpai2g48h4-tanjiro/per-channel-bivw`
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B run:** `rf4lp09j`
+- **Hypothesis:** Replace scalar per-sample BIVW weight with separate per-channel weights `cw[b,c] = 1/var(y_norm[b,:,c])`, normalised to mean=1 per channel. Expected 1–4% improvement by giving pressure channel an independent variance track.
+
+### Results
+
+| Metric | Per-channel BIVW | Scalar BIVW baseline (an97gg8n) | Δ |
+|--------|-----------------|--------------------------------|---|
+| `val_avg/mae_surf_p` | **154.5967** | 119.2987 | **+29.6% ❌** |
+| `test_avg/mae_surf_p` | 142.7603 | ~119.63 (3-split) | +19.3% ❌ |
+
+Per-split val surface-p MAE at best checkpoint (epoch 14):
+
+| Split | Per-channel BIVW | Prior baseline | Δ |
+|-------|-----------------|----------------|---|
+| `val_single_in_dist` | 213.4762 | 140.09 | +73.39 |
+| `val_geom_camber_rc` | 171.6911 | 142.40 | +29.29 |
+| `val_geom_camber_cruise` | 103.5190 | 85.98 | +17.54 |
+| `val_re_rand` | 129.7005 | 108.73 | +20.97 |
+| **val_avg** | **154.5967** | **119.2987** | **+29.6%** |
+
+All 4 test splits were finite (PR #1527 NaN guard working).
+
+### Analysis and Conclusions
+
+**Closed — clear dead end.** Every validation split regressed; the approach is 58% worse than the current best baseline (98.16 after PR #1558).
+
+**Mechanism (tanjiro's analysis, confirmed correct):** The original scalar BIVW was *implicitly* a p-variance-driven Re-curriculum. Because `p` spans 5 orders of magnitude in variance vs ~10^4 for Ux/Uy, the pooled per-sample `1/var(y_norm_valid)` was effectively dominated by `var(p)`. This meant: low-Re samples (small p) got upweighted, high-Re samples (large p) got downweighted — for *all three channels simultaneously*. Per-channel decoupling broke this coupling by letting `cw[b,Ux]` and `cw[b,Uy]` be large on high-Re samples while `cw[b,p]` is small. The model received conflicting signals: "learn velocity from high-Re samples but ignore their pressure" — exactly backwards for `val_avg/mae_surf_p`.
+
+**Additional factor:** With batch_size=4 and p-variance over 10^5 range, per-sample `channel_w[:,p]` after mean-1 normalisation varied up to 50× within a single batch, giving extremely high gradient variance and effectively 1–2 samples dominating each step.
+
+**Key lesson:** Scalar BIVW was doing more than "between-sample variance correction" — it was also acting as a p-aware Re-curriculum. This coupling should not be casually broken. Any future per-channel weighting experiment should preserve the p-dominated sample ordering, e.g. by computing sample weights from p-variance only and then applying a small per-channel log-mean correction on top.
+
+**Potentially valuable follow-ups flagged by tanjiro (not assigned here):**
+- Pre-compute frozen p-variance sample weights over the full corpus (makes the implicit curriculum explicit)
+- EMA per-channel variance (cuts within-batch-of-4 noise)
