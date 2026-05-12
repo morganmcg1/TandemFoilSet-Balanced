@@ -236,25 +236,40 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples with any non-finite y (one test_geom_camber_cruise sample
+            # has -inf in pressure ground-truth); without this, inf*0=NaN/inf*1=inf
+            # pollutes the loss/vol_loss/surf_loss diagnostic for that split.
+            # accumulate_batch already skips non-finite samples internally, so MAE
+            # metrics are unaffected — this guard only cleans up the diagnostic.
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            safe_mask = mask & y_finite.unsqueeze(-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2 * channel_weights
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
+            err = pred - y_norm
+            abs_err = err.abs()
+            beta = 0.1
+            huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
+            weighted = huber * channel_weights
+            vol_mask = safe_mask & ~is_surface
+            surf_mask = safe_mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (weighted * vol_mask.unsqueeze(-1)).sum()
                 / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (weighted * surf_mask.unsqueeze(-1)).sum()
                 / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
             ).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, safe_mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -446,12 +461,17 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2 * channel_weights
 
+        # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
+        err = pred - y_norm
+        abs_err = err.abs()
+        beta = 0.1
+        huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
+        weighted = huber * channel_weights
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
+        vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
+        surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
