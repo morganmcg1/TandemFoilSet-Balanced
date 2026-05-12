@@ -76,3 +76,40 @@ Implications for round-1 review:
 - alphonse's seed-comparison run `hg135fap` is in flight to confirm `xqrz8bjw` isn't an RNG fluke.
 
 Action: wait for alphonse to post `SENPAI-RESULT` once `hg135fap` finishes (~15 min ETA from 21:07Z), then prioritize PR #1504 for merge.
+
+## 2026-05-12 21:52 — PR #1504 MERGED: Mask-aware PhysicsAttention (round-1 baseline)
+
+- **Student:** willowpai2g48h3-alphonse
+- **Branch:** willowpai2g48h3-alphonse/mask-aware-physics-attn
+- **Merge commit:** `a6981e1`
+- **W&B runs:** `hg135fap` (submitted), `xqrz8bjw` (seed-2)
+
+### Final numbers (best-val checkpoint → test eval)
+
+| metric | hg135fap | xqrz8bjw |
+|---|---:|---:|
+| `val_avg/mae_surf_p` | **119.450** | 128.966 |
+| `test_avg/mae_surf_p` | **109.669** | 117.623 |
+| best_epoch | 14 | 12 |
+| runtime (min) | 31.9 | 32.1 |
+
+### Per-split (hg135fap best-val)
+
+| split | val mae_surf_p | test mae_surf_p |
+|---|---:|---:|
+| `single_in_dist` | 140.20 | 123.97 |
+| `geom_camber_rc` | 133.10 | 121.92 |
+| `geom_camber_cruise` | 93.08 | 81.06 |
+| `re_rand` | 111.42 | 111.73 |
+
+### Implementation note (intentional deviation from PR instructions)
+
+PR proposed masking *before* slice softmax with `-inf`. Alphonse caught that the softmax is over `slice_num` (last dim), not `N` — applying `-inf` along N would produce `softmax([-inf, ...])` = NaN. They masked *after* softmax instead (`slice_weights * mask[:,None,:,None]`), which yields the same effect (padded positions contribute zero to numerator and denominator) without the NaN trap. Empirical validation: both seeds trained cleanly, finite metrics on all four splits including cruise.
+
+### Implications for round 1
+
+The 5 other in-flight stale_wip PRs (#1505-1509, #1511) and #1589 are running on the pre-merge train.py without the mask fix. If their results return `test_geom_camber_cruise=None`, the per-PR test_avg will be invalid against the new merged baseline. They should be allowed to finish their current runs; if the metrics-fidelity rule kicks in (NaN/None on primary), the PR will need rebase + re-run on the merged code. Send-back rather than close, since the underlying hypothesis is still untested.
+
+### Follow-ups (for alphonse's next assignment)
+
+Alphonse becomes idle on merge. Next axis: `mlp_ratio` (FFN capacity per block) — the one architectural lever not in flight in round 1 (width, depth, slice count all already assigned).
