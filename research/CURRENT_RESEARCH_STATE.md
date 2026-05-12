@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 20:05 (round 2 underway; higher-lr-cosine-14 is new baseline)
+- **Date**: 2026-05-12 22:45 (SOAP paradigm shift; new baseline 42.4015)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -8,64 +8,78 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 96.5587** — PR #1518 (higher-lr-cosine-14), merged 2026-05-12.
+**val_avg/mae_surf_p = 42.4015** — PR #1613 (thorfinn/soap-optimizer), merged 2026-05-12.
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), `AdamW(lr=1e-3, wd=1e-4)`, **`CosineAnnealingLR(T_max=14)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, MSE loss. NaN scoring fix in `train.py:evaluate_split`. ~14 epochs / 30 min.
+**LARGEST SINGLE IMPROVEMENT: -52.6% vs previous 89.3940.**
 
-Test avg 85.87 (all 4 splits, NaN-free for first time).
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), **SOAP** (`lr=1e-3, wd=1e-4, precondition_frequency=10, max_precond_dim=256`), `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+relative-L2 loss. ~13 epochs / 30 min.
+
+Test avg 36.40 (all 4 splits).
 
 ---
 
 ## Current Research Focus
 
-**The key insight from round 2**: Schedule alignment matters enormously. By setting T_max=14 to match the real epoch budget, the cosine schedule actually reaches its low-LR fine-tuning phase. Combined with lr=1e-3 (safe under grad_clip=1.0), this gave -17.6% over the previous best. The old T_max=50 was wasting 64% of the schedule.
+**SOAP paradigm shift**: The optimizer was the dominant bottleneck. SOAP's Kronecker-factored quasi-Newton preconditioner gives 4.2× grad norm reduction — each step is far better conditioned than AdamW. This is now the default optimizer on the advisor branch.
 
-**Val still falling at epoch 14** — the model has not converged within the 30-min cap. This is the key constraint on further progress. Options:
-1. More epochs per 30 min (bf16-amp — alphonse)
-2. Faster convergence (higher lr — thorfinn; Huber loss — tanjiro; warmup — frieren)
-3. Architecture that converges faster (wider-deeper — edward)
+**Key constraint remaining**:
+- Val still falling at epoch 13 — model NOT converged
+- clip_frac=0.984 at ep 13 — SOAP is still being clipped ~9× per step (grad_norm=9.16 vs clip=1.0)
+- Only 13 epochs in 30 min (vs 14 for AdamW) — SOAP is slightly slower per epoch
 
-**Key open questions**:
-1. Does Huber loss compound on top of the new LR/schedule baseline? (Tanjiro's rebase will answer this — now needs to beat 96.56 instead of 117.17)
-2. Does lr=1.5e-3 push past 96.56 or find the LR ceiling? (Thorfinn's new PR #1539)
-3. Does bf16-amp enable 18-20 epochs in 30 min, and what would that yield with the new LR?
-4. Can architecture scaling (wider-deeper) converge faster to a better solution?
+**Three highest-priority open questions**:
+1. Does relaxing grad_clip from 1.0 to 5.0 unlock SOAP's step magnitude? (thorfinn #1668)
+2. Does bf16-amp give 15-17 epochs with SOAP, compounding the two biggest wins? (alphonse #1456)
+3. Does re-conditioned-scaling (architecture-level scale head) compound with SOAP? (fern #1599)
 
-**Per-split profile** at new baseline:
-- Easiest: `val_geom_camber_cruise` (74.35 val, 61.86 test) — big improvement, cruise regime
-- Hardest: `val_geom_camber_rc` (110.59) and `val_single_in_dist` (108.58) — raceCar regime still challenging
-
-**NaN fix**: y-sanitization is now in `train.py:evaluate_split` (merged with PR #1518). All future PRs get it automatically via rebase.
+**Per-split profile at new baseline**:
+- cruise (val 24.32 / test 19.79) — dramatically improved, near-saturating
+- re_rand (val 43.22 / test 35.97) — much improved
+- single_in_dist (val 46.09 / test 41.76) — still harder but major gains
+- rc (val 55.98 / test 48.10) — hardest split, room to improve
 
 ---
 
 ## Active Experiments
 
-| PR | Student | Slug | Status | Notes |
-|----|---------|------|--------|-------|
-| #1456 | alphonse | `bf16-amp` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
-| #1457 | askeladd | `surf-weight-50` | WIP (v2) | surf_weight=30 + old-grad-clip baseline; may need round 3 |
-| #1458 | edward | `wider-deeper` | WIP (v2, dirty) | batch_size=4 + grad-clip; sent back for rebase |
-| #1460 | fern | `relative-l2-loss` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
-| #1462 | frieren | `warmup-cosine` | WIP (v2, dirty) | 1-epoch warmup; sent back for rebase |
-| #1467 | nezuko | `more-slices-128` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
-| #1473 | tanjiro | `huber-loss` | WIP (v2, pending rebase) | Rebase onto new LR baseline, target ≤96.56 |
-| #1539 | thorfinn | `lr-1.5e-3-cosine-14` | WIP (new) | lr=1.5e-3, T_max=14; LR ceiling test |
+| PR | Student | Slug | Status | Priority | Notes |
+|----|---------|------|--------|----------|-------|
+| #1456 | alphonse | `bf16-amp` | WIP (v2) | **HIGHEST** | bf16 + SOAP = expected major compound; needs rebase |
+| #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30 on SOAP base; needs rebase |
+| #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128 on SOAP base; needs rebase |
+| #1579 | frieren | `pcgrad-surgery` | WIP | LOW | PCGrad may be redundant with SOAP preconditioning |
+| #1599 | fern | `re-conditioned-scaling` | WIP | HIGH | Re-scale head; orthogonal to optimizer |
+| #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5 on SOAP base; orthogonal |
+| #1630 | tanjiro | `sgdr-restarts` | WIP | MEDIUM | SGDR T_0=7; needs rebase to get SOAP |
+| #1668 | thorfinn | `soap-relax-clip` | WIP (new) | **HIGH** | grad_clip 1.0→5.0; unlocks SOAP step magnitude |
+
+All 8 student pods healthy. SOAP update comment posted to all 7 WIP PRs.
 
 ---
 
-## Potential Next Research Directions
+## Ruled Out
 
-Round 2 refinements + round 3 candidates:
+- **warmup-cosine** (PR #1462): redundant with grad_clip
+- **lr=1.5e-3 (AdamW)** (PR #1539): above AdamW LR ceiling; SOAP may change this
+- **wider-deeper-3M** (PR #1458): epoch-limited
 
-- **Per-channel Huber delta**: `delta_p < delta_Ux ≈ delta_Uy` — pressure has widest residuals. Try `{p: 0.3, Ux: 0.7, Uy: 0.7}`.
-- **EMA of model weights**: Shadow param set for val only (~5 lines, no hyperparams). Smooths the noisy 14-epoch trajectory, often +1-3%.
-- **CosineAnnealingWarmRestarts(T_0=7)**: Two complete cosine cycles in 14 epochs; each restart re-energizes the optimizer. Orthogonal to LR scaling.
-- **SiLU activation**: Replace GELU in Transolver MLP. Cheap, orthogonal, often helps in physics-informed settings.
-- **Lion optimizer**: Lower memory, sign-based updates. LR should be ~3-10× lower than AdamW equivalent. Try lr=1e-4 with Lion.
-- **surf_weight sweep**: Test {15, 20, 25} on the new LR baseline to see if the surface/volume tradeoff optimum shifts.
-- **Compound: Huber + bf16-amp**: If both work independently, compound should dominate. Best round-3 assignment.
-- **Wider-deeper + new LR**: If edward's wider-deeper run completes, merge and then test lr=1e-3 T_max=14 on top.
-- **Fourier/positional encoding**: Improve geometric OOD encoding for raceCar regime generalization.
+## Potential Next Directions
 
-**Plateau protocol**: If 5 consecutive experiments fail to beat 96.5587, escalate to architecture overhaul (FNO spectral layer, GNOT multi-query attention, graph neural operators).
+Now that SOAP has set a dramatically new baseline, the open research questions are:
+
+**Highest priority (not yet assigned)**:
+- **bf16-amp + SOAP**: alphonse is running this. Expected to be massive — 15-17 epochs vs 13, on a model that hasn't converged.
+- **soap-relax-clip**: thorfinn running. clip_frac=0.984 means SOAP is clipping 9×. Relaxing to 5.0 should unlock larger steps.
+
+**Architecture-level** (could compound with SOAP):
+- **re-conditioned-scaling** (fern running): Re-scale head orthogonal to optimizer
+- **FNO spectral layer**: Not yet tried; may outperform attention on turbulent flows
+- **GNOT multi-query attention**: Not yet tried; designed for CFD
+
+**Schedule refinements** (lower priority now that SOAP dominates):
+- **T_max=13** (match SOAP's actual epoch count): Small alignment fix
+- **Higher lr (2e-3 or 3e-3) under SOAP**: LR ceiling may have shifted significantly
+
+**PCGrad status**: With SOAP preconditioning gradients, PCGrad's conflict-resolution is likely partially redundant. Will evaluate when frieren's results arrive.
+
+**Plateau protocol**: Baseline moved from 89.39 to 42.40 — NOT a plateau. Next 5 experiments should be evaluated against 42.4015.

@@ -1,6 +1,142 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1518 (higher-lr-cosine-14)
+## Current Baseline — PR #1613 (soap-optimizer)
+
+**val_avg/mae_surf_p = 42.4015** (epoch 13 / 13 completed in 30-min cap) — **-52.6% vs previous 89.3940**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1) on relative-L2 normalized residuals (inherited)
+- ~13 epochs in ~30 min (slight SOAP overhead vs 14 epoch baseline)
+- SOAP vendored as `soap.py` (upstream commit `a1e553530fde97d0e6b307d7c82ac6d38b072340`)
+
+**Per-split val at best epoch (13):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 46.09 |
+| val_geom_camber_rc | 55.98 |
+| val_geom_camber_cruise | **24.32** |
+| val_re_rand | 43.22 |
+| **val_avg** | **42.4015** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 41.76 |
+| test_geom_camber_rc | 48.10 |
+| test_geom_camber_cruise | 19.79 |
+| test_re_rand | 35.97 |
+| **test_avg** | **36.4017** |
+
+**Convergence trace**: 163.69 → 107.26 → 83.20 → 75.45 → 72.44 → 58.88 → 52.97 → 49.79 → 44.55 → 42.40 (still falling at ep 13).
+
+**Grad norm trace**: 38.87 → 27.04 → 19.66 → 14.39 → 9.16. SOAP's Kronecker-factored preconditioner is producing 4.2× gradient norm reduction. Clip frac: 1.000 through ep 10, then 0.997 → 0.987 → 0.984.
+
+**Artifact**: `models/model-charliepai2g24h1-thorfinn-soap-optimizer-20260512-220030/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# SOAP optimizer, Huber+rel-L2, lr=1e-3, T_max=14, grad_clip=1.0 are now defaults on this branch
+```
+
+**Key insight**: SOAP's Kronecker-factored quasi-Newton preconditioner transforms this problem. The 4.2× grad norm reduction means each step is much better conditioned — the optimizer is following the loss surface curvature rather than a noisy first-order gradient. This is the largest single improvement in the programme (+52.6%). Val is still falling at ep 13 — more epochs (bf16-amp) would compound significantly.
+
+---
+
+## Previous Baseline — PR #1473 (huber-relative-l2-compound)
+
+**val_avg/mae_surf_p = 89.3940** (epoch 14 / 14 completed in 30-min cap) — **-0.24% vs previous 89.6121**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: `AdamW(lr=1e-3, wd=1e-4)`, `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`
+- `batch_size=4`, `surf_weight=10.0`, **Huber(δ=0.1) applied to relative-L2 normalized residuals**
+- ~14 epochs in ~30 min
+- Loss: `huber_relative_l2` — Huber on per-sample energy-normalized residuals (δ=0.1 in normalized space)
+
+**Per-split val at best epoch (14):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 109.01 |
+| val_geom_camber_rc | 101.19 |
+| val_geom_camber_cruise | **66.36** |
+| val_re_rand | 81.02 |
+| **val_avg** | **89.3940** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 98.51 |
+| test_geom_camber_rc | 88.12 |
+| test_geom_camber_cruise | 54.80 |
+| test_re_rand | 76.97 |
+| **test_avg** | **79.5993** |
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-huber-loss-20260512-211810/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# Huber(delta=0.1) on relative-L2, lr=1e-3, T_max=14, grad_clip=1.0 now defaults on this branch
+```
+
+**Key insight**: Huber(δ=0.1) in normalized residual space compounds cleanly with relative-L2. The L2-fraction trajectory (33%→63%) shows Huber remains genuinely active throughout training — the delta=0.1 in normalized space is well-placed for intra-sample outlier capping without collapsing to MSE early. Grad clip_frac dropped from 1.0 to 0.075 by epoch 14 (vs ~0.98 on rel-L2-only) — the compound loss is significantly smoother. Val still falling at epoch 14.
+
+---
+
+## Previous Baseline — PR #1460 (relative-l2-loss)
+
+**val_avg/mae_surf_p = 89.6121** (epoch 14 / 14 completed in 30-min cap) — **-7.20% vs previous 96.5587**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: `AdamW(lr=1e-3, wd=1e-4)`, `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`
+- `batch_size=4`, `surf_weight=10.0`, **per-sample relative L2 loss** (`||pred-y||²/||y||²`)
+- ~131s/epoch; 14 epochs in ~30 min
+- Loss: per-sample relative L2 in normalized space (replaces MSE)
+
+**Per-split val at best epoch (14):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 109.07 |
+| val_geom_camber_rc | 97.99 |
+| val_geom_camber_cruise | **67.09** |
+| val_re_rand | 84.29 |
+| **val_avg** | **89.6121** |
+
+**Test (4 splits):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 91.14 |
+| test_geom_camber_rc | 85.89 |
+| test_geom_camber_cruise | 56.35 |
+| test_re_rand | 79.18 |
+| **test_avg** | **78.14** |
+
+**Artifact**: `models/model-charliepai2g24h1-fern-relative-l2-loss-20260512-200551/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# loss=relative_l2, lr=1e-3, T_max=14, grad_clip=1.0 are now the default Config values on this branch
+```
+
+**Key insight**: Relative L2 loss (`||pred-y||²/||y||²`) normalizes by sample energy, automatically down-weighting high-energy (extreme-value) samples and up-weighting low-energy ones. This is a better inductive bias than MSE for flows with large Re variation — the loss landscape is flatter and more homogeneous across splits. Val still falling at epoch 14 (95.94 → 93.35 → 89.61 in last 3 epochs); more epochs would help.
+
+**Gradient diagnostic**: clip_frac fell to 0.984 at ep 14 (was 1.0 throughout on MSE baseline) — relative-L2 is producing smaller raw gradient norms. The loss surface is smoother.
+
+---
+
+## Previous Baseline — PR #1518 (higher-lr-cosine-14)
 
 **val_avg/mae_surf_p = 96.5587** (epoch 14 / 14 completed in 30-min cap) — **-17.6% vs previous 117.17**
 
