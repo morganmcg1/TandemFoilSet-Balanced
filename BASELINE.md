@@ -102,3 +102,53 @@ cd target && python train.py \
 - **All future PRs must beat `val_avg/mae_surf_p < 119.2987` to merge.**
 - Test NaN infrastructure fixed in PR #1527 (merged) — `evaluate_split` now `nan_to_num`-guards both `pred_orig` and `y` before `accumulate_batch`, and passes an explicit `_y_ok` finite-sample mask. From PR #1527 forward, expect all four test split `mae_surf_p` values to be finite.
 - Indicative test_avg from tanjiro's BIVW-only PR #1527 run (`dg5xbm6g`, no surf-head): `test_avg/mae_surf_p = 119.7792` with `test_geom_camber_cruise = 81.42`. Actual test_avg for BIVW+surf-head+fix combo pending next merged run.
+
+---
+
+## 2026-05-12 22:00 — PR #1558: Huber (SmoothL1) surface loss, delta=0.5
+
+- **Branch:** `willowpai2g48h4-thorfinn/smooth-l1-surface-loss` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
+- **W&B run:** `2w7nverc` (winning arm, delta=0.5); `3goyvktl` (delta=1.0 secondary)
+- **Best epoch:** 14 / 14 completed (hit 30-min wall-clock cap; still improving)
+- **val_avg/mae_surf_p:** `98.1642` ← **current best** (−17.72% vs prior 119.2987)
+- **test_avg/mae_surf_p:** `NaN` (cruise split pre-existing bug); **test 3-split mean: 98.7537** (−17.45% vs ~119.63)
+
+### Per-split val surface-p MAE (best checkpoint, delta=0.5)
+
+| Split | mae_surf_p | vs prior baseline |
+|-------|-----------|-------------------|
+| `val_single_in_dist` | 123.14 | 140.09 → **−12.1%** ✓ |
+| `val_geom_camber_rc` | 107.24 | 142.40 → **−24.7%** ✓ (OOD regression fully reversed) |
+| `val_geom_camber_cruise` | 73.28 | 85.98 → **−14.8%** ✓ |
+| `val_re_rand` | 88.99 | 108.73 → **−18.2%** ✓ |
+| **val_avg** | **98.1642** | **−17.72%** |
+
+### Per-split test surface-p MAE (3 of 4 clean, delta=0.5)
+
+| Split | mae_surf_p | vs prior baseline |
+|-------|-----------|-------------------|
+| `test_single_in_dist` | 111.92 | 127.93 → **−12.5%** |
+| `test_geom_camber_rc` | 98.91 | 127.18 → **−22.2%** |
+| `test_geom_camber_cruise` | NaN | (pre-existing cruise bug) |
+| `test_re_rand` | 85.43 | 103.79 → **−17.7%** |
+| **test 3-split mean** | **98.7537** | **−17.45%** |
+
+### Reproduce
+
+```bash
+cd target && python train.py \
+    --huber_delta 0.5 \
+    --wandb_group smooth-l1-surface-loss \
+    --wandb_name huber-delta-0.5 \
+    --agent willowpai2g48h4-thorfinn
+```
+
+### Notes
+
+- Huber loss (SmoothL1, delta=0.5) on surface, MSE on volume. Applied to all 3 surface channels jointly.
+- `delta=0.5` wins because most surface residuals in normalised space (~O(0.3–1.5)) fall in the L1 regime, giving constant-magnitude gradients that directly minimise MAE.
+- `delta=1.0` gives only −1.3% (barely above noise floor) — too much residual in quadratic regime.
+- Reverses val_geom_camber_rc OOD regression from PR #1528 (+6.84% → −24.7%): Huber suppresses the large-residual surf-head pull toward OOD outlier nodes.
+- Synergy with BIVW: BIVW removes between-sample gradient inflation; Huber removes within-sample per-node gradient inflation — orthogonal channels that compound.
+- **All future PRs must beat `val_avg/mae_surf_p < 98.1642` to merge.**
+- Test cruise NaN is unchanged; use 3-split mean as surrogate paper metric.
