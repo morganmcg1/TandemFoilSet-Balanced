@@ -238,9 +238,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                pred = model({"x": x_norm})["preds"]
-            pred = pred.float()
+            pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
