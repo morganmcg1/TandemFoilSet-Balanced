@@ -254,7 +254,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 
@@ -434,6 +443,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
+    grad_norm_min = float("inf")
+    grad_clipped_count = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -454,7 +467,17 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        gn = grad_norm.item()
+        grad_norm_sum += gn
+        if gn > grad_norm_max:
+            grad_norm_max = gn
+        if gn < grad_norm_min:
+            grad_norm_min = gn
+        if gn > 1.0:
+            grad_clipped_count += 1
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -486,6 +509,9 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    grad_norm_mean = grad_norm_sum / max(n_batches, 1)
+    grad_norm_min_log = grad_norm_min if grad_norm_min != float("inf") else 0.0
+    clip_frac = grad_clipped_count / max(n_batches, 1)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -493,6 +519,10 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_mean": grad_norm_mean,
+        "train/grad_norm_min": grad_norm_min_log,
+        "train/grad_norm_max": grad_norm_max,
+        "train/grad_clip_frac": clip_frac,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -500,6 +530,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad[min={grad_norm_min_log:.3f} mean={grad_norm_mean:.3f} max={grad_norm_max:.3f} clip%={100*clip_frac:.0f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
