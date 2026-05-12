@@ -62,6 +62,17 @@ ACTIVATION = {
 }
 
 
+def make_fourier_features(coords: torch.Tensor, num_freqs: int, freq_base: float = 2.0) -> torch.Tensor:
+    """Sin/cos Fourier features for each coordinate column (NeRF-style).
+
+    coords: [..., D] raw (unnormalized) coords. Returns [..., 2*D*num_freqs].
+    """
+    freqs = freq_base ** torch.arange(num_freqs, dtype=coords.dtype, device=coords.device)
+    angles = coords.unsqueeze(-1) * freqs                       # [..., D, F]
+    sin_cos = torch.cat([angles.sin(), angles.cos()], dim=-1)   # [..., D, 2F]
+    return sin_cos.reshape(*coords.shape[:-1], coords.shape[-1] * 2 * num_freqs)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -217,7 +228,9 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   fourier_num_freqs: int = 0,
+                   fourier_freq_base: float = 2.0) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -249,6 +262,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 mask = mask[y_finite]
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if fourier_num_freqs > 0:
+                fourier = make_fourier_features(x[..., :2], fourier_num_freqs, fourier_freq_base)
+                x_norm = torch.cat([x_norm, fourier], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -370,6 +386,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    fourier_num_freqs: int = 4    # 0 disables; >0 appends 4*F sin/cos features on raw (x,z)
+    fourier_freq_base: float = 2.0
 
 
 cfg = sp.parse(Config)
@@ -398,9 +416,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+fourier_extra_dim = 4 * cfg.fourier_num_freqs  # 2 coords * 2 (sin,cos) * num_freqs
 model_config = dict(
-    space_dim=2,
-    fun_dim=X_DIM - 2,
+    space_dim=2 + fourier_extra_dim,    # 2 raw coords + Fourier extras
+    fun_dim=X_DIM - 2,                  # other 22 input features
     out_dim=3,
     n_hidden=128,
     n_layers=6,
@@ -454,6 +473,9 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        if cfg.fourier_num_freqs > 0:
+            fourier = make_fourier_features(x[..., :2], cfg.fourier_num_freqs, cfg.fourier_freq_base)
+            x_norm = torch.cat([x_norm, fourier], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
@@ -479,7 +501,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             cfg.fourier_num_freqs, cfg.fourier_freq_base)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -537,7 +560,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 cfg.fourier_num_freqs, cfg.fourier_freq_base)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
