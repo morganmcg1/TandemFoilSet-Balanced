@@ -117,3 +117,59 @@ Sent back to compose SWA with the merged warmup recipe: SWA_START_EPOCH=6, --epo
 - Root cause: surface velocity (Ux, Uy) is NOT free — down-weighting it hurts more than the pressure focus gains. In normalized space, channel variances are already balanced by y_std normalisation.
 - Clean negative result, well-analyzed by student.
 - Fern reassigned to H11 (BF16 + batch=8 for throughput).
+
+---
+
+## 2026-05-12 20:55 — PR #1487: Surface skip branch (SENT BACK — needs composition with merged baseline)
+
+- Student branch: `charliepai2g24h5-thorfinn/surf-skip-branch`
+- Hypothesis: Adding a lightweight surface-conditioned skip from local geometry features (saf, dsdf, AoA, NACA) directly to surface output bypasses 5 transformer layers; predicted 2–7% relative improvement on val_avg/mae_surf_p, especially on geometry-OOD splits.
+- Trained on PRE-WARMUP baseline config (no warmup, no cosine T_max fix, no seed pin).
+
+### Results (within-PR comparison vs pre-warmup baseline rerun)
+
+| Metric | Baseline (no skip, pre-warmup) | + SurfaceSkip | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 143.83 | **134.91** | -6.20% |
+| test_avg/mae_surf_p | 133.15 | **123.64** | -7.14% |
+
+### Per-split val (corrected by student in follow-up comment)
+
+| Split | Baseline | Surf_skip | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 199.46 | 175.55 | **-12.0%** |
+| val_geom_camber_rc | 138.68 | 141.40 | +2.0% |
+| val_geom_camber_cruise | 110.20 | 104.13 | -5.5% |
+| val_re_rand | 126.98 | 118.55 | -6.6% |
+
+### Per-split test (best checkpoint)
+
+| Split | Baseline | Surf_skip | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 175.30 | 157.89 | -9.9% |
+| test_geom_camber_rc | 130.31 | 128.61 | -1.3% |
+| test_geom_camber_cruise | 99.50 | 89.23 | **-10.3%** |
+| test_re_rand | 127.48 | 118.82 | -6.8% |
+
+- Metrics: `models/model-surf_skip_branch_fix-20260512-200428/metrics.jsonl`, `models/model-baseline_sw10_fix-20260512-192956/metrics.jsonl`
+- ΔParams: +675 (17→32→3 GELU); Peak VRAM: 42.1 GB (unchanged); Wall: 14 epochs in 30 min (unchanged)
+
+### Bug fix found in this PR (separately useful)
+
+Student diagnosed the GT-NaN propagation bug in `data/scoring.py`: `err * mask` returns NaN even when mask=0 because IEEE float multiplies NaN to NaN regardless. Their in-train.py workaround filters batches by sample-wise `y_finite` in evaluate_split, which is the same fix #1564 (alphonse) is working on. They volunteered to send a separate follow-up PR for the proper `data/scoring.py` fix (`torch.where(mask, err, 0)`) — accepted.
+
+### Analysis
+
+The skip mechanism is real: within-run -6.2% rel on val_avg is at the top of the predicted band. The largest gain is on val_single_in_dist (-12.0%), NOT on the geometry-OOD splits as predicted by the rationale. The original hypothesis ("skip helps geometry-OOD most") was partially correct on test (test_geom_camber_cruise -10.3%) but contradicted on val (val_geom_camber_rc +2.0%). Best interpretation: the skip is a generic local-features booster.
+
+**Does not merge as-is.** Absolute number 134.91 > merged baseline 114.40. The skip's gain was measured against the *old* baseline; we need to compose it with the warmup+cosine recipe to know whether it still wins on top of the merged baseline.
+
+### Advisor action
+
+Sent back to compose with merged baseline (#1519 warmup+cosine+seed+nan_to_num). Reproduce command:
+
+```bash
+cd target/ && python train.py --experiment_name surf_skip_warmup_cosine13 --epochs 13 --agent charliepai2g24h5-thorfinn
+```
+
+Acceptance: beat 114.40 by any margin. Expected number based on within-run delta is ~107. Status: WIP awaiting rerun.
