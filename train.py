@@ -442,6 +442,14 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA: Polyak averaging of weights, used at eval/test only. Float32 buffer to
+# avoid bf16 precision drift; update skipped during warmup so we don't bake in
+# the random init.
+EMA_DECAY = 0.999
+EMA_WARMUP_STEPS = 200
+ema_state = {k: v.clone().float() for k, v in model.state_dict().items()}
+print(f"EMA: decay={EMA_DECAY}, warmup_steps={EMA_WARMUP_STEPS}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -457,6 +465,8 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay": EMA_DECAY,
+        "ema_warmup_steps": EMA_WARMUP_STEPS,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -511,6 +521,11 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+
+        if global_step >= EMA_WARMUP_STEPS:
+            for k, v in model.state_dict().items():
+                ema_state[k].mul_(EMA_DECAY).add_(v.float(), alpha=1 - EMA_DECAY)
+
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
         epoch_vol += vol_loss.item()
@@ -521,7 +536,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate on EMA weights ---
+    training_state = {k: v.clone() for k, v in model.state_dict().items()}
+    model.load_state_dict({k: v.to(device) for k, v in ema_state.items()})
+
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
@@ -529,6 +547,9 @@ for epoch in range(MAX_EPOCHS):
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+
+    # Restore training weights for next epoch
+    model.load_state_dict(training_state)
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
@@ -539,6 +560,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ema/active": int(global_step >= EMA_WARMUP_STEPS),
+        "ema/global_step": global_step,
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
@@ -555,7 +578,9 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA weights (not raw training weights) so the end-of-run test
+        # eval loads the same parameters we just validated on.
+        torch.save({k: v.to(device) for k, v in ema_state.items()}, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
