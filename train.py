@@ -63,6 +63,32 @@ ACTIVATION = {
 }
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth applied to a residual branch.
+
+    During training, each sample's contribution to the residual branch is
+    zeroed with probability ``drop_prob`` (independently across samples and
+    across each call site / forward pass); kept contributions are scaled by
+    ``1 / (1 - drop_prob)`` so the expected output equals the unmasked branch.
+    During eval the module is identity, matching DeiT/Swin/timm convention.
+    """
+
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = float(drop_prob)
+        self.register_buffer("_last_keep_mean", torch.zeros(()), persistent=False)
+
+    def forward(self, x):
+        if not self.training or self.drop_prob == 0.0:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # per-sample mask
+        mask = x.new_empty(shape).bernoulli_(keep_prob)
+        with torch.no_grad():
+            self._last_keep_mean.copy_(mask.mean())
+        return x * (mask / keep_prob)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -139,7 +165,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -150,6 +177,7 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path = DropPath(drop_path_rate)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +186,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -169,6 +197,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 drop_path_rate=0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -191,6 +220,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=drop_path_rate,
             )
             for i in range(n_layers)
         ])
@@ -387,6 +417,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    drop_path_rate: float = 0.0  # Stochastic depth per-block drop probability (0 disables).
 
 
 cfg = sp.parse(Config)
@@ -424,6 +455,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    drop_path_rate=cfg.drop_path_rate,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -535,7 +567,7 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({
+        step_log = {
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
             "train/re_weight_min": re_weight.min().item(),
@@ -544,7 +576,12 @@ for epoch in range(MAX_EPOCHS):
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
             "global_step": global_step,
-        })
+        }
+        if cfg.drop_path_rate > 0:
+            keep_means = [m._last_keep_mean.item() for m in model.modules() if isinstance(m, DropPath)]
+            if keep_means:
+                step_log["train/drop_path_active_fraction"] = sum(keep_means) / len(keep_means)
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
