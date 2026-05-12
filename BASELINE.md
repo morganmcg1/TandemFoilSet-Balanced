@@ -4,28 +4,33 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
-### 2026-05-12 23:05 — PR #1577: [seed42-baseline] Seeding + surf_weight=10 rollback (alphonse)
+### 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max 50→15 to anneal inside cap (nezuko)
 
-- **`val_avg/mae_surf_p`:** **116.43** (best epoch 18/18 completed; still descending at timeout)
-- **`test_avg/mae_surf_p`:** **108.87** (from best-val checkpoint)
-- **Per-split surface-p MAE (val):** single_in_dist=131.15, geom_camber_rc=121.66, geom_camber_cruise=100.47, re_rand=112.46
-- **Per-split surface-p MAE (test):** single_in_dist=117.35, geom_camber_rc=113.75, geom_camber_cruise=86.85, re_rand=117.52
-- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=50), AdamW, unified_pos=True, ref=8, bf16 autocast`
-- **Key change:** Adds deterministic seeding (`seed=42`, `cudnn.deterministic=True`, seeded DataLoader/sampler). Also effectively rolls back `surf_weight` 20→10 (alphonse's branch predated #1369 merge; squash-merge 3-way resolution confirmed surf_weight=10 is correct).
-- **Determinism:** Two independent runs produce byte-identical metrics. σ across seeds is unknown — see "open questions" below.
-- **Metric artifacts:** `models/model-charliepai2g48h4-alphonse-seed42-baseline-20260512-215112/metrics.jsonl`
-- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-alphonse --experiment_name "charliepai2g48h4-alphonse/seed42-baseline"`
+- **`val_avg/mae_surf_p`:** **114.81** (best epoch 17/18)
+- **`test_avg/mae_surf_p`:** **104.68** (from best-val checkpoint)
+- **Per-split surface-p MAE (val):** single_in_dist=139.82, geom_camber_rc=120.59, geom_camber_cruise=87.75, re_rand=111.06
+- **Per-split surface-p MAE (test):** single_in_dist=120.31, geom_camber_rc=113.90, geom_camber_cruise=75.41, re_rand=109.09
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast`
+- **Key change:** `CosineAnnealingLR(T_max=50)` → `CosineAnnealingLR(T_max=15)`. T_max=15 matches the achievable epoch count under the 30-min cap, so the schedule actually anneals to lr≈0 around epoch 16; best-val is in the second cycle's near-zero-lr regime (epoch 17, lr=5.46e-6).
+- **Caveat:** Nezuko's run was on the pre-rollback advisor base (surf_weight=20.0, no seed). The 3-way squash merge correctly resolved surf_weight=10 + seed=42 + T_max=15 in the final state. A seeded confirmation run on this exact recipe is expected from the other rebase students (edward Huber, askeladd EMA).
+- **Metric artifacts:** `models/model-charliepai2g48h4-nezuko-cosine-trunc-t15-merged-20260512-215533/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-nezuko --experiment_name "charliepai2g48h4-nezuko/cosine-trunc-t15-merged"`
 
-**Note:** val=116.43 was achieved with surf_weight=10 on the 3-merge recipe (unified_pos + bf16 + scoring-fix). The surf_weight=20 (PR #1369) is now rolled back — fern's #1570 confirmed it was a regression (+7.5% test on merged recipe) and alphonse's seeded result (116.43 at surf_weight=10) is 9.6% better than fern's unseeded merged recipe (127.86 at surf_weight=20).
+**Note on schedule:** PyTorch's `CosineAnnealingLR` continues cycling past `T_max`. Best epoch (17) lands in the second cycle's lr≈0 climb-back regime, suggesting `T_max=18` (matching achievable epoch count exactly) may give another 1-2 pts. Follow-up assigned to nezuko.
 
 **Open questions after this merge:**
-- Across-seed σ is unknown for the new recipe. A seed=7 rerun would establish it.
-- The val curve was still descending at epoch 18/50 — the model is undertrained in 30 min.
-- All 3 rebase-in-flight PRs (#1374 Huber, #1540 EMA, #1542 T15) will now inherit seed=42 + surf_weight=10 on rebase.
+- Across-seed σ is still unknown. Alphonse #1685 (seed=7) will calibrate.
+- T_max=15 vs T_max=18 (matching epoch count exactly) — nezuko follow-up
+- Edward Huber rebase (#1374) is highest-priority next merge candidate (was val=112.06 unseeded on default config; stacks with this schedule should land sub-112).
 
 ---
 
-## Previous best
+## Previous bests (chronological)
+
+### 2026-05-12 23:05 — PR #1577: [seed42-baseline] Seeding + surf_weight=10 rollback (alphonse)
+- **val_avg/mae_surf_p:** 116.43 / **test:** 108.87
+- Config: merged recipe (unified_pos + bf16 + scoring-fix), surf_weight=10, seed=42, T_max=50
+- Adds determinism infrastructure; byte-identical across 2 runs.
 
 ### 2026-05-12 20:10 — PR #1512: [scoring-nan-fix] Default config + NaN-fix patch (fern)
 
@@ -42,12 +47,13 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 | #1513 (tanjiro) | bf16 autocast | 125.40 | 126.57 (3-split) | **MERGED** → 24% per-epoch speedup |
 | #1416 (thorfinn) | unified_pos=True, ref=8 | 125.78 | 117.12 | **MERGED** → best cruise OOD |
 | #1369 (askeladd) | surf_weight=10→20 | 127.94 | 117.35 | **MERGED but effectively reverted** → regression confirmed (#1570: val=127.86), rolled back via #1577 |
-| **#1577 (alphonse)** | **seed=42 + surf_weight=10 rollback** | **116.43** | **108.87** | **MERGED — NEW BEST** |
+| #1577 (alphonse) | seed=42 + surf_weight=10 rollback | 116.43 | 108.87 | MERGED |
+| **#1542 (nezuko)** | **T_max=15 cosine truncation** | **114.81** | **104.68** | **MERGED — NEW BEST** |
 
-**Current advisor-branch recipe** (after 5 effective merges, surf_weight=20 rolled back):
-`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=50), AdamW`
+**Current advisor-branch recipe** (after 6 effective merges):
+`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW`
 
-**Comparison threshold:** with seeding, σ is unknown. Need a seed=7 cross-check. Use 5+ pt val difference as practical significance threshold until across-seed σ is measured.
+**Comparison threshold:** with seeding, σ is unknown. Need a seed=7 cross-check (alphonse #1685 in flight). Use 5+ pt val difference as practical significance threshold until across-seed σ is measured.
 
 ---
 

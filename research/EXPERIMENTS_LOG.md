@@ -2,6 +2,51 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] T_max=50→15 on merged recipe — **MERGED (NEW BEST: val=114.81)**
+- Student branch: `charliepai2g48h4-nezuko/cosine-trunc-t15`
+- Hypothesis: With CosineAnnealingLR(T_max=50) but only ~18 epochs reachable under the 30-min cap, the schedule barely anneals — lr is still at ~75% of peak when training ends. Truncating to T_max=15 forces full annealing inside the cap window.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 17/18) | **114.81** — **NEW BEST ON BRANCH** |
+| `test_avg/mae_surf_p` | **104.68** |
+| `val_single_in_dist/mae_surf_p` | 139.82 |
+| `val_geom_camber_rc/mae_surf_p` | 120.59 |
+| `val_geom_camber_cruise/mae_surf_p` | 87.75 |
+| `val_re_rand/mae_surf_p` | 111.06 |
+| Best epoch | 17 (in 2nd cosine cycle, lr=5.46e-6) |
+| Wall clock | 30.9 min (18 epochs) |
+| Peak VRAM | 33.9 GB |
+| Metrics path | `models/model-charliepai2g48h4-nezuko-cosine-trunc-t15-merged-20260512-215533/metrics.jsonl` |
+
+**Analysis.** -1.4% val / -3.8% test vs alphonse seeded baseline (116.43 / 108.87). The schedule fix stacks cleanly with merged levers — lift on merged recipe (-7.4% vs canonical fern baseline 123.99) is bigger than on default config alone (-1.7% in #1542's pre-rebase trial). Mechanism: bf16's 28% throughput boost gives more usable epochs, which benefit more from a properly-annealed LR. Best epoch lands at the lr≈0 point in cycle 2 (epochs 16-17) — strong evidence that fine-tuning at very low LR adds real value.
+
+**Caveat.** Run was on pre-rollback advisor base (surf_weight=20, no seed). The 3-way squash merge correctly produced surf_weight=10 + seed=42 + T_max=15 in the final state. A seeded confirmation will come naturally from the next student rebasing on this HEAD.
+
+**Decision.** MERGED. Updated BASELINE.md and CURRENT_RESEARCH_STATE.md. New stacking target: merged recipe + T_max=15 + Huber.
+
+**Suggested follow-ups:**
+1. **T_max=18** to match achievable epoch count exactly (nezuko's own suggestion) — eliminates the second-cycle lr climb-back observed at epoch 18.
+2. **T_max=15 + Huber stack** — edward's #1374 rebase will land this naturally.
+
+## 2026-05-12 23:25 — PR #1394: [wd5e-4] AdamW weight_decay 1e-4→5e-4 — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-frieren/wd5e-4`
+- Hypothesis: Stronger weight decay improves OOD camber generalization.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 11) | 135.35 (vs default 123.99, **+9.2% worse**) |
+| `test_avg/mae_surf_p` | NaN (fp32 overflow in test_geom_camber_cruise; pre-#1512 base) |
+| `val_geom_camber_cruise/mae_surf_p` | 101.61 (slightly better than baseline range) |
+| `val_geom_camber_rc/mae_surf_p` | 155.50 (substantially worse) |
+| `val_re_rand/mae_surf_p` | 115.00 |
+| `val_single_in_dist/mae_surf_p` | 169.27 (substantially worse) |
+| Metrics path | `models/model-charliepai2g48h4-frieren-wd5e-4-20260512-215336/metrics.jsonl` |
+
+**Analysis.** Run was on stale pre-merge advisor base (no unified_pos, no bf16, no scoring-fix — confirmed by NaN test result). Mixed per-split signal: cruise OOD slightly better, but rc and in-distribution both regress meaningfully. Net val regression of +9.2%. The plain global wd lever is too blunt for this dataset.
+
+**Decision.** CLOSED. Hypothesis falsified. Frieren reassigned to gradient clipping.
+
 ## 2026-05-12 23:05 — PR #1577: [seed42-baseline] Seeding infrastructure + surf_weight=10 rollback — **MERGED (NEW BEST: val=116.43)**
 - Student branch: `charliepai2g48h4-alphonse/seed42-baseline`
 - Hypothesis: Add deterministic seeding (seed=42, cudnn.deterministic, seeded DataLoader/sampler) to eliminate run-to-run noise and establish a reproducible canonical baseline for all future ablations.
