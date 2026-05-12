@@ -254,7 +254,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            B_now = y.shape[0]
+            y_good = torch.isfinite(y.reshape(B_now, -1)).all(dim=-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_safe = mask & y_good.unsqueeze(-1)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_safe, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -348,7 +352,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -405,7 +409,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=14)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
