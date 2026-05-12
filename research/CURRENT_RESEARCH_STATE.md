@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 21:35 (round-4 closure: PR #1428 nezuko per-channel weights; round-4 assignment: PR #1619 nezuko sampler boost)
+- **As of:** 2026-05-12 23:15 (round-6 fully assigned: closed #1590 slice_num=96, stale #1561/#1535; new assignments #1652 frieren warmup, #1653 askeladd grad-clip on compile, #1660 tanjiro EMA. All 8 students active.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -8,174 +8,148 @@
 
 ## Round-5 research focus
 
-We start clean: 8 idle students, 1 GPU each, and no prior round-5 winners
-recorded on this branch. The aim of round 5 is to **stake out the highest-value
-single-axis levers on the Transolver baseline** for `val_avg/mae_surf_p` so the
-fleet can lock in a real baseline number and identify which levers compound.
+We have now merged 3 stacked winners, establishing a strong baseline at
+val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
+1. **Compounding cheap orthogonal levers** on top of the compile baseline.
+2. **Testing capacity arms** now that compile makes 36 epochs available.
+3. **Data/sampler side** (nezuko, PR #1619) targeting val_single_in_dist.
 
-## Round-1 fleet status
+## Fleet status
 
 ### Merged winners
 | PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |---|---|---|---|---|---|
-| #1532 ✓ | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN fix | **101.12** | **91.50** | Epoch 17 of 19; still improving; -8.7% vs #1444 |
+| #1568 ✓ | charliepai2g48h5-thorfinn | torch.compile(dynamic=True) + bf16 AMP | **69.83** | **61.87** | Epoch 36 of 36; still improving; -30.9% vs #1532; 2× throughput |
+| #1532 ✓ | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN fix | 101.12 | 91.50 | Epoch 17 of 19; -8.7% vs #1444 |
 | #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | 110.76 | NaN (bug) | Prior baseline |
 
-**Round-5 baseline floor: val_avg/mae_surf_p = 101.1212, test_avg/mae_surf_p = 91.5013**
+**Current baseline: val_avg/mae_surf_p = 69.8316, test_avg/mae_surf_p = 61.8652 (PR #1568)**
 
-> Scoring-NaN workaround merged via PR #1532. New PRs inheriting the advisor
-> branch will have the fix. PRs created before #1532 may still see NaN on
-> `test_geom_camber_cruise` — those report 3-split partial average.
+> Current advisor branch has: Smooth-L1 (β=1.0) + bf16 AMP + torch.compile(dynamic=True)
+> + scoring-NaN workaround. All new PRs inherit these. Epoch budget at 30-min cap: **~36 epochs
+> at ~49.5 s/epoch**. Peak GPU memory: ~24 GB (abundant headroom on 96 GB).
 
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
 |---|---|---|---|---|
-| #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Wall-clock binding, not gradient noise |
+| #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Wall-clock binding at fp32; now irrelevant |
 | #1375 ✗ | charliepai2g48h5-alphonse | `surf_weight` 10 → 30 | 120.394 | Biases away from volume manifold |
-| #1388 ✗ | charliepai2g48h5-askeladd | 5-epoch warmup + `lr` 5e-4 → 1e-3 | 152.033 | Higher peak lr overshoots good basins |
-| #1398 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 192 | 138.138 | Wall-clock binding (10/50 epochs); reassigned milder n_hidden=160 + bf16 |
-| #1413 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 7 | 144.904 | Wall-clock binding (10/50 epochs); reassigned milder n_layers=6 + bf16 |
-| #1422 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 128 | 145.971 | Wall-clock binding (11/50 epochs); reassigned milder slice_num=96 + bf16 |
-| #1428 ✗ | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | 135.531 | All 4 splits worse; fp32 budget + channel weighting distorts Ux/Uy coupling; reassigned sampler boost |
+| #1388 ✗ | charliepai2g48h5-askeladd | 5-epoch warmup + `lr` 5e-4 → 1e-3 | 152.033 | Higher peak lr overshoots |
+| #1398 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 192 (fp32) | 138.138 | Wall-clock binding (10 epochs); reassigned n_hidden=160 + bf16 |
+| #1413 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 7 (fp32) | 144.904 | Wall-clock binding (10 epochs); reassigned n_layers=6 + bf16 |
+| #1422 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 128 (fp32) | 145.971 | Wall-clock binding (11 epochs); reassigned slice_num=96 + bf16 |
+| #1428 ✗ | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] | 135.531 | All 4 splits worse; Ux/Uy coupling degraded |
+| #1590 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 96 + bf16 | 105.024 | +3.86% vs bf16 baseline; slice lever now well-characterized (64 best) |
+| #1561 ✗ | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
+| #1535 ✗ | charliepai2g48h5-tanjiro | EMA weights eval decay=0.999 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
 |---|---|---|---|
 | #1619 | charliepai2g48h5-nezuko | RaceCar single sampler boost 2× (50% share) | Data/sampler |
-| #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
-| #1560 | charliepai2g48h5-alphonse | T_max=14 cosine matched to actual epochs | Schedule |
-| #1561 | charliepai2g48h5-askeladd | Gradient norm clipping (max_norm=1.0) | Optimization |
-| #1568 | charliepai2g48h5-thorfinn | `torch.compile` + bf16 AMP | Throughput |
-| #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (inherited) | Width × throughput |
-| #1588 | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 (inherited) | Depth × throughput |
-| #1590 | charliepai2g48h5-frieren | `slice_num` 64 → 96 + bf16 (inherited) | Slice × throughput |
+| #1560 | charliepai2g48h5-alphonse | T_max=36 cosine matched to compile budget (re-run) | Schedule × compile |
+| #1633 | charliepai2g48h5-thorfinn | Huber β sweep (β=0.5 and β=2.0) | Loss shape |
+| #1652 | charliepai2g48h5-frieren | Step-based linear warmup (500 steps) + cosine | Schedule warmup |
+| #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
+| #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
+| #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (pre-compile) | Width |
+| #1588 | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 (pre-compile) | Depth |
+
+> **Note on #1560:** Alphonse's original T_max=18 result (90.32) proved the
+> schedule-completion mechanism clearly. PR sent back because (a) no code change was
+> made and (b) post-compile budget is now 36 epochs, making T_max=36 the correct value.
+> Student re-running with --epochs 36 on the updated advisor branch.
+
+> **Note on #1587, #1588, #1590:** These pre-date PR #1568 (compile). They'll test
+> capacity + bf16 (without compile). Results will tell us whether the capacity lever
+> is real; if it is, we follow up with capacity + compile.
 
 ## Open research questions
 
-Insights surfaced across closed PRs that are now informing in-flight or queued
-arms:
+1. **T_max matched to compile-era epoch budget.** PR #1560 (alphonse) proved
+   the mechanism at T_max=18 (90.32, -10.7% vs bf16 baseline). Re-running at
+   T_max=36 to match the post-compile 36-epoch budget. Expected further gain:
+   ~6-10 MAE off the 69.83 baseline.
 
-1. **`T_max` matched to actual epoch budget.** Surfaced by PRs #1439, #1375,
-   and #1388 (three students independently raised it). The
-   `CosineAnnealingLR(T_max=50)` schedule never reaches its late-phase low LR
-   because only ~14 epochs fit under the 30-min cap. **Now in flight as
-   PR #1560 (alphonse): `--epochs 14` so `T_max=14`.**
+2. **`val_single_in_dist` still the hardest split.** At compile baseline:
+   val_single_in_dist=77.10 vs 50.64-83.49 for other splits. Still ~13% above
+   val_avg. PR #1619 (nezuko) tests domain-aware sampler reweighting (RaceCar
+   single 2×) to directly target coverage of this split.
 
-2. **`val_single_in_dist` dominates the cross-split mean.** Its surf_p MAE is
-   roughly 2× the others' (135 vs 77-101 at baseline; PR #1375 confirmed
-   raising surf_weight makes it *worse*, going to 148). A loss/sampler tweak
-   that improves only that split would dominate `val_avg/mae_surf_p`. Worth
-   probing later with single-domain-aware loss reweighting or domain-aware
-   sampler tweaks (`sample_weights` override in `train.py` since `data/loader.py`
-   is read-only).
+3. **Capacity arms haven't had compile throughput yet.** PRs #1587, #1588,
+   #1590 test n_hidden=160 / n_layers=6 / slice_num=96 paired with bf16 but
+   NOT compile. If any of these show improvement, the natural follow-up is the
+   same intervention + compile (which now allows 20-28 epochs for wider/deeper
+   models).
 
-3. **Step-based warmup at lower peak lr.** Surfaced by PR #1388. The 5-epoch
-   warmup in PR #1388 used ~36% of the 14-epoch budget. A short step-based
-   warmup over the first ~500 steps at a modest peak (closer to baseline
-   lr=5e-4 than 1e-3) is a smaller perturbation worth a future try.
+4. **Gradient-norm characterization.** PR #1561 (askeladd, grad clip) will
+   log per-step norms. Diagnostic value: if gradients are well-behaved,
+   optimization is the wrong lever; if spiky, clip or AdamW β tweaks help.
 
-4. **Gradient-norm characterization.** PR #1561 (askeladd) will log per-step
-   gradient norms — informative diagnostic regardless of whether the clip
-   intervention helps. Tells us whether the baseline trajectory has
-   high-variance gradients (warranting clipping, layer-wise lr decay, or
-   AdamW-beta tweaks) or well-behaved gradients (where regularization or
-   data augmentation are the better swings).
+5. **Huber β optimum.** β=1.0 was arbitrary. PR #1633 tests β=0.5 (sharper)
+   and β=2.0 (smoother). Result will orient further β sweeps or confirm β=1.0
+   is near-optimal.
 
-5. **Capacity scale-ups need throughput compensation.** Three students
-   (edward #1398, fern #1413, frieren #1422) independently demonstrated that
-   capacity scale-ups at fp32 only fit 10-11 epochs in the 30-min cap (vs
-   baseline's 19), and val curves are still descending at timeout. The
-   round-3 reassignments (PRs #1587, #1588, #1590) test the milder bumps
-   paired with bf16 inheritance. **If these still don't beat baseline, then
-   any model-architecture lever requires `torch.compile` (PR #1568) or
-   matched LR schedule (PR #1560) to be testable in this budget.**
+## Constraints (post-compile)
 
-Constraints shape what we can sensibly try in 30-minute training executions:
+- **Epoch budget:** ~36 epochs in 30 min at baseline config (n_hidden=128,
+  n_layers=5, slice_num=64) with compile + bf16. 2× faster than bf16-only.
+- **Memory:** ~24 GB peak at baseline with compile + bf16. Significant headroom
+  on 96 GB GPUs — capacity scale-ups now viable.
+- **Wall-clock binding:** Every arm is still wall-clock-bound. Best epoch = 36
+  (terminal) in PR #1568 — model still descending. More epochs = more gain.
+- **Schedule-terminal effect confirmed:** Alphonse's data shows cosine reaching
+  LR→0 gains ~8 MAE in the last 4 epochs. T_max=36 on compiled model is the
+  highest-confidence cheap win queued.
 
-- A single execution is wall-clock-bound; counterfactuals must show signal
-  within the first ~30 wall-clock minutes (≈ 15-30 epochs for the default
-  Transolver on this dataset, depending on mesh sizes).
-- Reference architecture (n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2)
-  is well-shaped for fast iteration — moderate scale-ups still fit on 96 GB.
-- Test-time metric `test_avg/mae_surf_p` always evaluated at the end from the
-  best val checkpoint — every PR must report both val + test averages, and the
-  per-split breakdown, with finite values across all four val and four test
-  splits.
-
-## Themes that drove round-1 and round-2 assignments
+## Themes
 
 1. **Loss reformulation** (cheap, high expected value):
-   - Smooth-L1 vs MSE: **WON (PR #1444, merged)** — this is the baseline now.
+   - Smooth-L1 vs MSE: **WON (PR #1444, merged)** — Huber β=1.0 baseline.
    - Surface weight tuning: refuted (PR #1375).
-   - Per-channel reweighting [1,1,3]: refuted (PR #1428) — distorts velocity/pressure coupling.
+   - Per-channel reweighting [1,1,3]: refuted (PR #1428).
+   - **Huber β sweep (β=0.5 / β=2.0): in flight (PR #1633).**
 
-6. **Data / sampler** (round-4 addition, targeting val_single_in_dist):
-   - RaceCar single 2× sampler boost: in flight (PR #1619).
+2. **Throughput** (cheap, very high expected value):
+   - bf16 AMP + scoring fix: **WON (PR #1532, merged)** — 19 epochs in 30 min.
+   - torch.compile(dynamic=True): **WON (PR #1568, merged)** — 36 epochs in 30 min; -30.9%.
 
-2. **Optimization schedule** (cheap, high expected value):
+3. **Optimization schedule** (cheap, high expected value):
    - Higher peak lr (1e-3 + warmup): refuted (PR #1388).
-   - T_max matched to actual epochs: in flight (PR #1560 round-2 reassign).
+   - **T_max matched to compile budget (T_max=36): in flight (PR #1560 rerun, alphonse).**
 
-3. **Capacity / model topology** (moderate cost, moderate expected value):
-   - Wider Transolver (`n_hidden` 128 → 192) — in flight (PR #1398).
-   - Deeper Transolver (`n_layers` 5 → 7) — in flight (PR #1413).
-   - Larger slice count (`slice_num` 64 → 128) — in flight (PR #1422).
+4. **Capacity / model topology** (moderate cost, moderate expected value):
+   - n_hidden=160 + bf16: in flight (PR #1587, edward).
+   - n_layers=6 + bf16: in flight (PR #1588, fern).
+   - slice_num=96 + bf16: in flight (PR #1590, frieren).
+   - *(If any of these win → follow-up with compile compounding.)*
 
-4. **Effective batch size** (cheap, moderate expected value):
-   - Batch 4 → 8: refuted (PR #1439).
+5. **Regularization / stabilization**:
+   - EMA weights for eval (decay=0.999): in flight (PR #1535, tanjiro).
+   - Gradient clipping (max_norm=1.0): in flight (PR #1561, askeladd).
 
-5. **Throughput / regularization** (round-2 additions):
-   - bf16 AMP + scoring fix: in flight (PR #1532).
-   - EMA weights for eval: in flight (PR #1535).
-   - Gradient clipping (max_norm=1.0): in flight (PR #1561 round-2 reassign).
+6. **Data / sampler** (targeting val_single_in_dist):
+   - **RaceCar single 2× sampler boost: in flight (PR #1619, nezuko).**
 
-## What has been ruled out (rounds 2 + 3 + 4 closures)
+## What has been ruled out
 
-- **Higher peak lr (1e-3 with warmup) — refuted by PR #1388.** Schedule is well
-  tuned at lr=5e-4. Pushing lr higher is unproductive at this wall-clock budget.
-- **Higher surf_weight (10 → 30) — refuted by PR #1375.** Biases gradients away
-  from the volume manifold; `val_single_in_dist` (the hardest split) regresses.
-- **Higher batch (4 → 8) — refuted by PR #1439.** Wall-clock is the binding
-  constraint, not gradient noise. Memory was at 84/96 GB at batch=8.
-- **Larger capacity at fp32 — wall-clock-bound (PRs #1398, #1413, #1422).**
-  Width=192, depth=7, slice_num=128 each fit only 10-11 epochs vs baseline's
-  19 — undertrained at timeout. Capacity lever requires bf16 throughput
-  compensation (in flight: #1587, #1588, #1590) before final verdict.
-- **Per-channel loss weights [1,1,3] — refuted by PR #1428.** All four
-  val splits regressed (val_avg=135.53 vs 101.12 baseline). Physical
-  coupling between velocity and pressure means 3× pressure gradient
-  distorts Ux/Uy, which feeds back negatively into pressure accuracy. Even
-  on val_geom_camber_cruise (easiest split) only reached 103.33 at epoch 13.
-  Milder weights ([1,1,2], [1,1,1.5]) remain speculative but deprioritized.
+- **Higher peak lr (1e-3 + warmup):** refuted by PR #1388.
+- **Higher surf_weight (10 → 30):** refuted by PR #1375.
+- **Higher batch (4 → 8) at fp32:** refuted by PR #1439. (Retestable at compile+bf16 if needed.)
+- **Larger capacity at fp32:** wall-clock-bound (PRs #1398, #1413, #1422). Verdict pending with bf16+compile.
+- **Per-channel loss weights [1,1,3]:** refuted by PR #1428. All 4 splits worsened.
 
-Cheap lever space is mostly explored. Remaining cheap-lever candidates:
-schedule shape (T_max #1560), gradient stabilization (#1561), domain-aware
-sampler reweighting (#1619), EMA (#1535).
+## Potential next research directions (post round-5)
 
-## Potential next research directions (round 3+ once current arms settle)
+- **Compound schedule + compile:** T_max=36 is the highest-confidence next win.
+- **n_hidden=192 + compile:** if #1587 (n_hidden=160+bf16) wins, the natural next step.
+- **Step-based warmup at lower peak lr** (queued from PR #1388 analysis).
+- **AoA reflection augmentation:** flip AoA/z/Uy/saf for data augmentation. Complex but high value.
+- **Spectral / Fourier feature lifting on (x, z)** — high-frequency surface features.
+- **Re-aware output head** — log-magnitude normalization for high-Re pressure extremes.
+- **Auxiliary divergence loss** — incompressible flow physics regularizer.
+- **Optimizer swaps** — Lion or AdaFactor vs AdamW.
+- **Sampler sweep** — if 2× wins, try 1.5× and 3× to find the optimum.
+- **Domain-aware loss reweighting** (separate from sampler) — per-sample loss weight based on domain membership.
 
-- **Compound winners.** If T_max=14 (#1560), grad-clip (#1561), bf16 (#1532),
-  or EMA (#1535) each win independently, stack the orthogonal ones in a
-  single follow-up PR.
-- **Step-based warmup at lower peak** (queued from PR #1388 analysis).
-- **AoA reflection augmentation.** Cheap, physics-grounded data augmentation.
-  Requires careful handling of `saf` (signed arc-length) and `dsdf` channels
-  in the input feature layout.
-- **Spectral / Fourier feature lifting on (x, z)** before the preprocess MLP —
-  helps high-frequency surface features that drive pressure.
-- **Boundary-aware attention masking or extra surface-aware blocks at the
-  end of the encoder** — pressure peaks live at the foil surface; biasing
-  attention toward surface slices could help.
-- **Re-aware feature normalization or log-magnitude head** — high-Re samples
-  drive extremes; explicit Re-conditioning of the output scale may reduce
-  loss-channel coupling.
-- **Domain-aware sampler tweak (in flight PR #1619).** `RaceCar single` up-weighted
-  2× in `train.py` before WeightedRandomSampler. If 2× wins, sweep to 1.5× and 3×.
-- **Huber β sweep.** Try β=0.5 (sharper) and β=2.0 (smoother) to find the
-  Huber transition that matches the dataset's residual distribution.
-- **Auxiliary divergence or gradient penalty losses** — incompressible flow
-  divergence-free constraint as a physics regularizer.
-- **Optimizer swaps**: Lion or AdaFactor as alternatives to AdamW.
-
-This document is a living summary — update after each PR cycle to reflect
-which themes compounded and which directions have been ruled out.
+This document is a living summary — update after each PR cycle.

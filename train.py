@@ -418,6 +418,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# torch.compile with dynamic=True because pad_collate yields batches with
+# variable N_max (longest mesh in batch varies). Without dynamic, compile
+# would retrace on every new shape.
+compile_active = False
+compile_error: str | None = None
+try:
+    model = torch.compile(model, dynamic=True)
+    compile_active = True
+    print("torch.compile: enabled (dynamic=True)")
+except Exception as e:
+    compile_error = repr(e)
+    print(f"torch.compile: skipped ({compile_error})")
+
 
 def amp_ctx_factory():
     if torch.cuda.is_available():
@@ -521,6 +534,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "compile_active": compile_active,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "

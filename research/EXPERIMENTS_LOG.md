@@ -2,6 +2,223 @@
 
 ---
 
+## 2026-05-12 22:45 — PR #1535: EMA model weights for eval (decay=0.999) — CLOSED (stale)
+
+- **Branch:** `charliepai2g48h5-tanjiro/ema-eval-decay-0.999`
+- **Student:** charliepai2g48h5-tanjiro
+- **Hypothesis:** Maintain EMA copy of model weights with decay=0.999 and use it for eval —
+  typical late-training noise smoothing.
+
+### Outcome
+
+**CLOSED** with no commits past the original assignment commit. Pod appears to have stalled
+or failed to start training; no training trajectory, no metrics.jsonl, no terminal SENPAI-RESULT.
+
+### Disposition
+
+- Hypothesis itself remains in-play and was reassigned on the compile baseline (decay=0.999,
+  `torch.optim.swa_utils.AveragedModel` after compile, eval/test via EMA model).
+- No data lost; closing simply frees the student slot.
+
+---
+
+## 2026-05-12 22:45 — PR #1561: Gradient clipping max_norm=1.0 — CLOSED (stale)
+
+- **Branch:** `charliepai2g48h5-askeladd/grad-clip-1.0`
+- **Student:** charliepai2g48h5-askeladd
+- **Hypothesis:** Bound rare large gradient updates via `clip_grad_norm_(.., max_norm=1.0)`;
+  also a high-diagnostic-value characterization of training gradient norms.
+
+### Outcome
+
+**CLOSED** with no commits past the original assignment commit. Pod appears to have stalled
+or failed to start training; no trajectory, no metrics.jsonl, no terminal SENPAI-RESULT.
+
+### Disposition
+
+- Hypothesis reassigned on the compile baseline with the per-epoch grad-norm aggregation
+  (min/p50/mean/max/clip_frac) added so we still get the diagnostic value regardless of
+  whether clipping wins on validation.
+
+---
+
+## 2026-05-12 22:45 — PR #1590: slice_num 64 → 96 + bf16 — CLOSED
+
+- **Branch:** `charliepai2g48h5-frieren/slice-num-96-bf16`
+- **Student:** charliepai2g48h5-frieren
+- **Hypothesis:** Increase Transolver slice_num from 64 → 96 paired with bf16 AMP. With
+  bf16's ~2× throughput we can afford the slightly more expensive forward and still complete
+  full training; more slices = finer flow-field tokenization.
+
+### Results
+
+| Metric | Baseline (#1532 bf16) | This PR (#1590) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 101.12 | **105.024** | +3.86% (WORSE) |
+
+- **Status:** CLOSED — does not beat bf16 baseline, well behind the new compile baseline (69.83).
+- **Metric artifacts:** PR comment; trajectory shows monotone-worse vs slice_num=64 within
+  the same epoch budget.
+
+### Analysis
+
+Combined with the round-3 fp32 result (slice_num=128 → val=145.97 at 11 epochs, wall-clock-bound)
+and the bf16 result here (slice_num=96 → 105.02 at full budget), the slice_num lever is now
+well-characterized:
+
+| slice_num | regime | val_avg/mae_surf_p |
+|---:|---|---:|
+| 64 | bf16 (baseline) | 101.12 |
+| 96 | bf16 | 105.02 (+3.86%) |
+| 128 | fp32 (epoch-bound) | 145.97 |
+
+Monotone-worse with slice count. The 64-slice default appears near-optimal for this dataset
+size — adding slices adds capacity that overfits or simply costs throughput without finding
+useful additional flow-field structure. **slice_num is a dead lever upward**; downward
+(slice_num=32 or 48) would be a separate experiment but is a low-priority swing.
+
+### Conclusions
+
+- slice_num=64 is the right value for the current data + architecture.
+- Closing this arm; do NOT pair slice_num=96 with compile (no signal it would help).
+- Round-6 reassignment: frieren → step-based linear warmup + cosine on compile baseline.
+
+---
+
+## 2026-05-12 22:10 — PR #1568: torch.compile + bf16 AMP for additional throughput — MERGED ✓
+
+- **Branch:** `charliepai2g48h5-thorfinn/torch-compile-bf16`
+- **Student:** charliepai2g48h5-thorfinn
+- **Hypothesis:** `torch.compile(model, dynamic=True)` stacked on top of bf16 AMP doubles
+  per-epoch throughput from ~98 s → ~49.5 s, fitting 36 epochs in 30 min vs 19 previously.
+  Mechanism: kernel fusion eliminates Python dispatch overhead. `dynamic=True` prevents
+  recompilation on variable-length mesh batches (N_max varies per batch).
+
+### Results
+
+| Metric | Baseline (#1532) | This PR (#1568) | Δ |
+|---|---|---:|---:|
+| `val_avg/mae_surf_p` | 101.1212 | **69.8316** | **-30.9%** |
+| `test_avg/mae_surf_p` | 91.5013 | **61.8652** | **-32.4%** |
+
+| Split | val mae_surf_p | Δ vs #1532 |
+|---|---:|---:|
+| `val_single_in_dist` | 77.10 | -35.8% |
+| `val_geom_camber_rc` | 83.49 | -22.0% |
+| `val_geom_camber_cruise` | 50.64 | -38.9% |
+| `val_re_rand` | 68.10 | -28.0% |
+
+| Split | test mae_surf_p |
+|---|---:|
+| `test_single_in_dist` | 67.81 |
+| `test_geom_camber_rc` | 77.68 |
+| `test_geom_camber_cruise` | 41.98 |
+| `test_re_rand` | 59.99 |
+
+- **Status:** MERGED — new baseline 69.8316 / 61.8652.
+- **Epochs reached:** 36 (timeout-bound, 29.41 min; best epoch = 36, still descending)
+- **Time/epoch:** ~49.5 s (2.0× speedup vs bf16-only ~98 s)
+- **Peak GPU:** 23.8 GB (64 GB headroom on 96 GB card)
+- **Compile status:** active for all 36 epochs, no recompilation stalls with `dynamic=True`
+- **Metric artifacts:** `models/model-charliepai2g48h5-thorfinn-torch-compile-bf16-20260512-205152/metrics.jsonl`
+
+### Analysis
+
+The win is almost entirely explained by epoch count: 36 vs 19 epochs = ~1.9× more gradient
+steps. The model was monotonically improving through epoch 36 with no late-training instability.
+`dynamic=True` was the correct choice — without it, dynamo would specialize per N_max and
+accumulate recompilation costs that outweigh the kernel-fusion gain on variable-mesh batches.
+
+All 4 val splits improved uniformly (+22-39%), including the hardest OOD splits. This is
+pure optimization headroom, not overfitting.
+
+**Key consequence:** The new 36-epoch budget changes the arithmetic for every in-flight arm.
+- Capacity arms (#1587, #1588, #1590) were targeting n_hidden=160/n_layers=6/slice_num=96
+  + bf16 (without compile). With compile now on advisor, those arms now run at compile speed
+  IF they rebase — but they were branched before this merge and won't automatically have compile.
+- T_max=50 cosine schedule with 36 epochs reaches LR≈0.012 at epoch 36 (not the full
+  low-LR tail). Alphonse's T_max=18 result proved the terminal LR decay matters — so
+  T_max=36 on top of compile is now the highest-confidence cheap win.
+
+### Conclusions
+
+- torch.compile is a free 2× throughput multiplier with no accuracy cost.
+- 23.8 GB peak (batch=4, n_hidden=128) leaves 72 GB headroom for capacity exploration.
+- Budget is still binding at 36 epochs — the model is still descending. More compute =
+  more improvement. Highest-value follow-up: T_max=36 schedule to exploit the low-LR tail.
+
+---
+
+## 2026-05-12 22:00 — PR #1560: Match cosine T_max to actual epoch budget — SENT BACK
+
+- **Branch:** `charliepai2g48h5-alphonse/tmax-18-cosine`
+- **Student:** charliepai2g48h5-alphonse
+- **Hypothesis:** `CosineAnnealingLR(T_max=50)` with 19 bf16 epochs never reaches the
+  low-LR tail. Setting T_max=epoch_budget (originally T_max=14 for fp32, T_max=18 for
+  bf16) lets the schedule complete, adding a meaningful low-LR fine-tuning phase.
+
+### Results (two arms)
+
+**Arm A — T_max=14 (fp32-era budget, pre-bf16 advisor commit 1341b98):**
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **98.7502** (best epoch = 14, terminal) |
+| `test_avg/mae_surf_p` | **88.8030** |
+| Epochs reached | 14/14 (complete) |
+| Time/epoch | ~132.4 s (fp32) |
+| vs #1444 baseline (110.76) | -10.8% |
+
+**Arm B — T_max=18 (bf16-era budget, current advisor commit afd445a):**
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **90.3237** (best epoch = 18, terminal) |
+| `test_avg/mae_surf_p` | **80.1938** |
+| Epochs reached | 18/18 (complete) |
+| Time/epoch | ~98.0 s (bf16) |
+| vs #1532 baseline (101.12) | **-10.7%** |
+
+Per-split Arm B (tmax-18):
+| Split | val mae_surf_p | Δ vs #1532 |
+|---|---:|---:|
+| `val_single_in_dist` | 105.86 | -14.2% |
+| `val_geom_camber_rc` | 99.48 | -7.1% |
+| `val_geom_camber_cruise` | 70.74 | -14.6% |
+| `val_re_rand` | 85.22 | -9.8% |
+
+- **Status:** SENT BACK — baseline moved to 69.83 (PR #1568 merged). T_max=18 (90.32)
+  no longer beats new baseline. Reassigned to retest with T_max=36 matching compile budget.
+- **Metric artifacts:** `models/model-charliepai2g48h5-alphonse-tmax-18-cosine-20260512-210749/metrics.jsonl`,
+  `models/model-charliepai2g48h5-alphonse-tmax-14-cosine-20260512-201325/metrics.jsonl`
+
+### Analysis
+
+**Mechanism confirmed.** Best epoch = terminal epoch in BOTH arms. The cosine schedule's
+low-LR tail (final ~20-25% of epochs where LR approaches 0) provides material fine-tuning
+benefit. The trajectory is clear:
+
+val_avg at epochs 14→18 in Arm B: 98.34 → 92.62 → 92.34 → 91.44 → **90.32** — the last 4
+epochs (T_max=14 to terminal) gained ~8.0 absolute MAE points. This is the "low-LR tail" the
+hypothesis predicted.
+
+**At epoch 14, both arms agree** (Arm B epoch 14 = 98.34, Arm A terminal = 98.75) — the LR
+trajectory difference up to epoch 14 is negligible. The improvement is purely from completing
+the cosine arc.
+
+**Key implication for compile baseline:** With torch.compile reaching 36 epochs, the "natural
+budget" has doubled. T_max=36 would complete the cosine arc and provide the same low-LR tail
+effect — potentially gaining ~8-12 MAE off the 69.83 baseline.
+
+### Conclusions
+
+- Schedule-completion is a real, cheap, orthogonal lever. Best epoch = terminal epoch = strong
+  signal that the low-LR tail does fine-tuning work.
+- T_max=18 is obsolete — compile changed the budget to 36 epochs.
+- **Follow-up:** alphonse re-running PR #1560 with `--epochs 36` on the updated advisor branch.
+  If the same epoch-14→18 proportional gain holds (~8% of the remaining MAE), val_avg could
+  drop from ~60 (extrapolating compile curve) to ~55 in the final epochs.
+
+---
+
 ## 2026-05-12 21:30 — PR #1428: Per-channel loss weights [1,1,3] favoring pressure — CLOSED
 
 - **Branch:** `charliepai2g48h5-nezuko/pressure-channel-weight`
