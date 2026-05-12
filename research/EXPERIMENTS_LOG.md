@@ -98,3 +98,29 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - Best result in round 1 so far (val 110.84 vs 134.14/136.69; offline-test 99.79 vs partial-3-split 130.65/132.59 from the other two). bf16 wall-clock speedup gave 18 epochs vs 11-12 for fp32 siblings — the hypothesis works as predicted.
 - Sent back with: add the 4-line eval workaround in train.py, rerun, resubmit. The merged baseline will then carry both bf16 AND the scoring fix, propagating the fix to the rest of the round.
 
+## 2026-05-12 19:50 — PR #1447: tanjiro `batch_size=8` (review 1, closed — dead end)
+
+- Branch: `willowpai2g48h5-tanjiro/batch-size-8`
+- Hypothesis: double batch_size 4 → 8 to halve gradient variance under `WeightedRandomSampler`.
+- W&B run: `qp366pa4` (14 of 30 epochs; hit 30-min cap at 30.34 min)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 14) | **154.74** |
+| `val/single_in_dist/mae_surf_p` | 232.43 |
+| `val/geom_camber_rc/mae_surf_p` | 160.45 |
+| `val/geom_camber_cruise/mae_surf_p` | 104.41 |
+| `val/re_rand/mae_surf_p` | 121.67 |
+| `clean_test_avg/mae_surf_p` (post-NaN-patch re-eval) | **138.92** |
+| `test/test_single_in_dist/mae_surf_p` | 201.96 |
+| `test/test_geom_camber_rc/mae_surf_p` | 142.73 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 92.47 |
+| `test/test_re_rand/mae_surf_p` | 118.53 |
+| Peak GPU memory | **~94.0 GB / 96 GB (98.3%)** |
+| Per-epoch wall clock | ~130 s (≈ same as `bs=4`) |
+
+- Worst of the four reviewed round-1 PRs. The hypothesis predicted "smoother training → lower val" but mis-predicted wall-clock: per-epoch time stayed ~130 s because dataloader/collator dominates, so doubling `bs` halved optimizer steps per minute under the hard 30-min cap. Val curve was still descending steeply at the cap (170 → 156 → 155), confirming the run was under-trained relative to siblings, not bad on the merits.
+- Decision: **close**. No salvageable variation within the wall-clock constraint — `bs=6` has the same direction at smaller magnitude, `bs=4, accum=2` is identical in compute, and `bs=4` baseline becomes obsolete once alphonse's bf16 (#1419) lands as round-1 baseline.
+- Useful artifacts kept: (1) independent confirmation that the train.py NaN workaround produces a clean `clean_test_avg/mae_surf_p = 138.92` on the previously-poisoned scoring path; (2) 94 GB peak GPU measurement at `slice_num=64, n_hidden=128, bs=8` — bounds what `n_hidden=192` (frieren #1442) can stack on top; (3) student killed a duplicate `bs=8` launch (`4g5fatyx`) — good housekeeping.
+- Lesson recorded: under our 30-min wall-clock cap, any lever that doesn't speed up *per-epoch* wall clock (or improve sample-efficiency dramatically) leaves optimizer steps on the table. This is why bf16 wins and why pure batch-size scaling loses. Architectural levers face the same headwind.
+

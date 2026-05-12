@@ -11,43 +11,49 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Round 1 — in flight (first two reviews completed)
+## Round 1 — in flight (4 reviewed, 7 WIP + 1 early-round-2)
 
-Broad sweep over orthogonal levers. First two PRs landed and were sent back (#1427, #1451) due to a `data/scoring.py` NaN-propagation bug that NaN-poisons `test_avg/mae_surf_p`. Both showed promising val signals (134.14 and 136.69 respectively at incomplete epoch budgets). All 8 students currently have WIP PRs. Each PR targets `icml-appendix-willow-pai2g-48h-r5`.
+Broad sweep over orthogonal levers. Scoring NaN bug diagnosed and workaround broadcast to all PRs. Three PRs sent back for clean rerun (#1427, #1451, #1419). One PR closed as dead end (#1447).
 
-### Active issue: `data/scoring.py` NaN propagation
+### Scoring fix (broadcast to all PRs)
 
-- `.test_geom_camber_cruise_gt/000020.pt` contains **761 `-inf` values** in y[:, 2] (volume p channel). The exact value `-65504.0 = -fp_max(bf16)` is the smoking gun — preprocessing overflowed in bf16 upstream. Diagnosed jointly by thorfinn (#1451) and alphonse (#1419).
-- Scoring's intended sample-skipping is poisoned by IEEE `(+/-inf) * 0 = NaN` and then `NaN * 0 = NaN`.
-- Workaround (in `train.py` only — `data/` is read-only): pre-mask non-finite samples + `nan_to_num(y, nan=0, posinf=0, neginf=0)` before `accumulate_batch`. Snippet broadcast to all WIP PRs; alphonse's rerun of #1419 will be the canonical merged version that propagates the fix.
-- Val is unaffected; only the end-of-run test eval needs the fix.
+`.test_geom_camber_cruise_gt/000020.pt` has `-inf` values in y[:, 2] (`-65504 = -fp_max(bf16)`). Workaround in `evaluate_split` in `train.py` (data/ is read-only):
+```python
+sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+mask_eff = mask & sample_finite.unsqueeze(-1)
+y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
+```
+Val is unaffected. Alphonse's rerun (#1419) will be canonical merged version.
 
-### Round-1 leaderboard (preliminary, pending reruns with fix)
+### Round-1 leaderboard
 
-| PR | Student | Hypothesis | Val (best) | Test (clean) | Epochs in cap |
-|----|---------|-----------|-----------:|-------------:|---:|
-| #1419 | alphonse | bf16 autocast | **110.84** | **99.79** (offline) | 18 |
-| #1427 | askeladd | surf_weight=30 | 134.14 | NaN; 130.65 (3-split) | 12 |
-| #1451 | thorfinn | slice_num=128 (bs=2 OOM-fallback) | 136.69 | NaN; 132.59 (3-split) | 11 |
+| PR | Student | Hypothesis | Val (best) | Test (clean) | Epochs | Status |
+|----|---------|-----------|-----------:|-------------:|---:|---|
+| #1419 | alphonse | bf16 autocast | **110.84** | **99.79** | 18 | WIP (rerunning with NaN fix) |
+| #1427 | askeladd | surf_weight=30 | 134.14 | 130.65 (3-split) | 12 | WIP (rerunning with NaN fix) |
+| #1451 | thorfinn | slice_num=128 (bs=2) | 136.69 | 132.59 (3-split) | 11 | WIP (rerunning with NaN fix) |
+| #1447 | tanjiro | batch_size=8 | 154.74 | 138.92 | 14 | **Closed** (halved optimizer steps under wall-clock cap) |
 
-Alphonse leads decisively. The big driver is the bf16 speedup yielding 18 epochs vs 11-12. Other hypotheses haven't had time to fully reveal their effect yet.
+Alphonse leads decisively — bf16 buys 18 epochs vs 11-14 for fp32 siblings. Under our 30-min wall-clock cap, per-epoch speed is the dominant convergence lever.
+
+### In-flight WIP PRs (still training)
 
 | Student | PR | Hypothesis | Lever |
 |---------|----|-----------|-------|
-| alphonse | #1419 | bf16 autocast (mixed precision) | Optimisation / throughput |
+| alphonse | #1419 | bf16 autocast | Throughput (18 epochs/30 min) |
 | askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting |
-| edward | #1430 | `lr=1e-3` + 5% linear warmup + cosine | Optimisation |
+| edward | #1430 | `lr=1e-3` + 5% warmup + cosine | Optimisation |
 | fern | #1436 | Smooth L1 (Huber) loss | Loss form |
-| frieren | #1442 | Wider Transolver `n_hidden=192` | Architecture (capacity) |
-| nezuko | #1445 | Per-channel surface weighting `(0.5, 0.5, 2.0)` | Loss / metric alignment |
-| tanjiro | #1447 | `batch_size=8` (2×) | Gradient noise / throughput |
+| frieren | #1442 | Wider `n_hidden=192` | Architecture (capacity) |
+| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment |
+| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability |
 | thorfinn | #1451 | `slice_num=128` (2×) | Architecture (attention partitioning) |
 
 ## Round-2 candidate pool (from `research/RESEARCH_IDEAS_2026-05-12_round1.md`)
 
-Round-1 already covers H2 (warmup ≈ edward #1430), H6 (per-channel p weighting ≈ nezuko #1445), and H7 (Huber ≈ fern #1436). Remaining researcher-agent suggestions, to seed round 2 once round-1 results land:
+H1 (gradient clipping) already assigned to tanjiro (#1534). Remaining:
 
-- **H1 — gradient clipping** (`clip_grad_norm_(model.parameters(), 1.0)`): low risk, plausible stabiliser given high-Re y magnitudes up to ±29K
 - **H3 — `n_layers=8`**: matches original Transolver paper default; baseline is L=5
 - **H4 — `slice_num=96`** (alternative finer-grain to thorfinn's 128)
 - **H5 — `mlp_ratio=4`**: capacity increase, all standard transformers use 4×
