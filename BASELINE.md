@@ -39,10 +39,49 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **101.1212** | #1532 | bf16 AMP + scoring fix; else Smooth-L1 defaults | epoch 17 of 19; still improving at timeout |
-| `test_avg/mae_surf_p` | **91.5013** | #1532 | — | first finite test avg on this branch |
+| `val_avg/mae_surf_p` | **69.8316** | #1568 | torch.compile(dynamic=True) + bf16 AMP + scoring fix + Smooth-L1 | epoch 36 of 36; still improving at timeout |
+| `test_avg/mae_surf_p` | **61.8652** | #1568 | — | finite across all 4 test splits |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 101.1212` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 69.8316` to be merged.
+
+## 2026-05-12 22:10 — PR #1568: torch.compile + bf16 AMP for additional throughput
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 36 (wall-clock-bound at 30 min; model still descending at timeout)
+- **Epochs reached:** 36 (~2.0× faster than bf16 baseline: ~49.5 s/epoch vs ~98 s)
+- **Peak GPU memory:** 23.8 GB
+
+| Split | val mae_surf_p | Δ vs #1532 baseline |
+|---|---|---|
+| `val_single_in_dist` | 77.10 | -35.8% |
+| `val_geom_camber_rc` | 83.49 | -22.0% |
+| `val_geom_camber_cruise` | 50.64 | -38.9% |
+| `val_re_rand` | 68.10 | -28.0% |
+| **val_avg** | **69.8316** | **-30.9%** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 67.81 |
+| `test_geom_camber_rc` | 77.68 |
+| `test_geom_camber_cruise` | 41.98 |
+| `test_re_rand` | 59.99 |
+| **test_avg** | **61.8652** |
+
+- **Key code change:** `torch.compile(model, dynamic=True)` applied after model construction; `dynamic=True` prevents recompilation on variable mesh batch sizes. No recompilation stalls observed across 36 epochs.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-torch-compile-bf16-20260512-205152/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-torch-compile-bf16-20260512-205152/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/torch-compile-bf16" \
+      --epochs 50
+  ```
+  (`torch.compile(model, dynamic=True)` now on advisor branch — see PR #1568 diff)
+
+---
 
 ## 2026-05-12 20:01 — PR #1532: bf16 AMP for 2x epoch throughput + scoring-NaN fix
 
