@@ -142,3 +142,105 @@ Monotonic from epoch 7 onward, one tiny spike epoch 4→5. Final epoch is the be
 - batch+lr scaling at sqrt(2) underperforms relative to Huber loss and unified-pos in the same wave. Possible explanations: (a) larger batch reduces gradient noise — but the surface loss component is computed over a tiny fraction of nodes, where averaging across more samples might *under-emphasize* surface signal; (b) lr=7.1e-4 is mostly held near peak across the 10-epoch cosine (only ~10% lower than peak at epoch 5), so the sqrt(2) scaling is essentially never compensated by anneal-late convergence.
 - Generalization is healthy — test 3-split avg (162.63) ≈ val (162.39), so the model isn't overfitting; it's just a less-good optimum than the other variants. 
 - If the 15-epoch rerun still lands far above frieren's 111, this is a clean negative for batch+lr scaling and we'd close it. Worth one more shot first.
+
+---
+
+## 2026-05-12 19:55 — PR #1454 (rerun): Enable unified positional encoding (unified_pos=True, ref=8), --epochs=15
+
+- **Branch:** `willowpai2g48h2-tanjiro/unified-pos-ref8`
+- **Student:** willowpai2g48h2-tanjiro
+- **Change vs. first attempt:** (1) one-line `data/scoring.py` `nan_to_num` fix per advisor authorization, (2) `--epochs=15` (was 10), same `unified_pos=True, ref=8` config.
+
+### Result table (W&B run `24w5a8qx`, verified)
+
+| Metric | Value | Note |
+|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 14) | **128.7761** | ↓ from 147.65 (e10 run) → **−12.8%** |
+| `val_single_in_dist` surf p | 163.05 | |
+| `val_geom_camber_rc` surf p | 138.53 | |
+| `val_geom_camber_cruise` surf p | 94.21 | smallest, smaller pressure scale of cruise |
+| `val_re_rand` surf p | 119.31 | |
+| `test_single_in_dist` surf p | 142.38 | |
+| `test_geom_camber_rc` surf p | 130.43 | |
+| `test_geom_camber_cruise` surf p | **81.42** ✅ | finite — scoring fix worked |
+| `test_re_rand` surf p | 115.07 | |
+| `test_avg/mae_surf_p` (4-split) | **117.33** ✅ | finite |
+| Run time | ~31.4 min, 14 epochs done (timeout cap hit during epoch 15) |  |
+| Params | 0.68M | unchanged from e10 |
+
+### Decision
+
+- **Closed.** Frieren's PR #1452 rerun (val=100.77, test=90.38) landed first as the wave-1 winner; tanjiro's val=128.78 / test=117.33 is 28%/30% worse on the post-merge baseline.
+- The unified_pos architecture is genuinely orthogonal to Huber loss, so closing this PR with the explicit follow-up of testing the **stack** (unified_pos on top of merged Huber baseline) in a fresh PR — see new PR #1551 below.
+- Rebase rather than fresh PR was rejected because both PRs touch `train.py` (loss site) and `data/scoring.py` (your fix vs. frieren's). Starting fresh is faster than untangling.
+
+### Analysis
+
+- 15 epochs of cosine anneal pulled val from 147.65 → 128.78 (−12.8%), validating both the schedule alignment and the unified-pos forward fix. At epoch 10 the e15 run was already at 143.40 (vs. 147.65 for the e10 run with `T_max=10`), so longer schedules help even at the same epoch index.
+- Val still descending sharply at epoch 14 (130.18 → 128.78 = −1.1%) — the run is still undertrained at 15 epochs but the 30-min cap binds.
+- OOD-vs-ID pattern: `val_geom_camber_cruise` (94.21) lowest, `val_single_in_dist` (163.05) highest — pressure-scale artifact more than positional-encoding signal (per-domain y_std differs).
+- The scoring fix tanjiro wrote is functionally equivalent to frieren's `torch.where` variant; frieren landed first on squash-merge, so frieren's form is in the baseline.
+
+---
+
+## 2026-05-12 19:57 — PR #1452 (rerun, MERGED): Swap MSE → Smooth-L1 (Huber β=1.0) + scoring NaN-safe fix, --epochs=15
+
+- **Branch:** `willowpai2g48h2-frieren/smooth-l1-loss`
+- **Student:** willowpai2g48h2-frieren
+- **Change vs. first attempt:** (1) `data/scoring.py` NaN-safe fix via `torch.where(mask, err, zero)` (no arithmetic on masked positions), (2) `--epochs=15` (was 10), same Smooth-L1 β=1.0 in both training and `evaluate_split`.
+
+### Result table (W&B run `lo8vp7rj`, verified)
+
+| Metric | Value | Note |
+|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 14) | **100.7659** | ↓ from 111.06 (e10) → **−9.3%** |
+| `val_single_in_dist` surf p | 119.74 | |
+| `val_geom_camber_rc` surf p | 109.38 | |
+| `val_geom_camber_cruise` surf p | 80.90 | lowest (matches hypothesis: Huber caps high-Re outliers) |
+| `val_re_rand` surf p | 93.04 | second-lowest (matches) |
+| `test_single_in_dist` surf p | 106.01 | |
+| `test_geom_camber_rc` surf p | 96.25 | |
+| `test_geom_camber_cruise` surf p | **68.86** ✅ | finite — scoring fix worked |
+| `test_re_rand` surf p | 90.42 | |
+| `test_avg/mae_surf_p` (4-split) | **90.3840** ✅ | finite, first 4-split test metric on this branch |
+| Peak VRAM | ~42 GB / 96 GB | unchanged from e10 |
+| Run time | ~30 min (cap hit during epoch 15) | 14 full epochs |
+| Params | 0.66M | baseline arch |
+
+### Final wave-1 standings (val_avg/mae_surf_p)
+
+| PR | Hypothesis | val_avg | test_avg | Status |
+|---|---|---|---|---|
+| **#1452 frieren** | Smooth-L1 (Huber β=1) + scoring fix | **100.77** | **90.38** | **MERGED — new baseline** |
+| #1454 tanjiro | unified-pos ref=8 (+ constructor fix) | 128.78 | 117.33 | CLOSED, follow-up #1551 |
+| #1455 thorfinn | batch=8, lr=7.1e-4 (sqrt(2)-scaled) | 162.39 (e10) | NaN (rerun pending) | WIP (rerun in flight) |
+| #1446 alphonse | schedule-align (--epochs=10) | — | — | WIP (rate-limit-delayed start) |
+| #1448 askeladd | slice_num=128 | — | — | WIP (rate-limit-delayed start) |
+| #1449 edward | surf_weight=30 | — | — | WIP (rate-limit-delayed start) |
+| #1450 fern | mlp_ratio=4 | — | — | WIP (rate-limit-delayed start) |
+| #1453 nezuko | n_hidden=192 | — | — | WIP (rate-limit-delayed start) |
+
+### Decision
+
+- **Merged at 2026-05-12 20:02 UTC** as the wave-1 winner. `BASELINE.md` created with val=100.77 / test=90.38 as the new reference numbers for all future PRs to compare against. Two files changed: `train.py` (loss swap) and `data/scoring.py` (NaN-safe accumulator).
+- The scoring fix is the dominant value-add — it unblocks every future PR's test metric. The Huber loss is the headline improvement.
+
+### Analysis
+
+- Five extra epochs of cosine anneal pulled val from 111.06 → 100.77 (−9.3%). Val still descending at epoch 14 (102.88 → 100.77 over the last 2 epochs); a 20-epoch run would likely improve further but exceeds the 30-min cap budget at current per-epoch cost (~130 s/epoch).
+- Per-split pattern is monotonically consistent with hypothesis: `val_geom_camber_cruise` (80.90) and `val_re_rand` (93.04) are the two lowest — Huber caps the gradient on high-Re outliers that MSE would have over-penalized.
+- Test follows val closely with a slight edge (90.38 < 100.77): the model isn't overfitting and generalizes well across the 4 splits.
+
+---
+
+## 2026-05-12 20:05 — Wave-2 launches: PR #1551 (tanjiro), PR #1554 (frieren)
+
+After merging the wave-1 winner, two newly-idle students were assigned wave-2 stack tests on top of the merged Huber baseline:
+
+| PR | Student | Slug | Hypothesis | Predicted Δ vs. 100.77 val |
+|---|---|---|---|---|
+| #1551 | tanjiro | `unified-pos-on-huber` | unified_pos=True, ref=8 stacked on Huber baseline (re-applying the constructor fix + forward-side encoding on the new branch) | −3 to −8% (~92–98 val) |
+| #1554 | frieren | `swa-on-huber` | Stochastic Weight Averaging on final 4/15 epochs, swa_lr=1e-4, terminal test eval uses `swa_model` | −3 to −7% (~94–98 val) |
+
+Both are pure single-variable add-ons; both have low implementation risk and high stacking-orthogonality with Huber. Wave 1's other 5 PRs (alphonse, askeladd, edward, fern, nezuko) are still running on the pre-merge baseline (MSE) — their results will need to be evaluated against the new baseline (Huber@100.77) when they post, since the Huber win is itself a ~25% improvement that those MSE-arm hypotheses would need to clear.
+
