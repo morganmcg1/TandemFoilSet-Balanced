@@ -14,6 +14,32 @@ Stock `train.py` on `icml-appendix-willow-pai2g-48h-r5` — Transolver with the 
 **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across the 4 val splits).
 **Paper-facing metric:** `test_avg/mae_surf_p` (computed at end of run from the best-val checkpoint).
 
+## 2026-05-12 22:10 — PR #1606: fern EMA of model weights (decay=0.999)
+
+Merged. EMA shadow copy of model parameters updated after every optimizer step (`ema = 0.999 * ema + 0.001 * model`). Val and test evaluation uses EMA weights instead of live weights. EMA lags during warmup but consistently outperforms the live model from epoch 9 onward; the gap widens late in training as cosine LR anneals but SGD noise persists.
+
+**New best (lower is better):**
+
+| Metric | Value | vs PR #1436 |
+|--------|-------|-------------|
+| `val_avg/mae_surf_p` | **92.3452** | −4.14 (−4.3%) |
+| `test_avg/mae_surf_p` | **81.6297** | −4.70 (−5.4%) |
+
+**Per-split test (best-val checkpoint, epoch 17):**
+
+| Split | mae_surf_p |
+|-------|----------:|
+| `test_single_in_dist` | 95.2950 |
+| `test_geom_camber_rc` | 91.9270 |
+| `test_geom_camber_cruise` | 58.7160 |
+| `test_re_rand` | 80.5810 |
+| **test_avg** | **81.6297** |
+
+- **EMA-vs-live diagnostic:** epoch 17 live model test=104.70 vs EMA test=81.63 — EMA shadow is +28% better than live weights at same step
+- **Config change:** `copy.deepcopy(model)` EMA shadow with `requires_grad=False`; updated after each `optimizer.step()` on fp32 master weights; val+test eval use `ema_model`
+- **W&B run:** `gdfynh7o`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+
 ## 2026-05-12 21:10 — PR #1436: fern Huber + bf16 (compound winner)
 
 Merged. Smooth L1 / Huber loss (β=1.0) replaces MSE in both training and `evaluate_split`. Stacked on top of the alphonse bf16 baseline; effects compounded as predicted — Huber's loss-shape alignment with the MAE metric (linear tails for high-Re extreme p samples) + bf16's epoch budget (~18 vs ~14 fp32).
