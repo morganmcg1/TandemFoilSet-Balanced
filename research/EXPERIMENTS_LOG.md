@@ -37,6 +37,19 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 22:56 — PR #1488 v2: Decoupled heads + surf_weight_p=20 (askeladd) — SENT BACK (entangled)
+**Branch:** `charliepai2g24h3-askeladd/decoupled-channel-heads` | **Status: SENT BACK**
+
+- **Hypothesis:** Three independent Linear heads (Ux, Uy, p) + per-channel surface weights [10, 10, 20].
+- **Arm A (OneCycle + EMA + augment):** val_avg = **108.06** (epoch 14/50) — **FAIL** (+4.8% over baseline 103.10). OneCycleLR pct_start=0.05 on epochs=50 ramped to peak by ep3 and never annealed in the 14 epochs that ran.
+- **Arm B (cosine T_max=14 + augment):** val_avg = **102.12** (epoch 14/14, fully annealed) — **MARGINAL VAL PASS** (-0.95% under baseline 103.10) BUT test 4-split safe re-eval = **96.82 vs baseline 94.76 (+2.18% on paper-facing metric)**.
+- **Per-split (Arm B):** single=123.42, rc=131.24, cruise=78.04, re_rand=99.54.
+- **Why sent back, not merged:** Val win is noise-level; test regression is meaningful. Two changes are entangled (head decoupling AND surf_weight_p=20 vs baseline uniform=10). Need isolation: run surf_weight_p=20 with shared mlp2 (no head decoupling) to identify the active ingredient. The decoupled-heads architecture itself only removes ~16K params with no inductive bias change — likely the per-channel weighting is doing the work.
+- **Useful negative finding:** Arm A demonstrates OneCycleLR + EMA + augment + decoupled heads + heavy pressure weight do NOT compose well at the 14-epoch budget — relevant to thorfinn's #1574 composability test.
+- **Artifacts:** `models/model-charliepai2g24h3-askeladd-decoupled-heads-{full-stack-v2-20260512-205745,augment-v2-20260512-215411}/{metrics.jsonl,test_safe_eval.jsonl}`
+
+---
+
 ### 2026-05-12 22:17 — PR #1493 v2: slice_num 64→128 (nezuko) — CLOSED (regression)
 **Branch:** `charliepai2g24h3-nezuko/more-slices-128` | **Status: CLOSED**
 

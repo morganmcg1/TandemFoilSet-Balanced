@@ -22,12 +22,14 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 
 **Strong loss-curvature signal (sent back):** PR #1543 v1 (fern) log-cosh @ 106.68 on PR #1520 base — clean −5.21% vs #1520, cruise split gets −12.0%. Doesn't beat 103.10 baseline (no augmentation); sent back for log-cosh + augmentation rerun.
 
+**Per-channel pressure weighting signal (sent back, entangled):** PR #1488 v2 Arm B (askeladd) decoupled heads + surf_weight_p=20 @ val 102.12 / test 96.82 on full merged stack with cosine T_max=14. Beats val 103.10 by 0.95% but loses test 4-split by +2.18%. Two changes entangled (head decoupling + weighting). Sent back for surf_weight_p=20-alone ablation. Likely the per-channel weighting is the active ingredient.
+
 ## Current student assignments
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
 | alphonse | #1484 | `huber-pressure-loss` | WIP — rebase: Huber d=0.5+d=1.0 on full merged stack (2 arms) |
-| askeladd | #1488 | `decoupled-channel-heads` | WIP — rebase: decoupled heads on full merged stack (2 arms) |
+| askeladd | #1488 | `decoupled-channel-heads` | WIP — v2 sent back (Arm B 102.12 val/96.82 test, entangled), run Arm C: surf_weight_p=20 alone (no decoupling) |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1543 | `logcosh-loss` | WIP — sent back v1 (106.68 vs baseline 103.10), rebase + re-run with augmentation default ON |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
