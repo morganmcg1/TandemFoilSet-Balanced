@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 23:32 (nezuko #1695 tmax-18 assigned; frieren #1696 grad-clip-1.0 assigned; all 8 students now active)
+- **As of:** 2026-05-12 23:45 (all 8 students active; #1374, #1540, #1575 blocked by GraphQL rate limit, will resume after ~23:49 UTC reset)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -26,7 +26,7 @@ Six merges (after surf_weight=20 effectively reverted):
 
 1. **Robust loss functions — HIGHEST PRIORITY.** Huber loss (#1374, edward, val=112.06 unseeded default) is the strongest single lever discovered. Edward's rebase + seeded rerun on the now-merged-T_max=15 recipe is the critical gate; expected to land sub-110.
 2. **LR schedule.** T_max=15 (nezuko #1542) merged — val=114.81 new best. Open: T_max=18 to match achievable epoch count exactly (nezuko follow-up); could give another 1-2 pts.
-3. **EMA weight averaging.** EMA decay=0.999 (askeladd #1540, val=121.16 unseeded default). Branch rebased; awaiting seeded training rerun on new HEAD.
+3. **EMA weight averaging.** EMA decay=0.999 (askeladd #1540, val=121.16 unseeded default). Branch still CONFLICTING; rebase + seeded rerun pending — student has not yet picked up advisor feedback (likely GraphQL-rate-limited polling).
 4. **Architecture / capacity.** hidden256 (tanjiro #1575) in flight — first fair capacity test at merged recipe.
 5. **Positional encoding.** Global pos norm (thorfinn #1576) — sent back for seeded rerun.
 6. **Across-seed variance.** Alphonse #1685 (seed=7) — calibrates σ for the new recipe.
@@ -38,9 +38,9 @@ Six merges (after surf_weight=20 effectively reverted):
 | Lever | val_avg | test_avg | Config | Status |
 |---|---|---|---|---|
 | **T_max=15 + merged (nezuko #1542)** | **114.81** | **104.68** | merged + T_max=15 (unseeded, surf_weight=20→10 via merge) | **MERGED — CURRENT BEST** |
-| Huber loss (edward #1374) | 112.06 | 107.52 (3-split) | default + Huber (unseeded) | Rebase in flight |
+| Huber loss (edward #1374) | 112.06 | 107.52 (3-split) | default + Huber (unseeded) | Branch now MERGEABLE; awaiting seeded rerun on merged HEAD |
 | Seeded baseline (alphonse #1577) | 116.43 | 108.87 | merged + seed=42 | MERGED |
-| EMA decay=0.999 (askeladd #1540) | 121.16 | 108.69 | default + EMA (unseeded) | Rebase done, seeded rerun pending |
+| EMA decay=0.999 (askeladd #1540) | 121.16 | 108.69 | default + EMA (unseeded) | Branch CONFLICTING; rebase + seeded rerun pending |
 | Global pos norm (thorfinn #1576) | 123.56 | 109.71 | merged + global_norm (unseeded) | Sent back |
 | Default + scoring-fix (#1512) | 123.99 | 110.97 | default only | Superseded |
 | wd5e-4 (frieren #1394) | 135.35 | NaN | default + wd5e-4 (unseeded, pre-merge) | **CLOSED — regression** |
@@ -48,8 +48,8 @@ Six merges (after surf_weight=20 effectively reverted):
 ## Active student assignments
 
 ### Priority: rebase + seeded rerun on merged recipe
-- **PR #1374 — `huber-loss` (edward)** — **WIP (rebase)** — STRONGEST LEVER val=112.06 unseeded; seeded rerun on new HEAD (with T_max=15) is the critical next merge.
-- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Branch rebased; awaiting seeded training rerun on new HEAD.
+- **PR #1374 — `huber-loss` (edward)** — **WIP (rebase)** — STRONGEST LEVER val=112.06 unseeded; branch now MERGEABLE against current HEAD but result is on OLD config; seeded rerun on new HEAD (with T_max=15) is the critical next merge.
+- **PR #1540 — `ema-weights` (askeladd)** — **WIP (rebase)** — Branch still CONFLICTING; advisor rebase request from 20:56 UTC, no commits since 20:53 — likely GraphQL-rate-limited polling.
 
 ### Round-2 in flight
 - **PR #1575 — `hidden256-bf16` (tanjiro)** — **WIP** — capacity test
