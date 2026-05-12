@@ -10,13 +10,14 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 ## Round-1 status
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| alphonse | #1359 | lr-warmup-1e-3 | stale_wip | No result yet |
+| alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
 | askeladd | #1361 | wider-hidden-192 | wip (retrying) | val 140-148 (NaN test fixed) → rebase+retest |
 | edward | #1362 | more-slices-128 | wip (retrying) | test 129.60 (worse than baseline) → rebase+retest |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
 | tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
+| tanjiro | #1578 | ema-eval-weights | wip (new) | Assigned: Polyak EMA at eval on top of bf16 baseline |
 | thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
 ## Key research findings so far

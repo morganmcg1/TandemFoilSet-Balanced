@@ -1,5 +1,22 @@
 # SENPAI Research Results
 
+## 2026-05-12 20:11 — PR #1359: LR warmup + 1e-3 peak: cosine aligned to 30-min budget
+- Branch: willowpai2g48h1-alphonse/lr-warmup-1e-3
+- Hypothesis: 2-epoch linear warmup (lr=1e-5 → 1e-3) then cosine decay over remaining 48 epochs. Peak LR = 2× default 5e-4.
+- W&B runs: `o0s1z3aq` (trial-1 reported), `qua872ss`, `x9ntld98` (variance check)
+
+| Metric | trial-1 | mean 3 runs | std |
+|---|---|---|---|
+| val_avg/mae_surf_p (best) | **138.85** @ ep 12 | 144.06 | 4.05 |
+| test_avg/mae_surf_p | NaN (cruise GT bug) | — | — |
+| test 3-split partial | 139.20 | — | — |
+| Epochs completed | 13 (timeout) | — | — |
+| Peak GPU mem | 42.1 GB | — | — |
+
+**Analysis**: LR=1e-3 is at the edge of stability (epoch-7 spike: val jumped 184 → 214, recovered). High run-to-run variance (std=4.05 ≈ 3% of mean) from undertrained regime. Student proactively ran 3 trials for variance characterization — valuable. Test NaN from the known data bug (PR not rebased onto fix). val=138.85 on default batch=4 (no bf16) is comparable to or slightly worse than bf16 baseline val=133.75, but on a different config — not directly comparable. Warmup schedule hypothesis itself is still untested vs the new baseline.
+
+**Action**: Sent back to rebase onto bf16+batch-8 baseline and retest lr=1e-3 warmup on top. New baseline gives ~17 epoch headroom, making cosine decay more meaningful. Target: test_avg < 121.28.
+
 ## 2026-05-12 19:00 — PR #1361: Wider model: n_hidden 128→192 for more flow-field capacity
 - Branch: willowpai2g48h1-askeladd/wider-hidden-192
 - Hypothesis: Increase Transolver hidden width from 128 → 192 (n_head=4, dim_head=48) for more flow-field capacity. Predicted -3% to -7% on val_avg/mae_surf_p.
