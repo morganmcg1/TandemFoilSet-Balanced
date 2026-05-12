@@ -67,6 +67,20 @@ Hypotheses sourced from `/research/RESEARCH_IDEAS_2026-05-12_18:00.md`.
 
 ---
 
+### 2026-05-12 19:22 — PR #1493: PhysicsAttention slice_num 64→128 (nezuko)
+**Branch:** `charliepai2g24h3-nezuko/more-slices-128` | **Status: SENT BACK**
+
+- **Hypothesis:** Doubling slice_num gives PhysicsAttention more token capacity to represent surface vs. volume regions in 74-242K-node meshes.
+- **val_avg/mae_surf_p: 138.317** (epoch 10/11) — 19.9% worse than #1491 baseline.
+- **Per-split:** single=175.88, rc=147.04, cruise=108.51, re_rand=121.83.
+- **Test (3-split proxy):** single=146.80, rc=135.49, re_rand=123.74 → ~135.01.
+- **Memory:** Peak 54.5 / 96 GB — slice_num=128 is cheap. Room for slice_num=192 or 256 in a later round.
+- **Cruise NaN trace:** Independently identified the same 761-Inf bug as tanjiro (PR #1494). Clearest write-up of the boolean→float cast mechanics. Credited alongside tanjiro.
+- **Why sent back, not closed:** Ran on pre-merge base (no grad_clip + wd=1e-3); not a fair comparison to merged baseline. Same cosine T_max=50 mismatch (11 epochs only). Need rebase on #1491 + --epochs 11 re-run.
+- **Artifacts:** `models/model-more-slices-128-20260512-180855/{metrics.jsonl,metrics.yaml}`
+
+---
+
 ### 2026-05-12 18:53 — PR #1490: Scale model n_hidden=256, n_head=8 (edward)
 **Branch:** `charliepai2g24h3-edward/scale-model-256` | **Status: SENT BACK**
 
