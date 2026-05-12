@@ -1,6 +1,51 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1518 (higher-lr-cosine-14)
+## Current Baseline — PR #1460 (relative-l2-loss)
+
+**val_avg/mae_surf_p = 89.6121** (epoch 14 / 14 completed in 30-min cap) — **-7.20% vs previous 96.5587**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: `AdamW(lr=1e-3, wd=1e-4)`, `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`
+- `batch_size=4`, `surf_weight=10.0`, **per-sample relative L2 loss** (`||pred-y||²/||y||²`)
+- ~131s/epoch; 14 epochs in ~30 min
+- Loss: per-sample relative L2 in normalized space (replaces MSE)
+
+**Per-split val at best epoch (14):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 109.07 |
+| val_geom_camber_rc | 97.99 |
+| val_geom_camber_cruise | **67.09** |
+| val_re_rand | 84.29 |
+| **val_avg** | **89.6121** |
+
+**Test (4 splits):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 91.14 |
+| test_geom_camber_rc | 85.89 |
+| test_geom_camber_cruise | 56.35 |
+| test_re_rand | 79.18 |
+| **test_avg** | **78.14** |
+
+**Artifact**: `models/model-charliepai2g24h1-fern-relative-l2-loss-20260512-200551/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# loss=relative_l2, lr=1e-3, T_max=14, grad_clip=1.0 are now the default Config values on this branch
+```
+
+**Key insight**: Relative L2 loss (`||pred-y||²/||y||²`) normalizes by sample energy, automatically down-weighting high-energy (extreme-value) samples and up-weighting low-energy ones. This is a better inductive bias than MSE for flows with large Re variation — the loss landscape is flatter and more homogeneous across splits. Val still falling at epoch 14 (95.94 → 93.35 → 89.61 in last 3 epochs); more epochs would help.
+
+**Gradient diagnostic**: clip_frac fell to 0.984 at ep 14 (was 1.0 throughout on MSE baseline) — relative-L2 is producing smaller raw gradient norms. The loss surface is smoother.
+
+---
+
+## Previous Baseline — PR #1518 (higher-lr-cosine-14)
 
 **val_avg/mae_surf_p = 96.5587** (epoch 14 / 14 completed in 30-min cap) — **-17.6% vs previous 117.17**
 
