@@ -228,6 +228,41 @@ Per-split (dropout=0.2):
 
 ---
 
+## 2026-05-12 22:53 — PR #1386: Fourier positional encoding L=6 mf32 BF16 (nezuko) — **MERGED**
+
+- **Branch:** `willowpai2g24h5-nezuko/fourier-position-encoding`
+- **Hypothesis:** Replace raw (x,z) coordinates with Fourier features (log-spaced frequencies) to help the model learn high-frequency spatial patterns that MLPs struggle with from raw floats.
+- **W&B runs:** `bpbykd9z` (L=6, primary), `qwmh06uh` (L=4, secondary)
+- **Config:** L=6, min_freq=1.0, max_freq=32.0 (corrected from v1's max_freq=1000), positions standardized before encoding; BF16
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | Best epoch |
+|-----|-------------------|--------------------|-----------:|
+| **Fourier L=6 mf32 BF16** (`bpbykd9z`) | **103.2393** | **90.828** | 18 |
+| Fourier L=4 mf32 BF16 (`qwmh06uh`) | 107.1261 | 94.7796 | 18 |
+| **Baseline (BF16+scoring fix, #1541)** | 120.40 | 106.67 | 17 |
+
+Per-test-split (L=6):
+
+| Split | test surf_p | vs Baseline (106.67 avg) |
+|-------|------------|------------------------:|
+| single_in_dist | 105.79 | −15.6% |
+| geom_camber_rc | 102.99 | −9.0% |
+| geom_camber_cruise | 64.21 | −20.9% |
+| re_rand | 90.31 | −15.6% |
+| **avg** | **90.83** | **−14.8%** |
+
+**Result:** MERGED as new baseline. val=103.24, test=90.83. All 4 splits improve; biggest gain on cruise geometry (−20.9%), supporting the hypothesis that Fourier features resolve fine boundary-layer structure on unseen airfoil shapes.
+
+**Key observations:**
+1. **max_freq matters far more than L.** v1 with max_freq=1000 on raw coords was −8% *worse* than baseline; v2 with max_freq=32 on normalized coords is −14% *better*. The frequency range (not the number of octaves) is the dominant variable.
+2. **Standardize positions before encoding.** Computing sin/cos on raw coords makes the basis poorly conditioned; standardizing first puts frequencies in the Tancik-meaningful range.
+3. **L=6 > L=4 by ~4%.** Extra octaves covering finer spatial scales (λ ≈ 0.2 unit) help boundary-layer resolution; negligible VRAM cost.
+4. **This is the largest single-experiment gain yet: −14.8% test** — surpassing Huber (−10.4% val, BF16 pending) and dropout=0.2 (−7.7% val, BF16 pending). Fourier positional encoding is a foundational input feature change that should compound with both loss and regularization improvements.
+
+**New baseline:** val=103.24, test=90.83. All subsequent PRs should compare against these numbers.
+
+---
+
 ## 2026-05-12 21:55 — PR #1609: Transolver slice_num 64→128 (frieren) — **CLOSED**
 
 - **Branch:** `willowpai2g24h5-frieren/slice-num-128-physics-tokens`

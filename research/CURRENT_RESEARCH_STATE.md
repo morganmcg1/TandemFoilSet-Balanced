@@ -1,85 +1,82 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-12 ~21:10 UTC
+- **Date:** 2026-05-12 ~23:15 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
-- **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock. Treat experiments as isolated for git and experiment artifacts; do not cross-reference unrelated branches.
+- **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
 
 ## Current baseline
 
 | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | PR |
 |--------|-------------------|--------------------|----|
-| BF16 + scoring fix (frieren rerun) | **120.40** | **106.67** | #1541 |
+| Fourier pos encoding L=6 mf32 + BF16 | **103.24** | **90.83** | #1386 ✅ MERGED |
+| BF16 + scoring fix (frieren rerun) | 120.40 | 106.67 | #1541 |
 
-All 4 test splits now finite. Per-test: single_in_dist=125.29, rc=113.23, cruise=81.16, re_rand=106.99
+Per-test-split (new baseline): single_in_dist=105.79, geom_camber_rc=102.99, geom_camber_cruise=64.21, re_rand=90.31
 
-## Round 1 results — summary
+## Round 2 active experiments
 
-| PR | Student | Config | val_avg | test_avg | Status |
-|----|---------|--------|---------|----------|--------|
-| #1371 | frieren | BF16 autocast | 123.72 | NaN | ✅ MERGED (superseded by #1541) |
-| #1541 | frieren | Scoring fix + BF16 rerun | **120.40** | **106.67** | ✅ MERGED — current baseline |
-| #1367 | fern | Dropout=0.2+clip=1.0 | **113.86** (pre-BF16) | — | ♻ Rebasing to add BF16 |
-| #1357 | askeladd | Huber δ=1.0 | **107.91** (pre-BF16) | — | ♻ Sent back for BF16+scoring rerun |
-| #1412 | thorfinn | Warmup-5ep+BF16 | 123.10 | NaN | ✗ CLOSED (within noise of baseline) |
-| #1352 | alphonse | surf_weight=30 | 120.88 | NaN | ✗ CLOSED (direction exhausted) |
-| #1365 | edward | OneCycleLR max_lr=1e-3 | 128.89 | NaN | ✗ CLOSED (schedule mismatched to budget) |
-| #1386 | nezuko | Fourier pos encoding | 123.10 | NaN | ♻ Retry with max_freq=32 + BF16 |
-| #1400 | tanjiro | Aux surf-p head λ=2 | 132.48 | NaN | ♻ Rebasing for BF16 combo |
+| PR | Student | Config | W&B val (best finished run) | Status |
+|----|---------|--------|----------------------------|--------|
+| #1357 | askeladd | Huber δ=1.0 + BF16 (rebase) | 98.79 (`m733u17z`) — **BEATS baseline** | WIP; new run in flight |
+| #1367 | fern | Dropout=0.2 + BF16 (rebase) | 98.96 (`otwlgvo7`) — **BEATS baseline** | WIP; new run in flight |
+| #1604 | alphonse | Asinh transform on p target | 106.48 (`8lsszzwj`) — below new baseline | WIP; no SENPAI-RESULT yet |
+| #1583 | thorfinn | CosineAnnealingLR T_max=18 | 110.72 (`se2af891`) — below new baseline | WIP; new run in flight |
+| #1607 | edward | EMA weight averaging at eval | 112.14 (`bdjvz5qy`) — below new baseline | WIP; new run in flight |
+| #1624 | frieren | AdamW betas (0.9, 0.95) + new arm (0.9, 0.98) | 141.04 — worse than baseline | WIP; new run in flight |
+| #1400 | tanjiro | Aux surf-p head λ=2 + BF16 | 118.88 (`nzxjwa7n`) — below new baseline | WIP; new run in flight |
+| #1386 | nezuko | Fourier L=6 mf32 BF16 | 103.24 ✅ | MERGED |
 
-**Two clear winners pending rebase + rerun:**
-1. **askeladd Huber δ=1.0** (107.91 pre-BF16) — biggest single-experiment gain, ~10.4% below baseline
-2. **fern Dropout=0.2** (113.86 pre-BF16) — ~5.5% below baseline
+**Note:** Multiple students started new runs at ~22:51-22:55 UTC, suggesting they completed first arms and are running additional experiments. Results should land ~23:21-23:25 UTC.
 
-Both should land below 110 after BF16+scoring rerun. These are the priority merge candidates.
+## Key findings (all rounds)
 
-## Active experiments (Round 2 — assigned 2026-05-12 21:05)
+1. **Fourier positional encoding (max_freq=32, normalized):** −14.8% test, biggest single gain. All splits improve; largest on cruise geometry (−20.9%). Foundational input feature change.
+2. **BF16 buys ~4 extra epochs** (18 vs ~14) in the 30-min window — foundational
+3. **Scoring bug fixed (PR #1541):** `data/scoring.py` now guards `0×inf=NaN`
+4. **Huber > MSE:** ~10% val gain (pre-BF16), targets high-Re outliers directly. With BF16, expect ~98-99 val
+5. **Dropout=0.2 > 0.1:** ~7.7% val gain (pre-BF16). With BF16, expect ~98-99 val
+6. **Frequency scaling matters enormously:** Fourier L=6 max_freq=1000 was −8% worse; max_freq=32 is −14% better
+7. **Capacity-up architecture loses in 18 epochs:** slice_num=128 −9.5%, aux head starved for epochs
+8. **surf_weight, OneCycleLR, warmup-only, AdamW betas(0.9,0.95):** no improvement
 
-| PR | Student | Hypothesis | Status |
-|----|---------|-----------|--------|
-| #1604 | alphonse | Asinh transform on p target (compress high-Re tail) | WIP — new |
-| #1607 | edward | EMA weight averaging at eval (smooth val wobble) | WIP — new |
-| #1609 | frieren | slice_num=64→128 (double physics-token resolution) | WIP — new |
-| #1583 | thorfinn | CosineAnnealingLR T_max=18 (match reachable epochs) | WIP — from cycle 5 |
-| #1367 | fern | Dropout=0.2 + BF16 + scoring fix (rebase) | WIP |
-| #1357 | askeladd | Huber δ=1.0 + BF16 + scoring fix (rebase) | WIP — sent back |
-| #1400 | tanjiro | Aux surf-p head λ=2 + BF16 combo | WIP |
-| #1386 | nezuko | Fourier max_freq=32 + normalized positions + BF16 | WIP |
+## Upcoming priority: compound the top wins
 
-All 8 students have active assignments.
+After round-2 PRs merge (Huber + Dropout both likely beat ~103.24 too):
 
-## Key findings from round 1
+1. **Fourier + Huber:** Input encoding × loss robustness — orthogonal improvements likely to stack
+2. **Fourier + Dropout:** Fourier features + regularization — should stack (one fixes input, one fixes training dynamics)
+3. **Fourier + Huber + Dropout:** triple combo — the three biggest independent gains
+4. **Fourier + Dropout sweep:** 0.15, 0.20, 0.25 — find optimal
+5. **Fourier L sweep:** L=8, L=12 with max_freq=32 — marginal but worth screening
 
-1. **BF16 buys ~4 extra epochs** (18 vs ~14) in the 30-min window — foundational
-2. **Scoring bug fixed (PR #1541):** `data/scoring.py` now guards `0×inf=NaN` — `test_avg/mae_surf_p` is usable
-3. **Huber > MSE:** ~10% gain, biggest single lever — targets high-Re outliers directly
-4. **Dropout=0.2 > 0.1:** ~5-8% gain, helps every split (loss-landscape smoother, not classic regularizer)
-5. **surf_weight, OneCycleLR, raw Fourier, naive aux head, warmup-only:** all fail to beat BF16+scoring baseline standalone
-6. **T_max mismatch:** Schedule decays only 36% in 18 BF16 epochs — late-epoch LR wobble visible
+## Potential Round 3+ directions
 
-## Potential next research directions (round 3+)
+**Compositions (high priority — each tested win is likely orthogonal):**
+- Fourier L=6 + Huber δ=1.0 + BF16
+- Fourier L=6 + Dropout=0.2 + BF16
+- Fourier L=6 + Huber + Dropout + BF16 (triple)
+- Fourier L=6 + T_max=18 (if T_max wins)
 
-**After Round 2 winners merge:**
-- **Compound the two biggest wins:** Huber + Dropout=0.2 + BF16 + scoring fix
-- **Triple combos:** Huber + Dropout=0.2 + T_max=18 (if T_max wins)
-- **Dropout sweep around 0.2:** 0.15, 0.25, 0.30
-- **Huber δ sweep:** 0.5, 1.0, 2.0 — find optimum
+**Fourier tuning:**
+- L=8 or L=12 (same max_freq=32, more octaves)
+- min_freq tuning (try 2.0 or π instead of 1.0)
+- Concatenate raw positions + Fourier features (don't replace)
+- Random Fourier basis (Gaussian weights) vs fixed log-spaced
 
-**Architecture-level (after compositions saturate):**
-- **n_hidden=192 or 256:** wider model, BF16 leaves 63 GB free
-- **n_layers=6 or 7:** deeper Transolver stack
-- **Different attention head count:** n_head=8 (currently 4)
+**Architecture (after compositions saturate):**
+- n_hidden=192 or 256 (VRAM has 63 GB free at current config)
+- n_layers=6 or 7
+- n_head=8 (currently 4)
+- Deeper preprocessing MLP (fun_dim-based changes)
 
-**Loss formulation (orthogonal to model):**
-- **Per-sample y normalization:** divide each sample's y by its own std
-- **Sobolev / divergence-free penalty** on (Ux, Uy) — physics-informed
-- **Adaptive loss weighting:** auto-balance vol/surf weights from gradient norms
+**Loss formulation:**
+- Huber δ sweep: 0.5, 1.0, 2.0 — find optimum
+- Per-sample y normalization
+- Sobolev / divergence-free penalty on (Ux, Uy)
+- Adaptive loss weighting from gradient norms
 
 **Optimization:**
-- **AdamW betas (0.9, 0.95)** — short-training tweak
-- **Larger batch + linear LR scaling**
-- **Lion / Adan optimizer**
-
-**Data augmentation:**
-- **Mesh dropout / subset sampling** for training robustness
-- **Coordinate jittering** for spatial invariance
+- Lion or Adan optimizer
+- Larger batch + linear LR scaling
+- T_max=18 tuning (if it provides meaningful gain over the new baseline)
