@@ -309,6 +309,7 @@ def write_experiment_summary(
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
+        "grad_clip": cfg.grad_clip,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
@@ -350,6 +351,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
+    grad_clip: float = 0.0  # 0.0 = disabled; >0 clips gradient norm to this value
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -442,6 +444,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_max = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -471,15 +475,23 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # When max_norm=inf, clip_grad_norm_ does not clip but still returns the total grad norm.
+        clip_max = cfg.grad_clip if cfg.grad_clip > 0 else float("inf")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max)
         optimizer.step()
         scheduler.step()
 
+        gn = grad_norm.item()
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm_sum += gn
+        if gn > epoch_grad_norm_max:
+            epoch_grad_norm_max = gn
         n_batches += 1
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -512,13 +524,16 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/lr_end_of_epoch": current_lr,
+        "train/grad_norm_mean": epoch_grad_norm_mean,
+        "train/grad_norm_max": epoch_grad_norm_max,
+        "grad_clip": cfg.grad_clip,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} gn_mean={epoch_grad_norm_mean:.3f} gn_max={epoch_grad_norm_max:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
