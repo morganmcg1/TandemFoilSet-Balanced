@@ -67,6 +67,48 @@ Decouple channel weighting: apply [1,1,3] only to surf loss, vol loss keeps unif
 
 ---
 
+## 2026-05-12 22:30 — PR #1414: Smooth L1 rebased (Huber β=0.1 + channel_weights=[1,1,3])
+
+- **Branch:** `charliepai2g48h2-alphonse/smooth-l1-loss` (rebased + re-run)
+- **Hypothesis:** Stack Smooth L1 (β=0.1) on top of #1418's channel_weights=[1,1,3]. L1 directly minimizes median absolute error = MAE eval criterion. Both axes are orthogonal.
+- **Status:** MERGED ✅ — **new baseline** (val_avg/mae_surf_p = 95.336)
+
+### Results
+
+| Metric | Value | vs Baseline #1424 (102.85) |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 13) | **95.336** | **−7.3% BETTER** 🏆 |
+| val_single_in_dist | 118.539 | −11.3% |
+| val_geom_camber_rc | 105.115 | −7.9% |
+| val_geom_camber_cruise | 71.196 | −13.3% |
+| val_re_rand | 86.495 | −10.2% |
+| test_single_in_dist | 103.264 | — |
+| test_geom_camber_rc | 96.989 | — |
+| test_geom_camber_cruise | **61.217** ✓ | — |
+| test_re_rand | 81.121 | — |
+| test_avg/mae_surf_p (clean 4-split) | **85.648** | — (baseline was partial NaN) |
+| Epochs completed | 13/14 | (timeout) |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-alphonse-smooth-l1-rebased-20260512-211440/metrics.jsonl`
+- `models/model-charliepai2g48h2-alphonse-smooth-l1-rebased-20260512-211440/metrics.yaml`
+
+### Commentary
+
+Smooth L1 + CW stacked delivers −7.3% over the warmup/clip baseline (102.85) and −22.3% over the original #1418 MSE baseline. Uniform gain across all 4 val splits (−7.9% to −13.3%), strongest on cruise OOD (−13.3%) consistent with hypothesis.
+
+Notably, this combined result (95.336) is slightly worse than Smooth L1 alone on pre-CW code (90.585 from first run). Alphonse identifies two hypotheses: RNG noise (single seed, ~5% spread plausible) OR mild antagonism between Smooth L1 and CW=[1,1,3]. Mechanism for antagonism: Smooth L1 already de-emphasizes large pressure residuals (linear regime above β=0.1); CW then re-upweights pressure 3×, partially canceling the first effect.
+
+**Incidental win:** NaN-skip fix (`y_finite` + `nan_to_num(y)` before accumulation) now merged. `test_avg/mae_surf_p` is clean 4-split (85.648) for the first time. Previously NaN due to IEEE 754 inf×0=NaN in accumulator.
+
+⚠️ **Note on merged config:** The validated metric (95.336) was from lr=5e-4 run (pre-#1424 state). The merged code combines Smooth L1 + CW + warmup + clip (lr=7e-4). Full-stack validation assigned to alphonse as follow-up PR #1663.
+
+### Follow-up direction
+
+PR #1663 — alphonse to run the FULL stack (all merged changes, no train.py edits needed) to confirm actual post-merge metric. β sweep (β ∈ {0.05, 0.02, 0.3}) pending on that baseline.
+
+---
+
 ## 2026-05-12 21:00 — PR #1414: Smooth L1 (Huber β=0.1) loss in normalized space
 
 - **Branch:** `charliepai2g48h2-alphonse/smooth-l1-loss`
