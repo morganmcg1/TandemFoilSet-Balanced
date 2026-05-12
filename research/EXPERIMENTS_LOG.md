@@ -1,5 +1,54 @@
 # SENPAI Research Results
 
+## 2026-05-12 19:15 — PR #1464: Per-channel loss weighting (pressure ×5)
+
+- Branch: `charliepai2g24h2-alphonse/channel-weight-p5`
+- Hypothesis: chan_w=[1,1,5] applied to sq_err aligns gradient with primary metric (val_avg/mae_surf_p)
+- Artifacts: `models/model-charliepai2g24h2-alphonse-channel-weight-p5-20260512-181154/metrics.jsonl`
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy | mae_vol_p |
+|---|---:|---:|---:|---:|
+| val_single_in_dist     | 155.84 | 2.73 | 1.14 | 182.03 |
+| val_geom_camber_rc     | 146.50 | 3.80 | 1.44 | 170.88 |
+| val_geom_camber_cruise | 103.54 | 2.06 | 0.88 | 115.59 |
+| val_re_rand            | 129.86 | 2.90 | 1.18 | 141.11 |
+| **val_avg**            | **133.94** | 2.87 | 1.16 | 152.40 |
+| test_single_in_dist    | 141.26 | 2.46 | 1.12 | 163.72 |
+| test_geom_camber_rc    | 145.90 | 3.91 | 1.38 | 167.33 |
+| test_geom_camber_cruise| NaN   | 1.98 | 0.83 | NaN   |
+| test_re_rand           | 127.03 | 2.79 | 1.17 | 135.38 |
+| 3-split test avg       | 125.48 |      |      |       |
+
+**Config:** chan_w=[1,1,5], bs=4, lr=5e-4, surf_weight=10, n_hidden=128, n_layers=5, n_head=4, slice_num=64. 14 epochs (30 min timeout-cut), still improving. Peak VRAM 42.1 GB.
+
+**Decision: MERGED — new floor at val_avg/mae_surf_p=133.9353 (beats previous 143.15 by 6.4%).**
+
+**Analysis:** Channel weighting directly aligned training gradient with the primary metric. Improvement spans all 4 splits (val_re_rand marginal but positive). Val curve still descending at epoch 14 — this result is timeout-limited. Next: try chan_w=[1,1,10] to map the response curve. Also flag: two students independently found and documented the test NaN bug (data/scoring.py `0*NaN` propagation from one bad GT sample in test_geom_camber_cruise).
+
+---
+
+## 2026-05-12 19:15 — PR #1489: AoA-sign flip augmentation (50% per-batch)
+
+- Branch: `charliepai2g24h2-thorfinn/aoa-flip-aug`
+- Hypothesis: 50% per-batch AoA flip augmentation increases AoA coverage for OOD generalization
+- Artifacts: `models/model-charliepai2g24h2-thorfinn-aoa-flip-aug-20260512-180844/metrics.jsonl`
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| val_single_in_dist     | 185.20 | 2.53 | **2.40** |
+| val_geom_camber_rc     | 150.35 | 3.21 | **2.88** |
+| val_geom_camber_cruise | 113.38 | 1.70 | **1.30** |
+| val_re_rand            | 136.74 | 2.51 | **1.87** |
+| **val_avg**            | **146.42** |     |      |
+
+**Config:** per-batch 50% AoA flip, bs=4, lr=5e-4, all baseline defaults. 14 epochs (timeout-cut at epoch 11 best). Peak VRAM 42.1 GB.
+
+**Decision: SENT BACK for changes (146.42 > 133.94 floor, plus Uy degradation 2.11 vs 0.98).**
+
+**Analysis:** mae_surf_Uy doubled vs unaugmented (2.11 vs 0.98 for tanjiro), suggesting per-batch flipping harms Uy precision — the model sees Uy flipped for all samples in the batch 50% of the time, which may cause hedging. The interesting OOD cruise result (113.38) warrants follow-up. Sent back to try per-sample flip at p=0.25.
+
+---
+
 ## 2026-05-12 19:00 — PR #1486: Scale batch size 4 → 8 (fallback, bs=16 OOMed)
 
 - Branch: `charliepai2g24h2-tanjiro/batch-size-16`

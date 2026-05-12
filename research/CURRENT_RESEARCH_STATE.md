@@ -1,45 +1,56 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 19:00
+- **Date:** 2026-05-12 19:20
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2)
 - **Most recent human researcher direction:** none on this branch
 
 ## Current floor
 
-**val_avg/mae_surf_p = 143.15** (PR #1486, merged)  
-Config: bs=8/lr=7e-4/baseline-model, 14 epochs in 30 min (timeout-cut, still improving)  
-Note: floor was set by a fallback run (bs=16 OOMed) — true bs=4 baseline value unknown.
+**val_avg/mae_surf_p = 133.9353** (PR #1464, merged)  
+Config: chan_w=[1,1,5], bs=4, lr=5e-4, ~0.66M baseline model, 14 epochs (timeout-cut)  
+Test 3-split avg: 125.48 (excl. cruise NaN)
 
-**Known test NaN bug:** `test_geom_camber_cruise/000020.pt` has NaN p-channel GT. The `0 * NaN = NaN` mask propagation in `data/scoring.py` makes `test_avg/mae_surf_p` NaN for all experiments. Val metrics are clean (4 splits all finite). Ranking on `val_avg/mae_surf_p` is unaffected.
+**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Documented by 2 students (alphonse + thorfinn). Fix = one line in `data/scoring.py` (protected file) — will address in a dedicated bug-fix PR.
 
 ## Active experiments (WIP)
 
-| PR | Student | Hypothesis | Lever |
-|---|---|---|---|
-| #1464 | alphonse | Per-channel loss weighting (pressure ×5) | Loss alignment |
-| #1468 | askeladd | surf_weight 10 → 30 | Loss alignment |
-| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency |
-| #1482 | frieren | 3-epoch warmup + peak lr=1e-3 + cosine | Optimization |
-| #1485 | nezuko | slice_num 64 → 128 | Physics-token resolution |
-| #1489 | thorfinn | AoA-sign flip augmentation (50% prob) | OOD geometry generalization |
-| #1524 | tanjiro | Gradient accumulation (accum=4, eff_bs=16) | Gradient quality |
-| #1526 | edward | Model scaling: n_hidden=224, n_layers=7 (~3.4M) | Capacity |
+| PR | Student | Hypothesis | Lever | Round |
+|---|---|---|---|---|
+| #1468 | askeladd | surf_weight 10 → 30 | Loss alignment | 1 |
+| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 |
+| #1482 | frieren | 3-epoch warmup + peak lr=1e-3 + cosine | Optimization | 1 |
+| #1485 | nezuko | slice_num 64 → 128 | Physics-token resolution | 1 |
+| #1489 | thorfinn | AoA flip (refine: per-sample p=0.25) | OOD augmentation | 1-revised |
+| #1524 | tanjiro | Gradient accumulation (accum=4, eff_bs=16) | Gradient quality | 2 |
+| #1526 | edward | Model scaling: n_hidden=224, n_layers=7 (~3.4M) | Capacity | 2 |
+| #1531 | alphonse | Channel weight p=10 (sweep from winning p=5) | Loss alignment | 2 |
 
-## Key findings from round 1 (first completions)
+## Key findings so far
 
-1. **pad_collate is the memory bottleneck for batch scaling** — bs=8 peaks at 84 GB; bs=16 OOMs. Gradient accumulation is the correct way to test effective batch scaling.
-2. **256-8-8 doesn't fit at bs=4** — activation memory fills 94 GB. Must use bs=2 or AMP to try the full-size model.
-3. **Test NaN bug** — `test_geom_camber_cruise/000020.pt` has corrupt p GT. Needs fix in scoring or data.
+1. **Channel weight [1,1,5] is a confirmed win** (+6.4% on floor, PR #1464). Primary metric alignment via loss weighting is a strong lever.
+2. **pad_collate makes batch scaling expensive** — bs=8 uses 84 GB. Gradient accumulation is the correct approach for larger effective batches.
+3. **256-8-8 OOMs at bs=4**; 224-7-8 (~3.4M) is the correct intermediate test for model capacity.
+4. **AoA flip per-batch degrades Uy** (mae_surf_Uy doubles). Per-sample flip at lower probability is the fix.
+5. **Test NaN in test_geom_camber_cruise** — one bad GT sample propagates through scoring. Val is clean. Needs bug-fix PR.
+6. **VRAM budget:** bs=4 baseline uses ~42 GB. bf16 (fern) could halve this to ~21 GB and allow 256-8-8 or bs=8 to fit cleanly.
 
-## Potential next research directions (round 3 candidates)
+## Round-2 hypothesis pipeline
 
-- **Stack round-1 winners**: AMP + warmup + channel weighting should compound if orthogonal.
-- If AMP wins: re-attempt 256-8-8 at bs=4 with bf16 (halves activation memory).
-- **NaN guard fix**: add `nan_to_num` or sample-skip in `evaluate_split` for clean test metrics.
-- **Sort-by-size sampler**: batch similar mesh sizes to reduce padding waste (frees VRAM headroom).
-- Dual surface/volume output heads (AB-UPT style) — if loss alignment levers are exhausted.
-- Fourier positional encoding of (x, z).
-- surf_weight > 30 if askeladd's result wins cleanly.
-- Larger slice_num (192/256) if nezuko (128) wins cleanly.
+### High priority (stack winners)
+- **alphonse chan-weight-p10**: does p=10 compound vs p=5? Map the response curve.
+- **askeladd surf-weight-30**: if both surface weight levers win, stack chan_w=[1,1,5]+surf_weight=30 in round 3.
+
+### Medium priority
+- **tanjiro grad-accum**: once confirmed, effective bs=16 should compound with any loss/architecture change.
+- **edward model-224-7-8**: if 3.4M params improve on 0.66M, the capacity bottleneck is confirmed.
+
+### Potential round-3 directions
+- If AMP (fern) wins: retry 256-8-8 with bf16 (activations halved, ~47 GB → fits).
+- Stack best winners: chan_w=[1,1,5|10] + warmup (if frieren wins) + AMP (if fern wins) + surf_weight=30 (if askeladd wins).
+- NaN guard fix in scoring.py (small PR — enables clean test_avg across all experiments).
+- Sort-by-size sampler (batching by mesh size reduces pad_collate waste).
+- If augmentation pays off: per-sample per-domain AoA flip at p=0.25.
+- Dual surface/volume heads (AB-UPT style) if loss-alignment levers saturate.
+- Fourier positional encoding for (x, z).
 </content>
