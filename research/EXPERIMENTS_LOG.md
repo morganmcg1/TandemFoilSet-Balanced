@@ -2,6 +2,81 @@
 
 ---
 
+## 2026-05-12 21:xx — PR #1456: [bf16-amp] bf16 automatic mixed precision
+
+- **Branch**: charliepai2g24h1-alphonse/bf16-amp
+- **Hypothesis**: bf16-amp reduces memory pressure and increases throughput, enabling more epochs in the 30-min wall-clock budget.
+- **Status**: SENT BACK (v2) — regression due to schedule misalignment; rebase + T_max=18 required
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p | 114.21 (REGRESSION) |
+| Baseline | 96.5587 |
+| Delta | +18.2% (WORSE) |
+| Epochs completed | 18 (vs 14 baseline — +30% throughput confirmed) |
+
+**Analysis**: bf16-amp confirmed 30% throughput gain (18 vs 14 epochs). Regression was entirely due to running with old `T_max=50`: at 18 epochs, only 36% of the cosine schedule was used. Sent back to rebase onto new baseline (rel-L2 loss), set `T_max=18` to match new epoch budget, and re-run. If throughput advantage holds, the compound (18 epochs × aligned schedule × relative-L2 base) should beat 89.61.
+
+**Artifacts**: Not yet committed (stale branch, not merged)
+
+---
+
+## 2026-05-12 21:xx — PR #1473: [huber-loss-v2] Huber loss (δ=0.5) rebased onto grad-clip baseline
+
+- **Branch**: charliepai2g24h1-tanjiro/huber-loss
+- **Hypothesis**: Huber loss caps outlier-residual gradients on extreme-value mesh nodes; on top of grad_clip + lr=1e-3 baseline, should improve convergence stability and final val MAE.
+- **Status**: SENT BACK (v3) — beat old baseline (96.56) but not new baseline (89.61 from relative-l2); next step is Huber on top of relative-L2
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | **90.0929** |
+| val_single_in_dist | 104.29 |
+| val_geom_camber_rc | 101.05 |
+| val_geom_camber_cruise | 70.12 |
+| val_re_rand | 84.92 |
+| test_avg/mae_surf_p | 78.97 |
+| huber_delta | 0.5 |
+| huber_l2_frac (ep 1 → 14) | 76% → 94% |
+| Baseline (old) | 96.5587 |
+| Delta vs old baseline | -6.69% |
+| New baseline | 89.6121 |
+| Delta vs new baseline | +0.54% (just missed) |
+
+**Analysis**: Clean training, no instabilities, L2-fraction trajectory perfect (capping early, MSE-like late). Beat the old MSE baseline by 6.69% but lost to fern's relative-L2 by a narrow margin (90.09 vs 89.61). Sent back to compound: apply Huber to normalized residuals in relative-L2 space. New delta should be tuned to the normalized scale (~0.05–0.1 rather than 0.5). The mechanisms are complementary: relative-L2 handles inter-sample scale variation, Huber handles intra-sample node outliers.
+
+**Artifacts**: `models/` path TBD after v3 re-run
+
+---
+
+## 2026-05-12 21:xx — PR #1460: [relative-l2-loss] Per-sample relative L2 loss
+
+- **Branch**: charliepai2g24h1-fern/relative-l2-loss
+- **Hypothesis**: Relative L2 loss (`||pred-y||²/||y||²`) normalizes by sample energy, automatically down-weighting high-energy (high-Re) samples and up-weighting low-energy ones — a better inductive bias for the multi-Re dataset.
+- **Status**: MERGED — new baseline
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | **89.6121** |
+| val_single_in_dist | 109.07 |
+| val_geom_camber_rc | 97.99 |
+| val_geom_camber_cruise | **67.09** |
+| val_re_rand | 84.29 |
+| test_avg/mae_surf_p (4-split) | **78.14** |
+| test_single_in_dist | 91.14 |
+| test_geom_camber_rc | 85.89 |
+| test_geom_camber_cruise | 56.35 |
+| test_re_rand | 79.18 |
+| Peak VRAM | 42.11 GB |
+| Epochs | 14 (~131s/epoch, 30-min cap) |
+| Baseline | 96.5587 |
+| Delta | **-7.20%** |
+
+**Analysis**: Relative-L2 loss's per-sample energy normalization creates a flatter cross-split loss landscape. The gradient clip fraction dropped to 0.984 at ep 14 (vs 1.0 throughout on MSE) — the loss surface is genuinely smoother. Val was still falling at ep 14 (95.94 → 93.35 → 89.61 in last 3 epochs), indicating more headroom with more epochs. Cruise split improved dramatically (67.09 vs 74.35 baseline). RC and single_in_dist improved but remain the hardest splits — both span the full Re range and benefit most from architecture-level scale separation (H2 re-conditioned-scaling).
+
+**Artifacts**: `models/model-charliepai2g24h1-fern-relative-l2-loss-20260512-200551/metrics.jsonl`
+
+---
+
 ## 2026-05-12 20:41 — PR #1462: [warmup-cosine-v2] 1-epoch LinearLR warmup + CosineAnnealingLR
 
 - **Branch**: charliepai2g24h1-frieren/warmup-cosine

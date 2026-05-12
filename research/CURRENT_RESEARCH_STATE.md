@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 20:05 (round 2 underway; higher-lr-cosine-14 is new baseline)
+- **Date**: 2026-05-12 21:15 (round 2 underway; relative-l2-loss is new baseline)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -8,34 +8,36 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 96.5587** — PR #1518 (higher-lr-cosine-14), merged 2026-05-12.
+**val_avg/mae_surf_p = 89.6121** — PR #1460 (relative-l2-loss), merged 2026-05-12.
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), `AdamW(lr=1e-3, wd=1e-4)`, **`CosineAnnealingLR(T_max=14)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, MSE loss. NaN scoring fix in `train.py:evaluate_split`. ~14 epochs / 30 min.
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params), `AdamW(lr=1e-3, wd=1e-4)`, `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, **per-sample relative L2 loss** (`||pred-y||²/||y||²`). ~14 epochs / 30 min.
 
-Test avg 85.87 (all 4 splits, NaN-free for first time).
+Test avg 78.14 (all 4 splits).
 
 ---
 
 ## Current Research Focus
 
-**The key insight from round 2**: Schedule alignment matters enormously. By setting T_max=14 to match the real epoch budget, the cosine schedule actually reaches its low-LR fine-tuning phase. Combined with lr=1e-3 (safe under grad_clip=1.0), this gave -17.6% over the previous best. The old T_max=50 was wasting 64% of the schedule.
+**The key insight from round 2a**: Loss normalization matters. Relative-L2 loss (`||pred-y||²/||y||²`) normalizes by sample energy, creating a flatter cross-split loss landscape. This gave -7.20% over the MSE+lr+schedule baseline. Gradient clip fraction dropped from 1.0 to 0.984 — the loss surface is genuinely smoother.
 
-**Val still falling at epoch 14** — the model has not converged within the 30-min cap. This is the key constraint on further progress. Options:
-1. More epochs per 30 min (bf16-amp — alphonse)
-2. Faster convergence (higher lr — thorfinn; Huber loss — tanjiro; warmup — frieren)
-3. Architecture that converges faster (wider-deeper — edward)
-
-**Key open questions**:
-1. Does Huber loss compound on top of the new LR/schedule baseline? (Tanjiro's rebase will answer this — now needs to beat 96.56 instead of 117.17)
-2. Does lr=1.5e-3 push past 96.56 or find the LR ceiling? (Thorfinn's new PR #1539)
-3. Does bf16-amp enable 18-20 epochs in 30 min, and what would that yield with the new LR?
-4. Can architecture scaling (wider-deeper) converge faster to a better solution?
+**Val still falling at epoch 14** — model still not converged. Two compounding levers remain:
+1. More epochs per 30 min (bf16-amp — alphonse, v2; needs T_max alignment fix)
+2. Architecture-level scale handling (re-conditioned-scaling — fern, new; orthogonal to loss-level fix)
+3. Gradient surgery (PCGrad — frieren, ongoing)
+4. Loss composition (Huber on relative-L2 — tanjiro, v3; within-sample node outlier handling)
 
 **Per-split profile** at new baseline:
-- Easiest: `val_geom_camber_cruise` (74.35 val, 61.86 test) — big improvement, cruise regime
-- Hardest: `val_geom_camber_rc` (110.59) and `val_single_in_dist` (108.58) — raceCar regime still challenging
+- Easiest: `val_geom_camber_cruise` (67.09 val, 56.35 test) — cruise regime well-solved
+- Hardest: `val_single_in_dist` (109.07) and `val_geom_camber_rc` (97.99) — high-Re regime still challenging
+- `val_re_rand` (84.29) intermediate — spans Re range but with random sampling
 
-**NaN fix**: y-sanitization is now in `train.py:evaluate_split` (merged with PR #1518). All future PRs get it automatically via rebase.
+**Key open questions**:
+1. Does a learned Re-conditioned scale head compound with relative-L2 loss? (Fern's new PR #1599)
+2. Does bf16-amp + T_max=18 give meaningful gains over the 14-epoch relative-L2 baseline? (Alphonse v2)
+3. Does PCGrad gradient surgery address gradient conflict at 100% clip rate? (Frieren PR #1579)
+4. Does Huber applied to normalized residuals (relative-Huber) add outlier capping beyond relative-L2? (Tanjiro v3)
+
+**NaN fix**: y-sanitization is in `train.py:evaluate_split` (merged with PR #1518). All future PRs get it automatically.
 
 ---
 
@@ -43,26 +45,26 @@ Test avg 85.87 (all 4 splits, NaN-free for first time).
 
 | PR | Student | Slug | Status | Notes |
 |----|---------|------|--------|-------|
-| #1456 | alphonse | `bf16-amp` | WIP | Just picked up assignment (rate limit cleared); running now |
-| #1457 | askeladd | `surf-weight-50` | WIP (v2) | surf_weight=30 + grad-clip baseline |
-| #1458 | edward | `wider-deeper` | WIP (v2) | batch_size=4 + grad-clip; just picked up, rebasing |
-| #1460 | fern | `relative-l2-loss` | WIP | Pre-new-baseline; needs to beat 96.56 |
+| #1456 | alphonse | `bf16-amp` | WIP (v2) | Sent back: rebase + T_max=18 to match 18-epoch bf16 budget |
+| #1457 | askeladd | `surf-weight-50` | WIP (v2) | surf_weight=30 + new baseline; needs to beat 89.61 |
+| #1458 | edward | `wider-deeper` | WIP (v2) | batch_size=4 + grad-clip; rebasing onto new baseline |
+| #1460 | fern | `relative-l2-loss` | MERGED | New baseline 89.61. Fern reassigned to re-conditioned-scaling |
 | #1467 | nezuko | `more-slices-128` | WIP | Pre-new-baseline; recovering from rate limit |
-| #1473 | tanjiro | `huber-loss` | WIP (v2, pending rebase) | Rebase onto new LR baseline, target ≤96.56 |
-| #1539 | thorfinn | `lr-1.5e-3-cosine-14` | WIP (new) | lr=1.5e-3, T_max=14; LR ceiling test |
-| #1579 | frieren | `pcgrad-surgery` | WIP (new) | PCGrad vol/surf gradient surgery; HIGH priority |
+| #1473 | tanjiro | `huber-loss` | WIP (v3) | Rebase + Huber on normalized residuals (δ~0.05-0.1), target ≤89.61 |
+| #1539 | thorfinn | `lr-1.5e-3-cosine-14` | WIP | lr=1.5e-3, T_max=14; LR ceiling test; needs to beat 89.61 |
+| #1579 | frieren | `pcgrad-surgery` | WIP | PCGrad vol/surf gradient surgery; HIGH priority |
+| #1599 | fern | `re-conditioned-scaling` | WIP (new) | Learned Re-scale head; HIGH priority |
 
 ---
 
 ## Ruled Out
 
-- **warmup-cosine** (PR #1462, closed): within-noise tie (+0.5% worse). Warmup is redundant with grad_clip=1.0 at this budget — the clip already bounds the first step. Exhausted. Would only help if we drop grad_clip or push LR well above 1e-3.
+- **warmup-cosine** (PR #1462, closed): within-noise tie (+0.5% worse). Warmup is redundant with grad_clip=1.0 at this budget — the clip already bounds the first step. Exhausted.
 
 ## Potential Next Research Directions
 
 Round 2 HIGH priority (from `RESEARCH_IDEAS_2026-05-12_round2.md`):
 - **`soap-optimizer`**: Quasi-Newton (arxiv 2502.00604), 2-10× over Adam on PDE benchmarks; requires `pip install soap-optimizer`. Not yet assigned.
-- **`re-conditioned-scaling`**: Re-conditioned output scale head reading `log_Re` from input dim 13; targets output scale heterogeneity across Re=100K–5M. Not yet assigned.
 
 Round 2 MEDIUM priority:
 - **`sgdr-restarts`**: CosineAnnealingWarmRestarts(T_0=7) — two cycles in 14 epochs; orthogonal to current schedule.
@@ -70,8 +72,10 @@ Round 2 MEDIUM priority:
 - **`per-channel-loss-weights`**: Up-weight p channel in MSE loss.
 
 Round 3 compound candidates:
-- **Huber + bf16-amp**: Once both merge independently, compound should dominate.
+- **relative-L2 + bf16-amp**: Once bf16 v2 merges, compound with more epochs should dominate.
+- **re-conditioned-scaling + relative-L2**: Already set up — fern's PR #1599 runs on rel-L2 base.
 - **PCGrad + re-conditioned-scaling**: If pcgrad-surgery improves gradient quality, scaling fix should compound.
-- **wider-deeper + new LR**: Pending edward's rebase result.
+- **relative-Huber + relative-L2**: Tanjiro's v3 is this compound.
+- **wider-deeper + relative-L2**: Pending edward's rebase result.
 
-**Plateau protocol**: If 5 consecutive experiments fail to beat 96.5587, escalate to architecture overhaul (FNO spectral layer, GNOT multi-query attention, graph neural operators).
+**Plateau protocol**: If 5 consecutive experiments fail to beat 89.6121, escalate to architecture overhaul (FNO spectral layer, GNOT multi-query attention, graph neural operators).
