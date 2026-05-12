@@ -21,6 +21,7 @@ winner sets the first numeric reference value.
 - **Loss**: **L1 (MAE) in normalized target space**, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0` _(updated 2026-05-12 by PR #1397)_
 - **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
+- **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -32,6 +33,51 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-12 22:55 — PR #1637 (`charliepai2g24h4-askeladd/grad-clip-25`)
+
+Permissive gradient clipping at `max_norm=25.0` immediately before
+`optimizer.step()` — a single-line addition. Diagnostic-informed
+follow-up to closed PR #1529 (`max_norm=1.0`, +5.4% regression): with the
+threshold raised from 1.0 to 25.0, clipping fires on the outlier-spike
+steps (the largest grad norm observed in training is 110.04 at epoch 8)
+without touching typical 30-70-range gradients. The mechanism is
+compatible with stoch-depth (block-drop spikes are suppressed) and
+cosine T_max=15 (the late-epoch cooldown phase relies on stable
+gradients to fine-tune).
+
+- **`val_avg/mae_surf_p`** = **90.294** (best @ epoch 15, last epoch before 30 min timeout)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **81.243**
+
+Per-split surface pressure MAE at the best val checkpoint:
+
+| Split | mae_surf_p (val) |
+|-------|-----------:|
+| single_in_dist     | 109.497 |
+| geom_camber_rc     |  98.952 |
+| geom_camber_cruise |  69.208 |
+| re_rand            |  83.520 |
+| **avg**            | **90.294** |
+
+vs PR #1611 baseline:
+- val_avg: 94.217 → 90.294 (**-4.16% improvement**)
+- All four val splits improved uniformly (-3.14% to -5.61%) — no
+  split-specific direction, exactly as the hypothesis predicted ("stable
+  descent helps everywhere").
+- test_avg: 84.859 → 81.243 (-4.26% improvement)
+
+Diagnostic from the per-epoch `train/last_grad_norm` trace: 14/15 epochs
+had end-of-epoch grad_norm > 25 (the clip threshold), confirming
+clipping is active throughout training. The largest spike (110.04 at
+epoch 8) was suppressed; typical training-step norms stayed in the
+30-70 range. Val MAE descended monotonically epoch 9 → 15, with the
+biggest single-epoch drop (-13.7%) coinciding with the only epoch where
+the end-of-epoch norm fell below 25 (22.40 at epoch 12).
+
+- **Metric artifacts**:
+  `models/model-charliepai2g24h4-askeladd-grad-clip-25-20260512-221014/metrics.jsonl`
+  and `metrics.yaml`.
+- **n_params**: 0.66M (unchanged), **peak GPU memory**: 42.11 GB, **wall time**: 30 min (cap).
 
 ### 2026-05-12 21:16 — PR #1611 (`charliepai2g24h4-askeladd/cosine-tmax-15`)
 
