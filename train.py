@@ -228,6 +228,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_samples_total = 0
+    n_samples_skipped = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -236,13 +238,37 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # Eval forward in fp32. bf16 training is fine but eval in fp32 is
+            # cheap and avoids any chance of bf16-induced non-finites at extreme
+            # test points.
+            with torch.amp.autocast("cuda", enabled=False):
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                y_norm = (y - stats["y_mean"]) / stats["y_std"]
+                pred = model({"x": x_norm})["preds"].float()
 
-            sq_err = (pred - y_norm) ** 2
+            B = pred.shape[0]
+            n_samples_total += B
+
+            # Per-sample skip: drop any sample whose y or pred has non-finite
+            # entries. Matches the scorer's `y_finite` semantics — pre-filtered
+            # here because `accumulate_batch` multiplies err by a zero mask
+            # without first sanitizing, and nan*0=nan leaks NaN into the
+            # channel-level aggregator (e.g. test_geom_camber_cruise sample 20
+            # has NaN in the pressure channel of y).
+            pred_fin = torch.isfinite(pred.reshape(B, -1)).all(dim=-1)
+            y_fin = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            keep = pred_fin & y_fin
+            n_samples_skipped += int((~keep).sum().item())
+
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            sq_err = (pred - y_norm) ** 2
+            # Zero out contributions from skipped samples so NaN doesn't leak
+            # into the loss running mean either.
+            sq_err = torch.where(
+                keep.view(B, 1, 1).expand_as(sq_err),
+                sq_err, torch.zeros_like(sq_err),
+            )
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -253,16 +279,22 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            if keep.any():
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
+                ds, dv = accumulate_batch(
+                    pred_orig[keep], y[keep], is_surface[keep], mask[keep],
+                    mae_surf, mae_vol,
+                )
+                n_surf += ds
+                n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
            "loss": vol_loss + surf_weight * surf_loss}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
+    out["n_samples_total"] = n_samples_total
+    out["n_samples_skipped"] = n_samples_skipped
     return out
 
 
@@ -380,6 +412,8 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    amp: bool = True              # bfloat16 autocast on forward+loss
+    grad_accum: int = 2           # accumulate over N mini-batches before stepping
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -478,28 +512,38 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    optimizer.zero_grad()
+    for step_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.amp):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            # Loss in float32 for numerical stability
+            sq_err = (pred.float() - y_norm.float()) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = (vol_loss + cfg.surf_weight * surf_loss) / cfg.grad_accum
 
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
-        global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+
+        is_step = ((step_idx + 1) % cfg.grad_accum == 0) or ((step_idx + 1) == len(train_loader))
+        if is_step:
+            optimizer.step()
+            optimizer.zero_grad()
+            global_step += 1
+            # Log the un-scaled loss for human readability
+            wandb.log({"train/loss": loss.item() * cfg.grad_accum,
+                       "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
