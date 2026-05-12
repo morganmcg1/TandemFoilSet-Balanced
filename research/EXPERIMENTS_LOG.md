@@ -114,3 +114,49 @@ Per-split val (epoch 18):
 | **avg** | **98.77** |
 
 **Conclusion:** MERGED as new baseline. 32.5% improvement over previous best (146.25). bf16 dramatically reduced both memory (32.9 vs 54.5 GB) and time-per-epoch (99 vs 172s). Model still descending at epoch 18 — schedule mismatch (T_max=50 but only ~18 achievable) means cosine LR ends at ~71% of peak. Follow-ups: (1) fp32 eval to recover faithful test_avg (frieren PR #1556), (2) T_max=20 retune so cosine fully cools within achievable budget (thorfinn PR #1557).
+
+---
+
+## 2026-05-12 20:57 — PR #1557: Retune cosine T_max=50 → 20 (thorfinn)
+- willowpai2g24h4-thorfinn/tmax-retune-20
+- **Hypothesis:** With T_max=50 but only ~18 epochs achievable, cosine LR ends at ~71% of peak — schedule never enters its low-LR refinement tail. Resizing T_max=20 should let LR cool fully to ~0 within achievable budget. Predicted: 3-8% val improvement.
+- **W&B:** `iycgna1l`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best epoch 13) | **112.9602** (−14.4% worse than baseline 98.77) |
+| test_avg/mae_surf_p (4-split, bf16 eval) | **101.4561** ✓ first faithful 4-split test on this branch |
+| Epochs completed | 13 / 20 (30-min cap) |
+| Sec/epoch | ~139s (not the predicted ~99s — throughput variance) |
+| Peak GPU | 93.76 GB |
+
+Per-test-split surface MAE (bf16 eval, scoring fix in place):
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 130.32 |
+| test_geom_camber_rc | 106.18 |
+| test_geom_camber_cruise | 70.73 |
+| test_re_rand | 98.59 |
+| **mean** | **101.46** |
+
+**Conclusion:** CLOSED. Hypothesis disproven — at this budget, T_max=50 was already near-optimal because the model is compute-bottlenecked (still descending at termination) rather than schedule-bottlenecked. At epoch 13 LR was 27% of peak (vs 74% under T_max=50), so the run trained at roughly half the LR throughout, slowing convergence. The achievable epoch count (13 here) was lower than predicted because throughput came in at 139s/epoch not 99s.
+
+**Key learning:** First faithful 4-split test_avg = 101.46 on this branch. Compute throughput, not LR schedule shape, is the bottleneck — directly motivates torch.compile follow-up (PR #1584).
+
+---
+
+## 2026-05-12 20:55 — PR #1522: Bigger hidden (n_hidden=192, n_head=6) on slice_num=128 baseline (tanjiro)
+- willowpai2g24h4-tanjiro/hidden192-on-slice128
+- **Hypothesis:** Wider model (~2.25× params, 0.65M → 1.46M) reduces val_avg/mae_surf_p with slice_num=128 baseline + grad clipping.
+- **W&B:** `q9ja73zj`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best epoch 7) | **144.9091** |
+| test 3-split avg (excl. cruise) | 145.75 |
+| Epochs completed | 7 / 50 (30-min cap) |
+| Sec/epoch | ~264s |
+| Peak GPU | 95.37 GB (vs 96 GB cap — very tight) |
+
+**Conclusion:** SENT BACK. Tanjiro built on top of the **old** baseline (PR #1396, pre-bf16) — they branched before PR #1415 was merged and never picked up bf16. Their 144.91 was compared against the old baseline of 146.25 (claimed −0.9% improvement), but the **current** baseline is 98.77. Asked to rebase on the merged baseline (which now includes bf16 + grad_clip), then re-run hidden192/n_head6 on top. With bf16, memory should drop ~40% (95 GB → ~55-60 GB) and epoch count should rise from 7 → ~15-17, giving the wider model a real shot at the new baseline. Directional signal interesting: cruise −8.6%, re_rand −9.5% on val (vs old baseline) suggests width helps OOD geometry/Reynolds; needs re-test with full bf16 budget.

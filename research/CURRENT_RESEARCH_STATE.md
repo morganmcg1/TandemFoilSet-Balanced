@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 ~20:30 UTC
+- **As of:** 2026-05-12 ~21:05 UTC
 - **Track:** `willow-pai2g-24h-r4` (round 4 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
@@ -9,13 +9,11 @@
 
 ## Current research focus
 
-Round-2 cleanup and follow-up experiments on the bf16 baseline:
+Round-3 confirmed compute is the bottleneck, not architecture or schedule:
 
-1. **Scoring fix landed** (PR #1521) — `test_avg/mae_surf_p = 131.14` first valid test metric. Cruise node bf16-inf still zeroed by `nan_to_num` (biased low) — fp32 eval follow-up assigned.
-2. **bf16 is the big winner** (PR #1415) — 32.5% val improvement, 42% throughput gain, 40% VRAM reduction. Model still descending at 30-min cutoff; schedule-epoch mismatch is the suspected bottleneck.
-3. **Two immediate follow-ups in flight:**
-   - frieren (PR #1556): fp32 eval — removes bf16 autocast from `evaluate_split` only; recovers faithful `test_avg/mae_surf_p` for cruise node.
-   - thorfinn (PR #1557): T_max=20 — resizes CosineAnnealingLR to the achievable epoch budget so LR cools fully to ~0.
+1. **T_max=20 disproven** (PR #1557 closed) — Thorfinn's analysis shows the model is compute-bottlenecked, still descending at termination. T_max=50 is near-optimal at the current achievable budget. **First faithful 4-split test_avg = 101.46** recorded.
+2. **Hidden-192 retest needed on bf16 baseline** (PR #1522 sent back) — Tanjiro built on the OLD baseline (pre-bf16); claimed 144.91 vs old 146.25, but current baseline is 98.77. Rebased retry on bf16 baseline should give ~15-17 epochs (vs 7) and unlock the wider model's potential. Directional: width helps cruise/re_rand splits.
+3. **Throughput is the lever:** thorfinn now assigned torch.compile (PR #1584). Even 25% throughput gain buys ~4 extra epochs of monotonic val descent.
 
 ## Active PRs
 
@@ -23,20 +21,24 @@ Round-2 cleanup and follow-up experiments on the bf16 baseline:
 |---------|-----|------------|--------|
 | alphonse | #1373 | lr-warmup-1e-3 | stale WIP |
 | askeladd | #1379 | smooth-l1-loss | stale WIP |
-| edward | #1383 | p-channel-weight | stale WIP |
+| edward | #1383 | p-channel-weight | actively rebased (commit 20:54) |
 | fern | #1390 | higher-surf-weight | stale WIP |
-| frieren | #1556 | **fp32-eval** | WIP (new) |
-| nezuko | #1404 | onecycle-lr (corrected total_steps) | Sent back / WIP |
-| tanjiro | #1522 | hidden192-on-slice128 | WIP |
-| thorfinn | #1557 | **tmax-retune-20** | WIP (new) |
+| frieren | #1556 | fp32-eval | WIP (still in run window) |
+| nezuko | #1404 | onecycle-lr (corrected total_steps) | sent back, stale |
+| tanjiro | #1522 | hidden192-on-bf16-baseline | sent back, awaiting rebase + retry |
+| thorfinn | #1584 | **torch-compile** (dynamic=True) | WIP (new) |
 
 ## Potential next research directions
 
-### Immediate (once #1556 and #1557 land)
-- Stack winners: T_max=20 + fp32 eval + higher peak LR (1e-3) now that schedule fully cools
-- OneCycleLR retry with correct `total_steps = 18 * steps_per_epoch` (nezuko PR #1404 rebase)
-- Hidden-192 retry (tanjiro PR #1522) — confirm width helps on top of bf16 baseline
-- Stacking round-1 ideas: smooth-L1 loss, p-channel weight — these need retesting on bf16 baseline
+### Immediate (once #1556, #1584, #1522 rebased, #1383 rebased land)
+- torch.compile (thorfinn #1584) — free throughput → more epochs
+- fp32 eval (frieren #1556) — unbiased test_avg, paper-faithful
+- Hidden-192 on bf16 baseline (tanjiro #1522 rebase) — width helps OOD, retest with full budget
+- Channel-weighted p:3 (edward #1383 rebased) — focuses gradient on p-channel
+- OneCycleLR retry with correct total_steps (nezuko #1404 — still WIP, stale)
+- Higher peak LR (alphonse #1373 — stale, may need reassignment)
+- Smooth-L1 loss (askeladd #1379 — stale)
+- Higher surf_weight (fern #1390 — stale)
 
 ### Architecture
 - SwiGLU MLP in place of standard GELU FF layers
