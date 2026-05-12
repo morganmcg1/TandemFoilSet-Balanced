@@ -381,6 +381,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    grad_clip_norm: float = 1.0  # max global gradient norm; 0 to disable
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -494,6 +495,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
+    grad_norm_min = float("inf")
+    grad_clipped_steps = 0
+    grad_norm_steps = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -514,9 +520,22 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        log_step = {"train/loss": loss.item(), "global_step": global_step + 1}
+        if cfg.grad_clip_norm > 0:
+            pre_clip = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), cfg.grad_clip_norm
+            )
+            pre_clip_val = pre_clip.item()
+            log_step["train/grad_norm_before_clip"] = pre_clip_val
+            grad_norm_sum += pre_clip_val
+            grad_norm_max = max(grad_norm_max, pre_clip_val)
+            grad_norm_min = min(grad_norm_min, pre_clip_val)
+            grad_norm_steps += 1
+            if pre_clip_val > cfg.grad_clip_norm:
+                grad_clipped_steps += 1
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log(log_step)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -554,6 +573,11 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    if grad_norm_steps > 0:
+        log_metrics["train/grad_norm_mean"] = grad_norm_sum / grad_norm_steps
+        log_metrics["train/grad_norm_max"] = grad_norm_max
+        log_metrics["train/grad_norm_min"] = grad_norm_min
+        log_metrics["train/grad_clipped_frac"] = grad_clipped_steps / grad_norm_steps
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -574,11 +598,18 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     swa_tag = " [SWA]" if swa_active else ""
+    clip_tag = ""
+    if grad_norm_steps > 0:
+        clip_frac = grad_clipped_steps / grad_norm_steps
+        clip_tag = (
+            f"  gn[mean={grad_norm_sum / grad_norm_steps:.2f} "
+            f"max={grad_norm_max:.2f} clip%={100 * clip_frac:.0f}]"
+        )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]{swa_tag}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"lr={current_lr:.2e}  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{clip_tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
