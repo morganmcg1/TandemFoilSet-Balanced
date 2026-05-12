@@ -205,9 +205,51 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def get_grid(self, x, mask=None):
+        """Soft 2D RBF grid encoding zero-padded to ref**3 dims.
+
+        Computes per-sample min/max over real (non-padded) nodes, normalizes
+        (x, z) into [0, 1], then evaluates a Gaussian outer product against a
+        ref-by-ref reference grid (width ~ one grid cell). Padding rows are
+        zeroed out so they cannot bias the preprocess MLP. Output is then
+        padded with zeros to ref**3 to match the existing preprocess input
+        size.
+        """
+        B, N, _ = x.shape
+        pos = x[..., :2]
+        if mask is not None:
+            mask_b = mask.unsqueeze(-1)
+            big = pos.abs().detach().amax() + 1.0
+            pos_lo = torch.where(mask_b, pos, big)
+            pos_hi = torch.where(mask_b, pos, -big)
+            mn = pos_lo.amin(dim=1, keepdim=True)
+            mx = pos_hi.amax(dim=1, keepdim=True)
+        else:
+            mn = pos.amin(dim=1, keepdim=True)
+            mx = pos.amax(dim=1, keepdim=True)
+        rng = (mx - mn).clamp(min=1e-6)
+        norm = (pos - mn) / rng
+
+        grid_lin = torch.linspace(0, 1, self.ref, device=x.device, dtype=x.dtype)
+        fx_g = torch.exp(-((norm[..., 0:1] - grid_lin[None, None, :]) ** 2) * (self.ref ** 2))
+        fz_g = torch.exp(-((norm[..., 1:2] - grid_lin[None, None, :]) ** 2) * (self.ref ** 2))
+        grid_2d = (fx_g[..., :, None] * fz_g[..., None, :]).reshape(B, N, self.ref ** 2)
+
+        pad = self.ref ** 3 - self.ref ** 2
+        grid = F.pad(grid_2d, (0, pad))
+        if mask is not None:
+            grid = grid * mask.unsqueeze(-1).to(grid.dtype)
+        return grid
+
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.unified_pos:
+            mask = data.get("mask", None)
+            grid = self.get_grid(x, mask=mask)
+            x_in = torch.cat([grid, x[..., self.space_dim:]], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -236,9 +278,32 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose ground truth is non-finite.
+            # scoring.accumulate_batch intends to skip them, but its
+            # masked-sum uses NaN * 0 = NaN which propagates a single
+            # bad sample into the whole split accumulator. The dataset
+            # contains at least one such file
+            # (test_geom_camber_cruise/000020.pt: 761 NaN p values).
+            y_ok = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_ok.all():
+                n_drop = (~y_ok).sum().item()
+                print(f"    [eval] dropping {n_drop} samples with non-finite ground truth", flush=True)
+                if not y_ok.any():
+                    continue
+                x, y = x[y_ok], y[y_ok]
+                is_surface, mask = is_surface[y_ok], mask[y_ok]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
+            # Defensive: a non-finite prediction at a single node would
+            # poison both the running loss and the MAE accumulators for the
+            # whole split (sum becomes NaN). Replace with 0 (= y_mean post
+            # denorm) so the eval still produces usable numbers.
+            if not torch.isfinite(pred).all():
+                n_bad = (~torch.isfinite(pred)).sum().item()
+                print(f"    [eval] replaced {n_bad} non-finite pred values with 0", flush=True)
+                pred = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -395,6 +460,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -443,7 +510,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "mask": mask})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
