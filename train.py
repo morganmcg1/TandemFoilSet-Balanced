@@ -255,7 +255,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             pred_orig = torch.nan_to_num(pred_orig, nan=0.0, posinf=1e6, neginf=-1e6)
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # Filter non-finite GT nodes before accumulate_batch. scoring.py's
+            # per-sample skip uses ``err * mask``, but NaN * 0 == NaN, so a single
+            # Inf/NaN in y poisons the running sum. Zero the bad values in y and
+            # AND the masks with a per-node finiteness gate so contaminated
+            # positions are treated as padding.
+            gt_finite_mask = torch.isfinite(y).all(dim=-1)
+            y_clean = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_clean = mask & gt_finite_mask
+            is_surface_clean = is_surface & gt_finite_mask
+            ds, dv = accumulate_batch(pred_orig, y_clean, is_surface_clean, mask_clean, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
