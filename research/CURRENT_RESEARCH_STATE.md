@@ -8,24 +8,29 @@
 
 ## Research focus
 
-Round 1 of a fresh launch. No baseline run exists yet on this branch — the as-is `train.py` is the reference (Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, AdamW lr=5e-4, surf_weight=10, MSE loss, cosine schedule).
+Round 1 baseline now established by PR #1504 (mask-aware PhysicsAttention, merged 2026-05-12 21:52):
 
-The opening portfolio targets eight orthogonal axes of the baseline so the first round of results gives us a wide read on what limits performance. Each hypothesis is a single-knob change so its contribution is attributable.
+- **`val_avg/mae_surf_p` = 119.450**, **`test_avg/mae_surf_p` = 109.669**
+- Mask-aware code is now the reference `train.py`. It fixes the `test_geom_camber_cruise=None` failure mode that affected every other unmasked round-1 run.
 
-## Round 1 portfolio (8 PRs, one per student)
+Round 1 in-flight (7 PRs) is now running on the **pre-merge** code (no mask fix). Their test_geom_camber_cruise will likely return None. Plan: let them finish their current runs, then send back any that report `test_avg=None` for a clean rebase + re-run on the merged baseline. The underlying hypotheses (Huber, wider, more slices, surf_weight 25, warmup+lr, deeper, AdamW betas) are still valuable; only the comparison surface needs to be fixed.
 
-| PR    | Student   | Hypothesis axis                  | Predicted Δ on val_avg/mae_surf_p |
-|-------|-----------|----------------------------------|------------------------------------|
-| #1504 | alphonse  | Mask-aware PhysicsAttention      | −3% to −10% (correctness fix)      |
-| #1505 | askeladd  | Huber surface loss (β=0.5)       | −3% to −8%  (loss/metric alignment)|
-| #1506 | edward    | Wider hidden (128→192)           | −2% to −7%  (capacity)             |
-| #1507 | fern      | More slices (64→128)             | −2% to −6%  (physics granularity)  |
-| #1508 | frieren   | surf_weight 10→25                | −2% to −6%  (loss reweighting)     |
-| #1509 | nezuko    | Warmup + lr=1e-3                 | −3% to −7%  (optimization)         |
-| #1510 | tanjiro   | Fourier pos enc (L=6)            | −3% to −10% (spectral bias fix)    |
-| #1511 | thorfinn  | Deeper (5→7 layers)              | −2% to −6%  (depth)                |
+## Round 1 portfolio (status)
 
-The four axes covered: **architecture (width, depth, slice count, pos enc), loss (Huber, surf weight), optimization (LR/warmup), correctness (mask)**.
+| PR    | Student   | Hypothesis axis                  | Status |
+|-------|-----------|----------------------------------|--------|
+| #1504 | alphonse  | Mask-aware PhysicsAttention      | **MERGED** (val=119.45, test=109.67) |
+| #1505 | askeladd  | Huber surface loss (β=0.5)       | WIP, pre-merge code |
+| #1506 | edward    | Wider hidden (128→192)           | WIP, pre-merge code |
+| #1507 | fern      | More slices (64→128)             | WIP, pre-merge code |
+| #1508 | frieren   | surf_weight 10→25                | WIP, pre-merge code |
+| #1509 | nezuko    | Warmup + lr=1e-3                 | WIP, pre-merge code |
+| #1510 | tanjiro   | Fourier pos enc (L=6)            | CLOSED (cruise NaN, pre-merge) |
+| #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-merge code |
+| #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, pre-merge code |
+| #1623 | alphonse  | mlp_ratio 2→4                    | WIP, post-merge baseline |
+
+Axes covered: **architecture (width, depth, slice count, pos enc, FFN ratio), loss (Huber, surf weight), optimization (LR/warmup, AdamW betas), correctness (mask) → done**.
 
 ## Potential next research directions
 
