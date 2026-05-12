@@ -45,6 +45,7 @@ from data import (
     load_test_data,
     pad_collate,
 )
+from soap import SOAP
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -363,6 +364,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip: float = 1.0
+    precondition_frequency: int = 10
+    max_precond_dim: int = 256
 
 
 cfg = sp.parse(Config)
@@ -408,7 +411,14 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = SOAP(
+    model.parameters(),
+    lr=cfg.lr,
+    betas=(0.95, 0.95),
+    weight_decay=cfg.weight_decay,
+    precondition_frequency=cfg.precondition_frequency,
+    max_precond_dim=cfg.max_precond_dim,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=14)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
