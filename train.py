@@ -81,6 +81,29 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SurfaceSkip(nn.Module):
+    """Direct path from local geometry features to output for surface nodes only."""
+    # Dims 0-11 (position, saf, dsdf) + 13 (log Re) + 14-17 (AoA, NACA foil 1).
+    # Dim 12 (is_surface flag) is omitted — we already gate by the mask.
+    # Foil-2 / tandem dims (18-23) are omitted to keep the skip local.
+    SKIP_DIMS = list(range(12)) + [13, 14, 15, 16, 17]
+
+    def __init__(self, out_dim=3, hidden=32):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(len(self.SKIP_DIMS), hidden),
+            nn.GELU(),
+            nn.Linear(hidden, out_dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x_norm, is_surface):
+        x_local = x_norm[..., self.SKIP_DIMS]
+        skip = self.net(x_local)
+        return skip * is_surface.float().unsqueeze(-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -195,6 +218,8 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Surface skip — added AFTER self.apply so its zero-init last layer is preserved.
+        self.surf_skip = SurfaceSkip(out_dim=out_dim, hidden=32)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,9 +232,12 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        is_surface = data.get("is_surface", None)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
+        if is_surface is not None:
+            fx = fx + self.surf_skip(x, is_surface)
         return {"preds": fx}
 
 
@@ -238,7 +266,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -467,7 +495,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
