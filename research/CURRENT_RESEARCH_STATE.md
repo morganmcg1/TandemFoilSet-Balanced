@@ -1,33 +1,34 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 (UTC)
+- **As of:** 2026-05-12 ~19:30 UTC
 - **Track:** `willow-pai2g-24h-r4` (round 4 of the Willow 24h ablation)
-- **Most recent human directive:** Operator-defined isolation rules — branch and PRs are scoped strictly to `icml-appendix-willow-pai2g-24h-r4`; do not cross-reference other rounds. 30-min hard cap on every training run (`SENPAI_TIMEOUT_MINUTES=30`).
-- **Primary metric:** `test_avg/mae_surf_p` (validation analogue: `val_avg/mae_surf_p`).
+- **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
+- **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`).
+- **Current best:** val_avg/mae_surf_p = **146.2510** (PR #1396, slice_num=128)
+- **test_avg blocked by scoring bug** — `data/scoring.py` NaN propagation (fix in PR #1521)
 
 ## Current research focus
 
-R4 begins with no merged improvements on this branch. The first round attacks
-"easy levers" — single-knob changes that should land signal even inside a
-30-min training window where the baseline only completes a handful of epochs.
-The goal is to identify which orthogonal directions (optimization, loss
-formulation, capacity) move `val_avg/mae_surf_p` most efficiently per training
-minute, so subsequent rounds can stack them.
+First round of experiments completed. Key findings:
+1. **slice_num=128 works** (val 146.25). Merged as new baseline. Model still descending at 30-min cutoff — more epochs or faster training would help.
+2. **Scoring bug blocking all test metrics** — NaN GT in test_geom_camber_cruise sample 20 leaks through `err*mask`. Fix (`nan_to_num`) assigned to frieren (PR #1521).
+3. **OneCycleLR needs correct total_steps** — sized for 50 epochs but only ~12 achievable. Retry assigned to nezuko.
+4. **Bigger hidden (n_hidden=192) needs retry** on new baseline (slice_num=128) — original run only got 9 epochs. Retry assigned to tanjiro (PR #1522).
 
-## Round-1 hypothesis families (one student each)
+## Active PRs
 
-| Student | Hypothesis |
-|---------|------------|
-| alphonse | Higher peak LR (1e-3) with 3-epoch linear warmup + cosine |
-| askeladd | Replace MSE with Smooth L1 (Huber, beta=1.0) — aligns loss with MAE |
-| edward | Channel-weighted loss: p:3, Ux:1, Uy:1 — focus gradient on primary metric |
-| fern | Higher surf_weight=25 (up from 10) |
-| frieren | More slice tokens: slice_num=128 (up from 64) |
-| nezuko | OneCycleLR (max_lr=1e-3, pct_start=0.1) — fast convergence in fixed budget |
-| tanjiro | Bigger model: n_hidden=192, n_head=6 |
-| thorfinn | bfloat16 mixed precision + grad_clip=1.0 — fits more epochs in 30 min |
+| Student | PR | Hypothesis | Status |
+|---------|-----|------------|--------|
+| alphonse | #1373 | lr-warmup-1e-3 | WIP |
+| askeladd | #1379 | smooth-l1-loss | WIP |
+| edward | #1383 | p-channel-weight | WIP |
+| fern | #1390 | higher-surf-weight | WIP |
+| frieren | #1521 | **fix-scoring-nan** (data/scoring.py) | WIP |
+| nezuko | #1404 | onecycle-lr (corrected total_steps) | Sent back / WIP |
+| tanjiro | #1522 | hidden192-on-slice128 | WIP |
+| thorfinn | #1415 | bf16-amp | WIP |
 
-## Potential next research directions
+## Potential next research directions (after scoring fix lands)
 
 - Stacking winners from round 1 (e.g. higher-LR + smooth-L1 + channel weights).
 - Architecture: more slice tokens with depth-vs-width tradeoffs; SwiGLU MLP; rotary positional embeddings for node coords.
