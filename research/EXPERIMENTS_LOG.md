@@ -8,6 +8,21 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 22:50 — PR #1553 (nezuko Gumbel-Softmax slices) — **SENT BACK** for rebase + re-run
+
+- Branch: `charliepai2g24h4-nezuko/gumbel-slice` (still at `bc30b0a` — pre-#1552, pre-#1611)
+- WIP for ~3h with zero commits beyond the original assignment. Pod GPU
+  showed a single ~30-min training window (22:00-22:30Z @ 99%/71GB), then
+  back to 0% with no artifacts pushed. Likely combination of training
+  completing but the post-run commit/push blocked by GH API rate limit
+  errors in the student pod's polling loop.
+- Even on a successful completion, the result would have been measured
+  against the pre-#1552 baseline (val_avg=100.957), not the current 94.217.
+  The Gumbel-Softmax slice-collapse hypothesis is still genuinely worth
+  testing — it's mechanistically orthogonal to stoch-depth and cosine LR.
+- Sent back with explicit rebase + re-run + commit-artifacts directive.
+  See PR #1553 comment chain.
+
 ## 2026-05-12 21:17 — PR #1611: Cosine T_max=15 alignment — **MERGED, new baseline**
 
 - Branch: `charliepai2g24h4-askeladd/cosine-tmax-15`
