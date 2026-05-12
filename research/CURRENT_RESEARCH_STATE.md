@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 21:00 (round 1 decided; 4 PRs merged into recipe; EMA new best 121.16 sent back for rebase; round 2 in flight)
+- **As of:** 2026-05-12 21:10 (round 1 decided; 4 PRs merged into recipe; EMA new best 121.16 sent back for rebase; round 2 in flight; #1402 closed to unblock nezuko duplicate-WIP)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -42,7 +42,7 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 | edward | huber-loss | Loss robustness | WIP (#1374) — training started 19:50 UTC |
 | fern | lr1e3-warmup-cosine | Higher peak lr + warmup | **CLOSED (#1376)** — `val_avg=147.26`, +19% vs baseline, warmup ate budget; reassigned to `surf-weight-20-stack` (#1570) |
 | frieren | wd5e-4 | Regularization | WIP (#1394) — pod still rate-limited as of 20:35 UTC |
-| nezuko | slice128 | Physics-attention granularity | **Sent back (#1402)** — `val_avg=137.17`, +10.6%; request cosine-trunc rerun; reassigned to `cosine-trunc-t15` (#1542) |
+| nezuko | slice128 | Physics-attention granularity | **CLOSED (#1402)** — `val_avg=137.17`, +10.6%; cosine-trunc rerun assigned as #1542; closed to clear duplicate-WIP block on pod |
 | tanjiro | hidden192 | Model capacity | **CLOSED (#1406)** — `val_avg=151.64`, wall-clock-bound, superseded by bf16 merge; reassigned to `hidden256-bf16` (#1575) |
 | thorfinn | unified-pos | Positional encoding | **MERGED (#1416)** — `val_avg=125.78`, best cruise val=91.85; reassigned to `unified-pos-global-norm` (#1576) |
 
@@ -61,9 +61,22 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 - **PR #1576 — `unified-pos-global-norm` (thorfinn)** — WIP — corpus-level pos normalization for unified_pos
 
 ### Pending round-1 WIPs
-- **PR #1368 — `baseline-ref` (alphonse)** — WIP — training started 19:48 UTC; second baseline sample
-- **PR #1374 — `huber-loss` (edward)** — WIP — training started 19:50 UTC
-- **PR #1394 — `wd5e-4` (frieren)** — WIP — still rate-limited 20:35 UTC; GPU idle
+- **PR #1368 — `baseline-ref` (alphonse)** — **CLOSED** ✓ — `val_avg=137.57` recorded; pod reassigned to seed42-baseline (#1577)
+- **PR #1374 — `huber-loss` (edward)** — WIP — training in progress 21:01 UTC (GPU 100%, 44GB)
+- **PR #1394 — `wd5e-4` (frieren)** — WIP — training in progress 21:06 UTC (GPU 99%, 71GB)
+- **PR #1577 — `seed42-baseline` (alphonse)** — WIP — training in progress 21:03 UTC (GPU 98%, 71GB)
+
+### Pod status snapshot (21:10 UTC)
+| Student | PR | Pod state | Action |
+|---|---|---|---|
+| alphonse | #1577 | training (GPU 98%) | wait |
+| askeladd | #1540 | rebasing (GPU idle) | wait for rebase + rerun |
+| edward | #1374 | training (GPU 100%) | wait |
+| fern | #1570 | training (GPU 99%) | wait |
+| frieren | #1394 | training (GPU 99%) | wait |
+| nezuko | #1542 | idle, picking up after #1402 closure | wait for next iteration |
+| tanjiro | #1575 | training (GPU 100%, 93GB!) | wait — high VRAM hidden=256 |
+| thorfinn | #1576 | training (GPU 99%) | wait |
 
 ### Highest priority active PR
 - **PR #1540 — `ema-weights` (askeladd)** — **NEW BEST val=121.16 / test=108.69** on default config; sent back for rebase onto merged recipe (unified_pos+bf16+surf_weight=20 all changed train.py while run was in flight). Merge as soon as rebase lands.
