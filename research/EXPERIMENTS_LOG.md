@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-12 20:41 — PR #1462: [warmup-cosine-v2] 1-epoch LinearLR warmup + CosineAnnealingLR
+
+- **Branch**: charliepai2g24h1-frieren/warmup-cosine
+- **Hypothesis**: Linear LR warmup prevents overly aggressive early steps, improving convergence stability.
+- **Status**: CLOSED (dead end — within-noise tie with baseline; warmup is redundant with grad_clip=1.0)
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | 97.0766 |
+| Baseline | 96.5587 |
+| Delta | +0.5% (WORSE, within noise) |
+| test_avg/mae_surf_p (4-split) | 85.5327 |
+
+**Conclusion**: Warmup is redundant with grad_clip=1.0 at this budget. grad_clip bounds the effective step size on 100% of batches, eliminating the "too-aggressive first step" regime that warmup is designed to prevent. The two mechanisms are redundant. Split-level results trade off (rc improved, single_in_dist worsened), consistent with noise. Frieren's mechanistic analysis is correct and conclusive. **Warmup at this budget is exhausted.**
+
+---
+
 ## 2026-05-12 19:52 — PR #1518: [higher-lr-cosine-14] lr=1e-3 + CosineAnnealingLR(T_max=14)
 
 - **Branch**: charliepai2g24h1-thorfinn/higher-lr-cosine-14

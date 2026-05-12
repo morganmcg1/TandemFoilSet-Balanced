@@ -43,29 +43,35 @@ Test avg 85.87 (all 4 splits, NaN-free for first time).
 
 | PR | Student | Slug | Status | Notes |
 |----|---------|------|--------|-------|
-| #1456 | alphonse | `bf16-amp` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
-| #1457 | askeladd | `surf-weight-50` | WIP (v2) | surf_weight=30 + old-grad-clip baseline; may need round 3 |
-| #1458 | edward | `wider-deeper` | WIP (v2, dirty) | batch_size=4 + grad-clip; sent back for rebase |
-| #1460 | fern | `relative-l2-loss` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
-| #1462 | frieren | `warmup-cosine` | WIP (v2, dirty) | 1-epoch warmup; sent back for rebase |
-| #1467 | nezuko | `more-slices-128` | WIP (round 1) | Pre-new-baseline; needs to beat 96.56 |
+| #1456 | alphonse | `bf16-amp` | WIP | Just picked up assignment (rate limit cleared); running now |
+| #1457 | askeladd | `surf-weight-50` | WIP (v2) | surf_weight=30 + grad-clip baseline |
+| #1458 | edward | `wider-deeper` | WIP (v2) | batch_size=4 + grad-clip; just picked up, rebasing |
+| #1460 | fern | `relative-l2-loss` | WIP | Pre-new-baseline; needs to beat 96.56 |
+| #1467 | nezuko | `more-slices-128` | WIP | Pre-new-baseline; recovering from rate limit |
 | #1473 | tanjiro | `huber-loss` | WIP (v2, pending rebase) | Rebase onto new LR baseline, target ≤96.56 |
 | #1539 | thorfinn | `lr-1.5e-3-cosine-14` | WIP (new) | lr=1.5e-3, T_max=14; LR ceiling test |
+| #1579 | frieren | `pcgrad-surgery` | WIP (new) | PCGrad vol/surf gradient surgery; HIGH priority |
 
 ---
 
+## Ruled Out
+
+- **warmup-cosine** (PR #1462, closed): within-noise tie (+0.5% worse). Warmup is redundant with grad_clip=1.0 at this budget — the clip already bounds the first step. Exhausted. Would only help if we drop grad_clip or push LR well above 1e-3.
+
 ## Potential Next Research Directions
 
-Round 2 refinements + round 3 candidates:
+Round 2 HIGH priority (from `RESEARCH_IDEAS_2026-05-12_round2.md`):
+- **`soap-optimizer`**: Quasi-Newton (arxiv 2502.00604), 2-10× over Adam on PDE benchmarks; requires `pip install soap-optimizer`. Not yet assigned.
+- **`re-conditioned-scaling`**: Re-conditioned output scale head reading `log_Re` from input dim 13; targets output scale heterogeneity across Re=100K–5M. Not yet assigned.
 
-- **Per-channel Huber delta**: `delta_p < delta_Ux ≈ delta_Uy` — pressure has widest residuals. Try `{p: 0.3, Ux: 0.7, Uy: 0.7}`.
-- **EMA of model weights**: Shadow param set for val only (~5 lines, no hyperparams). Smooths the noisy 14-epoch trajectory, often +1-3%.
-- **CosineAnnealingWarmRestarts(T_0=7)**: Two complete cosine cycles in 14 epochs; each restart re-energizes the optimizer. Orthogonal to LR scaling.
-- **SiLU activation**: Replace GELU in Transolver MLP. Cheap, orthogonal, often helps in physics-informed settings.
-- **Lion optimizer**: Lower memory, sign-based updates. LR should be ~3-10× lower than AdamW equivalent. Try lr=1e-4 with Lion.
-- **surf_weight sweep**: Test {15, 20, 25} on the new LR baseline to see if the surface/volume tradeoff optimum shifts.
-- **Compound: Huber + bf16-amp**: If both work independently, compound should dominate. Best round-3 assignment.
-- **Wider-deeper + new LR**: If edward's wider-deeper run completes, merge and then test lr=1e-3 T_max=14 on top.
-- **Fourier/positional encoding**: Improve geometric OOD encoding for raceCar regime generalization.
+Round 2 MEDIUM priority:
+- **`sgdr-restarts`**: CosineAnnealingWarmRestarts(T_0=7) — two cycles in 14 epochs; orthogonal to current schedule.
+- **`lion-optimizer`**: Sign-based updates, lr ~3-10× lower than AdamW.
+- **`per-channel-loss-weights`**: Up-weight p channel in MSE loss.
+
+Round 3 compound candidates:
+- **Huber + bf16-amp**: Once both merge independently, compound should dominate.
+- **PCGrad + re-conditioned-scaling**: If pcgrad-surgery improves gradient quality, scaling fix should compound.
+- **wider-deeper + new LR**: Pending edward's rebase result.
 
 **Plateau protocol**: If 5 consecutive experiments fail to beat 96.5587, escalate to architecture overhaul (FNO spectral layer, GNOT multi-query attention, graph neural operators).
