@@ -489,17 +489,44 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
 
+        # ── Per-sample inverse-variance weighting (BIVW) ─────────────────────
+        # y_norm has shape [B, N, 3]; mask has shape [B, N]. Compute each
+        # sample's variance over valid nodes only (pooled across the 3 target
+        # channels), then weight the loss contribution by 1/var so low-Re
+        # (low normalized variance) samples are not under-trained.
+        with torch.no_grad():
+            B = y_norm.shape[0]
+            y_var = torch.empty(B, device=y_norm.device, dtype=y_norm.dtype)
+            for b in range(B):
+                valid = y_norm[b][mask[b]]
+                if valid.numel() == 0:
+                    y_var[b] = 1.0
+                else:
+                    y_var[b] = valid.var().clamp(min=1e-4)
+            sample_w = 1.0 / y_var
+            sample_w = sample_w / sample_w.mean()
+        sw = sample_w[:, None, None]
+        sq_err_w = sq_err * sw
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/sample_w_max": sample_w.max().item(),
+            "train/sample_w_min": sample_w.min().item(),
+            "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
+            "train/y_var_max": y_var.max().item(),
+            "train/y_var_min": y_var.min().item(),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
