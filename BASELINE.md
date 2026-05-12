@@ -40,9 +40,9 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **115.403** | [#1491](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1491) |
-| `test_avg/mae_surf_p` | NaN (cruise split NaN — see note) | #1491 |
-| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | ~115.1 | #1491 |
+| `val_avg/mae_surf_p` | **112.546** | [#1520](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1520) |
+| `test_avg/mae_surf_p` | NaN (cruise split NaN — see note) | #1520 |
+| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | **110.862** | #1520 |
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -123,3 +123,61 @@ cd target/ && python train.py \
 ```
 
 Metrics: `models/model-grad-clip-wd1e-3-20260512-181000/metrics.jsonl`
+
+---
+
+## 2026-05-12 19:53 — PR #1520: OneCycleLR + EMA(0.999)
+
+New best result. Replaces PR #1491 as the running baseline.
+
+**Per-split val (best checkpoint, epoch 14 / 14 run — still decreasing at cap):**
+
+| Split | `mae_surf_p` | `mae_surf_Ux` | `mae_surf_Uy` |
+|-------|---:|---:|---:|
+| val_single_in_dist | 125.102 | 1.560 | 0.716 |
+| val_geom_camber_rc | 136.044 | 2.948 | 1.029 |
+| val_geom_camber_cruise | 86.305 | 1.182 | 0.491 |
+| val_re_rand | 102.731 | 1.908 | 0.733 |
+| **avg** | **112.546** | **1.900** | **0.742** |
+
+**Per-split test (best checkpoint):**
+
+| Split | `mae_surf_p` |
+|-------|---:|
+| test_single_in_dist | 113.886 |
+| test_geom_camber_rc | 118.861 |
+| test_geom_camber_cruise | NaN (see note above) |
+| test_re_rand | 99.839 |
+| avg (3-split proxy) | **110.862** |
+
+**Config (merged into advisor branch train.py):**
+
+| Param | Value |
+|-------|-------|
+| `n_hidden` | 128 |
+| `n_layers` | 5 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 2 |
+| `lr` | 5e-4 |
+| `weight_decay` | 1e-3 (from #1491) |
+| `grad_clip` | 1.0 (from #1491) |
+| `use_onecycle` | **True** ← new |
+| `ema_decay` | **0.999** ← new |
+| OneCycle peak LR | 5e-3 (10× base) |
+| OneCycle pct_start | 0.05 (5% warmup) |
+| OneCycle final min LR | 5e-6 |
+| `batch_size` | 4 |
+| `surf_weight` | 10.0 |
+| epochs run | 14 / 50 configured |
+
+Reproduce:
+```
+cd target/ && python train.py \
+  --experiment_name onecycle-ema-decay999 \
+  --use_onecycle True \
+  --ema_decay 0.999 \
+  --epochs 50
+```
+
+Metrics: `models/model-charliepai2g24h3-fern-onecycle-ema-decay999-20260512-191518/metrics.yaml`
