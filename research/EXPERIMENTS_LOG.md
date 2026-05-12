@@ -1,5 +1,56 @@
 # SENPAI Research Results
 
-Round-1 experiments assigned 2026-05-12. Results will be appended here as PRs complete and are reviewed.
+## 2026-05-12 19:00 — PR #1486: Scale batch size 4 → 8 (fallback, bs=16 OOMed)
+
+- Branch: `charliepai2g24h2-tanjiro/batch-size-16`
+- Hypothesis: bs=4 is underutilizing 96GB VRAM; bs=16 + scaled lr=1e-3 should reduce gradient noise
+- Artifacts: `models/model-charliepai2g24h2-tanjiro-batch-size-8-fallback-20260512-180842/metrics.jsonl`
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy | mae_vol_p |
+|---|---:|---:|---:|---:|
+| val_single_in_dist     | 179.61 | 2.21 | 1.04 | 203.56 |
+| val_geom_camber_rc     | 151.83 | 2.82 | 1.24 | 156.45 |
+| val_geom_camber_cruise | 114.07 | 1.43 | 0.68 | 112.80 |
+| val_re_rand            | 127.06 | 2.20 | 0.96 | 127.11 |
+| **val_avg**            | **143.15** | 2.17 | 0.98 | 149.98 |
+| test_single_in_dist    | 156.25 | 2.10 | 0.95 | 178.28 |
+| test_geom_camber_rc    | 148.55 | 2.85 | 1.17 | 149.25 |
+| test_geom_camber_cruise| NaN   | 1.32 | 0.64 | NaN   |
+| test_re_rand           | 137.14 | 2.01 | 0.92 | 129.92 |
+
+**Config run:** bs=8, lr=7e-4 (fallback: bs=16 OOMed at 93 GB due to pad_collate), wd=1e-4, surf_weight=10, ~1.4M baseline model. 14 epochs in 30 min (timeout-cut, still improving). Best epoch=14.
+
+**Decision: MERGED — establishes floor at val_avg/mae_surf_p=143.15.**
+
+**Key findings:**
+- `pad_collate` makes batch scaling memory-expensive: bs=4→bs=8 pushed peak VRAM to 84 GB (far above the naive ~10 GB estimate). bs=16 needs ~160 GB — not feasible without AMP.
+- With bs=8, per-epoch time ~130 s vs ~30-35 s for bs=4 → only 14 epochs in 30 min instead of ~50. Hypothesis about gradient-noise reduction can't be evaluated cleanly here.
+- **Critical data bug:** `test_geom_camber_cruise/000020.pt` has 761 NaN values in p channel. scoring.py's NaN-skip logic fails because `0 * NaN = NaN` in masked reductions → test_avg/mae_surf_p is NaN for all experiments. This affects only test metrics, not val (val data is clean).
+- Suggested fix: gradient accumulation (accum_steps=4 at bs=4 → effective_bs=16 without extra memory).
+
+---
+
+## 2026-05-12 19:00 — PR #1472: Bigger Transolver fallback 192-6-8 (~1.7M params)
+
+- Branch: `charliepai2g24h2-edward/bigger-model-256-8-8`
+- Hypothesis: 1.4M params is underparameterized; 256-8-8 (~8.8M) should improve capacity
+- Artifacts: `models/model-charliepai2g24h2-edward-bigger-model-256-8-8-20260512-181250/metrics.jsonl`
+
+| Split | mae_surf_p | epoch |
+|---|---:|---:|
+| val_single_in_dist     | 194.04 | 6 |
+| val_geom_camber_rc     | 182.21 | 6 |
+| val_geom_camber_cruise | 136.44 | 6 |
+| val_re_rand            | 148.52 | 6 |
+| **val_avg**            | **165.30** | 6 |
+
+**Config run:** n_hidden=192, n_layers=6, n_head=8 (fallback: 256-8-8 OOMed at 94 GB), bs=4, lr=5e-4. 7 epochs in 30 min (per-epoch ~265 s → very few epochs). test_avg=NaN (data bug).
+
+**Decision: CLOSED — 165.30 > 143.15 (floor). Fallback config is only 1.22x bigger than baseline and had only 7 epochs.**
+
+**Key findings:**
+- 256-8-8 with mlp_ratio=2 OOMs at bs=4 (MLP hidden=512, 8 layers × 242K-node activations). Requires bs=2 or AMP to fit.
+- 192-6-8 at 7 epochs is not a valid test of the scaling hypothesis (not enough epochs to converge).
+- Intermediate-size n_hidden=224, n_layers=7, n_head=8 (~3.4M, dim_head=28) should fit at bs=4 with headroom and get ~15-20 epochs.
+- Model NaN in p-channel at test_geom_camber_cruise may indicate early-training numerical instability in the slice attention temperature.
 </content>
-</invoke>
