@@ -1,5 +1,66 @@
 # SENPAI Research Results
 
+## 2026-05-12 20:00 — PR #1531: Channel weight p=10 (sweep beyond p=5)
+
+- Branch: `charliepai2g24h2-alphonse/channel-weight-p10`
+- Hypothesis: Doubling pressure weight from p=5 to p=10 maps response curve
+- Artifacts: `models/model-charliepai2g24h2-alphonse-channel-weight-p10-20260512-191417/metrics.jsonl`
+
+| Split | mae_surf_p (p=10) | mae_surf_p (p=5 floor) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 185.22 | 155.84 | +18.9% |
+| val_geom_camber_rc     | 173.27 | 146.50 | +18.3% |
+| val_geom_camber_cruise | 118.90 | 103.54 | +14.8% |
+| val_re_rand            | 133.44 | 129.86 | +2.8% |
+| **val_avg**            | **152.71** | **133.94** | **+14.0%** |
+| mae_surf_Ux            | 3.48 | 2.73 | +27.5% |
+| mae_surf_Uy            | 1.34 | 1.14 | +17.5% |
+
+**Decision: CLOSED — p=10 regresses on every split AND degrades Ux past the 20% threshold flagged in the PR body.**
+
+**Analysis:** The chan_w response curve is non-monotonic. The 1→5 jump was a 6.4% win; 5→10 is a 14% loss. The optimum is p≈5 (or slightly lower). The training-loop SGD is being yanked toward pressure at the cost of Ux — the +27.5% Ux degradation is a real signal. Next: alphonse → decoupled surf vs vol chan_w (#1559) — apply [1,1,5] only to surface portion since the metric is mae_surf_p.
+
+---
+
+## 2026-05-12 20:00 — PR #1524 (round 1): Gradient accumulation eff_bs=16 (no chan_w base)
+
+- Branch: `charliepai2g24h2-tanjiro/grad-accum-eff-bs16`
+- Hypothesis: grad-accum=4 with lr=1e-3 (sqrt-LR scaling) → cleaner gradients at base VRAM cost
+- Artifacts: `models/model-charliepai2g24h2-tanjiro-grad-accum-eff-bs16-20260512-190822/metrics.jsonl`
+
+| Split | mae_surf_p | Pre-chan_w floor (#1486) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 175.60 | 179.61 | -2.2% |
+| val_geom_camber_rc     | 145.90 | 151.83 | -3.9% |
+| val_geom_camber_cruise | 112.51 | 114.07 | -1.4% |
+| val_re_rand            | 124.83 | 127.06 | -1.8% |
+| **val_avg**            | **139.71** | **143.15** | **-2.4%** |
+| Peak VRAM              | 42.1 GB | 84.2 GB | half |
+
+**Decision: SENT BACK for rebase + stack with chan_w + T_max=14 cosine tuning.**
+
+**Analysis:** Methodology confirmed — grad-accum=4 with sqrt-LR scaling beats pre-chan_w floor by 2.4% at half the VRAM of bs=8. But branch base lacks chan_w (PR assigned before #1464 merged). To make this a real win vs the current floor 133.94, must rebase and stack with chan_w. Also: cosine T_max=50 barely decays in 14 epochs — student's suggested follow-up #4 to set T_max=14 for proper LR decay over the budget.
+
+---
+
+## 2026-05-12 20:00 — PR #1489 (revised): Per-sample AoA flip p=0.25 (no chan_w base)
+
+- Branch: `charliepai2g24h2-thorfinn/aoa-flip-aug`
+- Hypothesis: switch from per-batch p=0.5 to per-sample p=0.25 to fix Uy regression
+- Artifacts: `models/model-charliepai2g24h2-thorfinn-aoa-flip-persample-p025-20260512-191315/metrics.jsonl`
+
+| Metric | per-batch p=0.5 | per-sample p=0.25 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p     | 146.42 | 146.14 | -0.2% (flat) |
+| val_avg/mae_surf_Uy    | 2.11   | 1.06   | **-50%** (Uy fix worked) |
+| val_geom_camber_rc/mae_surf_p | 150.35 | 164.66 | +9.5% (regression here) |
+
+**Decision: SENT BACK for rebase + stack with chan_w.**
+
+**Analysis:** Per-sample Uy fix unambiguously worked (mae_surf_Uy cut in half). Primary metric flat overall — augmentation helps 3 splits, hurts val_geom_camber_rc. On pre-chan_w base, this is +2.1% regression vs 143.15. Levers (augmentation reshapes input distribution; chan_w reshapes gradient) are orthogonal — student's follow-up #1 suggests stacking. Sent back to rebase and rerun on top of chan_w.
+
+---
+
 ## 2026-05-12 19:30 — PR #1468: surf_weight 10 → 30 (surface loss emphasis)
 
 - Branch: `charliepai2g24h2-askeladd/surf-weight-30`
