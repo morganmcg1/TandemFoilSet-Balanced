@@ -177,8 +177,17 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            # 2D problem: positional encoding has ref**2 dims (canonical Transolver 2D).
+            self.preprocess = MLP(fun_dim + ref**2, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
+            gx, gy = torch.meshgrid(
+                torch.linspace(0.0, 1.0, ref),
+                torch.linspace(0.0, 1.0, ref),
+                indexing="ij",
+            )
+            self.register_buffer(
+                "grid_ref", torch.stack([gx, gy], dim=-1).reshape(-1, 2)
+            )
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
@@ -207,7 +216,27 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.unified_pos:
+            # Per-mesh min-max normalize positions → translation/scale invariance.
+            pos = x[:, :, :2]
+            mask = data.get("mask", None)
+            if mask is not None:
+                valid = mask.unsqueeze(-1)
+                pos_min = pos.masked_fill(~valid, float("inf")).amin(dim=1, keepdim=True)
+                pos_max = pos.masked_fill(~valid, float("-inf")).amax(dim=1, keepdim=True)
+            else:
+                pos_min = pos.amin(dim=1, keepdim=True)
+                pos_max = pos.amax(dim=1, keepdim=True)
+            pos_unit = ((pos - pos_min) / (pos_max - pos_min).clamp(min=1e-6)).clamp(0.0, 1.0)
+            # Euclidean distance to each ref grid point via |a|^2+|b|^2-2 a.b.
+            p_sq = (pos_unit ** 2).sum(dim=-1, keepdim=True)
+            g_sq = (self.grid_ref ** 2).sum(dim=-1).view(1, 1, -1)
+            pg = torch.matmul(pos_unit, self.grid_ref.t())
+            pos_enc = torch.sqrt(torch.clamp(p_sq + g_sq - 2.0 * pg, min=1e-12))
+            x_in = torch.cat([x[:, :, 2:], pos_enc], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -238,7 +267,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -423,6 +452,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -486,7 +517,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "mask": mask})["preds"]
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
