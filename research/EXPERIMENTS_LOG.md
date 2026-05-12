@@ -1,5 +1,58 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 23:05 — PR #1405: bfloat16 autocast + batch_size 8 + sqrt-scaled lr — sent back for rebase
+
+- **Student branch:** `charliepai2g48h1-tanjiro/amp-bf16-batch8`
+- **Hypothesis:** bfloat16 autocast + larger batch (4→8) + sqrt-scaled lr (5e-4→7e-4) doubles throughput → more realized epochs within the 30-min cap.
+
+### Result (pre-rebase, on L1-only baseline)
+
+| Arm | bf16 | batch | lr | epochs cfg | epochs done | val_avg/mae_surf_p | test_avg (3/4) |
+|-----|------|-------|-----|------------|-------------|---------------------|----------------|
+| Arm 1 (main hypothesis) | ✅ | 8 | 7e-4 | 15 | 15 | 100.77 | 89.61 |
+| **Arm 2 (control)** | ✅ | 4 | 5e-4 | 25 | **19** | **82.70** | **73.06** |
+
+**Arm 2 is a huge win**: val=82.70 is -12.3% vs L1 baseline (94.29). The surprise: throughput hypothesis failed (bs=8 gave no speedup — CPU/dataloader is the bottleneck), but running --epochs 25 let the cosine schedule consume its full tail (19 realized epochs vs 14 before), and that's where the gain came from.
+
+### Why sent back (not merged yet)
+
+PR has merge conflicts (CONFLICTING state) because PR #1355 already added the `--loss l1` branches that tanjiro also implemented locally. Additionally, **PR #1581 (frieren, OneCycleLR@2e-3) merged at 22:55 UTC with val=85.61**, which changes the baseline recipe. Tanjiro's Arm 2 result (82.70) was on cosine+lr=5e-4 with 19 realized epochs — it's not directly comparable to the new OneCycleLR baseline.
+
+Sent back with instructions to:
+1. Rebase and drop duplicate L1 implementation (keep only bf16 + eval safety changes)
+2. Re-run on top of new baseline: Arm A (bf16 + OneCycle@2e-3 + 14ep), Arm B (bf16 + OneCycle@2e-3 + 25ep configured)
+
+**Key scientific insight:** CPU/dataloader throughput is the per-epoch bottleneck, not GPU. On these irregular meshes (74K–242K nodes), `num_workers=4, prefetch=2` starves the GPU at both bs=4 and bs=8. The win from "more epochs" (19 vs 14 realized) is pure cosine-tail scheduling. This strongly motivates profiling the dataloader or using a pre-batched dataset before any further batch-size experiments.
+
+---
+
+## 2026-05-12 22:55 — PR #1581: L1 + OneCycleLR@peak=2e-3 (frieren) ✅ MERGED
+
+- **Student branch:** `charliepai2g48h1-frieren/l1-onecycle-compound`
+- **Hypothesis:** OneCycleLR (warmup→peak→cosine wind-down, per-batch stepping) compounded with L1 loss, at peak_lr=1e-3 and peak_lr=2e-3.
+
+### Result
+
+| Arm | peak_lr | val_avg/mae_surf_p | Δ vs L1 baseline | test_avg (3/4) | Δ vs test baseline |
+|-----|--------:|-------------------:|------------------:|-------------------:|------------------:|
+| **B (winner)** | 2e-3 | **85.615** | **-9.20%** | **83.328** | **-9.29%** |
+| A | 1e-3 | 87.574 | -7.12% | 84.617 | -7.88% |
+| Baseline | 5e-4 cosine | 94.291 | — | 91.859 | — |
+
+Per-split val: cruise=66.44, rc=94.61, re_rand=81.89, single=99.52
+
+### Action: MERGED as new baseline (val_avg=85.615)
+
+Both arms beat baseline; Arm B wins. Key findings:
+- **Compound stacks well**: loss change (→L1) gave ~57%; adding OneCycle@2e-3 gives another 9.2% on top
+- **L1 tolerates higher peak LR**: L1 gradient is bounded at 1 in normalized units, so large raw steps don't explode. Arm B (2e-3) outperforms Arm A (1e-3) by 2.1pp additional
+- **Schedule fully consumed**: best epoch=14/14 with LR wound to 10⁻⁹ — no truncated tail
+- **`val_geom_camber_rc` biggest absolute improvement**: 107.6 → 94.6 (-12%), still the hardest split
+
+Round-2 follow-up dispatched: #1667 (frieren, peak LR push to 3/4/5e-3 — monotone signal warrants pushing further).
+
+---
+
 ## 2026-05-12 22:05 — PR #1399: Per-channel surface loss pressure weighting (3-arm corrected sweep) ❌ CLOSED
 
 - **Student branch:** `charliepai2g48h1-nezuko/surf-channel-pressure-weight`

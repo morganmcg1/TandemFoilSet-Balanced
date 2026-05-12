@@ -1,20 +1,22 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 (last update 21:25 UTC)
+- **Date:** 2026-05-12 (last update 23:10 UTC)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r1`
 - **Research tag:** `charlie-pai2g-48h-r1` (Charlie no-W&B logging-ablation arm,
   48h run)
 - **Most recent human directive:** None — fresh launch, no human issues in
   the queue.
 
-## Current best (as of 20:52 UTC) — BASELINE ESTABLISHED
+## Current best (as of 22:55 UTC) — BASELINE UPDATED
 
-**Merged:** PR #1355 alphonse — Pure L1 loss on normalized residuals
-`val_avg/mae_surf_p = 94.291` | `test_avg_3of4 = 91.859` | best epoch 14/15
+**Merged:** PR #1581 frieren — L1 + OneCycleLR@peak=2e-3
+`val_avg/mae_surf_p = 85.615` | `test_avg_3of4 = 83.328` | best epoch 14/14 (-9.2% vs PR #1355)
 
-Per-split val: cruise=71.66, re_rand=87.50, single=110.41, rc=107.60
+Per-split val: cruise=66.44, re_rand=81.89, single=99.52, rc=94.61
 
-**All downstream experiments must use `--loss l1`.**
+**Previous baseline** (PR #1355): `val_avg/mae_surf_p = 94.291`
+
+**All downstream experiments must use `--loss l1 --lr 2e-3 --epochs 14` (OneCycleLR).**
 
 ## Round-1 leaderboard (closed)
 
@@ -143,19 +145,19 @@ losses on the volume field as auxiliary heads.
 
 ## Active in-flight PRs (round 2 + round-1 stragglers)
 
-Status as of 22:05 UTC. All 8 students have a WIP PR — zero idle GPUs.
+Status as of 23:10 UTC. All 8 students have a WIP PR — zero idle GPUs.
 
 | PR | Student | Hypothesis | State |
 |----|---------|-----------|-------|
-| **#1581** | **frieren** | **L1 + OneCycleLR compound (peak_lr 1e-3 vs 2e-3)** | Round-2 WIP |
+| **#1667** | **frieren** | **OneCycleLR peak LR push: 3/4/5e-3 sweep (new baseline = 85.61)** | Round-3 WIP (dispatched 23:05) |
 | **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 WIP |
 | **#1601** | **thorfinn** | **EMA of model weights (decay 0.999 vs 0.9999) on L1 baseline** | Round-2 WIP |
 | **#1602** | **fern** | **Gradient clipping sweep (0 / 0.5 / 1.0) on L1 baseline** | Round-2 WIP |
-| **#1605** | **edward** | **asinh transform on pressure target (scale 100 vs 680) with L1** | Round-2 WIP |
-| **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP (dispatched 22:05 after closing MSE-era #1399) |
-| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 in flight (notified to add `--loss l1`) |
-| #1405 | tanjiro | bfloat16 autocast + batch_size 8 + sqrt-scaled lr | Round-1 in flight (notified to add `--loss l1`) |
+| **#1605** | **edward** | **asinh transform on pressure target (fixed stats, scale 100 vs 680) with L1** | Round-2 WIP (rerunning with corrected normalization) |
+| **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP |
+| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 in flight |
+| #1405 | tanjiro | bf16 + rebase + re-run on OneCycleLR baseline | Sent back for rebase (conflict) + re-run on new baseline |
 
-**Action items:** wait for in-flight PRs; prioritize merge of any that beat 94.29.
+**Action items:** All in-flight round-2 PRs now compare against new baseline 85.615. Any round-2 result that beats 85.61 should merge immediately. Tanjiro's rerun (bf16 + OneCycle) is a key test: does bf16 + extended-epoch scheduling stack with OneCycle?
 
-**Key insight from nezuko #1399 (closed):** Val signal for channel-weighting is monotone and real on MSE era (2% improvement on val_avg, 4% on hardest OOD split val_geom_camber_rc at k=3). Does it stack with L1? Answer comes from #1625.
+**Key compound insight (frieren #1581):** L1 + OneCycle compounds to -9.2% on top of just L1. L1's bounded gradient allows higher peak LR without instability — monotone signal from 1e-3→2e-3 motivates the #1667 push to 3/4/5e-3.
