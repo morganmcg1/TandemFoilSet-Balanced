@@ -236,6 +236,15 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples with non-finite GT entirely. accumulate_batch's
+            # post-hoc mask makes Inf*0=NaN in err, polluting mae_*_p.
+            y_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite.any():
+                continue
+            if not y_finite.all():
+                keep = y_finite.nonzero(as_tuple=True)[0]
+                x, y, is_surface, mask = x[keep], y[keep], is_surface[keep], mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
