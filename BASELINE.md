@@ -8,6 +8,92 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-12 22:02 — PR #1586: Stack per-sample Re-based loss weighting on Huber baseline
+
+- **val_avg/mae_surf_p:** **95.7488** (best, epoch 14, base-model — student trained on Huber-only baseline, *not* SWA)
+- **test_avg/mae_surf_p:** **86.1694** (4-split, all finite, base-model checkpoint)
+- Improvement vs. PR #1554 (current merged baseline 99.07 / 88.90): val −3.36%, test −3.06%
+
+### ⚠ Important composition note
+
+This PR was trained against the **Huber baseline (PR #1452)**, *not* the merged SWA-on-Huber baseline (PR #1554). The student got val=95.75 / test=86.17 with **Huber + Re-weight only** (no SWA). The merge into the advisor branch *composed* the Re-weight changes with the existing SWA infrastructure, so the **post-merge train.py now runs Huber + Re-weight + SWA together** — an untested combination.
+
+- If SWA + Re-weight compose constructively (likely; they target orthogonal axes — SWA averages weights, Re-weight reshapes per-step gradients), the next PR trained on this branch should match or beat 95.75 val.
+- If SWA + Re-weight anti-compose, the next run could regress toward ~99 val (the SWA-only baseline) or worse.
+
+The next training run on this baseline will validate the composition. Until then, **treat val=95.75 as the conservative tested floor** for the new baseline; the merged code likely achieves something between 95 and 93 val.
+
+### Val per-split surface MAE (best epoch 14, Huber + Re-weight)
+
+| Split | mae_surf_p | Δ vs. #1554 (99.07 baseline) |
+|---|---|---|
+| val_single_in_dist     | 113.0987 | −3.95% |
+| val_geom_camber_rc     | 103.2184 | −1.03% |
+| val_geom_camber_cruise | 74.9257  | **−5.37%** |
+| val_re_rand            | 91.7525  | −3.54% |
+| **val_avg**            | **95.7488** | **−3.36%** |
+
+### Test per-split surface MAE
+
+| Split | mae_surf_p | Δ vs. #1554 (88.90 baseline) |
+|---|---|---|
+| test_single_in_dist     | 100.1050 | −2.21% |
+| test_geom_camber_rc     | 94.4517  | −1.07% |
+| test_geom_camber_cruise | 64.1979  | **−5.10%** |
+| test_re_rand            | 85.9230  | −4.63% |
+| **test_avg**            | **86.1694** | **−3.06%** |
+
+### Config (tested run; merged code now also includes SWA)
+
+- Architecture: Transolver baseline (n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, unified_pos=False)
+- Loss: Smooth-L1 (Huber β=1.0) with **per-sample Re-based reweighting**:
+  - Extract per-sample `log(Re)` from feature dim 13 via masked-mean over real nodes (constant per sample)
+  - `log_re_shifted = log_re - log_re.min().detach() + 1.0` (positive shift)
+  - `re_weight = 1.0 / log_re_shifted` then normalized to mean=1 per batch
+  - Applied as per-sample multiplier on `sq_err` *before* surf/vol mask split, *before* `surf_weight=10.0`
+- Optimizer: AdamW lr=5e-4, weight_decay=1e-4
+- Scheduler: CosineAnnealingLR(T_max=15)
+- Batch size: 4
+- **SWA (now in merged code, NOT in the tested config):** swa_start_frac=0.75, swa_lr=1e-4, anneal_epochs=2, terminal eval on `swa_model.module`
+- Epochs: 15 (cap triggered after epoch 14)
+- Wall clock: ~30 min (hit `SENPAI_TIMEOUT_MINUTES=30`)
+- Params: 0.66M
+- Peak VRAM: ~42 GB
+
+### Re-weight diagnostics (final-step W&B summary)
+
+- `train/re_weight_mean` = 1.0000 (normalized as designed)
+- `train/re_weight_min` = 0.6182 (highest-Re sample)
+- `train/re_weight_max` = 1.6691 (lowest-Re sample) — ~2.7× spread
+- `train/loss_unweighted` = 1.1588 vs. `train/loss` = 0.7271 (weighting reshapes loss by ~37%)
+
+### W&B run
+
+- `wt3u5zgs` — https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2/runs/wt3u5zgs
+
+### Reproduce (tested config)
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --agent willowpai2g48h2-thorfinn \
+  --wandb_name willowpai2g48h2-thorfinn/re-weight-on-huber \
+  --wandb_group re-weight-stack-test
+```
+
+### What landed
+
+Re-weight applied to the per-element Huber loss inside the training loop (`weighted_err = sq_err * re_weight_expanded`), *before* the surf/vol mask split. The diagnostic `train/loss_unweighted` is computed under `no_grad` so the reweighted loss is what backprop sees. Per-batch normalization keeps the mean weight at exactly 1.0, so the lever changes *which samples dominate* but not the average gradient magnitude.
+
+### Open follow-ups (for future PRs)
+
+- **Validate the merged composition.** The next PR trained on this branch will tell us whether SWA + Re-weight compose constructively or not. If the next 1-2 PRs land near 92-95 val (consistent with their own predicted improvements stacked on a 95-base), the composition is sound. If they regress toward 99 val, SWA may need to be re-tuned (lower swa_lr) or removed in favor of Re-weight alone.
+- **Per-sample y_std weighting** (alternative to log_re-based weighting; the PR's "send-back" branch).
+- **Stronger weighting curve** (e.g., `1/sqrt(log_re_shifted)` for wider spread).
+- **Stacking with another mechanism-orthogonal lever** — surface-weight, mlp_ratio, FiLM, grad-clip, β-sweep all still untested on this composed baseline.
+
+---
+
 ## 2026-05-12 21:06 — PR #1554: Stack SWA on Huber baseline
 
 - **val_avg/mae_surf_p:** **99.0704** (SWA model, end of training)
