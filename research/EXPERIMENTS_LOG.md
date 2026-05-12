@@ -6,6 +6,76 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-12 22:55 — PR #1562: Depth scaling n_layers 6 → 7 — CLOSED
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/n-layers-7
+- **Hypothesis:** Deeper model (7 layers vs 6) should improve representational capacity; expected −3–5% on val_avg/mae_surf_p.
+- **Outcome:** **CLOSED** — val=154.198 (+51.5% vs current 101.810 baseline), test=NaN (reproducible NaN on test_geom_camber_cruise p-channel, both runs).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 7) | **154.198** |
+| val_single_in_dist | 193.128 |
+| val_geom_camber_rc | 171.668 |
+| val_geom_camber_cruise | 115.258 |
+| val_re_rand | 136.737 |
+| test_avg/mae_surf_p | **NaN** (test_geom_camber_cruise blowup on p-channel) |
+| n_params | 1.365M (vs 0.99M for n_layers=6) |
+| Epochs completed | 9/50 (30-min cap, ~205 s/epoch) |
+
+**Analysis:** Three key findings: (1) Budget binding — at ~205 s/epoch for n_layers=7, only 9 epochs fit in 30 min vs 12-13 for n_layers=6, so the bigger model is fundamentally undertrained. (2) Reproducible NaN — test_geom_camber_cruise/mae_surf_p NaN appeared on both independent runs (-201029 and -205108); n_layers=6 doesn't exhibit this. The depth-7 model is more numerically fragile on at least one cruise test sample. (3) Sweet spot — n_layers=6 + mlp_ratio=4 appears to be the Pareto-optimal configuration for our compute budget. Going deeper requires either batch_size increase (fewer steps/epoch = faster epochs) or longer wall-clock budget. Reassigned edward to dropout=0.1 (PR #1632).
+
+**Artifacts:** `models/model-charliepai2g48h3-edward-n-layers-7-20260512-205108/metrics.jsonl`
+
+---
+
+## 2026-05-12 22:55 — PR #1594: Lower LR 5e-4 → 3e-4 — CLOSED
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/lower-lr-3e-4
+- **Hypothesis:** L1 constant-magnitude gradients don't shrink at convergence → lower LR helps fine convergence. Expected −3–6%.
+- **Outcome:** **CLOSED** — val=119.221 (+17.1% vs 101.810), test=109.040 (+18.9% vs 91.708).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 9) | **119.221** |
+| val_single_in_dist | 152.670 (+23.0%) |
+| val_geom_camber_rc | 128.660 (+14.2%) |
+| val_geom_camber_cruise | 84.604 (+10.5%) |
+| val_re_rand | 110.951 (+18.3%) |
+| test_avg/mae_surf_p | **109.040** |
+| Epochs completed | 11/50 (30-min cap, ~175 s/epoch) |
+
+**Analysis:** Root cause is budget-driven undertraining. With T_max=50 and only 11 epochs in the budget, the cosine LR barely decays regardless of initial value. At lr=3e-4, the model simply makes smaller steps toward the same solution the baseline reaches in 13 epochs at lr=5e-4. Lower LR is only useful if paired with a schedule that decays within budget (T_max=14) — see alphonse PR #1592 which is testing exactly that. Student's analysis was spot-on. Reassigned to batch_size=8 experiment (PR #1634).
+
+**Artifacts:** `models/model-charliepai2g48h3-tanjiro-lower-lr-3e-4-20260512-210951/metrics.jsonl`
+
+---
+
+## 2026-05-12 22:55 — PR #1593: Gradient clipping max_norm=1.0 — SENT BACK
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/gradient-clipping
+- **Hypothesis:** L1 gradient oscillations cause val instability → clipping at max_norm=1.0 stabilizes training.
+- **Outcome:** **SENT BACK** — val=112.784 (+10.8% vs 101.810), test=100.553 (+9.6% vs 91.708). Oscillations NOT eliminated (epoch spikes at ep 4, 8, 10 persisted). Hypothesis: max_norm=1.0 is too aggressive — L1 gradients are constant magnitude ±1/±surf_weight per element, so clip threshold of 1.0 effectively throttles learning rate. Sent back to try max_norm=10.0.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 11) | **112.784** |
+| val_single_in_dist | 143.901 (+15.9%) |
+| val_geom_camber_rc | 129.979 (+15.3%) |
+| val_geom_camber_cruise | 80.735 (+5.4%) |
+| val_re_rand | 96.523 (+2.9%) |
+| test_avg/mae_surf_p | **100.553** |
+| Epochs completed | 11/50 (30-min cap) |
+
+**Analysis:** clip=1.0 likely clips EVERY update given ~1.18M params and L1 gradients. With 1.18M params each producing a ±1 or ±surf_weight gradient, the expected gradient L2 norm is ~sqrt(n_params * mean_grad^2) >> 1.0. The oscillations persisted, confirming this isn't reducing gradient spikes — it's just capping useful parameter updates. max_norm=10.0 is the natural next test: loose enough to only clip true outlier spikes, tight enough to have any stabilization effect.
+
+**Artifacts:** `models/model-charliepai2g48h3-nezuko-gradient-clipping-20260512-211112/metrics.jsonl`
+
+---
+
 ## 2026-05-12 22:30 — PR #1563: EMA weights (decay=0.999) for val/test eval — CLOSED
 
 - **Student:** charliepai2g48h3-askeladd

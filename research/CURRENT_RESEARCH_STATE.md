@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 ~22:30
+- **Date:** 2026-05-12 ~23:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none yet — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -19,8 +19,6 @@
 | re_rand | 93.820 | 89.536 |
 | **avg** | **101.810** | **91.708** |
 
-Note: The merged train.py defaults are now L1 loss + n_layers=6 + mlp_ratio=4.
-
 ## What we've learned
 
 ### Big wins (merged)
@@ -33,50 +31,58 @@ Note: The merged train.py defaults are now L1 loss + n_layers=6 + mlp_ratio=4.
 - Channel-weighted loss p×3 in normalized space: counterproductive
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
-- Warmup+lr=1e-3: too hot; even T_max=15 fails on n_layers=6 arch (175 s/epoch)
-- EMA (decay=0.999): cold-start drag kills performance (+41% worse); requires 100+ epochs or non-random init
+- Warmup+lr=1e-3: too hot (even T_max=15 fails at ~175 s/epoch)
+- EMA (decay=0.999): cold-start drag (+41% worse); requires 100+ epochs or non-random init
+- lr=3e-4: undertraining at 30-min cap; cosine barely decays with T_max=50 (sent back to try lower LR + short T_max later)
+- n_layers=7: +51% worse, 9 epochs/30min, reproducible NaN on test_geom_camber_cruise
+- grad clip max_norm=1.0: too aggressive for L1 constant-magnitude gradients; retry at max_norm=10 in progress
 
-### Key insight
-**L1 loss is the dominant lever so far** (−20.5% alone). Architecture wins stack onto this. EMA cold-start drag is a real constraint at 30-min budget — weight averaging only viable if initialized from post-warmup live weights.
+### Key insights
+1. **L1 loss is the dominant lever** (−20.5% alone)
+2. **Budget is the constraint**: 30 min → ~12-13 epochs at n_layers=6, ~9 at n_layers=7. Any deeper/wider arch needs a batching change.
+3. **n_layers=6 + mlp_ratio=4 is the sweet spot** for the 30-min budget
+4. **LR/schedule coupling**: can't tune LR without also fixing T_max; lower LR needs shorter T_max to decay properly
+5. **Gradient clip threshold**: with L1 loss and 1.18M params, max_norm=1.0 clips virtually all updates; threshold must be >>1.0 to be useful
 
 ## Active experiments
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
 | alphonse | #1592 | Cosine T_max 50 → 14 (align to budget) | WIP |
-| nezuko | #1593 | Gradient clipping (max_norm=1.0) | WIP |
-| tanjiro | #1594 | Lower LR: 5e-4 → 3e-4 | WIP |
+| nezuko | #1593 | Gradient clipping (max_norm=10.0 re-run) | WIP (sent back) |
+| tanjiro | #1634 | Batch size 4 → 8 (lower gradient noise) | New |
 | fern | #1595 | Huber/SmoothL1 loss (beta=1.0) | WIP |
-| edward | #1562 | n_layers 6 → 7 | WIP |
-| askeladd | #1622 | AdamW betas (0.9,0.999)→(0.95,0.99) | New |
+| edward | #1632 | Dropout=0.1 in attention (OOD regularization) | New |
+| askeladd | #1622 | AdamW betas (0.9,0.999)→(0.95,0.99) | WIP |
 | frieren | #1384 | surf_weight 10 → 25 (rebase needed) | WIP/CONFLICTING |
 | thorfinn | #1525 | Fourier positional features (L=4) | WIP |
 
-## Round 3 themes and open questions
+## Round 3/4 themes and open questions
 
-1. **LR tuning for L1**: L1 gradients are constant-magnitude — is 5e-4 still optimal? (tanjiro testing 3e-4)
-2. **Schedule completion**: T_max=50 means cosine barely decays in ~14 epochs — does aligning to budget help? (alphonse testing T_max=14)
-3. **Gradient stability**: L1 oscillations with AdamW at 5e-4 — does clipping help? (nezuko testing)
-4. **Huber vs L1**: Smooth convergence in fine regime vs pure L1 — is there a middle ground? (fern testing)
-5. **Architecture on L1**: n_layers=7 (edward) — does depth still win on L1 baseline?
-6. **surf_weight with L1**: frieren testing surf_weight=25 on current arch (needs rebase)
-7. **Fourier features**: thorfinn testing — does input feature engineering help OOD?
-8. **AdamW betas for L1**: β2=0.999 tracks MSE variance, not L1; tighter β2=0.99 may be a better fit (askeladd)
+1. **Schedule completion** (alphonse): T_max=14 = does aligning decay to actual epoch budget help?
+2. **Gradient stability at scale** (nezuko retry): max_norm=10 — right clip threshold for L1 grad magnitudes?
+3. **Batch size effect** (tanjiro): batch=4→8 — fewer, cleaner gradient steps; does this trade-off favor accuracy at our budget?
+4. **OOD regularization** (edward): dropout=0.1 — improves hardest OOD splits?
+5. **Huber vs L1** (fern): SmoothL1 beta=1.0 — middle ground between MSE and L1?
+6. **AdamW betas for L1** (askeladd): (0.95, 0.99) vs default — better second-moment tracking for constant-magnitude gradients?
+7. **surf_weight with L1** (frieren): 10 → 25 on new baseline, after rebase
+8. **Fourier features** (thorfinn): input feature engineering — does L=4 Fourier encoding help OOD?
 
-## Probable round 4 directions (conditional on round 3 signal)
+## Probable round 4/5 directions (conditional on round 3/4 signal)
 
-- **Stacked winners**: Compound all orthogonal wins (e.g. optimal LR + grad clip + betas + L1)
+- **Stacked winners**: Compound all orthogonal wins (e.g. optimal T_max + optimal batch + dropout + L1)
+- **LR+schedule joint tuning**: lr=3e-4 + T_max=14 (if alphonse's T_max=14 shows benefit)
 - **surf_weight exploration**: If surf_weight=25 fails, try surf_weight=5 (L1 may already rebalance)
+- **Physical-space L1**: Compute loss in denormalized units for direct metric alignment
 - **Data augmentation**: Mesh-coarsening, AoA jitter for OOD robustness
-- **Physical-space L1**: Compute loss in denormalized units for direct metric alignment (edward suggested)
-- **Per-channel weighting in L1**: Scale surface p higher in L1 space (previously failed in MSE — may be different)
-- **SWA (Stochastic Weight Averaging) with late-start**: Initialize EMA-style average from post-epoch ~8; fixes cold-start drag
-- **Architecture revisit**: n_layers=8 once training is more stable
+- **SWA with late-start**: Initialize from post-epoch-8 live weights (fixes EMA cold-start issue)
 - **Lion optimizer**: Sign-based update complements L1 constant-gradient dynamics
+- **mlp_ratio=8**: Bigger feedforward; note we're at width limit (n_hidden=128 × 8 = 1024-dim MLP). Per-epoch time TBD.
 
 ## Key constraints
 
-- 30 min / run cap: n_layers=6 arch gives ~12-13 epochs (~175 s/epoch with L1)
-- Per-epoch time budget eliminates: n_head=8 (+43%), slice_num=128 (+12%), warmup+lr=1e-3 (T_max never decays)
+- 30 min / run cap: n_layers=6 → ~12-13 epochs (~175 s/epoch with L1)
+- Per-epoch time budget eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~205 s/epoch)
 - EMA eliminates: decay=0.999 with random init (cold-start drag, half-life 693 steps)
 - test_avg/mae_surf_p is RELIABLE since PR #1358 NaN-fix: 91.708 is the first accurate test baseline
+- Gradient clip threshold must be >>1.0 with L1 loss and 1.18M params (L2 grad norm >> 1.0 for constant ±1 grads)
