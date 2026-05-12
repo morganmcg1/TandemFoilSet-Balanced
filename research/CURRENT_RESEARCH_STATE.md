@@ -11,53 +11,43 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Round 1 — in flight (4 reviewed, 7 WIP + 1 early-round-2)
+## Current baseline (MERGED)
 
-Broad sweep over orthogonal levers. Scoring NaN bug diagnosed and workaround broadcast to all PRs. Three PRs sent back for clean rerun (#1427, #1451, #1419). One PR closed as dead end (#1447).
+**PR #1419 — alphonse bf16 autocast** (merged 2026-05-12):
+- `val_avg/mae_surf_p = 109.2937` (epoch 18)
+- `test_avg/mae_surf_p = 97.6659`
+- Config: bf16 autocast + NaN scoring fix, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
+- ~18 epochs / 30 min (bf16 = ~101 s/epoch)
 
-### Scoring fix (broadcast to all PRs)
+**Scoring fix is now in the merged `train.py`** — all new PRs inherit it automatically.
 
-`.test_geom_camber_cruise_gt/000020.pt` has `-inf` values in y[:, 2] (`-65504 = -fp_max(bf16)`). Workaround in `evaluate_split` in `train.py` (data/ is read-only):
-```python
-sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
-mask_eff = mask & sample_finite.unsqueeze(-1)
-y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
-ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
-```
-Val is unaffected. Alphonse's rerun (#1419) will be canonical merged version.
+## Active round-2 experiments
 
-### Round-1 leaderboard
+| Student | PR | Hypothesis | Lever | Status |
+|---------|----|-----------|-------|------|
+| alphonse | #1544 | `mlp_ratio=4` (2× MLP width) | Architecture (capacity) | WIP |
+| askeladd | #1427 | `surf_weight=30` (3×) — rerunning with NaN fix | Loss weighting | WIP |
+| edward | #1546 | `n_layers=8` (Transolver paper default) | Architecture (depth) | WIP |
+| fern | #1436 | Huber loss — rebase + retest on bf16 baseline | Loss form | WIP |
+| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP |
+| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP |
+| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP |
+| thorfinn | #1550 | `slice_num=96` (clean test at bs=4+bf16) | Architecture (attention) | WIP |
 
-| PR | Student | Hypothesis | Val (best) | Test (clean) | Epochs | Status |
-|----|---------|-----------|-----------:|-------------:|---:|---|
-| #1419 | alphonse | bf16 autocast | **110.84** | **99.79** | 18 | WIP (rerunning with NaN fix) |
-| #1427 | askeladd | surf_weight=30 | 134.14 | 130.65 (3-split) | 12 | WIP (rerunning with NaN fix) |
-| #1451 | thorfinn | slice_num=128 (bs=2) | 136.69 | 132.59 (3-split) | 11 | WIP (rerunning with NaN fix) |
-| #1447 | tanjiro | batch_size=8 | 154.74 | 138.92 | 14 | **Closed** (halved optimizer steps under wall-clock cap) |
+## Key observations from round 1
 
-Alphonse leads decisively — bf16 buys 18 epochs vs 11-14 for fp32 siblings. Under our 30-min wall-clock cap, per-epoch speed is the dominant convergence lever.
-
-### In-flight WIP PRs (still training)
-
-| Student | PR | Hypothesis | Lever |
-|---------|----|-----------|-------|
-| alphonse | #1419 | bf16 autocast | Throughput (18 epochs/30 min) |
-| askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting |
-| edward | #1430 | `lr=1e-3` + 5% warmup + cosine | Optimisation |
-| fern | #1436 | Smooth L1 (Huber) loss | Loss form |
-| frieren | #1442 | Wider `n_hidden=192` | Architecture (capacity) |
-| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment |
-| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability |
-| thorfinn | #1451 | `slice_num=128` (2×) | Architecture (attention partitioning) |
+1. **bf16 is the dominant lever** — 18 epochs/30 min vs 11-14 for fp32. Under our hard wall-clock cap, per-epoch speed is the strongest convergence driver. Now merged.
+2. **Huber loss shows remarkable signal** — fern achieved val=109.45 at fp32 14 epochs, nearly matching bf16 at 18 epochs. This implies ~4 epochs of effective speedup from loss-shape alignment with MAE metric. Huber + bf16 expected to compound to ~95-105.
+3. **batch_size scaling doesn't help** — bs=8 halved optimizer steps/min without reducing per-epoch time (dataloader bottleneck). Closed.
+4. **slice_num=128 confounded by bs=2 OOM** — can't interpret. slice_num=96 (thorfinn #1550) tests this cleanly at bs=4.
+5. **LR=1e-3 + cosine T_max mismatch** — schedule sized to 30 epochs ran only 14; under-annealed. Closed. edward retesting n_layers=8 (depth is a cleaner lever at bf16 baseline).
+6. **val_single_in_dist is consistently the hardest split** (~133-175 MAE across runs) — not an overfitting artifact, more likely extreme-Re / extreme-p samples. OOD camber_cruise is consistently easiest (73-106 MAE).
 
 ## Round-2 candidate pool (from `research/RESEARCH_IDEAS_2026-05-12_round1.md`)
 
-H1 (gradient clipping) already assigned to tanjiro (#1534). Remaining:
+H1 (gradient clipping → tanjiro), H3 (n_layers=8 → edward), H4 (slice_num=96 → thorfinn), H5 (mlp_ratio=4 → alphonse) all assigned. Remaining:
 
-- **H3 — `n_layers=8`**: matches original Transolver paper default; baseline is L=5
-- **H4 — `slice_num=96`** (alternative finer-grain to thorfinn's 128)
-- **H5 — `mlp_ratio=4`**: capacity increase, all standard transformers use 4×
-- **H8 — dropout 0.1**: regularisation for the 3-of-4 OOD val splits, needs Transolver kwarg check first
+- **H8 — dropout 0.1**: regularisation for the 3-of-4 OOD val splits. Assign to next idle student.
 
 ## Broader follow-up directions (post-round-2)
 

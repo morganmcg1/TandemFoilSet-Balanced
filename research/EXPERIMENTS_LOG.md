@@ -124,3 +124,77 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - Useful artifacts kept: (1) independent confirmation that the train.py NaN workaround produces a clean `clean_test_avg/mae_surf_p = 138.92` on the previously-poisoned scoring path; (2) 94 GB peak GPU measurement at `slice_num=64, n_hidden=128, bs=8` — bounds what `n_hidden=192` (frieren #1442) can stack on top; (3) student killed a duplicate `bs=8` launch (`4g5fatyx`) — good housekeeping.
 - Lesson recorded: under our 30-min wall-clock cap, any lever that doesn't speed up *per-epoch* wall clock (or improve sample-efficiency dramatically) leaves optimizer steps on the table. This is why bf16 wins and why pure batch-size scaling loses. Architectural levers face the same headwind.
 
+## 2026-05-12 20:05 — PR #1419 v2: alphonse bf16 autocast + scoring fix (MERGED — new baseline)
+
+- Branch: `willowpai2g48h5-alphonse/bf16-autocast`
+- W&B run: `4hy79j91` (18 of 30 epochs; hit 30-min cap at 30.37 min)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 18) | **109.2937** |
+| `val/single_in_dist/mae_surf_p` | 133.2714 |
+| `val/geom_camber_rc/mae_surf_p` | 115.3895 |
+| `val/geom_camber_cruise/mae_surf_p` | 87.8295 |
+| `val/re_rand/mae_surf_p` | 100.6844 |
+| `test_avg/mae_surf_p` (W&B summary, finite) | **97.6659** |
+| `test/test_single_in_dist/mae_surf_p` | 113.9645 |
+| `test/test_geom_camber_rc/mae_surf_p` | 105.7068 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 73.3736 |
+| `test/test_re_rand/mae_surf_p` | 97.6189 |
+| Per-epoch wall clock | ~101 s |
+
+- **Decision: MERGE** — round-1 winner. bf16 autocast + NaN scoring fix. All 4 test splits finite (W&B summary). Val curve still descending at cap (best is epoch 18, last epoch run). Small improvements vs v1 (val 110.84 → 109.29, test offline-99.79 → W&B-97.67) are within RNG variance; the important outcome is that the W&B-logged test metric is now fully clean and mergeable.
+- bf16 gives ~101 s/epoch vs ~150-160 s fp32 — 18 epochs in 30 min vs 11-14 for fp32 siblings.
+- Scoring fix confirmed working: `test_geom_camber_cruise/mae_surf_p = 73.37` (no longer NaN). Note: `test_geom_camber_cruise/loss` and `vol_loss` still show NaN in W&B (the non-workaround loss accumulator path was not patched; cosmetic only).
+- **New baseline**: val=109.29, test=97.67. All subsequent PRs compare against this.
+
+## 2026-05-12 20:10 — PR #1436: fern Huber (Smooth L1) loss (review 1, sent back for rebase)
+
+- Branch: `willowpai2g48h5-fern/huber-loss`
+- W&B run: `8kxmpkhu` (14 of 30 epochs; ~130 s/epoch fp32)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 14) | **109.4523** |
+| `val/single_in_dist/mae_surf_p` | 142.1625 |
+| `val/geom_camber_rc/mae_surf_p` | 116.2204 |
+| `val/geom_camber_cruise/mae_surf_p` | 82.3047 |
+| `val/re_rand/mae_surf_p` | 97.1215 |
+| `test_avg/mae_surf_p` (clean) | **98.4633** |
+| `test/test_single_in_dist/mae_surf_p` | 123.5613 |
+| `test/test_geom_camber_rc/mae_surf_p` | 104.7107 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 70.5944 |
+| `test/test_re_rand/mae_surf_p` | 94.9866 |
+
+- **Remarkable result**: val=109.45 at fp32 14 epochs nearly matches the merged baseline val=109.29 at bf16 18 epochs. This implies Huber's sample-efficiency gain ≈ 4 epochs of extra training, which is large.
+- Not merged as-is because: (1) 109.45 > 109.29 new baseline (technically doesn't beat it by 0.16); (2) tested against unmerged stock — needs rebase + retest on bf16 baseline.
+- **Sent back**: rebase onto merged `icml-appendix-willow-pai2g-48h-r5`, remove duplicate NaN workaround (already in baseline), rerun with bf16 inherited. Predicted val ~95-105 if effects stack (Huber + bf16).
+
+## 2026-05-12 20:10 — PR #1430: edward lr=1e-3 + warmup (review 1, closed)
+
+- Branch: `willowpai2g48h5-edward/lr-1e-3-warmup`
+- W&B run: `w5uih4d4` (14 of 30 epochs)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 14) | 137.7464 |
+| `test_avg/mae_surf_p` (clean) | 124.2629 |
+
+- **Decision: close**. cosine T_max=30 mismatch with actual 14-epoch budget left the run at lr≈5.8e-4 (midpoint of the annealing curve) at termination — never reached the low-LR polishing phase. The hypothesis (lr=1e-3 outperforms lr=5e-4) is untested; the schedule-budget mismatch is the confound. Retesting at fp32 with corrected schedule (`--epochs 15`) would still face a structurally disadvantaged epoch count vs the merged bf16 baseline (~14 fp32 vs ~18 bf16 epochs). Closed.
+- The better follow-up is lr=1e-3 + warmup ON TOP OF the merged bf16 baseline — assigned fresh to edward as round-2 (lr+warmup may compound with bf16's throughput benefit).
+- NaN workaround application was correct; LR schedule implementation was correct.
+
+## 2026-05-12 20:10 — PR #1451 v2: thorfinn slice_num=128 rerun (review 2, closed)
+
+- Branch: `willowpai2g48h5-thorfinn/slice-num-128`
+- W&B run: `0t5h1kwd` (11 of 30 epochs; ~171 s/epoch at bs=2)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 9) | 141.4702 |
+| `test_avg/mae_surf_p` (clean 4-split) | **128.9030** |
+| Peak GPU memory | 27.0 GB (bs=2) |
+
+- **Decision: close**. The NaN workaround works (all 4 test splits finite). But val=141.47 is well below the merged baseline (109.29). The bs=2 confound persists — run-to-run noise at bs=2 swamped the signal (the two runs differed by 4.8 MAE on val). At ~171 s/epoch (bs=2), only 11 epochs fit in 30 min.
+- The hypothesis (slice_num doubling → better OOD) remains untested cleanly. Assigned thorfinn H4 slice_num=96 as the clean test: less memory than 128, fits at bs=4, bf16 inherited → ~12-15 epochs, no batch-size confound.
+
