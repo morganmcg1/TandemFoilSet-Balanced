@@ -1,5 +1,29 @@
 # SENPAI Research Results
 
+## 2026-05-12 20:20 — PR #1482: 3-epoch warmup + cosine + peak lr=1e-3
+
+- Branch: `charliepai2g24h2-frieren/warmup-cosine-lr1e-3`
+- Hypothesis: Linear warmup + higher peak lr reduces destabilizing updates in early epochs; canonical for transformer training
+- Artifacts: `models/model-charliepai2g24h2-frieren-warmup-cosine-lr1e-3-20260512-180356/metrics.jsonl`
+
+| Split | val mae_surf_p | test mae_surf_p (bs=4) | test mae_surf_p (bs=1) |
+|---|---:|---:|---:|
+| val_single_in_dist     | 162.05 | 146.76 | 151.01 |
+| val_geom_camber_rc     | 137.15 | 122.86 | 124.68 |
+| val_geom_camber_cruise | 101.34 | NaN    | 82.75  |
+| val_re_rand            | 111.83 | 111.94 | 111.16 |
+| **val_avg / test_avg** | **128.09** | **NaN** | **117.40** |
+
+**Config:** 3-ep warmup + lr=1e-3 + cosine(T_max=47, eta_min=1e-6), bs=4, wd=1e-4, surf_weight=10, all other defaults. **No chan_w in branch base** (PR assigned before #1464 merged — stacked floor unknown). 14 epochs (timeout-cut). Peak VRAM 42.1 GB.
+
+**Decision: MERGED — new floor at val_avg/mae_surf_p=128.09 (beats 133.94 by 4.4%).**
+
+**Analysis:** Second confirmed win. val_re_rand showed the largest improvement (129.86→111.83, −14%), indicating warmup + higher LR particularly helps cross-regime generalization. The test NaN on test_geom_camber_cruise is a NEW model-level issue (not the data bug): specific bs=4 batch compositions at lr=1e-3 boundary cause non-finite attention weights. bs=1 eval is clean (117.40). Student proposed fixes: lr=7.5e-4 + gradient clipping — assigned as #1573 follow-up.
+
+**Note:** This floor was measured WITHOUT chan_w in the branch base. The merged advisor branch now has both chan_w + warmup — the true stacked floor is expected to be lower than 128.09 but unmeasured.
+
+---
+
 ## 2026-05-12 20:00 — PR #1531: Channel weight p=10 (sweep beyond p=5)
 
 - Branch: `charliepai2g24h2-alphonse/channel-weight-p10`

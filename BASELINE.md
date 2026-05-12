@@ -1,6 +1,43 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1464 (2026-05-12)
+## Current best — PR #1482 (2026-05-12)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **128.0916** |
+| val_single_in_dist/mae_surf_p | 162.05 |
+| val_geom_camber_rc/mae_surf_p | 137.15 |
+| val_geom_camber_cruise/mae_surf_p | 101.34 |
+| val_re_rand/mae_surf_p | 111.83 |
+| test_avg/mae_surf_p | NaN† |
+| test_single_in_dist/mae_surf_p | 146.76 |
+| test_geom_camber_rc/mae_surf_p | 122.86 |
+| test_geom_camber_cruise/mae_surf_p | NaN† |
+| test_re_rand/mae_surf_p | 111.94 |
+| test_avg (bs=1 clean eval) | 117.40 |
+| best_epoch | 14 (of 50; timeout-cut, still improving) |
+
+†Two distinct NaN sources on test_geom_camber_cruise: (1) known data bug (`0*NaN` propagation from 000020.pt), and (2) model-level batch-composition sensitivity at lr=1e-3 for specific bs=4 batches in this split. Diagnosed by student: bs=1 eval produces clean test_avg=117.40. Addressed in follow-up PR.
+
+**Note:** This floor was measured WITHOUT chan_w=[1,1,5] in the branch (PR assigned before #1464 merged). The merged advisor branch NOW has BOTH chan_w + warmup; the true floor with both levers stacked is expected to be ≤128.09 but has not been measured yet. Use 128.09 as the conservative floor until askeladd's re-run (#1536) confirms.
+
+**Artifacts:** `models/model-charliepai2g24h2-frieren-warmup-cosine-lr1e-3-20260512-180356/`
+
+**Change:** 3-epoch linear warmup (0.02×peak → 1.0) followed by CosineAnnealingLR(T_max=MAX_EPOCHS−3, eta_min=1e-6). Peak lr=1e-3 (CLI flag). Added per-epoch LR logging to metrics.jsonl.
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --lr 1e-3 \
+  --agent charliepai2g24h2-frieren \
+  --experiment_name "charliepai2g24h2-frieren/warmup-cosine-lr1e-3"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)  
+Optimizer: AdamW lr=1e-3 (peak), wd=1e-4, batch_size=4, surf_weight=10, 3-ep warmup + cosine, fp32  
+Peak VRAM: 42.1 GB. Wall clock cap: 30 min → 14 epochs.
+
+## Previous floor — PR #1464 (2026-05-12)
 
 | Metric | Value |
 |---|---|
