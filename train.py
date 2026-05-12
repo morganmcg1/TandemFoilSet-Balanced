@@ -162,11 +162,34 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class FiLMLayer(nn.Module):
+    """Feature-wise Linear Modulation: h' = gamma(z) * h + beta(z).
+
+    Identity-initialised so the model starts at the un-modulated baseline;
+    training learns the global-condition modulation.
+    """
+
+    def __init__(self, cond_dim: int, hidden_dim: int):
+        super().__init__()
+        self.gamma_proj = nn.Linear(cond_dim, hidden_dim)
+        self.beta_proj = nn.Linear(cond_dim, hidden_dim)
+        nn.init.zeros_(self.gamma_proj.weight)
+        nn.init.ones_(self.gamma_proj.bias)
+        nn.init.zeros_(self.beta_proj.weight)
+        nn.init.zeros_(self.beta_proj.bias)
+
+    def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        gamma = self.gamma_proj(z).unsqueeze(1)
+        beta = self.beta_proj(z).unsqueeze(1)
+        return gamma * h + beta
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  stoch_depth_prob: float = 0.0,
-                 layer_scale_init: float = 0.025):
+                 layer_scale_init: float = 0.025,
+                 cond_dim: int = 0):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
@@ -180,6 +203,7 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
+        self.film = FiLMLayer(cond_dim, hidden_dim) if cond_dim > 0 else None
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -187,7 +211,7 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, z=None):
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
@@ -195,6 +219,8 @@ class TransolverBlock(nn.Module):
                 return fx
         fx = self.layer_scale_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.layer_scale_mlp * self.mlp(self.ln_2(fx)) + fx
+        if self.film is not None and z is not None:
+            fx = self.film(fx, z)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -221,17 +247,26 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.cond_dim = 11
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+                cond_dim=self.cond_dim,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Restore FiLM identity init (overwritten by trunc_normal_ in _init_weights).
+        for block in self.blocks:
+            if block.film is not None:
+                nn.init.zeros_(block.film.gamma_proj.weight)
+                nn.init.ones_(block.film.gamma_proj.bias)
+                nn.init.zeros_(block.film.beta_proj.weight)
+                nn.init.zeros_(block.film.beta_proj.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -244,9 +279,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        z = data.get("z")
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, z)
         return {"preds": fx}
 
 
@@ -274,9 +310,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # Global flow params (dims 13-23: log_Re, AoA1, NACA1*3, AoA2, NACA2*3,
+            # gap, stagger) extracted from node 0 BEFORE Fourier shifts indices.
+            # Node 0 avoids padded-zero bias since pad_collate appends padding.
+            z = x_norm[:, 0, 13:24]
             x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "z": z})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -500,9 +540,10 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        z = x_norm[:, 0, 13:24]
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "z": z})["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
