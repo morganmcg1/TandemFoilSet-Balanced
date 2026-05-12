@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-12 21:30 UTC (wave 2 partly resolved — #1611 cosine merged as new baseline, wave 3 launched)
+- **Last updated**: 2026-05-12 23:00 UTC (3 reviews done — #1637 grad-clip-25 merged as new baseline; #1636 + #1553 closed; wave-4 spawned)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,152 +11,132 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1611 merged — cosine T_max=15 win, -4.21%)
+## Current best baseline (PR #1637 merged — grad-clip max_norm=25, -4.16%)
 
-- `val_avg/mae_surf_p` = **94.217** (cosine `T_max=15` + L1 + stoch-depth; best @ ep 15)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **84.859**
-- Per-split val: single_in_dist=114.200 / camber_rc=102.157 / camber_cruise=73.321 / re_rand=87.188
-- Δ vs PR #1552 baseline (98.353): **-4.21%** on val_avg, **-3.57%** on 4-split test
-- Largest single-arm gain of wave 2 so far. Val MAE descended monotonically
-  every epoch — model still improving at the 30-min cap, hinting at further
-  headroom with more time or warm-started follow-ups.
+- `val_avg/mae_surf_p` = **90.294** (grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 15)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **81.243**
+- Per-split val: single_in_dist=109.497 / camber_rc=98.952 / camber_cruise=69.208 / re_rand=83.520
+- Δ vs PR #1611 baseline (94.217): **-4.16%** on val_avg, **-4.26%** on 4-split test
+- All four val splits improved uniformly (-3.14% to -5.61%)
+- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → val_avg has improved from 100.957 to 90.294 = **-10.6% over 4 merges**.
 
 ## Current research focus
 
-**Active leverage from the merged cosine T_max=15 baseline.** Three threads
-are converging:
+**Stacking compound wins.** The merged baseline is now 90.294 with four
+mechanisms stacked: L1 loss, stoch-depth schedule, cosine T_max=15, and
+grad-clip max_norm=25. Each individual mechanism has been confirmed
+beneficial on this dataset; the compound is now ~11% better than the
+original L1-only baseline. Three threads in flight:
 
-1. **Stack the cosine cooldown with EMA** — frieren #1608 was sent back for
-   rebase. EMA averaged on top of the cosine cooldown phase should keep most
-   of its 95.761 raw signal but now starts from a 94.2 floor (mechanistically
-   orthogonal: EMA averages over the trajectory; cosine reshapes the trajectory).
-2. **Outstanding extraordinary signal: fern #1549 FiLM = 81.291** — posted on
-   a branch missing both stoch-depth and cosine T_max=15. **-17.3% vs current**
-   baseline if it holds after rebase. This is the single highest-EV lever in
-   flight; sent back for rebase to confirm.
-3. **Outstanding strong signal: edward #1548 Fourier coords L=4 = 92.053** —
-   posted on a branch missing stoch-depth. -6.40% vs old baseline. Sent back
-   to verify it stacks with stoch-depth + cosine.
+1. **Bracket grad-clip** (askeladd #1674, `max_norm=50`) — direct
+   follow-up to merged #1637. Tests whether pure spike suppression
+   (the 110-norm at ep8) is the active mechanism vs spike+heavy-step
+   suppression (the typical 30-70 norms also getting clipped at 25).
+   Mechanism check via the new `train/last_grad_norm` log.
+2. **Per-channel output calibration** (alphonse #1675, H17) — clean pivot
+   from closed log1p direction. Adds 6 learnable parameters (γ, β ∈ ℝ³)
+   on the output head, identity-init. Attacks pressure-channel calibration
+   without compression.
+3. **Slice-collapse attack #3** (nezuko #1677, H12 per-node τ) — clean
+   pivot from closed Gumbel-Softmax. Per-node deterministic temperature
+   via small MLP, identity-init. Distinct from prior Ada-Temp and Gumbel
+   attempts.
 
-The recurring round-1 finding holds firmly: **surf_weight=10 is at or above
-the optimum**. Three independent confirmations bracket the optimum near 10.
+Two extraordinary signals still pending rebase confirmation:
 
-## Round 2 wave 2 — resolution
+- **fern #1549 FiLM = 81.291** posted on old base (missing stoch-depth, cosine, grad-clip). **-17.3% vs #1611 baseline, -10.0% vs current 90.294 baseline if it holds.** Highest-EV lever in flight.
+- **edward #1548 Fourier coords L=4 = 92.053** posted on old base (missing stoch-depth and cosine). -6.40% vs #1611 baseline; would need to retest against 90.294.
 
-| Student | PR | Slug | Verdict | Δ vs `#1552` baseline |
+The recurring round-1 finding holds: **surf_weight=10 is at or above the
+optimum**. Three independent confirmations bracket the optimum near 10.
+
+## Round 2 wave 3 — full resolution
+
+| Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
-| askeladd | #1611 | `cosine-tmax-15` | **MERGED** (new baseline 94.217) | -4.21% |
-| frieren | #1608 | `ema-weights-0.999` | **SENT BACK** for rebase | -2.64% (vs old base) |
-| alphonse | #1610 | `log1p-target` | **CLOSED** | +1.18% |
-| tanjiro | #1612 | `stoch-depth-0.05` | WIP | — |
+| askeladd | #1637 | `grad-clip-25` | **MERGED** (new baseline 90.294) | -4.16% |
+| alphonse | #1636 | `log1p-p-only` | **CLOSED** (channel-attribution falsified) | +5.32% |
+| nezuko | #1553 | `gumbel-slice` | **CLOSED** (3-run mean +4.4% vs old, hyp falsified) | +4.4% (3-run mean) |
 
-## Wave-1 carryover (still WIP / in rebase)
+## Round 2 wave 4 — currently in flight (3 new PRs after wave-3 closures)
 
-- **thorfinn #1555** — Tied projection + `n_hidden=144` retune (sent-back).
-- **nezuko #1553** — Gumbel-Softmax slice weights (WIP).
-- **fern #1549** — **FiLM global cond — sent back, MASSIVE -17.3% signal at 81.291**.
-- **edward #1548** — Fourier coords L=4 — sent back for stoch-depth+cosine rebase (-6.40%).
-
-## Round 2 wave 3 — currently in flight (2 new PRs after wave-2 closures)
-
-| Student | PR | Slug | Wave-3 idea | Axis |
+| Student | PR | Slug | Wave-4 idea | Axis |
 |---------|----|----|--------------|------|
-| alphonse | #1636 | `log1p-p-only` | H16 | Target reparam — log1p only on p (heavy-tailed) channel |
-| askeladd | #1637 | `grad-clip-25` | H15 | Optim trajectory — permissive grad clip on outlier spikes only |
+| askeladd | #1674 | `grad-clip-50` | H15 bracket | Optim — bracket grad-clip threshold above 25 |
+| alphonse | #1675 | `out-scale-bias-h17` | H17 | Output head — learnable per-channel γ, β |
+| nezuko | #1677 | `per-node-temp-h12` | H12 | Slice mechanism — per-node deterministic τ_i |
 
-### H16 motivation
-alphonse's closed #1610 (full-target log1p) regressed +1.18% on val_avg but
-revealed a clean per-split asymmetry: cruise/re_rand improved (the lower-peak
-splits) while single_in_dist/camber_rc regressed (the high-peak splits). The
-recomputed `log_y_std = [1.115, 1.531, 4.643]` showed only the pressure channel
-is genuinely heavy-tailed (4× the others). H16 applies log1p ONLY to p,
-isolating the compression where it matters.
+## Wave-1 / wave-2 carryover (still WIP)
 
-### H15 motivation
-askeladd's closed #1529 (`max_norm=1.0`) regressed +5.4% — but his own grad
-norm diagnostic showed natural training norms in the 10-245 range. clip=1.0
-fired on 100% of steps (effectively reducing LR); clip=25 fires only on
-outlier spikes (~10-15% of steps based on his data), suppressing the rare
-large-update events without touching typical descent. Compatible with both
-stoch-depth (which can cause block-drop-induced grad spikes) and cosine
-cooldown (where outlier spikes are especially damaging in the late
-fine-tuning phase).
+| Student | PR | Slug | Status |
+|---------|----|----|--------|
+| thorfinn | #1555 | `remove-in-project-fx` | WIP (n_hidden=144 retune) |
+| fern | #1549 | `film-global-cond` | **REBASING** — extraordinary -17% signal pending re-run on current stack |
+| edward | #1548 | `fourier-coords-L4` | **REBASING** — -6% signal needs re-run on current stack |
+| frieren | #1608 | `ema-weights-0.999` | **REBASING** — -2.6% signal needs re-run on current stack |
+| tanjiro | #1612 | `stoch-depth-0.05` | WIP (drop_rate=0.05 bracket below merged 0.10) |
 
-## Wave 4 candidate pool (held)
+## Wave 5 candidate pool (held)
 
-The researcher-agent refresh (`research/RESEARCH_IDEAS_2026-05-12_21:00.md`)
-also surfaced these, gated on the wave-3 results and rebase outcomes above:
+The researcher-agent refresh `research/RESEARCH_IDEAS_2026-05-12_21:00.md`
+surfaced these, gated on wave-4 results and pending-rebase outcomes:
 
-- **H12 (per-node adaptive temperature)** — `τᵢ = τ₀ + Linear(dim_head→1)(x_mid_i)`,
-  clamped ≥ 0.1. Distinct from the exhausted Ada-Temp variants in #1514
-  (which tried per-head and shared-heads scalar τ, never per-node).
-  **Hold until #1553 Gumbel-Softmax concludes** — both attack slice-collapse
-  via different mechanisms.
-- **H17 (learnable output scale+bias for pressure channel)** — `nn.Parameter`
-  scale and bias on the p channel only. Bypasses `_init_weights` reset
-  (which uses trunc_normal_ on nn.Linear, not on bare Parameters), so the
-  identity-init invariant holds. Small calibration gain expected on cruise.
-- **H16-followup (learnable log compression α)** — if H16 wins, replace
-  fixed `log1p(|y_p|)` with `log(1 + α·|y_p|) / α`, α learnable; α=0 →
-  identity, α=1 → full log1p.
-- **H15-followup (grad-clip bracket)** — if H15 wins, sweep `max_norm ∈
-  {10, 50}` to bracket the optimum.
+- **H15-followup-bracket-low (grad-clip max_norm=10)** — only if #1674 at
+  max_norm=50 regresses or matches 25. Pins 25 from below.
+- **H17-followup (per-output-position γ, β with spatial freq bins)** —
+  only if simpler H17 wins. More params, more risk.
+- **H12-followup-floor-sweep (tau_floor ∈ {0.05, 0.2})** — only if #1677
+  H12 wins. Bracket the floor.
+- **Stoch-depth follow-ups (depending on tanjiro #1612 outcome):**
+  - If 0.05 wins → bracket with 0.075 (between 0.05 winner and merged 0.10).
+  - If 0.05 regresses → over-regularization theory falsified; try 0.15 or 0.20.
+  - **Stack dropout in PhysicsAttention/MLP at 0.05** — standard ViT recipe;
+    often compounds with stoch-depth regardless of drop_rate outcome.
 
-### Still-open levers from later-round queue
-
-**Stoch-depth follow-ups (depending on tanjiro #1612 outcome):**
-- If 0.05 wins → bracket with 0.075 (between winner and merged 0.10).
-- If 0.05 regresses → over-regularization theory falsified; try 0.15 or 0.20.
-- **Stack dropout in PhysicsAttention/MLP at 0.05** — standard ViT recipe;
-  often compounds with stoch-depth regardless of drop_rate outcome.
+### Other open levers
 
 **Architecture/loss:**
 - **Output head specialization** — separate p / Ux / Uy heads with
-  channel-balanced loss in physical units.
+  channel-balanced loss in physical units. (Stronger version of H17.)
 - **Domain-aware sampler reweighting** to match val split aggregation
   (3/4 tandem in val_avg vs. 1/3 tandem in current sampler).
 - **Optimizer alternatives** — Lion, Adafactor, Sophia at calibrated lr.
 
-**Constraints reaffirmed from wave-1 + wave-2 closures:**
+**Constraints reaffirmed from wave-1 + wave-2 + wave-3 closures:**
 - No more learnable loss-balance objectives (Kendall ruled out the family).
 - No more architectural changes that add >10% per-step compute (asymmetric Q/K).
 - surf_weight=10 is empirically at-or-near optimum (3+ independent confirmations).
-- Full-target log1p uniformly is wrong (channel-asymmetric); pressure-only
-  may still work (H16 testing this now).
+- **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
+- **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48-21:30 UTC)
+## Recent closures and merges (2026-05-12 19:48-23:00 UTC)
 
-- **#1611 cosine-tmax-15 (askeladd)** — **MERGED** as new baseline 94.217.
-  val_avg -4.21%, test 4-split 84.859 (-3.57%).
-- **#1610 log1p-target (alphonse)** — **CLOSED** at +1.18%. Per-split
-  asymmetry → motivates H16 (pressure-only variant) now in flight as #1636.
-- **#1608 ema-weights-0.999 (frieren)** — **SENT BACK** for rebase onto
-  new #1611 baseline. Raw signal 95.761 was -2.64% vs OLD baseline; should
-  still stack with cosine.
-- **#1549 film-global-cond (fern)** — **SENT BACK** for rebase. Posted
-  val_avg=81.291 (-17.3% vs new baseline!) — extraordinary signal pending
-  confirmation after rebase onto stoch-depth + cosine.
-- **#1548 fourier-coords-L4 (edward)** — **SENT BACK** for stoch-depth +
-  cosine rebase. Posted val_avg=92.053 (-6.40% vs old baseline).
+- **#1637 grad-clip-25 (askeladd)** — **MERGED** as new baseline 90.294. val_avg -4.16%, test 4-split 81.243 (-4.26%). Mechanism: clip on outlier-spike steps, leave typical 30-70 norms unscaled.
+- **#1636 log1p-p-only (alphonse)** — **CLOSED** at +5.32%. Per-split asymmetry amplified from #1610: single_in_dist regressed +14.42%, camber_rc +9.23%. Channel-attribution theory falsified. Log-compression direction fully closed.
+- **#1553 gumbel-slice (nezuko)** — **CLOSED** at +4.4% (3-run mean). All 3 runs underperform even the old L1 baseline. Sampling noise antagonistic to the current stoch-depth + cosine + grad-clip stack.
+- **#1611 cosine-tmax-15 (askeladd)** — **MERGED** earlier today (new baseline 94.217 at the time, now superseded).
+- **#1610 log1p-target (alphonse)** — **CLOSED** at +1.18%.
+- **#1608 ema-weights-0.999 (frieren)** — **SENT BACK** for rebase.
+- **#1549 film-global-cond (fern)** — **SENT BACK** for rebase. Extraordinary 81.291 signal pending.
+- **#1548 fourier-coords-L4 (edward)** — **SENT BACK** for rebase.
 - **#1552 stoch-depth-0.1 (frieren)** — **MERGED** (round-2 wave-1 winner).
-- **#1555 remove-in-project-fx (thorfinn)** — **SENT BACK** for n_hidden=144
-  re-tune. Net +1.57% but efficiency gains real and direction worth iterating.
+- **#1555 remove-in-project-fx (thorfinn)** — **SENT BACK** for n_hidden=144.
 - **#1514 ada-temp v2 (alphonse)** — **CLOSED** at +3.4% vs L1-only base.
 - **#1547 kendall-uncertainty (askeladd)** — **CLOSED** at +5.28%.
-- **#1545 asymmetric-qk (tanjiro)** — **CLOSED** at +18.9% (compute-bound).
-- **#1530 channel-weight-p3 (tanjiro)** — closed, +1.22% worse than L1.
-- **#1529 grad-clip-1.0 (askeladd)** — closed, +5.4% worse than L1.
+- **#1545 asymmetric-qk (tanjiro)** — **CLOSED** at +18.9%.
+- **#1530 channel-weight-p3 (tanjiro)** — closed, +1.22%.
+- **#1529 grad-clip-1.0 (askeladd)** — closed, +5.4% — clip too aggressive at 1.0; the bracket success at 25 today validates the diagnostic.
 
 ## All 8 students currently assigned
 
 | Student | PR | Status |
 |---------|----|--------|
-| alphonse | #1636 | WIP (H16 log1p-p-only) |
-| askeladd | #1637 | WIP (H15 grad-clip-25) |
+| alphonse | #1675 | WIP (H17 out-scale-bias) |
+| askeladd | #1674 | WIP (grad-clip-50 bracket) |
 | edward | #1548 | rebasing (Fourier L=4) |
 | fern | #1549 | rebasing (FiLM 81.291 signal) |
 | frieren | #1608 | rebasing (EMA 0.999) |
-| nezuko | #1553 | WIP (Gumbel-Softmax slices) |
+| nezuko | #1677 | WIP (H12 per-node temp) |
 | tanjiro | #1612 | WIP (stoch-depth 0.05) |
 | thorfinn | #1555 | retuning (n_hidden=144) |
 

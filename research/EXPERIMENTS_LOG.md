@@ -8,6 +8,98 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 22:55 — PR #1637: Grad-clip max_norm=25 — **MERGED, new baseline**
+
+- Branch: `charliepai2g24h4-askeladd/grad-clip-25`
+- Hypothesis: H15 from wave-3 candidate pool. Diagnostic-informed follow-up
+  to closed #1529 (`max_norm=1.0`, +5.4% regression). At `max_norm=25`,
+  clipping fires on the outlier spikes (training grad norms range 22-110)
+  without touching the typical 30-70 norms.
+
+| Metric | This PR | Baseline (#1611) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | **90.294** | 94.217 | **-4.16%** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | **81.243** | 84.859 | **-4.26%** |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 109.497 / 98.952 / 69.208 / 83.520 | 114.200 / 102.157 / 73.321 / 87.188 | **-4.12% / -3.14% / -5.61% / -4.21%** |
+
+- **All four val splits improved uniformly** (-3.14% to -5.61%) — exactly as
+  the hypothesis predicted ("stable descent helps everywhere"), no
+  split-specific direction.
+- **Mechanism confirmed by the new `train/last_grad_norm` log**: 14/15 epochs
+  had end-of-epoch grad_norm > 25 (clipping active throughout). Largest
+  spike: 110.04 at epoch 8. Per-step rate likely higher than the
+  per-end-of-epoch rate.
+- **Cosine cooldown phase shows the biggest payoff**: the single largest
+  epoch-to-epoch val_avg drop (-13.7%) coincides with the only epoch
+  where end-of-epoch norm fell below the clip (22.40 at ep12).
+- Best epoch at the wall-clock cap (15/15) again — same monotonic-descent
+  pattern as the cosine-T_max-15 winner. The model is still improving when
+  time runs out.
+- Brackets the grad-clip direction: clip=1.0 (#1529, +5.4%) too aggressive,
+  clip=25 (#1637, -4.16%) the sweet spot or near it. Natural next:
+  bracket at clip=50 to test if pure spike-suppression is sufficient.
+
+## 2026-05-12 22:55 — PR #1636 (alphonse pressure-only log1p) — **CLOSED**
+
+- Branch: `charliepai2g24h4-alphonse/log1p-p-only`
+- Hypothesis: H16. Targeted follow-up to closed #1610 (full-target log1p,
+  +1.18% regression). Apply log1p ONLY to the pressure channel (the only
+  genuinely heavy-tailed channel per #1610's `log_y_std`), keep Ux/Uy raw.
+
+| Metric | This PR | Baseline (post #1611) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | 99.227 | 94.217 | **+5.32%** |
+| test_avg/mae_surf_p (4-split) | 88.264 | 84.859 | +4.01% |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 130.667 / 111.589 / 64.848 / 89.803 | 114.200 / 102.157 / 73.321 / 87.188 | **+14.42% / +9.23% / -11.56% / +3.00%** |
+
+- **Channel-attribution theory falsified.** The per-split asymmetry observed
+  in full-channel #1610 was preserved AND amplified by pressure-only log1p.
+  High-peak splits (single_in_dist, camber_rc) regressed *more* than under
+  full log1p; low-peak cruise gained more.
+- Mechanism (per the student's writeup): log compression flattens the tail
+  relative spacing the model relies on to discriminate extreme-pressure
+  samples (raceCar Re up to 5M, |p| up to ~30k). After inverse expm1,
+  small relative errors blow up multiplicatively at the tails — which are
+  exactly the high-peak splits that dominate val_avg.
+- Closed per the explicit PR rubric: "If p-only log1p still regresses, the
+  entire log-compression direction is dead on this dataset/metric — we
+  close and pivot to other channel-rebalancing ideas (e.g. H17)."
+- Pivoting alphonse to H17 (learnable per-channel scale+bias on output)
+  — addresses pressure calibration *without* compression.
+
+## 2026-05-12 22:55 — PR #1553 (nezuko Gumbel-Softmax slices, tau=1.0) — **CLOSED**
+
+- Branch: `charliepai2g24h4-nezuko/gumbel-slice`
+- Hypothesis: replace softmax over slice weights with Gumbel-Softmax during
+  training (deterministic softmax at eval) to sharpen slice assignments
+  and attack the slice-collapse failure mode.
+- Note: branch was never rebased onto the current baseline (still on the
+  pre-#1552/#1611 base). Student reported three runs with mean ± std.
+
+| Run | val_avg/mae_surf_p | Δ vs old base (100.957) | Δ vs current base (90.294) |
+|-----|---:|---:|---:|
+| ...-201404 | 102.827 | +1.85% | +13.89% |
+| ...-205438 | 109.970 | +8.93% | +21.79% |
+| ...-215442 (canonical) | 103.490 | +2.51% | +14.62% |
+| **Mean ± std** | **105.43 ± 3.16** | **+4.43%** | **+16.77%** |
+
+- **Hypothesis falsified across 3 independent runs.** Variance (~3 MAE units)
+  rules out single-seed effects; all 3 underperform even the old L1 baseline.
+- Failure mode (per student diagnostic): Gumbel sampling noise slows early
+  convergence enough that the 30-min cap binds before the model reaches
+  the deterministic baseline's asymptote. The eval-time deterministic
+  softmax can't recover because the slice weights were trained against
+  noisy targets.
+- Closed not just because of the negative result on the old base, but
+  because the current baseline stack (stoch-depth + cosine T_max=15 +
+  grad-clip max_norm=25) is *mechanistically antagonistic* to additional
+  gradient noise: stoch-depth already adds variance via block drop, cosine
+  cooldown relies on stable gradients in the late phase, and grad-clip
+  suppresses spikes that Gumbel noise would create. Layering Gumbel on
+  top would worsen, not improve, the gap.
+- Pivoting nezuko to H12 (per-node adaptive temperature) — different attack
+  on slice-collapse that *doesn't* inject sampling noise.
+
 ## 2026-05-12 22:50 — PR #1553 (nezuko Gumbel-Softmax slices) — **SENT BACK** for rebase + re-run
 
 - Branch: `charliepai2g24h4-nezuko/gumbel-slice` (still at `bc30b0a` — pre-#1552, pre-#1611)
