@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -409,7 +410,10 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=14)
+warmup_epochs = 1
+warmup_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+cosine_scheduler = CosineAnnealingLR(optimizer, T_max=14 - warmup_epochs)
+scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs])
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -504,11 +508,13 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
     grad_clip_frac = epoch_grad_clipped / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
+    current_lr = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": grad_norm_mean,
