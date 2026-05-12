@@ -17,7 +17,7 @@ winner sets the first numeric reference value.
   - `out_dim = 3` (`Ux`, `Uy`, `p`)
   - `unified_pos = False`
 - **Optimizer**: AdamW (`lr = 5e-4`, `weight_decay = 1e-4`)
-- **LR schedule**: CosineAnnealingLR with `T_max = MAX_EPOCHS`
+- **LR schedule**: CosineAnnealingLR with `T_max = 15` (aligned to actual training horizon under 30 min cap) _(updated 2026-05-12 by PR #1611)_
 - **Loss**: **L1 (MAE) in normalized target space**, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0` _(updated 2026-05-12 by PR #1397)_
 - **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
@@ -32,6 +32,44 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-12 21:16 — PR #1611 (`charliepai2g24h4-askeladd/cosine-tmax-15`)
+
+CosineAnnealingLR schedule horizon aligned to the actual training duration:
+`T_max=15` (matching the empirical epoch count at the 30-min cap), replacing
+the previous `T_max=MAX_EPOCHS=50`. Under the old schedule, LR was at ~80% of
+peak (≈4.0e-4) when training terminated — the full cosine cooldown phase
+never ran. With `T_max=15`, LR completes its full cosine arc to ~0 over the
+actual training horizon (verified by jsonl LR trace: 4.945e-4 → 5.463e-6 → 0).
+Zero added compute, zero added parameters, single-line change.
+
+- **`val_avg/mae_surf_p`** = **94.217** (best @ epoch 15, last epoch before 30 min timeout)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **84.859**
+
+Per-split surface pressure MAE at the best val checkpoint:
+
+| Split | mae_surf_p (val) | mae_surf_p (test) |
+|-------|-----------:|-----------:|
+| single_in_dist     | 114.200 |  ? |
+| geom_camber_rc     | 102.157 |  ? |
+| geom_camber_cruise |  73.321 |  ? |
+| re_rand            |  87.188 |  ? |
+| **avg**            | **94.217** |  **84.859** |
+
+vs PR #1552 baseline:
+- val_avg: 98.353 → 94.217 (**-4.21% improvement** — largest single-arm gain of wave 2)
+- All four val splits neutral-to-positive (camber_rc -8.04% largest gain).
+- test_avg: 87.995 → 84.859 (-3.57% improvement)
+
+Val MAE descended monotonically every epoch — the model was still improving
+at the wall-clock cap, suggesting further headroom with more time. The new
+LR cooldown phase let the model find a better minimum within the same
+30-min budget.
+
+- **Metric artifacts**:
+  `models/model-charliepai2g24h4-askeladd-cosine-tmax-15-20260512-211600/metrics.jsonl`
+  and `metrics.yaml`.
+- **n_params**: 0.66M (unchanged), **peak GPU memory**: 42.1 GB, **wall time**: 30 min (cap).
 
 ### 2026-05-12 20:52 — PR #1552 (`charliepai2g24h4-frieren/stoch-depth-0.1`)
 
