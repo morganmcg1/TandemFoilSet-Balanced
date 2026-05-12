@@ -1,0 +1,48 @@
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+
+test_single_in_dist (skipped: 0)
+  mae_surf_Ux = 1.3235
+  mae_vol_Ux = 4.4767
+  mae_surf_Uy = 0.7546
+  mae_vol_Uy = 2.0243
+  mae_surf_p = 108.5759
+  mae_vol_p = 120.3975
+
+test_geom_camber_rc (skipped: 0)
+  mae_surf_Ux = 2.0822
+  mae_vol_Ux = 5.0544
+  mae_surf_Uy = 0.9316
+  mae_vol_Uy = 2.6120
+  mae_surf_p = 99.8801
+  mae_vol_p = 102.7288
+
+test_geom_camber_cruise (skipped: 1)
+  mae_surf_Ux = 0.8538
+  mae_vol_Ux = 3.1044
+  mae_surf_Uy = 0.4543
+  mae_vol_Uy = 1.1299
+  mae_surf_p = 63.9704
+  mae_vol_p = 64.6173
+
+test_re_rand (skipped: 0)
+  mae_surf_Ux = 1.3342
+  mae_vol_Ux = 3.8854
+  mae_surf_Uy = 0.7102
+  mae_vol_Uy = 1.7775
+  mae_surf_p = 88.6967
+  mae_vol_p = 88.8362
+
+=== Safe test_avg (skip-Inf-aware) ===
+  avg/mae_surf_Ux = 1.3984
+  avg/mae_surf_Uy = 0.7127
+  avg/mae_surf_p = 90.2808
+  avg/mae_vol_Ux = 4.1302
+  avg/mae_vol_Uy = 1.8859
+  avg/mae_vol_p = 94.1450
+
+Samples skipped per split:
+  test_single_in_dist: 0
+  test_geom_camber_rc: 0
+  test_geom_camber_cruise: 1
+  test_re_rand: 0
