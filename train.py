@@ -207,7 +207,28 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.unified_pos:
+            # Build a learned-grid positional embedding: Gaussian RBFs over a
+            # ref x ref grid in the (x, z) plane. Normalized positions span
+            # roughly [-7, 7] for x and [-0.4, 6.2] for z, so we widen the
+            # grid beyond the PR's [-1, 1] default to actually cover the data.
+            pos = x[..., :2]                                # [B, N, 2]
+            ref = self.ref
+            grid_lo, grid_hi = -7.0, 7.0
+            grid_x = torch.linspace(grid_lo, grid_hi, ref, device=pos.device, dtype=pos.dtype)
+            grid_y = torch.linspace(grid_lo, grid_hi, ref, device=pos.device, dtype=pos.dtype)
+            gx, gy = torch.meshgrid(grid_x, grid_y, indexing="ij")
+            grid = torch.stack([gx, gy], -1).reshape(-1, 2)  # [ref*ref, 2]
+            d2 = ((pos.unsqueeze(-2) - grid) ** 2).sum(-1)   # [B, N, ref*ref]
+            # Sigma ≈ grid spacing so adjacent features overlap at ~exp(-1).
+            spacing = (grid_hi - grid_lo) / (ref - 1)
+            pos_feat = torch.exp(-d2 / (spacing ** 2))       # [B, N, ref*ref]
+            if pos_feat.shape[-1] < ref ** 3:
+                pos_feat = pos_feat.repeat_interleave(ref, dim=-1)[..., : ref ** 3]
+            x_in = torch.cat([x[..., 2:], pos_feat], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -254,7 +275,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # Workaround for data/scoring.py NaN-propagation: accumulate_batch
+            # gates samples via `y_finite & mask`, but `nan * 0 = nan` in IEEE,
+            # so a single non-finite ground-truth value leaks into the per-
+            # channel sum. Pre-filter samples here to honor the documented
+            # "skip the whole sample" semantics.
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 
@@ -395,6 +430,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
