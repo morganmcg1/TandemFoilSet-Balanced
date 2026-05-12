@@ -8,6 +8,127 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 21:00 — PR #1555: Remove `in_project_fx` (Transolver++ tied projection) — **REQUEST CHANGES** (sent back to thorfinn for n_hidden=144 follow-up)
+
+- Branch: `charliepai2g24h4-thorfinn/remove-in-project-fx`
+- Hypothesis: H3 from round-2 list. Remove redundant `in_project_fx` from
+  `PhysicsAttention`, re-using `x_mid` as the value source in the slice-pooling
+  einsum (Transolver++, arXiv 2502.02414). Acts as a structural prior + frees VRAM.
+- Run was on L1+stoch-depth base (post-#1552), so direct apples-to-apples vs current baseline.
+
+| Metric | This PR | Baseline (#1552) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14/15) | 99.898 | 98.353 | **+1.57% (slightly worse)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 89.532 | 87.995 | +1.75% |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 129.395 / 108.141 / 72.436 / 89.619 | 119.16 / 111.09 / 73.32 / 89.84 | **+8.60% / -2.65% / -1.21% / -0.25%** |
+| n_params | 579,799 | 662,359 | **-12.5%** |
+| Peak GPU memory | 39.63 GB | 42.11 GB | **-5.9%** |
+| Wall time/epoch | ~125 s | ~123 s | ~unchanged |
+
+- **Pattern is a classic capacity-vs-regularization tradeoff.** The three OOD-flavored
+  splits (camber_rc, camber_cruise, re_rand) all improve modestly; single_in_dist
+  regresses by +8.6%, pulling val_avg net negative. The tied projection acts as a
+  structural regularizer that helps OOD but underfits the in-distribution mode.
+  Efficiency gains are real: -12.5% params and -5.9% VRAM at identical wall time.
+- **Action: sent back with re-tune spec** — keep the tied projection, but reinvest
+  the freed parameter budget (~83k params) and VRAM headroom by widening
+  `n_hidden=128 → 144`. This redistributes capacity across all weights rather than
+  concentrating it in a single redundant projection. Expected: single_in_dist
+  recovers toward 119, OOD gains preserved → net improvement vs 98.353. Student
+  must rebase onto current HEAD to include the merged stoch-depth code.
+
+## 2026-05-12 21:00 — PR #1514: Ada-Temp v2 (shared-across-heads Δτ) — **CLOSED**
+
+- Branch: `charliepai2g24h4-alphonse/ada-temp` (v2 force-push)
+- Hypothesis: v2 follow-up to test alphonse's own diagnosis that extra per-head
+  Δτ capacity hurt cross-regime transfer. v2 uses `Linear(dim, 1)` (shared-heads).
+- Run was on L1-only base (pre-#1552), so compared against 100.957 not 98.353.
+
+| Metric | v2 | L1 baseline (#1397) | v1 (per-head) | Current baseline (#1552) |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 104.366 | 100.957 | 101.770 | 98.353 |
+| Δ vs L1 baseline | **+3.4% (worse)** | — | +0.81% | -2.58% |
+| Δ vs current best | **+6.1% (worse)** | +2.65% | +3.47% | — |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 122.77 / 114.35 / 85.47 / 94.88 | 127.37 / 110.83 / 77.35 / 88.27 | 118.02 / 114.13 / 78.35 / 96.58 | 119.16 / 111.09 / 73.32 / 89.84 |
+| Δ vs L1 per-split | -4.60 / +3.51 / **+8.12** / +6.60 | — | -9.35 / +3.30 / +1.00 / +8.31 | — |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 93.936 | NaN | NaN | 87.995 |
+
+- **Both Ada-Temp variants are now exhausted.** v1 (per-head) regressed by +0.81%;
+  v2 (shared-heads) regresses harder by +3.4% on val_avg.
+- **The capacity-overfit hypothesis is partially contradicted.** Shared-heads
+  narrowed v1's val_re_rand regression (+8.31 → +6.60) and partially preserved
+  v1's val_single_in_dist gain (-9.35 → -4.60). But v2 introduced a new
+  large regression on val_geom_camber_cruise (+1.00 → +8.12), which v1 didn't
+  have. Removing per-head freedom collapses head specialization on the cruise
+  regime that needed it most.
+- **Action: CLOSED.** The NaN-safe pre-filter from this PR was independently
+  preserved via #1552 (now standard in baseline). Slice-collapse is also being
+  attacked via a different mechanism in #1553 (Gumbel-Softmax, WIP under nezuko).
+  Alphonse's suggested follow-up (Eidetic Slice Embedding) goes on the
+  wave-3 candidate pile for later revival if Gumbel-Softmax doesn't pan out.
+
+## 2026-05-12 21:00 — PR #1547: Kendall uncertainty weighting — **CLOSED**
+
+- Branch: `charliepai2g24h4-askeladd/kendall-uncertainty`
+- Hypothesis: H6 from round-2 list. Replace hand-tuned `surf_weight=10` with
+  learnable per-task log-sigmas (Kendall et al., CVPR 2018) so the surf/vol
+  balance becomes data-driven.
+
+| Metric | This PR | Baseline (#1552) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | 103.544 | 98.353 | **+5.28% (worse)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 94.524 | 87.995 | **+7.42% (worse)** |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 132.989 / 115.872 / 73.899 / 91.417 | 119.16 / 111.09 / 73.32 / 89.84 | +11.6% / +4.3% / +0.8% / +1.8% |
+| Learned `log_sigma_surf` / `log_sigma_vol` | -0.288 / -0.079 | — | — |
+| **Effective `surf_weight`** | **1.518** | 10.0 | -85% lower than hand-tuned |
+
+- **Key diagnostic finding: the Kendall MLE objective is fundamentally misaligned
+  with the physical evaluation metric.** Learned sigmas converged to
+  effective_surf_weight=1.518, ~7× lower than the hand-tuned value of 10 that
+  the baseline uses. Cross-referencing closed PRs #1403 (surf_weight=30, +5.1%
+  worse) and #1530 (effective surf×P_WEIGHT=30, +1.22% worse), the empirical
+  optimum for surf_weight is at or near 10, and learnable per-task likelihood
+  pulls it the wrong way.
+- **Lesson: learnable loss-balance objectives must align with the physical
+  eval metric, not just calibrated likelihoods.** This rules out the entire
+  family of MLE-style balance learning (Kendall, GradNorm, dynamic weight
+  averaging) unless they're constrained to optimize the evaluation surrogate
+  directly.
+- **Action: CLOSED.** Clean negative result. No reasonable variant of the
+  Kendall objective recovers the gap; the objective is the problem, not the
+  parameterization.
+
+## 2026-05-12 21:00 — PR #1545: Asymmetric Q/K slice projections (LinearNO) — **CLOSED**
+
+- Branch: `charliepai2g24h4-tanjiro/asymmetric-qk`
+- Hypothesis: H2 from round-2 list. Independent V and K slice projections in
+  PhysicsAttention (LinearNO-style) — separate the slice-assignment basis from
+  the value basis to enable richer slice tokens.
+
+| Metric | This PR | Baseline (#1552) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 10) | 116.940 | 98.353 | **+18.90% (worse)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 105.058 | 87.995 | **+19.39% (worse)** |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 141.506 / 132.312 / 86.757 / 107.185 | 119.16 / 111.09 / 73.32 / 89.84 | +18.7% / +19.1% / +18.3% / +19.3% |
+| n_params | 672,919 | 662,999 | +9,920 (+1.5%) |
+| Epochs reached in 30-min cap | **10** | 15 | **-33%** |
+
+- **Compute-bound failure mode.** The mechanism is empirically active (block-3
+  slice cos-sim = 0.097 confirms slice divergence), but the extra `in_project_slice_k`
+  projection adds ~40% wall-clock cost per epoch. Run terminated at epoch 10
+  vs the baseline's 15 — same compute budget, fewer effective gradient steps.
+- The trajectory was still descending at termination but needed ~17 additional
+  MAE points of improvement to match baseline, which is implausible in the
+  remaining 5 epochs even with monotonic descent.
+- **Structural lesson: architectural changes that add >10% per-step compute
+  are unviable in our 30-min training regime, even when the mechanism is
+  theoretically sound.** Future architectural changes must be parameter-additions,
+  not compute-additions, OR be paired with a complementary efficiency-saving
+  (e.g., the tied-projection direction that thorfinn is iterating on in #1555).
+- **Action: CLOSED.** Direction is dead within current budget constraints;
+  asymmetric Q/K could only be re-attempted at higher budget or paired with a
+  compute-saving change.
+
 ## 2026-05-12 20:52 — PR #1552: Stochastic depth (drop_rate=0.1, linear schedule) — **MERGED, new baseline**
 
 - Branch: `charliepai2g24h4-frieren/stoch-depth-0.1`
