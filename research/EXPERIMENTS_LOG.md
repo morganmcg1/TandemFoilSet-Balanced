@@ -110,3 +110,41 @@ Two students independently diagnosed the systemic `test_geom_camber_cruise/mae_s
 ### No decisions this cycle
 
 All 8 PRs remain draft `status:wip`. No code commits on 7 of 8 branches (frieren has a partial commit). No SENPAI-RESULT terminal markers. Advisor held back on per-student nudge comments to avoid further burning the shared GraphQL rate-limit budget (visible in pod logs as 6-retry token exhaustion per heartbeat).
+
+---
+
+## 2026-05-12 21:45 — Cycle-4 observations
+
+### Third independent cruise-NaN diagnosis (alphonse, #1461)
+
+Alphonse (baseline PR #1461) posted a detailed diagnostic at 21:15 UTC — independently arriving at the same root cause as edward (#1466) and thorfinn (#1480). New facts added by alphonse's analysis:
+
+- **Data scan:** scanned all 8 val/test splits (1000 files); `test_geom_camber_cruise/000020.pt` is the *only* file with non-finite `y` across the entire test/val set. `y[:, 2]` (pressure) has `-Inf` on 761 nodes.
+- **Behaviour confirmed:** all four W&B runs on this branch's project show identical `test_geom_camber_cruise/{mae_surf_p, mae_vol_p} = NaN` and `test_avg/mae_surf_p = NaN`. The other three test splits are clean.
+- **Resolution path the student proposed:** (1) repair the data file, (2) fix scoring.py with `torch.where`, or (3) flag and accept the NaN.
+
+### Advisor decision recorded on #1461
+
+Posted advisor comment at 21:45 UTC ruling each path:
+
+1. **Data fix:** out of scope for this isolated launch — dataset is fixed for the controlled ablation.
+2. **scoring.py fix:** out of scope — `program.md` declares `data/scoring.py` read-only and we don't modify it during this launch.
+3. **In-scope path:** the `train.py:evaluate_split` sanitize-and-gate workaround already prototyped on #1466 and #1480 is the right vehicle. Whichever of those PRs commits + finalizes first will land as the bug-fix.
+
+Also explicitly authorized alphonse's `test_avg/mae_surf_p_excluding_bad_sample` post-hoc recompute from the best existing checkpoint (`hqj9bt84`) — that becomes the canonical baseline test number for the round, usable *before* the eval-time workaround lands.
+
+### State unchanged otherwise
+
+| Item | Cycle-3 state | Cycle-4 state | Δ |
+|---|---|---|---|
+| Review-ready PRs | 0 | 0 | none |
+| Idle students | 0 | 0 | none |
+| Stale_wip PRs | 5 | 4 (alphonse moved off after comment) | -1 |
+| Code commits beyond `assign` | 1 (frieren partial) | 1 (frieren partial) | none |
+| Terminal SENPAI-RESULT markers | 0 | 0 | none |
+| Active student pods | 8/8 Ready | 8/8 Ready | none |
+| Human issues | 0 | 0 | none |
+
+### No formal decisions / merges this cycle
+
+No PRs marked ready for review; no merges, closes, or send-backs (beyond the advisor comment on #1461 acknowledging alphonse's flag, which is informational, not a state change).

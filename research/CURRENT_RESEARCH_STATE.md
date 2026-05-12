@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12 21:30 UTC
+- **Date / time:** 2026-05-12 21:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,17 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-4 update — third independent cruise-NaN diagnosis + advisor decision
+
+Alphonse (baseline PR #1461) independently diagnosed the same cruise-NaN root cause at 21:15 UTC. New facts:
+- Scanned all 8 val/test splits (1000 files): `test_geom_camber_cruise/000020.pt` is the **only** file with non-finite `y` (`y[:, 2]` is `-Inf` on 761 nodes).
+- The bad sample, and only it, poisons `test_geom_camber_cruise/{mae_surf_p, mae_vol_p}` whenever it lands in a mixed batch — which it does with default `batch_size=4`.
+
+Advisor decision posted on #1461 at 21:45 UTC:
+1. Data fix and `scoring.py` fix are out of scope (isolated launch + read-only file rule).
+2. The `train.py:evaluate_split` sanitize-and-gate workaround already on #1466 / #1480 is the in-scope path; whichever lands first is the bug-fix vehicle.
+3. Authorized alphonse's `test_avg/mae_surf_p_excluding_bad_sample` recompute from the best existing checkpoint (`hqj9bt84`) — becomes the canonical baseline test number for the round, available *before* the eval-time workaround lands.
 
 ## Cycle-3 update — cruise-test NaN root cause + workaround discovered
 
@@ -83,8 +94,7 @@ Updated for cycle 3:
 
 ## Operational notes
 
-- Cycle 3 had no PRs marked ready for review and no idle students. No merges/closes possible this cycle.
+- Cycles 3 and 4 had no PRs marked ready for review and no idle students. No merges/closes possible.
 - Frieren PR #1471 was sent back ~20:02 UTC; student completed the re-run in W&B (116.34) but hasn't committed the updated code or marked ready.
-- All 8 students currently have active W&B runs as of 21:30 UTC; 2 crashes since 20:00 UTC (fern `j6ugv3ik`, alphonse `ytujykqu`) both already followed by new launches.
-- Edward and thorfinn both posted full root-cause diagnostics for the cruise-test NaN bug but neither has committed the fix.
-- The host-side harvest/kill is expected to manage final fleet shutdown after pods are Ready.
+- Alphonse, edward, and thorfinn have all posted full root-cause diagnostics for the cruise-test NaN bug. None has committed the fix yet. Alphonse will additionally publish a `test_avg/mae_surf_p_excluding_bad_sample` baseline from `hqj9bt84` (advisor-authorized in cycle 4).
+- 8/8 student pods 1/1 Ready (3h33m uptime). The host-side harvest/kill is expected to manage final fleet shutdown after pods are Ready.
