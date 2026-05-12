@@ -381,6 +381,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 3   # linear LR ramp from lr/10 → lr
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -438,7 +439,21 @@ scaler = GradScaler(device="cuda", enabled=amp_enabled)
 print(f"BF16 autocast: {'enabled' if amp_enabled else 'disabled'}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=0.1,              # lr starts at lr * 0.1
+    end_factor=1.0,                # ramps to lr * 1.0
+    total_iters=cfg.warmup_epochs,
+)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=max(1, MAX_EPOCHS - cfg.warmup_epochs),
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[cfg.warmup_epochs],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
