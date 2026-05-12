@@ -45,12 +45,31 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 | `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | ~115.1 | #1491 |
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
-> (read-only) uses `err * surf_mask` where `NaN * 0 = NaN` in IEEE 754. The
-> cruise test split has one sample with non-finite ground-truth pressure, causing
-> the entire split's `mae_surf_p` accumulator to be poisoned. Ux/Uy on the same
-> split remain finite. Until this is fixed at the data layer, `test_avg/mae_surf_p`
-> will always be NaN. Use the 3-split proxy (single + rc + re_rand) as the
-> paper-facing estimate.
+> (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
+>
+> **Root cause** (traced by tanjiro in PR #1494): hidden ground-truth file
+> `splits_v2/.test_geom_camber_cruise_gt/000020.pt` contains **761 `+Inf` values
+> in the pressure channel** of `y[:, 2]` (probably a divergent CFD solve written
+> through unfiltered). The scoring code intends to skip samples with non-finite
+> ground truth, but the subtraction `pred - y` happens before the sample-skip
+> mask is applied, so `Inf` leaks into `err` and then `Inf * 0 = NaN` poisons
+> the per-channel accumulator. Ux/Uy on the same split remain finite because
+> they have no Inf in `y`.
+>
+> **Policy for this launch:** `data/scoring.py` is read-only per `program.md`,
+> so we do not patch it. Two options for reporting `test_avg/mae_surf_p`:
+>
+> 1. **3-split proxy:** mean over `test_single_in_dist`, `test_geom_camber_rc`,
+>    `test_re_rand` (skip cruise). Simple and well-defined.
+> 2. **Safe re-eval side script (preferred):** load the saved checkpoint and
+>    recompute MAE with `y` zero-filled wherever `y` is non-finite, before the
+>    subtraction. Tanjiro's `models/model-re-film-conditioning-20260512-182128/test_safe_eval.log`
+>    pattern: clone `y`, set `y[~isfinite(y).all(-1, keepdim=True)] = 0.0`,
+>    then proceed normally. This preserves the existing skip-sample semantics
+>    AND covers all 4 splits (199/200 cruise samples accumulated).
+>
+> When reporting paper-facing numbers, prefer the safe re-eval. Note both in
+> the PR comment if they differ.
 
 ---
 
