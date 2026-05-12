@@ -1,11 +1,11 @@
 # SENPAI Research State
 
-- 2026-05-12 22:00 — willow-pai2g-48h-r1, round 1 producing wins: edward & askeladd both beat baseline
+- 2026-05-12 22:10 — willow-pai2g-48h-r1, round 1 complete, round 2 in progress
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
-## Round-1 winners pending merge
-- **#1591 edward/cosine-aligned-epochs**: test=**111.98** (−7.67%) ⭐ BIGGEST — sent back for 1-line code commit (epochs:int=18 default), will merge as new baseline next
-- **#1361 askeladd/wider-hidden-192 trial-4**: test=**115.30** (−4.93%) — holding merge pending edward's land; will need rebase+retest on schedule-aligned baseline to confirm compound
+## Current baseline (PR #1591 merged)
+**test_avg/mae_surf_p = 111.98** | val_avg/mae_surf_p = 125.36
+Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround + **epochs=18** (schedule-aligned); n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2.
 
 ## Current baseline (PR #1391 merged)
 **test_avg/mae_surf_p = 121.28** | val_avg/mae_surf_p = 133.75
@@ -15,9 +15,10 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
-| askeladd | #1361 | wider-hidden-192 | **WIN PENDING** ⏳ | trial-4: test **115.30** (−4.93%) — holding merge pending edward |
+| askeladd | #1361 | wider-hidden-192 | wip (rebasing) | trial-4: test 115.30 — holding merge, needs rebase+retest on new baseline (target <111.98) |
 | edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
-| edward | #1591 | cosine-aligned-epochs | **WIN PENDING** ⭐ | test **111.98** (−7.67%); sent back for 1-line code commit (epochs:int=18 default) |
+| edward | #1591 | cosine-aligned-epochs | **MERGED** ✓ | test **111.98** (−7.67%) — new baseline |
+| edward | #1643 | mlp-ratio-4 | wip (new) | Assigned: mlp_ratio 2→4, richer FFN per block |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
