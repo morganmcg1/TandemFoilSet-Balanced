@@ -120,6 +120,74 @@ Sent back to compose SWA with the merged warmup recipe: SWA_START_EPOCH=6, --epo
 
 ---
 
+## 2026-05-12 21:05 — PR #1564: GT-NaN fix in evaluate_split (MERGED — first valid test number)
+
+- Student branch: `charliepai2g24h5-alphonse/gt-nan-fix`
+- Hypothesis: Filtering non-finite GT samples before `accumulate_batch` in `evaluate_split` gives a clean, paper-facing `test_avg/mae_surf_p` for the first time this round.
+- Fix: `gt_finite_mask = torch.isfinite(y).all(dim=-1)`, AND'd into `mask` and `is_surface` before calling `accumulate_batch`. Non-finite GT positions treated as padding. Strict no-op on clean GT.
+
+### Results
+
+| Metric | Baseline (#1519) | This run | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 114.40 | **114.40** | 0.00 (bit-identical) |
+| test_avg/mae_surf_p | NaN | **107.57** | → finite |
+
+### Per-split test (first valid paper numbers)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| test_single_in_dist | 122.65 | 1.663 | 0.769 |
+| test_geom_camber_rc | 111.09 | 2.332 | 0.942 |
+| test_geom_camber_cruise | 92.41 | 1.179 | 0.612 |
+| test_re_rand | 104.14 | 1.595 | 0.775 |
+| **test_avg** | **107.57** | 1.692 | 0.775 |
+
+- Metrics: `models/model-gt_nan_fix_baseline-20260512-201204/metrics.jsonl`
+- Command: `cd target/ && python train.py --epochs 13 --experiment_name gt_nan_fix_baseline --agent charliepai2g24h5-alphonse`
+- Peak VRAM: 42.11 GB; 13 epochs @ ~131 s/epoch (28 min)
+
+### Analysis
+
+Fix is a strict no-op on clean GT and exactly as-expected on the corrupted sample. Val is bit-identical because the GT-NaN issue only affected test evaluation (specifically test_geom_camber_cruise/idx=20). Now the paper-facing test number is valid and we have a proper 4-split test average for all future PRs.
+
+**MERGED. New test baseline: test_avg/mae_surf_p = 107.57**
+
+---
+
+## 2026-05-12 21:10 — PR #1565: BF16 + batch=8 for 20 epochs (SENT BACK — T_max mismatch + LR not scaled)
+
+- Student branch: `charliepai2g24h5-fern/bf16-batch8-ep20`
+- Hypothesis: BF16 + batch=8 → ~20 epochs in 30-min budget → 5–12% improvement.
+
+### Results
+
+| Metric | This run (bf16, b=8, ep20) | Baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **116.14** | 114.40 | +1.5% **WORSE** |
+| test_avg (3-split clean) | 111.83 | 107.57 | +3.9% worse |
+| Epochs completed | 18/20 | 13 | +38% |
+| s/epoch | 104.4 | ~131 | −20% |
+| Peak VRAM (GB) | 65.86 | 42 | +57% |
+
+- Metrics: `models/model-bf16_batch8_ep20-20260512-201635/metrics.jsonl`
+
+### Root causes (from student analysis — well-diagnosed)
+
+1. **T_max=20 but only 18 epochs ran** → cosine LR at epoch 18 was ~1.75e-5 instead of zero. Same schedule-mismatch error that T_max=50 made. Must always match --epochs to what actually finishes in budget.
+2. **batch=8 without LR scaling** → gradient noise halved but LR unchanged. val_single_in_dist +9.9% regression is the signal.
+3. **VRAM grew 57%** → doubling batch dominates BF16 savings; "stays near 42 GB" was wrong.
+
+### Advisor action
+
+Sent back to isolate BF16 from batch:
+- **Run 1**: BF16 only, batch=4, `--epochs 15` (conservative estimate; adjust to actual completion). Name: `bf16_only_ep15`
+- **Run 2** (only if Run 1 beats baseline): BF16 + batch=8 + `--lr 7e-4` + `--epochs 17`. Name: `bf16_b8_ep17_lr7e4`
+
+Key invariant: --epochs must match what actually finishes in 30 min. Status: WIP awaiting rerun.
+
+---
+
 ## 2026-05-12 20:55 — PR #1487: Surface skip branch (SENT BACK — needs composition with merged baseline)
 
 - Student branch: `charliepai2g24h5-thorfinn/surf-skip-branch`
