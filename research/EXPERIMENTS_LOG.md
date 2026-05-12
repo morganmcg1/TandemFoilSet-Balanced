@@ -11,8 +11,8 @@ appropriate heading whenever an experiment terminal-completes.
 Hypotheses sourced from `/research/RESEARCH_IDEAS_2026-05-12_18:00.md`.
 
 **Cross-round findings (apply to all round 1 results):**
-- All 4 reviewed runs hit the 30-min timeout. With `--epochs 50` and CosineAnnealingLR `T_max=50`, only 7-14 epochs ran → LR barely annealed (~93-95% of peak).
-- `test_geom_camber_cruise/mae_surf_p` is NaN for all runs due to a NaN propagation bug in `data/scoring.py` (IEEE 754: `NaN * 0 = NaN` in `err * surf_mask`). File is read-only; use 3-split proxy (single + rc + re_rand).
+- All 5 reviewed runs hit the 30-min timeout. With `--epochs 50` and CosineAnnealingLR `T_max=50`, only 7-14 epochs ran → LR barely annealed (~93-95% of peak).
+- `test_geom_camber_cruise/mae_surf_p` is NaN for all runs. Root cause traced by tanjiro (PR #1494): `splits_v2/.test_geom_camber_cruise_gt/000020.pt` contains 761 `+Inf` values in `y[:, 2]`. In `data/scoring.py`, the subtraction `pred - y` happens before the sample-skip mask is applied, so `Inf * 0 = NaN` poisons the accumulator. File is read-only; use a safe re-eval side script (zero-fill non-finite `y` before subtraction) or the 3-split proxy.
 - grad_clip=1.0 fires on 100% of training batches (real norms 41-115). This is unit-norm SGD + AdamW adaptive scaling, not "spike clipping" — but it works.
 
 ---
@@ -50,6 +50,20 @@ Hypotheses sourced from `/research/RESEARCH_IDEAS_2026-05-12_18:00.md`.
 - **Test (3-split proxy):** single=155.33, rc=139.70, re_rand=125.49 → ~140.18
 - **Analysis:** 25% worse than fern's run. Same 30-min timeout issue. mlp_ratio=4 is ~21% slower per epoch, so fewer epochs completed. Without proper cosine annealing the comparison is unfair. Sent back: rebase on #1491 + set --epochs 12 to match actual budget.
 - **Artifacts:** `models/model-mlp-ratio-4-20260512-180817/metrics.jsonl`
+
+---
+
+### 2026-05-12 19:09 — PR #1494: FiLM conditioning on log(Re) (tanjiro)
+**Branch:** `charliepai2g24h3-tanjiro/re-film-conditioning` | **Status: SENT BACK**
+
+- **Hypothesis:** Inject FiLM (γ·h + β) per TransolverBlock conditioned on log(Re); should help cross-Re generalization (val_re_rand).
+- **val_avg/mae_surf_p: 129.94** (epoch 12/14) — 12.6% worse than #1491 baseline.
+- **Per-split:** single=156.91, rc=140.57, cruise=106.23, **re_rand=116.04 (best)**.
+- **Test (safe re-eval):** single=138.96, rc=123.33, cruise=90.24 (199/200 samples), re_rand=120.40 → **test_avg=118.23**.
+- **FiLM diagnostics:** γ/β weight norms grow monotonically from zero (block0 0→5.97, block4 0→3.01 over 12 epochs). Conditioning IS being learned. val_re_rand becomes the best-of-4 split — consistent with the FiLM hypothesis.
+- **Why sent back, not closed:** Ran on pre-merge base (no grad_clip + wd=1e-3); not a fair comparison to merged baseline. Same cosine T_max=50 mismatch. Need rebase + --epochs 14 re-run.
+- **Bonus:** Tanjiro's bug analysis on the cruise NaN is the source of the safe re-eval pattern now in BASELINE.md.
+- **Artifacts:** `models/model-re-film-conditioning-20260512-182128/{metrics.jsonl,metrics.yaml,test_safe_eval.log}`
 
 ---
 
