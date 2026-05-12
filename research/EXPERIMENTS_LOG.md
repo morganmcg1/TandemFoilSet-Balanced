@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-12 22:xx — PR #1473: [huber-loss v3] Huber(δ=0.1) on relative-L2 normalized residuals
+
+- **Branch**: charliepai2g24h1-tanjiro/huber-loss
+- **Hypothesis**: Applying Huber(δ=0.1) to the per-sample energy-normalized residuals (relative-L2 space) provides intra-sample outlier capping on top of inter-sample scale normalization.
+- **Status**: MERGED — new baseline 89.3940
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | **89.3940** |
+| val_single_in_dist | 109.01 |
+| val_geom_camber_rc | 101.19 |
+| val_geom_camber_cruise | **66.36** |
+| val_re_rand | 81.02 |
+| test_avg/mae_surf_p (4-split) | **79.5993** |
+| test_single_in_dist | 98.51 |
+| test_geom_camber_rc | 88.12 |
+| test_geom_camber_cruise | 54.80 |
+| test_re_rand | 76.97 |
+| Baseline | 89.6121 |
+| Delta | **-0.24%** |
+| huber_delta | 0.1 (normalized space) |
+| L2-fraction (ep 1 → 14) | 33% → 63% |
+| grad clip_frac (ep 14) | 0.075 (vs 0.984 on rel-L2-only) |
+
+**Analysis**: The compound works: Huber(δ=0.1) in normalized space is genuinely active throughout (L2-fraction 33%→63%, vs 93%→94% with the raw-space δ=0.5 that largely collapsed to MSE). The most striking diagnostic is clip_frac dropping from ~1.0 (MSE baseline) to 0.075 by epoch 14 — the loss surface is dramatically smoother. val_re_rand showed the biggest improvement (84.29→81.02). val_geom_camber_rc regressed slightly (97.99→101.19) — this is the hardest OOD split and may need the re-conditioned-scaling architecture fix. Win is narrow (-0.24%) but clean, monotone, and confirmed in committed JSONL.
+
+**Key mechanism**: relative-L2 handles inter-sample scale variation (across Re regimes); Huber handles intra-sample node outliers (within each sample). Complementary mechanisms.
+
+**Artifacts**: `models/model-charliepai2g24h1-tanjiro-huber-loss-20260512-211810/metrics.jsonl`
+
+---
+
 ## 2026-05-12 21:xx — PR #1458: [wider-deeper v2] Scale Transolver n_hidden=256, n_layers=6, n_head=8
 
 - **Branch**: charliepai2g24h1-edward/wider-deeper
