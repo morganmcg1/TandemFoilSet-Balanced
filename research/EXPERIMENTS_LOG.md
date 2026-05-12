@@ -48,6 +48,61 @@ Per-split test surface-p MAE (3 of 4 clean):
 
 ---
 
+## 2026-05-12 22:00 — PR #1558: Huber (SmoothL1) surface loss delta=0.5 (MERGED — new baseline)
+
+- **Branch:** `willowpai2g48h4-thorfinn/smooth-l1-surface-loss` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `2w7nverc` (delta=0.5, winner), `3goyvktl` (delta=1.0, secondary)
+- **Hypothesis:** Replace MSE surface loss with Huber (SmoothL1) loss. For |err| < delta: quadratic (like MSE scaled); for |err| >= delta: linear (L1-consistent). Aligns optimization objective directly with MAE evaluation metric. Orthogonal to BIVW (which handles between-sample gradient inflation at the sample level; Huber handles within-sample per-node gradient inflation).
+
+### Results — Winning arm delta=0.5
+
+| Metric | Value | vs prior baseline (119.2987) |
+|--------|-------|------------------------------|
+| `val_avg/mae_surf_p` | **98.1642** | **−17.72%** |
+| test 3-split mean | **98.7537** | −17.45% |
+| Best epoch | 14 / 14 | (still improving at cap) |
+| Peak VRAM | 43.0 GB | |
+
+Per-split val surface-p MAE (delta=0.5):
+
+| Split | mae_surf_p | vs prior baseline |
+|-------|-----------|-------------------|
+| `val_single_in_dist` | 123.14 | 140.09 → −12.1% ✓ |
+| `val_geom_camber_rc` | 107.24 | 142.40 → −24.7% ✓ (OOD regression fully reversed) |
+| `val_geom_camber_cruise` | 73.28 | 85.98 → −14.8% ✓ |
+| `val_re_rand` | 88.99 | 108.73 → −18.2% ✓ |
+| **val_avg** | **98.1642** | **−17.72%** |
+
+Per-split test (delta=0.5, 3 of 4 finite):
+
+| Split | mae_surf_p |
+|-------|-----------|
+| `test_single_in_dist` | 111.92 |
+| `test_geom_camber_rc` | 98.91 |
+| `test_geom_camber_cruise` | NaN (cruise bug) |
+| `test_re_rand` | 85.43 |
+| **3-split mean** | **98.7537** |
+
+Secondary arm (delta=1.0): val_avg=117.74 (only −1.3% — barely above noise).
+
+### Analysis and Conclusions
+
+**New round-4 baseline: 98.1642.** This is the largest single-PR improvement so far (17.7% vs the prior best of −5.4%).
+
+**Mechanism confirmed:** `train/surf_l1_frac` (fraction of surface errors above delta) stays high throughout training for delta=0.5 — most residuals are in the L1 regime, producing constant-magnitude gradients that directly minimise MAE. delta=1.0 keeps too many residuals in the quadratic regime (barely different from MSE).
+
+**OOD camber regression reversed:** val_geom_camber_rc was the problematic split (+6.84% regression in #1528). With Huber, it drops 24.7% — the largest per-split gain. Root cause: MSE pulled the surf-head toward large-residual OOD outlier nodes; Huber capped that pull at delta.
+
+**BIVW + surf-head + Huber synergy:** Each mechanism targets a different scale of gradient heterogeneity:
+- BIVW: between-sample (different Re → different variance)
+- Surf-head: surface vs volume specialisation  
+- Huber: within-sample per-node (outlier surface nodes)
+
+**Next:** Test smaller deltas (0.2, 0.3) assigned to thorfinn PR #1627. Also need to test whether grad-clip (#1499 rebase), per-channel BIVW (#1580), and BF16/AMP (#1572) all stack on top of this new baseline.
+
+---
+
 ## 2026-05-12 20:55 — PR #1527: Fix test NaN — guard evaluate_split against non-finite GT/pred (MERGED)
 
 - **Branch:** `willowpai2g48h4-tanjiro/fix-test-nan-scoring` (squash-merged into `icml-appendix-willow-pai2g-48h-r4`)
