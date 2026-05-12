@@ -5,6 +5,63 @@
 
 ---
 
+## 2026-05-12 23:52 — PR #1684: T_max alignment (--epochs 14, cosine fully anneals)
+
+**Student:** charliepai2g48h2-frieren  
+**Change:** Run with `--epochs 14` instead of `--epochs 20`. With `CosineAnnealingLR(T_max=epochs)` and only ~14 epochs fitting in the 30-min cap, the old schedule left LR at ~37% of peak at termination. Aligned `T_max=14` so cosine fully anneals to LR≈0 at epoch 14. No code changes — single CLI flag. All prior changes intact: channel_weights=[1,1,3], lr=7e-4 with 2-epoch warmup, grad_clip=1.0, Smooth L1 β=0.1, NaN-skip.
+
+### Validation (best epoch 14/14 — cosine fully annealed, val still monotone descending at cutoff)
+
+| Split | mae_surf_p | vs. Prior Baseline |
+|---|---|---|
+| val_single_in_dist | 103.231 | −12.9% |
+| val_geom_camber_rc | 95.256 | −9.4% |
+| val_geom_camber_cruise | 60.589 | −14.9% |
+| val_re_rand | 79.170 | −8.5% |
+| **val_avg/mae_surf_p** | **84.562** | **−11.3%** |
+
+**Improvement vs #1414 baseline: −11.3% (95.336 → 84.562)**  
+**Improvement vs #1418 baseline: −31.1% (122.6395 → 84.562)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 91.146 |
+| test_geom_camber_rc | 87.193 |
+| test_geom_camber_cruise | 50.942 |
+| test_re_rand | 70.508 |
+| **test_avg/mae_surf_p** | **74.947** |
+
+**Improvement vs #1414 test baseline: −12.5% (85.648 → 74.947)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW lr=7e-4 (peak), 2-epoch warmup, wd=1e-4, CosineAnnealingLR(**T_max=14**), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: Smooth L1 (β=0.1, reduction='none') × channel_weights[1,1,3] / 5 in normalized space
+- NaN-skip guard in `evaluate_split` — clean 4-split test_avg
+
+### Key finding
+
+T_max must match feasible epochs under the wall-clock cap. Prior baseline used T_max=20 with ~14 epochs completing → LR was ~37% of peak at termination. Aligning T_max=14 lets cosine fully anneal to 0, recovering a "free" −11.3% from schedule alignment alone. All 4 val splits improved with similar magnitude (8.5%–14.9%), confirming no split-specific artifact.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-frieren-tmax-aligned-14-20260512-230927/metrics.jsonl`
+- `models/model-charliepai2g48h2-frieren-tmax-aligned-14-20260512-230927/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-frieren \
+    --experiment_name "charliepai2g48h2-frieren/tmax-aligned-14" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-12 22:30 — PR #1414: Smooth L1 (Huber β=0.1) loss + NaN-skip fix
 
 **Student:** charliepai2g48h2-alphonse  
