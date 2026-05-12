@@ -391,11 +391,11 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=256,
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
