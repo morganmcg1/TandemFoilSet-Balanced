@@ -203,6 +203,11 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # H17: identity-init per-channel scale+bias for output rebalancing.
+        # At init, gamma=1, beta=0 -> identity (no behavior change from baseline).
+        # 6 learnable parameters total; not touched by _init_weights (only nn.Linear/LayerNorm are).
+        self.out_gamma = nn.Parameter(torch.ones(out_dim))
+        self.out_beta = nn.Parameter(torch.zeros(out_dim))
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -218,6 +223,8 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
+        # H17: apply learnable per-channel affine (broadcasts over B and N).
+        fx = fx * self.out_gamma + self.out_beta
         return {"preds": fx}
 
 
@@ -514,6 +521,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        "out_gamma": model.out_gamma.detach().cpu().tolist(),
+        "out_beta": model.out_beta.detach().cpu().tolist(),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
