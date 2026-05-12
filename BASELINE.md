@@ -5,19 +5,42 @@ Research tag: `charlie-pai2g-48h-r1`
 
 ## Status (2026-05-12)
 
-**No measured baseline yet.** This advisor branch was created fresh from
-`icml-appendix-charlie`. Round-1 student experiments (PRs #1355, #1381, #1385,
-#1389, #1393, #1399, #1405, #1410) include a wall-clock-tuned vanilla run on
-several PR arms — the first terminal `SENPAI-RESULT` from any of them
-establishes the de-facto baseline measurement. We will update this file with
-the actual `val_avg/mae_surf_p` and `test_avg/mae_surf_p` once the first PR
-completes.
+**Measured baseline established.** First round-1 winner merged: PR #1355
+(alphonse, pure L1 loss). Branch `icml-appendix-charlie-pai2g-48h-r1` now
+contains this change. All subsequent experiments should use `--loss l1` and
+compare against these numbers.
 
-## Reference configuration (unchanged `train.py`)
+## 2026-05-12 20:52 — PR #1355: Smooth L1 / pure L1 vs MSE (alphonse)
+
+- **Primary metric:** `val_avg/mae_surf_p` = **94.291**
+- **Paper-facing metric:** `test_avg/mae_surf_p_3of4_finite_splits` = **91.859**
+  (3 finite test splits; `test_geom_camber_cruise/mae_surf_p` is NaN due to
+  pre-existing `+Inf` sample 000020.pt — `data/scoring.py` is read-only)
+- **Best epoch:** 14 / 15 configured (~131 s/epoch, ~42 GB peak VRAM)
+- **Per-split val breakdown:**
+
+| Split | mae_surf_p |
+|-------|------------|
+| val_geom_camber_cruise | 71.660 |
+| val_re_rand | 87.503 |
+| val_single_in_dist | 110.407 |
+| val_geom_camber_rc | 107.595 |
+| **val_avg** | **94.291** |
+
+- **Metric artifacts:** `models/model-pure-l1-20260512-191540/metrics.jsonl`
+  and `metrics.yaml` on this branch.
+- **Reproduce:**
+
+```bash
+cd target && python train.py --epochs 15 --loss l1 \
+  --agent charliepai2g48h1-alphonse --experiment_name pure-l1
+```
+
+## Reference configuration (updated after PR #1355)
 
 - **Optimizer:** `AdamW(lr=5e-4, weight_decay=1e-4)`
 - **Scheduler:** `CosineAnnealingLR(T_max=epochs)`
-- **Loss:** MSE in normalized space, `vol_loss + 10.0 * surf_loss`
+- **Loss:** ~~MSE~~ → **Pure L1** in normalized space, `vol_loss + 10.0 * surf_loss` (merged PR #1355)
 - **Model:** Transolver
   - `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2`
   - `space_dim=2, fun_dim=22 (= X_DIM - 2), out_dim=3`
