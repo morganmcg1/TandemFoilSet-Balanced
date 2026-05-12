@@ -177,7 +177,7 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**space_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
@@ -207,7 +207,21 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.unified_pos:
+            pos = x[..., :2]
+            feats = x[..., 2:]
+            grid = torch.linspace(0, 1, self.ref, device=pos.device)
+            gy, gx = torch.meshgrid(grid, grid, indexing="ij")
+            ref_grid = torch.stack([gx, gy], dim=-1).reshape(-1, 2)
+            pmin = pos.amin(dim=1, keepdim=True)
+            pmax = pos.amax(dim=1, keepdim=True)
+            pos_n = (pos - pmin) / (pmax - pmin).clamp(min=1e-6)
+            dist = ((pos_n.unsqueeze(2) - ref_grid.unsqueeze(0).unsqueeze(0)) ** 2).sum(-1)
+            pos_enc = torch.softmax(-dist * (self.ref ** 2), dim=-1)
+            x_in = torch.cat([feats, pos_enc], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -236,13 +250,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Some samples in held-out test splits have non-finite y entries
+            # (e.g. -Inf in pressure for one cruise sample); without this guard,
+            # 0*Inf in the mask multiplication produces NaN metrics downstream.
+            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            sample_mask = sample_finite.view(-1, 1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            vol_mask = mask & ~is_surface & sample_mask
+            surf_mask = mask & is_surface & sample_mask
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -254,9 +275,14 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
-            n_surf += ds
-            n_vol += dv
+            good = sample_finite.nonzero(as_tuple=True)[0]
+            if len(good) > 0:
+                ds, dv = accumulate_batch(
+                    pred_orig[good], y[good], is_surface[good], mask[good],
+                    mae_surf, mae_vol,
+                )
+                n_surf += ds
+                n_vol += dv
 
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
@@ -395,6 +421,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
