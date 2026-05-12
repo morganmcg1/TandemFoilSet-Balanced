@@ -441,6 +441,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
+    epoch_l2_frac = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -453,12 +454,22 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
 
-        sq_err = (pred - y_norm) ** 2
+        # Huber-shaped per-node residuals in normalized space.
+        # Replaces the squared error in the relative-L2 numerator, combining
+        # per-sample relative scaling with per-node outlier capping.
+        HUBER_DELTA = 0.1
+        residual = pred - y_norm
+        abs_residual = residual.abs()
+        sq_err = torch.where(
+            abs_residual <= HUBER_DELTA,
+            0.5 * residual ** 2,
+            HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
+        )
         vol_mask = (mask & ~is_surface).unsqueeze(-1)
         surf_mask = (mask & is_surface).unsqueeze(-1)
 
-        # Per-sample relative L2 (squared-ratio form, joint over Ux/Uy/p channels).
-        # Each sample contributes ||pred - y||^2 / ||y||^2 — equal weight regardless
+        # Per-sample relative Huber-L2 (Huber numerator, ||y||^2 denominator).
+        # Each sample contributes Σ huber(pred - y) / ||y||^2 — equal weight regardless
         # of physical scale. Clamp denominators at 1e-6 to guard near-uniform samples.
         vol_sq = (sq_err * vol_mask).sum(dim=(1, 2))
         vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
@@ -467,6 +478,13 @@ for epoch in range(MAX_EPOCHS):
         vol_loss = (vol_sq / vol_denom).mean()
         surf_loss = (surf_sq / surf_denom).mean()
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Diagnostic: track fraction of residuals in L2 (quadratic) regime
+        with torch.no_grad():
+            valid = mask.unsqueeze(-1).expand_as(abs_residual)
+            n_valid = valid.sum().clamp(min=1)
+            n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
+            l2_frac_batch = (n_l2.float() / n_valid.float()).item()
 
         optimizer.zero_grad()
         loss.backward()
@@ -482,11 +500,13 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -522,13 +542,16 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_mean": grad_norm_mean,
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
+        "train/huber_l2_frac": epoch_l2_frac,
+        "huber_delta": 0.1,
+        "loss_type": "huber_relative_l2",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
