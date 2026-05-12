@@ -1,7 +1,60 @@
 # Baseline Metrics — `icml-appendix-charlie-pai2g-48h-r2`
 
 > Primary ranking metric: **`val_avg/mae_surf_p`** (equal-weight mean surface pressure MAE across 4 val splits, physical units). Lower is better.
-> Test metric: **`test_avg/mae_surf_p`** — currently partially NaN (see scoring bug note below).
+> Test metric: **`test_avg/mae_surf_p`** — now clean 4-split (NaN-skip fix merged in #1414).
+
+---
+
+## 2026-05-12 22:30 — PR #1414: Smooth L1 (Huber β=0.1) loss + NaN-skip fix
+
+**Student:** charliepai2g48h2-alphonse  
+**Change:** Replace MSE loss with elementwise Smooth L1 (Huber, β=0.1) in normalized space. Applied in both training loop and `evaluate_split`. Per-channel weighting [1,1,3] multiplied elementwise to Smooth L1 output before spatial reduction. Also includes `nan_to_num`+`y_finite` guard in `evaluate_split` — enables clean 4-split `test_avg/mae_surf_p`.
+
+> ⚠️ **Note on merged config:** Alphonse's run that produced the validated 95.336 was on the pre-#1424 advisor state (lr=5e-4, no warmup, no clip). The merged code additionally includes #1424's warmup/clip (lr=7e-4, 2-epoch warmup, grad_clip=1.0) since those changes are orthogonal and auto-merged. The full-stack combination (Smooth L1 + CW + warmup + clip) has not yet been precisely validated — a follow-up confirmation run is assigned to alphonse.
+
+### Validation (best epoch 13/14 completed, timeout at 30 min)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---|---|---|
+| val_single_in_dist | 118.539 | — | — |
+| val_geom_camber_rc | 105.115 | — | — |
+| val_geom_camber_cruise | 71.196 | — | — |
+| val_re_rand | 86.495 | — | — |
+| **val_avg/mae_surf_p** | **95.336** | | |
+
+**Improvement vs #1424 baseline: −7.3% (102.8503 → 95.336)**  
+**Improvement vs #1418 baseline: −22.3% (122.6395 → 95.336)**
+
+### Test (from best-val checkpoint, epoch 13) — clean 4-split
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 103.264 |
+| test_geom_camber_rc | 96.989 |
+| test_geom_camber_cruise | **61.217** ✓ (NaN-skip fix active) |
+| test_re_rand | 81.121 |
+| **test_avg/mae_surf_p** | **85.648** |
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW lr=7e-4 (from #1424, peak cosine), wd=1e-4, 2-epoch warmup, grad_clip=1.0, batch_size=4, surf_weight=10
+- Loss: `F.smooth_l1_loss(..., beta=0.1, reduction='none')` × channel_weights[1,1,3] / 5 in normalized space
+- **NaN-skip** guard in `evaluate_split` → `test_avg/mae_surf_p` is now finite across all splits
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-alphonse-smooth-l1-rebased-20260512-211440/metrics.jsonl`
+- `models/model-charliepai2g48h2-alphonse-smooth-l1-rebased-20260512-211440/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-alphonse \
+    --experiment_name "charliepai2g48h2-alphonse/smooth-l1-rebased" \
+    --epochs 20
+```
 
 ---
 
@@ -116,4 +169,4 @@ err = (pred_orig.double() - y_safe.double()).abs()
 
 ---
 
-> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 102.8503`.
+> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 95.336`.
