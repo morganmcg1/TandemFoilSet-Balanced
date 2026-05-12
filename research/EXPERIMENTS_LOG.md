@@ -8,6 +8,58 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 20:52 — PR #1552: Stochastic depth (drop_rate=0.1, linear schedule) — **MERGED, new baseline**
+
+- Branch: `charliepai2g24h4-frieren/stoch-depth-0.1`
+- Hypothesis: H8 from round-2 list. Add stochastic depth (Huang et al., ECCV 2016)
+  with linearly increasing per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]`.
+  Implicit ensemble of shallower networks for OOD regularization. No-op at eval.
+  Predicted 1-3% improvement on `val_avg/mae_surf_p`, primarily via OOD geometry splits.
+- Also includes the NaN-safe pre-filter in `evaluate_split` (standardized in every
+  round-2 PR after #1530/#1529 independently discovered it).
+
+| Metric | This PR | L1 baseline (#1397) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | **98.353** | 100.957 | **-2.58% (improvement)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | **87.995** | NaN (data bug) | **first finite 4-split ref** |
+| test_avg/mae_surf_p (3-split, ex-cruise) | 96.579 | 100.831 | -4.22% |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 119.159 / 111.093 / 73.323 / 89.837 | 127.371 / 110.832 / 77.353 / 88.273 | **-6.45% / +0.24% / -5.21% / +1.77%** |
+| Per-split test: single_in_dist / camber_rc / camber_cruise / re_rand | 104.953 / 101.883 / 62.243 / 82.901 | — | new finite ref |
+
+- **The hypothesis held, but the OOD-specific framing was only half-supported.**
+  Predicted gains were on OOD geometry splits (camber_rc, camber_cruise).
+  Observed: camber_cruise -5.21% (large), camber_rc +0.24% (flat),
+  single_in_dist -6.45% (largest gain), re_rand +1.77% (small regression).
+  Student's reading: single_in_dist was the worst split at baseline despite
+  being in-distribution, so it had the most regularization headroom.
+  Stoch-depth's implicit ensemble flattens split-specific overfit modes
+  regardless of the OOD axis.
+- **Training dynamics:** val trace is noisier than L1 baseline (epoch 13: 105.69
+  → epoch 14: 113.91 → epoch 15: 98.35 = new best). Bernoulli-block-drop noise
+  injects variance into val. Best epoch landed at the wall-clock cap; more
+  training time would likely extend the gain. The L1 baseline plateaued earlier
+  at the same wall-clock budget, so stoch-depth is also getting more out of
+  each minute of training.
+- **Cosmetic NaN caveat:** loss/surf_loss aggregates for `test_geom_camber_cruise`
+  still show NaN/Inf in `metrics.yaml` because the normalized-space loss path
+  runs before the §3 pre-filter; the §3 fix only protects `accumulate_batch`.
+  All four `mae_surf_p`/`mae_vol_p` channels are finite, so the primary ranking
+  metric is clean. Out of scope; one-line follow-up.
+- **Decision: MERGED.** First post-L1 architectural improvement; -2.58% on the
+  primary metric and establishes the first finite 4-split test reference
+  (87.995). Stoch-depth is now part of the canonical config; all subsequent
+  wave-1 PRs in flight will be compared to this stronger baseline.
+- **Suggested follow-ups (student):**
+  1. Run longer — not actionable (`SENPAI_TIMEOUT_MINUTES` is a hard bound).
+  2. Sweep `drop_rate` ∈ {0.05, 0.15, 0.20} — 0.05 might be Pareto-better given
+     val_re_rand +1.77% suggests slight over-regularization; 0.15-0.20 might
+     bite harder on val_geom_camber_rc which barely moved.
+  3. Combine with `dropout` inside PhysicsAttention/MLP at 0.05 — standard
+     ViT recipe, may compound with stoch-depth.
+  4. Loss-NaN cosmetic fix — pre-filter finite samples before `y_norm` is
+     formed so the normalized-space loss aggregates report finite numbers
+     for `test_geom_camber_cruise`.
+
 ## 2026-05-12 20:02 — PR #1514: Ada-Temp per-point adaptive slice temperature — **REQUEST CHANGES** (sent back to alphonse for v2)
 
 - Branch: `charliepai2g24h4-alphonse/ada-temp`
