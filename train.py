@@ -236,6 +236,22 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples with non-finite GT before scoring/loss to work
+            # around a data bug on test_geom_camber_cruise/000020.pt (inf in
+            # pressure GT) — see issue #1567. scoring.py masks the bad sample
+            # via sample_mask but inf * 0 = NaN propagates into mae_surf_p,
+            # so we filter one layer up. Padding is finite zeros (pad_collate),
+            # so this only fires on real non-finite GT.
+            y_finite = torch.isfinite(y.reshape(y.size(0), -1)).all(dim=-1)
+            if not y_finite.all():
+                valid_idx = y_finite.nonzero(as_tuple=True)[0]
+                if valid_idx.numel() == 0:
+                    continue
+                x = x[valid_idx]
+                y = y[valid_idx]
+                is_surface = is_surface[valid_idx]
+                mask = mask[valid_idx]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
