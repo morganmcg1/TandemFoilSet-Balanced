@@ -177,8 +177,12 @@ class Transolver(nn.Module):
         self.output_dims = output_dims or []
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**2, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
+            grid_1d = torch.linspace(0.0, 1.0, ref)
+            gx, gy = torch.meshgrid(grid_1d, grid_1d, indexing="ij")
+            ref_grid = torch.stack([gx, gy], dim=-1).reshape(ref * ref, 2)
+            self.register_buffer("ref_grid", ref_grid, persistent=False)
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
@@ -207,7 +211,27 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        if self.unified_pos:
+            pos = x[:, :, :2]
+            mask = data.get("mask")
+            if mask is None:
+                pos_min = pos.amin(dim=1, keepdim=True)
+                pos_max = pos.amax(dim=1, keepdim=True)
+            else:
+                m = mask.unsqueeze(-1)
+                pos_for_min = pos.masked_fill(~m, float("inf"))
+                pos_for_max = pos.masked_fill(~m, float("-inf"))
+                pos_min = pos_for_min.amin(dim=1, keepdim=True)
+                pos_max = pos_for_max.amax(dim=1, keepdim=True)
+            extent = (pos_max - pos_min).clamp(min=1e-6)
+            pos_norm = (pos - pos_min) / extent
+            ref_grid = self.ref_grid.to(pos_norm.dtype)
+            diff = pos_norm.unsqueeze(2) - ref_grid.view(1, 1, -1, 2)
+            dist_enc = torch.sqrt((diff * diff).sum(dim=-1) + 1e-12)
+            x_in = torch.cat([dist_enc, x[:, :, 2:]], dim=-1)
+        else:
+            x_in = x
+        fx = self.preprocess(x_in) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -238,7 +262,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "mask": mask})["preds"]
 
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
             vol_mask = mask & ~is_surface
@@ -423,6 +447,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    unified_pos=True,
+    ref=8,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -486,7 +512,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "mask": mask})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
         vol_mask = mask & ~is_surface
