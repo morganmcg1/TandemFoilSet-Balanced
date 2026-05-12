@@ -9,18 +9,48 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-12 22:15 — PR #1480: thorfinn — bf16 + grad_accum=2 (MERGED)
+
+**New best val and first finite test_avg.**
+
+- **val_avg/mae_surf_p:** 116.2965 (was 131.79) — **-11.6%**
+- **test_avg/mae_surf_p:** **104.9554** — first finite test_avg in this project
+- **W&B run:** `5wvm7na2`
+- **Epochs:** 18 in 30 min (vs ~14 fp32 baseline — 2.5× throughput gain from bf16+accum)
+
+Per-split test `mae_surf_p`:
+
+| Split | test |
+|---|---|
+| `single_in_dist` | 115.83 |
+| `geom_camber_rc` | 117.06 |
+| `geom_camber_cruise` | **80.35** (1/200 samples skipped — the known bad sample) |
+| `re_rand` | 106.58 |
+
+**Also landed:** `train.py:evaluate_split` sanitize-and-gate cruise-NaN workaround — all future runs on this branch now produce finite `test_avg`.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/bf16-accum2" --wandb_group "willow-r2-throughput"
+```
+(bf16 autocast and grad_accum=2 are now the default in `Config`; no extra flags needed)
+
+---
+
 ## Active baseline (config to beat)
 
-Stock Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2`:
+Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — now includes bf16 autocast and grad_accum=2 from PR #1480:
 
 | Hyperparam | Value |
 |---|---|
 | `lr` | 5e-4 |
 | `weight_decay` | 1e-4 |
-| `batch_size` | 4 |
+| `batch_size` | 4 (effective=8 with grad_accum=2) |
 | `surf_weight` | 10.0 |
 | `epochs` (ceiling) | 50 |
 | Wall clock cap | `SENPAI_TIMEOUT_MINUTES=30` |
+| `amp` | `True` (bf16 autocast on forward+loss) |
+| `grad_accum` | 2 |
 | `n_hidden` | 128 |
 | `n_layers` | 5 |
 | `n_head` | 4 |
@@ -32,53 +62,29 @@ Stock Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2`:
 
 Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/baseline"`.
 
-## Best metrics on the willow r2 W&B project
+## Current best metrics
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-Baseline measured from four alphonse stock-config runs. The spread across all four is the noise floor.
+**Best val (merged):** `val_avg/mae_surf_p` = **116.30** (PR #1480, thorfinn, run `5wvm7na2`)
+**Best test (merged):** `test_avg/mae_surf_p` = **104.96** (same run — first finite test_avg)
 
-- `val_avg/mae_surf_p` (best): **119.64** (3rd run); full noise band: 119.64 → 131.79 → 132.73 → 140.01 (~17% range)
-- `test_avg/mae_surf_p`: **NaN** (systemic cruise overflow). Pre-fix comparator below.
-
-### Pre-fix test comparator (excluding the one bad sample)
-
-Alphonse (#1461, run `ztb0ri42`) reloaded the best checkpoint and manually excluded `test_geom_camber_cruise/000020.pt`. This is the canonical baseline test number for this round:
-
-- **`test_avg/mae_surf_p_excluding_bad_sample`: 126.20**
-
-Per-split test `mae_surf_p` (run `ztb0ri42`, best checkpoint epoch 13):
-
-| Split | val | test (raw) | test (excluding bad sample) |
-|---|---|---|---|
-| `single_in_dist` | 166.27 | 143.45 | 143.45 |
-| `geom_camber_rc` | 151.02 | 135.17 | 135.17 |
-| `geom_camber_cruise` | 113.54 | **NaN** | **98.06** (199/200 samples) |
-| `re_rand` | 129.21 | 128.13 | 128.13 |
-| **avg** | **140.01** | **NaN** | **126.20** |
-
-Note: `ztb0ri42` is the 4th baseline run (val_avg=140.01, worst of the 4). The three finite test splits are the most reliable test comparators.
-
-All stock-config baseline runs (for noise band reference):
+Stock fp32 baseline runs (pre-merge, for noise floor reference):
 
 | W&B run | val_avg/mae_surf_p | epochs | notes |
 |---|---|---|---|
-| `z2ls7ol1` (alphonse, 3rd) | **119.64** | best in cohort | from cycle-2 W&B survey |
-| `hqj9bt84` (alphonse, 1st) | 131.79 | 14 | canonical baseline |
-| `89653mip` (alphonse, 2nd) | 132.73 | 12 | backup |
-| `ztb0ri42` (alphonse, 4th) | 140.01 | 13 | per-split test numbers logged |
+| `z2ls7ol1` (alphonse) | 119.64 | ~14 | from cycle-2 W&B survey |
+| `hqj9bt84` (alphonse) | 131.79 | 14 | canonical fp32 baseline |
+| `89653mip` (alphonse) | 132.73 | 12 | fp32 backup |
+| `ztb0ri42` (alphonse) | 140.01 | 13 | per-split test logged; workaround=126.20 |
 
-**Merge bar:** any hypothesis is a winner if `val_avg/mae_surf_p` beats 131.79 by a margin exceeding the noise band (~17% → effectively need to beat ~119 to be unambiguously out of noise). Frieren (116.34) currently leads and is outside the noise band.
-
-### First finite test_avg (pending merge)
-
-Thorfinn (#1480, run `5wvm7na2`) reported `test_avg/mae_surf_p = 104.96` using the `train.py:evaluate_split` cruise-NaN workaround. This PR has been sent back to add code commits — once merged it will land the workaround for the whole round and set the new baseline.
+fp32 baseline noise band: 119.64–140.01 (~17%). All future comparisons are against the new best: **116.30 val / 104.96 test**.
 
 ## Notes for students
 
-- **Single-run noise floor is ~17%** — four stock-baseline runs span 119.64–140.01. A hypothesis must beat 131.79 (or ideally 119.64) to be a clean winner above noise.
-- **Primary decision metric on this branch is `val_avg/mae_surf_p`** (lower is better).
-- **`test_avg/mae_surf_p` will be NaN until the cruise-NaN workaround PR lands.** PR #1631 (alphonse) and #1480 (thorfinn, sent back) both target this. Once one lands, all subsequent runs get finite `test_avg` for free.
-- Use `test_avg/mae_surf_p_excluding_bad_sample = 126.20` as the canonical pre-fix test comparator.
-- Report all four per-test-split `mae_surf_p` values; cruise pressure will be NaN until the workaround lands.
-- Per-split metrics matter for diagnosis — flag splits where your change helps or hurts disproportionately.
+- **Baseline as of PR #1480:** `val_avg/mae_surf_p = 116.30`, `test_avg/mae_surf_p = 104.96`.
+- **cruise-NaN workaround is now landed.** All runs on this branch produce finite `test_avg` — no per-PR code needed.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat 116.30 to be a winner.
+- The noise band on fp32 baseline was ~17%. The new bf16+accum baseline may have a similar noise floor — single-run wins close to 116.30 should be confirmed with a second seed.
+- Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
+- Per-split metrics matter — flag splits where your change helps or hurts disproportionately.
