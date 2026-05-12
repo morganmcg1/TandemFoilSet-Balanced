@@ -410,6 +410,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -521,7 +522,20 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         pred = surf_head(pred, x_norm, is_surface)
-        sq_err = (pred - y_norm) ** 2
+
+        # Per-node Huber (SmoothL1) for surface to align with MAE metric;
+        # keep MSE for volume. delta=0 falls back to MSE for surface too.
+        delta = cfg.huber_delta
+        abs_err = (pred - y_norm).abs()
+        if delta > 0:
+            surf_node_loss = torch.where(
+                abs_err < delta,
+                0.5 * abs_err.pow(2) / delta,
+                abs_err - 0.5 * delta,
+            )
+        else:
+            surf_node_loss = abs_err.pow(2)
+        sq_err = abs_err.pow(2)  # MSE for volume
 
         # ── Per-sample inverse-variance weighting (BIVW) ─────────────────────
         # y_norm has shape [B, N, 3]; mask has shape [B, N]. Compute each
@@ -540,18 +554,24 @@ for epoch in range(MAX_EPOCHS):
             sample_w = 1.0 / y_var
             sample_w = sample_w / sample_w.mean()
         sw = sample_w[:, None, None]
-        sq_err_w = sq_err * sw
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err_w * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (sq_err * sw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (surf_node_loss * sw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
+        # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
+        with torch.no_grad():
+            if delta > 0 and surf_mask.any():
+                surf_abs = abs_err[surf_mask.unsqueeze(-1).expand_as(abs_err)]
+                surf_l1_frac = (surf_abs >= delta).float().mean().item()
+            else:
+                surf_l1_frac = 0.0
         wandb.log({
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
@@ -559,6 +579,7 @@ for epoch in range(MAX_EPOCHS):
             "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
             "train/y_var_max": y_var.max().item(),
             "train/y_var_min": y_var.min().item(),
+            "train/surf_l1_frac": surf_l1_frac,
             "global_step": global_step,
         })
 
