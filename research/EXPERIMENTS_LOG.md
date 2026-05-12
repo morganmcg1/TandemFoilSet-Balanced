@@ -247,6 +247,116 @@ Match EMA window to training horizon. Refined hypothesis: **timm-style adaptive 
 
 ---
 
+## 2026-05-12 22:00 — PR #1424: Warmup cosine peak LR 7e-4 + grad clip 1.0
+
+- **Branch:** `charliepai2g48h2-fern/warmup-7e-4-clip`
+- **Hypothesis:** Lower peak LR to 7e-4 (from 1e-3), extend warmup to 2 epochs (from 1), add gradient clipping (max_norm=1.0). Stacked on top of #1418 channel_weights=[1,1,3]. Hypothesis: stable fast convergence under 30-min cap with larger-than-baseline LR but without the epoch-5 spike seen at 1e-3.
+- **Status:** MERGED ✅ — **new baseline** (val_avg/mae_surf_p = 102.8503)
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 14) | **102.8503** | **−16.13% BETTER** 🏆 |
+| val_single_in_dist | 119.682 | −18.0% |
+| val_geom_camber_rc | 113.333 | −17.8% |
+| val_geom_camber_cruise | 82.087 | −13.5% |
+| val_re_rand | 96.299 | −13.9% |
+| test_single_in_dist | 104.577 | — |
+| test_geom_camber_rc | 97.972 | — |
+| test_geom_camber_cruise | NaN ⚠️ (GT bug) | — |
+| test_re_rand | 93.588 | — |
+| test_avg/mae_surf_p (3-split partial) | 98.712 | — |
+| Epoch time | ~131s/epoch | same as baseline |
+| Peak GPU | 42.1 GB | same as baseline |
+| Epochs completed | 14/20 | still descending at timeout |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-fern-warmup-7e-4-clip-20260512-211813/metrics.jsonl`
+- `models/model-charliepai2g48h2-fern-warmup-7e-4-clip-20260512-211813/metrics.yaml`
+
+### Commentary
+
+The refinement of #1424-r1 (LR=1e-3, 1-epoch warmup, no clip) fully resolved the training instability. No epoch-5 spike. From epoch 3 onward the loss curve is monotonically decreasing all the way to the timeout at epoch 14 — the model is **still improving** at cutoff, implying T_max=20 with 14 reachable epochs leaves 6 epochs over-annealed. The −16.13% improvement is uniform across all 4 val splits (−13.5% to −18.0%), with strongest gains on the in-distribution and rc-OOD splits.
+
+**Mechanism**: gradient clipping (max_norm=1.0) eliminates the catastrophic gradient spikes that destabilized the 1e-3 run. The 7e-4 peak is still +40% above the baseline 5e-4, giving faster early convergence, while the 2-epoch warmup ramps smoothly to avoid cold-start gradient noise. Together these changes compress effective convergence into the 30-min window.
+
+**Compounding**: this PR stacks on top of #1418 channel_weights=[1,1,3]. All subsequent PRs are now measured against both changes combined. The advisor branch now includes: (i) channel_weights=[1,1,3], (ii) lr_peak=7e-4, (iii) 2-epoch warmup, (iv) grad_clip=1.0.
+
+**Open question**: T_max=20 with only 14 reachable epochs means the cosine LR reached ~45% of the schedule. Setting T_max=14 would give a tighter anneal. However, the model was still descending (not oscillating), suggesting the current LR at epoch 14 is still productively high. T_max alignment could be tried as a follow-up.
+
+---
+
+## 2026-05-12 22:00 — PR #1517: EMA adaptive decay (Arm A: timm-style max=0.99, Arm B: fixed 0.99)
+
+- **Branch:** `charliepai2g48h2-askeladd/ema-0.99-adaptive`
+- **Hypothesis:** Timm-style adaptive EMA decay `min(0.99, (1+step)/(10+step))` auto-warms over first ~1000 steps and caps at 0.99 (window ~100 steps), avoiding cold-start lag from fixed high-decay EMA. Secondary arm: fixed `decay=0.99`. Both should benefit generalization without the horizon-mismatch failure of 0.999.
+- **Status:** CLOSED — neutral result; best arm (+0.40% worse on val, −0.63% better on test 3-split)
+
+### Results
+
+| Metric | Arm A (adaptive) | Arm B (fixed 0.99) | vs Baseline #1418 |
+|---|---|---|---|
+| val_avg/mae_surf_p (best) | 123.1314 | 124.0113 | +0.40% / +1.12% worse |
+| val_single_in_dist | 145.19 | 148.81 | — |
+| val_geom_camber_rc | 139.72 | 140.69 | — |
+| val_geom_camber_cruise | 94.53 | 94.90 | — |
+| val_re_rand | 113.08 | 111.75 | — |
+| test_avg (3-split partial) | 120.8885 | 123.99 | −0.63% (Arm A better) |
+| Epochs completed | 14/20 | 14/20 | — |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-askeladd-ema-0.99-adaptive-*/metrics.jsonl` (two runs)
+
+### Commentary
+
+The hypothesis refinement (max=0.99 vs 0.999) correctly fixed the cold-start lag — Arm A is much closer to baseline than the −10.5% disaster of the original run. However, even adaptive EMA cannot overcome the fundamental issue: with only 14 reachable epochs in a still-descending regime, any weight averaging that incorporates early (worse) weights degrades the final model. The test partial 3-split shows EMA marginally helps OOD generalization (test partial 0.63% better), but the val_avg metric that we rank against is 0.40% worse. Net result: **neutral**. Against the new baseline of 102.85 (PR #1424), a neutral result from the old baseline is even further behind.
+
+**Pattern**: EMA helps OOD splits (camber cruise consistent) but hurts in-dist. This suggests the live model slightly overfits to in-dist while EMA under-fits it. A post-hoc checkpoint ensemble (e.g., average last 3 epoch checkpoints) might capture this benefit without the live-model drag. However, this adds inference complexity for marginal expected gain.
+
+### Why closed
+
+New baseline is 102.8503. EMA alone (no warmup, no LR change) cannot bridge to that bar. Resources better deployed on orthogonal axes.
+
+---
+
+## 2026-05-12 22:00 — PR #1598: MLP ratio 2→4 alone (decoupled from slice_num)
+
+- **Branch:** `charliepai2g48h2-nezuko/mlp-ratio-4-alone`
+- **Hypothesis:** Decouple mlp_ratio=4 from the failed #1429 (slice_num=128 + mlp_ratio=4). Wider post-attention MLP at stable slice_num=64. Predicted −1% to −3% vs baseline from wider hidden capacity (128*2 → 128*4 = 512 MLP dim per block).
+- **Status:** CLOSED — +7.0% worse vs old baseline; new baseline 102.8503 makes this approach insufficient
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 9) | 131.2161 | **+7.0% WORSE** |
+| val_single_in_dist | 164.234 | +12.6% |
+| val_geom_camber_rc | 144.434 | +4.8% |
+| val_geom_camber_cruise | 98.040 | +3.3% |
+| val_re_rand | 118.155 | +5.6% |
+| test_avg (3-split partial) | 128.806 | — |
+| Epoch time | ~148s/epoch | +13% over baseline |
+| Params | ~991K | +50% over baseline (662K) |
+| Epochs completed | 13/20 | (timeout) |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-nezuko-mlp-ratio-4-alone-*/metrics.jsonl`
+
+### Commentary
+
+Under-trained: 13/20 epochs at 148s/epoch vs baseline 131s/epoch. The cosine LR was only at ~27% of its T_max=20 schedule at cutoff. Stability confirmed — no softmax/slice_norm overflow at slice_num=64 (max pred abs value logged, all finite). The +7% worse result is almost certainly an under-training artifact; the student's epoch-13 metrics show the model was still declining.
+
+However, even accounting for under-training, a compute-matched rerun (student suggestion: --epochs 12, T_max=12) is unlikely to bridge to the **new baseline of 102.8503** — the original prediction was −1% to −3% from the OLD 122.64 baseline, which would put the expected result around 119-121, still 16-18% above 102.85. The single MLP-ratio axis without warmup/LR/clip stacking is insufficient.
+
+**Key finding**: stability at slice_num=64 confirmed. The slice_num=96 (intermediate) is a lower-risk probe for the attention token count axis.
+
+### Why closed
+
+New baseline (102.85) renders this isolated experiment non-competitive. Resources better deployed on higher-leverage axes.
+
+---
+
 ## 2026-05-12 18:53 — PR #1424: Warmup + cosine, peak LR 1e-3
 
 - **Branch:** `charliepai2g48h2-fern/warmup-cosine-1e-3`
