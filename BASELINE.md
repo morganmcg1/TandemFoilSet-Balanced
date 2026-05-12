@@ -8,6 +8,107 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-12 23:55 — PR #1585: Stack FiLM global conditioning on Huber baseline (research-ideas H5)
+
+- **val_avg/mae_surf_p:** **80.8162** (best seed, epoch 14, base-model — student trained on Huber-only baseline #1452, *not* on Re-weight + SWA stack)
+- **test_avg/mae_surf_p:** **71.3028** (best seed, 4-split, all finite, base-model)
+- **All-3-seeds mean ± std:** val 82.20 ± 1.23, test 73.09 ± 1.64 — every seed clears the previous baseline (95.75) by 12+ points
+- Improvement vs. PR #1586 (95.75 / 86.17): val **−15.6%**, test **−17.3%** (largest single-PR gain on this branch to date)
+
+### ⚠ Important composition note
+
+This PR was trained against the **Huber-only baseline (PR #1452)**, *not* the Re-weight + SWA merged baseline (PR #1586). The student got val=80.82 / test=71.30 with **Huber + FiLM only**. The merge into the advisor branch composes FiLM with the existing Re-weight + SWA infrastructure, so the **post-merge train.py now runs Huber + Re-weight + SWA + FiLM together** — an untested combination.
+
+- The 15-point absolute headroom below the previous baseline is large enough that even a worst-case interaction with Re-weight or SWA (PR #1645 evidence: SWA may regress this stack by ~5pts) leaves FiLM-on-merged firmly under 95.75.
+- Tanjiro's #1679 (no-SWA test) and thorfinn's #1642 (Re-weight-sqrt) on the merged baseline will help triangulate the actual composition floor.
+- **Conservative tested floor for the new baseline:** val=80.82 — the merged code likely achieves something between 80 and 85 val on next run.
+
+### Val per-split surface MAE (best seed, epoch 14)
+
+| Split | mae_surf_p (seed 2) | mean ± std (3 seeds) | Δ vs. #1586 (95.75 frame) |
+|---|---|---|---|
+| val_single_in_dist     | 88.39  | 92.50 ± 3.58 | **−21.84%** |
+| val_geom_camber_rc     | 97.36  | 97.90 ± 0.47 | −5.16% |
+| val_geom_camber_cruise | 59.69  | 60.06 ± 0.84 | **−19.84%** |
+| val_re_rand            | 77.83  | 78.34 ± 0.92 | **−14.62%** |
+| **val_avg**            | **80.8162** | **82.20 ± 1.23** | **−15.59%** |
+
+### Test per-split surface MAE (best seed)
+
+| Split | mae_surf_p (seed 2) | mean ± std (3 seeds) | Δ vs. #1586 (86.17 frame) |
+|---|---|---|---|
+| test_single_in_dist     | 79.48 | 82.58 ± 3.34 | **−17.51%** |
+| test_geom_camber_rc     | 84.71 | 87.89 ± 2.93 | −6.95% |
+| test_geom_camber_cruise | 50.26 | 50.30 ± 0.36 | **−21.65%** |
+| test_re_rand            | 70.76 | 71.58 ± 0.84 | **−16.69%** |
+| **test_avg**            | **71.3028** | **73.09 ± 1.64** | **−17.27%** |
+
+### Config (tested run on Huber-only; merged code now also includes Re-weight + SWA)
+
+- Architecture: Transolver baseline + **FiLM conditioner** (zero-init last linear → starts as identity)
+  - FiLM input: globals (dims 13–23 of x, 11 features: Re, AoA, NACA M/P/T front+rear, gap, stagger) via masked-mean over real nodes
+  - FiLM output: `[B, L=5, 2, H=128]` predicting per-layer per-sample `(γ, β)`
+  - FiLM applied as `(1 + γ) * fx + β` after each block's FFN+residual
+  - mid_dim=64, ~84K extra params (~13% of baseline 0.66M → total 0.75M)
+- Loss: Smooth-L1 (Huber β=1.0) — student trained without Re-weight; merged code adds it
+- Optimizer: AdamW lr=5e-4, weight_decay=1e-4 (single param group, FiLM included via `nn.Module` wrapper)
+- Scheduler: CosineAnnealingLR(T_max=15)
+- Batch size: 4, surf_weight=10.0
+- **Re-weight (in merged code, NOT in tested config):** `1/log_re_shifted`, normalized per batch
+- **SWA (in merged code, NOT in tested config):** swa_start_frac=0.75, swa_lr=1e-4, anneal_epochs=2
+- Epochs: 15, wall clock 32.2 min (hit cap), peak VRAM ~42 GB
+
+### FiLM modulation diagnostics (final epoch, averaged across 3 seeds)
+
+| Layer | mean(|γ|) | mean(|β|) |
+|---|---|---|
+| L0 | 0.233 | 0.117 |
+| L1 | 0.241 | 0.152 |
+| L2 | 0.241 | 0.170 |
+| L3 | 0.234 | 0.180 |
+| L4 | 0.225 | 0.190 |
+| **all-layer mean** | **0.235** | **0.162** |
+
+`‖γ‖_L2 ≈ 15.3`, `‖β‖_L2 ≈ 10.6` (averaged across seeds). γ uniform across depth (~0.23–0.24), β grows monotonically with depth (0.12 at L0 → 0.19 at L4) — early layers prefer multiplicative scaling, later layers also use additive bias from global flow conditions. Mechanism is real, not a parameter-count artifact.
+
+### W&B runs (3 seeds)
+
+- seed 0: `f10x2pwq` — val=82.61, test=74.53
+- seed 1: `vija565w` — val=83.17, test=73.44
+- seed 2 (**best**): `j7uw0nhi` — val=80.82, test=71.30
+- Link: https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2/runs/j7uw0nhi
+
+### Reproduce (tested config — Huber + FiLM only, single seed)
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --seed 2 \
+  --agent willowpai2g48h2-askeladd \
+  --wandb_name willowpai2g48h2-askeladd/film-on-huber-seed2 \
+  --wandb_group film-stack-test
+```
+
+### What landed
+
+- **`FiLMConditioner(nn.Module)`** in `train.py`: MLP head `[Linear(11→64) → GELU → Linear(64→2·L·H)]` predicting per-layer `(γ, β)` from masked-mean of x[:,:,13:24]. Zero-init final linear → FiLM starts as identity.
+- **`FiLMTransolver(nn.Module)`** wrapper in `train.py`: holds Transolver + FiLMConditioner, computes FiLM in forward, threads `film` tensor through Transolver's `data` dict so per-block forward can extract layer slice.
+- **`TransolverBlock.forward(self, fx, film=None)`** modified to apply `(1+γ)*fx + β` after FFN+residual when `film` is non-None. Default behavior preserved when `film=None` (backward-compatible).
+- **`Transolver.forward(self, data, **kwargs)`** reads `data["film"]` (optional) and slices per-layer `(γ, β)` into each block.
+- `evaluate_split` updated to pass `mask` into the model dict so FiLM head can extract globals from real nodes.
+- New CLI flags: `--seed`, `--film_mid_dim`.
+- W&B observability: per-layer `|γ|`, `|β|` magnitudes, L2 norms, FiLM head param count.
+
+### Open follow-ups (for future PRs)
+
+- **Validate the merged composition.** Next merged PR confirms whether FiLM + Re-weight + SWA compose constructively. Expected ~80–85 val.
+- **More epochs on FiLM-merged baseline.** Val was still descending at epoch 14 on best seed (−4.5% from epoch 12→14). 25–30 epochs likely buys another 2–4 points if wall-clock permits.
+- **Stack FiLM with a geometry-aware lever.** Largest remaining gap is `val_geom_camber_rc` (97.90 ± 0.47) — FiLM helps cross-Re but not cross-camber-geometry as strongly. Slice_num bump, geometry-aware positional encoding, or surface-arc-length conditioning are candidates.
+- **FiLM mid_dim sweep.** mid_dim=64 already learns non-trivial modulation; mid_dim=128 confirm run is cheap.
+- **Per-channel loss weighting** (edward's wave-6 candidate): upweight `p` channel within both surf_loss and vol_loss. Orthogonal axis.
+
+---
+
 ## 2026-05-12 22:02 — PR #1586: Stack per-sample Re-based loss weighting on Huber baseline
 
 - **val_avg/mae_surf_p:** **95.7488** (best, epoch 14, base-model — student trained on Huber-only baseline, *not* SWA)
