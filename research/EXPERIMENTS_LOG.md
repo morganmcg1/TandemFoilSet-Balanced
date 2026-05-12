@@ -8,6 +8,117 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 21:17 — PR #1611: Cosine T_max=15 alignment — **MERGED, new baseline**
+
+- Branch: `charliepai2g24h4-askeladd/cosine-tmax-15`
+- Hypothesis: H14 from wave-2 candidate pool. Change `T_max=MAX_EPOCHS=50` to
+  `T_max=15` so the cosine LR decay completes over the actual training
+  horizon (~13-15 epochs under the 30-min cap), instead of being ~30% complete
+  with LR still at ~80% of peak when training terminates.
+
+| Metric | This PR | Baseline (#1552) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | **94.217** | 98.353 | **-4.21% (largest wave-2 gain)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | **84.859** | 87.995 | **-3.57%** |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 114.200 / 102.157 / 73.321 / 87.188 | 119.16 / 111.09 / 73.32 / 89.84 | **-4.16% / -8.04% / -0.00% / -2.95%** |
+
+- **All four val splits neutral-to-positive** — every split improved or stayed flat.
+  camber_rc had the biggest gain (-8.04%); cruise was the only flat one (was already
+  the easiest split at 73.32 in #1552, hard to push lower).
+- **LR trace confirmed the mechanism**: epoch 1 LR = 4.945e-4, epoch 14 = 5.463e-6,
+  epoch 15 = 0.0. The full cosine cooldown phase now happens — under the old
+  `T_max=50` setting, LR at epoch 15 was still ~4.0e-4 (80% of peak),
+  i.e. the model never entered the fine-tuning phase.
+- **Val MAE descended monotonically every epoch** — still improving at the
+  wall-clock cap. The cooldown helps without pulling the optimum forward.
+- **Action: MERGED** as new canonical baseline. Single-line change, zero added
+  compute, zero added params. Subsequent PRs are now compared against 94.217 /
+  84.859. The two pending rebase PRs (edward #1548 Fourier, fern #1549 FiLM)
+  and the strong wave-2 EMA result (frieren #1608, val_avg=95.761) are all
+  affected by this baseline shift and need re-evaluation.
+
+## 2026-05-12 21:17 — PR #1608: EMA of model weights (decay=0.999) — **REQUEST CHANGES** (sent back to frieren for rebase onto new cosine baseline)
+
+- Branch: `charliepai2g24h4-frieren/ema-weights-0.999`
+- Hypothesis: H13 from wave-2 pool. Exponential moving average of model weights;
+  validate and checkpoint using the EMA copy.
+
+| Metric | This PR | Baseline (#1552) | Δ vs #1552 | New baseline (#1611) | Δ vs #1611 |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 95.761 | 98.353 | **-2.64%** | 94.217 | **+1.64% (worse vs new)** |
+| test_avg/mae_surf_p (4-split) | 85.286 | 87.995 | -3.08% | 84.859 | +0.50% |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 115.69 / 107.67 / 71.88 / 87.81 | 119.16 / 111.09 / 73.32 / 89.84 | -2.91% / -3.08% / -1.96% / -2.26% | 114.20 / 102.16 / 73.32 / 87.19 | +1.30% / +5.39% / -1.96% / +0.71% |
+
+- **Mechanism worked.** All four splits improved vs the #1552 base, monotonic
+  val descent every epoch. Implementation correct: EMA swap-in for val, live
+  weights restored after, EMA `state_dict()` saved to checkpoint, test load
+  picks up EMA weights automatically.
+- **But the #1611 cosine merge shifted the baseline.** EMA's run was on
+  T_max=50 base; the new baseline has T_max=15. Standalone EMA gain (-2.64%)
+  no longer beats the new baseline.
+- **Action: SENT BACK with rebase spec.** EMA and cosine T_max alignment are
+  mechanistically orthogonal (different optimizer-trajectory variance vs
+  LR-schedule shape), so they should stack. Expected stacked val_avg: ~92-93
+  if EMA's -2.64% effect carries over to the new base. Re-evaluate after rebase.
+
+## 2026-05-12 21:17 — PR #1549: FiLM conditioning on global flow params — **REQUEST CHANGES** (sent back to fern for rebase — extraordinary signal)
+
+- Branch: `charliepai2g24h4-fern/film-global-cond`
+- Hypothesis: H10 from round-2 list. FiLM (Feature-wise Linear Modulation) of
+  per-block features by global flow parameters (Reynolds, AoA, etc. from
+  metadata). Bug fix in conditioning extraction: use node-0 instead of mean-
+  pool over padded zeros (which collapsed the conditioning signal).
+
+| Metric | This PR | L1 baseline (#1397) | Δ vs L1 | Current baseline (#1611) | Δ vs current |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 13) | **81.291** | 100.957 | **-19.5%** | 94.217 | **-13.7% (huge gap)** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | **71.731** | NaN | first finite | 84.859 | **-15.5%** |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 94.72 / 103.94 / 52.13 / 74.38 | 127.37 / 110.83 / 77.35 / 88.27 | -25.6% / -6.2% / -32.6% / -15.7% | 114.20 / 102.16 / 73.32 / 87.19 | -17.1% / +1.7% / -28.9% / -14.7% |
+| n_params | 677,719 | 660,000 | +2.7% | 662,359 | +2.3% |
+
+- **Largest single-experiment signal of round 2 by a wide margin.** Beats the
+  L1-only baseline by 19.5% on val, beats the current (cosine+stoch-depth)
+  baseline by 13.7% **even without those two improvements stacked**. cruise
+  OOD split dropped 73.32 → 52.13 (-29%) — exactly the regime where global
+  flow params (Re, AoA) should carry the most information.
+- **Caveat: no stoch-depth, no cosine T_max=15.** fern's branch is older than
+  both #1552 and #1611. The 13.7% gap suggests FiLM is doing dominant
+  conditioning work, but the comparison can't be confirmed without stacking
+  on the full current baseline.
+- **Action: SENT BACK with rebase spec.** This is the **top-priority pending
+  rebase** of the round. If FiLM + stoch-depth + cosine all stack, projected
+  val_avg lands in the 78-84 range — a massive new baseline. If interference
+  is severe, we choose between FiLM-only and the current baseline; the
+  FiLM-only result (81.291) would still be a -13.7% improvement.
+
+## 2026-05-12 21:17 — PR #1610: log1p target reparameterization (H11) — **CLOSED**
+
+- Branch: `charliepai2g24h4-alphonse/log1p-target`
+- Hypothesis: H11. Sign-preserving log1p of the target across all 3 channels
+  (Ux, Uy, p), inverse-transform at metric time. Compresses heavy-tailed
+  distribution and rebalances per-sample gradient magnitude.
+
+| Metric | This PR | Baseline (#1552) | Δ vs #1552 | New baseline (#1611) |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 13) | 99.513 | 98.353 | **+1.18% (regression)** | 94.217 (+5.62% vs new) |
+| test_avg/mae_surf_p (4-split) | 89.586 | 87.995 | +1.81% | 84.859 |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 125.01 / 114.83 / 69.34 / 88.87 | 119.16 / 111.09 / 73.32 / 89.84 | +4.91% / +3.37% / -5.43% / -1.08% | — |
+
+- **Diagnostic value is high.** log1p helps the lower-peak splits (cruise -5.43%,
+  re_rand -1.08%) but hurts the high-peak ones (single_in_dist +4.91%,
+  camber_rc +3.37%). The pressure channel's log_y_std=4.64 is ~4× the
+  other two channels (1.12, 1.53) — it's the only heavy-tailed channel, and
+  full log-compression flattens the surface stagnation peaks that
+  `mae_surf_p` rewards.
+- **Implementation was correct**: signed_log1p / signed_expm1 wired properly,
+  stats recomputed on log-space targets, sanity checks pass (epoch-1
+  surf_loss=1.28 in log space as expected, physical-unit MAE reported
+  correctly at O(100)).
+- **Action: CLOSED**. Pressure-only log1p (H16) is the natural targeted variant
+  and is being assigned as alphonse's next hypothesis — the heavy-tailed
+  channel that benefits from compression is isolated, while Ux/Uy stay in
+  physical units.
+
 ## 2026-05-12 21:13 — PR #1548: Fourier coord encoding (L=4) — **REQUEST CHANGES** (sent back to edward for rebase onto stoch-depth baseline)
 
 - Branch: `charliepai2g24h4-edward/fourier-coords-L4`
