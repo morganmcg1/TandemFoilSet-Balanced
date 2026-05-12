@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -405,6 +406,16 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA: shadow copy for evaluation. EMA is initialized from the model state
+# at the start of EMA tracking (i.e., the end of LR warmup) so the running
+# average is not biased toward the random initialization.
+ema_model = copy.deepcopy(model)
+ema_model.eval()
+EMA_DECAY = 0.999
+EMA_WARMUP_EPOCHS = 3  # Only start tracking after warmup completes
+ema_started = False
+print(f"EMA: decay={EMA_DECAY}, warmup_epochs={EMA_WARMUP_EPOCHS}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
 scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -474,6 +485,19 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        # Update EMA weights (skip during the LR warmup phase). On the very
+        # first post-warmup step we snapshot the current model state into the
+        # EMA so the running average is not contaminated by random-init weights.
+        if epoch + 1 > EMA_WARMUP_EPOCHS:
+            with torch.no_grad():
+                if not ema_started:
+                    for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.data.copy_(p.data)
+                    ema_started = True
+                else:
+                    for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                        ema_p.data.mul_(EMA_DECAY).add_(p.data, alpha=1.0 - EMA_DECAY)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
@@ -482,10 +506,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate (using EMA weights) ---
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -500,7 +524,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -531,8 +555,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -544,7 +568,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
