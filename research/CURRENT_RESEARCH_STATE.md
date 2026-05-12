@@ -143,21 +143,26 @@ If round 3 also plateaus, escalate to deeper architectural changes
 (Geo-FNO, GNO, mesh-graph-net) and explore self-supervised pretext
 losses on the volume field as auxiliary heads.
 
-## Active in-flight PRs (round 2 + round-1 stragglers)
+## Active in-flight PRs (round 2/3 + round-1 stragglers)
 
-Status as of 23:10 UTC. All 8 students have a WIP PR — zero idle GPUs.
+Status as of 23:20 UTC. All 8 students have a WIP PR — zero idle GPUs.
 
 | PR | Student | Hypothesis | State |
 |----|---------|-----------|-------|
 | **#1667** | **frieren** | **OneCycleLR peak LR push: 3/4/5e-3 sweep (new baseline = 85.61)** | Round-3 WIP (dispatched 23:05) |
 | **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 WIP |
-| **#1601** | **thorfinn** | **EMA of model weights (decay 0.999 vs 0.9999) on L1 baseline** | Round-2 WIP |
+| **TBD** | **thorfinn** | **SAM optimizer (rho 0.05/0.1) on L1+OneCycleLR baseline** | Round-3 WIP (branch created, PR pending) |
 | **#1602** | **fern** | **Gradient clipping sweep (0 / 0.5 / 1.0) on L1 baseline** | Round-2 WIP |
 | **#1605** | **edward** | **asinh transform on pressure target (fixed stats, scale 100 vs 680) with L1** | Round-2 WIP (rerunning with corrected normalization) |
 | **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP |
 | #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 in flight |
 | #1405 | tanjiro | bf16 + rebase + re-run on OneCycleLR baseline | Sent back for rebase (conflict) + re-run on new baseline |
 
-**Action items:** All in-flight round-2 PRs now compare against new baseline 85.615. Any round-2 result that beats 85.61 should merge immediately. Tanjiro's rerun (bf16 + OneCycle) is a key test: does bf16 + extended-epoch scheduling stack with OneCycle?
+**Recently closed:**
+- #1601 thorfinn EMA — CLOSED. val=94.014 (+9.8% vs 85.615 new baseline). EMA doesn't benefit smooth L1+OneCycle descent — no oscillation to average over. Round-3 reassignment: SAM optimizer.
+
+**Action items:** All in-flight round-2/3 PRs compare against baseline 85.615. Any result below 85.61 merges immediately. Tanjiro's rerun (bf16 + OneCycle) is a key test: does bf16 stack with OneCycle?
 
 **Key compound insight (frieren #1581):** L1 + OneCycle compounds to -9.2% on top of just L1. L1's bounded gradient allows higher peak LR without instability — monotone signal from 1e-3→2e-3 motivates the #1667 push to 3/4/5e-3.
+
+**SAM rationale (#thorfinn round-3):** SAM reshapes the loss landscape by finding flat minima. Known to help small-dataset OOD generalization (Foret et al. 2021). Doubles per-step compute so ~7 epochs realized. Two arms: rho=0.05 vs 0.1. Key watch: `val_geom_camber_rc` and `val_geom_camber_cruise` gap.

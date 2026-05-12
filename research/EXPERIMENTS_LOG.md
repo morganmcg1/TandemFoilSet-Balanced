@@ -1,5 +1,33 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 23:15 — PR #1601: EMA of model weights (decay 0.999 vs 0.9999) ❌ CLOSED
+
+- **Student branch:** `charliepai2g48h1-thorfinn/ema-model-weights`
+- **Hypothesis:** EMA of model weights (exponential moving average) as a near-zero-cost regularizer provides a smoother ensemble of checkpoints, reducing overfitting on the 1499-sample training set and improving OOD generalization.
+
+### Result
+
+| Arm | EMA decay | best epoch | val_avg/mae_surf_p | test_avg (3/4) |
+|-----|-----------|------------|---------------------|----------------|
+| A | 0.999 | 14 | **94.014** | ~91.6 (est.) |
+| B | 0.9999 | 14 | ~94.2 | — |
+| Baseline (L1 only) | — | 14 | 94.291 | 91.859 |
+| **New baseline (L1+OneCycle)** | — | 14 | **85.615** | 83.328 |
+
+### Action: CLOSED — beaten by OneCycle baseline
+
+**Root cause of failure:** EMA provides benefit when gradient updates are noisy and the optimizer oscillates near a minimum — the EMA smooths over the oscillations. L1 + OneCycleLR produces a **smooth monotone descent**: bounded L1 gradients + warm-up/wind-down schedule drive a clean trajectory with no oscillation to average over. EMA sees no gradient noise to exploit.
+
+**Timing issue:** Thorfinn ran results against the old L1-only baseline (94.29). Arm A's val=94.014 is marginally better (+0.3%) than that old baseline, but:
+1. The new OneCycleLR baseline (85.615) was merged while #1601 was in-flight
+2. 94.014 is +9.8% worse than 85.615 — not a winner against the current best
+3. EMA decay=0.9999 effective window ≈ 70 epochs >> 14 realized epochs; EMA barely converged
+
+**Round-3 follow-up dispatched: #`TBD` (thorfinn, SAM optimizer)**
+SAM (Sharpness-Aware Minimization) is the orthogonal lever: it reshapes the loss landscape rather than averaging weights, and is known to help small-dataset OOD generalization (Foret et al. 2021). Arms: rho=0.05 vs rho=0.1.
+
+---
+
 ## 2026-05-12 23:05 — PR #1405: bfloat16 autocast + batch_size 8 + sqrt-scaled lr — sent back for rebase
 
 - **Student branch:** `charliepai2g48h1-tanjiro/amp-bf16-batch8`
