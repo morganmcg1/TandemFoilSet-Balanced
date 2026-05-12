@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-12 21:15
+- 2026-05-12 22:15
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -8,54 +8,59 @@
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **114.40** | #1519 (warmup3 + cosine T_max=13) |
-| **test_avg/mae_surf_p** | **107.57** | #1564 (GT-NaN fix in evaluate_split) |
+| **val_avg/mae_surf_p** | **105.46** | #1483 (grad_clip max_norm=1.0) |
+| **test_avg/mae_surf_p** | **TBD** | Source branch lacked GT-NaN fix; merged code has it — next run will produce finite test |
 
-- Model still improving at epoch 13 → more compute headroom
-- All 4 val splits and all 4 test splits now produce finite MAEs
+Merged stack: warmup3+cosine13 + GT-NaN fix (evaluate_split) + grad_clip(max_norm=1.0), AdamW(lr=5e-4, wd=1e-4), batch=4, seed=42.
 
 ## Key round-5 findings to date
 
 | Finding | Impact |
 |---|---|
 | Baseline does ~13 epochs in 30 min (not 50) | All schedule hyperparams must be matched to budget |
-| CosineAnnealingLR(T_max=50) barely decays in 13 epochs | Matching T_max=13 alone gave 8.6% improvement |
+| CosineAnnealingLR(T_max=50) barely decays in 13 epochs | Matching T_max=13 alone gave 8.6% improvement (#1519) |
 | 3-epoch warmup stabilises early training | Composes cleanly with schedule fix |
-| SWA mechanism works (27.5% within-run gain on val) | Not yet beating merged baseline; need warmup+SWA compose |
+| SWA mechanism works (27.5% within-run gain on val) | Not yet beating merged baseline; needs warmup+SWA compose |
 | surf_weight=20 regresses at 14 epochs | Budget too short for the changed loss landscape |
 | p-channel 3x weight regresses | Surface Ux/Uy is NOT a free task; equal-weight is already right |
 | GT NaN at cruise test sample 20 (idx=20, y contains Inf) | Fixed in #1564: gt_finite_mask filter before accumulate_batch |
 | Surface skip -6.2% within-run on pre-warmup baseline (#1487) | Mechanism real; needs composition with merged baseline (~107 expected) |
 | BF16+batch=8 regressed val +1.5% (T_max mismatch + no LR scale) | --epochs must ALWAYS match actual budget; batch scale needs LR scale |
+| Gradient clipping max_norm=1.0 gives -7.8% (#1483, MERGED) | Pre-clip norms 45-112 >> 1.0: clipping fires EVERY step = gradient renorm |
+| EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: EMA averages "early bad model" into "late good model" |
+| n_hidden=192 regresses +47.7% (#1478, CLOSED) | 185s/epoch → only 10/50 epochs ran; T_max=50 mismatch; needs BF16 to revisit |
 
 ## Active PRs (all 8 students assigned)
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #1463 | askeladd | Warmup+cosine+SWA composed | WIP rerun (needs rebase) | Beat 114.40 |
-| #1470 | edward | Instance-norm loss | WIP active | Beat 114.40 |
-| #1478 | frieren | Wider model n_hidden=192 | WIP active (64.8 GB GPU) | Beat 114.40 |
-| #1481 | nezuko | slice_num=128 | WIP active (87 GB GPU) | Beat 114.40 |
-| #1483 | tanjiro | Gradient clipping max_norm=1.0 | WIP active (69.5 GB GPU) | Beat 114.40 |
-| #1487 | thorfinn | Surface skip composed with merged baseline | WIP rerun | Beat 114.40 |
-| #1565 | fern | BF16 only (batch=4) isolate precision gain | WIP rerun | Beat 114.40 |
-| #1596 | alphonse | EMA of weights (decay=0.999) per gradient step | WIP new | Beat 114.40 |
+| #1463 | askeladd | Warmup+cosine+SWA composed | WIP (needs rebase onto #1483) | Beat 105.46 |
+| #1470 | edward | Instance-norm loss | WIP active | Beat 105.46 |
+| #1481 | nezuko | slice_num=128 | WIP active | Beat 105.46 |
+| #1487 | thorfinn | Surface skip composed with merged baseline | WIP active | Beat 105.46 |
+| #1565 | fern | BF16 only (batch=4) isolate precision gain | WIP rerun | Beat 105.46 |
+| #1638 | tanjiro | LR=1e-3 exploit grad_clip stability | WIP new | Beat 105.46 |
+| #1639 | alphonse | Huber/Smooth-L1 loss (delta=1.0) | WIP new | Beat 105.46 |
+| #1641 | frieren | Lion optimizer (lr=1.5e-4) | WIP new | Beat 105.46 |
 
 ## Open questions from active experiments
 
-1. **Does EMA of weights improve generalization?** (#1596 alphonse) — Near-zero cost, no LR valley needed, proven in low-iteration regimes. Expected 2-5%.
-2. **Does the surface skip compose with warmup+cosine?** (#1487 thorfinn rerun) — High prior; within-run delta of -6.2%. Expected ~107 val, could push test below 100.
-3. **Does composed warmup+SWA beat warmup alone?** (#1463 askeladd) — SWA mechanism confirmed; composing with warmup recipe is most promising pending hypothesis.
-4. **Does gradient clipping stabilise training?** (#1483 tanjiro) — Would improve all future experiments if it does.
-5. **Does wider model help?** (#1478 frieren) — 192 hidden dims; slower per epoch so fewer epochs fit in budget.
-6. **Does instance-norm loss help?** (#1470 edward) — Addresses Re dynamic range; could improve val_re_rand.
-7. **Does BF16 alone (batch=4) unlock more epochs?** (#1565 fern) — Isolated from batch confound.
+1. **Does surface skip compose with warmup+cosine+grad_clip?** (#1487 thorfinn rerun) — Within-run δ was -6.2%. Composed with new baseline (105.46), expected ~98-100 val. Could push test below 100.
+2. **Does lr=1e-3 exploit grad_clip stability?** (#1638 tanjiro) — Grad renorm bounds every update; 2× LR gives larger bounded steps. Expected 2–6%.
+3. **Does Huber loss complement grad_clip?** (#1639 alphonse) — Per-sample outlier robustness + gradient-vector robustness are orthogonal. Expected on OOD splits.
+4. **Does Lion optimizer suit our renorm regime?** (#1641 frieren) — Grad_clip is global renorm; Lion is per-param sign renorm. Natural experiment to see if full sign quantization helps. Expected 1–3%.
+5. **Does instance-norm loss help?** (#1470 edward) — Addresses Re dynamic range; could improve val_re_rand.
+6. **Does slice_num=128 help?** (#1481 nezuko) — More slice tokens in PhysicsAttention. Slower per epoch but richer geometry partitioning.
+7. **Does BF16 alone (batch=4) unlock more epochs?** (#1565 fern) — Isolated from batch confound. If yes, enables revisiting wider model.
+8. **Does composed warmup+SWA beat grad_clip baseline?** (#1463 askeladd) — Needs rebase onto #1483 merged stack.
 
 ## Next hypotheses to queue (when students go idle)
 
-1. **Surface skip + winning compose** — once #1487 and any of (#1483, #1463, #1596) win, compose them.
-2. **Skip hidden=64** — current surf_skip is 32 hidden (675 params); scaling up may improve camber-OOD. Only after #1487 confirms composition wins.
-3. **Volume-side skip** — analogous to surf_skip for volume nodes (different feature subset). Complements surface skip.
-4. **LR increase (lr=1e-3)** — with warmup + clipping (if #1483 wins), pushing lr from 5e-4 to 1e-3 could improve convergence speed.
-5. **Transolver++ local adaptive correction** — highest expected gain from literature, moderate engineering effort. Priority after simpler wins are exhausted.
-6. **n_layers=7 with BF16** — if BF16 wins (#1565), depth increase becomes viable within budget.
+1. **Surface skip + lr=1e-3 + grad_clip** — once #1487 and #1638 results land, compose the winners.
+2. **Skip hidden=64** — scale surf_skip MLP from 32→64 hidden after #1487 confirms composition wins.
+3. **Volume-side skip** — analogous to surf_skip for volume nodes. Complements surface skip.
+4. **Huber + Lion compose** — if both #1639 and #1641 win, compose them for additive gain.
+5. **n_hidden=192 with BF16** — if #1565 wins and shows memory headroom, revisit wider model.
+6. **n_layers=7 (depth) with BF16** — depth increase viable if BF16 wins.
+7. **Transolver++ local adaptive correction** — highest expected gain from literature, moderate engineering effort. Priority after simpler wins are exhausted.
+8. **max_norm sweep** — test max_norm=2.0 vs 0.5 to characterize the renorm-optimal scale (tanjiro's PR does lr but not norm sweep; a follow-up could isolate the scale question).

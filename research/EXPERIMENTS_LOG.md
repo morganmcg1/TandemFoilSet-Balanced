@@ -241,3 +241,113 @@ cd target/ && python train.py --experiment_name surf_skip_warmup_cosine13 --epoc
 ```
 
 Acceptance: beat 114.40 by any margin. Expected number based on within-run delta is ~107. Status: WIP awaiting rerun.
+
+---
+
+## 2026-05-12 21:55 — PR #1483: Gradient clipping max_norm=1.0 (MERGED — new baseline)
+
+- Student branch: `charliepai2g24h5-tanjiro/grad-clip-1`
+- Hypothesis: Adding `clip_grad_norm_(model.parameters(), max_norm=1.0)` between `loss.backward()` and `optimizer.step()` prevents training instability in PhysicsAttention and improves convergence.
+
+### Results
+
+| Metric | Baseline (#1564) | This run (grad_clip) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 114.40 | **105.46** | **-7.8%** |
+| test_avg/mae_surf_p | 107.57 | TBD* | — |
+
+*Source branch lacked GT-NaN fix; merged code now has both, so test will be re-measured by next run.
+
+### Per-split val (epoch 13, grad_clip merged stack)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| val_single_in_dist | 112.93 | 1.445 | 0.699 |
+| val_geom_camber_rc | 122.87 | 2.467 | 0.957 |
+| val_geom_camber_cruise | 83.98 | 1.001 | 0.556 |
+| val_re_rand | 102.08 | 1.763 | 0.745 |
+| **val_avg** | **105.46** | 1.669 | 0.739 |
+
+- Metrics: `models/model-grad_clip_1-20260512-210428/metrics.jsonl`
+- Peak VRAM: 69.5 GB (note: student branch had no BF16, so higher than expected — merged code unchanged)
+
+### Analysis
+
+Pre-clip gradient norms are 45–112 throughout training (ALL well above max_norm=1.0), meaning clipping fires on **every gradient step** — it is not "tame occasional outliers" but rather **gradient renormalization** at every update. The effect is closer to "Adam on g/‖g‖": the gradient direction is preserved but the magnitude is bounded.
+
+Largest gains on highest-magnitude splits: val_single_in_dist −12.4% (112.93 vs prior 128.x), val_geom_camber_rc −8.2%. Consistent with Re-rebalancing: extreme-Re samples no longer dominate gradient direction.
+
+**Implementation:** 1-line surgical addition between `loss.backward()` and `optimizer.step()`:
+```python
+grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+```
+
+**MERGED. New val baseline: 105.46. New baseline stack: warmup3+cosine13 + GT-NaN fix + grad_clip(1.0).**
+
+---
+
+## 2026-05-12 22:05 — PR #1596: EMA of weights decay=0.999 (CLOSED — regression)
+
+- Student branch: `charliepai2g24h5-alphonse/ema-weights`
+- Hypothesis: Exponential Moving Average of model weights (decay=0.999) per gradient step improves generalization, especially on OOD splits; expected 2–5%.
+
+### Results
+
+| Metric | Baseline (#1483) | This run (EMA) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 105.46 | **122.46** | **+16.1% WORSE** |
+
+### Analysis
+
+In our 13-epoch / ~530-step training regime, EMA decay=0.999 gives a half-life of ~693 steps — far longer than the entire run. EMA is essentially returning the model from epoch ~0.5, averaging over the descent trajectory. This regime is **monotonically descending**: the model never reaches a flat valley or noise-dominated region where EMA adds value. EMA is beneficial when training has converged and the model oscillates around a minimum; in our short regime it systematically lags the current model.
+
+Root cause: short-budget + monotonic loss trajectory = EMA always averages "early bad model" into "late good model". The EMA model is meaningfully worse than the end-of-training checkpoint at every step.
+
+**Closed as clean negative result.** Insight: our 30-min budget leaves no EMA headroom. If training eventually runs for 100+ epochs, EMA becomes viable again.
+
+---
+
+## 2026-05-12 22:05 — PR #1478: Wider model n_hidden=192 (CLOSED — regression, budget mismatch)
+
+- Student branch: `charliepai2g24h5-frieren/nhidden192`
+- Hypothesis: Increasing n_hidden from 128 to 192 (1.5× width, estimated 4.7M params) gives the model more capacity to resolve complex tandem-foil interactions; expected 3–8% improvement.
+
+### Results
+
+| Metric | Baseline (#1483) | This run (n_hidden=192) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 105.46 | **155.80** | **+47.7% WORSE** |
+| Epochs completed | 13 | 10/50 (hit wall) | — |
+
+### Analysis
+
+Three compounding failures:
+1. **Budget exhausted too early:** n_hidden=192 costs ~185 s/epoch (vs ~130 s for 128). Only 10 of 50 configured epochs ran. The model was far from convergence.
+2. **CosineAnnealingLR T_max=50 mismatch:** Student used T_max=50 instead of matching T_max to actual epoch count. The learning rate never decayed from its initial value (LR ≈ peak at epoch 10/50).
+3. **Parameter count error:** Actual params = 1.47M (close to 128-hidden baseline 0.92M), not the estimated 4.7M. The parameter count was wrong but this is moot given the epoch budget failure.
+
+**Closed as clean negative result.** The wider model itself was never fairly evaluated — it was starved of compute. With BF16 (PR #1565 fern) reducing memory, revisiting n_hidden=192 at proper budget could be viable later, but for now we need to wait for that result first.
+
+---
+
+## 2026-05-12 22:15 — PR #1638: LR 1e-3 (assigned to tanjiro)
+
+- Student branch: `charliepai2g24h5-tanjiro/lr1e3-with-gradclip`
+- Hypothesis: Grad clip fires on every step (pre-clip norms 45–112 >> max_norm=1.0) → gradient updates are bounded regardless of loss curvature → safely increase lr from 5e-4 to 1e-3. 2× larger (but still bounded) steps → faster convergence in same 13-epoch budget. Expected improvement: 2–6%.
+- Status: WIP, assigned.
+
+---
+
+## 2026-05-12 22:15 — PR #1639: Huber loss delta=1.0 (assigned to alphonse)
+
+- Student branch: `charliepai2g24h5-alphonse/huber-loss`
+- Hypothesis: Smooth-L1 (Huber, δ=1.0) is robust to per-sample outlier residuals in the same way grad_clip is robust to gradient-vector outliers. Expected to reduce the heavy right tail in loss contributions from extreme-Re or unseen-geometry samples. Expected improvement on val_geom_camber_rc and val_re_rand; 2–5% overall.
+- Status: WIP, assigned.
+
+---
+
+## 2026-05-12 22:15 — PR #1641: Lion optimizer (assigned to frieren)
+
+- Student branch: `charliepai2g24h5-frieren/lion-optimizer`
+- Hypothesis: Lion (EvoLved Sign Momentum, Chen et al. 2023) uses sign-based updates — the logical endpoint of gradient renormalization. Since grad_clip already partially normalizes updates, Lion may further improve by applying per-parameter sign quantization. Lower memory (one state vs two for AdamW). lr=1.5e-4 (3× lower than AdamW baseline per Lion's scaling recommendation). Expected: 1–3% improvement.
+- Status: WIP, assigned.
