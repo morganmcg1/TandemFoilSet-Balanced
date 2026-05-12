@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 23:10
+- **Date:** 2026-05-13 00:10
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -13,21 +13,22 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ## Current baseline (MERGED — triple compound winner)
 
-**PR #1606 — fern EMA weights decay=0.999** (merged 2026-05-12 22:10, stacked on top of #1436):
-- `val_avg/mae_surf_p = 92.3452` (epoch 17; vs 96.49 Huber+bf16 → −4.3%)
-- `test_avg/mae_surf_p = 81.6297` (vs 86.33 → −5.4%)
-- Config: EMA shadow (decay=0.999) + Huber loss (β=1.0) + bf16 autocast + NaN scoring fix, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
-- ~17 epochs / 30 min (bf16 = ~110 s/epoch with diagnostic pass)
-- EMA-vs-live gap at epoch 17: live test=104.70, EMA test=81.63 (+28% better)
+**PR #1689 — fern Huber β=0.5** (merged 2026-05-13 00:05, stacked on top of #1606):
+- `val_avg/mae_surf_p = 85.9197` (epoch 17; vs 92.35 EMA baseline → −6.96%)
+- `test_avg/mae_surf_p = 76.5495` (vs 81.63 → −6.22%)
+- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
+- ~17 epochs / 30 min (~112 s/epoch)
+- All 4 test splits improved; EMA-vs-live gap at epoch 17: live val=96.41, EMA val=85.92
 
-**Cumulative compounding (3 merges so far):**
+**Cumulative compounding (4 merges so far):**
 
 | Baseline | val | test | Key change |
 |----------|-----|------|------------|
 | Stock (MSE, fp32) | ~160+ | ~130+ | — |
 | PR #1419 alphonse bf16 | 109.29 | 97.67 | bf16 autocast → +4 epochs in budget |
-| PR #1436 fern Huber | 96.49 | 86.33 | Smooth L1 loss → loss-shape MAE alignment |
-| PR #1606 fern EMA | **92.35** | **81.63** | Weight averaging → reduces noise ball at eval |
+| PR #1436 fern Huber β=1.0 | 96.49 | 86.33 | Smooth L1 → loss-shape MAE alignment |
+| PR #1606 fern EMA | 92.35 | 81.63 | Weight averaging → reduces noise ball at eval |
+| PR #1689 fern Huber β=0.5 | **85.92** | **76.55** | Tighter MAE alignment in moderate-error band |
 
 ## Active experiments
 
@@ -36,19 +37,22 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (rebasing) | pinged with Huber+bf16 baseline; rebase requested |
 | edward | #1669 | EMA decay=0.9995 (longer half-life, 3.7 epochs) | EMA variant | WIP | flag-only change; tests wider averaging window |
-| fern | TBD | Huber β=0.5 (more L1-aligned in moderate-error region) | Loss shape | WIP (queued) | surgical follow-up to confirmed Huber lever |
+| fern | TBD | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP (queued) | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch before cosine | LR schedule | WIP | SequentialLR warmup; targets EMA early-lag and gradient instability |
 | tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebased 21:18) | v2 rerun on bf16+Huber+EMA |
-| thorfinn | #1629 | Dropout=0.1 | OOD regularization | WIP | H8 from round-1 pool; first regularization direction tested |
+| thorfinn | #1629 | Dropout=0.1 v2 on β=0.5 baseline | OOD regularization | WIP (sent back) | beat old baseline (90.08); retest needed on new baseline (85.92) |
 
-**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 92.3452` to merge directly. PRs started against the bf16-only (109.29) or Huber+bf16 (96.49) baseline will need rebase + retest if they fall between those thresholds.
+**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.9197` (PR #1689 Huber β=0.5, test=76.5495). PRs that beat the old EMA baseline (92.35) but not the current baseline will be sent back for retest on the new stack.
 
 ## Closed hypotheses (all rounds)
 
 ### Loss / feature engineering
 - **per-channel surface weights (0.5, 0.5, 2.0)** (#1445 v2, nezuko) — val=93.60 (+1.4% worse). p already dominates gradient signal; re-weighting backfired, U down-weighting removed geometric regularization.
 - **SiLU activation** (#1648, edward) — val=96.99 (+5.0% worse). "Smoother but slower" trajectory; GELU/lr=5e-4 is well-tuned for this regime.
+
+### Loss shape / Huber β
+- **Huber β=0.5** (#1689, fern) — val=85.92 (−6.96% vs β=1.0 baseline). MERGED. All 4 splits improved; largest gains on hardest splits (in_dist −7.6%, camber_rc −7.0%). Mechanism: β=0.5 moves L1 gradient into the moderate-error bulk where loss density lives, directly aligning with MAE metric.
 
 ### Training efficiency
 - **EMA without diagnostic pass** (#1626, fern) — val=92.46 (+0.12 within noise). Diagnostic overhead was ~8 s/epoch not the predicted ~25 s; +1 epoch in budget (18 vs 17) insufficient to escape noise. Bottleneck is training step, not val. Useful intel: peak mem 32.9 GB / 96 GB.
@@ -76,11 +80,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ## Potential next directions (post current round)
 
-- **Huber β sweep** (β=0.5 assigned to fern) — tighter MAE-alignment in moderate-error region
-- **torch.compile** — fresh throughput angle; ~1.2–1.5× speedup if it compiles cleanly with bf16
-- **Re-conditioning** — explicit Re-aware embeddings or log-Re positional encoding (OOD re_rand split underperforms)
-- **Surface-aware decoder / dual-head** — separate volume and surface heads may improve surface-pressure alignment
+- **Huber β=0.25** (assigned to fern) — continue pushing toward pure L1; EMA should buffer kink noise
+- **Annealing β over training** — start β=1.0 (stable early when errors are large) → decay to β=0.25 (MAE-aligned late)
+- **torch.compile** — throughput angle; ~1.2–1.5× speedup if compiles cleanly with bf16
+- **Re-conditioning** — explicit Re-aware embeddings or log-Re positional encoding (re_rand split still underperforms)
+- **Surface-aware decoder / dual-head** — separate volume and surface heads
 - **Spectral / Fourier neural operator hybrids** — fresh architecture direction if attention-based plateau
 - **Test-time augmentation** using physical symmetries (mirroring flow domain)
-- **Lookahead optimizer** — outer/inner optimizer wrapping, complementary to EMA at the optimizer level
-- **SAM (sharpness-aware minimization)** — 2 forward passes/step; flatter minima may improve OOD
+- **Lookahead optimizer** — complementary to EMA at optimizer level

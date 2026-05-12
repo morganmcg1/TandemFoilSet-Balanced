@@ -420,3 +420,44 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Useful intel from student**: peak memory 32.9 GB / 96 GB (~3× headroom), training step is dominant cost. Bottleneck is the training pass itself, not val/diag.
 - **Decision: CLOSE.** Mechanism is real but magnitude too small. Assigning fern to Huber β=0.5 sweep (more L1-aligned in moderate-error region; surgical single-hparam follow-up to confirmed Huber lever).
 
+## 2026-05-13 00:05 — PR #1689: fern Huber β=0.5 (review 1, MERGED — new best)
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p5`
+- W&B run: `liurnqyo` (17 epochs; ~112 s/epoch; β=1.0→0.5, both call sites)
+- Hypothesis: reducing Huber transition point makes the loss linear (L1-aligned with MAE) over the moderate-error range where most of the loss density sits; EMA absorbs kink-noise near 0.
+
+| Metric | β=0.5 (liurnqyo) | β=1.0 baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | **85.9197** | 92.3452 | −6.43 (−6.96%) |
+| `test_avg/mae_surf_p` | **76.5495** | 81.6297 | −5.08 (−6.22%) |
+| `test/test_single_in_dist/mae_surf_p` | **88.03** | 95.30 | −7.26 (−7.6%) |
+| `test/test_geom_camber_rc/mae_surf_p` | **85.46** | 91.93 | −6.46 (−7.0%) |
+| `test/test_geom_camber_cruise/mae_surf_p` | **56.40** | 58.72 | −2.32 (−3.9%) |
+| `test/test_re_rand/mae_surf_p` | **76.30** | 80.58 | −4.28 (−5.3%) |
+
+- **All 4 test splits improved.** Largest gains on the two hardest splits (in_dist and camber_rc) where moderate-error density is highest and β controls the most gradient mass.
+- **EMA-vs-live gap preserved:** epoch 17 EMA val=85.92 vs live val=96.41 (−10.49 MAE). The L1 kink doesn't destabilize optimization because EMA smooths it.
+- **No instability:** monotonic val descent, ~same per-epoch wall time (111.78 s vs 109 s baseline).
+- **Root cause of gain:** at β=1.0, quadratic region extends to |x|=1.0 in normalized space; bulk of surface-p errors in training are in the 0.1–0.8 range, so β=1.0 was effectively training an MSE objective on the majority of samples. Dropping to β=0.5 moves the linear regime into the bulk, directly aligning gradients with the MAE metric. Same mechanism that made PR #1436 (MSE→Huber β=1.0) a large win — lever pushed further.
+- **Val still descending ~2.5/epoch at cap** — consistent with all prior runs; total training time is still the budget-limiting constraint.
+- **Decision: MERGE.** Cleanest single-variable win in this round. New baseline: val=85.9197, test=76.5495. Assigning fern to β=0.25 sweep.
+
+## 2026-05-13 00:05 — PR #1629: thorfinn dropout=0.1 (review 1, sent back — new baseline needed)
+
+- Branch: `willowpai2g48h5-thorfinn/dropout-0p1`
+- W&B run: `argppwi8` (17 epochs; 112.7 s/epoch; dropout=0.1 vs dropout=0.0)
+- Hypothesis: attention-only dropout=0.1 improves OOD generalization.
+
+| Metric | dropout=0.1 (argppwi8) | EMA baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 90.0841 | 92.3452 | −2.26 (−2.45%) |
+| `test_avg/mae_surf_p` | 80.8527 | 81.6297 | −0.78 (−0.95%) |
+| `test/test_single_in_dist/mae_surf_p` | **91.86** | 95.30 | −3.44 (better) |
+| `test/test_geom_camber_rc/mae_surf_p` | **90.02** | 91.93 | −1.91 (better) |
+| `test/test_geom_camber_cruise/mae_surf_p` | 59.99 | 58.72 | +1.27 (worse) |
+| `test/test_re_rand/mae_surf_p` | 81.54 | 80.58 | +0.96 (worse) |
+
+- **Beat old baseline (92.35)** but no longer beats new baseline after fern β=0.5 merge (val=85.92). Mixed per-split: IID and camber_rc improve, camber_cruise and re_rand slightly regress.
+- **Mechanism: dropout helps where overfitting is the failure mode** (in_dist, camber_rc), not where genuine extrapolation is required (camber_cruise, re_rand). OOD failure modes differ by split.
+- **Decision: SEND BACK for retest on β=0.5+EMA+bf16 baseline.** Mechanisms are orthogonal; if they stack, dropout should give another −2 MAE on top of β=0.5. If camber_cruise/re_rand regressions persist, try dropout=0.05.
+
