@@ -46,6 +46,25 @@ from data import (
     pad_collate,
 )
 
+
+def signed_log1p_p_only(y: torch.Tensor) -> torch.Tensor:
+    """Apply sign-preserving log1p ONLY to the pressure channel (index 2).
+
+    Ux (index 0) and Uy (index 1) pass through unchanged. Isolates compression
+    to the heavy-tailed pressure channel (see PR #1636 hypothesis).
+    """
+    out = y.clone()
+    out[..., 2] = torch.sign(y[..., 2]) * torch.log1p(y[..., 2].abs())
+    return out
+
+
+def signed_expm1_p_only(y_mixed: torch.Tensor) -> torch.Tensor:
+    """Inverse of signed_log1p_p_only — apply expm1 only to the p channel."""
+    out = y_mixed.clone()
+    out[..., 2] = torch.sign(y_mixed[..., 2]) * torch.expm1(y_mixed[..., 2].abs())
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -245,7 +264,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_mixed = signed_log1p_p_only(y)
+            y_norm = (y_mixed - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             abs_err = (pred - y_norm).abs()
@@ -261,7 +281,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            pred_mixed = pred * stats["y_std"] + stats["y_mean"]
+            pred_orig = signed_expm1_p_only(pred_mixed)
             B = y.shape[0]
             finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
             if finite_sample.any():
@@ -403,6 +424,32 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# Recompute target stats: log1p the p channel, leave Ux/Uy in physical space.
+print("Recomputing target stats with p-channel log1p compression...")
+_y_mean_orig = stats["y_mean"].detach().cpu().tolist()
+_y_std_orig = stats["y_std"].detach().cpu().tolist()
+with torch.no_grad():
+    y_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    y_sq_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    n_obs = 0.0
+    for x, y, is_surface, mask in train_loader:
+        y = y.to(device, non_blocking=True)
+        mask = mask.to(device, non_blocking=True)
+        y_mixed = signed_log1p_p_only(y).to(torch.float64)
+        m = mask.unsqueeze(-1).to(torch.float64)
+        y_sum += (y_mixed * m).sum(dim=(0, 1))
+        y_sq_sum += (y_mixed.pow(2) * m).sum(dim=(0, 1))
+        n_obs += m.sum().item()
+    y_mean_new = (y_sum / max(n_obs, 1.0)).to(torch.float32)
+    y_var_new = (y_sq_sum / max(n_obs, 1.0)).to(torch.float32) - y_mean_new.pow(2)
+    y_std_new = y_var_new.clamp(min=1e-8).sqrt()
+    stats["y_mean"] = y_mean_new
+    stats["y_std"] = y_std_new
+print(f"  y_mean orig (Ux, Uy, p)           = {_y_mean_orig}")
+print(f"  y_std  orig                       = {_y_std_orig}")
+print(f"  y_mean mixed (Ux=raw, Uy=raw, p=log1p) = {stats['y_mean'].cpu().tolist()}")
+print(f"  y_std  mixed                       = {stats['y_std'].cpu().tolist()}")
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -459,7 +506,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_mixed = signed_log1p_p_only(y)
+        y_norm = (y_mixed - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
 
