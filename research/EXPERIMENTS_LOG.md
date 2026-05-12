@@ -2,6 +2,58 @@
 
 ---
 
+## 2026-05-12 21:xx — PR #1458: [wider-deeper v2] Scale Transolver n_hidden=256, n_layers=6, n_head=8
+
+- **Branch**: charliepai2g24h1-edward/wider-deeper
+- **Hypothesis**: 3M-param Transolver (4.5× baseline) converges to a better solution within 30-min cap.
+- **Status**: CLOSED — not competitive in 30-min epoch budget
+
+**v1 results (batch_size=2, old LR, pre-grad-clip base):**
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 7) | 126.9875 |
+| Epochs | 7 (~311s/epoch, still falling at timeout) |
+
+**v2 results (batch_size=4, lr=1e-3, T_max=14, grad-clip base):**
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 6) | 158.0610 |
+| test_avg/mae_surf_p | 145.9203 |
+| Peak VRAM | 98.83 GB |
+| Epochs | 6 (near-OOM, 311s/epoch) |
+
+**Analysis**: At 3M params, the model gets only 6-7 epochs in 30 min vs 14 for the 662K baseline. The v2 regression (158 vs v1's 127) was caused by applying lr=1e-3 (calibrated for the small model) to the large model — 100% clip rate throughout. Even v1's promising trajectory (204→127 in 7 epochs) cannot plausibly converge below 89.61 given the epoch budget. Closed; edward reassigned to per-channel-loss-weights.
+
+**Artifacts**: `models/model-charliepai2g24h1-edward-wider-deeper-20260512-180258/metrics.jsonl`, `models/model-charliepai2g24h1-edward-wider-deeper-v2-20260512-201243/metrics.jsonl`
+
+---
+
+## 2026-05-12 21:xx — PR #1539: [lr-1.5e-3-cosine-14] Test lr ceiling: 1.5e-3 + T_max=14
+
+- **Branch**: charliepai2g24h1-thorfinn/lr-1.5e-3-cosine-14
+- **Hypothesis**: lr=1.5e-3 (vs 1e-3 baseline) with T_max=14; tests whether the LR ceiling is higher than 1e-3.
+- **Status**: CLOSED — LR ceiling confirmed, regression
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | 100.2425 |
+| val_single_in_dist | 119.01 |
+| val_geom_camber_rc | 110.47 |
+| val_geom_camber_cruise | 76.51 |
+| val_re_rand | 94.98 |
+| test_avg/mae_surf_p | 89.1065 |
+| Baseline (new) | 89.6121 |
+| Delta | +11.8% (WORSE) |
+| Clip frac | 99–100% throughout |
+
+**Analysis**: lr=1.5e-3 is confirmed above the LR ceiling. 100% clip rate throughout — pushing nominal LR higher just increases the wasted component beyond the clip threshold. single_in_dist degraded most (+10.43 vs val). The ceiling experiment is complete: lr=1e-3 is the right AdamW LR for this dataset/architecture at grad_clip=1.0. To push past this ceiling, need a different optimizer (SOAP, quasi-Newton) rather than higher LR. Thorfinn reassigned to soap-optimizer (H1, HIGH priority).
+
+**Artifacts**: `models/model-charliepai2g24h1-thorfinn-lr-1.5e-3-cosine-14-20260512-200502/metrics.jsonl`
+
+---
+
 ## 2026-05-12 21:xx — PR #1456: [bf16-amp] bf16 automatic mixed precision
 
 - **Branch**: charliepai2g24h1-alphonse/bf16-amp
