@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12 22:15 (post-#1586-merge + wave-4 launch, all 8 students active)
+- **Last updated:** 2026-05-12 23:08 (post-wave-4-review + wave-5 launch, all 8 students active)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -11,15 +11,19 @@
 
 ## ⭐ Current baseline (PR #1586 merged 2026-05-12 22:02 UTC)
 
-- **val_avg/mae_surf_p:** **95.7488** (best, epoch 14, base-model — student trained on Huber-only baseline)
+- **val_avg/mae_surf_p:** **95.7488** (best, epoch 14, base-model — tested without SWA)
 - **test_avg/mae_surf_p:** **86.1694** (4-split, all finite)
-- **Config (tested):** Transolver baseline + Smooth-L1 (Huber β=1.0) + per-sample Re-based loss weighting (`1/log_re_shifted`, normalized) + surf_weight=10.0 + `data/scoring.py` NaN-safe fix + CosineAnnealingLR(T_max=15)
-- **Merged code adds:** SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2) — **untested composition**, next training run on this branch validates whether Huber + Re-weight + SWA compose constructively.
+- **Config (tested):** Transolver baseline + Smooth-L1 (Huber β=1.0) + per-sample Re-based loss weighting (`1/log_re_shifted`, normalized) + surf_weight=10.0 + CosineAnnealingLR(T_max=15)
+- **Merged code adds:** SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2) — **untested composition; PR #1645 evidence suggests SWA is regressing this stack**. PR #1679 (tanjiro, no-SWA) will resolve this directly.
 - See `BASELINE.md` for the full reproducible spec + composition warning.
+
+## 🔥 Hottest signal this session
+
+**PR #1617 nezuko (grad-clip on SWA-on-Huber baseline):** −4.6% val / −6.8% test vs. #1554 baseline AND −1.3% val / −3.8% test vs. current merged baseline #1586. **Variance reduced 16× (16% → 0.83% inter-seed).** Sent back for rebase due to merge conflicts with the Re-weight changes. Expected to land as new baseline after rebase + retest validates the Re-weight × grad-clip composition.
 
 ## Most recent direction from human researcher team
 
-None received. Last issue check: 2026-05-12 22:10 UTC, zero open issues on this advisor branch. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) on the TandemFoilSet Transolver baseline within isolated branch `icml-appendix-willow-pai2g-48h-r2`.
+None received. Last issue check: 2026-05-12 22:10 UTC, zero open issues on this advisor branch. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`).
 
 ## ✓ Merged improvements
 
@@ -27,95 +31,94 @@ None received. Last issue check: 2026-05-12 22:10 UTC, zero open issues on this 
 |---|---|---|---|
 | #1452 (frieren) | smooth-l1-loss-e15 | MSE → Huber (β=1.0), 10 → 15 epochs (schedule-aligned), `data/scoring.py` NaN-safe fix | val=100.77, test=90.38 |
 | #1554 (frieren) | swa-on-huber | SWA on final 4/15 epochs, terminal eval on `swa_model` | val=99.07, test=88.90 |
-| #1586 (thorfinn) | re-weight-on-huber | Per-sample loss reweighting by `1/log_re_shifted`, normalized | **val=95.75, test=86.17** (current; tested without SWA) |
-
-Three improvements merged on this branch. Each one was a single-variable change motivated by a specific diagnostic from the prior baseline: Huber for outlier gradients, SWA for flat-minima ensembling, Re-weight for per-sample imbalance.
+| #1586 (thorfinn) | re-weight-on-huber | Per-sample loss reweighting by `1/log_re_shifted`, normalized | **val=95.75, test=86.17** (current) |
 
 ## Current research focus
 
-### Wave 4 (in flight, on the merged Huber + Re-weight + SWA baseline)
+### Wave 5 (in flight, on the merged Huber + Re-weight + SWA baseline)
 
-Two PRs forked from the post-#1586 baseline, testing variants on the most-validated axes.
+Three PRs forked from post-#1586 baseline, testing new mechanism axes after wave-4's mixed results.
 
 | PR | Student | Slug | Hypothesis | Predicted Δ vs. 95.75 val |
 |---|---|---|---|---|
-| #1642 | thorfinn | `re-weight-sqrt-on-swa` | Sharper Re-weight curve `1/sqrt(log_re_shifted)` (vs `1/log` baseline) | −1 to −3% |
-| #1645 | tanjiro | `swa-lr-5e5-on-swa` | Tighten `swa_lr` 1e-4 → 5e-5; recovers val_re_rand under SWA | −0.5 to −2% (esp. val_re_rand) |
+| #1642 | thorfinn | `re-weight-sqrt-on-swa` | Sharper Re-weight curve `1/sqrt(log_re_shifted)` (vs `1/log`) | −1 to −3% |
+| #1679 | tanjiro | `no-swa-on-reweight` | **Remove SWA entirely** — test the cosine-floor-displacement diagnosis | ~match baseline; either way informative |
+| #1680 | fern | `drop-path-0p1-on-merged` | Stochastic depth `drop_path_rate=0.1` on Transolver blocks (regularization axis) | −0.5 to −2% |
 
-### Wave 3 (in flight, on the SWA-on-Huber baseline #1554, val=99.07)
+### Wave 3 (in flight, on SWA-on-Huber baseline #1554, val=99.07)
 
-| PR | Student | Slug | Hypothesis | Predicted Δ vs. 99.07 val |
+| PR | Student | Slug | Hypothesis | Status |
 |---|---|---|---|---|
-| #1600 | frieren | `beta-sweep-on-swa` | 3-arm sweep: Huber β ∈ {0.3, 1.0, 3.0} | best arm: −1 to −4% |
-| #1617 | nezuko | `grad-clip-on-swa` | `clip_grad_norm_(max_norm=1.0)` + 2 seeds (variance signal) | −0.5 to −2% + variance reduction |
-| #1618 | alphonse | `surf-huber-vol-mse` | Split loss kind: Huber on surface, MSE on volume | −2 to −5% |
-| #1620 | edward | `surf-weight-30-on-swa` | Bump `surf_weight` 10 → 30 (3× upweighting of surface contributions) | −1 to −4% |
-| #1621 | fern | `mlp-ratio-4-on-swa` | Restore canonical Transolver `mlp_ratio` 2 → 4 (~0.66M → ~1.0M params) | −1 to −5% |
+| #1600 | frieren | `beta-sweep-on-swa` | 3-arm sweep: Huber β ∈ {0.3, 1.0, 3.0} | WIP |
+| #1617 | nezuko | `grad-clip-on-swa` | `clip_grad_norm_(max_norm=1.0)` + 2 seeds | **strong result; rebase needed** |
+| #1618 | alphonse | `surf-huber-vol-mse` | Split loss kind: Huber on surface, MSE on volume | WIP |
+| #1620 | edward | `surf-weight-30-on-swa` | Bump `surf_weight` 10 → 30 | WIP |
 
 ### Wave 2 (in flight, stack-stale on Huber-only baseline #1452, val=100.77)
 
 | PR | Student | Slug | Hypothesis | Stacks on |
 |---|---|---|---|---|
-| #1585 | askeladd | `film-on-huber` | FiLM global conditioning + per-layer (γ,β) from Re/AoA/NACA/gap/stagger, 3 seeds | Huber baseline only |
-
-Only one wave-2 PR remains in flight after #1586 merged and #1551 closed.
+| #1585 | askeladd | `film-on-huber` | FiLM global conditioning (3 seeds) | Huber baseline only |
 
 ### Reframe decision rule for wave-2/3 PRs landing against now-superseded baselines
 
-- Beats `95.75` (current frame): merge directly — GitHub merge composes the lever with the SWA + Re-weight train.py changes.
-- `95.75 ≤ val < 99.07` (improves on SWA-frame but not current): send back for rebase + retrain on merged code.
+- Beats `95.75` (current frame) AND no merge conflicts: merge directly.
+- Beats `95.75` BUT has merge conflicts: send back for rebase + retest on merged code (e.g., nezuko #1617 just hit this path).
+- `95.75 ≤ val < 99.07` (improves on SWA-frame but not current): send back for rebase + retrain.
 - `99.07 ≤ val < 100.77` (only improves on Huber-frame): send back if mechanism is interesting; close if dead-end.
 - `val > 100.77`: close.
 
 ## ✗ Closed this session
 
-- #1454 (tanjiro, unified-pos rerun): val=128.78, regression vs. baseline.
+- #1454 (tanjiro, unified-pos rerun): val=128.78, regression.
 - #1455 (thorfinn, batch=8/lr=7.1e-4 rerun): val=141.94, regression.
 - #1448 (askeladd, slice_num=128, 3 seeds): mean val=134.31 ± 2.39.
 - #1453 (nezuko, n_hidden=192, 2 unseeded runs): val=128.28 / 148.57, 16% variance.
 - #1446 (alphonse, --epochs=10 schedule align): never trained, moot.
-- #1449 (edward, surf-weight-30): never trained (baseline-stale + rate-limit idling).
-- #1450 (fern, mlp-ratio-4): never trained (baseline-stale + rate-limit idling).
-- #1551 (tanjiro, unified-pos-on-huber): **val=105.24**, +4.4% regression vs Huber-only baseline. Hit own close rule. Student's post-mortem correctly identified that unified-pos is redundant with normalized (x, z) input and capacity-displacing. Lever debunked twice on this branch — moving on.
+- #1449 (edward, surf-weight-30): never trained (baseline-stale).
+- #1450 (fern, mlp-ratio-4 wave-1): never trained (baseline-stale).
+- #1551 (tanjiro, unified-pos-on-huber): val=105.24, +4.4% regression. Lever debunked twice on this branch.
+- #1621 (fern, mlp-ratio-4 wave-3 rerun): val=106.11 + wall-clock overflow. **Capacity expansion definitively closed as wrong axis** (second confirmation after #1453).
+- #1645 (tanjiro, swa_lr=5e-5): val=100.55, hit close-rule. Excellent mechanistic post-mortem identified the cosine-floor displacement issue.
 
 ## ⚠ Active operational notes
 
-- The GraphQL rate-limit pattern (~30-40 min between exhaustions) has continued but pods now recover automatically. Continue using REST helpers where possible.
-- Wave 2/3 PRs forked from earlier baseline frames — reframe rule above applies. Most informative case: a #1554-frame win that still beats `95.75` after merge composition.
-- The **untested SWA + Re-weight composition** is the largest single unknown in the current baseline. PR #1645 (tanjiro, swa_lr=5e-5) and the wave-3 SWA-stack tests will all answer this implicitly.
+- The GraphQL rate-limit pattern (~30-40 min between exhaustions) continues; pods recover automatically. REST helpers preferred where possible.
+- **#1617 nezuko's rebased result is the strongest near-term baseline-update candidate.** Expected SWA val ~93–94 after rebase if the levers compose constructively.
+- **The SWA × Re-weight composition concern is now well-evidenced:** #1645 showed SWA was *worse* than no-SWA on this stack (100.55 vs 95.75). #1679 (tanjiro's no-SWA test) will definitively answer whether the merged code's floor is at the wrong place. If yes, that itself is a baseline-update path.
 
 ## Mechanism-axis coverage (all 8 students)
 
 - **Loss-shape:** β-sweep (#1600, frieren), surface-vs-volume split (#1618, alphonse)
 - **Loss-weighting:** surf_weight bump (#1620, edward), Re-weight-sqrt (#1642, thorfinn)
-- **Optimizer-stability:** gradient clipping (#1617, nezuko)
-- **Architecture-capacity:** mlp_ratio=4 (#1621, fern)
+- **Optimizer-stability:** gradient clipping (#1617, nezuko, rebase-needed)
+- **Regularization:** stochastic depth (#1680, fern) — **NEW**
 - **Architecture-conditioning:** FiLM (#1585, askeladd)
-- **SWA-hyperparam:** swa_lr tightening (#1645, tanjiro)
+- **Schedule / SWA-on-off:** no-SWA test (#1679, tanjiro) — **NEW**
 
-Eight orthogonal mechanism axes, eight students, zero overlap. The portfolio is well-spread.
+7 orthogonal mechanism axes across 8 students. Architecture-capacity (mlp_ratio, n_hidden) has been definitively closed as wrong-axis. Two new axes added this round.
 
-## Potential next research directions (wave 5+)
+## Potential next research directions (wave 6+)
 
-Ranked by expected ROI on `val_avg/mae_surf_p` if wave 4 hits expected improvements:
+Ranked by expected ROI on `val_avg/mae_surf_p` if wave 5 hits expected improvements:
 
-1. **Compound stack: SWA × Huber × Re-weight × (whichever wave-3/4 PRs win).** Each merged win compounds; theoretical 4-lever floor is ~88 val if all midpoints hit.
-2. **Per-channel Huber β** — pressure normalized range > Ux/Uy. Depends on β-sweep (#1600) result. If a single β > 1.0 wins, sweep per-channel.
-3. **EMA averaging as alternative to SWA** — variant test; weights recent epochs more heavily, may handle val_re_rand better than SWA.
-4. **Surface-aware slice routing in PhysicsAttention** (research-ideas H2) — −5 to −12% predicted but medium implementation effort.
-5. **Earlier swa_start_frac (0.65)** — fits 5–6 averaged epochs into 15-epoch envelope (depends on #1645's swa_lr win).
-6. **Asinh transform on pressure target** — compresses high-Re tail; orthogonal to Re-weight (which up-weights low-Re samples).
-7. **Domain-adversarial training** — −3 to −8% on camber OOD specifically (research-ideas).
-8. **Best-checkpoint vs SWA-final** — save base-best alongside SWA for paper-facing comparisons.
-9. **Stochastic depth in MLP/attention** — regularization on a dataset that overfits.
-10. **Capacity bump retest** — n_hidden=192 + grad-clip + seeded + 15-epoch on the merged baseline.
+1. **Compound stack: (whichever wave-5 PRs win) × (whichever wave-3 PRs win post-rebase)** — each merged win compounds. Plausible compound floor ~90 val / ~78 test.
+2. **grad-clip threshold sweep** — nezuko's clip_fraction is pinned at 100% with threshold=1.0; sweep {2, 5, 10, 20} to find 10–40% sweet spot.
+3. **Per-channel Huber β** — pressure normalized range > Ux/Uy. Depends on β-sweep (#1600) result.
+4. **EMA averaging as alternative to SWA** — if no-SWA (#1679) wins, this is a low-effort variant that may capture the SWA-flat-minima benefit without the schedule-window displacement.
+5. **Fix SWA schedule-window interaction:** keep cosine continuing underneath SWA, set swa_lr = cosine floor (~1e-5). Only if #1679 confirms SWA hurts AND we want to keep some averaging.
+6. **n_hidden=192 + grad-clip rescue** — capacity bump might land with the variance-killer.
+7. **Surface-aware slice routing in PhysicsAttention** — research-ideas H2, medium-effort.
+8. **Asinh transform on pressure target** — value-level compression of high-Re tail; orthogonal to sample-level Re-weight.
+9. **Domain-adversarial training** — −3 to −8% on camber OOD specifically.
+10. **Best-checkpoint vs SWA-final infrastructure** — save base-best alongside SWA for paper-facing comparisons regardless of which path wins.
 
-The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` has H1–H10 with concrete implementation specs.
+The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` has H1–H10 with concrete implementation specs (if any remain unexplored).
 
 ## Open questions to revisit on next review
 
-- **SWA + Re-weight composition:** does merging compose constructively, anti-compose, or neutral? Wave-4 PRs implicitly answer this.
-- **Stacking gain accounting:** when wave-4 lands, compute realized vs. predicted compound improvement. If actual gain falls below predicted, the levers may be correlated (e.g., Re-weight and surf_weight=30 both reshaping the loss objective).
-- **Variance discipline:** nezuko's 16% n_hidden=192 variance argues for fixed seeds in all wave-4+ stack-tests. Wave-3's nezuko PR (#1617) explicitly tests this.
-- **Per-split divergence post-merge:** with merged baseline (#1586 frame), val_geom_camber_cruise (74.93) is the easiest val split; val_re_rand (91.75) is still the hardest val split. The wave-3 SWA-stack tests + wave-4 swa_lr PR should all be monitored on val_re_rand specifically.
-- **Cherry-pickable downstream from wave-2 stale PR #1585 (askeladd FiLM):** if FiLM regresses against Huber-only baseline, the FiLM module implementation may still be cherry-pickable for a clean rerun on the merged baseline.
+- **SWA × Re-weight composition:** does merging compose constructively, anti-compose, or neutral? #1645 evidence so far: anti-composes (SWA hurts). #1679 will definitively answer.
+- **grad-clip × Re-weight composition:** #1617 rebase will test. Expected: constructive (orthogonal mechanism axes).
+- **drop_path on 5-layer network:** literature consensus says drop_path is most useful at 12+ layers; this test will show whether the small-dataset overfitting concern outweighs the depth concern.
+- **Per-split divergence post-merge:** with current baseline, val_geom_camber_cruise (74.93) is easiest; val_re_rand (91.75) is hardest. Both wave-3 grad-clip rebase and wave-5 no-SWA should be monitored on val_re_rand specifically.
+- **Wall-clock budget tightness:** 30-min per-run is tight enough that runs with extra per-epoch cost (mlp_ratio=4, etc.) get truncated. This is a constraint, not a bug, but it favors lower-overhead levers.

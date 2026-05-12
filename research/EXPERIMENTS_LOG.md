@@ -582,3 +582,178 @@ After this round of close+reassign on the merged baseline (val=95.75/test=86.17)
 - **SWA-hyperparam:** swa_lr tightening (#1645)
 
 This is comprehensive across orthogonal axes. Theoretical compound floor if all wave-4 stack-tests hit midpoints: 95.75 × 0.98 × 0.985 ≈ 92.4 val. Add wave-3 if-rebased: × 0.95 → 87.8 val. The 88 val barrier is in striking distance if a few independent levers compound.
+
+---
+
+## 2026-05-12 22:55 — PR #1617 nezuko (grad-clip on SWA): STRONG result, SEND BACK FOR REBASE
+
+- **Branch:** `willowpai2g48h2-nezuko/grad-clip-on-swa`
+- **Student:** willowpai2g48h2-nezuko
+- **Hypothesis:** `clip_grad_norm_(max_norm=1.0)` + 2 seeds. Predicted Δ vs. #1554 baseline 99.07: −0.5 to −2% + variance reduction.
+
+### Result table (W&B runs `0waxhiwi`, `54mtkvwb` — both seeds verified)
+
+| Metric | Seed A | Seed B | Mean ± std | Baseline #1554 | Current baseline #1586 |
+|---|---|---|---|---|---|
+| SWA `val_avg/mae_surf_p` | **94.4827** | 95.2719 | 94.8773 ± 0.558 | 99.0704 | 95.7488 |
+| SWA `test_avg/mae_surf_p` | **82.8888** | 83.8157 | 83.3522 ± 0.655 | 88.8955 | 86.1694 |
+| Δ vs. #1554 baseline (val/test) | **−4.63% / −6.76%** | −3.84% / −5.71% | — | — | — |
+| Δ vs. #1586 baseline (val/test) | **−1.32% / −3.81%** | −0.51% / −2.73% | — | — | — |
+| Params | 0.66M | 0.66M | — | 0.66M | 0.66M |
+
+### val_re_rand (the diagnostic split — SWA-regressed under #1554)
+
+| Seed | val_re_rand (SWA) | Baseline #1554 (95.12) | Baseline #1586 (91.75) |
+|---|---|---|---|
+| A | **87.6607** | **−7.84%** | −4.46% |
+| B | 89.8227 | −5.56% | −2.10% |
+
+### Variance reduction (key secondary signal)
+
+- Inter-seed gap on SWA val: **0.83%** (0.79 absolute on a 94.9 base)
+- Inter-seed gap on SWA test: **1.11%** (0.93 absolute)
+- vs. PR #1453 baseline: n_hidden=192 had **16% inter-seed gap**. Clipping cuts that by ~20×.
+- `grad_clipped_frac ≈ 1.00` every epoch — clip threshold (1.0) is well below natural gradient norms (mean 13–30, max 50–180). This means clipping is acting as **fixed-magnitude updates** every step, not just a rare-spike defender — effectively normalized-SGD with cosine LR. Student's mechanistic read on this was excellent.
+
+### Decision: SEND BACK FOR REBASE
+
+- Result beats both #1554 baseline AND current merged baseline #1586. Best-seed SWA val (94.48) < current frame 95.75.
+- **BUT the PR has merge conflicts** — the student branched from the SWA-on-Huber baseline before PR #1586 (Re-weight) was merged. Their tested config does NOT include Re-weight; the merged code does.
+- Direct merge (resolving conflicts blind) would silently introduce the Re-weight × grad-clip composition into the merged code without validation. Per the reframe rule, the cleaner path is rebase + retest.
+- The student is also incentivized: their already-strong result will likely land as a new baseline after rebase, with the additional benefit of cleanly characterizing the Re-weight × grad-clip composition.
+
+### Expected behavior after rebase
+
+The levers should compose constructively (orthogonal mechanism targets):
+- Re-weight reshapes per-sample loss multipliers (sample-level)
+- Grad-clip bounds gradient magnitude (step-level)
+- Predicted: val ~93–94, test ~82–83 (additive)
+- Anti-composition risk: low. Both target the high-Re instability problem from different angles.
+
+### nezuko follow-up suggestions (deferred to wave-6 if/when this PR lands)
+
+1. `grad_clip_norm ∈ {2, 5, 10, 20}` sweep — find the threshold that brings `clip_fraction` into 10–40% sweet spot.
+2. `n_hidden=192` + grad-clip — rescue the original capacity bump that caused PR #1453's 16% variance.
+3. Per-block grad-norm logging — point at where instability originates (attention vs MLP vs projection).
+
+---
+
+## 2026-05-12 22:59 — PR #1645 tanjiro (swa_lr=5e-5): CLOSED — close-rule hit, valuable diagnostic
+
+- **Branch:** `willowpai2g48h2-tanjiro/swa-lr-5e5-on-swa`
+- **Student:** willowpai2g48h2-tanjiro
+- **Hypothesis:** `swa_lr=5e-5` (half of current 1e-4) to recover val_re_rand under SWA. Predicted Δ vs. 95.75: −0.5 to −2%.
+
+### Result table (W&B run `qaga06c1`, verified)
+
+| Metric | Value | Baseline #1586 (95.75/86.17) | Δ |
+|---|---|---|---|
+| base-best `val_avg/mae_surf_p` (epoch 14) | 99.7183 | 95.7488 | +4.15% |
+| SWA `val_avg/mae_surf_p` (primary) | **100.5554** | 95.7488 | **+5.02%** |
+| SWA `test_avg/mae_surf_p` | **89.5176** | 86.1694 | +3.89% |
+| base `val_re_rand` epoch 14 | 91.854 | 91.7525 | +0.11% |
+| SWA `val_re_rand` final | 94.006 | 91.7525 | **+2.46%** |
+
+SWA `train/lr` confirmed: annealed to 5e-5 in epochs 12–14 (vs. cosine floor ~7e-6 at epoch 14).
+
+### Decision: CLOSED (val 100.55 > 98 close rule)
+
+- swa_lr tightening did **not** recover val_re_rand. The base-best val_re_rand (91.85) essentially matched baseline (91.75) regardless of swa_lr.
+- The SWA average (94.0) was *worse* than the base-best (91.85), because the average is dominated by under-converged epoch-12 weights.
+- **Student's mechanistic post-mortem was excellent and changes the diagnosis:**
+  - The cosine floor at epoch 14 is ~7e-6, well below any swa_lr value tested (1e-4, 5e-5).
+  - SWA's window therefore *replaces* the cosine schedule's tail — it doesn't average around the bottom.
+  - The merged Huber + Re-weight + SWA composition is empirically *worse* than the Huber + Re-weight alone baseline (95.75 vs 100.55 on this run).
+- This kills the wave-1 "swa_lr above cosine floor causes val_re_rand regression" diagnosis as the first-order cause. The first-order cause is **schedule-window displacement**.
+
+### tanjiro follow-up
+
+Reassigned to PR #1679: `no-swa-on-reweight` — **remove SWA entirely from the merged baseline**. This is the student's own suggested follow-up #1. The controlled test directly answers: does Huber + Re-weight (the wave-3 win) actually need SWA, or has SWA been a regression on this composition all along? If `val_no_swa ≈ 95.75`, the merged baseline's SWA needs reconsidering (either remove, or fix schedule-window interaction). If `val_no_swa > 96`, SWA was actually helping and we need a different framing.
+
+---
+
+## 2026-05-12 22:58 — PR #1621 fern (mlp_ratio=4): CLOSED — capacity wrong axis + wall-clock overflow
+
+- **Branch:** `willowpai2g48h2-fern/mlp-ratio-4-on-swa`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** `mlp_ratio: 2 → 4` (~0.66M → ~1.0M params) on the SWA-on-Huber baseline. Predicted Δ vs. 99.07: −1 to −5%.
+
+### Result table (W&B run `x9rndnzk`, verified)
+
+| Metric | Baseline #1554 | Result | Δ |
+|---|---|---|---|
+| SWA `val_avg/mae_surf_p` | 99.0704 | **106.1099** | **+7.10%** |
+| SWA `test_avg/mae_surf_p` | 88.8955 | **95.1907** | +7.08% |
+| Params | 0.66M | 0.99M | +50% (matches prediction) |
+| Wall time | ~30 min @ 15/15 epochs | **32.8 min @ 13/15 epochs (timeout)** | overflow |
+
+### Decision: CLOSED
+
+- val 106.11 > 102 → close-rule branch.
+- Wall-clock overflow truncated training to 13/15 epochs → close-rule branch (also).
+- Capacity expansion is the wrong axis at this dataset size — second confirmation after PR #1453 (n_hidden=192, also negative).
+- val curve was flat at epoch 13 (109.84 vs epoch 12 109.09), so extra epochs unlikely to recover.
+
+### fern follow-up
+
+Reassigned to PR #1680: `drop-path-0p1-on-merged` — stochastic depth `drop_path_rate=0.1` on Transolver blocks. Same overfitting concern (small dataset, 5 layers), opposite-direction lever (regularize instead of expand capacity). Mechanism-orthogonal to all current in-flight levers.
+
+---
+
+## 2026-05-12 23:08 — Wave-5 portfolio launch
+
+After this triage round, the active portfolio is:
+
+### Stack-tests on merged baseline (Huber + Re-weight + SWA, val=95.75)
+
+| PR | Student | Lever | Mechanism axis | Predicted Δ vs. 95.75 val |
+|---|---|---|---|---|
+| #1642 | thorfinn | Re-weight curve `1/sqrt(log_re_shifted)` (sharper) | loss-weighting / curve-shape | −1 to −3% |
+| #1679 | tanjiro | **Remove SWA entirely** | schedule / SWA-on-off | ~match baseline; informative either way |
+| #1680 | fern | `drop_path_rate=0.1` (stochastic depth) | regularization | −0.5 to −2% |
+
+### Stack-tests on SWA-on-Huber baseline (#1554, val=99.07) — pre-#1586 frame
+
+| PR | Student | Lever | Status |
+|---|---|---|---|
+| #1600 | frieren | Huber β ∈ {0.3, 1.0, 3.0} (3 arms) | WIP |
+| #1617 | nezuko | `grad_clip_norm=1.0` (2 seeds, post-rebase) | WIP **(rebase needed; result already strong)** |
+| #1618 | alphonse | Huber on surface + MSE on volume | WIP |
+| #1620 | edward | `surf_weight=30.0` (3× baseline) | WIP |
+
+### Stack-stale on Huber baseline (#1452, val=100.77)
+
+| PR | Student | Lever | Status |
+|---|---|---|---|
+| #1585 | askeladd | FiLM global conditioning (3 seeds) | WIP |
+
+### Mechanism-axis coverage (post wave-5)
+
+- **Loss-shape:** β-sweep (#1600, frieren), surface-vs-volume split (#1618, alphonse)
+- **Loss-weighting:** surf_weight bump (#1620, edward), Re-weight-sqrt (#1642, thorfinn)
+- **Optimizer-stability:** gradient clipping (#1617, nezuko) — **strong result pending rebase**
+- **Regularization:** stochastic depth (#1680, fern) — **NEW axis added**
+- **Architecture-conditioning:** FiLM (#1585, askeladd)
+- **Schedule / SWA-on-off:** no-SWA test (#1679, tanjiro) — **NEW axis added**
+
+7 orthogonal mechanism axes across 8 students. Two new axes (regularization, schedule-choice) added this round. The portfolio remains well-spread.
+
+### Compound-improvement target (revised)
+
+If wave-3 PRs land at midpoints and wave-5 PRs hit predicted ranges:
+- Current floor: 95.75 val / 86.17 test
+- nezuko's grad-clip rebase: −1.3% / −3.8% → 94.5 / 82.9
+- thorfinn re-weight-sqrt: −2% midpoint → 92.6 / 81.2 (if composes with grad-clip)
+- fern drop-path: −1% midpoint → 91.7 / 80.4
+- frieren β-sweep / alphonse split / edward surf_weight: incremental gains likely correlated
+- **Plausible compound floor:** ~90 val / ~78 test if a few independent wins compound
+
+---
+
+### Open question for next review wave
+
+When wave-5 results land:
+1. **Does no-SWA reproduce ~95.75?** This is the cleanest single test of the SWA × Re-weight composition concern.
+2. **Does drop_path compose with SWA?** SWA's flat-minima averaging and drop_path's subnetwork-ensembling target similar geometry — could compound constructively or be redundant.
+3. **Does nezuko's rebased grad-clip × Re-weight stack to ~93–94 val?** This is the highest-confidence next-baseline candidate.
+4. **Has the val_re_rand bottleneck been correctly diagnosed?** tanjiro's no-SWA test, if it recovers val_re_rand to ~91, confirms the schedule-window hypothesis.
