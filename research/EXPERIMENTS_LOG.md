@@ -171,6 +171,63 @@ Per-split (dropout=0.2):
 
 ---
 
+## 2026-05-12 21:05 — PR #1357: Huber loss δ=1.0 (askeladd) — **SENT BACK for BF16 rerun**
+
+- **Branch:** `willowpai2g24h5-askeladd/huber-loss-delta-1`
+- **Hypothesis:** Replace MSE with Huber δ=1.0 in normalized space; linear penalty past 1σ is robust to high-Re outliers.
+- **W&B run:** `whazlv6i` (pre-BF16 base — peak VRAM ~82 GB)
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| val_avg/mae_surf_p (best, ep 14) | **107.91** | beats baseline 120.40 by 10.4% |
+| val_single_in_dist | 123.52 | |
+| val_geom_camber_rc | 114.01 | |
+| val_geom_camber_cruise | 89.82 | |
+| val_re_rand | 104.27 | |
+| 3-split test avg | 105.94 | test_avg NaN (run predates scoring fix) |
+| Epochs completed | 14 in ~31 min | non-BF16 throughput |
+
+**Result:** SENT BACK for rebase + rerun. Run did not have BF16 active (~82 GB VRAM confirms pre-BF16 code). Predicted: rebase + BF16 + scoring fix should give 107.91 × ~0.95 (BF16 extra epochs) ≈ ~100-105 val with finite test_avg. Will merge as winner on rebase return.
+
+**Key observation:** Huber gives the largest single-experiment gain we've seen so far (~10%). Per-split improvements are largest on `val_re_rand` and `val_geom_camber_cruise` — exactly the high-Re/high-dynamic-range splits the hypothesis targeted. Strong candidate for compounding with dropout=0.2 (PR #1367).
+
+---
+
+## 2026-05-12 21:05 — PR #1352: surf_weight=30 (alphonse) — **CLOSED**
+
+- **Branch:** `willowpai2g24h5-alphonse/surf-weight-30`
+- **Hypothesis:** Increase surf_weight 10→30 to focus loss on surface pressure (the ranking metric).
+- **W&B runs:** `q12wxz51` (sw=30), `9j9hnhfs` (sw=20)
+
+| Arm | val_avg/mae_surf_p | best epoch |
+|-----|--------------------|------------|
+| surf_weight=20 | 127.05 | 13 |
+| **surf_weight=30** | **120.88** | **14** |
+
+**Result:** CLOSED. val=120.88 does not beat baseline (120.40) and is far from leading unmerged result (113.86 dropout=0.2). Pushing higher likely loses on val_single_in_dist (150.63 at sw=30, indicating overweighted surface loss hurts in-distribution generalization).
+
+**Key observation:** Monotonic improvement 20→30 but trajectory tops out below the leading regularization-based approaches. Surf-weight is exhausted as a standalone lever; might compound with dropout in a future run.
+
+---
+
+## 2026-05-12 21:05 — PR #1365: OneCycleLR max_lr=1e-3 (edward) — **CLOSED**
+
+- **Branch:** `willowpai2g24h5-edward/onecyclelr-max-lr-1e3`
+- **Hypothesis:** OneCycleLR sweeps wider LR range than CosineAnnealingLR in short training budget.
+- **W&B run:** `3ghxoqlb`
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (best, ep 13) | 128.89 |
+| Epochs completed | 14 in 30 min |
+| 3-split test avg | 124.47 |
+
+**Result:** CLOSED. val=128.89 is ~7% worse than baseline (120.40). The schedule was structurally mismatched to the budget: OneCycleLR was set with epochs=MAX_EPOCHS=50, so peak LR (1e-3) hits at epoch 5 and the schedule plans to anneal slowly over 45 more epochs — but we only get 14, so LR stays pinned ~9e-4 the entire run.
+
+**Key observation:** Student's own diagnosis is correct: OneCycleLR + 30-min budget requires `total_steps` matched to actual reachable steps, NOT to nominal max_epochs. Thorfinn is testing the analogous fix for CosineAnnealingLR (T_max=18) in PR #1583 — wait for that result before re-trying a budget-matched OneCycleLR.
+
+---
+
 ## Stragglers status (round 1, as of 2026-05-12 ~20:06–20:51)
 
 | PR | Student | Status |
