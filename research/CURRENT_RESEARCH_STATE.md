@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12 20:06 (post-wave-1-merge, wave-2 launched)
+- **Last updated:** 2026-05-12 21:30 (post-wave-2-merge: SWA+Huber baseline)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -9,78 +9,86 @@
 - **Students × GPU:** 8 × 1 (96 GB each)
 - **Idle students:** 0 (all 8 actively assigned)
 
-## ⭐ Current baseline (PR #1452 merged 2026-05-12 20:02 UTC)
+## ⭐ Current baseline (PR #1554 merged 2026-05-12 21:06 UTC)
 
-- **val_avg/mae_surf_p:** **100.7659** (best, epoch 14)
-- **test_avg/mae_surf_p:** **90.3840** (4-split, all finite)
-- **Config:** Transolver baseline + Smooth-L1 (Huber β=1.0) + `data/scoring.py` NaN-safe fix + CosineAnnealingLR(T_max=15)
-- **W&B run:** `lo8vp7rj`
+- **val_avg/mae_surf_p:** **99.0704** (SWA model, end of training)
+- **test_avg/mae_surf_p:** **88.8955** (4-split, all finite)
+- **Config:** Transolver baseline + Smooth-L1 (Huber β=1.0) + `data/scoring.py` NaN-safe fix + CosineAnnealingLR(T_max=15) + **SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2, terminal eval on swa_model.module)**
+- **W&B run:** `cnu8v9i2`
 - See `BASELINE.md` for the full reproducible spec.
 
 ## Most recent direction from human researcher team
 
-None received. Last issue check: 2026-05-12 20:01 UTC, zero open issues. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) on the TandemFoilSet Transolver baseline within isolated branch `icml-appendix-willow-pai2g-48h-r2`.
+None received. Last issue check: 2026-05-12 21:30 UTC, zero open issues. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) on the TandemFoilSet Transolver baseline within isolated branch `icml-appendix-willow-pai2g-48h-r2`.
 
-## ✓ Resolved infrastructure issues
+## ✓ Merged improvements
 
-- **`data/scoring.py` NaN propagation:** FIXED via PR #1452 (frieren's `torch.where(mask, err, zero)`). All future PRs inherit the fix from the merged baseline.
-- **`Transolver` `unified_pos=True` constructor bug:** still present in baseline (not in scope for #1452). Will be re-applied as part of PR #1551 (tanjiro stack-test) if it lands.
+| PR | Slug | Win | Frieren-merged baseline |
+|---|---|---|---|
+| #1452 (frieren) | smooth-l1-loss-e15 | MSE → Huber (β=1.0), 10 → 15 epochs (schedule-aligned), `data/scoring.py` NaN-safe fix | val=100.77, test=90.38 |
+| #1554 (frieren) | swa-on-huber | SWA on final 4/15 epochs, terminal eval on `swa_model` | **val=99.07, test=88.90** (current) |
 
-## ⚠ Active operational note
-
-GraphQL API was rate-limited from ~19:25 UTC; reset at ~19:48 UTC. During the rate-limit window, the 5 wave-1 student pods (alphonse, askeladd, edward, fern, nezuko) saw "no assignments" in their poll output and idled, despite having open assigned PRs. After the reset (~19:53 UTC onwards) all 5 picked up their assignments and started training. Their results will land ~20:20-20:30 UTC if everything works.
-
-Current GraphQL bucket: ~2117/5000 remaining at 20:06 UTC; next reset ~20:48 UTC. Continue using REST helpers (`gh api .../issues/.../comments`, `gh api .../pulls/X --method PATCH`) where possible to preserve GraphQL budget.
+frieren has merged 2/2 of their PRs on this branch — they own both the Huber and SWA implementations.
 
 ## Current research focus
 
-**Wave 1 (closed):** 8 orthogonal single-variable hypotheses against the original advisor-branch baseline. Three completed:
+**Wave 3 (in flight):** Three high-ROI levers stacked directly on the merged SWA-on-Huber baseline.
 
-- **#1452 frieren — Smooth-L1 (Huber β=1.0)** → val=100.77 / test=90.38 → **MERGED as baseline**
-- #1454 tanjiro — unified-pos ref=8 → val=128.78 / test=117.33 → CLOSED (worse than new baseline; stack-test as #1551)
-- #1455 thorfinn — batch=8, lr=7.1e-4 → val=162.39 (e10) → rerun pending
-
-**Wave 2 (in flight):** Stack tests on top of the merged Huber baseline:
-
-| PR | Student | Slug | Hypothesis | Predicted Δ |
+| PR | Student | Slug | Hypothesis | Predicted Δ vs. 99.07 val |
 |---|---|---|---|---|
-| #1551 | tanjiro | `unified-pos-on-huber` | unified_pos=True ref=8 + forward-side encoding, on Huber baseline | −3 to −8% (~92–98 val) |
-| #1554 | frieren | `swa-on-huber` | SWA on final 4/15 epochs, swa_lr=1e-4, terminal test eval uses `swa_model` | −3 to −7% (~94–98 val) |
+| #1600 | frieren | `beta-sweep-on-swa` | 3-arm sweep: Huber β ∈ {0.3, 1.0, 3.0} | best arm: −1 to −4% |
+| #1617 | nezuko | `grad-clip-on-swa` | `clip_grad_norm_(max_norm=1.0)` + 2 seeds (variance signal) | −0.5 to −2% + variance reduction |
+| #1618 | alphonse | `surf-huber-vol-mse` | Split loss kind: Huber on surface, MSE on volume | −2 to −5% |
 
-**Wave 1 still in flight (now training on the pre-merge MSE baseline):**
+**Wave 2 (in flight, stack-stale on Huber baseline):** Three levers based on the pre-SWA Huber baseline. They'll need to be re-evaluated when results land — a win on Huber-baseline doesn't directly compare to the SWA-baseline number.
 
-| PR | Student | Slug | Lever |
+| PR | Student | Slug | Hypothesis | Stacks on |
+|---|---|---|---|---|
+| #1551 | tanjiro | `unified-pos-on-huber` | unified_pos=True ref=8 (2D Transolver ref²=64 grid) | Huber baseline only |
+| #1585 | askeladd | `film-on-huber` | FiLM global conditioning + per-layer (γ,β) from Re/AoA/NACA/gap/stagger, 3 seeds | Huber baseline only |
+| #1586 | thorfinn | `re-weight-on-huber` | Per-sample loss reweighting by 1/(shifted log Re), normalized | Huber baseline only |
+
+**Wave 1 (still in flight, MSE arm):** Two levers training on the original MSE+10-epoch baseline. Their pods are mid-training (GPU at 93-94 GB). Letting them complete; will evaluate liberally and reframe back to MSE baseline (val=147.65) when results land.
+
+| PR | Student | Slug | Hypothesis |
 |---|---|---|---|
-| #1446 | alphonse | `schedule-align-baseline` | CosineAnnealingLR(T_max=epochs=10) — was confounded with Huber in #1452 |
-| #1448 | askeladd | `slice-num-128` | Double PhysicsAttention slice_num |
-| #1449 | edward | `surf-weight-30` | Bias loss toward surface metric |
-| #1450 | fern | `mlp-ratio-4` | Restore canonical Transolver MLP FFN capacity |
-| #1453 | nezuko | `wider-n-hidden-192` | Widen Transolver hidden dim |
-| #1455 | thorfinn | `batch-8-lr-up` (rerun) | Batch=8 + sqrt(2)-scaled lr, --epochs=15 + scoring fix |
+| #1449 | edward | `surf-weight-30` | Bias loss further toward primary surface MAE metric (10 → 30) |
+| #1450 | fern | `mlp-ratio-4` | Restore canonical Transolver MLP FFN capacity (2 → 4) |
 
-These 6 are running on MSE + their respective lever. Since Huber alone gave a ~25% improvement (147.65 → 111.06), any wave-1-MSE hypothesis that lands above ~108 val will likely not beat the new baseline. **However, several of these levers (schedule-align in particular) may still be measuring something distinct from Huber — schedule alignment is implicit in the 15-epoch reruns but isn't explicitly tested.** Evaluate each on its own merits when it lands, not just on the absolute metric.
+## ✗ Closed this session
 
-## Potential next research directions (wave 3+)
+- #1454 (tanjiro, unified-pos rerun): val=128.78, regression vs. new baseline — reassigned as wave-2 stack-test PR #1551.
+- #1455 (thorfinn, batch=8/lr=7.1e-4 rerun): val=141.94, regression — reassigned as wave-2 PR #1586 (Re-weight).
+- #1448 (askeladd, slice_num=128, 3 seeds): mean val=134.31 ± 2.39 — reassigned as wave-2 PR #1585 (FiLM).
+- #1453 (nezuko, n_hidden=192, 2 unseeded runs): val=128.28 / 148.57, 16% variance — reassigned as wave-3 PR #1617 (gradient clipping; lever motivated directly by their variance observation).
+- #1446 (alphonse, --epochs=10 schedule align): never trained, **moot** — schedule alignment is implicit in the merged baseline. Reassigned as wave-3 PR #1618 (split-loss-by-node-type).
 
-Ranked by expected ROI on `val_avg/mae_surf_p` if wave 2 hits expected improvements:
+## ⚠ Active operational note
 
-1. **Stack #1551 (unified-pos) + #1554 (SWA) + Huber** — three orthogonal wins compounded. Expected delta if both hit: 100.77 × 0.94 × 0.94 ≈ 89 val.
-2. **β sweep on Huber** (β ∈ {0.1, 0.3, 1.0, 3.0}) — β=1.0 was a guess; lower β acts more like L1, higher more like MSE. May yield another ~3-5% by itself.
-3. **Surface-aware slice routing** (research-ideas H2) — −5 to −12% predicted but medium implementation effort (thread `is_surface` through every block).
-4. **FiLM global conditioning** on Re/AoA/NACA/gap/stagger (research-ideas H5) — −4 to −10% predicted, new module.
-5. **Per-sample Re-based loss weighting** (research-ideas H4) — −4 to −9% on val_re_rand specifically.
-6. **Surface-only Huber + MSE on volume** — split loss by node type; surface is the headline metric.
-7. **Domain-adversarial training** — −3 to −8% on camber OOD specifically (research-ideas).
-8. **Per-channel β** — pressure has wider normalized range than Ux/Uy in normalized space.
-9. **EMA averaging instead of SWA** — different averaging schedule; cheap variant if SWA doesn't deliver.
-10. **Gradient clipping** — defensive; cheap to add, can rescue divergent runs in larger-capacity arms.
+- The GraphQL rate-limit pattern (~30-40 min between exhaustions) has continued but pods now recover automatically. Continue using REST helpers where possible.
+- Three wave-2 PRs (#1551, #1585, #1586) are stack-stale: they fork from the Huber-only baseline, not the merged SWA-on-Huber baseline. Their training results will need to be reframed against the appropriate baseline. **Decision rule:** if their result beats val=99.07 on the Huber baseline they tested on, it's a clear stack win (merge directly — GitHub merge will compose the lever with the SWA train.py changes that are now in advisor). If they only beat the old Huber baseline (val=100.77) but not 99.07, send back for rebase + retrain. If they regress vs. 100.77, close.
 
-The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` doc on this branch contains H1–H10 with concrete implementation specs.
+## Potential next research directions (wave 4+)
+
+Ranked by expected ROI on `val_avg/mae_surf_p` if wave 3 hits expected improvements:
+
+1. **Compound stack: SWA × Huber × (whichever wave-3 PR wins) × (whichever wave-2 PR wins after rebase).** Each merged win compounds; theoretical 4-lever floor is ~85 val if all midpoints hit.
+2. **Per-channel Huber β** — pressure normalized range > Ux/Uy. Depends on β-sweep (#1600) result. If a single β > 1.0 wins, sweep per-channel.
+3. **EMA averaging instead of SWA** — variant test; cheap to swap.
+4. **Surface-aware slice routing in PhysicsAttention** (research-ideas H2) — −5 to −12% predicted but medium implementation effort. Wave-4 if a simple stack-test doesn't land.
+5. **Lower swa_lr (0.05× base lr)** — addresses the val_re_rand regression observed in PR #1554's SWA eval.
+6. **Earlier swa_start_frac (0.65)** — fits 5 averaged epochs into 14-epoch envelope.
+7. **Capacity bump retest** — n_hidden=192 + grad-clip + seeded + 15-epoch on SWA-on-Huber baseline.
+8. **Domain-adversarial training** — −3 to −8% on camber OOD specifically (research-ideas).
+9. **Best-checkpoint vs SWA-final** — save base-best alongside SWA for paper-facing comparisons.
+10. **Re-rebase wave-2 stack-stales** — give the FiLM/unified-pos/Re-weight PRs a clean re-run on SWA-on-Huber.
+
+The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` doc has H1–H10 with concrete implementation specs.
 
 ## Open questions to revisit on review
 
-- **Stacking gain:** when wave-2 results land, compute the gain ratio of each stack vs. predicted compound. If actual gain falls below predicted, the levers may be partially correlated (e.g. unified-pos and Huber both helping mostly via the same OOD samples). That's diagnostic.
-- **Per-split divergence post-merge:** with Huber baseline, `val_geom_camber_cruise` (80.90) and `val_re_rand` (93.04) are the easiest splits; the two raceCar splits (val_single_in_dist=119.74, val_geom_camber_rc=109.38) are the hardest. Future architectural levers may target the hard splits specifically.
-- **Schedule alignment vs. Huber decoupling:** wave-1 PR #1452 conflates "Huber loss" with "--epochs=15 = T_max-aligned schedule". A pure schedule-alignment-only comparison (alphonse #1446) lands soon — that result will let us attribute how much of the 25%+ wave-1 win was schedule alignment vs. loss reformulation.
-- **VRAM headroom:** #1455 thorfinn ran at 84.2 GB peak with batch=8. We have ~12 GB headroom for capacity bumps — useful for future hypotheses.
-- **What to do with the 6 wave-1-in-flight PRs that may not beat Huber baseline:** evaluate each individually; some levers (e.g. surf_weight=30) target the metric directly and may still help even on the new baseline.
+- **Stacking gain accounting:** when wave-3 lands, compute realized vs. predicted compound improvement. If actual gain falls below predicted, the levers may be correlated (e.g., gradient clipping and SWA both stabilizing the same noise source).
+- **Variance discipline:** nezuko's 16% n_hidden=192 variance argues for ALL future stack-tests to either use a fixed seed (preferably) or report 2-seed results. Wave-3's nezuko PR (#1617) explicitly tests this.
+- **Per-split divergence post-SWA-merge:** with SWA-on-Huber baseline, val_geom_camber_cruise (79.18) is the easiest val split; val_re_rand (95.12) is the hardest val split AND the one that slightly regressed vs. Huber-only (93.04 → 95.12). The val_re_rand regression is the most diagnostic per-split signal in the merged baseline.
+- **PR #1554's val_re_rand regression** (+2.2%) is most likely from only 3 SWA-active epochs (not 4) + `swa_lr` above cosine floor. Tighter SWA tuning is on the wave-4 list.
+- **Cherry-pickable downstream from wave-2 stale PRs:** if any of #1551, #1585, #1586 implements a fix that's not in the merged baseline (e.g., FiLM module, unified-pos constructor fix), and they regress, the implementation might still be cherry-pickable for a clean rerun.
