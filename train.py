@@ -217,7 +217,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   loss_fn: str = "mse", smooth_l1_beta: float = 0.1) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -240,15 +241,20 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = (pred - y_norm) ** 2
+            if loss_fn == "smooth_l1":
+                per_elem = F.smooth_l1_loss(
+                    pred, y_norm, reduction="none", beta=smooth_l1_beta
+                )
+            else:
+                per_elem = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (per_elem * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (per_elem * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -386,6 +392,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    loss_fn: str = "mse"  # "mse" or "smooth_l1"
+    smooth_l1_beta: float = 0.1
 
 
 cfg = sp.parse(Config)
@@ -487,12 +495,17 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        sq_err = (pred - y_norm) ** 2
+        if cfg.loss_fn == "smooth_l1":
+            per_elem = F.smooth_l1_loss(
+                pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
+            )
+        else:
+            per_elem = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -512,7 +525,8 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                             loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -580,7 +594,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
