@@ -215,11 +215,38 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class ReScaleHead(nn.Module):
+    """Per-sample, Re-conditioned output scale (DimINO-style redimensionalization).
+
+    Takes normalized log(Re) as a scalar per sample and emits a positive scale
+    factor per output channel, broadcast over mesh nodes. Initialized so the
+    output is the identity (scale ≈ 1.0) at step 0, so the model starts where
+    plain Transolver would and only deviates if the gradient signal supports it.
+    """
+
+    def __init__(self, hidden: int = 32, out_channels: int = 3):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, out_channels),
+        )
+        with torch.no_grad():
+            self.mlp[-1].weight.zero_()
+            self.mlp[-1].bias.fill_(0.541)  # softplus(0.541) ≈ 1.0
+
+    def forward(self, log_re: torch.Tensor) -> torch.Tensor:
+        # log_re: [B, 1]  →  [B, 1, C] scale, broadcast over N nodes.
+        raw = self.mlp(log_re)
+        scale = F.softplus(raw)
+        return scale.unsqueeze(1)
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -248,7 +275,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            log_re_norm = x_norm[:, 0, 13:14]
+            scale = rescale_head(log_re_norm)
+            pred = model({"x": x_norm})["preds"] * scale
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -417,8 +446,10 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+n_params_head = sum(p.numel() for p in rescale_head.parameters())
+print(f"Model: Transolver ({n_params/1e6:.2f}M params) + ReScaleHead ({n_params_head} params)")
 
 # torch.compile for forward/backward throughput. mode="default" + dynamic=True:
 # pad_collate yields variable per-batch shapes (mesh nodes 74K-242K, B=4), so
@@ -430,7 +461,7 @@ print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dyn
 model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
 
 optimizer = SOAP(
-    model.parameters(),
+    list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
     betas=(0.95, 0.95),
     weight_decay=cfg.weight_decay,
@@ -467,12 +498,19 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    rescale_head.train()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
     n_batches = 0
+    scale_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    scale_sq_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    log_re_sum = 0.0
+    log_re_sq_sum = 0.0
+    scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
+    scale_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -483,7 +521,9 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            log_re_norm = x_norm[:, 0, 13:14]
+            scale = rescale_head(log_re_norm)
+            pred = model({"x": x_norm})["preds"] * scale
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -521,7 +561,10 @@ for epoch in range(MAX_EPOCHS):
         scaler.scale(loss).backward()
         if cfg.grad_clip > 0:
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(rescale_head.parameters()),
+                cfg.grad_clip,
+            )
             grad_norm_val = float(grad_norm)
             epoch_grad_norm_sum += grad_norm_val
             if grad_norm_val > epoch_grad_norm_max:
@@ -530,6 +573,16 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_clipped += 1
         scaler.step(optimizer)
         scaler.update()
+
+        with torch.no_grad():
+            sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
+            lr = log_re_norm.squeeze(1).to(torch.float64)        # [B]
+            scale_sum += sc.sum(dim=0)
+            scale_sq_sum += (sc ** 2).sum(dim=0)
+            log_re_sum += lr.sum().item()
+            log_re_sq_sum += (lr ** 2).sum().item()
+            scale_log_re_cross += (sc * lr.unsqueeze(1)).sum(dim=0)
+            scale_n += sc.shape[0]
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -544,8 +597,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    rescale_head.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -560,8 +614,29 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(
+            {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
+            model_path,
+        )
         tag = " *"
+
+    # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
+    if scale_n > 0:
+        scale_mean_t = scale_sum / scale_n
+        scale_var_t = (scale_sq_sum / scale_n - scale_mean_t ** 2).clamp(min=0)
+        scale_std_t = scale_var_t.sqrt()
+        scale_mean = scale_mean_t.tolist()
+        scale_std = scale_std_t.tolist()
+        lr_mean = log_re_sum / scale_n
+        lr_var = max(log_re_sq_sum / scale_n - lr_mean ** 2, 0.0)
+        lr_std = lr_var ** 0.5
+        if lr_std > 1e-8:
+            cov = scale_log_re_cross / scale_n - scale_mean_t * lr_mean
+            corr = (cov / scale_std_t.clamp(min=1e-8) / lr_std).tolist()
+        else:
+            corr = [0.0, 0.0, 0.0]
+    else:
+        scale_mean = scale_std = corr = [0.0, 0.0, 0.0]
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
@@ -589,12 +664,20 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "rescale/scale_mean": scale_mean,
+        "rescale/scale_std": scale_std,
+        "rescale/scale_logre_corr": corr,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
+        f"std={[f'{v:.3f}' for v in scale_std]}  "
+        f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -606,8 +689,11 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    rescale_head.load_state_dict(ckpt["rescale_head"])
     model.eval()
+    rescale_head.eval()
 
     test_metrics = None
     test_avg = None
@@ -619,7 +705,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
