@@ -228,6 +228,27 @@ Per-split (dropout=0.2):
 
 ---
 
+## 2026-05-12 21:55 — PR #1609: Transolver slice_num 64→128 (frieren) — **CLOSED**
+
+- **Branch:** `willowpai2g24h5-frieren/slice-num-128-physics-tokens`
+- **Hypothesis:** Doubling physics-token count gives attention finer-grained spatial access; orthogonal to other levers.
+- **W&B run:** `kg0dwlen`
+
+| Metric | Value | vs Baseline |
+|--------|-------|-------------|
+| val_avg/mae_surf_p (best, ep 12) | 127.42 | **+5.83% worse** |
+| test_avg/mae_surf_p | **116.80** | +9.50% worse |
+| test_single_in_dist | 135.60 | +8.23% |
+| test_geom_camber_rc | 127.82 | +12.88% |
+| test_geom_camber_cruise | 87.67 | +8.03% |
+| test_re_rand | 116.12 | +8.53% |
+
+**Result:** CLOSED. Every metric worse than baseline (120.40/106.67). Lands in PR's own "over-allocated to capacity" decision bucket.
+
+**Key observation (pattern confirmation):** In the 18-epoch budget, capacity-adding architectural changes consistently lose because the epochs sacrificed for slower compute matter more than the representational gain. This is the second confirmation (after #1400 tanjiro aux head ran into the same wall). Cheap gradient-shape changes (Huber, dropout) win; capacity-up architecture loses. **For future architecture changes, the per-epoch cost is the dominant variable, not the parameter count.**
+
+---
+
 ## Stragglers status (round 1, as of 2026-05-12 ~20:06–20:51)
 
 | PR | Student | Status |
