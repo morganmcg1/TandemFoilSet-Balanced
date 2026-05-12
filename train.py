@@ -236,6 +236,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose GT contains non-finite values. accumulate_batch
+            # already does per-sample skipping for non-finite GT, but its
+            # ``err = (pred - y).abs()`` followed by ``err * mask`` is poisoned
+            # by ``0 * Inf = NaN``; doing the skip here also avoids the same
+            # poisoning in the loss sums below.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                keep = torch.where(y_finite_per_sample)[0]
+                if keep.numel() == 0:
+                    continue
+                x = x[keep]; y = y[keep]
+                is_surface = is_surface[keep]; mask = mask[keep]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
