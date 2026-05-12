@@ -38,10 +38,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 1. **bf16 is the dominant lever** — 18 epochs/30 min vs 11-14 for fp32. Under our hard wall-clock cap, per-epoch speed is the strongest convergence driver. Now merged.
 2. **Huber loss shows remarkable signal** — fern achieved val=109.45 at fp32 14 epochs, nearly matching bf16 at 18 epochs. This implies ~4 epochs of effective speedup from loss-shape alignment with MAE metric. Huber + bf16 expected to compound to ~95-105.
-3. **batch_size scaling doesn't help** — bs=8 halved optimizer steps/min without reducing per-epoch time (dataloader bottleneck). Closed.
-4. **slice_num=128 confounded by bs=2 OOM** — can't interpret. slice_num=96 (thorfinn #1550) tests this cleanly at bs=4.
-5. **LR=1e-3 + cosine T_max mismatch** — schedule sized to 30 epochs ran only 14; under-annealed. Closed. edward retesting n_layers=8 (depth is a cleaner lever at bf16 baseline).
-6. **val_single_in_dist is consistently the hardest split** (~133-175 MAE across runs) — not an overfitting artifact, more likely extreme-Re / extreme-p samples. OOD camber_cruise is consistently easiest (73-106 MAE).
+3. **Gradient norms are massive without clipping** — tanjiro's grad-clip diagnostic: 5250/5250 steps clipped at `max_norm=1.0`, max pre-clip norm = 837. AdamW's per-parameter scaling alone is not constraining raw gradient magnitudes; the clip acts as full gradient normalization, not a safety net. Trajectory smoothing was visible (val swings ±20 vs ±50 unclipped). Tanjiro's fp32 val=111.91 nearly matched bf16 baseline.
+4. **batch_size scaling doesn't help** — bs=8 halved optimizer steps/min without reducing per-epoch time (dataloader bottleneck). Closed.
+5. **slice_num=128 confounded by bs=2 OOM** — can't interpret. slice_num=96 (thorfinn #1550) tests this cleanly at bs=4.
+6. **n_hidden=192 confounded by bs=2 OOM** (shared-GPU contention) — frieren #1442 sent back to retest at bs=4 on bf16 baseline.
+7. **LR=1e-3 + cosine T_max mismatch** — schedule sized to 30 epochs ran only 14; under-annealed. Closed. edward retesting n_layers=8 (depth is a cleaner lever at bf16 baseline).
+8. **val_single_in_dist is consistently the hardest split** (~133-175 MAE across runs) — not an overfitting artifact, more likely extreme-Re / extreme-p samples. OOD camber_cruise is consistently easiest (73-106 MAE).
 
 ## Round-2 candidate pool (from `research/RESEARCH_IDEAS_2026-05-12_round1.md`)
 

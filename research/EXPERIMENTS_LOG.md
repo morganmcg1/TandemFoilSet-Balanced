@@ -198,3 +198,45 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - **Decision: close**. The NaN workaround works (all 4 test splits finite). But val=141.47 is well below the merged baseline (109.29). The bs=2 confound persists — run-to-run noise at bs=2 swamped the signal (the two runs differed by 4.8 MAE on val). At ~171 s/epoch (bs=2), only 11 epochs fit in 30 min.
 - The hypothesis (slice_num doubling → better OOD) remains untested cleanly. Assigned thorfinn H4 slice_num=96 as the clean test: less memory than 128, fits at bs=4, bf16 inherited → ~12-15 epochs, no batch-size confound.
 
+## 2026-05-12 20:55 — PR #1534: tanjiro gradient clipping `max_norm=1.0` (review 1, sent back for rebase)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-1p0` (pre-merge fp32 baseline)
+- W&B run: `2olay9t8` (14 of 30 epochs; ~130 s/epoch fp32)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 12) | 111.9067 |
+| `test_avg/mae_surf_p` | 100.3499 |
+| `test/test_single_in_dist/mae_surf_p` | 115.510 |
+| `test/test_geom_camber_rc/mae_surf_p` | 117.827 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 70.212 |
+| `test/test_re_rand/mae_surf_p` | 97.851 |
+| Gradient clipping triggered | **5250 / 5250 steps (100%)** |
+| Max pre-clip gradient norm | **837.32** |
+
+- **Key empirical finding**: With `max_norm=1.0`, **every step of training was clipped** — the un-clipped baseline runs at gradient norms 300–800× above the cap. `max_norm=1.0` is therefore acting as full gradient normalization (`direction(g) * lr`), not as a safety net for rare spikes as the hypothesis framed it. This is a substantive observation about the training dynamics: AdamW's per-parameter scaling alone is not preventing large raw-gradient updates; the clip is effectively the norm controller.
+- **Val trajectory**: monotonically descending after epoch 5, with small wobbles (max swing ±20 vs the ±50 seen in unclipped fp32 baselines like tanjiro's bs=8 closed PR). The smoothing effect is real and visible.
+- **Result vs baseline**: val=111.91 fp32 14 epochs vs merged baseline 109.29 bf16 18 epochs. Very close given the 4-epoch disadvantage at fp32.
+- **Decision: send back for rebase + retest on bf16 baseline.** bf16 doesn't affect raw gradient magnitudes meaningfully (master weights are fp32, autocast is forward-only), so the same "every step clipped" dynamic should hold on top of bf16. With 4 more bf16 epochs at smoother trajectory, predicted val ~95-105.
+
+## 2026-05-12 20:58 — PR #1442: frieren wider Transolver `n_hidden=192` (review 1, sent back for rebase)
+
+- Branch: `willowpai2g48h5-frieren/wider-n-hidden-192` (pre-merge fp32 baseline)
+- W&B run: `5ux034zo` (10 of 30 epochs; ~182 s/epoch fp32, **batch_size=2 forced fallback**)
+- Model: 1.47M params (vs ~1M at n_hidden=128)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 9) | 140.3826 |
+| `test_avg/mae_surf_p` | 128.8978 |
+| `test/test_single_in_dist/mae_surf_p` | 168.5868 |
+| `test/test_geom_camber_rc/mae_surf_p` | 132.5917 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 89.0377 |
+| `test/test_re_rand/mae_surf_p` | 125.3750 |
+| Peak GPU memory | 91.07 GB (shared with co-resident process) |
+
+- **Multiple confounders**: (1) bs=2 forced by OOM (co-resident process ate 73 GB on the shared GPU during the original bs=4 launch); (2) only 10 epochs in 30 min due to wider model's per-epoch slowdown; (3) cosine LR never reached its low-lr fine-tuning regime.
+- The result (val=140.38) is below baseline by ~30 absolute MAE, but the confounders are extrinsic and the hypothesis is mechanistically reasonable. With bf16 inherited from the merged baseline, the wider model should fit at bs=4 cleanly (~30-40 GB estimated).
+- **Decision: send back for rebase + retest at bs=4 on bf16 baseline.** Removes the bs=2 confound and adds ~4-6 extra epochs. If wider doesn't beat 109.29 on a fair test, close.
+
+
