@@ -6,57 +6,67 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12
+- **Date / time:** 2026-05-12 20:00
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
-- **Target base branch:** `icml-appendix-willow`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
-- **Most recent direction from human researcher team:** none (controlled 24h/48h Charlie-vs-Willow logging ablation; no inbound human directives at boot).
+- **Most recent direction from human researcher team:** none (no inbound issues at this cycle).
 
 ## Current research focus
 
-Round 2 of the 24h Charlie-vs-Willow logging ablation on TandemFoilSet, a CFD surrogate task. Primary metric `val_avg/mae_surf_p` (equal-weight mean surface pressure MAE across 4 val splits); paper-facing comparator `test_avg/mae_surf_p`. The launch is isolated from other branches — no comparison or cross-pollination with parallel Charlie/Willow rounds is permitted.
+Round 2 of the 24h Charlie-vs-Willow logging ablation on TandemFoilSet, with a hard 30-min per-training-run wall-clock cap. Primary metric `val_avg/mae_surf_p`; the paper-facing comparator `test_avg/mae_surf_p` is structurally NaN on this branch (cruise test split overflows on every run including baseline) — decisions use val_avg + the three finite per-test-split metrics.
 
-**Per-training-run wall-clock cap is hard 30 minutes** (`SENPAI_TIMEOUT_MINUTES=30`). This is the dominant constraint shaping the hypothesis space — only ideas that produce signal in the first 5–15 epochs are testable. Hypotheses that need long convergence are off the table for this round.
+## Baseline (measured)
 
-## Themes for r2
+Two stock-config runs by alphonse (W&B `hqj9bt84`, `89653mip`): `val_avg/mae_surf_p` = **131.79 / 132.73** (~132, ±~0.5%). Single-run noise floor ~0.5–1%; a hypothesis needs to clear that to be a clean winner. See `BASELINE.md` for the full per-split breakdown.
 
-Across 8 idle students, I'm initially assigning across 5 angles to maximize information per launch:
+## Live observations (W&B; not all PRs formally submitted)
 
-1. **Loss prioritization (3 students)** — surface pressure is the metric; baseline loss treats Ux/Uy/p uniformly and underweights surface nodes given their tiny fraction (~3%) of total mesh nodes. Three independent attacks: (a) raise `surf_weight` (region balance), (b) raise pressure-channel weight inside the per-node loss (intra-channel balance), (c) replace global-normalized MSE with per-sample Huber rescaling (Re-scale fairness).
+Multiple students have arms finished in W&B but haven't all marked PRs as ready for review. Forward-looking signal:
 
-2. **Optimizer / fast convergence (1 student)** — the conservative `lr=5e-4` may under-use the 30-min budget. `lr=2e-3` with grad clip 1.0 is a sharp discriminating test.
+| Student | Best W&B run | val_avg/mae_surf_p | Δ vs baseline | PR status |
+|---|---|---|---|---|
+| thorfinn (bf16+accum) | `opxuv6bq` | **118.17** | **-10.3%** | WIP — strong winner candidate |
+| fern (lr=2e-3+clip) | `z8ub3am9` | 123.53 | -6.3% | WIP — winner candidate |
+| askeladd (surf_weight=30) | `1uu93jzg` | 124.43 | -5.6% | WIP — winner candidate |
+| frieren (p_weight=3) | `ph14bsim` | 130.98 | -0.9% | **sent back** — re-running with p_weight=2 + clip |
+| tanjiro (per-field heads) | `bexja50y` | 131.74 | ~tie | WIP — likely no-op |
+| alphonse (baseline) | `hqj9bt84` | 131.79 | (reference) | WIP — establishing reference |
+| nezuko (wider 256/8h) | `cvi8ju7g` | 159.35 | +21% (worse) | WIP — capacity hurt under 30-min cap |
+| edward (Huber persample) | `ct3iuldn` | 287.78 | +118% (worse) | WIP — major regression |
 
-3. **Capacity (1 student)** — 2M-param baseline may be capacity-limited on the geometry+Re variation. Width 128→256 / heads 4→8 doubles representational budget.
+These are W&B observations; formal PR adjudication happens only when each student posts a terminal `SENPAI-RESULT` and marks ready for review.
 
-4. **Architectural decoupling (1 student)** — separate per-field output heads (Ux/Uy/p) so pressure projection can specialize away from velocity.
+## Themes that are working
 
-5. **Throughput (1 student)** — bf16 autocast + grad accumulation: more epochs per 30 min, larger effective batch, gradient-noise reduction.
+- **Throughput hypothesis (thorfinn, bf16+accum)** is the current leader. More epochs in the 30-min budget directly translates into better val_avg. Implication: anything that reduces per-step wall time is potentially compoundable.
+- **Higher LR with grad clip (fern)** also works strongly. Suggests the baseline LR is under-tuned for the 30-min regime.
+- **Region prioritization (askeladd, surf_weight=30)** also pays off. The baseline `surf_weight=10` is genuinely too low for a 3%-surface-fraction mesh.
 
-Plus **1 student running a stock-config baseline** because the W&B project had zero runs at launch — we need a measured reference to compare every hypothesis against.
+## Themes that are not working
 
-## Potential next research directions (round 2 spares / round 3 candidates)
+- **Per-sample Huber normalization (edward)** is catastrophic (val_avg ~3× worse). The per-sample rescaling appears to destroy the learned scale relationships across Re. Will likely need to close this PR when submitted.
+- **Wider model (nezuko, 256/8h)** is hurt by the 30-min cap — wider epochs take longer, fewer epochs fit, undertrained.
+- **Per-field output heads (tanjiro)** is a wash. Architectural decoupling at the head doesn't help in this regime.
+- **Intra-channel pressure upweight (frieren, p_weight=3)** is marginal and numerically risky.
 
-Held back for the next round, sourced from `research/RESEARCH_IDEAS_2026-05-12_initial.md`:
+## Next directions (round 3 candidates, conditional)
 
-- **H4** — LR warmup (5%) + `CosineAnnealingWarmRestarts(T_0=5 or 10)`. Schedule angle; small expected delta but free.
-- **H6** — `slice_num` 64 → 128 (with batch_size=2 if needed). Tests slice-attention granularity for tandem geometry.
-- **H7** — 7 layers + stochastic depth p=0.1. Depth instead of width.
-- **H8** — SiLU activation (one-flag change). Zero-risk free experiment.
-- **H10** — `log1p(dsdf)` + Re-scaled position transform. Input feature engineering; stats.json normalization risk.
-- **H13** — Re-conditioned Fourier position encoding (`sin(2π·pos·√Re)`). Physics-informed position.
-- **H14** — `slice_num=256, batch_size=1` cruise diagnostic.
+Held back from `RESEARCH_IDEAS_2026-05-12_initial.md`, prioritized by what we've now learned:
 
-After r2 first wave returns, also worth exploring if any winners emerge:
+1. **Stack the throughput + LR + region winners.** thorfinn-style bf16+accum *with* fern-style lr=2e-3+clip *with* askeladd-style surf_weight=30 — three independent levers that should compose. High-value compound experiment for r3.
+2. **Sweep `surf_weight`** more finely (20, 30, 40, 50) now that we know 30 helps. Find the saturation point.
+3. **Higher LR + larger effective batch** combo (lr=1e-3 or 2e-3, accum=4, bf16). Tests whether the LR win is bottlenecked by step noise.
+4. **Diagnose the cruise-test NaN at the source** (model output sanitization in `train.py` before `accumulate_batch`). One student in r3 should attempt to make every finished run report a finite `test_avg`. This unlocks paper-facing numbers.
+5. **OneCycleLR with high peak (1e-3)** as a schedule alternative to bare cosine.
+6. **Surface-aware sampling** — oversample batches with high surface-node fraction.
+7. **EMA of weights** as a near-free regularizer.
+8. **slice_num sweep** (32, 64, 128) — physics-attention granularity.
 
-- **Stacked hypotheses**: if H3 (surf_weight=30) wins, try H3+H2 stack (region + channel). If H1 (Huber) wins, try H1+H3 stack. Be careful of confounds.
-- **Loss shape**: SmoothL1 / MAE-direct in normalized space (no Huber rescaling, just absolute loss) — if Huber wins for the right reason, MAE-direct might win more.
-- **Sampler**: per-batch domain-balanced batching (instead of weighted-random) — guarantees coverage.
-- **EMA of weights**: cheap regularizer; may show signal in 10+ epochs if any.
-- **Output residual over an analytic prior**: e.g. predict δ over a coarse linear potential-flow estimate — if pressure has a strong "easy" component, this should help.
-- **Surface-aware sampling/positional emphasis**: surface nodes get more attention slices or a dedicated head.
+Held back as lower priority (post-r2):
+- H7 (deeper + stochastic depth), H8 (SiLU), H10 (log1p dsdf), H13 (Re-Fourier position).
 
 ## Operational notes
 
-- All 8 students were idle at boot; 8 PRs created. Re-survey shortly to confirm pods pick up assignments.
-- Baseline metrics in `BASELINE.md` will be backfilled once `alphonse`'s baseline run logs to W&B; update the file at that point.
-- Plateau protocol not yet relevant — this is round 2 of round 2, no consecutive nulls yet.
+- All 8 students currently have active WIP PRs (frieren just returned to WIP via send-back).
+- Plateau protocol: not active — strong differentiated signal across hypotheses.
+- Next polling priorities: thorfinn / fern / askeladd PRs marked ready for review (any of these is a likely merge); edward likely close; nezuko likely send-back to drop to default width but use a different angle.

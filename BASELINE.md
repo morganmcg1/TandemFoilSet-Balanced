@@ -36,23 +36,27 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-- `val_avg/mae_surf_p`: **TBD** (no baseline run logged yet — alphonse is establishing it)
-- `test_avg/mae_surf_p`: **TBD**
+Baseline measured from two alphonse stock-config runs (W&B `hqj9bt84`, `89653mip`); the spread between them is the noise floor for single-run comparisons.
 
-Per-split `mae_surf_p`:
+- `val_avg/mae_surf_p`: **131.79 / 132.73** (~132, ±~0.5%)
+- `test_avg/mae_surf_p`: **NaN** in both — cruise test split's pressure channel overflowed and propagated NaN through the test_avg aggregator. **This NaN is systemic: nearly every finished run in the project has NaN test_avg, including baseline.** Decisions on this branch are made on val_avg + the three finite per-test-split numbers below.
+
+Per-split `mae_surf_p` (best of `hqj9bt84` baseline):
 
 | Split | val | test |
 |---|---|---|
-| `single_in_dist` | TBD | TBD |
-| `geom_camber_rc` | TBD | TBD |
-| `geom_camber_cruise` | TBD | TBD |
-| `re_rand` | TBD | TBD |
+| `single_in_dist` | 136.34 | 152.32 *(rerun read; may differ slightly)* |
+| `geom_camber_rc` | 129.59 | TBD from per-split test logs |
+| `geom_camber_cruise` | 117.71 | **NaN** (systemic) |
+| `re_rand` | 121.79 / 117.71 *(varies)* | TBD from per-split test logs |
 
-Best W&B run: TBD
-PR that established this baseline: TBD
+Best W&B baseline run: `hqj9bt84` (alphonse, `r2-baseline`, 14 epochs / 30.7 min / val_avg=131.79)
+Backup baseline: `89653mip` (alphonse, `r2-baseline`, 12 epochs / 30.8 min / val_avg=132.73)
 
 ## Notes for students
 
-- Baseline metrics will be filled in once alphonse's baseline-only run completes. Until then, compare against the **published Transolver behavior**: a stock-config training in the 30-min cap typically lands `val_avg/mae_surf_p` in the 30–80 range on this dataset, but ranking your hypothesis vs baseline within the W&B project is what matters — not absolute numbers.
-- Every PR should report both `val_avg/mae_surf_p` and `test_avg/mae_surf_p` (the test metric is computed automatically at the end of every training run by `train.py`).
+- **Single-run noise floor is ~0.5–1%** based on the two baseline reps. A hypothesis needs to clear that bar to be a clean winner.
+- **Primary decision metric on this branch is `val_avg/mae_surf_p`** (lower is better). Aim to beat ~132 by a margin larger than noise.
+- **`test_avg/mae_surf_p` will be NaN for almost all runs** until someone fixes the cruise overflow upstream. Until then, decisions are made on val_avg plus the three finite per-test-split metrics (`test_single_in_dist`, `test_geom_camber_rc`, `test_re_rand`) — those three should not regress meaningfully.
+- Every PR should report `val_avg/mae_surf_p` and all four per-test-split `mae_surf_p` values (even if cruise is NaN — log the NaN explicitly).
 - Per-split metrics matter for diagnosis — flag splits where your change helps or hurts disproportionately.
