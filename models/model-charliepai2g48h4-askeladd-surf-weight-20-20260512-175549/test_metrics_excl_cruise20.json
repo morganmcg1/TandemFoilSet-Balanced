@@ -1,0 +1,58 @@
+{
+  "checkpoint": "models/model-charliepai2g48h4-askeladd-surf-weight-20-20260512-175549/checkpoint.pt",
+  "excluded": "test_geom_camber_cruise[20] (761 Inf in pressure ground truth)",
+  "test_splits": {
+    "test_single_in_dist": {
+      "vol_loss": 0.7423318007588386,
+      "surf_loss": 0.4781179604679346,
+      "loss": 10.30469101011753,
+      "mae_surf_Ux": 1.8085173410990987,
+      "mae_vol_Ux": 5.887518016647733,
+      "mae_surf_Uy": 0.8277819412361866,
+      "mae_vol_Uy": 2.506623559467932,
+      "mae_surf_p": 134.34151987707236,
+      "mae_vol_p": 151.31413655855195
+    },
+    "test_geom_camber_rc": {
+      "vol_loss": 0.5990431666374206,
+      "surf_loss": 0.22555382862687112,
+      "loss": 5.110119739174843,
+      "mae_surf_Ux": 2.9488210473047127,
+      "mae_vol_Ux": 6.999622188305235,
+      "mae_surf_Uy": 1.0251070049840558,
+      "mae_vol_Uy": 3.2598274166013024,
+      "mae_surf_p": 122.85972629679101,
+      "mae_vol_p": 133.42006283723913
+    },
+    "test_geom_camber_cruise": {
+      "vol_loss": 0.29091332718729973,
+      "surf_loss": 0.09092746369540691,
+      "loss": 2.109462601095438,
+      "mae_surf_Ux": 1.401491745765989,
+      "mae_vol_Ux": 5.015642906439332,
+      "mae_surf_Uy": 0.6646029540463859,
+      "mae_vol_Uy": 1.7828217564915192,
+      "mae_surf_p": 91.69412381619203,
+      "mae_vol_p": 105.79863278909889
+    },
+    "test_re_rand": {
+      "vol_loss": 0.456180767416954,
+      "surf_loss": 0.18654573515057563,
+      "loss": 4.187095470428466,
+      "mae_surf_Ux": 2.08910610913843,
+      "mae_vol_Ux": 5.868382270319414,
+      "mae_surf_Uy": 0.9241492284797105,
+      "mae_vol_Uy": 2.4452463144839225,
+      "mae_surf_p": 120.48710792322517,
+      "mae_vol_p": 128.31743244272636
+    }
+  },
+  "test_avg": {
+    "avg/mae_surf_Ux": 2.061984060827058,
+    "avg/mae_surf_Uy": 0.8604102821865848,
+    "avg/mae_surf_p": 117.34561947832013,
+    "avg/mae_vol_Ux": 5.942791345427929,
+    "avg/mae_vol_Uy": 2.498629761761169,
+    "avg/mae_vol_p": 129.71256615690407
+  }
+}
