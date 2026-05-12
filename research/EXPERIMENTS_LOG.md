@@ -1,5 +1,38 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 22:05 — PR #1399: Per-channel surface loss pressure weighting (3-arm corrected sweep) ❌ CLOSED
+
+- **Student branch:** `charliepai2g48h1-nezuko/surf-channel-pressure-weight`
+- **Hypothesis:** Per-channel surface-loss weighting `CHANNEL_W=[1,1,k]` (boosting p relative to Ux/Uy) improves `val_avg/mae_surf_p` by directing gradients toward the ranking metric.
+
+### Result — corrected 3-arm sweep (`.mean()` denominator, `surf_weight=10`)
+
+All arms use MSE loss (round-1 dispatch, pre-L1-baseline).
+
+| Arm | `CHANNEL_W` | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p (3/4) | val_geom_camber_rc |
+|-----|-------------|---------|---------------------|---------------------------|---------------------|
+| **C (winner)** | `[1,1,3]` | 14 | **120.448** | 118.886 | 128.573 |
+| B   | `[1,1,2]`   | 14 | 120.992             | 120.960                   | 132.772             |
+| A (control) | `[1,1,1]` | 14 | 122.961     | **118.579**               | 133.982             |
+
+Artifacts: `models/model-baseline-control-sw10-20260512-192251/`, `models/model-surf-pw2-fixed-sw10-20260512-200712/`, `models/model-surf-pw3-fixed-sw10-20260512-205059/` on the student branch.
+
+### Action: CLOSED — MSE-era results 28%+ worse than L1 baseline (94.29)
+
+The absolute numbers are dominated by MSE-vs-L1: the merged L1 baseline (94.29) is 23% better than nezuko's Arm A control (122.96) using the same architecture and surf_weight. No arm can be merged.
+
+**But the val signal is real and actionable:**
+- Monotone improvement on `val_avg/mae_surf_p` as k rises: 122.96 → 120.99 → 120.45 (-2.0%)
+- Strongest effect on `val_geom_camber_rc` (hardest OOD split): 133.98 → 132.77 → 128.57 (-4.0%)
+- Signal holds across all four val splits — not a single-split fluke
+- Test mean is inconclusive (non-monotone, within noise), consistent with nezuko's honest caveat about single-seed variance
+
+### Round-2 follow-up dispatched: #1625
+
+Same lever compounded with L1. Hypothesis: the ~2% val gain from channel weighting stacks on top of the ~57% gain from L1. Arms at k∈{2,3,5}.
+
+---
+
 ## 2026-05-12 21:20 — Round-2 dispatch (5 PRs)
 
 After establishing L1 as the new measured baseline (PR #1355, val_avg/mae_surf_p=94.29),
