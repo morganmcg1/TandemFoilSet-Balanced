@@ -217,6 +217,40 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def wall_distance_feature(
+    x: torch.Tensor,
+    is_surface: torch.Tensor,
+    mask: torch.Tensor,
+    max_surf_samples: int = 1024,
+) -> torch.Tensor:
+    """Per-node log(1 + min Euclidean distance to surface), standardized.
+
+    Uses **unnormalized** node positions (dims 0-1 of ``x``) so distances are in
+    physical units. Surface points are sub-sampled to ``max_surf_samples`` per
+    sample for tractable ``cdist``. Returns ``[B, N, 1]``; padding rows are zero
+    before standardization and stay near the per-batch shift after.
+    """
+    B, N, _ = x.shape
+    pos = x[..., 0:2]
+    out = torch.zeros(B, N, 1, device=x.device, dtype=x.dtype)
+    for b in range(B):
+        valid = mask[b]
+        surf = is_surface[b] & valid
+        if surf.sum() == 0:
+            continue
+        surf_pos = pos[b][surf]
+        if surf_pos.shape[0] > max_surf_samples:
+            idx = torch.randperm(surf_pos.shape[0], device=x.device)[:max_surf_samples]
+            surf_pos = surf_pos[idx]
+        node_pos = pos[b][valid]
+        d = torch.cdist(node_pos.unsqueeze(0), surf_pos.unsqueeze(0)).squeeze(0).min(dim=-1).values
+        out[b, valid, 0] = torch.log1p(d)
+    flat = out[mask]
+    mu, sigma = flat.mean(), flat.std().clamp(min=1e-3)
+    out = (out - mu) / sigma
+    return out
+
+
 def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
@@ -237,9 +271,24 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            wd = wall_distance_feature(x, is_surface, mask)
+            x_norm = torch.cat([x_norm, wd], dim=-1)
             pred = model({"x": x_norm})["preds"]
 
+            # Drop samples whose ground-truth y is non-finite (e.g. test_geom_camber_cruise
+            # sample 20 has -inf pressure values). accumulate_batch intends to skip these via
+            # y_finite, but Inf * 0 == NaN poisons the MAE accumulator; filter at the batch level.
+            y_finite_per_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_per_sample.all():
+                if not y_finite_per_sample.any():
+                    continue
+                keep = y_finite_per_sample
+                pred = pred[keep]
+                y = y[keep]
+                is_surface = is_surface[keep]
+                mask = mask[keep]
+
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
             sq_err = (pred - y_norm) ** 2 * channel_weights
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
@@ -388,7 +437,7 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    fun_dim=X_DIM - 2 + 1,  # +1 wall-distance feature appended in the loop
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -448,6 +497,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        wd = wall_distance_feature(x, is_surface, mask)
+        x_norm = torch.cat([x_norm, wd], dim=-1)
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2 * channel_weights
 
