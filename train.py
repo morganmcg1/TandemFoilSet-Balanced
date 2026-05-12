@@ -92,7 +92,10 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
-        self.temp_proj = nn.Linear(dim, heads)
+        # Ada-Temp v2: shared-across-heads per-point temperature delta. Projects
+        # to a single scalar per node that broadcasts over heads, reducing the
+        # extra capacity vs. the per-head variant in v1.
+        self.temp_proj = nn.Linear(dim, 1)
         nn.init.zeros_(self.temp_proj.weight)
         nn.init.zeros_(self.temp_proj.bias)
 
@@ -120,8 +123,8 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        delta_temp = self.temp_proj(x)                            # [B, N, heads]
-        delta_temp = delta_temp.permute(0, 2, 1).unsqueeze(-1)    # [B, heads, N, 1]
+        # Ada-Temp v2: per-node temperature delta shared across heads.
+        delta_temp = self.temp_proj(x).unsqueeze(1)               # [B, 1, N, 1]
         local_temp = (self.temperature + delta_temp).clamp(min=1e-3)
         slice_weights = self.softmax(self.in_project_slice(x_mid) / local_temp)
         slice_norm = slice_weights.sum(2)
@@ -266,7 +269,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # NaN-safe pre-filter: drop any sample whose ground-truth has
+            # non-finite entries (e.g. test_geom_camber_cruise/000020.pt has
+            # inf in y_p on 761 nodes). Without this, multiplying NaN/inf by
+            # mask=0 still propagates NaN through err in accumulate_batch,
+            # which then poisons the per-split mae_surf accumulator.
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 
