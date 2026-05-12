@@ -2,6 +2,59 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-12 20:53 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max from 50 to 15 to anneal inside cap
+- Student branch: `charliepai2g48h4-nezuko/cosine-trunc-t15`
+- Hypothesis: under the 30-min cap only ~14 epochs land; `CosineAnnealingLR(T_max=50)` keeps lr at ~92% of initial throughout. Truncating to `T_max=15` gives a real late-training fine-tuning regime (lr → ~0 by the last 1–2 epochs).
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 14/14) | **121.83** — **NEW BEST on branch (default config)** |
+| `test_avg/mae_surf_p` | **110.50** (NaN-safe guard from #1416 incorporated) |
+| `val_single_in_dist/mae_surf_p`     | 153.94 |
+| `val_geom_camber_rc/mae_surf_p`     | 127.17 |
+| `val_geom_camber_cruise/mae_surf_p` |  96.01 |
+| `val_re_rand/mae_surf_p`            | 110.19 |
+| Final lr (ep 14) | 2.16e-5 (= 4.3% of 5e-4 init — schedule actually annealed) |
+| Wall clock | 30.6 min |
+| Peak VRAM | 42.12 GB |
+| Params | 0.66 M |
+| Metrics path | `models/model-charliepai2g48h4-nezuko-cosine-trunc-t15-20260512-200814/metrics.jsonl` |
+
+**Analysis.** Hypothesis confirmed cleanly: val_avg descended 127.16 → 121.83 over epochs 12 → 14 as lr annealed from 1.25e-4 to 2.16e-5 — 5.3-pt drop concentrated in the late-training phase where T_max=50 would have left lr at ~4.6e-4. Beats round-1 default baseline (123.99) by 2.16 pts (1.7%); within noise of askeladd EMA (121.16) but achieved via an orthogonal lever (lr schedule vs. weight averaging). Test improved more than val (~5.6% over thorfinn unified-pos #1416), consistent with the late-anneal also stabilizing the final-iterate weights.
+
+**Decision.** Sent back for rebase onto merged recipe (#1512 + #1513 + #1416 + #1369) — train.py merge conflict blocks direct merge. Re-run on `unified_pos=True + bf16 + surf_weight=20 + T_max=15` to confirm stacking. Status:wip via REST API (GraphQL rate-limited).
+
+**Suggested follow-ups:**
+1. **EMA + T_max=15 stack** — both top-2 levers are orthogonal, this is the biggest expected win.
+2. **T_max=18** matched to bf16 epoch count (~18 epochs/30 min) for slightly slower anneal.
+3. **Linear warmup + T_max=15** — 1-2 warmup epochs preserve the lever, may reduce noise on the first few epochs.
+
+## 2026-05-12 20:53 — PR #1540: [ema-weights] Use EMA of weights (decay=0.999) for val/test eval
+- Student branch: `charliepai2g48h4-askeladd/ema-weights`
+- Hypothesis: under 14-epoch wall-clock truncation, the final-iterate weights are noisy mid-schedule estimates; Polyak averaging with decay=0.999 produces a smoother estimate closer to a stable late-training weight, reducing run-to-run variance.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 14/14, EMA weights) | **121.16** — **NEW BEST on branch (default config)** |
+| `test_avg/mae_surf_p` | **108.69** — best test on branch |
+| `val_single_in_dist/mae_surf_p`     | 147.47 |
+| `val_geom_camber_rc/mae_surf_p`     | 132.15 |
+| `val_geom_camber_cruise/mae_surf_p` |  95.58 |
+| `val_re_rand/mae_surf_p`            | 109.44 |
+| Wall clock | 30.5 min |
+| Peak VRAM | 42.11 GB (2× param cost negligible at 0.66M params) |
+| Params | 0.66 M |
+| Metrics path | `models/model-charliepai2g48h4-askeladd-ema-weights-20260512-201111/metrics.jsonl` |
+
+**Analysis.** Val_avg was monotonically decreasing every single epoch (335.67 → 121.16 over 14 epochs) — clean smoothing effect, no late-stage oscillation. EMA half-life ≈ 1.85 epochs at decay=0.999 with ~375 steps/epoch, so the EMA is dominated by late-training weights (correct regime). Test moved more than val (~7% test vs ~3.7% val improvement over thorfinn) — EMA's smoothing of the truncated mid-schedule weights is most valuable here because we're mid-cosine without a settled iterate.
+
+**Decision.** Sent back for rebase onto merged recipe (advisor branch progressed during run). Re-run on `unified_pos=True + bf16 + surf_weight=20 + EMA decay=0.999`. After rebase + rerun, this is the next merge candidate — combining EMA + cosine-trunc-T15 (#1542 above) on the merged recipe is the highest-priority round-2 stacking target.
+
+**Suggested follow-ups:**
+1. **EMA + cosine-trunc-T15 stack** — orthogonal levers, both top-2 results.
+2. **Decay bracket {0.99, 0.999, 0.9995}** to pin the optimal value.
+3. **Multi-seed EMA on/off A/B** — direct variance-reduction measurement (matches the original 30-pt seed-gap motivation).
+
 ## 2026-05-12 18:31 — PR #1376: [lr1e3-warmup-cosine] lr=1e-3 with 3-epoch linear warmup + cosine
 - Student branch: `charliepai2g48h4-fern/lr1e3-warmup-cosine`
 - Hypothesis: replace plain `CosineAnnealingLR(T_max=50)` + `lr=5e-4` with `LinearLR(3 ep warmup) → CosineAnnealingLR(T_max=47)` and `lr=1e-3` to converge further inside the 30-min wall-clock cap.

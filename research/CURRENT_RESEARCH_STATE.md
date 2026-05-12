@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 21:10 (round 1 decided; 4 PRs merged into recipe; EMA new best 121.16 sent back for rebase; round 2 in flight; #1402 closed to unblock nezuko duplicate-WIP)
+- **As of:** 2026-05-12 21:25 (round 1 decided; 4 PRs merged into recipe; **two new bests in flight on rebase: EMA 121.16 (#1540) and cosine-trunc-T15 121.83 (#1542)**; both sent back for merged-recipe confirmation; round 2 in flight; GraphQL rate limit affecting student polling but training continues)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -53,7 +53,7 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 - **PR #1513 — `bf16-autocast` (tanjiro)** — **MERGED** ✓ — 24% per-epoch throughput; 18 effective epochs/30 min
 - **PR #1533 — `surf-p-weight-3x` (thorfinn)** — **CLOSED** ✗ — 3× ratio too aggressive (154.47, +24%); lighter ratio suggested
 - **PR #1540 — `ema-weights` (askeladd)** — WIP — EMA Polyak averaging at val/test (targets 30-pt run-to-run variance)
-- **PR #1542 — `cosine-trunc-t15` (nezuko)** — WIP — truncate T_max 50→15 so cosine actually anneals
+- **PR #1542 — `cosine-trunc-t15` (nezuko)** — **NEW BEST (default config) val=121.83 / test=110.50**; sent back for rebase onto merged recipe. After rebase + rerun, this stacks cleanly with EMA (#1540) for the highest-priority round-2 target.
 
 ### Round-2 new assignments (on merged recipe)
 - **PR #1570 — `surf-weight-20-stack` (fern)** — WIP — surf_weight=10→20 on top of merged unified_pos+bf16
@@ -78,8 +78,11 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 | tanjiro | #1575 | training (GPU 100%, 93GB!) | wait — high VRAM hidden=256 |
 | thorfinn | #1576 | training (GPU 99%) | wait |
 
-### Highest priority active PR
-- **PR #1540 — `ema-weights` (askeladd)** — **NEW BEST val=121.16 / test=108.69** on default config; sent back for rebase onto merged recipe (unified_pos+bf16+surf_weight=20 all changed train.py while run was in flight). Merge as soon as rebase lands.
+### Highest priority active PRs (both new bests, both pending rebase + merged-recipe confirmation)
+- **PR #1540 — `ema-weights` (askeladd)** — **val=121.16 / test=108.69** on default config; rebase in flight (GPU 94GB / 98% as of 21:21 UTC, training restarted ~21:08 UTC); pod actively rerunning. Merge as soon as rebased rerun lands.
+- **PR #1542 — `cosine-trunc-t15` (nezuko)** — **val=121.83 / test=110.50** on default config; sent back for rebase onto merged recipe + rerun (21:23 UTC). Stacks cleanly with EMA — pair is the highest-priority round-2 target.
+
+**Stacking projection:** merged recipe (`unified_pos + bf16 + surf_weight=20`) + EMA + truncated cosine `T_max=15` could push **val_avg below 115** if all three levers compose orthogonally. Three independent variance/optimization improvements applied to the same architecture.
 
 ## Key signals and round-2 strategy
 
