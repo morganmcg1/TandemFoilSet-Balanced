@@ -46,6 +46,11 @@ def accumulate_batch(
     vol_mask = effective & ~is_surface
 
     err = (pred_orig.double() - y.double()).abs()
+    # Zero out non-finite errors so masked sums don't propagate NaN/inf from
+    # samples whose ground truth contains non-finite values. The per-sample
+    # y_finite filter above already excludes such samples from the count
+    # denominators; this just stops 0 * inf = NaN from leaking through.
+    err = torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)
     mae_surf += (err * surf_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
     mae_vol += (err * vol_mask.unsqueeze(-1).double()).sum(dim=(0, 1))
     return int(surf_mask.sum().item()), int(vol_mask.sum().item())
