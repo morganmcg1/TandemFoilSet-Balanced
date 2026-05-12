@@ -137,9 +137,38 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class FiLMLayer(nn.Module):
+    """Feature-wise Linear Modulation conditioned on a scalar.
+
+    Applies an element-wise affine transform: out = (1 + gamma(c)) * x + beta(c).
+    Zero-init on the final linear layer ensures identity transform at init,
+    so training starts identical to the unconditional baseline.
+    """
+
+    def __init__(self, cond_dim: int, feat_dim: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(cond_dim, feat_dim * 2),
+            nn.SiLU(),
+            nn.Linear(feat_dim * 2, feat_dim * 2),
+        )
+        # Zero-init final layer → gamma=0, beta=0 at init → effective scale=1, shift=0
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        # x: [B, N, D], cond: [B, cond_dim]
+        out = self.net(cond)                  # [B, 2*D]
+        gamma, beta = out.chunk(2, dim=-1)    # [B, D] each
+        gamma = gamma.unsqueeze(1) + 1.0      # [B, 1, D] broadcast over N, init near 1
+        beta = beta.unsqueeze(1)              # [B, 1, D]
+        return gamma * x + beta
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 use_film=False, cond_dim=1):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -156,10 +185,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
+        self.use_film = use_film
+        if use_film:
+            self.film = FiLMLayer(cond_dim=cond_dim, feat_dim=hidden_dim)
 
-    def forward(self, fx):
+    def forward(self, fx, cond=None):
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        if self.use_film and cond is not None:
+            fx = self.film(fx, cond)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -170,12 +204,14 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 use_film=False, cond_dim=1):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.use_film = use_film
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
@@ -191,11 +227,19 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                use_film=use_film, cond_dim=cond_dim,
             )
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Re-apply FiLM zero-init AFTER _init_weights, which would otherwise
+        # overwrite it with trunc_normal. Zero-init ensures identity at t=0.
+        if use_film:
+            for blk in self.blocks:
+                if blk.use_film:
+                    nn.init.zeros_(blk.film.net[-1].weight)
+                    nn.init.zeros_(blk.film.net[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -207,10 +251,13 @@ class Transolver(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
-        x = data["x"]
+        x = data["x"]  # [B, N, input_dim] — normalized
+        # Extract log(Re) conditioning signal: dim 13 is normalized log(Re).
+        # Average over nodes (all nodes share the same Re per sample).
+        cond = x[:, :, 13].mean(dim=1, keepdim=True)  # [B, 1]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, cond=cond)
         return {"preds": fx}
 
 
@@ -435,6 +482,8 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    use_film=True,
+    cond_dim=1,
 )
 
 model = Transolver(**model_config).to(device)
@@ -580,6 +629,18 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+
+    # FiLM diagnostic: log gamma/beta weight norms for first and last blocks
+    film_diag: dict = {}
+    if getattr(model, "use_film", False):
+        for blk_idx in [0, len(model.blocks) - 1]:
+            blk = model.blocks[blk_idx]
+            if blk.use_film:
+                last_w = blk.film.net[-1].weight
+                last_b = blk.film.net[-1].bias
+                film_diag[f"film_block{blk_idx}_last_weight_norm"] = last_w.norm().item()
+                film_diag[f"film_block{blk_idx}_last_bias_norm"] = last_b.norm().item()
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -595,6 +656,7 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
+        **film_diag,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
