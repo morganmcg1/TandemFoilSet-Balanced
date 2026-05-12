@@ -471,6 +471,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -512,6 +513,7 @@ for epoch in range(MAX_EPOCHS):
         "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/last_grad_norm": float(total_norm),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
