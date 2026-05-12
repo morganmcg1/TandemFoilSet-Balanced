@@ -47,6 +47,22 @@ from data import (
 )
 from soap import SOAP
 
+
+def _pcgrad_project(g_a, g_b):
+    """Project g_a to remove the component conflicting with g_b (Yu et al. 2020).
+
+    Per-tensor variant: dot product and projection are computed per parameter
+    tensor rather than on a concatenated flat vector. Cheaper, and a defensible
+    approximation for 2-task settings.
+    """
+    if g_a is None or g_b is None:
+        return g_a
+    dot = (g_a * g_b).sum()
+    if dot < 0:
+        g_a = g_a - (dot / (g_b.norm() ** 2 + 1e-12)) * g_b
+    return g_a
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -452,6 +468,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
+    epoch_conflict_frac = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -496,8 +513,40 @@ for epoch in range(MAX_EPOCHS):
             n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
 
+        # ---- PCGrad gradient surgery ----
+        # Two backward passes: collect per-task gradients, project away conflict,
+        # then combine. surf_weight is applied AFTER projection (canonical recipe).
         optimizer.zero_grad()
-        loss.backward()
+        vol_loss.backward(retain_graph=True)
+        grads_vol = [p.grad.clone() if p.grad is not None else None
+                     for p in model.parameters()]
+        optimizer.zero_grad()
+        surf_loss.backward()
+        grads_surf = [p.grad.clone() if p.grad is not None else None
+                      for p in model.parameters()]
+        optimizer.zero_grad()
+
+        # Diagnostic: fraction of parameter tensors with negative vol/surf dot product
+        conflict_count = 0
+        n_params_pairs = 0
+        for gv, gs in zip(grads_vol, grads_surf):
+            if gv is not None and gs is not None:
+                n_params_pairs += 1
+                if (gv * gs).sum() < 0:
+                    conflict_count += 1
+        conflict_frac_batch = conflict_count / max(n_params_pairs, 1)
+
+        # Combine with projection: remove conflicting components
+        for p, gv, gs in zip(model.parameters(), grads_vol, grads_surf):
+            if gv is None and gs is None:
+                continue
+            gv_proj = _pcgrad_project(gv, gs)
+            gs_proj = _pcgrad_project(gs, gv)
+            p.grad = (gv_proj if gv_proj is not None else torch.zeros_like(p.data))
+            if gs_proj is not None:
+                p.grad = p.grad + cfg.surf_weight * gs_proj
+        # ---- end PCGrad ----
+
         if cfg.grad_clip > 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             grad_norm_val = float(grad_norm)
@@ -511,12 +560,14 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
+        epoch_conflict_frac += conflict_frac_batch
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+    epoch_conflict_frac /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -553,15 +604,17 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
         "train/huber_l2_frac": epoch_l2_frac,
+        "train/pcgrad_conflict_frac": epoch_conflict_frac,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2",
+        "pcgrad": True,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f} pcgrad={epoch_conflict_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
