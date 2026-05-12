@@ -34,8 +34,25 @@ variants of the default `train.py` configuration.
 - test (paper-facing): `test_avg/mae_surf_p` — same average, computed once at
   end-of-run from the best validation checkpoint.
 
-Lower is better. No measured numbers are recorded for this track yet; the
-first completed default-config run on this fleet will populate this baseline.
+Lower is better.
+
+## Current frontier (round 1 partial)
+
+No clean settled baseline yet — every completed run so far has hit the 30-min
+cap at 10–11 epochs (out of `--epochs 50`) and produced non-finite pressure
+on `test_geom_camber_cruise` so `test_avg/mae_surf_p` cannot be computed.
+
+Best validation reading observed so far (informational only — not a merged
+baseline because test_avg is NaN):
+
+| Source | val_avg/mae_surf_p | partial test_avg (3 of 4 splits) | Notes |
+|---|---:|---:|---|
+| #1372 (n_head=8, closed) | 153.84 | 141.53 | 11/50 epochs, cruise-test pressure inf |
+| #1378 (n_hidden=192, closed) | 155.16 | 159.62 | 10/50 epochs, cruise-test pressure inf |
+
+Round 2 priorities — fix the blockers before retrying capacity changes:
+- gradient clipping (frieren #1383) to address the cruise-test pressure inf
+- bf16 autocast (tanjiro #1384) to attack throughput so more epochs fit
 
 ## Reproduce command
 
