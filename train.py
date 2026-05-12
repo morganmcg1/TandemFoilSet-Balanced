@@ -578,7 +578,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=cfg.grad_clip)
         optimizer.step()
         global_step += 1
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
