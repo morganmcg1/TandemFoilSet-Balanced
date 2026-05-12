@@ -54,3 +54,25 @@ Future work (separate PRs, not bolted onto Fourier):
 - Per-sample `(slice_norm.min, |fx|.max)` instrumentation on cruise test samples
 - Compare cruise test eval behavior on the unmodified baseline (rules in/out whether the blowup is Fourier-specific)
 - Output-head magnitude bounding (slice_norm clamp from below, or LayerNorm on residual)
+
+## 2026-05-12 21:15 — Cross-PR observation: cruise test NaN is a baseline correctness issue
+
+W&B audit of all round-1 finished runs (snapshot ~21:15 UTC) shows `test_geom_camber_cruise/mae_surf_p` returns `None` for every finished run **except** alphonse's `xqrz8bjw` (mask-aware PhysicsAttention, PR #1504):
+
+| Student / PR | wandb_id | val_avg/mae_surf_p | test_avg/mae_surf_p | cruise_test present |
+|---|---|---:|---:|---|
+| alphonse #1504 (mask-aware) | xqrz8bjw | 128.97 | **117.62** | **Yes** |
+| edward #1506 (wider 192) | 1o90ujme | 148.45 | None | No |
+| frieren #1508 (surf_weight 25) | zjxmwjhs | 140.47 | None | No |
+| thorfinn #1511 (deeper 7) | i14s7xxp | 152.83 | None | No |
+| tanjiro #1510 (Fourier, both scales) | fp227kem, qziefxht | 121.41, 132.56 | None | No |
+
+Combined with the already-stated PR #1510 conclusion ("cruise blowup is a model-level robustness issue, not a Fourier-spectrum issue"), this is a strong correctness signal: the unmodified PhysicsAttention slice softmax produces inf/NaN on the cruise test eval, and **PR #1504's mask-aware fix appears to resolve it**.
+
+Implications for round-1 review:
+- PR #1504 just got materially more important — it's both a metric improvement and a correctness fix on the paper-facing metric.
+- Other round-1 PRs that don't change the slice softmax mask cannot beat baseline on `test_avg/mae_surf_p` until the mask fix is in place (their test_avg will be None).
+- Once #1504 merges, the rest of round 1 should be re-evaluated against the new mask-aware baseline.
+- alphonse's seed-comparison run `hg135fap` is in flight to confirm `xqrz8bjw` isn't an RNG fluke.
+
+Action: wait for alphonse to post `SENPAI-RESULT` once `hg135fap` finishes (~15 min ETA from 21:07Z), then prioritize PR #1504 for merge.

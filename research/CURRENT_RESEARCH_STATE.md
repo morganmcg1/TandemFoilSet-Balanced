@@ -46,10 +46,11 @@ Larger swings reserved for later rounds (after baseline is established):
 
 ## Open questions and ruled-out paths
 
+- **Strong signal (2026-05-12 21:15):** PR #1504 (mask-aware PhysicsAttention) is the only finished round-1 run with a populated `test_avg/mae_surf_p` — all other finished baselines hit `test_geom_camber_cruise=None`. This includes the Fourier PR #1510 (closed) and the finished runs of #1506/#1508/#1511. Strong evidence that the baseline's unmasked slice softmax produces inf/NaN on at least one cruise test sample, and mask-aware attention fixes it. **PR #1504 is now the highest-priority merge candidate** of round 1 — both a metric improvement and a correctness fix on the paper-facing metric.
 - **Open:** Is the loss/metric mismatch (MSE training vs MAE evaluation) actually a big lever, or has the surface weight already absorbed it?
 - **Open:** Is the dataset bottleneck on the geometry-camber holdouts (M=6-8 raceCar, M=2-4 cruise) inductive-bias-bound, or capacity-bound?
-- **Open:** Does the padding in `pad_collate` produce measurable noise in slice formation at batch_size=4? PR #1504 answers this.
-- **Nothing ruled out yet.** This is round 1.
+- **Resolved:** Padding in `pad_collate` does produce measurable noise — see PR #1504 evidence above.
+- **Ruled-out:** Fourier positional encoding (PR #1510, both `pos_scale=1.0` and `pos_scale=0.1`) cannot be fairly evaluated until the cruise NaN is resolved. Not a Fourier-spectrum problem.
 
 ## Operating notes
 
