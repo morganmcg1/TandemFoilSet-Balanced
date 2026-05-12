@@ -213,11 +213,33 @@ class Transolver(nn.Module):
         return {"preds": fx}
 
 
+class SurfaceCorrection(nn.Module):
+    """Additive head applied only at surface nodes.
+
+    Zero-initialized last layer means corrected pred == base pred at init.
+    """
+
+    def __init__(self, in_dim, out_dim=3, hidden=64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden), nn.GELU(),
+            nn.Linear(hidden, hidden), nn.GELU(),
+            nn.Linear(hidden, out_dim),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, base_pred, x_norm, is_surface):
+        feats = torch.cat([base_pred, x_norm], dim=-1)
+        delta = self.net(feats)
+        return base_pred + delta * is_surface.unsqueeze(-1).float()
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, surf_head=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -239,6 +261,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            if surf_head is not None:
+                pred = surf_head(pred, x_norm, is_surface)
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -428,10 +452,17 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
+all_params = list(model.parameters()) + list(surf_head.parameters())
+n_params = sum(p.numel() for p in all_params)
+n_params_base = sum(p.numel() for p in model.parameters())
+n_params_surf = sum(p.numel() for p in surf_head.parameters())
+print(
+    f"Model: Transolver ({n_params_base/1e6:.2f}M params) + "
+    f"SurfaceCorrection ({n_params_surf/1e3:.1f}K params) = {n_params/1e6:.2f}M total"
+)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(all_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -475,6 +506,7 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
+    surf_head.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
@@ -487,6 +519,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
+        pred = surf_head(pred, x_norm, is_surface)
         sq_err = (pred - y_norm) ** 2
 
         vol_mask = mask & ~is_surface
@@ -511,8 +544,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    surf_head.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surf_head=surf_head)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -543,7 +577,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save({"model": model.state_dict(), "surf_head": surf_head.state_dict()}, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -567,8 +601,11 @@ if best_metrics:
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    surf_head.load_state_dict(ckpt["surf_head"])
     model.eval()
+    surf_head.eval()
 
     test_metrics = None
     test_avg = None
@@ -580,7 +617,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, surf_head=surf_head)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
