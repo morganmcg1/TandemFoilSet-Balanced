@@ -1,5 +1,47 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-12 23:05 — PR #1638: LR=1e-3 with grad_clip (MERGED — new baseline 95.44)
+
+- Student branch: `charliepai2g24h5-tanjiro/lr1e3-with-gradclip`
+- Hypothesis: Doubling LR (5e-4 → 1e-3) under grad-clip renorm regime exploits the fact that clipping fires every step — bounded step size means we can afford larger nominal LR.
+- Single config delta: `lr: 5e-4 → 1e-3` in Config dataclass (commit `a1b596d`).
+- Trained 13/13 epochs (~28.5 min), best at epoch 13.
+
+### Results
+
+| Metric | Baseline (#1483) | PR #1638 | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **105.46** | **95.44** | **−10.02 (−9.5%)** |
+| val_single_in_dist/mae_surf_p | 112.93 | 110.99 | −1.94 |
+| val_geom_camber_rc/mae_surf_p | 122.87 | 105.99 | **−16.88** |
+| val_geom_camber_cruise/mae_surf_p | 83.98 | 75.32 | **−8.66** |
+| val_re_rand/mae_surf_p | 102.08 | 89.46 | **−12.62** |
+| test_avg/mae_surf_p | TBD | **87.83** | — |
+| test_single_in_dist | — | 92.92 | — |
+| test_geom_camber_rc | — | 93.16 | — |
+| test_geom_camber_cruise | — | 80.53 | — |
+| test_re_rand | — | 84.74 | — |
+
+- Metrics: `models/model-charliepai2g24h5-tanjiro-lr1e3_gradclip-20260512-221259/metrics.jsonl`
+- Pre-clip grad_norm at epoch 13: 19.77 (confirming clipping fires every step throughout training).
+- Peak VRAM: 42.11 GB, n_params=662,359.
+
+### Analysis
+
+This is the biggest single improvement of round 5 (−9.5%). The gradient renorm mechanism (every step's gradient is rescaled to unit-ball) effectively decouples step direction from magnitude. In this regime, the LR is purely a step-size multiplier with no risk of gradient explosion. Doubling LR (5e-4 → 1e-3) doubles effective step size without changing any other dynamics.
+
+The per-split breakdown is revealing: the largest gains are on the OOD splits (val_geom_camber_rc −16.9, val_re_rand −12.6, val_geom_camber_cruise −8.7) vs. the in-distribution split (val_single_in_dist −1.9). This suggests larger-LR renorm regime improves generalisation across Re and camber domains, not just in-distribution fitting. This is consistent with the gradient-renorm-as-implicit-regularisation interpretation.
+
+The test set performance (87.83) is better proportionally than val (95.44) — the test splits are generalization-harder, and the improvement held, suggesting the gains are real.
+
+### Suggested follow-ups (from student + advisor)
+
+1. Push LR further: lr=2e-3 with same clip
+2. Loosen clip: max_norm=4.0 at lr=1e-3 (test if tighter renorm was the active mechanism or just bounded-step)
+3. Compose with other in-flight changes (Huber loss #1639, dropout #1656, Lion #1641)
+
+---
+
 ## 2026-05-12 18:55 — PR #1459: Raise surf_weight 10→20 (CLOSED — regression)
 
 - Student branch: `charliepai2g24h5-alphonse/surf-weight-20`

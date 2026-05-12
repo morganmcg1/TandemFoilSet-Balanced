@@ -8,30 +8,42 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **105.46** | PR #1483 (merged 2026-05-12) — grad clip + warmup+cosine |
-| test_avg/mae_surf_p | TBD* | PR #1483 reported test NaN due to source-branch lacking GT-NaN fix; merged code now has both grad_clip AND GT-NaN fix — re-measure on next run |
+| **val_avg/mae_surf_p** | **95.44** | PR #1638 (merged 2026-05-12) — lr=1e-3 with grad_clip |
+| **test_avg/mae_surf_p** | **87.83** | PR #1638 — all 4 splits finite |
 
-*PR #1483's source branch did not include the GT-NaN fix from PR #1564, so its test_avg was NaN. The merged code combines `clip_grad_norm_(max=1.0)` (from #1483) with warmup+cosine schedule (from #1519) and the GT-NaN evaluate_split filter (from #1564). The next reproduce run will produce a finite test_avg.
-
-### Per-split val (PR #1483, epoch 13, **note: ran on pre-warmup baseline**)
+### Per-split val (PR #1638, epoch 13)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---:|---:|---:|
-| val_single_in_dist | 112.93 | 1.445 | 0.699 |
-| val_geom_camber_rc | 122.87 | 2.467 | 0.957 |
-| val_geom_camber_cruise | 83.98 | 1.001 | 0.556 |
-| val_re_rand | 102.08 | 1.763 | 0.745 |
-| **val_avg** | **105.46** | 1.669 | 0.739 |
+| val_single_in_dist | 110.99 | 1.293 | 0.666 |
+| val_geom_camber_rc | 105.99 | 2.065 | 0.871 |
+| val_geom_camber_cruise | 75.32 | 0.849 | 0.496 |
+| val_re_rand | 89.46 | 1.423 | 0.670 |
+| **val_avg** | **95.44** | 1.408 | 0.676 |
 
-### Per-split test (PR #1483, partial — cruise NaN under source branch's old eval code)
+### Per-split test (PR #1638, epoch 13 best checkpoint)
 
-| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
-|---|---:|---:|---:|
-| test_single_in_dist | 107.65 | 1.521 | 0.675 |
-| test_geom_camber_rc | 106.42 | 2.324 | 0.881 |
-| test_geom_camber_cruise | NaN | 0.980 | 0.514 |
-| test_re_rand | 97.10 | 1.495 | 0.703 |
-| **test_avg (3-split clean)** | **103.72** | — | — |
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 92.92 |
+| test_geom_camber_rc | 93.16 |
+| test_geom_camber_cruise | 80.53 |
+| test_re_rand | 84.74 |
+| **test_avg** | **87.83** |
+
+## 2026-05-12 23:05 — PR #1638: LR=1e-3 with grad_clip (MERGED)
+
+- **val_avg/mae_surf_p: 95.44** (↓ 9.5% from 105.46 — biggest gain this round)
+- **test_avg/mae_surf_p: 87.83** (all 4 splits finite, tested from best-val checkpoint epoch 13)
+- **Metric artifacts:** `models/model-charliepai2g24h5-tanjiro-lr1e3_gradclip-20260512-221259/metrics.jsonl`
+- **What changed:** `lr: 5e-4 → 1e-3` in `train.py` Config dataclass (1-line change, commit `a1b596d`). All other config identical to #1483 baseline.
+- **Why it worked:** Grad-clip at max_norm=1.0 fires every step (pre-clip norms 45–112 >> 1.0), effectively renormalising every gradient vector to unit norm. This bounded-step regime can safely absorb a 2× LR increase: each step is geometrically identical but with larger step size. The biggest gains are on OOD splits (val_geom_camber_rc −16.9, val_re_rand −12.6) consistent with improved cross-domain generalisation from the renorm regime.
+- **Baseline configuration delta:** `lr: 5e-4 → 1e-3` (AdamW).
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name lr1e3_gradclip --agent <student>
+  ```
+  (train.py now has `lr: float = 1e-3` as default)
 
 ## 2026-05-12 21:55 — PR #1483: Gradient clipping max_norm=1.0 (MERGED)
 
@@ -82,7 +94,7 @@ no W&B.
 | Activation | GELU |
 | Loss | MSE in normalized space: `vol_loss + 10 * surf_loss` |
 | Surface weight | 10.0 |
-| Optimizer | AdamW, lr=5e-4, weight_decay=1e-4 |
+| Optimizer | AdamW, lr=1e-3, weight_decay=1e-4 |
 | LR schedule | CosineAnnealingLR, T_max=epochs |
 | Batch size | 4 (variable mesh sizes, pad_collate to N_max) |
 | Sampler | WeightedRandomSampler (balanced domain mix) |
