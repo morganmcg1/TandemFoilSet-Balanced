@@ -159,4 +159,50 @@ Per-test-split surface MAE (bf16 eval, scoring fix in place):
 | Sec/epoch | ~264s |
 | Peak GPU | 95.37 GB (vs 96 GB cap — very tight) |
 
-**Conclusion:** SENT BACK. Tanjiro built on top of the **old** baseline (PR #1396, pre-bf16) — they branched before PR #1415 was merged and never picked up bf16. Their 144.91 was compared against the old baseline of 146.25 (claimed −0.9% improvement), but the **current** baseline is 98.77. Asked to rebase on the merged baseline (which now includes bf16 + grad_clip), then re-run hidden192/n_head6 on top. With bf16, memory should drop ~40% (95 GB → ~55-60 GB) and epoch count should rise from 7 → ~15-17, giving the wider model a real shot at the new baseline. Directional signal interesting: cruise −8.6%, re_rand −9.5% on val (vs old baseline) suggests width helps OOD geometry/Reynolds; needs re-test with full bf16 budget.
+**Conclusion — SENT BACK.** Tanjiro built on top of the **old** baseline (PR #1396, pre-bf16) — they branched before PR #1415 was merged and never picked up bf16. Their 144.91 was compared against the old baseline of 146.25 (claimed −0.9% improvement), but the **current** baseline is 98.77. Asked to rebase on the merged baseline (which now includes bf16 + grad_clip), then re-run hidden192/n_head6 on top. With bf16, memory should drop ~40% (95 GB → ~55-60 GB) and epoch count should rise from 7 → ~15-17, giving the wider model a real shot at the new baseline. Directional signal interesting: cruise −8.6%, re_rand −9.5% on val (vs old baseline) suggests width helps OOD geometry/Reynolds; needs re-test with full bf16 budget.
+
+---
+
+## 2026-05-12 22:00 — PR #1556: fp32 eval (bf16 train only) — faithful test_avg (frieren)
+- willowpai2g24h4-frieren/fp32-eval
+- **Hypothesis:** Remove bf16 autocast from `evaluate_split` — train stays bf16, eval reverts to fp32. Recovers faithful `test_avg/mae_surf_p` for cruise node that overflows to inf in bf16.
+- **W&B:** `m4gdwz80`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best epoch 13) | 114.9255 (regressed from baseline 98.77) |
+| test_avg/mae_surf_p (4-split, fp32 eval) | **101.9851** ✓ first faithful fp32 test_avg |
+| test_geom_camber_cruise | **74.52** ✓ finite (was NaN/inf-biased) |
+| Epochs completed | 13 / 50 (30-min cap) |
+| Sec/epoch | ~144s (vs 99s baseline — +45% overhead) |
+| Peak GPU | 74.2 GB |
+
+**Conclusion — SENT BACK.** Hypothesis confirmed: cruise test now finite (74.52) and test_avg=101.99 is faithful. But fp32 eval costs 45s/epoch, dropping from 18 epochs to 13 — an unacceptable wall-clock regression that would drag down all future baselines. Sent back with guidance to gate eval frequency via `eval_every_n_epochs=3` so average eval overhead = 15s/epoch (restore ~16 epochs, val near baseline). The fp32-no-autocast code change itself is correct — just needs the frequency lever before merging.
+
+---
+
+## 2026-05-12 21:56 — PR #1584: torch.compile(model, dynamic=True) — free throughput (thorfinn)
+- willowpai2g24h4-thorfinn/torch-compile
+- **Hypothesis:** torch.compile fuses kernels and eliminates Python overhead. On a transformer-style bf16 model, expected 20-40% speedup → more epochs in the 30-min cap → direct val improvement.
+- **W&B:** `t0zwgi1n`
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best epoch 27) | **76.4310** ✓ NEW BASELINE (−22.6% vs 98.77) |
+| test_avg/mae_surf_p (4-split, bf16 eval) | 68.7604 (cruise biased-low by nan_to_num posinf-zero) |
+| Test 3-split mean (excl. cruise) | 74.84 |
+| Epochs completed | 29 / 50 (30-min cap) |
+| Sec/epoch | 62.6s median (epoch 3+) — **1.58× throughput** |
+| Peak GPU | 50.78 GB |
+
+Per-val-split (best epoch 27):
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 99.46 |
+| val_geom_camber_rc | 93.02 |
+| val_geom_camber_cruise | 51.21 |
+| val_re_rand | 73.14 |
+| **avg** | **76.43** |
+
+**Conclusion: MERGED.** Free win on every axis — 1.58× throughput (not 1.2-1.4× predicted), 29 epochs vs 18 (+61%), val=76.43 (−22.6% improvement). Compile overhead is one-shot (~12s epoch 1 only), amortized over 28 subsequent epochs. dynamic=True confirmed correct — tight epoch-to-epoch variance (σ=0.7s) shows no recompilation jitter. No correctness regressions. New baseline raised to 76.43. Follow-up: T_max=30 retune (PR #1628) to align cosine schedule to new 29-epoch budget.
