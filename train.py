@@ -471,7 +471,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=50.0)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
