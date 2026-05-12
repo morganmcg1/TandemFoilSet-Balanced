@@ -373,6 +373,29 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    augment: bool = True
+    aoa_jitter_rad: float = 0.00873  # std of Gaussian noise on AoA features (~ 0.5 deg)
+    naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
+
+
+def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
+    """AoA + NACA-camber jitter applied in raw (pre-normalization) space.
+
+    Per-sample Gaussian noise broadcast across all nodes. Foil 2 jitter is
+    masked to tandem samples — single-foil samples have all of dims 18-23
+    exactly zero and we preserve that indicator (otherwise we induce a
+    train/val distribution mismatch on the single-foil split).
+    """
+    x = x.clone()
+    B = x.shape[0]
+    aoa_noise = torch.randn(B, 1, 1, device=x.device) * cfg.aoa_jitter_rad
+    naca_noise = torch.randn(B, 1, 1, device=x.device) * cfg.naca_jitter
+    is_tandem = (x[:, :, 18:24].abs().sum(dim=(1, 2), keepdim=True) > 0).to(x.dtype)
+    x[:, :, 14:15] += aoa_noise
+    x[:, :, 15:16] += naca_noise
+    x[:, :, 18:19] += aoa_noise * is_tandem
+    x[:, :, 19:20] += naca_noise * is_tandem
+    return x
 
 
 cfg = sp.parse(Config)
@@ -494,6 +517,8 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        if cfg.augment:
+            x = augment_geometry(x, cfg)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
