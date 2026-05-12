@@ -363,6 +363,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
+    accum_steps: int = 1  # gradient accumulation; effective batch = batch_size * accum_steps
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -446,6 +447,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    accum_steps = max(int(cfg.accum_steps), 1)
+    micro_idx = 0
+    optimizer.zero_grad()
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -464,13 +468,19 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        (loss / accum_steps).backward()
+        micro_idx += 1
+        if micro_idx % accum_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    if micro_idx % accum_steps != 0:
+        optimizer.step()
+        optimizer.zero_grad()
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
