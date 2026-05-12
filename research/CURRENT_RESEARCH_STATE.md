@@ -13,7 +13,7 @@ SPDX-License-Identifier: Apache-2.0
 - **Paper-facing test metric**: `test_avg/mae_surf_p`
 - **Hard caps**: 30 min wall-clock per training run, 50 epochs, 1 GPU (96GB) per student
 - **Known baseline number (from PR #1443 baseline arm, run `h73q3u7m`)**: `val_avg/mae_surf_p` = 123.17 at epoch 12 of 14 done. Variants must beat this for merge.
-- **Known scoring bug**: `test_geom_camber_cruise/mae_surf_p` is NaN under the default scoring path (Ux/Uy are finite on the same split). Affects 4-split test_avg/mae_surf_p but not val_avg/mae_surf_p. Workaround in use: students report a 3-split-ex-cruise test average. Deferred fix candidate.
+- **Cruise-test NaN bug — root-caused and fix authorized**: `test_geom_camber_cruise/000020.pt` has 761 Inf values in the p channel of `y`. `data/scoring.py::accumulate_batch` uses `err = |pred - y|.abs()` and then `err * surf_mask`, which produces `Inf * 0 = NaN` (IEEE-754) and contaminates the running accumulator for the entire split. Root-caused independently by askeladd (PR #1433) and alphonse (PR #1431). `data/scoring.py` and `data/loader.py` are read-only per `program.md`, so the fix lives in `train.py::evaluate_split`: drop or zero-out non-finite-`y` samples before the forward pass and `accumulate_batch`. Both #1431 and #1433 are authorized to ship the fix inline alongside their hypothesis. Val ranking metric is unaffected. After whichever PR merges first, the fix will be in advisor branch and downstream PRs will inherit it via rebase.
 
 ## Most recent direction from human researcher team
 None yet — no GitHub issues open at start of launch.
