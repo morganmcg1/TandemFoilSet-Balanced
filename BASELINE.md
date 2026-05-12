@@ -9,16 +9,9 @@ no W&B.
 | Metric | Value | Source |
 |---|---|---|
 | **val_avg/mae_surf_p** | **114.40** | PR #1519 (merged 2026-05-12) |
-| test_avg/mae_surf_p | NaN* | PR #1519 — see note on cruise GT issue |
-| test_avg/mae_surf_p (3-split clean) | 112.63 | Excluding cruise test (GT-NaN at sample 20) |
+| **test_avg/mae_surf_p** | **107.57** | PR #1564 (merged 2026-05-12) — GT-NaN fix |
 
-*`test_geom_camber_cruise/mae_surf_p` is NaN due to a corrupted ground-truth sample
-(`idx=20` has Inf values in `y`). All other test splits and all val splits are clean.
-This is a **data-side issue, not a model issue** — the model's predictions on cruise
-are healthy (verified by askeladd's per-sample diagnosis in PR #1463). Fix is tracked:
-add a GT-side non-finite filter in `evaluate_split` in `train.py`.
-
-### Per-split val (new baseline, epoch 13)
+### Per-split val (epoch 13)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---:|---:|---:|
@@ -27,6 +20,30 @@ add a GT-side non-finite filter in `evaluate_split` in `train.py`.
 | val_geom_camber_cruise | 89.71 | 1.177 | 0.590 |
 | val_re_rand | 104.02 | 1.737 | 0.805 |
 | **val_avg** | **114.40** | 1.756 | 0.802 |
+
+### Per-split test (epoch 13, best checkpoint)
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
+|---|---:|---:|---:|
+| test_single_in_dist | 122.65 | 1.663 | 0.769 |
+| test_geom_camber_rc | 111.09 | 2.332 | 0.942 |
+| test_geom_camber_cruise | 92.41 | 1.179 | 0.612 |
+| test_re_rand | 104.14 | 1.595 | 0.775 |
+| **test_avg** | **107.57** | 1.692 | 0.775 |
+
+## 2026-05-12 21:05 — PR #1564: GT-NaN fix in evaluate_split (MERGED)
+
+- **val_avg/mae_surf_p: 114.40** (unchanged — bit-identical to #1519; fix is a no-op on clean GT)
+- **test_avg/mae_surf_p: 107.57** (was NaN; now the first valid paper-facing test number)
+- **Metric artifacts:** `models/model-gt_nan_fix_baseline-20260512-201204/metrics.jsonl`
+- **What changed:** In `evaluate_split`, filter non-finite GT samples before calling `accumulate_batch`:
+  `gt_finite_mask = torch.isfinite(y).all(dim=-1)` then AND into `mask` and `is_surface`. Fixes
+  IEEE `NaN * 0 = NaN` leakage in `data/scoring.py` (which is read-only). Val results are bit-identical
+  to #1519; only `test_geom_camber_cruise/mae_surf_p` changes (NaN → 92.41).
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name gt_nan_fix_baseline --agent <student>
+  ```
 
 ## 2026-05-12 20:10 — PR #1519: Warmup + cosine to 13-epoch budget (MERGED)
 
