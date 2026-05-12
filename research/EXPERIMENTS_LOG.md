@@ -58,3 +58,62 @@ Sent back to student with:
 4. Report best val_avg/mae_surf_p in BOTH the pre-SWA and post-SWA regimes so we can attribute the SWA contribution cleanly.
 
 Status: WIP, awaiting rerun.
+
+---
+
+## 2026-05-12 20:10 — PR #1519: Warmup + cosine matched to 13-epoch budget (MERGED — new baseline)
+
+- Student branch: `charliepai2g24h5-alphonse/warmup-cosine-epochs13`
+- Hypothesis: 3-epoch linear warmup + cosine T_max matched to 13-epoch budget improves val_avg/mae_surf_p by 3–10% by letting the LR actually reach near-zero.
+- Trained 13/13 epochs (28.5 min), best at epoch 13 (still improving).
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| val_avg/mae_surf_p (epoch 13) | **114.40** |
+| val_single_in_dist/mae_surf_p | 140.78 |
+| val_geom_camber_rc/mae_surf_p | 123.10 |
+| val_geom_camber_cruise/mae_surf_p | 89.71 |
+| val_re_rand/mae_surf_p | 104.02 |
+| test_avg/mae_surf_p | NaN (cruise GT issue) |
+| test_avg/mae_surf_p (3-split clean) | 112.63 |
+
+- Metrics: `models/model-warmup3_cosine13-20260512-190738/metrics.jsonl`
+- Seed: 42, peak VRAM: 42.1 GB
+
+### Analysis
+
+The schedule fix worked exactly as predicted: matching T_max=13 to the actual budget caused val_avg/mae_surf_p to decrease monotonically from 229 (epoch 1) to **114.40** (epoch 13), with the largest gains in epochs 11–13 when the LR is finally in the low-LR valley. The warmup prevented early LR instability in the PhysicsAttention temperature. Model was STILL IMPROVING at epoch 13 — strong signal for follow-up with composed SWA.
+
+**Test NaN confirmed to be data-side:** Sample 20 of test_geom_camber_cruise has Inf values in ground-truth `y`. The model predictions are healthy (all finite). Fix needed in train.py's `evaluate_split` — filter non-finite GT before calling `accumulate_batch`.
+
+**Merged as new baseline. val_avg/mae_surf_p = 114.40.**
+
+---
+
+## 2026-05-12 20:12 — PR #1463: SWA rerun (SWA_START=8, epochs=14) (SENT BACK — doesn't beat new baseline)
+
+- Student branch: `charliepai2g24h5-askeladd/swa-start25`
+- Result: val_avg/mae_surf_p = 123.78 (SWA best, epoch 14)
+- Pre-SWA best within-run: 170.86 (epoch 7)
+- SWA δ within-run: -47.08 absolute (-27.5% relative) — mechanism clearly working
+- Clean test_avg (excluding cruise GT-NaN sample 20): **110.859**
+
+### Comparison vs new baseline (114.40 from PR #1519)
+
+123.78 > 114.40 — does NOT beat new baseline. The warmup+cosine recipe in #1519 outperforms SWA-without-warmup.
+
+### Advisor action
+
+Sent back to compose SWA with the merged warmup recipe: SWA_START_EPOCH=6, --epochs 13, warmup epochs 1–3, cosine 4–5, SWA 6–13 (8 epochs of SWA in the valley). Hypothesis: compounding warmup + SWA could push below 114.40.
+
+---
+
+## 2026-05-12 20:14 — PR #1474: Per-channel p-weight 3x (CLOSED — regression)
+
+- Student branch: `charliepai2g24h5-fern/surf-p-channel-weight3`
+- Result: val_avg/mae_surf_p = 135.79 (vs new baseline 114.40 — 18.7% regression)
+- Root cause: surface velocity (Ux, Uy) is NOT free — down-weighting it hurts more than the pressure focus gains. In normalized space, channel variances are already balanced by y_std normalisation.
+- Clean negative result, well-analyzed by student.
+- Fern reassigned to H11 (BF16 + batch=8 for throughput).
