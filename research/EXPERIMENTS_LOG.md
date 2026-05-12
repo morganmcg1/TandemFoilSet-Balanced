@@ -6,6 +6,29 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-12 22:30 — PR #1563: EMA weights (decay=0.999) for val/test eval — CLOSED
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/ema-weights
+- **Hypothesis:** EMA of model weights (decay=0.999) improves val/test metrics via implicit model ensemble over training trajectory.
+- **Outcome:** **CLOSED** — val=143.7075, +41.1% worse than current baseline 101.810. test_avg=NaN.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 11) | **143.7075** |
+| val_single_in_dist | 182.77 |
+| val_geom_camber_rc | 155.00 |
+| val_geom_camber_cruise | 112.89 |
+| val_re_rand | 124.17 |
+| test_avg/mae_surf_p | **NaN** (EMA-averaged weights → NaN on test_geom_camber_cruise p-channel) |
+| Epochs completed | 11/50 (30-min cap) |
+
+**Analysis:** EMA cold-start drag is the root cause. With decay=0.999, the EMA buffer half-life is ~693 steps. ModelEMA initialized at random weights and was updated only during training, so the EMA buffer was dominated by early-epoch random-weight values throughout the entire 11-epoch run. The EMA consistently lagged well behind the live model (which reached 101.810 without EMA). Additionally, the EMA-averaged weights landed in a numerically degenerate region for at least one sample in test_geom_camber_cruise, producing NaN on the p-channel — the live model handled the same sample without NaN.
+
+EMA would require: (a) initializing the EMA buffer from post-warmup live weights (not random init), OR (b) training for 100+ epochs so the buffer stabilizes. Neither is feasible at 30-min wall-clock. Closed; askeladd reassigned to AdamW betas experiment (PR #1622).
+
+---
+
 ## 2026-05-12 21:10 — PR #1358: L1 (MAE) loss in normalized space — MERGED
 
 - **Student:** charliepai2g48h3-alphonse
