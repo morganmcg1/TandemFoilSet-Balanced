@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 23:26 UTC
+- **Date**: 2026-05-12 23:38 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -20,7 +20,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 
 **Best raw number observed (but not merged):** 100.987 — PR #1494 v2 (tanjiro, FiLM on log(Re), rebased onto #1491 only, without augmentation). Sent back to rebase onto post-#1495 base.
 
-**Strong loss-curvature signal (sent back):** PR #1543 v1 (fern) log-cosh @ 106.68 on PR #1520 base — clean −5.21% vs #1520, cruise split gets −12.0%. Doesn't beat 103.10 baseline (no augmentation); sent back for log-cosh + augmentation rerun.
+**Disproved (closed, mechanistic):** PR #1543 v2 (fern) log-cosh + augment @ 106.93 (+3.71%) / test 100.61 (+6.18%). The v2 − v1 delta ≈ 0 (augmentation added nothing on top of log-cosh, vs +9.4 on MSE) proves log-cosh and augment are SUBSTITUTES, not complements: both target high-Re gradient dominance via different mechanisms. Log-cosh's gradient cap defeats augmentation's purpose on rc split (+13.5% worse, the killer).
 
 **Per-channel pressure weighting signal (sent back, entangled):** PR #1488 v2 Arm B (askeladd) decoupled heads + surf_weight_p=20 @ val 102.12 / test 96.82 on full merged stack with cosine T_max=14. Beats val 103.10 by 0.95% but loses test 4-split by +2.18%. Two changes entangled (head decoupling + weighting). Sent back for surf_weight_p=20-alone ablation. Likely the per-channel weighting is the active ingredient.
 
@@ -31,7 +31,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 | alphonse | #1484 | `huber-pressure-loss` | WIP — rebase: Huber d=0.5+d=1.0 on full merged stack (2 arms) |
 | askeladd | #1488 | `decoupled-channel-heads` | WIP — v2 sent back (Arm B 102.12 val/96.82 test, entangled), run Arm C: surf_weight_p=20 alone (no decoupling) |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
-| fern | #1543 | `logcosh-loss` | WIP — sent back v1 (106.68 vs baseline 103.10), rebase + re-run with augmentation default ON |
+| fern | #1698 | `test-time-augmentation` | WIP — TTA with 2 arms (N=5/9, jitter=0.5°/0.75°) at eval time. Pure inference-time, no training changes. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — Fourier features on (x,y) coordinates (NeRF-style γ(x), L=6 bands) |
 | tanjiro | #1693 | `swiglu-ffn` | WIP — SwiGLU gated linear unit FFN replacing GELU MLP (single arm, cosine T_max=14) |
@@ -55,6 +55,17 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 - **mlp_ratio=4** (frieren, pre-merge): 144.33. 21% slower per epoch, fewer epochs completed. Need equal-budget rebase.
 - **n_hidden=256** (edward, pre-merge): 172.26. Severely under-budgeted (7 epochs). Sent back as n_hidden=192 (more manageable).
 - **Decoupled heads** (askeladd): Still WIP from round 1.
+
+### Universal principle (PR #1543 v2)
+**Loss saturation and data augmentation are SUBSTITUTES, not complements**
+when both target the same failure mode (high-magnitude pressure residuals
+dominating MSE gradients). Augmentation broadens the training distribution
+→ harder samples need stronger gradient; loss saturation (log-cosh, Huber
+likely) caps that gradient → augmentation's value is destroyed. This rules
+out a class of "regularize the loss + diversify the data" stacking
+hypotheses. Stack-compatible alternatives: per-channel splits (only saturate
+where residuals are large; MSE elsewhere), per-sample reweighting (don't
+touch the per-residual gradient curve).
 
 ### Universal finding (PR #1574)
 **OneCycleLR scheduling bug:** `--use_onecycle True --epochs 50` with `pct_start=0.05`

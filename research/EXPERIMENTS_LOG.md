@@ -37,6 +37,34 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 23:36 — PR #1698: Test-time augmentation (fern) — WIP (assigned)
+**Branch:** `charliepai2g24h3-fern/test-time-augmentation` | **Status: WIP**
+
+- **Hypothesis:** At test time, evaluate the model on N AoA-jittered copies of each input and average the predictions. A model trained with AoA jitter (PR #1495) has been taught small AoA perturbations should yield similar flow fields — TTA cashes in that invariance at inference.
+- **Why this is clean:** No training changes (identical to #1495 baseline). No compositional risk like log-cosh + augment conflict. Pure ensemble. Direct paper-metric improvement.
+- **Arms:** Arm A (N=5, jitter=0.5° = 0.00873 rad — matches training); Arm B (N=9, jitter=0.75° = 0.0131 rad — slightly wider to exploit augment's noise-robust margin).
+- **Pass criterion:** test_avg/mae_surf_p (4-split safe re-eval) < 94.0 (≥0.76 absolute improvement on paper metric).
+- **Predicted Δ:** −1 to −4% on test_avg. Standard CV trick (DeiT, EfficientNet report 0.3-1.5 point gains).
+- **Artifacts:** TBD
+
+---
+
+### 2026-05-12 23:33 — PR #1543 v2: Log-cosh + augment (fern) — CLOSED (substitutes, not complements)
+**Branch:** `charliepai2g24h3-fern/logcosh-loss` | **Status: CLOSED**
+
+- **Hypothesis:** Log-cosh loss (v1 won −5.21% on pre-augment stack #1520) should compound additively with AoA+NACA augmentation on the merged baseline #1495.
+- **val_avg/mae_surf_p: 106.93** (epoch 14/50, cap) — **+3.71% over baseline 103.10**.
+- **test_avg/mae_surf_p (safe re-eval, 4-split):** **100.61** — **+6.18% over baseline 94.76**.
+- **Per-split (val):** single=127.26 (+1.07%), **rc=129.82 (+13.5% WORSE — the killer)**, cruise=75.22 (−3.55%), re_rand=95.42 (+1.35%).
+- **The v2 − v1 delta is ~0** (augmentation added nothing on top of log-cosh, vs +9.4 units on MSE) — clinching evidence that the two interventions are SUBSTITUTES, not complements.
+- **Mechanism (student-diagnosed):** Augmentation broadens distribution → samples have larger residuals → MSE responds with larger gradients → model is pushed to fit harder geometries. Log-cosh saturates the gradient at `tanh(r) ≈ ±1` for `|r| > 2` → augmented samples receive the *same* learning signal as easy ones → augmentation's purpose defeated. Both intervene on the same failure mode (high-magnitude pressure residuals dominating MSE gradients); they cannot stack because the second's mechanism defeats the first.
+- **Generalizable principle (logged for paper):** "Loss saturation and data augmentation are not additive in this regime — they are substitutes targeting the same gradient-dominance failure mode."
+- **Why closed:** Mechanism is decisive; tuning the saturation threshold won't fix the ordering conflict.
+- **Student's suggestion #3 (per-channel log-cosh on pressure only) noted but not picked up:** velocity channels have residuals in 1-3 range where log-cosh ≈ MSE; so per-channel-on-pressure is functionally equivalent to full log-cosh and would face the same compositional conflict.
+- **Artifacts:** `models/model-logcosh-full-stack-v2-20260512-225228/{metrics.jsonl,metrics.yaml,safe_eval.json,config.yaml}`
+
+---
+
 ### 2026-05-12 23:25 — PR #1693: SwiGLU FFN (tanjiro) — WIP (assigned)
 **Branch:** `charliepai2g24h3-tanjiro/swiglu-ffn` | **Status: WIP**
 
