@@ -213,3 +213,34 @@ Alphonse was immediately re-assigned **PR #1631** (`cruise-nan-eval-fix`): imple
 - Noise band updated: 4 baseline runs, 119.64–140.01 (~17%)
 - Canonical pre-fix test comparator: `test_avg/mae_surf_p_excluding_bad_sample = 126.20`
 - Thorfinn's 104.96 noted as "pending merge" — highest-priority once code is committed
+
+---
+
+## 2026-05-12 22:15 — Cycle-6: #1480 merged, #1466 closed, three new assignments
+
+### PR #1480 thorfinn — MERGED ✓ (val=116.30, test=104.96)
+
+Code was committed on cycle-6 entry (`f8c1c40`). All three changes confirmed in diff:
+1. bf16 autocast on forward+loss (`Config.amp=True`, `torch.amp.autocast("cuda", dtype=torch.bfloat16, enabled=cfg.amp)`)
+2. Gradient accumulation=2 (`Config.grad_accum=2`, accumulation boundary logic in training loop)
+3. `evaluate_split` per-sample sanitize-and-gate workaround (`keep = pred_finite & y_finite`, fp32 eval, `n_samples_skipped` logged)
+
+New baseline: **val=116.30 / test=104.96** (first finite test_avg in the project). cruise-NaN workaround now on advisor branch for all subsequent PRs.
+
+### PR #1466 edward — CLOSED (Huber direction broken)
+
+Final run `4bplylk3`: val=324.66, test=305.82. ~150% worse than baseline. Student's own analysis: "direction did not pan out — per-sample Huber-norm convergence is 3-4× slower than MSE in this normalized space." Bug fix in evaluate_split was correct but superseded by thorfinn's more complete implementation, already merged.
+
+### PR #1631 alphonse — CLOSED (redundant after #1480 merge)
+
+The cruise-NaN workaround it was targeting landed via #1480. No need to land a second implementation.
+
+### New assignments issued
+
+| PR | Student | Hypothesis | Key change |
+|---|---|---|---|
+| #1651 | thorfinn | Cosine T_max recalibration | `epochs=18` so CosineAnnealingLR fully anneals within 30-min budget |
+| #1654 | edward | EMA model weights | Shadow EMA copy for eval (`decay=0.9995`); zero extra training FLOPs |
+| #1655 | alphonse | OneCycleLR max_lr=2e-3 | Warmup→anneal schedule at 4× baseline LR; different shape from standard cosine |
+
+All three build on the merged bf16+accum=2 baseline. Beat val=116.30 to be a winner.

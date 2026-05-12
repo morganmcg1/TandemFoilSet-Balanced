@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12 22:00 UTC
+- **Date / time:** 2026-05-12 22:20 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,32 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-6 update — MAJOR MILESTONE: First merge! val=116.30, test=104.96
+
+### PR #1480 thorfinn — MERGED ✓
+
+Code committed and squash-merged. **New baseline: val_avg=116.30, test_avg=104.96.**
+
+This merge simultaneously:
+- Landed the bf16+accum=2 throughput win (2.5× epoch throughput; 18 epochs in 30 min)
+- Landed the cruise-NaN evaluate_split workaround — all future runs now produce finite `test_avg` automatically
+
+### PR #1466 edward — CLOSED (broken direction)
+
+Huber direction: val=324.66 (~150% worse than baseline). Closed.
+
+### PR #1631 alphonse — CLOSED (redundant after #1480 merge)
+
+Cruise-NaN workaround targeted by this PR has landed via #1480.
+
+### Three new assignments
+
+| PR | Student | Hypothesis | Expected val |
+|---|---|---|---|
+| **#1651** | thorfinn | `epochs=18` cosine T_max recalibration | Free win from full anneal |
+| **#1654** | edward | EMA model weights (`decay=0.9995`) | ~113-115 (1-4% gain) |
+| **#1655** | alphonse | `OneCycleLR(max_lr=2e-3)` | TBD vs cosine-2e-3 |
 
 ## Cycle-5 update — First terminal results + major milestone: first finite test_avg
 
@@ -36,9 +62,9 @@ However, the PR branch has only the empty assign commit — no code pushed. The 
 
 Run `ztb0ri42`: val_avg=140.01, test_avg=NaN. Delivered the key deliverable: `test_avg/mae_surf_p_excluding_bad_sample = 126.20` — canonical pre-fix test comparator. BASELINE.md updated. Alphonse closed and re-assigned.
 
-### New assignment: PR #1631 alphonse — cruise-NaN eval workaround
+### New assignment: PR #1631 alphonse — cruise-NaN eval workaround (now closed)
 
-Alphonse assigned the `train.py:evaluate_split` sanitize-and-gate workaround as a clean baseline-hardening PR. Stock config + bug fix only. Expected result: finite `test_avg/mae_surf_p` around 126. Once merged, all subsequent PRs get finite test_avg for free.
+Was assigned but superseded by #1480 merge. Closed when #1480 landed.
 
 ## Cycle-4 update — third independent cruise-NaN diagnosis + advisor decision
 
@@ -62,20 +88,20 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-5)
+## Current leaderboard (post cycle-6)
 
-Baseline best: val_avg=119.64 (noise band ±17%). The current bar is 131.79 (canonical baseline run `hqj9bt84`).
+**New baseline: val=116.30 / test=104.96** (PR #1480, thorfinn, merged). Beat 116.30 to merge.
 
-| Student / PR | Best val_avg | test_avg (best) | Status | Code committed? | Notes |
-|---|---|---|---|---|---|
-| thorfinn #1480 (bf16+accum) | **116.30** | **104.96** ✓ | WIP (sent back) | no | Highest-priority merge; needs code commit |
-| frieren #1471 (p_weight=2+clip) | **116.34** | NaN | WIP | partial (p_weight=3 arm only) | Best val tied; needs updated code + SENPAI-RESULT |
-| fern #1469 (lr=2e-3+clip) | 118.77 | NaN | WIP | no | Within noise of baseline-best; needs code + SENPAI-RESULT |
-| alphonse #1631 (cruise-nan eval fix) | TBD | TBD | WIP (new) | no | Baseline hardening; expected ~126 test_avg |
-| askeladd #1465 (surf_w=30) | 127.53 | NaN | WIP (stale) | no | Moderate signal |
-| tanjiro #1476 (per-field heads) | 137.21 | NaN | WIP (stale) | no | Stability issues |
-| nezuko #1475 (wider 256/8h) | 176.37 | NaN | WIP (stale) | no | Under-trained under 30-min cap |
-| edward #1466 (Huber per-sample) | 275.04 | NaN | WIP | no | Direction broken; cruise-NaN workaround coded locally |
+| Student / PR | Best val_avg | test_avg | Status | Notes |
+|---|---|---|---|---|
+| **thorfinn #1651** (cosine T18) | TBD | TBD | WIP (new) | Expects free improvement from full anneal |
+| **edward #1654** (EMA weights) | TBD | TBD | WIP (new) | 1-4% gain expected at eval time |
+| **alphonse #1655** (OneCycleLR) | TBD | TBD | WIP (new) | Warmup+anneal schedule at max_lr=2e-3 |
+| frieren #1471 (p_weight=2+clip) | 116.34 (W&B only) | NaN | WIP (stale) | Needs code commit + SENPAI-RESULT |
+| fern #1469 (lr=2e-3+clip) | 118.77 (W&B only) | NaN | WIP (stale) | Needs code commit + SENPAI-RESULT |
+| askeladd #1465 (surf_w=30) | 127.53 (W&B only) | NaN | WIP (stale) | Needs code + SENPAI-RESULT |
+| tanjiro #1476 (per-field heads) | 137.21 (W&B only) | NaN | WIP (stale) | Stability issues; likely close |
+| nezuko #1475 (wider 256/8h) | 176.37 (W&B only) | NaN | WIP (stale) | Under-trained; likely close |
 
 **Key:**
 - Δ vs baseline-best uses alphonse's best baseline run (119.64) — strict.
@@ -105,22 +131,20 @@ Notably, edward and thorfinn both posted **detailed diagnostic comments** in cyc
 
 Not in plateau. Most hypotheses sit inside the noise band but multiple directions are showing consistent (if small) movement. Need formal submissions to adjudicate.
 
-## Next directions (post cycle-5)
+## Next directions (post cycle-6)
 
-1. **Merge #1480 thorfinn immediately when code commits land.** This is the highest-leverage action in the round — bf16+accum lands throughput win AND cruise-NaN workaround in one PR. test_avg=104.96 is the paper-facing number to beat.
-2. **Drive frieren #1471 to completion.** Frieren has val_avg=116.34 from W&B but only the old p_weight=3 code committed. Need updated code (p_weight=2+clip) + terminal SENPAI-RESULT.
-3. **Drive fern #1469 to completion.** fern 118.77 is 3rd-best and within noise of baseline-best; needs code + SENPAI-RESULT.
-4. **PR #1631 alphonse (cruise-nan eval fix)** — baseline hardening. Once merged, every subsequent PR gets finite test_avg. Timing with thorfinn's send-back: whichever of the two gets code committed first becomes the bug-fix vehicle.
-5. **Stack winners** — after bf16+accum, p_weight=2+clip, and lr=2e-3+clip are individually confirmed and merged, build a stacked-arm combining all three. Likely synergistic.
-6. **Schedule recalibration** — with bf16+accum reaching 18 epochs in 30 min, `T_max=50` means the LR never anneals. A `T_max=18` (or throughput-matched value) should give free improvement from full cosine anneal.
-7. **Close edward #1466** when their SENPAI-RESULT arrives — Huber per-sample direction is broken (275 val_avg = 130%+ regression).
-8. **Close nezuko #1475** when SENPAI-RESULT arrives — wider model is under-trained under 30-min cap.
-9. **Close tanjiro #1476** when SENPAI-RESULT arrives — per-field heads shown stability issues and +15% regression.
+1. **Merge thorfinn #1651** when code + SENPAI-RESULT arrive. Expect improvement from full cosine anneal.
+2. **Merge edward #1654** when EMA results arrive. 1-4% gain expected.
+3. **Merge alphonse #1655** if OneCycleLR beats 116.30.
+4. **Drive frieren #1471 and fern #1469 to completion** — both have W&B results beating baseline but no code committed. Both need to push code + terminal SENPAI-RESULT.
+5. **Stack winners** — once the top confirmed hypotheses (bf16+accum ✓, cosine-T18, lr=2e-3, p_weight=2+clip) are individually merged, build a stacked-arm combining all. Synergistic gains likely.
+6. **Close tanjiro #1476 and nezuko #1475** when SENPAI-RESULTs arrive — both show regression and no clear path to improvement.
+7. **Research next frontier hypotheses** — need researcher-agent to survey new directions once current pipeline clears.
 
 ## Operational notes
 
-- **Cycle 5 decisions:** #1480 sent back (code not committed), #1461 closed (deliverables captured), #1631 new assignment to alphonse.
-- **7 of 8 students still have no real code commits** on their branches. The harvest workflow is the primary driver. The GraphQL rate-limit pressure from pod logs persists.
-- Frieren's branch has the p_weight=3 code only (old arm); p_weight=2+clip results are in W&B only.
-- 8/8 student pods 1/1 Ready. Host-side harvest/kill controls fleet shutdown.
-- The cruise-NaN workaround has two parallel paths: #1631 alphonse (new baseline-hardening) and #1480 thorfinn (sent back for code commit). Whichever lands first wins.
+- **Cycle 6 decisions:** #1480 merged (first merge!), #1466 closed, #1631 closed, #1651/#1654/#1655 assigned.
+- **Frieren's branch** still has the p_weight=3 code only; the p_weight=2+clip W&B result (116.34) is better than the new 116.30 baseline by a sliver but needs proper code commit to be mergeable.
+- GraphQL rate limit hit during cycle-6 assignment creation — workaround: used REST API for #1654 and #1655 label additions. Rate limit should recover before next cycle.
+- 8/8 student pods still 1/1 Ready. Host-side harvest/kill controls fleet shutdown.
+- **cruise-NaN fix is now landed** on the advisor branch (via #1480). All test_avg values will be finite going forward.
