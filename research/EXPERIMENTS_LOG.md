@@ -6,6 +6,41 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 00:20 — ROUND 4 BATCH: 4 experiments — ALL CLOSED
+
+**Key cross-experiment finding:** At the 30-min/~11-13 epoch budget, we are CONVERGENCE-LIMITED. Any change that slows per-epoch progress consistently loses, even if theoretically sound with more training time.
+
+### PR #1649: weight_decay 1e-4 → 0 — CLOSED (+3.2% worse)
+- **Student:** charliepai2g48h3-thorfinn
+- val=105.079, test=94.684 (best: +3.2% worse, closest miss of round 4)
+- val_single_in_dist hit hardest (+5.7%); L1 does NOT dampen high-magnitude gradient flow the way MSE does → WD provides useful regularization
+- **Conclusion:** WD=0 is wrong direction. Stronger WD (5e-4) is the natural next step.
+- **Artifacts:** `models/model-charliepai2g48h3-thorfinn-weight-decay-zero-20260512-221840/metrics.jsonl`
+
+### PR #1632: dropout=0.1 in attention — CLOSED (+11.8% worse)
+- **Student:** charliepai2g48h3-edward
+- val=113.838, test=103.151 (best: +11.8% worse)
+- Model is underfitting at 11 epochs; adding noise to an underfit model is counterproductive
+- val_single_in_dist hit hardest (+16.8%)
+- **Conclusion:** Dropout trades convergence speed for stability — wrong tradeoff at 30-min budget.
+- **Artifacts:** `models/model-dropout-01-mlp-attn-20260512-220657/metrics.jsonl`
+
+### PR #1622: AdamW betas (0.9,0.999)→(0.95,0.99) — CLOSED (+15.4% worse)
+- **Student:** charliepai2g48h3-askeladd
+- val=117.483, test=107.268 (best: +15.4% worse)
+- β2=0.99 shorter memory amplified noise on L1's frequent sign-flips; caused oscillation bumps at epochs 5 and 10
+- **Key insight:** Standard betas (0.9, 0.999) are correct for L1 at our budget. Next direction: looser β1=0.85 with β2=0.999 unchanged (askeladd's own post-mortem suggestion)
+- **Artifacts:** `models/model-adamw-betas-transformer-20260512-215824/metrics.jsonl`
+
+### PR #1593 (max_norm=10 arm): Gradient clipping — CLOSED (+15.7% worse)
+- **Student:** charliepai2g48h3-nezuko
+- max_norm=10: val=117.811, test=105.623 (+15.7% vs baseline)
+- max_norm=1: val=112.784, test=100.553 (+10.8% vs baseline) — both arms worse
+- **Critical finding:** max_norm=10 DID reduce oscillation jumps 4-28× smaller. But final val was worse, not better. Conclusion: clipping trades convergence speed for stability — wrong tradeoff. Oscillations ARE useful optimization search.
+- **Artifacts:** `models/model-charliepai2g48h3-nezuko-gradient-clipping-max10-20260512-220638/metrics.jsonl`
+
+---
+
 ## 2026-05-12 23:30 — PR #1595: Huber/SmoothL1 loss beta=1.0 — CLOSED
 
 - **Student:** charliepai2g48h3-fern

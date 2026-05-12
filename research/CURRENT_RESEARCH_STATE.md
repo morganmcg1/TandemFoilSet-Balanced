@@ -50,13 +50,13 @@
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
 | alphonse | #1592 | Cosine T_max 50 → 14 (align to budget) | WIP |
-| nezuko | #1593 | Gradient clipping (max_norm=10.0 re-run) | WIP (sent back) |
-| tanjiro | #1634 | Batch size 4 → 8 (lower gradient noise) | New |
-| fern | #1661 | CosineAnnealingWarmRestarts T_0=4 T_mult=2 | New |
-| edward | #1632 | Dropout=0.1 in attention (OOD regularization) | New |
-| askeladd | #1622 | AdamW betas (0.9,0.999)→(0.95,0.99) | WIP |
+| nezuko | #1678 | LR 5e-4 → 7e-4 (upper-stable range) | New |
+| tanjiro | #1634 | Batch size 4 → 8 (lower gradient noise) | WIP |
+| fern | #1661 | CosineAnnealingWarmRestarts T_0=4 T_mult=2 | WIP |
+| edward | #1671 | AdamW β1 0.9→0.85 (looser momentum) | New |
+| askeladd | #1673 | AdamW eps 1e-8→1e-4 (adaptive scaling floor) | New |
 | frieren | #1384 | surf_weight 10 → 25 (rebase needed) | WIP/CONFLICTING |
-| thorfinn | #1649 | weight_decay 1e-4 → 0 (L1 as implicit regularizer) | New |
+| thorfinn | #1670 | weight_decay 1e-4 → 5e-4 (stronger L2) | New |
 
 ## Round 3/4 themes and open questions
 
@@ -87,4 +87,8 @@
 - EMA eliminates: decay=0.999 with random init (cold-start drag, half-life 693 steps)
 - Fourier L=4 does NOT compound with L1 (+5.6% worse); L1+n_layers=6 absorbs the same high-freq OOD content
 - test_avg/mae_surf_p is RELIABLE since PR #1358 NaN-fix: 91.708 is the first accurate test baseline
-- Gradient clip threshold must be >>1.0 with L1 loss and 1.18M params (L2 grad norm >> 1.0 for constant ±1 grads)
+- Gradient clip max_norm=1.0 AND max_norm=10.0: both worse. Clipping reduces oscillations but costs convergence speed. Oscillations are useful optimization search at 30-min budget.
+- Dropout=0.1: +11.8% worse. Model is underfitting; regularizing an underfit model is counterproductive.
+- AdamW betas (0.95, 0.99): +15.4% worse. β2=0.99 amplifies sign-flip noise for L1. Standard (0.9, 0.999) is correct.
+- weight_decay=0: +3.2% worse (closest miss of round 4). WD provides useful regularization for high-magnitude splits.
+- **Round 4 meta-insight: CONVERGENCE-LIMITED. Anything slowing per-epoch progress loses at 30-min budget.**
