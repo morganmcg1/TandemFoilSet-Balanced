@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-12 19:30 — PR #1473: [huber-loss] Switch MSE → Huber loss (delta=0.5)
+
+- **Branch**: charliepai2g24h1-tanjiro/huber-loss
+- **Hypothesis**: Huber loss caps outlier-residual gradients on extreme-value mesh nodes, improving stability and final val MAE.
+- **Status**: Winner pending rebase — sent back to resolve merge conflicts and re-verify on grad-clip baseline
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 13) | **111.296** ⭐ |
+| val_single_in_dist | 133.55 |
+| val_geom_camber_rc | 122.56 |
+| val_geom_camber_cruise | 89.51 |
+| val_re_rand | 99.57 |
+| test_avg/mae_surf_p (3 splits, excl cruise) | 112.51 |
+| Peak VRAM | 42.1 GB |
+| Epochs | 14 (~130s/epoch, 30-min cap) |
+| huber_l2_frac (epoch 1 → 13) | 0.749 → 0.931 |
+| huber_delta | 0.5 |
+
+**Analysis**: Clean training trajectory, no instabilities. L2-fraction climbed from 75% → 93% across training, exactly the "outlier-capping early, MSE-like late" pattern the PR predicted. **111.296 beats the 117.17 baseline by ~5%** — clear winner.
+
+**Caveat**: This run forked from pre-grad-clip-1 base. The advisor branch now has grad_clip=1.0 as default. Student must rebase, re-run with grad-clip active, and apply the y-sanitization fix in train.py:evaluate_split. The 117.17 grad-clip baseline becomes the head-to-head comparison target.
+
+**Bonus**: Tanjiro diagnosed the test_geom_camber_cruise NaN bug independently — `Inf*0=NaN` in scoring.py accumulator from a single sample with -inf pressure values. Their proposed fix is correct in spirit but must be applied in train.py:evaluate_split (since `data/` is read-only per program.md).
+
+**Artifacts**: `models/model-charliepai2g24h1-tanjiro-huber-loss-20260512-180430/metrics.jsonl`
+
+---
+
 ## 2026-05-12 18:57 — PR #1479: [grad-clip-1] Add gradient clipping (clip_norm=1.0) for training stability
 
 - **Branch**: charliepai2g24h1-thorfinn/grad-clip-1
