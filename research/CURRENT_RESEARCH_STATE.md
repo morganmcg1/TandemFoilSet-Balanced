@@ -55,7 +55,7 @@
 | edward | #1632 | Dropout=0.1 in attention (OOD regularization) | New |
 | askeladd | #1622 | AdamW betas (0.9,0.999)→(0.95,0.99) | WIP |
 | frieren | #1384 | surf_weight 10 → 25 (rebase needed) | WIP/CONFLICTING |
-| thorfinn | #1525 | Fourier positional features (L=4) | WIP |
+| thorfinn | #1649 | weight_decay 1e-4 → 0 (L1 as implicit regularizer) | New |
 
 ## Round 3/4 themes and open questions
 
@@ -66,7 +66,7 @@
 5. **Huber vs L1** (fern): SmoothL1 beta=1.0 — middle ground between MSE and L1?
 6. **AdamW betas for L1** (askeladd): (0.95, 0.99) vs default — better second-moment tracking for constant-magnitude gradients?
 7. **surf_weight with L1** (frieren): 10 → 25 on new baseline, after rebase
-8. **Fourier features** (thorfinn): input feature engineering — does L=4 Fourier encoding help OOD?
+8. **weight_decay=0** (thorfinn): L1 as implicit regularizer may not need AdamW WD; removing it frees capacity
 
 ## Probable round 4/5 directions (conditional on round 3/4 signal)
 
@@ -84,5 +84,6 @@
 - 30 min / run cap: n_layers=6 → ~12-13 epochs (~175 s/epoch with L1)
 - Per-epoch time budget eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~205 s/epoch)
 - EMA eliminates: decay=0.999 with random init (cold-start drag, half-life 693 steps)
+- Fourier L=4 does NOT compound with L1 (+5.6% worse); L1+n_layers=6 absorbs the same high-freq OOD content
 - test_avg/mae_surf_p is RELIABLE since PR #1358 NaN-fix: 91.708 is the first accurate test baseline
 - Gradient clip threshold must be >>1.0 with L1 loss and 1.18M params (L2 grad norm >> 1.0 for constant ±1 grads)

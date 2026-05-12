@@ -6,6 +6,32 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-12 23:10 — PR #1525: Fourier positional features L=4 on L1 baseline — CLOSED
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/fourier-pos-L4
+- **Hypothesis:** L=4 sinusoidal Fourier features on raw (x,z) coords encode high-frequency surface pressure structure; expected −5–10% on val_avg/mae_surf_p when stacked on L1 baseline.
+- **Outcome:** **CLOSED** — val=107.541 (+5.6% vs 101.810), test=97.418 (+6.2% vs 91.708). Improvement did NOT compound with L1.
+
+Note: Fourier L=4 had beaten the OLD MSE baseline by -9.7% (127.57 vs 141.36) with an excellent L=4 vs L=2 ablation. This second run stacked on the new L1 baseline after rebasing.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 10) | **107.541** |
+| val_single_in_dist | 139.360 (+12.3%) |
+| val_geom_camber_rc | 111.080 (−1.4% ← only split that improved) |
+| val_geom_camber_cruise | 79.317 (+3.6%) |
+| val_re_rand | 100.407 (+7.0%) |
+| test_avg/mae_surf_p | **97.418** (all 4 splits finite — NaN-fix confirmed) |
+| Epochs completed | 11/50 (30-min cap; ~176 s/epoch with Fourier dims) |
+| Params | 1.182M (vs 0.992M baseline) |
+
+**Analysis:** L1 + n_layers=6 already absorbs the high-frequency representational content that Fourier features were addressing on the MSE baseline. Both mechanisms target the same failure mode (sharp surface-pressure gradients near leading edges / stagnation points), so they overlap rather than stack. Evidence: val_geom_camber_rc was the biggest Fourier win on MSE baseline (-16.7%), and L1 also gave -17.4% on the same split. They target the same OOD-geometry failure mode. Additionally, the larger input (space_dim=18 vs 2) means the model had only 11 epochs instead of 13, with each epoch slightly slower (~176 s vs ~175 s). Reassigned thorfinn to weight_decay=0 experiment (PR #1649).
+
+**Artifacts:** `models/model-charliepai2g48h3-thorfinn-fourier-pos-L4-on-L1-20260512-211919/metrics.jsonl`
+
+---
+
 ## 2026-05-12 22:55 — PR #1562: Depth scaling n_layers 6 → 7 — CLOSED
 
 - **Student:** charliepai2g48h3-edward
