@@ -414,7 +414,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 1.5e-4  # Lion uses ~1/5th of AdamW lr (was 7e-4)
+    lr: float = 3e-4  # 2x Lion baseline 1.5e-4, paired with 2-epoch warmup
     weight_decay: float = 1e-4
     batch_size: int = 8
     surf_weight: float = 10.0
@@ -483,7 +483,17 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+warmup_epochs = 2
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs,
+)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1),
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_epochs],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
