@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1357 Huber δ=1.0 (on Fourier base) | **98.79** | **88.90** | -4.31% val, -2.13% test vs Fourier baseline |
+| #1367 Dropout=0.2 + clip_grad=1.0 | **98.96** | **88.74** | dropout standalone on BF16; merged into Fourier+Huber base |
+| #1357 Huber δ=1.0 (on Fourier base) | 98.79 | 88.90 | -4.31% val, -2.13% test vs Fourier baseline |
 | #1386 Fourier pos encoding L=6 mf32 BF16 | 103.24 | 90.83 | All 4 test splits improve |
 | #1541 Scoring fix + BF16 rerun | 120.40 | 106.67 | All 4 test splits now finite |
 
@@ -28,6 +29,22 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-12 23:56 — PR #1367: Dropout=0.2 + grad-clip=1.0 (fern)
+
+- **val_avg/mae_surf_p (best epoch 18):** 98.9622
+- **test_avg/mae_surf_p:** 88.7390
+- **Per-test-split:** single_in_dist=110.77, geom_camber_rc=97.23, geom_camber_cruise=58.81, re_rand=88.14
+- **Per-val-split:** single_in_dist=121.99, geom_camber_rc=107.52, geom_camber_cruise=70.70, re_rand=95.63
+- **Epochs completed:** 18 in ~31 min (cap-bound); val still descending
+- **W&B run:** `otwlgvo7`
+- **Reproduce:** `cd "target/" && python train.py --dropout 0.2 --agent willowpai2g24h5-fern --wandb_name "willowpai2g24h5-fern/dropout-0.2-bf16-clean" --wandb_group "willow-pai2g-24h-r5-regularization"`
+
+**Key change:** Add `dropout=0.2` to Transolver attention (`nn.Dropout(dropout)` after attention output and at FFN), and add `clip_grad_norm_(model.parameters(), 1.0)` in training step. PR default is `dropout: float = 0.1` — **use `--dropout 0.2` to reproduce the winning arm**.
+
+**Note:** Student's run `otwlgvo7` had `fun_dim=22` in W&B config (pre-Fourier, pre-Huber base). Reported val=98.96 was achieved with dropout-only. The squash-merge applied dropout to the current Fourier+Huber base, producing a Fourier+Huber+Dropout codebase. Actual compound performance to be verified by next baseline run.
 
 ---
 
