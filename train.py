@@ -241,6 +241,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
+            sq_err = sq_err * CHANNEL_WEIGHT  # [B, N, 3] * [3] broadcasts
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -387,6 +388,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    p_weight: float = 3.0  # channel weight on pressure in MSE loss (Ux=Uy=1.0)
 
 
 cfg = sp.parse(Config)
@@ -395,6 +397,8 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+CHANNEL_WEIGHT = torch.tensor([1.0, 1.0, cfg.p_weight], device=device)  # Ux, Uy, p
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -468,6 +472,7 @@ run = wandb.init(
         "pct_start": 0.1,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
+        "channel_weight": CHANNEL_WEIGHT.tolist(),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -511,6 +516,7 @@ for epoch in range(MAX_EPOCHS):
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
             sq_err = (pred - y_norm) ** 2
+            sq_err = sq_err * CHANNEL_WEIGHT  # [B, N, 3] * [3] broadcasts
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
