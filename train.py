@@ -270,9 +270,17 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
             pred = model({"x": x_norm})["preds"]
             pred = surf_head(pred, x_norm, is_surface)
 
-            sq_err = (pred - y_norm) ** 2
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            # Guard: data/scoring.py:accumulate_batch has inf*0=NaN when GT has
+            # non-finite values. Pre-filter here: nan_to_num both tensors so no
+            # inf reaches the product, and tighten the mask to drop bad samples.
+            _B = y.shape[0]
+            _y_ok = torch.isfinite(y.reshape(_B, -1)).all(dim=-1)  # [B]
+            _y_norm_safe = torch.nan_to_num(y_norm, nan=0.0, posinf=0.0, neginf=0.0)
+            _pred_safe = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+            sq_err = (_pred_safe - _y_norm_safe) ** 2
+            _safe_mask = mask & _y_ok[:, None]
+            vol_mask = _safe_mask & ~is_surface
+            surf_mask = _safe_mask & is_surface
             vol_loss_sum += (
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
@@ -284,7 +292,13 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            ds, dv = accumulate_batch(
+                torch.nan_to_num(pred_orig, nan=0.0, posinf=0.0, neginf=0.0),
+                torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0),
+                is_surface,
+                mask & _y_ok[:, None],
+                mae_surf, mae_vol,
+            )
             n_surf += ds
             n_vol += dv
 
