@@ -49,6 +49,17 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Corpus-level position bounds
+# ---------------------------------------------------------------------------
+# Raw-coordinate min/max of node positions, scanned once across train + all 4
+# val splits in splits_v2 (full 1499 train + 400 val samples). Used by the
+# unified_pos branch to replace per-batch amin/amax with deterministic,
+# batch-independent normalization. See PR #1576.
+RAW_POS_MIN = torch.tensor([-9.5502, -9.5925], dtype=torch.float32)  # [x_min, z_min]
+RAW_POS_MAX = torch.tensor([13.5499, 9.6245], dtype=torch.float32)   # [x_max, z_max]
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -170,6 +181,8 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 pos_min: torch.Tensor | None = None,
+                 pos_max: torch.Tensor | None = None,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -184,6 +197,14 @@ class Transolver(nn.Module):
         else:
             self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
+
+        # Fixed corpus-level position bounds for unified_pos normalization. When
+        # provided, replace per-batch amin/amax so the spatial encoding is
+        # deterministic per node and independent of batch composition/padding.
+        self.use_global_pos_norm = pos_min is not None and pos_max is not None
+        if self.use_global_pos_norm:
+            self.register_buffer("pos_min", pos_min.view(1, 1, -1).float())
+            self.register_buffer("pos_max", pos_max.view(1, 1, -1).float())
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
@@ -215,9 +236,15 @@ class Transolver(nn.Module):
             grid = torch.linspace(0, 1, self.ref, device=pos.device)
             gy, gx = torch.meshgrid(grid, grid, indexing="ij")
             ref_grid = torch.stack([gx, gy], dim=-1).reshape(-1, 2)
-            pmin = pos.amin(dim=1, keepdim=True)
-            pmax = pos.amax(dim=1, keepdim=True)
-            pos_n = (pos - pmin) / (pmax - pmin).clamp(min=1e-6)
+            if self.use_global_pos_norm:
+                pmin = self.pos_min
+                pmax = self.pos_max
+                pos_n = (pos - pmin) / (pmax - pmin).clamp(min=1e-6)
+                pos_n = pos_n.clamp(0.0, 1.0)
+            else:
+                pmin = pos.amin(dim=1, keepdim=True)
+                pmax = pos.amax(dim=1, keepdim=True)
+                pos_n = (pos - pmin) / (pmax - pmin).clamp(min=1e-6)
             dist = ((pos_n.unsqueeze(2) - ref_grid.unsqueeze(0).unsqueeze(0)) ** 2).sum(-1)
             pos_enc = torch.softmax(-dist * (self.ref ** 2), dim=-1)
             x_in = torch.cat([feats, pos_enc], dim=-1)
@@ -441,6 +468,23 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# Translate raw corpus-level position bounds into the normalized space the
+# model actually sees (input `x` is z-scored with stats from stats.json).
+pos_mean_cpu = stats["x_mean"][:2].detach().cpu()
+pos_std_cpu = stats["x_std"][:2].detach().cpu()
+POS_MIN_NORM = (RAW_POS_MIN - pos_mean_cpu) / pos_std_cpu
+POS_MAX_NORM = (RAW_POS_MAX - pos_mean_cpu) / pos_std_cpu
+print(
+    "Global pos bounds (raw): "
+    f"x=[{RAW_POS_MIN[0]:.4f}, {RAW_POS_MAX[0]:.4f}]  "
+    f"z=[{RAW_POS_MIN[1]:.4f}, {RAW_POS_MAX[1]:.4f}]"
+)
+print(
+    "Global pos bounds (norm): "
+    f"x=[{POS_MIN_NORM[0]:.4f}, {POS_MAX_NORM[0]:.4f}]  "
+    f"z=[{POS_MIN_NORM[1]:.4f}, {POS_MAX_NORM[1]:.4f}]"
+)
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -456,7 +500,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+model = Transolver(**model_config, pos_min=POS_MIN_NORM, pos_max=POS_MAX_NORM).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
@@ -478,6 +522,12 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "pos_norm": {
+            "raw_pos_min": RAW_POS_MIN.tolist(),
+            "raw_pos_max": RAW_POS_MAX.tolist(),
+            "norm_pos_min": POS_MIN_NORM.tolist(),
+            "norm_pos_max": POS_MAX_NORM.tolist(),
+        },
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
