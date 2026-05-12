@@ -6,6 +6,46 @@ appropriate heading whenever an experiment terminal-completes.
 
 ---
 
+## Round 2 — build on merged stack (ongoing)
+
+All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3` (includes grad_clip=1.0, wd=1e-3, OneCycleLR, EMA=0.999) before running. Current baseline: **val_avg/mae_surf_p = 112.546** (PR #1520).
+
+---
+
+### 2026-05-12 19:53 — PR #1520: OneCycleLR + EMA weights (fern)
+**Branch:** `charliepai2g24h3-fern/onecycle-lr-ema` | **Status: MERGED** ⭐
+
+- **Hypothesis:** Replace CosineAnnealingLR (T_max=50, only ~5% annealed in 14 epochs) with OneCycleLR (auto-adapts to actual steps). Add EMA(0.999) weights for evaluation to eliminate checkpoint-selection jitter.
+- **val_avg/mae_surf_p: 112.546** (epoch 14/14) — **−2.5% vs baseline 115.403**.
+- **Per-split:** single=125.10, rc=136.04, **cruise=86.31** (best camber), re_rand=102.73.
+- **Test (3-split proxy):** single=113.89, rc=118.86, re_rand=99.84 → **110.862** (−3.7% vs baseline 115.13).
+- **Analysis:** Val curve was strictly monotone decreasing (epoch 14 still the best at cap). EMA eliminated the regression fern's own baseline saw at epochs 13–14 (115.40 → 119.37 → 126.42). OneCycleLR peak LR = 5e-3 reached at epoch 3; lr=4.3e-3 at cap (barely in cosine anneal phase). val_re_rand improved 6.4% (109.76 → 102.73) — EMA smoothing particularly helps the Re-generalization split. Both effects (OneCycleLR + EMA) are compounding.
+- **Artifacts:** `models/model-charliepai2g24h3-fern-onecycle-ema-decay999-20260512-191518/{metrics.jsonl,metrics.yaml}`
+
+---
+
+### 2026-05-12 19:54 — PR #1484: Huber loss delta=0.5 and delta=1.0 (alphonse)
+**Branch:** `charliepai2g24h3-alphonse/huber-pressure-loss` | **Status: SENT BACK**
+
+- **Hypothesis:** Huber loss (delta=1.0 in normalized space) clips high-Re gradient extremes and improves `val_avg/mae_surf_p` by 3–8%.
+- **val_avg/mae_surf_p:** delta=0.5: **108.097**, delta=1.0: **108.104** (both epoch 14; tie within noise).
+- **Per-split (delta=0.5 best):** single=146.2, rc=113.3, cruise=79.0, re_rand=93.8.
+- **Test (3-split proxy):** delta=0.5: single=124.8, rc=98.4, re_rand=90.4 → ~104.55. delta=1.0: single=111.3, rc=105.3, re_rand=102.3 → ~106.27.
+- **Analysis:** Best raw number of all round-1 runs (108.10 vs 115.40 baseline), but ran on pre-merge base (no grad_clip + wd, no OneCycleLR + EMA). Merge conflict blocked direct merge. Key concern: delta=0.5 helps cruise/re_rand but hurts single_in_dist (146.2 vs 122.6 at d=1.0) — aggressive clipping removes signal needed for high-Re single-foil. Bug analysis of cruise NaN matches tanjiro's independent trace.
+- **Why sent back:** Merge conflicts (DIRTY state). Pre-merge base comparison unfair to new baseline 112.546. Instructed: rebase, run both arms (d=0.5, d=1.0) with full merged stack (OneCycleLR + EMA + clip + wd), pass criterion val_avg < 112.546.
+- **Artifacts:** `models/model-huber-delta-{1p0,0p5}-20260512-*/metrics.yaml`
+
+---
+
+### 2026-05-12 20:XX — PR #1543: Log-cosh loss on merged stack (fern)
+**Branch:** `charliepai2g24h3-fern/logcosh-loss` | **Status: WIP (assigned)**
+
+- **Hypothesis:** Log-cosh loss [smooth, threshold-free heavy-tail robustification] is a cleaner alternative to Huber (no delta tuning, no gradient discontinuity). `L(r) = log(cosh(r))` → gradient = tanh(r) → saturates to ±1 for large residuals automatically.
+- **Expected delta:** −3% to −8% on val_avg/mae_surf_p vs baseline 112.546.
+- **Artifacts:** TBD
+
+---
+
 ## Round 1 — broad coverage (assigned 2026-05-12)
 
 Hypotheses sourced from `/research/RESEARCH_IDEAS_2026-05-12_18:00.md`.
