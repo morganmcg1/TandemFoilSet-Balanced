@@ -241,6 +241,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
+            chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
+            sq_err = sq_err * chan_w[None, None, :]
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -445,6 +447,8 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
+        chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
+        sq_err = sq_err * chan_w[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
