@@ -28,11 +28,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1544 | `mlp_ratio=4` (2× MLP width) | Architecture (capacity) | WIP | based on bf16-only baseline |
-| askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (stale, ~2h) | NaN-fix rerun pending |
+| askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (pinged with Huber+bf16 baseline) | NaN-fix now in base; rebase requested |
 | edward | #1546 | `n_layers=8` (Transolver paper default) | Architecture (depth) | WIP | based on bf16-only baseline |
 | fern | #1606 | EMA of model weights (decay=0.999) | Weight averaging | WIP | round-3, on top of Huber+bf16 |
-| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebasing) | based on bf16-only baseline |
-| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP (stale, ~2h) | |
+| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:05) | rerun at bs=4 on bf16 |
+| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP (pinged with Huber+bf16 baseline) | rebase requested |
 | tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebasing) | based on bf16-only baseline |
 | thorfinn | #1550 | `slice_num=96` (clean test at bs=4+bf16) | Architecture (attention) | WIP | based on bf16-only baseline |
 
