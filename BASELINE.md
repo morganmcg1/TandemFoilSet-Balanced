@@ -14,6 +14,42 @@ Stock `train.py` on `icml-appendix-willow-pai2g-48h-r5` — Transolver with the 
 **Primary metric:** `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across the 4 val splits).
 **Paper-facing metric:** `test_avg/mae_surf_p` (computed at end of run from the best-val checkpoint).
 
+## 2026-05-12 21:10 — PR #1436: fern Huber + bf16 (compound winner)
+
+Merged. Smooth L1 / Huber loss (β=1.0) replaces MSE in both training and `evaluate_split`. Stacked on top of the alphonse bf16 baseline; effects compounded as predicted — Huber's loss-shape alignment with the MAE metric (linear tails for high-Re extreme p samples) + bf16's epoch budget (~18 vs ~14 fp32).
+
+**New best (lower is better):**
+
+| Metric | Value | vs PR #1419 |
+|--------|-------|-------------|
+| `val_avg/mae_surf_p` | **96.4863** | −12.81 (−11.7%) |
+| `test_avg/mae_surf_p` | **86.3326** | −11.33 (−11.6%) |
+
+**Per-split val (epoch 16, best checkpoint):**
+
+| Split | mae_surf_p |
+|-------|----------:|
+| `val_single_in_dist` | 112.8995 |
+| `val_geom_camber_rc` | 106.9168 |
+| `val_geom_camber_cruise` | 75.1834 |
+| `val_re_rand` | 90.9454 |
+| **val_avg** | **96.4863** |
+
+**Per-split test (best-val checkpoint):**
+
+| Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy | mae_vol_p |
+|-------|----------:|------------:|------------:|----------:|
+| `test_single_in_dist` | 101.2155 | 1.4049 | 0.6030 | 108.6379 |
+| `test_geom_camber_rc` | 95.6042 | 1.9262 | 0.8326 | 106.1176 |
+| `test_geom_camber_cruise` | 64.2155 | 1.0321 | 0.4469 | 63.5676 |
+| `test_re_rand` | 84.2951 | 1.3881 | 0.6406 | 85.9693 |
+| **test_avg** | **86.3326** | **1.4378** | **0.6308** | **91.0731** |
+
+- **Config change:** `sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')` replaces `sq_err = (pred - y_norm) ** 2` in two locations (training inner loop and `evaluate_split`).
+- **W&B run:** `kmwsz3i4`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+- All 4 test splits improved (vs alphonse): in_dist −12.75, camber_rc −10.10, camber_cruise −9.16, re_rand −13.32.
+
 ## 2026-05-12 20:00 — PR #1419: alphonse bf16 autocast (round-1 winner)
 
 Merged. bf16 mixed-precision training (`torch.amp.autocast(dtype=torch.bfloat16)`) + scoring NaN workaround in `evaluate_split`. Both changes are now in the advisor branch and will propagate to all subsequent student PRs.
