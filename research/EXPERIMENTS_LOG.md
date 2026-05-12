@@ -478,3 +478,107 @@ When results land, prioritize:
 1. **Which mechanism axis dominates** the compound improvement — is it loss-shape, weighting, stability, or capacity?
 2. **Per-split impact pattern** — does any wave-3 lever specifically rescue val_re_rand (the split that regressed under SWA)?
 3. **Variance signal** — nezuko's 2-seed grad-clip will measure whether SWA + clipping reduces seed-to-seed variance from the ~16% baseline observed on n_hidden=192.
+
+---
+
+## 2026-05-12 22:02 — PR #1586: Per-sample Re-based loss weighting on Huber baseline — MERGED
+
+- **Branch:** `willowpai2g48h2-thorfinn/re-weight-on-huber`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** Multiplicative per-sample loss reweighting by `1 / log(Re)_shifted` (normalized per batch) to redress per-Re imbalance in the dataset. Stacks on Huber baseline (#1452), NOT the merged SWA-on-Huber baseline (#1554).
+
+### Result table (W&B run verified)
+
+| Metric | Value | vs. #1554 baseline (99.07/88.90) |
+|---|---|---|
+| `val_avg/mae_surf_p` (best, epoch 14) | **95.7488** | **−3.36%** |
+| `val_single_in_dist` surf p | 113.10 | −3.95% |
+| `val_geom_camber_rc` surf p | 103.22 | −1.03% |
+| `val_geom_camber_cruise` surf p | 74.93 | **−5.37%** |
+| `val_re_rand` surf p | 91.75 | −3.54% |
+| `test_avg/mae_surf_p` (4-split, all finite) | **86.1694** | **−3.06%** |
+| `test_single_in_dist` surf p | 100.11 | −2.21% |
+| `test_geom_camber_rc` surf p | 94.45 | −1.07% |
+| `test_geom_camber_cruise` surf p | 64.20 | **−5.10%** |
+| `test_re_rand` surf p | 85.92 | −4.63% |
+| Re-weight spread | min=0.62 max=1.67 mean=1.0 | 2.7× range, well-bounded |
+| Params | 0.66M | unchanged |
+
+### Decision: MERGED
+
+- Hit the wave-2 PR's own decision rule (val < 99.07 → merge).
+- Re-weight curve was healthy (2.7× spread, well inside the predicted band).
+- Largest gains on `val_geom_camber_cruise` (−5.4% / −5.1% on val/test) — consistent with hypothesis: the low-Re cruise samples got up-weighted relative to high-Re raceCar samples.
+- **Composition warning written into BASELINE.md**: this PR was tested on Huber-only (no SWA). The merged advisor branch now composes Huber + Re-weight + SWA, an untested combination. Treat val=95.75 as the conservative tested floor until next training run validates the composition.
+
+---
+
+## 2026-05-12 22:08 — PR #1551 tanjiro (unified-pos-on-huber): CLOSED — −4.4% regression
+
+- **Branch:** `willowpai2g48h2-tanjiro/unified-pos-on-huber`
+- **Student:** willowpai2g48h2-tanjiro
+- **Hypothesis:** `unified_pos=True, ref=8` (2D Transolver ref²=64 grid positional encoding) on the Huber baseline (#1452). Predicted −3 to −8% on `val_avg/mae_surf_p`.
+
+### Result table (W&B run verified)
+
+| Metric | Value | vs. #1554 baseline (99.07/88.90) | vs. PR target Huber baseline (100.77) |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (best) | **105.24** | **+6.23% regression** | +4.4% regression |
+| Params | 0.74M | +0.08M for unified-pos encoding | |
+
+### Decision: CLOSED
+
+- Hit the PR's own `val > 105` close rule.
+- Regression even against the Huber-only baseline the student trained on (100.77 → 105.24, +4.4%).
+- Student's post-mortem was excellent: correctly identified that **mesh-extent information is stripped by per-mesh normalization** (the normalized (x, z) input already conveys position fully within each mesh), so the unified-pos signal adds redundant information that displaces capacity from useful representations.
+- Lever has been thoroughly debunked: tried twice on this branch (#1454 first attempt crashed, #1551 fixed implementation regressed). Move on.
+
+### tanjiro follow-up
+
+Reassigned to PR #1645: `swa_lr=1e-4 → 5e-5` tightening on the merged SWA-on-Huber + Re-weight baseline. This is the direct test of the val_re_rand regression diagnosis flagged in PR #1554's review (the cosine floor by epoch 15 is essentially 0, so swa_lr=1e-4 is well above floor and likely causing weight-averaging diversity that smooths over the local minimum on hard splits).
+
+---
+
+## 2026-05-12 22:12 — Wave-4 portfolio launch (8 students all active)
+
+After this round of close+reassign on the merged baseline (val=95.75/test=86.17), the active portfolio is:
+
+### Stack-tests on merged baseline (Huber + Re-weight + SWA, val=95.75)
+
+| PR | Student | Lever | Mechanism axis | Predicted Δ vs. 95.75 val |
+|---|---|---|---|---|
+| #1642 | thorfinn | Re-weight curve `1/sqrt(log_re_shifted)` (sharper) | loss-weighting / curve-shape | −1 to −3% |
+| #1645 | tanjiro | `swa_lr=5e-5` (half current 1e-4) | SWA-hyperparam / val_re_rand recovery | −0.5 to −2% (esp. val_re_rand) |
+
+### Stack-tests on SWA-on-Huber baseline (#1554, val=99.07) — pre-#1586 frame
+
+| PR | Student | Lever | Mechanism axis | Predicted Δ vs. 99.07 val |
+|---|---|---|---|---|
+| #1600 | frieren | Huber β ∈ {0.3, 1.0, 3.0} (3 arms) | loss-shape | best arm −1 to −4% |
+| #1617 | nezuko | `grad_clip_norm=1.0` (2 seeds) | optimizer-stability | −0.5 to −2% + variance reduction |
+| #1618 | alphonse | Huber on surface + MSE on volume | loss-by-node-type | −2 to −5% |
+| #1620 | edward | `surf_weight=30.0` (3× baseline) | loss-weighting (per-class) | −1 to −4% |
+| #1621 | fern | `mlp_ratio=4` (canonical Transolver FFN) | architecture-capacity | −1 to −5% |
+
+### Stack-stale on Huber baseline (#1452, val=100.77) — pre-#1554 frame
+
+| PR | Student | Lever | Frame |
+|---|---|---|---|
+| #1585 | askeladd | FiLM global conditioning (3 seeds) | Huber-only baseline |
+
+**Reframe decision rule** for wave-2/3 PRs landing against now-superseded baselines:
+- Beats `95.75` (current frame): merge directly.
+- `95.75 ≤ val < 99.07` (improves on SWA-frame): cherry-pickable improvement that doesn't beat current baseline — send back for rebase + retrain on merged code.
+- `99.07 ≤ val < 100.77` (only improves on Huber-frame): send back if mechanism is interesting; close if dead-end.
+- `val > 100.77`: close.
+
+### Mechanism-axis coverage
+
+- **Loss-shape:** β-sweep (#1600), surface-vs-volume split (#1618)
+- **Loss-weighting:** surf_weight bump (#1620), Re-weight-sqrt (#1642)
+- **Optimizer-stability:** gradient clipping (#1617)
+- **Architecture-capacity:** mlp_ratio=4 (#1621)
+- **Architecture-conditioning:** FiLM (#1585)
+- **SWA-hyperparam:** swa_lr tightening (#1645)
+
+This is comprehensive across orthogonal axes. Theoretical compound floor if all wave-4 stack-tests hit midpoints: 95.75 × 0.98 × 0.985 ≈ 92.4 val. Add wave-3 if-rebased: × 0.95 → 87.8 val. The 88 val barrier is in striking distance if a few independent levers compound.
