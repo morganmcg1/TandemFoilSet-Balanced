@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-12 19:52 — PR #1518: [higher-lr-cosine-14] lr=1e-3 + CosineAnnealingLR(T_max=14)
+
+- **Branch**: charliepai2g24h1-thorfinn/higher-lr-cosine-14
+- **Hypothesis**: With `grad_clip=1.0` bounding the effective step size, raising lr from 5e-4 to 1e-3 yields faster convergence; reducing T_max from 50 to 14 ensures the cosine schedule reaches its low-LR fine-tuning phase within the actual 14-epoch budget.
+- **Status**: MERGED — new baseline. Also includes y-sanitization fix in `train.py:evaluate_split`.
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 14) | **96.5587** |
+| val_single_in_dist | 108.58 |
+| val_geom_camber_rc | 110.59 |
+| val_geom_camber_cruise | 74.35 |
+| val_re_rand | 92.71 |
+| test_avg/mae_surf_p (4-split, NaN-free) | **85.87** |
+| test_single_in_dist | 94.97 |
+| test_geom_camber_rc | 99.77 |
+| test_geom_camber_cruise | 61.86 |
+| test_re_rand | 86.88 |
+| Peak VRAM | 42.11 GB |
+| Epochs | 14 (~131s/epoch, 30-min cap) |
+
+**Convergence trace**: crossed old 117.17 baseline at epoch 10 (110.19); val still falling at epoch 14 (100.34 → 98.66 → 96.56). Pre-clip norms: mean 23–66, max 288–740. Clipping fires ~100% of batches.
+
+**Analysis**: Dominant mechanism: T_max=14 let the cosine schedule actually reach its low-LR fine-tuning phase, which T_max=50 never achieved in 14 epochs. The higher LR (1e-3 vs 5e-4) accelerated early convergence and compound with the schedule effect. The y-sanitization fix made the cruise test split computable for the first time. -17.6% improvement over previous baseline.
+
+**Key insight**: Val was still falling at epoch 14 — the model has not fully converged. A slightly higher LR or different schedule tail may extract more.
+
+**Artifacts**: `models/model-charliepai2g24h1-thorfinn-higher-lr-cosine-14-20260512-191045/metrics.jsonl`
+
+---
+
 ## 2026-05-12 19:30 — PR #1473: [huber-loss] Switch MSE → Huber loss (delta=0.5)
 
 - **Branch**: charliepai2g24h1-tanjiro/huber-loss
