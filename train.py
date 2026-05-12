@@ -375,7 +375,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-4  # OneCycleLR lower bound (was 5e-4 for CosineAnnealingLR)
+    max_lr: float = 1e-3  # OneCycleLR peak
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -432,7 +433,17 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+steps_per_epoch = len(train_loader)
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=cfg.max_lr,
+    steps_per_epoch=steps_per_epoch,
+    epochs=MAX_EPOCHS,
+    pct_start=0.1,
+    div_factor=cfg.max_lr / cfg.lr,     # start LR = max_lr / div_factor = cfg.lr
+    final_div_factor=100,               # end LR = max_lr / (div_factor * final_div_factor)
+    anneal_strategy="cos",
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -498,6 +509,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
@@ -505,7 +517,6 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
