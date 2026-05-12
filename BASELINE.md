@@ -40,9 +40,10 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **112.546** | [#1520](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1520) |
-| `test_avg/mae_surf_p` | NaN (cruise split NaN — see note) | #1520 |
-| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | **110.862** | #1520 |
+| `val_avg/mae_surf_p` | **103.100** | [#1495](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1495) |
+| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **94.757** | #1495 |
+| `test_avg/mae_surf_p` (as-written; cruise NaN) | NaN | #1495 |
+| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | **98.520** | #1495 |
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -181,3 +182,68 @@ cd target/ && python train.py \
 ```
 
 Metrics: `models/model-charliepai2g24h3-fern-onecycle-ema-decay999-20260512-191518/metrics.yaml`
+
+---
+
+## 2026-05-12 19:59 — PR #1495: AoA + NACA camber jitter augmentation
+
+New best result. Replaces PR #1520 as the running baseline.
+
+**Per-split val (best checkpoint, epoch 14 / 14 run):**
+
+| Split | `mae_surf_p` | `mae_surf_Ux` | `mae_surf_Uy` |
+|-------|---:|---:|---:|
+| val_single_in_dist | 125.910 | 1.352 | 0.738 |
+| val_geom_camber_rc | 114.346 | 2.221 | 0.980 |
+| val_geom_camber_cruise | 77.995 | 0.895 | 0.520 |
+| val_re_rand | 94.150 | 1.555 | 0.736 |
+| **avg** | **103.100** | **1.506** | **0.744** |
+
+**Per-split test (best checkpoint, safe re-eval — zero-fills non-finite y before subtraction):**
+
+| Split | `mae_surf_p` |
+|-------|---:|
+| test_single_in_dist | 105.140 |
+| test_geom_camber_rc | 100.580 |
+| test_geom_camber_cruise | 83.481 (199/200 samples — see safe re-eval note above) |
+| test_re_rand | 89.834 |
+| **avg (4-split safe re-eval)** | **94.757** |
+| avg (3-split proxy, excl. cruise) | 98.520 |
+
+**Config (merged into advisor branch train.py):**
+
+| Param | Value |
+|-------|-------|
+| `n_hidden` | 128 |
+| `n_layers` | 5 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 2 |
+| `lr` | 5e-4 |
+| `weight_decay` | 1e-3 (from #1491) |
+| `grad_clip` | 1.0 (from #1491) |
+| `use_onecycle` | True (default, from #1520) |
+| `ema_decay` | 0.999 (default, from #1520) |
+| `augment` | **True** ← new default |
+| `aoa_jitter_rad` | **0.00873** (±0.5°) ← new |
+| `naca_jitter` | **0.002** ← new |
+| `batch_size` | 4 |
+| `surf_weight` | 10.0 |
+| epochs run | 14 / 14 configured (cosine T_max=14, full anneal) |
+
+**Note on scheduler:** This baseline number 103.100 was achieved with cosine T_max=14 (NOT OneCycleLR). The merged train.py retains `use_onecycle=True` as default from #1520, so reproducing the **exact baseline number** requires `--use_onecycle False --epochs 14`. The composability of augmentation with OneCycleLR + EMA has NOT yet been measured directly.
+
+Reproduce baseline (as run by thorfinn):
+```
+cd target/ && python train.py \
+  --experiment_name geom-aoa-augment-r2 \
+  --augment True \
+  --aoa_jitter_rad 0.00873 \
+  --naca_jitter 0.002 \
+  --use_onecycle False \
+  --epochs 14
+```
+
+Metrics: `models/model-geom-aoa-augment-r2-20260512-190924/metrics.yaml`
+
+**Safe re-eval side script** for handling cruise NaN: `models/model-geom-aoa-augment-r2-20260512-190924/safe_re_eval.py`. Reusable across experiments — preserves the "skip non-finite samples" semantics by zero-filling `y` where non-finite before the subtraction. All future PRs should commit a similar safe re-eval log for paper-facing test reporting.
