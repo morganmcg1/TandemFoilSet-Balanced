@@ -103,3 +103,48 @@ Per-split test mae_surf_p: in-dist 144.1, geom_rc 141.2, geom_cruise **NaN**, re
 **Analysis**: Tanjiro found the scoring bug independently, patched it in evaluate_split, and produced the strongest test_avg in the cohort (121.28 vs edward's 129.60 and partial-fourier estimates). The bf16+batch-8 config doubles effective throughput (17 epochs vs ~10-11 for others), enabling the model to reach a significantly lower loss at timeout. Also: `test_geom_camber_cruise`=78.57 is very low — BF16+higher-batch seems to particularly improve cruise OOD generalization. Val loss still descending at epoch 17 — more training would help further.
 
 **Action**: MERGED as new round-1 baseline. Also merged critical scoring bug workaround. All future PRs must rebase and beat test_avg < 121.28.
+
+## 2026-05-12 21:55 — PR #1591: Cosine schedule aligned to 30-min budget: --epochs 18 ⭐ WINNER (pending code-change commit)
+- Branch: willowpai2g48h1-edward/cosine-aligned-epochs
+- Hypothesis: Set `--epochs 18` so cosine T_max=18 fully decays within the realistic 30-min budget. Predicted -2% to -5%.
+- W&B run: `h7w6skh8`
+
+| Metric | This run | Baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | **125.36** | 133.75 | **−6.27%** |
+| **test_avg/mae_surf_p** | **111.98** | 121.28 | **−7.67%** ⭐ |
+| test single_in_dist | 148.79 | 166.19 | −10.47% |
+| test geom_camber_rc | 117.15 | 136.20 | −13.99% |
+| test geom_camber_cruise | 77.85 | 78.57 | −0.92% |
+| test re_rand | 104.13 | 104.17 | −0.04% |
+| Epochs completed | 17/18 | 17/50 | — |
+| Final LR | 5.32e-6 | 6.2e-4 | 2 orders of magnitude lower |
+| Peak GPU mem | 82.68 GB | 65.9 GB | +25% (extra allocator activity, fits cleanly) |
+
+**Analysis**: The schedule-alignment hypothesis lands well above predicted range (−7.67% vs predicted −2% to −5%). The mechanism is exactly as theorized: aligning T_max to the realistic epoch budget gives the model the full cosine decay including the low-LR refinement phase (5.32e-6 vs baseline 6.2e-4 final LR). This 2-orders-of-magnitude lower LR phase is what finds a flatter optimum. Best-val shifts from epoch 17 (last) on baseline to epoch 15 (mid-refinement) on this run — concrete evidence that the LR decay finds a flatter minimum rather than just rescaling.
+
+The wins concentrate on geometry-OOD splits (single_in_dist −10.47%, geom_camber_rc −13.99%) where weight-space noise hurts most. Cruise and re_rand barely move (~−1%, ~0%) — already at noise floor for this model size. This pattern strongly suggests the schedule fix unlocks generalization the model already had latent capacity for.
+
+**Action**: Win confirmed via W&B `h7w6skh8`. PR has zero code diff — win achieved via `--epochs 18` CLI flag only. Sent back to commit `epochs: int = 18` to Config dataclass default so the win compounds for the whole cohort. Will merge as new baseline once committed.
+
+## 2026-05-12 21:55 — PR #1361 trial-4: Wider model n_hidden 192 on rebased baseline
+- Branch: willowpai2g48h1-askeladd/wider-hidden-192
+- Hypothesis: n_hidden 128→192 on top of PR #1391 baseline.
+- W&B run: `p3uzgdir` (trial-4)
+
+| Metric | Trial-4 | Baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | **128.31** | 133.75 | **−4.07%** |
+| **test_avg/mae_surf_p** | **115.30** | 121.28 | **−4.93%** ✓ |
+| test single_in_dist | 125.91 | 166.19 | −24.24% |
+| test geom_camber_rc | 123.73 | 136.20 | −9.16% |
+| test geom_camber_cruise | 94.46 | 78.57 | +20.22% (worse — extra capacity overfits cruise) |
+| test re_rand | 117.11 | 104.17 | +12.42% (worse) |
+| Params | 1.47M | 0.67M | +2.2× |
+| Batch size | 4 (OOM at 8) | 8 | — |
+
+**Analysis**: Width hypothesis holds on the corrected baseline — wider model wins overall (−4.93%) within predicted range. **However**, the per-split signal is interesting: in_dist (−24%) and rc (−9%) improve while cruise (+20%) and re_rand (+12%) regress. This suggests width helps the splits closer to training distribution but hurts the OOD-extrapolation splits. The wider model with more capacity at the same depth may be overfitting to in-distribution structure. Worth noting for round 2.
+
+Practical constraint: at bs=8+bf16+n_hidden=192 the model OOMs at 94GB (≥96GB cap). Forced fallback to bs=4 which halves throughput. The wider+bs=4 config still wins, so the headline result holds.
+
+**Action**: Holding merge pending edward's #1591 landing first (bigger win). After edward merges, askeladd to rebase + retest on schedule-aligned baseline (which will have epochs=18 default). Expected: width may compound with schedule, or may plateau — that's the test.

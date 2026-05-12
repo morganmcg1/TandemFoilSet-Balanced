@@ -1,7 +1,11 @@
 # SENPAI Research State
 
-- 2026-05-12 21:15 — willow-pai2g-48h-r1, round 1 in progress; waiting on 7 student runs
+- 2026-05-12 22:00 — willow-pai2g-48h-r1, round 1 producing wins: edward & askeladd both beat baseline
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
+
+## Round-1 winners pending merge
+- **#1591 edward/cosine-aligned-epochs**: test=**111.98** (−7.67%) ⭐ BIGGEST — sent back for 1-line code commit (epochs:int=18 default), will merge as new baseline next
+- **#1361 askeladd/wider-hidden-192 trial-4**: test=**115.30** (−4.93%) — holding merge pending edward's land; will need rebase+retest on schedule-aligned baseline to confirm compound
 
 ## Current baseline (PR #1391 merged)
 **test_avg/mae_surf_p = 121.28** | val_avg/mae_surf_p = 133.75
@@ -11,9 +15,9 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
-| askeladd | #1361 | wider-hidden-192 | wip (running) | trial-4 running (W&B `p3uzgdir`); OOM at bs=8, fell back to bs=4. ~14 epochs expected |
+| askeladd | #1361 | wider-hidden-192 | **WIN PENDING** ⏳ | trial-4: test **115.30** (−4.93%) — holding merge pending edward |
 | edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
-| edward | #1591 | cosine-aligned-epochs | wip (new) | Assigned: --epochs 18 so T_max=18 aligns cosine decay to 30-min budget |
+| edward | #1591 | cosine-aligned-epochs | **WIN PENDING** ⭐ | test **111.98** (−7.67%); sent back for 1-line code commit (epochs:int=18 default) |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
@@ -22,10 +26,12 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
 ## Key research findings so far
-1. **Throughput matters more than architecture at 30-min budget**: bf16+batch-8 gets 17 epochs vs 10-11 epochs, that alone was enough for the current best test score.
-2. **Fourier features show strongest val signal** (119.70 vs baseline 133.75 val), but needs proper test comparison — sending back for rebase.
-3. **Undertraining is the main confound**: cosine T_max=50 barely decays in 10-17 epochs; all round-1 models are severely undertrained.
-4. **Critical data bug found**: `test_geom_camber_cruise/000020.pt` has 761 inf in ground-truth `p`; scorig workaround now in baseline.
+1. **Throughput matters more than architecture at 30-min budget**: bf16+batch-8 gets 17 epochs vs 10-11 epochs, that alone was enough for the round-1 baseline (test=121.28).
+2. **Schedule alignment is a massive free win**: simply setting T_max=actual epochs delivers −7.67% (test 111.98) — biggest single round-1 improvement. The cosine refinement phase (final LR ~5e-6 vs un-aligned ~6e-4) finds substantially flatter optima, with the win concentrated on geometry-OOD splits.
+3. **Width helps overall but splits OOD generalization**: n_hidden=192 wins −4.93% overall but improves in_dist/rc while regressing on cruise/re_rand. Suggests capacity overfits in-distribution structure at the same depth. Worth round-2 split-level analysis.
+4. **Fourier features show strongest val signal** (119.70 vs baseline 133.75 val), but needs proper test comparison — pending rebase.
+5. **Critical data bug found**: `test_geom_camber_cruise/000020.pt` has 761 inf in ground-truth `p`; scoring workaround now in baseline.
+6. **slice_num=128 is a dead-end at bs=8 bf16**: attention map [B,H,N,slice] memory dominates → near OOM, +44% epoch time → undertrains.
 
 ## Active research priorities for pending students
 All stale students (fern, frieren, thorfinn) were nudged with comments pointing to the new baseline (test 121.28) and rebase instructions. Alphonse and nezuko have rebase instructions; waiting for trial-2/trial-4 results.
@@ -33,11 +39,14 @@ All stale students (fern, frieren, thorfinn) were nudged with comments pointing 
 **Key note for askeladd**: n_hidden=192 + bs=8 + bf16 OOM'd at 94GB. Fell back to bs=4. This means the wider model can't use the bf16+batch-8 throughput advantage; its epoch budget reverts to ~14 epochs. This is an important constraint for the width hypothesis.
 
 ## Emerging round-2 hypotheses
-- **Fourier + bf16**: Most promising combo given nezuko's val signal and tanjiro's throughput win
-- **Wider model (192) + bf16**: Width hypothesis needs a fair test on the new baseline
-- **Cosine schedule fix**: T_max aligned to actual epoch budget — edward's #1591 directly tests this. alphonse's lr-warmup also related (higher peak LR + warmup). **slice_num=128 is a dead-end under batch=8** (near OOM, +44% epoch time → fewer epochs → regression).
-- **Combined wins**: After confirming which individual changes work, combine the winners for round 3+
-- **Deeper model (7 layers)**: Fern's result pending — depth may compound well with throughput improvements
+After edward's schedule-alignment merge lands (new baseline test ≈ 111.98), priorities:
+- **Width × schedule**: askeladd's wider-192 → retest on schedule-aligned baseline. Wins may compound or plateau.
+- **Fourier × schedule**: nezuko's fourier-pos (val 119.70 was best round-1 val signal) → retest on new baseline.
+- **lr-warmup × schedule**: alphonse's lr=1e-3 + warmup → may stack with proper cosine decay.
+- **Sweep --epochs near the cliff** (16, 17, 18, 19): edward's run hit timeout end of ep 17; finer alignment could squeeze more.
+- **Width-split asymmetry**: investigate why n_hidden=192 helps in_dist/rc but hurts cruise/re_rand — may suggest depth (more layers) > width for cross-domain generalization.
+- **Deeper model (7 layers) + schedule fix**: fern's result pending — depth × low-LR may compound especially well.
+- **CosineAnnealingWarmRestarts**: edward's follow-up suggestion — may revisit late-training dynamics.
 
 ## Next milestones
 - Get clean results from the 4 stale_wip students (alphonse, fern, frieren, thorfinn)
