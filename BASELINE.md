@@ -18,7 +18,7 @@ winner sets the first numeric reference value.
   - `unified_pos = False`
 - **Optimizer**: AdamW (`lr = 5e-4`, `weight_decay = 1e-4`)
 - **LR schedule**: CosineAnnealingLR with `T_max = MAX_EPOCHS`
-- **Loss**: MSE in normalized target space, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0`
+- **Loss**: **L1 (MAE) in normalized target space**, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0` _(updated 2026-05-12 by PR #1397)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -31,9 +31,38 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
-- **PR**: _none — no winners merged yet on this branch_
-- **`val_avg/mae_surf_p`**: TBD (to be set by first merged winner)
-- **`test_avg/mae_surf_p`**: TBD
+### 2026-05-12 19:05 — PR #1397 (`charliepai2g24h4-alphonse/l1-loss`)
+
+L1 (MAE) loss replaces MSE in normalized-space training. First numeric
+baseline on this branch.
+
+- **`val_avg/mae_surf_p`** = **100.9574** (best @ epoch 13/14 before 30 min timeout)
+- **`test_avg/mae_surf_p` (3-split mean, excludes `test_geom_camber_cruise`)** = **100.8314**
+- **`test_avg/mae_surf_p` (all 4 splits, raw)** = NaN — pre-existing data
+  bug: `test_geom_camber_cruise/000020.pt` has 761 nodes with `inf` in
+  pressure y. Affects every arm in this round; `data/scoring.py` is
+  marked read-only. See PR #1397 comment for full trace and proposed
+  fixes. Until resolved we record the 3-split test mean.
+
+Per-split surface pressure MAE at the best val checkpoint:
+
+| Split | mae_surf_p |
+|-------|-----------:|
+| val_single_in_dist     | 127.371 |
+| val_geom_camber_rc     | 110.832 |
+| val_geom_camber_cruise |  77.353 |
+| val_re_rand            |  88.273 |
+| **val_avg/mae_surf_p** | **100.957** |
+| test_single_in_dist    | 116.622 |
+| test_geom_camber_rc    |  97.209 |
+| test_geom_camber_cruise| NaN (data bug, surf_Ux/Uy still ok) |
+| test_re_rand           |  88.663 |
+| **test_avg/mae_surf_p (3-split)** | **100.831** |
+
+- **Metric artifacts**:
+  `models/model-charliepai2g24h4-alphonse-l1-loss-20260512-175404/metrics.jsonl`
+  and `metrics.yaml`.
+- **n_params**: 0.66M, **peak GPU memory**: 42.1 GB, **wall time**: 30.7 min.
 
 ## Reproduce baseline
 
