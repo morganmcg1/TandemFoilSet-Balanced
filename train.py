@@ -229,6 +229,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    # Mirror the training-loop per-channel surface weighting so reported
+    # surf_loss is comparable across train and eval. Sum stays at 3.0 so
+    # surf_weight tuning is unaffected.
+    surf_chan_w_eval = torch.tensor([0.5, 0.5, 2.0], device=device)
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -249,7 +253,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * surf_chan_w_eval * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -453,6 +457,13 @@ print(f"EMA shadow model initialized (decay={cfg.ema_decay})")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+# Per-channel surface loss weight: (Ux, Uy, p). Sum = 3 keeps the overall
+# gradient magnitude close to the previous uniform (1, 1, 1) weighting, so
+# surf_weight=10 still applies cleanly. The 2.0 on p pulls the optimizer
+# harder on the primary metric channel while Ux/Uy still provide geometric
+# regularization.
+surf_chan_w = torch.tensor([0.5, 0.5, 2.0], device=device)
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -514,7 +525,7 @@ for epoch in range(MAX_EPOCHS):
             pred = model({"x": x_norm})["preds"]
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction="none")
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_loss = (sq_err * surf_chan_w * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
