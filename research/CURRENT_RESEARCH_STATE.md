@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-12 ~20:00 UTC
+- **Date:** 2026-05-12 ~21:00 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock. Treat experiments as isolated for git and experiment artifacts; do not cross-reference unrelated branches.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -9,49 +9,59 @@
 
 | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | PR |
 |--------|-------------------|--------------------|----|
-| BF16 autocast (merged) | **123.72** | NaN* | #1371 |
+| BF16 + scoring fix (frieren rerun) | **120.40** | **106.67** | #1541 |
 
-*NaN due to pre-existing data bug in `test_geom_camber_cruise/000020.pt` — frieren fixing in PR #1541.
+All 4 test splits now finite. Per-test: single_in_dist=125.29, rc=113.23, cruise=81.16, re_rand=106.99
 
-## Round 1 results so far
+## Round 1 results (completed)
 
-| PR | Student | Config | val_avg | 3-split test | Status |
-|----|---------|--------|---------|-------------|--------|
-| #1371 | frieren | BF16 autocast | **123.72** | 121.90 | ✅ MERGED — new baseline |
-| #1367 | fern | Dropout=0.2+clip=1.0 | **113.86** | 114.77 | ♻ Rebasing (conflict w/ #1371) |
-| #1412 | thorfinn | Warmup-5ep+cosine | 135.37 | 131.12 | ♻ Rebasing to add BF16+warmup combo |
-| #1357-#1400 | others | 5 hypotheses | — | — | WIP/no results yet (2+ hr) |
+| PR | Student | Config | val_avg | test_avg | Status |
+|----|---------|--------|---------|----------|--------|
+| #1371 | frieren | BF16 autocast | 123.72 | NaN | ✅ MERGED (superseded) |
+| #1541 | frieren | Scoring fix + BF16 rerun | **120.40** | **106.67** | ✅ MERGED — new baseline |
+| #1367 | fern | Dropout=0.2+clip=1.0 | **113.86** (pre-BF16) | — | ♻ Rebasing to add BF16 |
+| #1412 | thorfinn | Warmup-5ep+BF16 | 123.10 | NaN | ✗ CLOSED (within noise of baseline) |
+| Others | Various | 5 hypotheses | — | — | WIP |
 
-**fern dropout=0.2** (113.86) is the current leading unmerged result — 7.7% below the BF16 baseline and still descending at the cap. Priority merge candidate when rebase lands.
-
-## Key findings from round 1
-
-1. **BF16 buys ~4 extra epochs** (18 vs ~14) in the 30-min window — free gains
-2. **Dropout=0.2** unexpectedly improves every split, not just OOD — likely acting as loss-landscape smoother in the low-epoch regime rather than classic regularization
-3. **Warmup=5 > warmup=3** across 3/4 splits (−6.3% on val_avg). Untested with BF16
-4. **Critical bug:** `data/scoring.py` + bad GT in `test_geom_camber_cruise/000020.pt` poisons test_avg — fix in progress (#1541)
+**fern dropout=0.2** (113.86 pre-BF16) remains the most promising unmerged result — 7.7% below the old baseline. With BF16, expected to go lower. Top priority merge candidate.
 
 ## Active experiments
 
 | PR | Student | Hypothesis | Expected ETA |
 |----|---------|-----------|-------------|
-| #1541 | frieren | Fix scoring.py NaN + BF16 baseline rerun | ~30 min |
-| #1367 | fern | Dropout=0.2 + BF16 (rebase) | ~30 min |
-| #1412 | thorfinn | Warmup-5 + BF16 combo | ~30 min |
+| #1583 | thorfinn | CosineAnnealingLR T_max=18 (match reachable epochs) | ~30 min |
+| #1367 | fern | Dropout=0.2 + BF16 + scoring fix (rebase) | ~30 min |
+| #1400 | tanjiro | Aux surf-p head λ=2 + BF16 combo | ~30 min |
+| #1386 | nezuko | Fourier pos encoding, max_freq=32, normalized + BF16 retry | ~30 min |
 | #1352 | alphonse | surf_weight=30 | still running? |
 | #1357 | askeladd | Huber loss δ=1.0 | still running? |
 | #1365 | edward | OneCycleLR max_lr=1e-3 | still running? |
-| #1386 | nezuko | Fourier pos encoding | still running? |
-| #1400 | tanjiro | Aux surf-p head | still running? |
+
+## Key findings from round 1
+
+1. **BF16 buys ~4 extra epochs** (18 vs ~14) in the 30-min window — foundational throughput gain
+2. **Scoring bug fixed (PR #1541):** `data/scoring.py` now guards `0×inf=NaN` in the cruise split; `test_avg/mae_surf_p` is usable for the first time
+3. **Dropout=0.2** unexpectedly improves every split, not just OOD — likely acting as loss-landscape smoother
+4. **Warmup finding:** warmup-5 helps without BF16, but BF16's extra epochs dominate; combined result is within noise of BF16-alone
+5. **T_max mismatch:** Current T_max=50 barely decays cosine in 18 BF16 epochs — late-epoch LR stays ~4.5e-4 causing val wobble. T_max=18 is the next lever to pull.
 
 ## Potential next research directions (round 2+)
 
-- **dropout sweep around 0.2:** fern confirmed 0.2 > 0.1; try 0.15, 0.25, 0.3 to find the optimum
-- **dropout=0.2 + warmup-5 + BF16 triple combo:** after each lands, combine them
-- **slice_num sweep (64→96→128):** Transolver "physics tokens" count is likely high-leverage; VRAM permits (frieren only used 33 GB with BF16)
-- **Bigger model n_hidden=192 or 256:** BF16 at 33 GB leaves 63 GB free; a 2× wider model is possible
+**High priority:**
+- **fern dropout=0.2 + BF16:** current leader 113.86 pre-BF16; combo should beat 120.40 baseline clearly
+- **T_max=18 (thorfinn):** cosine actually decaying to near-zero should stabilize late training and improve best checkpoint quality
+- **dropout sweep around 0.2 + BF16:** once fern lands, try 0.15/0.25/0.30 to find optimum
+- **dropout=0.2 + T_max=18 triple:** compound both improvements
+
+**Medium priority:**
+- **slice_num sweep (64→96→128):** Transolver "physics tokens" count; VRAM permits (~33 GB currently)
+- **CosineAnnealingWarmRestarts:** multi-cycle restart may escape local minima in 18-epoch budget
+- **surf_weight tune** combined with dropout: both reduce surface loss emphasis, likely compound
+- **EMA model** for evaluation — averages out noise from short runs
+- **Bigger model n_hidden=192 or 256:** BF16 at 33 GB leaves 63 GB free
+
+**Exploratory:**
 - **Output-space transforms:** asinh on p target to compress high-Re tail
 - **Per-sample y normalization:** divide each sample's y by its own std before loss
-- **Sobolev / divergence-free penalty** on (Ux, Uy)
-- **EMA model** for evaluation — averages out the noise in the short 30-min runs
-- **surf_weight tune** combined with dropout: both work in the same direction (emphasize surface)
+- **Sobolev / divergence-free penalty** on (Ux, Uy) — physics-informed regularizer
+- **Fourier positional encoding (retry):** nezuko fixing max_freq/normalization issues

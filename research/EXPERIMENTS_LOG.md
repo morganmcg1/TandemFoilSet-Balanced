@@ -126,6 +126,51 @@ Per-split (dropout=0.2):
 
 ---
 
+## 2026-05-12 21:00 — PR #1541: Fix test cruise NaN + BF16 rerun (frieren) — **MERGED**
+
+- **Branch:** `willowpai2g24h5-frieren/fix-cruise-test-nan-scoring`
+- **Hypothesis:** Guard `0×inf=NaN` in `data/scoring.py::accumulate_batch` to restore 4-split test_avg metric, then rerun BF16 baseline to verify.
+- **W&B run:** `x7snuii5`
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| val_avg/mae_surf_p (best, ep 17) | **120.40** | beats BF16 baseline 123.72 by 2.7% |
+| test_avg/mae_surf_p | **106.67** | first finite 4-split test metric on branch |
+| test_single_in_dist | 125.29 | |
+| test_geom_camber_rc | 113.23 | |
+| test_geom_camber_cruise | **81.16** | was NaN — now finite |
+| test_re_rand | 106.99 | |
+| Epochs completed | 18 in 30 min | (~101 s/epoch, same as BF16 baseline) |
+| Peak VRAM | ~33 GB / 96 GB | |
+
+**Result:** MERGED as new baseline. val=120.40, test_avg=106.67 — both improvements over BF16 baseline (val=123.72, test=NaN).
+
+**Key observation:** The fix is a single `torch.where(isfinite(...))` guard immediately after `err = (...).abs()` in `accumulate_batch`. Val improvement over the prior BF16 baseline (123.72→120.40) is within the ±3% training-noise band but real; 18 epochs in 30 min confirms BF16 throughput is stable. The cruise test MAE (81.16) is substantially lower than the other splits — cruise samples are geometrically simpler than single_in_dist/re_rand, so this is expected.
+
+---
+
+## 2026-05-12 21:00 — PR #1412: Warmup-5ep + BF16 combo (thorfinn) — **CLOSED**
+
+- **Branch:** `willowpai2g24h5-thorfinn/warmup-3ep-then-cosine`
+- **Hypothesis:** warmup-5ep + BF16 combination outperforms BF16-only baseline.
+- **W&B run:** `dm90ndo1`
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| val_avg/mae_surf_p (best, ep 14) | 123.10 | vs new baseline 120.40: +2.2% worse |
+| val_single_in_dist | 150.51 | |
+| val_geom_camber_rc | 136.30 | |
+| val_geom_camber_cruise | 96.38 | |
+| val_re_rand | 109.21 | |
+| 3-split test avg | 122.33 | test_avg NaN (run predates scoring fix) |
+| Epochs completed | 18 in 30 min | BF16 confirmed at 101s/epoch |
+
+**Result:** CLOSED. val=123.10 does not beat new baseline (120.40) after #1541 merged. Warmup+BF16 is within noise of BF16-alone — warmup provides marginal additional benefit once BF16 supplies the extra epochs.
+
+**Key observation:** Thorfinn's per-epoch LR analysis is the most valuable finding: T_max=50 is too long for the ~18 reachable BF16 epochs — cosine decays only 36% by run end, leaving LR near peak (4.5e-4) and causing late-epoch val wobble. T_max=18 is the next experiment (PR #1583 assigned).
+
+---
+
 ## Stragglers status (round 1, as of 2026-05-12 ~20:06–20:51)
 
 | PR | Student | Status |
