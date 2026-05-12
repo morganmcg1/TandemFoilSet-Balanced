@@ -242,8 +242,27 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
+def asinh_p_transform(y, scale):
+    """Apply asinh(y/scale) to channel index 2 (pressure)."""
+    if scale <= 0:
+        return y
+    y = y.clone()
+    y[..., 2] = torch.asinh(y[..., 2] / scale)
+    return y
+
+
+def asinh_p_invert(y, scale):
+    """Invert: scale * sinh(y) on channel index 2 (pressure)."""
+    if scale <= 0:
+        return y
+    y = y.clone()
+    y[..., 2] = scale * torch.sinh(y[..., 2])
+    return y
+
+
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   fourier_L: int, fourier_min_freq: float, fourier_max_freq: float) -> dict[str, float]:
+                   fourier_L: int, fourier_min_freq: float, fourier_max_freq: float,
+                   asinh_p_scale: float) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -265,6 +284,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             x_std_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_encode_positions(x_std_norm, fourier_L, fourier_min_freq, fourier_max_freq)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = asinh_p_transform(y_norm, asinh_p_scale)
             pred = model({"x": x_norm})["preds"]
 
             huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
@@ -280,6 +300,7 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             ).item()
             n_batches += 1
 
+            pred = asinh_p_invert(pred, asinh_p_scale)
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
@@ -421,6 +442,7 @@ class Config:
     fourier_min_freq: float = 1.0   # min frequency (rad/unit on standardized coords)
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
+    asinh_p_scale: float = 1.0   # scale for asinh on p channel; 0 disables
 
 
 cfg = sp.parse(Config)
@@ -553,6 +575,7 @@ for epoch in range(MAX_EPOCHS):
                 x_std_norm, cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq
             )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            y_norm = asinh_p_transform(y_norm, cfg.asinh_p_scale)
             pred = model({"x": x_norm})["preds"]
             huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
@@ -592,13 +615,15 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics_main = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+                             cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                             cfg.asinh_p_scale)
         for name, loader in val_loaders.items()
     }
     if ema_model is not None:
         split_metrics_ema = {
             name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
-                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                                 cfg.asinh_p_scale)
             for name, loader in val_loaders.items()
         }
     else:
@@ -686,7 +711,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                                 cfg.asinh_p_scale)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
