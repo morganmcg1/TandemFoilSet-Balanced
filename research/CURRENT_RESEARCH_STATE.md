@@ -18,13 +18,13 @@ See `BASELINE.md` for per-split details.
 | PR | Student | Slug | Axis | vs. Baseline |
 |----|---------|------|------|---|
 | #1414 | alphonse | `smooth-l1-loss` | Loss form (Huber β=0.1) | WIP |
-| #1421 | edward | `surf-weight-25` | surf_weight 10→25 | WIP |
-| #1424 | fern | `warmup-cosine-1e-3` | Refined: 7e-4 + 2ep warmup + grad clip | SENT BACK |
+| #1421 | edward | `surf-only-channel-weight` | Decouple vol/surf channel weights | SENT BACK (was 124.96 vs 122.64) |
+| #1424 | fern | `warmup-7e-4-clip` | Refined: 7e-4 + 2ep warmup + grad clip | SENT BACK |
 | #1426 | frieren | `hidden-192-head-6` | Width n_hidden 128→192 | WIP |
 | #1429 | nezuko | `slice-128-mlp-4` | slice_num 64→128, mlp_ratio 2→4 | WIP |
 | #1432 | tanjiro | `wall-distance-feature` | Input wall-distance feature | WIP |
 | #1435 | thorfinn | `unified-pos-ref8` | Unified pos encoding ref=8 | WIP |
-| #1517 | askeladd | `ema-0.999` | EMA weight averaging for eval | NEW |
+| #1517 | askeladd | `ema-0.999` | EMA weight averaging for eval | WIP |
 
 ## Current research focus
 

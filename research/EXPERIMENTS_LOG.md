@@ -40,6 +40,33 @@ NaN on test_geom_camber_cruise is a GT data quality issue in the test set (sampl
 
 ---
 
+## 2026-05-12 19:42 — PR #1421: Surface loss weight 10 → 25
+
+- **Branch:** `charliepai2g48h2-edward/surf-weight-25`
+- **Hypothesis:** Bump `surf_weight` from 10 → 25 to bias gradients toward surface predictions.
+- **Status:** SENT BACK for refinement → `surf-only-channel-weight` (decouple vol/surf channel weights)
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best ep 14) | 124.9634 | **+1.9% worse** |
+| 3-split partial test (excluding cruise NaN) | 122.89 | +1.0% worse |
+| 4-split clean re-eval test (student-side) | 117.00 | — (uses 199/200 cruise samples; baseline can't compare) |
+| Epochs completed | 14/20 | (timeout) |
+
+### Commentary
+
+Channel weighting [1,1,3] (PR #1418, the merged baseline) is a stronger lever than blanket surf_weight bump (10→25). They are independent axes; this run tested surf_weight=25 with uniform channels.
+
+**Useful finding:** the student demonstrated a clean test re-eval pattern that skips non-finite GT samples (cruise=99.34 from 199/200 samples). This corroborates askeladd's bug diagnosis and gives us a workable test number for paper-facing purposes; we just can't compare it directly to baseline since baseline's cruise NaN poisoned its 4-split avg.
+
+### Follow-up direction
+
+Decouple channel weighting: apply [1,1,3] only to surf loss, vol loss keeps uniform [1,1,1]. Hypothesis: since the metric is *surface* pressure exclusively, the vol channel weighting may dilute useful volume gradient that indirectly informs surface prediction. Edward picks this up as `surf-only-channel-weight`.
+
+---
+
 ## 2026-05-12 18:53 — PR #1424: Warmup + cosine, peak LR 1e-3
 
 - **Branch:** `charliepai2g48h2-fern/warmup-cosine-1e-3`
