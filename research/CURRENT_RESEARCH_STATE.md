@@ -1,16 +1,23 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12
+- **Last updated:** 2026-05-12 (post-first-review)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Students × GPU:** 8 × 1 (96 GB each)
+- **Idle students:** 0
 
 ## Most recent direction from human researcher team
 
-None received. Last issue check: 2026-05-12, zero open issues. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) on the TandemFoilSet Transolver baseline within isolated branch `icml-appendix-willow-pai2g-48h-r2`.
+None received. Last issue check: 2026-05-12 (post-first-review), zero open issues. Workflow assumed: drive primary ranking metric `val_avg/mae_surf_p` (and `test_avg/mae_surf_p`) on the TandemFoilSet Transolver baseline within isolated branch `icml-appendix-willow-pai2g-48h-r2`.
+
+## ⚠ Active infrastructure issue
+
+`data/scoring.py` `accumulate_batch` propagates NaN from a single corrupt GT sample (`test_geom_camber_cruise/000020.pt`) into the channel-level test surface-pressure MAE — making `test_avg/mae_surf_p` come back as NaN. Discovered by PR #1454 (tanjiro). The fix is one line (`nan_to_num` on the err before multiplying by mask). Tanjiro is now executing the fix as part of their re-run; once that PR merges, the other wave-1 PRs will need to rebase to inherit the fix or be sent back to re-run for clean test metrics. **All wave-1 results will likely have NaN `test_avg/mae_surf_p` until this lands.**
+
+There is also a constructor bug in `Transolver` where the `unified_pos=True` branch was a 3D-Transolver copy (`ref**3`) that the 2D forward pass never built encoding for. Tanjiro's PR also includes the train.py fix for this (switch to `ref**2`, add `forward`-side encoding, plumb `mask`). Lands together with the scoring fix.
 
 ## Current research focus
 
@@ -28,7 +35,7 @@ The most consequential observation from inspecting `train.py`: cosine `CosineAnn
 | #1450 | fern | `mlp-ratio-4` | FFN capacity | −2 to −6% |
 | #1452 | frieren | `smooth-l1-loss` | Robust loss (Huber) | −3 to −10% (mostly val_re_rand) |
 | #1453 | nezuko | `wider-n-hidden-192` | Width capacity | −3 to −7% |
-| #1454 | tanjiro | `unified-pos-ref8` | Positional encoding | −3 to −8% (esp. geom-OOD) |
+| #1454 | tanjiro | `unified-pos-ref8` | Positional encoding | −3 to −8% (esp. geom-OOD) — **first result: val=147.65, test=NaN (sent back for scoring fix + 15 epochs)** |
 | #1455 | thorfinn | `batch-8-lr-up` | Effective batch + sqrt-scaled lr | −2 to −6% |
 
 Coverage axes: schedule, attention granularity, loss weighting, robust loss, width, FFN ratio, positional encoding, batch+lr. Capacity along depth (`n_layers`) is intentionally left for wave 2 once wave 1 reveals which capacity dimensions actually move the metric.
@@ -48,7 +55,7 @@ When wave 1 finishes, candidates for wave 2 ranked roughly by expected return on
 9. **Gradient clipping** — defensive; cheap to add and can rescue divergent runs in larger-capacity arms.
 10. **Layer-wise lr or AdamW betas tweak (`beta2=0.95`)** — small effect but cheap and stackable.
 
-A researcher-agent is currently brainstorming additional ideas in the background and will write a `RESEARCH_IDEAS_2026-05-12_round2.md` file to this directory.
+The researcher-agent finished and wrote `RESEARCH_IDEAS_2026-05-12_round2.md` on this branch. Top picks for wave 2 (subject to wave-1 results): **FiLM global conditioning** on Re/AoA/NACA/gap/stagger (highest predicted ROI, −4 to −10%), **SWA** (−3 to −7%, near-zero risk), **surface-aware slice routing** (−5 to −12% but medium implementation), **domain-adversarial training** (−3 to −8% on camber OOD), **per-sample Re-based loss weighting** (−4 to −9% on val_re_rand).
 
 ## Open questions to revisit on review
 
