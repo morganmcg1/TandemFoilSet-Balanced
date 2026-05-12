@@ -8,6 +8,41 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 23:55 — PR #1555 (thorfinn tied projection + n_hidden=144 retune) — **CLOSED**
+
+- Branch: `charliepai2g24h4-thorfinn/remove-in-project-fx`
+- Hypothesis: keep the tied projection (in_project_fx removed, slice pool
+  reuses x_mid) but widen `n_hidden` 128 → 144 to reinvest the freed
+  parameter budget across all weights.
+- Rebased onto current advisor HEAD `05a8b35` (post #1552 + #1611 + #1637).
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 12/13) | 102.668 | 90.294 | **+13.71%** |
+| test_avg/mae_surf_p (4-split) | 91.739 | 81.243 | +12.92% |
+| n_params | 730,423 | 662,359 | +10.3% |
+| Wall time/epoch | 143s | 120s | +19% |
+| Epochs in 30-min cap | 13 | 15 | -2 |
+
+- **All four val splits regressed** by 5-22%, not just in-distribution.
+  Rules out the "wider over-parameterizes a small training set"
+  interpretation in favor of a structural "wider doesn't help here" signal.
+- **Root cause (per student diagnostic)**: the original n_hidden=144 retune
+  hypothesis was framed against the pre-cosine, pre-grad-clip baseline at
+  val_avg=98.353 where single_in_dist sat at 129.4 (in-distribution
+  underfit was real). After #1611 cosine + #1637 grad-clip both merged,
+  single_in_dist dropped to 109.5 *via optimization fixes alone* — the
+  underfitting the retune was meant to fix had already been resolved.
+- **Wall-clock budget cost** the rest: wider model = +19%/epoch =
+  -2 epochs in the cap = cosine arc cuts off at LR=2.2e-5 instead of
+  5e-6, losing the late-epoch fine-tuning that the merged baseline relies on.
+- **Reusable structural constraint reaffirmed**: under the 30-min cap, any
+  capacity-add must be free or near-free on wall-clock. Tanjiro #1545
+  asymmetric Q/K's +40% step cost set the same constraint; this PR's +19%
+  step cost reconfirms it.
+- Pivoting thorfinn to attention/MLP dropout=0.05 — orthogonal to merged
+  stoch-depth (block-level), zero compute overhead, standard ViT recipe.
+
 ## 2026-05-12 22:55 — PR #1637: Grad-clip max_norm=25 — **MERGED, new baseline**
 
 - Branch: `charliepai2g24h4-askeladd/grad-clip-25`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-12 23:00 UTC (3 reviews done — #1637 grad-clip-25 merged as new baseline; #1636 + #1553 closed; wave-4 spawned)
+- **Last updated**: 2026-05-12 23:58 UTC (#1555 thorfinn closed after rebase regression; wave 4 now full at 4 PRs)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -58,19 +58,19 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | alphonse | #1636 | `log1p-p-only` | **CLOSED** (channel-attribution falsified) | +5.32% |
 | nezuko | #1553 | `gumbel-slice` | **CLOSED** (3-run mean +4.4% vs old, hyp falsified) | +4.4% (3-run mean) |
 
-## Round 2 wave 4 — currently in flight (3 new PRs after wave-3 closures)
+## Round 2 wave 4 — currently in flight (4 PRs)
 
 | Student | PR | Slug | Wave-4 idea | Axis |
 |---------|----|----|--------------|------|
 | askeladd | #1674 | `grad-clip-50` | H15 bracket | Optim — bracket grad-clip threshold above 25 |
 | alphonse | #1675 | `out-scale-bias-h17` | H17 | Output head — learnable per-channel γ, β |
 | nezuko | #1677 | `per-node-temp-h12` | H12 | Slice mechanism — per-node deterministic τ_i |
+| thorfinn | #1699 | `attn-mlp-dropout-0.05` | new H18 | Regularization — fine-grained dropout on top of merged stoch-depth |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 
 | Student | PR | Slug | Status |
 |---------|----|----|--------|
-| thorfinn | #1555 | `remove-in-project-fx` | WIP (n_hidden=144 retune) |
 | fern | #1549 | `film-global-cond` | **REBASING** — extraordinary -17% signal pending re-run on current stack |
 | edward | #1548 | `fourier-coords-L4` | **REBASING** — -6% signal needs re-run on current stack |
 | frieren | #1608 | `ema-weights-0.999` | **REBASING** — -2.6% signal needs re-run on current stack |
