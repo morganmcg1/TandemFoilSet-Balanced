@@ -381,6 +381,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    swa_lr: float = 5e-5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -440,7 +441,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 swa_start_frac = 0.75
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
 swa_model = AveragedModel(model)
-swa_lr = cfg.lr * 0.2
+swa_lr = cfg.swa_lr
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
 print(
     f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
