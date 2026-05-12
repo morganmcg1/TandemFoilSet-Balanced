@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 00:10 (round-7: closed #1588 n_layers=6 (depth ruled out); #1619 nezuko sent back for compile rebase; assigned #1676 fern AdamW β2=0.95. All 8 students active.)
+- **As of:** 2026-05-13 00:40 (round-7b: closed #1587 edward n_hidden=160 (stale); reassigned #1688 edward n_hidden=160+compile. All 8 students active.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -43,6 +43,7 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 | #1561 ✗ | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
 | #1535 ✗ | charliepai2g48h5-tanjiro | EMA weights eval decay=0.999 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
 | #1588 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 | 111.058 | +9.83% vs bf16 baseline; depth lever ruled out (surface regressed more than volume) |
+| #1587 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (stale, no commits) | — | Pod stalled; reassigned on compile baseline as #1688 |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
@@ -53,7 +54,7 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 | #1652 | charliepai2g48h5-frieren | Step-based linear warmup (500 steps) + cosine | Schedule warmup |
 | #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
 | #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
-| #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (pre-compile) | Width |
+| #1688 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + compile + bf16 | Width |
 | #1676 | charliepai2g48h5-fern | AdamW β2 0.999 → 0.95 (transformer fast-adapting recipe) | Optimizer |
 
 > **Note on #1560:** Alphonse's original T_max=18 result (90.32) proved the
@@ -61,9 +62,9 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 > made and (b) post-compile budget is now 36 epochs, making T_max=36 the correct value.
 > Student re-running with --epochs 36 on the updated advisor branch.
 
-> **Note on #1587:** This pre-dates PR #1568 (compile). It tests n_hidden=160+bf16
-> without compile. If it wins, follow up with n_hidden=160+compile. (Note: #1588 fern
-> n_layers=6+bf16 was closed — depth lever ruled out by two experiments.)
+> **Note on #1688:** n_hidden=160+compile. Per-epoch cost ~65-75 s → ~24-27 epochs in
+> 30 min. Depth ruled out by #1413+#1588; width is the last untested capacity axis.
+> If #1688 wins, follow up with n_hidden=192+compile.
 
 ## Open research questions
 
@@ -120,11 +121,12 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
    - **T_max matched to compile budget (T_max=36): in flight (PR #1560 rerun, alphonse).**
 
 4. **Capacity / model topology** (moderate cost, moderate expected value):
-   - n_hidden=160 + bf16: in flight (PR #1587, edward).
+   - **n_hidden=160 + compile: in flight (PR #1688, edward).**
+   - n_hidden=160 + bf16 (stale): closed, reassigned → #1688.
    - n_layers=6 + bf16: **refuted (PR #1588, closed)** — +9.83% vs bf16 baseline.
    - n_layers=7 + fp32: **refuted (PR #1413, closed)** — wall-clock bound.
    - slice_num=96 + bf16: **refuted (PR #1590, closed)** — monotone-worse.
-   - **Depth lever ruled out.** Width (#1587) still being tested.
+   - **Depth lever ruled out.** Width (#1688) first test on compile baseline.
 
 5. **Regularization / stabilization**:
    - EMA weights for eval (decay=0.999) on compile: in flight (PR #1660, tanjiro).

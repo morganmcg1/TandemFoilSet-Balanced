@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-13 00:40 — PR #1587: n_hidden 128 → 160 + bf16 — CLOSED (stale)
+
+- **Branch:** `charliepai2g48h5-edward/wider-hidden-160-bf16`
+- **Student:** charliepai2g48h5-edward
+- **Hypothesis:** Widen Transolver n_hidden 128→160 paired with bf16 AMP.
+
+### Outcome
+
+**CLOSED** with no commits past the original assignment commit. Pod stalled or
+failed to start training; no training trajectory, no metrics.jsonl, no terminal
+SENPAI-RESULT. Same pattern as previously stale #1561 (askeladd) and #1535 (tanjiro).
+
+This is the third edward assignment to stall; the hypothesis itself remains valid.
+Width capacity has not been refuted — reassigned as PR #1688 on the compile baseline
+with explicit n_hidden=160+compile instructions and updated run command.
+
+---
+
 ## 2026-05-13 00:10 — PR #1619: RaceCar single sampler boost 2× — SENT BACK (needs compile rebase)
 
 - **Branch:** `charliepai2g48h5-nezuko/sampler-boost-single-2x`
