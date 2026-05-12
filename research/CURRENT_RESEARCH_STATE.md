@@ -36,6 +36,7 @@
 - lr=3e-4: undertraining at 30-min cap; cosine barely decays with T_max=50 (sent back to try lower LR + short T_max later)
 - n_layers=7: +51% worse, 9 epochs/30min, reproducible NaN on test_geom_camber_cruise
 - grad clip max_norm=1.0: too aggressive for L1 constant-magnitude gradients; retry at max_norm=10 in progress
+- Huber loss β=1.0: +15.7% worse; β=1.0 is "mostly-MSE" for normalized targets (std≈1). The constant-magnitude gradient advantage of L1 is what matters.
 
 ### Key insights
 1. **L1 loss is the dominant lever** (−20.5% alone)
@@ -51,7 +52,7 @@
 | alphonse | #1592 | Cosine T_max 50 → 14 (align to budget) | WIP |
 | nezuko | #1593 | Gradient clipping (max_norm=10.0 re-run) | WIP (sent back) |
 | tanjiro | #1634 | Batch size 4 → 8 (lower gradient noise) | New |
-| fern | #1595 | Huber/SmoothL1 loss (beta=1.0) | WIP |
+| fern | #1661 | CosineAnnealingWarmRestarts T_0=4 T_mult=2 | New |
 | edward | #1632 | Dropout=0.1 in attention (OOD regularization) | New |
 | askeladd | #1622 | AdamW betas (0.9,0.999)→(0.95,0.99) | WIP |
 | frieren | #1384 | surf_weight 10 → 25 (rebase needed) | WIP/CONFLICTING |
@@ -63,7 +64,7 @@
 2. **Gradient stability at scale** (nezuko retry): max_norm=10 — right clip threshold for L1 grad magnitudes?
 3. **Batch size effect** (tanjiro): batch=4→8 — fewer, cleaner gradient steps; does this trade-off favor accuracy at our budget?
 4. **OOD regularization** (edward): dropout=0.1 — improves hardest OOD splits?
-5. **Huber vs L1** (fern): SmoothL1 beta=1.0 — middle ground between MSE and L1?
+5. **Multi-cycle schedule** (fern): CosineAnnealingWarmRestarts T_0=4 T_mult=2 — periodic LR restarts to escape L1 loss landscape traps?
 6. **AdamW betas for L1** (askeladd): (0.95, 0.99) vs default — better second-moment tracking for constant-magnitude gradients?
 7. **surf_weight with L1** (frieren): 10 → 25 on new baseline, after rebase
 8. **weight_decay=0** (thorfinn): L1 as implicit regularizer may not need AdamW WD; removing it frees capacity

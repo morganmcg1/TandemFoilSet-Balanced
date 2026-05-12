@@ -6,6 +6,29 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-12 23:30 — PR #1595: Huber/SmoothL1 loss beta=1.0 — CLOSED
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/huber-beta1
+- **Hypothesis:** Huber loss (smooth L1 for small errors, L1 for large) provides middle ground between MSE and L1; expected ±3% vs L1.
+- **Outcome:** **CLOSED** — val=117.773 (+15.7% worse than 101.810), test=107.832 (+17.6% worse).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 11) | **117.773** |
+| val_single_in_dist | 152.680 (+23.0%) |
+| val_geom_camber_rc | 125.599 (+11.4%) |
+| val_geom_camber_cruise | 89.558 (+17.0%) |
+| val_re_rand | 103.255 (+10.1%) |
+| test_avg/mae_surf_p | **107.832** |
+| Epochs completed | 11/50 (30-min cap; ~175 s/epoch) |
+
+**Analysis:** Student's mechanistic explanation is correct: with targets normalized to std≈1, a large fraction of node errors fall inside β=1.0, where Huber behaves quadratically (MSE/2) — removing L1's constant-magnitude gradient. The loss ends up "mostly-MSE" for the error regime that matters most. This mirrors the MSE→L1 story in reverse: Huber β=1.0 reverts most of the gradient advantage L1 provided. Student noted β=0.1 might work but the benefit would be marginal at best. Reassigned to CosineAnnealingWarmRestarts (PR #1661).
+
+**Artifacts:** `models/model-charliepai2g48h3-fern-huber-beta1-20260512-211021/metrics.jsonl`
+
+---
+
 ## 2026-05-12 23:10 — PR #1525: Fourier positional features L=4 on L1 baseline — CLOSED
 
 - **Student:** charliepai2g48h3-thorfinn
