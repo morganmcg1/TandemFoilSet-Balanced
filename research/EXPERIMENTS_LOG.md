@@ -320,3 +320,45 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - Implementation is minimal (~15 lines, no external dependencies). Adds ~3 MB of fp32 shadow weights for 0.66M-param model. EMA on fp32 master weights is correct — bf16 autocast only touches the forward pass.
 - **Decision: MERGE** — new baseline val=92.35, test=81.63.
 
+## 2026-05-12 22:00 — PR #1546: edward `n_layers=8` (review 1, closed — dead end)
+
+- Branch: `willowpai2g48h5-edward/n-layers-8`
+- W&B run: `9duc68ci` (12 of 30 epochs; 155 s/epoch; peak VRAM 79.24 GB)
+
+| Metric | n_layers=8 | Baseline (bf16) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best, epoch 12) | 136.4966 | 109.2937 | +27.20 (+24.9%) |
+| `test_avg/mae_surf_p` | 126.2424 | 97.6659 | +28.58 (+29.3%) |
+| `test/test_single_in_dist/mae_surf_p` | 129.86 | 113.96 | +15.90 |
+| `test/test_geom_camber_rc/mae_surf_p` | 142.91 | 105.71 | +37.20 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 102.38 | 73.37 | +29.00 |
+| `test/test_re_rand/mae_surf_p` | 129.82 | 97.62 | +32.20 |
+| Per-epoch wall time | 155 s | 101 s | +54% |
+| Epochs in 30 min | 12 | 18 | −6 |
+
+- **Both failure mechanisms are clean**: (1) +54% per-epoch cost → 12 epochs vs 18; (2) val trajectory still descending at epoch 12 — model not converged. Cosine schedule T_max=30 + actual 12 epochs = schedule runs at high-to-mid LR throughout, no low-LR polishing.
+- **OOD splits worst**: camber_rc +37.2, re_rand +32.2 — opposite of predicted "depth helps OOD". Classic underfitting: higher-capacity model generalizes worse than lower-capacity model with same data budget when the higher-capacity model hasn't been trained long enough.
+- **Pattern confirmed**: third architecture experiment (after mlp_ratio=4, slice_num=96) to fail under budget. Architecture capacity is not the bottleneck; training duration and schedule are.
+- **Decision: CLOSE.** The schedule-alignment hypothesis (T_max=actual budget) is worth testing independently — assigning alphonse to that. n_layers=8 closed.
+
+## 2026-05-12 22:00 — PR #1544: alphonse `mlp_ratio=4` (review 1, closed — dead end)
+
+- Branch: `willowpai2g48h5-alphonse/mlp-ratio-4`
+- W&B run: `yz7e5k2m` (17 of 30 epochs; 108 s/epoch; peak VRAM 38.1 GB)
+
+| Metric | mlp_ratio=4 | Baseline (bf16) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best, epoch 17) | 115.0388 | 109.2937 | +5.74 (+5.3%) |
+| `test_avg/mae_surf_p` | 101.6665 | 97.6659 | +4.00 (+4.1%) |
+| `test/test_single_in_dist/mae_surf_p` | 127.53 | 113.96 | +13.57 |
+| `test/test_geom_camber_rc/mae_surf_p` | 103.59 | 105.71 | −2.13 (better) |
+| `test/test_geom_camber_cruise/mae_surf_p` | 75.67 | 73.37 | +2.30 |
+| `test/test_re_rand/mae_surf_p` | 99.88 | 97.62 | +2.26 |
+| Per-epoch wall time | ~108 s | ~101 s | +7% |
+| Epochs in 30 min | 17 | 18 | −1 |
+
+- **Same pattern at smaller scale**: +7% per-epoch overhead → 17 epochs vs 18, still descending at epoch 17 (best=last). Marginally less budget-impacted than n_layers=8 (108 vs 155 s/epoch), but the extra capacity doesn't help in 17 epochs.
+- **3 of 4 test splits worse**: camber_rc is the only marginal win (−2.13). in_dist worsens the most (+13.57), consistent with conventional `mlp_ratio=4` over-parameterizing for our 1500-sample training set.
+- **Architectural note**: conventional ML uses `mlp_ratio=4` for large datasets (ImageNet, language); TandemFoilSet has 1500 samples with batch_size=4. Wider MLP adds params without enough optimizer steps to benefit. mlp_ratio=2 is correctly sized for our regime.
+- **Decision: CLOSE.** Assigning alphonse to LR schedule alignment (T_max=18).
+
