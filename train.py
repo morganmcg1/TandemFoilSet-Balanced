@@ -62,6 +62,20 @@ ACTIVATION = {
 }
 
 
+class FourierEncoding(nn.Module):
+    """Sinusoidal Fourier features for position. Produces 4*L extra features."""
+    def __init__(self, n_freq: int = 6, scale: float = 1.0):
+        super().__init__()
+        freqs = (2.0 ** torch.arange(n_freq).float()) * torch.pi * scale
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, pos):  # pos: [B, N, 2]
+        proj = pos[..., None] * self.freqs[None, None, None, :]
+        sins = proj.sin().flatten(-2)
+        coss = proj.cos().flatten(-2)
+        return torch.cat([sins, coss], dim=-1)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -169,18 +183,23 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 pos_n_freq: int = 6, pos_scale: float = 1.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
 
+        self.pos_enc = FourierEncoding(n_freq=pos_n_freq, scale=pos_scale)
+        pos_feat_dim = 4 * pos_n_freq
+
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + pos_feat_dim,
+                                  n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -207,7 +226,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+        pos = x[..., :2]
+        fourier = self.pos_enc(pos)
+        x_full = torch.cat([x, fourier], dim=-1)
+        fx = self.preprocess(x_full) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
