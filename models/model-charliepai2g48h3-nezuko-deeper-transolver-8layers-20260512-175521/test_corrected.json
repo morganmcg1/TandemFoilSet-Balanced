@@ -1,0 +1,40 @@
+{
+  "note": "Recomputed test metrics with masking fix for sample(s) with Inf in y. test_geom_camber_cruise contains 1 sample with Inf-y; original scoring computes (pred - Inf).abs() = Inf and then Inf * 0 (mask) = NaN.",
+  "test_splits": {
+    "test_single_in_dist": {
+      "mae_surf_Ux": 2.6587425987112034,
+      "mae_vol_Ux": 6.151076134816592,
+      "mae_surf_Uy": 0.9717500737633039,
+      "mae_vol_Uy": 2.3948293626271475,
+      "mae_surf_p": 159.78393681092751,
+      "mae_vol_p": 157.71854226905015
+    },
+    "test_geom_camber_rc": {
+      "mae_surf_Ux": 3.044450449192054,
+      "mae_vol_Ux": 6.801491682398917,
+      "mae_surf_Uy": 1.1787177361651962,
+      "mae_vol_Uy": 3.041949227064902,
+      "mae_surf_p": 136.48741447480595,
+      "mae_vol_p": 133.17945942280846
+    },
+    "test_geom_camber_cruise": {
+      "mae_surf_Ux": 1.9102346110325052,
+      "mae_vol_Ux": 4.188272104341534,
+      "mae_surf_Uy": 0.6128380484525804,
+      "mae_vol_Uy": 1.6452078646760173,
+      "mae_surf_p": 95.63018282456372,
+      "mae_vol_p": 88.9358679268517
+    },
+    "test_re_rand": {
+      "mae_surf_Ux": 2.4992250078488714,
+      "mae_vol_Ux": 5.355937950027774,
+      "mae_surf_Uy": 0.9290386837803979,
+      "mae_vol_Uy": 2.3096215581110506,
+      "mae_surf_p": 129.01784194938114,
+      "mae_vol_p": 120.11940026725559
+    }
+  },
+  "test_avg/mae_surf_p": 130.22984401491956,
+  "test_avg/mae_surf_Ux": 2.5281631666961584,
+  "test_avg/mae_surf_Uy": 0.9230861355403697
+}
