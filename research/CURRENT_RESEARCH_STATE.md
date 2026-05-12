@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r1
 
-- 2026-05-12 18:55 (round 1 first results in)
+- 2026-05-12 19:35 (round 1: 3 of 8 done; round 2 in flight)
 - Most recent research direction from human researcher team: This launch is a
   controlled 24h/48h Charlie-vs-Willow logging ablation. Each training run is
   capped at `SENPAI_TIMEOUT_MINUTES=30`. The fleet is scoped to research tag
@@ -10,55 +10,75 @@
 
 - Current research focus and themes:
 
-  Round 1 first two completions (PRs #1372 n_head=8 and #1378 n_hidden=192,
-  both now closed) revealed two crosscutting blockers that affect ALL
-  capacity-changing variants under the 30-min wall-clock cap:
+  Three of eight round-1 PRs are complete (#1372 n_head=8, #1378 n_hidden=192,
+  #1382 wd=3e-4) and all three exposed the same dual-blocker pattern under the
+  30-min wall-clock cap:
 
-  1. **Throughput.** A standard run reaches only ~10–11 of the spec'd 50
-     epochs before the timeout fires. Wider/deeper variants reach even fewer
-     (~10 epochs at n_hidden=192). Under this regime the
-     `CosineAnnealingLR(T_max=epochs)` schedule barely moves the LR from
-     peak across the whole run, so models are still in their early-noise
-     regime when evaluated.
-  2. **Stability.** Both completed runs produced non-finite pressure
-     predictions on `test_geom_camber_cruise` (one of four test splits)
-     while staying finite on the other three. This corrupted
-     `test_avg/mae_surf_p` for both PRs. Strong signal that an undertrained
-     Transolver blows up the pressure head on extreme OOD samples.
+  1. **Throughput.** Standard runs hit ~10–11 epochs out of the spec'd 50
+     before the cap fires. `CosineAnnealingLR(T_max=50)` decays LR by only
+     ~10% across the whole run, so models stay near peak LR (high-noise
+     regime) all the way through evaluation.
+  2. **Stability.** All three completed runs produced non-finite pressure
+     predictions on the hardest OOD split (`test_geom_camber_cruise`) while
+     Ux/Uy and the other three test splits stayed finite. This corrupted
+     `test_avg/mae_surf_p` to NaN. The pattern is now unambiguous: the
+     undertrained Transolver blows up the pressure head on extreme OOD
+     samples in the cruise tandem domain (unseen camber M=2–4).
 
-  Round 2 attacks these blockers head-on while round 1 finishes:
+  Subtler issue flagged by thorfinn's results comment: `data/scoring.py`
+  uses `err * mask.double()` accumulation which propagates NaN if `err`
+  contains any `inf` (since `inf * 0 = NaN`). `torch.where(mask, err, 0)`
+  would be NaN-safe. **`data/` is read-only per program.md**, so we cannot
+  fix scoring directly — instead the active strategy is to prevent inf at
+  the source via grad clipping (#1515) and to make `test_avg/mae_surf_p`
+  computable on every future run.
 
-  - **frieren #1383** — `grad-clip-1.0`: add
-    `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)` to the
-    training step. Directly addresses the cruise-test pressure inf. If this
-    works, all subsequent capacity sweeps can produce clean `test_avg`.
-  - **tanjiro #1384** — `bf16-autocast`: wrap the forward + loss in
-    `torch.autocast(device_type='cuda', dtype=torch.bfloat16)`. Cheapest
-    path to ~1.3–1.8× per-step speedup on Hopper/Ampere → more epochs fit
-    inside the 30-min cap. Compounds with every future hypothesis.
+  Round-1 informational ranking (not a settled baseline since all test_avg
+  are NaN):
 
-- Round 1 in-flight (6 PRs still WIP, results expected within the next
-  hour or so):
+  | PR | Change | val_avg/mae_surf_p | partial test_avg (3 of 4) |
+  |---|---|---:|---:|
+  | #1382 | wd=3e-4 | **149.40** | 153.20 |
+  | #1372 | n_head=8 | 153.84 | 141.53 |
+  | #1378 | n_hidden=192 | 155.16 | 159.62 |
+
+  Round 2 attacks the blockers head-on so capacity-changing variants can be
+  retried with clean test numbers later:
+
+  - **frieren #1515** — `grad-clip-1.0`: insert
+    `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)` between
+    `loss.backward()` and `optimizer.step()`. Directly addresses the
+    cruise-test pressure inf. If this works, every subsequent experiment
+    can report a finite `test_avg/mae_surf_p`.
+  - **tanjiro #1516** — `bf16-autocast`: wrap forward + (val/test) forward
+    in `torch.autocast(device_type='cuda', dtype=torch.bfloat16)`. Expected
+    ~1.3–1.8× per-step speedup → ~15–22 epochs in 30 min vs 10–12 today.
+    Compounds with every future hypothesis (more anneal, more training).
+  - **thorfinn (queued)** — `huber-loss-vol`: replace MSE on the volume
+    term with Huber loss (delta in normalized space). Robustness against
+    high-Re outliers; may indirectly help cruise-test pressure stability.
+
+- Round 1 in-flight (5 PRs still WIP — currently quiet but pods running
+  ~2h+; expected to finish within next hour as the wider/deeper variants
+  have higher per-epoch cost):
   - alphonse #1353 — `surf-weight-25`
   - askeladd #1354 — `lr-1e-3`
   - edward #1356 — `n-layers-7`
   - fern #1360 — `slice-num-128`
   - nezuko #1377 — `mlp-ratio-4`
-  - thorfinn #1382 — `wd-3e-4`
 
 - Round 2 (so far):
-  - frieren #1383 — `grad-clip-1.0`
-  - tanjiro #1384 — `bf16-autocast`
+  - frieren #1515 — `grad-clip-1.0`
+  - tanjiro #1516 — `bf16-autocast`
+  - thorfinn — `huber-loss-vol` (this turn)
 
-- Potential next research directions and themes once round 1/2 land:
+- Potential next research directions once round 1/2 land:
   - **Schedule fix**: pass `--epochs <fits-in-30min>` so `T_max=epochs`
-    actually anneals. Likely worth ~5–15 MAE points on its own.
-  - **Compound winners**: best loss-weight × best LR × best stability fix
-    into a multi-knob frontier run.
-  - **Loss reformulation**: Huber on volume term (high-Re samples push
-    extreme y values that pure MSE penalizes disproportionately), or
-    per-channel weighting (Ux/Uy/p with separate weights).
-  - **LR schedule variants**: OneCycle, warmup+cosine, lower min-lr.
+    actually anneals — likely worth ~5–15 MAE points on its own.
+  - **Compound winners**: best loss-weight × best LR × stability/throughput
+    fixes into a multi-knob frontier run.
+  - **LR schedule variants**: OneCycleLR (built-in warmup+anneal for short
+    budgets), warmup+cosine, lower min-lr.
   - **Architecture**: RoPE / Fourier positional encoding on (x, z), gated
     FFN (SwiGLU), pre-norm vs post-norm placement.
   - **Data**: coordinate normalization (centering on foil 1), per-domain

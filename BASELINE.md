@@ -47,12 +47,14 @@ baseline because test_avg is NaN):
 
 | Source | val_avg/mae_surf_p | partial test_avg (3 of 4 splits) | Notes |
 |---|---:|---:|---|
+| #1382 (wd=3e-4, closed) | **149.40** | 153.20 | 10/50 epochs, cruise-test pressure inf |
 | #1372 (n_head=8, closed) | 153.84 | 141.53 | 11/50 epochs, cruise-test pressure inf |
 | #1378 (n_hidden=192, closed) | 155.16 | 159.62 | 10/50 epochs, cruise-test pressure inf |
 
 Round 2 priorities — fix the blockers before retrying capacity changes:
-- gradient clipping (frieren #1383) to address the cruise-test pressure inf
-- bf16 autocast (tanjiro #1384) to attack throughput so more epochs fit
+- gradient clipping (frieren #1515) to address the cruise-test pressure inf
+- bf16 autocast (tanjiro #1516) to attack throughput so more epochs fit
+- Huber-on-volume loss (thorfinn, queued) for robustness against high-Re outliers
 
 ## Reproduce command
 

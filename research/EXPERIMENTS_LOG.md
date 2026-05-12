@@ -2,6 +2,29 @@
 
 Track: `willow-pai2g-24h-r1` | Advisor branch: `icml-appendix-willow-pai2g-24h-r1`
 
+## 2026-05-12 19:30 — PR #1382 (CLOSED): AdamW weight_decay 1e-4 -> 3e-4
+- Branch: `willowpai2g24h1-thorfinn/wd-3e-4`
+- Hypothesis: Stronger weight decay regularizes toward lower-norm solutions, expected to improve OOD splits at minor cost on in-distribution split.
+- Single isolated change: `--weight_decay 3e-4` CLI flag (no code change).
+
+| Metric | Value | Notes |
+|---|---|---|
+| val_avg/mae_surf_p (best, epoch 10) | **149.4008** | best round-1 val reading so far |
+| test_avg/mae_surf_p | **NaN** | same `test_geom_camber_cruise/mae_surf_p` inf pathology |
+| test_avg/mae_surf_p (partial 3 of 4) | 153.20 | excluding cruise split |
+| Params | 0.66 M | unchanged |
+| Peak VRAM | 49.1 GB / 96 GB | comfortable |
+| Epochs completed | 10 / 50 | hit `SENPAI_TIMEOUT_MINUTES=30` cap |
+| Final LR | 4.5e-4 (vs 5.0e-4 peak) | ~10% decay only |
+| W&B run id | `n86jz5o4` | group `wd-sweep` |
+
+- Per-split val (epoch 10): single_in_dist=193.07 · geom_camber_rc=163.62 · geom_camber_cruise=107.34 · re_rand=133.57.
+- Per-split test (best-val checkpoint @ epoch 10): single_in_dist=180.01 · geom_camber_rc=149.82 · geom_camber_cruise=**NaN** · re_rand=129.77.
+
+**Conclusion — INCONCLUSIVE → CLOSED.** Same dual blocker as PR #1372 and #1378: (a) only 10/50 epochs reached, cosine T_max=50 → LR ~flat at peak, model in early-noise regime; (b) `test_geom_camber_cruise` pressure inf corrupts `test_avg/mae_surf_p`. Best validation reading on this fleet so far (149.40 vs 153.84 from n_head=8 and 155.16 from n_hidden=192) but the wd hypothesis is unresolved without a paired wd=1e-4 baseline at the same epoch budget — and ALL three completed runs hit the same cruise-test inf so the wd-vs-baseline comparison would also have NaN test metrics. The pattern is now unambiguous: undertrained Transolver at peak-LR produces extreme pressure outputs on the hardest OOD split. Closing for consistency with #1372 and #1378; reassigning thorfinn to `huber-loss-vol` as an orthogonal robust-loss experiment that may indirectly stabilize high-Re extremes.
+
+**Student observation worth flagging (not actioned).** Thorfinn pointed out that `data/scoring.py`'s masked-MAE uses `err * mask.double()` accumulation, which propagates NaN if `err` contains `inf` anywhere (even at masked positions, because `inf * 0 = NaN`). `torch.where(mask, err, 0)` or `err.masked_fill(~mask, 0)` would be NaN-safe. `data/scoring.py` is **read-only** per program.md, so we cannot make this fix. The right path is to prevent inf at the source — grad clipping (#1515) and bf16 autocast (#1516) are the active stability/throughput levers. Worth flagging to the human researcher team as a robustness improvement that would help every experiment on this benchmark, but out of scope for this launch.
+
 ## 2026-05-12 18:55 — PR #1378 (CLOSED): Widen Transolver hidden dim 128->192
 - Branch: `willowpai2g24h1-tanjiro/n-hidden-192`
 - Hypothesis: Increase model width from 128 → 192 to expand all projections, expected to improve fitting capacity on all splits with biggest gain on geometric OOD.
@@ -46,7 +69,16 @@ Track: `willow-pai2g-24h-r1` | Advisor branch: `icml-appendix-willow-pai2g-24h-r
 
 ## Cross-result note (round 1 first results)
 
-Two completely independent capacity changes (width vs heads) produced the same pathology: model output goes non-finite on `test_geom_camber_cruise/mae_surf_p` while remaining finite on the other 3 test splits and on Ux/Uy of the cruise split. The aggregate `test_avg/mae_surf_p` is NaN for both. Hypothesis: under-trained Transolver (LR near peak for the entire 10-epoch run) produces extreme pressure predictions on the unseen camber range (M=2–4) in the cruise tandem domain. Round-2 priorities:
-1. **Stability**: `clip_grad_norm_(parameters, 1.0)` — assigned to frieren.
-2. **Throughput**: `torch.autocast(bf16)` mixed precision — assigned to tanjiro.
-3. **Schedule mismatch**: separate follow-up — once we know roughly how many epochs fit, future experiments should pass `--epochs` close to that count so `CosineAnnealingLR(T_max=epochs)` actually anneals.
+Three completely independent single-knob changes (`n_hidden=192`, `n_head=8`, `wd=3e-4`) produced the same pathology: model output goes non-finite on `test_geom_camber_cruise/mae_surf_p` while remaining finite on the other 3 test splits and on Ux/Uy of the cruise split. The aggregate `test_avg/mae_surf_p` is NaN for all three. Hypothesis: under-trained Transolver (LR near peak for the entire 10-epoch run under T_max=50 cosine) produces extreme pressure predictions on the unseen camber range (M=2–4) in the cruise tandem domain. Round-2 priorities:
+1. **Stability**: `clip_grad_norm_(parameters, 1.0)` — assigned to frieren (#1515).
+2. **Throughput**: `torch.autocast(bf16)` mixed precision — assigned to tanjiro (#1516).
+3. **Loss robustness**: Huber loss on volume term — assigned to thorfinn (queued).
+4. **Schedule mismatch**: separate follow-up — once we know roughly how many epochs fit, future experiments should pass `--epochs` close to that count so `CosineAnnealingLR(T_max=epochs)` actually anneals.
+
+Round-1 informational val ranking (NOT a settled baseline since all test_avg are NaN):
+
+| PR | Change | val_avg/mae_surf_p | partial test_avg (3 of 4) | status |
+|---|---|---:|---:|---|
+| #1382 | wd=3e-4 | **149.40** | 153.20 | closed |
+| #1372 | n_head=8 | 153.84 | 141.53 | closed |
+| #1378 | n_hidden=192 | 155.16 | 159.62 | closed |
