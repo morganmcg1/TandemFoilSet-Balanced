@@ -102,14 +102,39 @@ Per-split (dropout=0.2):
 
 ---
 
-## Stragglers status (round 1, as of 2026-05-12 ~20:06)
+## 2026-05-12 20:51 — PR #1386: Fourier positional encoding L=6 (nezuko) — **PENDING RETRY**
+
+- **Branch:** `willowpai2g24h5-nezuko/fourier-position-encoding`
+- **Hypothesis:** Random Fourier features on (x,z) coordinates help model learn high-freq spatial patterns.
+- **W&B run:** `0xuvq54a`
+- **Config:** L=6, min_freq=1.0, max_freq=1000.0, no BF16 (PR predates BF16 merge), 14 epochs in 30 min
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| val_avg/mae_surf_p (best, ep 13) | **123.10** | 0.5% below merged BF16 baseline (123.72) |
+| val_single_in_dist | 142.19 | vs 153.36 (BF16): better |
+| val_geom_camber_rc | 138.34 | vs 129.40 (BF16): worse |
+| val_geom_camber_cruise | 92.13 | vs 99.23 (BF16): better |
+| val_re_rand | 119.73 | vs 112.87 (BF16): worse |
+| 3-split test avg | 124.90 | vs 121.90 (BF16): worse |
+| test_geom_camber_cruise | NaN | same pre-existing data bug |
+| Peak VRAM | 42.5 GB / 96 GB | |
+
+**Result:** SENT BACK for retry. Student correctly identified that **max_freq=1000 is far too high** for raw coordinates (Tancik standard is max_freq ≈ 2π × num_octaves on NORMALIZED positions). Requested re-run with max_freq=32, normalized positions, and BF16 from base.
+
+**Key observation:** Marginal +0.5% val improvement over BF16 baseline, but per-split signals are mixed (helps single_in_dist & cruise, hurts rc & re_rand). The mixed signal + known scaling bug + room for a much bigger win via the retry → preferred over merging a borderline win with a bug.
+
+---
+
+## Stragglers status (round 1, as of 2026-05-12 ~20:06–20:51)
 
 | PR | Student | Status |
 |----|---------|--------|
-| #1386 | nezuko | Implementation verified, launching training |
-| #1365 | edward | Mid-epoch 7/50 OneCycleLR; val 254→190 over 6 epochs — likely undercooked (peak LR at 5 ep but MAX_EPOCHS=50 → low avg LR) |
-| #1357 | askeladd | Epoch 3/50 Huber loss; val 232→178 — descending normally |
-| #1352 | alphonse | surf_weight=20 finished at val=127.05 (worse than 123.72 BF16 baseline); surf_weight=30 arm still pending |
+| #1386 | nezuko | ✅ Completed at val=123.10 → SENT BACK for retry |
+| #1365 | edward | Mid-epoch 7/50 OneCycleLR; val 254→190 over 6 epochs — likely undercooked |
+| #1357 | askeladd | Epoch 3/50 Huber loss; val 232→178 — descending |
+| #1352 | alphonse | surf_weight=20 finished at val=127.05 (worse than 123.72 baseline); surf_weight=30 arm still pending |
+| #1541 | frieren | Scoring fix + baseline rerun — no comments yet |
 
 ---
 
