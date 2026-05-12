@@ -387,6 +387,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    no_swa: bool = False  # disable SWA — train cosine-only, terminal eval on base model
 
 
 cfg = sp.parse(Config)
@@ -438,14 +439,21 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
 swa_start_frac = 0.75
-swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
-swa_model = AveragedModel(model)
-swa_lr = cfg.lr * 0.2
-swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
-print(
-    f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
-    f"swa_lr={swa_lr:.2e}, anneal_epochs=2"
-)
+if not cfg.no_swa:
+    swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
+    swa_model = AveragedModel(model)
+    swa_lr = cfg.lr * 0.2
+    swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
+    print(
+        f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
+        f"swa_lr={swa_lr:.2e}, anneal_epochs=2"
+    )
+else:
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = MAX_EPOCHS + 1  # never triggers
+    swa_lr = None
+    print("SWA: disabled via --no_swa (cosine schedule only, base-model eval)")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -459,10 +467,11 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "swa_start_frac": swa_start_frac,
-        "swa_start_epoch": swa_start_epoch,
+        "swa_start_frac": swa_start_frac if not cfg.no_swa else None,
+        "swa_start_epoch": swa_start_epoch if not cfg.no_swa else None,
         "swa_lr": swa_lr,
-        "swa_anneal_epochs": 2,
+        "swa_anneal_epochs": 2 if not cfg.no_swa else None,
+        "no_swa": cfg.no_swa,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -550,7 +559,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    if epoch >= swa_start_epoch:
+    if (not cfg.no_swa) and epoch >= swa_start_epoch:
         swa_model.update_parameters(model)
         swa_scheduler.step()
         current_lr = swa_scheduler.get_last_lr()[0]
@@ -616,9 +625,10 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
 # the run even if no base epoch ever improved val_avg/mae_surf_p.
-swa_model_path = model_dir / "checkpoint_swa.pt"
-torch.save(swa_model.module.state_dict(), swa_model_path)
-print(f"Saved SWA checkpoint to {swa_model_path}")
+if not cfg.no_swa:
+    swa_model_path = model_dir / "checkpoint_swa.pt"
+    torch.save(swa_model.module.state_dict(), swa_model_path)
+    print(f"Saved SWA checkpoint to {swa_model_path}")
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
@@ -627,8 +637,9 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
-        "swa_start_epoch": swa_start_epoch,
+        "swa_start_epoch": swa_start_epoch if not cfg.no_swa else None,
         "swa_lr": swa_lr,
+        "no_swa": cfg.no_swa,
     })
 
     # --- Base-best evaluation (for comparison) ---
@@ -654,109 +665,172 @@ if best_metrics:
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, base_test_metrics[name])
 
-    # --- SWA evaluation (primary numbers) ---
-    # Per PR spec: load SWA weights into `model`, then run evaluate_split for
-    # val + test. These are the "reported best" numbers.
-    model.load_state_dict(swa_model.module.state_dict())
-    model.eval()
+    if not cfg.no_swa:
+        # --- SWA evaluation (primary numbers) ---
+        # Per PR spec: load SWA weights into `model`, then run evaluate_split for
+        # val + test. These are the "reported best" numbers.
+        model.load_state_dict(swa_model.module.state_dict())
+        model.eval()
 
-    print("\nEvaluating SWA model on val splits...")
-    swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    swa_val_avg = aggregate_splits(swa_val_metrics)
-    swa_val_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
-    print(f"  SWA   val_avg/mae_surf_p={swa_val_avg_surf_p:.4f}")
-    for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, swa_val_metrics[name])
-
-    swa_test_metrics = None
-    swa_test_avg = None
-    if not cfg.skip_test and test_loaders is not None:
-        print("\nEvaluating SWA model on test splits...")
-        swa_test_metrics = {
+        print("\nEvaluating SWA model on val splits...")
+        swa_val_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
+            for name, loader in val_loaders.items()
         }
-        swa_test_avg = aggregate_splits(swa_test_metrics)
-        print(f"\n  SWA   test_avg/mae_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
-        for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, swa_test_metrics[name])
+        swa_val_avg = aggregate_splits(swa_val_metrics)
+        swa_val_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+        print(f"  SWA   val_avg/mae_surf_p={swa_val_avg_surf_p:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_metrics[name])
 
-    # --- W&B logging: SWA = primary `test_*`/`val_*`, base = `base_test_*` alias ---
-    final_log: dict[str, float] = {}
+        swa_test_metrics = None
+        swa_test_avg = None
+        if not cfg.skip_test and test_loaders is not None:
+            print("\nEvaluating SWA model on test splits...")
+            swa_test_metrics = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  SWA   test_avg/mae_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
 
-    for split_name, m in swa_val_metrics.items():
-        for k, v in m.items():
-            final_log[f"swa_val/{split_name}/{k}"] = v
-    for k, v in swa_val_avg.items():
-        final_log[f"swa_val_{k}"] = v
+        # --- W&B logging: SWA = primary `test_*`/`val_*`, base = `base_test_*` alias ---
+        final_log: dict[str, float] = {}
 
-    if swa_test_metrics is not None:
-        for split_name, m in swa_test_metrics.items():
+        for split_name, m in swa_val_metrics.items():
             for k, v in m.items():
-                final_log[f"test/{split_name}/{k}"] = v
-                final_log[f"swa_test/{split_name}/{k}"] = v
-        for k, v in swa_test_avg.items():
-            final_log[f"test_{k}"] = v
-            final_log[f"swa_test_{k}"] = v
+                final_log[f"swa_val/{split_name}/{k}"] = v
+        for k, v in swa_val_avg.items():
+            final_log[f"swa_val_{k}"] = v
 
-    if base_test_metrics is not None:
-        for split_name, m in base_test_metrics.items():
-            for k, v in m.items():
-                final_log[f"base_test/{split_name}/{k}"] = v
-        for k, v in base_test_avg.items():
-            final_log[f"base_test_{k}"] = v
+        if swa_test_metrics is not None:
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    final_log[f"test/{split_name}/{k}"] = v
+                    final_log[f"swa_test/{split_name}/{k}"] = v
+            for k, v in swa_test_avg.items():
+                final_log[f"test_{k}"] = v
+                final_log[f"swa_test_{k}"] = v
 
-    wandb.log(final_log)
-    wandb.summary.update(final_log)
+        if base_test_metrics is not None:
+            for split_name, m in base_test_metrics.items():
+                for k, v in m.items():
+                    final_log[f"base_test/{split_name}/{k}"] = v
+            for k, v in base_test_avg.items():
+                final_log[f"base_test_{k}"] = v
 
-    # --- Artifact: SWA model is the reported best ---
-    swa_base = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "tandemfoil")
-    swa_artifact_name = f"model-{swa_base}-{run.id}-swa"
-    swa_metadata = {
-        "run_id": run.id,
-        "run_name": run.name,
-        "agent": cfg.agent,
-        "wandb_name": cfg.wandb_name,
-        "wandb_group": cfg.wandb_group,
-        "git_commit": _git_commit_short(),
-        "n_params": n_params,
-        "model_config": model_config,
-        "swa_start_epoch": swa_start_epoch,
-        "swa_start_frac": swa_start_frac,
-        "swa_lr": swa_lr,
-        "swa_anneal_epochs": 2,
-        "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
-        "swa_test_avg/mae_surf_p": (swa_test_avg["avg/mae_surf_p"] if swa_test_avg else None),
-        "base_best_epoch": best_metrics["epoch"],
-        "base_best_val_avg/mae_surf_p": best_avg_surf_p,
-        "base_test_avg/mae_surf_p": (base_test_avg["avg/mae_surf_p"] if base_test_avg else None),
-        "lr": cfg.lr,
-        "weight_decay": cfg.weight_decay,
-        "batch_size": cfg.batch_size,
-        "surf_weight": cfg.surf_weight,
-        "epochs_configured": cfg.epochs,
-    }
-    description = (
-        f"Transolver SWA checkpoint — swa val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f} "
-        f"(base-best epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f})"
-    )
-    if swa_test_avg is not None:
-        description += f" | swa test_avg/mae_surf_p = {swa_test_avg['avg/mae_surf_p']:.4f}"
-    swa_artifact = wandb.Artifact(
-        name=swa_artifact_name,
-        type="model",
-        description=description,
-        metadata=swa_metadata,
-    )
-    swa_artifact.add_file(str(swa_model_path), name="checkpoint.pt")
-    config_yaml = model_dir / "config.yaml"
-    if config_yaml.exists():
-        swa_artifact.add_file(str(config_yaml), name="config.yaml")
-    run.log_artifact(swa_artifact, aliases=["best", "swa-final"])
-    print(f"\nLogged SWA model artifact '{swa_artifact_name}'")
+        wandb.log(final_log)
+        wandb.summary.update(final_log)
+
+        # --- Artifact: SWA model is the reported best ---
+        swa_base = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "tandemfoil")
+        swa_artifact_name = f"model-{swa_base}-{run.id}-swa"
+        swa_metadata = {
+            "run_id": run.id,
+            "run_name": run.name,
+            "agent": cfg.agent,
+            "wandb_name": cfg.wandb_name,
+            "wandb_group": cfg.wandb_group,
+            "git_commit": _git_commit_short(),
+            "n_params": n_params,
+            "model_config": model_config,
+            "swa_start_epoch": swa_start_epoch,
+            "swa_start_frac": swa_start_frac,
+            "swa_lr": swa_lr,
+            "swa_anneal_epochs": 2,
+            "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
+            "swa_test_avg/mae_surf_p": (swa_test_avg["avg/mae_surf_p"] if swa_test_avg else None),
+            "base_best_epoch": best_metrics["epoch"],
+            "base_best_val_avg/mae_surf_p": best_avg_surf_p,
+            "base_test_avg/mae_surf_p": (base_test_avg["avg/mae_surf_p"] if base_test_avg else None),
+            "lr": cfg.lr,
+            "weight_decay": cfg.weight_decay,
+            "batch_size": cfg.batch_size,
+            "surf_weight": cfg.surf_weight,
+            "epochs_configured": cfg.epochs,
+        }
+        description = (
+            f"Transolver SWA checkpoint — swa val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f} "
+            f"(base-best epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f})"
+        )
+        if swa_test_avg is not None:
+            description += f" | swa test_avg/mae_surf_p = {swa_test_avg['avg/mae_surf_p']:.4f}"
+        swa_artifact = wandb.Artifact(
+            name=swa_artifact_name,
+            type="model",
+            description=description,
+            metadata=swa_metadata,
+        )
+        swa_artifact.add_file(str(swa_model_path), name="checkpoint.pt")
+        config_yaml = model_dir / "config.yaml"
+        if config_yaml.exists():
+            swa_artifact.add_file(str(config_yaml), name="config.yaml")
+        run.log_artifact(swa_artifact, aliases=["best", "swa-final"])
+        print(f"\nLogged SWA model artifact '{swa_artifact_name}'")
+    else:
+        # --- no_swa: base-best is the reported model. Promote base metrics
+        # into the canonical `val_avg/mae_surf_p` and `test_avg/mae_surf_p` keys
+        # so BASELINE-aligned tooling and W&B summaries pick them up. ---
+        print("\nSWA disabled: terminal eval uses base-best checkpoint.")
+        final_log: dict[str, float] = {}
+        # Re-publish the (already-best) val-split metrics under `test_*`-style
+        # aggregation keys to match the existing test logging structure for
+        # the base model.
+        if base_test_metrics is not None:
+            for split_name, m in base_test_metrics.items():
+                for k, v in m.items():
+                    final_log[f"test/{split_name}/{k}"] = v
+                    final_log[f"base_test/{split_name}/{k}"] = v
+            for k, v in base_test_avg.items():
+                final_log[f"test_{k}"] = v
+                final_log[f"base_test_{k}"] = v
+        # Publish val_avg under the canonical key too (mirrors best_metrics).
+        final_log["val_avg/mae_surf_p"] = best_avg_surf_p
+        wandb.log(final_log)
+        wandb.summary.update(final_log)
+
+        # --- Artifact: base-best is the reported model ---
+        base_artifact_token = _sanitize_artifact_token(cfg.wandb_name or cfg.agent or "tandemfoil")
+        base_artifact_name = f"model-{base_artifact_token}-{run.id}-base"
+        base_metadata = {
+            "run_id": run.id,
+            "run_name": run.name,
+            "agent": cfg.agent,
+            "wandb_name": cfg.wandb_name,
+            "wandb_group": cfg.wandb_group,
+            "git_commit": _git_commit_short(),
+            "n_params": n_params,
+            "model_config": model_config,
+            "no_swa": True,
+            "base_best_epoch": best_metrics["epoch"],
+            "base_best_val_avg/mae_surf_p": best_avg_surf_p,
+            "base_test_avg/mae_surf_p": (base_test_avg["avg/mae_surf_p"] if base_test_avg else None),
+            "lr": cfg.lr,
+            "weight_decay": cfg.weight_decay,
+            "batch_size": cfg.batch_size,
+            "surf_weight": cfg.surf_weight,
+            "epochs_configured": cfg.epochs,
+        }
+        description = (
+            f"Transolver base-best checkpoint (no SWA) — "
+            f"epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}"
+        )
+        if base_test_avg is not None:
+            description += f" | test_avg/mae_surf_p = {base_test_avg['avg/mae_surf_p']:.4f}"
+        base_artifact = wandb.Artifact(
+            name=base_artifact_name,
+            type="model",
+            description=description,
+            metadata=base_metadata,
+        )
+        base_artifact.add_file(str(model_path), name="checkpoint.pt")
+        config_yaml = model_dir / "config.yaml"
+        if config_yaml.exists():
+            base_artifact.add_file(str(config_yaml), name="config.yaml")
+        run.log_artifact(base_artifact, aliases=["best", "base-final"])
+        print(f"\nLogged base-best model artifact '{base_artifact_name}'")
 else:
     print("\nNo base checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping eval + artifact upload.")
 
