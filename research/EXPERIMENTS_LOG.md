@@ -351,3 +351,49 @@ Three compounding failures:
 - Student branch: `charliepai2g24h5-frieren/lion-optimizer`
 - Hypothesis: Lion (EvoLved Sign Momentum, Chen et al. 2023) uses sign-based updates — the logical endpoint of gradient renormalization. Since grad_clip already partially normalizes updates, Lion may further improve by applying per-parameter sign quantization. Lower memory (one state vs two for AdamW). lr=1.5e-4 (3× lower than AdamW baseline per Lion's scaling recommendation). Expected: 1–3% improvement.
 - Status: WIP, assigned.
+
+---
+
+## 2026-05-12 22:18 — PR #1487: Surface skip composed with warmup+cosine13 (CLOSED — negative composition)
+
+- Student branch: `charliepai2g24h5-thorfinn/surf-skip-branch`
+- Composition rerun: surf_skip + warmup+cosine13 (i.e. tried on the pre-grad_clip baseline of 114.40)
+
+### Results
+
+| Metric | vs older baseline (114.40) | vs current baseline (105.46, post #1483 grad_clip) |
+|---|---:|---:|
+| val_avg/mae_surf_p = **119.33** | +4.31% worse | +13.1% worse |
+| test_avg/mae_surf_p = 107.86 | +0.27% worse | ~flat |
+
+### Per-split val (best checkpoint, epoch 13)
+
+| Split | Pre-warmup baseline | Surf_skip composed | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 140.78 | 141.71 | +0.66% |
+| val_geom_camber_rc | 123.10 | 123.67 | +0.46% |
+| val_geom_camber_cruise | 89.71 | 100.69 | **+12.24%** |
+| val_re_rand | 104.02 | 111.25 | +6.95% |
+
+- Metrics: `models/model-surf_skip_warmup_cosine13-20260512-210000/metrics.jsonl`
+- Peak VRAM: 42.1 GB (unchanged); 13/13 epochs in 28.5 min
+
+### Analysis (student's, validated)
+
+The within-run -6.2% delta from the original PR was real BUT measured against a much weaker pre-warmup baseline (143.83). The warmup+cosine schedule absorbed exactly the headroom the skip was filling:
+
+1. **Zero-init skip + 3-epoch warmup + cosine T_max=13:** the skip needs gradient signal late in training (since it starts at zero) but cosine has nearly killed gradients by then. Skip has no learning window.
+2. **Schedule moved model into the skip's regime:** Merged baseline's val_geom_camber_cruise=89.71 is much better than the pre-warmup baseline's 116.55. With less room to help, the skip ends up adding noise instead (100.69 = +12% worse).
+3. The composition with the now-merged grad_clip (which renormalizes gradients every step) would likely worsen this further — bounded updates with a zero-init module gives even less mass to flow into.
+
+**Conclusion:** Net negative composition. Skip mechanism is real but doesn't survive better optimization. **Closed.** thorfinn reassigned to a new hypothesis.
+
+**Bonus from this PR:** Student diagnosed the GT-NaN propagation bug in `data/scoring.py` independently in this PR. That diagnosis became the basis for #1564 (merged) which fixed it train.py-side.
+
+---
+
+## 2026-05-12 22:25 — PR #1656: Dropout=0.1 in attention + MLP (assigned to thorfinn)
+
+- Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
+- Hypothesis: The merged stack uses dropout=0.0 everywhere. With only weight_decay=1e-4 and grad_clip(max_norm=1.0) regularizing the gradients but NO forward-pass feature noise, the model may overfit on the small dataset. Adding dropout=0.1 to attention output + MLP is the classic transformer regularization knob and is orthogonal to all in-flight experiments. Expected 1–4% improvement, especially on OOD splits (val_geom_camber_rc, val_re_rand).
+- Status: WIP, assigned.
