@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -424,6 +425,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    warmup_epochs: int = 5  # Linear LR warmup epochs before cosine decay.
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -479,7 +481,16 @@ n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
 
 optimizer = torch.optim.AdamW(all_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+warmup_epochs = cfg.warmup_epochs
+
+def lr_lambda(epoch):
+    if epoch < warmup_epochs:
+        return float(epoch + 1) / float(max(1, warmup_epochs))
+    progress = float(epoch - warmup_epochs) / float(max(1, MAX_EPOCHS - warmup_epochs))
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
