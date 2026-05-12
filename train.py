@@ -472,10 +472,8 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
-wandb.define_metric("val_live/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
-    wandb.define_metric(f"{_name}_live/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -540,7 +538,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate (EMA = primary, live model = diagnostic) ---
+    # --- Validate (EMA only) ---
     model.eval()
     # ema_model is kept in eval() permanently; re-assert in case of mode drift.
     ema_model.eval()
@@ -551,21 +549,12 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
-
-    live_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    live_val_avg = aggregate_splits(live_split_metrics)
-    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
-    live_val_loss_mean = sum(m["loss"] for m in live_split_metrics.values()) / len(live_split_metrics)
     dt = time.time() - t0
 
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
-        "val_live/loss": live_val_loss_mean,
         "ema_decay": cfg.ema_decay,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -576,12 +565,6 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc. (EMA)
-    for split_name, m in live_split_metrics.items():
-        for k, v in m.items():
-            log_metrics[f"{split_name}_live/{k}"] = v
-    for k, v in live_val_avg.items():
-        log_metrics[f"val_live_{k}"] = v  # val_live_avg/mae_surf_p etc.
-    log_metrics["val_avg/mae_surf_p_ema_minus_live"] = avg_surf_p - live_avg_surf_p
     wandb.log(log_metrics)
 
     tag = ""
@@ -591,8 +574,6 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
-            "live_val_avg/mae_surf_p": live_avg_surf_p,
-            "live_per_split": live_split_metrics,
         }
         torch.save({
             "model": model.state_dict(),
@@ -605,9 +586,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"ema_val_surf_p={avg_surf_p:.4f}{tag}  "
-        f"live_val_surf_p={live_avg_surf_p:.4f}  "
-        f"(ema-live={avg_surf_p-live_avg_surf_p:+.4f})"
+        f"ema_val_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -648,31 +627,12 @@ if best_metrics:
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
-        # Diagnostic: also report live-model test (same epoch checkpoint).
-        print("\nEvaluating on held-out test splits (live weights, diagnostic)...")
-        live_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-            for name, loader in test_loaders.items()
-        }
-        live_test_avg = aggregate_splits(live_test_metrics)
-        print(f"\n  TEST  (live)  avg_surf_p={live_test_avg['avg/mae_surf_p']:.4f}")
-        for name in TEST_SPLIT_NAMES:
-            print_split_metrics(name, live_test_metrics[name])
-
         test_log: dict[str, float] = {}
         for split_name, m in test_metrics.items():
             for k, v in m.items():
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
-        for split_name, m in live_test_metrics.items():
-            for k, v in m.items():
-                test_log[f"test_live/{split_name}/{k}"] = v
-        for k, v in live_test_avg.items():
-            test_log[f"test_live_{k}"] = v
-        test_log["test_avg/mae_surf_p_ema_minus_live"] = (
-            test_avg["avg/mae_surf_p"] - live_test_avg["avg/mae_surf_p"]
-        )
         wandb.log(test_log)
         wandb.summary.update(test_log)
 
