@@ -13,22 +13,37 @@ recorded on this branch. The aim of round 5 is to **stake out the highest-value
 single-axis levers on the Transolver baseline** for `val_avg/mae_surf_p` so the
 fleet can lock in a real baseline number and identify which levers compound.
 
-## Round-1 fleet status (out as of 2026-05-12)
+## Round-1 fleet status
 
-| Student | PR | Hypothesis (single-axis) | Theme |
+### Merged winners
+| PR | Student | Hypothesis | val_avg/mae_surf_p | Notes |
+|---|---|---|---|---|
+| #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | **110.76** | Epoch 14 of 50 (30-min cap); still improving |
+
+**Round-5 baseline floor: val_avg/mae_surf_p = 110.7608**
+
+> Note: `test_avg/mae_surf_p` is NaN for all PRs in round 5 due to a data
+> corruption bug in `test_geom_camber_cruise/000020.pt` interacting with
+> `data/scoring.py`'s masking logic (`0 × Inf = NaN`). Round-5 ranking is
+> by `val_avg/mae_surf_p` only.
+
+### In-flight (WIP)
+| PR | Student | Hypothesis | Theme |
 |---|---|---|---|
-| charliepai2g48h5-alphonse | #1375 | `surf_weight` 10 → 30 | Loss balance |
-| charliepai2g48h5-askeladd | #1388 | 5-epoch linear warmup + `lr` 5e-4 → 1e-3, cosine after | Optimization schedule |
-| charliepai2g48h5-edward | #1398 | `n_hidden` 128 → 192 | Capacity (width) |
-| charliepai2g48h5-fern | #1413 | `n_layers` 5 → 7 | Capacity (depth) |
-| charliepai2g48h5-frieren | #1422 | `slice_num` 64 → 128 | Slice-attention granularity |
-| charliepai2g48h5-nezuko | #1428 | Per-channel loss weight [1,1,3] favoring pressure | Loss balance |
-| charliepai2g48h5-tanjiro | #1439 | `batch_size` 4 → 8 | Gradient-variance reduction |
-| charliepai2g48h5-thorfinn | #1444 | MSE → Smooth-L1 (Huber, β=1.0) | Loss shape |
+| #1375 | charliepai2g48h5-alphonse | `surf_weight` 10 → 30 | Loss balance |
+| #1388 | charliepai2g48h5-askeladd | 5-epoch warmup + `lr` 5e-4 → 1e-3 | Schedule |
+| #1398 | charliepai2g48h5-edward | `n_hidden` 128 → 192 | Width |
+| #1413 | charliepai2g48h5-fern | `n_layers` 5 → 7 | Depth |
+| #1422 | charliepai2g48h5-frieren | `slice_num` 64 → 128 | Slice granularity |
+| #1428 | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | Loss channel |
+| #1439 | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | Gradient variance |
 
-All eight runs hold every other hyperparameter at the `train.py` defaults so
-each PR isolates a single intervention. The first cleanly-terminal PR will
-establish the round-5 baseline.
+### thorfinn — next assignment
+Next experiment: **bf16 mixed precision (bfloat16 AMP)** in `train.py`. The
+model reached epoch 14 of 50 at the 30-min cap. If AMP halves step time we get
+~28 epochs, which is substantial additional convergence under the same budget.
+Also includes the `evaluate_split` scoring-fix workaround (filter bad sample
+before calling `accumulate_batch`) to recover finite `test_avg/mae_surf_p`.
 
 Constraints shape what we can sensibly try in 30-minute training executions:
 
