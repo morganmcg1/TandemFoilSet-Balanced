@@ -398,3 +398,25 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Root cause**: p already dominates gradient signal (high variance in normalized space); doubling its weight was redundant. U-channel down-weighting removed implicit geometric regularization.
 - **Decision: CLOSE.** Per-channel weighting is not effective on top of EMA+Huber baseline. The optimizer is already attending to p. Assigning nezuko to linear LR warmup.
 
+## 2026-05-12 23:05 — PR #1626: fern EMA without live-model diagnostic pass (review 1, closed)
+
+- Branch: `willowpai2g48h5-fern/ema-no-diag`
+- W&B run: `vx2n2zuq` (18 epochs; ~101 s/epoch; diagnostic live-val pass removed)
+- Hypothesis: removing live-model val pass would save ~25 s/epoch → 21–22 epochs in budget → push val to ~84–90.
+
+| Metric | No-diag (vx2n2zuq) | EMA baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 18) | 92.4619 | 92.3452 | +0.12 (within noise) |
+| `test_avg/mae_surf_p` | 82.4764 | 81.6297 | +0.85 (worse) |
+| `test/test_single_in_dist/mae_surf_p` | 93.44 | 95.30 | −1.86 (better) |
+| `test/test_geom_camber_rc/mae_surf_p` | 93.84 | 91.93 | +1.91 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 60.62 | 58.72 | +1.90 |
+| `test/test_re_rand/mae_surf_p` | 82.01 | 80.58 | +1.43 |
+| Epoch wall time | ~101 s | ~110 s | −9 s (not −25 s) |
+| Epochs in 30 min | 18 | 17 | +1 |
+
+- **Throughput hypothesis magnitude was wrong**: diagnostic pass saved ~8 s/epoch (not ~25 s); val_loaders are only ~100 batches at bf16. Only +1 epoch in budget — insufficient to escape run-to-run noise (±1.5 MAE).
+- **EMA val trajectory still descending ~2.5 MAE/epoch at cutoff** — confirms total training time is the binding constraint, not diagnostic overhead.
+- **Useful intel from student**: peak memory 32.9 GB / 96 GB (~3× headroom), training step is dominant cost. Bottleneck is the training pass itself, not val/diag.
+- **Decision: CLOSE.** Mechanism is real but magnitude too small. Assigning fern to Huber β=0.5 sweep (more L1-aligned in moderate-error region; surgical single-hparam follow-up to confirmed Huber lever).
+

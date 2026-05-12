@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 22:15
+- **Date:** 2026-05-12 23:10
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -36,7 +36,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (rebasing) | pinged with Huber+bf16 baseline; rebase requested |
 | edward | #1669 | EMA decay=0.9995 (longer half-life, 3.7 epochs) | EMA variant | WIP | flag-only change; tests wider averaging window |
-| fern | #1626 | EMA without diagnostic pass (more epochs) | Training efficiency | WIP | −25 s/epoch → 21-22 epochs vs 17; EMA mechanism confirmed |
+| fern | TBD | Huber β=0.5 (more L1-aligned in moderate-error region) | Loss shape | WIP (queued) | surgical follow-up to confirmed Huber lever |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch before cosine | LR schedule | WIP | SequentialLR warmup; targets EMA early-lag and gradient instability |
 | tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebased 21:18) | v2 rerun on bf16+Huber+EMA |
@@ -49,6 +49,9 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 ### Loss / feature engineering
 - **per-channel surface weights (0.5, 0.5, 2.0)** (#1445 v2, nezuko) — val=93.60 (+1.4% worse). p already dominates gradient signal; re-weighting backfired, U down-weighting removed geometric regularization.
 - **SiLU activation** (#1648, edward) — val=96.99 (+5.0% worse). "Smoother but slower" trajectory; GELU/lr=5e-4 is well-tuned for this regime.
+
+### Training efficiency
+- **EMA without diagnostic pass** (#1626, fern) — val=92.46 (+0.12 within noise). Diagnostic overhead was ~8 s/epoch not the predicted ~25 s; +1 epoch in budget (18 vs 17) insufficient to escape noise. Bottleneck is training step, not val. Useful intel: peak mem 32.9 GB / 96 GB.
 
 ### Architecture / capacity
 
@@ -73,11 +76,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ## Potential next directions (post current round)
 
-- **EMA decay sweep** (0.9995) — if ema-no-diag shows continued improvement, test longer half-life
-- **Grad-clip + EMA compounding** — tanjiro's v2 will reveal if both stack
-- **Architecture at EMA baseline** — mlp_ratio=4 (alphonse) and n_layers=8 (edward) may compound once they rebase to EMA+Huber+bf16
-- **LR schedule alignment** — cosine T_max matched to actual epoch budget (~20 epochs for EMA-no-diag)
+- **Huber β sweep** (β=0.5 assigned to fern) — tighter MAE-alignment in moderate-error region
+- **torch.compile** — fresh throughput angle; ~1.2–1.5× speedup if it compiles cleanly with bf16
 - **Re-conditioning** — explicit Re-aware embeddings or log-Re positional encoding (OOD re_rand split underperforms)
 - **Surface-aware decoder / dual-head** — separate volume and surface heads may improve surface-pressure alignment
 - **Spectral / Fourier neural operator hybrids** — fresh architecture direction if attention-based plateau
 - **Test-time augmentation** using physical symmetries (mirroring flow domain)
+- **Lookahead optimizer** — outer/inner optimizer wrapping, complementary to EMA at the optimizer level
+- **SAM (sharpness-aware minimization)** — 2 forward passes/step; flatter minima may improve OOD
