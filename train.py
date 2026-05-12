@@ -537,24 +537,25 @@ for epoch in range(MAX_EPOCHS):
         pred = surf_head(pred, x_norm, is_surface)
         sq_err = (pred - y_norm) ** 2
 
-        # ── Per-sample inverse-variance weighting (BIVW) ─────────────────────
+        # ── Per-channel inverse-variance weighting (per-channel BIVW) ────────
         # y_norm has shape [B, N, 3]; mask has shape [B, N]. Compute each
-        # sample's variance over valid nodes only (pooled across the 3 target
-        # channels), then weight the loss contribution by 1/var so low-Re
-        # (low normalized variance) samples are not under-trained.
+        # sample's per-channel variance over valid nodes, then weight the
+        # loss by 1/var with per-channel mean-1 normalisation. Decouples the
+        # weighting of Ux, Uy, p so the channel with widest dynamic range
+        # (typically p) does not dominate the pooled per-sample weight.
         with torch.no_grad():
             B = y_norm.shape[0]
-            y_var = torch.empty(B, device=y_norm.device, dtype=y_norm.dtype)
+            C = y_norm.shape[-1]
+            y_var = torch.ones(B, C, device=y_norm.device, dtype=y_norm.dtype)
             for b in range(B):
                 valid = y_norm[b][mask[b]]
-                if valid.numel() == 0:
-                    y_var[b] = 1.0
-                else:
-                    y_var[b] = valid.var().clamp(min=1e-4)
-            sample_w = 1.0 / y_var
-            sample_w = sample_w / sample_w.mean()
-        sw = sample_w[:, None, None]
-        sq_err_w = sq_err * sw
+                if valid.numel() > 0:
+                    for c in range(C):
+                        y_var[b, c] = valid[:, c].var().clamp(min=1e-4)
+            channel_w = 1.0 / y_var
+            channel_w = channel_w / channel_w.mean(dim=0, keepdim=True)
+        cw = channel_w[:, None, :]
+        sq_err_w = sq_err * cw
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
@@ -566,13 +567,24 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+        cw_mean = channel_w.mean(dim=0)
+        cw_std = channel_w.std(dim=0) if channel_w.shape[0] > 1 else torch.zeros(C, device=channel_w.device)
         wandb.log({
             "train/loss": loss.item(),
-            "train/sample_w_max": sample_w.max().item(),
-            "train/sample_w_min": sample_w.min().item(),
-            "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
-            "train/y_var_max": y_var.max().item(),
-            "train/y_var_min": y_var.min().item(),
+            "train/channel_w_mean_Ux": cw_mean[0].item(),
+            "train/channel_w_mean_Uy": cw_mean[1].item(),
+            "train/channel_w_mean_p": cw_mean[2].item(),
+            "train/channel_w_std_Ux": cw_std[0].item(),
+            "train/channel_w_std_Uy": cw_std[1].item(),
+            "train/channel_w_std_p": cw_std[2].item(),
+            "train/channel_w_max": channel_w.max().item(),
+            "train/channel_w_min": channel_w.min().item(),
+            "train/y_var_max_Ux": y_var[:, 0].max().item(),
+            "train/y_var_max_Uy": y_var[:, 1].max().item(),
+            "train/y_var_max_p": y_var[:, 2].max().item(),
+            "train/y_var_min_Ux": y_var[:, 0].min().item(),
+            "train/y_var_min_Uy": y_var[:, 1].min().item(),
+            "train/y_var_min_p": y_var[:, 2].min().item(),
             "global_step": global_step,
         })
 
