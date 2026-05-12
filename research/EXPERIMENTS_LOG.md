@@ -2,6 +2,48 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-12 23:05 — PR #1577: [seed42-baseline] Seeding infrastructure + surf_weight=10 rollback — **MERGED (NEW BEST: val=116.43)**
+- Student branch: `charliepai2g48h4-alphonse/seed42-baseline`
+- Hypothesis: Add deterministic seeding (seed=42, cudnn.deterministic, seeded DataLoader/sampler) to eliminate run-to-run noise and establish a reproducible canonical baseline for all future ablations.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 18/18) | **116.43** — **NEW BEST ON BRANCH** |
+| `test_avg/mae_surf_p` | **108.87** |
+| `val_single_in_dist/mae_surf_p` | 131.15 |
+| `val_geom_camber_rc/mae_surf_p` | 121.66 |
+| `val_geom_camber_cruise/mae_surf_p` | 100.47 |
+| `val_re_rand/mae_surf_p` | 112.46 |
+| Epochs completed | 18/50 (timeout hit; still descending) |
+| Wall clock | 30.9 min |
+| Peak VRAM | 33.9 GB |
+| Params | 0.68 M |
+| Determinism | Byte-identical across 2 independent runs |
+| Metrics path | `models/model-charliepai2g48h4-alphonse-seed42-baseline-20260512-215112/metrics.jsonl` |
+
+**Analysis.** **-6.1% vs old unseeded baseline (123.99) and -9.2% vs unseeded merged recipe (127.86).** Two factors: (1) deterministic seeding stabilizes training, and (2) the run was on surf_weight=10 (not 20) because alphonse's branch predated #1369 — consistent with fern's #1570 confirming surf_weight=20 is a regression. The squash-merge 3-way resolution kept surf_weight=20 on the advisor branch, so surf_weight was explicitly rolled back to 10 post-merge. **Definitive seed=42 + surf_weight=10 reference: val=116.43 / test=108.87.**
+
+**Decision.** MERGED. surf_weight rolled back to 10.0 in advisor train.py post-merge. The seeding infrastructure is now in the base recipe for all future experiments.
+
+## 2026-05-12 23:05 — PR #1576: [unified-pos-global-norm] Corpus-level pos normalization — **SENT BACK (needs seeded rerun)**
+- Student branch: `charliepai2g48h4-thorfinn/unified-pos-global-norm`
+- Hypothesis: Per-batch pos normalization in unified_pos creates encoding noise across batches. Fixed corpus-level bounds make the spatial encoding deterministic per-node.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 18/18) | 123.56 |
+| `test_avg/mae_surf_p` | 109.71 |
+| `val_single_in_dist/mae_surf_p` | 157.53 |
+| `val_geom_camber_rc/mae_surf_p` | 134.67 |
+| `val_geom_camber_cruise/mae_surf_p` | 89.17 |
+| `val_re_rand/mae_surf_p` | 112.87 |
+| vs prior unified_pos (#1416) | -2.22 val, **-7.41 test** |
+| Metrics path | `models/model-charliepai2g48h4-thorfinn-unified-pos-global-norm-20260512-215857/metrics.jsonl` |
+
+**Analysis.** Direction is right (test improvement -7.41 vs prior unified_pos), but run was unseeded and the 7+ pt val gap vs new seeded baseline (116.43) is within old σ ≈ 6.8. The global pos norm implementation is correct (corpus bounds scanned from train+val, stored as model buffers). surf_weight was 10 (not 20) on this branch. Cannot confirm improvement without seeded rerun.
+
+**Decision.** Sent back for rebase onto seeded baseline + rerun with seed=42.
+
 ## 2026-05-12 21:48 — PR #1374: [huber-loss] Smooth L1 (Huber) instead of MSE in normalized space — **STRONGEST LEVER ON BRANCH**
 - Student branch: `charliepai2g48h4-edward/huber-loss`
 - Hypothesis: per-sample target std spans ~10× even within one validation split, so MSE's squared gradient over-emphasizes high-Re/large-magnitude samples and biases the model. Replacing MSE with Smooth L1 (Huber, beta=1.0) caps outlier gradients while preserving quadratic behavior near zero.
