@@ -1,5 +1,113 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-12 21:20 — Round-2 dispatch (5 PRs)
+
+After establishing L1 as the new measured baseline (PR #1355, val_avg/mae_surf_p=94.29),
+five round-2 PRs were dispatched to compound the L1 winner with orthogonal levers that
+are cheap (no extra params, no compute hit) and target known weak spots of
+short-budget training in normalized space.
+
+| PR | Student | Lever | Arms |
+|----|---------|-------|------|
+| #1581 | frieren | L1 + OneCycleLR compound | peak_lr=1e-3 vs 2e-3 |
+| #1582 | alphonse | surf_weight sweep on L1 | surf_weight=5 / 10 (control) / 20 |
+| #1601 | thorfinn | EMA of model weights on L1 | decay=0.999 vs 0.9999 |
+| #1602 | fern | Gradient clipping on L1 | max_norm 0 (control) / 0.5 / 1.0 |
+| #1605 | edward | asinh transform on pressure target with L1 | scale=100 (aggressive) vs 680 (~σ_p, gentle) |
+
+All five dispatched against the L1 baseline (`--loss l1` is the recipe-level
+default in every PR body). The three still-running round-1 PRs (#1381 wider
+askeladd, #1399 nezuko channel-weight corrected replan, #1405 tanjiro bf16)
+remain in flight; if any beats 94.29 it will be merged ahead of the round-2
+results.
+
+---
+
+## 2026-05-12 21:15 — PR #1385: Finer physics attention (slice_num 64→128, n_head 4→8) ❌ CLOSED
+
+- **Student branch:** `charliepai2g48h1-edward/slices128-heads8`
+- **Hypothesis:** Doubling `slice_num` (64→128) and `n_head` (4→8) gives the
+  Transolver physics attention finer slicing and better feature interaction.
+  Predicted -2% to -5% on `val_avg/mae_surf_p`.
+
+### Result
+
+| Arm | slice_num | n_head | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p (3/4) |
+|-----|-----------|--------|---------|---------------------|---------------------------|
+| A   | 128       | 8      | 9       | 151.92              | 144.78                    |
+| B   | 128       | 4      | 9       | 156.83              | 149.51                    |
+
+### Action: CLOSED — 61% regression vs the new L1 baseline (94.29)
+
+Both arms regressed massively. The finer attention slicing combined with
+more heads roughly **doubled** attention compute per layer; under the
+hard 30-min wall-clock cap, only 9 epochs of 15 ran — same schedule-mismatch
+pathology as the deeper-net experiment (#1389). Even discounting the
+schedule artifact, the gap to L1 baseline is too large for further sweeps
+under the current epoch budget. Closing the slice/head lever for this arm.
+
+---
+
+## 2026-05-12 21:12 — PR #1389: Deeper Transolver (n_layers 5→8) ❌ CLOSED
+
+- **Student branch:** `charliepai2g48h1-fern/deeper-8-layers`
+- **Hypothesis:** Going from 5 → 8 layers gives more iterations of slice
+  attention → MLP refinement.
+
+### Final result (after Arm C `--epochs 9` rerun)
+
+| Arm | lr | epochs | best ep | val_avg/mae_surf_p |
+|-----|------|--------|---------|---------------------|
+| A   | 5e-4 | 9 / 15 | 8       | 153.48              |
+| B   | 3e-4 | 9 / 15 | 8       | 147.40              |
+| C   | 3e-4 | 9 / 9  | 8       | ~142–145 (schedule-matched, still 50%+ worse than L1) |
+
+### Action: CLOSED — 42%+ regression vs L1 baseline
+
+Arm C (cosine T_max=9 matching the realized epoch count) closed only ~3
+points vs Arm B's schedule-mismatched 147.40. Even with the schedule
+artifact removed, depth=8 is ~50% worse than the 94.29 L1 baseline at
+this epoch count. Closing the depth lever for the current epoch budget;
+re-test when total compute budget allows full 15-epoch realization of
+deeper nets.
+
+Reusable finding: more depth raises per-step compute by ~55% (so realized
+epochs drop from 14 → 9 under the 30-min cap), and the cosine schedule
+needs to be retuned to T_max=realized_epochs whenever the per-step cost
+materially changes.
+
+---
+
+## 2026-05-12 21:08 — PR #1410: Multi-scale Fourier features for (x,z) coords ❌ CLOSED
+
+- **Student branch:** `charliepai2g48h1-thorfinn/fourier-position-features`
+- **Hypothesis:** Adding learned/fixed sinusoidal frequency encodings of (x,z)
+  coordinates should give the network a richer geometric representation
+  than the raw 2D coords alone, particularly helping the geometry-OOD splits.
+  Predicted -3% to -8% on `val_avg/mae_surf_p`.
+
+### Result
+
+| Arm | n_freq_bands | scale_max | best ep | val_avg/mae_surf_p | test_avg/mae_surf_p (3/4) |
+|-----|--------------|-----------|---------|---------------------|---------------------------|
+| A   | 8            | 10        | 13      | 105.05              | 102.78                    |
+| B   | 16           | 32        | 12      | 109.20              | 106.94                    |
+
+### Action: CLOSED — 11% regression vs L1 baseline (94.29)
+
+Both Fourier-feature arms regressed against L1 baseline. The geometry-OOD
+splits (`val_geom_camber_rc/cruise`) did not improve relative to the L1
+baseline either — the synthetic frequency bands seem to add noise without
+adding geometric information that the raw coords don't already provide
+to the Transolver's slice attention.
+
+This is informative: it suggests the Transolver's physics-aware attention
+on raw coords is already extracting geometric structure effectively, and
+the next geometric-representation experiment should attack the slicing
+mechanism itself rather than the input coordinate encoding.
+
+---
+
 ## 2026-05-12 20:50 — PR #1355: Smooth L1 / pure L1 loss vs MSE on normalized residuals ✅ MERGED
 
 - **Student branch:** `charliepai2g48h1-alphonse/smooth-l1-loss`
