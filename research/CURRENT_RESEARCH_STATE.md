@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12 ~19:15 (round-1 partial results, #1418 merged)
+- **Last updated:** 2026-05-12 ~20:05 (#1432 wall-distance is a winner, #1517 EMA-0.999 failed; both refined and sent back)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -17,22 +17,23 @@ See `BASELINE.md` for per-split details.
 
 | PR | Student | Slug | Axis | vs. Baseline |
 |----|---------|------|------|---|
-| #1414 | alphonse | `smooth-l1-loss` | Loss form (Huber β=0.1) | WIP |
+| #1414 | alphonse | `smooth-l1-loss` | Loss form (Huber β=0.1) | WIP (training in progress) |
 | #1421 | edward | `surf-only-channel-weight` | Decouple vol/surf channel weights | SENT BACK (was 124.96 vs 122.64) |
 | #1424 | fern | `warmup-7e-4-clip` | Refined: 7e-4 + 2ep warmup + grad clip | SENT BACK |
-| #1426 | frieren | `hidden-192-head-6` | Width n_hidden 128→192 | WIP |
-| #1429 | nezuko | `slice-128-mlp-4` | slice_num 64→128, mlp_ratio 2→4 | WIP |
-| #1432 | tanjiro | `wall-distance-feature` | Input wall-distance feature | WIP |
+| #1426 | frieren | `hidden-192-head-6` | Width n_hidden 128→192 | WIP (training, GPU 99%) |
+| #1429 | nezuko | `slice-128-mlp-4` | slice_num 64→128, mlp_ratio 2→4 | WIP (training, GPU 100%) |
+| #1432 | tanjiro | `wall-distance-rebased` | Wall-dist + channel weights stacked | SENT BACK (refined; 121.46 alone on old code, beats baseline by -0.96%) |
 | #1435 | thorfinn | `unified-pos-ref8` | Unified pos encoding ref=8 | WIP |
-| #1517 | askeladd | `ema-0.999` | EMA weight averaging for eval | WIP |
+| #1517 | askeladd | `ema-0.99-adaptive` | timm-style adaptive EMA decay (max=0.99) | SENT BACK (refined; 0.999 was +10.5% worse — horizon mismatch) |
 
 ## Current research focus
 
-1. **Complete round-1 cohort** (6 PRs still WIP) — rank all results against new baseline 122.6395.
-2. **Compound winning changes** — once cohort settles, stack the top independent gains together.
-3. **Loss weighting axis** (strongest signal so far): follow-ups include pressure-only [0,0,1] and per-surface-vs-vol channel weighting variations.
-4. **Training stability under 30-min cap**: warmup + moderate LR lift with grad clipping (fern's round-2 hypothesis).
-5. **EMA evaluation** (askeladd round-2): should benefit any model that stops training mid-convergence.
+1. **Stack tanjiro's wall-distance (−0.96%) on top of #1418's channel weights** — the most promising single-axis stacking opportunity identified so far. Round-2 hypothesis for tanjiro.
+2. **Refined EMA** (askeladd r3): timm-style adaptive decay capped at 0.99 to match the 5,250-step training horizon. Will succeed or kill the EMA axis cleanly.
+3. **Complete round-1 cohort** (4 PRs still WIP: #1414, #1426, #1429, #1435) — rank all results against current baseline 122.6395.
+4. **Compound winning changes** — once round-2 results land, stack wall-distance + channel weights + (EMA if it works) + (LR warmup if it works).
+5. **Loss weighting axis** (strongest signal so far): follow-ups include pressure-only [0,0,1] and per-surface-vs-vol channel weighting variations (edward).
+6. **Training stability under 30-min cap**: warmup + moderate LR lift with grad clipping (fern's round-2 hypothesis).
 
 ## Next research directions (researcher-agent, 2026-05-12)
 
