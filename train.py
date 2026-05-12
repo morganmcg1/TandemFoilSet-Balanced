@@ -241,6 +241,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm})["preds"]
 
             abs_err = (pred - y_norm).abs()
+
+            # Up-weight pressure channel (channel 2) by P_WEIGHT for consistent loss logging.
+            P_WEIGHT = 3.0
+            channel_weights = abs_err.new_tensor([1.0, 1.0, P_WEIGHT])
+            abs_err = abs_err * channel_weights[None, None, :]
+
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -254,7 +260,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 
@@ -445,6 +460,11 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
+
+        # Up-weight pressure channel (channel 2) by P_WEIGHT in the loss.
+        P_WEIGHT = 3.0
+        channel_weights = abs_err.new_tensor([1.0, 1.0, P_WEIGHT])  # [3]
+        abs_err = abs_err * channel_weights[None, None, :]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
