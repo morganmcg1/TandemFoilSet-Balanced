@@ -32,6 +32,32 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 ---
 
+## 2026-05-12 19:10 — PR #1392: Deeper Transolver n_layers 5 → 8
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/deeper-transolver-8layers
+- **Hypothesis:** Increasing n_layers 5 → 8 (+60% depth) would improve representation through more iterative refinement; expected −2–4% on val_avg/mae_surf_p.
+- **Outcome:** **SENT BACK** for a more moderate depth (n_layers=6) — 1.6% worse on val at 30-min cap, but promising signal on OOD geometry (val_geom_camber_rc 5.4% better) and trajectory still descending at cutoff.
+
+| Metric | Value vs baseline 141.356 |
+|---|---|
+| val_avg/mae_surf_p (best, ep 9) | **143.650** (+1.6% worse) |
+| val_single_in_dist/mae_surf_p | 179.503 (+4.7% worse vs 171.42) |
+| val_geom_camber_rc/mae_surf_p | **151.158** (−5.4% better vs 159.80) |
+| val_geom_camber_cruise/mae_surf_p | 118.512 (+13.3% worse vs 104.61) |
+| val_re_rand/mae_surf_p | 125.428 (−3.2% better vs 129.59) |
+| test_avg (corrected, Inf-y masked) | **130.23** (−6.6% better vs ~139.51) |
+| Epochs completed | 9/50 (30-min cap) |
+| Per-epoch time | ~206 s (vs ~150 s baseline) |
+| Peak VRAM | 64.5 GB |
+| Params | 1.03M |
+
+**Analysis:** Depth-8 lost on val (-1.6%) but won on test_corrected (-6.6%) and val_geom_camber_rc (-5.4%). Two oscillation epochs (2 and 8) indicate mild instability with the deeper model + AdamW + flat 5e-4 LR. The trajectory was still steeply descending at cutoff (162.7 → 143.6 in the final epoch). The 65% per-epoch overhead is too costly at fixed 30-min cap. **Sending back with feedback to try n_layers=6** — a middle-ground depth that should fit ~12 epochs and may retain the OOD-geometry benefit.
+
+**Artifacts:** `models/model-charliepai2g48h3-nezuko-deeper-transolver-8layers-20260512-175521/metrics.jsonl`
+
+---
+
 ## 2026-05-12 19:05 — PR #1366: Wider Transolver n_hidden 128 → 192
 
 - **Student:** charliepai2g48h3-edward
