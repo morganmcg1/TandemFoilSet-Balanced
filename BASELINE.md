@@ -1,6 +1,49 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1460 (relative-l2-loss)
+## Current Baseline — PR #1473 (huber-relative-l2-compound)
+
+**val_avg/mae_surf_p = 89.3940** (epoch 14 / 14 completed in 30-min cap) — **-0.24% vs previous 89.6121**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: `AdamW(lr=1e-3, wd=1e-4)`, `CosineAnnealingLR(T_max=14)`, `grad_clip=1.0`
+- `batch_size=4`, `surf_weight=10.0`, **Huber(δ=0.1) applied to relative-L2 normalized residuals**
+- ~14 epochs in ~30 min
+- Loss: `huber_relative_l2` — Huber on per-sample energy-normalized residuals (δ=0.1 in normalized space)
+
+**Per-split val at best epoch (14):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| val_single_in_dist | 109.01 |
+| val_geom_camber_rc | 101.19 |
+| val_geom_camber_cruise | **66.36** |
+| val_re_rand | 81.02 |
+| **val_avg** | **89.3940** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p |
+|-------|-----------|
+| test_single_in_dist | 98.51 |
+| test_geom_camber_rc | 88.12 |
+| test_geom_camber_cruise | 54.80 |
+| test_re_rand | 76.97 |
+| **test_avg** | **79.5993** |
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-huber-loss-20260512-211810/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# Huber(delta=0.1) on relative-L2, lr=1e-3, T_max=14, grad_clip=1.0 now defaults on this branch
+```
+
+**Key insight**: Huber(δ=0.1) in normalized residual space compounds cleanly with relative-L2. The L2-fraction trajectory (33%→63%) shows Huber remains genuinely active throughout training — the delta=0.1 in normalized space is well-placed for intra-sample outlier capping without collapsing to MSE early. Grad clip_frac dropped from 1.0 to 0.075 by epoch 14 (vs ~0.98 on rel-L2-only) — the compound loss is significantly smoother. Val still falling at epoch 14.
+
+---
+
+## Previous Baseline — PR #1460 (relative-l2-loss)
 
 **val_avg/mae_surf_p = 89.6121** (epoch 14 / 14 completed in 30-min cap) — **-7.20% vs previous 96.5587**
 
