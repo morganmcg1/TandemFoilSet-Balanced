@@ -489,17 +489,45 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
+        # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
+        m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
+        denom = m_b.sum(dim=1).clamp(min=1)                                 # [B, 1]
+        log_re = (x[:, :, 13:14] * m_b).sum(dim=1) / denom                  # [B, 1]
+        # Shift so all values are >= 1 (prevents divide-by-near-zero and keeps weights positive).
+        log_re_shifted = log_re - log_re.min().detach() + 1.0               # [B, 1]
+        re_weight = 1.0 / log_re_shifted                                    # [B, 1]
+        # Normalize so per-batch sample weights mean to 1.0.
+        re_weight = re_weight * (re_weight.shape[0] / re_weight.sum().clamp(min=1e-8))
+        re_weight_expanded = re_weight.unsqueeze(-1)                        # [B, 1, 1]
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Apply per-sample re_weight to the per-element error; surf_weight stays on top.
+        weighted_err = sq_err * re_weight_expanded
+        vol_loss = (weighted_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (weighted_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
+        with torch.no_grad():
+            vol_loss_unw = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/loss_unweighted": loss_unweighted.item(),
+            "train/re_weight_min": re_weight.min().item(),
+            "train/re_weight_max": re_weight.max().item(),
+            "train/re_weight_mean": re_weight.mean().item(),
+            "train/log_re_per_batch_mean": log_re.mean().item(),
+            "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
