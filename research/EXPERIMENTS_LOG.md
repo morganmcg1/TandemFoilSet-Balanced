@@ -90,19 +90,79 @@ Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_
 2. **`ref` sweep ∈ {12, 16}.** Wider soft grid = finer spatial membership; +small param cost on input MLP.
 3. **Truncated cosine `T_max ≈ effective_epochs`** — applies branch-wide.
 
-## 2026-05-12 19:18 — Round 1 status snapshot
+## 2026-05-12 19:29 — PR #1369: [surf-weight-20] Increase surf_weight 10→20
+- Student branch: `charliepai2g48h4-askeladd/surf-weight-20`
+- Hypothesis: bump `Config.surf_weight=10.0→20.0` to weight surface MSE 2× more vs volume — direct lever on the primary ranking metric.
 
-| Student | Slug | val_avg/mae_surf_p | Status |
-|---|---|---|---|
-| thorfinn | `unified-pos` (#1416) | **125.78** | Held pending baseline — best so far |
-| fern | `lr1e3-warmup-cosine` (#1376) | 147.26 | Held pending baseline |
-| tanjiro | `hidden192` (#1406) | 151.64 | Held pending baseline |
-| alphonse | `baseline-ref` (#1368) | — | WIP (started 18:51 UTC, ETA ~19:21 UTC) |
-| askeladd | `surf-weight-20` (#1369) | — | WIP |
-| edward | `huber-loss` (#1374) | — | WIP |
-| frieren | `wd5e-4` (#1394) | — | WIP |
-| nezuko | `slice128` (#1402) | — | WIP |
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 12/14) | **127.9357** |
+| `test_avg/mae_surf_p` (best-val checkpoint, cruise[20] excluded) | **117.3456** |
+| `val_geom_camber_cruise/mae_surf_p` | 108.97 |
+| `val_geom_camber_rc/mae_surf_p`     | **135.82** (best among returned PRs) |
+| `val_re_rand/mae_surf_p`            | 116.55 |
+| `val_single_in_dist/mae_surf_p`     | **150.41** (best so far on the hardest split) |
+| Wall clock | 30 min cap; 14 epochs landed |
+| Peak VRAM | 42.1 GB |
+| Params | 0.66 M |
+| Metrics path | `models/model-charliepai2g48h4-askeladd-surf-weight-20-20260512-175549/metrics.jsonl` |
+| Test workaround | `test_metrics_excl_cruise20.json` (re-run from best-val checkpoint with cruise[20] dropped) |
 
-Follow-on assignments active this cycle: PR #1512 (fern, `scoring-nan-fix`), PR #1513 (tanjiro, `bf16-autocast`), PR #1533 (thorfinn, `surf-p-weight-3x` — per-channel surface weighting, 3× pressure vs Ux/Uy).
+**Analysis.** 2nd-best round-1 result, essentially tied with thorfinn at the noise floor. Hypothesis confirmed: heavier surface weighting moves the primary metric meaningfully without destabilizing training. Per-split, this PR is the strongest on `val_single_in_dist` (150 vs ~180 for tanjiro/fern) AND `val_geom_camber_rc` (136, best returned) — both raceCar tracks. Cruise (109) is weaker than thorfinn's unified-pos (92) but stronger than fern/tanjiro. The two levers (positional encoding, surf_weight) hit different per-split weak points and are likely orthogonal — round-2 stacking candidate.
 
-_(Round 1 still partially in flight — more results landing as PRs come back for review.)_
+**Major variance signal.** Askeladd ran the same surf_weight=20 config twice; the second run landed val_avg = 157.95 — a 30-point gap from seed/noise alone. `train.py` is unseeded. This makes ANY single-run comparison noise-limited. Follow-up assignment for askeladd is EMA-weights (PR #1540) as a variance-reduction technique pending dedicated seeded-training infra.
+
+**Held pending baseline (PR #1368).**
+
+**Independent scoring-bug confirmation.** Third independent confirmation (after fern and thorfinn) of `Inf * 0 = NaN` on `test_geom_camber_cruise[20]`. Askeladd committed a `test_metrics_excl_cruise20.json` workaround artifact — fern's PR #1512 is still the root-cause fix.
+
+**Suggested follow-ups (kept on backlog):** seeded training (#1), surf_weight sweep {5,10,15,20,30} once seeded, linear warmup.
+
+## 2026-05-12 19:32 — PR #1402: [slice128] Double slice_num 64→128
+- Student branch: `charliepai2g48h4-nezuko/slice128`
+- Hypothesis: physics-attention groups N nodes into `slice_num` learned tokens; default 64 may be too few for large meshes (242K nodes on cruise). Double to 128 to give finer physical structure, especially on the cruise splits.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 10/11) | **137.1686** |
+| `test_avg/mae_surf_p` | NaN (scoring bug; 3-split mean: 135.53) |
+| `val_geom_camber_cruise/mae_surf_p` | **107.79** (best on cruise val among non-unified-pos PRs) |
+| `val_geom_camber_rc/mae_surf_p`     | 143.92 |
+| `val_re_rand/mae_surf_p`            | 120.60 |
+| `val_single_in_dist/mae_surf_p`     | 176.37 |
+| Wall clock | 30 min cap (~31.8 min); 10 best of 11 epochs landed (-3 vs thorfinn's 13) |
+| Peak VRAM | 54.5 GB (vs 42 GB at slice_num=64; +30% memory) |
+| Params | 0.67 M (+0.01 M from slice projection layers) |
+| Metrics path | `models/model-charliepai2g48h4-nezuko-slice128-20260512-184959/metrics.jsonl` |
+
+**Analysis.** 3rd-best returned result. Hypothesis is *directionally* supported: cruise val improves to 107.79 — the strongest cruise number among the four non-unified-pos PRs (thorfinn's unified-pos got cruise=91.85, which is special). The per-epoch cost of slice128 is higher (~10% slower), so this PR landed 3 fewer epochs than thorfinn at the same cap, and the comparison is wall-clock-budget-confounded rather than capacity-saturated. Worth retrying with thorfinn's unified-pos already stacked once we know the baseline.
+
+**Held pending baseline (PR #1368).**
+
+**Independent scoring-bug confirmation.** Fourth independent identification of the same `Inf * 0 = NaN` root cause. Suggested data-layer fix as alternative to fern's helper-site fix — going with fern's #1512 because it's smaller blast radius.
+
+**Suggested follow-ups (kept on backlog):** slice256 (54.5 GB → ~70 GB still under 96 GB), stack with n_hidden, longer wall time.
+
+## 2026-05-12 19:52 — Round 1 status snapshot (5/8 returned, baseline still WIP)
+
+| Student | Slug | val_avg/mae_surf_p | test_avg/mae_surf_p | Status |
+|---|---|---|---|---|
+| thorfinn | `unified-pos` (#1416) | **125.78** | 117.12 | Held pending baseline — best so far |
+| askeladd | `surf-weight-20` (#1369) | **127.94** | 117.35 | Held pending baseline — 2nd |
+| nezuko | `slice128` (#1402) | 137.17 | NaN (135.53 over 3) | Held pending baseline — 3rd |
+| fern | `lr1e3-warmup-cosine` (#1376) | 147.26 | NaN | Held pending baseline |
+| tanjiro | `hidden192` (#1406) | 151.64 | NaN | Held pending baseline |
+| alphonse | `baseline-ref` (#1368) | — | — | WIP — rate-limited 17:50→19:48 UTC, ETA ~20:25 UTC |
+| edward | `huber-loss` (#1374) | — | — | WIP — rate-limited 17:50→19:50 UTC, ETA ~20:27 UTC |
+| frieren | `wd5e-4` (#1394) | — | — | WIP |
+
+**Active follow-on assignments:**
+- PR #1512 (fern) — `scoring-nan-fix` (helper-site fix for the `Inf*0=NaN` bug)
+- PR #1513 (tanjiro) — `bf16-autocast` (throughput, predicted 30-50% per-epoch reduction)
+- PR #1533 (thorfinn) — `surf-p-weight-3x` (per-channel: weight surface-p 3× over surface-Ux/Uy)
+- **PR #1540 (askeladd) — `ema-weights`** (variance reduction via Polyak averaging, decay 0.999, EMA at val/test)
+- **PR #1542 (nezuko) — `cosine-trunc-t15`** (truncate `T_max=50→15` so cosine actually anneals inside the 30-min cap; addresses near-constant-lr observation across all 5 returned runs)
+
+**Pod rate-limit incident.** alphonse and edward hit GraphQL rate limits at ~17:50 UTC and couldn't pick up assigned PRs for ~2 hours (13 and 18 heartbeat iterations of "## Student research state — No assigned PRs or issues" respectively). They finally cleared at 19:48-19:50 UTC. This pushed baseline ETA from ~19:21 to ~20:25 UTC. No work was lost; just delayed.
+
+_(Round 1 still partially in flight — baseline + edward + frieren still pending.)_

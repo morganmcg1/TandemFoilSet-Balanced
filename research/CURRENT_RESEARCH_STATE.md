@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 19:18 (round 1 in flight, 3/8 returned + 3 follow-ons assigned, baseline still pending)
+- **As of:** 2026-05-12 19:55 (round 1 in flight, 5/8 returned + 5 follow-ons assigned, baseline still pending due to ~2h pod rate-limit)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -26,12 +26,12 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 
 | Student | Slug | Lever | Status |
 |---|---|---|---|
-| alphonse | baseline-ref | Control (no changes) | WIP (#1368) |
-| askeladd | surf-weight-20 | Loss balancing | WIP (#1369) |
-| edward | huber-loss | Loss robustness | WIP (#1374) |
-| fern | lr1e3-warmup-cosine | Higher peak lr + warmup | **Returned (#1376)** — `val_avg/mae_surf_p = 147.26`, held pending baseline |
+| alphonse | baseline-ref | Control (no changes) | WIP (#1368) — rate-limited 17:50→19:48 UTC; training started 19:48; baseline ETA ~20:25 UTC |
+| askeladd | surf-weight-20 | Loss balancing | **Returned (#1369)** — `val_avg/mae_surf_p = 127.94`, **2nd best**, held pending baseline; reassigned to `ema-weights` (#1540) |
+| edward | huber-loss | Loss robustness | WIP (#1374) — rate-limited 17:50→19:50 UTC; training started 19:50 |
+| fern | lr1e3-warmup-cosine | Higher peak lr + warmup | **Returned (#1376)** — `val_avg/mae_surf_p = 147.26`, held pending baseline; reassigned to `scoring-nan-fix` (#1512) |
 | frieren | wd5e-4 | Regularization | WIP (#1394) |
-| nezuko | slice128 | Physics-attention granularity | WIP (#1402) |
+| nezuko | slice128 | Physics-attention granularity | **Returned (#1402)** — `val_avg/mae_surf_p = 137.17`, 3rd best, held pending baseline; reassigned to `cosine-trunc-t15` (#1542) |
 | tanjiro | hidden192 | Model capacity | **Returned (#1406)** — `val_avg/mae_surf_p = 151.64`, held pending baseline; reassigned to `bf16-autocast` (#1513) |
 | thorfinn | unified-pos | Positional encoding | **Returned (#1416)** — `val_avg/mae_surf_p = 125.78`, **best so far**, held pending baseline; reassigned to `surf-p-weight-3x` (#1533) |
 
@@ -40,17 +40,26 @@ See `research/RESEARCH_IDEAS_2026-05-12_0001.md` for full hypothesis details.
 - **PR #1512 — `scoring-nan-fix` (fern)** — surgical `nan_to_num` in `data/scoring.py:accumulate_batch` to stop NaN propagation when test/val GT contains non-finite values. Advisor-authorized deviation from the `data/scoring.py` read-only convention. Without this, every test eval on this codebase reports NaN for `test_avg/mae_surf_p`.
 - **PR #1513 — `bf16-autocast` (tanjiro)** — wrap forward+backward in `torch.cuda.amp.autocast(dtype=torch.bfloat16)`. Tests whether throughput is the binding constraint at the 30-min cap. Predicted 30-50% per-epoch wall-clock reduction; if it works, future capacity experiments become viable.
 - **PR #1533 — `surf-p-weight-3x` (thorfinn)** — per-channel surface weighting: weight surface-pressure 3× over surface-Ux/Uy via a `(1.0, 1.0, 3.0)` channel-weight vector applied inside `surf_loss`. Targets the universal round-1 weakness on `val_single_in_dist` (~180 vs ~120 on other splits). Orthogonal to thorfinn's unified-pos win (#1416), so the two can stack in round 2.
+- **PR #1540 — `ema-weights` (askeladd)** — Polyak averaging (EMA decay 0.999) of model parameters; use EMA model for val/test eval. Targets the 30-point run-to-run variance askeladd surfaced from two identical surf_weight=20 runs (val_avg=127.94 vs 157.95). Bridge to dedicated seeded-training infra; expected 1-5% val improvement plus large variance reduction.
+- **PR #1542 — `cosine-trunc-t15` (nezuko)** — change `CosineAnnealingLR(T_max=50→15)` so the schedule actually anneals inside the 30-min cap. Across all 5 returned PRs, `cos(13/50)≈0.85` at the kill point means LR stayed within 10% of initial for the whole run — effectively constant-LR training. Targets a universal schedule mismatch, expected 3-10% val improvement on top of the round-1 default.
 
 ## Round 1 emerging signal
 
-All three returned runs show the same per-split structure: cruise-camber OOD is *easier* than in-dist sanity; the dominating contributor to `val_avg/mae_surf_p` is `val_single_in_dist` (raceCar single, ~210K nodes, ground effect). Round 2 should consider levers that specifically attack large-mesh single-foil pressure regression:
+All five returned runs show the same per-split structure: cruise-camber OOD is *easier* than in-dist sanity; the dominating contributor to `val_avg/mae_surf_p` is `val_single_in_dist` (raceCar single, ~210K nodes, ground effect). Round 2 should consider levers that specifically attack large-mesh single-foil pressure regression:
 - per-channel surface weighting (weight p > Ux/Uy on surface) — **already in flight as PR #1533 (thorfinn)**
 - physical-units loss for surface pressure
 - mesh-size-aware sampling / sample weighting
+- **NEW: seeded training is a prerequisite** — askeladd surfaced 30-point val_avg variance between two identical-config runs (127.94 vs 157.95). EMA (#1540) and cosine truncation (#1542) are partial mitigations; full deterministic seeding deferred to round 2 as dedicated infra.
 
-**Strongest lever so far is positional encoding** — thorfinn's `unified_pos=True, ref=8` lands `val_avg/mae_surf_p = 125.78`, ~14% better than fern's lr/warmup and ~17% better than tanjiro's widened hidden. Cruise-camber test MAE drops to `80.27`, suggesting the soft-grid encoding helps most where the mesh is large and roughly uniformly distributed. Worth stacking with the loss-balancing levers (surf_weight, per-channel) in round 2 if both prove orthogonal at the same wall-clock cap.
+**Strongest two levers are positional encoding and loss balancing** (essentially tied at the noise floor):
+- thorfinn `unified-pos`: `val_avg=125.78`, best on cruise (91.85)
+- askeladd `surf-weight-20`: `val_avg=127.94`, best on raceCar splits (single=150.41, rc=135.82)
 
-`data/scoring.py:accumulate_batch` propagates NaN through `inf * 0 = NaN` when test/val GT contains non-finite values (concretely `test_geom_camber_cruise` sample 20 has `y_p = -inf`). Every test eval on this codebase reports NaN for `test_avg/mae_surf_p`. Two complementary fixes are in flight: surgical one-line fix at the helper site (fern's PR #1512: `torch.nan_to_num(err, ...)` after computing `err`) and a defensive pre-filter at the call site (thorfinn's PR #1416 added it locally to `train.py::evaluate_split`). Both can coexist after merge; #1512 fixes the read-only-convention'd file as a baseline-clean approach.
+These two hit different per-split weak points (cruise vs raceCar) and are mechanistically orthogonal (input encoding vs output loss weighting). Strong round-2 stacking candidate: `unified_pos=True + surf_weight=20` could plausibly land below 120.
+
+`data/scoring.py:accumulate_batch` propagates NaN through `inf * 0 = NaN` when test/val GT contains non-finite values (concretely `test_geom_camber_cruise` sample 20 has `y_p = -inf`). Four independent confirmations from fern, thorfinn, askeladd, nezuko. Surgical fix at the helper site (fern's PR #1512: `torch.nan_to_num(err, ...)`) is in flight; thorfinn's PR #1416 also added a defensive pre-filter at the call site in `train.py::evaluate_split`. Both can coexist after merge.
+
+**Pod rate-limit incident (17:50–19:48 UTC).** Alphonse and edward got rate-limited on `gh` GraphQL polling for ~2 hours after pod start and could not pick up assigned PRs. Cleared at 19:48-19:50 UTC. Baseline ETA pushed from ~19:21 to ~20:25 UTC. No work lost.
 
 ## Potential follow-up directions (after round 1)
 
