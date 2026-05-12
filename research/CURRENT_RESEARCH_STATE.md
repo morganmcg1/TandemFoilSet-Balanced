@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12 21:30 (post-wave-2-merge: SWA+Huber baseline)
+- **Last updated:** 2026-05-12 21:55 (post-wave-2-merge + wave-3 portfolio complete)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -32,13 +32,15 @@ frieren has merged 2/2 of their PRs on this branch — they own both the Huber a
 
 ## Current research focus
 
-**Wave 3 (in flight):** Three high-ROI levers stacked directly on the merged SWA-on-Huber baseline.
+**Wave 3 (in flight):** Five high-ROI levers stacked directly on the merged SWA-on-Huber baseline, spanning orthogonal mechanism axes (loss-shape, weighting, stability, capacity).
 
 | PR | Student | Slug | Hypothesis | Predicted Δ vs. 99.07 val |
 |---|---|---|---|---|
 | #1600 | frieren | `beta-sweep-on-swa` | 3-arm sweep: Huber β ∈ {0.3, 1.0, 3.0} | best arm: −1 to −4% |
 | #1617 | nezuko | `grad-clip-on-swa` | `clip_grad_norm_(max_norm=1.0)` + 2 seeds (variance signal) | −0.5 to −2% + variance reduction |
 | #1618 | alphonse | `surf-huber-vol-mse` | Split loss kind: Huber on surface, MSE on volume | −2 to −5% |
+| #1620 | edward | `surf-weight-30-on-swa` | Bump `surf_weight` 10 → 30 (3× upweighting of surface contributions) | −1 to −4% |
+| #1621 | fern | `mlp-ratio-4-on-swa` | Restore canonical Transolver `mlp_ratio` 2 → 4 (~0.66M → ~1.0M params) | −1 to −5% |
 
 **Wave 2 (in flight, stack-stale on Huber baseline):** Three levers based on the pre-SWA Huber baseline. They'll need to be re-evaluated when results land — a win on Huber-baseline doesn't directly compare to the SWA-baseline number.
 
@@ -48,12 +50,11 @@ frieren has merged 2/2 of their PRs on this branch — they own both the Huber a
 | #1585 | askeladd | `film-on-huber` | FiLM global conditioning + per-layer (γ,β) from Re/AoA/NACA/gap/stagger, 3 seeds | Huber baseline only |
 | #1586 | thorfinn | `re-weight-on-huber` | Per-sample loss reweighting by 1/(shifted log Re), normalized | Huber baseline only |
 
-**Wave 1 (still in flight, MSE arm):** Two levers training on the original MSE+10-epoch baseline. Their pods are mid-training (GPU at 93-94 GB). Letting them complete; will evaluate liberally and reframe back to MSE baseline (val=147.65) when results land.
+**Wave 1 (closed/reassigned this session):**
 
-| PR | Student | Slug | Hypothesis |
-|---|---|---|---|
-| #1449 | edward | `surf-weight-30` | Bias loss further toward primary surface MAE metric (10 → 30) |
-| #1450 | fern | `mlp-ratio-4` | Restore canonical Transolver MLP FFN capacity (2 → 4) |
+- **#1449 edward** and **#1450 fern** were closed as baseline-stale (never produced results; pods idled after rate-limit episodes while their branches went 2 merges out of date). Both reassigned as fresh wave-3 stack-tests forked from the current SWA-on-Huber baseline:
+  - **#1620 edward** (`surf-weight-30-on-swa`) — same lever as #1449, fresh branch on new baseline
+  - **#1621 fern** (`mlp-ratio-4-on-swa`) — same lever as #1450, fresh branch on new baseline
 
 ## ✗ Closed this session
 
@@ -62,6 +63,8 @@ frieren has merged 2/2 of their PRs on this branch — they own both the Huber a
 - #1448 (askeladd, slice_num=128, 3 seeds): mean val=134.31 ± 2.39 — reassigned as wave-2 PR #1585 (FiLM).
 - #1453 (nezuko, n_hidden=192, 2 unseeded runs): val=128.28 / 148.57, 16% variance — reassigned as wave-3 PR #1617 (gradient clipping; lever motivated directly by their variance observation).
 - #1446 (alphonse, --epochs=10 schedule align): never trained, **moot** — schedule alignment is implicit in the merged baseline. Reassigned as wave-3 PR #1618 (split-loss-by-node-type).
+- #1449 (edward, surf-weight-30): never trained (baseline-stale + rate-limit idling) — reassigned as wave-3 PR #1620 (`surf-weight-30-on-swa`, same lever, fresh branch).
+- #1450 (fern, mlp-ratio-4): never trained (baseline-stale + rate-limit idling) — reassigned as wave-3 PR #1621 (`mlp-ratio-4-on-swa`, same lever, fresh branch).
 
 ## ⚠ Active operational note
 

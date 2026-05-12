@@ -417,3 +417,64 @@ Edward and fern are mid-training on the original MSE baseline (94 GB GPU usage o
 If wave-3 PRs land at the midpoint of their predicted ranges, the compound effect on val is:
 `99.07 × 0.975 (β-sweep) × 0.985 (grad-clip) × 0.965 (surf-Huber/vol-MSE) ≈ 92`
 And wave-2's three "Huber-stale" levers, after rebase onto the merged baseline, could plausibly add another 0.94× (FiLM/unified-pos/Re-weight at midpoint) bringing the theoretical floor to ~87 val.
+
+---
+
+## 2026-05-12 21:50 — PR #1449 edward + PR #1450 fern: CLOSED (baseline-stale, never trained)
+
+- Both PRs were wave-1 single-variable assignments (surf_weight=30, mlp_ratio=4) created at 17:55 UTC against the pre-merge MSE baseline.
+- Neither posted training results in the ~4 hours between assignment and triage.
+- Root cause: GraphQL rate-limit episodes caused student polls to return "no work assigned" intermittently, and by the time the buckets reset their assignment branches were already 2 merges out of date (Huber merge at 20:02, SWA merge at 21:06). Pods went idle ("No assigned PRs or issues") and never resumed.
+- Branch inspection: both branches only contained the original advisor-assignment commit — no student code changes were ever pushed.
+- Decision: **CLOSED** as **baseline-stale**, not as regressions. The levers are still scientifically valuable; reopening them on fresh branches forked from the current SWA-on-Huber advisor branch HEAD so the comparison is apples-to-apples.
+
+### Reassignments
+
+| Old PR | New PR | Student | Slug | Stacks on |
+|---|---|---|---|---|
+| #1449 | **#1620** | edward | `surf-weight-30-on-swa` | SWA-on-Huber baseline (#1554) ✓ |
+| #1450 | **#1621** | fern | `mlp-ratio-4-on-swa` | SWA-on-Huber baseline (#1554) ✓ |
+
+Both fresh PRs preserve the original lever exactly — only the baseline frame and the supporting infrastructure (Huber + scoring fix + SWA + schedule-aligned cosine) have changed. Predicted improvements:
+
+- edward: −1 to −4% on val (surf_weight=30 aligns training objective to surface-MAE metric)
+- fern: −1 to −5% on val (mlp_ratio=4 restores canonical Transolver FFN capacity, ~0.66M → ~1.0M params)
+
+---
+
+## 2026-05-12 21:50 — Wave-3 portfolio (complete, 5 in flight)
+
+After this reassignment cascade, the full active wave-3 stack-test portfolio against the SWA-on-Huber baseline (val=99.07) is:
+
+| PR | Student | Lever | Mechanism axis | Predicted Δ |
+|---|---|---|---|---|
+| #1600 | frieren | Huber β ∈ {0.3, 1.0, 3.0} (3 arms) | loss-shape | best arm −1 to −4% |
+| #1617 | nezuko | `grad_clip_norm=1.0` (2 seeds) | optimizer-stability | −0.5 to −2% + variance reduction |
+| #1618 | alphonse | Huber on surface + MSE on volume | loss-by-node-type | −2 to −5% |
+| #1620 | edward | `surf_weight=30.0` (3× baseline) | loss-weighting | −1 to −4% |
+| #1621 | fern | `mlp_ratio=4` (canonical Transolver FFN) | architecture-capacity | −1 to −5% |
+
+Wave-2 portfolio (3 in flight, stack-stale on Huber baseline, will be evaluated when results land):
+
+| PR | Student | Lever | Stacks on |
+|---|---|---|---|
+| #1551 | tanjiro | `unified_pos=True` ref=8 | Huber baseline (#1452) |
+| #1585 | askeladd | FiLM global conditioning (3 seeds) | Huber baseline (#1452) |
+| #1586 | thorfinn | Per-sample Re-based loss weighting | Huber baseline (#1452) |
+
+### Mechanism-axis coverage
+
+- **Loss-shape:** β-sweep (#1600), surface-vs-volume kind split (#1618)
+- **Loss-weighting:** surf_weight bump (#1620), per-sample Re (#1586)
+- **Optimizer-stability:** gradient clipping (#1617)
+- **Architecture-capacity:** mlp_ratio=4 (#1621), positional-encoding (#1551, unified-pos)
+- **Architecture-conditioning:** FiLM (#1585)
+
+This is well-spread across orthogonal axes. If any 2-3 wave-3 levers hit their midpoints, the merged baseline could compound to ~93-95 val. Wave-2 stack-stale arms (if rebased after winning on Huber baseline) could push another 0.94× to ~88-90 val.
+
+### Open question for next review wave
+
+When results land, prioritize:
+1. **Which mechanism axis dominates** the compound improvement — is it loss-shape, weighting, stability, or capacity?
+2. **Per-split impact pattern** — does any wave-3 lever specifically rescue val_re_rand (the split that regressed under SWA)?
+3. **Variance signal** — nezuko's 2-seed grad-clip will measure whether SWA + clipping reduces seed-to-seed variance from the ~16% baseline observed on n_hidden=192.
