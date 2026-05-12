@@ -244,3 +244,67 @@ After merging the wave-1 winner, two newly-idle students were assigned wave-2 st
 
 Both are pure single-variable add-ons; both have low implementation risk and high stacking-orthogonality with Huber. Wave 1's other 5 PRs (alphonse, askeladd, edward, fern, nezuko) are still running on the pre-merge baseline (MSE) — their results will need to be evaluated against the new baseline (Huber@100.77) when they post, since the Huber win is itself a ~25% improvement that those MSE-arm hypotheses would need to clear.
 
+
+---
+
+## 2026-05-12 21:10 — PR #1448 askeladd (slice_num=128, wave-1 MSE arm): CLOSED
+
+- Branch: `willowpai2g48h2-askeladd/slice-num-128`
+- Hypothesis: Double `slice_num` in the PhysicsAttention block (64 → 128) to give the model more learned latent slices to softmax-route nodes into, on top of the pre-merge MSE baseline.
+- 3 seeds (continuing askeladd's wave-1 rigor):
+
+| Seed | best val_avg/mae_surf_p | best epoch |
+|---|---:|---:|
+| A | 131.67 | (terminal) |
+| B | ~134.78 | (terminal) |
+| C | ~136.49 | (terminal) |
+| Mean ± std | **134.31 ± 2.39** | — |
+
+- Test (best seed A): finite under merged scoring fix but well above new baseline (90.38).
+- Decision: **CLOSED**. Best seed is 30.6% worse than the merged Huber baseline (100.77). On the pre-merge MSE baseline alone the lever was a regression (vs. 147.65 → 131.67 is only −10.8%, less than the ~25% Huber win), and stacking with Huber is unlikely to recover that gap.
+
+### Follow-up
+
+- Closed cleanly with a hand-off comment pointing askeladd at a new wave-2 hypothesis (PR #1585, FiLM-on-Huber, research-ideas H5). FiLM is a more principled way to inject the same global flow-context (Re/AoA/NACA/gap/stagger) into the model than widening the latent slice budget.
+
+---
+
+## 2026-05-12 21:12 — PR #1455 thorfinn rerun (batch=8, lr=7.1e-4, wave-1 MSE arm): CLOSED
+
+- Branch: `willowpai2g48h2-thorfinn/batch-8-lr-up`
+- Hypothesis (rerun): Increase batch size from 4 → 8 with sqrt(2)-scaled lr (5e-4 → ~7.1e-4); run for full 15 epochs with the merged `data/scoring.py` fix.
+- Single-seed result:
+
+| Metric | Value |
+|---|---:|
+| val_avg/mae_surf_p (best) | 141.94 |
+| test_avg/mae_surf_p | 125.92 |
+| Peak VRAM | 84.2 GB |
+| Wall time | ~28 min |
+| best_epoch | 10 |
+
+- Decision: **CLOSED**. 41% worse than new Huber baseline (val=100.77). The lr-batch scaling alone — even with the scoring fix applied — doesn't close the gap to the Huber win. Possible the lr scaling overshot (sqrt(2) was a rule-of-thumb), but the wider-batch regularization story doesn't survive Huber's outlier-gradient capping.
+
+### Follow-up
+
+- Closed cleanly with a hand-off comment pointing thorfinn at a new wave-2 hypothesis (PR #1586, Re-based loss weighting on Huber, research-ideas H4). Per-sample Re-weighting directly addresses the "y std varies 10× across samples" observation from `program.md`, which is mechanism-orthogonal to Huber's gradient capping.
+
+---
+
+## 2026-05-12 21:15 — Wave-2 launches: PR #1585 (askeladd), PR #1586 (thorfinn)
+
+Both newly-idle students were reassigned wave-2 stack tests on top of the merged Huber baseline. With this round, all 4 of the most promising "stack on Huber" levers from `RESEARCH_IDEAS_2026-05-12_round2.md` are now in flight:
+
+| PR | Student | Slug | Hypothesis | Predicted Δ vs. 100.77 val |
+|---|---|---|---|---|
+| #1551 | tanjiro | `unified-pos-on-huber` | unified_pos=True ref=8 stacked on Huber | −3 to −8% (~92–98 val) |
+| #1554 | frieren | `swa-on-huber` | SWA on final 4/15 epochs, swa_lr=1e-4, terminal test eval uses `swa_model` | −3 to −7% (~94–98 val) |
+| #1585 | askeladd | `film-on-huber` | FiLM global conditioning (Re/AoA/NACA/gap/stagger → per-layer γ,β), zero-init for identity start, 3 seeds | −4 to −10% (~91–97 val) |
+| #1586 | thorfinn | `re-weight-on-huber` | Per-sample loss reweighting by 1/(shifted log Re), normalized to mean=1 per batch, 1 seed | −4 to −9% (~92–97 val) |
+
+If multiple wave-2 levers land in the predicted range, **wave 3 should stack them** — Huber × unified-pos × FiLM × SWA, etc. The predicted compound improvement from 4 stacked levers (each at the midpoint of its range) is ~100.77 × 0.94 × 0.94 × 0.93 × 0.95 ≈ 78–83 val.
+
+### Notes
+
+- All 4 wave-2 PRs touch **train.py only** (per stack-test discipline). No PR touches `target/models/Transolver.py`, and `data/scoring.py` is frozen with the merged frieren fix.
+- The FiLM PR (#1585) is the only one that runs 3 seeds; the other three run 1 seed each (different rigor patterns reflect each lever's inherent variance — FiLM adds new params, the others don't).
