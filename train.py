@@ -254,7 +254,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            # NaN-safe: NaN*0 = NaN in IEEE 754 would NaN-poison channel sums
+            # if y has NaN (e.g. test_geom_camber_cruise/000020.pt y[:,2]).
+            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask_eff = mask & sample_finite.unsqueeze(-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
@@ -432,7 +437,17 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+warmup_epochs = max(1, int(0.05 * MAX_EPOCHS))
+warmup = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs,
+)
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=max(1, MAX_EPOCHS - warmup_epochs),
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -446,6 +461,13 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "scheduler": {
+            "type": "SequentialLR[LinearLR_warmup->CosineAnnealingLR]",
+            "warmup_epochs": warmup_epochs,
+            "warmup_start_factor": 0.1,
+            "warmup_end_factor": 1.0,
+            "cosine_T_max": max(1, MAX_EPOCHS - warmup_epochs),
+        },
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
