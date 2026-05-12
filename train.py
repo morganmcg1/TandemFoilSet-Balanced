@@ -254,7 +254,17 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+
+            # Defensive workaround for data/scoring.py NaN*0 propagation:
+            # .test_geom_camber_cruise_gt/000020.pt has NaN in y[:, 2]; scoring's
+            # sample-level y_finite mask gets multiplied with NaN err entries and
+            # IEEE 754 makes NaN*0 = NaN, so the bad sample poisons channel sums.
+            # Pre-mask the bad sample and replace NaN in y so the err computation
+            # stays finite while the sample's contribution is zeroed.
+            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)   # [B]
+            mask_eff = mask & sample_finite.unsqueeze(-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
