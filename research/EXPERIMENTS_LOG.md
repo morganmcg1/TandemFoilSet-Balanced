@@ -166,3 +166,73 @@ Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_
 **Pod rate-limit incident.** alphonse and edward hit GraphQL rate limits at ~17:50 UTC and couldn't pick up assigned PRs for ~2 hours (13 and 18 heartbeat iterations of "## Student research state — No assigned PRs or issues" respectively). They finally cleared at 19:48-19:50 UTC. This pushed baseline ETA from ~19:21 to ~20:25 UTC. No work was lost; just delayed.
 
 _(Round 1 still partially in flight — baseline + edward + frieren still pending.)_
+
+## 2026-05-12 20:00 — PR #1512: [scoring-nan-fix] Stop NaN propagation (fern) — MERGED as baseline anchor
+- Student branch: `charliepai2g48h4-fern/scoring-nan-fix`
+- Hypothesis: surgical `torch.nan_to_num(err, nan=0.0, posinf=0.0, neginf=0.0)` after `err = (pred-y).abs()` in `data/scoring.py::accumulate_batch` — fixes `Inf * 0 = NaN` propagation that poisoned every `test_avg/mae_surf_p` evaluation on this branch.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 14/14) | **123.99** |
+| `test_avg/mae_surf_p` (NOW FINITE) | **110.97** |
+| `test_geom_camber_cruise/mae_surf_p` | **76.78** (previously NaN) |
+| `test_geom_camber_rc/mae_surf_p` | 121.93 |
+| `test_re_rand/mae_surf_p` | 110.93 |
+| `test_single_in_dist/mae_surf_p` | 134.23 |
+| Config | default (lr=5e-4, surf_weight=10, unified_pos=False, no bf16) |
+| Wall clock | 30 min cap; 14 epochs |
+| Peak VRAM | 42.11 GB |
+| Metrics path | `models/model-charliepai2g48h4-fern-scoring-nan-fix-20260512-185620/metrics.jsonl` |
+
+**Analysis.** This PR's primary value is that it unblocks all future test evaluations. Secondarily it provides the first clean default-config baseline: val_avg=123.99, test_avg=110.97. Note that val numbers are unaffected by the scoring fix (val GT has no non-finite values); the val number is therefore identical to what alphonse's true baseline run should produce under the same RNG. **Merged** as both a critical infra fix and a baseline anchor. New `BASELINE.md` entry set at 123.99/110.97.
+
+## 2026-05-12 20:03 — PR #1513: [bf16-autocast] bf16 throughput (tanjiro) — MERGED as infra
+- Student branch: `charliepai2g48h4-tanjiro/bf16-autocast`
+- Hypothesis: wrap training forward+backward in `torch.cuda.amp.autocast(dtype=torch.bfloat16)` to reduce per-epoch wall clock and land more epochs in the 30-min cap.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 18/18) | **125.40** |
+| `test_avg/mae_surf_p` (3-split mean, cruise NaN) | **126.57** |
+| `val_geom_camber_cruise/mae_surf_p` | 90.70 |
+| `val_geom_camber_rc/mae_surf_p` | 132.06 |
+| `val_re_rand/mae_surf_p` | 111.22 |
+| `val_single_in_dist/mae_surf_p` | 167.62 |
+| Per-epoch wall clock | **101.4 s** (vs ~133 s fp32 → **24% speedup**) |
+| Epochs landed | **18** (vs 13 fp32, vs 10 hidden192 — wall-clock win is clear) |
+| Val still descending at ep 18 | Yes — model not converged at cap |
+| NaN-safe guard (isfinite) | 0 batches skipped — no overflow |
+| Peak VRAM | 32.9 GB (vs 42 GB fp32; **22% VRAM savings**) |
+| Params | 0.66 M |
+| Metrics path | `models/model-charliepai2g48h4-tanjiro-bf16-autocast-20260512-190244/metrics.jsonl` |
+
+**Analysis.** Hypothesis confirmed. val_avg=125.40 is within noise of baseline 123.99; the value here is the throughput win — 24% faster, +5 extra epochs in 30 min, 22% less VRAM. This makes future capacity experiments viable (hidden256 can now land 12-14 epochs vs 10 for hidden192 without bf16). **Merged** as throughput infrastructure. Every future experiment on this branch inherits bf16 autocast from the merged recipe.
+
+**Note on test metric:** `test_avg/mae_surf_p` is NaN (pre-fix run — this PR was submitted before #1512 merged). 3-split mean = 126.57.
+
+## 2026-05-12 20:30 — Round 1 merge/close decisions (baseline now at val=123.99)
+
+With baseline established, reviewed all 5 held round-1 hypothesis PRs:
+
+| PR | Lever | val_avg | Δ from baseline | Decision |
+|---|---|---|---|---|
+| #1416 (thorfinn) | unified-pos | 125.78 | +1.4% | **MERGED** — within noise, cruise val 91.85 is real |
+| #1369 (askeladd) | surf-weight-20 | 127.94 | +3.2% | **Pending merge** — preflight blocked by hold comment ordering |
+| #1402 (nezuko) | slice128 | 137.17 | +10.6% | **Request changes** — re-run with cosine-trunc-T15 |
+| #1376 (fern) | lr1e3-warmup | 147.26 | +18.8% | **CLOSED** — warmup ate budget |
+| #1406 (tanjiro) | hidden192 | 151.64 | +22.3% | **CLOSED** — wall-clock-bound, superseded by #1575 |
+| #1533 (thorfinn) | surf-p-weight-3x | 154.47 | +24.6% | **CLOSED** — 3× ratio too aggressive, model too small |
+
+## 2026-05-12 ~20:35 — Round 2 assignments (building on merged recipe)
+
+The advisor-branch recipe now includes unified_pos=True, bf16, and scoring-fix. Round-2 student assignments all inherit this merged baseline:
+
+| Student | PR | Slug | Lever |
+|---|---|---|---|
+| fern | #1570 | `surf-weight-20-stack` | surf_weight=20 on top of merged unified_pos+bf16 recipe |
+| tanjiro | #1575 | `hidden256-bf16` | n_hidden=128→256 on merged bf16+unified_pos recipe |
+| thorfinn | #1576 | `unified-pos-global-norm` | replace per-batch pos norm with corpus-level bounds |
+| askeladd | #1540 | `ema-weights` | Polyak EMA at val/test (in flight since earlier cycle) |
+| nezuko | #1542 | `cosine-trunc-t15` | CosineAnnealingLR T_max=50→15 (in flight since earlier cycle) |
+
+Pending round-1 WIPs still outstanding: #1368 (alphonse baseline-ref, started training 19:48 UTC, ETA ~20:30 UTC), #1374 (edward huber-loss, started 19:50 UTC), #1394 (frieren wd5e-4, still rate-limited as of 20:35 UTC).

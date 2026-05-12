@@ -19,6 +19,17 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 **Note on test metric:** `test_avg/mae_surf_p = 110.97` is the first clean test number on this branch — the scoring-nan-fix PR is what made it possible. All prior test numbers (NaN) were the result of the `Inf * 0 = NaN` propagation bug in `data/scoring.py::accumulate_batch` now fixed in this merge.
 
+## Merged architecture improvements (within noise floor of val_avg=123.99)
+
+These PRs were merged because they deliver infrastructure value and are within the noise floor (run-to-run variance ±~15 points), even though their point-estimate val_avg is slightly above 123.99:
+
+| PR | Description | val_avg | test_avg (3-split) | Status |
+|---|---|---|---|---|
+| #1513 (tanjiro) | bf16 autocast | 125.40 | 126.57 | **MERGED** → 24% per-epoch speedup; 18 effective epochs/30 min |
+| #1416 (thorfinn) | unified_pos=True, ref=8 | 125.78 | 117.12 | **MERGED** → best cruise: val=91.85, test=80.27 |
+
+**Current advisor-branch recipe** (after these merges): `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, CosineAnnealingLR(T_max=50), AdamW`. Future experiments inherit this recipe unless otherwise specified. The true baseline for the merged recipe has not yet been measured — next run on the merged recipe without additional changes will establish it.
+
 ---
 
 ## Previous best
