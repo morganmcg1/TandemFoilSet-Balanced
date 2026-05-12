@@ -6,6 +6,88 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-12 21:10 — PR #1358: L1 (MAE) loss in normalized space — MERGED
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/l1-surface-pressure-loss
+- **Hypothesis:** L1 loss directly optimizes the ranking metric (MAE); expected −2–5% on val_avg/mae_surf_p.
+- **Outcome:** **MERGED — new baseline 101.810 (−20.5% vs 128.127).** Far exceeded expectations.
+
+| Metric | Value vs baseline 128.127 |
+|---|---|
+| val_avg/mae_surf_p (best, ep 13) | **101.810** (−20.5%) |
+| val_single_in_dist | 124.150 (−22.3% vs 159.746) |
+| val_geom_camber_rc | 112.699 (−17.4% vs 136.513) |
+| val_geom_camber_cruise | 76.570 (−25.3% vs 102.432) |
+| val_re_rand | 93.820 (−17.6% vs 113.819) |
+| test_avg/mae_surf_p | **91.708** (first finite test result!) |
+| test_single_in_dist | 110.726 |
+| test_geom_camber_rc | 99.692 |
+| test_geom_camber_cruise | 66.879 |
+| test_re_rand | 89.536 |
+| Epochs completed | 14/50 (30-min cap) |
+| Peak VRAM | 42.1 GB |
+
+**Analysis:** The loss function switch from MSE to L1 (MAE) produced the single largest improvement seen in this research program. The result is −20.5% better despite using the old arch (n_layers=5, mlp_ratio=2) — showing the loss function dominates architecture in importance here. This makes sense: L1 directly optimizes the metric we evaluate with. The merged train.py stacks L1 + n_layers=6 + mlp_ratio=4; a confirmed stacked run will likely improve further.
+
+Alphonse also included a `train.py::evaluate_split` NaN-fix (filter non-finite GT samples before scorer call), making test metrics finite for the first time: test_avg/mae_surf_p = 91.708 across all 4 test splits.
+
+**Artifacts:** `models/model-l1-loss-e50-20260512-195549/metrics.jsonl`
+
+---
+
+## 2026-05-12 21:05 — PR #1566: n_head 4 → 8
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/n-head-8
+- **Hypothesis:** Doubling attention heads to 8 diversifies slice patterns; expected −2–4%.
+- **Outcome:** **CLOSED** — +15.7% worse (148.280 vs 128.127), per-epoch cost +43%.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 8) | **148.280** |
+| Epochs completed | 9/50 (30-min cap) |
+| Per-epoch time | ~222 s (vs ~156 s baseline) |
+
+**Analysis:** n_head=8 launches more but smaller softmax/matmul kernels, creating overhead that costs +43% per epoch (not +15% as predicted). Only 9 epochs fit in 30 min, and the val curve was still oscillating at epoch 8. Under fixed wall-clock, n_head=4 dominates. Future attention-diversity experiments should use slice_num changes rather than head count.
+
+---
+
+## 2026-05-12 21:05 — PR #1401 (arm 2): Warmup + cosine T_max=15
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/warmup-cosine-lr1e-3
+- **Hypothesis:** 3-ep warmup to peak lr=1e-3 with T_max=15 aligned to budget; expected beat baseline.
+- **Outcome:** **CLOSED** — val=133.448, +4.15% worse than old baseline 128.127 (and far worse than new baseline 101.810).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 11) | **133.448** |
+| val_geom_camber_cruise | 102.355 (≈ old baseline) |
+| Epochs completed | 11/15 (30-min cap, epochs ~175 s) |
+
+**Analysis:** Peak lr=1e-3 is too hot for the wider/deeper model. The n_layers=6 arch has ~35% longer epochs (~175 s vs ~130 s for old arch), so even T_max=15 can't complete in 30 min. The schedule's low-LR tail (epochs 12-15) was never executed. This direction is exhausted — reassigned to lower LR (3e-4) approach.
+
+---
+
+## 2026-05-12 21:05 — PR #1370: slice_num 64 → 128
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/slice-128
+- **Hypothesis:** Doubling physics-attention slices improves mesh resolution; expected −1–3%.
+- **Outcome:** **CLOSED** — val=150.909, +17.8% worse than new baseline 101.810. Also modified data/scoring.py (read-only).
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p (best, ep 10) | **150.909** |
+| test_avg/mae_surf_p (NaN-fix applied) | **137.481** |
+| Epochs completed | 11/50 (30-min cap) |
+| Per-epoch time | ~173 s |
+
+**Analysis:** Doubling slices costs ~12% more per epoch AND the result is significantly worse. The slice bottleneck hypothesis is not supported within the 30-min budget. Additionally, fern modified data/scoring.py (read-only per program.md) — the equivalent train.py workaround was already merged in PR #1358. Closed; fern reassigned to Huber loss.
+
+---
+
 ## 2026-05-12 19:05 — PR #1408: MLP expansion ratio 2 → 4 (canonical transformer recipe)
 
 - **Student:** charliepai2g48h3-thorfinn
