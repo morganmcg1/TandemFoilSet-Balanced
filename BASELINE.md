@@ -8,6 +8,73 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-12 21:06 — PR #1554: Stack SWA on Huber baseline
+
+- **val_avg/mae_surf_p:** **99.0704** (SWA model, end of training)
+- **test_avg/mae_surf_p:** **88.8955** (4-split, all finite, SWA model)
+- Improvement vs. PR #1452: val −1.69%, test −1.65%
+
+### Val per-split surface MAE (SWA model)
+
+| Split | mae_surf_p | Δ vs. #1452 |
+|---|---|---|
+| val_single_in_dist     | 117.7539 | −1.66% |
+| val_geom_camber_rc     | 104.2288 | −4.71% |
+| val_geom_camber_cruise | 79.1798  | −2.12% |
+| val_re_rand            | 95.1191  | **+2.23%** |
+| **val_avg**            | **99.0704** | **−1.69%** |
+
+### Test per-split surface MAE (SWA model)
+
+| Split | mae_surf_p | Δ vs. #1452 |
+|---|---|---|
+| test_single_in_dist     | 102.3693 | −3.43% |
+| test_geom_camber_rc     | 95.4730  | −0.81% |
+| test_geom_camber_cruise | 67.6442  | −1.77% |
+| test_re_rand            | 90.0956  | −0.35% |
+| **test_avg**            | **88.8955** | **−1.65%** |
+
+### Config
+
+- Everything from PR #1452 baseline (Huber β=1.0, AdamW lr=5e-4 wd=1e-4, batch=4, surf_weight=10.0, CosineAnnealingLR(T_max=15), 15 epochs)
+- **SWA additions:**
+  - `swa_start_frac = 0.75` → `swa_start_epoch = 11` (0-indexed)
+  - `swa_lr = 1e-4` (= 0.2 × base lr)
+  - `swa_anneal_epochs = 2`, `anneal_strategy = "cos"`
+  - `update_bn` skipped (Transolver uses LayerNorm)
+  - Terminal test eval runs on `swa_model.module`, not the base model
+  - 3 SWA-active epochs in practice (epochs 12, 13, 14; epoch 15 timed out)
+- Params: 0.66M (SWA is a running average, no extra trained params)
+- Peak VRAM: ~42 GB
+- Wall clock: 30.8 min
+
+### W&B run
+
+- `cnu8v9i2` — https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2/runs/cnu8v9i2
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --agent willowpai2g48h2-frieren \
+  --wandb_name willowpai2g48h2-frieren/swa-on-huber \
+  --wandb_group swa-stack-test
+```
+
+### What landed
+
+- `torch.optim.swa_utils.AveragedModel` + `SWALR` added in `train.py`. Cosine anneals epochs 0–10 (inclusive); SWALR holds `swa_lr=1e-4` epochs 11–14 while `swa_model.update_parameters(model)` accumulates the running mean. After the last epoch, `model.load_state_dict(swa_model.module.state_dict())` and re-evaluate val/test — these are the headline numbers.
+- Per-split test improvements are uniform (all 4 splits down), consistent with the flat-minima-helps-OOD hypothesis. Val mix is positive on 3/4 splits with a small `val_re_rand` regression (+2.2%) — likely an artifact of only 3 averaged epochs and `swa_lr` being above the cosine floor.
+
+### Open follow-ups (for future PRs)
+
+- **Stack SWA × unified_pos × FiLM × Re-weight × β-sweep** — orthogonal levers; current wave-2 wave (#1551 tanjiro, #1585 askeladd, #1586 thorfinn) all stack on Huber baseline. The next merged winner should compound on this SWA-on-Huber baseline.
+- **Tighter SWA tuning:** lower `swa_lr` (0.1× or 0.05× base lr) and/or earlier `swa_start_frac` (0.65) to fit 4–5 averaged epochs into the 14-epoch envelope. Predicted further −1 to −3% on val.
+- **Same open follow-ups carry forward from PR #1452:** β sweep, surface-only Huber, per-channel β.
+
+---
+
 ## 2026-05-12 20:02 — PR #1452: Swap MSE → Smooth-L1 (Huber β=1.0) + scoring NaN-safe fix
 
 - **val_avg/mae_surf_p:** **100.7659** (best, epoch 14)
