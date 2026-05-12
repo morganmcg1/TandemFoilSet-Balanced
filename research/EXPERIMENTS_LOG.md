@@ -364,3 +364,56 @@ After merging frieren's SWA win, they were re-assigned to test a 3-arm β sweep 
 | #1600 | frieren | β ∈ {0.3, 1.0, 3.0} sweep | SWA-on-Huber baseline (#1554) ✓ |
 
 Three of the four wave-2 PRs were created before the SWA merge and currently target their work against the pre-merge Huber baseline. **Each needs to be sent back for rebase** so its result is comparable to the new SWA-on-Huber baseline (val=99.07).
+
+---
+
+## 2026-05-12 21:25 — PR #1453 nezuko (n_hidden=192, wave-1 MSE arm): CLOSED
+
+- Branch: `willowpai2g48h2-nezuko/wider-n-hidden-192`
+- Hypothesis: Widen Transolver `n_hidden` 128 → 192 on the pre-merge MSE+10-epoch baseline.
+- Result (2 runs, no seed): val_avg/mae_surf_p = **128.28** (best, run `pn7x5dx8`) and **148.57** (worse, run `k3ddvtjm`). 16% inter-run variance.
+- Test (best run): test_avg_3split/mae_surf_p = 129.13 (NaN on cruise pressure due to running against the pre-merge `data/scoring.py`).
+- Decision: **CLOSED**. Best run is 29% worse than the new SWA-on-Huber baseline (val=99.07).
+- Param count came out to 1.47M (~2.2× baseline 0.66M). Capacity expansion plausible but variance-limited at this schedule budget.
+
+### nezuko follow-up
+
+Reassigned to PR #1617: gradient clipping (max_norm=1.0) on SWA-on-Huber baseline. The lever is motivated *directly by their wave-1 observation* of 16% seed-to-seed variance — clipping is the right defensive lever for gradient-spike instability that Huber's per-element capping doesn't cover. 2-seed protocol so we can measure variance reduction.
+
+---
+
+## 2026-05-12 21:25 — PR #1446 alphonse (schedule-align, --epochs=10): CLOSED — not a regression
+
+- Branch: `willowpai2g48h2-alphonse/schedule-align-baseline`
+- Hypothesis: Align cosine `T_max=epochs=10` to actual training budget (the pre-merge baseline had `T_max=15` but `--epochs=10`).
+- Result: **never trained** — pod was stuck on rate-limit + outdated baseline window.
+- Decision: **CLOSED** as moot. The merged baseline (PR #1452 → #1554) already uses `--epochs=15` with `CosineAnnealingLR(T_max=15)` — schedule alignment landed implicitly as part of the Huber merge, not as an isolated test. Re-running this experiment would test something already in baseline.
+
+### alphonse follow-up
+
+Reassigned to PR #1618: split-loss-by-node-type (Huber on surface + MSE on volume), research-ideas H3. The headline metric is `mae_surf_p` so a surface-specialized loss kind is targeted at exactly the right axis. Wave-1's Huber win came from outlier-gradient capping which is most relevant for high-magnitude surface residuals; on volume, MSE may give a stronger learning signal. Single-variable split-loss change.
+
+---
+
+## 2026-05-12 21:25 — Wave-3 portfolio (5 in flight, 2 stale wave-1 still running)
+
+After the cascade of close+reassign, the active portfolio is now:
+
+| PR | Student | Slug | Stacks on | Predicted Δ vs. 99.07 val |
+|---|---|---|---|---|
+| #1551 | tanjiro | `unified-pos-on-huber` | Huber baseline (#1452) — **stale**, predates SWA merge | will need rebase if it wins |
+| #1585 | askeladd | `film-on-huber` | Huber baseline (#1452) — **stale**, predates SWA merge | will need rebase if it wins |
+| #1586 | thorfinn | `re-weight-on-huber` | Huber baseline (#1452) — **stale**, predates SWA merge | will need rebase if it wins |
+| #1600 | frieren | `beta-sweep-on-swa` (3-arm) | SWA-on-Huber baseline (#1554) ✓ | −1 to −4% best arm |
+| #1617 | nezuko | `grad-clip-on-swa` (2-seed) | SWA-on-Huber baseline (#1554) ✓ | −0.5 to −2% + variance reduction |
+| #1618 | alphonse | `surf-huber-vol-mse` | SWA-on-Huber baseline (#1554) ✓ | −2 to −5% |
+| (#1449) | edward | `surf-weight-30` (wave-1 MSE arm) | MSE baseline — **stale**, training in progress | needs reframe when results land |
+| (#1450) | fern | `mlp-ratio-4` (wave-1 MSE arm) | MSE baseline — **stale**, training in progress | needs reframe when results land |
+
+Edward and fern are mid-training on the original MSE baseline (94 GB GPU usage on their pods, no PR comments yet). Letting them complete; will evaluate their lever delta on the MSE frame and decide rebase vs. close when they post.
+
+### Compound improvement target
+
+If wave-3 PRs land at the midpoint of their predicted ranges, the compound effect on val is:
+`99.07 × 0.975 (β-sweep) × 0.985 (grad-clip) × 0.965 (surf-Huber/vol-MSE) ≈ 92`
+And wave-2's three "Huber-stale" levers, after rebase onto the merged baseline, could plausibly add another 0.94× (FiLM/unified-pos/Re-weight at midpoint) bringing the theoretical floor to ~87 val.
