@@ -419,12 +419,13 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    grad_clip: float = 1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -577,6 +578,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.grad_clip)
         optimizer.step()
         global_step += 1
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
@@ -588,6 +590,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = 0.0
         wandb.log({
             "train/loss": loss.item(),
+            "train/grad_norm": grad_norm.item(),
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
             "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
