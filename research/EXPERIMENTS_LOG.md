@@ -2,6 +2,115 @@
 
 ---
 
+## 2026-05-12 20:00 — PR #1388: Linear warmup + lr 5e-4 → 1e-3 with cosine anneal — CLOSED
+
+- **Branch:** `charliepai2g48h5-askeladd/warmup-lr-1e3`
+- **Student:** charliepai2g48h5-askeladd
+- **Hypothesis:** Add 5-epoch linear warmup and raise peak lr from 5e-4 to 1e-3
+  (with cosine anneal afterward). Compensate for small batch and short
+  wall-clock budget.
+
+### Results
+
+| Metric | lr=1e-3 (primary) | lr=7.5e-4 (fallback) |
+|---|---:|---:|
+| `val_avg/mae_surf_p` | **152.0332** | 152.5056 |
+| `val_single_in_dist/mae_surf_p` | 184.95 | 177.17 |
+| `val_geom_camber_rc/mae_surf_p` | 163.59 | 163.31 |
+| `val_geom_camber_cruise/mae_surf_p` | 122.49 | 124.96 |
+| `val_re_rand/mae_surf_p` | 137.10 | 144.58 |
+| `test_avg/mae_surf_p` | NaN (no scoring workaround) | NaN |
+| `test_3of4_avg/mae_surf_p` | 148.47 | 148.80 |
+| Best epoch | 12 | 12 |
+| Epochs reached | 14 | 14 |
+| Time/epoch | 131.4 s | 132.0 s |
+| Peak GPU | 42.11 GB | 42.12 GB |
+| Loss used | **MSE** (PR predates Smooth-L1) | **MSE** |
+
+- **Artifacts:** `models/model-charliepai2g48h5-askeladd-warmup-lr-1e3-20260512-181136/metrics.{jsonl,yaml}`, `models/model-charliepai2g48h5-askeladd-warmup-lr-7.5e4-20260512-185418/metrics.{jsonl,yaml}`
+- **Status:** CLOSED — both arms ~41 MAE worse than baseline.
+
+### Analysis
+
+- ~41 MAE gap is too large to be MSE-vs-Smooth-L1 alone; lr=1e-3 is the
+  dominant cause. The 5-epoch warmup + 9 epochs at peak lr=1e-3 + small
+  cosine decay integrates LR-area-under-curve comparable to baseline's
+  14 epochs at lr=5e-4, but more time at high lr overshoots good basins.
+- Not divergence (loss curves were clean) — just a worse local minimum.
+- Student independently rediscovered the scoring NaN bug, identical to
+  thorfinn/alphonse's findings. Three independent students all found the
+  same `0 × Inf = NaN` interaction — high-confidence diagnosis.
+- The "step-based warmup over the first ~500 steps" idea is worth queuing
+  separately, since 5 epochs = ~36% of the 14 epochs actually fitting in the
+  cap.
+
+### Conclusions
+
+- lr=1e-3 with warmup is not productive at this wall-clock budget. The lr
+  lever appears to be tuned correctly at baseline (lr=5e-4). Pushing lr
+  higher (e.g., lr=1.5e-3, lr=2e-3) is not promising given the 41 MAE gap.
+- More promising direction implied: step-based warmup at a *lower* peak.
+  Queued for later, not assigned now.
+- Next assignment for askeladd: gradient clipping max_norm=1.0 (PR #1561) —
+  orthogonal to schedule lever space.
+
+---
+
+## 2026-05-12 19:53 — PR #1375: Raise surf_weight 10 → 30 — CLOSED
+
+- **Branch:** `charliepai2g48h5-alphonse/surf-weight-30`
+- **Student:** charliepai2g48h5-alphonse
+- **Hypothesis:** Raise `surf_weight` from 10 to 30 to bias gradients more
+  toward the ranking quantity (surface pressure MAE).
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **120.3944** (epoch 13) |
+| `val_single_in_dist/mae_surf_p` | 148.75 |
+| `val_geom_camber_rc/mae_surf_p` | 125.45 |
+| `val_geom_camber_cruise/mae_surf_p` | 93.73 |
+| `val_re_rand/mae_surf_p` | 113.65 |
+| `test_avg/mae_surf_p` | **112.6536** (finite — scoring workaround applied) |
+| `test_single_in_dist/mae_surf_p` | 133.54 |
+| `test_geom_camber_rc/mae_surf_p` | 123.03 |
+| `test_geom_camber_cruise/mae_surf_p` | 79.73 |
+| `test_re_rand/mae_surf_p` | 114.32 |
+| Best epoch | 13 |
+| Epochs reached | 14 |
+| Time/epoch | 131.9 s |
+| Peak GPU | 42.11 GB |
+| Loss used | **MSE** (PR predates Smooth-L1) |
+
+- **Artifacts:** `models/model-charliepai2g48h5-alphonse-surf-weight-30-20260512-191201/metrics.{jsonl,yaml}`
+- **Status:** CLOSED — does not beat baseline (120.39 > 110.76).
+
+### Analysis
+
+- ~10 MAE gap to baseline. Smooth-L1 vs MSE typically buys ~5% in this
+  regime — even a full recovery wouldn't close the gap.
+- Per-split signal is diagnostic: `val_single_in_dist` got *worse* under
+  surf_weight=30 (148.75 vs baseline 135.16) — surface-heavy reweighting
+  biased gradients away from the volume manifold, hurting the hardest split.
+  This is not an MSE-vs-Smooth-L1 artifact.
+- Student independently rediscovered the scoring NaN bug AND wrote a clean
+  `train.py:evaluate_split` workaround — exactly the same workaround being
+  rolled centrally via PR #1532 (thorfinn). All four test splits finite as
+  a result.
+- Student also surfaced the recurring "T_max=50 cosine never decays in 14
+  epochs" observation that tanjiro/askeladd also raised.
+
+### Conclusions
+
+- `surf_weight=30` is not productive — biases away from volume manifold.
+  The baseline at `surf_weight=10` is well-tuned.
+- Next assignment for alphonse: T_max=14 cosine schedule matched to actual
+  epoch budget (PR #1560) — exactly the lever the student's own analysis
+  pointed at, and orthogonal to all in-flight work.
+
+---
+
 ## 2026-05-12 19:27 — PR #1439: Double batch_size 4 → 8 — CLOSED
 
 - **Branch:** `charliepai2g48h5-tanjiro/batch-size-8`
