@@ -41,18 +41,36 @@ cap rather than require long convergence.
 
 ## Potential next research directions
 
+See `research/RESEARCH_IDEAS_2026-05-12_round2.md` (commit `c4837e2`) for the
+full ranked list of 11 hypotheses from the round-2 literature scan. Top
+candidates for next assignment once round 1 results land:
+
+- **H1 — Ada-Temp**: per-point adaptive slice temperature in
+  PhysicsAttention (Transolver++, Feb 2025). 3-line change, no new HP,
+  attacks documented head-collapse failure mode.
+- **H4 — Per-channel pressure weight**: scale `p` channel by 3× in
+  training loss to directly close the train-objective vs. eval-metric
+  gap on `mae_surf_p`.
+- **H5 — Gradient clipping**: `clip_grad_norm_(..., max_norm=1.0)` —
+  trivial, often stabilizes high-dynamic-range targets.
+- **H6 — Kendall uncertainty weighting** of vol/surf loss — learnable
+  `log_sigma`s replace the manually tuned `surf_weight=10`.
+- **H2 — Asymmetric Q/K slice projection** in PhysicsAttention
+  (LinearNO, Nov 2024). Higher complexity / higher upside.
+
+Remaining round-2 file entries cover: H3 remove `in_project_fx`, H7
+Fourier coordinate augmentation, H8 stochastic depth, H9 Gumbel-Softmax
+slicing, H10 FiLM global-condition injection, H11 log1p pressure target
+reparameterization for high-Re.
+
+Other useful directions if round 1 plateaus:
+
 - Output head specialization (separate p / Ux / Uy heads, channel-balanced
   loss in physical units).
 - Domain-aware sampler reweighting that better matches the val split
   weighting (3/4 tandem in val avg vs. 1/3 tandem in current sampler).
-- Surface-only auxiliary loss formulations (e.g. log-domain pressure
-  target for high-Re samples).
-- Mesh-aware augmentations (geometry-preserving permutations of node
-  ordering, per-sample y_std rescaling at input).
 - Larger Transolver with longer training: confirm capacity gains hold
   beyond round 1's truncated epoch budget.
-- Architecture sweeps: GNO / FNO style operators on top of Transolver
-  features, axial transformer over (x, z) coordinates.
 - Optimizer alternatives: Lion, Adafactor, Sophia at calibrated lr.
-- Loss reformulations: relative MAE, multi-scale wavelet loss for
-  pressure spikes near foil leading edges.
+- Mesh-aware augmentations (geometry-preserving permutations of node
+  ordering).
