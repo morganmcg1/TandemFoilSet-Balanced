@@ -2,6 +2,131 @@
 
 ---
 
+## 2026-05-12 20:55 — PR #1422: slice_num 64 → 128 — CLOSED
+
+- **Branch:** `charliepai2g48h5-frieren/slice-num-128`
+- **Student:** charliepai2g48h5-frieren
+- **Hypothesis:** Increase `slice_num` from 64 to 128 to give Transolver
+  more physics-aware slice tokens per attention layer.
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **145.9708** (epoch 11 best) |
+| `val_single_in_dist` | 184.67 |
+| `val_geom_camber_rc` | 154.30 |
+| `val_geom_camber_cruise` | 114.72 |
+| `val_re_rand` | 130.19 |
+| `test_avg/mae_surf_p` | NaN (no scoring workaround) |
+| Best epoch | 11 |
+| Epochs reached | 11 (timeout-bound) |
+| Time/epoch | ~171 s (vs ~131 s baseline) |
+| Peak GPU | 54.5 GB |
+| Loss used | **MSE** (pre-Smooth-L1 branch) |
+
+- **Status:** CLOSED — +44% worse than baseline 101.12.
+
+### Analysis
+
+Same diagnosis as #1398, #1413: capacity scale-up at fp32 + MSE only fits
+11 epochs in the 30-min cap, vs baseline's 19 epochs (bf16) — undertrained.
+Val still descending monotonically through epoch 11 (no plateau, no
+instability, no OOM at 54.5 GB). The lever itself isn't refuted — the
+budget is binding.
+
+### Conclusions
+
+- slice_num=128 untestable under current wall-clock budget without bf16.
+- Next assignment for frieren: slice_num=96 + bf16 inheritance (PR #1590) —
+  milder slice bump paired with throughput fix for fair test.
+
+---
+
+## 2026-05-12 20:55 — PR #1413: n_layers 5 → 7 — CLOSED
+
+- **Branch:** `charliepai2g48h5-fern/deeper-7-layers`
+- **Student:** charliepai2g48h5-fern
+- **Hypothesis:** Increase `n_layers` from 5 to 7 (deeper Transolver) to
+  give more iterative slice-attention refinement.
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **144.9040** (epoch 10 best) |
+| `val_single_in_dist` | 171.26 |
+| `val_geom_camber_rc` | 177.24 |
+| `val_geom_camber_cruise` | 103.29 |
+| `val_re_rand` | 127.83 |
+| `test_avg/mae_surf_p` | NaN (no scoring workaround) |
+| Best epoch | 10 |
+| Epochs reached | 10 (timeout-bound) |
+| Time/epoch | ~181 s |
+| Peak GPU | 57.1 GB |
+| Loss used | **MSE** (pre-Smooth-L1 branch) |
+
+- **Status:** CLOSED — +43% worse than baseline 101.12.
+
+### Analysis
+
+Same diagnosis as the capacity-arms pattern: at n_layers=7 + fp32 + MSE,
+only 10 epochs fit in the 30-min cap. Val descended steeply through
+epoch 10 with no plateau. No instability, no OOM. Wall-clock is the
+binding constraint, not depth.
+
+### Conclusions
+
+- n_layers=7 untestable under current budget without bf16.
+- Next assignment for fern: n_layers=6 + bf16 inheritance (PR #1588) —
+  milder depth bump paired with throughput fix.
+
+---
+
+## 2026-05-12 20:53 — PR #1398: n_hidden 128 → 192 — CLOSED
+
+- **Branch:** `charliepai2g48h5-edward/wider-hidden-192`
+- **Student:** charliepai2g48h5-edward
+- **Hypothesis:** Widen Transolver `n_hidden` from 128 to 192 for more
+  representational capacity.
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **138.1375** (epoch 10 best) |
+| `val_single_in_dist` | 187.30 |
+| `val_geom_camber_rc` | 141.23 |
+| `val_geom_camber_cruise` | 103.21 |
+| `val_re_rand` | 120.81 |
+| `test_avg/mae_surf_p` | NaN (no scoring workaround) |
+| Best epoch | 10 |
+| Epochs reached | 10 (timeout-bound) |
+| Time/epoch | ~186 s |
+| Peak GPU | 58.0 GB |
+| Loss used | **MSE** (pre-Smooth-L1 branch) |
+
+- **Status:** CLOSED — +37% worse than baseline 101.12.
+
+### Analysis
+
+Trajectory was volatile at epoch 7-10 (167→179→197→138) — clearly still
+in early-training oscillation, not converged. Wider model at fp32 trades
+epochs for capacity 1-for-1. No instability, no OOM. Pattern matches
+fern (#1413) and frieren (#1422) exactly: wall-clock is binding for
+capacity scale-ups under MSE+fp32.
+
+### Conclusions
+
+- n_hidden=192 untestable under current budget without bf16.
+- Three students (edward, fern, frieren) independently identified the
+  same pattern: capacity-scale-up arms get killed by wall-clock cap
+  unless paired with throughput recovery (bf16).
+- Next assignment for edward: n_hidden=160 + bf16 inheritance (PR #1587) —
+  milder width bump paired with throughput fix.
+
+---
+
 ## 2026-05-12 20:01 — PR #1532: bf16 AMP for 2x epoch throughput + scoring-NaN fix — MERGED
 
 - **Branch:** `charliepai2g48h5-thorfinn/bf16-amp-scoring-fix`

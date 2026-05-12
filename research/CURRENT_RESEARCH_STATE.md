@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 20:15 (PR #1532 merged, round-2 fully assigned)
+- **As of:** 2026-05-12 21:00 (round-3 closures: capacity arms; round-3 assignments out for edward, fern, frieren)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -30,21 +30,24 @@ fleet can lock in a real baseline number and identify which levers compound.
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
 |---|---|---|---|---|
-| #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Worse than baseline; wall-clock is binding constraint, not gradient noise |
-| #1375 ✗ | charliepai2g48h5-alphonse | `surf_weight` 10 → 30 | 120.394 | Worse than baseline; biases away from volume manifold (`val_single_in_dist` got worse) |
-| #1388 ✗ | charliepai2g48h5-askeladd | 5-epoch warmup + `lr` 5e-4 → 1e-3 | 152.033 | Higher peak lr overshoots good basins; lr=5e-4 baseline is well-tuned |
+| #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Wall-clock binding, not gradient noise |
+| #1375 ✗ | charliepai2g48h5-alphonse | `surf_weight` 10 → 30 | 120.394 | Biases away from volume manifold |
+| #1388 ✗ | charliepai2g48h5-askeladd | 5-epoch warmup + `lr` 5e-4 → 1e-3 | 152.033 | Higher peak lr overshoots good basins |
+| #1398 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 192 | 138.138 | Wall-clock binding (10/50 epochs); reassigned milder n_hidden=160 + bf16 |
+| #1413 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 7 | 144.904 | Wall-clock binding (10/50 epochs); reassigned milder n_layers=6 + bf16 |
+| #1422 ✗ | charliepai2g48h5-frieren | `slice_num` 64 → 128 | 145.971 | Wall-clock binding (11/50 epochs); reassigned milder slice_num=96 + bf16 |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
 |---|---|---|---|
-| #1398 | charliepai2g48h5-edward | `n_hidden` 128 → 192 | Width |
-| #1413 | charliepai2g48h5-fern | `n_layers` 5 → 7 | Depth |
-| #1422 | charliepai2g48h5-frieren | `slice_num` 64 → 128 | Slice granularity |
 | #1428 | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | Loss channel |
 | #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
 | #1560 | charliepai2g48h5-alphonse | T_max=14 cosine matched to actual epochs | Schedule |
 | #1561 | charliepai2g48h5-askeladd | Gradient norm clipping (max_norm=1.0) | Optimization |
 | #1568 | charliepai2g48h5-thorfinn | `torch.compile` + bf16 AMP | Throughput |
+| #1587 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (inherited) | Width × throughput |
+| #1588 | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 (inherited) | Depth × throughput |
+| #1590 | charliepai2g48h5-frieren | `slice_num` 64 → 96 + bf16 (inherited) | Slice × throughput |
 
 ## Open research questions
 
@@ -76,6 +79,15 @@ arms:
    high-variance gradients (warranting clipping, layer-wise lr decay, or
    AdamW-beta tweaks) or well-behaved gradients (where regularization or
    data augmentation are the better swings).
+
+5. **Capacity scale-ups need throughput compensation.** Three students
+   (edward #1398, fern #1413, frieren #1422) independently demonstrated that
+   capacity scale-ups at fp32 only fit 10-11 epochs in the 30-min cap (vs
+   baseline's 19), and val curves are still descending at timeout. The
+   round-3 reassignments (PRs #1587, #1588, #1590) test the milder bumps
+   paired with bf16 inheritance. **If these still don't beat baseline, then
+   any model-architecture lever requires `torch.compile` (PR #1568) or
+   matched LR schedule (PR #1560) to be testable in this budget.**
 
 Constraints shape what we can sensibly try in 30-minute training executions:
 
@@ -113,7 +125,7 @@ Constraints shape what we can sensibly try in 30-minute training executions:
    - EMA weights for eval: in flight (PR #1535).
    - Gradient clipping (max_norm=1.0): in flight (PR #1561 round-2 reassign).
 
-## What has been ruled out (round-2 closures)
+## What has been ruled out (rounds 2 + 3 closures)
 
 - **Higher peak lr (1e-3 with warmup) — refuted by PR #1388.** Schedule is well
   tuned at lr=5e-4. Pushing lr higher is unproductive at this wall-clock budget.
@@ -121,10 +133,14 @@ Constraints shape what we can sensibly try in 30-minute training executions:
   from the volume manifold; `val_single_in_dist` (the hardest split) regresses.
 - **Higher batch (4 → 8) — refuted by PR #1439.** Wall-clock is the binding
   constraint, not gradient noise. Memory was at 84/96 GB at batch=8.
+- **Larger capacity at fp32 — wall-clock-bound (PRs #1398, #1413, #1422).**
+  Width=192, depth=7, slice_num=128 each fit only 10-11 epochs vs baseline's
+  19 — undertrained at timeout. Capacity lever requires bf16 throughput
+  compensation (in flight: #1587, #1588, #1590) before final verdict.
 
-Three of the four "loss balance / schedule / effective batch" cheap levers are
-now refuted. Remaining cheap-lever space: schedule shape (T_max — in flight via
-#1560), gradient stabilization (#1561), per-channel loss weighting (#1428).
+Cheap lever space is mostly explored. Remaining cheap-lever candidates:
+schedule shape (T_max #1560), gradient stabilization (#1561), per-channel
+loss weighting (#1428), EMA (#1535).
 
 ## Potential next research directions (round 3+ once current arms settle)
 
