@@ -308,3 +308,59 @@ If multiple wave-2 levers land in the predicted range, **wave 3 should stack the
 
 - All 4 wave-2 PRs touch **train.py only** (per stack-test discipline). No PR touches `target/models/Transolver.py`, and `data/scoring.py` is frozen with the merged frieren fix.
 - The FiLM PR (#1585) is the only one that runs 3 seeds; the other three run 1 seed each (different rigor patterns reflect each lever's inherent variance — FiLM adds new params, the others don't).
+
+---
+
+## 2026-05-12 21:06 — PR #1554 frieren (SWA on Huber): MERGED — new baseline
+
+- Branch: `willowpai2g48h2-frieren/swa-on-huber`
+- Hypothesis: Stochastic Weight Averaging on final 4/15 epochs of the Huber baseline, swa_lr=1e-4, anneal_epochs=2, eval on `swa_model.module` at terminal step.
+- Result:
+
+| Metric | Old baseline (#1452) | New (SWA+Huber, #1554) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 100.7659 | **99.0704** | **−1.69%** |
+| test_avg/mae_surf_p | 90.3840 | **88.8955** | **−1.65%** |
+| Wall time | 30.0 min | 30.8 min | +2.7% |
+| Peak VRAM | ~42 GB | ~42 GB | flat |
+| Params | 0.66M | 0.66M | flat |
+
+- All four **test splits improved** (test_single_in_dist −3.4%, test_geom_camber_rc −0.8%, test_geom_camber_cruise −1.8%, test_re_rand −0.4%).
+- Val per-split mostly positive: val_single_in_dist −1.7%, val_geom_camber_rc −4.7%, val_geom_camber_cruise −2.1%; **val_re_rand regressed +2.2%** — speculation in PR comment: only 3 SWA-active epochs averaged in the 30-min cap (epoch 15 didn't start), and `swa_lr=1e-4` is above the cosine floor at that point, so the average is integrating over noisier weights.
+- W&B run `cnu8v9i2` (https://wandb.ai/wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2/runs/cnu8v9i2) — verified via wandb-primary subagent: all reported numbers match logged metrics to 4+ decimal places, run state = "finished", no NaN in primary surface metrics.
+- One minor non-fatal flag: `swa_test/test_geom_camber_cruise/vol_loss = Infinity` (volume-component normalised loss on the corrupt GT sample `000020.pt`). Surface MAE is finite. Not a regression from #1452.
+
+### Decision
+
+- **Merged at 2026-05-12 21:06 UTC** via `gh pr merge 1554 --squash`. Preflight passed. `BASELINE.md` updated with the new numbers.
+- The 1.7% headline improvement is smaller than the predicted −3 to −7% range, but firmly above the merge bar. The "SWA effect" within this run (SWA vs. base-best, same trajectory) is −4.0% val / −5.3% test, which is squarely in the predicted range — the gap is fully explained by frieren's wave-1 baseline run having an unusually good epoch-14 base, while this SWA run's base hit best at epoch 12.
+
+### Analysis
+
+- SWA composes cleanly with Huber. The flat-minima effect shows uniformly across test splits, exactly as predicted for OOD generalization.
+- The `val_re_rand` regression suggests `swa_lr` is too high; lowering to 0.1× or 0.05× base lr may close that gap (logged in BASELINE.md follow-ups).
+- The merged baseline shifts ~95 → 99 territory on val, ~88 → 89 on test. With three wave-2 levers still in flight (unified-pos, FiLM, Re-weight), each predicted to land another −3 to −10%, the compound 4-lever theoretical floor is ~78–83 val.
+
+---
+
+## 2026-05-12 21:15 — Wave-3 launch: PR #1600 (frieren, beta-sweep-on-swa)
+
+After merging frieren's SWA win, they were re-assigned to test a 3-arm β sweep on the new SWA-on-Huber baseline:
+
+| PR | Student | Slug | Hypothesis | Predicted Δ vs. 99.07 val |
+|---|---|---|---|---|
+| #1600 | frieren | `beta-sweep-on-swa` | 3-arm sweep: β ∈ {0.3, 1.0, 3.0}, single-variable on the Smooth-L1 transition point | best arm: −1 to −4% (~95–98 val), control: 99.07, worst: neutral or slight regress |
+
+- frieren is the right student to own this since they wrote both the Huber (PR #1452) and SWA (PR #1554) implementations. They have full context to debug any divergent arm.
+- The β sweep is the natural hyperparameter-tuning follow-up to the merged baseline. Even if no arm wins, the shape of the β-response curve is diagnostic about the residual distribution late in training.
+
+### Current wave-2/3 portfolio (4 in flight)
+
+| PR | Student | Lever | Stacks on |
+|---|---|---|---|
+| #1551 | tanjiro | unified_pos=True ref=8 | Huber baseline (#1452) — **stale** (needs rebase onto SWA baseline) |
+| #1585 | askeladd | FiLM global conditioning | Huber baseline (#1452) — **stale** (needs rebase onto SWA baseline) |
+| #1586 | thorfinn | Per-sample Re-based loss weighting | Huber baseline (#1452) — **stale** (needs rebase onto SWA baseline) |
+| #1600 | frieren | β ∈ {0.3, 1.0, 3.0} sweep | SWA-on-Huber baseline (#1554) ✓ |
+
+Three of the four wave-2 PRs were created before the SWA merge and currently target their work against the pre-merge Huber baseline. **Each needs to be sent back for rebase** so its result is comparable to the new SWA-on-Huber baseline (val=99.07).
