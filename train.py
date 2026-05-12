@@ -95,8 +95,10 @@ class PhysicsAttention(nn.Module):
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
+        self.in_project_slice = nn.Linear(dim_head, slice_num)         # value-pooling path
+        self.in_project_slice_k = nn.Linear(dim_head, slice_num)       # key-only path (new)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        torch.nn.init.orthogonal_(self.in_project_slice_k.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -117,21 +119,27 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
-        slice_norm = slice_weights.sum(2)
-        slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
-        slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
+        slice_weights_v = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights_k = self.softmax(self.in_project_slice_k(x_mid) / self.temperature)
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
-        v = self.to_v(slice_token)
+        slice_norm_v = slice_weights_v.sum(2)
+        slice_token_v = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights_v)
+        slice_token_v = slice_token_v / ((slice_norm_v + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
+
+        slice_norm_k = slice_weights_k.sum(2)
+        slice_token_k = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights_k)
+        slice_token_k = slice_token_k / ((slice_norm_k + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
+
+        q = self.to_q(slice_token_v)
+        k = self.to_k(slice_token_k)
+        v = self.to_v(slice_token_v)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
         )
 
-        out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
+        out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights_v)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
         return self.to_out(out_x)
 
@@ -254,7 +262,16 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+            B = y.shape[0]
+            finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if finite_sample.any():
+                idx = finite_sample.nonzero(as_tuple=True)[0]
+                ds, dv = accumulate_batch(
+                    pred_orig[idx], y[idx], is_surface[idx], mask[idx],
+                    mae_surf, mae_vol,
+                )
+            else:
+                ds, dv = 0, 0
             n_surf += ds
             n_vol += dv
 

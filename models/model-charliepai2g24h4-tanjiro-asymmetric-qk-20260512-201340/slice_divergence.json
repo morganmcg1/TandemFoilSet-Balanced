@@ -1,0 +1,40 @@
+{
+  "n_batches": 4,
+  "per_block": [
+    {
+      "block": 0,
+      "mean_abs_diff_softmax": 0.02378586959093809,
+      "entropy_v_nats": 2.901527464389801,
+      "entropy_k_nats": 2.8544934391975403,
+      "cos_sim_per_node": 0.24778274819254875
+    },
+    {
+      "block": 1,
+      "mean_abs_diff_softmax": 0.02392537286505103,
+      "entropy_v_nats": 1.8851730525493622,
+      "entropy_k_nats": 1.6316689848899841,
+      "cos_sim_per_node": 0.24966418743133545
+    },
+    {
+      "block": 2,
+      "mean_abs_diff_softmax": 0.011712236795574427,
+      "entropy_v_nats": 3.4215354919433594,
+      "entropy_k_nats": 3.3755051493644714,
+      "cos_sim_per_node": 0.6729123741388321
+    },
+    {
+      "block": 3,
+      "mean_abs_diff_softmax": 0.02704152325168252,
+      "entropy_v_nats": 2.455563247203827,
+      "entropy_k_nats": 2.42760694026947,
+      "cos_sim_per_node": 0.09687516465783119
+    },
+    {
+      "block": 4,
+      "mean_abs_diff_softmax": 0.011579340556636453,
+      "entropy_v_nats": 3.6058132648468018,
+      "entropy_k_nats": 3.53971666097641,
+      "cos_sim_per_node": 0.6366828978061676
+    }
+  ]
+}
