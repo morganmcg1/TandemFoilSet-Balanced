@@ -12,14 +12,12 @@ Experiment metrics are written to local JSONL only (`models/<experiment>/metrics
   `val_geom_camber_cruise`, `val_re_rand`). Lower is better.
 - **Test (paper-facing):** `test_avg/mae_surf_p` from the best-val checkpoint.
 
-> ⚠️ **Round-5 scoring bug (affects all PRs):** `test_geom_camber_cruise/000020.pt`
-> contains ±Inf values in the `p` channel (761 nodes of 225K). In `data/scoring.py`,
-> the per-sample `y_finite` mask correctly identifies the bad sample, but the
-> subsequent `err * surf_mask` sum computes `0 * Inf = NaN` (IEEE-754), which
-> propagates into `test_avg/mae_surf_p`. **Round-5 merge decisions are therefore
-> made on `val_avg/mae_surf_p` alone.** The test metric column below records the
-> partial 3-split value (excluding `test_geom_camber_cruise`) until a data or
-> scoring fix is in place.
+> ✅ **Round-5 scoring bug fixed (merged via PR #1532):** `test_geom_camber_cruise/000020.pt`
+> contains ±Inf values in the `p` channel. The `train.py:evaluate_split` workaround
+> (batch-level `y_finite_mask` filter before `accumulate_batch`) is now on the
+> advisor branch. All subsequent PRs must include this fix on their branch and
+> should report **finite `test_avg/mae_surf_p`**. Round-5 ranking remains
+> `val_avg/mae_surf_p` as the primary metric.
 
 ## Reference configuration (train.py defaults)
 
@@ -41,10 +39,48 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **110.7608** | #1444 | Smooth-L1 (Huber β=1.0), else defaults | epoch 14 of 50; still improving at timeout |
-| `test_avg/mae_surf_p` | NaN (bug) / 112.40 (3-split excl. cruise) | #1444 | — | see scoring bug note above |
+| `val_avg/mae_surf_p` | **101.1212** | #1532 | bf16 AMP + scoring fix; else Smooth-L1 defaults | epoch 17 of 19; still improving at timeout |
+| `test_avg/mae_surf_p` | **91.5013** | #1532 | — | first finite test avg on this branch |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 110.7608` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 101.1212` to be merged.
+
+## 2026-05-12 20:01 — PR #1532: bf16 AMP for 2x epoch throughput + scoring-NaN fix
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 17 (wall-clock-bound at 30 min; model still improving at epoch 19)
+- **Epochs reached:** 19 (~25% faster than fp32: ~98 s/epoch vs ~131 s)
+- **Peak GPU memory:** 32.95 GB (well under 96 GB limit)
+
+| Split | val mae_surf_p | Δ vs #1444 |
+|---|---|---|
+| `val_single_in_dist` | 120.0176 | -15.14 |
+| `val_geom_camber_rc` | 107.0980 | -21.98 |
+| `val_geom_camber_cruise` | 82.8425 | +5.14 |
+| `val_re_rand` | 94.5268 | -6.57 |
+| **val_avg** | **101.1212** | **-9.64** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 105.4434 |
+| `test_geom_camber_rc` | 99.9931 |
+| `test_geom_camber_cruise` | 69.2841 |
+| `test_re_rand` | 91.2844 |
+| **test_avg** | **91.5013** |
+
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-bf16-amp-scoring-fix-20260512-192502/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-bf16-amp-scoring-fix-20260512-192502/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/bf16-amp-scoring-fix" \
+      --epochs 50
+  ```
+  (bf16 AMP via `torch.autocast` + scoring workaround — see PR #1532 diff)
+
+---
 
 ## 2026-05-12 — PR #1444: Swap MSE → Smooth-L1 (Huber, beta=1.0)
 
