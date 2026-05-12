@@ -17,9 +17,20 @@ Broad sweep over orthogonal levers. First two PRs landed and were sent back (#14
 
 ### Active issue: `data/scoring.py` NaN propagation
 
-- `.test_geom_camber_cruise_gt/000020.pt` has NaN in y[:, 2]. Scoring's intended sample-skipping is poisoned by IEEE `NaN * 0 = NaN`.
-- Workaround (in `train.py` only — `data/` is read-only): pre-mask non-finite samples + `nan_to_num(y, ...)` before `accumulate_batch`. Snippet broadcast to all WIP PRs.
+- `.test_geom_camber_cruise_gt/000020.pt` contains **761 `-inf` values** in y[:, 2] (volume p channel). The exact value `-65504.0 = -fp_max(bf16)` is the smoking gun — preprocessing overflowed in bf16 upstream. Diagnosed jointly by thorfinn (#1451) and alphonse (#1419).
+- Scoring's intended sample-skipping is poisoned by IEEE `(+/-inf) * 0 = NaN` and then `NaN * 0 = NaN`.
+- Workaround (in `train.py` only — `data/` is read-only): pre-mask non-finite samples + `nan_to_num(y, nan=0, posinf=0, neginf=0)` before `accumulate_batch`. Snippet broadcast to all WIP PRs; alphonse's rerun of #1419 will be the canonical merged version that propagates the fix.
 - Val is unaffected; only the end-of-run test eval needs the fix.
+
+### Round-1 leaderboard (preliminary, pending reruns with fix)
+
+| PR | Student | Hypothesis | Val (best) | Test (clean) | Epochs in cap |
+|----|---------|-----------|-----------:|-------------:|---:|
+| #1419 | alphonse | bf16 autocast | **110.84** | **99.79** (offline) | 18 |
+| #1427 | askeladd | surf_weight=30 | 134.14 | NaN; 130.65 (3-split) | 12 |
+| #1451 | thorfinn | slice_num=128 (bs=2 OOM-fallback) | 136.69 | NaN; 132.59 (3-split) | 11 |
+
+Alphonse leads decisively. The big driver is the bf16 speedup yielding 18 epochs vs 11-12. Other hypotheses haven't had time to fully reveal their effect yet.
 
 | Student | PR | Hypothesis | Lever |
 |---------|----|-----------|-------|

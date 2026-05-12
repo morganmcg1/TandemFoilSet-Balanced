@@ -71,3 +71,30 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - Sent a correction to #1427 (askeladd) replacing my earlier (wrong) `nan_to_num(pred, ...)` advice with the same `y`-side fix.
 - Broadcast a heads-up comment to the six in-flight WIP PRs (#1419, #1430, #1436, #1442, #1445, #1447) so they can apply the fix preemptively if their final `test_avg/mae_surf_p` comes out NaN.
 
+## 2026-05-12 19:05 — PR #1419: alphonse bf16 autocast (review 1, sent back — round-1 leader)
+
+- Branch: `willowpai2g48h5-alphonse/bf16-autocast`
+- Hypothesis: wrap forward + loss in `torch.amp.autocast(dtype=torch.bfloat16)`; keep optimizer/master weights fp32; eval in fp32.
+- W&B run: `8d4b22mt` (18 of 30 epochs in 30 min; ~101 s/epoch)
+
+| Metric | Value |
+|--------|-------|
+| `val_avg/mae_surf_p` (best, epoch 18, still descending) | **110.84** |
+| `val/single_in_dist/mae_surf_p` | 138.30 |
+| `val/geom_camber_rc/mae_surf_p` | 115.25 |
+| `val/geom_camber_cruise/mae_surf_p` | 88.93 |
+| `val/re_rand/mae_surf_p` | 105.11 |
+| `test_avg/mae_surf_p` (W&B summary) | **NaN** (same scoring bug) |
+| `test_avg/mae_surf_p` (offline, clean) | **99.79** |
+| `test/test_single_in_dist/mae_surf_p` | 110.00 |
+| `test/test_geom_camber_rc/mae_surf_p` | 110.37 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 76.31 |
+| `test/test_re_rand/mae_surf_p` | 102.46 |
+| Peak VRAM | 32.9 GB |
+| Params | 662k |
+
+- Numerically stable — no NaN/inf during training, smooth descending val curve.
+- Independently diagnosed the scoring bug AND traced upstream cause: the 761 non-finite values in test_geom_camber_cruise sample 20 are all exactly `-65504.0 = -fp_max(bf16)` — overflow leakage from bf16 preprocessing in the dataset pipeline. Confirms the bug is `-inf`, not NaN, but both fail under `(+/-inf) * 0 = NaN`. Workaround `torch.nan_to_num(y, nan=0, posinf=0, neginf=0)` handles all three.
+- Best result in round 1 so far (val 110.84 vs 134.14/136.69; offline-test 99.79 vs partial-3-split 130.65/132.59 from the other two). bf16 wall-clock speedup gave 18 epochs vs 11-12 for fp32 siblings — the hypothesis works as predicted.
+- Sent back with: add the 4-line eval workaround in train.py, rerun, resubmit. The merged baseline will then carry both bf16 AND the scoring fix, propagating the fix to the rest of the round.
+
