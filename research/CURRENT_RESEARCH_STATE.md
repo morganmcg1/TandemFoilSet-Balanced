@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-12 21:00 UTC (round 2 — wave 1 mostly resolved, wave 2 spawning)
+- **Last updated**: 2026-05-12 21:11 UTC (round 2 wave 2 in flight; researcher-agent refresh complete)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -66,33 +66,58 @@ surf×P_WEIGHT=30) by +1.22%, and Kendall's learned weight (1.52) regressed by
 | fern | #1549 | `film-global-cond` | WIP | — |
 | edward | #1548 | `fourier-coords-L4` | WIP | — |
 
-After the round-2 wave-1 closures, **four students are idle**: frieren,
-alphonse, askeladd, tanjiro. The researcher-agent has been spawned to refresh
-the hypothesis pool with novel high-EV ideas that complement the in-flight
-WIP PRs (Gumbel-Softmax, FiLM, Fourier coords, tied-projection retune).
+After the round-2 wave-1 closures, the four idle students (frieren, alphonse,
+askeladd, tanjiro) were re-assigned wave-2 hypotheses (#1608, #1610, #1611,
+#1612). The researcher-agent refresh
+(`research/RESEARCH_IDEAS_2026-05-12_21:00.md`) **independently validated 2 of
+the 4 wave-2 picks** (H13 EMA → frieren #1608, H14 cosine T_max → askeladd
+#1611), which is a strong convergence signal. The new ideas it added are
+captured in the Wave 3 candidate pool below.
 
-## Wave 2 candidates (current pool, will be augmented by researcher-agent)
+## Round 2 wave 2 — currently in flight (4 new PRs after wave-1 closures)
 
-**Stoch-depth follow-ups (compound on the new baseline):**
-- **Sweep `drop_rate` ∈ {0.05, 0.15, 0.20}** — val_re_rand +1.77% suggests slight
-  over-regularization at 0.10; 0.05 might be Pareto-better. Conversely, 0.15-0.20
-  may bite harder on val_geom_camber_rc which barely moved.
+| Student | PR | Slug | Wave-2 idea | Axis |
+|---------|----|----|--------------|------|
+| frieren | #1608 | `ema-weights-0.999` | H13 | Optimizer trajectory — exponential moving avg of weights |
+| alphonse | #1610 | `log1p-target` | H11 | Target reparameterization — sign-preserving log1p of all 3 channels |
+| askeladd | #1611 | `cosine-tmax-15` | H14 | LR schedule — align cosine T_max to actual training horizon |
+| tanjiro | #1612 | `stoch-depth-0.05` | H8 follow-up | Regularization sweep — halve drop_rate to recover val_re_rand |
+
+Plus 4 still-WIP PRs carried over from wave 1:
+- thorfinn #1555 (tied projection + n_hidden=144 retune)
+- nezuko #1553 (Gumbel-Softmax slice weights)
+- fern #1549 (FiLM global conditioning)
+- edward #1548 (Fourier coord encoding L=4)
+
+## Wave 3 candidate pool (next round after wave 2 results)
+
+The researcher-agent refresh (`research/RESEARCH_IDEAS_2026-05-12_21:00.md`) validated 2 of the 4 wave-2 picks independently (H13 EMA, H14 cosine T_max=15) and added new candidates not in the previous pool:
+
+- **H12 (per-node adaptive temperature)** — `τᵢ = τ₀ + Linear(dim_head→1)(x_mid_i)`,
+  clamped ≥ 0.1. Distinct from the exhausted Ada-Temp variants in #1514 (which
+  tried per-head and shared-heads scalar τ, never per-node). **Hold until #1553
+  Gumbel-Softmax concludes** — both attack slice-collapse via different
+  mechanisms; if Gumbel doesn't win, H12 becomes the next slice-collapse arm.
+- **H15 (grad clip max_norm=25)** — distinct from closed #1529 (clip=1.0). At 25,
+  clips only the spike epochs; closed-PR data showed natural grad norms in the
+  10-245 range, so 25 leaves typical steps untouched but suppresses outliers.
+- **H17 (learnable output scale+bias for pressure channel)** — `nn.Parameter`
+  scale and bias on the p channel only. Bypasses `_init_weights` reset (which
+  uses trunc_normal_ on nn.Linear, not on bare Parameters), so the identity-init
+  invariant holds. Small calibration gain expected, especially on cruise split.
+- **H16 (log1p applied to pressure channel only)** — pressure-only variant of
+  alphonse's #1610 full-target log1p. Hold as a fallback if alphonse's all-channel
+  variant partially wins but loses on Ux/Uy.
+
+### Still-open levers from later-round queue
+
+**Stoch-depth follow-ups (depending on tanjiro #1612 outcome):**
+- If 0.05 wins → bracket with 0.075 (between winner and merged 0.10).
+- If 0.05 regresses → over-regularization theory falsified; try 0.15 or 0.20.
 - **Stack dropout in PhysicsAttention/MLP at 0.05** — standard ViT recipe;
-  often compounds with stoch-depth.
+  often compounds with stoch-depth regardless of drop_rate outcome.
 
-**Remaining round-2 ideas not yet picked up:**
-- **H11**: log1p target reparameterization — medium-high risk, unclear direction.
-  Worth trying now that we have margin against the stronger baseline.
-- **H5 (revisit)**: gradient clipping at `max_norm ∈ {10, 25, 50}` — only clips
-  the spike epochs (#1529 confirmed natural norms 10-245); or AGC.
-
-**Untried levers from later-round queue:**
-- **EMA of model weights (decay 0.999)** — round-1 axis (closed #1420 without
-  L1 run); often a free 1-2% gain; complements stoch-depth (both reduce
-  variance across late epochs). High-EV, simple to implement.
-- **Cosine T_max alignment** — schedule `T_max=15` to match the 30-min cap
-  rather than the configured `MAX_EPOCHS=50`. The current run sits at ~80% of
-  initial LR at the cap; aligning the schedule reduces wasted LR runway.
+**Architecture/loss:**
 - **Output head specialization** — separate p / Ux / Uy heads with
   channel-balanced loss in physical units.
 - **Domain-aware sampler reweighting** to match val split aggregation
