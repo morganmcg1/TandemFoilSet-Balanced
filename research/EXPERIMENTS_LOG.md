@@ -67,6 +67,45 @@ Decouple channel weighting: apply [1,1,3] only to surf loss, vol loss keeps unif
 
 ---
 
+## 2026-05-12 20:54 — PR #1435: Unified positional encoding (ref=8, 8×8 soft Gaussian grid)
+
+- **Branch:** `charliepai2g48h2-thorfinn/unified-pos-ref8`
+- **Hypothesis:** Replace raw `(x,z)` positions with a learned 8×8 (=64) soft-Gaussian grid encoding zero-padded to ref³=512. Hypothesis: geometry-OOD splits benefit from spatially structured priors.
+- **Status:** SENT BACK for refinement → `unified-pos-ref16-nopad` (drop zero-pad, widen grid to ref=16)
+
+### Results
+
+| Metric | Value | vs Baseline #1418 |
+|---|---|---|
+| val_avg/mae_surf_p (best, ep 14) | 124.4938 | **+1.51% worse** |
+| test_avg/mae_surf_p (full 4-split, clean) | 113.7291 | — (baseline NaN) |
+| val_single_in_dist | 141.887 | −2.8% |
+| val_geom_camber_rc | 140.815 | +2.1% |
+| val_geom_camber_cruise | 93.156 | **−1.8%** ✓ |
+| val_re_rand | 122.117 | **+9.1%** ✗ |
+| Peak GPU | 45.67 GB | +8% |
+| Epochs completed | 14/20 | (timeout) |
+
+### Commentary
+
+Direction shows real signal on the camber-cruise OOD split (−1.8%), which is exactly where the hypothesis predicted positional encoding would help — stable spatial priors for unfamiliar geometry. But the **fixed-bandwidth Gaussian at ref=8 under-resolves the wake region**, badly hurting val_re_rand (+9.1%, high-Re samples push per-batch min/max apart, smearing Gaussian responses across cells).
+
+The architecture also wastes 448 of 512 preprocess input dims on zero-padding (ref²=64 actual content, ref³=512 expected width). This is dead capacity that the first linear layer must learn to ignore.
+
+### Incidental defensive fixes (universally useful)
+
+Thorfinn added two eval-side fixes in `train.py`:
+1. **Drop non-finite-GT samples** (similar to tanjiro's #1432 fix) — produces clean 4-split test_avg.
+2. **`nan_to_num` prediction sanitization before scoring** — strictly stronger than the GT-only fix; guards against model output overflow (we saw this in fern's #1424 instability run).
+
+Both fixes ride along with this PR. Will propagate to baseline once any iteration of this branch merges.
+
+### Follow-up direction
+
+Drop zero-pad + widen grid to ref=16 (256 cells, much better wake resolution). Cleaner param efficiency and finer spatial discretization. Predicted Δ: −1% to −4% vs current baseline if wake-region gain dominates the per-cell-bandwidth tradeoff.
+
+---
+
 ## 2026-05-12 19:56 — PR #1432: Wall-distance feature
 
 - **Branch:** `charliepai2g48h2-tanjiro/wall-distance-feature`

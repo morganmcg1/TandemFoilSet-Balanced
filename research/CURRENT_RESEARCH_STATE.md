@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-12 ~20:05 (#1432 wall-distance is a winner, #1517 EMA-0.999 failed; both refined and sent back)
+- **Last updated:** 2026-05-12 ~21:00 (#1435 unified-pos +1.5% worse, sent back to widen grid; pod GraphQL rate-limits causing stalled WIPs)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -23,7 +23,7 @@ See `BASELINE.md` for per-split details.
 | #1426 | frieren | `hidden-192-head-6` | Width n_hidden 128→192 | WIP (training, GPU 99%) |
 | #1429 | nezuko | `slice-128-mlp-4` | slice_num 64→128, mlp_ratio 2→4 | WIP (training, GPU 100%) |
 | #1432 | tanjiro | `wall-distance-rebased` | Wall-dist + channel weights stacked | SENT BACK (refined; 121.46 alone on old code, beats baseline by -0.96%) |
-| #1435 | thorfinn | `unified-pos-ref8` | Unified pos encoding ref=8 | WIP |
+| #1435 | thorfinn | `unified-pos-ref16-nopad` | Unified pos encoding ref=16 (drop zero-pad) | SENT BACK (ref=8 was +1.5% worse; signal on cruise OOD, hurt re_rand) |
 | #1517 | askeladd | `ema-0.99-adaptive` | timm-style adaptive EMA decay (max=0.99) | SENT BACK (refined; 0.999 was +10.5% worse — horizon mismatch) |
 
 ## Current research focus
