@@ -58,4 +58,51 @@ Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_
 
 **Suggested follow-ups:** none merged in immediately — the hypothesis "capacity helps" is unproven but not falsified.
 
+## 2026-05-12 19:15 — PR #1416: [unified-pos] Unified positional encoding with `ref=8`
+- Student branch: `charliepai2g48h4-thorfinn/unified-pos`
+- Hypothesis: replace raw `(x,z)` positions through the preprocess MLP with `Transolver`'s `unified_pos=True` soft-grid encoding (`ref=8`, 2D so `ref^space_dim=64` features); regularized fixed-grid encoding should give a stronger spatial inductive bias on irregular meshes.
+
+| Metric | Value |
+|---|---|
+| `val_avg/mae_surf_p` (best, ep 13/14) | **125.7759** |
+| `test_avg/mae_surf_p` (best-val checkpoint) | **117.1233** |
+| `val_geom_camber_cruise/mae_surf_p` | **91.85** |
+| `val_geom_camber_rc/mae_surf_p`     | 145.70 |
+| `val_re_rand/mae_surf_p`            | 114.24 |
+| `val_single_in_dist/mae_surf_p`     | 151.32 |
+| `test_geom_camber_cruise/mae_surf_p` | **80.27** |
+| `test_geom_camber_rc/mae_surf_p`     | 138.57 |
+| `test_re_rand/mae_surf_p`            | 114.75 |
+| `test_single_in_dist/mae_surf_p`     | 134.89 |
+| Wall clock | 30 min cap; ep 13 best of 14 landed |
+| Peak VRAM | 42.5 GB |
+| Params | 0.68 M (+20 K vs default — input MLP grows from `(2+22)→256` to `(64+22)→256`) |
+| Metrics path | `models/model-charliepai2g48h4-thorfinn-unified-pos-20260512-175707/metrics.jsonl` |
+
+**Analysis.** Strongest round-1 result by a wide margin: `val_avg/mae_surf_p=125.78` beats fern (147.26) by ~14% and tanjiro (151.64) by ~17% at the same 30-min cap, and ships with a valid test number. Cruise-camber OOD is *especially* strong here (`val=91.85, test=80.27`) — soft-grid encoding plausibly resolves the larger, more uniformly distributed cruise meshes better than raw-coordinate-through-MLP. The raceCar single-foil + ground-effect samples (`val_single_in_dist=151.32`, `val_geom_camber_rc=145.70`) remain the dominant residual error, same per-split pattern as fern and tanjiro. Schedule was wall-clock-limited (`cosine(13/50)≈0.84`, so LR barely annealed) — a `T_max≈effective_epochs` follow-up could plausibly buy further headroom.
+
+**Held pending baseline (PR #1368).** Given fern and tanjiro both land ~150 at the same cap, the baseline is almost certainly above 125 — this PR is on track to merge.
+
+**Independent scoring-bug fix in this PR.** Thorfinn independently identified the same `inf * 0 = NaN` propagation that fern reported in #1512, and added a defensive workaround in `train.py::evaluate_split` that pre-filters non-finite-y samples before they reach `accumulate_batch`. Without this guard, `test_avg/mae_surf_p` is NaN on this branch for every experiment that hits a `geom_camber_cruise` test sample. Workaround at the call site coexists with fern's surgical fix at the helper site (#1512).
+
+**Suggested follow-ups (kept on backlog):**
+1. **Corpus-level position normalization.** Current `unified_pos` uses per-batch `pos.amin/amax`, so a sample's encoding depends on its batch-mates and on padding zeros. Replacing with fixed corpus-level bounds (from `stats`) would make the encoding deterministic per-sample and remove a noise source.
+2. **`ref` sweep ∈ {12, 16}.** Wider soft grid = finer spatial membership; +small param cost on input MLP.
+3. **Truncated cosine `T_max ≈ effective_epochs`** — applies branch-wide.
+
+## 2026-05-12 19:18 — Round 1 status snapshot
+
+| Student | Slug | val_avg/mae_surf_p | Status |
+|---|---|---|---|
+| thorfinn | `unified-pos` (#1416) | **125.78** | Held pending baseline — best so far |
+| fern | `lr1e3-warmup-cosine` (#1376) | 147.26 | Held pending baseline |
+| tanjiro | `hidden192` (#1406) | 151.64 | Held pending baseline |
+| alphonse | `baseline-ref` (#1368) | — | WIP (started 18:51 UTC, ETA ~19:21 UTC) |
+| askeladd | `surf-weight-20` (#1369) | — | WIP |
+| edward | `huber-loss` (#1374) | — | WIP |
+| frieren | `wd5e-4` (#1394) | — | WIP |
+| nezuko | `slice128` (#1402) | — | WIP |
+
+Follow-on assignments active this cycle: PR #1512 (fern, `scoring-nan-fix`), PR #1513 (tanjiro, `bf16-autocast`), PR #1533 (thorfinn, `surf-p-weight-3x` — per-channel surface weighting, 3× pressure vs Ux/Uy).
+
 _(Round 1 still partially in flight — more results landing as PRs come back for review.)_
