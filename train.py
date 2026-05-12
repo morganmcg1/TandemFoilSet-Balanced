@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -403,6 +404,14 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Stochastic Weight Averaging — average epoch-end snapshots from the late
+# portion of training (when the live model is mostly converged). Per-epoch
+# update_parameters call; Transolver uses LayerNorm so update_bn is unneeded.
+SWA_START_EPOCH = 10  # 1-indexed: begin averaging at displayed epoch 10
+swa_model = AveragedModel(model)
+swa_active = False
+n_swa_updates = 0
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 warmup_epochs = 2
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
@@ -467,6 +476,12 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
+
+    if (epoch + 1) >= SWA_START_EPOCH:
+        swa_model.update_parameters(model)
+        swa_active = True
+        n_swa_updates += 1
+
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -502,6 +517,8 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "swa_active": swa_active,
+        "n_swa_updates": n_swa_updates,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -514,35 +531,83 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# --- SWA model validation ---
+swa_val_avg = None
+swa_val_split_metrics = None
+swa_model_path = model_dir / "checkpoint_swa.pt"
+if swa_active:
+    print(f"\n=== SWA model final evaluation (averaged {n_swa_updates} checkpoints from epoch {SWA_START_EPOCH}) ===")
+    swa_model.eval()
+    swa_val_split_metrics = {
+        name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, channel_weights, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_aggregated = aggregate_splits(swa_val_split_metrics)
+    swa_val_avg = swa_val_aggregated["avg/mae_surf_p"]
+    print(f"SWA val_avg/mae_surf_p = {swa_val_avg:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, swa_val_split_metrics[name])
+
+    torch.save(swa_model.module.state_dict(), swa_model_path)
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "swa_eval",
+        "swa_start_epoch": SWA_START_EPOCH,
+        "n_swa_updates": n_swa_updates,
+        "val_avg/mae_surf_p": swa_val_avg,
+        "val_splits": swa_val_split_metrics,
+    })
+
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest live val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if swa_val_avg is not None:
+        winner = "SWA" if swa_val_avg < best_avg_surf_p else "LIVE"
+        print(f"SWA val_avg/mae_surf_p = {swa_val_avg:.4f}  →  winner: {winner}")
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
     test_metrics = None
     test_avg = None
+    swa_test_metrics = None
+    swa_test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+        print("\nEvaluating LIVE best on held-out test splits...")
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (LIVE)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
+
+        if swa_active:
+            print("\nEvaluating SWA on held-out test splits...")
+            swa_model.eval()
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, loader, stats, cfg.surf_weight, channel_weights, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  TEST (SWA)   avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "swa_test_avg": swa_test_avg,
+            "swa_test_splits": swa_test_metrics,
+            "n_swa_updates": n_swa_updates,
+            "swa_start_epoch": SWA_START_EPOCH,
         })
 
     write_experiment_summary(
@@ -556,5 +621,17 @@ if best_metrics:
         n_params=n_params,
         model_config=model_config,
     )
+
+    if swa_active:
+        with open(model_dir / "metrics.yaml", "a") as f:
+            yaml.safe_dump({
+                "swa_start_epoch": SWA_START_EPOCH,
+                "swa_n_updates": n_swa_updates,
+                "swa_checkpoint": str(swa_model_path),
+                "swa_val_avg/mae_surf_p": swa_val_avg,
+                **{f"swa_val/{split}/{k}": v for split, m in (swa_val_split_metrics or {}).items() for k, v in m.items()},
+                **({"swa_test_avg/mae_surf_p": swa_test_avg["avg/mae_surf_p"]} if swa_test_avg else {}),
+                **{f"swa_test/{split}/{k}": v for split, m in (swa_test_metrics or {}).items() for k, v in m.items()},
+            }, f, sort_keys=True)
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
