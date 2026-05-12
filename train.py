@@ -393,6 +393,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     ema_decay: float = 0.999
+    dropout: float = 0.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -436,11 +437,15 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=cfg.dropout,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
+sample_block = model.blocks[0]
+assert sample_block.attn.dropout.p == cfg.dropout, \
+    f"Dropout mismatch: expected {cfg.dropout}, got {sample_block.attn.dropout.p}"
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
