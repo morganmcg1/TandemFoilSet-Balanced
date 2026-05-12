@@ -441,7 +441,17 @@ def amp_ctx_factory():
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Step-based linear warmup for the first WARMUP_STEPS optimizer steps,
+# then per-epoch cosine annealing over the remaining schedule.
+WARMUP_STEPS = 500
+warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=0.01, end_factor=1.0, total_iters=WARMUP_STEPS,
+)
+cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=max(MAX_EPOCHS - 2, 1),
+)
+print(f"Schedule: linear warmup {WARMUP_STEPS} steps, then cosine over {max(MAX_EPOCHS - 2, 1)} epochs")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -461,11 +471,15 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+global_step = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
+
+    epoch_start_lr = optimizer.param_groups[0]['lr']
+    print(f"Epoch {epoch+1}/{MAX_EPOCHS} start: lr={epoch_start_lr:.3e} (global_step={global_step})")
 
     t0 = time.time()
     model.train()
@@ -494,11 +508,16 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
 
+        if global_step < WARMUP_STEPS:
+            warmup_sched.step()
+        global_step += 1
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if global_step >= WARMUP_STEPS:
+        cosine_sched.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -524,6 +543,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    end_lr = optimizer.param_groups[0]['lr']
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -535,6 +555,10 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "lr/epoch_start": epoch_start_lr,
+        "lr/epoch_end": end_lr,
+        "global_step": global_step,
+        "warmup_steps": WARMUP_STEPS,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
