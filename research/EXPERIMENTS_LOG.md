@@ -757,3 +757,60 @@ When wave-5 results land:
 2. **Does drop_path compose with SWA?** SWA's flat-minima averaging and drop_path's subnetwork-ensembling target similar geometry — could compound constructively or be redundant.
 3. **Does nezuko's rebased grad-clip × Re-weight stack to ~93–94 val?** This is the highest-confidence next-baseline candidate.
 4. **Has the val_re_rand bottleneck been correctly diagnosed?** tanjiro's no-SWA test, if it recovers val_re_rand to ~91, confirms the schedule-window hypothesis.
+
+---
+
+## 2026-05-12 23:05 — PR #1620 edward (surf_weight=30): CLOSED — close-rule + clean post-mortem
+
+- **Branch:** `willowpai2g48h2-edward/surf-weight-30-on-swa`
+- **Student:** willowpai2g48h2-edward
+- **Hypothesis:** `surf_weight: 10 → 30` on SWA-on-Huber baseline. Predicted Δ vs. 99.07: −1 to −4%.
+
+### Result table (W&B run `pgwpk2qy`, verified)
+
+| Metric | Baseline #1554 | Result | Δ |
+|---|---|---|---|
+| SWA `val_avg/mae_surf_p` | 99.0704 | **105.9851** | **+6.98%** |
+| SWA `test_avg/mae_surf_p` | 88.8955 | **95.7252** | +7.68% |
+| `mae_vol_p` per split (SWA avg) | ~88–95 typical | **~110–155** | **~30% volume regression** |
+| Params | 0.66M | 0.66M | unchanged |
+| Wall time | ~30 min @ 15/15 | ~30.8 min @ 14/15 epochs (timeout) | matches baseline |
+
+### Per-split val regression pattern (uniform direction, no generalization-gap)
+
+| Split | Δ vs baseline |
+|---|---|
+| val_single_in_dist | +7.42% |
+| val_geom_camber_rc | **+14.02%** (worst) |
+| val_geom_camber_cruise | +5.24% |
+| val_re_rand | +0.16% (barely moved) |
+
+### Decision: CLOSED (val 105.99 > 102)
+
+- Student's **mechanistic post-mortem is exemplary** — "volume context starvation" framing nails the issue. Pressure on the airfoil is determined by what the flow is doing around it; over-upweighting surface starves the model of the volume-domain context needed to learn surface pressure correctly.
+- Volume MAE inflated ~30% while surface MAE did not compensate → clear evidence that upweighting changed *which features got optimized for*, not *which features the model could extract*.
+- All splits regressed uniformly (not just OOD) → optimization landscape itself is worse-shaped, not a generalization-gap issue.
+
+### edward follow-up
+
+Reassigned to PR #1691: `surf-weight-5-on-merged` — **halve surf_weight to 5.0** (opposite direction). The student's own post-mortem suggested this:
+
+> If surf_weight=30 overshoots the surf/vol balance ridge, the current surf_weight=10 may already be past optimal in the same direction. Try surf_weight below 10 (e.g. 5.0, 3.0). Volume context may be undervalued.
+
+This is the cleanest possible single-variable opposite-direction test. Predicted: −0.5 to −3% on val if 10 was past optimal; matches baseline if 10 was optimal.
+
+---
+
+## 2026-05-12 23:08 — PR #1600 frieren (β-sweep): IN PROGRESS (no intervention needed)
+
+Status check during this review wave: frieren is healthy, actively running the 3-arm sweep sequentially.
+
+- W&B runs in past 4 hours:
+  - **β=0.3 (attempt 1):** `cdok7j6i` — finished, val_best=98.22 / swa_val=96.25
+  - **β=0.3 (attempt 2):** `hg15owt2` — finished, val_best=**96.16** / swa_val=96.35 / swa_test_avg=**84.76**
+  - **β=1.0:** `e1hxvzwk` — currently running (started 22:54 UTC)
+  - **β=3.0:** not yet started (sequential after β=1.0)
+
+The interim β=0.3 signal is interesting: val=96.16 doesn't beat the current merged baseline 95.75, but **test=84.76 beats baseline 86.17 by 1.63%**. This is unusual asymmetry. Wait for full sweep + formal SENPAI-RESULT before drawing conclusions — could be that β=0.3 (closer to L1) generalizes better but converges to slightly worse val.
+
+No advisor action required. Frieren will post terminal SENPAI-RESULT after β=3.0 completes (~30–60 more min).
