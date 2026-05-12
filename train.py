@@ -488,6 +488,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+grad_clip_max_norm = 1.0
+run_max_grad_norm = 0.0
+run_n_clipped = 0
+run_n_steps_total = 0
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -497,6 +501,8 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_max_grad_norm = 0.0
+    epoch_n_clipped = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -519,6 +525,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip_max_norm).item()
         optimizer.step()
 
         # EMA update on fp32 master weights. Buffers copied defensively
@@ -530,7 +537,21 @@ for epoch in range(MAX_EPOCHS):
                 b_ema.data.copy_(b.data)
 
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        run_n_steps_total += 1
+        was_clipped = grad_norm > grad_clip_max_norm
+        if was_clipped:
+            epoch_n_clipped += 1
+            run_n_clipped += 1
+        if grad_norm > epoch_max_grad_norm:
+            epoch_max_grad_norm = grad_norm
+        if grad_norm > run_max_grad_norm:
+            run_max_grad_norm = grad_norm
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm,
+            "train/grad_clipped": float(was_clipped),
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -564,6 +585,9 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_max": epoch_max_grad_norm,
+        "train/grad_clipped_epoch_count": epoch_n_clipped,
+        "train/grad_clipped_epoch_frac": epoch_n_clipped / max(n_batches, 1),
         "val/loss": val_loss_mean,
         "val_live/loss": live_val_loss_mean,
         "ema_decay": cfg.ema_decay,
@@ -622,6 +646,11 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "grad_clip_max_norm": grad_clip_max_norm,
+        "run_max_grad_norm": run_max_grad_norm,
+        "run_n_clipped": run_n_clipped,
+        "run_n_steps_total": run_n_steps_total,
+        "run_clipped_frac": run_n_clipped / max(run_n_steps_total, 1),
     })
 
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
