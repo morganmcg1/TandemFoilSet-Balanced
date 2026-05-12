@@ -248,12 +248,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * surf_mask.unsqueeze(-1) * SURF_CH_WEIGHTS[None, None, :]).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not y_finite_sample.all():
+                keep = y_finite_sample
+                if keep.sum() == 0:
+                    continue
+                pred_orig = pred_orig[keep]
+                y = y[keep]
+                is_surface = is_surface[keep]
+                mask = mask[keep]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -403,6 +412,11 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Per-channel weights for the surface MSE: emphasize pressure (channel 2)
+# because val_avg/mae_surf_p is the primary ranking metric. Order matches
+# output_fields=["Ux", "Uy", "p"].
+SURF_CH_WEIGHTS = torch.tensor([1.0, 1.0, 3.0], device=device)
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -449,7 +463,7 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (sq_err * surf_mask.unsqueeze(-1) * SURF_CH_WEIGHTS[None, None, :]).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
