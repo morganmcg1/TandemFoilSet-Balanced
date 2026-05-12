@@ -19,4 +19,19 @@ The reference baseline is the as-is `train.py` on this branch:
 
 ## Status
 
-No prior runs on this branch yet. The first round of experiments establishes the reference numbers — every PR should report its full val_avg/mae_surf_p, test_avg/mae_surf_p, and the four per-split surface pressure MAE numbers.
+Round 1 baseline established by PR #1504 (mask-aware PhysicsAttention). All subsequent PRs should compare against this.
+
+## 2026-05-12 21:52 — PR #1504: Mask padded nodes in PhysicsAttention slice softmax
+
+- **`val_avg/mae_surf_p`:** 119.450 (best-val checkpoint, `hg135fap`)
+- **`test_avg/mae_surf_p`:** 109.669
+- **Per-split val (best-val):** single_in_dist=140.20, geom_camber_rc=133.10, geom_camber_cruise=93.08, re_rand=111.42
+- **Per-split test:** single_in_dist=123.97, geom_camber_rc=121.92, geom_camber_cruise=81.06, re_rand=111.73
+- **W&B runs:** `hg135fap` (submitted), `xqrz8bjw` (seed-2: val=128.97, test=117.62)
+- **Implementation note:** mask is applied to `slice_weights` **after** the slice softmax (`slice_weights * mask[:,None,:,None]`), not before — applying `-inf` before softmax over `slice_num` would produce NaN. Both seeds train cleanly with finite metrics on all four test splits, including `geom_camber_cruise` which was returning None on every other unmasked round-1 run.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-alphonse \
+      --wandb_name "willowpai2g48h3-alphonse/mask-aware-physics-attn" \
+      --wandb_group mask-aware-physics-attn
+  ```
