@@ -367,6 +367,9 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+# Surface per-channel weights: [Ux, Uy, p].  Pressure is the ranking metric.
+surf_channel_weight = torch.tensor([1.0, 1.0, 2.0], device=device).view(1, 1, 3)
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -449,7 +452,9 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Per-channel weighted surface loss (broadcasts over [B, N, 3]).
+        weighted_surf_sq = sq_err * surf_channel_weight
+        surf_loss = (weighted_surf_sq * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * surf_channel_weight.sum()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
