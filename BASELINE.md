@@ -1,5 +1,96 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-12 21:10 — PR #1358: L1 (MAE) loss in normalized space
+
+**New best: `val_avg/mae_surf_p` = 101.810** (epoch 13, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 5 (run config) / **6** (merged default) |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 2 (run config) / **4** (merged default) |
+| `space_dim` | 2 |
+| `unified_pos` | False |
+| Loss | **L1 (MAE) in normalized space** ← changed |
+| Optimizer | AdamW, lr=5e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Run cap | 30 min wall clock per training execution |
+
+> **Note on arch:** Alphonse's run used n_layers=5, mlp_ratio=2 (branched before PR #1408 and #1392).
+> The merged train.py now defaults to n_layers=6, mlp_ratio=4 + L1 loss (stacked). The measured
+> improvement below is L1 loss alone; the stacked result should be even better.
+
+> **Note on NaN-fix:** Alphonse also added a `train.py::evaluate_split` guard that skips non-finite
+> GT samples before calling the scorer. This makes test metrics finite for the first time —
+> `test_avg/mae_surf_p = 91.708` is the first reliable test number on this branch.
+
+### Val metrics (best checkpoint, epoch 13)
+
+| Split | `mae_surf_p` | `mae_surf_Ux` | `mae_surf_Uy` |
+|---|---|---|---|
+| val_single_in_dist | 124.150 | — | — |
+| val_geom_camber_rc | 112.699 | — | — |
+| val_geom_camber_cruise | 76.570 | — | — |
+| val_re_rand | 93.820 | — | — |
+| **val_avg/mae_surf_p** | **101.810** | — | — |
+
+### Improvement vs PR #1392 baseline (128.127)
+
+| Split | Old | New | Δ |
+|---|---|---|---|
+| val_single_in_dist | 159.746 | 124.150 | −22.3% |
+| val_geom_camber_rc | 136.513 | 112.699 | −17.4% |
+| val_geom_camber_cruise | 102.432 | 76.570 | −25.3% |
+| val_re_rand | 113.819 | 93.820 | −17.6% |
+| **val_avg** | **128.127** | **101.810** | **−20.5%** |
+
+### Test metrics (best-val checkpoint, epoch 13) — all finite
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 110.726 |
+| test_geom_camber_rc | 99.692 |
+| test_geom_camber_cruise | 66.879 (first finite cruise test result!) |
+| test_re_rand | 89.536 |
+| **test_avg/mae_surf_p** | **91.708** |
+
+### Metric artifacts
+
+`models/model-l1-loss-e50-20260512-195549/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent <student> \
+  --experiment_name <name> \
+  --epochs 50 \
+  --lr 5e-4 \
+  --weight_decay 1e-4 \
+  --batch_size 4 \
+  --surf_weight 10
+```
+
+Note: L1 loss is now the default in `train.py` (merged from PR #1358). `n_layers=6, mlp_ratio=4` also
+baked in. No extra flags needed.
+
+---
+
+## Benchmark to beat
+
+**`val_avg/mae_surf_p` < 101.810** — lower is better.
+
+Test metric benchmark: **`test_avg/mae_surf_p` < 91.708**.
+
+The hardest splits are `val_single_in_dist` (124.2) and `val_geom_camber_rc` (112.7).
+
+---
+
 ## 2026-05-12 19:30 — PR #1392: n_layers 5 → 6 (moderate depth increase)
 
 **New best: `val_avg/mae_surf_p` = 128.127** (epoch 12, 30-min wall-clock cap)
