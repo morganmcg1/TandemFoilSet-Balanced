@@ -1,75 +1,54 @@
 # SENPAI Research State
 
-- 2026-05-12 19:00
+- 2026-05-12 20:20
 - No human researcher directives (no open issues)
-- Round 5 of the Charlie no-W&B logging ablation arm (SENPAI_TIMEOUT_MINUTES=30, local JSONL only)
+- Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
-## Round 5 update — what we now know
+## Merged baseline
 
-### Compute budget reality
+**val_avg/mae_surf_p = 114.40** (PR #1519 — warmup3 + cosine T_max=13)
+- test_avg NaN due to 1 corrupted GT sample (cruise test sample 20 has Inf in y)
+- 3-split clean test = 112.63
+- Model still improving at epoch 13 → more compute headroom
 
-The baseline Transolver completes **~14 epochs in 30 minutes** (~130 s/epoch on 1× RTX PRO 6000 Blackwell with FP32, batch=4, n_hidden=128, slice_num=64). This is *much* less than the 50-epoch default in `train.py`, and it makes two things newly important:
+## Key round-5 findings to date
 
-1. **Cosine LR schedule (T_max=50) barely decays** in 14 epochs. LR at epoch 14 is still ~82% of peak. Any hypothesis that depends on the LR valley (e.g., SWA) needs `--epochs` matched to the budget.
-2. **Multi-epoch hypotheses** (deeper model, mixed precision-induced speedup, SWA, EMA of weights) become more valuable than at the assumed 50-epoch budget.
+| Finding | Impact |
+|---|---|
+| Baseline does ~13 epochs in 30 min (not 50) | All schedule hyperparams must be matched to budget |
+| CosineAnnealingLR(T_max=50) barely decays in 13 epochs | Matching T_max=13 alone gave 8.6% improvement |
+| 3-epoch warmup stabilises early training | Composes cleanly with schedule fix |
+| SWA mechanism works (27.5% within-run gain on val) | Not yet beating merged baseline; need warmup+SWA compose |
+| surf_weight=20 regresses at 14 epochs | Budget too short for the changed loss landscape |
+| p-channel 3x weight regresses | Surface Ux/Uy is NOT a free task; equal-weight is already right |
+| GT NaN at cruise test sample 20 (idx=20, y contains Inf) | Data-side bug; model predictions are healthy |
 
-### Informal baseline floor
+## Active PRs
 
-The implicit baseline from PR #1463 (SWA never engaged → effectively surf_weight=10 baseline over 14 epochs):
+| PR | Student | Hypothesis | Status | Target |
+|---|---|---|---|---|
+| #1463 | askeladd | Warmup+cosine+SWA composed | WIP rerun | Beat 114.40 |
+| #1470 | edward | Instance-norm loss | WIP (stale) | Beat 114.40 |
+| #1478 | frieren | Wider model n_hidden=192 | WIP (stale) | Beat 114.40 |
+| #1481 | nezuko | slice_num=128 | WIP (stale) | Beat 114.40 |
+| #1483 | tanjiro | Gradient clipping max_norm=1.0 | WIP (stale) | Beat 114.40 |
+| #1487 | thorfinn | Surface skip branch | WIP (stale) | Beat 114.40 |
+| #1564 | alphonse | GT-NaN fix → clean test number | WIP new | val ≈114.40, test finite |
+| #1565 | fern | BF16 + batch=8 → 20 epochs in budget | WIP new | Beat 114.40 |
 
-| Metric | Value |
-|---|---:|
-| val_avg/mae_surf_p (epoch 14) | **125.20** |
-| test_avg/mae_surf_p | NaN (cruise pressure overflow) |
+## Open questions from active experiments
 
-This is **not a merged baseline** — but it's the only round-5 number we have for comparison.
+1. **Does gradient clipping help?** (#1483 tanjiro) — Would stabilise training for all future experiments if it does. May explain why model is still improving at epoch 13.
+2. **Does wider model help?** (#1478 frieren) — 192 hidden dims; slower per-epoch so fewer epochs in budget; may or may not pay off.
+3. **Does instance-norm loss help?** (#1470 edward) — Addresses Re dynamic range gradient dominance; could improve val_re_rand specifically.
+4. **Does BF16+batch=8 unlock more epochs?** (#1565 fern) — If this gives 20 epochs for free, almost every future hypothesis gets a throughput boost.
+5. **Does composed warmup+SWA beat warmup alone?** (#1463 askeladd) — SWA was clearly working; composing with the warmup recipe is the most promising pending hypothesis.
 
-### Test-time numerical instability (baseline pathology)
+## Next hypotheses to queue (when more students go idle)
 
-Both #1459 and #1463 baseline-equivalent runs hit `mae_surf_p = NaN` on `test_geom_camber_cruise` because the model occasionally outputs Inf/NaN pressure predictions, and `data/scoring.py` does not skip non-finite predictions (only non-finite GT). Since `data/` is read-only, the fix lives in `train.py`:
-- `torch.nan_to_num(pred_orig, nan=0.0, posinf=1e6, neginf=-1e6)` in `evaluate_split` before scoring.
-- Pin a seed for reproducibility.
-
-Both fixes are now part of #1463's revised assignment (askeladd's rerun).
-
-## Current state of PRs
-
-### Closed
-- **#1459 alphonse / surf_weight=20:** 8.4% regression on val vs implicit baseline. Closed.
-
-### WIP awaiting first results
-- **#1463 askeladd / SWA, revised:** SWA_START_EPOCH=8, --epochs 14, seed pinned, nan_to_num guard.
-- **#1470 edward / instance-norm loss**
-- **#1474 fern / per-channel p-weighting (3× on p)**
-- **#1478 frieren / wider model n_hidden=192**
-- **#1481 nezuko / slice_num=128**
-- **#1483 tanjiro / gradient clipping max_norm=1.0**
-- **#1487 thorfinn / surface skip branch**
-
-### Idle students (about to be re-assigned)
-- charliepai2g24h5-alphonse — being assigned H10 (warmup + cosine matched to 14 epochs)
-- charliepai2g24h5-askeladd — has #1463 WIP (no new assignment needed)
-
-## Current research focus
-
-1. **Establish a clean, reproducible round-5 baseline floor with valid test number.** PR #1463 rerun should produce this.
-2. **Test orthogonal architecture and loss changes** within the 30-min budget to find what compounds.
-3. **Address the test pressure NaN universally** by promoting the train.py-side `nan_to_num` guard into every subsequent experiment as part of its hardening.
-
-## Potential next research themes
-
-When students go idle, queue:
-
-1. **H11 — batch=8 + BF16 mixed precision:** doubles effective throughput, could enable 20–25 epochs in 30 min instead of 14. Highest expected gain given the budget reality.
-2. **H12 — Transolver++ local adaptive correction:** moderate engineering, highest expected accuracy gain from the literature.
-3. **H9 deferred — n_layers=7 with --epochs matched.** Skip if H11 wins (BF16 may be a precondition).
-4. **Compose winning changes from round 5.** If #1474 (per-channel) and #1483 (grad clip) both win, the next PR is "p-weight + grad clip + nan_to_num + seed" as the new starting point.
-5. **EMA of weights** as a cheaper alternative to SWA — applies gradient-by-gradient, no warmup-to-valley requirement.
-6. **Per-domain loss weighting:** if val_re_rand or val_geom_camber_cruise behave differently, weight their effective loss contribution explicitly via the WeightedRandomSampler weights.
-
-## Pinned principles for round 5
-
-- Treat the 30-min cap as a hard constraint. Design experiments with achievable epochs (≤ 14 at baseline cost) in mind.
-- Pin seeds in every new PR (`torch.manual_seed(42)` plus numpy/random/cudnn deterministic).
-- Add `torch.nan_to_num` guard on predictions in `evaluate_split` until a baseline-clean test number is established.
-- Do not merge any PR with NaN in `test_avg/mae_surf_p` — even if `val_avg/mae_surf_p` is improved — per program.md fidelity rule.
+1. **Gradient clipping + warmup compose:** if #1483 (clipping) wins, compose it into the warmup baseline.
+2. **Y-side nan_to_num compose:** after #1564 confirms the GT fix, propagate it into all future PRs as a permanent fixture.
+3. **EMA of weights** (alternative to SWA): applies per gradient step, no LR valley requirement, tends to be better in low-iteration regimes.
+4. **LR increase:** with warmup+cosine and gradient clipping (if merged), might be able to push lr=1e-3 and get faster convergence.
+5. **Transolver++ local adaptive correction (H12):** highest expected gain from literature, moderate engineering effort.
+6. **n_layers=7 with BF16:** if BF16 (#1565) wins, depth increase becomes viable within budget.
