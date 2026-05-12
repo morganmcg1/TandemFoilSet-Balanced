@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-05-12 20:01 — PR #1532: bf16 AMP for 2x epoch throughput + scoring-NaN fix — MERGED
+
+- **Branch:** `charliepai2g48h5-thorfinn/bf16-amp-scoring-fix`
+- **Student:** charliepai2g48h5-thorfinn
+- **Hypothesis:** Enable bf16 mixed-precision training (`torch.autocast("cuda", dtype=torch.bfloat16)`) to increase epoch throughput and reach more training epochs within the 30-min cap. Also includes scoring-NaN workaround: batch-level `y_finite_mask` filter in `evaluate_split` before `accumulate_batch`.
+
+### Results
+
+| Metric | Value |
+|---|---:|
+| `val_avg/mae_surf_p` | **101.1212** (epoch 17 best) |
+| `val_single_in_dist/mae_surf_p` | 120.0176 |
+| `val_geom_camber_rc/mae_surf_p` | 107.0980 |
+| `val_geom_camber_cruise/mae_surf_p` | 82.8425 |
+| `val_re_rand/mae_surf_p` | 94.5268 |
+| `test_avg/mae_surf_p` | **91.5013** (finite — first on this branch) |
+| `test_single_in_dist/mae_surf_p` | 105.4434 |
+| `test_geom_camber_rc/mae_surf_p` | 99.9931 |
+| `test_geom_camber_cruise/mae_surf_p` | 69.2841 |
+| `test_re_rand/mae_surf_p` | 91.2844 |
+| Best epoch | 17 |
+| Epochs reached | 19 (~25% faster at ~98 s/epoch vs ~131 s) |
+| Peak GPU | 32.95 GB |
+
+- **Improvement:** -9.64 MAE (-8.7%) vs PR #1444 baseline (110.7608)
+- **Artifacts:** `models/model-charliepai2g48h5-thorfinn-bf16-amp-scoring-fix-20260512-192502/metrics.{jsonl,yaml}`
+- **Status:** MERGED → new round-5 baseline floor: **val_avg/mae_surf_p = 101.1212**
+
+### Analysis
+
+1. **bf16 AMP gave a real throughput win**: ~25% faster per epoch (98 vs 131 s), reaching epoch 19 vs baseline's epoch 14 — 5 extra epochs of convergence. The extra epochs drove the primary win: best epoch 17 vs baseline's 14.
+
+2. **Scoring fix unblocked test_avg**: The `y_finite_mask` filter in `evaluate_split` correctly skipped `test_geom_camber_cruise/000020.pt`, giving the first finite `test_avg/mae_surf_p` (91.50) on this branch. This fix is now on the advisor branch for all subsequent PRs.
+
+3. **Throughput under 2×**: At 0.66 M params, the model is small — Python/I/O overhead is a non-trivial fraction of step time. Bigger models would amortize the autocast win more. The `~25%` gain is real but modest.
+
+4. **Still improving at cap**: Val was 102.26 at epoch 19 (final) vs best 101.12 at epoch 17 — slight uptick at the last epoch, still trending overall. More compute budget would likely gain additional MAE points.
+
+5. **`val_geom_camber_cruise` slight regression (+5 MAE pts)**: The only split that worsened. Possibly noise from the different convergence trajectory (more epochs = different phase of the schedule). Worth watching in follow-up runs.
+
+### Conclusions
+
+- bf16 AMP is now the baseline — it's merged and available for all subsequent PRs to inherit.
+- The scoring-NaN workaround is now on advisor — new baseline for test_avg is 91.5013.
+- New bar: any PR must beat **101.1212** on val_avg/mae_surf_p to merge.
+- Next for thorfinn: compound the wins — pair bf16 with the best capacity lever once architecture results settle.
+
+---
+
 ## 2026-05-12 20:00 — PR #1388: Linear warmup + lr 5e-4 → 1e-3 with cosine anneal — CLOSED
 
 - **Branch:** `charliepai2g48h5-askeladd/warmup-lr-1e3`

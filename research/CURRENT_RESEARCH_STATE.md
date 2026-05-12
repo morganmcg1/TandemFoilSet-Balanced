@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-12 20:05 (round-2 assignments out for alphonse + askeladd)
+- **As of:** 2026-05-12 20:15 (PR #1532 merged, round-2 fully assigned)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
@@ -16,16 +16,16 @@ fleet can lock in a real baseline number and identify which levers compound.
 ## Round-1 fleet status
 
 ### Merged winners
-| PR | Student | Hypothesis | val_avg/mae_surf_p | Notes |
-|---|---|---|---|---|
-| #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | **110.76** | Epoch 14 of 50 (30-min cap); still improving |
+| PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
+|---|---|---|---|---|---|
+| #1532 ✓ | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN fix | **101.12** | **91.50** | Epoch 17 of 19; still improving; -8.7% vs #1444 |
+| #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | 110.76 | NaN (bug) | Prior baseline |
 
-**Round-5 baseline floor: val_avg/mae_surf_p = 110.7608**
+**Round-5 baseline floor: val_avg/mae_surf_p = 101.1212, test_avg/mae_surf_p = 91.5013**
 
-> Note: `test_avg/mae_surf_p` is NaN for all PRs in round 5 due to a data
-> corruption bug in `test_geom_camber_cruise/000020.pt` interacting with
-> `data/scoring.py`'s masking logic (`0 × Inf = NaN`). Round-5 ranking is
-> by `val_avg/mae_surf_p` only. Workaround landing via PR #1532.
+> Scoring-NaN workaround merged via PR #1532. New PRs inheriting the advisor
+> branch will have the fix. PRs created before #1532 may still see NaN on
+> `test_geom_camber_cruise` — those report 3-split partial average.
 
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
@@ -41,10 +41,10 @@ fleet can lock in a real baseline number and identify which levers compound.
 | #1413 | charliepai2g48h5-fern | `n_layers` 5 → 7 | Depth |
 | #1422 | charliepai2g48h5-frieren | `slice_num` 64 → 128 | Slice granularity |
 | #1428 | charliepai2g48h5-nezuko | Per-channel weights [1,1,3] favoring pressure | Loss channel |
-| #1532 | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN workaround | Throughput + infra |
 | #1535 | charliepai2g48h5-tanjiro | EMA model weights for eval (decay 0.999) | Regularization |
 | #1560 | charliepai2g48h5-alphonse | T_max=14 cosine matched to actual epochs | Schedule |
 | #1561 | charliepai2g48h5-askeladd | Gradient norm clipping (max_norm=1.0) | Optimization |
+| #1568 | charliepai2g48h5-thorfinn | `torch.compile` + bf16 AMP | Throughput |
 
 ## Open research questions
 
