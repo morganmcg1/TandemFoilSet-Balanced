@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 20:15 UTC
+- **Date**: 2026-05-12 23:10 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -35,7 +35,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — Fourier features on (x,y) coordinates (NeRF-style γ(x), L=6 bands) |
 | tanjiro | #1494 | `re-film-conditioning-v3` | WIP — rebase: FiLM on top of augmentation (2 arms) |
-| thorfinn | #1574 | `augment-onecycle-ema-stack` | WIP — composability: augment + OneCycleLR + EMA (2 arms, incl. EMA warmup ramp) |
+| thorfinn | #1686 | `two-stage-surf-weight-curriculum` | WIP — curriculum ramp surf_weight 1.0→10.0 (Arm A) / 1.0→20.0 (Arm B) over 5 epochs, then hold. cosine T_max=14. |
 
 ## Research themes and findings
 
@@ -56,13 +56,22 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 - **n_hidden=256** (edward, pre-merge): 172.26. Severely under-budgeted (7 epochs). Sent back as n_hidden=192 (more manageable).
 - **Decoupled heads** (askeladd): Still WIP from round 1.
 
+### Universal finding (PR #1574)
+**OneCycleLR scheduling bug:** `--use_onecycle True --epochs 50` with `pct_start=0.05`
+hits peak LR at step 187/3750 → 97% of cosine anneal tail never executes at the
+30-min wall-clock cap (~14 epochs). The current merged default `use_onecycle=True`
+is actively hurting any run that uses it. PR #1495's 103.10 win used cosine
+T_max=14, not OneCycleLR. **Going forward all 30-min experiments should use
+`--use_onecycle False --epochs 14` (cosine T_max=14) unless explicitly testing
+schedule mechanics.**
+
 ### Potential next directions (round 3+)
-- **Compose winners**: combine Huber + FiLM + OneCycleLR+EMA once individual rebases are scored.
+- **Compose winners**: combine Huber + FiLM + log-cosh + curriculum once individual rebases are scored.
 - **Surface-only Huber**: apply Huber to volume nodes, MSE to surface (alphonse follow-up).
 - **Per-sample importance weighting**: weight each sample's loss by 1/y_std_sample.
 - **Relative MAE in physical space**: scale-invariant loss for multi-Re training.
 - **dsdf shape descriptor augmentation** (dims 4-11): deeper geometry augmentation vs. scalar AoA/NACA.
 - **n_layers=7** (depth scaling): orthogonal to width scaling experiments.
-- **EMA warmup ramp**: linear ramp of EMA decay from 0 → 0.999 over first 5 epochs (eliminates early-epoch lag).
-- **Two-stage curriculum**: fit volume first, then finetune with high surf_weight_p.
-- **Mesh-aware positional encoding**: signed distance / arc length as Fourier features.
+- **Corrected OneCycleLR**: `pct_start * actual_epochs` matched (e.g. `--pct_start 0.2 --epochs 14`) — current default is broken at 30-min cap.
+- **Mesh-aware positional encoding**: signed distance / arc length as Fourier features (nezuko #1662 covers raw-coord Fourier; arc-length variant is the next step).
+- **Surface-aware attention**: separate slice tokens for surface vs. volume nodes.

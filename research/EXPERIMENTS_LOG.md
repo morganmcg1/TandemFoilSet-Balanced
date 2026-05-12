@@ -37,6 +37,30 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 23:08 — PR #1686: Two-stage surf_weight curriculum (thorfinn) — WIP (assigned)
+**Branch:** `charliepai2g24h3-thorfinn/two-stage-surf-weight-curriculum` | **Status: WIP**
+
+- **Hypothesis:** Linearly ramp `surf_weight` from 1.0 → 10.0 (Arm A) or 1.0 → 20.0 (Arm B) over the first 5 epochs, then hold. Lets the volume field converge first before surface objective dominates the loss. Standard curriculum-learning rationale.
+- **Why this:** Adjacent signal from PR #1488 v2 Arm B (askeladd) suggests `surf_weight_p=20` alone may be helpful (val 102.12 / test 96.82 — entangled with head decoupling, but currently being isolated in Arm C of #1488). A *gradual* ramp to 10/20 should outperform a static bump by reducing early-epoch noise pressure.
+- **Config:** `--surf_weight_warmup_epochs 5 --surf_weight_init 1.0 --epochs 14 --use_onecycle False` (cosine T_max=14, the proven recipe from #1495).
+- **Pass criterion:** val_avg < 103.10 AND test 4-split safe re-eval < 94.76.
+- **Artifacts:** TBD
+
+---
+
+### 2026-05-12 23:06 — PR #1574: augment + OneCycleLR + EMA composability (thorfinn) — CLOSED (regression + scheduling bug)
+**Branch:** `charliepai2g24h3-thorfinn/augment-onecycle-ema-stack` | **Status: CLOSED**
+
+- **Hypothesis:** Verify that augment (#1495) + OneCycleLR + EMA (#1520) compose cleanly on the merged stack, and test an EMA warmup ramp (linear 0→0.999 over first 5 epochs).
+- **Arm A (full stack, EMA constant 0.999):** val_avg = **115.51** (+12.0% over baseline 103.10) — **FAIL**.
+- **Arm B (full stack, EMA warmup ramp 0→0.999 over 5 ep):** val_avg = **110.74** (+7.4% over baseline) — **FAIL**.
+- **Root cause (student diagnosed):** OneCycleLR with `pct_start=0.05` and `--epochs 50` reaches peak LR at step 187/3750. Because the wall-clock cap is 30 min ≈ 14 epochs of actual training, the remaining 97% of cosine anneal tail never executes. The merged stack default `use_onecycle=True` is actively hurting any 14-epoch run that uses it.
+- **Implications:** (a) PR #1495 won at 103.10 only because it ran with cosine T_max=14, not OneCycleLR. (b) Any in-flight PR using `--use_onecycle True --epochs 50` is similarly stuck at peak LR. (c) Going forward, default cosine T_max=epochs unless OneCycleLR's `pct_start * epochs` matches the actual epoch budget.
+- **Why closed:** Clean negative result on the specific composability question. The scheduling bug is the actionable insight; rerunning with the same args wouldn't help. EMA warmup arm could be tested separately later under a corrected schedule.
+- **Artifacts:** `models/model-charliepai2g24h3-thorfinn-augment-onecycle-ema-{constant,warmup}-*/metrics.jsonl`
+
+---
+
 ### 2026-05-12 22:56 — PR #1488 v2: Decoupled heads + surf_weight_p=20 (askeladd) — SENT BACK (entangled)
 **Branch:** `charliepai2g24h3-askeladd/decoupled-channel-heads` | **Status: SENT BACK**
 
