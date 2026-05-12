@@ -84,6 +84,8 @@ Per-split test mae_surf_p: in-dist 144.1, geom_rc 141.2, geom_cruise **NaN**, re
 
 **Action**: Sent back to rebase onto new bf16+batch-8 baseline and retest `slice_num=128` addition. Target: test_avg < 121.28.
 
+**Trial-2 result (W&B `tfmvmowl`, rebased on PR #1391)**: val=166.66 (+24.6%), test=155.15 (+27.9%). **Dead end — PR CLOSED.** Root cause: `slice_num=128` at `batch_size=8` quadruples the attention map `[B=8, H=4, N≈150k, slice_num=128]`, pushing peak memory to 94.3 GB (vs 65.9 GB baseline, near the 96 GB OOM cap) and epoch time up +44% to 154.5s — only 12 epochs complete vs 17 for baseline. Model under-trains severely, with a sharp regression at ep 12 (167→202, possible bf16 instability in larger attention maps). The trial-1 "zero overhead" finding was batch=4+fp32; at batch=8+bf16 the cross-attention map is 4× larger. Direction ruled out under the 30-min budget at this batch size.
+
 ## 2026-05-12 20:05 — PR #1391: BF16 + batch 8: more epochs within 30-min cap via AMP ⭐ MERGED
 - Branch: willowpai2g48h1-tanjiro/bf16-batch-8
 - Hypothesis: bf16 autocast + batch_size=8 + lr=7e-4 (√2 scaling) → more epochs in 30-min budget. Predicted -3% to -7%.

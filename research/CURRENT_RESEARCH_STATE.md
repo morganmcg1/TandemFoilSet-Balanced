@@ -12,7 +12,8 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip (rebasing) | val 138.85 (mean 144.06, std 4.05 across 3 runs) → rebase+retest |
 | askeladd | #1361 | wider-hidden-192 | wip (retrying) | val 140-148 (NaN test fixed) → rebase+retest |
-| edward | #1362 | more-slices-128 | wip (retrying) | test 129.60 (worse than baseline) → rebase+retest |
+| edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
+| edward | #1591 | cosine-aligned-epochs | wip (new) | Assigned: --epochs 18 so T_max=18 aligns cosine decay to 30-min budget |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
 | frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
@@ -32,8 +33,7 @@ Students still stale (alphonse, fern, frieren, thorfinn) need to complete their 
 ## Emerging round-2 hypotheses
 - **Fourier + bf16**: Most promising combo given nezuko's val signal and tanjiro's throughput win
 - **Wider model (192) + bf16**: Width hypothesis needs a fair test on the new baseline
-- **Cosine schedule fix**: T_max aligned to actual epoch budget (key undertraining mitigation — alphonse's `lr-warmup-1e-3` directly tests this)
-- **More physics tokens (slice_num=128) + bf16**: Edward's hypothesis needs fair test on new baseline
+- **Cosine schedule fix**: T_max aligned to actual epoch budget — edward's #1591 directly tests this. alphonse's lr-warmup also related (higher peak LR + warmup). **slice_num=128 is a dead-end under batch=8** (near OOM, +44% epoch time → fewer epochs → regression).
 - **Combined wins**: After confirming which individual changes work, combine the winners for round 3+
 - **Deeper model (7 layers)**: Fern's result pending — depth may compound well with throughput improvements
 
