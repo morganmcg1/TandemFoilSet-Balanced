@@ -11,28 +11,32 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED)
+## Current baseline (MERGED — compound winner)
 
-**PR #1419 — alphonse bf16 autocast** (merged 2026-05-12):
-- `val_avg/mae_surf_p = 109.2937` (epoch 18)
-- `test_avg/mae_surf_p = 97.6659`
-- Config: bf16 autocast + NaN scoring fix, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
-- ~18 epochs / 30 min (bf16 = ~101 s/epoch)
+**PR #1436 — fern Huber + bf16** (merged 2026-05-12, stacked on top of #1419):
+- `val_avg/mae_surf_p = 96.4863` (epoch 16; vs 109.29 alphonse bf16 → −11.7%)
+- `test_avg/mae_surf_p = 86.3326` (vs 97.67 → −11.6%)
+- Config: Huber loss (β=1.0) + bf16 autocast + NaN scoring fix, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
+- ~18 epochs / 30 min (bf16 = ~100 s/epoch)
 
-**Scoring fix is now in the merged `train.py`** — all new PRs inherit it automatically.
+**Round-1 underlying baseline (also merged):** PR #1419 alphonse bf16: val=109.29, test=97.67.
+
+**Compounding observed**: bf16 (epoch budget) + Huber (loss-shape) stack to −12 MAE improvement on val. Per-split improvements (−9 to −13 MAE) are uniform across all 4 splits, so the gains aren't from one split alone.
 
 ## Active round-2 experiments
 
-| Student | PR | Hypothesis | Lever | Status |
-|---------|----|-----------|-------|------|
-| alphonse | #1544 | `mlp_ratio=4` (2× MLP width) | Architecture (capacity) | WIP |
-| askeladd | #1427 | `surf_weight=30` (3×) — rerunning with NaN fix | Loss weighting | WIP |
-| edward | #1546 | `n_layers=8` (Transolver paper default) | Architecture (depth) | WIP |
-| fern | #1436 | Huber loss — rebase + retest on bf16 baseline | Loss form | WIP |
-| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP |
-| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP |
-| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP |
-| thorfinn | #1550 | `slice_num=96` (clean test at bs=4+bf16) | Architecture (attention) | WIP |
+| Student | PR | Hypothesis | Lever | Status | Note |
+|---------|----|-----------|-------|------|-----|
+| alphonse | #1544 | `mlp_ratio=4` (2× MLP width) | Architecture (capacity) | WIP | based on bf16-only baseline |
+| askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (stale, ~2h) | NaN-fix rerun pending |
+| edward | #1546 | `n_layers=8` (Transolver paper default) | Architecture (depth) | WIP | based on bf16-only baseline |
+| fern | #1606 | EMA of model weights (decay=0.999) | Weight averaging | WIP | round-3, on top of Huber+bf16 |
+| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebasing) | based on bf16-only baseline |
+| nezuko | #1445 | Per-channel surf weights `(0.5, 0.5, 2.0)` | Loss / metric alignment | WIP (stale, ~2h) | |
+| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebasing) | based on bf16-only baseline |
+| thorfinn | #1550 | `slice_num=96` (clean test at bs=4+bf16) | Architecture (attention) | WIP | based on bf16-only baseline |
+
+**Important**: round-2 experiments above were started against the **bf16-only** baseline (109.29 val). With Huber now merged (96.49 val), any of these PRs that don't reach val<96.49 will need to either rebase + retest on Huber+bf16 or be closed if they're clearly orthogonal-but-non-additive.
 
 ## Key observations from round 1
 

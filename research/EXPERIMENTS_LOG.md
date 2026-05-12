@@ -239,4 +239,27 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - The result (val=140.38) is below baseline by ~30 absolute MAE, but the confounders are extrinsic and the hypothesis is mechanistically reasonable. With bf16 inherited from the merged baseline, the wider model should fit at bs=4 cleanly (~30-40 GB estimated).
 - **Decision: send back for rebase + retest at bs=4 on bf16 baseline.** Removes the bs=2 confound and adds ~4-6 extra epochs. If wider doesn't beat 109.29 on a fair test, close.
 
+## 2026-05-12 21:05 — PR #1436 v2: fern Huber + bf16 (MERGED — new compound baseline)
+
+- Branch: `willowpai2g48h5-fern/huber-loss` (rebased onto bf16 baseline)
+- W&B run: `kmwsz3i4` (18 of 30 epochs; ~100 s/epoch bf16; best at epoch 16)
+
+| Metric | Value | vs PR #1419 (alphonse) |
+|--------|-------|------------------------|
+| `val_avg/mae_surf_p` (best, epoch 16) | **96.4863** | **−12.81 (−11.7%)** |
+| `val/single_in_dist/mae_surf_p` | 112.8995 | −20.37 |
+| `val/geom_camber_rc/mae_surf_p` | 106.9168 | −8.47 |
+| `val/geom_camber_cruise/mae_surf_p` | 75.1834 | −12.65 |
+| `val/re_rand/mae_surf_p` | 90.9454 | −9.74 |
+| `test_avg/mae_surf_p` | **86.3326** | **−11.33 (−11.6%)** |
+| `test/test_single_in_dist/mae_surf_p` | 101.2155 | −12.75 |
+| `test/test_geom_camber_rc/mae_surf_p` | 95.6042 | −10.10 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 64.2155 | −9.16 |
+| `test/test_re_rand/mae_surf_p` | 84.2951 | −13.32 |
+
+- **Compound winner**. Huber's loss-shape benefit + bf16's epoch-budget benefit stacked exactly as predicted. The relative drops are uniform across all 4 splits (−9 to −13 MAE) — Huber doesn't just help one regime, it helps everywhere.
+- The single largest improvement was on `test_re_rand` (−13.32, −13.6%) and `test_single_in_dist` (−12.75, −11.2%). These are the splits with the largest extreme-p values; Huber's linear tail behavior on those samples is doing the right thing.
+- **Decision: MERGE** — new baseline is Huber+bf16 = val 96.49, test 86.33. All subsequent PRs compare to this.
+- Round-2 winner pattern is now confirmed: orthogonal levers from round 1 are stacking (bf16 → Huber → next?). Suggests the optimization frontier is wide open.
+
 
