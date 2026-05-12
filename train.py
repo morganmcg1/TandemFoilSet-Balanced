@@ -320,6 +320,7 @@ def write_experiment_summary(
         "onecycle_div_factor": cfg.onecycle_div_factor,
         "onecycle_final_div_factor": cfg.onecycle_final_div_factor,
         "ema_decay": cfg.ema_decay,
+        "ema_warmup_epochs": cfg.ema_warmup_epochs,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -368,6 +369,7 @@ class Config:
     onecycle_div_factor: float = 10.0  # initial_lr = max_lr / this
     onecycle_final_div_factor: float = 100.0  # min_lr = initial_lr / this
     ema_decay: float = 0.999  # EMA of model weights for eval (0.0 disables)
+    ema_warmup_epochs: int = 0  # ramp EMA decay 0->ema_decay linearly over first N epochs (0 disables)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -511,6 +513,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_clip_fires = 0
     n_batches = 0
 
+    if cfg.ema_warmup_epochs > 0 and epoch < cfg.ema_warmup_epochs:
+        effective_ema_decay = cfg.ema_decay * (epoch / cfg.ema_warmup_epochs)
+    else:
+        effective_ema_decay = cfg.ema_decay
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -542,7 +549,7 @@ for epoch in range(MAX_EPOCHS):
         if scheduler_step_per_batch:
             scheduler.step()
         if ema_model is not None:
-            update_ema(model, ema_model, cfg.ema_decay)
+            update_ema(model, ema_model, effective_ema_decay)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -594,6 +601,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
+        "ema_decay_effective": effective_ema_decay,
+        "ema_warmup_epochs": cfg.ema_warmup_epochs,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
     })
     print(
