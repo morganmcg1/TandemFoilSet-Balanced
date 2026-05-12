@@ -40,3 +40,34 @@ Student's diagnostic is correct: the cruise NaN traces to `accumulate_batch` pro
 ### Decision
 
 Sent back to student with two changes: drop `p_weight` to 2.0 (less aggressive) and add `clip_grad_norm_(model.parameters(), 1.0)` as a baseline-hardening numerical safety. Same `--wandb_group "willow-r2-p-weight"` so the arms remain comparable. Acceptance criterion for re-review: val_avg cleanly below baseline AND no regression on the three finite per-test-splits.
+
+### Update — 2026-05-12 21:00 (cycle 2)
+
+Frieren ran the re-run in W&B per the send-back. New best `val_avg/mae_surf_p` = **116.34** (run `18f9jjzt`), which is the best in the entire cohort across all students/arms. The configuration delivered as asked: `p_weight=2.0` + `clip_grad_norm_=1.0`. However: student has not yet committed/pushed the updated `train.py` (commit `acf88af` on the branch still reflects the original `p_weight=3.0` change) and has not posted the updated SENPAI-RESULT comment. Awaiting student-side workflow completion before final adjudication.
+
+---
+
+## 2026-05-12 21:00 — Cycle-2 advisor-side observations (no formal submissions)
+
+All 8 students have completed multiple W&B runs but only frieren has any code commit on their branch beyond the empty assign commit. The other 7 PRs are `stale_wip`. Pod logs show students are alive and polling but throttled by GitHub GraphQL API rate limits.
+
+### Live W&B leaderboard (latest best per student)
+
+| Rank | Student / hypothesis | Best W&B run | val_avg/mae_surf_p | Δ vs baseline-median (~131) |
+|---|---|---|---|---|
+| 1 | frieren / p_weight=2 + clip (re-run) | `18f9jjzt` | **116.34** | -11.2% |
+| 2 | fern / lr=2e-3+clip | `m7xp2x4b` | 118.77 | -9.3% |
+| 3 | alphonse / baseline (3rd rep) | `z2ls7ol1` | 119.64 | -8.7% |
+| 4 | thorfinn / bf16+accum=2 | `zg3qckt7` | 124.60 | -4.9% |
+| 5 | askeladd / surf_weight=30 | `dqey3vto` | 127.53 | -2.6% |
+| 6 | tanjiro / per-field heads | `0bh0u3h1` | 137.21 | +4.7% |
+| 7 | nezuko / wider 256/8h | `shqqxayq` | 176.37 | +34.6% |
+| 8 | edward / Huber per-sample | `wxpj1e4u` | 275.04 | +110% |
+
+### Re-calibrated noise floor
+
+The 3 alphonse baseline runs span 119.64–132.73 (13 points, ~10%). The previous "0.5–1%" noise estimate was wrong (it was the spread between 131.79 and 132.73, ignoring the third run). With the true noise band ~10%, frieren (-11%) and fern (-9%) are at the edge of, but plausibly within, noise. Without repeat seeds we can't fully separate signal from noise.
+
+### No formal decisions made this cycle
+
+No PRs were marked ready for review. No merges, send-backs, or closes happened (beyond the pre-existing frieren send-back from cycle 1). The advisor branch was updated with the recalibrated noise floor and cycle-2 W&B observations.

@@ -6,67 +6,70 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-12 20:00
+- **Date / time:** 2026-05-12 21:00 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
-- **Most recent direction from human researcher team:** none (no inbound issues at this cycle).
+- **Most recent human direction:** none.
 
 ## Current research focus
 
-Round 2 of the 24h Charlie-vs-Willow logging ablation on TandemFoilSet, with a hard 30-min per-training-run wall-clock cap. Primary metric `val_avg/mae_surf_p`; the paper-facing comparator `test_avg/mae_surf_p` is structurally NaN on this branch (cruise test split overflows on every run including baseline) — decisions use val_avg + the three finite per-test-split metrics.
+Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better). Paper-facing `test_avg/mae_surf_p` is structurally NaN on this branch (cruise test split overflows in nearly every run including baseline).
 
-## Baseline (measured)
+## Cycle-2 update — noise floor is much bigger than first thought
 
-Two stock-config runs by alphonse (W&B `hqj9bt84`, `89653mip`): `val_avg/mae_surf_p` = **131.79 / 132.73** (~132, ±~0.5%). Single-run noise floor ~0.5–1%; a hypothesis needs to clear that to be a clean winner. See `BASELINE.md` for the full per-split breakdown.
+Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
-## Live observations (W&B; not all PRs formally submitted)
+## Live W&B observations (3h into launch)
 
-Multiple students have arms finished in W&B but haven't all marked PRs as ready for review. Forward-looking signal:
+| Student | Best val_avg | Δ vs baseline-best (119.64) | Δ vs baseline-median (~131) | Code committed? | Notes |
+|---|---|---|---|---|---|
+| frieren (p_weight) | **116.34** | -2.8% | -11.0% | partial (only p_weight=3 arm, not the re-run code) | Best in cohort; re-run with p_weight=2 + clip succeeded |
+| fern (lr=2e-3+clip) | 118.77 | -0.7% | -9.3% | no | 2 new arms launched ~20:51 UTC, still running |
+| alphonse (baseline) | 119.64 | reference | reference | no | 3 baseline runs span 13 points |
+| thorfinn (bf16+accum) | 124.60 | +4.1% | -4.9% | no | More epochs/30min as designed; first arm was 118.17 |
+| askeladd (surf_w=30) | 127.53 | +6.6% | -2.6% | no | Improving across retries |
+| tanjiro (per-field heads) | 137.21 | +14.7% | +4.7% | no | 3 of 7 runs crashed — stability issues |
+| nezuko (wider 256/8h) | 176.37 | +47.4% | +34.6% | no | 1 currently running; capacity hurt under 30-min cap |
+| edward (Huber per-sample) | 275.04 | +130.0% | +110.0% | no | Direction is broken; close on submission |
 
-| Student | Best W&B run | val_avg/mae_surf_p | Δ vs baseline | PR status |
-|---|---|---|---|---|
-| thorfinn (bf16+accum) | `opxuv6bq` | **118.17** | **-10.3%** | WIP — strong winner candidate |
-| fern (lr=2e-3+clip) | `z8ub3am9` | 123.53 | -6.3% | WIP — winner candidate |
-| askeladd (surf_weight=30) | `1uu93jzg` | 124.43 | -5.6% | WIP — winner candidate |
-| frieren (p_weight=3) | `ph14bsim` | 130.98 | -0.9% | **sent back** — re-running with p_weight=2 + clip |
-| tanjiro (per-field heads) | `bexja50y` | 131.74 | ~tie | WIP — likely no-op |
-| alphonse (baseline) | `hqj9bt84` | 131.79 | (reference) | WIP — establishing reference |
-| nezuko (wider 256/8h) | `cvi8ju7g` | 159.35 | +21% (worse) | WIP — capacity hurt under 30-min cap |
-| edward (Huber persample) | `ct3iuldn` | 287.78 | +118% (worse) | WIP — major regression |
+**Key:**
+- Δ vs baseline-best uses alphonse's best baseline run (119.64) — strict.
+- Δ vs baseline-median (~131) is what a single hypothesis run would naturally compare against if you'd picked one baseline at random.
+- "Code committed?" measured by branch having any commit beyond the empty `assign` commit. Only frieren's first iteration is committed (`acf88af`).
 
-These are W&B observations; formal PR adjudication happens only when each student posts a terminal `SENPAI-RESULT` and marks ready for review.
+## Workflow observation — stale_wip PRs
 
-## Themes that are working
+All 7 non-frieren PRs are flagged `stale_wip`. Root cause: students ran training in W&B but did not commit/push their `train.py` modifications. The pods are alive (kubectl confirms 1/1 Ready) and polling, but each iteration is hitting GraphQL API rate limits (visible in pod logs: "API rate limit already exceeded for user ID …", retrying for ~90s per iteration). The host-side harvest workflow is expected to drive completion. No advisor nudges this cycle — they would compete for the same rate-limited tokens.
 
-- **Throughput hypothesis (thorfinn, bf16+accum)** is the current leader. More epochs in the 30-min budget directly translates into better val_avg. Implication: anything that reduces per-step wall time is potentially compoundable.
-- **Higher LR with grad clip (fern)** also works strongly. Suggests the baseline LR is under-tuned for the 30-min regime.
-- **Region prioritization (askeladd, surf_weight=30)** also pays off. The baseline `surf_weight=10` is genuinely too low for a 3%-surface-fraction mesh.
+## Themes
 
-## Themes that are not working
+**Working (under noise but consistent):**
+- Higher LR + grad clip (fern) — multiple arms consistently below baseline median.
+- Throughput (thorfinn) — second arm regressed; the bf16+accum benefit may be epoch-count-dependent and saturate.
+- Region prioritization (askeladd) — moderate signal.
+- Intra-channel weighting (frieren, p_weight=2 with clip) — current best, but only one stable arm.
 
-- **Per-sample Huber normalization (edward)** is catastrophic (val_avg ~3× worse). The per-sample rescaling appears to destroy the learned scale relationships across Re. Will likely need to close this PR when submitted.
-- **Wider model (nezuko, 256/8h)** is hurt by the 30-min cap — wider epochs take longer, fewer epochs fit, undertrained.
-- **Per-field output heads (tanjiro)** is a wash. Architectural decoupling at the head doesn't help in this regime.
-- **Intra-channel pressure upweight (frieren, p_weight=3)** is marginal and numerically risky.
+**Not working:**
+- Per-sample Huber rescaling (edward) — catastrophic 100%+ regression. Will close on submission.
+- Wider model (nezuko) — 30-min cap turns the wider model into an under-trained model.
+- Per-field heads (tanjiro) — wash + stability issues.
 
-## Next directions (round 3 candidates, conditional)
+## Plateau status
 
-Held back from `RESEARCH_IDEAS_2026-05-12_initial.md`, prioritized by what we've now learned:
+Not in plateau. Most hypotheses sit inside the noise band but multiple directions are showing consistent (if small) movement. Need formal submissions to adjudicate.
 
-1. **Stack the throughput + LR + region winners.** thorfinn-style bf16+accum *with* fern-style lr=2e-3+clip *with* askeladd-style surf_weight=30 — three independent levers that should compose. High-value compound experiment for r3.
-2. **Sweep `surf_weight`** more finely (20, 30, 40, 50) now that we know 30 helps. Find the saturation point.
-3. **Higher LR + larger effective batch** combo (lr=1e-3 or 2e-3, accum=4, bf16). Tests whether the LR win is bottlenecked by step noise.
-4. **Diagnose the cruise-test NaN at the source** (model output sanitization in `train.py` before `accumulate_batch`). One student in r3 should attempt to make every finished run report a finite `test_avg`. This unlocks paper-facing numbers.
-5. **OneCycleLR with high peak (1e-3)** as a schedule alternative to bare cosine.
-6. **Surface-aware sampling** — oversample batches with high surface-node fraction.
-7. **EMA of weights** as a near-free regularizer.
-8. **slice_num sweep** (32, 64, 128) — physics-attention granularity.
+## Next directions (r3 candidates)
 
-Held back as lower priority (post-r2):
-- H7 (deeper + stochastic depth), H8 (SiLU), H10 (log1p dsdf), H13 (Re-Fourier position).
+Same as previous cycle, with new priorities given cycle-2 observations:
+
+1. **Repeat-runs for variance estimation** — give the top 3 hypotheses (frieren-p_weight=2+clip, fern-lr=2e-3+clip, thorfinn-bf16+accum) a 2nd or 3rd seed to separate signal from noise. The ~10% noise band on baseline means single-run wins are unsafe.
+2. **Stack winners** — once the top 3 hypotheses are independently confirmed, build a single stacked-arm PR combining bf16+accum + lr=2e-3+clip + surf_weight=30 (+ optional p_weight=2). Test compound improvement.
+3. **Diagnose cruise-test NaN** — fix the overflow in `accumulate_batch` so `test_avg/mae_surf_p` becomes reportable. Either: clamp predictions before accumulation, or replace the inf-prone arithmetic. This unlocks paper-facing numbers.
+4. **OneCycleLR + high peak** as a schedule alternative.
+5. **Surface-aware sampling**, **EMA weights**, **slice_num sweep** — held back from r2.
 
 ## Operational notes
 
-- All 8 students currently have active WIP PRs (frieren just returned to WIP via send-back).
-- Plateau protocol: not active — strong differentiated signal across hypotheses.
-- Next polling priorities: thorfinn / fern / askeladd PRs marked ready for review (any of these is a likely merge); edward likely close; nezuko likely send-back to drop to default width but use a different angle.
+- Cycle 2 had no PRs marked ready for review and no idle students. No merges/closes possible this cycle.
+- Frieren PR #1471 was sent back ~20:02 UTC; student completed the re-run in W&B (116.34) but hasn't committed the updated code or marked ready.
+- The host-side harvest/kill is expected to manage final fleet shutdown after pods are Ready.
