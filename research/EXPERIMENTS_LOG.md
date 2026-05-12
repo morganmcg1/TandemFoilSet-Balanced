@@ -262,4 +262,61 @@ This preserves scoring's intended sample-skipping semantics without the `NaN * 0
 - **Decision: MERGE** — new baseline is Huber+bf16 = val 96.49, test 86.33. All subsequent PRs compare to this.
 - Round-2 winner pattern is now confirmed: orthogonal levers from round 1 are stacking (bf16 → Huber → next?). Suggests the optimization frontier is wide open.
 
+## 2026-05-12 21:54 — PR #1550: thorfinn `slice_num=96` (review 1, closed — dead end)
+
+- Branch: `willowpai2g48h5-thorfinn/slice-num-96`
+- W&B runs: `had0wmcv` (primary, 15 epochs), `h651wzrd` (confirmation, 13 epochs)
+- Clean run — no OOM, no NaN, no fallback. bs=4 + bf16 fit cleanly (peak 43.2 GB).
+
+| Metric | slice_num=96 | Baseline (4hy79j91, bf16) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best, epoch 15) | **120.69** | 109.29 | +11.40 (+10.4%) |
+| `test_avg/mae_surf_p` | **110.24** | 97.67 | +12.58 (+12.9%) |
+| `test/test_single_in_dist/mae_surf_p` | 124.31 | 113.96 | +10.35 |
+| `test/test_geom_camber_rc/mae_surf_p` | 123.19 | 105.71 | +17.48 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 84.30 | 73.37 | +10.93 |
+| `test/test_re_rand/mae_surf_p` | 109.17 | 97.62 | +11.55 |
+| Per-epoch wall time | ~121 s | ~101 s | +20% |
+| Epochs in 30 min | 15 | 18 | −3 |
+| Run-to-run variance (val_avg) | ~6 pts | — | — |
+
+- **Both mechanisms of failure are clean**: (1) 96 slices → +20% per-epoch cost → 15 epochs vs 18 for baseline; (2) even per-step the model learns more slowly — the slice projection (learned soft clustering) needs more gradient steps to differentiate 96 groups than 64. In a short-budget regime it never fully specializes.
+- **OOD splits hit hardest** (+17.5 test on camber_rc, +10.9 on cruise) — opposite of predicted "finer partitioning helps extrapolation." The partitioning underfits when under-trained, giving near-random slice assignment on OOD inputs.
+- **Confirmation run** (h651wzrd) gives val=126.78, test=113.97 — consistent, same direction, variance ~6 pts is much smaller than the 11-pt gap to baseline. The negative result is robust.
+- **Decision: CLOSE.** Slice_num=96 is not competitive within the 30-min cap. The experiment does establish that `slice_num=64` is a good calibration for our budget; going wider costs throughput without compensating in per-step quality. Assigning thorfinn to dropout=0.1 (regularization direction, orthogonal).
+
+## 2026-05-12 21:54 — PR #1606: fern EMA weights `decay=0.999` (MERGED — new baseline)
+
+- Branch: `willowpai2g48h5-fern/ema-weights`
+- W&B run: `gdfynh7o` (17 of 30 epochs; ~110 s/epoch; hit 30-min cap between epochs 17 and 18)
+- Implementation: `copy.deepcopy(model)` EMA shadow, updated after every `optimizer.step()` on fp32 master weights; val + test eval use `ema_model`; live-model diagnostic pass also run each epoch.
+
+| Metric | EMA (gdfynh7o) | Baseline (kmwsz3i4, Huber+bf16) | Δ | % |
+|--------|----------:|----------:|---:|---:|
+| `val_avg/mae_surf_p` (best, epoch 17) | **92.3452** | 96.4863 | −4.14 | −4.3% |
+| `test_avg/mae_surf_p` | **81.6297** | 86.3326 | −4.70 | −5.4% |
+| `test/test_single_in_dist/mae_surf_p` | 95.2950 | 101.2155 | −5.93 | −5.86% |
+| `test/test_geom_camber_rc/mae_surf_p` | 91.9270 | 95.6042 | −3.67 | −3.84% |
+| `test/test_geom_camber_cruise/mae_surf_p` | 58.7160 | 64.2155 | −5.50 | −8.57% |
+| `test/test_re_rand/mae_surf_p` | 80.5810 | 84.2951 | −3.72 | −4.41% |
+| Per-epoch wall time | ~110 s | ~100 s | +10% |
+| Epochs in 30 min | 17 | 18 | −1 |
+| Peak VRAM | 33.0 GB | ~33 GB | ≈ same |
+
+**EMA-vs-live diagnostic (confirms mechanism works):**
+
+| Epoch | EMA val | Live val | EMA − Live |
+|-------|---------|----------|------------|
+| 9 | 132.82 | 147.95 | −15.1 |
+| 12 | 109.29 | 123.51 | −14.2 |
+| 15 | 97.06 | 106.93 | −9.9 |
+| 16 | 94.59 | 116.99 | −22.4 |
+| 17 | 92.35 | 117.63 | −25.3 |
+
+Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% better than the instantaneous weights at the same training step. The noise ball interpretation is empirically confirmed.
+
+- **All four test splits improve** uniformly. Largest relative gain on camber_cruise (−8.6%) — the smaller-magnitude domain where SNR of the weight-averaging benefit is highest.
+- EMA half-life at decay=0.999 is ~1.85 epochs (693 steps at 375 steps/epoch). Lags during warmup (expected), catches up by epoch 6, consistently outperforms from epoch 9 onward.
+- Implementation is minimal (~15 lines, no external dependencies). Adds ~3 MB of fp32 shadow weights for 0.66M-param model. EMA on fp32 master weights is correct — bf16 autocast only touches the forward pass.
+- **Decision: MERGE** — new baseline val=92.35, test=81.63.
 
