@@ -436,14 +436,19 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 model = torch.compile(model, mode="default", dynamic=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-warmup_epochs = 3
-scheduler = torch.optim.lr_scheduler.SequentialLR(
+steps_per_epoch = max(1, len(train_loader))
+# Size OneCycleLR to the wall-clock-achievable budget under torch.compile (~29 epochs
+# in 30 min at slice_num=128) so the decay tail actually fires within the timeout —
+# the super-convergence mechanism depends on reaching it. Per advisor feedback on PR #1404.
+SCHEDULER_EPOCHS = 29
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    schedulers=[
-        torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs),
-        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, MAX_EPOCHS - warmup_epochs)),
-    ],
-    milestones=[warmup_epochs],
+    max_lr=1e-3,
+    total_steps=SCHEDULER_EPOCHS * steps_per_epoch,
+    pct_start=0.1,
+    anneal_strategy="cos",
+    div_factor=10.0,
+    final_div_factor=1e3,
 )
 
 run = wandb.init(
@@ -458,8 +463,12 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "warmup_epochs": warmup_epochs,
-        "scheduler": "linear_warmup_cosine",
+        "scheduler": "onecycle",
+        "scheduler_epochs": SCHEDULER_EPOCHS,
+        "max_lr": 1e-3,
+        "pct_start": 0.1,
+        "div_factor": 10.0,
+        "final_div_factor": 1e3,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -514,14 +523,18 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        # Step OneCycleLR per batch (vs once per epoch for cosine). Guard against
+        # over-stepping total_steps if more than SCHEDULER_EPOCHS happen to fit
+        # before the time cap (would raise ValueError otherwise).
+        if scheduler._step_count <= scheduler.total_steps:
+            scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
