@@ -39,10 +39,51 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **69.8316** | #1568 | torch.compile(dynamic=True) + bf16 AMP + scoring fix + Smooth-L1 | epoch 36 of 36; still improving at timeout |
-| `test_avg/mae_surf_p` | **61.8652** | #1568 | — | finite across all 4 test splits |
+| `val_avg/mae_surf_p` | **64.0705** | #1633 | Huber β=0.5 + compile + bf16 + Smooth-L1 | epoch 37 of 37; still improving at timeout; -8.2% vs #1568 |
+| `test_avg/mae_surf_p` | **55.4961** | #1633 | — | finite across all 4 test splits; -10.3% vs #1568 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 69.8316` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 64.0705` to be merged.
+
+## 2026-05-13 00:50 — PR #1633: Huber β=0.5 (sharper loss function)
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 37 (wall-clock-bound at 30 min; model still descending at timeout)
+- **Epochs reached:** 37 (~49.5 s/epoch, same as compile baseline — sharper β adds no compute)
+- **Peak GPU memory:** 23.83 GB (unchanged)
+
+| Split | val mae_surf_p | Δ vs #1568 baseline |
+|---|---|---|
+| `val_single_in_dist` | 72.5692 | -5.9% |
+| `val_geom_camber_rc` | 78.3209 | -6.2% |
+| `val_geom_camber_cruise` | **43.3744** | **-14.4%** |
+| `val_re_rand` | 62.0174 | -8.9% |
+| **val_avg** | **64.0705** | **-8.2%** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 63.0824 |
+| `test_geom_camber_rc` | 69.4136 |
+| `test_geom_camber_cruise` | **36.1544** |
+| `test_re_rand` | 53.3341 |
+| **test_avg** | **55.4961** |
+
+- **Key code change:** `F.smooth_l1_loss(..., beta=0.5)` (was β=1.0). Sharper β makes the loss linear for a wider range of medium-magnitude residuals, down-weighting outlier gradients — directly suited to TandemFoil's heavy-tailed surface pressure residual distribution.
+- **Monotone signal:** β=2.0 (val=77.81, +11.4%), β=1.0 (val=69.83, baseline), β=0.5 (val=64.07, -8.2%). Clear direction: sweep further toward β=0.25 / L1.
+- **Note:** best_epoch=37=terminal — model was still improving at the timeout. Sweeping β=0.25 is the next logical step.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-huber-beta-0.5-20260512-221022/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-huber-beta-0.5-20260512-221022/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/huber-beta-0.5" \
+      --epochs 50
+  ```
+  (change both `smooth_l1_loss` call sites in `train.py` to `beta=0.5` — see PR #1633 diff)
+
+---
 
 ## 2026-05-12 22:10 — PR #1568: torch.compile + bf16 AMP for additional throughput
 
