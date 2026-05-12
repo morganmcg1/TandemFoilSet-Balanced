@@ -24,9 +24,9 @@ See `BASELINE.md` for per-split details.
 | #1432 | tanjiro | `wall-distance-rebased` | Wall-dist + channel weights + warmup stacked | NEEDS REBASE (notified of new baseline 102.85) |
 | #1435 | thorfinn | `unified-pos-ref16-nopad` | Unified pos encoding ref=16, no zero-pad | NEEDS REBASE (notified of new baseline 102.85) |
 | #1597 | frieren | `depth-6-layers` | Depth n_layers 5→6, width unchanged | WIP |
-| #1640 | fern | `rff-pos-encoding` | Fourier RFF encoding (space_dim 2→64, sigma=1.0) | NEW — just assigned |
-| #1644 | askeladd | `swa-ep10-14` | SWA averaging epochs 10–14 | NEW — just assigned |
-| #1646 | nezuko | `slice-96-stable` | slice_num 64→96 intermediate | NEW — just assigned |
+| #1657 | fern | `rff-pos-encoding` | Fourier RFF encoding (space_dim 2→64, sigma=1.0) | NEW — just assigned |
+| #1658 | askeladd | `swa-ep10-14` | SWA averaging epochs 10–14 | NEW — just assigned |
+| #1659 | nezuko | `slice-96-stable` | slice_num 64→96 intermediate | NEW — just assigned |
 
 ### Closed as dead ends (this round)
 - #1426 frieren hidden-192-head-6: +12.8% worse, only 9 epochs at 30-min cap
@@ -39,9 +39,9 @@ See `BASELINE.md` for per-split details.
 1. **🔥 Smooth L1 rebase (alphonse #1414)** — most critical. Stacks Smooth L1 + channel weights + warmup/clip. Expected to be largest combined gain. New target: val_avg < 102.8503. Previous result on old code was 90.58 — if stacked improvements are additive, we could see 75–85 range.
 2. **Wall-distance rebase (tanjiro #1432)** — small but real physics signal (−0.96% on old code). Stacking with new baseline should reveal true additive value.
 3. **Unified pos encoding ref=16 (thorfinn #1435)** — OOD signal on cruise split confirmed at ref=8 (+1.5% overall but −1.8% cruise). ref=16 + no zero-pad should fix the wake-resolution problem.
-4. **Fourier RFF positional encoding (fern #1640)** — novel input representation. 64-dim sinusoidal encoding of (x,z) coordinates, should improve OOD generalization vs raw coords.
-5. **SWA epochs 10-14 (askeladd #1644)** — averaging late converged checkpoints, orthogonal to EMA failure mode.
-6. **slice_num=96 (nezuko #1646)** — intermediate token count, stable range confirmed, tests attention granularity axis.
+4. **Fourier RFF positional encoding (fern #1657)** — novel input representation. 64-dim sinusoidal encoding of (x,z) coordinates, should improve OOD generalization vs raw coords.
+5. **SWA epochs 10-14 (askeladd #1658)** — averaging late converged checkpoints, orthogonal to EMA failure mode.
+6. **slice_num=96 (nezuko #1659)** — intermediate token count, stable range confirmed, tests attention granularity axis.
 7. **Depth n_layers=6 (frieren #1597)** — WIP depth probe.
 8. **Decoupled vol/surf channel weights (edward #1421)** — stale, needs rebase and re-run with new baseline.
 
