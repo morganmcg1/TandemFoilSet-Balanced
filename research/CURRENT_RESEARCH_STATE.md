@@ -31,7 +31,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1543 | `logcosh-loss` | WIP — sent back v1 (106.68 vs baseline 103.10), rebase + re-run with augmentation default ON |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
-| nezuko | #1493 | `more-slices-128-v2` | WIP — rebase: slice_num=128 |
+| nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — Fourier features on (x,y) coordinates (NeRF-style γ(x), L=6 bands) |
 | tanjiro | #1494 | `re-film-conditioning-v3` | WIP — rebase: FiLM on top of augmentation (2 arms) |
 | thorfinn | #1574 | `augment-onecycle-ema-stack` | WIP — composability: augment + OneCycleLR + EMA (2 arms, incl. EMA warmup ramp) |
 

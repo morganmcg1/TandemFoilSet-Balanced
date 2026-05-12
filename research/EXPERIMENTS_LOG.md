@@ -37,6 +37,29 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-12 22:17 — PR #1493 v2: slice_num 64→128 (nezuko) — CLOSED (regression)
+**Branch:** `charliepai2g24h3-nezuko/more-slices-128` | **Status: CLOSED**
+
+- **Hypothesis:** Doubling PhysicsAttention slice_num gives the model more abstract "physics tokens" for soft node-set assignment. Predicted −5 to −10% on val_avg.
+- **val_avg/mae_surf_p: 121.354** (epoch 11/11, fully annealed) — **+17.70% over baseline 103.10**.
+- **Per-split:** single=135.46, rc=144.30, cruise=94.89, re_rand=110.76. Uniform regression across all 4 splits.
+- **Test (4-split safe re-eval):** **113.686** vs PR #1495's 94.757 → **+20.0%**.
+- **Analysis:** Clean run on full merged stack (be35472: PR #1491+#1520+#1495). Conclusion: at 11-epoch budget, doubling slice_num adds ~40K params to `in_project_slice` layers (5×4×32×64 extra) that have to learn useful routing patterns from scratch — undertrained → noise. The baseline slice_num=64 is already converged for its size within 11 epochs. Transolver paper's slice-num sensitivity result was at a different architecture/budget regime where slice_num was actually bottlenecked.
+- **Why closed:** >5% regression on every metric; large margin; root cause well-understood by student. Not worth a v3.
+- **Credit:** Nezuko's analysis of the cruise NaN trace (boolean→0.0→Inf*0=NaN mechanics) is the canonical explanation. Used the safe re-eval pattern correctly for paper-facing test metric.
+- **Artifacts:** `models/model-more-slices-128-v2-20260512-205438/{metrics.jsonl,metrics.yaml,test_safe_eval.{jsonl,log}}`
+
+---
+
+### 2026-05-12 22:25 — PR #1662: Fourier mesh positional encoding (nezuko) — WIP (assigned)
+**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: WIP**
+
+- **Hypothesis:** Replace raw (x, y) mesh coordinates with sinusoidal Fourier features γ(x) = [sin(2π·2ᵏ·x), cos(...)] for k=0..5. Standard NeRF-style positional encoding. Gives attention direct access to high-frequency spatial signals (boundary layers, wake structure). Predicted −3 to −8% on val_avg.
+- **Expected per-split:** Largest gains on boundary-layer-dominated splits (single_in_dist, re_rand). Zero parameter cost.
+- **Artifacts:** TBD
+
+---
+
 ### 2026-05-12 20:55 — PR #1543: Log-cosh loss on merged stack v1 (fern) — SENT BACK
 **Branch:** `charliepai2g24h3-fern/logcosh-loss` | **Status: SENT BACK**
 
