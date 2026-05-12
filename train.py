@@ -254,7 +254,18 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
-            ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
+
+            # Workaround for data/scoring.py NaN/inf*0 propagation under IEEE 754.
+            # .test_geom_camber_cruise_gt/000020.pt has 761 -inf entries in y[:, 2]
+            # (likely bf16 overflow during upstream preprocessing). scoring's
+            # sample_finite mask is correct in intent but err*mask still NaN-poisons
+            # the channel sums because (+/-inf) * 0 = NaN and NaN * 0 = NaN.
+            # Pre-mask the bad sample and replace non-finite y values so the err
+            # computation stays finite while the sample's contribution is zeroed.
+            sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask_eff = mask & sample_finite.unsqueeze(-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, mask_eff, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
 
