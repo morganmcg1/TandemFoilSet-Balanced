@@ -8,6 +8,72 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-12 19:55 — Stale-WIP closures: 5 PRs branched off pre-L1 MSE base
+
+Five round-1 PRs (#1407 wider/deeper, #1411 slice_num=128, #1417 lr-warmup=1e-3,
+#1420 EMA weights, #1425 SwiGLU FFN) were assigned at 17:52 UTC, before L1 loss
+(PR #1397) merged at 19:05. Student pods were stalled on GH API rate limits
+through 19:50 and never started training. Closing because any result on those
+branches would be measured against pre-L1 MSE base and not directly comparable
+to the new L1 baseline. All five hypotheses remain valid avenues to revive
+in a later round; they are deprioritized for round 2 in favour of architecture
+and loss-formulation ideas from `RESEARCH_IDEAS_2026-05-12_round2.md`.
+
+## 2026-05-12 19:50 — PR #1530: Per-channel L1 loss with pressure x3 weight — **CLOSED, worse than L1**
+
+- Branch: `charliepai2g24h4-tanjiro/channel-weight-p3`
+- Hypothesis: H4 from round-2 list. In L1 loss, multiply pressure channel by
+  P_WEIGHT=3.0 to steer gradient flow toward the ranking metric `mae_surf_p`.
+  Predicted 2-6% improvement on `val_avg/mae_surf_p`.
+
+| Metric | This PR | L1 baseline (#1397) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14/14) | 102.184 | 100.957 | **+1.22% (worse)** |
+| test_avg/mae_surf_p (3-split, ex-cruise) | 100.696 | 100.831 | -0.13% |
+| test_avg/mae_surf_p (**4-split, NaN-safe, new finite ref**) | **92.465** | NaN | — |
+| Per-split val: single_in_dist / camber_rc / camber_cruise / re_rand | 126.233 / 112.645 / 77.502 / 92.356 | 127.371 / 110.832 / 77.353 / 88.273 | mostly noise except +4.6% on re_rand |
+
+- Effective combined surface-pressure weight became `surf_weight × P_WEIGHT = 30`,
+  the same regime as closed PR #1403 (`surf_weight=30`), which also regressed.
+  Student diagnosed this directly. The 3× upweight is too aggressive on top
+  of L1's already-amplified surface gradients.
+- **Lasting deliverable:** the NaN-safe pre-filter in `train.py::evaluate_split`
+  works as designed and produced the first finite 4-split test mean on this
+  branch (92.465). Pre-filter pattern is now bundled into every round-2 PR
+  assignment so subsequent runs land a comparable 4-split test reference.
+- Per-channel surface MAE at best val: surf_Ux=1.43, surf_Uy=0.69, surf_p=102.18;
+  vol_Ux=4.81, vol_Uy=2.22, vol_p=103.80. Predicted Ux/Uy uptick in exchange for
+  p drop did NOT materialize — we got a p regression instead.
+- Suggested follow-ups (lower P_WEIGHT, combined surf_weight+P_WEIGHT sweep)
+  are deferred until higher-EV round-2 levers are explored.
+
+## 2026-05-12 19:48 — PR #1529: Gradient clipping (max_norm=1.0) — **CLOSED, much worse than L1**
+
+- Branch: `charliepai2g24h4-askeladd/grad-clip-1.0`
+- Hypothesis: H5 from round-2 list. Add `clip_grad_norm_(max_norm=1.0)` to
+  reduce variance from gradient spikes on variable mesh sizes / high-Re samples.
+  Predicted 1-4% improvement on `val_avg/mae_surf_p` via smoother convergence.
+
+| Metric | This PR | L1 baseline (#1397) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 11/14) | 106.401 | 100.957 | **+5.4% (worse)** |
+| test_avg/mae_surf_p (3-split, ex-cruise) | 103.364 | 100.831 | +2.5% |
+| test_avg/mae_surf_p (**4-split, NaN-safe, finite ref**) | **94.846** | NaN | — |
+
+- Student logged per-epoch gradient norms (min 10, mean 47, max 245) and clip%
+  per epoch (100% in every epoch). `max_norm=1.0` is far below the natural
+  pre-clip norm of 10-245, so every step was rescaled by 0.02-0.10× — the
+  model effectively trained at 1-5% of the configured LR throughout, which
+  is too slow to converge inside 14 epochs.
+- The diagnosis is exemplary post-hoc analysis and exactly the kind of
+  per-epoch instrumentation we want from every arm.
+- **Lasting deliverable:** NaN-safe pre-filter in `evaluate_split` (identical
+  to tanjiro's #1530 fix). 4-split test mean (94.846) is reproducible and
+  finite. Workaround is now standard in all round-2 assignments.
+- Suggested follow-ups (`max_norm ∈ {10, 25, 50}`, AGC) deferred — higher-EV
+  round-2 hypotheses have priority. If architecture/loss levers stall, we
+  will return to AGC.
+
 ## 2026-05-12 19:10 — PR #1423: Enable unified_pos=True with ref=8 — **CLOSED, worse than L1**
 
 - Branch: `charliepai2g24h4-tanjiro/unified-pos`
