@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 03:20 UTC (send back #1799 thorfinn LayerScale CaiT init=0.1 for rebase — STRONG result on stale stack: val_avg 77.629 (-8.42% vs 84.762 pre-#1772) and test_avg 68.010 (-8.91%); both val and test move equally (not val-overfit); per-channel γ_l std up to 30% of mean confirms mechanism; mlp branch shows depth-decreasing trend (block 0=0.115, block 4=0.079) consistent with stoch-depth interaction; nudge #1753 askeladd — silent 2+ hours, three merges behind (baseline 90.294 → 82.311); in-flight: #1711, #1753, #1799, #1828, #1830, #1852; rebasing: #1549, #1754, #1799)
+- **Last updated**: 2026-05-13 03:25 UTC (send back #1828 frieren SmoothL1(β=0.01) for rebase — clean win on stale stack: val 83.938 (-0.97%), test 73.300 (-1.82%) vs pre-#1772 84.762/74.659; but +1.98% regression vs current 82.311 baseline, ~flat on test; mechanism solid via late-cooldown grad-norm trace (ep14=13.9 vs ep10-13 31-49) and all 4 test splits improve; per the same rebase-confirm pattern as #1799; fern #1549 just rebased at 03:04:51 UTC after second nudge, awaiting fresh training run; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754, #1799)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -95,12 +95,15 @@ Active threads (post #1811 close → #1852 coord jitter pivot):
    Mechanism: forces invariance to mesh-level coord perturbations,
    regularizes high-freq Fourier feature responses (L=6 features at
    `sin(32π·x)` are highly sensitive to small δx).
-7. **SmoothL1 (Huber) loss with β=0.01** (frieren #1828, H25) — fresh
-   axis after closed EMA-0.999. Loss-landscape smoothing replacing L1's
-   subgradient discontinuity at zero. Mechanism predicted orthogonal to
-   Fourier features (changes loss landscape near small residuals, not the
-   function representation) — different axis from EMA's weight-space
-   smoothing which fought Fourier sharpening.
+7. **SmoothL1 (Huber) loss with β=0.01 REBASING** (frieren #1828, H25) —
+   ran on **stale stack** (Fourier L=4) at val=83.938 (-0.97%), test=73.300
+   (-1.82%) vs 84.762/74.659. But +1.98% regression vs current 82.311
+   baseline (and essentially flat on test, 73.300 vs 73.330). Mechanism
+   solid: all 4 test splits improve, late-cooldown grad-norm trace
+   (ep14=13.9, ep15=16.4 vs ep10-13 range 31-49) directly demonstrates
+   smooth-near-zero gradient effect during cosine cooldown. Sent back to
+   re-run on current 82.311 stack with Fourier L=6 — open question:
+   does Fourier L=6 already address some of what SmoothL1 was fixing?
 
 Note: all wave-5/6/7 in-flight experiments (#1711, #1753, #1799, #1811,
 #1828, #1830) are measured against the **new 82.311 baseline** (post #1772
@@ -159,7 +162,7 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 |---------|----|----|---------|---------------|
 | frieren | #1608 | `ema-weights-0.999` | **CLOSED** (rebased: weight-space smoothing fights Fourier sharpening, inverse-correlates per-split) | +2.93% val, +4.12% test |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: split capacity at half width; val_single_in_dist regressed +5.34% inverse to prediction) | +1.99% val |
-| frieren | #1828 | `smooth-l1-loss-beta-001` | WIP | tbd |
+| frieren | #1828 | `smooth-l1-loss-beta-001` | **REBASING** (won on stale stack: val=83.938, test=73.300; -0.97%/-1.82% pre-#1772; +1.98% vs current 82.311; mechanism solid via late-cooldown grad-norm trace; all 4 test splits improve) | tbd vs 82.311 |
 | edward | #1830 | `fourier-coords-L8` | WIP — plateau-probe follow-up to merged #1772 L=6 | tbd |
 | tanjiro | #1852 | `coord-jitter-aug-0.005` | WIP — fresh data-aug axis after closed decoder-side direction | tbd |
 
@@ -167,7 +170,7 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 
 | Student | PR | Slug | Status |
 |---------|----|----|--------|
-| fern | #1549 | `film-global-cond` | **REBASING** — extraordinary -19.5% signal pending re-run on current 84.762 stack |
+| fern | #1549 | `film-global-cond` | **REBASING** — extraordinary -19.5% signal pending re-run on current 82.311 stack (rebased at 03:04:51 UTC after 2 nudges; training not yet re-run; fun_dim=22 metrics still in tree from May 12 pre-everything run) |
 
 (edward #1548 Fourier coords now MERGED — see new best baseline above; frieren #1608 EMA now CLOSED — see wave 7 above.)
 

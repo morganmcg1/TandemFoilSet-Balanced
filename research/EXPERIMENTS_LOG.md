@@ -8,6 +8,91 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:24 — PR #1828 (frieren SmoothL1 β=0.01 — H25) — **REBASING** (sent back)
+
+- Branch: `charliepai2g24h4-frieren/smooth-l1-loss-beta-001`
+- Hypothesis: replace L1 with SmoothL1 (Huber) at β=0.01 — smooth the
+  subgradient discontinuity at zero so the cosine-LR cooldown can pin
+  small residuals without zigzag. Mechanism predicted orthogonal to
+  Fourier features (changes loss landscape near r=0, not function
+  representation). Different axis from EMA's weight-space smoothing
+  which fought Fourier sharpening.
+- Pre-rebase results (against stale baseline 84.762, Fourier L=4 stack):
+
+| Metric | This PR | Stale baseline (#1548) | Current baseline (#1772) | Δ vs stale | Δ vs current |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 83.938 | 84.762 | 82.311 | **−0.97%** | +1.98% |
+| test_avg/mae_surf_p (4-split) | 73.300 | 74.659 | 73.330 | **−1.82%** | −0.04% (~flat) |
+| Param count | 666,247 | 665,943 | 667,991 | +304 (negligible) | -1744 |
+| Peak mem | 42.2 GB | — | — | unchanged | unchanged |
+
+Per-split val MAE @ best epoch 15 (vs stale baseline):
+
+| Split | Stale base | This PR | Δ vs stale |
+|---|---:|---:|---:|
+| val_single_in_dist     | 97.074 | 96.090 | −1.01% |
+| val_geom_camber_rc     | 94.997 | 94.271 | −0.76% |
+| val_geom_camber_cruise | 63.711 | 64.088 | +0.59% |
+| val_re_rand            | 83.266 | 81.303 | −2.36% |
+| **val_avg**            | 84.762 | **83.938** | **−0.97%** |
+
+Per-split test MAE @ best val checkpoint:
+
+| Split | Stale base | This PR | Δ vs stale |
+|---|---:|---:|---:|
+| test_single_in_dist     | 85.819 | 84.846 | −1.13% |
+| test_geom_camber_rc     | 83.023 | 80.750 | −2.74% |
+| test_geom_camber_cruise | 54.879 | 54.416 | −0.84% |
+| test_re_rand            | 74.916 | 73.186 | −2.31% |
+| **test_avg**            | 74.659 | **73.300** | **−1.82%** |
+
+- **Mechanism analysis — clean and well-instrumented.** All 4 test splits
+  improve and 3/4 val splits improve. The single val regression
+  (camber_cruise +0.59%) is contradicted by its test result (−0.84%) and
+  is well within natural epoch-to-epoch variance. Late-epoch (10-15)
+  train surface loss is monotonically decreasing with only a tiny ~+0.005
+  bump at ep13 (in the noise band). Final-cooldown grad norms are notably
+  small: **ep14=13.9, ep15=16.4 vs ep10-13 range 31-49** — the lowest of
+  the whole run, directly demonstrating the predicted behavior of
+  SmoothL1's smooth-near-zero gradient letting the LR cooldown actually
+  pin small residuals instead of zigzagging them. Test improvement > val
+  improvement is a positive generalization signal.
+- **Fourier-gain conflict check:** student verified explicitly. No
+  per-split pattern of consistent regression that would indicate conflict
+  with merged Fourier coords (the single val regression is contradicted
+  by test; not a mechanism conflict signal). Hypothesis explicitly
+  predicted no spectral-bias conflict (SmoothL1 changes loss landscape
+  near r=0, not function representation).
+- **Why sent back for rebase (not merged):** student ran on pre-#1772
+  baseline (84.762, Fourier L=4 stack, `fun_dim: 36`). Current baseline is
+  82.311 (Fourier L=6, `fun_dim: 44`). On the current baseline, the
+  pre-rebase result is +1.98% val regression and essentially flat on
+  test. The 02:14 UTC run started 36 minutes BEFORE #1772 merged at 02:50
+  UTC. Same rebase-confirm pattern as #1799 LayerScale (also sent back
+  this iteration).
+- **Big open mechanism question:** does Fourier L=6 already partially
+  address what SmoothL1 was fixing? L=6 gives the model sharper feature
+  representation, which could reduce the prevalence of small-residual
+  zigzag regions that SmoothL1 smooths. If they overlap, the gain
+  shrinks; if they don't, the gain holds. Expected post-rebase: val_avg
+  in [81.0, 82.0] if clean compound; [82.0, 83.0] if partial overlap
+  (marginal); > 82.311 if active interference (close with mechanism).
+- **Operational note from student:** entrypoint re-invoked while a prior
+  training was still running, creating duplicate model dirs at 02:54 and
+  03:01. Student killed those duplicates and committed only the canonical
+  02:14 run. Clean.
+- **Student's pre-registered follow-ups (queued, contingent on rebase
+  confirmation):**
+  1. β=0.005 (tighter smooth window). If still wins, optimum is in
+     [0.005, 0.01]. Tests "kill the zigzag at convergence" interpretation.
+  2. β=0.05 (5× wider smooth window). Tests direction-not-magnitude. If
+     also wins, mechanism is robust; if regresses, 0.01 is in a narrow
+     sweet spot.
+  3. Per-channel β — pressure has wider target distribution than velocity
+     in y_norm space; could compound with surf_weight asymmetry.
+- Single arm. Wall time confirmed within 30 min cap (14 epochs). Metrics:
+  `models/model-charliepai2g24h4-frieren-smooth-l1-loss-beta-001-20260513-021419/metrics.{jsonl,yaml}`.
+
 ## 2026-05-13 03:15 — PR #1799 (thorfinn LayerScale CaiT init=0.1 — H23) — **REBASING** (sent back)
 
 - Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.1`
