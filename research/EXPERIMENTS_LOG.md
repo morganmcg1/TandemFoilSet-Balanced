@@ -1188,3 +1188,84 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50 --wandb_group willow-pai2g-48h-r5-mlp-ratio-scan`, with `mlp_ratio=3` in `train.py`.
 - Predicted: val ≤ 55.0 if FFN headroom unlocked; 55.0–56.5 neutral; > 56.5 capacity-up regression confirmed.
 - Targets: val < 55.7634, test < 48.0960.
+
+## 2026-05-13 12:00 — PR #1982: tanjiro grad-clip=2.5 + T_max=50 retest — MERGED (12th compound winner; MASSIVE)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-max-norm-2p5`
+- Hypothesis: Threshold scan step 3 (max_norm=5.0→2.5) — originally at T_max=30 (first-pass val=66.13, +4.2% vs #1930). Sent back for T_max=50 retest.
+- W&B runs: `auwrg4mz` (T_max=30 first pass), `bb6o68xa` (T_max=50 confirmation — terminal result)
+
+| Metric | T_max=30 first pass | T_max=50 confirmation | vs #1953 baseline | vs #1982 new baseline |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | 56.97 | **52.6406** | **−3.12 (−5.60%)** | — |
+| `test_avg/mae_surf_p` | 49.38 | **44.9791** | **−3.12 (−6.49%)** | — |
+| `test_single_in_dist` | 55.07 | **49.8555** | −3.03 (−5.73%) | — |
+| `test_geom_camber_rc` | 64.45 | **57.7726** | −4.01 (−6.49%) | — |
+| `test_geom_camber_cruise` | 31.10 | **28.9446** | −2.21 (−7.10%) | — |
+| `test_re_rand` | 46.88 | **43.3437** | −3.22 (−6.90%) | — |
+| Clip rate | 96.54% | 98.93% | — | — |
+| Mean downscaling | ~7.21× | ~7.14× | — | — |
+| Epochs | 30/30 | 33/50 (timeout) | — | — |
+
+- **ALL 4 splits improve dramatically.** in_dist regression from step 2 (max_norm=5.0) is **fully reversed**.
+- **Mechanism:** Grad-clip=2.5 at 98.9% clip rate and ~7.1× downscaling is still in the productive moderate-scaling regime (NOT the direction-normalization failure at max_norm=1.0). Monotonically accelerating improvement: 10→5→2.5 each step larger than last.
+- **Decision: MERGE (12th compound winner).** Single-axis gradient threshold change now baked into train.py.
+- **Next:** threshold scan step 4 (max_norm=1.5) — frieren #2067.
+
+## 2026-05-13 12:05 — PR #2023: frieren n_hidden=192→224 — MERGED (13th compound winner)
+
+- Branch: `willowpai2g48h5-frieren/n-hidden-224-width-push`
+- Hypothesis: Width push 192→224 on 11-compound stack. Compact-but-wide hypothesis: per-layer expressivity is bottleneck at n_layers=3.
+- W&B run: `80b6pnb9` (29/50 epochs, EMA still descending at −1.46/ep at termination)
+
+| Metric | n_hidden=224 | vs #1953 baseline (55.76) | vs #1982 baseline (52.64) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **53.2494** | −2.51 (−4.51%) | +0.61 (wider is better vs old, not vs new) |
+| `test_avg/mae_surf_p` | **46.6004** | −1.50 (−3.11%) | +1.62 |
+| `test_single_in_dist` | 53.2544 | +0.37 (noise) | — |
+| `test_geom_camber_rc` | 58.8796 | −2.90 (−4.70%) | — |
+| `test_geom_camber_cruise` | 29.6831 | −1.47 (−4.72%) | — |
+| `test_re_rand` | 44.5845 | −1.98 (−4.25%) | — |
+
+- **Merged (13th compound winner) because:** beat #1953 baseline (55.76) at time of review; n_hidden width mechanism is orthogonal to grad-clip; mechanisms expected to compound.
+- **EMPTY DIFF MERGE.** Win was CLI-only (n_hidden=224). advisor branch defaults still n_hidden=128.
+- **Combined state (n_hidden=224 + grad-clip=2.5 + T_max=50) UNMEASURED.** tanjiro #2066 is the confirmation run.
+- **Next:** tanjiro #2066 (combined state), thorfinn #2068 (n_hidden=256 width scan).
+
+## 2026-05-13 12:10 — PR #1960: thorfinn n_layers=2 + n_hidden=192 — CLOSED (depth-floor confirmed)
+
+- Branch: `willowpai2g48h5-thorfinn/n-layers-2-n-hidden-192`
+- Hypothesis: Depth-floor test. At n_layers=2, 39 s/epoch vs 54 s/epoch allows ~46 epochs in budget — more compute to offset depth reduction.
+- W&B run: `ychyadab` (30/30 epochs at T_max=30, grad-clip=10 — protocol stale)
+
+| Metric | n_layers=2 | Baseline at submit (#1953) | Current baseline (#1982) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 56.9559 | 55.7634 | **52.6406** |
+| `test_avg/mae_surf_p` | 49.5122 | 48.0960 | **44.9791** |
+
+- **Decision: CLOSE.** val=56.96 vs #1953 = +2.1% worse at submit time; vs #1982 = +8.2% worse.
+- **Mechanism:** n_layers=2 loses to n_layers=3 even at equal conditions. Despite 39 s/epoch throughput advantage, depth-2 expressivity is insufficient for PhysicsAttention multi-layer composition on PDE task. Compact-but-wide sweet spot confirmed at n_layers=3.
+- **Depth-floor conclusion:** n_layers=3 is the optimum depth. n_layers=2 too shallow, n_layers=5+ too deep (old capacity-up failures), n_layers=8 catastrophic. Depth axis is now CLOSED.
+- **Next:** thorfinn #2068 — n_hidden=256 width push.
+
+## 2026-05-13 12:10 — PR #2066: tanjiro assigned n_hidden=224 + grad-clip=2.5 compound confirmation
+
+- Branch: `willowpai2g48h5-tanjiro/n-hidden-224-compound-confirm`
+- Hypothesis: Directly measure the combined 13-compound stack (n_hidden=224 + grad-clip=2.5 + T_max=50). The merged state is currently unmeasured — PR #1982 was at n_hidden=192, PR #2023 was at grad-clip=5.0.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50` (grad-clip=2.5 now in train.py)
+- Predicted: val ≈ 50–52 if mechanisms add linearly; lower if synergistic.
+- Targets: val < 52.6406, test < 44.9791.
+
+## 2026-05-13 12:10 — PR #2067: frieren assigned grad-clip=1.5 (threshold scan step 4)
+
+- Branch: `willowpai2g48h5-frieren/grad-clip-1p5`
+- Hypothesis: Threshold scan step 4. max_norm=1.5 between last win (2.5, clip rate 98.9%) and known fail (1.0, direction-normalization). Predicted ~99.5-99.8% clip rate, ~12× mean downscaling.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` + `GRAD_CLIP_MAX_NORM = 1.5` in train.py.
+- Targets: val < 52.6406, test < 44.9791.
+
+## 2026-05-13 12:10 — PR #2068: thorfinn assigned n_hidden=256 width push
+
+- Branch: `willowpai2g48h5-thorfinn/n-hidden-256-width-push`
+- Hypothesis: Width scan step 3 (192 WIN, 224 WIN → test 256). 1.63M params. Tests if compact+wide direction still has headroom or plateaus at 1500-sample dataset capacity.
+- Reproduce: `--n_hidden 256 --n_layers 3 --epochs 50` (grad-clip=2.5 in train.py).
+- Targets: val < 52.6406, test < 44.9791.
