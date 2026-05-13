@@ -379,7 +379,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    epochs: int = 50
+    epochs: int = 30
     eval_every_n_epochs: int = 3  # fp32 eval is ~45s/epoch overhead; eval less often to free epochs
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -387,14 +387,19 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    seed: int = 0
 
 
 cfg = sp.parse(Config)
 MAX_EPOCHS = 3 if cfg.debug else cfg.epochs
 MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
+torch.manual_seed(cfg.seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(cfg.seed)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else "") + f"  seed={cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -435,19 +440,18 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 model = torch.compile(model, mode="default", dynamic=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-steps_per_epoch = max(1, len(train_loader))
-# Size OneCycleLR to the wall-clock-achievable budget under torch.compile (~29 epochs
-# in 30 min at slice_num=128) so the decay tail actually fires within the timeout —
-# the super-convergence mechanism depends on reaching it. Per advisor feedback on PR #1404.
-SCHEDULER_EPOCHS = 29
-scheduler = torch.optim.lr_scheduler.OneCycleLR(
+# Scheduler shootout (PR #1628): revert OneCycleLR back to SequentialLR(LinearLR warmup
+# + CosineAnnealingLR) with per-epoch stepping. With epochs=30, T_max = MAX_EPOCHS - 3 = 27
+# so the cosine arm fully cools to ~0 by epoch 30, eliminating the late-epoch LR-noise
+# uptick observed under T_max=47 (PR #1584's val curve at epochs 27-29).
+warmup_epochs = 3
+scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
-    max_lr=1.5e-3,
-    total_steps=SCHEDULER_EPOCHS * steps_per_epoch,
-    pct_start=0.1,
-    anneal_strategy="cos",
-    div_factor=10.0,
-    final_div_factor=1e3,
+    schedulers=[
+        torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs),
+        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, MAX_EPOCHS - warmup_epochs)),
+    ],
+    milestones=[warmup_epochs],
 )
 
 run = wandb.init(
@@ -462,12 +466,9 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "scheduler": "onecycle",
-        "scheduler_epochs": SCHEDULER_EPOCHS,
-        "max_lr": 1.5e-3,
-        "pct_start": 0.1,
-        "div_factor": 10.0,
-        "final_div_factor": 1e3,
+        "scheduler": "linear_warmup_cosine",
+        "warmup_epochs": warmup_epochs,
+        "cosine_t_max": max(1, MAX_EPOCHS - warmup_epochs),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -522,11 +523,6 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        # Step OneCycleLR per batch (vs once per epoch for cosine). Guard against
-        # over-stepping total_steps if more than SCHEDULER_EPOCHS happen to fit
-        # before the time cap (would raise ValueError otherwise).
-        if scheduler._step_count <= scheduler.total_steps:
-            scheduler.step()
         global_step += 1
         wandb.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "global_step": global_step})
 
@@ -534,6 +530,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
+    # Per-epoch SequentialLR(LinearLR warmup + CosineAnnealingLR) step.
+    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
