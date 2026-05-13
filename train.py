@@ -426,6 +426,11 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    adaptive_huber: bool = False  # If True, override huber_delta with running p75 EMA
+    adaptive_huber_alpha: float = 0.99  # EMA decay for running delta
+    adaptive_huber_quantile: float = 0.75  # quantile of |residuals| to track
+    adaptive_huber_clamp_lo: float = 0.2
+    adaptive_huber_clamp_hi: float = 2.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -548,8 +553,22 @@ for epoch in range(MAX_EPOCHS):
 
         # Per-node Huber (SmoothL1) for surface to align with MAE metric;
         # keep MSE for volume. delta=0 falls back to MSE for surface too.
-        delta = cfg.huber_delta
         abs_err = (pred - y_norm).abs()
+        surf_mask = mask & is_surface
+        # Adaptive Huber: EMA of per-batch p_q(|residual|) on surface nodes.
+        adaptive_raw_q = float("nan")
+        if cfg.adaptive_huber and surf_mask.any():
+            with torch.no_grad():
+                surf_abs_for_q = abs_err[surf_mask.unsqueeze(-1).expand_as(abs_err)].detach()
+                q = torch.quantile(surf_abs_for_q, cfg.adaptive_huber_quantile).item()
+                adaptive_raw_q = q
+                q_clamped = max(cfg.adaptive_huber_clamp_lo,
+                                min(cfg.adaptive_huber_clamp_hi, q))
+                cfg.huber_delta = (
+                    cfg.adaptive_huber_alpha * cfg.huber_delta
+                    + (1.0 - cfg.adaptive_huber_alpha) * q_clamped
+                )
+        delta = cfg.huber_delta
         if delta > 0:
             surf_node_loss = torch.where(
                 abs_err < delta,
@@ -579,7 +598,6 @@ for epoch in range(MAX_EPOCHS):
         sw = sample_w[:, None, None]
 
         vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
         vol_loss = (sq_err * sw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (surf_node_loss * sw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -595,7 +613,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = (surf_abs >= delta).float().mean().item()
             else:
                 surf_l1_frac = 0.0
-        wandb.log({
+        step_log = {
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
@@ -604,7 +622,11 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
             "global_step": global_step,
-        })
+        }
+        if cfg.adaptive_huber:
+            step_log["train/adaptive_huber_delta"] = float(cfg.huber_delta)
+            step_log["train/adaptive_huber_raw_quantile"] = float(adaptive_raw_q)
+        wandb.log(step_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
