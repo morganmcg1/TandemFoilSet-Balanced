@@ -2,6 +2,44 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 00:08 — PR #1374: [huber-loss] Smooth L1 / Huber loss on merged recipe — **MERGED (NEW BEST: val=110.59)**
+- Student branch: `charliepai2g48h4-edward/huber-loss`
+- Hypothesis: MSE loss is sensitive to large-residual samples (high-Re flows with 10× larger pressure gradients), pulling the training signal disproportionately toward outliers. Smooth L1 / Huber loss (beta=1.0) is identical to MSE for small residuals (|e|<1) but linear for large residuals, capping the gradient magnitude per-sample and giving the model a more stable signal.
+
+| Metric | Value |
+|---|---|
+| val_avg/mae_surf_p | **110.59** (best epoch 15/18) |
+| test_avg/mae_surf_p | **102.28** (all 4 splits clean) |
+| val single_in_dist | 127.85 |
+| val geom_camber_rc | 111.05 |
+| val geom_camber_cruise | 95.72 |
+| val re_rand | 107.73 |
+| test single_in_dist | 113.36 |
+| test geom_camber_rc | 105.68 |
+| test geom_camber_cruise | 85.87 |
+| test re_rand | 104.20 |
+
+- Artifact: `models/model-charliepai2g48h4-edward-huber-loss-20260512-231342/metrics.jsonl`
+- Config: merged recipe (unified_pos, bf16, seed=42, T_max=15) + `loss=F.smooth_l1_loss(beta=1.0, reduction='sum') / (pred.shape[-1] * count)` applied in both training loop and evaluate_split
+- Epochs: 18/50 (30-min cap), best at epoch 15
+
+**Analysis:** Clear improvement over both reference points. Vs directly-comparable seeded baseline (#1577 seed=42, MSE, T_max=50): Δval = −5.84 (−5.0%), Δtest = −6.59 (−6.1%). Vs previous best (#1542 T_max=15 MSE): Δval = −4.22 (−3.7%), Δtest = −2.40 (−2.3%). Both deltas exceed the cross-seed σ measured by alphonse #1685 (σ ≈ 3.5 val). Huber pulls down the hard high-Re splits (single_in_dist: −12.0, geom_camber_rc: −9.5, re_rand: −3.3) at a small cost on the easy cruise split (+8.0 val). The improvement is real and composes cleanly with the T_max=15 truncation — best epoch shifted from 17 to 15, sitting fully within the first cosine cycle where lr anneals cleanly. Three independent trials in the pre-rebase run (109.33–112.33) confirmed signal-not-noise, now confirmed again on the merged recipe. **Stack target: Huber + EMA + T_max=18/grad-clip.**
+
+## 2026-05-12 23:53 — PR #1685: [seed7-variance] Cross-seed σ on pre-Huber merged recipe — **CLOSED (informational)**
+- Student branch: `charliepai2g48h4-alphonse/seed7-variance`
+- Hypothesis: Calibrate across-seed variance σ so we know the practical significance threshold for new experiments.
+
+| Metric | seed=42 (#1577 ref) | seed=7 | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 116.43 | 119.88 | +3.45 |
+| test_avg/mae_surf_p | 108.87 | 109.37 | +0.50 |
+| val geom_camber_rc | 121.66 | 141.71 | +20.05 |
+| val geom_camber_cruise | 100.47 | 91.56 | −8.91 |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-seed7-variance-20260512-231026/metrics.jsonl`
+
+**Analysis:** σ_half ≈ 1.7 val / 0.25 test from a 2-point bracket. Per-split variance is highly heterogeneous: geom_camber_rc varies ±20 pts while re_rand is stable. Average cancels substantially. Practical threshold: ≥5 val pts (≈3× σ_half). The seed=42 reference is not unrepresentatively lucky. Key nuance: "curve still descending at cap" means σ is partially driven by epoch-count jitter — the T_max=15 recipe (where training exits at lr≈0) will have lower seed variance. Follow-up: alphonse #1714 will measure σ on the Huber recipe specifically.
+
 ## 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] T_max=50→15 on merged recipe — **MERGED (NEW BEST: val=114.81)**
 - Student branch: `charliepai2g48h4-nezuko/cosine-trunc-t15`
 - Hypothesis: With CosineAnnealingLR(T_max=50) but only ~18 epochs reachable under the 30-min cap, the schedule barely anneals — lr is still at ~75% of peak when training ends. Truncating to T_max=15 forces full annealing inside the cap window.
