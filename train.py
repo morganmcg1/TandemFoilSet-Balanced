@@ -461,13 +461,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 # OneCycleLR(max_lr=1e-3) — upper-bracket peak LR vs merged max_lr=8e-4 (+25%).
 # pct_start=0.1 => ~2.1ep warmup at bs=1 (750 batches/ep), smooth C1-continuous curve.
 # div_factor=25 => initial_lr=4.0e-5; final_div_factor=10 => final_lr=4.0e-6.
 # T_MAX_EPOCHS=21 matches current bs=1 baseline (#2012 fit 21 epochs at 30-min cap).
 # Loop is capped at T_MAX_EPOCHS to prevent stepping past total_steps (OneCycleLR
 # would raise on the (total_steps+1)-th call).
+# AdamW betas=(0.9, 0.99): β2=0.99 (intermediate between 0.999 default and 0.95)
+# tests moderately faster 2nd-moment adaptation at bs=1 (this PR's Arm B).
 T_MAX_EPOCHS = 21
 n_batches_per_epoch = math.ceil(len(train_loader))
 total_steps = T_MAX_EPOCHS * n_batches_per_epoch
@@ -495,6 +497,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "adamw_betas": list(optimizer.defaults["betas"]),
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
