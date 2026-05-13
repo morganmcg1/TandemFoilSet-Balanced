@@ -499,3 +499,26 @@ T_max=20 stretches the cosine schedule so the LR at epoch 18 is 3.67e-6 (vs ~0 w
 ### Mechanism
 
 Finding #20 (pre-LN: lr=1.5e-4 optimal, lr=2e-4 +9.5% regression) was calibrated to pre-LN's unbounded residual stream. Under post-LN's bounded activations, the loss-landscape curvature absorbs higher LR cleanly — e1 gn_mean for lr=3e-4 was 95.9 vs predicted 120–160. The new post-LN LR optimum is **lr=2e-4** (1.33× the pre-LN value, not 2×). Both arms hit best_epoch=18/18 — schedule still has headroom even before stacking with T_max=20. The IID gains dominate (in_dist −6.04%, comfortably beating noise floor ~1.4%); rc remains the largest-headroom split. **Note:** This entry merges lr=2e-4 with T_max=18 (the post-LN baseline at the time of the experiment). The lr=2e-4 + T_max=20 stack is the natural next step and is being assigned immediately.
+
+## 2026-05-13 21:25 — PR #2572: LR midpoint refinement — lr=2.25e-4 wins (Finding #54 updated)
+
+- **test_avg/mae_surf_p: 46.8821** (NEW BEST — −2.14% vs previous 47.9076)
+- **val_avg/mae_surf_p:** 54.5798 (best epoch 18/18)
+- **Per-split:** in_dist=46.7260 (−2.30%), rc=60.1858 (−0.57%), cruise=33.0391 (−3.95%), re_rand=47.5775 (−2.66%)
+- **W&B run:** f5nlky02 (postln-lr-refinement group)
+- **Config change:** `--lr 2.25e-4` (Lion lr: 2e-4 → 2.25e-4); T_max=18
+- **Full config:** bf16 + bs=4 + accum=2 + Lion **lr=2.25e-4** + β1=0.9 + β2=0.99 + wd=0 + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + post-LN + t_max=18 + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2.25e-4`
+
+### Per-split test mae_surf_p
+
+| Split | mae_surf_p | Δ vs prev baseline (47.9076) |
+|---|---|---|
+| test_single_in_dist | 46.7260 | −2.30% |
+| test_geom_camber_rc | 60.1858 | −0.57% |
+| test_geom_camber_cruise | 33.0391 | **−3.95%** |
+| test_re_rand | 47.5775 | −2.66% |
+
+### Mechanism
+
+Finding #54 updated: the post-LN LR optimum is **lr=2.25e-4** (1.50× the pre-LN lr=1.5e-4), not 1.33×. The three-point LR curve (2e-4 / 2.25e-4 / 3e-4) shows a sharp interior optimum: val at the midpoint (54.58) is ~10× further from either endpoint (55.90, 55.79) than the endpoints are from each other (Δ=0.11). All four splits improve simultaneously — a clean basin-centroid effect, not IID/OOD redistribution. Clip-fire at e18=44.1%, slightly below both neighboring lr points (44.7%, 51.6%), suggesting the lr=2.25e-4 optimization path settles more cleanly. best_epoch=18 (still descending). Next: lr=2.5e-4 probe to map the right side of the valley, and lr=2.25e-4+T_max=20 stack.
