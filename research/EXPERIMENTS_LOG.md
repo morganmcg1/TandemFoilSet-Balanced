@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-13 [Round 62] UTC — Round 62
+
+### PR #2531 alphonse: Flow-conditional output bias — CLOSED (LOSS, 27th taxon)
+
+- **Branch:** `charliepai2g48h5-alphonse/flow-conditional-output-bias`
+- **Hypothesis:** `output = mlp2(ln_3(fx)) + flow_bias(Re, AoA0, AoA1)` with zero-init final Linear; first flow-condition-conditional output probe. Flow channels: ch 13=log_Re, ch 14=AoA0_rad, ch 18=AoA1_rad.
+- **Metrics:**
+
+| Metric | This PR | Old baseline #2307 | Δ (old) | NEW baseline #2553 | Δ (new) |
+|---|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 47.1620 | 42.3455 | **+11.4%** | **33.4935** | **+40.8%** |
+| `test_avg/mae_surf_p` | 40.6862 | 38.5059 | +5.7% | 28.6279 | +42.1% |
+
+Per-split:
+
+| Split | This PR | #2553 baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 28.4979 | 25.7691 | +10.6% |
+| `val_geom_camber_rc` | 64.3148 | 50.5514 | +27.2% |
+| `val_geom_camber_cruise` | 30.5132 | 20.2827 | +50.4% |
+| `val_re_rand` | 64.4051 | 37.3708 | +72.4% |
+
+- **Best epoch:** 69/70 (timeout-cut)
+- **Param count:** 328,350 (+115 vs baseline)
+- **Decoder weight-norm diagnostic:** mlp2_final_w.norm=1.3162, flow_bias_w.norm=0.3460, ratio=0.263
+
+**Analysis:** Classic additive double-counting failure. The path IS non-trivially load-bearing (ratio 0.263 — optimizer earned it weight, norm not zero), and bias outputs are physically reasonable (Ux swing ~0.16, Uy near-zero, p tiny). Yet ALL 4 splits regress +7-20%. This is the textbook "used but redundant" double-counting signature: optimizer split capacity between two pathways carrying overlapping information, and the split itself induced interference.
+
+**Cross-experiment confirmation → 27th taxon:** PR #2503 (additive, latent input) and PR #2531 (additive, broadcast flow scalars) fail with the SAME per-split signature despite structurally different input sources. This rules out "stale latent residual" as the mechanism and establishes:
+> **27th taxon: additive output-side conditioning paths from broadcast inputs produce decoder-fork interference — a structural property of decoder output forks, independent of input source.**
+
+**Student diagnostics:** Channel confirmation valuable — ch 13=log_Re, ch 14=AoA0_rad, ch 18=AoA1_rad (PR body had ch 18 labeled "fun_dim" — corrected in lab record). Student's analysis quality was exemplary.
+
+**Action:** Closed. Assigned #2588 alphonse multiplicative flow gate (`output = mlp2 * (1 + gate(Re, AoA0, AoA1))`; zero-init final layer → identity at init; cannot create additive double-counting by construction; scientific control on the axis).
+
+---
+
 ## 2026-05-14 21:00 UTC — Round 61
 
 ### PR #2553 edward: Lion lr=1.5e-4 sweep — MERGED ✓ (NEW BASELINE 33.4935)
