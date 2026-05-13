@@ -477,10 +477,29 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Decoupled wd: no L2 on biases/norm scales/placeholder — standard Transformer
+# practice (Lion paper recipe). "ln_" catches this codebase's LayerNorm names
+# (ln_1/ln_2/ln_3); "norm" is kept for any future norm-named params.
+_no_decay_names = ("bias", "ln_", "norm", "placeholder")
+decay_params = [p for n, p in model.named_parameters()
+                if not any(nd in n for nd in _no_decay_names)]
+no_decay_params = [p for n, p in model.named_parameters()
+                   if any(nd in n for nd in _no_decay_names)]
+decay_names = [n for n, p in model.named_parameters()
+               if not any(nd in n for nd in _no_decay_names)]
+no_decay_names = [n for n, p in model.named_parameters()
+                  if any(nd in n for nd in _no_decay_names)]
+n_decay = sum(p.numel() for p in decay_params)
+n_no_decay = sum(p.numel() for p in no_decay_params)
+print(f"Optimizer param groups: decay={len(decay_params)} tensors / {n_decay/1e6:.3f}M "
+      f"params, no_decay={len(no_decay_params)} tensors / {n_no_decay/1e3:.2f}K params")
+print(f"  no_decay names ({len(no_decay_names)}): {no_decay_names}")
 optimizer = Lion(
-    model.parameters(),
+    [
+        {"params": decay_params, "weight_decay": cfg.weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ],
     lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -499,6 +518,11 @@ run = wandb.init(
         "fourier_pos_dim": fourier_pos_dim,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "optimizer/decoupled_wd": True,
+        "optimizer/no_decay_filters": list(_no_decay_names),
+        "optimizer/n_params_decay": n_decay,
+        "optimizer/n_params_no_decay": n_no_decay,
+        "optimizer/no_decay_param_names": no_decay_names,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
