@@ -8,7 +8,7 @@
 | | |
 |---|---|
 | Optimizer | AdamW |
-| LR / Scheduler | OneCycleLR(max_lr=1.5e-3, total_steps=29×steps/ep, pct_start=0.1, div_factor=10, final_div_factor=1e3) |
+| LR / Scheduler | OneCycleLR(max_lr=1.5e-3, total_steps=29×steps/ep, pct_start=0.05, div_factor=10, final_div_factor=1e3) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
 | Epochs | 50 (capped at 30 min wall); eval_every_n_epochs=3 |
@@ -24,6 +24,41 @@
 Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
+
+### 2026-05-13 03:00 — PR #1719: OneCycleLR pct_start=0.05 — compositional OOD-camber win on new max_lr baseline
+
+- **val_avg/mae_surf_p:** **66.1352** (best epoch 27/29) ✓ NEW BASELINE
+- **test_avg/mae_surf_p (4-split, fp32 eval):** **56.8971**
+- **Per-split val (best epoch 27):**
+  - `val_single_in_dist`: 73.33 (was 73.78, −0.6% — already saturated by max_lr=1.5e-3)
+  - `val_geom_camber_rc`: 79.02 (was 80.71, −2.1%)
+  - `val_geom_camber_cruise`: 47.51 (was 51.72, **−8.2% — biggest mover, all from pct_start**)
+  - `val_re_rand`: 64.68 (was 68.10, −5.0%)
+- **Per-split test:**
+  - `test_single_in_dist`: ~60.5
+  - `test_geom_camber_rc`: ~70.8
+  - `test_geom_camber_cruise`: ~38.5
+  - `test_re_rand`: ~57.8
+- **W&B run:** `vfkbmgnp`
+- **vs prior baseline (#1716):** val −2.45 (−3.57%), test −3.46 (−5.72%) — **test gain > val gain → strong generalization**
+- **Peak GPU:** ~49 GB | **Sec/epoch:** ~62s | **Epochs:** 29 (best=27)
+- **Model diff vs PR #1716:** `pct_start=0.1 → 0.05` in OneCycleLR constructor + W&B config (2 lines)
+- **LR shape:** Peak LR (1.5e-3) reached at epoch 1.5 instead of 2.9. ~8 additional epochs in the deep-decay regime (LR < 1e-4).
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --wandb_name willow-r4-nezuko-onecycle-pctstart-005 --agent willowpai2g24h4-nezuko
+  ```
+
+**Key insight (mechanistic — compositional, not redundant):** `max_lr=1.5e-3` (#1716) and `pct_start=0.05` (#1719) address ORTHOGONAL failure modes:
+- High `max_lr` accelerates the in-dist basin descent (saturated at val_single_in_dist −8.8% in #1716; this PR adds only −0.6% there).
+- Low `pct_start` extends the deep-decay tail. OOD splits (geom_camber_rc, geom_camber_cruise) are NOT LR-saturated — they're starved for refinement steps at low LR. pct_start=0.05 gives them ~28% more deep-decay epochs and unlocks val_geom_camber_cruise −8.2% / val_re_rand −5.0%.
+
+This refutes the round-9 hypothesis that pct_start was within RNG noise — the single-knob result against the OLD baseline (max_lr=1e-3) was noise BECAUSE the in-dist basin wasn't reached without high LR. The composition test reveals the true mechanism.
+
+**Next target:** beat val_avg/mae_surf_p = 66.1352 / test_avg/mae_surf_p = 56.8971
+
+---
 
 ### 2026-05-13 01:30 — PR #1716: OneCycleLR max_lr=1.5e-3 — in-dist squeeze + LR ceiling probe
 
@@ -52,7 +87,7 @@ Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 **Key insight:** Higher peak LR accelerates convergence into the in-distribution basin (val_single_in_dist −8.8%). OOD splits (geom_camber_rc/cruise) are LR-saturated and don't move — they require a different lever (augmentation, regularization, geometry features). Best epoch shifts 29→27, indicating the schedule fully consumed its descent budget. Next step: push to max_lr=2e-3 to test the LR ceiling, and separately probe the OOD bottleneck.
 
-**Next target:** beat val_avg/mae_surf_p = 68.5843 / test_avg/mae_surf_p = 60.3521
+**Superseded** by PR #1719 (composition with pct_start=0.05).
 
 ---
 

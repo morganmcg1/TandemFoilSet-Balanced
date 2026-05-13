@@ -505,3 +505,77 @@ Per-split test deltas (showing the noise fingerprint):
 **Next:** Assigning edward to his own suggested follow-up #2: **surface-only p-weighting with milder weight (p_weight=2)**. Applying the weight only inside `surf_mask` is the surgical version of the hypothesis — directly targets the headline metric. This is the targeted retry that should determine whether the underlying mechanism (gradient re-allocation to p) is the right lever or whether channel-balance entirely needs a different approach.
 
 **Next target:** beat val_avg/mae_surf_p = **70.9449** on the new fp32-eval stack. The next experiment on this stack will establish the new faithful test_avg baseline.
+
+---
+
+## 2026-05-13 03:00 — PR #1719: OneCycleLR pct_start=0.05 (composition with max_lr=1.5e-3) — **MERGED, NEW BASELINE**
+- willowpai2g24h4-nezuko / willowpai2g24h4-nezuko/onecycle-pctstart-005
+- **Hypothesis (round 13 retry):** Round 9 single-knob result was within RNG noise vs OLD baseline (val −1.33%, test −0.82%). Composition test against NEW baseline (max_lr=1.5e-3) determines whether pct_start=0.05 is mechanistically distinct from or redundant with the max_lr increase.
+- **W&B:** `vfkbmgnp`
+- **SHA merged:** `c94e35392a0ea34e50aa68efd8985388c2f6208f`
+
+| Metric | Baseline #1716 (pct_start=0.1) | This run (pct_start=0.05) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 68.5843 | **66.1352** | **−2.45 (−3.57%)** ✓ |
+| test_avg/mae_surf_p | 60.3521 | **56.8971** | **−3.46 (−5.72%)** ✓ |
+| Mean sec/epoch | ~62.5 | ~62 | ≈unchanged |
+| Best epoch | 27/29 | 27/29 | same |
+
+Per-split val (the mechanistic decomposition):
+
+| Split | #1716 (max_lr) | #1719 (max_lr + pct_start) | Δ | Attribution |
+|---|---:|---:|---:|---|
+| val_single_in_dist | 73.78 | 73.33 | −0.45 (−0.6%) | saturated by max_lr (#1716 already moved this −8.8%) |
+| val_geom_camber_rc | 80.71 | 79.02 | −1.69 (−2.1%) | **NEW gain from pct_start** (this split was unmoved by max_lr) |
+| val_geom_camber_cruise | 51.72 | 47.51 | **−4.21 (−8.2%)** | **biggest mover, all from pct_start** |
+| val_re_rand | 68.10 | 64.68 | −3.42 (−5.0%) | combined effect |
+
+**Decision: MERGED.** This is a strong compositional win. Both metrics improve by far more than RNG noise floor; test improvement (5.72%) exceeds val improvement (3.57%) which is the fingerprint of genuine generalization, not noise.
+
+**Genuine learning (KEY MECHANISTIC INSIGHT):** `max_lr` and `pct_start` address ORTHOGONAL failure modes:
+- High `max_lr` (1e-3 → 1.5e-3) accelerates the in-dist basin descent. In #1716, val_single_in_dist moved −8.8% (the biggest mover there); in this PR it moves only −0.6% (saturated).
+- Low `pct_start` (0.1 → 0.05) extends the deep-decay tail. OOD splits (geom_camber_rc, geom_camber_cruise) are NOT LR-saturated — they're starved for refinement steps at low LR. pct_start=0.05 reaches peak LR at epoch 1.5 instead of 2.9, giving ~8 additional epochs in the deep-decay regime (LR < 1e-4) and unlocks val_geom_camber_cruise −8.2%.
+
+This refutes the round-9 hypothesis that pct_start was within RNG noise — the single-knob result against the OLD baseline (max_lr=1e-3) was noise BECAUSE the in-dist basin wasn't reached without high LR. Once the high-LR basin is locked in, pct_start=0.05 unlocks the OOD-camber improvement that was waiting in the schedule shape. **Compositional schedule changes can stack mechanistically when they hit different failure modes.**
+
+**Next target:** beat val_avg/mae_surf_p = **66.1352** / test_avg/mae_surf_p = **56.8971**
+
+---
+
+## 2026-05-13 03:00 — PR #1807: torch.compile mode=max-autotune-no-cudagraphs — CLOSED (compile overhead defeats throughput gain under cap)
+- willowpai2g24h4-tanjiro / willowpai2g24h4-tanjiro/compile-max-autotune-no-cudagraphs
+- **Hypothesis:** `mode="max-autotune-no-cudagraphs"` enables Triton kernel autotuning without the CUDAGraph capture path that hurt `reduce-overhead` (#1764). Expected: 5-15% per-epoch speedup → 1-4 additional epochs in the 30-min cap.
+- **W&B:** [run logged by student]
+
+| Metric | Baseline #1716 (default) | This run (max-autotune-no-cudagraphs) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 68.5843 | ~70.6 (+3.0%) | **WORSE** |
+| test_avg/mae_surf_p | 60.3521 | regression | **WORSE** |
+| Train sec/epoch (sustained) | ~62.5 | ~59 | **−5.5% (+5.5% faster, as predicted)** ✓ |
+| Eval throughput | baseline | +6.3% | ✓ |
+| Compile time (ep1) | ~5s | **~185s** | +180s |
+| Epochs in 30-min cap | 29 | **27** | **−2 (compile overhead ate 2 epochs)** |
+| CUDAGraph warnings | none | none | ✓ as predicted |
+| Triton autotuner picks | n/a | 36 logged | ✓ as predicted |
+
+**Decision: CLOSED — split outcome, throughput claim validated, schedule-amortization claim refuted.**
+
+**What worked (hypothesis validated):**
+- Kernel autotuning delivered +5.5% per-epoch speedup, exactly in the 5-15% predicted range
+- 36 Triton kernel picks logged by the autotuner — proof the autotuner did work
+- Zero CUDAGraph warnings under `dynamic=True`, validating the mode flag
+- Eval throughput also improved (+6.3%), confirming kernel improvements help across the board
+
+**What didn't (and the root cause):**
+- 180.6s extra compile cost ate ~2 epochs at the front
+- SCHEDULER_EPOCHS=29 hardcoded → with only 27 epochs completed, final LR was ~8.5e-5 instead of target 1.5e-6
+- Model under-trained → val_avg/mae_surf_p regressed by +3.0%
+
+**Genuine learning (KEY):** **Compile overhead must be amortized against achievable epoch count, not nominal schedule length.** `max-autotune-no-cudagraphs` would likely win on a longer run (45+ min wall) or with `SCHEDULER_EPOCHS` rescaled to the actual epoch count. Under the 30-min cap with SCHEDULER_EPOCHS=29 hardcoded, the compile tax is unrecoverable. There is no fix for this PR; the throughput attack class itself is closed under the current wall-clock budget.
+
+**Compile-mode attack class closed:**
+- `reduce-overhead` (#1764): CUDAGraph capture under dynamic=True records 9 shape variants, overhead defeats savings.
+- `max-autotune-no-cudagraphs` (#1807): kernel autotuning works (+5.5%) but 180s compile cost defeats the win under cap.
+- **Implication:** Python dispatch is NOT the bottleneck and the static-kernel ceiling is NOT recoverable under the 30-min cap. Remaining throughput attacks: SDPA flash backend, mesh-layout caching, batch size sweep.
+
+**Next:** Reassigning tanjiro to an OOD-tail experiment (final_div_factor sweep) — builds on the round-13 finding that deep-decay LR refinement is the mechanism behind nezuko's OOD gains.
