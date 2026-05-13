@@ -4,6 +4,30 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 12:10 — PR #1968: [max_lr-1e-3] OneCycleLR max_lr 8e-4→1e-3 (+25% peak) on bs=1 (thorfinn)
+
+- **`val_avg/mae_surf_p`:** **59.39** (best epoch 21/21 — still descending at schedule end)
+- **`test_avg/mae_surf_p`:** **51.40** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=58.84, geom_camber_rc=70.02, geom_camber_cruise=46.67, re_rand=62.03
+- **Per-split surface-p MAE (test):** single_in_dist=51.49, geom_camber_rc=63.38, geom_camber_cruise=38.23, re_rand=52.51
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, wd=1e-4, surf_weight=5.0, batch_size=1, seed=42, OneCycleLR(max_lr=1e-3, pct_start=0.1, anneal_strategy='cos', div_factor=25, final_div_factor=10, T_MAX_EPOCHS=21), AdamW(0.9,0.999, lr=5e-4 initial), smooth_l1_loss(beta=0.5), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
+- **Key change:** `max_lr=8e-4 → 1e-3` (+25%). All other schedule params identical. Initial LR = 1e-3/25 = 4e-5; final LR = 1e-3/250 = 4e-6.
+- **Improvement vs #2014 (OneCycleLR max_lr=8e-4, val=60.98):** val −1.59 (−2.61%), test −1.08 (−2.06%)
+- **Split detail:** single_in_dist improved most (val −4.50 / test −3.26); rc improved val −2.77 / test −0.70; cruise slightly worse val +0.77 / test +0.80; re_rand essentially flat val +0.12 / test −1.15. Single_in_dist and rc drove the win; cruise/re_rand are at similar floor.
+- **Training dynamics:** Epoch-1 max grad-norm ~100 (vs ~80 at 8e-4), fully absorbed by clip. Val monotonically decreased ep1→21; best epoch=21 (final), still descending — the model hasn't saturated the 30-min budget.
+- **Metric artifacts:** `models/model-charliepai2g48h4-thorfinn-max-lr-1e-3-20260513-112139/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-thorfinn --experiment_name "charliepai2g48h4-thorfinn/max-lr-1e-3"`
+- **17th effective merge. SUB-60 VAL MILESTONE HIT.**
+
+**Open questions / next steps after this merge:**
+- **max_lr upper bracket still open:** 1e-3 beats 8e-4; is 1.2e-3 even better? Or does instability kick in above 1e-3?
+- **Best epoch = final epoch** (still descending) — suggests more epochs or higher max_lr could push val further.
+- **cruise split slightly worsened** (+0.77 val / +0.80 test) — higher peak may overshoot the narrow camber-cruise geometry distribution. Architecture (n_hidden=192, edward #2217) may help here.
+- **EMA null result** (askeladd #1540, +0.05 val on this base) — confirmed EMA is moot on OneCycleLR, closing.
+- **rc split (hardest at val=70.02)** — still the dominant contributor to val avg. Architecture width or pct_start tuning may help.
+
+---
+
 ### 2026-05-13 11:05 — PR #2014: [onecycle-lr] OneCycleLR(max_lr=8e-4) replacing SequentialLR on bs=1 (nezuko)
 
 - **`val_avg/mae_surf_p`:** **60.98** (best epoch 20/21)
