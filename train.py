@@ -366,6 +366,110 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
     return out
 
 
+def evaluate_split_multi_tta(
+    model,
+    rescale_head,
+    loader,
+    stats,
+    surf_weight,
+    device,
+    tta_settings: dict[str, list[float]],
+) -> dict[str, dict[str, float]]:
+    """Evaluate a split under multiple TTA arms in a single pass over the data.
+
+    ``tta_settings`` maps arm name -> list of physical log_re deltas to average
+    over (e.g. ``{"no_tta": [0.0], "tta_0.05": [-0.05, 0.0, 0.05]}``). Each
+    delta is added to ``x[..., 13]`` (raw log(Re)) BEFORE normalization, so the
+    physical interpretation is Re' = Re * exp(delta). The model + rescale_head
+    are run once per unique delta, and each arm's prediction is the mean over
+    its delta set. MAE for each arm is accumulated independently in float64.
+    """
+    unique_deltas = sorted({d for deltas in tta_settings.values() for d in deltas})
+
+    arm_states: dict[str, dict] = {
+        name: {
+            "vol_loss_sum": 0.0,
+            "surf_loss_sum": 0.0,
+            "mae_surf": torch.zeros(3, dtype=torch.float64, device=device),
+            "mae_vol": torch.zeros(3, dtype=torch.float64, device=device),
+            "n_surf": 0,
+            "n_vol": 0,
+            "n_batches": 0,
+        }
+        for name in tta_settings
+    }
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            y_sample_finite = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            mask = mask & y_sample_finite.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+
+            # Compute predictions at each unique delta once; share across arms.
+            delta_preds_norm: dict[float, torch.Tensor] = {}
+            for delta in unique_deltas:
+                x_shift = x.clone()
+                x_shift[..., 13] = x_shift[..., 13] + delta
+                x_norm = (x_shift - stats["x_mean"]) / stats["x_std"]
+                log_re_norm = x_norm[:, 0, 13:14]
+                scale = rescale_head(log_re_norm)
+                pred = model({"x": x_norm})["preds"] * scale
+                delta_preds_norm[delta] = pred
+
+            B_now = y.shape[0]
+            y_good = torch.isfinite(y.reshape(B_now, -1)).all(dim=-1)
+            y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_safe = mask & y_good.unsqueeze(-1)
+
+            for arm_name, deltas in tta_settings.items():
+                if len(deltas) == 1:
+                    pred = delta_preds_norm[deltas[0]]
+                else:
+                    pred = torch.stack([delta_preds_norm[d] for d in deltas], dim=0).mean(dim=0)
+                state = arm_states[arm_name]
+                sq_err = (pred - y_norm) ** 2
+                state["vol_loss_sum"] += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                state["surf_loss_sum"] += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
+                state["n_batches"] += 1
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
+                ds, dv = accumulate_batch(
+                    pred_orig, y_safe, is_surface, mask_safe,
+                    state["mae_surf"], state["mae_vol"],
+                )
+                state["n_surf"] += ds
+                state["n_vol"] += dv
+
+    results: dict[str, dict[str, float]] = {}
+    for arm_name, state in arm_states.items():
+        nb = max(state["n_batches"], 1)
+        vol_loss = state["vol_loss_sum"] / nb
+        surf_loss = state["surf_loss_sum"] / nb
+        out = {
+            "vol_loss": vol_loss,
+            "surf_loss": surf_loss,
+            "loss": vol_loss + surf_weight * surf_loss,
+        }
+        out.update(finalize_split(state["mae_surf"], state["mae_vol"],
+                                  state["n_surf"], state["n_vol"]))
+        results[arm_name] = out
+    return results
+
+
 def _sanitize_path_token(s: str) -> str:
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
     return out.strip("-_.") or "experiment"
@@ -935,6 +1039,93 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
+        })
+
+        # --- TTA Re-bracket evaluation (PR #2534) ---
+        # Apply test-time augmentation by averaging predictions at
+        # Re * {e^-delta, 1.0, e^+delta} in log-space (delta added directly
+        # to physical x[..., 13] before normalization). Pure inference-time —
+        # the best checkpoint above is reused. We run multiple deltas in a
+        # single pass to share forward passes (no_tta + 0.02 + 0.05 + 0.10
+        # share the delta=0 forward pass, so the total unique forwards/sample
+        # is 7 across all four arms).
+        tta_settings = {
+            "no_tta": [0.0],
+            "tta_0.02": [-0.02, 0.0, 0.02],
+            "tta_0.05": [-0.05, 0.0, 0.05],
+            "tta_0.10": [-0.10, 0.0, 0.10],
+        }
+        print("\nEvaluating TTA arms on val splits...")
+        val_tta_loaders = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in val_splits.items()
+        }
+        val_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
+        for split_name, loader in val_tta_loaders.items():
+            arm_results = evaluate_split_multi_tta(
+                model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
+            )
+            for arm_name, metrics in arm_results.items():
+                val_tta_per_arm[arm_name][split_name] = metrics
+        val_tta_avg = {
+            arm: aggregate_splits(val_tta_per_arm[arm]) for arm in tta_settings
+        }
+        for arm_name in tta_settings:
+            val_avg_p = val_tta_avg[arm_name].get("avg/mae_surf_p", float("nan"))
+            print(f"  VAL  {arm_name:10s}  val_avg/mae_surf_p={val_avg_p:.4f}")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "tta_val",
+            "best_epoch": best_metrics["epoch"],
+            "tta_settings": tta_settings,
+            "val_tta_per_arm": val_tta_per_arm,
+            "val_tta_avg": val_tta_avg,
+        })
+
+        print("\nEvaluating TTA arms on test splits...")
+        test_tta_per_arm: dict[str, dict[str, dict[str, float]]] = {arm: {} for arm in tta_settings}
+        for split_name, loader in test_loaders.items():
+            arm_results = evaluate_split_multi_tta(
+                model, rescale_head, loader, stats, cfg.surf_weight, device, tta_settings,
+            )
+            for arm_name, metrics in arm_results.items():
+                test_tta_per_arm[arm_name][split_name] = metrics
+        test_tta_avg = {
+            arm: aggregate_splits(test_tta_per_arm[arm]) for arm in tta_settings
+        }
+        for arm_name in tta_settings:
+            t_avg_p = test_tta_avg[arm_name].get("avg/mae_surf_p", float("nan"))
+            print(f"  TEST {arm_name:10s}  test_avg/mae_surf_p={t_avg_p:.4f}")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "tta_test",
+            "best_epoch": best_metrics["epoch"],
+            "tta_settings": tta_settings,
+            "test_tta_per_arm": test_tta_per_arm,
+            "test_tta_avg": test_tta_avg,
+        })
+
+        # Pick best TTA arm by val_avg/mae_surf_p for headline reporting.
+        best_arm = min(tta_settings, key=lambda a: val_tta_avg[a].get("avg/mae_surf_p", float("inf")))
+        best_arm_val = val_tta_avg[best_arm]["avg/mae_surf_p"]
+        best_arm_test = test_tta_avg[best_arm]["avg/mae_surf_p"]
+        no_tta_val = val_tta_avg["no_tta"]["avg/mae_surf_p"]
+        no_tta_test = test_tta_avg["no_tta"]["avg/mae_surf_p"]
+        delta_val = best_arm_val - no_tta_val
+        delta_test = best_arm_test - no_tta_test
+        print(
+            f"\nBest TTA arm by val: {best_arm}  "
+            f"val_avg={best_arm_val:.4f} (Δ {delta_val:+.4f} vs no_tta {no_tta_val:.4f})  "
+            f"test_avg={best_arm_test:.4f} (Δ {delta_test:+.4f} vs no_tta {no_tta_test:.4f})"
+        )
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "tta_summary",
+            "best_epoch": best_metrics["epoch"],
+            "best_arm": best_arm,
+            "val_avg_by_arm": {a: val_tta_avg[a].get("avg/mae_surf_p") for a in tta_settings},
+            "test_avg_by_arm": {a: test_tta_avg[a].get("avg/mae_surf_p") for a in tta_settings},
+            "best_arm_val_avg/mae_surf_p": best_arm_val,
+            "best_arm_test_avg/mae_surf_p": best_arm_test,
+            "delta_val_vs_no_tta": delta_val,
+            "delta_test_vs_no_tta": delta_test,
         })
 
     write_experiment_summary(
