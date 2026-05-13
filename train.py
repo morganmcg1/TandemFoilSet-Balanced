@@ -457,6 +457,7 @@ class Config:
     slice_num: int = 64
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
+    n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
 
 
 cfg = sp.parse(Config)
@@ -491,7 +492,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=cfg.n_layers,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
