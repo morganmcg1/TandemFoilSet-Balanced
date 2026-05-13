@@ -1357,6 +1357,81 @@ Pivoting tanjiro onto the depth-direction follow-up:
 
 **6 PRs still forked from old baseline** — merge bar tightened by ~6 points for those when they terminate.
 
+---
+
+## 2026-05-13 — PR #1818 CLOSE: Slice_num 64→128 (cap-bounded structural close)
+
+- **Branch:** `willowpai2g48h2-alphonse/slice-num-128`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Upward direction of slice-routing axis: slice_num=64→128 doubles routing granularity.
+
+### Result table (W&B run as posted, terminal)
+
+| Metric | Value | Note |
+|---|---|---|
+| `val_avg/mae_surf_p` (SWA) | **408.69** | degenerate — SWA never activated |
+| `val_avg/mae_surf_p` (base, epoch 10) | 94.79 | last completed epoch |
+| Wall-clock | ~196s/epoch | **~75-80% overhead** vs baseline ~110s/epoch |
+| Epochs completed | 10 of 15 | cap-bounded; SWA window (epoch 11-15) never ran |
+| Slice-routing entropy | 4.52 → 3.33 | mechanism IS being used; saturation pattern matches baseline |
+
+### Decision
+
+- **Closed** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1818#issuecomment-4436780745
+- Rationale: structural close — slice_num=128 cannot fit in 30-min SENPAI_TIMEOUT_MINUTES envelope under current SWA schedule. Mechanism not broken; wall-clock cost dominates.
+
+### Analysis — high-information mechanism finding
+
+**The PhysicsAttention slice-routing einsum scales LINEARLY in slice_num, not in parameter count.** Student's wall-clock prediction (5-8% overhead) was off by ~10× because the dominant cost is the routing einsum, not the slice-projection layer. This is a high-information lesson: **wall-clock cost analysis for capacity-axis PRs must include operations that scale with the changed dimension, not just param count.**
+
+Slice-routing softmax IS being used at slice_num=128 — entropy 4.52→3.33 mirrors baseline saturation pattern. The model would likely converge to a competitive val if it had budget. **Slice-routing upward expansion is exhausted within the 30-min envelope.**
+
+### Reassignment to PR #1856: slice_num 64→32 (downward direction)
+
+Pivoting alphonse to the downward direction (student's own suggested follow-up #3):
+- **Mechanism:** smaller routing set forces more decisive softmax (entropy bounded by log(32)=3.47). With FiLM providing per-sample modulation, model may need fewer shared routing patterns.
+- **Wall-clock is on our side**: ~80s/epoch projected, well within 30-min cap with SWA fully active (rare experiment where the change makes training *faster*).
+- **Tests opposite mechanism question:** does FiLM stabilize a *smaller* routing set?
+- Forked from new grad-clip+FiLM baseline (74.62/66.14).
+- Decision rule: val < 74.62 → MERGE; 74.62 ≤ val < 76.0 → 2nd seed; 76.0 ≤ val < 78.0 → clean negative; val ≥ 78.0 → close (slice-routing axis fully exhausted, both directions tested).
+
+---
+
+## 2026-05-13 — PR #1734 rebase guidance (thorfinn asinh α=0.5)
+
+- **Branch:** `willowpai2g48h2-thorfinn/asinh-transform`
+- **Student:** willowpai2g48h2-thorfinn
+- **Status:** WIP, needs rebase onto advisor branch after #1731 grad-clip merge.
+
+### Action
+
+Posted rebase guidance comment at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1734#issuecomment-4436779382:
+- Rebase onto `icml-appendix-willow-pai2g-48h-r2` (now includes grad-clip max_norm=1.0)
+- Run with `--max_norm 1.0 --asinh_alpha 0.5`
+- Decision rule moves: SWA val < 74.62 → MERGE; SWA test < 66.14 → send back (test override)
+- Preserve grad-clip block + asinh logic during conflict resolution
+
+### Why
+
+The advisor branch was updated with PR #1731 (grad-clip MERGE) after thorfinn was assigned. The asinh mechanism (gentler-compression of pressure targets) is genuinely promising — we want a fair shot against the new baseline, not a stale-rebase close like wave-3 #1642.
+
+### Wave-6 portfolio status (post invocation 4)
+
+8 students, all active. 1 close + 1 reassignment + 1 rebase guidance this round.
+
+| PR | Student | Status | Mechanism axis | Forked from |
+|---|---|---|---|---|
+| #1856 | alphonse | WIP (NEW) | Slice_num 64→32 (downward) | 74.62 (new) |
+| #1838 | tanjiro | WIP | FiLM depth 2→3 | 74.62 (new) |
+| #1831 | nezuko | WIP | Max-norm sweep {0.5, 2.0} | 74.62 (new) |
+| #1821 | askeladd | WIP | Vol Ux/Uy weight 2.0× | 80.82 (old) |
+| #1734 | thorfinn | rebase pending | asinh α=0.5 | rebasing onto 74.62 |
+| #1757 | frieren | WIP | β=0.3 | 80.82 (old) |
+| #1758 | fern | WIP | Mesh subsample 0.9 | 80.82 (old) |
+| #1787 | edward | WIP | Re-jitter σ=0.05 | 80.82 (old) |
+
+**13 mechanism axes total** (slice-routing upward closure adds to count; downward now in play). All 8 students have active assignments.
+
 
 
 
