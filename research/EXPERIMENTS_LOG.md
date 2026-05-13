@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-13 01:55 — PR #1652: warmup-500 + cosine (β=0.5 rebase) — CLOSED (substituted by β)
+
+- **Branch:** `charliepai2g48h5-frieren/warmup-500-cosine`
+- **Student:** charliepai2g48h5-frieren
+- **Hypothesis:** Linear warmup over 500 steps stacked on Huber β=0.5 baseline; predicted additive gain since mechanisms (LR-trajectory vs loss-shape) seemed orthogonal.
+
+### Results
+
+| Metric | Baseline (#1633 β=0.5) | This PR (warmup+β=0.5) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 64.0705 | 63.9922 | −0.12% (noise floor) |
+| `test_avg/mae_surf_p` | 55.4961 | **55.9481** | **+0.81%** ✗ (all 4 test splits worse) |
+
+| Split | warmup+β=0.5 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 71.90 | 72.57 | −0.92% |
+| `val_geom_camber_rc` | 77.08 | 78.32 | −1.58% |
+| `val_geom_camber_cruise` | 44.36 | 43.37 | +2.28% |
+| `val_re_rand` | 62.62 | 62.02 | +0.98% |
+
+- **Epochs:** 36. **Time/epoch:** ~49.65s (unchanged). **Best epoch:** 36/36 (still descending).
+- **Artifacts:** `models/model-charliepai2g48h5-frieren-warmup-500-on-huber0.5-20260513-001402/metrics.jsonl`
+
+### Analysis — paper-grade mechanism finding
+
+The student's split-direction analysis is the high-value part. On β=1.0 (her original #1652 run), warmup helped OOD splits (camber_rc −6.4%, camber_cruise −3.5%, re_rand −3.1%) and hurt in-dist (+6.1%) — classical "warmup → flatter minimum" mechanism. On β=0.5 rebase, the pattern *inverts*: warmup helps in-dist and camber_rc, hurts camber_cruise and re_rand. **Warmup and β=0.5 are competing for the same "early-training stabilization" lever**, not stacking additively.
+
+**Three independent students converging on the same axis:**
+- Frieren #1652 warmup-500 on β=1.0: −1.62% val
+- Askeladd #1653 grad-clip on β=1.0: −14.92% val
+- Huber β=0.5 itself (PR #1633): −8% val
+
+All three reduce gradient-signal volatility in early training, but they substitute for each other (warmup on β=0.5 = no gain). Future "stabilization" interventions must come from a different mechanism (data-distribution warmup, schedule-completion alignment, etc.).
+
+### Conclusions
+
+- Closes the LR-trajectory-warmup axis on β=0.5 base.
+- The "early-step coherence" cluster is well-explored; further gains must come from capacity, data distribution, late-training schedule, or eval-time techniques.
+- Predicts: askeladd's #1653 rebase will show *partial* (not additive) gain — likely a substantial fraction of −14.92% will be captured by β=0.5 already.
+
+---
+
+## 2026-05-13 01:55 — PR #1660: EMA decay=0.999 — CLOSED (pod never started)
+
+- **Branch:** `charliepai2g48h5-tanjiro/ema-eval-decay-0.999-compile`
+- **Student:** charliepai2g48h5-tanjiro
+- **Hypothesis:** Per-step EMA of weights for evaluation, decay=0.999.
+- **Reason for closure:** Pod stuck in GraphQL rate-limit retry loop for 3+ hours (since ~22:30 UTC 2026-05-12). Only commit on branch is the assignment commit `1f9dfdd`. EMA experiment was never actually started.
+- **Reassignment:** PR #1789 surf_weight=15 (simpler 1-line change, smaller failure surface).
+
+---
+
+## 2026-05-13 01:55 — PR #1788: attention dropout=0.1 — ASSIGNED (frieren)
+
+- **Branch:** `charliepai2g48h5-frieren/attention-dropout-0.1`
+- **Hypothesis:** Activate PhysicsAttention dropout (existing wired parameter, currently 0.0) at p=0.1. Activation-level regularization, orthogonal to L2 (fern's WD work) and grad-clip (askeladd). Targets slice-attention pathway redundancy.
+- **Config change:** Add `dropout=0.1` to `model_config` dict.
+- **Baseline to beat:** val_avg < 64.0705.
+
+---
+
+## 2026-05-13 01:55 — PR #1789: surf_weight 10 → 15 — ASSIGNED (tanjiro)
+
+- **Branch:** `charliepai2g48h5-tanjiro/surf-weight-15`
+- **Hypothesis:** Up-weight surface loss term to align training objective with the surf-p-primary validation metric. +50% bump to test the loss-balancing axis on β=0.5 base.
+- **Config change:** `cfg.surf_weight` 10.0 → 15.0 (1-line in dataclass).
+- **Baseline to beat:** val_avg < 64.0705.
+
+---
+
 ## 2026-05-13 01:15 — PR #1727: weight_decay 1e-4 → 5e-4 — CLOSED (regression)
 
 - **Branch:** `charliepai2g48h5-fern/weight-decay-5e-4`

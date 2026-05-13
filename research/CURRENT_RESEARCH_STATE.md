@@ -1,22 +1,22 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 01:15 (round-11: closed #1727 fern weight_decay=5e-4 (+4.06%, under-fit on 36-epoch budget); closed #1701 alphonse batch=8 (+16.1%, step-count starvation −54% grad updates); sent back #1653 askeladd grad-clip for β=0.5 rebase (result on stale β=1.0 base, lever is real −14.92% on old baseline); assigned #1774 alphonse lr=7.5e-4 (faster steps per same epoch count); assigned #1775 fern weight_decay=5e-5 (DOWN sweep to bracket WD optimum). Baseline still 64.07.)
+- **As of:** 2026-05-13 01:55 (round-12: closed #1652 frieren warmup-500 rebase (−0.12% val noise / +0.81% test regression; warmup is *substituted* by β=0.5, not additive); closed #1660 tanjiro EMA (pod stuck 3+hrs in GraphQL rate-limit, never started); assigned #1788 frieren attention-dropout=0.1 (orthogonal regularization axis); assigned #1789 tanjiro surf_weight=15 (loss-balance axis, 1-line change for low failure surface). Key insight: early-training-stabilization axis (warmup + grad-clip + β-shape) is *one* lever with multiple substitutable implementations. Baseline still 64.07.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
   `SENPAI_TIMEOUT_MINUTES=30` cap per training execution).
 
-## Round-11 research focus
+## Round-12 research focus
 
 4 merged winners → baseline 64.07 (from 110.76 at round-1 start, -42%). Primary focus:
 1. **Stacking sampler 2x on β=0.5** — nezuko #1619 (highest-confidence win).
-2. **Stacking warmup-500 on β=0.5** — frieren #1652 (OOD lever confirmed on old base).
-3. **Loss shape sweep β=0.25/L1** — thorfinn #1700 (monotone β signal: 2.0>1.0>0.5).
-4. **Grad-clip β=0.5 rebase** — askeladd #1653 (lever is real: -14.92% on old β=1.0 base; must rebase to test stacking).
-5. **FFN capacity** — edward #1741 (mlp_ratio=3: targeted capacity vs uniform widening).
-6. **LR bump** — alphonse #1774 (lr=7.5e-4: step-size increase orthogonal to schedule).
-7. **WD bracket DOWN** — fern #1775 (weight_decay=5e-5: completes the 3-point bracket around 1e-4 default).
-8. **EMA eval** — tanjiro #1660 (pod rate-limited but alive, will resume when quota clears).
+2. **Loss shape sweep β=0.25/L1** — thorfinn #1700 (monotone β signal: 2.0>1.0>0.5).
+3. **Grad-clip β=0.5 rebase** — askeladd #1653 (lever is real: -14.92% on old β=1.0 base; must rebase to test stacking).
+4. **FFN capacity** — edward #1741 (mlp_ratio=3: targeted capacity vs uniform widening).
+5. **LR bump** — alphonse #1774 (lr=7.5e-4: step-size increase orthogonal to schedule).
+6. **WD bracket DOWN** — fern #1775 (weight_decay=5e-5: completes the 3-point bracket around 1e-4 default).
+7. **Attention dropout** — frieren #1788 (p=0.1: activation-level regularization, distinct from L2).
+8. **Loss balancing** — tanjiro #1789 (surf_weight=15: up-weight surface loss for surf-p-primary metric).
 
 **Architecture axis status:** Depth (n_layers) CLOSED by #1413+#1588. Uniform width (n_hidden) CLOSED by #1398+#1587+#1688. Only mlp_ratio (FFN-only) and n_head untested.
 
@@ -40,6 +40,8 @@
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
 |---|---|---|---|---|
+| #1652 ✗ | charliepai2g48h5-frieren | warmup-500 + cosine (β=0.5 rebase) | 63.9922 | −0.12% val (noise floor) + 0.81% test regression. **Warmup substituted by β=0.5**, not additive — same early-stabilization lever. Closes warmup axis on β=0.5 base. |
+| #1660 ✗ | charliepai2g48h5-tanjiro | EMA decay=0.999 (never started) | n/a | Pod stuck in GraphQL rate-limit retry for 3+ hours. Reassigned to simpler surf_weight axis. |
 | #1727 ✗ | charliepai2g48h5-fern | weight_decay 1e-4 → 5e-4 | 66.6723 | +4.06% regression. Under-fit on 36-epoch budget: trajectory lagged baseline by 3-5 epochs. WD-UP axis closed at 5×. |
 | #1701 ✗ | charliepai2g48h5-alphonse | batch_size 4 → 8 + compile | 74.4033 | +16.1% regression. Step-count starvation: −54% grad updates (6,392 vs 13,875). Batch scaling confirmed dead-end at TandemFoil scale. |
 | #1688 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 160 + compile | 73.6658 | Width ruled out at 30-min cap (+5.49% vs 69.83 baseline). Same compute-starvation pattern as depth. |
@@ -65,13 +67,13 @@
 | #1652 | charliepai2g48h5-frieren | Warmup-500 — **2nd rebase onto β=0.5** (OOD lever confirmed, expects compounding) | Schedule |
 | #1700 | charliepai2g48h5-thorfinn | Huber β=0.25 + pure L1 sweep (continue from β=0.5 win) | Loss shape |
 | #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 — **β=0.5 REBASE** (was on stale β=1.0 baseline) | Optimization × diagnostic |
-| #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Eval ensemble |
 | #1700 | charliepai2g48h5-thorfinn | Huber β=0.25 + pure L1 sweep (continue from β=0.5 win) | Loss shape |
 | #1619 | charliepai2g48h5-nezuko | Sampler 2× — **3rd rebase onto β=0.5** | Data/sampler |
-| #1652 | charliepai2g48h5-frieren | Warmup-500 — **2nd rebase onto β=0.5** | LR schedule |
 | #1741 | charliepai2g48h5-edward | `mlp_ratio` 2 → 3: targeted FFN capacity | Architecture |
 | #1774 | charliepai2g48h5-alphonse | lr 5e-4 → 7.5e-4: faster steps per epoch | Optimizer/LR |
 | #1775 | charliepai2g48h5-fern | weight_decay 1e-4 → 5e-5: WD bracket DOWN sweep | Regularization |
+| #1788 | charliepai2g48h5-frieren | attention dropout=0.1: activation-level regularization | Regularization |
+| #1789 | charliepai2g48h5-tanjiro | surf_weight 10 → 15: up-weight surface loss term | Loss balance |
 
 > **Note on #1700:** Sweeping β downward from 0.5 (merged winner). β=0.25 narrows
 > the quadratic region to |e|<0.25, further L1-ifying the loss. Arm B tests pure L1.
@@ -169,6 +171,7 @@
 - **n_layers scaling (depth):** fully ruled out. Both n_layers=7+fp32 (#1413) and n_layers=6+bf16 (#1588) lost.
 - **n_hidden width scaling:** fully ruled out. n_hidden=192+fp32 (#1398), n_hidden=160+bf16-stale (#1587), n_hidden=160+compile (#1688, +5.49%). All fail under 30-min cap via compute starvation.
 - **weight_decay UP (1e-4→5e-4):** refuted by PR #1727 (+4.06%). Stronger L2 under-fits on this 36-epoch budget. WD-up axis closed.
+- **Warmup-500 on β=0.5 base:** refuted by PR #1652 rebase. Warmup is substituted by Huber β=0.5 (both stabilize early training via different mechanisms). Closes the warmup axis on β=0.5 — confirms "early-stabilization is one lever with multiple implementations" hypothesis. Future stabilization work must come from a different mechanism (e.g., curriculum).
 - **Per-channel loss weights [1,1,3]:** refuted by PR #1428. All 4 splits worsened.
 - **AdamW β2=0.95:** refuted by PR #1676. Mechanism mismatch: transformer-recipe β2 suited for large-scale LM, not 1499-sample Transolver. β2 axis closed.
 
