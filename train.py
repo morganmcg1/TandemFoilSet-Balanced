@@ -118,8 +118,8 @@ class FourierCoordEnc(nn.Module):
     def __init__(self, n_freqs: int = 4):
         super().__init__()
         self.n_freqs = n_freqs
-        freqs = 2.0 ** torch.arange(n_freqs).float()
-        self.register_buffer("freqs", freqs)
+        freqs = 2.0 ** torch.arange(n_freqs).float()  # dyadic init {1,2,4,8,16,32}
+        self.freqs = nn.Parameter(freqs)  # H44: learned Fourier coord frequencies
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         coords = x[..., :2]
@@ -390,6 +390,8 @@ def write_experiment_summary(
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
             summary[f"best_val/{split_name}/{k}"] = v
+    if "learned_freqs" in best_metrics:
+        summary["best/fourier_learned_freqs"] = best_metrics["learned_freqs"]
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
         summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
@@ -462,6 +464,10 @@ val_loaders = {
 N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
+# H44: sanity-check learnable Fourier frequencies.
+print(f"[H44] Initial freqs: {fourier_enc.freqs.data.tolist()}")
+print(f"[H44] freqs is Parameter: {isinstance(fourier_enc.freqs, nn.Parameter)}")
+
 model_config = dict(
     space_dim=2,
     fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
@@ -476,9 +482,11 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-n_params = sum(p.numel() for p in model.parameters())
+n_model_params = sum(p.numel() for p in model.parameters())
+n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
+n_params = n_model_params + n_fourier_params
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"n_params: {n_params}")
+print(f"n_params: {n_params} (expected 831191 + {n_fourier_params} = baseline + freq params)")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 for i, b in enumerate(model.blocks):
@@ -487,7 +495,8 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+trainable_params = list(model.parameters()) + list(fourier_enc.parameters())
+optimizer = torch.optim.AdamW(trainable_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -556,7 +565,7 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
+        total_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=25.0)
         optimizer.step()
         scheduler.step()
 
@@ -584,12 +593,15 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "learned_freqs": fourier_enc.freqs.detach().cpu().tolist(),
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    # H44: snapshot learned Fourier frequencies for this epoch.
+    learned_freqs = fourier_enc.freqs.detach().cpu().tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -603,12 +615,14 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "fourier/learned_freqs": learned_freqs,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    print(f"  learned_freqs: {[f'{f:.3f}' for f in learned_freqs]}")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -622,7 +636,13 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_layer_scale_stats})
+final_learned_freqs = fourier_enc.freqs.detach().cpu().tolist()
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "final",
+    "fourier/final_learned_freqs": final_learned_freqs,
+    **final_layer_scale_stats,
+})
+print(f"Final learned Fourier freqs: {[f'{f:.3f}' for f in final_learned_freqs]}")
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
     print(
