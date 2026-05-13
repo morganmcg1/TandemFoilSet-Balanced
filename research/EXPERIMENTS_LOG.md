@@ -1,5 +1,98 @@
 # SENPAI Research Results
 
+## 2026-05-13 07:00 — PR #1978: Re-curriculum via per-sample log(Re)-tail loss multiplier (not sampler)
+
+- **Branch:** `willowpai2g48h4-tanjiro/re-loss-weight` (CLOSED — structural regression)
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B run:** `3rq00dn0`
+- **Hypothesis:** Loss-side mechanism (vs the failed sampler-side #1868): apply `w = 1 + α × |normalized(log_Re)|` as per-sample loss multiplier, expecting to focus learning on Re-distribution tails (re_rand, geom_camber_rc).
+
+### Results
+
+| Metric | Baseline | Arm 1 (α=0.5) | Δ |
+|--------|---------|---------------|---|
+| `val_avg/mae_surf_p` | 97.9914 | 114.5247 | **+16.87% regression** |
+| `test_avg/mae_surf_p` (4-split) | 88.5311 | 101.9300 | **+15.13% regression** |
+| Best epoch | 11 | 12 / 14 | — |
+
+Arm 2 (α=1.0) correctly skipped per branching rule.
+
+Per-split val MAE:
+| Split | Baseline | Arm 1 | Δ |
+|-------|----------|-------|---|
+| val_single_in_dist | 120.31 | 140.34 | +16.7% |
+| val_geom_camber_rc | 115.98 | 137.99 | +19.0% |
+| val_geom_camber_cruise | 66.04 | 80.66 | +22.1% (worst regression) |
+| val_re_rand | 89.64 | 99.10 | +10.6% (smallest regression — opposite of prediction) |
+| **val_avg** | **97.99** | **114.52** | **+16.87%** |
+
+### Mechanism diagnosis — exemplary BIVW-interaction analysis from student
+
+The student identified the structural failure precisely:
+- BIVW (1/var(y_norm)) **implicitly up-weights low-Re samples** since high-Re has larger residual variance in normalized space
+- Symmetric Re-tail boost composed multiplicatively with BIVW produces:
+  - **Low-Re tail**: BIVW↑ × Re-tail↑ = double up-weight (already-easy samples dominate)
+  - **Mid-Re**: BIVW≈1 × Re-tail↓ = down-weighted (most informative samples lose gradient)
+  - **High-Re tail**: BIVW↓ × Re-tail↑ = approximate cancellation (intended boost absorbed)
+
+The smoking gun: **val_geom_camber_cruise regressed MOST (+22.1%)** while it was expected to be unaffected. The easiest split sits at higher-Re samples where the Re-tail boost should help but is cancelled by BIVW.
+
+`re_w` diagnostics: mean=1.36, range=[1.00, 3.19] — meaningful, non-trivial signal (not a null perturbation like #1868), but downstream behavior is destructive.
+
+### Conclusion
+
+Combined with PR #1868 (sampler-side variant, structural no-op), the entire **symmetric Re-tail re-weighting** family is now characterized as structurally incompatible with BIVW. The student's own follow-up #4: "Re-curriculum as conceived (symmetric tail boost composed with BIVW) is not a path to beat 97.9914 — recommend closing this thread."
+
+### Residual opportunities (not assigned)
+- **Asymmetric high-Re-only weighting**: `w = 1 + α × max(0, normalized(log_Re))` — avoids the BIVW low-Re double-counting
+- **Replace BIVW with Re-tail (not compose)**: tests whether they're addressing the same problem
+- Future-loop candidates if other directions stall
+
+---
+
+## 2026-05-13 07:00 — PR #1951: SWA late-epoch averaging: avg last K checkpoints post-training
+
+- **Branch:** `willowpai2g48h4-askeladd/swa-late-epoch` (CLOSED — mechanism works, trajectory variance overwhelms)
+- **Student:** willowpai2g48h4-askeladd
+- **W&B runs:** `aawyil4y` (k=3, start=12), `3j5wwshz` (k=5, start=10)
+- **Hypothesis:** Average last K checkpoint weights post-training to center on local basin (bypassing EMA's early-training contamination from PR #1808).
+
+### Results
+
+| Arm | best single-epoch | last-epoch | SWA-averaged | SWA gain | vs baseline 97.99 |
+|-----|-------------------|------------|--------------|----------|-------------------|
+| Arm 1 (k=3, start=12) | 105.6335 (ep 13) | 109.7513 | **101.2533** | **−4.38 (−4.1%)** | **+3.33% regression** |
+| Arm 2 (k=5, start=10) | 105.8172 (ep 14) | 105.8172 | **102.4204** | **−3.40 (−3.2%)** | **+4.52% regression** |
+
+Test 4-split: Arm 1 = 89.4132 vs 88.5311 baseline → **+0.99% test regression** (much smaller than val gap of +3.33%).
+
+### Analysis
+
+**SWA mechanism worked exactly as predicted**:
+- k=3 SWA(ep 12,13,14) is **8.7 points lower** than the mean of the 3 epochs (108.46), **4.4 points lower** than minimum
+- k=3 beats k=5 (101.25 vs 102.42) — including epochs 10-11 (val 119, 116) drags toward less-converged weights
+
+**Why it fails to beat baseline**: This run's trajectory landed in a much worse basin (best single ~105.6) than baseline's trajectory (best single ~97.99). That's an **~8 point trajectory gap** that the **~4 point SWA gain** cannot bridge. Likely seed variance.
+
+**Interesting side finding**: Test gap (+0.99%) is much smaller than val gap (+3.33%). Consistent with SWA's regularization effect helping generalization more than val MAE — but single-seed evidence is anecdotal.
+
+### Conclusion
+
+SWA implementation is sound and reusable. But under the 30-min budget with 14 epochs:
+- Seed variance can produce ±8 point swings in best single-epoch val
+- SWA mechanism delivers ~4 points of basin-centering improvement
+- These are not commensurate; trajectory variance dominates
+
+The student's follow-up #1 (paired-seed comparison) would isolate the SWA delta but doubles GPU cost. Not the highest-value use of askeladd's slot. Mechanism noted for future plateau-protocol use.
+
+### Residual opportunities
+- Re-run baseline + SWA on a paired seed
+- k=2 (epochs 13-14 only) — student's follow-up #2
+- Compose with longer-budget runs (--epochs 20) — student's follow-up #3
+- Investigate why this trajectory landed worse than baseline — could be a deeper hyperparameter sensitivity issue
+
+---
+
 ## 2026-05-13 06:35 — PR #1950: Adaptive Huber delta: EMA of p75 per-batch residuals (self-tuning δ)
 
 - **Branch:** `willowpai2g48h4-fern/adaptive-huber-delta` (CLOSED — mechanism collapse)

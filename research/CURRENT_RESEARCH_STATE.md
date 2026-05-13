@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 20)
+- **As of:** 2026-05-13 (updated cycle 22)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -44,12 +44,12 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 
 1. **Decoupled LR extension** — merged at 5e-3 (−0.18%); trend not exhausted. Push to 7e-3/1e-2 with 2-epoch head warmup to tame late oscillation. #1949 thorfinn (WIP).
 2. **Stochastic Depth (DropPath)** — regularization angle no other PR is exploring. p∈{0.05, 0.1} on Transolver residual branches. Targets the late-epoch oscillation pattern seen in PR #1795 baseline. #1987 fern (NEW).
-3. **SWA late-epoch averaging** — average last K checkpoints post-training, bypassing EMA's early-training contamination issue. #1951 askeladd (WIP).
+3. **AdamW β2 sweep** — default β2=0.999 has ~700-step half-life, longer than our 5200-step training budget. Try {0.95, 0.98} for faster variance tracking, standard transformer best practice. #2015 askeladd (NEW).
 4. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
 5. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
 6. **Per-channel Huber delta** — δ_p vs δ_ux/uy. #1922 nezuko (WIP).
 7. **Encoder LR re-tune** — encoder LR was calibrated pre-Huber/pre-decoupled-head; re-sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3. #1974 edward (NEW).
-8. **Re-curriculum via loss multiplier** — per-sample `w = 1 + α × |normalized(log_Re)|` applied as loss multiplier; avoids sampler no-op structural failure from #1868. #1978 tanjiro (NEW).
+8. **LogCosh surface loss** — different loss family from Huber-δ; C²-smooth instead of Huber's C¹ kink. Tests if gradient smoothness at the δ boundary matters for Adam's variance tracking. #2013 tanjiro (NEW).
 
 ## Key insights
 
@@ -67,10 +67,10 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
 | 1922 | nezuko | per-channel-huber-delta | WIP | δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}; tests if global δ over-flattens Ux/Uy distributions |
 | 1949 | thorfinn | surf-head-lr-warmup | WIP | surf_head_lr ∈ {7e-3, 1e-2} + 2-ep head warmup; extends PR #1795 trend |
-| 1951 | askeladd | swa-late-epoch | WIP | Avg last K checkpoints post-training; avoids EMA's early-training drag |
 | 1974 | edward | encoder-lr-retune | WIP | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
-| 1978 | tanjiro | re-loss-weight | WIP | Per-sample loss multiplier 1+α×|norm(log(Re))|; loss-side Re-curriculum avoiding #1868 sampler no-op |
-| 1987 | fern | stochastic-depth | WIP (NEW) | DropPath p∈{0.05, 0.1} on Transolver residual branches; only regularization experiment running |
+| 1987 | fern | stochastic-depth | WIP | DropPath p∈{0.05, 0.1} on Transolver residual branches; only regularization experiment running |
+| 2013 | tanjiro | logcosh-surface-loss | WIP (NEW) | LogCosh C²-smooth alternative to Huber-δ kink. Arms: scale={1.0, 0.5} |
+| 2015 | askeladd | adamw-beta2-0.95 | WIP (NEW) | AdamW β2 ∈ {0.95, 0.98}; default 0.999 too slow for 14-epoch budget |
 
 ## Working hypotheses
 
@@ -84,7 +84,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 8. **surf_weight tuning on Huber baseline** — **rejected** (PR #1720, all arms +7-21% regression). Optimum is at sw=10; hypothesis was wrong about Huber requiring higher surf_weight. Volume MSE starvation mechanism identified.
 9. **Frozen p-variance stratified sampling** — **rejected** (PR #1746, +272% regression). Variance dynamic range is 8 OOM; 1/var(p) sampler collapses effective training set to a handful of low-Re samples. Conceptually sound but wrong functional form.
 9a. **log(Re) quantile bucketing** — **rejected** (PR #1868, +8.4% regression). Quantile boundaries produce equal-count buckets; 1/count weights then ≈ uniform — structural no-op. Only adds ±2% perturbation to existing domain weights. Correct mechanism is loss-side multiplier: PR #1978.
-9b. **Re-curriculum via per-sample loss multiplier** — testing (PR #1978 tanjiro). `w = 1 + α × |normalized(log_Re)|` applied as per-sample loss multiplier. Avoids sampler structural cancellation. Tests if Re-tail focus improves re_rand + geom_camber_rc.
+9b. **Re-curriculum via per-sample loss multiplier** — **rejected** (PR #1978, +16.87% regression). Symmetric tail boost composed multiplicatively with BIVW creates destructive interaction: BIVW already implicitly up-weights low-Re samples (since high-Re has larger normalized variance), so symmetric Re-tail double-up-weights low-Re and cancels high-Re boost. Mid-Re samples lose gradient signal. Entire 'symmetric Re-tail re-weighting' direction now characterized as structurally incompatible with BIVW. Both sampler (#1868) and loss-side (#1978) variants fail for related reasons. Direction closed.
 10. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97% regression). 19% slower per-epoch → 12 vs 14 epochs → underfit. Confirms wall-clock-bound principle.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30% regression). +37% per-epoch cost → 10 vs 14 epochs. Fourth wall-clock-bound capacity failure. Pareto frontier confirmed: depth=5/14ep is optimal; all capacity expansions on depth+slice axes lose.
@@ -97,8 +97,10 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 14. **EMA model weights** — **rejected** (PR #1808, +7.8-16.2% regression). 14-epoch budget too short; model in descent phase, not noisy-plateau. EMA window contaminates evaluation with early-training weights. Budget mismatch, not hypothesis failure.
 15. **Decoupled LR for surf_head vs encoder** — **confirmed** (PR #1795, −0.18%). surf_head_lr=5e-3 (10×encoder) is the winning arm; monotonic improvement trend across 1e-3→3e-3→5e-3 not yet exhausted. Extending: PR #1949 thorfinn tests 7e-3/1e-2 with warmup.
 16. **Adaptive Huber δ** — **rejected** (PR #1950, +2.25% regression). EMA δ collapsed to clamp floor (0.2) in 60 steps and stayed 88% of training — effectively fixed-δ=0.2. Decoupled-LR merger made δ landscape flatter (PR #1627 saw +17% at δ=0.2; this run only +2.25%). Direction exhausted at this baseline.
-17. **SWA late-epoch averaging** — testing (#1951 askeladd, NEW). Average last K checkpoints to avoid EMA's early-training drag.
-18. **Stochastic Depth (DropPath)** — testing (#1987 fern, NEW). p∈{0.05, 0.1} on Transolver residual branches. Targets late-epoch oscillation; no other PR is exploring regularization.
+17. **SWA late-epoch averaging** — **rejected** (PR #1951, +3.33% val, +0.99% test regression). SWA mechanism worked exactly as predicted: averaged checkpoint is 4 points better than best single epoch. But this run's trajectory landed ~8 points worse than baseline (best single epoch 105.63 vs 97.99) due to seed variance. The 4-point mechanism gain cannot bridge 8-point trajectory gap. Direction closed; mechanism would still help on a baseline-quality trajectory but cannot be reliably evaluated under our budget without paired-seed.
+18. **Stochastic Depth (DropPath)** — testing (#1987 fern). p∈{0.05, 0.1} on Transolver residual branches.
+19. **LogCosh surface loss** — testing (#2013 tanjiro, NEW). C²-smooth alternative to Huber's C¹ δ-kink. Tests if gradient smoothness affects Adam's variance tracking.
+20. **AdamW β2 sweep** — testing (#2015 askeladd, NEW). Default β2=0.999 has ~700-step half-life vs 5200-step total budget; try 0.95 (transformer standard) and 0.98.
 
 ## Closed / rejected hypotheses
 
@@ -118,6 +120,8 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 - **PR #1868** (log(Re) quantile bucketing) — +8.4% regression. Structural no-op: quantile bounds → equal counts → 1/count weights ≈ uniform. Max/min ratio 1.02×; only ±2% perturbation of existing domain weights. Mechanism itself is broken. Follow-up: loss-side multiplier (#1978).
 - **PR #1924** (n_head=8) — +18.84% regression. +31% per-epoch wall-clock → 11 vs 14 epochs. Fifth wall-clock-bound failure. Pareto frontier fully characterized.
 - **PR #1950** (adaptive Huber δ via EMA of p75 residuals) — +2.25% val regression, +1.07% test. δ collapsed to clamp floor (0.2) within 60 steps because p75 of normalized residuals has median ~0.106. Effectively fixed-δ=0.2 run. Useful side finding: decoupled-LR merger flattened the δ landscape (compare to PR #1627's +17% at δ=0.2). Direction exhausted.
+- **PR #1978** (Re-curriculum via loss multiplier) — +16.87% val, +15.13% test regression. Symmetric Re-tail × BIVW creates destructive interaction: low-Re double-up-weighted, mid-Re down-weighted, high-Re boost cancelled. Both symmetric Re-tail variants (sampler #1868 and loss #1978) closed.
+- **PR #1951** (SWA late-epoch averaging) — +3.33% val, +0.99% test regression. SWA mechanism worked (averaged ckpt 4 points better than best single epoch) but trajectory landed in worse basin than baseline (seed variance). Cannot reliably evaluate without paired-seed comparison under 30-min cap. Direction closed.
 
 ## Potential next directions
 
