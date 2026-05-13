@@ -39,7 +39,11 @@ Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
 - **#2420 tanjiro (lr=7e-4 with merged betas=(0.9, 0.95))**: in flight; tests LR-betas interaction at +40% lr with reactive beta2=0.95.
 - **#2397 fern (grad-clip max_norm=0.5 downward bisect)**: in flight; symmetric bisect of clip threshold.
 
-**Idle students (4):** alphonse, askeladd, frieren, thorfinn — all just had PRs closed at 17:45; new hypotheses being generated.
+**Just assigned (2026-05-13 18:20):**
+- **#2501 askeladd (β_p=0.625 upward bisect):** natural follow-up to #2163; β_p<0.5 hurt hard splits, β_p>0.5 should help; per-channel loop infrastructure already in place.
+- **#2504 frieren (QK-RMSNorm):** normalize Q and K to unit norm per head inside PhysicsAttention; PaLM-2/Gemma-2/ViT-22B style; targets attention entropy collapse on heterogeneous mesh domains.
+- **#2505 alphonse (SiLU activation):** GELU → SiLU in all FFN blocks; improves gradient flow under 100%-clipped training; LLaMA/DINOv2 style; zero param change.
+- **#2506 thorfinn (per-channel target normalization):** per-channel mean/std instead of global scalar; FNO/GINO standard; removes implicit double-weighting of pressure channel.
 
 **Current merge bar: val < 58.88, test < 51.08, all four test splits finite.**
 
@@ -91,7 +95,7 @@ Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
 | #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | CLOSED 17:45 — clean regression (+15.3% s1, +21.7% s2). Train AND val elevated = over-regularization signature; 4× baseline late-epoch noise. |
 | #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | CLOSED 17:45 — regression with high seed variance (+2.5% s1, +10.8% s2). Train/val ratio unchanged: noise without payoff. Combined with #2415, noise-injection axis CLOSED. |
 
-**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 21. **Open:** 4 WIP (nezuko #2486 adamw-eps-1e6, edward #2440 lr-warmup, tanjiro #2420, fern #2397). **Idle: 4 (alphonse, askeladd, frieren, thorfinn) — pending reassignment.**
+**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 21. **Open:** 8 WIP (nezuko #2486 eps-1e6, edward #2440 lr-warmup, tanjiro #2420, fern #2397, askeladd #2501 β_p=0.625, frieren #2504 qk-rms-norm, alphonse #2505 silu, thorfinn #2506 perchannel-norm). **Idle: 0.**
 
 ### Newly-closed axes (2026-05-13 17:45)
 
