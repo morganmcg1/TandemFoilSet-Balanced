@@ -8,6 +8,34 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 15:51 — PR #2389: Batch size down bs=2 — more grad steps per 30-min cap (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **57.7122** (W&B run `jc24jr52`) — **−11.7%** vs prior baseline 65.40
+- **`test_avg/mae_surf_p` (4-split, finite):** **49.5412** — **−11.7%** vs prior 56.11
+- **`test_no_ema_avg/mae_surf_p`:** 59.85
+- **Per-split val surface-p MAE (`jc24jr52`, bs=2+slice32+fourier_k=12, best-val epoch 26):**
+  - val_single_in_dist: 61.06  (vs 71.30 → −14.4%) ✅
+  - val_geom_camber_rc: 68.11  (vs 74.02 → −8.0%) ✅
+  - val_geom_camber_cruise: 42.98  (vs 49.63 → −13.4%) ✅
+  - val_re_rand: 58.71  (vs 66.63 → −11.9%) ✅
+- **Per-split test surface-p MAE (`jc24jr52`, 4-split clean):**
+  - test_single_in_dist: 51.92  (vs 59.73 → −13.1%) ✅
+  - test_geom_camber_rc: 59.20  (vs 65.09 → −9.0%) ✅
+  - test_geom_camber_cruise: 35.95  (vs 41.08 → −12.5%) ✅
+  - test_re_rand: 51.09  (vs 58.54 → −12.7%) ✅
+- **Mechanism:** `batch_size=4→2` doubles gradient updates per epoch (~750 mini-batches vs ~375) and, critically, was 17% *faster* per epoch (71 s vs 85 s) due to mesh-padding Pareto win: `pad_collate` pads each batch to the largest sample; at bs=2 only one partner gets padded (vs 3 at bs=4), reducing wasted FLOPs on smaller meshes. Net: 2.26× total gradient updates in the same 30-min wall-clock (19,500 vs 8,625). Val curve still descending at epoch 26 (LR at ~28% peak) → model still under-trained at cap.
+- **Compute:** 26/50 epochs, 71.0 s/epoch, 30.7 min total, **13.6 GB VRAM** (down from 80.9 GB), 668,855 params.
+- **Merge bar update (vs val 57.71 / test 49.54):**
+  - ≤ 51.9 val → **merge** (≥10% gain)
+  - 51.9 – 57.7 → **second seed**
+  - ≥ 57.7 → **close**
+- **W&B run:** `jc24jr52`
+- **W&B group:** `willow-r3-bs2`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2
+  ```
+
 ## 2026-05-13 14:15 — PR #1747: Sweep slice_num on Transolver Physics Attention (MERGED — slice_num=32 wins)
 
 - **`val_avg/mae_surf_p` (primary):** **65.3954** (W&B run `9sk1rwv1`)
