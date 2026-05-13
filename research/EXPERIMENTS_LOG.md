@@ -764,6 +764,45 @@ Per-split test surf_p (best seed `80dhotn5`): single_in_dist=58.25, geom_camber_
 
 - **nezuko → PR #2379 (T_max=35 + eta_min=1e-5):** directly tests the residual-LR mechanism with explicit floor. Single kwarg addition.
 
+## 2026-05-13 17:30 — PR #2341 CLOSED: surf_weight bisect 10 → 20 (post-grad-clip)
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/surf-weight-20-bisect
+- **Hypothesis:** Bisect surf_weight upward (10 → 20) under grad-clip. If surf was under-weighted at 10 (structural class imbalance argument), going to 20 should win.
+
+### Results (2 seeds, post-grad-clip baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `jv593e0v` | 1 | 65.626 | 57.490 | 35 | 30.5 min |
+| `w1tusccq` | 2 | **64.312** | 57.983 | 34 | 30.5 min |
+| **Baseline #1692** | 2 (`aoehi425`) | **60.093** | **53.370** | 35 | 30.3 min |
+
+Per-split test surf_p (seed 2, `w1tusccq`): single_in_dist=65.43, geom_camber_rc=72.97, geom_camber_cruise=37.84, re_rand=55.69
+
+Δ vs baseline: val **+7.0%** (worse), test **+8.6%** (worse). Cruise hit hardest (+17.6%).
+
+### Conclusion
+
+**CLOSED — hypothesis falsified, axis fully bracketed at surf_weight=10.**
+
+Three-point picture on the surf_weight axis (under grad-clip):
+
+| surf_w | val_avg | Δ vs baseline |
+|---|---:|---:|
+| 5 (#2041) | 61.69 | +2.7% |
+| **10 (baseline)** | **60.09** | **0.0%** |
+| 20 (this PR) | 64.31 | +7.0% |
+
+**Convex around 10, asymmetric (×2 hurts ~2.6× more than ÷2).** Over-weighting surface steals capacity from volume; OOD splits where volume signal matters most regress disproportionately. The grad-clip step normalisation that "absorbs per-batch scale variance" doesn't fix the *signal-share* problem — that's a separate axis.
+
+### Follow-up
+
+- **thorfinn → PR #2415 (stochastic depth p=0.1):** pivot to structural regularization (DropPath on Transolver blocks). Orthogonal to all in-flight axes (loss balance, param-level dropout, weight_decay, grad-clip, optimizer betas, schedule, EMA).
+- **Per-node dynamic loss weighting** noted as a future-round axis: replace the heuristic `surf_weight=10` with a per-batch dynamic value that targets a specific surface signal share (e.g. 50% or 85%). Requires careful design — target share is itself a hyperparameter and the natural surf:vol node ratio is ~1:15.
+
+---
+
 ## 2026-05-13 16:00 — PR #2246 CLOSED: Grad-clip bisect max_norm=1.0 → 5.0
 
 - **Student:** willowpai2g48h3-fern
