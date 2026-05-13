@@ -2687,3 +2687,67 @@ Per-epoch trajectory observed: EMA briefly overtook base val at epoch 11 (76.92 
 - **Two arms:** T_max=10 (aggressive — 3-4 plateau epochs) and T_max=12 (conservative — 1-2 plateau epochs)
 - **Target:** val < 47.64 / test < 40.57. Decision rule: <47.64 merge candidate; 47.64-48.50 close-call; ≥48.50 close.
 - Builds directly on tanjiro's prior banked findings from #2187 (SWA needs lr in flat region) and #2285 (EMA can't fix schedule-shape problem).
+
+---
+## 2026-05-13 14:05 — PR #2243 CLOSED willowpai2g48h2-edward (Huber β=0.2 on β=0.3+RFF+Kendall stack)
+
+- **Branch:** `willowpai2g48h2-edward/beta-0p2-on-current-stack`
+- **Hypothesis:** Bracket β between 0.1 and 0.3 — does monotone trend continue below 0.3?
+- **Results (terminal, W&B run `n1yxxuhz`):**
+
+| Metric | β=0.3 baseline | β=0.2 (this run) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 66.66 | 66.66 | +0.003% (flat) |
+| test_avg/mae_surf_p | 58.32 | 58.59 | +0.46% |
+
+### β bracket on RFF+Kendall stack — fully characterized
+| β | val | Δ vs β=0.3 | Verdict |
+|---|---:|---:|---|
+| 1.0 (#2082) | 70.63 | +5.95% | regression |
+| 0.3 (#1757) | 66.66 | — | **optimum** |
+| 0.2 (#2243) | 66.66 | flat | within noise on val, +0.46% on test |
+| 0.1 (#2171 closed) | 71.65 | +7.49% | regression |
+
+**β axis CLOSED — β=0.3 is the optimum.** Both directions flat-or-worse.
+
+**Beautiful mechanism confirmation:** Edward's Kendall log_σ trace shows all 6 channels relaxed toward uniform under lower β (surf_p, vol_p, vol_ux/uy all drift +0.03 to +0.05 log_σ as β drops 0.3→0.2). Confirms β controls the loss-gradient magnitude that Kendall σ adapts to.
+
+---
+## 2026-05-13 14:06 — PR #2170 CLOSED willowpai2g48h2-nezuko (RFF nfeatures=32 on β=0.3+RFF+Kendall stack)
+
+- **Branch:** `willowpai2g48h2-nezuko/fourier-nfeatures-32`
+- **Hypothesis:** Doubling RFF spectral dim (16 → 32) compounds with β=0.3.
+- **Results (terminal, W&B run `re8i5eqi`):**
+
+| Metric | β=0.3 baseline | n=32 (this run) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 66.66 | 67.14 | +0.72% regression |
+| test_avg/mae_surf_p | 58.32 | 57.54 | −1.34% improvement |
+
+### Mixed val/test direction
+- **Val splits:** 2 regress (camber rc +3.16%, cruise +4.80%), 2 improve (in_dist −2.03%, re_rand −1.81%)
+- **Test splits:** 4/4 improve
+
+**Classic overfitting signature** — more spectral capacity helps test (200 samples/split) but hurts noisier val splits.
+
+**Banked insight from nezuko's analysis:** SWA-window-gating mechanism. RFF benefits gated by SWA quality, not spectral dim. With timeout cutting SWA to 2 averaging epochs, the richer 32-dim feature space has more degrees of freedom to overfit val-camber. This directly informs tanjiro's #2342 T_max work (faster cosine → more flat-region epochs for SWA to average over).
+
+**RFF spectral-dim axis CLOSED at n=16.** RFF mechanism itself (#2082) intact, width sweep exhausted.
+
+---
+## 2026-05-13 14:08 — PR #2347 ASSIGNED willowpai2g48h2-edward (Drop grad-clip on Lion baseline)
+
+- **Branch:** `willowpai2g48h2-edward/drop-grad-clip-on-lion`
+- **Hypothesis:** Lion's sign-update naturally bounds per-step weight changes; external max_norm=0.5 (clip fires 74% under Lion) is over-constraining the sign computation by flipping near-zero coordinates.
+- **Two arms:** max_norm ∈ {0.0 (off), 2.0 (relaxed)}
+- **No code changes needed** — `--max_norm 0` already disables clipping in existing code (`if cfg.max_norm > 0` gate).
+- **Target:** val < 47.64 / test < 40.57. Distinct from alphonse's #2270 (max_norm {0.75,1.0} on β=0.3, AdamW stack).
+
+---
+## 2026-05-13 14:09 — PR #2354 ASSIGNED willowpai2g48h2-nezuko (Lion + n_hidden=192 larger model)
+
+- **Branch:** `willowpai2g48h2-nezuko/lion-larger-model-hidden-192`
+- **Hypothesis:** Lion scales better with model size than AdamW (Chen 2023). Current 0.76M-param model is undersized — VRAM headroom ~45 GB / 96 GB allows substantial capacity bump.
+- **Single arm:** n_hidden 128 → 192 (1.5×) — predicted ~1.5-1.8M params, VRAM ~65-70 GB.
+- **Code change:** Add `--n_hidden` CLI flag (default -1 = use 128). Wire into model_config and wandb logging.
+- **Target:** val < 47.64. Predict 2-5% improvement if Lion's capacity-scaling hypothesis holds.

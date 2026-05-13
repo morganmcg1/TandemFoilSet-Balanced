@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 14:01 (closed #2285 tanjiro EMA decay=0.999 regression; assigned #2342 tanjiro T_max ∈ {10,12} cosine sweep on Lion baseline)
+- **Last updated:** 2026-05-13 14:10 (closed #2243 edward β=0.2 + #2170 nezuko n=32; assigned #2347 edward drop-grad-clip-Lion + #2354 nezuko n_hidden=192-Lion)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -54,14 +54,14 @@
 |---|---|---|---|---|
 | **#2297** | **askeladd** | wip | Lion lr sweep {2e-4, 4e-4, 5e-4} | Fine-bracket the winning lr=3e-4 |
 | #2168 | thorfinn | wip (rebase sent) | σ=0.5 on β=0.3 stack | Needs further rebase to Lion baseline now |
-| #2170 | nezuko | wip (rebase sent) | nfeatures=32 on β=0.3 stack | Same — needs Lion rebase |
 | #2240 | frieren | wip | GC on β=0.3 | Needs rebase to Lion after finishing |
-| #2243 | edward | wip | β=0.2 bracket | Needs rebase to Lion after finishing |
 | **#2311** | **fern** | wip | Hybrid Lion+AdamW-for-σ on Lion stack | Restores Kendall σ differentiation |
 | #2270 | alphonse | wip | max_norm {0.75, 1.0} on β=0.3 | Needs rebase to Lion after finishing |
-| **#2342** | **tanjiro** | wip (new) | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
+| **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
+| **#2347** | **edward** | wip (new) | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
+| **#2354** | **nezuko** | wip (new) | n_hidden=192 (larger model) on Lion stack | Exploit Lion's capacity-scaling property |
 
-**⚠ Rebase wave incoming:** All 7 non-askeladd WIP PRs were launched against the β=0.3 baseline (val=66.66). When they complete and post SENPAI-RESULT, compare vs Lion baseline (47.64). Any that don't beat 47.64 go back for Lion-stack rerun. Expected outcome: most will be worth rerunning since their mechanisms are orthogonal to Lion.
+**⚠ Mixed rebase status:** Wave 11 has 4 direct-Lion experiments (#2297, #2311, #2342, #2347, #2354) and 3 remaining β=0.3-stack PRs needing eventual Lion rebase (#2168, #2240, #2270). Triage rule: when β=0.3-stack PRs complete, evaluate result vs Lion baseline (47.64). If <47.64: merge directly. If 47.64-66.66: send back for Lion rebase. If ≥66.66: close.
 
 ## Key banked mechanisms
 
@@ -72,7 +72,8 @@
 5. **SWA frac bounded below** — only frac≥0.75 averages in flat-loss region. EMA decay=0.999 (#2285) did NOT fix it (val=70.34, regression) — its 5-epoch window dilutes late-epoch low-lr updates with stale high-lr snapshots. Right fix is schedule shape: faster cosine T_max → eta_min plateau covers more averaging window. → testing now in #2342.
 6. **σ=0.5 direction real but marginal** — contributed −0.47 val on β=0.0 stack; may still compound
 7. **LayerScale γ=1e-4 fails at 5 layers** — ReZero γ=1.0 is the fix (#2269 fern)
-8. **β=0.3 = β optimum** — β=0.1 regresses. β=0.2 (#2243) closes the bracket.
+8. **β=0.3 = β optimum, axis CLOSED** — β=0.1 (#2171) regressed +7.5%, β=0.2 (#2243) flat on val/+0.46% on test. Both directions exhausted. Edward's Kendall σ-relaxation mechanism confirmed (lower β → all 6 log_σ drift toward uniform).
+9. **RFF spectral-dim axis CLOSED at n=16** — n=32 (#2170) gave mixed val/test direction; banked SWA-window-gating mechanism (timeout limits useful averaging) directly feeds tanjiro's #2342.
 
 ## Key open bottlenecks
 
@@ -83,8 +84,8 @@
 ## Potential next directions (Wave 11)
 
 1. **Lion + hybrid AdamW for Kendall σ heads** — restore per-channel σ differentiation. Separate param group with AdamW(lr=1e-3, wd=0) for log_σ, Lion for model. Could unlock another 2-5%.
-2. **Lion + drop grad-clip** — clip fires 74% under Lion; max_norm=2.0 or off. Cross with max_norm sweep.
-3. **Lion + larger model** — hidden_dim=192 (VRAM: ~49/96 GB used). More capacity may matter more under Lion.
+2. ~~Lion + drop grad-clip~~ — testing in #2347 (max_norm ∈ {0.0, 2.0})
+3. ~~Lion + larger model~~ — testing in #2354 (n_hidden=192)
 4. **Lion + T_max sweep** — currently testing in #2342 (T_max ∈ {10,12}). If T_max=10 wins, the schedule-shape lever is bankable; if T_max=12 wins, search continues toward intermediate values; if neither wins, the current T_max=15 is already optimal under Lion's convergence profile.
 5. **σ=0.5 on Lion stack** — if thorfinn's σ=0.5 shows promise on β=0.3, apply to Lion baseline too
 6. ~~EMA + Lion~~ — EMA decay=0.999 closed (#2285). If T_max sweep (#2342) succeeds, that subsumes the averaging-window question.
@@ -98,10 +99,11 @@
 
 ### 🔬 In-flight (Wave 10)
 - Lion lr fine-sweep (#2297 askeladd) — map lr optimum around 3e-4
-- T_max cosine sweep on Lion (#2342 tanjiro) — direct Lion-baseline experiment
-- Hybrid Lion+AdamW for Kendall σ (#2311 fern) — direct Lion-baseline experiment
+- T_max cosine sweep on Lion (#2342 tanjiro) — schedule shape
+- Hybrid Lion+AdamW for Kendall σ (#2311 fern) — restore σ differentiation
+- Drop grad-clip on Lion (#2347 edward) — clip fires 74% under sign-update
+- Lion + n_hidden=192 (#2354 nezuko) — capacity scaling
 - σ=0.5 on β=0.3 (#2168 thorfinn) — will need Lion rebase after completing
-- nfeatures=32 on β=0.3 (#2170 nezuko) — same
-- GC (#2240 frieren), β=0.2 (#2243 edward), max_norm {0.75,1.0} (#2270 alphonse) — all need Lion rebase when done
+- GC (#2240 frieren), max_norm {0.75,1.0} (#2270 alphonse) — need Lion rebase when done
 
 ### ✗ Closed (25+ axes) — see prior entries
