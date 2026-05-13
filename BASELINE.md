@@ -4,6 +4,27 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 03:00 — PR #1695: [tmax-18] Tune cosine T_max=15→18 to match achievable epoch count exactly (nezuko)
+
+- **`val_avg/mae_surf_p`:** **84.67** (best epoch 18/18)
+- **`test_avg/mae_surf_p`:** **74.94** (from best-val checkpoint, all 4 splits clean)
+- **Per-split surface-p MAE (val):** single_in_dist=96.25, geom_camber_rc=93.25, geom_camber_cruise=65.39, re_rand=83.78
+- **Per-split surface-p MAE (test):** single_in_dist=85.31, geom_camber_rc=83.17, geom_camber_cruise=55.11, re_rand=76.18
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=18, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+- **Key change:** `CosineAnnealingLR(T_max=18, eta_min=0.0)` (was T_max=15). Under the 30-min wall-clock cap, the model reliably reaches 18 epochs. Setting T_max=18 aligns the cosine schedule minimum with the last achievable epoch, ensuring lr→0 at the true end of training rather than 3 epochs early. Clean scheduling win — no capacity or loss changes.
+- **Improvement vs directly-comparable reference (#1762 surf-weight-5, T_max=15):** val −5.91 (−6.5%), test −5.06 (−6.3%)
+- **All 4 val splits improved:** single_in_dist −10.06, geom_camber_rc −5.59, geom_camber_cruise −3.96, re_rand −4.04
+- **All 4 test splits improved:** single_in_dist −8.30, geom_camber_rc −3.69, geom_camber_cruise −3.26, re_rand −5.02
+- **Metric artifacts:** `models/model-charliepai2g48h4-nezuko-tmax-18-20260513-021955/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-nezuko --experiment_name "charliepai2g48h4-nezuko/tmax-18"`
+
+**Open questions after this merge:**
+- Does T_max=19 or T_max=20 push further, or is 18 at saturation given the 30-min cap? (18 epochs complete cleanly; 19 may be squeezable depending on mini-batch time variance.)
+- Layers-6 edward rerun on new baseline — previously extrapolated ~80.5 from Huber-base delta; with T_max=18 now standard, target shifts to sub-79.
+- EMA on current recipe (askeladd #1540) is highest-priority stacking test; estimated sub-79 with EMA+current recipe.
+
+---
+
 ### 2026-05-13 02:10 — PR #1762: [surf-weight-5] Halve surface loss weight 10→5 (tanjiro)
 
 - **`val_avg/mae_surf_p`:** **90.58** (best epoch 17/18)
