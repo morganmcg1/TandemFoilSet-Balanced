@@ -389,3 +389,29 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
   (grad-clip max_norm=2.5 now in train.py defaults from PR #1982; no extra flag needed for that)
 - **COMBINED STATE (12+13): n_hidden=224 + grad-clip=2.5 is UNMEASURED.** PR #1982 was measured at n_hidden=192 (val=52.64); PR #2023 was measured at grad-clip=5.0 (val=53.25). Both mechanisms beat the 11-compound baseline independently. Predicted combined val ≈ 50–52 if mechanisms are additive. **The next priority is to directly measure val at n_hidden=224 + grad-clip=2.5 + T_max=50.**
 - **All subsequent experiments should target val < 52.6406 and test < 44.9791** (from PR #1982 — the current direct measurement). The combined n_hidden=224 + grad-clip=2.5 state will supersede this once directly measured.
+
+## 2026-05-13 17:45 — PR #2142: fern Huber β=0.5 → 0.25 (tighter MAE alignment on 13-compound stack)
+
+**New best — 14th compound improvement (loss-shape axis at grad-clip=2.5 saturated regime)**
+
+- **val_avg/mae_surf_p:** **50.3812** (vs #1982 baseline 52.6406; **−4.29%**, −2.26 absolute)
+- **test_avg/mae_surf_p:** **43.7187** (vs #1982 baseline 44.9791; **−2.80%**, −1.26 absolute)
+
+**Per-split test (EMA, best-val checkpoint — all 4 splits improve):**
+
+| Split | mae_surf_p | vs #1982 | Δ% |
+|-------|----------:|----------:|---:|
+| `test_single_in_dist` | 48.9641 | −0.89 | −1.79% |
+| `test_geom_camber_rc` | 57.3689 | −0.40 | −0.70% |
+| `test_geom_camber_cruise` | 26.9722 | −1.97 | −6.81% |
+| `test_re_rand` | 41.5697 | −1.77 | −4.09% |
+| **test_avg** | **43.7187** | **−1.26** | **−2.80%** |
+
+- **Best epoch:** 33 (still descending at termination — not epoch-saturated)
+- **Clip rate:** 99.91% (12364/12375 steps) — Huber β axis operates upstream of gradient computation; mechanism is loss curvature, not amplitude. Axis confirmed orthogonal to clip saturation.
+- **Mechanism:** Huber β=0.25 tightens the MAE alignment further. At β=0.25, the quadratic region covers only |error| < 0.25 — nearly all normalized surface-pressure errors are in the linear (L1-like) regime. This directly targets the primary MAE metric across the bulk of the loss distribution.
+- **Note on clip rate:** 99.91% vs baseline 98.93% (+0.98pp) — the tighter Huber creates slightly sharper gradients for moderate errors, which increases clip rate marginally. But this is upstream-of-gradient mechanism (loss curvature), not amplitude.
+- **W&B run:** `aew7c8ej`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
+  (huber_beta=0.25 now baked into advisor branch train.py from this merge; grad-clip=2.5, T_max=50 also baked in)
+- **All subsequent experiments should target val < 50.3812 and test < 43.7187** as the merge threshold.
