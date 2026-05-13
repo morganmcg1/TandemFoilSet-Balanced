@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1607 EMA decay=0.99 | **77.05** | **68.27** | −22.1% val / −23.1% test vs prior best; uniform gains all 4 splits |
+| #1781 Lion optimizer lr=1e-4 | **61.30** | **52.68** | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
+| #1607 EMA decay=0.99 | 77.05 | 68.27 | −22.1% val / −23.1% test vs prior best; uniform gains all 4 splits |
 | #1367 Dropout=0.2 + clip_grad=1.0 | 98.96 | 88.74 | dropout standalone on BF16; merged into Fourier+Huber base |
 | #1357 Huber δ=1.0 (on Fourier base) | 98.79 | 88.90 | -4.31% val, -2.13% test vs Fourier baseline |
 | #1386 Fourier pos encoding L=6 mf32 BF16 | 103.24 | 90.83 | All 4 test splits improve |
@@ -30,6 +31,22 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 05:10 — PR #1781: Lion optimizer (thorfinn)
+
+- **val_avg/mae_surf_p (best epoch 16):** 61.3017 — **−20.44% vs prior best (77.054)**
+- **test_avg/mae_surf_p:** 52.6824 — **−22.83% vs prior best (68.265)**
+- **Per-val-split:** single_in_dist=71.675 (test: 59.813), geom_camber_rc(test: 64.584), geom_camber_cruise(test: 35.140), re_rand(test: 51.193)
+- **Per-test-split:** single_in_dist=59.813, geom_camber_rc=64.584, geom_camber_cruise=35.140, re_rand=51.193
+- **Epochs completed:** 16 in ~31 min; val still descending steeply at cap (not converged)
+- **W&B runs:** `e2l23xny` (winning arm lr=1e-4), `9fjjfgjt` (lr=5e-5, val=64.01)
+- **Reproduce (best arm):** `cd "target/" && python train.py --optimizer lion --lr 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-thorfinn --wandb_name "willowpai2g24h5-thorfinn/lion-lr1e-4-ema" --wandb_group "willow-pai2g-24h-r5-lion"`
+
+**Key change:** Replace AdamW with Lion optimizer (sign-based momentum update). Canonical Lion: `c_t = β1·m_{t-1} + (1-β1)·g_t; update = sign(c_t); m_t = β2·m_{t-1} + (1-β2)·g_t` with β1=0.9, β2=0.99, lr=1e-4. Student identified and fixed β1/β2 swap in original PR diff before running. Lion+EMA decouples exploration (Lion's noisy sign-magnitude steps) from smoothing (EMA averaging), yielding a substantially larger gain than AdamW+EMA — uniform 20–28% across all 4 test splits.
+
+**Note:** val/test both still descending at epoch-16 cap. Longer budget (100 epochs, higher timeout) is the highest-EV immediate follow-up.
 
 ---
 
