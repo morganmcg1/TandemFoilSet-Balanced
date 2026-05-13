@@ -7,6 +7,48 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 09:00 — PR #1779: AdamW weight_decay sweep at AMP+EMA baseline — CLOSED
+
+- Student branch: `willowpai2g24h3-thorfinn/weight-decay-sweep`
+- Hypothesis: AdamW `weight_decay` sweep {1e-4, 1e-3, 1e-2, 5e-2} as a regularization probe on top of the merged SmoothL1+grad-clip+EMA(0.999)+AMP stack. Prediction: a modest wd lift would help the highest-MAE OOD splits (`val_single_in_dist`, `val_geom_camber_rc`) preferentially.
+
+### Results — all 3 variant arms (rebased onto advisor `04aa53b`, 30-min cap, AMP+EMA on)
+
+| arm | wd | val_avg | test_avg | Δ val vs 77.37 | best epoch | run id |
+|---|---:|---:|---:|---:|---:|---|
+| Baseline (advisor) | 1e-4 | **77.37** | **68.21** | — | — | `30wvu5r0` |
+| wd=1e-3 (best variant) | 1e-3 | 77.73 | 68.64 | +0.36 (+0.5%) | 19/50 | `xz3vojme` |
+| wd=1e-2 | 1e-2 | 78.35 | 69.54 | +0.98 (+1.3%) | 19/50 | `npnres0j` |
+| wd=5e-2 | 5e-2 | 81.03 | 71.57 | +3.66 (+4.7%) | 19/50 | `hqglc6x5` |
+
+W&B group: `willow-r3-weight-decay-sweep`. No NaNs, no OOMs, peak GPU mem ~53 GiB across arms.
+
+### Per-split val breakdown (wd=1e-3 best variant vs AMP+EMA baseline `30wvu5r0`)
+
+| split | baseline 1e-4 | wd=1e-3 | Δ | wd=1e-2 | Δ |
+|---|---:|---:|---:|---:|---:|
+| val_single_in_dist | 90.76 | **90.29** | −0.47 | **89.65** | −1.11 |
+| val_geom_camber_rc | 90.73 | **88.59** | **−2.14** | 91.46 | +0.73 |
+| val_geom_camber_cruise | 54.88 | 57.99 | +3.11 | 57.80 | +2.92 |
+| val_re_rand | 73.12 | 74.05 | +0.93 | 74.50 | +1.38 |
+| **avg** | **77.37** | **77.73** | +0.36 | **78.35** | +0.98 |
+
+### Mechanism analysis (thorfinn)
+
+The hypothesis predicted that L2 regularization should preferentially help the highest-MAE OOD-ish val splits. **The mechanism is partly real but unprofitable**:
+
+- At wd=1e-3, the two high-MAE OOD-ish splits (`val_single_in_dist`, `val_geom_camber_rc`) DO improve in the predicted direction (−0.47 and **−2.14** respectively).
+- But the same regularizer hurts `val_geom_camber_cruise` by +3.11 and `val_re_rand` by +0.93.
+- Net of opposing forces lands aggregate inside the ±7 noise band on the wrong side of baseline.
+
+This is the signature of a **model whose capacity is matched-to-task**: there is no free regularization headroom — the same regularizer that fixes one split breaks another by the same magnitude. EMA already subsumes the variance-reduction effect that decoupled weight_decay would otherwise provide.
+
+### Conclusion (advisor)
+
+**Weight decay is closed at this baseline.** Rule out the entire L2-regularization family for Round 2: no wd schedules, no layer-wise wd, no AdamW-vs-Adam re-runs. The forward axis is **input-side feature representation / data augmentation**, which thorfinn's per-split asymmetry diagnosis points at directly. Next assignment to thorfinn is coordinate-jitter augmentation as a synthetic-near-miss-geometry generator targeting the held-out camber splits.
+
+The per-split asymmetry table from this run ("one split is over-regularized by exactly the same amount that the other is under-regularized") is the cleanest capacity-vs-task-fit diagnostic from this round and should be revisited every time a new lever is proposed.
+
 ## 2026-05-13 06:35 — PR #1440: Enable bfloat16 mixed precision (AMP + EMA) — MERGED (WINNER)
 
 - Student branch: `willowpai2g24h3-nezuko/amp-bf16`
