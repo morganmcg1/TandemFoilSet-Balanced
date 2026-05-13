@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 11:30 UTC
+- **Date / time:** 2026-05-13 11:35 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -51,7 +51,7 @@ Two stale-stack results sent back for retest under current code:
 | #2205 | thorfinn | OneCycleLR cycle_momentum=False (fix hidden default cycling beta1 between 0.85–0.95) |
 | #2103 | alphonse | NAdam (retest under linear+batch2 stack; cosine run beat old baseline -2.4%) |
 | #2104 | nezuko | max_lr=2.5e-3 (retest under linear+batch2; cosine run beat old baseline -1.09%) |
-| #2101 | edward | AdamW beta1 0.95→0.94 (confirm peak from other side; 0.97 failed +3.6%) |
+| #2224 | edward | AdamW WD parameter groups (exclude biases + LayerNorm from weight_decay; standard transformer practice) |
 | #2148 | tanjiro | OneCycleLR three_phase=True (extra anneal phase under linear) |
 | #2152 | frieren | smooth_l1 β 0.25→0.20 (close axis: 0.15 fail at +1.90%) |
 | #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen step bound, sent back for retest) |
@@ -65,7 +65,7 @@ Two stale-stack results sent back for retest under current code:
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
 - beta2: 0.99 (-2.98% #1959), 0.98 (-1.77% #2008, MERGED), 0.97 CLOSED (#2087: both runs ~5% worse); peak confirmed at 0.98
-- beta1: 0.90→0.95 won (-2.5% #1867), 0.95→0.97 failed (+3.6% #2076 closed); 0.94 in-flight (#2101)
+- beta1: 0.90→0.95 won (-2.5% #1867), 0.95→0.97 failed (+3.6% #2076), 0.95→0.94 failed (+12.0% #2101); **axis closed both sides** — 0.95 sharp local optimum
 - AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
 - eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal
 - grad_accum=4: +18%, eff_batch=8 was optimal (now eff_batch=4 since batch_size=2 merged)
@@ -86,7 +86,7 @@ Two stale-stack results sent back for retest under current code:
 2. **Momentum cycling fix** (#2205 cycle_momentum=False) — hidden PyTorch default has been running in ALL prior experiments; this is an untested axis affecting 10 compounding wins.
 3. **Optimizer variants** — NAdam (#2103 alphonse retest), optimizer mechanics orthogonal to anneal+batch
 4. **max_lr upward** (#2104 nezuko retest max_lr=2.5e-3 under current stack) — if bounded-gradient story holds under linear+batch2, may still have room
-5. **beta1 fine-tuning** (#2101 edward 0.94) — 0.95 won, 0.97 failed, 0.94 untested
+5. **WD parameter groups** (#2224 edward) — exclude biases/LayerNorm from weight_decay (shape change, not magnitude); standard transformer practice untested on this stack
 6. **three_phase=True** (#2148 tanjiro) — extra anneal phase under linear
 7. **β-close** (#2152 frieren β=0.20) — midpoint between 0.25 (winner) and 0.15 (fail); closes the axis
 

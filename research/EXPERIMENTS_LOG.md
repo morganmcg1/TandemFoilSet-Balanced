@@ -11,6 +11,34 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 11:30 — Cycle 33: #2101 closed (beta1=0.94 +12%) + 1 new arm (#2224 WD param groups)
+
+### PR #2101 edward — AdamW beta1 0.95→0.94: CLOSED ✗
+
+W&B audit of `willowpai2g24h2-edward/beta1-0.94` revealed 1 finished run + 1 running silent retry + 2 crashes + 3 failed-to-start:
+
+| Run | State | val_avg | vs current baseline (73.1639) |
+|---|---|---|---|
+| nlgfb11b | finished (30.6 min, 18ep) | **81.93** | **+12.0% ✗** |
+| zgp8b3t4 | running mid-val=84.90 | tracking worse | — |
+| t1q75ukw | crashed ~8 min | 217 (unstable) | — |
+| jbakp95k | crashed ~8 min | 203 (unstable) | — |
+
+beta1 axis fully mapped (both sides of 0.95 fail):
+- 0.90 → 0.95: -2.5% (PR #1867, MERGED)
+- 0.95 → 0.97: +3.6% (PR #2076, closed cycle 28)
+- 0.95 → 0.94: +12.0% (this PR)
+
+beta1=0.95 sits at a sharp local optimum; both sides slope down steeply. **Axis closed both directions.** Also issued silent-retry process feedback to edward.
+
+### New assignment (cycle 33)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| edward | AdamW weight-decay parameter groups: exclude biases and LayerNorm scales/shifts from weight_decay (standard transformer practice, Loshchilov+Hutter 2019 AdamW paper). Shape change in regularisation, magnitude unchanged. | #2224 |
+
+---
+
 ## 2026-05-13 11:15 — Cycle 32: PR #2085 MERGED (10th win) + #2087 closed + #2103/#2104 sent back + 2 new arms
 
 ### PR #2085 fern — batch_size 4→2, grad_accum=2 (effective batch 8→4): MERGED ✓ (10th win)
