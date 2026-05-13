@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~04:35
+- **Date:** 2026-05-13 ~05:35
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -49,9 +49,10 @@
 - **Channel-weighted L1 [0.03,0.03,1.0] on GeGLU+Lion**: +11.0% (PR #1767 — GeGLU gates do implicit channel balancing; manual Ux/Uy downweighting disrupts routing)
 - **SwiGLU vs GeGLU**: +1.6% (PR #1824 — LLM finding doesn't transfer; GELU's slightly negative gate range benefits CFD pressure-gradient features)
 - **SmoothL1 β=0.1 on GeGLU+Lion**: +7.1% (PR #1859 — all loss modifications exhausted; pure L1 optimal for Lion)
+- **n_layers=7 (re-test with RMSNorm+Lion)**: +4.6% (PR #1890 — 12 epochs at 160s/epoch; single_in_dist catastrophic +18%; depth expansion incompatible with budget under any tested condition)
+- **WD=1e-1**: +2.72% (PR #1889 — over-regularizes; best_epoch=10, train descending while val climbs; WD space above 1e-2 exhausted)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
-- n_layers=7: +51% worse, too slow (~205s/epoch)
 - EMA decay=0.999: cold-start drag (+41% worse)
 - Batch=8 (accum_steps=2): +23.6% worse (step-count limited)
 - Fourier L=4: +5.6% worse (doesn't compound with L1)
@@ -73,17 +74,19 @@
 |---------|-----|------------|--------|
 | alphonse | #1765 | Lion lr=2e-4 (bug fix landed): rerun on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
 | askeladd | #1766 | Lion WD=1e-2 on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| edward | #1889 | Lion WD=1e-1: upper end of paper-recommended range | NEW |
+| edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | NEW |
 | tanjiro | #1872 | mlp_ratio=8 + GeGLU+Lion: recover fc2 capacity | WIP |
 | fern | #1790 | Lion + 2-epoch cosine warmup on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
 | nezuko | #1793 | Lion + T_max=12 aligned to budget on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
 | thorfinn | #1836 | surf_weight 5 on RMSNorm+GeGLU+Lion (rebase needed) | SENT BACK (rerun needed) |
-| frieren | #1890 | n_layers=7 + RMSNorm+GeGLU+Lion: depth re-test with faster norm | NEW |
+| frieren | #1920 | CosineAnnealingLR eta_min=1e-5: non-zero LR floor for Lion tail | NEW |
 
 **Recently merged:**
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test) ← new baseline 63.017
 
 **Recently closed:**
+- frieren #1890: n_layers=7 (+4.6%) — 160s/epoch → 12 epochs; single_in_dist catastrophic (+18%); depth incompatible with budget
+- edward #1889: WD=1e-1 (+2.72%) — over-regularizes; best_epoch=10, then val climbs while train descends
 - edward #1859: SmoothL1 β=0.1 (+7.1%) — all loss modifications exhausted; pure L1 optimal for Lion
 - edward #1767: channel-weighted L1 (+11%) — GeGLU gates do implicit channel balancing
 - tanjiro #1824: SwiGLU (+1.6%) — GELU's negative gate range benefits CFD features
@@ -109,16 +112,15 @@ Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`l
 8. **surf_weight=5** (thorfinn #1836): confirmed −2.74% on GeGLU+Lion (just missed RMSNorm baseline); rerun on RMSNorm stack.
 
 **Queued ideas for next idle students (after current round lands):**
-- **CosineAnnealingLR eta_min=1e-5**: fern suggested Lion benefits from non-zero final LR; not yet tested
-- **Lion WD=3e-2**: bracket WD optimum between 1e-2 and 1e-1 after both land
 - **RMSNorm + surf_weight=5**: if thorfinn's rerun lands positive, compound already confirmed
-- **n_hidden widening 128→160**: capacity without restructuring MLP; ~225s/epoch is tight
+- **n_hidden widening 128→160**: capacity without restructuring MLP; ~225s/epoch is tight (~9 epochs, risky)
 - **PhysicsAttention slice_num=48**: slight reduction for faster epochs; might help convergence
+- **Lion WD=5e-2 or WD=2e-2**: further brackets after edward's WD=3e-2 and askeladd's WD=1e-2 land
 
 ## Key constraints
 
 - 30 min / run cap: Lion → ~11 epochs (~165s/epoch estimated with bf16+Lion)
-- Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~205s/epoch)
+- Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~160s/epoch even with RMSNorm+Lion; confirmed dead in PR #1890)
 - EMA: cold-start drag, incompatible with short budget
 - Batch increase: always worse (step-count limited)
 - Gradient clipping: always worse (oscillations are useful)

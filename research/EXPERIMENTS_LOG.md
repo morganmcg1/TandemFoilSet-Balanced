@@ -6,6 +6,52 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 05:30 — PR #1890: n_layers=7 + RMSNorm+GeGLU+Lion — CLOSED (+4.6% val regression)
+
+- **Student:** charliepai2g48h3-frieren
+- **Branch:** charliepai2g48h3-frieren/n-layers-7-rmsnorm-geglu-lion
+- **Hypothesis:** RMSNorm+bf16 reduces per-epoch time enough (~160s vs 205s) to fit 11-12 epochs at 7 layers vs 9 in the old AdamW stack. Re-test n_layers=7 under better conditions.
+- **Result:** val=65.904, test=56.888 (epoch best 12 of 12, 30-min cap)
+
+| Split | val (n_layers=7) | val (baseline n_layers=6) | Δ |
+|---|---|---|---|
+| single_in_dist | 90.497 | 76.710 | **+18.0%** |
+| geom_camber_rc | 77.252 | 73.930 | +4.5% |
+| geom_camber_cruise | 38.800 | 40.746 | −4.8% |
+| re_rand | 57.067 | 60.683 | −6.0% |
+| **avg** | **65.904** | **63.017** | **+4.6% worse** |
+
+- **Per-epoch time:** ~160s (vs 138s at 6 layers) → 12 epochs fit in 30 min vs 14
+- **Test:** 56.888 vs 54.731 = +3.9% worse
+- **Analysis:** n_layers=7 helps geom_camber_cruise and re_rand (simpler splits), but catastrophically regresses single_in_dist (+18%) — the deeper model is underfitting at 12 epochs where the 6-layer model peaks at 13-14. Budget-convergence mismatch confirmed. Architecture depth expansion remains incompatible with this 30-min cap.
+- **Dead end:** n_layers=7 is worse under all tested conditions (AdamW ~205s/epoch, Lion+RMSNorm ~160s/epoch)
+- **Reassigned frieren:** PR #1920 CosineAnnealingLR eta_min=1e-5
+
+---
+
+## 2026-05-13 05:30 — PR #1889: Lion WD=1e-1 — CLOSED (+2.72% val regression, over-regularizes)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/lion-wd-1e-1
+- **Hypothesis:** WD=1e-1 is the upper end of Lion paper's recommended range (10-100× Adam); bracket with askeladd's WD=1e-2 to find optimum.
+- **Result:** val=64.731, test=57.110 (best epoch=10, 30-min cap)
+
+| Split | val (WD=1e-1) | val (baseline WD=1e-4) | Δ |
+|---|---|---|---|
+| single_in_dist | ~78.5 | 76.710 | regressed |
+| geom_camber_rc | ~75.6 | 73.930 | regressed |
+| geom_camber_cruise | ~42.8 | 40.746 | regressed |
+| re_rand | ~62.0 | 60.683 | regressed |
+| **avg** | **64.731** | **63.017** | **+2.72% worse** |
+
+- **Test:** 57.110 vs 54.731 = +4.35% worse
+- **Key diagnostic:** best_epoch=10 (vs baseline epoch=13) — val starts climbing after epoch 10 while train loss keeps dropping. Textbook over-regularization signature.
+- **Insight:** WD=1e-1 forces parameters toward zero too aggressively at only 14 epochs. Model already underfitting — adding more regularization makes it worse. WD=1e-2 (askeladd, in-flight) likely the true optimum; WD=1e-1 confirmed as upper dead-end boundary.
+- **Dead end:** WD space above 1e-2 exhausted.
+- **Reassigned edward:** PR #1925 Lion WD=3e-2 (bracket between 1e-2 and 1e-1)
+
+---
+
 ## 2026-05-13 04:30 — PR #1837: RMSNorm in TransolverBlock — MERGED (−2.9% val, −5.9% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-frieren
