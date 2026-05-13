@@ -74,6 +74,48 @@
 
 ---
 
+## 2026-05-13 05:15 — Round 15
+
+### PR #1619: sampler 2× single on L1 — MERGED (new baseline)
+
+- **Student:** charliepai2g48h5-nezuko
+- **Result (L1+compile rebase):** val_avg=56.6217 (-4.89% vs 59.54), test_avg=50.4310 (-2.01%).
+- **Per-split val:** single -13.51% (64.89→56.12), geom_camber_rc -4.02% (74.04→71.07), **geom_camber_cruise +4.31%** (39.97→41.69), re_rand -2.76% (59.24→57.60). Three of four splits improve.
+- **Per-split test:** test_single -9.97%; test_rc +0.20%; test_cruise +1.78%; test_re_rand +1.34%.
+- **Mechanics:** Sampler boost 2× on racecar_single → 50%/25%/25% share. L1's uniform per-sample gradient (bounded sign) amplifies coverage benefit vs β=1.0 run. Sampler validated across 3 baselines: β=1.0 (-2.80%), β=1.0+compile (-2.25%), L1+compile (-4.89%). Win grows with sharper loss.
+- **Best epoch:** 39 (terminal), wall-clock-bound; trajectory still descending. Run ep 38→39: 57.74→56.62.
+- **Artifacts:** `models/model-charliepai2g48h5-nezuko-sampler-2x-on-l1-20260513-021352/metrics.jsonl`
+- **NEW BASELINE: val_avg=56.6217, test_avg=50.4310**
+
+---
+
+### PR #1826: cosine eta_min=5e-5 — CLOSED (LR floor backfired)
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Result:** val_avg=63.70 (+6.99% vs 59.54), test_avg=55.23 (+7.32%). All four val splits worse by 4-11%.
+- **Root cause:** eta_min=5e-5 lifted polishing LR by +38.5% at best_epoch (36) and +45.2% at terminal (37). On pure L1 loss with sign-only gradients, the *only* step-damping mechanism is the schedule — there's no gradient-magnitude softening. A higher LR floor prevents fine-grained convergence. Model settled at a wider error ball.
+- **Intervention verified:** LR(37) was 1.316e-4 vs 9.064e-5 if unfloored (+45.2%). The floor worked exactly as intended — it was just the wrong direction on L1.
+- **Closed axis:** LR floor (cosine eta_min) on L1 loss. Schedule-floor axis closed — L1 relies on schedule damping for settling.
+- **Artifacts:** `models/model-charliepai2g48h5-thorfinn-cosine-eta-min-5e-5-20260513-021535/metrics.jsonl`
+
+---
+
+### PR #1870: sampler boost both RaceCar 2× — ASSIGNED (nezuko)
+
+- **Branch:** `charliepai2g48h5-nezuko/sampler-boost-both-racecar-2x`
+- **Hypothesis:** Boost racecar_single=2 AND racecar_tandem=2, cruise=1 (40%/40%/20% share). Builds on PR #1619 win; should recover geom_camber_rc by restoring tandem training mass.
+- **Baseline to beat:** val_avg < 56.6217.
+
+---
+
+### PR #1871: surf_loss p-weight 2× — ASSIGNED (thorfinn)
+
+- **Branch:** `charliepai2g48h5-thorfinn/surf-p-weight-2x`
+- **Hypothesis:** Apply [1.0, 1.0, 2.0] channel weight ONLY to surf_loss — double gradient budget on p-channel at surface nodes without touching vol_loss. Orthogonal to PR #1428 failure (that applied [1,1,3] globally, distorting velocity via volume loss; this is surf-only).
+- **Baseline to beat:** val_avg < 56.6217.
+
+---
+
 ## 2026-05-13 05:00 — Round 14: PR reviews and new assignments
 
 ### PR #1788: attention-dropout=0.1 — CLOSED (slow convergence, budget-bound loss)
