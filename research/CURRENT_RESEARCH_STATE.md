@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 02:10
+- **Date:** 2026-05-13 02:30
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -11,16 +11,17 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED — 5-compound winner)
+## Current baseline (MERGED — 6-compound winner)
 
-**PR #1672 — nezuko LR warmup 1 epoch v2** (merged 2026-05-13 02:05, stacked on top of #1689):
-- `val_avg/mae_surf_p = 85.0926` (epoch 17; vs 85.9197 β=0.5 baseline → −0.96%)
-- `test_avg/mae_surf_p = 75.5171` (vs 76.5495 → −1.35%)
-- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep (start_factor=0.2), n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
-- ~17 epochs / 30 min (~110 s/epoch)
-- All 4 test splits improved; re_rand best (−1.41 MAE)
+**PR #1763 — edward torch.compile** (merged 2026-05-13 02:20, stacked on top of #1672):
+- `val_avg/mae_surf_p = 71.4371` (epoch 29; vs warmup baseline 85.0926 → **−16.06%**)
+- `test_avg/mae_surf_p = 62.5927` (vs 75.5171 → **−17.11%**)
+- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep (start_factor=0.2) + `torch.compile(model, dynamic=True, mode='default')`, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
+- **29 epochs / 30 min (~63 s/epoch steady state, 44% faster than baseline)** ← throughput win is clean
+- All 4 test splits improved (in_dist −16.67, cruise −10.99, camber_rc −10.49, re_rand −13.55)
+- Val curve was still descending at epoch 29 (~0.4 MAE/epoch); T_max=30 confounder noted
 
-**Cumulative compounding (5 merges so far):**
+**Cumulative compounding (6 merges so far):**
 
 | Baseline | val | test | Key change |
 |----------|-----|------|------------|
@@ -29,7 +30,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | PR #1436 fern Huber β=1.0 | 96.49 | 86.33 | Smooth L1 → loss-shape MAE alignment |
 | PR #1606 fern EMA | 92.35 | 81.63 | Weight averaging → reduces noise ball at eval |
 | PR #1689 fern Huber β=0.5 | 85.92 | 76.55 | Tighter MAE alignment in moderate-error band |
-| PR #1672 nezuko warmup 1ep | **85.09** | **75.52** | LR warmup compresses EMA-lag phase |
+| PR #1672 nezuko warmup 1ep | 85.09 | 75.52 | LR warmup compresses EMA-lag phase |
+| PR #1763 edward torch.compile | **71.44** | **62.59** | 44% speedup → 29 vs 17 epochs in budget |
 
 ## Active experiments
 
@@ -37,14 +39,16 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1791 | lr=7e-4 (raise peak LR, keep T_max=30 hot-cosine shape) | LR magnitude | WIP | #1647 T_max=18 closed: aligned cosine starves LR at end; inverted angle = raise peak LR |
 | askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
-| edward | #1763 | torch.compile (attack throughput bottleneck) | Throughput | WIP | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
-| fern | #1805 | Adaptive Huber β annealing (β=1.0 → β=0.5 over epochs 1-10) | Loss shape / schedule | WIP | β sweep bracketed (β=0.25 closed +9.3%, β=1.0 closed); anneal β for best of both regimes |
+| edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | #1763 compile MERGED (new best val=71.44); val still descending at cap with T_max=30 starving LR |
+| fern | #1805 | Adaptive Huber β annealing (β=1.0 → β=0.5 over epochs 1-10) | Loss shape / schedule | WIP | β sweep bracketed (β=0.25 closed +9.3%); anneal β for best of both regimes |
 | frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
-| nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED (new best −0.96%); extend warmup to see if EMA catch-up gain scales |
+| nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED; extend warmup to see if EMA catch-up gain scales |
 | tanjiro | #1784 | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | WIP | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
 | thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
 
-**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.0926` (PR #1672 warmup 1ep, test=75.5171, W&B 1hn6ur4l). PRs that only beat the prior β=0.5 baseline (85.92) but not the current baseline will be sent back for retest.
+**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 71.4371` (PR #1763 torch.compile, test=62.5927, W&B o6k5dj4g). PRs that only beat the pre-compile baseline (85.09) are outdated — the hypothesis must be retested ON TOP OF the compile stack to be meaningful.
+
+**Important caveat for in-flight WIPs**: PRs #1743, #1783, #1784, #1791, #1792, #1805, #1806 were all assigned BEFORE the torch.compile merge. They are running on the pre-compile stack and will complete ~17 epochs (not 29). Evaluation will compare them against the old 85.09 baseline for mechanism validation only. Any result that beats 71.44 is a clean MERGE; results between 71.44 and 85.09 show the hypothesis has merit but needs retesting on top of compile.
 
 ## Closed hypotheses (all rounds)
 
@@ -66,8 +70,9 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 - **Huber β=0.5** (#1689, fern) — val=85.92 (−6.96% vs β=1.0 baseline). MERGED. All 4 splits improved; largest gains on hardest splits (in_dist −7.6%, camber_rc −7.0%). Mechanism: β=0.5 moves L1 gradient into the moderate-error bulk where loss density lives, directly aligning with MAE metric.
 - **Huber β=0.25** (#1705, fern) — val=93.92 (+9.31% vs β=0.5 baseline). β sweep bracketed: β=0.25 (worse), β=0.5 (BEST), β=1.0 (worse). Mechanism: quadratic region |x| < 0.25 too small for moderate errors; constant L1 gradient is too slow. in_dist hurt most (+17.81%), cruise least (+4.14%); consistent with error-distribution explanation. Adaptive β schedule (1.0→0.5 anneal) under test in #1805.
 
-### Training efficiency
+### Training efficiency / throughput
 - **EMA without diagnostic pass** (#1626, fern) — val=92.46 (+0.12 within noise). Diagnostic overhead was ~8 s/epoch not the predicted ~25 s; +1 epoch in budget (18 vs 17) insufficient to escape noise. Bottleneck is training step, not val. Useful intel: peak mem 32.9 GB / 96 GB.
+- **torch.compile(model, dynamic=True)** (#1763, edward) — val=71.44 (−16.06% vs warmup baseline). MERGED. 44% per-epoch speedup, 29 epochs vs 17 in 30 min. All 4 splits dramatically improved. Val still descending at cap → follow-up epochs=40 under test (#1833).
 
 ### EMA variants
 - **EMA decay=0.9995** (#1669, edward) — val=133.43 (+41 MAE, catastrophic). At 30-min cap, 3.7-epoch half-life can't reach steady state — shadow stays anchored to high-loss init iterates. Clean isolation: live model trajectory identical to baseline. Mechanism plausible at ≥20 epoch budget; falsified at ours.
@@ -92,18 +97,35 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 1. **bf16 is the dominant lever** — 18 epochs/30 min vs 11-14 for fp32. Merged.
 2. **Huber loss is the second lever** — loss-shape alignment with MAE metric; ~4 epochs of effective speedup vs MSE. Merged.
 3. **EMA weight averaging is the third lever** — reduces the SGD noise ball at eval; EMA consistently outperforms live weights from epoch 9+ (epoch 17: −25 MAE). Merged.
-4. **All three stack orthogonally** — compounding from val~160 to val=92.35 confirms each lever is mostly independent. The remaining headroom from these three stacked should be explored before declaring a local minimum.
-5. **Gradient norms are massive without clipping** — 5250/5250 steps clipped at max_norm=1.0, max norm 837. Acts as full gradient normalization. Tanjiro's retest on bf16 will show whether smoother trajectory compounds with the existing stack.
-6. **Per-epoch throughput is king** — any lever that doesn't speed up wall-clock per-epoch or improve sample-efficiency struggles. Architecture levers (wider, deeper, more slices) face this headwind.
-7. **val_single_in_dist is hardest** (~112-175 MAE across runs). OOD camber_cruise is easiest (58-87 MAE). In_dist being hardest is likely extreme-Re / extreme-p samples in the in-distribution set, not an overfitting artifact.
+4. **torch.compile is the fourth major lever** — 44% per-epoch speedup, 29 epochs in 30 min. This is transformative: the entire throughput ceiling has shifted. All previously-failed capacity experiments that were ~1.2× slower than baseline should be retested on compile stack.
+5. **Val is still falling at the cap** — at epoch 29 (~0.4 MAE/epoch). We are not at convergence. Each new epoch gets cheaper; the ceiling keeps rising.
+6. **Gradient norms are massive without clipping** — 5250/5250 steps clipped at max_norm=1.0, max norm 837. Acts as full gradient normalization. Tanjiro's retest on bf16 will show whether smoother trajectory compounds with the existing stack.
+7. **Per-epoch throughput is king** — any lever that doesn't speed up wall-clock per-epoch or improve sample-efficiency struggles. Architecture levers (wider, deeper, more slices) face this headwind. But the compile win shows there was a **5× larger** throughput gain available than any architecture tweak could deliver.
+8. **val_single_in_dist is hardest** (~112-175 MAE across runs, ~70 post-compile). OOD camber_cruise is easiest (~44 post-compile). In_dist being hardest is likely extreme-Re / extreme-p samples in the in-distribution set, not an overfitting artifact.
 
 ## Potential next directions (post current round)
 
-- **Huber β=0.25** (assigned to fern) — continue pushing toward pure L1; EMA should buffer kink noise
-- **Annealing β over training** — start β=1.0 (stable early when errors are large) → decay to β=0.25 (MAE-aligned late)
-- **torch.compile** — throughput angle; ~1.2–1.5× speedup if compiles cleanly with bf16
-- **Re-conditioning** — explicit Re-aware embeddings or log-Re positional encoding (re_rand split still underperforms)
-- **Surface-aware decoder / dual-head** — separate volume and surface heads
+### Immediate (compile stack, higher epoch budget)
+- **T_max decoupling**: `--epochs 40` (edward, #1833) — allow cosine to run longer into training; val still falling at cap
+- **Even longer schedule**: if 40-epoch cosine wins, try `T_max=60` or warm-restart cosine
+- **LR at cap analysis**: the "hot LR" from T_max >> actual epochs was accidentally beneficial; design this explicitly
+- **All pre-compile hypotheses retested on compile stack**: alphonse lr=7e-4 (#1791), askeladd surf_weight=5 (#1743), frieren n_layers=3 (#1792), etc. — should all be retested on compile stack regardless of pre-compile result
+
+### Loss / optimization
+- **Adaptive β schedule** (fern, #1805) — still under test; mechanism now has more epochs to express itself (29 vs 17)
+- **Gradient clipping safety-net** (tanjiro, #1784) — max_norm=10 vs max_norm=1.0 (100% clip); spike suppression only
+- **Lookahead optimizer** (thorfinn, #1783) — EMA operates at weight level; Lookahead at optimizer level — complementary hypothesis
+- **Re-conditioning**: explicit Re-aware embeddings or log-Re positional encoding (re_rand split: 61.35 → ~55 target)
+- **Cycle LR / warm restarts**: SGDR cosine restarts every ~5-8 epochs might prevent stagnation
+
+### Architecture (on compile stack — higher epoch budget changes the equation)
+- **n_layers=3** (frieren, #1792): shallower model may now NOT need throughput savings (29 epochs is ample); test if 3-layer model is actually expressive enough at 29 epochs
+- **n_layers=7**: was untested; on compile stack, per-epoch cost for +2 layers is smaller fraction of budget
+- **slice_num=80**: not yet tested; small step toward slice_num=64 minimum
+- **Batch size = 8 on compile stack**: dataloader was the bottleneck before; compile may shift it to GPU compute, making bs=8 viable again
+
+### Architecture — fresh directions (post-plateau, when current stack is exhausted)
+- **Surface-aware decoder / dual-head** — separate volume and surface heads; surface MAE is the metric, optimize directly
 - **Spectral / Fourier neural operator hybrids** — fresh architecture direction if attention-based plateau
 - **Test-time augmentation** using physical symmetries (mirroring flow domain)
-- **Lookahead optimizer** — complementary to EMA at optimizer level
+- **Graph neural network surrogate** — physics-aware topology instead of attention slicing

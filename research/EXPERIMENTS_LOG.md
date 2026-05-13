@@ -636,3 +636,28 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Per-split pattern validates mechanism**: in_dist worst (+17.81%, large errors deep in L1 regime), camber_cruise least affected (+4.14%, smaller errors closer to quadratic boundary).
 - **Student's follow-up suggestion adopted**: adaptive β schedule (β=1.0 early → β=0.5 late). Reassigning fern.
 - **Decision: CLOSE.** β=0.5 is confirmed as the fixed-β optimum. Assigning fern to adaptive β annealing.
+
+## 2026-05-13 02:10 — PR #1763: edward torch.compile (review 1, MERGED — massive throughput win)
+
+- Branch: `willowpai2g48h5-edward/torch-compile`
+- W&B run: `o6k5dj4g` (29 epochs in 30.7 min; ~63 s/epoch steady state; `torch.compile(model, dynamic=True, mode='default')`)
+- Hypothesis: throughput-bound research — compile attack on the per-epoch wall-clock ceiling that killed n_layers=8, n_hidden=192, slice_num=96, EMA=0.9995.
+
+| Metric | torch.compile (o6k5dj4g) | warmup baseline (1hn6ur4l) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 29) | **71.4371** | 85.0926 | **−13.66 (−16.06%)** |
+| `test_avg/mae_surf_p` | **62.5927** | 75.5171 | **−12.92 (−17.11%)** |
+| `test/test_single_in_dist/mae_surf_p` | **70.43** | 87.10 | −16.67 |
+| `test/test_geom_camber_rc/mae_surf_p` | **74.09** | 84.58 | −10.49 |
+| `test/test_geom_camber_cruise/mae_surf_p` | **44.51** | 55.50 | −10.99 |
+| `test/test_re_rand/mae_surf_p` | **61.35** | 74.90 | −13.55 |
+| Per-epoch wall time | ~63 s (steady) | ~110 s | **−44%** |
+| Epochs in 30 min | **29** | 17 | **+12 (+71%)** |
+| Peak GPU memory | 23.8 GB | unmeasured | ~headroom |
+
+- **Throughput delivered above estimate**: PR hypothesis was 15–35% speedup; actual was 44%. PhysicsAttention is small-kernel-heavy → inductor fusion + bf16 compose cleanly.
+- **All 4 test splits improve dramatically** (best gains in_dist −16.67, cruise −10.99).
+- **Val curve was still descending at cap** (~0.4 MAE/epoch ep 27–29). More epochs would help further.
+- **Confounder flagged**: `--epochs 30` makes cosine T_max=30 instead of baseline implicit T_max=50; some of the val gain may be from the more aggressive schedule. The throughput component is clean either way (29 vs 17 epochs is undeniable).
+- **Decision: MERGE.** New baseline: val=71.4371, test=62.5927. All downstream experiments inherit compile automatically; in-flight PRs will rebase onto this stack.
+- **Edward reassigned to `--epochs 40` with T_max=40** — convert the freed budget into more training. Val was still descending; estimate ~35–38 epochs in 30 min with slightly less aggressive cosine, projecting val ~64–67.
