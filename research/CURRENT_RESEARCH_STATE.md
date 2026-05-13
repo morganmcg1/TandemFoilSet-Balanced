@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 13:00 UTC (Wave 13: CLOSE #2136 alphonse n_head=2 (+1.24%, axis exhausted); CLOSE #2075 thorfinn LayerScale 0.0125 (+2.53%, floor confirmed at 0.025); ASSIGN #2262 alphonse slice_num=96; ASSIGN #2266 thorfinn GeGLU gate comparison)
+- **Last updated**: 2026-05-13 13:30 UTC (Wave 13: CLOSE #2221 askeladd RMSNorm (+20.2% — LayerNorm mean-centering essential for SwiGLU gate); CLOSE #2200 tanjiro SwiGLU 384 (+1.94%, compute-bound); ASSIGN #2281 tanjiro swiglu-inner-dim-320; ASSIGN #2286 askeladd flow-cond-fourier-re-aoa)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -33,14 +33,14 @@ The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 lo
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| alphonse | #2262 | slice-num-96 | slice_num=64→96: Transolver physics-slice capacity sweep (+50% inter-token states) | NEW |
-| askeladd | #2221 | rmsnorm-post-swiglu | LayerNorm→RMSNorm: LLaMA recipe, removes mean-centering, pairs with SwiGLU | WIP |
+| alphonse | #2262 | slice-num-96 | slice_num=64→96: Transolver physics-slice capacity sweep (+50% inter-token states) | WIP |
+| askeladd | #2286 | flow-cond-fourier-re-aoa | Fourier encode log_Re+AoA0+AoA1 dims (n_freqs=2); +12 features, fun_dim 44→56 | NEW |
 | edward | #2225 | gaussian-rff-σ-calibrated | Gaussian RFF σ=1.0 + σ=3.0 arms (vs dyadic L=6, σ=10 failed +36.6%) | WIP |
 | fern | #2244 | n-layers-6-depth | n_layers=5→6: depth bump on SwiGLU stack, stoch-depth auto-adjusted | WIP |
-| frieren | #2098 | lion-optimizer | Lion+SwiGLU rebase; training stopped GPU=0% without committing metrics; re-run in progress | WIP (re-run) |
+| frieren | #2098 | lion-optimizer | Lion+SwiGLU re-run; training actively running | WIP (re-run) |
 | nezuko | #2239 | lr-3e-4-bracket-post-swiglu | Peak lr=5e-4→3e-4 on post-SwiGLU stack | WIP |
-| tanjiro | #2200 | swiglu-inner-dim-384 | SwiGLU inner_dim 256→384: next bisect in capacity sweep | WIP (training) |
-| thorfinn | #2266 | geglu-gate-comparison | GeGLU: SiLU→GELU in SwiGLU gate — mechanism comparison, zero param cost | NEW |
+| tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320: bisect between won-256 and lost-384 | NEW |
+| thorfinn | #2266 | geglu-gate-comparison | GeGLU: SiLU→GELU in SwiGLU gate — mechanism comparison, zero param cost | WIP |
 
 **Merged/closed in Wave 12/13:**
 - **#2105 tanjiro SwiGLU** — MERGED (val=68.812 −6.96%; 12th compound win)
@@ -49,27 +49,34 @@ The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 lo
 - **#2102/#2135 askeladd/edward** — CLOSED (crash-loop; reassigned as #2221/#2225)
 - **#2137 nezuko lr-3e-4** — CLOSED (crash-loop; reassigned as #2239)
 - **#2157 fern vol-ch-weight-pressure** — CLOSED (+1.28%; vol-pressure axis closed)
-- **#2136 alphonse n_head=2** — CLOSED (+1.24% vs old baseline; n_head axis exhausted at n_head=4)
-- **#2075 thorfinn LayerScale 0.0125** — CLOSED (+2.53% vs old baseline; LayerScale floor confirmed at 0.025; axis exhausted)
+- **#2136 alphonse n_head=2** — CLOSED (+1.24%; n_head axis exhausted at n_head=4)
+- **#2075 thorfinn LayerScale 0.0125** — CLOSED (+2.53%; LayerScale floor confirmed at 0.025)
+- **#2221 askeladd RMSNorm** — CLOSED (+20.2%; LayerNorm mean-centering + β bias load-bearing for SwiGLU gate; normalization axis closed)
+- **#2200 tanjiro SwiGLU 384** — CLOSED (+1.94%; compute-bound: 21% slower/epoch, only 11 epochs; val_camber_rc improved −2.39%, in-dist regressed; reassigned as #2281 inner_dim=320 bisect)
 
 **Closed axes (permanently):**
 - Attention head count: n_head=8 (+7.81%), n_head=2 (+1.24%) — n_head=4 is optimum
 - LayerScale init: sweep 0.1→0.05→0.025→0.0125 complete, 0.025 is the floor
 - Vol-loss per-channel weighting: conflicts with surf-ch-weight [0.5,0.5,2.0]
-- (and all earlier-closed axes from BASELINE.md)
+- Normalization: LayerNorm + β bias is the optimum; RMSNorm fails +20% (mean-centering essential for SwiGLU gate)
+- (all earlier-closed axes from BASELINE.md)
 
-**Frieren Lion (#2098) context:** Lion+SwiGLU rebase ran for ~17 min then stopped without committing. Re-run required. Pre-rebase Lion val=67.846 narrowly misses current 67.381; Lion+SwiGLU composition could break 65 val.
+**Key finding from #2221 (normalization):** LayerNorm's mean-centering is essential for SwiGLU gate stability. Without mean-subtraction, W_gate·x carries DC component → SiLU asymmetry. LayerNorm β bias carries additive DOF that RMSNorm loses. This rules out ALL mean-centering-free normalization swaps.
+
+**Key finding from #2200 (width sweep):** inner_dim=384 is compute-bound (not capacity-bound) at 30-min cap. val_camber_rc (−2.39%) shows capacity-benefit on hardest OOD; in-dist regression is optimization gap. Inner_dim=320 bisect (#2281) tests whether this trade-off improves at lower compute cost.
+
+**Frieren Lion (#2098) context:** actively re-running post-rebase. Pre-rebase Lion val=67.846 vs current 67.381. Lion+SwiGLU could be the largest single gain if orthogonal.
 
 **Prioritized research themes for Wave 14** (after in-flight results):
 
-1. **SwiGLU width sweep**: #2200 (inner_dim=384) — if wins, try 512; if plateaus, 256 is optimum
-2. **Depth** (#2244 n_layers=6): first depth test ever; val_geom_camber_rc=80.673 primary expected beneficiary
-3. **Lion optimizer** (#2098 re-run): sign-momentum orthogonal to all merged stack components
-4. **RMSNorm** (#2221): LLaMA/Mistral recipe — SwiGLU + RMSNorm is a well-studied combination
-5. **Gaussian Fourier σ-calibration** (#2225): σ-matched features for std-normalized CFD coords
-6. **slice_num=96** (#2262): first Transolver token-capacity test ever
-7. **GeGLU gate** (#2266): mechanism comparison — isolates whether SiLU vs GELU matters for physics regression
-8. **LR=3e-4** (#2239): peak lr may need re-tuning on wider SwiGLU stack
+1. **Lion optimizer** (#2098): sign-momentum orthogonal to all merged stack components; pre-SwiGLU -8.83% val
+2. **Depth** (#2244 n_layers=6): first depth test ever; val_geom_camber_rc=80.673 primary beneficiary
+3. **SwiGLU width bisect** (#2281 inner_dim=320): decouple capacity from compute budget
+4. **Flow-cond Fourier** (#2286 log_Re/AoA): first non-spatial Fourier encoding; val_re_rand targeted
+5. **Gaussian Fourier σ-calibration** (#2225): σ-matched RFF for std-normalized CFD coords
+6. **slice_num=96** (#2262): Transolver token capacity, first-ever test
+7. **GeGLU gate** (#2266): SiLU vs GELU in SwiGLU — mechanism comparison
+8. **LR=3e-4** (#2239): peak lr may need re-tuning on SwiGLU stack
 9. **n_layers=7**: follow-up if #2244 wins
 10. **slice_num=128**: follow-up if #2262 wins
 

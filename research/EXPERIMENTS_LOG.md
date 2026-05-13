@@ -8,6 +8,41 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 13:30 — PR #2221 (askeladd rmsnorm-post-swiglu) — **CLOSED** (catastrophic regression)
+
+- Branch: `charliepai2g24h4-askeladd/rmsnorm-post-swiglu`
+- Hypothesis: Replace LayerNorm with RMSNorm (Zhang & Sennrich 2019) in all TransolverBlocks. Motivation: LLaMA/Mistral pair SwiGLU+RMSNorm successfully; removing mean-centering + β bias reduces params by 1,408.
+
+| metric | Baseline (#2175) | RMSNorm | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 67.381 | 80.997 | **+20.2%** |
+| **test_avg** | 57.800 | 71.398 | **+23.5%** |
+| val_single_in_dist | 73.341 | 103.066 | **+40.5%** |
+| val_geom_camber_rc | 80.673 | 87.473 | +8.4% |
+| val_geom_camber_cruise | 48.675 | 57.770 | +18.7% |
+| val_re_rand | 66.834 | 75.679 | +13.2% |
+
+Best epoch: 10 (vs 13 baseline — slower per-epoch convergence). n_params: 829,783 (−1,408 from LN bias removal).
+
+**Mechanism**: LayerNorm's mean-centering is essential for SwiGLU gate stability. Without it, W_gate·x carries DC component → SiLU asymmetry. LayerNorm β bias was load-bearing additive DOF (3 DOF with LN: γ_LN + β_LN + γ_l; only 2 with RMSNorm: γ_RMS × γ_l). Uniform regression across all splits — generic training-dynamics failure, not domain-specific. val_single_in_dist (+40.5%) worst-hit: high-magnitude p features sensitive to gate asymmetry without mean centering. **Normalization axis closed: LayerNorm + affine is the optimum.**
+
+## 2026-05-13 13:30 — PR #2200 (tanjiro swiglu-inner-dim-384) — **CLOSED** (compute-bound)
+
+- Branch: `charliepai2g24h4-tanjiro/swiglu-inner-dim-384`
+- Hypothesis: SwiGLU inner_dim 256→384 (1.5× wider gate/up/down projections). Following 256's win, test next bisect.
+
+| metric | #2175 (256) | inner_dim=384 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 67.381 | 68.687 | **+1.94%** |
+| **test_avg** | 57.800 | 60.389 | **+4.48%** |
+| val_single_in_dist | 73.341 | 78.506 | +7.04% |
+| val_geom_camber_rc | 80.673 | 78.742 | **−2.39%** ✓ |
+| val_re_rand | 66.834 | 66.581 | **−0.38%** ✓ |
+
+n_params: 1,076,951 (+245K). Best epoch: 11 (vs 13 baseline). Sec/epoch: 167 vs 138 (+21%).
+
+**Mechanism**: Compute-bound failure. +21% per-epoch cost → only 11 epochs vs 13 baseline. Cosine LR T_max=14 not fully traversed. Model still capacity-limited (best=last epoch trained, monotone improving). Key finding: val_camber_rc IMPROVED (−2.39%) despite average regression — extra capacity helps hardest OOD. In-dist splits regressed because fewer LR steps, not because width hurts. **Bisect at 320 (H39) assigned.** Inner_dim width axis may still open if compute budget decoupled.
+
 ## 2026-05-13 13:00 — PR #2075 (thorfinn layerscale-init-0.0125) — **CLOSED** (amplitude floor)
 
 - Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.0125`
