@@ -461,3 +461,24 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Mechanism: dropout helps where overfitting is the failure mode** (in_dist, camber_rc), not where genuine extrapolation is required (camber_cruise, re_rand). OOD failure modes differ by split.
 - **Decision: SEND BACK for retest on β=0.5+EMA+bf16 baseline.** Mechanisms are orthogonal; if they stack, dropout should give another −2 MAE on top of β=0.5. If camber_cruise/re_rand regressions persist, try dropout=0.05.
 
+## 2026-05-13 00:10 — PR #1672: nezuko linear LR warmup 1 epoch (review 1, sent back — new baseline needed + T_max confounder)
+
+- Branch: `willowpai2g48h5-nezuko/lr-warmup-1ep`
+- W&B run: `zp13gmgt` (17 epochs; 110 s/epoch; SequentialLR with 1-epoch linear warmup 0.2→1.0 then cosine)
+- Hypothesis: 1-epoch warmup (a) reduces early-epoch EMA lag, (b) gentler optimization start prevents gradient spikes.
+
+| Metric | Warmup (zp13gmgt) | EMA baseline (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 91.7248 | 92.3452 | −0.62 (−0.67%) |
+| `test_avg/mae_surf_p` | 81.2043 | 81.6297 | −0.43 (−0.52%) |
+| `test/test_single_in_dist/mae_surf_p` | **91.52** | 95.30 | **−3.78** (better) |
+| `test/test_geom_camber_rc/mae_surf_p` | **89.60** | 91.93 | **−2.33** (better) |
+| `test/test_geom_camber_cruise/mae_surf_p` | 60.86 | 58.72 | +2.15 (worse) |
+| `test/test_re_rand/mae_surf_p` | 82.84 | 80.58 | +2.26 (worse) |
+
+- **Beat OLD baseline** but no longer beats NEW baseline (val=85.92 after #1689 merge).
+- **EMA-lag hypothesis FALSIFIED** by student's diagnostic: epoch-1 EMA−Live gap was +108.3 vs baseline +106.6 — essentially identical. At decay=0.999, EMA shadow at epoch 1 is still ~70% initialization (0.31 cumulative replacement); slowing first-epoch updates doesn't change much.
+- **Mechanism (b) partial credit**: warmup placed model in slightly different basin — IID and camber_rc improved materially, but camber_cruise/re_rand regressed. Mixed signal.
+- **Confounder flagged by student**: cosine `T_max=29` (vs baseline T_max=30) → late-phase LR ~6% higher at epoch 17. Honest disclosure.
+- **Decision: SEND BACK for retest on β=0.5 baseline + fixed T_max** (`T_max=MAX_EPOCHS * len(train_loader) - warmup_steps`). Mechanism may still stack on β=0.5; clean retest needed.
+

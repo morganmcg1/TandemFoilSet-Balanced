@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 00:10
+- **Date:** 2026-05-13 00:30
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -37,9 +37,9 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1427 | `surf_weight=30` (3×) | Loss weighting | WIP (rebasing) | pinged with Huber+bf16 baseline; rebase requested |
 | edward | #1669 | EMA decay=0.9995 (longer half-life, 3.7 epochs) | EMA variant | WIP | flag-only change; tests wider averaging window |
-| fern | TBD | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP (queued) | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
+| fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
-| nezuko | #1672 | Linear LR warmup 1 epoch before cosine | LR schedule | WIP | SequentialLR warmup; targets EMA early-lag and gradient instability |
+| nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
 | tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebased 21:18) | v2 rerun on bf16+Huber+EMA |
 | thorfinn | #1629 | Dropout=0.1 v2 on β=0.5 baseline | OOD regularization | WIP (sent back) | beat old baseline (90.08); retest needed on new baseline (85.92) |
 
