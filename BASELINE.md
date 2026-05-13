@@ -8,36 +8,50 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **53.62** | PR #2028 (merged 2026-05-13) — per-channel Huber δ=[0.5,0.5,0.2] on n_hidden=160+Lion+BF16+epochs=16 stack |
-| **test_avg/mae_surf_p** | **49.65** | PR #2028 — all 4 splits finite |
-| Peak VRAM | 37.99 GB | PR #2028 — BF16, batch=4, n_hidden=160 |
-| s/epoch | ~115 s | PR #2028 — 16 epochs ≈ 30.7 min total |
+| **val_avg/mae_surf_p** | **52.78** | PR #2027 (merged 2026-05-13) — Lion lr=2e-4 on per-channel δ + n_hidden=160 stack |
+| **test_avg/mae_surf_p** | **49.42** | PR #2027 — all 4 splits finite |
+| Peak VRAM | 37.99 GB | PR #2027 — BF16, batch=4, n_hidden=160 |
+| s/epoch | ~109 s | PR #2027 — 16 epochs ≈ 29 min total |
 
-### Per-split val (PR #2028, epoch 16, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 58.46 |
-| val_geom_camber_rc | 67.34 |
-| val_geom_camber_cruise | 35.10 |
-| val_re_rand | 53.58 |
-| **val_avg** | **53.62** |
-
-### Per-split test (PR #2028, epoch 16 best checkpoint, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+### Per-split val (PR #2027, epoch 16, lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 48.40 |
-| test_geom_camber_rc | 58.75 |
-| test_geom_camber_cruise | 47.64 |
-| test_re_rand | 43.83 |
-| **test_avg** | **49.65** |
+| val_single_in_dist | 56.24 |
+| val_geom_camber_rc | 67.45 |
+| val_geom_camber_cruise | 34.25 |
+| val_re_rand | 53.17 |
+| **val_avg** | **52.78** |
+
+### Per-split test (PR #2027, epoch 16 best checkpoint, lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 46.75 |
+| test_geom_camber_rc | 59.92 |
+| test_geom_camber_cruise | 47.47 |
+| test_re_rand | 43.52 |
+| **test_avg** | **49.42** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --experiment_name per_channel_huber_delta_ep16 --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name pcd_lr2e4_baseline_check --agent <student>
 ```
-(n_hidden=160, Lion lr=3e-4, wd=6e-5, epochs=16; per-channel δ=[Ux=0.5, Uy=0.5, p=0.2] is now in train.py)
+(n_hidden=160, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2] in train.py defaults. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required** — train.py defaults `lion_lr=1.5e-4 / lion_weight_decay=3e-5` are stale from #1641 and do not match the current best config.)
+
+## 2026-05-13 09:00 — PR #2027: Lion lr=2e-4 on per-channel δ + n_hidden=160 stack (MERGED)
+
+- **val_avg/mae_surf_p: 52.7778** (↓ 1.6% from 53.62 — Lion LR optimum continues moving down as the loss landscape tightens)
+- **test_avg/mae_surf_p: 49.4184** (↓ 0.5% from 49.65)
+- **Peak VRAM: 37.99 GB** (unchanged); s/epoch ~109 s (slightly faster than 115 s baseline)
+- **Metric artifacts:** `models/model-lion_lr2e4_n160_pcd-20260513-081331/metrics.jsonl`
+- **What changed:** Lion `lr=3e-4 → 2e-4` (CLI flag only, no code change). All other config identical.
+- **Why it worked:** The wider model (n_hidden=160, 1.6× params) has larger per-parameter gradient contributions, so Lion's sign-quantized step size at lr=3e-4 over-shoots in the back half of training. Reducing to lr=2e-4 produces tighter convergence — visible in the per-epoch curve where divergence between lr=2e-4 and lr=3e-4 only appears after epoch 10 (once cosine decay and signs settle). Three of four val splits improve: single_in_dist −2.22, cruise −0.85, re_rand −0.41. The OOD-geometry split `geom_camber_rc` is flat (+0.11), consistent with smaller LR giving tighter in-distribution fits without over-stepping on harder samples. Compounds with PR #2028: per-channel δ does most of the work (−2.30 val), lr=2e-4 adds another −0.84.
+- **Baseline configuration delta:** `--lion_lr 2e-4` (explicit CLI flag; train.py default still 1.5e-4 — stale from #1641 sweep but not updated).
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name pcd_lr2e4_baseline_check --agent <student>
+  ```
 
 ## 2026-05-13 08:00 — PR #2028: Per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2] on n_hidden=160 stack (MERGED)
 
@@ -202,7 +216,7 @@ cd target/ && python train.py --epochs 16 --experiment_name per_channel_huber_de
 | Activation | GELU |
 | Loss | Per-channel Huber (Smooth-L1): δ=[Ux=0.5, Uy=0.5, p=0.2]; `vol_loss + 10 * surf_loss` |
 | Surface weight | 10.0 |
-| Optimizer | **Lion, lr=3e-4, weight_decay=6e-5** (changed from AdamW lr=1e-3) |
+| Optimizer | **Lion, lr=2e-4, weight_decay=6e-5** (lr lowered from 3e-4 → 2e-4 with PR #2027 on per-channel δ stack) |
 | LR schedule | LambdaLR, 3-epoch warmup + cosine to T_max=epochs |
 | Grad clip | max_norm=1.0 |
 | Batch size | 4 (variable mesh sizes, pad_collate to N_max) |
