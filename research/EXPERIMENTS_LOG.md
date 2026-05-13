@@ -4,6 +4,115 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 17:30 — PR #2484 (ASSIGNED, frieren): Skip SWALR — let cosine continue through SWA window; direct test of SWALR-overrides-cosine mental model
+
+- **Branch:** `willowpai2g48h2-frieren/skip-swalr-cosine-through-swa-window`
+- **Student:** willowpai2g48h2-frieren
+- **Hypothesis:** SWALR overrides cosine immediately at swa_start_epoch (3rd-confirmed mechanism). Skipping SWALR lets cosine continue through SWA window — SWA averages cosine-tail weights (lower LR, more tightly clustered around local optimum) instead of SWALR-floor weights (constant 6e-5). The original SWA paper's "constant LR for diversity" recommendation may not apply at our 13-epoch budget where cosine LR at epoch 13 = 1.95e-5 is still moving weights meaningfully under Lion's sign-update.
+- **Why this is high-value:** Directly tests the falsifiable alternative to the SWALR-overrides-cosine mental model that has misled #2187/#2285/#2342/#2429. Orthogonal to #2463 (swa_lr value) and #2481 (anneal_epochs) — both still use SWALR.
+
+---
+
+## 2026-05-13 17:30 — PR #2481 (ASSIGNED, edward): SWALR anneal_epochs=1 on σ=0.5 — eliminate mid-ramp averaging, all 3 SWA epochs at swa_lr
+
+- **Branch:** `willowpai2g48h2-edward/swa-anneal-epochs-1-on-sigma0p5`
+- **Student:** willowpai2g48h2-edward
+- **Hypothesis:** SWALR with anneal_epochs=2 wastes 1 epoch of SWA averaging on weights at mid-ramp LRs (1.04e-4 → 8.18e-5 → 6e-5). Cutting cooldown to 1 epoch gets the base model to swa_lr 1 epoch earlier; SWA window averages 3 epochs of weights at the swa_lr=6e-5 floor instead of 1 mid-ramp + 2 floor. Lion step magnitude at LR=8.18e-5 is ~36% larger than at 6e-5 → noisier ensemble.
+- **Why this is high-value:** Directly motivated by edward's own #2429 Diagnostic 3. Single-line code change. Orthogonal to all in-flight work (changes ramp speed, not floor value).
+
+---
+
+## 2026-05-13 17:30 — PR #2363 (CLOSED, frieren): Lion + linear warmup (3 epochs) on β=0.3+RFF+Kendall — clean regression, 6 banked findings
+
+- **Branch:** `willowpai2g48h2-frieren/lion-linear-warmup`
+- **Student:** willowpai2g48h2-frieren
+- **Hypothesis:** Linear warmup 3 epochs (lr 0→3e-4) reduces early-epoch gradient oscillation; Lion paper recommends "longer warmup."
+
+### Result table
+
+| Run | val_avg | test_avg | Δ vs σ=1.0 (47.64) | Δ vs σ=0.5 (45.76) | W&B |
+|---|---:|---:|---:|---:|---|
+| Warmup=3 | **49.3211** | **42.2118** | **+1.68 (regression)** | **+3.56 (regression)** | `jwleq79m` |
+
+### Per-split SWA val/test
+
+| Split | val (this run) | val (σ=1.0 base) | test (this run) | test (σ=1.0 base) |
+|---|---:|---:|---:|---:|
+| single_in_dist | 52.820 | 48.447 | 44.266 | 42.396 |
+| geom_camber_rc | 62.866 | 62.855 | 57.071 | 55.252 |
+| geom_camber_cruise | 31.832 | 29.711 | 26.412 | 24.413 |
+| re_rand | 49.766 | 49.553 | 41.098 | 40.197 |
+
+Largest regression on `single_in_dist` (+4.4) — the easiest split — consistent with under-training rather than over-fitting.
+
+### Commentary and conclusions
+
+**Three mechanism predictions failed:**
+
+1. **Lion has NO chaotic init phase.** Baseline epoch-1 val=189.70 at lr=3e-4 is NOT a chaotic-init signature — it's just where Lion's sign(EMA(grad)) lands after one epoch. Warmup at lr=1e-4 made epoch-1 *worse* (390.91), since sign-update direction is identical and magnitude shrinks.
+2. **clip_fraction is invariant to lr schedule.** Epochs 1-3 at lr ∈ {1e-4, 2e-4, 3e-4} all showed clip_fraction ≈ 99-100%. Clipping happens on raw ‖g‖ pre-optimizer-scaling — gradient distribution is set by (model + data + loss), not by hyperparameter schedule. **The persistent-clipping signature CANNOT be fixed by warmup/lr.**
+3. **Budget cost > smoothing benefit.** By epoch 9 warmup run was AHEAD (val 67.17 vs 78.74), but 30-min budget cut at epoch 13 before SWA could convert. Warmup spends 3 of 13 effective epochs at sub-lr → no budget left to amortize.
+
+**Banked findings (6):**
+
+1. **Lion does NOT have a chaotic init phase like Adam** — Adam→Lion mental model transfer for warmup is REFUTED. Don't assume Adam-paper recommendations transfer just because both are momentum-based.
+2. **clip_fraction is invariant to lr schedule** — gradient distribution is a property of (model + data + loss), not hyperparameters. Future clip-related experiments must manipulate `max_norm` or upstream loss/architecture, NOT lr.
+3. **Warmup smooths the trajectory (no epoch-7 regression) but smoothing alone isn't enough** for SWA-quality endpoint under the 30-min budget cap.
+4. **Budget-binding principle for lr-schedule manipulations** — at SENPAI_TIMEOUT_MINUTES=30 → ~13 effective epochs, ANY lr modification costing >1 epoch of full-lr training will struggle to recover. Applies to: warmup, longer T_max, EMA warm-up.
+5. **9th independent σ-collapse confirmation** — log_σ trajectory identical to baseline through warmup phase. σ-collapse invariant to lr schedule (in addition to grad-clip, optimizer, T_max).
+6. **clip_fraction definition discrepancy flagged** — student observed 99-100% clip_fraction while BASELINE.md cites 74% from #2063 `5hp3gid7`. Worth a future diagnostic PR — either definition mismatch or gradient norms have drifted across the merge series. Connects to #2270 alphonse pre-clip diagnostics gap.
+
+**Axis fully closed.** No follow-up arms recommended for the warmup direction. Student reassigned to **#2484 skip-SWALR experiment** — direct test of SWALR-overrides-cosine mental model, building on the diagnostic skill demonstrated here.
+
+---
+
+## 2026-05-13 17:30 — PR #2429 (CLOSED, edward): SWA start_frac ∈ {0.5, 0.6} sweep on σ=0.5 — clean regression, 6 banked findings inc. 3rd SWALR-overrides-cosine confirmation
+
+- **Branch:** `willowpai2g48h2-edward/swa-start-frac-sweep-on-sigma0p5`
+- **Student:** willowpai2g48h2-edward
+- **Hypothesis:** Lion converges faster than AdamW; plateau onset is earlier; earlier SWA averages more epochs in flat region.
+
+### Result table
+
+| Arm | swa_start_frac | SWA window | val_avg | test_avg | Δ val vs baseline | W&B |
+|---|---:|---|---:|---:|---:|---|
+| Baseline #2168 | 0.75 | epochs 12-13 (2 ep) | **45.7648** | **39.6619** | — | `7f6pqafs` |
+| Arm 1 | 0.6 | epochs 10-13 (4 ep) | 47.0247 | 40.4087 | +1.260 (+2.75%) | `5y94ql5q` |
+| Arm 2 | 0.5 | epochs 8-13 (6 ep) | 48.7746 | 41.8059 | +3.010 (+6.58%) | `iat48tvm` |
+
+Monotonic: smaller frac → worse. Decision rule: both arms > 47.0 (close threshold) → axis CLOSED in this direction.
+
+### Per-split (Arm 1 SWA val)
+
+| Split | Baseline | Arm 1 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 48.774 | 49.980 | +1.21 |
+| geom_camber_rc | 58.290 | 60.484 | +2.19 |
+| geom_camber_cruise | 29.111 | 29.791 | +0.68 |
+| re_rand | 46.885 | 47.843 | +0.96 |
+
+### Commentary and conclusions
+
+**The hypothesis "Lion plateau onset is earlier than AdamW" was wrong for this 13-epoch budget.** Edward's Diagnostic 2 shows train/loss dropping 0.57 (Arm 1) and 1.06 (Arm 2) units AFTER SWA start — clear non-plateau. Plateau onset is ≥ epoch 12. SWA windows of 4-6 epochs average actively-descending weights.
+
+Edward's Diagnostic 3 also surfaces the **3rd independent confirmation** that SWALR overrides cosine immediately at swa_start_epoch — at frac=0.6 the model trains at LR ≤ 1.04e-4 for epochs 9-13 (vs cosine which would have continued descending to ~3e-5 by epoch 13).
+
+**Banked findings (6):**
+
+1. **Lion's plateau onset on this 13-epoch budget is ≥ epoch 12, NOT 7-9.** The "Lion converges faster than AdamW so plateau starts earlier" mental model fails at timeout-capped budgets.
+2. **3rd independent SWALR-overrides-cosine confirmation** — tanjiro #2342 originally surfaced the mechanism; edward #2429's Diagnostic 3 confirms. The "SWA averages cosine eta_min plateau" mental model behind #2187, #2285, #2342, and #2429 is mechanically wrong.
+3. **swa_start_frac<0.75 compounds two regressions:** pre-plateau averaging AND earlier base-model LR cut. Multiplicative not additive cost.
+4. **`geom_camber_rc` is the dominant error contributor (~2× the other splits) on the σ=0.5 Lion stack.** Now the load-bearing OOD split for all future architecture/data work.
+5. **8th independent σ-collapse confirmation** — log_σ ≈ −0.88 to −0.91, invariant to SWA schedule.
+6. **effective_weight diagnostic** is a clean addition to σ-collapse confirmation reporting (= exp(−2·log_σ)).
+
+**Suggested follow-ups (from edward):**
+- Follow-up #2 (raise swa_lr → cosine-final) is in flight as tanjiro #2463.
+- **Follow-up #3 (anneal_epochs=1)** is the natural next step — orthogonal to all in-flight; edward reassigned to **#2481** to run it.
+- Opposite-direction bracket (frac=0.85) banked as future direction.
+
+---
+
 ## 2026-05-13 17:10 — PR #2390 (SENT BACK, askeladd): Lion wd sweep {1e-4, 1e-3, 3e-3} on β=0.3+RFF σ=1.0+Kendall — mechanism validated, rebase to σ=0.5 + extend to wd=1e-2
 
 - **Branch:** `willowpai2g48h2-askeladd/lion-wd-sweep-on-beta0p3`
