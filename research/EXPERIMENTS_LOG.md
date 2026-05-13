@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-13 19:45 — PR #2489: wd=3e-4/1e-3 stack on n_head=2+n_layers=3 (edward) — MERGED, NEW BEST
+
+- **Branch:** `willowpai2g24h5-edward/wd-n-layers-3-slice32`
+- **Hypothesis:** wd=3e-4 monotonic signal from #2356 (n_layers=5 compound) should transfer directly to new n_layers=3 baseline; test whether wd=1e-3 extends the trend further.
+- **W&B runs:** `vtewwalc` (wd=3e-4, winner), `h2h5d9cl` (wd=1e-3, flat)
+
+| Arm | wd | val | test | Δ vs #2400 (43.14/36.95) | Epochs |
+|-----|-----|-----|------|--------------------------|--------|
+| **1** | **3e-4** | **42.0040** | **35.9573** | **−2.64% / −2.69% ✓** | 33 |
+| 2 | 1e-3 | 43.1112 | 36.8196 | −0.07% / −0.35% ✗ | 34 |
+| Baseline #2400 | 1e-4 | 43.14 | 36.95 | — | 34 |
+
+Per-test-split (mae_surf_p): single_in_dist=37.27 (−5.2%), geom_camber_rc=50.92 (−1.6%), geom_camber_cruise=20.96 (−1.7%), re_rand=34.69 (−2.1%) — **all 4 improve on Arm 1**.
+
+**Result:** MERGED. val=42.0040/test=35.9573. New best.
+
+Key findings:
+1. **wd=3e-4 signal transfers from n_layers=5 to n_layers=3.** Same regularization advantage as #2356, consistent relative magnitude (~2.6% val improvement). Depth-independent regularization.
+2. **Monotonic trend does NOT extend to wd=1e-3 at n_layers=3.** Arm 2 flat on val, 3/4 OOD splits regress. Shallower architecture is more sensitive to over-regularization — same penalty has larger relative effect at fewer layers.
+3. **wd=3e-4 confirmed as the operating point.** No exploration needed below 3e-4 or above.
+4. **Edward's suggestion for dropout follow-up is sound:** higher dropout (0.25/0.30) as complementary regularization axis, stacking on wd=3e-4.
+
+**Edward reassigned:** dropout=0.25/0.30 stack on new wd=3e-4 compound.
+
+---
+
 ## 2026-05-13 19:30 — PR #2490: slice_num=16/8 stack on n_head=2+n_layers=3 (frieren) — CLOSED, ANTI-STACKS
 
 - **Branch:** `willowpai2g24h5-frieren/slice16-stack-n-layers-3`
