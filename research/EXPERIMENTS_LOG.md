@@ -1764,3 +1764,40 @@ Per-split (trial-2, wd=0): in_dist=68.77, rc=75.36, cruise=48.44, re_rand=65.57.
 - **Conclusions**: LR floor ≥ 1e-5 in the cosine tail is harmful. eta_min lever CLOSED at eta_min=0. EMA revival via eta_min>0 pathway also closed — both point to LR→0 as optimal for convergence. Finding #44 established.
 
 → Assigned alphonse Lion gradient noise (PR #2485): LR-scaled Langevin perturbation inside Lion update step — orthogonal to eta_min, respects LR→0 tail by design.
+
+## 2026-05-13 18:30 — PR #2456: Pre-LN → Post-LN swap in TransolverBlock (WINNER)
+- willowpai2g48h1-tanjiro/postln-swap
+- **Hypothesis**: Moving LayerNorm from before (pre-LN) to after (post-LN) the residual connection keeps the residual stream bounded at each layer, enabling convergence to a deeper minimum.
+- **Results**:
+
+| Metric | post-LN | baseline (#2343 wd=0) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **51.5839** | 60.7447 | **−15.08%** |
+| val_avg/mae_surf_p | 59.1952 | 69.3303 | −14.62% |
+| best_epoch | 18 (final) | 18 | — |
+| W&B run | ovv9h3s7 | rxid6958 | — |
+
+Per-split (test): in_dist=51.59 (−17.30%), rc=61.37 (−13.46%), cruise=39.33 (−16.17%), re_rand=54.04 (−13.91%). All 4 splits improved uniformly — 10.8× the noise floor.
+
+- **Analysis**: Uniform IID+OOD improvement is the decisive signature — this is a representation-level effect, NOT the IID/OOD redistribution pattern from Finding #41. Post-LN keeps residual stream stationary (bounded); the model reaches a different, deeper minimum than pre-LN. best_epoch=18 with loss still descending at cutoff — minimum has more headroom with more epochs or higher LR. Sharp contrast with RMSNorm (#2425): placement-after-residual is the first-order lever; computation type (LayerNorm vs RMSNorm) is second-order. Also: post-LN's e1 gn_mean=83.6 vs typical pre-LN 100-120 — gradient statistics changed. Finding #45 established.
+
+- **New baseline: test_avg/mae_surf_p = 51.5839**
+
+→ Assigned tanjiro RMSNorm under post-LN (PR #2499): stack computation type on placement position.
+→ Assigned askeladd LR re-calibration (PR #2494): Finding #20 (lr=1.5e-4) was on pre-LN stack; post-LN changes gradient stability boundary.
+
+## 2026-05-13 18:30 — PR #2458: Lookahead meta-optimizer wrapping Lion (k=5/10)
+- willowpai2g48h1-askeladd/lookahead-lion
+- **Hypothesis**: Lookahead's Polyak averaging over k=5/10 inner steps would reduce Lion's sign-flip variance and find flatter minima.
+- **Results**:
+
+| Arm | k | test_avg | vs baseline | W&B |
+|---|---|---|---|---|
+| Arm 1 | 5 | 66.6682 | **+9.76%** | 7j048p95 |
+| Arm 2 | 10 | aborted (>2% regression abort rule) | — | — |
+
+Per-split (Arm 1, k=5): in_dist=70.90 (+13.69%), rc=75.89 (+7.00%), cruise=51.02 (+8.76%), re_rand=68.87 (+9.70%). All splits regressed.
+
+- **Analysis**: Lookahead's slow-step Polyak averaging started from initialization (slow weights=0). In epoch 1, the first slow-step at k=5 iterations pulled parameters back toward the origin — classic "early-training anchor drag." This is fundamentally incompatible with Lion's structure: Lion's sign-based binary updates have no local-exploration phase that Polyak averaging is designed to smooth. Averaging binary direction choices is destructive, not regularizing. The meta-optimizer lever is closed for Lion. Finding #45b established.
+
+→ Assigned askeladd LR re-calibration (PR #2494): test lr=3e-4 under post-LN.
