@@ -421,6 +421,7 @@ class Config:
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -531,7 +532,13 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    optimizer.zero_grad()
+    accum_loss = 0.0
+    n_micro_in_accum = 0
+    total_micro = len(train_loader)
+    for step_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -550,12 +557,24 @@ for epoch in range(MAX_EPOCHS):
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
+            scaled_loss = loss / cfg.accumulation_steps
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        scaled_loss.backward()
+        accum_loss += loss.item()
+        n_micro_in_accum += 1
+
+        is_step = ((step_idx + 1) % cfg.accumulation_steps == 0) or ((step_idx + 1) == total_micro)
+        if is_step:
+            optimizer.step()
+            optimizer.zero_grad()
+            global_step += 1
+            wandb.log({
+                "train/loss": accum_loss / max(n_micro_in_accum, 1),
+                "train/effective_batch_size": cfg.batch_size * n_micro_in_accum,
+                "global_step": global_step,
+            })
+            accum_loss = 0.0
+            n_micro_in_accum = 0
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
