@@ -458,6 +458,16 @@ optimizer = torch.optim.AdamW(
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
+# EMA weights — averaged trajectory used at eval/test time.
+# Effective averaging window ~1/(1-decay) = 1000 steps ≈ 4 epochs at bs=4.
+EMA_DECAY = 0.999
+ema_state = {
+    k: v.detach().clone()
+    for k, v in model.state_dict().items()
+    if v.dtype.is_floating_point
+}
+print(f"EMA: decay={EMA_DECAY}, tracking {len(ema_state)} floating-point tensors")
+
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
     project=os.environ.get("WANDB_PROJECT"),
@@ -470,6 +480,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_decay": EMA_DECAY,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -524,6 +535,13 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        # EMA update: θ_ema ← decay · θ_ema + (1 - decay) · θ
+        with torch.no_grad():
+            msd = model.state_dict()
+            for k in ema_state:
+                ema_state[k].mul_(EMA_DECAY).add_(msd[k].detach(), alpha=1 - EMA_DECAY)
+
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -539,15 +557,43 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate on EMA weights ---
+    # Swap live → EMA inside a try/finally so an eval-time crash can't leave
+    # the model in EMA state (which would silently corrupt the next epoch's
+    # EMA update).
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
-        for name, loader in val_loaders.items()
-    }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+    msd = model.state_dict()
+    live_state = {k: msd[k].detach().clone() for k in ema_state}
+    for k in ema_state:
+        msd[k].copy_(ema_state[k])
+
+    try:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        val_avg = aggregate_splits(split_metrics)
+        avg_surf_p = val_avg["avg/mae_surf_p"]
+        val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+        tag = ""
+        if avg_surf_p < best_avg_surf_p:
+            best_avg_surf_p = avg_surf_p
+            best_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+            # Save the checkpoint WHILE EMA weights are loaded — EMA is what
+            # we evaluate on test.
+            torch.save(model.state_dict(), model_path)
+            tag = " *"
+    finally:
+        # Always restore live weights for the next training epoch.
+        msd = model.state_dict()
+        for k in live_state:
+            msd[k].copy_(live_state[k])
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -562,19 +608,8 @@ for epoch in range(MAX_EPOCHS):
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc. (EMA-eval)
     wandb.log(log_metrics)
-
-    tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
-        best_metrics = {
-            "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
-        }
-        torch.save(model.state_dict(), model_path)
-        tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
@@ -592,6 +627,36 @@ with torch.no_grad():
     param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
 print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
 wandb.summary["param_l2_final_epoch"] = param_l2_final
+
+# --- End-of-training live-vs-EMA diagnostic (single extra eval pass) ---
+# At this point the model holds live (non-EMA) weights — restored each epoch
+# by the val swap-back. Run val once on live weights to compare against the
+# EMA-eval val_avg from the final epoch.
+if best_metrics:
+    print("\nLive-weights diagnostic (final-epoch val, single extra eval pass)...")
+    model.eval()
+    final_live_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    final_live_avg = aggregate_splits(final_live_metrics)
+    final_live_surf_p = final_live_avg["avg/mae_surf_p"]
+    final_ema_surf_p = val_avg["avg/mae_surf_p"]  # last EMA-eval value from the loop
+    ema_minus_live = final_ema_surf_p - final_live_surf_p
+    print(
+        f"  final_live_val_avg/mae_surf_p = {final_live_surf_p:.4f}\n"
+        f"  final_ema_val_avg/mae_surf_p  = {final_ema_surf_p:.4f}\n"
+        f"  ema - live                    = {ema_minus_live:+.4f}"
+    )
+    diag_log: dict[str, float] = {
+        "diag/final_live_val_avg/mae_surf_p": final_live_surf_p,
+        "diag/final_ema_val_avg/mae_surf_p": final_ema_surf_p,
+        "diag/ema_minus_live_val_avg/mae_surf_p": ema_minus_live,
+    }
+    for split_name, m in final_live_metrics.items():
+        diag_log[f"diag/final_live_{split_name}/mae_surf_p"] = m["mae_surf_p"]
+    wandb.log(diag_log)
+    wandb.summary.update(diag_log)
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
