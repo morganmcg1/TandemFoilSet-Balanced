@@ -450,6 +450,23 @@ for p in ema_model.parameters():
 ema_model.eval()
 print(f"EMA shadow model initialized (decay={cfg.ema_decay})")
 
+# torch.compile the live model only. EMA shadow stays uncompiled — it's never
+# trained, so compile overhead would be wasted, and keeping ema_model.parameters()
+# as a plain Transolver makes the EMA update loop and state_dict reload trivial.
+# dynamic=True handles variable mesh node counts across batches (a single graph).
+compile_enabled = False
+try:
+    model = torch.compile(model, dynamic=True, mode="default")
+    compile_enabled = True
+    print("[compile] torch.compile applied (dynamic=True, mode='default')")
+except Exception as e:
+    print(f"[compile] torch.compile FAILED: {e}")
+    print("[compile] Continuing with uncompiled model")
+print(
+    f"[compile] live params: {sum(p.numel() for p in model.parameters())}, "
+    f"ema params: {sum(p.numel() for p in ema_model.parameters())}"
+)
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -465,6 +482,9 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "torch_compile": compile_enabled,
+        "torch_compile_mode": "default" if compile_enabled else None,
+        "torch_compile_dynamic": True if compile_enabled else None,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
