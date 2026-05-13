@@ -18,6 +18,7 @@ dependencies = [
     "rich",
     "wandb",
     "pyyaml",
+    "lion-pytorch>=0.1.2",
 ]
 
 [build-system]

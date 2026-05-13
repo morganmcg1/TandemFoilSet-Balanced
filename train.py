@@ -30,6 +30,7 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
+from lion_pytorch import Lion
 from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
@@ -413,11 +414,13 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 7e-4
+    lr: float = 1.5e-4  # Lion uses ~1/5th of AdamW lr (was 7e-4)
     weight_decay: float = 1e-4
     batch_size: int = 8
     surf_weight: float = 10.0
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
+    lion_beta1: float = 0.9
+    lion_beta2: float = 0.99
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -474,7 +477,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lion(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(cfg.lion_beta1, cfg.lion_beta2),
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
