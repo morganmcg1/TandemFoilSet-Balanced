@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-05-13 01:51 — PR #1776: 4-epoch warmup (warmup_epochs 2→4, LR peak at 36% of schedule)
+
+**Student:** charliepai2g48h2-frieren  
+**Change:** Increase `warmup_epochs` from 2 to 4 (single constant change). LinearLR now ramps over 4 epochs (LR: 7e-5 → 7e-4); CosineAnnealingLR T_max=10 (was 12), annealing epochs 5→14. LR peak is effectively at epoch 5/14 = 36% of training. All other config unchanged: `F.l1_loss`, channel_weights=[1,1,3], lr=7e-4, grad_clip=1.0, NaN-skip, --epochs 14.
+
+### Validation (best epoch 14/14 — all splits still improving at cutoff)
+
+| Split | mae_surf_p | vs. #1682 baseline |
+|---|---|---|
+| val_single_in_dist | 97.7121 | −1.61% |
+| val_geom_camber_rc | 94.4202 | −0.94% |
+| val_geom_camber_cruise | 55.3299 | **−10.50%** |
+| val_re_rand | 75.3436 | −1.48% |
+| **val_avg/mae_surf_p** | **80.7014** | **−3.04%** |
+
+**Improvement vs #1682 baseline: −3.04% (83.230 → 80.7014)**  
+**Cumulative improvement vs #1418 baseline: −34.2% (122.64 → 80.7014)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 89.6836 |
+| test_geom_camber_rc | 84.2149 |
+| test_geom_camber_cruise | 46.0941 |
+| test_re_rand | 67.6655 |
+| **test_avg/mae_surf_p** | **71.9145** |
+
+**Improvement vs #1682 test baseline: −2.17% (73.513 → 71.9145)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW lr=7e-4 (peak), **4-epoch warmup**, wd=1e-4, CosineAnnealingLR(T_max=10), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in normalized space
+- NaN-skip guard in `evaluate_split`
+
+### Key finding
+
+Longer warmup (4 epochs vs 2) strongly helps — every val and test split improves. Standout: val_geom_camber_cruise −10.50% (likely because the low-LR warmup period stabilizes early gradient flow, and this smooth-pressure split benefits most from accurate late-epoch convergence). Schedule shape: longer low-LR ramp → model is better initialized before taking high-LR=7e-4 steps → steeper cosine descent from T_max=10 spends more epochs near peak LR before annealing.
+
+First-epoch training loss is higher than baseline (more conservative early ramp), crossing over at ~epoch 4-5. Best epoch remains 14/14 with `is_best=True` at the final epoch.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-frieren-warmup-4-epochs-20260513-011736/metrics.jsonl`
+- `models/model-charliepai2g48h2-frieren-warmup-4-epochs-20260513-011736/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-frieren \
+    --experiment_name "charliepai2g48h2-frieren/warmup-4-epochs" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 00:53 — PR #1682: Pure L1 loss (F.l1_loss, remove Smooth L1 quadratic regime)
 
 **Student:** charliepai2g48h2-tanjiro  
