@@ -816,3 +816,72 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: reduce mlp_ratio 2→1 (FFN goes 128→256→128 to 128→128). Tests if FFN expansion is over-parameterized on compile stack. Expected ~10-15% per-epoch speedup → ~33 epochs in budget.
 - Companion to frieren #1875 (n_layers=3, depth axis) and askeladd #1841 (slice_num=48, slice axis): completes the 3-axis capacity-down matrix.
 - Targets compile-stack baseline 71.44.
+
+## 2026-05-13 05:50 — PR #1875: frieren n_layers=3 v2 — MERGED (7th compound winner)
+
+- Branch: `willowpai2g48h5-frieren/n-layers-3-v2-compile`
+- Hypothesis: reduce depth n_layers=5→3 on compile-stack baseline. Tests if PhysicsAttention slicing carries representational load independently of depth. Throughput angle: shallower model → fewer ops per epoch → more epochs in 30-min budget.
+- W&B run: `fsqr0yp5`
+
+| Metric | Value | vs compile baseline (71.44/62.59) |
+|--------|-------|-----|
+| `val_avg/mae_surf_p` (best, epoch 30/30) | **69.4518** | −1.99 (−2.78%) |
+| `test_avg/mae_surf_p` | **61.1887** | −1.40 (−2.24%) |
+| `test_single_in_dist/mae_surf_p` | 67.8314 | −2.59 |
+| `test_geom_camber_rc/mae_surf_p` | 74.2256 | +0.14 (noise, <0.2%) |
+| `test_geom_camber_cruise/mae_surf_p` | 42.8224 | −1.69 |
+| `test_re_rand/mae_surf_p` | 59.8755 | −1.47 |
+| Per-epoch wall time | 40.8 s | −22.2 s (−35%) |
+| Epochs in 30 min | 30 (of ~44 projected) | +1 (hit T_max=30 cap) |
+| Param count | 420,047 | 0.23× baseline (1.84M) |
+
+- **Best epoch was epoch 30/30 (final)** — val trajectory still descending at termination. Model had NOT converged; T_max=30 means cosine LR hit zero at epoch 30, but ~44 epochs are available in the budget. This is the key follow-up signal.
+- **Mechanism confirmed**: PhysicsAttention slicing carries primary representational load. 3 layers is sufficient for 1500-sample TandemFoilSet; freed compute translates directly to more training epochs.
+- **Decision: MERGE.** New compile-stack baseline: val=69.4518, test=61.1887.
+- **Follow-up assigned**: frieren #1898 — n_layers=3 + epochs=50 (cosine schedule tuning: T_max=50 prevents dead epochs at LR=0 beyond epoch 30).
+
+## 2026-05-13 05:50 — PR #1805: fern β anneal v2 — SENT BACK for retest on n_layers=3 baseline
+
+- Branch: `willowpai2g48h5-fern/beta-anneal-1p0-to-0p5`
+- Hypothesis: adaptive Huber β annealing (1.0→0.5 over epochs 1-10). Tests if gradual transition improves early-phase stability then late-phase MAE alignment.
+- W&B run: `w334qy8f`
+
+| Metric | Value | vs compile baseline (71.44) | vs new baseline (69.45) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 29/29) | **71.1615** | −0.28 (−0.39%, BEAT) | +1.71 (does NOT beat) |
+| `test_avg/mae_surf_p` | **61.7884** | −0.80 (−1.28%) | +0.60 |
+
+- Result was a genuine win against the old compile baseline (71.4371). But PR #1875 merged before review, shifting baseline to 69.4518. Result no longer beats the new baseline.
+- **Mechanism confirmed as sound**: relative test win grew from −0.58% (pre-compile) to −1.28% (compile) — more late-phase β=0.5 epochs amplifies the benefit. On n_layers=3 (~44 epochs available), the anneal benefit should be even larger.
+- **Decision: SEND BACK.** Retest on n_layers=3 branch with `--epochs 30`. New targets: val < 69.4518, test < 61.1887.
+
+## 2026-05-13 05:50 — PR #1791: alphonse lr=7e-4 — CLOSED (LR magnitude dead end)
+
+- Branch: `willowpai2g48h5-alphonse/lr-7e-4`
+- Hypothesis: raise peak LR 5e-4→7e-4 to exploit the hot-LR plateau effect. Prediction: EMA accumulates better live-model signal at faster convergence rate.
+- W&B run: `omqh52yk`
+
+| Metric | Value | vs old baseline (85.92) | vs compile baseline (71.44) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 17) | **86.284** | +0.36 (+0.42% regression) | +14.84 far worse |
+| `test_avg/mae_surf_p` | **76.753** | +0.20 (+0.27% regression) | +14.16 far worse |
+| Per-epoch wall time | ~112 s | — (pre-compile, no throughput) | — |
+
+- Marginal regression vs even the pre-compile baseline. No test split improved.
+- **Mechanism (student analysis confirmed correct):** EMA half-life (~693 steps) is fixed by decay=0.999, independent of LR magnitude. Faster live convergence (higher lr) + larger EMA step contributions roughly cancel: faster trajectory compressed by EMA tracking a shorter but faster path. EMA-live gap narrowed (−10.5→−4.3), but that's the live model moving faster, not EMA improving.
+- **LR sweep fully bracketed**: lr=5e-4 (BEST) < lr=7e-4 (−0.42%). LR-magnitude direction is exhausted. Note: was also run on pre-compile stack (17 epochs vs 29), which further amplifies the gap vs compile baseline.
+- **Decision: CLOSE.** Reassigning alphonse to #1899 — n_hidden=192 + n_layers=3 (width reinvestment hypothesis: compact+wide vs prior compact+narrow and deep+wide configs).
+
+## 2026-05-13 05:50 — PR #1898: frieren assigned n_layers=3 + epochs=50 (cosine schedule tuning)
+
+- Branch: `willowpai2g48h5-frieren/n-layers-3-epochs-50`
+- Hypothesis: PR #1875 showed best_epoch=30/30 with T_max=30 (LR hits zero at epoch 30). With ~44 epochs available in the 30-min budget, the final 14 epochs run at LR=0 — wasted training capacity. Setting `--epochs 50` (T_max=50) keeps LR positive through all 44 actual epochs (LR ≈ 1.8e-5 at ep 44 vs 0 at ep 30).
+- Single variable under test: epochs (T_max) 30→50. n_layers=3 explicitly specified.
+- Targets: val < 69.4518, test < 61.1887.
+
+## 2026-05-13 05:50 — PR #1899: alphonse assigned n_layers=3 + n_hidden=192 (width reinvestment)
+
+- Branch: `willowpai2g48h5-alphonse/n-layers-3-n-hidden-192`
+- Hypothesis: on n_layers=5, n_hidden=192 regressed +12.5% (capacity saturation at depth). On n_layers=3, params are only 0.42M (baseline 1.84M). n_hidden=192 × n_layers=3 ≈ 0.94M params — compact but wide. Tests if width reinvestment compensates for reduced depth.
+- Estimated per-epoch time: ~65 s/epoch → ~27 epochs in 30 min.
+- Targets: val < 69.4518, test < 61.1887.
