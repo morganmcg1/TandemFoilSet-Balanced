@@ -8,6 +8,28 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 14:05 — PR #1986: Fourier positional features for (x,z) node coordinates — K=12 (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **73.1596** (W&B run `osxp8woj`)
+- **`test_avg/mae_surf_p` (4-split, finite):** **63.8880**
+- **Per-split val surface-p MAE (`osxp8woj`, K=12+warmup5, best-val epoch 19):**
+  - val_single_in_dist: 80.28  (vs 88.79 baseline → −9.6%) ✅
+  - val_geom_camber_rc: 81.88  (vs 89.23 → −8.2%) ✅
+  - val_geom_camber_cruise: 57.96  (vs 54.47 → +6.4%) ❌ regression
+  - val_re_rand: 72.52  (vs 71.33 → +1.7%) ~noise
+- **Per-split test surface-p MAE (`osxp8woj`, 4-split clean):**
+  - test_single_in_dist: 71.08  (vs 80.20 → −11.4%) ✅
+  - test_geom_camber_rc: 70.73  (vs 79.83 → −11.4%) ✅
+  - test_geom_camber_cruise: 47.87  (vs 45.41 → +5.4%) ❌ regression
+  - test_re_rand: 65.87  (vs 64.70 → +1.8%) ~noise
+- **Mechanism:** Fourier position encoding (sin/cos features for x,z) adds inductive bias for sharp pressure peak localization. K=12 resolves λ down to ~0.1 in normalized coord space — big gains on sharp-peak splits (single_in_dist, camber_rc), slight regression on smooth-field splits (cruise). Zero latency overhead; 3,072 extra params.
+- **W&B run:** `osxp8woj`
+- **W&B group:** `willow-r3-fourier-features`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12
+  ```
+
 ## 2026-05-13 10:50 — PR #1438: 5-epoch linear LR warmup before cosine decay (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **75.9562** (W&B run `d1lqln08`; warmup-3ep sibling `fzxx54lu` at 76.72)
