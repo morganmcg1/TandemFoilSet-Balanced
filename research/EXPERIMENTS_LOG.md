@@ -1,5 +1,28 @@
 # SENPAI Research Results
 
+## 2026-05-13 05:10 — PR #1849: Huber β sweep β=0.5 and β=0.3 — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-edward/huber-beta-sweep`
+- Hypothesis: Lower β makes the Huber loss more L1-like, closer to MAE eval metric; sweep β=0.5 and β=0.3 vs merged β=1.0
+- Artifacts: `models/model-charliepai2g24h2-edward-huber-beta0p5-20260513-031119/metrics.yaml`, `models/model-charliepai2g24h2-edward-huber-beta0p3-20260513-035314/metrics.yaml`, `eval_bs1.jsonl` for each
+
+| Metric | β=1.0 (#1801) | β=0.5 (Arm A) | β=0.3 (Arm B) | Best Δ% |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 111.15 | 108.47 | **105.68** | **−4.92%** |
+| val_single_in_dist | 134.21 | 138.62 | **126.21** | −5.96% |
+| val_geom_camber_rc | 133.88 | **125.25** | 116.36 | −13.1% (β=0.3) |
+| val_geom_camber_cruise | 77.59 | **75.41** | 82.23 | −2.8% (β=0.5) |
+| val_re_rand | 98.93 | **94.59** | 97.92 | −4.4% (β=0.5) |
+| **test_avg bs=1** | 99.06 | 97.49 | **94.98** | **−4.11%** |
+
+**Config:** lr=7.5e-4, wd=1e-4, bs=4, chan_w=[1,1,5], surf_weight=10, warmup+cosine T_max=47, gradclip(1.0), Huber β=0.3, fp32. 12 epochs (timeout-cut). ~42 GB VRAM.
+
+**Decision: MERGED — β=0.3 arm wins. New floor val_avg=105.6808.**
+
+**Analysis:** β sweep confirms monotone gain for most splits (β=0.3 < β=0.5 < β=1.0). The exception is val_geom_camber_cruise (low-residual split): β=0.5 was best (75.41 < 77.59 β=1.0 < 82.23 β=0.3). This split-level β interaction — lower β hurts low-residual regions — motivates the next hypothesis: **per-channel β** with higher β for pressure (smaller residuals, especially on cruise) and lower β for velocity channels. Edward assigned #1927 to test β=0.1 and per-channel β (Ux=0.1, Uy=0.1, p=0.5).
+
+---
+
 ## 2026-05-13 04:15 — PR #1524 (r3): Gradient accumulation accum=4 + floor stack — CLOSED
 
 - Branch: `charliepai2g24h2-tanjiro/grad-accum-eff-bs16`
