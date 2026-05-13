@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 06:45 UTC
+- **Date / time:** 2026-05-13 05:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,66 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-19 update — #1863 tanjiro β=0.25 MERGED ✓ (-6.8%), 2 closed, 3 new arms
+
+**New all-time best: val=80.03 / test=70.89.** 6th consecutive compounding win. β sweep is ACCELERATING: 1.0→0.5 was -0.77 val; 0.5→0.25 was -3.76 val. Both confirmed independently. **Active baseline: val=80.03 / test=70.89. Cumulative: -39.3% from start (131.79→80.03).**
+
+Closed: frieren #1893 (β=0.25 duplicate, independently confirmed), thorfinn #1866 (grad_accum=4 +18% regression).
+
+3 new arms:
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1957 | tanjiro | β=0.10 (continue accelerating β sweep) |
+| #1958 | frieren | p_weight 2.0→3.0 (rebalance under β=0.25) |
+| #1959 | thorfinn | beta2 0.999→0.99 (faster variance adaptation under new stack) |
+
+### Active leaderboard
+
+| Val | Test | PR | What landed |
+|---|---|---|---|
+| **80.03** | **70.89** | #1863 tanjiro | smooth_l1(β=0.25) |
+| 85.84 | 74.45 | #1867 fern | AdamW beta1=0.95 |
+| 88.06 | 78.46 | #1666 tanjiro | smooth_l1(β=1) |
+| 97.07 | 85.71 | #1655 alphonse | OneCycleLR max_lr=2e-3 |
+| 110.27 | 99.41 | #1471 frieren | p_weight=2.0 + clip_grad_norm=1.0 |
+
+### Closed axes (do not revisit)
+
+- surf_weight: optimum at 10.0 (tried 7, 15, 30)
+- n_head: n_head=4 (dim_head=32) optimal; n_head=8 catastrophic
+- weight_decay: local minimum at 1e-4
+- mlp_ratio=3, n_layers=6: capacity-at-budget failures
+- slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
+- lr (base): optimal at 5e-4
+- beta2=0.95: +13% under old stack (retesting 0.99 under new stack)
+- grad_accum=4: +18%, eff_batch=8 optimal
+- max_lr=4e-3: diverges
+- pct_start=0.3: +9.5%, 0.1 optimal from both directions
+
+### In-flight WIP
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1892 | fern | EMA weights (decay=0.9999) |
+| #1864 | edward | dropout=0.02/attention (rebase pending) |
+| #1915 | alphonse | OneCycleLR div_factor 25→10 |
+| #1928 | askeladd | grad_clip 1.0→0.5 |
+| #1929 | nezuko | OneCycleLR final_div_factor 1e4→1e3 |
+| #1957 | tanjiro | β=0.10 |
+| #1958 | frieren | p_weight 2.0→3.0 |
+| #1959 | thorfinn | beta2 0.999→0.99 |
+
+### Priority research directions
+
+1. **β sweep continuation** — β=0.10 in-flight. If accelerating trend continues, consider β=0.05 or MAE-inspired asymmetric loss. Watch for early-training instability.
+2. **p_weight rebalancing** — under β=0.25, the gradient balance between p and U channels has shifted. p_weight=3.0 in-flight.
+3. **beta2 retest** — beta2=0.99 under smooth_l1+beta1=0.95 stack is untested. Prior test used very different loss shape.
+4. **EMA model weights** — high-prior zero-cost technique, in-flight (#1892).
+5. **Post-β: per-channel β** — if β=0.10 confirms the trend, try β_p=0.05, β_U=0.25 (channel-specific loss shaping).
+6. **Optimizer: weight_decay retest** — under β=0.25+beta1=0.95, optimal wd may have shifted.
+
+---
 
 ## Cycle-16 update — #1867 fern beta1=0.95 MERGED ✓ (-2.5%), 2 closed, 2 sent-back, 3 new arms
 

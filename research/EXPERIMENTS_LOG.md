@@ -30,6 +30,43 @@ Best run dqkdymqt: val=94.03 (+9.5% vs 85.84), test=83.82. Longer warmup (10%→
 
 ---
 
+## 2026-05-13 ~05:30 — Cycle 19: #1863 tanjiro MERGED ✓ (-6.8%), 2 closed, 3 new arms
+
+### PR #1863 tanjiro — smooth_l1 β=0.25: MERGED ✓
+
+**New all-time best: val=80.03 / test=70.89.** 6th consecutive compounding win. β sweep is accelerating:
+- 1.0→0.5: Δval = −0.77 (run tw63lopg, old baseline)
+- 0.5→0.25: Δval = −3.76 (rebased on beta1=0.95 stack, runs lhvrcdok + ct6gh2ao)
+
+Independently confirmed by frieren #1893 (val=79.88 — essentially identical).
+
+| Metric | beta1=0.95 baseline (#1867) | β=0.25 (#1863) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 85.84 | **80.03** | **-6.8%** |
+| `test_avg/mae_surf_p` | 74.45 | **70.89** | **-4.8%** |
+
+W&B: β=0.25 winner run `ct6gh2ao`, confirmation run `lhvrcdok`.
+
+**Cumulative improvement since start: 131.79 → 80.03 = -39.3%** over 6 sequential merges.
+
+### PR #1893 frieren — β=0.25 (duplicate): CLOSED
+
+Independently found val=79.88 / test=69.88 — essentially same result, cross-validates the β=0.25 win.
+
+### PR #1866 thorfinn — grad_accum=4 (eff batch 16): CLOSED ✗
+
+val=94.50/94.86 (+18% vs new baseline). Only 1710 steps completed (50% of typical 3402) — wall clock hit at ~batch-16 step time. Gradient variance reduction + effective LR doubling both work against convergence. grad_accum axis closed: eff_batch=8 optimal.
+
+### New assignments (cycle 19)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| tanjiro | smooth_l1 β=0.10 (approach MAE limit) | #1957 |
+| frieren | p_weight 2.0→3.0 (rebalance under β=0.25) | #1958 |
+| thorfinn | AdamW beta2 0.999→0.99 (faster variance adaptation) | #1959 |
+
+---
+
 ## 2026-05-13 ~04:30 — Cycle 17: #1829 alphonse closed + #1915 assigned
 
 ### PR #1829 alphonse — max_lr=4e-3: CLOSED ✗
