@@ -1386,3 +1386,98 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
   - (B) val ≈ 52.0-53.5 (within noise) → slice_num plateau region above 64; 64 holds as conservative default
   - (C) val > 54.0 → throughput penalty (~3.2% slower → ~28 vs 30 epochs in budget) + potential over-parameterization erodes performance
 - **Mechanism diagnostics:** per-epoch wall time (predict ~64 s/ep), param count (+560 weights to 1.264M), peak GPU (~78 GiB vs 74 at slice=48), val trajectory at ep 25/28/final (plateau or still descending), EMA-live gap (was −12.16 at slice=48; if similar, EMA still doing variance-absorbing work).
+
+## 2026-05-13 13:50 — PR #1805: fern Huber β anneal v3 — CLOSED (grad-clip saturates anneal mechanism)
+
+- Branch: `willowpai2g48h5-fern/beta-anneal-1p0-to-0p5`
+- Hypothesis: β anneal 1.0→0.5 over epochs 1-10 on the 13-compound stack. Expectation: anneal compounds with the longer T_max=50 cosine tail.
+- W&B run: `lgg4v9sx` (32/50 epochs)
+
+| Metric | This (β anneal v3) | Baseline #1982 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **53.9233** | 52.6406 | **+2.43% regression** |
+| `test_avg/mae_surf_p` | **46.5339** | 44.9791 | **+3.46% regression** |
+| `test_single_in_dist` | 53.0485 | 49.8555 | +6.40% (largest hit) |
+| `test_geom_camber_rc` | 59.4080 | 57.7726 | +2.84% |
+| `test_geom_camber_cruise` | 28.4414 | 28.9446 | −1.73% ✓ (only improvement) |
+| `test_re_rand` | 45.2377 | 43.3437 | +4.38% |
+
+**β anneal schedule + grad-clip rate (the mechanism diagnostic):**
+
+| Epoch | β | clip rate | mean grad-norm | val (EMA) |
+|---:|---:|---:|---:|---:|
+| 1 | 1.000 | **100.0%** | 41.05 | 331.59 |
+| 5 | 0.778 | **100.0%** | 18.91 | 181.65 |
+| 10 | 0.500 | 100.0% | 18.32 | 109.42 |
+| 32 | 0.500 | 96.3% | 10.48 | 53.92 |
+
+- **Decision: CLOSE.** Falls in 52.64-55.0 close zone per advisor's own 08:23 instruction. 3/4 test splits regress; in_dist takes the biggest hit (+6.40% — same pattern as #2067 grad-clip=1.5 fail).
+- **Mechanism: grad-clip=2.5 saturates the gradient channel during high-β phase.** β=1.0 produces mean grad norms 18-41 (7-16× threshold). 99.7-100% clip rate during anneal phase truncates everything to direction-only (sign without magnitude). The curvature information that β=1.0 was supposed to provide is **operationally invisible** under saturated clipping. After ep 10 the model is at β=0.5 and the anneal mechanism has done nothing distinctive.
+- **Per-split insight:** in_dist regresses MOST (+6.40%) — mirrors #2067 finding. Aggressive/corrupted gradient signal hurts the largest, most-informative population first.
+- **β anneal axis CLOSED on current grad-clip=2.5 stack.** Mechanism may revive if grad-clip loosens (e.g., if frieren #2094 max_norm=2.0 fails and we go back to 3.0+). Currently the loss-shape lever fights the gradient-stability lever.
+- **Next:** fern #2142 constant β=0.25 (no high-β phase; tests steady-state loss-shape axis).
+
+## 2026-05-13 13:50 — PR #2053: nezuko mlp_ratio=3 v1 — SENT BACK (protocol-stale grad-clip=5.0)
+
+- Branch: `willowpai2g48h5-nezuko/mlp-ratio-3`
+- Hypothesis: FFN capacity bracket. mlp_ratio=2 → 3 on the (then) 11-compound stack. Wider FFN per attention block helps when n_layers=3 has each block doing more representation work.
+- W&B run: `4da3u1ad` (30/50 epochs)
+
+| Metric | This (mlp_ratio=3) | #1953 (at submit) | #1982 (current) | Δ vs #1953 | Δ vs #1982 |
+|---|---:|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | **54.8155** | 55.7634 | 52.6406 | **−1.70% WIN** | **+4.13% LOSS** |
+| `test_avg/mae_surf_p` | **47.8073** | 48.0960 | 44.9791 | **−0.60% WIN** | **+6.29% LOSS** |
+| `test_single_in_dist` | 52.9765 | 52.8835 | 49.8555 | +0.18% | +6.26% |
+| `test_geom_camber_rc` | 61.2182 | 61.7845 | 57.7726 | **−0.92% ✓** | +5.96% |
+| `test_geom_camber_cruise` | 31.0784 | 31.1522 | 28.9446 | **−0.24% ✓** | +7.37% |
+| `test_re_rand` | 45.9562 | 46.5637 | 43.3437 | **−1.30% ✓** | +6.03% |
+| Param count | 1.15M (+22%) | 0.94M | — | — | — |
+| Grad-clip rate | 93.46% | (grad-clip=5.0) | — | — | — |
+
+- **Decision: SEND BACK for current-stack retest.** Mechanism is real on the older stack but result is protocol-stale by #1982 (grad-clip=5.0 → 2.5 in train.py) and #2023 (n_hidden=224 documented).
+- **Mechanism interpretation (student's analysis is excellent):** "With shallower attention (n_layers=3), per-block FFN does proportionally more representation work" — explains why mlp_ratio scaled here when it failed at n_layers=5 (#1544). 3/4 OOD splits descended cleanly.
+- **Retest with `--n_hidden 224 --n_layers 3 --epochs 50` and `mlp_ratio=3` constant in train.py.** Predicted: val ≈ 51.75 if linear compound with #1982 baseline.
+- **Three outcomes:**
+  - (A) val < 52.64 → MERGE (14th compound winner; FFN width compounds with width + clip)
+  - (B) val 52.64-54.0 → mechanism still has signal but doesn't beat new baseline; close
+  - (C) val > 54.0 OR clip rate hits 100% → mlp_ratio=3 fights saturated clip; close
+- **Diagnostic to watch:** grad-clip rate at termination. mlp_ratio=3 means larger gradients (more params) → predict 99.5%+. If 100%, in direction-normalization regime like #2067.
+
+## 2026-05-13 13:50 — PR #2024: edward EMA decay=0.998 v1 — SENT BACK (protocol-stale grad-clip=5.0)
+
+- Branch: `willowpai2g48h5-edward/ema-decay-0p998`
+- Hypothesis: Tighten EMA decay 0.999 → 0.998 to halve the EMA half-life (693 → 346 steps) for better tracking of late-training improvements on T_max=50 schedule.
+- W&B run: `ajd4i909` (29/50 epochs)
+
+| Metric | This (EMA=0.998) | #1953 (at submit) | #1982 (current) | Δ vs #1953 | Δ vs #1982 |
+|---|---:|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | **54.2188** | 55.7634 | 52.6406 | **−2.77% WIN** | **+3.00% LOSS** |
+| `test_avg/mae_surf_p` | **46.9800** | 48.0960 | 44.9791 | **−2.32% WIN** | **+4.45% LOSS** |
+| `test_single_in_dist` | 53.7677 | 52.8835 | 49.8555 | +1.67% | +7.85% |
+| `test_geom_camber_rc` | 60.7889 | 61.7845 | 57.7726 | **−1.61% ✓** | +5.22% |
+| `test_geom_camber_cruise` | 29.2714 | 31.1522 | 28.9446 | **−6.04% ✓** | +1.13% |
+| `test_re_rand` | 44.0918 | 46.5637 | 43.3437 | **−5.31% ✓** | +1.73% |
+| EMA-live gap (final) | −8.68 | −8.32 | — | (unchanged) | — |
+
+- **Decision: SEND BACK for current-stack retest.** Same protocol-stale issue as #2053 (grad-clip=5.0, clip rate 93.83%). Mechanism partial confirmation: val/test improve cleanly vs #1953, but EMA-live gap did NOT close as predicted.
+- **Mechanism reframed (student's analysis is sharp):** Shorter half-life (~346 steps) doesn't reduce the *visible* gap against a noisy live model. It reduces the *steady-state averaging bias* against the *expected* live trajectory. Live model is noisy (94% grad-clip rate) — gap metric is dominated by live noise, not EMA lag. The improvement comes from EMA absorbing higher-frequency noise, not from closing the lag.
+- **Caveat:** test_single_in_dist regressed slightly (+0.88 vs #1953, +1.67%). The faster EMA hurts the regime where the live model is most confident.
+- **Retest with `--n_hidden 224 --n_layers 3 --epochs 50` and `ema_decay=0.998` constant in train.py.** Predicted: val ≈ 51.18 if relative −2.77% holds. Aggressive clip rate at grad-clip=2.5 (98.9% baseline) means live model is *more* noisy — possibly amplifying EMA's noise-rejection benefit.
+- **Three outcomes:**
+  - (A) val < 52.64 → MERGE (14th compound winner)
+  - (B) val 52.64-54.0 → mechanism still has signal but doesn't beat new baseline; close
+  - (C) val > 54.0 → faster EMA hurts under tighter clip regime; close
+- **Diagnostic to log:** EMA-live gap at final epoch + test_single_in_dist (does in_dist regression persist?).
+
+## 2026-05-13 13:50 — PR #2142: fern assigned Huber β=0.5 → 0.25 (loss-shape follow-up to #1689)
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p25-13stack`
+- Hypothesis: Tighter MAE alignment via β=0.25 on the 13-compound stack. Natural follow-up to fern's own #1689 merge (β=1.0 → 0.5, val −7.4%). Smaller β = more samples in linear region = closer to L1/MAE alignment.
+- **Distinct from closed #1805 (β anneal):** Constant β=0.25 has NO high-β phase. Tests *steady-state* loss-shape axis at the current grad-clip=2.5 regime. β anneal failed because the high-β (1.0) phase saturated clipping at 99.7-100% during epochs 1-10. Constant β=0.25 operates entirely in the already-saturated steady-state regime — different mechanism question.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50` + Huber β constant `0.5 → 0.25` in train.py.
+- Targets: val < 52.6406, test < 44.9791.
+- **Three possible outcomes:**
+  - (A) val < 52.64 → loss-shape lever still productive at the current stack; tighter MAE alignment helps the higher-capacity model fit residual errors
+  - (B) val 52.0-53.5 → β plateau region above optimum; β=0.5 was already near-optimal
+  - (C) val > 54.0 → β=0.25 destabilizes quadratic transition; regression despite tighter MAE alignment
+- **Diagnostics:** grad-clip rate at termination (predict 98.5-99.5%), mean grad-norm distribution (compare to β=0.5 baseline), per-split test breakdown, EMA-live gap.
