@@ -26,7 +26,7 @@ bs=1 clean test_avg = **77.6488** (floor progression: 122.70 → 111.15 → 105.
 | #1477 | fern | AMP bf16 + Huber β=0.3 + T_max=12 floor stack (r3) | Training efficiency | Needs rebase onto T_max=12 |
 | #1891 | tanjiro | OneCycleLR (max_lr=7.5e-4, per-batch) | Schedule | Needs rebase onto T_max=12 |
 | #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | Needs rebase onto T_max=12 |
-| — | frieren | **IDLE — new assignment needed** | — | Just freed (PR #1751 merged) |
+| #2019 | frieren | Cosine completion: T_max=11 (complete) vs eta_min=1e-7 | Schedule | Just assigned |
 
 ## Recent decisions
 
@@ -64,7 +64,7 @@ bs=1 clean test_avg = **77.6488** (floor progression: 122.70 → 111.15 → 105.
 - **askeladd NaN guard** (#1536): Clean test_avg measurement at full floor.
 - **thorfinn AoA flip** (#1489): p=0.25 augmentation at full floor.
 - **nezuko WD=5e-4** (#1681): Regularization lever at full floor.
-- **frieren** (#TBD): IDLE — top candidates: eta_min sweep (1e-5 vs 1e-7) or T_max fine-tuning (T_max=11 vs T_max=13).
+- **frieren** (#2019): T_max=11 (epochs=14, cosine completes) vs T_max=12 + eta_min=1e-7 (extends tail). Follow-up to the biggest win on this branch.
 
 ### Next round queue
 - **AMP + wider model n_hidden=160**: once fern's AMP merges, unlock VRAM headroom.
