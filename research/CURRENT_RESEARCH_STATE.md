@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~14:25 — PRs #2291 (clip=0.25) and #2292 (n-head-8) CLOSED; clip axis fully mapped (0.5 optimal); n_head=8 revealed critical Transolver param-scaling quirk (q/k/v scale as dim_head²); assigned fern #2346 slice-num-96, nezuko #2345 batch-size-2
+- **Last updated:** 2026-05-13 ~14:55 — Closed #2293 wd-1e-3 (+1.27%, spike returns), #2257 foil-mirror-aug (+19.97% catastrophic, z=0 not a valid symmetry), #1817 charbonnier (stale 12h). Assigned alphonse #2364 tmax-14, frieren #2365 chan-weights-5, tanjiro #2366 asinh-gain-2. wd axis CLOSED at 1e-4; foil-mirror axis CLOSED.
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -37,13 +37,13 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 
 | PR | Student | Slug | Axis | Status |
 |----|---------|------|------|---|
-| #2345 | nezuko | `batch-size-2` | bsz 4→2; gradient-noise regularization, 2× opt steps/epoch; targets OOD via flatter minima | **WIP — just assigned** |
-| #2346 | fern | `slice-num-96` | Transolver slice_num 64→96 (+50% physics slices); +5K params; risk: ~35min for 14 epochs | **WIP — just assigned** |
-| #2293 | alphonse | `wd-1e-3` | Weight decay 1e-4→1e-3 (10×); untested axis on new stack | **WIP — training** |
-| #2257 | frieren | `foil-mirror-aug` | Z-axis foil reflection augmentation; doubles effective training data | **WIP — in training** |
-| #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 50× (1e-4→5e-3); nudged to rebase onto clip=0.5 HEAD | **WIP — nudged** |
+| #2364 | alphonse | `tmax-14` | CosineAnnealing T_max 10→14; final LR no longer hits 0; addresses best_epoch=14/14 non-convergence | **WIP — just assigned** |
+| #2365 | frieren | `chan-weights-5` | channel_weights [1,1,3]→[1,1,5]; pushes 71% (vs 60%) of training signal onto pressure channel | **WIP — just assigned** |
+| #2366 | tanjiro | `asinh-gain-2` | ASINH_GAIN 1.0→2.0; tighter pressure-outlier compression; orthogonal to loss-function axis | **WIP — just assigned** |
+| #2345 | nezuko | `batch-size-2` | bsz 4→2; gradient-noise regularization, 2× opt steps/epoch; targets OOD via flatter minima | **WIP — training** |
+| #2346 | fern | `slice-num-96` | Transolver slice_num 64→96 (+50% physics slices); +5K params; risk: ~35min for 14 epochs | **WIP — training** |
+| #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 50× (1e-4→5e-3); LIKELY DEAD — wd=1e-3 already +1.27%; close if no progress | **WIP — likely stale** |
 | #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 vs 65.2170 baseline on PRE-clip=0.5 HEAD; sent back for rerun on clip=0.5 stack | **WIP — rerun requested** |
-| #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss alternative; rebasing on RFF+clip=0.5 base | **WIP — rebasing** |
 | #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; rebasing/rerunning on RFF+clip=0.5 base | **WIP — rebasing** |
 
 ## Closed axes (exhausted)
@@ -61,6 +61,8 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 | β2 | **CLOSED** at 0.99 | β2=0.95 +1.12% (non-monotone, 0.99 sweet spot) |
 | grad_clip | **CLOSED** at 0.5 | 0.25 gives +0.65% val; clipping 100% saturated at peak-LR window; halving clip halves effective LR |
 | n_head | **CLOSED** at 4 | n=8 gave +23.4% val / +24.6% test; **CRITICAL implementation quirk**: Transolver q/k/v scale as `dim_head²`, so n_head=8 actually LOSES 16.6K params |
+| weight_decay | **CLOSED** at 1e-4 | wd=1e-3 gives +1.27% val; **epoch-5 spike RETURNS** even with clip=0.5 (val_avg ep4=186 → ep5=253); wd amplifies effective gradient at peak LR |
+| foil-mirror-aug | **CLOSED** | +19.97% val / +21.97% test catastrophic; z=0 is NOT a valid symmetry for tandem-foil dataset (asymmetric flow direction → mirrored samples mis-labeled) |
 
 ## Key research insights
 
@@ -76,14 +78,17 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 
 ## Next research directions (priority order)
 
-1. **Clip bracket completion** (#2291 nezuko clip=0.25): monotone test on clip axis; if positive, probe 0.125
-2. **Weight decay tuning** (#2293 alphonse wd=1e-3 / #1820 thorfinn wd=5e-3): wd=1e-4 never re-optimized; standard transformer wd is 1e-2 to 1e-3; OOD generalization target
-3. **Attention architecture** (#2292 fern n_head=8): finer-grained attention; no param/FLOP cost; targets rc/single geometry OOD
-4. **Data augmentation** (#2257 frieren foil-mirror-aug): z-axis reflection doubles effective data; orthogonal to optimization axes
-5. **surf_weight tuning** (#1421 edward surf-weight=25): −2.95% pre-RFF, worth retesting on RFF+clip=0.5 base
-6. **Alternative loss functions** (#1817 tanjiro charbonnier): still rebasing, value unclear on RFF base
-7. **Slice_num architecture** (untested): probe 64→96 if n_head=8 closes architecture axis
-8. **RFF on surface normals** (untested): add (n_x, n_z) to RFF encoding, target rc/single geometry splits
+1. **Schedule/LR-tail probe** (#2364 alphonse tmax-14): IN FLIGHT — addresses best_epoch=14/14 non-convergence by keeping LR>0 at end
+2. **Loss-weighting probe** (#2365 frieren chan-weights-5): IN FLIGHT — push pressure weighting 60%→71% of training signal
+3. **Pressure compression probe** (#2366 tanjiro asinh-gain-2): IN FLIGHT — tighten asinh GAIN, attenuate outlier influence
+4. **Batch noise / flat-minima** (#2345 nezuko batch-size-2): IN FLIGHT
+5. **Slice_num architecture** (#2346 fern slice-num-96): IN FLIGHT
+6. **surf_weight / channel structure** (#1421 edward surf-only): rerun on clip=0.5 stack
+7. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF positional encoding; targets rc/single geometry splits — high-value, more involved
+8. **AdamW β1** (untested): currently 0.9, try 0.85 or 0.95; β2 was non-monotone at 0.99, β1 may also have sweet spot
+9. **Warmup duration variations** (untested combos): warmup_epochs=2 paired with T_max=12 to maintain endpoint while extending peak-LR window
+10. **mlp_ratio probe** (untested): 2→4 doubles FFN width; +~150K params; tests if FFN is the bottleneck on convergence
+11. **n_layers depth probe** (untested): 5→6 deeper representation; +~140K params; some compute risk
 
 ## Epoch budget arithmetic
 

@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-13 14:55 — PR #1817: charbonnier-eps-1e-3 (tanjiro) — CLOSED (stale 12+ hours)
+
+- **Branch:** `charliepai2g48h2-tanjiro/charbonnier-eps-1e-3`
+- **Status:** Stale since 2026-05-13 02:06 UTC. Pod listed PR but never produced a training run. No terminal `SENPAI-RESULT`.
+- **Reasoning for close:** Loss-function-shape axis was exhausted earlier in the launch — pure-L1 was the global minimum. Charbonnier (smooth-L1 variant with extra ε parameter) is structurally very unlikely to beat pure-L1. Combined with 12h of no progress, the GPU slot is better spent elsewhere.
+- **Reassignment:** Tanjiro now testing `asinh-gain-2` (#2366) — tightens pressure compression strength on an orthogonal, untested axis.
+
+---
+
+## 2026-05-13 14:55 — PR #2293: wd-1e-3 (alphonse) — CLOSED (+1.27% val regression; wd axis CLOSED at 1e-4)
+
+- **Branch:** `charliepai2g48h2-alphonse/wd-1e-3`
+- **Hypothesis:** Increase weight_decay 10× (1e-4 → 1e-3) for tighter L2 regularization on RFF base; standard transformer wd is 1e-2 to 1e-3.
+- **Metric artifacts:** committed under `models/model-charliepai2g48h2-alphonse-wd-1e-3-*/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170)
+
+| Split | Baseline | wd=1e-3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | ~74.6 | +1.1% ❌ |
+| val_geom_camber_rc | 79.4389 | ~80.6 | +1.5% ❌ |
+| val_geom_camber_cruise | 42.8481 | ~43.3 | +1.0% ❌ |
+| val_re_rand | 64.8172 | ~65.5 | +1.0% ❌ |
+| **val_avg/mae_surf_p** | **65.2170** | **~66.05** | **+1.27%** ❌ |
+
+### Critical diagnostic — epoch-5 spike RETURNS at wd=1e-3 even with clip=0.5
+
+Pre-wd-change, clip=0.5 eliminated the +91 epoch-5 spike (the headline result of #2260). At wd=1e-3, the spike comes BACK: val_avg epoch-4 ≈ 186 → epoch-5 ≈ 253 (worse than the clip=1.0 baseline spike at wd=1e-4).
+
+**Mechanism:** Higher weight decay amplifies the negative gradient component (`-wd × W`) flowing through the optimizer. At peak LR, this larger effective gradient magnitude pushes the clip-saturated regime harder, breaking the careful balance grad_clip=0.5 struck against the natural gradient norm.
+
+### Outcome
+
+**wd axis CLOSED at 1e-4** on the RFF+clip=0.5 stack. The wd=5e-3 PR (#1820 thorfinn) is now stale by extrapolation — 50× should be MUCH worse than 10×. Will close that PR next cycle. The interaction between wd, gradient clipping, and the peak-LR window is a tight coupling: any axis that increases gradient magnitude at peak LR will reactivate the spike.
+
+---
+
+## 2026-05-13 14:55 — PR #2257: foil-mirror-aug (frieren) — CLOSED (+19.97% val catastrophic)
+
+- **Branch:** `charliepai2g48h2-frieren/foil-mirror-aug`
+- **Hypothesis:** Z-axis foil reflection augmentation; doubles effective training data by adding mirrored copies of each sample.
+- **Metric artifacts:** committed under `models/model-charliepai2g48h2-frieren-foil-mirror-aug-*/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170)
+
+| Split | Baseline | foil-mirror | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | ~88 | +19% ❌ |
+| val_geom_camber_rc | 79.4389 | ~97 | +22% ❌ |
+| val_geom_camber_cruise | 42.8481 | ~51 | +19% ❌ |
+| val_re_rand | 64.8172 | ~78 | +20% ❌ |
+| **val_avg/mae_surf_p** | **65.2170** | **~78.2** | **+19.97%** ❌ |
+| **test_avg/mae_surf_p** | 56.4581 | ~68.8 | **+21.97%** ❌ |
+
+### Critical insight: z=0 is NOT a symmetry of the tandem-foil dataset
+
+The hypothesis assumed that flipping the z-axis preserves the physics (since the underlying Navier-Stokes equations are isotropic in z for 2D flow). But the dataset structure does NOT have z-reflection symmetry:
+- Tandem foils have asymmetric placement relative to the freestream direction.
+- The flow has a definite direction (left → right); reflecting z creates flow patterns that are physically inconsistent with the actual sample.
+- The model learns to map (geometry, pressure) and the mirrored "geometry" no longer corresponds to the original pressure field — it's an entirely DIFFERENT flow with a DIFFERENT pressure that we're falsely labeling with the original pressure.
+
+This is a **systematic mis-labeling** that injects pure noise into training. Hence the catastrophic +20% regression.
+
+### Outcome
+
+**foil-mirror axis CLOSED. Z-reflection is invalid for this dataset.** Future augmentation experiments must verify the symmetry actually holds in the specific dataset. Open augmentation directions: x-axis translation (likely valid; periodic), small geometric perturbations (e.g., +ε to foil normals).
+
+---
+
 ## 2026-05-13 14:25 — PR #2291: grad-clip-0p25 (nezuko) — CLOSED (clip axis fully mapped at 0.5)
 
 - **Branch:** `charliepai2g48h2-nezuko/grad-clip-0p25`
