@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #2069 n_head=2 on Lion+MAE+lr=1e-4 | **51.11** | **44.18** | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
+| **#2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4** | **50.91** | **43.68** | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
+| #2069 n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
 | #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
 | #1825 MAE (L1) loss on Lion+EMA | 56.58 | 48.82 | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
 | #1781 Lion optimizer lr=1e-4 | 61.30 | 52.68 | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
@@ -34,6 +35,20 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 12:27 — PR #2210: surf_weight=5 on n_head=2 compound (nezuko)
+
+- **val_avg/mae_surf_p (best epoch 20):** 50.9119 — **−0.39% vs n_head=2 baseline (51.11)**
+- **test_avg/mae_surf_p:** 43.6823 — **−1.13% vs n_head=2 baseline (44.18)**
+- **Per-test-split:** single_in_dist=46.42 (−2.81 vs baseline), geom_camber_rc=58.60 (+1.16), geom_camber_cruise=27.33 (+0.59), re_rand=42.39 (−0.91)
+- **Epochs completed:** 20 in ~30.9 min; val still descending at cap — NOT converged
+- **W&B run:** `qkyx47iv`
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **surf_weight=5**
+- **Reproduce:** `cd "target/" && python train.py --n_head 2 --surf_weight 5 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-nezuko --wandb_name "willowpai2g24h5-nezuko/sw5-n-head-2-lion-mae" --wandb_group "willow-pai2g-24h-r5-surf-weight-n2"`
+
+**Key change:** surf_weight 10 → 5. MAE loss's uniform per-node weighting reduces the relative importance of an explicit surface emphasis; sw=5 better matches the MAE regime. Non-monotonic response in [5,10]: sw=5 (50.91) < sw=10 (51.11) < sw=7 (52.02) — sw=7 is a local maximum, not a linear interpolation. Majority of gain on in-distribution splits; marginal losses on camber-OOD splits. Both arms reached 20 epochs; val still descending at cap.
 
 ---
 
