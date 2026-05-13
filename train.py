@@ -462,9 +462,9 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# OneCycleLR(max_lr=1e-3) — upper-bracket peak LR vs merged max_lr=8e-4 (+25%).
+# OneCycleLR(max_lr=1.2e-3) — continue upper-bracket peak LR vs merged max_lr=1e-3 (+20%).
 # pct_start=0.1 => ~2.1ep warmup at bs=1 (750 batches/ep), smooth C1-continuous curve.
-# div_factor=25 => initial_lr=4.0e-5; final_div_factor=10 => final_lr=4.0e-6.
+# div_factor=25 => initial_lr=4.8e-5; final_div_factor=10 => final_lr=4.8e-6.
 # T_MAX_EPOCHS=21 matches current bs=1 baseline (#2012 fit 21 epochs at 30-min cap).
 # Loop is capped at T_MAX_EPOCHS to prevent stepping past total_steps (OneCycleLR
 # would raise on the (total_steps+1)-th call).
@@ -473,7 +473,7 @@ n_batches_per_epoch = math.ceil(len(train_loader))
 total_steps = T_MAX_EPOCHS * n_batches_per_epoch
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    max_lr=1e-3,
+    max_lr=1.2e-3,
     total_steps=total_steps,
     pct_start=0.1,
     anneal_strategy='cos',
