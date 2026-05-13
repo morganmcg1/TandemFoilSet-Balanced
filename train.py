@@ -217,12 +217,17 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   surf_channel_weights=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``surf_channel_weights`` is given (shape (3,)), the surface-loss
+    computation weights the per-channel squared errors before summing, so the
+    val ``surf_loss`` tracks the same training objective.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -247,10 +252,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
-            surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            if surf_channel_weights is not None:
+                surf_sq = sq_err * surf_mask.unsqueeze(-1) * surf_channel_weights
+            else:
+                surf_sq = sq_err * surf_mask.unsqueeze(-1)
+            surf_loss_sum += (surf_sq.sum() / surf_mask.sum().clamp(min=1)).item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -379,6 +385,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
+    p_surf_weight: float = 2.0  # per-channel weight on surface-p only (Ux/Uy stay 1.0)
     epochs: int = 50
     eval_every_n_epochs: int = 3  # fp32 eval is ~45s/epoch overhead; eval less often to free epochs
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -441,6 +448,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Per-channel surface loss weights — [Ux, Uy, p]. Surgical up-weight on surface-p
+# (the headline metric channel) without touching volume-p or surface Ux/Uy.
+surf_channel_weights = torch.tensor(
+    [1.0, 1.0, cfg.p_surf_weight], device=device, dtype=torch.float32,
+)
+
 model = torch.compile(model, mode="default", dynamic=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -477,6 +490,7 @@ run = wandb.init(
         "pct_start": 0.05,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
+        "surf_channel_weights": [1.0, 1.0, cfg.p_surf_weight],
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -523,8 +537,13 @@ for epoch in range(MAX_EPOCHS):
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            surf_count = surf_mask.sum().clamp(min=1)
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            # Per-channel surface squared error. Reduce over (B, N) only so we can
+            # both compute the weighted surf_loss and log unweighted per-channel
+            # diagnostics from the same tensor.
+            surf_sq_per_channel = (sq_err * surf_mask.unsqueeze(-1)).sum(dim=(0, 1))  # (3,)
+            surf_loss = (surf_sq_per_channel * surf_channel_weights).sum() / surf_count
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -537,7 +556,27 @@ for epoch in range(MAX_EPOCHS):
         if scheduler._step_count <= scheduler.total_steps:
             scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "global_step": global_step})
+
+        # Per-channel surface MSE (unweighted) + p-fraction of the weighted surf_loss.
+        # Single .cpu() sync via the float() casts that wandb.log already needs.
+        surf_per_ch = (surf_sq_per_channel / surf_count).detach().float()
+        surf_Ux_unw = surf_per_ch[0].item()
+        surf_Uy_unw = surf_per_ch[1].item()
+        surf_p_unw = surf_per_ch[2].item()
+        surf_total_weighted = surf_Ux_unw + surf_Uy_unw + cfg.p_surf_weight * surf_p_unw
+        surf_p_frac_weighted = (
+            (cfg.p_surf_weight * surf_p_unw) / surf_total_weighted
+            if surf_total_weighted > 0 else 0.0
+        )
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/surf_loss_Ux": surf_Ux_unw,
+            "train/surf_loss_Uy": surf_Uy_unw,
+            "train/surf_loss_p_unweighted": surf_p_unw,
+            "train/surf_loss_p_frac_weighted": surf_p_frac_weighted,
+            "lr": scheduler.get_last_lr()[0],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -555,7 +594,8 @@ for epoch in range(MAX_EPOCHS):
     if should_eval:
         model.eval()
         split_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 surf_channel_weights=surf_channel_weights)
             for name, loader in val_loaders.items()
         }
         val_avg = aggregate_splits(split_metrics)
@@ -630,7 +670,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 surf_channel_weights=surf_channel_weights)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
