@@ -1,5 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
+- **As of:** 2026-05-13 20:00 UTC (round-42: **MERGED #2290 frieren n_hidden=96 WIN** (val 46.3612, −1.04% vs 46.8460; test 40.3555, −1.12%). **NEW BASELINE 46.3612.** All 4 splits improve uniformly (budget-bound 2-for-2: depth-down #2268 + width-down #2290). Per-epoch savings only 15% (not predicted 40-45%; slice ops dominate ~linearly in n_hidden, not n_hidden²); +17% more cosine epochs (60→70); best=67≠terminal (cosine converged cleanly). 330K params (−43%), dim_head=48 at n_head=2. LayerScale γ auto-adapted (96,)→(96,), no collapse. Width axis OPEN further: no capacity floor at 96. Assigned #2336 frieren n_hidden=64 (width-down continuation; depth axis has #2289 nezuko n_layers=3 in-flight; width completes the pair; dim_head=32 at n_head=2 — tests whether floor aligns with n_head=4/dim_head=32 LOSS #2222 or budget-bound dominates). All 8 students in-flight, zero idle, new baseline 46.3612.)
 - **As of:** 2026-05-13 19:30 UTC (round-41: Closed #2223 edward berHu c=1.0 (stale_wip: pod stuck on iteration 108 from 13:26 UTC for 5+ hours, classic stale pattern matching DropPath #1976/#2083/#2179 and translation #2138/#2235 retries). berHu hypothesis preserved — structurally distinct from all 10 closed taxa (LOSS-AMPLIFYING direction, never tested); baseline shifted significantly since assignment (49.8053 → 46.8460). Reassigned as #2316 retry-2 on fresh branch off current advisor via REST API (GraphQL rate-limited). Same berHu(c=1.0) hypothesis, new bar 46.8460, includes full advisor stack (n_layers=4 + LayerScale + warmup-3-cosine + n_head=2 + slice_num=32). All 8 students in-flight, zero idle, baseline 46.8460.)
 - **As of:** 2026-05-13 19:00 UTC (round-40: Closed #2272 askeladd LayerScale asymmetric init γ_mlp=1e-3 (val 48.5072, +3.55% LOSS vs current baseline 46.8460; wash vs assigned baseline 48.5160 only -0.018%). **Hypothesis FALSIFIED:** asymmetric init caused LATER convergence (best epoch 47, +5 vs #2195's ep42) not earlier; trained γ converges to same scale regardless of init (MLP 0.034-0.054 vs #2195's 0.025-0.05); the "near-zero branches-off phase" is an implicit warm-up that is load-bearing, not waste. Mixed 2-WIN/2-LOSS per-split (in-dist + rc improved; cruise + re_rand regressed). **10th failure-mode taxon added: init-prior-misalignment LOSS** — starting a residual-gate parameter at its trained-scale rather than small-norm prior corrupts implicit warm-up dynamics; OOD splits suffer first. LayerScale axis FULLY CLOSED at uniform init=1e-4 (PR #2195). Assigned #2307 askeladd slice_num 32→24 (budget-freeing PhysicsAttention granularity probe — 3rd orthogonal axis of budget-bound regime triangulation, after depth #2268 WIN and width #2290 in-flight). All 8 students in-flight, zero idle, baseline 46.8460.)
 - **As of:** 2026-05-13 17:45 UTC (round-39 final: Assigned #2298 thorfinn n_layers=4 --epochs 90 (budget-extrapolation diagnostic; no code changes; tests descent curve continuation). All 8 students in-flight, zero idle, new baseline 46.8460.)
@@ -38,7 +39,8 @@ New baseline = L1 + compile + bf16 + sampler 2× single + slice_num=32 + warmup-
 
 | PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
 |---|---|---|---|---|
-| #2268 ✓ | thorfinn | n_layers 5→4 (depth-down; --epochs 60; 577K params) | **46.8460** | **40.8140** |
+| #2290 ✓ | frieren | n_hidden 128→96 (width-down; --epochs 90; 330K params; −43%) | **46.3612** | **40.3555** |
+| #2268 ✓ | thorfinn | n_layers 5→4 (depth-down; --epochs 60; 577K params) | 46.8460 | 40.8140 |
 | #2195 ✓ | askeladd | LayerScale init=1e-4 (CaiT-style per-channel learnable γ on attn+MLP branches) | 48.5160 | 42.8162 |
 | #2173 ✓ | thorfinn | n_head 4→2 (dim_head 32→64) | 49.8053 | 43.5396 |
 | #2033 ✓ | thorfinn | LinearWarmup-3 + CosineAnnealingLR(T_max=47) | 50.6001 | 43.9680 |
@@ -50,21 +52,21 @@ New baseline = L1 + compile + bf16 + sampler 2× single + slice_num=32 + warmup-
 | #1532 ✓ | thorfinn | bf16 AMP + scoring-NaN fix | 101.12 | 91.50 |
 | #1444 ✓ | thorfinn | MSE → Huber β=1.0 | 110.76 | NaN |
 
-**Current baseline: val_avg/mae_surf_p = 46.8460, test_avg/mae_surf_p = 40.8140 (PR #2268, n_layers=4 + LayerScale on advisor)**
+**Current baseline: val_avg/mae_surf_p = 46.3612, test_avg/mae_surf_p = 40.3555 (PR #2290, n_hidden=96 + n_layers=4 + LayerScale on advisor)**
 
-Per-split baseline (PR #2268):
+Per-split baseline (PR #2290):
 
 | Split | val mae_surf_p |
 |---|---|
-| `val_single_in_dist` | 41.7031 |
-| `val_geom_camber_rc` | 64.6729 |
-| `val_geom_camber_cruise` | 31.5759 |
-| `val_re_rand` | 49.4322 |
+| `val_single_in_dist` | 40.7757 |
+| `val_geom_camber_rc` | 64.2563 |
+| `val_geom_camber_cruise` | 31.5251 |
+| `val_re_rand` | 48.8877 |
 
-> Advisor config: Pure L1 + bf16 AMP + torch.compile(dynamic=True) + scoring-NaN workaround + sampler 2× racecar_single + slice_num=32 + LinearWarmup(3ep, 0.1→1.0) + CosineAnnealingLR(T_max=epochs-3) + n_head=2 (dim_head=64) + LayerScale γ=1e-4 (per-channel CaiT-style, all blocks) + **n_layers=4 (down from 5)**.
-> ~58 epochs in 30 min (~31.4 s/epoch, -20% vs LayerScale baseline). Peak GPU: ~16.55 GB.
-> **Best epoch = terminal (58)** — budget-bound; training still improving at 30.4-min timeout. 577K params (−18% vs prior baseline).
-> **KEY FINDING:** budget-bound regime confirmed. Reducing per-epoch cost → more cosine refinement steps → better results within wall-clock constraint.
+> Advisor config: Pure L1 + bf16 AMP + torch.compile(dynamic=True) + scoring-NaN workaround + sampler 2× racecar_single + slice_num=32 + LinearWarmup(3ep, 0.1→1.0) + CosineAnnealingLR(T_max=epochs-3) + n_head=2 (dim_head=48) + LayerScale γ=1e-4 (per-channel CaiT-style, all blocks) + n_layers=4 + **n_hidden=96 (down from 128)**.
+> ~70 epochs in 30 min (~25.4 s/epoch). Peak GPU: ~14.27 GB.
+> **Best epoch 67 ≠ terminal 70** — cosine converged cleanly. 330K params (−43% vs n_hidden=128 baseline). Budget-bound 2-for-2.
+> **KEY FINDING:** budget-bound regime confirmed on width axis. n_hidden 128→96 trades 43% params for +17% cosine epochs → all 4 splits improve. Width axis open further (n_hidden=64 assigned to frieren as #2336).
 
 ## In-flight (WIP)
 
@@ -72,7 +74,7 @@ Per-split baseline (PR #2268):
 |---|---|---|---|
 | #2307 | askeladd | slice_num 32→24 (budget-freeing PhysicsAttention granularity probe; --epochs 70) | **Round-40** — 3rd orthogonal axis of budget-bound regime triangulation; depth-down (#2268 WIN) + width-down (#2290 in-flight) + attention-granularity-down; ~8-12% per-epoch savings; key diagnostic: uniform improvement = budget-bound 3-for-3; geometric-OOD regression = PhysicsAttention capacity floor |
 | #2298 | thorfinn | n_layers=4 + --epochs 90 (budget-extrapolation diagnostic; no code changes) | **Round-39** — same config as #2268 (just merged); extends budget from 60→90 epochs; ~70-72 epochs expected in 30 min; establishes descent curve continuation and budget floor |
-| #2290 | frieren | n_hidden 128→96 (width-down probe; --epochs 90; ~40-45% per-epoch savings) | **Round-39** — orthogonal to depth-down (#2268 win); budget-freeing width reduction; ~330K params; tests budget-bound vs capacity-floor axis on width dimension |
+| #2336 | frieren | n_hidden 96→64 (width-down continuation; --epochs 100; ~150K params) | **Round-42** — direct continuation of #2290 WIN (all 4 splits improved); tests whether budget-bound extends to 64 dims (dim_head=32 at n_head=2 — same per-head width as n_head=4/n_hidden=128 LOSS in #2222; tests whether floor is dim_head or total-capacity determined) |
 | #2289 | nezuko | n_layers 4→3 (depth-down continuation; --epochs 75) | **Round-39** — continues depth-down WIN from #2268; probes inflection point of budget-capacity trade-off at depth=3; ~450K params; ~25% more wall-clock savings |
 | #2283 | alphonse | Squared ReLU (ReLU²) at all 3 MLP sites — Primer-style sharp activation | **Round-39** — opposite direction of closed SiLU (negative-tail) LOSS; tests whether activation axis closes at GELU or extends to ReLU²; Primer paper precedent (consistently strong over GELU) |
 | #2280 | tanjiro | DropPath p_max=0.1 retry-4 (linear depth schedule, applied to LayerScale-gated branches) | **Round-39** — 4th attempt at DropPath after 3 consecutive pod stalls (#1976/#2083/#2179); same hypothesis, pod-unstick attempt; now stacks with LayerScale γ on advisor |

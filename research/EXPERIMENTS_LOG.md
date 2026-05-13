@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-13 20:00 UTC — Round 42
+
+### PR #2290 frieren: n_hidden 128→96 (width-down probe) — MERGED (WIN, new baseline 46.3612)
+
+- **Branch:** `charliepai2g48h5-frieren/n-hidden-96`
+- **Hypothesis:** budget-bound regime extends to width axis. Reducing n_hidden 128→96 saves per-epoch compute → more cosine epochs in 30-min budget → better val.
+
+- **Results (vs PR #2268 baseline 46.8460):**
+
+| Metric | PR #2290 | PR #2268 baseline | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.3612** | 46.8460 | **−1.04% WIN** |
+| `test_avg/mae_surf_p` | **40.3555** | 40.8140 | **−1.12% WIN** |
+| Epochs reached | 70 of 70 | 58 of 60 | +17% more epochs |
+| Best epoch | 67 (≠terminal) | 58 (=terminal) | cosine converged cleanly |
+| Per-epoch cost | ~25.4 s | ~31 s | −15% (not predicted −40-45%) |
+| Peak memory | 14.27 GB | ~16.5 GB | −13% |
+| Param count | ~330K | ~578K | −43% |
+
+- **Per-split breakdown:**
+
+| Split | PR #2290 | PR #2268 baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 40.7757 | 41.7031 | **−2.22% WIN** |
+| `val_geom_camber_rc` | 64.2563 | 64.6729 | **−0.64% WIN** |
+| `val_geom_camber_cruise` | 31.5251 | 31.5759 | **−0.16% WIN** |
+| `val_re_rand` | 48.8877 | 49.4322 | **−1.10% WIN** |
+
+All 4 splits improve uniformly — classic budget-bound signature. Budget-bound regime confirmed 2-for-2 (depth-down #2268 + width-down #2290).
+
+- **Key finding:** Per-epoch savings ~15% (not predicted 40-45%). Slice ops at slice_num=32 dominate and scale ~linearly in n_hidden, not n_hidden². Despite modest per-epoch savings, +17% more cosine epochs (60→70) drove improvement. Width axis is open further — no capacity floor at n_hidden=96.
+
+- **LayerScale γ behavior:** Auto-adapted from (128,) to (96,). MLP γ ~0.063–0.078, attn γ ~0.004–0.012 (6-10× ratio). Same structure as PR #2195 — robust to width reduction.
+
+- **New advisor config:** L1 + compile + bf16 + sampler 2× single + slice_num=32 + warmup-3-cosine + n_head=2 + LayerScale γ=1e-4 + n_layers=4 + **n_hidden=96** (dim_head=48). New baseline 46.3612 / 40.3555.
+
+- **Next assignment:** frieren → PR #2336 n_hidden=64 (width-down continuation; tests capacity floor or budget-bound 3-for-3 on width axis; dim_head=32 at n_head=2 — aligns with prior n_head=4/n_hidden=128 LOSS #2222; key diagnostic for whether floor is dim_head or total-capacity determined).
+
+---
+
 ## 2026-05-13 19:30 UTC — Round 41
 
 ### PR #2223 edward: berHu reverse-Huber (c=1.0) — CLOSED stale_wip (8h pod-stall, reassigned as #2316 retry-2)
