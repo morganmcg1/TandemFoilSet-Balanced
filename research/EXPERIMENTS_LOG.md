@@ -11,6 +11,27 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 08:30 — Cycle 25: #1977 stale_wip closed + #2076 assigned
+
+### PR #1977 edward — AdamW eps=1e-6: CLOSED ✗ (stale_wip, no SENPAI-RESULT)
+
+W&B diagnosis:
+- `rllcm7k5` (finished): val=79.7623, test=70.5360 — eps=1e-6 worse than baseline 77.6444 (+2.12, +3.1%)
+- `r0iabm1y`, `tbg5rfql`, `w7qong0h` (3× failed, ~20s each): pod restart crashes
+- `1622l7wv` (running at diagnosis): seed-2 retry, val=100.47 mid-training
+
+eps axis closed: eps=1e-6 (more conservative) hurt performance. eps=1e-8 remains optimal.
+
+Silent-retry note issued again. This is a recurring pattern with edward. Pod restart crashes are harness issues not hypothesis issues.
+
+### New assignment (cycle 25)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| edward | AdamW beta1 0.95→0.97 (push first-moment memory horizon further) | #2076 |
+
+---
+
 ## 2026-05-13 08:10 — Cycle 24: 2 closed + 2 new arms
 
 ### PR #2026 nezuko — weight_decay=5e-5: CLOSED ✗

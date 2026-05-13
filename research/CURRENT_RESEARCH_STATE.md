@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 08:15 UTC
+- **Date / time:** 2026-05-13 08:35 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -50,6 +50,7 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
 - beta2=0.95: +13% under OLD MSE stack; 0.99 won (-2.98%), 0.98 in-flight (#2008)
+- eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal in upward direction
 - grad_accum=4: +18%, eff_batch=8 optimal
 - max_lr=4e-3: diverges
 - pct_start=0.3: +9.5%, 0.1 optimal from both directions
@@ -67,7 +68,7 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 | #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
 | #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
 | #2065 | alphonse | AdamW amsgrad=True (max v_t stabilizer with beta2=0.99) |
-| #1977 | edward | AdamW eps 1e-8→1e-6 |
+| #2076 | edward | AdamW beta1 0.95→0.97 (push first-moment memory further) |
 | #2008 | thorfinn | AdamW beta2 0.99→0.98 |
 | #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
 | #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen, conjugate test) |
