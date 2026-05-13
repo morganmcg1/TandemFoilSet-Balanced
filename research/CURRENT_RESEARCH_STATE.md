@@ -31,12 +31,12 @@ The compound stack has 14 merged wins (100.957 → 64.182 = **−36.4%**). The G
 |---------|----|----|---------|--------|
 | askeladd | #2286 | flow-cond-fourier-re-aoa | Fourier encode log_Re+AoA0+AoA1 dims (n_freqs=2); +12 features, fun_dim 44→56 | IN FLIGHT |
 | tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320: bisect between won-256 and lost-384. NOTE: branched pre-GeGLU; compare vs old SwiGLU baseline 67.381, then evaluate vs new 64.182 | IN FLIGHT |
-| thorfinn | NEW | reglu-gate | ReGLU gate: F.gelu → F.relu in SwiGLUMLP. Closes gate-sharpness monotonicity (SiLU<GELU<ReLU). | ASSIGNED |
-| alphonse | NEW | cosine-tmax-adjustment | T_max=11 or T_max=12: calibrate cosine schedule to actual 12-13 epoch budget post-SwiGLU/GeGLU | ASSIGNED |
-| edward | NEW | hybrid-fourier-dyadic-rff | Keep dyadic L=6 + concatenate small Gaussian RFF block (m=6, σ≈1.0): combine high-freq precision (dyadic) + OOD-cruise generalization (RFF) | ASSIGNED |
-| fern | NEW | geglu-inner-dim-320 | GeGLU + inner_dim=320: now that GeGLU is baseline, does wider inner_dim compound? | ASSIGNED |
-| nezuko | NEW | lr-bracket-up-7e-4 | LR=5e-4→7e-4: upper side of lr bracket unexplored; GeGLU's harder gate may tolerate larger lr | ASSIGNED |
-| frieren | NEW | learned-fourier-freqs | FourierCoordEnc.B as nn.Parameter (init from dyadic or N(0,σ²I)): learned spatial frequency spectrum | ASSIGNED |
+| thorfinn | #2304 | reglu-gate | ReGLU gate: F.gelu → F.relu in SwiGLUMLP. Closes gate-sharpness monotonicity (SiLU<GELU<ReLU). | WIP |
+| alphonse | #2308 | cosine-tmax-12 | T_max=14→12: calibrate cosine schedule to actual ~12-13 epoch budget post-SwiGLU/GeGLU | WIP |
+| edward | #2309 | hybrid-fourier-dyadic-rff | Keep dyadic L=6 + concatenate small Gaussian RFF block (m=6, σ=1.0): combine high-freq precision + OOD-cruise generalization | WIP |
+| fern | #2306 | geglu-inner-dim-320 | GeGLU + inner_dim=320: does wider inner_dim compound with GeGLU gate win? | WIP |
+| nezuko | #2310 | lr-bracket-up-7e-4 | LR=5e-4→7e-4: close upper side of LR bracket (only lower side tested) | WIP |
+| frieren | #2312 | learned-fourier-freqs | FourierCoordEnc.freqs as nn.Parameter (dyadic init): let network learn optimal frequency spectrum | WIP |
 
 ## Key findings from Wave 13/14
 
