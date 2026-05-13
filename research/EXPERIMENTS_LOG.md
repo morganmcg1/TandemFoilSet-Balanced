@@ -8,6 +8,33 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:25 — PR #2361 (nezuko stoch-depth-0.05-reglu) — **CLOSED** (Outcome B; stoch-depth axis confirmed at 0.10)
+
+- Branch: `charliepai2g24h4-nezuko/stoch-depth-0.05-reglu`
+- Hypothesis: Reduce max stoch-depth from 0.10 to 0.05 — ReGLU's exact-zero sparsity may reduce the need for explicit stochastic depth regularization.
+- Metric artifact: `models/model-charliepai2g24h4-nezuko-stoch-depth-0.05-reglu-20260513-142034/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304 62.949/54.221) | Stoch-depth 0.05 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | **69.086** | **−1.20%** |
+| val_geom_camber_rc | 74.845 | 75.971 | +1.50% |
+| val_geom_camber_cruise | 44.262 | **43.996** | −0.60% |
+| val_re_rand | 62.765 | 63.207 | +0.70% |
+| **val_avg (primary)** | **62.949** | 63.065 | **+0.18%** (wash) |
+| test_avg | 54.221 | **53.930** | **−0.54%** (mild test improvement) |
+
+Best epoch: 12, n_params: 831,191 (unchanged).
+
+**Analysis:** Stoch-depth 0.05 max shows the canonical tradeoff: lighter drop improves in-dist (single_in_dist −1.20%) but worsens camber_rc (+1.50%) — exactly what stoch-depth was designed to prevent (OOD overfitting). The cross-split effects roughly cancel. **Stoch-depth axis confirmed closed at 0.10 under ReGLU.** ReGLU's sparsity is NOT a substitute for stoch-depth regularization on this architecture/dataset.
+
+Test avg mildly improved (−0.54%) but val gating metric +0.18% → does not meet Outcome A. The val→test improvement is noted but insufficient to merge at below-baseline val.
+
+Vs new inner_dim=288 baseline (61.875): +1.92% worse.
+
+**Reassigning nezuko to OOD-upweighted sampling** — the camber_rc and re_rand splits dominate the val error; 2.5× and 2× sampling weights target the bottleneck directly.
+
+---
+
 ## 2026-05-13 16:05 — PR #2360 (fern reglu-inner-dim-288) — **MERGED** (16th compound win)
 
 - Branch: `charliepai2g24h4-fern/reglu-inner-dim-288`

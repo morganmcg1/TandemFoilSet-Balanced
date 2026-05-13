@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 16:20 UTC (Wave 16: MERGE #2360 fern inner_dim=288 (16th win, −1.71%); CLOSE #2359 squared-relu (gate axis closed at ReLU); ASSIGN #2385 thorfinn abs-glu-gate, #2386 fern reglu-inner-dim-320)
+- **Last updated**: 2026-05-13 16:30 UTC (Wave 16: MERGE #2360 inner_dim=288 (16th win); CLOSE #2359/#2361; ASSIGN #2385 thorfinn abs-glu, #2386 fern inner_dim=320, #2391 nezuko ood-upsampling)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -31,7 +31,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 |---------|----|----|---------|--------|
 | thorfinn | #2385 | abs-glu-gate | AbsGLU: replace relu→abs in SwiGLUMLP gate — symmetric threshold, no dead zone | ASSIGNED |
 | fern | #2386 | reglu-inner-dim-320 | inner_dim=288→320 on ReGLU stack (epoch-budget mechanism confirmed at 288) | ASSIGNED |
-| nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth 0.10→0.05 on ReGLU stack | IN FLIGHT |
+| nezuko | #2391 | ood-upsampling | 2.5× camber_rc + 2× re_rand sampling weights — targets hardest OOD splits | ASSIGNED |
 | askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | IN FLIGHT |
 | edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | IN FLIGHT |
 | frieren | #2370 | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | IN FLIGHT |
@@ -68,7 +68,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 | Axis | Best setting | Closure reason |
 |---|---|---|
 | L1 vs MSE | L1 | First merged win |
-| Stoch-depth single-knob | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum (re-testing on ReGLU: nezuko #2361) |
+| Stoch-depth single-knob | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum confirmed on ReGLU (#2361: 0.05 max +0.18% worse) |
 | Cosine T_max | T_max=14 (per-batch) | #2308 alphonse: T_max=12 +3.24%, runtime jitter risk |
 | LR warmup | epoch-1 linear ramp | Merged |
 | Grad-clip | max_norm=25 | {1.0,10,25,50} bracket complete |
@@ -100,7 +100,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 
 1. **AbsGLU gate** (thorfinn NEW): F.abs(x) gate — symmetric threshold, no dead zone; tests if exact-zero threshold vs absolute-value matters in gate design
 2. **inner_dim=320 on ReGLU** (fern NEW): natural follow-up to 288 win; ReGLU simpler than GELU, may stay in 12-epoch window
-3. **Stoch-depth on ReGLU** (nezuko #2361): reduce max drop 0.10→0.05; ReGLU sparsity may reduce need for explicit drop
+3. **OOD-upweighted sampling** (nezuko #2391 NEW): 2.5× camber_rc + 2× re_rand training weight — directly targets the val_geom_camber_rc bottleneck (72.143, 16% above val_avg)
 4. **FiLM-style global conditioning** (askeladd #2368): γ/β = MLP(log_Re,AoA0,AoA1) — proper mechanism for per-sample scalars
 5. **Hybrid Fourier σ=3.0** (edward #2369): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
 6. **Learned freqs no-wd + 10× lr** (frieren #2370): unblock the under-trained 6-freq vector
