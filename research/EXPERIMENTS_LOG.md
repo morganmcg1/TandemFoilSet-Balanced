@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-13 11:30 — PR #2124: Surface-only pressure weight {0.5, 1.5}
+
+- **Branch:** `willowpai2g48h4-alphonse/surf-only-pw` (CLOSED — channel-weight axis dead end)
+- **Student:** willowpai2g48h4-alphonse
+- **W&B runs:** `s8xblprk` (Arm 1 k=0.5), `uxai0y1u` (Arm 2 k=1.5)
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs #2031 (93.62) | test_avg/mae_surf_p | Δ vs #2031 (83.88) |
+|-----|---------------------|---------------------|---------------------|---------------------|
+| Arm 1 (k=0.5, surf-only, raw) | 104.7205 | **+11.85%** | 95.0281 | **+13.29%** |
+| Arm 2 (k=1.5, surf-only, raw) | 114.0693 | **+21.85%** | 103.0041 | **+22.80%** |
+
+Vs the current baseline 89.7197 (#2091), regressions are +16.8% and +27.2% respectively.
+
+### Key finding: velocity rebalancing mechanism did NOT fire
+
+The PR's central hypothesis was: k=0.5 pressure weight would free encoder for velocity learning, indirectly improving pressure. **Arm 1 (k=0.5) regressed velocity (+6.4% Ux, +3.9% Uy), the opposite of the predicted direction.** The encoder is overwhelmingly trained by volume MSE; within-surface channel reshuffles don't affect encoder learning.
+
+### Combined channel-weight picture
+
+| Experiment | k_p (effective) | val_avg/mae_surf_p | Δ |
+|------------|-----------------|---------------------|---|
+| Baseline (uniform) | 1.0 | 93.62 | — |
+| PR #2124 Arm 1 | 0.5 (surf-only, raw) | 104.72 | +11.85% |
+| PR #2124 Arm 2 | 1.5 (surf-only, raw) | 114.07 | +21.85% |
+| PR #1496 (pw=3, both, mean-norm) | ~1.8 effective | ~112.3 | +20.04% |
+| PR #1496 (pw=5, both, mean-norm) | ~3.0 effective | ~117 | +25% |
+
+**Monotonic regression in all directions from k=1.0.** The surface-pressure channel-weight axis is fully closed: sub-unit, unit, and super-unit all characterized. k=1.0 is the local minimum.
+
+### Analysis
+
+Student diagnosed correctly: surface loss is gradient-dominated by pressure (not value-dominated, because Huber at δ=0.5 clips into L1 regime). Channel re-weighting attenuates or amplifies gradient directly, without a secondary encoder-rebalancing effect. The `surf_weight=10` global factor already controls the relative emphasis — per-channel within-surface weighting is a distinct lever with no beneficial operating point.
+
+### Branching rule closure
+
+Both arms >3% regression → entire surface-pressure-weight axis is dead per the branching rule. Correct closure.
+
+---
+
 ## 2026-05-13 13:10 — PR #2128: AdamW epsilon sweep {1e-7, 1e-6}: denominator-floor stabilizer
 
 - **Branch:** `willowpai2g48h4-nezuko/adamw-eps` (CLOSED — eps axis ruled out, excellent diagnostics)

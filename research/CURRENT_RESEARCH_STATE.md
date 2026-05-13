@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 35)
+- **As of:** 2026-05-13 (updated cycle 36)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -46,7 +46,8 @@
 | 2153 | fern | wd-bracket | WIP (NEW) | Finer WD sweep {4e-4, 5.5e-4, 6e-4} — brackets the peak on both sides; preserves weight_norm logging |
 | 2122 | edward | decoupled-wd | WIP (NEW) | Per-group WD: encoder vs surf_head (10× LR → 10× effective shrinkage at coupled WD) |
 | 2123 | askeladd | cosine-tmax | WIP (NEW) | T_max sweep {15, 20, 25}: T_max=50 wastes 72% of cosine cycle at 14-ep wall-clock cap |
-| 2124 | alphonse | surf-only-pw | WIP (NEW) | Surface-only pressure weight {0.5, 1.5}: NO mean-normalisation (avoids #1496 bug) |
+| 2124 | alphonse | surf-only-pw | CLOSED | Both arms +11.85%/+21.85%. Monotonic regression across all k values. k=1.0 is sharp local minimum. Channel-weight axis fully closed. |
+| 2227 | alphonse | cosine-restart | WIP (NEW) | SGDR cosine restart T_0=10/7: induces planned spike+recovery based on cycle 34 reframing that e12 spike is BENEFICIAL |
 | 2127 | thorfinn | surf-head-step-decay | CLOSED | Both arms regressed (+7.05%, +2.83%). MECHANISM CONFIRMED (spike damped) but spike+recovery is BENEFICIAL — damping spike loses recovery. |
 | 2188 | thorfinn | encoder-lr-boost | WIP (NEW) | Encoder LR boost at e15-18 (dual to head-LR damp); arms: ×2.0, ×3.0; composes w/ compile |
 | 2128 | nezuko | adamw-eps | CLOSED | Both arms +13.13%/+23.08%. Decisive: surf_frac_below_eps=0 always. Eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out. |
@@ -92,7 +93,8 @@
 26a. **WD bracket sweep {4e-4, 5.5e-4, 6e-4}** — testing (#2153 fern, NEW). Brackets the peak symmetrically; weight_norm logging preserved as primary diagnostic.
 27. **Decoupled weight_decay per param group** — testing (#2122 edward, NEW). surf_head at 10× LR sees 10× effective WD shrinkage; decoupling may unlock further gains.
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
-29. **Surface-only pressure weight {0.5, 1.5}** — testing (#2124 alphonse, NEW). Sub-unit weight on surface pressure only, NO mean-normalisation (corrects #1496's bug).
+29. **Surface-only pressure weight {0.5, 1.5}** — **rejected** (PR #2124, +11.85% / +21.85%). k=1.0 is a sharp local minimum in both directions. Velocity rebalancing mechanism did NOT fire (k=0.5 regressed velocity). Channel-weight axis fully closed across all 5 experiments (#1496 with mean-norm bug, #2124 without).
+29a. **SGDR cosine restart T_0=10/7** — testing (#2227 alphonse, NEW). Induced planned spike+recovery based on cycle 34 reframing. If e12 spike is beneficial exploration, cosine restarts should amplify gains. Two arms: single restart at e10 vs periodic restarts every 7 epochs.
 30. **surf_head step decay at e10 {×0.5, ×0.3}** — **rejected** (PR #2127, +7.05% / +2.83%). MECHANISM CONFIRMED (clean spike damping observed) but the spike+recovery is a beneficial training dynamic — damping the spike also damps the e14 deep minimum. **Reframing:** the e12 spike is an exploration burst, not pathology.
 30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — testing (#2188 thorfinn, NEW). If the spike comes from encoder entering a new landscape where the head is pre-positioned "too forward," briefly speeding up the encoder during transition might preserve recovery while smoothing the misalignment.
 31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
@@ -151,6 +153,7 @@
 - #2127 (surf_head step decay) — 7.05% / 2.83% regression, but key reframing: e12 spike+recovery is BENEFICIAL
 - #2013 (LogCosh surface loss) — 3.51% / 14.18% regression, C² smoothness was non-issue, surface-loss family closed
 - #2128 (AdamW eps sweep 1e-7/1e-6) — +13.13% / +23.08% regression. surf_frac_below_eps=0 always: eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out entirely.
+- #2124 (surface-only pressure weight k=0.5/1.5) — +11.85% / +21.85% regression. k=1.0 is sharp local minimum in both directions. Velocity rebalancing mechanism absent. Channel-weight axis fully closed.
 
 ## Potential next directions (after cycle 30 in-flight)
 
