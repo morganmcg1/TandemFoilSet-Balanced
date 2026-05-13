@@ -6,6 +6,14 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~14:35 — PRs #2213, #2193 — CLOSED (n_head axis fully exhausted)
+
+- **PR #2213 (fern n_head=2+epochs=24 on n_layers=4):** val=40.966 / test=35.255 — **+2.01% vs PR #2172** (n_head=4 same stack), **+4.66% vs new baseline 39.143**. Student's diagnostic insight: PR #2149's marginal n_head=2 win (−0.25% at epoch 21) was a "less-bad slow learner" artifact — at full 24-epoch budget, n_head=4 wins clearly. n_head=2 still descending at epoch 24 but never catches up.
+- **PR #2193 (askeladd n_head=1 on n_layers=4):** val=43.980 / test=37.170 — **+2.97% vs PR #2149** (n_head=2), **+12.4% vs new baseline 39.143**. Critical insight: n_head=1 has **+30% MORE params** (864K vs 667K) yet still lost decisively. Attention **diversity** (multiple modes) is doing real work — not just per-head capacity.
+- **Conclusion:** n_head axis fully bracketed: n_head=4 (best) > n_head=2 > n_head=1. The current best (n_layers=3+slice_num=32+epochs=27, n_head=4) is at the optimum of this axis. The n_head=2 plumbing PR #2149 was likely a false winner that we merged. No further n_head exploration needed.
+
+---
+
 ## 2026-05-13 ~14:15 — PRs #2150, #2134 — CLOSED (dead ends, LR axis saturated)
 
 - **PR #2150 (frieren lr=8e-5):** val=44.017 / test=37.507 — +12.4% above new baseline 39.143. LR axis fully exhausted: lr=8e-5 too slow to converge within epoch budget. Classic undertrained signature, best_epoch=21/21 still descending.
