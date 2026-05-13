@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 23:00 (post-SOAP-merge, 3 race-condition send-backs)
+- **Date**: 2026-05-13 00:10 (PCGrad closed, EMA assigned to frieren)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -20,24 +20,24 @@ Test avg 36.40 (all 4 splits).
 
 ## Current Research Focus
 
-**SOAP paradigm shift validated**. Now harvesting compound wins on top of SOAP. Three concurrent PRs (alphonse/bf16-amp, fern/re-conditioned-scaling, tanjiro/sgdr→cosine-eta-min) completed on stale pre-SOAP base — all rebased onto SOAP and re-running.
+**SOAP paradigm shift validated. Now compounding on top of SOAP across orthogonal axes.**
 
-**Key constraint remaining at SOAP baseline**:
-- Val still falling at epoch 13 — model NOT converged
-- clip_frac=0.984 at ep 13 — SOAP is still being clipped ~9× per step (grad_norm=9.16 vs clip=1.0)
-- Only 13 epochs in 30 min (vs 14 for AdamW) — SOAP is slightly slower per epoch
-- LR ceiling may have shifted under SOAP's preconditioner — untested
+Key properties of the SOAP baseline to exploit:
+- Val still falling at epoch 13 — model NOT converged → bf16-amp and EMA directly exploit this
+- clip_frac=0.984 → SOAP clipped ~9×/step (grad_norm=9.16 vs clip=1.0) → soap-relax-clip targets this
+- Only 13 epochs in 30 min → bf16-amp should give ~17 epochs
+- Gradient conflict is sparse (4% of tensors per PCGrad) — SOAP + loss normalization already tames magnitude noise
 
-**Three highest-priority open questions**:
-1. Does relaxing grad_clip from 1.0 to 5.0 unlock SOAP's step magnitude? (thorfinn #1668)
-2. Does bf16-amp give 17+ epochs with SOAP, compounding the two biggest wins? (alphonse #1456 rebased)
-3. Does Re-conditioned-scaling compound with SOAP, or is it redundant? (fern #1599 rebased)
+**Three highest-priority running experiments**:
+1. **soap-relax-clip** (thorfinn #1668): grad_clip 1.0→5.0 to unlock SOAP step magnitude
+2. **bf16-amp** (alphonse #1456 rebasing): +29% throughput confirmed; ~17 epochs on SOAP
+3. **ema-weights** (frieren #1704, new): EMA of SOAP weights = free smoothed checkpoint, zero wall-clock cost
 
 **Per-split profile at new baseline**:
 - cruise (val 24.32 / test 19.79) — dramatically improved, near-saturating
 - re_rand (val 43.22 / test 35.97) — much improved
 - single_in_dist (val 46.09 / test 41.76) — still harder but major gains
-- rc (val 55.98 / test 48.10) — hardest split, room to improve
+- rc (val 55.98 / test 48.10) — hardest split, most room to improve
 
 ---
 
@@ -45,14 +45,14 @@ Test avg 36.40 (all 4 splits).
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #1456 | alphonse | `bf16-amp` | WIP (rebasing) | **HIGHEST** | bf16 + SOAP = expected ~17 epochs; +29% throughput confirmed |
+| #1456 | alphonse | `bf16-amp` | WIP (rebasing) | **HIGHEST** | +29% throughput → ~17 epochs on SOAP; compound |
 | #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30 on SOAP base; needs rebase |
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128 on SOAP base; needs rebase |
-| #1579 | frieren | `pcgrad-surgery` | WIP | LOW | PCGrad may be redundant with SOAP preconditioning |
-| #1599 | fern | `re-conditioned-scaling` | WIP (rebasing) | HIGH | Re-scale head working (scale corr +0.92); SOAP compound test |
+| #1599 | fern | `re-conditioned-scaling` | WIP (rebasing) | HIGH | ReScaleHead (scale corr +0.92 with log_Re); SOAP compound test |
 | #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5 on SOAP base; orthogonal |
-| #1630 | tanjiro | `sgdr-restarts` → `cosine-eta-min` | WIP (rebasing, pivoted) | MEDIUM | Pivoted: monotone cosine + eta_min=1e-5 floor on SOAP |
+| #1630 | tanjiro | `cosine-eta-min` | WIP (rebasing, pivoted) | MEDIUM | Monotone cosine + eta_min=1e-5 floor on SOAP |
 | #1668 | thorfinn | `soap-relax-clip` | WIP | **HIGH** | grad_clip 1.0→5.0; unlocks SOAP step magnitude |
+| #1704 | frieren | `ema-weights` | WIP (new) | **HIGH** | EMA β=0.999 of SOAP weights; zero wall-clock cost |
 
 All 8 student pods healthy. All on SOAP-base or rebasing onto SOAP.
 
@@ -64,24 +64,27 @@ All 8 student pods healthy. All on SOAP-base or rebasing onto SOAP.
 - **lr=1.5e-3 (AdamW)** (PR #1539): above AdamW LR ceiling; SOAP may change this
 - **wider-deeper-3M** (PR #1458): epoch-limited
 - **SGDR T_0=7** (PR #1630, pivoted): restart cost ~4 epochs of re-convergence at 14-epoch budget — replaced with monotone cosine + eta_min floor
+- **PCGrad gradient surgery** (PR #1579, closed): mechanism confirmed (9× grad-norm reduction) but 1.63× wall-clock penalty can't be earned back at 30-min budget; gradient conflict is sparse (4% of tensors) and already mostly tamed by SOAP + loss normalization
+
+---
 
 ## Potential Next Directions
 
-Now that SOAP has set a dramatically new baseline, the open research questions are:
+**Currently in-flight on SOAP base** (see active experiments above).
 
-**Currently in-flight on SOAP base**:
-- **bf16-amp + SOAP**: alphonse #1456 rebased. Expected to be massive — ~17 epochs vs 13, on a model that hasn't converged.
-- **soap-relax-clip**: thorfinn #1668. clip_frac=0.984 means SOAP is clipping 9×. Relaxing to 5.0 should unlock larger steps.
-- **re-conditioned-scaling + SOAP**: fern #1599 rebased. Architecture-level head; compound test on top of optimizer.
-
-**Architecture-level** (not yet assigned, could compound with SOAP):
+**Architecture-level** (not yet assigned):
 - **FNO spectral layer**: Not yet tried; may outperform attention on turbulent flows
 - **GNOT multi-query attention**: Not yet tried; designed for CFD
-- **Larger model under SOAP**: SOAP's preconditioner may let us absorb a larger model in the epoch budget
+- **Larger model under SOAP**: SOAP may unlock capacity that was epoch-limited under AdamW
 
-**Schedule refinements**:
-- **Higher lr (2e-3 or 3e-3) under SOAP**: LR ceiling may have shifted significantly with preconditioning — next priority once bf16-amp lands
+**Optimizer/schedule**:
+- **Higher lr (2e-3) under SOAP**: LR ceiling may have shifted; next priority after soap-relax-clip results
+- **SOAP precondition_frequency=5** (more frequent updates): trades compute for better conditioning
 
-**PCGrad status**: With SOAP preconditioning gradients, PCGrad's conflict-resolution is likely partially redundant. Will evaluate when frieren's results arrive.
+**Loss**:
+- **Per-split loss weighting by OOD difficulty** (rc hardest, cruise easiest): explicit curriculum
+- **Charbonnier loss instead of Huber**: smoother near zero, differentiable everywhere
 
-**Plateau protocol**: Baseline moved from 89.39 to 42.40 — NOT a plateau. Next 5 experiments should be evaluated against 42.4015.
+**PCGrad status**: Confirmed mechanism but structural wall-clock loss. No further follow-up unless budget increases.
+
+**Plateau protocol**: Baseline moved from 89.39 to 42.40 — NOT a plateau. All 8 slots active.

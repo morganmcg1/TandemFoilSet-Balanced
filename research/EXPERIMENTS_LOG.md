@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-13 00:00 — PR #1579: [pcgrad-surgery] Gradient surgery for vol/surf conflict
+
+- **Branch**: charliepai2g24h1-frieren/pcgrad-surgery
+- **Hypothesis**: PCGrad gradient surgery (Yu et al. NeurIPS 2020) reduces destructive interference between vol_loss and surf_loss gradients, lowering effective update noise that forces 100% gradient clipping.
+- **Status**: CLOSED — mechanism confirmed but wall-clock loss is structural at 30-min budget
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 8, EMA weights) | **59.2256** |
+| test_avg/mae_surf_p | **53.7574** |
+| SOAP baseline | 42.4015 |
+| Delta | **+39.6% regression** |
+| seconds/epoch | 225 (vs 138 for SOAP baseline, 1.63×) |
+| Epochs completed | 8 (vs 13 for SOAP in same wall-clock) |
+| conflict_frac (vol vs surf) | **0.04 (sparse)** |
+| post-PCGrad grad_norm_mean | 2.28 (vs SOAP 9.16 at ep 13) |
+| post-PCGrad grad_norm_max | 6.65 (vs SOAP 259 at ep 13) |
+| Peak GPU memory | 47.6 GB (vs SOAP ~25-30 GB) |
+
+**Per-epoch trajectory vs SOAP at matched epochs**:
+- PCGrad@ep8 = 59.23 beats SOAP@ep8 = 72.44 by **13.2 points** (mechanism confirmed)
+- But SOAP@ep13 = 42.40, which PCGrad never reaches due to 1.63× epoch cost
+
+**Analysis**: The mechanism works — PCGrad achieves 9× lower mean grad-norm and 70× lower max grad-norm vs SOAP at matched epochs. The vol/surf gradient conflict is real but **sparse** (4% of parameter tensors at any given step). The relative-L2 + Huber + SOAP stack already tames most conflict; residual is concentrated in a few high-magnitude tensors. PCGrad's projection addresses those tensors but the 2× backward pass overhead (1.63× wall-clock) cannot be earned back at a 30-min budget. Structural dead-end at this compute level.
+
+**Key insight**: Per-tensor conflict_frac ≈ 0.04 confirms gradient conflict is real but sparse. Most variance in grad norms is magnitude-based (handled by SOAP + loss normalization), not direction-based. Multi-pass gradient methods are structurally disadvantaged at small epoch budgets.
+
+**Artifact**: `models/model-charliepai2g24h1-frieren-pcgrad-surgery-20260512-231800/metrics.jsonl`
+
+---
+
 ## 2026-05-12 22:55 — Race-condition send-backs (3 PRs on stale baseline)
 
 After SOAP merged at 22:30 as new baseline (42.4015), three PRs completed concurrently on the pre-SOAP base. None directly comparable to current baseline; all sent back for SOAP-rebased re-test.
