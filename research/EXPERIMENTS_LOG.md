@@ -8,6 +8,72 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 15:30 — PR #2312 (frieren learned-fourier-freqs) — **CLOSED** (borderline B; under-trained freqs)
+
+- Branch: `charliepai2g24h4-frieren/learned-fourier-freqs`
+- Hypothesis: Make `FourierCoordEnc.freqs` an `nn.Parameter` (dyadic init 1,2,4,8,16,32) so the model can discover its own spectral basis instead of using fixed dyadic frequencies.
+- Metric artifact: `results/icml-appendix-charlie-pai2g-24h-r4_charliepai2g24h4-frieren_learned-fourier-freqs.jsonl`
+
+| Split | ReGLU baseline (#2304 62.949/54.221) | Learned freqs | Δ vs new baseline |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | 73.665 | +5.35% (regression) |
+| val_geom_camber_rc | 74.845 | 72.751 | **−2.80%** |
+| val_geom_camber_cruise | 44.262 | **42.121** | **−4.84%** (best on board) |
+| val_re_rand | 62.765 | 61.222 | **−2.46%** |
+| **val_avg (primary)** | **62.949** | 63.580 | **+1.00%** (borderline) |
+| **test_avg** | **54.221** | 55.389 | +2.15% |
+
+Best epoch 12 (timeout-truncated, run still descending). n_params: 831,197 (+6).
+
+**Mechanism analysis:** Learned freqs barely moved — bottom freqs converged to (1.084, 1.819, 3.868) from dyadic init (1, 2, 4); top freqs essentially fixed at (7.992, 15.996, 31.983) from init (8, 16, 32). Only the bottom 3 freqs received meaningful gradient signal; high-freq freqs stayed pinned. AdamW with default wd=1e-4 + lr=5e-4 + post-step `clamp(0.1, 100)` effectively froze the freqs at init. Split pattern is informative: 3/4 OOD splits improved (camber_cruise hit a new best 42.121), but in-dist regressed +5.35% and dragged the average.
+
+**Conclusion:** Mechanism shows real signal — spectral adaptation moves OOD-cruise. The blocker is under-training of the 6-parameter freq vector. Follow-up assigning to frieren: per-block independent learned freqs (5 blocks × 6 = 30 params) for finer spectral carving, OR no-wd param group + 10× lr multiplier on freqs to actually let them explore. The student's diagnosis was correct.
+
+---
+
+## 2026-05-13 15:30 — PR #2309 (edward hybrid-fourier-dyadic-rff) — **CLOSED** (Outcome C; σ=1.0 redundant)
+
+- Branch: `charliepai2g24h4-edward/hybrid-fourier-dyadic-rff`
+- Hypothesis: Concatenate dyadic L=6 + Gaussian RFF m=6 σ=1.0 Fourier encoders to combine high-freq pressure structure (dyadic) with smooth OOD coverage (RFF).
+- Metric artifact: `results/icml-appendix-charlie-pai2g-24h-r4_charliepai2g24h4-edward_hybrid-fourier-dyadic-rff.jsonl`
+
+| Split | ReGLU baseline (#2304) | Hybrid σ=1.0 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | 78.504 | +12.27% (large regression) |
+| val_geom_camber_rc | 74.845 | 78.012 | +4.23% |
+| val_geom_camber_cruise | 44.262 | 44.766 | +1.14% (NOT the −7.9% from #2225) |
+| val_re_rand | 62.765 | 67.022 | +6.78% |
+| **val_avg (primary)** | **62.949** | 68.076 | **+8.14%** |
+| **test_avg** | **54.221** | 57.878 | +6.75% |
+
+Best epoch 12 (~9% slower per epoch). n_params: 834,263 (+3,072).
+
+**Mechanism analysis:** σ=1.0 RFF generates frequencies clustered around the LOW end of dyadic's already-covered range (dyadic spans π to 32π ≈ 3.14 to 100.5; σ=1.0 RFF median freq ≈ 6.28). Net effect: capacity dilution — preprocess MLP input grew from 46-d to 58-d (+26%), wasting parameters learning to ignore redundant low-freq features rather than capturing complementary structure. The OOD-cruise win from RFF-only #2225 (at σ=3.0) did NOT transfer — σ=3.0 was the actual high-freq complement that worked.
+
+**Conclusion:** The hybrid was correct in principle but used the wrong σ. The student's analysis identified the issue: "σ=3.0 hybrid would directly test whether high-freq RFF (not low-freq) is the actual OOD-cruise ingredient." Follow-up assigning to edward: hybrid retest with σ=3.0.
+
+---
+
+## 2026-05-13 15:30 — PR #2286 (askeladd flow-cond-fourier-re-aoa) — **CLOSED** (Outcome C; class falsified)
+
+- Branch: `charliepai2g24h4-askeladd/flow-cond-fourier-re-aoa`
+- Hypothesis: Apply Fourier features `[sin(2^k π x), cos(2^k π x)] for k=0..3` to log_Re, AoA0, AoA1 (3 per-sample scalar dims); fun_dim 44→56.
+- Metric artifact: `results/icml-appendix-charlie-pai2g-24h-r4_charliepai2g24h4-askeladd_flow-cond-fourier-re-aoa.jsonl`
+
+| Metric | Branch-point baseline (#2175 67.381) | Flow-cond Fourier | Δ vs new ReGLU baseline (62.949) |
+|---|---:|---:|---:|
+| val_avg | 67.381 | 70.172 | **+11.47%** |
+| test_avg | 57.800 | 60.988 | +12.49% |
+| val_re_rand | — | (worst hit) | +13.84% |
+
+All splits regressed. n_params: 834,263 (+3,072).
+
+**Mechanism analysis (quoting student's correct diagnosis):** "Spatial Fourier decomposes a signal that varies across nodes — sin(2^k π · x_node) generates progressively higher-frequency modes that capture spatial detail. Flow-cond Fourier operates on per-sample constants: every node in a sample sees the same log_Re, the same AoA. sin(2^k π · AoA) is just k constant features per sample. There is no spectral structure to decompose — only redundant rescalings of a single scalar."
+
+**Conclusion:** Class of `(sin/cos)(α·scalar)` features for per-sample condition scalars is fundamentally mismatched — Fourier features are useful when there is per-node variation along a coordinate axis, not for global conditioning. **Permanently closing this axis (any variant of per-sample scalar Fourier).** Follow-up assigning to askeladd: FiLM-style γ/β = MLP(condition_scalars) applied to TransolverBlock activations — the correct mechanism for global conditioning.
+
+---
+
 ## 2026-05-13 14:10 — PR #2304 (thorfinn reglu-gate) — **MERGED** (15th compound win)
 
 - Branch: `charliepai2g24h4-thorfinn/reglu-gate`

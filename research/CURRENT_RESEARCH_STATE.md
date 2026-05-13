@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 14:20 UTC (Wave 15: MERGE #2304 thorfinn ReGLU (−1.92%, 15th compound win); CLOSE #2306/#2310; Assigning thorfinn/fern/nezuko)
+- **Last updated**: 2026-05-13 15:35 UTC (Wave 16: CLOSE #2312 borderline / #2309 σ=1.0 redundant / #2286 class falsified; assigning askeladd/edward/frieren follow-ups)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -21,24 +21,24 @@ None received yet on this branch.
 
 ## Current research focus
 
-**Wave 15 — Gate-sharpness continuation + Fourier encoder variants + capacity bisect.**
+**Wave 16 — Gate-sharpness continuation + global conditioning + spectral adaptation refinement.**
 
-The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). The ReGLU win (−1.92% val, −4.07% test) confirmed the gate-sharpness monotonicity: SiLU→GELU→ReLU each improved, with OOD splits benefiting most from harder gates. The next question: does gate sharpness continue past ReLU (Squared ReLU = F.relu²)? Simultaneously, Fourier encoder axis (hybrid dyadic+RFF, learned frequencies) and capacity bisect (ReGLU+inner_dim=288) are in-flight. The LR and depth axes are now closed.
+The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). Three Wave 15 Fourier-axis experiments closed: (#2312 learned-freqs borderline +1.00%, freqs under-trained; #2309 hybrid σ=1.0 redundant +8.14%; #2286 flow-cond Fourier on per-sample scalars falsified +11.47%). Three reglu-axis experiments remain in-flight (thorfinn squared-relu, fern reglu-288, nezuko stoch-0.05). Wave 16 reassigns the 3 Fourier-axis follow-ups: (a) FiLM-style global conditioning to replace failed flow-cond Fourier, (b) hybrid Fourier retest with σ=3.0 (the actual winning σ from #2225), (c) per-block learned freqs OR no-wd+higher-lr on freqs to unblock the under-training. The LR and depth axes are closed.
 
-**Wave 15 active threads:**
+**Wave 16 active threads:**
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| askeladd | #2286 | flow-cond-fourier-re-aoa | Fourier encode log_Re+AoA0+AoA1 dims; +12 features, fun_dim 44→56 | IN FLIGHT |
 | tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320 (pre-ReGLU branch; compare vs old SwiGLU baseline 67.381) | IN FLIGHT |
 | alphonse | #2308 | cosine-tmax-12 | T_max=14→12 cosine schedule recalibration | IN FLIGHT |
-| edward | #2309 | hybrid-fourier-dyadic-rff | Dyadic L=6 + Gaussian RFF m=6 σ=1.0 concatenated Fourier encoder | IN FLIGHT |
-| frieren | #2312 | learned-fourier-freqs | FourierCoordEnc.freqs as nn.Parameter (dyadic init) | IN FLIGHT |
-| thorfinn | #2359 | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | ASSIGNED |
-| fern | #2360 | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | ASSIGNED |
-| nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | ASSIGNED |
+| thorfinn | #2359 | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | IN FLIGHT |
+| fern | #2360 | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | IN FLIGHT |
+| nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | IN FLIGHT |
+| askeladd | TBD | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | ASSIGNING |
+| edward | TBD | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | ASSIGNING |
+| frieren | TBD | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | ASSIGNING |
 
-## Key findings from Wave 13/14/15
+## Key findings from Wave 13/14/15/16
 
 **Gate activation axis (fully confirmed monotonic):**
 - SiLU → GELU: **−4.75% val, −2.21% test** (14th compound win)
@@ -46,14 +46,15 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). The R
 - Gate-sharpness monotonicity: SiLU < GELU < ReLU — each harder gate wins
 - OOD splits benefit more from harder gates than in-dist (camber_cruise, camber_rc, re_rand all improved most)
 - val_single_in_dist small regression (+2.03) with ReGLU — harder gate may slightly over-suppress in-dist features
-- **Next: Squared ReLU** (F.relu²) — Primer (So et al. 2021) — tests whether monotonicity continues past ReLU
+- **Next: Squared ReLU** (F.relu²) — Primer (So et al. 2021) — thorfinn #2359 in-flight
 - If squared ReLU wins → axis still open; if not → ReLU is the gate optimum
 
-**Encoder axis (from #2225 Gaussian RFF + in-flight #2286):**
-- Pure Gaussian RFF acts as low-pass filter vs dyadic broadband — misses high-freq pressure structure
-- But RFF *did* improve OOD-cruise splits (+1-2%) across both σ values consistently — signal is real
-- Hybrid dyadic+RFF could capture both (in-dist high-freq + OOD smooth coverage)
-- Learned frequencies (B as Parameter) is the most principled approach to discover optimal spectrum
+**Encoder axis findings (#2225, #2286, #2309, #2312):**
+- Pure Gaussian RFF (#2225 σ=3.0) acts as low-pass filter vs dyadic broadband — misses high-freq pressure structure, but improved OOD-cruise +1-2%
+- Hybrid σ=1.0 (#2309) FAILED (+8.14%) — σ=1.0 RFF freq band overlaps dyadic's low octaves → redundancy, capacity dilution
+- Per-sample scalar Fourier (#2286) FAILED (+11.47%) — falsified class; Fourier needs per-node spatial variation
+- Learned freqs (#2312) borderline (+1.00% val, 3/4 OOD splits improved, in-dist regressed +5.35%); high-freq freqs stayed pinned at init; mechanism is real but under-trained
+- **Wave 16 follow-ups**: σ=3.0 hybrid (edward), no-wd+10×lr learned-freqs (frieren), FiLM conditioning for scalars (askeladd)
 
 **Lion optimizer (#2098 close):**
 - Lion + SwiGLU: partially redundant (both address per-channel grad heterogeneity) + schedule mismatch (12 vs 14 epochs)
@@ -94,17 +95,20 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). The R
 | Coord jitter | off | std=0.002/0.005 direction-inverted |
 | SmoothL1 / Huber | off | Absorbed by LayerScale |
 | Adaptive grad-clip | off | Over-clips on LayerScale-attenuated stack |
-| Gaussian RFF (pure) | dyadic L=6 | Low-pass filter, in-dist regression |
+| Gaussian RFF (pure σ=1.0) | dyadic L=6 | Low-pass filter, in-dist regression |
+| Hybrid dyadic+RFF σ=1.0 | dyadic L=6 | #2309 redundant low-freq overlap; retry at σ=3.0 |
+| Per-sample scalar Fourier | concat | #2286 class falsified — no spectral structure |
 
 ## Prioritized open research themes (Wave 16+)
 
-1. **Squared ReLU gate** (thorfinn, NEW): F.relu(x)^2 — Primer-style gate; tests whether monotonicity continues past ReLU
-2. **ReGLU inner_dim=288** (fern, NEW): bisect between 256 (win) and 320 (B) on current ReGLU stack
-3. **Stoch-depth on ReGLU** (nezuko, NEW): reduce max drop 0.10→0.05; ReGLU sparsity may reduce need for explicit drop
-4. **FlowCond Fourier** (askeladd, in-flight #2286): non-spatial Fourier for log_Re/AoA — targets val_re_rand
-5. **Hybrid dyadic+RFF Fourier** (edward, in-flight #2309): combine high-freq + smooth OOD coverage
-6. **Learned Fourier frequencies** (frieren, in-flight #2312): discover optimal frequency spectrum
-7. **Cosine T_max=12** (alphonse, in-flight #2308): schedule recalibration
-8. **SwiGLU inner_dim=320** (tanjiro, in-flight #2281): pre-ReGLU branch; compare vs old SwiGLU baseline 67.381
+1. **Squared ReLU gate** (thorfinn #2359 in-flight): F.relu(x)^2 — Primer-style gate; tests whether monotonicity continues past ReLU
+2. **ReGLU inner_dim=288** (fern #2360 in-flight): bisect between 256 (win) and 320 (B) on current ReGLU stack
+3. **Stoch-depth on ReGLU** (nezuko #2361 in-flight): reduce max drop 0.10→0.05; ReGLU sparsity may reduce need for explicit drop
+4. **FiLM-style global conditioning** (askeladd, NEW): γ/β = MLP(log_Re,AoA0,AoA1) modulating block activations — proper mechanism for per-sample scalars
+5. **Hybrid Fourier σ=3.0** (edward, NEW): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
+6. **Learned freqs no-wd + 10× lr** (frieren, NEW): unblock the under-trained 6-freq vector; let high-freq freqs actually move
+7. **Cosine T_max=12** (alphonse #2308 in-flight): schedule recalibration
+8. **SwiGLU inner_dim=320** (tanjiro #2281 in-flight): pre-ReGLU branch; compare vs old SwiGLU baseline 67.381
 9. **Harder gates**: Cube ReLU, or learned per-channel gate (nn.PReLU); only if Squared ReLU wins
-10. **Width n_hidden=144**: only if gate/capacity axes saturate
+10. **Per-block learned freqs**: 5 × 6 = 30 freq params for spatial spectral carving — if frieren no-wd hits limits
+11. **Width n_hidden=144**: only if gate/capacity axes saturate
