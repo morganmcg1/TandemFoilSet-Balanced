@@ -82,6 +82,26 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class GeGLUMLP(nn.Module):
+    """MLP with GeGLU activation (Shazeer 2020).
+
+    fc1 output is split in half along the feature dim, GELU is applied to one
+    half and elementwise-multiplied with the other. fc1 has the same params as
+    a GELU MLP with hidden=n_hidden; fc2 has half the input dim so half the
+    params of the GELU equivalent.
+    """
+
+    def __init__(self, n_input, n_hidden, n_output):
+        super().__init__()
+        assert n_hidden % 2 == 0, f"GeGLU requires even n_hidden, got {n_hidden}"
+        self.fc1 = nn.Linear(n_input, n_hidden)
+        self.fc2 = nn.Linear(n_hidden // 2, n_output)
+
+    def forward(self, x):
+        x1, x2 = self.fc1(x).chunk(2, dim=-1)
+        return self.fc2(F.gelu(x1) * x2)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -150,8 +170,7 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = GeGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
