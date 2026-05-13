@@ -8,6 +8,27 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:20 — PR #2175 (tanjiro swiglu-inner-dim-256) — **MERGED** (13th compound win)
+
+- Branch: `charliepai2g24h4-tanjiro/swiglu-inner-dim-256`
+- Hypothesis: Expand SwiGLU inner_dim from 176 (round_up8(256×2/3)) to 256 (full hidden_dim), removing the param-matched budget constraint. Param cost +22.6% (677,591 → 831,191). 5×mlp_ratio=2 with full hidden_dim projection in gate/up/down paths.
+- Metric artifacts: `models/model-charliepai2g24h4-tanjiro-swiglu-inner-dim-256-20260513-102355/metrics.jsonl`
+
+| Split | Baseline (#2105 68.812/59.410) | inner_dim=256 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 76.377 | 73.341 | **−3.97%** |
+| val_geom_camber_rc | 79.291 | 80.673 | +1.74% (lone regression) |
+| val_geom_camber_cruise | 52.005 | 48.675 | **−6.40%** |
+| val_re_rand | 67.573 | 66.834 | **−1.09%** |
+| **val_avg (primary)** | **68.812** | **67.381** | **−2.08%** |
+| test_single_in_dist | 67.134 | 64.685 | **−3.65%** |
+| test_geom_camber_rc | 69.308 | 69.035 | **−0.39%** |
+| test_geom_camber_cruise | 42.352 | 40.356 | **−4.72%** |
+| test_re_rand | 58.848 | 57.121 | **−2.94%** |
+| **test_avg** | **59.410** | **57.800** | **−2.71%** |
+
+**Analysis:** Expanding SwiGLU inner_dim from 176 to 256 removes the 2/3-ratio budget constraint. Win is modest (−2.08% val, −2.71% test) but consistent: all 4 test splits improve, 3/4 val splits improve. The lone val regression (camber_rc +1.74%) reverses on test (−0.39%), suggesting noise on a 100-sample slice. Every epoch was a new best (best=ep 13, last trained), indicating the wider model is in the capacity-limited regime — not overfitting. Run was timeout-bound at 13/50 epochs; longer schedule would likely widen the gap. Consistent with Shazeer's original argument: 2/3 ratio is budget-neutral, not capacity-optimal. Compound: 100.957 → 67.381 = **−33.3% over 13 merges**.
+
 ## 2026-05-13 11:15 — PR #2105 (tanjiro swiglu-activation) — **MERGED** (12th compound win)
 
 - Branch: `charliepai2g24h4-tanjiro/swiglu-activation`

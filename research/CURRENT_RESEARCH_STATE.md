@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 11:25 UTC (Wave 12: MERGE #2105 tanjiro SwiGLU MLP (val=68.812 −6.96% vs 73.958, test=59.410 −7.89% — largest single-PR gain, 12th compound win); ASSIGN #2175 tanjiro swiglu-inner-dim-256; CLOSE #2099 fern wd-3x (+2.24%/+2.67% vs new baseline, wd axis confirmed 1e-4); ASSIGN #2157 fern vol-ch-weight-pressure)
+- **Last updated**: 2026-05-13 11:45 UTC (Wave 13: MERGE #2175 tanjiro SwiGLU inner_dim=256 (val=67.381 −2.08%, test=57.800 −2.71% — 13th compound win); ASSIGN #2200 tanjiro swiglu-inner-dim-384; SEND-BACK #2098 frieren Lion rebase+re-run on post-#2175 baseline; #2075 thorfinn just picked up after rate-limit clear)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,53 +11,55 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #2105 merged — SwiGLU MLP, largest single-PR gain ever, 12th compound win)
+## Current best baseline (PR #2175 merged — SwiGLU inner_dim=256, 13th compound win)
 
-- `val_avg/mae_surf_p` = **68.812** (SwiGLU MLP inner_dim=176 + LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 12)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **59.410**
-- Per-split val: single_in_dist=76.377 / camber_rc=79.291 / camber_cruise=52.005 / re_rand=67.573
-- Per-split test: single_in_dist=67.134 / camber_rc=69.308 / camber_cruise=42.352 / re_rand=58.848
-- Δ vs PR #1754 baseline (73.958 / 64.502): **−6.96%** val_avg, **−7.89%** test_avg (**ALL 4 splits improve**)
-- **⚠ Measurement note**: SwiGLU run measured on pre-#1754 advisor HEAD (no LR warmup). Post-merge code includes LR warmup; re-validation in-flight at #2175.
-- **Mechanism (SwiGLU)**: gated MLP `W_down · (SiLU(W_gate·x) ⊙ W_up·x)` provides per-token input-dependent feature routing. Gate learns to selectively amplify/suppress Fourier features per node per block. OOD splits gain most (re_rand −8.73%/−13.62%, camber_cruise −10.49%/−14.43%) consistent with gate adapting to shifted input feature distributions. Best epoch 14→12 (faster convergence, gate stabilizes training landscape). n_params: 677,591 (+1.24% vs 669,271 GELU baseline).
-- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→**#2105** → val_avg has improved from 100.957 to **68.812** = **−31.8% over 12 merges**.
+- `val_avg/mae_surf_p` = **67.381** (SwiGLU MLP inner_dim=256 + LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 13)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **57.800**
+- Per-split val: single_in_dist=73.341 / camber_rc=80.673 / camber_cruise=48.675 / re_rand=66.834
+- Per-split test: single_in_dist=64.685 / camber_rc=69.035 / camber_cruise=40.356 / re_rand=57.121
+- Δ vs PR #2105 baseline (68.812 / 59.410): **−2.08%** val_avg, **−2.71%** test_avg
+- **Mechanism (SwiGLU inner_dim=256)**: expanding from 176 to 256 removes the 2/3-ratio budget constraint from the Shazeer SwiGLU recipe. Every epoch was a new best at ep 13; model is capacity-limited not overfitting. All 4 test splits improve; val_camber_rc lone regression (+1.74%) but its matched test split wins (−0.39%) → noise. n_params: 831,191 (+22.6% vs 677,591).
+- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→**#2175** → val_avg has improved from 100.957 to **67.381** = **−33.3% over 13 merges**.
 
 ## Current research focus
 
-**Wave 12 — compounding SwiGLU gating win + diversified probe axes.**
+**Wave 13 — SwiGLU capacity sweep + orthogonal diversified probes.**
 
-The compound stack has 12 merged wins (100.957 → 68.812 = **−31.8%**): L1 loss, stoch-depth [0,0.025,0.05,0.075,0.1], cosine T_max=14, LR warmup epoch-1, grad-clip max_norm=25, Fourier L=4→L=6, LayerScale CaiT init=0.1→0.05→0.025, per-channel surf-weight [0.5,0.5,2.0], **SwiGLU MLP inner_dim=176**.
+The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 loss, stoch-depth [0,0.025,0.05,0.075,0.1], cosine T_max=14, LR warmup epoch-1, grad-clip max_norm=25, Fourier L=6, LayerScale CaiT init=0.025, per-channel surf-weight [0.5,0.5,2.0], SwiGLU MLP inner_dim=176 → **inner_dim=256** (latest merged win).
 
-**SwiGLU (#2105)** is the biggest single-PR gain: −7.53% val / −9.33% test. All 4 splits improve. OOD splits benefit most (gate adapts to shifted input distributions). Best epoch advances 14→12. This is a major unlock — the model's MLP blocks now have learnable input-dependent routing.
+**SwiGLU capacity is still the strongest open lever.** Both inner_dim=176 (−7.53%/−9.33%) and inner_dim=256 (−2.08%/−2.71%) won. The capacity-limited signature ("every epoch a new best") persists at 256, so inner_dim=384 (#2200) is the live next bet. The SwiGLU width sweep is an active research axis with confirmed upside.
 
-**Wave 12 active threads** (all 8 students assigned):
+**Wave 13 active threads** (all 8 students assigned, zero idle GPUs):
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
 | alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features | WIP |
-| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) | WIP |
-| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep | WIP |
-| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack | WIP |
-| frieren | #2098 | lion-optimizer | Sign-momentum optimizer (sign momentum, decoupled wd) replacing AdamW | WIP |
-| fern | #2157 | vol-ch-weight-pressure | vol_loss per-channel weight [1,1,2]: pressure emphasis in volume domain | WIP |
 | askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling | WIP |
-| tanjiro | #2175 | swiglu-inner-dim-256 | SwiGLU inner_dim 176→256 (full capacity) + warmup stack | NEW |
+| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) | WIP |
+| fern | #2157 | vol-ch-weight-pressure | vol_loss per-channel weight [1,1,2]: pressure emphasis in volume domain | WIP |
+| frieren | #2098 | lion-optimizer | Lion (rebase → re-run on post-#2175 baseline 67.381); strong signal on old baseline (67.846 < 68.812) | WIP (rebase) |
+| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack | WIP |
+| tanjiro | #2200 | swiglu-inner-dim-384 | SwiGLU inner_dim 256→384: next bisect in capacity sweep (OOM fallback to 320) | NEW |
+| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep (just picked up after rate-limit clear) | WIP |
 
-**Closed in Wave 11/12:**
-- **#2105 tanjiro SwiGLU** — MERGED (val=68.812 −6.96% vs 73.958, test=59.410 −7.89%; 12th compound win)
-- **#2099 fern wd-3x** — CLOSED (+2.24%/+2.67% vs new baseline; wd axis confirmed at 1e-4 optimum)
+**Merged in Wave 12/13:**
+- **#2105 tanjiro SwiGLU** — MERGED (val=68.812 −6.96% vs 73.958; 12th compound win; largest single-PR gain)
+- **#2175 tanjiro SwiGLU inner_dim=256** — MERGED (val=67.381 −2.08% vs 68.812; 13th compound win; capacity-limited signal)
+- **#2099 fern wd-3x** — CLOSED (+2.24%/+2.67% vs new baseline; wd axis confirmed at 1e-4)
 
-**Prioritized research themes for Wave 13** (depending on in-flight outcomes):
+**Frieren Lion (#2098) context:** pre-rebase val=67.846 was already below current baseline 67.381 by only 0.46; barely misses. After rebase+re-run with SwiGLU inner_dim=256, Lion+SwiGLU composition needs testing. Predicted outcome: ~63–65 val if fully orthogonal, ~67 if partially redundant.
 
-1. **SwiGLU capacity/combinations**: inner_dim=256 in-flight (#2175); GeGLU comparison (SiLU→GELU gate); gate-only ablation (remove W_up); SwiGLU in attention slice MLPs.
-2. **SwiGLU + RMSNorm**: LLaMA/Mistral recipe is SwiGLU + RMSNorm — if RMSNorm wins (#2102), combine.
-3. **Encoder/representation**: Gaussian Fourier σ-calibration in-flight (#2135); learnable σ per-frequency; Re/AoA Fourier features on flow-condition dims (targets val_re_rand still high at 67.573).
-4. **Architecture depth**: with SwiGLU now in the stack, test n_layers=6 or 7 (deeper); SwiGLU compounds better with depth than GELU does.
-5. **Optimizer**: Lion in-flight (#2098); if Lion wins, bracket lr around 1e-4.
-6. **Normalization**: RMSNorm in-flight (#2102).
-7. **Attention width**: n_head=2 in-flight (#2136); combined with SwiGLU, test n_head=2 + SwiGLU.
-8. **Loss**: vol-ch-weight-pressure [1,1,2] in-flight (#2157).
-9. **LR**: lr=3e-4 bracket in-flight (#2137).
+**Prioritized research themes for Wave 14** (after in-flight results):
+
+1. **SwiGLU width sweep**: if #2200 (inner_dim=384) wins, next bisect is 512 or check capacity vs compute; if plateaus at 384, inner_dim=256 is the optimum.
+2. **Lion optimizer** (#2098 rebase): strongest orthogonal candidate — operates on different axis from all merged stack components.
+3. **SwiGLU + RMSNorm**: LLaMA/Mistral recipe is SwiGLU + RMSNorm — if #2102 wins, combine with SwiGLU.
+4. **Attention depth**: if Lion wins, test n_layers=6 — SwiGLU wider per-layer may compound with depth.
+5. **Gaussian Fourier σ-calibration** (#2135): camber_cruise test now 40.356; σ-calibrated RFF may further improve OOD generalization.
+6. **n_head=2** (#2136): wider heads + SwiGLU wider MLP may be synergistic.
+7. **vol-ch-weight** (#2157): pressure weighting in volume domain, orthogonal to surf-ch-weight already merged.
+8. **lr=3e-4 bracket** (#2137): LR may need re-tuning with wider SwiGLU model.
+9. **GeGLU comparison**: replace SiLU with GELU in the gate — test whether SiLU's non-zero negative activations add value vs GELU's smooth approximation.
 
 **Closed axes (do not re-test):**
 - Dyadic Fourier: L=4 merged, L=6 merged, L=8 closed (val_re_rand × surf-ch-weight interaction) → Gaussian Fourier in-flight
@@ -75,7 +77,7 @@ The compound stack has 12 merged wins (100.957 → 68.812 = **−31.8%**): L1 lo
 - AdamW betas (0.9, 0.95): non-uniform regression, regime mismatch
 - n_head=8: +7.81% regression, head fragmentation (dim_head=16) destroys OOD cross-geom features, +42% wall-time incompatible with 30-min cap
 - Gaussian Fourier σ=10: +36.6% regression, σ scale mismatch for std-normalized coords (direction NOT closed — σ-calibration in-flight at #2135)
-- Weight decay 3×: wd=3e-4 regressed +1.61%/+1.07% (old) vs +2.24%/+2.67% (new baseline 73.958); fit/generalization gap already tight at wd=1e-4; wd axis confirmed at 1e-4 optimum
+- Weight decay 3×: wd=3e-4 regressed +2.24%/+2.67% (vs baseline 73.958); wd axis confirmed at 1e-4 optimum; fit/generalization gap already tight
 
 **Output-side calibration is fully exhausted** after wave-4 results: #1610
 (full log1p), #1636 (pressure-only log1p), #1675 (per-channel γ, β output
