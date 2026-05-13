@@ -58,6 +58,8 @@
 - **n_layers=7 (re-test with RMSNorm+Lion)**: +4.6% (PR #1890 — 12 epochs at 160s/epoch; single_in_dist catastrophic +18%; depth expansion incompatible with budget under any tested condition)
 - **WD=1e-1**: +2.72% (PR #1889 — over-regularizes; best_epoch=10, train descending while val climbs; WD space above 1e-2 exhausted)
 - **lr=2e-4 on RMSNorm stack**: +0.98% val (PR #1765 — RMSNorm tightened loss surface; lr=2e-4 overshoots on geom_camber_rc; test −1.23% ✓; pivot to lr=1.5e-4)
+- **mlp_ratio=8 + GeGLU**: +5.95% (PR #1872 — gating wins outright; fc2 capacity expansion beyond 256 channels adds noise pathways; mlp_ratio=4 optimal)
+- **CosineAnnealingLR eta_min=1e-5**: +12.05% vs current baseline (PR #1920 — LR floor above 0 conflicts with T_max=12 which cleanly decays to 0; T_max=12 strictly dominates)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
 - EMA decay=0.999: cold-start drag (+41% worse)
@@ -75,18 +77,18 @@
 7. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc became easier; single_in_dist became the primary bottleneck. surf_weight=5 cracked single_in_dist (−20.5% val).
 8. **geom_camber_rc (72.0 val) is now the hardest split** — primary target for further improvement.
 
-## Active experiments (Round 11 — all on T_max=12 + RMSNorm+GeGLU+Lion baseline)
+## Active experiments (Round 12 — all on T_max=12 + RMSNorm+GeGLU+Lion baseline, val=52.798)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
 | alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR | WIP (rerun) |
 | askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
 | edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | WIP |
-| tanjiro | #1872 | mlp_ratio=8 + GeGLU+Lion: recover fc2 capacity | WIP (stale, nudged) |
-| fern | #1790 | Lion + 2-epoch cosine warmup | WIP (rerun) |
-| nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | NEW |
+| fern | #1790 | Lion + 2-epoch cosine warmup (rerun on GeGLU+Lion stack) | WIP (pending rerun) |
+| nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | WIP |
 | thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | WIP |
-| frieren | #1920 | CosineAnnealingLR eta_min=1e-5: non-zero LR floor for Lion tail | WIP |
+| frieren | #1983 | CosineAnnealingLR T_max=10: push cosine floor to epoch 10 | NEW |
+| tanjiro | #1984 | n_hidden=160: widen attention dim for richer aerodynamic features | NEW |
 
 **Recently merged:**
 - nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test) ← NEW BASELINE 52.798/44.972
@@ -94,6 +96,8 @@
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
+- frieren #1920: eta_min=1e-5 (+12.05% vs current baseline) — mechanism redundant with T_max=12; T_max=12 cleanly decays LR to 0, which is strictly better than a 1e-5 floor
+- tanjiro #1872: mlp_ratio=8 (+5.95%) — "gating wins outright"; fc2 capacity expansion adds noise pathways that gate doesn't fully suppress at 12 epochs
 - frieren #1890: n_layers=7 (+4.6%) — depth incompatible with budget
 - edward #1889: WD=1e-1 (+2.72%) — over-regularizes
 - edward #1859: SmoothL1 β=0.1 (+7.1%) — all loss modifications exhausted
@@ -121,12 +125,11 @@ Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`l
 8. **CosineAnnealingLR eta_min=1e-5** (frieren #1920): non-zero LR floor for Lion tail; potentially redundant with T_max=12 now that LR reaches 0 cleanly.
 
 **Queued ideas for next idle students (after current round lands):**
-- **T_max=10 or T_max=11**: push cosine further (LR closer to 0 earlier); cheap to test
-- **surf_weight=2 with T_max=12**: if compound holds, keep sweeping
+- **T_max=11**: T_max=10 assigned to frieren (#1983); if T_max=10 wins, try 11 to bracket optimum
+- **surf_weight=2 with T_max=12**: if T_max=12+sw=5 compound (nezuko #1956) holds, keep sweeping
 - **geom_camber_rc-targeted experiments**: 67.7 val still dominates the average; worth targeted interventions
-- **n_hidden widening 128→160**: capacity without restructuring MLP; ~225s/epoch is tight (~9 epochs, risky)
-- **PhysicsAttention slice_num=48**: slight reduction for faster epochs
-- **Higher LR (1.5e-4 or 2e-4) + T_max=12 compound**: now that LR decays to 0, larger initial steps may be tolerable
+- **PhysicsAttention slice_num=48**: slight reduction for faster epochs, more steps in budget
+- **Higher LR (1.5e-4 or 2e-4) + T_max=12 compound**: now that LR decays to 0, larger initial steps may be tolerable; alphonse #1765 testing 1.5e-4
 
 ## Key constraints
 

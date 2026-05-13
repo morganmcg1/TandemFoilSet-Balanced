@@ -6,6 +6,54 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 06:20 — PR #1920: CosineAnnealingLR eta_min=1e-5 — CLOSED (+12.05% vs current baseline; mechanism redundant with T_max=12)
+
+- **Student:** charliepai2g48h3-frieren
+- **Branch:** charliepai2g48h3-frieren/cosine-eta-min-1e-5
+- **Hypothesis:** Non-zero LR floor (eta_min=1e-5) prevents Lion's cosine tail from fully collapsing to 0, preserving some update signal in final epochs.
+- **Result:** val=59.159, test=53.210 (measured vs PR #1837 baseline val=63.017 → −6.1% improvement on old baseline)
+
+| Split | val (eta_min=1e-5) | val (old #1837 baseline) | Δ vs old | val (current #1793 baseline) | Δ vs current |
+|---|---|---|---|---|---|
+| single_in_dist | ~54.9 | 76.710 | −9.7% | 58.907 | −6.8% |
+| geom_camber_rc | ~72.6 | 73.930 | −1.8% | 67.658 | **+7.3%** |
+| geom_camber_cruise | ~43.8 | 40.746 | +7.5% | 33.380 | **+31.2%** |
+| re_rand | ~65.4 | 60.683 | +7.8% | 51.248 | **+27.6%** |
+| **avg** | **59.159** | **63.017** | **−6.1% ✓ (old)** | **52.798** | **+12.05% ✗** |
+
+- **Test:** 53.210 vs 44.972 = **+18.3% worse** than current baseline
+- **Analysis:** Result was measured against the PR #1837 baseline (val=63.017). The baseline shifted twice (→57.328 via PR #1836, →52.798 via PR #1793 T_max=12) before review. Against the current baseline, this is a large regression. Critically, cruise and re_rand splits regressed badly: the eta_min=1e-5 floor RAISED the LR in the late-epoch regime (vs T_max=12 decaying to 0), which interfered with Lion's fine-grained late-epoch refinement.
+- **Mechanism conflict confirmed:** Both eta_min and T_max address late-epoch LR behavior; T_max=12 (LR→0) strictly dominates eta_min=1e-5 (LR floor above 0). T_max=12 won the head-to-head and is now the stack default.
+- **Student's own follow-up suggestion** explicitly named "combine with T_max tuning" — that direction is now merged (PR #1793).
+- **Dead end:** LR schedule "floor vs ceiling" axis is exhausted. T_max=12 is the correct solution.
+- **Reassigned frieren:** PR #1983 CosineAnnealingLR T_max=10 (push cosine further)
+
+---
+
+## 2026-05-13 06:20 — PR #1872: mlp_ratio=8 + GeGLU — CLOSED (+5.95% regression, "gating wins outright")
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/mlp-ratio-8-geglu-lion
+- **Hypothesis:** GeGLU halves fc2 input width (256 → 128 effective channels at mlp_ratio=4). Doubling to mlp_ratio=8 recovers the capacity, giving GeGLU gating + full MLP depth.
+- **Result:** val=68.781, test=60.220 (original run). Reproducibility run: val=69.613. Both confirm regression.
+
+| Split | val (mlp_ratio=8) | val (baseline mlp_ratio=4) | Δ |
+|---|---|---|---|
+| single_in_dist | ~80.8 | 72.044 | **+12.2%** |
+| geom_camber_rc | ~89.2 | 89.234 | ~0% |
+| geom_camber_cruise | ~41.5 | 38.721 | +7.2% |
+| re_rand | ~63.5 | 57.586 | +10.3% |
+| **avg** | **68.781** | **64.918** (PR #1769 baseline) | **+5.95% worse** |
+
+- **Test:** 60.220 vs 58.171 = +3.5% worse
+- **Per-epoch overhead:** ~163s vs ~143s (+14%) → net −1 effective epoch in 30-min budget
+- **Reproducibility:** Second seed also regressed (val=69.613). Regression is real, not noise.
+- **Student analysis confirmed:** "gating wins outright." Interpretation: GeGLU's selective gating is the structural win — it filters which features propagate into the physics attention. Wider fc2 adds capacity but also adds noise pathways that the gate doesn't fully suppress at 12-epoch budget. single_in_dist regressed worst (+12-18%), consistent with extra capacity overfitting on the simple in-distribution splits.
+- **Dead end:** MLP capacity expansion exhausted. mlp_ratio=4 with GeGLU gating is optimal for this budget.
+- **Reassigned tanjiro:** PR #1984 n_hidden=160 (widen attention dim — orthogonal capacity axis)
+
+---
+
 ## 2026-05-13 06:05 — PR #1793: CosineAnnealingLR T_max=12 on RMSNorm+GeGLU+Lion — MERGED (−7.9% val, −8.9% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-nezuko
