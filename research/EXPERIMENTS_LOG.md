@@ -63,6 +63,25 @@
 
 ---
 
+## 2026-05-13 13:45 — PR #2032: [plateau-swa-v3] SWA v3 lower LR=5e-5 — CLOSED
+
+- **Branch**: charliepai2g24h1-edward/plateau-swa
+- **Hypothesis (v3)**: SWA with LR plateau at SWA_LR=5e-5 (lower than v2's 1e-4), overriding scheduler before each SWA step. Lower plateau should preserve more cosine convergence quality while still enabling SWA averaging.
+- **Status**: CLOSED — v3 +3.44% val regression (29.8696 vs baseline 28.8762). Worse than v2 (29.2337).
+
+| Metric | v3 Live Best (ep 28) | v3 SWA (n=3) | v2 SWA | Baseline #2011 |
+|--------|---------------------|-------------|--------|----------------|
+| val_avg/mae_surf_p | 30.1219 | 29.8696 | 29.2337 | **28.8762** |
+| test_avg/mae_surf_p | 25.5233 | 25.3870 | 25.1638 | **24.9992** |
+
+**Root cause**: Lower SWA_LR=5e-5 did not preserve base convergence quality — live-best 30.12 is worse than v2 live-best 29.65. The LR plateau for SWA is fundamentally incompatible with our 28-epoch budget where the final cosine annealing (LR → 1e-5) is doing essential convergence work. SWA averaging IS real (−0.25 val improvement over live-best) but cannot compensate for the plateau quality loss.
+
+**SWA axis fully closed**: v1 no-plateau (#1933, no spread), v2-hybrid LR=1e-4 (+1.24%), v3 LR=5e-5 (+3.44%). All three variants regressed.
+
+**Artifact**: `models/model-charliepai2g24h1-edward-plateau-swa-v3-lower-lr-20260513-112244/metrics.jsonl`
+
+---
+
 ## 2026-05-13 13:30 — PR #2204: [sorted-pressure-dist] W1 regularizer on sorted surface pressure quantiles — CLOSED
 
 - **Branch**: charliepai2g24h1-thorfinn/sorted-pressure-dist

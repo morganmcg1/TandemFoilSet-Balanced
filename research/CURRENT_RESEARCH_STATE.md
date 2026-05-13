@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 13:30 (reviewed #2204 sorted-pressure-dist, #2198 refilm-per-block, #2147 cosine-long-tail, #2169 re-input-jitter — all CLOSED; assigned soap-betas-0p9-0p99 #2252 thorfinn, refilm-hidden-16 #2253 fern, soap-precond-freq-5 #2255 askeladd, mlp-ratio-3 #2256 tanjiro)
+- **Date**: 2026-05-13 13:45 (reviewed #2032 plateau-swa-v3 CLOSED +3.44%, #2204 sorted-pressure-dist CLOSED, #2198 refilm-per-block CLOSED, #2147 cosine-long-tail CLOSED, #2169 re-input-jitter CLOSED; assigned soap-betas-0p9-0p99 #2252 thorfinn, refilm-hidden-16 #2253 fern, soap-precond-freq-5 #2255 askeladd, mlp-ratio-3 #2256 tanjiro, surf-weight-15 #2264 edward)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -61,6 +61,11 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - OneCycleLR (#1884): +3.52%; grad_clip saturated throughout peak window
 - Cosine T_max=40 (#2147): +11.4%; Cosine T_max=56: +31.4%; T_max=28 confirmed optimal
 
+### SWA Axis CLOSED (all 3 variants regressed)
+- SWA last-k (#1933): no weight-space spread at LR=1e-5
+- SWA v2-hybrid LR=1e-4 (#2032): +1.24% val miss; SWA averaging real (−0.94) but LR plateau costs base quality
+- SWA v3 LR=5e-5 (#2032): +3.44% val; lower plateau even worse. SWA incompatible with 28-ep cosine budget.
+
 ---
 
 ## Current Research Focus
@@ -70,7 +75,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 2. **ReFiLM capacity**: shared FiLM hidden=8→16 (fern #2253 NEW)
 3. **SOAP preconditioner**: precondition_frequency 10→5 (askeladd #2255 NEW)
 4. **FFN capacity**: mlp_ratio 2→3 (tanjiro #2256 NEW)
-5. **SWA v3**: SWA_LR=5e-5, override before scheduler.step() (edward #2032 WIP REBASE)
+5. **Surface loss weight**: surf_weight 10→15, targeting rc split (edward #2264 NEW)
 6. **EMA β=0.99**: rampup from 0.9 (frieren #1966 WIP REBASE)
 7. **Weight decay 5×**: SOAP wd 1e-4→5e-4 (alphonse #2233 NEW)
 8. **slice_num=128**: Capacity doubling (nezuko #1467 WIP STALE)
@@ -87,7 +92,7 @@ All 8 students active.
 | #2253 | fern | `refilm-hidden-16` | NEW | **HIGH** | ReFiLM hidden=8→16; wider shared FiLM MLP without per-block overfitting risk |
 | #2255 | askeladd | `soap-precond-freq-5` | NEW | **HIGH** | precondition_frequency 10→5; 2× Kronecker factor refresh rate |
 | #2256 | tanjiro | `mlp-ratio-3` | NEW | **HIGH** | mlp_ratio 2→3; ~+655K FFN params, ~2× model capacity |
-| #2032 | edward | `plateau-swa-v3` | WIP REBASE | **HIGH** | SWA_LR=5e-5; override before scheduler.step() |
+| #2264 | edward | `surf-weight-15` | NEW | **HIGH** | surf_weight 10→15; targets rc split (41.95) using direction from #1936 |
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99 from 0.9 rampup; needs rebase onto 28.8762 |
 | #2233 | alphonse | `weight-decay-5e-4` | NEW | **HIGH** | SOAP wd 1e-4→5e-4 (5×); OOD generalization via stronger L2 regularization |
 | #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=128; baseline update sent |
@@ -120,6 +125,7 @@ All 8 students active.
 - **attention-dropout** (#1900): still descending at ep29, smoking gun +0.47%
 - **surf-weight-7** (#1936): rc went WRONG direction +2.94%
 - **swa-last-k** (#1933): no weight-space spread at LR=1e-5
+- **plateau-swa v2+v3** (#2032): SWA axis fully closed. v2 LR=1e-4 +1.24%, v3 LR=5e-5 +3.44%. LR plateau incompatible with 28-ep cosine budget.
 - **ema-weights v1** (#1704): dual-val overhead +5.9%
 - **ema-weights v2** (#1917): β=0.999 too high +2.9%
 - **rescale-head-2ch** (#1952): +4.63% on rebased stack; Ux channel load-bearing with p_weight=5
@@ -147,7 +153,7 @@ All 8 students active.
 - **SOAP beta/precond results** (#2252, #2255): if optimizer internals help, test combined (lower beta1 + higher beta2 + freq=5)
 - **FFN capacity result** (#2256 mlp-ratio-3): if helps, also test wider hidden=192 (ruled out earlier at mlp_ratio=2 — worth retesting at ratio=3)
 - **ReFiLM hidden-16 result** (#2253): if helps, test hidden=32 or combined with mlp-ratio-3
-- **EMA/SWA convergence** (#1966, #2032): still the priority — model converges monotonically to cutoff in every run
+- **EMA convergence** (#1966): still the priority — model converges monotonically to cutoff in every run; SWA now closed
 - **Geometry-specific augmentation**: camber/chord perturbation for geom_camber splits (rc split remains worst at 41.95)
 - **Auxiliary losses**: divergence/curl of predicted velocity as regularizer
 - **Multi-seed baseline**: 3 runs to firm up noise floor at 28.88
