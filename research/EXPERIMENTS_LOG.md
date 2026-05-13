@@ -142,15 +142,22 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-12 23:25 — PR #1693: SwiGLU FFN (tanjiro) — WIP (assigned)
-**Branch:** `charliepai2g24h3-tanjiro/swiglu-ffn` | **Status: WIP**
+### 2026-05-13 01:15 — PR #1693 v1: SwiGLU FFN (tanjiro) — **SENT BACK (massive raw signal, needs rebase + verification)**
+**Branch:** `charliepai2g24h3-tanjiro/swiglu-ffn` | **Status: WIP (v2 in progress)**
 
-- **Hypothesis:** Replace standard 2-layer GELU/SiLU MLP in each TransolverBlock with SwiGLU (gated linear unit) — Shazeer 2020. Used in LLaMA, PaLM, Mistral. Content-dependent feature selection via gating.
-- **Why orthogonal:** frieren #1492 tests *wider* FFN (mlp_ratio 2→4) on width axis; SwiGLU tests *structurally different* FFN at same hidden dim. Edward #1490 is width on attention. Stackable in principle with all loss/augment/scheduler work.
-- **Config:** `--use_swiglu True --use_onecycle False --ema_decay 0.0 --augment True --epochs 14` (cosine T_max=14, the proven recipe from #1495).
-- **Pass criterion:** val_avg < 103.10 AND test 4-split safe re-eval < 94.76.
-- **Predicted Δ:** −2 to −5% on val_avg. Param count ~1.0M → ~1.16M (16% more in FFN).
-- **Artifacts:** TBD
+- **Hypothesis:** Replace 2-layer GELU MLP in each TransolverBlock with SwiGLU (gated linear unit, Shazeer 2020). Content-dependent feature selection via gating.
+- **v1 result (extraordinary):** val_avg/mae_surf_p = **87.278** (best epoch 12/14), test_avg/mae_surf_p (safe 4-split) = **82.237**. Beats new baseline #1686 (97.62/91.95) by **−10.5% val / −10.6% test**.
+- **Uniform gain:** 12-16% improvement across ALL 4 val and test splits. The largest test gains on `re_rand` (−15.8%) and `single_in_dist` (−13.9%) — the highest-Re, most numerically extreme splits. Consistent with content-dependent gating being most useful where features span the widest range.
+- **Per-split val (v1):** single=106.39, rc=95.50, cruise=67.41, re_rand=79.81 (all below thorfinn's #1686 numbers).
+- **Per-split test (v1, safe):** single=90.52, rc=88.08, cruise=74.72, re_rand=75.63.
+- **Param count:** 827K (+7% over baseline 770K — small overhead).
+- **Config:** v1 explicitly disabled EMA (`--ema_decay 0.0`); used cosine T_max=14, no Huber (predated #1484), no curriculum (predated #1686).
+- **Why sent back, not merged:**
+  - (1) Merge conflicts (`mergeable_state=dirty`) — branch predates #1484/#1686 stack merges; rebase needed.
+  - (2) Result is large enough (15% MAE improvement from one architectural change) that one verification rerun on the merged stack is justified — distinguishes "SwiGLU is the dominant signal" from "v1's EMA-disable was load-bearing" or "v1's pre-rebase context hid an artifact."
+  - (3) v2 will simultaneously answer: does SwiGLU compose with curriculum + Huber + EMA? Strongest possible test in one run.
+- **v2 instructions:** rebase, run `--use_swiglu True` with the full merged-stack defaults (curriculum + Huber + EMA + augment + cosine T_max=14). Pass criterion: val < 97.62 AND test (safe 4-split) < 91.947.
+- **Artifacts (v1):** `models/model-charliepai2g24h3-tanjiro-swiglu-ffn-cosine14-20260513-000123/{metrics.jsonl,test_safe_eval.jsonl}`
 
 ---
 
