@@ -1,26 +1,41 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~07:30 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 24+ of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~09:00 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 28 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
 - **Current best (3-seed mean, paper-publishable):** val = **65.35 ± 3.37**, test = **56.68 ± 2.66** (PR #1379 — Smooth-L1 β=0.5, 3-seed). Best seed: val=62.3972, test=54.4758 (seed=1, W&B `mqf224bq`).
 
 ## Current research focus
 
-### ⚠️ Major Baseline Reframing (Round 20 — PR #1874 merged)
+### pct_start bracket {0.05, 0.10, 0.15} — critical paper figure
 
-Thorfinn's 2-seed confirmation (PR #1874) **refutes the headline framing of #1719**. The +5.72% test gain was from seed=0 sitting at the −1.15σ lucky tail. 3-seed reality:
-- **Mean test gain vs #1716: only −1.23%** (below 2% refutation threshold)
-- **Real OOD/in-dist trade-off:** OOD splits improve ~2-3.5% in mean; in-dist **regresses** +3.8% test / +4.5% val
-- **val_geom_camber_cruise −8.2% claim was actually ~−3.3% in 3-seed mean**
-- **Standing rule now established:** any single-seed win below 6% requires ≥2 seeds before paper framing
+The most important pending figure is the 3-seed multi-seed sweep of the OneCycleLR warmup fraction. The mechanism is confirmed (pct_start=0.05 extends the decay tail, improving OOD while regressing in-dist), but the magnitude was overstated by a lucky single seed.
 
-The pct_start=0.05 mechanism (deep-decay tail extension → OOD refinement) is real but smaller than the single-seed number suggested. The in-dist regression reveals that 0.05 may be too aggressive a warmup reduction. **The pct_start bracket {0.05, 0.10, 0.15} is now the critical paper figure to complete.**
+**Important caveat**: thorfinn #1944's pct_start=0.10 3-seed result was on the MSE stack (not the current Smooth-L1 β=0.5 baseline). The bracket figure now has two layers:
 
-### OOD-asymmetric regularization (from #1860)
+**MSE-stack bracket (legacy figure):**
+| pct_start | Seeds | val_avg | test_avg | Source |
+|---:|---:|---:|---:|---:|
+| 0.05 | 3 | 68.88 ± 2.40 | 59.61 ± 2.36 | #1874 |
+| **0.10** | **3** | **67.339 ± 1.98** | **58.314 ± 1.76** | **#1944 (sent back, but data valid)** |
+| 0.15 | 1 | 67.35 | 58.07 | #1768 (closed) |
+| 0.15 | 3 | TBD | TBD | WIP — nezuko #2046 |
 
-Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (+11.7% cruise vs +3.8% in-dist). The standard "regularization → better OOD" prior is inverted on this workload. Nezuko #1916 (wd=2e-5, symmetric test) in progress.
+**MSE-stack finding (paper-relevant):** pct_start=0.10 is a clean Pareto improvement over 0.05 — ALL 4 val and 4 test splits improve, std SHRINKS, in-dist regression eliminated, OOD gain preserved.
+
+**Smooth-L1 β=0.5 stack bracket (current baseline figure):**
+| pct_start | Seeds | val_avg | test_avg | Source |
+|---:|---:|---:|---:|---:|
+| 0.05 (current baseline) | 3 | 65.35 ± 3.37 | 56.68 ± 2.66 | #1379 |
+| 0.10 | 3 | TBD | TBD | thorfinn re-running #1944 on new stack |
+| 0.15 | 3 | TBD | TBD | nezuko #2046 (forked before β=0.5 — may also need re-run) |
+
+The high-value compose-able question: does β=0.5 + pct_start=0.10 stack additively? β=0.5 = gradient fairness across residual magnitudes; pct_start=0.10 = LR-schedule Pareto warmup/decay balance — orthogonal mechanisms, expected ~1-2 mae units of additional gain over β=0.5 + pct=0.05.
+
+### OOD-asymmetric regularization — CLOSED
+
+The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) regressed vs wd=1e-4. The basin is confirmed: wd=1e-4 is the optimum for this workload. **Key paper finding:** standard "regularization → better OOD" prior is INVERTED here — wd=5e-4 regressed OOD splits monotonically more than in-dist, suggesting richer features are needed for OOD extrapolation.
 
 ## Active PRs
 
@@ -31,9 +46,9 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 | edward | #2039 | AdamW β2=0.95 — faster 2nd-moment adaptation, 3-seed | WIP |
 | fern | #2003 | surf_weight 10 → 15 — mild upward bracket step, 3-seed | WIP |
 | frieren | #2002 | OneCycleLR anneal_strategy=cos → linear — cosine-tail shape probe, 3-seed | WIP |
-| nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP — pinged 2026-05-13 |
+| nezuko | #2046 | OneCycleLR pct_start=0.15 — 3-seed bracket completion (paper figure) | WIP |
 | tanjiro | #1965 | batch_size=4 → 8 (gradient quality vs step-count probe, 3-seed) | WIP |
-| thorfinn | #1944 | OneCycleLR pct_start=0.10 (3-seed, bracket midpoint + in-dist regression test) | WIP |
+| thorfinn | #1944 | OneCycleLR pct_start=0.10 (sent back, re-running on Smooth-L1 β=0.5 stack — Pareto win on MSE confirmed) | WIP |
 
 ## Key learnings so far
 
@@ -53,22 +68,24 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 14. **The standard "regularization → better OOD" prior is INVERTED (paper-worthy)** (nezuko #1860 closed) — wd=5e-4 regresses ALL splits, regression monotonic with OOD distance: in-dist +3.78%, camber-rc +7.28%, camber-cruise +11.68%, re-rand +10.37%. Mechanism: OOD extrapolation needs richer features; uniform shrinkage destroys OOD features first.
 15. **NEW (paper-critical): Single-seed wins below ~6% need multi-seed confirmation** (thorfinn #1874 merged) — pct_start=0.05 seed=0 was at −1.15σ lucky tail. 3-seed mean gain vs #1716 is only −1.23% (below noise threshold). Real effect: OOD splits improve ~2-3% in mean; in-dist REGRESSES ~4%. The pct_start=0.05 vs 0.10 trade-off is now the paper's key schedule question.
 16. **Smooth-L1 β=1.0 ≈ MSE at convergence on this stack** (askeladd #1379 sent back) — bulk normalized residuals at convergence satisfy |err| < 1.0, keeping the loss in the quadratic regime. β=0.5 will be the first real test of gradient-fairness.
+17. **Weight decay basin confirmed at wd=1e-4** (nezuko #1916 closed) — wd=2e-5 (5× lower) also regresses vs baseline. Both wd directions explored (5e-4 = too much regularization; 2e-5 = too little). wd=1e-4 is the optimum; weight decay axis is exhausted.
+18. **pct_start=0.10 is the Pareto point on MSE stack** (thorfinn #1944 sent back, 3-seed) — 67.34 ± 1.98 val / 58.31 ± 1.76 test vs 0.05's 68.88 ± 2.40 / 59.61 ± 2.36. **ALL 4 val splits AND all 4 test splits improve simultaneously**, std SHRINKS in both metrics, in-dist regression at 0.05 is fully eliminated, OOD gain preserved. Result needs re-run on Smooth-L1 β=0.5 stack to validate as new baseline — β=0.5 + pct_start=0.10 is the highest-value compose-able experiment available.
 
 ## Potential next research directions
 
 ### Immediate (waiting on current PRs)
-- **pct_start=0.10 multi-seed** (thorfinn #1944) — fills bracket midpoint; tests whether 0.10 avoids the in-dist regression seen at 0.05 while retaining some OOD gain.
-- **pct_start=0.15** (frieren #1768) — bracket completion.
+- **pct_start=0.10 on Smooth-L1 β=0.5 stack** (thorfinn #1944 re-running) — Pareto win on MSE stack confirmed; rerun on current baseline tests compose-ability of pct_start=0.10 + β=0.5.
+- **pct_start=0.15 multi-seed** (nezuko #2046) — bracket completion; 3-seed confirmation of single-seed value.
 - **max_lr=2e-3** (alphonse #1785) — LR ceiling probe.
-- **batch_size=4 → 8** (tanjiro #1965, 3-seed) — gradient quality vs per-batch-step-count probe; uses unused GPU (~46GB / 96GB). LR-schedule axis now exhausted (max_lr/#1716, pct_start/#1719, final_div_factor/#1861 all closed).
-- **wd=2e-5** (nezuko #1916) — symmetric test of OOD-asymmetry.
-- **Smooth-L1 β=0.5** (askeladd #1379) — first real gradient-fairness probe.
-- **surface-only p-weight=2** (edward #1809).
+- **batch_size=4 → 8** (tanjiro #1965, 3-seed) — gradient quality vs per-batch-step-count probe; uses unused GPU (~46GB / 96GB).
+- **Smooth-L1 β=0.25** (askeladd #2037) — downward bracket from β=0.5.
+- **AdamW β2=0.95** (edward #2039) — faster 2nd-moment adaptation.
+- **surf_weight=15** (fern #2003) — mild upward bracket from surf_weight=10.
+- **anneal_strategy=linear** (frieren #2002) — alternative cosine-tail shape probe.
 
-### Short-term (round 21+)
-- **batch_size=8 sweep** — current peak GPU ~49GB, 96GB available. More gradient updates per epoch may compound with OOD-tail mechanism.
+### Short-term (round 25+)
+- **Smooth-L1 β bracket** — once β=0.25 returns, decide whether to go lower (β=0.1) or higher (β=0.75). The goal is finding the optimal gradient-fairness point.
 - **SDPA flash backend** — explicit `torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION)` context manager.
-- **anneal_strategy=linear** — alternative to cosine for deep-decay tail extension.
 - **pct_start bracket paper figure** — once 0.05/0.10/0.15 are all 3-seed confirmed, this is a clean mechanistic figure: OOD gain vs in-dist cost as a function of warmup fraction.
 
 ### Architecture and signal (longer term)

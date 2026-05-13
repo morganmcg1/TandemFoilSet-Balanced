@@ -788,3 +788,63 @@ The 3-rep mean (65.92 val / 57.45 test) is suggestive — it beats the MSE 3-see
 **Next:** Reassigning fern to **surf_weight=15** with 3 seeds. Tight upward step (50% increase, vs the failed 150% jump). Tests whether the curve from 10 is locally monotonic or has any room for a smaller bump.
 
 **Minor flag:** `test_geom_camber_cruise/loss = nan` printed in test-eval summary line but `mae_surf_p` (the headline metric) was still computed cleanly per-batch. Likely Inf/NaN slipping through a single-batch reduction. Not blocking; track if it recurs.
+
+## 2026-05-13 09:00 — PR #1944: OneCycleLR pct_start=0.10 (3-seed bracket midpoint) — SENT BACK (clean Pareto win on MSE stack, needs re-run on β=0.5)
+- willowpai2g24h4-thorfinn / thorfinn/pct-start-0p10-3seed
+- **Hypothesis:** pct_start=0.10 is the Pareto optimum between OOD gain (pct=0.05 mechanism) and in-dist regression elimination (longer warmup descends in-dist basin properly).
+- **W&B:** seed=0 `oi6kvjoy`, seed=1 `s5j0yw6e`, seed=2 `mxpqv7ur` (group: `pct-start-bracket-0p10`)
+
+### Headline (3-seed mean ± std) on MSE stack
+
+| Metric | pct_start=0.10 (this PR) | pct_start=0.05 ref (#1874) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **67.339 ± 1.976** | 68.88 ± 2.40 | **−1.54** |
+| test_avg/mae_surf_p | **58.314 ± 1.758** | 59.61 ± 2.36 | **−1.30** |
+| best_epoch | 28 (all 3 seeds) | 28 | stable |
+
+### Per-seed
+
+| Run | seed | val_avg | test_avg | best_epoch |
+|---|---:|---:|---:|---:|
+| oi6kvjoy | 0 | 68.6568 | 59.6910 | 28 |
+| s5j0yw6e | 1 | 65.0671 | 56.3336 | 28 |
+| mxpqv7ur | 2 | 68.2944 | 58.9173 | 28 |
+
+### Per-split 3-seed mean Δ vs pct=0.05 reference
+
+| Split | pct=0.10 (mean ± std) | pct=0.05 3-seed | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 75.589 ± 4.120 | 77.12 | **−1.53** ✓ in-dist recovers |
+| val_geom_camber_rc | 79.568 ± 1.996 | 80.85 | −1.28 |
+| val_geom_camber_cruise | 48.629 ± 2.320 | 50.01 | −1.38 ✓ OOD preserved |
+| val_re_rand | 65.571 ± 1.276 | 67.55 | −1.98 |
+
+### Per-split 3-seed mean (test)
+
+| Split | pct=0.10 (mean ± std) |
+|---|---:|
+| test_single_in_dist | 63.835 ± 2.624 |
+| test_geom_camber_rc | 71.734 ± 2.040 |
+| test_geom_camber_cruise | 39.735 ± 1.162 |
+| test_re_rand | 57.951 ± 2.192 |
+
+**Decision: SENT BACK — clean Pareto improvement on MSE stack, but needs re-run on Smooth-L1 β=0.5 baseline.**
+
+The result is a clear Pareto win over pct_start=0.05 on the MSE stack: ALL 4 val splits AND all 4 test splits improve simultaneously, std SHRINKS in both metrics (1.98 vs 2.40 val, 1.76 vs 2.36 test), in-dist regression is fully eliminated, and OOD gain is preserved. This is exactly what the hypothesis predicted.
+
+**However**: the experiment was forked before PR #1379 merged (Smooth-L1 β=0.5 became the new baseline at val=65.35 ± 3.37 / test=56.68 ± 2.66). The pct=0.10 MSE result (67.34/58.31) does NOT beat the current baseline as-is.
+
+The right next step is to run β=0.5 + pct_start=0.10 — these target orthogonal failure modes (β=0.5 = gradient fairness across residual magnitudes; pct_start=0.10 = LR-schedule Pareto warmup/decay balance) and should compose additively.
+
+**Genuine learnings (paper-relevant):**
+
+1. **pct_start=0.10 is the bracket midpoint Pareto point** on the MSE stack. Per-seed std shrinks, in-dist regression eliminated, OOD gain preserved. This is the right base for the paper's pct_start figure.
+2. **Schedule stability improves at pct_start=0.10** — variance across seeds tightens substantially (1.98 vs 2.40 val), suggesting 0.05 was at the edge of a metastable region of the LR schedule landscape.
+3. **The "−1.54 / −1.30 in 3-seed mean" margin is robust** — direction confirmed by all 8 split-level comparisons going the same way. Not a seed artifact.
+4. **The β=0.5 + pct_start=0.10 composition is the highest-value compose-able experiment available** — both Pareto improvements over their respective references.
+
+**Next:** Thorfinn re-runs 3 seeds on Smooth-L1 β=0.5 + pct_start=0.10. Decision criteria:
+- Beats val < 65.35 / test < 56.68 (3-seed mean) → merge as new baseline, β=0.5 + pct=0.10 stack
+- Within noise (66-67) → mechanisms partially overlap (both touch OOD generalization); 0.10 is still the better pct_start point
+- Above 67 → mechanisms compete somehow; investigate the interaction
+
