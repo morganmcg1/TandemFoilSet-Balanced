@@ -489,6 +489,7 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print(f"Translation augmentation: sigma=0.01 on channels 0-1 (per-sample, training only) - physical-symmetry OOD lever, retry-2")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -528,6 +529,12 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Translation augmentation: per-sample shift of mesh coords (channels 0-1), training only.
+            # Exploits translation invariance of the underlying flow physics - preserves foil shape exactly.
+            sigma_translation = 0.01
+            x_norm = x_norm.clone()
+            trans_noise = torch.randn(x_norm.shape[0], 1, 2, device=x_norm.device, dtype=x_norm.dtype) * sigma_translation
+            x_norm[:, :, 0:2] = x_norm[:, :, 0:2] + trans_noise
             pred = model({"x": x_norm})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
