@@ -388,6 +388,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    n_head: int = 4
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -427,7 +428,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=6,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
