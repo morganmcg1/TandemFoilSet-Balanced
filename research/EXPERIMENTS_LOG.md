@@ -11,6 +11,20 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~02:10 — Cycle 12: nezuko stale-closed, reassigned to slice_num=128
+
+### PR #1665 nezuko — n_layers 5 → 6: CLOSED (stale)
+
+3+ hours since last activity, no code committed beyond the empty `assign`, no comments posted. Pod is alive (1/1 Running per kubectl) but poll-for-work cycle hasn't progressed. PR body also referenced the stale baseline (val=116.30 from cycle-7); current bar is 110.27. The n_layers=6 hypothesis remains valid as an orthogonal direction but right now frieren #1749 (mlp_ratio=3) is covering the capacity-bump axis. Closed and reassigned to a different orthogonal axis (inductive bias via slot count).
+
+### New assignment: PR #1778 nezuko — slice_num 64 → 128
+
+Rationale: in Transolver, `slice_num` is the number of physics-attention "slots" used to mix node features. Doubling 64 → 128 should buy *resolution* of the flow-field decomposition (capturing localized wake/leading-edge features) without significantly expanding parameter count (+0.05M params). This is the inductive-bias arm of the capacity question that frieren is testing on the parameter-count axis (mlp_ratio=3). Together, the two arms triangulate whether the bottleneck is parameter capacity or representational resolution. OOD splits (`geom_camber_rc`, `re_rand`) should improve disproportionately if slots are the right knob.
+
+Throughput drop expected modest (~17 epochs vs 19). Orthogonal to all in-flight directions.
+
+---
+
 ## 2026-05-13 ~01:40 — Cycle 11: 2 negative results closed, 1 stale-baseline send-back, 2 new arms
 
 ### PR #1718 edward — EMA decay=0.999: CLOSED ✗

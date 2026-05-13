@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 01:40 UTC
+- **Date / time:** 2026-05-13 02:10 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,20 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-12 update — nezuko stale-closed; reassigned to slice_num=128 (inductive-bias arm)
+
+### PR #1665 nezuko — n_layers=6: CLOSED (stale)
+
+3+ hours of zero progress (no code committed, no comments), and the PR body referenced the stale 116.30 baseline. Pod alive but the poll-for-work cycle hasn't moved. Hypothesis was not strictly dominated — n_layers=6 is orthogonal to mlp_ratio=3 (frieren #1749) — but a fresh PR re-triggers the pod's poll cycle, and slice_num covers a different orthogonal axis. Closing was the lower-risk choice.
+
+### PR #1778 nezuko — slice_num 64 → 128: NEW ASSIGNMENT
+
+The model is **still descending at the final epoch** on the current baseline. When under-fitting at the budget cap, the question is "what kind of capacity does the model need?" Two orthogonal answers in flight:
+- **frieren #1749** — *parameter capacity* (mlp_ratio 2 → 3, +33% FFN width per block)
+- **nezuko #1778** — *representational resolution* (slice_num 64 → 128, 2× physics-attention slots, ~0 param-count change)
+
+If both win, we've found two orthogonal capacity levers. If only one wins, that's a strong signal about the right inductive-bias direction.
 
 ## Cycle-11 update — EMA + LR-sweep directions ruled out; capacity + regularization arms launched
 
@@ -165,22 +179,23 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-11)
+## Current leaderboard (post cycle-12)
 
 **Active baseline: val=110.27 / test=99.41** (PRs #1480+#1471, merged). Beat 110.27 to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (new, cycle-11) | 33% FFN capacity bump per block |
-| **edward #1750** (wd=5e-5) | TBD | TBD | WIP (new, cycle-11) | Relax L2 (model still under-fitting at budget cap) |
+| **nezuko #1778** (slice_num=128) | TBD | TBD | WIP (new, cycle-12) | 2× physics-attention slots; inductive-bias arm of capacity question |
+| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | 33% FFN capacity bump per block; param-count arm of capacity question |
+| **edward #1750** (wd=5e-5) | TBD | TBD | WIP (cycle-11) | Relax L2 (model still under-fitting at budget cap) |
 | **thorfinn #1738** (AdamW beta2=0.95) | TBD | TBD | WIP (cycle-10) | Fast variance EMA for short transformer runs |
-| **nezuko #1665** (n_layers=6) | TBD | TBD | WIP (cycle-7) | Single block; capacity bump within budget |
 | **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (sent-back cycle-11) | Stale baseline → rebase + re-run instructed |
 | alphonse #1655 (OneCycleLR) | 111.65 | 101.67 | WIP (sent-back) | Rebase+retry on new base; high-value stack hypothesis |
 | fern #1469 (lr=2e-3+clip) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | askeladd #1465 (surf_w=30) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | New baseline |
 | **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Prior baseline |
+| ~~nezuko #1665~~ (n_layers=6) | — | — | CLOSED cycle-12 | Stale 3+ hrs; reassigned to slice_num=128 |
 | ~~edward #1718~~ (EMA 0.999) | 126.4 (EMA) / 119.5 (live) | — | CLOSED cycle-11 | EMA lag persists; live still descending at end |
 | ~~frieren #1717~~ (lr=1e-3) | 120.2 | 110.1 | CLOSED cycle-11 | +10 MAE regression with persistent val oscillation |
 | ~~thorfinn #1651~~ (cosine T18) | — | — | CLOSED cycle-10 | Stale + dominated by alphonse OneCycleLR |
