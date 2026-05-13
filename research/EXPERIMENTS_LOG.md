@@ -6,6 +6,51 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~16:20 — PRs #2229 MERGED / #2278 #2273 #2151 CLOSED
+
+### PR #2229 (alphonse: slice_num=24 on n_layers=3+epochs=33) — **MERGED — NEW BASELINE val=37.366**
+
+**Metric artifacts:** `models/model-slicenum24-nlayers3-epochs33-20260513-122356/metrics.jsonl`
+
+| Split | val mae_surf_p | Δ vs baseline (38.270) | test mae_surf_p |
+|---|---|---|---|
+| single_in_dist | 38.082 | −6.2% | 33.836 |
+| geom_camber_rc | 51.356 | −1.3% | 45.411 |
+| geom_camber_cruise | 20.702 | −0.4% | 16.874 |
+| re_rand | 39.325 | −1.1% | 29.365 |
+| **avg** | **37.366** | **−2.36%** | **31.371** |
+
+- **~53.7s/epoch** (down from 57s at slice_num=32) → 33 epochs in 29.5 min cap
+- best_epoch=33/33 STILL DESCENDING — cosine at minimum, epoch-budget still limiting
+- All four splits improve on both val and test; strongest gain: single_in_dist (−6.2% val)
+- Epoch-budget mechanism (faster per-epoch → more epochs → better convergence) continues as the dominant lever
+
+**Reassignments:**
+- alphonse → slice_num=16 (continue partition sweep)
+- tanjiro → slice_num=12 (floor probe)
+
+---
+
+### PR #2278 (edward: mlp_ratio=6 on n_layers=3) — CLOSED (+5.4% val worse)
+
+val=40.330 vs baseline 38.270. Every split degraded uniformly. mlp_ratio=6 doesn't transfer to compact stack — at n_layers=3, attention is the bottleneck, not FFN capacity. Run also hit 30-min cap at epoch 25/28 due to GPU contention. Even with clean GPU, projected val ≥38.3 → still loses vs NEW baseline 37.366.
+
+**Implication:** mlp_ratio=4 is optimal at n_layers=3. Edward reassigned to test mlp_ratio=2 (opposite direction).
+
+---
+
+### PR #2273 (tanjiro: linear warmup 2 ep + cosine on n_layers=3) — CLOSED (+1.66% val worse)
+
+val=38.907 vs baseline 38.270. Only single_in_dist improved; three harder splits regressed. Root cause: warmup_epochs=2 compresses cosine T_max from 30→28, losing 2 epochs of late-stage descent (the most productive phase). Warmup axis closed for this stack.
+
+---
+
+### PR #2151 (thorfinn: slice_num=24 on n_layers=4) — CLOSED (superseded, no results)
+
+Never completed; superseded by PR #2229 which tested the same slice_num=24 on the superior n_layers=3 stack. Thorfinn reassigned to lr=1.5e-4 on n_layers=3+slice_num=24.
+
+---
+
 ## 2026-05-13 ~16:00 — PR #2245 — CLOSED (vol-gradient sw=5 does NOT transfer to compact stack)
 
 **fern: surf_weight=5 on n_layers=3+slice_num=32+epochs=27**

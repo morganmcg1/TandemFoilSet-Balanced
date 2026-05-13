@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~15:30
+- **Date:** 2026-05-13 ~16:25
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,24 +9,24 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 38.270** (n_head=4 + n_layers=3 + slice_num=32 + epochs=30, PR #2228)
-**`test_avg/mae_surf_p` = 32.470**
+**`val_avg/mae_surf_p` = 37.366** (n_head=4 + n_layers=3 + slice_num=24 + epochs=33, PR #2229)
+**`test_avg/mae_surf_p` = 31.371**
 
-> **Capacity floor identified:** n_layers=2 lost (PR #2230, +0.94% val). The single_in_dist and geom_camber_rc splits regressed — n_layers=3 is the depth floor. Stop pushing n_layers lower.
+> **Capacity floor identified:** n_layers=2 lost (PR #2230, +0.94% val). n_layers=3 is the depth floor.
 
-> **Config note:** `train.py` default is `n_head=4` (line 392). PR #2149 plumbed `--n_head` as CLI arg but did NOT change the default. All runs that did NOT pass `--n_head` explicitly have been running with n_head=4.
+> **Config note:** `train.py` default is `n_head=4` (line 392). All runs that did NOT pass `--n_head` explicitly have been running with n_head=4.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 40.481 | 36.568 |
-| geom_camber_rc | **52.042** | 46.624 |
-| geom_camber_cruise | 20.785 | 16.956 |
-| re_rand | 39.772 | 29.734 |
-| **avg** | **38.270** | **32.470** |
+| single_in_dist | 38.082 | 33.836 |
+| geom_camber_rc | **51.356** | 45.411 |
+| geom_camber_cruise | 20.702 | 16.874 |
+| re_rand | 39.325 | 29.365 |
+| **avg** | **37.366** | **31.371** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 30 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 32`
+**Reproduce:** `cd target/ && python train.py --epochs 33 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 24`
 
-**best_epoch=30/30 STILL DESCENDING** at 58s/epoch — 28.5 min used, only 1.5 min margin. The epoch axis is now tight; further extensions require per-epoch speedups (slice_num=24 in flight, code-change axes available).
+**best_epoch=33/33 STILL DESCENDING** at 53.7s/epoch — 29.5 min used, very tight margin. Per-epoch further reductions remain the primary lever (slice_num=16/12 in flight).
 
 ## What we've learned
 
@@ -48,21 +48,23 @@
 15. **n_head=2 (head_dim=32→64)**: −0.25% val (PR #2149) ← plumbed --n_head CLI arg; n_head=4 is still the train.py default
 16. **epochs=24 (3 extra cosine epochs)**: −6.21% val / −5.41% test (PR #2172) ← n_head=4 default at run time
 17. **n_layers=3 + slice_num=32 + epochs=27**: −8.58% val / −9.02% test (PR #2107) ← BIGGEST SINGLE STEP; best_epoch=27 STILL DESCENDING
+18. **epochs=30 on n_layers=3+slice_num=32**: −2.20% val (PR #2228) ← best_epoch=30 STILL DESCENDING
+19. **slice_num=24 + epochs=33 on n_layers=3**: −2.36% val / −3.38% test (PR #2229) ← ~54s/epoch, 33 epochs, STILL DESCENDING
 
 ### Current stack (defaults + CLI overrides)
 - L1 (MAE) loss in normalized space, **surf_weight=10**
 - **n_layers=3** (PR #2107) ← CLI `--n_layers 3` (default is 5)
-- **slice_num=32** (PR #2108) ← CLI `--slice_num 32` (default is 48)
+- **slice_num=24** (PR #2229) ← CLI `--slice_num 24` (default is 48)
 - **n_head=4** — this is the actual train.py default (line 392). PR #2149 plumbed CLI arg but did NOT change the default.
-- **epochs=27** (PR #2107) ← CLI `--epochs 27`
+- **epochs=33** (PR #2229) ← CLI `--epochs 33`
 - **mlp_ratio=4, GeGLU activation** (PR #1769) — hardcoded in model_config at line 435
 - **RMSNorm** (PR #1837)
 - n_hidden=128
 - Lion optimizer, lr=1e-4, weight_decay=1e-4
-- **CosineAnnealingLR T_max=27** (auto-aligns: `T_max=MAX_EPOCHS=cfg.epochs`)
+- **CosineAnnealingLR T_max=33** (auto-aligns: `T_max=MAX_EPOCHS=cfg.epochs`)
 - bf16 mixed precision
-- **~515K params** at n_layers=3 (down from 667K at n_layers=4)
-- **~57s/epoch**, 27 epochs = 25.6 min total
+- **~514K params** at n_layers=3+slice_num=24
+- **~53.7s/epoch**, 33 epochs = 29.5 min total
 
 ## The epoch-count mechanism: trajectory so far
 
@@ -81,49 +83,49 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 23)
+## Active experiments (Round 24)
 
-**Baseline: val=38.270 (PR #2228), test=32.470**
+**NEW Baseline: val=37.366 (PR #2229), test=31.371**
 
 | Student | PR | Hypothesis | Stack |
 |---------|-----|------------|-----------|
-| tanjiro | #2273 | **Linear warmup (2 ep) + cosine** on n_layers=3+epochs=30 (code change) | n_layers=3 |
-| frieren | #2274 | weight_decay=0 on n_layers=3+epochs=30 (test if compact model needs reg) | n_layers=3 |
-| edward | #2278 | **mlp_ratio=6 on n_layers=3+epochs=28** (mechanism transfer from PR #2185) | n_layers=3 |
-| nezuko | #2279 | **surf_weight=3 on n_layers=3+epochs=27** (fill sw curve at compact stack) | n_layers=3 |
-| fern | #2301 | **lr=1.5e-4 on n_layers=3+epochs=30** (retest LR axis at compact stack) | n_layers=3 |
-| askeladd | #2248 | surf_weight=2 on n_layers=3+epochs=27 (bracket vol-gradient axis below) | n_layers=3 |
-| alphonse | #2229 | slice_num=24 on n_layers=3+epochs=33 (per-epoch speedup) | n_layers=3 |
-| thorfinn | #2151 | slice_num=24 on n_layers=4 (legacy stack) | n_layers=4 |
+| alphonse | new | **slice_num=16 on n_layers=3+epochs=36** (continue partition sweep) | n_layers=3 |
+| tanjiro | new | **slice_num=12 on n_layers=3+epochs=38** (floor probe — where does slice axis saturate?) | n_layers=3 |
+| edward | new | **mlp_ratio=2 on n_layers=3+slice_num=24+epochs=33** (test lighter FFN at compact depth) | n_layers=3 |
+| thorfinn | new | **lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33** (LR retest at new baseline stack) | n_layers=3 |
+| frieren | #2274 | weight_decay=0 on n_layers=3+slice_num=32+epochs=30 (WD floor test) | n_layers=3 |
+| nezuko | #2279 | surf_weight=3 on n_layers=3+slice_num=32+epochs=27 (sw curve fill) | n_layers=3 |
+| fern | #2301 | lr=1.5e-4 on n_layers=3+slice_num=32+epochs=30 (LR retest at old stack) | n_layers=3 |
+| askeladd | #2248 | surf_weight=2 on n_layers=3+slice_num=32+epochs=27 (bracket sw axis low) | n_layers=3 |
 
-**Round summary:** 7/8 students on the n_layers=3 stack. The vol-gradient axis (surf_weight) is being thoroughly bracketed at compact stack: sw=2 (askeladd), sw=3 (nezuko), sw=5 (fern), sw=10 (baseline). Combined with mlp_ratio=6 mechanism transfer, warmup schedule test, WD floor test, and slice_num=24 speedup — covers most orthogonal axes simultaneously.
+**Round summary:** All 8 on n_layers=3 stack. Primary focus is the partition sweep (slice_num=16/12) to continue the dominant mechanism. The frieren/nezuko/fern/askeladd PRs (#2274/#2279/#2301/#2248) are on the OLD slice_num=32 stack — they will need to beat the NEW baseline 37.366 to merge. If they test orthogonal axes that win at slice_num=32, those axes are worth compounding with slice_num=24.
 
-**Closed this turn:** #2214 (nezuko sw=5 on n_layers=4, val=39.693 +3.7% lose); #2185 (edward mlp_ratio=6 on n_layers=4, val=41.496 +8.4% lose); #2245 (fern sw=5 on n_layers=3, val=39.254 +2.57% lose — vol-gradient mechanism does NOT transfer to compact stack). sw axis at compact stack now fully bracketed: sw=2/3/5/10 all tested or in-flight.
+**Merged this turn:** #2229 (alphonse slice_num=24, val=37.366, −2.36%) — new baseline
+**Closed this turn:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy n_layers=4 superseded)
 
-## Confirmed mechanisms (orthogonal to compact stack)
+## Confirmed mechanisms
 
-**PR #2214 (sw=5 on n_layers=4):** Per-split mae_vol_p improved on every split (−7.9 to −14.9%). But **PR #2245 (fern sw=5 on n_layers=3) shows this does NOT produce net surface improvements at compact depth** — all splits regressed vs current baseline. Vol-gradient mechanism is depth-sensitive; sw=10 remains optimal at n_layers=3. → nezuko #2279 (sw=3) testing whether more aggressive gradient reallocation changes the picture.
+**Epoch-budget (dominant lever):** Faster per-epoch → more epochs → better convergence. 11 consecutive best_epoch=final wins. PR #2229 confirms at slice_num=24: 33 epochs in 29.5 min, still descending.
 
-**PR #2185 (mlp_ratio=6 on n_layers=4):** Every split improved on test, test gain −4.12% > val gain. Still descending at best_epoch=22/22. → **edward #2278 testing this on n_layers=3+epochs=28; projected val ~37.1 if additive.**
+**Dead at n_layers=3:**
+- mlp_ratio=6 (+5.4%) — attention is the bottleneck, not FFN capacity
+- Linear warmup (+1.66%) — compresses cosine tail
+- sw=5/vol-gradient (+2.57%) — depth-sensitive, doesn't compound at compact stack
 
-## Next priority hypotheses (when slots open)
+## Next priority hypotheses (when slots open after Round 24)
 
-**Highest EV (depend on Round 23 outcomes):**
-1. **Compound mlp_ratio=6 + sw=5 + n_layers=3**: if #2278 and #2245 both win, stack mechanisms
-2. **mlp_ratio=8 on n_layers=3**: if mlp_ratio=6 wins, push axis further
-3. **Compound winning warmup + epochs=30 stack**: if #2273 wins, prepend warmup to winning configs
-4. **slice_num=16 on n_layers=3**: if #2229 (slice_num=24) wins, continue sweep
-5. **lr=1.5e-4 on n_layers=3+slice_num=32**: prior test was neutral at n_layers=4 — may differ at compact depth
+**Highest EV:**
+1. **slice_num=8 floor probe** — if slice_num=12 wins, probe the hard floor
+2. **Compound slice_num=16 + any winning orthogonal** — stack mechanisms once slice axis is resolved
+3. **n_hidden=96 on compact stack** — trade width for epoch budget (~40s/epoch → ~44 epochs); untested
 
-**Medium priority (orthogonal axes not yet fully explored at compact stack):**
-6. **n_hidden=96 on n_layers=3**: trade width for depth — may recover capacity floor margin
-7. **Triangular LR / OneCycle on epochs=30**: if cosine warmup wins, test alternative schedules
-8. **bf16→fp16**: if speedup is real without precision loss, increases epoch budget further
+**Medium priority:**
+4. **WD and LR on slice_num=24** — frieren/fern/askeladd/nezuko tests are at slice_num=32; if they show signal, retest at new baseline
+5. **mlp_ratio=2 follow-up**: if edward's run confirms lighter FFN helps, try mlp_ratio=1 (pure attention, no FFN expansion)
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
-- Geometric data augmentation (flip/scale) — targets geom_camber_rc OOD bottleneck
-- Attention mechanism investigation: PhysicsAttention slice granularity interacts with slice_num — does the attention quality degrade below slice_num=16?
+- PhysicsAttention capacity floor: actively probing with slice_num=12/16 — where does attention quality degrade?
 
 ## Dead ends
 
@@ -132,7 +134,10 @@
 - **surf_weight=15**: neutral on n_layers=4 — sw=10 near optimum in high direction
 - **n_head=8**: +43% per-epoch, +15.7% worse
 - **n_layers=7**: +4.6% (epoch budget dominates; 160s/epoch too slow)
-- **mlp_ratio=2**: +9.95%; mlp_ratio=8: +5.95% (both worse, 4 optimal)
+- **mlp_ratio=6 at n_layers=3**: +5.4% worse (PR #2278) — attention bottleneck, not FFN; mlp_ratio=4 optimal at n_layers=3; mlp_ratio=2 now being tested (edward #2350)
+- **mlp_ratio=2 at older stack**: +9.95%; mlp_ratio=8: +5.95% (both worse on old stack; mlp_ratio=4 optimal there too)
+- **Linear epoch warmup (2 ep)**: +1.66% val worse (PR #2273) — compresses cosine T_max by 2 epochs, hurting the high-value late-stage descent; no benefit to Lion+L1 at lr=1e-4
+- **mlp_ratio=6 at n_layers=3**: +5.4% val worse (PR #2278) — FFN capacity is not the bottleneck at depth 3
 - **grad-clip**: worse for Lion (sign-update already handles magnitude)
 - **DropPath**: needs 100-300 epoch budgets; useless at 20-30 epoch budgets
 - **Dropout**: always worse (model is underfitting)
