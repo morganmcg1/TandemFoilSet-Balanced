@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-05-14 [Round 73] UTC — Round 73
+
+### PR #2623 frieren: Learnable attention temperature τ per block — CLOSED (LOSS; 37th taxon)
+
+- **Branch:** `charliepai2g48h5-frieren/attn-temperature`
+- **Hypothesis:** Add 1 learnable scalar τ per TransolverBlock (init=1.0) that multiplies the slice softmax logits. Direct interpretable diagnostic on slice-routing sharpness.
+
+| Metric | τ (this) | NEW Baseline #2614 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **33.7249** | 33.3722 | **+1.06% LOSS** |
+| `test_avg/mae_surf_p` | **28.8200** | 28.3736 | **+1.57% LOSS** |
+| Param count | 328,239 | 328,619 | unchanged (pre-FiLM stack) |
+| Best epoch | 66/70 (timeout) | 70/70 | — |
+
+Per-split val:
+
+| Split | τ (this) | #2553 ref | Δ |
+|---|---|---|---|
+| `single_in_dist` | 25.3296 | 25.7691 | **−1.71% (WIN)** |
+| `geom_camber_rc` | 50.7416 | 50.5514 | +0.38% (flat — failed prediction) |
+| `geom_camber_cruise` | 21.0788 | 20.2827 | **+3.92% (WORST)** |
+| `re_rand` | 37.7494 | 37.3708 | +1.01% |
+
+Per-block terminal τ:
+
+| Block | τ | Direction |
+|---|---|---|
+| 0 | 0.8078 | softer |
+| 1 | 0.8781 | softer |
+| 2 | 0.8293 | softer |
+| 3 | 0.7896 | softer |
+| **Mean** | **~0.826** | uniform softer |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-frieren-attn-temperature-20260513-223618/metrics.jsonl`
+
+**Analysis (excellent student diagnostic):** ALL 4 blocks moved τ coherently below 1.0 (range [0.79, 0.88]) — the optimizer DID engage the lever consistently (~17% softer than init). Mechanism worked. But val didn't move: in_dist marginally improved, camber_rc flat (failed predicted >2% WIN), camber_cruise regressed +3.92%. **Slice-routing sharpness is expressive-but-not-load-bearing on this dataset.**
+
+**No block-3 heterogeneity signal.** The hypothesis that block 3 (where γ_attn drifts toward zero historically) would diverge in τ-trajectory is FALSIFIED — block 3 τ=0.79 is only marginally lower than block 1's 0.88.
+
+**Connection to #2607 (slice_num=48 LOSS, 33rd taxon):** That run hypothesized over-sharp routing as the bottleneck. τ data is mildly consistent with "model wants softer routing" but the val effect is null. So #2607's bottleneck-from-sharpness hypothesis is also indirectly falsified.
+
+**37th closed taxon:** slice-routing sharpness axis. Combined with closed slice_num bracket at 24 (33rd taxon) and closed Lion-internal LR + β₁ (35th, 36th taxa), we're saturating optimizer-internal and routing-internal axes. Architectural conditioning (FiLM merged + per-block FiLM in-flight) and depth-specific regularization remain active.
+
+**Action:** Closed. Pivoted frieren to QK-Norm (#2661) — attention internal stability probe; structurally distinct from τ (post-softmax) and spectral norm (weight constraint).
+
+---
+
+### Assignment (Round 73)
+
+- **#2661 frieren** — QK-Norm: per-head LayerNorm on Q and K post-projection (V unchanged); +768 params; targets Q·K magnitude drift / softmax saturation; standard in PaLM-E / ViT-22B / Gemma; NEW bar = val < 33.3722
+
+---
+
 ## 2026-05-14 [Round 72] UTC — Round 72
 
 ### PR #2602 edward: Lion lr=1.75e-4 midpoint — CLOSED (LOSS; 36th taxon)
