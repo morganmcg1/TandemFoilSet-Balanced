@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~03:45
+- **Date:** 2026-05-13 ~04:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -45,6 +45,7 @@
 - Gradient clipping max_norm=1 and max_norm=10: both worse (oscillations = useful search)
 - Huber loss β=1.0: +15.7% (mostly-MSE; L1's constant gradient is the key)
 - **Channel-weighted L1 [0.03,0.03,1.0] on GeGLU+Lion**: +11.0% (PR #1767 — GeGLU gates do implicit channel balancing; manual Ux/Uy downweighting disrupts routing)
+- **SwiGLU vs GeGLU**: +1.6% (PR #1824 — LLM finding doesn't transfer; GELU's slightly negative gate range may benefit CFD pressure-gradient features)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
 - n_layers=7: +51% worse, too slow (~205s/epoch)
@@ -70,14 +71,15 @@
 | alphonse | #1765 | Lion lr=2e-4 with lr=cfg.lr bug fix | WIP (rerun on GeGLU+Lion) |
 | askeladd | #1766 | Lion WD=1e-2 on GeGLU+Lion (compound test) | SENT BACK (rerun on GeGLU+Lion) |
 | edward | #1859 | SmoothL1 β=0.1 on GeGLU+Lion (remove L1 gradient discontinuity at zero) | NEW |
-| tanjiro | #1824 | SwiGLU vs GeGLU: SiLU gate comparison | WIP |
+| tanjiro | #1872 | mlp_ratio=8 + GeGLU: recover fc2 capacity halved by gating split | NEW |
 | fern | #1790 | Lion + 2-epoch cosine warmup on GeGLU+Lion | SENT BACK (rerun on GeGLU+Lion) |
 | nezuko | #1793 | Lion + T_max=12 aligned to budget | WIP (on pre-GeGLU; check upon completion) |
 | thorfinn | #1836 | surf_weight 10 → 5 on GeGLU+Lion | WIP |
 | frieren | #1837 | RMSNorm replaces LayerNorm on GeGLU+Lion | WIP |
 
 **Recently closed:**
-- edward #1767 channel-weighted L1 [0.03, 0.03, 1.0] on GeGLU+Lion: +11% regression — GeGLU gates disrupt with manual channel weights
+- edward #1767: channel-weighted L1 on GeGLU+Lion (+11%) — GeGLU gates do implicit channel balancing; manual reweighting disrupts routing
+- tanjiro #1824: SwiGLU vs GeGLU (+1.6%) — GELU's slightly negative gate range better for CFD pressure features; LLM finding doesn't transfer
 
 ## Critical infra issue: train.py:440 LR hardcoding bug
 
@@ -88,7 +90,7 @@
 ## Round 8/9 priorities (GeGLU+Lion baseline)
 
 **Tier 1 (directly on new baseline):**
-1. **SwiGLU + Lion** (tanjiro #1824): A/B test SiLU gate vs GELU gate.
+1. **mlp_ratio=8 + GeGLU** (tanjiro #1872): recover fc2 capacity halved by GeGLU split; tests "gating alone vs gating+capacity"
 2. **SmoothL1 β=0.1 + GeGLU+Lion** (edward #1859): remove L1 gradient discontinuity at zero for Lion sign updates.
 
 **Tier 2 (mechanism confirmation on GeGLU+Lion):**
@@ -103,9 +105,9 @@
 - **RMSNorm + GeGLU + Lion**: frieren testing RMSNorm (#1837); if positive, it's already on GeGLU+Lion
 - **surf_weight 5** (thorfinn #1836): on GeGLU+Lion; may help if pressure signal too noisy with high surf_weight
 - **GeGLU + CosineAnnealingLR eta_min=1e-5**: fern suggested Lion benefits from non-zero final LR; needs testing
-- **mlp_ratio=8 + GeGLU**: effective mlp_ratio is 2 with GeGLU (halved); 8 restores to 4. May be too slow (~170s/epoch)
-- **Lion WD=3e-2**: askeladd noted 1e-2 was low end of paper's recommended range; 3e-2 or 1e-1 may be better
-- **n_hidden widening 128→160**: pure capacity increase if mlp_ratio is too slow
+- **Lion WD=3e-2 or 1e-1**: askeladd noted 1e-2 was low end of paper's recommended range; more WD may be better
+- **n_hidden widening 128→160**: capacity increase (slower than ratio; ~30% more params)
+- **n_layers=7 with GeGLU+Lion**: depth was "too slow" on AdamW (~205s); GeGLU+Lion+bf16 at 143s may now fit (~167s/epoch → 10 epochs)
 
 ## Key constraints
 

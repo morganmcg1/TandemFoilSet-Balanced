@@ -6,6 +6,28 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 04:00 — PR #1824: SwiGLU (SiLU gate) vs GeGLU — CLOSED (+1.6% val regression)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/swiglu-lion
+- **Hypothesis:** SiLU gate smoother gradient than GELU; SwiGLU > GeGLU (as in LLaMA/PaLM)
+- **Result:** val=65.957, test=58.705 (GeGLU+Lion stack, epoch 11, 30-min cap)
+
+| Split | SwiGLU val | GeGLU val (baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 79.277 | 72.021 | +10.1% |
+| geom_camber_rc | 81.003 | 89.234 | **−9.2%** |
+| geom_camber_cruise | 41.225 | 37.058 | +11.2% |
+| re_rand | 62.321 | 61.359 | +1.6% |
+| **avg** | **65.957** | **64.918** | **+1.6% worse** |
+
+- **Decision:** CLOSED — primary metric regresses (>baseline); student correctly said "don't merge"
+- **Key insight:** SwiGLU helped only on geom_camber_rc (OOD geometry, −9.2%), hurt everywhere else. LLM SwiGLU > GeGLU finding does not transfer to this CFD surrogate. GELU's slightly negative gate range may be beneficial for pressure-gradient features. Per-split routing (SwiGLU for OOD, GeGLU for in-distribution) is an interesting observation but not actionable without architectural complexity.
+- **Dead end added:** SwiGLU +1.6% vs GeGLU on this task
+- **Reassigned:** tanjiro → PR #1872 mlp_ratio=8 + GeGLU (recover fc2 capacity halved by gating split)
+
+---
+
 ## 2026-05-13 03:45 — PR #1767: Channel-weighted L1 [0.03, 0.03, 1.0] on GeGLU+Lion — CLOSED (+11.0% regression)
 
 - **Student:** charliepai2g48h3-edward
