@@ -51,6 +51,11 @@ from data import (
 # Transolver model
 # ---------------------------------------------------------------------------
 
+class SquaredReLU(nn.Module):
+    def forward(self, x):
+        return F.relu(x) ** 2
+
+
 ACTIVATION = {
     "gelu": nn.GELU,
     "tanh": nn.Tanh,
@@ -60,11 +65,12 @@ ACTIVATION = {
     "softplus": nn.Softplus,
     "ELU": nn.ELU,
     "silu": nn.SiLU,
+    "squared_relu": SquaredReLU,
 }
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="squared_relu", res=True):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
@@ -138,7 +144,7 @@ class PhysicsAttention(nn.Module):
 
 
 class TransolverBlock(nn.Module):
-    def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
+    def __init__(self, num_heads, hidden_dim, dropout, act="squared_relu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  layerscale_init=1e-4):
         super().__init__()
@@ -156,7 +162,7 @@ class TransolverBlock(nn.Module):
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
+                nn.Linear(hidden_dim, hidden_dim), SquaredReLU(),
                 nn.Linear(hidden_dim, out_dim),
             )
 
@@ -170,7 +176,7 @@ class TransolverBlock(nn.Module):
 
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
-                 n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
+                 n_head=8, act="squared_relu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
@@ -457,6 +463,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"Activation: SquaredReLU (ReLU²) at all 3 MLP sites — Primer-style sharp activation, replaces GELU; symmetric probe to closed SiLU LOSS (#2156)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
