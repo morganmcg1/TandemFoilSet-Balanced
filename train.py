@@ -431,6 +431,7 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    input_noise_std: float = 0.0  # Stddev of Gaussian noise added to inputs during training (Tikhonov-equivalent regularization). 0.0 = disabled.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -570,6 +571,8 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        if model.training and cfg.input_noise_std > 0:
+            x_norm = x_norm + torch.randn_like(x_norm) * cfg.input_noise_std
         if cfg.use_torch_compile and not compile_warmup_logged:
             _warmup_t0 = time.time()
         pred = model({"x": x_norm})["preds"]
