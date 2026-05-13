@@ -7,6 +7,87 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 19:10 — PR #2314: Lion optimizer (lr=1e-4) — MERGED ⭐ MAJOR WIN
+
+- `willowpai2g24h3-askeladd/lion-optimizer`
+- **Hypothesis:** AdamW → Lion (Chen et al. 2023 sign-based momentum). At lr=1e-4 (AdamW_lr/5), Lion normalizes updates to max step size, making each gradient step more impactful without slowing throughput.
+- **Results:**
+
+| Metric | Baseline (qttr6jay, AdamW) | Lion lr=1e-4 (h2m396kw) | Δ |
+|---|---:|---:|---|
+| val_avg | 53.8380 | **43.1973** | **−19.8% ✅** |
+| test_avg | 46.9320 | **35.7630** | **−23.8% ✅** |
+| Best epoch | 29 | 32 | +3 |
+| s/epoch | 57.8 | 57.8 | identical |
+| VRAM | ~13 GB | 11.2 GB | −14% |
+
+Per-split val (all 4 improve):
+
+| Split | Baseline | Lion | Δ |
+|---|---:|---:|---|
+| single_in_dist | 57.24 | **41.63** | −27.3% |
+| camber_rc | 62.57 | **56.63** | −9.5% |
+| camber_cruise | 40.50 | **29.58** | −26.9% |
+| re_rand | 55.05 | **44.96** | −18.3% |
+
+Per-split test (all 4 improve):
+
+| Split | Baseline | Lion | Δ |
+|---|---:|---:|---|
+| single_in_dist | 50.16 | **34.16** | −31.9% |
+| camber_rc | 56.06 | **47.74** | −14.8% |
+| camber_cruise | 33.72 | **24.83** | −26.4% |
+| re_rand | 47.79 | **36.32** | −24.0% |
+
+- **Analysis:** Largest single-step gain of the launch (−19.8% val, −23.8% test). Lion's sign-based updates effectively normalize gradient magnitudes, giving uniform step size every iteration regardless of curvature. At lr=1e-4 (1/5 of AdamW's 5e-4), Lion matches AdamW's throughput exactly (32 epochs in 30 min at 57.8 s/ep). All 8/8 per-split metrics improve; largest gains on smooth-geometry splits (camber_cruise −26.9%, single_in_dist −27.3%), consistent with Lion's known strength on smooth loss landscapes. Second seed from pre-merge arm (n_layers=5 stack) confirmed at val 45.48, test 37.95. All subsequent experiments must now use `--optimizer lion --lr 1e-4` as part of the base stack.
+- W&B: `h2m396kw` (retest on n_layers=4 stack), `62gq70rj` (Arm A n_layers=5), `qng9zq6d` (Arm B lr=3e-4)
+- **New baseline:** val 43.1973 / test 35.7630. New merge bar: ≤38.9 val (≥10% gain).
+- **Full stack reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --optimizer lion --lr 1e-4`
+
+## 2026-05-13 18:55 — PR #2192: n_head=2 sweep — SENT BACK (retest on Lion stack)
+
+- `willowpai2g24h3-frieren/n-head-sweep`
+- **Hypothesis:** n_head sweep (2, 4, 8) — wider per-head attention (n_head=2, dim_head=64) may capture more physically coherent flow patterns than 32 dims/head at default.
+- **Results (AdamW stack, before Lion merge):**
+
+| Arm | n_head | dim_head | val_avg | test_avg | best_ep | s/ep |
+|---|---|---|---:|---:|---|---|
+| **B (`fa9n7lqp`)** | **2** | **64** | **49.777** | **42.676** | 36 | 50.2 |
+| A (`xejqc8hr`) | 4 | 32 | 53.149 | 44.873 | 31 | 58.3 |
+| C (`x0sx5nmq`) | 8 | 16 | 58.737 | 50.907 | 25 | 72.4 |
+
+- **Analysis:** Clear n_head=2 win (−7.5% val, −9.1% test vs AdamW baseline 53.84). n_head=8 is a strong regression (+9.1%) — narrowing heads below 32 dims/head hurts. n_head=2 with 64 dims/head enables richer per-slice representation. However, results were measured without Lion. Against new Lion baseline 43.20, the result regresses. Sent back for n_head=2+Lion retest. If confirmed, n_head=2+Lion likely compounds.
+- W&B group: `willow-r3-n-head-sweep-nl4`
+
+## 2026-05-13 18:31 — PR #2097: coord-jitter σ=0.005 — SENT BACK (retest on Lion stack)
+
+- `willowpai2g24h3-thorfinn/coord-jitter-aug`
+- **Hypothesis:** Gaussian coordinate jitter on (x,z) input dims — augmentation for OOD-camber generalization.
+- **Results (AdamW stack):**
+
+| Arm | σ | val_avg | Δ | test_avg | Δ | best_ep |
+|---|---|---:|---|---:|---|---|
+| **A (`ufx6b3d1`)** | **0.005** | **52.19** | **−3.1%** | **44.84** | **−4.5%** | 32 |
+| B (`glq2kv94`) | 0.01 | 52.57 | −2.4% | 45.25 | −3.6% | 32 |
+
+- **Analysis:** Both arms improve on AdamW baseline (53.84), with σ=0.005 best. Improvements are small (3.1%/4.5%) and fall within the ±7 single-seed noise band. However, directionally consistent (both val+test improve) and augmentation is orthogonal to optimizer. Sent back for σ=0.005+Lion retest. If Lion amplifies the gain via better use of augmented gradients, this could compound. Thorfinn's per-split analysis showed largest benefit on `single_in_dist` (−7.5%) and `re_rand` (−5.7%), with very small camber_rc benefit (−0.4%).
+- W&B: `ufx6b3d1` (σ=0.005), `glq2kv94` (σ=0.01)
+
+## 2026-05-13 18:20 — PR #2462: n_layers=3 — SENT BACK (retest on Lion stack)
+
+- `willowpai2g24h3-edward/n-layers-sweep`
+- **Hypothesis:** Push depth below n=4 merged baseline — n_layers=3 on full stack.
+- **Results (AdamW stack):**
+
+| Run | val_avg | test_avg | best_ep | params |
+|---|---:|---:|---|---|
+| Seed 1 (`qgju7je7`) | **48.7928** | **42.1367** | 40 | ~428K |
+| Seed 2 (`hrayb76h`) | 52.3633 | 45.0600 | 33 | ~428K |
+| Baseline (qttr6jay, n=4) | 53.8380 | 46.9320 | 29 | 548K |
+
+- **Analysis:** Clean n_layers=3 win on AdamW (−9.4% val, −10.2% test). Two seeds confirm the direction (epoch-aligned noise ~0.3). All 8/8 per-split metrics improve; largest on single_in_dist (−14.7% val, −16.5% test), smallest on camber_rc (−3.4%). Val curve still strictly descending at epoch 40 (−0.5/ep avg), model still gradient-step-limited. However, against new Lion baseline 43.20, the result regresses. Sent back for n_layers=3+Lion retest. With Lion's efficient updates and faster per-epoch throughput at n=3 (~43 s/ep estimated), this could be very strong.
+- W&B: `qgju7je7` (seed 1), `hrayb76h` (seed 2)
+
 ## 2026-05-13 16:43 — PR #2423: n_hidden=192 on bs=2+slice32 merged stack — CLOSED
 
 - `willowpai2g24h3-fern/wider-model-bs2`

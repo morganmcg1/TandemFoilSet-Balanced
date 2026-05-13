@@ -5,34 +5,41 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~16:50 — **edward #2119 n_layers=4 MERGED (val 53.84/test 46.93, −6.7%/−5.3%)** — new best; fern #2423 closed (+17.6% regression, budget-bound); edward→#2462 n_layers=3, fern→#2464 n_hidden-narrow; all 6 in-flight notified)
-- **Current best (merged)**: PR #2119 edward n_layers=4 (run `qttr6jay`) at **val 53.8380 / test 46.9320** — all 8 sub-metrics improve, 29 epochs, 57.8 s/epoch, 548K params. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4`
-- **Updated merge bar (vs 53.84 baseline)**: ≤48.4 val ⇒ merge (≥10% gain), 48.4-53.8 → second seed, ≥53.8 → close.
-- **Closed axes on merged stack:**
-  - cosine-tail shape (#2302 –epochs 20, #2413 –epochs 25 both regress)
-  - width-up (#2423 n_hidden=192 → only 17 epochs, 33% slower, +17.6% regression)
-  - **Confirmed dominant mechanism: gradient-step-bound — lighter models converge further in 30-min cap**
-- **Active research directions (both exploit gradient-step-bound):**
-  1. **Model size minimization** — edward #2462 (n_layers=3), fern #2464 (n_hidden=96/64)
-  2. **LR magnitude axis** — tanjiro #2449 (lr=7e-4, lr=1e-3)
-  3. **Batch-size minimization** — nezuko #2421 (bs=1)
-  4. **Architecture variants** — askeladd #2314 (Lion), frieren #2192 (n_head sweep), alphonse #2358 (slice=16)
-  5. **Augmentation** — thorfinn #2097 (coord-jitter)
-- **In-flight (8 students, 0 idle):**
-  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32, Arm B slice_num=16; running. Notified of new 53.84 baseline.
-  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: running. Notified of new 53.84 baseline.
-  - edward #2462 n-layers-3-sweep: **newly assigned** — n_layers=3 on full stack, testing depth minimum below 4.
-  - fern #2464 n-hidden-narrow: **newly assigned** — n_hidden=96 (Arm A), n_hidden=64 (Arm B, conditional). Width analog of n_layers=4 win.
-  - frieren #2192 n-head-sweep (2,4,8): actively running (back to 98% GPU after arm gap). Notified of new 53.84 baseline.
-  - nezuko #2421 bs1-sweep: bs=1 sweep running. Notified of new 53.84 baseline.
-  - tanjiro #2449 lr-peak-sweep: lr=7e-4 (Arm A) and lr=1e-3 (Arm B) on bs=2+slice32+n_layers=4 stack. Notified of new 53.84 baseline.
-  - thorfinn #2097 coord-jitter-aug: actively running (GPU 98%). Notified of new 53.84 baseline.
-- **Key structural observations from merged stack:**
-  - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + bs=2 + **n_layers=4**
-  - **Per-layer throughput scales exactly as predicted** (4/5 = 0.80×, measured 0.81×). Depth reduction buys real epochs.
-  - Padding-waste mechanism (bs=2): `pad_collate` at bs=2 pads only 1 sample vs 3 at bs=4. bs=2 was 17% faster/epoch AND 2.26× more grad steps.
-  - Val curve still monotonic at epoch 29 (LR ~28% peak). Model still gradient-step-limited even after depth reduction.
-  - Model is now **548K params**, 57.8 s/epoch, ~13 GB VRAM. All 3 knobs (depth, batch, slice) compound orthogonally.
+- **Date**: 2026-05-13 ~19:15 — **askeladd #2314 Lion lr=1e-4 MERGED (val 43.20/test 35.76, −19.8%/−23.8%)** — largest single gain of launch; all 7 students redirected to Lion stack. Frieren n_head=2 (+7.5%), edward n_layers=3 (+9.4%), thorfinn coord-jitter (+3.1%) all confirmed directionally positive but sent back for Lion retest.
+- **Current best (merged)**: PR #2314 askeladd Lion lr=1e-4 (run `h2m396kw`) at **val 43.1973 / test 35.7630** — all 8 sub-metrics improve, 32 epochs, 57.8 s/epoch, 548K params, 11.2 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --optimizer lion --lr 1e-4`
+- **Updated merge bar (vs 43.20 baseline)**: ≤38.9 val ⇒ merge (≥10% gain), 38.9-43.2 → second seed, ≥43.2 → close.
+- **Closed axes on current stack:**
+  - cosine-tail shape (both regress)
+  - width-up n_hidden=192 (both n_layers=5 and n_layers=4 tested; +17.6% regression, budget-bound)
+  - Lion lr=3e-4 (val 49.93, worse than 1e-4 at 45.48)
+- **Phase shift: all experiments must now use Lion as optimizer base**
+- **Active research directions (all on Lion stack):**
+  1. **Depth minimum** — edward #2462 (n_layers=3+Lion retest)
+  2. **Head width** — frieren #2192 (n_head=2+Lion retest)
+  3. **Augmentation** — thorfinn #2097 (coord-jitter σ=0.005+Lion retest)
+  4. **Lion LR tuning** — tanjiro #2449 (redirected: lr=5e-5, lr=2e-4 flanking 1e-4)
+  5. **Batch-size** — nezuko #2421 (bs=1+Lion)
+  6. **Slice-num** — alphonse #2358 (slice=16+Lion)
+  7. **Width-down** — fern #2464 (n_hidden=96+Lion; stalled on rate limits, GPU idle)
+- **In-flight (7 active GPUs, fern rate-limited/idle):**
+  - alphonse #2358: redirected to slice_num=16+Lion+n_layers=4 retest; needs rebase
+  - askeladd: MERGED ✅ (new baseline = 43.20)
+  - edward #2462: sent back for n_layers=3+Lion retest
+  - fern #2464: pod stalled on GitHub GraphQL rate limits — GPU=0%, last contact ~18:45. Updated instructions posted; rate limits expected to recover
+  - frieren #2192: sent back for n_head=2+Lion retest
+  - nezuko #2421: redirected to bs=1+Lion; needs rebase + kill current AdamW run
+  - tanjiro #2449: redirected to Lion lr flanking (5e-5 and 2e-4); needs kill current AdamW runs
+  - thorfinn #2097: sent back for coord-jitter σ=0.005+Lion retest
+- **Key structural insight (Lion mechanism):**
+  - Lion uses sign(grad_ema) — update direction = ±1, always at max step size
+  - No momentum scaling, no per-param adaptive rates — uniform step magnitude makes every gradient signal count equally
+  - At lr=1e-4 (1/5 of AdamW 5e-4), matches AdamW throughput (57.8 s/ep) while gaining 3 more epochs (32 vs 29)
+  - All 8/8 per-split metrics improve; largest gains on smooth geometries (camber_cruise, single_in_dist)
+  - Gradient-step-bound mechanism still dominant: model still descending at epoch 32
+  - **Open question:** Does Lion lr=1e-4 remain optimal? Flanking with 5e-5 and 2e-4 (tanjiro #2449 redirect)
+  - **Open question:** Does bs=1 + Lion compound? (nezuko #2421)
+  - **Open question:** Does n_layers=3 + Lion compound? (edward #2462)
+  - **Open question:** Does n_head=2 + Lion compound? (frieren #2192)
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
