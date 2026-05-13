@@ -2,6 +2,156 @@
 
 ---
 
+## 2026-05-13 02:20 — PR #1676: AdamW β2=0.95 — CLOSED (lever refuted)
+
+- **Branch:** `charliepai2g48h5-fern/adamw-beta2-0.95`
+- **Student:** charliepai2g48h5-fern
+- **Hypothesis:** β2=0.95 (faster second-moment tracking, "transformer recipe") vs 0.999 default.
+
+### Results
+
+| Metric | Baseline (#1568) | This PR | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.8316 | **69.9029** | +0.10% (wash) |
+| `test_avg/mae_surf_p` | 61.8652 | **62.9973** | +1.83% ✗ |
+
+| Split | β2=0.95 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 79.9420 | 77.10 | +2.84 |
+| `val_geom_camber_rc` | 83.7474 | 83.49 | +0.26 |
+| `val_geom_camber_cruise` | 48.7266 | 50.64 | -1.91 |
+| `val_re_rand` | 67.1955 | 68.10 | -0.90 |
+
+- **Best epoch:** 36 (terminal, still descending). **Time/epoch:** ~49.78 s. **Peak GPU:** 23.83 GB.
+- **Metric artifacts:** `models/model-charliepai2g48h5-fern-adamw-beta2-0.95-20260512-230647/metrics.jsonl`
+
+### Analysis
+
+Mixed per-split signal (in-dist slightly worse, two OOD splits slightly better, one slightly worse).
+Net result is noise — 69.90 vs 69.83 is within random seed variance. The training loss showed
+mild spikes (~10-16% bumps) at epochs 20, 28, 32 — consistent with "spikier Adam" from shorter
+second-moment averaging window under batch=4 noise. Notably, 69.90 also doesn't beat the new
+64.07 baseline (PR #1633, Huber β=0.5 merged same round).
+
+Student diagnosis is correct: β2=0.95 is suited for large-scale LM training where intra-epoch
+gradient distribution shifts are real. On 1499-sample TandemFoil with 375 steps/epoch, the
+gradient distribution is stationary — β2=0.999 provides better L2 stability for this regime.
+The cosine LR schedule already handles "late-training adaptation" that β2=0.95 was supposed to help with.
+
+### Conclusions
+
+- **β2 axis: CLOSED.** Lever does not transfer to small encoder-only Transolver on this dataset scale.
+- Do not re-run further β2 variants (0.99, etc.) — the mechanism mismatch is understood.
+- Training-loss bump characterization is useful diagnostic prior: if a future design uses
+  aggressive β2, pair with grad-clipping.
+
+---
+
+## 2026-05-13 02:20 — PR #1652: Warmup-500-cosine — SENT BACK (needs β=0.5 rebase)
+
+- **Branch:** `charliepai2g48h5-frieren/warmup-500-cosine`
+- **Student:** charliepai2g48h5-frieren
+- **Hypothesis:** Linear warmup over 500 steps (LR 0.01×→1.0× peak) + cosine T_max=50 decay.
+
+### Results (on OLD 69.83 baseline)
+
+| Metric | Baseline (#1568) | This PR | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.8316 | **68.7004** | **-1.62%** ✓ |
+| `test_avg/mae_surf_p` | 61.8652 | **60.7640** | **-1.78%** ✓ |
+
+| Split | Warmup-500 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 81.77 | 77.10 | +6.1% |
+| `val_geom_camber_rc` | 78.16 | 83.49 | **-6.4%** |
+| `val_geom_camber_cruise` | 48.87 | 50.64 | **-3.5%** |
+| `val_re_rand` | 66.01 | 68.10 | **-3.1%** |
+
+- **Best epoch:** 35/36 (one before terminal). **Time/epoch:** ~49.6 s. **Peak GPU:** 23.8 GB.
+- **Metric artifacts:** `models/model-charliepai2g48h5-frieren-warmup-500-cosine-20260512-225549/metrics.jsonl`
+- **LR trajectory verified:** Epoch-1 start at 5e-6 (0.01×), step-500 peak 5e-4, cosine engaged.
+
+### Analysis
+
+Real lever, but the old baseline (69.83) has been superseded. Warmup-500 delivered -1.62% on val_avg,
+concentrated on OOD splits (camber_rc -6.4%, camber_cruise -3.5%, re_rand -3.1%) with an in-dist
+regression (+6.1%). The mechanism prediction was correct: warmup → flatter minimum → better OOD
+generalization, at small in-dist cost.
+
+68.70 does NOT beat the new 64.07 baseline (PR #1633). Warmup is orthogonal to β=0.5 (one changes
+LR trajectory shape, the other changes residual sensitivity). Combined, multiplicative stacking
+predicts ~62.7-63.5 val_avg — beats 64.07.
+
+**Note on in-dist regression:** Under β=0.5 (cleaner per-sample gradients for medium residuals),
+the in-dist regression may shrink or disappear — an informative interaction effect to watch.
+
+### Conclusions
+
+- **SENT BACK** for rebase onto `icml-appendix-charlie-pai2g-48h-r5` (inherits β=0.5).
+- Lever is real; expected to compound with β=0.5.
+- Post-merge follow-ups queued: warmup-length sweep (250, 1000, 2000 steps); T_max alignment.
+
+---
+
+## 2026-05-13 02:20 — PR #1619: Sampler 2× compile rebase — SENT BACK AGAIN (needs β=0.5 rebase)
+
+- **Branch:** `charliepai2g48h5-nezuko/sampler-boost-single-2x`
+- **Student:** charliepai2g48h5-nezuko
+- **Second run:** Compile + sampler-2x (rebase onto #1568 compile baseline per prior advisor feedback)
+
+### Results (on 69.83 compile baseline, second rebase)
+
+| Metric | Compile baseline (#1568) | This run | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.8316 | **68.2641** | **-2.25%** ✓ |
+| `test_avg/mae_surf_p` | 61.8652 | **61.4236** | **-0.71%** ✓ |
+
+| Split | Sampler+Compile | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | **64.6884** | 77.10 | **-16.10%** |
+| `val_geom_camber_rc` | 85.6303 | 83.49 | +2.56% |
+| `val_geom_camber_cruise` | 53.6013 | 50.64 | +5.85% |
+| `val_re_rand` | 69.1363 | 68.10 | +1.52% |
+
+- **Best epoch:** 39 (terminal — still descending). **Time/epoch:** ~46.2 s. **Peak GPU:** 23.83 GB.
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-sampler-boost-single-2x-compile-20260512-230452/metrics.jsonl`
+
+### Analysis
+
+Sampler lever amplified under compile: val_single_in_dist -16.10% (vs -10.7% pre-compile), because
+more gradient steps per 30-min window amplify the coverage benefit. Best epoch=39=terminal means
+the model is still descending — sampler+compile gains are under-saturated.
+
+68.26 does NOT beat the new 64.07 baseline (PR #1633, β=0.5). Sampler is orthogonal to β=0.5 by
+construction (batch sampling vs per-sample loss shape). Combined stacking is the highest-confidence
+win remaining in the queue. Predicted multiplicative combination: 69.83 × (1-0.082) × (1-0.0225) ≈ 62.65.
+
+Key diagnostic for the third run: watch val_geom_camber_cruise. β=0.5 alone gave -14.4% on cruise;
+sampler-2x alone gave +5.85%. Net direction is uncertain — if they cancel, the implication is that
+the 2× cruise-mass reduction is a meaningful cost and "boost both racecar domains" is the right fix.
+
+### Conclusions
+
+- **SENT BACK AGAIN** for third rebase — now onto current `icml-appendix-charlie-pai2g-48h-r5`
+  (which has β=0.5). This is the final rebase needed.
+- If sampler+β=0.5 beats 64.07, follow-ups: boost-factor sweep (1.5×, 3×); "boost both racecar
+  domains (single=2, tandem=2, cruise=1)".
+
+---
+
+## 2026-05-13 02:20 — PR #1727: weight_decay 1e-4 → 5e-4 — ASSIGNED (fern)
+
+- **Branch:** `charliepai2g48h5-fern/weight-decay-5e-4`
+- **Student:** charliepai2g48h5-fern (fresh assignment after #1676 closed)
+- **Hypothesis:** Stronger L2 regularization improves OOD generalization on the 1499-sample dataset.
+- **Config change:** `weight_decay: float = 1e-4` → `weight_decay: float = 5e-4` (single-line diff)
+- **Mechanism:** 5× L2 penalty trades mild in-dist capacity for better parameter-space flatness
+  on OOD splits (camber_rc, re_rand). Independent of all in-flight experiments (different axis).
+- **Prediction:** -1% to -3% on val_avg, concentrated on OOD splits. val_avg landing zone: 62-63.5.
+- **Baseline to beat:** val_avg/mae_surf_p < 64.0705.
+
+---
+
 ## 2026-05-13 01:10 — PR #1560: T_max=36 cosine on compile baseline — CLOSED (lever characterized)
 
 - **Branch:** `charliepai2g48h5-alphonse/tmax-14-cosine`
