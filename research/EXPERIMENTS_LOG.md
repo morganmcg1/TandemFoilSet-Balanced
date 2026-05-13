@@ -780,3 +780,70 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 **Programme implication**: ReScaleHead is now the default in the advisor branch. All future experiments inherit it. Future compound direction: 2-channel head (Ux scale ≈ identity; drop Ux to reduce parameter noise) or FiLM-style conditioning (inject log(Re) into PhysicsAttention slice weighting instead of output rescaling).
 
 **Cumulative programme gain**: −74.5% from 117.17 → 29.8463
+
+---
+
+## 2026-05-13 05:55 — PR #1936: [surf-weight-7] Lower surf_weight 10→7 — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/surf-weight-7
+- **Hypothesis**: surf_weight=10 over-emphasizes surface; lowering to 7 should improve OOD-rc.
+- **Status**: **CLOSED** — clean negative, refuted in opposite direction
+- **Metrics JSONL**: `models/model-charliepai2g24h1-tanjiro-surf-weight-7-20260513-050813/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 31.3366 | **+2.94%** (worse) |
+| test_avg/mae_surf_p | 26.9876 | **+3.40%** (worse) |
+| val_geom_camber_rc | 44.12 | **+6.5%** (WORSE — opposite of hypothesis) |
+| val_geom_camber_cruise | 15.25 | +8.6% |
+| val_single_in_dist | 34.09 | -0.5% |
+| val_re_rand | 31.88 | -0.4% |
+
+**Programme learning**: surface gradients are load-bearing across ALL splits, especially rc (which has the largest absolute surface error 41.43). Reducing surface loss weight makes the dominant error source worse. surf_weight=10 was correctly tuned. The val_re_rand -3.7% signal from attention-dropout (#1900) was incidental, not a surface-overweighting signature.
+
+**Loss-domain rebalancing (uniform surf_weight scalar) is now ruled out.** Next direction: input-domain augmentation (coord jitter) and the OPPOSITE direction probe (surf_weight=15).
+
+---
+
+## 2026-05-13 05:55 — PR #1933: [swa-last-k] SWA over last 5 cosine-floor epochs — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/swa-last-k
+- **Hypothesis**: SWA over last K=5 epochs at cosine floor (LR ≈ 1e-5) reduces single-epoch noise and improves over best-epoch checkpoint.
+- **Status**: **CLOSED** — null result, SWA-at-floor doesn't work
+- **Metrics JSONL**: `models/model-charliepai2g24h1-thorfinn-swa-last-k-20260513-050934/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| swa_val_avg/mae_surf_p | 31.1956 | +2.48% |
+| best_epoch val_avg | 31.1750 | +2.41% |
+| **SWA vs best_epoch Δ** | **+0.07%** | (tied, within noise) |
+
+**Critical programme finding from student**: *"Run-to-run variance is ~1-2%; the 0.07% SWA-vs-best gap is well below this noise floor."* This run was +2.4% worse than baseline at best-epoch on identical hyperparameters — confirming **single-seed noise floor is ~1-2%**. Multi-seed validation needed for borderline results.
+
+**Why SWA-at-floor failed**: At LR=1e-5, weight updates are O(lr×grad)=O(1e-5)/param. The 5 floor checkpoints occupy ~zero region of weight-space, so their average ≈ the last checkpoint. Izmailov 2018 SWA gains require *high-LR plateau* (e.g. constant lr=1e-4 for SWA window) creating weight oscillation to flatten. Our cosine floor is the opposite regime.
+
+**Loss trajectory confirmed convergence-limited**: val descended monotonically from 32.76 (ep24) → 31.18 (ep30). Model still descending at cutoff.
+
+---
+
+## 2026-05-13 05:55 — PR #1917: [ema-weights-v2] EMA β=0.999, EMA-only val — CLOSED
+
+- **Branch**: charliepai2g24h1-frieren/ema-weights-v2
+- **Hypothesis**: EMA β=0.999, EMA-only val (no live val) recovers v1's 4-epoch wall-clock penalty, enabling 30-epoch comparison.
+- **Status**: **CLOSED** — protocol fix worked but β too high for budget
+- **Metrics JSONL**: `models/model-ema-weights-v2-20260513-051110/metrics.jsonl`
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| ema_val_avg/mae_surf_p | 31.3225 | +2.9% |
+| ema_test_avg/mae_surf_p | 27.1987 | +4.2% |
+| live_val_avg (E29 one-shot) | 31.1183 | +2.2% |
+| **EMA vs live at E29** | **EMA=31.32 > live=31.12** | EMA biased to older worse weights |
+| Epochs completed | 29 | -1 (vs 30 baseline) |
+| Mean epoch time | 62s | +3% (down from v1's +13%) |
+
+**Smoking gun from student**: With β=0.999 and ~375 batches/epoch, effective window ≈ 1/(1-β) = 1000 steps ≈ 2.7 epochs. By E29, EMA averages weights from E26-E29 — all WORSE than live at E29 (loss still descending). EMA + cosine floor double-smooth the same signal.
+
+**Programme learning**: small-budget training (30 ep) needs SHORT EMA windows (β≤0.99, effective window ≤0.3 ep), NOT the standard β=0.999. Combine with Karras rampup to avoid early-training EMA-stuck-at-init failure (E1→E10 trajectory went 333→68).
+
+**EMA hypothesis pivoted**: v3 will use β=0.99 with Karras rampup.
