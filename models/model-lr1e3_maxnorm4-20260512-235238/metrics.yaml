@@ -1,0 +1,102 @@
+agent: charliepai2g24h5-tanjiro
+batch_size: 4
+best_epoch: 13
+best_val/val_geom_camber_cruise/loss: 0.8860311530157923
+best_val/val_geom_camber_cruise/mae_surf_Ux: 0.8260113263221504
+best_val/val_geom_camber_cruise/mae_surf_Uy: 0.48892812452750056
+best_val/val_geom_camber_cruise/mae_surf_p: 73.94349472143755
+best_val/val_geom_camber_cruise/mae_vol_Ux: 3.0029994681074985
+best_val/val_geom_camber_cruise/mae_vol_Uy: 1.1722452440012492
+best_val/val_geom_camber_cruise/mae_vol_p: 68.52597042229468
+best_val/val_geom_camber_cruise/surf_loss: 0.07489442693069577
+best_val/val_geom_camber_cruise/vol_loss: 0.13708688370883465
+best_val/val_geom_camber_rc/loss: 2.8364083224534986
+best_val/val_geom_camber_rc/mae_surf_Ux: 2.165835092541276
+best_val/val_geom_camber_rc/mae_surf_Uy: 0.9085238684711807
+best_val/val_geom_camber_rc/mae_surf_p: 106.55613054234284
+best_val/val_geom_camber_rc/mae_vol_Ux: 5.20695509850508
+best_val/val_geom_camber_rc/mae_vol_Uy: 2.5639609508808343
+best_val/val_geom_camber_rc/mae_vol_p: 112.59114871638283
+best_val/val_geom_camber_rc/surf_loss: 0.23576949417591095
+best_val/val_geom_camber_rc/vol_loss: 0.47871338069438935
+best_val/val_re_rand/loss: 1.8316260128468274
+best_val/val_re_rand/mae_surf_Ux: 1.4754855885995697
+best_val/val_re_rand/mae_surf_Uy: 0.6855842294080869
+best_val/val_re_rand/mae_surf_p: 92.11322258425407
+best_val/val_re_rand/mae_vol_Ux: 3.849507125317871
+best_val/val_re_rand/mae_vol_Uy: 1.7744765081389098
+best_val/val_re_rand/mae_vol_p: 88.58319115280239
+best_val/val_re_rand/surf_loss: 0.152311888448894
+best_val/val_re_rand/vol_loss: 0.3085071283578873
+best_val/val_single_in_dist/loss: 3.189042801633477
+best_val/val_single_in_dist/mae_surf_Ux: 1.3223540878153481
+best_val/val_single_in_dist/mae_surf_Uy: 0.6707544495224178
+best_val/val_single_in_dist/mae_surf_p: 107.69728961175232
+best_val/val_single_in_dist/mae_vol_Ux: 4.645657285545543
+best_val/val_single_in_dist/mae_vol_Uy: 1.8533170627110502
+best_val/val_single_in_dist/mae_vol_p: 117.29715984433417
+best_val/val_single_in_dist/surf_loss: 0.27854750376194715
+best_val/val_single_in_dist/vol_loss: 0.4035677640140057
+best_val_avg/mae_surf_p: 95.0775343649467
+checkpoint: models/model-lr1e3_maxnorm4-20260512-235238/checkpoint.pt
+epochs_configured: 13
+experiment_name: lr1e3_maxnorm4
+git_commit: 549dfe3
+lr: 0.001
+model_config:
+  fun_dim: 22
+  mlp_ratio: 2
+  n_head: 4
+  n_hidden: 128
+  n_layers: 5
+  out_dim: 3
+  output_dims:
+  - 1
+  - 1
+  - 1
+  output_fields:
+  - Ux
+  - Uy
+  - p
+  slice_num: 64
+  space_dim: 2
+n_params: 662359
+surf_weight: 10.0
+test/test_geom_camber_cruise/loss: .nan
+test/test_geom_camber_cruise/mae_surf_Ux: 0.8556538971632643
+test/test_geom_camber_cruise/mae_surf_Uy: 0.5127832780459352
+test/test_geom_camber_cruise/mae_surf_p: 80.21027735497688
+test/test_geom_camber_cruise/mae_vol_Ux: 2.987827445691129
+test/test_geom_camber_cruise/mae_vol_Uy: 1.206747471539521
+test/test_geom_camber_cruise/mae_vol_p: 78.96132352589751
+test/test_geom_camber_cruise/surf_loss: .nan
+test/test_geom_camber_cruise/vol_loss: .inf
+test/test_geom_camber_rc/loss: 1.8702054695785049
+test/test_geom_camber_rc/mae_surf_Ux: 2.045226910578779
+test/test_geom_camber_rc/mae_surf_Uy: 0.8241384911029058
+test/test_geom_camber_rc/mae_surf_p: 95.28523000010944
+test/test_geom_camber_rc/mae_vol_Ux: 4.978543051268512
+test/test_geom_camber_rc/mae_vol_Uy: 2.4084461091656935
+test/test_geom_camber_rc/mae_vol_p: 100.81865714825051
+test/test_geom_camber_rc/surf_loss: 0.15121689818799497
+test/test_geom_camber_rc/vol_loss: 0.358036487698555
+test/test_re_rand/loss: 1.3214058167859912
+test/test_re_rand/mae_surf_Ux: 1.2794018014395128
+test/test_re_rand/mae_surf_Uy: 0.6501109554809846
+test/test_re_rand/mae_surf_p: 85.172316991163
+test/test_re_rand/mae_vol_Ux: 3.6346462707814395
+test/test_re_rand/mae_vol_Uy: 1.6472490439186862
+test/test_re_rand/mae_vol_p: 84.21394082852856
+test/test_re_rand/surf_loss: 0.10883241342380642
+test/test_re_rand/vol_loss: 0.2330816825479269
+test/test_single_in_dist/loss: 3.400502808615565
+test/test_single_in_dist/mae_surf_Ux: 1.2806433922790514
+test/test_single_in_dist/mae_surf_Uy: 0.6330309804718893
+test/test_single_in_dist/mae_surf_p: 92.37942372647193
+test/test_single_in_dist/mae_vol_Ux: 4.235824080119461
+test/test_single_in_dist/mae_vol_Uy: 1.7369227056426397
+test/test_single_in_dist/mae_vol_p: 107.04902634117276
+test/test_single_in_dist/surf_loss: 0.2983381969854236
+test/test_single_in_dist/vol_loss: 0.41712083876132966
+test_avg/mae_surf_p: 88.26181201818031
+weight_decay: 0.0001
