@@ -907,3 +907,44 @@ tanjiro reassigned to PR #1923 (wd-1e-5): reduce weight decay 1e-4→1e-5.
 **AdamW betas axis fully bracketed:** β1=0.9 optimum (β1=0.95 +4.3%), β2=0.999 optimum (β2=0.98 +1.5%). Defaults are optimal.
 
 frieren reassigned to PR #1919 (mlp-ratio-4): double Transolver FFN width 2→4.
+
+---
+
+## 2026-05-13 05:15 — PR #1902: [slice-num-128] Transolver physics slices 64→128 — **CLOSED (wall-clock bound regression)**
+- Student branch: `charliepai2g48h4-edward/slice-num-128`
+- Hypothesis: More physics slices = finer routing of geometric features through Transolver attention.
+
+| Metric | slice_num=64 (#1855 best) | slice_num=128 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 83.95 | **99.86** | **+15.91 (+19.0%)** |
+| test_avg/mae_surf_p | 74.70 | 90.41 | +15.71 (+21.0%) |
+| Epochs completed | 18/18 | 13/15 (timed out) | −5 epochs |
+| Per-epoch time | ~103 s | ~146 s | **+42%** |
+| Peak VRAM | 33.9 GB | 48.2 GB | +42% |
+| n_params | 678,231 | 688,791 | +1.6% (negligible) |
+
+- Artifact: `models/model-charliepai2g48h4-edward-slice-num-128-20260513-041404/metrics.jsonl`
+
+**Analysis:** The hypothesis's "no wall-clock impact" claim was refuted: softmax-over-slices and slice-mixed attention scale with `slice_num`, costing +42% per epoch. Apples-to-apples per-epoch comparison shows the loss trajectory tracks the baseline through epoch ~12 (val 99.86 at e13 vs 94.87 baseline at e13). The baseline then pulls ahead in epochs 13-18 as cosine bottoms to eta_min=5e-5. slice_num=128 simply doesn't see those epochs.
+
+**Verdict on slice_num axis:** Going above 64 is wall-clock bound; going below 64 would lose representational capacity. **slice_num=64 is at the sweet spot** for this 30-min budget. Edward reassigned to PR #1943 (ref-16): unified_pos reference points 8→16 — zero-param, low wall-clock impact.
+
+---
+
+## 2026-05-13 05:15 — PR #1812: [lr-warmup-1ep] 1-epoch linear warmup + cosine — **SENT BACK FOR REBASE + STACK**
+- Student branch: `charliepai2g48h4-thorfinn/lr-warmup-1ep`
+- Hypothesis: 1-epoch linear warmup (lr 5e-6 → 5e-4) protects AdamW momentum from epoch-1 high-gradient corruption, improving late-training generalization.
+
+| Metric | This run (T_max=17 cosine + warmup, eta_min=0.0) | Baseline #1695 (T_max=18 cosine, eta_min=0.0) | Current best #1855 (eta_min=5e-5) | Δ vs #1695 | Δ vs current best |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 83.64 | 84.67 | 83.95 | **−1.03** | −0.31 |
+| test_avg/mae_surf_p | 74.65 | 74.94 | 74.70 | −0.29 | −0.05 |
+
+**Analysis:** The student's run was on the pre-#1855 HEAD (eta_min=0.0). Their schedule replaced `eta_min=5e-5` with `eta_min=0.0` (via SequentialLR with 17-epoch cosine to zero). This is NOT directly comparable to current best:
+- vs old baseline (#1695): −1.03 val improvement; within σ≈8.5 noise
+- vs current best (#1855): −0.31 val; well inside noise floor
+- Two changes confounded: (1) warmup added, (2) eta_min floor removed
+
+**Mechanism partially confirmed.** Epoch-1 grad-norm mean=15.32 vs baseline 30-1000+ — warmup successfully dampens AdamW's early variance-corruption hazard. But epoch-1 val=269 (worse than baseline ~233): warmup reduces effective lr during epoch 1, so less progress per step.
+
+**Verdict: send back for proper stacking.** Asked thorfinn to: (1) rebase onto current HEAD (eta_min=5e-5 in train.py); (2) modify cosine portion to use eta_min=5e-5 not 0.0; (3) rerun for apples-to-apples comparison. If val improves below ~82.5 (>σ from current best), we merge.

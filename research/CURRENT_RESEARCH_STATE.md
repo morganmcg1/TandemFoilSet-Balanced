@@ -1,15 +1,15 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 05:00 (AdamW betas axis fully bracketed and closed; tanjiro #1923 wd-1e-5 + frieren #1919 mlp-ratio-4 assigned; 11 effective merges; 8 students active)
+- **As of:** 2026-05-13 05:20 (slice_num axis closed at 64; thorfinn warmup sent back for stacking; edward assigned ref-16; 11 effective merges; 8 students active)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
 
 ## Current focus
 
-TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=83.95 / test=74.70 (fern #1855 eta_min=5e-5). Optimizer beta tuning closed (both β1 and β2 regress from defaults). Depth axis closed (5 optimum, 6/7 regress). Bracketing exhausted on conventional hyperparameter axes; remaining levers are capacity (mlp_ratio, slice_num), regularization (wd, EMA), schedule (warmup, eta_min, lr_peak), and architectural (attention heads).
+TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=83.95 / test=74.70 (fern #1855 eta_min=5e-5). Most conventional hyperparameter axes now bracketed: max_norm, surf_weight, depth, AdamW betas, slice_num. Remaining levers concentrate on EMA, capacity-within-block (mlp_ratio), regularization (wd), schedule shape (warmup, lr peak, eta_min), attention heads, and position encoding granularity.
 
-**Sub-80 val is the next milestone.** EMA (askeladd, in rebase) remains the highest expected stacking gain. 7 in-flight probes covering capacity, regularization, schedule, and attention.
+**Sub-80 val is the next milestone.** EMA (askeladd, in rebase) remains the highest expected stacking gain.
 
 ## Merged recipe (current advisor base — 11 effective merges)
 
@@ -34,6 +34,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **depth axis CLOSED**: 5→83.95, 6→93.97, 7→96.81. Monotonic regression under global grad-clip.
 - **AdamW β1 axis CLOSED**: 0.9 (optimum), 0.95 (+4.3% regression).
 - **AdamW β2 axis CLOSED**: 0.999 (optimum), 0.98 (+1.5% regression).
+- **slice_num axis CLOSED**: 64 optimum (128 +19% wall-clock-bound; going below 64 would lose capacity).
 - **loss shape axis CLOSED**: log-cosh regression — grad-clip removes tail-shape benefit.
 - **eta_min OPEN**: 5e-5 merged. Bracketing with 1e-4 (fern #1901) in flight.
 
@@ -44,45 +45,45 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 3. **LR schedule alignment — MERGED.** T_max=18 (nezuko #1695) — val=84.67.
 4. **LR floor — MERGED.** eta_min=5e-5 (fern #1855) — val=83.95.
 5. **EMA weight averaging.** Askeladd #1540 rebasing onto current HEAD. Expected sub-80.
-6. **Attention heads.** Nezuko #1853 (n_head=8) — zero-param inductive bias probe.
+6. **Attention heads.** Nezuko #1853 (n_head=8) — zero-param inductive bias probe; pod stale at 03:05 update.
 7. **LR floor bracket.** Fern #1901 (eta_min=1e-4) — bracket higher than merged 5e-5.
-8. **Physics slice routing.** Edward #1902 (slice_num=128) — finer Transolver routing, zero-param.
-9. **LR warmup.** Thorfinn #1812 (lr-warmup-1ep) — 1-epoch warmup + cosine.
-10. **Peak LR reduction.** Alphonse #1914 (lr=5e-4→3e-4) — smaller steps, tighter basin.
-11. **FFN capacity.** Frieren #1919 (mlp_ratio=2→4) — double per-block FFN width.
-12. **Regularization reduction.** Tanjiro #1923 (wd=1e-4→1e-5) — less weight decay for small model.
+8. **LR warmup (rerun).** Thorfinn #1812 (lr-warmup-1ep) — first run hinted at improvement (val=83.64 vs old baseline) but on different schedule; sent back to stack on current HEAD with eta_min=5e-5 preserved.
+9. **Peak LR reduction.** Alphonse #1914 (lr=5e-4→3e-4) — smaller steps, tighter basin.
+10. **FFN capacity.** Frieren #1919 (mlp_ratio=2→4) — double per-block FFN width.
+11. **Regularization reduction.** Tanjiro #1923 (wd=1e-4→1e-5) — less weight decay for small model.
+12. **Position encoding granularity.** Edward #1943 (ref=8→16) — zero-param, finer unified_pos.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
 | Lever | val_avg | test_avg | Config | Status |
 |---|---|---|---|---|
 | **eta_min=5e-5 (fern #1855)** | **83.95** | **74.70** | merged + eta_min=5e-5 | **MERGED — CURRENT BEST** |
+| lr-warmup-1ep (thorfinn #1812) | 83.64 | 74.65 | T_max=17 cosine + 1ep warmup, eta_min=0.0 | **SENT BACK — within noise; needs stacking on current HEAD** |
 | T_max=18 (nezuko #1695) | 84.67 | 74.94 | merged + T_max=18 | MERGED → superseded |
-| β2=0.98 (frieren #1886) | 85.94 | 76.16 | T_max=18 base + β2=0.98 | **CLOSED — +1.5% regression** |
-| β1=0.95 (tanjiro #1888) | 88.32 | 78.58 | T_max=18 base + β1=0.95 | **CLOSED — +4.3% regression** |
+| β2=0.98 (frieren #1886) | 85.94 | 76.16 | T_max=18 base + β2=0.98 | CLOSED |
+| β1=0.95 (tanjiro #1888) | 88.32 | 78.58 | T_max=18 base + β1=0.95 | CLOSED |
 | surf_weight=5 (tanjiro #1762) | 90.58 | 80.00 | merged + surf_weight=5 | MERGED → superseded |
-| grad-clip max_norm=1.0 (#1696) | 96.78 | 86.56 | merged + grad-clip | MERGED → superseded |
-| layers-7 (alphonse #1834) | 96.81 | 87.41 | current HEAD + n_layers=7 | **CLOSED — depth axis closed** |
-| layers-6 (edward #1730) | 93.97 | 83.05 | grad-clip+surf5+T15 + layers=6 | **CLOSED — depth axis closed** |
+| layers-7 (alphonse #1834) | 96.81 | 87.41 | current HEAD + n_layers=7 | CLOSED |
+| slice_num=128 (edward #1902) | 99.86 | 90.41 | current HEAD + slice_num=128 | **CLOSED — wall-clock bound** |
 | EMA (askeladd #1540) | 99.60 | 91.15 | Huber + EMA (no grad-clip) | Rebasing onto current HEAD |
 
 ## Active student assignments (all 8)
 
 ### Priority: rebase onto current HEAD
 - **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Rebased; EMA + full recipe is primary stacking test; expected sub-80.
+- **PR #1812 — `lr-warmup-1ep` (thorfinn)** — **WIP (rerun)** — Sent back: rebase + add eta_min=5e-5 to cosine portion for apples-to-apples comparison.
 
 ### Capacity / architecture probes
-- **PR #1919 — `mlp-ratio-4` (frieren)** — **WIP (new)** — mlp_ratio=2→4 per-block FFN doubling; ~+30% params at same depth
-- **PR #1902 — `slice-num-128` (edward)** — **WIP** — Transolver physics slices 64→128, zero-param
-- **PR #1853 — `n-head-8` (nezuko)** — **WIP** — n_head=4→8 zero-param inductive bias probe
+- **PR #1919 — `mlp-ratio-4` (frieren)** — **WIP** — mlp_ratio=2→4 per-block FFN doubling.
+- **PR #1943 — `ref-16` (edward)** — **WIP (new)** — unified_pos ref=8→16, finer position normalization.
+- **PR #1853 — `n-head-8` (nezuko)** — **WIP (stale)** — n_head=4→8 attention head probe. No comments since 03:05; pod may be running or stuck.
 
 ### Regularization / generalization probes
-- **PR #1923 — `wd-1e-5` (tanjiro)** — **WIP (new)** — weight decay 1e-4→1e-5; less regularization
+- **PR #1923 — `wd-1e-5` (tanjiro)** — **WIP** — weight decay 1e-4→1e-5; less regularization.
 
 ### Schedule / LR tuning probes
-- **PR #1901 — `eta-min-1e-4` (fern)** — **WIP** — bracket eta_min higher: 5e-5→1e-4
-- **PR #1914 — `lr-3e-4` (alphonse)** — **WIP** — lower peak LR 5e-4→3e-4
-- **PR #1812 — `lr-warmup-1ep` (thorfinn)** — **WIP** — 1-epoch warmup + cosine
+- **PR #1901 — `eta-min-1e-4` (fern)** — **WIP** — bracket eta_min higher: 5e-5→1e-4.
+- **PR #1914 — `lr-3e-4` (alphonse)** — **WIP** — lower peak LR 5e-4→3e-4.
 
 ## Closed / dead ends
 - max_norm axis CLOSED: bracketed at 0.5/1.0/3.0
@@ -90,6 +91,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - depth axis CLOSED: 5/6/7 monotonically worse under global grad-clip
 - AdamW β1 axis CLOSED: 0.9 optimum, 0.95 regresses
 - AdamW β2 axis CLOSED: 0.999 optimum, 0.98 regresses
+- slice_num axis CLOSED: 64 optimum, 128 wall-clock bound
 - log-cosh (#1635): regression under grad-clip
 - wd5e-4 (#1394, pre-recipe): regression — not directly applicable
 - surf_weight=20 (#1570): rolled back
@@ -99,6 +101,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - global-pos-norm seeded (#1576): within σ noise
 - huber-seed7-variance (#1714): informational σ calibration (σ≈8.5)
 
-## Highest-priority stacking target
+## Highest-priority stacking targets
 
-**EMA (askeladd #1540)** — rebased onto current HEAD. EMA on the older recipe was best-in-class; expected to push val below 80 on the full stack. All other 7 in-flight probes are independent levers that compound if they hit.
+1. **EMA (askeladd #1540)** — rebased onto current HEAD. Highest expected single gain. Expected sub-80.
+2. **lr-warmup rerun (thorfinn #1812)** — first run hinted improvement; awaiting apples-to-apples confirmation on current HEAD.
+3. **All 6 other probes** — capacity/reg/schedule/attention/position levers in flight; each could compound if it hits.
