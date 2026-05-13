@@ -6,6 +6,27 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 03:15 — PR #1766: Lion WD=1e-2 — SENT BACK (+10.4% on old baseline, but obsolete; CRITICAL bug discovered)
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/lion-wd-1e-2
+- **Result:** val=77.859, test=67.662 (Lion+GELU stack, epoch 13)
+
+| Split | val (WD=1e-2) | val (WD=1e-4 baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 93.076 | 98.979 | −6.0% |
+| geom_camber_rc | 93.965 | 104.737 | −10.3% |
+| geom_camber_cruise | 51.233 | 62.041 | −17.4% |
+| re_rand | 73.161 | 81.995 | −10.8% |
+| **avg** | **77.859** | **86.938** | **−10.4%** |
+
+- **vs Lion+GELU baseline (86.938):** −10.4% — Lion paper recommendation validated; WD=1e-2 is the correct value
+- **vs new GeGLU+Lion baseline (64.918):** +19.9% worse — obsolete on current baseline
+- **CRITICAL BUG DISCOVERED:** train.py:440 hardcoded `lr=1e-4` in Lion constructor, silently ignoring `--lr` CLI flag. askeladd's fix: `lr=cfg.lr`. This bug invalidates alphonse's #1765 lr=2e-4 experiment (silently ran at lr=1e-4).
+- **Action:** Sent back to retest WD=1e-2 on GeGLU+Lion stack (expected to compound — orthogonal mechanisms). KEEP bug fix in branch.
+
+---
+
 ## 2026-05-13 02:45 — PR #1769: GeGLU + Lion — MERGED (**new best: val=64.918, −25.3%**)
 
 - **Student:** charliepai2g48h3-tanjiro
