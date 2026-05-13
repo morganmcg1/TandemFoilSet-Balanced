@@ -1508,7 +1508,92 @@ Both comments instruct the student to:
 
 The GraphQL rate-limit pattern has been observed across the fleet (see prior notes in CURRENT_RESEARCH_STATE.md). Pods recover automatically once the rate-limit window resets, but **loop-state continuity across rate-limit windows is fragile** — students can lose track of in-progress runs. Future hardening idea: have the entrypoint cache the last-known assignment list and treat rate-limit errors as "unknown" rather than "no assignments".
 
+---
 
+## 2026-05-13 06:00 — Wave-7 batch review & new baseline merge
 
+### Five review-ready PRs ranked by `val_avg/mae_surf_p`
 
+| PR | Student | Slug | val (SWA) | test (SWA) | Decision |
+|---|---|---|---|---|---|
+| #1831 (arm 0.5) | nezuko | max-norm-sweep | **73.81** ✅ | **65.04** ✅ | **MERGED** (new baseline) |
+| #1856 | alphonse | slice-num-32 | 74.86 | **64.13** ✅ | **send back for 2nd seed** (test win in variance band) |
+| #1838 | tanjiro | film-depth-3 | 77.92 | 68.90 | **CLOSED** |
+| #1821 | askeladd | uxuy-weight-2p0 | 81.43 | 72.47 | **CLOSED** |
+| #1787 | edward | re-jitter-0p05 | 85.85 | 76.81 | **CLOSED** (per PR's own decision rule) |
+
+### PR #1831 (nezuko, max_norm sweep) — MERGED
+
+- **Branch:** `willowpai2g48h2-nezuko/max-norm-sweep-on-clipfilm`
+- **Hypothesis:** Sweep grad-clip threshold {0.5, 2.0} around merged 1.0 to test sensitivity. Strong directional signal expected.
+- **Winning arm (W&B `h7yzkcwl`):** `--max_norm 0.5`
+- val_avg/mae_surf_p (SWA) = **73.8093** vs baseline 74.6214 → **−1.08%** ✅
+- test_avg/mae_surf_p (SWA) = **65.0381** vs baseline 66.1360 → **−1.66%** ✅
+- All 4 per-split val AND all 4 per-split test improve.
+- **Losing arm (W&B `h0w87kbe`):** `--max_norm 2.0` → val=75.15, test=66.48 (regression).
+- clip_fraction: 0.5→99.2%, 1.0→92%, 2.0→77% — monotonic tighten-helps signal.
+- Mechanism: tighter clip → cleaner late-epoch updates → better SWA averaging (consistent with #1731 mechanism story).
+- **Verdict: MERGE.** Compound improvement over #1731 (val 74.62→73.81, test 66.14→65.04). max_norm=0.5 becomes new baseline.
+- **Closes:** grad-clip max_norm axis tighten direction (0.5 wins, 1.0 prior baseline, 2.0 regresses). Further-tighten direction (0.25, 0.1) is the natural follow-up sweep family.
+
+### PR #1856 (alphonse, slice_num=32) — SEND BACK for 2nd seed
+
+- **Branch:** `willowpai2g48h2-alphonse/slice-num-32-on-clipfilm`
+- **Hypothesis:** Test whether FiLM stabilizes a smaller routing set (slice_num 64→32) — downward direction after #1818 closed upward (slice_num=128 wall-clock bound).
+- **W&B run:** `66wplldt`
+- val_avg/mae_surf_p (SWA) = 74.86 vs baseline 74.62 → +0.32% (within 2-seed σ=0.86 variance band per #1731 record)
+- test_avg/mae_surf_p (SWA) = **64.13** vs baseline 66.14 → **−3.04%** ✅ (clean test win, all 4 test splits beat baseline)
+- Entropy: mean 3.35→1.86 (above 1.5 starvation floor); ent_min 1.36 (one block sharp) — routing healthy at slice_num=32, no collapse.
+- **Verdict: SEND BACK.** Per decision rule: 74.62 ≤ val < 76.0 → 2nd seed check; test override fires (test < 66.14). Paper-facing test wins matter independently.
+
+### PR #1838 (tanjiro, FiLM depth=3) — CLOSED
+
+- **Branch:** `willowpai2g48h2-tanjiro/film-depth-3-on-clipfilm`
+- **Hypothesis:** Test compositional FiLM capacity via depth=3 (width direction closed at mid_dim=64 in #1760).
+- **W&B run:** `biehfqwc`
+- val_avg/mae_surf_p (SWA) = 77.92 vs baseline 74.62 → +4.42% (clean negative)
+- test_avg/mae_surf_p (SWA) = 68.90 vs baseline 66.14 → +4.18% (clean negative)
+- val_geom_camber_rc +2.2% — got WORSE (exact opposite of hypothesis prediction).
+- FiLM magnitudes drift UP +16% γ / +30% β with depth=3 vs depth=2.
+- **Verdict: CLOSE.** Both width (#1760) and depth (#1838) directions of FiLM capacity tested cleanly; both regress.
+- **High-info finding:** FiLM head capacity is NOT the bottleneck. Increasing modulation freedom doesn't help; the head learns to push (γ, β) higher but that doesn't translate into improved metrics. Points to modulation-magnitude-bound axis (assigned to tanjiro #1909 tanh-bounded FiLM) as the next FiLM-related lever.
+- **Closes:** FiLM-capacity (intra-head) both width + depth directions.
+
+### PR #1821 (askeladd, uxuy_weight=2.0) — CLOSED
+
+- **Branch:** `willowpai2g48h2-askeladd/uxuy-weight-2p0-on-filmed`
+- **Hypothesis:** Inverse of #1702 (which up-weighted pressure). Diagnostic showed Ux/Uy carry larger residual fractions (p/ux≈0.60, p/uy≈0.63), suggesting upweighting Ux/Uy might pull effort toward harder channels.
+- **W&B run:** `3znv4997`
+- vs OLD baseline (assignment fork, val=80.82, test=71.30): val 81.43 (+0.76% within σ band), test 72.47 (+1.63% within σ band)
+- vs NEW baseline (post-#1831, val=73.81, test=65.04): val +10.33%, test +11.42% (clean regression on new bar)
+- **Verdict: CLOSE.** Per-channel weighting axis exhausted both directions (#1702 p-up regressed; #1821 uxuy-up at-best variance-band on its fork frame, clear regress on new frame).
+- **Mechanism diagnosis:** Loss-rebalancing trades p-error for Ux/Uy-error in constant-budget redistribution — the optimizer redistributes capacity rather than discovering new gradients. **The residual-ratio analysis was right empirically; fixed weighting was the wrong lever.**
+- **Reassigned:** askeladd → #1906 Kendall uncertainty-weighted multi-task (learned σ heads = principled alternative to fixed weighting).
+- **Closes:** Per-channel fixed weighting axis (both directions tested).
+
+### PR #1787 (edward, Re-jitter σ=0.05) — CLOSED
+
+- **Branch:** `willowpai2g48h2-edward/re-jitter-0p05-on-filmed`
+- **Hypothesis:** Per-sample Gaussian noise on log_re_shifted (FiLM-conditioning feature) → forces FiLM head to learn smooth interpolation across Re values rather than memorize discrete categories. Predicted gain on val_re_rand (OOD Re split).
+- **W&B run:** `5nzpzllg` (and `zaw84sm6` identical deterministic confirmation)
+- val_avg/mae_surf_p (SWA) = **85.85** vs OLD baseline 80.82 → +6.23% (clean regression); vs NEW baseline 73.81 → +16.4%
+- test_avg/mae_surf_p (SWA) = **76.81** vs OLD 71.30 → +7.73%; vs NEW 65.04 → +18.1%
+- All 4 val splits regress, all 4 test splits regress.
+- **val_re_rand +4.44% worse** — regressed on the very split it was designed to fix.
+- **Verdict: CLOSE** per the PR's own decision rule (val ≥ 84 → clean regression).
+- **Mechanism diagnosis (from student's PR):** the 11-dim FiLM global is dominated by AoA + geometry, not Re. Perturbing 1-of-11 conditioning features destabilized the head's feature mixing across ALL splits, not just Re-extrapolation.
+- **Two clean confirmations:** (1) `re_weight_mean=1.000000` across 5255 batches → Re-weight loss correctly unjittered. (2) Deterministic across two runs (5nzpzllg ≡ zaw84sm6) → reproducible result.
+- **Reassigned:** edward → #1907 Position-jitter on volume mesh coords (non-conditioning input augmentation; student's own follow-up suggestion).
+- **Closes:** Sample-level input-augmentation on FiLM-conditioning features (Re-axis). Conditioning-feature-as-augmentation-channel is mechanistically wrong on this stack.
+
+### New assignments to 4 idle students
+
+| PR | Student | Slug | Mechanism axis | Forked from |
+|---|---|---|---|---|
+| #1906 | askeladd | `kendall-uncertainty-on-clipfilm` | Learned per-channel σ heads (Kendall et al. 2018) — principled alternative to fixed per-channel weighting | 73.81 |
+| #1907 | edward | `pos-jitter-0p01-on-clipfilm` | Position-jitter on volume mesh coords (non-boundary, σ=0.01) — mechanism-orthogonal to closed Re-jitter axis | 73.81 |
+| #1908 | nezuko | `learnable-routing-temp-on-clipfilm` | Per-block learnable softmax temperature on PhysicsAttention slice-routing — attention-side stability lever | 73.81 |
+| #1909 | tanjiro | `film-tanh-bound-on-clipfilm` | Tanh-bound FiLM (γ, β) outputs — addresses #1760 + #1838 magnitude-drift observation | 73.81 |
+
+All 4 assignments fork from new baseline (val=73.81, test=65.04 post-#1831 merge). Each tests a distinct mechanism axis with high-info decision rules (merge / send-back / close) tied to the new variance band (σ=0.86 val from #1731's 2-seed record).
 
