@@ -64,22 +64,26 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
+    """GeGLU (Shazeer 2020): out = W_out(act(W_value(x)) * W_gate(x))."""
+
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
-        self.linear_post = nn.Linear(n_hidden, n_output)
+        self.fc_value = nn.Linear(n_input, n_hidden)
+        self.fc_gate = nn.Linear(n_input, n_hidden)
+        self.act = act_fn()
+        self.fc_out = nn.Linear(n_hidden, n_output)
         self.linears = nn.ModuleList(
             [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
         )
 
     def forward(self, x):
-        x = self.linear_pre(x)
+        x = self.act(self.fc_value(x)) * self.fc_gate(x)
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
-        return self.linear_post(x)
+        return self.fc_out(x)
 
 
 class PhysicsAttention(nn.Module):
@@ -155,10 +159,8 @@ class TransolverBlock(nn.Module):
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            self.mlp2 = MLP(hidden_dim, hidden_dim, out_dim,
+                            n_layers=0, res=False, act=act)
 
     def forward(self, fx):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
@@ -457,6 +459,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"FFN structure: GeGLU (Noam Shazeer 2020) at all MLP sites — gate*GELU(value) multiplicative; replaces standard GELU FFN at preprocess + {model_config['n_layers']} TransolverBlock MLPs + decoder mlp2; ~+13% params")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
