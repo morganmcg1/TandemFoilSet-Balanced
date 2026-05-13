@@ -54,9 +54,30 @@ Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 - High `max_lr` accelerates the in-dist basin descent (saturated at val_single_in_dist −8.8% in #1716; this PR adds only −0.6% there).
 - Low `pct_start` extends the deep-decay tail. OOD splits (geom_camber_rc, geom_camber_cruise) are NOT LR-saturated — they're starved for refinement steps at low LR. pct_start=0.05 gives them ~28% more deep-decay epochs and unlocks val_geom_camber_cruise −8.2% / val_re_rand −5.0%.
 
-This refutes the round-9 hypothesis that pct_start was within RNG noise — the single-knob result against the OLD baseline (max_lr=1e-3) was noise BECAUSE the in-dist basin wasn't reached without high LR. The composition test reveals the true mechanism.
+**⚠️ Multi-seed calibration (PR #1874, 2026-05-13 05:01):** The single-seed gain above was variance-inflated. Seed=0 sat at the −1.15σ lucky tail across ALL metrics. 3-seed mean (seeds 0, 1, 2):
 
-**Next target:** beat val_avg/mae_surf_p = 66.1352 / test_avg/mae_surf_p = 56.8971
+| Metric | seed=0 (best) | seed=1 | seed=2 | **3-seed mean ± std** |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 66.1352 | 70.5405 | 69.9678 | **68.88 ± 2.40** |
+| test_avg/mae_surf_p | 56.8971 | 61.1382 | 60.7911 | **59.61 ± 2.36** |
+
+Real OOD/in-dist trade-off: OOD splits (geom_camber_rc, geom_camber_cruise, re_rand) improve ~2-3.5% in mean; in-dist regresses +3.8% test / +4.5% val. The headline val_geom_camber_cruise −8.2% was actually ~−3.3% in the 3-seed mean. **Standing rule: future single-seed wins below 6% must be confirmed with ≥2 seeds before paper framing.**
+
+**Next target:** beat val_avg/mae_surf_p = 66.1352 / test_avg/mae_surf_p = 56.8971 (single-run best) — or beat **3-seed mean 68.88 / 59.61** for paper-publishable claim.
+
+---
+
+### 2026-05-13 05:00 — PR #1874: 2-seed confirmation + seed flag (methodology)
+
+- **val_avg/mae_surf_p:** N/A (confirmation run, not metric win)
+- **test_avg/mae_surf_p:** N/A
+- **W&B runs:** seed=1 `roajxtd5`, seed=2 `2tnq94du` (seed=0 reference: `vfkbmgnp`)
+- **Code change:** `seed: int = 0` added to `Config`; `torch.manual_seed`, `torch.cuda.manual_seed_all`, `np.random.seed`, `random.seed` seeded after `sp.parse(Config)`. Seed logged to W&B.
+- **Reproduce (seed=N):**
+  ```bash
+  cd target
+  python train.py --seed N --wandb_name willow-r4-confirm-seed-N --agent willowpai2g24h4-thorfinn
+  ```
 
 ---
 

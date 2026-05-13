@@ -645,4 +645,65 @@ This INVERTS a common ML prior ("more reg → less overfit → better OOD"). On 
 - All splits improve → over-regularization everywhere, lock in lower wd
 - All splits degrade → wd=1e-4 at a basin, wd attack class closed
 
+---
+
+## 2026-05-13 05:00 — PR #1874: 2-seed confirmation of pct_start=0.05 baseline — MERGED (methodology + baseline reframing)
+- willowpai2g24h4-thorfinn
+- **Hypothesis:** Single-seed +5.72% test gain from PR #1719 (seed=0) was at the high end of RNG variance (±5%). 3-seed mean should confirm or refute. Strong confirmation: 3-seed mean test gain ≥ 3%. Refutation: mean gain < 2%.
+- **W&B:** seed=0 `vfkbmgnp` (reference), seed=1 `roajxtd5`, seed=2 `2tnq94du`
+
+| Metric | seed=0 | seed=1 | seed=2 | 3-seed mean ± std |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 66.1352 | 70.5405 | 69.9678 | **68.88 ± 2.40** |
+| test_avg/mae_surf_p | 56.8971 | 61.1382 | 60.7911 | **59.61 ± 2.36** |
+| best_epoch | 28 | 28 | 28 | 28 (stable) |
+
+Per-split: 3-seed mean vs #1716 prior baseline:
+
+| Split | #1716 | 3-seed mean ± std | Δ% | seed=0 claimed |
+|---|---:|---:|---:|---:|
+| val_single_in_dist | 73.78 | 77.12 ± 3.36 | **+4.5% (regression)** | −0.6% |
+| val_geom_camber_rc | 80.71 | 80.85 ± 1.59 | +0.2% | −2.1% |
+| val_geom_camber_cruise | 51.72 | 50.01 ± 2.78 | −3.3% | −8.2% (claimed) |
+| val_re_rand | 68.10 | 67.55 ± 2.48 | −0.8% | −5.0% (claimed) |
+
+**Decision: MERGED as methodology improvement (--seed flag) + reframing.** The seed flag itself (default=0, backward-compatible) is paper-critical for reproducibility. The 3-seed results reveal the structural picture:
+
+1. **Mean test gain vs #1716 is only −1.23%** (claimed −5.72% single-seed) — BELOW the 2% refutation threshold. The single-seed PR #1719 claim was variance-inflated.
+2. **Real OOD/in-dist trade-off exists:** all three OOD test splits improve ~2-3.5% in mean; in-dist REGRESSES +3.8% test / +4.5% val. These partially cancel into a noise-level net gain.
+3. **val_geom_camber_cruise −8.2% claim was actually ~−3.3% in 3-seed mean.** The single-seed framing overstated the mechanism.
+4. **Seed=0 sat at the −1.15σ lucky tail on EVERY metric** — a ~10% probability event that became the research record's anchor.
+
+**Genuine learnings:**
+1. **Multi-seed confirmation is required for any win below ~6%.** Standing rule established.
+2. **pct_start=0.05 is real but modest:** small OOD benefit (+2-3%) offset by in-dist regression. The mechanism (deep-decay tail extending OOD refinement) exists but is weaker than the single-seed number suggested.
+3. **The in-dist regression is new information:** pct_start=0.05 may be too aggressive a warmup reduction — pct_start=0.075-0.10 could be a Pareto improvement (less in-dist cost, still better OOD than 0.30 default). Frieren #1768 (pct_start=0.15) and any future pct_start=0.10 run will close the bracket.
+
+**Next:** Assign thorfinn to a new experiment now that confirmation is complete.
+
+---
+
+## 2026-05-13 05:20 — PR #1379: Smooth-L1 (Huber β=1.0) loss — SENT BACK (β=0.5 next probe)
+- willowpai2g24h4-askeladd / willowpai2g24h4-askeladd/smooth-l1-loss
+- **Hypothesis:** Smooth-L1 (Huber, β=1.0) caps gradient for large residuals, aligning training with MAE objective and downweighting high-Re outliers.
+- **W&B (final 3-rep run on new baseline):** `ktvtfke5` (rep1 best), `uuftwrl4` (rep2), `7kculd6o` (rep3)
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|---|---:|---:|---:|
+| rep1 (best) | **64.2178** | **55.5306** | 28 |
+| rep2 | 69.2304 | 60.4594 | 28 |
+| rep3 | 64.3171 | 56.3481 | 28 |
+| **3-rep mean ± std** | **65.92 ± 2.87** | **57.45 ± 2.64** | — |
+| Baseline (MSE 3-seed) | 68.88 ± 2.40 | 59.61 ± 2.36 | — |
+
+**Decision: SENT BACK — β=0.5 is the correct mechanistic probe.** The student's self-analysis is correct: at β=1.0, bulk normalized residuals at convergence (std≈1) mostly satisfy |err| < 1.0, so Smooth-L1 behaves identically to MSE in the bulk and only differs on the long tail. The gradient-fairness mechanism was never actually exercised.
+
+The 3-rep mean (65.92 val / 57.45 test) is suggestive — it beats the MSE 3-seed mean (68.88 / 59.61) by ~4% — but the unpaired n=3 vs n=3 comparison is not statistically significant (t≈1.05, df=4, p>0.05). Best replicate (64.22) beats both single-seed best and 3-seed mean comfortably, but the outlier seed-2 (69.23) pulls the mean down.
+
+**What β=0.5 tests:** Half the bulk residuals fall into the linear regime, so gradient-fairness applies to the majority of training samples — not just the tails. This is a clean, high-leverage mechanical probe.
+
+**Assignment:** askeladd runs seeds 0, 1, 2 at β=0.5 for a paired head-to-head vs the MSE 3-seed mean (68.88 / 59.61). Decision criteria: if 3-seed mean < 66, merge and sweep β=0.25; if 66-68, moderate signal needs 1 more confirmation; if ≥68, close the Smooth-L1 attack class.
+
+**Best-rep per-split (ktvtfke5, test):** in_dist=60.82, camber_rc=67.92, camber_cruise=38.52, re_rand=54.86, **avg=55.53**.
+
 **Minor flag:** `test_geom_camber_cruise/loss = nan` printed in test-eval summary line but `mae_surf_p` (the headline metric) was still computed cleanly per-batch. Likely Inf/NaN slipping through a single-batch reduction. Not blocking; track if it recurs.
