@@ -454,6 +454,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    sps_min_acc = float("inf")
+    sps_max_acc = float("-inf")
+    sps_mean_acc = 0.0
+    sps_batch_std_acc = 0.0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -474,7 +478,26 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
-        surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
+
+        # Per-sample surface loss normalization by pressure std (PR #1707).
+        # 1) Reduce weighted surf loss to one scalar per sample: shape [B]
+        cw_sum = channel_weights.sum()
+        surf_count = surf_mask.sum(dim=1)  # [B]
+        surf_num = (weighted * surf_mask.unsqueeze(-1)).sum(dim=(1, 2))  # [B]
+        surf_denom = (surf_count.to(weighted.dtype) * cw_sum).clamp(min=1.0)  # [B]
+        surf_loss_per_sample = surf_num / surf_denom  # [B]
+
+        # 2) Per-sample std of normalized pressure over surface nodes (masked, unbiased).
+        with torch.no_grad():
+            y_p_norm = y_norm[..., 2]  # [B, N]
+            sc = surf_count.to(y_p_norm.dtype).clamp(min=2.0)  # at least 2 for unbiased std
+            masked_p_mean = (y_p_norm * surf_mask).sum(dim=1) / sc  # [B]
+            diff_sq = ((y_p_norm - masked_p_mean.unsqueeze(-1)) ** 2) * surf_mask
+            surf_p_std = (diff_sq.sum(dim=1) / (sc - 1.0).clamp(min=1.0)).sqrt().clamp(min=1e-6)  # [B]
+
+        # 3) Divide by per-sample std, then take batch mean.
+        surf_loss = (surf_loss_per_sample / surf_p_std).mean()
+
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -484,6 +507,10 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        sps_min_acc = min(sps_min_acc, surf_p_std.min().item())
+        sps_max_acc = max(sps_max_acc, surf_p_std.max().item())
+        sps_mean_acc += surf_p_std.mean().item()
+        sps_batch_std_acc += (surf_p_std.std().item() if surf_p_std.numel() > 1 else 0.0)
         n_batches += 1
 
     scheduler.step()
@@ -519,6 +546,10 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_p_std_min": sps_min_acc,
+        "train/surf_p_std_max": sps_max_acc,
+        "train/surf_p_std_mean": sps_mean_acc / max(n_batches, 1),
+        "train/surf_p_std_batch_std_mean": sps_batch_std_acc / max(n_batches, 1),
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
