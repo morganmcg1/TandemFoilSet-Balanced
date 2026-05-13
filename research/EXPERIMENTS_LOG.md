@@ -257,6 +257,30 @@
 
 ---
 
+## 2026-05-13 13:30 — PR #2211: OneCycleLR on n_head=2 baseline: pct_start=0.3 vs 0.1 (thorfinn) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-thorfinn/onecyclelr-n-head-2`
+- **Hypothesis:** OneCycleLR (peak LR mid-training, then consolidation) may fill the "refining phase" absent from cosine at 20-epoch / 30-min cap. Arm 1: pct_start=0.3 (peak at epoch 6, consolidate to end). Arm 2: pct_start=0.1 (peak at epoch 2, maximize consolidation window).
+- **W&B runs:** `5icnpjij` (Arm 1, pct=0.3), `qp0lkwkm` (Arm 2, pct=0.1). Arm 1 also had crashed run `zbwa7pwv` (diverged step 3066 at OneCycle peak — instability confirmed) and prior attempt `lrv2xokp` (val=56.49).
+
+| Arm | pct_start | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (50.91) |
+|-----|-----------|--------|---------------------|----------------------|----------------------|
+| 1 | 0.3 | `5icnpjij` | 53.875 | 46.622 | +5.8% / +6.7% |
+| 2 | 0.1 | `qp0lkwkm` | 58.785 | 50.526 | +15.5% / +15.7% |
+
+**Per-test-split (Arm 1, best):** single_in_dist=51.38, geom_camber_rc=60.49, geom_camber_cruise=29.54, re_rand=45.08 — all worse than baseline.
+
+**Result:** CLOSED. Key findings:
+1. **OneCycleLR underperforms cosine at 20-epoch budget** — both arms worse on all 4 test splits.
+2. **More aggressive warmup (pct=0.1) is much worse** (+15.5% vs +5.8%): consolidating a barely-trained basin produces dead epochs.
+3. **Root cause (student analysis):** OneCycleLR's integrated LR ~half of cosine baseline's. With div_factor=25: start=4e-6, peak=1e-4, end=1e-8. Cosine baseline starts at lr_max=1e-4 and decays to ~35% by epoch 20. For Lion (step = lr×sign(g)), lower integrated LR = fewer effective exploration steps.
+4. **Arm 1 crash at step 3066** (`zbwa7pwv`): diverged exactly at the OneCycle peak — confirms the risk of sign-magnitude updates at high LR peaks without adaptive scaling.
+5. **Pattern confirmed:** This is the third consecutive LR-scheduling experiment that regresses (also #1999, #2167). At the 30-min budget, model is in early exploration regime — any annealing/peak-then-decay structure wastes update budget.
+
+**Thorfinn reassigned:** PR #2318 — Lion weight_decay sweep on n_head=2+sw=5 compound (wd=3e-4 vs wd=3e-5). First explicit wd sweep on the new compound.
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`

@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~13:05 UTC
+- **Date:** 2026-05-13 ~13:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -28,17 +28,18 @@
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| **#2218** | **alphonse** | **slice_num sweep on n_head=2: slice_num=32 (Arm1) vs slice_num=128 (Arm2)** | **WIP — new** |
-| **#2211** | **thorfinn** | **OneCycleLR on n_head=2: pct_start=0.3 (Arm1) vs pct_start=0.1 (Arm2)** | **WIP — new** |
-| **#2216** | **frieren** | **Split loss on n_head=2: surf-MAE + vol-Huber (Arm1), surf-MAE + vol-MSE (Arm2)** | **WIP — new** |
-| **#2277** | **nezuko** | **surf_weight lower probe on n_head=2+sw=5 baseline: sw=4 (Arm1) vs sw=3 (Arm2)** | **WIP — new** |
+| **#2218** | **alphonse** | **slice_num sweep on n_head=2: slice_num=32 vs slice_num=128** | **WIP — awaiting terminal result (slice32 wins, nudged)** |
+| **#2318** | **thorfinn** | **Lion weight_decay sweep on n_head=2+sw=5: wd=3e-4 (Arm1) vs wd=3e-5 (Arm2)** | **WIP — new** |
+| **#2216** | **frieren** | **Split loss on n_head=2: surf-MAE + vol-Huber (Arm1), surf-MAE + vol-MSE (Arm2)** | **WIP — regressing, awaiting terminal result** |
+| **#2277** | **nezuko** | **surf_weight lower probe on n_head=2+sw=5 baseline: sw=4 (Arm1) vs sw=3 (Arm2)** | **WIP** |
 | #2183 | edward | AdamW+EMA+MAE: lr=5e-4 (Arm1) + lr=2e-4 (Arm2) — fill missing 2×2 cell | WIP |
-| **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP — new** |
-| #2251 | tanjiro | lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) | WIP — new |
-| **#2271** | **askeladd** | **Lion β2 on n_head=2: β2=0.995 confirm (Arm1) + β2=0.999 push (Arm2) at lr=1e-4** | **WIP — new** |
+| **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
+| #2251 | tanjiro | lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) | WIP |
+| **#2271** | **askeladd** | **Lion β2 on n_head=2: β2=0.995 confirm (Arm1) + β2=0.999 push (Arm2) at lr=1e-4** | **WIP** |
 
 ## Closed experiments this round
 
+- **#2211 (thorfinn):** OneCycleLR pct_start=0.3/0.1 on n_head=2 — both regress (+5.8%/+6.7% and +15.5%/+15.7% vs baseline #2210). Root cause: OneCycleLR integrated LR ~half of cosine baseline (div_factor=25, start=4e-6); Lion sign-steps at lower integrated LR = fewer effective explorations. Arm 1 also crashed at OneCycle peak (zbwa7pwv, step 3066 diverge). Third consecutive schedule experiment to regress. Closed; reassigned to #2318 (Lion wd sweep).
 - **#2086 (thorfinn):** Lion lr=4e-4/3e-4 — both regress vs baseline (+3.83%/+4.10%). **lr-doubling trend saturated at lr=2e-4** after 3 octaves. Flat minimum: 4e-4 only 2 pts worse than 3e-4 despite 4× higher lr. Closed; reassigned to #2211 (OneCycleLR).
 - **#2069 (alphonse):** n_head=2 — **MERGED** val=51.11, test=44.18. Biggest win of the round.
 - **#2056 (nezuko):** sw=5 at lr=1e-4 beat OLD baseline (54.46 < 55.41) but can't merge onto new n_head=2 code as-is. Closed; reassigned to #2210 (sw=5+sw=7 on n_head=2).
@@ -70,16 +71,17 @@
 12. **Dropout=0.2 confirmed locally optimal (#2131):** dropout=0.3 mean ≈ 0.2 within noise (±0.38 val), 0.1 regresses +4.3%. Under-regularization signal from mlp_ratio=4 (#1961) does NOT transfer to mlp_ratio=2; main-vs-EMA gap already moderate (~6–11) on this compound.
 13. **Lion β2=0.995 wins −2.9% on OLD compound (#2144, closed):** Monotonic ordering 0.95<0.99<0.995 at three points. β2=0.95 regresses +15.7% (asymmetric). Mechanism: longer momentum window (~200 steps) de-noises direction signal before `sign(·)` taken. Retest on n_head=2 in #2271 — direct merge candidate if win transfers.
 14. **surf_weight=5 merged (#2210):** −0.39%/−1.13% val/test vs n_head=2 baseline. Non-monotonic response: sw=5 < sw=10 < sw=7. Win concentrated in in-dist splits (single_in_dist −2.81). Lower probe (sw=3/4) in #2277.
-15. **Cosine schedule changes consistently regress at 30-min budget (#1999, #2167):** At both lr=1e-4 and lr=2e-4, T_max=16 and eta_min changes hurt. Model is under-converged at default schedule — forcing LR down faster cuts off productive learning. Schedule shape is not a viable lever at current budget.
+15. **Cosine schedule changes consistently regress at 30-min budget (#1999, #2167, #2211):** Three independent schedule experiments (T_max-matching, eta_min, OneCycleLR) all regress. At both lr=1e-4 and lr=2e-4 the model is still in the early exploration regime at the cap — forcing LR down faster cuts off productive learning. Schedule shape is not a viable lever at current budget.
 16. **AdamW+EMA+MAE diagnostic (#2183, in progress):** Both lr arms show val~73-74 (+44-45% vs baseline). 2×2 mechanism table: Lion+EMA=50.91, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× more than EMA; EMA contribution is larger in the noisier AdamW cell.
+17. **slice_num=32 wins on n_head=2 (#2218, awaiting terminal result):** val≈49.86/test≈42.19 — beats baseline #2210 by −1.05/−1.49. slice_num=128 regresses +5.3/+5.1. First exploration below slice_num=64; coarser spatial abstraction works better at n_head=2 with per-head dim=64.
 
 ## Priority for current wave
 
 **Architecture:**
-- slice_num sweep (#2218 alphonse) — last unexplored architecture dimension; n_head=2 may pair differently with finer/coarser slices
+- slice_num=32 (#2218 alphonse) — **confirmed win** val=49.86/test=42.19 in W&B; awaiting terminal SENPAI-RESULT before merge
 
-**Schedule / optimization:**
-- OneCycleLR on n_head=2 (#2211 thorfinn) — schedule shape now the frontier after lr-saturation
+**Optimizer hparams:**
+- Lion wd sweep (#2318 thorfinn) — wd=3e-4 vs wd=3e-5 on new compound; first decoupled-wd sweep on n_head=2+sw=5
 
 **Loss:**
 - Split loss: surface-MAE + volume-Huber (#2216 frieren) — aligns train signal with eval metric; volume Huber reduces outlier noise
