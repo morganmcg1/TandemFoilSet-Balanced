@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -581,8 +582,66 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+# Layer-wise LR decay (LLRD) param groups.
+#  - Block N-1 (closest to output) gets the full base_lr.
+#  - Block k gets base_lr * decay^(N-1-k) for k = 0..N-1.
+#  - Input embedding (preprocess + placeholder) gets base_lr * decay^N (one
+#    step beyond block 0, matching PR convention).
+#  - "Heads" (ReScaleHead module + Transolver.re_film) keep the full base_lr,
+#    matching the PR convention that small task-specific modules learn at full
+#    rate. The block-internal mlp2 head in the last block stays inside the
+#    block_{N-1} group at full rate.
+LLRD_DECAY = 0.7
+n_layers_for_llrd = model_config["n_layers"]
+uncompiled_for_groups = uncompiled_model  # raw nn.Module, before torch.compile wrapping
+
+heads_params = (
+    list(rescale_head.parameters()) + list(uncompiled_for_groups.re_film.parameters())
+)
+embedding_params = (
+    list(uncompiled_for_groups.preprocess.parameters()) + [uncompiled_for_groups.placeholder]
+)
+block_params_per_idx: list[list[torch.nn.Parameter]] = [
+    list(uncompiled_for_groups.blocks[i].parameters()) for i in range(n_layers_for_llrd)
+]
+
+param_groups: list[dict] = []
+group_lr_scales: list[float] = []
+group_names: list[str] = []
+param_groups.append({"params": heads_params, "lr": cfg.lr, "name": "heads"})
+group_lr_scales.append(1.0); group_names.append("heads")
+for block_idx in range(n_layers_for_llrd):
+    depth_from_output = (n_layers_for_llrd - 1) - block_idx
+    scale = LLRD_DECAY ** depth_from_output
+    param_groups.append(
+        {"params": block_params_per_idx[block_idx], "lr": cfg.lr * scale, "name": f"block_{block_idx}"}
+    )
+    group_lr_scales.append(scale); group_names.append(f"block_{block_idx}")
+embed_scale = LLRD_DECAY ** n_layers_for_llrd
+param_groups.append(
+    {"params": embedding_params, "lr": cfg.lr * embed_scale, "name": "embedding"}
+)
+group_lr_scales.append(embed_scale); group_names.append("embedding")
+
+# Sanity check: every parameter is assigned to exactly one group.
+all_param_ids = set(id(p) for p in list(uncompiled_for_groups.parameters()) + list(rescale_head.parameters()))
+assigned_ids: set[int] = set()
+for g in param_groups:
+    for p in g["params"]:
+        assert id(p) not in assigned_ids, "LLRD param assigned to multiple groups"
+        assigned_ids.add(id(p))
+missing_ids = all_param_ids - assigned_ids
+extra_ids = assigned_ids - all_param_ids
+assert not missing_ids, f"LLRD missing {len(missing_ids)} params"
+assert not extra_ids, f"LLRD has {len(extra_ids)} extra params"
+
+print("LLRD param groups (decay={:.2f}):".format(LLRD_DECAY))
+for g in param_groups:
+    n_p = sum(p.numel() for p in g["params"])
+    print(f"  {g['name']:<12s}  lr={g['lr']:.3e}  scale={g['lr']/cfg.lr:.4f}  n_params={n_p}")
+
 optimizer = SOAP(
-    list(model.parameters()) + list(rescale_head.parameters()),
+    param_groups,
     lr=cfg.lr,
     betas=(0.95, 0.95),
     weight_decay=cfg.weight_decay,
@@ -590,7 +649,15 @@ optimizer = SOAP(
     max_precond_dim=cfg.max_precond_dim,
 )
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
+SCHEDULER_ETA_MIN_RATIO = 1e-5 / cfg.lr  # 0.01 for cfg.lr=1e-3; matches baseline eta_min for full-LR groups.
+# Proportional cosine via LambdaLR. CosineAnnealingLR uses a single scalar eta_min for
+# all groups, which would collapse LLRD ratios at the cosine floor (every group ending
+# at the same 1e-5). LambdaLR multiplies each group's initial lr by a common factor, so
+# the LLRD scales are preserved at every point on the schedule, including the floor.
+def _cosine_lambda(epoch: int) -> float:
+    progress = min(epoch / SCHEDULER_T_MAX, 1.0)
+    return SCHEDULER_ETA_MIN_RATIO + 0.5 * (1.0 - SCHEDULER_ETA_MIN_RATIO) * (1.0 + math.cos(math.pi * progress))
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_cosine_lambda)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -738,7 +805,9 @@ for epoch in range(MAX_EPOCHS):
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
-    current_lr = scheduler.get_last_lr()[0]
+    per_group_lr = scheduler.get_last_lr()  # list aligned with optimizer.param_groups
+    current_lr = per_group_lr[0]  # heads group lr (full base rate); back-compat with downstream log
+    llrd_lr_by_name = {group_names[i]: per_group_lr[i] for i in range(len(group_names))}
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
@@ -818,9 +887,12 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
+        "train/llrd_lr": llrd_lr_by_name,
+        "scheduler": "lambda_lr_proportional_cosine",
         "scheduler_T_max": SCHEDULER_T_MAX,
-        "scheduler_eta_min": 1e-5,
+        "scheduler_eta_min_ratio": SCHEDULER_ETA_MIN_RATIO,
+        "llrd_decay": LLRD_DECAY,
+        "llrd_group_scales": {group_names[i]: group_lr_scales[i] for i in range(len(group_names))},
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
         "torch_compile_dynamic": torch_compile_dynamic,
