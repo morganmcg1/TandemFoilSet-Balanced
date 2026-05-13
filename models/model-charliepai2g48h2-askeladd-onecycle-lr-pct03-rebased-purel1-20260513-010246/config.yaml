@@ -2,7 +2,7 @@ agent: charliepai2g48h2-askeladd
 batch_size: 4
 debug: false
 epochs: 14
-experiment_name: charliepai2g48h2-askeladd/onecycle-lr-pct03
+experiment_name: charliepai2g48h2-askeladd/onecycle-lr-pct03-rebased-purel1
 lr: 0.0007
 model_config:
   fun_dim: 22
