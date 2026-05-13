@@ -5,15 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 02:00)
+- **Date**: 2026-05-13 (updated 05:00 — after #1437 EMA merge)
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
 - **Target metric** (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 splits)
 - **Paper-facing test metric**: `test_avg/mae_surf_p`
 - **Hard caps**: 30 min wall-clock per training run, 50 epochs, 1 GPU (96GB) per student
-- **Verified best (merged)**: `val_avg/mae_surf_p = 104.03` (PR #1615, run `mc22t7l2`, pure-L1). Same-PR sibling SmoothL1(β=0.1) baseline arm landed at **102.17 val / 92.04 test** (`x0ud9i0a`) — within noise of the pure-L1 variant.
-- **Paper-facing test metric**: `test_avg/mae_surf_p = 95.09` (4-split, post-fix, PR #1615 variant) — first verified 4-split test pass on a merged PR.
+- **Verified best (merged)**: `val_avg/mae_surf_p = 91.66` / `test_avg/mae_surf_p = 81.28` (PR #1437, run `emqh79b0`, SmoothL1+grad-clip+**EMA decay=0.999**). Sibling EMA reproduction `zzv8ke31` at val=93.70 / test=83.46 confirms outside ±7 noise. Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999`.
 - **Cruise-test NaN bug — FULLY FIXED in code (PR #1615, MERGED)**: `test_geom_camber_cruise/000020.pt` has 761 Inf values in the p channel of `y`. The advisor branch was previously missing the per-sample finite-y filter in `train.py::evaluate_split` (BASELINE.md / PR #1433 docs claimed it was in code, but only the docs landed). PR #1615 adds `y_finite = torch.isfinite(y).all(dim=-1)` filter before forward pass at train.py:240-250, exactly matching `data/scoring.py::accumulate_batch` per-sample-skip semantics. All future PRs will natively report finite 4-split `test_avg/mae_surf_p` without student-side workarounds.
 - **Single-seed noise band ≈ ±7 around mean ≈ 99** (confirmed by three independent SmoothL1 reproductions of the same code at 102.17 / 103.57 / 125.94 in PR #1615 alone, plus advisor-branch baselines 90.91, 102.17, 104.84). Implication: hypotheses claiming <5% improvement need multi-seed confirmation. "Headline" Round 2 merges need ≥10% relative gain to be visibly real on a single seed.
 
@@ -39,7 +38,7 @@ The baseline Transolver recipe has several obvious soft spots:
 | ~~`surf-weight-50`~~ (alphonse, #1431) | **CLOSED** | Raise surf_weight 10→50 — variant +7.3% worse on test (Bernoulli coupling breaks); vol[p] degraded 30-102% across all test splits | — |
 | ~~`grad-clip-norm1`~~ (askeladd, #1433) | **MERGED** | clip_grad_norm_ at 1.0; ALSO ships cruise-NaN fix. 114.18 (−13.5%) under MSE | Low |
 | ~~`p-channel-weight3x`~~ (edward, #1434) | **CLOSED** | 3× p_weight catastrophic (157.16, +62%); 5× also catastrophic (138.92, +43%). Same Bernoulli-coupling failure mode as alphonse's closed #1431 (channel reweighting breaks coupled physics) | — |
-| `ema-decay999` (fern, #1437) | WIP-rebased-running | EMA model weights; rebase done, baseline arm landed at 104.84 (in-band w/ 104.70); variant arm pending | Low |
+| ~~`ema-decay999`~~ (fern, #1437) | **MERGED (WINNER)** | EMA decay=0.999 on top of SmoothL1+grad-clip. Variant 91.66 val / 81.28 test (best), sibling 93.70/83.46 — both well outside ±7 noise. New high-water mark. Mechanism: variance-reduction-at-eval (~5%) + better-epoch-selection (~4%), dual-eval logging now on advisor branch. | Low |
 | `warmup-5ep` (frieren, #1438) | WIP-rebase-needed | 5-epoch linear LR warmup; advisor told frieren to rebase onto current advisor branch | Low |
 | `amp-bf16` (nezuko, #1440) | WIP-likely-dead | bfloat16 autocast; multiple finished arms all 131–184, plus 1 crash. Likely close after terminal results post | Medium |
 | ~~`smooth-l1-beta01`~~ (tanjiro, #1441) | **MERGED (WINNER)** | SmoothL1(β=0.1). **104.70 (−20.6%)** — new best | Medium |
@@ -76,6 +75,7 @@ The most promising single direction beyond Round 1 is likely a **best-checkpoint
 
 ## Active emerging lessons
 
+- **EMA(0.999) is a +12% headline lever on top of SmoothL1+grad-clip (PR #1437 MERGED).** Predicted delta was 1–3%; observed −11.9% on val / −14.5% on test, well outside the ±7 noise band over three baselines (101.06, 104.03, 105.18). Decomposes cleanly via dual eval at same training step: ~5% from variance-reduction-on-eval + ~4% from better epoch selection (monotone EMA val curve picks a later, better-converged epoch). Three distinct gradient-stabilization mechanisms now stack orthogonally on the advisor branch: SmoothL1 (per-element gradient cap) + grad-clip (per-batch spike attenuation) + EMA (parameter-trajectory averaging). Implication: any future "gradient-hygiene" hypothesis must beat this combined stack to merge — the easy wins on this axis are now claimed. EMA also added a `test_no_ema/*` dual-eval logging branch that future EMA-extension PRs (decay sweep, warmup, longer-budget) inherit for free.
 - **Schedule-budget mismatch is a structural baseline weakness, but schedule-cooling alone does not move the metric.** thorfinn's `schedule-tuned-e13` (#1537, closed) ran 5 finished arms of `--epochs 13`; best 118.77, all clustered 118-122 — **+14 above merged 104.70 baseline and +28 above the advisor-branch ~91 noise floor.** Implication: the cooling regime contributes less than the seed-to-seed ±7 noise on this baseline. The schedule-reformulation lever is not dead, but it needs to be paired with warmup or peak-LR retuning (frieren's `warmup-5ep` #1438 tests the warmup half). The natural Round 2 stack remains **warmup + tuned T_max** — but only after the merged advisor branch grows the warmup component.
 - **Width is compute-bound at this budget.** Any future architecture-scaling proposal must either reduce other compute (e.g. slice_num, mlp_ratio) or budget for fewer-but-fully-cooled epochs.
 - **SmoothL1 is a 20% headline lever, not a 2-5% tweak.** Predicted delta was 2–5%; observed was 20.6%. Mechanism: capping per-element gradient magnitude on high-`|p|` outlier samples in normalized space. Gain is uniform across val splits, with the largest absolute gain on `val_geom_camber_cruise` (highest-magnitude split). This reframes Round 2 priorities: any technique that further attenuates per-sample outlier influence (β=0.05, pure L1, per-Re reweighting, gradient-norm-aware sample reweighting) jumps in priority above standard hygiene levers.

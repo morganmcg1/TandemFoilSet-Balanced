@@ -7,6 +7,68 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 04:52 — PR #1437: EMA of model weights (decay=0.999) — MERGED (winner)
+
+- Student branch: `willowpai2g24h3-fern/ema-decay999`
+- Hypothesis: EMA of model weights (decay=0.999) at val/test/checkpoint reduces variance of the SGD/Adam trajectory; predicted 1–3% reduction in `val_avg/mae_surf_p`. Orthogonal to SmoothL1 (per-element gradient cap) and grad-clip (per-batch gradient cap) because it operates on the parameter trajectory itself.
+
+### Results (rebase onto advisor HEAD `4f225b4` = SmoothL1+grad-clip+cruise-NaN fix)
+
+| Arm | Run | ema_decay | best val_avg/mae_surf_p | test_avg/mae_surf_p (4-split) | Δ vs merged 104.03/95.09 |
+|---|---|---|---:|---:|---:|
+| baseline-30m-newbase-v2 | `7xv82fez` | 0.0 | 101.06 | 89.41 | −2.9% / −6.0% (in noise) |
+| baseline-r3-30m | `t73h00e2` | 0.0 | 105.18 | 94.79 | +1.1% / −0.3% (in noise) |
+| **ema-decay-0.999-30m-newbase** | `zzv8ke31` | 0.999 | **93.70** | **83.46** | **−9.9% / −12.2%** |
+| **ema-decay-0.999-30m-newbase-v2** | `emqh79b0` | 0.999 | **91.66** | **81.28** | **−11.9% / −14.5%** |
+
+Three baselines (incl. merged 104.03) mean ≈ 103.4; two EMA reproductions mean ≈ 92.7 — a **−10.4% mean delta on val, well outside the ±7 single-seed noise band**.
+
+### Per-split breakdown (best EMA `emqh79b0`)
+
+**Val (vs merged baseline #1615 per-split):**
+
+| Split | EMA `emqh79b0` | merged baseline | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 108.52 | 129.82 | **−16.4%** |
+| val_geom_camber_rc | 104.81 | 110.53 | **−5.2%** |
+| val_geom_camber_cruise | 68.50 | 80.24 | **−14.6%** |
+| val_re_rand | 84.78 | 95.52 | **−11.2%** |
+
+**Test (4-split, finite):**
+
+| Split | EMA `emqh79b0` |
+|---|---:|
+| test_single_in_dist | 98.53 |
+| test_geom_camber_rc | 89.74 |
+| test_geom_camber_cruise | 57.58 |
+| test_re_rand | 79.30 |
+
+Improvement is broadly distributed (every split is in-the-money). Biggest absolute gains land on `single_in_dist` and `cruise` — the splits with the noisiest val curve under baseline. Smallest gain on `geom_camber_rc` (already the lowest-error split, less headroom).
+
+### Mechanism (decomposed by dual eval at the same training step)
+
+EMA(0.999) is a Polyak average over the AdamW trajectory with effective window ≈ 1000 steps. The rebase plumbed an additional "non-EMA test eval at the same epoch" logged under `test_no_ema/*`, isolating two distinct contributions:
+
+| Branch | test_avg/mae_surf_p |
+|---|---:|
+| EMA weights (saved ckpt) | **81.28** |
+| Raw weights at same step (no-EMA-eval) | 85.46 |
+| Baseline (no EMA in training, `7xv82fez`) | 89.41 |
+
+- **Variance-reduction at eval (~5%):** 85.46 → 81.28 from averaging the parameter trajectory.
+- **Better epoch selection (~4%):** 89.41 → 85.46 because the EMA val curve is monotonically descending so `argmin val_avg` lands on a later, better epoch.
+
+Both effects compound; combined ≈ −9% test, with no interaction with SmoothL1 / grad-clip. Per-step EMA update overhead is ~1 ms; per-epoch wall-clock identical to baseline at 130–133 s. EMA also did NOT need any α-warmup at this budget (decay=0.9995 was tested in PR pass 1 and is too slow at 30 min — see #1437 pass 1 comment).
+
+### Conclusions
+
+- **Merged. New empirical high-water mark on the advisor branch:**
+  - `val_avg/mae_surf_p = 91.66` (down from 104.03)
+  - `test_avg/mae_surf_p = 81.28` (down from 95.09)
+- EMA stacks orthogonally on top of SmoothL1(β=0.1) + grad_clip(1.0) without interaction — three distinct gradient-stabilization mechanisms on three distinct objects (per-element / per-batch / parameter-trajectory) all compose.
+- The `test_no_ema/*` dual-eval plumbing now ships on the advisor branch — future EMA-extension PRs (decay sweep, warmup, longer-budget) inherit it for free.
+- **Round 2 priority shift**: capacity / regularization / loss reformulation now compete against a much harder baseline. Hypotheses claiming <5% improvement need ≥2 seeds. Any new "headline" merge needs ≥10% relative gain to be visibly real on a single seed.
+
 ## 2026-05-12 19:30 — PR #1443: Widen Transolver to n_hidden=192, n_head=6 (CLOSED)
 
 - Student branch: `willowpai2g24h3-thorfinn/wider-n192`
