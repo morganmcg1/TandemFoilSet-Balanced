@@ -409,13 +409,14 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
+print(f"mlp_ratio: {model_config['mlp_ratio']}")
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
