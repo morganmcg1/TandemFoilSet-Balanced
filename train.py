@@ -31,7 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -47,6 +47,91 @@ from data import (
     pad_collate,
 )
 from soap import SOAP
+
+
+# ---------------------------------------------------------------------------
+# SAM (Sharpness-Aware Minimization) wrapper
+# ---------------------------------------------------------------------------
+
+
+class SAM:
+    """Sharpness-Aware Minimization (Foret et al. 2021, arXiv:2010.01412).
+
+    Wraps an arbitrary base optimizer. Each training step is two passes:
+      1) forward+backward at w → grad ∇L(w).
+      2) ε = ρ · ∇L(w) / ||∇L(w)||;  w → w + ε  (climb to local maximum in ρ-ball).
+      3) forward+backward at w+ε → adversarial grad ∇L(w+ε).
+      4) restore w; base_optimizer.step() using adversarial grad.
+
+    Net effect: optimizer minimizes max_{||ε||<ρ} L(w+ε), pushing solutions
+    toward flatter local minima. Cost: 2× forward-backward per step.
+
+    Compatible with any base optimizer (SGD/Adam/AdamW/SOAP/Shampoo). The
+    base optimizer never sees the perturbed weights — the perturbation is
+    rolled back inside ``second_step`` before ``base_optimizer.step()``.
+
+    Exposes ``param_groups`` so PyTorch LR schedulers can target this wrapper
+    transparently (they only read/write ``param_groups[i]['lr']``).
+    """
+
+    def __init__(self, base_optimizer, rho: float = 0.05):
+        if rho < 0:
+            raise ValueError(f"SAM rho must be non-negative, got {rho}")
+        self.base_optimizer = base_optimizer
+        self.rho = rho
+        self.state: dict = {}  # maps parameter -> e_w perturbation tensor
+
+    @property
+    def param_groups(self):
+        return self.base_optimizer.param_groups
+
+    def _grad_norm(self) -> torch.Tensor:
+        """L2 norm of the concatenated gradient over all base-optimizer params."""
+        device_ = None
+        norms = []
+        for group in self.base_optimizer.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                if device_ is None:
+                    device_ = p.grad.device
+                norms.append(p.grad.norm(2))
+        if not norms:
+            return torch.zeros((), device=device_ if device_ is not None else "cpu")
+        return torch.norm(torch.stack(norms), 2)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad: bool = False) -> torch.Tensor:
+        """Compute and apply the SAM perturbation. Returns ||∇L(w)||."""
+        grad_norm = self._grad_norm()
+        scale = self.rho / (grad_norm + 1e-12)
+        for group in self.base_optimizer.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                e_w = p.grad * scale
+                p.add_(e_w)
+                self.state[p] = e_w
+        if zero_grad:
+            self.zero_grad()
+        return grad_norm
+
+    @torch.no_grad()
+    def second_step(self, zero_grad: bool = False) -> None:
+        """Unperturb weights (w+ε → w), then step the base optimizer using the
+        adversarial gradient already populated by the second backward pass.
+        """
+        for group in self.base_optimizer.param_groups:
+            for p in group["params"]:
+                e_w = self.state.pop(p, None)
+                if e_w is not None:
+                    p.sub_(e_w)
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base_optimizer.zero_grad(set_to_none=set_to_none)
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -467,6 +552,10 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # SAM (Sharpness-Aware Minimization) perturbation radius. 0 disables SAM
+    # entirely (single forward-backward per step). Otherwise wraps SOAP with
+    # SAM(rho) and runs two forward-backward passes per step.
+    sam_rho: float = 0.02
 
 
 cfg = sp.parse(Config)
@@ -581,7 +670,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
-optimizer = SOAP(
+base_optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
     betas=(0.95, 0.95),
@@ -589,9 +678,18 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
-scaler = GradScaler()
+sam_enabled = cfg.sam_rho > 0
+if sam_enabled:
+    optimizer = SAM(base_optimizer, rho=cfg.sam_rho)
+    # SAM doubles compute per step. At the 30-min wall-cap the baseline does
+    # ~28 epochs; SAM is expected to halve that to ~14. Aligning T_max to the
+    # actual epoch budget keeps the cosine tail useful.
+    SCHEDULER_T_MAX = 14
+    print(f"SAM enabled (rho={cfg.sam_rho}); T_max set to {SCHEDULER_T_MAX}")
+else:
+    optimizer = base_optimizer
+    SCHEDULER_T_MAX = 28
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -630,9 +728,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     rescale_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_vol2 = epoch_surf2 = 0.0  # second-pass (perturbed) loss components — SAM only
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
+    epoch_sam_grad_norm_sum = 0.0  # ||∇L(w)|| from first pass — used to size SAM ε
     epoch_l2_frac = 0.0
     n_batches = 0
     # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
@@ -647,12 +747,17 @@ for epoch in range(MAX_EPOCHS):
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
 
+    HUBER_DELTA = 0.1
+    all_params = list(model.parameters()) + list(rescale_head.parameters())
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # ----- First pass: forward + loss at current weights w -----
+        optimizer.zero_grad()
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -663,7 +768,6 @@ for epoch in range(MAX_EPOCHS):
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
             # per-sample relative scaling with per-node outlier capping.
-            HUBER_DELTA = 0.1
             residual = pred - y_norm
             abs_residual = residual.abs()
             sq_err = torch.where(
@@ -694,7 +798,9 @@ for epoch in range(MAX_EPOCHS):
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
-        # pressure-channel error signal against velocity channels).
+        # pressure-channel error signal against velocity channels). Computed
+        # from the first-pass (un-perturbed) forward — that's the model state
+        # we report metrics from.
         with torch.no_grad():
             valid = mask.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
@@ -706,22 +812,74 @@ for epoch in range(MAX_EPOCHS):
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
 
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        if cfg.grad_clip > 0:
-            scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                list(model.parameters()) + list(rescale_head.parameters()),
-                cfg.grad_clip,
-            )
-            grad_norm_val = float(grad_norm)
-            epoch_grad_norm_sum += grad_norm_val
-            if grad_norm_val > epoch_grad_norm_max:
-                epoch_grad_norm_max = grad_norm_val
-            if grad_norm_val > cfg.grad_clip:
-                epoch_grad_clipped += 1
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+
+        if sam_enabled:
+            # First-pass clip bounds the perturbation source. Magnitude of ε is
+            # always ρ regardless of clipping (SAM normalises), but clipping
+            # prevents a pathological all-zero or all-NaN grad from corrupting
+            # the perturbation direction. clip_grad_norm_ returns the *pre-clip*
+            # norm — use that for the SAM diagnostic so we can track how sharp
+            # the un-perturbed loss landscape is (post-clip norm is just == clip).
+            if cfg.grad_clip > 0:
+                pre_clip_first = torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
+                epoch_sam_grad_norm_sum += float(pre_clip_first)
+            else:
+                epoch_sam_grad_norm_sum += float(optimizer._grad_norm())
+
+            # Climb to w + ε, clear grads (we want the adversarial grad alone,
+            # not the sum with the un-perturbed grad).
+            optimizer.first_step(zero_grad=True)
+
+            # ----- Second pass: forward + loss at perturbed weights w + ε -----
+            with autocast(device_type="cuda", dtype=torch.bfloat16):
+                x_norm2 = (x - stats["x_mean"]) / stats["x_std"]
+                y_norm2 = (y - stats["y_mean"]) / stats["y_std"]
+                log_re_norm2 = x_norm2[:, 0, 13:14]
+                scale2 = rescale_head(log_re_norm2)
+                pred2 = model({"x": x_norm2})["preds"] * scale2
+                residual2 = pred2 - y_norm2
+                abs_residual2 = residual2.abs()
+                sq_err2 = torch.where(
+                    abs_residual2 <= HUBER_DELTA,
+                    0.5 * residual2 ** 2,
+                    HUBER_DELTA * (abs_residual2 - 0.5 * HUBER_DELTA),
+                )
+                sq_err2_weighted = sq_err2 * ch_weights
+                vol_sq2 = (sq_err2_weighted * vol_mask).sum(dim=(1, 2))
+                surf_sq2 = (sq_err2_weighted * surf_mask).sum(dim=(1, 2))
+                vol_loss2 = (vol_sq2 / vol_denom).mean()
+                surf_loss2 = (surf_sq2 / surf_denom).mean()
+                loss2 = vol_loss2 + cfg.surf_weight * surf_loss2
+
+            loss2.backward()
+            epoch_vol2 += vol_loss2.item()
+            epoch_surf2 += surf_loss2.item()
+
+            # Adversarial-pass clip — this is the gradient SOAP actually steps with.
+            if cfg.grad_clip > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
+                grad_norm_val = float(grad_norm)
+                epoch_grad_norm_sum += grad_norm_val
+                if grad_norm_val > epoch_grad_norm_max:
+                    epoch_grad_norm_max = grad_norm_val
+                if grad_norm_val > cfg.grad_clip:
+                    epoch_grad_clipped += 1
+
+            # Unperturb (w + ε → w) and run base optimizer step using the
+            # adversarial gradient already in p.grad.
+            optimizer.second_step()
+        else:
+            # Standard (non-SAM) single-pass step.
+            if cfg.grad_clip > 0:
+                grad_norm = torch.nn.utils.clip_grad_norm_(all_params, cfg.grad_clip)
+                grad_norm_val = float(grad_norm)
+                epoch_grad_norm_sum += grad_norm_val
+                if grad_norm_val > epoch_grad_norm_max:
+                    epoch_grad_norm_max = grad_norm_val
+                if grad_norm_val > cfg.grad_clip:
+                    epoch_grad_clipped += 1
+            optimizer.step()
 
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
@@ -742,7 +900,10 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_vol2 /= max(n_batches, 1)
+    epoch_surf2 /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+    sam_grad_norm_mean = epoch_sam_grad_norm_sum / max(n_batches, 1) if sam_enabled else 0.0
 
     # --- Validate ---
     model.eval()
@@ -835,6 +996,11 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "sam/enabled": sam_enabled,
+        "sam/rho": cfg.sam_rho if sam_enabled else 0.0,
+        "sam/grad_norm_mean": sam_grad_norm_mean,
+        "sam/perturbed_vol_loss": epoch_vol2 if sam_enabled else 0.0,
+        "sam/perturbed_surf_loss": epoch_surf2 if sam_enabled else 0.0,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -845,10 +1011,15 @@ for epoch in range(MAX_EPOCHS):
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
     })
+    sam_print = (
+        f"  sam[||∇L||={sam_grad_norm_mean:.3f} pert_vol={epoch_vol2:.4f} pert_surf={epoch_surf2:.4f}]"
+        if sam_enabled else ""
+    )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
-        f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
+        f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]"
+        f"{sam_print}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
@@ -875,7 +1046,7 @@ for epoch in range(MAX_EPOCHS):
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
-print(f"\nTraining done in {total_time:.1f} min")
+print(f"\nTraining done in {total_time:.1f} min  (epochs completed: {last_completed_epoch})")
 
 # Always capture slice entropy on the actually-completed final epoch, so the
 # "last" snapshot reflects reality even if training was cut short by the
