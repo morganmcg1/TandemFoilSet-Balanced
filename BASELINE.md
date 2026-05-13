@@ -419,3 +419,13 @@ cd "target/" && python train.py \
 ```
 
 *(Note: `slice_num=24` is hardcoded in `model_config` in `train.py`. Already merged via PR #2282. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
+
+## 2026-05-13 16:30 — PR #2343: Weight decay wd=0 ablation
+
+- **test_avg/mae_surf_p: 60.7447** (NEW BEST — −1.78% vs previous 61.8457)
+- **val_avg/mae_surf_p:** 69.3303 (best epoch 18/18)
+- **Per-split:** in_dist=62.37, rc=70.92, cruise=46.91, re_rand=62.78
+- **W&B run:** rxid6958 (weight-decay-ablation group)
+- **Config change:** `--weight_decay 0.0` (was 1e-4)
+- **Full config:** bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + β1=0.9 + β2=0.99 + **wd=0** + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0`
