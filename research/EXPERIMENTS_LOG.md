@@ -588,3 +588,29 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 
 **Mechanistic conclusion**: clip=5.0 fully unlocked SOAP's steps (clip_frac 0.33→0.00, mechanism validated). However, SOAP+cosine+bf16 at clip=1.0 slightly outperforms clip=5.0. By late training (with cosine LR decay), the gradient norms are already small enough that clip=1.0 is non-binding. Widening clip provided no additional signal. The value of clip relaxation was in the early training regime (clip_frac 0.98–1.00), which cosine scheduling has already effectively resolved. Note: comparison to AdamW baseline in student writeup was incorrect — the correct comparator is clip=1.0 vs clip=5.0 on the same SOAP+bf16+cosine stack.
 
+
+---
+
+## 2026-05-13 04:15 — PR #1847: [larger-batch-compile] batch_size 4→8 — CLOSED
+
+- **Branch**: charliepai2g24h1-alphonse/larger-batch-compile
+- **Hypothesis**: Doubling batch size from 4→8 would exploit 72 GB memory headroom freed by torch.compile (24/96 GB), lower gradient variance, and improve generalization on OOD splits.
+- **Status**: **CLOSED** — hypothesis falsified, three-mechanism root cause identified
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 36.9205 | **+21.3% (worse)** |
+| test_avg/mae_surf_p | 32.0504 | **+22.8% (worse)** |
+| Peak GPU memory | 47.69 GB | +23 GB (not +9 GB as predicted) |
+| Epochs in 30 min | 30 | same (training NOT compute-bound) |
+| Optimizer steps/epoch | 188 | was 376 at batch=4 |
+
+**Three-mechanism root cause**:
+1. **Training is not compute-bound at batch=4**: per-epoch wall-time stayed 60s/ep — batch=8 gives identical epoch count (30 in 30 min), so the "fewer epochs" justification was wrong
+2. **Half the optimizer updates per epoch** (188 vs 376, LR held at 1e-3 due to clip ceiling): at 1,499 training samples, MORE optimizer steps beats lower gradient variance per step
+3. **T_max=23 caused cosine restart regression**: schedule hit floor at ep 23, LR climbed for 7 more epochs (val regressed 36.92 → 38.84). Should have been T_max=28 or T_max=steps-to-timeout
+
+**Memory cost much higher than predicted**: 24 GB → 47.69 GB (+23 GB), not the +9 GB predicted. Activation memory grows super-linearly with batch size under torch.compile graph capture.
+
+**Net programme lesson**: Data-bottleneck manifests in TWO ways — (1) wider models can't fill representation space, (2) larger batches halve optimizer steps without providing extra information. Both ruled out for 1,499-sample dataset.
+
