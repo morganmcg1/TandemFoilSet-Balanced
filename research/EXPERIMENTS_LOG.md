@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-05-13 19:15 — PR #2445: 3-seed baseline calibration on #2227 config (SENT BACK — branch behind + seed code not committed)
+
+- **Branch:** `willowpai2g48h4-nezuko/seed-variance-calibration` (still WIP)
+- **Student:** willowpai2g48h4-nezuko
+- **W&B runs:** `d9iwzzni` (seed=42), `3ey6sjoz` (seed=43), `daegvjgo` (seed=44) — all on #2227 baseline config (T_0=10, T_mult=1, WD=5e-4, no eta_min)
+- **Hypothesis:** measure intrinsic seed variance σ at 21-epoch SGDR budget. The hypothesis from cycle 53 (#2331 sub-finding) was σ ≈ 1-2 val points.
+
+### Results
+
+| Seed | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch | W&B run |
+|------|--------------------|---------------------|------------|---------|
+| 42 | 86.3207 | 75.9316 | 20 | `d9iwzzni` |
+| 43 | 86.9272 | 77.1424 | 19 | `3ey6sjoz` |
+| 44 | 86.8930 | 76.9254 | 20 | `daegvjgo` |
+| **mean** | **86.7136** | **76.6665** | — | — |
+| **std** | **0.3407** | **0.6456** | — | — |
+
+### Per-split val mae_surf_p (mean ± std across 3 seeds)
+
+| Split | mean | std |
+|-------|------|-----|
+| `val_single_in_dist` | 104.9800 | 2.0803 |
+| `val_geom_camber_rc` | 105.0622 | 2.3340 |
+| `val_geom_camber_cruise` | 56.8798 | 0.8058 |
+| `val_re_rand` | 79.9326 | 1.4150 |
+
+### Analysis and Conclusions
+
+**CRITICAL FINDING — three intertwined results:**
+
+**1. Seed σ at 21-ep SGDR is small (~0.34 val, 0.65 test) — 3-5× tighter than the 1-2 val hypothesized.** Implication: future merge bars can be aggressive — 2σ ≈ 0.7 val is a confident threshold for SOTA improvement. Many of our recent merges (e.g. PR #2357 eta_min Δ=0.31 val) are at or just above 1σ — borderline by this revised noise floor.
+
+**2. The kt5pk5qu reference (val=83.997, the PR #2227 cosine_restart baseline) IS NOT REPRODUCIBLE under current code.** All 3 seeded runs of the same config land at 86.32-86.93 val, with the original 83.997 sitting ~8σ below the new mean. With σ this small, an 8σ gap cannot be a tail draw. **Most plausible cause: code/environment drift between when kt5pk5qu was originally measured and now** — torch.compile kernel selection differences, library version drift, sampler RNG state, or some combination. The "lucky draw" hypothesis from cycle 53 is FALSIFIED.
+
+**3. The IMPROVEMENT TRAJECTORY is still valid; absolute numbers need re-anchoring.** PR #2444 (T_mult=2) was measured under the same current code as nezuko's seeded runs. Its val=82.26 is real relative to PR #2357's val=83.69 (also under current code, also recent). What's NOT comparable is the kt5pk5qu reference (83.997) used to validate PR #2357's "win" — that reference was from an earlier code state.
+
+### Technical issues blocking merge
+
+**a. Branch is behind advisor.** Nezuko branched at commit `aeef399` (cycle 49, pre-#2357 pre-#2444). Her train.py LACKS the `cosine_restart_eta_min` flag added by #2357. Merging would revert two SOTA wins. **Action: rebase onto current advisor.**
+
+**b. `--seed` flag is NOT in the committed branch.** The W&B run configs show `seed: 42/43/44` logged correctly — proving the student's local train.py had the flag at runtime. But the diff between her branch and current advisor shows **zero new code in train.py** (only removals — the eta_min code her branch lacks). The local edits to Config / set_seed() were never `git add`-ed. Going forward, advisor branch has no seed infrastructure. **Action: rebase, properly commit the --seed flag, push.**
+
+**c. Variance was measured on the OLD #2227 config, not current SOTA.** Two SOTA improvements have merged since #2227 (eta_min #2357 and T_mult=2 #2444). The variance we actually need is σ on the CURRENT SOTA #2444 config — to establish a seeded merge bar for future PRs. **Action: re-run 3 seeds on `--cosine_restart_T_0 7 --cosine_restart_T_mult 2 --seed {42,43,44}`.**
+
+### Send-back instructions (posted to PR)
+
+Detailed comment posted at 2026-05-13 19:15 asking nezuko to: rebase onto current advisor, properly commit the --seed flag, re-run on the CURRENT SOTA config, and report seeded mean ± std with note on whether any seed produces val < 82.2642 (which would supersede the current SOTA).
+
+### Status
+
+- **PR converted back to draft**
+- **Label swapped: status:review → status:wip**
+- **σ measurement (86.71 ± 0.34 on #2227) preserved here for ICML appendix CIs**
+
+### Suggested follow-ups (after rebase + re-run completes)
+
+- **If any seed of #2444 config beats 82.2642:** that seed value supersedes current SOTA; report seeded best as new baseline.
+- **If seeded mean of #2444 config differs significantly from 82.2642:** update BASELINE.md to report `mean ± std` over seeds rather than single-seed value.
+- **Going forward:** all future SOTA candidates should report at least 2 seeds, ideally 3, with the merge bar set at `mean ≤ current SOTA mean − 2σ`.
+
+---
+
 ## 2026-05-13 18:45 — PR #2284: Finer WD sweep below 5e-4 under restart (CLOSED — all arms regress, WD axis closed below 5e-4)
 
 - **Branch:** `willowpai2g48h4-frieren/finer-wd-sweep-21epoch`

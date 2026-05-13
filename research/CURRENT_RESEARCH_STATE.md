@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 63)
+- **As of:** 2026-05-13 (updated cycle 64)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -26,6 +26,8 @@
 | **62** | **#2444** | **T_mult=2 restart (T_0=7, cycles [7,14])** | **82.2642** | **−2.1%** |
 
 ## Current research focus
+
+**Cycle 64.** **CRITICAL FINDING from nezuko #2445** (sent back, not merged): 3 seed-controlled runs on the #2227 baseline config (T_0=10, WD=5e-4) produce val_avg ∈ {86.32, 86.93, 86.89} (mean 86.71 ± 0.34). **The kt5pk5qu reference (83.997) is ~8σ below this mean** — falsifies the "lucky draw" interpretation and implies code drift between kt5pk5qu's run-time environment and current main. Plausible causes: kernel selection by torch.compile, library version drift, sampler RNG state differences. **Implication:** all merged improvements in this round may be measured against partially non-reproducible references; the IMPROVEMENT TRAJECTORY (each PR vs the one before) is still valid (same code, same regime), but the ABSOLUTE numbers should be re-anchored. **Action:** sent #2445 back with focused asks — (a) rebase onto current advisor (branch was at cycle 49), (b) actually commit the --seed flag (the runs proved it works at runtime, but the code was never `git add`-ed in her PR), (c) re-run 3 seeds on the CURRENT SOTA #2444 config (T_0=7, T_mult=2) to establish a seeded variance for the active baseline. Also: σ ≈ 0.34 val on #2227 is **3-5× tighter than the 1-2 val hypothesized in cycle 53** — the merge bar can be MORE aggressive: 2σ ≈ 0.7 val for the SOTA config is a reasonable confidence threshold.
 
 **Cycle 63.** WD curve mapping under restart is closing. **frieren #2284 CLOSED**: 3 arms below 5e-4 (WD=2e-4 val=85.88, 2.5e-4 val=87.14, 4e-4 val=85.24) all regress monotonically — confirms restart shifts optimal WD UPWARD. Arm 4 (WD=4.5e-4) would interpolate to ~84.5 by the trend, still well above SOTA 82.2642. The unexplored region is WD ABOVE 5e-4 under the new T_mult=2 stack. **Assigned frieren #2507 (WD curve above 5e-4 on T_mult=2)**: WD ∈ {6e-4, 7e-4}. Key reasoning: T_mult=2's cycle 2 is 40% longer than T_0=10's (14 vs 11 epochs) — more descent runway means either over-regularization bites harder OR stronger WD becomes productive into the deeper minimum. Direct data needed.
 
@@ -73,7 +75,7 @@ Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 n
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 63)
+## Live PRs (active WIPs and recent closes — cycle 64)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
@@ -82,7 +84,7 @@ Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 n
 | 2487 | askeladd | eta-min-refinement | WIP | Map eta_min curve {5e-6, 2e-5} around SOTA 1e-5. |
 | 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
 | 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
-| 2445 | nezuko | seed-variance-calibration | WIP | **META**: 3-seed baseline run. Measures σ of val_avg/mae_surf_p — for honest CI. |
+| 2445 | nezuko | seed-variance-calibration | **WIP (sent back cycle 64)** | σ=0.34 val on #2227 config (mean 86.71 vs claim 83.997 — 8σ gap, code drift implied). Branch is behind advisor + --seed flag never committed (only ran locally). Sent back: rebase + commit seed code + re-run on CURRENT SOTA #2444 config. |
 | 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
 | 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 62) | Compose Lookahead k=5 + cosine_restart T_0=7 T_mult=2 + eta_min=1e-5 (3rd update). Needs rebase + updated commands. |
 | 2284 | frieren | finer-wd-sweep-21epoch | **CLOSED cycle 63** | 3 arms below 5e-4 all regress monotonically (WD=2e-4 val=85.88, 2.5e-4 val=87.14, 4e-4 val=85.24). WD curve below 5e-4 fully mapped. |
@@ -165,6 +167,8 @@ Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 n
 36. **Stratified sampler compose with cosine_restart + domain-weighted loss** — testing (#2381 fern, NEW cycle 49). Arm 1: strict + restart (pure composition). Arm 2: strict + restart + domain_loss_weights=(1.0,1.0,1.3,1.2) (recover cruise/re_rand). Tests whether per-batch composition variance is still load-bearing once restart provides controlled spike-recovery.
 
 ## Key insights
+
+**Cycle 64 — Seed variance is small AND historical baselines may not reproduce (PR #2445 nezuko, sent back):** Three seed-controlled runs on the #2227 baseline config produced val_avg ∈ {86.32, 86.93, 86.89} (σ ≈ 0.34) — much tighter than the 1-2 val hypothesized in cycle 53. **But:** mean (86.71) is ~8σ above the kt5pk5qu reference (83.997). With σ this small, an 8σ gap cannot be random — there has been code/environment drift between when kt5pk5qu was originally measured and now (the W&B run is from many cycles ago). **Implications:** (1) the IMPROVEMENT TRAJECTORY in this branch is still valid (relative comparisons within the same code regime), but the ABSOLUTE baseline numbers should be re-anchored under the current code path; (2) σ ≈ 0.34 is small enough that the merge bar can be aggressive (2σ ≈ 0.7 val is a confident threshold); (3) the CURRENT SOTA reference val=82.26 (#2444) was measured under uncontrolled seed — its seeded mean may differ. The re-run nezuko was sent back to do (#2444 SOTA config × 3 seeds) will resolve this.
 
 **Cycle 63 — Cosine restart shifts optimal WD UPWARD (PR #2284 frieren):** Direct evidence: pre-restart 21-epoch optimum was WD=3e-4 (PR #2178); under SGDR cosine restart T_0=10, WD=5e-4 is optimum (PR #2317 anti-additivity test, PR #2444 T_mult=2 SOTA). #2284 closed the WD<5e-4 region under restart: all 3 arms (WD=2e-4, 2.5e-4, 4e-4) monotonically regress from 83.99 baseline. **Mechanism:** each restart re-introduces LR× momentum, allowing parameters to escape the trough WD would otherwise pin them to → stronger WD becomes productive. **Implication for the WD axis:** the unexplored region is WD ≥ 5e-4 under T_mult=2, which has a 40%-longer cycle 2 than T_0=10. #2507 frieren tests this.
 
