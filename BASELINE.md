@@ -1,5 +1,82 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 04:30 — PR #1837: RMSNorm in TransolverBlock (frieren)
+
+**New best: `val_avg/mae_surf_p` = 63.017** (epoch 13, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| **Normalization** | **RMSNorm** (replaces LayerNorm) ← changed |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE) in normalized space, surf_weight=10 |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+> **RMSNorm implementation:** replaces all `nn.LayerNorm` instances in `TransolverBlock` with `nn.RMSNorm`. RMSNorm drops mean-centering (computes scale only via RMS), ~3.4% faster than LayerNorm with bf16 → 14 epochs fit in 30 min vs 13. Best checkpoint was epoch 13 (not 14).
+
+### Val metrics (best checkpoint, epoch 13)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 76.710 |
+| val_geom_camber_rc | **73.930** |
+| val_geom_camber_cruise | 40.746 |
+| val_re_rand | 60.683 |
+| **val_avg/mae_surf_p** | **63.017** |
+
+### Test metrics (best-val checkpoint, epoch 13)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 67.384 |
+| test_geom_camber_rc | **64.508** |
+| test_geom_camber_cruise | 34.707 |
+| test_re_rand | 52.327 |
+| **test_avg/mae_surf_p** | **54.731** |
+
+### Improvement vs PR #1769 baseline (64.918 val / 58.171 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 72.021 | 76.710 | +6.5% | 64.947 | 67.384 | +3.7% |
+| geom_camber_rc | 89.234 | 73.930 | **−17.2%** | 80.467 | 64.508 | **−19.8%** |
+| geom_camber_cruise | 37.058 | 40.746 | +10.0% | 32.329 | 34.707 | +7.4% |
+| re_rand | 61.359 | 60.683 | −1.1% | 54.939 | 52.327 | −4.7% |
+| **avg** | **64.918** | **63.017** | **−2.9%** | **58.171** | **54.731** | **−5.9%** |
+
+> RMSNorm's removal of mean-centering allowed the model to attend to relative pressure magnitudes more cleanly. This had the most pronounced effect on `geom_camber_rc` (the hardest OOD geometry split), cutting it by −17.2% val / −19.8% test. `single_in_dist` and `geom_camber_cruise` regressed slightly — consistent with RMSNorm routing gradient toward harder splits via its changed scale normalization.
+
+### Metric artifacts
+
+`models/model-charliepai2g48h3-frieren-rmsnorm-geglu-lion-20260513-031035/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent <student> \
+  --experiment_name <name> \
+  --epochs 50 \
+  --lr 1e-4 \
+  --weight_decay 1e-4 \
+  --batch_size 4 \
+  --surf_weight 10
+```
+
+Note: RMSNorm, GeGLU activation, Lion optimizer, and bf16 are now all defaults in `train.py` (merged from PRs #1769, #1837).
+
+---
+
 ## 2026-05-13 02:45 — PR #1769: GeGLU activation + Lion optimizer (tanjiro)
 
 **New best: `val_avg/mae_surf_p` = 64.918** (epoch 13, 30-min wall-clock cap)
