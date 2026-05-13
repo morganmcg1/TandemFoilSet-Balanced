@@ -2,6 +2,101 @@
 
 ---
 
+## 2026-05-13 [Round 68] UTC — Round 68
+
+### PR #2590 nezuko: Lion β₁=0.95 sweep — CLOSED (LOSS; 30th taxon)
+
+- **Branch:** `charliepai2g48h5-nezuko/lion-beta1-095`
+- **Hypothesis:** Lion betas=(0.90,0.99)→(0.95,0.99); 2× momentum persistence; test whether narrow Lion minimum from SWA #2567 is addressable by smoother momentum.
+
+| Metric | β₁=0.95 (this) | Baseline #2553 (β₁=0.90) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 36.9832 | **33.4935** | **+10.4% WORSE** |
+| `test_avg/mae_surf_p` | 31.3401 | 28.6279 | **+9.5% WORSE** |
+| Best epoch | 69/70 (timeout at ep69) | 70/70 | one less |
+| Lion momentum non-zero fraction | 0.9805 | ~0.9958 | **−1.5 pp** |
+
+Per-split:
+
+| Split | β₁=0.95 | #2553 | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 30.7061 | 25.7691 | +19.2% |
+| `val_geom_camber_rc` | 50.5990 | 50.5514 | +0.1% (floor) |
+| `val_geom_camber_cruise` | 23.8701 | 20.2827 | +17.7% |
+| `val_re_rand` | 42.7576 | 37.3708 | +14.4% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-nezuko-lion-beta1-095-20260513-212855/metrics.jsonl`
+
+**Analysis (student's authoritative diagnosis, accepted):** With β₁=0.95, each gradient contributes only 5% to m_t (vs 10% at β₁=0.90). Under Lion's sign(m_t) operation, a persistent committed direction can be wrong for ~20 steps before the running average flips — wasting ~20 effective updates per misaligned cycle. The cosine-cooled LR phase magnifies this: late training updates are already smaller per step. The Lion momentum non-zero fraction dropping from 0.9958→0.9805 confirms some parameter directions weren't getting committed updates.
+
+This is NOT a "smoothing the final approach" failure — it is an OPTIMIZATION-LEVEL failure where the momentum buffer commits too long to wrong directions. Confirms the SWA #2567 finding: **Lion's narrow minimum is intrinsic to its sign-step geometry, not a consequence of sign-direction noise near the minimum.** Smoothing momentum (β₁-up) does NOT help — it actively hurts by extending miscommit cycles.
+
+**30th closed taxon:** persistent-momentum miscommit on sign-step. β₁-up on Lion regresses uniformly because slower momentum-averaging extends bad direction commits under sign() truncation.
+
+**Action:** Closed. Assigned #2613 nezuko Lion β₁=0.85 (β₁-down) — student suggestion #2; symmetric bracket-completing counter-experiment. Decision rule: if also LOSS, Lion-β family fully closed.
+
+---
+
+### PR #2588 alphonse: Multiplicative flow gate — CLOSED (marginal LOSS; 31st taxon meta-family)
+
+- **Branch:** `charliepai2g48h5-alphonse/multiplicative-flow-gate`
+- **Hypothesis:** output = mlp2 * (1 + gate(Re, AoA0, AoA1)); zero-init gate final layer; structural counter to #2531 additive LOSS — no double-counting possible because gate=0 is exact identity.
+
+| Metric | Mult-gate (this) | Baseline #2553 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 33.6466 | **33.4935** | **+0.46% WORSE** |
+| `test_avg/mae_surf_p` | 28.9917 | 28.6279 | **+1.27% WORSE** |
+| Best epoch | 68/70 (converged) | 70/70 | — |
+| Param count | 328,350 | 328,235 | +115 (gate module) |
+| `gate.final.weight.norm` | **0.9075** | 0 (init) | gate LEARNED non-trivially |
+| `gate.final.bias.norm` | 0.0782 | 0 (init) | — |
+| `gate_mean_output_magnitude` (val_re_rand) | 0.139 (~14% modulation) | n/a | — |
+
+Per-split (OPPOSITE of predicted):
+
+| Split | val (this) | val (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 25.3761 | 25.7691 | **−1.52% (helped — local)** |
+| `geom_camber_rc` | 50.1363 | 50.5514 | **−0.82% (helped — local)** |
+| `geom_camber_cruise` | 21.0384 | 20.2827 | **+3.72% (HURT — OOD)** |
+| `re_rand` | 38.0357 | 37.3708 | **+1.78% (HURT — OOD)** |
+
+Per-sample gate |g| variation across Re_norm ∈ [-0.77, +0.69]:
+- Sample 1 (low Re): |g|=0.182
+- Sample 2 (mid Re): |g|=0.051
+- Sample 3 (high Re): |g|=0.223
+- Sample 4: |g|=0.099
+
+**U-shaped vs Re** — gate is largest at the extremes, smallest in the middle. The optimizer DID find a Re-conditional correction pattern. But the resulting modulation REGRESSED on OOD splits that should have benefited and IMPROVED on in-distribution splits.
+
+- **Committed metrics:** `models/model-charliepai2g48h5-alphonse-multiplicative-flow-gate-20260513-212707/metrics.jsonl`
+
+**Analysis:** The structural argument was correct mechanically — multiplicative with zero-init prevents the additive double-counting that killed #2531. Gate norm 0.91 confirms unrestricted use by the optimizer without two-path additive interference. BUT this just relocated the problem: the gate found Re-conditional corrections that **overfit to in-distribution Re patterns** and degraded on the OOD splits it was supposed to help. Classic expressivity-vs-generalization trade with 115 extra params funneled through a 3-scalar bottleneck.
+
+**Combined with PR #2531 (additive flow-bias LOSS):** both forms of "broadcast-scalar flow-conditional output head" now fail on this task. The architectural failure axis is the META-FAMILY:
+
+- **Additive (#2531):** weight-norm ratio 0.263 → double-counting / decoder-fork interference
+- **Multiplicative (#2588):** gate norm 0.91 → Re-dependent overfitting (per-Re corrections don't transfer)
+
+**31st closed taxon:** output-side flow-conditional readout meta-family. Regardless of additive vs multiplicative form, the 3-scalar broadcast-flow projection at the OUTPUT level overfits the 5-10 distinct training Re values and does not generalize. The structural form is NOT the issue — the issue is WHERE (output is too late) AND WHAT (3-scalar bottleneck is too narrow).
+
+**Action:** Closed. Assigned #2614 alphonse feature-stream FiLM gate (student suggestion #2) — apply `fx = fx * (1 + film(Re, AoA0, AoA1))` AFTER preprocessor BEFORE block 0. Structurally different: conditioning routes through attention/MLP, not applied as final output correction. Tests whether failure was WHERE (output-side) not WHETHER (axis viable at feature level).
+
+---
+
+### PR #2557 fern: Per-channel surf loss [1,1,3] retry-1 — CLOSED (2nd consecutive stale_wip; axis abandoned)
+
+- **Branch:** `charliepai2g48h5-fern/per-channel-surf-loss-retry1`
+- **Hypothesis:** ch_w=[1,1,3] on surf_loss; 3× emphasis on pressure channel; first per-channel gradient allocation probe.
+- **History:** #2496 stale → #2557 stale_wip. Two consecutive non-starts on same hypothesis.
+- **Result:** Not run. Only advisor placeholder commit.
+
+**Analysis:** Following NormFormer precedent (#2480+#2541 → axis abandoned at 2 stales), per-channel surf loss axis is abandoned at 2 stales. The hypothesis is well-scoped (~5 line edit) but has not been picked up across multiple polling cycles. Holding an idle student slot is more costly than the expected information from this probe.
+
+**Action:** Closed. Pivoted fern to #2615 Stochastic Depth / DropPath p=0.1 — fresh regularization axis (Touvron 2021 CaiT), single-class change, structurally orthogonal to all in-flight experiments.
+
+---
+
 ## 2026-05-13 [Round 67] UTC — Round 67
 
 ### PR #2589 askeladd: PaLM-style parallel attn+MLP RETRY-1 — CLOSED (LOSS; 29th taxon)
