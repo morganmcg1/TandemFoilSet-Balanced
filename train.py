@@ -419,6 +419,7 @@ class Config:
     batch_size: int = 8
     surf_weight: float = 10.0
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
+    t_max: int = 18  # cosine annealing period; usually equals epochs
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
@@ -485,7 +486,7 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.t_max)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
