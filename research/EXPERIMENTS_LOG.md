@@ -1137,3 +1137,73 @@ Root causes:
 Note: New baseline is test=68.10 (PR #2090 grad_clip=5.0 merged same cycle). DropPath would need to beat 68.10, not 80.62.
 
 **Action**: CLOSED. New experiment assigned to thorfinn.
+
+---
+
+## 2026-05-13 10:40 — PR #2118: Per-axis Fourier Lx=8/Ly=4 — CLOSED ✗
+- Branch: willowpai2g48h1-frieren/fourier-per-axis-Lx8-Ly4
+- W&B run: `fcmxmc0m` — group `fourier-per-axis`
+
+| Metric | Lx=8/Ly=4 | Old Baseline (#1980) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep13) | 94.2423 | 90.82 | +3.77% |
+| **test_avg/mae_surf_p** | **84.4164** | **80.62** | **+4.71%** |
+
+Per-split test MAE:
+| Split | Lx=8/Ly=4 | Old Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 93.35 | 82.23 | **+13.52%** ← worst |
+| test_geom_camber_rc | 94.47 | 93.60 | +0.93% |
+| test_geom_camber_cruise | 63.86 | 61.57 | +3.72% |
+| test_re_rand | 85.98 | 85.06 | +1.08% |
+
+- Epochs completed: 14 / 18 (30-min timeout, ~130s/epoch)
+- Config: bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + n_hidden=192 + **fourier_L=8, fourier_L_y=4** (space_dim=26 vs baseline 34)
+
+**Analysis**: Hypothesis FALSIFIED. The PR predicted y-axis high-freq channels alias on sparse mesh and removing them would recover L=16 regression. Empirically:
+1. **In-distribution regressed MOST (+13.5%)** — opposite of what aliasing-removal would predict. Aliasing removal would help in-dist and OOD; what we see is signature of information loss.
+2. Cruise regressed only +3.7% — not the worst, contradicting "boundary-layer detail in y" prediction.
+3. The y-axis Fourier features carry information used broadly: transition regions, wake shed structure, local pressure peak above/below foil — cutting Ly=8→4 drops basis below ~1/16 of domain, exactly where surface pressure gradients live near leading/trailing edges.
+
+Three points of evidence (PR #1887 L=16 +4.6%, this Ly=4 +4.7%, baseline L=8 winning) point to L=8 uniform as a tight local optimum.
+
+**Fourier hyperparameter lever CLOSED at L=8 uniform**. Doubly closed against new baseline (test=68.10) — would need to beat 68.10, but this run gave 84.42.
+
+**Action**: Closed (advisor-led, after rate limit recovery). frieren idle, will be reassigned.
+
+---
+
+## 2026-05-13 10:40 — PR #2115: Mesh-node dropout p=0.1 — CLOSED ✗
+- Branch: willowpai2g48h1-alphonse/mesh-node-dropout
+- W&B run: `zhuge7lq` — group `mesh-node-dropout`
+
+| Metric | node_dropout=0.1 | Old Baseline (#1980) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep15) | 153.22 | 90.82 | **+68.7%** |
+| **test_avg/mae_surf_p** | **148.87** | **80.62** | **+84.7%** |
+
+Per-split test MAE — every split catastrophically regressed:
+| Split | dropout=0.1 | Old Baseline | Δ |
+|---|---|---|---|
+| test_single_in_dist | 107.16 | 82.23 | +30.3% |
+| test_geom_camber_rc | **214.88** | 93.60 | **+129.6%** ← worst |
+| test_geom_camber_cruise | 90.60 | 61.57 | +47.1% |
+| test_re_rand | 182.82 | 85.06 | +114.9% |
+
+- Epochs completed: 15 / 18 (30-min timeout)
+- Config: bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + Fourier L=8 + n_hidden=192 + **node_dropout=0.1**
+- Sanity: realized drop rate = 0.1001 ✓, training-only guard works ✓, peak GPU 43.4 GB unchanged
+
+**Analysis**: Catastrophic failure with strong mechanism diagnosis from student. Three structural reasons mesh-node dropout fails on Transolver:
+
+1. **Physics attention is dense across all input positions**. Transolver's `PhysicsAttention.in_project_slice` routes every node into slice-tokens then attention couples kept tokens. Zeroing 10% of input features at the FRONT poisons slice-token computation for kept nodes too — qualitatively different from PointNet's independent per-point processing.
+2. **Distribution shift between dropped and padded positions**. Dropped → `x_norm=0` exactly; padded → `x_norm=-mean/std` (non-zero, channel-dependent). Model sees 3 classes of node in training; at eval only 2 classes exist (dropped class is OOD).
+3. **Hardest split (rc, +130%) is exactly where dense spatial coverage matters most** — unseen geometry holdout. Random spatial node removal during training disrupts the spatial coverage the model needs.
+
+Train-val gap is enormous (train_surf=0.11, val ~5.5) but in wrong direction — not overfitting being cured, but model fitting noisy training distribution that doesn't transfer.
+
+**Mesh-node-dropout lever CLOSED at p=0.1**. Lower p (0.05, 0.02) would shrink magnitude but not flip sign per the train-val gap signature. Doubly closed against new baseline test=68.10.
+
+**Note for future**: Student's suggested follow-up #3 (drop output nodes from LOSS, not input features) is the Transolver-shaped form of this regularization and is a separate viable lever. Follow-up #4 (geometry-feature jitter on dsdf, saf, NACA params 15-17) is also worth keeping in the hypothesis bank for OOD generalization.
+
+**Action**: Closed (advisor-led, after rate limit recovery). alphonse idle, will be reassigned.
