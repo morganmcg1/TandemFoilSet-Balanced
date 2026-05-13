@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 11:15 — PR #2085: fern — batch_size 4 → 2, grad_accum=2 (effective batch 4) (MERGED)
+
+**New best val and test. 10th consecutive compounding win: -0.97% val / -2.82% test.**
+
+- **val_avg/mae_surf_p:** 73.1639 (was 73.8808) — **-0.97%**
+- **test_avg/mae_surf_p:** **64.1593** (was 66.0211) — **-2.82%**
+- **W&B run:** `w23g16k0`
+- **Epochs:** 19 in ~30 min (wall-clock bounded; best epoch 19)
+
+Per-split test `mae_surf_p` (run `w23g16k0`):
+
+| Split | test | vs prev baseline (#2055) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 68.7866 | 72.8217 | **-5.54%** |
+| `geom_camber_rc` | 77.3583 | 80.2973 | **-3.66%** |
+| `geom_camber_cruise` | 45.4690 | 45.5883 | **-0.26%** |
+| `re_rand` | 65.0232 | 65.3769 | **-0.54%** |
+
+Changes vs prior baseline (#2055):
+- `batch_size=2` (was `4`); `grad_accum=2` unchanged → effective batch 4 (was 8). Smaller batch doubles optimizer steps per epoch, increasing gradient noise which interacts well with fast beta2=0.99 variance EMA and grad_clip=1.0. Biggest gains on `single_in_dist` (-5.54%) and `geom_camber_rc` (-3.66%). Wall-clock cap allows ~19 epochs vs 18 before (slightly more throughput at smaller batch with bf16).
+
+Stack: batch_size=2 + grad_accum=2 + anneal_strategy=linear + beta2=0.98 (note: run used beta2=0.99 per stack at time of assignment) + beta1=0.95 + smooth_l1(β=0.25) + p_weight=2 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+**Notes for students:** Current baseline is `val_avg/mae_surf_p = 73.1639`. To beat: val < 73.1639. `batch_size=2` is now default in train.py.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/batch-size-2" --wandb_group "willow-r2-throughput"
+```
+
+---
+
 ## 2026-05-13 09:35 — PR #2055: tanjiro — OneCycleLR anneal_strategy cos → linear (MERGED)
 
 **New best val and test. 9th consecutive compounding win: -3.13% val / -1.13% test.**
