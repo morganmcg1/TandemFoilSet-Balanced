@@ -200,12 +200,16 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
-        # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
+        # Per-block FiLM gates — independent zero-init Linear(3, n_hidden) per TransolverBlock.
         # Applied AFTER _init_weights so it overrides the trunc_normal_ init.
         # Channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531 instrumentation).
-        self.film = nn.Linear(3, n_hidden)
-        nn.init.zeros_(self.film.weight)
-        nn.init.zeros_(self.film.bias)
+        # Zero-init -> identity modulation at step 0 (strict generalization of single-gate #2614).
+        self.film_gates = nn.ModuleList([
+            nn.Linear(3, n_hidden) for _ in range(n_layers)
+        ])
+        for gate in self.film_gates:
+            nn.init.zeros_(gate.weight)
+            nn.init.zeros_(gate.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -220,11 +224,11 @@ class Transolver(nn.Module):
         x = data["x"]
         # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
         flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
-        film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        # Feature-stream FiLM: zero-init -> identity at step 0
-        fx = fx * (1 + film_scale)
-        for block in self.blocks:
+        # Per-block FiLM: zero-init -> identity at step 0; each block sees its own gate.
+        for i, block in enumerate(self.blocks):
+            film_scale = self.film_gates[i](flow_scalars).unsqueeze(1)  # [B, 1, n_hidden]
+            fx = fx * (1 + film_scale)
             fx = block(fx)
         return {"preds": fx}
 
@@ -470,11 +474,12 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 print(
-    f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
+    f"Per-block FiLM gates: {model_config['n_layers']} independent zero-init Linear(3, {model_config['n_hidden']}) "
+    f"applied before each TransolverBlock; "
     f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
-    f"residual-stream conditioning vs output-side (closed #2531+#2588); "
-    f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
-    f"baseline to beat: val_avg/mae_surf_p < 33.4935"
+    f"strict generalization of single-gate #2614 (#2646 hypothesis); "
+    f"+~{model_config['n_layers'] * (3 * model_config['n_hidden'] + model_config['n_hidden'])} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 33.3722"
 )
 print(f"Actual total params: {n_params}")
 
@@ -713,16 +718,21 @@ if best_metrics:
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
-    # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
-    _film = _inner.film
-    _film_w_norm = _film.weight.detach().float().norm().item()
-    _film_b_norm = _film.bias.detach().float().norm().item()
-    print("\nFeature-stream FiLM final diagnostics (best-checkpoint weights):")
-    print(f"  film.weight.norm: {_film_w_norm:.4f}")
-    print(f"  film.bias.norm:   {_film_b_norm:.4f}")
+    # Per-block FiLM diagnostics: weight/bias norms + modulation magnitude per gate
+    print("\nPer-block FiLM final diagnostics (best-checkpoint weights):")
+    _film_per_block: list[dict] = []
+    for _i, _gate in enumerate(_inner.film_gates):
+        _w_norm = _gate.weight.detach().float().norm().item()
+        _b_norm = _gate.bias.detach().float().norm().item()
+        print(f"  film_gate[{_i}]: weight.norm={_w_norm:.4f}  bias.norm={_b_norm:.4f}")
+        _film_per_block.append({
+            "block_idx": _i,
+            "weight_norm": _w_norm,
+            "bias_norm": _b_norm,
+            "scale_abs_mean_val_re_rand": None,
+        })
 
-    # Modulation magnitude on a val_re_rand batch (highest-OOD split for Re).
-    _film_scale_mag = None
+    # Modulation magnitude per gate on a val_re_rand batch (highest-OOD split for Re).
     _val_re_rand_loader = val_loaders.get("val_re_rand")
     if _val_re_rand_loader is not None:
         with torch.no_grad():
@@ -730,15 +740,15 @@ if best_metrics:
             _x = _x.to(device, non_blocking=True)
             _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
             _flow_scalars = _x_norm[:, 0, [13, 14, 18]]
-            _film_scale = _film(_flow_scalars.float()).unsqueeze(1)
-            _film_scale_mag = (1 + _film_scale).abs().mean().item()
-        print(f"  film_scale |1+gamma| mean on val_re_rand batch: {_film_scale_mag:.4f}")
+            for _i, _gate in enumerate(_inner.film_gates):
+                _scale = _gate(_flow_scalars.float())
+                _mag = (1 + _scale).abs().mean().item()
+                _film_per_block[_i]["scale_abs_mean_val_re_rand"] = _mag
+                print(f"  film_gate[{_i}] |1+gamma| mean on val_re_rand batch: {_mag:.4f}")
     append_metrics_jsonl(metrics_jsonl_path, {
-        "event": "film_diagnostic",
+        "event": "film_per_block_diagnostic",
         "epoch": int(best_metrics["epoch"]),
-        "film_weight_norm": _film_w_norm,
-        "film_bias_norm": _film_b_norm,
-        "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+        "gates": _film_per_block,
     })
 
     test_metrics = None
