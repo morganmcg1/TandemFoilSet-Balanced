@@ -103,8 +103,12 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        # Diagnostic capture (uncompiled-model only). When True, computes and
+        # stores per-head slice entropy mean for one batch into _last_slice_entropy.
+        self._diag_capture = False
+        self._last_slice_entropy: torch.Tensor | None = None
 
-    def forward(self, x):
+    def forward(self, x, gamma=None, beta=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -119,7 +123,15 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_logits = self.in_project_slice(x_mid) / self.temperature
+        if gamma is not None and beta is not None:
+            slice_logits = slice_logits * (1.0 + gamma) + beta
+        slice_weights = self.softmax(slice_logits)
+        if self._diag_capture:
+            with torch.no_grad():
+                # entropy per (B, H, N): -sum_S w * log(w + eps); mean over (B, N) per head
+                ent = -(slice_weights * torch.log(slice_weights.clamp(min=1e-8))).sum(dim=-1)
+                self._last_slice_entropy = ent.mean(dim=(0, 2)).detach().to(torch.float64)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -158,8 +170,8 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, gamma=None, beta=None):
+        fx = self.attn(self.ln_1(fx), gamma, beta) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -197,6 +209,10 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
+        # are computed once and passed to every block. Zero-init makes (gamma, beta)
+        # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
+        self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -209,9 +225,13 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # x is already in normalized space (caller normalises with stats), so x[:, 0, 13:14]
+        # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
+        log_re = x[:, 0, 13:14]
+        gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx)
+            fx = block(fx, gamma, beta)
         return {"preds": fx}
 
 
@@ -240,6 +260,43 @@ class ReScaleHead(nn.Module):
         raw = self.mlp(log_re)
         scale = F.softplus(raw)
         return scale.unsqueeze(1)
+
+
+class ReFiLM(nn.Module):
+    """FiLM Re-conditioner for PhysicsAttention slice logits.
+
+    Maps log(Re) → per-head per-slice (gamma, beta) used to modulate slice
+    logits before the softmax: slice_logits' = slice_logits * (1 + gamma) + beta.
+    Zero-init final layer makes (gamma, beta) = (0, 0) at step 0, so the model
+    starts identical to baseline; the optimiser must actively open the gate.
+
+    Shared across all TransolverBlocks (one instance lives on the parent
+    Transolver and is called once per forward). Outputs broadcast over N nodes.
+
+    References: Perez et al. 2018 (1709.07871), Peebles & Xie 2022 (2212.09748,
+    DiT adaLN-Zero), gMLP (2105.08050) on zero-init gating stability.
+    """
+
+    def __init__(self, heads: int, slice_num: int, hidden: int = 8):
+        super().__init__()
+        self.heads = heads
+        self.slice_num = slice_num
+        self.net = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, 2 * heads * slice_num),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, log_re: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # log_re: [B, 1]  →  gamma, beta each [B, H, 1, S]
+        B = log_re.shape[0]
+        out = self.net(log_re)
+        gamma, beta = out.chunk(2, dim=-1)
+        gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
+        beta = beta.reshape(B, self.heads, 1, self.slice_num)
+        return gamma, beta
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +512,16 @@ model = Transolver(**model_config).to(device)
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params) + ReScaleHead ({n_params_head} params)")
+n_params_film = sum(p.numel() for p in model.re_film.parameters())
+print(
+    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
+    f"+ ReScaleHead ({n_params_head} params)"
+)
+
+# Keep a reference to the uncompiled module for diagnostic forward passes
+# (slice entropy capture). Diagnostics toggle a Python flag that would otherwise
+# force torch.compile to recompile.
+uncompiled_model = model
 
 # torch.compile for forward/backward throughput. mode="default" + dynamic=True:
 # pad_collate yields variable per-batch shapes (mesh nodes 74K-242K, B=4), so
@@ -465,6 +531,55 @@ torch_compile_mode = "default"
 torch_compile_dynamic = True
 print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
 model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
+
+
+def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
+    """Capture per-block per-head mean slice entropy on one val batch.
+
+    Returns: list[list[float]] — outer = blocks, inner = heads (length H per block).
+    Uses the uncompiled model to avoid torch.compile recompilation from the
+    Python flag flip. Also returns the gamma/beta running stats observed on that batch.
+    """
+    attns = [b.attn for b in uncompiled.blocks]
+    for a in attns:
+        a._diag_capture = True
+        a._last_slice_entropy = None
+    was_training = uncompiled.training
+    uncompiled.eval()
+    captured: list | None = None
+    gamma_stats = beta_stats = None
+    try:
+        with torch.no_grad():
+            for x, _y, _is_surface, mask in val_loader:
+                x = x.to(device_, non_blocking=True)
+                mask = mask.to(device_, non_blocking=True)
+                x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
+                log_re = x_norm[:, 0, 13:14]
+                gamma, beta = uncompiled.re_film(log_re)
+                gamma_stats = {
+                    "mean": gamma.mean().item(),
+                    "std": gamma.std().item(),
+                    "absmax": gamma.abs().max().item(),
+                }
+                beta_stats = {
+                    "mean": beta.mean().item(),
+                    "std": beta.std().item(),
+                    "absmax": beta.abs().max().item(),
+                }
+                _ = uncompiled({"x": x_norm})
+                captured = [
+                    [float(v) for v in a._last_slice_entropy.tolist()]
+                    if a._last_slice_entropy is not None else []
+                    for a in attns
+                ]
+                break
+    finally:
+        for a in attns:
+            a._diag_capture = False
+            a._last_slice_entropy = None
+        if was_training:
+            uncompiled.train()
+    return captured or [], gamma_stats, beta_stats
 
 optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
@@ -498,6 +613,12 @@ print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+slice_entropy_ep1: list[list[float]] | None = None
+slice_entropy_film_stats_ep1: dict | None = None
+slice_entropy_last: list[list[float]] | None = None
+slice_entropy_film_stats_last: dict | None = None
+last_completed_epoch: int = 0
+diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -673,6 +794,24 @@ for epoch in range(MAX_EPOCHS):
     vol_count_safe = vol_count_total.clamp(min=1)
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
+
+    # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
+    # (the loop overwrites `last`, so after training ends, last reflects the
+    # final completed epoch even if the run is cut short by timeout).
+    epoch_slice_entropy: list[list[float]] | None = None
+    epoch_gamma_stats: dict | None = None
+    epoch_beta_stats: dict | None = None
+    if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_MAX - 2, 1):
+        epoch_slice_entropy, epoch_gamma_stats, epoch_beta_stats = capture_slice_entropy(
+            uncompiled_model, val_loaders[diag_split_name], stats, device,
+        )
+        if (epoch + 1) == 1:
+            slice_entropy_ep1 = epoch_slice_entropy
+            slice_entropy_film_stats_ep1 = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+        slice_entropy_last = epoch_slice_entropy
+        slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+    last_completed_epoch = epoch + 1
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -702,6 +841,9 @@ for epoch in range(MAX_EPOCHS):
         "rescale/scale_mean": scale_mean,
         "rescale/scale_std": scale_std,
         "rescale/scale_logre_corr": corr,
+        "film/slice_entropy_per_head": epoch_slice_entropy,
+        "film/gamma_stats": epoch_gamma_stats,
+        "film/beta_stats": epoch_beta_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -720,11 +862,46 @@ for epoch in range(MAX_EPOCHS):
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
     )
+    if epoch_slice_entropy is not None:
+        flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
+        if flat_ent:
+            mean_ent = sum(flat_ent) / len(flat_ent)
+            print(
+                f"    SliceEntropy(diag)  mean={mean_ent:.3f}  "
+                f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
+                f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
+            )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+# Always capture slice entropy on the actually-completed final epoch, so the
+# "last" snapshot reflects reality even if training was cut short by the
+# timeout before the SCHEDULER_T_MAX-2 trigger range was reached.
+if last_completed_epoch > 0 and last_completed_epoch != 1:
+    _ent, _g, _b = capture_slice_entropy(
+        uncompiled_model, val_loaders[diag_split_name], stats, device,
+    )
+    slice_entropy_last = _ent
+    slice_entropy_film_stats_last = {"gamma": _g, "beta": _b}
+
+# Persist epoch-1 vs last-epoch slice-entropy comparison as a single record so it's
+# easy to surface in the results comment.
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "film_slice_entropy_summary",
+    "n_params_film": n_params_film,
+    "ep1": {
+        "slice_entropy_per_head": slice_entropy_ep1,
+        "film_stats": slice_entropy_film_stats_ep1,
+    },
+    "last": {
+        "epoch": last_completed_epoch,
+        "slice_entropy_per_head": slice_entropy_last,
+        "film_stats": slice_entropy_film_stats_last,
+    },
+})
 
 # --- Test evaluation + local summary ---
 if best_metrics:
