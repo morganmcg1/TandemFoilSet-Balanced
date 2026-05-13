@@ -262,9 +262,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            # smooth_l1 (Huber, beta=0.5) — train/eval shape parity with the
+            # smooth_l1 (Huber, beta=0.25) — train/eval shape parity with the
             # training step so val/loss is comparable.
-            per_elem = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            per_elem = F.smooth_l1_loss(pred, y_norm, beta=0.25, reduction="none")
             # Zero out contributions from skipped samples so NaN doesn't leak
             # into the loss running mean either.
             per_elem = torch.where(
@@ -551,7 +551,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            # smooth_l1 (Huber, beta=0.5) in float32 for numerical stability.
+            # smooth_l1 (Huber, beta=0.25) in float32 for numerical stability.
             # Aligns the gradient with the MAE-based evaluation metric for
             # large normalized residuals; identical to MSE near zero.
             # Channel weights: [Ux, Uy, p] — upweight pressure (applied on the
@@ -560,7 +560,7 @@ for epoch in range(MAX_EPOCHS):
                 [1.0, 1.0, cfg.p_weight], device=device, dtype=torch.float32
             )
             per_elem = F.smooth_l1_loss(
-                pred.float(), y_norm.float(), beta=0.5, reduction="none"
+                pred.float(), y_norm.float(), beta=0.25, reduction="none"
             ) * ch_weights[None, None, :]
 
             vol_mask = mask & ~is_surface
