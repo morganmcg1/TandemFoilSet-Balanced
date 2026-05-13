@@ -8,7 +8,7 @@
 | | |
 |---|---|
 | Optimizer | AdamW |
-| LR / Scheduler | OneCycleLR(max_lr=1e-3, total_steps=29×steps/ep, pct_start=0.1, div_factor=10, final_div_factor=1e3) |
+| LR / Scheduler | OneCycleLR(max_lr=1.5e-3, total_steps=29×steps/ep, pct_start=0.1, div_factor=10, final_div_factor=1e3) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
 | Epochs | 50 (capped at 30 min wall); eval_every_n_epochs=3 |
@@ -24,6 +24,37 @@
 Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
+
+### 2026-05-13 01:30 — PR #1716: OneCycleLR max_lr=1.5e-3 — in-dist squeeze + LR ceiling probe
+
+- **val_avg/mae_surf_p:** **68.5843** (best epoch 27/29 — last 3 within 0.03, converged tail) ✓ NEW BASELINE
+- **test_avg/mae_surf_p (4-split, fp32 eval):** **60.3521**
+- **Per-split val (best epoch 27):**
+  - `val_single_in_dist`: 73.78 (was 80.87, −8.8% — biggest mover)
+  - `val_geom_camber_rc`: 80.71 (was 80.80, ≈unchanged)
+  - `val_geom_camber_cruise`: 51.72 (was 51.75, ≈unchanged)
+  - `val_re_rand`: 68.10 (was 70.36, −3.2%)
+- **Per-split test:**
+  - `test_single_in_dist`: 63.5400
+  - `test_geom_camber_rc`: 74.6399
+  - `test_geom_camber_cruise`: 42.1353
+  - `test_re_rand`: 61.0934
+- **W&B run:** `dvk0201k`
+- **vs prior baseline (#1556):** val −2.36 (−3.3%), test −1.48 (−2.4%)
+- **Peak GPU:** 48.80 GB | **Sec/epoch:** ~62.1s | **Epochs:** 29 (best=27, last 3 within 0.03 — converged)
+- **Model diff vs PR #1556:** `max_lr=1e-3 → 1.5e-3` in OneCycleLR constructor + W&B config (2 lines)
+- **LR sweep:** 1.5e-4 → 1.5e-3 (peak) → 1.5e-7 (final), 10904 steps, no instability
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --wandb_name willow-r4-alphonse-onecycle-maxlr1p5e3 --agent willowpai2g24h4-alphonse
+  ```
+
+**Key insight:** Higher peak LR accelerates convergence into the in-distribution basin (val_single_in_dist −8.8%). OOD splits (geom_camber_rc/cruise) are LR-saturated and don't move — they require a different lever (augmentation, regularization, geometry features). Best epoch shifts 29→27, indicating the schedule fully consumed its descent budget. Next step: push to max_lr=2e-3 to test the LR ceiling, and separately probe the OOD bottleneck.
+
+**Next target:** beat val_avg/mae_surf_p = 68.5843 / test_avg/mae_surf_p = 60.3521
+
+---
 
 ### 2026-05-13 01:05 — PR #1556: fp32 eval + eval_every_n_epochs=3 — paper-faithful test_avg (composes onto OneCycleLR)
 

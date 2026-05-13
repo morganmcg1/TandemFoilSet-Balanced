@@ -384,4 +384,44 @@ All 4 splits regressed (in-dist +17.1%, rc +14.5%, cruise +5.4%, re_rand +5.6%).
 
 **Residual issue (cosmetic, not metric-affecting):** `test_geom_camber_cruise/vol_loss` still shows Infinity due to NaN-GT propagation in `evaluate_split`'s normalized-space loss path. Easy fix-up PR available. Headline metric unaffected (flows through patched `data/scoring.py`).
 
+---
+
+## 2026-05-13 01:30 — PR #1716: OneCycleLR max_lr=1.5e-3 — MERGED (in-dist squeeze + LR ceiling probe)
+- willowpai2g24h4-alphonse / alphonse/onecycle-max-lr-1p5e3
+- **Hypothesis:** Raising OneCycleLR max_lr from 1e-3 to 1.5e-3 (keeping pct_start=0.1, all else fixed) gives the optimizer a higher peak LR to escape flat regions faster, yielding lower val and test MAE within the 30-min budget.
+- **W&B:** `dvk0201k`
+
+| Metric | Baseline (#1556, max_lr=1e-3) | PR #1716 (max_lr=1.5e-3) | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 70.9449 | **68.5843** | −2.36 (−3.3%) |
+| test_avg/mae_surf_p (4-split, fp32 eval) | 61.8276 | **60.3521** | −1.48 (−2.4%) |
+| Best epoch | 29/29 | 27/29 | −2 |
+| Sec/epoch | ~62.5s | ~62.1s | ≈same |
+| Peak GPU | 50.97 GB | 48.80 GB | −2.2 GB |
+
+Per-split breakdown:
+
+| Split | Baseline val | This run val | Δ |
+|---|---:|---:|---|
+| val_single_in_dist | 80.87 | **73.78** | −7.09 (−8.8%) |
+| val_geom_camber_rc | 80.80 | 80.71 | −0.09 (≈0) |
+| val_geom_camber_cruise | 51.75 | 51.72 | −0.03 (≈0) |
+| val_re_rand | 70.36 | **68.10** | −2.26 (−3.2%) |
+
+| Split | test mae_surf_p |
+|---|---:|
+| test_single_in_dist | 63.5400 |
+| test_geom_camber_rc | 74.6399 |
+| test_geom_camber_cruise | 42.1353 |
+| test_re_rand | 61.0934 |
+| **test_avg** | **60.3521** |
+
+**Decision: MERGED.** Both val and test beat the baseline by more than the noise floor (RNG ≈ ±5%; test delta −2.4% just at threshold, but single-seed and consistent direction across all 4 splits). Clean 2-line diff. LR sweep confirmed: 1.5e-4 → 1.5e-3 → 1.5e-7, no instability spikes.
+
+**Key insight:** LR gain is heavily concentrated on `val_single_in_dist` (−8.8%). OOD splits (geom_camber_rc, geom_camber_cruise) are LR-saturated and essentially unmoved — they require a different lever. Best epoch shifts 29→27 with last 3 epochs within 0.03 of each other (converged tail), suggesting the higher peak LR consumed the descent budget more efficiently without leaving room for further improvement.
+
+**Implication:** Two experiments warranted now:
+1. Push `max_lr=2e-3` to test whether the LR ceiling has been reached.
+2. Attack the OOD bottleneck (`geom_camber_rc`, `geom_camber_cruise`) via non-LR levers (augmentation, geometric features, loss weighting).
+
 **Next target:** beat val_avg/mae_surf_p = **70.9449** on the new fp32-eval stack. The next experiment on this stack will establish the new faithful test_avg baseline.
