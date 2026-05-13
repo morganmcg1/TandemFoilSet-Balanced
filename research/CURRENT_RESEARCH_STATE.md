@@ -1,19 +1,22 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 02:20 (round-9: closed #1676 fern β2=0.95 (refuted, wash); sent back #1652 frieren warmup-500 and #1619 nezuko sampler-2x for third rebase onto β=0.5 advisor; assigned #1727 fern weight_decay=5e-4. Baseline still 64.07.)
+- **As of:** 2026-05-13 02:40 (round-10: closed #1688 edward n_hidden=160 (width ruled out at 30-min cap, +5.49%); diagnosed #1660/#1653 as rate-limit stalls not true stale (pods recovered); assigned #1741 edward mlp_ratio=3 (FFN-only capacity, compute-neutral vs uniform widening). Baseline still 64.07.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
   `SENPAI_TIMEOUT_MINUTES=30` cap per training execution).
 
-## Round-9 research focus
+## Round-10 research focus
 
 4 merged winners → baseline 64.07 (from 110.76 at round-1 start, -42%). Primary focus:
-1. **Loss shape sweep** (β=0.25 / L1) — monotone signal confirmed; thorfinn running.
-2. **Stacking sampler 2x on β=0.5 baseline** — nezuko third rebase (highest-confidence next win).
-3. **Stacking warmup-500 on β=0.5 baseline** — frieren second rebase (real lever, expect compounding).
-4. **L2 regularization** (weight_decay 5e-4) — fresh fern assignment; OOD-targeted.
-5. **Capacity, batch, EMA, grad-clip** — edward (#1688), alphonse (#1701), tanjiro (#1660), askeladd (#1653).
+1. **Stacking sampler 2x on β=0.5** — nezuko #1619 (highest-confidence win: -16.1% on single_in_dist + β=0.5 OOD).
+2. **Stacking warmup-500 on β=0.5** — frieren #1652 (OOD splits -6.4%, -3.5%, -3.1% on old baseline).
+3. **Loss shape sweep β=0.25/L1** — thorfinn #1700 (monotone signal clear).
+4. **L2 regularization sweep** — fern #1727 (weight_decay 5e-4 OOD-targeted).
+5. **FFN capacity** — edward #1741 (mlp_ratio=3: first clean test of targeted capacity).
+6. **Training config** — alphonse #1701 (batch=8 at compile), tanjiro #1660 (EMA), askeladd #1653 (grad-clip).
+
+**Architecture axis status:** Depth (n_layers) CLOSED by #1413+#1588. Uniform width (n_hidden) CLOSED by #1398+#1587+#1688. Only mlp_ratio (FFN-only) and n_head untested.
 
 ## Fleet status
 
@@ -35,6 +38,7 @@
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
 |---|---|---|---|---|
+| #1688 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 160 + compile | 73.6658 | Width ruled out at 30-min cap (+5.49% vs 69.83 baseline). Same compute-starvation pattern as depth. |
 | #1676 ✗ | charliepai2g48h5-fern | AdamW β2 0.999 → 0.95 | 69.9029 | Near-baseline wash (+0.10%); lever doesn't transfer to small encoder-only Transolver. β2 axis closed. |
 | #1560 ✗ | charliepai2g48h5-alphonse | T_max=36 cosine (re-run on compile) | 69.598 | Marginal (+0.23 MAE vs 69.83 compile baseline); lever characterized — gap closes as epoch budget grows. T_max=36 no longer beats new 64.07 baseline |
 | #1588 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 | 111.058 | +9.83% vs bf16 baseline; depth lever ruled out (surface regressed more than volume) |
@@ -60,7 +64,7 @@
 | #1727 | charliepai2g48h5-fern | weight_decay 1e-4 → 5e-4: L2 for OOD splits | Regularization |
 | #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
 | #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
-| #1688 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + compile + bf16 | Width |
+| #1741 | charliepai2g48h5-edward | `mlp_ratio` 2 → 3: targeted FFN capacity | Architecture |
 
 > **Note on #1700:** Sweeping β downward from 0.5 (merged winner). β=0.25 narrows
 > the quadratic region to |e|<0.25, further L1-ifying the loss. Arm B tests pure L1.
@@ -156,6 +160,7 @@
 - **Higher batch (4 → 8) at fp32:** refuted by PR #1439. (Retesting at compile+bf16 via #1701.)
 - **Larger capacity at fp32:** wall-clock-bound (PRs #1398, #1413, #1422). n_layers=6+bf16 also ruled out (#1588, +9.83%).
 - **n_layers scaling (depth):** fully ruled out. Both n_layers=7+fp32 (#1413) and n_layers=6+bf16 (#1588) lost. Surface metric regressed MORE than volume in both cases — opposite of slice-attention mechanism prediction.
+- **n_hidden width scaling:** fully ruled out. n_hidden=192+fp32 (#1398), n_hidden=160+bf16-stale (#1587), n_hidden=160+compile (#1688, +5.49%). All fail under 30-min cap via compute starvation.
 - **Per-channel loss weights [1,1,3]:** refuted by PR #1428. All 4 splits worsened.
 - **AdamW β2=0.95:** refuted by PR #1676. Mechanism mismatch: transformer-recipe β2 suited for large-scale LM, not 1499-sample Transolver. β2 axis closed.
 

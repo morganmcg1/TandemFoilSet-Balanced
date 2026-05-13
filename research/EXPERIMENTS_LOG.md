@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-13 02:40 — PR #1688: n_hidden 128 → 160 on compile baseline — CLOSED (width ruled out)
+
+- **Branch:** `charliepai2g48h5-edward/wider-hidden-160-compile`
+- **Student:** charliepai2g48h5-edward
+- **Hypothesis:** Widen Transolver n_hidden 128→160 on compile + β=0.5 baseline.
+
+### Results
+
+| Metric | Baseline (#1568 compile) | This PR | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.8316 | **73.6658** | **+5.49%** ✗ |
+| `test_avg/mae_surf_p` | 61.8652 | **64.5826** | **+4.39%** ✗ |
+
+| Split | n_hidden=160 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 89.83 | 77.10 | **+16.5%** |
+| `val_geom_camber_rc` | 83.13 | 83.49 | -0.4% |
+| `val_geom_camber_cruise` | 52.78 | 50.64 | +4.2% |
+| `val_re_rand` | 68.92 | 68.10 | +1.2% |
+
+- **Best epoch:** 30/31. **Time/epoch:** ~58.3 s (+17.7%). **Peak GPU:** 28.4 GB. **Params:** 1.027M.
+- **Val trajectory:** Oscillating in 73-85 range (not cleanly descending like baseline).
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-wider-hidden-160-compile-20260512-235416/metrics.jsonl`
+
+### Analysis
+
+**Compute starvation — same mechanism as depth experiments.** Per-epoch cost 49.5→58.3s (+17.7%), epochs 36→31 (-14%), val_single_in_dist regressed +16.5% (in-dist split, should be best if capacity actually helped). Val curve oscillated 73-85 rather than cleanly descending.
+
+**Width axis now fully ruled out under 30-min cap.** Complete lever characterization:
+- n_hidden=192+fp32 (#1398): wall-clock bound
+- n_hidden=160+bf16 (#1587): pod stall
+- n_hidden=160+compile (#1688): +5.49% loss
+
+**Student's valuable insight:** `mlp_ratio=3` is the next-cheapest targeted test — affects FFN only, attention cost unchanged, ~5-8% per-epoch overhead vs 17.7% for uniform widening.
+
+### Conclusions
+
+- Uniform width scaling is dead under the 30-min cap. Do not re-run on β=0.5 baseline.
+- `mlp_ratio=3` assigned as PR #1741 — smallest-footprint capacity change.
+- If mlp_ratio=3 also loses, all capacity axes are closed and we should focus entirely on regularization and data levers.
+
+---
+
+## 2026-05-13 02:40 — PR #1741: mlp_ratio 2 → 3 — ASSIGNED (edward)
+
+- **Branch:** `charliepai2g48h5-edward/mlp-ratio-3`
+- **Student:** charliepai2g48h5-edward (fresh assignment after #1688 closed)
+- **Hypothesis:** FFN-only capacity increase. mlp_ratio=3 → FFN hidden 256→384; attention cost unchanged.
+- **Mechanism:** Slice-attention does spatial mixing; FFN does per-token non-linear projection. Richer FFN may model more complex physics interactions without the full compute hit of uniform widening.
+- **Config change:** `mlp_ratio=2` → `mlp_ratio=3` in model_config dict (single-line diff)
+- **Expected per-epoch cost:** ~52-53s (vs 49.5 baseline; 17.7% for n_hidden=160)
+- **Expected epochs:** ~33-34 (vs 36 baseline; 31 for n_hidden=160)
+- **Baseline to beat:** val_avg/mae_surf_p < 64.0705.
+
+---
+
 ## 2026-05-13 02:20 — PR #1676: AdamW β2=0.95 — CLOSED (lever refuted)
 
 - **Branch:** `charliepai2g48h5-fern/adamw-beta2-0.95`
