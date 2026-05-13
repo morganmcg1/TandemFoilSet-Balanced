@@ -2647,3 +2647,43 @@ Architectural residual-scaling axis at 5 layers closed entirely.
 - **Hypothesis:** Lion collapses all 6 Kendall log_σ channels to identical −0.904. Hybrid: Lion for model params, AdamW(lr=1e-3, wd=0) for log_σ. Should restore per-channel σ differentiation while preserving Lion's optimization efficiency.
 - **Target:** val < 47.64 / test < 40.57
 - Single arm, full Lion+β=0.3 stack with hybrid optimizer.
+
+---
+## 2026-05-13 14:00 — PR #2285 CLOSED willowpai2g48h2-tanjiro (EMA decay=0.999 on β=0.3 stack)
+
+- **Branch:** `willowpai2g48h2-tanjiro/ema-weights-on-beta0p3`
+- **Hypothesis:** Replace SWA with EMA model weights (PyTorch AveragedModel + multi_avg_fn, decay=0.999); EMA's longer effective window should outperform the 4-epoch SWA window bounded by 30-min cap.
+- **Results (terminal):**
+
+| Metric | Value | vs prior #1757 (66.66/58.32) | vs current Lion (47.64/40.57) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 70.34 | +5.5% regression | +47.6% regression |
+| test_avg/mae_surf_p | 61.65 | +5.7% regression | +52.0% regression |
+
+W&B: tanjiro EMA run (see PR comments).
+
+### Mechanism analysis (banked finding)
+
+EMA decay=0.999 has effective averaging window ~5 epochs (1/(1-decay) = 1000-step EMA at batch level ≈ 5 epochs at 250 batches/epoch). Our 30-min-bound cosine schedule (T_max=15, ~13 actual epochs due to timeout) front-loads its lr drop into epochs 11-13 — lr drops ~4x over those 3 epochs entering eta_min.
+
+EMA's 5-epoch window therefore dilutes those late-epoch low-lr updates with stale higher-lr snapshots from epochs 8-10. Final EMA model sits at average of high-lr and low-lr points instead of the pure low-lr regime SWA achieves with its sharp window cut at swa_start_frac=0.75.
+
+Per-epoch trajectory observed: EMA briefly overtook base val at epoch 11 (76.92 vs 77.47), then base sprinted ahead as cosine entered eta_min plateau (epochs 12-13 base lr drops dominate; EMA can't catch up).
+
+### Why this is not just a decay-tuning problem
+
+- decay=0.9999 would need ~50 epochs window — we have ~15
+- decay=0.99 would track too closely to base model — no averaging benefit
+- The root mismatch is **schedule shape** (front-loaded eta_min entry), not averaging method
+
+**EMA axis CLOSED at decay=0.999 on this schedule.** Right fix is faster cosine schedule (smaller T_max) so eta_min plateau covers more of the averaging window — handing this to tanjiro next.
+
+---
+## 2026-05-13 14:01 — PR #2342 ASSIGNED willowpai2g48h2-tanjiro (T_max ∈ {10,12} cosine sweep on Lion baseline)
+
+- **Branch:** `willowpai2g48h2-tanjiro/t-max-10-cosine-on-lion`
+- **Hypothesis:** Faster cosine cooling places lr in eta_min plateau earlier → SWA window catches 3-5 averaging epochs in genuinely flat-loss region vs current 2.
+- **Code change:** Add `--t_max` CLI flag decoupling cosine schedule length from `--epochs`. Use `eta_min=lr*0.05` floor. Set `swa_start_epoch = max(0.75*MAX_EPOCHS, t_max)` to ensure SWA starts after cosine reaches plateau.
+- **Two arms:** T_max=10 (aggressive — 3-4 plateau epochs) and T_max=12 (conservative — 1-2 plateau epochs)
+- **Target:** val < 47.64 / test < 40.57. Decision rule: <47.64 merge candidate; 47.64-48.50 close-call; ≥48.50 close.
+- Builds directly on tanjiro's prior banked findings from #2187 (SWA needs lr in flat region) and #2285 (EMA can't fix schedule-shape problem).
