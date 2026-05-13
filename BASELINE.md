@@ -1,6 +1,44 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1751 (2026-05-13)
+## Current best — PR #1477 (2026-05-13)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **84.5393** |
+| val_single_in_dist/mae_surf_p | 97.8600 |
+| val_geom_camber_rc/mae_surf_p | 96.9600 |
+| val_geom_camber_cruise/mae_surf_p | 63.2900 |
+| val_re_rand/mae_surf_p | 80.0500 |
+| test_avg/mae_surf_p (bs=4, clean) | **74.6655** |
+| test_single_in_dist/mae_surf_p (bs=1) | 87.5600 |
+| test_geom_camber_rc/mae_surf_p (bs=1) | 87.1800 |
+| test_geom_camber_cruise/mae_surf_p (bs=1) | 52.6900 |
+| test_re_rand/mae_surf_p (bs=1) | 72.2300 |
+| test_avg (bs=1 clean eval) | **74.9122** |
+| best_epoch | 15 / 15 (cosine COMPLETED — no timeout-cut) |
+| wall_clock | 24.6 min (vs 30 min floor — 18% faster) |
+| peak_vram | 32.95 GB (vs 42.11 GB floor — 22% reduction) |
+
+**NOTE:** Non-finite-y prefilter in `evaluate_split` now resolves the bs=4 NaN on `test_geom_camber_cruise` — test_avg at bs=4 is now fully clean (74.67).
+
+**Artifacts:** `models/model-charliepai2g24h2-fern-amp-bf16-on-t12-floor-20260513-075400/` (best seed)
+
+**Change from PR #1751 floor:** Added AMP bf16 autocast around forward pass in train loop and evaluate_split (with `pred.float()` before loss computation to preserve fp32 Huber + chan_w arithmetic). Also added non-finite-y prefilter in `evaluate_split` to skip samples with NaN/Inf ground truth — fixes the bs=4 test_geom_camber_cruise NaN that required `eval_bs1.py` workaround. bf16 reduces peak VRAM by 9 GB (42→33 GB) and epoch time by 37% (156s→98s), enabling the full 15-epoch cosine schedule to complete within 24.6 min vs the prior floor's timeout-cut at epoch 14. val_avg improved **−1.6%** (85.93→84.54, best seed). bs=1 test improved **−3.5%** (77.65→74.91). 2-seed mean: val_avg=85.08, test_avg_bs1=75.28 (both seeds beat floor).
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --lr 7.5e-4 \
+  --epochs 15 \
+  --agent charliepai2g24h2-fern \
+  --experiment_name "charliepai2g24h2-fern/amp-bf16-on-t12-floor"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)
+Optimizer: AdamW lr=7.5e-4, wd=1e-4, batch_size=4, chan_w=[1,1,5], surf_weight=10, 3-ep warmup + cosine(T_max=12, eta_min=1e-6), gradient-clip max_norm=1.0, Huber β=0.3, **AMP bf16** + non-finite-y prefilter.
+Peak VRAM: 32.95 GB. Wall clock: 24.6 min → **15 epochs (full cosine)**.
+
+## Previous best — PR #1751 (2026-05-13)
 
 | Metric | Value |
 |---|---|
