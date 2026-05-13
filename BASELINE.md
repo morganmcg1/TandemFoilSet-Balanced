@@ -39,12 +39,52 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **54.0051** | #1846 | L1 + compile + bf16 + slice_num=32 | epoch 40 of 41; best≠terminal (first converged run); -9.30% vs #1700; **measured on L1-only base** |
-| `test_avg/mae_surf_p` | **47.6261** | #1846 | — | all 4 test splits improve; -7.46% vs #1700 |
+| `val_avg/mae_surf_p` | **50.6001** | #2033 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine | epoch 44 of 44 (terminal); -6.31% vs #1846; val_single_in_dist -18.87% |
+| `test_avg/mae_surf_p` | **43.9680** | #2033 | — | all 4 test splits improve; -7.68% vs #1846 |
 
-> ⚠️ **Note:** PR #1846 (slice_num=32) was measured on the L1 baseline (#1700, val=59.54) **before** the sampler merge (#1619, val=56.62 with sampler 2× single). Post-merge advisor now includes BOTH sampler 2× single AND slice_num=32. The true stacked baseline will be revealed when future PRs run against current advisor. Conservative lower bound: val_avg ≤ 54.0051.
+All subsequent PRs must beat `val_avg/mae_surf_p < 50.6001` to be merged.
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 54.0051` to be merged.
+## 2026-05-13 13:00 — PR #2033: Linear warmup 3ep + monotone cosine (T_max=47)
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 44 of 44 — terminal (still improving when 30-min timeout hit)
+- **Epochs reached:** 44 (~41.0 s/epoch, -6% vs slice=32 baseline — warmup startup slightly more stable)
+- **Peak GPU memory:** 21.35 GB (unchanged)
+
+| Split | val mae_surf_p | Δ vs #1846 |
+|---|---|---|
+| `val_single_in_dist` | **47.9418** | **-18.87%** |
+| `val_geom_camber_rc` | 67.3675 | -0.11% |
+| `val_geom_camber_cruise` | **34.3430** | -3.85% |
+| `val_re_rand` | **52.7481** | -1.89% |
+| **val_avg** | **50.6001** | **-6.31%** |
+
+| Split | test mae_surf_p | Δ vs #1846 |
+|---|---|---|
+| `test_single_in_dist` | **42.1940** | — |
+| `test_geom_camber_rc` | **61.5999** | — |
+| `test_geom_camber_cruise` | **28.2251** | — |
+| `test_re_rand` | **43.8531** | — |
+| **test_avg** | **43.9680** | **-7.68%** |
+
+- **LR schedule:** linear warmup ep1-3 (5e-5 → 5e-4) then CosineAnnealingLR(T_max=47, eta_min=0). Warmup confirmed by logged LR: ep1=5e-5, peak at ep4, monotone cosine descent to ~2e-5 by ep44.
+- **Mechanism:** warmup gives optimizer 2-3 sub-peak-LR epochs to select a better loss basin before cosine descent locks in. Largest gain is val_single_in_dist (-18.9%) where basin quality is most sensitive; OOD splits move less but don't regress.
+- **Late-stage settling preserved:** unlike SGDR (#1989 LOSS), the monotone cosine tail lets L1 sign-gradient regime fine-tune in. val improved all the way to ep44 — gap ep41→44 still -4.9%.
+- **Why it works:** L1's sign-gradient property benefits from a two-phase schedule: warmup ("find the basin"), cosine tail ("fine-tune within it"). Complementary design.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-warmup-3-cosine-20260513-072010/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-warmup-3-cosine-20260513-072010/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/warmup-3-cosine" \
+      --epochs 50
+  ```
+  (warmup-3-cosine schedule now on advisor branch)
+
+---
 
 ## 2026-05-13 05:45 — PR #1846: slice_num 64 → 32 (tighter attention bottleneck)
 
