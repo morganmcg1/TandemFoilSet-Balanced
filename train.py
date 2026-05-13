@@ -228,6 +228,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    n_skipped_nonfinite_y = 0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -236,9 +237,27 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            # Pre-filter samples with non-finite y. scoring.py already skips
+            # such nodes from MAE division, but the upstream
+            # `(pred - y_norm)**2 * mask` produces `Inf*0 = NaN` and poisons
+            # the per-channel accumulator. Observed: 1/200 samples in
+            # test_geom_camber_cruise has Inf in y[p].
+            B = y.shape[0]
+            y_finite = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            if not y_finite.all():
+                n_skipped_nonfinite_y += int((~y_finite).sum().item())
+                if not y_finite.any():
+                    continue
+                x = x[y_finite]
+                y = y[y_finite]
+                is_surface = is_surface[y_finite]
+                mask = mask[y_finite]
+
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                y_norm = (y - stats["y_mean"]) / stats["y_std"]
+                pred = model({"x": x_norm})["preds"]
+            pred = pred.float()
 
             huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=0.3, reduction='none')
             chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
@@ -263,7 +282,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "n_skipped_nonfinite_y_samples": float(n_skipped_nonfinite_y)}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -457,9 +477,11 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+
         huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=0.3, reduction='none')
         chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
         huber_err = huber_err * chan_w[None, None, :]
