@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-13 07:55 — PR #2004: adamw-beta2-0.99 (nezuko) — MERGED (new best)
+
+- **Branch:** `charliepai2g48h2-nezuko/adamw-beta2-0.99`
+- **Hypothesis:** AdamW default β2=0.999 → 0.99. Effective 2nd-moment window ~100 steps vs ~1000. At 14-epoch budget (~5250 steps), faster 2nd-moment adaptation should reduce epoch-5 peak-LR spike and improve cosine-decay phase convergence.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-adamw-beta2-0.99-20260513-070048/metrics.jsonl`
+
+### Results vs. #1895 baseline (74.2082)
+
+| Split | Baseline | β2=0.99 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 83.733 | 85.100 | +1.64% ❌ |
+| val_geom_camber_rc | 91.690 | 89.815 | **−2.04%** ✓ |
+| val_geom_camber_cruise | 50.392 | 50.761 | +0.73% |
+| val_re_rand | 71.018 | 70.309 | −1.00% ✓ |
+| **val_avg/mae_surf_p** | **74.2082** | **73.9964** | **−0.29%** ✓ |
+| **test_avg/mae_surf_p** | 65.1123 | 64.4437 | **−1.03%** ✓ |
+
+**MERGED — new best: val_avg=73.9964, test_avg=64.4437**
+
+### Analysis
+
+Hypothesis confirmed: epoch-5 peak-LR spike collapsed from +20.4 → +3.2 units. The faster 2nd-moment EMA had already adapted to warmup gradient scale by peak-LR epoch, dampening the step-size shock.
+
+Win concentrated on val_rc (−2.0%) and test_rc (−4.9%) — the historically resistant split. Slight regression on val_single (+1.6%) consistent with mild per-parameter regularization (less over-fit to easy in-dist regime). val_cruise and val_re_rand essentially flat (±1%).
+
+**Mechanism insight:** β2 reduction acts as adaptation-rate regularizer. Unlike capacity-reducing regularizers (DropPath), this doesn't slow convergence — it makes the optimizer more responsive. Single-line change, orthogonal to all existing axes.
+
+**Next:** probe β2=0.95 (monotone check — does gain continue toward RoFormer/DeiT recipes?).
+
+---
+
 ## 2026-05-13 07:30 — PR #1942: lr-2e-3 (alphonse) — CLOSED (dead end)
 
 - **Branch:** `charliepai2g48h2-alphonse/lr-2e-3`

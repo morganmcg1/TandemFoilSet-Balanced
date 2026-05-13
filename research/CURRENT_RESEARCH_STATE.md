@@ -1,16 +1,16 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~07:35 (closed #1942 alphonse lr-2e-3 +2.99% dead end; assigned alphonse #2045 lr-1.75e-3 midpoint probe)
+- **Last updated:** 2026-05-13 ~08:00 (merged #2004 nezuko adamw-beta2-0.99 −0.29% new best 73.9964; assigned nezuko #TBD β2=0.95)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 74.2082`** — PR #1895 (lr=1.5e-3 + asinh+warmup-4 stack), epoch 14/14, 0.66M param Transolver.
+**`val_avg/mae_surf_p = 73.9964`** — PR #2004 (β2=0.99 + lr=1.5e-3 + asinh+warmup-4 stack), epoch 14/14, 0.66M param Transolver.
 
-Per-split: val_single=83.733, val_rc=91.690, val_cruise=50.392, val_re_rand=71.018.  
-Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, test_re_rand=61.405).
+Per-split: val_single=85.100, val_rc=89.815, val_cruise=50.761, val_re_rand=70.309.  
+Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, test_re_rand=61.511).
 
 **Historical trajectory:**
 - 122.64 (#1418 channel_weights=[1,1,3])
@@ -21,12 +21,13 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 - 80.7014 (#1776 4-epoch warmup)
 - 79.8623 (#1777 asinh pressure compression GAIN=1.0)
 - 77.1419 (#1814 lr=1e-3 + asinh super-additive stack)
-- **74.2082** (#1895 lr=1.5e-3 ceiling probe) — **current**
+- 74.2082 (#1895 lr=1.5e-3 ceiling probe)
+- **73.9964** (#2004 adamw-β2=0.99) — **current**
 
 **Canonical config on advisor HEAD:**
 - `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 (on asinh-compressed targets in normalized space)
 - **Asinh pressure compression**: `compress_pressure(y_norm)` / `decompress_pressure(y_c)` with ASINH_GAIN=1.0 (pressure channel only)
-- AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0
+- AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0, **betas=(0.9, 0.99)**
 - batch_size=4, surf_weight=10, NaN-skip in evaluate_split
 
 ## In-flight PRs
@@ -34,13 +35,17 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
 | #2045 | alphonse | `lr-1.75e-3` | LR midpoint probe: binary-search ceiling between 1.5e-3 (winner) and 2e-3 (dead-end) | **--epochs 14** ✓ | WIP — just assigned |
-| #1970 | nezuko | `drop-path-0.1` | Stochastic Depth (DropPath) on Transolver residual branches | **--epochs 14** ✓ | WIP — just assigned |
-| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target; now needs 74.21) |
+| nezuko TBD | nezuko | `adamw-beta2-0.95` | β2 axis: probe 0.95 (monotone test toward RoFormer/DeiT) | **--epochs 14** ✓ | WIP — being assigned |
+| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — needs new 73.9964 target |
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — in progress |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (L2 regularization) | **--epochs 14** ✓ | WIP — in progress |
 | #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale |
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
+
+### Merged PRs (this round — new bests)
+- #2004 nezuko adamw-beta2-0.99: **−0.29%** val (74.2082 → 73.9964), test_rc **−4.9%** breakthrough on resistant split
+- #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082) — previous best
 
 ### Closed as dead ends (this round)
 - #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but optimization quality degraded; LR ceiling between 1.5e-3 and 2e-3; binary-search → #2045 lr-1.75e-3)
@@ -65,14 +70,14 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 
 ## Current research focus
 
-1. **LR axis — ceiling localised, binary search in progress:**
-   - **#2045 alphonse lr-1.75e-3**: lr=2e-3 was stable but +2.99% worse (optimization quality floor, not instability). Midpoint probe at 1.75e-3. Either confirms 1.5e-3 is exact ceiling or finds marginal gain narrowing the window further.
+1. **LR axis — binary search in progress:**
+   - **#2045 alphonse lr-1.75e-3**: midpoint between confirmed winner 1.5e-3 and confirmed dead-end 2e-3. Confirms ceiling location or finds marginal gain.
 
-2. **Optimizer β2 axis:**
-   - **#2004 nezuko adamw-beta2-0.99**: Change AdamW `betas=(0.9, 0.999)` → `(0.9, 0.99)`. Faster 2nd-moment adaptation for 14-epoch budget. No capacity reduction (unlike DropPath). Single-line change.
+2. **Optimizer β2 axis — probe β2=0.95:**
+   - β2=0.99 won by −0.29% val, −1.03% test with test_rc −4.9% breakthrough. Nezuko's follow-up #1: β2=0.95 (RoFormer/DeiT recipe). Monotone test: does faster adaptation continue to help?
 
 3. **Schedule axis — warmup-duration sweep:**
-   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch. ⚠️ Frieren needs to be notified of new 74.2082 target (was tracking 77.14).
+   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch. ⚠️ Frieren needs to be notified of new **73.9964** target (was tracking 74.2082).
 
 4. **Data augmentation axis:**
    - **#1815 askeladd node-dropout-0.9**: rebasing onto asinh base to confirm stacking.
@@ -90,21 +95,23 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 - **LR warmup + grad clip:** −16.1% on MSE baseline.
 - **T_max alignment (--epochs 14):** −11.3% — critical!
 - **4-epoch warmup:** −3.04% on pure-L1 base. Canonical.
-- **Asinh pressure compression (GAIN=1.0):** −1.04% on warmup-4 base. Bulk-redistribution mechanism. Cruise gains most. **PRESSURE-SPECIFIC** — high kurtosis of suction-peak tail; velocity channels Gaussian (asinh-all-channels regressed +2.75%).
-- **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts). Mechanism: asinh stabilizes high-LR gradient → escape local minima on hard splits while holding cruise.
-- **lr=1.5e-3 + asinh:** −3.80% further gain (77.14 → 74.21). Epoch-5 peak-LR spike re-emerges but bounded and recoverable. LR ceiling NOT closed.
-- **Warmup duration axis CONVERGING:** warmup=3 (too steep), warmup=4 (canonical winner), warmup=5 (in flight). Best_epoch=final at all tested LRs → cosine still productive.
-- **14-epoch-budget constraint on regularizers:** Capacity-reducing regularizers (DropPath, EMA-heavy-decay, SWA) require 100s+ epochs to pay off — confirmed by #1970 DropPath failure (+6.99%). Only mechanisms that don't slow convergence are safe at this budget.
-- **val_rc RESISTANT SPLIT:** gains −0.86% at lr=1.5e-3, −2.54% at lr=1e-3 vs 5%+ on other splits. Architecture or data limitation for multi-foil configurations.
+- **Asinh pressure compression (GAIN=1.0):** −1.04% on warmup-4 base. Bulk-redistribution mechanism. Cruise gains most. PRESSURE-SPECIFIC — velocity channels Gaussian.
+- **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts).
+- **lr=1.5e-3 + asinh:** −3.80% further gain (77.14 → 74.21). LR ceiling NOT closed.
+- **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed (+20.4 → +3.2 units). Test_rc breakthrough −4.9%. **β2 axis: probe 0.95 next.**
+- **Warmup duration axis CONVERGING:** warmup=3 (too steep), warmup=4 (canonical winner), warmup=5 (in flight).
+- **14-epoch-budget constraint on regularizers:** Capacity-reducing regularizers (DropPath, SWA) require 100s+ epochs. Only convergence-preserving mechanisms safe.
+- **val_rc RESISTANT SPLIT:** was −0.86% at lr=1.5e-3; β2=0.99 now shows −2.04% val_rc and −4.9% test_rc breakthrough. β2 adaptation rate interacts with multi-foil geometry generalization.
 - **Architecture/capacity axes: EXHAUSTED.** All depth/width/slice-num variations regress.
 
 ## Next research directions (when new slots open)
 
-1. **lr=3e-3** (if lr=2e-3 still improves — push LR ceiling until instability dominates)
-2. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip — 2× effective data, high EV but implementation-complex)
-3. **Gradient accumulation + linear LR scaling** (ACCUM_STEPS=2 with lr=3e-3 — effective BS doubles)
-4. **Longer training (--epochs 18)** if LR ceiling closes (best_epoch=final multiple times is strong signal for more budget)
-5. **val_rc targeted probe** (dedicated experiment for the most resistant split — geometry augmentation, separate loss weight sweep)
+1. **β2=0.98** (DeBERTa V3 choice — midpoint between 0.99 winner and 0.95 probe)
+2. **β1=0.95 + β2=0.99** (DeiT-style combined; faster momentum decay to smooth warmup→peak transition)
+3. **lr=1.75e-3 + β2=0.95 stack** (if both win — compound optimizer-hyperparameter stack)
+4. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip — 2× effective data, high EV but implementation-complex)
+5. **Longer training (--epochs 18)** if best_epoch=final continues (cosine still productive signal strong)
+6. **val_rc targeted probe** (dedicated experiment for the most resistant split)
 
 ## Epoch budget arithmetic
 

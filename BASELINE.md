@@ -5,6 +5,62 @@
 
 ---
 
+## 2026-05-13 07:55 — PR #2004: AdamW β2=0.99 (faster 2nd-moment adaptation)
+
+**Student:** charliepai2g48h2-nezuko  
+**Change:** Single one-line change `AdamW(..., betas=(0.9, 0.99))` — default β2=0.999 → 0.99. Effective 2nd-moment window ~100 steps vs ~1000. All other config unchanged.
+
+### Validation (best epoch 14/14)
+
+| Split | mae_surf_p | vs. #1895 baseline (74.2082) |
+|---|---|---|
+| val_single_in_dist | 85.100 | +1.64% ❌ |
+| val_geom_camber_rc | 89.815 | **−2.04%** ✓ |
+| val_geom_camber_cruise | 50.761 | +0.73% ❌ |
+| val_re_rand | 70.309 | −1.00% ✓ |
+| **val_avg/mae_surf_p** | **73.9964** | **−0.29%** ✓ |
+
+**Improvement vs #1895 baseline: −0.29% (74.2082 → 73.9964)**
+
+### Test (from best-val checkpoint, epoch 14)
+
+| Split | mae_surf_p | vs. #1895 |
+|---|---|---|
+| test_single_in_dist | 76.764 | +1.75% |
+| test_geom_camber_rc | 78.036 | **−4.90%** ✓ |
+| test_geom_camber_cruise | 41.463 | −0.20% |
+| test_re_rand | 61.511 | +0.17% |
+| **test_avg/mae_surf_p** | **64.4437** | **−1.03%** ✓ |
+
+**Improvement vs #1895 test baseline: −1.03% (65.1123 → 64.4437)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW **lr=1.5e-3** (peak), **4-epoch warmup**, wd=1e-4, **betas=(0.9, 0.99)**, CosineAnnealingLR(T_max=10), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- Asinh pressure compression: ASINH_GAIN=1.0 (pressure channel only)
+
+### Key finding
+
+Epoch-5 peak-LR spike collapsed from +20.4 units to +3.2 units — the faster 2nd-moment EMA absorbed the LR-peak step-size shock as predicted. Win concentrated on val_rc/test_rc (the resistant split: −2.0% val, −4.9% test) with slight regression on val_single (+1.6%). test_rc breakthrough suggests β2=0.99 provides mild regularization through per-parameter step-size diversity (less over-fit to easy single-foil regime). β2 axis: probe β2=0.95 next.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-nezuko-adamw-beta2-0.99-20260513-070048/metrics.jsonl`
+- `models/model-charliepai2g48h2-nezuko-adamw-beta2-0.99-20260513-070048/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-nezuko \
+    --experiment_name "charliepai2g48h2-nezuko/adamw-beta2-0.99" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 05:15 — PR #1895: lr=1.5e-3 ceiling probe (LR axis: 1e-3→1.5e-3)
 
 **Student:** charliepai2g48h2-alphonse  
