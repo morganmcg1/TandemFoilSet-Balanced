@@ -1,5 +1,71 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 01:20 — PR #1641: Lion optimizer (MERGED — new baseline 73.15)
+
+- Student branch: `charliepai2g24h5-frieren/lion-optimizer`
+- Hypothesis: Lion (sign-based optimizer, Chen et al. 2023) is the logical endpoint of gradient renormalization. Where grad_clip(max_norm=1.0) renormalizes to unit L2 norm globally, Lion per-parameter sign-quantizes every gradient to ±lr. With our existing renorm stack, testing Lion tests whether per-parameter uniformity outperforms global L2 renorm.
+- Two arms: Lion lr=1.5e-4 (Arm 1) and Lion lr=3e-4 (Arm 2, winner). Both ran 13 epochs FP32 (pre-BF16 merge) on warmup3+cosine13+grad_clip stack.
+
+### Results
+
+| Arm | optimizer | lion_lr | lion_wd | val_avg/mae_surf_p | Δ vs baseline (94.22) | test_avg/mae_surf_p | Δ vs baseline (87.10) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Baseline | AdamW (BF16) | — | — | 94.22 | — | 87.10 | — |
+| Lion Arm 1 | Lion | 1.5e-4 | 3e-5 | 75.17 | **−19.05 (−20.2%)** | 70.13 | **−16.97 (−19.5%)** |
+| **Lion Arm 2 (winner)** | Lion | **3e-4** | **6e-5** | **73.15** | **−21.07 (−22.4%)** | **66.76** | **−20.34 (−23.4%)** |
+
+### Per-split val at best epoch (epoch 13, Arm 2 winner)
+
+| Split | Baseline (94.22) | Lion lr=3e-4 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 107.86 | 80.78 | −24.9% |
+| val_geom_camber_rc | 105.04 | 90.86 | −13.5% |
+| val_geom_camber_cruise | 73.65 | 51.56 | −30.0% |
+| val_re_rand | 90.33 | 69.39 | −23.2% |
+| **val_avg** | **94.22** | **73.15** | **−22.4%** |
+
+### Per-split test (Arm 2 winner)
+
+| Split | Lion lr=3e-4 |
+|---|---:|
+| test_single_in_dist | 69.02 |
+| test_geom_camber_rc | 77.38 |
+| test_geom_camber_cruise | 59.49 |
+| test_re_rand | 61.14 |
+| **test_avg** | **66.76** |
+
+### Training trajectory (both arms monotonically improving at epoch 13)
+
+| Epoch | Lion lr=1.5e-4 | Lion lr=3e-4 |
+|---:|---:|---:|
+| 1 | 210.83 | 192.42 |
+| 5 | 131.30 | 127.88 |
+| 10 | 87.29 | 83.76 |
+| 13 | **75.17** | **73.15** |
+
+- Metrics (winner): `models/model-charliepai2g24h5-frieren-lion_lr3e4-20260512-225827/metrics.jsonl`
+- Metrics (arm 1): `models/model-charliepai2g24h5-frieren-lion_lr1_5e4-20260512-235646/metrics.jsonl`
+
+### Analysis
+
+**Outstanding result** — largest single-PR gain of the round. Lion outperforms AdamW by >22% on both val and test, with consistent gains across all 4 splits (val improvements range from −13.5% to −30.0%).
+
+Why it works: Lion's per-parameter sign update produces uniform ±lr steps for each parameter regardless of gradient magnitude. This is strictly stronger than grad_clip(max_norm=1.0)'s global L2 renorm. For Transolver's heterogeneous parameter space (PhysicsAttention slices, MLP projections, layer norms have very different gradient scales), uniform per-parameter steps appear dramatically more beneficial than globally-normalized steps.
+
+Critical observation: **Both arms are still improving monotonically at epoch 13.** This means Lion has NOT converged in the 13-epoch budget. More epochs could yield further gains — key hypothesis for follow-up.
+
+The LR relationship holds: lr=3e-4 (= AdamW lr/3.3) beats lr=1.5e-4 (= AdamW lr/6.7). The Lion paper's guideline of lr = AdamW_lr / 3 to / 10 is validated here.
+
+### Suggested follow-ups (from frieren + advisor)
+
+1. **Lion + longer cosine (epochs=16–18 with BF16)** — both arms non-converged at epoch 13, more epochs almost certainly help.
+2. **Lion + BF16 (now merged)** — the merged stack has both BF16 and Lion. First BF16+Lion run to establish the new true baseline.
+3. **Lion lr mid-point (2e-4, 2.5e-4)** — narrow the LR scan between the two arms (gap is small at 73.15 vs 75.17).
+4. **Lion β2 = 0.999** — lion-pytorch default is (0.9, 0.99); at batch=4 gradient noise is high per step, slower momentum might help.
+5. **Lion + n_hidden=192 (fern's current experiment)** — architecture width × sign optimizer composition.
+
+---
+
 ## 2026-05-13 01:15 — PR #1683: LR2e3 / max_norm=4.0 sweep (CLOSED — renorm-ceiling confirmed)
 
 - Student branch: `charliepai2g24h5-tanjiro/lr2e3-or-maxnorm-sweep`
