@@ -501,30 +501,50 @@ for i, b in enumerate(model.blocks):
     )
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
-# Other params: lr=cfg.lr, wd=cfg.weight_decay; freqs: lr=10*cfg.lr, wd=0.
-# Rationale: default wd=1e-4 pulls freqs toward 0 each step, and the global lr=5e-4
-# was too small to move them off their dyadic init (top freqs essentially fixed in #2312).
+# H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
+# channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
+# scaling factors toward zero (init=0.025), fighting the model's learned per-channel
+# diversification, and default lr=5e-4 under-trains them.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
-other_params = list(model.parameters())
+layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
+other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_params) == (
+# H54: param-group consistency check — every model param ends up in exactly one of
+# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+all_model_p = {id(p): p for p in model.parameters()}
+all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
+assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
+    f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
+)
+n_layer_scale = sum(p.numel() for p in layer_scale_params)
+expected_layer_scale = 2 * len(model.blocks) * model_config["n_hidden"]
+assert n_layer_scale == expected_layer_scale, (
+    f"Expected {expected_layer_scale} LayerScale params "
+    f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
+)
+assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
     sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
 )
 optimizer = torch.optim.AdamW(
     [
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H40] Optimizer param groups: "
-    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
-    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
+    f"[H54] Optimizer param groups: "
+    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
+    f"({sum(p.numel() for p in other_params)} params), "
+    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
+    f"({sum(p.numel() for p in freq_params)} params), "
+    f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
+    f"({n_layer_scale} params, expected {expected_layer_scale})"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
@@ -636,6 +656,7 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
     freqs_lr = optimizer.param_groups[1]["lr"]
+    layer_scale_lr = optimizer.param_groups[2]["lr"]
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -645,6 +666,7 @@ for epoch in range(MAX_EPOCHS):
         "lr": current_lr,
         "train/current_lr": current_lr,
         "train/freqs_lr": freqs_lr,
+        "train/layer_scale_lr": layer_scale_lr,
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -662,6 +684,7 @@ for epoch in range(MAX_EPOCHS):
         f"    freqs (lr={freqs_lr:.2e}): "
         f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
     )
+    print(f"    layer_scale (lr={layer_scale_lr:.2e})")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
