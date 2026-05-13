@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 05:50
+- **Date:** 2026-05-13 06:15
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -45,7 +45,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | frieren | #1898 | n_layers=3 + epochs=50 — cosine schedule T_max tuning | LR schedule / training duration | WIP | Critical follow-up: #1875 ran 30 epochs at T_max=30, but ~44 epochs fit in budget. Setting T_max=50 keeps LR positive through all 44 actual epochs, eliminating wasted "dead epochs" at LR=0 |
 | nezuko | #1878 | mlp_ratio=1 — capacity-down on FFN axis (compile-stack test) | Architecture / throughput | WIP | Running against old compile baseline (71.44). Completes 3-axis capacity-down matrix (depth=frieren, slice=askeladd, MLP=nezuko). If beats 69.45 → merge; else context-dependent |
 | tanjiro | #1784 | max_norm=10 (rebase+retest on compile stack) | Gradient stability | WIP-REBASE | Pre-compile result was clean win (val=84.97); retesting on n_layers=5 compile stack. Needs to beat 69.45 |
-| thorfinn | #1858 | SGDR cosine warm restarts (T_0=10, T_mult=2) | LR schedule / exploration | WIP | LR schedule axis; periodic restarts may help escape local optima. Running on compile stack |
+| thorfinn | #1913 | gradient accumulation steps=2 (effective bs=8) on n_layers=3 stack | Gradient quality | WIP | #1858 SGDR closed (+2.17% worse, EMA-tax exceeded basin improvement). Pivoting from trajectory-shape to gradient-quality axis: lower-variance updates via accumulation, no dataloader bottleneck |
 
 **Baseline alert**: New baseline is PR #1875 (val=69.4518, test=61.1887). All PRs assigned against old compile baseline (71.44) must beat 69.45 to merge; those that only beat 71.44 should be sent back for retest on the n_layers=3 stack.
 
@@ -67,7 +67,8 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 - **Dropout=0.1, 0.05** (#1629 v2/v3, thorfinn) — both +2% worse. β=0.5 sharpened landscape; per-step Bernoulli noise becomes gradient corruption.
 - **Gradient clipping max_norm=1.0** (#1534 v2, tanjiro) — +1.6% worse. 100% clipping = normalized SGD. Asymmetric OOD-helps/IID-hurts split. Safety-net retest at max_norm=10 under way.
 - **Lookahead optimizer k=5, α=0.5** (#1783, thorfinn) — +1.39% worse. Competes with EMA for trajectory-smoothing budget; EMA-live gap collapses from −10.5 to −1.6.
-- **Pattern**: 4/4 noise/smoothing mechanisms fail on β=0.5+EMA stack. Smoothing axis saturated.
+- **SGDR cosine warm restarts (T_0=10, T_mult=2)** (#1858, thorfinn) — val=72.99 (+2.17% vs OLD 71.44 baseline; +5.09% vs NEW 69.45 baseline). LR restart mechanism worked exactly as designed (LR log confirms, val trajectory shows bump-recovery). Live model at ep 28 reached baseline-equivalent test (62.55 vs 62.59). But: cycle 1 wasted on converge-then-reset; cycle 2 cooldown < baseline; EMA-tax of ~10 epochs to wash cycle-2 high-LR noise > marginal exploration benefit. 3/4 splits regress.
+- **Pattern**: 5/5 noise/smoothing/exploration mechanisms (dropout, grad-clip 1.0, surf_weight=30, Lookahead, SGDR) fail on β=0.5+EMA stack. **Optimization-side smoothing axis fully mapped and saturated.** Future gains must come from gradient-quality, capacity, schedule, or representation.
 
 ### LR warmup
 - **Warmup 1 epoch** (#1672 v2, nezuko) — MERGED, −0.96%. Mechanism: AdamW 2nd-moment stabilization, not EMA catch-up.

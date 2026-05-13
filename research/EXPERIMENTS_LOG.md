@@ -885,3 +885,31 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: on n_layers=5, n_hidden=192 regressed +12.5% (capacity saturation at depth). On n_layers=3, params are only 0.42M (baseline 1.84M). n_hidden=192 × n_layers=3 ≈ 0.94M params — compact but wide. Tests if width reinvestment compensates for reduced depth.
 - Estimated per-epoch time: ~65 s/epoch → ~27 epochs in 30 min.
 - Targets: val < 69.4518, test < 61.1887.
+
+## 2026-05-13 06:15 — PR #1858: thorfinn SGDR cosine warm restarts — CLOSED
+
+- Branch: `willowpai2g48h5-thorfinn/sgdr-t0-10-tmult-2`
+- Hypothesis: replace single-cycle cosine with SGDR(T_0=10, T_mult=2). Multiple shorter cycles with periodic LR restarts probe whether re-exploration escapes the cosine baseline's basin.
+- W&B run: `hhwwt15w`
+
+| Metric | Value | vs OLD compile baseline (71.44) | vs NEW n_layers=3 baseline (69.45) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 28) | **72.9885** | +1.55 (+2.17%) | +3.54 (+5.09%) |
+| `test_avg/mae_surf_p` | **63.2398** | +0.65 (+1.03%) | +2.05 (+3.36%) |
+| Per-epoch wall time | ~63 s | identical (scheduler is free) | — |
+| Epochs in 30 min | 28 | −1 | — |
+| LR restart at step 4135 | 0 → 5e-4 | mechanism worked as designed | — |
+
+- **Per-split**: 3/4 splits regress; only test_geom_camber_cruise improved (−0.93).
+- **Mechanism worked as designed**: LR log confirms cycle structure (cycle 1 ep 1–11, restart at ep 12 ramping LR 0→5e-4 in one step, cycle 2 cooldown ep 12–28). Val trajectory shows expected bump-then-recovery pattern. Live model at ep 28 reached baseline-equivalent test quality (62.55 vs 62.59).
+- **Budget mismatch**: cycle 1 (~10 epochs) is effectively wasted converging then resetting; cycle 2 (~17 epochs) cooldown < single-cycle cosine cooldown (~28 epochs). EMA's ~5.5-epoch effective window means cycle-2 high-LR noise needs ~10 post-restart epochs to wash out.
+- **Pattern consolidation**: with Lookahead (#1783), dropout (#1629), grad-clip 1.0 (#1534), and SGDR all regressing, the **optimization-side smoothing/exploration axis is fully mapped on this stack**. EMA decay=0.999 saturates the trajectory-smoothing budget; additional perturbations cost more than they buy at 30-min budget.
+- **Decision: CLOSE.** Reassigning thorfinn to fresh gradient-quality axis (#1913, gradient accumulation steps=2).
+
+## 2026-05-13 06:15 — PR #1913: thorfinn assigned gradient accumulation steps=2 (effective bs=8)
+
+- Branch: `willowpai2g48h5-thorfinn/grad-accum-2-effective-bs-8`
+- Hypothesis: accumulate gradients over 2 mini-batches before optimizer.step(). Effective batch=8 without dataloader bottleneck (which killed prior `bs=8` test #1447). Lower per-update gradient variance compounds with EMA's smoothing.
+- Implementation: scale loss by 1/ACCUM_STEPS, accumulate via .backward(), step optimizer + scheduler + EMA only on (batch_idx + 1) % ACCUM_STEPS == 0. New CLI flag --accumulation_steps.
+- Distinct from in-flight portfolio (architecture, schedule, loss shape, gradient norms): this is a *gradient-quality* intervention, not a trajectory-shape intervention.
+- Targets compile + n_layers=3 baseline: val < 69.4518, test < 61.1887.
