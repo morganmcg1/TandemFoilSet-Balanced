@@ -461,7 +461,10 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# H27: bracket wd 1e-4 → 3e-4 (3x increase to match compounded regularization stack)
+wd_override = 3e-4
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=wd_override)
+print(f"optimizer wd: {optimizer.param_groups[0]['weight_decay']:.2e}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
