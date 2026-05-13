@@ -6,6 +6,34 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~16:50 — PR #2274 — CLOSED (WD=0 marginal loss vs new baseline)
+
+**frieren: weight_decay=0 on n_layers=3+slice_num=32+epochs=30**
+- val_avg: 38.186 vs new baseline 37.366 → **+2.20% WORSE**
+- test_avg: 31.809 vs new baseline 31.371 → **+1.40% WORSE**
+
+(Note: assignment was based on OLD baseline 38.270 at slice_num=32, where this run looked neutral on val and −2.0% on test. The new baseline 37.366 from PR #2229 supersedes mid-flight.)
+
+| Split | val WD=0 | val baseline (new) | Δ |
+|---|---|---|---|
+| single_in_dist | 38.575 | 38.082 | +1.30% |
+| geom_camber_rc | 52.555 | 51.356 | +2.34% |
+| geom_camber_cruise | 21.122 | 20.702 | +2.03% |
+| re_rand | 40.491 | 39.325 | +2.96% |
+| **avg** | **38.186** | **37.366** | **+2.20%** |
+
+**Key mechanistic finding (per student diagnosis):** The compact model **does NOT overfit** at WD=0 — train+val both descend through epoch 30 with no divergence. This means WD=1e-4 was not doing meaningful regularization work; the compact stack is capacity-insufficient to overfit at this budget. **WD axis is effectively flat at compact stack** — future experiments can use WD=0 if convenient.
+
+Student also identified inter-run variance of ~1.7 val units between two duplicate WD=0 runs (one truncated at ep28: val=39.851; clean run: val=38.186). This is now the BASELINE.md noise floor benchmark.
+
+**Test_single_in_dist −9.3% is intriguing** but driven by one split out of four; likely run-to-run variance.
+
+**Metric artifacts:** `models/model-weight-decay-0-nlayers3-20260513-132321/metrics.jsonl`
+
+**Reassignment:** frieren → PR #2367 (lr=2e-4 on n_layers=3+slice_num=24+epochs=33) — bracket LR axis upper bound at new baseline.
+
+---
+
 ## 2026-05-13 ~16:20 — PRs #2229 MERGED / #2278 #2273 #2151 CLOSED
 
 ### PR #2229 (alphonse: slice_num=24 on n_layers=3+epochs=33) — **MERGED — NEW BASELINE val=37.366**
