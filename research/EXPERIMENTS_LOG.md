@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-05-13 11:00 UTC — Round 35
+
+### PR #2156 askeladd: GELU → SiLU activation swap (all 3 MLP sites) — CLOSED (LOSS, NEW failure-mode taxon)
+
+- **Branch:** `charliepai2g48h5-askeladd/gelu-to-silu`
+- **Hypothesis:** SiLU's smoother gating near zero should help residual stream propagation; consistent 0.3-1% literature gains. Predicted uniform per-split delta (architectural-activation mechanism, NOT averaging-style).
+- **Result:** val_avg = **57.6372** (+13.91% vs 50.6001, LOSS), test_avg = **50.6557** (+15.21% vs 43.9680).
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | SiLU | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 56.9333 | **+18.76%** (worst) |
+| `val_geom_camber_rc` | 67.3675 | 73.6172 | +9.28% |
+| `val_geom_camber_cruise` | 34.3430 | 40.2016 | +17.06% |
+| `val_re_rand` | 52.7481 | 59.7969 | +13.36% |
+
+**NEW failure-mode taxon: architectural-activation degradation (NOT bimodal, NOT broadcast-scalar):**
+
+1. **All 4 splits uniformly regress 9.3-18.8%.** Predicted "uniform per-split delta" diagnostic confirmed.
+2. **Mechanism (student's analysis, confirmed by quantitative properties):** GELU(x) = x·Φ(x) has min ≈ -0.17 at x ≈ -0.75; SiLU(x) = x·σ(x) has min ≈ -0.28 at x ≈ -1.28. SiLU's longer negative tail injects more low-magnitude negative noise into the residual stream. With L1's sign-flipping gradients + bf16's reduced precision + small `n_hidden=128`, this destabilises the converged regime.
+3. **Activation axis closed in the negative direction.** GELU dominates SiLU at this configuration; do not retry SiLU variants at this size.
+
+### PR #2155 alphonse: AdamW amsgrad=True — CLOSED (LOSS, completes AdamW optimizer axis 4-LOSS-for-4)
+
+- **Branch:** `charliepai2g48h5-alphonse/adamw-amsgrad`
+- **Hypothesis:** amsgrad's max-tracking 2nd-moment denominator is theoretically robust to L1 sign-flip noise. Predicted "if wash or win, distinct from averaging-style bimodal".
+- **Result:** val_avg = **55.3928** (+9.47% vs 50.6001, LOSS), test_avg = **48.1550** (+9.52% vs 43.9680).
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | amsgrad | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 50.9671 | +6.31% |
+| `val_geom_camber_rc` | 67.3675 | 70.8324 | +5.14% |
+| `val_geom_camber_cruise` | 34.3430 | 40.6777 | **+18.45%** (worst) |
+| `val_re_rand` | 52.7481 | 59.0941 | +12.03% |
+
+**NEW failure-mode taxon: optimizer-statistic over-conservativism (NOT bimodal, NOT momentum-lag):**
+
+1. **All 4 splits uniformly regress 5.14-18.45%.** OOD slightly more sensitive but all directions same.
+2. **Mechanism (student's outstanding analysis):** amsgrad's max-bound is PERMANENT — once a single high-variance gradient inflates `v_max`, all subsequent steps for that parameter are clamped lower forever, even after the noise subsides. This kills early-phase exploration during the high-LR cosine phase. By the time `v_max` plateaus, the schedule has already decayed past peak.
+3. **Trajectory evidence (student traced):** epoch 1 val_avg = 263.92 (catastrophic vs baseline ~140 at ep1); epoch 13 = 100.00 (crossing into 100s only after 4× normal time); epoch 45 best = 55.39 (recovering monotonically but LR already at 1.4e-5).
+4. **AdamW optimizer axis is now closed 4-LOSS-for-4** in this launch:
+   - lr=7.5e-4 (UP, #1774): LOSS +16%
+   - lr=3.75e-4 (DOWN, #1997): LOSS +11.4%
+   - β1=0.95 (#2093): LOSS +7.45% (momentum-lag taxon)
+   - amsgrad (#2155, this PR): LOSS +9.47% (over-conservativism taxon)
+   - Plus prior closure: β2=0.95 (#1845): LOSS +15%
+   - **Defaults (lr=5e-4, β1=0.9, β2=0.999) are locally optimal.** No further AdamW probing.
+
+### Round-35 failure-mode taxonomy update
+
+Through rounds 25-35 we now have 6 distinct failure-mode patterns documented (vs 4 at end of round 33):
+
+1. **Averaging-style bimodal (7×):** in-dist ↓, OOD ↑. coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead, warmup-5, fun-jitter.
+2. **Broadcast-scalar prior corruption (2×):** uniform regression all splits, val_re_rand worst. gap/stagger jitter, NACA jitter.
+3. **Momentum-lag overshoots cosine (1×):** uniform regression all splits. AdamW β1=0.95.
+4. **Warmup-duration asymmetry (1×):** non-bimodal non-uniform regression; warmup duration bounds OOD from below. warmup-2.
+5. **Architectural-activation degradation (1× this round):** uniform regression all splits (worst on in-dist). GELU→SiLU.
+6. **Optimizer-statistic over-conservativism (1× this round):** uniform regression all splits (worst on cruise OOD). AdamW amsgrad=True.
+
+### Assignments for Round 35
+
+| PR | Student | Hypothesis | Mechanism class |
+|---|---|---|---|
+| #2194 | alphonse | SGD(momentum=0.9, nesterov=True, lr=2e-3) | Optimizer-FAMILY swap from AdamW (4-LOSS-for-4 closed). High uncertainty — informative either way. |
+| #2195 | askeladd | LayerScale init=1e-4 (CaiT-style per-channel learnable γ on residual branches) | Architectural rescaling sub-class; distinct from activation/normalization/stochastic depth. |
+
+---
+
 ## 2026-05-13 10:45 UTC — Round 34
 
 ### PR #2083 tanjiro: DropPath p_max=0.1 (retry-2 of stale #1976) — CLOSED (2nd consecutive stale at pod-level)
