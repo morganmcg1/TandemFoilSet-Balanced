@@ -1382,3 +1382,30 @@ Mechanism diagnosis (final):
 **Note**: Student ran 3 same-config retries and 1 failed run without posting any PR comment. This is the second student (after edward) to run silent retries. Reinforced SENPAI-RESULT posting requirement in closure comment.
 
 **Follow-up**: Assigned frieren surf_weight sweep (#2294) — fresh untested lever directly targeting training signal for primary metric.
+
+## 2026-05-13 13:35 — PR #2209: T_max=15 cosine realign — CLOSED ✗
+- Branch: willowpai2g48h1-thorfinn/cosine-T-max-15
+- Hypothesis: Realign cosine schedule T_max to the 30-min wall-clock budget (T_max=15 epochs to match ~15 epochs actually trained). Expectation: deeper LR decay tail = better refinement.
+- W&B run: `miioy517`
+
+| Metric | T_max=15 | Baseline (PR #2226) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **69.8624** | **62.8014** | **+11.2% ✗** |
+| val_avg/mae_surf_p (best) | 78.1448 (e14) | 71.7560 (e17) | +8.9% |
+| test_single_in_dist | 74.03 | 64.70 | +14.4% |
+| test_geom_camber_rc | 79.42 | 71.97 | +10.4% |
+| test_geom_camber_cruise | 54.64 | 48.79 | +12.0% |
+| test_re_rand | 71.36 | 65.75 | +8.5% |
+| epochs completed | 14 (129s/epoch) | 17 | undertrained at timeout |
+
+**Analysis**: DISCRIMINATING NEGATIVE RESULT — confirms T_max sweep is exhausted as a lever.
+
+Student's mechanism diagnosis (correct):
+- T_max=15 does NOT just deepen the refinement tail — it lowers the LR at EVERY epoch.
+- At epoch 7, LR multiplier dropped from baseline's 0.67 (T_max=18) → 0.50 (T_max=15), a 25% reduction in mid-training LR.
+- Schedule effectively shortens the high-LR exploration phase by reducing its magnitude.
+- Validation still improving monotonically at epoch 14 — confirms undertraining: schedule got "colder" too fast.
+
+**T_max-shortening lever CLOSED.** The high-LR exploration phase magnitude is load-bearing; any T_max < trained-epochs starves the exploration phase rather than adding refinement. Refinement-tail mechanisms must come from orthogonal levers (eta_min floor, warmup start, OneCycleLR variants).
+
+**Follow-up**: Assigned thorfinn LR warmup (#2303) — structurally orthogonal change. Preserves cosine shape, only smooths first epoch's initialization. Tests whether Lion benefits from gentler ramp-up at peak LR (1.5e-4 → no LR change), distinct from prior LR-warmup-with-lr=3e-4 closure (#1359) which conflated warmup with peak LR change.
