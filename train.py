@@ -63,7 +63,8 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True,
+                 mlp_dropout: float = 0.0):
         super().__init__()
         act_fn = ACTIVATION[act]
         self.n_layers = n_layers
@@ -73,9 +74,11 @@ class MLP(nn.Module):
         self.linears = nn.ModuleList(
             [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
         )
+        self.mlp_dropout = nn.Dropout(mlp_dropout)
 
     def forward(self, x):
         x = self.linear_pre(x)
+        x = self.mlp_dropout(x)
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
@@ -84,13 +87,15 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 attn_dropout: float = 0.0):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
+        self.attn_dropout = nn.Dropout(attn_dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -118,6 +123,7 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = self.attn_dropout(slice_weights)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -139,7 +145,8 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 stoch_depth_prob: float = 0.0):
+                 stoch_depth_prob: float = 0.0,
+                 attn_dropout: float = 0.0, mlp_dropout: float = 0.0):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
@@ -147,10 +154,11 @@ class TransolverBlock(nn.Module):
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            attn_dropout=attn_dropout,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+                       n_layers=0, res=False, act=act, mlp_dropout=mlp_dropout)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -175,6 +183,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 attn_dropout: float = 0.0, mlp_dropout: float = 0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -198,6 +207,7 @@ class Transolver(nn.Module):
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
                 stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+                attn_dropout=attn_dropout, mlp_dropout=mlp_dropout,
             )
             for i in range(n_layers)
         ])
@@ -412,6 +422,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    attn_dropout=0.05,
+    mlp_dropout=0.05,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
