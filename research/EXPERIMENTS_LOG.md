@@ -249,3 +249,58 @@ This is now adopted as a round-1 portfolio constraint.
 
 - **alphonse → PR #1735 (SwiGLU FFN at matched param count):** their own follow-up suggestion #3. Replaces `MLP(d, m*d, d)` with `SwiGLUMLP(d, 2/3·m·d, d)` at matched params. Single-axis, changes *what* the FFN computes (multiplicative gating) without scaling capacity. Canonical "modern transformer FFN" upgrade.
 - bf16 AMP (#1715 frieren) could re-open mlp_ratio=4 (and other capacity axes) by giving ~1.5× more epochs within the cap. Flagged for re-evaluation if AMP wins.
+
+## 2026-05-13 02:00 — PR #1715 MERGED: bfloat16 mixed-precision (AMP)
+
+**Largest single win of round 1.** Third baseline shift in <8 hours.
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/bf16-amp
+- **Merge commit:** `7f5b917`
+- **W&B runs:** `pw6cgb3z` (seed 1, BETTER), `pb3ra1i1` (seed 2)
+
+### Final numbers vs PR #1505 baseline
+
+| Metric | bf16 seed 1 | bf16 seed 2 | #1505 baseline | Δ (s1) |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | **89.597** | 94.420 | 113.794 | **−21.3%** |
+| `test_avg/mae_surf_p` | **79.907** | 85.601 | 101.782 | **−21.5%** |
+| `test_single_in_dist` | 91.40 | 97.39 | 118.85 | −23.1% |
+| `test_geom_camber_rc` | 89.33 | 94.82 | 111.21 | **−19.7%** |
+| `test_geom_camber_cruise` | 60.15 | 65.34 | 75.21 | **−20.0%** (finite) |
+| `test_re_rand` | 78.75 | 84.85 | 101.87 | **−22.7%** |
+
+Both seeds clear baseline by 16-22%. Cruise stayed finite — the feared `1/(slice_norm + 1e-5)` × bf16-truncation interaction did not materialize.
+
+### Compute
+
+| | bf16 | #1505 |
+|---|---:|---:|
+| Per-epoch wall-clock | ~103s | ~135s |
+| Total epochs in 30 min | **18** | 14 |
+| Best epoch | 17 | 13 |
+| Speedup | ~24%/epoch, ~29% more epochs | — |
+| Peak VRAM | 33 GB | similar |
+
+### Implementation
+
+`torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)` wrapped around the forward pass in both `evaluate_split` (line 255) and the training loop (line 506). Backward + optimizer step stay in fp32. No `GradScaler` (bf16 keeps fp32 exponent range). Eval casts `pred` back to fp32 before metric accumulation.
+
+### Why this won more than predicted
+
+Predicted Δ was −1% to −5% from "more epochs alone." Actual was −21%. The decomposition:
+1. **More epochs:** 14 → 18 (29% more). Best epoch shifted from 13 → 17 — those 4 extra epochs at the convergence frontier added substantial metric.
+2. **Slightly cleaner trajectory:** at matched epoch indices, seed 1's epoch 13 val (~107) was already at-or-below the merged baseline's epoch-13 val (~120). So bf16 also produced a marginally better trajectory, not just more steps. Likely mechanism: bf16 mantissa noise acts as a mild regularizer on the loss landscape.
+3. **Both compound:** the convergence frontier was further along AND each step was slightly better — multiplicative gain.
+
+### Implications for round 1 portfolio
+
+This is **the third baseline shift in round 1** (mask-aware 21:52, Huber 00:00, bf16 02:00). All 7 still-WIP PRs are on stale baselines and need to rebase + re-run to clear the new bar (val < 89.60, test < 79.91). Heads-up posted on all 7.
+
+**Compute-bound axes are now reviewable.** The four closed PRs (#1506 width, #1507 slice=128, #1511 depth=7, #1623 mlp_ratio=4) all regressed because of "compute-bound undertraining" at the 30-min cap. On the new 18-epoch budget, several of those may be back in-play. Flagged for round-2 priority queue.
+
+### Follow-ups
+
+- **frieren → PR #1810 (torch.compile + bf16):** their own follow-up suggestion #4. `torch.compile(model, dynamic=True)` after model construction. Orthogonal to bf16 (Inductor/Triton layer, not precision). Expected another 10-30% per-epoch speedup; trajectory still descending at epoch 17 of 18 means more epochs continue to pay metric. Single-line change in `train.py:449`.
+- **Compute-bound revisits queued for round 2** (after current round-1 PRs land): re-run #1511 (depth=7), #1623 (mlp_ratio=4), #1507 (slice=128) on the bf16 baseline. If any of them now beat val=89.60, they were genuinely compute-bound rather than fundamentally wrong axes.
+

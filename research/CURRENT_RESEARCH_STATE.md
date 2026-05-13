@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-12
+- **Date:** 2026-05-13
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -8,31 +8,33 @@
 
 ## Research focus
 
-Round-1 baseline has shifted **twice** in the past 2 hours through stacking compatible winners:
+Round-1 baseline has shifted **three times in <8 hours** through stacking compatible winners:
 
 | Merge | Time | val | test | Δ vs prior |
 |---|---|---:|---:|---:|
 | PR #1504 (mask-aware) | 2026-05-12 21:52 | 119.450 | 109.669 | round-1 baseline |
-| PR #1505 (Huber β=0.5) | 2026-05-13 00:00 | **113.794** | **101.782** | −4.74% val, −7.19% test |
+| PR #1505 (Huber β=0.5) | 2026-05-13 00:00 | 113.794 | 101.782 | −4.74% val, −7.19% test |
+| **PR #1715 (bf16 AMP)** | **2026-05-13 02:00** | **89.597** | **79.907** | **−21.3% val, −21.5% test** |
 
-The current `train.py` has both fixes stacked. The mask is applied after slice softmax (line 195 area) and the surface loss is Huber β=0.5 at both train (line 508) and eval (line 260).
+The current `train.py` has all three stacked: mask after slice softmax (~line 125), Huber β=0.5 at train+eval (lines 260, 508), and bf16 autocast wrapping the forward in both eval (line 255) and train (line 506). Best epoch shifted 13 → 17 of 18 (still descending at termination).
 
 **Pattern emerging from round 1:**
-- Correctness and loss-formulation changes are both winning by 5-10% each, stacking additively.
-- All 4 of the "compute-bound" hypotheses (slice=128, deeper=7, surf_weight=25, fern's slice retry) closed because the per-epoch cost cut them below the wall-clock convergence horizon.
-- The `test_geom_camber_cruise` NaN affected every unmasked baseline. Resolved by mask. Worth a follow-up sanity check whether the underlying data issue (`scoring.py` cruise sample 20 with inf pressure) is fully neutralized or just masked.
+- **All three winners are orthogonal mechanisms** (correctness, loss formulation, compute). They stack additively — cumulative val 119.45 → 89.60 (−25%).
+- **The "compute-bound undertraining" cluster is now alive again.** Four hypotheses (#1506 wider, #1507 slice=128, #1511 deeper=7, #1623 mlp_ratio=4) closed because they extended per-epoch cost below the wall-clock convergence horizon. On bf16's 18-epoch budget, those axes may be back in-play — flagged for round-2 priority.
+- **The trajectory at epoch 17/18 of bf16 is still descending.** Compute remains the binding constraint at the 30-min cap — `torch.compile` (PR #1810, frieren) is the next compute-side lever.
+- The `test_geom_camber_cruise` NaN issue is fully resolved by the mask fix; bf16 truncation × `1/(slice_norm + 1e-5)` did not re-introduce it.
 
-Round 1 in-flight (7 PRs) on various baselines:
+Round 1 in-flight (7 PRs), ALL on stale baselines vs the current bf16 baseline:
 - **#1506 edward (n_hidden=192)**, **#1509 nezuko (warmup+lr=1e-3)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
 - **#1589 tanjiro (AdamW betas)**: rebasing from pre-mask
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber
-- **#1712 askeladd (Huber β=0.25)**: from current merged baseline
-- **#1715 frieren (bf16 AMP)**: from current merged baseline
-- **#1735 alphonse (SwiGLU FFN)**: from current merged baseline — replaces closed #1623
+- **#1712 askeladd (Huber β=0.25)**: from Huber baseline, pre-bf16
+- **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16
+- **#1810 frieren (torch.compile + bf16)**: from current bf16 baseline (just assigned)
 
-All 5 pre-Huber PRs got a heads-up about the new baseline; they need to clear val < 113.79 / test < 101.78 to merge.
+All 7 got a bf16 heads-up. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
 
-**Portfolio constraint added 2026-05-13 00:35 (from #1623 close):** All four scalar-capacity axes (#1506 width, #1507 slices, #1511 depth, #1623 mlp_ratio) have regressed compute-bound on the 30-min cap. **Further scalar-knob scaling of the encoder is closed** — capacity moves must now change *what* the model computes (gating, anchor selection, geometric features, loss shaping), not scale existing components. bf16 AMP (#1715) is the one exception: if it unlocks ~1.5× more epochs within the cap, the capacity axes can be re-opened on the AMP baseline.
+**Portfolio constraint update 2026-05-13 02:00 (after #1715 merge):** The compute-bound axes (#1506 width, #1507 slices, #1511 depth, #1623 mlp_ratio) that closed earlier may be **back in-play** on the bf16 baseline (18-epoch budget vs 14). They are not auto-re-opened — flagged for round-2 priority queue after current round-1 PRs land. The portfolio rule from #1623 (capacity moves should change *what* is computed, not scale existing components) still applies as the default; bf16 simply opens a controlled exception for retest.
 
 ## Round 1 portfolio (status)
 
@@ -40,36 +42,45 @@ All 5 pre-Huber PRs got a heads-up about the new baseline; they need to clear va
 |-------|-----------|----------------------------------|--------|
 | #1504 | alphonse  | Mask-aware PhysicsAttention      | **MERGED** 21:52 (val=119.45, test=109.67) |
 | #1505 | askeladd  | Huber surface loss (β=0.5)       | **MERGED** 00:00 (val=113.79, test=101.78) |
-| #1506 | edward    | Wider hidden (128→192)           | WIP, pre-mask code, heads-up posted |
-| #1507 | fern      | More slices (64→128)             | CLOSED (compute-bound, +27%) |
+| #1506 | edward    | Wider hidden (128→192)           | WIP, pre-mask code, bf16 heads-up posted |
+| #1507 | fern      | More slices (64→128)             | CLOSED (compute-bound, +27%) — bf16-revisit candidate |
 | #1508 | frieren   | surf_weight 10→25                | CLOSED (compute-bound, +16%) |
-| #1509 | nezuko    | Warmup + lr=1e-3                 | WIP, pre-mask code, heads-up posted |
+| #1509 | nezuko    | Warmup + lr=1e-3                 | WIP, pre-mask code, bf16 heads-up posted |
 | #1510 | tanjiro   | Fourier pos enc (L=6)            | CLOSED (cruise NaN, pre-mask) |
-| #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-mask code, heads-up posted |
-| #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware |
-| #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) |
-| #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask, pre-Huber |
-| #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, current baseline |
-| #1715 | frieren   | bf16 mixed-precision (AMP)       | WIP, current baseline |
-| #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, current baseline (just assigned) |
+| #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-mask code, bf16 heads-up posted — bf16-revisit candidate |
+| #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware, bf16 heads-up posted |
+| #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) — bf16-revisit candidate |
+| #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask pre-Huber, bf16 heads-up posted |
+| #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, pre-bf16, bf16 heads-up posted |
+| #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
+| #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, bf16 heads-up posted |
+| #1810 | frieren   | torch.compile (dynamic=True)     | WIP, current bf16 baseline (just assigned) |
 
-**Merged:** 2 (mask-aware, Huber). **Closed:** 4 (Fourier, slice=128, surf_weight=25, mlp_ratio=4). **Open:** 7 (4 needing rebase + 3 on current baseline).
+**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 4 (Fourier, slice=128, surf_weight=25, mlp_ratio=4 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (6 needing rebase + 2 on current baseline).
 
 ## Potential next research directions
 
-Confirmed winners so far (both stack): correctness (mask) + loss formulation (Huber). Likely follow-ups:
+Confirmed winners so far (all three stack): correctness (mask) + loss formulation (Huber) + compute (bf16). Likely follow-ups:
 
+- **If torch.compile wins (#1810 frieren):** further compute-side optimizations become low-priority (we'd be near the H100 ceiling). The bottleneck shifts to actual model quality — round-2 priorities pivot to architecture and OOD generalization.
 - **If Huber β-tuning wins (#1712 askeladd):** sweep β around the optimum, consider per-channel β for surface p vs Ux vs Uy (different normalized scales).
-- **If bf16 AMP wins (#1715 frieren):** the compute-bound hypotheses (slice=128, deeper=7, surf_weight=25) become reviewable again at the larger epoch budget. Re-open those as "AMP+X" combinations.
-- **If grad_clip wins (#1692 fern):** explore weight decay tuning and learning-rate revisits, since clipping decouples optimizer stability from those.
-- **If SwiGLU FFN wins (#1735 alphonse):** the gating mechanism's success would suggest other modern transformer-FFN moves are worth trying (e.g. GeGLU variant, larger gating dimension, or per-block residual gating). Pairs well with bf16 (#1715) — both compose orthogonally.
+- **If grad_clip wins (#1692 fern):** explore weight decay tuning and LR revisits, since clipping decouples optimizer stability from those.
+- **If SwiGLU FFN wins (#1735 alphonse):** the gating mechanism's success would suggest other modern transformer-FFN moves are worth trying (e.g. GeGLU variant, larger gating dimension, per-block residual gating). Pairs well with bf16.
+- **If width/warmup/depth/AdamW-betas land:** harvest the wins, stack them with bf16, and revisit compute-bound axes on the resulting baseline.
 
-Larger swings to queue for round 2 if the above plateau:
-- **Surface-anchored cross-attention** (boundary nodes as queries against volume tokens) — directly addresses the "surface inherits from volume" structural relationship that frieren's surf_weight result highlighted.
-- **Mirror data augmentation** (y-axis flip + Uy negation) — strong CFD physical prior, effectively 2× training data; orthogonal to all architectural/optimization changes.
-- **Per-sample Re normalization** (Reynolds-number-aware feature embedding) — re_rand split is where Huber gave the largest gain, suggesting Re-dependent error structure.
-- **Quantile / Pinball loss** — more aggressive median-targeting than Huber if β=0.25 still leaves gains on the table.
-- **OneCycleLR / longer cosine warmup** — alternative schedule, may help if AMP enables more epochs.
+Round-2 priority queue (post-round-1-cleanup):
+
+**Compute-bound revisits on bf16** (3 of the 4 closed PRs are candidates):
+- **n_layers=7** (#1511 retry on bf16) — was the cleanest compute-bound regression, simplest revisit.
+- **mlp_ratio=4** (#1623 retry on bf16) — alphonse's first attempt closed compute-bound; SwiGLU (#1735) is the alternative track; on bf16 both could be winners stacked together.
+- **slice_num=128** (#1507 retry on bf16) — fern's compute-bound axis; could substantially increase model capacity if epoch budget supports it.
+
+**Larger swings if round-1+round-2-revisits plateau:**
+- **Surface-anchored cross-attention** (boundary nodes as queries against volume tokens) — directly addresses the "surface inherits from volume" structural relationship.
+- **Mirror data augmentation** (y-axis flip + Uy negation) — strong CFD physical prior, effectively 2× training data; orthogonal to architectural/optimization changes. Note: requires careful per-feature flipping of ~9 signed columns in X.
+- **Per-sample Re normalization** (Reynolds-aware feature embedding) — re_rand and cruise are where bf16 gave the largest test gains (−22.7% / −20.0%), suggesting Re-dependent error structure remains.
+- **Quantile / Pinball loss** — more aggressive median-targeting than Huber if β-tune still leaves gains on the table.
+- **OneCycleLR / longer cosine warmup** — alternative schedule for the now-18-epoch budget.
 - **Cruise data sanity check** (`scoring.py` cruise sample 20 inf-pressure) — mask currently hides the upstream data issue; worth a dedicated PR to either clean or document.
 
 ## Open questions and ruled-out paths
