@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -45,6 +46,62 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+# ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper (Zhang, Lucas, Ba, Hinton 2019)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead wrapper around any inner optimizer.
+
+    Maintains slow weights theta_s that interpolate toward the inner optimizer's
+    fast weights theta_f every k steps:
+        theta_s <- theta_s + alpha * (theta_f - theta_s)
+        theta_f <- theta_s
+    """
+
+    def __init__(self, base_optimizer, k=5, alpha=0.5):
+        self.optimizer = base_optimizer
+        self.k = int(k)
+        self.alpha = float(alpha)
+        self.param_groups = self.optimizer.param_groups
+        self.defaults = self.optimizer.defaults
+        self.state = defaultdict(dict)
+        self._step_count = 0
+        for group in self.param_groups:
+            for p in group["params"]:
+                self.state[p]["slow"] = p.data.detach().clone()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = self.optimizer.step(closure)
+        self._step_count += 1
+        if self._step_count % self.k == 0:
+            for group in self.param_groups:
+                for p in group["params"]:
+                    slow = self.state[p]["slow"]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none=True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        return {
+            "inner": self.optimizer.state_dict(),
+            "step_count": self._step_count,
+            "slow_weights": {
+                id(p): self.state[p]["slow"].cpu()
+                for g in self.param_groups for p in g["params"]
+            },
+        }
+
+    def load_state_dict(self, sd):
+        self.optimizer.load_state_dict(sd["inner"])
+        self._step_count = sd.get("step_count", 0)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -370,6 +427,8 @@ class Config:
     skip_test: bool = False  # skip final test evaluation
     lion_lr: float = 1.5e-4
     lion_weight_decay: float = 3e-5
+    lookahead_k: int = 0          # 0 = disabled (default)
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -426,8 +485,16 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 from lion_pytorch import Lion
 LION_LR = cfg.lion_lr
 LION_WD = cfg.lion_weight_decay
-optimizer = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD)
-print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
+LOOKAHEAD_K = cfg.lookahead_k
+LOOKAHEAD_ALPHA = cfg.lookahead_alpha
+_inner = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD)
+if LOOKAHEAD_K > 0:
+    optimizer = Lookahead(_inner, k=LOOKAHEAD_K, alpha=LOOKAHEAD_ALPHA)
+    print(f"Optimizer: Lookahead(k={LOOKAHEAD_K}, alpha={LOOKAHEAD_ALPHA}) "
+          f"over Lion(lr={LION_LR}, wd={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
+else:
+    optimizer = _inner
+    print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
 import math
 WARMUP_EPOCHS = 3
 def lr_lambda(epoch):
@@ -450,9 +517,11 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
-        "optimizer": "Lion",
+        "optimizer": "Lookahead(Lion)" if LOOKAHEAD_K > 0 else "Lion",
         "lion_lr": LION_LR,
         "lion_weight_decay": LION_WD,
+        "lookahead_k": LOOKAHEAD_K,
+        "lookahead_alpha": LOOKAHEAD_ALPHA,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
