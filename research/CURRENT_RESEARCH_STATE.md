@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 07:10 (3 PRs sent back for rebase; fern assigned FiLM-re-attention; 2ch ReScaleHead closed)
+- **Date**: 2026-05-13 09:25 (reviewed #2077 soap-linear-warmup closed; assigned tanjiro coord-translation-aug #2092, askeladd sgdr-warm-restarts #2095)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -8,13 +8,13 @@
 
 ## Current Baseline
 
-**val_avg/mae_surf_p = 29.2179** — PR #1614 (edward/per-channel-loss-weights p=5), merged 2026-05-13.
+**val_avg/mae_surf_p = 28.8762** — PR #2011 (film-re-attention), merged 2026-05-13.
 
-**-75.1% cumulative from initial 117.17.**
+**-75.3% cumulative from initial 117.17.**
 
-Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params) **+ ReScaleHead** (163-param Re→scale head, out_channels=3) **+ p_channel_weight=5** (post-Huber linear weight on pressure channel), **SOAP** (`lr=1e-3, wd=1e-4`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 29 epochs / 30 min. Peak GPU 23.91/96 GB.
+Config: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params) **+ ReScaleHead** (163-param Re→scale head, out_channels=3) **+ p_channel_weight=5** (post-Huber linear weight on pressure channel) **+ ReFiLM** (4,624-param shared FiLM on slice logits, zero-init, across all 5 blocks/4 heads), **SOAP** (`lr=1e-3, wd=1e-4`), **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**, `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`, Huber(δ=0.1)+rel-L2 loss, **bf16 AMP**, **torch.compile(mode="default", dynamic=True)**. 28 epochs / 30 min. Peak GPU 27.79/96 GB.
 
-Per-split val: single_in_dist=28.56, rc=42.69, cruise=13.77, re_rand=31.85. Test avg 25.6024.
+Per-split val: single_in_dist=28.6013, rc=41.9483, cruise=14.1462, re_rand=30.8090. Test avg 24.9992.
 
 ---
 
@@ -24,33 +24,31 @@ Per-split val: single_in_dist=28.56, rc=42.69, cruise=13.77, re_rand=31.85. Test
 Single-seed run-to-run variance is **~1-2%** on val_avg/mae_surf_p. Deltas below 1.5% need multi-seed confirmation.
 
 ### Convergence/Budget-Limited
-Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (OneCycleLR, EMA, SWA with plateau) are high value.
+Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA, SGDR warm restarts, OneCycleLR) are high value.
 
-### Re-Conditioning Stack
-Two confirmed mechanisms: ReScaleHead (output rescaling, -1.95%) + p_channel_weight=5 (loss reweighting, -2.11%). Next step: FiLM inside attention (slice-selection conditioning).
+### Re-Conditioning Stack — 3 confirmed mechanisms
+- **ReScaleHead** (output rescaling, -1.95%): learned Re→scale applied to Transolver output
+- **p_channel_weight=5** (loss reweighting, -2.11%): 5× post-Huber pressure weight  
+- **ReFiLM** (attention conditioning, -1.17%): FiLM gates on slice logits — Re-dependent mode selection, confirmed by 33% entropy drop
 
-### Ux Channel Is Load-Bearing Even Near-Identity
-PR #1952 (drop Ux from ReScaleHead) REGRESSED +4.63% on rebased stack with p_weight=5. The Ux channel provides gradient stability for velocity channels when pressure is upweighted in the loss. 3-channel ReScaleHead stays in baseline.
+### Loss-Weighting Axis CLOSED
+p_weight=5 is the optimum. p_weight=15 regressed +4.20% — cross-channel backbone coupling prevents monotonic improvement.
 
-### Gradient Mass Targeting
-p dominates error by ~70× even after 5× weighting (gradient mass ratio now ~7×). There is headroom for further p_weight increase (edward running p_weight=15).
+### Input Augmentation Axis — per-node jitter CLOSED
+Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound with p_weight+ReFiLM stack. **Translation augmentation** (whole-mesh rigid shift, NSE-invariant) is being tested as a physically valid alternative.
+
+### LR Warmup for SOAP CLOSED
+3-epoch LinearLR warmup regressed +1.38% val. SOAP already trains stably from lr=1e-3 — no instability to fix. Warmup wastes budget epochs. Direction closed.
 
 ---
 
-## Current Research Focus — Convergence + Multi-Mechanism Compounding
+## Current Research Focus — Convergence + Budget-Aware Mechanisms
 
-**Three confirmed mechanisms compound**: SOAP, ReScaleHead, p_weight=5. The programme is now exploring:
-1. Whether additional loss-axis mechanisms (surf_weight, coord-jitter) compound with p_weight
-2. Whether Re-conditioning can go deeper than output rescaling (FiLM in attention)
-3. Whether budget-aware training (EMA, OneCycleLR) stacks on top
-4. Whether loss-axis p_weight can go higher (p_weight=15)
-
-**Loss-weighting axis CLOSED**: p_weight=15 regressed +4.20% — over-amplification distorts shared backbone features. p_weight=5 is the optimum; no more p_weight sweeps.
-
-**In-flight experiments awaiting rebase results** (ran on old 29.8463 baseline):
-- #1963 tanjiro/coord-jitter-aug: -0.78% val / -1.51% test (borderline, rebase needed)
-- #1964 thorfinn/surf-weight-15: -0.74% val / -1.72% test (borderline, rebase needed)
-- #1966 frieren/ema-beta-0p99-rampup: -2.6% val / -3.8% test (strong, rebase needed)
+**Three confirmed Re-conditioning mechanisms in baseline**: SOAP + ReScaleHead + p_weight + ReFiLM. Programme is now exploring:
+1. **Budget-aware training**: EMA β=0.99 (frieren, rebasing), SWA plateau with η_min=1e-4 (edward, rebasing), OneCycleLR peak 2e-3 (alphonse), SGDR warm restarts T_0=14 (askeladd NEW)
+2. **Architecture depth/capacity**: n_layers=6 (fern), slice_num=128 (nezuko)
+3. **Loss reformulation**: Per-channel Huber δ (thorfinn: velocity δ=0.5, pressure δ=0.1)
+4. **Augmentation**: Translation augmentation (tanjiro: rigid mesh shift, NSE-invariant NEW)
 
 ---
 
@@ -58,14 +56,15 @@ p dominates error by ~70× even after 5× weighting (gradient mass ratio now ~7�
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #1884 | alphonse | `onecycle-lr` | WIP | **HIGH** | OneCycleLR(max_lr=2e-3); baseline update sent (29.2179) |
-| #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; strong -2.6% on old baseline; needs rebase |
-| #1963 | tanjiro | `coord-jitter-aug` | WIP REBASE | **HIGH** | Coord jitter std=0.005; needs rebase onto 29.2179 |
-| #1964 | thorfinn | `surf-weight-15` | WIP REBASE | **HIGH** | surf=15 mild +; needs rebase onto 29.2179 |
-| #2032 | edward | `plateau-swa` | NEW | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure in #1933 |
-| #2011 | fern | `film-re-attention` | WIP | **HIGH** | FiLM Re-cond inside PhysicsAttention slice logits |
-| #1457 | askeladd | `surf-weight-50` | WIP | MEDIUM | surf_weight=50; baseline update sent (29.2179) |
-| #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; baseline update sent (29.2179) |
+| #2095 | askeladd | `sgdr-warm-restarts` | NEW | **HIGH** | CosineAnnealingWarmRestarts T_0=14, T_mult=1; 2 cosine cycles in 28 epochs |
+| #2092 | tanjiro | `coord-translation-aug` | NEW | **HIGH** | Rigid mesh translation NSE-invariant aug; distinct from per-node jitter |
+| #2081 | thorfinn | `per-channel-huber-delta` | WIP | **HIGH** | velocity δ=0.5, pressure δ=0.1 in Huber loss |
+| #2079 | fern | `n-layers-6` | WIP | **HIGH** | Deeper Transolver stack n_layers 5→6 (+20% depth) |
+| #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure; needs rebase onto 28.8762 |
+| #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; needs rebase onto 28.8762 |
+| #1884 | alphonse | `onecycle-lr` | WIP | **HIGH** | OneCycleLR(max_lr=2e-3); higher peak LR than warmup-only tests |
+| #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; baseline update sent |
+| #1457 | askeladd | `surf-weight-50` | CLOSED/REPLACED | — | Replaced by sgdr-warm-restarts |
 
 All 8 students active.
 
@@ -85,6 +84,7 @@ All 8 students active.
 | #1794 | alphonse | torch-compile | 30.4412 | **−17.5%** | **−74.0%** |
 | #1599 | fern | re-conditioned-scaling | 29.8463 | **−1.95%** | **−74.5%** |
 | #1614 | edward | per-channel-loss-weights | 29.2179 | **−2.11%** | **−75.1%** |
+| #2011 | fern | film-re-attention | 28.8762 | **−1.17%** | **−75.3%** |
 
 ## Ruled Out (key entries)
 
@@ -99,20 +99,22 @@ All 8 students active.
 - **ema-weights v1** (#1704): dual-val overhead +5.9%
 - **ema-weights v2** (#1917): β=0.999 too high +2.9%
 - **rescale-head-2ch** (#1952): +4.63% on rebased stack; Ux channel load-bearing with p_weight=5
-- **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling prevents monotonic improvement. p_weight=5 is optimum.
+- **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling. p_weight=5 is optimum.
+- **coord-jitter-aug** (#1963): +1.93% on rebased stack; per-node jitter doesn't compound with p_weight+ReFiLM
+- **soap-linear-warmup** (#2077): +1.38% val; no instability to fix + wastes budget epochs
 
 ---
 
 ## Potential Next Directions
 
 **After current in-flight experiments land**:
-- **p_weight axis closed**: p_weight=15 regressed; p_weight=5 is the optimum; no further loss-weight sweeps
-- **Higher-LR plateau SWA (correct version)**: depends on OneCycleLR result first
-- **Multi-seed baseline validation**: 3 runs to firm up noise floor
-- **Karras post-hoc EMA**: average across multiple β values offline (zero training cost)
-- **rc-specific augmentation**: coord jitter may not be enough; try geometric augmentations specific to OOD-rc shapes
+- **SGDR cycle length sweep**: If T_0=14 T_mult=1 works, test T_0=10 T_mult=2 (shorter first cycle, longer second)
+- **Higher peak LR**: OneCycleLR (#1884) tests peak 2e-3; if that works, try peak 3e-3 with SGDR
+- **ReFiLM per-block (not shared)**: Current ReFiLM is shared across all 5 blocks; per-block FiLM adds 4×more params but allows layer-specific Re gating
+- **Geometry-specific augmentation**: camber/chord perturbation to directly improve geom_camber splits
 - **Mixup on input features**: blend 2 samples for OOD generalization
 - **Auxiliary losses**: predict vorticity/divergence as auxiliary targets
-- **Single-run FiLM baseline**: verify FiLM works before combining with deeper architecture
+- **Multi-seed baseline validation**: 3 runs to firm up noise floor now that baseline is tighter
+- **Karras post-hoc EMA**: average across multiple β values offline (zero training cost) — needs EMA mechanism first
 
-**The model is still converging at ep 29-30 in every run.** Convergence-aware + Re-conditioning + loss-targeted mechanisms remain the priority.
+**The model is still converging at ep 28-29 in every run.** Convergence-aware mechanisms (EMA, SWA, SGDR, OneCycleLR) remain the priority.

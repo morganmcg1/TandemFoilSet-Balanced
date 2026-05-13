@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-13 09:20 — PR #2077: [soap-linear-warmup] 3-epoch linear LR warmup before cosine — CLOSED
+
+- **Branch**: charliepai2g24h1-askeladd/soap-linear-warmup
+- **Hypothesis**: 3-epoch LinearLR warmup (lr: 1e-6 → 1e-3) before CosineAnnealingLR prevents early-training instability in SOAP and improves final convergence.
+- **Status**: CLOSED — regression (+1.38% val / +2.49% test). Two compounding failure modes.
+
+| Metric | Warmup | Baseline (#2011) | Δ |
+|--------|--------|-----------------|---|
+| val_avg/mae_surf_p | 29.2754 | 28.8762 | **+1.38% (WORSE)** |
+| test_avg/mae_surf_p | 25.6217 | 24.9992 | **+2.49% (WORSE)** |
+
+**Per-split:**
+
+| Split | val warmup | val base | Δval | test warmup | test base | Δtest |
+|-------|-----------|---------|------|------------|---------|------|
+| single_in_dist | 30.1193 | 28.6013 | +5.30% | 31.0709 | 29.5300 | +5.22% |
+| geom_camber_rc | 41.9844 | 41.9483 | +0.09% | 38.1052 | 37.0266 | +2.91% |
+| geom_camber_cruise | 13.9614 | 14.1462 | −1.31% | 10.9757 | 11.0171 | −0.38% |
+| re_rand | 31.0366 | 30.8090 | +0.74% | 22.3352 | 22.4230 | −0.39% |
+| **avg** | **29.2754** | **28.8762** | **+1.38%** | **25.6217** | **24.9992** | **+2.49%** |
+
+**LR trace**: ep1=1e-6 → ep3=6.67e-4 → ep4=1e-3 (peak) → ep27=2.56e-5 (best) → ep28=1.39e-5. SequentialLR worked as specified.
+
+**Failure analysis** (per askeladd's thorough diagnosis):
+1. **No instability to fix**: SOAP already trains stably from lr=1e-3 at epoch 0 — val curves descend monotonically, no divergence. Warmup addresses a problem that doesn't exist here.
+2. **Budget waste**: 30-min cap = ~28 epochs regardless. 3 warmup epochs at near-zero LR (1e-6 → 1e-3) are effectively wasted — the cosine phase is compressed to 25 epochs vs baseline's 28. Regression dominated by single_in_dist (+5.3%), the split most sensitive to total effective training steps.
+
+**Programme conclusion**: LR warmup for SOAP on this problem is not beneficial. Warmup direction closed. OneCycleLR (#1884, alphonse) will establish if *any* higher-peak-LR regime with warmup helps — that experiment has a genuinely different hypothesis (peak LR 2e-3, not just warmup before 1e-3).
+
+**Artifact**: `models/model-soap-linear-warmup-20260513-082127/metrics.jsonl`
+
+---
+
+## 2026-05-13 09:00 — PR #2011: [film-re-attention] ReFiLM conditioning inside PhysicsAttention — MERGED
+
+- **Branch**: charliepai2g24h1-fern/film-re-attention
+- **Hypothesis**: FiLM (Feature-wise Linear Modulation) applied to slice logits inside PhysicsAttention allows the model to select different slice subsets per Reynolds number — deeper Re-conditioning than ReScaleHead (output rescaling). Zero-init gates ensure identity at epoch 0.
+- **Status**: MERGED — new baseline: val_avg=28.8762 (-1.17% vs #1614)
+
+| Metric | ReFiLM | Baseline (#1614) | Δ |
+|--------|--------|-----------------|---|
+| val_avg/mae_surf_p | **28.8762** | 29.2179 | **−1.17%** |
+| test_avg/mae_surf_p | **24.9992** | 25.6024 | **−2.36%** |
+
+**Per-split val:**
+
+| Split | ReFiLM | Base (#1614) | Δ |
+|-------|--------|-------------|---|
+| single_in_dist | 28.6013 | 28.5620 | +0.14% |
+| geom_camber_rc | 41.9483 | 42.6891 | −1.73% |
+| geom_camber_cruise | 14.1462 | 13.7711 | +2.72% |
+| re_rand | 30.8090 | 31.8496 | −3.27% |
+| **avg** | **28.8762** | **29.2179** | **−1.17%** |
+
+**Mechanism confirmed**: Mean slice entropy dropped 33% (4.153 → 2.759) — model genuinely uses different attention slice subsets per Re. Gains concentrate on Re-variable (re_rand −3.27% val) and OOD-shape (geom_camber_rc −1.73% val; −4.91% test). FiLM gates open monotonically (zero-init, |γ|max=0.70, |β|max=0.62 by ep28). All 3 Re-conditioning mechanisms now in baseline stack: ReScaleHead (output) + p_channel_weight (loss) + ReFiLM (attention).
+
+**Params**: 4,624 (shared module across all 5 blocks/4 heads); peak GPU +3.9 GB for FiLM intermediates. Best epoch = last (28) — schedule still binding.
+
+**Artifact**: `models/model-charliepai2g24h1-fern-film-re-attention-20260513-072042/metrics.jsonl`
+
+---
+
+## 2026-05-13 08:30 — PR #1963: [coord-jitter-aug] rebased onto #2011 stack — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/coord-jitter-aug
+- **Previous state**: Mild positive on old baseline (−0.78% val / −1.51% test vs #1599), sent back for rebase onto #1614. After further rebase onto #2011 (current baseline):
+- **Status**: CLOSED — +1.93% val regression on full rebased stack.
+
+| Metric | coord-jitter (rebased) | Baseline (#2011) | Δ |
+|--------|----------------------|-----------------|---|
+| val_avg/mae_surf_p | ~29.44 | 28.8762 | **+1.93% (WORSE)** |
+
+**Failure analysis**: Input-domain coordinate perturbation (per-node std=0.005 Gaussian jitter) does NOT compound with loss-domain reweighting (p_channel_weight=5) + ReFiLM. Two distinct axes that were orthogonal on the old stack interact destructively on the new stack. Per-node random jitter is geometrically non-physical (distorts foil geometry), which may be why it doesn't compound cleanly. **Input augmentation axis closed for per-node jitter.**
+
+**Follow-on**: tanjiro now assigned coord-translation-aug (#2092) — rigid whole-mesh translation, NSE-invariant and geometrically valid (distinct mechanism).
+
+---
+
 ## 2026-05-13 07:15 — PR #1985: [p-channel-weight-15] Sweep p_weight 5→15 — CLOSED
 
 - **Branch**: charliepai2g24h1-edward/p-channel-weight-15
