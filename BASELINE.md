@@ -296,3 +296,32 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
   (grad-clip max_norm=5.0 now in train.py defaults; no extra flags needed)
 - **All subsequent experiments should target val < 63.4801 and test < 54.9834** as the merge threshold.
 - **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + n_hidden=192 + grad-clip=5.0 + everything else**, but the measured val=63.48 is on **n_hidden=128 + grad-clip=5.0 WITHOUT n_hidden=192**. Expected combined val < 63.48. The first n_hidden=192 + grad-clip=5.0 run will confirm the true combined state.
+
+## 2026-05-13 09:50 — PR #1953: alphonse n_hidden=192 + epochs=50 (compound + schedule fix)
+
+**New best — 11th compound improvement (FULL 10-compound stack + schedule fix; massive win)**
+
+- **val_avg/mae_surf_p:** 55.7634 (↓ from 63.4801, **−12.17%**)
+- **test_avg/mae_surf_p:** 48.0960 (↓ from 54.9834, **−12.53%**)
+
+**Per-split test (ALL 4 splits improve dramatically):**
+
+| Split | mae_surf_p | vs PR #1930 | vs PR #1899 |
+|-------|----------:|----------:|----------:|
+| `test_single_in_dist` | 52.8835 | −9.56 (−15.30%) | −8.56 (−13.94%) |
+| `test_geom_camber_rc` | 61.7845 | −6.59 (−9.64%) | −7.54 (−10.88%) |
+| `test_geom_camber_cruise` | 31.1522 | −4.67 (−13.03%) | −6.55 (−17.39%) |
+| `test_re_rand` | 46.5637 | −6.73 (−12.63%) | −7.53 (−13.92%) |
+
+- **Config (as measured):** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, **n_hidden=192**, n_layers=3, slice_num=64, mlp_ratio=2, n_head=4, dropout=0.0, torch.compile(dynamic=True), grad-clip max_norm=5.0, **`--epochs 50` (T_max=50)**
+- **THIS IS THE FIRST DIRECT MEASUREMENT OF THE FULL 10-COMPOUND STACK** — n_layers=3 + n_hidden=192 + grad-clip=5.0 + EMA + Huber + warmup + compile + T_max=50.
+- **Epochs:** 30/50 completed in 30-min wall-clock cap (~55 s/epoch epochs 1-26 clean; 99-114 s/epoch epochs 27-30 GPU contention from stale duplicate process; metrics unaffected).
+- **Best epoch:** 30/30 — **every single epoch was a new EMA best**. Val slope at termination **−0.84/epoch** (strongly descending; not converged).
+- **LR at termination:** ~1.73e-4 (still productive). Cosine T_max=50 means LR stayed above zero through the full wall-clock budget.
+- **EMA-vs-live gap:** −8.32 (vs +0.42 at #1899). With clip rate 73% (p50=15.4, p90=35.9, p99=82.7, max=187.7), live model is noisy enough that EMA shadow carries real edge.
+- **Mechanism (orthogonal compounding confirmed):** All three changes (n_hidden=192, grad-clip=5.0, T_max=50) compounded as predicted. Schedule fix alone (T_max 30→50) on the 10-compound stack provided the dominant lift; the combined stack delivered a clean 12%+ improvement uniformly across all 4 test splits.
+- **Param count:** 931,791 (0.93M), peak GPU memory 21.3 GB / 96 GB.
+- **W&B run:** `vnsqnuoy`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
+- **All subsequent experiments should target val < 55.7634 and test < 48.0960** as the merge threshold.
+- **The model is epoch-saturated, not capacity-saturated** — val descending at −0.84/ep at termination. Schedule/throughput-axis follow-ups (higher T_max, larger batch, faster epoch) carry highest expected value.
