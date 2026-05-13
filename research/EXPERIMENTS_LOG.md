@@ -358,3 +358,72 @@ Per-test-split (L=6):
 **Key observation:** Cruise test drop to 58.81 (vs 66.61 with Huber, 64.21 with Fourier) confirms orthogonality of mechanisms. Val curve still descending at epoch 18 cap — suggests more epochs or compound with other regularisation would help further.
 
 **Next assignments:** askeladd → Huber δ sweep (PR #1703); fern → Dropout rate sweep 0.15/0.25/0.30 (PR #1706).
+
+---
+
+## 2026-05-13 01:15 — PR #1607: EMA weight averaging decay=0.99 (edward) — MERGED
+
+- **Branch:** `willowpai2g24h5-edward/ema-weight-avg`
+- **Hypothesis:** Exponential moving average over model weights smooths per-epoch val wobble, producing a more stable checkpoint at evaluation time and potentially accessing lower-loss basins.
+- **W&B run:** `nl3llszv`
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (EMA, best ep 16) | **77.054** |
+| val_single_in_dist/mae_surf_p | 85.45 |
+| val_geom_camber_rc/mae_surf_p | 88.60 |
+| val_geom_camber_cruise/mae_surf_p | 57.80 |
+| val_re_rand/mae_surf_p | 76.36 |
+| test_avg/mae_surf_p (EMA) | **68.265** |
+| test_single_in_dist/mae_surf_p | 75.31 |
+| test_geom_camber_rc/mae_surf_p | 80.81 |
+| test_geom_camber_cruise/mae_surf_p | 48.52 |
+| test_re_rand/mae_surf_p | 68.41 |
+| main val_avg (same epoch, no EMA) | ~100.22 |
+| Epochs completed | 16 in ~30 min |
+| Peak VRAM | 33.8 GB / 96 GB |
+| Δ vs prior best (#1367, val=98.96) | **−22.1% val / −23.1% test** |
+
+**Result:** MERGED. Largest single-PR gain of the session. Main model val at epoch 16 is ~100 — unchanged from no-EMA baseline. EMA model is 77.05. The 23-point gap is entirely due to weight averaging: EMA smooths across the last ~100 gradient steps (effective window = 1/(1−0.99)), filtering batch noise while remaining responsive to learning. Uniform gains across all 4 splits (17–32% reduction).
+
+**Key analysis:** Main model wobble was enormous (range 89–209 across 16 epochs). EMA's monotonic descent consistently reached deeper minima despite the noisy landscape. `decay=0.99` is highly responsive — essentially averaging the last ~100 batches (~0.27 epochs), not a multi-epoch window.
+
+**Implementation:** `copy.deepcopy(model)` with `requires_grad=False`; `ema_p ← decay·ema_p + (1−decay)·p` after every optimizer step; both model and EMA model evaluated on val each epoch; best checkpoint saves EMA weights; test eval loads EMA weights into model.
+
+**Note:** Student ran on default `dropout=0.1`. Full compound with Fourier+Huber+Dropout(0.2)+EMA not yet tested — this is a first estimate. Recommended follow-up: EMA + dropout=0.2 compound.
+
+---
+
+## 2026-05-13 01:15 — PR #1690: Fourier L=8 + concat-raw positions (nezuko) — CLOSED
+
+- **Branch:** `willowpai2g24h5-nezuko/fourier-l8-concat`
+- **Hypothesis:** (1) More Fourier frequencies (L=8 vs L=6) capture finer boundary-layer features; (2) Concatenating raw (x,z) alongside Fourier features helps geom_camber_rc by keeping global coordinates.
+- **W&B runs:** `2xfd4tvu` (L=8), `hswe57m9` (L=6 concat-raw)
+
+| Metric | L=6 baseline | L=8 replace | Concat-raw |
+|--------|-------------|-------------|------------|
+| val_avg/mae_surf_p | 103.24 | 104.97 (+1.6%) | 110.72 (+7.2%) |
+| test_avg/mae_surf_p | 90.83 | **89.91 (−1.0%)** | 100.65 (+10.8%) |
+
+**Result:** CLOSED. Both arms lose on the primary val metric. L=8 wash on test but primary metric regresses. L=6 concat-raw clear regression everywhere, including geom_camber_rc (+15.11) — the split it was meant to help. L=6 normalized replacement remains the Fourier sweet spot.
+
+**Key insight:** L=4→L=6 improvement was monotone; L=6→L=8 is not. L=8 may require more epochs to converge (last epoch was best, val still descending), but within 30-min budget the gain doesn't materialise. Concat-raw dilutes learned features via scale mismatch (raw pos ∈ [−2,2] vs sin/cos ∈ [−1,1]) — the slim model can't disentangle them in 18 epochs.
+
+---
+
+## 2026-05-13 01:15 — PR #1400: Aux surf-p head λ sweep (tanjiro) — CLOSED
+
+- **Branch:** `willowpai2g24h5-tanjiro/aux-surf-p-head`
+- **Hypothesis:** Auxiliary surface-pressure prediction head (MLP on penultimate hidden state, λ-weighted loss) adds direct ranking-metric gradient signal during training.
+- **W&B runs:** `xd6973hg` (λ=2, Fourier+BF16), `mbaijhsk` (λ=5, Fourier+BF16); earlier `m9xr80iw` (λ=2, pre-Fourier, no BF16)
+
+| Variant | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---------|-------------------|---------------------|
+| Fourier+BF16 baseline | 103.24 | 90.83 |
+| λ=2 + Fourier + BF16 | 114.32 (+10.7%) | 99.16 (+9.2%) |
+| λ=5 + Fourier + BF16 | 117.94 (+14.2%) | 104.56 (+15.1%) |
+
+**Result:** CLOSED. Both λ arms regress vs baseline; λ=5 is worse than λ=2 — increasing aux weight is monotone-worsening. Aux head is dominated by Fourier features: Fourier-encoded hidden state already carries strong surface-p signal, so extra aux loss gradient competes with the main loss without the surf_weight=10× advantage the main surface loss enjoys.
+
+**Key insight:** Aux head improved on the pre-Fourier base (val=118.88 vs ~123 pre-Fourier), confirming the mechanism works. It's specifically Fourier's input-feature improvement that makes the aux head redundant. The `return_hidden=True` pattern in train.py is a useful implementation pattern for future auxiliary-task hypotheses.
+
