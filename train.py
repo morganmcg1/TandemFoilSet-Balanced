@@ -228,6 +228,7 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    pred_abs_max = 0.0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -239,6 +240,9 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
+            batch_pred_max = pred.abs().max().item()
+            if batch_pred_max > pred_abs_max:
+                pred_abs_max = batch_pred_max
 
             sq_err = (pred - y_norm) ** 2 * channel_weights
             vol_mask = mask & ~is_surface
@@ -261,7 +265,8 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "pred_abs_max": pred_abs_max}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -393,7 +398,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=96,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -478,6 +483,7 @@ for epoch in range(MAX_EPOCHS):
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+    max_pred_abs = max(m.get("pred_abs_max", 0.0) for m in split_metrics.values())
     dt = time.time() - t0
 
     tag = ""
@@ -500,16 +506,26 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
+        "val_max_pred_abs": max_pred_abs,
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}  pred_abs_max={max_pred_abs:.2e}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    if max_pred_abs > 1e6:
+        print(f"\nSTABILITY ABORT: pred_abs_max={max_pred_abs:.4e} > 1e6 at epoch {epoch+1}.")
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "stability_abort",
+            "epoch": epoch + 1,
+            "pred_abs_max": max_pred_abs,
+        })
+        break
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
