@@ -63,6 +63,7 @@ Per-split baseline (PR #2195):
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
+| #2272 | askeladd | LayerScale asymmetric init: gamma_attn=1e-4, gamma_mlp=1e-3 (data-driven from PR #2195 trained γ diagnostics) | **Round-38** — MLP branches activated 4-8× stronger than attn at convergence → asymmetric init reduces budget waste in "near-zero" ramp-up phase; targets earlier convergence and possible further gain over 48.5160 baseline |
 | #2268 | thorfinn | n_layers 5→4 (depth-down probe; ~20% per-epoch wall-clock savings, --epochs 60) | **Round-38** — pure architectural reduction; complementary to in-flight #2234 mlp_ratio=4 ADD-capacity; budget-bound vs capacity-saturated diagnostic with high info value; param count 708K→575K |
 | #2223 | edward | berHu reverse-Huber c=1.0 (pure L1 for \|r\|≤1.0, quadratic-amplified for \|r\|>1.0) | **Round-36** — OPPOSITE of closed Huber-β (amplifies not softens); amplifies large-residual OOD gradients; no near-zero softening so no averaging-bimodal risk; targets val_geom_camber_rc + val_re_rand OOD bottleneck |
 | #2195 | askeladd | LayerScale init=1e-4 (CaiT-style per-channel learnable residual gain) | **Round-35** — architectural rescaling sub-class; learned per-branch gate, distinct from activation/normalization; 1280 params added, ~0.2% increase |

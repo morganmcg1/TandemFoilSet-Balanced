@@ -115,6 +115,7 @@ Closing as LOSS. **n_head axis fully closed; n_head=2 confirmed as TRUE INTERIOR
 
 | PR | Student | Hypothesis | Round |
 |---|---|---|---|
+| #2272 | askeladd | LayerScale asymmetric init (gamma_attn=1e-4, gamma_mlp=1e-3) — data-driven follow-up from PR #2195 trained γ diagnostics | round-38 |
 | #2268 | thorfinn | n_layers 5→4 (depth-down, --epochs 60) — pure architectural reduction, 708K→575K params, budget-bound vs capacity-saturated diagnostic | round-38 |
 
 Idle students: 0. All 8 students in-flight.
