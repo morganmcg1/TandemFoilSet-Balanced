@@ -132,6 +132,53 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class HybridFourierCoordEnc(nn.Module):
+    """Concat dyadic L=n_freqs (2^k·π, k=0..n_freqs-1) + Gaussian RFF m=rff_m σ=rff_sigma.
+
+    Replaces the 2 raw (x, z) coord dims with 4*n_freqs dyadic features
+    (sin/cos of coords * 2^k * π) plus 2*rff_m Gaussian RFF features
+    (sin/cos of coords @ B^T where B ~ N(0, σ²) is shape (rff_m, 2)).
+
+    The B matrix is sampled once with a local generator seeded at 42 so the
+    encoding is deterministic without perturbing the global RNG (model init
+    and sampler shuffling stay identical to the FourierCoordEnc baseline).
+
+    Hypothesis #2369: σ=3.0 emphasises HIGH-frequency directions
+    complementary to dyadic's low-octave coverage, in contrast to σ=1.0
+    (#2309) which clustered around dyadic's already-covered low band.
+
+    Input  shape: [B, N, in_dim] (in_dim = X_DIM after normalization)
+    Output shape: [B, N, in_dim + (4*n_freqs + 2*rff_m - 2)]
+                  e.g. n_freqs=6, rff_m=6 → 24+12-2 = +34 features.
+    """
+
+    def __init__(self, n_freqs: int = 6, rff_m: int = 6, rff_sigma: float = 3.0,
+                 rff_seed: int = 42):
+        super().__init__()
+        self.n_freqs = n_freqs
+        self.rff_m = rff_m
+        self.rff_sigma = rff_sigma
+        self.rff_seed = rff_seed
+        freqs = 2.0 ** torch.arange(n_freqs).float()
+        self.register_buffer("freqs", freqs)
+        gen = torch.Generator()
+        gen.manual_seed(rff_seed)
+        B = torch.randn(rff_m, 2, generator=gen) * rff_sigma
+        self.register_buffer("rff_B", B)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        coords = x[..., :2]
+        angles = coords.unsqueeze(-1) * self.freqs[None, None, None, :] * torch.pi
+        sin_d = torch.sin(angles)
+        cos_d = torch.cos(angles)
+        dyadic = torch.cat([sin_d, cos_d], dim=-1).reshape(
+            *x.shape[:-1], 4 * self.n_freqs
+        )
+        proj = coords @ self.rff_B.t()
+        rff = torch.cat([proj.sin(), proj.cos()], dim=-1)
+        return torch.cat([dyadic, rff, x[..., 2:]], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -460,11 +507,24 @@ val_loaders = {
 }
 
 N_FREQS = 6
-fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+# H40 (PR #2369): hybrid Fourier — dyadic L=6 + Gaussian RFF m=6 σ=3.0 (seed=42).
+# σ=3.0 emphasises high-freq RFF complementary to dyadic's π..32π coverage,
+# unlike #2309's σ=1.0 (low-freq RFF, redundant with dyadic, val=68.076).
+RFF_M = 6
+RFF_SIGMA = 3.0
+RFF_SEED = 42
+fourier_enc = HybridFourierCoordEnc(
+    n_freqs=N_FREQS, rff_m=RFF_M, rff_sigma=RFF_SIGMA, rff_seed=RFF_SEED,
+).to(device)
+print(
+    f"[H40] HybridFourierCoordEnc: dyadic L={N_FREQS} + RFF m={RFF_M} σ={RFF_SIGMA} "
+    f"seed={RFF_SEED} | rff_B shape={tuple(fourier_enc.rff_B.shape)} "
+    f"std={fourier_enc.rff_B.std().item():.4f} (expected ~{RFF_SIGMA:.4f})"
+)
 
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=4 * N_FREQS + 2 * RFF_M + (X_DIM - 2) - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
