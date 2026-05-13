@@ -1533,3 +1533,30 @@ Key mechanism findings from student's diagnosis (excellent two-seed protocol):
 **Finding #32 (inter-seed noise floor)**: ~1.4% rel test_avg/mae_surf_p on this stack/hardware. Any reported improvement from a single seed below this threshold requires multi-seed confirmation before claiming signal vs noise.
 
 **Follow-up**: Assigned askeladd Lion β2 sweep (#2382) — natural continuation, last untested Lion momentum parameter.
+
+## 2026-05-13 15:45 — PR #2333: slice_num=16 + clip=5.0 (slot floor scan) — CLOSED ✗ (floor found)
+- Branch: willowpai2g48h1-nezuko/slice-num-16
+- W&B run: `g5f3nl54`
+
+| Metric | slice=24 baseline (#2282) | slice=16 (this run) | Δ abs | Δ % |
+|---|---|---|---|---|
+| **test_avg/mae_surf_p** | **61.8457** | **63.0075** | +1.16 | **+1.88% ✗** |
+| val_avg/mae_surf_p (best) | 70.7422 | 72.7499 | +2.01 | +2.84% |
+| test_geom_camber_cruise | 46.72 | **48.14** | +1.42 | **+3.04% ✗** (decision trigger) |
+| test_single_in_dist | 64.56 | **64.37** | −0.19 | **−0.30%** (slight improvement) |
+| test_geom_camber_rc | 72.29 | 73.86 | +1.56 | +2.17% |
+| test_re_rand | 63.82 | 65.66 | +1.84 | +2.89% |
+| Per-epoch time | 102.7s | **97.34s** | −5.4s | −5.2% (faster as expected) |
+| Best epoch | 18/18 | 18/18 | — | full schedule |
+
+**Analysis**: SLOT FLOOR FOUND. Decision rule triggered exactly as designed: cruise +3.04% regression >2% threshold.
+
+Mechanism: slice=16 gives 4 tokens/head/block (16/4=4). TandemFoilSet has ≥5 distinct physics structures (leading edge, trailing edge, wake, far-field, camber line) — per-head capacity at slice=16 hits the structural boundary. The regression is OOD-localized (in_dist slightly *improved* −0.30%) confirming the locality-prior vs OOD tradeoff: `slice_num` controls how finely the model can represent distinct physics regions for OOD splits, not in-distribution accuracy.
+
+val→test gap widened vs slice=24: cruise val=57.30 → test=48.14 (Δ=9.16) vs slice=24 where the gap was tighter. Under-specialization at slice=16 shows as weaker OOD regularization.
+
+**Slot-scan lever CLOSED.** Monotonic chain 96→48→32→24 complete. Floor at slice_num=24.
+
+**Finding #34 (locality-prior OOD tradeoff)**: The slice_num lever trades off OOD generalization, not in-distribution accuracy. in_dist was the *least* sensitive split throughout the entire scan (96→48→32→24→16). Cruise/rc/re_rand move first and largest. Important prior: future capacity-tuning experiments should be evaluated first on cruise/re_rand, not in_dist.
+
+**Follow-up**: Assigned nezuko Fourier L sweep (#2393) — orthogonal positional encoding quality lever.
