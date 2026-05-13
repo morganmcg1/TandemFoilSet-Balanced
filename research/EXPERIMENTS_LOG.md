@@ -1746,3 +1746,21 @@ Fourier L lever confirmed CLOSED at L=8. Encoding resolution is not cruise/rc bo
 - **Conclusions**: EMA gain is timeout-budget-dependent. At eta_min=0 + full cosine completion, EMA shadow becomes degenerate. EMA may revive IF alphonse #2326 (eta_min=1.5e-5) shows that non-zero eta_min preserves late-epoch noise. Finding #43 established.
 
 → Assigned fern coord-noise augmentation (PR #2474): data-side OOD augmentation on mesh coordinates — first non-capacity intervention per the Finding #41 meta-pattern.
+
+## 2026-05-13 18:15 — PR #2326: Cosine eta_min=1.5e-5 floor
+- willowpai2g48h1-alphonse/cosine-eta-min-floor
+- **Hypothesis**: Adding a non-zero LR floor (eta_min=1.5e-5 = 10% of peak lr=1.5e-4) prevents the cosine tail from decaying to ~0, enabling late-training refinement.
+- **Results**:
+
+| Run | wd | eta_min | best epoch | val_avg | test_avg | vs baseline |
+|---|---|---|---|---|---|---|
+| wv3uvmgx (trial-2, wd=0) | 0 | 1.5e-5 | 16/17 | 72.5089 | **64.5359** | 60.7447 → **+6.24% REGRESSION** |
+| bgsom7hx (trial-1, wd=1e-4) | 1e-4 | 1.5e-5 | 16/17 | 73.1538 | 64.1665 | 61.8457 → **+2.18% REGRESSION** |
+
+Per-split (trial-2, wd=0): in_dist=68.77, rc=75.36, cruise=48.44, re_rand=65.57.
+
+- **Analysis**: Best epoch moved 17→16 in BOTH wd regimes — last epoch's val degraded after earlier best. The LR floor prevents the model from settling: Lion's sign-based step at lr=1.5e-5 is large enough to perturb a converged solution. Baseline's final-epoch lr ~1.1e-6 is small enough that updates become noise-floor. RC and re_rand (OOD splits) were most damaged (+3.4–3.6 pts) — the splits that should have benefited most from refinement were the ones most perturbed. LR trajectory verified as intended (1.6025e-5 at T_cur=17). Note: 30-min timeout capped both runs at 17 epochs.
+
+- **Conclusions**: LR floor ≥ 1e-5 in the cosine tail is harmful. eta_min lever CLOSED at eta_min=0. EMA revival via eta_min>0 pathway also closed — both point to LR→0 as optimal for convergence. Finding #44 established.
+
+→ Assigned alphonse Lion gradient noise (PR #2485): LR-scaled Langevin perturbation inside Lion update step — orthogonal to eta_min, respects LR→0 tail by design.
