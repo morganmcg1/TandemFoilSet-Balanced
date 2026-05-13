@@ -5,7 +5,15 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 11:10 — #1998 cosine-budget closed, #1986 fourier sent-back for rebase+retest as winner candidate, nezuko reassigned to lr-peak-sweep #2202)
+- **Date**: 2026-05-13 (updated 13:40 — Round 2 multi-arm sweeps mid-flight; W&B-observed finished arms not yet posted to PRs)
+- **In-flight intelligence (W&B-observed, not yet PR-terminal):**
+  - alphonse #1747 slice-num=32 (run `mux49i3k`, finished 12:38): **val 65.89 / test 57.31** — likely strongest winner candidate of Round 2 (−13.3% val / −15.1% test vs new 75.96/67.53 baseline). Per-split val: 76.89 / 79.32 / 44.05 / 63.31, all 4 splits improve.
+  - edward #2119 n-layers=4 (run `7hfmeaa3`, finished 12:32): val 68.52 / test 59.38 — also clear winner (−9.8% val / −12.1% test); all 4 val splits improve.
+  - tanjiro #1986 fourier-K=12 retest on warmup stack (run `osxp8woj`, finished 12:29): val 73.16 / test 63.89 — winner candidate (−3.7% val / −5.4% test). Validates prior fourier-K=12 result post-rebase.
+  - nezuko #2202 lr=1e-3 (run `4ns00uan`, finished 12:38): val 74.14 / test 64.71 — marginal winner (−2.4% val / −4.2% test); other arms (5e-4, 2e-3) status unknown.
+  - frieren #2192 n-head=8 (run `ram7l00l`, finished 12:36): val 103.6 / test 93.2 — severe regression. Pending 2/4 arms.
+  - Still running: askeladd t=1.0, fern droppath-0.2, thorfinn jitter-0.005.
+- **Merge order plan once terminals post**: rank by val_avg, merge winners sequentially. Current ordering: alphonse slice-32 (val 65.89) → edward n-layers-4 (val 68.52) → tanjiro fourier-K12 (val 73.16) → nezuko lr-1e-3 (val 74.14). Each merge updates baseline; subsequent PRs are re-evaluated against new baseline.
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
