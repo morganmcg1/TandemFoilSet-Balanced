@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-13 13:00 — Round 27
+
+### PR #2033 thorfinn: Linear warmup 3ep + monotone cosine (T_max=47) — MERGED (WIN -6.31% val / -7.68% test)
+
+- **Branch:** `charliepai2g48h5-thorfinn/warmup-3-cosine`
+- **Hypothesis:** Linear warmup 3 epochs (0.1×→1.0×) followed by CosineAnnealingLR(T_max=47) on L1+slice=32 baseline.
+- **Result:** val_avg = **50.6001** (−6.31%), test_avg = **43.9680** (−7.68%). Clean WIN. Best epoch 44/44 (terminal). **New baseline established.**
+
+**Per-split breakdown:**
+
+| Split | Baseline (PR #1846) | Warmup-3 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 59.0943 | **47.9418** | **−18.87%** ← largest gain |
+| `val_geom_camber_rc` | 67.4450 | **67.3675** | −0.11% (barely moved) |
+| `val_geom_camber_cruise` | 35.7197 | **34.3430** | −3.85% |
+| `val_re_rand` | 53.7616 | **52.7481** | −1.89% |
+| **val_avg** | **54.0051** | **50.6001** | **−6.31%** |
+
+**Mechanism confirmed:**
+- Warmup gives optimizer 2-3 sub-peak-LR epochs to select a better loss basin before cosine descent locks in
+- Largest gain on val_single_in_dist (-18.87%) where basin quality is most sensitive to ep-1 step size
+- OOD splits move little but don't regress — warmup doesn't trade OOD for in-dist
+- Late-stage settling preserved unlike SGDR (#1989 LOSS): model improved all the way to ep44 (gap ep41→44 = -4.9%)
+- L1 + warmup mechanism validated: warmup serves "find the basin" phase; cosine tail serves "fine-tune within it"
+
+**Run details:** 44 epochs in 30 min (~41 s/epoch), peak memory 21.35 GB. LR schedule confirmed: ep1=5e-5, peak at ep4, cosine descent to ~2e-5 by ep44.
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-thorfinn-warmup-3-cosine-20260513-072010/`
+
+### PR #1946 edward: EMA decay=0.999 (weight averaging for OOD generalization) — CLOSED (WASH-TO-LOSS, axis closed)
+
+- **Branch:** `charliepai2g48h5-edward/ema-weights-0.9999`
+- **Hypothesis:** EMA model weights with various decay values for flat-minima OOD generalization.
+- **Three-run summary:**
+
+| Run | Decay | val_avg | Δ baseline | Notes |
+|---|---|---|---|---|
+| Run 1 | 0.9999 | 165.27 | +205.9% | Lag-bias: `0.9999^16500 ≈ 0.19` — 19% init noise at terminal |
+| Run 2 (with diag) | 0.999 | 54.91 | +1.67% | Mechanism confirmed: EMA<raw from ep10 |
+| Run 3 (no-diag) | 0.999 | 56.12 | +3.92% | OOD regression 5-14%; run-to-run variance ~2pts |
+
+**Key findings:**
+- Mechanism IS real: EMA variance-reduction confirmed by dual-val diagnostic (EMA<raw from ep10 once init-noise decays `0.999^3750≈0.024`)
+- But per-split pattern is structurally wrong: val_single_in_dist -12.9%, all OOD splits +5-14%
+- **Third confirmation of averaging-style bimodal pattern:** coord-jitter, EMA (both decays), grad-clip all deliver ~-13% in-dist win but hurt OOD
+- **In-dist headroom finding (3× confirmed):** ~14% unlockable via averaging/regularization; OOD requires different structural interventions
+
+### Assignments: Round 27
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2071 | thorfinn | Warmup-5-cosine: probe warmup duration optimality (warmup_epochs=3→5, T_max=47→45) |
+| #2072 | edward | NACA geometry jitter σ=0.01 on channels 15-17 (NACA1) + 19-21 (NACA2): OOD camber generalization |
+
+---
+
 ## 2026-05-13 12:00 — Round 26
 
 ### PR #1653 askeladd: Grad-clip max_norm=1.0 — CLOSED (WASH on val_avg, OOD regression on primary bottleneck)
