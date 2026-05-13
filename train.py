@@ -595,7 +595,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = (surf_abs >= delta).float().mean().item()
             else:
                 surf_l1_frac = 0.0
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
@@ -604,7 +604,14 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
             "global_step": global_step,
-        })
+        }
+        if global_step % 50 == 0:
+            with torch.no_grad():
+                enc_norm_sq = sum(p.detach().norm().item() ** 2 for p in model.parameters())
+                sh_norm_sq = sum(p.detach().norm().item() ** 2 for p in surf_head.parameters())
+            log_payload["train/weight_norm_encoder"] = enc_norm_sq ** 0.5
+            log_payload["train/weight_norm_surf_head"] = sh_norm_sq ** 0.5
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
