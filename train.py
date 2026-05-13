@@ -426,6 +426,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    t_max: int = 0  # Cosine T_max; 0 = use cfg.epochs (current behavior)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -487,7 +488,9 @@ optimizer = torch.optim.AdamW(
     ],
     weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+t_max = cfg.t_max if cfg.t_max > 0 else MAX_EPOCHS
+print(f"[cosine] T_max={t_max}, epochs={MAX_EPOCHS}")
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -603,6 +606,8 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_max": y_var.max().item(),
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
+            "train/lr_encoder": scheduler.get_last_lr()[0],
+            "train/lr_surf_head": scheduler.get_last_lr()[-1],
             "global_step": global_step,
         })
 
@@ -632,6 +637,8 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
+        "train/lr_encoder": scheduler.get_last_lr()[0],
+        "train/lr_surf_head": scheduler.get_last_lr()[-1],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
