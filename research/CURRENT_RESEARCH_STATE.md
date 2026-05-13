@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 34)
+- **As of:** 2026-05-13 (updated cycle 35)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -49,7 +49,8 @@
 | 2124 | alphonse | surf-only-pw | WIP (NEW) | Surface-only pressure weight {0.5, 1.5}: NO mean-normalisation (avoids #1496 bug) |
 | 2127 | thorfinn | surf-head-step-decay | CLOSED | Both arms regressed (+7.05%, +2.83%). MECHANISM CONFIRMED (spike damped) but spike+recovery is BENEFICIAL — damping spike loses recovery. |
 | 2188 | thorfinn | encoder-lr-boost | WIP (NEW) | Encoder LR boost at e15-18 (dual to head-LR damp); arms: ×2.0, ×3.0; composes w/ compile |
-| 2128 | nezuko | adamw-eps | WIP (NEW) | AdamW ε sweep {1e-7, 1e-6}: denominator-floor stabilizer (orthogonal to β2/WD/clip) |
+| 2128 | nezuko | adamw-eps | CLOSED | Both arms +13.13%/+23.08%. Decisive: surf_frac_below_eps=0 always. Eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out. |
+| 2201 | nezuko | beta2-long | WIP (NEW) | AdamW β2=0.9999/0.9995: symmetric untested direction from #2015 (β2=0.95 regressed); longer second-moment timescale |
 
 ## Working hypotheses
 
@@ -94,7 +95,8 @@
 29. **Surface-only pressure weight {0.5, 1.5}** — testing (#2124 alphonse, NEW). Sub-unit weight on surface pressure only, NO mean-normalisation (corrects #1496's bug).
 30. **surf_head step decay at e10 {×0.5, ×0.3}** — **rejected** (PR #2127, +7.05% / +2.83%). MECHANISM CONFIRMED (clean spike damping observed) but the spike+recovery is a beneficial training dynamic — damping the spike also damps the e14 deep minimum. **Reframing:** the e12 spike is an exploration burst, not pathology.
 30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — testing (#2188 thorfinn, NEW). If the spike comes from encoder entering a new landscape where the head is pre-positioned "too forward," briefly speeding up the encoder during transition might preserve recovery while smoothing the misalignment.
-31. **AdamW ε sweep {1e-7, 1e-6}** — testing (#2128 nezuko, NEW). Denominator-floor stabilizer; orthogonal to β2/WD/grad-clip; small-batch sampler creates low-v regimes where ε becomes the dominant denominator term.
+31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
+31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — testing (#2201 nezuko, NEW). Symmetric untested direction from #2015 (β2=0.95 regressed +6.49%). β2=0.9999 averages v over ~10000-step timescale, a ~10× stronger low-pass filter than current β2=0.999. Tests whether variance-noise interpretation (help) or spike-as-signal interpretation (hurt) prevails. Composes with torch.compile + WD=5e-4.
 
 ## Key insights
 
@@ -148,6 +150,7 @@
 - #2120 (deeper WD 7e-4) — 18.85% val / 18.22% test regression, WD=5e-4 is sharp peak not plateau
 - #2127 (surf_head step decay) — 7.05% / 2.83% regression, but key reframing: e12 spike+recovery is BENEFICIAL
 - #2013 (LogCosh surface loss) — 3.51% / 14.18% regression, C² smoothness was non-issue, surface-loss family closed
+- #2128 (AdamW eps sweep 1e-7/1e-6) — +13.13% / +23.08% regression. surf_frac_below_eps=0 always: eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out entirely.
 
 ## Potential next directions (after cycle 30 in-flight)
 

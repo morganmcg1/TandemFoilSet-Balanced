@@ -2,6 +2,57 @@
 
 ---
 
+## 2026-05-13 13:10 — PR #2128: AdamW epsilon sweep {1e-7, 1e-6}: denominator-floor stabilizer
+
+- **Branch:** `willowpai2g48h4-nezuko/adamw-eps` (CLOSED — eps axis ruled out, excellent diagnostics)
+- **Student:** willowpai2g48h4-nezuko
+- **W&B runs:** `z1u61afo` (Arm 1 eps=1e-7), `6rs4qgsm` (Arm 2 eps=1e-6)
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs #2031 (93.62) | test_avg/mae_surf_p | Δ vs #2031 (83.88) |
+|-----|---------------------|---------------------|---------------------|---------------------|
+| Arm 1 (eps=1e-7) | 105.9131 | **+13.13%** | 93.2115 | **+11.12%** |
+| Arm 2 (eps=1e-6) | 115.2299 | **+23.08%** | 102.3420 | **+22.01%** |
+
+Vs the current baseline 89.7197 (PR #2091), regressions are +18.1% and +28.5% respectively.
+
+### Per-epoch trajectory (val_avg/mae_surf_p)
+
+| ep | Baseline #2031 | Arm 1 (eps=1e-7) | Arm 2 (eps=1e-6) |
+|----|----------------|------------------|------------------|
+| 11 | 109.59 | 130.27 | 119.50 |
+| 12 | **152.99 (SPIKE)** | **112.60 (no spike)** | 122.20 |
+| 13 | 108.28 | 107.52 | **115.23 (best)** |
+| 14 | **93.62 (best)** | **105.91 (best)** | 129.57 (regression) |
+
+### Critical mechanism diagnostic: `frac_below_eps`
+
+Student logged per-epoch fraction of parameters where `sqrt(v) < eps` (eps is dominant denominator term):
+
+| Epoch | Arm 1 enc frac (1e-7) | Arm 2 enc frac (1e-6) | Surf-head (both) |
+|-------|----------------------|-----------------------|-----------------|
+| 1 | 0.012 | 0.035 | **0.0** |
+| 2 | 0.001 | 0.015 | **0.0** |
+| 3-14 | ~0.0 | 0.001-0.003 | **0.0** |
+
+**Decisive result: surf-head frac_below_eps = 0.0 throughout both arms across all 14 epochs.** The surf-head — the locus of the e12 spike and the dominant driver of `mae_surf_p` — never sees eps as a denominator floor, even at eps=1e-6. The `surf_weight=10 × Huber δ=0.5` combination ensures sqrt(v) >> 1e-6 always for surf params.
+
+The encoder does have a small population of params where eps binds in early epochs (1-3% at e1, decaying to <0.3% by e5-14). These are biases and norm-scale params with low gradient variance. **The binding acts as a "slow start" for a subset of low-gradient encoder params, slowing effective convergence rate in epochs 1-5 — this is the regression mechanism, not "stabilization."**
+
+### Analysis
+
+1. **The e12 spike was NOT reproduced** — neither arm reached the regime where the spike occurs. Both started at much worse loss levels due to the slow-start effect.
+2. **Eps cannot affect surf-head update shape by construction**: the math is `update ∝ m / (sqrt(v) + eps)`. Since sqrt(v) >> eps for all surf params, changing eps from 1e-8 to 1e-6 has zero effect on surf_head updates.
+3. **The denominator-floor mechanism for the late-epoch oscillation is ruled out.** Combined with previous triangulation (#2058 grad-clip, #1949 warmup, #2127 step-decay), the oscillation is NOT a denominator issue.
+4. **The eps axis is closed.** Going to eps=1e-5 would overlap with FP16/BF16 territory (precision-sensitive by #1572) and is not warranted.
+
+### Student's follow-up suggestion → assigned
+
+Student correctly identifies β2=0.9999 as the cleanest next step (symmetric untested direction from #2015 β2=0.95 regression). Assigned to nezuko as PR #2201.
+
+---
+
 ## 2026-05-13 12:45 — PR #2127: surf_head step decay at e10 {×0.5, ×0.3}
 
 - **Branch:** `willowpai2g48h4-thorfinn/surf-head-step-decay` (CLOSED — mechanism confirmed, harmful intervention)
