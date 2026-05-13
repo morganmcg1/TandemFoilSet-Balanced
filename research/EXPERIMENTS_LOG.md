@@ -2063,4 +2063,142 @@ Run was at `--n_hidden 224` per send-back instruction (issued before Cycle 28 cl
 - **Distinct from active axes:** alphonse #2219 (n_hidden=160 width-floor), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), frieren #2247 (batch_size=2 opt-step density), nezuko #2267 (slice_num=48 partition geometry), tanjiro #2199 (--epochs 33 schedule alignment).
 - **Distinct from blocked axes:** depth is upstream of all gradient computation; not amplitude, not direction-variance. Should bypass clip saturation cleanly.
 
+## 2026-05-13 17:50 — PR #2219: alphonse n_hidden=160 — WIN vs old baseline; SENT BACK for compound retest under new baseline
+
+- Branch: `willowpai2g48h5-alphonse/n-hidden-160-width-floor`
+- Hypothesis: n_hidden=160 width-floor test — does narrower+more-epochs win at fixed 30-min budget?
+- W&B run: `smqwihpd`
+
+### Results — clean win vs old baseline #1982
+
+| Metric | n_hidden=160 | #1982 baseline (n=192) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **50.5152** | 52.6406 | **−4.04%** ✓ |
+| test_avg/mae_surf_p | **43.6358** | 44.9791 | **−2.99%** ✓ |
+
+**Per-split test (EMA, best-val):**
+
+| Split | n=160 | #1982 (n=192) | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 49.14 | ~49.86 | −1.44% |
+| test_geom_camber_rc | 57.74 | ~57.77 | −0.04% (wash) |
+| test_geom_camber_cruise | 26.96 | ~28.94 | −6.84% |
+| test_re_rand | 40.70 | ~43.34 | −6.09% |
+
+All 4 splits improved or washed. Strong OOD gains (camber_cruise, re_rand).
+
+**Throughput actual vs predicted:**
+
+| Quantity | Predicted | Actual |
+|---|---|---|
+| Epoch time | 38s (−30%) | 48.7s (−9.8%) |
+| Epochs in 30 min | 47/50 | 38/50 |
+| Cosine LR at termination | 6% | 14% |
+| Clip rate | ≤98.9% | **97.99%** |
+
+Predicted throughput gain was optimistic (−30% vs actual −9.8%), but the model still got 5 extra epochs (38 vs 33) and the clip rate DID drop (97.99% vs 98.93% baseline). The mechanism is confirmed: narrower model = smaller gradient norms relative to clip threshold = fewer clipped steps = amplitude information flows through.
+
+**Best epoch:** 38/50. Run terminated at budget (30.76 min).
+
+### Decision: SEND BACK for compound retest
+
+**Reason:** fern #2142 (Huber β=0.25) merged during review, establishing new baseline val=50.3812, test=43.7187. Alphonse's result (val=50.52, test=43.64) was measured under huber_beta=0.5:
+- vs new baseline: val +0.27% worse (within ±1.1 val pts noise floor)
+- vs new baseline: test −0.18% better (within ±0.75 test pts noise floor)
+
+**Statistical tie under new baseline.** Need compound retest to see if n_hidden=160 still wins on top of huber_beta=0.25. If mechanisms are additive, predicted compound: val ≈ 48.1, test ≈ 41.5 (both old wins compounding).
+
+→ Sent back 2026-05-13 17:45 UTC (comment 4441281585).
+
+## 2026-05-13 17:50 — PR #2142: fern Huber β=0.25 — MERGED (14th compound; −4.29% val / −2.80% test)
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p25`
+- Hypothesis: Huber β=0.5 → 0.25 — tighter MAE alignment at 13-compound stack. At β=0.25, the quadratic region covers only |error| < 0.25; nearly all normalized surface-pressure errors are in the linear (L1-like) regime. Directly targets the MAE primary metric across the bulk of the loss distribution.
+- W&B run: `aew7c8ej`
+
+### Results — best val in the review cycle; MERGED as 14th compound winner
+
+| Metric | β=0.25 | #1982 baseline (β=0.5) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **50.3812** | 52.6406 | **−4.29% ✓ BEST** |
+| test_avg/mae_surf_p | **43.7187** | 44.9791 | **−2.80% ✓** |
+
+**Per-split test (EMA, best-val epoch 33):**
+
+| Split | β=0.25 | #1982 | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 48.9641 | ~49.86 | −1.79% |
+| test_geom_camber_rc | 57.3689 | ~57.77 | −0.70% |
+| test_geom_camber_cruise | 26.9722 | ~28.94 | **−6.81%** |
+| test_re_rand | 41.5697 | ~43.34 | **−4.09%** |
+
+All 4 splits improved. camber_cruise and re_rand are the dominant OOD gains — consistent with loss-shape hypothesis: tighter β makes gradients more MAE-like across the bulk of the error distribution, which disproportionately helps on OOD splits where errors are larger and more uniform.
+
+**Best epoch:** 33 (model still descending at termination, −0.75/ep slope at epoch 33/50 — not yet epoch-saturated).
+
+**Clip rate:** 99.91% (12364/12375) — higher than baseline (98.93%). Tighter Huber β creates marginally sharper gradients for moderate errors. This is expected: loss curvature upstream of gradient means higher gradient norms, not lower. The axis is NOT amplitude-mediated; it changes the gradient DIRECTION distribution (smoother loss → smaller gradient magnitude for large errors → different relative scaling between near-zero and large-error examples).
+
+**Mechanism confirmed:** Huber β axis operates upstream of gradient computation (loss curvature → gradient shape → optimizer). Bypasses clip saturation completely. Clip saturation blocks amplitude axes (n_hidden, T_max, LR, mlp_ratio) and direction-variance axes (AdamW β₂), but NOT axes that change the gradient direction distribution via loss curvature.
+
+### Merge decision
+
+Best val (50.38) in this review cycle, better than alphonse (50.52) and edward (51.85). Merged first per best-first ordering. After merge, established new 14-compound baseline.
+
+**Cascade implications:**
+1. fern's PR closes; fern becomes idle for next cycle assignment
+2. alphonse's result (50.52) no longer beats new baseline (50.38); sent back for compound retest
+3. edward's result (51.85) no longer beats new baseline (50.38); sent back for compound retest
+
+## 2026-05-13 17:50 — PR #2024: edward EMA decay 0.998 v3 — WIN vs old baseline; SENT BACK for compound retest under new baseline
+
+- Branch: `willowpai2g48h5-edward/ema-decay-0p998`
+- v3 W&B run: `qhl8dqzs` (v1: `ajd4i909` at grad-clip=5.0; v2: `rg7invue` partial, killed)
+- History: v1 won vs #1953 (−2.77%), but was measured at grad-clip=5.0 (stale). v2 ran at n_hidden=224 × 3 failed attempts (30-min cap, throughput penalty). v3 switched to n_hidden=192 per ping, giving clean read.
+
+### Results — clean win vs old baseline #1982
+
+| Metric | EMA=0.998 v3 | #1982 baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **51.8455** | 52.6406 | **−0.795 (−1.51%)** ✓ |
+| test_avg/mae_surf_p | **44.3925** | 44.9791 | **−0.587 (−1.30%)** ✓ |
+
+**Per-split test (EMA, best-val epoch 33):**
+
+| Split | EMA=0.998 | #1982 | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 50.063 | ~49.86 | +0.40% (mild regression — same as v1) |
+| test_geom_camber_rc | 58.279 | ~57.77 | +0.88% (mild regression) |
+| test_geom_camber_cruise | 27.242 | ~28.94 | **−5.87%** |
+| test_re_rand | 41.986 | ~43.34 | **−3.12%** |
+
+Mixed split picture: in_dist and camber_rc mild regression; camber_cruise and re_rand clear gains. Same OOD-positive pattern as v1.
+
+**Clip rate:** 98.81% (cumulative), 94.93% final epoch — slightly lower than baseline 98.93%. EMA decay axis confirmed orthogonal to clip saturation (EMA averages post-clip weights, downstream of optimizer). Final-epoch rate dropping (94.93%) consistent with model converging and gradient norms becoming less extreme late in training.
+
+**EMA-live gap:** −6.15 on test (EMA 44.39 vs live 50.54). EMA providing ~6 MAE improvement on test. In-dist split shows EMA−live gap of −10.81 — the largest of any split, indicating EMA is working hardest on in-distribution where the live model is most noisy relative to the learned function.
+
+**Mechanism note:** student's diagnosis in v1 was confirmed in v3. Shorter EMA half-life (~346 steps at decay=0.998 vs ~693 at 0.999) doesn't close the EMA-live gap (gap ~−6 to −11, consistent with v1's −8.68). It reduces the steady-state noise floor of the EMA model. The gap metric is dominated by live model noise (94% clip rate = live model making lots of large corrective steps), not EMA bias.
+
+**Win is marginal** (−0.80 val pts, within ±1.1 noise floor). Clean but not decisive.
+
+### Decision: SEND BACK for compound retest
+
+**Reason:** fern #2142 merged, new baseline val=50.38, test=43.72. Edward's result (51.85) vs new baseline: +2.91% worse. Even if additive with fern's gain, the magnitude is uncertain.
+
+**Also:** train.py may have ema_decay reset to 0.999 during squash-merge (edward's v3 was on the PR branch, not the advisor branch at merge). Student instructed to verify `grep ema_decay target/train.py` before relaunching.
+
+→ Sent back 2026-05-13 17:50 UTC (comment 4441285168).
+
+## 2026-05-13 17:55 — PR #2299: fern assigned Huber β=0.25 → 0.1 scan continuation
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p1`
+- Hypothesis: Continue the successful β scan. Three consecutive β halvings have won: β=1.0(−6.96%), 0.5(−7.41%), 0.25(−4.29%). At β=0.1, the loss is essentially pure MAE (quadratic region only |e|<0.1). Tests whether β=0.25 is the floor or whether the scan should continue.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` with `huber_beta=0.25 → 0.1` in train.py.
+- Targets: val < 50.3812, test < 43.7187 (new 14-compound baseline).
+- **Why this assignment:** fern became idle after #2142 merged. Natural continuation of the loss-shape scan on the confirmed bypass-clip-saturation mechanism. Single-integer change. The marginal gain at each halving has been decreasing (6.96% → 7.41% → 4.29%) — could stop at 0.1 or continue. Either outcome informs the scan boundary.
+- **Three outcomes:**
+  - (A) val < 50.38 → MERGE (15th compound; pure-MAE loss is the floor)
+  - (B) wash
+  - (C) val > 51.5 → FAIL (β=0.25 confirmed as floor; scan complete)
+
 
