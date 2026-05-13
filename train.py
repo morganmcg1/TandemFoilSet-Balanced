@@ -312,6 +312,8 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "surf_weight_warmup_epochs": cfg.surf_weight_warmup_epochs,
+        "surf_weight_init": cfg.surf_weight_init,
         "epochs_configured": cfg.epochs,
         "grad_clip": cfg.grad_clip,
         "use_onecycle": cfg.use_onecycle,
@@ -377,6 +379,8 @@ class Config:
     augment: bool = True
     aoa_jitter_rad: float = 0.00873  # std of Gaussian noise on AoA features (~ 0.5 deg)
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
+    surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
+    surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -512,6 +516,14 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_clip_fires = 0
     n_batches = 0
 
+    if cfg.surf_weight_warmup_epochs > 0 and epoch < cfg.surf_weight_warmup_epochs:
+        progress = epoch / cfg.surf_weight_warmup_epochs
+        current_surf_weight = cfg.surf_weight_init + progress * (
+            cfg.surf_weight - cfg.surf_weight_init
+        )
+    else:
+        current_surf_weight = cfg.surf_weight
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -534,7 +546,7 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+        loss = vol_loss + current_surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -596,11 +608,14 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "train/grad_norm_mean": epoch_grad_norm_mean,
         "train/grad_clip_fire_rate": epoch_grad_clip_fire_rate,
+        "train/current_surf_weight": current_surf_weight,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
+        "surf_weight_warmup_epochs": cfg.surf_weight_warmup_epochs,
+        "surf_weight_init": cfg.surf_weight_init,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
