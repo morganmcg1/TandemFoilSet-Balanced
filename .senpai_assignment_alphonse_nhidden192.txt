@@ -1,0 +1,2 @@
+# Assignment: alphonse n_layers=3 + n_hidden=192 width reinvestment
+# See PR body for full instructions.
