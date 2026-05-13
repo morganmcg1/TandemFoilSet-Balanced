@@ -39,10 +39,52 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **33.4935** | #2553 | Lion lr=1.5e-4 (1.5× #2524's lr=1e-4); wd=3e-4, betas=(0.9, 0.99); all other params unchanged | ep70/70 (best=terminal; still monotonically descending); **−8.05% vs #2524** (36.3994); uniform WIN all 4 splits 3.5-14.4%; mechanism: higher LR unlocked deeper minimum within same budget |
-| `test_avg/mae_surf_p` | **28.6279** | #2553 | — | test from best-val checkpoint ep70; **−8.30% vs #2524** (31.2200) |
+| `val_avg/mae_surf_p` | **33.3722** | #2614 | Lion lr=1.5e-4 + FiLM feature-stream gate (Linear(3,96) zero-init, applied pre-blocks); all other params from #2553 unchanged | ep70/70 (best=terminal); **−0.36% vs #2553** (33.4935); val WIN 3/4 splits; uniform test WIN all 4 splits; mechanism: Re/AoA flow conditioning aids geometric extrapolation (rc +1.93%); val_re_rand mild regression (+2.12%) but test_re_rand improves (−1.16%) — noise on n=100 val |
+| `test_avg/mae_surf_p` | **28.3736** | #2614 | — | test from best-val checkpoint ep70; **−0.89% vs #2553** (28.6279); all 4 test splits improve uniformly |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 33.4935` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 33.3722` to be merged.
+
+## 2026-05-14 00:00 — PR #2614: FiLM feature-stream gate: uniform test WIN −0.89% (NEW BEST)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Best epoch:** 70 of 70 (best=terminal; still monotonically descending at cosine endpoint)
+- **Epochs reached:** 70 (full schedule; ~25.7 s/epoch)
+- **Peak GPU memory:** 14.1 GB (unchanged)
+- **Param count:** 328,619 (+384 FiLM params; +0.12% over #2553 baseline 328,235)
+- **FiLM diagnostics:** film.weight.norm=2.6245 (from 0), film.bias.norm=0.8504 (from 0); modulation factor ~0.92 on val_re_rand batch
+
+| Split | val mae_surf_p | Δ vs #2553 (33.4935) |
+|---|---|---|
+| `val_single_in_dist` | **25.3293** | **−1.71%** |
+| `val_geom_camber_rc` | **49.5771** | **−1.93%** |
+| `val_geom_camber_cruise` | 20.4181 | +0.67% (wash) |
+| `val_re_rand` | 38.1642 | +2.12% (mild regression; noise on n=100) |
+| **val_avg** | **33.3722** | **−0.36%** |
+
+| Split | test mae_surf_p | Δ vs #2553 |
+|---|---|---|
+| `test_single_in_dist` | **24.4830** | **−0.90%** |
+| `test_geom_camber_rc` | **43.3910** | **−1.04%** |
+| `test_geom_camber_cruise` | **16.8389** | **~0%** |
+| `test_re_rand` | **28.7816** | **−1.16%** |
+| **test_avg** | **28.3736** | **−0.89%** |
+
+- **Mechanism:** Single shared FiLM gate applied before block 0. Re/AoA scalar inputs → Linear(3, 96) → `fx = fx * (1 + gamma(c))`. Zero-init gate grows to norm 2.62 — optimizer found Re/AoA as useful routing signal. Geometric OOD splits (rc, in-dist) benefit most. val_re_rand regression appears to be n=100 small-sample noise (test_re_rand improves −1.16%).
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-alphonse-film-feature-stream-20260513-222603/metrics.jsonl`
+  `models/model-charliepai2g48h5-alphonse-film-feature-stream-20260513-222603/metrics.yaml`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-alphonse \
+      --experiment_name "charliepai2g48h5-alphonse/film-feature-stream" \
+      --lr 1.5e-4 \
+      --weight_decay 3e-4 \
+      --epochs 70
+  ```
+  (FiLM gate now on advisor branch — stacks with all prior wins)
+
+---
 
 ## 2026-05-14 21:00 — PR #2553: Lion lr=1.5e-4 sweep: uniform WIN −8.05% (NEW BEST)
 
