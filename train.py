@@ -219,7 +219,8 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_fn: str = "mse", smooth_l1_beta: float = 0.1) -> dict[str, float]:
+                   loss_fn: str = "mse", smooth_l1_beta: float = 0.1,
+                   amp: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -253,7 +254,12 @@ def evaluate_split(model, loader, stats, surf_weight, device,
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            if amp and device.type == "cuda":
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    pred = model({"x": x_norm})["preds"]
+                pred = pred.float()
+            else:
+                pred = model({"x": x_norm})["preds"]
 
             if loss_fn == "smooth_l1":
                 per_elem = F.smooth_l1_loss(
@@ -412,6 +418,7 @@ class Config:
     loss_fn: str = "mse"  # "mse", "smooth_l1", or "l1"
     smooth_l1_beta: float = 0.1
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
+    amp: bool = False  # bfloat16 mixed precision autocast for fwd + loss
 
 
 cfg = sp.parse(Config)
@@ -518,23 +525,29 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.loss_fn == "smooth_l1":
-            per_elem = F.smooth_l1_loss(
-                pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
-            )
-        elif cfg.loss_fn == "l1":
-            per_elem = torch.abs(pred - y_norm)
-        else:
-            per_elem = (pred - y_norm) ** 2
+        amp_ctx = (
+            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if cfg.amp and device.type == "cuda"
+            else torch.amp.autocast(device_type="cuda", enabled=False)
+        )
+        with amp_ctx:
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            pred = model({"x": x_norm})["preds"]
+            if cfg.loss_fn == "smooth_l1":
+                per_elem = F.smooth_l1_loss(
+                    pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
+                )
+            elif cfg.loss_fn == "l1":
+                per_elem = torch.abs(pred - y_norm)
+            else:
+                per_elem = (pred - y_norm) ** 2
 
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
-        vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+            vol_mask = mask & ~is_surface
+            surf_mask = mask & is_surface
+            vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -567,7 +580,8 @@ for epoch in range(MAX_EPOCHS):
     eval_model = ema_model if ema_model is not None else model
     split_metrics = {
         name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device,
-                             loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                             loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                             amp=cfg.amp)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -639,7 +653,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(test_eval_model, loader, stats, cfg.surf_weight, device,
-                                 loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                                 loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                                 amp=cfg.amp)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -665,7 +680,8 @@ if best_metrics:
             model.eval()
             test_metrics_no_ema = {
                 name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                     loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                                     loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                                     amp=cfg.amp)
                 for name, loader in test_loaders.items()
             }
             test_avg_no_ema = aggregate_splits(test_metrics_no_ema)
