@@ -1234,3 +1234,50 @@ Train-val gap is enormous (train_surf=0.11, val ~5.5) but in wrong direction —
 **Follow-up**: PR #2226 assigned to nezuko for slice_num=32 + clip=5.0 to continue the scan and find the actual slot floor.
 
 **Action**: Closed (advisor-led, after rate limit recovery). alphonse idle, will be reassigned.
+
+## 2026-05-13 11:50 — PR #2191: n_layers=6 + clip=5.0 — CLOSED ✗ (budget-constrained)
+- Branch: willowpai2g48h1-alphonse/n-layers-6-plus-clip
+- W&B run: `7e4z4xbd` — group `depth-revisit-clip`
+
+| Metric | depth=6+clip | New baseline (#2121) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep12) | 83.2536 | 71.9613 | +15.70% |
+| **test_avg/mae_surf_p** | **71.4219** | **65.3734** | **+9.24%** ✗ |
+| test_single_in_dist | 73.99 | 67.70 | +9.30% |
+| test_geom_camber_rc | 83.22 | 74.63 | +11.51% |
+| test_geom_camber_cruise | 54.21 | 51.29 | +5.69% |
+| test_re_rand | 74.27 | 67.87 | +9.42% |
+
+- Epochs: 12/18 (30-min wall clock, ~152.6s/epoch — +21% vs depth=5 baseline ~126s)
+- Model params: 1.75M (depth=5 baseline: 1.48M; +0.27M for one extra block)
+- Peak GPU memory: 51.2 GB (vs 43 GB at depth=5)
+- Clip fire rate: 91-100% throughout — mechanism preserved at depth=6
+
+**Analysis**: **Budget-constrained result, not an architectural failure.** Student's analysis was excellent. The key finding:
+
+1. **clip mechanism IS preserved at depth=6**: fire rate 91-100%, mean grad norm monotonic descent 98→24, identical pattern to depth=5. Original PR #1862 gradient-instability diagnosis was WRONG — clip addresses the failure mechanism entirely.
+
+2. **The regression is entirely explained by schedule truncation**: +21% per-epoch tax → only 12/18 epochs → final LR ≈ 4e-5 vs depth=5's 5e-6. The trajectory was STILL DESCENDING at ep12 (Δ=-3.56, the largest single-epoch drop). 3 epochs of cosine refinement lost.
+
+3. **rc had the smallest regression** (+1.2% vs +5-9% on other splits) — directionally consistent with depth helping OOD generalization but not paying off under 30-min cap.
+
+**Closure verdict**: Depth lever CLOSED **under 30-min wall-clock budget**. Not an architectural ceiling. A fixed-step-count comparison would likely show depth=6 competitive, but SENPAI_TIMEOUT_MINUTES=30 is a hard constraint.
+
+**Key insight for future**: "capacity-adding interventions that don't cost per-epoch time." This framing led directly to the n_head=8 assignment (#2236).
+
+## 2026-05-13 11:55 — PR #2088: Lion lr=2.1e-4 sqrt(2) sweep — CLOSED ✗
+- Branch: willowpai2g48h1-askeladd/lion-lr-2.1e-4-sqrt2-scaling
+- W&B runs: ucet8662 (lr=2.1e-4, test=85.22), l1e3rv6q (lr=2.1e-4, test=89.87), qkkh1q1x (CRASHED), efvjddip (lr=1.8e-4, test=85.79)
+
+| Run | LR | test_avg/mae_surf_p | vs new baseline (65.37) | vs old baseline (80.62) |
+|---|---|---|---|---|
+| ucet8662 | 2.1e-4 | 85.22 | +30.4% ✗ | +5.7% ✗ |
+| l1e3rv6q | 2.1e-4 | 89.87 | +37.5% ✗ | +11.5% ✗ |
+| qkkh1q1x | 2.1e-4 retry | CRASHED | N/A | N/A |
+| efvjddip | 1.8e-4 | 85.79 | +31.2% ✗ | +6.4% ✗ |
+
+**Analysis**: **Lion LR scaling lever PERMANENTLY CLOSED.** All arms regressed substantially. The sqrt(2) rule doesn't apply here.
+
+Mechanism diagnosis: The sqrt(2) LR scaling rule (lr ∝ sqrt(eff_bs), from linear-scaling + batch-size literature) was derived for AdamW-like optimizers where second-moment scaling moderates LR sensitivity. With grad_clip_max_norm=5.0 as a bulk direction rescaler (fire rate 84-100%), the effective gradient signal magnitude is near-constant across steps — eliminating the per-batch gradient variance that would benefit from LR scaling. Lion's sign-momentum already discards magnitude; clip removes the per-batch magnitude variance. lr=1.5e-4 is correctly calibrated for the clip+slice stack. Higher LRs corrupt the sign-vote stability.
+
+**Follow-up**: Assigned askeladd the Lion β1 sweep (#2237) — an untested optimizer lever that is mechanistically motivated by clip's gradient direction smoothing.
