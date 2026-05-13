@@ -463,6 +463,8 @@ class Config:
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
+    cosine_tmax: int = 0       # 0 = use MAX_EPOCHS (current default); >0 overrides T_max directly
+    cosine_eta_min: float = 0.0   # eta_min for CosineAnnealingLR; 0 = canonical (lr→0 at end)
 
 
 cfg = sp.parse(Config)
@@ -537,7 +539,11 @@ if cfg.optimizer == "lion":
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer}")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+_tmax = cfg.cosine_tmax if cfg.cosine_tmax > 0 else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=_tmax, eta_min=cfg.cosine_eta_min
+)
+print(f"Scheduler: CosineAnnealingLR T_max={_tmax}, eta_min={cfg.cosine_eta_min}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
