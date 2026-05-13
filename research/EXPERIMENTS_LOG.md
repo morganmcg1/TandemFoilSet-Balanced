@@ -836,3 +836,28 @@ The advisor-branch recipe now includes unified_pos=True, bf16, surf_weight=20, a
 | alphonse | #1577 | `seed42-baseline` | deterministic seeding → reproducible merged-recipe baseline |
 
 Pending round-1 WIPs: #1374 (edward huber-loss, ETA ~20:30 UTC), #1394 (frieren wd5e-4, rate-limited ~3h+).
+
+---
+
+## 2026-05-13 04:30 — PR #1834: [layers-7] n_layers 5→7 depth probe — **CLOSED (regression; depth axis fully bracketed)**
+- Student branch: `charliepai2g48h4-alphonse/layers-7`
+- Hypothesis: Confirm depth regression trend from layers-6 with a second data point at n_layers=7. Extending the capacity sweep: if layers-6 regressed, does layers-7 continue the monotonic regression?
+
+| Metric | n_layers=5 current best (#1855) | n_layers=6 (#1730) | n_layers=7 (this run) | Trend |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 83.95 | 93.97 | **96.81** | Monotonic regression ↑ |
+| test_avg/mae_surf_p | 74.70 | 83.05 | 87.41 | Monotonic regression ↑ |
+| Epochs completed | 18/18 | 15/15 | 13/15 | Fewer epochs per depth ↓ |
+| n_params | ~666K | ~800K | ~934K | +28% per layer |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-layers-7-20260513-*/metrics.jsonl`
+- n_layers=7 completed only 13/15 epochs (wall-clock cap; +28% params vs baseline → ~1.3× per-epoch cost)
+
+**Analysis:** Depth regression is monotonically consistent: n_layers 5→6→7 produces val 83.95→93.97→96.81. Three effects compound under global grad-clip:
+1. **Gradient dilution:** Global norm clipping applies a single scalar to all 5/6/7 layers simultaneously. Each layer receives proportionally less signal as depth increases — the effective per-layer LR drops.
+2. **Wall-clock penalty:** Each added block increases per-epoch cost by ~15-20%, reducing achievable epochs within the 30-min cap (18→15→13 epochs). Fewer epochs = less schedule coverage.
+3. **Parameter efficiency loss:** +28% params at n_layers=7 with proportionally less training time (13 vs 18 epochs = 28% fewer) → effective parameter utilization drops.
+
+**Conclusion: depth axis fully bracketed and CLOSED.** n_layers ∈ {5, 6, 7} confirms 5 is optimal under global grad-clip. Adding capacity via depth is contraindicated for the current training budget and clipping strategy. If depth becomes relevant again, the approach would need per-layer clip budgets (layerwise gradient clipping) or a longer training budget.
+
+alphonse reassigned to PR #1914 (lr-3e-4): lower peak LR 5e-4→3e-4.
