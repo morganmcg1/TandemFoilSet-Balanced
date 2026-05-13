@@ -7,6 +7,47 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 15:51 — PR #2389: batch_size=2 — more grad steps per 30-min cap — MERGED
+
+- `willowpai2g24h3-nezuko/bs2-retest`
+- **Hypothesis:** Default bs=4 is gradient-step-limited under the 30-min cap (val curve monotonic at epoch 23). bs=2 doubles mini-batches/epoch, and `pad_collate`'s per-batch padding means smaller batches waste fewer FLOPs on padding smaller meshes to the max sample size.
+- **Results:**
+
+| Metric | Baseline (#1747 bs=4) | bs=2 (`jc24jr52`) | Δ |
+|------|----:|----:|---|
+| val_avg | 65.3954 | **57.7122** | −11.7% ✅ |
+| test_avg | 56.1093 | **49.5412** | −11.7% ✅ |
+| Epochs in 30 min | 23 | **26** | +13% |
+| s/epoch | 85.4 | **71.0** | −17% (faster!) |
+| Peak VRAM | 80.9 GB | **13.6 GB** | −83% |
+| Total grad steps | ~8,625 | **~19,500** | +2.26× |
+
+Per-split val: single_in_dist=61.06 (−14.4%), camber_rc=68.11 (−8.0%), camber_cruise=42.98 (−13.4%), re_rand=58.71 (−11.9%). Per-split test: 51.92 (−13.1%), 59.20 (−9.0%), 35.95 (−12.5%), 51.09 (−12.7%).
+
+- **Analysis:** Uniform 4/4 val + test win confirms pure under-training story: the baseline was gradient-step-limited, not capacity- or regularization-limited. The Pareto speedup (bs=2 *faster* per epoch) is due to padding-waste reduction: `pad_collate` pads each batch to the largest sample; at bs=4 one large mesh inflates 3 smaller samples' FLOPs by up to 3.2×; at bs=2 only 1 sample is padded per batch. Val curve still strictly descending at epoch 26 (LR ~28% peak, cosine T_max=50 only 52% spent). VRAM headroom (82 GB free) opens the door for larger model experiments. EMA contribution intact (test_no_ema = 59.85 vs EMA 49.54 → −17.2% from EMA on top of bs=2).
+- W&B: `jc24jr52` (group: `willow-r3-bs2`)
+- Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2`
+
+## 2026-05-13 15:40 — PR #2313: Fourier K sweep (K=16, K=20) on slice32 stack — CLOSED
+
+- `willowpai2g24h3-fern/higher-fourier-k`
+- **Hypothesis:** K=12 was the best in the pre-slice stack; extending upward to K=16, K=20 might continue improving.
+
+| Arm | K | val_avg | test_avg | W&B |
+|---|---|---:|---:|---|
+| Baseline | 12 | 65.3954 | 56.1093 | `9sk1rwv1` |
+| Arm A | 16 | 66.6196 | 57.6283 | `l2rjj9sf` |
+| Arm B | 20 | 66.3272 | 57.6231 | `eu9wc5ki` |
+
+- **Analysis:** Both arms regress. K curve bent past K=12 on the slice32 stack. High-K failure mode: geometry-variation splits (camber_rc, camber_cruise) regress with higher K while single_in_dist marginally improves — consistent with high-frequency overfitting on 32-sample training set. K=12 confirmed optimum. Fourier-K axis settled.
+
+## 2026-05-13 15:26 — PR #2302: Cosine budget-match --epochs 20 on slice32 stack (retest) — CLOSED
+
+- `willowpai2g24h3-tanjiro/cosine-budget-match`
+- **Hypothesis (retest):** Short cosine schedule (T_max=15, --epochs 20) that was previously promising on fourier-only stack. Retested with --slice_num 32 added.
+- val 71.21 / test 62.03 → +8.88% / +10.55% regression vs new baseline.
+- **Analysis:** Hypothesis broke under slice32. The slice32 stack cap-time LR (≈0.66× peak at epoch 23) is already much closer to optimal than fourier-only stack (≈0.86× peak). Forcing T_max=15 starves the model of mid-schedule gradient area. The bottleneck under slice32 is total gradient steps (confirmed by bs=2 win), not LR-schedule shape. Follow-up: mild cosine-tail compression (--epochs 25) assigned to tanjiro #2413.
+
 ## 2026-05-13 14:15 — PR #1747: slice_num=32 on Physics Attention (+ fourier_k=12 baseline) — MERGED
 
 - `willowpai2g24h3-alphonse/slice-num-sweep`

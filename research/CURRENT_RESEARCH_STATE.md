@@ -5,23 +5,25 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~15:35 — tanjiro #2302 retest closed correctly (val 71.21 = +8.9% regression); tanjiro re-assigned #2413 cosine-tail-compression (--epochs 25, 22))
-- **Current best (merged)**: PR #1747 alphonse slice_num=32 (run `9sk1rwv1`) at **val 65.3954 / test 56.1093** — all 4 splits improve. Stacks additively on top of fourier-K12. Val curve still monotonic at epoch 23/50 → training cap still binding. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32`
-- **Updated merge bar (vs 65.40 baseline)**: ≤58.9 val ⇒ merge (≥10% gain), 58.9-65.4 → second seed, ≥65.4 → close.
+- **Date**: 2026-05-13 (updated ~16:00 — nezuko bs=2 MERGED (val 57.71/test 49.54, −11.7%); fern K-sweep closed; nezuko reassigned #2421 bs=1; fern reassigned #2423 n_hidden=192+bs2)
+- **Current best (merged)**: PR #2389 nezuko bs=2 (run `jc24jr52`) at **val 57.7122 / test 49.5412** — all 4 splits improve, 26/50 epochs, 71 s/epoch, VRAM **13.6 GB** (83% reduction, opens capacity experiments). Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2`
+- **Updated merge bar (vs 57.71 baseline)**: ≤51.9 val ⇒ merge (≥10% gain), 51.9-57.7 → second seed, ≥57.7 → close.
 - **In-flight (8 students, 0 idle):**
-  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32, Arm B slice_num=16; pick-up pending.
-  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: assigned; pick-up pending.
-  - edward #2119 n-layers-sweep: **first-round terminal at 15:07** (3 arms n_layers={4,5,6} on fourier-only stack). Arm B (n=4) wins cleanly: val 66.234 / test 57.265, dominates Arm A (n=5) on 4/4 val + 4/4 test splits; Arm C (n=6) regresses 4/4 on both. Cleanest single-axis signal yet, but 0.83 worse on val than current 65.40 baseline. **Sent back for n_layers=4+slice_num=32 single-arm retest** with mechanism prediction that depth and slice axes stack orthogonally → predicted 58-62 val range.
-  - fern #2313 higher-fourier-k {K=16, K=20}: assigned; pick-up pending.
-  - frieren #2192 n-head-sweep (2,4,8): rebased onto 7a9f46d (correct advisor HEAD) at ~14:55; arms pending.
-  - nezuko #2389 bs2-retest (bs=2 on merged stack): re-issued after #2374 auto-merged via workflow bug (state-update commit on student branch + ff onto advisor → GitHub closed PR as merged). Same hypothesis: more grad steps per 30-min cap (2× updates/epoch) helps under-trained model. No plumbing needed.
-  - tanjiro #2413 cosine-tail-compress: **newly assigned** — 2 arms `--epochs 25` (T_max=20, terminal LR ~0.05× peak) and `--epochs 22` (T_max=17, terminal LR ~0× peak). Follow-up from #2302 retest (closed, val 71.21 = +8.9% regression vs new 65.40 baseline); tanjiro's own analysis identified the right shape: keep 23-epoch wall-clock budget, curl LR tail.
-  - thorfinn #2097 coord-jitter-aug: awaiting pick-up with --slice_num 32 stack.
-- **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks. Fixed `result_markers()` to skip code-block lines and to require line-start matching (`lstrip().startswith("SENPAI-RESULT:")`). Alphonse's workaround report confirmed the bug.
+  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32+bs4, Arm B slice_num=16+bs4; running. Notified of new 57.71 baseline.
+  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: likely mid-run. Notified of new 57.71 baseline.
+  - edward #2119 n-layers-sweep: rebased clean; retest n_layers=4+slice32+bs4 pending. Notified of new 57.71 baseline.
+  - fern #2423 wider-model-bs2: **newly assigned** — n_hidden=192 on bs=2 stack. VRAM headroom (82 GB free) reopens width axis.
+  - frieren #2192 n-head-sweep (2,4,8): arms likely running with slice32 stack. Notified of new 57.71 baseline.
+  - nezuko #2421 bs1-sweep: **newly assigned** — bs=1, zero padding waste, ~2× more grad steps vs bs=2.
+  - tanjiro #2413 cosine-tail-compress: 2 arms `--epochs 25` and `--epochs 22`. Notified of new 57.71 baseline.
+  - thorfinn #2097 coord-jitter-aug: awaiting pick-up with slice32 stack. Notified of new 57.71 baseline.
+- **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks.
 - **Key structural observations from merged stack:**
-  - Stack so far: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32
-  - Val curve monotonic at epoch 23 → cap is still binding constraint. Cosine T_max=50, 23 epochs = 46% coverage. Better than the 22% at epoch 19/50 post-AMP. Tanjiro's cosine-budget-match (epochs=20, T_max=15) directly addresses this.
-  - All gains so far compound orthogonally; no negative interactions observed between EMA, AMP, fourier, and slice_num.
+  - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + **batch_size=2**
+  - Padding-waste mechanism: `pad_collate` pads each batch to the largest sample. bs=2→1 eliminates all padding. bs=2 was 17% faster/epoch than bs=4; bs=1 may be faster still.
+  - Val curve still monotonic at epoch 26 (LR ~28% peak, cosine T_max=50 only 52% spent). Model is gradient-step AND LR-limited.
+  - VRAM dropped from 80.9 GB → 13.6 GB at bs=2. 82 GB headroom now available for capacity (n_hidden, n_layers, n_head) experiments.
+  - All gains so far compound orthogonally; no negative interactions observed.
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
