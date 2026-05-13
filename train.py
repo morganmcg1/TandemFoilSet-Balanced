@@ -225,10 +225,12 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
-        # x is already in normalized space (caller normalises with stats), so x[:, 0, 13:14]
-        # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
-        log_re = x[:, 0, 13:14]
-        gamma, beta = self.re_film(log_re)
+        # x is already in normalized space (caller normalises with stats). Build
+        # the ReFiLM conditioning vector from the per-sample globals: channels
+        # 13 (log Re), 14 (AoA foil 1), 15 (NACA foil 1 camber), 22 (gap),
+        # 23 (stagger). Two contiguous slices + cat is torch.compile-friendly.
+        cond = torch.cat([x[:, 0, 13:16], x[:, 0, 22:24]], dim=-1)
+        gamma, beta = self.re_film(cond)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, gamma, beta)
@@ -263,10 +265,13 @@ class ReScaleHead(nn.Module):
 
 
 class ReFiLM(nn.Module):
-    """FiLM Re-conditioner for PhysicsAttention slice logits.
+    """FiLM conditioner for PhysicsAttention slice logits.
 
-    Maps log(Re) → per-head per-slice (gamma, beta) used to modulate slice
-    logits before the softmax: slice_logits' = slice_logits * (1 + gamma) + beta.
+    Maps a flow/geometry regime vector (default 5-dim:
+    [log(Re), AoA_foil1, camber_foil1, gap, stagger], all in the per-sample
+    normalized space used elsewhere in the trainer) → per-head per-slice
+    (gamma, beta) used to modulate slice logits before the softmax:
+    slice_logits' = slice_logits * (1 + gamma) + beta.
     Zero-init final layer makes (gamma, beta) = (0, 0) at step 0, so the model
     starts identical to baseline; the optimiser must actively open the gate.
 
@@ -277,22 +282,23 @@ class ReFiLM(nn.Module):
     DiT adaLN-Zero), gMLP (2105.08050) on zero-init gating stability.
     """
 
-    def __init__(self, heads: int, slice_num: int, hidden: int = 8):
+    def __init__(self, heads: int, slice_num: int, hidden: int = 8, cond_dim: int = 5):
         super().__init__()
         self.heads = heads
         self.slice_num = slice_num
+        self.cond_dim = cond_dim
         self.net = nn.Sequential(
-            nn.Linear(1, hidden),
+            nn.Linear(cond_dim, hidden),
             nn.GELU(),
             nn.Linear(hidden, 2 * heads * slice_num),
         )
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
 
-    def forward(self, log_re: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # log_re: [B, 1]  →  gamma, beta each [B, H, 1, S]
-        B = log_re.shape[0]
-        out = self.net(log_re)
+    def forward(self, cond: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # cond: [B, cond_dim]  →  gamma, beta each [B, H, 1, S]
+        B = cond.shape[0]
+        out = self.net(cond)
         gamma, beta = out.chunk(2, dim=-1)
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
@@ -554,8 +560,10 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
                 x = x.to(device_, non_blocking=True)
                 mask = mask.to(device_, non_blocking=True)
                 x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
-                log_re = x_norm[:, 0, 13:14]
-                gamma, beta = uncompiled.re_film(log_re)
+                # Match Transolver.forward conditioning vector:
+                # [log_re, aoa1, camber1, gap, stagger] in normalized space.
+                cond = torch.cat([x_norm[:, 0, 13:16], x_norm[:, 0, 22:24]], dim=-1)
+                gamma, beta = uncompiled.re_film(cond)
                 gamma_stats = {
                     "mean": gamma.mean().item(),
                     "std": gamma.std().item(),
