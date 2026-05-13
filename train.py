@@ -219,7 +219,8 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   loss_fn: str = "mse", smooth_l1_beta: float = 0.1) -> dict[str, float]:
+                   loss_fn: str = "mse", smooth_l1_beta: float = 0.1,
+                   truncated_l1_tau: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -261,6 +262,11 @@ def evaluate_split(model, loader, stats, surf_weight, device,
                 )
             elif loss_fn == "l1":
                 per_elem = torch.abs(pred - y_norm)
+            elif loss_fn == "truncated_l1":
+                per_elem = torch.minimum(
+                    torch.abs(pred - y_norm),
+                    torch.tensor(truncated_l1_tau, dtype=pred.dtype, device=pred.device),
+                )
             else:
                 per_elem = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -409,8 +415,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    loss_fn: str = "mse"  # "mse", "smooth_l1", or "l1"
+    loss_fn: str = "mse"  # "mse", "smooth_l1", "l1", or "truncated_l1"
     smooth_l1_beta: float = 0.1
+    truncated_l1_tau: float = 1.0  # zero-gradient cliff at |r|>=tau (only used when loss_fn=="truncated_l1")
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
 
 
@@ -527,6 +534,10 @@ for epoch in range(MAX_EPOCHS):
             )
         elif cfg.loss_fn == "l1":
             per_elem = torch.abs(pred - y_norm)
+        elif cfg.loss_fn == "truncated_l1":
+            abs_resid = torch.abs(pred - y_norm)
+            tau_t = torch.tensor(cfg.truncated_l1_tau, dtype=pred.dtype, device=pred.device)
+            per_elem = torch.minimum(abs_resid, tau_t)
         else:
             per_elem = (pred - y_norm) ** 2
 
@@ -548,11 +559,18 @@ for epoch in range(MAX_EPOCHS):
                 for eb, b in zip(ema_model.buffers(), model.buffers()):
                     eb.data.copy_(b.data)
         global_step += 1
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
             "global_step": global_step,
-        })
+        }
+        if cfg.loss_fn == "truncated_l1":
+            with torch.no_grad():
+                valid = mask.unsqueeze(-1).expand_as(abs_resid)
+                clipped = ((abs_resid >= tau_t) & valid).sum().item()
+                denom = max(valid.sum().item(), 1)
+                log_payload["train/pct_clipped"] = clipped / denom
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -567,7 +585,8 @@ for epoch in range(MAX_EPOCHS):
     eval_model = ema_model if ema_model is not None else model
     split_metrics = {
         name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device,
-                             loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                             loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                             truncated_l1_tau=cfg.truncated_l1_tau)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -639,7 +658,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(test_eval_model, loader, stats, cfg.surf_weight, device,
-                                 loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                                 loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                                 truncated_l1_tau=cfg.truncated_l1_tau)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
@@ -665,7 +685,8 @@ if best_metrics:
             model.eval()
             test_metrics_no_ema = {
                 name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                     loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                                     loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta,
+                                     truncated_l1_tau=cfg.truncated_l1_tau)
                 for name, loader in test_loaders.items()
             }
             test_avg_no_ema = aggregate_splits(test_metrics_no_ema)
