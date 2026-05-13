@@ -430,6 +430,7 @@ class Config:
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
+    dropout: float = 0.0   # Encoder dropout rate (PhysicsAttention + to_out); 0.0 = disabled
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -475,6 +476,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    dropout=cfg.dropout,
 )
 
 model = Transolver(**model_config).to(device)
