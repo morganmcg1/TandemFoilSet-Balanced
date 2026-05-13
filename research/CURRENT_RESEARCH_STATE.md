@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 21:00 UTC (Wave 17+: MERGE #2475 fern layerscale-init-0.1 (19th compound win); CLOSE 7 dead-ends with mechanism findings (#2469 freqs-xy / #2434 freq-eq-init / #2453 FiLM v2 / #2476 SWA / #2441 hybrid RFF / #2465 norm-bias-no-WD / #2488 RMSNorm-QK-γ); ASSIGN 8 new (#2510 decoupled-LS-init / #2511 input-gate / #2513 stoch-depth-deep / #2514 reflection-TTA / #2515 per-block-LS-lr / #2517 Q-bias / #2518 β2=0.99 / #2519 sharper-attn-τ))
+- **Last updated**: 2026-05-13 21:45 UTC (Wave 17+ Iteration 5: MERGE #2519 tanjiro attn-temp-fixed-sharper √2 — 20th compound win (val −3.68%, test −4.38%, biggest single-experiment win in 18 merges); CLOSE 2 dead-ends (#2510 decoupled-LS-init Outcome C / #2514 reflection-TTA catastrophic +25%); SEND BACK 4 winners for rebase (#2517 Q-bias / #2518 β2=0.99 / #2511 input-gate / #2515 per-block-LS-lr — all above new baseline, need stack-test); ASSIGN 3 new (#2574 alphonse attn-temp-√3 / #2575 askeladd latent-mixup / #2576 tanjiro per-head-τ-multiplier))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -9,61 +9,56 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #2475 merged — LayerScale init=0.1 retuned, 19th compound win)
+## Current best baseline (PR #2519 merged — fixed sharper attention τ=√2 × default, 20th compound win)
 
-- `val_avg/mae_surf_p` = **58.3244** (e12; full stack: ReGLU + inner_dim=288 + learned-freqs no-WD 10× lr + **LayerScale γ no-WD 10× lr init=0.1** + LR warmup + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 learnable + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **50.9438**
-- Per-split val: single_in_dist=71.343 / camber_rc=71.041 / camber_cruise=35.411 / re_rand=55.503
-- Per-split test: single_in_dist=63.834 / camber_rc=64.360 / camber_cruise=29.389 / re_rand=46.192
-- Δ vs prior PR #2436 baseline (58.6093 / 50.7946): **−0.49%** val_avg, **+0.29%** test (within noise)
-- **Mechanism finding (PRIMARY VALUE) — anti-correlated init responses**:
-  - attn LayerScale γ drifts DOWN from init=0.1 → lands 0.04-0.08 (sparse-state attractor, std/mean 150-243%)
-  - mlp LayerScale γ drifts UP from init=0.1 → lands 0.149-0.194 (dense-state attractor, std/mean 16-30%)
-  - **The two paths have OPPOSITE attractors under no-WD 10× lr** — contradicts "single global equilibrium" framing
-  - The no-WD 10× lr group is in a flat region of the loss landscape where init bias compounds rather than relaxing
-- **Why merged despite student's "don't merge"**: CLAUDE.md is explicit that `val_avg/mae_surf_p` is the metric of record; small improvements compound; +0.29% test regression is within noise. The mechanism finding directly motivates the next-wave decoupled-init test (#2510 alphonse).
-- **Compound progress**: 100.957 → **58.3244** = **−42.23% over 19 merges**
+- `val_avg/mae_surf_p` = **56.1754** (e12; full stack: ReGLU + inner_dim=288 + learned-freqs no-WD 10× lr + LayerScale γ no-WD 10× lr init=0.1 + LR warmup + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 learnable + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth + **fixed attention scale = 1/√(d_head/2) ≈ √2 × default**)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **48.7149**
+- Per-split val: single_in_dist=66.511 / camber_rc=68.819 / camber_cruise=34.782 / re_rand=54.590
+- Per-split test: single_in_dist=57.795 / camber_rc=63.594 / camber_cruise=28.422 / re_rand=45.048
+- Δ vs prior #2475 baseline (58.3244 / 50.9438): **−3.68% val**, **−4.38% test** (test gain > val gain — strong generalization signal; biggest single-experiment win in 18 merges)
+- **Mechanism — fixed scalar captures gain that learnable γ couldn't reach**: #2488 RMSNorm-Q/K-γ activated (γ moved on all 5 blocks) but per-channel std/mean peaked at only 33% (below 50% diversification threshold). The optimizer in 12 epochs cannot diversify a 1280-param per-channel γ enough to manifest the sharpening that a single fixed scalar produces directly. The fixed-scalar formulation works *because* it eliminates degrees of freedom that the optimizer couldn't allocate cleanly.
+- **All 8 splits improve uniformly**: not a single-split artifact; sharper attention is the right direction across in-distribution AND OOD.
+- **Compound progress**: 100.957 → **56.1754** = **−44.36% over 20 merges**
 - **n_params**: **892,637** (unchanged)
 
 ## Current research focus
 
-**Wave 17+ — Refined optimizer-group axis + emergent anti-correlated-init mechanism.**
+**Wave 17+ Iteration 5 — Sharpening attractor pushed; OOD-side regularization rebooted.**
 
-After Wave 17 partial results, the optimizer-group axis split into two empirically distinct classes:
-- **Additive scale params** (multiply activations linearly): freqs (#2370 MERGED, −3.73%), LayerScale γ (#2436 MERGED, −1.60%; #2475 MERGED retuning, −0.49%). Win at no-WD + 10× lr.
-- **Softmax-internal scale params** (govern combinatorial routing): slice temperature (#2437 CLOSED Outcome C, +4.81%), QK temperature v1 (#2377 CLOSED). Fast updates destabilize routing.
+The #2519 sharper-attention win (val −3.68%, test −4.38%, ALL 8 splits improve) is a turning point. After 18 merges where each win was 0.5-1.5% range, a single-line `scale = 1/√(d_head/2)` change produced the biggest single experiment win since #2370 (learned freqs). This validates two things at once:
 
-**NEW Wave 17+ mechanism (anti-correlated init under no-WD 10× lr group)**:
-The merge of #2475 LayerScale init=0.1 retuning revealed a striking pattern:
-- attn LayerScale γ drifts DOWN from init=0.1 → lands 0.04-0.08 (sparse-state attractor)
-- mlp LayerScale γ drifts UP from init=0.1 → lands 0.15-0.19 (dense-state attractor)
-- The two paths have OPPOSITE attractors despite identical optimizer treatment
-- The same overshoot pattern shows in #2434 (frieren freq-init-equilibrium): freqs continued drifting past the #2370 endpoint when started there
+1. **Direction**: sharper attention is preferred — confirms #2488 RMSNorm-Q/K-γ's "wants slight sharpening" finding now stripped to fixed cost.
+2. **Mechanism**: fixed scalar > learnable γ when the optimizer can't diversify enough params in 12 epochs. Future work should prefer fixed structural changes over learnable per-channel mechanisms when DoF budget is tight.
 
-**Interpretation**: the no-WD + 10× lr group operates in a **flat region** of the loss landscape where init bias COMPOUNDS rather than relaxing. This is a previously-unrecognized property of the group — it explains:
-- Why exact init matters less than direction-of-drift
-- Why retuning init close-but-not-AT the attractor can still win
-- Why different params with different optimal endpoints can coexist in the same group
+**Twin frontiers now active**:
 
-**Wave 17+ now tests mechanism follow-ups**:
-- `layerscale-init-decoupled` (alphonse #2510): split init at attractors (attn=0.025, mlp=0.1) — tests if it removes wrong-init reversal cost
-- `layerscale-per-block-lr` (fern #2515): per-block lr scaling 5×→15× — tests if the per-block std/mean heterogeneity in #2475 is a tunable signal
-- `input-feature-gate` (thorfinn #2511): extends additive-scale theme to input position
-- `stoch-depth-deep-block-concentrated` (frieren #2513): tests deep-block redundancy theory
-- `reflection-tta-at-inference` (askeladd #2514): risk-free TTA at val/test — paper-friendly addition
+**A. Sharpening-attractor exploration (where does it stop?)**:
+- `attn-temp-sqrt3` (alphonse #2574 NEW): even sharper τ=√3 × default (1.732×); tests if the attractor is past √2
+- `per-head-tau-multiplier` (tanjiro #2576 NEW): 20 params total (4 heads × 5 blocks) on top of √2; tests per-head fine-tuning of sharpening
 
-**Wave 17+ active threads (all 8 students busy):**
+**B. OOD-side regularization (5 winners in iter-4 all improved single_in_dist; OOD-side plateau)**:
+- `latent-mixup` (askeladd #2575 NEW): mixup at slice tokens, α=0.2, prob=0.5 — Manifold Mixup pattern, targeting camber_rc and camber_cruise improvement
+
+**C. Pre-#2519 winners re-testing on new baseline** (4 PRs rebasing — orthogonal mechanism check):
+- All four (edward #2517 Q-bias, nezuko #2518 β2=0.99, thorfinn #2511 input-gate, fern #2515 per-block-LS-lr) had val_avg between 56.69 and 58.09 — above the new 56.1754 baseline. Mechanism stack-test required.
+
+**Mechanism findings preserved from earlier iterations**:
+- **Anti-correlated init under no-WD 10× lr**: attn γ→sparse attractor (0.04-0.08), mlp γ→dense attractor (0.15-0.19), opposite endpoints despite identical opt treatment. The no-WD 10× lr group lives in a flat loss landscape where init bias compounds rather than relaxes.
+- **Trajectory matters more than endpoint** (#2510 closure): starting LayerScale γ AT the attractor produced +5.10% regression. The drift IS the optimization — skipping it loses coupling with other training signals.
+- **Y-reflection is NOT a valid prior** (#2514 closure): +25.13% catastrophic regression on TTA. The model has internalized non-symmetric task-relevant structure. Blocks all "y-symmetry as regularizer" hypotheses going forward.
+
+**Wave 17+ Iteration 5 active threads (8/8 students busy):**
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| alphonse | #2510 | layerscale-init-decoupled | Decoupled LayerScale init `attn=0.025, mlp=0.1` — directly tests #2475's anti-correlated-attractor finding | ASSIGNED |
-| thorfinn | #2511 | input-feature-gate | Per-feature input gate γ_input (44 params, no-WD 10× lr) — extends additive-scale theme to input position | ASSIGNED |
-| frieren | #2513 | stoch-depth-deep-block-concentrated | Concentrate stoch-depth in deeper blocks `[0,0,0.05,0.10,0.15]` vs linear `[0,0.025,0.05,0.075,0.1]` — anti-redundancy training | ASSIGNED |
-| askeladd | #2514 | reflection-tta-at-inference | Y-axis reflection test-time augmentation at val/test eval; predict on (x,y) AND (x,-y) with Uy sign flip; average outputs | ASSIGNED |
-| edward | #2517 | q-projection-bias | Q-projection learnable bias (640 params, no-WD 10× lr group); additive-scale theme at a new attention position | ASSIGNED |
-| nezuko | #2518 | adamw-beta2-0.99 | AdamW β2=0.99 (default 0.999) — ~10× faster second-moment forget, may improve per-group adaptation for the 3-group optimizer | ASSIGNED |
-| tanjiro | #2519 | attn-temp-fixed-sharper | Fixed sharper attention temperature τ=√2 × default (no learnable scale); tests if the #2488 RMSNorm-γ "wants slight sharpening" finding holds at fixed cost | ASSIGNED |
-| fern | #2515 | layerscale-per-block-lr | Per-block-separate LayerScale lr scaling (5×→15× linearly from block 0 to 4) — directly tests #2475's per-block heterogeneity finding (deep blocks have higher std/mean) | ASSIGNED |
+| alphonse | #2574 | attn-temp-sqrt3 | Even-sharper τ=√3 × default (1.732×); continuation of #2519 attractor exploration | NEW |
+| askeladd | #2575 | latent-mixup | Latent-space mixup at slice tokens, α=0.2, prob=0.5; OOD-targeted regularization | NEW |
+| tanjiro | #2576 | per-head-tau-multiplier | Per-head learnable τ multiplier on top of #2519's √2 baseline (20 params no-WD 10× lr) | NEW |
+| edward | #2517 | q-projection-bias | Q-projection learnable bias (640 params no-WD 10× lr); was pre-#2519 win at 56.69, now rebasing | REBASING |
+| nezuko | #2518 | adamw-beta2-0.99 | AdamW β2=0.99; was pre-#2519 win at 57.18, now rebasing | REBASING |
+| thorfinn | #2511 | input-feature-gate | Per-feature input gate γ_input (44 params no-WD 10× lr); pre-#2519 win at 57.70, now rebasing | REBASING |
+| fern | #2515 | layerscale-per-block-lr | Per-block LayerScale lr scaling (5×→15×); pre-#2519 small win at 58.09, now rebasing | REBASING |
+| frieren | #2513 | stoch-depth-deep-block-concentrated | Concentrate stoch-depth in deeper blocks `[0,0,0.05,0.10,0.15]` | STALE (no activity since assign — investigate next iter) |
 
 ## Key findings from Wave 13/14/15/16/17
 
@@ -131,6 +126,8 @@ The merge of #2475 LayerScale init=0.1 retuning revealed a striking pattern:
 | Hybrid fixed RFF + learned freqs | learned freqs only | #2441 CLOSED Outcome D +5.66%; RFF and learned-freqs SHARE low-frequency information rather than orthogonal coverage; camber_cruise regression is smoking gun (both encoders had won there individually); future Fourier work should refine single encoding (per-block/head/channel) not ensemble |
 | Bias + norm γ/β + temp blanket no-WD | bias + norm γ/β + temp use default WD | #2465 CLOSED Outcome C +5.16%; bias-WD removal is the regression source (biases drift unbounded without WD anchor); LayerScale γ already provides per-channel offset, so bias-no-WD adds redundant competing path; isolated norm-γ/β-only test not yet done |
 | RMSNorm-Q/K with learnable γ | no QK-norm | #2488 CLOSED Outcome B (γ activates but std/mean peaks 33%, below 50% threshold for diversification); competes with LayerScale γ in the residual; Q/K-norm axis fully closed across both F.normalize (#2377/#2427 magnitude collapse) AND RMSNorm (#2488 redundant scaling) |
+| LayerScale decoupled init at attractors (attn=0.025, mlp=0.1) | symmetric init=0.1 (#2475) | #2510 CLOSED Outcome C +5.10% val; trajectory matters more than endpoint — the no-WD 10× lr group's flat landscape means the drift IS the optimization, not just a path to a fixed endpoint. Combined with #2414 closure (asymmetric attn>mlp), the LayerScale init axis is fully closed across symmetric AND asymmetric variants. |
+| Y-axis reflection (TTA, augmentation, equivariance) | no reflection | #2514 CLOSED catastrophic +25.13% val / +25.37% test; TTA-off shows training was nominal. The tandem-foil dataset is NOT y-symmetric in any task-relevant sense — the model has internalized geometric orientation and flow direction as features. Blocks all "y-symmetry as regularizer" hypotheses (Manifold-Mixup with y-flip, equivariant arch with y-mirror, data aug with y-flip). |
 
 ## Prioritized open research themes (Wave 17+)
 

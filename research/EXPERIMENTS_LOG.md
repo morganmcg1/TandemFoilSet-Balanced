@@ -8,6 +8,85 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 21:30 — PR #2519 (tanjiro attn-temp-fixed-sharper) — **MERGED 20th compound win** (val −3.68%, test −4.38%; biggest single-experiment win in 18 merges)
+
+- Branch: `charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`
+- Hypothesis: Fixed sharper attention scale `SHARPER_SCALE = 1.0 / math.sqrt(d_head / 2.0)` (= √2 × default) — no learnable parameters; directly tests #2488 RMSNorm-Q/K-γ's "wants slight sharpening" finding without the per-channel-γ overhead
+- Metric artifact: `models/model-charliepai2g24h4-tanjiro-attn-temp-fixed-sharper-20260513-200103/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244 / 50.9438) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **56.1754** | 58.3244 | **−3.68%** WIN |
+| `test_avg/mae_surf_p` | **48.7149** | 50.9438 | **−4.38%** (test gain > val gain — strong generalization signal) |
+
+Per-split val: single_in_dist=66.511 / camber_rc=68.819 / camber_cruise=34.782 / re_rand=54.590
+Per-split test: single_in_dist=57.795 / camber_rc=63.594 / camber_cruise=28.422 / re_rand=45.048
+
+- **All 8 splits improve.** Per-split gains: single-id-val −6.78%, camber_rc-val −3.13%, camber_cruise-val −1.78%, re_rand-val −1.65%; test analogous. This is uniform, not single-split.
+- **Mechanism — fixed scalar captures gain that learnable γ couldn't reach**: #2488 RMSNorm-Q/K-γ activated (γ moved on all 5 blocks) but per-channel std/mean peaked at only 33% (below 50% diversification threshold). The optimizer in 12 epochs cannot diversify a 1280-param per-channel γ enough to manifest the sharpening that a single fixed scalar produces directly. The fixed-scalar formulation works *because* it eliminates degrees of freedom that the optimizer couldn't allocate cleanly.
+- **Single-line change** (`PhysicsAttention.forward`): `attn = F.scaled_dot_product_attention(q, k, v, scale=1/math.sqrt(d_head/2))` — no new params, no opt-group plumbing.
+- **Compound progress**: 100.957 → **56.1754** = **−44.36% over 20 merges**
+- **New baseline locked.** All in-flight winners (#2517/#2518/#2511/#2515) sent back for rebase + re-test against #2519 stack; their pre-rebase val_avgs (56.69, 57.18, 57.70, 58.09) all sit ABOVE the new baseline — mechanism stack-testing required.
+
+## 2026-05-13 21:36 — PR #2514 (askeladd reflection-tta-at-inference) — **CLOSED** catastrophic regression (+25.13% val; y-reflection is NOT a valid prior; falsifies model-as-symmetry-learner framing)
+
+- Branch: `charliepai2g24h4-askeladd/reflection-tta-at-inference`
+- Hypothesis: Y-axis reflection test-time augmentation at val/test eval; predict on (x,y) AND (x,-y) with Uy sign flip; average outputs. Pitched as "risk-free" because no retraining is required.
+- Metric artifact: `models/model-charliepai2g24h4-askeladd-reflection-tta-at-inference-20260513-194503/metrics.jsonl`
+
+| Metric | This run (TTA-on) | Current #2475 baseline (58.3244 / 50.9438) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 72.9846 | 58.3244 | **+25.13% regression** |
+| `test_avg/mae_surf_p` | 63.8714 | 50.9438 | **+25.37% regression** |
+| TTA-off baseline (same run) | val 58.21 | 58.3244 | within-noise (training was nominal) |
+
+- **Mechanism — model has internalized task-relevant non-symmetric structure**: the tandem-foil dataset is NOT y-symmetric in any task-relevant sense. The model has learned representations that encode the geometric orientation, foil tandem structure, and flow direction. Reflecting y inverts task-relevant features without inverting the matching ground-truth representation the model expects to produce. The +25% regression is uniform across all 4 splits and on test, confirming this isn't an OOD-specific failure but a fundamental incompatibility.
+- **Critical falsification — Y-reflection prior is REJECTED**: any future "use y-symmetry as a regularizer" hypothesis (Manifold-Mixup with y-flip, equivariant architectures with y-mirror, data-augmentation with y-flip) is blocked by this result. TTA-off shows training was perfectly nominal — the issue is exclusively the y-flip itself.
+- **Axis closure**: y-axis reflection (TTA, training augmentation, equivariance) — CLOSED across all variants.
+
+## 2026-05-13 21:35 — PR #2510 (alphonse layerscale-init-decoupled) — **CLOSED** Outcome C (+5.10% val regression; decoupled init at attractors does NOT remove wrong-init reversal cost)
+
+- Branch: `charliepai2g24h4-alphonse/layerscale-init-decoupled`
+- Hypothesis: Initialize LayerScale γ at the natural attractor values discovered in #2475 — `attn=0.025, mlp=0.1` — to remove the reversal cost when starting both at 0.1 (where attn drifts DOWN and mlp drifts UP).
+- Metric artifact: `models/model-charliepai2g24h4-alphonse-layerscale-init-decoupled-20260513-194601/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244 / 50.9438) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 61.2987 | 58.3244 | **+5.10% regression** |
+| `test_avg/mae_surf_p` | 53.4022 | 50.9438 | +4.83% regression |
+
+- Per-split val: single-id 73.8 / camber_rc 78.7 / camber_cruise 35.8 / re_rand 56.9 — camber_rc +10.83% is the worst single-split delta
+- **Mechanism — trajectory matters more than endpoint**: the no-WD 10× lr group's flat landscape means the optimizer must *traverse* a particular shape during training, not just *land* at a particular endpoint. Starting at the attractor skips the productive drift phase where the model couples optimizer trajectory to other learning signals. This is a deeper consequence of the "no-WD 10× lr is flat" finding from #2475 than expected — the drift IS the optimization, not just an artifact of imperfect init.
+- **LayerScale init axis CLOSURE**: both symmetric (0.025 #2436, 0.1 #2475) and asymmetric (attn>mlp #2414 +7.92%, attn<mlp #2510 +5.10%) tested; init=0.1 symmetric remains optimum. The decoupled-attractor hypothesis is rejected — closes the LayerScale init axis fully.
+
+## 2026-05-13 21:38 — PR #2517 (edward q-projection-bias) — **SENT BACK for rebase** (val 56.69 above new #2519 baseline 56.1754 — needs mechanism stack-test)
+
+- Branch: `charliepai2g24h4-edward/q-projection-bias`
+- Hypothesis: Q-projection learnable bias (640 params, no-WD 10× lr group); additive-scale theme at attention's Q position.
+- Pre-rebase result: val_avg = 56.69 — was a win against the #2475 baseline (58.3244, −2.80%) but is **above** the new post-#2519 baseline (56.1754).
+- Action: rebase onto post-#2519 advisor HEAD and re-test. If Q-bias and sharper-attn-τ stack, this could push to ~54.5–55.0 (additive effect). If they share mechanism, the post-rebase result will land near 56.17 and the PR will close.
+
+## 2026-05-13 21:39 — PR #2518 (nezuko adamw-beta2-0.99) — **SENT BACK for rebase** (val 57.18 above new #2519 baseline)
+
+- Branch: `charliepai2g24h4-nezuko/adamw-beta2-0.99`
+- Hypothesis: AdamW β2=0.99 (default 0.999); ~10× faster second-moment forget for better 3-group adaptation.
+- Pre-rebase result: val_avg = 57.18 — pre-#2519 win, now above baseline.
+- Action: rebase onto post-#2519 advisor HEAD and re-test. β2=0.99 is opt-config-only; should compose orthogonally with sharper-attn scale unless second-moment behavior interacts with the larger gradients flowing through sharper attention.
+
+## 2026-05-13 21:40 — PR #2511 (thorfinn input-feature-gate) — **SENT BACK for rebase** (val 57.70 above new #2519 baseline)
+
+- Branch: `charliepai2g24h4-thorfinn/input-feature-gate`
+- Hypothesis: Per-feature input gate γ_input (44 params, no-WD 10× lr); extends additive-scale theme to input position.
+- Pre-rebase result: val_avg = 57.70 — pre-#2519 win.
+- Action: rebase onto post-#2519 advisor HEAD and re-test. Input-gate operates at a completely different architectural position from attention scale, so should be orthogonal.
+
+## 2026-05-13 21:41 — PR #2515 (fern layerscale-per-block-lr) — **SENT BACK for rebase** (val 58.09 marginally above new #2519 baseline)
+
+- Branch: `charliepai2g24h4-fern/layerscale-per-block-lr`
+- Hypothesis: Per-block LayerScale lr scaling (5×→15× linearly from block 0 to 4); tests #2475's per-block heterogeneity finding.
+- Pre-rebase result: val_avg = 58.09 — was a small win pre-#2519, now slightly above baseline.
+- Action: rebase onto post-#2519 advisor HEAD and re-test. Per-block-lr-scaling for LayerScale γ is opt-group structural change; should be orthogonal to attention scale.
+
 ## 2026-05-13 20:55 — PR #2488 (tanjiro rmsnorm-qk-gamma) — **CLOSED** (Outcome B mechanism activated; +1.57% val regression; per-channel γ doesn't diversify enough)
 
 - Branch: `charliepai2g24h4-tanjiro/rmsnorm-qk-gamma`
