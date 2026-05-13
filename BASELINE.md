@@ -39,10 +39,55 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **56.6217** | #1619 | L1 + compile + bf16 + sampler 2× single | epoch 39 of 39; still improving at timeout; -4.89% vs #1700 |
-| `test_avg/mae_surf_p` | **50.4310** | #1619 | — | finite across all 4 test splits; -2.01% vs #1700 |
+| `val_avg/mae_surf_p` | **54.0051** | #1846 | L1 + compile + bf16 + slice_num=32 | epoch 40 of 41; best≠terminal (first converged run); -9.30% vs #1700; **measured on L1-only base** |
+| `test_avg/mae_surf_p` | **47.6261** | #1846 | — | all 4 test splits improve; -7.46% vs #1700 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 56.6217` to be merged.
+> ⚠️ **Note:** PR #1846 (slice_num=32) was measured on the L1 baseline (#1700, val=59.54) **before** the sampler merge (#1619, val=56.62 with sampler 2× single). Post-merge advisor now includes BOTH sampler 2× single AND slice_num=32. The true stacked baseline will be revealed when future PRs run against current advisor. Conservative lower bound: val_avg ≤ 54.0051.
+
+All subsequent PRs must beat `val_avg/mae_surf_p < 54.0051` to be merged.
+
+## 2026-05-13 05:45 — PR #1846: slice_num 64 → 32 (tighter attention bottleneck)
+
+- **Student:** charliepai2g48h5-frieren
+- **Best epoch:** 40 of 41 — **first run where best ≠ terminal** (model converged within budget!)
+- **Epochs reached:** 41 (~43.5 s/epoch, -12.3% vs baseline — slice_num=32 is faster)
+- **Peak GPU memory:** 21.35 GB (-10.4% vs baseline)
+- **Param count:** 657,079 (~5K fewer than baseline 662K — <1% change)
+
+| Split | val mae_surf_p | Δ vs #1700 L1 baseline |
+|---|---|---|
+| `val_single_in_dist` | **59.0943** | -8.93% |
+| `val_geom_camber_rc` | 67.4450 | -8.91% |
+| `val_geom_camber_cruise` | **35.7197** | **-10.63%** |
+| `val_re_rand` | **53.7616** | -9.25% |
+| **val_avg** | **54.0051** | **-9.30%** |
+
+| Split | test mae_surf_p | Δ vs #1700 |
+|---|---|---|
+| `test_single_in_dist` | **53.2538** | -4.27% |
+| `test_geom_camber_rc` | **62.8744** | -5.86% |
+| `test_geom_camber_cruise` | **29.4777** | -12.22% |
+| `test_re_rand` | **44.8988** | -9.97% |
+| **test_avg** | **47.6261** | **-7.46%** |
+
+- **All 4 val splits and all 4 test splits improved uniformly (~9%)** — this is a global inductive-bias benefit, not one-split coincidence.
+- **Why it works:** slice_num=64 was over-allocated for TandemFoilSet's natural spatial regimes (~10-20 CFD motifs). slice_num=32 forces tighter routing → regularization at the information-bottleneck level + ~4 extra epochs from budget gain.
+- **Key diagnostic:** first run in round 5 where best_epoch ≠ terminal (ep 40 < ep 41) — the model now converges within the 30-min cap. Smaller bottleneck = faster optimization.
+- **⚠️ Caveat:** Measured on L1-only base (#1700, 59.54). Post-merge advisor includes sampler 2× single (#1619). True stacked baseline revealed by future runs.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-frieren-slice-num-32-20260513-030801/metrics.jsonl`
+  `models/model-charliepai2g48h5-frieren-slice-num-32-20260513-030801/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-frieren \
+      --experiment_name "charliepai2g48h5-frieren/slice-num-32" \
+      --epochs 50
+  ```
+  (slice_num=32 now on advisor branch)
+
+---
 
 ## 2026-05-13 05:10 — PR #1619: Sampler 2× single boost on L1 baseline
 
