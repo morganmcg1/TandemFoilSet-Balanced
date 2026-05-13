@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~09:00 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 28 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~09:30 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 30 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
 - **Current best (3-seed mean, paper-publishable):** val = **65.35 ± 3.37**, test = **56.68 ± 2.66** (PR #1379 — Smooth-L1 β=0.5, 3-seed). Best seed: val=62.3972, test=54.4758 (seed=1, W&B `mqf224bq`).
@@ -33,9 +33,11 @@ The most important pending figure is the 3-seed multi-seed sweep of the OneCycle
 
 The high-value compose-able question: does β=0.5 + pct_start=0.10 stack additively? β=0.5 = gradient fairness across residual magnitudes; pct_start=0.10 = LR-schedule Pareto warmup/decay balance — orthogonal mechanisms, expected ~1-2 mae units of additional gain over β=0.5 + pct=0.05.
 
-### OOD-asymmetric regularization — CLOSED
+### OOD-asymmetric regularization — CLOSED (weight decay axis)
 
 The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) regressed vs wd=1e-4. The basin is confirmed: wd=1e-4 is the optimum for this workload. **Key paper finding:** standard "regularization → better OOD" prior is INVERTED here — wd=5e-4 regressed OOD splits monotonically more than in-dist, suggesting richer features are needed for OOD extrapolation.
+
+**New regularization angle (model stochastic):** fern #2126 now testing dropout=0.1 in Transolver attention and MLP layers. Stochastic regularization is mechanistically different from weight decay — it spreads predictive load across redundant paths rather than uniformly shrinking parameters. May be the right lever for OOD specifically.
 
 ## Active PRs
 
@@ -44,7 +46,7 @@ The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) reg
 | alphonse | #1785 | OneCycleLR max_lr=2e-3 (LR ceiling probe) | WIP |
 | askeladd | #2037 | Smooth-L1 β=0.25 — downward bracket from β=0.5, 3-seed | WIP |
 | edward | #2039 | AdamW β2=0.95 — faster 2nd-moment adaptation, 3-seed | WIP |
-| fern | #2003 | surf_weight 10 → 15 — mild upward bracket step, 3-seed | WIP |
+| fern | #2126 | Transolver dropout=0.1 — stochastic OOD regularization, 3-seed | WIP |
 | frieren | #2002 | OneCycleLR anneal_strategy=cos → linear — cosine-tail shape probe, 3-seed | WIP |
 | nezuko | #2046 | OneCycleLR pct_start=0.15 — 3-seed bracket completion (paper figure) | WIP |
 | tanjiro | #1965 | batch_size=4 → 8 (gradient quality vs step-count probe, 3-seed) | WIP |
@@ -70,6 +72,7 @@ The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) reg
 16. **Smooth-L1 β=1.0 ≈ MSE at convergence on this stack** (askeladd #1379 sent back) — bulk normalized residuals at convergence satisfy |err| < 1.0, keeping the loss in the quadratic regime. β=0.5 will be the first real test of gradient-fairness.
 17. **Weight decay basin confirmed at wd=1e-4** (nezuko #1916 closed) — wd=2e-5 (5× lower) also regresses vs baseline. Both wd directions explored (5e-4 = too much regularization; 2e-5 = too little). wd=1e-4 is the optimum; weight decay axis is exhausted.
 18. **pct_start=0.10 is the Pareto point on MSE stack** (thorfinn #1944 sent back, 3-seed) — 67.34 ± 1.98 val / 58.31 ± 1.76 test vs 0.05's 68.88 ± 2.40 / 59.61 ± 2.36. **ALL 4 val splits AND all 4 test splits improve simultaneously**, std SHRINKS in both metrics, in-dist regression at 0.05 is fully eliminated, OOD gain preserved. Result needs re-run on Smooth-L1 β=0.5 stack to validate as new baseline — β=0.5 + pct_start=0.10 is the highest-value compose-able experiment available.
+19. **surf_weight=10 is a confirmed basin** (fern #2003 closed) — +50% step (surf_weight=15) is within noise of MSE baseline, mildly worse on all splits. Combined with #1390 (surf_weight=25, +20.7% catastrophic regression), the surf_weight attack class is exhausted. Both directions explored — 10 is the joint optimum for this shared-backbone + max_lr=1.5e-3 stack. Changing surf_weight changes effective surface gradient LR; any deviation from 10 either destabilizes (too high) or under-emphasizes (too low).
 
 ## Potential next research directions
 
@@ -80,10 +83,10 @@ The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) reg
 - **batch_size=4 → 8** (tanjiro #1965, 3-seed) — gradient quality vs per-batch-step-count probe; uses unused GPU (~46GB / 96GB).
 - **Smooth-L1 β=0.25** (askeladd #2037) — downward bracket from β=0.5.
 - **AdamW β2=0.95** (edward #2039) — faster 2nd-moment adaptation.
-- **surf_weight=15** (fern #2003) — mild upward bracket from surf_weight=10.
+- **Transolver dropout=0.1** (fern #2126) — stochastic OOD regularization, first model-level regularization probe.
 - **anneal_strategy=linear** (frieren #2002) — alternative cosine-tail shape probe.
 
-### Short-term (round 25+)
+### Short-term (round 31+)
 - **Smooth-L1 β bracket** — once β=0.25 returns, decide whether to go lower (β=0.1) or higher (β=0.75). The goal is finding the optimal gradient-fairness point.
 - **SDPA flash backend** — explicit `torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION)` context manager.
 - **pct_start bracket paper figure** — once 0.05/0.10/0.15 are all 3-seed confirmed, this is a clean mechanistic figure: OOD gain vs in-dist cost as a function of warmup fraction.

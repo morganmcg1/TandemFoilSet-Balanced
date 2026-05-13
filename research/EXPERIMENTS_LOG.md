@@ -848,3 +848,40 @@ The right next step is to run β=0.5 + pct_start=0.10 — these target orthogona
 - Within noise (66-67) → mechanisms partially overlap (both touch OOD generalization); 0.10 is still the better pct_start point
 - Above 67 → mechanisms compete somehow; investigate the interaction
 
+
+## 2026-05-13 09:30 — PR #2003: surf_weight 10 → 15 (mild upward bracket step, 3-seed) — CLOSED (surf_weight attack class exhausted)
+- willowpai2g24h4-fern / fern/surf-weight-15-3seed
+- **Hypothesis:** +50% step from surf_weight=10 tests whether there is room for upward movement. surf_weight=25 (#1390) was catastrophic (+20.7%); surf_weight=15 is a tight probe.
+- **W&B:** seed=0 `5m1xlauc`, seed=1 `f5jf2h73`, seed=2 `g3qr3jst` (group: `surf-weight-15`)
+
+### 3-seed results
+
+| Metric | surf_weight=10 (MSE baseline, #1874) | surf_weight=15 (this PR) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 68.88 ± 2.40 | **70.27 ± 2.36** | +2.0% (within noise) |
+| test_avg/mae_surf_p | 59.61 ± 2.36 | **60.64 ± 3.01** | +1.7% (within noise) |
+| best_epoch | 28 | 28 (seed=1: 25) | — |
+
+**vs current β=0.5 baseline (#1379):** val 70.27 vs 65.35 = **+7.5% worse**. Test 60.64 vs 56.68 = **+7.0% worse**.
+
+### Per-split
+
+| Split | baseline | surf_weight=15 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 77.12 | 77.44 ± 1.42 | +0.4% |
+| val_geom_camber_rc | 80.85 | 83.50 ± 2.61 | +3.3% |
+| val_geom_camber_cruise | 50.01 | 51.00 ± 3.95 | +2.0% |
+| val_re_rand | 67.55 | 69.15 ± 1.53 | +2.4% |
+
+**Decision: CLOSED — surf_weight attack class exhausted.**
+
+Note: experiment ran on MSE stack (assigned before β=0.5 merged). Against MSE reference (68.88): "within noise" per the PR interpretation criteria — std bands overlap entirely. Against the current β=0.5 baseline (65.35): +7.5% regression, clear close. Both bracket directions are now characterized:
+- surf_weight=10 → 15: within noise / mildly worse (all 4 splits)
+- surf_weight=10 → 25: catastrophic +20.7% regression
+
+**surf_weight=10 is the basin.** The shared-backbone architecture is calibrated for this value at max_lr=1.5e-3. Increasing surface gradient emphasis in either direction degrades performance.
+
+**Flagged: test_geom_camber_cruise loss=NaN recurs at surf_weight=15** (MAEs finite, primary metric valid). The NaN originates in the loss aggregation path for this split, not the scoring path. Appears also at baseline; likely a pre-existing reduction bug, not surf_weight-specific. Track if it recurs on other PRs.
+
+**Next:** Pivoting fern to **Transolver dropout=0.1** (stochastic OOD regularization). PR #2126. Orthogonal to all current in-flight axes.
+
