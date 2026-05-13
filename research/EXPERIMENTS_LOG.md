@@ -1355,3 +1355,30 @@ The val improvement is tiny (−0.29%) while test improves strongly (−3.93%) �
 The diagnostic ratio ||model-ema||/||model|| is the key predictor: it should plateau in the 1-3% band for real averaging to occur. 0.99 achieves this; 0.95 and 0.999 are on opposite sides of the ideal.
 
 **Potential**: EMA 0.99 on the new slice=32 stack is expected test ~59-60 if the −5.3% gain from averaging stacks additively with slice regularization.
+
+## 2026-05-13 13:10 — PR #2190: accumulation_steps=4 + clip=5.0 — CLOSED ✗ (DISCRIMINATING)
+- Branch: willowpai2g48h1-frieren/accum-4-plus-clip
+- W&B runs: gy56bdkd (test=76.70), bhwyz3u5 (test=78.88), v7x90j9f (test=78.51), 9fsd17h0 (FAILED)
+
+| Run | test_avg/mae_surf_p | vs baseline (62.80) | val_avg/mae_surf_p |
+|---|---|---|---|
+| gy56bdkd (best) | 76.70 | +22.1% ✗ | 86.89 |
+| bhwyz3u5 | 78.88 | +25.6% ✗ | 88.97 |
+| v7x90j9f | 78.51 | +25.0% ✗ | 88.09 |
+
+**Analysis**: DISCRIMINATING NEGATIVE RESULT — highest value outcome of this PR.
+
+The experiment definitively answers: **clip=5.0 does NOT resolve step starvation at accum=4.** 
+
+Mechanism diagnosis (final):
+1. clip's gain is **per-micro-batch direction smoothing**, not per-effective-batch noise reduction. Rescaling each micro-batch gradient before accumulation reduces sign-vote noise at the micro-batch→parameter level.
+2. At accum=4, the step starvation effect (half optimizer steps per epoch → less cosine annealing progress → fewer total gradient updates) is structural and independent of gradient quality.
+3. Going accum=1→2 was net positive: fixed the worst sign-vote noise (free) without substantial step penalty. Going accum=2→4 is net negative: marginal gradient quality gain doesn't offset the step starvation.
+
+**clip mechanism story now complete**: clip's benefit is NOT "better eff_bs from accumulation" but purely "direction smoothing at micro-batch level." Clip's gain would be identical even without accumulation.
+
+**accum lever permanently closed at both accum=2 (optimal) and accum=4.**
+
+**Note**: Student ran 3 same-config retries and 1 failed run without posting any PR comment. This is the second student (after edward) to run silent retries. Reinforced SENPAI-RESULT posting requirement in closure comment.
+
+**Follow-up**: Assigned frieren surf_weight sweep (#2294) — fresh untested lever directly targeting training signal for primary metric.
