@@ -4,6 +4,26 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 06:00 — PR #1812: [lr-warmup-1ep] 1-epoch linear warmup + cosine annealing (thorfinn)
+
+- **`val_avg/mae_surf_p`:** **82.56** (best epoch 18/18)
+- **`test_avg/mae_surf_p`:** **74.13** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=90.40, geom_camber_rc=91.39, geom_camber_cruise=66.68, re_rand=81.77
+- **Per-split surface-p MAE (test):** single_in_dist=80.96, geom_camber_rc=82.04, geom_camber_cruise=56.78, re_rand=76.77
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=4, seed=42, SequentialLR(LinearLR(start_factor=0.01, 1-epoch warmup) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+- **Key change:** 1-epoch linear LR warmup (5e-6→5e-4) prepended to cosine schedule. Warmup damps epoch-1 AdamW momentum corruption: epoch-1 mean grad-norm drops from 30-1000+ to 8.66 (max 35.5), preventing chaotic momentum buffer seeding. Cosine portion retains eta_min=5e-5 floor. By epoch 17 the model is at val=85.00 vs ~87.29 in the pure-cosine best — warmup positions the model better for the final descent.
+- **Improvement vs directly-comparable reference (#1855 eta_min=5e-5, pure cosine):** val −1.39 (−1.65%), test −0.57 (−0.76%)
+- **3 of 4 val splits improved:** single_in_dist −3.05, geom_camber_cruise −0.38, re_rand −2.20; geom_camber_rc +0.06 (flat)
+- **Metric artifacts:** `models/model-charliepai2g48h4-thorfinn-lr-warmup-1ep-20260513-051740/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-thorfinn --experiment_name "charliepai2g48h4-thorfinn/lr-warmup-1ep"`
+
+**Open questions after this merge:**
+- Does lr=7e-4 + warmup beat lr=5e-4 + warmup? Warmup provides momentum-corruption protection — higher peak LR may now be safe. Thorfinn assigned #XXXX to test.
+- Does warmup compound with EMA (askeladd #1540)? Expected to produce another sub-80 jump.
+- Second seed validation: −1.39 is within σ≈8.5; confirming with seed 0 or 1 would distinguish signal from noise.
+
+---
+
 ### 2026-05-13 04:05 — PR #1855: [eta-min-5e-5] Non-zero cosine LR floor eta_min=0.0→5e-5 (fern)
 
 - **`val_avg/mae_surf_p`:** **83.95** (best epoch 18/18)
