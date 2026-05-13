@@ -81,6 +81,18 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLU(nn.Module):
+    """Gated SiLU MLP: param-equivalent to MLP(mlp_ratio=2) at hidden_dim=4/3*dim."""
+    def __init__(self, dim, hidden_dim, out_dim):
+        super().__init__()
+        self.w_in = nn.Linear(dim, hidden_dim)
+        self.w_gate = nn.Linear(dim, hidden_dim)
+        self.w_out = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        return self.w_out(F.silu(self.w_in(x)) * self.w_gate(x))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -147,8 +159,9 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        # SwiGLU: mlp_ratio=4/3 for param parity with standard MLP at mlp_ratio=2
+        swiglu_hidden = ((hidden_dim * 4 // 3) + 7) // 8 * 8  # round up to multiple of 8: 216 for hidden_dim=160
+        self.mlp = SwiGLU(hidden_dim, swiglu_hidden, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
