@@ -385,7 +385,7 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-SINGLE_DOMAIN_BOOST = 2.0
+RACECAR_BOOST = 2.0
 
 if not cfg.debug:
     with open(Path(cfg.splits_dir) / "meta.json") as f:
@@ -394,20 +394,21 @@ if not cfg.debug:
     print(f"[sampler-reweight] domain keys: {list(_domain_groups.keys())}")
     print(f"[sampler-reweight] sizes: " + str({k: len(v) for k, v in _domain_groups.items()}))
 
-    single_domain_key = None
+    boost_domains = []
     for k in _domain_groups.keys():
         kl = k.lower()
-        if "single" in kl and "tandem" not in kl:
-            single_domain_key = k
-            break
-    assert single_domain_key is not None, (
-        f"Could not find 'RaceCar single' domain among {list(_domain_groups.keys())}"
+        if "racecar" in kl and ("single" in kl or "tandem" in kl):
+            boost_domains.append(k)
+    assert len(boost_domains) == 2, (
+        f"Expected 2 RaceCar domains, found {boost_domains} among {list(_domain_groups.keys())}"
     )
-    print(f"[sampler-reweight] boosting domain '{single_domain_key}' by {SINGLE_DOMAIN_BOOST}x")
+    print(f"[sampler-reweight] boosting domains: {boost_domains} by {RACECAR_BOOST}x")
 
     boosted = sample_weights.clone()
-    for idx in _domain_groups[single_domain_key]:
-        boosted[idx] = boosted[idx] * SINGLE_DOMAIN_BOOST
+    for dk in boost_domains:
+        for idx in _domain_groups[dk]:
+            boosted[idx] = boosted[idx] * RACECAR_BOOST
+        print(f"[sampler-reweight] boosting domain '{dk}' by {RACECAR_BOOST}x")
 
     print(f"[sampler-reweight] pre-boost domain mass: "
           + ", ".join(f"{k}={sample_weights[v].sum().item():.4f}" for k, v in _domain_groups.items()))
