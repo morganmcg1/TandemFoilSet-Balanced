@@ -161,3 +161,46 @@ cd "target/" && python train.py \
 ```
 
 *(All defaults now include Fourier encoding with L=8. `--batch_size 4` required for n_hidden=192 + bf16.)*
+
+## 2026-05-13 03:20 — PR #1395: Lion optimizer (lr=1.5e-4, betas=(0.9,0.99))
+
+**Changes merged:** Lion optimizer replaces AdamW. `from lion_pytorch import Lion`; `lr: float = 1.5e-4` (was 7e-4 — Lion guideline: ~1/3–1/10× AdamW lr); `lion_beta1/beta2: float = 0.9/0.99`; `lion-pytorch>=0.1.2` added to `pyproject.toml`. All other config unchanged (Fourier L=8 and n_hidden=192 from prior merges now also present).
+
+**Key finding:** Lion is a far larger lever than expected — −15.97% test on the n_hidden=192 baseline, beating even the Fourier baseline (93.29) by −10.2%. Sign-momentum convergence appears particularly well-suited to this loss landscape. All 4 splits improve substantially. Note: the validated result (83.77) was from Lion on pre-Fourier n_hidden=192 (space_dim=2). Post-merge train.py has Lion + Fourier stacked — a Lion+Fourier confirmation run is in progress to quantify the compound gain.
+
+### Primary metrics (best val checkpoint, epoch 15 of 18 — Lion-only result, pre-Fourier merge)
+
+| Metric | Value | Δ vs Fourier baseline |
+|---|---|---|
+| **val_avg/mae_surf_p** | **92.70** | −10.26% |
+| **test_avg/mae_surf_p** | **83.77** | **−10.20%** |
+
+*(These figures are Lion without Fourier. Lion+Fourier compound result pending confirmation run.)*
+
+### Per-split test MAE (surface pressure — Lion-only result)
+
+| Split | mae_surf_p | Δ vs Fourier baseline (93.29) |
+|---|---|---|
+| test_single_in_dist | 90.07 | −7.7% |
+| test_geom_camber_rc | 98.72 | +4.6% (rc slightly worse in isolation) |
+| test_geom_camber_cruise | 60.96 | −15.6% |
+| test_re_rand | 85.32 | −12.1% |
+
+### Run info (Lion-only validation)
+
+- **W&B run:** `xhg3h5mi` — group `lion-optimizer` (entity: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r1`)
+- **Epochs:** 15 / 18 (30-min timeout, ~128 s/epoch at bs=4)
+- **Peak GPU memory:** ~43 GB (bs=4 + bf16 + n_hidden=192, no second-moment buffer vs AdamW)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, **space_dim=2** (pre-Fourier merge)
+
+### Reproduce (post-merge — includes Lion + Fourier stacked)
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `--batch_size 4` required — n_hidden=192 + bs=8 + bf16 OOMs.)*
