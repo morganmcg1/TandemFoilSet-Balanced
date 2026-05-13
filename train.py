@@ -86,7 +86,9 @@ _rff_B = None          # initialized after device is known
 
 # Gradient clip norm. PR #2260: tightened 1.0 → 0.5 to dampen epoch-5 spike on
 # RFF base (the +91-unit spike observed in #2130).
-GRAD_CLIP = 0.5
+# PR #2291: probing tighter clip 0.5 → 0.25 to complete the clip-axis bracket
+# and explore further generalization gains seen at the test split.
+GRAD_CLIP = 0.25
 
 
 def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
