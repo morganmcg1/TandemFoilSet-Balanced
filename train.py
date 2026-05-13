@@ -296,12 +296,17 @@ class FiLMTransolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, channel_weight=None) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    ``channel_weight`` (optional, shape [3]) multiplies the per-element Smooth-L1
+    so val/test loss stays comparable to the training loss when per-channel
+    weighting is in effect. The MAE accumulation is **unchanged** — physical-space
+    MAE is the score, not a weighted quantity.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -320,6 +325,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             pred = model({"x": x_norm, "mask": mask})["preds"]
 
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            if channel_weight is not None:
+                sq_err = sq_err * channel_weight
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -467,6 +474,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    p_weight: float = 1.0  # per-channel multiplier on the pressure-channel residuals before reduction. 1.0 = no upweight.
 
 
 cfg = sp.parse(Config)
@@ -478,6 +486,12 @@ torch.cuda.manual_seed_all(cfg.seed)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+print(f"p_weight: {cfg.p_weight} (channel order: [Ux, Uy, p])")
+
+# Per-channel loss weight applied to Smooth-L1 residuals before any other
+# weighting. Channel order matches data/scoring.py CHANNELS = (Ux, Uy, p),
+# so the p multiplier goes on index 2.
+channel_weight = torch.tensor([1.0, 1.0, cfg.p_weight], device=device, dtype=torch.float32)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -601,7 +615,9 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        sq_err_raw = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')   # [B, N, 3]
+        # Apply per-channel weight (broadcasts over [B, N, 3]) before re_weight and surf/vol split.
+        sq_err = sq_err_raw * channel_weight
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
         m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
@@ -623,10 +639,21 @@ for epoch in range(MAX_EPOCHS):
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
+        # Uses sq_err_raw (no channel/sample weighting) so the value is comparable across runs.
         with torch.no_grad():
-            vol_loss_unw = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss_unw = (sq_err_raw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_unw = (sq_err_raw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
+
+            # Per-channel mean unweighted Smooth-L1 over all real nodes (surf+vol). Reveals
+            # whether p is genuinely under-trained at the start of training (ratio > 1).
+            real_node_mask = mask.unsqueeze(-1).float()                     # [B, N, 1]
+            n_nodes = real_node_mask.sum().clamp(min=1)
+            per_ch = (sq_err_raw * real_node_mask).sum(dim=(0, 1)) / n_nodes  # [3]
+            loss_ux = per_ch[0].item()
+            loss_uy = per_ch[1].item()
+            loss_p = per_ch[2].item()
+            p_to_ux_ratio = loss_p / max(loss_ux, 1e-12)
 
         optimizer.zero_grad()
         loss.backward()
@@ -635,6 +662,10 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
+            "train/loss_unweighted_ux": loss_ux,
+            "train/loss_unweighted_uy": loss_uy,
+            "train/loss_unweighted_p": loss_p,
+            "train/p_to_ux_loss_ratio": p_to_ux_ratio,
             "train/re_weight_min": re_weight.min().item(),
             "train/re_weight_max": re_weight.max().item(),
             "train/re_weight_mean": re_weight.mean().item(),
@@ -662,7 +693,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, channel_weight=channel_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -757,7 +788,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         base_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, channel_weight=channel_weight)
             for name, loader in test_loaders.items()
         }
         base_test_avg = aggregate_splits(base_test_metrics)
@@ -773,7 +804,7 @@ if best_metrics:
 
     print("\nEvaluating SWA model on val splits...")
     swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, channel_weight=channel_weight)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -787,7 +818,7 @@ if best_metrics:
     if not cfg.skip_test and test_loaders is not None:
         print("\nEvaluating SWA model on test splits...")
         swa_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, channel_weight=channel_weight)
             for name, loader in test_loaders.items()
         }
         swa_test_avg = aggregate_splits(swa_test_metrics)
