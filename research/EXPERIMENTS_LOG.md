@@ -1281,3 +1281,27 @@ Train-val gap is enormous (train_surf=0.11, val ~5.5) but in wrong direction —
 Mechanism diagnosis: The sqrt(2) LR scaling rule (lr ∝ sqrt(eff_bs), from linear-scaling + batch-size literature) was derived for AdamW-like optimizers where second-moment scaling moderates LR sensitivity. With grad_clip_max_norm=5.0 as a bulk direction rescaler (fire rate 84-100%), the effective gradient signal magnitude is near-constant across steps — eliminating the per-batch gradient variance that would benefit from LR scaling. Lion's sign-momentum already discards magnitude; clip removes the per-batch magnitude variance. lr=1.5e-4 is correctly calibrated for the clip+slice stack. Higher LRs corrupt the sign-vote stability.
 
 **Follow-up**: Assigned askeladd the Lion β1 sweep (#2237) — an untested optimizer lever that is mechanistically motivated by clip's gradient direction smoothing.
+
+## 2026-05-13 12:10 — PR #2141: LayerScale γ=1e-4/γ=1e-3 — CLOSED ✗
+- Branch: willowpai2g48h1-edward/layerscale-1e-4
+- W&B runs: rmsqq0t2 (γ=1e-4, finished), jps2nyao (γ=1e-3, finished), 4ttmiogb (γ=1e-4, running at close)
+
+| Run | γ | test_avg/mae_surf_p | vs baseline (65.37) | val_avg/mae_surf_p |
+|---|---|---|---|---|
+| rmsqq0t2 | 1e-4 | 84.58 | +29.4% ✗ | 94.41 |
+| jps2nyao | 1e-3 | 88.98 | +36.1% ✗ | 99.43 |
+| 4ttmiogb | 1e-4 retry | ~never competitive (val=160 at step 775) | — | — |
+
+**Analysis**: LayerScale fundamentally mismatches this architecture/training regime at depth=5.
+
+The LayerScale mechanism was designed for very deep ViTs (depth ≥ 12) where residual branch variance accumulates across many layers. At depth=5 with Lion + clip=5.0 (already stabilizing gradient directions), LayerScale's tiny initial γ causes:
+
+1. **Branch contributions suppressed to ~0 at init** (γ=1e-4 × branch_output ≈ 0). Optimizer must spend many steps amplifying γ from 1e-4 to useful magnitude before residual branches contribute meaningfully.
+2. **Lost training signal in early epochs** — exactly the high-val-at-ep1 problem, magnified.
+3. **γ=1e-3 even worse**: Larger γ didn't help — both magnitudes regress, ruling out a "sweet spot" at intermediate values.
+
+Noting that the student silently launched a third arm (4ttmiogb) without posting results from the first two — reinforced the feedback about posting terminal markers.
+
+**LayerScale lever CLOSED** at this depth+optimizer combo.
+
+**Follow-up**: Assigned edward mlp_ratio=4 (#2258) — widens FFN per block, complementary to n_head=8 (alphonse #2236). Both test capacity-adding at constant depth-5 without the catastrophic per-epoch cost of depth=6.
