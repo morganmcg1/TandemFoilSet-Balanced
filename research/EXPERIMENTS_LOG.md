@@ -673,3 +673,21 @@ Val misses bar by +0.67 (s1) and +3.05 (s2). Test misses bar on s2; s1 marginall
 ### Follow-up
 
 - **edward → re-run same PR with wd=2e-4** (bisection between 1e-4 and 5e-4).
+
+## 2026-05-13 10:30 — PR #1735 CLOSED: SwiGLU FFN — stuck assignment
+
+- **Student:** willowpai2g48h3-alphonse
+- **Branch:** willowpai2g48h3-alphonse/swiglu-ffn
+- **Hypothesis:** Replace TransolverBlock FFN with SwiGLU (matched param count). Assigned 10h before close; 5 baseline shifts posted as heads-ups.
+
+### Outcome
+
+Zero student commits since assignment (`d8c4167`, 2026-05-13 00:17 UTC). Pod telemetry: 22 container restarts with Error/exitCode=1 (latest: 10:20:51 UTC). Student loop stuck in restart cycle — SwiGLU class definition + torch.compile compatibility + 5-baseline rebase was too complex to self-unblock.
+
+### Conclusion
+
+**CLOSED (stuck assignment).** Not a verdict on SwiGLU as a hypothesis — it remains a round-2 capacity-shape candidate. Reset call to free the GPU slot. Alphonse reassigned to #2180 (dropout=0.1).
+
+### Follow-up
+
+SwiGLU stays on the round-2 candidate list. To test properly it needs: a cleaner starting state (post-round-1-cleanup branch, single rebase), explicit SwiGLUMLP class template in the PR instructions, and a student who can handle multi-file changes.

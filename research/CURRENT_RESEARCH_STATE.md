@@ -28,7 +28,7 @@ The current `train.py` now has **five** stacked changes: mask after slice softma
 - **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures on n_hidden, n_layers, slice_num, mlp_ratio).
 
 Round 1 in-flight (8 PRs):
-- **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16 — vol-Huber heads-up posted (5th baseline shift)
+- **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline (just assigned; orthogonal to all in-flight; reset from stuck SwiGLU #1735)
 - **#1589 tanjiro (AdamW betas)**: from pre-mask — vol-Huber heads-up posted (5th baseline shift)
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber — vol-Huber heads-up posted (5th baseline shift)
 - **#1843 nezuko (Cosine T_max=35)**: on compile baseline — vol-Huber heads-up posted
@@ -67,7 +67,8 @@ Round 1 in-flight (8 PRs):
 | #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask pre-Huber, compile heads-up posted (3rd baseline shift); pod 13 restarts |
 | #1712 | askeladd  | Huber β=0.25 (β-tune)            | CLOSED (+6.6% val on bf16; bounds β from below) |
 | #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
-| #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, compile heads-up posted (3rd baseline shift) |
+| #1735 | alphonse  | SwiGLU FFN (matched params)      | CLOSED (stuck — 22 pod restarts, 0 commits in 10h; reset, not verdict on SwiGLU) |
+| #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | WIP, vol-Huber baseline (just assigned; orthogonal to all in-flight) |
 | #1810 | frieren   | torch.compile (dynamic=True)     | **MERGED** 05:15 (val=67.83, test=59.78) — largest single-axis win of round 1 |
 | #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, bf16 baseline — heads-up to retarget T_max=35 on compile |
 | #1882 | askeladd  | Huber β=0.75 (β-tune from above) | CLOSED (+8.6% val, +10.0% test — β-axis fully bracketed: 0.25 fails, 0.5 optimum, 0.75 fails) |
@@ -78,7 +79,7 @@ Round 1 in-flight (8 PRs):
 | #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
 | #2041 | thorfinn  | surf_weight 10 → 5               | WIP, vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance) |
 
-**Merged:** 5 (mask-aware, Huber β=0.5 surf, bf16, compile, **vol-Huber β=0.5**). **Closed:** 10 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, mlp_ratio=4-on-compile #1939, **β=0.75-on-vol-Huber #1882**). **Open:** 9 (3 needing rebase + 4 on compile baseline + 2 on vol-Huber baseline: thorfinn #2041, askeladd #2163).
+**Merged:** 5 (mask-aware, Huber β=0.5 surf, bf16, compile, **vol-Huber β=0.5**). **Closed:** 11 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, mlp_ratio=4-on-compile #1939, β=0.75-on-vol-Huber #1882, **SwiGLU-stuck #1735**). **Open:** 9 (2 needing rebase + 4 on compile baseline + 3 on vol-Huber baseline: thorfinn #2041, askeladd #2163, alphonse #2180).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -93,7 +94,7 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.
 - **If grad_clip wins (#1692 fern):** explore coupled weight-decay + LR revisits.
-- **If SwiGLU FFN wins (#1735 alphonse):** lone capacity-shape axis; GeGLU/per-block residual gating follow-ups.
+- **If dropout=0.1 wins (#2180 alphonse):** attention-layer regularization is productive; follow-up with dropout sweep (0.05, 0.15). SwiGLU stays as round-2 capacity-shape candidate for cleaner future assignment.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack.
 
 Round-2 priority queue (post-round-1-cleanup):
