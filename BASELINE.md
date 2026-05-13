@@ -1,6 +1,41 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1573 (2026-05-13)
+## Current best — PR #1801 (2026-05-13)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **111.1516** |
+| val_single_in_dist/mae_surf_p | 134.2063 |
+| val_geom_camber_rc/mae_surf_p | 133.8828 |
+| val_geom_camber_cruise/mae_surf_p | 77.5901 |
+| val_re_rand/mae_surf_p | 98.9271 |
+| test_avg/mae_surf_p (bs=4) | NaN† |
+| test_single_in_dist/mae_surf_p | 117.37 |
+| test_geom_camber_rc/mae_surf_p | 118.47 |
+| test_geom_camber_cruise/mae_surf_p | NaN† |
+| test_re_rand/mae_surf_p | 92.83 |
+| test_avg (bs=1 clean eval) | **99.0565** |
+| best_epoch | 13 (of 50; timeout-cut at 30 min) |
+
+†bs=4 NaN on test_geom_camber_cruise is the inference-time attention numerics edge case. bs=1 eval is clean. Note: test_avg bs=1 = 99.06 is the first sub-100 result on this branch.
+
+**Artifacts:** `models/model-charliepai2g24h2-edward-huber-loss-pressure-20260513-020521/`
+
+**Change from PR #1573 floor:** Replaced L2 squared-error loss with Huber/SmoothL1 (β=1.0) in both the training loop and `evaluate_split`. Applied to all 3 channels (Ux, Uy, p) with chan_w=[1,1,5] weighting preserved. val_avg/mae_surf_p improved **−9.4%** (122.70 → 111.15). bs=1 test improved **−10.2%** (110.25 → 99.06). Largest per-split gain: val_single_in_dist −15.9% (159.59 → 134.21).
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --lr 7.5e-4 \
+  --agent charliepai2g24h2-edward \
+  --experiment_name "charliepai2g24h2-edward/huber-loss-pressure"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)
+Optimizer: AdamW lr=7.5e-4, wd=1e-4, batch_size=4, chan_w=[1,1,5], surf_weight=10, 3-ep warmup + cosine(T_max=47, eta_min=1e-6), gradient-clip max_norm=1.0, Huber β=1.0, fp32
+Peak VRAM: 42.12 GB. Wall clock: 30 min → 13-14 epochs.
+
+## Previous best — PR #1573 (2026-05-13)
 
 | Metric | Value |
 |---|---|
