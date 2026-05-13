@@ -95,7 +95,7 @@ class SwiGLUMLP(nn.Module):
 
     def __init__(self, in_dim: int, hidden_dim: int):
         super().__init__()
-        inner_dim = hidden_dim
+        inner_dim = int(hidden_dim * 3 // 2)
         inner_dim = ((inner_dim + 7) // 8) * 8
         self.inner_dim = inner_dim
         self.w_gate = nn.Linear(in_dim, inner_dim, bias=False)
