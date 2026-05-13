@@ -424,4 +424,32 @@ Per-split breakdown:
 1. Push `max_lr=2e-3` to test whether the LR ceiling has been reached.
 2. Attack the OOD bottleneck (`geom_camber_rc`, `geom_camber_cruise`) via non-LR levers (augmentation, geometric features, loss weighting).
 
+---
+
+## 2026-05-13 01:55 — PR #1719: OneCycleLR pct_start=0.05 — SENT BACK (single-knob below new baseline; composition test pending)
+- willowpai2g24h4-nezuko / nezuko/onecycle-pct-start-0p05
+- **Hypothesis:** Shorter warmup (pct_start 0.10→0.05) shifts the LR-peak earlier, removing the noisy mid-descent epochs (ep11 spike of +30 in the baseline) and giving more of the 30-min budget to the cosine decay phase.
+- **W&B:** `urcnrdsc`
+
+| Metric | OLD Baseline (#1404, max_lr=1e-3 pct_start=0.10) | This run (max_lr=1e-3 pct_start=0.05) | Δ vs OLD | NEW Baseline (#1716, max_lr=1.5e-3 pct_start=0.10) | Δ vs NEW |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 70.9449 | 70.0009 | −0.94 (−1.33%) | 68.5843 | +1.42 (+2.07%) |
+| test_avg/mae_surf_p | 61.8276 | 61.3230 | −0.50 (−0.82%) | 60.3521 | +0.97 (+1.61%) |
+| Best epoch | 29/29 | 29/29 | 0 | 27/29 | +2 |
+
+Per-split val deltas vs OLD baseline (mirror alphonse's pattern but smaller):
+
+| Split | Δ vs OLD |
+|---|---:|
+| val_single_in_dist | 80.87→78.12 (−2.75) |
+| val_geom_camber_rc | 80.80→81.11 (+0.31, flat) |
+| val_geom_camber_cruise | 51.75→52.08 (+0.33, flat) |
+| val_re_rand | 70.36→68.69 (−1.67) |
+
+**Diagnosis: SENT BACK for composition test.** Single-knob effect of `pct_start=0.05` against the OLD baseline is positive but within RNG noise floor (val −1.33%, test −0.82%, with RNG ≈ ±5%). The shorter warmup did successfully eliminate the ep11 baseline spike (122.99 vs baseline 154.8). Pattern of gains (in-dist + re_rand benefit, OOD flat) is exactly the same pattern that alphonse #1716 saw with max_lr=1.5e-3 — the two knobs may be mechanistically redundant rather than additive.
+
+**Procedural issue:** PR now conflicts with merged advisor branch (alphonse changed max_lr on adjacent lines in the OneCycleLR constructor). Rebase needed.
+
+**Action:** Sent back with instructions to rebase onto new baseline (max_lr=1.5e-3) and re-run as a compositional test: does pct_start=0.05 still help when peak LR is already higher, or do the mechanisms overlap? Will group in W&B with frieren #1768 (pct_start=0.15) for a 3-point sweep against the new max_lr.
+
 **Next target:** beat val_avg/mae_surf_p = **70.9449** on the new fp32-eval stack. The next experiment on this stack will establish the new faithful test_avg baseline.
