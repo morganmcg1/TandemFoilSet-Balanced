@@ -53,8 +53,28 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-13 00:18 — PR #1662 v2: Fourier mesh positional encoding (nezuko) — SENT BACK
-**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: SENT BACK**
+### 2026-05-13 02:00 — PR #1662 v2: Fourier mesh PE — both arms PASS, **SENT BACK for v3 verification on merged stack**
+**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: SENT BACK v3**
+
+- **v2 ran with the v1→v2 prescription:** Arm A = uniform L=2 + cosine T_max=14 + no EMA + augment; Arm B = surface-only L=4 + cosine T_max=14 + no EMA + augment. Both 14 epochs, both within 30-min cap.
+- **Both arms PASS the original criterion** (val < 103.10 AND test < 94.76):
+  - Arm A (L=2): val_avg **95.727**, test_avg **89.989** (safe 4-split).
+  - Arm B (surface-only L=4): val_avg **95.598**, test_avg **89.895**.
+- **Against NEW #1686 baseline (97.620 / 91.947):** Arm B beats by **−2.07% val / −2.23% test** — still a winner under the post-#1484/#1686 merged stack.
+- **Per-split Arm B vs #1686:** single 111.06 (−3.16%), rc 106.97 (−3.68%), cruise 72.07 (−2.59%), re_rand 92.30 (+1.72%). Three of four splits cleanly improved.
+- **Per-arm comparison:** A vs B within 0.13% val / 0.10% test — capacity-vs-location distinction does NOT load-bear at this scale. Both fixes work; A simpler, B mechanistically nicer (gates high-freq basis to surface where boundary-layer detail lives).
+- **Mechanism (student write-up):** v1's failure was the OneCycle@11ep scheduler pathology (PR #1574 anneal-truncation), NOT capacity or scope. Once a fair recipe is used, ALL FOUR splits cleanly improve including the OOD geometry splits that v1 regressed on. Fourier features expose mesh-coordinate periodicity directly to the input projection so the network doesn't have to learn it from scratch via low-frequency MLP basis.
+- **Why sent back NOT merged:** Two reasons.
+  1. **Dirty merge state.** v2 ran on pre-#1484/#1686 stack — merge conflicts in Config/forward expected after rebase. Rebase is straightforward (orthogonal Config fields).
+  2. **Composability with Huber + curriculum + EMA untested.** v2 ran with `--ema_decay 0.0` (no EMA), no Huber, no curriculum — three of four key training-loop ingredients changed since the run. We need to confirm Fourier-PE compounds with the merged stack before merging.
+- **v3 instructions (single arm):** surface-only L=4 (Arm B, the recommended arm) on the FULL merged stack — Huber δ=0.5 + curriculum 1→20 + EMA=0.999 + cosine T_max=14 + augment. NO `--ema_decay 0.0` this time. Single 14-epoch run, then `safe_test_eval.py`.
+- **Pass criterion (v3):** val_avg/mae_surf_p < 97.620 AND test_avg/mae_surf_p (safe 4-split) < 91.947. If v3 ≈ v2 (95-96 val), Fourier compounds; if v3 ≈ baseline (97.6 val), Fourier was a substitute for something in the merged stack and we close cleanly.
+- **Artifacts (v2):** `models/model-fourier-L2-cosine14-20260513-002214/{metrics.jsonl,test_safe_eval.jsonl}`, `models/model-fourier-L4-surface-only-cosine14-20260513-010015/{metrics.jsonl,test_safe_eval.jsonl}`
+
+---
+
+### 2026-05-13 00:18 — PR #1662 v1→v2 send-back: Fourier mesh positional encoding (nezuko) — SENT BACK
+**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: SUPERSEDED by v2 entry above**
 
 - **v1 hypothesis:** Replace raw (x, y) mesh coords with sinusoidal Fourier features γ(x) = [sin(2π·2ᵏ·x), cos(2π·2ᵏ·x)] for k=0..5 (L=6). NeRF-style positional encoding for boundary-layer / wake / stagnation high-frequency structure.
 - **v1 results: val_avg/mae_surf_p = 107.19 (+3.97% vs 103.10 baseline), test_avg = 101.67 (+7.30%) — FAIL.**

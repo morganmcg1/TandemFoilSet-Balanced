@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 01:20 UTC
+- **Date**: 2026-05-13 02:00 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -29,14 +29,14 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + surf_w
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
-| alphonse | TBD | `huber-delta-smaller` | IDLE — to be assigned: δ=0.25 + δ=0.1 sweep, plus optional cosine T_max=14 isolation arm |
+| alphonse | #1736 | `huber-delta-smaller` | WIP — Huber δ sweep: 0.25 + 0.1 on merged stack (PR #1484 winner direction). |
 | askeladd | #1709 | `focal-per-sample-loss-weighting` | WIP — focal weighting γ=1.0/2.0 (2 arms). Amplifies hard-sample gradient (mechanistic opposite of log-cosh). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1770 | `n-layers-depth-scaling` | WIP — n_layers=6 (Arm A) / n_layers=7 (Arm B) on merged stack. Tests depth as third orthogonal scaling axis. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
-| nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — v1 had +3.97% val (val_single_in_dist −6.26%! best ever on worst split), sent back v2 with 2 arms: L=2 + cosine, L=4 surface-only + cosine. |
+| nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP v3 — v2 PASSED on pre-merge stack: both arms beat #1495 cleanly; vs new #1686 baseline, Arm B (surface-only L=4) wins by −2.07% val / −2.23% test. Sent back for rebase + v3 verification on merged stack (Huber+curriculum+EMA). |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on merged stack. Composability of SwiGLU × curriculum × Huber × EMA tested in one run. |
-| thorfinn | TBD | `huber-plus-curriculum-compose` | IDLE — to be assigned: compose Huber δ=0.5 (PR #1484) with curriculum 1→20 (PR #1686). Critical composability test. |
+| thorfinn | #1745 | `huber-plus-curriculum-compose` | WIP — Huber δ=0.5 (PR #1484) × curriculum 1→20 (PR #1686). Critical composability test. |
 
 ## Research themes and findings
 
@@ -47,8 +47,14 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + surf_w
 4. **Huber loss δ=0.5** (PR #1484 v2): Huber on top of merged stack → 99.879 val / 93.596 test (4-split safe). Note: ran with `--use_onecycle True --epochs 50` (the P4 "broken" config) AND won, contradicting P4 under MSE — P4 is loss-specific.
 5. **Two-stage surf_weight curriculum 1→20** (PR #1686): Ramp surf_weight 1→20 over 5 epochs (cosine T_max=14, MSE loss) → **97.620** val / **91.947** test (4-split safe) → new baseline. First substantial improvement on val_single_in_dist (114.69) via training-time mechanism, not data augmentation or PE. NOTE: ran WITHOUT Huber — Huber+curriculum composability is the obvious next composition test.
 
-### Promising single-split signal (sent back for v2)
-- **Fourier mesh PE** (nezuko #1662 v1): val_avg 107.19 (+3.97%, fails) BUT `val_single_in_dist = 118.03 vs 125.91 = −6.26%` — first substantial improvement on the historically WORST split. OOD splits regressed (rc +13.7%). Schedule confound (OneCycleLR ep=11 instead of cosine T_max=14). v2 with 2 arms: L=2 capacity-fix and L=4 surface-only scope-fix, both on cosine T_max=14.
+### Promising results (sent back for verification on merged stack)
+- **Fourier mesh PE** (nezuko #1662 v2): Both arms pass against #1495 baseline.
+  - Arm A (uniform L=2): val 95.727 / test 89.989
+  - Arm B (surface-only L=4): **val 95.598 / test 89.895** (recommended)
+  - vs NEW #1686 baseline: Arm B = −2.07% val / −2.23% test → still a winner.
+  - Per-split Arm B: single 111.06 / rc 106.97 / cruise 72.07 / re_rand 92.30 — three of four splits beat #1686 per-split, only re_rand marginally regressed (+1.72%).
+  - v2 ran with `--ema_decay 0.0` (no EMA), no Huber, no curriculum — full composability with merged stack untested. v1's failure was the OneCycle@11ep scheduler confound, NOT capacity or scope — both A and B (with different fixes) produce essentially identical wins under cosine T_max=14.
+  - Sent back for v3 = surface-only L=4 on merged stack with EMA + Huber + curriculum all active.
 - **SwiGLU FFN** (tanjiro #1693 v1): val 87.278 / test 82.237 (safe 4-split) — beats #1686 by **−10.5% val / −10.6% test**, uniform 12-16% gain across ALL 4 splits. If this holds on rebase it's the strongest single-change result on this branch. v1 ran on pre-#1484/#1686 stack with EMA explicitly disabled — sent back for rebase + rerun on full merged stack to verify and to test SwiGLU × curriculum × Huber × EMA composition in one run. Param count 827K (+7% over baseline).
 
 ### Closed (disproved on fair comparison)
