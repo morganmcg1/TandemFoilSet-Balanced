@@ -236,6 +236,77 @@ class FourierFeatures(nn.Module):
         return torch.cat([pos, enc], dim=-1)
 
 
+class ModelEMA:
+    """Exponential moving average of model parameters.
+
+    Per-step shadow update: ``shadow = decay * shadow + (1 - decay) * model``.
+    Call ``swap_in`` / ``swap_out`` around evaluation to use EMA weights, or
+    ``diagnostic_ratios`` to monitor model vs EMA divergence.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        # Store EMA weights as a separate state dict (parameters + buffers).
+        self.shadow = {
+            k: v.detach().clone().float() if v.dtype.is_floating_point else v.detach().clone()
+            for k, v in model.state_dict().items()
+        }
+        self._saved: dict | None = None
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for k, v in model.state_dict().items():
+            shadow = self.shadow[k]
+            if v.dtype.is_floating_point:
+                # In-place lerp: shadow = decay*shadow + (1-decay)*v
+                shadow.mul_(self.decay).add_(v.detach().float(), alpha=1.0 - self.decay)
+            else:
+                # Non-float buffers (e.g. int counters): copy directly
+                shadow.copy_(v.detach())
+
+    @torch.no_grad()
+    def swap_in(self, model: nn.Module) -> None:
+        """Save current model weights, load EMA weights into model."""
+        self._saved = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        ema_state = {k: v.to(self._saved[k].dtype) for k, v in self.shadow.items()}
+        model.load_state_dict(ema_state)
+
+    @torch.no_grad()
+    def swap_out(self, model: nn.Module) -> None:
+        """Restore original model weights."""
+        if self._saved is None:
+            return
+        model.load_state_dict(self._saved)
+        self._saved = None
+
+    @torch.no_grad()
+    def diagnostic_ratios(self, model: nn.Module) -> dict[str, float]:
+        """``||model_w - ema_w||_2 / ||model_w||_2`` for a few representative layers.
+
+        Picks the first preprocess linear, the first block attention projection,
+        the middle block, and the final output linear so we can watch where the
+        EMA lags the model. Should drop from ~5-15% at epoch 1 toward ~1-3% as
+        training stabilizes; sustained >20% at late epochs signals a bug.
+        """
+        out: dict[str, float] = {}
+        state = model.state_dict()
+        targets = [
+            "preprocess.linear_pre.0.weight",
+            "blocks.0.attn.in_project_x.weight",
+            "blocks.2.mlp.linear_pre.0.weight",
+            "blocks.4.mlp2.2.weight",
+        ]
+        for name in targets:
+            if name not in state or name not in self.shadow:
+                continue
+            m = state[name].detach().float()
+            e = self.shadow[name].float()
+            m_norm = m.norm().item()
+            if m_norm > 0:
+                out[name] = ((m - e).norm() / m_norm).item()
+        return out
+
+
 # ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
@@ -429,6 +500,8 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    use_ema: bool = True  # enable EMA weight averaging for eval/checkpoint
+    ema_decay: float = 0.999  # EMA decay factor (Polyak averaging horizon ~ 1/(1-decay))
 
 
 cfg = sp.parse(Config)
@@ -478,6 +551,9 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema = ModelEMA(model, decay=cfg.ema_decay) if cfg.use_ema else None
+print(f"EMA: {'enabled (decay=%.4f)' % cfg.ema_decay if ema is not None else 'disabled'}")
+
 optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
@@ -498,6 +574,8 @@ run = wandb.init(
         "n_params": n_params,
         "fourier_L": L_fourier,
         "fourier_pos_dim": fourier_pos_dim,
+        "use_ema": cfg.use_ema,
+        "ema_decay": cfg.ema_decay,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
@@ -519,6 +597,7 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+best_raw_state: dict | None = None
 global_step = 0
 train_start = time.time()
 
@@ -567,6 +646,8 @@ for epoch in range(MAX_EPOCHS):
         if is_step:
             optimizer.step()
             optimizer.zero_grad()
+            if ema is not None:
+                ema.update(model)
             global_step += 1
             wandb.log({
                 "train/loss": accum_loss / max(n_micro_in_accum, 1),
@@ -584,15 +665,22 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (EMA weights, the official metric when EMA is on) ---
     model.eval()
-    split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
-        for name, loader in val_loaders.items()
-    }
+    if ema is not None:
+        ema.swap_in(model)
+    try:
+        split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+            for name, loader in val_loaders.items()
+        }
+    finally:
+        if ema is not None:
+            ema.swap_out(model)
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -607,7 +695,10 @@ for epoch in range(MAX_EPOCHS):
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
-        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+        log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc. (EMA when on)
+    if ema is not None:
+        for layer_name, ratio in ema.diagnostic_ratios(model).items():
+            log_metrics[f"ema_diag/{layer_name}"] = ratio
     wandb.log(log_metrics)
 
     tag = ""
@@ -618,7 +709,14 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        if ema is not None:
+            torch.save({k: v.detach().clone() for k, v in ema.shadow.items()}, model_path)
+            # Keep the raw (training-weight) state in memory so we can run a
+            # one-shot raw val at the end without spending per-epoch budget.
+            best_raw_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        else:
+            torch.save(model.state_dict(), model_path)
+            best_raw_state = None
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -636,12 +734,44 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
-    wandb.summary.update({
+    summary = {
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
-    })
+    }
 
+    # One-shot raw val on the training weights at the best epoch — isolates
+    # EMA's contribution from the underlying trajectory at the same moment.
+    raw_val_at_best: dict | None = None
+    if best_raw_state is not None:
+        print("\nEvaluating raw (non-EMA) weights at best epoch...")
+        raw_state_on_device = {k: v.to(device) for k, v in best_raw_state.items()}
+        model.load_state_dict(raw_state_on_device)
+        model.eval()
+        raw_split_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, fourier_enc=fourier_enc)
+            for name, loader in val_loaders.items()
+        }
+        raw_val_at_best = aggregate_splits(raw_split_metrics)
+        print(f"  Raw val_avg/mae_surf_p (training weights) = {raw_val_at_best['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(f"raw/{name}", raw_split_metrics[name])
+        summary["best_raw_val_avg/mae_surf_p"] = raw_val_at_best["avg/mae_surf_p"]
+        # Log the raw at-best metrics under raw_* keys (one-time summary log).
+        raw_log: dict[str, float] = {}
+        for split_name, m in raw_split_metrics.items():
+            for k, v in m.items():
+                raw_log[f"raw_val/{split_name}/{k}"] = v
+        for k, v in raw_val_at_best.items():
+            raw_log[f"raw_val_{k}"] = v
+        wandb.log(raw_log)
+        best_metrics["raw_val_avg/mae_surf_p"] = raw_val_at_best["avg/mae_surf_p"]
+        best_metrics["raw_per_split"] = raw_split_metrics
+
+    wandb.summary.update(summary)
+
+    # Load the EMA-weight checkpoint for test eval (when EMA is active, this
+    # is what `model_path` contains).
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
