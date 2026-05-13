@@ -6,6 +6,49 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 03:45 — PR #1767: Channel-weighted L1 [0.03, 0.03, 1.0] on GeGLU+Lion — CLOSED (+11.0% regression)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/physical-space-l1-lion
+- **Hypothesis:** channel reweighting (p:Ux:Uy = 1:0.03:0.014) drives physical-space L1 win; test explicitly on GeGLU+Lion
+- **Result:** val=72.071, test=63.176 (GeGLU+Lion, epoch 13)
+
+| Split | val (CW) | val (baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 82.511 | 72.021 | +14.6% |
+| geom_camber_rc | 87.864 | 89.234 | −1.5% |
+| geom_camber_cruise | 48.734 | 37.058 | +31.5% |
+| re_rand | 69.174 | 61.359 | +12.7% |
+| **avg** | **72.071** | **64.918** | **+11.0%** |
+
+- **vs GeGLU+Lion baseline (64.918):** +11.0% WORSE — clear dead end
+- **Key insight:** GeGLU does implicit channel balancing via GELU(x1)*x2 gating. Manual downweighting of Ux/Uy starves the gates of velocity supervision, degrading the routing they've learned. The round-1 +4.0% win (Lion+GELU) was a GELU-specific interaction, not a portable mechanism.
+- **Action:** CLOSED. edward reassigned to SmoothL1 β=0.1 (#1859).
+
+---
+
+## 2026-05-13 03:45 — PR #1790: Lion + 2-epoch warmup — SENT BACK (−9.9% on old Lion+GELU, obsolete; rerun on GeGLU+Lion needed)
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/lion-cosine-warmup-2ep
+- **Hypothesis:** 2-epoch linear warmup (1e-6→1e-4) stabilizes Lion sign-update init; better basin before full LR kicks in
+- **Result:** val=78.315, test=68.744 (Lion+GELU stack, epoch 13)
+
+| Split | val (warmup) | val (no warmup) | Δ |
+|---|---|---|---|
+| single_in_dist | 91.531 | 98.979 | −7.5% |
+| geom_camber_rc | 95.883 | 104.737 | −8.5% |
+| geom_camber_cruise | 52.515 | 62.041 | −15.4% |
+| re_rand | 73.332 | 81.995 | −10.6% |
+| **avg** | **78.315** | **86.938** | **−9.9%** |
+
+- **vs Lion+GELU baseline (86.938):** −9.9% ✓ (hypothesis confirmed on old baseline)
+- **vs new GeGLU+Lion baseline (64.918):** +20.6% worse — obsolete, needs GeGLU rerun
+- **Mechanism:** warmup absorbs Lion's aggressive sign-update noise at random init; faster early convergence, larger gains on harder/OOD splits
+- **Action:** Sent back to retest on GeGLU+Lion stack. Warmup mechanism is orthogonal to activation function.
+
+---
+
 ## 2026-05-13 03:15 — PR #1766: Lion WD=1e-2 — SENT BACK (+10.4% on old baseline, but obsolete; CRITICAL bug discovered)
 
 - **Student:** charliepai2g48h3-askeladd
