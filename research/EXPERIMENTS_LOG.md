@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-13 16:30 — PR #2201: AdamW β2=0.9999/0.9995 — longer second-moment timescale (CLOSED)
+
+- **Branch:** `willowpai2g48h4-nezuko/beta2-long` (CLOSED — both arms regressed)
+- **Student:** willowpai2g48h4-nezuko
+- **W&B runs:** `zpq35emf` (Arm 1 β2=0.9999), `esas3nuc` (Arm 2 β2=0.9995)
+
+### Results vs CURRENT baseline (83.9969 / 74.7684)
+
+| Arm | β2 | val_avg/mae_surf_p | Δ vs 83.9969 | test_avg/mae_surf_p | Δ vs 74.7684 | best_ep |
+|-----|----|--------------------|--------------|---------------------|--------------|---------|
+| Arm 1 | 0.9999 | 95.8855 | **+14.2% ✗** | 84.1615 | **+12.5% ✗** | 19 |
+| Arm 2 | 0.9995 | 91.5725 | **+8.9% ✗** | 81.0857 | **+8.5% ✗** | 21 |
+
+(Note: student reported results vs OLD compile baseline 89.7197, not current 83.9969 — adjusted here.)
+
+### Commentary
+
+**β2 direction is permanently closed.** Both longer-timescale arms (β2=0.9999 → +14.2% val, β2=0.9995 → +8.9% val) regressed vs current baseline. Combined with PR #2015 (β2=0.95, +11% vs current), we have confirmed β2=0.999 is the sweet spot by exhaustive bilateral sweep.
+
+**Key mechanism confirmed:** β2=0.9999 produced a ~2.5× smaller sqrt_v_max ceiling AND ~2.4× smaller epoch-to-epoch variation — exactly the predicted "smoother second moment" effect. But the smooth denominator paradoxically caused LARGER mid-epoch spikes (e14 spike was 2.4× bigger) while destroying the e18/e20 deep minimum (baseline 89.72→83.99 → β2=0.9999 best 95.89). Long-β2 smoothing lets outlier batches through at full step magnitude.
+
+**Cycle-34 reframing confirmed for the 3rd time:** The per-batch sqrt(v) dynamics that β2=0.999 provides are signal, not noise. Damping them via longer β2 prevents the spike-recovery that produces the late-epoch deep minimum. β1 (momentum, numerator side) is the remaining untested axis.
+
+---
+
+## 2026-05-13 16:30 — PR #2188: Encoder LR boost at e15-18 (CLOSED)
+
+- **Branch:** `willowpai2g48h4-thorfinn/encoder-lr-boost` (CLOSED — beaten by new baseline)
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `fbk6rwg8` (Arm 1 ×2.0), `xzrpsilo` (Arm 2 ×3.0)
+
+### Results vs CURRENT baseline (83.9969)
+
+| Arm | Factor | val_avg/mae_surf_p | Δ vs 83.9969 | test_avg/mae_surf_p | Δ vs 74.7684 | Best ep |
+|-----|--------|--------------------|--------------|---------------------|--------------|---------|
+| Arm 1 | ×2.0 | 92.1147 | **+9.7% ✗** | 83.3518 | **+11.5% ✗** | 21 |
+| Arm 2 | ×3.0 | **84.7466** | **+0.9% ✗** | **75.2636** | **+0.7% ✗** | 21 |
+
+(Arm 2 won vs OLD compile baseline 89.72 at −5.54% val, but current baseline is 83.9969 after cosine restart merged.)
+
+### Commentary
+
+**Mechanism confirmed, result overtaken.** The 3× encoder boost at e15-18 induces a clean exploration burst at e16 (94.79 → 135.62 → 114.90 → 99.60 → 84.75) — exactly the predicted spike-recovery dynamic. The 2× factor is below the threshold to trigger real landscape escape.
+
+**Why closed:** Arm 2 (84.7466 val) is +0.9% ABOVE the new cosine-restart baseline (83.9969). Cosine restart already induces similar exploration bursts via restart-driven LR cycling. The encoder boost mechanism, while real, does not stack above cosine restart in its current form.
+
+**Key finding:** 2× → 3× monotonic improvement (+7.4 val points) suggests we're still on the upside of the curve. The `encoder_lr_boost_factor` sweet spot is ≥3× — there is likely room above 3×. However, with cosine restart already in the baseline, the burst needs to be repositioned to compose with restart cycles, not compete with them.
+
+---
+
 ## 2026-05-13 14:00 — PR #2227: SGDR cosine warm restart T_0=10/7 (MERGED — biggest single-axis win since compile)
 
 - **Branch:** `willowpai2g48h4-alphonse/cosine-restart` (MERGED — NEW BASELINE)

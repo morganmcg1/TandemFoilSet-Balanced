@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 46)
+- **As of:** 2026-05-13 (updated cycle 47)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -25,17 +25,21 @@
 
 ## Current research focus
 
-**Cycle 46.** Eight stacked mechanisms now merged (BIVW + surf-head + Huber + decoupled surf_head LR + torch.compile + WD optimization + cosine_restart_T_0=10) giving 33.4% total improvement from cycle-2 baseline. **Critical finding from PR #2227: cosine warm restart is the biggest single-axis win since compile.** The cycle 34 "spike is BENEFICIAL" reframing is VINDICATED — controlled spikes via LR restart produce monotonic cycle-over-cycle improvement.
+**Cycle 47.** Eight stacked mechanisms merged (33.4% total improvement). The cosine_restart_T_0=10 is now the bedrock of the baseline. Cycle 47 CLOSED two directions:
 
-**Key new insights from PR #2227:**
-- **Restart mechanism CONFIRMED.** T_0=10 (single restart, 2 cycles) yields val=83.9969 (−6.38% vs compile baseline). T_0=7 (3 cycles) also wins but is too aggressive.
-- **All splits improve.** Win on every val/test split — largest gains on OOD geometry splits (val_geom_camber_rc −7.0% vs compile baseline, val_geom_camber_cruise fully recovers).
-- **Best epoch sits AT THE RESTART.** Restart resets the high-LR cycle; the last epoch BEFORE the next spike is where the model is at its deepest descent.
-- **WD interaction:** PR #2227 used WD=5e-4 (the OLD baseline). The cosine_restart mechanism is so powerful it OVERCOMES the over-regularization that made WD=5e-4 regress in #2178. The optimal WD under cosine_restart may differ.
-- **Highest-priority compose:** cosine_restart_T_0=10 + WD=3e-4 (stacks two strongest wins). Also T_0 fine-tuning {11, 12} since cycle 2 may still have headroom.
+1. **β2 direction PERMANENTLY CLOSED** (PR #2201): both β2=0.9999 (+14.2%) and β2=0.9995 (+8.9%) regressed vs current 83.9969 baseline. β2=0.999 is the only viable sweet spot, confirmed by 3 experiments (#2015, #2201, #2015 bracket).
 
-**In-flight PRs now face the harder 83.9969 target:**
-All 7 in-flight PRs (nezuko, thorfinn, edward, fern, frieren, tanjiro, askeladd) used WD=5e-4 (or WD=3e-4) WITHOUT restart. They were stacked on the prior 89.72 / 87.01 baselines. Their hypothesis tests are still informative for the per-axis question, but only winners that beat 83.9969 will merit merge.
+2. **Encoder LR boost (PR #2188) overtaken by new baseline:** Arm 2 (3× boost, 84.75 val) lost to 83.9969 by 0.9%. Mechanism is confirmed; the boost needs to be repositioned in the restart cycle to compose properly.
+
+**Key new insights (cycle 47):**
+- β1 (gradient momentum coefficient) is the last unexplored AdamW axis — β2 is fixed, WD is well-characterized, LR is optimized. β1 may affect the spike-recovery numerator dynamics.
+- SWA (stochastic weight averaging) is worth retrying on the SGDR baseline. Prior attempt (#1951) was on a pre-restart non-SGDR regime. Now the cycle-end checkpoints (e10, e20) are genuine independent local minima — the exact inputs SWA was designed for.
+
+**New assignments this cycle:**
+- **nezuko #2331**: SWA over SGDR cycle-ends (Arm 1: average e10+e20; Arm 2: dense per-epoch average in cycle 2)
+- **thorfinn #2340**: AdamW β1 sweep (β1=0.85 faster adaptation vs β1=0.95 slower)
+
+**In-flight priorities (all face 83.9969 target):**
 
 **Key new insights from PR #2178:**
 - **WD optimal shifts with epoch budget.** WD=5e-4 (14-epoch optimum) → WD=3e-4 (21-epoch optimum). All in-flight PRs using WD=5e-4 are impaired and must now beat **87.0144** (harder target). Results should still be informative for their respective hypotheses.
@@ -50,29 +54,23 @@ All 7 in-flight PRs (nezuko, thorfinn, edward, fern, frieren, tanjiro, askeladd)
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs
+## Live PRs (active WIPs and recent closes — cycle 47)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 2013 | tanjiro | logcosh-surface-loss | CLOSED | Both arms regressed (+3.51%, +14.18% vs 97.99). C² smoothness was a non-issue. Surface-loss family well-characterized as dead end. |
-| 2189 | tanjiro | ema-21epoch | CLOSED | Both arms regressed (+9.07%/+16.46% val, +10.93%/+20.34% test). EMA init bias decay too slow; live model still descending at e21. EMA direction permanently closed. |
-| 2296 | tanjiro | lookahead-adamw | WIP (NEW) | Lookahead optimizer wrapping AdamW k={5,10} alpha=0.5: slow-track stabilizer orthogonal to EMA's failure mode |
-| 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
-| 2178 | frieren | compile-wd-compose | **MERGED** | WD=3e-4+compile; val 87.0144/test 78.9539 — NEW BASELINE. WD=5e-4 regressed (+1.17%). |
-| 2284 | frieren | finer-wd-sweep-21epoch | WIP (NEW) | Finer WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs around 3e-4 optimum |
-| 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
-| 2153 | fern | wd-bracket | CLOSED | Both arms +15.43%/+12.60%. WD=5e-4 SHARP bilateral peak. Key: rc↔sid pull opposite WD directions; e14 breakthrough load-bearing (-13.5% → -2.4% at 4e-4). WD axis fully closed. |
-| 2259 | fern | stratified-sampler | WIP (NEW) | Per-batch domain stratification (strict/rotated): tests sampler-variance → per-split asymmetry hypothesis; arms: 1+1+1+1weighted vs 2+1+1 rotating |
-| 2122 | edward | decoupled-wd | CLOSED | Both arms regressed (+9.17%/+18.62%). Key insight: head NEEDS more shrinkage (10× coupled WD was protective). Head-down direction fully rejected. |
-| 2232 | edward | head-up-wd | WIP (NEW) | Symmetric direction: surf_head_wd∈{1e-3,2e-3} vs encoder 5e-4. Head-up composes with torch.compile. |
-| 2123 | askeladd | cosine-tmax | WIP (NEW) | T_max sweep {15, 20, 25}: T_max=50 wastes 72% of cosine cycle at 14-ep wall-clock cap |
-| 2124 | alphonse | surf-only-pw | CLOSED | Both arms +11.85%/+21.85%. Monotonic regression across all k values. k=1.0 is sharp local minimum. Channel-weight axis fully closed. |
-| 2227 | alphonse | cosine-restart | **MERGED** | SGDR cosine_restart T_0=10 wins: val 83.9969/test 74.7684 — NEW BASELINE. Both arms beat baseline. |
-| 2317 | alphonse | restart-wd-compose | WIP (NEW) | Compose cosine_restart T_0=10 + WD=3e-4 (Arm 1) + T_0=12 + WD=5e-4 (Arm 2) |
-| 2127 | thorfinn | surf-head-step-decay | CLOSED | Both arms regressed (+7.05%, +2.83%). MECHANISM CONFIRMED (spike damped) but spike+recovery is BENEFICIAL — damping spike loses recovery. |
-| 2188 | thorfinn | encoder-lr-boost | WIP (NEW) | Encoder LR boost at e15-18 (dual to head-LR damp); arms: ×2.0, ×3.0; composes w/ compile |
-| 2128 | nezuko | adamw-eps | CLOSED | Both arms +13.13%/+23.08%. Decisive: surf_frac_below_eps=0 always. Eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out. |
-| 2201 | nezuko | beta2-long | WIP (NEW) | AdamW β2=0.9999/0.9995: symmetric untested direction from #2015 (β2=0.95 regressed); longer second-moment timescale |
+| 2317 | alphonse | restart-wd-compose | WIP | **HIGHEST PRIORITY**: Compose T_0=10 + WD=3e-4 (Arm 1) + T_0=12 + WD=5e-4 (Arm 2) |
+| 2296 | tanjiro | lookahead-adamw | WIP | Lookahead optimizer k={5,10} alpha=0.5 — slow-track stabilizer, mechanistically distinct from EMA |
+| 2284 | frieren | finer-wd-sweep-21epoch | WIP | WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs; will inform restart+WD compose |
+| 2259 | fern | stratified-sampler | WIP | Per-batch domain stratification — tests sampler-variance → per-split asymmetry hypothesis |
+| 2232 | edward | head-up-wd | WIP | surf_head_wd∈{1e-3,2e-3} vs encoder 5e-4 — symmetric to head-down (already confirmed head needs MORE shrinkage) |
+| 2123 | askeladd | cosine-tmax | WIP (STALE) | T_max sweep, no activity in multiple cycles — pre-dates cosine restart baseline |
+| 2331 | nezuko | swa-cycle-end-averaging | WIP (NEW) | SWA over SGDR cycle-ends (retry of #1951 in proper SGDR regime with genuine cycle-end minima) |
+| 2340 | thorfinn | adamw-beta1-sweep | WIP (NEW) | β1=0.85 vs β1=0.95 — last untested AdamW optimizer axis |
+| 2201 | nezuko | beta2-long | **CLOSED** | +14.2%/+8.9% regression vs 83.9969. β2=0.999 PERMANENTLY CONFIRMED. 3rd cycle-34 confirmation. |
+| 2188 | thorfinn | encoder-lr-boost | **CLOSED** | 3× arm (84.75) lost to new 83.9969 baseline by 0.9%. Mechanism confirmed; restart-aligned reposition needed. |
+| 2227 | alphonse | cosine-restart | **MERGED** | NEW BASELINE: val 83.9969/test 74.7684. T_0=10, both arms won. |
+| 2178 | frieren | compile-wd-compose | **MERGED** | val 87.0144. WD=3e-4 optimal at 21ep. |
+| 2091 | frieren | torch-compile | **MERGED** | val 89.7197. compile+21ep baseline. |
 
 ## Working hypotheses
 
@@ -122,9 +120,11 @@ All 7 in-flight PRs (nezuko, thorfinn, edward, fern, frieren, tanjiro, askeladd)
 29a. **SGDR cosine restart T_0=10/7** — **CONFIRMED** (PR #2227, val=83.9969 / test=74.7684 at T_0=10, **−6.38% val / −5.74% test vs compile baseline**). Both arms beat baseline. Mechanism CONFIRMED: each cycle's minimum deeper than prior, best epoch sits AT THE RESTART. Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. New baseline. Composes orthogonally with all merged wins. Used WD=5e-4; composition with WD=3e-4 is highest-priority next test.
 29b. **Cosine restart T_0=10 + WD=3e-4 compose; T_0=12 extend** — testing (#2317 alphonse, NEW). Arm 1: stack WD=3e-4 (frieren's win) with T_0=10 restart (alphonse's win). Arm 2: T_0=12 to give cycle 2 more descent before reset.
 30. **surf_head step decay at e10 {×0.5, ×0.3}** — **rejected** (PR #2127, +7.05% / +2.83%). MECHANISM CONFIRMED (clean spike damping observed) but the spike+recovery is a beneficial training dynamic — damping the spike also damps the e14 deep minimum. **Reframing:** the e12 spike is an exploration burst, not pathology.
-30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — testing (#2188 thorfinn, NEW). If the spike comes from encoder entering a new landscape where the head is pre-positioned "too forward," briefly speeding up the encoder during transition might preserve recovery while smoothing the misalignment.
+30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — **closed** (#2188 thorfinn, CLOSED cycle 47). 3× boost val=84.75 beat OLD baseline but lost to new 83.9969 by 0.9%. Mechanism confirmed: 2×→3× monotone improvement, spike at e16 (135.62) is encoder-LR driven and beneficial. Boost must be repositioned to compose with restart cycles rather than compete.
 31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
-31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — testing (#2201 nezuko, NEW). Symmetric untested direction from #2015 (β2=0.95 regressed +6.49%). β2=0.9999 averages v over ~10000-step timescale, a ~10× stronger low-pass filter than current β2=0.999. Tests whether variance-noise interpretation (help) or spike-as-signal interpretation (hurt) prevails. Composes with torch.compile + WD=5e-4.
+31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — **rejected** (#2201 nezuko, CLOSED cycle 47). β2=0.9999 +14.2% val, β2=0.9995 +8.9% val vs current baseline. Spike-as-signal interpretation prevailed. Long-β2 smoothing destroys e18/e20 deep minimum. β2 axis PERMANENTLY CLOSED: 0.95 (#2015) / 0.9999+0.9995 (#2201) all regress; 0.999 is the only viable point.
+31b. **AdamW β1=0.85/0.95 (gradient momentum adaptation speed)** — testing (#2340 thorfinn, NEW cycle 47). First β1 sweep in the programme. β1 controls step numerator dynamics — orthogonal to β2 (denominator). β1=0.85: faster gradient de-correlation after restart may deepen recovery minimum. β1=0.95: more momentum persistence through restart burst. The last untested AdamW axis.
+32. **SWA over SGDR cycle-ends (retry)** — testing (#2331 nezuko, NEW cycle 47). Prior #1951 SWA (+3.33%) was pre-restart, no genuine cycle-end minima. Now T_0=10 provides independent local minima at e10/e20. Izmailov 2018 designed SWA exactly for this regime. Two arms: sparse 2-snapshot SWA (e10, e20) vs dense per-epoch SWA in cycle 2 (e10–e20).
 
 ## Key insights
 
@@ -184,6 +184,8 @@ All 7 in-flight PRs (nezuko, thorfinn, edward, fern, frieren, tanjiro, askeladd)
 - #2153 (WD bracket 4e-4/5.5e-4) — +15.43%/+12.60% regression vs 89.7197 baseline. Key insight: e14 breakthrough load-bearing, weight-norm FLAT. Note: this experiment was at 14-epoch budget; the WD axis at 21 epochs (post-compile) is distinct — WD=3e-4 wins there (#2178).
 - #2178 Arm 1 (WD=5e-4 + compile) — +1.17% regression vs 89.7197. WD=5e-4 over-regularizes at 21 epochs, amplifies e12 spike. WD=3e-4 is the 21-epoch optimum.
 - #2189 (EMA 21-epoch re-screen) — +9.07%/+16.46% regression. ema_init_bias decay too slow; live model still descending at e21. EMA direction permanently closed across two attempts (#1808 at 14ep, #2189 at 21ep).
+- #2201 (AdamW β2=0.9999/0.9995) — +14.2%/+8.9% regression vs current baseline. β2=0.999 PERMANENTLY CONFIRMED as the only viable point. Combined with #2015 (β2=0.95), the β2 axis is fully exhausted in both directions.
+- #2188 (Encoder LR boost e15-18) — Arm 2 (3×) val=84.7466 beat OLD compile baseline by 5.54% but lost to current cosine-restart baseline (83.9969) by 0.9%. Mechanism confirmed: explore burst at e16 is encoder-LR-driven. Needs restart-aligned repositioning to compose.
 
 ## Potential next directions (after cycle 30 in-flight)
 
