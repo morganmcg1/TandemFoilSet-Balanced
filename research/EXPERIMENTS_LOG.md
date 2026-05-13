@@ -2,6 +2,69 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:03 — PR #1730: [layers-6] n_layers 5→6 depth test — **SENT BACK (Huber base, pre-grad-clip)**
+- Student branch: `charliepai2g48h4-edward/layers-6`
+- Hypothesis: Under-fit on `val_single_in_dist` (127.85 vs 95.72 cruise) signals depth bottleneck. Adding one Transolver block tests whether extra global-attention rounds close the gap.
+
+| Metric | Huber base (n_layers=5) | n_layers=6 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 110.59 | **98.24** | −11.2% |
+| test_avg/mae_surf_p | 102.28 | **88.35** | −13.6% |
+| val single_in_dist | 127.85 | 114.51 | −10.4% |
+| val geom_camber_rc | 111.05 | 103.27 | −7.0% |
+| val geom_camber_cruise | 95.72 | 78.73 | **−17.8%** |
+| val re_rand | 107.73 | 96.43 | −10.5% |
+| epochs completed | — | 15/50 (cap; monotonic) | — |
+| peak VRAM | — | 39.87 GB (unchanged) | — |
+| per-epoch time | ~100s | ~122s (+20%) | still within 30-min cap |
+
+- Artifact: `models/model-charliepai2g48h4-edward-layers-6-20260513-005303/metrics.jsonl`
+- Run context: on Huber HEAD (pre-grad-clip merge). Does not beat current best (96.78, grad-clip HEAD).
+
+**Analysis:** Strongest per-split signal on this branch — all 4 val + all 4 test splits improved, cruise best (−17.8% val, −23.2% test: large meshes ~210K nodes benefit from extra global-attention rounds). Per-split pattern supports depth-bottleneck hypothesis: `single_in_dist` −10.4% val validates the diagnostic that motivated the PR. VRAM unchanged (+0.01 GB) — depth is free compute-wise. The 6th block pays for itself.
+
+**Decision:** SENT BACK to rerun on grad-clip HEAD. Run was on pre-grad-clip Huber base. Applied to current best (96.78), the proportional Δ−11.2% would give ~85.9 val if proportionate — potentially the most impactful single lever on the board. Follow-ups: layers=7, combined layers=6 + grad-clip.
+
+## 2026-05-13 02:03 — PR #1635: [log-cosh-loss] Log-cosh robust loss — **SENT BACK (Huber base, pre-grad-clip)**
+- Student branch: `charliepai2g48h4-fern/log-cosh-loss`
+- Hypothesis: Log-cosh (analytically smooth, no piecewise threshold knob) is at least as good as Huber (β=1.0) and may be better due to smooth L1-to-L2 transition.
+
+| Metric | Huber base (#1374) | Log-cosh (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 110.59 | **104.31** | −5.68 (−5.1%) |
+| test_avg/mae_surf_p | ~102.28 | **95.10** | −7.18 |
+| val single_in_dist | — | 117.59 | — |
+| val geom_camber_rc | — | 114.56 | — |
+| val geom_camber_cruise | — | 84.85 | — |
+| val re_rand | — | 100.23 | — |
+| epochs completed | — | 18/50 (still descending) | — |
+
+- Artifact: `models/model-charliepai2g48h4-fern-log-cosh-loss-20260513-005527/metrics.jsonl`
+- 4 local runs: mean ~102.0, std ~1.8. Low cross-seed variance confirmed.
+- Run context: pre-grad-clip Huber HEAD. Does not beat current best (96.78, grad-clip HEAD).
+
+**Analysis:** Log-cosh beats Huber (β=1.0) by 5.68 val on the same recipe — clear improvement. Mechanism: analytically smooth tail-capping avoids Huber's piecewise kink at |x|=1. Curve still descending at 30-min cap (epoch 14→15: 110.55→104.31), suggesting potential for further gain with cleaner annealing. Cross-seed variance (std ~1.8) is lower than Huber's estimated σ ≈ 3.5. Composes cleanly with merged recipe (unified_pos + bf16 + surf_weight=10). Log-cosh and Huber are alternative losses — they replace each other, not stack.
+
+**Decision:** SENT BACK to rerun on grad-clip HEAD, replacing Huber with log-cosh. If log-cosh + grad-clip < 96.78, it becomes new loss merge and Huber is superseded.
+
+## 2026-05-13 02:03 — PR #1576: [unified-pos-global-norm] Corpus-level positional bounds (seeded rerun) — **CLOSED**
+- Student branch: `charliepai2g48h4-thorfinn/unified-pos-global-norm`
+- Hypothesis: Replacing per-batch positional normalization with corpus-wide fixed bounds removes batch-level non-determinism in the position encoding.
+
+| Metric | grad-clip baseline (#1696) | global-pos-norm (seeded, this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **96.78** | 98.41 | +1.63 (within σ) |
+| test_avg/mae_surf_p | **86.56** | 87.51 | +0.95 |
+| val single_in_dist | 110.38 | 121.64 | +11.26 |
+| val geom_camber_rc | 105.34 | 107.09 | +1.75 |
+| val geom_camber_cruise | 75.14 | 73.76 | −1.38 |
+| val re_rand | 96.27 | 91.17 | −5.10 |
+
+- Artifact: `models/model-charliepai2g48h4-thorfinn-unified-pos-global-norm-seeded-20260513-010628/metrics.jsonl`
+- Run context: on current grad-clip HEAD (confirmed: rebased onto e7056a6, Huber + grad-clip + seed=42). This is a true apples-to-apples comparison.
+
+**Analysis:** +1.63 val, +0.95 test — squarely within σ ≈ 3.5 noise. The previously observed improvement (unseeded MSE recipe, val ~123.56 vs 125.78) has been absorbed. Student's mechanistic explanation is compelling: grad-clip's per-step normalization + Huber's outlier suppression both independently absorbed the gradient noise that per-batch encoding was introducing. The change is no longer net-positive and adds maintenance burden (bounds re-scan if data changes). **CLOSED per student recommendation.** Work is still high-value: produced a clean mechanistic explanation of how the current recipe handles the positional encoding sensitivity. The "clip absorbs noise" story is now documented for future ablation reference.
+
 ## 2026-05-13 01:25 — PR #1695: [tmax-18] CosineAnnealingLR T_max=15→18 — **SENT BACK (Huber base, pre-grad-clip)**
 - Student branch: `charliepai2g48h4-nezuko/tmax-18`
 - Hypothesis: With ~18 epochs achievable in 30-min cap, T_max=18 bottoms the cosine exactly at the budget edge, so the best-epoch checkpoint sits at the end of the anneal (lr→0) rather than starting a second cycle (lr climbing back).
