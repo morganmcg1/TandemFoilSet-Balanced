@@ -473,7 +473,7 @@ def amp_ctx_factory():
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-warmup_epochs = 3
+warmup_epochs = 2
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[
