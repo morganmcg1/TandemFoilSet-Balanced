@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-05-13 18:00 — PR #2232: Decoupled WD head-UP head_wd∈{1e-3,2e-3} (CLOSED — wins vs OLD baseline only)
+
+- **Branch:** `willowpai2g48h4-edward/head-up-wd`
+- **Student:** willowpai2g48h4-edward
+- **W&B runs:** `e0z3c5xd` (Arm 1 head_wd=1e-3), `ghzh3v63` (Arm 2 head_wd=2e-3 ★)
+
+### Results
+
+| Arm | head_wd | val_avg | Δ vs 89.7197 (OLD) | Δ vs 83.9969 (CURRENT) | test_avg | Δ vs 79.32 |
+|-----|---------|---------|--------------------|------------------------|----------|------------|
+| 1 | 1e-3 (2×) | 91.17 | +1.61% | +8.5% ✗ | 82.19 | +3.6% |
+| 2 | 2e-3 (4×) | **88.25** | **−1.64% ★** | +5.1% ✗ | **78.22** | **−1.38% ★** |
+
+### Commentary
+
+**Wins vs OLD #2091 baseline at Arm 2** (head_wd=2e-3). Loses to current 83.9969 by 5%. PR pre-dates cosine_restart merge.
+
+**Three mechanism findings:**
+1. **Per-step shrinkage, not weight magnitude.** Doubling head_wd (1e-3→2e-3) reduced surf_head weight norm by only 1.25%. The effect operates through gradient-noise / step-decay dynamics, exactly as the residual-fit-suppression framing in #2122 predicted.
+2. **Per-split asymmetry:** val_single_in_dist −6.75%, val_geom_camber_rc −5.50% (improvements), but val_geom_camber_cruise +7.81% and val_re_rand +4.28% (regressions). Head was carrying split-specific fit for cruise/re_rand.
+3. **Branching rule fired:** Arm 2 > Arm 1 → optimum is above 2e-3. Sweep direction is up.
+
+**Follow-up assigned (#2380 head-wd-restart-compose):** Test head_wd∈{2e-3, 3e-3} composed with cosine_restart T_0=10.
+
+---
+
+## 2026-05-13 18:00 — PR #2259: Stratified per-domain batch sampler (CLOSED — diagnostic confirmed)
+
+- **Branch:** `willowpai2g48h4-fern/stratified-sampler`
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `dnpeee7f` (Arm 1 strict ★), `ad4vnb0c` (Arm 2 rotated)
+
+### Results
+
+| Arm | Mode | val_avg | Δ vs 89.7197 (OLD) | Δ vs 83.9969 (CURRENT) | test_avg | Δ vs 79.32 |
+|-----|------|---------|--------------------|------------------------|----------|------------|
+| 1 | strict 1+1+1+1g | **88.19** | **−1.71% ★** | +5.0% ✗ | **78.79** | **−0.67% ★** |
+| 2 | rotated 2+1+1 | 90.26 | +0.60% | +7.5% ✗ | 80.62 | +1.65% ✗ |
+
+### Commentary
+
+**Three diagnostic mechanisms confirmed — high-value experiment despite losing vs current baseline:**
+
+1. **Per-batch composition variance is load-bearing for per-split asymmetry.** val_single (−8.61%) and val_rc (−1.29%) move TOGETHER under strict for the first time. Confirms #2153 hypothesis: the unconstrained WeightedRandomSampler creates per-batch domain imbalance that drives second-moment variance and asymmetric splits.
+
+2. **Spike+recovery is ~30-50% sampler-variance driven.** Strict reduces e16 spike from baseline ~+50% to +31%. The remainder is intrinsic cosine-LR × second-moment dynamics.
+
+3. **Stratification creates new asymmetry:** rebalances single↔rc but regresses cruise (+7.10%) and re_rand (+1.55%). Cruise had been *implicitly oversampled* via lower BIVW gradient noise → smaller v_t → larger effective step. Stratification removes that implicit oversampling.
+
+**Follow-up assigned (#2381 stratified-restart-compose):** Test strict + cosine_restart, with optional domain-weighted loss (1.0/1.0/1.3/1.2) recovery.
+
+---
+
 ## 2026-05-13 17:30 — PR #2123: Cosine T_max sweep {15,20,25} (CLOSED — superseded by cosine restart)
 
 - **Branch:** `willowpai2g48h4-askeladd/cosine-tmax` (CLOSED — beaten by current baseline)

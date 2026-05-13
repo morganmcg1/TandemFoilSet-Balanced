@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 48)
+- **As of:** 2026-05-13 (updated cycle 49)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -54,22 +54,24 @@
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 47)
+## Live PRs (active WIPs and recent closes — cycle 49)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 2317 | alphonse | restart-wd-compose | WIP | **HIGHEST PRIORITY**: Compose T_0=10 + WD=3e-4 (Arm 1) + T_0=12 + WD=5e-4 (Arm 2) |
 | 2296 | tanjiro | lookahead-adamw | WIP | Lookahead optimizer k={5,10} alpha=0.5 — slow-track stabilizer, mechanistically distinct from EMA |
-| 2284 | frieren | finer-wd-sweep-21epoch | WIP | WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs; will inform restart+WD compose |
-| 2259 | fern | stratified-sampler | WIP | Per-batch domain stratification — tests sampler-variance → per-split asymmetry hypothesis |
-| 2232 | edward | head-up-wd | WIP | surf_head_wd∈{1e-3,2e-3} vs encoder 5e-4 — symmetric to head-down (already confirmed head needs MORE shrinkage) |
-| 2357 | askeladd | cosine-restart-eta-min | WIP (NEW) | Cosine restart eta_min sweep (1e-5 vs 5e-5) — cycle-end LR floor untested in #2227; orthogonal to #2317 |
-| 2123 | askeladd | cosine-tmax | **CLOSED** | T_max sweep on OLD pre-compile baseline; best arm +10.8% vs current 83.9969. T_max axis superseded by restart. |
-| 2331 | nezuko | swa-cycle-end-averaging | WIP (NEW) | SWA over SGDR cycle-ends (retry of #1951 in proper SGDR regime with genuine cycle-end minima) |
-| 2340 | thorfinn | adamw-beta1-sweep | WIP (NEW) | β1=0.85 vs β1=0.95 — last untested AdamW optimizer axis |
-| 2201 | nezuko | beta2-long | **CLOSED** | +14.2%/+8.9% regression vs 83.9969. β2=0.999 PERMANENTLY CONFIRMED. 3rd cycle-34 confirmation. |
-| 2188 | thorfinn | encoder-lr-boost | **CLOSED** | 3× arm (84.75) lost to new 83.9969 baseline by 0.9%. Mechanism confirmed; restart-aligned reposition needed. |
-| 2227 | alphonse | cosine-restart | **MERGED** | NEW BASELINE: val 83.9969/test 74.7684. T_0=10, both arms won. |
+| 2284 | frieren | finer-wd-sweep-21epoch | WIP (STALE 2nd cycle) | WD sweep {2e-4, 2.5e-4, 4e-4}; nudged twice, pod healthy |
+| 2331 | nezuko | swa-cycle-end-averaging | WIP | SWA over SGDR cycle-ends (retry of #1951 in proper SGDR regime) |
+| 2340 | thorfinn | adamw-beta1-sweep | WIP | β1=0.85 vs β1=0.95 — last untested AdamW optimizer axis |
+| 2357 | askeladd | cosine-restart-eta-min | WIP | Cosine restart eta_min sweep (1e-5 vs 5e-5) |
+| 2381 | fern | stratified-restart-compose | WIP (NEW cycle 49) | Strict stratification + cosine_restart + domain-weighted loss (Arm 2) |
+| 2380 | edward | head-wd-restart-compose | WIP (NEW cycle 49) | head_wd∈{2e-3, 3e-3} + cosine_restart compose |
+| 2259 | fern | stratified-sampler | **CLOSED** | Strict beat OLD by −1.71%, lost current by +5%. 3 mechanisms confirmed: per-batch composition variance load-bearing; spike 30-50% sampler-driven; new cruise/re_rand asymmetry. |
+| 2232 | edward | head-up-wd | **CLOSED** | head_wd=2e-3 beat OLD by −1.64%, lost current by +5%. Per-step shrinkage mechanism confirmed. Branching → up. |
+| 2123 | askeladd | cosine-tmax | **CLOSED** | T_max axis superseded by cosine_restart. |
+| 2201 | nezuko | beta2-long | **CLOSED** | β2=0.999 PERMANENTLY CONFIRMED. |
+| 2188 | thorfinn | encoder-lr-boost | **CLOSED** | Beaten by new baseline; mechanism confirmed. |
+| 2227 | alphonse | cosine-restart | **MERGED** | NEW BASELINE: val 83.9969 / test 74.7684. |
 | 2178 | frieren | compile-wd-compose | **MERGED** | val 87.0144. WD=3e-4 optimal at 21ep. |
 | 2091 | frieren | torch-compile | **MERGED** | val 89.7197. compile+21ep baseline. |
 
@@ -128,6 +130,8 @@
 32. **SWA over SGDR cycle-ends (retry)** — testing (#2331 nezuko, NEW cycle 47). Prior #1951 SWA (+3.33%) was pre-restart, no genuine cycle-end minima. Now T_0=10 provides independent local minima at e10/e20. Izmailov 2018 designed SWA exactly for this regime. Two arms: sparse 2-snapshot SWA (e10, e20) vs dense per-epoch SWA in cycle 2 (e10–e20).
 33. **Cosine T_max sweep {15, 20, 25}** — **rejected at 14ep pre-compile baseline** (#2123 askeladd, CLOSED cycle 48). Best arm T_max=20 val=93.06 (−0.6% vs OLD #2031), but +10.8% vs current 83.9969. T_max axis is now MOOT (current baseline uses CosineAnnealingWarmRestarts, not CosineAnnealingLR). Replaced by eta_min sweep (#2357).
 34. **Cosine restart eta_min sweep {1e-5, 5e-5}** — testing (#2357 askeladd, NEW cycle 48). PR #2227 used default eta_min=0 (LR drops to exactly 0 at cycle-ends e10/e20). This may or may not be optimal — a tiny nonzero floor LR could let the model continue micro-refining at cycle-end minima. Orthogonal to alphonse's #2317 (T_0=12 + WD compose) on the cosine restart axis.
+35. **Head_wd compose with cosine_restart** — testing (#2380 edward, NEW cycle 49). Composes #2232's head_wd=2e-3 win with #2227's restart. Arms: 2e-3 (verify) and 3e-3 (sweep upward per #2232 branching rule). Tests whether per-step shrinkage mechanism survives restart's spike dynamics, and whether restart "rescues" the cruise/re_rand regression that head_wd↑ causes alone.
+36. **Stratified sampler compose with cosine_restart + domain-weighted loss** — testing (#2381 fern, NEW cycle 49). Arm 1: strict + restart (pure composition). Arm 2: strict + restart + domain_loss_weights=(1.0,1.0,1.3,1.2) (recover cruise/re_rand). Tests whether per-batch composition variance is still load-bearing once restart provides controlled spike-recovery.
 
 ## Key insights
 
@@ -190,6 +194,8 @@
 - #2201 (AdamW β2=0.9999/0.9995) — +14.2%/+8.9% regression vs current baseline. β2=0.999 PERMANENTLY CONFIRMED as the only viable point. Combined with #2015 (β2=0.95), the β2 axis is fully exhausted in both directions.
 - #2188 (Encoder LR boost e15-18) — Arm 2 (3×) val=84.7466 beat OLD compile baseline by 5.54% but lost to current cosine-restart baseline (83.9969) by 0.9%. Mechanism confirmed: explore burst at e16 is encoder-LR-driven. Needs restart-aligned repositioning to compose.
 - #2123 (Cosine T_max {15,20,25}) — Best arm T_max=20 val=93.06, only −0.6% vs OLD #2031 baseline (93.62) and +10.8% vs current 83.9969. Mechanism partially confirmed (tighter T_max damps late-epoch oscillation) but T_max axis is moot after merging cosine_restart. Hypothesis superseded by eta_min direction (#2357).
+- #2232 (head-up-wd, head_wd∈{1e-3, 2e-3}) — Arm 2 head_wd=2e-3 won by −1.64% vs OLD baseline (89.7197) but +5% vs current 83.9969. Mechanism confirmed: per-step shrinkage (not weight magnitude). Per-split asymmetry: single (−6.75%) and rc (−5.50%) improved; cruise (+7.81%) and re_rand (+4.28%) regressed. Branching → up. Composition with restart assigned as #2380.
+- #2259 (stratified sampler strict/rotated) — Arm 1 strict won by −1.71% vs OLD but +5% vs current. Three diagnostic mechanisms confirmed: (1) per-batch composition variance load-bearing for per-split asymmetry; (2) spike+recovery 30-50% sampler-driven; (3) strict creates new cruise/re_rand asymmetry via removal of implicit BIVW oversampling. Composition with restart + domain-weighted loss assigned as #2381.
 
 ## Potential next directions (after cycle 30 in-flight)
 
