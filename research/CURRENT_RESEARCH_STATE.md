@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~06:10 (closed #1941 nezuko asinh-all-channels +2.75% dead end; assigned nezuko #1970 drop-path-0.1)
+- **Last updated:** 2026-05-13 ~07:05 (closed #1970 nezuko drop-path-0.1 +6.99% dead end; assigned nezuko #2004 adamw-beta2-0.99)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -44,6 +44,7 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 
 ### Closed as dead ends (this round)
 - #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419 (3-epoch ramp too steep at lr=1e-3)
+- #1970 nezuko drop-path-0.1: +6.99% vs 74.2082 (capacity-reducing regularizer incompatible with 14-epoch budget; DropPath needs 100s+ epochs)
 - #1941 nezuko asinh-all-channels: +2.75% vs 74.2082 (mechanism pressure-specific; velocity channels are Gaussian, not heavy-tailed)
 - #1835 nezuko asinh-gain-0.5: +1.96% vs 79.8623 (asymmetric axis — GAIN<1 erodes bulk-redistribution)
 - #1426 frieren hidden-192-head-6: +12.8% worse
@@ -66,8 +67,8 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 1. **LR axis — ceiling still open:**
    - **#1942 alphonse lr-2e-3**: #1895 showed best_epoch=final, largest epoch-14 drop (−7.38 units), cosine still productive at cutoff → lr ceiling still open. Probing 2e-3. Key risk: epoch-5 spike will be larger; monitor pred_abs_max for runaway vs bouncy-bounded.
 
-2. **Regularization axis — stochastic depth:**
-   - **#1970 nezuko drop-path-0.1**: DropPath with linear schedule [0.0, 0.025, 0.05, 0.075, 0.1] across 5 Transolver layers. Parameter-free ensemble regularizer; expected to help val_rc and val_re_rand. Mechanistically orthogonal to LR, asinh, node-dropout, loss shape.
+2. **Optimizer β2 axis:**
+   - **#2004 nezuko adamw-beta2-0.99**: Change AdamW `betas=(0.9, 0.999)` → `(0.9, 0.99)`. Faster 2nd-moment adaptation for 14-epoch budget. No capacity reduction (unlike DropPath). Single-line change.
 
 3. **Schedule axis — warmup-duration sweep:**
    - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch. ⚠️ Frieren needs to be notified of new 74.2082 target (was tracking 77.14).
@@ -92,6 +93,7 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 - **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts). Mechanism: asinh stabilizes high-LR gradient → escape local minima on hard splits while holding cruise.
 - **lr=1.5e-3 + asinh:** −3.80% further gain (77.14 → 74.21). Epoch-5 peak-LR spike re-emerges but bounded and recoverable. LR ceiling NOT closed.
 - **Warmup duration axis CONVERGING:** warmup=3 (too steep), warmup=4 (canonical winner), warmup=5 (in flight). Best_epoch=final at all tested LRs → cosine still productive.
+- **14-epoch-budget constraint on regularizers:** Capacity-reducing regularizers (DropPath, EMA-heavy-decay, SWA) require 100s+ epochs to pay off — confirmed by #1970 DropPath failure (+6.99%). Only mechanisms that don't slow convergence are safe at this budget.
 - **val_rc RESISTANT SPLIT:** gains −0.86% at lr=1.5e-3, −2.54% at lr=1e-3 vs 5%+ on other splits. Architecture or data limitation for multi-foil configurations.
 - **Architecture/capacity axes: EXHAUSTED.** All depth/width/slice-num variations regress.
 

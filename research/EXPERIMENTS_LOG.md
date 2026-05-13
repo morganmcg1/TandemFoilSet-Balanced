@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-13 07:00 — PR #1970: drop-path-0.1 (nezuko) — CLOSED (dead end)
+
+- **Branch:** `charliepai2g48h2-nezuko/drop-path-0.1`
+- **Hypothesis:** Add Stochastic Depth (DropPath) with linear schedule [0.0, 0.025, 0.05, 0.075, 0.1] across 5 Transolver layers. Parameter-free ensemble regularizer; expected to help val_rc and val_re_rand via OOD-geom ensemble effect.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-drop-path-0.1-20260513-061624/metrics.jsonl`
+
+### Results vs. #1895 baseline (74.2082)
+
+| Split | Baseline | DropPath 0.1 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 83.733 | 94.392 | **+12.74%** ❌ |
+| val_geom_camber_rc | 91.690 | 93.205 | +1.65% ❌ |
+| val_geom_camber_cruise | 50.392 | 56.533 | **+12.19%** ❌ |
+| val_re_rand | 71.018 | 73.460 | +3.44% ❌ |
+| **val_avg/mae_surf_p** | **74.2082** | **79.3974** | **+6.99%** ❌ |
+| **test_avg/mae_surf_p** | 65.1123 | 68.8846 | **+5.79%** ❌ |
+
+**Closed as dead end.** DropPath is depth- and budget-dependent regularizer.
+
+### Analysis
+
+Regression concentrated on in-distribution splits (val_single +12.74%) — opposite of predicted ensemble-regularizer signature. Root cause: DropPath benefits require long training horizons (100s-1000s of epochs in ConvNeXt/ViT/MAE) to compensate for capacity reduction. At only 14 epochs and 5 layers, the regularizer causes pure under-fitting without the long-run ensemble payoff. Every per-epoch val_avg value sits above baseline equivalent — not an optimization failure but a loss-landscape shift from reduced capacity. The 5-layer depth × 14-epoch budget combination is hostile to stochastic depth. Per-channel trajectory confirms: best_epoch=14 unchanged but systematically worse.
+
+**Key insight:** Before applying any capacity-reducing regularizer, check training horizon compatibility. Mechanisms that work over 1000s of steps (DropPath, EMA with heavy decay, SWA) are unlikely to fit in a 14-epoch budget. Mechanisms that don't delay convergence (LayerScale, optimizer β2, asinh) are safer bets.
+
+---
+
 ## 2026-05-13 06:05 — PR #1941: asinh-all-channels (nezuko) — CLOSED (dead end)
 
 - **Branch:** `charliepai2g48h2-nezuko/asinh-all-channels`
