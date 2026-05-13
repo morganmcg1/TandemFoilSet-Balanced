@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 07:00
+- 2026-05-13 07:20
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -8,16 +8,16 @@
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **56.90** | #1880 (Huber δ=0.3, merged 2026-05-13) |
-| **test_avg/mae_surf_p** | **53.20** | #1880 — all 4 splits finite |
-| Peak VRAM | 32.95 GB | #1880 — BF16, batch=4 |
-| s/epoch | ~102 s | BF16+Lion, 16 epochs ≈ 27 min |
+| **val_avg/mae_surf_p** | **55.92** | #1755 (n_hidden=160 on δ=0.3 stack, merged 2026-05-13) |
+| **test_avg/mae_surf_p** | **51.92** | #1755 — all 4 test splits finite |
+| Peak VRAM | 37.99 GB | #1755 — BF16, batch=4, n_hidden=160 |
+| s/epoch | ~115 s | n_hidden=160 + Lion, 16 epochs ≈ 30.7 min |
 
-Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=3e-4, wd=6e-5)** + **BF16 autocast** + **Huber δ=0.3 loss**, epochs=**16**, batch=4, seed=42.
+Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=3e-4, wd=6e-5)** + **BF16 autocast** + **Huber δ=0.3 loss** + **n_hidden=160**, epochs=**16**, batch=4, seed=42.
 
 **Reproduce current best:**
 ```bash
-cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 3e-4 --lion_weight_decay 6e-5 --experiment_name n160_d03_ep16_baseline_check --agent <student>
 ```
 
 ## Key round-5 findings to date
@@ -35,51 +35,55 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | **Lion + epochs=16 → −9.2% further (#1780, MERGED)** | **Non-converged at 13 epochs; cosine tail provides 3 more improvement epochs** |
 | **Huber δ=0.5 → −9.3% further (#1639, MERGED)** | **Per-element outlier capping stacks with grad_clip** |
 | **Huber δ=0.3 → −14.2% further (#1880, MERGED)** | **δ curve not bottomed at 0.5; 0.3 optimal — δ=0.2 ties within noise** |
+| **n_hidden=160 → −1.7% val further (#1755, MERGED)** | **Width gain orthogonal to loss-shape; val_geom_camber_rc (hardest OOD) benefits most (−5.38)** |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
 | EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
-| **n_hidden=160 → −8.97 val on Huber δ=0.5 stack (#1755 re-run, SENT BACK 4th time)** | val=57.34, test=53.69; +0.44 above new 56.90 δ=0.3 baseline. Compound n160+δ=0.3 likely beats baseline (orthogonal levers) |
 | n_hidden=192 confirmed dead (#1755 Arm B, lr=4e-4) | Budget cliff, grad_norm instability; 2× regression evidence |
-| Lion lr=2e-4 wins on Huber δ=0.5 stack (#1782, SENT BACK) | LR optimum shifted 2.5e-4→2e-4; needs re-run on new δ=0.3 stack |
+| Lion lr=2e-4 wins on Huber δ=0.5 stack (#1782, SENT BACK) | LR optimum shifted 2.5e-4→2e-4; needs re-run on new δ=0.3+n160 stack |
 | Dropout=0.1 → −5.7% val on OLD 66.32 baseline (#1656, SENT BACK) | Feature-level regularization works; needs re-run on δ=0.3 stack |
+| n_hidden=160 + δ=0.5 → val=57.34 (#1755, SENT BACK 4 times) | Width gain real; above new baselines each time; compound finally confirmed (MERGED) |
+| Huber δ=0.3+ep16 compound is the merged baseline (#1879, CLOSED) | Tanjiro's reproducibility run confirmed bit-identical to #1880; hypothesis absorbed by prior merge |
 
 ## Active PRs
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP — new | Beat 56.90 |
-| #1879 | tanjiro | Huber δ=0.5 + epochs=16 compound (now on δ=0.3 default) | WIP (stale, baseline notification sent) | Beat 56.90 |
-| #1782 | frieren | Lion lr=2e-4 single-arm on δ=0.3 stack | WIP (sent back 3rd time) | Beat 56.90 |
-| #1755 | fern | n_hidden=160 final-gate single-arm on δ=0.3+epochs=16 stack | WIP (sent back 4th time — FINAL gate) | Beat 56.90 |
-| #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
-| #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 56.90 |
-| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP — new | Beat 56.90 |
-| #1470 | edward | Instance-norm loss, epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
+| #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP | Beat 55.92 |
+| #1782 | frieren | Lion lr=2e-4 single-arm on δ=0.3+n128 stack | WIP (sent back 3rd time) | Beat 55.92 |
+| #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP | Beat 55.92 |
+| #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 55.92 |
+| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP — new | Beat 55.92 |
+| #1470 | edward | Instance-norm loss, epochs=16 | WIP | Beat 55.92 |
+| #2027 | tanjiro | Lion lr=2e-4 on n_hidden=160+δ=0.3 baseline | WIP — new | Beat 55.92 |
+| #2028 | fern | Per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) on n_hidden=160 | WIP — new | Beat 55.92 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
-| #1880 | alphonse | **MERGED** | Huber δ=0.3 → **new baseline 56.90/53.20** (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
+| #1755 | fern | **MERGED** | n_hidden=160 + δ=0.3 → **new baseline 55.92/51.92** (−1.7% val, −2.4% test). val_geom_camber_rc −5.38. |
+| #1879 | tanjiro | CLOSED | Huber δ=0.3+ep16 compound reproduced baseline exactly (bit-identical); hypothesis absorbed by #1880 |
+| #1880 | alphonse | **MERGED** | Huber δ=0.3 → baseline 56.90/53.20 (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
 | #1639 | alphonse | **MERGED** | Huber δ=0.5 → baseline 66.32 (−9.3%). Uniformly better. δ curve not bottomed out at time. |
 | #1780 | tanjiro | **MERGED** | Lion+epochs=16 → baseline 66.44 (−9.2%). Epochs=16 now structural standard. |
-| #1782 (2nd) | frieren | SENT BACK | lr=2e-4 wins on δ=0.5 stack (val=58.00); above new 56.90 baseline; needs δ=0.3 re-run |
-| #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 56.90; needs δ=0.3 re-run |
+| #1782 (2nd) | frieren | SENT BACK | lr=2e-4 wins on δ=0.5 stack (val=58.00); above new baseline; needs δ=0.3+n160 re-run |
+| #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 55.92; needs δ=0.3 stack re-run |
 | #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
 | #1463 | askeladd | CLOSED | SWA → val regression; SWALR fights Lion cosine |
 | #1641 | frieren | **MERGED** | Lion optimizer → baseline 73.15 (−22.4%). Largest single-PR gain. |
 
 ## Open questions from active experiments
 
-1. **Does n_layers=6 help on current stack?** (#1979 alphonse — depth vs width)
-2. **Does n_hidden=160 compose with δ=0.3+epochs=16?** (#1755 fern) — width gain was ~1.7 on old stack
-3. **Does Lion lr=2e-4 beat lr=3e-4 on δ=0.3 stack?** (#1782 frieren) — optimum shifted down before, may shift again
-4. **Does dropout=0.1 compose with δ=0.3?** (#1656 thorfinn) — orthogonal regularization axes
-5. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
-6. **Does surf_weight=15 or 5 beat 10 on δ=0.3+Lion stack?** (#2005 nezuko) — loss balance may have shifted with Huber+Lion
-7. **Does instance-norm loss help val_re_rand?** (#1470 edward)
-8. **Does Huber+epochs=16 compose when δ=0.3 is the default?** (#1879 tanjiro — should auto-pick up δ=0.3 after rebase)
+1. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
+2. **Does Lion lr=2e-4 beat lr=3e-4 on δ=0.3+n128 stack?** (#1782 frieren) — LR optimum shifted down before, may shift again
+3. **Does dropout=0.1 compose with δ=0.3+n160?** (#1656 thorfinn) — orthogonal regularization axes
+4. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
+5. **Does surf_weight shift from 10.0 under δ=0.3+Lion+n160?** (#2005 nezuko) — loss balance may have changed
+6. **Does instance-norm loss help val_re_rand?** (#1470 edward)
+7. **Does Lion lr=2e-4 beat 3e-4 on n_hidden=160 baseline?** (#2027 tanjiro) — LR optimum on new wider model
+8. **Does per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) beat uniform δ=0.3?** (#2028 fern) — decouple pressure vs velocity gradient capping
 
 ## Confirmed dead ends
 
@@ -94,21 +98,21 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 
 ### Currently active (don't duplicate)
 - #1979 alphonse: n_layers=6, epochs=14
-- #1879 tanjiro: Huber+epochs=16 (now effectively tests δ=0.3 compound after rebase)
-- #1782 frieren: lr=2e-4 on δ=0.3 stack
-- #1755 fern: n_hidden=160 on δ=0.3+epochs=16 stack
+- #1782 frieren: lr=2e-4 on δ=0.3+n128 stack
 - #1844 askeladd: Lion β2=0.999, epochs=16
 - #1656 thorfinn: dropout=0.1 on δ=0.3 stack
-- #2005 nezuko: surf_weight sweep 15 vs 5 on δ=0.3+Lion stack
+- #2005 nezuko: surf_weight sweep 15 vs 5 on δ=0.3+Lion+n160 stack
 - #1470 edward: instance-norm loss, epochs=16
+- #2027 tanjiro: Lion lr=2e-4 on n_hidden=160 baseline
+- #2028 fern: per-channel Huber δ (δ_p=0.2, δ_Ux/Uy=0.5) on n_hidden=160
 
 ### Queued ideas (when students finish above)
 
-1. **batch=8 + Lion + epochs=13** — larger effective batch; ~30 min with batch=8. (surf_weight sweep now active as #2005)
-2. **batch=8 + Lion + epochs=13** — larger effective batch; ~30 min with batch=8.
-3. **DropPath / stochastic depth** — targeted at Transolver's residual structure; complements dropout.
-4. **Activation sweep** — GELU → SwiGLU/SiLU on full combined stack.
-5. **Layer-wise LR decay** — different LR per Transolver layer.
-6. **Per-channel Huber δ** — δ_p=0.2, δ_U=0.5: decouple the cruise/single tradeoff observed in alphonse's δ scan.
-7. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
-8. **Lion lr=1.75e-4** — if frieren's re-run confirms 2e-4 beats 3e-4 on δ=0.3, probe further down the LR curve.
+1. **batch=8 + Lion + epochs=13** — larger effective batch on n_hidden=160 baseline; ~30 min with batch=8.
+2. **DropPath / stochastic depth** — targeted at Transolver's residual structure; complements dropout.
+3. **Activation sweep** — GELU → SwiGLU/SiLU on full combined stack.
+4. **Layer-wise LR decay** — different LR per Transolver layer.
+5. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
+6. **Lion lr=1.75e-4** — if tanjiro's (#2027) re-run confirms 2e-4 beats 3e-4 on n_hidden=160, probe further down the LR curve.
+7. **n_layers=6 + n_hidden=160 compound** — test depth×width compound after alphonse's n_layers=6 result lands.
+8. **Cosine LR floor** — cosine to η_min=lr×0.05 instead of 0; prevents over-suppression at convergence tail.

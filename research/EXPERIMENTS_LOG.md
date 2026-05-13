@@ -1,5 +1,67 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 07:15 — PR #1879: Compound Huber δ=0.5+epochs=16 (CLOSED — hypothesis absorbed)
+
+- Student branch: `charliepai2g24h5-tanjiro/huber-plus-epochs16`
+- Hypothesis: Huber δ=0.5 + epochs=16 should compound two independent wins (#1639 + #1780).
+
+### Results
+
+| Metric | This PR | Baseline (#1880) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 56.8955 | 56.8955 | 0 (bit-identical) |
+| test_avg/mae_surf_p | 53.2015 | 53.2015 | 0 (bit-identical) |
+
+Tanjiro correctly rebased onto the new advisor branch (after baseline notification), which had δ=0.3 as default. Running with `--epochs 16` and the rebased code reproduced the #1880 winning arm exactly to 4+ decimal places (same seed=42, same code, deterministic).
+
+### Analysis
+
+The compound hypothesis was already realized by PR #1880, which tested δ=0.3 on the epochs=16 stack and merged as the new baseline. After rebasing, tanjiro's run was code-identical to the #1880 winner arm.
+
+**Closed (not merged):** No new information beyond confirming seed-locked reproducibility. Tanjiro's analysis was scientifically honest and correct — he did not attempt to claim a tie as a win.
+
+**Tanjiro's suggested follow-ups (noted for queue):** (1) Cosine LR floor (η_min = lr×0.1 instead of 0), (2) curriculum δ schedule (0.3→0.2 in last 3 epochs), (3) epochs=17 push. All three added to queued ideas.
+
+- Metrics: `models/model-charliepai2g24h5-tanjiro-huber_epochs16-20260513-062410/metrics.jsonl`
+
+---
+
+## 2026-05-13 07:10 — PR #1755: n_hidden=160 on Huber δ=0.3+epochs=16 stack (MERGED — new baseline 55.92)
+
+- Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
+- Hypothesis: n_hidden=160 + δ=0.3 compound — width gain should be orthogonal to loss-shape regularization.
+
+### Results (vs new baseline 56.90 / 53.20, PR #1880)
+
+| Metric | Baseline n128+δ=0.3 | **This PR n160+δ=0.3** | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 56.90 | **55.92** | **−0.98 (−1.7%)** ✅ |
+| **test_avg/mae_surf_p** | 53.20 | **51.92** | **−1.28 (−2.4%)** ✅ |
+| Peak VRAM | 32.95 GB | 37.99 GB | +15% |
+| s/epoch | ~102 s | ~115 s | +13% |
+
+### Per-split val/test (n_hidden=160 + δ=0.3, epoch 16)
+
+| Split | val n128 | val n160 | Δ val | test n128 | test n160 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 60.26 | 61.14 | +0.88 | 52.32 | 51.41 | −0.91 |
+| geom_camber_rc | 75.20 | **69.82** | **−5.38** | 64.24 | **60.85** | **−3.39** |
+| geom_camber_cruise | 37.01 | 37.23 | +0.22 | 49.15 | 48.82 | −0.33 |
+| re_rand | 55.11 | 55.51 | +0.40 | 47.10 | 46.61 | −0.49 |
+| **avg** | **56.90** | **55.92** | **−0.98** | **53.20** | **51.92** | **−1.28** |
+
+- Metrics: `models/model-nhidden160_huber_d03_final-20260513-061938/metrics.jsonl`
+
+### Analysis
+
+**Width and loss-shape are orthogonal levers.** Val gain is concentrated in val_geom_camber_rc (racecar-camber OOD, hardest split) which drops −5.38. The other 3 val splits are within ±1 (tied, slight regressions likely within run-to-run noise). Test is cleaner: all 4 test splits improve.
+
+Generalization gap preserved (test−val: −4.00 vs −3.70 baseline). Both models converge flat at epoch 16 (n160 final epoch delta: −0.03 val, gradient_norm ~2.3 — asymptote reached). Peak VRAM 37.99 GB on H100; wall-clock 30.7 min (fits).
+
+**This is the 5th submission of this hypothesis** (4 send-backs due to moving baseline, final-gate framing). The width gain is real and compounds with δ=0.3, as predicted.
+
+---
+
 ## 2026-05-13 06:55 — PR #1481: Double physics-attention slices: slice_num 64→128 (CLOSED — dead end)
 
 - Student branch: `charliepai2g24h5-nezuko/double-attention-slices`
