@@ -376,3 +376,46 @@ cd "target/" && python train.py \
 ```
 
 *(Note: `slice_num=32` is hardcoded in `model_config` in `train.py`. Already merged via PR #2226. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
+
+## 2026-05-13 14:15 — PR #2282: slice_num=24 + clip=5.0 (slot floor scan continues)
+
+**Changes merged:** `model_config["slice_num"] = 24` (was 32) in `train.py` — one-line change to the hardcoded model config dict.
+
+**Key finding:** The monotonic regularization trend continues intact at slice=24. cruise improved −4.24% (48.79 → 46.72), re_rand improved −2.94%, and for the first time in this scan the cosine schedule **fully completed at 18/18 epochs** (per-epoch time 102.7s vs 108s at slice=32). Best checkpoint shifted to epoch 18 with val still improving monotonically. The slot floor is definitively below 24.
+
+### Primary metrics (best val checkpoint, epoch 18 of 18)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **70.7422** | −1.41% |
+| **test_avg/mae_surf_p** | **61.8457** | **−1.52%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline (62.80) |
+|---|---|---|
+| test_single_in_dist | 64.5575 | −0.22% |
+| test_geom_camber_rc | 72.2939 | +0.44% (slight regression) |
+| test_geom_camber_cruise | 46.7231 | **−4.24%** (slot floor still below 24) |
+| test_re_rand | 63.8181 | −2.94% |
+
+### Run info
+
+- **W&B run:** `evcflzgo` — group `slice-num-sweep`
+- **Epochs:** 18 / 18 (cosine schedule fully completed, 102.7 s/epoch)
+- **Peak GPU memory:** ~80.4 GB (PyTorch reserved cache on RTX PRO 6000 Blackwell 96 GB)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, **slice_num=24**, mlp_ratio=2, space_dim=34 (Fourier L=8)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --accumulation_steps 2 \
+  --grad_clip_max_norm 5.0 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(Note: `slice_num=24` is hardcoded in `model_config` in `train.py`. Already merged via PR #2282. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
