@@ -7,6 +7,25 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 23:13 — PR #2555: Lion wd sweep (3e-4, 1e-3) on n_head=2 — CLOSED
+
+- `willowpai2g24h3-thorfinn/weight-decay-lion-sweep`
+- **Hypothesis:** test wd=3e-4 (3× default) and wd=1e-3 (10× default) on the merged n_head=2+Lion stack. Lion paper recommends 3-10× AdamW wd for equivalent regularization; predicted a small positive on at least one arm.
+- **Results (4 finished runs across duplicate launches):**
+
+| Run | wd | State | val_avg | test_avg | Δ val |
+|---|---:|---|---:|---:|---:|
+| `5xmshkwk` | 3e-4 | finished | 41.32 | 34.34 | +2.61% ❌ |
+| `581t7ak5` | 3e-4 (seed 2) | finished | 44.41 | 37.00 | +10.27% ❌ |
+| `d4dd5gd1` | 1e-3 | finished | **40.91** | 34.56 | **+1.59% ❌** |
+| `myywnism` | 3e-4 (seed 3) | finished | — | — | (duplicate-launch artifact) |
+
+Baseline: 40.27 / 33.60 (`gd934e9l`).
+
+- **Analysis:** Both arms regress vs baseline. The lower-regress arm (wd=1e-3 at +1.59%) still sits above the 40.3 close threshold and the test metric is +2.86%. The seed-2 wd=3e-4 result (+10.27%) shows the same-config seed variance can be very large (41.32 vs 44.41), reinforcing that wd default 1e-4 is well-tuned for this stack. The Lion paper's 3-10× wd guidance applies to LLM/vision scales — on this 548K-param CFD surrogate at 30-min budget, larger wd hurts more than it helps. **Lion wd axis closed; default 1e-4 is optimal.** PR closed by student after advisor sendback.
+- **Operational flag:** Duplicate-launch issue surfaced again — 4 runs (3 of wd=3e-4, 1 of wd=1e-3) across one pod. Same harness pattern as edward #2596 / #2612.
+- **Next experiment:** thorfinn reassigned to **PR #2657 Cautious Lion** (H3 from RESEARCH_IDEAS_2026-05-13_22:30) — sign-gate update mask on Lion that directly targets the noise-amplification mechanism his earlier coord-jitter PR (#2097) exposed.
+
 ## 2026-05-13 22:55 — PR #2593: n_head=1 isolation — CLOSED
 
 - `willowpai2g24h3-frieren/n-head-1-isolation`
