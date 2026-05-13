@@ -479,7 +479,8 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             abs_err = (pred - y_norm).abs()
-            huber_err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
+            # delta=0.5: huber(x) = 0.5*x^2 if |x|<0.5 else 0.5*|x|-0.125
+            huber_err = torch.where(abs_err < 0.5, 0.5 * abs_err ** 2, 0.5 * abs_err - 0.125)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
