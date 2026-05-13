@@ -390,6 +390,7 @@ class Config:
     epochs: int = 50
     n_layers: int = 5
     slice_num: int = 48
+    mlp_ratio: int = 4
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -431,7 +432,7 @@ model_config = dict(
     n_layers=cfg.n_layers,
     n_head=4,
     slice_num=cfg.slice_num,
-    mlp_ratio=4,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
