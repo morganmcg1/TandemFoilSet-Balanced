@@ -440,12 +440,13 @@ model_config = dict(
     n_layers=5,
     n_head=2,
     slice_num=32,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
+print(f"FFN: mlp_ratio=4 (MLP hidden_dim = 128 × 4 = 512) — standard transformer FFN expansion")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
