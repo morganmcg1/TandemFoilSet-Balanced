@@ -2,6 +2,97 @@
 
 ---
 
+## 2026-05-13 01:10 — PR #1560: T_max=36 cosine on compile baseline — CLOSED (lever characterized)
+
+- **Branch:** `charliepai2g48h5-alphonse/tmax-14-cosine`
+- **Student:** charliepai2g48h5-alphonse
+- **Hypothesis:** Match CosineAnnealingLR T_max to the actual epoch budget at the 30-min cap.
+
+### Results (compile-era re-run, T_max=36)
+
+| Metric | Baseline (#1568) | This PR (T_max=36) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.832 | **69.598** | -0.234 (-0.34%) |
+| `test_avg/mae_surf_p` | 61.865 | **61.729** | -0.136 (-0.22%) |
+
+Per-split (mixed):
+
+| Split | T_max=36 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 76.167 | 77.10 | -0.93 |
+| `val_geom_camber_rc` | 81.053 | 83.49 | -2.44 |
+| `val_geom_camber_cruise` | 52.196 | 50.64 | +1.56 |
+| `val_re_rand` | 68.975 | 68.10 | +0.87 |
+
+- **Best epoch:** 36 (terminal, descending). **Epochs:** 36. **Time/epoch:** 49.8 s.
+- **Status:** CLOSED. 69.60 > new baseline 64.07 (Huber β=0.5, PR #1633 merged same round).
+
+### Analysis
+
+**Mechanism confirmed but gain diminished at compile budget.** The T_max=36 win internaly shows -6.2 MAE in epochs 28→36 (exactly as predicted), matching the T_max=14/18 arms' "last few epochs gain ~8 MAE" pattern. But the comparison vs the T_max=50 baseline at 36/50 epochs is tiny (+0.23 MAE) because the T_max=50 compile baseline already captures most of the cosine-decay benefit by epoch 36 (LR decays to ~0.21·lr_max, not zero).
+
+**Lever characterization complete:**
+
+| Arm | T_max | Epochs | Baseline | val_avg | Δ | Mechanism |
+|---|---|---|---|---|---|---|
+| #1560 A (fp32) | 14 | 14 | #1444 (110.76) | 98.75 | -10.8% | Low-LR tail traversal |
+| #1560 B (bf16) | 18 | 18 | #1532 (101.12) | 90.32 | -10.7% | Low-LR tail traversal |
+| #1560 C (compile) | 36 | 36 | #1568 (69.83) | 69.60 | -0.34% | Most of arc already covered |
+
+The gain collapses when the baseline already runs most of the cosine arc (36/50 epochs). This is a closed lever.
+
+### Conclusions
+
+- T_max=epoch_budget is a strong win when the baseline epoch count is a small fraction of T_max (e.g. 19/50 epochs with bf16 only). Neutral when the baseline already runs most of the arc.
+- Do NOT re-run this hypothesis on the β=0.5 baseline. Same math applies.
+- Closed: 69.60 does not beat new baseline 64.07.
+
+---
+
+## 2026-05-13 01:00 — PR #1633: Huber β=0.5 (sharper loss) — MERGED ✓
+
+- **Branch:** `charliepai2g48h5-thorfinn/huber-beta-sweep`
+- **Student:** charliepai2g48h5-thorfinn
+- **Hypothesis:** Huber β=0.5 (sharper quadratic-to-linear transition at |e|=0.5) vs β=1.0 baseline. Simultaneously test β=2.0 (smoother). TandemFoil surface pressure has a heavy-tailed residual distribution — smaller β makes loss linear for a wider range of medium residuals, down-weighting outlier gradients.
+
+### Results
+
+| Arm | β | val_avg/mae_surf_p | Δ vs baseline | test_avg |
+|---|---|---:|---:|---:|
+| **A (winner)** | **0.5** | **64.0705** | **-8.2% ✓** | **55.4961** |
+| B | 2.0 | 77.8090 | +11.4% ✗ | 69.2942 |
+
+Per-split — β=0.5 (Arm A):
+
+| Split | β=0.5 | Baseline (#1568) | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 72.5692 | 77.10 | -5.9% |
+| `val_geom_camber_rc` | 78.3209 | 83.49 | -6.2% |
+| `val_geom_camber_cruise` | **43.3744** | 50.64 | **-14.4%** |
+| `val_re_rand` | 62.0174 | 68.10 | -8.9% |
+
+- **Best epoch:** 37 (terminal, still descending at timeout). **Time/epoch:** ~49.5 s. **Peak GPU:** 23.83 GB.
+- **Status:** MERGED — new baseline 64.0705 / 55.4961.
+- **Metric artifacts:** `models/model-charliepai2g48h5-thorfinn-huber-beta-0.5-20260512-221022/metrics.jsonl`
+
+### Analysis
+
+**Clean monotone signal:** β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07). All four val splits improved. Largest win on val_geom_camber_cruise (-14.4%), the lowest-error split where the bulk of residuals is moderate — sharper β concentrates gradient on the bulk, ignoring outliers.
+
+β=2.0 regression is symmetric: approaching MSE over a wider band overweights tail residuals, hurting all four splits. The heavy-tailed residual distribution of TandemFoil surface pressure is the key underlying mechanism.
+
+Best epoch=37=terminal: model still descending at the wall-clock cap. This is a consistent pattern across all winning PRs — the model has more headroom.
+
+**Key consequence:** β=0.5 is now the advisor baseline. β=0.25 is the natural next step — PR #1700 (thorfinn) queued.
+
+### Conclusions
+
+- Sharper Huber β is a real, zero-cost lever for this dataset.
+- Direction is clear: sweep toward β=0.25 and pure L1 to find the optimum.
+- Surface-weight interaction possible (surf_weight=10 was tuned with β=1.0; re-tuning with β=0.5 may compound further).
+
+---
+
 ## 2026-05-13 00:40 — PR #1587: n_hidden 128 → 160 + bf16 — CLOSED (stale)
 
 - **Branch:** `charliepai2g48h5-edward/wider-hidden-160-bf16`

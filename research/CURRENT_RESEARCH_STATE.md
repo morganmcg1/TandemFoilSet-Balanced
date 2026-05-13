@@ -1,33 +1,36 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 00:40 (round-7b: closed #1587 edward n_hidden=160 (stale); reassigned #1688 edward n_hidden=160+compile. All 8 students active.)
+- **As of:** 2026-05-13 01:10 (round-8: merged #1633 Huber β=0.5 (val=64.07, -8.2%); closed #1560 T_max=36 (lever characterized, 0.23 MAE below noise floor); assigned #1700 thorfinn β=0.25+L1 sweep, #1701 alphonse batch=8. New baseline 64.07.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
   `SENPAI_TIMEOUT_MINUTES=30` cap per training execution).
 
-## Round-5 research focus
+## Round-8 research focus
 
-We have now merged 3 stacked winners, establishing a strong baseline at
-val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
-1. **Compounding cheap orthogonal levers** on top of the compile baseline.
-2. **Testing capacity arms** now that compile makes 36 epochs available.
-3. **Data/sampler side** (nezuko, PR #1619) targeting val_single_in_dist.
+4 merged winners → baseline 64.07 (from 110.76 at round-1 start, -42%). Primary focus:
+1. **Loss shape sweep** (β=0.25 / L1) — monotone signal confirmed, next step obvious.
+2. **Sampler compound** on compile baseline (nezuko rebase) — lever confirmed (-10.7% on val_single_in_dist).
+3. **Optimizer and regularization** (fern β2=0.95, askeladd grad-clip, tanjiro EMA, frieren warmup) — orthogonal axes.
+4. **Capacity** (edward n_hidden=160+compile) — width untested in compile era.
+5. **Batch size** (alphonse batch=8) — unexplored in compile era.
 
 ## Fleet status
 
 ### Merged winners
 | PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |---|---|---|---|---|---|
-| #1568 ✓ | charliepai2g48h5-thorfinn | torch.compile(dynamic=True) + bf16 AMP | **69.83** | **61.87** | Epoch 36 of 36; still improving; -30.9% vs #1532; 2× throughput |
+| #1633 ✓ | charliepai2g48h5-thorfinn | Huber β=0.5 (sharper loss) | **64.07** | **55.50** | Epoch 37 of 37; still descending; -8.2% vs #1568; wins all 4 splits |
+| #1568 ✓ | charliepai2g48h5-thorfinn | torch.compile(dynamic=True) + bf16 AMP | 69.83 | 61.87 | Epoch 36 of 36; still improving; -30.9% vs #1532; 2× throughput |
 | #1532 ✓ | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN fix | 101.12 | 91.50 | Epoch 17 of 19; -8.7% vs #1444 |
 | #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | 110.76 | NaN (bug) | Prior baseline |
 
-**Current baseline: val_avg/mae_surf_p = 69.8316, test_avg/mae_surf_p = 61.8652 (PR #1568)**
+**Current baseline: val_avg/mae_surf_p = 64.0705, test_avg/mae_surf_p = 55.4961 (PR #1633)**
 
-> Current advisor branch has: Smooth-L1 (β=1.0) + bf16 AMP + torch.compile(dynamic=True)
-> + scoring-NaN workaround. All new PRs inherit these. Epoch budget at 30-min cap: **~36 epochs
+> Current advisor branch has: Smooth-L1 (β=0.5) + bf16 AMP + torch.compile(dynamic=True)
+> + scoring-NaN workaround. All new PRs inherit these. Epoch budget at 30-min cap: **~37 epochs
 > at ~49.5 s/epoch**. Peak GPU memory: ~24 GB (abundant headroom on 96 GB).
+> **Key signal:** β monotone decreasing — β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07). Sweep continues toward β=0.25 / L1.
 
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
@@ -44,23 +47,27 @@ val_avg/mae_surf_p=69.83 (from 110.76 at round-1 start). The focus shifts to:
 | #1535 ✗ | charliepai2g48h5-tanjiro | EMA weights eval decay=0.999 (stale, no commits) | — | Pod stalled before training; reassigned on compile baseline |
 | #1588 ✗ | charliepai2g48h5-fern | `n_layers` 5 → 6 + bf16 | 111.058 | +9.83% vs bf16 baseline; depth lever ruled out (surface regressed more than volume) |
 | #1587 ✗ | charliepai2g48h5-edward | `n_hidden` 128 → 160 + bf16 (stale, no commits) | — | Pod stalled; reassigned on compile baseline as #1688 |
+| #1560 ✗ | charliepai2g48h5-alphonse | T_max=36 cosine (re-run on compile) | 69.598 | Marginal (+0.23 MAE vs 69.83 compile baseline); lever characterized — gap closes as epoch budget grows. T_max=36 no longer beats new 64.07 baseline |
 
 ### In-flight (WIP)
 | PR | Student | Hypothesis | Theme |
 |---|---|---|---|
 | #1619 | charliepai2g48h5-nezuko | RaceCar single sampler boost 2× on compile baseline (rebase) | Data/sampler |
-| #1560 | charliepai2g48h5-alphonse | T_max=36 cosine matched to compile budget (re-run) | Schedule × compile |
-| #1633 | charliepai2g48h5-thorfinn | Huber β sweep (β=0.5 and β=2.0) | Loss shape |
+| #1700 | charliepai2g48h5-thorfinn | Huber β=0.25 + pure L1 sweep (continue from β=0.5 win) | Loss shape |
+| #1701 | charliepai2g48h5-alphonse | batch_size 4 → 8 on compile baseline (retest from #1439) | Training config |
 | #1652 | charliepai2g48h5-frieren | Step-based linear warmup (500 steps) + cosine | Schedule warmup |
 | #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 + per-epoch grad-norm logging | Optimization × diagnostic |
 | #1660 | charliepai2g48h5-tanjiro | EMA weights eval (decay=0.999) on compile baseline | Regularization |
 | #1688 | charliepai2g48h5-edward | `n_hidden` 128 → 160 + compile + bf16 | Width |
 | #1676 | charliepai2g48h5-fern | AdamW β2 0.999 → 0.95 (transformer fast-adapting recipe) | Optimizer |
 
-> **Note on #1560:** Alphonse's original T_max=18 result (90.32) proved the
-> schedule-completion mechanism clearly. PR sent back because (a) no code change was
-> made and (b) post-compile budget is now 36 epochs, making T_max=36 the correct value.
-> Student re-running with --epochs 36 on the updated advisor branch.
+> **Note on #1700:** Sweeping β downward from 0.5 (merged winner). β=0.25 narrows
+> the quadratic region to |e|<0.25, further L1-ifying the loss. Arm B tests pure L1.
+> Clear monotone signal: β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07).
+
+> **Note on #1701:** Retesting batch=8 from PR #1439 in compile era. At fp32, batch=8
+> hit ~340 s/epoch (5 epochs). At compile+bf16, batch=8 should give ~65-75 s/epoch
+> (~24-27 epochs). Quality vs. epoch-count trade-off.
 
 > **Note on #1688:** n_hidden=160+compile. Per-epoch cost ~65-75 s → ~24-27 epochs in
 > 30 min. Depth ruled out by #1413+#1588; width is the last untested capacity axis.
