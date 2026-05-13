@@ -9,6 +9,37 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 07:05 — PR #1959: thorfinn — AdamW beta2 0.999 → 0.99 (MERGED)
+
+**New best val and test. 7th consecutive compounding win: -2.98% val / -3.78% test.**
+
+- **val_avg/mae_surf_p:** 77.6444 (was 80.03) — **-2.98%**
+- **test_avg/mae_surf_p:** **68.2153** (was 70.89) — **-3.78%**
+- **W&B run:** `sek6yk3j`
+- **Epochs:** 18 in ~30 min (best epoch 18)
+
+Per-split test `mae_surf_p` (run `sek6yk3j`):
+
+| Split | test | vs prev baseline (#1863) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 74.6250 | 78.49 | **-4.93%** |
+| `geom_camber_rc` | 81.4950 | 84.21 | **-3.22%** |
+| `geom_camber_cruise` | 48.8635 | 50.12 | **-2.51%** |
+| `re_rand` | 67.8779 | 70.75 | **-4.06%** |
+
+Changes vs prior baseline (#1863):
+- `betas=(0.95, 0.99)` in AdamW (beta2 0.999 → 0.99). Under smooth_l1(β=0.25)'s lower-noise, MAE-like gradient regime, per-parameter gradient variance is more stable — the second-moment EMA can safely adapt 10× faster (~100 steps half-life vs ~1000) without the noise sensitivity that breaks aggressive beta2 under MSE. All 4 test splits improved, confirming genuine optimization improvement. PR #1738's beta2=0.95 under old MSE stack was too aggressive (+13%); beta2=0.99 under the current stack found the sweet spot.
+
+Stack: beta2=0.99 + smooth_l1(β=0.25) + beta1=0.95 + OneCycleLR + p_weight=2 + grad_clip=1.0 + bf16 + grad_accum=2.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/beta2-0.99" --wandb_group "willow-r2-optimizer"
+```
+(beta2=0.99 is now the default; betas=(0.95, 0.99) in train.py)
+
+---
+
 ## 2026-05-13 05:30 — PR #1863: tanjiro — smooth_l1 β 1.0 → 0.25 (MERGED)
 
 **New best val and test. 6th consecutive compounding win: -6.8% val / -4.8% test.**
@@ -220,7 +251,7 @@ Transolver from `train.py` at HEAD — includes bf16 (PR #1480), grad_accum=2 (#
 | `mlp_ratio` | 2 |
 | Schedule | `OneCycleLR(max_lr=2e-3, pct_start=0.1, anneal_strategy="cos")` |
 | Loss | `smooth_l1(β=1)` per-element, then `p_weight`-weighted, `vol_loss + 10.0 * surf_loss` |
-| Optimizer | AdamW (`betas=(0.95, 0.999)`, eps=1e-8) |
+| Optimizer | AdamW (`betas=(0.95, 0.99)`, eps=1e-8) |
 
 Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/baseline"`.
 
@@ -228,14 +259,15 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-**Best val (merged):** `val_avg/mae_surf_p` = **80.03** (PR #1863, tanjiro, run `ct6gh2ao`)
-**Best test (merged):** `test_avg/mae_surf_p` = **70.89** (same run)
+**Best val (merged):** `val_avg/mae_surf_p` = **77.6444** (PR #1959, thorfinn, run `sek6yk3j`)
+**Best test (merged):** `test_avg/mae_surf_p` = **68.2153** (same run)
 
 Prior merged baselines (for reference):
 
 | PR | What landed | val_avg | test_avg |
 |---|---|---|---|
-| #1863 (tanjiro) | smooth_l1(β=0.25) | **80.03** | **70.89** |
+| #1959 (thorfinn) | AdamW beta2=0.99 | **77.6444** | **68.2153** |
+| #1863 (tanjiro) | smooth_l1(β=0.25) | 80.03 | 70.89 |
 | #1867 (fern) | AdamW beta1=0.95 | 85.84 | 74.45 |
 | #1666 (tanjiro) | smooth_l1(β=1) loss | 88.06 | 78.46 |
 | #1655 (alphonse) | OneCycleLR max_lr=2e-3 | 97.07 | 85.71 |
@@ -244,11 +276,11 @@ Prior merged baselines (for reference):
 
 ## Notes for students
 
-- **Baseline as of PR #1863:** `val_avg/mae_surf_p = 80.03`, `test_avg/mae_surf_p = 70.89`.
+- **Baseline as of PR #1959:** `val_avg/mae_surf_p = 77.6444`, `test_avg/mae_surf_p = 68.2153`.
 - **cruise-NaN workaround is landed.** All runs produce finite `test_avg` — no per-PR code needed.
-- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **80.03** to be a winner.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **77.6444** to be a winner.
 - OneCycleLR is the default scheduler (max_lr=2e-3, pct_start=0.1, cosine anneal).
 - smooth_l1_loss(β=0.25) is the default per-element loss.
-- AdamW beta1=0.95 is now the default (betas=(0.95, 0.999), eps=1e-8).
+- AdamW `betas=(0.95, 0.99)`, eps=1e-8 is now the default.
 - Grad clip at max_norm=1.0 is in the training loop default.
 - Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
