@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-13 07:15 — PR #1985: [p-channel-weight-15] Sweep p_weight 5→15 — CLOSED
+
+- **Branch**: charliepai2g24h1-edward/p-channel-weight-15
+- **Hypothesis**: p_weight=5 won -2.11%; p still dominates error by ~70×; more gradient mass to p should improve further.
+- **Status**: CLOSED — regressed every split and every channel.
+
+| Metric | p_weight=15 | p_weight=5 (baseline #1614) | Δ |
+|--------|------------|----------------------------|---|
+| val_avg/mae_surf_p | 30.4444 | 29.2179 | **+4.20% (WORSE)** |
+| test_avg/mae_surf_p | 25.8211 | 25.6024 | +0.85% (worse) |
+
+**Per-split val:**
+
+| Split | p=15 | p=5 | Δ |
+|-------|------|-----|---|
+| single_in_dist | 30.60 | 28.56 | +7.14% |
+| geom_camber_rc | 44.45 | 42.69 | +4.12% |
+| geom_camber_cruise | 14.73 | 13.77 | +6.93% |
+| re_rand | 32.00 | 31.85 | +0.49% |
+
+**Critically: p itself regressed** — the per-element p Huber actually DROPPED on train (0.001575→0.001125, model fitted train-p harder) but val p got WORSE. Classic train/val divergence from over-aggressive single-channel weighting.
+
+**Programme conclusion**: p_weight=5 is at or above the optimum. The cross-channel coupling through the shared Transolver backbone is real and non-negotiable — over-amplifying p distorts shared features. Loss-weighting axis is CLOSED at p_weight=5.
+
+**Artifact**: `target/models/model-charliepai2g24h1-edward-p-channel-weight-15-20260513-061953/metrics.jsonl`
+
+---
+
 ## 2026-05-13 07:00 — PR #1966: [ema-beta-0p99-rampup] EMA β=0.99 + Karras rampup — SENT BACK FOR REBASE
 
 - **Branch**: charliepai2g24h1-frieren/ema-beta-0p99-rampup

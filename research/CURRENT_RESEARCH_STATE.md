@@ -45,6 +45,8 @@ p dominates error by ~70× even after 5× weighting (gradient mass ratio now ~7�
 3. Whether budget-aware training (EMA, OneCycleLR) stacks on top
 4. Whether loss-axis p_weight can go higher (p_weight=15)
 
+**Loss-weighting axis CLOSED**: p_weight=15 regressed +4.20% — over-amplification distorts shared backbone features. p_weight=5 is the optimum; no more p_weight sweeps.
+
 **In-flight experiments awaiting rebase results** (ran on old 29.8463 baseline):
 - #1963 tanjiro/coord-jitter-aug: -0.78% val / -1.51% test (borderline, rebase needed)
 - #1964 thorfinn/surf-weight-15: -0.74% val / -1.72% test (borderline, rebase needed)
@@ -60,8 +62,8 @@ p dominates error by ~70× even after 5× weighting (gradient mass ratio now ~7�
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; strong -2.6% on old baseline; needs rebase |
 | #1963 | tanjiro | `coord-jitter-aug` | WIP REBASE | **HIGH** | Coord jitter std=0.005; needs rebase onto 29.2179 |
 | #1964 | thorfinn | `surf-weight-15` | WIP REBASE | **HIGH** | surf=15 mild +; needs rebase onto 29.2179 |
-| #1985 | edward | `p-channel-weight-15` | WIP | **HIGH** | p_weight=5→15 sweep |
-| #2011 | fern | `film-re-attention` | NEW | **HIGH** | FiLM Re-cond inside PhysicsAttention slice logits |
+| #2032 | edward | `plateau-swa` | NEW | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure in #1933 |
+| #2011 | fern | `film-re-attention` | WIP | **HIGH** | FiLM Re-cond inside PhysicsAttention slice logits |
 | #1457 | askeladd | `surf-weight-50` | WIP | MEDIUM | surf_weight=50; baseline update sent (29.2179) |
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; baseline update sent (29.2179) |
 
@@ -97,13 +99,14 @@ All 8 students active.
 - **ema-weights v1** (#1704): dual-val overhead +5.9%
 - **ema-weights v2** (#1917): β=0.999 too high +2.9%
 - **rescale-head-2ch** (#1952): +4.63% on rebased stack; Ux channel load-bearing with p_weight=5
+- **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling prevents monotonic improvement. p_weight=5 is optimum.
 
 ---
 
 ## Potential Next Directions
 
 **After current in-flight experiments land**:
-- **p_weight sweep continuation**: if p_weight=15 wins, try p_weight=25 (approaching 70× error ratio)
+- **p_weight axis closed**: p_weight=15 regressed; p_weight=5 is the optimum; no further loss-weight sweeps
 - **Higher-LR plateau SWA (correct version)**: depends on OneCycleLR result first
 - **Multi-seed baseline validation**: 3 runs to firm up noise floor
 - **Karras post-hoc EMA**: average across multiple β values offline (zero training cost)
