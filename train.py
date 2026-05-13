@@ -379,7 +379,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
-    weight_decay: float = 1e-4
+    weight_decay: float = 2e-4
     batch_size: int = 2
     surf_weight: float = 5.0
     epochs: int = 50
