@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 02:35
+- **Date:** 2026-05-13 03:10
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -40,11 +40,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | alphonse | #1791 | lr=7e-4 (raise peak LR, keep T_max=30 hot-cosine shape) | LR magnitude | WIP | #1647 T_max=18 closed: aligned cosine starves LR at end; inverted angle = raise peak LR |
 | askeladd | #1841 | slice_num=48 — capacity-down on slice axis (compile-stack test) | Architecture / throughput | WIP | #1743 surf=5 closed (sweep bracketed); pivoted to capacity-down direction (slice axis). Complements frieren's n_layers=3 |
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | #1763 compile MERGED (new best val=71.44); val still descending at cap with T_max=30 starving LR |
-| fern | #1805 | Adaptive Huber β annealing (β=1.0 → β=0.5 over epochs 1-10) | Loss shape / schedule | WIP | β sweep bracketed (β=0.25 closed +9.3%); anneal β for best of both regimes |
+| fern | #1805 | Adaptive Huber β annealing (rebase+retest on compile stack) | Loss shape / schedule | WIP-REBASE | Pre-compile result was small win (val=84.46 vs 85.09, 3/4 splits); sent back for compile-stack retest |
 | frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
 | nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED; extend warmup to see if EMA catch-up gain scales |
 | tanjiro | #1784 | max_norm=10 (rebase+retest on compile stack) | Gradient stability | WIP-REBASE | Pre-compile result was clean win on all 4 splits (val=84.97 vs 85.92); sent back to retest on compile stack |
-| thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
+| thorfinn | #1858 | SGDR cosine warm restarts (T_0=10, T_mult=2) | LR schedule / exploration | WIP | #1783 Lookahead closed (competes with EMA); pivot to LR schedule exploration via periodic restarts |
 
 **Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 71.4371` (PR #1763 torch.compile, test=62.5927, W&B o6k5dj4g). PRs that only beat the pre-compile baseline (85.09) are outdated — the hypothesis must be retested ON TOP OF the compile stack to be meaningful.
 
@@ -62,7 +62,9 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 - **Dropout=0.1 then 0.05 on β=0.5 baseline** (#1629 v2/v3, thorfinn) — val=87.61 (p=0.1) then 87.91 (p=0.05); both +2% worse. Monotonicity violation (p=0.05 worse than p=0.1) rules out tuning. β=0.5 sharpens loss curvature in small-residual regime; per-step Bernoulli noise becomes coordinate-wise gradient corruption, not regularization. EMA half-life 1.85 ep insufficient to wash out.
 - **Gradient clipping max_norm=1.0 on β=0.5 baseline** (#1534 v2, tanjiro) — val=87.27 (+1.6% worse). 6375/6375 steps clipped (100%) at peak norm 140 → effectively normalized SGD (direction-only). Clean OOD-helps (camber_cruise/re_rand) / IID-hurts (in_dist/camber_rc) split — flatter loss-landscape traversal at IID cost. Different mechanism than originally hypothesized; new attempt with max_norm=10 (rare-spike safety net only).
 
-**Pattern**: 3 of 3 noise/regularization mechanisms (surf_weight=30, dropout, grad-clip 1.0) that helped or were neutral on the old MSE/Huber-β=1.0 stack now regress on the β=0.5 stack. Loss-shape sharpening from β=0.5 has tightened the optimization neighborhood; mechanisms that perturb gradient direction or per-step gradients interfere with the finer adjustment.
+- **Lookahead optimizer k=5, α=0.5** (#1783, thorfinn) — val=87.11 (+1.39% worse). All 4 splits regress. **Mechanism breakthrough**: Lookahead and EMA compete for the same trajectory-smoothing budget — they don't stack. Lookahead's *live* model at ep 17 was 7.7 MAE better than baseline live (smoothing works), but EMA−live gap collapsed from −10.5 to −1.6, so EMA-evaluated checkpoint regressed. EMA at 0.999 has saturated the trajectory-smoothing axis at this budget.
+
+**Pattern**: 4 of 4 noise/smoothing mechanisms (surf_weight=30, dropout, grad-clip 1.0, Lookahead) regress on the β=0.5+EMA stack. The β=0.5-sharpened landscape + EMA-smoothed eval has saturated the trajectory-smoothing axis. **Future smoothing/regularization knobs likely won't help**; gains must come from structural changes (architecture, LR schedule shape, capacity, data) — not from another layer of noise control.
 
 ### LR warmup
 - **Warmup 1 epoch** (#1672 v2, nezuko) — val=85.09 (−0.96% vs β=0.5 baseline). MERGED. All 4 splits improved; re_rand best (−1.41). Mechanism: post-warmup EMA catch-up phase compressed (epoch-4 EMA-live gap −26 MAE vs baseline). T_max confounder (~6% higher late LR) still present; 2-epoch warmup under test.

@@ -714,3 +714,57 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - Hypothesis: capacity-down on slice axis (slice_num 64 → 48) → 10-15% per-epoch speedup → ~33-35 epochs in budget; tests whether 64 was overparameterized on the slice axis.
 - Targets new compile-stack baseline (val=71.44, test=62.59).
 - Complements frieren's n_layers=3 (#1792, in flight) — covers the second dimension of the capacity-down matrix.
+
+## 2026-05-13 03:05 — PR #1805: fern adaptive Huber β anneal (review 1, sent back for compile-stack rebase)
+
+- Branch: `willowpai2g48h5-fern/beta-anneal-1p0-to-0p5`
+- W&B run: `h18izyoe` (17 epochs at pre-compile; pre-compile baseline 85.09)
+- Hypothesis: linear β anneal 1.0→0.5 over epochs 1–10, held 0.5 thereafter.
+
+| Metric | β-anneal (h18izyoe) | warmup baseline (1hn6ur4l) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | **84.4610** | 85.0926 | **−0.74%** |
+| `test_avg/mae_surf_p` | **75.0761** | 75.5171 | **−0.58%** |
+| `test/test_single_in_dist/mae_surf_p` | 85.86 | 87.10 | −1.42% |
+| `test/test_geom_camber_rc/mae_surf_p` | 84.36 | 84.58 | −0.26% |
+| `test/test_geom_camber_cruise/mae_surf_p` | 55.79 | 55.50 | +0.53% (only regression) |
+| `test/test_re_rand/mae_surf_p` | 74.30 | 74.90 | −0.80% |
+| EMA-vs-live gap at ep 10 (β anneal end) | −5.4 (sign flip) | n/a | mechanism confirmed |
+
+- **3 of 4 splits improve**, only camber_cruise (smallest absolute baseline error) +0.5% within noise.
+- **Schedule verified** via train/huber_beta per-epoch log (1.000 → 0.500 over ep 1–10, held 0.500 ep 11–17).
+- **Mechanism confirmed**: EMA-live gap flips negative exactly at the β=0.5 lock-in (ep 10). Pre-anneal phase keeps EMA lagging (large errors deep in linear region; β=1.0 quadratic provides gradient direction info). Post-anneal phase aligns with MAE metric.
+- **Decision: SEND BACK** for rebase + retest on compile stack (new baseline 71.44). The β-anneal range (ep 1-10) now sits in 1/3 of training instead of 60%, leaving more ep at β=0.5 (the MAE-aligned regime where the gain originates) — mechanism predicts at-least-equal or better effect on compile stack.
+
+## 2026-05-13 03:05 — PR #1783: thorfinn Lookahead k=5, α=0.5 (review 1, closed)
+
+- Branch: `willowpai2g48h5-thorfinn/lookahead-k5-alpha0p5`
+- W&B run: `hk7oqnbm` (17 epochs at pre-compile; pre-warmup baseline 85.92)
+- Hypothesis: Lookahead optimizer wraps AdamW (k=5 inner steps, α=0.5 slow-weight pull) — modifies training trajectory rather than per-step noise; complementary to EMA.
+
+| Metric | Lookahead (hk7oqnbm) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 87.1120 | 85.9197 | **+1.19 (+1.39%)** |
+| `test_avg/mae_surf_p` | 77.5381 | 76.5495 | +0.99 (+1.29%) |
+| `test/test_single_in_dist/mae_surf_p` | 88.81 | 88.03 | +0.88% |
+| `test/test_geom_camber_rc/mae_surf_p` | 87.05 | 85.46 | +1.85% |
+| `test/test_geom_camber_cruise/mae_surf_p` | 57.49 | 56.40 | +1.93% |
+| `test/test_re_rand/mae_surf_p` | 76.81 | 76.30 | +0.67% |
+| Live val_avg (ep 17) | **88.74** | 96.41 | −7.7 MAE (Lookahead smoothing live works) |
+| **EMA−live gap (ep 17)** | **−1.63** | **−10.49** | gap collapsed 85% |
+
+- **All 4 splits regress.** Lookahead's live model is 7.7 MAE better than baseline live, but EMA's smoothing budget collapses from −10.5 to −1.6 — meaning EMA had nothing left to add after Lookahead pre-smoothed the trajectory.
+- **Mechanism — Lookahead and EMA compete for trajectory-smoothing headroom, not stack:**
+  - EMA decay=0.999 averages ~1000 fast-weight steps at eval time → absorbed noise from a noisy training path.
+  - Lookahead α=0.5/k=5 averages adjacent fast/slow weights every 5 steps inside training → pre-smooths the trajectory.
+  - Once Lookahead absorbs the SGD-noise EMA was eating, EMA's contribution drops to near-zero. Net regression.
+  - Secondary cost: slow-weight pull *resets* fast weights to slow weights every 5 steps, slowing exploration during the 17-epoch budget. Per-epoch EMA val never crosses baseline EMA → not a "needs more epochs" failure.
+- **Pattern complete**: 4 of 4 "noise/smoothing knobs" (dropout 0.1, dropout 0.05, grad-clip 1.0, Lookahead k=5 α=0.5) regress on β=0.5+EMA stack. β=0.5-sharpened landscape + EMA-smoothed eval has saturated this axis.
+- **Decision: CLOSE.** Reassigning thorfinn to SGDR (cosine warm restarts) — different LR shape, tests exploration via periodic LR restarts.
+
+## 2026-05-13 03:10 — PR #1858: thorfinn assigned SGDR cosine warm restarts (T_0=10, T_mult=2)
+
+- Branch: `willowpai2g48h5-thorfinn/sgdr-t0-10-tmult-2`
+- Hypothesis: replace single-cycle cosine with `CosineAnnealingWarmRestarts(T_0=10, T_mult=2)` → cycle 1 = 10 ep, restart at ep 12, cycle 2 = 20 ep. LR jumps from ~0 back to 5e-4 at restart.
+- Mechanism: tests exploration via periodic LR restart, complementary to edward #1833 (longer single cycle) and alphonse #1791 (higher peak LR).
+- Targets compile-stack baseline 71.44.
