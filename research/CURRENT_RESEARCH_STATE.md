@@ -90,7 +90,7 @@
 
 | Student | PR | Hypothesis | Stack | Can beat baseline? |
 |---------|-----|------------|-----------|---|
-| alphonse | #2431 | **lr=1.5e-4 × slice_num=16 (compound)** | n_layers=3+slice_num=16 | **YES — highest EV** |
+| alphonse | #2471 | **lr=1.2e-4 × slice_num=16** (fine-grained LR probe above trough) | n_layers=3+slice_num=16 | **possible** |
 | askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | **possible winner** |
 | tanjiro | #2408 | slice_num=8 on n_layers=3+epochs=38 (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
 | fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | possible — LR axis at sub-optimal partition |
@@ -147,10 +147,17 @@
 - slice_num=8: tanjiro #2408 (in flight — expected capacity collapse)
 
 **LR axis state at slice_num=16 (ACTIVE):**
-- lr=5e-5 (thorfinn #2450, IN FLIGHT — lower bound; at slice_num=24 this lost +5.1%)
+- lr=5e-5 (thorfinn #2450, IN FLIGHT — expected undertrained)
+- lr=8e-5 (UNTESTED)
 - lr=1e-4 (BASELINE, val=35.548)
-- lr=1.5e-4 (alphonse #2431, IN FLIGHT — compound with slice_num=16)
-- lr=2e-4 (ceiling confirmed below 2e-4 from #2367)
+- lr=1.2e-4 (alphonse #2471, IN FLIGHT — fine-grained probe above trough)
+- lr=1.5e-4 (#2431 CLOSED, +7.3% val — partition-dependent LR ceiling confirmed)
+- lr=2e-4 (closed at slice_num=24, +4.4%)
+
+**KEY INSIGHT: LR optimum shifts down with slice_num:**
+- slice_num=24: lr=1.5e-4 beats 1e-4 (positive signal from #2353)
+- slice_num=16: lr=1e-4 beats 1.5e-4 (this confirmation from #2431)
+- Hypothesis: smaller partition → tighter per-slice budget → more conservative LR needed
 
 **LR axis at slice_num=24 FULLY BRACKETED (closed):**
 - lr=5e-5: +5.1% (frieren #2402) — cosine decays before convergence

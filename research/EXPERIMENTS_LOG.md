@@ -6,6 +6,24 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 17:15 — PR #2431 — CLOSED (lr=1.5e-4 × slice_num=16 loses; LR optimum is partition-dependent)
+
+**alphonse: lr=1.5e-4 × slice_num=16 on n_layers=3+epochs=36**
+- vs baseline (PR #2348 val=35.548): val=38.125 (**+7.3% LOSS**), test=32.330 (+6.5%)
+- Uniform regression: +4.6% to +11.4% across all 4 val splits — not a single-domain effect
+- best_epoch=31 (timeout truncation — per-epoch 58.9s actual vs 49.8s predicted, GPU contention likely)
+- Even extrapolating cosine tail: would need >2.5 val improvement in 5 more epochs — not plausible
+
+**CRITICAL INSIGHT: LR optimum is partition-dependent:**
+- slice_num=24: lr=1.5e-4 wins over 1e-4 (~−1.41%, #2353 signal)
+- slice_num=16: lr=1.5e-4 loses +7.3% vs 1e-4 (this PR)
+- Hypothesis: as slice_num decreases, per-slice representational budget shrinks → more conservative LR needed
+- fern #2409 (lr=1.5e-4 at slice_num=12) will confirm if signal is strictly partition-decreasing
+
+**Metric artifacts:** `models/model-lr-1p5e-4-slicenum16-nlayers3-20260513-163110/metrics.jsonl`
+
+---
+
 ## 2026-05-13 17:05 — PR #2402 — CLOSED (lr=5e-5 loses badly; LR axis bracketed at slice_num=24)
 
 **frieren: lr=5e-5 on n_layers=3+slice_num=24+epochs=33**
