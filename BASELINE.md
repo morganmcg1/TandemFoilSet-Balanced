@@ -1,5 +1,68 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~14:30 — PR #2228: epochs=30 on n_layers=3+slice_num=32 (tanjiro)
+
+**New best: `val_avg/mae_surf_p` = 38.270** (epoch 30/30, best_epoch=30 STILL DESCENDING, n_head=4, n_layers=3, slice_num=32, surf_weight=10)
+
+> Extension of PR #2107 from epochs=27 to epochs=30. Used 28.5 min (1.5 min margin to 30-min cap). 9th consecutive winning experiment with best_epoch=final. The epoch-budget mechanism remains the dominant lever.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 3 |
+| `n_head` | 4 (default) |
+| `slice_num` | 32 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=30 (=epochs) |
+| `epochs` | 30 (still improving at epoch 30! best_epoch=30) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 515,055 (~515K) |
+
+### Val metrics (best checkpoint, epoch 30)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 40.481 | 47.288 |
+| val_geom_camber_rc | 52.042 | 57.167 |
+| val_geom_camber_cruise | 20.785 | 23.171 |
+| val_re_rand | 39.772 | 41.180 |
+| **val_avg/mae_surf_p** | **38.270** | — |
+
+### Test metrics (best-val checkpoint, epoch 30)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| test_single_in_dist | 36.568 | 42.933 |
+| test_geom_camber_rc | 46.624 | 51.874 |
+| test_geom_camber_cruise | 16.956 | 19.680 |
+| test_re_rand | 29.734 | 33.014 |
+| **test_avg/mae_surf_p** | **32.470** | — |
+
+### Improvement vs PR #2107 baseline (39.143 val / 33.571 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 40.405 | 40.481 | +0.2% | 35.977 | 36.568 | +1.6% |
+| geom_camber_rc | 51.895 | 52.042 | +0.3% | 47.136 | 46.624 | −1.1% |
+| geom_camber_cruise | 22.756 | 20.785 | **−8.7%** | 19.101 | 16.956 | **−11.2%** |
+| re_rand | 41.517 | 39.772 | **−4.2%** | 32.070 | 29.734 | **−7.3%** |
+| **avg** | **39.143** | **38.270** | **−2.2% ✓** | **33.571** | **32.470** | **−3.3% ✓** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 30 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 32
+```
+
+**Metric artifacts:** `models/model-epochs-30-nlayers3-slicenum32-20260513-115035/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~14:00 — PR #2107: n_layers=3 + slice_num=32 + T_max=27 (tanjiro)
 
 **New best: `val_avg/mae_surf_p` = 39.143** (epoch 27/27, best_epoch=27 STILL DESCENDING, n_head=4, n_layers=3, slice_num=32, surf_weight=10)
