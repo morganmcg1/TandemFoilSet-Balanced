@@ -323,6 +323,8 @@ def write_experiment_summary(
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
+        "optimizer": "SGD(lr=2e-3, momentum=0.9, nesterov=True)",
+        "optimizer_lr": 2e-3,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
@@ -471,8 +473,9 @@ def amp_ctx_factory():
 
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
+print(f"Optimizer: SGD(lr=2e-3, momentum=0.9, nesterov=True, weight_decay={cfg.weight_decay}) — optimizer-family swap from AdamW")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.SGD(model.parameters(), lr=2e-3, momentum=0.9, nesterov=True, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -487,7 +490,7 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     milestones=[warmup_epochs],
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * 2e-3:.6f} — SGD lr=2e-3, warmup start_factor=0.1)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
