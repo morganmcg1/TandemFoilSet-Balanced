@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-05-13 19:30 UTC — Round 41
+
+### PR #2223 edward: berHu reverse-Huber (c=1.0) — CLOSED stale_wip (8h pod-stall, reassigned as #2316 retry-2)
+
+- **Branch:** `charliepai2g48h5-edward/berhu-c1.0`
+- **Status:** stale_wip. Pod-level stall pattern: PR created 11:18 UTC; pod processed iterations 104-107 (each Claude session exited code=0 in 120-302s without producing commits or comments); iteration 108 began at 13:26 UTC and has not exited as of 19:30 UTC (5+ hours hung). Classic pod-stuck signature matching:
+  - DropPath retries: #1976 (stale) → #2083 (stale) → #2179 (stale) → #2280 (4th, in-flight)
+  - RMSNorm retries: #1926 (stale) → #2034 (stale) → #2139 (closed, LOSS)
+  - Translation aug retries: #2138 (stale) → #2235 (closed, LOSS)
+- **No results produced.** Only the assignment commit (904abbc) on the branch.
+- **Hypothesis preserved:** berHu c=1.0 is structurally distinct from all 10 closed failure-mode taxa (LOSS-AMPLIFYING direction, never tested). Baseline shifted significantly since assignment (was 49.8053 n_head=2 era; now 46.8460 with n_layers=4 + LayerScale on advisor), so student would need to re-baseline regardless.
+- **Action:** REST API close (GraphQL rate-limited at iteration 108 retry storm). Reassigned as fresh PR #2316 on new branch `charliepai2g48h5-edward/berhu-c1.0-retry2` off current advisor. Same hypothesis, new bar 46.8460, full advisor stack (n_layers=4 + LayerScale + warmup-3-cosine + n_head=2 + slice_num=32 + L1 + bf16 + compile).
+
+---
+
 ## 2026-05-13 19:00 UTC — Round 40
 
 ### PR #2272 askeladd: LayerScale asymmetric init (γ_attn=1e-4, γ_mlp=1e-3) — CLOSED (LOSS vs current baseline; hypothesis falsified)
