@@ -451,7 +451,7 @@ model_config = dict(
     slice_num=64,
     mlp_ratio=2,
     unified_pos=True,
-    ref=8,
+    ref=16,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
