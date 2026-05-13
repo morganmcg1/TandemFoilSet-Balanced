@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:38
+- **Date:** 2026-05-13 18:55
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,24 +9,26 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 35.548** (n_head=4 + n_layers=3 + slice_num=16 + epochs=36, PR #2348)
-**`test_avg/mae_surf_p` = 30.345**
+**`val_avg/mae_surf_p` = 35.256** (n_layers=2 + slice_num=16 + epochs=46, PR #2468)
+**`test_avg/mae_surf_p` = 30.245**
 
-> **CRITICAL FINDING: Partition sweep is NON-MONOTONE.** slice_num=16 beats slice_num=12 (val 35.969 → 35.548). Per-epoch cost flattens below slice_num=16 (both ~50s/epoch), so going below 16 loses capacity without gaining budget. The partition sweep floor appears to be at or near 16, not at the smallest possible value.
+> **DEPTH-DOWN + EPOCH-UP mechanism continues working.** n_layers=2 cut per-epoch from ~50s → ~35s (−30%), freeing 10 more cosine epochs. OOD splits drove the win; single_in_dist REGRESSED (+1.21) — capacity-regularization tradeoff at n_layers=2. best_epoch=46 STILL DESCENDING at ~−0.1/epoch.
 
-> **Config note:** `train.py` default is `n_head=4` (line 392). All runs that did NOT pass `--n_head` explicitly have been running with n_head=4.
+> **NEW EPOCH BUDGET CEILING: 35s/epoch × ~51 epochs = ~29.9 min. Frieren #2523 pushing to epochs=50.**
+
+> **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 35.263 | 32.248 |
-| geom_camber_rc | **49.105** | 44.663 |
-| geom_camber_cruise | 19.392 | 16.188 |
-| re_rand | 38.431 | 28.282 |
-| **avg** | **35.548** | **30.345** |
+| single_in_dist | 36.476 | 33.035 |
+| geom_camber_rc | **48.297** | 44.333 |
+| geom_camber_cruise | 18.326 | 15.496 |
+| re_rand | 37.923 | 28.116 |
+| **avg** | **35.256** | **30.245** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 16`
+**Reproduce:** `cd target/ && python train.py --epochs 46 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 2 --slice_num 16`
 
-**best_epoch=35/36** (slight flattening at final epoch vs always-final at previous checkpoints). ~49.8s/epoch, 29.89 min total.
+**~35.1s/epoch × 46 epochs = 26.9 min total. 361K params. Peak memory 13.49 GB.**
 
 ## What we've learned
 
@@ -51,6 +53,8 @@
 18. **epochs=30 on n_layers=3+slice_num=32**: −2.20% val (PR #2228) ← best_epoch=30 STILL DESCENDING
 19. **slice_num=24 + epochs=33 on n_layers=3**: −2.36% val / −3.38% test (PR #2229) ← ~54s/epoch, 33 epochs, STILL DESCENDING
 20. **slice_num=12 + epochs=36 on n_layers=3**: −3.74% val / −3.53% test (PR #2351) ← ~50s/epoch, 36 epochs, HIT CAP STILL DESCENDING
+21. **slice_num=16 + epochs=36 on n_layers=3**: −1.17% val (PR #2348) ← partition non-monotone; slice_num=16 beats 12
+22. **n_layers=2 + slice_num=16 + epochs=46**: −0.82% val / −0.33% test (PR #2468) ← depth-down+epoch-up; ~35s/epoch×46 epochs; OOD gains offset single_in_dist regression
 
 ### Current stack (defaults + CLI overrides)
 - L1 (MAE) loss in normalized space, **surf_weight=10**
@@ -84,25 +88,25 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 29+)
+## Active experiments (Round 30+)
 
-**Current Baseline: val=35.548 (PR #2348), test=30.345**
+**Current Baseline: val=35.256 (PR #2468 n_layers=2+epochs=46), test=30.245**
 
-| Student | PR | Hypothesis | Stack | Can beat baseline? |
+| Student | PR | Hypothesis | Stack | vs 35.256 |
 |---------|-----|------------|-----------|---|
-| alphonse | #2471 | **lr=1.2e-4 × slice_num=16** (fine-grained LR probe — between 1e-4 and 1.5e-4) | n_layers=3+slice_num=16 | **possible** |
-| askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | informative — expected slight loss |
-| edward | #2478 | **n_layers=4+slice_num=16+epochs=27** (depth-up counterpart to frieren depth-down) | n_layers=4+slice_num=16 | possible |
-| thorfinn | #2450 | **lr=5e-5 on n_layers=3+slice_num=16+epochs=36** (lower LR bound) | n_layers=3+slice_num=16 | possible — completes LR axis |
-| frieren | #2468 | **n_layers=2+slice_num=16+epochs=46** (depth reduction → more cosine budget) | n_layers=2+slice_num=16 | **YES — high EV via epoch-budget mechanism** |
-| nezuko | #2479 | **LayerScale on n_layers=3+slice_num=16+epochs=36** (residual branch scaling) | n_layers=3+slice_num=16 | possible — fresh architecture axis |
-| fern | #2492 | **surf_weight=8 on n_layers=3+slice_num=16+epochs=36** (loss-weight axis at new optimum) | n_layers=3+slice_num=16 | **possible** — sw axis not tested at slice_num=16 |
-| tanjiro | #2493 | **weight_decay=5e-5 on n_layers=3+slice_num=16+epochs=36** (WD axis at new optimum) | n_layers=3+slice_num=16 | possible — WD only tested at slice_num=24 |
+| alphonse | #2471 | lr=1.2e-4 × n_layers=3+slice_num=16 | OLD STACK | likely NO (old stack) |
+| edward | #2478 | n_layers=4+slice_num=16+epochs=27 | OLD STACK | likely NO (old stack) |
+| thorfinn | #2450 | lr=5e-5 × n_layers=3+slice_num=16 | OLD STACK | unlikely (old stack) |
+| nezuko | #2479 | LayerScale × n_layers=3+slice_num=16 | OLD STACK | possible if large arch gain |
+| fern | #2492 | surf_weight=8 × n_layers=3+slice_num=16 | OLD STACK | possible if large sw gain |
+| tanjiro | #2493 | weight_decay=5e-5 × n_layers=3+slice_num=16 | OLD STACK | possible if large wd gain |
+| frieren | **#2523** | **n_layers=2+slice_num=16+epochs=50** (push winner +4 epochs) | **NEW STACK** | **HIGH EV** — 3.1 min margin |
+| askeladd | **#2525** | **lr=1.5e-4 × n_layers=2+slice_num=16+epochs=46** (LR at new depth) | **NEW STACK** | possible |
 
-**Merged:** #2351 (tanjiro slice_num=12, val=35.969), #2348 (alphonse slice_num=16, val=35.548)
-**Closed this round:** #2447 (edward slice14 +2.6%), #2404 (nezuko n_head=1 tied), #2431 (alphonse lr=1.5e-4×slice16 +7.3%), #2402 (frieren lr=5e-5@slice24 +5.1%), #2417 (thorfinn n_head=2@slice12 +3.4%), #2375 (askeladd slice20), #2383 (edward n_head=2@slice24), #2409 (fern lr=1.5e-4@slice12, val=35.688 loses vs 35.548), #2408 (tanjiro slice8 stale)
+**Merged:** #2348 (val=35.548), #2468 (val=35.256 NEW BEST)
+**Closed this round:** #2451 (askeladd slice18 +4.3%), #2447, #2404, #2431, #2402, #2417, #2375, #2383, #2409, #2408
 
-**Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → 35.969 → **35.548** (−11.5% total from round start)
+**Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → 35.969 → 35.548 → **35.256** (−12.2% total from round start)
 
 **Variance note (from #2274 student diagnosis):** Inter-run variance on identical configs is ~1.7 val units. Recent ~0.5 val improvements are at or near this noise floor — single-run signals require corroboration.
 

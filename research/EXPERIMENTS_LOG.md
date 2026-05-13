@@ -6,6 +6,54 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 18:50 — PR #2468 — MERGED NEW BASELINE (n_layers=2+epochs=46 val=35.256, −0.82%)
+
+**frieren: n_layers=2+slice_num=16+epochs=46 (depth-down + epoch-up mechanism)**
+- val_avg/mae_surf_p = **35.256** vs baseline 35.548 (**−0.292, −0.82% NEW BEST**)
+- test_avg/mae_surf_p = **30.245** vs baseline 30.345 (−0.100, −0.33%)
+- best_epoch = 46/46 STILL DESCENDING — slope ~−0.2/epoch over last 5 epochs, ~−0.1 at final epoch
+- Per-epoch wall-clock: 35.08s (vs 50s at n_layers=3 — **30% cost reduction from depth drop**)
+- Epochs: 46 (vs 36 at n_layers=3 — **10 extra cosine epochs from budget savings**)
+- Total: 26.9 min (3.1 min margin under 30-min cap)
+- Params: 361,131 (vs 515K, −30%)
+- Peak memory: 13.49 GB
+
+| Split | val mae_surf_p | test mae_surf_p | val Δ |
+|---|---|---|---|
+| single_in_dist | 36.476 | 33.035 | **+1.213** (REGRESSION) |
+| geom_camber_rc | 48.297 | 44.333 | −0.808 |
+| geom_camber_cruise | 18.326 | 15.496 | −1.066 |
+| re_rand | 37.923 | 28.116 | −0.508 |
+| **avg** | **35.256** | **30.245** | **−0.292** |
+
+**KEY: OOD splits drove the win. single_in_dist regressed (+1.21) — mild capacity loss at n_layers=2 for in-dist data. Depth-budget axis not exhausted: 35s/epoch×50 epochs = 29.2 min, still within cap.**
+
+**Metric artifacts:** `models/model-charliepai2g48h3-frieren-nlayers2-slicenum16-epochs46-20260513-175423/metrics.jsonl`
+
+---
+
+## 2026-05-13 18:50 — PR #2451 — CLOSED (slice_num=18 +4.3% LOSS; partition axis fully closed)
+
+**askeladd: slice_num=18 on n_layers=3+epochs=36**
+- val=37.063 vs baseline 35.548 (+1.515, **+4.3% LOSS**)
+- test=30.983 vs 30.345 (+0.638)
+- Partition sweep non-monotone confirmed: 32→24→20→18(bump)→16(minimum)→12(worse)
+- slice_num=16 is a sharp, narrow local minimum — not floor of a broad valley
+
+**PARTITION AXIS FULLY CLOSED.** Complete picture:
+| slice_num | val | Δ vs 35.548 |
+|---|---|---|
+| 32 | 39.143 | +10.1% |
+| 24 | 37.366 | +5.1% |
+| 20 | 36.854 | +3.7% |
+| 18 | 37.063 | +4.3% |
+| **16** | **35.548** | **BASELINE** |
+| 12 | 35.969 | +1.2% |
+
+**Metric artifacts:** `models/model-slicenum18-nlayers3-20260513-173410/metrics.jsonl`
+
+---
+
 ## 2026-05-13 18:00 — PR #2408 — CLOSED (stale; tanjiro slice_num=8 never produced output)
 
 **tanjiro: slice_num=8 on n_layers=3+epochs=38**
