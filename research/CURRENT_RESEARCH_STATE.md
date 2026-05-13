@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 03:05 (T_max=18 merged val=84.67 new best; 10 effective merges; 8 students active)
+- **As of:** 2026-05-13 04:00 (T_max=18 merged val=84.67 new best; 10 effective merges; 8 students active; max_norm and surf_weight axes fully bracketed)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -26,10 +26,12 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 
 **Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=18, eta_min=0.0), AdamW, loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
 
-## Confirmed null results (closed this round)
+## Confirmed null results / closed axes
 
-- **max_norm=0.5** (frieren #1759): +0.43 val regression on surf_weight=5 HEAD. Under normalized gradient descent, tighter clipping adds no incremental regularization beyond max_norm=1.0 when norms are already 2-5. Dead end on max_norm axis below 1.0.
-- **log-cosh loss** (fern #1635): +0.61 val regression on surf_weight=5 HEAD. Grad-clip's global norm normalization removes the tail-shape benefit of log-cosh vs Huber — both reduce to MSE near zero. Loss-shape axis confirmed closed under this recipe.
+- **max_norm axis CLOSED**: 0.5→91.01, **1.0→84.67** (optimum), 3.0→86.30. Fully normalized gradient descent (all steps clipped) is optimal. Selective or tighter clipping both regress.
+- **surf_weight axis CLOSED**: 3→90.88, **5→90.58/84.67** (optimum), 10→96.78, 20→127.94. 5.0 confirmed optimum.
+- **log-cosh loss** (fern #1635): +0.61 val regression. Grad-clip removes tail-shape benefit — loss shape axis closed.
+- **log-cosh**, **max_norm=0.5**, **max_norm=3.0**, **surf_weight=3** all confirmed dead ends this round.
 
 ## Themes
 
@@ -38,11 +40,11 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 3. **LR schedule alignment — MERGED.** T_max=18 (nezuko #1695) — val=84.67 −6.5%. Best achievable epoch count, cosine reaches minimum at end of training.
 4. **EMA weight averaging.** Askeladd #1540 rebasing onto current HEAD. EMA+current recipe expected sub-80.
 5. **Depth / capacity.** Edward #1730 (layers-6) rerunning on current HEAD. Alphonse #1834 (layers-7) in flight.
-6. **Selective gradient clipping.** Frieren #1851 (max_norm=3.0) — probe whether looser clipping (some steps unclipped) helps under low-gradient regime.
-7. **Attention inductive bias.** Nezuko #1853 (n_head=8) — zero-param doubling of attention heads.
-8. **Schedule floor.** Fern #1855 (eta_min=5e-5) — non-zero LR floor to activate final-epoch steps.
-9. **LR schedule.** Thorfinn #1812 (lr-warmup-1ep) — notified of new T_max=18 baseline; cosine portion should target T_max=17.
-10. **Surface weight sweep.** Tanjiro #1832 (surf_weight=3) — notified of new baseline (84.67).
+6. **AdamW β2 tuning.** Frieren #1886 (β2=0.999→0.98) — faster variance adaptation, Transformer paper recommendation.
+7. **AdamW β1 tuning.** Tanjiro #1888 (β1=0.9→0.95) — smoother momentum for late-training stability.
+8. **Attention inductive bias.** Nezuko #1853 (n_head=8) — zero-param doubling of attention heads.
+9. **Schedule floor.** Fern #1855 (eta_min=5e-5) — non-zero LR floor to activate final-epoch steps.
+10. **LR schedule.** Thorfinn #1812 (lr-warmup-1ep) — 1-epoch warmup + cosine.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
@@ -66,16 +68,17 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **PR #1834 — `layers-7` (alphonse)** — **WIP** — Depth probe n_layers 5→7. Notified of new baseline (84.67).
 
 ### New assignments (fresh hypotheses on current HEAD)
-- **PR #1851 — `max-norm-3-selective` (frieren)** — **WIP (new)** — max_norm=3.0 selective clipping on current recipe
-- **PR #1853 — `n-head-8` (nezuko)** — **WIP (new)** — n_head=4→8 zero-param inductive bias probe
-- **PR #1855 — `eta-min-5e-5` (fern)** — **WIP (new)** — eta_min=0.0→5e-5 non-zero cosine LR floor
+- **PR #1886 — `adamw-beta2-0.98` (frieren)** — **WIP (new)** — β2=0.999→0.98 faster variance adaptation
+- **PR #1888 — `adamw-beta1-0.95` (tanjiro)** — **WIP (new)** — β1=0.9→0.95 smoother momentum
+- **PR #1853 — `n-head-8` (nezuko)** — **WIP** — n_head=4→8 zero-param inductive bias probe
+- **PR #1855 — `eta-min-5e-5` (fern)** — **WIP** — eta_min=0.0→5e-5 non-zero cosine LR floor
 
 ### In flight on current HEAD
-- **PR #1812 — `lr-warmup-1ep` (thorfinn)** — **WIP** — 1-epoch warmup + cosine; notified T_max should be 17 for cosine portion
-- **PR #1832 — `surf-weight-3` (tanjiro)** — **WIP** — surf_weight=5→3; notified of new baseline (84.67)
+- **PR #1812 — `lr-warmup-1ep` (thorfinn)** — **WIP** — 1-epoch warmup + cosine (T_max=17 recommended)
 
 ## Closed / dead ends
-- max_norm=0.5 (#1759): regression vs surf_weight=5 HEAD — normalized steps already optimal at max_norm=1.0
+- max_norm axis CLOSED: 0.5 (+0.43), **1.0 (optimum)**, 3.0 (+1.63) — fully bracketed
+- surf_weight axis CLOSED: 3 (+0.30), **5 (optimum)**, 10 (+6.20), 20 (+37) — fully bracketed  
 - log-cosh (#1635): regression vs surf_weight=5 HEAD — grad-clip removes tail-shape benefit
 - wd5e-4 (#1394): regression
 - surf_weight=20 (#1570): regression; rolled back

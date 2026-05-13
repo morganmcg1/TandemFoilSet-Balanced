@@ -2,6 +2,61 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:55 — PR #1851: [max-norm-3-selective] max_norm=1.0→3.0 — **CLOSED (regression; max_norm axis bracketed)**
+- Student branch: `charliepai2g48h4-frieren/max-norm-3-selective`
+- Hypothesis: Under surf_weight=5, pre-clip grad norms are 2-5 (mean). max_norm=3.0 creates selective clipping — steps with norm < 3 pass through unclipped, only outliers (norm > 3) are capped.
+
+| Metric | T_max=18 baseline (#1695) | max_norm=3.0 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 84.67 | 86.30 | **+1.63 (regression)** |
+| test_avg/mae_surf_p | 74.94 | 76.82 | +1.88 |
+| val single_in_dist | 96.25 | 94.50 | −1.75 (improved) |
+| val geom_camber_rc | 93.25 | 95.22 | +1.97 |
+| val geom_camber_cruise | 65.39 | 69.35 | +3.96 |
+| val re_rand | 83.78 | 86.12 | +2.34 |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-max-norm-3-selective-20260513-030937/metrics.jsonl`
+- Pre-clip grad norm trajectory: epochs 1-7 clipped (norm 3.5-6), epochs 8-18 mostly unclipped (norm 2.2-2.9).
+
+**Analysis:** Selective clipping degraded OOD splits (geom_camber_rc, cruise, re_rand). The mechanistic story: fully-normalized gradient descent (max_norm=1.0, all steps clipped) enforces consistent step magnitude throughout training. When late-epoch gradients fall below max_norm=3.0 (norm 2-3, unclipped), the optimizer switches to raw AdamW steps — larger effective step sizes in late training when the schedule wants small LR. This disrupts the coordinated small-step optimization in the LR-decay phase.
+
+**max_norm axis fully bracketed:**
+- max_norm=0.5: val=91.01 (regression +0.43 vs current best at the time)
+- max_norm=1.0: val=84.67 (OPTIMUM)
+- max_norm=3.0: val=86.30 (regression +1.63)
+
+Closed. Frieren reassigned to AdamW β2=0.98 (#1886).
+
+---
+
+## 2026-05-13 03:55 — PR #1832: [surf-weight-3] surf_weight=5→3 — **CLOSED (regression; surf_weight axis closed)**
+- Student branch: `charliepai2g48h4-tanjiro/surf-weight-3`
+- Hypothesis: Can surf_weight < 5 further balance surface-vs-volume residuals under grad-clip?
+
+| Metric | surf_weight=5 (T_max=15 base) | surf_weight=3 (this run, T_max=15) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 90.58 | 90.88 | **+0.30 (regression)** |
+| test_avg/mae_surf_p | 80.00 | 81.38 | +1.38 |
+| val single_in_dist | 106.31 | 102.46 | −3.85 (improved) |
+| val geom_camber_rc | 98.84 | 99.74 | +0.90 |
+| val geom_camber_cruise | 69.35 | 71.21 | +1.86 |
+| val re_rand | 87.82 | 90.11 | +2.29 |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-surf-weight-3-20260513-030933/metrics.jsonl`
+- Run context: on T_max=15 base (before T_max=18 merge) — valid direct comparison against surf_weight=5 at same schedule.
+
+**Analysis:** Going lower than surf_weight=5 over-corrects. Under grad-clip, surf_weight=5 balances surface-vs-volume contributions optimally. At surf_weight=3, surface gradients are under-weighted — the model prioritizes volume accuracy at the expense of surface pressure, which is the primary metric. single_in_dist slightly improves (surface pressure less dominant helps the easiest split) but the OOD splits regress.
+
+**surf_weight axis fully closed:**
+- surf_weight=3: 90.88 (regression)
+- surf_weight=5: 90.58 (OPTIMUM on T_max=15; 84.67 on T_max=18)
+- surf_weight=10: 96.78 (regression)
+- surf_weight=20: 127.94 (regression)
+
+Closed. Tanjiro reassigned to AdamW β1=0.95 (#1888).
+
+---
+
 ## 2026-05-13 03:00 — PR #1695: [tmax-18] T_max=15→18 rerun on surf_weight=5 HEAD — **MERGED (NEW BEST: val=84.67)**
 - Student branch: `charliepai2g48h4-nezuko/tmax-18`
 - Hypothesis: The 30-min wall-clock cap allows ~18 epochs. Setting T_max=18 (vs 15) aligns the cosine schedule minimum with the true end of training, preventing the LR from rising back up in a second cycle at epoch 16–18.
