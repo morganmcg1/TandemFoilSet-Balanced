@@ -96,7 +96,7 @@
 | fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | possible — LR axis at sub-optimal partition |
 | edward | #2447 | **slice_num=14 on n_layers=3+epochs=36** (partition neighborhood probe) | n_layers=3 | **possible winner** |
 | thorfinn | #2450 | **lr=5e-5 on n_layers=3+slice_num=16+epochs=36** (lower LR bound) | n_layers=3+slice_num=16 | possible — completes LR axis |
-| frieren | #2402 | lr=5e-5 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
+| frieren | #2468 | **n_layers=2+slice_num=16+epochs=46** (depth reduction → more cosine budget) | n_layers=2+slice_num=16 | **YES — high EV via epoch-budget mechanism** |
 | nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
 
 **Merged:** #2351 (tanjiro slice_num=12, val=35.969), #2348 (alphonse slice_num=16, val=35.548)
@@ -147,10 +147,15 @@
 - slice_num=8: tanjiro #2408 (in flight — expected capacity collapse)
 
 **LR axis state at slice_num=16 (ACTIVE):**
-- lr=5e-5 (thorfinn #2450, IN FLIGHT — lower bound)
+- lr=5e-5 (thorfinn #2450, IN FLIGHT — lower bound; at slice_num=24 this lost +5.1%)
 - lr=1e-4 (BASELINE, val=35.548)
 - lr=1.5e-4 (alphonse #2431, IN FLIGHT — compound with slice_num=16)
 - lr=2e-4 (ceiling confirmed below 2e-4 from #2367)
+
+**LR axis at slice_num=24 FULLY BRACKETED (closed):**
+- lr=5e-5: +5.1% (frieren #2402) — cosine decays before convergence
+- lr=1e-4: TROUGH
+- lr=2e-4: +4.4% (#2367)
 
 **LR axis state at slice_num=12 (informative only):**
 - lr=1.5e-4 (fern #2409, IN FLIGHT)

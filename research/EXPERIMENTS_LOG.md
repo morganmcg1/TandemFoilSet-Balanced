@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 17:05 — PR #2402 — CLOSED (lr=5e-5 loses badly; LR axis bracketed at slice_num=24)
+
+**frieren: lr=5e-5 on n_layers=3+slice_num=24+epochs=33**
+- vs old baseline (PR #2229 val=37.366): val=39.277 (**+5.1% LOSS**), test=33.643 (+7.2%)
+- Cannot beat current baseline 35.548 at all — clear loser
+- **Root cause:** cosine schedule decays to zero before model converges. Val still monotonically descending at epoch 33 (ep30→33: 39.98→39.69→39.33→39.28). Model undertrained, not over-regularized.
+- single_in_dist worst hit (+11.3% val) — in-domain undertraining signature
+- best_epoch=33/33 (cap), param count 514,263, 53.5s/epoch
+
+**LR axis fully bracketed at slice_num=24:**
+| lr | val_avg | Δ |
+|---|---|---|
+| 5e-5 (this) | 39.28 | +5.1% |
+| 1e-4 (baseline) | 37.37 | — |
+| 2e-4 (#2367) | 39.03 | +4.4% |
+
+Trough at lr=1e-4 confirmed for fixed 33-epoch cosine at slice_num=24. thorfinn #2450 testing lr=5e-5 at slice_num=16 will show if this transfers.
+
+**Student also killed two duplicate concurrent training runs** (from prior session re-entries). Well handled.
+
+**Metric artifacts:** `models/model-charliepai2g48h3-frieren-lr-5e-5-nlayers3-slicenum24-20260513-160510/metrics.jsonl`
+
+---
+
 ## 2026-05-13 16:45 — PR #2417 — CLOSED (n_head=2 loses at slice_num=12; n_head axis fully closed)
 
 **thorfinn: n_head=2 on n_layers=3+slice_num=12+epochs=36**
