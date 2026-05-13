@@ -160,7 +160,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         # SwiGLU: mlp_ratio=4/3 for param parity with standard MLP at mlp_ratio=2
-        swiglu_hidden = ((hidden_dim * 4 // 3) + 7) // 8 * 8  # round up to multiple of 8: 216 for hidden_dim=160
+        swiglu_hidden = ((hidden_dim * 2) + 7) // 8 * 8  # mlp_ratio=2 widening: 320 for hidden_dim=160
         self.mlp = SwiGLU(hidden_dim, swiglu_hidden, hidden_dim)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
