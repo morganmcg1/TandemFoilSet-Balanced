@@ -198,7 +198,18 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+
+        # Flow-conditional output bias: maps per-sample (log_Re, AoA0, AoA1) → per-channel output bias.
+        # Channels 13/14/18 of input x are broadcast-scalar (per-sample constant across N).
+        self.flow_bias = nn.Sequential(
+            nn.Linear(3, 16),
+            nn.GELU(),
+            nn.Linear(16, out_dim),
+        )
         self.apply(self._init_weights)
+        # Zero-init final Linear AFTER apply(...) so it overrides trunc_normal_ init.
+        nn.init.zeros_(self.flow_bias[-1].weight)
+        nn.init.zeros_(self.flow_bias[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -214,7 +225,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
-        return {"preds": fx}
+        # fx is now the per-point spatial prediction from the last block's mlp2(ln_3(...))
+        # Add a per-sample flow-conditional bias broadcast to all N points.
+        flow_conditions = x[:, 0:1, :][..., [13, 14, 18]]  # [B, 1, 3]
+        bias = self.flow_bias(flow_conditions)  # [B, 1, out_dim]
+        return {"preds": fx + bias}
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +472,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print("Architecture: flow-conditional output bias — output = mlp2(ln_3(fx)) + flow_bias(x[:, 0:1, [13,14,18]]); flow_bias = Linear(3,16)→GELU→Linear(16,3) with zero-init final Linear; +115 params; first flow-condition-conditional output probe; bias broadcasts to all N points per sample")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -629,6 +645,38 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Flow-bias decoder weight-norm diagnostic (best-checkpoint weights)
+    _last_block = _inner.blocks[-1]
+    _mlp2_final_w = _last_block.mlp2[-1].weight  # [out_dim, n_hidden]
+    _flow_bias_w = _inner.flow_bias[-1].weight   # [out_dim, 16]
+    _mlp2_norm = _mlp2_final_w.detach().float().norm().item()
+    _flow_bias_norm = _flow_bias_w.detach().float().norm().item()
+    _ratio = _flow_bias_norm / max(_mlp2_norm, 1e-6)
+    print(f"\nDecoder weight norms at terminal: mlp2_final_w.norm()={_mlp2_norm:.4f}, "
+          f"flow_bias_w.norm()={_flow_bias_norm:.4f}, ratio={_ratio:.4f}")
+
+    with torch.no_grad():
+        _test_inputs = torch.tensor(
+            [[[0.0, 0.0, 0.0]], [[1.0, 0.5, 0.0]], [[-1.0, 0.5, 1.0]]],
+            device=_mlp2_final_w.device, dtype=_mlp2_final_w.dtype,
+        )
+        _test_bias = _inner.flow_bias(_test_inputs)
+    _zero_vec = _test_bias[0, 0].tolist()
+    _sample_1 = _test_bias[1, 0].tolist()
+    _sample_2 = _test_bias[2, 0].tolist()
+    print(f"flow_bias output at test inputs: zero-vec → {_zero_vec}, "
+          f"sample-1 → {_sample_1}, sample-2 → {_sample_2}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "flow_bias_diagnostics",
+        "epoch": int(best_metrics["epoch"]),
+        "mlp2_final_w_norm": _mlp2_norm,
+        "flow_bias_w_norm": _flow_bias_norm,
+        "norm_ratio": _ratio,
+        "test_bias_zero_vec": _zero_vec,
+        "test_bias_sample_1": _sample_1,
+        "test_bias_sample_2": _sample_2,
+    })
 
     test_metrics = None
     test_avg = None
