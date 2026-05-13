@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-05-13 23:05 — Cycle 75: GeGLU mechanism win, sent back for Lion composition (PR #2566)
+
+- **PR #2566 (frieren, GeGLU MLP block):** Status:review, **3-seed mean val=71.6819 / test=62.7948**, std (val=2.60, test=1.28). Best seed `909izxsc` val=69.3651 / test=61.5534.
+- **vs pre-Lion baseline (82.26):** Δ_val = −10.58 (≈ 31σ), Δ_test = −9.61 — large win on the OLD baseline.
+- **vs current Lion SOTA (65.54):** Δ_val = +6.14 (3-seed mean) — GeGLU on AdamW does NOT beat Lion.
+- **Decision:** Send back, ask for GeGLU + Lion composition (2 seeds). The architectural mechanism is strong; the question is whether it composes orthogonally with Lion's sign-based optimizer.
+- **Branching rule communicated:** val_avg ≤ 61.4 (Lion mean − 2σ) → confident win, merge; 61.4–65.5 → 1 extra seed; >65.5 → close axis.
+- **Per-split prediction CONFIRMED:** `val_geom_camber_rc` benefited 2× more (−16.92 mean vs other splits −8 to −9). The per-token gating mechanism is geometry-aware. Paper-worthy result either way.
+- **Mechanistic finding to preserve:** Cycle-restart spike e7→e8 is 2.2× LARGER with GeGLU (+37.50 vs +16.89). Despite this, GeGLU recovers and surpasses baseline by e19. Gated MLP is more sensitive to LR resets but the cycle-2 minimum is deeper.
+- **Cost:** +24.7% params (165K from 668K→833K), +12.4% epoch time. Truncated at e19 instead of e21 (lost 2 epochs of cycle-2 cooldown) — reported numbers are a LOWER BOUND on GeGLU performance.
+
+## 2026-05-13 23:00 — Cycle 75 INCIDENT: Lion PR label bug (4 GPUs idle ~35 min)
+
+- **Bug:** PRs #2617 (nezuko), #2619 (fern), #2620 (thorfinn), #2621 (tanjiro) created in cycle 73 with label `student:<short>` instead of `student:willowpai2g48h4-<short>`. Student polling filters by full `student:willowpai2g48h4-*` form, so the PRs were INVISIBLE to their assigned students.
+- **Impact:** 4 student pods idle since ~22:25 UTC (35–40 min of GPU time lost across 4 GPUs, ~2.5 GPU-hours total).
+- **Fixed:** Labels swapped at 23:03 UTC. Students should resume on next 5-min poll.
+- **Root cause:** assign-experiment skill's `student` arg in cycle 73 was passed as short name (`nezuko`, `fern`, etc.) rather than full `willowpai2g48h4-nezuko`. The skill's label-application logic uses the arg verbatim. **Future assignments must always pass the full `willowpai2g48h4-*` name** (matches how #2635 and pre-Lion PRs were correctly labeled).
+- **Detection signal that should have caught this earlier:** `kubectl logs` for student pods showed "No assigned PRs or issues" with GPU 0% utilization — directly contradicting the WIP PR labels in the dashboard. Add to advisor checklist: when a WIP PR has 0 comments after ~30 min, check pod log for "No assigned PRs" string.
+
 ## 2026-05-13 22:25 — Cycle 73 new assignments (4 Lion-based experiments)
 
 - **nezuko #new (lion-sigma-calibration):** 3-seed σ calibration on Lion config (--seed 42/43/44, same Lion SOTA stack). Goal: establish σ_Lion precisely for paper appendix CI. 2-seed estimate σ≈2.06 val (from PR #2578 seeds 1+2). 3 seeds will tighten to ±28% CI. Critical for setting the 2σ merge bar (~4.1 val improvement needed for confidence). W&B group: nezuko-lion-sigma.
