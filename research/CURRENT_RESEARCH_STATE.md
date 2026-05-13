@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:15
+- **Date:** 2026-05-13 15:40
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -56,7 +56,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
-| alphonse | #2000 | T_max=80 retest on grad-clip=2.5 stack | Schedule + Gradient stability | WIP-RETEST | First pass: val=54.51 (beat #1953 55.76 by −2.25% — schedule mechanism confirmed) but +3.55% vs current #1982 baseline (52.64). Retest with current default grad-clip=2.5. Watch clip rate — predicted ≥99.5% (warning regime). Outcomes: (A) val<52.64 compound win; (B) clip-near-100% direction-normalization fail |
+| alphonse | #2219 | n_hidden=160 width-floor test (throughput-vs-capacity tradeoff at 30-min budget) | Architecture (width, floor) | WIP | #2000 CLOSED — T_max=80 retest at grad-clip=2.5 FAILED (val 55.03 = +4.54%, test 48.05 = +6.84% on all 4 splits — mechanism: clip-rate climbed to 99.44%, direction-normalization regime same as frieren #2067 max_norm=1.5 fail; schedule extension axis closed under current clip threshold). PR #2066 bracketed width axis at 192 from above (224/256 fail on epoch deficit); this PR tests symmetric question from below: does n_hidden=160 win by giving up some capacity for ~47 epochs in budget (vs 33 at 192)? Outcomes: (A) val<52.64 win — narrower+more-epochs is right tradeoff; (B) wash; (C) val>53.5 fail — 192 bracketed [160, 224] |
 | askeladd | #2159 | Peak LR 5e-4 → 7.5e-4 (1.5×) — epoch-saturated escape via amplitude | Optimization (LR amplitude) | WIP | #2113 CLOSED (slice=96 val=57.79, +9.77% regression; 7% throughput penalty cut training to 27/50 epochs, slice axis bracketed at 64). Different mechanism from alphonse #2000 T_max=80 (schedule extension) — this tests amplitude scaling. Outcomes: (A) val<52.64 win, model was LR-limited; (B) wash, plateau region; (C) val>54 clip rate hits 100%, direction-norm fail |
 | edward | #2024 | EMA decay 0.999 → 0.998 — retest on 13-compound stack | Optimization (EMA) | WIP-RETEST | v1 ran at grad-clip=5.0 (protocol-stale). val=54.22 beat #1953 (-2.77%) but +3.00% vs current #1982. 3/4 OOD test splits improved cleanly. EMA-live gap did NOT close (stayed −8.68 vs predicted ~0) but val/test improved — mechanism reframed: shorter half-life = better noise rejection, not closing live-gap visibility. Retest on n_hidden=224+grad-clip=2.5 stack |
 | fern | #2142 | Huber β=0.5 → 0.25 — tighter MAE alignment on 13-compound stack | Loss shape | WIP | #1805 CLOSED (β anneal v3 val=53.92, +2.43% regression; mechanism: grad-clip=2.5 saturates 99.7-100% during high-β phase, removes curvature benefit). Natural follow-up to #1689 (β=1.0→0.5 won −7.4%). Constant β=0.25 has no high-β phase — tests steady-state loss-shape axis at current grad-clip regime |
@@ -135,22 +135,35 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ### Active experiments (current direct-measurement baseline: PR #1982 at n_hidden=192; val=52.64, test=44.98)
 
-Fleet 8/8 WIP. The width axis is now bracketed at n_hidden=192 — new assignments default to that width.
+Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); alphonse #2219 testing the floor side.
 
-1. **T_max=80 schedule push retest** — #2000 (alphonse, second-pinged): protocol-stale retest on grad-clip=2.5 at n_hidden=192. Stalled 6h since send-back, second ping issued.
+1. **n_hidden=160 width-floor test** — #2219 (alphonse): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget — ~47 epochs predicted vs 33 at n_hidden=192.
 2. **Peak LR 5e-4 → 7.5e-4** — #2159 (askeladd): amplitude-scaling axis at n_hidden=224 (assigned before #2066 finding — may be at sub-optimal width).
 3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward): protocol-stale retest at n_hidden=224 stack (sub-optimal width but axis still informative).
 4. **Huber β=0.25** — #2142 (fern): steady-state loss-shape axis at current grad-clip regime.
 5. **Weight decay 0 → 1e-5** — #2160 (frieren): untested regularization axis at n_hidden=224 (sub-optimal width).
 6. **mlp_ratio=3 retest** — #2053 (nezuko): protocol-stale retest at n_hidden=224 stack (sub-optimal width).
 7. **AdamW betas (0.9, 0.95)** — #2186 (thorfinn): beta_2 reduction, untested optimizer-adaptation axis at n_hidden=224 (sub-optimal width).
-8. **--epochs 33 schedule alignment** — #2199 (tanjiro): cosine fully decays by realized 33-epoch budget at n_hidden=192. Directly addresses the throughput-induced epoch deficit finding from #2066.
+8. **--epochs 33 schedule alignment** — #2199 (tanjiro): cosine fully decays by realized 33-epoch budget at n_hidden=192.
 
 **Sub-optimal-width caveat:** PRs #2159/#2024/#2160/#2053/#2186 were assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Their results are still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
 
-### Closed (cycles 27-28)
-- #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit; width axis ceiling)
-- #2066 tanjiro n_hidden=224+grad-clip=2.5 compound (val 54.34 = +3.22% / test +4.92% — direct measurement that width axis bracketed at 192 under current stack)
+### Closed (cycles 27-29)
+- #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit; width axis ceiling at 30-min budget)
+- #2066 tanjiro n_hidden=224+grad-clip=2.5 compound (val 54.34 = +3.22% / test +4.92% — direct measurement, width axis bracketed at 192 from above)
+- #2000 alphonse T_max=80 retest at grad-clip=2.5 (val 55.03 = +4.54% / test 48.05 = +6.84% — clip rate climbed to 99.44%, direction-normalization regime; schedule extension axis closed under current clip threshold)
+
+### Schedule axis status (post-#2000 closure)
+
+| Stack | T_max | Clip rate | val | Verdict |
+|---|---|---:|---:|---|
+| grad-clip=5.0 + T_max=50 (#1953) | 50 | ~73% | 55.76 | superseded |
+| grad-clip=5.0 + T_max=80 (alphonse 1st run) | 80 | 93.86% | 54.51 | won −2.25% (now stale stack) |
+| **grad-clip=2.5 + T_max=50 (#1982)** | **50** | **98.93%** | **52.64** | **OPTIMUM** |
+| grad-clip=2.5 + T_max=80 (#2000) | 80 | 99.44% | 55.03 | FAIL +4.54% |
+| grad-clip=2.5 + T_max=33 (#2199 in flight) | 33 | TBD | TBD | tests opposite direction |
+
+The schedule lever requires headroom in the clip distribution — when grad-clip pushes the clip rate above ~99%, extending T_max doesn't translate into useful effective LR. Direction-only SGD has no benefit from "keep LR high in mid-training."
 
 ### Next after current round
 - **n_hidden=192 retest of any winner at sub-optimal width** — confirm intrinsic axis lift

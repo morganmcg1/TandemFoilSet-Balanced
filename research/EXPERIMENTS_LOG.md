@@ -1678,3 +1678,71 @@ The PR #2023 (n_hidden=224) "win" at val=53.25 was measured under the OLD grad-c
 - Branch: `willowpai2g48h5-alphonse/t-max-80-schedule-push`
 - Status: Sent back at 08:57 UTC for retest at grad-clip=2.5 stack. Branch HEAD is still the original 06:53 UTC assignment marker (no retest commit). Pod healthy (0 restarts). Issued second ping with restart command at 15:15 UTC.
 - Also notified student that #2066 finding confirms `--n_hidden 192` (already in their send-back command) is the TRUE optimal width.
+
+## 2026-05-13 15:40 — PR #2000: alphonse T_max=80 retest on grad-clip=2.5 stack — CLOSED (clip-saturation kills schedule extension)
+
+- Branch: `willowpai2g48h5-alphonse/t-max-80-schedule-push`
+- Hypothesis: Retest T_max=80 schedule extension on current 13-compound stack (grad-clip=2.5). Original run at grad-clip=5.0 won −2.25%. Tests whether schedule lever compounds with the new tighter clip threshold.
+- W&B run: `6o54qgc6`
+
+### Results — clean negative result
+
+| Metric | #2000 retest (T_max=80) | #1982 baseline (T_max=50) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **55.0317** | 52.6406 | **+4.54% REGRESSION** |
+| test_avg/mae_surf_p | **48.0524** | 44.9791 | **+6.84% REGRESSION** |
+| Epochs reached | 33/80 | 33/50 | identical |
+| Clip rate | **99.44%** | 98.93% | +0.51pp |
+| Mean downscaling | **7.50×** | 7.14× | +5% |
+| EMA-live gap (val) | **−19.24** | ~−8 (#1953) | widened to handle live noise |
+
+All 4 test splits regress: in_dist 55.31 (vs 49.86 baseline), camber_rc 61.47 (vs 57.77), camber_cruise 30.30 (vs 28.94), re_rand 45.13 (vs 43.34).
+
+### Mechanism — schedule lever requires headroom in clip distribution
+
+Schedule axis interaction matrix:
+
+| Stack | T_max | Clip rate | val | Verdict |
+|---|---|---:|---:|---|
+| grad-clip=5.0 (old #1953 stack) | 50 | ~73% | 55.76 | baseline |
+| grad-clip=5.0 + T_max=80 (prior alphonse run) | 80 | 93.86% | 54.51 | WIN −2.25% (now stale) |
+| **grad-clip=2.5 + T_max=50 (current #1982)** | **50** | **98.93%** | **52.64** | **OPTIMUM** |
+| grad-clip=2.5 + T_max=80 (THIS PR) | 80 | **99.44%** | 55.03 | FAIL +4.54% |
+
+At grad-clip=5.0 + T_max=80 (93.86% clip), ~6% of steps preserve their gradient magnitude — enough curvature signal for T_max=80's "keep effective LR higher in mid-training" mechanism to operate.
+
+At grad-clip=2.5 + T_max=80 (99.44% clip), the optimizer is essentially doing **direction-only SGD with a fixed step magnitude of 2.5/||g||**. T_max=80's mechanism is operating on a constant-magnitude proxy — the LR multiplier doesn't translate into larger effective steps. Information loss dominates.
+
+This is the same direction-normalization regime that killed frieren #2067 at max_norm=1.5.
+
+### Critical insight — orthogonal-compounding assumption fails at clip saturation
+
+The schedule mechanism IS real (proven at grad-clip=5.0 by the original alphonse run). It does NOT compound with grad-clip=2.5. The two mechanisms interact destructively at clip-saturation regimes (>99% clip rate).
+
+This is the first cleanly-observed destructive interaction in our compound stack. All prior compounds (grad-clip × n_layers × n_hidden × T_max=50) were measured to compound additively. The compound assumption breaks when one axis pushes another into a saturated regime.
+
+### Schedule axis closed under current grad-clip=2.5 stack
+
+- T_max=50: 52.64 (OPTIMUM)
+- T_max=80: 55.03 (FAIL)
+- T_max=33: tanjiro #2199 in flight — tests OPPOSITE direction (alignment with realized 33-epoch budget at n_hidden=192)
+
+### Suggested follow-ups
+1. **n_hidden=160 at T_max=50** — width-axis floor side (closes width bracket if it fails or finds new optimum if it wins)
+2. **tanjiro #2199** — schedule alignment in flight
+
+→ Assigning alphonse: n_hidden=160 width-floor test.
+
+## 2026-05-13 15:40 — PR #2219: alphonse assigned n_hidden=160 width-floor test
+
+- Branch: `willowpai2g48h5-alphonse/n-hidden-160-width-floor`
+- Hypothesis: Width axis from the floor side. PR #2066 bracketed width at n_hidden=192 from above (224 fails on epoch deficit). Test symmetric question from below: does n_hidden=160 win by giving up some per-layer capacity for ~47 epochs in budget (predicted) vs 33 at n_hidden=192? The throughput-vs-capacity tradeoff at fixed 30-min budget is the core constraint.
+- Reproduce: `--n_hidden 160 --n_layers 3 --epochs 50`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Quantitative predictions:**
+  - Param count: ~0.65M (−30% vs current 0.93M)
+  - Epoch time: ~38s (vs 54s at n=192, assuming O(n²) attention)
+  - Epochs in 30 min: ~47/50 (vs 33/50) — nearly full schedule
+  - Cosine LR at termination: ~6% of base (vs 26%) — fully into quiet annealing tail
+- **Three outcomes:** (A) val<52.64 win — narrower+more-epochs is right tradeoff; (B) wash — 160/192 plateau; (C) val>53.5 fail — 192 bracketed [160, 224].
+- **Distinct from active axes:** tanjiro #2199 (--epochs 33 alignment) extracts late-phase low-LR refinement via *schedule shortening*; this PR extracts it via *width narrowing*. Alternative routes to the same lift — orthogonal mechanisms.
