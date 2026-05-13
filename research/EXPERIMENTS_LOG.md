@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-13 20:50 — PR #2537: [derived-features-re2-aoa] Derived input features log(Re)^2, log(Re)·AoA — CLOSED
+
+- **Branch**: charliepai2g24h1-frieren/derived-features-re2-aoa
+- **Hypothesis**: Add `log(Re)^2` and `log(Re) · AoA1` as explicit polynomial cross features to relieve early-layer burden of learning Re-AoA coupling.
+- **Status**: CLOSED — +3.26% val, +4.18% test regression. Hypothesis cleanly falsified.
+
+| Metric | Derived features | Baseline (#2011) | Δ |
+|--------|------------------|------------------|---|
+| val_avg/mae_surf_p | 29.8169 | 28.8762 | **+3.26% (WORSE)** |
+| test_avg/mae_surf_p | 26.0441 | 24.9992 | **+4.18% (WORSE)** |
+
+**Smoking gun**: The two splits the hypothesis predicted to benefit MOST (val_re_rand, val_geom_camber_rc) regressed the MOST (+1.67, +0.94 respectively). The single improved split was val_geom_camber_cruise (-0.45) — the most-fixed-Re/most-fixed-camber split.
+
+**Programme finding**: When the architecture already has explicit Re-conditioning (ReFiLM β/γ, |γ|max=0.70 by ep28) AND learned Re-rescaling (ReScaleHead 3-channel), explicit polynomial features in the input duplicate information that FiLM/ReScaleHead extract through their own nonlinearities. With N=1499, the model has to LEARN to down-weight the redundant channels — costing effective sample efficiency. Tabular-ML feature engineering orthogonality argument does NOT transfer when explicit Re-aware conditioning hooks already exist in the architecture.
+
+**Artifact**: `models/model-charliepai2g24h1-frieren-derived-features-re2-aoa-20260513-200429/metrics.jsonl`
+
+---
+
+## 2026-05-13 20:43 — PR #2532: [drop-path-0p1] Stochastic Depth on residual branches (rates 0.1, 0.05) — CLOSED
+
+- **Branch**: charliepai2g24h1-askeladd/drop-path-0p1
+- **Hypothesis**: Linear stochastic-depth schedule across 5 Transolver blocks (0.0→drop_path_rate) regularizes the residual stream, reducing overfit on N=1499 samples.
+- **Status**: CLOSED — both arms regressed val by ~+5.7-6.2%.
+
+| Metric | drop_path=0.1 | drop_path=0.05 | Baseline (#2011) |
+|--------|---------------|----------------|------------------|
+| val_avg/mae_surf_p | 30.5304 (+5.7%) | 30.6569 (+6.2%) | 28.8762 |
+| test_avg/mae_surf_p | 26.1550 (+4.6%) | 26.1157 (+4.5%) | 24.9992 |
+
+**Per-split val**: Uniform regression across all splits except val_re_rand (drop_path=0.1, +0.54 only). Train loss already at ~2e-3 (very low) confirms not in capacity-overfit regime — it's an optimization plateau.
+
+**Programme finding (closes a meta-axis)**: Branch-level stochastic depth is inappropriate for shallow physics-attention stacks (n_layers ≤ 5). DeiT/ConvNeXt evidence relies on 12+ block stacks where keep-rate compounds across depth. Linear schedule meant only blocks 3-4 saw non-trivial drop rates; lower blocks essentially deterministic. Combined with Lookahead (#2384), confirms that any mechanism adding gradient/trajectory noise needs deeper stacks OR longer schedules. Token-level dropout (input nodes, not residuals) is structurally different and remains unexplored (see #2582).
+
+**Artifact**: `models/model-charliepai2g24h1-askeladd-drop-path-0p1-20260513-193005/metrics.jsonl`
+
+---
+
 ## 2026-05-13 20:25 — PR #2538: [bernoulli-surface-loss] Bernoulli surface-pressure constraint — CLOSED
 
 - **Branch**: charliepai2g24h1-nezuko/bernoulli-surface-loss
