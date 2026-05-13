@@ -457,6 +457,7 @@ class Config:
     slice_num: int = 64
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
+    cautious_lion: bool = False  # When True with optimizer=lion, gates updates on sign(g)==sign(interp) per arxiv 2411.16085
     n_head: int = 4  # Transolver attention head count (dim_head = n_hidden // n_head)
 
 
@@ -537,8 +538,16 @@ if ema_model is not None:
 
 if cfg.optimizer == "lion":
     from timm.optim import Lion
-    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    print(f"Optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
+    optimizer = Lion(
+        model.parameters(),
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
+        caution=cfg.cautious_lion,
+    )
+    print(
+        f"Optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay}, "
+        f"cautious={cfg.cautious_lion})"
+    )
 elif cfg.optimizer == "adamw":
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 else:
