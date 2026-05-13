@@ -505,6 +505,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm /= max(n_batches, 1)
 
+    with torch.no_grad():
+        param_l2 = torch.sqrt(sum((p.detach().float() ** 2).sum() for p in model.parameters())).item()
+
     # --- Validate ---
     model.eval()
     split_metrics = {
@@ -535,6 +538,7 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm": epoch_grad_norm,
+        "train/param_l2": param_l2,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
