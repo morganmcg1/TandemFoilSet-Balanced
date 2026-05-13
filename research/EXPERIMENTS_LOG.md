@@ -379,6 +379,62 @@ The unimodal ordering (vd=0.5 best of three, not monotone) confirms this is a no
 
 ---
 
+## 2026-05-13 03:25 — PR #1746: Frozen p-variance stratified sampler (CLOSED — variance-explosion failure)
+
+- **Branch:** `willowpai2g48h4-tanjiro/frozen-p-variance-stratified-sampling`
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `uayv2md1` (stratified+BIVW), `8h2u23z6` (stratified-only, BIVW disabled)
+- **Hypothesis:** Pre-compute per-sample sampling weight ∝ 1/var(p) over the full corpus, use WeightedRandomSampler. Makes BIVW's implicit Re-curriculum explicit at data-loader level; removes within-batch estimation noise.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p (4-split) |
+|-----|--------------------|-----------|-------------------------------|
+| **Baseline (PR #1558)** | **98.1642** | — | 98.7537 (3-split) |
+| Arm 1: stratified + BIVW | 365.1298 | **+272% ❌** | 341.55 |
+| Arm 2: stratified only (BIVW disabled) | 365.0082 | **+272% ❌** | 341.57 |
+
+Per-split val (best epoch, Arm 2):
+
+| Split | val mae_surf_p | vs baseline |
+|-------|---------------|------------|
+| `val_single_in_dist` | 511.17 | 123.14 → +315% ❌ |
+| `val_geom_camber_rc` | 451.48 | 107.24 → +321% ❌ |
+| `val_geom_camber_cruise` | 207.99 | 73.28 → +184% ❌ |
+| `val_re_rand` | 289.39 | 88.99 → +225% ❌ |
+| **val_avg** | **365.01** | **+272%** |
+
+### Sampler diagnostic (the smoking gun)
+
+| Statistic | Value |
+|-----------|-------|
+| p-variance min (raw) | 9.28 × 10⁻² |
+| p-variance max (raw) | 2.30 × 10⁷ |
+| **Dynamic range of var(p)** | **2.47 × 10⁸ ×** |
+| Sample weight min (norm.) | ~1.5 × 10⁻⁶ |
+| Sample weight max (norm.) | 371.71 |
+| **Effective upweight ratio** | **2.47 × 10⁸ ×** |
+
+### Analysis and Conclusions
+
+**Closed — variance-explosion failure mode.** The hypothesis underestimated the empirical p-variance dynamic range by 6 orders of magnitude.
+
+**Root cause (tanjiro's analysis, confirmed):** With var(p) spanning 0.09 to 2.3×10⁷ (8 OOM) and the WeightedRandomSampler interpreting weights as relative probabilities, the most-upweighted sample is drawn ~247 million times more often than the least. The effective training distribution collapses to a handful of low-Re samples (likely cruise-domain with tiny p-variance). The model never sees the high-Re/high-pressure cases that drive validation MAE.
+
+**Arm 1 vs Arm 2 (0.03% diff) confirms the sampler dominates entirely:** once the data-loader collapses, BIVW has nothing to re-balance (the batches are near-identical).
+
+**Why the existing domain-balanced sampler works but 1/var(p) doesn't:** The baseline `sample_weights` from `load_data()` have a dynamic range of only ~1.35× (599 raceCar single vs 443 cruise). 1/var(p) has a dynamic range **8 orders of magnitude larger**, so it becomes a Dirac comb instead of a smooth re-weighting.
+
+**Principle established:** Any inverse-variance sampling weight on this corpus must be either (a) tempered with τ ∈ [0.05, 0.2], (b) log-compressed, (c) bucketed by quantile, or (d) replaced with a feature that has bounded dynamic range. Pure 1/var(p) is unusable.
+
+**Residual opportunities (tanjiro's suggestions):**
+1. log(Re) quantile bucketing (selected for follow-up — log(Re) spans only ~1.5 OOM).
+2. Tempered inverse-variance: `w ∝ var(p)^(-τ)` with τ ≈ 0.1.
+3. Log-spaced weights: `w ∝ 1/log(1+var(p))`.
+4. Combine with existing domain-balanced sampler via product.
+
+---
+
 ## 2026-05-13 02:10 — PR #1497: 5-epoch linear warmup + CosineAnnealingLR (CLOSED — val regressed)
 
 - **Branch:** `willowpai2g48h4-askeladd/warmup-cosine-lr`
