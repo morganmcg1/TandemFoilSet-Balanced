@@ -1,90 +1,85 @@
 # SENPAI Research State
 
-- 2026-05-13 12:15 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=65.3734 (PR #2121 slice_num=48 + clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 65.37 = −46.1%.
+- 2026-05-13 12:50 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=62.8014 (PR #2226 slice_num=32 + clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 62.80 = −48.2%.
 - No directives from human researcher team yet.
 
-## Current baseline (PR #2121 merged — slice_num=48 + grad_clip=5.0)
+## Current baseline (PR #2226 merged — slice_num=32 + grad_clip=5.0)
 
-**test_avg/mae_surf_p = 65.3734** | val = 71.9613 (best epoch 15)
-Config: bf16 + batch_size=4 + accumulation_steps=2 (eff_bs=8) + Lion lr=1.5e-4 + β1=0.9 + Fourier L=8 + n_hidden=192, n_layers=5, n_head=4, **slice_num=48**, mlp_ratio=2 + **grad_clip_max_norm=5.0**. W&B run: vyjph01c.
+**test_avg/mae_surf_p = 62.8014** | val = 71.7560 (best epoch 17)
+Config: bf16 + batch_size=4 + accumulation_steps=2 (eff_bs=8) + Lion lr=1.5e-4 + β1=0.9 + Fourier L=8 + n_hidden=192, n_layers=5, n_head=4, **slice_num=32**, mlp_ratio=2 + **grad_clip_max_norm=5.0**. W&B run: 9u8p8npt.
 
-Per-split: in_dist=67.70, rc=74.63, cruise=51.29, re_rand=67.87.
+Per-split: in_dist=64.70, rc=71.97, cruise=48.79, re_rand=65.75.
 
-## Round-3 status (updated 2026-05-13 12:15)
+**Slot floor observation**: cruise improved at EVERY slice reduction step (64→48→32). Floor is confirmed BELOW 32. Scan continues at 24.
+
+## Previous baselines
+- PR #2121 (slice=48 + clip): test=65.3734
+- PR #2090 (clip=5.0 only): test=68.0957
+- PR #1980 (accum=2): test=80.62
+- PR #1395 (Lion): test=83.77
+- PR #1387 (Fourier+wider): test=93.29
+- PR #1391 (bf16+batch-8): test=121.28
+
+## Round-3 status (updated 2026-05-13 12:50)
 
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| edward | #2258 | mlp_ratio=4 + clip + slice=48: wider FFN | **wip** (NEW) | Capacity-add complementing n_head=8; rc OOD key diagnostic |
-| alphonse | #2236 | n_head=8 + clip + slice=48: attention diversification | **wip** | Zero per-epoch cost capacity |
+| nezuko | #2282 | slice_num=24 + clip=5.0 | **wip** (NEW) | Slot floor scan continues; cruise diagnostic |
+| fern | #2117 | EMA decay=0.99 + clip + slice=32 (retest) | **wip** (SENT BACK) | Rebase + change default 0.95→0.99 + confirm slice=32 stack |
+| alphonse | #2236 | n_head=8 + clip + slice=32 | **wip** | Attention diversification; zero time cost |
 | askeladd | #2237 | Lion β1 sweep (0.95/0.85) + clip | **wip** | First β1 test under bulk clip rescaling |
-| nezuko | #2226 | slice_num=32 + clip=5.0 | **wip** | Capacity scan; cruise diagnostic |
-| tanjiro | #2208 | grad-clip-sweep (2.0/10.0/50.0) | **wip** | Bracket optimal clip threshold |
-| thorfinn | #2209 | cosine T_max=15 | **wip** | Schedule alignment on new stack |
-| fern | #2117 | EMA decay=0.95 + clip=5.0 | **wip** | Run ckmhwg39 in flight |
-| frieren | #2190 | accumulation_steps=4 + clip=5.0 | **wip** | Step starvation mechanism retest |
-| edward | #2141 | LayerScale γ=1e-4/1e-3 | **CLOSED** ✗ | Both γ regress >29%. Mechanism mismatch: depth=5 doesn't need LayerScale's init suppression; Lion+clip already stabilizes gradients. |
-| alphonse | #2191 | n_layers=6 + clip=5.0 | **CLOSED** ✗ | +9.24% vs baseline. Depth closed under 30-min budget (+21% per-epoch tax). Clip mechanism intact. |
-| askeladd | #2088 | lion-lr=2.1e-4 sqrt(2) sweep | **CLOSED** ✗ | All arms test=85-90. LR scaling closed. |
+| tanjiro | #2208 | grad-clip-sweep (2.0/10.0/50.0) | **wip** | Bracket clip threshold |
+| thorfinn | #2209 | cosine T_max=15 | **wip** | Schedule alignment |
+| edward | #2258 | mlp_ratio=4 + clip + slice=32 | **wip** | FFN width capacity |
+| frieren | #2190 | accumulation_steps=4 + clip=5.0 | **wip** | Step starvation retest |
+| nezuko | #2226 | slice_num=32 + clip=5.0 | **MERGED** ✓ | test=62.8014 (−3.93%). Cruise −4.87% → floor below 32. |
+| fern | #2117 (old) | EMA 0.99 on old slice=64 stack | **SENT BACK** | test=64.50 (beats old 68.10, not new 62.80). Needs rebase. |
 
 ## Key research findings (cumulative)
 
-1. **Throughput at 30-min budget**: bf16+batch-8 → 17 epochs.
-2. **Schedule alignment**: T_max=actual epochs → −7.67%.
-3. **Width × schedule compounds**: n_hidden=192 → −10.97%.
-4. **Fourier × width compounds**: NeRF L=8 → −6.42%.
-5. **Lion optimizer**: sign-momentum → −15.97%.
-6. **Lion opens memory budget**: ~43 GB vs AdamW 94 GB.
-7. **Depth lever CLOSED under 30-min budget**: ceiling is wall-clock, not stability. +21% per-epoch tax eats cosine refinement. Clip intact at depth=6.
-8. **Gradient accumulation (accum=2) wins**: −3.77%.
-9. **Width lever CLOSED**: n_hidden>192 infeasible.
-10. **EMA 0.999 CLOSED**: Horizon mismatch. Short-horizon 0.95+clip being retested.
-11. **Slice-num monotonic**: 96 regresses, 48 wins (−4%). Scan continues at 32.
-12. **Weight-decay CLOSED**.
-13. **Fourier CLOSED at L=8**: 3 evidence points.
-14. **grad-accum=4 CLOSED pre-clip**: Being retested with clip.
-15. **DropPath CLOSED**.
-16. **Activation-swap CLOSED (SiLU +14.3%)**.
-17. **grad_clip=5.0 MASSIVE WIN**: −15.5%. Bulk Lion direction rescaler.
-18. **Mesh-node-dropout CLOSED**: Dense physics attention incompatible.
-19. **slice_num=48 + clip COMPOUND WIN**: −3.99% super-additive. New best 65.3734.
-20. **Lion LR scaling CLOSED**: sqrt(2) rule fails with clip. lr=1.5e-4 correctly calibrated.
-21. **Clip mechanism preserved at depth=6**: Budget closes depth, not stability.
-22. **LayerScale CLOSED at depth=5**: γ=1e-4 and γ=1e-3 both regress >29%. Mechanism mismatch — init suppression counterproductive when Lion+clip already stabilizes directions.
+1–21. [Same as previous] Lion, Fourier, width, schedule, clip, etc.
+22. **Slice-num monotonic scan ongoing**: 96↑, 64→48↓, 48→32↓, cruise improved at every step. Slot floor still below 32. All gains are regularization (locality prior), not capacity reduction.
+23. **EMA 0.99 beats 0.95 and 0.999**: diag-ratio diagnostic explains why — 0.99 lands in 1-3% tracking band. 0.95 too tight (barely averages); 0.999 too loose (lags the trajectory). Half-life ~69 steps (1/5 epoch) is the sweet spot. Gain on old stack: −5.29%.
+24. **Cumulative gain from PR #1391: 121.28 → 62.80 = −48.2%**.
 
-## Active experiments (8 students)
+## Active experiments
 
-### Tier 1: Direct stack follow-ups
+### Tier 1: Slot floor scan + EMA confirmation (highest expected value)
 | PR | Student | Expected gain |
 |---|---|---|
-| #2226 | nezuko | slice_num=32 + clip: −0.5% to −2% |
-| #2208 | tanjiro | clip sweep 2.0/10.0/50.0: −0.5% to −2% |
-| #2209 | thorfinn | T_max=15: −0.5% to −1.5% |
+| #2282 | nezuko | slice_num=24: −0.5% to −2%; cruise diagnostic for floor |
+| #2117 | fern | EMA 0.99 on slice=32 stack: −1% to −4% if gain stacks |
 
 ### Tier 2: Mechanism retests
 | PR | Student | Expected gain |
 |---|---|---|
 | #2190 | frieren | accum=4 + clip: −1% to −3% |
+| #2209 | thorfinn | T_max=15 schedule alignment: −0.5% to −1.5% |
+| #2208 | tanjiro | clip threshold sweep: −0.5% to −2% |
 
-### Tier 3: New capacity levers (complementary pair)
+### Tier 3: New capacity levers
 | PR | Student | Expected gain |
 |---|---|---|
 | #2236 | alphonse | n_head=8: attention diversification, zero time cost |
-| #2258 | edward | mlp_ratio=4: FFN width, ~+15% time cost |
+| #2258 | edward | mlp_ratio=4: wider FFN, ~+15% time overhead |
 
 ### Tier 4: Optimizer tuning
 | PR | Student | Expected gain |
 |---|---|---|
-| #2237 | askeladd | Lion β1=0.95: momentum recalibration under clip |
-| #2117 | fern | EMA 0.95 + clip: short-horizon weight averaging |
+| #2237 | askeladd | Lion β1=0.95 (primary): momentum recalibration under clip |
 
 ## Key open questions
-1. Does slice_num=32 further reduce test? (cruise diagnostic)
-2. Is clip threshold 2.0 better than 5.0?
-3. Does T_max=15 help on new stack?
-4. Does clip fix accum=4 step starvation?
-5. Do n_head=8 and mlp_ratio=4 add capacity without budget penalty?
-6. What's optimal Lion β1 with clip? (β1=0.9 inherited from Lion paper)
-7. Why is the rc-cruise gap (74.63 vs 51.29) still 23 points?
+1. **Where is the slice floor?** Cruise still improving at 32. 24 is next.
+2. **Does EMA 0.99 stack with slice=32?** Expected ~59-60 if additive. Very high priority.
+3. Does clip=2.0 beat 5.0? (#2208 tanjiro)
+4. Does T_max=15 help? (#2209 thorfinn)
+5. Does clip fix accum=4? (#2190 frieren)
+6. Do n_head=8 and mlp_ratio=4 add capacity? (#2236 alphonse, #2258 edward)
+7. What's optimal Lion β1 with clip? (#2237 askeladd)
 
 ## Plateau watch
-NOT in plateau. Consecutive wins. 8 active experiments covering clip-stack follow-ups, mechanism retests, capacity levers, and optimizer tuning. Continue.
+NOT in plateau. Three consecutive wins (#2090 −15.5%, #2121 −4%, #2226 −4%). Momentum is strong. The slice scan + EMA confirmation are the highest-value open experiments. Continue.
+
+## Next milestones
+- nezuko #2282: slice=24 floor scan
+- fern #2117: EMA 0.99 confirmation on new stack (very high priority)

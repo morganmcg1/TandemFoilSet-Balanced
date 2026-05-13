@@ -1305,3 +1305,53 @@ Noting that the student silently launched a third arm (4ttmiogb) without posting
 **LayerScale lever CLOSED** at this depth+optimizer combo.
 
 **Follow-up**: Assigned edward mlp_ratio=4 (#2258) — widens FFN per block, complementary to n_head=8 (alphonse #2236). Both test capacity-adding at constant depth-5 without the catastrophic per-epoch cost of depth=6.
+
+## 2026-05-13 12:40 — PR #2226: slice_num=32 + clip=5.0 — MERGED ✓ (NEW BEST)
+- Branch: willowpai2g48h1-nezuko/slice-num-32-clip
+- W&B run: `9u8p8npt` — group `slice-num-sweep`
+
+| Metric | slice=32+clip | slice=48+clip baseline | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep17) | **71.7560** | 71.9613 | −0.29% |
+| **test_avg/mae_surf_p** | **62.8014** | 65.3734 | **−3.93%** ✓ new best |
+| test_single_in_dist | 64.70 | 67.70 | −4.49% |
+| test_geom_camber_rc | 71.97 | 74.63 | −3.57% |
+| **test_geom_camber_cruise** | **48.79** | 51.29 | **−4.87%** ← KEY: slot floor below 32 |
+| test_re_rand | 65.75 | 67.87 | −3.13% |
+
+- Epochs: 17/18 (timeout at 30.97 min, ~108s/epoch)
+- Peak GPU: 37.2 GB (slight reduction from 40 GB)
+- Clip fire rate: 78-100% — mechanism intact throughout
+
+**Analysis**: FOURTH CONSECUTIVE IMPROVEMENT in the monotonic slice_num regularization scan. The most critical finding: **cruise improved −4.87%** — the slot floor is confirmed to be BELOW 32. All four splits improved, identical qualitative pattern to slice=48 merge.
+
+The regularization mechanism: smaller slice_num imposes stronger locality inductive bias on Transolver's physics attention (fewer tokens per attention block → coarser-but-more-generalizable slice routing). The gain is universal rather than split-specific, consistent with a regularizer reducing overfitting to training distribution.
+
+The val improvement is tiny (−0.29%) while test improves strongly (−3.93%) — the signature of a regularizer that narrows the train→test generalization gap without necessarily finding a lower-loss training trajectory.
+
+**Cumulative gain from PR #1391**: 121.28 → 62.80 = −48.2%.
+
+**Follow-up**: Assigned nezuko slice_num=24 (#2282) to continue the scan.
+
+## 2026-05-13 12:40 — PR #2117: EMA decay=0.95/0.99 — SENT BACK for retest
+- Branch: willowpai2g48h1-fern/ema-decay-095
+- W&B runs: ckmhwg39 (decay=0.95, test=67.10), ny447839 (decay=0.99, test=64.50)
+
+| Arm | decay | test_avg/mae_surf_p | vs old baseline (#2090) | vs NEW baseline (#2226) |
+|---|---|---|---|---|
+| ckmhwg39 | 0.95 | 67.10 | −1.45% ✓ | +6.87% ✗ |
+| ny447839 | 0.99 | 64.50 | −5.29% ✓ | +2.71% ✗ |
+
+**Note**: Both arms were run on slice_num=64 stack (fern's branch forked before PR #2121 merged slice=48). Neither arm beats the new baseline test=62.80. Sent back for:
+1. Rebase onto new advisor branch (slice=32 stack)
+2. Change default ema_decay from 0.95 to 0.99 (actual winner)
+3. Confirmation run: slice=32 + EMA 0.99 on new baseline
+
+**Why EMA 0.99 was the winner despite the PR predicting 0.95**: 
+- decay=0.95 half-life ~14 steps — too tight, nearly identical to raw model (diag ratio 0.3% at epoch 14)
+- decay=0.99 half-life ~69 steps ≈ 1/5 epoch — lands in the 1-3% tracking band the PR predicted
+- decay=0.999 (PR #2050, previously closed) had half-life ~1000 steps — too loose, lagged 3-4 epochs
+
+The diagnostic ratio ||model-ema||/||model|| is the key predictor: it should plateau in the 1-3% band for real averaging to occur. 0.99 achieves this; 0.95 and 0.999 are on opposite sides of the ideal.
+
+**Potential**: EMA 0.99 on the new slice=32 stack is expected test ~59-60 if the −5.3% gain from averaging stacks additively with slice regularization.
