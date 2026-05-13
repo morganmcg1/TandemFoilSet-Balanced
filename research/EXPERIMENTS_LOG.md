@@ -1172,3 +1172,57 @@ Two-seed mean test: (51.08 + 52.77)/2 = **51.93** vs baseline 52.36 → −0.83%
 - askeladd → β_p upward bisection (next assignment).
 
 ---
+
+## 2026-05-13 18:30 — PR #2440 CLOSED: LR warmup (3 epochs → peak, then constant)
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/lr-warmup-3ep
+- **Hypothesis:** Add 3-epoch linear warmup (33% → 67% → 100% peak lr), then hold constant for remaining 32 epochs. Predicted to stabilize early training while preserving peak throughput.
+
+### Results (2 seeds)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | Δ vs baseline |
+|---|---|---:|---:|---:|---|
+| `akckruxi` | 1 (better) | 71.7786 | 64.7217 | 28/35 | +21.9% val / +26.7% test |
+| `totr8cz2` | 2 | 75.2275 | 67.2460 | 35/35 | +27.8% val / +31.6% test |
+| **Baseline #2017** | 1 | **58.883** | **51.078** | 35 | — |
+
+All four test splits regress on both seeds. single_in_dist hit hardest (+47% / +51% test).
+
+### Conclusion
+
+**CLOSED — confirmed regression.** Dominant mechanism: removing the cosine tail is the critical failure. Holding LR constant at peak for 32 of 35 epochs means the model never reaches the fine-grained convergence regime that the baseline's CosineAnnealingLR T_max=50 provides (lr ≈ 0.7× peak at epoch 35, slowly grinding down). Three negative results close the cosine-schedule-modification axis for round 1: T_max=35 no floor (#1843: +3.1%), T_max=35 + eta_min=1e-5 (#2379: +8.0%), warmup+constant this PR (+21.9%). Cosine T_max=50 schedule shape is structurally optimal for the 35-epoch compute-bound regime.
+
+### Follow-up
+
+- edward → Lion optimizer (PR #2516; fresh optimizer-family axis).
+
+---
+
+## 2026-05-13 18:40 — PR #2506 CLOSED: Per-channel target normalization (no-op; wrong premise)
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/perchannel-target-norm
+- **Hypothesis:** Add explicit per-channel normalization of targets (Ux, Uy, p separately) via channel-specific y_mean/y_std stats. Hypothesis assumed stats.json stored scalar y_std — wrong.
+
+### Results
+
+**No runs executed.** Student correctly identified the hypothesis premise was false before running any experiments.
+
+**Student diagnostic (subset scan):**
+```
+normalized std per-ch: [1.006, 1.041, 1.118]   # already ≈ unit
+normalized mean per-ch: [-0.026, -0.005, -0.040]  # already ≈ 0
+```
+
+`data/loader.py` loads `stats.json` as `[3]` tensors. `(y - stats["y_mean"]) / stats["y_std"]` over `y: [B, N, 3]` already broadcasts per-channel — Ux gets `y_std[0]=21.78`, Uy gets `9.74`, p gets `679.45`. Per-channel normalization was already in place; the proposed change would have been a no-op.
+
+### Conclusion
+
+**CLOSED — hypothesis premise was wrong; credit to student for catching it before GPU spend.** Advisor error: the hypothesis spec assumed `y_std` was scalar based on incorrect code reading. The student's "verify premise before spending GPU" behavior is exactly the right research instinct. Zero GPU wasted.
+
+### Follow-up
+
+- thorfinn → n_head 4→8 attention head shape change (PR #2520; clean architectural axis, no param-count change).
+
+---

@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-13 18:00
+- **Date:** 2026-05-13 18:50
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -33,17 +33,15 @@ The current `train.py` now has **eight** stacked changes: mask after slice softm
 - **Loss-formulation wins stack:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) combined to −8% on val.
 - **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures).
 
-Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
-- **#2486 nezuko (AdamW eps=1e-6)**: just assigned (17:00); fixes bf16 subnormal denominator floor (default eps=1e-8 < bf16 min normal 1.175e-7). 1-line change, well-precedented (LLaMA-2/Mistral eps≥1e-5 in bf16).
-- **#2440 edward (LR warmup 3-epoch linear ramp)**: just assigned (16:14); tests cold-start instability mechanism on grad-clip 100%-engagement baseline.
-- **#2420 tanjiro (lr=7e-4 with merged betas=(0.9, 0.95))**: in flight; tests LR-betas interaction at +40% lr with reactive beta2=0.95.
+Round 1 in-flight (8 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
+- **#2486 nezuko (AdamW eps=1e-6)**: assigned 17:00; fixes bf16 subnormal denominator floor (default eps=1e-8 < bf16 min normal 1.175e-7). 1-line change, well-precedented (LLaMA-2/Mistral eps≥1e-5 in bf16).
+- **#2420 tanjiro (lr=7e-4 with merged betas=(0.9, 0.95))**: WIP but crash-looping (6 full-run crashes, debug works). Diagnostic comment sent 18:45. Awaiting traceback or completion.
 - **#2397 fern (grad-clip max_norm=0.5 downward bisect)**: in flight; symmetric bisect of clip threshold.
-
-**Just assigned (2026-05-13 18:20):**
 - **#2501 askeladd (β_p=0.625 upward bisect):** natural follow-up to #2163; β_p<0.5 hurt hard splits, β_p>0.5 should help; per-channel loop infrastructure already in place.
 - **#2504 frieren (QK-RMSNorm):** normalize Q and K to unit norm per head inside PhysicsAttention; PaLM-2/Gemma-2/ViT-22B style; targets attention entropy collapse on heterogeneous mesh domains.
 - **#2505 alphonse (SiLU activation):** GELU → SiLU in all FFN blocks; improves gradient flow under 100%-clipped training; LLaMA/DINOv2 style; zero param change.
-- **#2506 thorfinn (per-channel target normalization):** per-channel mean/std instead of global scalar; FNO/GINO standard; removes implicit double-weighting of pressure channel.
+- **#2516 edward (Lion optimizer):** [NEW 18:45] Replace AdamW with Lion (Chen et al. 2023); signed momentum update, no v state (−30% memory), lr=5e-5 (×0.1), wd=2e-3 (×10); tests optimizer-family axis.
+- **#2520 thorfinn (n_head 4→8):** [NEW 18:45] Increase attention heads from 4 to 8 while n_hidden=128 constant; head_dim 32→16; param-count neutral; tests attention head multiplexing capacity on heterogeneous mesh domains.
 
 **Current merge bar: val < 58.88, test < 51.08, all four test splits finite.**
 
@@ -62,7 +60,7 @@ Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
 | PR    | Student   | Hypothesis axis                  | Status |
 |-------|-----------|----------------------------------|--------| 
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | **MERGED** 16:03 (val=59.97, test=52.36) — 7th baseline shift, −0.2% val / −1.9% test; beta2=0.95 shortens second-moment window ~1000→20 steps |
-| #2420 | tanjiro   | LR=7e-4 with merged betas        | WIP, betas baseline (just assigned; tests whether reactive beta2 tolerates 40% LR increase) |
+| #2420 | tanjiro   | LR=7e-4 with merged betas        | WIP but crash-looping (6 full-run crashes, debug OK); diagnostic comment sent 18:45 |
 | #1504 | alphonse  | Mask-aware PhysicsAttention      | **MERGED** 21:52 (val=119.45, test=109.67) |
 | #1505 | askeladd  | Huber surface loss (β=0.5)       | **MERGED** 00:00 (val=113.79, test=101.78) |
 | #1506 | edward    | Wider hidden (128→192)           | CLOSED on bf16 (+19.4% val, +20.8% test — 6th compute-bound capacity-axis regression; width fully retired) |
@@ -94,8 +92,12 @@ Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
 | #2341 | thorfinn  | surf_weight 10 → 20              | CLOSED: val +7.0%, test +8.6% worse. Axis fully bracketed (5 fails, 10 optimum, 20 fails). Convex asymmetric — over-weighting steals capacity from volume → OOD regresses hardest. |
 | #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | CLOSED 17:45 — clean regression (+15.3% s1, +21.7% s2). Train AND val elevated = over-regularization signature; 4× baseline late-epoch noise. |
 | #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | CLOSED 17:45 — regression with high seed variance (+2.5% s1, +10.8% s2). Train/val ratio unchanged: noise without payoff. Combined with #2415, noise-injection axis CLOSED. |
+| #2440 | edward    | LR warmup (3-ep linear ramp)     | CLOSED 18:30 — +21.9%/+27.8% regression both seeds. Removing cosine tail dominant effect; cosine-schedule-modification axis fully closed (3rd negative result). |
+| #2506 | thorfinn  | Per-channel target normalization | CLOSED 18:40 — no-op (hypothesis premise wrong: stats.json y_std already [3] tensor, per-channel already active). Student caught before any GPU spend. |
+| #2516 | edward    | Lion optimizer (Chen et al. 2023) | WIP NEW 18:45 — signed momentum, no v state, lr=5e-5, wd=2e-3. Fresh optimizer-family axis. |
+| #2520 | thorfinn  | n_head 4→8 (head_dim 32→16)      | WIP NEW 18:45 — param-count neutral; tests attention head multiplexing on heterogeneous mesh domains. Never tested in round 1. |
 
-**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 21. **Open:** 8 WIP (nezuko #2486 eps-1e6, edward #2440 lr-warmup, tanjiro #2420, fern #2397, askeladd #2501 β_p=0.625, frieren #2504 qk-rms-norm, alphonse #2505 silu, thorfinn #2506 perchannel-norm). **Idle: 0.**
+**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 23. **Open:** 8 WIP (nezuko #2486, tanjiro #2420 [crash-loop], fern #2397, askeladd #2501, frieren #2504, alphonse #2505, edward #2516 [lion-NEW], thorfinn #2520 [nhead8-NEW]). **Idle: 0.**
 
 ### Newly-closed axes (2026-05-13 17:45)
 
