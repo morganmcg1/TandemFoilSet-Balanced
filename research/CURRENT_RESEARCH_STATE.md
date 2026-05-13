@@ -1,7 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-13 10:55 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
+- 2026-05-13 10:45 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
 - No directives from human researcher team yet.
+- **Rate-limit advisory (10:42 UTC)**: GitHub GraphQL API rate limit hit while attempting close ops on #2118/#2115. Reset 10:49 UTC. Closes and reassignments staged but pending; PR bodies for next assignments saved to /tmp/pr_body_accum4_clip_retest.md (frieren H6) and /tmp/pr_body_depth_6_clip_retest.md (alphonse H1).
 
 ## Current baseline (PR #2090 merged — grad_clip_max_norm=5.0)
 
@@ -27,9 +28,9 @@ Per-split: in_dist=68.29, rc=82.24, cruise=50.71, re_rand=71.14.
 | tanjiro | #2165 | grad-clip-sweep (max_norm=2.0/10.0/50.0) | **wip** (NEW) | Bracket optimal clip threshold; mechanism validation |
 | thorfinn | #2166 | cosine-realign-epochs15 | **wip** (NEW) | T_max=15 to match actual 30-min budget |
 | edward | #2141 | layerscale-1e-4 | **wip** | CaiT-style per-channel residual scaling, γ_init=1e-4 |
-| alphonse | #2115 | mesh-node-dropout=0.1 | **wip** | Input-side OOD regularizer for mesh-density holdouts |
+| alphonse | #2115 | mesh-node-dropout=0.1 | **CLOSED** ✗ (pending GitHub) | +84.7% catastrophic. Mechanism: PointNet-style dropout poisons dense physics attention. → assigned H1 n_layers=6+clip retest |
 | fern | #2117 | ema-decay-095 | **wip** | 14-step half-life EMA, follow-up to closed #2050 |
-| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **wip** | Anisotropic mesh Fourier basis |
+| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **CLOSED** ✗ (pending GitHub) | +4.71%. Hypothesis falsified (in_dist hit worst → info loss, not aliasing). Fourier ceiling L=8 confirmed. → assigned H6 accum=4+clip retest |
 | nezuko | #2121 | slice_num-48 + clip=5.0 retest | **wip** (SENT BACK) | Retest on new baseline=68.10; previous result 79.60 vs old 80.62 |
 | askeladd | #2088 | lion-lr-2.1e-4-sqrt2 | **wip** | Lion lr sqrt(2) scaling for eff_bs=8 |
 | tanjiro | #2090 | grad-norm-clip-5-on-lion-stack | **MERGED** ✓ | **test=68.0957** (−15.5%); new best. Bulk Lion rescaler, not tail-only. |
@@ -60,6 +61,8 @@ Per-split: in_dist=68.29, rc=82.24, cruise=50.71, re_rand=71.14.
 15. **DropPath CLOSED**: Underfitting regime, depth=5 too shallow, 18 epochs too few.
 16. **Activation-swap CLOSED (SiLU, +14.3%)**: GELU near-optimal at depth=5 width=192.
 17. **grad_clip=5.0 MASSIVE WIN**: −15.5% (68.10 from 80.62). Bulk Lion direction rescaler. New best. Mechanism: clip before momentum buffer smooths sign-vote direction variance, free since Lion discards magnitude anyway.
+18. **Fourier lever permanently CLOSED at L=8 uniform**: 3 points of evidence — L=16 +4.6%, Ly=4 +4.7%, L=8 winning. y-axis high-freq carries info (transition regions, wake shed, leading/trailing edge pressure).
+19. **Mesh-node-dropout CLOSED at p=0.1**: PointNet-style dropout fundamentally incompatible with Transolver's dense physics attention. Three failure modes: slice-token poisoning, eval-time distribution shift, dense-coverage requirement for unseen geometry.
 
 ## Active hypotheses — new priority order
 
@@ -76,10 +79,14 @@ Given new baseline test=68.10 and the clip=5.0 breakthrough, priority order shif
 | PR | Student | Hypothesis | Likely gain range |
 |---|---|---|---|
 | #2088 | askeladd | Lion lr=2.1e-4 (sqrt(2)) | Likely direction-swap given new clip smoothing |
-| #2115 | alphonse | Mesh-node dropout=0.1 | −0.5% to −1.5% on OOD splits |
 | #2117 | fern | EMA decay=0.95 | −0.3% to −1.5% |
-| #2118 | frieren | Per-axis Fourier Lx=8/Ly=4 | −0.3% to −1.5% |
 | #2141 | edward | LayerScale γ=1e-4 | −0.3% to −1.5% |
+
+### Tier 1 NEW (post-Fourier/dropout-closure assignments — staged, pending rate-limit reset)
+| PR | Student | Hypothesis | Expected gain | Discriminating? |
+|---|---|---|---|---|
+| NEW-frieren | frieren | accumulation_steps=4 + clip=5.0 (mechanism-changed retest of closed #2009) | −1% to −3% if clip changes step-starvation; key diagnostic | YES — validates/falsifies clip-as-direction-rescaler |
+| NEW-alphonse | alphonse | n_layers=6 + clip=5.0 (mechanism-changed retest of closed #1862) | −2% to −5% if depth ceiling was clip-conditional | YES — tests whether depth=5 is genuine architectural ceiling |
 
 ## Key open questions (updated)
 1. **Is 2.0 better or worse than 5.0 for max_norm?** (#2165) — characterizes whether bulk rescaling benefits from being even tighter, or whether 5.0 was the right trade-off.
