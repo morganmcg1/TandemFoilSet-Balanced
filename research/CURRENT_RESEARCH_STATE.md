@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 08:15 (CLOSED #1993 tanjiro n-head-2 — n_head axis fully closed at 4; SENT BACK #2012 edward loss-beta-0-5 (beat OLD 82.56 not NEW 76.24); askeladd #1540 EMA retraining on new HEAD GPU=99%; assigning tanjiro fresh hypothesis; 13 effective merges)
+- **As of:** 2026-05-13 08:25 (SENT BACK #1992 frieren mlp-ratio-1 (val=81.91, beat OLD 82.56 not NEW 76.24); askeladd #1540 EMA retraining at GPU=97%; 7 in-flight PRs all targeting val<76.24 on bs=2 baseline; 13 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -71,6 +71,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 |---|---|---|---|
 | **batch-size-2 (alphonse #1972)** | **76.24** | **66.85** | **MERGED — CURRENT BEST** |
 | loss-beta-0-5 (edward #2012) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
+| mlp-ratio-1 (frieren #1992) | 81.91 | 73.12 | SENT BACK — beat old, not new baseline |
 | lr-warmup-1ep (thorfinn #1812) | 82.56 | 74.13 | MERGED → superseded |
 | lr-7e-4 (thorfinn #1968) | 79.77 | 72.06 | SENT BACK — beat old, not new baseline |
 | n-head-2 (tanjiro #1993) | 83.78 | 73.71 | CLOSED — n_head=4 unimodal optimum |
@@ -95,7 +96,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **PR #2014 — `onecycle-lr` (nezuko)** — **WIP** — was on bs=4; evaluate vs new baseline.
 
 ### Capacity / architecture / loss probes
-- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP (sent back 08:22)** — beat OLD 82.56 (val=81.91) not NEW 76.24; rerunning on bs=2 HEAD.
 - **PR #2012 — `loss-beta-0-5` (edward)** — **WIP** — was on bs=4; evaluate vs new baseline.
 - **PR #2073 — `slice-num-32` (tanjiro)** — **WIP (new)** — lower bracket of slice_num axis on bs=2 baseline.
 

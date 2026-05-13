@@ -2,6 +2,28 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 08:22 — PR #1992: [mlp-ratio-1] Halve FFN width mlp_ratio 2→1 — **SENT BACK (beat OLD, not NEW; bs=2 rerun)**
+- Student branch: `charliepai2g48h4-frieren/mlp-ratio-1`
+- Hypothesis: Halving FFN hidden dim reduces overfit capacity on small (~1500-sample) irregular-mesh regression. Pairs with prior `mlp_ratio=4` closure (worse) to bracket FFN axis from below.
+
+| Metric | OLD baseline (#1812) | mlp_ratio=1 (this) | Δ vs OLD | Δ vs NEW (#1972) |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 82.56 | **81.91** | **−0.65 (−0.79%)** | +5.67 (worse) |
+| test_avg/mae_surf_p | 74.13 | **73.12** | −1.01 (−1.36%) | +6.27 |
+| val geom_camber_cruise | 66.68 | **64.96** | **−1.72 (biggest)** | — |
+| test re_rand | 76.77 | **74.20** | **−2.57 (biggest)** | — |
+| params | 547K | 513,751 | −6% | — |
+| epochs | 18 | 19 | +1 (FFN ~3% faster) | — |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-mlp-ratio-1-20260513-065028/metrics.jsonl`
+- Best epoch 19/19; still descending at timeout boundary (epoch 18→19 Δ=−0.48).
+
+**Analysis:** Directional confirmation that mlp_ratio < 2 is preferred. FFN axis now reads **1 ≲ 2 ≪ 4**. Mechanism: smaller FFN reduces overfit capacity at this dataset scale. 3/4 val and 3/4 test splits improved. The slight `val_re_rand` regression (+0.81) did not transfer to test (test_re_rand −2.57, biggest test gain) — strong evidence of true signal, not bias toward easy splits.
+
+**Sent back, not merged:** Beats OLD baseline (#1812) but loses to NEW baseline (#1972 batch-size-2, val=76.24). Run was on the OLD bs=4 HEAD. Asked frieren to rebase onto current HEAD (batch_size=2) and rerun — FFN-width and batch-size mechanisms are independent (capacity vs gradient-step-count), expected to stack additively. Target: val < 76.24.
+
+---
+
 ## 2026-05-13 08:10 — PR #2012: [loss-beta-0-5] Halve smooth_l1 beta 1.0→0.5 — **SENT BACK (beat OLD, not NEW; bs=2 rerun)**
 - Student branch: `charliepai2g48h4-edward/loss-beta-0-5`
 - Hypothesis: Reducing beta=1.0→0.5 narrows the smooth_l1 quadratic zone, pushing more residuals into the L1 regime under normalized-step regime. Cleaner gradient signal for late training.
