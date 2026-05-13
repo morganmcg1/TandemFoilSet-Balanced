@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 17:30 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=60.7447 (PR #2343 wd=0 + slice_num=24 + clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 60.74 = **−49.9%**.
+- 2026-05-13 18:00 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=60.7447 (PR #2343 wd=0 + slice_num=24 + clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 60.74 = **−49.9%**.
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #2343 merged — wd=0)
@@ -41,19 +41,21 @@ Three independent axes now confirm: **capacity/resolution increases improve IID,
 
 Implication: test_avg improvements must come from OOD-specific levers or levers that improve both IID and OOD simultaneously (like wd=0 did). Any "fit harder" axis is dead for test_avg at current scale.
 
-## Round-3 status (updated 2026-05-13 17:30)
+## Round-3 status (updated 2026-05-13 18:00)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
 | thorfinn | #2433 | Per-iter warmup (correct SequentialLR impl) | **wip** |
 | frieren | #2426 | surf_weight DOWN (sw=5/7) | **wip** |
-| fern | #2117 | EMA 0.99 on slice=24+wd=0 | **wip** (SENT BACK 3× — needs rebase) |
 | alphonse | #2326 | cosine eta_min=1.5e-5 | **wip** (STALE) |
-| askeladd | #2458 | Lookahead-wrapped Lion (k=5/10) | **wip** (NEW) |
-| tanjiro | #2456 | Pre-LN → Post-LN swap | **wip** (NEW) |
-| edward | #2327 | SiLU activation swap | **wip** (STALE) |
-| nezuko | #2466 | SwiGLU MLP (param-matched) | **wip** (NEW) |
+| askeladd | #2458 | Lookahead-wrapped Lion (k=5/10) | **wip** |
+| tanjiro | #2456 | Pre-LN → Post-LN swap | **wip** |
+| nezuko | #2466 | SwiGLU MLP (param-matched) | **wip** |
+| edward | #2473 | Slot routing temperature: fixed T=1.0/0.5 vs learnable | **wip** (NEW) |
+| fern | #2474 | Coord-noise augmentation: Gaussian jitter on mesh coords (train only) | **wip** (NEW) |
 | thorfinn | #2343 | wd=0 ablation | **MERGED** ✓ | test=60.7447 (−1.78%). New best. |
+| edward | #2327 | GELU → SiLU activation swap | **CLOSED** ✗ | +16% regression all 3 trials. Finding #42. |
+| fern | #2117 | EMA decay=0.95/0.99 | **CLOSED** ✗ | Diag-ratio collapse; EMA gain budget-dependent. Finding #43. |
 | nezuko | #2393 | Fourier L=12/4 | **CLOSED** ✗ | Regime-neutral; IID/OOD redistribution. Finding #41. |
 | tanjiro | #2425 | LayerNorm → RMSNorm | **CLOSED** ✗ | Regime-neutral aggregate. Finding #40. |
 | askeladd | #2382 | Lion β2=0.999/0.95 | **CLOSED** ✗ | Symmetric +13%. Finding #39. |
@@ -69,7 +71,7 @@ Implication: test_avg improvements must come from OOD-specific levers or levers 
 21. **Clip mechanism fully characterized**: clip=5.0 in bulk-rescaling plateau [2,5].
 22. **LayerScale CLOSED**: counterproductive with Lion+clip.
 23. **slice_num scan COMPLETE**: Floor at slice_num=24.
-24. **EMA 0.99 wins on old stack**: slice=24 confirmation pending (fern #2117).
+24. **EMA 0.99 wins on old stack**: slice=24 confirmation pending → SUPERSEDED by Finding #43.
 25. **accum=4 PERMANENTLY CLOSED**: accum=2 optimal.
 26. **T_max sweep CLOSED**: T_max=18 optimal.
 27. **Capacity-budget structural bound**: >+5% per-epoch overhead = net loser.
@@ -82,48 +84,51 @@ Implication: test_avg improvements must come from OOD-specific levers or levers 
 34. **Capacity-limited regime** (#2344): 1.47M+18 epochs = capacity-limited, not overfitting.
 35. **Locality regularization incompatible with stochastic attention** (#2344).
 36. **surf_weight has split-asymmetric effects** (#2294): sw↑ hurts rc. Optimum below 10.
-37. **Lion wd=0 optimal** (#2343): NEW BASELINE.
-38. **Lion β2=0.99 sharp sweet spot** (#2382): Lion fully tuned milestone.
-39. **Normalization-type lever closed** (#2425): LayerNorm optimal; RMSNorm neutral aggregate.
-40. **IID/OOD redistribution meta-pattern** (#2393): Three independent axes confirm — capacity/resolution increases improve IID, harm OOD uniformly. Fourier L lever closed. Future improvements must target OOD-specific mechanisms.
+37. **surf_weight lever CLOSED** (#2294): sw=15/20 all worse on rc. sw=5/7 testing.
+38. **Lion wd=0 optimal** (#2343): NEW BASELINE.
+39. **Lion β2=0.99 sharp sweet spot** (#2382): Lion fully tuned milestone.
+40. **Normalization-type lever closed** (#2425): LayerNorm optimal; RMSNorm neutral aggregate.
+41. **IID/OOD redistribution meta-pattern** (#2393): Three independent axes confirm — capacity/resolution increases improve IID, harm OOD uniformly. Fourier L lever closed. Future improvements must target OOD-specific mechanisms.
+42. **SiLU vs GELU convergence-rate asymmetry** (#2327): SiLU +16% regression across all 3 trials. Mechanistic explanation: Lion sign-momentum + fixed budget favors activations matching GELU's smooth gradient profile. Slow-converging architectural choices lose at fixed epoch budget regardless of theoretical asymptotics. GELU is optimal.
+43. **EMA gain is timeout-budget-dependent** (#2117): EMA 0.95 and 0.99 both tie baseline (diag-ratio collapses from 0.95% to 0.08% by epoch 18). EMA needs late-training parameter noise to average; full-schedule completion + eta_min=0 eliminates that noise. EMA may revive if alphonse #2326 (eta_min>0) lands a gain.
 
 ## Active experiments (8 students)
 
-### Tier 1: EMA (highest expected value)
-| PR | Student | Expected gain |
-|---|---|---|
-| #2117 | fern | EMA 0.99 on slice=24+wd=0 (NEEDS REBASE): −1% to −4% |
-
-### Tier 2: High-EV levers
+### Tier 1: Architecture / meta-optimizer
 | PR | Student | Expected gain |
 |---|---|---|
 | #2433 | thorfinn | Per-iteration warmup: −0.5% to −2% |
-| #2426 | frieren | surf_weight DOWN (sw=5/7): rc improvement expected |
 | #2458 | askeladd | Lookahead-wrapped Lion (k=5/10): −0.5% to −3% |
-
-### Tier 3: Architecture
-| PR | Student | Expected gain |
-|---|---|---|
 | #2456 | tanjiro | Pre-LN → Post-LN swap: −0.5% to −2.5% |
 | #2466 | nezuko | SwiGLU MLP (param-matched): −0.3% to −2% |
+
+### Tier 2: OOD-targeted levers (priority per Finding #41)
+| PR | Student | Expected gain |
+|---|---|---|
+| #2426 | frieren | surf_weight DOWN (sw=5/7): rc improvement expected |
+| #2474 | fern | Coord-noise augmentation (σ=0.005): OOD-targeted data augmentation |
+| #2473 | edward | Slot routing temperature ablation: T=1.0 vs learnable |
+
+### Tier 3: Schedule
+| PR | Student | Expected gain |
+|---|---|---|
 | #2326 | alphonse | cosine eta_min=1.5e-5 (STALE) |
-| #2327 | edward | SiLU activation (STALE) |
 
 ## Key open questions
-1. **Does EMA 0.99 stack with wd=0+slice=24?** Fern needs rebase. Expected ~57-59 if stacks.
-2. **Does per-iteration warmup help Lion momentum bootstrap?** (thorfinn #2433)
-3. **Does surf_weight=5/7 improve rc generalization?** (frieren #2426)
-4. **Does Lookahead's Polyak averaging reduce Lion sign-flip variance?** (askeladd #2458)
-5. **Does Post-LN improve OOD on this 5-layer stack?** (tanjiro #2456) — does it follow Finding #41?
-6. **Does SwiGLU's gating break Finding #41 (improve OOD too) or follow it (IID only)?** (nezuko #2466)
-7. **Does SiLU outperform GELU with Lion?** (edward #2327, stale)
+1. **Does Post-LN improve OOD on this 5-layer stack?** (tanjiro #2456) — does it follow Finding #41?
+2. **Does Lookahead's Polyak averaging reduce Lion sign-flip variance?** (askeladd #2458)
+3. **Does SwiGLU's gating break Finding #41 (improve OOD too) or follow it (IID only)?** (nezuko #2466)
+4. **Does per-iteration warmup help Lion momentum bootstrap?** (thorfinn #2433)
+5. **Does surf_weight=5/7 improve rc generalization?** (frieren #2426)
+6. **Does coord-noise jitter on mesh coords target OOD splits without hurting IID?** (fern #2474) — first data-side intervention; key test of Finding #41 scope.
+7. **Is slot routing temperature learnable T=0.5 actually doing work, or is fixed T=1.0 equivalent?** (edward #2473) — tests whether slot routing is genuinely a learned lever or just a tunable constant.
 8. **Does eta_min refinement floor help?** (alphonse #2326, stale)
 
 ## IMPORTANT NOTES
 - **All new/updated run commands must include `--weight_decay 0.0`**
-- **Fern #2117** needs rebase (3rd ping sent with step-by-step instructions)
-- **Edward #2327 and alphonse #2326** are stale (3h+) — status checks sent
+- **Alphonse #2326** is stale (4h+) — status check pending
 - **IID/OOD redistribution meta-pattern** now governs hypothesis selection: prioritize OOD-specific levers
+- **EMA revival condition**: EMA may become viable again IF alphonse #2326 (eta_min=1.5e-5) shows that non-zero eta_min prevents full convergence — that would reintroduce late-epoch noise for EMA to average.
 
 ## Lever status summary
 | Lever | Status | Best value |
@@ -143,11 +148,13 @@ Implication: test_avg improvements must come from OOD-specific levers or levers 
 | Attention dropout | CLOSED | 0.0 (no dropout) |
 | Normalization type | CLOSED — LayerNorm optimal | LayerNorm |
 | Fourier L | CLOSED — L=8 optimal | L=8 |
+| Activation function | CLOSED — GELU optimal | GELU |
+| EMA | CLOSED (budget-dependent) — may revive at eta_min>0 | — |
 | Normalization position | **ACTIVE** (#2456, post-LN) | — |
 | Meta-optimizer | **ACTIVE** (#2458, Lookahead) | — |
 | MLP architecture | **ACTIVE** (#2466, SwiGLU) | — |
 | Warmup | **RETESTING** (#2433, per-iter) | — |
 | surf_weight | PARTIAL — testing sw↓ | #2426 (sw=5/7) |
-| EMA | PENDING (fern #2117) | 0.99 on slice=24+wd=0 |
+| Slot routing temperature | **ACTIVE** (#2473, fixed T ablation) | — |
+| Coord-noise augmentation | **ACTIVE** (#2474, σ=0.005) | — |
 | eta_min | STALE (alphonse #2326) | — |
-| activation | STALE (edward #2327) | — |

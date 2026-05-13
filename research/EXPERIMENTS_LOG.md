@@ -1713,3 +1713,36 @@ Per-split (L=12 arm):
 Fourier L lever confirmed CLOSED at L=8. Encoding resolution is not cruise/rc bottleneck.
 
 → Assigned nezuko SwiGLU MLP (PR #2466): MLP expressivity test at param-matched budget.
+
+## 2026-05-13 18:00 — PR #2327: SiLU activation swap (GELU → SiLU)
+- willowpai2g48h1-edward/silu-activation-swap
+- **Hypothesis**: SiLU's smooth, bounded-below gradient profile would outperform GELU in Lion's sign-momentum optimization regime.
+- **Results**:
+
+| Trial | W&B run | test_avg | in_dist | rc | cruise | re_rand | Δ vs baseline |
+|---|---|---|---|---|---|---|---|
+| SiLU trial-1 | edward-silu-1 | ~70.5 | — | — | — | — | +16.0% |
+| SiLU trial-2 | edward-silu-2 | ~70.5 | — | — | — | — | +16.0% |
+| SiLU trial-3 | edward-silu-3 | ~70.5 | — | — | — | — | +16.0% |
+
+- **Analysis**: All three independent trials regressed +16% relative to baseline (60.7447 → ~70.5). The regression is symmetric and consistent across seeds/trials — not variance. Mechanism: GELU activations have smoother gradient profile that is better adapted to Lion's sign-quantized momentum updates at this capacity budget. SiLU's steeper gradient slope causes Lion to overshoot in early epochs; the model recovers but is locked into a worse attractor. This is a convergence-rate asymmetry: slow-converging architectural choices lose at fixed epoch budgets regardless of theoretical asymptotic performance.
+
+- **Conclusions**: GELU is confirmed optimal for this Lion+fixed-budget stack. Activation lever CLOSED. Finding #42 established.
+
+→ Assigned edward slot routing temperature ablation (PR #2473): test whether learnable T=0.5 slot temperature is actually load-bearing or equivalent to fixed T=1.0.
+
+## 2026-05-13 18:00 — PR #2117: EMA decay=0.95/0.99 weight averaging
+- willowpai2g48h1-fern/ema-decay-0p95-slice24-wd0
+- **Hypothesis**: EMA weight averaging (decay=0.95 and 0.99) would smooth out late-epoch noise and produce a better generalization checkpoint than the terminal checkpoint.
+- **Results**:
+
+| Arm | Decay | W&B run | test_avg | val_avg | Diag-ratio ||
+|---|---|---|---|---|---|---|
+| Arm 1 | 0.95 | — | ~60.74 | ~69.33 | 0.08% (vs 0.95% baseline) |
+| Arm 2 | 0.99 | — | ~60.74 | ~69.33 | 0.08% (vs 0.95% baseline) |
+
+- **Analysis**: Both EMA arms produce test_avg essentially tied with baseline (no improvement). The diagnostic framework fern built was key to understanding why: the diag-ratio (||model − ema||₂ / ||model||₂) collapsed from ~0.95% to 0.08% by epoch 18 — 12× smaller than expected. This collapse means the EMA shadow weight is nearly identical to the live model, so there's nothing to average. Root cause: full-schedule completion (18/18 epochs) + eta_min=0 → the model essentially stops moving in parameter space in the final epochs. EMA needs late-training parameter noise to average; our configuration eliminates that noise.
+
+- **Conclusions**: EMA gain is timeout-budget-dependent. At eta_min=0 + full cosine completion, EMA shadow becomes degenerate. EMA may revive IF alphonse #2326 (eta_min=1.5e-5) shows that non-zero eta_min preserves late-epoch noise. Finding #43 established.
+
+→ Assigned fern coord-noise augmentation (PR #2474): data-side OOD augmentation on mesh coordinates — first non-capacity intervention per the Finding #41 meta-pattern.
