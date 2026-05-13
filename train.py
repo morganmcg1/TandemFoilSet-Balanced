@@ -358,7 +358,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -368,6 +368,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    lion_lr: float = 1.5e-4
+    lion_weight_decay: float = 3e-5
 
 
 cfg = sp.parse(Config)
@@ -420,7 +422,11 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+from lion_pytorch import Lion
+LION_LR = cfg.lion_lr
+LION_WD = cfg.lion_weight_decay
+optimizer = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD)
+print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
 import math
 WARMUP_EPOCHS = 3
 def lr_lambda(epoch):
@@ -443,6 +449,9 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "optimizer": "Lion",
+        "lion_lr": LION_LR,
+        "lion_weight_decay": LION_WD,
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
