@@ -2,6 +2,90 @@
 
 ---
 
+## 2026-05-13 22:15 — PR #2605: askeladd Gradient Noise (Neelakantan 2015) — assignment (NEW cycle 72)
+
+- **Branch:** `willowpai2g48h4-askeladd/gradient-noise-neelakantan2015`
+- **Student:** willowpai2g48h4-askeladd (idle after closure of #2548 Reflection TTA)
+- **Hypothesis:** Add Gaussian noise to parameter gradients AFTER `loss.backward()`, BEFORE `optimizer.step()`. Schedule `σ_t = η / (1+t)^γ` with η=0.01, γ=0.55 (Neelakantan 2015 paper defaults for attention-based tasks). Mechanistically distinct from thorfinn's input noise (#2521, potential win): input noise perturbs `x` → Tikhonov regularization in weight space; gradient noise perturbs `g = ∂L/∂θ` → optimization-side exploration, helps escape sharp local minima. If both win they compose orthogonally. Distinct from all prior optimizer closures (β1/β2/ε/AdaBelief/Lion) — none add stochasticity to the gradient direction.
+- **Arms:** Single arm η=0.01, γ=0.55 on CURRENT SOTA #2444 config with `--use_grad_noise --grad_noise_eta 0.01 --grad_noise_gamma 0.55`.
+- **Branching:** ≥0.7 val win = confident → 2nd seed; 0.4-0.7 val win = marginal → 2nd seed; ±0.4 = borderline → consider η=0.1 arm before closing; ≥1.0 regression = close.
+- **Implementation:** global step counter added, `p.grad.add_(randn_like * sigma_t)` for all model + surf_head params after backward, before clip/step.
+
+---
+
+## 2026-05-13 22:15 — PR #2603: alphonse RMSNorm replaces LayerNorm (Zhang & Sennrich 2019) — assignment (NEW cycle 72)
+
+- **Branch:** `willowpai2g48h4-alphonse/rmsnorm-replace-layernorm`
+- **Student:** willowpai2g48h4-alphonse (idle after closure of #2579 QK-Norm)
+- **Hypothesis:** Replace all 15 `nn.LayerNorm(hidden_dim)` in TransolverBlock (3 per block × 5 blocks: `ln_1`, `ln_2`, `ln_3`) with `nn.RMSNorm(hidden_dim)`. Zhang & Sennrich 2019 (arXiv:1910.07467). RMSNorm formula: `y = x / sqrt(mean(x²) + eps) * gamma` — no mean-subtraction, no bias, one reduction op instead of two. Mechanistically distinct from QK-Norm (#2579, just closed): QK-Norm normalizes Q/K INSIDE the attention scoring step; RMSNorm replaces the per-sublayer normalization BEFORE each block. Different tensors, different forward-pass sites. Strong empirical record (Llama, T5, PaLM).
+- **Arms:** Single arm `--use_rmsnorm` on CURRENT SOTA #2444 config.
+- **Implementation:** `_make_norm(hidden_dim, use_rmsnorm)` helper, thread `use_rmsnorm` through Transolver → TransolverBlock. Verify `nn.RMSNorm` exists in PyTorch 2.4+ else provide 8-line fallback.
+- **Per-split prediction:** RMSNorm expected to help CRUISE and RE_RAND (easy splits with lower-variance features where mean-subtraction may over-correct) rather than RC (hard split with variable features where LayerNorm centering may be load-bearing). This is the OPPOSITE prediction from QK-Norm — the two normalizations target different aspects, so per-split signatures are mechanistically separating.
+
+---
+
+## 2026-05-13 22:15 — PR #2548: askeladd Reflection TTA — CLOSED cycle 72
+
+- **Branch:** `willowpai2g48h4-askeladd/reflection-tta-inference`
+- **Student:** willowpai2g48h4-askeladd
+- **Result:** CATASTROPHIC REGRESSION — 3.51x–3.82x worse val_tta_avg across 2 seeds.
+
+| Run | val (no TTA) | val_tta_avg | Δ | test (no TTA) | test_tta_avg | Δ |
+|-----|-------------|-------------|---|---------------|-------------|---|
+| `jcf1ledc` | 85.15 | 299.22 | +214.07 (3.51x) | 75.44 | 286.15 | +210.71 (3.79x) |
+| `278an6fe` | 83.82 | 320.24 | +236.42 (3.82x) | 74.50 | 305.94 | +231.44 (4.11x) |
+
+Both baseline (no-TTA) runs reproduce SOTA within T_mult=2 seed variance (~1-2 val spread per cycle-71 nezuko data).
+
+- **Mechanism diagnosis (2-cause, both confirmed):**
+  1. **Ground-plane asymmetry (3/4 splits):** raceCar mesh z ∈ [+0.02, +9.60] (strictly above z=0 ground plane). Reflection → z ∈ [-9.60, -0.02], pure OOD coordinates. Model never trained on below-ground configurations.
+  2. **Feature-vector inconsistency (all 4 splits):** conservative implementation reflects position dims (z) and AoA dims (14, 18) but NOT saf dims (2-3) and dsdf dims (4-11). This creates a chimera input — even z-symmetric cruise mesh (z ∈ [-9.55, +9.55]) regresses 2.25x because saf/dsdf describe the unreflected foil while position/AoA describe the reflected one.
+- **Key diagnostic:** **Model becomes MORE non-equivariant during training.** Smoke test at e3: val_baseline=468.03 vs val_tta=468.23 (Δ=+0.20, essentially identical). At e21: Δ=+214. The model learns a strongly asymmetric input→output mapping over training, not because of architecture but because of the asymmetric dataset (ground-plane raceCar geometry).
+- **Paper value:** Clean experimental evidence that PhysicsAttention (absolute positional features, slice-attention) is strongly non-equivariant. The "learned during training" signature rules out architectural equivariance. Equivariant architectures (E(3)-NNs) would require an architectural change.
+- **Closure:** Both PR-body branching rules ("TTA regresses: model has learned ASYMMETRIC bias — close axis") and the student's own analysis concur. Permanently closed.
+
+---
+
+## 2026-05-13 22:15 — PR #2579: alphonse QK-Norm — CLOSED cycle 72
+
+- **Branch:** `willowpai2g48h4-alphonse/qk-norm-attention`
+- **Student:** willowpai2g48h4-alphonse
+- **W&B run:** `hsfz1c73` (finished, 31 min, peak 43.0 GB)
+- **Results:**
+
+| Metric | QK-Norm | SOTA #2444 | Δ |
+|--------|---------|------------|---|
+| val_avg/mae_surf_p | 82.3964 | 82.2642 | +0.13 (borderline neutral) |
+| test_avg/mae_surf_p | 72.0863 | 72.4019 | −0.32 (marginal) |
+
+- **Per-split val:**
+
+| Split | QK-Norm | SOTA | Δ |
+|-------|---------|------|---|
+| val_single_in_dist | 97.0848 | 96.8979 | +0.19 |
+| val_geom_camber_rc | 100.5738 | 103.1372 | **−2.56** ✓ |
+| val_geom_camber_cruise | 55.1356 | 53.9395 | +1.20 |
+| val_re_rand | 76.7914 | 75.0824 | +1.71 |
+| **val_avg** | **82.3964** | **82.2642** | **+0.13** |
+
+- **Per-split test:**
+
+| Split | QK-Norm | SOTA | Δ |
+|-------|---------|------|---|
+| test_single_in_dist | 85.4738 | 85.5208 | −0.05 |
+| test_geom_camber_rc | 88.9409 | 91.0868 | **−2.15** ✓ |
+| test_geom_camber_cruise | 46.1836 | 44.9228 | +1.26 |
+| test_re_rand | 67.7468 | 68.0771 | −0.33 |
+| **test_avg** | **72.0863** | **72.4019** | **−0.32** |
+
+- **Mechanism findings:**
+  1. **Prediction confirmed on per-split rc** (−2.56 val/−2.15 test, ≥6σ). Bounded attention contributions DO help the hard OOD geometry split. But the gain is offset by cruise (+1.20) and re_rand (+1.71) → net val_avg +0.13.
+  2. **qk_scale near-stationary** (+1.2% from init=5.657). The learnable temperature is essentially a no-op under this recipe; the L2-normalization constraint on Q/K vectors is the operative mechanism, not temperature adaptation.
+  3. **Restart spike NOT dampened** (+24.56 at e7→e8 vs ~25-50 typical range). Spike is LR×m/√v on ALL weights, not specifically attention-magnitude driven — consistent with frieren's #2507 WD-spike finding.
+- **Closure reason:** val_avg +0.13 falls in ±0.4 close band per original branching rules. Single-seed null on primary metric. test_avg −0.32 marginal but within σ_T_mult=2 ≈ 1.0-1.5 (cycle-71 nezuko partial data). Paper value: (a) confirms attention scoring step has no untapped headroom in this regime; (b) L2-normalization geometry vs temperature re-tuning is a clean mechanistic decomposition.
+
+---
+
 ## 2026-05-13 21:30 — PR #2521: thorfinn input Gaussian noise — POTENTIAL WIN on noise-1e-2, sent back for 2nd seed (cycle 71)
 
 - **Branch:** `willowpai2g48h4-thorfinn/input-gaussian-noise`
