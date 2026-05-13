@@ -468,6 +468,7 @@ class Config:
     seed: int = 0
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
+    use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
 
 
 cfg = sp.parse(Config)
@@ -530,7 +531,24 @@ n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
 print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# Kendall uncertainty heads — per-channel learnable log_sigma scalars (Kendall, Gal, Cipolla 2018).
+# Channel order matches loss decomposition: [surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy].
+KENDALL_CHANNELS = ("surf_p", "surf_ux", "surf_uy", "vol_p", "vol_ux", "vol_uy")
+KENDALL_LOG_SIGMA_CLAMP = 3.0  # clamp |log_sigma| ≤ 3, so sigma ∈ [exp(-3), exp(3)] ≈ [0.05, 20]
+if cfg.use_kendall_uncertainty:
+    log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
+    # Separate param group with weight_decay=0 — weight decay on log_sigma acts as an unwanted prior toward sigma=1.
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
+            {"params": [log_sigmas], "weight_decay": 0.0},
+        ],
+        lr=cfg.lr,
+    )
+    print(f"Kendall uncertainty: ON (6 log_sigmas, clamp ±{KENDALL_LOG_SIGMA_CLAMP}, no weight decay on log_sigmas)")
+else:
+    log_sigmas = None
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
@@ -620,11 +638,34 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        # Apply per-sample re_weight to the per-element error; surf_weight stays on top.
+        # Apply per-sample re_weight to the per-element error; surf_weight (or Kendall sigmas) stays on top.
         weighted_err = sq_err * re_weight_expanded
-        vol_loss = (weighted_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (weighted_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Per-channel decomposition: mean-reduced over masked nodes.
+        # Y channel order: 0=Ux, 1=Uy, 2=p. Kendall channel order: surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy.
+        surf_count = surf_mask.sum().clamp(min=1)
+        vol_count = vol_mask.sum().clamp(min=1)
+        per_channel_surf = (weighted_err * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_count  # [3]
+        per_channel_vol = (weighted_err * vol_mask.unsqueeze(-1)).sum(dim=(0, 1)) / vol_count    # [3]
+        surf_loss = per_channel_surf.sum()  # sum over 3 channels (matches old surf_loss aggregate)
+        vol_loss = per_channel_vol.sum()
+
+        if cfg.use_kendall_uncertainty:
+            # 6 per-channel scalar losses in Kendall order.
+            kendall_losses = torch.stack([
+                per_channel_surf[2],  # surf_p
+                per_channel_surf[0],  # surf_ux
+                per_channel_surf[1],  # surf_uy
+                per_channel_vol[2],   # vol_p
+                per_channel_vol[0],   # vol_ux
+                per_channel_vol[1],   # vol_uy
+            ])
+            log_sigmas_clamped = torch.clamp(log_sigmas, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
+            # Kendall, Gal, Cipolla 2018 eq. 9: L = sum_c [ 0.5 * exp(-2*log_sigma_c) * loss_c + log_sigma_c ]
+            precision = torch.exp(-2.0 * log_sigmas_clamped)
+            loss = (0.5 * precision * kendall_losses + log_sigmas_clamped).sum()
+        else:
+            loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
         with torch.no_grad():
@@ -658,6 +699,15 @@ for epoch in range(MAX_EPOCHS):
         if grad_norm_val is not None:
             log_payload["train/grad_norm"] = grad_norm_val
             log_payload["train/clip_fraction"] = clip_fired
+        if cfg.use_kendall_uncertainty:
+            with torch.no_grad():
+                ls = log_sigmas.detach()
+                ls_c = torch.clamp(ls, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
+                eff_w = 0.5 * torch.exp(-2.0 * ls_c)
+                for ci, name in enumerate(KENDALL_CHANNELS):
+                    log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
+                    log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
+                    log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
         wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
@@ -740,11 +790,32 @@ for epoch in range(MAX_EPOCHS):
         f"lr={current_lr:.2e}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
+    if cfg.use_kendall_uncertainty:
+        with torch.no_grad():
+            ls = log_sigmas.detach().cpu().numpy()
+            ls_clamped = torch.clamp(log_sigmas.detach(), -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP).cpu().numpy()
+            eff_w_arr = (0.5 * torch.exp(-2.0 * torch.tensor(ls_clamped))).numpy()
+        ls_str = "  ".join(f"{n}={s:+.3f}(w={w:.3f})" for n, s, w in zip(KENDALL_CHANNELS, ls, eff_w_arr))
+        print(f"    kendall: {ls_str}")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+if cfg.use_kendall_uncertainty:
+    with torch.no_grad():
+        ls_final = log_sigmas.detach().cpu().numpy()
+        ls_clamped = torch.clamp(log_sigmas.detach(), -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP).cpu().numpy()
+        eff_w_final = (0.5 * torch.exp(-2.0 * torch.tensor(ls_clamped))).numpy()
+    print("\nFinal Kendall log_sigmas:")
+    for n, s, w in zip(KENDALL_CHANNELS, ls_final, eff_w_final):
+        print(f"  {n:<10s} log_sigma={s:+.4f}  effective_weight={w:.4f}")
+    kendall_summary = {}
+    for n, s, w in zip(KENDALL_CHANNELS, ls_final, eff_w_final):
+        kendall_summary[f"final/log_sigma_{n}"] = float(s)
+        kendall_summary[f"final/effective_weight_{n}"] = float(w)
+    wandb.summary.update(kendall_summary)
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
 # the run even if no base epoch ever improved val_avg/mae_surf_p.
