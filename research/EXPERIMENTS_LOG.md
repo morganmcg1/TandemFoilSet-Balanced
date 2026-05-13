@@ -1612,3 +1612,25 @@ Per-epoch time: ~108s (slice=32, as expected). Timeout at 17/18 epochs.
 **Implication**: The optimum for surf_weight is BELOW 10, not above. Sweeping UP was the wrong direction. Symmetric argument: sw=5 should improve rc by ~3.4 while only losing ~2.3 on in_dist+cruise → net improvement.
 
 **Lever NOT closed**: Sweep redirected downward. Assigned sw=5 + sw=7 on current slice=24 stack (#2426).
+
+## 2026-05-13 16:30 — PR #2343: Weight decay wd=0 ablation — MERGED ✓ (NEW BEST)
+- Branch: willowpai2g48h1-thorfinn/wd-ablation
+- W&B runs: `rxid6958` (wd=0 primary), `2agc4ytr` (wd=1e-5 secondary)
+
+| Arm | val (best, ep) | test_avg | Δ vs prev best |
+|---|---|---|---|
+| **wd=0** | **69.3303** (ep 18) | **60.7447** | **−1.78%** ✓ NEW BEST |
+| wd=1e-5 | 71.6855 (ep 18) | 64.2606 | +3.90% ✗ |
+| wd=1e-4 (baseline) | 70.7422 (ep 18) | 61.8457 | — |
+
+Per-split (wd=0): in_dist=62.37, rc=70.92, cruise=46.91, re_rand=62.78.
+
+Improvement is broad-based: in_dist −3.39%, rc −1.91%, re_rand −1.63%, cruise +0.41% (flat). Not OOD-localized — the wd=0 benefit is general.
+
+**Key mechanism finding**: Late-epoch grad-norm LOWER under wd=0 (12.91 vs 16.85 at ep18) and lower clip fire rate (76.6% vs 82.5%). If wd=1e-4 were doing meaningful L2 shrinkage, removing it would raise weights/grads. The OPPOSITE occurred: Lion's slice+clip regularization already provides sufficient constraint; the L2 term was competing rather than complementing. wd=1e-5 anomalous regression most likely single-seed noise.
+
+**Finding #38: Lion wd=0 confirmed optimal at slice_num=24 + clip=5.0**. Slice locality prior + Lion bulk-clip direction smoother already provide sufficient regularization. Explicit L2 weight decay is redundant and slightly harmful in [0, 1e-4] range.
+
+**Per-epoch time:** ~102.6s (unchanged). Full 18/18 schedule.
+
+**Cumulative gain update:** 121.28 → 60.74 = **−49.9%** from launch baseline.
