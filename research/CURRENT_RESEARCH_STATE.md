@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~09:12 UTC
+- **Date:** 2026-05-13 ~10:00 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -26,17 +26,18 @@
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| **#2086** | **thorfinn** | **Lion lr probe: lr=4e-4 (bold) + lr=3e-4 (midpoint) on Lion+MAE** | **WIP — new** |
+| #2086 | thorfinn | Lion lr probe: lr=4e-4 (bold) + lr=3e-4 (midpoint) on Lion+MAE | WIP |
 | #2070 | edward | Lion-no-EMA ablation + AdamW-no-EMA (diagnostic for ICML appendix) | WIP |
 | #2069 | alphonse | n_head sweep: n_head=8 (more) and n_head=2 (fewer) on Lion+MAE | WIP |
 | #2056 | nezuko | surf_weight sweep on Lion+MAE: sw=5 (Arm1), sw=15 (Arm2) | WIP |
 | #2052 | frieren | batch_size=8: lr=2e-4 linear (Arm1), lr=1e-4 batch-only (Arm2) | WIP |
-| #2001 | askeladd | Lion β1 sweep: β1=0.95 (Arm1), β1=0.85 (Arm2) | WIP |
+| **#2144** | **askeladd** | **Lion β2 sweep: β2=0.995 (Arm1), β2=0.95 (Arm2) on Lion+MAE+lr=2e-4** | **WIP — new** |
 | #1999 | fern | Cosine T_max tuning: T_max=16 (Arm1), T_max=16+eta_min=1e-5 (Arm2) | WIP |
-| **#2131** | **tanjiro** | **Dropout sweep on Lion+MAE+lr=2e-4: dropout=0.3 (Arm1), dropout=0.1 (Arm2)** | **WIP — new** |
+| #2131 | tanjiro | Dropout sweep on Lion+MAE+lr=2e-4: dropout=0.3 (Arm1), dropout=0.1 (Arm2) | WIP |
 
 ## Closed experiments this round
 
+- **#2001 (askeladd):** Lion β1=0.95/β1=0.85 — regression both arms (+4.0%/+6.4% vs baseline). Asymmetric: β1=0.85 hurts ~2× more. Canonical β1=0.9 confirmed optimal. Closed.
 - **#1932 (thorfinn):** Lion lr=2e-4 — **MERGED** val=55.41, test=47.90.
 - **#1825 (askeladd):** MAE loss on Lion+EMA — **MERGED** val=56.58, test=48.82.
 - **#1823 (fern):** wd=5e-4 on AdamW base — regression. Closed.
@@ -60,13 +61,14 @@
 6. **Canonical wd scaling disconfirmed on Lion+MAE:** wd=5e-4 regresses vs wd=1e-4 at lr=2e-4. EMA+dropout already saturate regularization; additional wd over-constrains.
 7. **Architectural compute-budget wall (all 3 capacity axes confirmed):** depth (n_layers=6, +19%/epoch), width (n_hidden=192/256, +30-53%/epoch), AND FFN-width (mlp_ratio=3/4, +1ep cost + main/EMA 22pt gap) ALL regress at 30-min cap. Only compute-neutral architecture changes viable (n_head, slice_num).
 8. **Under-regularization signal (new):** mlp_ratio=4 showed main_val=85.3 vs ema_val=63.5 — 22pt gap, EMA absorbing heavy noise. Suggests baseline compound has regularization headroom. Tanjiro's #2131 dropout sweep probes this directly.
-8. **BF16:** foundational (+4 epochs in 30-min window).
+8. **Lion β1=0.9 confirmed optimal (#2001):** β1=0.95 (+4.0%) and β1=0.85 (+6.4%) both regress vs canonical 0.9. Asymmetric curve — over-reactive (β1=0.85) hurts 2× more than over-inertial (β1=0.95). Signed gradient direction is informative enough that maintaining it longer is preferable to discarding faster. β2=0.99 (momentum window) is the last untested Lion parameter.
+9. **BF16:** foundational (+4 epochs in 30-min window).
 
 ## Priority for current wave
 
 **Optimization frontier:**
 - Lion lr=4e-4 / 3e-4 (#2086 thorfinn) — test saturation boundary of the lr-doubling trend
-- Lion β1 sweep (#2001 askeladd) — β1=0.9 from large-scale vision; small-data optimal may differ
+- Lion β2 sweep (#2144 askeladd) — β2=0.99 default untested; at lr=2e-4, momentum window may be the noise bottleneck (β1=0.9 confirmed optimal)
 - Cosine T_max tuning (#1999 fern) — T_max=50 barely decays LR in 16 epochs
 - surf_weight on Lion+MAE (#2056 nezuko) — sw=15 direction untested with MAE's uniform weighting
 - batch_size + LR scaling (#2052 frieren)
@@ -83,4 +85,4 @@
 - **OneCycleLR** — peak in middle; pairs with Lion's large exploration amplitude
 - **EMA decay=0.995 retest on Lion+MAE** — #1857 hint suggests test improvement at 0.995
 - **slice_num sweep** — last unexplored architecture dimension (current=64)
-- **β2 (Lion momentum EMA) sweep at lr=2e-4** — at higher lr, β2=0.99 may be the noise bottleneck
+- **β2 sweep in progress (#2144)** — if β2=0.995/0.95 shows a win, probe further along the gradient-window axis

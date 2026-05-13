@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-05-13 ~10:00 — PR #2001: Lion β1 sweep β1=0.95 vs β1=0.85 on Lion+MAE+lr=2e-4 (askeladd) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-askeladd/lion-b1-sweep`
+- **Hypothesis:** β1=0.9 is Lion's canonical value from large-scale vision experiments; smaller datasets may prefer a different β1. β1=0.95 gives more momentum inertia (slower direction change), β1=0.85 makes the sign update more reactive to the current gradient.
+- **W&B runs:** `hqfbylaj` (Arm 1: β1=0.95), `2ql8nhfg` (Arm 2: β1=0.85)
+
+| Metric | Current baseline (#1932) | Arm 1 (β1=0.95) | Arm 2 (β1=0.85) | Δ Arm1 | Δ Arm2 |
+|--------|--------------------------|-----------------|-----------------|--------|--------|
+| val_avg/mae_surf_p | **55.41** | 57.62 | 58.93 | +4.00% | +6.36% |
+| test_avg/mae_surf_p | **47.90** | ~50.0 (est.) | ~51.4 (est.) | regression | regression |
+
+**Result:** CLOSED. Both arms regress vs baseline. The curve is **asymmetric**: β1=0.85 hurts ~2× more than β1=0.95, indicating the loss landscape is more sensitive to over-reactive updates than to over-inertial ones. The optimum is near or slightly above β1=0.9.
+
+**Key finding:** Canonical β1=0.9 is confirmed as (near-)optimal for this problem. The asymmetric response (β1=0.95 hurts less than β1=0.85) suggests the momentum inertia side has more tolerance than the reactivity side — the signed gradient direction is informative enough that maintaining it longer is preferable to discarding it faster. No follow-up β1 variations warranted.
+
+**Askeladd reassigned:** PR #2144 — Lion β2 sweep (β2=0.995 vs β2=0.95) on Lion+MAE+lr=2e-4. At lr=2e-4, the momentum buffer's memory window (β2) is the last untested hyperparameter in the Lion triplet (lr, β1, β2). β1=0.9 optimum confirmed; β2=0.99 default is untested.
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`
