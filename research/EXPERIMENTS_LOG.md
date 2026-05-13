@@ -7,7 +7,59 @@ SPDX-PackageName: senpai
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
 Primary metric: `val_avg/mae_surf_p` (lower is better).
-**Active baseline (PR #1480 merged):** `val_avg/mae_surf_p=116.30`, `test_avg/mae_surf_p=104.96` (run `5wvm7na2`, bf16+grad_accum=2). The cruise-NaN `train.py:evaluate_split` workaround is now landed, so `test_avg/mae_surf_p` is finite for all future runs on this branch.
+**Active baseline (PRs #1480 + #1471 merged):** `val_avg/mae_surf_p=110.27`, `test_avg/mae_surf_p=99.41` (run `krsv4c21`, p_weight=2.0+clip_grad_norm=1.0 stacked on bf16+grad_accum=2).
+
+---
+
+## 2026-05-13 00:10 — Cycle 8: #1471 MERGED, 2 sends-back, 1 close, 2 new assignments
+
+### PR #1471 frieren — p_weight=2.0 + clip_grad_norm=1.0: MERGED ✓
+
+Frieren rebased onto the #1480 baseline (bf16+accum2), applied p_weight=2.0 (down from 3.0) + grad clip 1.0 as directed in the cycle-7 send-back. Result:
+
+| Metric | This run (`krsv4c21`) | Prior baseline (#1480) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **110.27** | 116.30 | **−5.19%** |
+| `test_avg/mae_surf_p` | **99.41** | 104.96 | **−5.29%** |
+| `test_single_in_dist` | 116.69 | 115.83 | +0.74% (noise) |
+| `test_geom_camber_rc` | 110.01 | 117.06 | −6.02% |
+| `test_geom_camber_cruise` | 72.77 | 80.35 | −9.43% |
+| `test_re_rand` | 98.17 | 106.58 | −7.89% |
+
+Grad clip is binding on nearly every optimizer step (mean pre-clip norm 114, max 1203). This confirms the Transolver training loop runs in a high-gradient-magnitude regime. Despite the clip being very active, val curve descended monotonically with no late-epoch instability — clip is acting as a step-size cap, not just a safety valve.
+
+**New merged baseline: val=110.27 / test=99.41.** p_weight=2.0 and clip_grad_norm(max_norm=1.0) are now defaults on the branch.
+
+### PR #1655 alphonse — OneCycleLR(max_lr=2e-3): SENT BACK
+
+Alphonse's run (`flq69g4q`) delivered val=111.65/test=101.67 — a clean +4% vs old #1480 baseline. But after frieren's merge, the new bar is 110.27. Alphonse's result is now 1.4% worse than baseline. Sent back: rebase + re-run OneCycleLR on the new p_weight+clip base. Expected stack result: ~107 or better.
+
+| Metric | Alphonse (`flq69g4q`) | New baseline |
+|---|---|---|
+| `val_avg/mae_surf_p` | 111.65 | **110.27** (now the bar) |
+| `test_avg/mae_surf_p` | 101.67 | **99.41** |
+
+### PR #1654 edward — EMA decay=0.9995: CLOSED ✗
+
+Catastrophic: val=195.33 (live live=127.17, but EMA far behind). Root cause: at decay=0.9995, half-life ≈ 1386 steps → only 2.3 half-lives in a 3200-step run. EMA was still ~20% weighted toward initial random parameters at end of training. Implementation correct; decay badly mistuned. Closed with re-assignment to decay=0.999 (~4.6 half-lives in budget).
+
+| Metric | EMA (val) | Live (val) | Baseline |
+|---|---|---|---|
+| Epoch 5 | 318 | 188 | — |
+| Epoch 10 | 258 | 149 | — |
+| Epoch 15 | 210 | 124 | — |
+| Epoch 17 | **195** | **127** | **110.27** |
+
+### PR #1469 fern — lr=2e-3+clip: SENT BACK
+
+Fern's only comment was a bug-fix for the cruise-NaN (duplicating what #1480 already merged). No terminal SENPAI-RESULT for the actual lr=2e-3 hypothesis. Baseline moved twice since their last update. Sent back with full rebase + re-run instructions. Hypothesis is still live — fern's lr=2e-3 on the new p_weight+clip base is high-value.
+
+### New assignments (cycle 8)
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| **#1717** | frieren | `lr: 5e-4 → 1e-3` — LR bracket between current base (5e-4) and fern's 2e-3. Justified by grad-clip step-size cap and effective-batch scaling rule (accum=2). |
+| **#1718** | edward | EMA `decay=0.999` — budget-calibrated retry (4.6 half-lives in 3200 steps vs prior 2.3). With clip now in base, live weights change more smoothly → EMA should track better. |
 
 ---
 
