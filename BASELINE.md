@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **50.6001** | #2033 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine | epoch 44 of 44 (terminal); -6.31% vs #1846; val_single_in_dist -18.87% |
-| `test_avg/mae_surf_p` | **43.9680** | #2033 | — | all 4 test splits improve; -7.68% vs #1846 |
+| `val_avg/mae_surf_p` | **49.8053** | #2173 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + **n_head=2 (dim_head=64)** | epoch 47 of 47 (terminal); -1.57% vs #2033; val_cruise -5.09% / val_in_dist -3.44% |
+| `test_avg/mae_surf_p` | **43.5396** | #2173 | — | test_in_dist -3.64%; test_rc -0.17%; test_cruise -2.03%; test_re_rand +1.14% |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 50.6001` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 49.8053` to be merged.
+
+## 2026-05-13 14:30 — PR #2173: n_head 4→2 (dim_head 32→64): architectural head-rank probe
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 47 of 47 — terminal (still improving when 30-min timeout hit; ep45→47 val: 50.91→49.97→49.81)
+- **Epochs reached:** 47 (~37.5 s/epoch, -9% vs baseline — fewer head projections)
+- **Peak GPU memory:** 20.05 GB (-6.1% vs baseline)
+- **Param count:** 708,269 (unchanged — head projections are hidden_dim × hidden_dim regardless)
+
+| Split | val mae_surf_p | Δ vs #2033 |
+|---|---|---|
+| `val_single_in_dist` | **46.2915** | **-3.44%** |
+| `val_geom_camber_rc` | 67.4416 | +0.11% (wash) |
+| `val_geom_camber_cruise` | **32.5963** | **-5.09%** |
+| `val_re_rand` | 52.8918 | +0.27% (wash) |
+| **val_avg** | **49.8053** | **-1.57%** |
+
+| Split | test mae_surf_p | Δ vs #2033 |
+|---|---|---|
+| `test_single_in_dist` | **40.6576** | **-3.64%** |
+| `test_geom_camber_rc` | **61.4956** | -0.17% |
+| `test_geom_camber_cruise` | **27.6519** | **-2.03%** |
+| `test_re_rand` | 44.3531 | +1.14% (mild) |
+| **test_avg** | **43.5396** | **-0.97%** |
+
+- **Config change:** `n_head: 4 → 2` in model_config (dim_head: 32 → 64). Same hidden_dim=128, same param count.
+- **Mechanism:** with n_head=4 / dim_head=32, each attention head's query/key subspace is rank-32 — too narrow to encode geometric/physical relations. n_head=2 / dim_head=64 doubles each head's rank for the same FLOPs/params. Matches literature optimum (dim_head≈64, Vaswani 2017, LLaMA, T5).
+- **Per-split pattern:** improvements concentrated in val_single_in_dist (-3.4%) and val_geom_camber_cruise (-5.1%) — in-dist and "easy" OOD benefit most. Harder OOD splits (val_geom_camber_rc +0.1%, val_re_rand +0.3%) are washed — data/regularization-limited, not head-rank-limited.
+- **Best=terminal again** — training still descending at 30-min timeout. Both #2033 and now #2173 are budget-limited; true ceiling is below 49.8.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-n-head-2-20260513-101936/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-n-head-2-20260513-101936/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/n-head-2" \
+      --epochs 50
+  ```
+  (n_head=2 now on advisor branch)
+
+---
 
 ## 2026-05-13 13:00 — PR #2033: Linear warmup 3ep + monotone cosine (T_max=47)
 
