@@ -46,6 +46,7 @@ from data import (
     load_test_data,
     pad_collate,
 )
+from lookahead import Lookahead
 from soap import SOAP
 
 # ---------------------------------------------------------------------------
@@ -581,7 +582,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
-optimizer = SOAP(
+_soap = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
     betas=(0.95, 0.95),
@@ -589,6 +590,12 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
+# Lookahead(SOAP, k=5, alpha=0.5) — slow weights blended toward fast every 5
+# inner steps via in-place .data.copy_(), no load_state_dict swap. Aliases
+# param_groups so CosineAnnealingLR + GradScaler unscale/step are transparent.
+LOOKAHEAD_K = 5
+LOOKAHEAD_ALPHA = 0.5
+optimizer = Lookahead(_soap, k=LOOKAHEAD_K, alpha=LOOKAHEAD_ALPHA)
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
@@ -629,6 +636,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     rescale_head.train()
+    optimizer.reset_diag()
     epoch_vol = epoch_surf = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
@@ -812,6 +820,7 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    lookahead_diag = optimizer.get_diag()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,6 +853,14 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "optimizer": "lookahead_soap",
+        "lookahead/k": LOOKAHEAD_K,
+        "lookahead/alpha": LOOKAHEAD_ALPHA,
+        "lookahead/sync_count": lookahead_diag["sync_count"],
+        "lookahead/drift_norm_mean": lookahead_diag["drift_norm_mean"],
+        "lookahead/slow_norm_mean": lookahead_diag["slow_norm_mean"],
+        "lookahead/drift_slow_ratio_mean": lookahead_diag["drift_slow_ratio_mean"],
+        "lookahead/drift_slow_ratio_max": lookahead_diag["drift_slow_ratio_max"],
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -861,6 +878,13 @@ for epoch in range(MAX_EPOCHS):
         f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
+    )
+    print(
+        f"    Lookahead(k={LOOKAHEAD_K}, alpha={LOOKAHEAD_ALPHA})  syncs={lookahead_diag['sync_count']}  "
+        f"drift_norm={lookahead_diag['drift_norm_mean']:.4f}  "
+        f"slow_norm={lookahead_diag['slow_norm_mean']:.4f}  "
+        f"drift/slow[mean={lookahead_diag['drift_slow_ratio_mean']:.5f}, "
+        f"max={lookahead_diag['drift_slow_ratio_max']:.5f}]"
     )
     if epoch_slice_entropy is not None:
         flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
