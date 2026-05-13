@@ -462,7 +462,21 @@ for i, b in enumerate(model.blocks):
     )
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+# H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
+# scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
+batches_per_epoch = len(train_loader)
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer, start_factor=1e-8, end_factor=1.0, total_iters=batches_per_epoch
+)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=14 * batches_per_epoch
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[batches_per_epoch],
+)
+print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={14 * batches_per_epoch} batches (14 epochs)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -518,12 +532,12 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
         optimizer.step()
+        scheduler.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -556,6 +570,7 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": current_lr,
+        "train/current_lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
