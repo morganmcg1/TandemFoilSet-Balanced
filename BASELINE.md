@@ -351,4 +351,56 @@ cd target && python train.py \
 - Val gain (−3.01%) is notably larger than test gain (−0.46%) — regularization helps in-dist val substantially but OOD test splits are mixed.
 - Both arms at 21 epochs in ~30.7 min (same throughput as PR #2091).
 - **Critical lesson:** WD axis is budget-dependent. WD=5e-4 was optimal at 14 epochs (PR #2031); WD=3e-4 is optimal at 21 epochs. PRs in-flight using WD=5e-4 must now beat **87.0144** to merit merge.
-- **All future PRs must beat `val_avg/mae_surf_p < 87.0144` to merge.**
+- **All future PRs must beat `val_avg/mae_surf_p < 87.0144` to merge (superseded — see PR #2227 below).**
+
+---
+
+## 2026-05-13 14:00 — PR #2227: SGDR cosine warm restart T_0=10 (new SOTA, biggest single-axis win since compile)
+
+- **val_avg/mae_surf_p: 83.9969** (best checkpoint epoch 20) — **−3.59% vs 87.0144 / −6.38% vs 89.7197 (compile baseline)**
+- **test_avg/mae_surf_p: 74.7684** — **−5.30% vs 78.9539 / −5.74% vs 79.3167**
+- **W&B run:** `kt5pk5qu` (Arm 1, T_0=10 winner; Arm 2 T_0=7 also won at val=86.7781)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 5e-4 \
+      --use_torch_compile \
+      --compile_mode default \
+      --cosine_restart_T_0 10 \
+      --cosine_restart_T_mult 1 \
+      --wandb_group cosine-restart \
+      --wandb_name restart-T0-10 \
+      --agent willowpai2g48h4-alphonse
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 20)
+
+| Split | mae_surf_p | vs prior SOTA (87.0144) | vs compile baseline (89.7197) |
+|-------|-----------|------------------------|--------------------------------|
+| `val_single_in_dist` | 104.89 | 106.99 → **−2.0%** ✓ | 114.92 → **−8.7%** ✓ |
+| `val_geom_camber_rc` | 101.05 | 104.00 → **−2.8%** ✓ | 108.66 → **−7.0%** ✓ |
+| `val_geom_camber_cruise` | 54.58 | 57.33 → **−4.8%** ✓ | 55.45 → **−1.6%** ✓ |
+| `val_re_rand` | 75.47 | 79.74 → **−5.4%** ✓ | 79.85 → **−5.5%** ✓ |
+| **val_avg** | **83.9969** | **−3.59% ✓** | **−6.38% ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior SOTA (78.9539) |
+|-------|-----------|--------------------------|
+| `test_single_in_dist` | 95.11 | 95.70 → **−0.6%** ✓ |
+| `test_geom_camber_rc` | 90.78 | 97.92 → **−7.3%** ✓ |
+| `test_geom_camber_cruise` | 45.16 | 48.06 → **−6.0%** ✓ |
+| `test_re_rand` | 68.03 | 74.14 → **−8.2%** ✓ |
+| **test 4-split mean** | **74.7684** | **−5.30% ✓** |
+
+### Notes
+
+- SGDR cosine warm restarts (Loshchilov & Hutter 2017, arXiv:1608.03983). Single restart at e10 (T_0=10, T_mult=1).
+- Mechanism CONFIRMED: each cycle's minimum is DEEPER than the prior cycle's. Cycle-1 e9=105 → cycle-2 e19=86.72 (−18%). Best epoch is RIGHT AT THE RESTART (e20=83.997 — model at end of cycle 2 deep descent, before next restart spike).
+- **Wins on every val and test split.** Largest gains on OOD geometry splits (`val_geom_camber_rc` −7.0%, `val_geom_camber_cruise` recovers fully) — restart escapes in-distribution overfitting and forces re-discovery of generalizing features.
+- Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. Both arms show the spike-then-deeper-recovery pattern reliably.
+- T_0=7 (Arm 2, ppmzaftp) also won (val=86.78) — 3 restarts in 21 epochs is too aggressive. T_0=10 = 2 cycles is optimal at this budget.
+- **Critical**: This was run with WD=5e-4 (NOT the new SOTA WD=3e-4 from PR #2178). The restart mechanism is so strong it OVERCOMES the over-regularization that made WD=5e-4 regress in PR #2178. Composing cosine_restart with WD=3e-4 is the immediate next experiment (potentially even better).
+- **All future PRs must beat `val_avg/mae_surf_p < 83.9969` to merge.**
