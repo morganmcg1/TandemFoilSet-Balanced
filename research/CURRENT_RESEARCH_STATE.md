@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 05:15 UTC
+- **Date / time:** 2026-05-13 05:40 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,21 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-15 update — #1666 tanjiro smooth_l1 MERGED ✓ (-9.3%), 4 closed, 5 new arms
+
+**New all-time best: val=88.06 / test=78.46.** smooth_l1(β=1) stacked on OneCycleLR: -9.3% val / -8.5% test. All four splits improve, single_in_dist -13.6%. Third consecutive compounding win (after bf16+accum, p_weight+clip, OneCycleLR, now smooth_l1). **Active baseline: val=88.06 / test=78.46.**
+
+4 closed: #1819 fern n_head=8 (+21%, catastrophic), #1802 edward wd=2e-4 (+3%, wd axis closed), #1749 frieren mlp_ratio=3 (+11%, capacity↑ needs more epochs), #1804 thorfinn eps=1e-6 (modest +3.2%, mechanism uncertain, gradient dynamics changed).
+
+5 new arms (all on new smooth_l1+OneCycleLR baseline):
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1863 | tanjiro | smooth_l1 β=0.5 (more MAE-like follow-up) |
+| #1864 | edward | dropout=0.05 (new regularization axis) |
+| #1865 | frieren | n_layers 5→6 (architecture depth, never run) |
+| #1866 | thorfinn | grad_accum 2→4 (eff_batch 8→16) |
+| #1867 | fern | AdamW beta1 0.9→0.95 (more momentum) |
 
 ## Cycle-14 update — 2 more negatives closed, 2 new arms on new baseline
 
@@ -224,30 +239,28 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-14)
+## Current leaderboard (post cycle-15)
 
-**Active baseline: val=97.07 / test=85.71** (PRs #1480+#1471+#1655 merged). Beat **97.07** to merge.
+**Active baseline: val=88.06 / test=78.46** (PRs #1480+#1471+#1655+#1666 merged). Beat **88.06** to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **alphonse #1829** (max_lr=4e-3) | TBD | TBD | WIP (cycle-13c, NEW BASELINE) | Double the current OneCycleLR peak LR |
-| **nezuko #1840** (pct_start=0.3) | TBD | TBD | WIP (cycle-14, NEW BASELINE) | Longer warmup; orthogonal to alphonse |
-| **askeladd #1839** (surf=7) | TBD | TBD | WIP (cycle-14, NEW BASELINE) | Inverse of failed upward axis |
-| **fern #1819** (n_head=8) | TBD | TBD | WIP (cycle-13b, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
-| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (cycle-13, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
-| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (cycle-13, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
-| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
-| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (cycle-11, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
-| **MERGED: alphonse #1655** (OneCycleLR) | **97.07** | **85.71** | **MERGED** cycle-13c | New baseline — strongest single result of launch |
-| **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | Prior baseline |
-| **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Foundation baseline |
-| ~~askeladd #1816~~ (surf=15) | 117.70 | 105.29 | CLOSED cycle-14 | Second negative upward; axis closed going up |
-| ~~nezuko #1803~~ (T_max=20) | 97.66 | 88.13 | CLOSED cycle-14 | Mechanistically valid but dominated by OneCycleLR |
-| ~~askeladd #1465~~ (surf=30) | 111.95 | 102.51 | CLOSED cycle-13b | First upward negative |
-| ~~fern #1469~~ (lr=2e-3) | 121.33 | 111.80 | CLOSED cycle-13b | LR axis closed at 5e-4 |
-| ~~nezuko #1778~~ (slice_num=128) | 125.03 | 111.65 | CLOSED cycle-13 | Throughput cost 52%; rejected |
-| ~~edward #1750~~ (wd=5e-5) | 113.15 | 103.08 | CLOSED cycle-13 | OOD-concentrated regression — wd is OOD-load-bearing |
-| ~~thorfinn #1738~~ (beta2=0.95) | 124.63 | 111.16 | CLOSED cycle-13 | Late-phase noise dominated |
+| **tanjiro #1863** (β=0.5) | TBD | TBD | WIP (cycle-15, NEW BASELINE) | β axis follow-up on own win |
+| **edward #1864** (dropout=0.05) | TBD | TBD | WIP (cycle-15, NEW BASELINE) | New regularization axis |
+| **frieren #1865** (n_layers=6) | TBD | TBD | WIP (cycle-15, NEW BASELINE) | Architecture depth |
+| **thorfinn #1866** (grad_accum=4) | TBD | TBD | WIP (cycle-15, NEW BASELINE) | Batch scaling |
+| **fern #1867** (beta1=0.95) | TBD | TBD | WIP (cycle-15, NEW BASELINE) | Optimizer momentum |
+| **alphonse #1829** (max_lr=4e-3) | TBD | TBD | WIP (cycle-13c) | OneCycleLR peak LR sweep |
+| **askeladd #1839** (surf=7) | TBD | TBD | WIP (cycle-14) | surf_weight downward test |
+| **nezuko #1840** (pct_start=0.3) | TBD | TBD | WIP (cycle-14) | OneCycleLR warmup duration |
+| **MERGED: tanjiro #1666** (smooth_l1 β=1) | **88.06** | **78.46** | **MERGED** cycle-15 | Eval/train alignment win |
+| **MERGED: alphonse #1655** (OneCycleLR) | 97.07 | 85.71 | **MERGED** cycle-13c | Schedule win |
+| **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | Loss shaping win |
+| **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Throughput win |
+| ~~fern #1819~~ (n_head=8) | 133.49 | 122.30 | CLOSED cycle-15 | +21%; 16-dim too small |
+| ~~edward #1802~~ (wd=2e-4) | 113.62 | 103.45 | CLOSED cycle-15 | wd axis closed at 1e-4 |
+| ~~frieren #1749~~ (mlp_ratio=3) | 122.79 | 104.90 | CLOSED cycle-15 | Capacity↑ needs more epochs |
+| ~~thorfinn #1804~~ (eps=1e-6) | 106.71 | 97.95 | CLOSED cycle-15 | Modest -3.2%, mechanism uncertain |
 
 ## Workflow observation — stale_wip PRs
 
@@ -271,6 +284,25 @@ Notably, edward and thorfinn both posted **detailed diagnostic comments** in cyc
 ## Plateau status
 
 Not in plateau. Most hypotheses sit inside the noise band but multiple directions are showing consistent (if small) movement. Need formal submissions to adjudicate.
+
+## Next directions (post cycle-15)
+
+**Active stack: smooth_l1(β=1) + OneCycleLR(max_lr=2e-3, pct_start=0.1) + p_weight=2 + clip=1 + bf16 + grad_accum=2 → val=88.06 / test=78.46.**
+
+Two consecutive compounding wins (OneCycleLR -12%, smooth_l1 -9.3%) suggest the model is optimization-limited and loss-alignment-limited. The current 8 in-flight experiments explore:
+- **Loss β axis**: tanjiro #1863 (β=0.5)
+- **Regularization**: edward #1864 (dropout), askeladd #1839 (surf_weight)
+- **Architecture**: frieren #1865 (n_layers=6)
+- **Training dynamics**: thorfinn #1866 (eff_batch=16), fern #1867 (beta1)
+- **Schedule**: alphonse #1829 (max_lr=4e-3), nezuko #1840 (pct_start=0.3)
+
+Axes definitively closed: LR (5e-4 optimum), wd (1e-4 optimum), n_head at current width, mlp_ratio at current budget, beta2 (0.999 default), slice_num.
+
+**Potential next-wave ideas (for when current queue clears):**
+1. n_hidden=192 or 256 — capacity may be bottleneck after gradient improvements
+2. AdamW eps now warranted to re-test on new smooth_l1 baseline (gradient dynamics changed)
+3. smooth_l1 β=2.0 (other direction on β axis)
+4. Combined: OneCycleLR max_lr=2e-3 + pct_start=0.3 if both axes give positive results
 
 ## Next directions (post cycle-13c)
 

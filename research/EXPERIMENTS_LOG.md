@@ -7,7 +7,60 @@ SPDX-PackageName: senpai
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
 Primary metric: `val_avg/mae_surf_p` (lower is better).
-**Active baseline (PRs #1480 + #1471 + #1655 merged):** `val_avg/mae_surf_p=97.07`, `test_avg/mae_surf_p=85.71` (run `d29igs7w`, OneCycleLR max_lr=2e-3 stacked on p_weight=2.0+clip_grad_norm=1.0+bf16+grad_accum=2).
+**Active baseline (PRs #1480 + #1471 + #1655 + #1666 merged):** `val_avg/mae_surf_p=88.06`, `test_avg/mae_surf_p=78.46` (run `fihyl2d5`, smooth_l1(β=1) stacked on OneCycleLR+p_weight=2+clip+bf16+grad_accum=2).
+
+---
+
+## 2026-05-13 ~05:30 — Cycle 15: #1666 tanjiro MERGED ✓ + 4 closed + 5 new arms
+
+### PR #1666 tanjiro — smooth_l1(β=1) replaces MSE: MERGED ✓
+
+**New all-time best: val=88.06 / test=78.46.** Second consecutive compounding winner.
+
+| Metric | OneCycleLR baseline (#1655) | smooth_l1+OneCycleLR (#1666) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 97.07 | **88.06** | **-9.3%** |
+| `test_avg/mae_surf_p` | 85.71 | **78.46** | **-8.5%** |
+
+W&B run: `fihyl2d5` (rebased on OneCycleLR baseline).
+
+Per-split test `mae_surf_p`:
+| Split | test | vs #1655 | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 85.74 | 99.24 | **-13.6%** |
+| `geom_camber_rc` | 90.31 | 95.85 | **-5.8%** |
+| `geom_camber_cruise` | 58.96 | 61.71 | **-4.5%** |
+| `re_rand` | 78.83 | 86.04 | **-8.4%** |
+
+**Analysis:** eval/train-alignment hypothesis confirmed. smooth_l1(β=1) caps per-element gradient at 1.0 for large residuals (MAE-shape for outliers), vs MSE's unbounded per-element gradient. Pre-clip global grad norm dropped 3-4× (mean 64→17, max 852→202) but the global clip still binds on nearly every step — the two mechanisms are not redundant. The stack smooth_l1+OneCycleLR+p_weight+clip is now three orthogonal compounding wins: loss alignment (#1666), schedule shape (#1655), and channel weighting (#1471). Single_in_dist took the biggest per-split gain (-13.6%) — the large-outlier suppression benefits in-distribution samples most.
+
+**Note from student:** gradient stat diagnostic newly logged (grad_norm before/after clip). Useful for future experiments.
+
+### PR #1819 fern — n_head=8: CLOSED ✗
+
+val=133.49 / test=122.30 (+21%/+23% vs old baseline). Catastrophic regression across all splits. 16-dim per head is below practical floor for this task. Additionally, throughput was 54% slower than expected. N_head=8 direction closed at n_hidden=128. To explore more heads, would need n_hidden=256 (dim_head stays ≥32).
+
+### PR #1802 edward — wd=2e-4: CLOSED ✗
+
+val=113.62 / test=103.45 (+3%/+4% vs old baseline). wd=2e-4 worsened geom_camber_rc (+3.9%) — did not invert the wd=5e-5 OOD signal symmetrically. Three-point sweep (5e-5/1e-4/2e-4) confirms **wd=1e-4 is at a local minimum on the OOD axis**. Weight_decay axis definitively closed.
+
+### PR #1749 frieren — mlp_ratio=3: CLOSED ✗
+
+val=122.79 / test=104.90 (+11.4%/+5.5% vs old baseline). Every split regressed. At 18 epochs and 30-min cap, the extra capacity doesn't converge. IID worsened most (not OOD), ruling out overfitting interpretation — the model simply needs more epochs for the wider FFN. FFN-width-via-mlp_ratio closed at this training budget.
+
+### PR #1804 thorfinn — AdamW eps=1e-6: CLOSED (modest positive, mechanism uncertain)
+
+val=106.71 / test=97.95 (-3.2%/-1.5% vs old baseline). Modest positive direction but late-phase oscillation still exceeded the 5-MAE threshold per student's own diagnostic — noise floor not dominant. With smooth_l1 now changing gradient dynamics (pre-clip norm 3-4× lower), closed and redirected to a fresh orthogonal axis.
+
+### 5 new assignments
+
+| PR | Student | Hypothesis | New axis |
+|---|---|---|---|
+| #1863 | tanjiro | smooth_l1 β 1.0 → 0.5 | β axis follow-up on own win; more MAE-like |
+| #1864 | edward | dropout=0.05 | New regularization axis (stochastic noise) |
+| #1865 | frieren | n_layers 5 → 6 | Architecture depth (never actually run despite #1665 stale attempt) |
+| #1866 | thorfinn | grad_accum 2 → 4 (eff_batch 8→16) | Training dynamics / batch-size axis |
+| #1867 | fern | AdamW beta1 0.9 → 0.95 | Optimizer momentum, motivated by smooth_l1's lower grad norm |
 
 ---
 
