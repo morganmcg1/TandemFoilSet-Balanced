@@ -486,7 +486,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
     use_ema: bool = True  # weight-averaged shadow used for val/test eval + best ckpt
-    ema_decay: float = 0.95  # half-life ~14 steps; #2050 used 0.999 which lagged the rapid descent
+    ema_decay: float = 0.99  # half-life ~69 steps; lands diag-ratio in 1-2% tracking band per prior 0.95/0.99 sweep on slice=64
 
 
 cfg = sp.parse(Config)
