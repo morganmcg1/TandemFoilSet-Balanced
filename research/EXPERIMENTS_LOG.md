@@ -1,5 +1,55 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 08:30 — PR #2035: Lion lr=3.5e-4 on n_hidden=160 + δ=0.3 stack (CLOSED — plateau confirmed)
+
+- Student branch: `charliepai2g24h5-frieren/lion-lr-upward-n160`
+- Hypothesis: LR optimum continues moving upward on δ=0.3 stack (mechanism: tighter δ puts more residuals in quadratic regime, needing larger LR). Testing lr=3.5e-4 vs baseline lr=3.0e-4.
+
+### Results (vs old baseline 55.92 / 51.92, n_hidden=160 + δ=0.3)
+
+| Metric | Baseline (lr=3e-4) | This PR (lr=3.5e-4) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 55.92 | **55.90** | −0.02 (within noise) |
+| test_avg/mae_surf_p | 51.92 | **52.24** | +0.32 (worse) |
+
+*Note: New baseline is 53.62 (PR #2028). Neither this result nor the old baseline beats the new baseline.*
+
+### Per-split val (lr=3.5e-4, epoch 16)
+
+| Split | lr=3.5e-4 | lr=3.0e-4 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 59.05 | 61.14 | **−2.09** |
+| geom_camber_rc | 70.00 | 69.82 | +0.18 |
+| geom_camber_cruise | 38.06 | 37.23 | +0.83 |
+| re_rand | 56.51 | 55.51 | +1.00 |
+| **avg** | **55.90** | **55.92** | **−0.02** |
+
+### Key finding: Split-pattern diagnostic
+
+Higher LR helps the easiest split (`single_in_dist`, −2.09) but hurts all three OOD splits by ~+1 MAE each. This is mild over-stepping — the optimizer converges faster on easy samples (in-distribution) while regressing on harder OOD domains that prefer slower, more careful convergence. Average comes out flat.
+
+### Frieren's mechanism revision (valuable paper analysis)
+
+The upward-LR-with-δ prediction held for narrow models (n_hidden=128) but breaks down for n_hidden=160. Wider models are typically MORE LR-sensitive (larger per-step gradient contributions), which over-rides the δ-driven step-magnitude argument. The LR response bowl is WIDE-AND-FLAT in the 3.0–3.5e-4 region.
+
+### LR response curve (cumulative, n_hidden=160 + δ=0.3 stack)
+
+| lion_lr | val | test | Source |
+|---:|---:|---:|---|
+| 2.0e-4 | TBD | TBD | #2027 tanjiro (rerun in flight) |
+| **3.0e-4** | **55.92** | **51.92** | #1755 (merged baseline) |
+| **3.5e-4** | **55.90** | **52.24** | #2035 this PR |
+
+### Disposition
+
+**Closed.** Clear negative result against old baseline; not competitive against new baseline (53.62). The bowl-flat finding ends the upward LR probe. Frieren's analysis quality is paper-worthy.
+
+**Reassigned to PR #2084:** Cosine LR floor (eta_min=lr×0.05). Directly motivated by frieren's observation that epoch 16 is always best and the curve is still descending.
+
+- Metrics: `models/model-lion_lr3_5e4_n160-20260513-072359/metrics.jsonl`
+
+---
+
 ## 2026-05-13 08:05 — PR #2027: Lion lr=2e-4 on n_hidden=160 baseline (SENT BACK — rerun needed on current stack)
 
 - Student branch: `charliepai2g24h5-tanjiro/lion-lr-sweep-n160`

@@ -47,6 +47,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 | **Huber δ=0.3 → −14.2% further (#1880, MERGED)** | **δ curve not bottomed at 0.5; 0.3 optimal — δ=0.2 ties within noise** |
 | **n_hidden=160 → −1.7% val further (#1755, MERGED)** | **Width gain orthogonal to loss-shape; val_geom_camber_rc (hardest OOD) benefits most (−5.38)** |
 | **Per-channel Huber δ=[0.5,0.5,0.2] → −4.1% val further (#2028, MERGED)** | **Decoupling p vs Ux/Uy δ: pressure tight (0.2), velocity expanded (0.5). Uniform improvement all 8 splits.** |
+| Lion lr=3.5e-4 plateau on n160+δ=0.3 stack (#2035, CLOSED) | val=55.90 (flat vs 55.92). LR bowl wide-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts 3 OOD splits — mild over-stepping. Mechanism: wider model over-rides δ-driven LR shift. |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
@@ -64,7 +65,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 | #2074 | fern | Per-channel δ refinement: δ_p=0.15 (Arm A) and δ_p=0.10 (Arm B) | WIP — new | Beat 53.62 |
 | #2027 | tanjiro | Lion lr=2e-4 rerun on current per-channel δ stack (rebase+rerun) | WIP (sent back) | Beat 53.62 |
 | #2044 | edward | DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 | WIP | Beat 53.62 |
-| #2035 | frieren | Lion lr=3.5e-4 on n_hidden=160 (upward LR probe) | WIP | Beat 53.62 |
+| #2084 | frieren | Cosine LR floor: eta_min=lr×0.05 to prevent zero-LR at epoch 16 | WIP — new | Beat 53.62 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP | Beat 53.62 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (baseline updated) | Beat 53.62 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline updated) | Beat 53.62 |
@@ -75,6 +76,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 | PR | Student | Outcome | Note |
 |---|---|---|---|
 | #2028 | fern | **MERGED** | Per-channel Huber δ=[Ux=0.5,Uy=0.5,p=0.2] → **new baseline 53.62/49.65** (−4.1% val, −4.4% test). Uniform gain across all 8 splits. |
+| #2035 | frieren | CLOSED | lr=3.5e-4 val=55.90 (flat vs 55.92 old baseline). LR plateau confirmed; bowl wide-flat at 3.0–3.5e-4. Split pattern reveals over-stepping on OOD. |
 | #2027 | tanjiro | SENT BACK | lr=2e-4 beats old baseline (52.795 < 55.92 on uniform-δ=0.3 code) but ran before #2028 merged. Needs rerun on current per-channel δ stack. |
 | #1755 | fern | **MERGED** | n_hidden=160 + δ=0.3 → baseline 55.92/51.92 (−1.7% val, −2.4% test). val_geom_camber_rc −5.38. |
 | #1879 | tanjiro | CLOSED | Huber δ=0.3+ep16 compound reproduced baseline exactly (bit-identical); hypothesis absorbed by #1880 |
@@ -89,7 +91,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 1. **Does per-channel δ_p=0.15 or 0.10 beat δ_p=0.20?** (#2074 fern) — pressure δ response surface not mapped below 0.2
 2. **Does Lion lr=2e-4 beat lr=3e-4 on the combined per-channel δ + n160 stack?** (#2027 tanjiro rerun) — strong signal from old stack; confirmation run needed
 3. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
-4. **Does Lion lr=3.5e-4 beat lr=3e-4 on n_hidden=160?** (#2035 frieren) — LR optimum may continue rising with per-channel δ
+4. **Does cosine LR floor (eta_min=lr×0.05) prevent over-decay and improve final-epoch performance?** (#2084 frieren) — epoch 16 always best, curve still descending; floor at 1.5e-5 may squeeze more improvement
 5. **Does dropout=0.1 compose with per-channel δ+n160?** (#1656 thorfinn) — orthogonal regularization axes
 6. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
 7. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko) — loss balance may have changed
@@ -101,6 +103,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 - **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test (renorm-ceiling). Obsoleted by Lion switch.
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
 - **n_hidden=192 (#1755 Arm B, lr=4e-4)**: Budget cliff + grad_norm instability at lr=4e-4. 2× regression evidence.
+- **Lion lr=3.5e-4 on n160 (#2035)**: val=55.90 (flat vs 55.92). LR bowl wide-and-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts OOD splits — mild over-stepping. Do not probe lr≥4e-4. LR optimum reversal mechanism was narrow-model-specific; wider model over-rides it.
 - **Huber δ=0.1 (uniform)**: δ=0.3 and δ=0.2 essentially tied for uniform scalar; further reduction into δ<0.2 will degrade cruise/re_rand splits due to over-saturation. BUT: per-channel δ_p=0.1 or 0.15 may still be optimal when velocity is separately set to 0.5 — this is what #2074 tests.
 - **Instance-norm loss with 1e-6 clamp (#1470)**: +3.7% val regression. Near-uniform low-Re samples (y_std ≈ 5e-4) got amplified 1000-2000×.
 - **slice_num=128 (#1481)**: +22.5% val regression. 41% per-epoch slowdown → budget cliff.
@@ -112,7 +115,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 3. **batch=8 + epochs=13** — larger effective batch on n_hidden=160; ~30 min with batch=8. Tests whether Lion's sign-voting benefits from reduced noise at B=8.
 4. **Activation sweep** — GELU → SiLU in MLP blocks. Simple, well-tested in transformers.
 5. **n_layers=6 + n_hidden=160 compound** — test depth×width compound after alphonse's n_layers=6 result lands.
-6. **Lion lr=4e-4 on n_hidden=160** — if frieren's #2035 (lr=3.5e-4) wins, probe further up the LR curve.
+6. **SiLU activation** — swap GELU → SiLU in MLP blocks. Simple, orthogonal to all current changes, potentially 1–3% gain.
 7. **Layer-wise LR decay** — different LR per Transolver layer.
 8. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
 9. **Weight decay sweep at lr=2e-4** — if lr=2e-4 confirms: wd=4.5e-5 / 6e-5 / 8e-5 to couple wd with new lr.
