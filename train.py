@@ -467,6 +467,12 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Focal MAE element-wise reweighting on SURFACE-PRESSURE residuals only.
+    # Multiplier: ((|residual_p| / mean_surf_|residual_p|) ** focal_gamma).clamp(0.1, 10.0)
+    # Detached: backprop flows through Huber values, not the weight. Stacks on top
+    # of p_channel_weight and surf_weight (multiplicatively, numerator-only).
+    # focal_gamma=0 → uniform weight=1 (disables focal). focal_gamma=2 default.
+    focal_gamma: float = 2.0
 
 
 cfg = sp.parse(Config)
@@ -646,6 +652,15 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # Focal-weight diagnostics on surface pressure positions, accumulated over epoch.
+    focal_w_sum = torch.zeros((), dtype=torch.float64, device=device)
+    focal_w_sqsum = torch.zeros((), dtype=torch.float64, device=device)
+    focal_w_max_epoch = 0.0
+    focal_n_surf = torch.zeros((), dtype=torch.float64, device=device)
+    focal_unw_p_surf_sum = torch.zeros((), dtype=torch.float64, device=device)
+    focal_w_p_surf_sum = torch.zeros((), dtype=torch.float64, device=device)
+    focal_p95_sum = 0.0
+    focal_p95_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -673,12 +688,29 @@ for epoch in range(MAX_EPOCHS):
             )
             vol_mask = (mask & ~is_surface).unsqueeze(-1)
             surf_mask = (mask & is_surface).unsqueeze(-1)
+            surf_mask_2d = mask & is_surface  # (B, N) for focal weight computation
 
-            # Apply per-channel weights linearly to the per-element Huber output
-            # (after Huber transform). This gives exact w× gradient amplification
-            # on the pressure channel regardless of Huber regime — applying weights
-            # to the raw residual would distort the δ threshold per-channel.
-            sq_err_weighted = sq_err * ch_weights
+            # Focal element-wise reweighting on surface pressure (hard-element mining).
+            # weight = ((|res_p| / mean_surf_|res_p|) ** γ).clamp(0.1, 10.0)
+            # Detached weight: backprop flows through Huber values only. Reference
+            # scale is the batch-global mean over surface positions, so weight ≈ 1
+            # on a typical surface element and >1 on outlier (hard) surface elements.
+            with torch.no_grad():
+                p_residual_abs = residual[..., 2].detach().abs().float()  # fp32 for stable mean
+                surf_mask_f = surf_mask_2d.float()
+                surf_n = surf_mask_f.sum().clamp(min=1.0)
+                p_surf_mean_abs = ((p_residual_abs * surf_mask_f).sum() / surf_n).clamp_min(1e-6)
+                focal_weight = ((p_residual_abs / p_surf_mean_abs) ** cfg.focal_gamma).clamp(0.1, 10.0)
+                focal_weight = torch.where(surf_mask_2d, focal_weight, torch.ones_like(focal_weight))
+
+            # Per-element focal multiplier: identity except channel 2 on surface.
+            focal_mult = torch.ones_like(sq_err)
+            focal_mult[..., 2] = focal_weight.to(sq_err.dtype)
+
+            # Apply per-channel weights × focal multiplier to the per-element Huber.
+            # ch_weights gives exact 5× p-channel amplification regardless of Huber regime;
+            # focal_mult further amplifies hard-residual surface pressure elements.
+            sq_err_weighted = sq_err * ch_weights * focal_mult
 
             # Per-sample relative Huber-L2 (weighted Huber numerator, unweighted
             # ||y||^2 denominator). Each sample contributes Σ_ch w_ch · huber(pred - y)
@@ -705,6 +737,25 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+
+            # Focal weight diagnostics on surface positions only.
+            fw_surf = focal_weight[surf_mask_2d]  # 1D vector
+            if fw_surf.numel() > 0:
+                fw_f64 = fw_surf.to(torch.float64)
+                focal_w_sum += fw_f64.sum()
+                focal_w_sqsum += (fw_f64 ** 2).sum()
+                fw_max_b = float(fw_f64.max())
+                if fw_max_b > focal_w_max_epoch:
+                    focal_w_max_epoch = fw_max_b
+                focal_n_surf += float(fw_f64.numel())
+                if fw_f64.numel() >= 20:
+                    focal_p95_sum += float(torch.quantile(fw_f64, 0.95))
+                    focal_p95_n += 1
+                # Effective loss ratio: weighted vs unweighted Huber on p-surf.
+                huber_p_f64 = sq_err_f64[..., 2]
+                surf_f64 = surf_mask_2d.to(torch.float64)
+                focal_unw_p_surf_sum += (huber_p_f64 * surf_f64).sum()
+                focal_w_p_surf_sum += (huber_p_f64 * surf_f64 * focal_weight.to(torch.float64)).sum()
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -795,6 +846,20 @@ for epoch in range(MAX_EPOCHS):
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
 
+    # Focal-weight epoch stats (mean/std over surface positions, max/p95, effective loss ratio).
+    focal_n_total = focal_n_surf.item()
+    if focal_n_total > 0:
+        fw_mean = focal_w_sum.item() / focal_n_total
+        fw_var = max(focal_w_sqsum.item() / focal_n_total - fw_mean ** 2, 0.0)
+        fw_std = fw_var ** 0.5
+        unw_sum = focal_unw_p_surf_sum.item()
+        w_sum = focal_w_p_surf_sum.item()
+        focal_eff_ratio = (w_sum / unw_sum) if unw_sum > 1e-12 else 0.0
+        fw_p95 = focal_p95_sum / focal_p95_n if focal_p95_n > 0 else 0.0
+    else:
+        fw_mean = fw_std = fw_p95 = focal_eff_ratio = 0.0
+        focal_w_max_epoch = 0.0
+
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
     # final completed epoch even if the run is cut short by timeout).
@@ -834,7 +899,13 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
-        "loss_type": "huber_relative_l2_channel_weighted",
+        "loss_type": "huber_relative_l2_channel_weighted_focal",
+        "focal/gamma": cfg.focal_gamma,
+        "focal/weight_mean": fw_mean,
+        "focal/weight_std": fw_std,
+        "focal/weight_max": focal_w_max_epoch,
+        "focal/weight_p95": fw_p95,
+        "focal/effective_loss_ratio": focal_eff_ratio,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -856,6 +927,11 @@ for epoch in range(MAX_EPOCHS):
         f"Uy={surf_huber_per_ch[1]:.5f} p={surf_huber_per_ch[2]:.5f}]  "
         f"vol[Ux={vol_huber_per_ch[0]:.5f} "
         f"Uy={vol_huber_per_ch[1]:.5f} p={vol_huber_per_ch[2]:.5f}]"
+    )
+    print(
+        f"    Focal γ={cfg.focal_gamma}  "
+        f"weight[mean={fw_mean:.3f} std={fw_std:.3f} max={focal_w_max_epoch:.3f} p95={fw_p95:.3f}]  "
+        f"eff_loss_ratio={focal_eff_ratio:.3f}"
     )
     print(
         f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
