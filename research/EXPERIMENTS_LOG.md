@@ -8,6 +8,24 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 05:57 — PR #1711 (alphonse surf-ch-weight [0.5,0.5,2.0] — H18) — **MERGED** (8th compound win)
+
+- Branch: `charliepai2g24h4-alphonse/surf-ch-weight-h18`
+- Merge commit: `bd1d19a`; baseline update: `1d612fc`
+- Hypothesis: per-channel surf-loss weighting `[w_Ux, w_Uy, w_p] = [0.5, 0.5, 2.0]` (p:vel ratio 4×) applied to `surf_loss` and `evaluate_split`. Mass-preserving (sum=3.0), zero new parameters. Expected -0.5% to -2.5% val.
+
+| Metric | This PR (H18) | Baseline (#1799) | Δ vs current |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **75.391** | 78.260 | **−3.67%** |
+| test_avg/mae_surf_p (4-split) | **66.608** | 69.903 | **−4.71%** |
+
+Per-split val: single_in_dist=82.287 (−3.50%) / camber_rc=85.631 (−3.84%) / camber_cruise=58.630 (−6.34%) / re_rand=75.015 (−1.46%). **All 4 improve.**
+Per-split test: single_in_dist=72.554 (−6.80%) / camber_rc=74.210 (−6.64%) / camber_cruise=50.877 (−1.60%) / re_rand=68.792 (−2.52%). **All 4 improve.**
+
+Per-channel trade-off (mechanism confirmed): Ux +21%, Uy +12%, p −3.8% on val; Ux/Uy don't appear in primary metric so trade is pure win. Direction was the correct "fix the loss surface" pivot from failed #1610/#1636/#1675 prediction-side attempts. Test gains exceed val gains on in-dist (+6.80% vs 3.50%) — possible generalization bonus from reduced velocity-channel overfitting.
+
+Exceeded pre-registered prediction band (-0.5% to -2.5%). Alphonse assigned #1962: bracket-up to [0.33, 0.33, 2.33] (p:vel ratio 7×) to test if there's remaining capacity to reallocate. Metric artifacts: `models/model-charliepai2g24h4-alphonse-surf-ch-weight-h18-20260513-050507/metrics.jsonl`.
+
 ## 2026-05-13 05:08 — PR #1828 (frieren SmoothL1 β=0.01 — H25, rebase 2) — **SEND-BACK** (β=0.005 close-out)
 
 - Branch: `charliepai2g24h4-frieren/smooth-l1-loss-beta-001`
@@ -28,6 +46,20 @@ Per-split test: 2 improve cleanly (test_single_in_dist **−3.40%**, test_re_ran
 **Mechanism finding (load-bearing for next-step design):** Compared to frieren's pre-rebase L=4 stack result (val −0.97%, test −1.82%), both effects compressed substantially on the post-LayerScale stack. Late-cooldown grad_norm rose from 13.9 (L=4 stack) to 28.5 (current stack) at epoch 14 — directly demonstrating that LayerScale's γ_l ≈ 0.1 per-channel residual attenuation absorbs part of what SmoothL1's smooth-near-zero gradient was buying on the unmodified residual stream. Both mechanisms reduce the late-training per-step update magnitude in the small-residual regime; the combination is sub-additive.
 
 **Decision: REQUEST CHANGES → β=0.005 bracket close-out.** Val is essentially flat (+0.05% does not satisfy the primary-metric improvement merge criterion), but the direction isn't dead — test wins are clean and the mechanism is real, just attenuated. β=0.005 (one-line change) is the natural disambiguator: tighter window may match the now-LayerScale-attenuated residual distribution, or confirm the loss-landscape direction is tapped out on this stack. Three pre-registered outcomes: A win (8th compound), B flat (close direction), C regression (β=0.01 was the narrow sweet spot).
+
+## 2026-05-13 05:57 — PR #1830 (edward Fourier L=8 — H26) — **SEND-BACK** (rebase onto post-#1711 baseline)
+
+- Branch: `charliepai2g24h4-edward/fourier-coords-L8`
+- Hypothesis: Fourier coord encoding N_FREQS=6→8, fun_dim=52. Expected val-win or val-plateau with Gaussian Fourier pivot.
+
+| Metric | This PR (#1799 baseline) | Baseline (#1799) | Δ vs #1799 |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **78.144** | 78.260 | **−0.149%** (PLATEAU per verdict tree ±0.5%) |
+| test_avg/mae_surf_p (4-split) | **68.168** | 69.903 | **−2.48%** (clean WIN) |
+
+Mechanism checks passed: `val_geom_camber_cruise` showed smallest delta (plateau-leading-edge signal, as predicted); no aliasing on `val_single_in_dist`; best-epoch shifted 15→14 (soft overfit signal). LayerScale γ depth-decreasing pattern preserved (0.110→0.081 MLP branch).
+
+**Send-back reason:** Measured against #1799 baseline (78.260). PR #1711 alphonse merged first (new baseline 75.391). Fourier L=8 at 78.144 doesn't beat 75.391. Sent back for rebase onto post-#1711 HEAD; mechanisms are orthogonal (input-side vs loss-side), expect clean compound.
 
 ## 2026-05-13 03:56 — PR #1799 (thorfinn LayerScale CaiT init=0.1 — H23) — **MERGED** (7th compound win)
 

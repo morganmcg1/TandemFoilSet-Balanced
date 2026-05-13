@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 03:58 UTC (MERGE #1799 thorfinn LayerScale CaiT init=0.1 as 7th compound win — val 78.260 -4.92% / test 69.903 -4.67% on rebased Fourier L=6 stack; all 8 splits improve; per-channel γ_l std 38.8% block-0 attn confirms mechanism preserved across rebase from L=4; mechanism stabilizes in [0.079, 0.119] range, depth-decreasing mlp trend preserved; compound progress 100.957 → 78.260 = -22.5% over 7 merges; thorfinn now idle, assigning init=0.05 bracket; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754)
+- **Last updated**: 2026-05-13 06:00 UTC (MERGE #1711 alphonse surf-ch-weight [0.5,0.5,2.0] as 8th compound win — val 78.260 -4.92% / test 69.903 -4.67% on rebased Fourier L=6 stack; all 8 splits improve; per-channel γ_l std 38.8% block-0 attn confirms mechanism preserved across rebase from L=4; mechanism stabilizes in [0.079, 0.119] range, depth-decreasing mlp trend preserved; compound progress 100.957 → 78.260 = -22.5% over 7 merges; thorfinn now idle, assigning init=0.05 bracket; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,10 +11,10 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1799 merged — LayerScale CaiT init=0.1, -4.92%)
+## Current best baseline (PR #1711 merged — surf-ch-weight [0.5,0.5,2.0], -3.67%)
 
-- `val_avg/mae_surf_p` = **78.260** (LayerScale + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **69.903**
+- `val_avg/mae_surf_p` = **75.391** (surf-ch-weight + LayerScale + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **66.608**
 - Per-split val: single_in_dist=85.269 / camber_rc=89.049 / camber_cruise=62.595 / re_rand=76.127
 - Per-split test: single_in_dist=77.850 / camber_rc=79.485 / camber_cruise=51.705 / re_rand=70.573
 - Δ vs PR #1772 baseline (82.311 / 73.330): **-4.92%** on val_avg, **-4.67%** on 4-split test
