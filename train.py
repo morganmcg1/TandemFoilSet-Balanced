@@ -82,6 +82,31 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class AuxReHead(nn.Module):
+    """Predicts log_re_shifted from a pooled per-block hidden representation.
+
+    Mask-aware mean pool over real nodes, then a small MLP -> scalar.
+    Input:  x [B, N, hidden_dim], mask [B, N] (optional, True = real node).
+    Output: scalar prediction per sample, shape [B].
+    """
+
+    def __init__(self, hidden_dim, mlp_dim=32):
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_dim),
+            nn.GELU(),
+            nn.Linear(mlp_dim, 1),
+        )
+
+    def forward(self, x, mask=None):
+        if mask is not None:
+            mask_f = mask.unsqueeze(-1).float()
+            pooled = (x * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp_min(1.0)
+        else:
+            pooled = x.mean(dim=1)
+        return self.head(pooled).squeeze(-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -215,14 +240,35 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         # Optional FiLM params [B, L, 2, H] — sliced per block as (gamma, beta) each [B, 1, H].
         film_params = data.get("film", None)
+        # Optionally collect per-block hidden states (pre-mlp2 for last block) so
+        # aux Re heads can read them. Off by default to keep eval-mode memory low.
+        collect_hidden = data.get("collect_hidden", False)
+        hidden_states: list[torch.Tensor] | None = [] if collect_hidden else None
         for i, block in enumerate(self.blocks):
+            film_pair = None
             if film_params is not None:
                 gamma = film_params[:, i, 0, :].unsqueeze(1)
                 beta = film_params[:, i, 1, :].unsqueeze(1)
-                fx = block(fx, film=(gamma, beta))
+                film_pair = (gamma, beta)
+            if not block.last_layer:
+                fx = block(fx, film=film_pair)
+                if collect_hidden:
+                    hidden_states.append(fx)
             else:
-                fx = block(fx)
-        return {"preds": fx}
+                # Inline last-block forward to expose the [B, N, hidden] state
+                # AFTER FiLM modulation but BEFORE mlp2 collapses it to out_dim.
+                h = block.attn(block.ln_1(fx)) + fx
+                h = block.mlp(block.ln_2(h)) + h
+                if film_pair is not None:
+                    gamma, beta = film_pair
+                    h = (1 + gamma) * h + beta
+                if collect_hidden:
+                    hidden_states.append(h)
+                fx = block.mlp2(block.ln_3(h))
+        out = {"preds": fx}
+        if collect_hidden:
+            out["hidden_states"] = hidden_states
+        return out
 
 
 class FiLMConditioner(nn.Module):
@@ -271,6 +317,7 @@ class FiLMTransolver(nn.Module):
     """
 
     def __init__(self, n_layers, n_hidden, cond_dim=11, film_mid_dim=64,
+                 aux_re_weight: float = 0.0, aux_re_mid_dim: int = 32,
                  **transolver_kwargs):
         super().__init__()
         self.transolver = Transolver(
@@ -281,15 +328,41 @@ class FiLMTransolver(nn.Module):
             cond_dim=cond_dim, mid_dim=film_mid_dim,
         )
         self._last_film: torch.Tensor | None = None  # detached, for diagnostics
+        # Per-block auxiliary log_re prediction heads. Only instantiated when
+        # the aux loss is active so the baseline-arm parameter count is unchanged.
+        self.aux_re_weight = aux_re_weight
+        self.n_layers = n_layers
+        if aux_re_weight > 0:
+            self.aux_re_heads = nn.ModuleList([
+                AuxReHead(n_hidden, mlp_dim=aux_re_mid_dim) for _ in range(n_layers)
+            ])
+        else:
+            self.aux_re_heads = None
+        self._last_aux_re_stack: torch.Tensor | None = None
 
     def forward(self, data, **kwargs):
         x = data["x"]
         mask = data["mask"]
         film_params = self.film(x, mask)
         self._last_film = film_params.detach()
-        # Forward through Transolver with FiLM injected via data dict.
-        data_with_film = {**data, "film": film_params}
-        return self.transolver(data_with_film, **kwargs)
+        # Only collect per-block hidden states during training when aux heads are
+        # active — eval forwards pay no extra memory or compute.
+        compute_aux = (
+            self.aux_re_heads is not None
+            and self.aux_re_weight > 0
+            and self.training
+        )
+        data_with_film = {**data, "film": film_params, "collect_hidden": compute_aux}
+        result = self.transolver(data_with_film, **kwargs)
+        if compute_aux:
+            hidden_states = result.get("hidden_states", [])
+            aux_preds = [
+                head(h, mask=mask) for h, head in zip(hidden_states, self.aux_re_heads)
+            ]
+            aux_stack = torch.stack(aux_preds, dim=1)  # [B, n_layers]
+            result["aux_re_stack"] = aux_stack
+            self._last_aux_re_stack = aux_stack.detach()
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +542,8 @@ class Config:
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
+    aux_re_weight: float = 0.0  # weight on auxiliary per-block log_re prediction loss (0 = off)
+    aux_re_mid_dim: int = 32  # hidden dim of the per-block auxiliary log_re MLP head
 
 
 cfg = sp.parse(Config)
@@ -518,6 +593,8 @@ model = FiLMTransolver(
     n_hidden=model_config["n_hidden"],
     cond_dim=11,
     film_mid_dim=cfg.film_mid_dim,
+    aux_re_weight=cfg.aux_re_weight,
+    aux_re_mid_dim=cfg.aux_re_mid_dim,
     space_dim=model_config["space_dim"],
     fun_dim=model_config["fun_dim"],
     out_dim=model_config["out_dim"],
@@ -529,7 +606,12 @@ model = FiLMTransolver(
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
-print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
+n_params_aux = (
+    sum(p.numel() for p in model.aux_re_heads.parameters())
+    if model.aux_re_heads is not None else 0
+)
+aux_str = f", AuxRe heads {n_params_aux/1e3:.1f}K (weight={cfg.aux_re_weight})" if n_params_aux else ""
+print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K{aux_str})")
 
 # Kendall uncertainty heads — per-channel learnable log_sigma scalars (Kendall, Gal, Cipolla 2018).
 # Channel order matches loss decomposition: [surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy].
@@ -613,6 +695,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    epoch_aux_re_sum = 0.0  # per-epoch average aux Re loss (cfg.aux_re_weight > 0 only)
+    epoch_aux_per_block_sum: torch.Tensor | None = None
+    epoch_aux_corr_per_block_sum: torch.Tensor | None = None
+    aux_n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -622,7 +708,9 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm, "mask": mask})["preds"]
+        model_out = model({"x": x_norm, "mask": mask})
+        pred = model_out["preds"]
+        aux_re_stack = model_out.get("aux_re_stack", None)  # [B, n_layers] or None
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
@@ -663,9 +751,35 @@ for epoch in range(MAX_EPOCHS):
             log_sigmas_clamped = torch.clamp(log_sigmas, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
             # Kendall, Gal, Cipolla 2018 eq. 9: L = sum_c [ 0.5 * exp(-2*log_sigma_c) * loss_c + log_sigma_c ]
             precision = torch.exp(-2.0 * log_sigmas_clamped)
-            loss = (0.5 * precision * kendall_losses + log_sigmas_clamped).sum()
+            main_loss = (0.5 * precision * kendall_losses + log_sigmas_clamped).sum()
         else:
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            main_loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Aux Re prediction loss: MSE between per-block predictions and log_re_shifted.
+        # Forces every block to maintain enough Re information in its hidden state for
+        # a small MLP head to recover it — representation-bottleneck regularization.
+        aux_re_loss_val = None  # for logging only (Python float)
+        per_block_aux_losses = None
+        per_block_aux_corr = None
+        if cfg.aux_re_weight > 0 and aux_re_stack is not None:
+            # log_re_shifted: [B, 1] -> [B, n_blocks] (same target per block).
+            target_re = log_re_shifted.detach().squeeze(-1)  # [B]
+            target_expanded = target_re.unsqueeze(1).expand_as(aux_re_stack)
+            aux_re_loss = F.mse_loss(aux_re_stack, target_expanded, reduction='mean')
+            loss = main_loss + cfg.aux_re_weight * aux_re_loss
+            aux_re_loss_val = aux_re_loss.item()
+            # Per-block diagnostics (no grad) — verify non-trivial across depth.
+            with torch.no_grad():
+                per_block_aux_losses = ((aux_re_stack - target_expanded) ** 2).mean(dim=0)  # [n_blocks]
+                # Within-batch Pearson r per block (noisy at B=4, but cheap to log).
+                if aux_re_stack.shape[0] > 1:
+                    t_centered = target_re - target_re.mean()
+                    p_centered = aux_re_stack - aux_re_stack.mean(dim=0, keepdim=True)
+                    t_norm = t_centered.norm().clamp_min(1e-8)
+                    p_norm = p_centered.norm(dim=0).clamp_min(1e-8)
+                    per_block_aux_corr = (t_centered.unsqueeze(1) * p_centered).sum(dim=0) / (t_norm * p_norm)
+        else:
+            loss = main_loss
 
         # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
         with torch.no_grad():
@@ -708,11 +822,36 @@ for epoch in range(MAX_EPOCHS):
                     log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
                     log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
                     log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
+        if aux_re_loss_val is not None:
+            log_payload["train/aux_re_loss_avg"] = aux_re_loss_val
+            log_payload["train/aux_re_weight"] = cfg.aux_re_weight
+            log_payload["train/main_loss"] = main_loss.item()
+            if per_block_aux_losses is not None:
+                for bi in range(per_block_aux_losses.numel()):
+                    log_payload[f"train/aux_re_loss_block_{bi}"] = per_block_aux_losses[bi].item()
+            if per_block_aux_corr is not None:
+                for bi in range(per_block_aux_corr.numel()):
+                    log_payload[f"train/aux_re_corr_block_{bi}"] = per_block_aux_corr[bi].item()
         wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+        if aux_re_loss_val is not None:
+            epoch_aux_re_sum += aux_re_loss_val
+            aux_n_batches += 1
+            if per_block_aux_losses is not None:
+                pbl_cpu = per_block_aux_losses.detach().cpu()
+                if epoch_aux_per_block_sum is None:
+                    epoch_aux_per_block_sum = pbl_cpu.clone()
+                else:
+                    epoch_aux_per_block_sum += pbl_cpu
+            if per_block_aux_corr is not None:
+                pbc_cpu = per_block_aux_corr.detach().cpu()
+                if epoch_aux_corr_per_block_sum is None:
+                    epoch_aux_corr_per_block_sum = pbc_cpu.clone()
+                else:
+                    epoch_aux_corr_per_block_sum += pbc_cpu
 
     if epoch >= swa_start_epoch:
         swa_model.update_parameters(model)
@@ -750,6 +889,16 @@ for epoch in range(MAX_EPOCHS):
         log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
         log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
         log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
+    if aux_n_batches > 0:
+        log_metrics["train/aux_re_loss_avg_epoch"] = epoch_aux_re_sum / aux_n_batches
+        if epoch_aux_per_block_sum is not None:
+            per_block_avg = epoch_aux_per_block_sum / aux_n_batches
+            for bi in range(per_block_avg.numel()):
+                log_metrics[f"train/aux_re_loss_block_{bi}_epoch"] = per_block_avg[bi].item()
+        if epoch_aux_corr_per_block_sum is not None:
+            per_block_corr_avg = epoch_aux_corr_per_block_sum / aux_n_batches
+            for bi in range(per_block_corr_avg.numel()):
+                log_metrics[f"train/aux_re_corr_block_{bi}_epoch"] = per_block_corr_avg[bi].item()
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -816,6 +965,24 @@ if cfg.use_kendall_uncertainty:
         kendall_summary[f"final/log_sigma_{n}"] = float(s)
         kendall_summary[f"final/effective_weight_{n}"] = float(w)
     wandb.summary.update(kendall_summary)
+
+# Final per-block aux Re loss summary (last training epoch — proxy for "converged" aux state).
+if cfg.aux_re_weight > 0 and aux_n_batches > 0 and epoch_aux_per_block_sum is not None:
+    per_block_avg = (epoch_aux_per_block_sum / aux_n_batches).tolist()
+    overall = epoch_aux_re_sum / aux_n_batches
+    print("\nFinal-epoch aux Re prediction diagnostics (mean across batches):")
+    print(f"  overall MSE = {overall:.4f}")
+    aux_summary: dict[str, float] = {"final/aux_re_loss_avg": overall}
+    for bi, v in enumerate(per_block_avg):
+        print(f"  block_{bi}: MSE = {v:.4f}")
+        aux_summary[f"final/aux_re_loss_block_{bi}"] = float(v)
+    if epoch_aux_corr_per_block_sum is not None:
+        per_block_corr_avg = (epoch_aux_corr_per_block_sum / aux_n_batches).tolist()
+        print("  per-block within-batch Pearson r (B=4, noisy):")
+        for bi, v in enumerate(per_block_corr_avg):
+            print(f"    block_{bi}: r = {v:+.4f}")
+            aux_summary[f"final/aux_re_corr_block_{bi}"] = float(v)
+    wandb.summary.update(aux_summary)
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
 # the run even if no base epoch ever improved val_avg/mae_surf_p.
