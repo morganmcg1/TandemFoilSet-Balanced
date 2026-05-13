@@ -466,6 +466,9 @@ torch_compile_dynamic = True
 print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
 model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
 
+COORD_JITTER_STD = 0.005
+print(f"Coord jitter enabled: std={COORD_JITTER_STD} on x_norm[..., :2] (training only)")
+
 optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
@@ -534,6 +537,12 @@ for epoch in range(MAX_EPOCHS):
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if model.training:
+                coord_noise = torch.randn_like(x_norm[..., :2]) * COORD_JITTER_STD
+                x_norm = torch.cat([
+                    x_norm[..., :2] + coord_noise,
+                    x_norm[..., 2:],
+                ], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
@@ -696,6 +705,7 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "coord_jitter_std": COORD_JITTER_STD,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
