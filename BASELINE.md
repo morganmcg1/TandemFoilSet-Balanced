@@ -249,3 +249,55 @@ cd target && python train.py \
 - Late-epoch trajectory note: WD=5e-4 had a transient epoch-12 spike (152.99) followed by recovery to 93.62 at epoch 14 — same late-epoch oscillation pattern observed across other baselines, but the post-spike recovery breached a new minimum.
 - **All future PRs must beat `val_avg/mae_surf_p < 93.6198` to merge.**
 - **Hyperparameter staleness principle confirmed:** the −4.46% gain from a single 5× WD bump validates that the optimizer hyperparameters inherited pre-Huber/pre-decoupled-LR are systematically suspect. Re-evaluation of other axes (encoder_lr, β2, etc.) on the new baseline is warranted.
+
+---
+
+## 2026-05-13 11:00 — PR #2091: torch.compile throughput unlock (21 epochs in 30 min)
+
+- **val_avg/mae_surf_p: 89.7197** (best checkpoint epoch 18) — **−4.16% vs 93.6198**
+- **test_avg/mae_surf_p: 79.3167** — **−5.44% vs 83.8825**
+- **W&B run:** `fvlekakd` (mode=default, dynamic=True)
+- **Training config:** weight_decay=1e-4 (old default — branch predates PR #2031 merge), huber_delta=0.5, surf_head_lr=5e-3
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 1e-4 \
+      --use_torch_compile \
+      --compile_mode default \
+      --wandb_group torch-compile \
+      --wandb_name torch-compile-default \
+      --agent willowpai2g48h4-frieren
+  ```
+- **NOTE:** This result was achieved with weight_decay=1e-4 (the old pre-#2031 default). Composing with weight_decay=5e-4 is the highest-priority next experiment for frieren.
+
+### Per-split val surface-p MAE (best checkpoint epoch 18)
+
+| Split | mae_surf_p | vs prior baseline (93.6198) |
+|-------|-----------|------------------------------|
+| `val_single_in_dist` | 114.92 | 109.61 → +4.9% ↑ |
+| `val_geom_camber_rc` | 108.66 | 118.05 → **−8.0%** ✓ |
+| `val_geom_camber_cruise` | 55.45 | 61.07 → **−9.2%** ✓ |
+| `val_re_rand` | 79.85 | 85.75 → **−6.9%** ✓ |
+| **val_avg** | **89.7197** | **−4.16% ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior baseline (83.8825) |
+|-------|-----------|------------------------------|
+| `test_single_in_dist` | 104.29 | 101.87 → +2.4% ↑ |
+| `test_geom_camber_rc` | 96.30 | 105.24 → **−8.5%** ✓ |
+| `test_geom_camber_cruise` | 46.12 | 51.43 → **−10.3%** ✓ |
+| `test_re_rand` | 70.55 | 76.99 → **−8.4%** ✓ |
+| **test 4-split mean** | **79.3167** | **−5.44% ✓** |
+
+### Notes
+
+- `torch.compile(mode="default", dynamic=True)` — single symbolic-shape graph, no per-shape recompile chaos (only 2 frames compiled despite 74K–242K node mesh sizes). Compile warmup: 8.8s (negligible).
+- **Throughput:** 21 epochs in 30 min vs prior 14 (1.43× per-epoch speedup, 50% more epochs in same budget).
+- `mode="reduce-overhead"` OOM'd at epoch 1, batch 219 (CUDA Graph private pool accumulation on variable shapes). Incompatible without upstream bucketed-padding.
+- Also enables: `torch.set_float32_matmul_precision("high")` (TF32 matmul), `cudnn.benchmark=True`.
+- **val_single_in_dist slightly regresses** (+4.9% vs prior baseline) while OOD geometry splits dramatically improve (geom_camber_rc −8%, cruise −9.2%). This trade-off likely reflects weight_decay=1e-4 (old default) being under-regularized at 21 epochs — in-distribution split may be benefiting less from longer training than OOD.
+- **Highest-priority follow-up:** compose torch.compile + weight_decay=5e-4 (which is now the default on this branch). Expected to recover the in-distribution split regression while preserving the OOD gains.
+- **All future PRs must beat `val_avg/mae_surf_p < 89.7197` to merge.**
