@@ -46,6 +46,39 @@ from data import (
     pad_collate,
 )
 
+
+class Lion(torch.optim.Optimizer):
+    """Lion: Symbolic Discovery of Optimization Algorithms (Chen et al., 2023)."""
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta1, beta2 = group["betas"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                # Decoupled weight decay (AdamW-style)
+                if wd != 0.0:
+                    p.data.mul_(1.0 - lr * wd)
+                grad = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                # Lion update: sign(beta1 * m + (1 - beta1) * grad)
+                update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.data.add_(update, alpha=-lr)
+                # Momentum update for next step
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -450,11 +483,11 @@ model = torch.compile(model, dynamic=True)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(
+optimizer = Lion(
     model.parameters(),
-    lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.95),
+    lr=cfg.lr * 0.1,        # Lion-recommended: ×0.1 of AdamW lr
+    weight_decay=cfg.weight_decay * 10.0,  # Lion-recommended: ×10 of AdamW wd
+    betas=(0.9, 0.99),       # Lion-paper default
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
