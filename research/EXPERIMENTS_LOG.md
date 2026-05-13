@@ -991,3 +991,28 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: Combine the width win (#1899) with the schedule fix. At ~54 s/epoch, only ~33 epochs fit in 30-min budget. With `--epochs 50` (T_max=50), LR at epoch 33 ≈ 1.0e-4 (productive); with `--epochs 30`, LR=0 by epoch 30 (dead zone for last 3 epochs). Val slope at epoch 30 was −0.22/epoch — clear epoch-saturation signal.
 - **This is also the first run to measure the full combined stack: n_layers=3 + n_hidden=192 + grad-clip=10 + epochs=50**.
 - Targets: val < 63.7215, test < 55.6430.
+
+## 2026-05-13 07:50 — PR #1913: thorfinn grad-accum=2 (effective bs=8) — CLOSED
+
+- Branch: `willowpai2g48h5-thorfinn/grad-accum-2-effective-bs-8`
+- Hypothesis: accumulate gradients over 2 mini-batches before optimizer.step(). Effective batch=8 without dataloader bottleneck. Lower per-update gradient variance compounds with EMA's smoothing.
+- W&B run: `txbm2f2n`
+
+| Metric | Value | vs PR #1875 (n_layers=3 baseline) | vs PR #1899 (current 9-merge baseline) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 30) | **75.6422** | +6.19 (+8.9% regression) | +11.92 (+18.7% worse) |
+| `test_avg/mae_surf_p` | **66.6086** | +5.42 (+8.9%) | +10.97 (+19.7%) |
+| Per-epoch wall time | 40.3 s | ~unchanged | n/a (run was on n_hidden=128) |
+| Total opt-steps | 5,610 | ~half (vs ~11,250) | — |
+
+- **All 4 splits regress significantly** (in_dist +10.16, camber_rc +3.84, camber_cruise +3.01, re_rand +4.66).
+- **Mechanism (clearly diagnosed)**: per-epoch wall time unchanged but opt-steps halved → cosine schedule starves at half the parameter-update distance. Val descending at +0.5/epoch at the cap = severely undertrained. Variance-reduction effect WAS present (EMA-live gap closed to +1.88, suggesting smoother live trajectories) but dwarfed by the step-count deficit.
+- **Pattern consolidation**: 4/4 trajectory-quality interventions from thorfinn at fixed-epoch budget have regressed (#1550 slice=96, #1783 Lookahead, #1858 SGDR, #1913 grad-accum). Trajectory smoothing axis is fully saturated by EMA decay=0.999 + grad-clip=10. Additional perturbations cost more than they buy at the current schedule.
+- **Decision: CLOSE.** Fixed wall-clock retest (student's #1 follow-up) is mechanistically valid but baseline shifted twice during the run. Reassigning thorfinn to architectural axis (n_layers=2 + n_hidden=192).
+
+## 2026-05-13 07:50 — PR #1960: thorfinn assigned n_layers=2 + n_hidden=192 (depth floor test)
+
+- Branch: `willowpai2g48h5-thorfinn/n-layers-2-n-hidden-192`
+- Hypothesis: push depth further beyond winning #1899 stack. Param count ~0.62M (1.5× n_hidden=128 baseline, 0.67× #1899). Expected ~36 s/epoch → ~50 epochs in 30-min budget. Mechanism check: is n_layers=3 the depth floor, or can the wider hidden dim carry the load with 2 composition steps?
+- Predicted outcomes: (Win) val < 63.72 → depth floor is below 3; (Tie) within ±0.5 → depth=3 was floor; (Loss) val > 65 → capacity floor at depth=2.
+- Targets: val < 63.7215, test < 55.6430.

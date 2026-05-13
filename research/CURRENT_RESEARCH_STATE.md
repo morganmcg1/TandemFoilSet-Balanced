@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 07:35
+- **Date:** 2026-05-13 07:50
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -49,7 +49,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | frieren | #1898 | n_layers=3 + epochs=50 — cosine schedule T_max tuning | LR schedule / training duration | WIP | Critical follow-up: #1875 ran 30 epochs at T_max=30, but ~44 epochs fit in budget. Setting T_max=50 keeps LR positive through all 44 actual epochs |
 | nezuko | #1878 | mlp_ratio=1 — capacity-down on FFN axis | Architecture / throughput | WIP | Completes 3-axis capacity-down matrix (depth=frieren, slice=askeladd, MLP=nezuko). Running against older stack — may need rebase + retest |
 | tanjiro | #1930 | grad-clip max_norm=5.0 — threshold scan on new 8-merge stack | Gradient stability (threshold scan) | WIP | Direct continuation of #1784 win. Tests if threshold-vs-quality relationship is monotonic (push lower) or U-shaped (settle at 10). At threshold 5: ~100% clip rate, ~4.2× typical downscaling vs 2.1× at 10 |
-| thorfinn | #1913 | gradient accumulation steps=2 (effective bs=8) on n_layers=3 stack | Gradient quality | WIP | #1858 SGDR closed. Pivoting to gradient-quality axis: lower-variance updates via accumulation, no dataloader bottleneck. Will implicitly measure on 8-merge stack |
+| thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
 **Baseline alert**: New baseline is PR #1899 (**val=63.7215, test=55.6430**). All future merges must beat this. WIP PRs running against older baselines should be sent back for retest if their delta wouldn't beat 63.72.
 
@@ -74,6 +74,7 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 - **Gradient clipping max_norm=1.0** (#1534 v2, tanjiro) — +1.6% worse. 100% clipping = normalized SGD with ~22× downscaling. Asymmetric OOD-helps/IID-hurts split. Direction-normalization regime.
 - **Lookahead optimizer k=5, α=0.5** (#1783, thorfinn) — +1.39% worse. Competes with EMA for trajectory-smoothing budget; EMA-live gap collapses from −10.5 to −1.6.
 - **SGDR cosine warm restarts (T_0=10, T_mult=2)** (#1858, thorfinn) — val=72.99 (+2.17% vs OLD 71.44 baseline; +5.09% vs NEW 69.45 baseline). LR restart mechanism worked exactly as designed. Cycle 1 wasted on converge-then-reset; EMA-tax of ~10 epochs to wash cycle-2 high-LR noise > marginal exploration benefit.
+- **Gradient accumulation steps=2 (effective bs=8)** (#1913, thorfinn) — val=75.64 (+8.9% vs old baseline; +18.7% vs current). Mechanism diagnosis was sharp: per-epoch wall time unchanged but opt-steps halved → cosine starves → model undertrained at +0.5/ep at the cap. EMA-live gap DID close to +1.88 (variance reduction effect IS present) but step-count deficit dominates at fixed --epochs. Fixed wall-clock retest mechanically valid but baseline shifted; closed.
 - **Refined pattern**: 5 trajectory-shape interventions (dropout, grad-clip 1.0, surf_weight=30, Lookahead, SGDR) failed on β=0.5+EMA stack. But **grad-clip=10 in the soft-scaling regime succeeded** (PR #1784, −7.65%). The failure pattern wasn't about clipping/perturbing per se — it was about direction-normalization (clip 100%, ~22× scaling) and exploration-vs-EMA conflict. Soft proportional damping of the heavy gradient tail (72% clip, ~2.1× typical scaling) preserves bulk direction signal while suppressing outliers. Future smoothing experiments should target this regime, not the high-intensity end.
 
 ### Gradient stability / heavy-tail damping (NEW direction — opens after #1784)
