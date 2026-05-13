@@ -428,7 +428,7 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-warmup_epochs = 2
+warmup_epochs = 4
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
 cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
@@ -460,6 +460,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    lr_epoch = optimizer.param_groups[0]["lr"]
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
@@ -523,6 +524,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": lr_epoch,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
