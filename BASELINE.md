@@ -121,3 +121,23 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 65.47, test < 57.84, all four test splits finite.**
+
+## 2026-05-13 12:00 — PR #1692: Add gradient clipping (max_norm=1.0)
+
+- **`val_avg/mae_surf_p`:** 60.0933 (best seed 2, `aoehi425`)
+- **`test_avg/mae_surf_p`:** 53.3695
+- **Per-split test surf_p (seed 2):** single_in_dist=61.9997, geom_camber_rc=69.4702, geom_camber_cruise=32.1715, re_rand=49.8364
+- **Per-split test surf_p (seed 1, `ctkgotbo`):** single_in_dist=59.9815, geom_camber_rc=68.6415, geom_camber_cruise=35.4031, re_rand=52.0793
+- **Seed 2 confirmation (`aoehi425`):** val=60.0933, test=53.3695 — both seeds beat baseline by a wide margin.
+- **W&B runs:** `aoehi425` (seed 2, BETTER), `ctkgotbo` (seed 1)
+- **Implementation note:** `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` before each `optimizer.step()`. Includes grad-norm logging to W&B. Mean raw grad norm is ~18-19 across steps; `max_norm=1.0` engages on **100% of steps** — not spike clipping but global step-size normalisation. This decouples effective LR from the large per-batch gradient scale variance induced by the balanced sampler (cruise vs raceCar tandem vs single, all with very different mesh sizes and target magnitudes). Combined with `torch.compile(dynamic=True)`, the clipping kernel is fused into the compiled graph.
+- **Compute:** 30.3-30.4 min (hits 30-min cap), ~52s/epoch steady-state, peak VRAM 60-65 GB. Best epoch: 33/50 (seed 1), 35/50 (seed 2) — compute-bound.
+- **Delta vs PR #1910 (vol-Huber baseline):** val **−8.2%** (65.47 → 60.09), test **−7.7%** (57.84 → 53.37). All four test splits improved: single_in_dist −4.5%, geom_camber_rc −2.4%, geom_camber_cruise **−18.1%**, re_rand **−10.9%**. Cruise and re_rand show the largest relative gains, consistent with the balanced-sampler gradient-scale heterogeneity hypothesis.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-fern \
+      --wandb_name "willowpai2g48h3-fern/grad-clip-1.0-seed2" \
+      --wandb_group grad-clip
+  ```
+
+**New merge bar: val < 60.09, test < 53.37, all four test splits finite.**
