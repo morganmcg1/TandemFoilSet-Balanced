@@ -578,35 +578,82 @@ print(
 # channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
 # scaling factors toward zero (init=0.025), fighting the model's learned per-channel
 # diversification, and default lr=5e-4 under-trains them.
+# H64: split LayerScale group into 5 per-block groups with linearly scaled lr (5x->15x from
+# block 0 to block 4). Directly tests the #2475 mechanism finding: deeper blocks have
+# progressively higher attn γ std/mean ratios (177% -> 243%), suggesting they need more
+# effective lr to explore per-channel sparse gating. Shallow blocks stay conservative.
+LAYERSCALE_LR_PER_BLOCK = [5.0, 7.5, 10.0, 12.5, 15.0]
+import re as _h64_re
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
-layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
-other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+n_blocks = len(model.blocks)
+assert n_blocks == len(LAYERSCALE_LR_PER_BLOCK), (
+    f"Block count {n_blocks} != len(LAYERSCALE_LR_PER_BLOCK) {len(LAYERSCALE_LR_PER_BLOCK)}"
+)
+layerscale_per_block: list[list[torch.nn.Parameter]] = [[] for _ in range(n_blocks)]
+other_params = []
+for name, p in model.named_parameters():
+    if "layer_scale" in name:
+        m = _h64_re.search(r"blocks\.(\d+)\.", name)
+        if m is None:
+            raise ValueError(f"Could not parse block index from layerscale param name: {name}")
+        block_idx = int(m.group(1))
+        assert 0 <= block_idx < n_blocks, f"Block index out of range: {block_idx} for {name}"
+        layerscale_per_block[block_idx].append(p)
+    else:
+        other_params.append(p)
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-# H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+# H64: param-group consistency check — every model param ends up in exactly one of
+# (layerscale_per_block[i], other_params); freq_params come from fourier_enc separately.
 all_model_p = {id(p): p for p in model.parameters()}
-all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
+all_assigned_p = {
+    id(p): p
+    for group in [other_params, *layerscale_per_block]
+    for p in group
+}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
-n_layer_scale = sum(p.numel() for p in layer_scale_params)
-expected_layer_scale = 2 * len(model.blocks) * model_config["n_hidden"]
+layerscale_counts_per_block = [len(g) for g in layerscale_per_block]
+layerscale_numel_per_block = [sum(p.numel() for p in g) for g in layerscale_per_block]
+n_layer_scale = sum(layerscale_numel_per_block)
+expected_layer_scale_per_block = 2 * model_config["n_hidden"]
+expected_layer_scale = n_blocks * expected_layer_scale_per_block
+assert all(c == 2 for c in layerscale_counts_per_block), (
+    f"Each block should have exactly 2 LayerScale Parameters (attn + mlp); got {layerscale_counts_per_block}"
+)
+assert all(n == expected_layer_scale_per_block for n in layerscale_numel_per_block), (
+    f"Each block should have {expected_layer_scale_per_block} scalar LayerScale params; "
+    f"got {layerscale_numel_per_block}"
+)
 assert n_layer_scale == expected_layer_scale, (
-    f"Expected {expected_layer_scale} LayerScale params "
-    f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
+    f"Expected {expected_layer_scale} LayerScale scalar params "
+    f"({n_blocks} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
-    sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
+assert (
+    sum(p.numel() for p in freq_params)
+    + n_layer_scale
+    + sum(p.numel() for p in other_params)
+) == (
+    sum(p.numel() for p in model.parameters())
+    + sum(p.numel() for p in fourier_enc.parameters())
 )
+optim_groups = [
+    {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+    {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+]
+# H64: one optimizer group per block for layerscale params, with linearly scaled lr.
+LAYERSCALE_GROUP_START_IDX = len(optim_groups)
+for block_idx in range(n_blocks):
+    optim_groups.append({
+        "params": layerscale_per_block[block_idx],
+        "lr": cfg.lr * LAYERSCALE_LR_PER_BLOCK[block_idx],
+        "weight_decay": 0.0,
+    })
 optimizer = torch.optim.AdamW(
-    [
-        {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
-        {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
-        {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
-    ],
+    optim_groups,
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
@@ -615,10 +662,18 @@ print(
     f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in other_params)} params), "
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
-    f"({sum(p.numel() for p in freq_params)} params), "
-    f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
-    f"({n_layer_scale} params, expected {expected_layer_scale})"
+    f"({sum(p.numel() for p in freq_params)} params)"
 )
+print(f"[H64] LayerScale per-block lr scaling: {LAYERSCALE_LR_PER_BLOCK}")
+print(f"[H64] LayerScale param counts per block (tensors): {layerscale_counts_per_block}")
+print(f"[H64] LayerScale numel per block (scalars): {layerscale_numel_per_block}")
+print(f"[H64] LayerScale total scalar params: {n_layer_scale} (expected {expected_layer_scale})")
+for block_idx in range(n_blocks):
+    g = optimizer.param_groups[LAYERSCALE_GROUP_START_IDX + block_idx]
+    print(
+        f"[H64]   block {block_idx}: lr={g['lr']:.2e} ({LAYERSCALE_LR_PER_BLOCK[block_idx]:.1f}x base) "
+        f"wd={g['weight_decay']:.0e} ({sum(p.numel() for p in g['params'])} params)"
+    )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
@@ -664,6 +719,9 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # H64: per-block layerscale pre-clip grad-norm — snapshot last batch's value as
+    # an on-GPU tensor; sync once at epoch end to avoid per-batch CPU sync overhead.
+    last_layerscale_block_grad_norm_sq = torch.zeros(n_blocks, device=device)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -688,6 +746,15 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # H64: snapshot per-block layerscale pre-clip grad norms BEFORE clip_grad_norm_ rescales them.
+        # Stays on GPU; only summarized to CPU at end of epoch.
+        with torch.no_grad():
+            for _bi in range(n_blocks):
+                _bgn_sq = torch.zeros((), device=device)
+                for _p in layerscale_per_block[_bi]:
+                    if _p.grad is not None:
+                        _bgn_sq = _bgn_sq + _p.grad.detach().pow(2).sum()
+                last_layerscale_block_grad_norm_sq[_bi] = _bgn_sq
         # H40: clip both model and fourier_enc params together (freqs included).
         total_norm = torch.nn.utils.clip_grad_norm_(
             list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
@@ -729,7 +796,27 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
     freqs_lr = optimizer.param_groups[1]["lr"]
-    layer_scale_lr = optimizer.param_groups[2]["lr"]
+    # H64: per-block layerscale lr is now one group per block (5 groups total).
+    layerscale_lrs_per_block = [
+        optimizer.param_groups[LAYERSCALE_GROUP_START_IDX + b]["lr"]
+        for b in range(n_blocks)
+    ]
+    # Mean across blocks; preserved as a back-compat scalar for downstream readers.
+    layer_scale_lr_mean = sum(layerscale_lrs_per_block) / float(n_blocks)
+    layerscale_grad_norms_per_block = (
+        last_layerscale_block_grad_norm_sq.sqrt().detach().cpu().tolist()
+    )
+    # Block-level current per-epoch LayerScale γ stats (mean/std of attn + mlp γ).
+    layerscale_attn_mean_per_block: list[float] = []
+    layerscale_attn_std_per_block: list[float] = []
+    layerscale_mlp_mean_per_block: list[float] = []
+    layerscale_mlp_std_per_block: list[float] = []
+    with torch.no_grad():
+        for _bi, _b in enumerate(model.blocks):
+            layerscale_attn_mean_per_block.append(float(_b.layer_scale_attn.mean().item()))
+            layerscale_attn_std_per_block.append(float(_b.layer_scale_attn.std().item()))
+            layerscale_mlp_mean_per_block.append(float(_b.layer_scale_mlp.mean().item()))
+            layerscale_mlp_std_per_block.append(float(_b.layer_scale_mlp.std().item()))
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -739,7 +826,17 @@ for epoch in range(MAX_EPOCHS):
         "lr": current_lr,
         "train/current_lr": current_lr,
         "train/freqs_lr": freqs_lr,
-        "train/layer_scale_lr": layer_scale_lr,
+        # Back-compat scalar: mean of the per-block layerscale lrs.
+        "train/layer_scale_lr": layer_scale_lr_mean,
+        # H64: per-block layerscale lrs and grad norms (last-batch snapshot).
+        "train/layer_scale_lr_per_block": layerscale_lrs_per_block,
+        "train/layer_scale_lr_mults_per_block": LAYERSCALE_LR_PER_BLOCK,
+        "train/layer_scale_grad_norm_per_block": layerscale_grad_norms_per_block,
+        # H64: per-epoch layerscale γ statistics (mean/std per block per path).
+        "train/layer_scale_attn_mean_per_block": layerscale_attn_mean_per_block,
+        "train/layer_scale_attn_std_per_block": layerscale_attn_std_per_block,
+        "train/layer_scale_mlp_mean_per_block": layerscale_mlp_mean_per_block,
+        "train/layer_scale_mlp_std_per_block": layerscale_mlp_std_per_block,
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -757,7 +854,14 @@ for epoch in range(MAX_EPOCHS):
         f"    freqs (lr={freqs_lr:.2e}): "
         f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
     )
-    print(f"    layer_scale (lr={layer_scale_lr:.2e})")
+    print(
+        f"    layer_scale lr per-block: "
+        f"[{', '.join(f'{v:.2e}' for v in layerscale_lrs_per_block)}]"
+    )
+    print(
+        f"    layer_scale grad_norm per-block (last batch, pre-clip): "
+        f"[{', '.join(f'{v:.3e}' for v in layerscale_grad_norms_per_block)}]"
+    )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
