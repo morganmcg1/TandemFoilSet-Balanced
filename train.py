@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -32,7 +33,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.amp import GradScaler, autocast
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -47,6 +48,97 @@ from data import (
     pad_collate,
 )
 from soap import SOAP
+
+# ---------------------------------------------------------------------------
+# SDF (signed-distance-to-foil) feature
+# ---------------------------------------------------------------------------
+
+# Per-node SDF is concatenated to x as channel index X_DIM (24, the 25th slot).
+SDF_FEATURE_IDX = X_DIM
+X_DIM_AUG = X_DIM + 1  # 25 after SDF concatenation
+
+
+def compute_sdf(x: torch.Tensor, device: torch.device | str = "cpu", chunk: int = 16384) -> torch.Tensor:
+    """Min L2 distance from each node to the nearest foil-surface node.
+
+    Args:
+        x: ``[N, 24]`` raw per-node features (unnormalized). ``x[:, :2]`` are
+            physical-space coords; ``x[:, 12]`` is the 0/1 surface indicator.
+        device: device for the cdist compute.
+        chunk: per-iteration volume-node window so we never materialize a full
+            ``[N, N_surf]`` matrix at once.
+
+    Returns:
+        ``[N]`` float32 tensor on CPU. Surface nodes themselves get ~0 (they
+        self-match), so the model can read near-zero as the "I am on the foil"
+        sentinel.
+    """
+    coords = x[:, :2].to(device, dtype=torch.float32)
+    is_surf = (x[:, 12].to(device) > 0.5)
+    surf_idx = is_surf.nonzero(as_tuple=True)[0]
+    if surf_idx.numel() == 0:
+        return torch.zeros(coords.shape[0], dtype=torch.float32)
+    surf_coords = coords[surf_idx]
+    N = coords.shape[0]
+    sdf = torch.empty(N, dtype=torch.float32, device=device)
+    for i in range(0, N, chunk):
+        end = min(i + chunk, N)
+        d = torch.cdist(coords[i:end], surf_coords)  # [chunk, N_surf]
+        sdf[i:end] = d.min(dim=1).values
+    return sdf.cpu()
+
+
+def precompute_sdf_cache(
+    files: list[Path],
+    cache_dir: Path,
+    device: torch.device | str,
+    desc: str,
+) -> list[Path]:
+    """Compute SDF for each source ``.pt`` file and cache to ``cache_dir``.
+
+    Cache files are named ``{idx:06d}.pt`` to mirror the source layout. Returns
+    the list of cache paths aligned with the input file order.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_files: list[Path] = []
+    for i, src in enumerate(tqdm(files, desc=desc, leave=False)):
+        cache_file = cache_dir / f"{i:06d}.pt"
+        cache_files.append(cache_file)
+        if cache_file.exists():
+            continue
+        sample = torch.load(src, weights_only=True)
+        sdf = compute_sdf(sample["x"], device=device)
+        torch.save(sdf, cache_file)
+    return cache_files
+
+
+class SDFAugmentedDataset(Dataset):
+    """Wrap a base dataset to append the (pre-normalized) SDF as channel 24.
+
+    SDF is normalized by the training-set 99th-percentile (single scalar) so
+    the channel lives in roughly ``[0, 1]``. Stats are extended with mean=0,
+    std=1 for this channel so the trainer's standard normalization line is
+    a no-op on the SDF column.
+    """
+
+    def __init__(self, base_ds: Dataset, sdf_files: list[Path], sdf_99: float):
+        assert len(base_ds) == len(sdf_files), (
+            f"base_ds len {len(base_ds)} != sdf_files len {len(sdf_files)}"
+        )
+        self.base_ds = base_ds
+        self.sdf_files = sdf_files
+        self.sdf_99 = float(sdf_99)
+
+    def __len__(self) -> int:
+        return len(self.base_ds)
+
+    def __getitem__(self, idx: int):
+        x, y, is_surface = self.base_ds[idx]
+        sdf = torch.load(self.sdf_files[idx], weights_only=True)  # [N]
+        sdf_norm = (sdf / self.sdf_99).unsqueeze(-1)  # [N, 1]
+        x_aug = torch.cat([x, sdf_norm], dim=-1)  # [N, 25]
+        return x_aug, y, is_surface
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -479,6 +571,68 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# --- SDF precompute + dataset augmentation ---
+# Compute per-node min L2 distance to nearest foil-surface node for every
+# train/val sample, cache to local disk, and wrap the datasets to surface
+# normalized SDF as channel X_DIM (25th feature) of the input.
+sdf_cache_root = Path("sdf_cache") / Path(cfg.splits_dir).name
+sdf_compute_device = device
+print(f"SDF cache root: {sdf_cache_root}")
+t_sdf = time.time()
+train_sdf_files = precompute_sdf_cache(
+    train_ds.files, sdf_cache_root / "train", sdf_compute_device, desc="sdf:train"
+)
+val_sdf_files: dict[str, list[Path]] = {}
+for name, ds in val_splits.items():
+    val_sdf_files[name] = precompute_sdf_cache(
+        ds.files, sdf_cache_root / name, sdf_compute_device, desc=f"sdf:{name}"
+    )
+
+# Compute training-set 99th-percentile of SDF (single scalar). Subsample
+# uniformly across all training nodes to stay inside numpy's percentile budget
+# while keeping the estimate stable.
+print("Computing SDF 99th-percentile on training set...")
+SUBSAMPLE_PER_FILE = 50_000  # plenty for percentile stability
+chunks: list[np.ndarray] = []
+sdf_min = float("inf")
+sdf_max = float("-inf")
+sdf_mean_acc = 0.0
+sdf_count = 0
+rng = np.random.default_rng(0)
+for p in train_sdf_files:
+    s = torch.load(p, weights_only=True).numpy()
+    n = s.size
+    sdf_min = min(sdf_min, float(s.min()))
+    sdf_max = max(sdf_max, float(s.max()))
+    sdf_mean_acc += float(s.sum())
+    sdf_count += n
+    if n > SUBSAMPLE_PER_FILE:
+        idx = rng.choice(n, size=SUBSAMPLE_PER_FILE, replace=False)
+        chunks.append(s[idx])
+    else:
+        chunks.append(s)
+all_sdf_sub = np.concatenate(chunks)
+sdf_99 = float(np.quantile(all_sdf_sub, 0.99))
+sdf_mean_obs = sdf_mean_acc / max(sdf_count, 1)
+print(
+    f"SDF train stats: min={sdf_min:.4f}, max={sdf_max:.4f}, mean={sdf_mean_obs:.4f}, "
+    f"99%ile={sdf_99:.4f}, n_samples={len(train_sdf_files)}, n_nodes_total={sdf_count}, "
+    f"precompute_time={time.time() - t_sdf:.1f}s"
+)
+sdf_norm_99 = sdf_max / sdf_99 if sdf_99 > 0 else 0.0
+print(f"  Post-normalization SDF range: [0, {sdf_norm_99:.3f}] (clipped by 99%ile=1.0)")
+
+train_ds = SDFAugmentedDataset(train_ds, train_sdf_files, sdf_99)
+val_splits = {
+    name: SDFAugmentedDataset(ds, val_sdf_files[name], sdf_99)
+    for name, ds in val_splits.items()
+}
+
+# Extend normalization stats so the standard (x - mean) / std line preserves
+# the pre-normalized SDF channel as-is.
+stats["x_mean"] = torch.cat([stats["x_mean"], torch.zeros(1, device=device)])
+stats["x_std"] = torch.cat([stats["x_std"], torch.ones(1, device=device)])
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
@@ -497,7 +651,8 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    # fun_dim grows by 1 to accommodate the SDF channel (X_DIM_AUG = 25 inputs).
+    fun_dim=X_DIM_AUG - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -509,6 +664,12 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
+# Small-init the SDF column of the first preprocess linear so the new feature
+# doesn't disrupt the initial training trajectory; the optimizer must actively
+# decide to use the SDF signal.
+with torch.no_grad():
+    pre_w = model.preprocess.linear_pre[0].weight  # [n_hidden*2, X_DIM_AUG]
+    pre_w.data[:, SDF_FEATURE_IDX] = torch.randn(pre_w.shape[0], device=pre_w.device) * 0.01
 rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
@@ -606,6 +767,11 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "sdf_99": sdf_99,
+        "sdf_feature_idx": SDF_FEATURE_IDX,
+        "sdf_train_min": sdf_min,
+        "sdf_train_max": sdf_max,
+        "sdf_train_mean": sdf_mean_obs,
     }, f, sort_keys=True)
 
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
@@ -635,6 +801,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
     n_batches = 0
+    # SDF channel diagnostics (over real, non-padded nodes per training batch).
+    sdf_min_epoch = float("inf")
+    sdf_max_epoch = float("-inf")
+    sdf_sum_epoch = 0.0
+    sdf_n_epoch = 0
+    sdf_grad_norm_sum = 0.0
     # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
     surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
     vol_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
@@ -705,11 +877,23 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+            # SDF channel sanity (over real nodes only).
+            sdf_vals = x_norm[..., SDF_FEATURE_IDX][mask]
+            if sdf_vals.numel() > 0:
+                sdf_min_epoch = min(sdf_min_epoch, float(sdf_vals.min()))
+                sdf_max_epoch = max(sdf_max_epoch, float(sdf_vals.max()))
+                sdf_sum_epoch += float(sdf_vals.sum())
+                sdf_n_epoch += int(sdf_vals.numel())
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         if cfg.grad_clip > 0:
             scaler.unscale_(optimizer)
+            # SDF column gradient norm (pre-clip): tells us whether the model
+            # is actively using the SDF channel.
+            sdf_w_grad = uncompiled_model.preprocess.linear_pre[0].weight.grad
+            if sdf_w_grad is not None:
+                sdf_grad_norm_sum += float(sdf_w_grad[:, SDF_FEATURE_IDX].detach().norm())
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 list(model.parameters()) + list(rescale_head.parameters()),
                 cfg.grad_clip,
@@ -812,6 +996,10 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    sdf_mean_epoch = sdf_sum_epoch / max(sdf_n_epoch, 1) if sdf_n_epoch > 0 else 0.0
+    sdf_grad_norm_mean = sdf_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
+    sdf_min_log = sdf_min_epoch if sdf_n_epoch > 0 else 0.0
+    sdf_max_log = sdf_max_epoch if sdf_n_epoch > 0 else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,6 +1032,11 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "sdf/min": sdf_min_log,
+        "sdf/max": sdf_max_log,
+        "sdf/mean": sdf_mean_epoch,
+        "sdf/grad_norm_mean": sdf_grad_norm_mean,
+        "sdf/sdf_99": sdf_99,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +1064,10 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    print(
+        f"    SDF  min={sdf_min_log:.4f}  max={sdf_max_log:.4f}  mean={sdf_mean_epoch:.4f}  "
+        f"col_grad_norm_mean={sdf_grad_norm_mean:.4f}  (sdf_99={sdf_99:.4f})"
+    )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -918,6 +1115,17 @@ if best_metrics:
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        # Precompute SDF for test x-files (they already carry ``is_surface``).
+        test_sdf_files = {
+            name: precompute_sdf_cache(
+                ds.x_files, sdf_cache_root / name, sdf_compute_device, desc=f"sdf:{name}"
+            )
+            for name, ds in test_datasets.items()
+        }
+        test_datasets = {
+            name: SDFAugmentedDataset(ds, test_sdf_files[name], sdf_99)
+            for name, ds in test_datasets.items()
+        }
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
