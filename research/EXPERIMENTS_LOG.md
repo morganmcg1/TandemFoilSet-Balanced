@@ -1409,3 +1409,54 @@ Student's mechanism diagnosis (correct):
 **T_max-shortening lever CLOSED.** The high-LR exploration phase magnitude is load-bearing; any T_max < trained-epochs starves the exploration phase rather than adding refinement. Refinement-tail mechanisms must come from orthogonal levers (eta_min floor, warmup start, OneCycleLR variants).
 
 **Follow-up**: Assigned thorfinn LR warmup (#2303) — structurally orthogonal change. Preserves cosine shape, only smooths first epoch's initialization. Tests whether Lion benefits from gentler ramp-up at peak LR (1.5e-4 → no LR change), distinct from prior LR-warmup-with-lr=3e-4 closure (#1359) which conflated warmup with peak LR change.
+
+## 2026-05-13 14:00 — PR #2236: n_head=8 + clip=5.0 + slice_num=48 — CLOSED ✗
+- Branch: willowpai2g48h1-alphonse/n-head-8-clip-slice
+- W&B run: `cusaqc7y`
+
+| Metric | n_head=8 | Current best (PR #2226) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **69.5335** | **62.8014** | **+10.7% ✗** |
+| val_avg/mae_surf_p (best) | 79.88 (e13) | 71.76 (e17) | +11.3% |
+| test_geom_camber_rc | 80.66 | 71.97 | +12.1% (worst-hit) |
+| Per-epoch time | 149 s | ~119 s | **+18% ✗** |
+| Epochs completed | 13 / 18 | 17 / 18 | −4 |
+
+**Analysis**: DISCRIMINATING NEGATIVE — confirms capacity-budget bound joint with #2191 + #2258.
+
+Student's CUDA-kernel-level diagnosis (highest-value insight of this PR):
+- d_head=24 (n_head=8 at n_hidden=192) falls below the optimal cuBLAS matmul-based attention tensor-core path on Blackwell.
+- Activation memory grew +6.6 GB (49.6 GB vs 43 GB baseline) from un-fused head-split intermediates `[B, n_slices, H, d_head]`, despite zero param change.
+- Mechanism is **NOT** "head splitting is bad" abstractly — it's "d_head < 32 hits slow kernel path", a hardware bound.
+- rc OOD split worst-hit (+6.0 absolute), opposite of attention-diversification prediction. Two readings consistent with data: (a) d_head=24 too narrow for slot-routing physics, or (b) pure schedule truncation; the per-epoch trajectory comparison favors reading (a).
+
+Grad-norm trajectory healthy (104 → 21 smooth decay, clip fire rate 100% → 93%) → not stability problem, pure capacity/budget trade-off.
+
+**n_head lever closed at d_head=192/n_head; specifically d_head < 32 hits cuBLAS slow path.** Recording the hardware bound as a permanent constraint on future capacity-adding experiments.
+
+**Follow-up**: Assigned alphonse cosine eta_min=1.5e-5 (#2326) — refinement-tail lever, per-epoch-cost-neutral, addresses #2209 closure follow-up directly.
+
+## 2026-05-13 14:00 — PR #2258: mlp_ratio=4 + clip=5.0 + slice_num=48 — CLOSED ✗
+- Branch: willowpai2g48h1-edward/mlp-ratio-4-clip-slice
+- W&B runs: `e47tykkl` (primary), `tj26of6c` (replicate)
+
+| Metric | mlp_ratio=4 (mean over 2 seeds) | Current best (PR #2226) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **69.30 (e47tykkl=69.48, tj26of6c=69.13)** | **62.8014** | **+10.4% ✗** |
+| val_avg/mae_surf_p (best) | 78.74 (e14) | 71.76 (e17) | +9.7% |
+| Per-epoch time | 130 s | ~119 s | +9% |
+| Epochs completed | 14 / 18 | 17 / 18 | −3 |
+
+**Analysis**: DISCRIMINATING NEGATIVE — second confirmation of capacity-budget bound after #2191 (depth=6) and joint with #2236 (n_head=8).
+
+Student's two-seed protocol (e47tykkl + tj26of6c within 0.4 points on test_avg) cleanly separates signal from noise. Mechanism diagnosis:
+- e5 val=124.7 was healthy (below abort threshold 130) → Lion+clip+wider-FFN trained stably.
+- val curve still descending at -3pts/epoch when timer killed at e14 → pure schedule truncation, not capacity conflict.
+- +9% per-epoch tax cost 2 epochs of training; missing tail is exactly where baseline does final refinement.
+- rc OOD split hurt most (+7.0 absolute, opposite of capacity-helps-OOD prediction).
+
+**mlp_ratio lever closed at this stack.** With three independent capacity-adding interventions failing (depth=6 +21%, n_head=8 +18%, mlp_ratio=4 +9%), the structural budget bound is formalized: **>+5% per-epoch overhead has been a net loser under 30-min cap.**
+
+**Two-seed protocol adopted as standard practice.** Student's seed-confirmation rule ("within 1 point of test_avg = real, not noise") is now expected for budget-truncated runs.
+
+**Follow-up**: Assigned edward SiLU activation swap (#2327) — per-epoch-cost-neutral free architectural change. SiLU is the activation used in original Lion paper experiments.
