@@ -454,6 +454,7 @@ class Config:
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 = disabled)
     fourier_k: int = 0  # 0 = off (baseline); K > 0 enables Fourier expansion of (x, z) into 4K features
     fourier_max_freq: float = 10.0  # max frequency in the logspaced band; positions are O(1) post-norm
+    slice_num: int = 64
 
 
 cfg = sp.parse(Config)
@@ -489,7 +490,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
