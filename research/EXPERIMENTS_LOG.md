@@ -1269,3 +1269,80 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: Width scan step 3 (192 WIN, 224 WIN → test 256). 1.63M params. Tests if compact+wide direction still has headroom or plateaus at 1500-sample dataset capacity.
 - Reproduce: `--n_hidden 256 --n_layers 3 --epochs 50` (grad-clip=2.5 in train.py).
 - Targets: val < 52.6406, test < 44.9791.
+
+## 2026-05-13 13:00 — PR #2067: frieren grad-clip max_norm=1.5 — CLOSED (direction-normalization failure)
+
+- Branch: `willowpai2g48h5-frieren/grad-clip-1p5`
+- Hypothesis: Threshold scan step 4. max_norm=1.5 between last win (2.5, clip rate 98.9%) and known fail (1.0, direction-normalization). Predicted ~99.5-99.8% clip rate, ~12× mean downscaling.
+- W&B run: `90yx6m3u`
+
+| Metric | This (max_norm=1.5) | Baseline #1982 (max_norm=2.5) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **62.5939** | 52.6406 | **+9.95 (+18.91%)** |
+| `test_avg/mae_surf_p` (EMA) | **54.4545** | 44.9791 | **+9.48 (+21.07%)** |
+| `test_single_in_dist` | 62.4418 | 49.8555 | +12.59 (+25.2%) |
+| `test_geom_camber_rc` | 68.4060 | 57.7726 | +10.63 (+18.4%) |
+| `test_geom_camber_cruise` | 34.9669 | 28.9446 | +6.02 (+20.8%) |
+| `test_re_rand` | 52.0031 | 43.3437 | +8.66 (+20.0%) |
+
+**Threshold scan fully bracketed:**
+
+| max_norm | clip rate | mean downscaling | val_avg | regime |
+|---|---:|---:|---:|---|
+| 10.0 | 72.4% | ~2.1× | 65.98 | soft-scaling WIN |
+| 5.0 | 90.1% | ~4.3× | 63.48 | moderate-scaling WIN |
+| **2.5** | **98.9%** | **~7.1×** | **52.64** | **OPTIMUM** |
+| 1.5 (this) | **100.000%** | ~14.2× | 62.59 | direction-normalization FAIL |
+| 1.0 | ~100% | ~22× | regression | direction-normalization FAIL |
+
+- **Decision: CLOSE.** +18.91% val regression, +21.07% test regression. All 4 splits regress proportionally ~18-25% (in_dist hit hardest at +25.2%). Clip rate hit hard 100.0% (8625/8625 steps). Mean downscaling ~14.2× exceeded predicted 12× — deeper into direction-normalization regime than expected.
+- **Mechanism: direction-normalization failure.** The optimum threshold (2.5) gives 7× proportional damping while preserving directional information; deeper than that and the gradient signal collapses to pure direction (analogous to SGD without learning rate adaptation in Adam). norm_max (207.45) actually smaller than at 2.5 (353.04) — fewer extreme spikes despite tighter clipping, suggesting model can no longer access high-curvature directions.
+- **Per-split uniformity insight:** in_dist regresses MOST (+25.2%) — diverse training distributions need more gradient signal to fit; aggressive clipping hurts the largest, most informative population first.
+- **Next:** frieren #2094 — grad-clip=2.0 fine-scan between 1.5 (fail) and 2.5 (win) to characterize the cliff edge precisely.
+
+## 2026-05-13 13:00 — PR #2000: alphonse T_max=80 schedule — SENT BACK (protocol-stale; current-stack retest)
+
+- Branch: `willowpai2g48h5-alphonse/t-max-80-schedule-push`
+- Hypothesis: Extend cosine schedule from T_max=50 → T_max=80 on then-current #1953 stack to give late-training more useful LR. Goalposts moved during the run (PRs #1982 grad-clip=2.5 and #2023 n_hidden=224 merged after start).
+- W&B run: `gdk53vwe`
+
+| Metric | #1953 (baseline at submit) | #2000 T_max=80 | #1982 (current) | Δ vs #1953 | Δ vs #1982 |
+|---|---:|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | 55.7634 | **54.5106** | 52.6406 | **−2.25% WIN** | **+3.55% LOSS** |
+| `test_avg/mae_surf_p` | 48.0960 | **46.7380** | 44.9791 | **−2.82% WIN** | **+3.92% LOSS** |
+| `test_single_in_dist` | 52.8835 | 54.2532 | 49.8555 | +2.59% ⚠ | +8.82% |
+| `test_geom_camber_rc` | 61.7845 | 59.1708 | 57.7726 | **−4.23%** | +2.42% |
+| `test_geom_camber_cruise` | 31.1522 | 29.2805 | 28.9446 | **−6.01%** | +1.16% |
+| `test_re_rand` | 46.5637 | 44.2475 | 43.3437 | **−4.97%** | +2.08% |
+
+**Schedule mechanism diagnostic (T_max=80 vs T_max=50):**
+
+| Diagnostic | T_max=50 (#1953) | T_max=80 (this) | Notes |
+|---|---:|---:|---|
+| Best epoch / total | 30/30 | 33/33 | wall-clock-bound, one extra epoch fit |
+| Val slope last 5ep | −0.84/ep | **−0.8742/ep** | descent UNCHANGED — schedule-limited not capacity-saturated |
+| Val slope last 3ep | — | −0.9708/ep | actually steepening |
+| LR at termination | ~1.73e-4 | 3.23e-4 | ~1.87× higher (matches design) |
+| Grad-clip rate | 73% | 93.86% | predicted hot-clip regime, observed |
+| EMA−live gap | −8.32 (test) | −14.06 (val)/−13.44 (test) | gap widened ~+5.7 |
+
+- **Decision: SEND BACK for current-stack retest.** Mechanism is real (val descent unchanged at termination, 3/4 splits beat #1953 by 2-6%) but result is protocol-stale by 2 mechanism merges (#1982 grad-clip=2.5 + #2023 n_hidden=224).
+- **Mechanism interpretation:** Val descent extends linearly through wall-clock cap. The model wanted more useful LR, not more epochs at zero LR. Higher tail LR widened EMA-live gap as expected.
+- **Retest hypothesis:** does T_max=80 still help on grad-clip=2.5 stack? Three outcomes possible:
+  - (A) val < 52.64 → schedule + clip compound, 14th compound winner
+  - (B) val 52.64-54.0 → mechanism partially survives, document interaction, close
+  - (C) val > 54.0 → grad-clip=2.5 at higher T_max=80 LR overshoots into clip-rate-100% regime (like #2067)
+- **Watch clip rate.** At T_max=80 + grad-clip=5.0 = 93.86%. Predict T_max=80 + grad-clip=2.5 ≥ 99.5%. If 100% and regression, direction-normalization fail like #2067.
+- **in_dist regression note:** the only test split that regressed (+1.37 vs #1953) was in_dist — possibly attention-vs-LR interaction at higher mid-training LR. Worth tracking on retest.
+
+## 2026-05-13 13:00 — PR #2094: frieren assigned grad-clip max_norm=2.0 (fine-scan, bracketed cliff)
+
+- Branch: `willowpai2g48h5-frieren/grad-clip-2p0-fine-scan`
+- Hypothesis: Fine-grain test of optimum boundary in [2.0, 2.5]. The 2.5→1.5 cliff is sharp (52.64 WIN → 62.59 FAIL); max_norm=2.0 sits in the middle. Predicted mean downscaling ~9× (linear interp between 7× and 14×).
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` + `GRAD_CLIP_MAX_NORM = 2.0` in train.py.
+- Targets: val < 52.6406, test < 44.9791.
+- **Three possible outcomes:**
+  - (A) val < 52.64 → optimum shifts to 2.0 or below; flat region in [2.0, 2.5]; fine-scan continues
+  - (B) val ≈ 52.0-53.5 (within noise) → flat optimum [2.0, 2.5]; 2.5 holds as conservative choice
+  - (C) val > 54.0 → regime transition happens between 2.0 and 2.5; threshold optimum is sharp at 2.5
+- **Key diagnostic: clip rate.** If 100% (like 1.5 did), direction-normalization regime regardless of downscaling ratio.

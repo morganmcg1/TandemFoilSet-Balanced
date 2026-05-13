@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 12:20
+- **Date:** 2026-05-13 13:00
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -57,11 +57,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
-| alphonse | #2000 | T_max=80 schedule extension (epochs 50→80) | Schedule | WIP | #1953 MERGED (11th winner, val=55.76, MASSIVE −12.17%). Val descending at −0.84/ep at termination. At T_max=80, LR at ep 30 ≈ 3.45e-4 (vs 1.73e-4 at T_max=50). Tests: schedule push compounds further OR T_max=50 was sweet spot |
+| alphonse | #2000 | T_max=80 retest on grad-clip=2.5 stack | Schedule + Gradient stability | WIP-RETEST | First pass: val=54.51 (beat #1953 55.76 by −2.25% — schedule mechanism confirmed) but +3.55% vs current #1982 baseline (52.64). Retest with current default grad-clip=2.5. Watch clip rate — predicted ≥99.5% (warning regime). Outcomes: (A) val<52.64 compound win; (B) clip-near-100% direction-normalization fail |
 | askeladd | #1841 | slice_num=48 — retest on full 8-merge stack (n_layers=3 + grad-clip=10) | Architecture / throughput | WIP-REBASE | First-pass val=70.76 beat OLD baseline (71.44) but not n_layers=3 (69.45) or new grad-clip baseline (65.98). Mechanism (3/4 splits improve, capacity-right-sizing) is clean. Expected retest val ≈ 65.35 if relative −0.95% holds |
 | edward | #2024 | EMA decay 0.999 → 0.998 on 11-compound stack | Optimization (EMA) | WIP | #1833 CLOSED (stale, never completed training). At #1953 EMA−live gap is −8.32 (vs +0.42 at #1899). Halving EMA half-life (693→346 steps) should let EMA track the live model's improvements in the new T_max=50 schedule tail |
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 11-merge stack |
-| frieren | #2067 | grad-clip max_norm=2.5 → 1.5 (threshold scan step 4) | Gradient stability (threshold scan) | WIP | #2023 MERGED (n_hidden=224 WIN, val=53.25). Threshold scan: 10→5→2.5 all WON monotonically. 1.5 brackets between last win (2.5) and known fail (1.0 = direction-normalization). Expected ~99.5-99.8% clip rate, ~12× downscaling |
+| frieren | #2094 | grad-clip max_norm=2.0 fine-scan | Gradient stability (threshold scan) | WIP | #2067 CLOSED (max_norm=1.5 val=62.59, +18.91% — direction-normalization failure confirmed; clip rate hit 100%, downscaling 14.2× ≈ predicted 12×). Fine-grain test between FAIL (1.5) and WIN (2.5). Outcomes: (A) optimum shifts to 2.0; (B) flat region [2.0, 2.5]; (C) regime transition sharp at 2.5 |
 | nezuko | #2053 | mlp_ratio 2 → 3 — FFN capacity bracket on 11-compound + T_max=50 | Architecture (FFN width) | WIP | #1994 CLOSED (n_head=8 gave uniform slight regression across all 4 splits at +13.6% vs new baseline; mechanism falsified, not just protocol-stale). mlp_ratio=4 failed on n_layers=5 stack (#1544); mlp_ratio=1 failed on n_layers=3 (#1878). Tests if longer schedule + wider model surfaces FFN headroom |
 | tanjiro | #2066 | n_hidden=224 + grad-clip=2.5 compound confirmation (PRIORITY) | Architecture + Gradient stability | WIP | #1982 MERGED (12th compound winner, val=52.64, −5.60%). #2023 MERGED (n_hidden=224, val=53.25 at grad-clip=5.0 — combined state unmeasured). Directly measures the full 13-compound stack at n_hidden=224 + grad-clip=2.5 + T_max=50. Highest-expected-value run in pipeline |
 | thorfinn | #2068 | n_hidden=256 width push (scan step 3) | Architecture (width) | WIP | #1960 CLOSED (n_layers=2 val=56.96 — +8.2% regression vs current baseline; depth-floor confirmed closed at n_layers=2). Width scan: 192 WIN, 224 WIN → testing 256. Tests if width scaling continues or plateaus at 1500-sample dataset capacity |
