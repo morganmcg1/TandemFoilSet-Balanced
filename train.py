@@ -467,6 +467,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    uxuy_weight: float = 1.0  # multiplier on vol-loss Ux and Uy channels (PR #1821)
 
 
 cfg = sp.parse(Config)
@@ -618,7 +619,11 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         # Apply per-sample re_weight to the per-element error; surf_weight stays on top.
         weighted_err = sq_err * re_weight_expanded
-        vol_loss = (weighted_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        # PR #1821: up-weight vol-loss Ux (ch 0) and Uy (ch 1) channels by uxuy_weight; p (ch 2) untouched.
+        # Surface-loss path is UNCHANGED (surf_weight applies uniformly across channels there).
+        vol_channel_weights = sq_err.new_tensor([cfg.uxuy_weight, cfg.uxuy_weight, 1.0]).view(1, 1, 3)
+        weighted_err_vol = weighted_err * vol_channel_weights
+        vol_loss = (weighted_err_vol * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (weighted_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
@@ -627,6 +632,12 @@ for epoch in range(MAX_EPOCHS):
             vol_loss_unw = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
+            # PR #1821: per-channel vol-loss components (unweighted, no re_weight or uxuy_weight).
+            # Channels: 0=Ux, 1=Uy, 2=p per data/scoring.py CHANNELS.
+            vol_denom = vol_mask.sum().clamp(min=1)
+            vol_loss_ux_component = (sq_err[..., 0] * vol_mask).sum() / vol_denom
+            vol_loss_uy_component = (sq_err[..., 1] * vol_mask).sum() / vol_denom
+            vol_loss_p_component = (sq_err[..., 2] * vol_mask).sum() / vol_denom
 
         optimizer.zero_grad()
         loss.backward()
@@ -640,6 +651,10 @@ for epoch in range(MAX_EPOCHS):
             "train/re_weight_mean": re_weight.mean().item(),
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            # PR #1821: per-channel vol-loss components (pre-weighting) for diagnostic.
+            "train/vol_loss_ux_component_mean": vol_loss_ux_component.item(),
+            "train/vol_loss_uy_component_mean": vol_loss_uy_component.item(),
+            "train/vol_loss_p_component_mean": vol_loss_p_component.item(),
             "global_step": global_step,
         })
 
