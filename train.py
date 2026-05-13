@@ -574,10 +574,10 @@ for epoch in range(MAX_EPOCHS):
         is_step = ((step_idx + 1) % cfg.grad_accum == 0) or ((step_idx + 1) == len(train_loader))
         if is_step:
             # clip_grad_norm_ returns the *pre-clip* total norm; log whether the
-            # cap (max_norm=1.0) was binding so we can compare smooth_l1's
+            # cap (max_norm=1.5) was binding so we can compare smooth_l1's
             # already-bounded per-elem gradient against the global clip.
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            clip_active = float(grad_norm.item() > 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.5)
+            clip_active = float(grad_norm.item() > 1.5)
             optimizer.step()
             optimizer.zero_grad()
             # OneCycleLR steps per optimizer step. Guard against overflow if
