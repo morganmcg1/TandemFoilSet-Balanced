@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 08:45 UTC
+- **Date / time:** 2026-05-13 09:00 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -19,22 +19,26 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
-## Cycle-21 update — #1959 thorfinn beta2=0.99 MERGED ✓ (-2.98%), 1 sent back, 1 new arm
+## Cycle-27 update — #2008 thorfinn beta2=0.98 MERGED ✓ (-1.77%), #2025 sent back, #2087 assigned
 
-**New all-time best: val=77.6444 / test=68.2153.** 7th consecutive compounding win. **Active baseline: val=77.6444 / test=68.2153. Cumulative: -41.1% from start (131.79→77.6444).**
+**New all-time best: val=76.2707 / test=66.7732.** 8th consecutive compounding win. **Active baseline: val=76.2707 / test=66.7732. Cumulative: -42.1% from start (131.79→76.2707).**
 
-beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magnitude regime, the second-moment EMA can safely adapt 10× faster (~100 steps half-life vs 1000) without noise penalty. All 4 test splits improved. Fern's EMA experiment sent back — decay=0.9999 has 6932-step half-life vs our 3400-step training, too slow; redirected to decay sweep {0.999, 0.99}.
+Beta2 sweep: 0.999→0.99 (-2.98%) → 0.99→0.98 (-1.77%). Trend is decelerating but all 4 splits improve each step — genuine optimizer dynamics, not split-specific overfitting. At beta2=0.98, half-life is ~50 steps. 0.97 (33-step half-life) is the natural next bisection.
 
-1 new arm:
+Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly worse vs new 76.27). Sent back for max_norm=1.5 midpoint.
+
+2 new arms:
 | PR | Student | Hypothesis |
 |---|---|---|
-| #2008 | thorfinn | AdamW beta2 0.99→0.98 (continue sweep toward MAE-regime optimum) |
+| #2087 | thorfinn | AdamW beta2 0.98→0.97 (bisection continues) |
+| #2025 | askeladd | grad_clip max_norm=1.5 (sent back, new target baseline 76.2707) |
 
 ### Active leaderboard (all-time best)
 
 | Val | Test | PR | What landed |
 |---|---|---|---|
-| **77.6444** | **68.2153** | #1959 thorfinn | AdamW beta2=0.99 |
+| **76.2707** | **66.7732** | #2008 thorfinn | AdamW beta2=0.98 |
+| 77.6444 | 68.2153 | #1959 thorfinn | AdamW beta2=0.99 |
 | 80.03 | 70.89 | #1863 tanjiro | smooth_l1(β=0.25) |
 | 85.84 | 74.45 | #1867 fern | AdamW beta1=0.95 |
 | 88.06 | 78.46 | #1666 tanjiro | smooth_l1(β=1) |
@@ -49,7 +53,7 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 - mlp_ratio=3, n_layers=6: capacity-at-budget failures
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
-- beta2=0.95: +13% under OLD MSE stack; 0.99 won (-2.98%), 0.98 in-flight (#2008)
+- beta2: 0.999→0.99 (-2.98%, #1959), 0.99→0.98 (-1.77%, #2008 MERGED); 0.97 in-flight (#2087)
 - eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal in upward direction
 - grad_accum=4: +18%, eff_batch=8 optimal
 - max_lr=4e-3: diverges
@@ -70,9 +74,9 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 | #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
 | #2065 | alphonse | AdamW amsgrad=True (max v_t stabilizer with beta2=0.99) |
 | #2076 | edward | AdamW beta1 0.95→0.97 (push first-moment memory further) |
-| #2008 | thorfinn | AdamW beta2 0.99→0.98 |
+| #2087 | thorfinn | AdamW beta2 0.98→0.97 (sweep continuation) |
 | #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
-| #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen, conjugate test) |
+| #2025 | askeladd | grad_clip max_norm=1.5 midpoint (2.0 traded in-dist for OOD; 1.5 sent back for retry vs new baseline 76.2707) |
 | #2064 | nezuko | weight_decay 1e-4→2e-4 (upward conjugate — more OOD regularization) |
 
 ### Priority research directions

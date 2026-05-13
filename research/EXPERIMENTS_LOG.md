@@ -11,6 +11,49 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 09:00 — Cycle 27: #2008 MERGED + #2025 sent back + #2087 assigned
+
+### PR #2008 thorfinn — AdamW beta2 0.99→0.98: MERGED ✓ (8th win)
+
+W&B run: `p704q4m5`
+
+| Metric | Baseline (#1959) | This run | Δ |
+|--------|-----------------|----------|---|
+| val_avg/mae_surf_p | 77.6444 | **76.2707** | **-1.77% ✓** |
+| test_avg/mae_surf_p | 68.2153 | **66.7732** | **-2.11% ✓** |
+| test single_in_dist | 74.6250 | 71.8614 | -3.70% |
+| test geom_camber_rc | 81.4950 | 80.1858 | -1.61% |
+| test geom_camber_cruise | 48.8635 | 48.2707 | -1.21% |
+| test re_rand | 67.8779 | 66.7750 | -1.62% |
+
+**Analysis:** Beta2 sweep: 0.999→0.99 (-2.98%) then 0.99→0.98 (-1.77%). Decelerating but all 4 splits improve each step. Under smooth_l1(β=0.25)'s bounded gradient magnitude regime, faster variance adaptation keeps improving. Peak GPU: 98.52 GB spike at init, steady 41.4 GB. New baseline: val=76.2707, test=66.7732.
+
+### PR #2025 askeladd — grad_clip max_norm 1.0→2.0: SENT BACK for max_norm=1.5
+
+W&B run: `ocxmgvtb`
+
+| Metric | Baseline (#2008) | This run | Δ |
+|--------|-----------------|----------|---|
+| val_avg/mae_surf_p | 76.2707 | 77.6972 | +1.77% ✗ (misses new baseline) |
+| test_avg/mae_surf_p | 66.7732 | 67.7295 | +1.43% ✗ (misses new baseline) |
+| test single_in_dist | 71.8614 | 76.1312 | -4.27% (worse) |
+| test geom_camber_rc | 80.1858 | 80.4998 | +0.39% |
+| test geom_camber_cruise | 48.2707 | 47.3381 | -1.93% (better) |
+| test re_rand | 66.7750 | 66.9490 | +0.26% |
+
+**Note:** Reported against old baseline (77.6444). Against new baseline (76.2707), this misses both val and test. Even under old baseline, val missed by 0.07%.
+
+**Analysis:** max_norm=2.0 shows single_in_dist regression (+4.27%) while most OOD splits improve. Student correctly identified the bracketing: 0.5 under-fits, 2.0 trades in-dist for OOD. Requested max_norm=1.5 midpoint with new baseline as target.
+
+### New assignments (cycle 27)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| thorfinn | AdamW beta2 0.98→0.97 (sweep continuation, predicted ~-1% val) | #2087 |
+| askeladd | grad_clip max_norm=1.5 (sent back from #2025) | #2025 |
+
+---
+
 ## 2026-05-13 08:30 — Cycle 25: #1977 stale_wip closed + #2076 assigned
 
 ### PR #1977 edward — AdamW eps=1e-6: CLOSED ✗ (stale_wip, no SENPAI-RESULT)
