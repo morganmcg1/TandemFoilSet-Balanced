@@ -426,6 +426,11 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    # Late-epoch SWA (no LR cycling): snapshot the last `swa_k` epochs starting at
+    # epoch `swa_start_epoch` (1-indexed) and average them post-training before
+    # final val/test evaluation. -1 disables the entire pathway.
+    swa_start_epoch: int = -1
+    swa_k: int = 3
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -523,6 +528,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
+swa_states: list[dict] = []  # late-epoch (model, surf_head) state-dict snapshots
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -665,12 +671,144 @@ for epoch in range(MAX_EPOCHS):
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
+    # ── SWA late-epoch snapshot ───────────────────────────────────────────
+    # Capture a CPU copy of (model, surf_head) state dicts at the end of each
+    # epoch in the SWA window. State is cloned off-GPU so live training is
+    # uninterrupted; we keep only the last `swa_k` snapshots.
+    if cfg.swa_start_epoch > 0 and (epoch + 1) >= cfg.swa_start_epoch:
+        swa_states.append({
+            "epoch": epoch + 1,
+            "model": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
+            "surf_head": {k: v.detach().cpu().clone() for k, v in surf_head.state_dict().items()},
+        })
+        while len(swa_states) > cfg.swa_k:
+            swa_states.pop(0)
+        _swa_epochs = [s["epoch"] for s in swa_states]
+        print(
+            f"    SWA: snapshot stored (window holds epochs "
+            f"{_swa_epochs}, max {cfg.swa_k})"
+        )
+
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# ── SWA late-epoch averaging ─────────────────────────────────────────────
+# After training, average the collected last-K snapshots and use the averaged
+# weights for the final val/test evaluation and the model artifact. We also
+# evaluate the *live* last-epoch model on val as a sanity baseline so we can
+# attribute any gain (or loss) directly to averaging vs. the single live
+# iterate. Transolver uses LayerNorm (no BN running stats) so no re-estimation
+# step is required.
+swa_active = cfg.swa_start_epoch > 0 and len(swa_states) > 0
+if swa_active:
+    n_swa = len(swa_states)
+    swa_epoch_range = [s["epoch"] for s in swa_states]
+    print(
+        f"\nSWA: averaging {n_swa} snapshots from epochs {swa_epoch_range} "
+        f"(swa_start_epoch={cfg.swa_start_epoch}, swa_k={cfg.swa_k})"
+    )
+
+    # 1) Live (last-epoch) val sanity baseline — model still holds the live
+    # weights here, so just evaluate directly.
+    model.eval()
+    surf_head.eval()
+    live_split_metrics = {
+        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_val = live_val_avg["avg/mae_surf_p"]
+
+    # 2) Average each tensor across snapshots (float arithmetic, cast back to
+    # the param's native dtype). Non-floating tensors (none expected for this
+    # model, but guarded) just take the most-recent snapshot.
+    def _avg_state(state_list):
+        out = {}
+        for key, ref in state_list[0].items():
+            if ref.is_floating_point():
+                stacked = torch.stack([s[key].float() for s in state_list], dim=0)
+                out[key] = stacked.mean(dim=0).to(ref.dtype)
+            else:
+                out[key] = state_list[-1][key].clone()
+        return out
+
+    model_avg = _avg_state([s["model"] for s in swa_states])
+    surf_head_avg = _avg_state([s["surf_head"] for s in swa_states])
+    model.load_state_dict({k: v.to(device) for k, v in model_avg.items()})
+    surf_head.load_state_dict({k: v.to(device) for k, v in surf_head_avg.items()})
+    model.eval()
+    surf_head.eval()
+
+    # 3) SWA-model val (replaces the "best checkpoint" weights downstream).
+    swa_split_metrics = {
+        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_split_metrics)
+    swa_val = swa_val_avg["avg/mae_surf_p"]
+
+    print("\nSWA sanity check — val_avg/mae_surf_p:")
+    print(f"  best single-epoch checkpoint: {best_avg_surf_p:.4f} (epoch {best_metrics.get('epoch', 'n/a')})")
+    print(f"  last-epoch live model:        {live_val:.4f}")
+    print(f"  SWA-averaged ({n_swa} epochs):    {swa_val:.4f}")
+
+    # 4) W&B summary — keep every comparison number recoverable.
+    summary_updates = {
+        "swa/n_snapshots": n_swa,
+        "swa/cfg_start_epoch": cfg.swa_start_epoch,
+        "swa/cfg_k": cfg.swa_k,
+        "swa/epochs_used_min": min(swa_epoch_range),
+        "swa/epochs_used_max": max(swa_epoch_range),
+        "swa/best_single_val_avg/mae_surf_p": best_avg_surf_p,
+        "swa/best_single_epoch": best_metrics.get("epoch") if best_metrics else None,
+        "swa/live_val_avg/mae_surf_p": live_val,
+        "swa/avg_val_avg/mae_surf_p": swa_val,
+    }
+    for split_name, m in live_split_metrics.items():
+        for k, v in m.items():
+            summary_updates[f"swa/live/{split_name}/{k}"] = v
+    for split_name, m in swa_split_metrics.items():
+        for k, v in m.items():
+            summary_updates[f"swa/avg/{split_name}/{k}"] = v
+    wandb.summary.update(summary_updates)
+
+    # 5) Persist SWA weights to model_path so the downstream load_state_dict +
+    # test eval + artifact upload all use the averaged model.
+    torch.save(
+        {"model": model.state_dict(), "surf_head": surf_head.state_dict()},
+        model_path,
+    )
+
+    # 6) Rewrite best_metrics / best_avg_surf_p so wandb summary and the
+    # SENPAI-RESULT metric reflect the SWA model. Retain pre-SWA bests under
+    # explicit keys so the comparison is still legible.
+    orig_best_epoch = best_metrics.get("epoch") if best_metrics else None
+    orig_best_avg_surf_p = best_avg_surf_p
+    best_avg_surf_p = swa_val
+    best_metrics = {
+        "epoch": swa_epoch_range[-1],
+        "val_avg/mae_surf_p": swa_val,
+        "per_split": swa_split_metrics,
+        "swa_active": True,
+        "swa_start_epoch": cfg.swa_start_epoch,
+        "swa_k": cfg.swa_k,
+        "swa_n_snapshots": n_swa,
+        "swa_epochs_used": swa_epoch_range,
+        "orig_best_single_epoch": orig_best_epoch,
+        "orig_best_single_val_avg/mae_surf_p": orig_best_avg_surf_p,
+        "live_last_epoch_val_avg/mae_surf_p": live_val,
+    }
+
 # --- Test evaluation + artifact upload ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if swa_active:
+        print(
+            f"\nFinal model: SWA average of last {best_metrics['swa_n_snapshots']} "
+            f"epochs (epochs {best_metrics['swa_epochs_used']}); "
+            f"val_avg/mae_surf_p = {best_avg_surf_p:.4f}"
+        )
+    else:
+        print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
