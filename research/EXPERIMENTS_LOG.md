@@ -74,6 +74,55 @@
 
 ---
 
+## 2026-05-13 05:00 — Round 14: PR reviews and new assignments
+
+### PR #1788: attention-dropout=0.1 — CLOSED (slow convergence, budget-bound loss)
+
+- **Student:** charliepai2g48h5-frieren
+- **Result:** val_avg=65.8345 (+2.75% vs OLD 64.07 baseline), test_avg=59.3951 (+7.03%).
+- **Analysis:** Best epoch = terminal epoch (36/36). All four val splits regressed — no preferential OOD gain from attention dropout. Per-weight activation noise dominated regularization benefit under 36-epoch cap. "Closed on 30-min regime" — slower convergence never caught the baseline.
+- **Closed axes:** Attention dropout (per-weight) at p=0.1 closed under wall-clock cap. DropPath (block-level) remains untested — different convergence profile.
+- **Artifacts:** `models/model-charliepai2g48h5-frieren-attention-dropout-0.1-20260513-020018/metrics.jsonl`
+
+---
+
+### PR #1741: mlp_ratio=3 — CLOSED (capacity axis triangulated closed)
+
+- **Student:** charliepai2g48h5-edward
+- **Result:** val_avg=68.9250 (+7.6% vs OLD 64.07 baseline), test_avg=61.9016 (+11.5%).
+- **Param count:** 826K (up from 662K). Per-epoch: +6.5% (within prediction). Epochs: 34 (vs 36 baseline).
+- **Analysis:** Plateau-bound trajectory (oscillating tail: ep 32→33→34: 68.92→69.26→72.47). NOT the undertrained-but-converging shape. Combined with #1688 (n_hidden=160 also lost), **both capacity axes (uniform width and asymmetric FFN) are triangulated closed** on 30-min budget. Future gains from regularization, optimizer, schedule, or loss-shape — not model size.
+- **Artifacts:** `models/model-charliepai2g48h5-edward-mlp-ratio-3-20260513-020905/metrics.jsonl`
+
+---
+
+### PR #1774: lr=7.5e-4 on β=0.5 — SENT BACK (L1 rebase needed)
+
+- **Student:** charliepai2g48h5-alphonse
+- **Result (2 runs, β=0.5):** mean val_avg=63.30 (-1.20% vs 64.07), mean test_avg=56.34 (+1.51%). Run-to-run gap: 1.06 val, 1.55 test — effect size within noise floor.
+- **Why sent back:** L1 merged (new baseline 59.54). Student's own analysis: "revisit if loss landscape changes" — L1 IS that change. Unit-bounded gradients (L1 sign) change what optimal LR is. Per-epoch cost: UNCHANGED (~49.5s). Sent back for L1 rebase.
+- **Predicted L1 outcome:** 57-59 val if larger step stacks; wash if neutral; >60 if L1 high-variance sign gradients penalize larger steps.
+- **Artifacts:** `models/model-charliepai2g48h5-alphonse-lr-7.5e-4-20260513-012003/metrics.jsonl`, `models/model-charliepai2g48h5-alphonse-lr-7.5e-4-20260513-015915/metrics.jsonl`
+
+---
+
+### PR #1845: AdamW betas=(0.9, 0.95) — ASSIGNED (edward)
+
+- **Branch:** `charliepai2g48h5-edward/adamw-betas-0.9-0.95`
+- **Hypothesis:** On L1 loss, every gradient is a unit sign (bounded, high-variance). beta2=0.999 (1000-step memory) over-smooths the preconditioner. beta2=0.95 (20-step memory) adapts faster to per-parameter gradient variance. Modern transformer default (GPT/LLaMA). Single line change.
+- **Baseline to beat:** val_avg < 59.5354.
+
+---
+
+### PR #1846: slice_num 64 → 32 — ASSIGNED (frieren)
+
+- **Branch:** `charliepai2g48h5-frieren/slice-num-32`
+- **Hypothesis:** slice_num=64 may be over-allocated for TandemFoilSet's natural spatial structure (~10-20 canonical CFD regimes: stagnation, transition, separation, wake, inter-foil). Reducing to 32 tightens the attention bottleneck inductive bias, reduces per-epoch time ~3-5%, and forces load-balancing across fewer slices. CFD intuition: fewer coarser slices ≈ more physics-consistent decomposition than 64 fine-grained slices spread thin.
+- **Note:** #1590 (slice_num=96 on bf16) was closed at +3.86% regression — but that was LARGER slices. This is the SMALLER direction and a different compute regime.
+- **Baseline to beat:** val_avg < 59.5354.
+
+---
+
 ## 2026-05-13 01:55 — PR #1652: warmup-500 + cosine (β=0.5 rebase) — CLOSED (substituted by β)
 
 - **Branch:** `charliepai2g48h5-frieren/warmup-500-cosine`
