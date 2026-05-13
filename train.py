@@ -953,6 +953,18 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    # Param norm — direct measurement of weight-decay effect (PR #2390).
+    # Computed once per epoch over base model params; cheap and useful for Lion wd sweeps.
+    with torch.no_grad():
+        sq_sum = 0.0
+        n_params = 0
+        for p in model.parameters():
+            if p.requires_grad:
+                sq_sum += float(p.detach().pow(2).sum().item())
+                n_params += p.numel()
+        param_l2 = sq_sum ** 0.5
+        param_rms = (sq_sum / max(n_params, 1)) ** 0.5
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -961,6 +973,8 @@ for epoch in range(MAX_EPOCHS):
         "swa_active": int(swa_active),
         "epoch_time_s": dt,
         "global_step": global_step,
+        "train/param_norm": param_l2,
+        "train/param_rms": param_rms,
     }
     if cfg.max_norm > 0 and n_batches > 0:
         log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
