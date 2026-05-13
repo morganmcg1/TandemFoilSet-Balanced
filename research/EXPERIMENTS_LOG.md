@@ -1401,3 +1401,86 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 **Programme learning**: small-budget training (30 ep) needs SHORT EMA windows (β≤0.99, effective window ≤0.3 ep), NOT the standard β=0.999. Combine with Karras rampup to avoid early-training EMA-stuck-at-init failure (E1→E10 trajectory went 333→68).
 
 **EMA hypothesis pivoted**: v3 will use β=0.99 with Karras rampup.
+
+---
+
+## 2026-05-13 19:10 — PR #2320: [slice-num-32] Halve PhysicsAttention slices 64→32 — CLOSED
+
+- **Branch**: charliepai2g24h1-askeladd/slice-num-32
+- **Hypothesis**: slice_num 64→32 buys ~10% wall-clock allowing more epochs in 30-min budget.
+- **Status**: **CLOSED** — +0.95% val regression
+- **Metrics JSONL**: `models/model-charliepai2g24h1-askeladd-slice-num-32-20260513-171408/metrics.jsonl`
+
+| Metric | Value | vs baseline (28.8762) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 29.1496 | **+0.95% worse** |
+| test_avg/mae_surf_p | 25.1765 | +0.71% worse |
+| Epochs | 31 (vs 28 baseline) | +3 (but SCHEDULER_T_MAX=28 hardcoded → last 3 at eta_min flat) |
+
+**Programme learning**: PhysicsAttention slicing is NOT the per-step bottleneck — only 11% speedup, not 40-50%. Hard OOD splits suffer most (geom_camber_rc -2.05%, re_rand -2.03%). slice_num axis fully closed (128 +13.5%, 32 +0.95%, 64 optimum). The hardcoded SCHEDULER_T_MAX=28 issue noted by student is a real fix opportunity but doesn't help current 30-min runs.
+
+---
+
+## 2026-05-13 19:10 — PR #2319: [aoa-film-conditioning] Extend ReFiLM from Re-only to 5-dim — CLOSED
+
+- **Branch**: charliepai2g24h1-alphonse/aoa-film-conditioning
+- **Hypothesis**: Extending ReFiLM to [log Re, AoA, camber, gap, stagger] helps geometry OOD splits.
+- **Status**: **CLOSED** — +3.93% val regression
+- **Metrics JSONL**: `models/model-charliepai2g24h1-alphonse-aoa-film-conditioning-20260513-171533/metrics.jsonl`
+
+**Programme learning (critical)**: ReFiLM(Re) works because Re is a SPECIAL channel — it varies WITHIN splits and globally governs the slice-selection landscape. AoA/gap/stagger/camber are CONSTANT within each sample, so FiLM has no within-split modulation to learn. Gate IS active (γ absmax 1.24, 1.8x Re-only baseline) but counterproductive. Multi-channel FiLM expansion axis fully closed.
+
+---
+
+## 2026-05-13 19:10 — PR #2321: [llrd-transolver] Layer-wise LR decay (0.7 per block) — CLOSED
+
+- **Branch**: charliepai2g24h1-edward/llrd-transolver
+- **Hypothesis**: LLRD across 5 Transolver blocks improves OOD generalization.
+- **Status**: **CLOSED** — +6.85% val regression (>5%)
+- **Metrics JSONL**: `models/model-charliepai2g24h1-edward-llrd-transolver-20260513-171839/metrics.jsonl`
+
+**Programme learning**: LLRD attenuates layers near the output too aggressively on a shallow 5-block stack. LLRD is most useful for very deep transformers (24L+); inappropriate for our 5L architecture. LLRD axis closed.
+
+---
+
+## 2026-05-13 19:10 — PR #2323: [soap-max-precond-dim-128] SOAP max_precond_dim 256→128 — CLOSED
+
+- **Branch**: charliepai2g24h1-frieren/soap-max-precond-dim-128
+- **Hypothesis**: Halve max_precond_dim for faster Kronecker refresh.
+- **Status**: **CLOSED** — +16.45% val regression (severe)
+- **Metrics JSONL**: `models/model-charliepai2g24h1-frieren-soap-max-precond-dim-128-20260513-170625/metrics.jsonl`
+
+**Programme learning**: SOAP requires max_precond_dim >= n_hidden=128 to fully precondition per-channel covariance. Halving creates poorly-conditioned updates. SOAP HP space fully closed (betas, wd, precond_freq, max_precond_dim).
+
+---
+
+## 2026-05-13 19:10 — PR #2322: [geom-conditioned-output-head] 4-dim ReScaleHead — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/geom-conditioned-output-head
+- **Hypothesis**: ReScaleHead conditioning expanded from [log Re] to [log Re, AoA, Gap, Stagger] helps geometry OOD.
+- **Status**: **CLOSED** — +3.79% val regression
+- **Metrics JSONL**: `models/model-charliepai2g24h1-fern-geom-conditioned-output-head-20260513-171831/metrics.jsonl`
+
+**Programme learning**: Diagnostic confirmed ReScaleHead remained dominated by Re (corr_logRe +0.85 on p). Geom info is already in 24-dim node features and reaches output via Transolver — adding it again at head is redundant signal. Multi-channel ReScaleHead axis closed; Re-only is optimal.
+
+---
+
+## 2026-05-13 19:10 — PR #2325: [pressure-laplacian-loss] kNN-graph Laplacian on volume p — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/pressure-laplacian-loss
+- **Hypothesis**: L1 Laplacian smoothness regularizer on predicted pressure helps OOD geometry.
+- **Status**: **CLOSED** — +3.91% val regression
+- **Metrics JSONL**: `models/model-thorfinn-pressure-laplacian-loss-20260513-172533/metrics.jsonl`
+
+**Programme learning**: Two compounding issues — (a) +10-15% per-epoch overhead from kNN cdist outside autocast cost 2 epochs; (b) stochastic M=1024 with λ=0.01 acted as noise injection (variance ~ mean) rather than coherent prior. CRUCIALLY: loss targeted VOLUME nodes but ranking is on SURFACE — wrong region. Physics-informed Laplacian axis closed for this formulation. Future direction: mesh-edge-based Laplacian or pressure-Poisson residual.
+
+---
+
+## 2026-05-13 19:10 — PR #2428: [layerscale-init-1e-4] LayerScale on Transolver residual branches (γ₀=1e-4 + retry γ₀=0.1+nodecay) — CLOSED
+
+- **Branch**: charliepai2g24h1-nezuko/layerscale-init-1e-4
+- **Hypothesis**: CaiT-style per-channel learnable residual scaling stabilizes deep skip connections.
+- **Status**: **CLOSED** — both arms regress (+2.69% γ₀=1e-4, +2.93% γ₀=0.1+nodecay)
+- **Metrics JSONL**: `target/metrics/charliepai2g24h1-nezuko/layerscale-init-1e-4.jsonl` + `layerscale-init-0.1-nodecay.jsonl`
+
+**Programme learning**: First arm (γ₀=1e-4) failed due to (a) SOAP blew through tiny init in 1 epoch, (b) WD=1e-4 = 100% relative decay/step. Second arm (γ₀=0.1 + WD-exclude) addressed both — γ stays 0.08-0.12, no blowthrough, no decay collapse — but STILL +2.93% val regression. Baseline isn't unstable, so LayerScale's stabilization mechanism doesn't apply. Per-feature damping costs effective capacity. **LayerScale residual scaling axis FULLY CLOSED across both γ₀ regimes.**

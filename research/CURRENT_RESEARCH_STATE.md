@@ -1,8 +1,9 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 16:55 (closed #2384 lookahead-soap-k5 +6.3% — trajectory-smoothing meta-axis fully CLOSED across EMA/SWA/Lookahead; assigned nezuko layerscale-init-1e-4 #2428 — orthogonal training-dynamics axis)
+- **Date**: 2026-05-13 19:10 — MASSIVE PLATEAU SIGNAL. Closed 7 PRs in single review wave (all regressed): #2319 aoa-film, #2320 slice-32, #2321 llrd, #2322 geom-output-head, #2323 soap-precond-dim-128, #2325 pressure-laplacian, #2428 layerscale (both γ₀ arms). Plus earlier in this session: #2384 lookahead, #1467 slice-128. ALL conventional axes (HP, schedule, loss, FiLM/Scale expansion, slice-num, SOAP-HP, LayerScale, LLRD, trajectory smoothing, Laplacian) now exhausted. Researcher-agent dispatched for bold fresh ideas. #2324 tanjiro grad-accum still WIP (rate-limited token; resets 19:49).
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
+- **CRITICAL INFRA NOTE**: PR #2319-#2325 were originally created with short-form student labels (`student:alphonse` etc.) instead of full-form (`student:charliepai2g24h1-alphonse`). This made them invisible to student pod polling (which uses exact full-name label match per senpai-gh.sh:669). 3-hour stuck period until labels were patched at 17:01. All future `assign-experiment` calls MUST use full student name.
 
 ---
 
@@ -86,14 +87,20 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ## Current Research Focus
 
-**Broad convergence, architecture, physics-informed, and conditioning axes.** After closing EMA and SOAP precond-freq as negative, the track is now fully loaded with 8 concurrent experiments spanning diverse mechanisms:
-1. **Input conditioning breadth** (alphonse #2319): extend ReFiLM to AoA + geometry inputs alongside Re
-2. **Slice granularity sweep** (askeladd #2320, nezuko #1467): slice_num=32 vs 128 — both directions from baseline=64
-3. **Layer-wise LR decay** (edward #2321): LLRD across Transolver blocks (decay=0.7) may decouple early/late feature learning rates
-4. **Geometry-conditioned output head** (fern #2322): per-sample scale MLP from gap/stagger/AoA input
-5. **SOAP max_precond_dim=128** (frieren #2323): faster Kronecker factor refresh than reducing precond_freq
-6. **Gradient accumulation** (tanjiro #2324): effective batch 4→8 via accum_steps=2
-7. **Physics-informed Laplacian loss** (thorfinn #2325): smoothness regulariser on predicted pressure field
+**At a hard plateau.** 7+ axes closed in single review wave. Conventional levers exhausted:
+- Trajectory smoothing (EMA/SWA/Lookahead) — CLOSED
+- Loss-shape (Huber-δ, log-cosh, sorted W1, Laplacian) — CLOSED
+- Input augmentation — CLOSED
+- Architecture scale (n_layers, n_head, mlp_ratio, slice_num both directions) — CLOSED
+- LR schedule (cosine T_max, SGDR, OneCycleLR, warmup) — CLOSED
+- Weight tuning (p_channel_weight, surf_weight) — CLOSED
+- SOAP HP space (betas, wd, precond_freq, max_precond_dim) — CLOSED
+- LayerScale residual scaling (γ₀ ∈ {1e-4, 0.1+nodecay}) — CLOSED
+- ReFiLM expansion (per-block, per-head, 5-dim multi-channel) — CLOSED
+- ReScaleHead expansion (multi-channel) — CLOSED
+- LLRD layer-wise LR decay — CLOSED
+
+**Plateau Protocol activated.** Researcher-agent dispatched at 19:10 with `RESEARCH_IDEAS_2026-05-13_19:00.md` target to generate 7-8 bold fresh hypotheses. Need to think at different abstraction levels: data representation, equivariance, physics-informed (different formulations than Laplacian), multi-task auxiliary, output-side calibration.
 
 ---
 
@@ -101,14 +108,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2319 | alphonse | `aoa-film-conditioning` | WIP | HIGH | extend ReFiLM conditioning to (Re, AoA, gap, stagger, camber) |
-| #2320 | askeladd | `slice-num-32` | WIP | HIGH | halve slices 64→32; more epochs per 30-min budget |
-| #2321 | edward | `llrd-transolver` | WIP | HIGH | layer-wise LR decay across Transolver blocks (decay=0.7) |
-| #2322 | fern | `geom-conditioned-output-head` | WIP | HIGH | geometry-conditioned output scale: (gap, stagger, AoA) → per-sample scale |
-| #2323 | frieren | `soap-max-precond-dim-128` | WIP | HIGH | SOAP max_precond_dim 256→128 (faster Kronecker refresh) |
-| #2324 | tanjiro | `grad-accum-batch8` | WIP | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
-| #2325 | thorfinn | `pressure-laplacian-loss` | WIP | MEDIUM | physics-informed Laplacian smoothness regulariser on predicted pressure |
-| #2428 | nezuko | `layerscale-init-1e-4` | NEW | **HIGH** | LayerScale γ=1e-4 on residual branches (per-channel learnable); orthogonal training-dynamics axis (CaiT) |
+| #2324 | tanjiro | `grad-accum-batch8` | WIP (token rate-limited until 19:49) | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
 
 ---
 
@@ -162,24 +162,32 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **weight-decay-5e-4** (#2233): +1.86%; convergence-limited; wd=1e-4 is local optimum.
 - **mlp-ratio-3** (#2256): +23.9%; compute-bound underfitting under fixed 30-min budget. FFN capacity axis CLOSED.
 - **surf-weight-15** (#2264): +3.18%; bilateral surf_weight failure (7 and 15 both worse). surf_weight=10 is local optimum. RC bottleneck is NOT surface/volume balance.
-- **soap-precond-freq-5** (#2255): +3.52%; halving precond_freq introduced Kronecker-factor noise at bs=4. freq=10 confirmed optimal. SOAP optimizer tuning axis largely exhausted (betas, wd, precond_freq all tested; max_precond_dim still open).
-- **ema-beta-0p99-rampup** (#1966): mean +2.60% over 4 seeds; per-epoch EMA/live state-swap interacts with torch.compile+ReFiLM degrading live trajectory. EMA smoothing dividend real (~-0.1 MAE) but cannot overcome trajectory penalty. EMA axis CLOSED permanently on this stack.
-- **more-slices-128** (#1467): +13.5% val / +12.5% test; all 4 splits regressed including OOD geometry splits the hypothesis targeted. Train surf_loss collapsed to 0.003 (~20× drop) by epoch 18 — classic overfit. With 1499 training samples, slice_num=64 is the local maximum. Slice-num upper axis CLOSED.
-- **lookahead-soap-k5** (#2384): +6.3% val. Mechanical claim landed (no recompile, drift/slow ≤0.04, zero overhead) but α=0.5 pull-back acts as 50% effective LR brake. Val still descending at ep 28. Only `val_geom_camber_cruise` (most-converged split) improved (−0.19). **Trajectory-smoothing meta-axis fully CLOSED: EMA (+2.60%), SWA v1-v3 (+1.24-3.44%), Lookahead (+6.3%) — three independent mechanisms, same root cause: averaging past trajectory hurts a still-descending model in budget-limited regime.**
+- **soap-precond-freq-5** (#2255): +3.52%; halving precond_freq introduced Kronecker-factor noise at bs=4. freq=10 confirmed optimal.
+- **soap-max-precond-dim-128** (#2323): +16.45% (severe). max_precond_dim < n_hidden=128 destroys preconditioning. SOAP HP space FULLY CLOSED.
+- **ema-beta-0p99-rampup** (#1966): mean +2.60% over 4 seeds; per-epoch EMA/live state-swap interacts with torch.compile+ReFiLM. EMA axis CLOSED permanently.
+- **more-slices-128** (#1467): +13.5%; overfit on 1499 samples. slice_num=64 optimum.
+- **slice-num-32** (#2320): +0.95%; 11% speedup (not 40-50%); SCHEDULER_T_MAX=28 hardcode meant extra epochs ran at eta_min=1e-5. slice_num axis FULLY CLOSED.
+- **lookahead-soap-k5** (#2384): +6.3%; α=0.5 = 50% LR brake on descending model. **Trajectory-smoothing meta-axis fully CLOSED across EMA/SWA/Lookahead.**
+- **aoa-film-conditioning** (#2319): +3.93%; gate IS active (γ absmax 1.24 = 1.8× Re-only) but extra channels are constant within sample. Re is special (varies within splits, governs slice-selection landscape). Multi-channel FiLM expansion CLOSED.
+- **llrd-transolver** (#2321): +6.85% (>5%); LLRD attenuates near-output layers too aggressively on shallow 5L stack. LLRD inappropriate for shallow architectures.
+- **geom-conditioned-output-head** (#2322): +3.79%; corr_logRe stayed +0.85 (Re-dominated); geom info already in 24-dim node features. Multi-channel ReScaleHead CLOSED.
+- **pressure-laplacian-loss** (#2325): +3.91%; kNN cdist overhead cost 2 epochs; M=1024 sampling acted as noise injection at λ=0.01; targeted VOLUME but ranks on SURFACE. Laplacian formulation CLOSED (alternative formulations still possible).
+- **layerscale-init-1e-4 + γ₀=0.1+nodecay** (#2428): +2.69% / +2.93%; mechanism works on retry but baseline isn't unstable, per-feature gating costs effective capacity. LayerScale residual axis FULLY CLOSED both regimes.
 
 ---
 
 ## Potential Next Directions
 
-**After current in-flight experiments land**:
-- **Lookahead wrapper**: Lookahead(SOAP, k=5, α=0.5) — slow-weights averaging on top of SOAP; substitutes for EMA/SWA benefit WITHOUT the per-epoch state-swap that breaks torch.compile+ReFiLM. Highest-priority untested convergence mechanism.
-- **Extended budget**: 30→45 min would let mlp_ratio=3/larger models fully train; may unlock capacity wins blocked by compute ceiling
-- **Geometry-specific conditioning** (pending #2319 alphonse result): domain-specific attention or adapter heads for rc vs cruise; rc=41.95 is 3× cruise=14.15
-- **Auxiliary velocity losses**: Divergence/curl of predicted velocity as Navier-Stokes regularizer; supplements Laplacian pressure (#2325)
-- **Coordinate-based positional encodings**: Fourier positional encoding of (x,z) mesh coordinates instead of/in addition to raw mesh dimensions
-- **Multi-scale architecture**: hierarchical attention over coarse+fine mesh resolutions
-- **SOAP max_precond_dim=64**: if 128 helps (#2323), go smaller for even faster Kronecker refresh
-- **Slice count both directions**: if slice_num=32 wins (more epochs), reconsider n_layers decrease; if =128 wins (more capacity), check if T_max needs adjustment
-- **Multi-seed baseline confirmation**: 3 runs at 28.8762 to firm up the noise floor before declaring any ~1% gain a winner
+**PLATEAU PROTOCOL — researcher-agent dispatched at 19:10.** All conventional HP/schedule/loss/architecture axes are exhausted. Need BOLD directions at different abstraction levels:
 
-**The model is still converging at ep 28-29 in every run.** Lookahead wrapping SOAP (no state-swap overhead) remains the highest-priority untested convergence mechanism. rc split (41.95 vs cruise=14.15) is a 3× gap — domain-specific/geometry-conditioned mechanisms are the second-highest priority, now being probed by alphonse (#2319) and fern (#2322).
+**Conjectured next-tier categories (waiting on researcher-agent output for specifics):**
+- **Data representation transforms**: signed distance field input, vorticity feature, dynamic pressure (0.5·ρ·U²) derived feature, frame-equivariant coordinates
+- **Output-side calibration**: temperature scaling, isotonic regression on prediction percentiles, residual correction head trained on val errors
+- **Physics-informed beyond Laplacian**: Bernoulli surface residual, mass conservation surface integral, momentum balance — all targeting surface (where ranking is) not volume
+- **Multi-task auxiliary losses**: predict u/v/p with auxiliary tasks (surface normal, distance to wake, distance to LE/TE)
+- **Targeted hard-sample reweighting**: focal-loss-style emphasis on val_geom_camber_rc-like samples (RC is 3× cruise so the loss should emphasize rc more without changing surf_weight scalar)
+- **Test-time augmentation**: average predictions across mirror/translation symmetries
+- **Architectural micro-changes** that haven't been tried: attention bias (learned per-pair bias), positional encoding tricks, output head changes (e.g., per-channel separate prediction heads)
+- **Pretraining/SSL on mesh**: pretrain encoder on a self-supervised mesh task before joint training
+
+**The rc split (val=41.95, 3× cruise=14.15) is the dominant error source.** Any new direction should be evaluated on whether it specifically targets rc-OOD, not just average val.
