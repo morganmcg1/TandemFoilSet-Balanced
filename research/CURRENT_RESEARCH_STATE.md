@@ -42,7 +42,7 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 | #2292 | fern | `n-head-8` | Transolver n_head 4→8; same params/FLOPs, finer-grained attention | **WIP — just assigned** |
 | #2257 | frieren | `foil-mirror-aug` | Z-axis foil reflection augmentation; doubles effective training data | **WIP — in training** |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 50× (1e-4→5e-3); nudged to rebase onto clip=0.5 HEAD | **WIP — nudged** |
-| #1421 | edward | `surf-weight-25` | surf_weight 10→25; nudged to rebase onto clip=0.5 HEAD | **WIP — nudged** |
+| #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 vs 65.2170 baseline on PRE-clip=0.5 HEAD; sent back for rerun on clip=0.5 stack | **WIP — rerun requested** |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss alternative; rebasing on RFF+clip=0.5 base | **WIP — rebasing** |
 | #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; rebasing/rerunning on RFF+clip=0.5 base | **WIP — rebasing** |
 
