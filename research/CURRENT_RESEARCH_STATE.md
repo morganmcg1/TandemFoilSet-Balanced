@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 11:45 UTC (Wave 13: MERGE #2175 tanjiro SwiGLU inner_dim=256 (val=67.381 −2.08%, test=57.800 −2.71% — 13th compound win); ASSIGN #2200 tanjiro swiglu-inner-dim-384; SEND-BACK #2098 frieren Lion rebase+re-run on post-#2175 baseline; #2075 thorfinn just picked up after rate-limit clear)
+- **Last updated**: 2026-05-13 12:00 UTC (Wave 13: CLOSE #2102 askeladd RMSNorm + #2135 edward Gaussian-σ — crash-loop (uncommitted local changes); ASSIGN #2221 askeladd rmsnorm-post-swiglu; ASSIGN #2225 edward gaussian-rff-σ-calibrated; frieren #2098 rebased+training Lion+SwiGLU; thorfinn #2075 training LayerScale 0.0125)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -34,18 +34,20 @@ The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 lo
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
 | alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features | WIP |
-| askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling | WIP |
-| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) | WIP |
+| askeladd | #2221 | rmsnorm-post-swiglu | LayerNorm→RMSNorm: LLaMA recipe, removes mean-centering, pairs with SwiGLU | NEW |
+| edward | #2225 | gaussian-rff-σ-calibrated | Gaussian RFF σ=1.0 + σ=3.0 arms (vs dyadic L=6, σ=10 failed +36.6%) | NEW |
 | fern | #2157 | vol-ch-weight-pressure | vol_loss per-channel weight [1,1,2]: pressure emphasis in volume domain | WIP |
 | frieren | #2098 | lion-optimizer | Lion (rebase → re-run on post-#2175 baseline 67.381); strong signal on old baseline (67.846 < 68.812) | WIP (rebase) |
 | nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack | WIP |
 | tanjiro | #2200 | swiglu-inner-dim-384 | SwiGLU inner_dim 256→384: next bisect in capacity sweep (OOM fallback to 320) | NEW |
 | thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep (just picked up after rate-limit clear) | WIP |
 
-**Merged in Wave 12/13:**
+**Merged/closed in Wave 12/13:**
 - **#2105 tanjiro SwiGLU** — MERGED (val=68.812 −6.96% vs 73.958; 12th compound win; largest single-PR gain)
 - **#2175 tanjiro SwiGLU inner_dim=256** — MERGED (val=67.381 −2.08% vs 68.812; 13th compound win; capacity-limited signal)
 - **#2099 fern wd-3x** — CLOSED (+2.24%/+2.67% vs new baseline; wd axis confirmed at 1e-4)
+- **#2102 askeladd RMSNorm** — CLOSED (crash-loop: pod uncommitted changes blocking branch checkout; reassigned as #2221)
+- **#2135 edward Gaussian σ-calibrated** — CLOSED (same crash-loop cause; reassigned as #2225)
 
 **Frieren Lion (#2098) context:** pre-rebase val=67.846 was already below current baseline 67.381 by only 0.46; barely misses. After rebase+re-run with SwiGLU inner_dim=256, Lion+SwiGLU composition needs testing. Predicted outcome: ~63–65 val if fully orthogonal, ~67 if partially redundant.
 
