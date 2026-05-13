@@ -358,7 +358,7 @@ class FiLMTransolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device, huber_beta=1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -381,7 +381,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=huber_beta, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -534,6 +534,7 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    huber_beta: float = 1.0  # Smooth-L1 (Huber) loss beta; smaller = more aggressive outlier suppression.
 
 
 cfg = sp.parse(Config)
@@ -697,7 +698,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        sq_err = F.smooth_l1_loss(pred, y_norm, beta=cfg.huber_beta, reduction='none')
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
         m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
@@ -822,7 +823,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -942,7 +943,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         base_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
             for name, loader in test_loaders.items()
         }
         base_test_avg = aggregate_splits(base_test_metrics)
@@ -958,7 +959,7 @@ if best_metrics:
 
     print("\nEvaluating SWA model on val splits...")
     swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -972,7 +973,7 @@ if best_metrics:
     if not cfg.skip_test and test_loaders is not None:
         print("\nEvaluating SWA model on test splits...")
         swa_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, cfg.huber_beta)
             for name, loader in test_loaders.items()
         }
         swa_test_avg = aggregate_splits(swa_test_metrics)
