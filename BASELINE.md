@@ -1439,3 +1439,51 @@ cd target/ && python train.py \
   --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
   --surf_weight 10 --n_layers 3 --slice_num 16
 ```
+
+## 2026-05-13 18:50 — PR #2468: n_layers=2+slice_num=16+epochs=46 (frieren)
+
+**New best: `val_avg/mae_surf_p` = 35.256** (epoch 46/46 STILL DESCENDING, n_layers=2, slice_num=16, epochs=46, ~35s/epoch, 26.9 min)
+
+> Depth-down + epoch-up mechanism: n_layers=2 cut per-epoch wall-clock ~30% (50s→35s), freeing 10 extra cosine annealing epochs. Win driven primarily by OOD splits (geom_camber_rc −0.81, geom_camber_cruise −1.07, re_rand −0.51); val_single_in_dist REGRESSED (+1.21), indicating mild capacity loss at n_layers=2 for in-distribution data. 361K params (vs 515K at n_layers=3, −30%). Still descending at epoch 46 with slope ~−0.2/epoch.
+
+| Hyperparameter | Value |
+|---|---|
+| `n_layers` | **2** (was 3) |
+| `slice_num` | 16 |
+| `epochs` | **46** (was 36) |
+| `n_head` | 4 |
+| `lr` | 1e-4 |
+| `weight_decay` | 1e-4 |
+| `surf_weight` | 10 |
+| Per-epoch wall-clock | ~35.1s |
+| Params | 361,131 |
+| Peak memory | 13.49 GB |
+
+### Val metrics (best checkpoint, epoch 46)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 36.476 | 44.346 |
+| geom_camber_rc | 48.297 | 52.974 |
+| geom_camber_cruise | 18.326 | 21.310 |
+| re_rand | 37.923 | 39.352 |
+| **avg** | **35.256** | — |
+
+### Test metrics (from best-val checkpoint)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 33.035 | 39.541 |
+| geom_camber_rc | 44.333 | 50.047 |
+| geom_camber_cruise | 15.496 | 18.347 |
+| re_rand | 28.116 | 31.349 |
+| **avg** | **30.245** | 34.821 |
+
+**Metric artifacts:** `models/model-charliepai2g48h3-frieren-nlayers2-slicenum16-epochs46-20260513-175423/metrics.jsonl`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --epochs 46 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
+  --surf_weight 10 --n_layers 2 --slice_num 16
+```
