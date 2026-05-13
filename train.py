@@ -478,11 +478,13 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(
+optimizer = torch.optim.NAdam(
     model.parameters(),
     lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
     betas=(0.95, 0.98),
+    eps=1e-8,
+    weight_decay=cfg.weight_decay,
+    decoupled_weight_decay=True,
 )
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
