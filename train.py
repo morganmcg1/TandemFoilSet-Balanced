@@ -165,9 +165,11 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
+            # Shared pre-head trunk (Linear+GELU). The original final Linear(d, out_dim)
+            # has been moved up to Transolver as two specialized heads (surf_head/vol_head)
+            # gated by is_surface — see Transolver.forward.
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
             )
 
     def forward(self, fx, gamma=None, beta=None):
@@ -208,6 +210,11 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Two specialized output heads. Surface nodes (is_surface=True) use surf_head;
+        # volume nodes use vol_head. Created before apply(_init_weights) so both inherit
+        # the same trunc_normal(std=0.02)+zero-bias init scheme as the rest of the model.
+        self.surf_head = nn.Linear(n_hidden, out_dim)
+        self.vol_head = nn.Linear(n_hidden, out_dim)
         self.apply(self._init_weights)
         # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
@@ -232,7 +239,17 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, gamma, beta)
-        return {"preds": fx}
+        # Surface/volume specialized heads. is_surface (bool [B, N]) gates which
+        # head's prediction is used per node. Padded nodes (is_surface=False) flow
+        # through vol_head but get masked out of loss/metrics downstream.
+        is_surface = data.get("is_surface")
+        surf_out = self.surf_head(fx)
+        vol_out = self.vol_head(fx)
+        if is_surface is None:
+            out = vol_out
+        else:
+            out = torch.where(is_surface.unsqueeze(-1), surf_out, vol_out)
+        return {"preds": out}
 
 
 class ReScaleHead(nn.Module):
@@ -334,7 +351,7 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"] * scale
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -513,8 +530,11 @@ rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 n_params_film = sum(p.numel() for p in model.re_film.parameters())
+n_params_surf_head = sum(p.numel() for p in model.surf_head.parameters())
+n_params_vol_head = sum(p.numel() for p in model.vol_head.parameters())
 print(
-    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
+    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
+    f"surf_head {n_params_surf_head}, vol_head {n_params_vol_head}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
 
@@ -550,8 +570,9 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
     gamma_stats = beta_stats = None
     try:
         with torch.no_grad():
-            for x, _y, _is_surface, mask in val_loader:
+            for x, _y, is_surface, mask in val_loader:
                 x = x.to(device_, non_blocking=True)
+                is_surface = is_surface.to(device_, non_blocking=True)
                 mask = mask.to(device_, non_blocking=True)
                 x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
                 log_re = x_norm[:, 0, 13:14]
@@ -566,7 +587,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
                     "std": beta.std().item(),
                     "absmax": beta.abs().max().item(),
                 }
-                _ = uncompiled({"x": x_norm})
+                _ = uncompiled({"x": x_norm, "is_surface": is_surface})
                 captured = [
                     [float(v) for v in a._last_slice_entropy.tolist()]
                     if a._last_slice_entropy is not None else []
@@ -658,7 +679,7 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"] * scale
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -794,6 +815,23 @@ for epoch in range(MAX_EPOCHS):
     vol_count_safe = vol_count_total.clamp(min=1)
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
+    surf_node_frac = (surf_count_total / (surf_count_total + vol_count_total).clamp(min=1)).item()
+
+    # Surf/vol head specialization diagnostics. Compute per-channel absmax of each
+    # head's weight matrix in physical (denormalized) channel order: 0=Ux, 1=Uy, 2=p.
+    # Specialization shows up as the surf_head pressure-row magnitude growing relative
+    # to vol_head's, since the loss weighting puts ~80x more gradient on surface p.
+    with torch.no_grad():
+        surf_w = uncompiled_model.surf_head.weight.detach()
+        vol_w = uncompiled_model.vol_head.weight.detach()
+        surf_head_absmax = [float(surf_w[i].abs().max().item()) for i in range(surf_w.shape[0])]
+        vol_head_absmax = [float(vol_w[i].abs().max().item()) for i in range(vol_w.shape[0])]
+        surf_head_l2 = [float(surf_w[i].norm().item()) for i in range(surf_w.shape[0])]
+        vol_head_l2 = [float(vol_w[i].norm().item()) for i in range(vol_w.shape[0])]
+        surf_vol_w_cos = float(
+            (surf_w.flatten() @ vol_w.flatten() /
+             (surf_w.flatten().norm() * vol_w.flatten().norm()).clamp(min=1e-12)).item()
+        )
 
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
@@ -841,6 +879,12 @@ for epoch in range(MAX_EPOCHS):
         "rescale/scale_mean": scale_mean,
         "rescale/scale_std": scale_std,
         "rescale/scale_logre_corr": corr,
+        "heads/surf_node_frac": surf_node_frac,
+        "heads/surf_absmax_per_ch": surf_head_absmax,
+        "heads/vol_absmax_per_ch": vol_head_absmax,
+        "heads/surf_l2_per_ch": surf_head_l2,
+        "heads/vol_l2_per_ch": vol_head_l2,
+        "heads/surf_vol_w_cos": surf_vol_w_cos,
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
@@ -861,6 +905,12 @@ for epoch in range(MAX_EPOCHS):
         f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
+    )
+    print(
+        f"    Heads  surf_node_frac={surf_node_frac:.3f}  "
+        f"surf|absmax[Ux={surf_head_absmax[0]:.3f} Uy={surf_head_absmax[1]:.3f} p={surf_head_absmax[2]:.3f}]  "
+        f"vol|absmax[Ux={vol_head_absmax[0]:.3f} Uy={vol_head_absmax[1]:.3f} p={vol_head_absmax[2]:.3f}]  "
+        f"w_cos={surf_vol_w_cos:+.4f}"
     )
     if epoch_slice_entropy is not None:
         flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
