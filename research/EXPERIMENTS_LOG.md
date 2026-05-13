@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-13 20:08 — PR #2535: [mixup-scalar-alpha-0p4] Scalar-only Mixup α=0.4 — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/mixup-scalar-alpha-0p4
+- **Hypothesis**: Linear interpolation in parameter space (Re, AoA1, AoA2, NACA1, NACA2, gap, stagger) creates physically valid synthetic flow examples; Beta(0.4, 0.4) Mixup expands effective training set.
+- **Status**: CLOSED — catastrophic +52.7% val regression.
+
+| Metric | Mixup α=0.4 | Baseline (#2011) | Δ |
+|--------|-------------|------------------|---|
+| val_avg/mae_surf_p | 44.0894 | 28.8762 | **+52.7% (WORSE)** |
+| test_avg/mae_surf_p | 38.8855 | 24.9992 | **+55.6% (WORSE)** |
+
+**Per-split val** (Δ vs baseline): single_in_dist +23.6 (+83%), geom_camber_rc +13.6 (+33%), geom_camber_cruise +10.9 (+77%), re_rand +12.7 (+41%).
+
+**Programme finding**: Mixup family ruled out for this geometry-conditioned regression. The interpolation hypothesis is invalid: mixing two NACA-4-digit airfoils linearly does NOT produce a valid airfoil. Per-node features encode geometry A, but targets are convex combinations of fields A and B — the targets do not match the geometry encoded in the per-node features. ID-split degradation pattern (single_in_dist worst hit at +83%) confirms the training-signal corruption hypothesis. Even α=0.1 would carry the same fundamental per-node-consistency violation. Conditional Mixup (same NACA pairs) is interesting but has very small effective pool.
+
+**Artifact**: `models/model-charliepai2g24h1-fern-mixup-scalar-alpha-0p4-20260513-193110/metrics.jsonl`
+
+---
+
+## 2026-05-13 20:06 — PR #2529: [surf-vol-split-head] Surf/vol split output head — CLOSED
+
+- **Branch**: charliepai2g24h1-alphonse/surf-vol-split-head
+- **Hypothesis**: Split single `Linear(d, 3)` output head into separate `surf_head`/`vol_head` gated by `is_surface` — surface head specializes on pressure-dominated surface regime.
+- **Status**: CLOSED — small +2.39% val regression.
+
+| Metric | Split head | Baseline (#2011) | Δ |
+|--------|-----------|------------------|---|
+| val_avg/mae_surf_p | 29.5649 | 28.8762 | **+2.39% (WORSE)** |
+| test_avg/mae_surf_p | 25.1784 | 24.9992 | +0.72% (WORSE) |
+
+**Per-split val**: single_in_dist +1.10 (+3.85%), geom_camber_rc +1.13 (+2.69%), geom_camber_cruise −0.02, re_rand +0.54 (+1.75%).
+
+**Mechanism diagnostic (key finding):** L2 norms of head rows showed surf_head/vol_head ratio for pressure channel = **1.02** (no specialization on the metric-relevant channel), while velocity channels saw vol_head dominate (surf/vol ratio 0.5-0.7). Cosine similarity between heads: **0.49 → 0.49** over training — no meaningful divergence. Surface-node fraction is only 1.7% per batch, giving surf_head ~50× fewer gradient samples than vol_head.
+
+**Programme finding (critical for follow-up direction)**: The bottleneck is in the trunk's shared representations, not in output head capacity. Adding parallel heads can only re-weight a fixed shared representation — it cannot introduce new specialization the trunk doesn't already encode. Multi-channel head expansion is now FULLY closed (#2322 geom-output-head also closed earlier). **Follow-up #2559 (alphonse) tests trunk-level surface specialization via `is_surface_emb` injected into node tokens before block 0.**
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-surf-vol-split-head-20260513-192611/metrics.jsonl`
+
+---
+
 ## 2026-05-13 16:50 — PR #2384: [lookahead-soap-k5] Lookahead(SOAP, k=5, α=0.5) — CLOSED
 
 - **Branch**: charliepai2g24h1-nezuko/lookahead-soap-k5
