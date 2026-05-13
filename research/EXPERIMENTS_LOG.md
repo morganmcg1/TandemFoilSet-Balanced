@@ -880,3 +880,31 @@ Decision framework for these PRs as they complete:
 - best-arm val ≥ 84 → close as superseded by FiLM
 
 Status comments posted to #1617, #1618, #1600 updating the baseline frame.
+
+---
+
+## 2026-05-13 00:25 — Wave 5 review wave: 4 PRs closed, 4 new wave-6 assignments
+
+After the #1585 FiLM merge (new baseline val=80.82 / test=71.30), all 4 in-flight wave-5 PRs (designed against the 95.75 baseline) completed and were reviewed.
+
+### Closed PRs
+
+| PR | Student | Lever | Result | Decision | Mechanism finding |
+|---|---|---|---|---|---|
+| #1680 | fern | `drop_path_rate=0.1` | val=109.52 / test=99.35 | CLOSE | Stochastic depth is wrong-axis at 5 layers; per-block 10% drop = 20% effective-depth perturbation. Pairs with #1621 (mlp_ratio=4) to definitively close the architecture-regularization-vs-capacity axis in both directions. |
+| #1679 | tanjiro | no-SWA | val=98.96 / test=88.13 | CLOSE | **SWA was helping cross-camber generalization** (+10.2% regression on val_geom_camber_rc without SWA). The schedule-displacement frame from #1645 was wrong; the right axis is "how much averaging is enough?". Motivates wave-6 SWA-window-size sweep. |
+| #1642 | thorfinn | `1/sqrt(log_re_shifted)` | val=96.26 / test=86.88 | CLOSE | **Per-batch normalization eats the Re-weight curve difference.** Run-wide weight extrema (0.625, 1.672) virtually identical to v1's (0.618, 1.669). Re-weight CURVE is not a meaningful lever under per-batch normalization; the DIRECTION of weighting is the lever. Future Re-weight experiments need to change normalization scheme or move to hard-example-mining family. |
+| #1617 | nezuko | grad-clip rebase | (no response in 2+ hours) | CLOSE | Original wave-3 result on prior baseline frame (val=94.48, 20× variance reduction) is preserved. New baseline (80.82) makes the marginal grad-clip win (~1.3%) too tight to guarantee landing. Reassigned to fresh PR on FiLM baseline. |
+
+### New wave-6 assignments
+
+All 4 PRs start fresh from the merged FiLM baseline (no rebase pain), 4 orthogonal mechanism axes:
+
+| PR | Student | Slug | Mechanism axis | Predicted Δ vs. 80.82 |
+|---|---|---|---|---|
+| #1731 | nezuko | `grad-clip-on-filmed` | Optimizer-stability (clean retest of wave-3 win on new baseline) | −0.5 to −2% val |
+| #1732 | tanjiro | `swa-start-0p65-on-filmed` | SWA window size (5 averaged epochs vs current 3) — direct follow-up to #1679 mechanism finding | −0.5 to −2% val |
+| #1733 | fern | `attn-dropout-0p1-on-filmed` | Token-level regularization (different granularity than drop_path) — third regularization axis test | −0.5 to −2% val |
+| #1734 | thorfinn | `asinh-pressure-on-filmed` | Value-level target compression (orthogonal to sample-level Re-weight curve) | −1 to −3% val |
+
+Combined with #1691 (edward, surf_weight=5) and #1702 (askeladd, per-channel p-weight) and #1618 (alphonse, surf-Huber-vol-MSE), the in-flight wave covers 7 distinct mechanism axes across all 8 students.
