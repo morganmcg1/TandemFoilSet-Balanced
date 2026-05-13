@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -138,6 +139,12 @@ class FourierCoordEnc(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
+    # H67: when True, the forward pass also computes the slice-to-slice
+    # softmax weights explicitly and writes the mean / per-head min entropy
+    # to ``self.last_attn_entropy_*`` for diagnostic logging. Default False
+    # so the production path stays on F.scaled_dot_product_attention.
+    record_entropy: bool = False
+
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
         super().__init__()
         inner_dim = dim_head * heads
@@ -155,6 +162,9 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+
+        self.last_attn_entropy_mean: float | None = None
+        self.last_attn_entropy_per_head_min: float | None = None
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -179,11 +189,26 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # H67: fixed sharper temperature (factor of sqrt(2) sharper than the
+        # default 1/sqrt(d_head) scale of F.scaled_dot_product_attention).
+        sharper_scale = 1.0 / math.sqrt(self.dim_head / 2.0)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
+            scale=sharper_scale,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
         )
+
+        if PhysicsAttention.record_entropy:
+            with torch.no_grad():
+                logits = torch.matmul(q, k.transpose(-2, -1)) * sharper_scale
+                weights = F.softmax(logits, dim=-1)
+                # entropy per (batch, head, query-token): -sum_k p_k log p_k
+                ent = -(weights * (weights + 1e-12).log()).sum(dim=-1)  # [B, H, T]
+                self.last_attn_entropy_mean = float(ent.mean().item())
+                self.last_attn_entropy_per_head_min = float(
+                    ent.mean(dim=(0, 2)).min().item()
+                )
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
@@ -415,6 +440,42 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
     )
 
 
+def measure_attention_entropies(
+    model, val_loader, stats, fourier_enc, device, n_batches: int = 4,
+) -> tuple[list[float], list[float]]:
+    """Measure mean and per-head-min slice-to-slice attention entropy per block.
+
+    Toggles ``PhysicsAttention.record_entropy`` on, runs ``n_batches`` of
+    ``val_loader`` in eval mode (no_grad), accumulates the per-block
+    ``last_attn_entropy_*`` scalars, then disables recording. Cheap enough
+    to invoke once per probe epoch.
+    """
+    was_training = model.training
+    model.eval()
+    PhysicsAttention.record_entropy = True
+    n_blocks = len(model.blocks)
+    sum_mean = [0.0] * n_blocks
+    sum_min = [0.0] * n_blocks
+    n = 0
+    with torch.no_grad():
+        for batch_idx, (x, _y, _is_surface, _mask) in enumerate(val_loader):
+            if batch_idx >= n_batches:
+                break
+            x = x.to(device, non_blocking=True)
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            x_norm = fourier_enc(x_norm)
+            _ = model({"x": x_norm})
+            for i, block in enumerate(model.blocks):
+                sum_mean[i] += block.attn.last_attn_entropy_mean or 0.0
+                sum_min[i] += block.attn.last_attn_entropy_per_head_min or 0.0
+            n += 1
+    PhysicsAttention.record_entropy = False
+    if was_training:
+        model.train()
+    denom = max(n, 1)
+    return ([s / denom for s in sum_mean], [s / denom for s in sum_min])
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -499,6 +560,18 @@ for i, b in enumerate(model.blocks):
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
+
+# H67: fixed sharper attention temperature (factor sqrt(2) sharper than the
+# F.scaled_dot_product_attention default scale 1/sqrt(d_head)).
+_h67_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h67_sharper_scale = 1.0 / math.sqrt(_h67_dim_head / 2.0)
+_h67_default_scale = 1.0 / math.sqrt(_h67_dim_head)
+print(
+    f"[H67] attention scale: {_h67_sharper_scale:.4f} "
+    f"(default would be {_h67_default_scale:.4f}, factor sqrt(2)={math.sqrt(2):.4f}, "
+    f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
+    f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
+)
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
@@ -687,6 +760,31 @@ for epoch in range(MAX_EPOCHS):
     print(f"    layer_scale (lr={layer_scale_lr:.2e})")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
+
+    # H67: probe slice-to-slice attention entropy at epochs 1, 6, 12 for
+    # comparison against the post-#2475 baseline (default scale 1/sqrt(32)).
+    if (epoch + 1) in (1, 6, 12):
+        probe_loader = val_loaders["val_single_in_dist"]
+        ent_means, ent_min_per_head = measure_attention_entropies(
+            model, probe_loader, stats, fourier_enc, device, n_batches=4,
+        )
+        max_entropy = math.log(model_config["slice_num"])
+        ent_ratios = [e / max_entropy for e in ent_means]
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "attention_entropy",
+            "epoch": epoch + 1,
+            "max_entropy": max_entropy,
+            "per_block_entropy_mean": ent_means,
+            "per_block_entropy_min_per_head": ent_min_per_head,
+            "per_block_entropy_ratio": ent_ratios,
+        })
+        print(
+            f"    [H67] attn entropy (max=log(64)={max_entropy:.4f}): "
+            + " ".join(
+                f"b{i}={ent_means[i]:.4f}({ent_ratios[i]*100:.1f}%, min/head={ent_min_per_head[i]:.4f})"
+                for i in range(len(ent_means))
+            )
+        )
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
