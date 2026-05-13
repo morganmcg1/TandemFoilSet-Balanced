@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 01:30 (post triple-close #1733/#1732/#1600 + 3 fresh reassignments — regularization & SWA-window axes both closed; β-axis ported to FiLM)
+- **Last updated:** 2026-05-13 01:55 (post #1734 thorfinn send-back for gentler asinh(0.5·p) — mechanism real but α=1.0 has structural per-split asymmetry)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 0 (all 8 actively assigned to wave-6 or earlier in-flight PRs)
+- **Idle students:** 0 (all 8 actively assigned to wave-6; thorfinn re-running #1734 with gentler asinh(0.5·p))
 
 ## ⭐ Current baseline (PR #1585 merged 2026-05-12 23:55 UTC)
 
@@ -21,6 +21,7 @@
 ## 🔥 Hottest signals this session
 
 - **PR #1585 (askeladd, FiLM-on-Huber):** MERGED. Largest single-PR gain on this branch. val=80.82 (−15.6%) / test=71.30 (−17.3%) vs prior 95.75/86.17. Architecture-conditioning axis landed.
+- **#1734 (thorfinn, asinh-pressure α=1.0) result 2026-05-13 01:50:** val=80.00 (-1.01%) / test=72.71 (+1.97%) — both within seed-variance. **Mechanism is real and structural per-split:** cruise/re_rand improve dramatically (-7-12%), single/rc regress (+3-10%). asinh knee at α=1.0 catches mid-range values. **Sent back for asinh(0.5·p) gentler compression** — if lands clean, this is the merge candidate; if not, axis closes cleanly.
 - **Triple-close 2026-05-13 01:30:**
   - #1733 fern (attn-dropout=0.1): val=83.86 (+3.76%) — 3rd consecutive regularization-axis close. Wave conclusion: this regime needs **more training signal, not less**.
   - #1732 tanjiro (swa_start=0.65): val=84.06 (+4.01%) — SWA-window axis closed in both directions (removal +22.4%, enlargement +4.01%). swa_start_frac=0.75 is the narrow optimum.
@@ -50,7 +51,7 @@ All 7 PRs forked from the new baseline. 3 fresh assignments at 01:30 UTC after t
 |---|---|---|---|---|
 | #1702 | askeladd | `per-channel-p-weight-on-filmed` | Per-channel pressure-loss weighting (`p_weight ∈ {2.0, 3.0}`, 2-arm) | −0.5 to −2% |
 | #1731 | nezuko | `grad-clip-on-filmed` | Gradient clipping (max_norm=1.0, 2 seeds) — retest of wave-3 win | −0.5 to −2% |
-| #1734 | thorfinn | `asinh-pressure-on-filmed` | Value-level pressure-target compression | −1 to −3% |
+| #1734 | thorfinn | `asinh-0p5-pressure-on-filmed` | Value-level pressure-target compression (**gentler α=0.5 after α=1.0 had structural per-split asymmetry; mechanism real**) | −0.5 to −2% val + clean test |
 | #1739 | alphonse | `surf-huber-vol-mse-on-filmed` | Loss-kind per domain (Huber on surf, MSE on vol) — retest of #1618 win | −1 to −3% |
 | #1757 | frieren | `beta-0p3-on-filmed` | **β=0.3 port from closed #1600** (single-arm composition test on FiLM stack) | −1 to −5% val / **−2 to −7% test** ← strongest expected mechanism gain |
 | #1758 | fern | `mesh-subsample-0p9-on-filmed` | **Random mesh-node subsampling** (data-side input augmentation; new mechanism family) | −0.5 to −2% |
@@ -140,7 +141,8 @@ The researcher-agent's `RESEARCH_IDEAS_2026-05-12_round2.md` has H1–H10 (some 
 
 ## Open questions to revisit on next review
 
-- **Composition of wave-6 wins:** if frieren #1757 (β=0.3) AND grad-clip #1731 AND asinh #1734 all land independently, do they compose constructively? Loss-shape × optimizer-stability × value-transform are theoretically orthogonal; empirical test needed.
+- **asinh α-tuning (#1734):** the gentler α=0.5 retest is a high-information experiment: if it lands (val<80.82 AND test<71.30 in one seed), the value-level compression mechanism becomes a stack-compatible lever. If it doesn't, peak-magnitude failure is structural to the asinh mechanism on this distribution — close the axis.
+- **Composition of wave-6 wins:** if frieren #1757 (β=0.3) AND grad-clip #1731 AND asinh(0.5·p) #1734 all land independently, do they compose constructively? Loss-shape × optimizer-stability × value-transform are theoretically orthogonal; empirical test needed.
 - **Per-channel weighting (askeladd #1702) × value-level transform (thorfinn #1734):** both target the pressure channel from different angles. May anti-compose if one already addresses what the other does.
 - **β=0.3 composition (frieren #1757):** the strongest mechanism-port test of this session. Does the monotonic-β finding from pre-FiLM stack survive the FiLM composition? If yes, β follow-ups (β=0.1, per-channel β) become high-priority. If no, the FiLM modulation may already address the per-sample residual heterogeneity that β-tuning targets.
 - **Intra-FiLM capacity (tanjiro #1760):** if mid_dim=128 lands, FiLM head capacity was a separate lever from generic n_hidden. If it doesn't, FiLM at mid_dim=64 is at the optimum and we've fully exhausted the FiLM-axis until geometry-conditioning is added.

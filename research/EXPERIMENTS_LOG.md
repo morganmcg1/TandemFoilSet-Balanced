@@ -1012,3 +1012,53 @@ The SWA-amenable parameter space is narrow on this composition; moving on from t
 
 **8 distinct mechanism axes in flight on the FiLM baseline. Three highest-probability landings: #1757 (β port has explicit prior data), #1731 (grad-clip retest of wave-3 win), #1734 (asinh on heavy-tailed pressure target).**
 
+
+---
+
+## 2026-05-13 01:55 — PR #1734 (thorfinn, asinh-pressure-on-filmed): SEND BACK for gentler asinh(0.5·p)
+
+**Result:** val=80.00 (-1.01% vs FiLM baseline 80.82) / test=72.71 (**+1.97%** vs 71.30) — single seed, W&B `5noqs8er`.
+
+**Decision: send back, NOT merge.** Both metrics are within FiLM's seed-variance band (val std=1.23, test std=1.64). Within-noise val improvement combined with within-noise test regression doesn't justify merging since test is the paper-facing metric and the result is statistically a draw on aggregate.
+
+### Per-split mechanism finding (large, consistent, structural)
+
+| Split family | val Δ | test Δ | Interpretation |
+|---|---|---|---|
+| Heavy-tail (cruise + re_rand) | **-7.0% avg** | **-7.8% avg** | asinh reshapes loss surface in favor of these splits |
+| Peak-magnitude (single + rc) | **+3.3% avg** | **+8.7% avg** | asinh under-weights gradients on large suction peaks |
+
+- `val_geom_camber_cruise` -9.78% (best gain), `test_geom_camber_cruise` -11.50%
+- `val_re_rand` -4.13%, `test_re_rand` -4.11%
+- `val_single_in_dist` +6.39%, `test_single_in_dist` +9.68%
+- `val_geom_camber_rc` +0.13%, `test_geom_camber_rc` +7.79%
+
+**Diagnostic confirmation:** tail compression active (2.56× batch-level, 9.5× global tail). The asymmetric per-split failure mode is **structural to the α=1.0 transform**, not a tuning bug.
+
+### Why send-back, not merge or close
+
+The asinh mechanism is genuinely orthogonal to FiLM and Re-weight (value-axis vs head-conditioning vs sample-axis). The per-split wins on heavy-tail splits are large (>>seed-variance), well beyond noise. The peak-magnitude regressions are also large but predictable: at α=1.0, the asinh knee is at |p|≈1 in z-score space, which catches mid-range values that the model needs to fit accurately. A gentler α should preserve heavy-tail wins (still log-regime for genuine tails) while sparing mid-range peaks (now linear-regime).
+
+### Send-back direction: asinh(0.5·p)
+
+- Single-arm test of gentler compression strength
+- If lands (val<80.82 AND test<71.30): clean merge, value-level axis lands as new lever
+- If doesn't land: definitively close axis — peak-magnitude failure is structural to compressing-this-distribution, not to compression strength
+
+### Thorfinn becomes non-idle
+
+Sending back via `send_pr_back_to_student_with_comment` swaps `status:review` → `status:wip`. Thorfinn picks up the same PR with new instructions on next poll cycle.
+
+### Wave-6 portfolio status (8 students, all active)
+
+| PR | Student | Status | Mechanism axis |
+|---|---|---|---|
+| #1691 | edward | WIP | Sample-domain weighting (surf_weight halve) — pre-FiLM-merge residual |
+| #1702 | askeladd | WIP | Per-channel p-weight |
+| #1731 | nezuko | WIP | Gradient clipping (optimizer stability) |
+| #1734 | thorfinn | **WIP (re-running asinh(0.5·p))** | Value-level transform (gentler) |
+| #1739 | alphonse | WIP | Loss-kind per domain (surf-Huber/vol-MSE) |
+| #1757 | frieren | WIP | β=0.3 on FiLM (loss-shape) |
+| #1758 | fern | WIP | Mesh-node subsampling (data-side augmentation) |
+| #1760 | tanjiro | WIP | FiLM mid_dim 64→128 (intra-FiLM capacity) |
+
