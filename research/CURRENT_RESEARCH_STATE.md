@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 02:00
+- **Date:** 2026-05-13 02:10
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -11,16 +11,16 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED — triple compound winner)
+## Current baseline (MERGED — 5-compound winner)
 
-**PR #1689 — fern Huber β=0.5** (merged 2026-05-13 00:05, stacked on top of #1606):
-- `val_avg/mae_surf_p = 85.9197` (epoch 17; vs 92.35 EMA baseline → −6.96%)
-- `test_avg/mae_surf_p = 76.5495` (vs 81.63 → −6.22%)
-- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
-- ~17 epochs / 30 min (~112 s/epoch)
-- All 4 test splits improved; EMA-vs-live gap at epoch 17: live val=96.41, EMA val=85.92
+**PR #1672 — nezuko LR warmup 1 epoch v2** (merged 2026-05-13 02:05, stacked on top of #1689):
+- `val_avg/mae_surf_p = 85.0926` (epoch 17; vs 85.9197 β=0.5 baseline → −0.96%)
+- `test_avg/mae_surf_p = 75.5171` (vs 76.5495 → −1.35%)
+- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep (start_factor=0.2), n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
+- ~17 epochs / 30 min (~110 s/epoch)
+- All 4 test splits improved; re_rand best (−1.41 MAE)
 
-**Cumulative compounding (4 merges so far):**
+**Cumulative compounding (5 merges so far):**
 
 | Baseline | val | test | Key change |
 |----------|-----|------|------------|
@@ -28,7 +28,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | PR #1419 alphonse bf16 | 109.29 | 97.67 | bf16 autocast → +4 epochs in budget |
 | PR #1436 fern Huber β=1.0 | 96.49 | 86.33 | Smooth L1 → loss-shape MAE alignment |
 | PR #1606 fern EMA | 92.35 | 81.63 | Weight averaging → reduces noise ball at eval |
-| PR #1689 fern Huber β=0.5 | **85.92** | **76.55** | Tighter MAE alignment in moderate-error band |
+| PR #1689 fern Huber β=0.5 | 85.92 | 76.55 | Tighter MAE alignment in moderate-error band |
+| PR #1672 nezuko warmup 1ep | **85.09** | **75.52** | LR warmup compresses EMA-lag phase |
 
 ## Active experiments
 
@@ -37,13 +38,13 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | alphonse | #1791 | lr=7e-4 (raise peak LR, keep T_max=30 hot-cosine shape) | LR magnitude | WIP | #1647 T_max=18 closed: aligned cosine starves LR at end; inverted angle = raise peak LR |
 | askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
 | edward | #1763 | torch.compile (attack throughput bottleneck) | Throughput | WIP | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
-| fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
+| fern | #1805 | Adaptive Huber β annealing (β=1.0 → β=0.5 over epochs 1-10) | Loss shape / schedule | WIP | β sweep bracketed (β=0.25 closed +9.3%, β=1.0 closed); anneal β for best of both regimes |
 | frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
-| nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
+| nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED (new best −0.96%); extend warmup to see if EMA catch-up gain scales |
 | tanjiro | #1784 | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | WIP | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
 | thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
 
-**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.9197` (PR #1689 Huber β=0.5, test=76.5495). PRs that beat the old EMA baseline (92.35) but not the current baseline will be sent back for retest on the new stack.
+**Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.0926` (PR #1672 warmup 1ep, test=75.5171, W&B 1hn6ur4l). PRs that only beat the prior β=0.5 baseline (85.92) but not the current baseline will be sent back for retest.
 
 ## Closed hypotheses (all rounds)
 
@@ -58,8 +59,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 **Pattern**: 3 of 3 noise/regularization mechanisms (surf_weight=30, dropout, grad-clip 1.0) that helped or were neutral on the old MSE/Huber-β=1.0 stack now regress on the β=0.5 stack. Loss-shape sharpening from β=0.5 has tightened the optimization neighborhood; mechanisms that perturb gradient direction or per-step gradients interfere with the finer adjustment.
 
+### LR warmup
+- **Warmup 1 epoch** (#1672 v2, nezuko) — val=85.09 (−0.96% vs β=0.5 baseline). MERGED. All 4 splits improved; re_rand best (−1.41). Mechanism: post-warmup EMA catch-up phase compressed (epoch-4 EMA-live gap −26 MAE vs baseline). T_max confounder (~6% higher late LR) still present; 2-epoch warmup under test.
+
 ### Loss shape / Huber β
 - **Huber β=0.5** (#1689, fern) — val=85.92 (−6.96% vs β=1.0 baseline). MERGED. All 4 splits improved; largest gains on hardest splits (in_dist −7.6%, camber_rc −7.0%). Mechanism: β=0.5 moves L1 gradient into the moderate-error bulk where loss density lives, directly aligning with MAE metric.
+- **Huber β=0.25** (#1705, fern) — val=93.92 (+9.31% vs β=0.5 baseline). β sweep bracketed: β=0.25 (worse), β=0.5 (BEST), β=1.0 (worse). Mechanism: quadratic region |x| < 0.25 too small for moderate errors; constant L1 gradient is too slow. in_dist hurt most (+17.81%), cruise least (+4.14%); consistent with error-distribution explanation. Adaptive β schedule (1.0→0.5 anneal) under test in #1805.
 
 ### Training efficiency
 - **EMA without diagnostic pass** (#1626, fern) — val=92.46 (+0.12 within noise). Diagnostic overhead was ~8 s/epoch not the predicted ~25 s; +1 epoch in budget (18 vs 17) insufficient to escape noise. Bottleneck is training step, not val. Useful intel: peak mem 32.9 GB / 96 GB.

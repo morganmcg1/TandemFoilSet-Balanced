@@ -595,3 +595,44 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **EMA−Live gap = −9.88** (EMA helps as expected); wider model converges more slowly so terminal-live underperforms terminal-EMA noticeably.
 - **Pattern complete**: 4/4 architecture-capacity experiments regress under 30-min cap (n_layers=8, mlp_ratio=4, slice_num=96, n_hidden=192). Capacity is NOT the bottleneck at 1500 training samples — training duration / step count is.
 - **Decision: CLOSE.** Reassigning frieren to opposite direction: `n_layers=3` (shallower). Tests throughput-vs-capacity at the depth axis — we've only tested deeper so far. If shallow gives ~25–30% per-epoch speedup (~22 epochs in budget), the extra 5 epochs × ~2.5 MAE/epoch could net positive if convergence trajectory holds.
+
+## 2026-05-13 02:05 — PR #1672 v2: nezuko LR warmup 1 epoch (review 2, MERGED — new best)
+
+- Branch: `willowpai2g48h5-nezuko/lr-warmup-1ep`
+- W&B run: `1hn6ur4l` (17 epochs; warmup 1 epoch start_factor=0.2→1.0, 375 steps; rebased on β=0.5+EMA+bf16)
+- Hypothesis: 1-epoch linear LR warmup reduces EMA early-phase lag and improves per-split convergence.
+
+| Metric | Warmup v2 (1hn6ur4l) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | **85.0926** | 85.9197 | −0.83 (−0.96%) |
+| `test_avg/mae_surf_p` | **75.5171** | 76.5495 | −1.03 (−1.35%) |
+| `test/test_single_in_dist/mae_surf_p` | **87.10** | 88.03 | −0.93 |
+| `test/test_geom_camber_rc/mae_surf_p` | **84.58** | 85.46 | −0.89 |
+| `test/test_geom_camber_cruise/mae_surf_p` | **55.50** | 56.40 | −0.90 |
+| `test/test_re_rand/mae_surf_p` | **74.90** | 76.30 | −1.41 (best split gain) |
+
+- **All 4 test splits improve.** v1 had regressions on camber_cruise (+2.15) and re_rand (+2.26); v2 cleans those up.
+- **Original EMA-lag hypothesis falsified again** (epoch-1 gap actually wider +86.2 vs baseline +77.1 — slower first epoch means both EMA and live start closer together). **Real mechanism**: warmup compresses post-warmup EMA catch-up phase — at epoch 4, EMA-live gap compressed by 26 MAE (+41.8 vs +67.6 baseline). EMA reaches "steady convergence" faster.
+- **T_max confounder unchanged** from v1 (T_max=10875, ~6% higher late LR). Gain is consistent across all 4 splits and EMA-vs-live diagnostic shows real mechanism effect, so warmup is doing real work.
+- **Decision: MERGE.** New baseline: val=85.0926, test=75.5171.
+
+## 2026-05-13 02:05 — PR #1705: fern Huber β=0.25 (review 1, closed)
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p25`
+- W&B run: `6b7k86h5` (15 epochs; timeout-capped; β=0.25 both call sites)
+- Hypothesis: β=0.25 would continue the L1-alignment trend from β=0.5's −6.96% win.
+
+| Metric | β=0.25 (6b7k86h5) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 15) | 93.92 | 85.92 | +9.31% |
+| `test_avg/mae_surf_p` | 83.80 | 76.55 | +9.48% |
+| `test/test_single_in_dist/mae_surf_p` | 103.71 | 88.03 | +17.81% (worst) |
+| `test/test_geom_camber_rc/mae_surf_p` | 91.72 | 85.46 | +7.33% |
+| `test/test_geom_camber_cruise/mae_surf_p` | 58.73 | 56.40 | +4.14% (least affected) |
+| `test/test_re_rand/mae_surf_p` | 81.05 | 76.30 | +6.22% |
+
+- **β sweep now fully bracketed**: β=1.0 (worse), β=0.5 (BEST), β=0.25 (worse). Minimum confirmed at β=0.5.
+- **Mechanism confirmed**: quadratic region |x| < 0.25 too small for moderate-error regime. Constant L1 gradient magnitude gives uniform-step descent that underexplores loss landscape vs β=0.5's Huber gradient. EMA absorbed kink-noise cleanly (smooth val trajectory) but couldn't recover lost convergence rate.
+- **Per-split pattern validates mechanism**: in_dist worst (+17.81%, large errors deep in L1 regime), camber_cruise least affected (+4.14%, smaller errors closer to quadratic boundary).
+- **Student's follow-up suggestion adopted**: adaptive β schedule (β=1.0 early → β=0.5 late). Reassigning fern.
+- **Decision: CLOSE.** β=0.5 is confirmed as the fixed-β optimum. Assigning fern to adaptive β annealing.
