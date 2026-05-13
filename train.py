@@ -456,6 +456,7 @@ class Config:
     fourier_max_freq: float = 10.0  # max frequency in the logspaced band; positions are O(1) post-norm
     slice_num: int = 64
     n_layers: int = 5  # Transolver block depth
+    n_hidden: int = 128  # Transolver hidden width
 
 
 cfg = sp.parse(Config)
@@ -488,7 +489,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=cfg.n_layers,
     n_head=4,
     slice_num=cfg.slice_num,
