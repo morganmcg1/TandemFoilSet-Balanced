@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 13:00 UTC
+- **Date / time:** 2026-05-13 13:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -16,6 +16,14 @@ SPDX-PackageName: senpai
 Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
 **11 sequential compounding wins.** Current active stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+## Cycle-37 update — PR #2205 thorfinn closed (cycle_momentum=False fatal) + new #2275
+
+**Critical insight discovered:** `cycle_momentum=True` is load-bearing (+18.1% val regression when disabled). PR #1867's `beta1=0.95` was implicitly setting `max_momentum` (PyTorch's cycle PEAK at LR-low), not a fixed beta1. The effective first-moment decay in every one of our 11 wins has been cycling between 0.85 and 0.95, not fixed at 0.95.
+
+**Implication for closed axes:** the `beta1` axis (PR #1867 winner) and the momentum cycling behavior have never been disentangled. The `(base_momentum=0.85, max_momentum=0.95)` PyTorch defaults are unexplored hyperparameters.
+
+**New PR #2275 thorfinn:** `max_momentum=0.99` (keep `base_momentum=0.85`, keep `cycle_momentum=True`). Analogous to the beta2 axis wins (#1959 0.999→0.99, #2008 0.99→0.98): raise the cycle PEAK so the long anneal tail (90% of training with pct_start=0.1) benefits from higher first-moment EMA for stable gradient integration, while preserving the load-bearing low-momentum spike at LR peak.
 
 ## Cycle-36 update — PR #2224 edward WD param groups sent back (stale-baseline pattern)
 
@@ -56,12 +64,12 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 |---|---|---|
 | #2254 | fern | grad_accum 2→1 (eff_batch 2→1, true SGD; continue winning trend) |
 | #2250 | frieren | AdamW eps 1e-8 → 1e-9 (untested direction; lower variance-denominator floor) |
-| #2205 | thorfinn | OneCycleLR cycle_momentum=False (fix hidden default cycling beta1 between 0.85–0.95) |
-| #2103 | alphonse | NAdam (retest under linear+batch2 stack; cosine run beat old baseline -2.4%) |
-| #2104 | nezuko | max_lr=2.5e-3 (retest under linear+batch2; cosine run beat old baseline -1.09%) |
-| #2224 | edward | AdamW WD parameter groups (exclude biases + LayerNorm from weight_decay; standard transformer practice) |
-| #2241 | tanjiro | OneCycleLR pct_start=0.05 (less warmup, extends refinement tail; his own follow-up from #2148 analysis) |
-| #2025 | askeladd | grad_clip max_norm=1.5 retest under batch_size=1 baseline (won under batch_size=2 stack; compounding test) |
+| #2275 | thorfinn | OneCycleLR max_momentum 0.95→0.99 (raise cycle PEAK; base=0.85 preserved; #2205 follow-up) |
+| #2103 | alphonse | NAdam (retest under linear+batch_size=1 stack) |
+| #2104 | nezuko | max_lr=2.5e-3 (retest under batch_size=1 stack) |
+| #2224 | edward | AdamW WD parameter groups (retest under batch_size=1; stale-baseline) |
+| #2241 | tanjiro | OneCycleLR pct_start=0.05 (less warmup, extends refinement tail) |
+| #2025 | askeladd | grad_clip max_norm=1.5 retest under batch_size=1 baseline |
 
 ## Closed axes (do not revisit)
 
@@ -87,6 +95,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 - grad_clip=0.5: +12%, undershoots
 - smooth_l1 β<0.25: 0.10 closed, 0.15 closed (#2133 +1.90%), 0.20 closed (#2152 +1.41%); **β=0.25 sharp local optimum, axis closed both sides**
 - EMA model weights: all decays (~20-25% worse); OneCycleLR live weights strictly dominate
+- OneCycleLR cycle_momentum=False: **+18.1% val / +17.9% test** (#2205 closed). Cycling is load-bearing. **CRITICAL: `beta1=0.95` from PR #1867 was implicitly `max_momentum`, not a fixed beta1. Effective beta1 cycles between 0.85–0.95 in all 11 wins. Do NOT disable cycling.**
 
 ## Priority research directions
 
@@ -94,7 +103,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 2. **Compounding grad_clip win** — askeladd retest max_norm=1.5 under batch_size=1 (#2025). Two related but distinct gradient-noise levers; do they compound?
 3. **AdamW eps downward** — frieren eps=1e-9 (#2250). Untested direction on a partially-closed axis under fundamentally different gradient dynamics from when eps=1e-6 was tested.
 4. **WD parameter groups** — edward (#2224). Standard transformer practice (exclude biases + LayerNorm); shape change in regularisation.
-5. **Momentum cycling fix** — thorfinn cycle_momentum=False (#2205). Hidden PyTorch default has been running in ALL 11 compounding wins.
+5. **Momentum cycle RANGE tuning** — thorfinn max_momentum=0.99 (#2275). Cycle is load-bearing (disabling caused +18.1% regression, PR #2205 closed). Now tuning the RANGE. PyTorch defaults (0.85, 0.95) are untested implicit HPs; max_momentum=0.99 is the highest-leverage first move.
 6. **pct_start downward** — tanjiro 0.05 (#2241). His own analysis from failed #2148 — extends refinement tail without curtailing exploration.
 7. **NAdam, max_lr=2.5e-3 retests** — alphonse (#2103), nezuko (#2104) — stale-stack winners getting re-verified under current code.
 

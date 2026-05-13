@@ -11,6 +11,42 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 13:15 — Cycle 37: PR #2205 thorfinn closed (cycle_momentum=False fatal +18.1%) + #2275 assigned
+
+### PR #2205 thorfinn — OneCycleLR cycle_momentum=False: CLOSED ✗
+
+W&B run: `0gsrx3o8` (batch_size=2 per branch defaults)
+
+| Metric | Baseline (#2085, cycle=True) | This run (cycle=False) | Δ |
+|--------|-----------------------------:|-----------------------:|---|
+| val_avg/mae_surf_p | 73.1639 | 86.4101 | **+18.1% ✗** |
+| test_avg/mae_surf_p | 64.1593 | 75.6631 | **+17.9% ✗** |
+| test single_in_dist | 68.7866 | 87.7335 | **+27.5% ✗** |
+| test geom_camber_rc | 77.3583 | 86.3158 | +11.6% ✗ |
+| test geom_camber_cruise | 45.4690 | 54.4321 | +19.7% ✗ |
+| test re_rand | 65.0232 | 74.1708 | +14.1% ✗ |
+
+**Analysis (thorfinn's own analysis is correct):** Hypothesis disconfirmed clearly. `cycle_momentum=True` is load-bearing. Mechanistically: `base_momentum=0.85` at LR peak lets the optimizer track high-LR signal without over-smoothing (low momentum = fast tracking), while `max_momentum=0.95` during the long anneal tail gives stable gradient integration. Pinning to 0.95 throughout over-smooths during the high-LR phase and under-smooths during the tail — worst of both.
+
+**Critical hidden insight revealed:** PR #1867's `beta1=0.95` tuning win was actually finding the optimal `max_momentum` value (the PEAK of the cycle, reached at LR-low), not a fixed beta1. The effective beta1 throughout every one of our 11 compounding wins has been cycling between [0.85, 0.95], never fixed. The historical `beta1` axis is implicitly the `max_momentum` axis.
+
+**Axis captured:** `cycle_momentum=False` → closed forever. The cycling is non-negotiable.
+
+**Fresh axis opened:** `(base_momentum, max_momentum)` range tuning — PyTorch defaults (0.85, 0.95) have never been explicitly verified for this network. Assigned PR #2275 to thorfinn: `max_momentum=0.99` (keep `base_momentum=0.85`), analogous to the beta2 axis wins, raising the cycle peak for higher first-moment EMA during the 90% of training in the anneal tail.
+
+### Fleet state after cycle 37
+
+All 8 students WIP, zero idle. Stale-baseline retest queue is 4 deep:
+- Askeladd, alphonse, nezuko, edward all need to rebase+retest under batch_size=1
+
+New axes in-flight:
+- #2275 thorfinn: max_momentum=0.99 (fresh insight from #2205)
+- #2241 tanjiro: pct_start=0.05 (still running)
+- #2250 frieren: eps=1e-9 (still running)
+- #2254 fern: grad_accum=1 eff_batch=1 (still running)
+
+---
+
 ## 2026-05-13 13:00 — Cycle 36: PR #2224 edward sent back (stale-baseline pattern, mechanism sound)
 
 ### PR #2224 edward — AdamW WD parameter groups (exclude biases + LayerNorm): SENT BACK
