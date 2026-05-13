@@ -1,6 +1,56 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1630 (cosine-eta-min)
+## Current Baseline — PR #1456 (bf16-amp + cosine-eta-min)
+
+**val_avg/mae_surf_p = 36.8778** (epoch 16 of 17 completed in 30-min cap) — **-7.51% vs previous 39.8693**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- **`CosineAnnealingLR(T_max=17, eta_min=1e-5)`** ← key addition (was T_max=14)
+- **bf16 AMP enabled** ← key addition (was fp32)
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1) on relative-L2 normalized residuals
+- **17 epochs in ~30 min** (vs 13 previously, ~+29% throughput from bf16)
+- Peak GPU 32.98 GB (room for larger batch/model)
+
+**Per-split val at best epoch (16):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| val_single_in_dist | **42.92** | −4.89 (−10.2%) |
+| val_geom_camber_rc | **47.78** | −4.50 (−8.6%) |
+| val_geom_camber_cruise | **18.60** | −2.29 (−11.0%) |
+| val_re_rand | 38.21 | −0.28 (−0.7%) |
+| **val_avg** | **36.8778** | **−2.99 (−7.51%)** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| test_single_in_dist | **42.15** | −3.80 (−8.3%) |
+| test_geom_camber_rc | **42.69** | −3.64 (−7.9%) |
+| test_geom_camber_cruise | **15.26** | −1.98 (−11.5%) |
+| test_re_rand | **27.53** | −3.84 (−12.2%) |
+| **test_avg** | **31.9058** | **−3.32 (−9.42%)** |
+
+**Convergence trace**: 172.42 → 161.06 → 135.82 → 106.21 → 88.47 → 79.09 → 76.91 → 72.14 → 61.82 → 58.93 → 52.57 → 51.18 → 43.74 → 39.71 → 38.44 → **36.88** → 36.97 (ep 16 best; ep 17 drifts back +0.09 at LR floor).
+
+**Grad clip / norm trace**: clip_frac smoothly decays 0.98 → 0.34 across 17 epochs. `huber_l2_frac` rises 0.42 → 0.86 — Huber actively capping outliers throughout.
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-bf16-amp-cosine-eta-min-20260513-005955/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# SOAP + bf16 + CosineAnnealingLR(T_max=17, eta_min=1e-5) are now defaults on this branch
+```
+
+**Key insight**: bf16 AMP gives ~+29% throughput at zero quality cost. T_max=17 aligns the cosine tail with the new 17-epoch budget. ALL 8 splits (4 val + 4 test) improved — the broad win signals the model genuinely benefits from more epochs, not just a per-split tuning. eta_min=1e-5 keeps the late epoch usable. Peak memory only 33/96 GB — substantial headroom for larger batch or model.
+
+---
+
+## Previous Baseline — PR #1630 (cosine-eta-min)
 
 **val_avg/mae_surf_p = 39.8693** (epoch 13 / 13 completed in 30-min cap) — **-5.97% vs previous 42.4015**
 
