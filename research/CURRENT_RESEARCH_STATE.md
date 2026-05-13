@@ -82,9 +82,9 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #2352 | edward | Lion wd sweep on GeGLU baseline: wd=2e-3 and wd=5e-3 (firing values on new baseline) | WIP | Beat 45.92 |
 | #2288 | frieren | Lion lr sweep on GeGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP | Beat 45.92 |
 | #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe, SwiGLU co-change) | WIP | Beat 45.92 |
-| (new) | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | Just assigned | Beat 45.92 |
-| (new) | tanjiro | GeGLU mlp_ratio=2 — swiglu_hidden 216→320, +48% MLP capacity | Just assigned | Beat 45.92 |
-| (new) | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | Just assigned | Beat 45.92 |
+| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP — new | Beat 45.92 |
+| #2403 | tanjiro | GeGLU mlp_ratio=2 — swiglu_hidden 216→320, +48% MLP capacity | WIP — new | Beat 45.92 |
+| #2405 | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | WIP — new | Beat 45.92 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP (stale baseline, running) | Beat 45.92 |
 | #1979 | alphonse | n_layers=6 depth sweep, actively running (rebased, adjusted to 11 epochs) | WIP (stale baseline, running) | Beat 45.92 |
 
