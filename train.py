@@ -433,7 +433,8 @@ def lr_lambda(epoch):
     if epoch < WARMUP_EPOCHS:
         return float(epoch + 1) / WARMUP_EPOCHS
     progress = (epoch - WARMUP_EPOCHS) / max(1, MAX_EPOCHS - WARMUP_EPOCHS)
-    return 0.5 * (1.0 + math.cos(math.pi * progress))
+    cosine_factor = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return 0.05 + 0.95 * cosine_factor
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
