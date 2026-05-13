@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 16:55
+- 2026-05-13 17:00
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -87,7 +87,7 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 | #2460 | fern | LayerScale γ=0.1 on attn+ffn residuals (zero-rank-loss selective suppression) | WIP — new | Beat 43.73 |
 | #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 43.73 |
 | #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 43.73 |
-| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP | Beat 43.73 |
+| #2461 | nezuko | n_layers=4 + β1=0.85 compound: depth+optimizer co-change | WIP — new | Beat 43.73 |
 | #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP | Beat 43.73 |
 | #1979 | alphonse | n_layers=6 depth sweep (stale pre-β1 baseline; directionally informative) | WIP (stale) | Beat 43.73 |
 | #2459 | askeladd | β1 lower-bound: β1∈{0.875, 0.80} to narrow optimum below 0.85 | WIP — new | Beat 43.73 |
@@ -97,6 +97,7 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 | PR | Student | Outcome | Note |
 |---|---|---|---|
 | #2405 | askeladd | **MERGED** | Lion β1=0.85: val=43.73 (−4.8% vs 45.92), test=41.86 (−5.6%). Arm A (β1=0.85) clear winner; Arm B (β1=0.95) catastrophically regresses +19.7%. **New baseline 43.73/41.86.** Direction-smoothness axis: lower β1 → more reactive sign update → faster val convergence with B=4 noisy gradients. |
+| #2424 | nezuko | CLOSED | n_layers=4+β1=0.90: val=45.88 (beats old 45.92 by 0.04, within noise; +4.9% vs new 43.73). Run used pre-merge β1=0.90 stack. Test −1.8% real. Reassigned to n_layers=4+β1=0.85 (#2461). |
 | #2401 | fern | CLOSED | GeGLU gate on `PhysicsAttention.to_out` (hidden=56): val=52.98 (+15.4% worse). Bottleneck rank loss (160→56→160) dominates gate benefit. Param-parity ≠ capability-parity. Epoch time +17% (131s vs 112s) → 2 fewer epochs at budget. Reassigned to LayerScale (#2460). |
 | #2315 | thorfinn | CLOSED | RMSNorm: pod stalled. 0 commits, 0 comments, GPU dropped to 0% over 3.5h. Hypothesis untested. Replaced with simpler single-line slice_num=48 assignment (#2432). |
 | #2403 | tanjiro | SENT BACK | swiglu_hidden=320 (mlp_ratio=2): val=48.13 (+4.8%), test=46.19 (+4.2%) at only 14/16 epochs (30-min cap hit). Per-epoch overhead 20%, not 5% as expected. Val −4.5/ep at termination (extrapolated 39–43 range at ep16). Inconclusive — sent back to test swiglu_hidden=256. |

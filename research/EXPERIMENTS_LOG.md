@@ -1,5 +1,34 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 16:55 — PR #2424: n_layers=4 cost-recovery probe (CLOSED — baseline shifted)
+
+- Student branch: `charliepai2g24h5-nezuko/n-layers-4-cost-recovery`
+- Hypothesis: n_layers=4 saves ~18% per-epoch cost, enabling full 16-epoch cosine schedule within 30-min cap.
+
+### Results (vs #2287 old baseline: val=45.92; vs new baseline #2405: val=43.73)
+
+| Split | val | test |
+|---|---:|---:|
+| single_in_dist | 48.22 | 41.74 |
+| geom_camber_rc | 60.73 | 52.93 |
+| geom_camber_cruise | 28.72 | 41.93 |
+| re_rand | 45.84 | 37.59 |
+| **avg** | **45.88** | **43.55** |
+
+vs old baseline: Δval=−0.04 (−0.09%) — within seed noise. Δtest=−0.80 (−1.8%) — genuine test improvement.
+vs new baseline: Δval=+2.15 (+4.9%) — significantly worse. Does NOT beat current threshold 43.73.
+
+### Metric artifacts
+- `models/model-charliepai2g24h5-nezuko-n_layers_4_geglu_20260513-160333-20260513-160336/metrics.jsonl`
+
+### Analysis
+
+Cost-recovery prediction accurate: n_params=844,563 (~0.84M), per-epoch ~102.4 s (−18.7%), 27.3 min total for 16 full epochs. Val win over old baseline was 0.04 (seed noise). Run used β1=0.90 (default, pre-#2405 baseline). 
+
+**Key insight:** The ~1.8% test improvement and the split-level asymmetry (rc regresses, cruise improves) suggest depth sweet spot effect is real but run didn't have β1=0.85. Reassigned to n_layers=4 + β1=0.85 combined (#2461) to test compound effect. Rough expectation: ~43.70 val.
+
+---
+
 ## 2026-05-13 16:50 — PR #2401: GeGLU gate in PhysicsAttention.to_out (CLOSED — bottleneck rank loss)
 
 - Student branch: `charliepai2g24h5-fern/attention-output-gating`
