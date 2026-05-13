@@ -363,7 +363,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
-    grad_clip: float = 1.0
+    grad_clip: float = 5.0  # was 1.0 — relaxed to allow SOAP's larger conditioned steps
     precondition_frequency: int = 10
     max_precond_dim: int = 256
 
