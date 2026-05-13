@@ -445,6 +445,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
+print(f"pos_jitter_sigma: 0.01 (volume nodes only, training only)")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -512,6 +513,11 @@ for epoch in range(MAX_EPOCHS):
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            POS_JITTER_SIGMA = 0.01
+            if model.training:
+                interior = (mask & ~is_surface).unsqueeze(-1).to(x_norm.dtype)
+                noise = torch.randn_like(x_norm[..., :2]) * POS_JITTER_SIGMA
+                x_norm = torch.cat([x_norm[..., :2] + noise * interior, x_norm[..., 2:]], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
