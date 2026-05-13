@@ -430,7 +430,7 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-N_FREQS = 4
+N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
 model_config = dict(
