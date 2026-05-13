@@ -2,6 +2,84 @@
 
 ---
 
+## 2026-05-13 15:00 UTC — Round 36
+
+### PR #2173 thorfinn: n_head 4→2 (dim_head 32→64) — MERGED (**WIN**, new baseline)
+
+- **Branch:** `charliepai2g48h5-thorfinn/n-head-2`
+- **Hypothesis:** Increase attention head capacity (dim_head=32→64) to match literature-optimal dim_head≈64. Same param count, same FLOPs — purely shifts representation subspace.
+- **Results:**
+
+| Metric | n_head=2 | PR #2033 baseline | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **49.8053** | 50.6001 | **−1.57%** ✅ |
+| `test_avg/mae_surf_p` | **43.5396** | 43.9680 | **−0.97%** ✅ |
+
+| Split | n_head=2 val | #2033 baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 46.2915 | 47.9418 | −3.44% ✅ |
+| `val_geom_camber_rc` | 67.4416 | 67.3675 | +0.11% (wash) |
+| `val_geom_camber_cruise` | 32.5963 | 34.3430 | −5.09% ✅ |
+| `val_re_rand` | 52.8918 | 52.7481 | +0.27% (wash) |
+
+| Split | n_head=2 test |
+|---|---|
+| `test_single_in_dist` | 40.6576 |
+| `test_geom_camber_rc` | 61.4956 |
+| `test_geom_camber_cruise` | 27.6519 |
+| `test_re_rand` | 44.3531 |
+
+- **Best epoch:** 47 of 47 (terminal; ep45→47 val: 50.91→49.97→49.81 — still descending at timeout)
+- **Epochs/time:** 47 epochs × ~37.5 s = 30.1 min
+- **Metric artifacts:** `models/model-charliepai2g48h5-thorfinn-n-head-2-20260513-101936/metrics.jsonl`
+
+**Analysis:** Literature optimum dim_head≈64 confirmed for this architecture. With slice_num=32 compressed tokens (not raw mesh nodes), head diversity (n_head) matters less than head capacity (dim_head) — n_head=2 high-rank heads outperform n_head=4 low-rank heads. Improvements concentrated in val_single_in_dist (−3.44%) and val_geom_camber_cruise (−5.09%); the harder OOD splits (val_geom_camber_rc +0.11%, val_re_rand +0.27%) washed — data/regularization-limited, not head-rank-limited. Both improvements are "easy" splits; the bottleneck splits remain flat. Best=terminal; true ceiling is below 49.81 with more budget. **New n_head axis direction:** n_head=1 (dim_head=128) assigned as #2222 to close the axis.
+
+---
+
+### PR #2174 edward: Huber β=0.1 (smooth-L1 training loss) — CLOSED (LOSS, 8th averaging bimodal)
+
+- **Branch:** `charliepai2g48h5-edward/huber-beta-0.1`
+- **Hypothesis:** Pure L1 has constant ±1 gradient (sign-flip noise); Huber β=0.1 introduces quadratic regime for |r|<0.1, smoothing sign-flip while preserving L1's bulk character. Orthogonal to optimizer-side amsgrad fix.
+- **Results:**
+
+| Metric | Huber β=0.1 | New baseline #2173 | Old baseline #2033 | Δ vs #2033 |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **51.5551** | 49.8053 | 50.6001 | **+1.89% LOSS** |
+| `test_avg/mae_surf_p` | **45.1841** | 43.5396 | 43.9680 | **+2.77% LOSS** |
+
+| Split | Huber β=0.1 val | #2033 val | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 47.1714 | 47.9418 | −1.61% (improved) |
+| `val_geom_camber_rc` | 69.2112 | 67.3675 | +2.74% |
+| `val_geom_camber_cruise` | 35.8311 | 34.3430 | +4.33% (worst) |
+| `val_re_rand` | 54.0068 | 52.7481 | +2.39% |
+
+- **Best epoch:** 45 of 47 possible (timeout at ~40.5 s/epoch); still trending down at termination
+- **Metric artifacts:** `models/model-charliepai2g48h5-edward-huber-beta-0.1-20260513-101933/metrics.jsonl`
+
+**Analysis:** Classic averaging-style bimodal signature — 8th confirmation. In-dist improved −1.61% while all 3 OOD splits regressed +2.4 to +4.3%. Mechanism: at β=0.1 in normalized space, enough training residuals fall below the threshold to trigger quadratic (MSE-like) gradient behavior, softening effective regularization → predictions drift toward conditional mean → in-dist benefits (dense training data), OOD suffers (sparse data). **The Huber-β axis is now fully closed:** β∈{0.1, 0.25, 0.5, 1.0, 2.0} ALL bimodal LOSS vs L1, monotone in β. Pure L1 is the saturating optimum along the smooth-L1 β sweep. NOTE: This closes the LOSS-SOFTENING direction; the LOSS-AMPLIFYING direction (berHu/reverse-Huber) is now in-flight as #2223 — structurally opposite mechanism.
+
+**Updated failure-mode taxonomy** (7 distinct patterns, 8 total bimodal confirmations):
+1. Averaging-style bimodal (8×): coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead, warmup-5, fun-jitter, Huber β=0.1
+2. Broadcast-scalar prior corruption (2×): gap/stagger #2114, NACA jitter #2072
+3. Momentum-lag overshoots cosine (1×): β1=0.95 #2093
+4. Warmup-duration asymmetry (1×): warmup-2 #2112
+5. Architectural-activation degradation (1×): SiLU swap #2156
+6. Optimizer-statistic over-conservativism (1×): amsgrad #2155
+7. Architectural-rank improvement (1×, WIN): n_head=2 #2173
+
+---
+
+### Round-36 Assignments
+
+| PR | Student | Hypothesis | Mechanism |
+|---|---|---|---|
+| #2222 | thorfinn | n_head=1 (dim_head=128) | Close n_head axis at single-head endpoint; either confirms monotone improvement or confirms n_head=2 as optimum |
+| #2223 | edward | berHu reverse-Huber (c=1.0) | First LOSS-AMPLIFYING loss probe: pure L1 for |r|≤c, quadratic-amplified beyond c; directly targets OOD large-residual bottleneck; structurally opposite to ALL 8 bimodal-class closures |
+
+---
+
 ## 2026-05-13 11:00 UTC — Round 35
 
 ### PR #2156 askeladd: GELU → SiLU activation swap (all 3 MLP sites) — CLOSED (LOSS, NEW failure-mode taxon)

@@ -1,5 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
+- **As of:** 2026-05-13 15:00 UTC (round-36: **MERGED #2173 thorfinn n_head=2 WIN** (val 49.8053, -1.57%; test 43.5396, -0.97%); new baseline 49.8053 (n_head=2, dim_head=64). Closed #2174 edward Huber β=0.1 (val 51.5551, +1.89% LOSS — **8th averaging-style bimodal confirmation**: in-dist -1.61% while all 3 OOD splits +2.4 to +4.3%; Huber-β family fully closed β∈{0.1,0.25,0.5,1.0,2.0} all bimodal vs L1 — pure L1 is the saturating optimum). Assigned #2222 thorfinn n_head=1 (dim_head=128, closes the n_head axis at the endpoint) + #2223 edward berHu reverse-Huber c=1.0 (pure L1 for |r|≤c, quadratic-amplified for |r|>c — OPPOSITE of closed Huber-β softening; directly amplifies large-residual OOD gradients; distinct from ALL 8 bimodal closures). All 8 students in-flight, zero idle.)
 - **As of:** 2026-05-13 11:00 UTC (round-35: Closed #2156 askeladd GELU→SiLU swap (val 57.64, +13.91% LOSS) — uniform regression all 4 splits 9.3-18.8%; NEW failure-mode taxon: 'architectural-activation degradation' (NOT bimodal, NOT broadcast-scalar). GELU's sharper near-zero gating is load-bearing for L1+bf16; SiLU's longer negative tail destabilises residual stream. Closed #2155 alphonse AdamW amsgrad=True (val 55.39, +9.47% LOSS) — uniform regression all 4 splits; amsgrad's max-bound is PERMANENT once a high-variance gradient inflates v_max → kills early-phase high-LR exploration. **AdamW optimizer axis now closed 4-LOSS-for-4** (lr-UP/DOWN, β1, amsgrad) — defaults are locally optimal. Assigned #2194 alphonse SGD(momentum=0.9, nesterov, lr=2e-3) — optimizer-FAMILY swap (leave AdamW entirely) + #2195 askeladd LayerScale init=1e-4 (CaiT-style learnable per-channel residual gain, distinct architectural sub-class from activation/normalization). Baseline still **50.6001**)
 - **As of:** 2026-05-13 10:45 UTC (round-34: Closed stale #2083 tanjiro DropPath (2nd consecutive stale at pod-level, same pattern as frieren RMSNorm #1926→#2034→#2139). Reassigned tanjiro to DropPath retry-3 (#2179) on fresh branch via REST API (GraphQL rate-limited). Hypothesis unchanged — block-level stochastic depth, structurally distinct from 7× averaging-style and 2× broadcast-scalar prior corruption closed classes. All 8 students now in-flight. Baseline still **50.6001**)
 - **As of:** 2026-05-13 10:30 UTC (round-33: Closed #2112 thorfinn warmup-2 (val 51.93, +2.62% LOSS) — bimodal symmetric-flip prediction FALSIFIED; warmup duration bounds OOD from below; warmup axis fully closed at warmup-3 with sharply asymmetric peak {2,3,5}={51.93, 50.60, 50.72}. Closed #2072 edward NACA jitter σ=0.01 (val 53.05, +4.85% LOSS) — **2nd confirmation of broadcast-scalar prior corruption** (val_re_rand worst hit at +7.36%, same exact pattern as gap/stagger #2114). Generalizable rule: ALL per-sample-broadcast scalar input channels (NACA 15-17/19-21, gap/stagger 22-23, fun_dim 13/14/18) are load-bearing priors, NOT augmentation targets. Assigned #2173 thorfinn n_head 4→2 (dim_head 32→64, architectural probe closer to literature optimum) + #2174 edward Huber β=0.1 (smooth-L1 loss probe addressing L1 sign-flip noise at the loss level). Baseline still **50.6001**)
@@ -29,7 +30,8 @@ New baseline = L1 + compile + bf16 + sampler 2× single + slice_num=32 + warmup-
 
 | PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p |
 |---|---|---|---|---|
-| #2033 ✓ | thorfinn | LinearWarmup-3 + CosineAnnealingLR(T_max=47) | **50.6001** | **43.9680** |
+| #2173 ✓ | thorfinn | n_head 4→2 (dim_head 32→64) | **49.8053** | **43.5396** |
+| #2033 ✓ | thorfinn | LinearWarmup-3 + CosineAnnealingLR(T_max=47) | 50.6001 | 43.9680 |
 | #1846 ✓ | frieren | slice_num 64 → 32 | 54.0051 | 47.6261 |
 | #1619 ✓ | nezuko | Sampler 2× racecar_single | 56.62 | 50.43 |
 | #1700 ✓ | thorfinn | Pure L1 loss | 59.54 | 51.47 |
@@ -38,29 +40,29 @@ New baseline = L1 + compile + bf16 + sampler 2× single + slice_num=32 + warmup-
 | #1532 ✓ | thorfinn | bf16 AMP + scoring-NaN fix | 101.12 | 91.50 |
 | #1444 ✓ | thorfinn | MSE → Huber β=1.0 | 110.76 | NaN |
 
-**Current baseline: val_avg/mae_surf_p = 50.6001, test_avg/mae_surf_p = 43.9680 (PR #2033)**
+**Current baseline: val_avg/mae_surf_p = 49.8053, test_avg/mae_surf_p = 43.5396 (PR #2173, n_head=2)**
 
-Per-split baseline (PR #2033):
+Per-split baseline (PR #2173):
 
 | Split | val mae_surf_p |
 |---|---|
-| `val_single_in_dist` | 47.9418 |
-| `val_geom_camber_rc` | 67.3675 |
-| `val_geom_camber_cruise` | 34.3430 |
-| `val_re_rand` | 52.7481 |
+| `val_single_in_dist` | 46.2915 |
+| `val_geom_camber_rc` | 67.4416 |
+| `val_geom_camber_cruise` | 32.5963 |
+| `val_re_rand` | 52.8918 |
 
-> Advisor config: Pure L1 + bf16 AMP + torch.compile(dynamic=True) + scoring-NaN workaround + sampler 2× racecar_single + slice_num=32 + LinearWarmup(3ep, 0.1→1.0) + CosineAnnealingLR(T_max=47).
-> ~44 epochs in 30 min (~41 s/epoch). Peak GPU: ~21.35 GB.
-> **Best epoch = terminal in all recent runs (model still improving at timeout).**
+> Advisor config: Pure L1 + bf16 AMP + torch.compile(dynamic=True) + scoring-NaN workaround + sampler 2× racecar_single + slice_num=32 + LinearWarmup(3ep, 0.1→1.0) + CosineAnnealingLR(T_max=47) + **n_head=2 (dim_head=64)**.
+> ~47 epochs in 30 min (~37.5 s/epoch). Peak GPU: ~20.05 GB.
+> **Best epoch = terminal** (still descending at timeout ep47: val 50.91→49.97→49.81).
 
 ## In-flight (WIP)
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
+| #2223 | edward | berHu reverse-Huber c=1.0 (pure L1 for \|r\|≤1.0, quadratic-amplified for \|r\|>1.0) | **Round-36** — OPPOSITE of closed Huber-β (amplifies not softens); amplifies large-residual OOD gradients; no near-zero softening so no averaging-bimodal risk; targets val_geom_camber_rc + val_re_rand OOD bottleneck |
+| #2222 | thorfinn | n_head 2→1 (dim_head 64→128) | **Round-36** — close the n_head axis at the endpoint; n_head=4→2 WIN −1.57%; n_head=1 tests whether monotone improvement continues or n_head=2 is the optimum |
 | #2195 | askeladd | LayerScale init=1e-4 (CaiT-style per-channel learnable residual gain) | **Round-35** — architectural rescaling sub-class; learned per-branch gate, distinct from activation/normalization; 1280 params added, ~0.2% increase |
 | #2194 | alphonse | SGD(momentum=0.9, nesterov=True, lr=2e-3) | **Round-35** — optimizer-FAMILY swap from AdamW (4-LOSS-for-4 axis); high uncertainty, informative either way; lr=4× current AdamW |
-| #2174 | edward | Huber β=0.1 (smooth-L1 training loss) | **Round-33** — addresses L1 sign-flip noise at the loss level (orthogonal to amsgrad optimizer fix); quadratic-near-zero, L1-elsewhere; expected uniform per-split delta |
-| #2173 | thorfinn | n_head 4→2 (dim_head 32→64) | **Round-33** — architectural probe; closer to literature-optimal dim_head=64; NOT averaging, NOT broadcast-scalar, NOT schedule |
 | #2139 | frieren | RMSNorm replacing LayerNorm (all 3 sites) — **retry-3** of stale #1926/#2034 | **Round-31** — fresh PR after 2nd consecutive stale; same hypothesis, pod-unstick attempt |
 | #2138 | nezuko | Translation augmentation σ=0.01 (channels 0-1, per-sample shift) | **Round-31** — physical-symmetry OOD lever; structurally distinct from all 7 closed averaging-style mechanisms |
 | #2179 | tanjiro | DropPath p_max=0.1 stochastic depth — **retry-3** of stale #1976/#2083 | **Round-34** — fresh PR after 2nd consecutive stale; same hypothesis, pod-unstick attempt (mirror of frieren RMSNorm retry-3 #2139) |
@@ -103,6 +105,8 @@ Long-running in-flight PRs (#1775, #1988) were assigned on the old 54.0051 basel
 - **NACA geometry jitter σ=0.01 (channels 15-17, 19-21):** LOSS +4.85% val (53.05), +6.23% test (46.71) (PR #2072, round-33 close). All 4 splits regress, val_re_rand worst hit at +7.36% (52.75 → 56.63). **2nd confirmation of broadcast-scalar prior corruption** — NACA channels are also per-sample-broadcast scalars (one NACA descriptor per foil broadcast to all N points). Pattern identical to gap/stagger #2114: uniform LOSS, val_re_rand worst (the split with NO camber variation but Re-shift). Smoking gun: NACA noise should be neutral on val_re_rand under "domain shift" hypothesis, but it's the worst regressor → confirms NACA is used as conditioning prior for the Re/AoA channels too. **Generalizable rule:** the per-sample-broadcast scalar channel class (NACA 15-17/19-21, gap/stagger 22-23, Re/AoA 13/14/18) is NOT augmentation-safe. Per-point channels (coords 0-1) remain to be tested via translation aug #2138 nezuko.
 - **Warmup-2-cosine:** LOSS +2.62% val (51.93), +3.51% test (45.51) on warmup-3-cosine baseline (PR #2112, round-33 close). Bimodal symmetric-flip prediction FALSIFIED. Per-split: val_single_in_dist +1.75%, val_geom_camber_rc -1.26% (mild WIN, ONLY OOD WIN we've seen on camber_rc bottleneck), val_geom_camber_cruise +10.13%, val_re_rand +3.49%. **Warmup bracket {2, 3, 5} on val_avg = {51.93, 50.60, 50.72}** — sharply asymmetric peak at warmup-3. Mechanism: warmup duration bounds OOD from below; under-warm training destabilises OOD feature learning, not just in-dist basin selection. **Warmup duration axis fully closed at warmup-3.** Schedule axis (warmup + cosine) is now exhausted in this launch.
 - **GELU → SiLU activation swap:** LOSS +13.91% val (57.64), +15.21% test (50.66) (PR #2156, round-35 close). All 4 splits uniform regression 9.3-18.8% (val_single_in_dist worst +18.76%). NEW failure-mode taxon: **architectural-activation degradation** — distinct from 7× averaging-style bimodal and 2× broadcast-scalar prior corruption. Mechanism (student's analysis confirmed): GELU's sharper gating near zero (min≈-0.17 at x≈-0.75) is doing useful work in the L1+bf16+small-hidden regime; SiLU's longer negative tail (min≈-0.28 at x≈-1.28) injects more low-magnitude negative noise into the residual stream which destabilises the converged L1 sign-flip regime. Activation axis closed in the negative direction — GELU dominates SiLU here.
+- **n_head=4 → n_head=2 (dim_head 32→64):** MERGED as PR #2173 (WIN −1.57% val 49.8053, −0.97% test 43.5396). Improvements concentrated in val_single_in_dist (−3.44%) and val_geom_camber_cruise (−5.09%); val_geom_camber_rc and val_re_rand washed (+0.1%). Mechanism: wider dim_head increases per-head subspace rank for attending over slice_num=32 compressed tokens. Literature optimum dim_head≈64 (Vaswani 2017, LLaMA) confirmed. n_head=1 (dim_head=128) probe now in-flight as #2222 to close the axis.
+- **Huber β=0.1 (smooth-L1) training loss:** LOSS +1.89% val (51.5551) (PR #2174, round-36 close). **8th averaging-style bimodal confirmation**: val_single_in_dist −1.61% (in-dist WIN) while all 3 OOD splits +2.4 to +4.3% (LOSS). The Huber-β family is now closed across β∈{0.1, 0.25, 0.5, 1.0, 2.0} — ALL 5 bimodal vs pure L1 (plus MSE counts as β=∞ bimodal). **Pure L1 is the saturating optimum along the smooth-L1 β axis.** Mechanism: quadratic regime at β=0.1 catches enough normalized training residuals to reintroduce averaging-style drift toward conditional mean → in-dist benefits, OOD suffers. NOTE: this is the LOSS-SOFTENING direction; the LOSS-AMPLIFYING direction (berHu/reverse-Huber) has NOT been tested and is now in-flight as #2223.
 - **AdamW amsgrad=True:** LOSS +9.47% val (55.39), +9.52% test (48.15) (PR #2155, round-35 close). All 4 splits uniform regression 5.14-18.45% (val_geom_camber_cruise worst +18.45%). Mechanism (student's analysis confirmed): amsgrad's max-bound is PERMANENT — once a single high-variance gradient inflates v_max, all subsequent steps for that parameter are clamped lower forever, killing early-phase exploration during the high-LR cosine phase. **AdamW optimizer axis now closed 4-LOSS-for-4** in this launch (lr-UP/DOWN/β1/amsgrad) plus β2=0.95 prior closure = 5 axis closures. Defaults (lr=5e-4, β1=0.9, β2=0.999) are locally optimal. NEW failure-mode taxon: **optimizer-statistic over-conservativism** — distinct from momentum-lag (β1=0.95) and averaging-style. Next optimizer direction must leave AdamW entirely (SGD probe assigned as #2194).
 
 ## Open questions / next experiments
@@ -136,3 +140,5 @@ Long-running in-flight PRs (#1775, #1988) were assigned on the old 54.0051 basel
 15. **Huber β=0.1 (smooth-L1 training loss)** — **in-flight #2174 edward.** Loss-function probe: addresses L1 sign-flip noise at the loss level (orthogonal to amsgrad optimizer fix in #2155). Quadratic-near-zero (|residual|<0.1), L1-elsewhere — preserves 90%+ of L1's character but eliminates sign-flip in the near-converged regime. Expected uniform per-split delta. If 8th bimodal, β=0.1 is large enough to act as soft L2.
 16. **SGD with Nesterov momentum (lr=2e-3, momentum=0.9)** — **in-flight #2194 alphonse.** Optimizer-FAMILY swap from AdamW after AdamW axis closed 4-LOSS-for-4. Distinct from any β-tweak or 2nd-moment statistic change. High uncertainty: may diverge in first epoch OR may train cleanly and match/beat AdamW. Informative either way — establishes whether AdamW's adaptive mechanism is load-bearing for L1+bf16 Transformer training.
 17. **LayerScale init=1e-4 (CaiT-style learnable per-channel residual gain)** — **in-flight #2195 askeladd.** Architectural rescaling sub-class: per-branch γ ∈ R^hidden_dim initialized to 1e-4 multiplies each residual branch output before adding to the residual stream. Distinct from activation (closed), DropPath (in-flight #2179), and RMSNorm (in-flight #2139). 1280 added params (~0.2% increase). Expected uniform per-split delta.
+18. **n_head=1 (dim_head=128)** — **in-flight #2222 thorfinn.** Closes the n_head axis at the single-head endpoint: dim_head=128 = full hidden dimension per head. n_head=4 (dim_head=32) → n_head=2 (dim_head=64) was WIN −1.57%; this tests whether the monotone improvement continues. Either outcome (win or loss) definitively closes the axis.
+19. **berHu reverse-Huber c=1.0** — **in-flight #2223 edward.** First probe of the LOSS-AMPLIFYING direction (vs all prior LOSS-SOFTENING probes in the bimodal class). BerHu = pure L1 for |r| ≤ c (identical to baseline near zero — no softening), quadratic-amplified for |r| > c (stronger gradient than L1 for large OOD-type residuals). Directly targets val_geom_camber_rc and val_re_rand which have been flat since round 1. Mechanistically distinct from ALL 8 bimodal-class closures.
