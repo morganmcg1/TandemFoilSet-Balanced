@@ -2,6 +2,69 @@
 
 ---
 
+## 2026-05-13 20:30 — PR #2566: GeGLU MLP block (Shazeer 2020) — assignment to frieren (NEW cycle 69)
+
+- **Branch:** `willowpai2g48h4-frieren/geglu-mlp-block`
+- **Student:** willowpai2g48h4-frieren (idle after closure of #2507)
+- **Hypothesis:** Replace standard MLP in TransolverBlock (`Linear(d, mlp_ratio*d) → GELU → Linear(mlp_ratio*d, d)`) with GeGLU drop-in: `out(GELU(gate(x)) * value(x))` where gate and value are parallel projections from d → mlp_ratio*d, multiplied elementwise, then projected back. Shazeer 2020 ("GLU Variants Improve Transformer", arXiv:2002.05202). Per-token, per-feature gating lets the network dynamically modulate which MLP features pass through, on a token-by-token basis. Strong empirical record (PaLM, Llama, T5-XL). Mechanically distinct from ALL in-flight cycle 68 work (all optimizer-side, schedule-side, or training-time regularizer). Architectural MLP-structure lever has been almost entirely untouched in this round (prior architecture experiments #1498, #1501, #1881, #1924, #2057 were all SIZE changes; GeGLU is a STRUCTURAL change to the nonlinearity).
+- **Arms:** Single arm with `--use_geglu` on CURRENT SOTA #2444 config. GeGLU at same `mlp_ratio=2` (intermediate=256) gives +50% MLP params (~5% total model), ~15% wall-clock — within 30-min budget.
+- **Branching rule:** ≥0.7 val improvement = confident win, run 2nd seed. ±0.4 borderline = close. ≥1.0 regression = close.
+- **Implementation:** Adds `GeGLU` class with 3 linear layers and elementwise gate-value multiply, plus `--use_geglu` flag that swaps MLP construction in `TransolverBlock.__init__`. `use_geglu` arg threaded through `Transolver.__init__`.
+
+---
+
+## 2026-05-13 20:15 — PR #2507: WD curve ABOVE 5e-4 on T_mult=2 — CLOSED (both arms regress, WD axis closed bilaterally; mechanism correction on cycle-2 spike)
+
+- **Branch:** `willowpai2g48h4-frieren/wd-above-5e4-tmult2`
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** `l0jhtjy5` (WD=6e-4), `kldflt4w` (WD=7e-4)
+- **Hypothesis:** WD curve above 5e-4 — T_mult=2's longer cycle 2 (14 vs 11 epochs) may absorb stronger WD productively.
+
+### Results — best checkpoint epoch 21 in both arms
+
+| Arm | WD | val_avg | test_avg | Δ val vs SOTA | Δ test vs SOTA | per-split splits all regress? |
+|-----|-----|---------|----------|---------------|----------------|---|
+| Baseline #2444 | 5e-4 | 82.2642 | 72.4019 | — | — | — |
+| Arm 1 | 6e-4 | **86.0943** | **75.7151** | **+3.83 ❌** | **+3.31 ❌** | YES (4/4 val, 4/4 test) |
+| Arm 2 | 7e-4 | **83.5968** | **74.0943** | **+1.33 ❌** | **+1.69 ❌** | YES (4/4 val, 4/4 test) |
+
+### Per-split val/test (Arm 2 WD=7e-4 — the closer-to-baseline arm)
+
+| Split | val | val baseline | Δ | test | test baseline | Δ |
+|-------|-----|--------------|---|------|---------------|---|
+| `single_in_dist` | 97.9432 | 96.8979 | +1.1% | 88.4477 | 85.5208 | +3.4% |
+| `geom_camber_rc` | 105.1948 | 103.1372 | +2.0% | 94.8419 | 91.0868 | +4.1% |
+| `geom_camber_cruise` | 54.9073 | 53.9395 | +1.8% | 44.9325 | 44.9228 | +0.0% |
+| `re_rand` | 76.3418 | 75.0824 | +1.7% | 68.1551 | 68.0771 | +0.1% |
+
+### Cycle-2 spike observation — restart kick at e8
+
+| Arm | WD | e7 (end cycle 1) | e8 (cycle-2 spike) | spike Δ (e8 − e7) | e21 (best) |
+|-----|-----|------------------|---------------------|-------------------|------------|
+| Arm 1 | 6e-4 | 115.14 | 145.21 | **+30.07** | 86.09 |
+| Arm 2 | 7e-4 | 116.18 | 171.11 | **+54.93** | 83.60 |
+
+**Stronger WD → LARGER cycle-2 spike, not smaller.** Frieren's mechanism: AdamW WD shrinks weights every step, so the parameter norm is lower at the end of cycle 1 under WD=7e-4 than WD=6e-4. When the LR re-kicks at e8, the update step is *relatively* larger compared to the small-norm parameters, producing a bigger spike. **Spike magnitude tracks weight-shrinkage amplitude, not basin tightness.**
+
+### Closure reason
+
+1. **Both arms regress** on every val and test split — clear merge-fail.
+2. **WD axis now closed bilaterally under T_mult=2.** PR #2284 closed below 5e-4 (3 arms regress monotonically). This PR closes above 5e-4. 5e-4 is the bilateral peak under restart at 21 epochs.
+3. **Non-monotone above 5e-4** (6e-4 worst, 7e-4 partial recovery) is the budget-conditioned trajectory effect: WD=7e-4 was still descending steeply at e21 (~1.2/epoch). Not a true U-shape; just a budget-bounded different trajectory.
+
+### Mechanistic correction for the paper
+
+The cycle-34 "spike is BENEFICIAL" reframing is partially corrected. The spike *signature* is a SYMPTOM of the WD/LR/weight-norm interaction at cycle restart, not a load-bearing optimization signal. Frieren's data shows: stronger WD → smaller weight norm at e7 → larger relative LR-kick at e8 → larger spike. The shape and depth of the cycle-2 minimum is what matters for final val, not the spike magnitude (which is upstream from it).
+
+### Suggested follow-ups (frieren's note)
+
+1. **DO NOT sweep WD=8e-4.** Curve non-monotone with no improvement at probed points; pushing higher unlikely to flip sign.
+2. **WD=5e-4 = bilateral peak at 21 epochs.** Close axis.
+3. **Trajectory-hint experiment** (optional, low priority): under longer budget (45-min), WD=7e-4 might surface as optimal — budget-conditioned, not fair-budget win.
+4. **Higher-leverage axes**: T_mult=2 × eta_min compose (alphonse #2498 active), architectural deltas (now picked up by this assignment), loss-side re-explore.
+
+---
+
 ## 2026-05-13 19:58 — PR #2554: AdaBelief optimizer (variance-based step size, Zhuang 2020) — assignment to tanjiro (NEW cycle 68)
 
 - **Branch:** `willowpai2g48h4-tanjiro/adabelief-optimizer`
