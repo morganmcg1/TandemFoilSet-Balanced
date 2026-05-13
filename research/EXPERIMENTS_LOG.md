@@ -30,6 +30,25 @@ Best run dqkdymqt: val=94.03 (+9.5% vs 85.84), test=83.82. Longer warmup (10%→
 
 ---
 
+## 2026-05-13 ~06:00 — Cycle 20: 2 closed + 2 new arms (auditing prior PR axes)
+
+### PR #1915 alphonse — OneCycleLR div_factor=10: CLOSED ✗
+
+val=86.14 vs new baseline 80.03 (+7.6%). Important finding from student: the actual code default was `div_factor=cfg.max_lr/cfg.lr=4.0` (warmup start 500µs), NOT 25.0 as my PR assumed. So my hypothesis framing was inverted — this experiment actually **decreased** starting LR (500µs → 200µs). Lesson: verify current code state before framing hypotheses. The result still informatively shows the warmup-starting-LR axis has small effect (<1%) at the current operating point.
+
+### PR #1864 edward — dropout=0.02: CLOSED ✗
+
+Multiple W&B silent retries: 04:21Z run val=84.8 (beat old baseline 85.84) but 05:16Z run on new β=0.25 stack val=87.1 (doesn't beat new 80.03). Dropout axis closed: neither p=0.05 nor p=0.02 composes with β=0.25 to beat new baseline.
+
+### New assignments (cycle 20)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| alphonse | OneCycleLR pct_start 0.1→0.05 (shorter warmup) | #1975 |
+| edward | AdamW eps 1e-8→1e-6 (conservative LR adaptation under new stack) | #1977 |
+
+---
+
 ## 2026-05-13 ~05:30 — Cycle 19: #1863 tanjiro MERGED ✓ (-6.8%), 2 closed, 3 new arms
 
 ### PR #1863 tanjiro — smooth_l1 β=0.25: MERGED ✓
