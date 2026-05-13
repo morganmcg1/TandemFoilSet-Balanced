@@ -7,6 +7,49 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 09:10 — PR #1842: Transolver mlp_ratio sweep (post-rebase under AMP) — CLOSED
+
+- Student branch: `willowpai2g24h3-edward/mlp-ratio-sweep`
+- Hypothesis: at the new AMP operating point, smaller MLP (`mlp_ratio=1`) re-allocates throughput into more epochs of cosine cool-down; larger MLP (`mlp_ratio=4`) costs throughput. Pre-AMP this PR had won at 85.82 val (−6.4% vs pre-AMP 91.66).
+
+### Results (3 arms, all rebased onto advisor `04aa53b` with `--amp --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999`)
+
+| arm | mlp_ratio | n_params | val_avg | test_avg (EMA) | test_no_ema | best epoch | s/epoch | run id |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| A (baseline reproduction) | 2 | 0.66M | **77.94** | **67.84** | 78.49 | 19 | 98.86 | `6u8da009` |
+| B (winner candidate pre-AMP) | 1 | 0.50M | 78.46 | 69.71 | 86.97 | 19 | 94.63 | `eliwspvs` |
+| C (bracket) | 4 | 0.99M | 81.14 | 71.66 | 85.11 | 18 | 103.76 | `t9yrv6d1` |
+| advisor reference | 2 | 0.66M | 77.37 | 68.21 | — | — | — | `30wvu5r0` |
+
+Arm A reproduces the advisor reference within ±0.6 val / ±0.4 test — rebase is correct. Arm B (the pre-AMP winner) loses on every test split. Arm C (the upper bracket) loses by even more. Per-split test deltas vs baseline:
+
+| split | ratio=2 | ratio=1 | ratio=4 | Δ(1−2) | Δ(4−2) |
+|---|---:|---:|---:|---:|---:|
+| test_single_in_dist | 79.84 | 81.30 | 84.78 | +1.46 | +4.94 |
+| test_geom_camber_rc | 79.73 | 80.83 | 82.63 | +1.10 | +2.90 |
+| test_geom_camber_cruise | 46.06 | 48.61 | 49.77 | +2.55 | +3.71 |
+| test_re_rand | 65.72 | 68.09 | 69.44 | +2.38 | +3.72 |
+
+### Mechanism — AMP subsumed the throughput-mechanism win
+
+Epoch-time ratio collapse is the keeper output:
+
+| arm | predicted (PR body) | pre-AMP measured | post-AMP measured |
+|---|---:|---:|---:|
+| ratio=1 vs baseline | 0.71× | 0.93× | **0.957×** |
+| ratio=4 vs baseline | 1.75× | 1.10× | **1.050×** |
+
+Under AMP, smaller MLP buys only ~4% per-epoch and larger MLP costs only ~5%. All three arms hit 18-19 epochs (vs the pre-AMP 13-15 spread). The throughput dial that drove the pre-AMP win (~2 extra epochs of cool-down) is now saturated by autocast. Only the per-step capacity effect remains, which favors the existing `mlp_ratio=2`.
+
+### Conclusion
+
+**Close. mlp_ratio axis at this depth/width is settled — no value in 1 or 4 over the existing default.** Code change (Config field) not cherry-picked: not needed for any in-flight hypothesis, and one less Config option is preferable. Edward reassigned to depth sweep (`n_layers`) — the natural follow-up since width was closed pre-AMP (#1443) and depth has never been tested at the AMP operating point.
+
+### Emerging lessons logged
+
+1. **AMP shifts the capacity-vs-throughput surface.** Pre-AMP optimum was throughput-saving (ratio=1); post-AMP optimum is the existing default (ratio=2). Pre-AMP architectural negatives may be worth a quick AMP re-sweep before being treated as final.
+2. **Test-split direction breaks ties on noise-band val results.** When val_avg lands in ±7 noise, per-split test sign (all worse vs mixed) is the cleanest tie-breaker. Decisive here against second-seeding mlp_ratio=1.
+
 ## 2026-05-13 09:00 — PR #1779: AdamW weight_decay sweep at AMP+EMA baseline — CLOSED
 
 - Student branch: `willowpai2g24h3-thorfinn/weight-decay-sweep`
