@@ -268,3 +268,31 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_layers 3 --n_hidden 192 --epochs 30`
 - **All subsequent experiments should target val < 63.7215 and test < 55.6430** as the merge threshold.
 - **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + n_hidden=192 + grad-clip=10 + everything else**, but the measured val=63.72 is on **n_layers=3 + n_hidden=192 WITHOUT grad-clip=10**. The full combined state has not been directly measured. Expected combined val < 63.72 (grad-clip should compound with architecture). The first n_layers=3 + n_hidden=192 + grad-clip=10 run (any subsequent experiment specifying `--n_layers 3 --n_hidden 192`) will confirm.
+
+## 2026-05-13 09:00 — PR #1930: tanjiro grad-clip max_norm=5.0 (threshold scan step 2)
+
+**New best — 10th compound improvement (tighter gradient clipping)**
+
+- **val_avg/mae_surf_p:** 63.4801 (↓ from 63.7215, **−0.38%**)
+- **test_avg/mae_surf_p:** 54.9834 (↓ from 55.6430, **−1.18%**)
+
+**Per-split test (3/4 splits improved; in_dist slight regression):**
+
+| Split | mae_surf_p | vs PR #1899 |
+|-------|----------:|----------:|
+| `test_single_in_dist` | 62.4458 | +1.00 (regression) |
+| `test_geom_camber_rc` | 68.3757 | −0.95 |
+| `test_geom_camber_cruise` | 35.8182 | −1.89 |
+| `test_re_rand` | 53.2939 | −0.80 |
+
+- **Config (as measured):** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, **n_hidden=128**, n_layers=3, slice_num=64, mlp_ratio=2, dropout=0.0, torch.compile(model, dynamic=True), **`clip_grad_norm_(model.parameters(), max_norm=5.0)`**
+- **NOTE:** This run did NOT have n_hidden=192 (tanjiro's branch was based on pre-n_hidden=192 advisor commit). Current advisor branch has n_hidden=192 + grad-clip=5.0 — combined state unmeasured.
+- **Clip stats:** clip rate 90.06%, mean grad norm 21.45 (unchanged from max_norm=10 run), mean downscaling 4.29× (predicted 4.2×, exact). Regime: moderate uniform downscaling — 90% of steps are scaled by ~4.3×, directions fully preserved.
+- **Mechanism:** Tighter threshold compresses the upper tail more aggressively than max_norm=10. At 90% clip rate with 4.3× downscaling, small-gradient steps are no longer suppressed relative to clipped steps (as occurs at max_norm=1.0 with ~22× scaling). OOD splits benefited; in_dist started regressing, suggesting the model is approaching the threshold where clipping begins to uniformly suppress useful gradients.
+- **Epochs:** 30/30 in 20.8 min (~41.6 s/epoch, identical n_layers=3 throughput)
+- **Best epoch:** 30/30 (still descending)
+- **W&B run:** `forfket5`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_layers 3 --n_hidden 192 --epochs 30`
+  (grad-clip max_norm=5.0 now in train.py defaults; no extra flags needed)
+- **All subsequent experiments should target val < 63.4801 and test < 54.9834** as the merge threshold.
+- **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + n_hidden=192 + grad-clip=5.0 + everything else**, but the measured val=63.48 is on **n_hidden=128 + grad-clip=5.0 WITHOUT n_hidden=192**. Expected combined val < 63.48. The first n_hidden=192 + grad-clip=5.0 run will confirm the true combined state.
