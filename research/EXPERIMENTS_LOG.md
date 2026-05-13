@@ -1,5 +1,42 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 06:55 — PR #1481: Double physics-attention slices: slice_num 64→128 (CLOSED — dead end)
+
+- Student branch: `charliepai2g24h5-nezuko/double-attention-slices`
+- Hypothesis: Increasing slice_num from 64→128 doubles the number of physics-attention basis tokens, potentially capturing finer-scale flow features. Orthogonal to optimizer/loss changes.
+
+### Results (vs baseline 56.90 / 53.20)
+
+| Metric | Baseline (slice_num=64) | **This PR (slice_num=128)** | Δ | % |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 56.90 | **69.69** | +12.79 | **+22.5%** |
+| test_avg/mae_surf_p | 53.20 | **64.90** | +11.70 | **+22.0%** |
+
+Both val and test regress heavily. All 4 val splits worse.
+
+### Per-split val (slice_num=128)
+
+| Split | Baseline | slice_num=128 | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 60.26 | 72.55 | +12.29 |
+| geom_camber_rc | 75.20 | 88.47 | +13.27 |
+| geom_camber_cruise | 37.01 | 47.88 | +10.87 |
+| re_rand | 55.11 | 69.87 | +14.76 |
+
+- Metrics: `models/model-charliepai2g24h5-nezuko-slice128_ep16-<timestamp>/metrics.jsonl`
+
+### Analysis & disposition
+
+**Root cause: budget cliff.** Doubling the slice tokens increases per-epoch compute from ~102 s to ~144 s (+41%). With a 30-min hard wall-clock cap the model completed only **13 epochs** instead of 16 — losing the critical cosine-tail epochs (14–16) where val typically falls by ~3–5 points. This is the same failure pattern observed when n_hidden=192 cost 12 epochs vs 13.
+
+**Matched-epoch analysis confirms no per-step improvement either:** even at matched epoch 13, slice_num=128 regresses vs the baseline. The additional attention resolution does not compensate for the increased compute cost — more slice tokens appear to make optimization harder, not easier, consistent with the Transolver design intent (64 slices already covers the mesh resolution adequately).
+
+**Closed (not sent back):** Two independent failure signals (regression + budget cliff). No evidence of value at any epoch count. `n_layers` or `n_head` width changes are cheaper architectural levers to try next.
+
+**Nezuko reassigned:** PR #2005, surf_weight sweep (15 vs 5) on the current δ=0.3 + Lion + BF16 + epochs=16 stack.
+
+---
+
 ## 2026-05-13 06:30 — PR #1755: n_hidden=160 single-arm on Huber δ=0.5+epochs=16 stack (SENT BACK — baseline moved 3rd time)
 
 - Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`

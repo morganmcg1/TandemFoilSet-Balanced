@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 06:30
+- 2026-05-13 07:00
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -35,6 +35,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | **Lion + epochs=16 → −9.2% further (#1780, MERGED)** | **Non-converged at 13 epochs; cosine tail provides 3 more improvement epochs** |
 | **Huber δ=0.5 → −9.3% further (#1639, MERGED)** | **Per-element outlier capping stacks with grad_clip** |
 | **Huber δ=0.3 → −14.2% further (#1880, MERGED)** | **δ curve not bottomed at 0.5; 0.3 optimal — δ=0.2 ties within noise** |
+| slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
 | EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
@@ -53,7 +54,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | #1755 | fern | n_hidden=160 final-gate single-arm on δ=0.3+epochs=16 stack | WIP (sent back 4th time — FINAL gate) | Beat 56.90 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
 | #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 56.90 |
-| #1481 | nezuko | slice_num=128, epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
+| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP — new | Beat 56.90 |
 | #1470 | edward | Instance-norm loss, epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
 
 ## Recently closed/merged
@@ -65,6 +66,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | #1780 | tanjiro | **MERGED** | Lion+epochs=16 → baseline 66.44 (−9.2%). Epochs=16 now structural standard. |
 | #1782 (2nd) | frieren | SENT BACK | lr=2e-4 wins on δ=0.5 stack (val=58.00); above new 56.90 baseline; needs δ=0.3 re-run |
 | #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 56.90; needs δ=0.3 re-run |
+| #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
 | #1463 | askeladd | CLOSED | SWA → val regression; SWALR fights Lion cosine |
 | #1641 | frieren | **MERGED** | Lion optimizer → baseline 73.15 (−22.4%). Largest single-PR gain. |
 
@@ -75,7 +77,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 3. **Does Lion lr=2e-4 beat lr=3e-4 on δ=0.3 stack?** (#1782 frieren) — optimum shifted down before, may shift again
 4. **Does dropout=0.1 compose with δ=0.3?** (#1656 thorfinn) — orthogonal regularization axes
 5. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
-6. **Does slice_num=128 help?** (#1481 nezuko)
+6. **Does surf_weight=15 or 5 beat 10 on δ=0.3+Lion stack?** (#2005 nezuko) — loss balance may have shifted with Huber+Lion
 7. **Does instance-norm loss help val_re_rand?** (#1470 edward)
 8. **Does Huber+epochs=16 compose when δ=0.3 is the default?** (#1879 tanjiro — should auto-pick up δ=0.3 after rebase)
 
@@ -86,6 +88,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
 - **n_hidden=192 (#1755 Arm B, lr=4e-4)**: Budget cliff + grad_norm instability at lr=4e-4. 2× regression evidence.
 - **Huber δ=0.1**: δ=0.3 and δ=0.2 essentially tied; further reduction into δ<0.2 will degrade cruise/re_rand splits due to over-saturation of low-std residuals into linear regime.
+- **slice_num=128 (#1481)**: +22.5% val regression. 41% per-epoch slowdown (144s/epoch) → only 13 epochs in 30-min budget, losing cosine-tail. Even at matched epoch 13, no per-step improvement vs slice_num=64. Architecture already saturated on mesh resolution.
 
 ## Next hypotheses to queue (when students go idle)
 
@@ -96,12 +99,12 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 - #1755 fern: n_hidden=160 on δ=0.3+epochs=16 stack
 - #1844 askeladd: Lion β2=0.999, epochs=16
 - #1656 thorfinn: dropout=0.1 on δ=0.3 stack
-- #1481 nezuko: slice_num=128, epochs=16
+- #2005 nezuko: surf_weight sweep 15 vs 5 on δ=0.3+Lion stack
 - #1470 edward: instance-norm loss, epochs=16
 
 ### Queued ideas (when students finish above)
 
-1. **surf_weight=15 or 5 under δ=0.3+Lion** — optimal weighting may shift with aggressive Huber capping.
+1. **batch=8 + Lion + epochs=13** — larger effective batch; ~30 min with batch=8. (surf_weight sweep now active as #2005)
 2. **batch=8 + Lion + epochs=13** — larger effective batch; ~30 min with batch=8.
 3. **DropPath / stochastic depth** — targeted at Transolver's residual structure; complements dropout.
 4. **Activation sweep** — GELU → SwiGLU/SiLU on full combined stack.
