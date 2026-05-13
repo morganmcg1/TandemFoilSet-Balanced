@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 16:30 UTC (Wave 16: MERGE #2360 inner_dim=288 (16th win); CLOSE #2359/#2361; ASSIGN #2385 thorfinn abs-glu, #2386 fern inner_dim=320, #2391 nezuko ood-upsampling)
+- **Last updated**: 2026-05-13 16:40 UTC (Wave 16: CLOSE #2371 alphonse n_hidden=144 (Outcome C, +19.2%, width axis closed at 128); ASSIGN #2414 alphonse attn-layerscale-0.05 dual LayerScale)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -21,9 +21,9 @@ None received yet on this branch.
 
 ## Current research focus
 
-**Wave 16 — Capacity + conditioning + spectral + attention + AbsGLU.**
+**Wave 16 — Capacity + conditioning + spectral + attention + gate + LayerScale-asymmetry + OOD-sampling.**
 
-The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key Wave 16 closures: #2359 squared-relu FAILED (+5.19% vs baseline — gate axis confirmed closed at ReLU; quadratic amplification of positive activations broke the CFD continuous-regression task); #2360 inner_dim=288 MERGED (16th win, −1.71%). Fresh assignments: thorfinn to AbsGLU gate (tests AbsGLU vs ReGLU: does exact-zero threshold vs absolute-value matter?), fern to inner_dim=320 on ReGLU stack (now viable given epoch-budget mechanism confirmed at 288). Ongoing: nezuko stoch-depth, askeladd FiLM, edward hybrid-σ-3, frieren freqs-no-wd, alphonse n_hidden-144, tanjiro QK-norm.
+The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key Wave 16 closures: #2359 squared-relu FAILED (+5.19% vs baseline — gate axis confirmed closed at ReLU); #2371 n_hidden=144 FAILED (+19.2% vs baseline — width axis closed at 128, quadratic param scaling makes residual-stream width untenable under 30-min cap); #2360 inner_dim=288 MERGED (16th win, −1.71%). Fresh assignment #2414: alphonse dual LayerScale (asymmetric attn=0.05/mlp=0.025 init) — tests whether the deeply-augmented MLP path (SwiGLU+ReGLU+inner=288) has miscalibrated the symmetric γ=0.025 optimum.
 
 **Wave 16 active threads:**
 
@@ -35,7 +35,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 | askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | IN FLIGHT |
 | edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | IN FLIGHT |
 | frieren | #2370 | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | IN FLIGHT |
-| alphonse | #2371 | n-hidden-144 | n_hidden 128→144 width bump (residual stream; inner_dim stays 288 via fern's merge) | IN FLIGHT |
+| alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric; tests whether deep MLP augmentation miscalibrated symmetric γ optimum | ASSIGNED |
 | tanjiro | #2377 | qk-norm-attention | QK normalization on PhysicsAttention (DiT/ViT-22B/SD3 standard, fresh axis) | IN FLIGHT |
 
 ## Key findings from Wave 13/14/15/16
@@ -47,11 +47,11 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 - ReLU = max(0, x) is exactly right: maximum sparsity + identity slope for positive survivors
 - **AbsGLU** (thorfinn NEW): tests whether absolute-value (no dead zone, bidirectional sharpness) could win vs one-sided gate
 
-**Capacity axis (inner_dim active):**
+**Capacity axis (inner_dim active, n_hidden CLOSED):**
 - inner_dim=256 (baseline): val=62.949 (#2304 ReGLU)
 - inner_dim=288 (fern #2360 MERGED): val=61.875 (−1.71%) — epoch budget confirmed; +4.7% sec/epoch
 - inner_dim=320 (fern NEW): natural follow-up; ReGLU's simpler gate may keep 320 in 12-epoch window
-- n_hidden=144 (alphonse IN FLIGHT): broader architectural width test
+- n_hidden=144 (alphonse #2371 CLOSED): +19.18% — width is quadratic-cost, lost 3 epochs to wall-clock cap; residual-stream width axis closed at 128
 
 **Encoder axis findings (#2225, #2286, #2309, #2312):**
 - Hybrid σ=1.0 (#2309) FAILED — redundant low-freq overlap
@@ -95,6 +95,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 | Per-sample scalar Fourier | concat | #2286 class falsified — no spectral structure |
 | Gate: Squared ReLU | ReGLU (ReLU) | #2359 +5.19%; quadratic amplification breaks high-magnitude CFD regression |
 | Gate: SiLU, GELU | ReGLU (ReLU) | SiLU<GELU<ReLU monotonic; axis closed at ReLU (pending AbsGLU test) |
+| n_hidden (residual stream width) | 128 | #2371 +19.18%: quadratic param scaling (n_hidden²) drove n_params +26.07%, lost 3 epochs to wall-clock cap; width is wrong knob under 30-min compute budget |
 
 ## Prioritized open research themes (Wave 16+)
 
@@ -104,7 +105,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 4. **FiLM-style global conditioning** (askeladd #2368): γ/β = MLP(log_Re,AoA0,AoA1) — proper mechanism for per-sample scalars
 5. **Hybrid Fourier σ=3.0** (edward #2369): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
 6. **Learned freqs no-wd + 10× lr** (frieren #2370): unblock the under-trained 6-freq vector
-7. **n_hidden=144 width** (alphonse #2371): residual-stream width bump
+7. **Dual LayerScale init** (alphonse #2414 NEW): asymmetric attn γ=0.05 / mlp γ=0.025 — tests whether the augmented MLP path (SwiGLU+ReGLU+inner=288) miscalibrated the symmetric LayerScale optimum
 8. **QK-norm attention** (tanjiro #2377): unit-normalize Q,K + learnable per-head temperature; DiT/ViT-22B/SD3 standard
 9. **inner_dim=304** bisect: if 320 is compute-bound again, test midpoint between 288 (win) and 320
 10. **Per-block learned freqs**: 5 × 6 = 30 freq params — escalation if frieren no-wd still under-trains

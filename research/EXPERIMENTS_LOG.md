@@ -8,6 +8,33 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:35 — PR #2371 (alphonse n-hidden-144) — **CLOSED** (Outcome C; n_hidden axis closed at 128)
+
+- Branch: `charliepai2g24h4-alphonse/n-hidden-144`
+- Hypothesis: Residual-stream width 128→144 unlocks additional capacity for OOD-camber/Re regimes. Predicted +12.5% n_params; head_dim 32→36.
+- Metric artifact: `models/model-charliepai2g24h4-alphonse-n-hidden-144-20260513-145259/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304 62.949) | n_hidden=144 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 69.925 | 85.345 | +22.05% |
+| val_geom_camber_rc | 74.845 | 84.980 | +13.54% |
+| val_geom_camber_cruise | 44.262 | 57.293 | +29.44% |
+| val_re_rand | 62.765 | 72.468 | +15.46% |
+| **val_avg (primary)** | **62.949** | **75.022** | **+19.18%** |
+| test_avg | 54.221 | 66.627 | +22.88% |
+
+Best epoch: 9 / ~9 trained (timeout-truncated, 3 epochs lost); n_params: 1,047,799 (+26.07%, far higher than predicted 935k); sec/epoch: ~183s median + 2 outlier epochs at 332/247s.
+
+**Analysis:** Quadratic param scaling reality (QKV proj, output proj, MLP all scale as n_hidden² when inner_dim=2·n_hidden) drove n_params +26% vs predicted +12.5%. (128/144)² = 1.266 matches observation. The wider model lost 3 effective epochs AND requires more steps per epoch to converge — under the 30-min cap, the comparison was unwinnable. val_avg trajectory still descending steeply at ep 9 (−10% between ep 8→9), confirming severe under-training.
+
+All 4 splits regressed (val +13% to +29%, test +18% to +30%) — no OOD-specific benefit emerges; if anything the wider net struggles MORE on previously-saturated splits (camber_cruise +29.4%).
+
+**n_hidden axis permanently closed at 128.** Width is the wrong knob to pull under 30-min/run — fern's #2360/#2386 MLP-only inner_dim path is the right capacity axis since it leaves attention and the residual stream alone.
+
+**Reassigning alphonse to dual LayerScale init** — separate the attention pathway γ (test 0.05) from the MLP pathway γ (keep 0.025). Compute-neutral 1-line change.
+
+---
+
 ## 2026-05-13 16:25 — PR #2361 (nezuko stoch-depth-0.05-reglu) — **CLOSED** (Outcome B; stoch-depth axis confirmed at 0.10)
 
 - Branch: `charliepai2g24h4-nezuko/stoch-depth-0.05-reglu`
