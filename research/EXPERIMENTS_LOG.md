@@ -8,7 +8,7 @@ appropriate heading whenever an experiment terminal-completes.
 
 ## Round 2 — build on merged stack (ongoing)
 
-All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3` (includes grad_clip=1.0, wd=1e-3, OneCycleLR, EMA=0.999) before running. Current baseline: **val_avg/mae_surf_p = 112.546** (PR #1520).
+All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3` (includes grad_clip=1.0, wd=1e-3, OneCycleLR, EMA=0.999, AoA+NACA augment, Huber δ=0.5) before running. Current baseline: **val_avg/mae_surf_p = 99.879** (PR #1484, Huber δ=0.5 v2) / test 93.596 (safe 4-split).
 
 ---
 
@@ -24,8 +24,24 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-12 19:54 — PR #1484: Huber loss delta=0.5 and delta=1.0 (alphonse)
-**Branch:** `charliepai2g24h3-alphonse/huber-pressure-loss` | **Status: SENT BACK**
+### 2026-05-13 00:25 — PR #1484 v2: Huber loss δ=0.5 on merged stack (alphonse) — **MERGED ⭐ NEW BASELINE**
+**Branch:** `charliepai2g24h3-alphonse/huber-pressure-loss` | **Status: MERGED**
+
+- **Hypothesis:** Huber loss with δ=0.5 (more aggressive than δ=1.0) clips high-Re gradient extremes; on the merged stack (grad_clip, wd, OneCycle, EMA, augment), the gradient distribution is well-conditioned enough that the round-1 "δ=0.5 hurts single_in_dist" failure mode is no longer present.
+- **val_avg/mae_surf_p (Arm A, δ=0.5):** **99.879** — **−3.13% vs PR #1495 baseline (103.10)**.
+- **test_avg/mae_surf_p (Arm A, safe 4-split):** **93.596** — **−1.23% vs baseline (94.757)**.
+- **Per-split val (Arm A):** single=123.26, rc=118.37, cruise=69.27 (−11.2%!), re_rand=88.62.
+- **Per-split test (Arm A, safe re-eval):** single=111.92, rc=101.71, cruise=75.54, re_rand=85.21.
+- **Arm B (δ=1.0):** val 109.59 / test 102.40 — beats #1520 but loses to #1495; uniformly inferior to Arm A.
+- **Analysis:** On the merged stack, δ=0.5 dominates δ=1.0 on **every per-split surface pressure metric including val_single_in_dist (123.3 vs 127.2)**. The round-1 fear was an artifact of the un-augmented, un-grad-clipped base. With aug + grad_clip + EMA, residual magnitudes are better behaved so more aggressive clipping consistently helps. Both arms still descending at the 14-epoch cap → ceiling is timeout-limited, not δ-limited.
+- **P4 reconciliation:** Arm A used `--use_onecycle True --epochs 50` — the exact "broken" config per P4. Yet it produced the new best result. Hypothesis: Huber loss is itself a gradient-clipping mechanism, interacting beneficially with the truncated OneCycleLR anneal (it does not need the long-tail anneal to converge). The "OneCycleLR broken" claim from PR #1574 was tested under MSE+EMA, not Huber+EMA. P4 needs revisiting under different loss formulations.
+- **Reusable artifact:** `safe_test_eval.py` — committed at repo root, does per-node skip of non-finite `y`. All future PRs should run it on best-val checkpoint for paper-facing 4-split test metrics.
+- **Artifacts:** `models/model-huber-d0p5-onecycle-ema-20260512-225607/{metrics.jsonl,metrics.yaml,test_safe_eval.json}`, `safe_test_eval.py`.
+
+---
+
+### 2026-05-12 19:54 — PR #1484 v1: Huber loss delta=0.5 and delta=1.0 (alphonse) — SENT BACK
+**Branch:** `charliepai2g24h3-alphonse/huber-pressure-loss` | **Status: SUPERSEDED by v2 above**
 
 - **Hypothesis:** Huber loss (delta=1.0 in normalized space) clips high-Re gradient extremes and improves `val_avg/mae_surf_p` by 3–8%.
 - **val_avg/mae_surf_p:** delta=0.5: **108.097**, delta=1.0: **108.104** (both epoch 14; tie within noise).

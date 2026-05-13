@@ -40,10 +40,11 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **103.100** | [#1495](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1495) |
-| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **94.757** | #1495 |
-| `test_avg/mae_surf_p` (as-written; cruise NaN) | NaN | #1495 |
-| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | **98.520** | #1495 |
+| `val_avg/mae_surf_p` | **99.879** | [#1484](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1484) |
+| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **93.596** | #1484 |
+| `test_avg/mae_surf_p` (3-split proxy, excl. cruise) | 99.616 | #1484 |
+
+Previous best (superseded): val 103.100 / test 94.757 — PR #1495 (AoA+NACA augment).
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -247,3 +248,69 @@ cd target/ && python train.py \
 Metrics: `models/model-geom-aoa-augment-r2-20260512-190924/metrics.yaml`
 
 **Safe re-eval side script** for handling cruise NaN: `models/model-geom-aoa-augment-r2-20260512-190924/safe_re_eval.py`. Reusable across experiments — preserves the "skip non-finite samples" semantics by zero-filling `y` where non-finite before the subtraction. All future PRs should commit a similar safe re-eval log for paper-facing test reporting.
+
+---
+
+## 2026-05-13 00:25 — PR #1484: Huber loss (δ=0.5) on merged stack
+
+**New best result. Replaces PR #1495 as running baseline.**
+
+Arm A (δ=0.5) and Arm B (δ=1.0) rebased onto the merged stack
+(`grad_clip=1.0`, `weight_decay=1e-3`, `use_onecycle=True`, `ema_decay=0.999`,
+`augment=True`). Both ran 14 epochs in the 30-min cap (50 configured).
+Both arms still descending at the cap → ceiling is timeout-limited.
+
+**Per-split val (Arm A, huber_delta=0.5, EMA weights, best checkpoint):**
+
+| Split | `mae_surf_p` | `mae_surf_Ux` | `mae_surf_Uy` |
+|-------|---:|---:|---:|
+| val_single_in_dist | 123.261 | 1.220 | 0.616 |
+| val_geom_camber_rc | 118.368 | 2.144 | 0.876 |
+| val_geom_camber_cruise | 69.270 | 0.799 | 0.435 |
+| val_re_rand | 88.616 | 1.463 | 0.620 |
+| **avg** | **99.879** | **1.406** | **0.637** |
+
+**Per-split test (Arm A, safe 4-split re-eval via `safe_test_eval.py`):**
+
+| Split | `mae_surf_p` |
+|-------|---:|
+| test_single_in_dist | 111.924 |
+| test_geom_camber_rc | 101.713 |
+| test_geom_camber_cruise | 75.537 (199/200 samples) |
+| test_re_rand | 85.211 |
+| **avg (4-split safe re-eval)** | **93.596** |
+| avg (3-split proxy, excl. cruise) | 99.616 |
+
+**Arm B (huber_delta=1.0)**: val 109.593 / test 102.399 — beats #1520 but
+loses to #1495 baseline; clearly inferior to Arm A on every split.
+
+**Config (merged into advisor branch train.py):**
+
+| Param | Value |
+|-------|-------|
+| `huber_delta` | **0.5** ← new field (loss switches from MSE to Huber when set) |
+| `n_hidden` / `n_layers` / `n_head` / `slice_num` / `mlp_ratio` | 128 / 5 / 4 / 64 / 2 |
+| `lr` | 5e-4 |
+| `weight_decay` | 1e-3 (from #1491) |
+| `grad_clip` | 1.0 (from #1491) |
+| `use_onecycle` | **True** (from #1520) — **note: this contradicts P4** |
+| `ema_decay` | 0.999 (from #1520) |
+| `augment` | True (from #1495) |
+| `epochs` | 50 configured, 14 completed at 30-min cap |
+
+**Note on schedule (P4 reconciliation):** Arm A used `--use_onecycle True --epochs 50` — the exact config flagged as "broken" in P4 (PR #1574). Yet it produced the new best result. Hypothesis: Huber loss is itself a gradient-clipping mechanism that interacts beneficially with the truncated OneCycleLR anneal. Recommend explicitly testing `--use_onecycle False --epochs 14` for Arm A in a follow-up to isolate the schedule contribution.
+
+**Note on δ direction:** Round-1 result hinted that δ=0.5 hurts `val_single_in_dist`. On the merged stack the picture flips: δ=0.5 dominates δ=1.0 on every split *including* single_in_dist (123.26 vs 127.24). The round-1 finding was an artifact of the un-augmented, un-grad-clipped base.
+
+Reproduce:
+```
+cd target/ && python train.py \
+  --experiment_name huber-d0p5-onecycle-ema \
+  --weight_decay 1e-3 --grad_clip 1.0 \
+  --use_onecycle True --ema_decay 0.999 \
+  --huber_delta 0.5 --epochs 50
+```
+
+Metrics: `models/model-huber-d0p5-onecycle-ema-20260512-225607/{metrics.yaml,test_safe_eval.json}`
+
+**`safe_test_eval.py` is now an advisor-branch artifact** (committed in PR #1484) — every future PR should run it on the best checkpoint for paper-facing 4-split test reporting.

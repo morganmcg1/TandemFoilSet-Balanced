@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 00:20 UTC
+- **Date**: 2026-05-13 00:30 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -13,12 +13,12 @@ None received.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 103.100** — PR #1495 (thorfinn, AoA + NACA camber jitter augmentation).
-Test 4-split safe re-eval = 94.757; 3-split proxy = 98.520.
-Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_max=14`.
-**Composability note:** ran with cosine, not OneCycleLR+EMA. Merged train.py defaults to use_onecycle=True (from #1520), so reproducing requires `--use_onecycle False --epochs 14`. OneCycleLR+EMA+augment composability is untested.
-
-**Best raw number observed (but not merged):** 100.987 — PR #1494 v2 (tanjiro, FiLM on log(Re), rebased onto #1491 only, without augmentation). Sent back to rebase onto post-#1495 base.
+**val_avg/mae_surf_p = 99.879** — PR #1484 v2 (alphonse, Huber loss δ=0.5 on merged stack).
+Test 4-split safe re-eval = **93.596** (−1.23% vs prior #1495 baseline); 3-split proxy = 99.616.
+Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + use_onecycle=True + ema_decay=0.999 + huber_delta=0.5`, 14 epochs at 30-min cap.
+**Per-split val:** single=123.26, rc=118.37, cruise=69.27 (−11.2% absolute on cruise!), re_rand=88.62.
+**Schedule note (P4 revisit):** Arm A used `--use_onecycle True --epochs 50` (the "broken" P4 config) AND won the baseline. Hypothesis: Huber's gradient-clipping property makes the truncated OneCycle anneal benign. Future loss-formulation experiments may not need cosine T_max=14.
+**`safe_test_eval.py` is now the standard 4-split test harness** — committed at repo root via PR #1484. All future PRs must run it on best-val checkpoint for paper-facing test metrics.
 
 **Disproved (closed, mechanistic):** PR #1543 v2 (fern) log-cosh + augment @ 106.93 (+3.71%) / test 100.61 (+6.18%). The v2 − v1 delta ≈ 0 (augmentation added nothing on top of log-cosh, vs +9.4 on MSE) proves log-cosh and augment are SUBSTITUTES, not complements: both target high-Re gradient dominance via different mechanisms. Log-cosh's gradient cap defeats augmentation's purpose on rc split (+13.5% worse, the killer).
 
@@ -28,7 +28,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
-| alphonse | #1484 | `huber-pressure-loss` | WIP — rebase: Huber d=0.5+d=1.0 on full merged stack (2 arms) |
+| alphonse | TBD | `huber-delta-smaller` | IDLE — to be assigned: δ=0.25 + δ=0.1 sweep, plus optional cosine T_max=14 isolation arm |
 | askeladd | #1709 | `focal-per-sample-loss-weighting` | WIP — focal weighting γ=1.0/2.0 (2 arms). Amplifies hard-sample gradient (mechanistic opposite of log-cosh). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1698 | `test-time-augmentation` | WIP — TTA with 2 arms (N=5/9, jitter=0.5°/0.75°) at eval time. Pure inference-time, no training changes. |
@@ -42,7 +42,8 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 ### Confirmed winners (merged)
 1. **Optimization hygiene** (PR #1491): grad_clip=1.0 + wd=1e-3 → 115.40.
 2. **Scheduler + EMA** (PR #1520): OneCycleLR + EMA=0.999 → 112.55 (built on #1491).
-3. **Geometry augmentation** (PR #1495): AoA + NACA camber jitter → **103.10** → new baseline. NOTE: thorfinn's best run used cosine T_max=14, not OneCycleLR.
+3. **Geometry augmentation** (PR #1495): AoA + NACA camber jitter → 103.10.
+4. **Huber loss δ=0.5** (PR #1484 v2): Huber on top of merged stack → **99.879** val / **93.596** test (4-split safe) → new baseline. Note: ran with `--use_onecycle True --epochs 50` (the P4 "broken" config) AND won, contradicting P4 — to be revisited.
 
 ### Promising single-split signal (sent back for v2)
 - **Fourier mesh PE** (nezuko #1662 v1): val_avg 107.19 (+3.97%, fails) BUT `val_single_in_dist = 118.03 vs 125.91 = −6.26%` — first substantial improvement on the historically WORST split. OOD splits regressed (rc +13.7%). Schedule confound (OneCycleLR ep=11 instead of cosine T_max=14). v2 with 2 arms: L=2 capacity-fix and L=4 surface-only scope-fix, both on cosine T_max=14.
@@ -78,18 +79,25 @@ should COMPOUND.** Focal weighting amplifies gradient on hard samples
 the two should compose. This is what P1/P2 *don't* rule out: the per-
 sample axis is orthogonal to per-residual and per-channel surgery.
 
-**P4 (PR #1574): OneCycleLR with `--epochs 50` is broken at 30-min cap.**
-pct_start=0.05 reaches peak LR at step 187/3750, leaving 97% of anneal
-unfired. All 30-min runs use cosine T_max=14 unless explicitly testing
-schedule mechanics.
+**P4 (PR #1574, revisited PR #1484 v2): OneCycleLR with `--epochs 50` was
+flagged broken at 30-min cap under MSE+EMA.** pct_start=0.05 reaches peak
+LR at step 187/3750, leaving 97% of anneal unfired. HOWEVER, alphonse's
+PR #1484 v2 used exactly this "broken" config and produced the new
+baseline (99.879). Refined hypothesis: P4 is loss-specific. Under
+**MSE+EMA** the truncated anneal hurts (regression in #1574). Under
+**Huber+EMA** it does not (because Huber itself bounds the gradient and
+no longer needs the long-tail anneal). Recommendation: when a hypothesis
+modifies the loss formulation, run BOTH `--use_onecycle True --epochs 50`
+and `--use_onecycle False --epochs 14` to isolate. When tuning
+architecture or augmentation, cosine T_max=14 remains the safer default.
 
 ### Potential next directions (round 3+)
-- **Compose winners**: combine Huber + FiLM + log-cosh + curriculum once individual rebases are scored.
-- **Surface-only Huber**: apply Huber to volume nodes, MSE to surface (alphonse follow-up).
+- **Even smaller Huber δ** (alphonse follow-up, queued): δ=0.25 and δ=0.1. The round-1 fear that "δ=0.5 hurts single_in_dist" is eliminated on the merged stack; the optimum may sit further below 0.5. Both arms still descending at 14-epoch cap.
+- **Surface-only Huber**: apply Huber to surface nodes, MSE to volume (the inverse split would also be informative — volume MAE is currently ~3% worse than surface).
 - **Per-sample importance weighting**: weight each sample's loss by 1/y_std_sample.
 - **Relative MAE in physical space**: scale-invariant loss for multi-Re training.
 - **dsdf shape descriptor augmentation** (dims 4-11): deeper geometry augmentation vs. scalar AoA/NACA.
 - **n_layers=7** (depth scaling): orthogonal to width scaling experiments.
-- **Corrected OneCycleLR**: `pct_start * actual_epochs` matched (e.g. `--pct_start 0.2 --epochs 14`) — current default is broken at 30-min cap.
-- **Mesh-aware positional encoding**: signed distance / arc length as Fourier features (nezuko #1662 covers raw-coord Fourier; arc-length variant is the next step).
+- **Mesh-aware positional encoding**: signed distance / arc length as Fourier features (nezuko #1662 v2 covers raw-coord Fourier; arc-length variant is the next step).
 - **Surface-aware attention**: separate slice tokens for surface vs. volume nodes.
+- **Stack winners**: once each in-flight axis settles (SwiGLU, TTA, surf_weight curriculum, focal weighting), test their composability with Huber δ=0.5.
