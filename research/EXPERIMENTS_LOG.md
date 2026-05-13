@@ -691,3 +691,45 @@ Zero student commits since assignment (`d8c4167`, 2026-05-13 00:17 UTC). Pod tel
 ### Follow-up
 
 SwiGLU stays on the round-2 candidate list. To test properly it needs: a cleaner starting state (post-round-1-cleanup branch, single rebase), explicit SwiGLUMLP class template in the PR instructions, and a student who can handle multi-file changes.
+
+## 2026-05-13 12:00 — PR #1692 MERGED: Gradient clipping max_norm=1.0
+
+- **Student:** willowpai2g48h3-fern
+- **Branch:** willowpai2g48h3-fern/grad-clip-1.0
+- **Hypothesis:** Add gradient clipping (max_norm=1.0) to stabilise training against mesh-size heterogeneity across domains. Predicted −1% to −3% val; actual gain much larger.
+
+### Results
+
+| Seed | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch/total |
+|---|---|---:|---:|---:|
+| 2 (BETTER by val) | aoehi425 | 60.0933 | 53.3695 | 35/50 |
+| 1 | ctkgotbo | 61.5739 | 54.0264 | 33/50 |
+| **baseline #1910** | r9zfwd4y | **65.469** | **57.837** | 35/35 |
+
+Per-split test surf_p (seed 2): single_in_dist=62.00, geom_camber_rc=69.47, geom_camber_cruise=32.17, re_rand=49.84
+Per-split test surf_p (seed 1): single_in_dist=59.98, geom_camber_rc=68.64, geom_camber_cruise=35.40, re_rand=52.08
+
+All four test splits finite. All four splits improve on both seeds.
+
+**Grad-norm diagnostic (critical finding):**
+- Mean raw grad norm: 18.86 (s1), 17.74 (s2)
+- Max raw grad norm: 121.01 (s1), 87.16 (s2)
+- Clip rate (>1.0): 99.8% (s1), 100% (s2)
+
+**max_norm=1.0 engages on EVERY step.** This is global step-size normalisation, not spike clipping.
+
+### Conclusion
+
+**MERGED (6th baseline shift).** New baseline: val=60.093, test=53.370.
+
+**−8.2% val / −7.7% test** — largest single-PR gain since torch.compile (−24.3%). Mechanism revealed by fern's own grad-norm logging: the balanced sampler's heterogeneous mesh sizes (cruise vs raceCar tandem vs single) produce large per-batch gradient scale variance. With max_norm=1.0 engaging 100% of the time at 1/18 of the raw gradient norm, the effective step size is decoupled from sample heterogeneity — every update is unit-direction with fixed LR. This is more like "natural gradient approximation" than clip-based regularisation.
+
+All four test splits improve uniformly, with the largest relative gains on geom_camber_cruise (−18%) and re_rand (−11%) — the OOD splits with the most diverse meshes.
+
+Broadcast heads-up to all 7 in-flight PRs with new bar val < 60.09, test < 53.37.
+
+### Follow-up
+
+- **fern → PR #2246 (max_norm=5.0 bisect):** bisect between 1.0 (winner) and unclipped (~∞ baseline). max_norm=5.0 still clips most steps but at 5× magnitude. Tests if softer normalisation finds a better sweet spot.
+- **If the bisect finds an optimum above 1.0:** the step-size-decoupling story is confirmed; the optimal max_norm is the geometric mean of the raw-norm distribution.
+- **Long-term question:** could an adaptive clip (clip by quantile of running norm, not fixed threshold) do even better? Lower priority for round 1.

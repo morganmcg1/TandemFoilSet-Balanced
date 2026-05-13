@@ -8,7 +8,7 @@
 
 ## Research focus
 
-Round-1 baseline has shifted **five times in ~10 hours** through stacking compatible winners — cumulative **−45.2% val, −47.3% test**:
+Round-1 baseline has shifted **six times in ~14 hours** through stacking compatible winners — cumulative **−49.7% val, −51.4% test**:
 
 | Merge | Time | val | test | Δ vs prior |
 |---|---|---:|---:|---:|
@@ -16,29 +16,30 @@ Round-1 baseline has shifted **five times in ~10 hours** through stacking compat
 | PR #1505 (Huber β=0.5 surf) | 2026-05-13 00:00 | 113.794 | 101.782 | −4.74% val, −7.19% test |
 | PR #1715 (bf16 AMP) | 2026-05-13 02:00 | 89.597 | 79.907 | −21.3% val, −21.5% test |
 | PR #1810 (torch.compile dynamic=True) | 2026-05-13 05:15 | 67.831 | 59.784 | −24.3% val, −25.2% test |
-| **PR #1910 (vol-Huber β=0.5)** | **2026-05-13 07:30** | **65.469** | **57.837** | **−3.5% val, −3.3% test** |
+| PR #1910 (vol-Huber β=0.5) | 2026-05-13 07:30 | 65.469 | 57.837 | −3.5% val, −3.3% test |
+| **PR #1692 (grad_clip max_norm=1.0)** | **2026-05-13 12:00** | **60.093** | **53.370** | **−8.2% val, −7.7% test** |
 
-The current `train.py` now has **five** stacked changes: mask after slice softmax (~line 125), Huber β=0.5 on surf (lines 260, 508) → now **also on vol** (lines 265, 515), bf16 autocast (lines 255, 506), and `torch.compile(model, dynamic=True)` at line 451. **Still compute-bound at 35 epochs (best=last on both PR #1910 seeds).**
+The current `train.py` now has **six** stacked changes: mask after slice softmax, Huber β=0.5 on surf and vol, bf16 autocast, `torch.compile(dynamic=True)`, and `clip_grad_norm_(max_norm=1.0)` before each optimizer step. **Still compute-bound (best=last on both PR #1692 seeds).**
 
 **Pattern emerging from round 1:**
-- **All five winners are orthogonal mechanisms** (correctness → loss(surf) → compute(bf16) → compute(compile) → loss(vol)). They stack additively — cumulative val 119.45 → 65.47 (−45.2%).
-- **Loss-formulation wins stack:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) have now separately contributed. OOD splits drive both wins (Huber suppresses outlier errors, OOD samples have more outliers). Combined they gave −8% on val.
-- **vol-Huber per-split signal:** OOD splits (rc −5.7%, cruise −4.1%, re_rand −6.9%) all improved; `single_in_dist` regressed +3.8% (possible over-weighting of surf after vol gradient quality improved). See PR #2041.
-- **Best=last at 35 epochs still** → compute remains the binding constraint. More compute-side levers (bs=8 frieren #1940) and schedule fixes (nezuko #1843) are the highest-value remaining axes.
-- **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures on n_hidden, n_layers, slice_num, mlp_ratio).
+- **All six winners are orthogonal mechanisms** (correctness → loss(surf) → compute(bf16) → compute(compile) → loss(vol) → optimisation(grad_clip)). Cumulative val 119.45 → 60.09 (−49.7%).
+- **Critical finding from #1692:** grad_clip max_norm=1.0 engages on **100% of training steps** (mean raw grad norm ~18-19). This is **global step-size normalisation**, not spike clipping. The balanced sampler's mesh-size heterogeneity (cruise vs raceCar) produces huge per-batch gradient variance; normalisation removes this variance from the effective LR.
+- **All four test splits improved uniformly** — geom_camber_cruise −18%, re_rand −11% are the biggest movers.
+- **New dominant research question:** what is the optimal max_norm? If 1.0 wins vs unclipped, and 1.0 is always clipping, is there a better threshold? fern → #2246 bisects with max_norm=5.0.
+- **Loss-formulation wins stack:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) combined to −8% on val.
+- **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures).
 
-Round 1 in-flight (8 PRs):
-- **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline (just assigned; orthogonal to all in-flight; reset from stuck SwiGLU #1735)
-- **#1589 tanjiro (AdamW betas)**: from pre-mask — vol-Huber heads-up posted (5th baseline shift)
-- **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber — vol-Huber heads-up posted (5th baseline shift)
-- **#1843 nezuko (Cosine T_max=35)**: on compile baseline — vol-Huber heads-up posted
-- ~~**#1882 askeladd (Huber β=0.75 surf)**: CLOSED — +8.6%/+10.0% regression, β-axis fully bracketed (0.25 and 0.75 both fail, 0.5 optimal and robust across all 5 baseline shifts)~~
-- **#1940 frieren (batch_size=8 + sqrt-LR scaling)**: on compile baseline — vol-Huber heads-up posted
-- **#2017 edward (weight_decay 1e-4 → 5e-4)**: SENT BACK — val +0.67% regression (per-split: in-dist improved, rc OOD regressed). Sent back for wd=2e-4 bisection.
-- **#2041 thorfinn (surf_weight 10 → 5)**: on vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance)
-- **#2163 askeladd (per-channel β: β_p=0.25, β_Ux=β_Uy=0.5)**: on vol-Huber baseline (just assigned; test if surf_p benefits from more-linear loss shape following vol-Huber direction)
+Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
+- **#2246 fern (grad-clip max_norm=5.0 bisect)**: on grad-clip baseline (just assigned; bisect clip threshold between 1.0 winner and unclipped)
+- **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline, grad-clip heads-up posted
+- **#2163 askeladd (per-channel β: β_p=0.25)**: on vol-Huber baseline, grad-clip heads-up posted
+- **#2041 thorfinn (surf_weight 10 → 5)**: on vol-Huber baseline, grad-clip heads-up posted; code committed (11:12)
+- **#2017 edward (weight_decay → 2e-4)**: sent back for bisection, grad-clip heads-up posted
+- **#1940 frieren (batch_size=8 + sqrt-LR)**: on compile baseline, code committed (11:12), grad-clip heads-up posted
+- **#1843 nezuko (Cosine T_max=35)**: on compile baseline, code committed (09:21), grad-clip heads-up posted
+- **#1589 tanjiro (AdamW betas 0.9, 0.95)**: freshly rebased (11:19), grad-clip heads-up posted
 
-**New merge bar: val < 65.47, test < 57.84, all four test splits finite.**
+**New merge bar: val < 60.09, test < 53.37, all four test splits finite.**
 
 **Latest diagnostic finding (2026-05-13 03:00 from PR #1509 close):** The cosine schedule `T_max=MAX_EPOCHS=50` mis-tunes the LR decay to a never-reached horizon. At the bf16 baseline's 18 epochs, end-of-run LR is at ~81% of peak (4.07e-4 vs 5e-4) — the schedule never actually decays. PR #1843 isolates this as a single-axis test.
 
@@ -64,7 +65,8 @@ Round 1 in-flight (8 PRs):
 | #1511 | thorfinn  | Deeper (5→7 layers)              | CLOSED on bf16 (+19.5% val, +19.8% test — depth axis closed) |
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, pre-mask, compile heads-up posted (4th baseline shift) |
 | #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) — retest in progress as #1939 |
-| #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask pre-Huber, compile heads-up posted (3rd baseline shift); pod 13 restarts |
+| #1692 | fern      | Gradient clipping (max_norm=1.0) | **MERGED** 12:00 (val=60.09, test=53.37) — **6th baseline shift, −8.2% val, −7.7% test**; 100% clip rate reveals global step-size normalisation mechanism |
+| #2246 | fern      | Grad-clip bisect: max_norm=5.0   | WIP, grad-clip baseline (just assigned; bisect the clip threshold) |
 | #1712 | askeladd  | Huber β=0.25 (β-tune)            | CLOSED (+6.6% val on bf16; bounds β from below) |
 | #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | CLOSED (stuck — 22 pod restarts, 0 commits in 10h; reset, not verdict on SwiGLU) |
@@ -79,7 +81,7 @@ Round 1 in-flight (8 PRs):
 | #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
 | #2041 | thorfinn  | surf_weight 10 → 5               | WIP, vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance) |
 
-**Merged:** 5 (mask-aware, Huber β=0.5 surf, bf16, compile, **vol-Huber β=0.5**). **Closed:** 11 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, mlp_ratio=4-on-compile #1939, β=0.75-on-vol-Huber #1882, **SwiGLU-stuck #1735**). **Open:** 9 (2 needing rebase + 4 on compile baseline + 3 on vol-Huber baseline: thorfinn #2041, askeladd #2163, alphonse #2180).
+**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 11. **Open:** 8 (tanjiro #1589, frieren #1940, nezuko #1843, thorfinn #2041, edward #2017, askeladd #2163, alphonse #2180, **fern #2246**).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -93,8 +95,8 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.
-- **If grad_clip wins (#1692 fern):** explore coupled weight-decay + LR revisits.
-- **If dropout=0.1 wins (#2180 alphonse):** attention-layer regularization is productive; follow-up with dropout sweep (0.05, 0.15). SwiGLU stays as round-2 capacity-shape candidate for cleaner future assignment.
+- **grad_clip MERGED (#1692, −8.2% val):** 100% clip rate = global step-size normalisation. fern #2246 bisects with max_norm=5.0 to find the sweet spot. After bisect: consider coupling with LR rescale (if max_norm=N always clips, the effective LR is lr × N/raw_norm — explicit LR tuning becomes redundant).
+- **If dropout=0.1 wins (#2180 alphonse):** attention-layer regularization stacks with grad_clip; follow-up with dropout sweep (0.05, 0.15). SwiGLU stays as round-2 capacity-shape candidate.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack.
 
 Round-2 priority queue (post-round-1-cleanup):
