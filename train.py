@@ -438,7 +438,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=2,
+    n_head=1,
     slice_num=32,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -448,6 +448,7 @@ print(f"slice_num: {model_config['slice_num']}")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 
 model = Transolver(**model_config).to(device)
+print(f"Architecture: n_head=1 (dim_head=128), n_hidden=128 — full hidden width per head")
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
