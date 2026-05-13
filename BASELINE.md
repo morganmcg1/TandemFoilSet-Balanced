@@ -8,30 +8,43 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **94.22** | PR #1565 (merged 2026-05-13) — BF16 autocast on lr=1e-3+grad_clip stack |
-| **test_avg/mae_surf_p** | **87.10** | PR #1565 — all 4 splits finite |
-| Peak VRAM | 32.94 GB | PR #1565 — 22% reduction vs FP32 (42.11 GB) |
-| s/epoch | 100.87 | PR #1565 — 23% faster vs FP32 (131.44 s) |
+| **val_avg/mae_surf_p** | **73.15** | PR #1641 (merged 2026-05-13) — Lion optimizer (lr=3e-4) on BF16+grad_clip stack |
+| **test_avg/mae_surf_p** | **66.76** | PR #1641 — all 4 splits finite |
+| Peak VRAM | 42.11 GB | PR #1641 — Lion run (FP32; merged stack now has BF16, expect ~33 GB) |
+| s/epoch | 134.3 s | PR #1641 — Lion run pre-BF16; with BF16 expect ~100 s |
 
-### Per-split val (PR #1565, epoch 13)
+### Per-split val (PR #1641, epoch 13)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---:|---:|---:|
-| val_single_in_dist | 107.86 | 1.320 | 0.651 |
-| val_geom_camber_rc | 105.04 | 2.062 | 0.882 |
-| val_geom_camber_cruise | 73.65 | 0.816 | 0.483 |
-| val_re_rand | 90.33 | 1.432 | 0.667 |
-| **val_avg** | **94.22** | 1.408 | 0.671 |
+| val_single_in_dist | 80.78 | 0.906 | 0.498 |
+| val_geom_camber_rc | 90.86 | 1.614 | 0.736 |
+| val_geom_camber_cruise | 51.56 | 0.567 | 0.400 |
+| val_re_rand | 69.39 | 1.078 | 0.554 |
+| **val_avg** | **73.15** | 1.041 | 0.547 |
 
-### Per-split test (PR #1565, epoch 13 best checkpoint)
+### Per-split test (PR #1641, epoch 13 best checkpoint)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 91.78 |
-| test_geom_camber_rc | 93.27 |
-| test_geom_camber_cruise | 79.54 |
-| test_re_rand | 83.81 |
-| **test_avg** | **87.10** |
+| test_single_in_dist | 69.02 |
+| test_geom_camber_rc | 77.38 |
+| test_geom_camber_cruise | 59.49 |
+| test_re_rand | 61.14 |
+| **test_avg** | **66.76** |
+
+## 2026-05-13 01:20 — PR #1641: Lion optimizer (lr=3e-4) (MERGED)
+
+- **val_avg/mae_surf_p: 73.15** (↓ 22.4% from 94.22 — largest single-PR gain this round)
+- **test_avg/mae_surf_p: 66.76** (↓ 23.4% from 87.10)
+- **Peak VRAM: 42.11 GB** (FP32 run; merged stack now has BF16 so future runs ~33 GB)
+- **Metric artifacts:** `models/model-charliepai2g24h5-frieren-lion_lr3e4-20260512-225827/metrics.jsonl` (winner); `models/model-charliepai2g24h5-frieren-lion_lr1_5e4-20260512-235646/metrics.jsonl` (arm 1)
+- **What changed:** Replaced AdamW with Lion optimizer from `lion-pytorch`. Lion lr=3e-4 (= AdamW lr/3.3), lion_wd=6e-5 (= wd/1.67). Added `lion_lr` and `lion_weight_decay` fields to Config. All other config identical: grad_clip(max_norm=1.0), warmup3+cosine13, MSE loss, batch=4, surf_weight=10.0, seed=42.
+- **Why it worked:** Lion's per-parameter sign-based update is a stronger version of the global gradient renormalization our baseline already applies via grad_clip. Where grad_clip renormalizes the full gradient vector to L2-norm ≤ 1, Lion takes each parameter's gradient and applies `±lr` regardless of its magnitude — per-parameter sign quantization. This eliminates gradient magnitude variance entirely across the parameter space, producing uniform step sizes across attention slices, MLP layers, and projection matrices. The Transolver's heterogeneous parameter structure (different gradient scales in PhysicsAttention vs MLP projections) benefits strongly from this uniformity. Two arms: lr=1.5e-4 (val 75.17) and lr=3e-4 (val 73.15 — winner).
+- **Reproduce:**
+  ```bash
+  pip install lion-pytorch && cd target/ && python train.py --epochs 13 --lion_lr 3e-4 --lion_weight_decay 6e-5 --experiment_name lion_lr3e4 --agent <student>
+  ```
 
 ## 2026-05-13 01:05 — PR #1565: BF16 autocast (MERGED)
 
@@ -111,13 +124,14 @@ no W&B.
 | Activation | GELU |
 | Loss | MSE in normalized space: `vol_loss + 10 * surf_loss` |
 | Surface weight | 10.0 |
-| Optimizer | AdamW, lr=1e-3, weight_decay=1e-4 |
-| LR schedule | CosineAnnealingLR, T_max=epochs |
+| Optimizer | **Lion, lr=3e-4, weight_decay=6e-5** (changed from AdamW lr=1e-3) |
+| LR schedule | LambdaLR, 3-epoch warmup + cosine to T_max=epochs |
+| Grad clip | max_norm=1.0 |
 | Batch size | 4 (variable mesh sizes, pad_collate to N_max) |
 | Sampler | WeightedRandomSampler (balanced domain mix) |
-| Max epochs | 50 (configurable via `--epochs`) |
+| Max epochs | 13 (within 30-min wall-clock) |
 | Timeout | 30 min wall-clock (hard cap) |
-| Precision | FP32 |
+| Precision | BF16 autocast in forward pass |
 
 ## Primary metric
 
