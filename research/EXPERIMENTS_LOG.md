@@ -604,3 +604,58 @@ Additionally, askeladd's LIVE this run was 4.5 points worse than #1424's reporte
 The within-run SWA-over-LIVE delta (3-5%) is a clean diagnostic for schedule basin flatness. Even though SWA didn't beat baseline, the technique correctly detected the flatter basin in cruise (the in-distribution split) vs the curved basins in OOD splits — useful insight for future basin-shape questions.
 
 ---
+
+## 2026-05-13 00:53 — PR #1682: Pure L1 loss (tanjiro)
+
+- **Branch:** `charliepai2g48h2-tanjiro/pure-l1-loss`
+- **Hypothesis:** Replacing Smooth L1 (β=0.1) with pure `F.l1_loss` (no quadratic regime) gives a tighter surrogate for the MAE evaluation criterion, since every residual contributes a constant-magnitude gradient.
+- **Status:** MERGED ✅ — new baseline 83.230
+
+### Results
+
+| Split | Baseline (#1684) | Pure-L1 | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 103.231 | **99.310** | −3.8% |
+| val_geom_camber_rc | 95.256 | 95.316 | +0.06% |
+| val_geom_camber_cruise | 60.589 | 61.818 | +2.0% |
+| val_re_rand | 79.170 | **76.477** | **−3.4%** |
+| **val_avg/mae_surf_p** | **84.562** | **83.230** | **−1.58%** |
+| **test_avg/mae_surf_p** | **74.947** | **73.513** | **−1.91%** |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-tanjiro-pure-l1-loss-20260513-001624/metrics.jsonl`
+
+### Commentary
+
+Hypothesis confirmed within predicted range (−1% to −4%). Pure L1 removes the β=0.1 quadratic zone, which was lightly load-shedding small-residual gradient pressure. Strongest gain on val_re_rand (−3.4%, highest-variance split), val_single (−3.8%). Cruise slightly regresses (+2.0%) — consistent with the interpretation that cruise meshes have more small residuals near convergence that the quadratic zone was previously handling smoothly.
+
+Gradient stability confirmed: peak |pred| ≈ 8.5K in physical units (117× below alarm threshold). `grad_clip=1.0` sufficient.
+
+**Canonical loss is now: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5.**
+
+---
+
+## 2026-05-13 00:53 — PR #1723: OneCycleLR (askeladd) — SENT BACK for rebase
+
+- **Branch:** `charliepai2g48h2-askeladd/onecycle-lr-pct03`
+- **Hypothesis:** OneCycleLR with pct_start=0.3 peaks LR at 30% of training (epoch 4 of 14) instead of 14% (epoch 2 of 14). Later peak + smooth final decay to near-zero.
+- **Status:** SENT BACK ↩️ — beats old baseline 84.562 (val=83.397, −1.38%) but doesn't beat new 83.230 baseline. Needs rebase + rerun stacked with pure-L1.
+
+### Results (on Smooth L1 β=0.1 + cosine baseline 84.562)
+
+| Split | Baseline (#1684) | OneCycleLR | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 103.231 | 101.455 | −1.72% |
+| val_geom_camber_rc | 95.256 | 96.717 | +1.53% |
+| val_geom_camber_cruise | 60.589 | 58.790 | −2.97% |
+| val_re_rand | 79.170 | 76.626 | **−3.21%** |
+| **val_avg/mae_surf_p** | **84.562** | **83.397** | **−1.38%** |
+| **test_avg/mae_surf_p** | **74.947** | **73.095** | **−2.47%** |
+
+Schedule trajectory confirmed: peak at epoch 4, monotonic descent from epoch 7, final LR ≈ 0.
+
+### Why sent back
+
+OneCycleLR change is orthogonal to pure-L1 (schedule vs loss). Askeladd's result (83.397) was on the Smooth L1 stack. After tanjiro's pure-L1 merged (new baseline 83.230), stacking both should give ~82.0. Sent back to rebase onto current advisor HEAD (which has pure-L1), keep OneCycleLR schedule, re-run with --epochs 14.
+
+---
