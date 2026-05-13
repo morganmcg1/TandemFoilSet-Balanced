@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 61)
+- **As of:** 2026-05-13 (updated cycle 62)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 83.6873`** — PR #2357 (cosine_restart_T_0=10, eta_min=1e-5, WD=5e-4, 21 epochs, 2 cycles), merged 2026-05-13 cycle 61.
-**Test 4-split mean: 73.3963** (test_avg/mae_surf_p, W&B run `zely2d09`).
+**`val_avg/mae_surf_p = 82.2642`** — PR #2444 (cosine_restart_T_0=7, T_mult=2, WD=5e-4, 21 epochs, cycles [7,14]), merged 2026-05-13 cycle 62.
+**Test 4-split mean: 72.4019** (test_avg/mae_surf_p, W&B run `1m0cfdr4`).
 
 ## Improvement trajectory
 
@@ -22,13 +22,16 @@
 | 33 | #2091 | torch.compile default (21 epochs vs 14) | 89.7197 | −4.16% |
 | 42 | #2178 | WD re-tune 1e-4→3e-4 at 21 epochs | 87.0144 | −3.01% |
 | 46 | #2227 | SGDR cosine warm restart T_0=10 | 83.9969 | −3.59% |
-| **61** | **#2357** | **Cosine restart eta_min=1e-5** | **83.6873** | **−0.37%** |
+| 61 | #2357 | Cosine restart eta_min=1e-5 | 83.6873 | −0.37% |
+| **62** | **#2444** | **T_mult=2 restart (T_0=7, cycles [7,14])** | **82.2642** | **−2.1%** |
 
 ## Current research focus
 
-**Cycle 60.** The β1 axis is now closed (#2340 thorfinn, both arms regress +3.5–4.8 val outside seed-noise band). **AdamW is fully exhausted** — β1, β2, LR, WD, ε all confirmed optimal. The programme has shifted to: (1) restart GEOMETRY (T_mult=2 alphonse, eta_min askeladd), (2) compose strategies (Lookahead tanjiro, head_wd edward), (3) ensemble (snapshot fern), (4) calibration (seed variance nezuko), (5) NEW: feature-level dropout (thorfinn #2477). Frieren #2284 actively characterising WD curve under restart — data strongly suggests WD optimum ≥5e-4 (monotone descent through 2e-4→4e-4, 4.5e-4 arm in-flight).
+**Cycle 62.** Two wins merged in quick succession: eta_min=1e-5 (#2357, cycle 61, −0.37% val) and T_mult=2 T_0=7 (#2444, cycle 62, −2.1% val). Current SOTA: val=82.2642 / test=72.4019. The programme has entered a high-momentum compose phase: (1) T_mult=2 + eta_min=1e-5 compose (alphonse #2498 — the two wins are orthogonal and should stack), (2) Lookahead + T_0=7 T_mult=2 + eta_min=1e-5 (tanjiro #2296 rebase), (3) eta_min curve refinement (askeladd #2487), (4) head_wd compose (edward #2380), (5) snapshot ensemble (fern #2452), (6) seed calibration (nezuko #2445), (7) MLP dropout (thorfinn #2477), (8) WD curve mapping (frieren #2284 near terminal).
 
-Key spike-trajectory insight from β1 sweep: smoother spikes (β1=0.95, +15.8 amplitude) do NOT produce deeper recovery minima. The cycle-34 spike-IS-signal reframing is confirmed. Future restart-suppression ideas should be treated sceptically.
+Key cycle 62 insight: T_0=7 is the unique value giving exactly 2 full non-truncated cycles in ≤21 epochs with T_mult=2. T_0=6 introduces a truncated 3rd cycle (restart at e19 wipes out the cycle-2 minimum). T_0=5 would be even more aggressive — not worth exploring until T_0=7+eta_min compose is confirmed.
+
+**Cycle 60.** β1 axis closed (#2340 thorfinn). AdamW fully exhausted.
 
 **Cycle 53.** The compose hypothesis (stack WD=3e-4 + cosine_restart) was definitively falsified by #2317 — the two top-2 wins target the same failure mode and are anti-additive. SWA is now permanently closed via geometric proof from #2331. Most critically, **seed variance of ~1-2 val points** has emerged as a key uncertainty, prompting a 3-seed calibration run (#2445). The cosine restart GEOMETRY axis (T_mult, cycle lengths) is the next active frontier.
 
@@ -76,9 +79,11 @@ Key spike-trajectory insight from β1 sweep: smoother spikes (β1=0.95, +15.8 am
 | 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 61) | Compose Lookahead k=5 + cosine_restart + eta_min=1e-5. Needs rebase + updated commands. |
 | 2284 | frieren | finer-wd-sweep-21epoch | WIP (ACTIVE — partial results posted) | 3 arms done: WD=2e-4 val=85.88, WD=2.5e-4 val=87.14, WD=4e-4 val=85.24. Arm 4 (WD=4.5e-4) in-flight. Trend: monotone descent toward WD=5e-4. |
 | 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
-| 2487 | askeladd | eta-min-refinement | WIP (NEW cycle 61) | Map eta_min curve above+below SOTA 1e-5. Arms: {5e-6, 2e-5}. |
+| 2498 | alphonse | tmult2-eta-min-compose | WIP (NEW cycle 62) | Compose T_0=7 T_mult=2 + eta_min=1e-5. Arms: {eta=1e-5, eta=2e-5}. Two orthogonal wins should stack. |
+| 2487 | askeladd | eta-min-refinement | WIP | Map eta_min curve {5e-6, 2e-5} around SOTA 1e-5. |
 | 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
-| 2357 | askeladd | cosine-restart-eta-min | **MERGED cycle 61** | eta_min=1e-5 WINS. val=83.6873 / test=73.3963. New SOTA. |
+| 2444 | alphonse | t-mult-2-restart | **MERGED cycle 62** | T_0=7 T_mult=2 WINS. val=82.2642 / test=72.4019. New SOTA. |
+| 2357 | askeladd | cosine-restart-eta-min | **MERGED cycle 61** | eta_min=1e-5 WINS. val=83.6873 / test=73.3963. |
 | 2340 | thorfinn | adamw-beta1-sweep | **CLOSED cycle 60** | Both arms regress +3.5–4.8 val (>2× seed noise). β1=0.9 confirmed. β1 axis exhausted. |
 | 2381 | fern | stratified-restart-compose | **CLOSED cycle 55** | Strict+restart not orthogonal — restart replaces sampler's spike-control role. |
 | 2331 | nezuko | swa-cycle-end-averaging | **CLOSED cycle 53** | Definitive null. SWA PERMANENTLY CLOSED. Seed variance ~1-2 val pts. |

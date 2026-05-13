@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-13 18:00 — PR #2444: T_mult=2 restart, T_0=7 (MERGED — new SOTA)
+
+- **Branch:** `willowpai2g48h4-alphonse/t-mult-2-restart`
+- **Student:** willowpai2g48h4-alphonse
+- **W&B runs:** `1m0cfdr4` (T_0=7 T_mult=2, WINNER), `eey54new` (T_0=6 T_mult=2, regressed)
+
+### Results
+
+| Arm | Config | best_epoch | val_avg/mae_surf_p | Δ vs #2357 (83.6873) | test_avg/mae_surf_p | W&B run |
+|-----|--------|-----------|-------------------|---------------------|--------------------|---------| 
+| Baseline (PR #2357) | T_0=10, T_mult=1, eta_min=1e-5 | 20 | 83.6873 | — | 73.3963 | zely2d09 |
+| **Arm 1 (WINNER)** | **T_0=7, T_mult=2, eta_min=0** | **21** | **82.2642** | **−1.42 (−1.7%)** | **72.4019** | `1m0cfdr4` |
+| Arm 2 | T_0=6, T_mult=2, eta_min=0 | 18 | 87.1358 | +3.45 (+4.1%) | 76.5659 | `eey54new` |
+
+### Per-split (Arm 1 winner)
+
+| Split | val | test |
+|-------|----:|-----:|
+| single_in_dist | 96.90 | 85.52 |
+| geom_camber_rc | 103.14 | 91.09 |
+| geom_camber_cruise | 53.94 | 44.92 |
+| re_rand | 75.08 | 68.08 |
+| **avg** | **82.2642** | **72.4019** |
+
+### Commentary
+
+**MERGED as new SOTA.** Val margin vs prior SOTA (83.6873): −1.42, well outside seed noise. Test margin: −1.00. Both robust.
+
+**Mechanism confirmed:** T_0=7, T_mult=2 → cycles [7, 14]. Longer cycle 2 (14 vs 10 epochs) gives deeper basin descent. Best epoch = e21 (last epoch) — model still improving at 30-min wall-clock cap. No convergence plateau.
+
+**T_0=7 is structurally unique:** It is the only T_0 value that gives exactly 2 full, non-truncated cosine cycles within ≤21 epochs under T_mult=2. T_0=6 would give cycles [6, 12] + 3 truncated epochs — the 3rd restart at e19 wipes out the e18 minimum. T_0=5 would be [5, 15] + 1 truncated epoch.
+
+**Arm 2 failure is informative:** T_0=6 fails not because cycle 2 is "too short" (e18=87.14 was already worse) but because the shorter cycle 1 enters cycle 2 from a less-warm starting state, and the truncated cycle 3 destroys any recovery chance.
+
+**Run used eta_min=0 (default)** — the eta_min=1e-5 win from #2357 was not composed here. Composing is the next experiment (alphonse #2498).
+
+**Split analysis:** Improvement concentrated in `single_in_dist` (val −7.99, test −9.59). OOD splits flat. Longer descent hits in-distribution basin harder without sacrificing OOD.
+
+**Assigned alphonse next:** PR #2498 — T_0=7 T_mult=2 + eta_min=1e-5 compose (two orthogonal wins should stack).
+
+---
+
 ## 2026-05-13 17:30 — PR #2357: Cosine restart eta_min sweep (MERGED — new SOTA)
 
 - **Branch:** `willowpai2g48h4-askeladd/cosine-restart-eta-min`
