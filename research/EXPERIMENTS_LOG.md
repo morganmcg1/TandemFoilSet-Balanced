@@ -346,3 +346,39 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 - Branch: nezuko/n-layers-6-fourier-wider
 - Hypothesis: Depth failed at n_hidden=128 due to training bottleneck (in_dist regressed most). At n_hidden=192 + Fourier (richer residual streams and explicit positional encoding), an extra layer has more structure to compose. Deeper nets extract higher-order feature interactions when input encoding is expressive enough.
 - Status: WIP (newly assigned). Target: test_avg < 93.29.
+
+## 2026-05-13 03:20 — PR #1395: Lion optimizer (lr=1.5e-4) (MERGED ✓)
+- Branch: willowpai2g48h1-thorfinn/lion-optimizer
+- Hypothesis: AdamW's second-moment accumulation is stable but slow; Lion's sign-momentum uses fixed-size steps with momentum for sharper convergence. Lion lr = ~1/5× AdamW lr per paper guidance.
+- W&B run: `xhg3h5mi` (trial-3) — group `lion-optimizer`
+- Status: **MERGED ✓ — new provisional best test=83.77 (Lion alone, pre-Fourier)**
+
+| Metric | Lion | Fourier baseline (#1387) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | **92.70** | 103.29 | **−10.26%** |
+| **test_avg/mae_surf_p** | **83.77** | 93.29 | **−10.20%** |
+| test_single_in_dist | **90.07** | 97.57 | −7.69% |
+| test_geom_camber_rc | 98.72 | 106.32 | −7.15% |
+| test_geom_camber_cruise | **60.96** | 72.25 | −15.63% |
+| test_re_rand | **85.32** | 97.04 | −12.08% |
+| Peak GPU memory | ~43 GB | 42.5 GB | similar |
+| Optimizer memory | no second-moment buffer | — | ~50% reduction vs AdamW |
+
+**Analysis**: Far exceeded predicted −2% to −5%. Lion's sign-momentum with lr=1.5e-4 outperforms AdamW 7e-4 by a massive margin on all splits. The rc split had previously been the weakest link for all improvements — Lion helps rc too (−7.15%). Cruise gets the biggest boost (−15.6%). The model had 43 GB GPU usage at bs=4 + n_hidden=192 + Lion, vs ~94 GB for AdamW at bs=8. This opens an important budget for bs=8 exploration. CRITICAL: run was on pre-Fourier baseline (space_dim=2). After merge, train.py has Lion + Fourier (space_dim=34) — compound result pending.
+
+**Action**: Merged. New provisional baseline test=83.77. Assigned thorfinn n_head=8 (first test on full stack + attention diversity); assigned askeladd lion-bs-8-sqrt2-lr (bs=8 now fits with Lion's 43 GB budget).
+
+## 2026-05-13 03:25 — PR #1771: Wider-192 schedule realigned epochs=14 (CLOSED ✗)
+- Branch: willowpai2g48h1-askeladd/wider-192-schedule-realigned
+- Hypothesis: T_max=18 with only 14-15 completable epochs → truncated cosine. Setting T_max=14 aligns schedule to actual budget.
+- W&B run: `9ltpngvo` — group `wider-192-schedule-realigned`
+- Status: **CLOSED ✗ — over-correction, current T_max=18 already optimal**
+
+| Metric | epochs=14 | Baseline (#1361) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 115.87 | 111.32 ± 2.87 | +4.09% |
+| **test_avg/mae_surf_p** | **104.86** | 99.69 ± 3.16 | **+5.19%** |
+
+**Analysis**: Negative result. T_max=14 is worse than T_max=18 despite training 14 complete epochs. The current model completes 14-15 of 18 epochs, which means the last 1-2 epochs have very low LR (~1e-6 range) — but this "slow landing" phase appears beneficial for final weight averaging. Setting T_max=14 makes LR reach exactly 0 at ep 14, which may cause premature over-refinement without the very-low-LR exploration phase. Direction closed.
+
+**Action**: Closed. Assigned askeladd lion-bs-8-sqrt2-lr.
