@@ -30,7 +30,7 @@ import torch.nn.functional as F
 import wandb
 import yaml
 from einops import rearrange
-from lion_pytorch import Lion
+from lion_noisy import Lion
 from timm.layers import trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
@@ -421,6 +421,7 @@ class Config:
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    lion_noise_sigma: float = 0.0  # LR-scaled Gaussian noise on Lion's post-sign update; 0.0 = off
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
     grad_clip_max_norm: float = 5.0  # max grad norm before optimizer.step(); rare-event tail clipping
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -484,6 +485,8 @@ optimizer = Lion(
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
+    noise_sigma=cfg.lion_noise_sigma,
+    peak_lr=cfg.lr,
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
