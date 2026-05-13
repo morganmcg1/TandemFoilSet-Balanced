@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 13:45 UTC
+- **Date / time:** 2026-05-13 14:00 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -15,7 +15,18 @@ SPDX-PackageName: senpai
 
 Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
-**11 sequential compounding wins.** Current active stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+**12 sequential compounding wins.** Current active stack: batch_size=1 + **grad_accum=1 (eff_batch=1, true SGD)** + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+## Cycle-40 update — PR #2254 MERGED (12th win, eff_batch=1 -7.49%) + #2025 sent back + #2330 Lookahead assigned
+
+**NEW BEST: val=65.0842 / test=56.3434 (PR #2254 fern grad_accum=1)**. **Largest single-experiment gain in the 12-win series: -7.49% val / -7.73% test.** The eff_batch trajectory (8→4→2→1) ACCELERATED at the final halving instead of diminishing. Cumulative from start: 131.79 → 65.08 = **-50.6%**.
+
+Key implication: we're now at the noise saturation floor (eff_batch=1 = maximum possible gradient noise). The remaining gains will come from:
+1. Orthogonal mechanisms that COMPOUND with the noisy regime (grad_clip axis, Lookahead, SWA)
+2. Algorithm-level changes (Lookahead slow-weight averaging — assigned to fern #2330)
+3. Architecture-level regularization (unexplored: stochastic depth, dropout re-test, etc.)
+
+**Also reviewed:** PR #2025 askeladd (max_norm=1.5 + batch_size=1, eff_batch=2) — val=65.7064 / test=57.7705 — a real -6.61%/-5.40% win against the OLD baseline but misses the new #2254 baseline by +0.95% val. Sent back to retest at eff_batch=1. If max_norm=1.5 compounds with grad_accum=1, that's a 13th win.
 
 ## Cycle-39 update — nezuko #2104 silent-retry audit + directive posted
 
@@ -61,7 +72,8 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 
 | Val | Test | PR | What landed |
 |---|---|---|---|
-| **70.3559** | **61.0663** | #2203 fern | batch_size=1 (eff_batch 4→2) |
+| **65.0842** | **56.3434** | #2254 fern | grad_accum=1 (eff_batch 2→1, true SGD) |
+| 70.3559 | 61.0663 | #2203 fern | batch_size=1 (eff_batch 4→2) |
 | 73.1639 | 64.1593 | #2085 fern | batch_size=2 (eff_batch 8→4) |
 | 73.8808 | 66.0211 | #2055 tanjiro | OneCycleLR anneal_strategy=linear |
 | 76.2707 | 66.7732 | #2008 thorfinn | AdamW beta2=0.98 |
@@ -76,14 +88,14 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 
 | PR | Student | Hypothesis |
 |---|---|---|
-| #2254 | fern | grad_accum 2→1 (eff_batch 2→1, true SGD; continue winning trend) |
+| #2330 | fern | Lookahead(k=5, α=0.5) wrapping AdamW (slow-weight dampening for true SGD; Zhang et al. 2019) |
 | #2300 | frieren | SWA over last 30% of training (terminal weight averaging; #2250 followup #2) |
 | #2275 | thorfinn | OneCycleLR max_momentum 0.95→0.99 (raise cycle PEAK; base=0.85 preserved; #2205 follow-up) |
 | #2103 | alphonse | NAdam (retest under linear+batch_size=1 stack) |
 | #2104 | nezuko | max_lr=2.5e-3 (retest under batch_size=1 stack) |
 | #2224 | edward | AdamW WD parameter groups (retest under batch_size=1; stale-baseline) |
 | #2241 | tanjiro | OneCycleLR pct_start=0.05 (less warmup, extends refinement tail) |
-| #2025 | askeladd | grad_clip max_norm=1.5 retest under batch_size=1 baseline |
+| #2025 | askeladd | grad_clip max_norm=1.5 retest under eff_batch=1 baseline (eff_batch=2 run was -6.61% but misses new baseline) |
 
 ## Closed axes (do not revisit)
 
@@ -97,7 +109,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 - beta1: 0.90→0.95 won (-2.5% #1867), 0.95→0.97 failed (+3.6% #2076), 0.95→0.94 failed (+12.0% #2101); **axis closed both sides** — 0.95 sharp local optimum
 - AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
 - eps=1e-6: +2.12% (#1804); eps=1e-9: +14.07% (#2250 closed cycle 38); **eps axis CLOSED both sides — 1e-8 sharp local optimum under current stack**
-- grad_accum=4: +18%, eff_batch=8 was optimal (now eff_batch=4 since batch_size=2 merged)
+- grad_accum: axis FULLY EXPLORED. Trend: eff_batch 8→4→2→1 each a win. eff_batch=1 is the floor (can't go lower); grad_accum=4 (+18%) was tested early at eff_batch=8.
 - max_lr=4e-3: diverges; max_lr=1.5e-3 CLOSED (+1.45%); 2.5e-3 being retested under new stack
 - pct_start=0.3 (cosine): +9.5%; 0.05 in-flight under linear (#2241) — direction reopened by tanjiro's #2148 mechanistic analysis
 - dropout=0.02/0.05: doesn't compose with β=0.25 stack
@@ -113,9 +125,9 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 
 ## Priority research directions
 
-1. **Batch/noise axis at the limit** — fern eff_batch=1 in-flight (#2254). The axis (8→4→2→?) has yielded 2 consecutive wins; this tests true SGD as the noise saturation point.
-2. **Compounding grad_clip win** — askeladd retest max_norm=1.5 under batch_size=1 (#2025). Two related but distinct gradient-noise levers; do they compound?
-3. **SWA terminal weight averaging** — frieren (#2300). Fresh axis — averages weights only over the final 30% of training (mechanistically distinct from closed EMA). Addresses frieren's own #2250 observation about geom_camber_cruise fragility.
+1. **Compounding grad_clip win** — askeladd retest max_norm=1.5 under eff_batch=1 (#2025). Under true SGD the gradient is even noisier, so max_norm=1.5 may compound even more strongly. This is the highest-priority retest.
+2. **Lookahead optimizer** — fern (#2330). Slow-weight dampening for true-SGD regime. Zhang et al. 2019 canonical complement to high-noise training.
+3. **SWA terminal weight averaging** — frieren (#2300). Averages weights over final 30% of training.
 4. **WD parameter groups** — edward (#2224). Standard transformer practice (exclude biases + LayerNorm); shape change in regularisation.
 5. **Momentum cycle RANGE tuning** — thorfinn max_momentum=0.99 (#2275). Cycle is load-bearing (disabling caused +18.1% regression, PR #2205 closed). Now tuning the RANGE. PyTorch defaults (0.85, 0.95) are untested implicit HPs; max_momentum=0.99 is the highest-leverage first move.
 6. **pct_start downward** — tanjiro 0.05 (#2241). His own analysis from failed #2148 — extends refinement tail without curtailing exploration.

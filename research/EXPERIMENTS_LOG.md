@@ -11,6 +11,53 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 14:00 — Cycle 40: PR #2254 MERGED (12th win, eff_batch=1) + #2025 sent back + #2330 assigned
+
+### PR #2254 fern — grad_accum 2→1 (eff_batch=1, true SGD): MERGED ✓ (12th win)
+
+W&B run: `e7euiii7`
+
+| Metric | Baseline (#2203) | This run | Δ |
+|--------|----------------:|---------:|---|
+| val_avg/mae_surf_p | 70.3559 | **65.0842** | **-7.49% ✓** |
+| test_avg/mae_surf_p | 61.0663 | **56.3434** | **-7.73% ✓** |
+| test single_in_dist | 66.0608 | **59.0270** | **-10.65%** |
+| test geom_camber_rc | 73.5254 | **71.5694** | **-2.66%** |
+| test geom_camber_cruise | 43.1260 | **38.5177** | **-10.69%** |
+| test re_rand | 61.5528 | **56.2596** | **-8.60%** |
+
+**This is the LARGEST single-experiment gain in the series.** The eff_batch trajectory (8→4→2→1) accelerated rather than diminishing: 2→1 gave -7.49% vs -3.84% and -4.08% for previous halvings. All four splits improved; largest gains on `single_in_dist` and `geom_camber_cruise` (-10.65%/-10.69%).
+
+**Analysis:** Bounded-gradient stack (smooth_l1 β=0.25 + grad_clip=1.0) absorbs true SGD noise without instability. The hypothesis that gradient noise at small effective batch is functioning as implicit regularization keeps paying off. Training was fully stable throughout.
+
+**Cumulative from start:** 131.79 → 65.08 = **-50.6%** across 12 sequential compounding wins.
+
+**Note on fern's implementation:** fern proactively identified the #2203 empty-merge bug and correctly set BOTH `batch_size=2→1` AND `grad_accum=2→1` in the PR. Clean implementation with correct W&B config verification.
+
+New defaults in train.py: `batch_size=1`, `grad_accum=1`.
+
+### PR #2025 askeladd — max_norm=1.5 + batch_size=1: SENT BACK (compounding test)
+
+W&B run `21j9tqai` (batch_size=1, grad_accum=2, max_norm=1.5):
+- val=65.7064 / test=57.7705 — beats OLD baseline #2203 (-6.61%/-5.40%, all four splits ↓)
+- Does NOT beat new baseline #2254 (val=65.0842) — +0.95% val / +2.43% test
+
+Parallel winner situation: fern's grad_accum=1 and askeladd's max_norm=1.5 are ORTHOGONAL mechanisms. The combination eff_batch=1 + max_norm=1.5 is genuinely untested. Sent back to rebase onto latest advisor branch (grad_accum=1 default) and retest max_norm=1.5 under eff_batch=1 stack. If it still wins: 13th compounding win.
+
+### Fleet state after cycle 40
+
+All 8 students WIP:
+- #2025 askeladd max_norm=1.5 retest under eff_batch=1 ← sent back
+- #2103 alphonse NAdam retest
+- #2104 nezuko max_lr=2.5e-3 retest (mwgf950s bs=1 run may have finished)
+- #2224 edward WD param groups retest
+- #2241 tanjiro pct_start=0.05
+- #2275 thorfinn max_momentum=0.99
+- #2300 frieren SWA last 30%
+- #2330 fern Lookahead(k=5, α=0.5) ← NEW
+
+---
+
 ## 2026-05-13 13:45 — Cycle 39: nezuko silent-retry audit on #2104
 
 **Status:** stale_wip PR #2104 max_lr=2.5e-3 has 8 silent retries since 11:14 UTC, none with SENPAI-RESULT. W&B audit:
