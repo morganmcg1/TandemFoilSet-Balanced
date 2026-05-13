@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -143,6 +144,13 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # H43: QK-norm per-head learnable temperature. Log-scaled keeps exp(.) > 0
+        # for stable gradients. Init log_temp = log(1/sqrt(dim_head)) matches the
+        # implicit scaling that SDPA already applies at init; the model learns
+        # per-head sharpness from there.
+        self.qk_log_temperature = nn.Parameter(
+            torch.full([1, heads, 1, 1], math.log(1.0 / math.sqrt(dim_head)))
+        )
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -176,10 +184,18 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # H43: QK-normalization. Unit-normalize Q and K along head-dim, then apply
+        # learnable per-head temperature. We multiply the scale into Q (so SDPA's
+        # scalar `scale=` arg can stay 1.0 while we still get per-head scaling),
+        # and override SDPA's default 1/sqrt(d_k) to avoid double-scaling.
+        q = F.normalize(q, dim=-1, p=2)
+        k = F.normalize(k, dim=-1, p=2)
+        qk_scale = self.qk_log_temperature.exp()  # (1, heads, 1, 1)
         out_slice = F.scaled_dot_product_attention(
-            q, k, v,
+            q * qk_scale, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
             is_causal=False,
+            scale=1.0,
         )
 
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
@@ -487,10 +503,18 @@ print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 
 print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
 print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
 print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
+# H43: QK-norm sanity check + per-block per-head init temperature record
+_h43_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h43_init_scale = math.exp(math.log(1.0 / math.sqrt(_h43_dim_head)))
+print(
+    f"[H43] QK-norm: heads={model_config['n_head']}, dim_head={_h43_dim_head}, "
+    f"init qk_scale = {_h43_init_scale:.4f}"
+)
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
-        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
+        f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}, "
+        f"qk_log_temperature init avg={b.attn.qk_log_temperature.mean().item():.4f}"
     )
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
@@ -596,6 +620,13 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    # H43: track per-block per-head qk_log_temperature evolution.
+    qk_log_temp_stats: dict[str, float] = {}
+    for li, blk in enumerate(model.blocks):
+        qlt = blk.attn.qk_log_temperature.detach().flatten()
+        for hi, val in enumerate(qlt.tolist()):
+            qk_log_temp_stats[f"qk_log_temp/l{li}_h{hi}"] = val
+        qk_log_temp_stats[f"qk_log_temp/l{li}_mean"] = float(qlt.mean().item())
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -609,6 +640,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        **qk_log_temp_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -623,12 +655,20 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Log final per-block LayerScale stats (end-of-training state) ---
 final_layer_scale_stats: dict[str, float] = {}
+final_qk_temp_stats: dict[str, float] = {}
 for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_mean"] = float(b.layer_scale_attn.mean().item())
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_layer_scale_stats})
+    # H43: per-block per-head qk_log_temperature and exp(qk_log_temperature)
+    qlt = b.attn.qk_log_temperature.detach().flatten()
+    for hi, v in enumerate(qlt.tolist()):
+        final_qk_temp_stats[f"final/qk_log_temp_l{i}_h{hi}"] = v
+        final_qk_temp_stats[f"final/qk_scale_l{i}_h{hi}"] = float(math.exp(v))
+    final_qk_temp_stats[f"final/qk_log_temp_l{i}_mean"] = float(qlt.mean().item())
+    final_qk_temp_stats[f"final/qk_log_temp_l{i}_std"] = float(qlt.std().item())
+append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_layer_scale_stats, **final_qk_temp_stats})
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
     print(
@@ -637,6 +677,13 @@ for i in range(len(model.blocks)):
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
     )
+print("[H43] Final qk_log_temperature per block (per-head):")
+for i in range(len(model.blocks)):
+    per_head = [f"h{hi}={final_qk_temp_stats[f'final/qk_log_temp_l{i}_h{hi}']:+.3f}"
+                for hi in range(model_config["n_head"])]
+    print(f"  block {i}: " + " ".join(per_head)
+          + f"  | mean={final_qk_temp_stats[f'final/qk_log_temp_l{i}_mean']:+.3f}"
+          + f"  std={final_qk_temp_stats[f'final/qk_log_temp_l{i}_std']:.3f}")
 
 # --- Test evaluation + local summary ---
 if best_metrics:
