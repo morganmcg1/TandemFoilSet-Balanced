@@ -1,6 +1,63 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1794 (torch-compile)
+## Current Baseline — PR #1599 (re-conditioned-scaling)
+
+**val_avg/mae_surf_p = 29.8463** (epoch 27 of 29 completed in 30-min cap) — **-1.95% vs previous 30.4412**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- **+ ReScaleHead**: 163-param learned Re→scale MLP (hidden=32, out_channels=3), softplus activation, identity init (softplus(0.541)≈1.0)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`) — params include model + rescale_head
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**
+- **`torch.compile(mode="default", dynamic=True)`** (Transolver only; ReScaleHead uncompiled)
+- **bf16 AMP** (wraps both Transolver + ReScaleHead forward)
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1) on relative-L2 normalized residuals
+- 29 epochs in ~30 min, peak GPU 24 GB
+- Cumulative: **-74.5%** vs initial 117.17
+
+**Per-split val at best epoch (27):**
+
+| Split | mae_surf_p | vs prev (30.4412) |
+|-------|-----------|---------|
+| val_single_in_dist | **30.20** | −4.07 (−11.9%) |
+| val_geom_camber_rc | **43.11** | +1.68 (+4.1%) |
+| val_geom_camber_cruise | **14.54** | +0.50 (+3.6%) |
+| val_re_rand | **31.54** | −0.48 (−1.5%) |
+| **val_avg** | **29.8463** | **−0.59 (−1.95%)** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p | vs prev (26.1013) |
+|-------|-----------|---------|
+| test_single_in_dist | **30.09** | −2.87 (−8.7%) |
+| test_geom_camber_rc | **39.41** | +1.51 (+4.0%) |
+| test_geom_camber_cruise | **11.74** | +0.36 (+3.2%) |
+| test_re_rand | **23.16** | +1.00 (+4.5%) |
+| **test_avg** | **26.1005** | **−0.0008 (≈0%)** |
+
+**ReScaleHead diagnostics (best epoch 27):**
+
+| Channel | scale mean | scale std | corr(scale, log Re) |
+|---------|-----------|----------|---------------------|
+| Ux | 1.180 | 0.058 | +0.637 |
+| Uy | 1.111 | 0.262 | +0.936 |
+| p | 1.308 | 0.527 | +0.858 |
+
+**Artifact**: `models/model-charliepai2g24h1-fern-re-conditioned-scaling-20260513-035742/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# Stack: SOAP + bf16 AMP + torch.compile(default, dynamic) + CosineAnnealingLR(T_max=28, eta_min=1e-5)
+# + ReScaleHead(hidden=32, out_channels=3) applied to Transolver output with log(Re) conditioning
+```
+
+**Key insight**: ReScaleHead reliably improves `single_in_dist` (−4.07 val) by separating shape learning from Re-scale calibration, but mildly regresses OOD-shape splits (rc, cruise). Val average still wins by 0.59 points because in-dist gain dominates. Mechanism confirmed in 3 of 3 runs: Uy/p show strong corr(scale, log Re) ~0.86–0.94; Ux is unused (freestream-dominated). Compound size has shrunk vs prior base because the stronger SOAP+torch.compile backbone already implicitly learns Re-scale.
+
+---
+
+## Previous Baseline — PR #1794 (torch-compile)
 
 **val_avg/mae_surf_p = 30.4412** (epoch 30 of 30 completed in 30-min cap) — **-17.5% vs previous 36.8778**
 
