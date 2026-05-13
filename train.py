@@ -426,6 +426,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    adam_beta1: float = 0.9    # AdamW β1 (gradient momentum); PyTorch default
+    adam_beta2: float = 0.999  # AdamW β2 (variance / 2nd-moment); PyTorch default
     use_torch_compile: bool = False    # JIT compile the model via torch.compile
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
@@ -499,8 +501,11 @@ optimizer = torch.optim.AdamW(
         {"params": list(model.parameters()), "lr": cfg.lr},
         {"params": list(surf_head.parameters()), "lr": _head_lr},
     ],
+    betas=(cfg.adam_beta1, cfg.adam_beta2),
     weight_decay=cfg.weight_decay,
+    eps=1e-8,
 )
+print(f"[optim] AdamW betas=({cfg.adam_beta1}, {cfg.adam_beta2}) wd={cfg.weight_decay}")
 if cfg.cosine_restart_T_0 > 0:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
@@ -659,6 +664,39 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    # AdamW first/second moment diagnostics — track how the optimizer's
+    # internal state evolves through cosine-restart spikes for the β1 sweep.
+    enc_m_abs_sum = 0.0
+    enc_m_count = 0
+    enc_m_max = 0.0
+    enc_v_max = 0.0
+    surf_m_abs_sum = 0.0
+    surf_m_count = 0
+    surf_m_max = 0.0
+    surf_v_max = 0.0
+    for p in optimizer.param_groups[0]["params"]:
+        st = optimizer.state.get(p)
+        if not st or "exp_avg" not in st:
+            continue
+        m = st["exp_avg"]
+        v = st["exp_avg_sq"]
+        enc_m_abs_sum += float(m.abs().sum().item())
+        enc_m_count += m.numel()
+        enc_m_max = max(enc_m_max, float(m.abs().max().item()))
+        enc_v_max = max(enc_v_max, float(v.max().item()))
+    for p in optimizer.param_groups[1]["params"]:
+        st = optimizer.state.get(p)
+        if not st or "exp_avg" not in st:
+            continue
+        m = st["exp_avg"]
+        v = st["exp_avg_sq"]
+        surf_m_abs_sum += float(m.abs().sum().item())
+        surf_m_count += m.numel()
+        surf_m_max = max(surf_m_max, float(m.abs().max().item()))
+        surf_v_max = max(surf_v_max, float(v.max().item()))
+    enc_m_mean = enc_m_abs_sum / max(enc_m_count, 1)
+    surf_m_mean = surf_m_abs_sum / max(surf_m_count, 1)
+
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -667,6 +705,12 @@ for epoch in range(MAX_EPOCHS):
         "lr_surf_head": scheduler.get_last_lr()[-1],
         "train/lr_encoder": optimizer.param_groups[0]["lr"],
         "train/lr_surf_head": optimizer.param_groups[1]["lr"],
+        "opt/encoder_m_mean": enc_m_mean,
+        "opt/encoder_m_max": enc_m_max,
+        "opt/encoder_v_max": enc_v_max,
+        "opt/surf_head_m_mean": surf_m_mean,
+        "opt/surf_head_m_max": surf_m_max,
+        "opt/surf_head_v_max": surf_v_max,
         "epoch": epoch + 1,
         "epoch_time_s": dt,
         "global_step": global_step,
