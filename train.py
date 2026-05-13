@@ -132,6 +132,28 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class GaussianRFFEnc(nn.Module):
+    """Gaussian random Fourier features for the 2 spatial coords.
+
+    H42 hybrid: adds 2*m smooth low-freq features alongside dyadic Fourier.
+    B is fixed (not learned) — sampled once at init from N(0, sigma^2 * I).
+    """
+
+    def __init__(self, m: int = 6, sigma: float = 1.0):
+        super().__init__()
+        B = torch.randn(m, 2) * sigma
+        self.register_buffer("B", B)
+        self.m = m
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        coords = x[..., :2]
+        proj = coords @ self.B.T
+        return torch.cat(
+            [torch.sin(2.0 * torch.pi * proj),
+             torch.cos(2.0 * torch.pi * proj)], dim=-1
+        )
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -298,7 +320,8 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
+            x_rff_extra = rff_enc.encode(x_norm)
+            x_norm = torch.cat([fourier_enc(x_norm), x_rff_extra], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -460,11 +483,14 @@ val_loaders = {
 }
 
 N_FREQS = 6
+RFF_M = 6      # H42: hybrid Fourier — 6 Gaussian random frequencies
+RFF_SIGMA = 1.0  # sigma matched to std-normalized coord scale
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+rff_enc = GaussianRFFEnc(m=RFF_M, sigma=RFF_SIGMA).to(device)
 
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2 + 2 * RFF_M,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -474,11 +500,15 @@ model_config = dict(
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
+print(f"[H42] Hybrid Fourier: dyadic L=6 (24 feats) + RFF m=6 sigma=1.0 (12 feats) = 36 coord feats")
+print(f"[H42] fun_dim={model_config['fun_dim']} (expected 56), preprocess input={model_config['fun_dim']+2} (expected 58)")
+print(f"[H42] RFF B.std()={rff_enc.B.std().item():.4f} (expected ~1.0)")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
+print(f"[H42] n_params={n_params} (baseline 831,191 + 2*128*12=3,072 preprocess extra ≈ 834,263)")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 for i, b in enumerate(model.blocks):
@@ -540,7 +570,8 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        x_norm = fourier_enc(x_norm)
+        x_rff_extra = rff_enc.encode(x_norm)
+        x_norm = torch.cat([fourier_enc(x_norm), x_rff_extra], dim=-1)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
