@@ -9,18 +9,18 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 52.798** (T_max=12 + RMSNorm+GeGLU+Lion+surf_weight=10, PR #1793, epoch 12)
-**`test_avg/mae_surf_p` = 44.972**
+**`val_avg/mae_surf_p` = 51.040** (T_max=12 + RMSNorm+GeGLU+Lion+surf_weight=5, PR #1956, epoch 12)
+**`test_avg/mae_surf_p` = 44.390**
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 58.907 | 50.239 |
-| geom_camber_rc | **67.658** | 59.561 |
-| geom_camber_cruise | 33.380 | 27.740 |
-| re_rand | 51.248 | 42.345 |
-| **avg** | **52.798** | **44.972** |
+| single_in_dist | 56.933 | 50.459 |
+| geom_camber_rc | **64.886** | 59.341 |
+| geom_camber_cruise | 31.056 | 25.501 |
+| re_rand | 51.287 | 42.260 |
+| **avg** | **51.040** | **44.390** |
 
-**Note:** Compound `T_max=12 + surf_weight=5` is in flight (nezuko #1956). If positive, the baseline shifts down again.
+**Reproduce:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5`
 
 ## What we've learned
 
@@ -34,9 +34,10 @@
 7. **mlp_ratio=4**: −5% (PR #1408)
 8. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
 9. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
+10. **T_max=12 + surf_weight=5 compound**: −3.33% val / −1.29% test (PR #1956) ← volume MAE −6% to −14% across all splits; cruise −6.96% val
 
 ### Current stack (defaults + CLI overrides)
-- L1 (MAE) loss in normalized space, **surf_weight=10** (CLI; reverted from 5 with T_max=12 merge — compound still in flight)
+- L1 (MAE) loss in normalized space, **surf_weight=5** (PR #1956 compound confirmed)
 - n_layers=6, **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128, n_head=4, slice_num=64
@@ -45,7 +46,7 @@
 - bf16 mixed precision (autocast)
 - 12 epochs in 30 min (~138s/epoch)
 
-**Reproduce command:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
+**Reproduce command:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -81,7 +82,7 @@
 7. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc became easier; single_in_dist became the primary bottleneck. surf_weight=5 cracked single_in_dist (−20.5% val).
 8. **geom_camber_rc (72.0 val) is now the hardest split** — primary target for further improvement.
 
-## Active experiments (Round 12 — all on T_max=12 + RMSNorm+GeGLU+Lion baseline, val=52.798)
+## Active experiments (Round 13 — all on T_max=12+sw=5 compound baseline, val=51.040)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
@@ -89,21 +90,22 @@
 | askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
 | edward | #1995 | n_layers=5: shallower model → ~15 epochs in 30-min budget | WIP |
 | fern | #1996 | slice_num=48: tighter PhysicsAttention → ~14 epochs in budget | WIP |
-| nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | WIP |
-| thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | WIP |
-| frieren | #2006 | Lion lr=8e-5: bracket alphonse's 1.5e-4 from below | NEW |
-| tanjiro | #2007 | mlp_ratio=2: test if "gating wins outright" extends below 4 | NEW |
+| nezuko | #2029 | surf_weight=2: continue gradient sweep below sw=5 | NEW |
+| thorfinn | #1948 | surf_weight=3 (on T_max=50 old stack — will compare vs 51.040 on review) | WIP |
+| frieren | #2006 | Lion lr=8e-5: bracket alphonse's 1.5e-4 from below | WIP |
+| tanjiro | #2007 | mlp_ratio=2: test if "gating wins outright" extends below 4 | WIP |
 
 **Recently merged:**
-- nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test) ← NEW BASELINE 52.798/44.972
+- nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val / −1.29% test) ← **NEW BASELINE 51.040/44.390**
+- nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test)
 - thorfinn #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (−9.03% val / −9.76% test)
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
-- frieren #1983: T_max=10 (+10.96% val / +11.95% test) — CosineAnnealingLR is cyclic, not clamped at T_max; epoch 11 dead with LR=0; T_max < cfg.epochs always strictly worse
-- tanjiro #1984: n_hidden=160 (val −0.247% / test +1.268%) — val/test inversion = noise; +52% params disproportionate for marginal gain; targeted geom_camber_rc regressed on test
-- edward #1925: WD=3e-2 (+0.06% on prior baseline; +19.4% vs current) — WD axis confirmed flat [1e-4→3e-2]; exhausted
-- fern #1790: Lion 2-epoch warmup — stale + mechanism conflicts with T_max=12 (warmup wastes 17% of budget when cosine already handles full decay)
+- frieren #1983: T_max=10 (+10.96%) — CosineAnnealingLR is cyclic; T_max < cfg.epochs always strictly worse
+- tanjiro #1984: n_hidden=160 (val −0.247% / test +1.268%) — val/test inversion = noise; +52% params disproportionate
+- edward #1925: WD=3e-2 (+0.06% on prior baseline) — WD axis saturated
+- fern #1790: Lion 2-epoch warmup — stale + conflicts with T_max=12
 - frieren #1920: eta_min=1e-5 (+12.05% vs current baseline) — mechanism redundant with T_max=12; T_max=12 cleanly decays LR to 0, which is strictly better than a 1e-5 floor
 - tanjiro #1872: mlp_ratio=8 (+5.95%) — "gating wins outright"; fc2 capacity expansion adds noise pathways that gate doesn't fully suppress at 12 epochs
 - frieren #1890: n_layers=7 (+4.6%) — depth incompatible with budget

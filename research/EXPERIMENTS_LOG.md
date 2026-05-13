@@ -6,6 +6,34 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 07:25 — PR #1956: T_max=12 + surf_weight=5 compound — MERGED (−3.33% val, −1.29% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/tmax-12-surf-weight-5-compound
+- **Hypothesis:** T_max=12 and surf_weight=5 are orthogonal mechanisms (schedule vs loss weighting); should compound additively. Predicted val 48-50.
+- **Result:** val=51.040, test=44.390 (epoch 12/12, 30-min cap, surf_weight=5)
+
+| Split | val (compound) | val (#1793 baseline sw=10) | Δ | test (compound) | test (baseline) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 56.933 | 58.907 | −3.35% | 50.459 | 50.239 | +0.44% |
+| geom_camber_rc | **64.886** | 67.658 | **−4.10%** | 59.341 | 59.561 | −0.37% |
+| geom_camber_cruise | 31.056 | 33.380 | **−6.96%** | 25.501 | 27.740 | **−8.07%** |
+| re_rand | 51.287 | 51.248 | +0.08% | 42.260 | 42.345 | −0.20% |
+| **avg** | **51.040** | **52.798** | **−3.33% ✓** | **44.390** | **44.972** | **−1.29% ✓** |
+
+- **Volume MAE check:** Volume MAE improved across ALL 4 splits (−6% to −14%) confirming gradient-budget reallocation mechanism
+  - single_in_dist vol: 67.251 → 60.506 (−10.0%)
+  - geom_camber_rc vol: 74.389 → 65.720 (−11.7%)
+  - geom_camber_cruise vol: 33.564 → 28.904 (−13.9%)
+  - re_rand vol: 52.194 → 48.815 (−6.5%)
+- **Compound analysis:** Sub-linear but real. Predicted −7% to −9% if fully additive; got −3.33%. Surface gradient with sw=5 shows diminishing returns at the cosine tail — the richer volume representation helps surface via context, but at T_max=12 end-state the two mechanisms partially share the same mode.
+- **re_rand is the laggard** (+0.08% val / −0.20% test) — Reynolds holdout benefits less from geometric context than geometry holdouts
+- **Cruise drives test gain** (−8.07%) — largest meshes get most benefit from gradient reallocation
+- **Metric artifacts:** `models/model-charliepai2g48h3-nezuko-tmax-12-surf-weight-5-compound-20260513-055720/metrics.jsonl`
+- **Reassigned nezuko:** PR #2029 surf_weight=2 on compound baseline (continue gradient sweep below sw=5)
+
+---
+
 ## 2026-05-13 07:00 — PR #1983: CosineAnnealingLR T_max=10 — CLOSED (+10.96% val, +11.95% test)
 
 - **Student:** charliepai2g48h3-frieren
