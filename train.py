@@ -459,6 +459,12 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+# Channel weights for the training loss. Pressure (channel 2) gets weight 1.0;
+# Ux/Uy (channels 0,1) get 0.03 — the average of the std ratios y_std[Ux,Uy]/y_std[p]
+# (≈0.032 and ≈0.014). This makes the channel reweighting explicit instead of
+# implicit through a physical-space rescaling (see PR #1767 results).
+loss_channel_w = torch.tensor([0.03, 0.03, 1.0], device=device)
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -479,7 +485,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            abs_err = (pred - y_norm).abs()
+            abs_err = (pred - y_norm).abs() * loss_channel_w
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
