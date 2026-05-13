@@ -452,10 +452,13 @@ print(f"EMA shadow model initialized (decay={cfg.ema_decay})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-# Linear LR warmup over the first epoch, then cosine decay over the remaining
+# Linear LR warmup over the first 2 epochs, then cosine decay over the remaining
 # epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
 # so T_max for the cosine phase is expressed in batch steps, not epochs.
-warmup_steps = len(train_loader)
+# Note: cosine_steps preserved at (MAX_EPOCHS - 1) * len(train_loader) to keep
+# T_max=10875 identical to the v2 warmup-1ep baseline (PR #1672) — single
+# variable under test is warmup duration only.
+warmup_steps = 2 * len(train_loader)
 cosine_steps = max((MAX_EPOCHS - 1) * len(train_loader), 1)
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=cosine_steps
