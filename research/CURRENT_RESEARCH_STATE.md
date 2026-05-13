@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 (wave-7 second-results batch: 1 MERGE [#1906 Kendall, new baseline 71.43/62.99], 1 send-back [#1734])
+- **Last updated:** 2026-05-13 05:55 (operational unblock loop: GraphQL rate-limit storm cleared, rebase guidance posted on #1907/#1757 after Kendall merge; #1873 fern stale-WIP was rate-limit artifact, resumed iter 60)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -8,7 +8,7 @@
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Students × GPU:** 8 × 1 (96 GB each)
 - **Idle students:** 0 (all 8 active)
-- **⚠ Operational note:** GraphQL API rate-limit storms (user ID 20516801) intermittently knock student entrypoints into "No assigned PRs" state mid-loop. Use REST helpers (`pr_body`, `pr_all_comments`) over GraphQL when possible.
+- **⚠ Operational note:** GraphQL API rate-limit storms (user ID 20516801) intermittently knock student entrypoints into "No assigned PRs" state mid-loop, AND prevent `gh pr create` (which uses GraphQL). Workaround for PR creation: REST API direct (`gh api repos/.../pulls --method POST --input <file>` + labels via `/issues/.../labels`). Workaround for read: REST helpers (`pr_body`, `pr_all_comments`). **Today's storm (~05:00–05:50 UTC) locked out all 8 students simultaneously**, manifesting as 4 "advisor-action" PRs (#1907, #1873, #1757, #1734) — most were not actually stale on the student side, just unable to poll. Pods resumed iter 60-101 between 05:48–05:54 UTC.
 
 ## ⭐ Current baseline (PR #1906 merged 2026-05-13 — Kendall uncertainty)
 
@@ -26,8 +26,10 @@
 
 - **PR #1906 (askeladd, Kendall uncertainty) MERGED:** val=**71.43** / test=**62.99** — clean win, all 8 splits improve, learned σ near-uniform (1.20× spread) with slight Ux/Uy emphasis. **Per-channel weighting axis now LANDED — Kendall succeeded where #1702 p-up and #1821 uxuy-up failed.** New baseline. Largest test gain on test_single_in_dist (−8.10) — in-distribution wins; OOD splits barely moved.
 - **PR #1734 (thorfinn, asinh α=0.5) SEND BACK:** val=75.07 / test=65.85 — within σ band, no test override; ALSO ran with stale `max_norm=1.0` (config confound). Sent back for rebase + rerun with `max_norm=0.5 --use_kendall_uncertainty`.
-- **#1873 (fern, SDF-feature)** still WIP — wave-7 geometry-axis open.
+- **#1873 (fern, SDF-feature)** still WIP — wave-7 geometry-axis open. Stale-WIP flag was a rate-limit-storm artifact (student locked out for ~30+ min); resumed at iter 60 (05:49 UTC).
 - **#1907 (edward, pos-jitter σ=0.05 rerun)**, **#1908 (nezuko, learnable routing-temp)**, **#1937 (alphonse, max-norm-tight sweep)**, **#1938 (tanjiro, per-token FiLM)**, **#1757 (frieren, β=0.3 rerun)** all WIP.
+- **Post-Kendall rebase guidance posted:** #1907 + #1757 received updated rebase comments pointing at the new 71.43 baseline (with `--use_kendall_uncertainty`). #1734 already had a current Kendall-aware comment. All 4 conflict PRs now have actionable advisor guidance for the student's next iteration.
+- **#1954 (askeladd, hard-example-mining on Kendall)** NEW WIP from prior loop.
 
 ## Most recent direction from human researcher team
 
