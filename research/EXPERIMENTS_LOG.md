@@ -4,6 +4,60 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 15:30 — PR #2168 (MERGED): RFF σ sweep {0.5, 0.25, AdamW σ=0.5} on Lion+β=0.3+RFF+Kendall
+
+- **Branch:** `willowpai2g48h2-thorfinn/fourier-sigma-refine`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** σ→gain curve was monotonic in pre-Lion era (σ=2 worst → σ=1 mid → σ=0.5 best on RFF-only). Test whether σ=0.5 also wins on the current Lion+β=0.3+RFF+Kendall baseline.
+
+### Result table
+
+| Arm | Stack | val_avg | test_avg | W&B | Status |
+|---|---|---:|---:|---|---|
+| 1 | AdamW + β=0.3 + RFF σ=0.5 + Kendall | 67.1077 | 58.6090 | `nkfc2ozg` | Regresses vs AdamW+β=0.3+σ=1.0 (#1757: 66.66) |
+| **2** | **Lion + β=0.3 + RFF σ=0.5 + Kendall** | **45.7648** | **39.6619** | `7f6pqafs` | **MERGED — new baseline** |
+| 3 | Lion + β=0.3 + RFF σ=0.25 + Kendall | 46.0009 | **39.0076** | `h5jfv598` | Test winner; val loses to Arm 2 by 0.24 (within seed noise) |
+
+### Per-split (Arm 2, merged config)
+
+| Split | val (σ=0.5) | Δ vs #2063 | test (σ=0.5) | Δ vs #2063 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 48.774 | +0.67% | 42.451 | +0.13% |
+| **geom_camber_rc** | **58.290** | **−7.26%** | 54.596 | −1.19% |
+| geom_camber_cruise | 29.111 | −2.02% | 23.445 | −3.97% |
+| **re_rand** | **46.885** | **−5.39%** | 38.156 | **−5.08%** |
+| **avg** | **45.765** | **−3.94%** | **39.662** | **−2.23%** |
+
+### Commentary and conclusions
+
+Merged Arm 2 (σ=0.5) as new baseline — wins primary `swa_val_avg` ranking metric (45.7648 vs 47.6416), and student tagged it as `primary_metric` in the SENPAI-RESULT. Arm 3 (σ=0.25) wins paper-facing test by an additional −0.65 but loses val by 0.24 (within ~0.27σ of inter-seed noise ~0.86) — sent thorfinn back with σ=0.1 confirmation + σ=0.25 seed-1 replicate (PR #2407) to settle the val-vs-test trade-off.
+
+### Banked findings
+
+1. **Optimizer × σ × β=0.3 interaction is non-monotonic.** σ↓ wins under Lion+β=0.3 (−1.88 val) and AdamW+RFF-only (#2082 era, −0.47 val) but LOSES under AdamW+β=0.3 (Arm 1: +0.45 val vs σ=1.0 reference). AdamW's per-coord adaptive LR cancels the σ↓ benefit at β=0.3; Lion's sign-update restores compounding. **Mechanism implication:** any future σ-modifying experiment must check optimizer × loss-shape interaction.
+2. **Lion+Kendall σ-collapse is robust to RFF bandwidth.** All 6 log_σ channels converge to identical −0.9037 at both σ=0.25 and σ=0.5 (matches #2063 σ=1.0 collapse). The Lion+Kendall mechanical equivalence to uniform-channel-weight is structural — fully invariant to input-encoding choices. Confirms #2311 (fern hybrid Lion+AdamW) is the right fix for σ differentiation; width/RFF approaches cannot help.
+3. **Lower-σ Fourier = stronger OOD-geometry prior on this dataset.** Test_geom_camber_rc: σ=1.0 → 55.252, σ=0.5 → 54.596 (−1.19%), σ=0.25 → 52.557 (**−4.88%**). Test_geom_camber_cruise: σ=1.0 → 24.413, σ=0.25 → **22.922 (−6.11%)**. Mechanism: very-low-frequency Fourier coords act as a global geometric smoothness prior over camber shapes outside the training distribution. The test curve hasn't bottomed out at σ=0.25 — direct motivation for #2407 σ=0.1 probe.
+4. **Three independent confirmations of σ-collapse mechanism** now banked (askeladd #2297, nezuko #2354, thorfinn #2168). Structural finding fully consolidated.
+
+---
+
+## 2026-05-13 15:30 — Lion-stack rebase notice posted to 7 in-flight PRs
+
+Baseline shifted from val 47.64 / test 40.57 (σ=1.0) to val 45.76 / test 39.66 (σ=0.5) mid-wave. All 7 currently-running Lion-stack PRs (#2390 askeladd, #2378 nezuko, #2363 frieren, #2347 edward, #2342 tanjiro, #2311 fern, #2270 alphonse) notified with the new threshold (val < 45.76 = merge; [45.76, 47.64] = directional win on σ=1.0 stack, needs rebase to test σ=0.5 composition; ≥ 47.64 = regression).
+
+Triage decision for these runs: do NOT kill mid-run. The σ knob is mechanistically independent of most in-flight axes (warmup, T_max, grad-clip relaxation, slice_num, wd), so compounding is likely. Re-evaluate each on landing.
+
+---
+
+## 2026-05-13 15:30 — PR #2407 (ASSIGNED, thorfinn): RFF σ=0.1 + σ=0.25 seed-1 bracket below
+
+- **Branch:** `willowpai2g48h2-thorfinn/lion-rff-sigma-0p1-bracket-below`
+- **Hypothesis:** σ test-curve hasn't bottomed out at σ=0.25. 2-arm sweep: σ=0.1 (further bracket below) + σ=0.25 seed-1 replicate (settle val-vs-test trade-off vs σ=0.5).
+- **Stack:** Lion + β=0.3 + RFF + Kendall (new baseline σ=0.5)
+- **Predicted:** Arm 1 either continues winning on test OOD-geometry splits (mechanism holds, σ floor open) OR finally inverts (degenerate RFF features hit local-frequency floor). Arm 2 either confirms σ=0.25 test win is seed-robust (merge candidate) or shows seed-0 was the outlier.
+
+---
+
 ## 2026-05-12 18:56 — PR #1454: Enable unified positional encoding (unified_pos=True, ref=8)
 
 - **Branch:** `willowpai2g48h2-tanjiro/unified-pos-ref8`
