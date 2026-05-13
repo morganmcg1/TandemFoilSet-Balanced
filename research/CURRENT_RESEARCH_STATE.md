@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 10:00
+- **Date:** 2026-05-13 11:30
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -49,11 +49,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #2000 | T_max=80 schedule extension (epochs 50→80) | Schedule | WIP | #1953 MERGED (11th winner, val=55.76, MASSIVE −12.17%). Val descending at −0.84/ep at termination. At T_max=80, LR at ep 30 ≈ 3.45e-4 (vs 1.73e-4 at T_max=50). Tests: schedule push compounds further OR T_max=50 was sweet spot |
 | askeladd | #1841 | slice_num=48 — retest on full 8-merge stack (n_layers=3 + grad-clip=10) | Architecture / throughput | WIP-REBASE | First-pass val=70.76 beat OLD baseline (71.44) but not n_layers=3 (69.45) or new grad-clip baseline (65.98). Mechanism (3/4 splits improve, capacity-right-sizing) is clean. Expected retest val ≈ 65.35 if relative −0.95% holds |
-| edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | Running on older stack. Needs to beat new baseline (val < 65.98) to merge; will likely need rebase + retest if beats only intermediate baselines |
-| fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 8-merge stack |
-| frieren | #1898 | n_layers=3 + epochs=50 — cosine schedule T_max tuning | LR schedule / training duration | WIP | Critical follow-up: #1875 ran 30 epochs at T_max=30, but ~44 epochs fit in budget. Setting T_max=50 keeps LR positive through all 44 actual epochs |
-| nezuko | #1994 | n_head=4→8 — attention head diversity | Architecture (attention) | WIP | #1878 CLOSED (+10.5% regression; mlp_ratio=1 already +0.99% on n_layers=3 stack). FFN capacity-down bracketed: mlp_ratio=2 is optimum. Testing attention diversity: 8 heads with head_dim=24 on n_hidden=192 |
-| tanjiro | #1982 | grad-clip max_norm=2.5 — threshold scan step 3 | Gradient stability (threshold scan) | WIP | #1930 MERGED (10th winner, val=63.48). 3/4 splits improved; in_dist regressed +1.00. At 2.5: ~97% clip, ~8-9× downscaling — tests whether crossing into direction-normalization regime. Outcome: (A) val < 63.48 → keep going; (B) val > 63.48 → U-shape confirmed, bracket between 2.5–5.0 |
+| edward | #2024 | EMA decay 0.999 → 0.998 on 11-compound stack | Optimization (EMA) | WIP | #1833 CLOSED (stale, never completed training). At #1953 EMA−live gap is −8.32 (vs +0.42 at #1899). Halving EMA half-life (693→346 steps) should let EMA track the live model's improvements in the new T_max=50 schedule tail |
+| fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 11-merge stack |
+| frieren | #2023 | n_hidden 192 → 224 width push on 11-compound stack | Architecture (width) | WIP | #1898 CLOSED (mechanism fully captured by #1953 merge; n_hidden=128 not competitive vs 192 on T_max=50 stack). Compact-but-wide hypothesis says width compounds further. Tests if 224 still improves or width plateaus |
+| nezuko | #1994 | n_head=4→8 — attention head diversity | Architecture (attention) | WIP | #1878 CLOSED (+10.5% regression; mlp_ratio=1 already +0.99% on n_layers=3 stack). FFN capacity-down bracketed: mlp_ratio=2 is optimum. Testing attention diversity: 8 heads with head_dim=24 on n_hidden=192. PRE-T_max=50 stack — likely needs retest |
+| tanjiro | #1982 | grad-clip max_norm=2.5 — RETEST with --epochs 50 | Gradient stability (threshold scan) | WIP-REBASE | Initial v1 result (val=66.13) ran at --epochs 30 / T_max=30 — protocol-stale post-#1953. Sent back for clean `--epochs 50 --n_hidden 192 --n_layers 3` retest. Two outcomes: (A) val < 55.76 → grad-clip threshold further compounded; (B) val ≥ 55.76 → U-shape confirmed at 2.5/5.0 |
 | thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
 **Baseline alert**: New baseline is PR #1953 (**val=55.7634, test=48.0960**). All future merges must beat this. WIP PRs running against the older PR #1930 baseline (val=63.48) MUST be rebased and retested with `--epochs 50` (T_max=50). The schedule fix alone is the dominant lift — any experiment without it cannot beat the new baseline.
@@ -124,17 +124,20 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ## Potential next directions
 
-### High priority (compile + n_layers=3 + n_hidden=192 + grad-clip=10 stack)
+### High priority (compile + n_layers=3 + n_hidden=192 + grad-clip=5 + T_max=50 stack)
 1. **T_max=80 schedule push** — #2000 (alphonse): direct follow-up to #1953. Tests if schedule axis has more headroom.
-2. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5 on PRE-T_max=50 stack — likely will need retest after #2000 result.
-3. **n_head=8** — #1994 (nezuko): attention head diversity. PRE-T_max=50 stack — likely will need retest.
-4. **n_layers=3 + epochs=50 retest (n_hidden=128)** — #1898 (frieren): STALE 2h+, nudged. May be DEAD given alphonse delivered the schedule-fix win on the wider stack.
-5. **β annealing retest** — #1805 (fern): NEEDS REBASE; retest on full 11-compound stack (val < 55.76).
-6. **slice_num=48 retest** — #1841 (askeladd): capacity-down on slice axis; needs retest on full stack.
-7. **n_layers=2 + n_hidden=192** — #1960 (thorfinn): depth floor test on PRE-T_max=50 stack — may need retest.
-8. **n_hidden=224 or 256 × n_layers=3 + epochs=50** — width scan extension. Wall-time constrained but well-motivated since #1899 showed compact+wide hypothesis.
-9. **EMA decay tuning** — EMA−live gap is now −8.32 (big!). Try ema_decay=0.998 or 0.9995 to balance smoothing vs reactivity.
+2. **n_hidden=224 width push** — #2023 (frieren) ACTIVE: width push on 11-compound stack. Compact+wide hypothesis: width axis may still have headroom now that schedule is fixed.
+3. **EMA decay 0.999 → 0.998** — #2024 (edward) ACTIVE: closes EMA−live gap (−8.32 at #1953). Single-axis test.
+4. **Grad-clip threshold scan step 3 — RETEST** — #1982 (tanjiro): max_norm=2.5 retest with `--epochs 50`. Was protocol-stale; first-pass val=66.13 against old baseline.
+5. **n_head=8** — #1994 (nezuko): attention head diversity. PRE-T_max=50 stack — may need retest.
+6. **β annealing retest** — #1805 (fern): NEEDS REBASE; retest on full 11-compound stack (val < 55.76).
+7. **slice_num=48 retest** — #1841 (askeladd): capacity-down on slice axis; needs retest on full stack.
+8. **n_layers=2 + n_hidden=192** — #1960 (thorfinn): depth floor test on PRE-T_max=50 stack — may need retest.
+
+### Medium priority (queued for next idle slot)
+9. **n_hidden=256 × n_layers=3 + epochs=50** — width scan upper edge if #2023 wins.
 10. **batch_size=8 + epochs=50** — possible with smaller model footprint. Compounds with schedule fix.
+11. **EMA decay=0.9995** — only if #2024 (decay=0.998) overshoots into "too lagged" regime.
 
 ### Medium priority
 - **n_hidden=160 × n_layers=3** — bracket width from below; is 192 the sweet spot or above it?

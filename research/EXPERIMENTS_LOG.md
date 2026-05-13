@@ -1112,3 +1112,52 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Predicted outcomes: (A) val < 55.76 → schedule push compounds, T_max axis still has headroom; (B) val > 55.76 → T_max=50 was the sweet spot; clipping dominates at higher effective LR.
 - Targets: val < 55.7634, test < 48.0960.
 - Single-flag change: `--epochs 50 → --epochs 80`. No code changes.
+
+## 2026-05-13 11:30 — PR #1982: tanjiro grad-clip=2.5 — SENT BACK (protocol-stale)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-2p5`
+- Hypothesis: Threshold scan step 3, max_norm=2.5 (after #1784 max_norm=10 win and #1930 max_norm=5 win). Tests whether crossing into direction-normalization regime (~97% clip rate, ~7-9× downscaling) still helps.
+- W&B run: `lpr8vehg`
+- First-pass result (PRE-#1953 baseline): val=66.13 — beat OLD baseline (#1784) but +4.2% worse than #1930. Mechanism diagnostic was clean: clip rate ~96.5%, ~7.21× scaling. Decision was held pending T_max-50 baseline retest.
+
+| Metric | Value | vs #1930 (then-current) | vs #1953 (new) |
+|--------|-------|----------|---------|
+| `val_avg/mae_surf_p` (best) | 66.13 | +4.2% | +18.6% |
+| Mechanism | clip 96.5%, ~7.21× scaling | direction-normalization regime | — |
+
+- **Decision: SEND BACK with `--epochs 50 --n_hidden 192 --n_layers 3` retest instructions.** The first-pass ran on T_max=30 schedule (now superseded). The 11-compound + T_max=50 stack provides the proper comparison point.
+- **What this measures:** does grad-clip=2.5 still hurt after schedule fix? If yes (val ≥ 55.76), U-shape between 2.5/5.0 is confirmed. If no, threshold scan continues.
+
+## 2026-05-13 11:30 — PR #1898: frieren n_hidden=128 + epochs=50 — CLOSED (mechanism subsumed)
+
+- Branch: `willowpai2g48h5-frieren/n-hidden-128-epochs-50`
+- Hypothesis: Convert throughput headroom into more training time via T_max=50 schedule fix on the n_layers=3 + n_hidden=128 stack.
+- W&B run: from PR comments — val_avg/mae_surf_p ≈ 67 range (incomplete; student replied to nudge with stale numbers).
+- **Decision: CLOSE.** PR #1953 (alphonse) ran the same mechanism (T_max=50) but combined with the n_hidden=192 width win — delivered val=55.76 (−12.17%). The schedule-fix mechanism is now fully captured in the merged 11-compound baseline. Continuing #1898 on the inferior n_hidden=128 stack provides no signal: it cannot beat the merged baseline (n_hidden=128 alone was +12.5% worse than n_hidden=192 in #1442 v2 retest).
+- **Lesson:** Schedule-fix experiments should always be run on the latest capacity stack. Frieren's hypothesis was prescient (predicted the schedule axis) but the experiment ran on outdated capacity.
+- **Next:** frieren assigned #2023 — n_hidden=224 width push on full 11-compound stack.
+
+## 2026-05-13 11:30 — PR #1833: edward `--epochs 40` (T_max=40) — CLOSED (stale, never completed)
+
+- Branch: `willowpai2g48h5-edward/epochs-40-tmax-40`
+- Hypothesis: convert throughput headroom into more training epochs via T_max=40.
+- Status at close: WIP-stale 2.5h+. Never completed a full training run; no terminal SENPAI-RESULT marker posted.
+- **Decision: CLOSE.** Same mechanism as #1898 — the schedule-fix axis is captured in the merged #1953 baseline at T_max=50, and #2000 (alphonse) is actively testing T_max=80 extension. Holding the slot is opportunity cost; cleaner to reassign edward to a fresh axis.
+- **Next:** edward assigned #2024 — EMA decay 0.999 → 0.998. Targets the EMA-live gap (−8.32) discovered in #1953.
+
+## 2026-05-13 11:30 — PR #2023: frieren assigned n_hidden=224 width push
+
+- Branch: `willowpai2g48h5-frieren/n-hidden-224-width-push`
+- Hypothesis: Push hidden width 192 → 224 on the 11-compound stack. Compact-but-wide hypothesis (#1899) suggested per-layer expressivity is the bottleneck at n_layers=3. With schedule now fixed (T_max=50, model still descending at termination), wider hidden gives the model more capacity to fit the residual error.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50 --wandb_group willow-pai2g-48h-r5-n_hidden_224`
+- Predicted: val ≤ 54.5 if width-scaling is strong, ~55.7 if neutral, > 56.5 if width hurts.
+- Targets: val < 55.7634, test < 48.0960.
+
+## 2026-05-13 11:30 — PR #2024: edward assigned EMA decay 0.999 → 0.998
+
+- Branch: `willowpai2g48h5-edward/ema-decay-0p998`
+- Hypothesis: Tighten EMA decay from 0.999 → 0.998 on the 11-compound stack. PR #1953's EMA-live gap is −8.32 (vs +0.42 at #1899) — the EMA shadow is now meaningfully lagging the live model. Halving the EMA half-life (693 → 346 steps ≈ 2 epochs) should let EMA track the live model's improvements through the T_max=50 cosine tail.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50 --wandb_group willow-pai2g-48h-r5-ema_decay_0p998`
+- Single-line code change in `train.py`. Diagnostic: log EMA-live gap at epochs 10, 25, 40, 50 — gap should close toward zero.
+- Predicted: val ≤ 55.0 if EMA-live gap closes, ~55.7 if neutral, > 56.0 if too reactive (loses smoothing value).
+- Targets: val < 55.7634, test < 48.0960.
