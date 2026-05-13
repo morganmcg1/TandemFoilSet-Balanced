@@ -52,6 +52,18 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUFFN(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, dropout=0.0):
+        super().__init__()
+        self.w_gate = nn.Linear(in_dim, hidden_dim)
+        self.w_value = nn.Linear(in_dim, hidden_dim)
+        self.w_out = nn.Linear(hidden_dim, out_dim)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def forward(self, x):
+        return self.dropout(self.w_out(F.silu(self.w_gate(x)) * self.w_value(x)))
+
+
 class PhysicsAttention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
         super().__init__()
@@ -89,7 +101,7 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu", mlp_ratio=4,
-                 last_layer=False, out_dim=1, slice_num=32):
+                 last_layer=False, out_dim=1, slice_num=32, use_swiglu=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -97,7 +109,10 @@ class TransolverBlock(nn.Module):
                                      dim_head=hidden_dim // num_heads,
                                      dropout=dropout, slice_num=slice_num)
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
+        if use_swiglu:
+            self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, dropout=dropout)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
@@ -114,7 +129,7 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_num=32, ref=8, unified_pos=False, use_swiglu=False,
                  output_fields=None, output_dims=None):
         super().__init__()
         self.ref = ref
@@ -128,7 +143,8 @@ class Transolver(nn.Module):
         self.blocks = nn.ModuleList([
             TransolverBlock(num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                             act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                            slice_num=slice_num, last_layer=(i == n_layers - 1))
+                            slice_num=slice_num, last_layer=(i == n_layers - 1),
+                            use_swiglu=use_swiglu)
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
@@ -210,6 +226,7 @@ def main():
         space_dim=mc["space_dim"], fun_dim=mc["fun_dim"], out_dim=mc["out_dim"],
         n_hidden=mc["n_hidden"], n_layers=mc["n_layers"], n_head=mc["n_head"],
         slice_num=mc["slice_num"], mlp_ratio=mc["mlp_ratio"],
+        use_swiglu=mc.get("use_swiglu", False),
         output_fields=mc["output_fields"], output_dims=mc["output_dims"],
     ).to(device)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
