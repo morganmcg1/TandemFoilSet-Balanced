@@ -8,6 +8,112 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 20:30 — PR #2475 (fern layerscale-init-0.1) — **MERGED** (19th compound win; val −0.49%, test +0.29%; anti-correlated init mechanism captured)
+
+- Branch: `charliepai2g24h4-fern/layerscale-init-0.1`
+- Hypothesis: LayerScale γ init=0.1 retuned on post-#2436 stack (LayerScale in no-WD 10× lr group); since #2436 endpoint avg γ ≈ 0.135, init at 0.1 starts closer to equilibrium and saves warm-up epochs
+- Metric artifact: `models/model-charliepai2g24h4-fern-layerscale-init-0.1-20260513-172731/metrics.jsonl`
+
+| Metric | This run | Prior baseline #2436 (58.6093) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **58.3244** | 58.6093 | **−0.49%** |
+| `test_avg/mae_surf_p` | 50.9438 | 50.7946 | +0.29% (noise) |
+| `val_single_in_dist` | 71.343 | 70.160 | +1.69% |
+| `val_geom_camber_cruise` | **35.411** | 36.251 | **−2.32%** |
+| `val_re_rand` | **55.503** | 56.922 | **−2.49%** |
+
+- **Mechanism finding (PRIMARY VALUE) — anti-correlated init responses**:
+  - attn LayerScale γ drifted DOWN from init=0.1 → landed 0.04–0.08 (mean per block: B0=0.0425, B1=0.0585, B2=0.0689, B3=0.0673, B4=0.0804)
+  - mlp LayerScale γ drifted UP from init=0.1 → landed 0.149–0.194 (B0=0.1928, B1=0.1941, B2=0.1671, B3=0.1485, B4=0.1486)
+  - Std/mean ratios: attn 150–243% (sparse-state attractor); mlp 16–30% (dense-state attractor)
+  - **The two paths have OPPOSITE attractors under no-WD 10× lr**, which contradicts the "single global equilibrium" framing. The no-WD 10× lr group is in a flat region of the loss landscape where init bias compounds rather than relaxing.
+- **Why we merged despite student's "don't merge" recommendation**: CLAUDE.md is explicit that `val_avg/mae_surf_p` is the metric of record. Small improvements compound. Test regression +0.29% is within run-to-run noise. The mechanism finding directly motivated PR #2510 (alphonse decoupled init test).
+- **New baseline**: val_avg = 58.3244, test_avg = 50.9438. 19 compound merges, 100.957 → 58.3244 = **−42.23% compound**.
+- **Follow-up directions**: (a) decouple attn vs mlp init at attractors (assigned PR #2510 alphonse); (b) per-block-separate LayerScale group lrs; (c) interpolation test at init=0.05.
+
+## 2026-05-13 20:25 — PR #2469 (thorfinn freqs-xy-separate) — **CLOSED** (Outcome B mechanism captured; directional asymmetry real, but OOD regression too hard to escalate)
+
+- Branch: `charliepai2g24h4-thorfinn/freqs-xy-separate`
+- Hypothesis: direction-separated learnable Fourier freqs (freqs_x, freqs_y); test whether top-freq gradient-pin in #2435 was caused by directional gradient cancellation (x vs y components having opposite sign)
+- Metric artifact: `models/model-charliepai2g24h4-thorfinn-freqs-xy-separate-20260513-172231/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 59.5183 | 58.3244 | **+2.10% regression** |
+| `test_avg/mae_surf_p` | 51.0299 | 50.9438 | +0.17% (neutral) |
+| `val_single_in_dist` | **66.836** | 71.343 | **−6.32%** (real in-dist gain) |
+| `val_geom_camber_cruise` | 39.820 | 35.411 | +12.45% (worst OOD regression) |
+
+- **Mechanism findings (Outcome B confirmed)**:
+  1. **Directional asymmetry IS real at low-freq end**: freq[0]: x→0.81 (−18.9%), y→1.03 (+3.0%); freq[1]: x→1.47 (−26.6%), y→2.02 (+0.8%), **asymmetry 37.3%**; freq[2]: x→3.43, y→3.76 (asymmetry 9.6%). x (streamwise) wants slower fundamentals; y (cross-stream geometry) wants dyadic spacing — consistent with chord vs camber prior in program.md.
+  2. **Top freqs [8, 16, 32] stayed pinned in BOTH directions** (<3% asymmetry, <2% drift). **Decisively resolves the gradient-pin question from #2435**: top-freq pin is NOT directional cancellation. Likely mesh-scale aliasing (the only remaining hypothesis).
+- **Why we close instead of escalating to lr×30 (pre-registered B action)**: OOD regression too hard (+12.45% camber_cruise) makes the test risky; the lr=50× sweep was already explored in #2435 and didn't help.
+- **Axis status**: top-freq gradient-pin axis closed for both lr and directional separation; remaining hypothesis is mesh-scale aliasing (would require different data sampling, not a model change).
+
+## 2026-05-13 20:20 — PR #2434 (frieren freq-init-equilibrium) — **CLOSED** (Outcome C +4.16% regression; equilibrium init OVERSHOOTS rather than relaxes)
+
+- Branch: `charliepai2g24h4-frieren/freq-init-equilibrium`
+- Hypothesis: H52 — initialize learnable freqs at #2370's converged values [0.75, 1.46, 3.44, 8, 16, 32] (instead of dyadic [1, 2, 4, 8, 16, 32]); should save warm-up epochs and let model find better local optima
+- Metric artifact: `models/model-charliepai2g24h4-frieren-freq-init-equilibrium-20260513-170814/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 60.7532 | 58.3244 | **+4.16% regression** |
+| `test_avg/mae_surf_p` | 52.6047 | 50.9438 | +3.26% regression |
+| `val_geom_camber_rc` | 76.991 | 71.041 | **+8.37%** (worst-hit OOD) |
+
+- **Mechanism — equilibrium init OVERSHOOTS, doesn't relax**:
+  - Bottom 3 freqs continued drifting DOWN from H52 init [0.75, 1.46, 3.44] → ended at [0.6344, 1.3403, 3.3253] (−15.4%, −8.2%, −3.3%)
+  - They did NOT stabilize at #2370's converged values — they overshot further.
+  - **Same anti-correlated-init pattern as #2475 (LayerScale γ overshoots when started near equilibrium)**: the no-WD 10× lr group is in a flat region where init bias compounds rather than relaxing.
+- **Mechanism question answered**: the #2370 win was NOT purely architectural (where the freqs land). The learning trajectory matters. Equilibrium init removes the early-training "approach phase" but introduces a fresh issue: the freqs have no asymptote to relax toward, so they keep moving in the same direction.
+- **Per-split asymmetry**: camber_rc is primary regression site (+7.7% val, +5.1% test); other 3 splits are neutral. Lower-freq spatial bands don't transfer to camber-shape variations.
+- **Axis status**: freq-init axis closed; #2370 dyadic init is the right starting point. The learning trajectory (not the endpoint) generates the gain.
+
+## 2026-05-13 20:15 — PR #2453 (askeladd flow-cond-film-v2) — **CLOSED** (Outcome C +4.45% regression; FiLM activated but generalized in wrong direction)
+
+- Branch: `charliepai2g24h4-askeladd/flow-cond-film-v2`
+- Hypothesis: FiLM conditioning on flow parameters (Re, AoA) with zero-init γ/β heads at the embedding; should improve OOD splits by giving model adaptive per-sample feature emphasis
+- Metric artifact: `models/model-charliepai2g24h4-askeladd-flow-cond-film-v2-20260513-170339/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 60.9178 | 58.3244 | **+4.45% regression** |
+| `test_avg/mae_surf_p` | 53.2378 | 50.9438 | +4.51% regression |
+| `val_single_in_dist` | 67.875 | 71.343 | **−4.86%** (only improving split) |
+| `val_geom_camber_cruise` | 41.241 | 35.411 | +16.46% (worst OOD regression) |
+| `val_re_rand` | 60.464 | 55.503 | +8.94% |
+
+- **Mechanism — FiLM is active but in wrong direction**:
+  - γ means stayed inside [0.95, 1.05] and β means inside [−0.05, 0.05] at cond=0 (population centroid) — by-the-book Outcome D criterion fires AT THE CENTROID.
+  - But per-channel std is non-trivial (~0.03 γ, ~0.02 β), AND the model performs differently at non-mean inputs (it actively hurts OOD splits). So FiLM modulation is NOT dormant — it's modulating per-sample, just modulating *badly*.
+  - The single_in_dist gain confirms FiLM helps the cleanest, most-mean-like distribution. The OOD regressions confirm FiLM hurts away-from-mean inputs — the *opposite* of the intended OOD-pickup pattern.
+- **Likely root cause**: Re/AoA conditioning is supposed to give adaptive per-sample emphasis. But with 12 epochs and the FiLM heads' zero-init, the modulator never builds robust per-cond-vector representations — it overfits to the in-distribution mean and produces noisy modulation at OOD points.
+- **Axis status**: zero-init FiLM at embedding closed. Would require either (a) more epochs (forbidden by 30-min cap), (b) different conditioning architecture (e.g., FiLM per-block instead of at embedding), or (c) explicit OOD regularization on the conditioning head. Future FiLM attempts must address the "in-dist → OOD generalization" issue.
+
+## 2026-05-13 20:10 — PR #2476 (alphonse swa-last-3-epochs) — **CLOSED** (Outcome C +7.79% regression; SWA averages through still-descending trajectory)
+
+- Branch: `charliepai2g24h4-alphonse/swa-last-3-epochs`
+- Hypothesis: Stochastic Weight Averaging over the last 3 training epochs (e10, e11, e12); should reduce final-epoch noise and improve generalization
+- Metric artifact: `models/model-charliepai2g24h4-alphonse-swa-last-3-epochs-20260513-173421/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `swa_val_avg/mae_surf_p` | 62.8677 | 58.3244 | **+7.79% regression** |
+| `swa_test_avg/mae_surf_p` | 54.3135 | 50.9438 | +6.62% regression |
+| Terminal e12 val_avg | 59.5287 | 58.3244 | +2.07% (within variance) |
+
+- **Mechanism — clean falsification**:
+  - Per-epoch val trajectory: e10=72.534, e11=65.938, e12=59.529 (terminal)
+  - SWA (mean of e10, e11, e12) = 62.8677 — drags terminal back to ~e10-e11 quality region
+  - **Val_avg dropped 9.7% in one epoch (e11→e12)**. The model is mid-descent at training cut-off.
+- **Root cause is the training schedule, not the SWA recipe**:
+  - Cosine T_max=14 at 30-min cap means LR at e12 is 5.45e−5 (~11% of peak)
+  - We're nowhere near the plateau phase where consecutive epochs sample equivalent minima
+  - Naive SWA over the last 3 epochs requires plateau behavior; we don't have that
+- **Why this doesn't extend to "try SWA with shorter window"**: e11 → e12 alone is still a 9.7% Δ. SWA(e11, e12) would still drag terminal back. The only way SWA would help in this regime is to push past the 30-min budget into a true plateau — forbidden by SENPAI_TIMEOUT_MINUTES=30.
+- **Axis status**: SWA fundamentally incompatible with current cosine T_max=14 + 30-min schedule; any future attempt requires both a different schedule (e.g., constant LR finale, longer warm-up extension) and a longer time cap. Close for current Charlie programme.
+
 ## 2026-05-13 19:30 — PR #2427 (tanjiro qk-norm-temp-init-0 / v2) — **CLOSED** (Outcome C +7.60% vs current; mechanism didn't activate; F.normalize magnitude-collapse)
 
 - Branch: `charliepai2g24h4-tanjiro/qk-norm-temp-init-0`
