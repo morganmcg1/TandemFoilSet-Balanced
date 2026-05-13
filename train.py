@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import subprocess
@@ -458,6 +459,17 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 
+ema_model = copy.deepcopy(model)
+for _p in ema_model.parameters():
+    _p.requires_grad = False
+ema_model.eval()
+ema_decay = 0.999
+print(
+    f"EMA Polyak weight averaging: decay={ema_decay} "
+    f"(~{int(1/(1-ema_decay))}-step time constant); EMA model evaluated for val/test metrics; "
+    f"+{sum(p.numel() for p in ema_model.parameters())/1e3:.1f}K transient params for EMA copy"
+)
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -479,6 +491,16 @@ def amp_ctx_factory():
 
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
+
+
+@torch.no_grad()
+def _update_ema():
+    _live = getattr(model, "_orig_mod", model)
+    for p_ema, p in zip(ema_model.parameters(), _live.parameters()):
+        p_ema.data.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+    for b_ema, b in zip(ema_model.buffers(), _live.buffers()):
+        b_ema.data.copy_(b.data)
+
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
@@ -547,6 +569,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        _update_ema()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -557,10 +580,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (using EMA snapshot) ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -575,7 +598,7 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -603,18 +626,68 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# --- EMA terminal diagnostics (current in-memory state) ---
+print("\nEMA terminal diagnostics (current in-memory state, post-training):")
+_live_inner = getattr(model, "_orig_mod", model)
+_diffs = []
+_norms = []
+with torch.no_grad():
+    for p_ema, p_live in zip(ema_model.parameters(), _live_inner.parameters()):
+        _diffs.append((p_ema - p_live).abs().mean().item())
+        _norms.append(p_live.abs().mean().item())
+mean_drift = sum(_diffs) / max(len(_diffs), 1)
+mean_norm = sum(_norms) / max(len(_norms), 1)
+drift_ratio = mean_drift / mean_norm if mean_norm > 0 else float("nan")
+print(
+    f"  drift: mean(|p_ema - p_live|)={mean_drift:.6f}, mean(|p_live|)={mean_norm:.6f}, "
+    f"ratio={drift_ratio:.4f}"
+)
+
+# Head-to-head: terminal LIVE val_avg vs terminal EMA val_avg
+model.eval()
+terminal_live_split_metrics = {
+    name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+    for name, loader in val_loaders.items()
+}
+terminal_live_avg = aggregate_splits(terminal_live_split_metrics)
+terminal_ema_split_metrics = {
+    name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+    for name, loader in val_loaders.items()
+}
+terminal_ema_avg = aggregate_splits(terminal_ema_split_metrics)
+print(
+    f"  terminal LIVE val_avg/mae_surf_p = {terminal_live_avg['avg/mae_surf_p']:.4f}\n"
+    f"  terminal EMA  val_avg/mae_surf_p = {terminal_ema_avg['avg/mae_surf_p']:.4f}"
+)
+if best_metrics:
+    print(
+        f"  best     EMA  val_avg/mae_surf_p = {best_avg_surf_p:.4f}  "
+        f"(epoch {best_metrics['epoch']}/{MAX_EPOCHS})"
+    )
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "ema_terminal_diagnostics",
+    "drift_mean_abs": mean_drift,
+    "live_mean_abs": mean_norm,
+    "drift_ratio": drift_ratio,
+    "terminal_live_val_avg/mae_surf_p": terminal_live_avg["avg/mae_surf_p"],
+    "terminal_ema_val_avg/mae_surf_p": terminal_ema_avg["avg/mae_surf_p"],
+    "terminal_live_splits": terminal_live_split_metrics,
+    "terminal_ema_splits": terminal_ema_split_metrics,
+    "best_ema_val_avg/mae_surf_p": best_avg_surf_p if best_metrics else None,
+    "best_ema_epoch": int(best_metrics["epoch"]) if best_metrics else None,
+})
+
 # --- Test evaluation + local summary ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
-    _inner = getattr(model, "_orig_mod", model)
+    # LayerScale diagnostic: report final per-block gamma means (best-EMA-checkpoint weights)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
-    print("\nLayerScale final gammas (best-checkpoint weights):")
-    for _i, _blk in enumerate(_inner.blocks):
+    print("\nLayerScale final gammas (best-EMA-checkpoint weights):")
+    for _i, _blk in enumerate(ema_model.blocks):
         _ga_mean = _blk.gamma_attn.detach().float().mean().item()
         _ga_abs = _blk.gamma_attn.detach().float().abs().mean().item()
         _gm_mean = _blk.gamma_mlp.detach().float().mean().item()
@@ -633,14 +706,14 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (using EMA snapshot)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
