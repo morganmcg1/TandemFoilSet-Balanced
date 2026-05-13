@@ -22,7 +22,7 @@ winner sets the first numeric reference value.
 - **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
 - **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
-- **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=4)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 16 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..3`). `fun_dim` bumps `22 → 36`. _(added 2026-05-13 by PR #1548)_
+- **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=6)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 24 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..5`). `fun_dim = 4 * 6 + 22 - 2 = 44`. _(updated 2026-05-13 by PR #1772, was L=4 in #1548)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -34,6 +34,35 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 02:50 — PR #1772 (`charliepai2g24h4-edward/fourier-coords-L6`)
+
+Fourier positional encoding bumped from L=4 → L=6 (24 Fourier features
+replacing the 16 L=4 features). Single-knob bracket-up of the merged
+#1548 Fourier mechanism — the L=4 → L=6 trajectory is still on the
+upward slope of Tancik's curve, with the predicted plateau at L=8-10.
+Every val split and every test split improves; magnitude is at the
+upper end of the pre-registered prediction band (-0.5% to -2.5%) on val
+and middle of the band on test.
+
+- **`val_avg/mae_surf_p`** = **82.311** (best @ epoch 15, last epoch before 30 min timeout)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **73.330**
+- **Per-split val** `mae_surf_p` at the best val checkpoint:
+  - `val_single_in_dist` = 93.299 (-3.89% vs L=4)
+  - `val_geom_camber_rc` = 92.965 (-2.14% vs L=4)
+  - `val_geom_camber_cruise` = 63.131 (-0.91% vs L=4)
+  - `val_re_rand` = 79.848 (-4.10% vs L=4)
+- **Per-split test** `mae_surf_p` at the best val checkpoint:
+  - `test_single_in_dist` = 83.323 (-2.91% vs L=4)
+  - `test_geom_camber_rc` = 81.867 (-1.39% vs L=4)
+  - `test_geom_camber_cruise` = 54.094 (-1.43% vs L=4)
+  - `test_re_rand` = 74.038 (-1.17% vs L=4)
+- **Δ vs PR #1548 baseline (84.762 / 74.659)**: **-2.89%** on val_avg, **-1.78%** on 4-split test.
+- **Compound progress**: #1397 → #1552 → #1611 → #1637 → #1548 → #1772 → val_avg has improved from 100.957 to 82.311 = **-18.5% over 6 merges**.
+- **Param count**: 667,991 (+2,048 over #1548; +0.31%; from wider preprocess MLP first-layer input).
+- **Surprise finding**: `val_re_rand` improved -4.10% (pre-registered as "likely stays flat" since its OOD axis is Reynolds, not spatial frequency). Plausible mechanism: at L=4 the network was over-spending capacity on low-freq geometry encoding; with L=6 it can encode geometry in higher Fourier bands and free up MLP capacity for Reynolds-dependent features. The consistent -1.2% to -1.4% gain on test_re_rand corroborates this is not pure noise.
+- **Metric artifacts**: `models/model-charliepai2g24h4-edward-fourier-coords-L6-20260513-011437/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-edward --experiment_name charliepai2g24h4-edward/fourier-coords-L6`
 
 ### 2026-05-13 01:15 — PR #1548 (`charliepai2g24h4-edward/fourier-coords-L4-rebased`)
 
