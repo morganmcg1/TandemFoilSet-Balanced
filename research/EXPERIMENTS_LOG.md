@@ -2,6 +2,79 @@
 
 ---
 
+## 2026-05-13 11:09 — PR #2069: n_head sweep n_head=8 vs n_head=2 on Lion+MAE+EMA (alphonse) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-alphonse/n-head-8-lion-mae`
+- **Hypothesis:** n_head=4 (baseline) may be over-/under-parameterized for slice_num=64 with n_hidden=128. n_head=2 doubles per-head dim (32→64); n_head=8 halves it (32→16).
+- **W&B runs:** `2lo9mn88` (n_head=2, winner), `qkh64fhe` (n_head=8 run 2), `y42702ef` (n_head=8 run 1)
+
+| Metric | Prev baseline (#1932) | n_head=2 | n_head=8 (run 1) | n_head=8 (run 2) |
+|--------|----------------------|----------|-----------------|-----------------|
+| val_avg/mae_surf_p | 55.41 | **51.11** | 64.09 | 62.74 |
+| test_avg/mae_surf_p | 47.90 | **44.18** | 54.96 | 54.11 |
+| Δ vs baseline | — | **−7.76%** | +15.7% | +13.2% |
+| Epochs in 30 min | 16 | **20** | 12 | 12 |
+
+**Per-test-split (n_head=2):** single_in_dist=49.23, geom_camber_rc=57.44, geom_camber_cruise=26.74, re_rand=43.30 — wins all 4.
+
+**Result:** MERGED. n_head=2 is the strongest single-experiment win of this round. Val still descending at cap (−1.3/epoch in last 3 transitions, no plateau). The monotonic head-count direction confirms head-undersizing story: n_head=2 wins → n_head=4 baseline → n_head=8 worst. The architectural change also unlocks faster epochs (~93.5s vs ~110s) for net more training steps in the same wall-clock.
+
+**Compute-neutrality caveat (alphonse's analysis):** At matched epoch=12 the two arms are close (n_head=2 val=63.00 vs n_head=8 val=62.74). The headline win at 51.11 is partly the architecture buying compute. But the architectural change is what unlocks it — the win is real and reproducible under the 30-min cap.
+
+**Note:** Both runs used lr=1e-4 (not the lr=2e-4 from #1932). The lr × n_head interaction is unexplored.
+
+**New compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_head=2** (slice_num=64)
+
+---
+
+## 2026-05-13 ~11:10 — PR #2086: Lion lr probe lr=4e-4 + lr=3e-4 on Lion+MAE (thorfinn) — CLOSED, SATURATION CONFIRMED
+
+- **Branch:** `willowpai2g24h5-thorfinn/lion-lr-4e-4-probe`
+- **Hypothesis:** lr-doubling trend 5e-5→1e-4→2e-4 hasn't saturated; 3e-4/4e-4 may continue.
+- **W&B runs:** `4q7tjvt4` (lr=4e-4), `bpa3tkj7` (lr=3e-4)
+
+| Arm | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (55.41) |
+|-----|---|---|---|
+| lr=4e-4 (4q7tjvt4) | 57.53 | 49.03 | +3.83% |
+| lr=3e-4 (bpa3tkj7) | 57.68 | 48.81 | +4.10% |
+| lr=2e-4 baseline | **55.41** | **47.90** | — |
+
+**Result:** CLOSED. lr-doubling trend saturated at lr=2e-4 after 3 winning octaves. Key diagnostics: (1) flat minimum — lr=4e-4 is only 2 pts worse than lr=3e-4 despite 4×-3× the learning rate; (2) EMA main-vs-EMA gap (~10-12 pts) is identical at all 3 lrs — EMA is not the bottleneck at higher lr; (3) both arms still descending at cap with ~3 val pts over last 4 epochs — not diverging, just in a shallower basin. Schedule shape (OneCycleLR) is the natural next lever.
+
+**Thorfinn reassigned:** PR #2211 — OneCycleLR on n_head=2 baseline.
+
+---
+
+## 2026-05-13 ~11:10 — PR #2056: surf_weight tune on Lion+MAE (nezuko) — CLOSED, RETEST ON n_head=2
+
+- **Branch:** `willowpai2g24h5-nezuko/surf-weight-lion-mae`
+- **Hypothesis:** MAE's uniform weighting reduces need for high surf_weight; sw=5 may improve surface focus, sw=15 may over-emphasize it.
+- **W&B runs:** `gxq26aip` (sw=5, lr=1e-4), `obkwbyo1` (sw=15, lr=2e-4)
+
+| Arm | sw | lr | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs old base (55.41) |
+|-----|----|----|---|---|---|
+| sw=5 (gxq26aip) | 5 | 1e-4 | **54.46** | **47.06** | −1.71% / −1.76% |
+| sw=15 (obkwbyo1) | 15 | 2e-4 | 58.32 | 50.27 | +5.25% / +4.95% |
+
+**Result:** CLOSED because #2069 (n_head=2, val=51.11) merged after this was submitted. sw=5 at lr=1e-4 beat the OLD baseline by 1.71% — a genuine improvement — but cannot be merged onto the new n_head=2 code as-is (was measured at n_head=4). sw=15 regresses on all splits. Nezuko reassigned to retest sw=5+sw=7 on n_head=2 baseline (#2210).
+
+---
+
+## 2026-05-13 ~11:10 — PR #2052: bs=8 + LR scaling on Lion+MAE (frieren) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-frieren/batch-size-lr-scaling`
+- **Hypothesis:** bs=8 reduces gradient noise; linear-scaled lr compensates for larger batch.
+- **W&B runs:** `nay1st1x` (bs=8, lr=2e-4), `img8ns9k` (bs=8, lr=1e-4)
+
+| Arm | bs | lr | val_avg/mae_surf_p | Δ vs baseline |
+|-----|----|----|---|---|
+| Arm 1 linear (nay1st1x) | 8 | 2e-4 | 61.05 | +7.9% |
+| Arm 2 batch-only (img8ns9k) | 8 | 1e-4 | 66.99 | +18.4% |
+
+**Result:** CLOSED. Hypothesis falsified: step-count-limited, not gradient-noise-limited. bs=8 takes half as many steps in same wall-clock. VRAM at 93.7 / 92.2 GB — bs=8 is maximum safe batch. The per-step distance route (lr) is the right lever; gradient noise reduction via batch size is wrong for this regime. Frieren reassigned to split-loss formulation (#2216: surface-MAE + volume-Huber).
+
+---
+
 ## 2026-05-13 ~10:34 — PR #2070: Lion-no-EMA + AdamW-no-EMA ablation (edward) — CLOSED, ICML APPENDIX
 
 - **Branch:** `willowpai2g24h5-edward/lion-no-ema-ablation`
