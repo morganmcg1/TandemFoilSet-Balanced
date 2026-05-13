@@ -407,7 +407,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 @dataclass
 class Config:
-    lr: float = 5e-4
+    lr: float = 5e-4              # initial_lr (OneCycleLR starting point)
+    max_lr: float = 2e-3          # peak LR for OneCycleLR
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
@@ -415,6 +416,8 @@ class Config:
     epochs: int = 50
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
+    onecycle_target_epochs: int = 18   # OneCycleLR total_steps calibration
+    onecycle_pct_start: float = 0.1
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -449,6 +452,13 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+# OneCycleLR step calibration. With bf16+accum=2 the 30 min budget reaches
+# ~18 epochs; set total_steps to that to land the anneal-to-zero phase
+# at the wall-clock cap.
+steps_per_epoch = max(len(train_loader) // cfg.grad_accum, 1)
+total_steps = max(cfg.onecycle_target_epochs * steps_per_epoch, 1)
+print(f"OneCycleLR: steps_per_epoch={steps_per_epoch} total_steps={total_steps}")
+
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -467,7 +477,15 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=cfg.max_lr,
+    total_steps=total_steps,
+    pct_start=cfg.onecycle_pct_start,
+    anneal_strategy="cos",
+    div_factor=cfg.max_lr / cfg.lr,   # initial_lr = max_lr / div_factor = cfg.lr
+    final_div_factor=1e4,             # final_lr = initial_lr / 1e4
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -546,17 +564,22 @@ for epoch in range(MAX_EPOCHS):
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
+            # OneCycleLR steps per optimizer step. Guard against overflow if
+            # the run somehow exceeds the calibrated total_steps budget.
+            if global_step < total_steps:
+                scheduler.step()
             global_step += 1
             # Log the un-scaled loss for human readability
             wandb.log({"train/loss": loss.item() * cfg.grad_accum,
                        "train/grad_norm": grad_norm.item(),
+                       "train/lr": scheduler.get_last_lr()[0],
                        "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    # OneCycleLR steps per optimizer step (above), not per epoch.
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
