@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import subprocess
 import time
@@ -169,23 +170,38 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 pos_freq_bands: int = 0,
+                 pos_freq_surface_only: bool = False,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.pos_freq_bands = pos_freq_bands
+        self.pos_freq_surface_only = pos_freq_surface_only
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+
+        # Fourier features per node: 2*L per spatial dim (sin + cos for each band).
+        # Keep raw coords concatenated alongside, so effective input width is
+        # space_dim + 2*space_dim*L + fun_dim.
+        fourier_dim = 2 * space_dim * pos_freq_bands if pos_freq_bands > 0 else 0
 
         if self.unified_pos:
             self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + fourier_dim,
+                                  n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
+
+        if pos_freq_bands > 0:
+            freqs = 2.0 ** torch.arange(pos_freq_bands, dtype=torch.float32)
+            self.register_buffer("_fourier_freqs", freqs)
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.fun_dim = fun_dim
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -206,8 +222,27 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def fourier_encode(self, coords: torch.Tensor) -> torch.Tensor:
+        """NeRF-style sinusoidal positional encoding.
+
+        coords: (..., space_dim) — node coordinates (here, normalized x_norm[:, :2])
+        returns: (..., 2 * space_dim * L) — [sin(2π·2ᵏ·d), cos(2π·2ᵏ·d)] features
+        """
+        proj = coords.unsqueeze(-1) * (2.0 * math.pi * self._fourier_freqs)
+        return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(start_dim=-2)
+
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.pos_freq_bands > 0:
+            coords = x[..., :self.space_dim]
+            fun = x[..., self.space_dim:]
+            fourier = self.fourier_encode(coords)
+            if self.pos_freq_surface_only:
+                # Gate Fourier features by binary is_surface mask so only
+                # surface nodes receive the high-frequency basis expansion.
+                is_surface = data["is_surface"].to(fourier.dtype).unsqueeze(-1)
+                fourier = fourier * is_surface
+            x = torch.cat([coords, fourier, fun], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -239,7 +274,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -322,6 +357,8 @@ def write_experiment_summary(
         "onecycle_div_factor": cfg.onecycle_div_factor,
         "onecycle_final_div_factor": cfg.onecycle_final_div_factor,
         "ema_decay": cfg.ema_decay,
+        "pos_freq_bands": cfg.pos_freq_bands,
+        "pos_freq_surface_only": cfg.pos_freq_surface_only,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -381,6 +418,8 @@ class Config:
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
     surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
+    pos_freq_bands: int = 0          # Fourier positional encoding bands (0 = disabled, NeRF-style γ(x))
+    pos_freq_surface_only: bool = False  # Gate Fourier features by is_surface mask (surface-only PE)
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -438,6 +477,8 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    pos_freq_bands=cfg.pos_freq_bands,
+    pos_freq_surface_only=cfg.pos_freq_surface_only,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -534,7 +575,7 @@ for epoch in range(MAX_EPOCHS):
             x = augment_geometry(x, cfg)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         residual = pred - y_norm
         sq_err = torch.where(
             residual.abs() <= cfg.huber_delta,
@@ -613,6 +654,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "ema_decay": cfg.ema_decay,
+        "pos_freq_bands": cfg.pos_freq_bands,
+        "pos_freq_surface_only": cfg.pos_freq_surface_only,
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
         "surf_weight_warmup_epochs": cfg.surf_weight_warmup_epochs,
         "surf_weight_init": cfg.surf_weight_init,
