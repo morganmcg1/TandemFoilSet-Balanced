@@ -1,5 +1,64 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 15:55 — PR #2005: surf_weight=15 on GeGLU stack (CLOSED — both axes regress)
+
+- Student branch: `charliepai2g24h5-nezuko/surf-weight-sweep`
+- Hypothesis: Raise surf_weight 10→15 to align loss with surface-p metric on the GeGLU+Lion+per-channel-δ+n160 stack.
+
+### Results (vs GeGLU baseline #2287: 45.92/44.35)
+
+| Metric | sw=15 | Baseline sw=10 | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **46.8959** | **45.92** | **+0.98 (+2.13%)** |
+| **test_avg/mae_surf_p** | **44.5852** | **44.35** | **+0.24 (+0.54%)** |
+
+Per-split val regressed on all 4 splits (+0.27 to +2.20). Per-split test: 3 of 4 splits regressed, only test_single_in_dist improved (−1.16). 15 of 16 epochs completed (30-min cap).
+
+### Mechanism
+
+Raising surf_weight 50% increased the surface term's gradient contribution but the *raw* per-element surface loss equilibrated similarly to baseline at epoch 15. With Lion's sign-quantized update (per-parameter ±lr regardless of gradient magnitude), reweighting two loss terms doesn't change the per-parameter step magnitude — it only changes which parameters get pushed each step. The model finds a similar minimum via a less efficient path.
+
+**Principle:** Loss-balance reweighting is a weak knob with Lion's sign update; effective only if it shifts which parameters reach saturation in the sign quantization, not by reweighting per-step magnitudes.
+
+### Disposition
+
+**CLOSED.** Reassigned nezuko to n_layers=4 (cost-recovery probe complementing fern's #2349 n_layers=6 budget-cliff result).
+
+- Metrics: `models/model-surf_weight_15_pcd_lr2e4-20260513-145644/metrics.jsonl`
+
+---
+
+## 2026-05-13 15:55 — PR #2352: Lion wd sweep on GeGLU stack (CLOSED — primary val not beaten, axis shallow)
+
+- Student branch: `charliepai2g24h5-edward/wd-sweep-geglu-baseline`
+- Hypothesis: Real wd above FP32 ulp floor may help on GeGLU stack (wd∈{2e-3, 5e-3}). #2177 showed wd<1.49e-4 at lr=2e-4 is FP32 ulp no-op.
+
+### Results (vs GeGLU baseline #2287: 45.92/44.35)
+
+| Arm | val_avg | Δ vs 45.92 | test_avg | Δ vs 44.35 |
+|---|---:|---:|---:|---:|
+| Baseline | 45.92 | — | 44.35 | — |
+| Arm A wd=2e-3 | 46.49 | +1.21% (worse) | 44.28 | −0.15% (tied) |
+| Arm B wd=5e-3 | 45.96 | +0.08% (noise) | 43.90 | **−1.01% (better)** |
+
+### Mechanism
+
+Param L2 grows ~58% from init at both wd=2e-3 and wd=5e-3 — the sign-update gradient growth dominates the wd shrink (theoretical per-step shrink at wd=5e-3, lr=2e-4 is ~0.000001 per step, vs sign-update magnitude of lr=2e-4 per parameter per step). The wd is "firing" but its magnitude is negligible compared to Lion's growth driver. Differences across arms are within seed noise.
+
+The non-monotonicity (Arm A worse than Arm B on val) confirms noise dominates: a real wd-induced regularization curve would be smooth in wd.
+
+**Test improvement on Arm B (−1.01%) is informative but unconfirmed:** without a seed pair this could be checkpoint-pick luck. The student suggested seed pair as follow-up.
+
+### Disposition
+
+**CLOSED.** Primary val not beaten on either arm. Student's own analysis says wd axis is shallow on this stack. GPU better spent on architectural axes (5 GeGLU follow-ups already in flight). Reassigned edward to n_head=8 sweep.
+
+**Recorded principle:** wd ∈ {6e-5, 2e-3, 5e-3} at lr=2e-4 with Lion+GeGLU all within ±0.6 val of baseline — wd axis is shallow and noise-dominated. Do not assign further wd sweeps on this stack without architectural changes.
+
+- Metrics: `models/model-charliepai2g24h5-edward-wd_2e3_geglu-20260513-141614/metrics.jsonl`, `models/model-charliepai2g24h5-edward-wd_5e3_geglu-20260513-145355/metrics.jsonl`
+
+---
+
 ## 2026-05-13 15:03 — PR #1844: Lion β2=0.999 on GeGLU stack (CLOSED — warmup cost dominates)
 
 - Student branch: `charliepai2g24h5-askeladd/lion-beta2-0_999`

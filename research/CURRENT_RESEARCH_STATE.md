@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 15:20
+- 2026-05-13 15:55
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -79,19 +79,21 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2352 | edward | Lion wd sweep on GeGLU baseline: wd=2e-3 and wd=5e-3 (firing values on new baseline) | WIP | Beat 45.92 |
-| #2288 | frieren | Lion lr sweep on GeGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP | Beat 45.92 |
-| #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe, SwiGLU co-change) | WIP | Beat 45.92 |
+| #2288 | frieren | Lion lr sweep on GeGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP (stale, status-checked) | Beat 45.92 |
+| #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe) | WIP (stale, status-checked) | Beat 45.92 |
 | #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP — new | Beat 45.92 |
 | #2403 | tanjiro | GeGLU mlp_ratio=2 — swiglu_hidden 216→320, +48% MLP capacity | WIP — new | Beat 45.92 |
 | #2405 | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | WIP — new | Beat 45.92 |
-| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP (stale baseline, running) | Beat 45.92 |
-| #1979 | alphonse | n_layers=6 depth sweep, actively running (rebased, adjusted to 11 epochs) | WIP (stale baseline, running) | Beat 45.92 |
+| #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP — new | Beat 45.92 |
+| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP — new | Beat 45.92 |
+| #1979 | alphonse | n_layers=6 depth sweep, actively running (stale baseline, directionally informative) | WIP (stale baseline) | Beat 45.92 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
+| #2352 | edward | CLOSED | Lion wd sweep on GeGLU stack. Neither arm beats primary val. Arm A (wd=2e-3): val=46.49 (+1.21%); Arm B (wd=5e-3): val=45.96 (+0.08% noise) but **test=43.90 (−1.01% real)**. Param L2 grows ~58% from init regardless of wd — sign-update dominates, wd axis is shallow on this stack. |
+| #2005 | nezuko | CLOSED | surf_weight=15 on GeGLU stack: val=46.90 (+2.13%), test=44.59 (+0.54%). Both axes regress. Mechanism: Lion's sign quantization makes loss-balance reweighting a weak knob — only changes which params get stepped, not step magnitude. |
 | #2349 | fern | CLOSED | n_layers=6 GeGLU: val=50.80 (+10.6%), test=47.96 (+8.1%). Budget-starved: +18% per-epoch cost → only 12/13 epochs in 30-min cap; val still descending at −4.0/ep at termination. Depth axis alive but needs wall-clock headroom. |
 | #2332 | tanjiro | CLOSED | SwiGLU preprocess entry projector: val=52.54 (+10.8%), test=50.07 (+11.2%). Gating at 24-dim input is information loss (no feature diversity for routing). Principle: gating works at scale (dim ≥ 160), not at low-dim entry. |
 | #1844 | askeladd | CLOSED | β2=0.999 on GeGLU stack: val=48.83 (+6.3%), test=46.36 (+4.5%). ~10× longer EMA timescale → warmup cost dominates 30-min cap. β2=0.99 confirmed optimal for this regime. β1 axis reassigned. |
@@ -123,14 +125,16 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 1. **Does GeGLU gating in PhysicsAttention.to_out compound on block-MLP gating?** (fern, just assigned) — If the attention output path also benefits from selective gating, all parametrized sub-layers use GeGLU — full gated architecture. Param-parity bottleneck at hidden=56.
 2. **Does widening the GeGLU MLP (hidden 216→320) improve?** (tanjiro, just assigned) — More gate capacity may unlock better selective routing without changing depth. +20% total params.
 3. **Does Lion β1 tune benefit at β1∈{0.85, 0.95}?** (askeladd, just assigned) — Instantaneous step direction weight is separate from EMA timescale (β2). Low warmup cost, orthogonal to β2=0.999 test.
-4. **Does real wd (2e-3 or 5e-3) help on the GeGLU baseline?** (#2352 edward) — First genuine wd signal above FP32 ulp floor on the current best stack.
-5. **Does the Lion lr optimum shift on the GeGLU baseline?** (#2288 frieren) — lr=2e-4 proven optimal for GELU; GeGLU may shift the bowl. Probing lr∈{2.5e-4, 3e-4}.
-6. **Does RMSNorm improve on the GeGLU stack?** (#2315 thorfinn) — LLaMA-recipe co-change; mean-centering may erase PhysicsAttention slice-token offsets; scale-only norm may preserve structural bias.
-7. **Does surf_weight shift from 10.0 on the GeGLU stack?** (#2005 nezuko — loss balance, runs on stale baseline; result still informative directionally)
+4. **Does the Lion lr optimum shift on the GeGLU baseline?** (#2288 frieren — stale, status-checked) — lr=2e-4 proven optimal for GELU; GeGLU may shift the bowl. Probing lr∈{2.5e-4, 3e-4}.
+5. **Does RMSNorm improve on the GeGLU stack?** (#2315 thorfinn — stale, status-checked) — LLaMA-recipe co-change; mean-centering may erase PhysicsAttention slice-token offsets; scale-only norm may preserve structural bias.
+6. **Does n_head=8 beat n_head=4 on the GeGLU stack?** (edward, just assigned) — attention diversity vs per-head capacity tradeoff. Same total params, different shape. Common in modern transformers.
+7. **Does n_layers=4 free enough budget to outperform n_layers=5?** (nezuko, just assigned) — cost-recovery probe complementing fern's n_layers=6 budget-cliff result (#2349). One fewer block → ~17 epochs instead of 15-16.
 8. **Does n_layers=6 beat n_layers=5 on the stale Huber stack?** (#1979 alphonse — rebased and running, directionally informative for depth axis)
 
 ## Confirmed dead ends
 
+- **Lion wd axis on GeGLU at lr=2e-4 (#2352 CLOSED)**: wd ∈ {6e-5, 2e-3, 5e-3} all within ±0.6 val of baseline. Param L2 grows ~58% from init regardless of wd — sign-update growth dominates the multiplicative shrink. Axis is shallow and noise-dominated. Arm B wd=5e-3 had a real-looking test improvement (−1.01%) but val regressed slightly — unconfirmed without seed pair.
+- **surf_weight=15 on GeGLU+Lion stack (#2005 CLOSED)**: val +2.13%, test +0.54%, both axes regress. Lion's sign quantization makes loss-balance reweighting weak (changes which params get stepped, not step magnitude). Don't assign further surf_weight sweeps on Lion stacks.
 - **SwiGLU gating at the preprocess entry projector (#2332 CLOSED)**: +10.8% val regression. Gating below dim~32 discards information rather than routing it — no feature diversity for selective suppression. **Principle: GeGLU gating only works at scale (input dim ≥ 160).**
 - **n_layers=6 on GeGLU stack (#2349 CLOSED)**: +10.6% val at termination. +18% per-epoch cost → only 12 of 13 epochs within 30-min cap; still in steep-descent regime. Depth axis alive, but needs budget > 30-min or cost reduction (smaller n_hidden/slice_num).
 - **Lion β2=0.999 on GeGLU stack (#1844 CLOSED)**: +6.3% val. ~10× longer EMA timescale costs too much warmup within 30-min/16-epoch cap. β2=0.99 confirmed optimal. β1 is a separate axis (now assigned).
