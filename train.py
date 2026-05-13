@@ -139,7 +139,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layerscale_init=1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -147,9 +148,11 @@ class TransolverBlock(nn.Module):
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
+        self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +161,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
+        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -450,6 +453,7 @@ print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -602,6 +606,26 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+
+    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
+    _inner = getattr(model, "_orig_mod", model)
+    _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nLayerScale final gammas (best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        _ga_mean = _blk.gamma_attn.detach().float().mean().item()
+        _ga_abs = _blk.gamma_attn.detach().float().abs().mean().item()
+        _gm_mean = _blk.gamma_mlp.detach().float().mean().item()
+        _gm_abs = _blk.gamma_mlp.detach().float().abs().mean().item()
+        print(f"  block[{_i}]: gamma_attn mean={_ga_mean:.6f} abs_mean={_ga_abs:.6f} | "
+              f"gamma_mlp mean={_gm_mean:.6f} abs_mean={_gm_abs:.6f}")
+        _gamma_log["blocks"].append({
+            "block_idx": _i,
+            "gamma_attn_mean": _ga_mean,
+            "gamma_attn_abs_mean": _ga_abs,
+            "gamma_mlp_mean": _gm_mean,
+            "gamma_mlp_abs_mean": _gm_abs,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
 
     test_metrics = None
     test_avg = None
