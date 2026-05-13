@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 05:00 — after #1437 EMA merge)
+- **Date**: 2026-05-13 (updated 06:15 — after #1800 close + #1986 tanjiro/fourier-positional-features assigned)
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
@@ -57,6 +57,7 @@ The baseline Transolver recipe has several obvious soft spots:
 | ~~`truncated-l1`~~ (tanjiro, #1800) | **CLOSED** | Truncated L1 cliff hurts in graded proportion to clip rate. Best τ=1.0+EMA+grad_clip arm 107.08/97.71 (+15.4/+16.4 vs baseline). Mechanism: the ~3% of residuals clipped at τ=1.0 carry critical signal for high-magnitude splits (`val_single_in_dist` +34 MAE). EMA stacks orthogonally (~10 test MAE buy, same as on SmoothL1). **Loss-shape axis now closed**: bounded-linear `sign(r)` (L1/SmoothL1/Huber) is the local optimum. | — |
 | `mlp-ratio-sweep` (edward, #1842) | WIP | Transolver block `mlp_ratio` sweep {1, 2, 3, 4} — orthogonal-to-width capacity vs throughput tradeoff | Low |
 | `droppath-stochastic-depth` (fern, #1918) | WIP (just assigned post-EMA-merge) | Stochastic Depth in TransolverBlock residual paths, linear-per-depth schedule, drop_path ∈ {0.0, 0.1, 0.2}. Predicted to help under-improved `val_geom_camber_rc` split most (regime-change axis). Orthogonal-to-EMA architectural regularization. | Low–Med |
+| `fourier-positional-features` (tanjiro, #1986) | WIP (just assigned) | Fourier random features for (x,z) node positions (Tancik et al 2020): expand 2 coords → 4K sin/cos features at log-spaced freqs. Sweep K ∈ {0, 4, 8, 12} + `--ema_decay 0.999`. Predicted biggest gain on `val_single_in_dist` (sharp suction-side peaks need high-freq resolving power). Input-side geometric enrichment — orthogonal to all loss/regularization levers. | Low–Med |
 
 All 7 prior in-flight PRs were notified of the new 91.66/81.28 baseline + EMA-rebase guidance — they should rebase, include `--ema_decay 0.999` on their best variant arms, and compare against the new baseline. EMA stacks orthogonally with every Round 2 hypothesis (loss-shape, capacity, regularization, sampling, precision, schedule), so existing hypotheses remain valid; merge bar is now ~86 val / ~76 test for a clean ≥10% gain over the new baseline.
 
