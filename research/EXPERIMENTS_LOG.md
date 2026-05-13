@@ -116,6 +116,63 @@
 
 ---
 
+## 2026-05-13 06:00 — Round 17
+
+### PR #1846: slice_num 64 → 32 — MERGED (7th winner, -9.30%)
+
+- **Student:** charliepai2g48h5-frieren
+- **Result vs L1 baseline (#1700):** val_avg=54.0051 (-9.30%), test_avg=47.6261 (-7.46%).
+- **All 4 val splits improve uniformly ~9%:** single -8.93%, rc -8.91%, cruise -10.63%, re_rand -9.25%.
+- **First converged-within-budget run:** best_epoch=40 ≠ terminal=41. Model settled for first time in round 5.
+- **Per-epoch time:** 43.5 s (-12.3% vs baseline). Memory: 21.35 GB (-10.4%). 41 epochs reached.
+- **Mechanism:** Tighter information-bottleneck regularization (32 slices ≈ natural CFD regime count) + ~12% faster per-epoch = ~4 extra epochs.
+- **Caveat:** Measured on L1-only base (no sampler). Post-merge advisor has both sampler AND slice_num=32. True combined baseline reveals via future runs.
+- **NEW BASELINE: val_avg=54.0051, test_avg=47.6261**
+
+---
+
+### PR #1870: sampler both-racecar 2× — CLOSED (regression)
+
+- **Student:** charliepai2g48h5-nezuko
+- **Result:** val_avg=61.58 (+8.77% vs 56.62 baseline). ALL splits worse including predicted-improvement split.
+- **Root cause:** Absolute racecar_single exposure dropped ~20% (from 50% → 40% share). Tandem boost doesn't help geom_camber_rc (held-out M=6-8 not in training regardless of tandem frequency). Cruise diversity removed → OOD hurt.
+- **Closed axis:** Joint RaceCar boost. 2× single only (#1619) remains the better sampler config.
+
+---
+
+### PR #1871: surf_loss p-weight [1,1,2] — CLOSED (OOD regression, axis closed)
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Result:** val_avg=59.22 (+4.59% vs 56.62 baseline). Only val_single_in_dist improved (-2.78%); all 3 OOD splits regressed 6-8%.
+- **Root cause:** Physics coupling — even surf-only p-weighting reshapes backbone features toward in-dist pressure, hurting OOD velocity/pressure generalization. Same failure mode as PR #1428 (global [1,1,3]).
+- **Closed axis:** Per-channel loss reweighting (both global and surf-only forms fail with OOD regression).
+
+---
+
+### PR #1903: slice_num 32 → 16 — ASSIGNED (frieren)
+
+- **Branch:** `charliepai2g48h5-frieren/slice-num-16`
+- **Hypothesis:** Bracket the slice_num optimum. If 32 was better than 64, does 16 also improve? Tests whether the TandemFoilSet spatial structure fits naturally into 16 or 32 coarse routing slots.
+- **Baseline:** val_avg < 54.0051.
+
+---
+
+### PR #1904: sampler racecar_single 1.5× — ASSIGNED (nezuko)
+
+- **Branch:** `charliepai2g48h5-nezuko/sampler-single-1.5x`
+- **Hypothesis:** Peak-bracketing: is 2× the optimum or have we overshot? 1.5× gives 37.5%/31.25%/31.25% share; cruise gets 31.25% back (vs 25% at 2×). Should recover geom_camber_cruise regression while keeping most of the single_in_dist win.
+- **Baseline:** val_avg < 54.0051.
+
+---
+
+### PR #1905: cosine warm restarts T_0=10 T_mult=2 — ASSIGNED (thorfinn)
+
+- **Branch:** `charliepai2g48h5-thorfinn/cosine-warm-restarts-t0-10`
+- **Hypothesis:** Replace monotone CosineAnnealingLR with CosineAnnealingWarmRestarts (SGDR). With slice_num=32 the model now converges within budget; restarts may squeeze more gain by providing multiple high-LR exploration phases. T_0=10 → T_mult=2 → restarts at epochs 10, 30.
+- **Baseline:** val_avg < 54.0051.
+
+---
+
 ## 2026-05-13 05:30 — Round 16
 
 ### PR #1789: surf_weight 10 → 15 — CLOSED (stale, tanjiro rate-limited)
