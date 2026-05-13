@@ -381,6 +381,7 @@ class Config:
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
     surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
+    racecar_single_loss_lambda: float = 0.0  # per-sample loss multiplier: (1 + lambda * is_racecar_single)
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -515,6 +516,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_clip_fires = 0
     n_batches = 0
+    epoch_n_racecar_single = 0
+    epoch_n_other = 0
+    epoch_weight_sum_racecar_single = 0.0
+    epoch_weight_sum_other = 0.0
 
     if cfg.surf_weight_warmup_epochs > 0 and epoch < cfg.surf_weight_warmup_epochs:
         progress = epoch / cfg.surf_weight_warmup_epochs
@@ -530,6 +535,16 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Per-sample racecar_single flag: foil-2 features (dims 18-23) are all
+        # exactly zero for single-foil samples by data construction; tandem
+        # samples always have non-zero foil-2 thickness. Computed before
+        # augmentation (augment_geometry preserves the zero block for
+        # single-foil samples via is_tandem masking, so the check is robust
+        # either way). No grad through this flag.
+        is_racecar_single = (
+            x[:, :, 18:24].abs().sum(dim=(1, 2)) == 0
+        ).to(x.dtype).detach()  # [B]
+
         if cfg.augment:
             x = augment_geometry(x, cfg)
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -542,11 +557,24 @@ for epoch in range(MAX_EPOCHS):
             cfg.huber_delta * (residual.abs() - 0.5 * cfg.huber_delta),
         )
 
+        # Per-domain loss weighting: scale per-node sq_err by per-sample weight
+        # weight_b = 1 + lambda * is_racecar_single_b. Applied BEFORE the
+        # surf_weight curriculum so the two compose multiplicatively. lambda=0
+        # reduces this to the original unweighted loss exactly.
+        loss_weight = 1.0 + cfg.racecar_single_loss_lambda * is_racecar_single  # [B]
+        sq_err = sq_err * loss_weight.view(-1, 1, 1)
+
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + current_surf_weight * surf_loss
+
+        n_rs = int(is_racecar_single.sum().item())
+        epoch_n_racecar_single += n_rs
+        epoch_n_other += int(is_racecar_single.numel() - n_rs)
+        epoch_weight_sum_racecar_single += float((loss_weight * is_racecar_single).sum().item())
+        epoch_weight_sum_other += float((loss_weight * (1.0 - is_racecar_single)).sum().item())
 
         optimizer.zero_grad()
         loss.backward()
@@ -598,6 +626,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    mean_w_rs = (
+        epoch_weight_sum_racecar_single / epoch_n_racecar_single
+        if epoch_n_racecar_single > 0 else 0.0
+    )
+    mean_w_other = (
+        epoch_weight_sum_other / epoch_n_other
+        if epoch_n_other > 0 else 0.0
+    )
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -609,6 +645,11 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_mean": epoch_grad_norm_mean,
         "train/grad_clip_fire_rate": epoch_grad_clip_fire_rate,
         "train/current_surf_weight": current_surf_weight,
+        "train/n_racecar_single": epoch_n_racecar_single,
+        "train/n_other": epoch_n_other,
+        "train/mean_loss_weight_racecar_single": mean_w_rs,
+        "train/mean_loss_weight_other": mean_w_other,
+        "racecar_single_loss_lambda": cfg.racecar_single_loss_lambda,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -620,6 +661,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"w[rs={mean_w_rs:.3f}({epoch_n_racecar_single}) o={mean_w_other:.3f}({epoch_n_other})]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
