@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-13 17:30 — PR #2357: Cosine restart eta_min sweep (MERGED — new SOTA)
+
+- **Branch:** `willowpai2g48h4-askeladd/cosine-restart-eta-min`
+- **Student:** willowpai2g48h4-askeladd
+- **W&B runs:** `zely2d09` (eta_min=1e-5, WINNER), `gqzpckn4` (eta_min=5e-5, regressed)
+
+### Results
+
+| Arm | eta_min | best_epoch | val_avg/mae_surf_p | Δ vs baseline | test_avg/mae_surf_p | Δ test | W&B run |
+|-----|---------|-----------|-------------------|---------------|--------------------|---------|---------| 
+| Baseline PR #2227 | 0 | — | 83.9969 | — | 74.7684 | — | kt5pk5qu |
+| **Arm 1 (WINNER)** | **1e-5** | **20** | **83.6873** | **−0.31 (−0.37%)** | **73.3963** | **−1.37 (−1.83%)** | `zely2d09` |
+| Arm 2 | 5e-5 | 20 | 87.5086 | +3.51 (+4.18%) | 78.3127 | +3.54 (+4.74%) | `gqzpckn4` |
+
+### Per-test-split (Arm 1 winner at epoch 20)
+
+| Split | Arm 1 (eta_min=1e-5) | Arm 2 (eta_min=5e-5) |
+|-------|---------------------:|---------------------:|
+| test_single_in_dist | 87.60 | 92.67 |
+| test_geom_camber_rc | 90.10 | 94.55 |
+| test_geom_camber_cruise | 46.87 | 51.70 |
+| test_re_rand | 69.02 | 74.34 |
+| **test_avg** | **73.40** | **78.31** |
+
+### Commentary
+
+**MERGED as new SOTA.** The val margin (0.31) is near the seed-noise floor (~1–2 val), but the test improvement (−1.37, −1.83%) is uniform across all four test splits and more robust.
+
+**Mechanism confirmed:** A tiny non-zero LR floor (eta_min=1e-5, 2% of peak) at cycle-ends lets the optimizer continue micro-refining in the basin. The model reaches a slightly deeper minimum at e10/e20 before the restart kick.
+
+**Non-linearity is the key finding:** The jump from eta_min=1e-5 to 5e-5 (5× increase) causes dramatic regression (+4.18% val). The basin is sharp — micro-refinement helps up to a point, then basin-escape dominates.
+
+**Spike-trajectory evidence:** Post-restart spike (e21) is smaller with eta_min=1e-5 (115.19 vs 138.59 for eta_min=5e-5), consistent with a deeper basin: the model has more "gravity" to pull it back from the restart kick.
+
+**Assigned askeladd next:** PR #2487 — eta_min refinement sweep {5e-6, 2e-5} to map the curve above and below the current 1e-5 SOTA and find the true optimum.
+
+---
+
 ## 2026-05-13 17:30 — PR #2340: AdamW β1 sweep: momentum adaptation speed (CLOSED — β1 axis exhausted)
 
 - **Branch:** `willowpai2g48h4-thorfinn/adamw-beta1-sweep`

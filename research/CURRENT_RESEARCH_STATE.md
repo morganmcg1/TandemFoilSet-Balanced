@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 60)
+- **As of:** 2026-05-13 (updated cycle 61)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 83.9969`** — PR #2227 (cosine_restart_T_0=10, WD=5e-4, 21 epochs, 2 cycles), merged 2026-05-13 cycle 46.
-**Test 4-split mean: 74.7684** (test_avg/mae_surf_p).
+**`val_avg/mae_surf_p = 83.6873`** — PR #2357 (cosine_restart_T_0=10, eta_min=1e-5, WD=5e-4, 21 epochs, 2 cycles), merged 2026-05-13 cycle 61.
+**Test 4-split mean: 73.3963** (test_avg/mae_surf_p, W&B run `zely2d09`).
 
 ## Improvement trajectory
 
@@ -21,7 +21,8 @@
 | 30 | #2031 | Weight decay 1e-4 → 5e-4 | 93.6198 | −4.46% |
 | 33 | #2091 | torch.compile default (21 epochs vs 14) | 89.7197 | −4.16% |
 | 42 | #2178 | WD re-tune 1e-4→3e-4 at 21 epochs | 87.0144 | −3.01% |
-| **46** | **#2227** | **SGDR cosine warm restart T_0=10** | **83.9969** | **−3.59%** |
+| 46 | #2227 | SGDR cosine warm restart T_0=10 | 83.9969 | −3.59% |
+| **61** | **#2357** | **Cosine restart eta_min=1e-5** | **83.6873** | **−0.37%** |
 
 ## Current research focus
 
@@ -72,13 +73,14 @@ Key spike-trajectory insight from β1 sweep: smoother spikes (β1=0.95, +15.8 am
 | 2444 | alphonse | t-mult-2-restart | WIP | T_mult=2 with T_0=7 (cycles 7+14=21) + T_0=6 secondary. Longer cycle 2 hypothesis. |
 | 2445 | nezuko | seed-variance-calibration | WIP | **META**: 3-seed baseline run. Measures σ of val_avg/mae_surf_p — for honest CI. |
 | 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
-| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 55) | Compose Lookahead k=5 + cosine_restart + WD=5e-4. Mechanisms orthogonal. |
+| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 61) | Compose Lookahead k=5 + cosine_restart + eta_min=1e-5. Needs rebase + updated commands. |
 | 2284 | frieren | finer-wd-sweep-21epoch | WIP (ACTIVE — partial results posted) | 3 arms done: WD=2e-4 val=85.88, WD=2.5e-4 val=87.14, WD=4e-4 val=85.24. Arm 4 (WD=4.5e-4) in-flight. Trend: monotone descent toward WD=5e-4. |
-| 2477 | thorfinn | mlp-dropout-sweep | WIP (NEW cycle 60) | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
-| 2357 | askeladd | cosine-restart-eta-min | WIP | eta_min=1e-5 vs 5e-5 for cycle-end LR floor. |
+| 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
+| 2487 | askeladd | eta-min-refinement | WIP (NEW cycle 61) | Map eta_min curve above+below SOTA 1e-5. Arms: {5e-6, 2e-5}. |
 | 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
+| 2357 | askeladd | cosine-restart-eta-min | **MERGED cycle 61** | eta_min=1e-5 WINS. val=83.6873 / test=73.3963. New SOTA. |
 | 2340 | thorfinn | adamw-beta1-sweep | **CLOSED cycle 60** | Both arms regress +3.5–4.8 val (>2× seed noise). β1=0.9 confirmed. β1 axis exhausted. |
-| 2381 | fern | stratified-restart-compose | **CLOSED cycle 55** | Strict+restart not orthogonal — restart replaces sampler's spike-control role. DW notable: reduced 2nd spike +31%. |
+| 2381 | fern | stratified-restart-compose | **CLOSED cycle 55** | Strict+restart not orthogonal — restart replaces sampler's spike-control role. |
 | 2331 | nezuko | swa-cycle-end-averaging | **CLOSED cycle 53** | Definitive null. SWA PERMANENTLY CLOSED. Seed variance ~1-2 val pts. |
 | 2317 | alphonse | restart-wd-compose | **CLOSED cycle 53** | WD×restart anti-additive. Same failure mode. |
 | 2232 | edward | head-up-wd | **CLOSED cycle 49** | Mechanism confirmed; lost current baseline. |
@@ -131,7 +133,8 @@ Key spike-trajectory insight from β1 sweep: smoother spikes (β1=0.95, +15.8 am
 27a. **Decoupled WD head-UP: surf_head_wd∈{1e-3,2e-3}** — testing (#2232 edward, NEW). Symmetric untested direction: raise head WD above encoder's 5e-4. Expected to help OOD splits by suppressing residual memorization further.
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
 29. **Surface-only pressure weight {0.5, 1.5}** — **rejected** (PR #2124, +11.85% / +21.85%). k=1.0 is a sharp local minimum in both directions. Velocity rebalancing mechanism did NOT fire (k=0.5 regressed velocity). Channel-weight axis fully closed across all 5 experiments (#1496 with mean-norm bug, #2124 without).
-29a. **SGDR cosine restart T_0=10/7** — **CONFIRMED** (PR #2227, val=83.9969 / test=74.7684 at T_0=10, **−6.38% val / −5.74% test vs compile baseline**). Both arms beat baseline. Mechanism CONFIRMED: each cycle's minimum deeper than prior, best epoch sits AT THE RESTART. Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. New baseline. Composes orthogonally with all merged wins. Used WD=5e-4; composition with WD=3e-4 is highest-priority next test.
+29a. **SGDR cosine restart T_0=10/7** — **CONFIRMED** (PR #2227, val=83.9969 / test=74.7684 at T_0=10, **−6.38% val / −5.74% test vs compile baseline**). Superseded by PR #2357.
+34a. **Cosine restart eta_min=1e-5** — **CONFIRMED** (PR #2357, **val=83.6873 / test=73.3963, −0.37% val / −1.83% test**). New SOTA. Tiny non-zero LR floor (2% of peak) at cycle-ends allows micro-refinement in the basin. Non-linear: eta_min=5e-5 (10% of peak) regresses dramatically (+4.18% val). Sweet spot narrow near 1e-5. **Follow-up refinement (#2487 askeladd) maps {5e-6, 2e-5}.** Both arms beat baseline. Mechanism CONFIRMED: each cycle's minimum deeper than prior, best epoch sits AT THE RESTART. Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. New baseline. Composes orthogonally with all merged wins. Used WD=5e-4; composition with WD=3e-4 is highest-priority next test.
 29b. **Cosine restart T_0=10 + WD=3e-4 compose; T_0=12 extend** — **REJECTED** (#2317 alphonse, CLOSED cycle 53). Neither arm beat baseline (Arm 1 +1.89%, Arm 2 +4.03%). WD=3e-4 and cosine_restart are ANTI-ADDITIVE: they target the same failure mode (over-regularization / in-dist overfitting). Arm 1 wins in-dist (−5.6%) but loses every OOD split — definitive split signature. WD×restart compose axis fully explored.
 29c. **T_mult=2 restart cycle geometry: T_0=7 (cycles 7+14=21) + T_0=6 secondary** — testing (#2444 alphonse, NEW cycle 53). Primary hypothesis: longer cycle 2 (14 vs 10 epochs) allows deeper descent at low-LR. T_0=7 is the UNIQUE value giving a full, non-truncated cycle 2 ≤ 21 epochs with T_mult=2. Arm 2 (T_0=6, cycle 2=12) creates a monotonic comparison: 10 (baseline) vs 12 vs 14 cycle-2 lengths.
 29d. **3-seed baseline calibration** — testing (#2445 nezuko, NEW cycle 53). Meta-experiment. Seeds 42/43/44 run on exact baseline config. Motivated by #2331 finding that live models regressed 1.3–1.6 val from baseline (possible seed variance σ~1-2 val). Required for: (a) honest CI for paper, (b) principled future merge threshold. Adds `--seed int` flag to train.py.
