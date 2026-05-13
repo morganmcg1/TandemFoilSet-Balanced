@@ -465,6 +465,7 @@ class Config:
     optimizer: str = "adamw"   # "adamw" or "lion"
     n_head: int = 4   # Transolver attention heads (head_dim = n_hidden / n_head)
     slice_num: int = 64   # Transolver virtual-slice tokens per head (granularity of physics-aware attention)
+    n_layers: int = 5   # Transolver depth (number of attention+MLP blocks)
 
 
 cfg = sp.parse(Config)
@@ -499,7 +500,7 @@ model_config = dict(
     fun_dim=X_DIM - 2 + fourier_extra,   # Fourier encoding adds 4L − 2 extra channels
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=cfg.n_head,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
