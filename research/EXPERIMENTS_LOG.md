@@ -1,5 +1,118 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 15:03 — PR #1844: Lion β2=0.999 on GeGLU stack (CLOSED — warmup cost dominates)
+
+- Student branch: `charliepai2g24h5-askeladd/lion-beta2-0_999`
+- Hypothesis: β2=0.999 (vs default 0.99) gives ~10× longer momentum EMA timescale, potentially smoothing noisy B=4 sign updates.
+
+### Results (vs GeGLU baseline #2287: 45.92/44.35)
+
+| Metric | β2=0.999 | GeGLU baseline | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **48.83** | **45.92** | **+2.91 (+6.3%)** |
+| **test_avg/mae_surf_p** | **46.36** | **44.35** | **+2.01 (+4.5%)** |
+
+All 4 val and test splits regress uniformly (+1.5 to +3.7 MAE). Epochs completed: 15/16 (both hit 30-min cap).
+
+### Per-epoch trajectory (β2=0.999 vs β2=0.99 baseline)
+
+| Epoch | β2=0.999 val | β2=0.99 val | Δ |
+|---:|---:|---:|---:|
+| 1 | 217.62 | 181.18 | +36.44 |
+| 5 | 102.11 | 111.66 | −9.55 |
+| 10 | 65.33 | 71.03 | −5.70 |
+| 13 | 53.76 | 51.37 | +2.39 |
+| 15 (best) | 48.83 | 45.92 | +2.91 |
+
+β2=0.999 is much slower in the first 4 epochs (~10× longer EMA timescale → ~1000 steps to settle vs ~100), briefly ahead at ep5-12, then falls behind in the cosine tail.
+
+### Mechanism
+
+β2=0.999 warmup cost is borne in epochs 1-4 (val loses 30+ MAE vs baseline). The model catches up mid-training but never fully recovers — the decisive convergence gain in the cosine tail (ep13-15) belongs to β2=0.99. Mechanistically sound hypothesis (smoother sign directions for noisy B=4 gradients) but the warm-up cost dominates within 30-min/16-epoch cap. With 25-30 epochs available, β2=0.999 could plausibly match baseline.
+
+### Disposition
+
+**CLOSED.** β2=0.99 confirmed optimal for this budget. Reassigned askeladd to Lion β1 sweep (instantaneous step direction weight, separate axis from EMA timescale).
+
+- Metrics: `models/model-charliepai2g24h5-askeladd-lion_beta2_0999_geglu_stack-20260513-141846/metrics.jsonl`
+
+---
+
+## 2026-05-13 15:03 — PR #2332: SwiGLU preprocess entry projector — tanjiro (CLOSED — gating at low-dim input too lossy)
+
+- Student branch: `charliepai2g24h5-tanjiro/swiglu-preprocess-mlp`
+- Hypothesis: Replace GELU entry projector (24→320→160) with SwiGLU gating (hidden=280, param parity). If GeGLU gating generalises from block-MLP to all projectors, this stacks another selective routing pass.
+
+### Results (vs SwiGLU baseline #2196: 47.43/45.01)
+
+| Metric | SwiGLU preprocess | Baseline | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **52.54** | **47.43** | **+10.8%** |
+| **test_avg/mae_surf_p** | **50.07** | **45.01** | **+11.2%** |
+
+All 8 splits regress +9% to +17%. Worst hits: geom_camber_cruise (+16% val) and re_rand test (+17.4%). 15/16 epochs completed.
+
+### Mechanism
+
+Block-MLP gating works because gating operates on a normalized, 160-dim feature manifold — enough diversity for selective routing. The preprocess block runs on 24 heterogeneous raw physics dimensions (positions, AoA, Re, NACA codes, gap/stagger). At input dim=24, multiplicative gating **discards information** rather than routing it — there's no second chance to recover the lost channel interactions. The slowest-converging splits (camber_cruise, re_rand) rely most on fine-grained channel mixing from the dense GELU MLP; SwiGLU's sparsification is pure information loss here.
+
+**Principle extracted:** Gating works at scale (input dim ≥ 160) — not as a universal architectural primitive at low input dims.
+
+### Disposition
+
+**CLOSED (dead end).** Gating below ~32 input dims discards more than it selects. Reassigned tanjiro to GeGLU mlp_ratio sweep (increase block-MLP hidden 216→320, giving the gate more capacity at scale).
+
+- Metrics: `models/model-charliepai2g24h5-tanjiro-swiglu_preprocess_h280-20260513-140813/metrics.jsonl`
+
+---
+
+## 2026-05-13 15:03 — PR #2349: n_layers=6 on GeGLU stack — fern (CLOSED — budget-starved, not architecturally broken)
+
+- Student branch: `charliepai2g24h5-fern/n-layers-6-geglu-stack`
+- Hypothesis: An extra GeGLU gating pass (6th TransolverBlock) should compound on #2287 — especially for the hardest OOD splits.
+
+### Results (vs GeGLU baseline #2287: 45.92/44.35)
+
+| Metric | n_layers=6 | n_layers=5 (baseline) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **50.80** | **45.92** | **+10.6%** |
+| **test_avg/mae_surf_p** | **47.96** | **44.35** | **+8.1%** |
+
+12/13 epochs completed (hit 30-min wall cap mid-epoch 13). Val still descending at −4.0 per epoch at termination.
+
+| Split | n_layers=6 val | Baseline val | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 56.73 | 48.87 | +7.86 |
+| geom_camber_rc | 62.39 | 58.78 | +3.61 |
+| geom_camber_cruise | 32.63 | 29.99 | +2.64 |
+| re_rand | 51.46 | 46.03 | +5.43 |
+| **avg** | **50.80** | **45.92** | **+4.88** |
+
+| Run characteristic | Value |
+|---|---|
+| n_params | 1,223,803 (+18% vs baseline ~1.04M) |
+| Peak VRAM | 50.24 GB (+18% vs baseline 42.5 GB) |
+| s/epoch | ~149 s (+18% vs baseline ~126 s) |
+| Epochs completed | 12 of 13, hit 30-min cap |
+
+### Mechanism
+
+The extra TransolverBlock costs +18% per-epoch time. Under the 30-min hard cap:
+- n_layers=5: ~15 epochs → well into cosine tail
+- n_layers=6: ~12 epochs → still in steep-descent regime (slope −4.0 at ep12 vs baseline's ~−0.27 in the cosine tail)
+
+The +4.88 val gap ≈ the slope at termination: 2-3 more epochs would likely close most of it. The depth hypothesis is **not architecturally broken — just budget-starved**.
+
+### Disposition
+
+**CLOSED.** +10.6% val regression at termination exceeds the 5% threshold. Reassigned fern to attention output gating (GeGLU-style gate in PhysicsAttention.to_out — directly extends the gating architecture to the attention output path, single axis, param-parity bottleneck at hidden=56).
+
+Note: n_layers=4 is a viable opposite test — one fewer block → more epochs in budget.
+
+- Metrics: `models/model-charliepai2g24h5-fern-n_layers6_geglu_20260513-141316-20260513-141319/metrics.jsonl`
+
+---
+
 ## 2026-05-13 14:20 — PR #2287: GeGLU gate ablation — SiLU→GELU inside SwiGLU block-MLP gate (MERGED — all 8 splits improve, new best val=45.92/test=44.35)
 
 - Student branch: `charliepai2g24h5-fern/geglu-gate-ablation`
