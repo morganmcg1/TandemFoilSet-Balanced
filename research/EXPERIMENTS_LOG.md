@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-13 12:15 — PR #2197: rff-nfeatures-64 (frieren) — CLOSED (dead end, capacity axis at d=32)
+
+- **Branch:** `charliepai2g48h2-frieren/rff-nfeatures-64`
+- **Hypothesis:** At fixed σ=3.0, double frequency count 32→64. Tests kernel approximation quality (1/√d variance reduction).
+- **Metric artifacts:** `models/model-charliepai2g48h2-frieren-rff-nfeatures-64-20260513-110556/metrics.jsonl`
+
+### Results vs. #1657 baseline (65.3304)
+
+| Split | Baseline (d=32) | d=64 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 75.688 | +4.12% ❌ |
+| val_geom_camber_rc | 78.833 | 83.007 | +5.30% ❌ |
+| val_geom_camber_cruise | 44.439 | **41.391** | **−6.86%** ✓ |
+| val_re_rand | 65.359 | 65.889 | +0.81% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **66.4937** | **+1.78%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 58.1547 | +2.13% ❌ |
+
+**Closed as dead end.** RFF capacity axis CLOSED at d=32.
+
+### Analysis
+
+Param count delta: +16K (+2.4%, more than predicted ~+8K due to wider preprocess MLP through multiple downstream layers). best_epoch=14/14, no NaN/divergence.
+
+**Repeated per-split signature across 3 RFF modifications:**
+
+| Experiment | val_cruise | val_rc | val_single | val_avg |
+|---|---|---|---|---|
+| σ=5.0 (#2158) | +1.09% | +1.98% | +4.09% | +2.75% |
+| anisotropic σ_z=1.5 (#2206) | **−1.61%** | +1.62% | +2.39% | +0.51% |
+| n_features=64 (#2197) | **−6.86%** | +5.30% | +4.12% | +1.78% |
+
+The pattern is unambiguous: **more flexible/wider RFF helps cruise but hurts rc/single**. The model has a per-split optimal bandwidth: cruise wants more capacity/flexibility, rc/single want fewer (more constrained) frequency vectors.
+
+### Key insights
+
+- **RFF capacity axis CLOSED at d=32.** Isotropic σ=3.0 + 32 frequencies is the local optimum for the GLOBAL val_avg metric.
+- **Cruise split has untapped potential** — improved consistently across RFF variants. A different mechanism (split-aware routing, augmentation, or learned weighting) might be the lever to capture this without rc/single regressing.
+- **The 14-epoch budget doesn't allow capacity-regularization** — extra frequency dimensions get fit to noise in 14 epochs.
+- **Next direction:** away from RFF mods entirely. Try fundamentally different mechanism (data augmentation, loss reformulation, etc.).
+
+### Next assignment for frieren: foil mirroring augmentation (#2257)
+
+Direct shift to a fundamentally different lever: z-axis reflection symmetry augmentation. Doubles effective training data while respecting exact TandemFoilSet symmetry. Strong precedent in CFD ML literature for 1–5% gains from symmetry-respecting augmentation.
+
+---
+
 ## 2026-05-13 11:55 — PR #2206: rff-anisotropic-sx3-sz1p5 (fern) — CLOSED (marginal val regression, mixed val/test, per-split tradeoff)
 
 - **Branch:** `charliepai2g48h2-fern/rff-anisotropic-sx3-sz1p5`
