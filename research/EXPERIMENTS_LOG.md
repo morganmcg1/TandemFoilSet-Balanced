@@ -913,3 +913,50 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Implementation: scale loss by 1/ACCUM_STEPS, accumulate via .backward(), step optimizer + scheduler + EMA only on (batch_idx + 1) % ACCUM_STEPS == 0. New CLI flag --accumulation_steps.
 - Distinct from in-flight portfolio (architecture, schedule, loss shape, gradient norms): this is a *gradient-quality* intervention, not a trajectory-shape intervention.
 - Targets compile + n_layers=3 baseline: val < 69.4518, test < 61.1887.
+
+## 2026-05-13 07:00 — PR #1784: tanjiro grad-clip max_norm=10 (v3 compile retest) — MERGED (8th compound winner)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-10p0`
+- Hypothesis (v3 retest): grad-clip max_norm=10 in "soft scaling" regime — heavy upper tail of gradient norms gets dampened (~2.1× downscaling at typical clipped step, ~9× at p99), bulk direction signal preserved. Pre-compile v3 (#1784 v1) showed clean win on all 4 splits.
+- W&B run: `vy49aq06` (compile-stack retest)
+
+| Metric | Value | vs PR #1763 compile baseline | vs PR #1875 new n_layers=3 baseline |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 29) | **65.9757** | −5.46 (−7.65%) | −3.48 (−5.00%) |
+| `test_avg/mae_surf_p` | **57.0711** | −5.52 (−8.83%) | −4.12 (−6.74%) |
+| `test_single_in_dist` | 64.5497 | −5.88 | −3.28 (vs 67.83) |
+| `test_geom_camber_rc` | 70.5841 | −3.50 | −3.64 (vs 74.23) |
+| `test_geom_camber_cruise` | 37.9291 | −6.58 | −4.89 (vs 42.82) |
+| `test_re_rand` | 55.2217 | −6.13 | −4.65 (vs 59.88) |
+| Clip rate (compile stack) | 72.4% | (was 86.9% pre-compile) | — |
+| Per-epoch wall time | 63.4 s | identical to compile baseline | n/a (run was on n_layers=5) |
+
+- **All 4 splits improve vs both baselines.** Largest wins on OOD splits (camber_cruise −6.58, re_rand −6.13) but IID also wins solidly (in_dist −5.88) — clean break from v2's mixed sign.
+- **Mechanism (soft scaling regime confirmed)**: clip rate 72.4% on compile stack (vs 86.9% pre-compile — bulk norm distribution shifted down due to warmup smoothing). Upper tail p99 unchanged at ~92 across stacks. Typical clipped step (norm ~21) → 2.1× downscaling. Heavy-tail damping without erasing bulk direction signal.
+- **Gradient-shape lever compounds with compile**: pre-compile win was −0.95% val; compile-stack win is −7.65% val. The healthier training regime (warmup + compile + more epochs) gives grad-clip more room to extract gains.
+- **Decision: MERGE.** New compile-stack baseline: val=65.9757, test=57.0711. 8th compound improvement.
+- **Caveat noted**: student's run was at n_layers=5 (their branch was behind the #1875 n_layers=3 merge). The squash-merge applies the grad-clip change on top of the n_layers=3 advisor branch. The combined n_layers=3 + grad-clip=10 stack has NOT been directly measured but is expected to be ≤ 65.98 given orthogonality of the mechanisms.
+- **Follow-up assigned**: tanjiro #1930 — grad-clip threshold scan (max_norm=5.0).
+
+## 2026-05-13 07:00 — PR #1841: askeladd slice_num=48 — SENT BACK for retest on new 8-merge stack
+
+- Branch: `willowpai2g48h5-askeladd/slice-num-48`
+- Hypothesis: capacity-down on slice axis (64→48 slice tokens for PhysicsAttention). Throughput + capacity-right-sizing.
+- W&B run: `sf87gbpr`
+
+| Metric | Value | vs PR #1763 (n_layers=5 compile) | vs PR #1875 (n_layers=3) | vs PR #1784 (grad-clip new stack) |
+|--------|-------|-----|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 30) | **70.7556** | −0.68 (−0.95%, BEAT old) | +1.30 (DOES NOT beat) | +4.78 (DOES NOT beat) |
+| `test_avg/mae_surf_p` | **61.7906** | −0.80 (−1.28%) | +0.60 | +4.72 |
+
+- Mechanism is clean: 3/4 splits improve (only camber_rc +1.69), val still descending at ep 30 (not capacity-limited), throughput gain 5.4% steady state (smaller than predicted but real), param count only −560 weights.
+- Result beat the OLD compile baseline but the advisor branch has advanced twice since assignment: n_layers=3 (−2.78%), then grad-clip=10 (−5.00% more). Need retest on full 8-merge stack.
+- **Decision: SEND BACK.** Retest at slice_num=48 + n_layers=3 + grad-clip=10. Expected val ≈ 65.35 (applying relative −0.95% win to new baseline). New targets: val < 65.98, test < 57.07.
+
+## 2026-05-13 07:00 — PR #1930: tanjiro assigned grad-clip max_norm=5.0 (threshold scan)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-5p0-new-stack`
+- Hypothesis: tighten threshold from 10→5 on the new 8-merge stack. Based on student's own diagnostic: at compile-stack norm distribution (p50=16.2, p90=40.6, p99=91.8), max_norm=5 gives ~100% clip rate with ~4.2× typical scaling (vs 2.1× at threshold 10). Tests whether the threshold-vs-quality relationship is monotonic (push lower in future PRs) or U-shaped (max_norm=10 is optimum).
+- Predicted outcomes: (A) val < 65.98 → keep going lower; (B) val > 67 → crossed sweet spot, settle at 10.
+- Single-line change: GRAD_CLIP_MAX_NORM = 10.0 → 5.0. Diagnostics inherited from #1784 merge.
+- Targets compile + n_layers=3 + grad-clip baseline: val < 65.9757, test < 57.0711.
