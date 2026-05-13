@@ -1077,3 +1077,38 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: Double attention heads 4→8. At n_hidden=192, head_dim goes 48→24. Prediction: more attention heads = more diverse attention patterns per slice, better multi-aspect generalization (geometry + physics + mesh topology). Clean single-axis test; head_dim=24 is small but workable for small dataset.
 - Failure mode: head_dim=24 too small → val regresses → brackets n_head=4 as optimum.
 - Targets: val < 63.4801, test < 54.9834.
+
+## 2026-05-13 10:00 — PR #1953: alphonse n_hidden=192 + epochs=50 — MERGED (11th compound winner; MASSIVE)
+
+- Branch: `willowpai2g48h5-alphonse/n-hidden-192-epochs-50`
+- Hypothesis: Compound the width win (#1899 val=63.72) with two missing pieces — (a) the now-merged grad-clip=5.0 layer, and (b) T_max=50 schedule fix (T_max=30 was causing LR→0 by epoch 30, starving the final training epochs). First direct measurement of the FULL 10-compound stack + corrected T_max.
+- W&B run: `vnsqnuoy`
+
+| Metric | Value | vs PR #1930 (current) | vs PR #1899 (n_hidden=192 alone) |
+|--------|-------|----------|---------|
+| `val_avg/mae_surf_p` (best, epoch 30) | **55.7634** | −7.72 (−12.17%) | −7.96 (−12.49%) |
+| `test_avg/mae_surf_p` | **48.0960** | −6.89 (−12.53%) | −7.55 (−13.57%) |
+| `test_single_in_dist` | 52.8835 | −9.56 (−15.30%) | −8.56 (−13.94%) |
+| `test_geom_camber_rc` | 61.7845 | −6.59 (−9.64%) | −7.54 (−10.88%) |
+| `test_geom_camber_cruise` | 31.1522 | −4.67 (−13.03%) | −6.55 (−17.39%) |
+| `test_re_rand` | 46.5637 | −6.73 (−12.63%) | −7.53 (−13.92%) |
+| Best epoch | 30/30 | val descending at −0.84/ep | — |
+| Epochs completed | 30/50 | wall-clock cap | — |
+| LR at termination | 1.73e-4 | cos T_max=50 productive | — |
+| EMA−live gap | −8.32 | EMA carries real edge | vs +0.42 at #1899 |
+| Param count | 0.93M | — | — |
+
+- **ALL 4 SPLITS IMPROVE DRAMATICALLY.** Biggest single-merge improvement in many cycles.
+- **Mechanism (orthogonal compounding confirmed):** All three changes (n_hidden=192, grad-clip=5.0 inherited, T_max=50) compounded as predicted. Schedule fix alone provided the dominant lift; the combined stack delivered uniform 12%+ improvement across all 4 test splits.
+- **Diagnostic finding:** EMA−live gap flipped from +0.42 (#1899) to **−8.32** with clip rate 73% — at the new compound point, the live model is noisy enough that EMA shadow carries genuine value (vs being nearly redundant in #1899). This is a strong signal: EMA isn't just smoothing convergence noise, it's correcting for real per-step gradient variance.
+- **Decision: MERGE.** PR #1953 is the 11th compound winner. The model is epoch-saturated, not capacity-saturated — val descending at −0.84/ep at termination.
+- **NOTE on advisor branch state:** PR merge produced an empty diff — student ran the winning config purely via CLI args. Future student PRs must specify `--n_hidden 192 --n_layers 3 --epochs 50` in their reproduce commands.
+- **Follow-up assigned**: alphonse #2000 — T_max=80 schedule extension (epochs 50→80). Same wall-clock, ~2× higher LR at termination, tests whether schedule push compounds further.
+
+## 2026-05-13 10:00 — PR #2000: alphonse assigned T_max=80 schedule extension
+
+- Branch: `willowpai2g48h5-alphonse/t-max-80-schedule-push`
+- Hypothesis: Push the T_max schedule further. At T_max=80, LR at epoch 30 is ~3.45e-4 (vs ~1.73e-4 at T_max=50) — keeps LR meaningfully higher through the wall-clock cap. Tests whether val descent rate at #1953 termination was schedule-limited or capacity-limited.
+- Predicted outcomes: (A) val < 55.76 → schedule push compounds, T_max axis still has headroom; (B) val > 55.76 → T_max=50 was the sweet spot; clipping dominates at higher effective LR.
+- Targets: val < 55.7634, test < 48.0960.
+- Single-flag change: `--epochs 50 → --epochs 80`. No code changes.

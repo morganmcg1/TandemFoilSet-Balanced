@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 09:30
+- **Date:** 2026-05-13 10:00
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -11,18 +11,22 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED — 10-compound winner)
+## Current baseline (MERGED — 11-compound winner; MASSIVE)
 
-**PR #1930 — tanjiro grad-clip max_norm=5.0** (merged 2026-05-13 09:00):
-- `val_avg/mae_surf_p = 63.4801` (↓ from 63.7215, **−0.38%**; 3/4 splits improve)
-- `test_avg/mae_surf_p = 54.9834` (↓ from 55.6430, **−1.18%**)
-- **3/4 test splits improve** (camber_rc −0.95, camber_cruise −1.89, re_rand −0.80; in_dist +1.00 regression — diagnostic signal that tighter clipping helps OOD generalization but starts suppressing IID gradients)
-- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep + `torch.compile(model, dynamic=True)` + n_hidden=192, n_layers=3, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4, **grad-clip max_norm=5.0**
-- **NOTE (measured WITHOUT n_hidden=192)**: tanjiro's branch was pre-n_hidden=192. Current advisor has n_layers=3 + n_hidden=192 + grad-clip=5.0. Combined state unmeasured. All subsequent student runs will measure the full combined stack.
-- Clip rate 90.1%, mean downscaling 4.3× (exactly as predicted). Predictions held: regime is still "moderate uniform downscaling", not direction-normalization failure.
-- **W&B run:** `forfket5`
+**PR #1953 — alphonse n_hidden=192 + epochs=50** (merged 2026-05-13 10:00):
+- `val_avg/mae_surf_p = 55.7634` (↓ from 63.4801, **−12.17%**)
+- `test_avg/mae_surf_p = 48.0960` (↓ from 54.9834, **−12.53%**)
+- **All 4 test splits improve dramatically** (in_dist −9.56, camber_rc −6.59, camber_cruise −4.67, re_rand −6.73 vs PR #1930)
+- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep + `torch.compile(dynamic=True)` + n_hidden=192, n_layers=3, slice_num=64, mlp_ratio=2, n_head=4, grad-clip max_norm=5.0, **`--epochs 50` (T_max=50)**
+- **FIRST direct measurement of the full 10-compound stack + schedule fix.** All three mergers (n_hidden=192, grad-clip=5.0, T_max=50) compounded as predicted.
+- **EMA−live gap flipped from +0.42 to −8.32** — at the new compound point, EMA shadow is doing real work absorbing per-step gradient variance, not just smoothing convergence noise.
+- Best epoch 30/30 (every single epoch was a new EMA best). Val slope at termination **−0.84/ep — model is epoch-saturated, not capacity-saturated**.
+- **W&B run:** `vnsqnuoy`
+- **Reproduce:** `cd target/ && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
 
-**Cumulative compounding (10 merges):**
+**IMPORTANT:** PR #1953 merge produced an EMPTY DIFF — student ran the winning config purely via CLI flags. The advisor branch default still has `n_hidden=128`, `n_layers=5`, and default epochs. All subsequent student PRs MUST specify `--n_hidden 192 --n_layers 3 --epochs 50` (or higher T_max) in reproduce commands to test against the actual 11-compound baseline.
+
+**Cumulative compounding (11 merges):**
 
 | Baseline | val | test | Key change |
 |----------|-----|------|------------|
@@ -36,13 +40,14 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | PR #1875 frieren n_layers=3 | 69.45 | 61.19 | 35% further speedup + capacity-right-sizing |
 | PR #1784 tanjiro grad-clip=10 | 65.98 | 57.07 | Soft-scaling regime damps gradient heavy tail |
 | PR #1899 alphonse n_hidden=192 | 63.72 | 55.64 | Width reinvestment — compact+wide beats compact+narrow on depth-limited stack |
-| **PR #1930 tanjiro grad-clip=5** | **63.48** | **54.98** | Tighter threshold → 90% clip rate, 4.3× downscaling; OOD wins dominate in_dist regression |
+| PR #1930 tanjiro grad-clip=5 | 63.48 | 54.98 | Tighter threshold → 90% clip rate, 4.3× downscaling |
+| **PR #1953 alphonse T_max=50 + full stack** | **55.76** | **48.10** | First full-stack measurement + schedule fix. All 4 splits −12% uniformly |
 
 ## Active experiments
 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
-| alphonse | #1953 | n_hidden=192 + epochs=50 — schedule fix + full-stack measurement | Schedule + compound | WIP | #1899 MERGED (9th winner, val=63.72). Val slope −0.22/ep at ep 30/30, epoch-saturated. T_max=50 keeps LR positive for all ~33 actual epochs. First direct measurement of combined n_layers=3 + n_hidden=192 + grad-clip=5.0 state |
+| alphonse | #2000 | T_max=80 schedule extension (epochs 50→80) | Schedule | WIP | #1953 MERGED (11th winner, val=55.76, MASSIVE −12.17%). Val descending at −0.84/ep at termination. At T_max=80, LR at ep 30 ≈ 3.45e-4 (vs 1.73e-4 at T_max=50). Tests: schedule push compounds further OR T_max=50 was sweet spot |
 | askeladd | #1841 | slice_num=48 — retest on full 8-merge stack (n_layers=3 + grad-clip=10) | Architecture / throughput | WIP-REBASE | First-pass val=70.76 beat OLD baseline (71.44) but not n_layers=3 (69.45) or new grad-clip baseline (65.98). Mechanism (3/4 splits improve, capacity-right-sizing) is clean. Expected retest val ≈ 65.35 if relative −0.95% holds |
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | Running on older stack. Needs to beat new baseline (val < 65.98) to merge; will likely need rebase + retest if beats only intermediate baselines |
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 8-merge stack |
@@ -51,15 +56,17 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | tanjiro | #1982 | grad-clip max_norm=2.5 — threshold scan step 3 | Gradient stability (threshold scan) | WIP | #1930 MERGED (10th winner, val=63.48). 3/4 splits improved; in_dist regressed +1.00. At 2.5: ~97% clip, ~8-9× downscaling — tests whether crossing into direction-normalization regime. Outcome: (A) val < 63.48 → keep going; (B) val > 63.48 → U-shape confirmed, bracket between 2.5–5.0 |
 | thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
-**Baseline alert**: New baseline is PR #1930 (**val=63.4801, test=54.9834**). All future merges must beat this. WIP PRs running against older baselines should be sent back for retest if their delta wouldn't beat 63.48.
+**Baseline alert**: New baseline is PR #1953 (**val=55.7634, test=48.0960**). All future merges must beat this. WIP PRs running against the older PR #1930 baseline (val=63.48) MUST be rebased and retested with `--epochs 50` (T_max=50). The schedule fix alone is the dominant lift — any experiment without it cannot beat the new baseline.
 
-**Full-stack measurement priority**: Advisor branch now has n_layers=3 + n_hidden=192 + grad-clip=5.0 + all 8 earlier merges. Key run: alphonse #1953 (n_hidden=192 + epochs=50) will be the first *direct* measurement of the full combined 10-compound stack with schedule fix.
+**Critical mandate**: ALL student reproduce commands MUST now specify `--n_hidden 192 --n_layers 3 --epochs 50` (or `--epochs 80` to match the in-flight schedule push). The PR #1953 merge produced an empty diff — these CLI flags are how students access the 11-compound stack.
 
-## Critical diagnostic: schedule truncation pattern
+## Critical diagnostic: schedule truncation pattern — CONFIRMED MASSIVE
 
-n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR hits zero at epoch 30; remaining ~14 epochs are at or near LR=0. The fact that PR #1875's best epoch was 30/30 (still descending at T_max) strongly suggests this is wasting capacity. PR #1898 (frieren epochs=50) directly tests whether fixing the schedule unlocks additional improvement.
+**RESOLVED by PR #1953**: T_max=50 vs T_max=30 (same wall-clock budget) delivered the dominant single-merge improvement in 11 cycles (−12% across all 4 test splits). The schedule axis is now confirmed as the highest-leverage remaining dimension.
 
-**If #1898 wins:** T_max tuning will become the new default for n_layers=3 experiments. Likely need to retroactively retest other hypotheses on n_layers=3 with correct T_max.
+**Current status:** model is epoch-saturated, not capacity-saturated. Val slope at #1953 termination was **−0.84/ep at epoch 30/30**. PR #2000 (alphonse T_max=80) is the immediate follow-up to test whether schedule can extract further gains.
+
+**Retroactive implications:** all previously-closed experiments measured under T_max=30 may have hidden viability under the new T_max=50 protocol. Specifically: the asymmetric OOD/IID trade-off observed at grad-clip=5 (in_dist +1.00 vs OOD wins) might reverse under longer effective training.
 
 ## Closed hypotheses (all rounds)
 
@@ -118,14 +125,16 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 ## Potential next directions
 
 ### High priority (compile + n_layers=3 + n_hidden=192 + grad-clip=10 stack)
-1. **Schedule fix + full-stack measurement** — #1953 (alphonse): n_hidden=192 + epochs=50. First direct measurement of combined 10-compound stack + schedule fix. Must beat val < 63.4801.
-2. **T_max schedule tuning (n_hidden=128)** — #1898 (frieren): epochs=50; STALE 2h+, nudged. If stuck, rebase and rerun with --n_hidden 192 --n_layers 3 --epochs 50.
-3. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5. Regime test.
-4. **n_head=8** — #1994 (nezuko): attention head diversity. Untested axis.
-5. **β annealing retest** — #1805 (fern): NEEDS REBASE (merge conflict); retest on full 10-compound stack.
-6. **slice_num=48 retest** — askeladd #1841: capacity-down on slice axis.
-7. **n_layers=2 + n_hidden=192** — thorfinn #1960: depth floor test.
-8. **n_hidden=256 × n_layers=3** — push width further. ~1.65M params. Best run AFTER schedule fix confirmed.
+1. **T_max=80 schedule push** — #2000 (alphonse): direct follow-up to #1953. Tests if schedule axis has more headroom.
+2. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5 on PRE-T_max=50 stack — likely will need retest after #2000 result.
+3. **n_head=8** — #1994 (nezuko): attention head diversity. PRE-T_max=50 stack — likely will need retest.
+4. **n_layers=3 + epochs=50 retest (n_hidden=128)** — #1898 (frieren): STALE 2h+, nudged. May be DEAD given alphonse delivered the schedule-fix win on the wider stack.
+5. **β annealing retest** — #1805 (fern): NEEDS REBASE; retest on full 11-compound stack (val < 55.76).
+6. **slice_num=48 retest** — #1841 (askeladd): capacity-down on slice axis; needs retest on full stack.
+7. **n_layers=2 + n_hidden=192** — #1960 (thorfinn): depth floor test on PRE-T_max=50 stack — may need retest.
+8. **n_hidden=224 or 256 × n_layers=3 + epochs=50** — width scan extension. Wall-time constrained but well-motivated since #1899 showed compact+wide hypothesis.
+9. **EMA decay tuning** — EMA−live gap is now −8.32 (big!). Try ema_decay=0.998 or 0.9995 to balance smoothing vs reactivity.
+10. **batch_size=8 + epochs=50** — possible with smaller model footprint. Compounds with schedule fix.
 
 ### Medium priority
 - **n_hidden=160 × n_layers=3** — bracket width from below; is 192 the sweet spot or above it?
