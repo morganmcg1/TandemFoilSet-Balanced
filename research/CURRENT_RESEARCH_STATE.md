@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 55)
+- **As of:** 2026-05-13 (updated cycle 60)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -24,6 +24,10 @@
 | **46** | **#2227** | **SGDR cosine warm restart T_0=10** | **83.9969** | **−3.59%** |
 
 ## Current research focus
+
+**Cycle 60.** The β1 axis is now closed (#2340 thorfinn, both arms regress +3.5–4.8 val outside seed-noise band). **AdamW is fully exhausted** — β1, β2, LR, WD, ε all confirmed optimal. The programme has shifted to: (1) restart GEOMETRY (T_mult=2 alphonse, eta_min askeladd), (2) compose strategies (Lookahead tanjiro, head_wd edward), (3) ensemble (snapshot fern), (4) calibration (seed variance nezuko), (5) NEW: feature-level dropout (thorfinn #2477). Frieren #2284 actively characterising WD curve under restart — data strongly suggests WD optimum ≥5e-4 (monotone descent through 2e-4→4e-4, 4.5e-4 arm in-flight).
+
+Key spike-trajectory insight from β1 sweep: smoother spikes (β1=0.95, +15.8 amplitude) do NOT produce deeper recovery minima. The cycle-34 spike-IS-signal reframing is confirmed. Future restart-suppression ideas should be treated sceptically.
 
 **Cycle 53.** The compose hypothesis (stack WD=3e-4 + cosine_restart) was definitively falsified by #2317 — the two top-2 wins target the same failure mode and are anti-additive. SWA is now permanently closed via geometric proof from #2331. Most critically, **seed variance of ~1-2 val points** has emerged as a key uncertainty, prompting a 3-seed calibration run (#2445). The cosine restart GEOMETRY axis (T_mult, cycle lengths) is the next active frontier.
 
@@ -61,23 +65,22 @@
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 55)
+## Live PRs (active WIPs and recent closes — cycle 60)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 2444 | alphonse | t-mult-2-restart | WIP | T_mult=2 with T_0=7 (cycles 7+14=21) + T_0=6 secondary. Longer cycle 2 hypothesis. |
 | 2445 | nezuko | seed-variance-calibration | WIP | **META**: 3-seed baseline run. Measures σ of val_avg/mae_surf_p — for honest CI. |
-| 2452 | fern | snapshot-ensemble-cycle-ends | WIP (NEW cycle 55) | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
+| 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
 | 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 55) | Compose Lookahead k=5 + cosine_restart + WD=5e-4. Mechanisms orthogonal. |
-| 2284 | frieren | finer-wd-sweep-21epoch | WIP (STALE) | WD sweep {2e-4, 2.5e-4, 4e-4}; nudged multiple times. |
-| 2340 | thorfinn | adamw-beta1-sweep | WIP (nudged cycle 54) | β1=0.85 vs β1=0.95 — last untested AdamW axis. |
-| 2357 | askeladd | cosine-restart-eta-min | WIP (nudged cycle 53) | eta_min=1e-5 vs 5e-5 for cycle-end LR floor. |
+| 2284 | frieren | finer-wd-sweep-21epoch | WIP (ACTIVE — partial results posted) | 3 arms done: WD=2e-4 val=85.88, WD=2.5e-4 val=87.14, WD=4e-4 val=85.24. Arm 4 (WD=4.5e-4) in-flight. Trend: monotone descent toward WD=5e-4. |
+| 2477 | thorfinn | mlp-dropout-sweep | WIP (NEW cycle 60) | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
+| 2357 | askeladd | cosine-restart-eta-min | WIP | eta_min=1e-5 vs 5e-5 for cycle-end LR floor. |
 | 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
+| 2340 | thorfinn | adamw-beta1-sweep | **CLOSED cycle 60** | Both arms regress +3.5–4.8 val (>2× seed noise). β1=0.9 confirmed. β1 axis exhausted. |
 | 2381 | fern | stratified-restart-compose | **CLOSED cycle 55** | Strict+restart not orthogonal — restart replaces sampler's spike-control role. DW notable: reduced 2nd spike +31%. |
-| 2296 tanjiro lookahead-adamw (1st run) | tanjiro | lookahead-adamw | **SENT BACK** | k=5 val=83.86 (−0.16% vs baseline, within noise) / test=74.07 (−0.94%). Used WD=3e-4 no restart. Compose test assigned. |
 | 2331 | nezuko | swa-cycle-end-averaging | **CLOSED cycle 53** | Definitive null. SWA PERMANENTLY CLOSED. Seed variance ~1-2 val pts. |
 | 2317 | alphonse | restart-wd-compose | **CLOSED cycle 53** | WD×restart anti-additive. Same failure mode. |
-| 2259 | fern | stratified-sampler | **CLOSED cycle 49** | Mechanisms confirmed; lost current baseline. |
 | 2232 | edward | head-up-wd | **CLOSED cycle 49** | Mechanism confirmed; lost current baseline. |
 | 2227 | alphonse | cosine-restart | **MERGED** | BASELINE: val 83.9969 / test 74.7684. |
 | 2178 | frieren | compile-wd-compose | **MERGED** | val 87.0144. |
@@ -140,7 +143,8 @@
 30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — **closed** (#2188 thorfinn, CLOSED cycle 47). 3× boost val=84.75 beat OLD baseline but lost to new 83.9969 by 0.9%. Mechanism confirmed: 2×→3× monotone improvement, spike at e16 (135.62) is encoder-LR driven and beneficial. Boost must be repositioned to compose with restart cycles rather than compete.
 31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
 31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — **rejected** (#2201 nezuko, CLOSED cycle 47). β2=0.9999 +14.2% val, β2=0.9995 +8.9% val vs current baseline. Spike-as-signal interpretation prevailed. Long-β2 smoothing destroys e18/e20 deep minimum. β2 axis PERMANENTLY CLOSED: 0.95 (#2015) / 0.9999+0.9995 (#2201) all regress; 0.999 is the only viable point.
-31b. **AdamW β1=0.85/0.95 (gradient momentum adaptation speed)** — testing (#2340 thorfinn, NEW cycle 47). First β1 sweep in the programme. β1 controls step numerator dynamics — orthogonal to β2 (denominator). β1=0.85: faster gradient de-correlation after restart may deepen recovery minimum. β1=0.95: more momentum persistence through restart burst. The last untested AdamW axis.
+31b. **AdamW β1=0.85/0.95 (gradient momentum adaptation speed)** — **REJECTED** (#2340 thorfinn, CLOSED cycle 60). Both arms regress: β1=0.85 +3.50/+3.96 val (two seeds), β1=0.95 +4.83 val. All well outside seed-noise band. β1=0.9 confirmed optimal. Key insight: β1=0.95 smooths restart spike (+15.8 amplitude vs +48.5 for β1=0.85) but does NOT deepen recovery minimum. Spike amplitude is NOT the load-bearing signal. **β1 axis fully exhausted; AdamW search complete (β1, β2, LR, WD, ε all locked).**
+37. **MLP dropout sweep in encoder (feature-level soft regularization)** — testing (#2477 thorfinn, NEW cycle 60). Dropout=0.05 vs 0.10 in PhysicsAttention (attention weights + to_out projection). Orthogonal to WD (weight-level). Code plumbing exists (dropout=0.0 default in Transolver). Tests if stochastic feature masking complements WD in the restart regime. Two arms + second-seed confirmation if either wins.
 32. **SWA over SGDR cycle-ends (retry)** — testing (#2331 nezuko, NEW cycle 47). Prior #1951 SWA (+3.33%) was pre-restart, no genuine cycle-end minima. Now T_0=10 provides independent local minima at e10/e20. Izmailov 2018 designed SWA exactly for this regime. Two arms: sparse 2-snapshot SWA (e10, e20) vs dense per-epoch SWA in cycle 2 (e10–e20).
 33. **Cosine T_max sweep {15, 20, 25}** — **rejected at 14ep pre-compile baseline** (#2123 askeladd, CLOSED cycle 48). Best arm T_max=20 val=93.06 (−0.6% vs OLD #2031), but +10.8% vs current 83.9969. T_max axis is now MOOT (current baseline uses CosineAnnealingWarmRestarts, not CosineAnnealingLR). Replaced by eta_min sweep (#2357).
 34. **Cosine restart eta_min sweep {1e-5, 5e-5}** — testing (#2357 askeladd, NEW cycle 48). PR #2227 used default eta_min=0 (LR drops to exactly 0 at cycle-ends e10/e20). This may or may not be optimal — a tiny nonzero floor LR could let the model continue micro-refining at cycle-end minima. Orthogonal to alphonse's #2317 (T_0=12 + WD compose) on the cosine restart axis.

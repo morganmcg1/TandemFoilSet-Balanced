@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-13 17:30 — PR #2340: AdamW β1 sweep: momentum adaptation speed (CLOSED — β1 axis exhausted)
+
+- **Branch:** `willowpai2g48h4-thorfinn/adamw-beta1-sweep`
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `o29tfbmf` (β1=0.85 run 1), `p6q5iy7h` (β1=0.85 retry), `uhotdk62` (β1=0.95)
+
+### Results
+
+| Arm | β1 | best_epoch | val_avg/mae_surf_p | Δ vs baseline | test_avg/mae_surf_p | W&B run |
+|-----|----|-----------|-------------------|---------------|--------------------|---------| 
+| Baseline kt5pk5qu | 0.9 | — | **83.9969** | — | **74.7684** | kt5pk5qu |
+| β1=0.85 (run 1) | 0.85 | 20 | 87.4989 | +3.50 (+4.17%) | 77.9268 | `o29tfbmf` |
+| β1=0.85 (retry) | 0.85 | 20 | 87.9596 | +3.96 (+4.72%) | 77.8949 | `p6q5iy7h` |
+| β1=0.95 | 0.95 | 20 | 88.8321 | +4.83 (+5.75%) | 78.9673 | `uhotdk62` |
+
+### Commentary
+
+**β1 axis definitively closed.** Both perturbations regress significantly — 3.5–4.8 val pts, well outside the ~1–2 val pt seed-variance band. The β1=0.85 retry confirmed the regression is structural, not noise (87.50/87.96, gap ~0.5 val within seed variance, both >3 pts above baseline).
+
+**AdamW search is now fully exhausted:**
+- β2 axis: β2=0.999 fixed (#2015, #2201)
+- β1 axis: β1=0.9 confirmed (this PR, both directions regress)
+- LR axis: 5e-4 / surf_head_lr=5e-3 confirmed (#1974, #1949)
+- WD axis: 5e-4 under restart confirmed; frieren #2284 maps the lower-WD curve
+- ε axis: closed (#2128, surf_head frac_below_eps=0 always)
+
+**Spike-trajectory finding (high diagnostic value for paper):**
+- β1=0.95 smooths the restart spike dramatically (e11 = +15.8 vs +48.5 at β1=0.85) — momentum inertia carries pre-restart gradient direction through the LR jump
+- β1=0.85 amplifies the spike — faster momentum decay leaves the model more exposed to the post-restart LR jump
+- BUT: smoother spike (β1=0.95) does NOT produce a deeper cycle-2 minimum (88.83 vs 87.50 for β1=0.85)
+- AND: rougher spike (β1=0.85) does not unlock anything either
+
+Interpretation: the step-magnitude composition `m/√v` is well-tuned at β1=0.9. The spike shape is determined by the momentum inertia crossing the LR reset, but the final recovery minimum is governed by the full gradient history, not spike amplitude. **Smoother spikes ≠ better convergence** — the cycle-34 spike-IS-signal reframing holds. Future restart-suppression hypotheses (warmup-after-restart, decoupled β1 reset) should note: this evidence says suppressing the spike does not help final val.
+
+**Assigned thorfinn next:** PR #2477 — MLP dropout sweep (feature-level activation dropout, 0.05 vs 0.10). First unexplored soft-regularization axis after AdamW exhaustion.
+
+---
+
 ## 2026-05-13 16:40 — PR #2381: Strict stratification + cosine_restart compose (CLOSED — informative null)
 
 - **Branch:** `willowpai2g48h4-fern/stratified-restart-compose`
