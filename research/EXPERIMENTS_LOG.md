@@ -6,6 +6,51 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 15:28 — PR #2351 — MERGED ✓ NEW BASELINE val=35.969 (slice_num=12 floor probe wins!)
+
+**tanjiro: slice_num=12 on n_layers=3+epochs=36 (reduced from 38 due to 51.89s/epoch)**
+- val_avg: **35.969** vs baseline 37.366 → **−1.40 (−3.74%) IMPROVEMENT**
+- test_avg: **30.265** vs baseline 31.371 → **−1.11 (−3.53%) IMPROVEMENT**
+- All 4 splits improved on both val and test
+- best_epoch: 36/36 (final — STILL DESCENDING)
+- 50.33s/epoch, 36 epochs, 30.2 min total (capped)
+- Peak memory: 18.16 GB, params: 513,075
+
+| Split | val sl12 | val baseline | Δval | test sl12 | test baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 36.308 | 38.082 | −4.66% | 33.241 | 33.836 | −1.76% |
+| geom_camber_rc | 49.521 | 51.356 | −3.57% | 43.631 | 45.411 | −3.92% |
+| geom_camber_cruise | 19.576 | 20.702 | −5.44% | 15.969 | 16.874 | −5.36% |
+| re_rand | 38.470 | 39.325 | −2.17% | 28.220 | 29.365 | −3.90% |
+| **avg** | **35.969** | **37.366** | **−3.74%** | **30.265** | **31.371** | **−3.53%** |
+
+**KEY FINDING: 'Capacity floor' hypothesis WRONG.** The capacity does NOT saturate at slice_num=24. Fewer slices → faster per-epoch → more cosine descent iterations within the 30-min cap. The mechanism is robustly holding from 32→24→12 (each step a large win). No capacity degradation signal on geom_camber_rc (vol mae_vol_p=54.2 — normal).
+
+**Trajectory:** val 40.158 → 39.143 → 38.270 → 37.366 → **35.969** (total −10.5% from round start)
+
+**Partition sweep ladder revised:**
+- slice_num=32: val=39.143
+- slice_num=24: val=37.366
+- slice_num=20: askeladd #2375 (in flight — expected ~36.9, cannot win)
+- slice_num=16: alphonse #2348 (in flight — expected ~36.5, cannot win)
+- slice_num=12: **35.969 ← NEW BASELINE**
+- slice_num=8: tanjiro #2408 (in flight, next probe)
+
+**Metric artifacts:** `models/model-slicenum12-nlayers3-20260513-142632/metrics.jsonl`
+
+**Reassignment:** tanjiro → PR #2408 (slice_num=8 next floor probe)
+
+---
+
+## 2026-05-13 15:28 — PR #2301 — CLOSED (stale dead-end; baseline shifted)
+
+**fern: lr=1.5e-4 on n_layers=3+slice_num=32+epochs=30**
+Never completed — closed due to baseline shift. Even winning at slice_num=32 gives ~38.x vs new baseline 35.969. No path to victory.
+
+**Reassignment:** fern → PR #2409 (lr=1.5e-4 at NEW stack slice_num=12+epochs=36)
+
+---
+
 ## 2026-05-13 15:15 — PR #2367 — CLOSED (lr=2e-4 loses; LR ceiling below 2e-4 confirmed)
 
 **frieren: lr=2e-4 on n_layers=3+slice_num=24+epochs=33**

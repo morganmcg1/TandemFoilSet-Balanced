@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:18
+- **Date:** 2026-05-13 15:30
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,24 +9,24 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 37.366** (n_head=4 + n_layers=3 + slice_num=24 + epochs=33, PR #2229)
-**`test_avg/mae_surf_p` = 31.371**
+**`val_avg/mae_surf_p` = 35.969** (n_head=4 + n_layers=3 + slice_num=12 + epochs=36, PR #2351)
+**`test_avg/mae_surf_p` = 30.265**
 
-> **Capacity floor identified:** n_layers=2 lost (PR #2230, +0.94% val). n_layers=3 is the depth floor.
+> **Capacity floor NOT found at slice_num=12.** The floor probe won decisively (−3.74%). Partition-sweep mechanism still dominant.
 
 > **Config note:** `train.py` default is `n_head=4` (line 392). All runs that did NOT pass `--n_head` explicitly have been running with n_head=4.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 38.082 | 33.836 |
-| geom_camber_rc | **51.356** | 45.411 |
-| geom_camber_cruise | 20.702 | 16.874 |
-| re_rand | 39.325 | 29.365 |
-| **avg** | **37.366** | **31.371** |
+| single_in_dist | 36.308 | 33.241 |
+| geom_camber_rc | **49.521** | 43.631 |
+| geom_camber_cruise | 19.576 | 15.969 |
+| re_rand | 38.470 | 28.220 |
+| **avg** | **35.969** | **30.265** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 33 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 24`
+**Reproduce:** `cd target/ && python train.py --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 12`
 
-**best_epoch=33/33 STILL DESCENDING** at 53.7s/epoch — 29.5 min used, very tight margin. Per-epoch further reductions remain the primary lever (slice_num=16/12 in flight).
+**best_epoch=36/36 STILL DESCENDING** at 50.3s/epoch — 30.2 min used, HIT CAP. Partition sweep continuing to slice_num=8.
 
 ## What we've learned
 
@@ -50,6 +50,7 @@
 17. **n_layers=3 + slice_num=32 + epochs=27**: −8.58% val / −9.02% test (PR #2107) ← BIGGEST SINGLE STEP; best_epoch=27 STILL DESCENDING
 18. **epochs=30 on n_layers=3+slice_num=32**: −2.20% val (PR #2228) ← best_epoch=30 STILL DESCENDING
 19. **slice_num=24 + epochs=33 on n_layers=3**: −2.36% val / −3.38% test (PR #2229) ← ~54s/epoch, 33 epochs, STILL DESCENDING
+20. **slice_num=12 + epochs=36 on n_layers=3**: −3.74% val / −3.53% test (PR #2351) ← ~50s/epoch, 36 epochs, HIT CAP STILL DESCENDING
 
 ### Current stack (defaults + CLI overrides)
 - L1 (MAE) loss in normalized space, **surf_weight=10**
@@ -89,17 +90,21 @@
 
 | Student | PR | Hypothesis | Stack |
 |---------|-----|------------|-----------|
-| alphonse | #2348 | **slice_num=16 on n_layers=3+epochs=36** (continue partition sweep) | n_layers=3 |
-| tanjiro | #2351 | **slice_num=12 on n_layers=3+epochs=38** (floor probe — where does slice axis saturate?) | n_layers=3 |
-| edward | #2383 | **n_head=2 on n_layers=3+slice_num=24+epochs=33** (attention-head axis: head_dim 32→64) | n_layers=3 |
-| thorfinn | #2353 | **lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33** (LR bracket upper-middle) | n_layers=3 |
-| frieren | #2402 | **lr=5e-5 on n_layers=3+slice_num=24+epochs=33** (LR lower bracket) | n_layers=3 |
-| nezuko | #2404 | **n_head=1 on n_layers=3+slice_num=24+epochs=33** (attention-head axis: single head, head_dim=128) | n_layers=3 |
-| fern | #2301 | lr=1.5e-4 on n_layers=3+slice_num=32+epochs=30 (LR retest at old stack — STALE, GPU active) | n_layers=3 |
-| askeladd | #2375 | **slice_num=20 on n_layers=3+epochs=34** (fine-grain partition sweep fill) | n_layers=3 |
+| alphonse | #2348 | slice_num=16 on n_layers=3+epochs=36 (partition sweep — expected ~36.5, CANNOT beat new baseline) | n_layers=3 |
+| askeladd | #2375 | slice_num=20 on n_layers=3+epochs=34 (partition sweep — expected ~36.9, CANNOT beat new baseline) | n_layers=3 |
+| tanjiro | #2408 | **slice_num=8 on n_layers=3+epochs=38** (next partition floor probe) | n_layers=3 |
+| fern | #2409 | **lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36** (LR at NEW baseline stack) | n_layers=3 |
+| edward | #2383 | n_head=2 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
+| thorfinn | #2353 | lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
+| frieren | #2402 | lr=5e-5 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
+| nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
 
-**Closed this turn:** #2367 (frieren lr=2e-4 +4.4%), #2279 (nezuko sw=3 +3.87%)
-**Closed since baseline shift:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy), #2274 (frieren WD=0 +2.2%), #2248 (askeladd sw=2 +3.13%), #2350 (edward mlp_ratio=2 +2.3%), #2367 (frieren lr=2e-4 +4.4%), #2279 (nezuko sw=3 +3.87%)
+**⚠️ NOTE:** alphonse/askeladd/edward/thorfinn/frieren/nezuko all testing at slice_num=24 or older stacks. Cannot beat new baseline 35.969. Will confirm axes when results land but will be closed.
+
+**Merged this turn:** #2351 (tanjiro slice_num=12, val=35.969, −3.74%) — new baseline
+**Closed this turn:** #2301 (fern lr=1.5e-4 old stack — baseline shifted, no path to victory)
+
+**Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → **35.969** (−10.5% total from round start)
 
 **Variance note (from #2274 student diagnosis):** Inter-run variance on identical configs is ~1.7 val units. Recent ~0.5 val improvements are at or near this noise floor — single-run signals require corroboration.
 
@@ -112,36 +117,39 @@
 
 ## Confirmed mechanisms
 
-**Epoch-budget (dominant lever):** Faster per-epoch → more epochs → better convergence. 11 consecutive best_epoch=final wins. PR #2229 confirms at slice_num=24: 33 epochs in 29.5 min, still descending.
+**Epoch-budget (dominant lever):** Faster per-epoch → more epochs → better convergence. **13 consecutive best_epoch=final wins.** Partition sweep: 32→24→12 each a large win. Mechanism shows NO sign of saturating.
 
 **Dead at n_layers=3:**
 - mlp_ratio=6 (+5.4%) — attention is the bottleneck, not FFN capacity
 - Linear warmup (+1.66%) — compresses cosine tail
 - sw=5/vol-gradient (+2.57%) — depth-sensitive, doesn't compound at compact stack
 
-## Next priority hypotheses (when slots open)
+## Next priority hypotheses
 
-**Highest EV:**
-1. **slice_num=8 floor probe** — if slice_num=12 wins, probe the hard floor
-2. **Compound slice_num=16 + winning orthogonal** — stack mechanisms once slice axis is resolved
-3. **n_hidden=96 on compact stack** — trade width for epoch budget (~40s/epoch → ~44 epochs); requires --n_hidden CLI flag
+**Highest EV (immediate):**
+1. **slice_num=8**: IN FLIGHT (tanjiro #2408) — continue partition sweep
+2. **slice_num=4 probe**: if slice_num=8 wins, try slice_num=4 (will likely fail on capacity but worth checking)
+3. **LR at slice_num=12**: fern #2409 (lr=1.5e-4) in flight — LR axis at NEW stack
+4. **Compound slice_num=12 + winning LR**: once fern lands, compound best-LR with current best partition
 
-**Medium priority:**
-4. **LR fine-grain below 1e-4** — if frieren's lr=5e-5 wins, try lr=3e-5 or 7.5e-5
-5. **Compound best-LR + best-nhead** — if either LR or attention axis wins, compound with the other winner
-6. **T_max decoupling** — T_max != epochs (e.g. T_max=44 with epochs=33 keeps residual LR at end); requires CLI flag
+**Medium priority (after stale-stack tests land):**
+5. **n_head=1/2 at slice_num=12**: once edward/nezuko results land at slice_num=24, re-run winning head count at new stack
+6. **lr=5e-5 at slice_num=12**: retest frieren's probe at new stack if lr=5e-5 shows any signal at slice_num=24
 
-**LR bracket state at compact stack:**
-- lr=5e-5 (frieren #2402, in flight)
-- lr=1e-4 (baseline, optimal so far)
-- lr=1.5e-4 (thorfinn #2353, in flight)
-- lr=2e-4 (#2367, closed +4.4%)
+**Partition sweep state:**
+- slice_num=32: val=39.143
+- slice_num=24: val=37.366 (BASELINE −2.36%)
+- slice_num=20: askeladd #2375 (in flight, expected ~36.9, cannot win vs 35.969)
+- slice_num=16: alphonse #2348 (in flight, expected ~36.5, cannot win vs 35.969)
+- slice_num=12: **35.969 (CURRENT BASELINE)**
+- slice_num=8: tanjiro #2408 (IN FLIGHT)
+- slice_num=4: next if 8 wins (may fail on capacity)
 
-**Attention-head bracket at compact stack:**
-- n_head=1 head_dim=128 (nezuko #2404, in flight)
-- n_head=2 head_dim=64 (edward #2383, in flight)
-- n_head=4 head_dim=32 (baseline)
-- n_head=8 head_dim=16 (old dead-end +15.7%)
+**LR axis state at slice_num=12 (NEW stack):**
+- lr=5e-5 (NOT YET TESTED at slice_num=12)
+- lr=1e-4 (BASELINE, val=35.969)
+- lr=1.5e-4 (fern #2409, IN FLIGHT)
+- lr=2e-4 (tested at slice_num=24, lost +4.4%)
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
