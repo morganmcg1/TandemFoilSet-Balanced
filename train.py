@@ -87,14 +87,15 @@ class SwiGLUMLP(nn.Module):
     Replaces a standard 2-matrix MLP `W2 · GELU(W1 · x)` with the gated
     variant `W_down · (SiLU(W_gate · x) ⊙ W_up · x)`.
 
-    `hidden_dim` is the original MLP inner dim; we scale to `2/3 * hidden_dim`
-    (rounded up to a multiple of 8) so the SwiGLU 3-matrix block has roughly
-    the same parameter count as the original 2-matrix MLP.
+    `hidden_dim` is the original MLP inner dim; we use the full
+    `hidden_dim` here (rounded up to a multiple of 8) to give the
+    gate/up/down projections their natural per-token routing capacity
+    (was 2/3 × hidden_dim for param-matching with the GELU 2-matrix MLP).
     """
 
     def __init__(self, in_dim: int, hidden_dim: int):
         super().__init__()
-        inner_dim = int(hidden_dim * 2 / 3)
+        inner_dim = hidden_dim
         inner_dim = ((inner_dim + 7) // 8) * 8
         self.inner_dim = inner_dim
         self.w_gate = nn.Linear(in_dim, inner_dim, bias=False)
