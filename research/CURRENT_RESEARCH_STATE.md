@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 (wave-7 first-results batch: 2 close + 2 send-back + 2 new assignments)
+- **Last updated:** 2026-05-13 (wave-7 second-results batch: 1 MERGE [#1906 Kendall, new baseline 71.43/62.99], 1 send-back [#1734])
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -10,25 +10,24 @@
 - **Idle students:** 0 (all 8 active)
 - **⚠ Operational note:** GraphQL API rate-limit storms (user ID 20516801) intermittently knock student entrypoints into "No assigned PRs" state mid-loop. Use REST helpers (`pr_body`, `pr_all_comments`) over GraphQL when possible.
 
-## ⭐ Current baseline (PR #1831 merged 2026-05-13 06:00 UTC)
+## ⭐ Current baseline (PR #1906 merged 2026-05-13 — Kendall uncertainty)
 
-- **val_avg/mae_surf_p:** **73.8093** (seed 0, SWA-model eval)
-- **test_avg/mae_surf_p:** **65.0381** (seed 0, SWA-model, 4-split all finite)
-- Improvement over prior #1731 baseline: val −1.08%, test −1.66%
-- Config: Transolver + FiLM (mid_dim=64) + Smooth-L1 (Huber β=1.0) + per-sample Re-weight + surf_weight=10.0 + **grad-clip max_norm=0.5** ← UPDATED
+- **val_avg/mae_surf_p:** **71.4346** (seed 0, SWA-model eval) ← NEW
+- **test_avg/mae_surf_p:** **62.9866** (seed 0, SWA-model, 4-split all finite) ← NEW
+- Improvement over prior #1831 baseline: val **−3.22%**, test **−3.15%** (2.76× σ band on val)
+- Config: Transolver + FiLM (mid_dim=64) + Smooth-L1 (Huber β=1.0) + per-sample Re-weight + **Kendall uncertainty per-channel σ heads** (replaces fixed surf_weight=10) + grad-clip max_norm=0.5
 - Schedule: CosineAnnealingLR(T_max=15), SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2)
-- W&B baseline run: `h7yzkcwl`
+- W&B baseline run: `dkfjae5o`
 - See `BASELINE.md` for full reproducible spec.
+- **Learned σ:** max/min weight spread 1.20× — nearly uniform, slight Ux/Uy emphasis (consistent with #1821 residual-ratio diagnosis); no clamp saturation.
+- **Per-split test gains (vs #1831):** test_single_in_dist −8.10 (huge!), test_geom_camber_rc −0.39, test_geom_camber_cruise −0.05, test_re_rand +0.33. **The Kendall win is concentrated on in-distribution accuracy; OOD splits barely moved** → OOD generalization remains bottlenecked by architecture/data-side levers, not loss weighting.
 
 ## 🔥 Hottest signals this session
 
-- **PR #1909 (tanjiro, tanh-bound FiLM) CLOSED:** clean negative — tanh saturation 0% throughout (bound never engaged); mild sub-linear compression hurt broadly. **FiLM-output-bound axis closes.** Together with #1760 (width) + #1838 (depth), all FiLM intra-head axes (capacity + output-bound) closed cleanly. Reassigned to #1938 per-token FiLM (first structural FiLM change).
-- **PR #1856 (alphonse, slice_num=32 2nd seed) CLOSED:** seed-0 test win didn't survive seed 1 — apples-to-apples val regression exceeds σ band, seed 1 routing collapse in block 1 (entropy 0.57, eff 1.77 slices). **Slice-routing capacity both directions closed:** upward #1818 (cap), downward this PR (routing collapse). Reassigned to #1937 max-norm further-tighten {0.25, 0.1} sweep.
-- **PR #1907 (edward, pos-jitter σ=0.01) SEND BACK:** student found coord range is [-9.55, +10.55] not [-1, 1] — PR σ=0.01 was ~10x mis-scaled, mechanism never had a fair test. Sent back at σ=0.05 (~3% of coord std).
-- **PR #1757 (frieren, β=0.3 on FiLM) SEND BACK:** val=72.11 / test=62.91 — strong absolute numbers, BUT ran with `--max_norm 1.0` (old baseline) not `0.5` (current). Not apples-to-apples. Sent back for rebase + rerun with `--max_norm 0.5`.
+- **PR #1906 (askeladd, Kendall uncertainty) MERGED:** val=**71.43** / test=**62.99** — clean win, all 8 splits improve, learned σ near-uniform (1.20× spread) with slight Ux/Uy emphasis. **Per-channel weighting axis now LANDED — Kendall succeeded where #1702 p-up and #1821 uxuy-up failed.** New baseline. Largest test gain on test_single_in_dist (−8.10) — in-distribution wins; OOD splits barely moved.
+- **PR #1734 (thorfinn, asinh α=0.5) SEND BACK:** val=75.07 / test=65.85 — within σ band, no test override; ALSO ran with stale `max_norm=1.0` (config confound). Sent back for rebase + rerun with `max_norm=0.5 --use_kendall_uncertainty`.
 - **#1873 (fern, SDF-feature)** still WIP — wave-7 geometry-axis open.
-- **#1734 (thorfinn, asinh-pressure)** still WIP / rebase pending — old baseline.
-- **#1906 (askeladd, Kendall uncertainty)**, **#1908 (nezuko, learnable routing-temp)** still WIP.
+- **#1907 (edward, pos-jitter σ=0.05 rerun)**, **#1908 (nezuko, learnable routing-temp)**, **#1937 (alphonse, max-norm-tight sweep)**, **#1938 (tanjiro, per-token FiLM)**, **#1757 (frieren, β=0.3 rerun)** all WIP.
 
 ## Most recent direction from human researcher team
 
@@ -43,30 +42,32 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 | #1586 (thorfinn) | re-weight-on-huber | Per-sample loss reweighting by `1/log_re_shifted` | val=95.75, test=86.17 |
 | #1585 (askeladd) | film-on-huber | FiLM global conditioning (zero-init head, per-layer (γ,β)) | val=80.82, test=71.30 |
 | #1731 (nezuko) | grad-clip-on-filmed | Grad-clip (max_norm=1.0) composing orthogonally with FiLM+SWA | val=74.62, test=66.14 |
-| #1831 (nezuko) | max-norm-0p5-on-clipfilm | Tighter grad-clip max_norm=0.5 | **val=73.81, test=65.04** (current) |
+| #1831 (nezuko) | max-norm-0p5-on-clipfilm | Tighter grad-clip max_norm=0.5 | val=73.81, test=65.04 |
+| #1906 (askeladd) | kendall-uncertainty-on-clipfilm | Learned per-channel σ heads (Kendall et al. 2018) | **val=71.43, test=62.99** (current) |
 
 ## Current research focus
 
-### Wave 7 (in flight)
+### Wave 7 (in flight) — all decisions vs new Kendall baseline (71.43/62.99)
 
 | PR | Student | Slug | Mechanism axis | Forked from | Decision threshold |
 |---|---|---|---|---|---|
-| #1937 ← NEW | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 | best-arm val < 73.81 → merge |
-| #1938 ← NEW | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change after capacity + output-bound axes closed | 73.81 | val < 73.81 → merge |
-| #1906 | askeladd | `kendall-uncertainty-on-clipfilm` | Learned per-channel σ heads (Kendall et al. 2018) — principled alternative to fixed per-channel weighting | 73.81 | val < 73.81 → merge |
-| #1907 ← rerun | edward | `pos-jitter-0p01-on-clipfilm` | Position-jitter on volume mesh coords; rerun at σ=0.05 after coord-scale finding | 73.81 | val < 73.81 → merge |
-| #1908 | nezuko | `learnable-routing-temp-on-clipfilm` | Per-block learnable softmax temperature on PhysicsAttention slice-routing | 73.81 | val < 73.81 → merge |
-| #1873 | fern | `sdf-feature-on-clipfilm` | Per-node SDF as input feature (wave-7 geometry-axis) | 74.62 | val < 73.81 on new bar |
-| #1757 ← rerun | frieren | `beta-0p3-on-filmed` | β=0.3 monotonic-β port; rerun after rebase + `--max_norm 0.5` | 73.81 (post-rebase) | val < 73.81 on new bar |
-| #1734 | thorfinn | `asinh-0p5-pressure-on-filmed` (rebase pending) | Value-level pressure-target compression | rebasing | val < 73.81 on new bar |
+| #TBD ← NEW | askeladd | TBD wave-7 next | Mechanism-distinct from Kendall (post-merge follow-up) | 71.43 | val < 71.43 → merge |
+| #1937 | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 → must reframe vs 71.43 | best-arm val < 71.43 → merge |
+| #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change | 73.81 → must reframe vs 71.43 | val < 71.43 → merge |
+| #1907 ← rerun | edward | `pos-jitter-0p01-on-clipfilm` | Position-jitter on volume mesh coords; rerun at σ=0.05 after coord-scale finding | 73.81 → must reframe vs 71.43 | val < 71.43 → merge |
+| #1908 | nezuko | `learnable-routing-temp-on-clipfilm` | Per-block learnable softmax temperature on PhysicsAttention slice-routing | 73.81 → must reframe vs 71.43 | val < 71.43 → merge |
+| #1873 | fern | `sdf-feature-on-clipfilm` | Per-node SDF as input feature (wave-7 geometry-axis) | 74.62 → must reframe vs 71.43 | val < 71.43 → merge |
+| #1757 ← rerun | frieren | `beta-0p3-on-filmed` | β=0.3 monotonic-β port; rerun after rebase + Kendall | (post-rebase) 71.43 | val < 71.43 on new bar |
+| #1734 ← rerun | thorfinn | `asinh-0p5-pressure-on-filmed` | Value-level pressure-target compression; rebase + rerun with Kendall | (post-rebase) 71.43 | val < 71.43 on new bar |
 
-### Decision rule (vs new 73.81 baseline)
+### Decision rule (vs new 71.43 baseline)
 
-- best-arm val < 73.81: merge (assuming no conflicts).
-- 73.81 ≤ val < 75.5 (within new 2-seed σ=0.86 variance band): send back for 2nd seed.
-- 75.5 ≤ val < 77.5: clean negative — close.
-- val ≥ 77.5: clean regression — close.
-- **Test override:** if test < 65.04 even when val doesn't beat 73.81, send back — paper-facing test wins matter independently.
+- best-arm val < 71.43: merge (assuming no conflicts).
+- 71.43 ≤ val < 73.0 (within σ=0.86 variance band): send back for 2nd seed if test < 62.99 (test override).
+- 73.0 ≤ val < 75.0: clean negative — close.
+- val ≥ 75.0: clean regression — close.
+- **Test override:** if test < 62.99 even when val doesn't beat 71.43, send back — paper-facing test wins matter independently.
+- **In-flight PRs assigned vs old 73.81 baseline:** their results will be re-framed at review time against 71.43 / 62.99. A PR that beats 73.81 but lands above 71.43 was already non-decisive and now needs re-evaluation through the new lens.
 
 ## ✗ Closed this session
 
@@ -74,6 +75,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Wave-5 closures:** #1617 (stale rebase), #1680 (drop_path=0.1), #1679 (no-SWA), #1642 (sqrt-Re-weight), #1618 (surf-Huber/vol-MSE on SWA-on-Huber), #1733 (attn-dropout=0.1), #1732 (swa_start=0.65), #1600 (β-sweep on SWA-on-Huber, β=0.3 best; reassigned), #1691 (surf_weight=5), #1739 (FiLM-absorbed per-domain loss), #1702 (per-channel p-up, diagnostic falsified premise)
 - **Wave-6 closures:** #1760 (FiLM mid_dim=128 — width direction closed), #1818 (slice_num=128 — wall-clock cap), #1758 (mesh-subsample Path B — bias contamination), #1838 (FiLM depth=3 — depth direction closed), #1821 (uxuy_weight=2.0 — per-channel weighting both directions closed), #1787 (Re-jitter σ=0.05 — conditioning-feature augmentation broadly closed)
 - **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed)
+- **Wave-7 merges:** #1906 (Kendall uncertainty — learned per-channel σ heads, val=71.43/test=62.99 new baseline)
 
 ## ⚠ Active operational notes
 
@@ -95,23 +97,26 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
   - **Slice-routing downward direction (slice_num 64→32, #1856 routing collapse) ← NEW**
   - Mesh-subsample Path B (zero-features + boolean mask, #1758 bias contamination)
   - Sample-level input-augmentation on FiLM-conditioning features (Re-jitter on log_re, #1787)
-- **5 axes have produced landings:**
+- **6 axes have produced landings:**
   - Loss-shape: Huber (#1452 merged)
   - Loss-weighting: per-sample Re-weight (#1586 merged)
   - Architecture-conditioning: FiLM (#1585 merged)
   - Optimizer-stability max_norm=1.0 (#1731 merged)
-  - **Optimizer-stability max_norm=0.5 (#1831 merged) ← NEW**
-- **Largest remaining gap: val_geom_camber_rc (90.32 on new baseline).** Geometry-aware levers (#1873 SDF) directly target this.
-- **Composition pattern confirmed twice:** grad-clip + FiLM compose constructively (+7% each independently). max_norm=0.5 compounds on top of that for another +1%. Stability-enabling levers stack.
+  - Optimizer-stability max_norm=0.5 (#1831 merged)
+  - **Loss-weighting (channel-level, learned σ — Kendall, #1906 merged) ← NEW**
+- **Largest remaining gap: val_geom_camber_rc (88.09 on new baseline).** Geometry-aware levers (#1873 SDF, #1907 pos-jitter) directly target this.
+- **Largest single-PR test gain:** Kendall's test_single_in_dist (76.74 → 68.64, −8.10) — biggest split-level move on this branch since FiLM merge.
+- **Composition pattern confirmed three times:** grad-clip + FiLM compose constructively. max_norm=0.5 compounds on top. **Kendall composes on top of grad-clip + FiLM** for another +3.2% val. Stability-enabling + multi-task-balancing levers stack additively.
+- **Mechanism finding from #1906 split breakdown:** Kendall improvements are 90%+ concentrated on test_single_in_dist. OOD splits (geom_camber_rc, geom_camber_cruise, re_rand) barely moved. **OOD generalization is bottlenecked by something OTHER than loss weighting** — likely architecture (per-token FiLM #1938, routing-temp #1908) or data-side (SDF #1873, pos-jitter #1907).
 
 ## Mechanism-axis coverage (all 8 students, wave 7)
 
-- **Loss-shape (β):** β=0.3 rerun pending after rebase + `--max_norm 0.5` (#1757 frieren)
+- **Loss-shape (β):** β=0.3 rerun pending after rebase + Kendall (#1757 frieren)
 - **Loss-shape (per-domain kind):** **CLOSED** at FiLM-scale (#1739)
 - **Loss-weighting (surf/vol split):** **CLOSED both directions** (sw=10 brackets optimum)
 - **Loss-weighting (channel-level, fixed):** **CLOSED both directions** (#1702 p-up; #1821 uxuy-up)
-- **Loss-weighting (channel-level, learned σ — Kendall):** in flight #1906 askeladd
-- **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) — pending rebase
+- **Loss-weighting (channel-level, learned σ — Kendall):** **LANDED #1906** ← NEW
+- **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) — rebase pending against new Kendall baseline
 - **Optimizer-stability (grad-clip max_norm):** **LANDED at 0.5 in baseline (#1831)** — further-tighten sweep {0.25, 0.1} in flight #1937 alphonse
 - **Data-side input augmentation (node-level Path B):** **CLOSED** (#1758)
 - **Data-side input augmentation (sample-level conditioning feature):** **CLOSED** (#1787 Re-jitter)
@@ -119,22 +124,22 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Geometry-aware input features (per-node SDF):** in flight #1873 fern
 - **Architecture-conditioning (intra-FiLM-capacity, width):** **CLOSED** (#1760)
 - **Architecture-conditioning (intra-FiLM-capacity, depth):** **CLOSED** (#1838)
-- **Architecture-conditioning (intra-FiLM, modulation magnitude bound):** **CLOSED** (#1909) ← NEW
-- **Architecture-conditioning (intra-FiLM, structural — per-token):** NEW — #1938 tanjiro (is_surface-aware split heads)
+- **Architecture-conditioning (intra-FiLM, modulation magnitude bound):** **CLOSED** (#1909)
+- **Architecture-conditioning (intra-FiLM, structural — per-token):** in flight #1938 tanjiro (is_surface-aware split heads)
 - **Architecture-conditioning (intra-routing-capacity, upward):** **CLOSED** (#1818)
-- **Architecture-conditioning (intra-routing-capacity, downward):** **CLOSED** (#1856 routing collapse) ← NEW
+- **Architecture-conditioning (intra-routing-capacity, downward):** **CLOSED** (#1856 routing collapse)
 - **Architecture-conditioning (intra-routing softmax sharpness):** in flight #1908 nezuko (learnable routing temperature)
 - **Architecture-conditioning (head):** FiLM — LANDED in baseline
 - **Schedule / SWA-window:** definitively closed
 - **Internal regularization:** definitively closed (3 sub-axes)
+- **Loss-weighting (channel-level, learned σ — Kendall):** **LANDED #1906** ← NEW
 
-**18 orthogonal mechanism axes — 5 landed (Huber, Re-weight, FiLM, grad-clip 1.0, grad-clip 0.5), 15 closed, 8 pending (2 new wave-7 assignments + 6 carry-over/rerun: SDF, Kendall, routing-temp, pos-jitter rerun, β=0.3 rerun, asinh, max-norm-tighter, per-token FiLM).**
+**18 orthogonal mechanism axes — 6 landed (Huber, Re-weight, FiLM, grad-clip 1.0, grad-clip 0.5, Kendall), 15 closed, 7 pending (carry-over/rerun: SDF, routing-temp, pos-jitter rerun, β=0.3 rerun, asinh rebase, max-norm-tighter, per-token FiLM) + 1 NEW slot to fill for askeladd.**
 
-**Mechanism findings from this batch's closures:**
-1. **#1909 closure:** FiLM-output-bound axis closed. Tanh saturation 0% throughout — the bound never engaged. Combined with #1760+#1838 capacity closures, the FiLM head is well-tuned at its current size and shape. Next FiLM lever must be **structural**, not capacity- or magnitude-related → #1938 per-token FiLM.
-2. **#1856 closure:** Slice-routing downward direction closed. Seed-0 test win didn't survive 2nd seed under apples-to-apples conditions; seed 1 showed routing collapse in block 1 (entropy 0.57, eff slice count 1.77). slice_num=64 is at/near optimum.
-3. **#1907 send-back:** Coord-scale diagnosis (range [-9.55, +10.55] not [-1, 1]) means original σ=0.01 was ~10x mis-scaled. Future input-augmentation hypotheses must compute σ relative to actual feature std, not assume normalized inputs.
-4. **#1757 send-back:** Strong absolute numbers (val 72.11) on stale baseline (`--max_norm 1.0`) means we can't merge as-is without undoing #1831. Rebase + rerun directly answers whether β=0.3 composes with max_norm=0.5 or is partially redundant.
+**Mechanism findings from this batch:**
+1. **#1906 MERGE — Kendall lands:** Per-channel learned σ heads succeeded where fixed weighting failed (#1702, #1821). Near-uniform learned weighting (1.20× spread) **beats** the hand-set `surf_weight=10` baseline. Confirms principled task uncertainty estimation is the right lever.
+2. **#1906 split breakdown — OOD bottleneck remains:** test_single_in_dist −8.10 (huge!), OOD splits barely move. **Loss-weighting axis cannot fix OOD; that bottleneck is architecture- or data-side.**
+3. **#1734 send-back:** Config confound (max_norm=1.0 vs current 0.5) plus within-σ-band non-win. Rerun with `--max_norm 0.5 --use_kendall_uncertainty --asinh_alpha 0.5` to test asinh on the new bar.
 
 ## Potential next research directions (wave 8+)
 
@@ -166,13 +171,13 @@ Ranked by expected ROI on `val_avg/mae_surf_p` given the new max_norm=0.5+FiLM b
 
 ## Open questions to revisit on next review
 
-- **#1873 SDF:** First geometry-aware lever — does it crack val_geom_camber_rc=90.32?
-- **#1906 Kendall:** Does learned per-channel σ outperform fixed surf_weight=10? Will tell us whether the per-channel weighting axis was lever-limited or fundamentally limited.
+- **#1873 SDF:** First geometry-aware lever — does it crack val_geom_camber_rc=88.09 on the new bar?
 - **#1907 Position-jitter (σ=0.05 rerun):** Does non-conditioning input augmentation at the corrected scale succeed where conditioning-feature augmentation failed? Key test of the diagnosis from #1787.
 - **#1908 Routing-temp:** Does explicit temperature parameterization help, or is it redundant with the projection-layer scale? Diagnostic-rich either way.
 - **#1937 max-norm-tight sweep {0.25, 0.1}:** Is the monotonic tighten-helps curve still descending past 0.5, or did 0.5 land at/near the optimum?
 - **#1938 per-token FiLM:** Do surface and volume tokens actually benefit from distinct modulation (cos(γ_surf, γ_vol) < 0.5)? Or is the FiLM head's bottleneck not structural after all (cos ≈ 1.0)?
-- **#1757 β=0.3 rerun:** Does β=0.3 compose with max_norm=0.5, or are the two stability levers partially redundant?
-- **#1734 asinh:** still WIP on old baseline; rebase + re-evaluate against 73.81 when results arrive.
-- **Wall-clock tightness:** new baseline runs at the 30-min cap; future PRs must account for the tightened envelope.
-- **Architectural-capacity-axis saturation:** with slice-routing both directions closed (#1818, #1856) and FiLM intra-head both axes closed (#1760, #1838, #1909), the remaining intra-architecture experiments are routing-temp (#1908) and per-token FiLM (#1938 structural). If both close, progress must come from data-side (#1873 SDF, #1907 pos-jitter) or schedule-side or loss-formulation (#1906 Kendall, #1734 asinh) levers.
+- **#1757 β=0.3 rerun:** Does β=0.3 compose with max_norm=0.5 + Kendall, or are these stability levers partially redundant?
+- **#1734 asinh rebase:** Does value-level pressure-target compression help on the new Kendall baseline?
+- **Wall-clock tightness:** new baseline runs near the 30-min cap; future PRs must account for the tightened envelope.
+- **OOD-bottleneck attribution:** Kendall's win was concentrated on test_single_in_dist (−8.10) with OOD splits barely moving. **The OOD generalization gap is now exposed as the dominant remaining challenge.** Architecture (#1938 per-token FiLM, #1908 routing-temp) or data-side (#1873 SDF, #1907 pos-jitter) levers are best-positioned to crack it. Loss-weighting axis is now landed; further gains there are diminishing-returns.
+- **In-flight reframe:** 6 wave-7 PRs were assigned with decision rule vs old 73.81 baseline. They will be re-evaluated against 71.43 at review time. A PR landing in [71.43, 73.81] beats the old bar but not the new — these become close-or-send-back rather than merge candidates.

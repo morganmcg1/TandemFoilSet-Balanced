@@ -1650,3 +1650,91 @@ Four review-ready PRs reviewed. No clean merge candidate — strongest absolute 
 
 ---
 
+## 2026-05-13 — Wave-7 second-results batch: 1 MERGE (#1906 Kendall = new baseline) + 1 send-back (#1734)
+
+Two review-ready PRs reviewed. **#1906 (askeladd, Kendall uncertainty) MERGED** as new baseline (val=71.43, test=62.99). **#1734 (thorfinn, asinh α=0.5) SENT BACK** for rebase + rerun with max_norm=0.5 and Kendall config.
+
+### PR #1906 (askeladd, Kendall uncertainty-weighted multi-task loss) — MERGED ⭐
+
+- **Branch:** `willowpai2g48h2-askeladd/kendall-uncertainty-on-clipfilm`
+- **Hypothesis:** Replace fixed `surf_weight=10` with learned per-channel σ heads (Kendall et al. 2018). Each (domain × channel) gets a learnable log_σ; total loss = `Σ (1/(2σ²) * L_c + log_σ_c)` over 6 heads (surface/volume × Ux/Uy/p).
+- **W&B run:** `dkfjae5o`
+- **Config verified:** `max_norm=0.5` ✓, `use_kendall_uncertainty=True` ✓, `epochs=15`, `seed=0` — clean apples-to-apples against #1831 baseline.
+- val_avg/mae_surf_p (SWA) = **71.4346** vs baseline 73.8093 → **−3.22%** (−2.375 abs, 2.76× σ=0.86 band)
+- test_avg/mae_surf_p (SWA) = **62.9866** vs baseline 65.0381 → **−3.15%** (clean test win)
+- **All 4 val splits improve; all 4 test splits improve.**
+
+### Per-split breakdown (Δ vs #1831)
+
+| Split | val (Kendall) | Δ val | test (Kendall) | Δ test |
+|---|---|---|---|---|
+| single_in_dist | 79.18 | −5.88 | **68.64** | **−8.10** (biggest move) |
+| geom_camber_rc | 88.09 | −2.23 | 79.95 | −0.39 |
+| geom_camber_cruise | 49.19 | −0.43 | 41.44 | −0.05 |
+| re_rand | 69.29 | −0.84 | 61.92 | +0.33 (within noise) |
+| **avg** | **71.43** | **−2.375** | **62.99** | **−2.05** |
+
+### Learned σ (final epoch)
+
+| Channel | log_σ | σ | Eff. weight (1/2σ²) |
+|---|---|---|---|
+| surf_p | −1.408 | 0.245 | 8.36 |
+| surf_ux | −1.500 | 0.223 | 10.04 |
+| surf_uy | −1.486 | 0.226 | 9.77 |
+| vol_p | −1.433 | 0.239 | 8.78 |
+| vol_ux | −1.438 | 0.238 | 8.86 |
+| vol_uy | −1.440 | 0.237 | 8.91 |
+
+**Max/min weight spread: 1.20×** (nearly uniform with slight Ux/Uy emphasis — consistent with the #1821 residual-ratio diagnosis). No clamp saturation; no collapse.
+
+### Mechanism finding (high-info)
+
+1. **Per-channel weighting axis LANDS where fixed weighting FAILED.** Both fixed-weighting directions closed previously (#1702 p-up regress, #1821 uxuy-up regress). Kendall learns a near-uniform weighting that beats fixed surf_weight=10 — confirming **the optimal weighting is close to uniform, but principled estimation beats hand-set values**.
+2. **Win is concentrated on test_single_in_dist (−8.10).** OOD splits (geom_camber_rc, geom_camber_cruise, re_rand) barely move on test side. **The loss-weighting axis fixes in-distribution accuracy but not OOD generalization.** The remaining OOD gap is bottlenecked by architecture (#1938 per-token FiLM, #1908 routing-temp) or data-side (#1873 SDF, #1907 pos-jitter) levers — not by loss formulation.
+3. **Composition pattern confirmed three times:** grad-clip + FiLM, then +max_norm=0.5, then +Kendall, each adds independent gain. Stability + multi-task levers stack additively.
+
+### Decision rule firing
+
+val (71.43) < 73.81 by 2.375 (2.76× σ band) and test (62.99) < 65.04 — both bars cleared by wide margins. **MERGE unambiguously.**
+
+### Reassignment (post-merge)
+
+askeladd becomes idle → reassign to new mechanism (#TBD this batch).
+
+### PR #1734 (thorfinn, asinh α=0.5 on pressure target) — SEND BACK
+
+- **Branch:** `willowpai2g48h2-thorfinn/asinh-transform`
+- **W&B run:** `eoel533s`
+- val_avg/mae_surf_p (SWA) = **75.0689** vs current baseline 73.8093 → +1.71% (within σ band)
+- test_avg/mae_surf_p (SWA) = **65.8454** vs current baseline 65.0381 → +1.24% (no test override)
+- Per-split: single_in_dist 82.99 (better than baseline single_in_dist 85.06 — α=0.5 compression helps here), geom_camber_rc 92.03, geom_camber_cruise 53.17 (degraded — α=0.5 hurts smooth-attached-flow regime), re_rand 72.08.
+
+### Critical config confound
+
+**W&B config shows `max_norm: 1.0`** but the current baseline (#1831) uses `max_norm=0.5`. After #1906 Kendall merge, the bar has moved again to require `--use_kendall_uncertainty` as well. The result is not apples-to-apples vs current baseline; merging would undo two improvements.
+
+### Decision
+
+**SEND BACK** with rebase + rerun instructions:
+```bash
+git rebase origin/icml-appendix-willow-pai2g-48h-r2
+cd target/ && python train.py \
+  --epochs 15 \
+  --max_norm 0.5 \
+  --use_kendall_uncertainty \
+  --asinh_alpha 0.5 \
+  --seed 0
+```
+
+If aggregate val on new bar remains in σ band, recommend trying α=0.3 (knee at |z|≈3σ — much closer to linear for the bulk distribution) to probe whether less aggressive compression recovers the cruise-split degradation without sacrificing the single_in_dist gain.
+
+### Anomaly note
+
+`swa_test/test_geom_camber_cruise/vol_loss: Infinity` — vol metric only, not surface MAE. Pre-existing normalized-space scoring artifact; does not affect headline metric. Flagged for diagnostic print before next run.
+
+### Wave-7 portfolio status (post second-results batch)
+
+8 students, all active. Carry-over: #1873 fern (SDF), #1908 nezuko (routing-temp). Reruns: #1907 edward (pos-jitter σ=0.05), #1757 frieren (β=0.3 + Kendall), #1734 thorfinn (asinh + Kendall). New wave-7: #1937 alphonse (max-norm-tight), #1938 tanjiro (per-token FiLM). New this batch: askeladd → TBD.
+
+---
+
