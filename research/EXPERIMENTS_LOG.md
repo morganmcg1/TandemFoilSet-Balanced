@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-13 06:35 — PR #1825: MAE (L1) loss on Lion+EMA base (askeladd) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-askeladd/mae-loss`
+- **Hypothesis:** MAE/L1 loss weights every node uniformly per the linear MAE evaluation metric; this property is independent of optimizer choice and should compound cleanly with Lion+EMA.
+- **W&B run:** `03w5fnvm` (Lion+MAE rerun)
+
+| Metric | MAE+Lion+EMA | Lion+EMA baseline (#1781) | Δ |
+|--------|-------------|--------------------------|---|
+| val_avg/mae_surf_p | **56.577** | 61.302 | **−7.71%** |
+| test_avg/mae_surf_p | **48.817** | 52.682 | **−7.34%** |
+| test/single_in_dist | 53.687 | 59.813 | −10.24% |
+| test/geom_camber_rc | 63.234 | 64.584 | −2.09% |
+| test/geom_camber_cruise | 30.812 | 35.140 | −12.32% |
+| test/re_rand | 47.535 | 51.193 | −7.14% |
+
+**Result:** MERGED. New best session baseline. Wins all 4 test splits. Val still descending at epoch-16 cap.
+
+**Key finding:** MAE's gain on Lion is *larger* (−7.71%) than on the original AdamW base (−3.15%). Lion's sign-magnitude update removes per-parameter gradient scale information, but MAE's uniform per-node loss aggregation operates *before* backprop — it directly controls how much each node contributes to the scalar loss. This is loss-side, not optimizer-side. Lion+MAE compound: the optimizer discards magnitude noise, the loss ensures every surface node contributes equally. Cruise split (−12.32%) and in-dist split (−10.24%) are the biggest movers.
+
+---
+
+## 2026-05-13 06:40 — PR #1823: Weight decay wd=5e-4 on pre-Lion AdamW base (fern) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-fern/weight-decay-sweep`
+- **W&B run:** `qvpxtrx8`
+
+| Metric | wd=5e-4 | AdamW baseline (#1607) | New Lion+MAE baseline |
+|--------|---------|------------------------|----------------------|
+| val_avg/mae_surf_p | 78.47 | 77.054 | **56.577** |
+| test_avg/mae_surf_p | 68.22 | 68.265 | **48.817** |
+
+**Result:** CLOSED. +1.84% val regression vs old AdamW baseline; +38.7% vs new Lion+MAE baseline.
+
+**Analysis:** val regressed (stronger L2 slowed the EMA trajectory), test was essentially tied. The mechanism check was interesting — main-model val improved with wd=5e-4, but EMA val regressed, suggesting stronger wd changes the EMA averaging geometry unfavorably. Direction also redundant: thorfinn's #1932 (Arm 2) is testing wd=5e-4 on the Lion base directly.
+
+---
+
 ## 2026-05-13 05:25 — PR #1761: n_layers=6 depth expansion (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/n-layers-6`
