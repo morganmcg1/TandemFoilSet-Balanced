@@ -1,0 +1,2 @@
+# Assignment: thorfinn gradient accumulation steps=2 (effective batch size 8)
+# See PR body for full instructions.
