@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~19:50 UTC
+- **Date:** 2026-05-13 ~20:15 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -34,7 +34,7 @@
 | #2482 | askeladd | n_layers=2/n_layers=1 (speed-dividend extension) | NEW | WIP (pod rate-limit blocked) |
 | #2483 | tanjiro | n_head=1 + n_layers=3/2 cross-axis | NEW | WIP (pod rate-limit blocked) |
 | #2470 | alphonse | sw=15/sw=20 on n_head=1 (sw-reversal test) | OLD (n_head=1) | WIP (pod rate-limit blocked) |
-| #2448 | thorfinn | Lion wd=3e-4/1e-3 on n_head=1 | OLD (n_head=1) | WIP |
+| **TBD** | **thorfinn** | **n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4** | NEW | Assigning now |
 | #2446 | nezuko | mlp_ratio=4/1 on n_head=1 | OLD (n_head=1) | WIP (pod rate-limit blocked) |
 
 **Wave split:** 5 students testing the NEW n_head=2+slice32+n_layers=3 compound (baseline now 42.00 after #2489 merge); 3 students completing isolated-axis data on the OLD n_head=1+n_layers=5 compound (vs 46.67).
@@ -42,7 +42,7 @@
 ## Infrastructure note
 Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API rate limit already exceeded` and unable to poll their assigned PRs. Root cause: fleet-wide rate-limit pressure on the student polling mechanism. Pods retry every 15s and recover when rate limits reset. Not individual student-agent failure.
 
-## Key findings this cycle (26–33)
+## Key findings this cycle (26–34)
 
 26. **sw signal REVERSES at n_head=1 (#2416):** sw=5 synergistic at n_head=2 (−2.54 val); at n_head=1 sw=5 REGRESSES +1.84 val (+3.94%). Mechanism: n_head=1 (dim=128) head must allocate surface capacity; sw=5 strips it with no backup.
 27. **lr does NOT transfer across slice_num resolutions (#2376):** lr=1.5e-4 regresses +1.8% on slice32 (opposite of slice64 where lr=1.5e-4 won).
@@ -52,6 +52,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 31. **lr=1.25e-4 test-only effect on n_head=1 (#2419):** Val flat (+0.42%, within noise), test wins by −2.56% vs old #2338. Val/test divergence at n_head=1. Doesn't beat new baseline.
 32. **slice_num INVERTS with depth (#2490):** slice_num=16 won at n_layers=5 (#2337) but anti-stacks at n_layers=3. Mechanism: depth and tokens not independent. **slice_num=32 confirmed as local optimum at n_layers=3.**
 33. **wd=3e-4 signal transfers depth-independently (#2489 — NEW BEST):** val=42.0040/test=35.9573 (−2.64%/−2.69% vs #2400, all 4 splits). wd=3e-4 operating point confirmed at n_layers=3; wd=1e-3 over-regularizes at this shallower depth. Regularization benefit is independent of network depth in this regime.
+34. **wd INVERTS at n_head=1 (#2448):** wd=3e-4 won at n_head=2 (#2356/#2489) but +0.51 val at n_head=1. wd is n_head-specific — n_head=2 spreads attention across 2 heads (variance/dilution that wd compensates), n_head=1 is single-head and already near wd=1e-4 optimum. At wd=3e-4 the n_head=1 and n_head=2 paths meet at val=47.18 → wd and n_head are substitutive regularizers. Pairs with finding 30 (slice × n_head substitutive at high per-head dim).
 
 ## Priority for current wave
 
@@ -64,11 +65,11 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 **Ongoing OLD-compound isolated-axis data (vs 46.67):**
 - **#2470 alphonse:** sw=15/20 — sw-reversal mechanism test at n_head=1
-- **#2448 thorfinn:** wd=3e-4/1e-3 — direct stack of monotonic wd at n_head=1
 - **#2446 nezuko:** mlp_ratio=4/1 — FFN-vs-attention compute rebalance
 
 ## Closed experiments this cycle
 
+- **#2448 (thorfinn):** wd=3e-4/1e-3 on n_head=1 — CLOSED. wd inverts at n_head=1; substitutive crossover with n_head=2 at wd=3e-4.
 - **#2489 (edward):** wd=3e-4 stack on n_layers=3 — **MERGED** val=42.00, test=35.96. NEW BEST.
 - **#2490 (frieren):** slice_num=16/8 stack on n_layers=3 — CLOSED. slice signal inverts with depth; slice32 is the local optimum.
 - **#2400 (askeladd):** n_layers=3 — **MERGED** val=43.14, test=36.95. MASSIVE WIN via speed-dividend.

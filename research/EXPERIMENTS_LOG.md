@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-13 20:15 — PR #2448: Lion wd=3e-4/1e-3 on n_head=1+slice32 (thorfinn) — CLOSED, wd INVERTS AT N_HEAD=1
+
+- **Branch:** `willowpai2g24h5-thorfinn/wd-n-head-1-slice32`
+- **Hypothesis:** wd=3e-4 monotonic win at n_head=2 (#2356) should transfer to n_head=1 since per-head dim=128 has more capacity to regularize.
+- **W&B runs:** `9ejpl0q4` (wd=3e-4), `8b58rifg` (wd=1e-3)
+
+| Arm | wd | val | test | Δ vs #2338 (46.67/40.69) | best_epoch |
+|-----|----|-----|------|--------------------------|------------|
+| 1 | 3e-4 | 47.1787 | 41.0294 | +0.51 / +0.34 ✗ | 23 |
+| 2 | 1e-3 | 48.1069 | 40.7166 | +1.44 / +0.03 ≈ | 26 |
+| Baseline #2338 | 1e-4 | 46.67 | 40.69 | — | 26 |
+
+**Result:** CLOSED. wd direction is monotonically *wrong* at n_head=1; val degrades with higher wd, test essentially flat.
+
+Key findings:
+1. **wd is n_head-specific.** Direction inverts vs n_head=2: wd=3e-4 was −2.68 val at n_head=2 (#2356); at n_head=1 it's +0.51 val. Hypothesis "n_head=1 has more capacity → needs more regularization" is FALSIFIED.
+2. **Mechanism (thorfinn):** n_head=2 spreads slice-attention across 2 heads, creating dilution/variance that wd compensates for. n_head=1 has a single head and is already near its wd=1e-4 optimum at slice32.
+3. **Substitutive regularizer crossover:** at wd=3e-4 the n_head=1 and n_head=2 paths meet at val=47.18 — wd lever and n_head lever can compensate each other.
+4. **Test_avg is robust to wd direction.** val degrades 46.67→48.11; test 40.69→40.72. val/test gap shrinks → small regularization-induced val underfit, not test damage.
+5. **Pairs with finding 30 (slice × n_head substitutive at high per-head dim).** Strong appendix material on regularization × architecture interactions.
+6. **Stop probing wd≥3e-3** — direction confirmed wrong past 1e-4.
+
+**Thorfinn reassigned:** n_head=4/8 sweep on new n_layers=3+wd=3e-4 compound — test architecture symmetry direction.
+
+---
+
 ## 2026-05-13 19:45 — PR #2489: wd=3e-4/1e-3 stack on n_head=2+n_layers=3 (edward) — MERGED, NEW BEST
 
 - **Branch:** `willowpai2g24h5-edward/wd-n-layers-3-slice32`
