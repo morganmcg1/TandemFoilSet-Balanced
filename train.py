@@ -238,11 +238,12 @@ class FiLMConditioner(nn.Module):
     Transolver init.
     """
 
-    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64):
+    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64, tanh_bound=False):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.cond_dim = cond_dim
+        self.tanh_bound = tanh_bound
         self.net = nn.Sequential(
             nn.Linear(cond_dim, mid_dim),
             nn.GELU(),
@@ -250,6 +251,7 @@ class FiLMConditioner(nn.Module):
         )
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
+        self._last_film_raw: torch.Tensor | None = None  # pre-tanh, detached
 
     def forward(self, x, mask):
         # x: [B, N, 24]  (already normalized by upstream pipeline)
@@ -258,7 +260,13 @@ class FiLMConditioner(nn.Module):
         denom = m.sum(dim=1).clamp(min=1)
         cond = (x[:, :, 13:24] * m).sum(dim=1) / denom    # [B, cond_dim]
         out = self.net(cond)                              # [B, 2*L*H]
-        return out.view(-1, self.n_layers, 2, self.n_hidden)  # [B, L, 2, H]
+        film = out.view(-1, self.n_layers, 2, self.n_hidden)  # [B, L, 2, H]
+        if self.tanh_bound:
+            self._last_film_raw = film.detach()
+            film = torch.tanh(film)
+        else:
+            self._last_film_raw = None
+        return film
 
 
 class FiLMTransolver(nn.Module):
@@ -271,7 +279,7 @@ class FiLMTransolver(nn.Module):
     """
 
     def __init__(self, n_layers, n_hidden, cond_dim=11, film_mid_dim=64,
-                 **transolver_kwargs):
+                 film_tanh_bound=False, **transolver_kwargs):
         super().__init__()
         self.transolver = Transolver(
             n_layers=n_layers, n_hidden=n_hidden, **transolver_kwargs
@@ -279,6 +287,7 @@ class FiLMTransolver(nn.Module):
         self.film = FiLMConditioner(
             n_layers=n_layers, n_hidden=n_hidden,
             cond_dim=cond_dim, mid_dim=film_mid_dim,
+            tanh_bound=film_tanh_bound,
         )
         self._last_film: torch.Tensor | None = None  # detached, for diagnostics
 
@@ -467,6 +476,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    film_tanh_bound: bool = False  # if True, apply tanh to FiLM (gamma, beta) outputs to bound modulation magnitudes to (-1, 1)
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
 
 
@@ -517,6 +527,7 @@ model = FiLMTransolver(
     n_hidden=model_config["n_hidden"],
     cond_dim=11,
     film_mid_dim=cfg.film_mid_dim,
+    film_tanh_bound=cfg.film_tanh_bound,
     space_dim=model_config["space_dim"],
     fun_dim=model_config["fun_dim"],
     out_dim=model_config["out_dim"],
@@ -708,16 +719,52 @@ for epoch in range(MAX_EPOCHS):
 
     # FiLM diagnostics: per-layer mean |gamma| and |beta| from last forward.
     if isinstance(model, FiLMTransolver) and model._last_film is not None:
-        film_t = model._last_film  # [B, L, 2, H]
-        gamma_per_layer = film_t[:, :, 0, :].abs().mean(dim=(0, 2))  # [L]
-        beta_per_layer = film_t[:, :, 1, :].abs().mean(dim=(0, 2))   # [L]
+        film_t = model._last_film  # [B, L, 2, H] — post-tanh if film_tanh_bound, else raw
+        gamma_t = film_t[:, :, 0, :]
+        beta_t = film_t[:, :, 1, :]
+        gamma_per_layer = gamma_t.abs().mean(dim=(0, 2))  # [L]
+        beta_per_layer = beta_t.abs().mean(dim=(0, 2))   # [L]
+        gamma_max_per_layer = gamma_t.abs().amax(dim=(0, 2))  # [L]
+        beta_max_per_layer = beta_t.abs().amax(dim=(0, 2))    # [L]
         log_metrics["film/gamma_abs_mean"] = gamma_per_layer.mean().item()
         log_metrics["film/beta_abs_mean"] = beta_per_layer.mean().item()
-        log_metrics["film/gamma_l2"] = film_t[:, :, 0, :].norm().item()
-        log_metrics["film/beta_l2"] = film_t[:, :, 1, :].norm().item()
+        log_metrics["film/gamma_abs_max"] = gamma_max_per_layer.max().item()
+        log_metrics["film/beta_abs_max"] = beta_max_per_layer.max().item()
+        log_metrics["film/gamma_l2"] = gamma_t.norm().item()
+        log_metrics["film/beta_l2"] = beta_t.norm().item()
         for li in range(gamma_per_layer.numel()):
             log_metrics[f"film/gamma_abs_L{li}"] = gamma_per_layer[li].item()
             log_metrics[f"film/beta_abs_L{li}"] = beta_per_layer[li].item()
+            log_metrics[f"film/gamma_max_abs_L{li}"] = gamma_max_per_layer[li].item()
+            log_metrics[f"film/beta_max_abs_L{li}"] = beta_max_per_layer[li].item()
+
+        # Tanh-saturation diagnostics: only meaningful when film_tanh_bound is on,
+        # so we also have access to the pre-tanh raw values via FiLMConditioner.
+        if cfg.film_tanh_bound and model.film._last_film_raw is not None:
+            raw = model.film._last_film_raw  # [B, L, 2, H], pre-tanh
+            gamma_raw = raw[:, :, 0, :]
+            beta_raw = raw[:, :, 1, :]
+            # post-tanh saturation fraction: |post-tanh| > 0.9 (near ±1 bound)
+            gamma_sat = (gamma_t.abs() > 0.9).float().mean(dim=(0, 2))  # [L]
+            beta_sat = (beta_t.abs() > 0.9).float().mean(dim=(0, 2))    # [L]
+            # raw-magnitude stats: what would the head have produced without tanh?
+            gamma_raw_per_layer = gamma_raw.abs().mean(dim=(0, 2))      # [L]
+            beta_raw_per_layer = beta_raw.abs().mean(dim=(0, 2))        # [L]
+            gamma_raw_max_per_layer = gamma_raw.abs().amax(dim=(0, 2))  # [L]
+            beta_raw_max_per_layer = beta_raw.abs().amax(dim=(0, 2))    # [L]
+            log_metrics["film/gamma_sat_frac"] = gamma_sat.mean().item()
+            log_metrics["film/beta_sat_frac"] = beta_sat.mean().item()
+            log_metrics["film/gamma_raw_abs_mean"] = gamma_raw_per_layer.mean().item()
+            log_metrics["film/beta_raw_abs_mean"] = beta_raw_per_layer.mean().item()
+            log_metrics["film/gamma_raw_abs_max"] = gamma_raw_max_per_layer.max().item()
+            log_metrics["film/beta_raw_abs_max"] = beta_raw_max_per_layer.max().item()
+            for li in range(gamma_per_layer.numel()):
+                log_metrics[f"film/gamma_sat_frac_L{li}"] = gamma_sat[li].item()
+                log_metrics[f"film/beta_sat_frac_L{li}"] = beta_sat[li].item()
+                log_metrics[f"film/gamma_raw_abs_L{li}"] = gamma_raw_per_layer[li].item()
+                log_metrics[f"film/beta_raw_abs_L{li}"] = beta_raw_per_layer[li].item()
+                log_metrics[f"film/gamma_raw_max_abs_L{li}"] = gamma_raw_max_per_layer[li].item()
+                log_metrics[f"film/beta_raw_max_abs_L{li}"] = beta_raw_max_per_layer[li].item()
 
     wandb.log(log_metrics)
 
