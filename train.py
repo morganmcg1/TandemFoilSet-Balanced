@@ -54,7 +54,7 @@ from data import (
 # space — decompress predictions before unnormalising. (PR #1777)
 # ---------------------------------------------------------------------------
 
-ASINH_GAIN = 1.0
+ASINH_GAIN = 2.0    # PR #2366: 1.0 → 2.0 (tighter compression of pressure outliers)
 
 
 def compress_pressure(y_norm: torch.Tensor) -> torch.Tensor:
@@ -492,6 +492,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
 print(f"GRAD_CLIP max_norm: {GRAD_CLIP}")
+print(f"ASINH_GAIN: {ASINH_GAIN}")
 warmup_epochs = 4
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
 cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
@@ -513,6 +514,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "asinh_gain": ASINH_GAIN,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -644,6 +646,7 @@ for epoch in range(MAX_EPOCHS):
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
         "grad_clip": GRAD_CLIP,
+        "asinh_gain": ASINH_GAIN,
         "pre_clip_grad_norm": grad_norm_summary,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
