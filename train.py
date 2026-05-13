@@ -467,6 +467,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    swa_start_frac: float = 0.75
 
 
 cfg = sp.parse(Config)
@@ -532,15 +533,17 @@ print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_f
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
-# SWA (PR #1554): average weights over the final 25% of training to find a
+# SWA (PR #1554): average weights over the final fraction of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
-swa_start_frac = 0.75
+swa_start_frac = cfg.swa_start_frac
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
+swa_active_epochs_planned = MAX_EPOCHS - swa_start_epoch
 swa_model = AveragedModel(model)
 swa_lr = cfg.lr * 0.2
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
 print(
-    f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
+    f"SWA: start_frac={swa_start_frac}, start_epoch={swa_start_epoch} (0-indexed), "
+    f"swa_active_epochs_planned={swa_active_epochs_planned}, "
     f"swa_lr={swa_lr:.2e}, anneal_epochs=2"
 )
 
@@ -558,6 +561,7 @@ run = wandb.init(
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "swa_start_frac": swa_start_frac,
         "swa_start_epoch": swa_start_epoch,
+        "swa_active_epochs_planned": swa_active_epochs_planned,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
     },
