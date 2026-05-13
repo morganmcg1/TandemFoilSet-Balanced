@@ -1,16 +1,16 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~02:10 (merged #1776 frieren warmup-4-epochs -3.04% → new baseline 80.7014; closed #1744 tanjiro grad-accum +14.9%, #1723 askeladd OneCycleLR rebased tied, #1722 alphonse β=0.05 +0.47%, #1435 thorfinn stale; assigned #1813 frieren warmup-5, #1814 alphonse lr-1e-3, #1815 askeladd node-dropout, #1817 tanjiro charbonnier, #1820 thorfinn wd-5e-3)
+- **Last updated:** 2026-05-13 ~02:40 (merged #1777 nezuko asinh-pressure-gain-1 -1.04% → new baseline 79.8623; assigned nezuko #1821 asinh-gain-0.5)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 80.7014`** — PR #1776 (4-epoch warmup + pure-L1 + T_max=14 alignment), epoch 14/14, 0.66M param Transolver.
+**`val_avg/mae_surf_p = 79.8623`** — PR #1777 (asinh pressure compression GAIN=1.0) stacked on PR #1776 (4-epoch warmup + pure-L1 + T_max=14 alignment), epoch 14/14, 0.66M param Transolver.
 
-Per-split: val_single=97.712, val_rc=94.420, val_cruise=55.330, val_re_rand=75.344.  
-Test: test_avg=71.9145 (test_single=89.684, test_rc=84.215, test_cruise=46.094, test_re_rand=67.666).
+Per-split: val_single=97.455, val_rc=94.889, val_cruise=54.000, val_re_rand=73.105.  
+Test: test_avg=70.4297 (test_single=86.938, test_rc=84.142, test_cruise=44.901, test_re_rand=65.738).
 
 **Historical trajectory:**
 - 122.64 (#1418 channel_weights=[1,1,3])
@@ -18,10 +18,12 @@ Test: test_avg=71.9145 (test_single=89.684, test_rc=84.215, test_cruise=46.094, 
 - 95.336 (#1414 Smooth L1 β=0.1 + NaN-skip)
 - 84.562 (#1684 T_max=14 alignment)
 - 83.230 (#1682 pure-L1 loss)
-- **80.7014** (#1776 4-epoch warmup) — **current**
+- 80.7014 (#1776 4-epoch warmup)
+- **79.8623** (#1777 asinh pressure compression GAIN=1.0) — **current**
 
 **Canonical config on advisor HEAD:**
-- `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 (in normalized space)
+- `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 (on asinh-compressed targets in normalized space)
+- **Asinh pressure compression**: `compress_pressure(y_norm)` / `decompress_pressure(y_c)` with ASINH_GAIN=1.0
 - AdamW lr=7e-4, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0
 - batch_size=4, surf_weight=10, NaN-skip in evaluate_split
 
@@ -34,7 +36,7 @@ Test: test_avg=71.9145 (test_single=89.684, test_rc=84.215, test_cruise=46.094, 
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (vol nodes only, data augmentation) | **--epochs 14** ✓ | WIP — just assigned |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — just assigned |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (L2 regularization) | **--epochs 14** ✓ | WIP — just assigned |
-| #1777 | nezuko | `asinh-pressure-gain-1` | Asinh value compression on pressure target | **--epochs 14** ✓ | WIP — in progress (notified of 80.70 target) |
+| #1821 | nezuko | `asinh-gain-0.5` | ASINH_GAIN 1.0→0.5 (wider linear region, milder compression) | **--epochs 14** ✓ | WIP — just assigned |
 | #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale (notified of 80.70 target) |
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
 

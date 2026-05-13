@@ -786,6 +786,34 @@ All 4 val splits improve. The standout is val_cruise (−10.50%): the low-LR war
 
 ---
 
+## 2026-05-13 02:40 — PR #1777: Asinh pressure compression (nezuko) — MERGED ✓
+
+- **Branch:** `charliepai2g48h2-nezuko/asinh-pressure-gain-1`
+- **Hypothesis:** Apply asinh(y * ASINH_GAIN) / ASINH_GAIN to the pressure channel (channel 2) of the normalized target before loss computation. ASINH_GAIN=1.0. Predicted mechanism: compress large-magnitude pressure residuals to make gradient more uniform across nodes, reducing capacity-steering toward suction-peak tail nodes.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-asinh-pressure-gain-1-20260513-012107/metrics.jsonl`
+
+### Results vs. #1776 baseline (warmup-4, val_avg=80.7014)
+
+| Split | Baseline (#1776) | Asinh (#1777) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 97.712 | 97.455 | −0.26% |
+| val_geom_camber_rc | 94.420 | 94.889 | +0.50% |
+| val_geom_camber_cruise | 55.330 | 54.000 | **−2.40%** |
+| val_re_rand | 75.344 | 73.105 | **−2.97%** |
+| **val_avg/mae_surf_p** | **80.7014** | **79.8623** | **−1.04%** |
+| test_avg/mae_surf_p | 71.9145 | 70.4297 | −2.06% |
+
+**New baseline: val_avg/mae_surf_p = 79.8623**
+
+### Analysis and conclusions
+
+- **Mechanism: bulk-redistribution, not tail-flattening.** Asinh compresses large-magnitude suction-peak residuals, forcing gradient capacity toward bulk pressure regions. Cruise benefits most (highest bulk/peak ratio); rc mildly regresses (more suction peaks relative to bulk).
+- **Implementation clean:** round-trip error 1.43e-6 (float32 epsilon), clamp never activated (pred_abs_max_norm ≤ 6.81), channels 0/1 bit-identical.
+- **Note:** Measured on pre-#1776 base (warmup_epochs=2); merged onto warmup_epochs=4. Changes are mechanistically orthogonal (target representation vs LR schedule). Delta reported vs #1776 baseline.
+- **Follow-up axis:** ASINH_GAIN sweep — GAIN=0.5 (wider linear region, milder compression, target: retain cruise/re_rand gains while recovering rc regression).
+
+---
+
 ## 2026-05-13 02:00 — PR #1722: Smooth L1 β=0.05 (alphonse) — CLOSED
 
 - **Branch:** `charliepai2g48h2-alphonse/smooth-l1-beta-005`
