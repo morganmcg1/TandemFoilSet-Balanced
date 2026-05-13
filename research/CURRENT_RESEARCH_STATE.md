@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:05
+- **Date:** 2026-05-13 15:18
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -89,19 +89,17 @@
 
 | Student | PR | Hypothesis | Stack |
 |---------|-----|------------|-----------|
-| alphonse | new | **slice_num=16 on n_layers=3+epochs=36** (continue partition sweep) | n_layers=3 |
-| tanjiro | new | **slice_num=12 on n_layers=3+epochs=38** (floor probe — where does slice axis saturate?) | n_layers=3 |
-| edward | #2383 | **n_head=2 on n_layers=3+slice_num=24+epochs=33** (test richer per-head attention at compact depth) | n_layers=3 |
-| thorfinn | new | **lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33** (LR retest at new baseline stack) | n_layers=3 |
-| frieren | #2367 | **lr=2e-4 on n_layers=3+slice_num=24+epochs=33** (LR upper bracket at new baseline) | n_layers=3 |
-| nezuko | #2279 | surf_weight=3 on n_layers=3+slice_num=32+epochs=27 (sw curve fill) | n_layers=3 |
-| fern | #2301 | lr=1.5e-4 on n_layers=3+slice_num=32+epochs=30 (LR retest at old stack) | n_layers=3 |
+| alphonse | #2348 | **slice_num=16 on n_layers=3+epochs=36** (continue partition sweep) | n_layers=3 |
+| tanjiro | #2351 | **slice_num=12 on n_layers=3+epochs=38** (floor probe — where does slice axis saturate?) | n_layers=3 |
+| edward | #2383 | **n_head=2 on n_layers=3+slice_num=24+epochs=33** (attention-head axis: head_dim 32→64) | n_layers=3 |
+| thorfinn | #2353 | **lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33** (LR bracket upper-middle) | n_layers=3 |
+| frieren | #2402 | **lr=5e-5 on n_layers=3+slice_num=24+epochs=33** (LR lower bracket) | n_layers=3 |
+| nezuko | #2404 | **n_head=1 on n_layers=3+slice_num=24+epochs=33** (attention-head axis: single head, head_dim=128) | n_layers=3 |
+| fern | #2301 | lr=1.5e-4 on n_layers=3+slice_num=32+epochs=30 (LR retest at old stack — STALE, GPU active) | n_layers=3 |
 | askeladd | #2375 | **slice_num=20 on n_layers=3+epochs=34** (fine-grain partition sweep fill) | n_layers=3 |
 
-**Round summary:** All 8 on n_layers=3 stack. Primary focus is the partition sweep (slice_num=16/12) to continue the dominant mechanism. The frieren/nezuko/fern/askeladd PRs (#2274/#2279/#2301/#2248) are on the OLD slice_num=32 stack — they will need to beat the NEW baseline 37.366 to merge. If they test orthogonal axes that win at slice_num=32, those axes are worth compounding with slice_num=24.
-
-**Merged this turn:** #2229 (alphonse slice_num=24, val=37.366, −2.36%) — new baseline
-**Closed since baseline shift:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy n_layers=4 superseded), #2274 (frieren WD=0 +2.2%, WD axis flat), #2248 (askeladd sw=2 +3.13%, sw axis closed at n_layers=3), #2350 (edward mlp_ratio=2 +2.3% — both directions from mlp_ratio=4 regress, axis closed)
+**Closed this turn:** #2367 (frieren lr=2e-4 +4.4%), #2279 (nezuko sw=3 +3.87%)
+**Closed since baseline shift:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy), #2274 (frieren WD=0 +2.2%), #2248 (askeladd sw=2 +3.13%), #2350 (edward mlp_ratio=2 +2.3%), #2367 (frieren lr=2e-4 +4.4%), #2279 (nezuko sw=3 +3.87%)
 
 **Variance note (from #2274 student diagnosis):** Inter-run variance on identical configs is ~1.7 val units. Recent ~0.5 val improvements are at or near this noise floor — single-run signals require corroboration.
 
@@ -121,16 +119,29 @@
 - Linear warmup (+1.66%) — compresses cosine tail
 - sw=5/vol-gradient (+2.57%) — depth-sensitive, doesn't compound at compact stack
 
-## Next priority hypotheses (when slots open after Round 24)
+## Next priority hypotheses (when slots open)
 
 **Highest EV:**
 1. **slice_num=8 floor probe** — if slice_num=12 wins, probe the hard floor
-2. **Compound slice_num=16 + any winning orthogonal** — stack mechanisms once slice axis is resolved
-3. **n_hidden=96 on compact stack** — trade width for epoch budget (~40s/epoch → ~44 epochs); untested
+2. **Compound slice_num=16 + winning orthogonal** — stack mechanisms once slice axis is resolved
+3. **n_hidden=96 on compact stack** — trade width for epoch budget (~40s/epoch → ~44 epochs); requires --n_hidden CLI flag
 
 **Medium priority:**
-4. **WD and LR on slice_num=24** — frieren/fern/askeladd/nezuko tests are at slice_num=32; if they show signal, retest at new baseline
-5. **n_head axis beyond n_head=2**: if n_head=2 wins at compact stack, probe n_head=1 (max head_dim=128); if loses, n_head=4 confirmed optimal
+4. **LR fine-grain below 1e-4** — if frieren's lr=5e-5 wins, try lr=3e-5 or 7.5e-5
+5. **Compound best-LR + best-nhead** — if either LR or attention axis wins, compound with the other winner
+6. **T_max decoupling** — T_max != epochs (e.g. T_max=44 with epochs=33 keeps residual LR at end); requires CLI flag
+
+**LR bracket state at compact stack:**
+- lr=5e-5 (frieren #2402, in flight)
+- lr=1e-4 (baseline, optimal so far)
+- lr=1.5e-4 (thorfinn #2353, in flight)
+- lr=2e-4 (#2367, closed +4.4%)
+
+**Attention-head bracket at compact stack:**
+- n_head=1 head_dim=128 (nezuko #2404, in flight)
+- n_head=2 head_dim=64 (edward #2383, in flight)
+- n_head=4 head_dim=32 (baseline)
+- n_head=8 head_dim=16 (old dead-end +15.7%)
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
@@ -148,7 +159,8 @@
 - **Linear epoch warmup (2 ep)**: +1.66% val worse (PR #2273) — compresses cosine T_max by 2 epochs, hurting the high-value late-stage descent; no benefit to Lion+L1 at lr=1e-4
 - **mlp_ratio=6 at n_layers=3**: +5.4% val worse (PR #2278) — FFN capacity is not the bottleneck at depth 3
 - **weight_decay=0 at compact stack**: +2.2% val worse vs new baseline (PR #2274), BUT confirmed compact stack does NOT overfit at WD=0 → WD axis is effectively FLAT. Future experiments can safely use WD=0 if convenient; not a winning lever.
-- **surf_weight axis at n_layers=3**: sw=2 (+3.13%, PR #2248), sw=5 (+2.57%, PR #2245) both lose vs new baseline. Vol-gradient mechanism is confirmed active (val mae_vol_p −18%, test mae_vol_p −19% at sw=2) but vol→surface coupling can't compensate for the deeper-budget baseline advantage. sw=10 remains optimal at compact stack.
+- **surf_weight axis at n_layers=3 FULLY CLOSED**: sw=2 (+3.13%), sw=3 (+3.87%), sw=5 (+2.57%) all lose vs new baseline. Vol-gradient mechanism confirmed active at all three (mae_vol_p −10 to −19%) but vol→surface coupling too weak to compensate. sw=10 remains optimal at compact stack.
+- **lr=2e-4 at compact stack**: +4.4% val worse (#2367). Geometry-OOD splits hurt most. LR ceiling below 2e-4 confirmed.
 - **grad-clip**: worse for Lion (sign-update already handles magnitude)
 - **DropPath**: needs 100-300 epoch budgets; useless at 20-30 epoch budgets
 - **Dropout**: always worse (model is underfitting)

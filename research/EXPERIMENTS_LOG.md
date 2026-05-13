@@ -6,6 +6,58 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 15:15 — PR #2367 — CLOSED (lr=2e-4 loses; LR ceiling below 2e-4 confirmed)
+
+**frieren: lr=2e-4 on n_layers=3+slice_num=24+epochs=33**
+- val_avg: 39.028 vs baseline 37.366 → **+1.66 (+4.4%) WORSE**
+- test_avg: 33.158 vs baseline 31.371 → **+1.79 (+5.7%) WORSE**
+- All 4 splits regress; largest hit: geom_camber_cruise (+2.65 val, +2.18 test)
+- Training stable: no divergence, monotone train loss decrease epochs 1-5
+- Best epoch: 32/33 (slightly earlier than baseline's 33 — higher LR shifts optimum earlier but final value worse)
+
+| Split | val lr=2e-4 | val baseline | Δval | test lr=2e-4 | test baseline | Δtest |
+|---|---|---|---|---|---|---|
+| single_in_dist | 39.079 | 38.082 | +0.997 | 34.796 | 33.836 | +0.960 |
+| geom_camber_rc | 53.132 | 51.356 | +1.776 | 47.612 | 45.411 | +2.201 |
+| geom_camber_cruise | 23.347 | 20.702 | +2.645 | 19.054 | 16.874 | +2.180 |
+| re_rand | 40.556 | 39.325 | +1.231 | 31.171 | 29.365 | +1.806 |
+| **avg** | **39.028** | **37.366** | **+1.66** | **33.158** | **31.371** | **+1.79** |
+
+**LR ceiling confirmed below 2e-4.** With thorfinn #2353 (lr=1.5e-4) in flight and frieren reassigned to lr=5e-5, the LR axis will be fully characterized: 5e-5, 1e-4 (baseline), 1.5e-4, 2e-4.
+
+**Mechanism finding:** Higher LR hurts geometry-OOD splits most (geom_camber_rc/cruise), suggesting the OOD generalization penalty from overstepping in weight space is concentrated on the hardest out-of-distribution cases.
+
+**Metric artifacts:** `models/model-lr-2e-4-nlayers3-slicenum24-20260513-142444/metrics.jsonl`
+
+**Reassignment:** frieren → PR #2402 (lr=5e-5 lower bracket)
+
+---
+
+## 2026-05-13 15:15 — PR #2279 — CLOSED (sw=3 loses; SW axis at n_layers=3 fully closed)
+
+**nezuko: surf_weight=3 on n_layers=3+slice_num=32+epochs=27 (truncated by wall-clock to 25 epochs)**
+- val_avg: 38.811 vs NEW baseline 37.366 → **+1.45 (+3.87%) WORSE**
+- test_avg: 33.164 vs NEW baseline 31.371 → **+1.79 (+5.7%) WORSE**
+- Vol mechanism CONFIRMED: mae_vol_p −10.9% val / −11.5% test across all splits
+- Run truncated at epoch 25/27 due to GPU contention from a duplicate process (well-diagnosed by student)
+- Even with contention, trajectory at epoch 25 (val=38.8) cannot close the ~1.4 gap in 2 epochs
+
+| Split | val sw=3 | val baseline | Δval |
+|---|---|---|---|
+| single_in_dist | 40.002 | 38.082 | +5.0% |
+| geom_camber_rc | 52.454 | 51.356 | +2.1% |
+| geom_camber_cruise | 22.426 | 20.702 | +8.3% |
+| re_rand | 40.360 | 39.325 | +2.6% |
+| **avg** | **38.811** | **37.366** | **+3.87%** |
+
+**SW axis at n_layers=3 fully closed:** sw=2 (+3.13%), sw=3 (+3.87%), sw=5 (+2.57%), sw=10 (optimal). Vol-gradient mechanism is consistently active but cannot overcome the baseline's partition+epochs advantage. vol→surface coupling is architecturally limited at compact depth.
+
+**Metric artifacts:** `models/model-surf-weight-3-nlayers3-slicenum32-20260513-142331/metrics.jsonl`
+
+**Reassignment:** nezuko → PR #2404 (n_head=1 attention-head axis probe)
+
+---
+
 ## 2026-05-13 15:05 — PR #2350 — CLOSED (mlp_ratio=2 loses; mlp_ratio=4 confirmed optimal at compact stack)
 
 **edward: mlp_ratio=2 on n_layers=3+slice_num=24+epochs=33**
