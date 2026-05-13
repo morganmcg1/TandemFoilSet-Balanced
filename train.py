@@ -477,6 +477,16 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # Physics-preserving AoA flip augmentation (per-sample, p=0.25)
+        flip_mask = torch.rand(x.shape[0], device=device) < 0.25
+        if flip_mask.any():
+            x = x.clone()
+            x[flip_mask, :, 14] = -x[flip_mask, :, 14]   # AoA foil 1 (flip sign)
+            x[flip_mask, :, 18] = -x[flip_mask, :, 18]   # AoA foil 2 (flip sign; 0 for single-foil, no effect)
+            y = y.clone()
+            y[flip_mask, :, 1] = -y[flip_mask, :, 1]     # Uy (sign-odd under vertical reflection)
+            # x-velocity (channel 0) and pressure (channel 2) are unchanged — invariant
+
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
