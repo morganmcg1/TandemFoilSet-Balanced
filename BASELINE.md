@@ -240,4 +240,31 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
 - **W&B run:** `vy49aq06`
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
   (grad-clip + diagnostics now in train.py defaults; no extra flags needed)
-- **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + grad-clip=10 + everything else**, but the measured number above is on **n_layers=5 + grad-clip=10**. The combined n_layers=3 + grad-clip=10 has not been directly measured. Mechanism (gradient-norm scaling, orthogonal to architecture) suggests these compound additively → expected val ≤ 65.98 on the combined stack, but the next n_layers=3 experiment will confirm directly. **All subsequent experiments should target val < 65.98 and test < 57.07** as the merge threshold.
+- **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + grad-clip=10 + everything else**, but the measured number above is on **n_layers=5 + grad-clip=10**. The combined n_layers=3 + grad-clip=10 has not been directly measured. Mechanism (gradient-norm scaling, orthogonal to architecture) suggests these compound additively → expected val ≤ 65.98 on the combined stack, but the next n_layers=3 experiment will confirm directly.
+
+## 2026-05-13 07:35 — PR #1899: alphonse n_layers=3 + n_hidden=192 (width reinvestment)
+
+**New best — 9th compound improvement (architectural capacity rebalancing)**
+
+- **val_avg/mae_surf_p:** 63.7215 (↓ from 65.9757, **−3.45%** vs prior best; ↓ from 69.4518 n_layers=3 baseline, **−8.25%**)
+- **test_avg/mae_surf_p:** 55.6430 (↓ from 57.0711, **−2.51%**; ↓ from 61.1887, **−9.06%**)
+
+**Per-split test (all 4 splits improved cleanly):**
+
+| Split | mae_surf_p | vs PR #1784 (grad-clip=10, n_layers=5) | vs PR #1875 (n_layers=3 baseline) |
+|-------|----------:|----------:|----------:|
+| `test_single_in_dist` | 61.4444 | −3.11 | −6.39 |
+| `test_geom_camber_rc` | 69.3247 | −1.26 | −4.90 |
+| `test_geom_camber_cruise` | 37.7067 | −0.22 | −5.12 |
+| `test_re_rand` | 54.0962 | −1.13 | −5.78 |
+
+- **Config (as measured):** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, **n_hidden=192**, n_layers=3, slice_num=64, mlp_ratio=2, dropout=0.0, torch.compile(model, dynamic=True)
+- **NOTE:** This run did NOT have grad-clip=10 (student's branch was based on pre-grad-clip advisor commit). Current advisor branch has n_layers=3 + n_hidden=192 + grad-clip=10 — combined state unmeasured.
+- **Epochs:** 30/30 in 28.15 min (~54.3 s/epoch steady state — 33% slower than n_hidden=128 compile baseline, well within 30-min budget)
+- **Param count:** 931,791 (0.93M; 2.22× n_hidden=128 n_layers=3 baseline of 0.42M; still below original 1.84M)
+- **Best epoch:** 30/30 (final) — val slope −0.22/epoch at end; **still descending, not converged**. EMA-vs-live gap +0.42 (EMA slightly behind live on a still-improving model)
+- **Mechanism:** "Compact but wide" hypothesis confirmed. n_hidden=192 × n_layers=3 (0.93M params) vs prior failed n_hidden=192 × n_layers=5 (+12.5% worse): depth reduction freed headroom for width reinvestment. At n_layers=3, per-layer expressivity was the bottleneck; wider layers compensate for reduced composition depth. Width and depth aren't fungible — depth-limited vs capacity-saturated regimes have opposite responses to widening.
+- **W&B run:** `r10qkcgd`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_layers 3 --n_hidden 192 --epochs 30`
+- **All subsequent experiments should target val < 63.7215 and test < 55.6430** as the merge threshold.
+- **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + n_hidden=192 + grad-clip=10 + everything else**, but the measured val=63.72 is on **n_layers=3 + n_hidden=192 WITHOUT grad-clip=10**. The full combined state has not been directly measured. Expected combined val < 63.72 (grad-clip should compound with architecture). The first n_layers=3 + n_hidden=192 + grad-clip=10 run (any subsequent experiment specifying `--n_layers 3 --n_hidden 192`) will confirm.
