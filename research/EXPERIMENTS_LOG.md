@@ -1054,3 +1054,44 @@ alphonse reassigned to PR #1972 (batch-size-2): halve batch 4→2.
 - 18/18 epochs; still descending at epoch 18.
 
 **Analysis:** single_in_dist regresses worst (+8.18 val) — canonical "weaker regularization → wider generalization gap" signature. Weight decay is load-bearing. wd=5e-4 also worse (older stack). Combined: wd=1e-4 is bracketed as optimum on both sides. **wd axis CLOSED: wd=1e-4 confirmed optimum.** Tanjiro reassigned #1993 n-head-2.
+
+## 2026-05-13 07:25 — PR #1991: [warmup-2ep] Extend warmup 1→2 epochs — **CLOSED**
+- Student branch: `charliepai2g48h4-edward/warmup-2ep`
+- Hypothesis: 2 epochs of warmup continues the damping benefit of 1ep merged in #1812.
+
+| Metric | warmup-2ep (this PR) | Baseline #1812 (warmup-1ep) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **83.35** | 82.56 | **+0.79 (+0.96%) ❌** |
+| test_avg/mae_surf_p | 75.06 | 74.13 | +0.93 (+1.25%) ❌ |
+| All 8 splits | +0.05 to +1.98 | — | all regressed |
+
+- Artifact: `models/model-charliepai2g48h4-edward-warmup-2ep-20260513-062412/metrics.jsonl`
+- 18/18 epochs (2 warmup + 16 cosine); epoch-1 grad_norm_mean = 8.99 vs baseline 8.66 (both well-tamed)
+- Epoch-2 grad_norm_mean = 9.43 — momentum buffer not measurably better-seeded vs 1ep
+
+**Analysis:** The corruption-damping mechanism of warmup saturates at 1 epoch. Edward's grad-norm trace confirms: epoch-1 is already at ~9 (vs unbounded 30-1000+ pre-warmup), and a second warmup epoch doesn't bring it lower. Trading useful cosine-descent capacity (T_max 17→16) for non-incremental warmup benefit is net-negative. **Axis disposition: warmup-length CLOSED, 1-epoch optimum.** Edward reassigned to loss-beta-0-5 #2012.
+
+---
+
+## 2026-05-13 07:25 — PR #1853: [n-head-8] Double attention heads 4→8 — **CLOSED**
+- Student branch: `charliepai2g48h4-nezuko/n-head-8`
+- Hypothesis: Doubling n_head (zero-param inductive bias change) gives finer head granularity.
+
+| Metric | n_head=8 (this PR) | Baseline #1812 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **96.33** | 82.56 | **+13.77 (+16.7%) ❌** |
+| test_avg/mae_surf_p | 86.97 | 74.13 | +12.84 (+17.3%) ❌ |
+| val single_in_dist | 114.04 | 90.40 | +23.64 (worst) |
+
+- Artifact: `models/model-charliepai2g48h4-nezuko-n-head-8-20260513-055556/metrics.jsonl`
+- 18/18 epochs; best epoch 13/18.
+- **n_params: 661,611 vs baseline 678,231 → −16,620 (−2.4%)** — NOT zero-param.
+
+**Critical discovery (by nezuko):** Transolver's PhysicsAttention uses per-head-dimensioned Q/K/V projections:
+- `to_q/k/v: dim_head × dim_head` per layer → 3 × (32²−16²) = 2,304 dropped per layer when n_head doubles
+- `in_project_slice: slice_num × dim_head` → 64 × 16 = 1,024 dropped per layer
+- 5 layers × ~3,324 = ~16,620 total drop
+
+So n_head=8 is not a pure inductive bias test — it's (a) finer granularity AND (b) -2.4% attention capacity. Both likely contributed to the regression. tanjiro's n_head=2 (#1993 in flight) tests the opposite direction (+55K params, coarser heads). **Axis disposition: n_head upper CLOSED.** nezuko reassigned to onecycle-lr #2014.
+
+**New assignments after this round:** edward #2012 (loss-beta-0-5), nezuko #2014 (onecycle-lr).
