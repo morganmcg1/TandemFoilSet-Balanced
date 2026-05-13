@@ -478,10 +478,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+no_decay_keywords = ("bias", "ln_1", "ln_2", "ln_3", "LayerNorm")
+decay_params = [p for n, p in model.named_parameters() if p.requires_grad and not any(k in n for k in no_decay_keywords)]
+no_decay_params = [p for n, p in model.named_parameters() if p.requires_grad and any(k in n for k in no_decay_keywords)]
+n_decay = sum(p.numel() for p in decay_params)
+n_no_decay = sum(p.numel() for p in no_decay_params)
+print(f"WD param groups: decay={n_decay} | no_decay={n_no_decay} ({n_no_decay/(n_decay+n_no_decay)*100:.2f}%)")
+optimizer_grouped_parameters = [
+    {"params": decay_params, "weight_decay": cfg.weight_decay},
+    {"params": no_decay_params, "weight_decay": 0.0},
+]
 optimizer = torch.optim.AdamW(
-    model.parameters(),
+    optimizer_grouped_parameters,
     lr=cfg.lr,
-    weight_decay=cfg.weight_decay,
     betas=(0.95, 0.98),
 )
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
