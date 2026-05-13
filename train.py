@@ -281,13 +281,66 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+# H63 reflection-TTA: which raw-x feature dims flip sign under z (vertical) reflection.
+# Strategy B per researcher recommendation: negate only geometric per-node features.
+# AoA (14, 18), NACA camber M (15, 19), and gap (22) are *physically* antisymmetric
+# under reflection too, but those features are one-sided in training (NACA_M >= 0;
+# raceCar AoA <= 0), so negating them creates OOD inputs that poison the average.
+# pos_z (1) and saf (2, 3) are signed in training and stay in-distribution.
+TTA_REFLECT_DIMS = (1, 2, 3)
+
+
+def make_reflection_mask(device, x_dim: int = X_DIM) -> torch.Tensor:
+    """Per-feature sign mask for y/z-axis reflection in raw-x space."""
+    mask = torch.ones(x_dim, device=device)
+    for d in TTA_REFLECT_DIMS:
+        mask[d] = -1.0
+    return mask
+
+
+def predict_with_tta(model, x, stats, fourier_enc, refl_mask):
+    """H63: y-axis reflection TTA — average prediction over the original and the
+    z-reflected input. Reflection is applied to raw x (before normalization) so
+    nonzero per-feature means do not break the mapping. Averaging is done in
+    physical (denormalized) target space so the nonzero Uy mean does not bias
+    the average; the returned prediction is in the normalized-target space the
+    downstream loss/scoring code expects.
+    """
+    # Forward 1: original geometry.
+    x_norm = (x - stats["x_mean"]) / stats["x_std"]
+    x_norm = fourier_enc(x_norm)
+    pred_orig_norm = model({"x": x_norm})["preds"]
+
+    # Forward 2: reflected geometry (negate z-flipping raw features, then normalize).
+    x_refl = x * refl_mask
+    x_refl_norm = (x_refl - stats["x_mean"]) / stats["x_std"]
+    x_refl_norm = fourier_enc(x_refl_norm)
+    pred_refl_norm = model({"x": x_refl_norm})["preds"]
+
+    # Denormalize, un-reflect Uy in physical space, then average in physical space.
+    y_std = stats["y_std"]
+    y_mean = stats["y_mean"]
+    pred_orig_phys = pred_orig_norm * y_std + y_mean
+    pred_refl_phys = pred_refl_norm * y_std + y_mean
+    pred_refl_phys = pred_refl_phys.clone()
+    pred_refl_phys[..., 1] = -pred_refl_phys[..., 1]  # Uy flips under reflection
+    pred_avg_phys = 0.5 * (pred_orig_phys + pred_refl_phys)
+    return (pred_avg_phys - y_mean) / y_std
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, tta: bool = False,
+                   refl_mask: torch.Tensor | None = None) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``tta=True``, predictions are averaged over the y-axis (vertical)
+    reflection of the input — see ``predict_with_tta``.
     """
+    if tta and refl_mask is None:
+        raise ValueError("refl_mask must be provided when tta=True")
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
@@ -300,10 +353,13 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
-            x_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_enc(x_norm)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            if tta:
+                pred = predict_with_tta(model, x, stats, fourier_enc, refl_mask)
+            else:
+                x_norm = (x - stats["x_mean"]) / stats["x_std"]
+                x_norm = fourier_enc(x_norm)
+                pred = model({"x": x_norm})["preds"]
 
             abs_err = (pred - y_norm).abs()
             vol_mask = mask & ~is_surface
@@ -372,8 +428,18 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    val_metrics_tta: dict | None = None,
+    val_avg_tta: dict | None = None,
+    test_metrics_no_tta: dict | None = None,
+    test_avg_no_tta: dict | None = None,
 ) -> None:
-    """Write a local summary next to the best checkpoint."""
+    """Write a local summary next to the best checkpoint.
+
+    H63: when ``val_metrics_tta`` / ``test_metrics_no_tta`` are supplied,
+    the summary surfaces both TTA-on and TTA-off val + test numbers at the
+    same best checkpoint so the TTA delta is directly readable from
+    metrics.yaml without parsing metrics.jsonl.
+    """
     summary: dict = {
         "agent": cfg.agent,
         "experiment_name": cfg.experiment_name,
@@ -390,15 +456,33 @@ def write_experiment_summary(
         "epochs_configured": cfg.epochs,
     }
 
+    # H63: `best_val/...` is the TTA-off val at the best checkpoint (matches the
+    # baseline trajectory; this is what was used for checkpoint selection).
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
             summary[f"best_val/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
+        # H63: `test_avg/mae_surf_p` and `test/...` are the TTA-on numbers — the
+        # headline numbers for the paper-facing comparison.
         summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    # H63: TTA-on val + TTA-off test at the same best checkpoint.
+    if val_avg_tta is not None and "avg/mae_surf_p" in val_avg_tta:
+        summary["val_avg_tta/mae_surf_p"] = val_avg_tta["avg/mae_surf_p"]
+        if val_metrics_tta is not None:
+            for split_name, m in val_metrics_tta.items():
+                for k, v in m.items():
+                    summary[f"val_tta/{split_name}/{k}"] = v
+    if test_avg_no_tta is not None and "avg/mae_surf_p" in test_avg_no_tta:
+        summary["test_avg_no_tta/mae_surf_p"] = test_avg_no_tta["avg/mae_surf_p"]
+        if test_metrics_no_tta is not None:
+            for split_name, m in test_metrics_no_tta.items():
+                for k, v in m.items():
+                    summary[f"test_no_tta/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -443,8 +527,38 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+# H63: y-axis reflection TTA mask. Built once and reused for both val and test passes.
+refl_mask = make_reflection_mask(device)
+_refl_dim_labels = [
+    "pos_x", "pos_z", "saf_0", "saf_1",
+    "dsdf_0", "dsdf_1", "dsdf_2", "dsdf_3", "dsdf_4", "dsdf_5", "dsdf_6", "dsdf_7",
+    "is_surf", "log_Re",
+    "AoA1", "NACA1_M", "NACA1_P", "NACA1_T",
+    "AoA2", "NACA2_M", "NACA2_P", "NACA2_T",
+    "gap", "stagger",
+]
+print("[H63] Reflection mask (raw-x dims, -1.0 = flipped under z-reflection):")
+print("  " + ", ".join(
+    f"{_refl_dim_labels[d]}={refl_mask[d].item():+.0f}" for d in range(X_DIM)
+))
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# H63: sanity-check the reflection. Print pos_z, saf_0/1 before/after for a train sample.
+_sanity_sample = train_ds[0]
+_sanity_x = _sanity_sample[0].to(device).unsqueeze(0)  # [1, N, 24]
+_sanity_x_refl = _sanity_x * refl_mask
+print("[H63] Sanity check — first train sample, first 5 nodes:")
+print(f"  pos_z       orig: {_sanity_x[0, :5, 1].cpu().tolist()}")
+print(f"  pos_z       refl: {_sanity_x_refl[0, :5, 1].cpu().tolist()}")
+print(f"  saf_0       orig: {_sanity_x[0, :5, 2].cpu().tolist()}")
+print(f"  saf_0       refl: {_sanity_x_refl[0, :5, 2].cpu().tolist()}")
+print(f"  pos_x  (unchanged) orig: {_sanity_x[0, :5, 0].cpu().tolist()}")
+print(f"  pos_x  (unchanged) refl: {_sanity_x_refl[0, :5, 0].cpu().tolist()}")
+print(f"  AoA1   (unchanged) orig={_sanity_x[0, 0, 14].item():+.4f} refl={_sanity_x_refl[0, 0, 14].item():+.4f}")
+print(f"  NACA_M (unchanged) orig={_sanity_x[0, 0, 15].item():+.4f} refl={_sanity_x_refl[0, 0, 15].item():+.4f}")
+del _sanity_sample, _sanity_x, _sanity_x_refl
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -632,10 +746,14 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (TTA-off during training; TTA-on is inference-only, applied
+    # at the end on the best checkpoint). This keeps the training-time val
+    # trajectory identical to baseline so checkpoint selection isn't
+    # confounded by the TTA recipe, and frees up wall-clock budget for the
+    # same number of training epochs as baseline. ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, tta=False)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -738,25 +856,105 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (with H63 reflection TTA)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+        # H63: TTA-on test pass (the headline result).
+        _tta_t0 = time.time()
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 tta=True, refl_mask=refl_mask)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        tta_test_seconds = time.time() - _tta_t0
+        print(f"\n  TEST [TTA-on]  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}  ({tta_test_seconds:.1f}s)")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
+            "tta": True,
             "test_avg": test_avg,
             "test_splits": test_metrics,
+            "tta_test_seconds": tta_test_seconds,
+        })
+
+        # H63 mechanism diagnostic: re-run val + test with both TTA on and off on the
+        # best checkpoint, so the per-channel TTA delta compares the same weights.
+        # The training-loop `split_metrics` belongs to the last epoch, which may not
+        # be the best one — do not use it for the delta.
+        print("\n[H63] Diagnostic: re-evaluating val + test with TTA OFF (same checkpoint)...")
+        _no_t0 = time.time()
+        val_metrics_no_tta = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, tta=False)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_no_tta = aggregate_splits(val_metrics_no_tta)
+        no_tta_val_seconds = time.time() - _no_t0
+        print(f"  VAL  [TTA-off] avg_surf_p={val_avg_no_tta['avg/mae_surf_p']:.4f}  ({no_tta_val_seconds:.1f}s)")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, val_metrics_no_tta[name])
+
+        _no_t0 = time.time()
+        test_metrics_no_tta = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, tta=False)
+            for name, loader in test_loaders.items()
+        }
+        test_avg_no_tta = aggregate_splits(test_metrics_no_tta)
+        no_tta_test_seconds = time.time() - _no_t0
+        print(f"  TEST [TTA-off] avg_surf_p={test_avg_no_tta['avg/mae_surf_p']:.4f}  ({no_tta_test_seconds:.1f}s)")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, test_metrics_no_tta[name])
+
+        # Re-run TTA-on val on the best checkpoint so the val delta is checkpoint-
+        # consistent (the training-loop split_metrics is from the *last* epoch).
+        _tta_val_t0 = time.time()
+        val_metrics_tta = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                 tta=True, refl_mask=refl_mask)
+            for name, loader in val_loaders.items()
+        }
+        val_avg_tta = aggregate_splits(val_metrics_tta)
+        tta_val_seconds = time.time() - _tta_val_t0
+        print(f"  VAL  [TTA-on ] avg_surf_p={val_avg_tta['avg/mae_surf_p']:.4f}  ({tta_val_seconds:.1f}s)")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, val_metrics_tta[name])
+
+        # Print per-channel TTA delta (Ux, Uy, p) to surface the mechanism.
+        print("\n[H63] Per-channel TTA delta = TTA_on - TTA_off (negative = improvement):")
+        for split_pool, names in (("VAL ", VAL_SPLIT_NAMES), ("TEST", TEST_SPLIT_NAMES)):
+            on_pool = test_metrics if split_pool == "TEST" else val_metrics_tta
+            off_pool = test_metrics_no_tta if split_pool == "TEST" else val_metrics_no_tta
+            for name in names:
+                d_p = on_pool[name]["mae_surf_p"] - off_pool[name]["mae_surf_p"]
+                d_ux = on_pool[name]["mae_surf_Ux"] - off_pool[name]["mae_surf_Ux"]
+                d_uy = on_pool[name]["mae_surf_Uy"] - off_pool[name]["mae_surf_Uy"]
+                print(
+                    f"  {split_pool} {name:<26s} dp={d_p:+.4f}  dUx={d_ux:+.4f}  dUy={d_uy:+.4f}"
+                )
+
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "diagnostic_no_tta",
+            "best_epoch": best_metrics["epoch"],
+            "tta": False,
+            "val_avg_no_tta": val_avg_no_tta,
+            "val_splits_no_tta": val_metrics_no_tta,
+            "test_avg_no_tta": test_avg_no_tta,
+            "test_splits_no_tta": test_metrics_no_tta,
+            "no_tta_val_seconds": no_tta_val_seconds,
+            "no_tta_test_seconds": no_tta_test_seconds,
+        })
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "diagnostic_tta_val_best_ckpt",
+            "best_epoch": best_metrics["epoch"],
+            "tta": True,
+            "val_avg_tta_best_ckpt": val_avg_tta,
+            "val_splits_tta_best_ckpt": val_metrics_tta,
+            "tta_val_seconds": tta_val_seconds,
         })
 
     write_experiment_summary(
@@ -769,6 +967,10 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        val_metrics_tta=val_metrics_tta if not cfg.skip_test else None,
+        val_avg_tta=val_avg_tta if not cfg.skip_test else None,
+        test_metrics_no_tta=test_metrics_no_tta if not cfg.skip_test else None,
+        test_avg_no_tta=test_avg_no_tta if not cfg.skip_test else None,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
