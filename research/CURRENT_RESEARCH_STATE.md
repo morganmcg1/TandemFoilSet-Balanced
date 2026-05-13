@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~10:10 (merged #1657 fern RFF σ=3.0 −11.71% NEW BEST 65.3304; assigned fern #2158 rff-sigma5; sent frieren #1813 back to rebase on RFF base)
+- **Last updated:** 2026-05-13 ~10:35 (closed #2045 alphonse lr-1.75e-3 +4.13% dead end, LR axis mapped at 1.5e-3 on pre-RFF base; assigned alphonse #2184 lr-2e-3-rff retest on new RFF base)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -38,7 +38,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 |----|---------|------|------|------|---|
 | #2158 | fern | `rff-sigma5` | RFF bandwidth sweep: σ=3.0 → 5.0 (monotone test) | **--epochs 14** ✓ | WIP — just assigned |
 | #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 (won −0.52% on old base, needs rebase on RFF) | **--epochs 14** ✓ | WIP — rebase requested |
-| #2045 | alphonse | `lr-1.75e-3` | LR midpoint probe (in flight on old base; result still informative) | **--epochs 14** ✓ | WIP — training in progress |
+| #2184 | alphonse | `lr-2e-3-rff` | LR ceiling retest on RFF base: 1.5e-3 → 2e-3 (was +2.99% on pre-RFF; RFF may shift ceiling) | **--epochs 14** ✓ | WIP — just assigned |
 | #1815 | askeladd | `node-dropout-0.9` | Node dropout 0.9 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
@@ -51,6 +51,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082)
 
 ### Closed as dead ends (this round)
+- #2045 alphonse lr-1.75e-3: +4.13% vs 74.2082 (LR axis fully mapped on pre-RFF: {1e-3: +3.96%, **1.5e-3 sweet spot**, 1.75e-3: +4.13%, 2e-3: +2.99%}; non-parabolic floor)
 - #2054 nezuko adamw-beta2-0.95: +1.12% (β2 axis mapped; non-monotone, 0.99 is sweet spot)
 - #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but optimization quality degraded)
 - #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419
@@ -65,8 +66,8 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 2. **Warmup axis — rebase on RFF:**
    - **#1813 frieren warmup-5**: Won −0.52% on old base (73.99 → 73.61). Sent back to rebase on RFF base (65.33). Expected to stack (orthogonal mechanisms).
 
-3. **LR axis — alphonse finishes old-base run:**
-   - **#2045 alphonse lr-1.75e-3**: In-flight on old base. If 1.75e-3 > 1.5e-3 → rebase on RFF, rerun. If regresses → LR ceiling = 1.5e-3, assign alphonse RFF-related experiment.
+3. **LR axis — retest ceiling on RFF base:**
+   - **#2184 alphonse lr-2e-3-rff**: Pre-RFF mapping closed (sweet spot 1.5e-3, non-parabolic floor). RFF transforms input geometry (24→86 dim), may shift LR ceiling upward. Retest lr=2e-3 directly on RFF base. If <65.33 → RFF shifts ceiling; if regresses → ceiling locked at 1.5e-3 across bases.
 
 4. **AdamW ε axis:**
    - **#2130 nezuko adamw-eps-1e-6**: Notified of RFF baseline, rebase needed.

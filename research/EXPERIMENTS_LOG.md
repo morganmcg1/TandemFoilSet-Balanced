@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-05-13 10:30 — PR #2045: lr-1.75e-3 (alphonse) — CLOSED (dead end, LR axis fully mapped)
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-1.75e-3`
+- **Hypothesis:** LR midpoint probe between 1.5e-3 (winner) and 2e-3 (dead-end). Either confirms 1.5e-3 exact ceiling or finds marginal gain narrowing window.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-1.75e-3-20260513-095039/metrics.jsonl`
+
+### Results vs. #1895 baseline (74.2082)
+
+| Split | Baseline | lr=1.75e-3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 83.733 | 87.305 | +4.27% ❌ |
+| val_geom_camber_rc | 91.690 | 94.225 | +2.77% ❌ |
+| val_geom_camber_cruise | 50.392 | 54.932 | +9.01% ❌ |
+| val_re_rand | 71.018 | 72.611 | +2.24% ❌ |
+| **val_avg/mae_surf_p** | **74.2082** | **77.2684** | **+4.13%** ❌ |
+| **test_avg/mae_surf_p** | 65.1123 | 67.3075 | +3.37% ❌ |
+
+**Closed as dead end.** LR axis fully mapped on pre-RFF base.
+
+### Analysis
+
+**LR axis final mapping (pre-RFF base, β2=0.99 + asinh + warmup-4):**
+
+| lr | val_avg | Δ vs winner | epoch-5 spike |
+|---|---|---|---|
+| 1e-3 | 77.1419 | +3.96% | small |
+| **1.5e-3** | **74.2082** | **baseline** | **+3.2 units (with β2=0.99)** |
+| 1.75e-3 | 77.2684 | +4.13% | +10 units |
+| 2e-3 | 76.43 | +2.99% | +48 units (seed-dependent) |
+
+Sweet-spot is genuine: 1.75e-3 is *worse* than 2e-3 despite being closer to the winner. The val landscape isn't a clean parabola — there's a sharp drop at 1.5e-3 and the schedule is brittle above it. The epoch-5 spike scales non-linearly with LR: +3.2 → +10 → +48 units across {1.5, 1.75, 2}e-3.
+
+**Next assignment:** lr=2e-3 retest on RFF base (PR #2184). Tests whether RFF (which just merged at −11.71%) shifts the LR ceiling.
+
+---
+
 ## 2026-05-13 10:05 — PR #1657: rff-pos-encoding σ=3.0 (fern) — MERGED (new best, MAJOR GAIN)
 
 - **Branch:** `charliepai2g48h2-fern/rff-pos-encoding`
