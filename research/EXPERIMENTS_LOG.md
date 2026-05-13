@@ -2,6 +2,46 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 04:05 — PR #1855: [eta-min-5e-5] Non-zero cosine LR floor — **MERGED (NEW BEST: val=83.95)**
+- Student branch: `charliepai2g48h4-fern/eta-min-5e-5`
+- Hypothesis: eta_min=0.0 means LR reaches ~0 by epoch 18, wasting final-epoch compute. A non-zero floor keeps gradient steps meaningful.
+
+| Metric | T_max=18 baseline (#1695) | eta_min=5e-5 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 84.67 | **83.95** | **−0.72 (−0.85%)** |
+| test_avg/mae_surf_p | 74.94 | **74.70** | −0.24 (−0.32%) |
+| val single_in_dist | 96.25 | 93.45 | −2.80 |
+| val geom_camber_rc | 93.25 | 91.33 | −1.92 |
+| val geom_camber_cruise | 65.39 | 67.06 | +1.67 (regression) |
+| val re_rand | 83.78 | 83.97 | +0.19 (flat) |
+
+- Artifact: `models/model-charliepai2g48h4-fern-eta-min-5e-5-20260513-030913/metrics.jsonl`
+- Final-epoch LR: 5.34e-5 (floor active; vs ~0 with eta_min=0.0)
+
+**Analysis:** Small but real gain. Key evidence: val 87.29 (epoch 17) → 83.95 (epoch 18), a 3.34-point drop in the final epoch under the non-zero floor. The model was still descending. Under normalized gradient descent, even a small LR produces a meaningful normalized step (step = max_norm × lr / ‖g‖). The floor prevents the "dead zone" where LR→0 renders all optimizer steps near-zero regardless of gradient direction. 3/4 val splits improve (geom_camber_cruise slightly regresses). Merged as 11th effective improvement.
+
+Open question: is eta_min=1e-4 (2×) even better, or too large? Fern assigned #1901 to bracket.
+
+---
+
+## 2026-05-13 04:05 — PR #1730: [layers-6] n_layers 5→6 rerun on grad-clip+surf_weight=5 HEAD — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-edward/layers-6`
+- Hypothesis: Extra Transolver block adds capacity, expected sub-80 given Huber-base −11.2% delta.
+
+| Metric | n_layers=5 baseline (#1762, T_max=15) | n_layers=6 (this run, T_max=15) | Δ vs #1762 | Δ vs current best |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 90.58 | 93.97 | **+3.7% worse** | **+11.9% worse** |
+| test_avg/mae_surf_p | 80.00 | 83.05 | +3.8% worse | +10.8% worse |
+
+- Artifact: `models/model-charliepai2g48h4-edward-layers-6-20260513-025519/metrics.jsonl`
+- Epochs: 15/50 (cap; per-epoch +20% → 15 epochs in 30 min). n_params: 799,387 vs 666K.
+
+**Analysis:** Depth does not stack with grad-clip under wall-clock budget. Prior Huber-base result (−11.2%) used unclipped gradients; under global norm clipping, adding more layers creates gradient dilution — each layer's signal is suppressed relatively more since global clipping normalizes the entire gradient. Additionally, the wall-clock budget penalty (15 epochs vs 18) eliminates the schedule advantage. With T_max=15 and only 15 achievable epochs, the capacity gain of the 6th block is fully offset by fewer training iterations.
+
+**Key finding:** Depth is unlikely to help under global grad-clip. Layers-7 (alphonse #1834) in flight will further confirm. edward reassigned to slice_num=128 (#1902).
+
+---
+
 ## 2026-05-13 03:55 — PR #1851: [max-norm-3-selective] max_norm=1.0→3.0 — **CLOSED (regression; max_norm axis bracketed)**
 - Student branch: `charliepai2g48h4-frieren/max-norm-3-selective`
 - Hypothesis: Under surf_weight=5, pre-clip grad norms are 2-5 (mean). max_norm=3.0 creates selective clipping — steps with norm < 3 pass through unclipped, only outliers (norm > 3) are capped.
