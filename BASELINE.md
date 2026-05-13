@@ -4,28 +4,37 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
-### 2026-05-13 00:08 — PR #1374: [huber-loss] Smooth L1 (Huber, beta=1.0) instead of MSE (edward)
+### 2026-05-13 01:19 — PR #1696: [grad-clip-1.0] Gradient clipping max_norm=1.0 (frieren)
 
-- **`val_avg/mae_surf_p`:** **110.59** (best epoch 15/18)
-- **`test_avg/mae_surf_p`:** **102.28** (from best-val checkpoint, all 4 splits clean)
-- **Per-split surface-p MAE (val):** single_in_dist=127.85, geom_camber_rc=111.05, geom_camber_cruise=95.72, re_rand=107.73
-- **Per-split surface-p MAE (test):** single_in_dist=113.36, geom_camber_rc=105.68, geom_camber_cruise=85.87, re_rand=104.20
-- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=Huber(beta=1.0)`
-- **Key change:** MSE → Smooth L1 / Huber loss (`F.smooth_l1_loss(pred, target, beta=1.0, reduction='sum') / (pred.shape[-1] * count)`) applied to both training loop and evaluate_split. Huber caps outlier gradients from high-Re samples while preserving quadratic behavior near zero.
-- **Improvement vs previous best (#1542 T_max=15):** val −4.22 (−3.7%), test −2.40 (−2.3%)
-- **Improvement vs directly-comparable seeded baseline (#1577):** val −5.84 (−5.0%), test −6.59 (−6.1%) — exceeds 2× cross-seed σ (~3.5 pts, calibrated by alphonse #1685)
-- **Caveat:** cruise split slightly regressed (+7.97 val, +10.46 test vs #1542). Huber pulls down hard high-Re splits at a small cost to the easy cruise split. Net clearly positive.
-- **Metric artifacts:** `models/model-charliepai2g48h4-edward-huber-loss-20260512-231342/metrics.jsonl`
-- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-edward --experiment_name "charliepai2g48h4-edward/huber-loss"`
+- **`val_avg/mae_surf_p`:** **96.78** (best epoch 17/18)
+- **`test_avg/mae_surf_p`:** **86.56** (from best-val checkpoint, all 4 splits clean)
+- **Per-split surface-p MAE (val):** single_in_dist=110.38, geom_camber_rc=105.34, geom_camber_cruise=75.14, re_rand=96.27
+- **Per-split surface-p MAE (test):** single_in_dist=98.34, geom_camber_rc=94.63, geom_camber_cruise=63.51, re_rand=89.75
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=MSE` + **`clip_grad_norm_(model.parameters(), max_norm=1.0)`**
+- **Key change:** `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` inserted between `loss.backward()` and `optimizer.step()`. Pre-clip gradient norms ranged 33–1000+ (mean 33–106 across epochs), meaning **every step was effectively clipped** — this acts as gradient-direction-following (unit step magnitude scaled by lr), fundamentally changing optimization dynamics rather than just outlier suppression.
+- **Run context:** Frieren's run was on the pre-Huber HEAD (started 2026-05-12 23:54 before Huber merge at ~00:08). The squash merge adds grad-clip on top of the current Huber HEAD, giving an untested Huber+grad-clip combination in `train.py`. Huber+grad-clip confirmation is expected from subsequent student runs.
+- **Improvement vs directly-comparable reference (#1542 T_max=15 MSE, pre-Huber base):** val −18.03 (−15.7%), test −18.12 (−17.3%)
+- **Improvement vs Huber-only best (#1374):** val −13.81 (−12.5%), test −15.72 (−15.4%)
+- **All 4 splits improved** (single_in_dist −29.4 val, geom_camber_rc −15.3, geom_camber_cruise −12.6, re_rand −14.8)
+- **Metric artifacts:** `models/model-charliepai2g48h4-frieren-grad-clip-1.0-20260512-235444/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-frieren --experiment_name "charliepai2g48h4-frieren/grad-clip-1.0"`
+
+**Note on optimization dynamics:** With max_norm=1.0 and typical grad norms of 30–1000+, clipping scales every step down by 30–1000×. The optimizer is doing normalized gradient descent (AdamW-with-clipping ≈ adaptive scale-free SGD). This may explain the dramatic improvement — the learning rate is effectively per-step adaptive, not just per-parameter adaptive.
 
 **Open questions after this merge:**
-- Cross-seed σ on Huber baseline now needed — alphonse reassigned seed=7 on Huber recipe.
-- Askeladd EMA (#1540) still in conflict; rebase + seeded rerun on Huber HEAD is the next stacking test.
-- Nezuko #1695 (T_max=18) and frieren #1696 (grad-clip) running against the old T_max=15/MSE base; results remain valid for their respective levers.
+- Huber+grad-clip combination is now in `train.py` but untested end-to-end. Next runs from rebased students will measure this.
+- Askeladd EMA rebase pending — first test of EMA+Huber+grad-clip stack.
+- Cross-seed σ on grad-clip baseline needed after first confirmation run.
+- Does max_norm=0.1 or 0.5 push further? Or is 1.0 already at saturation?
 
 ---
 
 ## Previous bests (chronological)
+
+### 2026-05-13 00:08 — PR #1374: [huber-loss] Smooth L1 (Huber, beta=1.0) instead of MSE (edward)
+- **val_avg/mae_surf_p:** 110.59 / **test:** 102.28
+- Config: merged recipe + Huber(beta=1.0) + seed=42. All 4 splits clean.
+- Artifact: `models/model-charliepai2g48h4-edward-huber-loss-20260512-231342/metrics.jsonl`
 
 ### 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max 50→15 (nezuko)
 - **val_avg/mae_surf_p:** 114.81 / **test:** 104.68
@@ -53,13 +62,14 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 | #1416 (thorfinn) | unified_pos=True, ref=8 | 125.78 | 117.12 | **MERGED** → best cruise OOD |
 | #1369 (askeladd) | surf_weight=10→20 | 127.94 | 117.35 | **MERGED but effectively reverted** → regression confirmed (#1570: val=127.86), rolled back via #1577 |
 | #1577 (alphonse) | seed=42 + surf_weight=10 rollback | 116.43 | 108.87 | MERGED |
-| #1542 (nezuko) | T_max=15 cosine truncation | 114.81 | 104.68 | MERGED → superseded by #1374 |
-| **#1374 (edward)** | **Huber loss (beta=1.0)** | **110.59** | **102.28** | **MERGED — NEW BEST** |
+| #1542 (nezuko) | T_max=15 cosine truncation | 114.81 | 104.68 | MERGED → superseded |
+| #1374 (edward) | Huber loss (beta=1.0) | 110.59 | 102.28 | MERGED → superseded by #1696 |
+| **#1696 (frieren)** | **grad-clip max_norm=1.0** | **96.78** | **86.56** | **MERGED — NEW BEST** |
 
-**Current advisor-branch recipe** (after 7 effective merges):
-`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, loss=Huber(beta=1.0)`
+**Current advisor-branch recipe** (after 8 effective merges):
+`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, loss=Huber(beta=1.0), clip_grad_norm_(max_norm=1.0)`
 
-**Comparison threshold:** cross-seed σ ≈ 3.5 val / 0.5 test (calibrated from alphonse #1685 seed=42 vs seed=7 on the pre-Huber recipe). Use 5+ pt val difference as practical significance threshold.
+**Comparison threshold:** cross-seed σ ≈ 3.5 val / 0.5 test (pre-Huber estimate; recalibration on new baseline needed). Use 5+ pt val difference as practical significance threshold. Note: frieren's run was pre-Huber; the combined Huber+grad-clip effect is yet to be measured.
 
 ---
 
