@@ -154,6 +154,12 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        # H59: RMSNorm-Q/K with learnable per-head per-channel γ (init=1.0).
+        # At init, post-norm q/k have unit RMS; SDPA's internal 1/sqrt(d_k) then
+        # produces unit-variance logits — matching baseline.
+        self.qk_rmsnorm_gamma_q = nn.Parameter(torch.ones(heads, dim_head))
+        self.qk_rmsnorm_gamma_k = nn.Parameter(torch.ones(heads, dim_head))
+        self.qk_rmsnorm_eps = 1e-6
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
     def forward(self, x):
@@ -179,6 +185,12 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
+        # H59: RMSNorm-Q/K with learnable γ (preserves magnitude, controls variance).
+        # q, k shape: [B, heads, slice_num, dim_head]; γ broadcast to [1, heads, 1, dim_head].
+        q_rms = torch.rsqrt(q.pow(2).mean(dim=-1, keepdim=True) + self.qk_rmsnorm_eps)
+        k_rms = torch.rsqrt(k.pow(2).mean(dim=-1, keepdim=True) + self.qk_rmsnorm_eps)
+        q = q * q_rms * self.qk_rmsnorm_gamma_q[None, :, None, :]
+        k = k * k_rms * self.qk_rmsnorm_gamma_k[None, :, None, :]
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.dropout.p if self.training else 0.0,
@@ -499,23 +511,49 @@ for i, b in enumerate(model.blocks):
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
+# H59: RMSNorm-Q/K γ init verification (expect mean=1.0, std=0.0 everywhere).
+for i, b in enumerate(model.blocks):
+    attn = b.attn
+    print(
+        f"block {i}: qk_rmsnorm_gamma_q mean={attn.qk_rmsnorm_gamma_q.mean().item():.4f} "
+        f"std={attn.qk_rmsnorm_gamma_q.std().item():.4f}, "
+        f"qk_rmsnorm_gamma_k mean={attn.qk_rmsnorm_gamma_k.mean().item():.4f} "
+        f"std={attn.qk_rmsnorm_gamma_k.std().item():.4f}"
+    )
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
 # channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
 # scaling factors toward zero (init=0.025), fighting the model's learned per-channel
 # diversification, and default lr=5e-4 under-trains them.
+# H59: RMSNorm-Q/K γ_q,γ_k (5 blocks × 2 × 4 heads × 32 dim_head = 1280 params) also in
+# a no-WD + 10× lr group — same additive-scale optimizer-group recipe.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
 layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
-other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+qk_rmsnorm_params = [p for n, p in model.named_parameters() if "qk_rmsnorm_gamma_" in n]
+other_params = [
+    p for n, p in model.named_parameters()
+    if "layer_scale" not in n and "qk_rmsnorm_gamma_" not in n
+]
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-# H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+# H59: expect 10 RMSNorm γ tensors (5 blocks × 2 for q,k), each [heads, dim_head] = [4, 32].
+n_qk_rmsnorm = sum(p.numel() for p in qk_rmsnorm_params)
+expected_qk_rmsnorm_tensors = 2 * len(model.blocks)
+expected_qk_rmsnorm_params = 2 * len(model.blocks) * model_config["n_head"] * (model_config["n_hidden"] // model_config["n_head"])
+assert len(qk_rmsnorm_params) == expected_qk_rmsnorm_tensors, (
+    f"Expected {expected_qk_rmsnorm_tensors} RMSNorm γ tensors (5 blocks × 2), "
+    f"got {len(qk_rmsnorm_params)}"
+)
+assert n_qk_rmsnorm == expected_qk_rmsnorm_params, (
+    f"Expected {expected_qk_rmsnorm_params} RMSNorm γ params, got {n_qk_rmsnorm}"
+)
+# H54+H59: param-group consistency check — every model param ends up in exactly one of
+# (layer_scale_params, qk_rmsnorm_params, other_params); freq_params come from fourier_enc separately.
 all_model_p = {id(p): p for p in model.parameters()}
-all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
+all_assigned_p = {id(p): p for group in [layer_scale_params, qk_rmsnorm_params, other_params] for p in group}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
@@ -525,7 +563,7 @@ assert n_layer_scale == expected_layer_scale, (
     f"Expected {expected_layer_scale} LayerScale params "
     f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
+assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in qk_rmsnorm_params) + sum(p.numel() for p in other_params) == (
     sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
 )
 optimizer = torch.optim.AdamW(
@@ -533,18 +571,21 @@ optimizer = torch.optim.AdamW(
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
         {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": qk_rmsnorm_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},  # H59
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H54] Optimizer param groups: "
+    f"[H54+H59] Optimizer param groups: "
     f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in other_params)} params), "
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in freq_params)} params), "
     f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
-    f"({n_layer_scale} params, expected {expected_layer_scale})"
+    f"({n_layer_scale} params, expected {expected_layer_scale}), "
+    f"qk_rmsnorm lr={optimizer.param_groups[3]['lr']:.2e} wd={optimizer.param_groups[3]['weight_decay']:.0e} "
+    f"({n_qk_rmsnorm} params, expected {expected_qk_rmsnorm_params}, in {len(qk_rmsnorm_params)} tensors)"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
@@ -657,7 +698,17 @@ for epoch in range(MAX_EPOCHS):
     current_lr = optimizer.param_groups[0]["lr"]
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
+    qk_rmsnorm_lr = optimizer.param_groups[3]["lr"]  # H59
     freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    # H59: per-block γ_q,γ_k snapshot — mean, std, max-|γ-1|, "moved" count (|γ-1|>0.2)
+    qk_rmsnorm_snapshot = {}
+    for i, b in enumerate(model.blocks):
+        for tag2, gamma in (("q", b.attn.qk_rmsnorm_gamma_q), ("k", b.attn.qk_rmsnorm_gamma_k)):
+            g = gamma.detach()
+            qk_rmsnorm_snapshot[f"qk_rmsnorm/gamma_{tag2}_l{i}_mean"] = float(g.mean().item())
+            qk_rmsnorm_snapshot[f"qk_rmsnorm/gamma_{tag2}_l{i}_std"] = float(g.std().item())
+            qk_rmsnorm_snapshot[f"qk_rmsnorm/gamma_{tag2}_l{i}_max_abs_dev"] = float((g - 1.0).abs().max().item())
+            qk_rmsnorm_snapshot[f"qk_rmsnorm/gamma_{tag2}_l{i}_moved_count"] = int(((g - 1.0).abs() > 0.2).sum().item())
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -667,6 +718,7 @@ for epoch in range(MAX_EPOCHS):
         "train/current_lr": current_lr,
         "train/freqs_lr": freqs_lr,
         "train/layer_scale_lr": layer_scale_lr,
+        "train/qk_rmsnorm_lr": qk_rmsnorm_lr,
         "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
@@ -674,6 +726,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        **qk_rmsnorm_snapshot,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -698,6 +751,21 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
+# H59: final per-block RMSNorm γ_q, γ_k stats — primary mechanism diagnostic.
+final_qk_rmsnorm_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    for tag2, gamma in (("q", b.attn.qk_rmsnorm_gamma_q), ("k", b.attn.qk_rmsnorm_gamma_k)):
+        g = gamma.detach()
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_mean"] = float(g.mean().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_std"] = float(g.std().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_max_abs_dev"] = float((g - 1.0).abs().max().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_min"] = float(g.min().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_max"] = float(g.max().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_moved_count"] = int(((g - 1.0).abs() > 0.2).sum().item())
+        # per-head spread: mean of per-head std (across the dim_head dim)
+        per_head_std = g.std(dim=-1)  # [heads]
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_per_head_std_mean"] = float(per_head_std.mean().item())
+        final_qk_rmsnorm_stats[f"final/qk_rmsnorm_gamma_{tag2}_l{i}_per_head_std_max"] = float(per_head_std.max().item())
 # H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
 final_freqs = fourier_enc.freqs.detach().cpu().tolist()
 init_freqs = [2.0**k for k in range(N_FREQS)]
@@ -711,7 +779,7 @@ freqs_summary = {
 }
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **final_qk_rmsnorm_stats, **freqs_summary},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -720,6 +788,19 @@ for i in range(len(model.blocks)):
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
+print("[H59] Final RMSNorm γ_q, γ_k stats (end-of-training):")
+for i in range(len(model.blocks)):
+    print(
+        f"  block {i}: "
+        f"γ_q mean={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_q_l{i}_mean']:.4f} "
+        f"std={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_q_l{i}_std']:.4f} "
+        f"max|γ-1|={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_q_l{i}_max_abs_dev']:.4f} "
+        f"moved={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_q_l{i}_moved_count']}/128 | "
+        f"γ_k mean={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_k_l{i}_mean']:.4f} "
+        f"std={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_k_l{i}_std']:.4f} "
+        f"max|γ-1|={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_k_l{i}_max_abs_dev']:.4f} "
+        f"moved={final_qk_rmsnorm_stats[f'final/qk_rmsnorm_gamma_k_l{i}_moved_count']}/128"
     )
 print("[H40] Final learned freqs vs dyadic init:")
 for k in range(N_FREQS):
