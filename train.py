@@ -429,7 +429,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 1.5e-3
     weight_decay: float = 1e-4
-    batch_size: int = 4
+    batch_size: int = 2
     surf_weight: float = 10.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -471,6 +471,10 @@ val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
     for name, ds in val_splits.items()
 }
+
+steps_per_epoch = len(train_loader)
+total_opt_steps = steps_per_epoch * MAX_EPOCHS
+print(f"batch_size={cfg.batch_size}  steps_per_epoch={steps_per_epoch}  total_opt_steps={total_opt_steps}")
 
 model_config = dict(
     space_dim=RFF_DIM,    # was 2 — now 64-dim RFF embedding replaces (x,z) (PR #1657)
