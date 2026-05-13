@@ -661,3 +661,56 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Confounder flagged**: `--epochs 30` makes cosine T_max=30 instead of baseline implicit T_max=50; some of the val gain may be from the more aggressive schedule. The throughput component is clean either way (29 vs 17 epochs is undeniable).
 - **Decision: MERGE.** New baseline: val=71.4371, test=62.5927. All downstream experiments inherit compile automatically; in-flight PRs will rebase onto this stack.
 - **Edward reassigned to `--epochs 40` with T_max=40** — convert the freed budget into more training. Val was still descending; estimate ~35–38 epochs in 30 min with slightly less aggressive cosine, projecting val ~64–67.
+
+## 2026-05-13 02:30 — PR #1743: askeladd surf_weight=5 (review 1, closed)
+
+- Branch: `willowpai2g48h5-askeladd/surf-weight-5`
+- W&B run: `bgddphoi` (17 epochs at pre-compile; pre-warmup baseline 85.92)
+- Hypothesis: optimum `surf_weight` shifted below 10 now that Huber β=0.5 carries MAE-alignment.
+
+| Metric | surf=5 (bgddphoi) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 87.6796 | 85.9197 | +1.7599 (+2.05%) |
+| `test_avg/mae_surf_p` | 77.9249 | 76.5495 | +1.3754 (+1.80%) |
+| `test/test_single_in_dist/mae_surf_p` | 88.04 | 88.03 | +0.01 (tied) |
+| `test/test_geom_camber_rc/mae_surf_p` | 87.60 | 85.46 | +2.14 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 57.95 | 56.40 | +1.55 |
+| `test/test_re_rand/mae_surf_p` | 78.10 | 76.30 | +1.80 |
+| `val_avg/mae_vol_p` | 86.01 | 91.80 | **−5.79 (−6.31% better)** |
+| `test_avg/mae_vol_p` | 76.75 | 83.32 | **−6.57 (−7.89% better)** |
+| EMA-vs-live gap (epoch 17) | −2.99 | −10.49 | gap shrank, less EMA benefit |
+
+- **surf_weight sweep now bracketed**: 5 (worse, +2.05%), 10 (BEST), 30 (worse, +3.6%). Clean U-shape on primary metric.
+- **Volume-vs-surface trade-off confirmed**: lower surf_weight routes gradient mass to volume head; vol metrics improve 5-10% on all splits. But primary metric is surf_p, so this is a side observation.
+- **EMA-vs-live gap monotonicity**: 5→−3, 10→−10.5, 30→−22. Reveals surf_weight controls *useful gradient variance* the EMA averages over — not just routing. Lower surf_weight → less variance → less EMA benefit → less converged surface model.
+- **Decision: CLOSE.** surf_weight=10 confirmed as fixed-optimum. Reassigning askeladd to capacity-down on slice axis (#1841: slice_num=48).
+
+## 2026-05-13 02:30 — PR #1784: tanjiro grad-clip max_norm=10 (review 1, sent back for rebase)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-10p0`
+- W&B run: `i3zau4g4` (17 epochs at pre-compile; pre-warmup baseline 85.92)
+- Hypothesis: max_norm=10 is "true safety net" (clip rate <1%) — isolates rare-spike clipping from direction-normalization.
+
+| Metric | grad-clip 10 (i3zau4g4) | β=0.5 baseline (liurnqyo) | v2 grad-clip 1.0 (#1534) |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | **84.9688** | 85.9197 | 87.27 |
+| `test_avg/mae_surf_p` | **74.7804** | 76.5495 | ~77.22 |
+| `test/test_single_in_dist/mae_surf_p` | **87.32** | 88.03 | 90.95 |
+| `test/test_geom_camber_rc/mae_surf_p` | **85.30** | 85.46 | 90.20 |
+| `test/test_geom_camber_cruise/mae_surf_p` | **53.05** | 56.40 | 53.14 |
+| `test/test_re_rand/mae_surf_p` | **73.46** | 76.30 | 74.59 |
+| Clip rate | 86.9% | n/a | 100% |
+| Avg scaling | ~2.6× | n/a | ~22× |
+
+- **Clean win on all 4 splits vs pre-compile baseline AND vs v2 (max_norm=1.0).**
+- **Mechanism rebracketed: continuous scaling regime, not safety net.** Gradient norm distribution: mean 26, p50=22, p90=49, p99=92, max=191. Threshold 10 clips 87% but only divides by ~2.6× on average (vs v2's ~22×). The regime is "soft direction-normalization" — heavy upper tail dampened (helps OOD) without erasing bulk gradient direction (preserves IID).
+- **Three regimes now visible**: v2@1.0 = 100% clip / 22× / OOD-helps+IID-hurts (NET REGRESS); v3@10 = 87% clip / 2.6× / ALL-HELP (NET WIN); predicted @50 or @100 = <10% clip / safety-net only (untested, would isolate rare-spike mechanism).
+- **However**: result is on pre-compile stack vs old baseline (85.92). Doesn't beat new compile baseline (71.44). Sent back for rebase + retest on compile stack — if mechanism holds and stacks with compile, we have a new best.
+- **Decision: SEND BACK** for rebase onto current advisor branch (with compile) and re-run. Mechanism is sound; need clean test against the actual current baseline.
+
+## 2026-05-13 02:35 — PR #1841: askeladd assigned slice_num=48 (compile-stack)
+
+- Branch: `willowpai2g48h5-askeladd/slice-num-48`
+- Hypothesis: capacity-down on slice axis (slice_num 64 → 48) → 10-15% per-epoch speedup → ~33-35 epochs in budget; tests whether 64 was overparameterized on the slice axis.
+- Targets new compile-stack baseline (val=71.44, test=62.59).
+- Complements frieren's n_layers=3 (#1792, in flight) — covers the second dimension of the capacity-down matrix.

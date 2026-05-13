@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 02:30
+- **Date:** 2026-05-13 02:35
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -38,12 +38,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1791 | lr=7e-4 (raise peak LR, keep T_max=30 hot-cosine shape) | LR magnitude | WIP | #1647 T_max=18 closed: aligned cosine starves LR at end; inverted angle = raise peak LR |
-| askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
+| askeladd | #1841 | slice_num=48 — capacity-down on slice axis (compile-stack test) | Architecture / throughput | WIP | #1743 surf=5 closed (sweep bracketed); pivoted to capacity-down direction (slice axis). Complements frieren's n_layers=3 |
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | #1763 compile MERGED (new best val=71.44); val still descending at cap with T_max=30 starving LR |
 | fern | #1805 | Adaptive Huber β annealing (β=1.0 → β=0.5 over epochs 1-10) | Loss shape / schedule | WIP | β sweep bracketed (β=0.25 closed +9.3%); anneal β for best of both regimes |
 | frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
 | nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED; extend warmup to see if EMA catch-up gain scales |
-| tanjiro | #1784 | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | WIP | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
+| tanjiro | #1784 | max_norm=10 (rebase+retest on compile stack) | Gradient stability | WIP-REBASE | Pre-compile result was clean win on all 4 splits (val=84.97 vs 85.92); sent back to retest on compile stack |
 | thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
 
 **Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 71.4371` (PR #1763 torch.compile, test=62.5927, W&B o6k5dj4g). PRs that only beat the pre-compile baseline (85.09) are outdated — the hypothesis must be retested ON TOP OF the compile stack to be meaningful.
@@ -56,6 +56,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 - **per-channel surface weights (0.5, 0.5, 2.0)** (#1445 v2, nezuko) — val=93.60 (+1.4% worse). p already dominates gradient signal; re-weighting backfired, U down-weighting removed geometric regularization.
 - **SiLU activation** (#1648, edward) — val=96.99 (+5.0% worse). "Smoother but slower" trajectory; GELU/lr=5e-4 is well-tuned for this regime.
 - **surf_weight=30 on β=0.5 baseline** (#1427 v2, askeladd) — val=88.99 (+3.6% worse). Huber β=0.5 already does the MAE-alignment work surf_weight was reaching for; over-weighting amplifies gradient variance (EMA-vs-live gap widens from −10.5 to −22).
+- **surf_weight=5 on β=0.5 baseline** (#1743, askeladd) — val=87.68 (+2.05% worse). All 4 surf-p splits regress, but ALL 4 vol-p splits IMPROVE 5-10%. surf_weight sweep bracketed: 5/10/30 → 10 is optimum on primary metric (surface). EMA-vs-live gap monotonic with surf_weight (5→−3, 10→−10.5, 30→−22) — surf_weight controls *useful gradient variance* the EMA averages over, not just routing.
 
 ### Regularization / noise on β=0.5 stack
 - **Dropout=0.1 then 0.05 on β=0.5 baseline** (#1629 v2/v3, thorfinn) — val=87.61 (p=0.1) then 87.91 (p=0.05); both +2% worse. Monotonicity violation (p=0.05 worse than p=0.1) rules out tuning. β=0.5 sharpens loss curvature in small-residual regime; per-step Bernoulli noise becomes coordinate-wise gradient corruption, not regularization. EMA half-life 1.85 ep insufficient to wash out.
