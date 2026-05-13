@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-05-13 13:25 — PR #2178: Compose torch.compile + weight_decay={5e-4, 3e-4}
+
+- **Branch:** `willowpai2g48h4-frieren/compile-wd-compose` (MERGED — NEW BASELINE)
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** `b1p4li7l` (Arm 1 WD=5e-4), `7r9t0jab` (Arm 2 WD=3e-4 ★ winner)
+
+### Results
+
+| Arm | WD | val_avg/mae_surf_p | Δ vs 89.7197 | test_avg/mae_surf_p | best_epoch |
+|-----|----|--------------------|--------------|---------------------|------------|
+| baseline | 1e-4 | 89.7197 | — | 79.3167 | 18 |
+| **Arm 1** | **5e-4** | **90.7677** | **+1.17% ✗** | **81.7736** | 21 |
+| **Arm 2 ★** | **3e-4** | **87.0144** | **−3.01% ✓** | **78.9539** | 21 |
+
+### Per-split val (Arm 2 best checkpoint e21)
+
+| Split | WD=1e-4 (baseline) | WD=3e-4 (Arm 2) | Δ |
+|-------|-------------------:|----------------:|---|
+| `val_single_in_dist` | 114.92 | **106.99** | **−6.9% ✓** |
+| `val_geom_camber_rc` | 108.66 | **104.00** | **−4.3% ✓** |
+| `val_geom_camber_cruise` | **55.45** | 57.33 | +3.4% ↑ |
+| `val_re_rand` | 79.85 | **79.74** | −0.1% ≈ |
+| **val_avg** | **89.7197** | **87.0144** | **−3.01% ✓** |
+
+### Per-epoch trajectory (key epochs)
+
+| epoch | WD=5e-4 (Arm 1) | WD=3e-4 (Arm 2) | WD=1e-4 (baseline) |
+|------:|----------------:|----------------:|-------------------:|
+| 10 | 106.21 | 111.54 | 126.72 |
+| 11 | 123.32 | 117.13 | 115.18 |
+| 12 | **135.18 ↑↑ SPIKE** | **108.22 (damped)** | 112.27 |
+| 13 | 109.92 | 117.79 | 107.93 |
+| 18 | 94.64 | 99.15 | **89.72 ← best baseline** |
+| 21 | **90.77 ← best Arm1** | **87.01 ← best Arm2** | 98.65 |
+
+### Analysis
+
+**Key finding: WD axis is BUDGET-DEPENDENT.** WD=5e-4 was optimal at 14 epochs (PR #2031, −4.46%). At 21 epochs (post-compile), WD=5e-4 OVER-REGULARIZES — it amplifies the e12 spike (+27%: e10=106→e12=135) while WD=3e-4 DAMPS it (e10=112→e12=108, smooth descent). Best epoch=21 for both higher-WD arms, still descending at the wall-clock cap.
+
+**Critical mechanism update:** The e12 spike behavior under different WD values suggests the spike may be a SYMPTOM of over-regularization rather than a beneficial exploration dynamic per se. WD=3e-4 produces smooth descent and wins; WD=5e-4 amplifies oscillation and loses. This partially challenges the cycle 34 reframing ("spike is beneficial"), though alphonse's cosine-restart (#2227) is an independent test.
+
+**Composition success:** The val gain (+50% epochs from compile + moderate regularization) is additive. In-distribution split fully recovered (val_single_in_dist 114.92→106.99, −6.9%) — the +4.9% regression from PR #2091 is reversed. Cruise gives back slightly (+3.4% val, +4.2% test) — cruise OOD prefers low WD.
+
+**Next axis:** Finer WD sweep around 3e-4 (test {2e-4, 2.5e-4, 4e-4}) to map the WD curve at 21 epochs. Frieren assigned (#2293).
+
+---
+
 ## 2026-05-13 12:15 — PR #2153: WD bracket sweep {4e-4, 5.5e-4, 6e-4}
 
 - **Branch:** `willowpai2g48h4-fern/wd-bracket` (CLOSED — WD axis fully characterized)

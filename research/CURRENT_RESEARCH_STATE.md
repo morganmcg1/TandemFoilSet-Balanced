@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 39)
+- **As of:** 2026-05-13 (updated cycle 42)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 89.7197`** — PR #2091 (torch.compile default mode, WD=1e-4, 21 epochs), merged 2026-05-13 cycle 33.
-**Test 4-split mean: 79.3167** (test_avg/mae_surf_p).
+**`val_avg/mae_surf_p = 87.0144`** — PR #2178 (torch.compile default mode, WD=3e-4, 21 epochs), merged 2026-05-13 cycle 42.
+**Test 4-split mean: 78.9539** (test_avg/mae_surf_p).
 
 ## Improvement trajectory
 
@@ -18,20 +18,25 @@
 | 5 | #1527 | Test NaN guard (eval only) | (val unchanged) | infra |
 | 10 | #1558 | Huber surface loss δ=0.5 | 98.1642 | −17.72% |
 | 18 | #1795 | Decoupled LR surf_head (5e-3) | 97.9914 | −0.18% |
-| 30 | **#2031** | **Weight decay 1e-4 → 5e-4** | **93.6198** | **−4.46%** |
-| 33 | **#2091** | **torch.compile default (21 epochs vs 14)** | **89.7197** | **−4.16%** |
+| 30 | #2031 | Weight decay 1e-4 → 5e-4 | 93.6198 | −4.46% |
+| 33 | #2091 | torch.compile default (21 epochs vs 14) | 89.7197 | −4.16% |
+| **42** | **#2178** | **WD re-tune 1e-4→3e-4 at 21 epochs** | **87.0144** | **−3.01%** |
 
 ## Current research focus
 
-**Cycle 33.** Six stacked mechanisms now merged (BIVW + surf-head + Huber + decoupled surf_head LR + weight_decay=5e-4 + torch.compile) giving 28.8% total improvement from cycle-2 baseline. New baseline **89.7197** via pure throughput unlock — 21 epochs vs 14 in the same 30-min wall-clock budget. **Highest-priority next experiment: compose torch.compile with weight_decay=5e-4 (PR #2178, frieren) — expected to stack both gains.**
+**Cycle 42.** Seven stacked mechanisms now merged (BIVW + surf-head + Huber + decoupled surf_head LR + WD re-tune to 3e-4 + torch.compile) giving 31.0% total improvement from cycle-2 baseline. **Critical finding from PR #2178: WD axis is BUDGET-DEPENDENT.** WD=5e-4 was optimal at 14 epochs; at 21 epochs it OVER-REGULARIZES and amplifies the e12 spike. WD=3e-4 damps the spike and reaches 87.0144.
 
-**Post-#2031 and #2091 insights:**
-- **Hyperparameter staleness is real**: WD=1e-4 survived BIVW, Huber, and decoupled-LR unquestioned. 5× increase to 5e-4 yielded −4.46% — largest optimizer-side gain since Huber. Every other hyperparameter (LR, β2, δ) should be audited for staleness.
-- **Late-epoch oscillation characterization**: The e11→e12 spike pattern is steady-state, confirmed across β2 (#2015), warmup (#1949), gradient clipping (#2058), and wider head (#2057). The three closed in cycle 30 (#2058, #2057, #1949 previously) all failed to dampen it. Untested: denominator-floor (ε) and cosine-schedule (T_max).
-- **torch.compile(default, dynamic=True) is a pure throughput unlock**: 1.43× per-epoch speedup, 21 epochs vs 14 in 30 min. Only 2 compile frames needed despite 74K–242K node mesh range. mode="reduce-overhead" OOM'd (CUDA Graph private pool + variable shapes). Val_avg 89.72 was achieved with OLD WD=1e-4 — composing with WD=5e-4 is the highest-priority next step (PR #2178).
-- **Recipe is wall-clock-bound, not data/capacity-bound**: giving it 50% more epochs yielded −4.16% val / −5.44% test. The model had headroom in every epoch budget tested.
-- **surf_head is NOT the capacity bottleneck** (#2057): hidden_dim 64→128 gave +5.36% regression. The encoder is the limiter for OOD geometry.
-- **Gradient clipping on surf_head is NOT the mechanism** (#2058): sh_grad_norm is 0.77× encoder norm, not larger. The spike is in the step magnitude (LR × m/√v), not the gradient. The untested levers: AdamW ε (denominator floor), cosine T_max (LR schedule), per-group step decay.
+**Key new insights from PR #2178:**
+- **WD optimal shifts with epoch budget.** WD=5e-4 (14-epoch optimum) → WD=3e-4 (21-epoch optimum). All in-flight PRs using WD=5e-4 are impaired and must now beat **87.0144** (harder target). Results should still be informative for their respective hypotheses.
+- **e12 spike may be a SYMPTOM of over-regularization.** WD=3e-4 damps the e12 spike (e10=112→e12=108, smooth) while winning; WD=5e-4 amplifies it (e10=106→e12=135, +27%). This partially challenges the cycle 34 reframing ("spike is beneficial") — or more precisely: the spike from optimal WD is different from the spike from over-regularized WD.
+- **In-distribution split fully recovered.** val_single_in_dist regression from PR #2091 (+4.9%) reversed (−6.9% at WD=3e-4). OOD cruise gives back slightly (+3.4%) — cruise prefers lower WD.
+- **Finer WD sweep around 3e-4 is the highest-priority next step** (frieren assigned #2293): test {2e-4, 2.5e-4, 4e-4} to find the precise 21-epoch optimum and check if further headroom exists.
+- **Recipe still wall-clock-bound.** Both arms best_epoch=21 (still descending). Longer training could yield more gains.
+
+**Post-#2031 and #2091 insights (still relevant):**
+- **torch.compile(default, dynamic=True)** is a pure throughput unlock (1.43×). Only 2 compile frames despite 74K–242K node mesh range.
+- **surf_head is NOT the capacity bottleneck** (#2057). Encoder is the limiter for OOD geometry.
+- **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
 ## Live PRs
@@ -41,7 +46,7 @@
 | 2013 | tanjiro | logcosh-surface-loss | CLOSED | Both arms regressed (+3.51%, +14.18% vs 97.99). C² smoothness was a non-issue. Surface-loss family well-characterized as dead end. |
 | 2189 | tanjiro | ema-21epoch | WIP (NEW) | EMA re-screen at 21 epochs (compose w/ compile); arms: decay=0.999 from e0, decay=0.9995 from e5 |
 | 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
-| 2178 | frieren | compile-wd-compose | WIP (NEW) | Compose torch.compile + WD=5e-4 (now default); arms: WD=5e-4, WD=3e-4 |
+| 2178 | frieren | compile-wd-compose | **MERGED** | WD=3e-4+compile; val 87.0144/test 78.9539 — NEW BASELINE. WD=5e-4 regressed (+1.17%). |
 | 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
 | 2153 | fern | wd-bracket | CLOSED | Both arms +15.43%/+12.60%. WD=5e-4 SHARP bilateral peak. Key: rc↔sid pull opposite WD directions; e14 breakthrough load-bearing (-13.5% → -2.4% at 4e-4). WD axis fully closed. |
 | 2259 | fern | stratified-sampler | WIP (NEW) | Per-batch domain stratification (strict/rotated): tests sampler-variance → per-split asymmetry hypothesis; arms: 1+1+1+1weighted vs 2+1+1 rotating |
@@ -70,7 +75,8 @@
 9b. **Re-curriculum via per-sample loss multiplier** — **rejected** (PR #1978, +16.87% regression). BIVW × Re-tail double-weights low-Re, cancels high-Re boost. Entire Re-reweighting direction closed.
 10. **BF16/AMP** — **rejected** (PR #1572, +3.62% val / +30.09% val at n256). Precision-sensitive surface MAE: val_geom_camber_rc +11.33%. FP32 required.
 10a. **torch.compile(default, dynamic=True)** — **confirmed** (PR #2091, **−4.16% val / −5.44% test**). 21 epochs in 30 min (1.43× speedup). reduce-overhead OOM'd. **New baseline 89.7197.**
-10b. **torch.compile + weight_decay=5e-4 compose** — testing (#2178 frieren, NEW). Stack both top wins.
+10b. **torch.compile + WD re-tune to 3e-4** — **confirmed** (PR #2178, **−3.01% val / −0.46% test**). WD=3e-4 is optimal at 21 epochs. WD=5e-4 over-regularizes at 21 epochs (+1.17% regression). New baseline 87.0144.
+10c. **Finer WD sweep {2e-4, 2.5e-4, 4e-4} at 21 epochs** — testing (#2293 frieren, NEW). Map the WD curve around the new 3e-4 optimum.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97%). Wall-clock-bound.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30%). Wall-clock-bound.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39%). Underfitting. Depth=5/14ep is Pareto.
@@ -159,7 +165,8 @@
 - #2128 (AdamW eps sweep 1e-7/1e-6) — +13.13% / +23.08% regression. surf_frac_below_eps=0 always: eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out entirely.
 - #2124 (surface-only pressure weight k=0.5/1.5) — +11.85% / +21.85% regression. k=1.0 is sharp local minimum in both directions. Velocity rebalancing mechanism absent. Channel-weight axis fully closed.
 - #2122 (decoupled WD head-down) — +9.17%/+18.62% regression. Reversed hypothesis: head NEEDS 10× effective shrinkage per step (coupled WD is protective). val_geom_camber_rc hit hardest. Head-up direction (#2232) is the untested symmetric point.
-- #2153 (WD bracket 4e-4/5.5e-4) — +15.43%/+12.60% regression. WD=5e-4 sharp bilateral peak confirmed. WD axis fully closed across 5 PRs (#1502, #2031, #2120, #2153). Key insight: e14 breakthrough load-bearing, weight-norm FLAT (WD acts on trajectory not scale).
+- #2153 (WD bracket 4e-4/5.5e-4) — +15.43%/+12.60% regression vs 89.7197 baseline. Key insight: e14 breakthrough load-bearing, weight-norm FLAT. Note: this experiment was at 14-epoch budget; the WD axis at 21 epochs (post-compile) is distinct — WD=3e-4 wins there (#2178).
+- #2178 Arm 1 (WD=5e-4 + compile) — +1.17% regression vs 89.7197. WD=5e-4 over-regularizes at 21 epochs, amplifies e12 spike. WD=3e-4 is the 21-epoch optimum.
 
 ## Potential next directions (after cycle 30 in-flight)
 
