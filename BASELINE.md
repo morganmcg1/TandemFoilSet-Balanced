@@ -4,6 +4,27 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 09:00 — PR #2036: [batch-size-1] Extreme batch bracket: batch_size 2→1 (alphonse)
+
+- **`val_avg/mae_surf_p`:** **70.30** (best epoch 18/19)
+- **`test_avg/mae_surf_p`:** **61.39** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=74.15, geom_camber_rc=81.11, geom_camber_cruise=53.67, re_rand=72.28
+- **Per-split surface-p MAE (test):** single_in_dist=64.82, geom_camber_rc=73.92, geom_camber_cruise=44.73, re_rand=62.09
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=1, seed=42, SequentialLR(LinearLR(1ep warmup) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
+- **Key change:** batch_size 2→1. n_batches_per_epoch doubled again (750→1500) — same wall-clock per epoch (~95s), 4x optimizer steps vs original bs=4. VRAM halved again (~8.5 GB). 19 epochs completed.
+- **Improvement vs #1972 (bs=2, val=76.24):** val −5.94 (−7.78%), test −5.46 (−8.17%)
+- **All 8 splits improved:** rc val −5.95 / test −3.64 (smallest), cruise val −5.72 / test −5.90, single_in_dist val −7.63 / test −6.12 (biggest val), re_rand val −4.46 / test −6.19
+- **Metric artifacts:** `models/model-charliepai2g48h4-alphonse-batch-size-1-20260513-075224/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-alphonse --experiment_name "charliepai2g48h4-alphonse/batch-size-1"`
+
+**Open questions after this merge:**
+- Does lr need retuning for bs=1? With 1500 steps/epoch, effective LR per epoch is 4x the bs=4 baseline. lr=4e-4 or 3e-4 tests downward bracket at bs=1.
+- Does EMA (askeladd #1540) still win on top of bs=1? Training completed, result pending rate-limit resolution.
+- Do other in-flight experiments (thorfinn lr-7e-4, nezuko OneCycle, edward beta-0.5, frieren mlp_ratio=1, tanjiro slice_num=32, fern wd-2e-4) still beat the new baseline val=70.30?
+- Batch size axis: bs=1 is the floor. If more steps is the mechanism, gradient accumulation or a different paradigm is next.
+
+---
+
 ### 2026-05-13 07:30 — PR #1972: [batch-size-2] Halve batch size 4→2 (alphonse)
 
 - **`val_avg/mae_surf_p`:** **76.24** (best epoch 18/19)
