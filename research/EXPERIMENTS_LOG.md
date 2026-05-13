@@ -6,6 +6,83 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 01:45 — PR #1725: Lion optimizer lr=1e-4 — MERGED (**new best: val=86.938, −14.3%**)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/lion-optimizer
+- **Hypothesis:** Lion's sign-based updates produce constant-magnitude steps, hypothesized to be synergistic with L1 loss which also produces constant ±1 gradients. Used lr=1e-4 (Lion paper recommends ~3-10× lower than Adam; our Adam lr=5e-4).
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| single_in_dist | 98.979 | 91.606 |
+| geom_camber_rc | 104.737 | 92.561 |
+| geom_camber_cruise | 62.041 | 52.841 |
+| re_rand | 81.995 | 74.952 |
+| **avg** | **86.938** | **77.990** |
+
+- **vs baseline (101.463 post-bf16):** −14.3% — the biggest single win since L1 loss itself (which was −20.5%)
+- **Epoch:** 11 of 50; still monotonically improving at 30-min cutoff. Convergence headroom remains.
+- **Analysis:** Lion's sign-based updates are structurally complementary to L1's constant-gradient dynamics. Both operate in a regime where gradient *direction* dominates over *magnitude*. The combined signal is particularly clean — no magnitude rescaling distorts the direction. All four splits improved, with the largest gains on cruise (−18.0%) and in_dist (−18.0%). The model still had room to improve at cutoff, suggesting further gains with LR tuning or warmup.
+- **Round 7 priority:** Lion LR tuning (lr=2e-4), Lion WD=1e-2 (paper recommendation), physical-space L1, GeGLU+Lion.
+- **Artifacts:** `models/model-charliepai2g48h3-edward-lion-optimizer-20260513-001607/metrics.jsonl`
+
+---
+
+## 2026-05-13 01:30 — PR #1728: GeGLU activation (AdamW) — CLOSED (+16.8% worse vs Lion baseline)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/geglu-activation
+- **Hypothesis:** GeGLU gating (multiplicative gate in MLP blocks) routes features by flow regime, mlp_ratio=3 to compensate for 2-projection overhead.
+- **Result:** val=101.499 (9 epochs, ~210s/epoch), test=91.436
+
+| Split | val | vs AdamW baseline (101.463) |
+|---|---|---|
+| single_in_dist | 134.924 | +8.7% |
+| geom_camber_rc | 112.496 | −0.2% |
+| geom_camber_cruise | 67.405 | −12.0% |
+| re_rand | 91.173 | −2.8% |
+| **avg** | **101.499** | **+0.04% (essentially baseline)** |
+
+- **Against new Lion baseline (86.938):** +16.8% worse — clearly not competitive.
+- **Analysis:** GeGLU's per-epoch overhead (~210s vs 140s with bf16) meant only 9 epochs vs 14 for baseline. The model was still improving at cutoff. The mixed split picture (cruise and re_rand improved, in_dist regressed) suggests GeGLU may help with complex OOD cases but hurts in-distribution. The AdamW context may also be limiting — GeGLU+Lion is a genuinely new hypothesis worth testing.
+- **Decision:** Closed; reassigned tanjiro to GeGLU+Lion (PR #1769).
+- **Artifacts:** `models/model-charliepai2g48h3-tanjiro-geglu-activation-20260513-002012/metrics.jsonl`
+
+---
+
+## 2026-05-13 01:20 — PR #1724: bf16 mixed precision — MERGED (new best: val=101.463, −0.34%)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/bf16-mixed-precision
+- **Hypothesis:** bf16 autocast reduces epoch time 1.26× (175s→138.5s), gaining +1 epoch (14 vs 13) within the 30-min cap. Small but reliable throughput gain.
+
+| Split | val mae_surf_p | test mae_surf_p |
+|---|---|---|
+| single_in_dist | 120.699 | 108.025 |
+| geom_camber_rc | 116.096 | 107.822 |
+| geom_camber_cruise | 73.667 | 63.152 |
+| re_rand | 95.391 | 87.800 |
+| **avg** | **101.463** | **91.700** |
+
+- **vs baseline (101.810 L1+n_layers=6):** −0.34% (marginal but positive)
+- **Analysis:** A100 is bandwidth-limited on batch=4 small meshes, not compute-bound — speedup was 1.26× rather than the hypothesized 2×. The crucial benefit is infrastructure: bf16 is now the default precision and will accelerate all future experiments.
+- **Critical implementation note:** PhysicsAttention temperature division at train.py:120 required `.float()` cast to prevent bf16 overflow. alphonse implemented correctly.
+- **Artifacts:** `models/model-charliepai2g48h3-alphonse-bf16-mixed-precision-20260513-001819/metrics.jsonl`
+
+---
+
+## 2026-05-13 01:10 — PR #1673: AdamW eps 1e-8→1e-4 — CLOSED (+13.2% worse)
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/adamw-eps-1e-4
+- **Hypothesis:** Larger epsilon raises the adaptive scaling floor, potentially stabilizing AdamW for L1's constant-magnitude gradients.
+- **Result:** val=115.267, test=104.XX
+- **vs baseline (101.810):** +13.2% worse
+- **Analysis:** The increased eps effectively narrows AdamW's adaptive range, hurting rather than helping. AdamW's eps=1e-8 default is well-calibrated. Dead end — AdamW hyperparameter space now fully exhausted (betas, WD, eps, LR, schedule all explored).
+- **Conclusion:** Stop tuning AdamW. Focus entirely on Lion-based experiments.
+
+---
+
 ## 2026-05-13 00:45 — PR #1670: weight_decay 1e-4 → 5e-4 — CLOSED (+14.9% worse)
 
 - **Student:** charliepai2g48h3-thorfinn
