@@ -30,7 +30,7 @@
 - **WD optimal shifts with epoch budget.** WD=5e-4 (14-epoch optimum) → WD=3e-4 (21-epoch optimum). All in-flight PRs using WD=5e-4 are impaired and must now beat **87.0144** (harder target). Results should still be informative for their respective hypotheses.
 - **e12 spike may be a SYMPTOM of over-regularization.** WD=3e-4 damps the e12 spike (e10=112→e12=108, smooth) while winning; WD=5e-4 amplifies it (e10=106→e12=135, +27%). This partially challenges the cycle 34 reframing ("spike is beneficial") — or more precisely: the spike from optimal WD is different from the spike from over-regularized WD.
 - **In-distribution split fully recovered.** val_single_in_dist regression from PR #2091 (+4.9%) reversed (−6.9% at WD=3e-4). OOD cruise gives back slightly (+3.4%) — cruise prefers lower WD.
-- **Finer WD sweep around 3e-4 is the highest-priority next step** (frieren assigned #2293): test {2e-4, 2.5e-4, 4e-4} to find the precise 21-epoch optimum and check if further headroom exists.
+- **Finer WD sweep around 3e-4 is the highest-priority next step** (frieren assigned #2284): test {2e-4, 2.5e-4, 4e-4} to find the precise 21-epoch optimum and check if further headroom exists.
 - **Recipe still wall-clock-bound.** Both arms best_epoch=21 (still descending). Longer training could yield more gains.
 
 **Post-#2031 and #2091 insights (still relevant):**
@@ -47,6 +47,7 @@
 | 2189 | tanjiro | ema-21epoch | WIP (NEW) | EMA re-screen at 21 epochs (compose w/ compile); arms: decay=0.999 from e0, decay=0.9995 from e5 |
 | 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
 | 2178 | frieren | compile-wd-compose | **MERGED** | WD=3e-4+compile; val 87.0144/test 78.9539 — NEW BASELINE. WD=5e-4 regressed (+1.17%). |
+| 2284 | frieren | finer-wd-sweep-21epoch | WIP (NEW) | Finer WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs around 3e-4 optimum |
 | 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
 | 2153 | fern | wd-bracket | CLOSED | Both arms +15.43%/+12.60%. WD=5e-4 SHARP bilateral peak. Key: rc↔sid pull opposite WD directions; e14 breakthrough load-bearing (-13.5% → -2.4% at 4e-4). WD axis fully closed. |
 | 2259 | fern | stratified-sampler | WIP (NEW) | Per-batch domain stratification (strict/rotated): tests sampler-variance → per-split asymmetry hypothesis; arms: 1+1+1+1weighted vs 2+1+1 rotating |
@@ -76,7 +77,7 @@
 10. **BF16/AMP** — **rejected** (PR #1572, +3.62% val / +30.09% val at n256). Precision-sensitive surface MAE: val_geom_camber_rc +11.33%. FP32 required.
 10a. **torch.compile(default, dynamic=True)** — **confirmed** (PR #2091, **−4.16% val / −5.44% test**). 21 epochs in 30 min (1.43× speedup). reduce-overhead OOM'd. **New baseline 89.7197.**
 10b. **torch.compile + WD re-tune to 3e-4** — **confirmed** (PR #2178, **−3.01% val / −0.46% test**). WD=3e-4 is optimal at 21 epochs. WD=5e-4 over-regularizes at 21 epochs (+1.17% regression). New baseline 87.0144.
-10c. **Finer WD sweep {2e-4, 2.5e-4, 4e-4} at 21 epochs** — testing (#2293 frieren, NEW). Map the WD curve around the new 3e-4 optimum.
+10c. **Finer WD sweep {2e-4, 2.5e-4, 4e-4} at 21 epochs** — testing (#2284 frieren, NEW). Map the WD curve around the new 3e-4 optimum.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97%). Wall-clock-bound.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30%). Wall-clock-bound.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39%). Underfitting. Depth=5/14ep is Pareto.

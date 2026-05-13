@@ -45,7 +45,7 @@
 
 **Composition success:** The val gain (+50% epochs from compile + moderate regularization) is additive. In-distribution split fully recovered (val_single_in_dist 114.92→106.99, −6.9%) — the +4.9% regression from PR #2091 is reversed. Cruise gives back slightly (+3.4% val, +4.2% test) — cruise OOD prefers low WD.
 
-**Next axis:** Finer WD sweep around 3e-4 (test {2e-4, 2.5e-4, 4e-4}) to map the WD curve at 21 epochs. Frieren assigned (#2293).
+**Next axis:** Finer WD sweep around 3e-4 (test {2e-4, 2.5e-4, 4e-4}) to map the WD curve at 21 epochs. Frieren assigned (#2284).
 
 ---
 
