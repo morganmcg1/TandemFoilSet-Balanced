@@ -706,4 +706,33 @@ The 3-rep mean (65.92 val / 57.45 test) is suggestive — it beats the MSE 3-see
 
 **Best-rep per-split (ktvtfke5, test):** in_dist=60.82, camber_rc=67.92, camber_cruise=38.52, re_rand=54.86, **avg=55.53**.
 
+---
+
+## 2026-05-13 05:55 — PR #1861: OneCycleLR final_div_factor=1e3 → 1e4 (deeper LR floor) — CLOSED (mechanism saturated)
+- willowpai2g24h4-tanjiro / willowpai2g24h4-tanjiro/final-div-factor-1e4
+- **Hypothesis:** Deepening the LR floor 1.5e-7 → 1.5e-8 extends the OOD-camber refinement mechanism that pct_start=0.05 unlocked.
+- **W&B (3 runs):** `4pdvddzi` (best), `lt8pen1e`, `aespjhyv`
+
+| Metric | Baseline #1719 (ffd=1e3) | best (4pdvddzi) | mean ± std (3 runs) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 66.1352 | 66.8098 (+1.0%) | **68.69 ± 2.34** |
+| test_avg/mae_surf_p | 56.8971 | 57.9293 (+1.8%) | ~59.8 |
+| val_geom_camber_cruise | 47.51 | 49.05 (+3.2%) | ~50.6 |
+| val_re_rand | 64.68 | 64.67 (≈0) | ~67.7 |
+| best_epoch | 27 | 28 | 28 |
+
+**Decision: CLOSED — deep-LR mechanism saturated.** The student verified the 1.5e-8 floor was actually reached (W&B LR trajectory confirms `1.503e-08` at final step), so the mechanism was realized — it just doesn't help. The OOD-camber split that pct_start=0.05 moved (-8.2% single-seed, −3.3% 3-seed mean) actually regresses with the deeper floor.
+
+**Key reading: 3-run mean (68.69) is within noise of MSE 3-seed mean (68.88).** The "regression" framing is partly a luck-of-seed artifact against the −1.15σ seed=0 anchor, but the directional verdict is right — no improvement.
+
+**Genuine learnings:**
+1. **Deep-LR refinement mechanism saturated at floor=1.5e-7.** The deep-decay TAIL COUNT (how long LR stays at the bottom) is the lever from pct_start=0.05, not the floor DEPTH.
+2. **LR-schedule attack class fully explored under 30-min cap:**
+   - max_lr saturates at 1.5e-3 (#1716, in-flight #1785 testing 2e-3)
+   - pct_start: real but multi-seed-modest gain at 0.05 (#1719/#1874)
+   - final_div_factor: depth saturated (this PR)
+3. **Variance ~3.4% CV across 3 random-seed runs** is consistent with #1874's 3.5-4% CV estimate. No-seed-control reruns produce comparable variance to explicit-seed reruns.
+
+**Next:** Pivoting tanjiro to non-LR direction per student's own suggestion. Assigning **batch_size=4 → 8** with 3 seeds — tests gradient-quality vs per-batch-step-count trade-off; uses unused GPU (~46GB / 96GB); is a clean compute-utilization probe.
+
 **Minor flag:** `test_geom_camber_cruise/loss = nan` printed in test-eval summary line but `mae_surf_p` (the headline metric) was still computed cleanly per-batch. Likely Inf/NaN slipping through a single-batch reduction. Not blocking; track if it recurs.
