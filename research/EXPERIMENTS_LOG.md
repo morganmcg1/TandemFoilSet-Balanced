@@ -1,5 +1,71 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 14:20 — PR #2287: GeGLU gate ablation — SiLU→GELU inside SwiGLU block-MLP gate (MERGED — all 8 splits improve, new best val=45.92/test=44.35)
+
+- Student branch: `charliepai2g24h5-fern/geglu-gate-ablation`
+- Hypothesis: SwiGLU (#2196) won with gate×SiLU. Does the choice of activation inside the gate matter? GeGLU (gate×GELU) tests whether GELU's gradient surface — which Lion is calibrated for — carries into the gate path.
+
+### Results (vs SwiGLU baseline #2196: 47.43/45.01)
+
+| Metric | SwiGLU (#2196) | GeGLU (this PR) | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 47.43 | **45.92** | **−1.51 (−3.2%) ← NEW BEST** |
+| **test_avg/mae_surf_p** | 45.01 | **44.35** | **−0.66 (−1.5%)** |
+
+All 8 splits improve. Largest val gain: single_in_dist (−3.32). All test splits improve too.
+
+### Per-split
+
+| Split | val SwiGLU | **val GeGLU** | Δval | test SwiGLU | **test GeGLU** | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 52.19 | **48.87** | −3.32 | 43.52 | **43.19** | −0.33 |
+| geom_camber_rc | 59.75 | **58.78** | −0.97 | 53.81 | **52.54** | −1.27 |
+| geom_camber_cruise | 30.87 | **29.99** | −0.88 | 43.91 | **43.55** | −0.36 |
+| re_rand | 46.90 | **46.03** | −0.87 | 38.82 | **38.14** | −0.68 |
+
+### Mechanism
+
+1-character change: `F.silu` → `F.gelu` inside the SwiGLU gate input path. The gate form `out = w_out(F.gelu(w_in(x)) * w_gate(x))` is GeGLU. This resolves the apparent paradox:
+- Bare GELU→SiLU regresses (#2176): Lion sign-updates tuned for GELU gradient surface
+- SwiGLU (gate×SiLU) wins (#2196): gating is the architectural primitive, SiLU tolerated inside gate
+- GeGLU (gate×GELU) wins MORE (#2287): gating + GELU's optimizer-aligned gradient = both benefits simultaneously
+
+Fern's analysis: "the gate activation matters because Lion's sign quantization is sensitive to the per-element gradient magnitude distribution. GELU's characteristic shape (near-zero for negative inputs, approximately linear for large positive inputs) provides the smoothest gradient signal for Lion's sign computation."
+
+### Disposition
+
+**MERGED.** New baseline: val=45.92/test=44.35. Reassigned fern to **n_layers=6 on GeGLU stack** (#2349): depth test with gated MLPs.
+
+- Metrics: `models/model-geglu_gate_vs_swiglu-20260513-130428/metrics.jsonl`
+
+---
+
+## 2026-05-13 14:15 — PR #2177 re-arm: Lion wd sweep at firing values wd∈{5e-4, 2e-3} (CLOSED — Arm D ties GELU baseline; regresses vs GeGLU baseline)
+
+- Student branch: `charliepai2g24h5-edward/wd-sweep-lr2e4`
+- Hypothesis (re-arm from FP32 ulp diagnostic): wd∈{5e-4, 2e-3} both exceed the FP32 ulp floor (wd > 1.49e-4 at lr=2e-4) so they genuinely apply per-step weight shrink. Will wd improve on the effective-wd=0 baseline?
+
+### Results (vs GELU baseline #1656: 52.63/49.22; run on old GELU stack)
+
+| Metric | GELU baseline | Arm C (wd=5e-4) | Arm D (wd=2e-3) | Best vs baseline |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.63 | 53.72 | **52.53** | −0.10 (−0.2%, essentially tied) |
+| **test_avg/mae_surf_p** | 49.22 | 50.56 | **49.22** | ≈0 (tie) |
+
+vs current GeGLU baseline (45.92): Arm D val=52.53 (+14.4% worse). Both arms are dead ends vs current best.
+
+### Mechanism
+
+Per edward's trajectory analysis: Arm D shows the expected param_l2 growth pattern (66.40 vs 65.19 baseline) and higher late-epoch grad_norm (2.67 vs 2.61), confirming real weight decay fires and keeps gradients slightly more active. But the *magnitude* of the effect is negligible on the GELU stack — wd is near-optimal at 0 for this problem. Split pattern: Arm D helps single_in_dist/cruise/re_rand, slightly hurts geom_camber_rc — net wash.
+
+### Disposition
+
+**CLOSED.** Ran on GELU stack which is now outdated. The wd axis is still worth probing on GeGLU stack — assigned to edward as PR #2352 with wd∈{2e-3, 5e-3}.
+
+- Metrics: `models/model-wd_5e4_lr2e4-20260513-120642/metrics.jsonl`, `models/model-wd_2e3_lr2e4-20260513-125114/metrics.jsonl`
+
+---
+
 ## 2026-05-13 14:05 — PR #2181: batch_size=8 Lion sign-vote test (CLOSED — epoch-budget cliff at fixed lr; step-count halved and undertrained)
 
 - Student branch: `charliepai2g24h5-tanjiro/batch8-lion-sign-vote`

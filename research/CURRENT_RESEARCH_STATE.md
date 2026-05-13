@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 14:10
+- 2026-05-13 14:30
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -14,29 +14,29 @@ Edward's #2177 arms produced bit-identical metrics to baseline. Diagnosis: `p.da
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **47.43** | #2196 (SwiGLU gated block-MLPs, merged 2026-05-13) |
-| **test_avg/mae_surf_p** | **45.01** | #2196 — all 4 splits finite; epoch-15 best checkpoint |
-| Peak VRAM | ~42.5 GB | #2196 — SwiGLU hidden=216 |
-| s/epoch | ~117 s | #2196 — 15 epochs completed within 30-min cap |
+| **val_avg/mae_surf_p** | **45.92** | #2287 (GeGLU gated block-MLPs, merged 2026-05-13) |
+| **test_avg/mae_surf_p** | **44.35** | #2287 — all 4 splits finite; epoch-15 best checkpoint |
+| Peak VRAM | ~42.5 GB | #2287 — GeGLU hidden=216, same as SwiGLU |
+| s/epoch | ~126 s | #2287 — 15 epochs completed within 30-min cap |
 
-Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=2e-4, wd=6e-5)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160** + **SwiGLU block-MLPs (hidden=216)** + **dropout=0.1**, epochs=**16**, batch=4, seed=42.
+Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=2e-4, wd=6e-5)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160** + **GeGLU block-MLPs (hidden=216, gate×GELU)** + **dropout=0.1**, epochs=**16**, batch=4, seed=42.
 
-**Note on wd:** wd=6e-5 is a FP32 ulp no-op at lr=2e-4 (effective wd=0). See #2177 re-arm.
+**Note on wd:** wd=6e-5 is a FP32 ulp no-op at lr=2e-4 (effective wd=0). Real wd being probed on GeGLU stack at #2352.
 
 **Reproduce current best:**
 ```bash
-cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name swiglu_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name geglu_baseline_check --agent <student>
 ```
 
-### Per-split val/test (new baseline, PR #2196)
+### Per-split val/test (new baseline, PR #2287)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 52.19 | 43.52 |
-| geom_camber_rc | 59.75 | 53.81 |
-| geom_camber_cruise | 30.87 | 43.91 |
-| re_rand | 46.90 | 38.82 |
-| **avg** | **47.43** | **45.01** |
+| single_in_dist | 48.87 | 43.19 |
+| geom_camber_rc | 58.78 | 52.54 |
+| geom_camber_cruise | 29.99 | 43.55 |
+| re_rand | 46.03 | 38.14 |
+| **avg** | **45.92** | **44.35** |
 
 ## Key round-5 findings to date
 
@@ -61,7 +61,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | **Zero-LR cosine tail is implicit regularizer for Lion (#2084, CLOSED)** | **Cosine floor eta_min=5%: val=54.05/test=51.09 — all 8 splits regress; test hit harder (+1.44 vs val +0.43). Mechanism: Lion's sign(m)*lr step magnitude scales with lr only — floor LR prevents final settling by keeping perturbations nonzero. Do NOT add LR floor to Lion runs.** |
 | **Lion wd ≤ 1.49e-4 is FP32 ulp no-op at lr=2e-4 (#2177, RE-ARMED)** | **All Lion experiments to date have effectively trained with wd=0. `(1−lr·wd)` rounds to 1.0 in FP32 for wd in our merged range. Re-armed at wd ∈ {5e-4, 2e-3} (firing values). The wd axis is genuinely unexplored.** |
 | **Dropout axis SATURATED at attn=0.1 (#2161, CLOSED)** | **Arm A (attn=0.1+MLP=0.1): val +5.1%, test +5.5%. Arm B (attn=0.05+MLP=0.0): val +2.0%, test +1.9%. Thin-ridge local optimum: more reg → worse, less reg → worse, different locus → worse. Dropout magnitude/locus sweeps no longer pay back GPU time.** |
-| **SwiGLU gated MLP → −9.9% val (#2196, MERGED)** | **Largest single-PR gain since Lion. val 52.63→47.43, test 49.22→45.01. All 8 splits improve. Gate mechanism: selective per-channel feature suppression before output projection. Hardest OOD split (geom_camber_rc) gained most (−7.60 val). New baseline 47.43/45.01.** |
+| **SwiGLU gated MLP → −9.9% val (#2196, MERGED)** | **val 52.63→47.43, test 49.22→45.01. All 8 splits improve. Gate mechanism: selective per-channel feature suppression. Hardest OOD split gained most.** |
+| **GeGLU (gate×GELU) beats SwiGLU (gate×SiLU) → −3.2% val (#2287, MERGED)** | **val 47.43→45.92, test 45.01→44.35. All 8 splits improve. Mechanism: GELU inside gate aligns with Lion's optimizer-calibrated gradient surface. Resolves paradox: bare-SiLU regresses, gated-SiLU wins, gated-GELU wins more. New baseline 45.92/44.35.** |
 | **LLRD factor=0.85 regresses +7% (#2182, CLOSED)** | **All 8 splits worse by 2.5–4.4 MAE. Lion sign-step is linearly LR-sensitive (no preconditioning) → 52% lr cut on input blocks = 52% step cut, no recovery. Transolver is too shallow (5 blocks vs BERT-12) for safe LLRD factor at 0.85.** |
 | Lion lr=3.5e-4 plateau on n160+δ=0.3 stack (#2035, CLOSED) | val=55.90 (flat vs 55.92). LR bowl wide-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts 3 OOD splits — mild over-stepping. Mechanism: wider model over-rides δ-driven LR shift. |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
@@ -78,10 +79,11 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2287 | fern | GeGLU gate ablation: SiLU→GELU inside SwiGLU gate — mechanism test (is SiLU or gating load-bearing?) | WIP — new | Beat 47.43 |
-| #2288 | frieren | Lion lr sweep on SwiGLU baseline: Arm A=2.5e-4, Arm B=3e-4 (SwiGLU changes gradient surface — confirm lr=2e-4 optimal) | WIP — new | Beat 47.43 |
+| #2349 | fern | n_layers=6 on GeGLU stack (epochs=13 for budget; depth test with gated MLPs) | WIP — new | Beat 45.92 |
+| #2352 | edward | Lion wd sweep on GeGLU baseline: wd=2e-3 and wd=5e-3 (firing values on new baseline) | WIP — new | Beat 45.92 |
+| #2288 | frieren | Lion lr sweep on SwiGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP | Beat 45.92 |
 | #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe, SwiGLU co-change) | WIP — new | Beat 47.43 |
-| #2177 | edward | Lion wd sweep re-arm: wd ∈ {5e-4, 2e-3} — first real wd signal above FP32 ulp floor | WIP — re-armed | Beat 47.43 |
+| #2177 | edward | CLOSED | Lion wd sweep: Arm C (wd=5e-4) regresses; Arm D (wd=2e-3) ties GELU baseline (−0.1% val). Ran on stale GELU stack — 14.4% worse than GeGLU baseline. wd axis near-optimal at wd≈0 for GELU; retesting on GeGLU at #2352. |
 | #2332 | tanjiro | SwiGLU preprocess MLP: replace GELU entry projector with SwiGLU gating (hidden=280, param parity) | WIP — new | Beat 47.43 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP (stale baseline) | Beat 47.43 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (stale baseline) | Beat 47.43 |
@@ -91,7 +93,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
-| #2196 | fern | **MERGED** | SwiGLU gated MLP (hidden=216, param-equiv to GELU) → **new baseline 47.43/45.01** (−9.9% val, −8.6% test). All 8 splits improve. Hardest OOD (geom_camber_rc) gained most (−7.60 val). Largest single-PR gain since Lion. |
+| #2287 | fern | **MERGED** | GeGLU (gate×GELU) vs SwiGLU (gate×SiLU) → **new baseline 45.92/44.35** (−3.2% val, −1.5% test). All 8 splits improve. Mechanism: GELU inside gate aligns with Lion optimizer surface. Confirms gating > bare activation, GELU > SiLU in gate context. |
+| #2196 | fern | **MERGED** | SwiGLU gated MLP (hidden=216, param-equiv to GELU) → baseline 47.43/45.01 (−9.9% val, −8.6% test). All 8 splits improve. |
 | #2181 | tanjiro | CLOSED | batch=8 at lr=2e-4: val=64.91 (+36.9% vs current baseline). Epoch-budget cliff: halved step count (188 vs 376) with Lion's magnitude-invariant sign update → 2× under-training at same lr. Val still descending at −1.8/epoch at epoch 15. Untestable without LR compensation. |
 | #2249 | thorfinn | CLOSED | Lookahead wrapper (k=5, α=0.5 vs 0.8): Arm A val=57.61 (+21.5% vs current baseline), Arm B val=53.45 (+12.7%). Both still descending at epoch 16 — epoch-budget cliff. Lookahead+Lion needs ≥30 epochs to amortise slow-weight lag; 16-epoch cap insufficient. |
 | #2182 | frieren | CLOSED | LLRD factor=0.85: all 8 splits regress +7.3% val. Lion sign-step linearly LR-sensitive → 52% input-block lr cut = 52% step reduction, no recovery. Too shallow (5 layers) for BERT-style LLRD. |
@@ -115,8 +118,9 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 ## Open questions from active experiments
 
-1. **Does GeGLU (gate × GELU) match or beat SwiGLU (gate × SiLU) on this stack?** (#2287 fern, new) — Isolates whether gating or SiLU's specific shape drives the SwiGLU win. Informs all future GLU-family architecture work.
-2. **Does the Lion lr optimum shift on the SwiGLU baseline?** (#2288 frieren, new) — lr=2e-4 was proven optimal for GELU. SwiGLU changes the gradient Jacobian structure. Probing lr∈{2.5e-4, 3e-4}.
+1. **Does n_layers=6 improve on the GeGLU stack?** (#2349 fern, new) — Depth test with gated MLPs; each added block adds a selective GeGLU routing pass. Uses epochs=13 for budget safety.
+2. **Does real wd (2e-3 or 5e-3) help on the GeGLU baseline?** (#2352 edward, new) — Arm D (wd=2e-3) on old GELU stack was essentially a tie. GeGLU's changed gradient surface may shift wd optimum.
+3. **Does the Lion lr optimum shift on the SwiGLU baseline?** (#2288 frieren) — lr=2e-4 proven optimal for GELU; SwiGLU/GeGLU may shift the bowl. Probing lr∈{2.5e-4, 3e-4}.
 3. **Does RMSNorm (scale-only, bias-free) outperform LayerNorm on the SwiGLU stack?** (#2315 thorfinn) — LLaMA-recipe co-change: SwiGLU+RMSNorm widely paired in modern transformers; mean-centering may erase PhysicsAttention slice-token offsets.
 4. **Does Lion weight_decay=5e-4 or 2e-3 beat the effective-wd=0 baseline?** (#2177 edward, re-armed) — First real wd signal above FP32 ulp floor. Important to test on SwiGLU stack eventually, but first get baseline wd result.
 5. **Does SwiGLU gating on the preprocess MLP stack on top of block-MLP SwiGLU?** (#2332 tanjiro) — extend gating to the mesh-feature entry projector (input dim=24, hidden=280 at param parity).
