@@ -416,7 +416,7 @@ class Config:
     lr: float = 7e-4
     weight_decay: float = 1e-4
     batch_size: int = 8
-    surf_weight: float = 10.0
+    surf_weight: float = 5.0   # was 10.0 — testing lower surface emphasis (PR #1710)
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
