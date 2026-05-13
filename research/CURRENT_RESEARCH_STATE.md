@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~02:50
+- **Date:** 2026-05-13 ~03:15
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -61,20 +61,26 @@
 5. **Lion was still improving at epoch 11 cutoff**: LR tuning and warmup may extract more performance
 6. **geom_camber_rc (104.7) and single_in_dist (99.0)** are now the hardest splits to improve
 
-## Active experiments (Round 7 — GeGLU+Lion baseline, compounding)
+## Active experiments (Round 8 — all on GeGLU+Lion baseline)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1765 | Lion lr=2e-4: upper LR bound | WIP (pre-GeGLU baseline) |
-| askeladd | #1766 | Lion WD=1e-2: paper-recommended WD | WIP (pre-GeGLU baseline) |
-| edward | #1767 | Pressure-weighted normalized loss (rebase + explicit wt) | SENT BACK |
-| tanjiro | #1824 | SwiGLU vs GeGLU: SiLU gate comparison | NEW |
-| fern | #1790 | Lion + 2-epoch cosine warmup | WIP (pre-GeGLU baseline) |
-| nezuko | #1793 | Lion + T_max=12 aligned to budget | WIP (pre-GeGLU baseline) |
+| alphonse | #1765 | Lion lr=2e-4 with lr=cfg.lr bug fix | SENT BACK (rerun needed) |
+| askeladd | #1766 | Lion WD=1e-2 rebased on GeGLU+Lion (compound test) | SENT BACK (rerun needed) |
+| edward | #1767 | Explicit pressure-weighted loss on GeGLU+Lion | SENT BACK |
+| tanjiro | #1824 | SwiGLU vs GeGLU: SiLU gate comparison | WIP |
+| fern | #1790 | Lion + 2-epoch cosine warmup | WIP (on pre-GeGLU; check upon completion) |
+| nezuko | #1793 | Lion + T_max=12 aligned to budget | WIP (on pre-GeGLU; check upon completion) |
+| thorfinn | #1836 | surf_weight 10 → 5 on GeGLU+Lion | NEW |
+| frieren | #1837 | RMSNorm replaces LayerNorm on GeGLU+Lion | NEW |
 
-**Round 6 stragglers (AdamW, compare to new 64.918 baseline):**
-- frieren #1729: RMSNorm — may still provide architectural insight
-- thorfinn #1737: surf_weight 10 → 5
+**Recently closed:**
+- thorfinn #1737 surf_weight=5 (stale, old baseline 101.810; reassigned as #1836)
+- frieren #1729 RMSNorm (stale, old baseline 101.810; reassigned as #1837)
+
+## Critical infra issue: train.py:440 LR hardcoding bug
+
+`optimizer = Lion(model.parameters(), lr=1e-4, ...)` hardcodes lr=1e-4, ignoring `cfg.lr`. Discovered by askeladd in PR #1766; fix in flight (`lr=cfg.lr`). Until merged, any LR experiment is silently broken. alphonse's lr=2e-4 in #1765 actually ran at 1e-4.
 
 > Note: Experiments #1765, #1766, #1790, #1793 are running on the GeGLU+Lion baseline's PREDECESSOR (Lion+GELU). When they land, results should be evaluated relative to their own training config — if they beat 86.938 (Lion+GELU baseline), the change is positive but needs retesting on the new GeGLU+Lion stack. If they beat 64.918 (new baseline), they compound.
 
