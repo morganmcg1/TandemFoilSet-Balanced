@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 01:20 UTC (🎉 **#1548 Fourier L=4 MERGED as new baseline 84.762 (-6.13% val, -8.10% test)**; #1699 thorfinn dropout closed +2.27%; 2 new assignments #1772 edward Fourier L=6, #1773 thorfinn AdamW betas; wave 5 in-flight: #1711, #1753, #1754, #1756; rebasing: #1549, #1608)
+- **Last updated**: 2026-05-13 02:05 UTC (close #1773 thorfinn AdamW betas (0.9, 0.95) +1.97%; assign #1799 thorfinn LayerScale CaiT init=0.1; wave 5 in-flight: #1711, #1753, #1754, #1756; wave 6 in-flight: #1772 edward Fourier L=6, #1799 thorfinn LayerScale; rebasing: #1549, #1608)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -62,7 +62,7 @@ pure spike suppression. The 1.0 / 25 / 50 bracket points map to a clear
 asymmetric profile around 25. **Lower bracket point (max_norm=10, #1713)
 now in flight** to complete the curve.
 
-Active threads (post #1548 merge + wave-5 in-flight + wave-6 new):
+Active threads (post #1773 close + wave-5/6 in-flight):
 
 1. **Per-channel surf-loss weighting** (alphonse #1711, H18,
    `[0.5, 0.5, 2.0]`) — loss-layer rebalancing toward pressure channel.
@@ -73,11 +73,11 @@ Active threads (post #1548 merge + wave-5 in-flight + wave-6 new):
 4. **Stoch-depth above-the-merged-optimum** (tanjiro #1756,
    `drop_rate=0.15`) — bracket above merged 0.10.
 5. **Fourier coord encoding `n_freqs=6`** (edward #1772) — pre-registered
-   bracket-up from his merged #1548 L=4. Direct continuation of the
-   strongest single-experiment signal of the round.
-6. **AdamW betas (0.9, 0.95)** (thorfinn #1773) — clean pivot from closed
-   dropout direction into orthogonal optimizer-recipe axis. Modern
-   transformer recipe (LLaMA/PaLM β₂=0.95 vs PyTorch default 0.999).
+   bracket-up from his merged #1548 L=4.
+6. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
+   pivot after closed AdamW betas direction. Per-channel learnable γ_l
+   gates each residual branch; +0.19% params; compounds with stoch-depth
+   (Touvron 2021 Table 3 evidence).
 
 Note: all wave-5 in-flight experiments (#1711, #1753, #1754, #1756) are
 measured against the **new 84.762 baseline**, not against the 90.294 they
@@ -120,12 +120,13 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | nezuko | #1754 | `lr-warmup-h19` | WIP | tbd |
 | tanjiro | #1756 | `stoch-depth-0.15` | WIP | tbd |
 
-## Round 2 wave 6 — newly assigned (2 PRs, more incoming as wave-5 closes)
+## Round 2 wave 6 — partial resolution (#1773 closed, #1772 + #1799 in flight)
 
-| Student | PR | Slug | Idea | Axis |
-|---------|----|----|--------------|------|
-| edward | #1772 | `fourier-coords-L6` | H21 | Encoding — bracket up from merged Fourier L=4 |
-| thorfinn | #1773 | `adamw-betas-0.95` | H22 | Optim — modern transformer betas recipe |
+| Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
+|---------|----|----|---------|---------------|
+| thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
+| edward | #1772 | `fourier-coords-L6` | WIP | tbd |
+| thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 
@@ -152,8 +153,9 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
 - **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 01:20 UTC)
+## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:05 UTC)
 
+- **#1773 adamw-betas-0.95 (thorfinn)** — **CLOSED** at +1.97% val, +1.61% test. Non-uniform regression confirms two falsified predictions (best-epoch unchanged, per-split non-uniform). Deeper finding: merged stack (grad-clip-25 + cosine T_max=15) already addresses the non-stationarity that motivated short-EMA β₂; the regime gap to LLaMA/PaLM (batch=10³-10⁶× larger, 10⁵-10⁶ steps) makes β₂=0.95 a worse fit. Optimizer-betas direction closed.
 - **#1548 fourier-coords-L4-rebased (edward)** — **MERGED** as new baseline **84.762** (val) / **74.659** (test). -6.13% val, -8.10% test vs #1637 baseline. Strongest single-experiment signal of the round; test gain exceeds val gain. Per-split pattern matches spectral-bias hypothesis exactly. 5th compound win on this branch.
 - **#1699 attn-mlp-dropout-0.05 (thorfinn)** — **CLOSED** at +2.27%. Three mechanisms: compute tax (+12% epoch wall-clock), stoch-depth was already at regularization optimum, slice-attention double-use of softmax weights disrupts unit-sum. Single-knob fine-grained dropout direction closed.
 - **#1713 grad-clip-10 (askeladd)** — **CLOSED** at +4.24%. Lower-bracket fixed-threshold confirmation. Completes the {1.0, 10, 25, 50} bracket — 25 is the asymmetric local optimum. Adaptive-clip (#1753) is the natural pivot.
@@ -218,6 +220,6 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 | frieren | #1608 | rebasing (EMA 0.999) |
 | nezuko | #1754 | WIP (H19 LR warmup epoch 1 + cosine T_max=14) |
 | tanjiro | #1756 | WIP (stoch-depth 0.15 — bracket above merged 0.10) |
-| thorfinn | #1773 | WIP (AdamW betas (0.9, 0.95) — modern transformer recipe) |
+| thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
 
 Zero idle students. Zero idle GPUs.

@@ -8,6 +8,44 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:00 — PR #1773 (thorfinn AdamW betas (0.9, 0.95) — H22) — **CLOSED**
+
+- Branch: `charliepai2g24h4-thorfinn/adamw-betas-0.95`
+- Hypothesis: change AdamW `betas` from PyTorch default `(0.9, 0.999)` to
+  `(0.9, 0.95)` for faster second-moment EMA adaptation. Mechanism: long
+  EMA horizon (1000 steps) lags the cosine-annealed gradient regime; 20-step
+  EMA tracks distribution shifts. Modern transformer recipe (LLaMA, PaLM).
+
+| Metric | This PR | Baseline (#1548) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | 86.427 | 84.762 | **+1.97%** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | 75.863 | 74.659 | **+1.61%** |
+| Best epoch | 15/15 | 15/15 | same |
+| Param count | 665,943 | 665,943 | unchanged |
+
+- **Per-split val MAE (non-uniform regression)**:
+  - val_single_in_dist     +0.92%
+  - val_geom_camber_rc     +1.97%
+  - val_geom_camber_cruise **+5.47%** (largest hit — low-noise-floor regime)
+  - val_re_rand            +0.50%
+- **Per-split test MAE**:
+  - test_single_in_dist     +0.71%
+  - test_geom_camber_rc     +0.48%
+  - test_geom_camber_cruise +3.41%
+  - test_re_rand            +2.58%
+- **Two falsified predictions confirm direction is closed**:
+  1. Best epoch did NOT shift earlier (faster basin-finding falsified)
+  2. Per-split direction NOT uniform (optimizer-as-global-mechanism framing falsified)
+- **Deepest mechanism finding**: the merged stack already addresses the
+  non-stationarity concerns that motivated H22. Grad-clip-25 truncates the
+  epoch-1 99.48 spike *before* AdamW sees it. Cosine T_max=15 anticipates
+  the LR regime change rather than asking AdamW to react. β₂=0.95 was
+  solving a problem that no longer existed.
+- **Regime gap**: LLaMA/PaLM use β₂=0.95 at batch=10³-10⁶ × ours, 10⁵-10⁶
+  steps. Our regime (batch=4, 5,625 steps) doesn't benefit from short-EMA.
+- Single-knob optimizer-betas direction closed on this dataset.
+- Follow-up assigned: PR #1799 (thorfinn LayerScale CaiT-style init=0.1).
+
 ## 2026-05-13 01:15 — PR #1548 (edward Fourier coords L=4 — rebased) — **MERGED (new baseline)**
 
 - Branch: `charliepai2g24h4-edward/fourier-coords-L4-rebased`
