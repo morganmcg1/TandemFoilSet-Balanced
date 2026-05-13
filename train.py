@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -31,6 +32,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -415,6 +417,7 @@ class Config:
     epochs: int = 50
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
+    ema_decay: float = 0.999      # EMA decay for AveragedModel; half-life ≈ ln(0.5)/ln(decay) steps
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -466,6 +469,16 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# EMA model — evaluated for val/test. Decay 0.999 → half-life ≈ 693 steps
+# (~4.6 half-lives over ~3200 steps in a 30-min/17-epoch run).
+ema_model = AveragedModel(
+    model,
+    device=device,
+    multi_avg_fn=get_ema_multi_avg_fn(cfg.ema_decay),
+)
+ema_half_life = math.log(0.5) / math.log(cfg.ema_decay) if cfg.ema_decay < 1.0 else float("inf")
+print(f"EMA: decay={cfg.ema_decay}  half-life={ema_half_life:.1f} steps")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -481,6 +494,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "ema_half_life_steps": ema_half_life,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -488,8 +502,11 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("live_val/*", step_metric="global_step")
+wandb.define_metric("ema_vs_live/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"live_{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -546,6 +563,7 @@ for epoch in range(MAX_EPOCHS):
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
+            ema_model.update_parameters(model)
             global_step += 1
             # Log the un-scaled loss for human readability
             wandb.log({"train/loss": loss.item() * cfg.grad_accum,
@@ -561,14 +579,25 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
+    # Primary: EMA model on val (drives best-checkpoint selection).
+    # Diagnostic: live model on val (track EMA-vs-live gap trajectory).
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+    model.eval()
+    live_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -584,6 +613,17 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    # Diagnostic: live model metrics under `live_<split>/*` and `live_val_<key>` keys.
+    for split_name, m in live_split_metrics.items():
+        for k, v in m.items():
+            log_metrics[f"live_{split_name}/{k}"] = v
+    for k, v in live_val_avg.items():
+        log_metrics[f"live_val_{k}"] = v
+    # EMA-vs-live gap (positive = EMA worse than live).
+    log_metrics["ema_vs_live/val_avg_mae_surf_p_gap"] = avg_surf_p - live_avg_surf_p
+    log_metrics["ema_vs_live/val_avg_mae_surf_p_gap_pct"] = (
+        100.0 * (avg_surf_p - live_avg_surf_p) / max(live_avg_surf_p, 1e-9)
+    )
     wandb.log(log_metrics)
 
     tag = ""
@@ -594,14 +634,17 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA state_dict — best checkpoint is the EMA model.
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    gap_pct = 100.0 * (avg_surf_p - live_avg_surf_p) / max(live_avg_surf_p, 1e-9)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"ema_val={avg_surf_p:.4f}  live_val={live_avg_surf_p:.4f}  "
+        f"gap={gap_pct:+.1f}%{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -618,20 +661,21 @@ if best_metrics:
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    # Load the saved EMA state back into ema_model for test evaluation.
+    ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_model.eval()
 
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (using EMA model)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
