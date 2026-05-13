@@ -2,6 +2,70 @@
 
 ---
 
+## 2026-05-14 03:00 UTC — Round 49
+
+Three review-ready PRs closed + 3 new experiments assigned.
+
+### PR #1775 fern: WD 1e-4 → 5e-5 — CLOSED (REGIME-FLIP LOSS)
+
+- **Branch:** charliepai2g48h5-fern/weight-decay-5e-5
+- **Hypothesis:** WD reduction 2× from 1e-4 to 5e-5, motivated by earlier WIN on β=0.5 Huber baseline (−4.43%).
+- **Metrics artifact:** `models/model-charliepai2g48h5-fern-wd-5e-5-epochs-70-20260513-165445/metrics.jsonl`
+
+| Metric | WD=5e-5 | Baseline #2307 (WD=1e-4) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.3290** | 42.3455 | **+9.41% (LOSS)** |
+| `test_avg/mae_surf_p` | **40.5578** | 38.5059 | **+5.33% (LOSS)** |
+| `val_single_in_dist` | 40.4506 | 35.4776 | +14.02% |
+| `val_geom_camber_rc` | 64.0555 | 60.8311 | +5.30% |
+| `val_geom_camber_cruise` | 31.8716 | 27.6517 | +15.26% |
+| `val_re_rand` | 48.9385 | 45.4214 | +7.75% |
+
+- **70/70 epochs terminal-best; cosine fully annealed to eta_min=0; clean convergence, not budget-starved.**
+- **DECISION: Close as LOSS — uniform regime-flip.**
+- **MECHANISM:** WD direction sign-flipped. On β=0.5 baseline (old stack), WD=5e-5 was WIN −4.43% — model was under-fit at 37 epochs under heavier config. On current L1+slice_num=24+n_hidden=96+n_layers=4+LayerScale stack with full 70-epoch cosine, model is now "well-trained, needs at least equal penalty." Reducing WD 2× leaves it under-regularized. All 4 splits regress 5-15% — uniform direction, not noise. **15th closed-axis observation: WD-direction regime-flip across stack changes.** On current advisor stack, sweep direction is UP (WD=2e-4) if revisited.
+
+---
+
+### PR #2457 edward: Per-group LR (embed=2×, γ=2×) — CLOSED (EMBED-DESTABILIZATION LOSS)
+
+- **Branch:** charliepai2g48h5-edward/per-group-lr
+- **Hypothesis:** Accelerate LayerScale γ warm-up and input embedding adaptation via 2× LR scaling.
+- **Metrics artifact:** `models/model-charliepai2g48h5-edward-per-group-lr-20260513-170054/metrics.jsonl`
+
+| Metric | Per-group LR | Baseline #2307 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **48.7460** | 42.3455 | **+15.1% (LOSS)** |
+| `test_avg/mae_surf_p` | **41.7706** | 38.5059 | **+8.5% (LOSS)** |
+| `val_single_in_dist` | 42.8615 | 35.4776 | +20.8% |
+| `val_geom_camber_rc` | 67.3762 | 60.8311 | +10.8% |
+| `val_geom_camber_cruise` | 32.7553 | 27.6517 | +18.5% |
+| `val_re_rand` | 51.9912 | 45.4214 | +14.5% |
+
+- **70/70 epochs terminal-best; trained γ (γ_attn≈0.021, γ_mlp≈0.115) same equilibrium as PR #2195 baseline — γ growth NOT the bottleneck.**
+- **DECISION: Close as LOSS — uniform destabilization.**
+- **MECHANISM:** embed=2× LR perturbs the upstream shared-token representation. All 4 blocks read the same preprocess/placeholder/slice_embed features every forward pass; doubling LR on those weights makes blocks re-fit a moving input distribution throughout all 70 epochs. Val_avg at ep5=164.5 vs typical baseline trajectory <100 by ep10-15 — convergence permanently bottlenecked. γ-LR acceleration also proved irrelevant: same trained equilibrium reached regardless. **16th closed-axis: per-parameter-group-LR with embed-acceleration.** Future: layer-wise LR DECAY downward (LLRD, early layers get LOWER LR) is the orthogonal and untested direction.
+
+---
+
+### PR #2411 nezuko: Aux camber head — CLOSED (1st STALE_WIP, never ran)
+
+- **Branch:** charliepai2g48h5-nezuko/aux-camber-head
+- **Only commit:** assignment commit at 2026-05-13T15:30:20Z; pod stalled ~2h without running.
+- **DECISION: Close stale. Hypothesis preserved and reassigned as #2495 retry-1.**
+
+---
+
+### New Assignments (Round-49)
+
+| PR | Student | Hypothesis | Notes |
+|---|---|---|---|
+| #2495 | nezuko | Auxiliary camber head λ=0.1 (retry-1 of #2411 stale) | 96→32→1 CamberHead on surface-pooled last-block hidden; first aux-objective probe to actually run; --epochs 70 |
+| #2496 | fern | Per-channel surface loss p_channel_weight=3.0 | ch_w=[1.0,1.0,3.0] surf only; vol uniform; surf_weight=10 unchanged; zero param change; --epochs 70 |
+| #2497 | edward | LLRD decay=0.7 (layer-wise LR decay) | preprocess @ lr×0.24 → block3+decoder @ lr×1.0; OPPOSITE of closed #2457; --epochs 70 |
+
+---
+
 ## 2026-05-14 01:45 UTC — Round 48
 
 One axis-closing LOSS reviewed + 1 new experiment assigned.
