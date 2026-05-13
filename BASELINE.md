@@ -37,6 +37,30 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 11:20 — PR #2175 (`charliepai2g24h4-tanjiro/swiglu-inner-dim-256`)
+
+SwiGLU inner_dim expanded from 176 (=round_up8(256×2/3), param-matched) to 256 (=full hidden_dim). Gives gate/up/down projections full representational capacity within each TransolverBlock. Wins on all 4 test splits and 3/4 val splits (val_geom_camber_rc +1.4, but test_geom_camber_rc still wins −0.27). Best epoch = 13 (last epoch trained — model was still improving at timeout, suggesting under-training; longer schedule likely widens gain further). Param cost +22.6% (677,591 → 831,191). Run at 30-min cap (13/50 epochs).
+
+- **`val_avg/mae_surf_p`** = **67.381** (best @ epoch 13; **−2.08%** vs #2105 baseline 68.812)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **57.800** (−2.71% vs #2105 baseline 59.410)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 73.341 (−4.00% vs #2105)
+  - `val_geom_camber_rc` = 80.673 (+1.74% vs #2105 — lone regression; test split wins)
+  - `val_geom_camber_cruise` = 48.675 (−6.40% vs #2105)
+  - `val_re_rand` = 66.834 (−1.09% vs #2105)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 64.685 (−3.65% vs #2105)
+  - `test_geom_camber_rc` = 69.035 (−0.39% vs #2105)
+  - `test_geom_camber_cruise` = 40.356 (−4.72% vs #2105)
+  - `test_re_rand` = 57.121 (−2.94% vs #2105)
+- **Mechanism**: expanding SwiGLU inner_dim from 176 to 256 removes the 2/3-ratio constraint and gives the gate/up/down paths full hidden_dim capacity. The per-epoch best trajectory (every epoch a new best) confirms the wider model is in the capacity-limited regime, not the overfitting regime. Consistent with Shazeer's original argument that 2/3 is budget-neutral, not capacity-optimal.
+- **Compound progress**: 13 merges, **100.957 → 67.381 = −33.3%** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→**#2175**)
+- **Param count**: 831,191 (+153,600 / +22.6% vs 677,591 in #2105).
+- **Metric artifacts**: `models/model-charliepai2g24h4-tanjiro-swiglu-inner-dim-256-20260513-102355/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-tanjiro --experiment_name charliepai2g24h4-tanjiro/swiglu-inner-dim-256`
+
+---
+
 ### 2026-05-13 11:15 — PR #2105 (`charliepai2g24h4-tanjiro/swiglu-activation`)
 
 SwiGLU gated MLP replacing GELU in all 5 TransolverBlocks. `inner_dim=176` (= round_up8(256×2/3)), bias-free gate and up projections, bias-free down projection. +8,320 params (+1.24%). Per-token gated feature routing dramatically improves all 4 splits, with largest gains on OOD-flavoured splits (re_rand −8.73% val / −13.62% test; camber_cruise −10.49% val / −14.43% test). **⚠ Measurement note:** this run was on the pre-#1754 advisor HEAD (cosine T_max=15, no LR warmup). The merged code includes both SwiGLU AND LR warmup (#1754). A re-baseline confirmation run is in-flight.
