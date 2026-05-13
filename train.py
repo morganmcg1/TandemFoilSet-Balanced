@@ -426,6 +426,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    adam_eps: float = 1e-8  # AdamW epsilon (denominator floor); default 1e-8
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -486,7 +487,9 @@ optimizer = torch.optim.AdamW(
         {"params": list(surf_head.parameters()), "lr": _head_lr},
     ],
     weight_decay=cfg.weight_decay,
+    eps=cfg.adam_eps,
 )
+print(f"[adamw] eps={cfg.adam_eps}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -614,6 +617,37 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # --- Optimizer-state diagnostics: sqrt(exp_avg_sq) vs eps ---
+    # When sqrt(v) << eps, eps becomes the dominant denominator term and caps
+    # update magnitude. We log per-param-group mean/max of sqrt(v) and the
+    # fraction of elements where sqrt(v) < eps, so we can directly observe how
+    # often the eps floor is binding.
+    opt_diag: dict[str, float] = {}
+    with torch.no_grad():
+        for group_idx, group in enumerate(optimizer.param_groups):
+            sqrt_v_sums = 0.0
+            sqrt_v_count = 0
+            sqrt_v_max = 0.0
+            below_eps = 0
+            total = 0
+            for p in group["params"]:
+                st = optimizer.state.get(p, {})
+                v = st.get("exp_avg_sq")
+                if v is None:
+                    continue
+                sqrt_v = v.sqrt()
+                sqrt_v_sums += sqrt_v.sum().item()
+                sqrt_v_count += sqrt_v.numel()
+                sqrt_v_max = max(sqrt_v_max, sqrt_v.max().item())
+                below_eps += (sqrt_v < cfg.adam_eps).sum().item()
+                total += sqrt_v.numel()
+            if sqrt_v_count > 0:
+                tag = "enc" if group_idx == 0 else "surf"
+                opt_diag[f"opt/{tag}_sqrt_v_mean"] = sqrt_v_sums / sqrt_v_count
+                opt_diag[f"opt/{tag}_sqrt_v_max"] = sqrt_v_max
+                opt_diag[f"opt/{tag}_frac_below_eps"] = below_eps / max(total, 1)
+    opt_diag["opt/adam_eps"] = cfg.adam_eps
+
     # --- Validate ---
     model.eval()
     surf_head.eval()
@@ -634,6 +668,7 @@ for epoch in range(MAX_EPOCHS):
         "lr_surf_head": scheduler.get_last_lr()[-1],
         "epoch_time_s": dt,
         "global_step": global_step,
+        **opt_diag,
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
