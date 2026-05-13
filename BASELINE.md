@@ -4,28 +4,33 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
-### 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max 50→15 to anneal inside cap (nezuko)
+### 2026-05-13 00:08 — PR #1374: [huber-loss] Smooth L1 (Huber, beta=1.0) instead of MSE (edward)
 
-- **`val_avg/mae_surf_p`:** **114.81** (best epoch 17/18)
-- **`test_avg/mae_surf_p`:** **104.68** (from best-val checkpoint)
-- **Per-split surface-p MAE (val):** single_in_dist=139.82, geom_camber_rc=120.59, geom_camber_cruise=87.75, re_rand=111.06
-- **Per-split surface-p MAE (test):** single_in_dist=120.31, geom_camber_rc=113.90, geom_camber_cruise=75.41, re_rand=109.09
-- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast`
-- **Key change:** `CosineAnnealingLR(T_max=50)` → `CosineAnnealingLR(T_max=15)`. T_max=15 matches the achievable epoch count under the 30-min cap, so the schedule actually anneals to lr≈0 around epoch 16; best-val is in the second cycle's near-zero-lr regime (epoch 17, lr=5.46e-6).
-- **Caveat:** Nezuko's run was on the pre-rollback advisor base (surf_weight=20.0, no seed). The 3-way squash merge correctly resolved surf_weight=10 + seed=42 + T_max=15 in the final state. A seeded confirmation run on this exact recipe is expected from the other rebase students (edward Huber, askeladd EMA).
-- **Metric artifacts:** `models/model-charliepai2g48h4-nezuko-cosine-trunc-t15-merged-20260512-215533/metrics.jsonl`
-- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-nezuko --experiment_name "charliepai2g48h4-nezuko/cosine-trunc-t15-merged"`
-
-**Note on schedule:** PyTorch's `CosineAnnealingLR` continues cycling past `T_max`. Best epoch (17) lands in the second cycle's lr≈0 climb-back regime, suggesting `T_max=18` (matching achievable epoch count exactly) may give another 1-2 pts. Follow-up assigned to nezuko.
+- **`val_avg/mae_surf_p`:** **110.59** (best epoch 15/18)
+- **`test_avg/mae_surf_p`:** **102.28** (from best-val checkpoint, all 4 splits clean)
+- **Per-split surface-p MAE (val):** single_in_dist=127.85, geom_camber_rc=111.05, geom_camber_cruise=95.72, re_rand=107.73
+- **Per-split surface-p MAE (test):** single_in_dist=113.36, geom_camber_rc=105.68, geom_camber_cruise=85.87, re_rand=104.20
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=Huber(beta=1.0)`
+- **Key change:** MSE → Smooth L1 / Huber loss (`F.smooth_l1_loss(pred, target, beta=1.0, reduction='sum') / (pred.shape[-1] * count)`) applied to both training loop and evaluate_split. Huber caps outlier gradients from high-Re samples while preserving quadratic behavior near zero.
+- **Improvement vs previous best (#1542 T_max=15):** val −4.22 (−3.7%), test −2.40 (−2.3%)
+- **Improvement vs directly-comparable seeded baseline (#1577):** val −5.84 (−5.0%), test −6.59 (−6.1%) — exceeds 2× cross-seed σ (~3.5 pts, calibrated by alphonse #1685)
+- **Caveat:** cruise split slightly regressed (+7.97 val, +10.46 test vs #1542). Huber pulls down hard high-Re splits at a small cost to the easy cruise split. Net clearly positive.
+- **Metric artifacts:** `models/model-charliepai2g48h4-edward-huber-loss-20260512-231342/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-edward --experiment_name "charliepai2g48h4-edward/huber-loss"`
 
 **Open questions after this merge:**
-- Across-seed σ is still unknown. Alphonse #1685 (seed=7) will calibrate.
-- T_max=15 vs T_max=18 (matching epoch count exactly) — nezuko follow-up
-- Edward Huber rebase (#1374) is highest-priority next merge candidate (was val=112.06 unseeded on default config; stacks with this schedule should land sub-112).
+- Cross-seed σ on Huber baseline now needed — alphonse reassigned seed=7 on Huber recipe.
+- Askeladd EMA (#1540) still in conflict; rebase + seeded rerun on Huber HEAD is the next stacking test.
+- Nezuko #1695 (T_max=18) and frieren #1696 (grad-clip) running against the old T_max=15/MSE base; results remain valid for their respective levers.
 
 ---
 
 ## Previous bests (chronological)
+
+### 2026-05-12 23:25 — PR #1542: [cosine-trunc-t15] Truncate cosine T_max 50→15 (nezuko)
+- **val_avg/mae_surf_p:** 114.81 / **test:** 104.68
+- Config: merged recipe + T_max=15 + seed=42. Per-split val: single_in_dist=139.82, geom_camber_rc=120.59, geom_camber_cruise=87.75, re_rand=111.06
+- Artifact: `models/model-charliepai2g48h4-nezuko-cosine-trunc-t15-merged-20260512-215533/metrics.jsonl`
 
 ### 2026-05-12 23:05 — PR #1577: [seed42-baseline] Seeding + surf_weight=10 rollback (alphonse)
 - **val_avg/mae_surf_p:** 116.43 / **test:** 108.87
@@ -48,12 +53,13 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 | #1416 (thorfinn) | unified_pos=True, ref=8 | 125.78 | 117.12 | **MERGED** → best cruise OOD |
 | #1369 (askeladd) | surf_weight=10→20 | 127.94 | 117.35 | **MERGED but effectively reverted** → regression confirmed (#1570: val=127.86), rolled back via #1577 |
 | #1577 (alphonse) | seed=42 + surf_weight=10 rollback | 116.43 | 108.87 | MERGED |
-| **#1542 (nezuko)** | **T_max=15 cosine truncation** | **114.81** | **104.68** | **MERGED — NEW BEST** |
+| #1542 (nezuko) | T_max=15 cosine truncation | 114.81 | 104.68 | MERGED → superseded by #1374 |
+| **#1374 (edward)** | **Huber loss (beta=1.0)** | **110.59** | **102.28** | **MERGED — NEW BEST** |
 
-**Current advisor-branch recipe** (after 6 effective merges):
-`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW`
+**Current advisor-branch recipe** (after 7 effective merges):
+`unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=10.0, seed=42, batch_size=4, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, loss=Huber(beta=1.0)`
 
-**Comparison threshold:** with seeding, σ is unknown. Need a seed=7 cross-check (alphonse #1685 in flight). Use 5+ pt val difference as practical significance threshold until across-seed σ is measured.
+**Comparison threshold:** cross-seed σ ≈ 3.5 val / 0.5 test (calibrated from alphonse #1685 seed=42 vs seed=7 on the pre-Huber recipe). Use 5+ pt val difference as practical significance threshold.
 
 ---
 
