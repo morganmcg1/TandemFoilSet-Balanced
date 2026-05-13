@@ -468,6 +468,7 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "warmup_epochs": cfg.warmup_epochs,
     }
 
     description = (
@@ -600,6 +601,7 @@ class Config:
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
+    warmup_epochs: int = 0  # linear warmup epochs from 0 → lr; 0 = no warmup (current behavior)
 
 
 cfg = sp.parse(Config)
@@ -709,12 +711,28 @@ else:
     log_sigmas = None
     optimizer = _build_optimizer(cfg.optimizer, model.parameters(), lr=cfg.lr, default_wd=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer.upper()} (lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e})")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.warmup_epochs > 0:
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1e-6, end_factor=1.0, total_iters=cfg.warmup_epochs
+    )
+    cosine_t_max = MAX_EPOCHS - cfg.warmup_epochs
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_t_max, eta_min=cfg.lr * 0.05
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[cfg.warmup_epochs],
+    )
+    print(f"Schedule: linear warmup {cfg.warmup_epochs} epochs → cosine T_max={cosine_t_max}")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"Schedule: cosine T_max={MAX_EPOCHS} (no warmup)")
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
 swa_start_frac = 0.75
-swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
+swa_start_epoch = max(int(swa_start_frac * MAX_EPOCHS), cfg.warmup_epochs + 1)  # 0-indexed loop var; ensure SWA window covers eta_min region, not warmup
 swa_model = AveragedModel(model)
 swa_lr = cfg.lr * 0.2
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
@@ -739,6 +757,7 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "warmup_epochs": cfg.warmup_epochs,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -1126,6 +1145,7 @@ if best_metrics:
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "warmup_epochs": cfg.warmup_epochs,
     }
     description = (
         f"Transolver SWA checkpoint — swa val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f} "
