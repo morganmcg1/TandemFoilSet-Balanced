@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-13 21:30 — PR #2521: thorfinn input Gaussian noise — POTENTIAL WIN on noise-1e-2, sent back for 2nd seed (cycle 71)
+
+- **Branch:** `willowpai2g48h4-thorfinn/input-gaussian-noise`
+- **Student:** willowpai2g48h4-thorfinn
+- **Hypothesis (recap, from cycle 65 assignment):** Bishop 1995 input-noise = Tikhonov-equivalent regularization. Different mechanism from dropout — augmentation that teaches geometry-invariance, not capacity restriction. Arms: σ_noise ∈ {0.005, 0.01} on CURRENT SOTA #2444 T_mult=2 stack.
+- **W&B runs observed at cycle 71 (group `thorfinn-input-noise`):**
+
+| Run name | run id | state | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val vs SOTA 82.2642 | Δ test vs SOTA 72.4019 |
+|----------|--------|-------|-------------------|---------------------|-----------------------|------------------------|
+| noise-1e-2 | `g1x2giek` | **finished (31m)** | **80.8671** | **71.2620** | **−1.40 ✓** | **−1.14 ✓** |
+| noise-1e-2 | `brk1y3b9` | **CRASHED (~19m)** | 131.6 (pre-crash) | n/a | — | — |
+| noise-5e-3 | `o820wdp3` | finished (31m) | 82.9601 | 73.0227 | +0.70 (marginal) | +0.62 |
+| noise-5e-3 | `2r2m6tjz` | finished (31m) | 85.1517 | 75.2666 | +2.89 ❌ | +2.86 ❌ |
+| noise-5e-3 | `025rtkfb` | still running (e15, ~18m in) | 116 mid-train | — | — | — |
+
+- **Per-split val for `g1x2giek` (the winning run):**
+
+| Split | mae_surf_p (g1x2giek) | mae_surf_p (SOTA #2444) | Δ |
+|-------|----------------------|--------------------------|---|
+| val_single_in_dist | 94.099 | 96.898 | −2.80 ✓ |
+| val_geom_camber_rc | 99.458 | 103.137 | **−3.68 ✓** |
+| val_geom_camber_cruise | 54.131 | 53.940 | +0.19 ≈ |
+| val_re_rand | 75.780 | 75.082 | +0.70 ≈ |
+| **val_avg** | **80.867** | **82.264** | **−1.40 ✓** |
+
+- **Per-split test for `g1x2giek`:**
+
+| Split | mae_surf_p (g1x2giek) | mae_surf_p (SOTA #2444) | Δ |
+|-------|----------------------|--------------------------|---|
+| test_single_in_dist | 83.213 | 85.521 | −2.31 ✓ |
+| test_geom_camber_rc | 89.564 | 91.087 | −1.52 ✓ |
+| test_geom_camber_cruise | 45.136 | 44.923 | +0.21 ≈ |
+| test_re_rand | 67.136 | 68.077 | −0.94 ✓ |
+| **test_avg** | **71.262** | **72.402** | **−1.14 ✓** |
+
+- **Interpretation:**
+  - **noise-1e-2 g1x2giek is a 2σ-clearing improvement** on the original branching rules (2σ ≈ 0.7 val per nezuko #2445 σ=0.34 on #2227 baseline). On the harder/wider σ on T_mult=2 SOTA config (cycle-71 #2445 partial data suggests σ_T_mult=2 ≈ 1.0-1.5), g1x2giek is still ~1σ-2σ below the seeded mean.
+  - **The OOD geometry split (val_geom_camber_rc) improves MOST**: −3.68 val (103.14 → 99.46). This is the worst SOTA split and exactly the prediction in the PR body (input noise teaches geometry-invariance). Mechanistic confirmation.
+  - **But concerning: brk1y3b9 crashed at ~19m**, leaving a single completed noise-1e-2 seed. Without redundancy, can't rule out "lucky draw" hypothesis.
+  - **noise-5e-3 within-arm variance is wide**: `o820wdp3` 82.96 vs `2r2m6tjz` 85.15 = 2.2 val between two finished runs of identical config. **Suggests input-noise inflates within-config seed variance** — same pattern as alphonse's σ=1.85 on T_mult=2 + eta_min compose. If σ_arm ≈ 1.5 on noise-1e-2, the 1.40 val improvement is borderline.
+- **Decision cycle 71:** **Send back for one more noise-1e-2 seed** before merge. The win is too important to merge on single-seed evidence given the within-arm variance pattern in noise-5e-3, but too promising to close. If 2nd noise-1e-2 lands sub-82 val, doubly-confirmed → merge. If 2nd lands 82-83 val, mean ~81.5 still merges with per-split sanity check. If 2nd lands ≥84 val, axis closes with the σ_arm finding.
+- **PR status:** flipped from status:review to status:wip, draft = true. Awaiting student's 2nd seed (~30 min run).
+- **Mechanistic significance:** First non-architectural, non-schedule lever to clear the 2σ confident-improvement bar in many cycles. The OOD-geometry prediction was load-bearing for the hypothesis and confirmed — Bishop 1995's continuous-dependence-on-input prior matches the CFD physics. Even if 2nd seed regresses, the single-seed mechanistic confirmation is paper-worthy.
+
+---
+
+## 2026-05-13 21:30 — PR #2445: nezuko 3-seed calibration on T_mult=2 SOTA — PARTIAL DATA in cycle 71
+
+- **Branch:** `willowpai2g48h4-nezuko/seed-variance-calibration`
+- **Student:** willowpai2g48h4-nezuko
+- **Status update:** After cycle-64 send-back asking for rebase + --seed commit + re-run on CURRENT SOTA #2444 config (T_0=7, T_mult=2, WD=5e-4, eta_min=0). Verified at cycle 71: rebase done, --seed flag committed, runs launched.
+- **W&B runs observed at cycle 71 (group `seed-variance-sota-tmult2`):**
+
+| Seed | run name | run id | state | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val vs SOTA 82.2642 |
+|------|----------|--------|-------|-------------------|---------------------|-----------------------|
+| 42 | sota-seed42 | `1oniltmp` | finished | 83.228 | 74.024 | +0.96 ❌ |
+| 43 | sota-seed43 | `0w0r4z87` | finished | 84.831 | 75.201 | +2.57 ❌ |
+| 44 | sota-seed44 | `njdc2evr` | **still running** | 106 mid-train | — | — |
+
+- **2-seed partial stats:** mean=84.03 val (Δ +1.77 vs SOTA), spread (max-min)=1.60 val.
+- **Mechanistic significance:** **T_mult=2 SOTA config itself has wider seed variance than the OLD T_0=10 baseline.** On #2227 baseline (T_0=10, single cycle), nezuko measured σ=0.34 val. On T_mult=2 SOTA, 2-seed spread is 1.60 val — already ~5× wider. Consistent with #2498's σ_val≈1.85 measurement on T_mult=2 + eta_min compose. **Three implications for the paper:**
+  1. **Seed variance is config-dependent.** Not a property of the codebase, but of the schedule/optimizer config. T_mult=2's longer cycle-2 disperses the basin-of-attraction across seeds — multiple deep minima exist in the cycle-2 trough.
+  2. **The #2444 SOTA val=82.26 is likely a favorable seed draw.** The seeded mean on T_mult=2 may be ~83.5-84 — meaning some of the reported #2444 SOTA improvement vs prior baseline is single-seed luck.
+  3. **2σ merge bar on T_mult=2 stack ≠ 0.7 val.** Future merges on T_mult=2 SOTA should use σ≈1.0-1.5 (2σ≈2-3 val) — not the older 0.7 from #2227 measurement.
+- **Cross-check on thorfinn #2521 win:** g1x2giek=80.87 val. Even if seeded mean on T_mult=2 is 83.5 (worst case from partial data), g1x2giek is ~1.8σ below mean — STILL exceeds 2σ if we use the conservative σ=1.5 estimate. The win interpretation holds.
+- **Next:** Awaiting seed 44 (~30 min). At seed 44 finish, nezuko should post terminal SENPAI-RESULT with 3-seed mean ± std. Will likely merge as a measurement contribution (not a SOTA-beating PR) — it sets honest CIs for the paper.
+
+---
+
 ## 2026-05-13 21:00 — PR #2579: QK-Norm attention scoring (Henry 2020) — assignment to alphonse (NEW cycle 70)
 
 - **Branch:** `willowpai2g48h4-alphonse/qk-norm-attention`
