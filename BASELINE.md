@@ -445,3 +445,34 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
   (batch_size=2 must be specified; all other 14-compound stack settings baked into advisor branch train.py)
 - **All subsequent experiments should target val < 46.6788 and test < 39.7696** as the merge threshold.
 - **CRITICAL THROUGHPUT NOTE:** batch_size=2 doubles opt-steps at same wall-clock per epoch (~53s). Compound retests MUST run with `--batch_size 2` to land on the new baseline. Any run at bs=4 measures on a different stack and cannot beat this baseline.
+
+## 2026-05-13 19:35 — PR #2219: alphonse n_hidden=160 (width-narrowing compound retest on 15-compound stack)
+
+**New best — 16th compound improvement (width-narrowing × opt-step density interaction)**
+
+- **val_avg/mae_surf_p:** **45.9186** (vs #2247 baseline 46.6788; **−1.63%**, −0.76 absolute)
+- **test_avg/mae_surf_p:** **39.0381** (vs #2247 baseline 39.7696; **−1.84%**, −0.73 absolute)
+
+**Per-split test (EMA, best-val checkpoint epoch 38 — 3 splits improve, camber_cruise wash):**
+
+| Split | mae_surf_p | vs #2247 | Δ% |
+|-------|----------:|----------:|---:|
+| `test_single_in_dist` | 42.2300 | −1.81 | −4.12% |
+| `test_geom_camber_rc` | 53.9414 | +0.82 | +1.57% |
+| `test_geom_camber_cruise` | 23.4382 | −0.71 | −2.93% |
+| `test_re_rand` | 36.5427 | −1.23 | −3.26% |
+| **test_avg** | **39.0381** | **−0.73** | **−1.84%** |
+
+- **Best epoch:** 38/50 (vs baseline 34/50 — 4 extra epochs from narrower net)
+- **Opt-steps:** 28,500 (750/epoch × 38 ep) — width-narrowing provides +11.8% more optimizer steps vs baseline
+- **Throughput:** 47.4 s/epoch (vs 53s at n=192 — width-narrowing saves ~5.6s/epoch at bs=2)
+- **Clip rate:** 98.06% (slight increase from 94.70% at bs=2 with n=192 — narrower net slightly noisier per-step)
+- **Grad norm mean:** 23.63 (vs 18.04 at n=160/bs=4 — bs=2 per-step noise raises this 31%)
+- **Param count:** 650,767 (0.65M vs 0.93M at n=192 — −30%)
+- **EMA-live gap:** −1.55 test (healthy late-phase noise rejection)
+- **Mechanism:** n_hidden=160 → faster epochs (−10.8% per-epoch time) → 4 extra epochs (38 vs 34) → cosine LR at termination drops from ~26% to 14% of base → additional late-phase low-LR refinement. The win is specifically a bs=2 × n_hidden=160 interaction — at bs=4 (14-compound stack), n=160 was a wash/slight loss. At bs=2 the narrower net's tighter direction-variance partially counter-balances the higher per-step gradient noise from halved batch size.
+- **Informational 14-stack result:** n=160/bs=4/β=0.25 was val 51.5954/test 44.4327 — slight regression vs 14-stack baseline (val 50.38). The bs=2 interaction is essential.
+- **W&B run:** `741bdhcl` (canonical); informational 14-stack: `560twhbv`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 160 --n_layers 3 --batch_size 2 --epochs 50`
+  (n_hidden=160 added; batch_size=2 must be explicit; all other 15-compound stack settings baked into advisor branch train.py)
+- **All subsequent experiments should target val < 45.9186 and test < 39.0381** as the merge threshold.
