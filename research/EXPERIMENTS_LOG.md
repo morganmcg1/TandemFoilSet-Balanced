@@ -501,3 +501,33 @@ Capacity axis exhausted. Frieren's suggestion #3 (pivot to data/loss/training ax
 NaN-skip pattern (`y_finite` + `nan_to_num(y)`) pioneered in this PR is now canonical via #1414. Tanjiro is being reassigned to a fresh direction.
 
 ---
+
+## 2026-05-12 23:52 — PR #1684: T_max alignment --epochs 14 (frieren)
+
+- **Branch:** `charliepai2g48h2-frieren/tmax-aligned-14`
+- **Hypothesis:** T_max=20 with only ~14 epochs fitting in the 30-min cap leaves LR at ~37% of peak at termination. Aligning T_max to feasible epoch count (--epochs 14) lets cosine fully anneal to LR≈0 — a "free" improvement with no code changes.
+- **Status:** MERGED ✅ — new baseline 84.562
+
+### Results
+
+| Split | Baseline (95.336) | T_max=14 | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 118.539 | 103.231 | −12.9% |
+| val_geom_camber_rc | 105.115 | 95.256 | −9.4% |
+| val_geom_camber_cruise | 71.196 | 60.589 | −14.9% |
+| val_re_rand | 86.495 | 79.170 | −8.5% |
+| **val_avg/mae_surf_p** | **95.336** | **84.562** | **−11.3%** |
+| **test_avg/mae_surf_p** | **85.648** | **74.947** | **−12.5%** |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-frieren-tmax-aligned-14-20260512-230927/metrics.jsonl`
+
+### Commentary
+
+**4× the predicted improvement (predicted −1–3%, actual −11.3%).** All 4 val splits improved with similar magnitude (8.5–14.9%), confirming no split-specific artifact — pure schedule alignment gain. 14/14 epochs completed cleanly (best = epoch 14, still descending). Prior baseline was using T_max=20 with cosine ending at ~37% of peak LR at cutoff; aligning to T_max=14 captures the full annealing benefit.
+
+### Critical finding for all subsequent experiments
+
+**Use `--epochs 14` from now on.** T_max=14 is the new schedule canon. All experiments assigned before this merge were using `--epochs 20` (schedule-misaligned). If those land close to 84.562 or below, they beat baseline; if they land 5–10% above, it may be a schedule alignment artifact rather than a genuine regression — they should be re-run with `--epochs 14` for confirmation.
+
+---
