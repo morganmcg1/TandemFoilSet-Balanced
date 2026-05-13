@@ -85,14 +85,14 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64, temp_init=0.5):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * temp_init)
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -140,13 +140,13 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4):
+                 layerscale_init=1e-4, temp_init=0.5):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
-            dropout=dropout, slice_num=slice_num,
+            dropout=dropout, slice_num=slice_num, temp_init=temp_init,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
@@ -173,7 +173,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 temp_init=0.5):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -194,6 +195,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                temp_init=temp_init,
             )
             for i in range(n_layers)
         ])
@@ -376,6 +378,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    temp_init: float = 0.25
 
 
 cfg = sp.parse(Config)
@@ -444,6 +447,7 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=2,
+    temp_init=cfg.temp_init,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -457,6 +461,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"PhysicsAttention temperature init: tau={cfg.temp_init} (sharper routing; was 0.5; learnable per-head, n_head={model_config['n_head']}, all {model_config['n_layers']} blocks)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -629,6 +634,38 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # PhysicsAttention temperature diagnostic: report trained per-head tau per block
+    _temp_log = {
+        "event": "physics_attn_temperatures",
+        "epoch": int(best_metrics["epoch"]),
+        "temp_init": cfg.temp_init,
+        "blocks": [],
+    }
+    _all_temps = []
+    print(f"\nPhysicsAttention trained tau (init={cfg.temp_init}, best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        _t = _blk.attn.temperature.detach().float()  # [1, heads, 1, 1]
+        _t_flat = _t.flatten().tolist()
+        _t_mean = _t.mean().item()
+        _t_std = _t.std().item() if _t.numel() > 1 else 0.0
+        _all_temps.extend(_t_flat)
+        print(f"  block[{_i}]: tau heads={_t_flat} mean={_t_mean:.4f} std={_t_std:.4f}")
+        _temp_log["blocks"].append({
+            "block_idx": _i,
+            "head_taus": _t_flat,
+            "mean": _t_mean,
+            "std": _t_std,
+        })
+    if _all_temps:
+        _t_all = torch.tensor(_all_temps)
+        _temp_log["overall_mean"] = _t_all.mean().item()
+        _temp_log["overall_std"] = _t_all.std().item() if _t_all.numel() > 1 else 0.0
+        _temp_log["overall_min"] = _t_all.min().item()
+        _temp_log["overall_max"] = _t_all.max().item()
+        print(f"  ALL: mean={_temp_log['overall_mean']:.4f} std={_temp_log['overall_std']:.4f} "
+              f"min={_temp_log['overall_min']:.4f} max={_temp_log['overall_max']:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, _temp_log)
 
     test_metrics = None
     test_avg = None
