@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 00:10 — PR #1471: frieren — p_weight=2.0 + clip_grad_norm=1.0 (MERGED)
+
+**New best val and test.**
+
+- **val_avg/mae_surf_p:** 110.2732 (was 116.30) — **-5.19%**
+- **test_avg/mae_surf_p:** **99.4108** (was 104.96) — **-5.29%**
+- **W&B run:** `krsv4c21`
+- **Epochs:** 19 in 30 min (best at epoch 18)
+
+Per-split test `mae_surf_p`:
+
+| Split | test | vs prior baseline | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 116.69 | 115.83 | +0.74% (within noise) |
+| `geom_camber_rc` | 110.01 | 117.06 | **-6.02%** |
+| `geom_camber_cruise` | **72.77** | 80.35 | **-9.43%** (1/200 samples skipped) |
+| `re_rand` | 98.17 | 106.58 | **-7.89%** |
+
+Changes vs prior baseline (#1480):
+- `p_weight: float = 2.0` — per-channel pressure upweight in squared-error map (before surf/vol mask sum)
+- `clip_grad_norm_(model.parameters(), max_norm=1.0)` — after `loss.backward()`, before `optimizer.step()`
+
+Note: grad clip is binding on nearly every step (mean norm 114, max 1203). The Transolver training loop runs in a high-gradient-magnitude regime; clip acts as a step-size cap.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/p-weight-2-clip" --wandb_group "willow-r2-p-weight"
+```
+(p_weight=2.0 and clip_grad_norm=1.0 are now defaults in `Config` and train loop; no extra flags needed)
+
+---
+
 ## 2026-05-12 22:15 — PR #1480: thorfinn — bf16 + grad_accum=2 (MERGED)
 
 **New best val and first finite test_avg.**
@@ -39,7 +71,7 @@ cd target/ && python train.py --agent <name> --wandb_name "<name>/bf16-accum2" -
 
 ## Active baseline (config to beat)
 
-Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — now includes bf16 autocast and grad_accum=2 from PR #1480:
+Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — includes bf16 autocast (PR #1480), grad_accum=2 (PR #1480), p_weight=2.0 + clip_grad_norm=1.0 (PR #1471):
 
 | Hyperparam | Value |
 |---|---|
@@ -47,6 +79,8 @@ Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — no
 | `weight_decay` | 1e-4 |
 | `batch_size` | 4 (effective=8 with grad_accum=2) |
 | `surf_weight` | 10.0 |
+| `p_weight` | 2.0 (per-channel pressure upweight in loss) |
+| `grad_clip` | `clip_grad_norm_(model.parameters(), max_norm=1.0)` |
 | `epochs` (ceiling) | 50 |
 | Wall clock cap | `SENPAI_TIMEOUT_MINUTES=30` |
 | `amp` | `True` (bf16 autocast on forward+loss) |
@@ -58,7 +92,7 @@ Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — no
 | `mlp_ratio` | 2 |
 | Schedule | `CosineAnnealingLR(T_max=epochs)` |
 | Optimizer | AdamW |
-| Loss | MSE on normalized targets, `vol_loss + 10.0 * surf_loss` |
+| Loss | `p_weight`-weighted per-channel sq_err, `vol_loss + 10.0 * surf_loss` |
 
 Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/baseline"`.
 
@@ -66,25 +100,21 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-**Best val (merged):** `val_avg/mae_surf_p` = **116.30** (PR #1480, thorfinn, run `5wvm7na2`)
-**Best test (merged):** `test_avg/mae_surf_p` = **104.96** (same run — first finite test_avg)
+**Best val (merged):** `val_avg/mae_surf_p` = **110.27** (PR #1471, frieren, run `krsv4c21`)
+**Best test (merged):** `test_avg/mae_surf_p` = **99.41** (same run)
 
-Stock fp32 baseline runs (pre-merge, for noise floor reference):
+Prior merged baselines (for reference):
 
-| W&B run | val_avg/mae_surf_p | epochs | notes |
+| PR | What landed | val_avg | test_avg |
 |---|---|---|---|
-| `z2ls7ol1` (alphonse) | 119.64 | ~14 | from cycle-2 W&B survey |
-| `hqj9bt84` (alphonse) | 131.79 | 14 | canonical fp32 baseline |
-| `89653mip` (alphonse) | 132.73 | 12 | fp32 backup |
-| `ztb0ri42` (alphonse) | 140.01 | 13 | per-split test logged; workaround=126.20 |
-
-fp32 baseline noise band: 119.64–140.01 (~17%). All future comparisons are against the new best: **116.30 val / 104.96 test**.
+| #1471 (frieren) | p_weight=2.0 + clip_grad_norm=1.0 | **110.27** | **99.41** |
+| #1480 (thorfinn) | bf16 autocast + grad_accum=2 + cruise-NaN fix | 116.30 | 104.96 |
 
 ## Notes for students
 
-- **Baseline as of PR #1480:** `val_avg/mae_surf_p = 116.30`, `test_avg/mae_surf_p = 104.96`.
-- **cruise-NaN workaround is now landed.** All runs on this branch produce finite `test_avg` — no per-PR code needed.
-- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat 116.30 to be a winner.
-- The noise band on fp32 baseline was ~17%. The new bf16+accum baseline may have a similar noise floor — single-run wins close to 116.30 should be confirmed with a second seed.
+- **Baseline as of PR #1471:** `val_avg/mae_surf_p = 110.27`, `test_avg/mae_surf_p = 99.41`.
+- **cruise-NaN workaround is landed.** All runs produce finite `test_avg` — no per-PR code needed.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **110.27** to be a winner.
+- Grad clip at max_norm=1.0 is now in the training loop default (binding on nearly every step — the model runs in a high-gradient-magnitude regime).
 - Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
 - Per-split metrics matter — flag splits where your change helps or hurts disproportionately.
