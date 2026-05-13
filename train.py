@@ -166,7 +166,7 @@ class PhysicsAttention(nn.Module):
         self.last_attn_entropy_mean: float | None = None
         self.last_attn_entropy_per_head_min: float | None = None
 
-    def forward(self, x):
+    def forward(self, x, mixup_spec=None):
         B, N, _ = x.shape
 
         fx_mid = (
@@ -210,6 +210,17 @@ class PhysicsAttention(nn.Module):
                     ent.mean(dim=(0, 2)).min().item()
                 )
 
+        # H69: latent-space mixup at slice tokens. Applied only when
+        # `mixup_spec` is provided (training, mixup-enabled batch, this layer
+        # selected). Mixes `out_slice` of shape [B, H, G=64, dim_head] across
+        # the batch dimension via `lam * out_slice + (1-lam) * out_slice[perm]`.
+        # Back-projection uses each sample's own slice_weights — analogous to
+        # set-transformer cross-attention where the query (geometry) and
+        # key/value (content) come from different sources.
+        if mixup_spec is not None:
+            lam, perm = mixup_spec
+            out_slice = lam * out_slice + (1.0 - lam) * out_slice[perm]
+
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
         return self.to_out(out_x)
@@ -239,13 +250,16 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        if self.training and self.stoch_depth_prob > 0.0:
+    def forward(self, fx, mixup_spec=None):
+        # H69: when mixup_spec is provided, force-execute the attention path
+        # so the slice-token mixup actually happens (skipping via stoch depth
+        # would desync mixed targets from unmixed predictions).
+        if self.training and self.stoch_depth_prob > 0.0 and mixup_spec is None:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
                     return self.mlp2(self.ln_3(fx))
                 return fx
-        fx = self.layer_scale_attn * self.attn(self.ln_1(fx)) + fx
+        fx = self.layer_scale_attn * self.attn(self.ln_1(fx), mixup_spec=mixup_spec) + fx
         fx = self.layer_scale_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
@@ -294,11 +308,15 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward(self, data, **kwargs):
+    def forward(self, data, mixup_spec=None, mixup_layer_idx=None, **kwargs):
+        # H69: optional latent mixup at slice tokens of block `mixup_layer_idx`.
+        # When mixup_spec is None or mixup_layer_idx is None, mixup is disabled
+        # for this forward (e.g., during validation/test).
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            spec = mixup_spec if (mixup_spec is not None and i == mixup_layer_idx) else None
+            fx = block(fx, mixup_spec=spec)
         return {"preds": fx}
 
 
@@ -482,6 +500,15 @@ def measure_attention_entropies(
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+# H69: latent-space mixup at slice tokens. Probability of applying mixup to a
+# training batch, and Beta distribution alpha for the mixing coefficient.
+# Mixup layer is randomly selected from {1, 2, 3} (inner blocks) each mixup
+# batch — block 0 is near-input, block 4 is near-output (predictions), inner
+# blocks carry semantic latent content.
+MIXUP_PROB = 0.5
+MIXUP_ALPHA = 0.2
+MIXUP_ELIGIBLE_LAYERS = (1, 2, 3)
+
 
 @dataclass
 class Config:
@@ -572,6 +599,11 @@ print(
     f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
+# H69: latent-space mixup at slice tokens (manifold mixup variant, Verma 2019).
+print(
+    f"H69 latent mixup: prob={MIXUP_PROB}, alpha={MIXUP_ALPHA}, "
+    f"eligible_layers={MIXUP_ELIGIBLE_LAYERS} (random selection per mixup batch)"
+)
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
@@ -655,6 +687,7 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+_h69_beta = torch.distributions.Beta(MIXUP_ALPHA, MIXUP_ALPHA)
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -664,6 +697,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # H69: per-epoch mixup stats
+    n_mixup_batches = 0
+    lam_sum = 0.0
+    layer_counts = {l: 0 for l in MIXUP_ELIGIBLE_LAYERS}
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -674,7 +711,35 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
+
+        # H69: latent-space mixup at slice tokens. Apply with probability
+        # MIXUP_PROB; pick a random eligible inner block; mix slice tokens
+        # inside that block and mix targets at the per-point level with the
+        # SAME (lam, perm). Validation/test paths never receive a mixup_spec.
+        # Padding correctness: at sample i's point j, if perm[i] is padded at
+        # j (i.e., j >= len(perm[i].mesh)), y_norm[perm][i,j] is normalized
+        # padding noise. Fall back to lam=1 at those points so no corrupted
+        # signal enters the mixed target (only valid perm[i] points contribute).
+        mixup_spec = None
+        mixup_layer_idx = None
+        if torch.rand(1).item() < MIXUP_PROB:
+            B = x_norm.size(0)
+            lam = float(_h69_beta.sample().item())
+            perm = torch.randperm(B, device=device)
+            mixup_layer_idx = int(MIXUP_ELIGIBLE_LAYERS[
+                torch.randint(len(MIXUP_ELIGIBLE_LAYERS), (1,)).item()
+            ])
+            mixup_spec = (lam, perm)
+            mask_perm = mask[perm].unsqueeze(-1).to(y_norm.dtype)  # [B, N_max, 1]
+            eff_lam = lam + (1.0 - lam) * (1.0 - mask_perm)        # [B, N_max, 1]
+            y_norm = eff_lam * y_norm + (1.0 - eff_lam) * y_norm[perm]
+            n_mixup_batches += 1
+            lam_sum += lam
+            layer_counts[mixup_layer_idx] += 1
+
+        pred = model(
+            {"x": x_norm}, mixup_spec=mixup_spec, mixup_layer_idx=mixup_layer_idx,
+        )["preds"]
         abs_err = (pred - y_norm).abs()
 
         vol_mask = mask & ~is_surface
@@ -704,6 +769,9 @@ for epoch in range(MAX_EPOCHS):
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    # H69: per-epoch mixup summary
+    mixup_frac = n_mixup_batches / max(n_batches, 1)
+    mean_lam = lam_sum / max(n_mixup_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -744,6 +812,10 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        # H69: per-epoch latent-mixup stats
+        "train/h69_mixup_frac": mixup_frac,
+        "train/h69_mixup_mean_lam": mean_lam,
+        "train/h69_mixup_layer_counts": layer_counts,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -751,7 +823,9 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
+        f"[H69 mixup: frac={mixup_frac:.2f} mean_lam={mean_lam:.3f} "
+        f"layers={layer_counts}]"
     )
     print(
         f"    freqs (lr={freqs_lr:.2e}): "
