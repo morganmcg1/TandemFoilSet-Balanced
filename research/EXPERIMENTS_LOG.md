@@ -719,3 +719,67 @@ Per-split signs are uniformly bad (no compensating wins on any split), consisten
 - Mechanism: Orthogonal to every previous lever (Lion, bf16, Fourier, grad-accum, n_hidden, schedule). Per-split divergence pattern (cruise=61.57 vs rc=93.60, 1.52× gap) suggests OOD regularization headroom. Zero memory/compute overhead — just a per-sample Bernoulli mask during training.
 - References: Huang 2016 (stochastic depth), Touvron 2021 (CaiT linear schedule), Liu 2022 (ConvNeXt).
 - Target: test_avg/mae_surf_p < 80.62 (new baseline from #1980)
+
+---
+
+## 2026-05-13 07:45 — PR #1945: n_hidden 192→256 — CLOSED (budget mismatch, not capacity failure)
+- Branch: willowpai2g48h1-alphonse/n-hidden-256
+- Hypothesis: Increase model width n_hidden 192→256 (~33%) on Lion+Fourier+grad-accum stack to leverage Lion's freed memory budget.
+- W&B run: z3h0j6ks (alphonse, n-hidden-256-trial-1)
+- Config: n_hidden=256, all other defaults; bs=4 (no grad-accum=2 was set — note: ran against old 83.77 baseline target)
+
+| Metric | n_hidden=256 | n_hidden=192 baseline | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **107.39** | **83.77** | **+28.2%** |
+| val_avg/mae_surf_p (best ep12) | 116.65 | 92.70 | +25.8% |
+| test_single_in_dist | 116.08 | 90.07 | +28.9% |
+| test_geom_camber_rc | 110.54 | 98.72 | +12.0% |
+| test_geom_camber_cruise | 89.66 | 60.96 | +47.1% |
+| test_re_rand | 113.29 | 85.32 | +32.8% |
+
+- 12/18 epochs at 153 s/epoch; hit `SENPAI_TIMEOUT_MINUTES=30` mid-epoch 13
+- Peak GPU: **53.5 GB** (predicted 57 GB ✓ — memory model was correct)
+- Model params: 2.62M (vs 1.47M @ 192, 1.78× ratio matches O(n_hidden²) ✓)
+- Validation curve **still monotonically declining** at epoch 12 — undertrained
+
+**Analysis (student diagnosis adopted)**: This is a **budget/schedule mismatch, not a capacity verdict**. Per-epoch time scaled as O(n_hidden^1.4) (not the naive 1.33×). At 153s/epoch the 30-min budget cuts off at 12 epochs while T_max=18 cosine never reaches the late refinement window. Two confounders stacked: undertraining (67% of schedule) + premature LR quench (cosine at minimum but model still learning). The +28% regression cannot be attributed to width itself.
+
+**Action**: Closed. Assigned alphonse n-hidden-224-rescaled-cosine (#2047): n_hidden=224 (17% wider — moderate), epochs=15, T_max=15. Budget projects ~117s/epoch × 15 ≈ 29.3 min, fits cleanly.
+
+---
+
+## 2026-05-13 07:45 — PR #1887: Fourier L=8→16 — CLOSED (frequency aliasing)
+- Branch: willowpai2g48h1-frieren/fourier-L-16
+- Hypothesis: Double NeRF Fourier frequency ceiling L=8→16 (space_dim 34→66) for richer positional encoding.
+- W&B run: xsqzxgi7 (frieren, fourier-L-16-trial-1)
+- Config: fourier_L=16, all other defaults; bs=4 (note: ran against old 83.77 baseline target)
+
+| Metric | L=16 | L=8 baseline | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **87.60** | **83.77** | **+4.57%** |
+| val_avg/mae_surf_p (best ep14) | 97.89 | 92.70 | +5.60% |
+| test_single_in_dist | 90.98 | 90.07 | +1.01% |
+| test_geom_camber_rc | 99.67 | 98.72 | +0.96% |
+| test_geom_camber_cruise | 67.52 | 60.96 | +10.76% |
+| test_re_rand | 92.24 | 85.32 | +8.11% |
+
+- 14/18 epochs at 130 s/epoch (truncated by 30-min cap — same budget as L=8 baseline so still a fair comparison)
+- Peak GPU: 43.7 GB (unchanged — extra input dims are negligible)
+
+**Analysis (student diagnosis adopted)**: **Frequency aliasing on irregular mesh**. CFD mesh density is highly non-uniform (dense near foils, sparse in freestream); L=16 pushes Fourier wavelengths to 2^15, far below the local Nyquist frequency in sparse regions → aliased noise, not informative encoding. Per-split signature confirms: cruise (+10.76%) and re_rand (+8.11%) regress most — these have the largest geometric variation where mesh-density mismatch is worst. Secondary factor: 66-d vs 34-d input layer slows optimization (~35% epoch-time increase, 130s vs 96s).
+
+**Fourier frequency-ceiling lever: CLOSED.** L=8 is optimal in this stack. Per-axis Fourier L (Lx=8, Lz=4) is mentioned by student as a possible follow-up but is high-implementation-cost for expected ~1% gain — parked.
+
+**Action**: Closed. Assigned frieren ema-weights-decay-0999 (#2050): EMA weight averaging with decay=0.999, eval on EMA copy. Orthogonal trajectory smoother for Lion sign-momentum bounce in late-cosine phase. ~6 MB memory overhead, zero compute overhead.
+
+---
+
+## 2026-05-13 07:45 — PR #2047 (NEW): n_hidden=224 with budget-aligned cosine (epochs=15, T_max=15)
+- Branch: willowpai2g48h1-alphonse/n-hidden-224-rescaled-cosine
+- Hypothesis: Moderate width bump (17%, vs 33% for #1945) with rescaled epochs so cosine schedule completes. Tests whether ANY width gain compounds on Lion+Fourier+grad-accum stack within the 30-min budget. Projects 117 s/epoch × 15 = 29.3 min; T_max=15 means schedule properly hits the LR floor.
+- Target: test_avg/mae_surf_p < 80.62 (new baseline from #1980)
+
+## 2026-05-13 07:45 — PR #2050 (NEW): EMA weight averaging (decay=0.999) for eval
+- Branch: willowpai2g48h1-frieren/ema-weights-decay-0999
+- Hypothesis: Maintain a shadow copy of model weights updated as ema = 0.999*ema + 0.001*model per optimizer step; evaluate on the EMA copy. Averages over ~1000-step horizon (final ~40% of training) — recovers the trajectory center rather than the noisy late-cosine endpoint. Especially valuable under Lion's uniform-magnitude sign updates which produce endpoint variance even at the LR floor. ~6 MB memory overhead, zero compute overhead, orthogonal to every current lever.
+- Target: test_avg/mae_surf_p < 80.62
