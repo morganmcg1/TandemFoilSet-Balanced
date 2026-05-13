@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-12 23:38 UTC
+- **Date**: 2026-05-13 00:04 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -22,14 +22,14 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 
 **Disproved (closed, mechanistic):** PR #1543 v2 (fern) log-cosh + augment @ 106.93 (+3.71%) / test 100.61 (+6.18%). The v2 − v1 delta ≈ 0 (augmentation added nothing on top of log-cosh, vs +9.4 on MSE) proves log-cosh and augment are SUBSTITUTES, not complements: both target high-Re gradient dominance via different mechanisms. Log-cosh's gradient cap defeats augmentation's purpose on rc split (+13.5% worse, the killer).
 
-**Per-channel pressure weighting signal (sent back, entangled):** PR #1488 v2 Arm B (askeladd) decoupled heads + surf_weight_p=20 @ val 102.12 / test 96.82 on full merged stack with cosine T_max=14. Beats val 103.10 by 0.95% but loses test 4-split by +2.18%. Two changes entangled (head decoupling + weighting). Sent back for surf_weight_p=20-alone ablation. Likely the per-channel weighting is the active ingredient.
+**Per-channel pressure weighting disproved (closed):** PR #1488 Arm C (askeladd, surf_weight_p=20 alone, no decoupling) @ val 105.72 (+2.62%) / test 99.29 (+4.53%). All three arms (A, B, C) fail pass criterion. Arm B's 102.12 was single-seed noise from cosine schedule, not signal. Adds to the "weight the loss + diversify the data" substitution principle established by PR #1543.
 
 ## Current student assignments
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
 | alphonse | #1484 | `huber-pressure-loss` | WIP — rebase: Huber d=0.5+d=1.0 on full merged stack (2 arms) |
-| askeladd | #1488 | `decoupled-channel-heads` | WIP — v2 sent back (Arm B 102.12 val/96.82 test, entangled), run Arm C: surf_weight_p=20 alone (no decoupling) |
+| askeladd | #1709 | `focal-per-sample-loss-weighting` | WIP — focal weighting γ=1.0/2.0 (2 arms). Amplifies hard-sample gradient (mechanistic opposite of log-cosh). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1698 | `test-time-augmentation` | WIP — TTA with 2 arms (N=5/9, jitter=0.5°/0.75°) at eval time. Pure inference-time, no training changes. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
@@ -56,25 +56,29 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment(±0.5° AoA, ±0.002 NACA) + cosine T_
 - **n_hidden=256** (edward, pre-merge): 172.26. Severely under-budgeted (7 epochs). Sent back as n_hidden=192 (more manageable).
 - **Decoupled heads** (askeladd): Still WIP from round 1.
 
-### Universal principle (PR #1543 v2)
-**Loss saturation and data augmentation are SUBSTITUTES, not complements**
-when both target the same failure mode (high-magnitude pressure residuals
-dominating MSE gradients). Augmentation broadens the training distribution
-→ harder samples need stronger gradient; loss saturation (log-cosh, Huber
-likely) caps that gradient → augmentation's value is destroyed. This rules
-out a class of "regularize the loss + diversify the data" stacking
-hypotheses. Stack-compatible alternatives: per-channel splits (only saturate
-where residuals are large; MSE elsewhere), per-sample reweighting (don't
-touch the per-residual gradient curve).
+### Universal principles (logged for ICML appendix)
 
-### Universal finding (PR #1574)
-**OneCycleLR scheduling bug:** `--use_onecycle True --epochs 50` with `pct_start=0.05`
-hits peak LR at step 187/3750 → 97% of cosine anneal tail never executes at the
-30-min wall-clock cap (~14 epochs). The current merged default `use_onecycle=True`
-is actively hurting any run that uses it. PR #1495's 103.10 win used cosine
-T_max=14, not OneCycleLR. **Going forward all 30-min experiments should use
-`--use_onecycle False --epochs 14` (cosine T_max=14) unless explicitly testing
-schedule mechanics.**
+**P1: Loss saturation and augmentation are SUBSTITUTES** (PR #1543 v2).
+Log-cosh saturates the gradient at `tanh(r)` for `|r|≳2`; augmentation
+creates harder samples by broadening the training distribution; the cap
+defeats the augmentation. Holds for Huber-style losses too.
+
+**P2: Per-channel pressure weighting and augmentation are also SUBSTITUTES**
+(PR #1488 v3 Arm C). Augmentation already emphasizes hard pressure regions
+via geometric diversity; explicit per-channel weighting on top is neutral-
+to-harmful. This generalizes P1: a class of "weight the loss + diversify
+the data" stacking patterns fails when both target the same channel.
+
+**P3 (testable, askeladd #1709): Per-sample reweighting and augmentation
+should COMPOUND.** Focal weighting amplifies gradient on hard samples
+(mechanism-opposite of log-cosh); augmentation creates hard samples;
+the two should compose. This is what P1/P2 *don't* rule out: the per-
+sample axis is orthogonal to per-residual and per-channel surgery.
+
+**P4 (PR #1574): OneCycleLR with `--epochs 50` is broken at 30-min cap.**
+pct_start=0.05 reaches peak LR at step 187/3750, leaving 97% of anneal
+unfired. All 30-min runs use cosine T_max=14 unless explicitly testing
+schedule mechanics.
 
 ### Potential next directions (round 3+)
 - **Compose winners**: combine Huber + FiLM + log-cosh + curriculum once individual rebases are scored.

@@ -37,6 +37,33 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 00:02 — PR #1709: Focal per-sample loss weighting (askeladd) — WIP (assigned)
+**Branch:** `charliepai2g24h3-askeladd/focal-per-sample-loss-weighting` | **Status: WIP**
+
+- **Hypothesis:** Per-sample loss weighting `w_i = (mse_i / mean_mse)^γ` (Lin et al. 2017 focal style, stop-grad on weight). Amplifies gradient on hard samples — the MECHANISTIC OPPOSITE of log-cosh's saturation (which caps gradient on hard samples and conflicts with augment per PR #1543).
+- **Why this should compound with augment:** Augmentation creates hard samples; focal weighting upweights them. Both interventions push the model to fit hard cases. The loss CURVE stays quadratic (no saturation), only per-sample contribution is reweighted multiplicatively.
+- **Arms:** Arm A γ=1.0 (moderate); Arm B γ=2.0 (aggressive). Both cosine T_max=14, full augment stack.
+- **Pass criterion:** val_avg < 103.10 AND test_avg (4-split safe re-eval) < 94.76.
+- **Predicted Δ:** −2 to −5% on val_avg, with largest gain on `val_single_in_dist` (currently 125.91, the worst split — high-Re samples have largest residuals → most focal upweight).
+- **Diagnostic:** log batch-wise weight.std() at epochs 7/14 — too low (<0.1) means too gentle to matter; too high (>5) means one sample dominates.
+- **Artifacts:** TBD
+
+---
+
+### 2026-05-13 00:00 — PR #1488 v3 Arm C: surf_weight_p=20 alone (askeladd) — CLOSED (entanglement disproved)
+**Branch:** `charliepai2g24h3-askeladd/decoupled-channel-heads` | **Status: CLOSED**
+
+- **Hypothesis (Arm C isolation):** Remove head decoupling, keep per-channel surface weights [w_uv=10, w_p=20] on shared mlp2. Tests whether per-channel pressure weighting is the active ingredient in Arm B's 102.12 val win.
+- **val_avg/mae_surf_p: 105.72** (epoch 14/14, cosine fully annealed) — **+2.62% over baseline 103.10**.
+- **test_avg/mae_surf_p (safe 4-split):** **99.29** — **+4.53% over baseline 94.76**.
+- **Per-split (Arm C vs Arm B):** single 128.48 (+3.68), rc 120.59 (+7.29), cruise 77.59 (+0.05 tie), re_rand 96.23 (+3.37). C is WORSE than B on every split — opposite of "B was helped by per-channel weighting."
+- **Cleanest interpretation:** Arm B's val 102.12 was single-seed noise from the cosine schedule, NOT signal from either head decoupling or per-channel weighting. Signed test−val gap (B=−5.30, C=−6.43, #1495=−8.34) suggests val/test variance at this scale is too large to detect 1-point val improvements reliably. Neither change above noise.
+- **Why closed:** All three arms (A: full stack, B: cosine+decoupled+weighted, C: cosine+weighted-only) fail pass criterion. Hypothesis exhausted.
+- **Generalizable principle (logged for paper):** "Per-channel pressure weighting [10,10,20] and AoA+NACA augmentation are also substitutes." Combined with PR #1543's log-cosh finding: a class of "weight the loss + diversify the data" stacking patterns fails when both target the same channel/failure mode. Stack-compatible alternatives: per-sample reweighting (orthogonal to per-residual curve), per-channel splits where saturation is confined to where residuals are large.
+- **Artifacts:** `models/model-charliepai2g24h3-askeladd-per-channel-surf-weight-cosine-v3-20260512-231009/{metrics.jsonl,test_safe_eval.jsonl}`
+
+---
+
 ### 2026-05-12 23:36 — PR #1698: Test-time augmentation (fern) — WIP (assigned)
 **Branch:** `charliepai2g24h3-fern/test-time-augmentation` | **Status: WIP**
 
