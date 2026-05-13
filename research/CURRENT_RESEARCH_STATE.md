@@ -1,16 +1,16 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~15:10 — Closed #1820 thorfinn wd-5e-3 (extrapolated dead; reassigned to #2373 beta1-0.95); sent #1815 askeladd back for rerun on current baseline (terminal result was on 12h-stale pre-RFF base). 7 in-flight PRs, zero idle students.
+- **Last updated:** 2026-05-13 ~15:20 — MERGED #2345 batch-size-2 NEW BEST **63.1086** (−3.23% val, −2.62% test; all 8 splits improve; val_single −6.32%). Closed #2346 slice-num-96 (+11% timeout-truncated). Assigned nezuko #2387 batch-size-1, fern #2388 warmup-2-tmax-12. **canonical batch_size=2** from now on.
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 65.2170`** — PR #2260 (grad_clip=0.5 on RFF+asinh+warmup-4+lr=1.5e-3+β2=0.99 canonical stack), epoch 14/14.
+**`val_avg/mae_surf_p = 63.1086`** — PR #2345 (batch_size=2 on grad_clip=0.5+RFF+asinh+warmup-4+lr=1.5e-3+β2=0.99 canonical stack), epoch 14/14.
 
-Per-split: val_single=73.7639, val_rc=79.4389, val_cruise=42.8481, val_re_rand=64.8172.  
-Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.2533, test_re_rand=54.4508).
+Per-split: val_single=69.1032, val_rc=77.8463, val_cruise=41.6722, val_re_rand=63.8128.  
+Test: test_avg=54.9824 (test_single=62.4700, test_rc=69.6733, test_cruise=34.7817, test_re_rand=53.0047).
 
 **Historical trajectory (this launch):**
 - 122.64 (#1418 channel_weights=[1,1,3])
@@ -24,27 +24,30 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 - 74.2082 (#1895 lr=1.5e-3)
 - 73.9964 (#2004 adamw-β2=0.99)
 - 65.3304 (#1657 RFF σ=3.0 +64-dim pos encoding) — LARGEST SINGLE JUMP −11.71%
-- **65.2170** (#2260 grad_clip=0.5) — **current** (−0.17% val, −0.85% test; eliminates epoch-5 spike)
+- 65.2170 (#2260 grad_clip=0.5) (−0.17% val, −0.85% test; eliminates epoch-5 spike)
+- **63.1086** (#2345 batch_size=2) — **current** (−3.23% val, −2.62% test; val_single −6.32%)
 
 **Canonical config on advisor HEAD:**
 - `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in asinh-compressed target space
 - **Asinh pressure compression**: ASINH_GAIN=1.0 (pressure channel only)
 - **RFF positional encoding**: σ=3.0, 64-dim [cos, sin] of (x,z), fixed B seeded 42, preprocess MLP input 24→86
 - AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10, eta_min=0), **grad_clip=0.5**, **betas=(0.9, 0.99)**, wd=1e-4, ε=1e-8
-- batch_size=4, surf_weight=10, NaN-skip in evaluate_split
+- **batch_size=2** (canonical from #2345), surf_weight=10, NaN-skip in evaluate_split
 
 ## In-flight PRs
 
 | PR | Student | Slug | Axis | Status |
 |----|---------|------|------|---|
-| #2364 | alphonse | `tmax-14` | CosineAnnealing T_max 10→14; final LR no longer hits 0; addresses best_epoch=14/14 non-convergence | **WIP — just assigned** |
-| #2365 | frieren | `chan-weights-5` | channel_weights [1,1,3]→[1,1,5]; pushes 71% (vs 60%) of training signal onto pressure channel | **WIP — just assigned** |
-| #2366 | tanjiro | `asinh-gain-2` | ASINH_GAIN 1.0→2.0; tighter pressure-outlier compression; orthogonal to loss-function axis | **WIP — just assigned** |
-| #2345 | nezuko | `batch-size-2` | bsz 4→2; gradient-noise regularization, 2× opt steps/epoch; targets OOD via flatter minima | **WIP — training** |
-| #2346 | fern | `slice-num-96` | Transolver slice_num 64→96 (+50% physics slices); +5K params; risk: ~35min for 14 epochs | **WIP — training** |
-| #2373 | thorfinn | `beta1-0.95` | AdamW β1 0.9→0.95; symmetry with β2=0.99 (closed sweet spot) suggests untested β1 may also have sweet spot >0.9 | **WIP — just assigned** |
-| #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 vs 65.2170 baseline on PRE-clip=0.5 HEAD; sent back for rerun on clip=0.5 stack | **WIP — rerun requested** |
-| #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; ON OLD BASE val=79.8056 (−1.11% vs 80.7014); sent back for rerun on current canonical (RFF+clip=0.5 stack) | **WIP — rerun on new base** |
+| PR | Student | Slug | Axis | Status |
+|----|---------|------|------|---|
+| #2387 | nezuko | `batch-size-1` | bsz 2→1 (true SGD); probe if batch axis continues; may timeout at ep13-14 | **WIP — just assigned** |
+| #2388 | fern | `warmup-2-tmax-12` | warmup 4→2 + T_max 10→12; same cosine endpoint, more peak-LR time; batch_size=2 canonical | **WIP — just assigned** |
+| #2364 | alphonse | `tmax-14` | CosineAnnealing T_max 10→14; final LR ~6.8e-4 instead of 0; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
+| #2365 | frieren | `chan-weights-5` | channel_weights [1,1,3]→[1,1,5]; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
+| #2366 | tanjiro | `asinh-gain-2` | ASINH_GAIN 1.0→2.0; tighter pressure-outlier compression; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — likely finishing** |
+| #2373 | thorfinn | `beta1-0.95` | AdamW β1 0.9→0.95; untested axis; **NOTE: used batch=4, evaluate vs 63.1086** | **WIP — training** |
+| #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 on PRE-clip=0.5 HEAD; sent back for rerun on current canonical | **WIP — rerun requested** |
+| #1815 | askeladd | `node-dropout-0.9` | Node dropout p=0.9; on OLD base val=79.8056 (−1.11% vs 80.7014); sent back for rerun on current stack | **WIP — rerun on new base** |
 
 ## Closed axes (exhausted)
 
@@ -63,6 +66,8 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 | n_head | **CLOSED** at 4 | n=8 gave +23.4% val / +24.6% test; **CRITICAL implementation quirk**: Transolver q/k/v scale as `dim_head²`, so n_head=8 actually LOSES 16.6K params |
 | weight_decay | **CLOSED** at 1e-4 | wd=1e-3 gives +1.27% val; **epoch-5 spike RETURNS** even with clip=0.5 (val_avg ep4=186 → ep5=253); wd amplifies effective gradient at peak LR |
 | foil-mirror-aug | **CLOSED** | +19.97% val / +21.97% test catastrophic; z=0 is NOT a valid symmetry for tandem-foil dataset (asymmetric flow direction → mirrored samples mis-labeled) |
+| slice_num | **CLOSED** at 64 | slice_num=96 gives +11.0% val (epoch-12, timeout); all splits regress uniformly; no physics-slice benefit; per-epoch overhead is the liability |
+| batch_size | **OPEN — 2 is current best** | batch=2 gives −3.23% val (NEW BEST 63.1086); val_single −6.32%; batch=1 probe in flight (#2387) |
 
 ## Key research insights
 
@@ -78,18 +83,18 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 
 ## Next research directions (priority order)
 
-1. **Schedule/LR-tail probe** (#2364 alphonse tmax-14): IN FLIGHT — addresses best_epoch=14/14 non-convergence by keeping LR>0 at end
-2. **Loss-weighting probe** (#2365 frieren chan-weights-5): IN FLIGHT — push pressure weighting 60%→71% of training signal
-3. **Pressure compression probe** (#2366 tanjiro asinh-gain-2): IN FLIGHT — tighten asinh GAIN, attenuate outlier influence
-4. **Batch noise / flat-minima** (#2345 nezuko batch-size-2): IN FLIGHT
-5. **Slice_num architecture** (#2346 fern slice-num-96): IN FLIGHT
-6. **surf_weight / channel structure** (#1421 edward surf-only): rerun on clip=0.5 stack
-7. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF positional encoding; targets rc/single geometry splits — high-value, more involved
-8. **AdamW β1** (#2373 thorfinn beta1-0.95): IN FLIGHT — β1=0.9 untested, sweet spot may be above 0.9 by symmetry with β2
-9. **Warmup duration variations** (untested combos): warmup_epochs=2 paired with T_max=12 to maintain endpoint while extending peak-LR window
-10. **mlp_ratio probe** (untested): 2→4 doubles FFN width; +~150K params; tests if FFN is the bottleneck on convergence
-11. **n_layers depth probe** (untested): 5→6 deeper representation; +~140K params; some compute risk
-12. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF positional encoding; targets rc/single geometry splits
+1. **Batch-axis continuation** (#2387 nezuko batch-size-1): IN FLIGHT — true SGD probe; timeout-limited to ~13 epochs
+2. **Warmup/schedule** (#2388 fern warmup-2-tmax-12): IN FLIGHT — more peak-LR time, same cosine endpoint; batch=2 canonical
+3. **Schedule tail** (#2364 alphonse tmax-14): IN FLIGHT (batch=4, evaluate vs 63.1086)
+4. **Channel weighting** (#2365 frieren chan-weights-5): IN FLIGHT (batch=4)
+5. **Pressure compression** (#2366 tanjiro asinh-gain-2): IN FLIGHT (batch=4)
+6. **Momentum** (#2373 thorfinn beta1-0.95): IN FLIGHT (batch=4)
+7. **surf_weight / channel structure** (#1421 edward surf-only): rerun on current stack
+8. **Node dropout** (#1815 askeladd node-dropout-0.9): rerun on current stack
+9. **mlp_ratio probe** (untested): 2→4 doubles FFN width; +~150K params; compute-risky (~35min) but capacity axis important
+10. **n_layers depth probe** (untested): 5→6; +~140K params; similar compute risk
+11. **warmup_epochs=3** (untested midpoint): split the difference between 2 and 4 once fern's warmup=2 result is in
+12. **RFF on surface normals** (untested): add (n_x, n_z) channels to RFF encoding; higher-complexity but high-value for rc/single OOD
 
 ## Epoch budget arithmetic
 

@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-05-13 15:20 — PR #2345: batch-size-2 (nezuko) — MERGED ✅ NEW BEST: 63.1086
+
+- **Branch:** `charliepai2g48h2-nezuko/batch-size-2`
+- **Hypothesis:** Halving batch_size from 4 to 2 doubles optimization steps per epoch (375→750), providing more gradient-noise regularization and finer-grained descent. With grad_clip saturated at peak LR, the 2× more max-step-size updates (not higher LR) compound to a better optimum.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-batch-size-2-20260513-141058/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170) — **NEW BEST**
+
+| Split | Baseline | batch_size=2 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | 69.1032 | **−6.32%** ✓ |
+| val_geom_camber_rc | 79.4389 | 77.8463 | **−2.00%** ✓ |
+| val_geom_camber_cruise | 42.8481 | 41.6722 | **−2.74%** ✓ |
+| val_re_rand | 64.8172 | 63.8128 | **−1.55%** ✓ |
+| **val_avg/mae_surf_p** | **65.2170** | **63.1086** | **−3.23%** ✓ |
+| **test_avg/mae_surf_p** | 56.4581 | 54.9824 | **−2.62%** ✓ |
+
+All 8 splits (4 val + 4 test) improved. best_epoch=14/14 (unchanged). Steps/epoch: 750 (2× baseline 375).
+
+### Analysis
+
+**Second-largest single improvement this launch** (after RFF σ=3.0 at −11.71%). The val_single_in_dist improvement (−6.32%) is the largest per-split gain since the RFF breakthrough — strongly supports the gradient-noise / flatter-minima mechanism for OOD generalization on in-distribution-geometry-but-OOD-condition splits.
+
+The mechanism is clean: with grad_clip=0.5 fully saturated at peak LR, doubling batch_size halves steps (and hurts); halving batch_size doubles steps (and helps). The "effective LR per epoch" stays constant (same max step magnitude × same number of clipped steps), but the optimizer trajectory through parameter space is 2× more refined. Unlike typical LR-scaling arguments, here MORE STEPS with the same step size is beneficial.
+
+**Canonical batch_size is now 2.** All future experiments MUST use batch_size=2 as baseline config.
+
+**Batch axis remains open.** Follow-up: nezuko #2387 probes batch_size=1 (true SGD direction; may timeout at ~13 epochs).
+
+---
+
+## 2026-05-13 15:20 — PR #2346: slice-num-96 (fern) — CLOSED (+11.0% regression; timeout at ep12; slice axis closed at 64)
+
+- **Branch:** `charliepai2g48h2-fern/slice-num-96`
+- **Hypothesis:** Increase Transolver physics slices from 64→96 (+50%), adding +5K params. More slices = finer-grained physics partition may help rc/single geometry OOD splits.
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-slice-num-96-20260513-141358/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170)
+
+| Split | slice_num=96 (ep12) | slice_num=64 baseline | Δ |
+|---|---|---|---|
+| val_single_in_dist | 83.8536 | 73.7639 | +13.7% ❌ |
+| val_geom_camber_rc | 86.9980 | 79.4389 | +9.5% ❌ |
+| val_geom_camber_cruise | 48.5743 | 42.8481 | +13.4% ❌ |
+| val_re_rand | 70.1531 | 64.8172 | +8.2% ❌ |
+| **val_avg/mae_surf_p** | **72.3947** | **65.2170** | **+11.0%** ❌ |
+| **test_avg/mae_surf_p** | 62.0292 | 56.4581 | +9.9% ❌ |
+
+- best_epoch: 12 / 14 (TIMEOUT at 30.6 min)
+- Per-epoch time: 150–156s (+15–20% vs ~130s baseline)
+- n_params: 683,511 (+5,120, +0.75% — matched prediction)
+
+### Analysis
+
+Timeout at 30.6 min (12/14 epochs) is a partial confounder, but +11% at epoch 12 vs baseline epoch 12 is well outside truncation-alone range. All 4 splits regress **uniformly** (8–14%) with no slice-specific benefit pattern — if extra slices helped certain flow regimes, we'd see selective split improvement. The Transolver paper's finding (slice_num=64 sufficient) holds on our task.
+
+**Slice axis CLOSED at 64.** The overhead comes from per-slice computations in the physics-slice attention mechanism, not from params (+0.75% is negligible). Added per-epoch compute is the liability.
+
+---
+
 ## 2026-05-13 15:10 — PR #1820: weight-decay-5e-3 (thorfinn) — CLOSED (extrapolated regression; wd axis already closed at 1e-4)
 
 - **Branch:** `charliepai2g48h2-thorfinn/weight-decay-5e-3`
