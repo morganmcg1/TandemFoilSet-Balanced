@@ -601,6 +601,8 @@ class Config:
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
     hybrid_kendall_lr: float = 1e-3  # AdamW lr for log_sigmas when optimizer=lion + use_kendall_uncertainty (Lion's sign-update collapses log_σ channels; AdamW preserves gradient-magnitude per-channel differentiation)
+    log_sigma_init: float = 0.0  # initial value switch for log_σ channels; 0.0 = uniform zeros (current). Nonzero = per-channel AdamW-equilibrium init from #2270/#1906.
+    log_sigma_anchor_lambda: float = 0.0  # L2 anchor weight on mean(log_σ) toward AdamW-equilibrium (target=-1.4); 0.0 = no anchor (current).
 
 
 cfg = sp.parse(Config)
@@ -696,7 +698,14 @@ def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
 optimizer_kendall: torch.optim.Optimizer | None = None
 hybrid_kendall = False
 if cfg.use_kendall_uncertainty:
-    log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
+    if cfg.log_sigma_init == 0.0:
+        log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
+    else:
+        # AdamW-equilibrium per-channel init from #2270/#1906. Switch is `cfg.log_sigma_init != 0`;
+        # the actual init values are the measured AdamW steady-state log_σ per channel.
+        adamw_eq = torch.tensor([-1.34, -1.49, -1.47, -1.38, -1.34, -1.35], device=device)
+        log_sigmas = nn.Parameter(adamw_eq.clone())
+    print(f"log_σ init: cfg.log_sigma_init={cfg.log_sigma_init}, values={log_sigmas.data.tolist()}")
     # Hybrid path: Lion's sign-update strips gradient magnitude and collapses all log_σ channels
     # to an identical value (verified in PR #2063). When using Lion + Kendall, route log_sigmas
     # through a separate AdamW optimizer so gradient-magnitude per-channel differentiation is
@@ -859,6 +868,16 @@ for epoch in range(MAX_EPOCHS):
             surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
+        anchor_loss_val = 0.0
+        if cfg.use_kendall_uncertainty and cfg.log_sigma_anchor_lambda > 0:
+            # L2 anchor on mean(log_σ) toward AdamW-equilibrium target (~−1.4). Operates
+            # symmetrically across channels, so spread is preserved; only the global mean
+            # is pulled. Open mechanism from BASELINE.md §"Note on mean drift" / PR #2500.
+            anchor_target = -1.4
+            anchor_loss = cfg.log_sigma_anchor_lambda * (log_sigmas.mean() - anchor_target).pow(2)
+            loss = loss + anchor_loss
+            anchor_loss_val = anchor_loss.item()
+
         optimizer.zero_grad()
         if optimizer_kendall is not None:
             optimizer_kendall.zero_grad()
@@ -905,6 +924,10 @@ for epoch in range(MAX_EPOCHS):
                     log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
                     log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
                     log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
+                log_payload["train/log_sigma_mean"] = ls.mean().item()
+                log_payload["train/log_sigma_spread"] = (ls.max() - ls.min()).item()
+                if cfg.log_sigma_anchor_lambda > 0:
+                    log_payload["train/anchor_loss"] = anchor_loss_val
         if (
             cfg.fourier_features
             and not fourier_diag_logged
