@@ -91,7 +91,14 @@ class PhysicsAttention(nn.Module):
         self.heads = heads
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # H12: per-node adaptive temperature. `temperature_0` is the shared
+        # base; per-node deviations come from `tau_head` (zero-initialised after
+        # Transolver._init_weights so tau_i == temperature_0 at init). Floor
+        # prevents collapse to a one-hot slice assignment.
+        self.temperature_0 = nn.Parameter(torch.ones(1) * 0.5)
+        self.tau_head = nn.Linear(dim_head, 1)
+        self.tau_floor = 0.1
+        self._last_tau: torch.Tensor | None = None
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -117,7 +124,11 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # H12: tau_i = temperature_0 + tau_head(x_mid)_i, broadcast over slices.
+        tau_per_node = (self.temperature_0 + self.tau_head(x_mid)).clamp(min=self.tau_floor)
+        self._last_tau = tau_per_node.detach()
+        slice_logits = self.in_project_slice(x_mid)
+        slice_weights = self.softmax(slice_logits / tau_per_node)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -203,6 +214,12 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # H12 identity init: zero per-node tau head AFTER trunc_normal pass so
+        # tau_i == temperature_0 at init (no behavior change vs scalar baseline).
+        for m in self.modules():
+            if isinstance(m, PhysicsAttention):
+                nn.init.zeros_(m.tau_head.weight)
+                nn.init.zeros_(m.tau_head.bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -482,6 +499,24 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # --- H12 tau distribution stats (last training step, aggregated across all layers) ---
+    tau_chunks = []
+    tau_floor_val = 0.1
+    for blk in model.blocks:
+        attn = getattr(blk, "attn", None)
+        if attn is not None and getattr(attn, "_last_tau", None) is not None:
+            tau_chunks.append(attn._last_tau.flatten())
+            tau_floor_val = attn.tau_floor
+    if tau_chunks:
+        tau_concat = torch.cat(tau_chunks)
+        tau_floor_frac = float((tau_concat <= tau_floor_val + 1e-4).float().mean().item())
+        tau_mean = float(tau_concat.mean().item())
+        tau_std = float(tau_concat.std().item())
+        tau_min = float(tau_concat.min().item())
+        tau_max = float(tau_concat.max().item())
+    else:
+        tau_floor_frac = tau_mean = tau_std = tau_min = tau_max = float("nan")
+
     # --- Validate ---
     model.eval()
     split_metrics = {
@@ -514,6 +549,11 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        "tau/floor_frac": tau_floor_frac,
+        "tau/mean": tau_mean,
+        "tau/std": tau_std,
+        "tau/min": tau_min,
+        "tau/max": tau_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -521,6 +561,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"tau[mean={tau_mean:.3f} std={tau_std:.3f} floor_frac={tau_floor_frac:.3f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
