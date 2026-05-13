@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4** | **49.86** | **42.19** | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
+| **#2335 slice_num=32 + surf_weight=5 on n_head=2+Lion+MAE+lr=1e-4** | **48.57** | **41.48** | −2.59% val / −1.68% test vs #2218; synergistic: observed −2.54 val vs additive −1.45; 3/4 test splits improve; 22 epochs |
+| #2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4 | 49.86 | 42.19 | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
 | #2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
 | #2069 n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
 | #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
@@ -36,6 +37,21 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 15:40 — PR #2335: slice_num=32 + surf_weight=5 interaction on n_head=2 compound (alphonse)
+
+- **val_avg/mae_surf_p (best epoch 22):** 48.573 — **−2.59% vs #2218 baseline (49.864)**
+- **test_avg/mae_surf_p:** 41.483 — **−1.68% vs #2218 baseline (42.187)**
+- **Per-test-split:** single_in_dist=47.41 (+4.30% ⚠ regress), geom_camber_rc=54.56 (−2.64% ✓), geom_camber_cruise=24.63 (−4.10% ✓), re_rand=39.33 (−5.39% ✓) — **3/4 splits improve**
+- **Epochs completed:** 22 in ~30 min (82.07s/ep); val still descending at cap — NOT converged
+- **VRAM:** ~81.1 GB peak
+- **W&B run:** `k5262fzu`
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **slice_num=32** + **surf_weight=5**
+- **Reproduce:** `cd "target/" && python train.py --n_head 2 --slice_num 32 --surf_weight 5 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-alphonse --wandb_name "willowpai2g24h5-alphonse/slice32-sw5-n2-lion-mae" --wandb_group "willow-pai2g-24h-r5-slice32-sw5"`
+
+**Key change:** Stack slice_num=32 (#2218) and surf_weight=5 (#2210) together. Interaction is **synergistic on val** (observed −2.54 vs additive −1.45; 1.75× predicted) and roughly additive on test_avg (−2.70 vs predicted −2.49). OOD camber + re_rand splits all gain strongly; single_in_dist regresses ~2 pts vs #2218-alone (coarser slices + softer surface emphasis removes guidance the high-magnitude in-dist single-foil split needed). Net test_avg still improves clearly.
 
 ---
 
