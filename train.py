@@ -693,7 +693,8 @@ def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
 
 
 if cfg.use_kendall_uncertainty:
-    log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
+    _INIT_LOG_SIGMA = torch.tensor([-1.34, -1.49, -1.47, -1.38, -1.34, -1.35], device=device)
+    log_sigmas = nn.Parameter(_INIT_LOG_SIGMA.clone())
     # Separate param group with weight_decay=0 — weight decay on log_sigma acts as an unwanted prior toward sigma=1.
     optimizer = _build_optimizer(
         cfg.optimizer,
@@ -874,6 +875,9 @@ for epoch in range(MAX_EPOCHS):
                     log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
                     log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
                     log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
+                log_payload["train/log_sigma_spread"] = (ls.max() - ls.min()).item()
+                log_payload["train/log_sigma_mean"] = ls.mean().item()
+                log_payload["train/log_sigma_std"] = ls.std().item()
         if (
             cfg.fourier_features
             and not fourier_diag_logged
@@ -1000,6 +1004,9 @@ if cfg.use_kendall_uncertainty:
     for n, s, w in zip(KENDALL_CHANNELS, ls_final, eff_w_final):
         kendall_summary[f"final/log_sigma_{n}"] = float(s)
         kendall_summary[f"final/effective_weight_{n}"] = float(w)
+    kendall_summary["final/log_sigma_spread"] = float(ls_final.max() - ls_final.min())
+    kendall_summary["final/log_sigma_mean"] = float(ls_final.mean())
+    kendall_summary["final/log_sigma_std"] = float(ls_final.std())
     wandb.summary.update(kendall_summary)
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
