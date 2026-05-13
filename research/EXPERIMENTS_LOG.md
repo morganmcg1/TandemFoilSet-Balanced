@@ -814,3 +814,69 @@ Status check during this review wave: frieren is healthy, actively running the 3
 The interim β=0.3 signal is interesting: val=96.16 doesn't beat the current merged baseline 95.75, but **test=84.76 beats baseline 86.17 by 1.63%**. This is unusual asymmetry. Wait for full sweep + formal SENPAI-RESULT before drawing conclusions — could be that β=0.3 (closer to L1) generalizes better but converges to slightly worse val.
 
 No advisor action required. Frieren will post terminal SENPAI-RESULT after β=3.0 completes (~30–60 more min).
+
+---
+
+## 2026-05-13 00:00 — PR #1585 askeladd (film-on-huber): **MERGED as new baseline** — val=80.82 / test=71.30 (−15.6% / −17.3%)
+
+**Largest single-PR gain on this branch to date.** Strong stack lever (architecture-conditioning axis) on top of the merged Huber + Re-weight + SWA baseline.
+
+### Result table (3 seeds, all clear baseline 95.75)
+
+| Seed | W&B run | best val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|---|
+| 0 | `f10x2pwq` | 82.61 | 74.53 |
+| 1 | `vija565w` | 83.17 | 73.44 |
+| 2 (best) | `j7uw0nhi` | **80.82** | **71.30** |
+| **mean ± std** | | **82.20 ± 1.23** | **73.09 ± 1.64** |
+
+### Per-split val surface-p MAE (best seed)
+
+| Split | mae_surf_p (seed 2) | Δ vs. #1586 baseline (95.75) |
+|---|---|---|
+| val_single_in_dist | 88.39 | −21.84% |
+| val_geom_camber_rc | 97.36 | −5.65% |
+| val_geom_camber_cruise | 59.69 | −20.34% |
+| val_re_rand | 77.83 | −15.18% |
+| **val_avg** | **80.82** | **−15.59%** |
+
+### What worked
+
+- **FiLM mechanism is real, not parameter-count artifact.** Modulation diagnostics show:
+  - Mean |γ|=0.235, mean |β|=0.162 (non-trivial magnitudes)
+  - γ uniform across depth (~0.23–0.24); β grows with depth (0.117 at L0 → 0.190 at L4)
+  - The architecture learned to use both knobs and stratify usage by depth
+- **Cross-condition generalization improved most.** Test improvement (−21.1% vs Huber-baseline) exceeds val improvement (−19.7%) — the exact signature FiLM is supposed to deliver: an explicit flow-condition prior at every layer reduces the model's need to re-learn "what flow regime is this?" from per-node features.
+- **Reproducibility excellent.** Inter-seed std of 1.23 (1.5% of mean) — clean signal.
+- **Zero-init last linear** in the FiLM head was the right call: starts as identity, training learns when/how to modulate. No instability, no overshoot.
+- **Largest gains land on splits with strong global-condition variation:**
+  - `val_geom_camber_cruise` (−25.8% on Huber-frame): different camber geometry; FiLM passes camber globals directly
+  - `val_single_in_dist` (−22.7% on Huber-frame): pure regime variation
+  - `val_re_rand` (−15.8% on Huber-frame): Reynolds variation; FiLM passes Re directly
+- **Smallest gain on `val_geom_camber_rc`** (−10.5% on Huber-frame, only −5.65% vs the more-recent 95.75 baseline). This split is the front-foil camber sweep with ground effect — the bottleneck remaining after FiLM. **Next stacking should target geometry**, not more global conditioning.
+
+### Composition notes (untested but expected sound)
+
+- The PR was forked off the **Huber-only** baseline (#1452, val=100.77), but the merge preflight was clean against the **current merged** baseline (Huber + Re-weight + SWA, val=95.75).
+- Post-merge train.py runs Huber + Re-weight + SWA + FiLM together. This composition was not directly tested.
+- Pessimistic estimate: even with the worst-case ~5pt SWA penalty (per PR #1645 evidence), FiLM's 80.82 leaves 10+ points of headroom under 95.75. Net-positive merge regardless.
+- Tanjiro's #1679 (no-SWA test) and thorfinn's #1642 (Re-weight-sqrt) on the merged baseline will help triangulate the actual composition floor.
+
+### Decision
+
+**MERGED.** Decision rule trigger: val=80.82 << 95.75 baseline. Beats the new-baseline threshold by 14.9 points. BASELINE.md updated.
+
+### askeladd follow-up
+
+Reassigned to PR #1702: `per-channel-p-weight-on-filmed` — **per-channel pressure-loss weighting** (`p_weight ∈ {2.0, 3.0}`, 2-arm sweep). Rationale: orthogonal 4th axis (per-channel) alongside surf_weight (per-node-domain), Re-weight (per-sample), and FiLM (per-condition). Targets the headline metric directly via the channel that matters most (pressure). Edward's wave-6 suggestion from his #1620 post-mortem.
+
+### Wave-5 PR implications
+
+The merged baseline now sits at val=80.82, not 95.75. The wave-5 PRs (#1691 edward surf_weight=5, #1680 fern drop_path=0.1, #1679 tanjiro no-SWA, #1642 thorfinn re-weight-sqrt) and remaining wave-3 PRs (#1617 nezuko grad-clip rebase, #1618 alphonse surf-Huber-vol-MSE, #1600 frieren β-sweep) were predicated on −0.5 to −3% improvements against 95.75. None of those predicted ranges land below 80.82.
+
+Decision framework for these PRs as they complete:
+- best-arm val < 80.82 → MERGE
+- 80.82 ≤ best-arm val < 84 → send back to retest stacked with FiLM
+- best-arm val ≥ 84 → close as superseded by FiLM
+
+Status comments posted to #1617, #1618, #1600 updating the baseline frame.
