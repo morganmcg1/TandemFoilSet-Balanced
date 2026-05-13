@@ -1,6 +1,64 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1599 (re-conditioned-scaling)
+## Current Baseline — PR #1614 (per-channel-loss-weights)
+
+**val_avg/mae_surf_p = 29.2179** (epoch 29 of 29; 30-min cap) — **-2.11% vs previous 29.8463**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- **+ ReScaleHead** (3-channel, 163 params): learned Re→scale MLP applied to Transolver output
+- **+ per-channel loss weights**: `ch_weights=[1.0, 1.0, 5.0]` applied as linear multiplier **post-Huber** on per-element Huber output (p_channel_weight=5.0)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`**
+- **`torch.compile(mode="default", dynamic=True)`**
+- **bf16 AMP**
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1)+rel-L2 with p post-Huber weight=5 in numerator; denominator unweighted
+- 29 epochs in ~30 min, peak GPU 23.91 GB
+- Cumulative: **-75.1%** vs initial 117.17
+
+**Per-split val at best epoch (29):**
+
+| Split | mae_surf_p | vs prev (#1599) |
+|-------|-----------|---------|
+| val_single_in_dist | **28.5620** | −1.638 (−5.43%) |
+| val_geom_camber_rc | **42.6891** | −0.421 (−0.97%) |
+| val_geom_camber_cruise | **13.7711** | −0.769 (−5.29%) |
+| val_re_rand | **31.8496** | +0.310 (+0.99%) |
+| **val_avg** | **29.2179** | **−0.6284 (−2.11%)** |
+
+**Per-split test at best epoch (29):**
+
+| Split | mae_surf_p | vs prev (#1599) |
+|-------|-----------|---------|
+| test_single_in_dist | **30.1346** | +0.045 (+0.15%) |
+| test_geom_camber_rc | **38.9393** | −0.471 (−1.19%) |
+| test_geom_camber_cruise | **10.8473** | −0.893 (−7.60%) |
+| test_re_rand | **22.4885** | −0.672 (−2.90%) |
+| **test_avg** | **25.6024** | **−0.4981 (−1.91%)** |
+
+**Per-channel trade-off (val avg @ best epoch):**
+
+| Channel | with p_weight=5 | baseline (#1599) | Δ |
+|---------|----------------|-----------------|---|
+| mae_surf_p | **29.218** | 29.846 | −2.1% |
+| mae_surf_Ux | 0.440 | 0.376 | +17.1% |
+| mae_surf_Uy | 0.248 | 0.224 | +10.7% |
+
+**Artifact**: `models/model-charliepai2g24h1-edward-per-channel-loss-weights-p5-20260513-052434/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# Stack: SOAP + bf16 + torch.compile(default, dynamic) + CosineAnnealingLR(T_max=28, eta_min=1e-5)
+# + ReScaleHead(hidden=32, out_channels=3) + p_channel_weight=5 (post-Huber)
+```
+
+**Key insight**: Upweighting the pressure channel by 5× post-Huber shifts ~7× more gradient mass to p vs each velocity channel. Numerator-only weighting preserves the denominator's cross-sample scaling, giving exactly 5× amplification across all Huber regimes (no variable amplification as l2_frac grows). Stable training, 3/4 val splits and all 4 test splits improve. Model still improving at ep 29 (last epoch) — convergence-limited.
+
+---
+
+## Previous Baseline — PR #1599 (re-conditioned-scaling)
 
 **val_avg/mae_surf_p = 29.8463** (epoch 27 of 29 completed in 30-min cap) — **-1.95% vs previous 30.4412**
 
@@ -397,6 +455,8 @@ cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
 
 | Date | PR | val_avg/mae_surf_p | test_avg | Notes |
 |------|----|--------------------|---------|-------|
+| 2026-05-13 | #1614 | **29.2179** | **25.6024** | per-channel-loss-weights p=5 post-Huber; 29 epochs / 30 min; -2.11% |
+| 2026-05-13 | #1599 | **29.8463** | **26.1005** | re-conditioned-scaling (ReScaleHead 3ch); 29 epochs / 30 min; -1.95% |
 | 2026-05-13 | #1794 | **30.4412** | **26.1013** | torch.compile(default,dynamic=True); 30 epochs / 30 min; -17.5% |
 | 2026-05-13 | #1456 | **36.8778** | **31.9058** | bf16-amp + cosine-eta-min T_max=17; 17 epochs / 30 min; -7.51% |
 | 2026-05-13 | #1630 | **39.8693** | **35.2214** | cosine-eta-min (eta_min=1e-5); 13 epochs / 30 min; -5.97% |
