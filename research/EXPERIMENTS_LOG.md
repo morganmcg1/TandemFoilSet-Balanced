@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 07:30 — PR #1942: lr-2e-3 (alphonse) — CLOSED (dead end)
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-2e-3`
+- **Hypothesis:** LR ceiling probe 1.5e-3 → 2e-3. PR #1895 showed best_epoch=final and the largest epoch-14 cosine drop (−7.38 units), suggesting LR ceiling still open. Probing 2e-3 with stability diagnostics (pred_abs_max, epoch-5 peak-LR spike).
+- **Metric artifacts:** alphonse ran 3-seed study; committed metrics under `exp/icml2026/charlie/metrics/`
+
+### Results vs. #1895 baseline (74.2082)
+
+| Run | Seed | val_avg/mae_surf_p | Δ vs baseline |
+|---|---|---|---|
+| Run 1 (047041) | 047041 | 76.3879 | +2.93% ❌ |
+| Run 2 (051042) | 051042 | 76.3785 | +2.92% ❌ |
+| Run 3 (055114) | 055114 | 76.5078 | +3.10% ❌ |
+| **Mean** | — | **76.4247** | **+2.99%** ❌ |
+
+**Closed as dead end.** Ceiling closes by optimization quality between 1.5e-3 and 2e-3.
+
+### Analysis
+
+LR=2e-3 is **stable** (pred_abs_max 14–18k, well below 50k instability flag) but systematically degrades optimization quality. Epoch-5 peak-LR spike is seed-dependent at this LR: Run 051042 showed no spike; Run 055114 showed +48 unit spike (2.4× the 1.5e-3 reference). Stability is bounded but training trajectory is noisier. All three runs worse than baseline by 2.9–3.1%.
+
+**Key insight:** LR ceiling closes between 1.5e-3 and 2e-3 by optimization quality, not stability. Binary search assigned to alphonse: lr=1.75e-3 midpoint probe (PR #2045).
+
+---
+
 ## 2026-05-13 07:00 — PR #1970: drop-path-0.1 (nezuko) — CLOSED (dead end)
 
 - **Branch:** `charliepai2g48h2-nezuko/drop-path-0.1`

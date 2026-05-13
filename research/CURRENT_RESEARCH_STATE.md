@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~07:05 (closed #1970 nezuko drop-path-0.1 +6.99% dead end; assigned nezuko #2004 adamw-beta2-0.99)
+- **Last updated:** 2026-05-13 ~07:35 (closed #1942 alphonse lr-2e-3 +2.99% dead end; assigned alphonse #2045 lr-1.75e-3 midpoint probe)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -33,7 +33,7 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
-| #1942 | alphonse | `lr-2e-3` | LR ceiling: 1.5e-3→2e-3 (ceiling still open per #1895) | **--epochs 14** ✓ | WIP — just assigned |
+| #2045 | alphonse | `lr-1.75e-3` | LR midpoint probe: binary-search ceiling between 1.5e-3 (winner) and 2e-3 (dead-end) | **--epochs 14** ✓ | WIP — just assigned |
 | #1970 | nezuko | `drop-path-0.1` | Stochastic Depth (DropPath) on Transolver residual branches | **--epochs 14** ✓ | WIP — just assigned |
 | #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target; now needs 74.21) |
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing |
@@ -43,6 +43,7 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
 
 ### Closed as dead ends (this round)
+- #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but optimization quality degraded; LR ceiling between 1.5e-3 and 2e-3; binary-search → #2045 lr-1.75e-3)
 - #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419 (3-epoch ramp too steep at lr=1e-3)
 - #1970 nezuko drop-path-0.1: +6.99% vs 74.2082 (capacity-reducing regularizer incompatible with 14-epoch budget; DropPath needs 100s+ epochs)
 - #1941 nezuko asinh-all-channels: +2.75% vs 74.2082 (mechanism pressure-specific; velocity channels are Gaussian, not heavy-tailed)
@@ -64,8 +65,8 @@ Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, 
 
 ## Current research focus
 
-1. **LR axis — ceiling still open:**
-   - **#1942 alphonse lr-2e-3**: #1895 showed best_epoch=final, largest epoch-14 drop (−7.38 units), cosine still productive at cutoff → lr ceiling still open. Probing 2e-3. Key risk: epoch-5 spike will be larger; monitor pred_abs_max for runaway vs bouncy-bounded.
+1. **LR axis — ceiling localised, binary search in progress:**
+   - **#2045 alphonse lr-1.75e-3**: lr=2e-3 was stable but +2.99% worse (optimization quality floor, not instability). Midpoint probe at 1.75e-3. Either confirms 1.5e-3 is exact ceiling or finds marginal gain narrowing the window further.
 
 2. **Optimizer β2 axis:**
    - **#2004 nezuko adamw-beta2-0.99**: Change AdamW `betas=(0.9, 0.999)` → `(0.9, 0.99)`. Faster 2nd-moment adaptation for 14-epoch budget. No capacity reduction (unlike DropPath). Single-line change.
