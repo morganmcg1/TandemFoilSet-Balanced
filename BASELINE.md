@@ -75,3 +75,29 @@ Current baseline: **PR #1715 (bf16 mixed-precision training)** stacked on top of
 This unblocks the four compute-bound axes that closed earlier (#1506 wider, #1507 slice=128, #1511 deeper=7, #1623 mlp_ratio=4). On the bf16 baseline, the 30-min cap now allows 18 epochs instead of 14 — those capacity moves may be back in play. Will be re-evaluated as round-2 priorities once the remaining round-1 PRs (#1506, #1509, #1511, #1589, #1692, #1712, #1735) land.
 
 Every in-flight PR is now on a stale baseline. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
+
+## 2026-05-13 05:15 — PR #1810: torch.compile (dynamic=True) on top of bf16
+
+- **`val_avg/mae_surf_p`:** 67.831 (best-val checkpoint, seed 1, `o142jibw`)
+- **`test_avg/mae_surf_p`:** 59.784 (from best-val checkpoint, seed 1)
+- **Per-split val (best-val, seed 1):** single_in_dist=71.28, geom_camber_rc=82.40, geom_camber_cruise=50.18, re_rand=67.46
+- **Per-split test (seed 1):** single_in_dist=62.60, geom_camber_rc=75.52, geom_camber_cruise=40.91, re_rand=60.10
+- **Seed 2 confirmation (`3d1aizjm`):** val=68.520, test=60.480, per-split test: single_in_dist=67.52, geom_camber_rc=72.03, geom_camber_cruise=42.38, re_rand=59.99 — both seeds beat baseline by ~24-25%, within 1% of each other.
+- **W&B runs:** `o142jibw` (seed 1, BETTER), `3d1aizjm` (seed 2)
+- **Implementation note:** Single-line addition in `train.py`: `model = torch.compile(model, dynamic=True)` after model instantiation. `dynamic=True` is required because `pad_collate` produces variable `max_n` per batch — without it, Inductor would retrace on every shape change. State-dict save/load round-trips cleanly through the `_orig_mod.` prefix wrapping.
+- **Compute:** ~49% per-epoch speedup (~103s → ~52s steady-state, after 1-epoch JIT warmup of ~63-73s); 35 total epochs vs baseline 18 within 30-min cap; best-val checkpoint at the **final epoch on both seeds** — model is still compute-bound at the doubled epoch budget. Peak VRAM 24.1 GB (75% headroom remaining vs 96 GB).
+- **Delta vs PR #1715:** val **−24.3%** (89.60 → 67.83), test **−25.2%** (79.91 → 59.78). Single-axis gain larger than any other round-1 PR including bf16 itself. Mechanism: ~1M-param Transolver at bs=4 is heavily Python/kernel-launch bound, so Inductor's kernel fusion eats a large fraction of total time; doubling the epoch budget while the val curve is still descending steeply produces a super-linear-in-epochs metric gain.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-frieren \
+      --wandb_name "willowpai2g48h3-frieren/torch-compile-seed1" \
+      --wandb_group torch-compile
+  ```
+
+### Implications for the rest of round 1
+
+Compute bottleneck is now relaxed substantially. **Round-2 priority queue shifts:** scalar-capacity axes that closed compute-bound (mlp_ratio=4, slice_num=128) become more viable on the 35-epoch budget. n_layers=7 remains marginal at +41% per-epoch overhead (would reduce 35 to ~25 epochs). Width was retested on bf16 in #1506 and regressed at the 18-epoch budget — needs re-evaluation at 35 epochs.
+
+**Best=last on both compile seeds** means lr-schedule alignment (#1843 nezuko, cosine T_max=18 → should be 35 now) becomes especially valuable. Heads-up posted to all in-flight PRs with new merge bar.
+
+Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, test < 59.78, all four test splits finite.**
