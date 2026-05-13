@@ -200,6 +200,13 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        # Feature-stream FiLM gate — zero-init both weight AND bias for identity at step 0.
+        # Applied AFTER _init_weights so it overrides the trunc_normal_ init.
+        # Channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531 instrumentation).
+        self.film = nn.Linear(3, n_hidden)
+        nn.init.zeros_(self.film.weight)
+        nn.init.zeros_(self.film.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -211,7 +218,12 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        # Per-sample flow scalars (constant across N) — channels [13, 14, 18]
+        flow_scalars = x[:, 0, [13, 14, 18]]                       # [B, 3]
+        film_scale = self.film(flow_scalars).unsqueeze(1)          # [B, 1, n_hidden]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        # Feature-stream FiLM: zero-init -> identity at step 0
+        fx = fx * (1 + film_scale)
         for block in self.blocks:
             fx = block(fx)
         return {"preds": fx}
@@ -457,6 +469,14 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(
+    f"Feature-stream FiLM gate: zero-init Linear(3, {model_config['n_hidden']}) applied before block 0; "
+    f"channels [13, 14, 18] = [log_Re, AoA0_rad, AoA1_rad] (per #2531); "
+    f"residual-stream conditioning vs output-side (closed #2531+#2588); "
+    f"+~{3 * model_config['n_hidden'] + model_config['n_hidden']} params; "
+    f"baseline to beat: val_avg/mae_surf_p < 33.4935"
+)
+print(f"Actual total params: {n_params}")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -692,6 +712,34 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Feature-stream FiLM diagnostic: weight/bias norms and modulation magnitude
+    _film = _inner.film
+    _film_w_norm = _film.weight.detach().float().norm().item()
+    _film_b_norm = _film.bias.detach().float().norm().item()
+    print("\nFeature-stream FiLM final diagnostics (best-checkpoint weights):")
+    print(f"  film.weight.norm: {_film_w_norm:.4f}")
+    print(f"  film.bias.norm:   {_film_b_norm:.4f}")
+
+    # Modulation magnitude on a val_re_rand batch (highest-OOD split for Re).
+    _film_scale_mag = None
+    _val_re_rand_loader = val_loaders.get("val_re_rand")
+    if _val_re_rand_loader is not None:
+        with torch.no_grad():
+            _x, _y, _is_surface, _mask = next(iter(_val_re_rand_loader))
+            _x = _x.to(device, non_blocking=True)
+            _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
+            _flow_scalars = _x_norm[:, 0, [13, 14, 18]]
+            _film_scale = _film(_flow_scalars.float()).unsqueeze(1)
+            _film_scale_mag = (1 + _film_scale).abs().mean().item()
+        print(f"  film_scale |1+gamma| mean on val_re_rand batch: {_film_scale_mag:.4f}")
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "film_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "film_weight_norm": _film_w_norm,
+        "film_bias_norm": _film_b_norm,
+        "film_scale_abs_mean_val_re_rand": _film_scale_mag,
+    })
 
     test_metrics = None
     test_avg = None
