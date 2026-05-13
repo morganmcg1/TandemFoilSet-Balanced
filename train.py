@@ -369,7 +369,7 @@ class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 20.0
     epochs: int = 50
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
@@ -457,6 +457,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"surf_weight: {cfg.surf_weight} (UP from 10.0) — gradient rebalancing toward primary metric mae_surf_p; surf_weight=20 never tested (10 baseline, 30 prior LOSS under heavier config)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
