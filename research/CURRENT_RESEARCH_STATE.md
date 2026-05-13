@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 17:30 UTC (Wave 17: CLOSE #2368 askeladd flow-cond-film v1 (stale WIP, pod never picked up); ASSIGN #2453 askeladd flow-cond-film-v2 (refreshed on new stack with corrected post-Fourier feature indices [35,36,40]))
+- **Last updated**: 2026-05-13 18:00 UTC (Wave 17: CLOSE #2437 nezuko slice-temp-lr-10x (Outcome C, +4.81% val; load-bearing finding — softmax-internal scale ≠ additive scale under no-WD/high-lr regime); ASSIGN #2465 nezuko norm-bias-no-wd (standard transformer recipe))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -39,7 +39,7 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 | frieren | #2434 | freq-init-equilibrium | Start Fourier freqs at #2370 equilibrium [0.75,1.46,3.44,8,16,32] + keep 10× lr — architectural vs dynamic mechanism test | ASSIGNED |
 | thorfinn | #2435 | learned-freqs-50x-lr | Keep dyadic init, raise lr from 10× to 50× — tests gradient-magnitude limit for top freqs | ASSIGNED |
 | fern | #2436 | layerscale-lr-10x | LayerScale params (10 tensors, 1280 scalars) in 10× lr no-WD group — same optimizer insight as #2370 | ASSIGNED |
-| nezuko | #2437 | slice-temp-lr-10x | Slice attention temperature (20 scalars, 5 blocks × 4 heads) in 10× lr no-WD group | ASSIGNED |
+| nezuko | #2465 | norm-bias-no-wd | LayerNorm γ/β + Linear biases + placeholder + attn.temperature → wd=0 (standard transformer recipe, orthogonal to fern #2436) | ASSIGNED |
 | askeladd | #2453 | flow-cond-film-v2 | FiLM γ/β = MLP(log_Re,AoA0,AoA1) — refreshed (v1 stale, never picked up); zero-init heads AFTER apply, cond_indices=[35,36,40] | ASSIGNED |
 | edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | ASSIGNED |
 | alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric | IN FLIGHT |
@@ -64,10 +64,12 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 - Learnable freqs (#2370 MERGED, 17th win): −3.73% — bottom 3 freqs adapted strongly, top 3 gradient-limited
 - **Wave 17 follow-ups**: freq init at equilibrium (frieren), 50× lr to unlock top freqs (thorfinn)
 
-**Optimizer-group insight (Wave 17 new axis):**
-- Scale/frequency parameters (freqs, LayerScale γ, slice temperature) may be systematically under-trained by default WD=1e-4 + lr=5e-4
-- Putting freqs in no-WD + 10× lr group: +17th win (−3.73%)
-- Testing same treatment for: LayerScale (fern), slice-temp (nezuko)
+**Optimizer-group insight (Wave 17 new axis — refined after #2437):**
+- Original framing: "scale/frequency parameters are systematically under-trained at default WD=1e-4 + lr=5e-4"
+- **Refined framing (post-#2437)**: the no-WD + high-lr treatment WORKS for **additive scale params** (freqs, LayerScale γ — multiply activations) but FAILS for **softmax-internal scale params** (slice temperature, QK temperature — govern combinatorial routing)
+- Freq insight (#2370 MERGED): +17th win (−3.73%)
+- Slice-temp at 10× lr (#2437 CLOSED Outcome C): +4.81%; block 0 collapsed uniformly to 0.185, destabilizing token-to-slice routing
+- Still testing: LayerScale γ at 10× lr (fern #2436 — additive scale, should win), QK temperature at no-WD + init=0 (tanjiro #2427 — softmax-internal but with proper init), norm/bias at default lr no-WD (nezuko #2465 — broad standard-transformer recipe)
 
 **Sampling axis (CLOSED for camber_rc upsampling):**
 - OOD upsampling (#2391): +8.22% — camber_rc bottleneck is geometric extrapolation, NOT data density; upsampling collapses in-dist
@@ -102,12 +104,13 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 ## Prioritized open research themes (Wave 17+)
 
 1. **LayerScale lr-10x** (fern #2436): does the optimizer-group insight generalize from freqs to LayerScale γ?
-2. **Slice temperature lr-10x** (nezuko #2437): does slice attention sharpness benefit from same treatment?
+2. ~~Slice temperature lr-10x~~ **CLOSED #2437 Outcome C** (softmax-internal scale ≠ additive scale); replaced with **norm-bias no-WD** (nezuko #2465)
 3. **Freq 50× lr** (thorfinn #2435): can top freqs be unlocked with higher lr?
 4. **Freq equilibrium init** (frieren #2434): was the #2370 win architectural or dynamic?
 5. **FiLM conditioning** (askeladd #2453): proper global conditioning for Re/AoA scalars (refreshed from stale #2368 on post-#2370 stack)
 6. **Hybrid RFF + learned freqs** (edward #2441 NEW): additive Gaussian σ=3 RFF ON TOP of current learned-freqs stack — tests orthogonality of mechanisms
 7. **QK-norm v2** (tanjiro #2427): with corrected init=0 and tau no-WD
 8. **Asymmetric LayerScale** (alphonse #2414): attn=0.05, mlp=0.025
-9. **All-param optimizer sweep**: if LayerScale + slice-temp both win, test joint 10× lr group for all scale params simultaneously
+9. **All-param optimizer sweep**: if LayerScale + norm-bias both win, test joint no-WD config for all 1D params simultaneously
 10. **Per-block learned freqs (30 params)**: natural escalation if 50× lr doesn't unlock top freqs
+11. **Slice temp init sweep (not lr sweep)**: if Wave 18 reopens this axis, try init ∈ {0.3, 0.7} at default lr — gradient signal in #2437 suggested sharper is preferred but lr was too aggressive

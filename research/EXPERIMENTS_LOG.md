@@ -8,6 +8,26 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 18:00 — PR #2437 (nezuko slice-temp-lr-10x) — **CLOSED** (Outcome C; slice-temp axis closed at default init=0.5, lr=5e-4, wd=1e-4)
+
+- Branch: `charliepai2g24h4-nezuko/slice-temp-lr-10x`
+- Hypothesis: Put PhysicsAttention.temperature (20 scalars) in a no-WD 10× lr group, analogous to the freq insight from #2370
+- Metric artifact: `models/model-charliepai2g24h4-nezuko-slice-temp-lr-10x-20260513-161433/metrics.jsonl`
+
+| Metric | This run | Baseline #2370 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **62.4297** | 59.5645 | **+2.865 (+4.81%)** |
+| `test_avg/mae_surf_p` | **54.1273** | 51.6141 | **+2.513 (+4.87%)** |
+| `val_geom_camber_rc` | 78.084 | 71.466 | +9.26% (worst regression) |
+| `val_re_rand` | 61.358 | 57.372 | +6.95% |
+| `val_geom_camber_cruise` | 41.840 | 39.185 | +6.78% |
+| `val_single_in_dist` | 68.437 | 70.235 | −2.56% (only improvement) |
+
+- **Mechanism**: temperatures moved substantially — block 0 collapsed uniformly to mean=0.185 (all 4 heads agreeing, std=0.036) ≈ 2.7× sharper than init. 15 of 20 heads ended sharper than init=0.5; 5 went softer. Block 1 was the only block with meaningful head specialisation (std=0.313).
+- **Why it failed**: temperature governs the *combinatorial* token-to-slice routing inside a softmax — moving it 10× faster than the rest of the network changes which slices each token attends to, and the network needs many epochs to relearn the routing. Block 0 committed to a peaked assignment before the rest of the network learned to use those slices. Slow recovery in val loss (199.7 ep 1 vs typical ~150) confirms early routing instability.
+- **Load-bearing finding for Wave 17**: the optimizer-group axis splits into two regimes — additive scale params (freqs, LayerScale γ; multiply activations) where 10× lr no-WD wins, vs softmax-internal scale params (slice temperature, QK temperature) where the routing structure can't absorb fast updates. Future no-WD experiments should distinguish these two classes explicitly.
+- **Action**: closed slice-temp axis at default config; reassigned nezuko to #2465 `norm-bias-no-wd` (LayerNorm γ/β + Linear biases + placeholder + attn.temperature get wd=0 at default lr — the standard transformer recipe we're missing, explicit orthogonal coverage with fern's #2436 LayerScale-lr-10x).
+
 ## 2026-05-13 17:30 — PR #2368 (askeladd flow-cond-film v1) — **CLOSED** (stale WIP; pod never picked up)
 
 - Branch: `charliepai2g24h4-askeladd/flow-cond-film`
