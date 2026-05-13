@@ -236,18 +236,20 @@ class Transolver(nn.Module):
 
 
 class ReScaleHead(nn.Module):
-    """Per-sample, Re-conditioned output scale (DimINO-style redimensionalization).
+    """Per-sample, geometry+Re-conditioned output scale (DimINO-style redimensionalization).
 
-    Takes normalized log(Re) as a scalar per sample and emits a positive scale
-    factor per output channel, broadcast over mesh nodes. Initialized so the
-    output is the identity (scale ≈ 1.0) at step 0, so the model starts where
-    plain Transolver would and only deviates if the gradient signal supports it.
+    Takes a per-sample conditioning vector of normalized scalars
+    [log(Re), AoA_1, Gap, Stagger] and emits a positive scale factor per output
+    channel, broadcast over mesh nodes. Identity-init: zero-weight final layer
+    + softplus^{-1}(1)≈0.541 bias makes the output scale ≈ 1.0 at step 0 for
+    every conditioning value, so the model starts where plain Transolver would
+    and only deviates if the gradient signal supports it.
     """
 
-    def __init__(self, hidden: int = 32, out_channels: int = 3):
+    def __init__(self, cond_dim: int = 4, hidden: int = 32, out_channels: int = 3):
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(1, hidden),
+            nn.Linear(cond_dim, hidden),
             nn.GELU(),
             nn.Linear(hidden, out_channels),
         )
@@ -255,9 +257,9 @@ class ReScaleHead(nn.Module):
             self.mlp[-1].weight.zero_()
             self.mlp[-1].bias.fill_(0.541)  # softplus(0.541) ≈ 1.0
 
-    def forward(self, log_re: torch.Tensor) -> torch.Tensor:
-        # log_re: [B, 1]  →  [B, 1, C] scale, broadcast over N nodes.
-        raw = self.mlp(log_re)
+    def forward(self, cond: torch.Tensor) -> torch.Tensor:
+        # cond: [B, cond_dim]  →  [B, 1, C] scale, broadcast over N nodes.
+        raw = self.mlp(cond)
         scale = F.softplus(raw)
         return scale.unsqueeze(1)
 
@@ -332,8 +334,10 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            log_re_norm = x_norm[:, 0, 13:14]
-            scale = rescale_head(log_re_norm)
+            # Conditioning: normalized [log(Re), AoA_1, Gap, Stagger] from x_norm.
+            # Features already z-scored via dataset stats, so we feed directly.
+            cond = x_norm[:, 0, [13, 14, 22, 23]]
+            scale = rescale_head(cond)
             pred = model({"x": x_norm})["preds"] * scale
 
             sq_err = (pred - y_norm) ** 2
@@ -509,7 +513,7 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
+rescale_head = ReScaleHead(cond_dim=4, hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 n_params_film = sum(p.numel() for p in model.re_film.parameters())
@@ -656,8 +660,10 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Conditioning: normalized [log(Re), AoA_1, Gap, Stagger] from x_norm.
             log_re_norm = x_norm[:, 0, 13:14]
-            scale = rescale_head(log_re_norm)
+            cond = x_norm[:, 0, [13, 14, 22, 23]]
+            scale = rescale_head(cond)
             pred = model({"x": x_norm})["preds"] * scale
 
             # Huber-shaped per-node residuals in normalized space.
