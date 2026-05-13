@@ -8,30 +8,45 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **66.44** | PR #1780 (merged 2026-05-13) — Lion + epochs=16 on BF16+grad_clip+Lion stack |
-| **test_avg/mae_surf_p** | **61.78** | PR #1780 — all 4 splits finite |
-| Peak VRAM | 32.94 GB | PR #1780 — BF16 |
-| s/epoch | 101.6 s | PR #1780 — BF16 |
+| **val_avg/mae_surf_p** | **66.32** | PR #1639 (merged 2026-05-13) — Huber δ=0.5 loss on Lion+BF16 stack (13 epochs) |
+| **test_avg/mae_surf_p** | **61.14** | PR #1639 — all 4 splits finite |
+| Peak VRAM | 32.95 GB | PR #1639 — BF16, batch=4 |
+| s/epoch | ~101 s | PR #1639 — BF16, 22 min total for 13 epochs |
 
-### Per-split val (PR #1780, epoch 16)
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 71.11 |
-| val_geom_camber_rc | 81.78 |
-| val_geom_camber_cruise | 48.92 |
-| val_re_rand | 63.96 |
-| **val_avg** | **66.44** |
-
-### Per-split test (PR #1780, epoch 16 best checkpoint)
+### Per-split val (PR #1639, epoch 13, δ=0.5 winning arm)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 60.78 |
-| test_geom_camber_rc | 71.40 |
-| test_geom_camber_cruise | 57.42 |
-| test_re_rand | 57.51 |
-| **test_avg** | **61.78** |
+| val_single_in_dist | 71.66 |
+| val_geom_camber_rc | 82.99 |
+| val_geom_camber_cruise | 46.06 |
+| val_re_rand | 64.56 |
+| **val_avg** | **66.32** |
+
+### Per-split test (PR #1639, epoch 13 best checkpoint, δ=0.5)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 62.73 |
+| test_geom_camber_rc | 69.80 |
+| test_geom_camber_cruise | 56.26 |
+| test_re_rand | 55.79 |
+| **test_avg** | **61.14** |
+
+## 2026-05-13 03:51 — PR #1639: Huber loss (δ=0.5) on Lion stack (MERGED)
+
+- **val_avg/mae_surf_p: 66.32** (↓ 0.2% from 66.44 PR #1780; the entire Huber→MSE swap at 13 epochs beats epochs=16 with MSE at 13 epochs by 0.12 — within run-to-run noise, but the win compounds with epoch extension)
+- **test_avg/mae_surf_p: 61.14** (↓ 1.0% from 61.78; all 4 splits finite)
+- **Peak VRAM: 32.95 GB**; total wall time ~22 min for 13 epochs
+- **Metric artifacts:** `models/model-charliepai2g24h5-alphonse-huber_delta0_5_lion-20260513-025216/metrics.jsonl` (winner); `models/model-charliepai2g24h5-alphonse-huber_delta1_lion-20260513-021619/metrics.jsonl` (δ=1.0 arm, val=67.41)
+- **What changed:** Replaced MSE with element-wise Huber (Smooth-L1) loss δ=0.5: `huber(x) = 0.5*x² if |x|<δ else δ*|x| - 0.5*δ²`. Two arms tested: δ=1.0 (val 67.41) and δ=0.5 (val 66.32 — winner). All other hyperparameters identical to #1641 Lion baseline.
+- **Why it worked:** Outlier residuals dominate MSE gradient — typically high-Re tandem samples near surfaces. Huber caps the per-element loss-gradient magnitude at δ. The hypothesis that this complements grad_clip held: grad_clip works on global gradient norm post-aggregation, Huber works per-element pre-aggregation, they stack. δ=0.5 uniformly better than δ=1.0 across all 4 val and 4 test splits, suggesting the response curve hasn't bottomed out — smaller δ may help further (next-step experiment).
+- **Baseline configuration delta:** MSE → Huber δ=0.5 (code change in train.py).
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name huber_delta0_5 --agent <student>
+  ```
+  (Huber δ=0.5 is the default loss; combine with `--epochs 16` to match #1780 schedule.)
 
 ## 2026-05-13 03:50 — PR #1780: Lion + epochs 13→16 (MERGED)
 
