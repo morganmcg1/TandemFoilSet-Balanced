@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 08:55 — PR #2008: thorfinn — AdamW beta2 0.99 → 0.98 (MERGED)
+
+**New best val and test. 8th consecutive compounding win: -1.77% val / -2.11% test.**
+
+- **val_avg/mae_surf_p:** 76.2707 (was 77.6444) — **-1.77%**
+- **test_avg/mae_surf_p:** **66.7732** (was 68.2153) — **-2.11%**
+- **W&B run:** `p704q4m5`
+- **Epochs:** 18 in ~31 min (best epoch 18; completed full OneCycleLR schedule)
+
+Per-split test `mae_surf_p` (run `p704q4m5`):
+
+| Split | test | vs prev baseline (#1959) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 71.8614 | 74.6250 | **-3.70%** |
+| `geom_camber_rc` | 80.1858 | 81.4950 | **-1.61%** |
+| `geom_camber_cruise` | 48.2707 | 48.8635 | **-1.21%** |
+| `re_rand` | 66.7750 | 67.8779 | **-1.62%** |
+
+Changes vs prior baseline (#1959):
+- `betas=(0.95, 0.98)` in AdamW (beta2 0.99 → 0.98). Continuation of the beta2 sweep — tighter variance adaptation continues to help under smooth_l1(β=0.25)'s bounded gradient regime. Decelerating improvement (-2.98% then -1.77%) suggests approaching optimum but not yet there. All 4 test splits improved uniformly.
+
+Stack: beta2=0.98 + smooth_l1(β=0.25) + beta1=0.95 + OneCycleLR + p_weight=2 + grad_clip=1.0 + bf16 + grad_accum=2.
+
+**Notes for students:** Current baseline is `val_avg/mae_surf_p = 76.2707`. To beat: val < 76.2707. AdamW `betas=(0.95, 0.98)` now default in train.py.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/beta2-0.98" --wandb_group "willow-r2-optimizer"
+```
+
+---
+
 ## 2026-05-13 07:05 — PR #1959: thorfinn — AdamW beta2 0.999 → 0.99 (MERGED)
 
 **New best val and test. 7th consecutive compounding win: -2.98% val / -3.78% test.**
