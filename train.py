@@ -467,6 +467,10 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Bernoulli surface variance regularizer. Penalizes variance of
+    # (p + 0.5*(Ux^2 + Uy^2)) across surface nodes per sample, computed in
+    # normalized prediction space. Applied only during training. Set to 0 to disable.
+    bernoulli_weight: float = 0.01
 
 
 cfg = sp.parse(Config)
@@ -630,6 +634,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     rescale_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_bernoulli = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
@@ -690,7 +695,31 @@ for epoch in range(MAX_EPOCHS):
             surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             vol_loss = (vol_sq / vol_denom).mean()
             surf_loss = (surf_sq / surf_denom).mean()
-            loss = vol_loss + cfg.surf_weight * surf_loss
+
+            # Bernoulli surface variance regularizer (training only). Penalises
+            # variance of (p + 0.5*(Ux^2 + Uy^2)) across surface nodes per
+            # sample in normalised prediction space. Vectorised population
+            # variance (unbiased=False) avoids unstable Bessel correction for
+            # samples with small surface counts. Surface mask uses the boolean
+            # is_surface tensor from pad_collate AND'd with `mask` (excludes
+            # padded positions) — never the normalised x feature.
+            surf_mask_b = mask & is_surface  # [B, N]
+            Ux_p = pred[..., 0]
+            Uy_p = pred[..., 1]
+            p_p = pred[..., 2]
+            p_total = p_p + 0.5 * (Ux_p ** 2 + Uy_p ** 2)  # [B, N]
+            n_surf_b = surf_mask_b.sum(dim=1).clamp(min=1).to(p_total.dtype)
+            sum_p_total = (p_total * surf_mask_b).sum(dim=1)
+            mean_p_total = sum_p_total / n_surf_b  # [B]
+            diff = (p_total - mean_p_total.unsqueeze(1)) * surf_mask_b
+            per_sample_var = (diff ** 2).sum(dim=1) / n_surf_b
+            bernoulli_loss = per_sample_var.mean()
+
+            loss = (
+                vol_loss
+                + cfg.surf_weight * surf_loss
+                + cfg.bernoulli_weight * bernoulli_loss
+            )
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
@@ -735,6 +764,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_bernoulli += bernoulli_loss.item()
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
@@ -742,6 +772,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_bernoulli /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
@@ -826,6 +857,8 @@ for epoch in range(MAX_EPOCHS):
         "torch_compile_dynamic": torch_compile_dynamic,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/bernoulli_loss": epoch_bernoulli,
+        "bernoulli_weight": cfg.bernoulli_weight,
         "train/grad_norm_mean": grad_norm_mean,
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
@@ -847,7 +880,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} bern={epoch_bernoulli:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
