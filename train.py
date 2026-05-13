@@ -422,6 +422,7 @@ class Config:
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
+    grad_clip_max_norm: float = 5.0  # max grad norm before optimizer.step(); rare-event tail clipping
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -536,6 +537,10 @@ for epoch in range(MAX_EPOCHS):
     accum_loss = 0.0
     n_micro_in_accum = 0
     total_micro = len(train_loader)
+    grad_norm_sum = 0.0
+    grad_norm_max = 0.0
+    grad_clip_fire_count = 0
+    n_opt_steps_epoch = 0
     for step_idx, (x, y, is_surface, mask) in enumerate(
         tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
     ):
@@ -565,12 +570,27 @@ for epoch in range(MAX_EPOCHS):
 
         is_step = ((step_idx + 1) % cfg.accumulation_steps == 0) or ((step_idx + 1) == total_micro)
         if is_step:
+            # Clip the *accumulated* gradient (post-accumulation, pre-optimizer-step).
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.grad_clip_max_norm
+            )
+            grad_norm_val = grad_norm.item()
+            fired = grad_norm_val > cfg.grad_clip_max_norm
+            grad_norm_sum += grad_norm_val
+            if grad_norm_val > grad_norm_max:
+                grad_norm_max = grad_norm_val
+            if fired:
+                grad_clip_fire_count += 1
+            n_opt_steps_epoch += 1
+
             optimizer.step()
             optimizer.zero_grad()
             global_step += 1
             wandb.log({
                 "train/loss": accum_loss / max(n_micro_in_accum, 1),
                 "train/effective_batch_size": cfg.batch_size * n_micro_in_accum,
+                "train/grad_norm_pre_clip": grad_norm_val,
+                "train/grad_clip_fired": float(fired),
                 "global_step": global_step,
             })
             accum_loss = 0.0
@@ -595,9 +615,14 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
     dt = time.time() - t0
 
+    grad_norm_mean_epoch = grad_norm_sum / max(n_opt_steps_epoch, 1)
+    grad_clip_fire_rate = grad_clip_fire_count / max(n_opt_steps_epoch, 1)
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": grad_norm_mean_epoch,
+        "train/grad_norm_epoch_max": grad_norm_max,
+        "train/grad_clip_fire_rate": grad_clip_fire_rate,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -625,6 +650,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad_norm[mean={grad_norm_mean_epoch:.3f} max={grad_norm_max:.3f} fire={grad_clip_fire_rate*100:.1f}%]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
