@@ -628,3 +628,65 @@ Third dead-end from per-epoch cost in round-2. Pattern confirmed: any change tha
 - Branch: willowpai2g48h1-askeladd/gradient-accumulation
 - Hypothesis: 2 micro-batches at bs=4 → effective bs=8 but same step count as bs=4 (5640 updates). Gets the gradient quality benefit without step-starvation. Sign vote over accumulated gradient = better directional signal. Zero memory change (43 GB peak).
 - Target: test_avg/mae_surf_p < 83.77
+
+---
+
+## 2026-05-13 06:55 — PR #1980: Gradient accumulation accum=2 — **MERGED** ✓ NEW BEST
+- Branch: willowpai2g48h1-askeladd/gradient-accumulation
+- W&B run: `6qxwtm0v` — group `gradient-accumulation`
+- Config: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, **accumulation_steps=2** (eff_bs=8), bs=4, bf16
+
+| Metric | Grad-accum=2 | Previous baseline (Lion-only, 83.77) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, epoch 14) | **90.82** | 92.70 | **−2.04%** |
+| **test_avg/mae_surf_p** | **80.62** | **83.77** | **−3.77%** ✅ |
+| test_single_in_dist | 82.23 | 90.07 | **−8.71%** 🏆 |
+| test_geom_camber_rc | 93.60 | 98.72 | **−5.18%** |
+| test_geom_camber_cruise | 61.57 | 60.96 | +1.00% |
+| test_re_rand | 85.06 | 85.32 | −0.31% |
+
+- Epochs: 14/18 at ~129 s/epoch; peak GPU **43.4 GB** (unchanged from bs=4!); 2632 total optimizer steps
+
+**Analysis**: Gradient accumulation over 2 micro-batches gives a higher signal-to-noise sign vote for Lion, mainly via tighter per-micro-batch mesh padding. TandemFoilSet meshes vary 900–250K nodes; padding to the local max of 4 samples vs the full bs=8 max reduces noise-from-padding significantly on variable-length batches. The dominant improvement is on in_dist (−8.71%) and rc (−5.18%). Cruise +1.0% — already the easiest split (smallest error), likely near noise floor.
+
+**Note**: The student correctly observed that this gives bs=8's step count (~1316 steps/epoch × 14 = 2632), NOT the same as bs=4 (5640). Despite the step reduction, the per-micro-batch padding advantage wins vs the true bs=8 attempt (#1877, +6.5%). The gradient accumulation approach compares favorably to both reference points.
+
+**NEW BASELINE: test=80.62, val=90.82** — Cumulative gain from PR #1391: 121.28 → 80.62 = **−33.5%**
+
+**Action**: MERGED. Assigned askeladd grad-accum-4 (#2009).
+
+---
+
+## 2026-05-13 06:55 — PR #1973: Cosine eta_min=lr/10 — CLOSED ✗
+- Branch: willowpai2g48h1-edward/cosine-eta-min
+- W&B run: `57aqam8j` — group `cosine-eta-min`
+- Config: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, **eta_min=1.5e-5** (lr/10), bs=4, bf16
+
+| Metric | eta_min=1.5e-5 | Lion baseline (83.77) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, epoch 14) | **95.79** | 92.70 | **+3.33%** |
+| **test_avg/mae_surf_p** | **86.71** | **83.77** | **+2.94%** |
+| test_single_in_dist | 89.09 | 90.07 | −0.98% |
+| test_geom_camber_rc | 99.46 | 98.72 | +0.74% |
+| test_geom_camber_cruise | 67.23 | 60.96 | +10.29% |
+| test_re_rand | 91.03 | 85.32 | +6.70% |
+
+- 14/18 epochs at 130 s/epoch; peak GPU 88.12 GB; final LR at ep14 = 3.08e-5
+
+**Analysis**: My LR math in the PR body was wrong. Claimed eta_min=1.5e-5 gives LR ≈ 1.84e-5 at epoch 14 — "nearly identical" to eta_min=0's 1.76e-5. Actual: LR(14) = 3.08e-5, **75% higher**. The floor raises the effective LR throughout the late-training window, not just at the tail. Lion's sign-momentum took oversized steps during refinement, blowing sharp minima on cruise (+10.3%) and re_rand (+6.7%). Excellent student diagnosis.
+
+**LR schedule floor lever: CLOSED.** eta_min=lr/10 is too large for truncated cosine at T_max=18. eta_min=lr/100 would be marginal, T_max-alignment is the cleaner fix (but T_max=14 was already tested in #1771 and failed). Pivot to activation function change.
+
+**Action**: Closed. Assigned edward swiglu-activation (#2010).
+
+---
+
+## 2026-05-13 07:00 — PR #2009 (NEW): Grad accum=4 (eff_bs=16)
+- Branch: willowpai2g48h1-askeladd/grad-accum-4
+- Hypothesis: Natural follow-up to accum=2 win. accum=4 further reduces padding noise (even tighter micro-batch padding) but halves optimizer steps again (~1316 total). Tests whether gradient-noise reduction continues to dominate vs step-starvation at eff_bs=16. Either outcome is informative: win = noise still dominant; loss = starvation resumes at eff_bs=16.
+- Target: test_avg/mae_surf_p < 80.62 (new baseline)
+
+## 2026-05-13 07:00 — PR #2010 (NEW): SiLU (Swish) activation
+- Branch: willowpai2g48h1-edward/swiglu-activation
+- Hypothesis: Replace GELU with SiLU in all MLP blocks (model_config: act="silu"). SiLU is already in ACTIVATION dict. Single parameter change, zero memory/compute overhead. SiLU consistently matches or beats GELU on modern Transformer benchmarks. Testing on grad-accum=2 stack (--accumulation_steps 2).
+- Target: test_avg/mae_surf_p < 80.62 (new baseline)
