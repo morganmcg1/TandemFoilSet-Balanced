@@ -5,6 +5,65 @@
 
 ---
 
+## 2026-05-13 15:15 — PR #2345: batch_size 4 → 2 (gradient-noise regularization, 2× opt steps/epoch)
+
+**Student:** charliepai2g48h2-nezuko  
+**Change:** Single constant change `batch_size: 4 → 2`. Doubles optimization steps per epoch (375 → 750 steps, 5250 → 10500 total). All other config unchanged from PR #2260: grad_clip=0.5, RFF σ=3.0, asinh GAIN=1.0, lr=1.5e-3, 4-epoch warmup, AdamW betas=(0.9, 0.99) ε=1e-8 wd=1e-4, CosineAnnealingLR(T_max=10).
+
+### Validation (best epoch 14/14)
+
+| Split | mae_surf_p | vs. #2260 baseline (65.2170) |
+|---|---|---|
+| val_single_in_dist | 69.1032 | **−4.66 (−6.32%)** ✓ |
+| val_geom_camber_rc | 77.8463 | **−1.59 (−2.00%)** ✓ |
+| val_geom_camber_cruise | 41.6722 | **−1.18 (−2.74%)** ✓ |
+| val_re_rand | 63.8128 | **−1.00 (−1.55%)** ✓ |
+| **val_avg/mae_surf_p** | **63.1086** | **−2.11 (−3.23%)** ✓ |
+
+**Improvement vs #2260 baseline: −3.23% (65.2170 → 63.1086)**
+
+### Test (from best-val checkpoint, epoch 14)
+
+| Split | mae_surf_p | vs. #2260 |
+|---|---|---|
+| test_single_in_dist | 62.4700 | **−1.98 (−3.08%)** ✓ |
+| test_geom_camber_rc | 69.6733 | **−2.00 (−2.79%)** ✓ |
+| test_geom_camber_cruise | 34.7817 | **−0.47 (−1.34%)** ✓ |
+| test_re_rand | 53.0047 | **−1.45 (−2.66%)** ✓ |
+| **test_avg/mae_surf_p** | **54.9824** | **−1.48 (−2.62%)** ✓ |
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **678K params** (unchanged)
+- RFF: B ~ N(0, σ²=9.0) ∈ R^{2×32}, fixed (seeded 42), output 64-dim [cos, sin]
+- AdamW **lr=1.5e-3**, **4-epoch warmup**, wd=1e-4, **betas=(0.9, 0.99)**, CosineAnnealingLR(T_max=10), **grad_clip=0.5**
+- **batch_size=2** (halved from 4; new canonical)
+- Loss: `F.l1_loss` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- Asinh pressure compression: GAIN=1.0 (pressure channel only)
+- 750 steps/epoch, 10500 total optimization steps (2× prior canonical)
+
+### Key finding
+
+Halving batch size from 4→2 gives **the second largest improvement this launch** (−3.23% val, −2.62% test). All 4 val and 4 test splits improve. **val_single_in_dist drops −6.32%** — the largest per-split gain, suggesting batch=2's gradient noise / flatter-minima effect is especially powerful for the single-geometry OOD split. With grad_clip=0.5 still 100% saturated in the peak-LR window, the 2× more optimization steps at max-step-size (not higher LR) is the driver: finer-grained gradient descent through more steps compounds to a meaningfully better optimum.
+
+**Canonical batch_size is now 2.** New experiments must use batch_size=2 as the baseline.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-nezuko-batch-size-2-20260513-141058/metrics.jsonl`
+- `models/model-charliepai2g48h2-nezuko-batch-size-2-20260513-141058/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-nezuko \
+    --experiment_name "charliepai2g48h2-nezuko/batch-size-2" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 13:20 — PR #2260: Tighter gradient clipping grad_clip 1.0 → 0.5 (dampen epoch-5 spike)
 
 **Student:** charliepai2g48h2-nezuko  
