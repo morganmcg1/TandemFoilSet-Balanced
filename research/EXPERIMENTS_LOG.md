@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-05-13 09:30 UTC — Round 31
+
+### PR #1988 nezuko: Per-sample fun_dim jitter Re/AoA (channels 13/14/18) — CLOSED after 2 σ-points (7th averaging-style bimodal confirmation)
+
+- **Branch:** `charliepai2g48h5-nezuko/fun-jitter-re-aoa-0.025` (latest run; previous σ=0.05 run on same PR)
+- **Hypothesis:** σ=0.025 retune of fun_dim jitter on condition channels. Earlier σ=0.05 was LOSS (+19.5%); student suggested σ=0.025 as the σ-sweep closure probe.
+- **Result:** val_avg = **57.9999** (+14.6% vs current 50.6001 baseline, +7.4% vs old 54.00), test_avg = **50.3245** (+5.7%). LOSS. Best epoch terminal at 44/44.
+
+**Per-split breakdown (vs 50.6001 current baseline):**
+
+| Split | Baseline | σ=0.025 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.94 | 54.86 | +14.4% (still loss vs current schedule) |
+| `val_geom_camber_rc` | 67.37 | 74.58 | +10.7% (OOD LOSS) |
+| `val_geom_camber_cruise` | 34.34 | 42.13 | +22.7% (largest OOD LOSS) |
+| `val_re_rand` | 52.75 | 60.42 | +14.5% (OOD LOSS) |
+
+**Two σ-points cleanly establish the dose-response:**
+
+| Split | σ=0.05 (vs old 54.00) | σ=0.025 (vs old 54.00) | Attenuation when halving σ |
+|---:|---:|---:|---:|
+| val_single_in_dist | +4.1% | **−7.16%** (flip to in-dist WIN at smaller σ) | directional flip |
+| val_geom_camber_rc | +12.2% | +10.6% | 0.87× (slower than linear) |
+| val_geom_camber_cruise | +21.9% | +17.9% | 0.82× (slower than linear) |
+| val_re_rand | +13.6% | +12.4% | 0.91× (near-flat) |
+
+**Key empirical findings:**
+
+1. **OOD damage is near-saturated in σ** — halving σ from 0.05 to 0.025 only reduces OOD regression by 9-18%, far slower than linear (which would be 50% reduction). This is the signature of "OOD damage is binary-in-σ-threshold" — any non-trivial fun_dim noise displaces the model's OOD condition→field readout equally.
+2. **In-dist exhibits a Goldilocks zone** — directional flip from +4.1% LOSS (σ=0.05) to −7.2% WIN (σ=0.025). The in-dist regularization mechanism IS real at smaller σ, but only at the cost of OOD damage that doesn't attenuate proportionally.
+3. **7th averaging-style bimodal confirmation** — joins the rock-solid empirical law (coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead, warmup-5). Now extended to channel-level data augmentation: condition-channel jitter is yet another way to express the same in-dist↔OOD trade-off.
+
+**Mechanism interpretation (student's analysis, verbatim and correct):** "Condition channels are broadcast scalars per sample, not noisy per-node features. Unlike coords (which already have natural mesh noise), the condition channels are 'exact' sample-level constants. Perturbing them tells the model the *operating condition itself* is uncertain — a much stronger prior than the pos-jitter case."
+
+**Class implication:** Future channel-level jitter probes (Re-only, AoA-only, even smaller σ) would each produce smaller-magnitude versions of the same bimodal — no operational information gain. **Axis closed comprehensively.**
+
+- **Metric artifacts:** `models/model-charliepai2g48h5-nezuko-fun-jitter-re-aoa-0.025-20260513-075053/metrics.jsonl`
+- **Next:** Reassign nezuko to translation augmentation σ=0.01 on coords (channels 0-1, per-sample shift) — physical-symmetry lever, structurally distinct from all 7 closed averaging-style mechanisms.
+
+### PR #2034 frieren: RMSNorm replaces LayerNorm (retry of stale #1926) — CLOSED (STALE, 2nd consecutive)
+
+- **Branch:** `charliepai2g48h5-frieren/rmsnorm-retry`
+- **Hypothesis:** RMSNorm at all 3 LayerNorm sites in TransolverBlock; Pre-LN architectural variant.
+- **Result:** Zero training activity. Only the round-25 assignment commit (d5f8ebc at 07:14 UTC); no further commits, no pod activity for 8+ hours. Same GraphQL rate-limit/pod-stuck pattern observed with tanjiro's stales (4 consecutive before unstuck via fresh PR #2083).
+- **Axis status:** UNTESTED. RMSNorm hypothesis intact and worth one more test on new 50.6001 baseline.
+- **Next:** Reassigned to frieren under fresh PR #2139 (same hypothesis, new PR to unstick pod via new branch/tracking state).
+
+### Assignment: Round 31
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2138 | nezuko | Translation augmentation σ=0.01 (channels 0-1, per-sample shift) — physical-symmetry OOD lever, structurally distinct from 7 closed averaging-style mechanisms |
+| #2139 | frieren | RMSNorm replacing LayerNorm (all 3 sites, retry-3 of stale #1926/#2034) — pod-unstick attempt via new PR |
+
+**Rationale (combined):** With the 7× averaging-style confirmation now rock-solid, the next OOD-targeting experiments must use structurally different mechanisms: physical-symmetry data augmentation (translation aug), structural input augmentation (NACA #2072 + gap/stagger #2114 already in flight), or architectural change (RMSNorm). Translation augmentation specifically tests whether the bimodal pattern extends to physical-symmetry augmentation or whether physical-symmetry is the first lever that breaks the trade-off — a critical experimental discriminant. RMSNorm continues the architecture-side probe.
+
+**Operations note:** GraphQL API rate-limited (5000/hr exhausted, resets ~09:49 UTC). PR creation done via REST API (`POST /repos/.../pulls`); labels added via `POST /repos/.../issues/{n}/labels`. REST core healthy at 4500+/5000.
+
+---
+
 ## 2026-05-13 15:30 — Round 30
 
 ### PR #2071 thorfinn: Warmup-5-cosine (warmup_epochs 3→5, T_max 47→45) — CLOSED (WASH, bimodal trade-off observed)

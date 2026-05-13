@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 15:30 (round-30: Closed #2071 thorfinn warmup-5 WASH (+0.23%, bimodal: in-dist −2.60% / re_rand +2.81% — settling-phase mechanism confirmed). Closed #2051 askeladd Lookahead LOSS (+5.09% / +12% vs new base). **5th averaging-style bimodal confirmation** — class definitively closed. Reassigned thorfinn to warmup-2-cosine (PR #2112) — probes OTHER direction of bimodal trade-off; reassigned askeladd to gap/stagger jitter σ=0.02 (PR #2114) — structurally different OOD attack via tandem configuration channels 22-23. Baseline still **50.6001**)
+- **As of:** 2026-05-13 09:30 UTC (round-31: Closed #1988 nezuko fun-jitter axis after σ=0.025 retune (val 58.00, +14.6% LOSS vs new baseline). **7th averaging-style bimodal confirmation** — Goldilocks zone identified for in-dist regularization at small σ but OOD damage near-saturated in σ. Closed stale #2034 frieren RMSNorm (2nd consecutive stale, pod-stuck pattern). Reassigned nezuko to translation augmentation σ=0.01 (PR #2138) — physical-symmetry lever, structurally distinct from all 7 closed averaging-style mechanisms; reassigned frieren to fresh RMSNorm retry-3 (PR #2139) via REST API (GraphQL rate-limited). Baseline still **50.6001**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -54,13 +54,13 @@ Per-split baseline (PR #2033):
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
+| #2139 | frieren | RMSNorm replacing LayerNorm (all 3 sites) — **retry-3** of stale #1926/#2034 | **Round-31** — fresh PR after 2nd consecutive stale; same hypothesis, pod-unstick attempt |
+| #2138 | nezuko | Translation augmentation σ=0.01 (channels 0-1, per-sample shift) | **Round-31** — physical-symmetry OOD lever; structurally distinct from all 7 closed averaging-style mechanisms |
 | #2114 | askeladd | Gap/stagger jitter σ=0.02 (channels 22-23, per-sample, training only) | **Round-30** — tandem-arrangement OOD attack; structurally distinct from closed averaging-style class; complements NACA jitter (#2072) |
 | #2112 | thorfinn | Warmup-2-cosine (warmup_epochs 3→2, T_max 47→48) | **Round-30** — probes OTHER direction of bimodal trade-off; predicted to favor OOD by extending settling-phase |
 | #2093 | alphonse | AdamW β1=0.95 (UP probe) — gradient momentum smoothing for L1 sign-noise | **Round-29** — single-knob optimizer probe on novel axis; β2 closed (#1845), β1 never probed |
 | #2083 | tanjiro | DropPath p_max=0.1 stochastic depth (retry of stale #1976) | **Round-28** — block-level stochastic depth, structurally distinct from closed averaging-style class |
 | #2072 | edward | NACA geometry jitter σ=0.01 (channels 15-17 NACA1, 19-21 NACA2) | **Round-27** — direct attack on val_geom_camber_rc OOD bottleneck via camber perturbation |
-| #2034 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **Round-25 retry** — RMSNorm hypothesis; resubmit of stale #1926 |
-| #1988 | nezuko | Per-sample fun_dim jitter Re/AoA — **retune σ=0.025** | **Round-24 send-back** — σ=0.05 LOSS (+11.9%); ⚠️ new baseline 50.6001 |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; ⚠️ new baseline 50.6001 |
 
 ## Warning on in-flight rebase
@@ -103,9 +103,10 @@ Long-running in-flight PRs (#1775, #1988) were assigned on the old 54.0051 basel
    - **EMA (decay=0.999, #1946) CLOSED (WASH-TO-LOSS):** -12.9% in-dist, OOD +5-14%.
    - **Grad-clip (#1653) CLOSED (WASH):** -13.3% in-dist, OOD +3-5%.
    - **lr-DOWN (#1997) CLOSED (LOSS):** -6.45 in-dist, OOD +4.84 to +5.74.
-   - **Lookahead k=5 α=0.5 (#2051) CLOSED (LOSS):** -9.48% in-dist, OOD +5.92-18.0% (5th averaging confirmation).
-   - **Warmup-5 (#2071) CLOSED (WASH+bimodal):** -2.60% in-dist, re_rand +2.81% (6th, settling-phase axis variant).
-   - **In-dist headroom is unlockable but does NOT translate to OOD (5×/6× confirmed).** Averaging-style regularization (coord-jitter, weight-EMA, grad-clip, lr-DOWN, Lookahead) and settling-phase reduction (warmup-5) consistently give in-dist win but regress OOD. This is now a rock-solid empirical law across 6 different mechanisms (data aug, weight aug, gradient aug, step-size aug, trajectory aug, schedule aug). **Mechanism-agnostic finding:** any reduction in effective late-stage exploration trades in-dist for OOD. **OOD requires structural intervention (geometry jitter, conditional embedding, multi-task auxiliary loss) — or extended late-stage settling time.**
+   - **Lookahead k=5 α=0.5 (#2051) CLOSED (LOSS):** -9.48% in-dist, OOD +5.92-18.0%.
+   - **Warmup-5 (#2071) CLOSED (WASH+bimodal):** -2.60% in-dist, re_rand +2.81%.
+   - **fun-jitter Re/AoA (#1988) CLOSED (LOSS, 2 σ-points):** σ=0.05 +19.5% LOSS, σ=0.025 +14.6% LOSS; OOD damage NEAR-SATURATED in σ (0.82-0.91× attenuation when σ halved, far slower than linear); in-dist Goldilocks zone at small σ. **7th averaging confirmation** at channel-level.
+   - **In-dist headroom is unlockable but does NOT translate to OOD (7× confirmed).** Averaging-style regularization (coord-jitter, weight-EMA, grad-clip, lr-DOWN, Lookahead) + settling-phase reduction (warmup-5) + channel-level jitter (fun-jitter) consistently give in-dist win but regress OOD. This is now a rock-solid empirical law across 7 mechanisms (data aug, weight aug, gradient aug, step-size aug, trajectory aug, schedule aug, channel aug). **Mechanism-agnostic finding:** any reduction in effective late-stage exploration trades in-dist for OOD. **The next OOD-targeting experiments must NOT be averaging-style** — needs physical-symmetry data augmentation (translation, reflection), structural input augmentation (NACA #2072, gap/stagger #2114), or architectural change (RMSNorm #2139, multi-task aux loss, conditional embedding).
    - **Active OOD interventions:** NACA geometry jitter (#2072 edward) — directly targets camber distribution shift; Lookahead optimizer (#2051 askeladd) — flat-minima bias hypothesis; fun-jitter Re/AoA σ=0.025 (#1988 nezuko) — function space augmentation.
    - **Untried structural OOD interventions:** domain conditional embedding (architectural), AoA reflection symmetry, multi-task camber prediction auxiliary loss.
 2. **Normalization** — RMSNorm in flight (#1926). Pre-LN vs Post-LN placement also untested.
@@ -118,3 +119,5 @@ Long-running in-flight PRs (#1775, #1988) were assigned on the old 54.0051 basel
 7. **AdamW β1=0.95 (UP probe)** — **in-flight #2093 alphonse.** Single-knob optimizer probe on novel axis. β2 closed (#1845, +15% LOSS); β1 never probed. β1=0.9→0.95 lengthens gradient-momentum half-life from ~10 to ~14 steps, providing smoothing for L1's sign-gradient noise.
 8. **Warmup-2-cosine (OOD-favorable bracket)** — **in-flight #2112 thorfinn.** Completes the warmup duration bracket (warmup-3 win → warmup-5 wash → warmup-2 probe). Predicted to swap the signs on the bimodal: in-dist slight regress, OOD slight gain via 1 extra settling epoch. If symmetric trade-off, val_avg ~50.4-50.5.
 9. **Gap/stagger jitter σ=0.02 (channels 22-23)** — **in-flight #2114 askeladd.** Tandem-foil arrangement augmentation on the last untouched geometric input channels. Structurally distinct from closed averaging-style class. Complements in-flight NACA jitter (#2072) — together they cover the complete geometry input space.
+10. **Translation augmentation σ=0.01 (channels 0-1, per-sample shift)** — **in-flight #2138 nezuko.** Physical-symmetry lever (NOT averaging-style). Per-sample rigid shift preserves foil shape exactly; exploits translation invariance of Navier-Stokes. **Critical diagnostic:** if this exhibits the bimodal signature, the 7× pattern generalizes to physical-symmetry augmentation too. If neutral or uniform improvement, we've found the first lever that breaks the bimodal.
+11. **RMSNorm at all 3 sites (retry-3)** — **in-flight #2139 frieren.** 3rd attempt after 2 stale PRs (#1926, #2034) at pod-level. Pre-LN architectural variant; expected to NOT show bimodal signature since layer-level not sample-level. Modest expected gain.
