@@ -389,3 +389,24 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 - AMP bf16 unlocks ~32 GB VRAM (vs 42 GB fp32) → 7-8 more epochs per 30-min cap. This is likely the main driver.
 - bf16 inference also fixes the bs=4 NaN on test_geom_camber_cruise (test 84.64 is fully clean bs=4)
 - Fern's evaluate_split NaN-y prefilter is a clean bug fix for the Type-1 data NaN. Supersedes askeladd's #1536 fix.
+
+## 2026-05-13 03:05 — PR #1801: Huber/SmoothL1 loss β=1.0 — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-edward/huber-loss-pressure`
+- Hypothesis: Replace L2 (sq-err) with Huber (β=1.0) to better match MAE evaluation metric and reduce outlier sensitivity
+- Artifacts: `models/model-charliepai2g24h2-edward-huber-loss-pressure-20260513-020521/metrics.jsonl`
+
+| Split | Huber (this PR) | Floor #1573 (L2) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 134.21 | 159.59 | **−15.9%** |
+| val_geom_camber_rc | 133.88 | 134.74 | −0.6% |
+| val_geom_camber_cruise | 77.59 | 89.18 | **−13.0%** |
+| val_re_rand | 98.93 | 107.31 | **−7.8%** |
+| **val_avg** | **111.15** | **122.70** | **−9.4%** |
+| test_avg (bs=1) | **99.06** | **110.25** | **−10.2%** |
+
+**Config:** Same as floor + Huber β=1.0 in BOTH train loop and evaluate_split, fp32. 13-14 epochs (30 min cap). Peak VRAM 42.12 GB.
+
+**Conclusion:** Clear win. L2→Huber is significant at −9.4% val, −10.2% test. Largest gain: single_in_dist (−15.9%) — consistent with Huber's robustness to the high-error tails in out-of-distribution samples. First sub-100 test_avg (99.06) on this branch. Huber now stacked in advisor train.py.
+
+**Key insight:** The L2/L1 training-metric mismatch was actively harming OOD splits (single_in_dist is the most OOD split). Switching to Huber acts as implicit outlier weighting — reduces gradient magnitude for high-residual samples that were pulling optimization away from the bulk distribution.
