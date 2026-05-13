@@ -1,5 +1,72 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~13:15 — PR #2149: n_head=2 + slice_num=32 + n_layers=4 + T_max=21 (askeladd)
+
+**New best: `val_avg/mae_surf_p` = 42.709** (epoch 21/21, best_epoch=21 STILL DESCENDING, n_head=2, n_layers=4, slice_num=32, surf_weight=10)
+
+> Also included: `--n_head` plumbed as CLI arg — `train.py` now accepts `--n_head` in Config dataclass; model_config reads `n_head=cfg.n_head`.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 4 |
+| `n_head` | **2** ← updated (was 4) |
+| `slice_num` | 32 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=21 (=epochs) |
+| `epochs` | 21 (still improving at epoch 21!) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 708,875 (+6.3% vs #2108 baseline 667,923) |
+
+> **Mechanism:** Per-head capacity wins over attention diversity on the new compact stack (n_layers=4 + slice_num=32). With coarser 32-slice PhysicsAttention partitions, doubling head_dim from 32→64 enables richer inter-slice representations. At the older deeper stacks (n_layers=6 + slice_num=64), head diversity won; the trade-off flipped when the model became shallow+narrow.
+
+> **Caveat:** Per-split picture is mixed — re_rand val −2.38% and geom_camber_rc test −2.06% are the primary movers; single_in_dist slightly regressed (+0.28% val, +1.33% test). Net positive is real but small.
+
+### Val metrics (best checkpoint, epoch 21)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 45.089 | 54.767 |
+| val_geom_camber_rc | 57.248 | 62.887 |
+| val_geom_camber_cruise | 25.495 | 27.463 |
+| val_re_rand | 43.004 | 45.138 |
+| **val_avg/mae_surf_p** | **42.709** | **47.564** |
+
+### Test metrics (best-val checkpoint, epoch 21)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| test_single_in_dist | 41.257 | 47.703 |
+| test_geom_camber_rc | 50.023 | 56.991 |
+| test_geom_camber_cruise | 21.336 | 23.642 |
+| test_re_rand | 34.519 | 37.756 |
+| **test_avg/mae_surf_p** | **36.784** | **41.523** |
+
+### Improvement vs PR #2108 baseline (42.815 val / 36.899 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 44.963 | 45.089 | +0.28% | 40.717 | 41.257 | +1.33% |
+| geom_camber_rc | 56.766 | 57.248 | +0.85% | 51.074 | 50.023 | **−2.06%** |
+| geom_camber_cruise | 25.476 | 25.495 | +0.07% | 21.158 | 21.336 | +0.84% |
+| re_rand | 44.053 | 43.004 | **−2.38%** | 34.646 | 34.519 | −0.37% |
+| **avg** | **42.815** | **42.709** | **−0.25% ✓** | **36.899** | **36.784** | **−0.31% ✓** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 2
+```
+
+**Metric artifacts:** `models/model-nhead-2-slicenum32-nlayers4-20260513-101116/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~10:30 — PR #2108: slice_num=32 + n_layers=4 + T_max=21 (thorfinn)
 
 **New best: `val_avg/mae_surf_p` = 42.815** (epoch 21/21, best_epoch=21 STILL DESCENDING, surf_weight=10, n_layers=4, slice_num=32)

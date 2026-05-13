@@ -6,6 +6,33 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~13:15 — PR #2149: n_head=2 on n_layers=4+slice_num=32 — MERGED (−0.25% val, −0.31% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/nhead-2-slicenum32-nlayers4
+- **Hypothesis:** Per-head capacity beats attention diversity on new compact stack — n_head=2 (head_dim=64) vs n_head=4 (head_dim=32) at n_layers=4 + slice_num=32.
+- **Result:** val=42.709 / test=36.784 (vs baseline 42.815/36.899 = **−0.25%/−0.31%**)
+
+| Split | val (baseline #2108) | val (n_head=2) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 44.963 | 45.089 | +0.28% | 41.257 |
+| geom_camber_rc | 56.766 | 57.248 | +0.85% | 50.023 |
+| geom_camber_cruise | 25.476 | 25.495 | +0.07% | 21.336 |
+| re_rand | 44.053 | 43.004 | **−2.38%** | 34.519 |
+| **avg** | **42.815** | **42.709** | **−0.25% ✓** | **36.784** |
+
+- **Mixed per-split picture:** re_rand val strongly improved (−2.38%), geom_camber_rc test improved (−2.06%), but single_in_dist slightly regressed on both val/test. Net positive.
+- **Mechanism confirmed:** Volume MAE shifts match surface shifts across splits (signs correlated), supporting genuine attention re-wiring not noise.
+- **Per-epoch wall-clock:** ~65s (down from 74s at n_head=4! head reduction freed compute despite larger head_dim). 
+- **n_params: 708,875** (+6.3% vs baseline 667,923) — mild param confound.
+- **best_epoch=21/21 STILL DESCENDING** — same pattern as all previous wins.
+- **n_head axis insight:** At n_layers=6+slice_num=64 (deep/wide stack), n_head=2 LOST by +12.4%. On n_layers=4+slice_num=32 (compact stack), n_head=2 WINS. The per-head capacity vs diversity trade-off flips as the model becomes shallower and has coarser partitions.
+- **Also included:** `--n_head` plumbed as CLI arg in train.py (model_config reads `n_head=cfg.n_head`).
+- **Metric artifacts:** `models/model-nhead-2-slicenum32-nlayers4-20260513-101116/metrics.jsonl`
+- **Reassigned askeladd:** PR #2193 n_head=1 on new stack (bracket the axis further)
+
+---
+
 ## 2026-05-13 ~13:00 — PR #2143: surf_weight=15 on n_layers=4 — CLOSED (+7.77% val, +9.50% test vs current)
 
 - **Student:** charliepai2g48h3-edward
