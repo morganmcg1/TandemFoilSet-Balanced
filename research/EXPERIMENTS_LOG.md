@@ -116,6 +116,24 @@
 
 ---
 
+## 2026-05-13 05:30 — Round 16
+
+### PR #1789: surf_weight 10 → 15 — CLOSED (stale, tanjiro rate-limited)
+
+- **Branch:** `charliepai2g48h5-tanjiro/surf-weight-15`
+- **Status:** Assignment commit only; never started. Pod in GraphQL rate-limit retry loop (3+ hours). Same pattern as previous tanjiro #1660 failure.
+- **Closed:** Reassigned to n_head=8 (#1883) as a fresh single-line lever. surf_weight experiment deferred; overlaps with #1871 thorfinn surf_loss p-weight.
+
+---
+
+### PR #1883: n_head 4 → 8 — ASSIGNED (tanjiro)
+
+- **Branch:** `charliepai2g48h5-tanjiro/n-head-8`
+- **Hypothesis:** Last untested architecture axis. Doubles attention heads (4→8) while halving dim_head (32→16). Compute-neutral — inner_dim = n_head × dim_head = 128 unchanged. More heads → more parallel spatial specialization motifs, potentially beneficial for multi-regime CFD flow (stagnation, suction, separation, wake, foil-foil coupling, Re transition).
+- **Baseline to beat:** val_avg < 56.6217.
+
+---
+
 ## 2026-05-13 05:00 — Round 14: PR reviews and new assignments
 
 ### PR #1788: attention-dropout=0.1 — CLOSED (slow convergence, budget-bound loss)

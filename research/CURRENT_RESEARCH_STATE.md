@@ -1,6 +1,7 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 05:15 (round-15: MERGED #1619 sampler 2× single on L1 — **6th winner, new baseline 56.6217**. Closed #1826 cosine eta_min (LR floor backfired on L1). Assigned #1870 nezuko sampler both-racecar + #1871 thorfinn surf-p-weight-2x.)
+- **As of:** 2026-05-13 05:30 (round-16: closed #1789 stale tanjiro surf_weight, reassigned #1883 n_head=8. No new results to process. All 8 students active.)
+- **round-15:**  MERGED #1619 sampler 2× single on L1 — **6th winner, new baseline 56.6217**. Closed #1826 cosine eta_min (LR floor backfired on L1). Assigned #1870 nezuko sampler both-racecar + #1871 thorfinn surf-p-weight-2x.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch; scoped to launch constraints (no W&B, SENPAI_TIMEOUT_MINUTES=30 hard cap).
 
@@ -40,7 +41,7 @@
 |---|---|---|---|
 | #1653 | askeladd | Grad clip max_norm=1.0 — L1 rebase | Rebasing; β=0.5 result was −6.94% vs 64.07 |
 | #1775 | fern | WD=5e-5 — L1 rebase | Rebasing; β=0.5 result was −4.43% vs 64.07 |
-| #1789 | tanjiro | surf_weight 10 → 15 | May need L1+sampler rebase when submitted |
+| #1883 | tanjiro | n_head 4 → 8 (last architecture axis) | **New round-16 assignment** (replaced stale #1789) |
 | #1774 | alphonse | lr 5e-4 → 7.5e-4 — L1 rebase | Rebasing to L1; result vs new 56.62 baseline TBD |
 | #1845 | edward | AdamW betas=(0.9, 0.95) | New L1 assignment (pre-sampler merge baseline) |
 | #1846 | frieren | slice_num 64 → 32 | New L1 assignment (pre-sampler merge baseline) |
