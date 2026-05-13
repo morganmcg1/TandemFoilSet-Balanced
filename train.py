@@ -378,7 +378,7 @@ class Config:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     batch_size: int = 4
-    surf_weight: float = 10.0
+    surf_weight: float = 15.0
     epochs: int = 50
     eval_every_n_epochs: int = 3  # fp32 eval is ~45s/epoch overhead; eval less often to free epochs
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
