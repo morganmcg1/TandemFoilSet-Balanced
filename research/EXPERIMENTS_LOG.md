@@ -1806,3 +1806,73 @@ Mechanisms expected to work at clip saturation (orthogonal to amplitude):
 - **Three outcomes:** (A) val<52.64 win — amplitude liberation works at lower LR; (B) wash; (C) val>54.5 fail — undertraining dominates, LR axis bracketed at 5e-4 within [3e-4, 7.5e-4].
 - **Quantitative predictions:** clip rate drops to ~92-95%, mean downscaling ~4-5×, possible undertraining risk if val descent rate halves.
 - **Distinct from active axes:** all 7 other students are on orthogonal axes (width-floor, EMA, Huber, weight_decay, mlp_ratio, schedule alignment, AdamW betas).
+
+## 2026-05-13 16:30 — PR #2160: frieren weight_decay 0 → 1e-5 — CLOSED (10× REDUCTION from baseline 1e-4; replicate-pair mean wash/loss)
+
+- Branch: `willowpai2g48h5-frieren/weight-decay-1e-5`
+- Hypothesis (original framing): Add small explicit L2 (1e-5) on top of zero-baseline, untested regularization axis on 13-compound stack. Target test/val OOD gap.
+- **Student baseline-framing catch (important)**: Student verified at `train.py:391` that `Config.weight_decay = 1e-4`, NOT 0 as the PR body assumed. So this experiment actually measures a **10× REDUCTION** in weight_decay from baseline (1e-4 → 1e-5), not an introduction of weight_decay from zero. Inverted hypothesis: does loosening regularization help the model learn richer features on 1500-sample dataset?
+- W&B runs (replicate pair, same config): `luy0nfhu`, `n62k4mdt`
+
+### Results — replicate-pair protocol, mean wash/loss
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Clip rate | Verdict vs #1982 |
+|---|---:|---:|---:|---|
+| luy0nfhu | **52.4127** | 45.6325 | ~96.6% | val −0.43% (Run 1 alone crosses baseline) |
+| n62k4mdt | 54.6240 | 47.1336 | ~96.7% | +3.77% / +4.79% (clean fail) |
+| **mean** | **53.5184** | **46.3831** | **96.67%** | **+1.66% val / +3.11% test mean loss** |
+| spread (n=2) | ±1.10 val pts | ±0.75 test pts | — | exceeds effect size |
+
+**Decision: CLOSE** (not merge) because:
+1. **Test (paper-facing metric) regresses on mean** by +3.11% — paper comparisons must use test from best-val checkpoint, and the mean is what generalizes.
+2. **3/4 OOD splits regress** on the mean (camber_rc, camber_cruise, re_rand all up; in_dist neutral) — the OOD-positive case from Run 1 alone is a coin-flip outcome at this variance level.
+3. **Inter-replicate spread (±1.10 val pts) exceeds the effect size**, so Run 1's apparent win is consistent with random luck within the noise floor at this config.
+
+### Mechanism reading — regularization axis NOT blocked by clip saturation, but axis direction wrong
+
+The clip-rate diagnostic is the key positive finding: at weight_decay=1e-5, clip rate dropped from baseline 98.93% to ~96.67%. This is a **2.26pp shift**, modest but real. It confirms:
+- The weight_decay axis **operates orthogonally to grad-clip** — looser L2 → smaller parameter norms → smaller gradient norms → fewer clipped steps.
+- The clip-saturation interaction pattern (#2066, #2000, #2159) does NOT apply to regularization-axis levers — this axis is genuinely accessible.
+
+But the result is OOD-negative on mean. Interpretation: at our 1500-sample dataset with 1.26M params, the model is **regularization-limited, not amplitude-limited**. Reducing weight_decay let the model fit the train manifold slightly tighter (better in_dist), but at the cost of OOD generalization across all three OOD splits (camber_rc, camber_cruise, re_rand).
+
+### Implication for future weight_decay experiments
+
+The natural follow-up direction is now **the OTHER way**: weight_decay 1e-4 → 3e-4 (3× increase). If 10× reduction hurts OOD, modest tightening might help. The previously-listed "weight_decay=1e-4 or 3e-5 — if frieren's 1e-5 wins, continue scan" follow-up is no longer the right next step — the axis sign was wrong.
+
+### Sub-finding — variance floor estimate
+
+This was the first deliberate replicate-pair on the willow track. The observed spread (±1.10 val pts, ±0.75 test pts at unchanged config) gives us a calibrated noise floor for interpreting future single-run experiments: effects smaller than ~1 val pt may not be statistically detectable without replication. This is a useful calibration even though the headline result was negative.
+
+### Suggested follow-ups
+1. **weight_decay 1e-4 → 3e-4** — opposite-direction test (untested)
+2. **Replicate-pair the next single-run winner** — formalize the variance floor
+
+→ Assigning frieren: batch_size=2 opt-step density (untested, distinct axis).
+
+## 2026-05-13 16:30 — PR #2142: fern Huber β=0.25 — second ping (stale_wip 2.5h)
+
+- Branch: `willowpai2g48h5-fern/huber-beta-0p25`
+- Status: WIP for ~2.5h since assignment, no commits/comments yet.
+- Action: Posted ping comment with updated reproduce command (`--n_hidden 192 --n_layers 3 --epochs 50` — explicitly NOT 224 per #2066 finding) and noted that Huber β axis is loss-shape (upstream of clip), distinct mechanism from blocked amplitude axes. Student should still expect this to bypass the clip-saturation pattern.
+- Comment ID: 4440717295
+
+## 2026-05-13 16:30 — PR #2247: frieren assigned batch_size 4 → 2 (opt-step density axis)
+
+- Branch: `willowpai2g48h5-frieren/batch-size-2-opt-steps`
+- Hypothesis: At fixed --epochs, batch_size=2 doubles the number of optimization steps per epoch (375 → 750 steps). This is the **opt-step density axis**, distinct from amplitude (LR, T_max, n_hidden) and distinct from gradient-accumulation (#1913 which halved opt-steps per epoch — opposite direction). Tests whether the clip-saturated regime is **opt-step-limited** rather than amplitude-limited: if effective step magnitude is fixed at 2.5/||g|| (direction-only SGD), then more steps = more direction information integrated per epoch.
+- Reproduce: `--n_hidden 192 --n_layers 3 --batch_size 2 --epochs 50`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Mechanism distinction:**
+  - **#1913 (FAIL, +18.7%)**: grad_accumulation_steps=2, effective batch_size=8. Per-epoch wall time unchanged; opt-steps HALVED. Cosine starves → undertrained.
+  - **THIS PR (#2247)**: batch_size=2 (no accumulation). Per-epoch wall time DOUBLES per batch but DOUBLES batches per epoch. Opt-steps per epoch DOUBLED. Reaches ~17 epochs in budget (predicted) but each epoch is 750 opt-steps instead of 375.
+- **Quantitative predictions:**
+  - Per-step time: similar (BF16 forward+backward dominates compute for n_hidden=192 transformer; small batch reduces but autograd overhead resists)
+  - Epoch time: ~108s (vs 54s at bs=4) — doubled
+  - Epochs in 30 min: ~17/50
+  - Opt-steps in 30 min: 17 × 750 = ~12,750 (vs 33 × 375 = ~12,375 at baseline) — roughly equivalent total opt-steps, but distributed differently
+  - Clip rate: may decrease (smaller batch gradients have lower variance averaged over batch → larger ratio of typical norm to clip threshold → fewer clipped, more amplitude through)
+- **Three outcomes:** (A) val<52.64 win — opt-step density matters more than schedule completion; (B) wash — equivalent total opt-steps wash out; (C) val>54 fail — schedule starvation dominates (similar mechanism to #1913).
+- **Distinct from active axes:** alphonse #2219 (width-floor 160), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), nezuko #2053 (mlp_ratio=3), tanjiro #2199 (--epochs 33), thorfinn #2186 (AdamW betas).
+- **Note on baseline framing**: This is the symmetric counterpart to #1913 (grad-accum halved opt-steps and failed). At fixed epochs, batch_size=2 doubles them. The opt-step density axis was raised in the next-after-current section of the research state.
+
