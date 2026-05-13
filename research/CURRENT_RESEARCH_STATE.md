@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 06:25 (closed ref-16 #1943, mlp-ratio-4 #1919, eta_min=1e-4 #1901; assigned cawr-t0-9 #1990, warmup-2ep #1991, mlp-ratio-1 #1992; 12 effective merges; 8 students active)
+- **As of:** 2026-05-13 06:30 (closed ref-16 #1943, mlp-ratio-4 #1919, eta_min=1e-4 #1901, wd=1e-5 #1923; assigned cawr-t0-9 #1990, warmup-2ep #1991, mlp-ratio-1 #1992, n-head-2 #1993; 12 effective merges; 8 students active)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -43,6 +43,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **eta_min axis CLOSED**: 5e-5 optimum. 0 worse (84.67), 1e-4 worse (85.06, just closed). 3-point bracket complete.
 - **ref axis CLOSED**: ref=8 optimum. ref=16 regresses (+4.3%, just closed). ref=8 confirmed both sides.
 - **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses sharply (+8.8%, just closed). mlp_ratio=1 (frieren #1992) testing lower bracket.
+- **wd axis CLOSED**: wd=1e-4 confirmed optimum. wd=1e-5 regresses (+3.9%), wd=5e-4 also regressed (older stack). Both sides bracketed.
 - **hidden dim CLOSED**: n_hidden=192/256 wall-clock bound.
 
 ## Themes
@@ -59,7 +60,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 10. **Attention heads.** Nezuko #1853 (n_head=8) — training completed; awaiting results post.
 11. **LR upper bracket.** Thorfinn #1968 (lr=7e-4 + warmup) — WIP.
 12. **Batch size.** Alphonse #1972 (batch_size=4→2) — WIP.
-13. **Regularization.** Tanjiro #1923 (wd=1e-5) — WIP.
+13. **Attention heads lower bracket.** Tanjiro #1993 (n_head=4→2) — NEW. Brackets n_head axis with nezuko's n_head=8.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
@@ -73,6 +74,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 | β2=0.98 (frieren #1886) | 85.94 | 76.16 | CLOSED |
 | β1=0.95 (tanjiro #1888) | 88.32 | 78.58 | CLOSED |
 | mlp_ratio=4 (frieren #1919) | 89.82 | 80.17 | CLOSED — FFN capacity upper closed |
+| wd=1e-5 (tanjiro #1923) | 85.76 | 76.33 | CLOSED — wd=1e-4 confirmed optimum |
 | lr=3e-4 (alphonse #1914) | 90.67 | 81.94 | CLOSED — +8% regression |
 | EMA (askeladd #1540) | 99.60 | 91.15 | Rebasing onto current HEAD — highest priority |
 
@@ -91,7 +93,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP** — lr=5e-4→7e-4 with warmup; upper LR bracket.
 
 ### Regularization / training dynamics probes
-- **PR #1923 — `wd-1e-5` (tanjiro)** — **WIP** — wd=1e-4→1e-5.
+- **PR #1993 — `n-head-2` (tanjiro)** — **WIP (new)** — n_head=4→2, brackets attention head axis alongside nezuko's n_head=8.
 - **PR #1972 — `batch-size-2` (alphonse)** — **WIP** — batch_size=4→2, 2x optimizer steps/epoch.
 
 ## Closed / dead ends (complete list)

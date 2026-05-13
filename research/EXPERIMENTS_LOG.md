@@ -1038,3 +1038,19 @@ alphonse reassigned to PR #1972 (batch-size-2): halve batch 4→2.
 **Analysis:** LR floor optimum is NOT monotone — 5e-5 is the sweet spot. At 1e-4 final-epoch updates are 2× larger, perturbing the settling basin under grad-clip. OOD asymmetry (test +2.28 > val +2.50) suggests flatter but geometrically-unspecialized minimum. Combined with #1695 (eta_min=0 → 84.67) and #1855 (eta_min=5e-5 → 83.95 merged), the 3-point bracket is clean. **eta_min axis CLOSED: 5e-5 optimum.**
 
 **New assignments after this round:** fern #1990 (cawr-t0-9), edward #1991 (warmup-2ep), frieren #1992 (mlp-ratio-1).
+
+## 2026-05-13 06:28 — PR #1923: [wd-1e-5] Reduce AdamW weight decay 1e-4→1e-5 — **CLOSED**
+- Student branch: `charliepai2g48h4-tanjiro/wd-1e-5`
+- Hypothesis: wd=1e-4 over-regularizes the 0.68M-param model on the small dataset; loosening it frees capacity.
+
+| Metric | wd=1e-5 (this PR) | Baseline #1812 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **85.76** | 82.56 | **+3.20 (+3.9%) ❌** |
+| test_avg/mae_surf_p | 76.33 | 74.13 | +2.20 (+3.0%) ❌ |
+| val single_in_dist | 98.58 | 90.40 | **+8.18 (biggest loser)** |
+| val re_rand | 83.94 | 81.77 | −0.03 (≈flat) |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-wd-1e-5-20260513-050241/metrics.jsonl`
+- 18/18 epochs; still descending at epoch 18.
+
+**Analysis:** single_in_dist regresses worst (+8.18 val) — canonical "weaker regularization → wider generalization gap" signature. Weight decay is load-bearing. wd=5e-4 also worse (older stack). Combined: wd=1e-4 is bracketed as optimum on both sides. **wd axis CLOSED: wd=1e-4 confirmed optimum.** Tanjiro reassigned #1993 n-head-2.
