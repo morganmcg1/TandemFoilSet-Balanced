@@ -32,10 +32,11 @@ Round 1 in-flight (8 PRs):
 - **#1589 tanjiro (AdamW betas)**: from pre-mask — vol-Huber heads-up posted (5th baseline shift)
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber — vol-Huber heads-up posted (5th baseline shift)
 - **#1843 nezuko (Cosine T_max=35)**: on compile baseline — vol-Huber heads-up posted
-- **#1882 askeladd (Huber β=0.75 surf)**: on compile baseline — vol-Huber heads-up posted
+- ~~**#1882 askeladd (Huber β=0.75 surf)**: CLOSED — +8.6%/+10.0% regression, β-axis fully bracketed (0.25 and 0.75 both fail, 0.5 optimal and robust across all 5 baseline shifts)~~
 - **#1940 frieren (batch_size=8 + sqrt-LR scaling)**: on compile baseline — vol-Huber heads-up posted
-- **#2017 edward (weight_decay 1e-4 → 5e-4)**: on compile baseline — vol-Huber heads-up posted
-- **#2041 thorfinn (surf_weight 10 → 5)**: on vol-Huber baseline (just assigned; re-calibrate surf_weight after vol-Huber reduced vol gradient magnitudes)
+- **#2017 edward (weight_decay 1e-4 → 5e-4)**: SENT BACK — val +0.67% regression (per-split: in-dist improved, rc OOD regressed). Sent back for wd=2e-4 bisection.
+- **#2041 thorfinn (surf_weight 10 → 5)**: on vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance)
+- **#2163 askeladd (per-channel β: β_p=0.25, β_Ux=β_Uy=0.5)**: on vol-Huber baseline (just assigned; test if surf_p benefits from more-linear loss shape following vol-Huber direction)
 
 **New merge bar: val < 65.47, test < 57.84, all four test splits finite.**
 
@@ -69,14 +70,15 @@ Round 1 in-flight (8 PRs):
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, compile heads-up posted (3rd baseline shift) |
 | #1810 | frieren   | torch.compile (dynamic=True)     | **MERGED** 05:15 (val=67.83, test=59.78) — largest single-axis win of round 1 |
 | #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, bf16 baseline — heads-up to retarget T_max=35 on compile |
-| #1882 | askeladd  | Huber β=0.75 (β-tune from above) | WIP, bf16 baseline, compile heads-up posted |
+| #1882 | askeladd  | Huber β=0.75 (β-tune from above) | CLOSED (+8.6% val, +10.0% test — β-axis fully bracketed: 0.25 fails, 0.5 optimum, 0.75 fails) |
 | #1910 | thorfinn  | Volume Huber β=0.5               | **MERGED** 07:30 (val=65.47, test=57.84) — OOD splits drove win; in-dist regressed slightly; zero compute overhead |
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
 | #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | WIP, current compile baseline — vol-Huber heads-up posted |
-| #2017 | edward    | weight_decay 1e-4 → 5e-4         | WIP, current compile baseline — vol-Huber heads-up posted |
+| #2017 | edward    | weight_decay 1e-4 → 5e-4         | SENT BACK for wd=2e-4 bisection (val +0.67% miss; in-dist improves, rc OOD regresses — over-regularization signature) |
+| #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
 | #2041 | thorfinn  | surf_weight 10 → 5               | WIP, vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance) |
 
-**Merged:** 5 (mask-aware, Huber β=0.5 surf, bf16, compile, **vol-Huber β=0.5**). **Closed:** 9 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, mlp_ratio=4-on-compile #1939). **Open:** 8 (3 needing rebase + 4 on compile baseline + 1 on vol-Huber baseline: thorfinn #2041 surf_weight=5).
+**Merged:** 5 (mask-aware, Huber β=0.5 surf, bf16, compile, **vol-Huber β=0.5**). **Closed:** 10 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, mlp_ratio=4-on-compile #1939, **β=0.75-on-vol-Huber #1882**). **Open:** 9 (3 needing rebase + 4 on compile baseline + 2 on vol-Huber baseline: thorfinn #2041, askeladd #2163).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -89,7 +91,7 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **surf_weight re-calibration is the natural next step** after vol-Huber (#2041 thorfinn): surf_weight=10 was calibrated with noisy-MSE vol; now that vol uses Huber, the 10× upweighting may over-emphasize surf. vol-Huber's in-dist surf_p +3.8% regression is the key motivating signal.
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
-- **If Huber β=0.75 wins (#1882 askeladd):** sweet spot is above 0.5; consider per-channel β (p vs Ux/Uy).
+- **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.
 - **If grad_clip wins (#1692 fern):** explore coupled weight-decay + LR revisits.
 - **If SwiGLU FFN wins (#1735 alphonse):** lone capacity-shape axis; GeGLU/per-block residual gating follow-ups.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack.

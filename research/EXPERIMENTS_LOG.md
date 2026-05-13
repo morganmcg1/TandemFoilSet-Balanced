@@ -611,3 +611,65 @@ Stacking wins so far: mask+Huber_surf+bf16+compile+vol_Huber = val 119.45 → 65
 - **thorfinn → PR #2041 (surf_weight 10 → 5):** re-calibrate surf_weight after vol-Huber changed effective gradient balance. `surf_weight=10` was calibrated when vol used noisy MSE; with vol now using Huber, the effective surf dominance has increased. Single-line change; directly motivated by #1910's per-split in-dist regression.
 - **β sweep on vol:** vol's outlier tail is populated differently from surf (100-1000× more nodes); β=1.0 or 0.25 may be more optimal. Lower-priority since #1910 already secured the stacking win.
 
+
+## 2026-05-13 10:15 — PR #1882 CLOSED: Huber β=0.75 — β-axis closure
+
+- **Student:** willowpai2g48h3-askeladd
+- **Branch:** willowpai2g48h3-askeladd/huber-beta-0p75
+- **Hypothesis:** Probe Huber optimum from above — test β=0.75 to determine if the optimum shifted upward post-bf16+compile+vol-Huber. Expected Δ: −1% to −4% val.
+
+### Results
+
+| Seed | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch/total |
+|---|---|---:|---:|---:|
+| 2 (BETTER by val) | u5a3b64t | 71.120 | 63.653 | 32/35 |
+| 1 | 22rskonx | 71.732 | 63.225 | 33/35 |
+| **baseline #1910** | r9zfwd4y | **65.469** | **57.837** | 35/35 |
+
+Per-split test surf_p (seed 2): single_in_dist=70.43, geom_camber_rc=77.71, geom_camber_cruise=44.69, re_rand=61.78
+
+| β | Δ val vs baseline | Δ test vs baseline | Verdict |
+|---|---:|---:|---|
+| 0.25 (PR #1712) | +6.6% | +9.4% | closed |
+| **0.5 (merged)** | **0%** | **0%** | **optimum** |
+| 0.75 (this PR) | **+8.6%** | **+10.0%** | **closed** |
+
+### Conclusion
+
+**CLOSED. β-axis fully bracketed.** Both seeds regressed +8-10% — symmetric with β=0.25's +6.6%/+9.4% failure. β=0.5 is the local optimum on this task/architecture and is robust across all five baseline shifts (bf16, compile, vol-Huber).
+
+The per-split asymmetry observed at β=0.25 (`single_in_dist` regressing harder than OOD — bulk-starvation effect) is **absent** at β=0.75: all four splits regressed within 8-14% of each other, with `geom_camber_cruise` (smallest-error split) the worst-hit in relative terms. This is consistent with the bf16+compile+vol-Huber stack having tightened the error distribution such that β=0.5 is now near-optimal for the tail/bulk tradeoff. The β-axis will not move.
+
+Best-epoch shifted earlier (32-33 / 35 vs baseline's 35/35) — mild indication that β=0.75 changes effective loss curvature, but not a confound for the clean regression verdict.
+
+### Follow-up
+
+- **askeladd → PR #2163 (per-channel β: β_p=0.25, β_Ux=β_Uy=0.5):** β=0.5 is optimal globally; but per-channel β is untested. p, Ux, Uy have different error distributions (even in normalized space). Testing β_p=0.25 specifically follows the vol-Huber direction (more linear on the outlier-heavy dominant channel).
+
+## 2026-05-13 10:15 — PR #2017 SENT BACK: weight_decay 1e-4 → 5e-4
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/weight-decay-5e-4
+- **Hypothesis:** wd=1e-4 may under-regularize the 35-epoch compile baseline; 5e-4 predicted −1% to −4% val with strongest in-dist recovery.
+
+### Results (partial — no merge, sent back for bisection)
+
+| Seed | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---:|---:|
+| 1 (BETTER) | ps9mbr4h | 66.1434 | 57.1875 |
+| 2 | kvc9noci | 68.5218 | 61.4100 |
+| **baseline #1910** | r9zfwd4y | **65.469** | **57.837** |
+
+Per-split test surf_p (seed 1): single_in_dist=63.51, geom_camber_rc=71.97, geom_camber_cruise=37.79, re_rand=55.47
+
+Val misses bar by +0.67 (s1) and +3.05 (s2). Test misses bar on s2; s1 marginally improves. Seed spread doubled (~1pt → 2.4pt).
+
+**Per-split mechanism:** textbook over-regularization signature on s1. `single_in_dist` improved 1.44pt, `geom_camber_cruise` improved 1.46pt, `re_rand` improved 0.49pt — but `geom_camber_rc` regressed 0.78pt and wiped val_avg. Model is under-regularized in the bulk (most splits gain) but over-regularized at the hardest OOD tail (rc loses).
+
+### Conclusion
+
+**Bar not cleared — sent back for wd=2e-4 bisection.** The per-split signature is mechanistically informative and the direction (some regularization helps the bulk) is real. wd=5e-4 is too aggressive for the rc tail. wd=2e-4 is the natural bisection; should preserve in-dist and easy-OOD gains while reducing the rc damage. Seed variance doubling at wd=5e-4 adds urgency — smaller step-size regularization should reduce checkpoint-selection sensitivity.
+
+### Follow-up
+
+- **edward → re-run same PR with wd=2e-4** (bisection between 1e-4 and 5e-4).
