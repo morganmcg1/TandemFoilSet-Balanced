@@ -1,5 +1,49 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 03:10 — PR #1755: n_hidden=192 + BF16 + Lion (SENT BACK — budget-cliff regression)
+
+- Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
+- Hypothesis: Wider model (n_hidden=192) on BF16+Lion stack — VRAM headroom from BF16 (32.94 GB → ~43 GB) unlocks the wider model that was previously infeasible.
+- Single change: `n_hidden=128 → 192` in Transolver config. 12 epochs (one less than Lion baseline's 13 due to 27% slower per-epoch at wider width).
+
+### Results
+
+| Metric | Lion baseline (#1641, 13 epochs) | n_hidden=192 (this PR, 12 epochs) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 73.15 | 73.11 | −0.04 (tie, within noise) |
+| **test_avg/mae_surf_p** | **66.76** | **68.76** | **+2.00 (REGRESSION)** |
+| Peak VRAM (GB) | 32.94 | 43.01 | +30% |
+| s/epoch | 100.87 | 127.74 | +27% |
+| Epochs completed | 13 | 12 | −1 (budget cliff) |
+| n_params | 656k | 1.47M | +2.2× |
+
+### Per-epoch trajectory (wider model systematically ahead at matched steps)
+
+| Epoch | n_hidden=128 (Lion) | n_hidden=192 |
+|---:|---:|---:|
+| 10 | 83.76 | 81.54 |
+| 11 | 80.47 | 76.26 |
+| 12 | 76.10 | 73.11 |
+| 13 | 73.15 | (out of budget) |
+
+- Metrics: `models/model-nhidden192_bf16-20260513-021849/metrics.jsonl`
+
+### Analysis
+
+Tie on val (−0.04, within noise) but **test regresses by 2.00 points**. Cannot merge per criteria (test is paper-facing metric, must not regress).
+
+However, the per-epoch trajectory is clean: at matched epoch counts, n_hidden=192 is systematically ahead of n_hidden=128 by 3–4 points. The wider model has the better learning dynamics; it just lost the race because of the **budget cliff**: n_hidden=192 fits only 12 epochs in 30 min (vs baseline's 13), and Lion's last-epoch jump (76→73 in baseline) is significant.
+
+The fix: either (a) reduce width to n_hidden=160 to fit 13 epochs, or (b) keep n_hidden=192 but scale Lion LR up (4e-4) to make 12 epochs deliver baseline's 13-epoch progress.
+
+### Decision
+
+**Sent back to fern with 2-arm follow-up:**
+- Arm A: n_hidden=160 + Lion lr=3e-4 (intermediate width, full 13-epoch budget)
+- Arm B: n_hidden=192 + Lion lr=4e-4 (wider with scaled LR to recover lost epoch)
+
+---
+
 ## 2026-05-13 01:20 — PR #1641: Lion optimizer (MERGED — new baseline 73.15)
 
 - Student branch: `charliepai2g24h5-frieren/lion-optimizer`
