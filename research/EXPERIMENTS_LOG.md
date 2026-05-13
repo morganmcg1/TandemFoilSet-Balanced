@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-13 15:30 — PR #1467: [more-slices-128] slice_num 64→128 — CLOSED
+
+- **Branch**: charliepai2g24h1-nezuko/more-slices-128
+- **Hypothesis**: Double PhysicsAttention slice_num from 64 to 128 to give more routing capacity for multi-domain physics. Predicted help on geom_camber OOD splits.
+- **Status**: CLOSED — +13.5% val / +12.5% test regression. All 4 splits regressed. Classic overfit.
+
+| Metric | slice=128 | Baseline (slice=64) | Δ |
+|--------|-----------|---------------------|---|
+| val_avg/mae_surf_p | 32.7601 | 28.8762 | **+13.5% (WORSE)** |
+| test_avg/mae_surf_p | 28.1216 | 24.9992 | **+12.5% (WORSE)** |
+| Params | 682,151 | 662,488 | +3.0% |
+| Epochs in 30 min | 23 | 28 | −5 (~9% slower/epoch) |
+| Peak GPU mem | 37.46 GB | ~28 GB | +9 GB |
+
+**Per-split val regression**: single_in_dist=34.64 (+6.04), camber_rc=45.11 (+3.16), camber_cruise=17.02 (+2.87), re_rand=34.28 (+3.47). The OOD geometry splits the hypothesis specifically targeted regressed *alongside* in-distribution — extra slices did not separate the multi-domain physics.
+
+**Overfit signature**: Train surf_loss collapsed to 0.003 (~20× drop from epoch 1) while val plateaued in low 30s by epoch 18. With 1499 training samples, slice_num=64 is the local maximum — extra routing capacity gives the optimizer more directions to overfit.
+
+**Programme finding**: slice_num=128 axis CLOSED. The symmetric lower-direction (slice_num=32, #2320 askeladd) is currently in flight to map the full curve.
+
+**Artifact**: `models/model-charliepai2g24h1-nezuko-more-slices-128-20260513-142218/metrics.jsonl`
+
+---
+
 ## 2026-05-13 11:40 — PR #1884: [onecycle-lr] OneCycleLR max_lr=2e-3, pct_start=0.1 — CLOSED
 
 - **Branch**: charliepai2g24h1-alphonse/onecycle-lr

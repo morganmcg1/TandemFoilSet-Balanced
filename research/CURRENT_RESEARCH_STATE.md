@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 17:00 (closed 7 experiments total: #2252 soap-betas +3.18%, #2253 refilm-hidden-16 +2.52%, #2233 weight-decay-5e-4 +1.86%, #2256 mlp-ratio-3 +23.9%, #2264 surf-weight-15 +3.18%, #2255 soap-precond-freq-5 +3.52% NEGATIVE, #1966 ema-beta-0p99-rampup mean +2.60% NEGATIVE — EMA axis CLOSED on ReFiLM stack; assigned 7 new WIP PRs #2319-#2325)
+- **Date**: 2026-05-13 15:35 (closed #1467 more-slices-128 +13.5% — slice_num=128 overfits with 1499 samples; assigned nezuko lookahead-soap-k5 #2384 — preferred EMA alternative from #1966 closure)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -108,7 +108,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 | #2323 | frieren | `soap-max-precond-dim-128` | WIP | HIGH | SOAP max_precond_dim 256→128 (faster Kronecker refresh) |
 | #2324 | tanjiro | `grad-accum-batch8` | WIP | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
 | #2325 | thorfinn | `pressure-laplacian-loss` | WIP | MEDIUM | physics-informed Laplacian smoothness regulariser on predicted pressure |
-| #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=64→128; last advisor instruction 12:42Z, no response yet |
+| #2384 | nezuko | `lookahead-soap-k5` | NEW | **HIGH** | Lookahead(SOAP, k=5, α=0.5); smoothing without state-swap overhead (preferred EMA alternative) |
 
 ---
 
@@ -164,6 +164,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **surf-weight-15** (#2264): +3.18%; bilateral surf_weight failure (7 and 15 both worse). surf_weight=10 is local optimum. RC bottleneck is NOT surface/volume balance.
 - **soap-precond-freq-5** (#2255): +3.52%; halving precond_freq introduced Kronecker-factor noise at bs=4. freq=10 confirmed optimal. SOAP optimizer tuning axis largely exhausted (betas, wd, precond_freq all tested; max_precond_dim still open).
 - **ema-beta-0p99-rampup** (#1966): mean +2.60% over 4 seeds; per-epoch EMA/live state-swap interacts with torch.compile+ReFiLM degrading live trajectory. EMA smoothing dividend real (~-0.1 MAE) but cannot overcome trajectory penalty. EMA axis CLOSED permanently on this stack.
+- **more-slices-128** (#1467): +13.5% val / +12.5% test; all 4 splits regressed including OOD geometry splits the hypothesis targeted. Train surf_loss collapsed to 0.003 (~20× drop) by epoch 18 — classic overfit. With 1499 training samples, slice_num=64 is the local maximum. Slice-num upper axis CLOSED.
 
 ---
 
