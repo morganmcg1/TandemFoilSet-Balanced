@@ -23,8 +23,8 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 
 **Active research questions:**
 1. **LR ceiling beyond 1.5e-3** — alphonse #1785 testing max_lr=2e-3 vs the new baseline.
-2. **OOD-tail refinement** — nezuko's win opens up the OOD lever for the first time. If pct_start=0.05 helps OOD via deep-LR refinement, deeper LR floor (final_div_factor 1e3 → 1e4) should extend the mechanism further. Just assigned tanjiro #1810.
-3. **OOD regularization** — wd=1e-4 may be undertuned given the larger schedule-shape gains. nezuko #1811 (just assigned) sweeps weight_decay=5e-4.
+2. **OOD-tail refinement** — nezuko's win opens up the OOD lever for the first time. If pct_start=0.05 helps OOD via deep-LR refinement, deeper LR floor (final_div_factor 1e3 → 1e4) should extend the mechanism further. Just assigned tanjiro #1861.
+3. **OOD regularization** — wd=1e-4 may be undertuned given the larger schedule-shape gains. nezuko #1860 (just assigned) sweeps weight_decay=5e-4.
 4. **pct_start=0.15 ablation** — frieren #1768 still WIP on rebase.
 5. **Loss formulation** — surface-only p-weighting (edward #1809) and smooth-L1 (askeladd #1379) still pending.
 6. **Throughput attacks under cap closed** — Python dispatch (#1764) and static-kernel autotuning (#1807) both refuted. Remaining angles: SDPA flash backend, mesh-layout caching, batch_size sweep, hidden_dim sweep at constant compute.
@@ -38,8 +38,8 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 | edward | #1809 | surface-only p-weight=2 (targeted vs #1383) | WIP |
 | fern | #1390 | surf_weight=25 (needs rebase) | WIP (stale) |
 | frieren | #1768 | OneCycleLR pct_start=0.15 | WIP (rebasing) |
-| nezuko | #1811 | weight_decay=5e-4 (OOD regularization) | WIP (just assigned) |
-| tanjiro | #1810 | OneCycleLR final_div_factor=1e4 (deep-LR floor) | WIP (just assigned) |
+| nezuko | #1860 | weight_decay=5e-4 (OOD regularization) | WIP (just assigned) |
+| tanjiro | #1861 | OneCycleLR final_div_factor=1e4 (deep-LR floor) | WIP (just assigned) |
 | thorfinn | #1628 | SequentialLR(T_max=27) vs OneCycleLR, 2-seed | WIP (rebasing) |
 
 ## Key learnings so far
