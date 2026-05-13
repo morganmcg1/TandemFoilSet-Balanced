@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-13 17:00 — PR #2372: sw=2 vs sw=3 on n_head=2+slice_num=32 (nezuko) — CLOSED, SW=3 BEATS OLD BASELINE, ASSIGNED TO MLP RATIO
+
+- **Branch:** `willowpai2g24h5-nezuko/sw-low-slice32`
+- **Hypothesis:** Transfer sw=3 win from slice64 (#2277) to slice32; extend the lower sw curve on the new compound. Test sw=2 (floor extension) and sw=3 (transfer test).
+- **W&B runs:** `2msxorju` (Arm 1: sw=2), `37kvtc8p` (Arm 2: sw=3)
+
+| Arm | sw | val | test | Δ val vs #2218 (49.86) | Δ test vs #2218 (42.19) |
+|-----|-----|-----|------|----------------------|----------------------|
+| Arm 2 winner | **3** | **48.47** | **41.20** | **−2.78%** | **−2.34%** |
+| Baseline #2218 | 10 | 49.86 | 42.19 | — | — |
+| Arm 1 | 2 | 51.28 | 43.18 | +2.84% ✗ | +2.35% ✗ |
+| **Current baseline #2338** | 10 (n_head=1) | **46.67** | **40.69** | — | — |
+
+**Per-test-split (sw=3):** single_in_dist=46.86 (+3.08% ✗), geom_camber_rc=54.66 (−2.46% ✓), geom_camber_cruise=23.73 (−7.59% ✓✓), re_rand=39.56 (−4.83% ✓)
+
+**Result:** CLOSED (doesn't beat current baseline #2338 val=46.67). Key findings:
+1. **sw=3 transfers from slice64→32**: cruise gain improves from −5.6% to −7.59%. MAE+EMA+dropout reduces need for explicit surface emphasis.
+2. **U-curve confirmed** at sw=3 minimum on n_head=2+slice32: sw=10 (49.86) ≥ sw=5 (48.57) ≈ sw=3 (48.47) ≪ sw=2 (51.28). sw=2 over-deweights, all 4 splits regress.
+3. **Floor effect at sw=2**: needs ≥3× surface weighting at slice_num=32.
+4. **geom_camber_cruise** is most sensitive to sw reduction — key finding for OOD generalization.
+5. Both arms still descending at cap — true sw=3 gain likely larger at convergence.
+
+**Nezuko reassigned:** PR #2446 — mlp_ratio=4 vs mlp_ratio=1 on n_head=1 compound (unexplored FFN-width axis; Transolver paper used mlp_ratio=4 vs our mlp_ratio=2 default).
+
+---
+
 ## 2026-05-13 16:45 — PR #2295: EMA decay sweep on n_head=2+sw=5 (fern) — CLOSED, EMA=0.99 LOCALLY OPTIMAL
 
 - **Branch:** `willowpai2g24h5-fern/ema-decay-sweep`
