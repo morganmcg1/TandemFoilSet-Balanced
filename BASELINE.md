@@ -1,5 +1,68 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~14:00 — PR #2107: n_layers=3 + slice_num=32 + T_max=27 (tanjiro)
+
+**New best: `val_avg/mae_surf_p` = 39.143** (epoch 27/27, best_epoch=27 STILL DESCENDING, n_head=4, n_layers=3, slice_num=32, surf_weight=10)
+
+> Compound of depth-reduction (n_layers=4→3) and partition-reduction (slice_num=48→32), both applied with updated epoch budget. Mechanisms are additive: each step freed independent per-epoch budget. Per-epoch ~57s → 27 epochs in ~25.6 min.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 3 |
+| `n_head` | 4 (default) |
+| `slice_num` | 32 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=27 (=epochs) |
+| `epochs` | 27 (still improving at epoch 27! best_epoch=27) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 515,055 (~515K) |
+
+### Val metrics (best checkpoint, epoch 27)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 40.405 | 48.379 |
+| val_geom_camber_rc | 51.895 | 59.980 |
+| val_geom_camber_cruise | 22.756 | 25.311 |
+| val_re_rand | 41.517 | 42.783 |
+| **val_avg/mae_surf_p** | **39.143** | **44.113** |
+
+### Test metrics (best-val checkpoint, epoch 27)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| test_single_in_dist | 35.977 | 43.837 |
+| test_geom_camber_rc | 47.136 | 53.725 |
+| test_geom_camber_cruise | 19.101 | 21.408 |
+| test_re_rand | 32.070 | 35.170 |
+| **test_avg/mae_surf_p** | **33.571** | **38.535** |
+
+### Improvement vs PR #2172 baseline (40.158 val / 34.904 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 40.610 | 40.405 | −0.5% | 38.553 | 35.977 | −6.7% |
+| geom_camber_rc | 54.872 | 51.895 | **−5.4%** | 49.316 | 47.136 | −4.4% |
+| geom_camber_cruise | 23.477 | 22.756 | **−3.1%** | 19.263 | 19.101 | −0.8% |
+| re_rand | 41.675 | 41.517 | −0.4% | 32.483 | 32.070 | −1.3% |
+| **avg** | **40.158** | **39.143** | **−2.53% ✓** | **34.904** | **33.571** | **−3.82% ✓** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 27 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 32
+```
+
+**Metric artifacts:** `models/model-nlayers-3-slicenum32-tmax27-20260513-101844/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~13:30 — PR #2172: epochs=24 + slice_num=32 + n_layers=4 (fern)
 
 **New best: `val_avg/mae_surf_p` = 40.158** (epoch 24/24, best_epoch=24 STILL DESCENDING, n_head=4, n_layers=4, slice_num=32)
