@@ -471,6 +471,7 @@ def amp_ctx_factory():
 
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
+print(f"Training loss: F.smooth_l1_loss(beta=0.1) — Huber with quadratic-near-zero, L1-elsewhere")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
@@ -528,7 +529,7 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            sq_err = F.l1_loss(pred, y_norm, reduction='none')
+            sq_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.1)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
