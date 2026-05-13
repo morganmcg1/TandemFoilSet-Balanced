@@ -2,6 +2,116 @@
 
 ---
 
+## 2026-05-13 01:15 — PR #1727: weight_decay 1e-4 → 5e-4 — CLOSED (regression)
+
+- **Branch:** `charliepai2g48h5-fern/weight-decay-5e-4`
+- **Student:** charliepai2g48h5-fern
+- **Hypothesis:** Stronger L2 regularization targets OOD splits (geom_camber_rc, re_rand) where train/val distribution shift is real.
+
+### Results
+
+| Metric | Baseline (#1633) | This PR (WD=5e-4) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 64.0705 | **66.6723** | **+4.06%** ✗ |
+| `test_avg/mae_surf_p` | 55.4961 | **58.6256** | **+5.64%** ✗ |
+
+| Split | WD=5e-4 | Baseline | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 73.9857 | 72.5692 | +1.95% |
+| `val_geom_camber_rc` | **77.5818** | 78.3209 | **−0.94%** (only improvement) |
+| `val_geom_camber_cruise` | 49.3384 | 43.3744 | **+13.75%** (worst) |
+| `val_re_rand` | 65.7833 | 62.0174 | +6.07% |
+
+- **Epochs:** 36 (wall-clock bound). **Time/epoch:** ~49.7s (unchanged). **Best epoch:** 35.
+- **Artifacts:** `models/model-charliepai2g48h5-fern-weight-decay-5e-4-20260513-001807/metrics.jsonl`
+
+### Analysis
+
+Under-fit, not over-regularization. Val trajectory lagged baseline by 3-5 equivalent epochs (epoch 18 val_avg=101.98 vs baseline ~92). Still descending at timeout. With 50+ epochs, 5e-4 plausibly catches up; under 30-min cap it's a net loss. One OOD split improved (geom_camber_rc −0.94%) — regularization thesis has *directional* validity but swamped by convergence lag. WD-UP axis closed.
+
+**Follow-up assigned:** weight_decay=5e-5 (PR #1775) — DOWN bracket to close the WD optimum search.
+
+---
+
+## 2026-05-13 01:15 — PR #1701: batch_size 4 → 8 on compile baseline — CLOSED (regression)
+
+- **Branch:** `charliepai2g48h5-alphonse/batch-size-8-compile`
+- **Student:** charliepai2g48h5-alphonse
+- **Hypothesis:** Larger batch → better gradient quality per step, tests quality-vs-quantity trade-off on compile+bf16 baseline.
+
+### Results
+
+| Metric | Baseline (#1633) | batch=8 | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 64.0705 | **74.4033** | **+16.1%** ✗ |
+| `test_avg/mae_surf_p` | 55.4961 | **66.8002** | **+20.4%** ✗ |
+
+| Quantity | batch=4 | batch=8 | Δ |
+|---|---:|---:|---:|
+| Steps/epoch | 375 | 188 | −50% |
+| Total grad updates | 13,875 | 6,392 | **−54%** |
+| Time/epoch | 49.7s | 53.4s | +7.4% |
+| Peak GPU memory | 23.83 GB | 47.63 GB | +2× |
+
+- **Artifacts:** `models/model-charliepai2g48h5-alphonse-batch-size-8-compile-20260513-000307/metrics.jsonl`
+
+### Analysis
+
+Textbook small-dataset step-count starvation. Matched-wall-clock probe (epoch 24): batch=8 (94.95) within 1.8% of batch=4 (93.26) — gradient quality is similar. The loss is entirely in step count: −54% total grad updates means the cosine-LR tail (which drives the last 1.5 MAE points) is never reached. **Batch scaling is fully dead** at TandemFoil scale in all compute regimes (#1439 fp32, #1701 compile).
+
+**Follow-up assigned:** lr=7.5e-4 (PR #1774) — raise per-step magnitude while keeping step count.
+
+---
+
+## 2026-05-13 01:15 — PR #1653: grad-clip max_norm=1.0 — SENT BACK (β=0.5 rebase required)
+
+- **Branch:** `charliepai2g48h5-askeladd/grad-clip-1.0-compile`
+- **Student:** charliepai2g48h5-askeladd
+- **Hypothesis:** Gradient norm clipping at max_norm=1.0 to stabilize large-gradient regime.
+
+### Results (on stale β=1.0 baseline)
+
+| Metric | β=1.0 compile baseline (#1568) | grad-clip | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 69.8316 | **59.4157** | **−14.92%** ✓ |
+| `test_avg/mae_surf_p` | 61.8652 | **53.0090** | **−14.32%** ✓ |
+
+**Note: askeladd's branch has `beta=1.0` at lines 246, 486 — result measured on OLD β=1.0 compile baseline, not current β=0.5 advisor (val_avg=64.07).** Cannot merge as-is.
+
+### Key grad-norm diagnostics
+
+| Epoch | grad_norm_p50 | clip_frac |
+|---|---:|---:|
+| 1 | 28.39 | 1.00 |
+| 6 | 15.20 | 1.00 |
+| 16 | 10.37 | 1.00 |
+| 26 | 6.52 | 0.99 |
+| 37 | 4.92 | 0.95 |
+
+Pre-clip norms are 10-30× above threshold throughout training. This is not a rare-spike guard — it is near-uniform per-step downscaling, acting as an adaptive LR floor that bounds the AdamW step to `lr × max_norm = 5e-4`.
+
+### Action
+
+Sent back for β=0.5 rebase. When stacked with β=0.5, if orthogonal: val_avg could reach ~55-58. If redundant: grad-clip and β=0.5 share the same "make gradient signal more coherent" mechanism and the stacking will be smaller.
+
+---
+
+## 2026-05-13 01:15 — PR #1774: lr=7.5e-4 — ASSIGNED (alphonse)
+
+- **Branch:** `charliepai2g48h5-alphonse/lr-7.5e-4`
+- **Hypothesis:** From #1701's step-count analysis: raise per-step magnitude (lr +50%) while keeping step count constant. β=0.5 reduced outlier gradient magnitude vs β=1.0, leaving room for larger LR. CosineAnnealingLR peak moves 5e-4 → 7.5e-4.
+- **Baseline to beat:** val_avg < 64.0705.
+
+---
+
+## 2026-05-13 01:15 — PR #1775: weight_decay=5e-5 — ASSIGNED (fern)
+
+- **Branch:** `charliepai2g48h5-fern/weight-decay-5e-5`
+- **Hypothesis:** From #1727's bracketology: DOWN sweep to complete 3-point WD bracket (5e-4=bad, 1e-4=baseline, 5e-5=this test). Closes the WD axis or identifies weaker-regularization win.
+- **Baseline to beat:** val_avg < 64.0705.
+
+---
+
 ## 2026-05-13 02:40 — PR #1688: n_hidden 128 → 160 on compile baseline — CLOSED (width ruled out)
 
 - **Branch:** `charliepai2g48h5-edward/wider-hidden-160-compile`
