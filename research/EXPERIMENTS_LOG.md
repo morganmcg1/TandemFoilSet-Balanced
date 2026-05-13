@@ -1,5 +1,74 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 08:05 — PR #2027: Lion lr=2e-4 on n_hidden=160 baseline (SENT BACK — rerun needed on current stack)
+
+- Student branch: `charliepai2g24h5-tanjiro/lion-lr-sweep-n160`
+- Hypothesis: Lion LR optimum shifts down as model widens (n_hidden=160 is 1.6× params); lr=2e-4 may beat lr=3e-4 on the n160 stack.
+
+### Results (vs OLD baseline 55.92, uniform δ=0.3 code)
+
+| Metric | Old baseline (lr=3e-4, δ=0.3) | This PR (lr=2e-4, δ=0.3) | New baseline (lr=3e-4, per-ch δ) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 55.92 | **52.795** | **53.62** |
+| test_avg/mae_surf_p | 51.92 | 49.856 | **49.65** |
+
+**Per-split (tanjiro, lr=2e-4, uniform δ=0.3):**
+
+| Split | val MAE_p | test MAE_p |
+|---|---:|---:|
+| single_in_dist | 56.24 | 48.75 |
+| geom_camber_rc | 67.43 | 59.72 |
+| geom_camber_cruise | 34.51 | 46.87 |
+| re_rand | 53.01 | 44.09 |
+
+### Analysis
+
+The directional signal is clear: lr=2e-4 beats lr=3e-4 on the old uniform-δ=0.3 stack (val 52.795 < 55.92). Every val split improves. Test is close but slightly above the new baseline (49.856 vs 49.65). The mechanism: wider model (1.6× params) has larger gradient-norm contribution per step → smaller LR prevents overshoot in Lion's sign-quantized regime. Tanjiro's trajectory shows learning curve still descending at epoch 16 (monotonic from epoch 1, best at final epoch).
+
+**BUT:** This run used the old uniform-δ=0.3 code. While this PR was in flight, PR #2028 (per-channel Huber δ) merged and became the new baseline (53.62/49.65) using DIFFERENT code. Direct comparison is not valid — two different hyperparameter points in different code variants. We can't claim a win over the current baseline with code from the old codebase.
+
+**Decision:** Sent back. Tanjiro to rebase onto current advisor branch (picks up per-channel δ from #2028) and re-run with `--lion_lr 2e-4` to confirm the improvement holds on the combined stack. The lr=2e-4 signal is strong enough to expect confirmation.
+
+- Metrics: `models/model-lion_lr2e4_n160-20260513-071233/metrics.jsonl`
+
+---
+
+## 2026-05-13 08:00 — PR #2028: Per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2] on n_hidden=160 (MERGED — new baseline 53.62)
+
+- Student branch: `charliepai2g24h5-fern/per-channel-huber-delta`
+- Hypothesis: Pressure and velocity residuals have different distributions; per-channel δ outperforms the uniform scalar δ=0.3 baseline.
+
+### Results (vs baseline 55.92 / 51.92)
+
+| Metric | Baseline (uniform δ=0.3) | **This PR (per-ch δ=[0.5,0.5,0.2])** | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 55.92 | **53.62** | **−2.30 (−4.1%)** ✅ |
+| **test_avg/mae_surf_p** | 51.92 | **49.65** | **−2.27 (−4.4%)** ✅ |
+| Peak VRAM | 37.99 GB | 37.99 GB | 0 |
+| s/epoch | ~115 s | ~115 s | 0 |
+
+### Per-split val/test (per-channel δ=[0.5, 0.5, 0.2], epoch 16)
+
+| Split | val baseline | val per-ch | Δ val | test baseline | test per-ch | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 61.14 | **58.46** | −2.68 | 51.41 | **48.40** | −3.01 |
+| geom_camber_rc | 69.82 | **67.34** | −2.48 | 60.85 | **58.75** | −2.10 |
+| geom_camber_cruise | 37.23 | **35.10** | −2.13 | 48.82 | **47.64** | −1.18 |
+| re_rand | 55.51 | **53.58** | −1.93 | 46.61 | **43.83** | −2.78 |
+| **avg** | **55.92** | **53.62** | **−2.30** | **51.92** | **49.65** | **−2.27** |
+
+### Analysis
+
+**Clean uniform win across all 8 splits.** All 4 val splits improve (−1.93 to −2.68), all 4 test splits improve (−1.18 to −3.01). No regressions anywhere. Code change: single tensor literal in the Huber loss computation (`abs_err.new_tensor([0.5, 0.5, 0.2])`).
+
+Mechanism: Pressure (p) residuals are high-variance in this CFD dataset — large outlier gradients dominate training when δ is applied uniformly. Keeping δ_p=0.2 (tight outlier cap on the dominant high-variance channel) while expanding velocity δ to 0.5 (restores more quadratic gradient signal for the lower-variance Ux/Uy channels) decouples the two regimes optimally. The response surface matches the uniform-δ monotone trend (0.3 was optimal for pressure when coupled with velocity), but now velocity and pressure are independently tuned.
+
+Training still improving at epoch 16 (val trajectory: 64.72 → 58.03 → 54.55 → 53.62 at epochs 13→14→15→16). Per-channel δ curve not bottomed out — refinement of pressure δ (0.2 → 0.15/0.10) is the natural next experiment (#2074, assigned to fern).
+
+- Metrics: `models/model-per_channel_huber_delta-20260513-071528/metrics.jsonl`
+
+---
+
 ## 2026-05-13 07:40 — PR #1470: Per-sample instance-norm loss (CLOSED — dead end with valuable root-cause)
 
 - Student branch: `charliepai2g24h5-edward/instance-norm-loss`
