@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-05-13 05:10 — PR #1781: Lion optimizer lr=1e-4+EMA (thorfinn) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-thorfinn/lion-optimizer`
+- **Hypothesis:** Lion's sign-based momentum updates (Chen et al. 2023) produce larger, noisier gradient steps that EMA then smooths — decoupling exploration (Lion) from integration (EMA) more cleanly than AdamW+EMA where second-moment normalization and EMA partially overlap.
+- **W&B runs:** `e2l23xny` (lr=1e-4, winner), `9fjjfgjt` (lr=5e-5), buggy-variant `lion-lr5e-5-buggy-variant.log`
+
+| Metric | Lion lr=1e-4 | Lion lr=5e-5 | Baseline #1607 (AdamW+EMA) | Δ vs baseline |
+|--------|-------------|-------------|--------------------------|---------------|
+| val_avg/mae_surf_p | **61.302** | 64.010 | 77.054 | **−20.44%** |
+| test_avg/mae_surf_p | **52.682** | 55.367 | 68.265 | **−22.83%** |
+| test/single_in_dist | 59.813 | 65.462 | 75.31 | −20.58% |
+| test/geom_camber_rc | 64.584 | 67.409 | 80.81 | −20.08% |
+| test/geom_camber_cruise | 35.140 | 35.899 | 48.52 | −27.58% |
+| test/re_rand | 51.193 | 52.696 | 68.41 | −25.17% |
+| Epochs (30-min cap) | 16/50 | 16/50 | 16/50 | — |
+
+**Result:** MERGED. Lion optimizer is the largest single-PR gain of the session — 20–28% uniform improvement across all 4 test splits. Curve still descending steeply at epoch-16 cap; not converged.
+
+**Key finding — Lion+EMA synergy:** Lion sign-magnitude updates are uniformly ±lr per step (aggressive, noisy), but EMA smooths the noise post-hoc. AdamW second-moment already smooths per-parameter scale, making AdamW+EMA partially redundant. Lion+EMA cleanly separates roles: exploration vs averaging. The lr=1e-4 arm beats lr=5e-5 because bigger, noisier steps give EMA more diversity to average over.
+
+**Bug fix (critical):** Student identified β1/β2 swap in PR diff relative to canonical Lion. Buggy variant scored 92.92 (regression), canonical scored 61.30. Fix: interpolation uses β1=0.9, momentum EMA uses β2=0.99.
+
+**Note:** val still descending at epoch-16 cap — longer budget is the highest-EV immediate follow-up.
+
+---
+
+## 2026-05-13 05:15 — PR #1604: Asinh pressure transform (alphonse) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-alphonse/asinh-pressure`
+- **Hypothesis:** Asinh transform on pressure target compresses the high-Re tail, improving generalization on re_rand and single_in_dist splits.
+- **W&B run:** `nbig5bns`
+
+| Metric | Asinh run | Baseline #1607 (EMA) | Δ |
+|--------|-----------|---------------------|---|
+| val_avg/mae_surf_p | 82.81 | 77.054 | **+7.5% (regression)** |
+| test_avg/mae_surf_p | 73.25 | 68.265 | **+7.3% (regression)** |
+| test/geom_camber_cruise | ~54 | 48.52 | +11.4% |
+
+**Result:** CLOSED. Clear regression on all splits.
+
+**Analysis:** Double-compression: Huber δ=1.0 already compresses the tail at the loss level. Asinh adds a second compression at the data (target representation) level. These are not additive — they compete on the same degree of freedom. With Fourier features providing richer spatial encoding, the model has capacity to learn high-Re structure directly; asinh pre-compression removes the tail signal the model needs. The correct future test, if any, would be Asinh-alone on the Fourier+EMA base *without* Huber loss.
+
+---
+
 ## 2026-05-12 19:28 — PR #1371: BF16 autocast (frieren)
 
 - **Branch:** `willowpai2g24h5-frieren/bf16-mixed-precision`
