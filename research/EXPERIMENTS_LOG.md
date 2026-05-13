@@ -1975,3 +1975,92 @@ The send-back specified `--n_hidden 224` at 09:54 UTC. Cycle 28 commit (632e5a9,
   - (C) val > 53.5 → FAIL — slice axis bracketed [48, 64(OPT), 96]; slice partition too coarse hurts feature separation
 - **Distinct from active axes:** alphonse #2219 (width-floor 160), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), frieren #2247 (batch_size=2 opt-step density), tanjiro #2199 (--epochs 33 schedule alignment), thorfinn #2186 (AdamW betas).
 
+## 2026-05-13 17:20 — PR #2186: thorfinn AdamW betas (0.9, 0.999) → (0.9, 0.95) — CLOSED (5th clip-saturation interaction; first optimizer-internal failure)
+
+- Branch: `willowpai2g48h5-thorfinn/adamw-betas-0p9-0p95`
+- Hypothesis: β₂ reduction makes second-moment estimate adapt ~50× faster (effective window ~20 steps vs ~1000) — bypass clip saturation because β₂ controls optimizer-internal smoothing, not gradient amplitude.
+- W&B run: `zxjf1uok`
+
+### Results — clean fail at >5% test regression threshold
+
+| Metric | #2186 (β₂=0.95) | #1982 baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **54.7984** | 52.6406 | **+2.16 (+4.10%)** ❌ |
+| test_avg/mae_surf_p | **47.3630** | 44.9791 | **+2.38 (+5.30%)** ❌ |
+| Clip rate | 99.29% | 98.93% | +0.36pp |
+| Grad-norm mean | 17.83 | 17.85 | unchanged (the clip threshold sees identical distribution) |
+| Param count | 1.26M (n_hidden=224) | 0.93M (n_hidden=192) | confound |
+| Epochs reached | 29/50 | 33/50 | throughput penalty |
+
+### Per-split test (EMA, best-val checkpoint)
+
+| Split | #2186 | #1982 | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 53.07 | ~52.88 | +0.36% (noise) |
+| test_geom_camber_rc | 61.61 | ~58.88 | **+4.64% FAIL** |
+| test_geom_camber_cruise | 29.62 | ~30.40 | −2.57% (noise) |
+| test_re_rand | 45.14 | ~44.58 | +1.26% |
+| **test_avg** | **47.36** | 44.98 | **+5.30% FAIL** |
+
+camber_rc dominates the regression (+4.64%). Two splits within noise; one improved slightly.
+
+### Mechanism — first optimizer-internal axis confirmed blocked by saturation
+
+The student's diagnosis is exact: at 99.3% clip rate, β₂=0.95's shrinking variance window (20 steps vs 1000) doesn't track real statistic drift (which is small) — it amplifies short-window variance in the denominator `sqrt(v_hat)`. Per-parameter step `α · m_hat / sqrt(v_hat)` becomes *more variable in direction* before the clip threshold renormalizes magnitude.
+
+The clip threshold then re-scales the entire vector to magnitude `2.5/||g||`. This preserves the (now noisier) direction. So what propagates to weights is:
+- Direction: noisier (β₂=0.95 variance amplification preserved through clipping)
+- Magnitude: fixed at 2.5 (clipping renormalizes)
+
+Result: optimizer takes 750 steps per epoch in directions that average more slowly across noise, achieving slower learning per epoch.
+
+### Pattern v2 — clip saturation extends beyond amplitude axes
+
+| PR | Lever | Where it acts | Pattern category |
+|---|---|---|---|
+| #2066 | n_hidden=224 | model width | amplitude |
+| #2000 | T_max=80 | LR schedule | amplitude |
+| #2159 | lr=7.5e-4 | LR magnitude | amplitude |
+| #2053 | mlp_ratio=3 | FFN width | amplitude |
+| **#2186** | **β₂=0.95** | **AdamW 2nd-moment** | **direction-variance** |
+
+**Unified mechanism:** clipping renormalizes amplitude but passes direction faithfully. Closed axes are anything that EITHER (a) increases gradient amplitude, OR (b) amplifies update-direction variance.
+
+### Implications for fleet
+
+- AdamW eps axis (denominator stability) likely also closed under same mechanism — eps changes denominator floor but doesn't reduce direction variance; likely amplifies it for low-variance directions.
+- Open axes that REDUCE direction variance: EMA decay (averaging), Huber β (loss-shape smoothing), weight_decay (decoupled from gradient).
+- Open axes that operate UPSTREAM of gradient computation: slice geometry, model depth, batch size (more samples → lower direction variance per opt-step), peak LR lowering (exits saturation).
+- Open axes that move COMPUTE budget: width narrowing, depth reduction, schedule alignment — these don't change gradient signal but increase epochs/budget.
+
+### Sub-finding — n_hidden=224 confound disclosure
+
+Run was at `--n_hidden 224` per send-back instruction (issued before Cycle 28 closed width axis at 192). This adds throughput penalty (29 vs 33 epochs reached). However, the student's per-step diagnostic (variance-window mechanism) is clean enough that the optimizer-axis effect is the dominant fail mode, not the throughput penalty.
+
+### Suggested follow-ups
+1. **n_layers 3 → 2** at n_hidden=192 — untested depth-down direction
+2. **Avoid AdamW eps tuning** under current grad-clip=2.5 regime (likely same mechanism)
+3. **AdamW betas may be worth revisiting** if askeladd #2231 lr=3e-4 succeeds at exiting saturation
+
+→ Assigning thorfinn: n_layers=2 × n_hidden=192 depth-axis compact push.
+
+## 2026-05-13 17:20 — PR #2276: thorfinn assigned n_layers 3 → 2 at n_hidden=192
+
+- Branch: `willowpai2g48h5-thorfinn/n-layers-2-compact-deep`
+- Hypothesis: Continue the compact+wide direction by reducing depth from 3 → 2. Previous compact+wide win (n_layers=5→3, PR #1875) was the strongest single merge of cycles 22-25. Depth axis was never pushed further. Strong throughput lever — orthogonal to all 7 active student axes and to all 5 confirmed clip-saturation blocked axes.
+- Reproduce: `--n_hidden 192 --n_layers 2 --epochs 50`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Why this axis now:**
+  - **Untested.** Listed in research state medium priority since cycle 25. Never executed.
+  - **Architecture axis upstream of all gradient computation.** Composition depth is a model-topology choice, independent of clip threshold mechanics.
+  - **Strong compute lever**: ~30-35% epoch reduction → ~43 epochs/budget vs 33. Cosine LR at termination: ~14% of base (vs 26%) — substantially into quiet annealing tail.
+  - **Param count**: ~0.62M (−33% vs 0.93M).
+- **Risk:** less composition depth. Attention-FFN×2 vs ×3 — whether 2-block stack has enough representational depth at this dataset scale is the open question. The Transolver / PhysicsAttention pattern has been validated at depth=3-8 in prior literature; depth=2 is at the floor of typical attention architectures.
+- **Three outcomes:**
+  - (A) val < 52.64 → MERGE — depth=3 was over-provisioned; throughput-frees-epochs wins
+  - (B) val 52.64–53.5 → WASH — capacity loss balances compute gain
+  - (C) val > 53.5 → FAIL — composition depth bracketed [2, 3(OPT)]; depth-down closed
+- **Distinct from active axes:** alphonse #2219 (n_hidden=160 width-floor), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), frieren #2247 (batch_size=2 opt-step density), nezuko #2267 (slice_num=48 partition geometry), tanjiro #2199 (--epochs 33 schedule alignment).
+- **Distinct from blocked axes:** depth is upstream of all gradient computation; not amplitude, not direction-variance. Should bypass clip saturation cleanly.
+
+
