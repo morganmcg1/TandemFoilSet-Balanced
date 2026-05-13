@@ -589,8 +589,22 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
+steps_per_epoch = len(train_loader)
+_expected_epochs = 30  # ~30 epochs in 30 min with torch.compile at batch=4
+ONECYCLE_MAX_LR = 2e-3
+ONECYCLE_PCT_START = 0.1           # 10% warmup = ~3 epochs
+ONECYCLE_DIV_FACTOR = 20           # start_lr = 2e-3 / 20 = 1e-4
+ONECYCLE_FINAL_DIV_FACTOR = 1000   # end_lr ≈ 1e-7
+ONECYCLE_TOTAL_STEPS = _expected_epochs * steps_per_epoch
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    optimizer,
+    max_lr=ONECYCLE_MAX_LR,
+    total_steps=ONECYCLE_TOTAL_STEPS,
+    pct_start=ONECYCLE_PCT_START,
+    anneal_strategy='cos',
+    div_factor=ONECYCLE_DIV_FACTOR,
+    final_div_factor=ONECYCLE_FINAL_DIV_FACTOR,
+)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -722,6 +736,10 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_clipped += 1
         scaler.step(optimizer)
         scaler.update()
+        # OneCycleLR advances per optimizer step. Guard against overrun if training
+        # outlasts the expected total_steps (LR has already decayed to ~end_lr).
+        if scheduler.last_epoch < scheduler.total_steps:
+            scheduler.step()
 
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
@@ -739,7 +757,6 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     current_lr = scheduler.get_last_lr()[0]
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
@@ -801,7 +818,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_slice_entropy: list[list[float]] | None = None
     epoch_gamma_stats: dict | None = None
     epoch_beta_stats: dict | None = None
-    if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_MAX - 2, 1):
+    if (epoch + 1) == 1 or (epoch + 1) >= max(_expected_epochs - 2, 1):
         epoch_slice_entropy, epoch_gamma_stats, epoch_beta_stats = capture_slice_entropy(
             uncompiled_model, val_loaders[diag_split_name], stats, device,
         )
@@ -818,9 +835,13 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
-        "scheduler_T_max": SCHEDULER_T_MAX,
-        "scheduler_eta_min": 1e-5,
+        "scheduler": "onecycle_lr",
+        "scheduler_max_lr": ONECYCLE_MAX_LR,
+        "scheduler_pct_start": ONECYCLE_PCT_START,
+        "scheduler_div_factor": ONECYCLE_DIV_FACTOR,
+        "scheduler_final_div_factor": ONECYCLE_FINAL_DIV_FACTOR,
+        "scheduler_total_steps": ONECYCLE_TOTAL_STEPS,
+        "scheduler_expected_epochs": _expected_epochs,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
         "torch_compile_dynamic": torch_compile_dynamic,
@@ -879,7 +900,7 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # Always capture slice entropy on the actually-completed final epoch, so the
 # "last" snapshot reflects reality even if training was cut short by the
-# timeout before the SCHEDULER_T_MAX-2 trigger range was reached.
+# timeout before the _expected_epochs-2 trigger range was reached.
 if last_completed_epoch > 0 and last_completed_epoch != 1:
     _ent, _g, _b = capture_slice_entropy(
         uncompiled_model, val_loaders[diag_split_name], stats, device,
