@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 17:10 UTC (Wave 17: MERGE #2370 frieren learned-freqs (17th win, −3.73%); CLOSE #2385 AbsGLU (+10.4%), #2386 inner_dim=320 (+6.0%), #2391 OOD-upsampling (+12.5%); ASSIGN #2434-#2437 (frieren/thorfinn/fern/nezuko optimizer-group experiments))
+- **Last updated**: 2026-05-13 17:20 UTC (Wave 17: CLOSE #2369 edward hybrid-σ=3 (stale baseline +4.82%); ASSIGN #2441 edward hybrid-rff-plus-learned-freqs (additive combination on new stack))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -41,7 +41,7 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 | fern | #2436 | layerscale-lr-10x | LayerScale params (10 tensors, 1280 scalars) in 10× lr no-WD group — same optimizer insight as #2370 | ASSIGNED |
 | nezuko | #2437 | slice-temp-lr-10x | Slice attention temperature (20 scalars, 5 blocks × 4 heads) in 10× lr no-WD group | ASSIGNED |
 | askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | IN FLIGHT |
-| edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | IN FLIGHT |
+| edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | ASSIGNED |
 | alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric | IN FLIGHT |
 | tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD | IN FLIGHT |
 
@@ -106,7 +106,7 @@ Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), 
 3. **Freq 50× lr** (thorfinn #2435): can top freqs be unlocked with higher lr?
 4. **Freq equilibrium init** (frieren #2434): was the #2370 win architectural or dynamic?
 5. **FiLM conditioning** (askeladd #2368): proper global conditioning for Re/AoA scalars
-6. **Hybrid Fourier σ=3** (edward #2369): high-freq RFF complement to learned dyadic
+6. **Hybrid RFF + learned freqs** (edward #2441 NEW): additive Gaussian σ=3 RFF ON TOP of current learned-freqs stack — tests orthogonality of mechanisms
 7. **QK-norm v2** (tanjiro #2427): with corrected init=0 and tau no-WD
 8. **Asymmetric LayerScale** (alphonse #2414): attn=0.05, mlp=0.025
 9. **All-param optimizer sweep**: if LayerScale + slice-temp both win, test joint 10× lr group for all scale params simultaneously

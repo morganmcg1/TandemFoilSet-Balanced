@@ -8,6 +8,28 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 17:20 — PR #2369 (edward hybrid-fourier-sigma-3) — **CLOSED** (stale baseline; +4.82% vs new baseline 59.5645)
+
+- Branch: `charliepai2g24h4-edward/hybrid-fourier-sigma-3`
+- Hypothesis: Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (retest of σ=1.0-failed #2309 with corrected σ)
+- Metric artifact: `models/model-charliepai2g24h4-edward-hybrid-fourier-sigma-3-20260513-150017/metrics.jsonl`
+
+| Split | Hybrid σ=3 | Old baseline (#2304 62.949) | Δ vs old | vs NEW baseline (59.5645) |
+|---|---:|---:|---:|---:|
+| val_single_in_dist | 77.490 | 69.925 | +10.82% | +10.32% |
+| val_geom_camber_rc | 76.699 | 74.845 | +2.48% | +7.31% |
+| val_geom_camber_cruise | 37.469 | 44.262 | **−15.35%** | −4.37% |
+| val_re_rand | 58.058 | 62.765 | **−7.50%** | +1.19% |
+| **val_avg** | **62.429** | **62.949** | **−0.83%** | **+4.82%** |
+
+**Analysis:** σ=3.0 mechanism is real (vs σ=1.0 hybrid in #2309: −8.30% better). BUT: experiment was evaluated on the OLD baseline (fixed dyadic), and frieren's #2370 (learned-freqs, merged 17th compound win) largely captures the same camber_cruise/re_rand gains. vs new baseline: +4.82% regression. The gains are overlapping — both experiments win on camber_cruise (−15% vs −14.6%) and re_rand (−7.5% vs −7.7%).
+
+**Key insight**: the "complement" framing for Gaussian RFF was calibrated against fixed dyadic [1,2,4,8,16,32]. After learned freqs adapted to [0.75,1.46,3.44,8,16,32], the spectral landscape is different and the optimal RFF σ may shift.
+
+**Reassigning edward to additive hybrid** (hybrid-rff-plus-learned-freqs, PR #2441): add Gaussian RFF σ=3 ON TOP of existing learned freqs (concatenate, don't replace). Tests whether RFF provides truly orthogonal OOD coverage beyond what adapted dyadic achieves.
+
+---
+
 ## 2026-05-13 17:05 — PR #2370 (frieren learned-freqs-no-wd-10x-lr) — **MERGED** (17th compound win, −3.73% val)
 
 - Branch: `charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`
