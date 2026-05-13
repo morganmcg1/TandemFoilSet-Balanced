@@ -619,14 +619,19 @@ SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
-# Hybrid SWA (PR #2032 v2): cosine deep tail to its natural 1e-5 floor, then
-# manual constant 1e-4 plateau for the last few epochs. This decouples
+# Hybrid SWA (PR #2032 v3): cosine deep tail to its natural 1e-5 floor, then
+# manual constant 5e-5 plateau for the last few epochs. This decouples
 # single-checkpoint fine-tuning (deep cosine tail) from SWA weight-space
 # spread (flat plateau). v1 raised eta_min to 1e-4 directly and lost the
-# fine-tuning that the baseline relies on; v2 keeps both.
+# fine-tuning that the baseline relies on; v2 kept the cosine tail but used
+# SWA_LR=1e-4 which was still too noisy and applied the override AFTER
+# scheduler.step (so snapshot #1 trained at cosine LR, not SWA_LR). v3 lowers
+# SWA_LR to 5e-5 (geometric mid-point between cosine floor 1e-5 and v2's 1e-4)
+# AND applies the override BEFORE the batch loop so every SWA snapshot is
+# actually trained at SWA_LR.
 from torch.optim.swa_utils import AveragedModel
 SWA_START_EPOCH = 25      # 0-indexed; begin SWA from epoch 26 (1-indexed)
-SWA_LR = 1e-4             # constant LR override during the SWA plateau
+SWA_LR = 5e-5             # constant LR override during the SWA plateau (v3: lowered from 1e-4)
 swa_model = AveragedModel(uncompiled_model)
 swa_rescale_head = AveragedModel(rescale_head)
 
@@ -664,6 +669,17 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+
+    # Hybrid SWA v3: override LR BEFORE this epoch's training so the SWA
+    # snapshot is actually trained at SWA_LR. (v2 averaged the first snapshot
+    # at the residual cosine LR because the override was applied at end of epoch.)
+    swa_lr_override_active = epoch >= SWA_START_EPOCH
+    cosine_lr = scheduler.get_last_lr()[0]   # cosine LR for this epoch (pre-override)
+    if swa_lr_override_active:
+        for pg in optimizer.param_groups:
+            pg['lr'] = SWA_LR
+    current_lr = optimizer.param_groups[0]['lr']  # actual LR used this epoch
+
     model.train()
     rescale_head.train()
     epoch_vol = epoch_surf = 0.0
@@ -775,21 +791,14 @@ for epoch in range(MAX_EPOCHS):
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
-    # current_lr = actual LR used during the just-completed epoch (reads
-    # optimizer state directly so it reflects any SWA override from the
-    # previous epoch, not just the cosine schedule).
-    current_lr = optimizer.param_groups[0]['lr']
-    cosine_lr = scheduler.get_last_lr()[0]
-    scheduler.step()
-    # Hybrid SWA: override LR for the next epoch's training and add the
-    # just-trained weights to the SWA average.
-    swa_lr_override_active = epoch >= SWA_START_EPOCH
+    # Hybrid SWA v3: snapshot the just-trained weights (training at SWA_LR
+    # was set at the top of the epoch). Then advance cosine; next epoch's
+    # start-of-loop block will override again if still in the SWA window.
     if swa_lr_override_active:
-        for pg in optimizer.param_groups:
-            pg['lr'] = SWA_LR
         swa_model.update_parameters(model)
         swa_rescale_head.update_parameters(rescale_head)
     swa_n_averaged = int(swa_model.n_averaged.item())
+    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
