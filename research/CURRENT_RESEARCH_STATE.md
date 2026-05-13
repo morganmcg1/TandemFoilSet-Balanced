@@ -25,17 +25,20 @@ The current `train.py` has all three stacked: mask after slice softmax (~line 12
 - The `test_geom_camber_cruise` NaN issue is fully resolved by the mask fix; bf16 truncation × `1/(slice_norm + 1e-5)` did not re-introduce it.
 
 Round 1 in-flight (8 PRs), most on stale baselines vs the current bf16 baseline:
-- **#1506 edward (n_hidden=192)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
+- **#1506 edward (n_hidden=192)**: pre-mask baseline — need full rebase
 - **#1589 tanjiro (AdamW betas)**: rebasing from pre-mask
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber
 - **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16
 - **#1810 frieren (torch.compile + bf16)**: current bf16 baseline
 - **#1843 nezuko (Cosine T_max=18)**: current bf16 baseline
-- **#1882 askeladd (Huber β=0.75)**: current bf16 baseline (just assigned, bounds β-axis from above)
+- **#1882 askeladd (Huber β=0.75)**: current bf16 baseline (bounds β-axis from above)
+- **#1910 thorfinn (Volume Huber β=0.5)**: current bf16 baseline (just assigned, extends #1505 mechanism to vol)
 
 All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.91, all four test splits finite.**
 
 **Latest diagnostic finding (2026-05-13 03:00 from PR #1509 close):** The cosine schedule `T_max=MAX_EPOCHS=50` mis-tunes the LR decay to a never-reached horizon. At the bf16 baseline's 18 epochs, end-of-run LR is at ~81% of peak (4.07e-4 vs 5e-4) — the schedule never actually decays. PR #1843 isolates this as a single-axis test.
+
+**Latest diagnostic finding (2026-05-13 03:45 from PR #1511 close on bf16):** depth=7 retry on bf16 still regresses compute-bound with best-val at the final epoch — the 18-epoch budget shrinks to 13 at +41% per-epoch overhead. Definitively closes the depth axis for round 1. Strengthens the portfolio rule that capacity moves should change *what* is computed (gating/attention reformulation), not scale existing scalar dimensions.
 
 **Portfolio constraint update 2026-05-13 02:00 (after #1715 merge):** The compute-bound axes (#1506 width, #1507 slices, #1511 depth, #1623 mlp_ratio) that closed earlier may be **back in-play** on the bf16 baseline (18-epoch budget vs 14). They are not auto-re-opened — flagged for round-2 priority queue after current round-1 PRs land. The portfolio rule from #1623 (capacity moves should change *what* is computed, not scale existing components) still applies as the default; bf16 simply opens a controlled exception for retest.
 
@@ -50,7 +53,7 @@ All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.
 | #1508 | frieren   | surf_weight 10→25                | CLOSED (compute-bound, +16%) |
 | #1509 | nezuko    | Warmup + lr=1e-3                 | CLOSED (+13.4% val on bf16; diagnostic surfaced T_max issue) |
 | #1510 | tanjiro   | Fourier pos enc (L=6)            | CLOSED (cruise NaN, pre-mask) |
-| #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-mask code, bf16 heads-up posted — bf16-revisit candidate |
+| #1511 | thorfinn  | Deeper (5→7 layers)              | CLOSED on bf16 (+19.5% val, +19.8% test — compute-bound at 18-ep ceiling; depth axis closed) |
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware, bf16 heads-up posted |
 | #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) — bf16-revisit candidate |
 | #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask pre-Huber, bf16 heads-up posted |
@@ -59,9 +62,12 @@ All got bf16 heads-up where applicable. New merge bar: **val < 89.60, test < 79.
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, pre-bf16, bf16 heads-up posted |
 | #1810 | frieren   | torch.compile (dynamic=True)     | WIP, current bf16 baseline |
 | #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, current bf16 baseline |
-| #1882 | askeladd  | Huber β=0.75 (β-tune from above) | WIP, current bf16 baseline (just assigned) |
+| #1882 | askeladd  | Huber β=0.75 (β-tune from above) | WIP, current bf16 baseline |
+| #1910 | thorfinn  | Volume Huber β=0.5               | WIP, current bf16 baseline (just assigned, extends #1505 to vol term) |
 
-**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 6 (Fourier, slice=128, surf_weight=25, mlp_ratio=4, warmup+lr=1e-3, β=0.25 — 3 of the closed are bf16-revisit candidates). **Open:** 8 (4 needing rebase + 4 on current baseline).
+**Merged:** 3 (mask-aware, Huber, bf16). **Closed:** 7 (Fourier, slice=128, surf_weight=25, mlp_ratio=4, warmup+lr=1e-3, β=0.25, depth=7-on-bf16 — 2 of the closed remain bf16-revisit candidates: slice=128, mlp_ratio=4). **Open:** 8 (4 needing rebase + 4 on current baseline).
+
+**Depth axis is now closed for round 1.** Re-evaluating depth=7 on bf16 (the canonical "compute-bound axis re-test") regressed by +19.5% val / +19.8% test, with best-val at the final epoch (13/13) — bf16's epoch unlock (+29%) did not offset the model's +41% per-epoch overhead. The portfolio constraint "capacity moves should change *what* is computed, not scale existing components" now has strong empirical support and applies as the default rule.
 
 ## Potential next research directions
 
@@ -75,10 +81,10 @@ Confirmed winners so far (all three stack): correctness (mask) + loss formulatio
 
 Round-2 priority queue (post-round-1-cleanup):
 
-**Compute-bound revisits on bf16** (3 of the 4 closed PRs are candidates):
-- **n_layers=7** (#1511 retry on bf16) — was the cleanest compute-bound regression, simplest revisit.
-- **mlp_ratio=4** (#1623 retry on bf16) — alphonse's first attempt closed compute-bound; SwiGLU (#1735) is the alternative track; on bf16 both could be winners stacked together.
-- **slice_num=128** (#1507 retry on bf16) — fern's compute-bound axis; could substantially increase model capacity if epoch budget supports it.
+**Compute-bound revisits on bf16** (now 2 of the closed PRs remain candidates after #1511's bf16 retry closed the depth axis):
+- **mlp_ratio=4** (#1623 retry on bf16) — alphonse's first attempt closed compute-bound; SwiGLU (#1735) is the alternative track; on bf16 both could be winners stacked together. Higher priority than slice_num because mlp_ratio has lower per-epoch overhead.
+- **slice_num=128** (#1507 retry on bf16) — fern's compute-bound axis; could substantially increase model capacity if epoch budget supports it. Lower priority — but if torch.compile (#1810) lands, the budget unlock might be enough.
+- **n_layers=7 is OUT.** #1511 retry on bf16 confirmed depth has too much per-epoch overhead (+41%) to ever beat the current ceiling at 30-min cap. Would require either a substantially larger compute budget or a depth-efficiency move (e.g. pre-norm + zero-init residuals; mid-training pruning).
 
 **Larger swings if round-1+round-2-revisits plateau:**
 - **Surface-anchored cross-attention** (boundary nodes as queries against volume tokens) — directly addresses the "surface inherits from volume" structural relationship.

@@ -376,3 +376,46 @@ Mechanism (verbatim from student):
   - **β=0.75 loses by a small margin** → β=0.5 is near-optimal; close the β-axis.
 - **Rule out β < 0.5** based on this PR's clean negative; no future PRs in [0.0, 0.5) territory until a heteroscedastic / per-channel β reformulation is proposed.
 
+
+## 2026-05-13 03:45 — PR #1511 (closed): Deeper Transolver (n_layers=5 → 7) on bf16 baseline
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/deeper-transolver
+- **Hypothesis:** Increase architectural depth from 5 to 7 layers (+40%) to give the model more representational capacity for OOD generalization. Pre-bf16 attempt was compute-bound; re-evaluated on the bf16 baseline (18-epoch budget vs 14) per the round-2 portfolio update.
+- **Baseline (#1715):** val=89.597, test=79.907, 18 epochs, best at epoch 17/18.
+
+### Results
+
+| Metric | n_layers=7 seed 1 | #1715 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **107.0279** | 89.597 | **+19.5%** |
+| `test_avg/mae_surf_p` | **95.7273** | 79.907 | **+19.8%** |
+
+- **W&B run:** seed 1 only (single-seed sufficient given the regression magnitude)
+- All 4 test splits finite. Best epoch hit on the **final epoch (13 of 13)** — trajectory still descending at termination.
+- Per-epoch overhead: ~41% (deeper model takes ~145s/epoch vs ~103s on baseline), reducing the 30-min budget from 18 epochs to 13.
+
+### Conclusion — clear compute-bound regression; depth axis closed for round 1
+
+This is the **fifth scalar-capacity axis** to lose compute-bound after the merge of bf16:
+1. #1506 width=192 (compute-bound pre-bf16)
+2. #1507 slice=128 (compute-bound pre-bf16)
+3. #1511 depth=7 pre-bf16 (compute-bound)
+4. #1623 mlp_ratio=4 (compute-bound)
+5. **#1511 depth=7 on bf16 (this run): still compute-bound at the new 18-epoch ceiling**
+
+The bf16 epoch-budget unlock was **not enough** to make depth=7 win — the 41% per-epoch overhead absorbs the +29% epoch budget bf16 gave us (18 → 13 epochs ≈ −28%). The student's analysis is excellent and confirms the pattern: best-val at the final epoch with trajectory still descending. They have made the right call against more depth on the current budget.
+
+This is now strong empirical support for the portfolio constraint adopted at #1623 close: **capacity moves should change *what* is computed (gating, attention reformulation, conditioning), not scale existing components.** SwiGLU (#1735 alphonse) is the canonical example of the right kind of capacity move.
+
+### Student-suggested follow-ups (mapping)
+
+- **#1 Profile per-layer cost on bf16:** noted for future investigation but lower priority than active hypotheses.
+- **#2/#3 LR schedule tuning + adaptive optimizer (AdamW betas):** **already in-flight** — PR #1843 (nezuko, cosine T_max=18) addresses #2; PR #1589 (tanjiro, AdamW betas=0.9,0.95) addresses #3.
+- **#4 torch.compile:** **already in-flight** — PR #1810 (frieren). If it wins, the per-epoch budget grows and depth may need a third revisit.
+- **#5 Mixed-depth / partial freezing:** interesting round-2 idea after current round-1 stack lands.
+
+### Follow-up
+
+- **thorfinn → PR #1910 (Volume Huber β=0.5):** Extend Huber loss from surf to vol (two-line change). Zero compute overhead, mirrors the #1505 mechanism on vol. Single-axis test. Slot was open after closing #1511.
+
