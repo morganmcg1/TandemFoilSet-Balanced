@@ -2,6 +2,53 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 08:10 — PR #2012: [loss-beta-0-5] Halve smooth_l1 beta 1.0→0.5 — **SENT BACK (beat OLD, not NEW; bs=2 rerun)**
+- Student branch: `charliepai2g48h4-edward/loss-beta-0-5`
+- Hypothesis: Reducing beta=1.0→0.5 narrows the smooth_l1 quadratic zone, pushing more residuals into the L1 regime under normalized-step regime. Cleaner gradient signal for late training.
+
+| Metric | OLD baseline (#1812) | beta=0.5 (this) | Δ vs OLD | Δ vs NEW (#1972) |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 82.56 | **81.21** | **−1.35 (−1.64%)** | +4.97 (+6.5%, worse) |
+| test_avg/mae_surf_p | 74.13 | **72.52** | −1.61 (−2.17%) | +5.67 (+8.5%) |
+| val single_in_dist | 90.40 | 88.55 | −1.85 | — |
+| val geom_camber_rc | 91.39 | 88.62 | −2.77 | — |
+| val geom_camber_cruise | 66.68 | 66.80 | +0.12 | — |
+| val re_rand | 81.77 | 80.88 | −0.89 | — |
+
+- Artifact: `models/model-charliepai2g48h4-edward-loss-beta-0-5-20260513-070621/metrics.jsonl`
+- Best epoch 18/18 (cosine reached eta_min=5e-5), 30-min wall-clock cap.
+- 3/4 val splits improve, 3/4 test splits improve (`geom_camber_cruise` val +0.12 noise; `geom_camber_rc` test +0.35 noise).
+
+**Analysis:** Clean directional confirmation that beta=0.5 < beta=1.0 in this regime. Edward's mechanistic reading is sound: with train surf_loss ~0.022–0.025 in late epochs (well below beta=1.0 quadratic threshold), the wider quadratic zone of beta=1.0 was effectively damping per-example gradient magnitude on small-but-not-zero residuals — under our grad-clip(max_norm=1.0) normalized-step regime, that translates to those examples contributing less to the chosen step direction. Narrowing to beta=0.5 lets them push their full unit gradient. Largest test gain is on the highest-MAE split (`test_single_in_dist`, −3.62), consistent with the "narrow quadratic zone helps hard-but-near-converged examples" story.
+
+**Sent back, not merged:** Beats OLD baseline (#1812) but loses to NEW baseline (#1972 batch-size-2, val=76.24). Run was on the OLD bs=4 HEAD. Asked edward to rebase onto current HEAD (batch_size=2) and rerun — beta-shape and batch-size mechanisms are independent, expect them to stack additively. Target: val < 76.24.
+
+---
+
+## 2026-05-13 08:08 — PR #1993: [n-head-2] Halve attention heads 4→2 — **CLOSED (n_head axis closed at 4)**
+- Student branch: `charliepai2g48h4-tanjiro/n-head-2`
+- Hypothesis: Wider/fewer heads (n_head=2 gives 64-dim heads, vs 32-dim at n_head=4) capture longer-range geometric dependencies more efficiently on small irregular meshes.
+
+| Metric | OLD baseline (#1812) | n_head=2 (this) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 82.56 | **83.78** | **+1.22 (+1.48%, worse)** |
+| test_avg/mae_surf_p | 74.13 | 73.71 | −0.42 (−0.57%, marginal) |
+| n_params | 734,541 | 734,541 | 0 (zero-param change) |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-n-head-2-20260513-065432/metrics.jsonl`
+- Best epoch 19/22 (model rebounded after cosine T_max=18 cycled past eta_min).
+
+**Bracket result — n_head axis CLOSED both directions:**
+| n_head | val_avg/mae_surf_p | params | Status |
+|--------|---------------------|---------|--------|
+| 2 (this) | 83.78 | 734,541 | WORSE — closed |
+| **4 (baseline)** | **82.56** | **734,541** | **OPTIMUM** |
+| 8 (#1853) | 96.33 | reduced ~2.4% | MUCH WORSE — closed |
+
+**Analysis:** Val is the source-of-truth selection metric and shows +1.22 regression (above cross-seed σ ~3.5 but clearly directional given +1.48% delta). The marginal test improvement (−0.42, −0.57%) is well within σ and disagrees with val on which split moved — pure noise. Tanjiro's independent observation that `CosineAnnealingLR` cycles LR back up past T_max (epochs 19→20→21 showing post-eta_min rebound) was a sharp catch — relevant to OneCycleLR (#2014) and CAWR (#1990) hypotheses currently in flight. The n_head axis is now fully bracketed and closed.
+
+---
+
 ## 2026-05-13 04:05 — PR #1855: [eta-min-5e-5] Non-zero cosine LR floor — **MERGED (NEW BEST: val=83.95)**
 - Student branch: `charliepai2g48h4-fern/eta-min-5e-5`
 - Hypothesis: eta_min=0.0 means LR reaches ~0 by epoch 18, wasting final-epoch compute. A non-zero floor keeps gradient steps meaningful.

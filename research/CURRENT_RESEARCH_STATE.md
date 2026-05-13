@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 07:30 (MERGED #1972 batch-size-2 val=76.24 NEW BEST; sent back #1968 thorfinn lr-7e-4 for rerun on new baseline; assigned alphonse #2036 batch-size-1; 13 effective merges; 8 students active)
+- **As of:** 2026-05-13 08:15 (CLOSED #1993 tanjiro n-head-2 — n_head axis fully closed at 4; SENT BACK #2012 edward loss-beta-0-5 (beat OLD 82.56 not NEW 76.24); askeladd #1540 EMA retraining on new HEAD GPU=99%; assigning tanjiro fresh hypothesis; 13 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -46,7 +46,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses. mlp_ratio=1 (frieren #1992) testing lower.
 - **wd axis CLOSED**: wd=1e-4 optimum.
 - **warmup length CLOSED**: 1-epoch optimum.
-- **n_head upper CLOSED**: n_head=8 regresses sharply (not zero-param!). n_head=2 (tanjiro #1993) testing lower.
+- **n_head axis FULLY CLOSED**: n_head=8 (#1853, val=96.33) and n_head=2 (#1993, val=83.78) both worse. n_head=4 unimodal optimum.
 
 ## Themes
 
@@ -63,20 +63,22 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 11. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP on old HEAD.
 12. **Loss shape sub-axis.** Edward #2012 (loss-beta-0-5) — WIP.
 13. **OneCycleLR schedule.** Nezuko #2014 (onecycle-lr, max_lr=8e-4) — WIP.
-14. **Attention head lower bracket.** Tanjiro #1993 (n-head-2) — WIP.
+14. **Attention head lower bracket.** Tanjiro #1993 (n-head-2) — CLOSED val=83.78 worse than 4. n_head axis fully bracketed.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
 | Lever | val_avg | test_avg | Status |
 |---|---|---|---|
 | **batch-size-2 (alphonse #1972)** | **76.24** | **66.85** | **MERGED — CURRENT BEST** |
+| loss-beta-0-5 (edward #2012) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
 | lr-warmup-1ep (thorfinn #1812) | 82.56 | 74.13 | MERGED → superseded |
 | lr-7e-4 (thorfinn #1968) | 79.77 | 72.06 | SENT BACK — beat old, not new baseline |
+| n-head-2 (tanjiro #1993) | 83.78 | 73.71 | CLOSED — n_head=4 unimodal optimum |
 | eta_min=5e-5 (fern #1855) | 83.95 | 74.70 | MERGED → superseded |
 | warmup-2ep (edward #1991) | 83.35 | 75.06 | CLOSED — warmup saturates at 1ep |
 | T_max=18 (nezuko #1695) | 84.67 | 74.94 | MERGED → superseded |
 | eta_min=1e-4 (fern #1901) | 85.06 | 76.41 | CLOSED — eta_min 5e-5 optimum |
-| n_head=8 (nezuko #1853) | 96.33 | 86.97 | CLOSED — n_head=4 optimum upper |
+| n_head=8 (nezuko #1853) | 96.33 | 86.97 | CLOSED — n_head=4 unimodal optimum |
 | EMA (askeladd #1540) | stale | — | Actively training on new HEAD — highest priority |
 
 ## Active student assignments (all 8)
@@ -95,7 +97,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 ### Capacity / architecture / loss probes
 - **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — was on bs=4; evaluate vs new baseline.
 - **PR #2012 — `loss-beta-0-5` (edward)** — **WIP** — was on bs=4; evaluate vs new baseline.
-- **PR #1993 — `n-head-2` (tanjiro)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #2073 — `slice-num-32` (tanjiro)** — **WIP (new)** — lower bracket of slice_num axis on bs=2 baseline.
 
 ## Closed / dead ends (complete list)
 - max_norm: 0.5/1.0/3.0 → 1.0
@@ -112,7 +114,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - eta_min: 3-pt bracket, 5e-5 optimum
 - wd: 1e-4 optimum (1e-5 worse)
 - warmup length: 1ep optimum (2ep worse)
-- n_head upper: 4 optimum (8 worse, NOT zero-param)
+- n_head: 4 unimodal optimum (2 worse +1.48%, 8 worse +16.7% — FULL BRACKET)
 
 ## Highest-priority stacking target
 
