@@ -162,6 +162,24 @@ class PhysicsAttention(nn.Module):
         return self.to_out(out_x)
 
 
+class PerChannelDecoder(nn.Module):
+    """Three independent full-capacity decoders (hidden_dim -> hidden_dim -> 1 per output channel)."""
+
+    def __init__(self, hidden_dim: int, out_dim: int):
+        super().__init__()
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, 1),
+            )
+            for _ in range(out_dim)
+        ])
+
+    def forward(self, x):  # x: (B, N, hidden_dim)
+        return torch.cat([h(x) for h in self.heads], dim=-1)  # (B, N, out_dim)
+
+
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
@@ -182,10 +200,7 @@ class TransolverBlock(nn.Module):
         self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
-            )
+            self.mlp2 = PerChannelDecoder(hidden_dim, out_dim)
 
     def forward(self, fx):
         if self.training and self.stoch_depth_prob > 0.0:
