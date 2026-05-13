@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 47)
+- **As of:** 2026-05-13 (updated cycle 48)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -63,7 +63,8 @@
 | 2284 | frieren | finer-wd-sweep-21epoch | WIP | WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs; will inform restart+WD compose |
 | 2259 | fern | stratified-sampler | WIP | Per-batch domain stratification — tests sampler-variance → per-split asymmetry hypothesis |
 | 2232 | edward | head-up-wd | WIP | surf_head_wd∈{1e-3,2e-3} vs encoder 5e-4 — symmetric to head-down (already confirmed head needs MORE shrinkage) |
-| 2123 | askeladd | cosine-tmax | WIP (STALE) | T_max sweep, no activity in multiple cycles — pre-dates cosine restart baseline |
+| 2357 | askeladd | cosine-restart-eta-min | WIP (NEW) | Cosine restart eta_min sweep (1e-5 vs 5e-5) — cycle-end LR floor untested in #2227; orthogonal to #2317 |
+| 2123 | askeladd | cosine-tmax | **CLOSED** | T_max sweep on OLD pre-compile baseline; best arm +10.8% vs current 83.9969. T_max axis superseded by restart. |
 | 2331 | nezuko | swa-cycle-end-averaging | WIP (NEW) | SWA over SGDR cycle-ends (retry of #1951 in proper SGDR regime with genuine cycle-end minima) |
 | 2340 | thorfinn | adamw-beta1-sweep | WIP (NEW) | β1=0.85 vs β1=0.95 — last untested AdamW optimizer axis |
 | 2201 | nezuko | beta2-long | **CLOSED** | +14.2%/+8.9% regression vs 83.9969. β2=0.999 PERMANENTLY CONFIRMED. 3rd cycle-34 confirmation. |
@@ -125,6 +126,8 @@
 31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — **rejected** (#2201 nezuko, CLOSED cycle 47). β2=0.9999 +14.2% val, β2=0.9995 +8.9% val vs current baseline. Spike-as-signal interpretation prevailed. Long-β2 smoothing destroys e18/e20 deep minimum. β2 axis PERMANENTLY CLOSED: 0.95 (#2015) / 0.9999+0.9995 (#2201) all regress; 0.999 is the only viable point.
 31b. **AdamW β1=0.85/0.95 (gradient momentum adaptation speed)** — testing (#2340 thorfinn, NEW cycle 47). First β1 sweep in the programme. β1 controls step numerator dynamics — orthogonal to β2 (denominator). β1=0.85: faster gradient de-correlation after restart may deepen recovery minimum. β1=0.95: more momentum persistence through restart burst. The last untested AdamW axis.
 32. **SWA over SGDR cycle-ends (retry)** — testing (#2331 nezuko, NEW cycle 47). Prior #1951 SWA (+3.33%) was pre-restart, no genuine cycle-end minima. Now T_0=10 provides independent local minima at e10/e20. Izmailov 2018 designed SWA exactly for this regime. Two arms: sparse 2-snapshot SWA (e10, e20) vs dense per-epoch SWA in cycle 2 (e10–e20).
+33. **Cosine T_max sweep {15, 20, 25}** — **rejected at 14ep pre-compile baseline** (#2123 askeladd, CLOSED cycle 48). Best arm T_max=20 val=93.06 (−0.6% vs OLD #2031), but +10.8% vs current 83.9969. T_max axis is now MOOT (current baseline uses CosineAnnealingWarmRestarts, not CosineAnnealingLR). Replaced by eta_min sweep (#2357).
+34. **Cosine restart eta_min sweep {1e-5, 5e-5}** — testing (#2357 askeladd, NEW cycle 48). PR #2227 used default eta_min=0 (LR drops to exactly 0 at cycle-ends e10/e20). This may or may not be optimal — a tiny nonzero floor LR could let the model continue micro-refining at cycle-end minima. Orthogonal to alphonse's #2317 (T_0=12 + WD compose) on the cosine restart axis.
 
 ## Key insights
 
@@ -186,6 +189,7 @@
 - #2189 (EMA 21-epoch re-screen) — +9.07%/+16.46% regression. ema_init_bias decay too slow; live model still descending at e21. EMA direction permanently closed across two attempts (#1808 at 14ep, #2189 at 21ep).
 - #2201 (AdamW β2=0.9999/0.9995) — +14.2%/+8.9% regression vs current baseline. β2=0.999 PERMANENTLY CONFIRMED as the only viable point. Combined with #2015 (β2=0.95), the β2 axis is fully exhausted in both directions.
 - #2188 (Encoder LR boost e15-18) — Arm 2 (3×) val=84.7466 beat OLD compile baseline by 5.54% but lost to current cosine-restart baseline (83.9969) by 0.9%. Mechanism confirmed: explore burst at e16 is encoder-LR-driven. Needs restart-aligned repositioning to compose.
+- #2123 (Cosine T_max {15,20,25}) — Best arm T_max=20 val=93.06, only −0.6% vs OLD #2031 baseline (93.62) and +10.8% vs current 83.9969. Mechanism partially confirmed (tighter T_max damps late-epoch oscillation) but T_max axis is moot after merging cosine_restart. Hypothesis superseded by eta_min direction (#2357).
 
 ## Potential next directions (after cycle 30 in-flight)
 

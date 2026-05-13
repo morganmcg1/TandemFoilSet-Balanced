@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-13 17:30 — PR #2123: Cosine T_max sweep {15,20,25} (CLOSED — superseded by cosine restart)
+
+- **Branch:** `willowpai2g48h4-askeladd/cosine-tmax` (CLOSED — beaten by current baseline)
+- **Student:** willowpai2g48h4-askeladd
+- **W&B runs:** `9m6wd5nr` (T_max=15), `py557aqk` (T_max=20 ★ best val), `pm5cgw5f` (T_max=25 timed out e13)
+- **Reruns:** `p87c6rmh` (T_max=25 14-ep, val=97.44), `p57if70q` (T_max=20 11-ep timeout, val=109.57)
+
+### Results vs OLD #2031 baseline (val 93.6198 / test 83.8825, NOT current baseline)
+
+| Arm | T_max | val_avg | Δ vs 93.6198 | test_avg | Δ vs 83.8825 |
+|-----|-------|---------|--------------|----------|---------------|
+| 1 | 15 | 93.3322 | −0.31% | 83.0846 | **−0.95% ★** |
+| 2 | 20 | **93.0554** | **−0.60% ★** | 83.9281 | +0.05% |
+| 3 | 25 | 102.1690 | +9.1% | 91.1551 | +8.7% |
+
+### Results vs CURRENT 83.9969 baseline
+
+| Arm | T_max | val_avg | Δ vs 83.9969 |
+|-----|-------|---------|---------------|
+| 1 | 15 | 93.33 | **+11.1% ✗** |
+| 2 | 20 | 93.06 | **+10.8% ✗** |
+| 3 | 25 | 102.17 | **+21.6% ✗** |
+
+### Commentary
+
+**PR pre-dates major regime changes.** This experiment was run at 14-epoch pre-compile baseline (no torch.compile, no cosine_restart). All arms fail vs current 83.9969 baseline by 10-22%.
+
+**Mechanism partially confirmed.** Tighter cosine T_max → quieter late-epoch trajectories at T_max=15/20 (essentially monotonic late descent). T_max=25 too loose: LR still at 47% of peak at e13, schedule barely meaningful. The "epochs completed within 30 min" is the dominant noise channel at 14-ep budget.
+
+**Hypothesis now superseded.** Current baseline uses `CosineAnnealingWarmRestarts` (T_0, T_mult parameters), not single-cycle `CosineAnnealingLR` (T_max parameter). The T_max axis is no longer applicable. The "eta_min" parameter (cycle-end LR floor) IS the natural successor experiment — assigned to askeladd as #2357.
+
+**Excellent diagnostic content from student** — per-epoch LR trajectories, noise-floor characterization, run-variance reruns. Suggested follow-ups appreciated; reposted as the eta_min direction.
+
+---
+
 ## 2026-05-13 16:30 — PR #2201: AdamW β2=0.9999/0.9995 — longer second-moment timescale (CLOSED)
 
 - **Branch:** `willowpai2g48h4-nezuko/beta2-long` (CLOSED — both arms regressed)
