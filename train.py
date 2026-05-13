@@ -214,6 +214,76 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# SAM optimizer wrapper (Foret et al. 2021, https://arxiv.org/abs/2010.01412)
+# ---------------------------------------------------------------------------
+
+
+class SAM(torch.optim.Optimizer):
+    """Sharpness-Aware Minimization wrapper around a base optimizer.
+
+    Two-step API: ``first_step`` perturbs params to the ε-neighbourhood
+    ascent direction; ``second_step`` undoes the perturbation and applies
+    the base-optimizer update using the gradient evaluated at the
+    perturbed point. Doubles forward-backward cost per training step.
+    """
+
+    def __init__(self, params, base_optimizer, rho=0.05, **kwargs):
+        if rho < 0:
+            raise ValueError(f"rho must be non-negative, got {rho}")
+        defaults = dict(rho=rho, **kwargs)
+        super().__init__(params, defaults)
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                e_w = p.grad * scale
+                p.add_(e_w)
+                self.state[p]["e_w"] = e_w
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                p.sub_(self.state[p]["e_w"])
+        self.base_optimizer.step()
+        if zero_grad:
+            self.zero_grad()
+
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device
+        return torch.norm(
+            torch.stack([
+                p.grad.norm(p=2).to(shared_device)
+                for group in self.param_groups
+                for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2,
+        )
+
+    def step(self, closure=None):
+        raise NotImplementedError("Call first_step / second_step explicitly.")
+
+    def state_dict(self):
+        return self.base_optimizer.state_dict()
+
+    def load_state_dict(self, sd):
+        self.base_optimizer.load_state_dict(sd)
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -312,6 +382,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "loss": cfg.loss,
+        "sam_rho": cfg.sam_rho,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -354,6 +426,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     loss: str = "mse"  # one of: "mse", "smooth_l1", "l1"
+    sam_rho: float = 0.0  # SAM perturbation radius; 0 = standard AdamW
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -404,9 +477,18 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.sam_rho > 0:
+    optimizer = SAM(
+        model.parameters(), torch.optim.AdamW,
+        rho=cfg.sam_rho, lr=cfg.lr, weight_decay=cfg.weight_decay,
+    )
+    sched_opt = optimizer.base_optimizer
+    print(f"Optimizer: SAM(AdamW, rho={cfg.sam_rho}) — 2× forward-backward per step")
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    sched_opt = optimizer
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optimizer,
+    sched_opt,
     max_lr=cfg.lr,
     total_steps=MAX_EPOCHS * len(train_loader),
     pct_start=0.1,
@@ -444,6 +526,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    def _compute_loss(x_norm, y_norm, vol_mask, surf_mask):
+        pred = model({"x": x_norm})["preds"]
+        if cfg.loss == "mse":
+            err = (pred - y_norm) ** 2
+        elif cfg.loss == "smooth_l1":
+            abs_err = (pred - y_norm).abs()
+            err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
+        elif cfg.loss == "l1":
+            err = (pred - y_norm).abs()
+        else:
+            raise ValueError(f"Unknown loss: {cfg.loss!r} (expected one of: mse, smooth_l1, l1)")
+        vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        return vol_loss, surf_loss, vol_loss + cfg.surf_weight * surf_loss
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -452,26 +549,24 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm})["preds"]
-        if cfg.loss == "mse":
-            sq_err = (pred - y_norm) ** 2
-        elif cfg.loss == "smooth_l1":
-            abs_err = (pred - y_norm).abs()
-            sq_err = torch.where(abs_err < 1.0, 0.5 * abs_err ** 2, abs_err - 0.5)
-        elif cfg.loss == "l1":
-            sq_err = (pred - y_norm).abs()
-        else:
-            raise ValueError(f"Unknown loss: {cfg.loss!r} (expected one of: mse, smooth_l1, l1)")
-
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-        loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        if cfg.sam_rho > 0:
+            # First forward-backward at θ (unperturbed): used to compute ε direction.
+            vol_loss, surf_loss, loss = _compute_loss(x_norm, y_norm, vol_mask, surf_mask)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
+            # Second forward-backward at θ + ε: gradient applied via base AdamW.
+            _, _, loss2 = _compute_loss(x_norm, y_norm, vol_mask, surf_mask)
+            loss2.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            vol_loss, surf_loss, loss = _compute_loss(x_norm, y_norm, vol_mask, surf_mask)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
         scheduler.step()
 
         epoch_vol += vol_loss.item()
@@ -512,6 +607,7 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/lr_end_of_epoch": current_lr,
+        "sam_rho": cfg.sam_rho,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
