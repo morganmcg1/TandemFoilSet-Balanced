@@ -6,6 +6,43 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~13:30 — PR #2172: epochs=24 on slice_num=32+n_layers=4 — MERGED (−6.21% val, −5.41% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/epochs-24-slicenum32-nlayers4
+- **Hypothesis:** best_epoch=21 was STILL DESCENDING in #2108 — squeeze remaining epoch budget by extending 21→24 epochs (24×74s = 29.58 min, just inside 30-min cap).
+- **Config note:** Ran with n_head=4 (default at time of run, BEFORE PR #2149 n_head=2 merge).
+- **Result:** val=40.158 / test=34.904 vs old baseline #2108 (42.815/36.899) = **−6.21%/−5.41%**; vs baseline #2149 (42.709/36.784) = **−6.0%/−5.1%**
+
+| Split | val (base #2108) | val (epochs=24) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 44.963 | 40.610 | **−9.7%** | 38.553 |
+| geom_camber_rc | 56.766 | 54.872 | **−3.3%** | 49.316 |
+| geom_camber_cruise | 25.476 | 23.477 | **−7.8%** | 19.263 |
+| re_rand | 44.053 | 41.675 | **−5.4%** | 32.483 |
+| **avg** | **42.815** | **40.158** | **−6.21% ✓** | **34.904** |
+
+- **All 4 splits improved** on both val and test.
+- **best_epoch=24/24 STILL DESCENDING** — ep23→ep24 delta was −0.37 (not flattening). 25 epochs would require 1850s = 30.83 min — just over cap. Epoch axis is truly saturated under current config.
+- **Per-epoch: ~73.9s mean** — consistent with prediction. Total training: 29.58 min.
+- **n_params: 667,923** (n_head=4 at run time).
+- **Clean within-run signal:** ep21=41.669 → ep24=40.158, delta −3.6% from the 3 extra epochs alone.
+- **Epoch mechanism streak:** best_epoch=final holds for 7 consecutive experiments (n_layers=6→5→4, slice_num=64→48→32, epochs=21→24).
+- **Compound needed:** n_head=2 + epochs=24 untested (n_head=2 from #2149 and epochs=24 from this PR not yet combined). Assigned to fern as PR #2213.
+- **Metric artifacts:** `models/model-charliepai2g48h3-fern-epochs-24-slicenum32-nlayers4-20260513-102003/metrics.jsonl`
+
+---
+
+## 2026-05-13 ~13:30 — PR #2109: surf_weight=2 on n_layers=4+slice_num=48 — CLOSED (stale, never run)
+
+- **Student:** charliepai2g48h3-nezuko
+- **Result:** Stale WIP 4h+ with no activity, no comments, no metrics. Never started.
+- **Why closed:** Stack superseded (old slice_num=48), baseline shifted from 46.344 to 40.158 (−12.5%). Even if sw=2 had improved the old stack, it would need retesting on the new stack.
+- **sw=15 diagnostic (PR #2143):** sw=15 was neutral on n_layers=4, confirming sw=10 is near optimum in the high direction. sw=2 in low direction remains tested but stale — not worth carrying forward on old stack.
+- **Reassigned nezuko:** PR #2214 surf_weight=5 on new compact stack (n_head=2 + slice_num=32 + n_layers=4 + epochs=24 config)
+
+---
+
 ## 2026-05-13 ~13:15 — PR #2149: n_head=2 on n_layers=4+slice_num=32 — MERGED (−0.25% val, −0.31% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-askeladd

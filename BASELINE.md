@@ -1,5 +1,72 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~13:30 — PR #2172: epochs=24 + slice_num=32 + n_layers=4 (fern)
+
+**New best: `val_avg/mae_surf_p` = 40.158** (epoch 24/24, best_epoch=24 STILL DESCENDING, n_head=4, n_layers=4, slice_num=32)
+
+> **Important note on config:** fern's branch was created BEFORE PR #2149 (n_head=2) merged. This run used `n_head=4` (default at run time). The current `train.py` default is `n_head=2` — reproduce command must pass `--n_head 4` to match this result exactly. The natural compound test is `n_head=2 + epochs=24` (assigned as fern's next PR).
+>
+> **Clean epoch-extension signal within this run:** ep21→ep24 delta = 41.669→40.158 = −3.6% (unconfounded by n_head; shows the epoch-budget mechanism is still operating regardless of head configuration).
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 4 |
+| `n_head` | 4 (run with n_head=4, BUT current train.py default is 2) |
+| `slice_num` | 32 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=24 (=epochs) |
+| `epochs` | 24 (still improving at epoch 24! — saturates the 30-min cap at 29.58 min) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 667,923 (n_head=4 config at run time) |
+
+> **Mechanism:** "Epoch-count is the binding constraint" pattern holds for 6 consecutive experiments. Cosine schedule expires before saturation. Extending from 21→24 epochs bought −3.6% additional improvement within this run. No further extension possible at current per-epoch time (25×74s = 1850s > 30 min).
+
+### Val metrics (best checkpoint, epoch 24)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 40.610 | 50.009 |
+| val_geom_camber_rc | 54.872 | 61.640 |
+| val_geom_camber_cruise | 23.477 | 24.981 |
+| val_re_rand | 41.675 | 43.916 |
+| **val_avg/mae_surf_p** | **40.158** | **45.136** |
+
+### Test metrics (best-val checkpoint, epoch 24)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| test_single_in_dist | 38.553 | 46.062 |
+| test_geom_camber_rc | 49.316 | 55.128 |
+| test_geom_camber_cruise | 19.263 | 21.140 |
+| test_re_rand | 32.483 | 35.210 |
+| **test_avg/mae_surf_p** | **34.904** | **39.385** |
+
+### Improvement vs PR #2108 baseline (42.815 val / 36.899 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 44.963 | 40.610 | **−9.7%** | 40.717 | 38.553 | −5.3% |
+| geom_camber_rc | 56.766 | 54.872 | **−3.3%** | 51.074 | 49.316 | −3.4% |
+| geom_camber_cruise | 25.476 | 23.477 | **−7.8%** | 21.158 | 19.263 | −9.0% |
+| re_rand | 44.053 | 41.675 | **−5.4%** | 34.646 | 32.483 | −6.2% |
+| **avg** | **42.815** | **40.158** | **−6.2% ✓** | **36.899** | **34.904** | **−5.4% ✓** |
+
+**Reproduce (fern's exact config):**
+```bash
+cd target/ && python train.py --epochs 24 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 4
+```
+
+**Metric artifacts:** `models/model-charliepai2g48h3-fern-epochs-24-slicenum32-nlayers4-20260513-102003/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~13:15 — PR #2149: n_head=2 + slice_num=32 + n_layers=4 + T_max=21 (askeladd)
 
 **New best: `val_avg/mae_surf_p` = 42.709** (epoch 21/21, best_epoch=21 STILL DESCENDING, n_head=2, n_layers=4, slice_num=32, surf_weight=10)

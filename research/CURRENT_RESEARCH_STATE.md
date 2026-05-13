@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~13:20
+- **Date:** 2026-05-13 ~13:45
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,20 +9,23 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 42.709** (n_head=2 + n_layers=4 + slice_num=32 + T_max=21, PR #2149)
-**`test_avg/mae_surf_p` = 36.784**
+**`val_avg/mae_surf_p` = 40.158** (n_head=4 + n_layers=4 + slice_num=32 + epochs=24, PR #2172)
+**`test_avg/mae_surf_p` = 34.904**
 
-**⚠ Note:** best_epoch=21 STILL DESCENDING. Per-head capacity wins over diversity at n_layers=4+slice_num=32. n_head=2 now a CLI arg.
+**⚠ Notes:**
+1. PR #2172 (fern) ran with n_head=4 (default BEFORE PR #2149). Current train.py default is n_head=2.
+2. best_epoch=24/24 STILL DESCENDING. 25 epochs would require 30.8 min — over cap. Epoch axis is now saturated under current per-epoch timing.
+3. **Next compound:** n_head=2 + epochs=24 (fern #2213, in flight) — expected to improve further if both axes compound.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 45.089 | 41.257 |
-| geom_camber_rc | **57.248** | 50.023 |
-| geom_camber_cruise | 25.495 | 21.336 |
-| re_rand | 43.004 | 34.519 |
-| **avg** | **42.709** | **36.784** |
+| single_in_dist | 40.610 | 38.553 |
+| geom_camber_rc | **54.872** | 49.316 |
+| geom_camber_cruise | 23.477 | 19.263 |
+| re_rand | 41.675 | 32.483 |
+| **avg** | **40.158** | **34.904** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 2`
+**Reproduce (fern's exact config):** `cd target/ && python train.py --epochs 24 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 4`
 
 ## What we've learned
 
@@ -42,22 +45,26 @@
 13. **n_layers=4 + T_max=17**: −1.07% val / −2.17% test (PR #2080) ← same mechanism; 17 epochs at ~94s/epoch; lr=cfg.lr bug fixed; best_epoch=17 STILL DESCENDING
 14. **slice_num=32 + T_max=21**: −7.6% val / −7.6% test (PR #2108) ← 74s/epoch, 21 epochs; all 8 per-split metrics improved; val still descending at epoch 21
 15. **n_head=2 (head_dim=32→64)**: −0.25% val / −0.31% test (PR #2149) ← per-head capacity > diversity on compact stack; mixed per-split (re_rand −2.38%, rc test −2.06%, single_in_dist slightly regressed)
+16. **epochs=24 (3 extra cosine epochs)**: −6.21% val / −5.41% test (PR #2172) ← epoch-budget mechanism still binding at slice_num=32; best_epoch=24 still descending; 30-min cap now fully saturated (29.58 min); n_head=4 config — compound with n_head=2 in flight
 
 ### Current stack (defaults + CLI overrides)
 - L1 (MAE) loss in normalized space, **surf_weight=10**
 - **n_layers=4** (PR #2080) ← CLI `--n_layers 4` (default is 5)
 - **slice_num=32** (PR #2108) ← CLI `--slice_num 32` (default is 48)
-- **n_head=2** (PR #2149) ← CLI `--n_head 2` (default is 4)
+- **n_head=2** (PR #2149) ← default in train.py is now 2 (was 4)
+- **epochs=24** (PR #2172, fern ran with n_head=4) ← new epoch budget
 - **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128
 - Lion optimizer, **lr=cfg.lr** (bug fixed in PR #2080), lr=1e-4, weight_decay=1e-4
-- **CosineAnnealingLR T_max=21** (=epochs, aligned)
+- **CosineAnnealingLR T_max=24** (=epochs, aligned)
 - bf16 mixed precision (autocast)
-- **21 epochs in 30 min** (~65s/epoch; best_epoch=21 STILL DESCENDING)
-- n_params: 708,875 (+6.3% vs PR #2108 667,923)
+- **24 epochs in ~30 min** (~65s/epoch at n_head=2; best_epoch=24 STILL DESCENDING — epoch axis saturated at current per-epoch speed)
+- n_params: ~708K (at n_head=2 default)
 
-**Reproduce command:** `cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 2`
+**⚠ Config alert:** Best recorded result (PR #2172) was at n_head=4 (default at run time). Current default is n_head=2. Compound n_head=2+epochs=24 in flight (fern #2213).
+
+**Reproduce (fern's exact best run):** `cd target/ && python train.py --epochs 24 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32 --n_head 4`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -104,16 +111,18 @@
 | Student | PR | Hypothesis | Base stack |
 |---------|-----|------------|-----------|
 | thorfinn | #2151 | slice_num=24 + n_layers=4 (slice sweep step 3) | NEW slice_num=32 stack |
-| askeladd | #2193 | n_head=1 on NEW stack (bracket per-head capacity axis) | NEW n_head=2 stack |
-| frieren | #2150 | lr=8e-5 on NEW stack (LR bracket below default) | NEW slice_num=32 stack |
-| fern | #2172 | epochs=24 + T_max=24 on slice_num=32 (squeeze epoch budget) | NEW slice_num=32 stack |
-| tanjiro | #2107 (sent back) | **n_layers=3 + slice_num=32 + T_max=27** (compound depth+slice) | NEW slice_num=32 stack |
-| alphonse | #2134 (sent back) | **lr=1.5e-4 + slice_num=32 + n_layers=4** (compound LR+slice) | NEW slice_num=32 stack |
-| nezuko | #2109 | surf_weight=2 + n_layers=4 (still on OLD slice_num=48) | OLD slice_num=48 stack |
-| edward | #2185 | mlp_ratio=6 + slice_num=32 (MLP capacity midpoint) | NEW slice_num=32 stack |
+| askeladd | #2193 | n_head=1 on NEW stack (bracket per-head capacity axis) | n_head=2+slice_num=32 |
+| fern | #2213 | **n_head=2 + epochs=24** compound (both recent wins) | NEW epoch=24 stack |
+| nezuko | #2214 | surf_weight=5 on new stack (vol-gradient mechanism) | NEW epoch=24 stack |
+| frieren | #2150 | lr=8e-5 + slice_num=32 (LR bracket below default) | slice_num=32 |
+| tanjiro | #2107 (sent back) | **n_layers=3 + slice_num=32 + T_max=27** (compound depth+slice) | slice_num=32 |
+| alphonse | #2134 (sent back) | **lr=1.5e-4 + slice_num=32 + n_layers=4** (compound LR+slice) | slice_num=32 |
+| edward | #2185 | mlp_ratio=6 + slice_num=32 (MLP capacity midpoint) | slice_num=32 |
+| thorfinn | #2151 | slice_num=24 + n_layers=4 (slice sweep step 3) | n_layers=4+slice_num=32 |
 
 **Recently merged:**
-- askeladd #2149: n_head=2 on n_layers=4+slice_num=32 (−0.25%/−0.31%) ← **NEW BASELINE 42.709/36.784** (n_head axis: per-head capacity > diversity on compact stack; n_head CLI arg now plumbed)
+- fern #2172: epochs=24 on slice_num=32+n_layers=4 (−6.21%/−5.41% vs #2108) ← **NEW BASELINE 40.158/34.904** (n_head=4 run; compound with n_head=2 in flight as #2213)
+- askeladd #2149: n_head=2 on n_layers=4+slice_num=32 (−0.25%/−0.31%) (per-head capacity > diversity on compact stack; n_head CLI arg plumbed)
 
 **Recently reviewed:**
 - edward #2143: sw=15 gave essentially flat val (−0.44% vs OLD), slightly worse test (+1.14% OLD); +7.77% vs NEW baseline. CLOSED. sw axis bracket on n_layers=4 nearly complete (sw=2 nezuko in flight remains). Reassigned to mlp_ratio=6 on new stack.
@@ -127,6 +136,7 @@
 - fern #1996: slice_num=48 + T_max=15 (−1.33% val)
 
 **Recently closed:**
+- nezuko #2109: sw=2 on n_layers=4+slice_num=48 (stale, never run) — superseded; reassigned to sw=5 on new stack
 - edward #2143: surf_weight=15 on n_layers=4 (+7.77% vs current) — neutral on OLD baseline, surf↔vol trade saturated on n_layers=4
 - fern #2062: n_layers=5 + slice_num=48 (stale, superseded by #2080 + #2108)
 - edward #2048: surf_weight=5 on n_layers=5 (+3.16% vs current) — vol-gradient mechanism active but stack-depth dependent
