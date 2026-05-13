@@ -152,3 +152,51 @@ cd target && python train.py \
 - Synergy with BIVW: BIVW removes between-sample gradient inflation; Huber removes within-sample per-node gradient inflation — orthogonal channels that compound.
 - **All future PRs must beat `val_avg/mae_surf_p < 98.1642` to merge.**
 - Test cruise NaN is unchanged; use 3-split mean as surrogate paper metric.
+
+---
+
+## 2026-05-13 05:30 — PR #1795: Decoupled LR for surf_head vs encoder
+
+- **val_avg/mae_surf_p: 97.9914** (best checkpoint epoch 11)
+- **test_avg/mae_surf_p: 88.5311** (4-split, cruise now finite post #1527)
+- **test 3-split mean (excl cruise): 99.5856** (apples-to-apples vs prior 98.7537; slight +0.85 regression on 3-split)
+- **W&B run:** `eg1rhrzg` (surf_head_lr=5e-3, arm 3)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --wandb_group decoupled-lr-surf-head \
+      --wandb_name surf-head-lr-5e-3 \
+      --agent willowpai2g48h4-thorfinn
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 11)
+
+| Split | mae_surf_p | vs prior baseline (98.1642) |
+|-------|-----------|------------------------------|
+| `val_single_in_dist` | 120.31 | 123.14 → **−2.3%** ✓ |
+| `val_geom_camber_rc` | 115.98 | 107.24 → +8.2% ✗ |
+| `val_geom_camber_cruise` | 66.04 | 73.28 → **−9.9%** ✓ |
+| `val_re_rand` | 89.64 | 88.99 → +0.7% ≈ |
+| **val_avg** | **97.9914** | **−0.18% ✓** |
+
+### Per-split test surface-p MAE
+
+| Split | mae_surf_p |
+|-------|-----------|
+| `test_single_in_dist` | 112.27 |
+| `test_geom_camber_rc` | 104.81 |
+| `test_geom_camber_cruise` | 55.36 (finite, NaN guard active) |
+| `test_re_rand` | 81.69 |
+| **test 4-split mean** | **88.5311** |
+| **test 3-split mean (no cruise)** | **99.5856** |
+
+### Notes
+
+- surf_head uses `surf_head_lr=5e-3` (10× encoder LR of 5e-4) via a separate AdamW param group.
+- Encoder LR unchanged at 5e-4. Both groups share weight_decay=1e-4.
+- Monotonic trend across sweep: arm 1 (1e-3, +15.9%) → arm 2 (3e-3, +6.6%) → arm 3 (5e-3, −0.18%). Margin not yet exhausted at 5e-3.
+- Late training oscillation at 5e-3: best epoch 11 (97.99), oscillates to ~108-113 before settling to 99.85 at epoch 14.
+- Test 3-split slightly regresses (+0.85) vs val improvement (−0.17); cruise (finite now) dramatically improves (73→55).
+- **All future PRs must beat `val_avg/mae_surf_p < 97.9914` to merge.**
