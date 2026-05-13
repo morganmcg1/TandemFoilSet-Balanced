@@ -487,7 +487,10 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# H32b: peak-lr bracket-down test on post-SwiGLU stack (was 5e-4, now 3e-4)
+lr_override = 3e-4
+optimizer = torch.optim.AdamW(model.parameters(), lr=lr_override, weight_decay=cfg.weight_decay)
+print(f"[H32b] Peak lr override: {lr_override:.2e} (baseline cfg.lr={cfg.lr:.2e})")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
