@@ -250,7 +250,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+                stoch_depth_prob=0.05 * (i / max(n_layers - 1, 1)),  # H47: halved -> [0, 0.0125, 0.025, 0.0375, 0.05]
             )
             for i in range(n_layers)
         ])
@@ -487,6 +487,11 @@ print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 
 print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
 print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
 print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
+# H47: stoch-depth schedule sanity check (max 0.10 -> 0.05)
+_h47_drop_probs = [b.stoch_depth_prob for b in model.blocks]
+print(f"[H47] Stoch-depth drop probs: {_h47_drop_probs}")
+print(f"[H47] Max drop prob: {max(_h47_drop_probs):.4f}  (expected 0.0500)")
+print(f"[H47] n_params: {n_params}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
