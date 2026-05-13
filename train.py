@@ -132,6 +132,31 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class GaussianRFFEnc(nn.Module):
+    """Gaussian Random Fourier Features coord encoding (Rahimi & Recht 2007).
+
+    Draws B ~ N(0, sigma**2 * I) in R^{2*n_freqs x 2} once at init (fixed buffer,
+    not learned). Forward: [sin(B @ coords), cos(B @ coords)] -> 4*n_freqs features,
+    same output dimension as FourierCoordEnc(n_freqs).
+    """
+
+    def __init__(self, n_freqs: int = 6, sigma: float = 1.0, seed: int = 42):
+        super().__init__()
+        self.n_freqs = n_freqs
+        self.sigma = sigma
+        self.seed = seed
+        rng = torch.Generator()
+        rng.manual_seed(seed)
+        B = torch.randn(2 * n_freqs, 2, generator=rng) * sigma
+        self.register_buffer("B", B)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        coords = x[..., :2]
+        angles = coords @ self.B.T
+        fourier = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
+        return torch.cat([fourier, x[..., 2:]], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -460,7 +485,13 @@ val_loaders = {
 }
 
 N_FREQS = 6
-fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+GAUSSIAN_SIGMA = 1.0
+fourier_enc = GaussianRFFEnc(n_freqs=N_FREQS, sigma=GAUSSIAN_SIGMA, seed=42).to(device)
+print(
+    f"GaussianRFFEnc: n_freqs={N_FREQS}, sigma={GAUSSIAN_SIGMA}, seed=42, "
+    f"B.std()={fourier_enc.B.std().item():.4f}, B.shape={tuple(fourier_enc.B.shape)}, "
+    f"out_features={4 * N_FREQS}"
+)
 
 model_config = dict(
     space_dim=2,
@@ -510,14 +541,27 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+fourier_config = {
+    "type": "GaussianRFFEnc",
+    "n_freqs": N_FREQS,
+    "sigma": GAUSSIAN_SIGMA,
+    "seed": 42,
+    "out_features": 4 * N_FREQS,
+    "B_std_realized": float(fourier_enc.B.std().item()),
+}
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
         "model_config": model_config,
+        "fourier_config": fourier_config,
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+append_metrics_jsonl(
+    metrics_jsonl_path,
+    {"event": "init", "fourier_config": fourier_config, "n_params": n_params},
+)
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
