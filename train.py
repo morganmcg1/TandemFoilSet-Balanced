@@ -189,6 +189,7 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        self.out_dim = out_dim
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
@@ -198,7 +199,21 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Multiplicative flow gate: output * (1 + gate(Re, AoA0, AoA1)).
+        # Channels [13, 14, 18] of the (normalized) input x correspond to
+        # [log_Re, AoA0_rad, AoA1_rad]. Final layer is zero-init so the
+        # model starts at exactly identity (gate=0). Optimizer must EARN
+        # any multiplicative correction by reducing loss.
+        self.flow_gate = nn.Sequential(
+            nn.Linear(3, 16),
+            nn.GELU(),
+            nn.Linear(16, out_dim),
+        )
         self.apply(self._init_weights)
+        # Zero-init the gate's FINAL layer (applied AFTER self.apply so the
+        # trunc_normal_ init does not overwrite it).
+        nn.init.zeros_(self.flow_gate[-1].weight)
+        nn.init.zeros_(self.flow_gate[-1].bias)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -214,7 +229,11 @@ class Transolver(nn.Module):
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
-        return {"preds": fx}
+        # Multiplicative flow gate at output. Flow scalars are constant per
+        # sample across mesh nodes, so we read them at node 0 and broadcast.
+        flow_in = x[:, 0, [13, 14, 18]]
+        gate = self.flow_gate(flow_in).unsqueeze(1)
+        return {"preds": fx * (1.0 + gate)}
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +476,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+_gate_w_norm = float(model.flow_gate[-1].weight.norm().item())
+_gate_b_norm = float(model.flow_gate[-1].bias.norm().item())
+print(
+    f"Multiplicative flow gate: form=output*(1+gate); zero-init final layer; "
+    f"gate.final.weight.norm={_gate_w_norm:.6f} (expected 0); "
+    f"gate.final.bias.norm={_gate_b_norm:.6f} (expected 0); "
+    f"input channels [13,14,18]=[log_Re, AoA0_rad, AoA1_rad] (normalized); "
+    f"baseline to beat: val_avg/mae_surf_p < 33.4935 (Lion lr=1.5e-4 from PR #2553)"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -692,6 +720,49 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # --- Flow gate diagnostic (best-checkpoint weights) ---
+    _gate_w_norm_t = float(_inner.flow_gate[-1].weight.detach().float().norm().item())
+    _gate_b_norm_t = float(_inner.flow_gate[-1].bias.detach().float().norm().item())
+    # Per-sample gate magnitude on one val batch (val_re_rand spans Re).
+    _diag_loader = val_loaders.get("val_re_rand") or next(iter(val_loaders.values()))
+    _x_b, _y_b, _is_b, _msk_b = next(iter(_diag_loader))
+    _x_b = _x_b.to(device, non_blocking=True)
+    _x_norm_b = (_x_b - stats["x_mean"]) / stats["x_std"]
+    with torch.no_grad():
+        _flow_in_b = _x_norm_b[:, 0, [13, 14, 18]].float()
+        _gate_b = _inner.flow_gate(_flow_in_b)
+    _gate_abs_per_sample = _gate_b.detach().float().abs().mean(dim=1)
+    _gate_mean_mag = float(_gate_b.detach().float().abs().mean().item())
+    print(
+        f"Terminal gate diagnostics: gate.final.weight.norm={_gate_w_norm_t:.6f}, "
+        f"gate.final.bias.norm={_gate_b_norm_t:.6f}, "
+        f"gate.mean_output_magnitude (val_re_rand batch)={_gate_mean_mag:.6f}"
+    )
+    _flow_re = _flow_in_b[:, 0].detach().float()
+    _flow_aoa0 = _flow_in_b[:, 1].detach().float()
+    _flow_aoa1 = _flow_in_b[:, 2].detach().float()
+    print(
+        f"Gate magnitude vs flow inputs (terminal val_re_rand batch): "
+        f"Re_norm range {float(_flow_re.min()):.3f}->{float(_flow_re.max()):.3f}, "
+        f"AoA0_norm range {float(_flow_aoa0.min()):.3f}->{float(_flow_aoa0.max()):.3f}, "
+        f"AoA1_norm range {float(_flow_aoa1.min()):.3f}->{float(_flow_aoa1.max()):.3f}"
+    )
+    print(
+        f"  per-sample gate |g|.mean(over out_dim): "
+        f"{[round(float(v), 6) for v in _gate_abs_per_sample.tolist()]}"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "flow_gate_diagnostic",
+        "epoch": int(best_metrics["epoch"]),
+        "gate_final_weight_norm": _gate_w_norm_t,
+        "gate_final_bias_norm": _gate_b_norm_t,
+        "gate_mean_output_magnitude_val_re_rand": _gate_mean_mag,
+        "per_sample_gate_abs_mean": [float(v) for v in _gate_abs_per_sample.tolist()],
+        "flow_in_re_norm": [float(v) for v in _flow_re.tolist()],
+        "flow_in_aoa0_norm": [float(v) for v in _flow_aoa0.tolist()],
+        "flow_in_aoa1_norm": [float(v) for v in _flow_aoa1.tolist()],
+    })
 
     test_metrics = None
     test_avg = None
