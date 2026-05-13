@@ -218,7 +218,16 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def beta_for_epoch(epoch, start_beta=1.0, end_beta=0.5, transition_start=1, transition_end=10):
+    if epoch <= transition_start:
+        return start_beta
+    if epoch >= transition_end:
+        return end_beta
+    t = (epoch - transition_start) / (transition_end - transition_start)
+    return start_beta + t * (end_beta - start_beta)
+
+
+def evaluate_split(model, loader, stats, surf_weight, device, beta: float = 0.5) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -241,7 +250,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=beta, reduction="none")
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -547,6 +556,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_clip_count = 0
     epoch_norm_max = 0.0
     epoch_norm_sum = 0.0
+    current_beta = beta_for_epoch(epoch + 1)
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -561,7 +571,7 @@ for epoch in range(MAX_EPOCHS):
         surf_mask = mask & is_surface
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+            sq_err = F.smooth_l1_loss(pred, y_norm, beta=current_beta, reduction="none")
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
@@ -616,7 +626,7 @@ for epoch in range(MAX_EPOCHS):
     # ema_model is kept in eval() permanently; re-assert in case of mode drift.
     ema_model.eval()
     split_metrics = {
-        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device, beta=current_beta)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -624,7 +634,7 @@ for epoch in range(MAX_EPOCHS):
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
 
     live_split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, beta=current_beta)
         for name, loader in val_loaders.items()
     }
     live_val_avg = aggregate_splits(live_split_metrics)
@@ -643,11 +653,13 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_clip_rate_epoch": epoch_clip_rate,
         "train/grad_clip_count_cumulative": clip_count_total,
         "train/grad_norm_max_global": norm_max_global,
+        "train/huber_beta": current_beta,
         "val/loss": val_loss_mean,
         "val_live/loss": live_val_loss_mean,
         "ema_decay": cfg.ema_decay,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
+        "epoch": epoch + 1,
         "global_step": global_step,
     }
     for split_name, m in split_metrics.items():
