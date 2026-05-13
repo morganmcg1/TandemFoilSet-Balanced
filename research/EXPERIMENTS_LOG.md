@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-14 04:30 UTC — Round 54
+
+One review-ready LOSS closed (22nd closed taxon: redundant-readout-pathway interference — skip is load-bearing but harmful) + 1 fresh hypothesis assigned (axis: flow-condition-conditional output bias — first probe; physically motivated by freestream + perturbation decomposition).
+
+### PR #2503 alphonse: Decoder residual skip Linear(96, 3) after ln_3 — CLOSED (READOUT-PATHWAY AXIS)
+
+- **Branch:** charliepai2g48h5-alphonse/decoder-residual-skip
+- **Hypothesis:** Add a linear skip path inside the decoder: `output = mlp2(ln_3(fx)) + skip_proj(ln_3(fx))`, where `skip_proj = Linear(96, 3)` with zero-init bias and Kaiming-uniform-init weight. Tests whether the smooth+sharp output mixture benefits from a dedicated linear pathway alongside mlp2's GELU-residual.
+- **Metrics artifact:** `models/model-charliepai2g48h5-alphonse-decoder-residual-skip-*/metrics.jsonl`
+
+| Metric | skip | Baseline #2307 (no skip) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.7497** | 42.3455 | **+10.40% (LOSS)** |
+| `test_avg/mae_surf_p` | **40.3518** | 38.5059 | **+4.79% (LOSS)** |
+| `val_single_in_dist` | 42.1611 | 35.4776 | +18.84% |
+| `val_geom_camber_rc` | 64.5773 | 60.8311 | +6.16% (least regression) |
+| `val_geom_camber_cruise` | 31.3023 | 27.6517 | +13.21% |
+| `val_re_rand` | 48.9580 | 45.4214 | +7.79% |
+
+- **70/70 epochs, best=ep66.**
+- **CRITICAL weight-norm diagnostic** (smoking gun):
+  - `mlp2_final_w.norm() = 1.0836` (pre-existing decoder readout)
+  - `skip_proj_w.norm() = 0.4347` (new linear path)
+  - **ratio = skip/mlp2 = 0.40** → skip IS load-bearing (well above 0.1 ignored threshold)
+  - Bias zero-init didn't rescue: training drove skip_proj.weight to non-trivial norm despite starting near zero
+- **Mechanism (textbook double-counting):** The pre-existing mlp2 (96→GELU→96→3) was already encoding smooth+sharp mixture efficiently. Adding redundant linear pathway SPLIT gradient between two competing readout heads; optimizer settled on suboptimal 40-60 mlp2-skip mixture worse than mlp2 alone.
+- **Smoking gun pattern:** val_single_in_dist regresses MOST (+18.84%) — the split where latent→output mapping should be most linear, and thus where the linear skip SHOULD have helped most. The diametric opposite of predicted "linear-component WIN" pattern. Matches "LOSS — double-counting" prediction arm exactly.
+- **22nd distinct closed-axis taxon: redundant-readout-pathway interference** (uniform LOSS with load-bearing-but-harmful skip; structurally distinct from prior 21 closures).
+- **Composability with in-flight #2472 split-heads is now moot** for this skip form. (Split-heads bifurcates by node type, a structurally different operation.)
+
+### New assignment
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2531 | alphonse | Flow-conditional output bias: flow_bias = Sequential(Linear(3, 16), GELU, Linear(16, 3)) zero-init; output = mlp2(ln_3(fx)) + flow_bias(x[:, 0:1, [13, 14, 18]]) (Re, AoA, fun_dim); +115 params; --epochs 70 | First flow-condition-conditional OUTPUT-bias probe; physically motivated by freestream+perturbation decomposition for incompressible NS; distinct from CLOSED FiLM (per-block modulation, this is single-shot output) and CLOSED decoder-skip (latent-conditioned, this is flow-condition-conditioned); zero-init prevents weight-splitting failure mode |
+
+---
+
 ## 2026-05-14 04:10 UTC — Round 53
 
 One review-ready LOSS closed (21st closed taxon: routing-sharpness over-commitment at warm-start) + 1 fresh hypothesis assigned (axis: PaLM-style parallel attention+MLP — first decoupled-branch architectural probe).
