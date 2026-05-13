@@ -426,6 +426,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    surf_head_clip: float = 0.0  # Max grad norm for surf_head params; 0 = disabled.
+    encoder_clip: float = 0.0    # Max grad norm for encoder (Transolver) params; 0 = disabled.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -533,6 +535,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     surf_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_sh_gn = epoch_enc_gn = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -586,6 +589,26 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+
+        # Pre-clip grad norms (clip_grad_norm_ with max_norm=inf is a no-op
+        # that still returns the L2 norm — used for diagnostics).
+        with torch.no_grad():
+            sh_grad_norm_pre = torch.nn.utils.clip_grad_norm_(
+                surf_head.parameters(), max_norm=float("inf")
+            ).item()
+            enc_grad_norm_pre = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float("inf")
+            ).item()
+
+        if cfg.surf_head_clip > 0:
+            torch.nn.utils.clip_grad_norm_(
+                surf_head.parameters(), max_norm=cfg.surf_head_clip
+            )
+        if cfg.encoder_clip > 0:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=cfg.encoder_clip
+            )
+
         optimizer.step()
         global_step += 1
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
@@ -603,16 +626,22 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_max": y_var.max().item(),
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
+            "train/surf_head_grad_norm_pre_clip": sh_grad_norm_pre,
+            "train/encoder_grad_norm_pre_clip": enc_grad_norm_pre,
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_sh_gn += sh_grad_norm_pre
+        epoch_enc_gn += enc_grad_norm_pre
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_sh_gn /= max(n_batches, 1)
+    epoch_enc_gn /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -629,6 +658,8 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/surf_head_grad_norm_pre_clip_epoch": epoch_sh_gn,
+        "train/encoder_grad_norm_pre_clip_epoch": epoch_enc_gn,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
