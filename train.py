@@ -444,7 +444,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=2,
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
@@ -455,6 +455,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
+print(f"n_head: {model.blocks[0].attn.heads}, dim_head: {model.blocks[0].attn.dim_head}, n_params: {n_params}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
