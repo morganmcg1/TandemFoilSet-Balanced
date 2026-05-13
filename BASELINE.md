@@ -25,6 +25,39 @@ Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
 
+### 2026-05-13 09:45 — PR #1785: OneCycleLR max_lr=2e-3 — LR ceiling expansion win (single-seed; 3-seed confirmation in progress)
+
+- **val_avg/mae_surf_p:** **62.0281** (seed=0, best epoch 28/29) ✓ NEW SINGLE-SEED BEST
+- **test_avg/mae_surf_p:** **52.4098** (seed=0, fp32 eval from best ckpt)
+- **Per-split val (best epoch 28):**
+  - `val_single_in_dist`: 65.59 (was 73-75 at β=0.5 mean, −11.1% vs PR-body #1716 baseline)
+  - `val_geom_camber_rc`: 75.85 (−6.0% vs #1716)
+  - `val_geom_camber_cruise`: 45.06 (−12.9% vs #1716)
+  - `val_re_rand`: 61.61 (−9.5% vs #1716)
+- **Per-split test (fp32 eval, best ckpt):**
+  - `test_single_in_dist`: 54.10
+  - `test_geom_camber_rc`: 65.98
+  - `test_geom_camber_cruise`: 36.86
+  - `test_re_rand`: 52.70
+- **W&B run:** `tqp3jpz4` (seed=0)
+- **vs β=0.5 3-seed mean (#1379):** val −5.1% (65.35→62.03), test −7.5% (56.68→52.41) — broad-based win on all 4 val and 4 test splits
+- **vs β=0.5 best seed (#1379 seed=1, val=62.40):** val −0.37, test −2.07 — beats even the prior lucky-tail seed on both metrics
+
+**Key insight:** max_lr=2e-3 on the β=0.5 stack unlocks headroom that wasn't accessible on MSE (steeper gradients would have destabilized). The Smooth-L1 L1-regime gradient capping allows a more aggressive peak LR without overshoot — orthogonal mechanisms compose. Best epoch=28 (shifted from 27 at 1.5e-3) confirms the full descent budget was consumed.
+
+⚠️ **Single-seed result.** Per standing rule (key learning #15), wins below ~6% val need multi-seed confirmation before paper framing. val gain = 5.1%, test = 7.5%. 3-seed confirmation in progress (alphonse follow-up, seeds 1+2). Until confirmed, treat 62.03 as a strong directional signal, not a paper-publishable anchor.
+
+- **Reproduce:**
+  ```bash
+  cd target
+  python -u train.py --seed 0 --wandb_name willow-r4-alphonse-onecycle-maxlr2e3 --agent willowpai2g24h4-alphonse --wandb_group onecycle-max-lr-sweep
+  ```
+- **Code diff vs #1379 baseline:** `max_lr=1.5e-3 → 2e-3` in OneCycleLR constructor + W&B config dict (2 lines only)
+
+**Next target:** beat val_avg/mae_surf_p = 62.0281 (this run) — or beat **3-seed mean ~64-65** for paper-publishable claim (pending alphonse confirmation run).
+
+---
+
 ### 2026-05-13 08:00 — PR #1379: Smooth-L1 (Huber) loss β=0.5 — gradient-fairness confirmed
 
 - **val_avg/mae_surf_p:** **65.3496 ± 3.37** (3-seed mean) | best seed=1: **62.3972** ✓ NEW BASELINE
