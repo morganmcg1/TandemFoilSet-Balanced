@@ -47,6 +47,32 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Asinh value-level compression on pressure channel (index 2 of y)
+# Linear near 0, log-like for large |x|. Inverse: sinh.
+# Compresses the heavy-tailed pressure target so pure-L1 gradient stops
+# over-emphasising leading-edge peaks. Metric still computed in physical
+# space — decompress predictions before unnormalising. (PR #1777)
+# ---------------------------------------------------------------------------
+
+ASINH_GAIN = 1.0
+
+
+def compress_pressure(y_norm: torch.Tensor) -> torch.Tensor:
+    """y_norm: [..., 3]. Returns a new tensor with channel 2 asinh-compressed."""
+    y_c = y_norm.clone()
+    y_c[..., 2] = torch.asinh(y_norm[..., 2] * ASINH_GAIN) / ASINH_GAIN
+    return y_c
+
+
+def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
+    """Inverse of compress_pressure. Decompresses model preds back to normalised scale."""
+    y = y_c.clone()
+    # Clamp before sinh to avoid overflow; healthy training keeps pred in ±5 range.
+    y[..., 2] = torch.sinh(y_c[..., 2].clamp(-10, 10) * ASINH_GAIN) / ASINH_GAIN
+    return y
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -250,10 +276,11 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
+            y_target = compress_pressure(y_norm)
             pred = model({"x": x_norm})["preds"]
 
-            # Pure L1 normalized-space loss, channel-weighted [1,1,3]/5
-            abs_err = (pred - y_norm).abs()
+            # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+            abs_err = (pred - y_target).abs()
             weighted = abs_err * channel_weights
             vol_mask = safe_mask & ~is_surface
             surf_mask = safe_mask & is_surface
@@ -267,7 +294,9 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            # Decompress channel 2 before un-normalising — MAE is in physical units (m²/s²).
+            pred_decompressed = decompress_pressure(pred)
+            pred_orig = pred_decompressed * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y_safe, is_surface, safe_mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -473,10 +502,24 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
+        y_target = compress_pressure(y_norm)
         pred = model({"x": x_norm})["preds"]
 
-        # Pure L1 normalized-space loss, channel-weighted [1,1,3]/5
-        abs_err = (pred - y_norm).abs()
+        if epoch == 0 and n_batches == 0:
+            # One-time sanity probe: confirm channels 0/1 untouched, channel 2 compressed,
+            # and decompress→compress round-trips cleanly. (PR #1777)
+            with torch.no_grad():
+                rt = decompress_pressure(y_target)
+                rt_err = (rt - y_norm).abs().max().item()
+                ch01_match = torch.equal(y_target[..., :2], y_norm[..., :2])
+            print(
+                f"  [asinh probe] y_norm channel-2 |max|={y_norm[..., 2].abs().max().item():.3f} "
+                f"→ y_target channel-2 |max|={y_target[..., 2].abs().max().item():.3f}  "
+                f"round-trip max|err|={rt_err:.2e}  channels-01-unchanged={ch01_match}"
+            )
+
+        # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+        abs_err = (pred - y_target).abs()
         weighted = abs_err * channel_weights
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
