@@ -441,6 +441,58 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Graph Laplacian smoothness regulariser (pressure channel, volume nodes)
+# ---------------------------------------------------------------------------
+
+def laplacian_reg_loss(pred_p, positions, vol_mask, k=8, M=1024):
+    """Stochastic kNN-graph Laplacian regulariser on the predicted p field.
+
+    For a subsample of M random volume query nodes per sample, finds the k
+    nearest *volume* neighbours by physical (x, z) distance and returns the L1
+    average of ``|p_q - mean_{j in kNN(q)} p_j|``. Operates in normalised
+    pressure space (caller passes the same ``pred * scale`` that goes into the
+    primary Huber loss). Excludes self from kNN.
+
+    Args:
+        pred_p: ``[B, N_max]`` predicted pressure (normalised space).
+        positions: ``[B, N_max, 2]`` denormalised node positions.
+        vol_mask: ``[B, N_max]`` True for valid volume (non-surface, non-pad) nodes.
+        k: neighbours per query.
+        M: random query nodes per sample.
+
+    Returns:
+        Scalar tensor; mean over contributing samples in the batch. Returns 0
+        if no valid samples in the batch.
+    """
+    B = pred_p.shape[0]
+    losses = []
+    for b in range(B):
+        valid_idx = vol_mask[b].nonzero(as_tuple=False).squeeze(-1)
+        N_valid = int(valid_idx.shape[0])
+        if N_valid < k + 1:
+            continue
+        M_b = min(M, N_valid)
+        perm = torch.randperm(N_valid, device=pred_p.device)[:M_b]
+        # cdist needs fp32 for kNN precision; positions may be coming from
+        # bf16 autocast context.
+        valid_pos = positions[b].index_select(0, valid_idx).to(torch.float32)
+        query_pos = valid_pos.index_select(0, perm)
+        dist = torch.cdist(query_pos, valid_pos, p=2)
+        # k+1 because the query itself is in valid_pos at distance 0.
+        _, knn_local = dist.topk(k + 1, dim=1, largest=False)
+        knn_local = knn_local[:, 1:]  # exclude self
+        knn_global = valid_idx[knn_local]              # [M_b, k]
+        query_global = valid_idx[perm]                 # [M_b]
+        neighbour_p = pred_p[b][knn_global]            # [M_b, k]
+        query_p = pred_p[b][query_global]              # [M_b]
+        lap = (query_p - neighbour_p.mean(dim=1)).abs()
+        losses.append(lap.mean())
+    if not losses:
+        return torch.zeros((), device=pred_p.device)
+    return torch.stack(losses).mean()
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -467,6 +519,15 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Graph Laplacian smoothness regulariser on predicted pressure.
+    # L1 norm of (p_i - mean_{j in kNN(i)} p_j) over volume nodes only, in
+    # normalised pressure space. Surface nodes excluded (natural discontinuities
+    # at stagnation/separation). Stochastic estimator: per step, sample M
+    # random volume query nodes per sample and compute true kNN among all
+    # volume nodes in that sample. M, k are fixed; lambda_lap=0 disables.
+    lambda_lap: float = 0.01
+    lap_k: int = 8
+    lap_M: int = 1024
 
 
 cfg = sp.parse(Config)
@@ -646,6 +707,9 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    epoch_lap_vol_sum = 0.0
+    epoch_lap_surf_sum = 0.0
+    epoch_lap_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -691,6 +755,33 @@ for epoch in range(MAX_EPOCHS):
             vol_loss = (vol_sq / vol_denom).mean()
             surf_loss = (surf_sq / surf_denom).mean()
             loss = vol_loss + cfg.surf_weight * surf_loss
+
+        # Laplacian smoothness regulariser on the predicted pressure channel.
+        # Computed outside autocast so cdist/topk run in fp32 (needed for stable
+        # kNN over positions that span ~20 m); the loss term itself is gathered
+        # from `pred` which carries the autocast dtype's gradient.
+        vol_mask_2d = mask & ~is_surface
+        if cfg.lambda_lap > 0.0:
+            pred_p = pred[..., 2]                          # [B, N_max]
+            positions = x[..., :2]                         # [B, N_max, 2]
+            lap_loss_vol = laplacian_reg_loss(
+                pred_p, positions, vol_mask_2d,
+                k=cfg.lap_k, M=cfg.lap_M,
+            )
+            loss = loss + cfg.lambda_lap * lap_loss_vol
+            with torch.no_grad():
+                # Diagnostic: same regulariser on surface nodes (not added to
+                # loss); shows whether smoothing would bleed onto surfaces.
+                surf_mask_2d = mask & is_surface
+                lap_loss_surf = laplacian_reg_loss(
+                    pred_p.detach(), positions, surf_mask_2d,
+                    k=cfg.lap_k, M=cfg.lap_M,
+                )
+                epoch_lap_vol_sum += float(lap_loss_vol)
+                epoch_lap_surf_sum += float(lap_loss_surf)
+                epoch_lap_n += 1
+        else:
+            lap_loss_vol = torch.zeros((), device=device)
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
@@ -794,6 +885,8 @@ for epoch in range(MAX_EPOCHS):
     vol_count_safe = vol_count_total.clamp(min=1)
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
+    lap_vol_mean = epoch_lap_vol_sum / max(epoch_lap_n, 1)
+    lap_surf_mean = epoch_lap_surf_sum / max(epoch_lap_n, 1)
 
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
@@ -844,6 +937,11 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "train/lap_loss_vol": lap_vol_mean,
+        "train/lap_loss_surf": lap_surf_mean,
+        "lambda_lap": cfg.lambda_lap,
+        "lap_k": cfg.lap_k,
+        "lap_M": cfg.lap_M,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -857,6 +955,15 @@ for epoch in range(MAX_EPOCHS):
         f"vol[Ux={vol_huber_per_ch[0]:.5f} "
         f"Uy={vol_huber_per_ch[1]:.5f} p={vol_huber_per_ch[2]:.5f}]"
     )
+    if cfg.lambda_lap > 0.0:
+        # Ratio of weighted Laplacian term to vol_loss (the main Huber-rel-L2
+        # term) is the relevant comparison — surf_loss is already x10.
+        ratio = (cfg.lambda_lap * lap_vol_mean) / max(epoch_vol, 1e-12)
+        print(
+            f"    Laplacian(λ={cfg.lambda_lap:.3g}, k={cfg.lap_k}, M={cfg.lap_M})  "
+            f"vol={lap_vol_mean:.4f}  surf(diag)={lap_surf_mean:.4f}  "
+            f"λ·lap_vol/vol_loss={ratio:.3f}"
+        )
     print(
         f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
         f"std={[f'{v:.3f}' for v in scale_std]}  "
