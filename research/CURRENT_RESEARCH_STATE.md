@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 01:40)
+- **Date**: 2026-05-13 (updated 02:00)
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
@@ -38,7 +38,7 @@ The baseline Transolver recipe has several obvious soft spots:
 |---|---|---|---|
 | ~~`surf-weight-50`~~ (alphonse, #1431) | **CLOSED** | Raise surf_weight 10→50 — variant +7.3% worse on test (Bernoulli coupling breaks); vol[p] degraded 30-102% across all test splits | — |
 | ~~`grad-clip-norm1`~~ (askeladd, #1433) | **MERGED** | clip_grad_norm_ at 1.0; ALSO ships cruise-NaN fix. 114.18 (−13.5%) under MSE | Low |
-| `p-channel-weight3x` (edward, #1434) | WIP-rebased-running | 3× weight on pressure channel in loss; new arm `wdmlxbyx` showing 106.6 mid-run; 3 prior crashes (incl. one NaN) post-rebase | Low–Med |
+| ~~`p-channel-weight3x`~~ (edward, #1434) | **CLOSED** | 3× p_weight catastrophic (157.16, +62%); 5× also catastrophic (138.92, +43%). Same Bernoulli-coupling failure mode as alphonse's closed #1431 (channel reweighting breaks coupled physics) | — |
 | `ema-decay999` (fern, #1437) | WIP-rebased-running | EMA model weights; rebase done, baseline arm landed at 104.84 (in-band w/ 104.70); variant arm pending | Low |
 | `warmup-5ep` (frieren, #1438) | WIP-rebase-needed | 5-epoch linear LR warmup; advisor told frieren to rebase onto current advisor branch | Low |
 | `amp-bf16` (nezuko, #1440) | WIP-likely-dead | bfloat16 autocast; multiple finished arms all 131–184, plus 1 crash. Likely close after terminal results post | Medium |
@@ -54,7 +54,9 @@ The baseline Transolver recipe has several obvious soft spots:
 |---|---|---|---|
 | `slice-num-sweep` (alphonse, #1747) | WIP | Transolver Physics Attention `slice_num` sweep at 32/64/96/128 — capacity test on 242K-node cruise meshes | Low–Med |
 | `re-loss-weight` (askeladd, #1721) | WIP | Loss-level Re-reweighting (continuous control replaces discrete sampler starvation from closed #1616) | Low |
-| `weight-decay-sweep` (thorfinn, NEW) | WIP | AdamW weight_decay sweep {0, 1e-3, 1e-2, 5e-2} — regularization probe at characterized ±7 noise floor | Low |
+| `weight-decay-sweep` (thorfinn, #1779) | WIP | AdamW weight_decay sweep {1e-4, 1e-3, 1e-2, 5e-2} — regularization probe at characterized ±7 noise floor | Low |
+| `truncated-l1` (tanjiro, #1800) | WIP | Truncated L1: per-element `min(\|r\|, τ)` — zero-gradient-beyond-τ outlier rejection at τ∈{0.5, 1.0, 2.0} | Low–Med |
+| `mlp-ratio-sweep` (edward, #1842) | WIP | Transolver block `mlp_ratio` sweep {1, 2, 3, 4} — orthogonal-to-width capacity vs throughput tradeoff | Low |
 
 Full Round 1 hypothesis design lives in `research/RESEARCH_IDEAS_2026-05-12_initial.md`. Results log lives in `research/EXPERIMENTS_LOG.md`.
 

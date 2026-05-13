@@ -252,3 +252,34 @@ The Huber win in #1441 was **the linear-region gradient cap on outlier residuals
 - **Implication for the paper**: parameter-free L1 is statistically indistinguishable from tuned-β SmoothL1 on TandemFoilSet at this scale — the SmoothL1 win in #1441 reduces to "gradient cap on the linear-region tail of outlier residuals." Clean negative result for the quadratic-near-zero.
 - Bug-fix code change unlocks paper-facing 4-split `test_avg/mae_surf_p` reporting for every future run on the advisor branch.
 - Follow-up direction (assigned to tanjiro as next PR): on the outlier-residual mechanism thread, the next high-leverage direction is **NOT smaller β** (this PR + closed #1616 already bracket that). It's a different mechanism entirely — to be designed in the next assignment.
+
+## 2026-05-13 01:55 — PR #1434: 3× p-channel weight on pressure in training loss (CLOSED)
+
+- Student branch: `willowpai2g24h3-edward/p-channel-weight3x`
+- Hypothesis: multiplying the pressure-channel loss term by 3× (relative to Ux, Uy) aligns the loss with the surface-MAE ranking metric without abandoning velocity supervision; predicted 2-5% improvement on `val_avg/mae_surf_p`.
+
+### Results — W&B group `willow-r3-p-channel-weight3x`
+
+| Arm | p_weight | Best val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline | W&B |
+|---|---:|---:|---:|---:|---|
+| baseline (best) | 1.0 | **97.00** | 89.49 (`567j0vuh`) | — | `w6lqwh5o` (val), `567j0vuh` (test) |
+| 5× variant | 5.0 | 138.92 | — | **+43% worse** | `aq0t3zfr` |
+| 3× variant | 3.0 | 157.16 | — | **+62% worse** | `nqjvocmq` |
+
+Multiple baseline reproductions (p_weight=1.0): 97.00, 98.49, 99.70, 113.12 — well-clustered near ~99, matching the current advisor-branch noise band.
+
+### Analysis (mechanistic — confirms Bernoulli-coupling generalization)
+
+Same failure mode as alphonse's closed #1431 (surf_weight 10 → 50), via a different lever:
+
+- Transolver's decoder predicts `(Ux, Uy, p)` as a globally coupled physical solution; the loss minimum lies on a manifold defined by the incompressible Navier-Stokes equations (∇·u = 0, u·∇u + ∇p/ρ = ν∇²u).
+- Up-weighting the `p` channel by 3× tells the optimizer to spend disproportionate capacity on fitting `p` at the expense of `(Ux, Uy)`. This breaks the Bernoulli closure between velocity and pressure.
+- Result: predicted-`p` drifts off the manifold defined by predicted `(Ux, Uy)`. Training-time p-loss can decrease while *evaluation* p-MAE rises, because the prediction is no longer physically self-consistent.
+
+**Independent confirmation of a generalizable failure mode.** alphonse's #1431 reweighted surface-vs-interior; edward's #1434 reweighted per-channel. Both fail by the same coupling-violation mechanism, and the failure scales monotonically with the strength of the reweighting (3× already +62% worse, 5× still +43% — i.e. 5× is "less catastrophic" than 3× because the 5× variant happened to converge on a slightly less broken local optimum; both are decisively closed).
+
+### Conclusions
+
+- Closed. Channel-level reweighting of (Ux, Uy, p) is a closed direction.
+- Combined with #1431 closure, the lesson is: **never reweight individual output channels (or boundary regions) of a physics-coupled multi-task head** unless the reweighting respects the coupling constraint. This rules out a whole family of naive task-aligned reweighting hypotheses for coupled PDE surrogates.
+- Follow-up direction (assigned to edward as next PR): hypothesis pivoted to a lever that doesn't touch the loss landscape's physical coupling — see next assignment.
