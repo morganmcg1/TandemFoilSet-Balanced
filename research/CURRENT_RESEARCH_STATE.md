@@ -1,74 +1,73 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 01:05
+- **Date:** 2026-05-13 05:35
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
 
 ## Current floor
 
-**val_avg/mae_surf_p = 122.7043** (PR #1573, merged 2026-05-13)
-Config: 3-ep warmup + lr=7.5e-4 + cosine(T_max=47) + gradclip(max_norm=1.0), bs=4, chan_w=[1,1,5], wd=1e-4, ~0.66M model, 12 epochs (timeout-cut)
-bs=1 clean test_avg = **110.2527** (all 4 splits finite; val 122.70 beats prior floor 128.09 by 4.2%)
+**val_avg/mae_surf_p = 105.6808** (PR #1849, merged 2026-05-13 05:10)
+Config: 3-ep warmup + lr=7.5e-4 + cosine(T_max=47) + gradclip(max_norm=1.0) + **Huber β=0.3** + chan_w=[1,1,5], wd=1e-4, ~0.66M model, 12 epochs (30-min cap)
+bs=1 clean test_avg = **94.9845** (floor progression: 122.70 → 111.15 → 105.68)
 
-**Known test NaN:** bs=4 test_geom_camber_cruise still NaN — deterministic inference-time attention numerics edge case with specific batch compositions at this model+weight. Train-side gradclip doesn't fix it. bs=1 eval is fully clean. Askeladd's #1536 addresses the separate data-bug NaN (Type 1).
+**AMP bf16 pending (highest priority):** Fern's #1477 r2 val_avg=101.22 on L2+AMP. Final Huber rebase (r3) in progress. With Huber β=0.3 now stacked, projected val_avg ~88-93.
 
-**eval_bs1.py** now in advisor branch — use for clean bs=1 test evaluation going forward.
+**Known test NaN:** bs=4 test_geom_camber_cruise — inference-time attention. AMP bf16 + fern's non-finite-y prefilter fixes both issues. bs=1 eval always clean.
 
 ## Active experiments (WIP)
 
-| PR | Student | Hypothesis | Lever | Round |
+| PR | Student | Hypothesis | Lever | Status |
 |---|---|---|---|---|
-| #1536 | askeladd | NaN guard + lr=1e-3 rerun stacked on NEW floor | Bug fix / measurement | 3 (training) |
-| #1559 | alphonse | Decoupled surf/vol chan_w: [1,1,5] surf, [1,1,1] vol | Loss alignment | 3 (training) |
-| #1524 | tanjiro | chan_w + grad-accum=4 + lr=7.5e-4 + T_max=14 | Stacking / opt | 3-revised (training) |
-| #1489 | thorfinn | chan_w + per-sample AoA flip p=0.25 | Stacking / aug | 3-revised (training) |
-| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (recovering, now training) |
-| #1708 | edward | Lookahead optimizer (k=5, α=0.5) wrapping AdamW | Optimizer | 4 (training) |
-| #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | 3 (training) |
-| (frieren) | frieren | NEW — assigning next hypothesis | TBD | 4 |
+| #1536 | askeladd | NaN guard + rerun on floor | Bug fix | Training |
+| #1947 | alphonse | chan_w sweep under β=0.3: [1,1,3] vs [1,1,7] | Loss tuning | Just assigned |
+| #1927 | edward | Huber β lower: β=0.1, per-channel β (Ux=0.1, p=0.5) | Loss tuning | WIP |
+| #1489 | thorfinn | AoA flip p=0.25 on Huber floor | Augmentation | Needs rebase+run |
+| #1477 | fern | AMP bf16 + Huber β=0.3 floor stack (r3) | Training efficiency | CONFLICTING — needs rebase |
+| #1891 | tanjiro | OneCycleLR (max_lr=7.5e-4, per-batch) | Schedule | WIP |
+| #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | WIP (stale flag) |
+| #1751 | frieren | Tighter cosine T_max=12 | Schedule | WIP (stale flag) |
 
 ## Recent decisions
 
-- **#1573 (frieren) MERGED — NEW FLOOR** val_avg 128.09 → 122.70 (−4.2%), bs=1 test 117.40 → 110.25 (−6.1%). lr=7.5e-4 + gradclip. val_geom_camber_cruise most improved (−12%). Gradient clip didn't fix bs=4 inference NaN (confirmed: it's inference-time, not training-time).
-- **#1485 (nezuko) CLOSED**: +25.4% regression, wall-clock budget binding.
-- **#1536 (askeladd) SENT BACK**: NaN guard code now pushed + rebased. Awaiting lr=1e-3 rerun at new floor.
-- **#1603 (edward EMA) CLOSED**: rapid-descent regime mismatch. Assigned Lookahead #1708 instead.
+- **#1559 (alphonse decoupled chan_w) CLOSED**: +9.8% mean regression across 9 seeds; best-of-9 only ties pre-floor baseline. Volume term acts as joint regularizer — decoupling breaks it. Reassigned chan_w sweep under β=0.3 as #1947.
+- **#1947 (alphonse chan_w sweep) ASSIGNED**: [1,1,3] vs [1,1,7] under Huber β=0.3 — natural follow-up to test if optimal chan_w shifted with loss change.
+- **#1849 (edward Huber β sweep) MERGED — NEW FLOOR**: val_avg 111.15 → 105.68 (−4.92%). β=0.3 beats β=0.5 beats β=1.0 for most splits. Exception: cruise (low-residual) prefers β=0.5. Per-channel β now assigned as follow-up (#1927).
+- **#1524 (tanjiro grad-accum r3) CLOSED**: +6.2% regression. Step throughput dominates gradient quality under 30-min timeout.
+- **#1801 (edward Huber β=1.0) MERGED**: val_avg 122.70 → 111.15 (−9.4%).
+- **#1891 (tanjiro OneCycleLR) ASSIGNED**: per-batch schedule, max_lr=7.5e-4.
+- **#1927 (edward) ASSIGNED**: β=0.1 sweep + per-channel β (Ux=0.1, p=0.5).
 
 ## Key findings so far
 
-1. **Channel weight [1,1,5] is a confirmed win** (+6.4%, PR #1464, floor 133.94).
-2. **Warmup + lr=1e-3 is a confirmed win** (+4.4%, PR #1482, floor 128.09).
-3. **lr=7.5e-4 + gradient clipping is a confirmed win** (+4.2%, PR #1573, floor 122.70). val_geom_camber_cruise most improved (−12%).
-4. **Three wins stacked in advisor train.py**: chan_w + warmup + gradclip. New experiments start with all three.
-5. **chan_w response curve non-monotonic** — p=10 14% worse, optimal ≈5.
-6. **Grad-accum=4 beats pre-chan_w floor by 2.4%** at half VRAM. Stacking in progress.
-7. **Per-sample AoA flip (p=0.25) fixes Uy** (−50%). Primary metric flat without chan_w stack.
-8. **Cosine T_max=50 barely decays in 12-14 epoch budget** — set T_max≈12-14.
-9. **pad_collate expensive at bs=8** (84 GB). Grad-accum is the correct lever.
-10. **slice_num=128 doesn't compound at 30-min cap** (close pending AMP).
-11. **Test NaN Type 1** (data bug, 000020.pt): fix in train.py evaluate_split (askeladd #1536).
-12. **Test NaN Type 2** (numerical, bs=4 inference): lr=1e-3 → lr=7.5e-4 REDUCES it. But bs=4 cruise NaN persists at 7.5e-4 — it's an inference-time attention computation issue. bs=1 eval is fully clean.
-13. **EMA doesn't fit rapid-descent regime**: averages older-worse with newer-better. #1603 closed.
-14. **eval_bs1.py** now in advisor branch for clean test-avg evaluation.
-15. **Frieren's gradclip key insight**: the bs=4 NaN is deterministic and identical across lr=1e-3 and lr=7.5e-4 runs — it's a property of model weights × specific batch composition in PhysicsAttention, not optimizer-related.
+1. **Channel weight [1,1,5] confirmed win** (+6.4%, PR #1464, floor 133.94).
+2. **Warmup + lr=1e-3 confirmed win** (+4.4%, PR #1482, floor 128.09).
+3. **lr=7.5e-4 + gradient clipping confirmed win** (+4.2%, PR #1573, floor 122.70).
+4. **Huber β=1.0 confirmed win** (−9.4%, PR #1801, floor 111.15).
+5. **Huber β=0.3 beats β=0.5 beats β=1.0** (−4.92%, PR #1849, floor 105.68). Exception: cruise split (low residuals) prefers β=0.5.
+6. **Six wins stacked**: chan_w + warmup + gradclip + Huber + β=0.3. New experiments start with all six.
+7. **AMP bf16 unlocks +58% epochs**: fern's non-stacked run at 18-19 epochs vs 12-14 floor. Non-finite-y prefilter fixes bs=4 test NaN.
+8. **Cosine T_max=50 poorly calibrated**: frieren testing T_max=12.
+9. **EMA + Lookahead + grad-accum fail under timeout-cut**: step throughput dominates.
+10. **β-curve split interaction**: lower β helps high-residual splits (rc, single_in_dist) but hurts low-residual cruise. Per-channel β is the natural fix.
 
-## Round-4 hypothesis pipeline
+## Round 5 hypothesis pipeline
 
-### High priority (active)
-- **askeladd NaN guard rerun** (#1536): first clean test_avg at current floor. Critical unlock.
-- **alphonse decoupled surf/vol chan_w** (#1559): [1,1,5] surf only — vs new floor 122.70.
-- **tanjiro chan_w + grad-accum** (#1524): now needs rebase on new floor (lr changed to 7.5e-4).
-- **thorfinn AoA flip** (#1489): now needs rebase on new floor.
-- **fern AMP bf16** (#1477): recovering from rate-limit, now training. VRAM unlock → 224-7-8 + slice_num=128 retry.
-- **edward Lookahead** (#1708): k=5, α=0.5. Compatible with rapid-descent regime.
-- **nezuko WD=5e-4** (#1681): regularization.
+### Critical (highest expected gain)
+- **fern AMP bf16 + Huber β=0.3 stacked** (#1477): Expected to be the largest remaining structural gain. 6+ more epochs per run + Huber β=0.3 interaction. Projected val_avg ~88-93.
+- **edward per-channel β** (#1927): β=0.1 for velocity, β=0.5 for pressure. May fix cruise regression while improving high-residual splits.
 
-### Next round (after current WIPs complete)
-- **Frieren (idle)**: assign next lever — try even lower lr (5e-4 or 6e-4) to push further into the stable regime, OR try LR=7.5e-4 with T_max=12 cosine (tighter decay for 12-epoch budget).
-- **Stack Lookahead + WD** (if both win independently).
-- If AMP wins: retry 224-7-8 + slice_num=128 with bf16.
-- Stack gradclip + askeladd NaN guard once #1536 merges.
-- Sort-by-size sampler (pad_collate waste reduction, higher effective bs).
-- SmoothL1/Huber loss for pressure channel.
-- Note: tanjiro #1524 and thorfinn #1489 need rebase onto new floor (lr changed from 1e-3 → 7.5e-4 in advisor train.py after #1573 merge). Their current PRs reference old floor. May need to send-back again.
+### In flight
+- **alphonse chan_w sweep** (#1947): [1,1,3] vs [1,1,7] under β=0.3 — test if optimal channel upweight shifted.
+- **frieren T_max=12** (#1751): Calibrated cosine decay — stale flag, may need bump.
+- **nezuko WD=5e-4** (#1681): Regularization lever — stale flag, may need bump.
+- **askeladd NaN guard** (#1536): Clean test_avg measurement at β=0.3 floor.
+- **thorfinn AoA flip** (#1489): p=0.25 on Huber floor. Needs rebase + run.
+- **tanjiro OneCycleLR** (#1891): Per-batch schedule.
+
+### Next round queue
+- **AMP + wider model n_hidden=160**: once fern's AMP merges, unlock VRAM headroom.
+- **AMP + slice_num=128**: more attention heads per epoch budget.
+- **torch.compile reduce-overhead** on top of AMP.
+- **β=0.05 or β=0.0 (pure L1)**: if per-channel β doesn't resolve cruise regression.
+- **Checkpoint averaging (SWA-lite)**: average last N checkpoint weights at eval.

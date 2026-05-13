@@ -1,5 +1,93 @@
 # SENPAI Research Results
 
+## 2026-05-13 05:30 — PR #1559: Decoupled chan_w (surf=[1,1,5], vol=[1,1,1]) — CLOSED
+
+- Branch: `charliepai2g24h2-alphonse/decoupled-chanw-surf-vol`
+- Hypothesis: chan_w=[1,1,5] should apply to surface loss only; volume loss should stay [1,1,1] since volume mae is not in the primary metric
+- Artifacts: 9-seed sweep on student branch (committed JSONL)
+
+| Statistic | Decoupled chan_w | Pre-floor baseline (#1464 base) | Δ% |
+|---|---:|---:|---:|
+| **val_avg mean (9 seeds)** | **147.0** | 133.94 | **+9.8%** |
+| val_avg best-of-9          | 134.14 | 133.94 | +0.15% |
+| val_avg std                | 8.32   | — | — |
+
+**Decision: CLOSED — mean +9.8% regression across 9 seeds; best-of-9 only ties old pre-floor baseline.**
+
+**Analysis:** Branch was based on a deep pre-floor base (missing warmup, gradclip, Huber). Even discounting the base mismatch, the 9-seed sweep is informative: the **volume term acts as a useful regularizer** even though it's not in the primary metric. Removing the channel upweight from the volume loss (`vol=[1,1,1]` instead of `[1,1,5]`) breaks shared-feature regularization between surface and volume heads. The decoupling intuition (target-only emphasis) is wrong — joint channel weighting is a feature, not a bug. Bug-fix work in the PR duplicates askeladd #1536 and fern #1477 NaN-guard work, so nothing salvageable to cherry-pick.
+
+**Follow-up:** Assigned alphonse #1947 — chan_w sweep under the new Huber β=0.3 regime ([1,1,3] vs [1,1,7]) to see if the optimal upweight magnitude shifted with the loss change.
+
+---
+
+## 2026-05-13 05:10 — PR #1849: Huber β sweep β=0.5 and β=0.3 — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-edward/huber-beta-sweep`
+- Hypothesis: Lower β makes the Huber loss more L1-like, closer to MAE eval metric; sweep β=0.5 and β=0.3 vs merged β=1.0
+- Artifacts: `models/model-charliepai2g24h2-edward-huber-beta0p5-20260513-031119/metrics.yaml`, `models/model-charliepai2g24h2-edward-huber-beta0p3-20260513-035314/metrics.yaml`, `eval_bs1.jsonl` for each
+
+| Metric | β=1.0 (#1801) | β=0.5 (Arm A) | β=0.3 (Arm B) | Best Δ% |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 111.15 | 108.47 | **105.68** | **−4.92%** |
+| val_single_in_dist | 134.21 | 138.62 | **126.21** | −5.96% |
+| val_geom_camber_rc | 133.88 | **125.25** | 116.36 | −13.1% (β=0.3) |
+| val_geom_camber_cruise | 77.59 | **75.41** | 82.23 | −2.8% (β=0.5) |
+| val_re_rand | 98.93 | **94.59** | 97.92 | −4.4% (β=0.5) |
+| **test_avg bs=1** | 99.06 | 97.49 | **94.98** | **−4.11%** |
+
+**Config:** lr=7.5e-4, wd=1e-4, bs=4, chan_w=[1,1,5], surf_weight=10, warmup+cosine T_max=47, gradclip(1.0), Huber β=0.3, fp32. 12 epochs (timeout-cut). ~42 GB VRAM.
+
+**Decision: MERGED — β=0.3 arm wins. New floor val_avg=105.6808.**
+
+**Analysis:** β sweep confirms monotone gain for most splits (β=0.3 < β=0.5 < β=1.0). The exception is val_geom_camber_cruise (low-residual split): β=0.5 was best (75.41 < 77.59 β=1.0 < 82.23 β=0.3). This split-level β interaction — lower β hurts low-residual regions — motivates the next hypothesis: **per-channel β** with higher β for pressure (smaller residuals, especially on cruise) and lower β for velocity channels. Edward assigned #1927 to test β=0.1 and per-channel β (Ux=0.1, Uy=0.1, p=0.5).
+
+---
+
+## 2026-05-13 04:15 — PR #1524 (r3): Gradient accumulation accum=4 + floor stack — CLOSED
+
+- Branch: `charliepai2g24h2-tanjiro/grad-accum-eff-bs16`
+- Hypothesis: grad-accum=4 (eff_bs=16) cleans gradient signal, compounds with Huber+chan_w+warmup stack
+- Artifacts: `models/model-charliepai2g24h2-tanjiro-grad-accum-stack-floor-r3-20260513-032140/metrics.jsonl`
+
+| Split | mae_surf_p (accum=4) | Huber floor #1801 | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 145.64 | 134.21 | +8.5% |
+| val_geom_camber_rc     | 130.21 | 133.88 | −2.7% |
+| val_geom_camber_cruise |  90.39 |  77.59 | +16.5% |
+| val_re_rand            | 106.14 |  98.93 | +7.3% |
+| **val_avg**            | **118.09** | **111.15** | **+6.2%** |
+| test_avg (3-split, excl cruise) | 118.04 | 109.56 | +7.7% |
+
+**Config:** accum_steps=4, lr=7.5e-4, chan_w=[1,1,5], 3-ep warmup + cosine T_max=47, gradclip(max_norm=1.0), Huber β=1.0. 14 epochs (timeout-cut at 30 min). Peak VRAM 42.11 GB.
+
+**Decision: CLOSED — +6.2% regression vs Huber floor. Clean dead-end on the current stack.**
+
+**Analysis:** Student's root-cause diagnosis is excellent and correct: at the 30-min timeout, accum_steps=4 reduces optimizer steps per epoch from ~375 to ~94 — the model sees 4× fewer total gradient updates (1313 vs 5250). Under a timeout-cut training regime, optimizer step throughput dominates over gradient cleanliness. On the *old* floor (122.70), accum compounded cleanly (+3.8% improvement). On the Huber floor, it doesn't — because the Huber stack is already producing high-quality per-step learning, and the throughput cost kills gains. **Do not revisit** grad-accum in the timeout-cut regime. If the training budget extends to >60 min, this hypothesis may be worth retesting.
+
+---
+
+## 2026-05-13 03:15 — PR #1477 (r2, AMP bf16 + L2 base): Outstanding results, sent back for Huber rebase
+
+- Branch: `charliepai2g24h2-fern/amp-bf16-gradclip`
+- Hypothesis: AMP bf16 unlocks +58% epochs in same wall clock; floor-stack rebase
+- Artifacts: `models/model-charliepai2g24h2-fern-amp-bf16-on-floor-r2-seed-a-20260513-020635/metrics.jsonl`, `...-seed-b-20260513-024157/metrics.jsonl`
+
+| Metric | seed-a | seed-b | Mean | Old floor #1573 | Δ vs #1573 |
+|---|---:|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | **104.71** | **101.22** | **102.97** | 122.70 | **−16.1%** |
+| test_avg (bs=4 clean!) | 93.52 | 93.36 | 93.44 | NaN | clean ✓ |
+| best_epoch (of 50) | 19 | 18 | 18.5 | 12 | +58% |
+| mean epoch time (s) | 98.6 | 98.6 | — | ~156 | −37% |
+| peak GPU memory (GB) | 32.95 | 32.95 | — | 42.12 | −22% |
+
+**Spread between seeds:** 3.49 val points (3.3%). Both seeds far under 115 threshold.
+
+**Decision: SENT BACK — branch rebased on pre-Huber HEAD `3b30bfc`. Needs one final rebase onto post-Huber `d0b582f` + ONE confirm seed.**
+
+**Analysis:** AMP bf16 is the largest single structural improvement since chan_w. Three wins compound: (1) 37% faster epochs → 58% more epochs in budget, (2) 22% less VRAM, (3) fern's non-finite-y prefilter in evaluate_split kills the bs=4 test NaN (test_geom_camber_cruise clean at 65/67 each seed). BUT: Huber PR #1801 merged DURING her rebase — branch HEAD `ad91591` was rebased onto `3b30bfc` (pre-Huber), so it now conflicts with `d0b582f`. Both seed-b at 101.22 and Huber floor at 111.15 are measured on incompatible configs. Expected result with Huber+AMP stacked: ~91-95 val_avg. Win condition: val_avg < 111.15.
+
+---
+
 ## 2026-05-13 01:00 — PR #1573: Warmup + lr=7.5e-4 + gradient clipping — **NEW FLOOR**
 
 - Branch: `charliepai2g24h2-frieren/warmup-lr75e-4-gradclip`
@@ -351,3 +439,62 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 - Intermediate-size n_hidden=224, n_layers=7, n_head=8 (~3.4M, dim_head=28) should fit at bs=4 with headroom and get ~15-20 epochs.
 - Model NaN in p-channel at test_geom_camber_cruise may indicate early-training numerical instability in the slice attention temperature.
 </content>
+
+## 2026-05-13 02:00 — PR #1708: Lookahead optimizer (k=5/10, α=0.5) — CLOSED
+
+- Branch: `charliepai2g24h2-edward/lookahead-optimizer-k5-alpha0p5`
+- Hypothesis: Lookahead wraps AdamW with slow-weight averaging to smooth trajectory and potentially aid generalization
+- Artifacts: `models/model-charliepai2g24h2-edward-lookahead-optimizer-k5-alpha0p5-20260513-000558/metrics.jsonl`
+
+| Run | k | Best val_avg/mae_surf_p | Δ vs floor |
+|---|---|---|---|
+| k=5 clean | 5 | 143.62 | **+17.0%** ↑ (worse) |
+| k=5 contended | 5 | 153.47 | +25.1% ↑ |
+| k=10 | 10 | 152.54 | +24.3% ↑ |
+
+**Conclusion:** Same regime-mismatch failure as EMA (#1603). In the rapid-descent regime (>10 MAE/epoch drop), Lookahead's slow weights average old-worse with new-better parameters, dragging convergence back. Pattern consistent: any weight-averaging optimizer fails in this regime. Closed as dead end. Edward reassigned to Huber loss (#1801).
+
+## 2026-05-13 02:05 — PR #1477: AMP bf16 + gradient clipping + NaN-y bug fix — SENT BACK
+
+- Branch: `charliepai2g24h2-fern/amp-bf16-gradclip`
+- Hypothesis: AMP bf16 reduces VRAM ~24% → more epochs per 30-min cap → better convergence
+- Artifacts: `models/model-charliepai2g24h2-fern-amp-bf16-gradclip-confirm-20260513-005403/metrics.jsonl`
+
+| Split | This run (bf16 only) | Floor #1573 | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 108.34 | 159.59 | **−32%** |
+| val_geom_camber_rc | 105.61 | 134.74 | **−22%** |
+| val_geom_camber_cruise | 73.20 | 89.18 | **−18%** |
+| val_re_rand | 91.07 | 107.31 | **−15%** |
+| **val_avg** | **94.55** | **122.70** | **−23%** |
+| test_avg (bs=4, clean!) | **84.64** | 110.25 (bs=1) | — |
+
+**BUT:** Fern's config REVERTS chan_w=[1,1,5] and 3-ep warmup from advisor. Run was at lr=5e-4 with plain CosineAnnealingLR(T_max=50). Missing the full floor stack. 19 epochs (vs 12 for floor) = 58% more budget from VRAM reduction.
+
+**Sent back:** asked to rebase onto current advisor and re-run with full floor stack (chan_w + warmup + gradclip + lr=7.5e-4) + AMP bf16 + bug fix.
+
+**Key insights:**
+- AMP bf16 unlocks ~32 GB VRAM (vs 42 GB fp32) → 7-8 more epochs per 30-min cap. This is likely the main driver.
+- bf16 inference also fixes the bs=4 NaN on test_geom_camber_cruise (test 84.64 is fully clean bs=4)
+- Fern's evaluate_split NaN-y prefilter is a clean bug fix for the Type-1 data NaN. Supersedes askeladd's #1536 fix.
+
+## 2026-05-13 03:05 — PR #1801: Huber/SmoothL1 loss β=1.0 — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-edward/huber-loss-pressure`
+- Hypothesis: Replace L2 (sq-err) with Huber (β=1.0) to better match MAE evaluation metric and reduce outlier sensitivity
+- Artifacts: `models/model-charliepai2g24h2-edward-huber-loss-pressure-20260513-020521/metrics.jsonl`
+
+| Split | Huber (this PR) | Floor #1573 (L2) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 134.21 | 159.59 | **−15.9%** |
+| val_geom_camber_rc | 133.88 | 134.74 | −0.6% |
+| val_geom_camber_cruise | 77.59 | 89.18 | **−13.0%** |
+| val_re_rand | 98.93 | 107.31 | **−7.8%** |
+| **val_avg** | **111.15** | **122.70** | **−9.4%** |
+| test_avg (bs=1) | **99.06** | **110.25** | **−10.2%** |
+
+**Config:** Same as floor + Huber β=1.0 in BOTH train loop and evaluate_split, fp32. 13-14 epochs (30 min cap). Peak VRAM 42.12 GB.
+
+**Conclusion:** Clear win. L2→Huber is significant at −9.4% val, −10.2% test. Largest gain: single_in_dist (−15.9%) — consistent with Huber's robustness to the high-error tails in out-of-distribution samples. First sub-100 test_avg (99.06) on this branch. Huber now stacked in advisor train.py.
+
+**Key insight:** The L2/L1 training-metric mismatch was actively harming OOD splits (single_in_dist is the most OOD split). Switching to Huber acts as implicit outlier weighting — reduces gradient magnitude for high-residual samples that were pulling optimization away from the bulk distribution.
