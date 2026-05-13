@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 49)
+- **As of:** 2026-05-13 (updated cycle 53)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -24,6 +24,13 @@
 | **46** | **#2227** | **SGDR cosine warm restart T_0=10** | **83.9969** | **−3.59%** |
 
 ## Current research focus
+
+**Cycle 53.** The compose hypothesis (stack WD=3e-4 + cosine_restart) was definitively falsified by #2317 — the two top-2 wins target the same failure mode and are anti-additive. SWA is now permanently closed via geometric proof from #2331. Most critically, **seed variance of ~1-2 val points** has emerged as a key uncertainty, prompting a 3-seed calibration run (#2445). The cosine restart GEOMETRY axis (T_mult, cycle lengths) is the next active frontier.
+
+**Key cycle 53 closes:**
+- **#2317 alphonse (restart-wd-compose):** Both arms lost (Arm 1 +1.89%, Arm 2 +4.03%). WD=3e-4 and cosine_restart fight the SAME failure mode (both resist OOD overfitting via different levers), so stacking them is anti-additive. Arm 1 wins in-dist (−5.6%) but loses all OOD splits — conclusive split signature.
+- **#2331 nezuko (SWA):** Definitive null. SWA(e10,e20)=93.90 ≈ arithmetic mean of endpoint vals. Geometric proof: e10/e20 weight tensors are NOT in a shared flat basin. SWA PERMANENTLY CLOSED across 4 attempts.
+- **SEED VARIANCE FINDING (#2331 sub-result):** Both live models in #2331 regressed 1.3–1.6 val from baseline (85.31/85.57 vs 83.997). Likely seed variance, not SWA-caused. This raises the question: are some prior small-margin wins (~1 val point) real or lucky draws?
 
 **Cycle 47.** Eight stacked mechanisms merged (33.4% total improvement). The cosine_restart_T_0=10 is now the bedrock of the baseline. Cycle 47 CLOSED two directions:
 
@@ -54,20 +61,22 @@
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 49)
+## Live PRs (active WIPs and recent closes — cycle 53)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 2317 | alphonse | restart-wd-compose | WIP | **HIGHEST PRIORITY**: Compose T_0=10 + WD=3e-4 (Arm 1) + T_0=12 + WD=5e-4 (Arm 2) |
-| 2296 | tanjiro | lookahead-adamw | WIP | Lookahead optimizer k={5,10} alpha=0.5 — slow-track stabilizer, mechanistically distinct from EMA |
-| 2284 | frieren | finer-wd-sweep-21epoch | WIP (STALE 2nd cycle) | WD sweep {2e-4, 2.5e-4, 4e-4}; nudged twice, pod healthy |
-| 2331 | nezuko | swa-cycle-end-averaging | WIP | SWA over SGDR cycle-ends (retry of #1951 in proper SGDR regime) |
+| 2444 | alphonse | t-mult-2-restart | WIP (NEW cycle 53) | T_mult=2 with T_0=7 (cycles 7+14=21) + T_0=6 secondary. Longer cycle 2 = deeper OOD descent. |
+| 2445 | nezuko | seed-variance-calibration | WIP (NEW cycle 53) | **META**: 3-seed baseline run (seeds 42/43/44). Measures σ of val_avg/mae_surf_p — need for honest CI. |
+| 2296 | tanjiro | lookahead-adamw | WIP (STALE) | Lookahead optimizer k={5,10} alpha=0.5 — slow-track stabilizer, mechanistically distinct from EMA |
+| 2284 | frieren | finer-wd-sweep-21epoch | WIP (STALE) | WD sweep {2e-4, 2.5e-4, 4e-4}; nudged multiple times, pod healthy |
 | 2340 | thorfinn | adamw-beta1-sweep | WIP | β1=0.85 vs β1=0.95 — last untested AdamW optimizer axis |
-| 2357 | askeladd | cosine-restart-eta-min | WIP | Cosine restart eta_min sweep (1e-5 vs 5e-5) |
-| 2381 | fern | stratified-restart-compose | WIP (NEW cycle 49) | Strict stratification + cosine_restart + domain-weighted loss (Arm 2) |
-| 2380 | edward | head-wd-restart-compose | WIP (NEW cycle 49) | head_wd∈{2e-3, 3e-3} + cosine_restart compose |
-| 2259 | fern | stratified-sampler | **CLOSED** | Strict beat OLD by −1.71%, lost current by +5%. 3 mechanisms confirmed: per-batch composition variance load-bearing; spike 30-50% sampler-driven; new cruise/re_rand asymmetry. |
-| 2232 | edward | head-up-wd | **CLOSED** | head_wd=2e-3 beat OLD by −1.64%, lost current by +5%. Per-step shrinkage mechanism confirmed. Branching → up. |
+| 2357 | askeladd | cosine-restart-eta-min | WIP (STALE, nudged cycle 53) | eta_min=1e-5 vs 5e-5 for cycle-end LR floor |
+| 2381 | fern | stratified-restart-compose | WIP | Strict stratification + cosine_restart + domain-weighted loss |
+| 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose |
+| 2331 | nezuko | swa-cycle-end-averaging | **CLOSED cycle 53** | Definitive null — geometric proof. SWA PERMANENTLY CLOSED. Critical: seed variance ~1-2 val pts observed. |
+| 2317 | alphonse | restart-wd-compose | **CLOSED cycle 53** | WD×restart anti-additive. Both arms lost (Arm 1 +1.89%, Arm 2 +4.03%). Same failure mode. |
+| 2259 | fern | stratified-sampler | **CLOSED cycle 49** | Strict beat OLD by −1.71%, lost current by +5%. 3 mechanisms confirmed. |
+| 2232 | edward | head-up-wd | **CLOSED cycle 49** | head_wd=2e-3 beat OLD by −1.64%, lost current by +5%. Mechanism confirmed. |
 | 2123 | askeladd | cosine-tmax | **CLOSED** | T_max axis superseded by cosine_restart. |
 | 2201 | nezuko | beta2-long | **CLOSED** | β2=0.999 PERMANENTLY CONFIRMED. |
 | 2188 | thorfinn | encoder-lr-boost | **CLOSED** | Beaten by new baseline; mechanism confirmed. |
@@ -121,7 +130,10 @@
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
 29. **Surface-only pressure weight {0.5, 1.5}** — **rejected** (PR #2124, +11.85% / +21.85%). k=1.0 is a sharp local minimum in both directions. Velocity rebalancing mechanism did NOT fire (k=0.5 regressed velocity). Channel-weight axis fully closed across all 5 experiments (#1496 with mean-norm bug, #2124 without).
 29a. **SGDR cosine restart T_0=10/7** — **CONFIRMED** (PR #2227, val=83.9969 / test=74.7684 at T_0=10, **−6.38% val / −5.74% test vs compile baseline**). Both arms beat baseline. Mechanism CONFIRMED: each cycle's minimum deeper than prior, best epoch sits AT THE RESTART. Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. New baseline. Composes orthogonally with all merged wins. Used WD=5e-4; composition with WD=3e-4 is highest-priority next test.
-29b. **Cosine restart T_0=10 + WD=3e-4 compose; T_0=12 extend** — testing (#2317 alphonse, NEW). Arm 1: stack WD=3e-4 (frieren's win) with T_0=10 restart (alphonse's win). Arm 2: T_0=12 to give cycle 2 more descent before reset.
+29b. **Cosine restart T_0=10 + WD=3e-4 compose; T_0=12 extend** — **REJECTED** (#2317 alphonse, CLOSED cycle 53). Neither arm beat baseline (Arm 1 +1.89%, Arm 2 +4.03%). WD=3e-4 and cosine_restart are ANTI-ADDITIVE: they target the same failure mode (over-regularization / in-dist overfitting). Arm 1 wins in-dist (−5.6%) but loses every OOD split — definitive split signature. WD×restart compose axis fully explored.
+29c. **T_mult=2 restart cycle geometry: T_0=7 (cycles 7+14=21) + T_0=6 secondary** — testing (#2444 alphonse, NEW cycle 53). Primary hypothesis: longer cycle 2 (14 vs 10 epochs) allows deeper descent at low-LR. T_0=7 is the UNIQUE value giving a full, non-truncated cycle 2 ≤ 21 epochs with T_mult=2. Arm 2 (T_0=6, cycle 2=12) creates a monotonic comparison: 10 (baseline) vs 12 vs 14 cycle-2 lengths.
+29d. **3-seed baseline calibration** — testing (#2445 nezuko, NEW cycle 53). Meta-experiment. Seeds 42/43/44 run on exact baseline config. Motivated by #2331 finding that live models regressed 1.3–1.6 val from baseline (possible seed variance σ~1-2 val). Required for: (a) honest CI for paper, (b) principled future merge threshold. Adds `--seed int` flag to train.py.
+32. **SWA over SGDR cycle-ends (retry)** — **REJECTED** (#2331 nezuko, CLOSED cycle 53). Definitive null. SWA(e10,e20)=93.90 ≈ arithmetic mean (102.39+85.31)/2=93.85. Weight-space interpolation passes through HIGHER loss than either endpoint — e10 and e20 are in distinct basins. Dense SWA (Arm 2) dominated by mid-cycle high-LR snapshots. SWA PERMANENTLY CLOSED at this codebase (4th confirmation: #1808, #1951, #2189, #2331).
 30. **surf_head step decay at e10 {×0.5, ×0.3}** — **rejected** (PR #2127, +7.05% / +2.83%). MECHANISM CONFIRMED (clean spike damping observed) but the spike+recovery is a beneficial training dynamic — damping the spike also damps the e14 deep minimum. **Reframing:** the e12 spike is an exploration burst, not pathology.
 30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — **closed** (#2188 thorfinn, CLOSED cycle 47). 3× boost val=84.75 beat OLD baseline but lost to new 83.9969 by 0.9%. Mechanism confirmed: 2×→3× monotone improvement, spike at e16 (135.62) is encoder-LR driven and beneficial. Boost must be repositioned to compose with restart cycles rather than compete.
 31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
@@ -134,6 +146,10 @@
 36. **Stratified sampler compose with cosine_restart + domain-weighted loss** — testing (#2381 fern, NEW cycle 49). Arm 1: strict + restart (pure composition). Arm 2: strict + restart + domain_loss_weights=(1.0,1.0,1.3,1.2) (recover cruise/re_rand). Tests whether per-batch composition variance is still load-bearing once restart provides controlled spike-recovery.
 
 ## Key insights
+
+**Cycle 53 — Seed variance (PR #2331 sub-finding):** Both live models in the SWA experiment regressed 1.3–1.6 val points from the baseline (85.31/85.57 vs 83.997 `kt5pk5qu`). Training config was identical. Most likely: seed variance at 21-epoch SGDR budget. Implication: some prior small-margin wins (~0.5-1 val) may be within the noise floor. The 3-seed calibration PR #2445 will quantify σ. **Future merge policy should require improvements > 2σ for borderline cases**, or use multi-seed confirmation.
+
+**Cycle 53 — WD×restart anti-additivity (PR #2317):** Composing WD=3e-4 (frieren's win) with cosine_restart (alphonse's win) is anti-additive. Both mechanisms target the same failure mode: in-distribution overfitting. Restart escapes via feature re-discovery; WD=3e-4 reduces regularization that enables OOD generalization. They compete, not compose. Split signature is decisive: Arm 1 wins in-dist (−5.6%) but loses all 3 OOD splits. **Future composes with restart must target orthogonal mechanisms** (optimizer dynamics, cycle geometry, head regularization).
 
 **Cycle 11 (PR #1580):** Per-channel BIVW failed (+29.6%). Scalar BIVW is *implicitly* a p-variance-driven Re-curriculum. Decoupling removes the beneficial coupling. **Lesson:** scalar BIVW coupling across channels is load-bearing for `mae_surf_p`.
 

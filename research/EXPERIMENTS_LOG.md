@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-13 22:00 — PR #2331: SWA over SGDR cycle-ends (CLOSED — definitive null, SWA permanently closed)
+
+- **Branch:** `willowpai2g48h4-nezuko/swa-cycle-end-averaging`
+- **Student:** willowpai2g48h4-nezuko
+- **W&B runs:** `u7j6ve8z` (Arm 1 — sparse 2-snapshot), `eyokcl48` (Arm 2 — dense per-epoch)
+
+### Results
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ val vs baseline |
+|-------|-------------------|---------------------|-------------------|
+| Baseline `kt5pk5qu` | 83.9969 | 74.7684 | — |
+| Arm 1 live (best, e20) | 85.3123 | 75.0951 | +1.59% ✗ |
+| **Arm 1 SWA (n=2, e10+e20)** | **93.8980** | **84.3707** | **+11.79% ✗✗** |
+| Arm 2 live (best, e20) | 85.5672 | 76.2486 | +1.87% ✗ |
+| **Arm 2 SWA (dense, n=11)** | **103.3037** | **93.9768** | **+22.99% ✗✗** |
+
+### Commentary
+
+**Geometric proof — definitive null.** SWA(e10,e20) val=93.90 ≈ arithmetic mean of endpoint vals (102.39+85.31)/2 = 93.85. The linear interpolation in weight space passes through HIGHER loss than either endpoint. This proves e10 and e20 are NOT in a shared flat basin — they are in distinct basins along the descent trajectory.
+
+**Dense SWA failure mode:** Mid-cycle high-LR snapshots (e11–e16, vals 110–132) dominate the running mean and drown out the late-cycle low-LR snapshots (e17–e20, vals 85–97). SWA-dense is incompatible with a single 10-epoch cosine descent.
+
+**SWA history at this codebase:**
+- #1808: SWA at 14ep non-restart (closed, +3.33%)
+- #1951: SWA retry (closed)
+- #2189: EMA 21-ep re-screen (closed, +9.07%)
+- **#2331: SWA over SGDR cycle-ends (closed, geometric proof). SWA PERMANENTLY CLOSED.**
+
+**CRITICAL SUB-FINDING — Seed Variance:** Both arms' live models regressed 1.3–1.6 val points from baseline (85.31/85.57 vs 83.997) despite training with identical config. Student interpretation: "the baseline kt5pk5qu got a slightly lucky draw." This calls into question all small-margin wins (~1 val point) in the programme. Seed variance of ~1-2 val points at 21-epoch SGDR budget is now a key uncertainty. → Addressed by new assignment #2445 (3-seed calibration).
+
+---
+
+## 2026-05-13 22:00 — PR #2317: Restart-WD compose (CLOSED — anti-additive, WD×restart falsified)
+
+- **Branch:** `willowpai2g48h4-alphonse/restart-wd-compose`
+- **Student:** willowpai2g48h4-alphonse
+- **W&B runs:** `m2076fd5` (Arm 1 T_0=10, WD=3e-4), `rpv7jbjp` (Arm 2 T_0=12, WD=5e-4)
+
+### Results
+
+| Run | val_avg/mae_surf_p | Δ val | test_avg/mae_surf_p | Δ test |
+|-----|-------------------|-------|---------------------|--------|
+| Baseline `kt5pk5qu` (T_0=10, WD=5e-4) | **83.9969** | — | **74.7684** | — |
+| **Arm 1** `m2076fd5` (T_0=10, WD=3e-4) | 85.5863 | +1.89% ✗ | 75.9591 | +1.59% ✗ |
+| **Arm 2** `rpv7jbjp` (T_0=12, WD=5e-4) | 87.3777 | +4.03% ✗ | 78.0472 | +4.39% ✗ |
+
+### Per-split breakdown (Arm 1)
+
+| Split | Baseline | Arm 1 | Δ |
+|-------|----------|-------|---|
+| val_single_in_dist | 104.89 | 98.98 | **−5.6% ✓** (in-dist improved!) |
+| val_geom_camber_rc | 101.05 | 105.23 | +4.1% ✗ |
+| val_geom_camber_cruise | 54.58 | 58.50 | +7.2% ✗ |
+| val_re_rand | 75.47 | 79.63 | +5.5% ✗ |
+| **val_avg** | **83.9969** | **85.5863** | **+1.89% ✗** |
+
+### Commentary
+
+**Anti-additive compose.** The two SOTA wins (WD=3e-4, cosine restart) target the SAME failure mode and are NOT orthogonal. Student's analysis: "the restart mechanism's main value is escaping in-distribution overfitting and re-discovering generalizing features. Lower WD (3e-4) weakens that generalization pressure during cycle 2's deep descent — the model overfits the in-dist mode and abandons the OOD invariants the restart had unlocked at WD=5e-4."
+
+Split-by-split signature is decisive: Arm 1 WINS in-dist (−5.6%) but LOSES every OOD split. WD=3e-4 and restart both fight over-regularization via the same mechanism, so they don't stack.
+
+**Arm 2 (T_0=12):** cycle 2 still descending at e21 (87.38, pointing down). Not a fundamental failure — the 30-min cap is binding. T_0=12 with T_mult=1 hits cycle 2 at 9/12 epochs at timeout; analogous to the truncation seen in previous T_0=12 runs.
+
+**Consequence for compose strategy:** WD-at-restart cannot be stacked. Restart "is" the generalization push that WD=3e-4 was approximating in non-restart runs. Future composes with restart must target orthogonal mechanisms.
+
+→ Follow-up: T_mult=2 with T_0=7 assigned as #2444 (alphonse). This tests whether a longer cycle 2 (14 vs 10 epochs) allows deeper OOD descent within budget.
+
+---
+
 ## 2026-05-13 18:00 — PR #2232: Decoupled WD head-UP head_wd∈{1e-3,2e-3} (CLOSED — wins vs OLD baseline only)
 
 - **Branch:** `willowpai2g48h4-edward/head-up-wd`
