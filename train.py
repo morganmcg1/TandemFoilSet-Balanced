@@ -82,6 +82,40 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+def _swiglu_hidden(dim: int, mlp_ratio: float) -> int:
+    """d_hidden = (2/3) * mlp_ratio * dim, rounded to a multiple of 8.
+
+    Preserves param count vs vanilla MLP(d -> mlp_ratio*d -> d):
+      vanilla: 2 * mlp_ratio * d^2
+      SwiGLU:  3 * d * d_hidden = 3 * d * (2/3 * mlp_ratio * d) = 2 * mlp_ratio * d^2
+    """
+    d_hidden = int(mlp_ratio * dim * 2 / 3)
+    return ((d_hidden + 7) // 8) * 8
+
+
+class SwiGLU(nn.Module):
+    """SwiGLU MLP (Shazeer 2020, LLaMA/PaLM-style): Linear(d -> d_hidden) gated
+    by Swish(Linear(d -> d_hidden)), projected back with Linear(d_hidden -> d).
+
+    Drop-in for the FFN block. d_hidden is chosen via `_swiglu_hidden` so the
+    total Linear param count matches a vanilla MLP(d -> mlp_ratio*d -> d).
+    """
+
+    def __init__(self, dim, mlp_ratio=2.0, dropout=0.0):
+        super().__init__()
+        d_hidden = _swiglu_hidden(dim, mlp_ratio)
+        self.d_hidden = d_hidden
+        self.w1 = nn.Linear(dim, d_hidden, bias=False)
+        self.w2 = nn.Linear(dim, d_hidden, bias=False)
+        self.act = nn.SiLU()
+        self.drop = nn.Dropout(dropout)
+        self.w3 = nn.Linear(d_hidden, dim, bias=False)
+
+    def forward(self, x):
+        gated = self.act(self.w1(x)) * self.w2(x)
+        return self.w3(self.drop(gated))
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -150,8 +184,7 @@ class TransolverBlock(nn.Module):
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = SwiGLU(hidden_dim, mlp_ratio=mlp_ratio, dropout=dropout)
         self.gamma_mlp = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
@@ -457,6 +490,11 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+_swiglu_d_hidden = _swiglu_hidden(model_config['n_hidden'], model_config['mlp_ratio'])
+print(f"SwiGLU FFN: d_hidden={_swiglu_d_hidden} (rounded to mult of 8 from 2/3 * mlp_ratio * n_hidden); "
+      f"swaps vanilla Linear(d->{model_config['n_hidden']*model_config['mlp_ratio']})->GELU->Linear back to d with "
+      f"Linear(d->{_swiglu_d_hidden}) gated by SiLU(Linear(d->{_swiglu_d_hidden})) -> Linear({_swiglu_d_hidden}->d) (bias=False); "
+      f"baseline param count=328,235; total params={n_params}; baseline to beat: val_avg/mae_surf_p < 33.4935 (PR #2553 Lion lr=1.5e-4)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
