@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 06:00 UTC (MERGE #1711 alphonse surf-ch-weight [0.5,0.5,2.0] as 8th compound win — val 78.260 -4.92% / test 69.903 -4.67% on rebased Fourier L=6 stack; all 8 splits improve; per-channel γ_l std 38.8% block-0 attn confirms mechanism preserved across rebase from L=4; mechanism stabilizes in [0.079, 0.119] range, depth-decreasing mlp trend preserved; compound progress 100.957 → 78.260 = -22.5% over 7 merges; thorfinn now idle, assigning init=0.05 bracket; in-flight: #1711, #1753, #1828, #1830, #1852; rebasing: #1549, #1754)
+- **Last updated**: 2026-05-13 06:15 UTC (post-#1711 merge stabilized; new baseline 75.391 val / 66.608 test; all 8 students actively training: #1962 alphonse surf-ch-weight-aggressive [0.33,0.33,2.33], #1753 askeladd adaptive grad-clip, #1830 edward Fourier L=8 rebase-2, #1549 fern FiLM (pod restart resolved, training now), #1828 frieren SmoothL1 β=0.005 close-out, #1754 nezuko LR warmup, #1852 tanjiro coord jitter aug, #1896 thorfinn LayerScale init=0.05; compound progress 100.957 → 75.391 = -25.3% over 8 merges; 7/8 GPUs at 99-100% util, 1 just-restarted just spinning up)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -15,14 +15,13 @@ None received yet on this branch.
 
 - `val_avg/mae_surf_p` = **75.391** (surf-ch-weight + LayerScale + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
 - `test_avg/mae_surf_p` (4-split, NaN-safe) = **66.608**
-- Per-split val: single_in_dist=85.269 / camber_rc=89.049 / camber_cruise=62.595 / re_rand=76.127
-- Per-split test: single_in_dist=77.850 / camber_rc=79.485 / camber_cruise=51.705 / re_rand=70.573
-- Δ vs PR #1772 baseline (82.311 / 73.330): **-4.92%** on val_avg, **-4.67%** on 4-split test
+- Per-split val: single_in_dist=82.287 / camber_rc=85.631 / camber_cruise=58.630 / re_rand=75.015
+- Per-split test: single_in_dist=72.554 / camber_rc=74.210 / camber_cruise=50.877 / re_rand=68.792
+- Δ vs PR #1799 baseline (78.260 / 69.903): **-3.67%** on val_avg, **-4.71%** on 4-split test
 - **All 4 val splits + all 4 test splits improve** — clean monotone direction
-- **Largest gain on `val_single_in_dist`** (-8.61%) and `test_single_in_dist` (-6.57%) — the high-magnitude pressure regime. LayerScale's per-channel gating selectively preserves the most useful channels for high-magnitude predictions.
-- **Mechanism confirmed across rebase** (#1799 ran initially on L=4 stack, sent back for re-run on L=6): γ_l means stay in [0.079, 0.119] range near init=0.1 (model does NOT ramp up to CaiT's [0.5, 1.5] expectation); per-channel std reaches 38.8% of mean in block-0 attn (vs 33.9% on L=4 — slightly higher with Fourier L=6); MLP branch γ_l means decrease with depth (block-0 mlp 0.119 → block-4 mlp 0.083).
-- **Marginal gain shrinkage on L=6 vs L=4** (val -4.92% vs -8.42%; test -4.67% vs -8.91%) — both mechanisms partially overlap in "making residual stream more useful at the right scale" but their levers are independent (input-encoding vs. per-channel gating). Clean compound win, not a fight.
-- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → **#1799 LayerScale** → val_avg has improved from 100.957 to **78.260** = **-22.5% over 7 merges**.
+- **Mechanism (per-channel surf weighting [0.5, 0.5, 2.0])**: Loss-surface rebalance, mass-preserved (sum=3), zero new params. Pressure error reduced -3.8% relative-to-pred, Ux +21%, Uy +12% — model trades a small amount of velocity precision for a larger pressure gain that the val_avg metric was bottlenecked on.
+- **Why surf-ch-weight worked when output-side attempts (#1610, #1636, #1675) failed**: All three prior output-side calibrations (full log1p, pressure log1p, per-channel γ/β at output) regressed because they modified the prediction map (the optimizer drifted away from a useful init). Per-channel surf-loss weighting moves the rebalance upstream to the **loss-surface gradient**, leaving the prediction map untouched. Strategic pivot from "fix the predictions" to "fix the loss surface" is validated.
+- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → #1799 LayerScale → **#1711 surf-ch-weight** → val_avg has improved from 100.957 to **75.391** = **-25.3% over 8 merges**.
 
 ## Current research focus
 
@@ -257,17 +256,43 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 - **Optimizer family pivots** — Lion (Chen 2023), Sophia (Liu 2023). Only if both
   betas-refresh (#1773) and warmup (#1754) regress.
 
-## All 8 students currently assigned
+## All 8 students currently assigned (post-#1711 merge)
 
 | Student | PR | Status |
 |---------|----|--------|
-| alphonse | #1711 | WIP (H18 surf-ch-weight [0.5, 0.5, 2.0]) |
-| askeladd | #1753 | WIP (adaptive grad-clip — 1.5× running median K=100) |
-| edward | #1830 | WIP (H26 Fourier coords L=8 — plateau-probe follow-up to just-merged #1772 L=6) |
-| fern | #1549 | rebasing (FiLM 81.291 signal pending vs 82.311 baseline) |
-| frieren | #1828 | WIP (H25 SmoothL1 β=0.01 — Huber loss replacing L1, loss-landscape pivot after closed EMA) |
-| nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 82.311) |
-| tanjiro | #1852 | WIP (H27 coord jitter aug std=0.005 — fresh data-aug pivot after closed decoder-side direction) |
-| thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
+| alphonse | #1962 | WIP — H18-B surf-ch-weight-aggressive [0.33, 0.33, 2.33] (p:vel ratio 7× — bracket up from merged 4×) |
+| askeladd | #1753 | WIP — adaptive grad-clip (1.5× running median K=100, pivot from closed fixed-threshold bracket) |
+| edward | #1830 | WIP — Fourier coords L=8 (rebase-2 onto post-#1711 baseline; orthogonal compound expected) |
+| fern | #1549 | WIP — FiLM global-cond (pod restart resolved 05:54 UTC, training fresh on current baseline) |
+| frieren | #1828 | WIP — SmoothL1 β=0.005 close-out (β=0.01 landed flat on val, narrow window bracket) |
+| nezuko | #1754 | WIP — LR warmup H19 (rebased; warmup orthogonal to LayerScale/surf-weight) |
+| tanjiro | #1852 | WIP — coord jitter aug std=0.005 (data-aug pivot, regularizes high-freq Fourier responses) |
+| thorfinn | #1896 | WIP — LayerScale init=0.05 (init bracket from merged init=0.1; tests per-channel-granularity hypothesis) |
 
-Zero idle students. Zero idle GPUs.
+Zero idle students. Zero idle GPUs. 7/8 GPUs at 99-100% utilization, 1 just-restarted spinning up training.
+
+## Wave 8 candidate pool (held — depending on in-flight outcomes)
+
+- **H18 bracket** (depending on #1962 outcome):
+  - If [0.33, 0.33, 2.33] (p:vel 7×) wins → bracket to [0.25, 0.25, 2.5] (p:vel 10×)
+  - If [0.33, 0.33, 2.33] plateaus → 4× was the optimum; close bracket
+  - If [0.33, 0.33, 2.33] regresses → mid-bracket [0.4, 0.4, 2.2] (p:vel 5.5×) for fine-grain
+- **Fourier follow-ups** (depending on #1830 outcome):
+  - If L=8 wins → bracket to L=10 (aliasing risk on dense meshes)
+  - If L=8 plateaus → Gaussian Fourier features (Tancik §3, σ ∈ {3, 5, 10})
+  - Either way → consider Fourier on flow-condition dims (Re, AoA — what `val_re_rand` cares about)
+- **LayerScale bracket** (depending on #1896 outcome):
+  - If init=0.05 wins → init=0.025 (Fixup-style)
+  - If init=0.05 plateaus → init bracket up to 0.15
+  - Either way → consider per-block init schedule (Fixup, Saint-style)
+- **Coord jitter bracket** (depending on #1852 outcome):
+  - If std=0.005 wins → bracket {0.002, 0.01} to find optimum noise scale
+  - If std=0.005 plateaus → try jitter on flow-condition dims, or input-mask augmentation
+- **SmoothL1 directional** (depending on #1828 outcome):
+  - If β=0.005 wins → close loss-landscape with smooth-near-zero confirmed
+  - If β=0.005 plateaus → close bracket; pivot to Charbonnier/Tukey biweight
+- **Architecture pivots** (held if simpler levers exhaust):
+  - **Separate p/Ux/Uy decoder heads with full capacity** (stronger H17, not the half-width confound)
+  - **Optimizer family**: Lion (Chen 2023), Sophia (Liu 2023)
+  - **Domain-aware sampler reweighting** to match val split aggregation
+  - **Learnable Re/AoA Fourier features** on flow-condition dims (since val_re_rand benefits most from spatial Fourier per #1772)
