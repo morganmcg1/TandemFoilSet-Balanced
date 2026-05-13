@@ -1,7 +1,8 @@
 # SENPAI Research State
 
-- 2026-05-13 10:52 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
+- 2026-05-13 11:00 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
 - No directives from human researcher team yet.
+- **Assignment routing bug fixed**: PRs #2165 and #2166 were created on branches `tanjiro/...` and `thorfinn/...` (missing `willowpai2g48h1-` prefix), so student pods never polled them. Closed and reassigned as #2208 (tanjiro) and #2209 (thorfinn) on correctly-prefixed branches.
 
 ## Current baseline (PR #2090 merged — grad_clip_max_norm=5.0)
 
@@ -20,12 +21,12 @@ Per-split: in_dist=68.29, rc=82.24, cruise=50.71, re_rand=71.14.
 - PR #1591 (cosine-aligned): test=111.98 | n_hidden=128
 - PR #1391 (bf16+batch-8): test=121.28 | n_hidden=128
 
-## Round-3 status (updated 2026-05-13 10:55)
+## Round-3 status (updated 2026-05-13 11:00)
 
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| tanjiro | #2165 | grad-clip-sweep (max_norm=2.0/10.0/50.0) | **wip** (NEW) | Bracket optimal clip threshold; mechanism validation |
-| thorfinn | #2166 | cosine-realign-epochs15 | **wip** (NEW) | T_max=15 to match actual 30-min budget |
+| tanjiro | #2208 | grad-clip-sweep (max_norm=2.0/10.0/50.0) | **wip** (REASSIGNED) | Bracket optimal clip threshold; mechanism validation |
+| thorfinn | #2209 | cosine-realign-epochs15 | **wip** (REASSIGNED) | T_max=15 to match actual 30-min budget |
 | edward | #2141 | layerscale-1e-4 | **wip** | CaiT-style per-channel residual scaling, γ_init=1e-4 |
 | alphonse | #2115 | mesh-node-dropout=0.1 | **CLOSED** ✗ | +84.7% catastrophic. Mechanism: PointNet-style dropout poisons dense physics attention. → **assigned #2191 n_layers=6+clip** |
 | fern | #2117 | ema-decay-095 | **wip** | 14-step half-life EMA, follow-up to closed #2050 |
@@ -55,7 +56,7 @@ Per-split: in_dist=68.29, rc=82.24, cruise=50.71, re_rand=71.14.
 10. **EMA decay=0.999 CLOSED**: Rapid descent regime ≠ stationary trajectory. Short-horizon (0.95) being tested.
 11. **Slice-num=96 CLOSED**: Capacity-up cost. Reversed direction (48) being retested.
 12. **Weight-decay lever CLOSED across both axes**: magnitude+structure both null.
-13. **Fourier ceiling L=8**: L=16 aliases on irregular mesh. Per-axis Lx=8/Ly=4 being tested.
+13. **Fourier lever permanently CLOSED at L=8 uniform**: L=16 aliases, Lx=8/Ly=4 also closed (+4.71% — y-axis carries info, not aliasing). Three points of evidence all confirm L=8 as the optimum.
 14. **grad-accum=4 CLOSED**: Step starvation at eff_bs=16.
 15. **DropPath CLOSED**: Underfitting regime, depth=5 too shallow, 18 epochs too few.
 16. **Activation-swap CLOSED (SiLU, +14.3%)**: GELU near-optimal at depth=5 width=192.
