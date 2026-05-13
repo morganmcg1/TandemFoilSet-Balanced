@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-13 15:20 — PR #2251: lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) (tanjiro) — CLOSED, NEITHER ARM BEATS #2218 BASELINE
+
+- **Branch:** `willowpai2g24h5-tanjiro/lr-sweep-n-head-2`
+- **Hypothesis:** n_head=2 inherited lr=1e-4 from n_head=4 baseline; doubling lr to 2e-4 was the n_head=4 winner — test 2e-4 vs 1.5e-4 on n_head=2.
+- **W&B runs:** `mq67yiq3` (Arm 1: lr=2e-4, best of 5), `ju4mdtl2` (Arm 2: lr=1.5e-4)
+
+| Arm | lr | val | test | Δ vs #2069 (51.11/44.18) | Δ vs #2218 (49.86/42.19) |
+|-----|-----|------|------|--------------------------|--------------------------|
+| **2 (winner)** | **1.5e-4** | **50.36** | **42.53** | **−0.75 / −1.65 ✓** | +0.50 / +0.34 ✗ |
+| 1 | 2e-4 | 50.55 | 43.10 | −0.56 / −1.08 ✓ | +0.69 / +0.91 ✗ |
+
+**Arm 1 crash rate:** 3/5 runs crashed (60%). Instability at lr=2e-4 with Lion+MAE+n_head=2+slice_num=64.
+
+**Per-test-split (Arm 2, lr=1.5e-4, `ju4mdtl2`):** single_in_dist=46.61, geom_camber_rc=55.99, geom_camber_cruise=26.35, re_rand=41.15
+
+**Result:** CLOSED. Both arms beat old n_head=2 baseline (#2069) but ran on slice_num=64 (pre-#2218 default) — cannot beat the new slice_num=32 compound. Key findings:
+1. **lr=1.5e-4 is the clear winner** on n_head=2+slice_num=64 — beats both #2069 and Arm 1.
+2. **60% crash rate at lr=2e-4** — instability signal; sits near the edge with Lion+MAE+n_head=2.
+3. **Natural follow-up:** test lr=1.5e-4 vs lr=1.25e-4 on the new slice_num=32 compound (assigned as PR #2376 to tanjiro).
+
+**Tanjiro reassigned:** PR #2376 — lr=1.5e-4 vs lr=1.25e-4 on slice_num=32 baseline.
+
+---
+
 ## 2026-05-13 14:35 — PR #2277: surf_weight lower probe sw=4 vs sw=3 on n_head=2 (nezuko) — CLOSED, sw=3 BEATS OLD BASELINE BUT LOSES TO NEW
 
 - **Branch:** `willowpai2g24h5-nezuko/surf-weight-lower`

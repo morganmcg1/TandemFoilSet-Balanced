@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~14:40 UTC
+- **Date:** 2026-05-13 ~15:20 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -35,11 +35,12 @@
 | **#2372** | **nezuko** | **surf_weight low probe on slice_num=32: sw=2 vs sw=3** | **WIP — new** |
 | **#2338** | **edward** | **n_head=1 on n_head=2+slice_num=32 baseline: extend monotonic trend** | **WIP** |
 | **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
-| #2251 | tanjiro | lr sweep on n_head=2: lr=2e-4 vs lr=1.5e-4 | WIP — Arm 1 done (50.55, doesn't merge on new baseline), Arm 2 running |
+| **#2376** | **tanjiro** | **lr sweep on slice_num=32 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
 | **#2271** | **askeladd** | **Lion β2 on n_head=2: β2=0.995 + β2=0.999** | **WIP — both arms done, regress; awaiting terminal SENPAI-RESULT** |
 
 ## Closed experiments this round
 
+- **#2251 (tanjiro):** lr=2e-4 vs lr=1.5e-4 on n_head=2+slice_num=64 — Arm 2 (lr=1.5e-4, val=50.36, test=42.53) beats #2069 (−0.75/−1.65) but loses to new #2218 baseline; both ran on slice_num=64 (pre-#2218 default). Key signal: lr=1.5e-4 is the optimal lr at slice_num=64. 60% crash rate at lr=2e-4 (instability). Closed; reassigned to #2376 (lr=1.5e-4 vs lr=1.25e-4 on slice_num=32).
 - **#2277 (nezuko):** sw=4/sw=3 on n_head=2+slice_num=64 — sw=3 wins vs old #2210 (val=50.23 vs 50.91, −1.34%) but loses to new #2218 (49.86) by +0.7%. Non-monotonic in [3,5]: sw=3 < sw=5 < sw=4. Strong geom_camber_cruise improvement (−5.6%) at lower sw. Closed; reassigned to #2372 (sw=2/sw=3 on slice_num=32).
 - **#2218 (alphonse):** slice_num=32 — **MERGED** val=49.86, test=42.19. Monotonic: 32 < 64 < 128. Also 23 epochs in budget (vs 20) — speed dividend. Interaction with sw=5 untested (#2335).
 - **#2216 (frieren):** Split loss (surf-MAE + vol-Huber/MSE) — all 3 arms regress (+4.5–7.1%). Formulation adds tension without signal benefit. Closed; reassigned to #2337 (slice_num=16).
@@ -92,9 +93,9 @@
 - slice_num=32 × sw=5 (#2335 alphonse) — stack both individual wins; interaction unexplored
 
 **Optimizer hparams:**
-- Lion wd sweep (#2339 thorfinn) — wd=3e-4 vs wd=3e-5 on new slice_num=32 compound
+- Lion wd sweep (#2356 thorfinn) — wd=3e-4 vs wd=3e-5 on new slice_num=32 compound
 - Lion β2 (#2271 askeladd) — β2=0.995 won −2.9% on old compound; retest on n_head=2; direct merge candidate
-- lr sweep (#2251 tanjiro) — lr=2e-4 won at n_head=4; retest at n_head=2
+- **lr sweep on slice_num=32 (#2376 tanjiro)** — lr=1.5e-4 (slice64 winner) vs lr=1.25e-4; transfer lr signal to new compound; #2251 confirmed optimal ~1.5e-4 at slice_num=64
 
 **EMA:**
 - EMA decay (#2295 fern) — 0.999 vs 0.95 on new compound
@@ -111,7 +112,7 @@
 - Lion β2 on n_head=2 (#2271 askeladd) — β2=0.995 wins on old compound; direct merge candidate if transfer confirmed
 
 **lr × architecture interaction:**
-- lr sweep on n_head=2 (#2251 tanjiro) — lr=2e-4 won at n_head=4, never retested on n_head=2; per-head dim doubled, optimal lr may have shifted
+- lr sweep on slice_num=32 (#2376 tanjiro) — #2251 confirmed lr=1.5e-4 is optimal at slice_num=64+n_head=2 (val=50.36 vs 50.91 at lr=1e-4); now testing transfer to slice_num=32 compound; {1.25e-4, 1.5e-4} bracket pins down optimum with stability
 
 **Lion momentum parameter (β2):**
 - β2 sweep on n_head=2 (#2271 askeladd) — β2=0.995 wins −2.9% on old compound; confirm transfer + push to β2=0.999; merge candidate
