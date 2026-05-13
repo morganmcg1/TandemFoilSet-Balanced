@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-05-13 10:20 — PR #2092: [coord-translation-aug] Rigid mesh translation augmentation — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/coord-translation-aug
+- **Hypothesis**: Per-sample rigid (dx, dy) translation of entire mesh, NSE-invariant in unbounded domain.
+- **Status**: CLOSED — +3.3% val regression. Bounded BVP breaks translation invariance.
+
+| Metric | Translation aug | Baseline (#2011) | Δ |
+|--------|----------------|-----------------|---|
+| val_avg/mae_surf_p | 29.8364 | 28.8762 | **+3.3% (WORSE)** |
+| test_avg/mae_surf_p | 25.8271 | 24.9992 | **+3.3% (WORSE)** |
+
+**Split pattern**: single_in_dist regressed most (+7.5%) — the split most reliant on absolute-position signal. geom_camber_rc regressed least (+0.4%) — already hard, absolute-position contributes less.
+
+**Root cause (tanjiro's analysis)**: NSE is translation-invariant in free space, but TandemFoilSet-Balanced is a bounded BVP with inlet/outlet/walls at fixed absolute positions. Input features encode the foil (saf, dsdf, NACA params) but NOT domain boundaries. The model's only localization signal is channels 0–1. Translating those while keeping target y unchanged adds systematic label noise along the absolute-position dimension. Translation augmentation CLOSED for this benchmark.
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-coord-translation-aug-20260513-091211/metrics.jsonl`
+
+---
+
 ## 2026-05-13 10:05 — PR #2110: [sgdr-warm-restarts-v2] SGDR T_0=14, T_mult=1 — CLOSED
 
 - **Branch**: charliepai2g24h1-askeladd/sgdr-warm-restarts-v2

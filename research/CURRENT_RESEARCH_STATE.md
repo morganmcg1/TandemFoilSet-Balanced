@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 10:10 (reviewed #2110/#2111/#2079 all closed; assigned thorfinn log-cosh-loss #2146, askeladd cosine-long-tail #2147, fern n-head-8 #2154)
+- **Date**: 2026-05-13 10:25 (reviewed #2110/#2111/#2079/#2092 all closed; assigned log-cosh #2146/cosine-long-tail #2147/n-head-8 #2154/re-input-jitter #2169)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -56,10 +56,10 @@ Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound wi
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
+| #2169 | tanjiro | `re-input-jitter` | NEW | **HIGH** | Gaussian noise σ=0.05/0.10 on log(Re) channel; targets re_rand OOD-Re |
 | #2154 | fern | `n-head-8` | NEW | **HIGH** | n_head 4→8; same inner_dim=128; doubles ReFiLM gating degrees of freedom |
 | #2147 | askeladd | `cosine-long-tail` | NEW | **HIGH** | T_max=40/56 so cosine never completes within 28-ep budget; higher final LR |
 | #2146 | thorfinn | `log-cosh-loss` | NEW | **HIGH** | Log-cosh C∞ replacement for Huber; smooth gradient for SOAP Hessian approx |
-| #2092 | tanjiro | `coord-translation-aug` | NEW | **HIGH** | Rigid mesh translation NSE-invariant aug; distinct from per-node jitter |
 | #2079 | fern | `n-layers-6` | WIP | **HIGH** | Deeper Transolver stack n_layers 5→6 (+20% depth) |
 | #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure; needs rebase onto 28.8762 |
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; needs rebase onto 28.8762 |
@@ -102,6 +102,7 @@ All 8 students active.
 - **rescale-head-2ch** (#1952): +4.63% on rebased stack; Ux channel load-bearing with p_weight=5
 - **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling. p_weight=5 is optimum.
 - **coord-jitter-aug** (#1963): +1.93% on rebased stack; per-node jitter doesn't compound with p_weight+ReFiLM
+- **coord-translation-aug** (#2092): +3.3% val; bounded BVP breaks NSE translation invariance — absolute-position encoding destroyed
 - **soap-linear-warmup** (#2077): +1.38% val; no instability to fix + wastes budget epochs
 - **per-channel-huber-delta v1** (#2081): +1.16% val; loosening velocity δ to 0.5 removes Huber tail → pure L2 for velocity → gradient mass shifts away from pressure
 - **huber-delta-p-tighter** (#2111): +1.50% val; tightening δ_p to 0.05 truncates informative-outlier pressure gradients (pressure already 88% in quadratic regime). Huber δ axis CLOSED.
