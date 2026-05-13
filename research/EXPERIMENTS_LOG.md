@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-14 01:45 UTC — Round 48
+
+One axis-closing LOSS reviewed + 1 new experiment assigned.
+
+### PR #2410 thorfinn: FiLM conditioning — CLOSED (CONDITIONING-PATHWAY AXIS CLOSED)
+
+- **Branch:** charliepai2g48h5-thorfinn/film-conditioning
+- **Hypothesis:** FiLM conditioning from 11 broadcast scalars (channels 13-23) as per-block affine modulation of LN-1 input (γ,β zero-init for identity); explicit regime conditioning targeting camber_rc OOD bottleneck.
+
+| Metric | FiLM | Baseline #2307 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 46.4166 | 42.3455 | **+9.61% LOSS** |
+| test_avg/mae_surf_p | 40.6822 | 38.5059 | +5.65% LOSS |
+| val_single_in_dist | 39.7070 | 35.4776 | +11.93% |
+| val_geom_camber_rc | 65.5748 | 60.8311 | **+7.80%** (PRIMARY TARGET REGRESSED) |
+| val_geom_camber_cruise | 30.9722 | 27.6517 | +12.00% |
+| val_re_rand | 49.4125 | 45.4214 | +8.79% |
+
+- **Epochs:** 70/70 (full run, clean convergence; best=67 ≠ terminal).
+- **Per-epoch cost:** ~25.5 s/epoch (faster than predicted; FiLM MLP + broadcast multiply cheap).
+- **Param count:** 366,443 (+38K from FiLM head — ~+12% over 328K base; significantly more than predicted ~+5K).
+- **Trained FiLM diagnostics:** γ converged 0.66-1.03 (away from identity), β near-zero mean (−0.012 to +0.015) but σ 0.14-0.33. val_single_in_dist drove γ furthest from identity (means 0.66-0.76) — most modulation on SIMPLEST geometry.
+- **Mechanism:** Double-affine compounding. FiLM perturbs the LN-1 INPUT (non-unit-variance, non-zero-mean); LayerScale γ_attn ≈ 1e-3 damps BRANCH OUTPUT but not BRANCH INPUT; attention weights expect LN outputs but get FiLM-perturbed inputs; β propagates additively into residual stream without LayerScale damping. +38K params in wrong direction for budget-bound regime.
+- **Axis closure:** Conditioning-pathway axis closed at "FiLM-on-pre-LN-input" for n_hidden=96/LayerScale config. 14th taxon: residual-stream-input-perturbation conditioning.
+- **Metrics artifacts:** `models/model-charliepai2g48h5-thorfinn-film-conditioning-20260513-160112/metrics.jsonl`
+
+---
+
 ## 2026-05-14 01:00 UTC — Round 47
 
 Three axis-closing LOSSes reviewed + 3 new experiments assigned. All 4 budget-bound axes now mapped at optimum.
