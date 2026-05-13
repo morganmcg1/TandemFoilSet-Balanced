@@ -153,6 +153,13 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # H73: attention temperature annealing — start sharper (sqrt(3)) and
+        # anneal toward sqrt(2) over training. Buffer so the value persists
+        # via state_dict (checkpoint load/save) without becoming a learnable
+        # parameter. Updated in the training loop, once per epoch.
+        self.register_buffer(
+            "attn_sharpening_factor", torch.tensor(math.sqrt(3.0))
+        )
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -189,9 +196,12 @@ class PhysicsAttention(nn.Module):
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
-        # H67: fixed sharper temperature (factor of sqrt(2) sharper than the
-        # default 1/sqrt(d_head) scale of F.scaled_dot_product_attention).
-        sharper_scale = 1.0 / math.sqrt(self.dim_head / 2.0)
+        # H73: dynamic sharper temperature — buffer-stored sharpening factor
+        # updated per-epoch from the training loop (linear anneal sqrt(3) ->
+        # sqrt(2) across the first N_ANNEAL_EPOCHS epochs, clamped to sqrt(2)
+        # afterward). Default scale is 1/sqrt(d_head); factor=sqrt(2) matches
+        # #2519, factor=sqrt(3) is the sharper early-epoch start.
+        sharper_scale = self.attn_sharpening_factor.item() / math.sqrt(self.dim_head)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
             scale=sharper_scale,
@@ -561,17 +571,31 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H67: fixed sharper attention temperature (factor sqrt(2) sharper than the
-# F.scaled_dot_product_attention default scale 1/sqrt(d_head)).
-_h67_dim_head = model_config["n_hidden"] // model_config["n_head"]
-_h67_sharper_scale = 1.0 / math.sqrt(_h67_dim_head / 2.0)
-_h67_default_scale = 1.0 / math.sqrt(_h67_dim_head)
+# H73: linear attention-temperature annealing sqrt(3) -> sqrt(2) over
+# N_ANNEAL_EPOCHS epochs. Bridges #2519 (fixed sqrt(2) win) and #2574
+# (fixed sqrt(3), too-sharp loss). Buffer-driven scale, factor updated
+# per-epoch in the training loop.
+N_ANNEAL_EPOCHS = 12
+_h73_dim_head = model_config["n_hidden"] // model_config["n_head"]
+_h73_init_factor = math.sqrt(3.0)
+_h73_final_factor = math.sqrt(2.0)
+_h73_init_scale = _h73_init_factor / math.sqrt(_h73_dim_head)
+_h73_final_scale = _h73_final_factor / math.sqrt(_h73_dim_head)
+_h73_default_scale = 1.0 / math.sqrt(_h73_dim_head)
 print(
-    f"[H67] attention scale: {_h67_sharper_scale:.4f} "
-    f"(default would be {_h67_default_scale:.4f}, factor sqrt(2)={math.sqrt(2):.4f}, "
-    f"dim_head={_h67_dim_head}, slice_num={model_config['slice_num']}, "
+    f"[H73] attn-temp anneal: linear sqrt(3)={_h73_init_factor:.4f} -> sqrt(2)={_h73_final_factor:.4f} "
+    f"over {N_ANNEAL_EPOCHS} epochs (then clamped at sqrt(2)); "
+    f"scale {_h73_init_scale:.4f} -> {_h73_final_scale:.4f} "
+    f"(default scale would be {_h73_default_scale:.4f}, "
+    f"dim_head={_h73_dim_head}, slice_num={model_config['slice_num']}, "
     f"max possible entropy=log({model_config['slice_num']})={math.log(model_config['slice_num']):.4f})"
 )
+# H73: confirm initial buffer values across all blocks (should all be sqrt(3) before epoch 0).
+for i, b in enumerate(model.blocks):
+    print(
+        f"[H73] block {i}: attn_sharpening_factor init = "
+        f"{float(b.attn.attn_sharpening_factor.item()):.4f}"
+    )
 
 # H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
 # H54: LayerScale params (layer_scale_attn + layer_scale_mlp across 5 blocks = 10 tensors x 128
@@ -660,6 +684,19 @@ for epoch in range(MAX_EPOCHS):
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
 
+    # H73: linearly anneal sqrt(3) -> sqrt(2) over N_ANNEAL_EPOCHS, clamped at
+    # sqrt(2) afterward. Updated at the start of each epoch so the new factor
+    # applies to all batches in this epoch (and to validation immediately
+    # after).
+    anneal_frac = min(1.0, epoch / max(1, N_ANNEAL_EPOCHS - 1))
+    current_attn_factor = math.sqrt(3.0) + anneal_frac * (math.sqrt(2.0) - math.sqrt(3.0))
+    for block in model.blocks:
+        block.attn.attn_sharpening_factor.fill_(current_attn_factor)
+    print(
+        f"[H73] Epoch {epoch+1}: attn_sharpening_factor = {current_attn_factor:.4f} "
+        f"(frac={anneal_frac:.3f}, target sqrt(2)={math.sqrt(2.0):.4f})"
+    )
+
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
@@ -744,6 +781,10 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        # H73: log annealed sharpening factor at this epoch.
+        "train/attn_sharpening_factor": current_attn_factor,
+        "train/attn_anneal_frac": anneal_frac,
+        "train/attn_anneal_n_epochs": N_ANNEAL_EPOCHS,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
