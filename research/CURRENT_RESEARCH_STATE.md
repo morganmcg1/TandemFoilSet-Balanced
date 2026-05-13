@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 36)
+- **As of:** 2026-05-13 (updated cycle 37)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -44,7 +44,8 @@
 | 2178 | frieren | compile-wd-compose | WIP (NEW) | Compose torch.compile + WD=5e-4 (now default); arms: WD=5e-4, WD=3e-4 |
 | 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
 | 2153 | fern | wd-bracket | WIP (NEW) | Finer WD sweep {4e-4, 5.5e-4, 6e-4} — brackets the peak on both sides; preserves weight_norm logging |
-| 2122 | edward | decoupled-wd | WIP (NEW) | Per-group WD: encoder vs surf_head (10× LR → 10× effective shrinkage at coupled WD) |
+| 2122 | edward | decoupled-wd | CLOSED | Both arms regressed (+9.17%/+18.62%). Key insight: head NEEDS more shrinkage (10× coupled WD was protective). Head-down direction fully rejected. |
+| 2232 | edward | head-up-wd | WIP (NEW) | Symmetric direction: surf_head_wd∈{1e-3,2e-3} vs encoder 5e-4. Head-up composes with torch.compile. |
 | 2123 | askeladd | cosine-tmax | WIP (NEW) | T_max sweep {15, 20, 25}: T_max=50 wastes 72% of cosine cycle at 14-ep wall-clock cap |
 | 2124 | alphonse | surf-only-pw | CLOSED | Both arms +11.85%/+21.85%. Monotonic regression across all k values. k=1.0 is sharp local minimum. Channel-weight axis fully closed. |
 | 2227 | alphonse | cosine-restart | WIP (NEW) | SGDR cosine restart T_0=10/7: induces planned spike+recovery based on cycle 34 reframing that e12 spike is BENEFICIAL |
@@ -91,7 +92,8 @@
 25a. **EMA model weights re-screen at 21-epoch budget** — testing (#2189 tanjiro, NEW). #1808 was wall-clock-bound at 14 epochs; torch.compile unlock makes EMA viable.
 26. **Deeper WD sweep {7e-4, 1e-3, 2e-3}** — **rejected** (PR #2120, +18.85% val at 7e-4). Branching rule correctly halted Arms 2-3. **WD=5e-4 is a SHARP peak**, not a plateau — confirmed by uniform regression across all 4 splits and an attenuated e14 breakthrough.
 26a. **WD bracket sweep {4e-4, 5.5e-4, 6e-4}** — testing (#2153 fern, NEW). Brackets the peak symmetrically; weight_norm logging preserved as primary diagnostic.
-27. **Decoupled weight_decay per param group** — testing (#2122 edward, NEW). surf_head at 10× LR sees 10× effective WD shrinkage; decoupling may unlock further gains.
+27. **Decoupled weight_decay per param group (head-down)** — **rejected** (PR #2122, +9.17%/+18.62%). The 10× effective per-step shrinkage on surf_head from coupled WD was PROTECTIVE, not over-regularization. surf_head (tiny 3-layer MLP, 10× LR, noisy residual target) NEEDS more shrinkage. val_geom_camber_rc hit hardest by head_wd↓ (+14 pts) — OOD geometry split is most sensitive to head memorization.
+27a. **Decoupled WD head-UP: surf_head_wd∈{1e-3,2e-3}** — testing (#2232 edward, NEW). Symmetric untested direction: raise head WD above encoder's 5e-4. Expected to help OOD splits by suppressing residual memorization further.
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
 29. **Surface-only pressure weight {0.5, 1.5}** — **rejected** (PR #2124, +11.85% / +21.85%). k=1.0 is a sharp local minimum in both directions. Velocity rebalancing mechanism did NOT fire (k=0.5 regressed velocity). Channel-weight axis fully closed across all 5 experiments (#1496 with mean-norm bug, #2124 without).
 29a. **SGDR cosine restart T_0=10/7** — testing (#2227 alphonse, NEW). Induced planned spike+recovery based on cycle 34 reframing. If e12 spike is beneficial exploration, cosine restarts should amplify gains. Two arms: single restart at e10 vs periodic restarts every 7 epochs.
@@ -154,6 +156,7 @@
 - #2013 (LogCosh surface loss) — 3.51% / 14.18% regression, C² smoothness was non-issue, surface-loss family closed
 - #2128 (AdamW eps sweep 1e-7/1e-6) — +13.13% / +23.08% regression. surf_frac_below_eps=0 always: eps cannot affect surf_head update shape. Denominator-floor mechanism ruled out entirely.
 - #2124 (surface-only pressure weight k=0.5/1.5) — +11.85% / +21.85% regression. k=1.0 is sharp local minimum in both directions. Velocity rebalancing mechanism absent. Channel-weight axis fully closed.
+- #2122 (decoupled WD head-down) — +9.17%/+18.62% regression. Reversed hypothesis: head NEEDS 10× effective shrinkage per step (coupled WD is protective). val_geom_camber_rc hit hardest. Head-up direction (#2232) is the untested symmetric point.
 
 ## Potential next directions (after cycle 30 in-flight)
 

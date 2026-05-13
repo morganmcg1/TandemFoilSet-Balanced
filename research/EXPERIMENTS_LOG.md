@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-13 11:45 — PR #2122: Decoupled weight_decay per param group: encoder vs surf_head
+
+- **Branch:** `willowpai2g48h4-edward/decoupled-wd` (CLOSED — head-down direction rejected, key insight: head wants MORE WD)
+- **Student:** willowpai2g48h4-edward
+- **W&B runs:** `hdwktvr1` (Arm 1 encoder=1e-3/head=1e-4), `71sqac4j` (Arm 2 encoder=5e-4/head=1e-4)
+
+### Results
+
+| Arm | encoder_wd | head_wd | val_avg/mae_surf_p | Δ vs #2031 (93.62) | test_avg/mae_surf_p |
+|-----|------------|---------|---------------------|---------------------|---------------------|
+| Arm 1 (hdwktvr1) | 1e-3 | 1e-4 | 102.2033 | **+9.17%** | 90.7632 |
+| Arm 2 (71sqac4j) | 5e-4 | 1e-4 | 111.0561 | **+18.62%** | 98.3770 |
+
+Vs current baseline 89.7197 (#2091): Arm 1 +13.9%, Arm 2 +23.8%.
+
+Arm 1 strictly dominates Arm 2 on every split (lowering encoder_wd 5e-4→5e-4 and raising it to 1e-3 partly rescued the regression vs lowering head_wd alone).
+
+### Key Insight: Symmetric Direction Reversal
+
+**The hypothesis was wrong in direction.** The surf_head (tiny 3-layer MLP, hidden=64, 10× LR, predicts noisy residual) NEEDS the 10× effective per-step shrinkage from coupled WD. Reducing head_wd degraded it.
+
+Student's mechanism: the head memorizes surface-residual noise without strong regularization. Evidence: val_geom_camber_rc was hit hardest by head_wd↓ (+14 points Arm 1→Arm 2) — the OOD geometry split is where head memorization shows up worst.
+
+**Arm 1 partial rescue** (encoder=1e-3) says encoder can tolerate higher WD, but it couldn't compensate for unwise head_wd reduction.
+
+### Implication: head-UP direction is untested
+
+The student correctly identified the next step: try `head_wd ∈ {1e-3, 2e-3}` with `encoder_wd=5e-4`. Assigned as PR #2232 (edward head-up-wd).
+
+---
+
 ## 2026-05-13 11:30 — PR #2124: Surface-only pressure weight {0.5, 1.5}
 
 - **Branch:** `willowpai2g48h4-alphonse/surf-only-pw` (CLOSED — channel-weight axis dead end)
