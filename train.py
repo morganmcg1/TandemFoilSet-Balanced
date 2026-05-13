@@ -81,6 +81,23 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class RMSNorm(nn.Module):
+    """RMSNorm (Zhang & Sennrich 2019): LayerNorm without mean-centering.
+
+    LayerNorm:  y = (x - μ) / (σ + ε) * γ + β   — two learned params, mean subtraction.
+    RMSNorm:    y = x / RMS(x) * γ              — one learned param, no centering.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        rms = x.pow(2).mean(-1, keepdim=True).add(self.eps).sqrt()
+        return x / rms * self.weight
+
+
 class SwiGLUMLP(nn.Module):
     """SwiGLU feed-forward block (Shazeer 2020).
 
@@ -195,17 +212,17 @@ class TransolverBlock(nn.Module):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = RMSNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
         )
-        self.ln_2 = nn.LayerNorm(hidden_dim)
+        self.ln_2 = RMSNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio)
         self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.ln_3 = RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
@@ -264,6 +281,8 @@ class Transolver(nn.Module):
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, data, **kwargs):
@@ -481,6 +500,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
+print(f"RMSNorm ln_1 weight shape: {tuple(model.blocks[0].ln_1.weight.shape)}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
