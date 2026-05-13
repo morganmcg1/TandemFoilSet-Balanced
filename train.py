@@ -135,6 +135,37 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class GaussianRFFEnc(nn.Module):
+    """Fixed Gaussian Random Fourier Features for 2D coordinates.
+
+    Appends 2*n_rff Fourier features (sin/cos pairs) to the input. Omega
+    is drawn from N(0, sigma**2) at init and registered as a buffer
+    (FIXED, not learned). Coords are read from the FIRST 2 dims of the
+    input — after FourierCoordEnc, those dims are sin/cos features, so
+    this module reads the **pre-FourierCoordEnc** coordinate space.
+    For chaining with FourierCoordEnc we apply this on the raw
+    pre-encoding tensor and concatenate the RFF features at the end.
+
+    Output: [B, N, in_dim + 2*n_rff]
+    """
+
+    def __init__(self, n_rff: int = 6, sigma: float = 3.0, seed: int = 42):
+        super().__init__()
+        rng = torch.Generator()
+        rng.manual_seed(seed)
+        omega = torch.randn(2, n_rff, generator=rng) * sigma  # [2, n_rff]
+        self.register_buffer("omega", omega)
+        self.n_rff = n_rff
+        self.sigma = sigma
+
+    def forward(self, x: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+        # coords: [B, N, 2] — pre-FourierCoordEnc normalized (x, z).
+        # x:      [B, N, F] — already passed through FourierCoordEnc.
+        proj = coords @ self.omega  # [B, N, n_rff]
+        rff = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)  # [B, N, 2*n_rff]
+        return torch.cat([x, rff], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -301,7 +332,9 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             mask = mask.to(device, non_blocking=True)
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            coords = x_norm[..., :2]  # H56: capture raw (x, z) coords before FourierCoordEnc
             x_norm = fourier_enc(x_norm)
+            x_norm = rff_enc(x_norm, coords)  # H56: append Gaussian RFF features
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -465,9 +498,26 @@ val_loaders = {
 N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
+# H56: Additive Gaussian RFF (sigma=3.0, m=6, fixed) concatenated on top of
+# FourierCoordEnc output. Tests whether sigma=3.0 RFF provides orthogonal
+# spectral coverage on top of the now-learned dyadic freqs.
+N_RFF = 6
+RFF_SIGMA = 3.0
+rff_enc = GaussianRFFEnc(n_rff=N_RFF, sigma=RFF_SIGMA, seed=42).to(device)
+print(
+    f"[H56] GaussianRFFEnc: n_rff={N_RFF}, sigma={RFF_SIGMA}, "
+    f"omega std={rff_enc.omega.std().item():.3f} (expected ~{RFF_SIGMA:.1f}), "
+    f"omega range=[{rff_enc.omega.min().item():.3f}, {rff_enc.omega.max().item():.3f}]"
+)
+
+# fun_dim breakdown after both encoders:
+#   FourierCoordEnc replaces 2 coord dims with 4*N_FREQS=24 features (net +22)
+#   GaussianRFFEnc appends 2*N_RFF=12 features (net +12)
+#   Original X_DIM=24 + 22 + 12 = 58; subtracting space_dim=2 gives fun_dim=56.
+rff_fun_dim = 4 * N_FREQS + 2 * N_RFF + (X_DIM - 2) - 2
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=rff_fun_dim,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -481,9 +531,11 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_model_params = sum(p.numel() for p in model.parameters())
 n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
-n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
-print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
+n_rff_params = sum(p.numel() for p in rff_enc.parameters())  # H56: 0 (omega is a buffer)
+n_params = n_model_params + n_fourier_params + n_rff_params
+print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs) + GaussianRFFEnc ({n_rff_params} params, omega is a fixed buffer)")
 print(f"n_params (total trainable): {n_params}")
+print(f"[H56] fun_dim={rff_fun_dim} (was 44 pre-H56). Expected ~846,557 params (was 831,197).")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 # H39: ReGLU gate sanity check (ReLU = max(0,x))
@@ -579,7 +631,9 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        coords = x_norm[..., :2]  # H56: capture raw (x, z) coords before FourierCoordEnc
         x_norm = fourier_enc(x_norm)
+        x_norm = rff_enc(x_norm, coords)  # H56: append Gaussian RFF features
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         abs_err = (pred - y_norm).abs()
