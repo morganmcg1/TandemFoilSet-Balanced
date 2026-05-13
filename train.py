@@ -488,6 +488,8 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
 print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+sigma_gap_stagger = 0.02
+print(f"Gap/stagger jitter: sigma={sigma_gap_stagger} on channels 22-23 (per-sample, training only)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -527,6 +529,10 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Tandem gap/stagger jitter: perturb foil-arrangement channels during training only
+            x_norm = x_norm.clone()
+            gs_noise = torch.randn(x_norm.shape[0], 1, 2, device=x_norm.device, dtype=x_norm.dtype) * sigma_gap_stagger
+            x_norm[:, :, 22:24] = x_norm[:, :, 22:24] + gs_noise
             pred = model({"x": x_norm})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
