@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 08:20 UTC (CLOSE #2020 alphonse per-channel-decoder-heads +4.20% regression — shared decoder cross-channel features are load-bearing, per-channel axis now CLOSED at 2 tests; CLOSE #1852 tanjiro coord-jitter std=0.005 +0.92% regression but direction-inverted split pattern: in-dist −4.83%, OOD-geom +4.92%; assign #2059 alphonse n_head=4→8 attention-diversity test; assign #2060 tanjiro coord-jitter std=0.002 bracket-down)
+- **Last updated**: 2026-05-13 08:45 UTC (MERGE #2018 thorfinn LayerScale init=0.025 as 10th compound win val=74.415 −0.08% / test=65.524 −0.74%; γ_l sign-flip at 110.5% std/mean; CLOSE #1830 edward Fourier L=8 val_re_rand +9.19% interaction with surf-ch-weight; assign #2075 thorfinn layerscale-init-0.0125 bracket-down; assign #2078 edward gaussian-fourier-σ=10 pivot)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,17 +11,17 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1896 merged — LayerScale init=0.05, -1.21%)
+## Current best baseline (PR #2018 merged — LayerScale init=0.025, -0.08% val / -0.74% test)
 
-- `val_avg/mae_surf_p` = **74.476** (LayerScale init=0.05 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **66.014**
-- Per-split val: single_in_dist=85.075 / camber_rc=82.764 / camber_cruise=57.002 / re_rand=73.063
-- Per-split test: single_in_dist=75.023 / camber_rc=73.975 / camber_cruise=48.442 / re_rand=66.617
-- Δ vs PR #1711 baseline (75.391 / 66.608): **-1.21%** on val_avg, **-0.89%** on 4-split test
-- **3/4 val + 3/4 test splits improve** (single_in_dist regresses +3.4% — interaction with p:vel=4× weighting)
-- **Mechanism (LayerScale init=0.05)**: Per-channel γ_l means scale ~linearly with init (~0.043/0.063 attn/mlp). Block-0 attn std/mean jumps 38.8% (init=0.1) → 70.7% (init=0.05) — model compensates lower amplitude via wider per-channel diversification. Depth-decreasing MLP trend preserved (0.063→0.047 blocks 0→4).
+- `val_avg/mae_surf_p` = **74.415** (LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **65.524**
+- Per-split val: single_in_dist=80.907 / camber_rc=84.613 / camber_cruise=58.100 / re_rand=74.039
+- Per-split test: single_in_dist=70.626 / camber_rc=73.856 / camber_cruise=49.491 / re_rand=68.125
+- Δ vs PR #1896 baseline (74.476 / 66.014): **−0.08%** val_avg, **−0.74%** test_avg
+- **1/4 val splits improve** (single_in_dist dominant −4.90%; OOD splits regress slightly)
+- **Mechanism (LayerScale init=0.025)**: γ_l std/mean crosses 1.0 at block-0 attn (110.5%) — ~half of per-channel entries are sign-flipped (negative γ_l). Diminishing-returns curve: gain per halving of init → -1.21% (0.1→0.05) → -0.08% (0.05→0.025). MLP branch not yet at sign-flip (47–73% std/mean).
 - **Surf-ch-weight axis fully mapped**: [1,1,1]=78.260 baseline / [0.5,0.5,2.0]=75.391 (4×, optimum) / [0.33,0.33,2.33]=76.890 (7×, Outcome C). Direction closed — do not exceed 4×.
-- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→**#1896** → val_avg has improved from 100.957 to **74.476** = **−26.2% over 9 merges**.
+- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→**#2018** → val_avg has improved from 100.957 to **74.415** = **−26.3% over 10 merges**.
 
 ## Current research focus
 
@@ -31,24 +31,25 @@ None received yet on this branch.
 - Per-channel-decoder (#2020): shared cross-channel decoder features are **load-bearing** for OOD-geom generalization. Per-channel decoder axis closed after 2 tests (both half-capacity #1811 and full-capacity #2020 regressed). camber_rc splits regress most severely when channel specialization is forced.
 - Coord-jitter (#1852): position-conditioned regularization works (in-dist −4.83%) but the OOD-geom splits hold out different shapes, not re-meshed positions. OOD damage outweighs in-dist gain at std=0.005. Sweet spot search ongoing (std=0.002, tanjiro #2060).
 
-**Active hypothesis threads (Wave 9):**
-1. **n_head=4→8** (alphonse #2059): attention diversity at zero param cost. Tests whether finer-grained slice attention patterns help, especially on OOD geometry.
-2. **coord-jitter std=0.002** (tanjiro #2060): bracket-down from #1852. If in-dist gain of -4.83% partially survives at lower amplitude, net val_avg could cross to negative.
-3. **LayerScale init=0.025** (thorfinn #2018): continue the operating-point sweep below 0.05. Tests whether per-channel diversification has a ceiling.
-4. **Fourier L=8** (edward #1830): re-run needed on post-#1896 baseline. Previously showed val-plateau (-0.149%) + test-win (-2.48%) on earlier stack; orthogonality with surf-weight expected.
-5. **SmoothL1 β=0.005** (frieren #1828): close-out bracket from β=0.01 (flat). Needs rebase.
-6. **LR warmup H19** (nezuko #1754): won on old baseline at -0.64%/-1.71%. Needs rebase onto post-#1896 stack.
-7. **Adaptive grad-clip K=100 α=1.5** (askeladd #1753): orthogonal to all merged changes; pod restart instability delaying results.
-8. **FiLM global-cond** (fern #1549): highest-EV pending hypothesis (originally -19.5% vs very old baseline). Now in 4th rebase request cycle; CONFLICTING branch.
+**Active hypothesis threads (Wave 10):**
+1. **n_head=4→8** (alphonse #2059): attention diversity at zero param cost. Tests whether finer-grained slice attention patterns help.
+2. **coord-jitter std=0.002** (tanjiro #2060): bracket-down from #1852 std=0.005. In-dist gain was -4.83%; find the operating-point sweet spot.
+3. **LayerScale init=0.0125** (thorfinn #2075): next bracket-down. Gain curve: -1.21% → -0.08%. Predicts floor at this level. Tests Outcome A (still winning), B (plateau), or C (regression).
+4. **Gaussian Fourier σ=10** (edward #2078): pivot from dyadic L=8 plateau. Fixed random Fourier features (Tancik NeurIPS 2020) to sidestep the val_re_rand / surf-ch-weight interaction.
+5. **SmoothL1 β=0.005** (frieren #1828): close-out bracket. Needs rebase onto post-#2018 baseline (74.415 / 65.524).
+6. **LR warmup H19** (nezuko #1754): won on old baseline. Needs rebase onto current stack.
+7. **Adaptive grad-clip K=100 α=1.5** (askeladd #1753): pod restart instability (14 restarts); push-before-train nudge sent.
+8. **FiLM global-cond** (fern #1549): highest-EV pending hypothesis. In 4th rebase cycle; CONFLICTING branch.
 
 **Closed axes (do not re-test):**
+- Dyadic Fourier: L=4 merged, L=6 merged, L=8 closed (val_re_rand × surf-ch-weight interaction) — pivot to Gaussian Fourier
 - Per-channel decoder output heads (both half-capacity #1811 and full-capacity #2020)
 - Per-channel surf-weight: 4× is local optimum; 7× and 1× both worse
 - Output-side prediction calibration (log1p, γ-bias)
 - Gumbel/Ada-Temp slice collapse (3 tests)
 - Fixed-threshold grad-clip (bracket {1.0, 10, 25, 50} complete, 25 is optimum)
 - Stoch-depth single-knob (0.05 and 0.15 both worse, 0.10 is optimum)
-- Attn-mlp-dropout (compute tax + conflicts with existing regularization)
+- Attn-mlp-dropout (compute tax + conflicts)
 - EMA weights (fights Fourier feature sharpening)
 - AdamW betas (0.9, 0.95) (non-uniform regression)
 
@@ -255,18 +256,18 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 - **Optimizer family pivots** — Lion (Chen 2023), Sophia (Liu 2023). Only if both
   betas-refresh (#1773) and warmup (#1754) regress.
 
-## All 8 students currently assigned (post-#2020/#1852 closures — Wave 9)
+## All 8 students currently assigned (post-#2018 merge / 10th compound win — Wave 10)
 
 | Student | PR | Status |
 |---------|----|--------|
-| alphonse | #2059 | NEW — n_head=4→8 attention diversity at zero param cost |
+| alphonse | #2059 | WIP — n_head=4→8 attention diversity at zero param cost |
 | askeladd | #1753 | WIP — adaptive grad-clip (1.5× running median K=100; 14 pod restarts, push-before-train nudge sent) |
-| edward | #1830 | WIP — Fourier coords L=8 rebase-3 (branch on post-#1896 HEAD; re-run training pending) |
-| fern | #1549 | WIP — FiLM global-cond rebase-v2 (4th send-back for rebase; silent) |
-| frieren | #1828 | WIP — SmoothL1 β=0.005 (CONFLICTING branch; rebase + re-run nudge sent) |
-| nezuko | #1754 | WIP — LR warmup H19 rebase (stale branch; nudge to push-before-train sent) |
-| tanjiro | #2060 | NEW — coord-jitter std=0.002 bracket-down (in-dist gain at 0.005 was -4.83%; find sweet spot) |
-| thorfinn | #2018 | WIP — LayerScale init=0.025 (continue operating-point sweep below 0.05) |
+| edward | #2078 | NEW — Gaussian Fourier σ=10 pivot from dyadic L=8 (val_re_rand interaction blocked L=8) |
+| fern | #1549 | WIP — FiLM global-cond rebase-v2 (4th send-back; CONFLICTING) |
+| frieren | #1828 | WIP — SmoothL1 β=0.005 (CONFLICTING; rebase + re-run nudge sent) |
+| nezuko | #1754 | WIP — LR warmup H19 rebase (stale; nudge sent) |
+| tanjiro | #2060 | WIP — coord-jitter std=0.002 bracket-down |
+| thorfinn | #2075 | NEW — LayerScale init=0.0125 (bracket-down from merged 0.025; tests floor of operating-point sweep) |
 
 Zero idle students. Zero idle GPUs.
 

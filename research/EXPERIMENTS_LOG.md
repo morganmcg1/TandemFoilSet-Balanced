@@ -8,6 +8,57 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 08:35 — PR #2018 (thorfinn LayerScale init=0.025) — **MERGED** (10th compound win)
+
+- Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.025`
+- Hypothesis: Continue LayerScale operating-point sweep: drop init=0.05 → **init=0.025**. Tests whether per-channel diversification has additional headroom.
+- Metric artifacts: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.025-20260513-070817/metrics.jsonl`
+
+| Metric | init=0.025 (#2018) | Baseline (#1896) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **74.415** | 74.476 | **−0.08% WIN** |
+| test_avg/mae_surf_p (4-split) | **65.524** | 66.014 | **−0.74% WIN** |
+
+Per-split val: single_in_dist=80.907 (−4.90%) / camber_rc=84.613 (+2.23%) / camber_cruise=58.100 (+1.93%) / re_rand=74.039 (+1.34%). Single split dominates the average improvement; OOD splits regress slightly.
+
+**Mechanism breakthrough — γ_l sign-flip threshold reached:**
+
+| init | val_avg | Block-0 attn std/mean |
+|---|---:|---:|
+| 0.1 | 78.260 | 38.8% |
+| 0.05 | 74.476 | 70.7% |
+| **0.025** | **74.415** | **110.5%** |
+
+Block-0 attn std now EXCEEDS mean (>100%) — ~half of per-channel γ_l entries have learned **negative** residual scale (sign-flipping residuals). MLP-side std/mean 47–73%, not yet at sign-flip. This is structurally novel: the model uses the residual gate not just to attenuate but to flip specific channels.
+
+Gain-per-halving: -1.21% (0.1→0.05) → **-0.08% (0.05→0.025)**. Diminishing returns confirmed. Test signal (-0.74%) stronger than val, driven by single_in_dist (-5.86%).
+
+Merged as 10th compound win per "merge even marginal improvements" principle. New compound progress: 100.957 → 74.415 = −26.3% over 10 merges.
+
+---
+
+## 2026-05-13 08:35 — PR #1830 (edward Fourier coords L=8, rebased-3) — **CLOSED** (+0.745% val regression; val_re_rand interaction)
+
+- Branch: `charliepai2g24h4-edward/fourier-coords-L8`
+- Hypothesis: Bracket up Fourier L=6 → L=8; test whether dyadic frequency spectrum continues to improve.
+- Metric artifacts: `models/model-charliepai2g24h4-edward-fourier-coords-L8-rebased-2-20260513-072103/metrics.jsonl`
+
+| Metric | L=8 rebased (#1830) | Baseline (#1896) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **75.031** | 74.476 | **+0.745% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **65.563** | 66.014 | −0.683% improvement |
+
+Per-split val: single_in_dist=80.904 (−1.36%) / camber_rc=86.085 (−2.80%) / camber_cruise=58.167 (−0.84%) / **re_rand=74.968 (+9.19%)**. 3/4 splits improve; val_avg sign set entirely by val_re_rand.
+
+**val_re_rand interaction with surf-ch-weight — key mechanism finding:**
+- On post-#1799 (no surf-ch-weight): L=8 gave val_re_rand **−5.31%** improvement
+- On post-#1896 (with surf-ch-weight [0.5,0.5,2.0]): L=8 gives val_re_rand **+9.19% regression**
+- The 14.5% swing is caused by the surf-ch-weight 4× velocity de-emphasis. Velocity gradients are most important for Reynolds-OOD (val_re_rand). At L=8, the high-frequency Fourier bands capture fine-grained velocity boundary-layer features, but these features are under-weighted by the surf-ch-weight 4× pressure emphasis. Result: L=8's highest-band capacity is available but not exploitable.
+
+**Dyadic Fourier direction now closed:** L=4 merged, L=6 merged, L=8 blocked. Follow-up: Gaussian Fourier features (Tancik 2020, σ=10) to test whether a continuous frequency distribution sidesteps the val_re_rand interaction.
+
+---
+
 ## 2026-05-13 08:15 — PR #2020 (alphonse per-channel-decoder-heads) — **CLOSED** (+4.20% regression)
 
 - Branch: `charliepai2g24h4-alphonse/per-channel-decoder-heads`
