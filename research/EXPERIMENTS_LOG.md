@@ -2,6 +2,122 @@
 
 ---
 
+## 2026-05-13 19:45 — PR #2477: MLP dropout sweep in encoder (CLOSED — both arms regress, feature-level dropout exhausted)
+
+- **Branch:** `willowpai2g48h4-thorfinn/mlp-dropout-sweep`
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `evxggj2y` (dropout=0.05), `tpqlam3j` (dropout=0.10)
+- **Hypothesis:** Feature-level activation dropout in PhysicsAttention's attention weights + to_out projection. Orthogonal mechanism to WD (weight-level). Tests if stochastic feature masking complements WD in the SGDR regime.
+
+### Results
+
+| Arm | dropout | val_avg/mae_surf_p | Δ vs current SOTA 82.26 | test_avg/mae_surf_p |
+|-----|---------|---------------------|--------------------------|---------------------|
+| 1 | 0.05 | 89.18 | +6.92 (+8.4%) ❌ | 79.41 |
+| 2 | 0.10 | 85.06 | +2.80 (+3.4%) ❌ | 75.52 |
+
+Both arms used the OLD baseline config (T_0=10, T_mult=1, no eta_min). Comparisons here are vs the current SOTA #2444 (val=82.26).
+
+### Cycle-2 trajectory
+
+| epoch | dropout=0.05 | dropout=0.10 |
+|-------|--------------|--------------|
+| e10 (cycle-1 end) | 101.79 | 103.75 |
+| e11 (restart spike) | 182.74 | 144.05 |
+| e19 | 90.99 | 86.98 |
+| **e20 (best)** | **89.18** | **85.06** |
+
+Dropout=0.10 has a SMALLER restart spike (144 vs 183) than dropout=0.05 — suggests dropout damps the spike via gradient variance. But this damping comes at the cost of cycle-2 minimum quality.
+
+### Analysis and Conclusions
+
+**Closed — feature-level dropout is not productive at our budget.**
+
+**Mechanistic read (from student):**
+- WD=5e-4 + SGDR already imposes substantial regularization. Adding activation-level dropout stacks regularization the model can't usefully consume in 21 epochs.
+- Dropout slows effective learning rate (gradient variance reduction reduces signal-to-noise on attention scores) → each cycle ends short of where it should.
+- At 0.05 the perturbation hurts gradients without compensating regularization; at 0.10 the model adapts more but still doesn't surpass baseline.
+
+**Cross-reference:** mirrors DropPath result (#1987) but softer. Both feature-level (#2477) AND structural (#1987) stochasticity directions are now exhausted.
+
+**Per nezuko #2445 σ measurement:** σ_seed ≈ 0.34 val on this exact baseline config. Arm 1 regression is ~20σ; Arm 2 is ~8σ above SOTA — clearly outside noise.
+
+### Branching decision — close, don't extend
+
+The trend (0.05 → 0.10 closer to baseline) hints the optimum may be near 0.10, but bounded BELOW baseline. Higher rates would likely cross back into clear regression as capacity loss outweighs regularization gain. The student correctly recommended closing.
+
+**Suggested follow-up (from student):** input-level Gaussian noise as data augmentation (Bishop 1995). Different mechanism from feature-level dropout. **Assigned as PR #2521 (thorfinn input-gaussian-noise).**
+
+---
+
+## 2026-05-13 19:45 — PR #2452: Snapshot ensemble e10+e20 prediction averaging (CLOSED — monotone degradation in α)
+
+- **Branch:** `willowpai2g48h4-fern/snapshot-ensemble-cycle-ends`
+- **Student:** willowpai2g48h4-fern
+- **W&B run:** `9r7dd3gq`
+- **Hypothesis:** Save e10 checkpoint at SGDR cycle-1 end; at eval, average predictions from e10 and e20 (free at training time, costs eval-time forward passes). The cycle-end snapshots are in distinct basins (#2331 finding), so prediction-space averaging should reduce variance even though weight-space averaging fails.
+
+### Results — α-sweep
+
+`ensemble(α) = α · pred_e10 + (1-α) · pred_e20`
+
+| α | val_avg | test_avg | Δ val vs e20 alone |
+|---|---------|----------|--------------------|
+| 0.0 (e20 alone) | **87.7106** | **78.2528** | 0.0000 |
+| 0.1 | 87.97 | 78.28 | +0.26 |
+| 0.2 | 88.56 | 78.65 | +0.85 |
+| 0.3 | 89.49 | 79.37 | +1.78 |
+| 0.4 | 90.75 | 80.43 | +3.04 |
+| 0.5 (50/50) | 92.32 | 81.82 | +4.61 |
+| 1.0 (e10 alone) | 104.33 | 93.06 | +16.62 |
+
+**Even the smallest α=0.1 mix hurts both val and test. Monotone degradation as α grows.**
+
+### Analysis and Conclusions
+
+**Closed — snapshot-ensemble axis decisively falsified.**
+
+**Mechanism (from student):**
+- The hypothesis assumed e10 and e20 are in distinct basins (per #2331) AND comparable in quality.
+- The first condition holds. The second condition is **decisively violated**: e10 val=104.33 is 16% higher bias than e20 val=87.71.
+- Prediction averaging mixes that bias into the e20 prediction without remotely enough variance reduction to compensate.
+- Result: monotone degradation in α — exactly the shape one expects when ensemble members have very different quality.
+
+**Cross-reference to Huang et al. 2017 Snapshot Ensembles:** They used M=5–10 cycles on CIFAR/SVHN. With M=2 cycles at our 21-ep budget, cycle endpoints are at very different points on the loss curve. SE works when later snapshots are *roughly converged* and only differ in basin — not our regime.
+
+### Critical cross-cycle confirmation of cycle-64 finding
+
+**fern's e20=87.71 is consistent with nezuko's seeded mean 86.71±0.34 (PR #2445, cycle 64) on this same #2227 baseline config — within ~3σ.** This is the SECOND independent confirmation (after nezuko's 3 seeds) that the kt5pk5qu reference (83.997) cannot be reproduced under current code. **Code/environment drift between the historical baseline measurement and current main is the most plausible cause.** Implication for the paper: report current-code seeded means, not historical reference numbers.
+
+### Suggested follow-up
+
+The student suggested closing the SE direction entirely. Combined with #1808 SWA, #1951 SWA, #2331 SWA, the weight-averaging family is at 4 attempts deep. **The remaining unexplored variant is within-basin SWA (averaging weights at e15, e17, e19, e21 — all in cycle 2's descent). Assigned as PR #2522 (fern within-cycle-swa).**
+
+---
+
+## 2026-05-13 19:30 — PR #2521: Input Gaussian noise augmentation during training (assignment to thorfinn, NEW cycle 65)
+
+- **Branch:** `willowpai2g48h4-thorfinn/input-gaussian-noise`
+- **Student:** willowpai2g48h4-thorfinn
+- **Hypothesis:** Bishop 1995 — input noise is mathematically equivalent to Tikhonov regularization. Different mechanism from dropout (#2477 closed) — augmentation not capacity restriction. CFD has continuous dependence on geometry, so input noise teaches geometry-invariance, especially relevant for OOD splits (val_geom_camber_rc, val_single_in_dist).
+- **Arms:** σ_input_noise ∈ {0.005, 0.01} on current SOTA T_mult=2 stack.
+- **Branching rule:** ≥0.7 val (2σ via nezuko's measurement) = confident win. Both regress → close axis.
+
+---
+
+## 2026-05-13 19:30 — PR #2522: Within-cycle-2 SWA (e15-e21 weight averaging) (assignment to fern, NEW cycle 65)
+
+- **Branch:** `willowpai2g48h4-fern/within-cycle-swa`
+- **Student:** willowpai2g48h4-fern
+- **Hypothesis:** 4th and likely final SWA family test. Distinct failure-mode analysis from prior SWA attempts:
+  - #1808 SWA: budget too short (14-ep) — fixed by current 21-ep budget.
+  - #1951 SWA: pre-restart, no cycle-end minima — fixed by post-#2227 restart regime.
+  - #2331 SWA: cross-basin (e10 vs e20 of T_0=10 cycles) — distinct basins, weight interpolation passes through higher loss.
+  - **#2522 SWA: same basin (e15, e17, e19, e21 all within cycle 2 of T_mult=2 stack)** — Izmailov 2018's intended regime.
+- **Single arm.** Branching: SWA < e21 by ≥0.7 val = win. SWA ≥ e21 = SWA family permanently exhausted across 4 distinct failure modes.
+
+---
+
 ## 2026-05-13 19:15 — PR #2445: 3-seed baseline calibration on #2227 config (SENT BACK — branch behind + seed code not committed)
 
 - **Branch:** `willowpai2g48h4-nezuko/seed-variance-calibration` (still WIP)

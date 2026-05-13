@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 64)
+- **As of:** 2026-05-13 (updated cycle 65)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -26,6 +26,14 @@
 | **62** | **#2444** | **T_mult=2 restart (T_0=7, cycles [7,14])** | **82.2642** | **−2.1%** |
 
 ## Current research focus
+
+**Cycle 65.** Two closures + 2 fresh assignments. **#2477 thorfinn MLP dropout CLOSED**: Arm 1 (dropout=0.05) val=89.18 (+8.4% vs SOTA), Arm 2 (dropout=0.10) val=85.06 (+3.4%) — both regress. Combined with #1987 DropPath, feature-level and structural stochasticity directions are exhausted. **#2452 fern snapshot ensemble CLOSED**: monotone degradation as e10's weight grows (e20 alone=87.71, 50/50 ensemble=92.32). Mechanism: e10 has 16% higher bias than e20; prediction averaging mixes that bias. Confirmation of cycle-64 finding: fern's e20=87.71 is consistent with nezuko's seeded mean 86.71±0.34 (within 3σ), NOT an "unlucky seed" — typical seed under current code.
+
+**Assignments cycle 65:**
+- **thorfinn #2521 (input-gaussian-noise):** Bishop 1995 input-noise = Tikhonov regularization, mechanistically distinct from dropout (capacity-restriction) — tests whether geometry-invariance prior via training-time noise helps OOD splits. Arms: σ_noise ∈ {0.005, 0.01} on current SOTA T_mult=2 stack.
+- **fern #2522 (within-cycle-swa):** SWA across e15-e21 (all within cycle 2 of T_mult=2 = same basin). Distinct from #2331 (cross-basin SWA, closed) and #2452 (prediction averaging, closed). Tests the Izmailov 2018 flat-minimum hypothesis WITHIN basin. If this also fails, SWA family is permanently exhausted.
+
+**edward #2380 NOT stale, just slow.** 7 W&B runs found (5 finished, 1 running, 1 crashed at e6). Running multiple seed replicates: head_wd=2e-3 across 4 seeds gives vals {84.10, 84.73, 85.69, 86.98} mean ~85.4, σ ~1.2 (higher seed variance than nezuko's 0.34 — possibly uncontrolled seeds). Best result so far (84.10) is still 1.84 above SOTA 82.26. Awaiting student's terminal report.
 
 **Cycle 64.** **CRITICAL FINDING from nezuko #2445** (sent back, not merged): 3 seed-controlled runs on the #2227 baseline config (T_0=10, WD=5e-4) produce val_avg ∈ {86.32, 86.93, 86.89} (mean 86.71 ± 0.34). **The kt5pk5qu reference (83.997) is ~8σ below this mean** — falsifies the "lucky draw" interpretation and implies code drift between kt5pk5qu's run-time environment and current main. Plausible causes: kernel selection by torch.compile, library version drift, sampler RNG state differences. **Implication:** all merged improvements in this round may be measured against partially non-reproducible references; the IMPROVEMENT TRAJECTORY (each PR vs the one before) is still valid (same code, same regime), but the ABSOLUTE numbers should be re-anchored. **Action:** sent #2445 back with focused asks — (a) rebase onto current advisor (branch was at cycle 49), (b) actually commit the --seed flag (the runs proved it works at runtime, but the code was never `git add`-ed in her PR), (c) re-run 3 seeds on the CURRENT SOTA #2444 config (T_0=7, T_mult=2) to establish a seeded variance for the active baseline. Also: σ ≈ 0.34 val on #2227 is **3-5× tighter than the 1-2 val hypothesized in cycle 53** — the merge bar can be MORE aggressive: 2σ ≈ 0.7 val for the SOTA config is a reasonable confidence threshold.
 
@@ -75,19 +83,21 @@ Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 n
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 64)
+## Live PRs (active WIPs and recent closes — cycle 65)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 2507 | frieren | wd-above-5e4-tmult2 | **WIP (NEW cycle 63)** | WD curve ABOVE 5e-4 on T_mult=2 stack. Arms: {6e-4, 7e-4}. Restart shifts optimal WD upward — does T_mult=2's longer cycle 2 shift it further? |
-| 2498 | alphonse | tmult2-eta-min-compose | WIP (NEW cycle 62) | Compose T_0=7 T_mult=2 + eta_min=1e-5. Arms: {eta=1e-5, eta=2e-5}. Two orthogonal wins should stack. |
+| 2522 | fern | within-cycle-swa | **WIP (NEW cycle 65)** | SWA across e15-e21 (cycle 2 only — same basin). Distinct from prior SWA attempts (#2331 cross-basin, #2452 prediction). 4th and likely final SWA family test. |
+| 2521 | thorfinn | input-gaussian-noise | **WIP (NEW cycle 65)** | Bishop 1995 input-noise = Tikhonov regularization. σ_noise ∈ {0.005, 0.01}. Different mechanism from dropout (#2477) — augmentation not capacity restriction. |
+| 2507 | frieren | wd-above-5e4-tmult2 | WIP (NEW cycle 63) | WD curve ABOVE 5e-4 on T_mult=2 stack. Arms: {6e-4, 7e-4}. |
+| 2498 | alphonse | tmult2-eta-min-compose | WIP (NEW cycle 62) | Compose T_0=7 T_mult=2 + eta_min=1e-5. Two orthogonal wins should stack. |
 | 2487 | askeladd | eta-min-refinement | WIP | Map eta_min curve {5e-6, 2e-5} around SOTA 1e-5. |
-| 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
-| 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
-| 2445 | nezuko | seed-variance-calibration | **WIP (sent back cycle 64)** | σ=0.34 val on #2227 config (mean 86.71 vs claim 83.997 — 8σ gap, code drift implied). Branch is behind advisor + --seed flag never committed (only ran locally). Sent back: rebase + commit seed code + re-run on CURRENT SOTA #2444 config. |
-| 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
-| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 62) | Compose Lookahead k=5 + cosine_restart T_0=7 T_mult=2 + eta_min=1e-5 (3rd update). Needs rebase + updated commands. |
-| 2284 | frieren | finer-wd-sweep-21epoch | **CLOSED cycle 63** | 3 arms below 5e-4 all regress monotonically (WD=2e-4 val=85.88, 2.5e-4 val=87.14, 4e-4 val=85.24). WD curve below 5e-4 fully mapped. |
+| 2445 | nezuko | seed-variance-calibration | WIP (sent back cycle 64) | σ=0.34 val on #2227 config (mean 86.71 vs claim 83.997 — 8σ gap, code drift implied). Branch behind + --seed flag never committed. Sent back. |
+| 2380 | edward | head-wd-restart-compose | WIP (slow, NOT stale — confirmed cycle 65) | 7 W&B runs across multiple seeds: best=84.10 (head_wd=2e-3), seed σ ~1.2. Awaiting final results. Still 1.84 above SOTA. |
+| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 62) | Compose Lookahead k=5 + T_0=7 T_mult=2 + eta_min=1e-5 (3rd update). Needs rebase. |
+| 2477 | thorfinn | mlp-dropout-sweep | **CLOSED cycle 65** | Both arms regress: dropout=0.05 val=89.18 (+8.4%), dropout=0.10 val=85.06 (+3.4%). Feature-level dropout axis exhausted. |
+| 2452 | fern | snapshot-ensemble-cycle-ends | **CLOSED cycle 65** | Monotone degradation in α (e20=87.71, 50/50=92.32). e10 too high-bias for prediction averaging. |
+| 2284 | frieren | finer-wd-sweep-21epoch | CLOSED cycle 63 | 3 arms below 5e-4 all regress monotonically. WD curve below 5e-4 fully mapped. |
 | 2444 | alphonse | t-mult-2-restart | **MERGED cycle 62** | T_0=7 T_mult=2 WINS. val=82.2642 / test=72.4019. New SOTA. |
 | 2357 | askeladd | cosine-restart-eta-min | **MERGED cycle 61** | eta_min=1e-5 WINS. val=83.6873 / test=73.3963. |
 | 2340 | thorfinn | adamw-beta1-sweep | **CLOSED cycle 60** | Both arms regress +3.5–4.8 val (>2× seed noise). β1=0.9 confirmed. β1 axis exhausted. |
@@ -159,7 +169,10 @@ Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 n
 31. **AdamW ε sweep {1e-7, 1e-6}** — **rejected** (PR #2128, +13.13% / +23.08%). Decisive diagnostic: surf_head `frac_below_eps = 0.0` for all epochs. Eps cannot affect surf_head updates because `sqrt(v) >> eps` always. **Denominator-floor mechanism is ruled out as a source of the late-epoch oscillation.** Eps axis is closed.
 31a. **AdamW β2=0.9999/0.9995 (longer second-moment timescale)** — **rejected** (#2201 nezuko, CLOSED cycle 47). β2=0.9999 +14.2% val, β2=0.9995 +8.9% val vs current baseline. Spike-as-signal interpretation prevailed. Long-β2 smoothing destroys e18/e20 deep minimum. β2 axis PERMANENTLY CLOSED: 0.95 (#2015) / 0.9999+0.9995 (#2201) all regress; 0.999 is the only viable point.
 31b. **AdamW β1=0.85/0.95 (gradient momentum adaptation speed)** — **REJECTED** (#2340 thorfinn, CLOSED cycle 60). Both arms regress: β1=0.85 +3.50/+3.96 val (two seeds), β1=0.95 +4.83 val. All well outside seed-noise band. β1=0.9 confirmed optimal. Key insight: β1=0.95 smooths restart spike (+15.8 amplitude vs +48.5 for β1=0.85) but does NOT deepen recovery minimum. Spike amplitude is NOT the load-bearing signal. **β1 axis fully exhausted; AdamW search complete (β1, β2, LR, WD, ε all locked).**
-37. **MLP dropout sweep in encoder (feature-level soft regularization)** — testing (#2477 thorfinn, NEW cycle 60). Dropout=0.05 vs 0.10 in PhysicsAttention (attention weights + to_out projection). Orthogonal to WD (weight-level). Code plumbing exists (dropout=0.0 default in Transolver). Tests if stochastic feature masking complements WD in the restart regime. Two arms + second-seed confirmation if either wins.
+37. **MLP dropout sweep in encoder (feature-level soft regularization)** — **REJECTED** (#2477 thorfinn, CLOSED cycle 65). Both arms regress: dropout=0.05 val=89.18 (+8.4%), dropout=0.10 val=85.06 (+3.4%) vs current SOTA 82.26. Mechanism: feature-level stochasticity slows convergence at 21-ep budget without yielding regularization benefit. Combined with #1987 DropPath (rejected) and the WD axis closures: WD=5e-4 + SGDR is already at the regularization limit for this stack. Feature-level and structural stochasticity directions are exhausted.
+38. **Snapshot ensemble (prediction-space averaging of e10 + e20)** — **REJECTED** (#2452 fern, CLOSED cycle 65). Monotone degradation in α (e20=87.71 alone, 50/50 ensemble=92.32). Mechanism: e10 has 16% higher bias than e20; prediction averaging mixes that bias. Huang et al. 2017 SE uses M=5-10 cycles where snapshots are roughly converged — at our M=2 in 21 epochs, cycle endpoints are at very different quality. Hypothesis falsified. Important cross-cycle confirmation: fern's e20=87.71 is consistent with nezuko's seeded mean 86.71±0.34 (within 3σ) — fern did NOT draw an unlucky seed; this is typical under current code.
+39. **Input Gaussian noise augmentation during training** — testing (#2521 thorfinn, NEW cycle 65). Bishop 1995: input-noise equivalent to Tikhonov regularization. Different mechanism from dropout (#2477) — augmentation, not capacity restriction. CFD has continuous dependence on geometry → input noise teaches geometry-invariance. Arms: σ_noise ∈ {0.005, 0.01} on current SOTA T_mult=2 stack. Branching: ≥0.7 val improvement = confident win.
+40. **Within-cycle-2 SWA (4-snapshot weight average across e15-e21)** — testing (#2522 fern, NEW cycle 65). Distinct from #2331 (cross-basin SWA, rejected) and #2452 (prediction averaging, rejected). All snapshots are in SAME cycle 2 descent basin under T_mult=2 → same-quality, same-region weights. Izmailov 2018's intended regime. Fourth and likely final SWA family test. If this also fails, SWA family is permanently closed.
 32. **SWA over SGDR cycle-ends (retry)** — testing (#2331 nezuko, NEW cycle 47). Prior #1951 SWA (+3.33%) was pre-restart, no genuine cycle-end minima. Now T_0=10 provides independent local minima at e10/e20. Izmailov 2018 designed SWA exactly for this regime. Two arms: sparse 2-snapshot SWA (e10, e20) vs dense per-epoch SWA in cycle 2 (e10–e20).
 33. **Cosine T_max sweep {15, 20, 25}** — **rejected at 14ep pre-compile baseline** (#2123 askeladd, CLOSED cycle 48). Best arm T_max=20 val=93.06 (−0.6% vs OLD #2031), but +10.8% vs current 83.9969. T_max axis is now MOOT (current baseline uses CosineAnnealingWarmRestarts, not CosineAnnealingLR). Replaced by eta_min sweep (#2357).
 34. **Cosine restart eta_min sweep {1e-5, 5e-5}** — testing (#2357 askeladd, NEW cycle 48). PR #2227 used default eta_min=0 (LR drops to exactly 0 at cycle-ends e10/e20). This may or may not be optimal — a tiny nonzero floor LR could let the model continue micro-refining at cycle-end minima. Orthogonal to alphonse's #2317 (T_0=12 + WD compose) on the cosine restart axis.
