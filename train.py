@@ -32,7 +32,7 @@ import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
 from torch.optim.swa_utils import AveragedModel, SWALR
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from data import (
@@ -46,6 +46,34 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+class IndexedDataset(Dataset):
+    """Wrap a Dataset to also return its integer index in __getitem__.
+
+    Used by the hard-example mining (HEM) path to expose stable per-sample IDs
+    in each training batch so an EMA-loss dict can be keyed on them. Leaves the
+    underlying ``data/loader.py`` interface untouched (it is read-only per
+    ``program.md``).
+    """
+
+    def __init__(self, ds: Dataset):
+        self.ds = ds
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        x, y, surf = self.ds[idx]
+        return x, y, surf, idx
+
+
+def indexed_pad_collate(batch):
+    """``pad_collate`` variant that also returns a [B] tensor of sample IDs."""
+    base = [(b[0], b[1], b[2]) for b in batch]
+    sample_ids = torch.tensor([b[3] for b in batch], dtype=torch.long)
+    x, y, surf, mask = pad_collate(base)
+    return x, y, surf, mask, sample_ids
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -469,6 +497,13 @@ class Config:
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
+    # Hard-example mining (HEM): per-sample EMA-loss focal weighting (PR #1954)
+    hard_example_mining: bool = False  # enable per-sample focal weighting from EMA loss
+    hem_focal_alpha: float = 0.5  # focal strength: weight = (1 + alpha * z(EMA loss)) clamped
+    hem_ema_decay: float = 0.9  # EMA decay for per-sample loss tracking (0.9 → ~10-batch window)
+    hem_warmup_epochs: int = 3  # epochs of identity weighting before focal kicks in (EMA still tracked)
+    hem_weight_min: float = 0.5  # lower clamp on per-sample weight
+    hem_weight_max: float = 2.0  # upper clamp on per-sample weight
 
 
 cfg = sp.parse(Config)
@@ -487,13 +522,26 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+if cfg.hard_example_mining:
+    # Swap collate + dataset so each training batch carries stable per-sample IDs.
+    train_ds_loader = IndexedDataset(train_ds)
+    train_collate = indexed_pad_collate
+    print(f"Hard-example mining: ON (alpha={cfg.hem_focal_alpha}, ema_decay={cfg.hem_ema_decay}, "
+          f"warmup={cfg.hem_warmup_epochs}, clamp=[{cfg.hem_weight_min}, {cfg.hem_weight_max}])")
+else:
+    train_ds_loader = train_ds
+    train_collate = pad_collate
+
+train_loader_kwargs = dict(num_workers=4, pin_memory=True,
+                           persistent_workers=True, prefetch_factor=2)
+
 if cfg.debug:
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True, **loader_kwargs)
+    train_loader = DataLoader(train_ds_loader, batch_size=cfg.batch_size,
+                              shuffle=True, collate_fn=train_collate, **train_loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              sampler=sampler, **loader_kwargs)
+    train_loader = DataLoader(train_ds_loader, batch_size=cfg.batch_size,
+                              sampler=sampler, collate_fn=train_collate, **train_loader_kwargs)
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -601,6 +649,9 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+# HEM state: maps dataset index → EMA of (post-Kendall, post-re_weight) per-sample loss.
+sample_loss_ema: dict[int, float] = {}
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -613,8 +664,16 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    epoch_hem_w_min = 1.0
+    epoch_hem_w_max = 1.0
+    epoch_hem_w_sum = 0.0
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+        if cfg.hard_example_mining:
+            x, y, is_surface, mask, sample_ids = batch
+        else:
+            x, y, is_surface, mask = batch
+            sample_ids = None
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -641,31 +700,88 @@ for epoch in range(MAX_EPOCHS):
         # Apply per-sample re_weight to the per-element error; surf_weight (or Kendall sigmas) stays on top.
         weighted_err = sq_err * re_weight_expanded
 
-        # Per-channel decomposition: mean-reduced over masked nodes.
-        # Y channel order: 0=Ux, 1=Uy, 2=p. Kendall channel order: surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy.
-        surf_count = surf_mask.sum().clamp(min=1)
-        vol_count = vol_mask.sum().clamp(min=1)
-        per_channel_surf = (weighted_err * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_count  # [3]
-        per_channel_vol = (weighted_err * vol_mask.unsqueeze(-1)).sum(dim=(0, 1)) / vol_count    # [3]
-        surf_loss = per_channel_surf.sum()  # sum over 3 channels (matches old surf_loss aggregate)
-        vol_loss = per_channel_vol.sum()
+        kendall_losses_log = None
+        per_sample_loss_detached = None
+        sample_weights_tensor = None
 
-        if cfg.use_kendall_uncertainty:
-            # 6 per-channel scalar losses in Kendall order.
-            kendall_losses = torch.stack([
-                per_channel_surf[2],  # surf_p
-                per_channel_surf[0],  # surf_ux
-                per_channel_surf[1],  # surf_uy
-                per_channel_vol[2],   # vol_p
-                per_channel_vol[0],   # vol_ux
-                per_channel_vol[1],   # vol_uy
-            ])
-            log_sigmas_clamped = torch.clamp(log_sigmas, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
-            # Kendall, Gal, Cipolla 2018 eq. 9: L = sum_c [ 0.5 * exp(-2*log_sigma_c) * loss_c + log_sigma_c ]
-            precision = torch.exp(-2.0 * log_sigmas_clamped)
-            loss = (0.5 * precision * kendall_losses + log_sigmas_clamped).sum()
+        if cfg.hard_example_mining:
+            # Per-sample-per-channel reduction (sample-wise node-mean), so each sample
+            # contributes one "difficulty score" regardless of mesh size.
+            surf_count_per = surf_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)  # [B, 1]
+            vol_count_per = vol_mask.sum(dim=1).clamp(min=1).unsqueeze(-1)    # [B, 1]
+            per_sample_surf = (weighted_err * surf_mask.unsqueeze(-1)).sum(dim=1) / surf_count_per  # [B, 3]
+            per_sample_vol = (weighted_err * vol_mask.unsqueeze(-1)).sum(dim=1) / vol_count_per    # [B, 3]
+
+            if cfg.use_kendall_uncertainty:
+                # Kendall channel order: surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy.
+                per_sample_kendall = torch.stack([
+                    per_sample_surf[:, 2],  # surf_p
+                    per_sample_surf[:, 0],  # surf_ux
+                    per_sample_surf[:, 1],  # surf_uy
+                    per_sample_vol[:, 2],   # vol_p
+                    per_sample_vol[:, 0],   # vol_ux
+                    per_sample_vol[:, 1],   # vol_uy
+                ], dim=1)  # [B, 6]
+                log_sigmas_clamped = torch.clamp(log_sigmas, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
+                precision = torch.exp(-2.0 * log_sigmas_clamped)
+                # Per-sample Kendall NLL: sum_c [ 0.5/sigma_c² * L_{b,c} + log sigma_c ]
+                per_sample_loss = (0.5 * precision * per_sample_kendall + log_sigmas_clamped).sum(dim=1)  # [B]
+                kendall_losses_log = per_sample_kendall.mean(dim=0)  # [6] for legacy logging
+            else:
+                per_sample_loss = per_sample_vol.sum(dim=1) + cfg.surf_weight * per_sample_surf.sum(dim=1)  # [B]
+
+            # Look up EMA values for each sample; default to current per-sample loss for unseen IDs.
+            per_sample_loss_detached = per_sample_loss.detach()
+            sample_ids_list = sample_ids.tolist()
+            ema_vals_list = [
+                sample_loss_ema.get(sid, per_sample_loss_detached[i].item())
+                for i, sid in enumerate(sample_ids_list)
+            ]
+            ema_vals = torch.tensor(ema_vals_list, device=device, dtype=per_sample_loss.dtype)
+
+            # Focal weights from EMA z-score; identity during warmup.
+            if epoch >= cfg.hem_warmup_epochs:
+                ema_mean = ema_vals.mean()
+                ema_std = ema_vals.std() + 1e-8
+                z_score = (ema_vals - ema_mean) / ema_std
+                sample_weights_tensor = (1.0 + cfg.hem_focal_alpha * z_score).clamp(
+                    cfg.hem_weight_min, cfg.hem_weight_max
+                )
+            else:
+                sample_weights_tensor = torch.ones_like(per_sample_loss)
+
+            loss = (sample_weights_tensor * per_sample_loss).mean()
+
+            # Aggregate vol/surf scalars for legacy epoch-mean logging (match shape of baseline).
+            surf_loss = per_sample_surf.mean(dim=0).sum()  # batch-mean of per-sample, then sum over 3 channels
+            vol_loss = per_sample_vol.mean(dim=0).sum()
         else:
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            # Baseline path: per-channel decomposition mean-reduced over masked nodes.
+            # Y channel order: 0=Ux, 1=Uy, 2=p. Kendall channel order: surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy.
+            surf_count = surf_mask.sum().clamp(min=1)
+            vol_count = vol_mask.sum().clamp(min=1)
+            per_channel_surf = (weighted_err * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_count  # [3]
+            per_channel_vol = (weighted_err * vol_mask.unsqueeze(-1)).sum(dim=(0, 1)) / vol_count    # [3]
+            surf_loss = per_channel_surf.sum()  # sum over 3 channels (matches old surf_loss aggregate)
+            vol_loss = per_channel_vol.sum()
+
+            if cfg.use_kendall_uncertainty:
+                # 6 per-channel scalar losses in Kendall order.
+                kendall_losses = torch.stack([
+                    per_channel_surf[2],  # surf_p
+                    per_channel_surf[0],  # surf_ux
+                    per_channel_surf[1],  # surf_uy
+                    per_channel_vol[2],   # vol_p
+                    per_channel_vol[0],   # vol_ux
+                    per_channel_vol[1],   # vol_uy
+                ])
+                log_sigmas_clamped = torch.clamp(log_sigmas, -KENDALL_LOG_SIGMA_CLAMP, KENDALL_LOG_SIGMA_CLAMP)
+                # Kendall, Gal, Cipolla 2018 eq. 9: L = sum_c [ 0.5 * exp(-2*log_sigma_c) * loss_c + log_sigma_c ]
+                precision = torch.exp(-2.0 * log_sigmas_clamped)
+                loss = (0.5 * precision * kendall_losses + log_sigmas_clamped).sum()
+                kendall_losses_log = kendall_losses
+            else:
+                loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
         with torch.no_grad():
@@ -685,6 +801,20 @@ for epoch in range(MAX_EPOCHS):
             epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm_val)
             epoch_clip_fraction_sum += clip_fired
         optimizer.step()
+
+        # Update EMA AFTER optimizer step (with the pre-weight per-sample loss).
+        if cfg.hard_example_mining:
+            per_sample_loss_vals = per_sample_loss_detached.cpu().tolist()
+            for i, sid in enumerate(sample_ids_list):
+                new_val = per_sample_loss_vals[i]
+                prev = sample_loss_ema.get(sid)
+                if prev is None:
+                    sample_loss_ema[sid] = new_val
+                else:
+                    sample_loss_ema[sid] = (
+                        cfg.hem_ema_decay * prev + (1.0 - cfg.hem_ema_decay) * new_val
+                    )
+
         global_step += 1
         log_payload = {
             "train/loss": loss.item(),
@@ -707,7 +837,22 @@ for epoch in range(MAX_EPOCHS):
                 for ci, name in enumerate(KENDALL_CHANNELS):
                     log_payload[f"train/log_sigma_{name}"] = ls[ci].item()
                     log_payload[f"train/effective_weight_{name}"] = eff_w[ci].item()
-                    log_payload[f"train/per_channel_loss_{name}"] = kendall_losses[ci].item()
+                    log_payload[f"train/per_channel_loss_{name}"] = kendall_losses_log[ci].item()
+        if cfg.hard_example_mining:
+            with torch.no_grad():
+                sw_min = sample_weights_tensor.min().item()
+                sw_mean = sample_weights_tensor.mean().item()
+                sw_max = sample_weights_tensor.max().item()
+            log_payload["train/hem_weights_min"] = sw_min
+            log_payload["train/hem_weights_mean"] = sw_mean
+            log_payload["train/hem_weights_max"] = sw_max
+            log_payload["train/hem_per_sample_loss_min"] = per_sample_loss_detached.min().item()
+            log_payload["train/hem_per_sample_loss_mean"] = per_sample_loss_detached.mean().item()
+            log_payload["train/hem_per_sample_loss_max"] = per_sample_loss_detached.max().item()
+            log_payload["train/hem_active"] = float(epoch >= cfg.hem_warmup_epochs)
+            epoch_hem_w_min = min(epoch_hem_w_min, sw_min)
+            epoch_hem_w_max = max(epoch_hem_w_max, sw_max)
+            epoch_hem_w_sum += sw_mean
         wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
@@ -750,6 +895,24 @@ for epoch in range(MAX_EPOCHS):
         log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
         log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
         log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
+    if cfg.hard_example_mining:
+        log_metrics["train/hem_weights_epoch_min"] = epoch_hem_w_min
+        log_metrics["train/hem_weights_epoch_max"] = epoch_hem_w_max
+        log_metrics["train/hem_weights_epoch_mean"] = epoch_hem_w_sum / max(n_batches, 1)
+        if sample_loss_ema:
+            ema_vals_all = torch.tensor(list(sample_loss_ema.values()), dtype=torch.float64)
+            n_ema = ema_vals_all.numel()
+            n_quarter = max(1, n_ema // 4)
+            sorted_vals = torch.sort(ema_vals_all, descending=True).values
+            top25 = sorted_vals[:n_quarter]
+            bot25 = sorted_vals[-n_quarter:]
+            top25_mean = top25.mean().item()
+            bot25_mean = bot25.mean().item()
+            log_metrics["train/hem_top25_loss_mean"] = top25_mean
+            log_metrics["train/hem_bot25_loss_mean"] = bot25_mean
+            log_metrics["train/hem_loss_spread"] = top25_mean / max(bot25_mean, 1e-8)
+            log_metrics["train/hem_ema_coverage"] = n_ema / len(train_ds)
+            log_metrics["train/hem_ema_size"] = n_ema
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
@@ -797,6 +960,15 @@ for epoch in range(MAX_EPOCHS):
             eff_w_arr = (0.5 * torch.exp(-2.0 * torch.tensor(ls_clamped))).numpy()
         ls_str = "  ".join(f"{n}={s:+.3f}(w={w:.3f})" for n, s, w in zip(KENDALL_CHANNELS, ls, eff_w_arr))
         print(f"    kendall: {ls_str}")
+    if cfg.hard_example_mining and "train/hem_loss_spread" in log_metrics:
+        active = "active" if epoch >= cfg.hem_warmup_epochs else "warmup"
+        print(
+            f"    hem({active}): w=[{log_metrics['train/hem_weights_epoch_min']:.3f}, "
+            f"{log_metrics['train/hem_weights_epoch_mean']:.3f}, "
+            f"{log_metrics['train/hem_weights_epoch_max']:.3f}]  "
+            f"spread={log_metrics['train/hem_loss_spread']:.2f}×  "
+            f"coverage={log_metrics['train/hem_ema_coverage']:.2f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -816,6 +988,32 @@ if cfg.use_kendall_uncertainty:
         kendall_summary[f"final/log_sigma_{n}"] = float(s)
         kendall_summary[f"final/effective_weight_{n}"] = float(w)
     wandb.summary.update(kendall_summary)
+
+if cfg.hard_example_mining and sample_loss_ema:
+    # Final top-25% sample IDs by EMA loss — useful to inspect whether the same
+    # samples are consistently hard across the run.
+    items = sorted(sample_loss_ema.items(), key=lambda kv: kv[1], reverse=True)
+    n_total = len(items)
+    n_quarter = max(1, n_total // 4)
+    top25 = items[:n_quarter]
+    bot25 = items[-n_quarter:]
+    top25_mean = sum(v for _, v in top25) / n_quarter
+    bot25_mean = sum(v for _, v in bot25) / n_quarter
+    print(
+        f"\nFinal HEM summary: {n_total}/{len(train_ds)} samples in EMA, "
+        f"top25/bot25 spread = {top25_mean / max(bot25_mean, 1e-8):.2f}× "
+        f"(top mean={top25_mean:.4f}, bot mean={bot25_mean:.4f})"
+    )
+    print("  Top-25 hardest sample IDs (first 50): " +
+          ", ".join(str(sid) for sid, _ in top25[:50]))
+    wandb.summary.update({
+        "final/hem_ema_coverage": n_total / len(train_ds),
+        "final/hem_top25_loss_mean": top25_mean,
+        "final/hem_bot25_loss_mean": bot25_mean,
+        "final/hem_loss_spread": top25_mean / max(bot25_mean, 1e-8),
+        "final/hem_top25_ids": [sid for sid, _ in top25],
+        "final/hem_top25_losses": [v for _, v in top25],
+    })
 
 # Persist the SWA-averaged weights regardless of best_metrics so they survive
 # the run even if no base epoch ever improved val_avg/mae_surf_p.
