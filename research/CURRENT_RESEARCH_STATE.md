@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 16:41
+- 2026-05-13 16:55
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -14,7 +14,7 @@ Edward's #2177 arms produced bit-identical metrics to baseline. Diagnosis: `p.da
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **43.73** | #2405 (Lion β1=0.85, merging 2026-05-13) |
+| **val_avg/mae_surf_p** | **43.73** | #2405 (Lion β1=0.85, merged 2026-05-13) |
 | **test_avg/mae_surf_p** | **41.86** | #2405 — all 4 splits finite; epoch-15 best checkpoint |
 | Peak VRAM | ~42.5 GB | #2405 — unchanged from #2287 |
 | s/epoch | ~126 s | #2287/#2405 — 15 epochs completed within 30-min cap |
@@ -84,19 +84,20 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
 | #2288 | frieren | Lion lr sweep on GeGLU+β1=0.85 baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP (stale) | Beat 43.73 |
-| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP | Beat 43.73 |
+| #2460 | fern | LayerScale γ=0.1 on attn+ffn residuals (zero-rank-loss selective suppression) | WIP — new | Beat 43.73 |
 | #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 43.73 |
 | #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 43.73 |
 | #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP | Beat 43.73 |
 | #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP | Beat 43.73 |
 | #1979 | alphonse | n_layers=6 depth sweep (stale pre-β1 baseline; directionally informative) | WIP (stale) | Beat 43.73 |
-| (new) | askeladd | β1 lower-bound: β1∈{0.80, 0.875} to narrow optimum | Pending assign | Beat 43.73 |
+| #2459 | askeladd | β1 lower-bound: β1∈{0.875, 0.80} to narrow optimum below 0.85 | WIP — new | Beat 43.73 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
 | #2405 | askeladd | **MERGED** | Lion β1=0.85: val=43.73 (−4.8% vs 45.92), test=41.86 (−5.6%). Arm A (β1=0.85) clear winner; Arm B (β1=0.95) catastrophically regresses +19.7%. **New baseline 43.73/41.86.** Direction-smoothness axis: lower β1 → more reactive sign update → faster val convergence with B=4 noisy gradients. |
+| #2401 | fern | CLOSED | GeGLU gate on `PhysicsAttention.to_out` (hidden=56): val=52.98 (+15.4% worse). Bottleneck rank loss (160→56→160) dominates gate benefit. Param-parity ≠ capability-parity. Epoch time +17% (131s vs 112s) → 2 fewer epochs at budget. Reassigned to LayerScale (#2460). |
 | #2315 | thorfinn | CLOSED | RMSNorm: pod stalled. 0 commits, 0 comments, GPU dropped to 0% over 3.5h. Hypothesis untested. Replaced with simpler single-line slice_num=48 assignment (#2432). |
 | #2403 | tanjiro | SENT BACK | swiglu_hidden=320 (mlp_ratio=2): val=48.13 (+4.8%), test=46.19 (+4.2%) at only 14/16 epochs (30-min cap hit). Per-epoch overhead 20%, not 5% as expected. Val −4.5/ep at termination (extrapolated 39–43 range at ep16). Inconclusive — sent back to test swiglu_hidden=256. |
 | #2352 | edward | CLOSED | Lion wd sweep on GeGLU stack. Neither arm beats primary val. Arm A (wd=2e-3): val=46.49 (+1.21%); Arm B (wd=5e-3): val=45.96 (+0.08% noise) but **test=43.90 (−1.01% real)**. Param L2 grows ~58% from init regardless of wd — sign-update dominates, wd axis is shallow on this stack. |
@@ -146,6 +147,7 @@ val=45.92, test=44.35 — beat this to confirm any stack improvement relative to
 - **n_layers=6 on GeGLU stack (#2349 CLOSED)**: +10.6% val at termination. +18% per-epoch cost → only 12 of 13 epochs within 30-min cap; still in steep-descent regime. Depth axis alive, but needs budget > 30-min or cost reduction (smaller n_hidden/slice_num).
 - **Lion β2=0.999 on GeGLU stack (#1844 CLOSED)**: +6.3% val. ~10× longer EMA timescale costs too much warmup within 30-min/16-epoch cap. β2=0.99 confirmed optimal.
 - **Lion β1=0.95 (#2405 Arm B)**: +19.7% val vs baseline. Inertial β1 (sign dominated by stale EMA) badly underperforms at B=4. β1=0.85 is the winner; explore β1∈{0.80, 0.875} to find lower bound of optimum.
+- **GeGLU bottleneck on `to_out` (#2401 CLOSED)**: +15.4% worse. Rank cut (160→56→160) dominates gate benefit. Epoch time +17%. Gating helps in 2-layer FFN context but not 1-layer attention projection at parity params.
 - **SWA mid-training (#1463)**: regresses in 13-epoch monotonic regime. Partial camber_rc signal — revisit at 24+ epochs.
 - **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test. Obsoleted by Lion switch.
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.

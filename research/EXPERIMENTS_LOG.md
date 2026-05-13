@@ -1,5 +1,35 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 16:50 — PR #2401: GeGLU gate in PhysicsAttention.to_out (CLOSED — bottleneck rank loss)
+
+- Student branch: `charliepai2g24h5-fern/attention-output-gating`
+- Hypothesis: Apply GeGLU gate to `PhysicsAttention.to_out` (currently plain Linear(160,160)), using param-parity bottleneck H=56 (27,112 params ≈ 25,760 baseline).
+
+### Results (vs GeGLU baseline #2287: val=45.92; new baseline #2405: val=43.73)
+
+| Metric | This PR | #2287 baseline | Δ vs #2287 | #2405 baseline | Δ vs #2405 |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 52.98 | 45.92 | +15.4% worse | 43.73 | +21.2% worse |
+| test_avg/mae_surf_p | 49.98 | 44.35 | +12.7% worse | 41.86 | +19.4% worse |
+
+Best checkpoint at epoch 14 (30-min cap hit before epoch 15). Epoch time ~131 s vs ~112 s baseline (+17%, 2 fewer epochs at budget).
+
+### Metric artifacts
+- `models/model-charliepai2g24h5-fern-attention-output-gating-20260513-160430/metrics.jsonl`
+
+### Analysis
+
+Three confounding factors, all negative:
+1. **Rank loss dominant.** GeGLU bottleneck replaces `Linear(160,160)` (rank 160) with `H=56` bottleneck. Gate multiplies but cannot recover rank-54 cut. Param-parity ≠ capability-parity.
+2. **Slower per epoch.** Two extra Linears push epoch from ~112s → ~131s. 2 fewer training epochs at 30-min cap.
+3. **Architecture difference vs FFN.** GeGLU worked in FFN (2-layer nonlinear projection, gate selects dims surviving 2nd Linear). `to_out` is 1-layer linear remap — no 2nd Linear to benefit from gating.
+
+Student analysis very thorough. Training was stable (grad_norm monotone 29→3.2, no NaN).
+
+**Reassigned fern** → LayerScale γ=0.1 residual gating (#2460) — same selective-suppression intuition with zero rank loss.
+
+---
+
 ## 2026-05-13 16:41 — PR #2405: Lion β1 sweep β1=0.85 (WINNER — new baseline 43.73/41.86)
 
 - Student branch: `charliepai2g24h5-askeladd/lion-beta1-sweep`
