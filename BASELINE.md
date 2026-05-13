@@ -23,6 +23,7 @@ winner sets the first numeric reference value.
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
 - **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
 - **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=6)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 24 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..5`). `fun_dim = 4 * 6 + 22 - 2 = 44`. _(updated 2026-05-13 by PR #1772, was L=4 in #1548)_
+- **LayerScale**: per-channel learnable γ_l vectors `nn.Parameter(torch.ones(hidden_dim) * 0.1)` (init=0.1) on both attn and MLP residual branches in each `TransolverBlock`; `fx = γ_attn ⊙ attn(ln_1(fx)) + fx` and `fx = γ_mlp ⊙ mlp(ln_2(fx)) + fx`. CaiT-style (Touvron et al. 2021). _(added 2026-05-13 by PR #1799)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -34,6 +35,37 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 03:56 — PR #1799 (`charliepai2g24h4-thorfinn/layerscale-init-0.1`)
+
+LayerScale (CaiT-style, Touvron et al. 2021) per-channel learnable
+residual gating with init=0.1. Adds two `nn.Parameter(torch.ones(hidden_dim) * 0.1)`
+vectors per `TransolverBlock` (one for attn output, one for MLP output)
+that multiply the corresponding branch output before adding to the
+residual stream. **Compounds cleanly with Fourier L=6** — both val and
+test improve by ~−4.7% to −4.9% on top of the merged L=6 stack. All 4
+val splits and all 4 test splits improve. Mechanism is preserved across
+the rebase from L=4 to L=6 (depth-decreasing γ_l trend on MLP branch +
+30%-of-mean per-channel std).
+
+- **`val_avg/mae_surf_p`** = **78.260** (best @ epoch 14, 1 epoch before 30 min timeout — shifted earlier as predicted from slow-start mechanism)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **69.903**
+- **Per-split val** `mae_surf_p` at the best val checkpoint:
+  - `val_single_in_dist` = 85.269 (-8.61% vs #1772)
+  - `val_geom_camber_rc` = 89.049 (-4.21% vs #1772)
+  - `val_geom_camber_cruise` = 62.595 (-0.85% vs #1772)
+  - `val_re_rand` = 76.127 (-4.66% vs #1772)
+- **Per-split test** `mae_surf_p` at the best val checkpoint:
+  - `test_single_in_dist` = 77.850 (-6.57% vs #1772)
+  - `test_geom_camber_rc` = 79.485 (-2.91% vs #1772)
+  - `test_geom_camber_cruise` = 51.705 (-4.42% vs #1772)
+  - `test_re_rand` = 70.573 (-4.68% vs #1772)
+- **Δ vs PR #1772 baseline (82.311 / 73.330)**: **-4.92%** on val_avg, **-4.67%** on 4-split test.
+- **Compound progress**: #1397 → #1552 → #1611 → #1637 → #1548 → #1772 → #1799 → val_avg has improved from 100.957 to 78.260 = **-22.5% over 7 merges**.
+- **Param count**: 669,271 (+1,280 over #1772; +0.19%; two `hidden_dim=128` LayerScale parameter vectors per block × 5 blocks).
+- **Mechanism confirmed across rebase**: Final γ_l means stay in [0.079, 0.119] range (near init=0.1, model does NOT ramp up to CaiT's [0.5, 1.5] expectation); per-channel std reaches 38.8% of mean in block-0 attn (slightly higher than the 33.9% on L=4 — Fourier L=6 gives more useful per-channel structure to gate); MLP branch γ_l means decrease with depth (block-0 mlp 0.119 → block-4 mlp 0.083), partially compensating for stoch-depth's stronger drop rate on later blocks.
+- **Metric artifacts**: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.1-rebased-20260513-031524/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-thorfinn --experiment_name charliepai2g24h4-thorfinn/layerscale-init-0.1`
 
 ### 2026-05-13 02:50 — PR #1772 (`charliepai2g24h4-edward/fourier-coords-L6`)
 
