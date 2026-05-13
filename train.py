@@ -218,9 +218,14 @@ class Transolver(nn.Module):
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
         self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
-        # ResidualFiLM modulates the n_hidden residual stream after each block's
-        # MLP residual add (shared across all blocks; zero-init for identity start).
-        self.residual_film = ResidualFiLM(dim=n_hidden, hidden=8)
+        # ResidualFiLM modulates the n_hidden residual stream after the deeper
+        # blocks (indices 2..n_layers-1). Shared across those blocks; zero-init
+        # for identity start. hidden=4 (reduced capacity to encourage regularizing
+        # behaviour). n_residual_film_first_block_idx controls where modulation
+        # begins — early blocks (0,1) handle in-distribution feature extraction
+        # and previously regressed on val_geom_camber_rc when Re-conditioned.
+        self.n_residual_film_first_block_idx = 2
+        self.residual_film = ResidualFiLM(dim=n_hidden, hidden=4)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -238,8 +243,12 @@ class Transolver(nn.Module):
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx, gamma, beta, log_re=log_re, residual_film=self.residual_film)
+        for block_idx, block in enumerate(self.blocks):
+            apply_resfilm = block_idx >= self.n_residual_film_first_block_idx
+            fx = block(
+                fx, gamma, beta, log_re=log_re,
+                residual_film=(self.residual_film if apply_resfilm else None),
+            )
         return {"preds": fx}
 
 
