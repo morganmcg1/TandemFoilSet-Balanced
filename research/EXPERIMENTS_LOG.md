@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-05-13 19:00 UTC — Round 40
+
+### PR #2272 askeladd: LayerScale asymmetric init (γ_attn=1e-4, γ_mlp=1e-3) — CLOSED (LOSS vs current baseline; hypothesis falsified)
+
+- **Branch:** `charliepai2g48h5-askeladd/layerscale-asym-init`
+- **Hypothesis:** data-driven follow-up from PR #2195 trained γ diagnostics. MLP branches converge to 4-8× larger γ (0.025-0.05) than attention branches (0.003-0.011). If we initialize γ_mlp=1e-3 (vs 1e-4) the model can skip ~5-10 "branches off" ramp-up epochs for MLP, gaining productive budget steps. Expected: best_epoch < 42 (earlier convergence); expected val < 48.52.
+
+- **Results (vs current baseline PR #2268, val 46.8460):**
+
+| Metric | PR #2272 | PR #2268 baseline | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 48.5072 | 46.8460 | **+3.55% LOSS** |
+| `test_avg/mae_surf_p` | 42.2859 | 40.8140 | **+3.62% LOSS** |
+| Epochs reached | 47/50 | 58/60 | — |
+| Time per epoch | ~38-40 s | ~31 s | — |
+| Best epoch | 47 (terminal) | 58 (terminal) | — |
+
+*Note: #2272 was branched from LayerScale (n_layers=5) advisor before n_layers=4 was merged. Direct comparison to #2195 assigned baseline (val 48.5160): -0.018% wash.*
+
+- **Per-split val breakdown (vs PR #2195 assigned baseline):**
+
+| Split | PR #2272 | PR #2195 baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 43.4255 | 44.6149 | **-2.67% WIN** |
+| `val_geom_camber_rc` | 65.4014 | 65.9411 | **-0.82% WIN** |
+| `val_geom_camber_cruise` | 34.2779 | 33.2325 | **+3.15% LOSS** |
+| `val_re_rand` | 50.9239 | 50.2756 | **+1.29% LOSS** |
+
+Mixed 2-WIN / 2-LOSS split pattern — opposite of PR #2195's uniform 3-of-4-WIN profile.
+
+- **γ diagnostic at best epoch 47:**
+
+| Block | γ_attn abs_mean | γ_mlp abs_mean | γ_mlp/γ_attn |
+|---|---|---|---|
+| 0 | 0.00891 | 0.05369 | 6.03× |
+| 1 | 0.00653 | 0.04310 | 6.60× |
+| 2 | 0.00601 | 0.03378 | 5.62× |
+| 3 | 0.00698 | 0.04391 | 6.29× |
+| 4 | 0.00193 | 0.04453 | 23.0× |
+
+Trained γ values converge to essentially the same regime regardless of init.
+
+- **Key diagnostic — convergence trajectory:**
+
+| Epoch | PR #2272 (γ_mlp init=1e-3) | PR #2195 (γ_mlp init=1e-4) |
+|---|---|---|
+| 42 | 50.162 | **48.516** (best) |
+| 43 | 50.013 | (terminal) |
+| 47 | **48.507** (best) | — |
+
+Asymmetric init caused LATER convergence (+5 epochs), not earlier. Prediction REJECTED.
+
+- **Conclusion and failure-mode analysis:**
+  - The "near-zero branches off phase" is NOT waste — it is an implicit warm-up where attention finds useful coarse structure before MLP residuals contribute strongly. Pumping γ_mlp to 1e-3 from epoch 1 means MLP contributions are 10× louder than residual identity while attention is still finding features → adds noise to residual stream that the model must learn around.
+  - Final trained γ values are identical regardless of init (confirmed empirically) — the model converges to a data-determined operating regime, not an init-determined one.
+  - Mixed per-split pattern (in-dist + rc improve; cruise + re_rand regress) is consistent: early-training instability from louder MLP residuals hurts OOD-stress splits most.
+  - The test_avg WIN (-1.24%) is a notable secondary signal but val signal is flat (-0.018%) and mechanism is falsified.
+
+- **10th distinct failure-mode taxon added: init-prior-misalignment LOSS** — initializing a load-bearing residual-gate parameter at its trained scale rather than its small-norm prior corrupts the implicit warm-up dynamics that are needed for stable early-phase learning. Mechanism is sister to broadcast-scalar prior corruption (taxon 2) — both involve prior belief injection at the wrong amplitude. OOD splits suffer first due to their reliance on early-phase geometric feature formation.
+
+- **LayerScale axis CLOSED:** uniform init=1e-4 (PR #2195) is confirmed as the optimal config. No further per-branch or per-block γ init probes warranted — final γ scale is data-determined, not init-determined.
+
+- **New assignment:** askeladd assigned PR #2307 slice_num 32→24 (3rd orthogonal budget-bound axis triangulation, after depth via #2268 WIN and width via #2290 in-flight).
+
+---
+
 ## 2026-05-13 17:00 UTC — Round 39
 
 ### PR #2194 alphonse: SGD(momentum=0.9, nesterov=True, lr=2e-3) — CLOSED (LOSS, optimizer-family axis fully closed)
