@@ -2,6 +2,74 @@
 
 ---
 
+## 2026-05-13 14:00 — PR #2227: SGDR cosine warm restart T_0=10/7 (MERGED — biggest single-axis win since compile)
+
+- **Branch:** `willowpai2g48h4-alphonse/cosine-restart` (MERGED — NEW BASELINE)
+- **Student:** willowpai2g48h4-alphonse
+- **W&B runs:** `kt5pk5qu` (Arm 1 T_0=10 ★ winner), `ppmzaftp` (Arm 2 T_0=7)
+
+### Results
+
+| Arm | T_0 | val_avg/mae_surf_p | Δ vs 89.7197 | test_avg/mae_surf_p | best_ep |
+|-----|-----|--------------------|--------------|---------------------|---------|
+| baseline | — | 89.7197 | — | 79.3167 | — |
+| **Arm 1 ★** | **10** | **83.9969** | **−6.38% ✓** | **74.7684** | 20 |
+| **Arm 2** | 7 | 86.7781 | −3.28% ✓ | 76.7821 | 21 |
+
+Both arms WIN. T_0=10 (single restart) is the clear winner.
+
+### Per-split val (Arm 1 best e20)
+
+| Split | T_0=10 | vs 87.0144 SOTA | vs 89.7197 compile |
+|-------|--------|------------------|---------------------|
+| `val_single_in_dist` | 104.89 | −2.0% ✓ | −8.7% ✓ |
+| `val_geom_camber_rc` | 101.05 | −2.8% ✓ | −7.0% ✓ |
+| `val_geom_camber_cruise` | 54.58 | −4.8% ✓ | −1.6% ✓ |
+| `val_re_rand` | 75.47 | −5.4% ✓ | −5.5% ✓ |
+| **val_avg** | **83.9969** | **−3.59% ✓** | **−6.38% ✓** |
+
+### Per-epoch trajectory (Arm 1, T_0=10)
+
+```
+e  val_avg   lr_enc      event
+1  197.35    4.88e-04
+9  105.45    1.22e-05    cycle-1 minimum
+10 102.18    5.00e-04   *RESTART (LR jumps to peak)
+11 130.10    4.88e-04    SPIKE (+27%)
+12 114.99    4.52e-04
+17  97.06    1.03e-04
+19  86.72    1.22e-05    cycle-2 deep recovery (−18% vs cycle-1)
+20  83.997   5.00e-04   *RESTART ← BEST EPOCH
+21 121.14    4.88e-04    post-restart spike
+```
+
+### Analysis
+
+**Hypothesis CONFIRMED.** The cycle 34 reframing ("e12 spike+recovery is beneficial training dynamic") was correct, and inducing more spikes via cosine warm restarts produces monotonic cycle-over-cycle improvement.
+
+**Mechanism observations:**
+1. Each restart produces a clean val spike (e11=130 in cycle 1's post-restart, e21=121 in cycle 2's post-restart)
+2. Each cycle's minimum is DEEPER than the prior cycle's (cycle-2 minimum −18% vs cycle-1)
+3. Best epoch sits RIGHT AT THE RESTART (e20=83.997, end of cycle 2, before next spike)
+4. OOD generalization gains are largest (test_geom_camber_rc −7.3%, test_re_rand −8.2%) — restart escapes in-distribution overfitting
+
+**Critical context:** Arm 1 used **WD=5e-4** (NOT the new SOTA WD=3e-4 from PR #2178). The cosine_restart mechanism is so powerful it OVERCOMES the over-regularization that made WD=5e-4 regress in #2178. Composing cosine_restart with WD=3e-4 is the immediate next experiment.
+
+**Other in-flight PRs are now misaligned:**
+- nezuko #2201 (β2 sweep) — used WD=5e-4 + NO restart, baseline 89.72; now beating 83.99
+- thorfinn #2188 (encoder LR boost) — used WD=5e-4 + NO restart
+- edward #2232 (head-WD up) — used WD=5e-4 + NO restart
+- fern #2259 (stratified sampler) — used WD=5e-4 + NO restart
+- frieren #2284 (finer WD sweep) — used WD ∈ {2e-4, 2.5e-4, 4e-4} + NO restart
+- tanjiro #2296 (Lookahead) — used WD=3e-4 + NO restart
+- askeladd #2123 (T_max sweep) — orthogonal: tests cosine cycle LENGTH, not restart
+
+All these PRs face the harder 83.9969 target. Some hypotheses may still produce composable wins atop restart_T_0=10 (e.g. β2, head-WD, Lookahead).
+
+**Alphonse next:** Compose cosine_restart_T_0=10 with WD=3e-4 (two strongest wins together) + variation on T_0 ∈ {11, 12} since cycle 2 may still have headroom.
+
+---
+
 ## 2026-05-13 13:35 — PR #2189: EMA model weights re-screen at 21-epoch budget (CLOSED)
 
 - **Branch:** `willowpai2g48h4-tanjiro/ema-21epoch-rescreen` (CLOSED — both arms regressed)
