@@ -396,7 +396,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=4,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -408,7 +408,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
 scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=12, eta_min=1e-6
+    optimizer, T_max=8, eta_min=1e-6
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,

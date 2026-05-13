@@ -239,6 +239,7 @@ def main():
     parser.add_argument("--batch_sizes", type=int, nargs="+", default=[4, 1])
     parser.add_argument("--surf_weight", type=float, default=10.0)
     parser.add_argument("--out_jsonl", type=Path, default=None)
+    parser.add_argument("--mlp_ratio", type=int, default=2)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -262,7 +263,7 @@ def main():
         n_layers=5,
         n_head=4,
         slice_num=64,
-        mlp_ratio=2,
+        mlp_ratio=args.mlp_ratio,
         output_fields=["Ux", "Uy", "p"],
         output_dims=[1, 1, 1],
     )
