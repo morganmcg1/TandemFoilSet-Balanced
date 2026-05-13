@@ -175,6 +175,35 @@
 
 ---
 
+## 2026-05-13 12:05 — PR #2144: Lion β2 sweep β2=0.995 vs β2=0.95 on Lion+MAE+lr=2e-4 (askeladd) — CLOSED, STRONG SIGNAL, NEEDS RETEST ON n_head=2
+
+- **Branch:** `willowpai2g24h5-askeladd/lion-beta2-sweep`
+- **Hypothesis:** β2 (momentum EMA decay, canonical=0.99) untested on TandemFoilSet. β2=0.995 lengthens momentum window (~200 effective steps); β2=0.95 shortens it (~20 steps).
+- **W&B runs:** `b7pyyc0n` (β2=0.995, winner), `94sgx2e9` (β2=0.95)
+
+| Arm | β2 | run_id | best_epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs old baseline (55.41) |
+|-----|-----|--------|------------|---------------------|----------------------|--------------------------|
+| 1 (winner) | 0.995 | `b7pyyc0n` | 16 | **53.815** | **46.609** | **−2.9% / −2.7%** |
+| 2 | 0.95 | `94sgx2e9` | 16 | 64.118 | 54.969 | +15.7% / +14.8% |
+
+**Val split breakdown (Arm 1, β2=0.995):**
+- single_in_dist=57.84 (−3.6), geom_camber_rc=68.85 (+1.5, flat), geom_camber_cruise=33.69 (−3.5), re_rand=54.88 (−0.9)
+
+**Test split breakdown (Arm 1, β2=0.995):**
+- single_in_dist=51.41 (flat), geom_camber_rc=60.80 (−1.5), geom_camber_cruise=28.71 (−2.5), re_rand=45.51 (−1.5)
+
+**Result:** CLOSED. Cannot merge on new n_head=2 compound (val=51.11 — arm is +2.71 above). Key findings:
+1. **Monotonic ordering: 0.95 < 0.99 < 0.995** — three strictly-ordered data points; trend is real
+2. **β2=0.995 wins −2.9% val on old compound** — strongest Lion-internal finding of the round
+3. **Asymmetric direction** (faster decay hurts 15.7% vs slower decay wins 2.9%) — signal quality vs staleness tradeoff heavily favor de-noising for batch_size=4
+4. **Mechanism:** longer momentum window (~200 vs ~100 steps) de-noises direction before `sign(·)` is taken; consistent with #2070 "Lion-direction-led" finding
+5. **EMA(weights) + β2(momentum) appear synergistic** — different smoothing targets
+6. **Student suggested β2=0.999** as natural follow-up given monotonic trend
+
+**Askeladd reassigned:** PR #2271 — β2 sweep on n_head=2 (β2=0.995 confirm transfer + β2=0.999 extend trend) at lr=1e-4. Highest-EV follow-up: strong signal, asymmetric, monotonic at 3 points; direct merge candidate if Arm 1 transfers.
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`
