@@ -988,3 +988,53 @@ thorfinn reassigned to PR #1968 (lr-7e-4): higher peak LR 5e-4→7e-4 with warmu
 **Analysis:** Uniform regression all 4 splits. Root cause: with CosineAnnealingLR over T_max=18, lower peak lr means ~40% less total parameter displacement within the same wall-clock budget. Model is underfitting (still descending at epoch 18) — not overfitting. **lr=5e-4 confirmed optimal lower bound. lr axis closed: 3e-4 dominated, 5e-4 optimum, 7e-4 (thorfinn) testing upper.**
 
 alphonse reassigned to PR #1972 (batch-size-2): halve batch 4→2.
+
+## 2026-05-13 06:20 — PR #1943: [ref-16] Double unified_pos reference points 8→16 — **CLOSED**
+- Student branch: `charliepai2g48h4-edward/ref-16`
+- Hypothesis: ref=16 (finer position normalization) would sharpen model's ability to distinguish local geometric features, especially on geometry-varying OOD splits.
+
+| Metric | ref=16 (this PR) | Baseline #1812 (ref=8) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **86.12** | 82.56 | **+3.56 (+4.3%) ❌** |
+| test_avg/mae_surf_p | 75.49 | 74.13 | +1.35 (+1.8%) ❌ |
+| val geom_camber_rc | 97.29 | 91.39 | **+5.90 (biggest loser)** |
+| val geom_camber_cruise | 65.56 | 66.68 | **−1.12 (only improver)** |
+
+- Artifact: `models/model-charliepai2g48h4-edward-ref-16-20260513-051503/metrics.jsonl`
+- 17/18 epochs (timeout); val still descending at ep17.
+
+**Analysis:** geom_camber_rc regressed sharply (+5.90) while geom_camber_cruise improved (−1.12), net negative. The dilution hypothesis is plausible: doubling reference points weakens any single reference's gradient contribution, slowing convergence within the 30-min budget. **Axis disposition: ref=16 closed; ref=8 confirmed optimum upper-side.**
+
+---
+
+## 2026-05-13 06:20 — PR #1919: [mlp-ratio-4] Double FFN width mlp_ratio 2→4 — **CLOSED**
+- Student branch: `charliepai2g48h4-frieren/mlp-ratio-4`
+- Hypothesis: mlp_ratio=4 adds FFN capacity (+29% params) without depth-dilution penalty seen in n_layers probes.
+
+| Metric | mlp_ratio=4 (this PR) | Baseline #1812 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **89.82** | 82.56 | **+7.26 (+8.8%) ❌** |
+| test_avg/mae_surf_p | 80.17 | 74.13 | +6.04 (+8.1%) ❌ |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-mlp-ratio-4-20260513-050053/metrics.jsonl`
+- 17/18 epochs (timeout); +29% params → 15% slower per epoch, cosine schedule cut 1 epoch short.
+
+**Analysis:** All 4 splits regressed 3–9%. Two causes: (1) ~1500-sample dataset can't leverage extra FFN capacity — overfits subtler patterns; (2) wall-clock penalty cuts cosine schedule short. **Axis disposition: mlp_ratio>2 closed. Half FFN (mlp_ratio=1) assigned to frieren #1992 to complete the bracket.**
+
+---
+
+## 2026-05-13 06:20 — PR #1901: [eta-min-1e-4] Bracket LR floor higher eta_min=5e-5→1e-4 — **CLOSED**
+- Student branch: `charliepai2g48h4-fern/eta-min-1e-4`
+- Hypothesis: eta_min=5e-5 was just merged; bracket whether higher floor continues to improve.
+
+| Metric | eta_min=1e-4 (this PR) | Baseline #1812 (eta_min=5e-5) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **85.06** | 82.56 | **+2.50 (+3.0%) ❌** |
+| test_avg/mae_surf_p | 76.41 | 74.13 | +2.28 (+3.1%) ❌ |
+
+- Artifact: `models/model-charliepai2g48h4-fern-eta-min-1e-4-20260513-045455/metrics.jsonl`
+- 18/18 epochs; final-epoch LR = 1.03e-4 confirmed.
+
+**Analysis:** LR floor optimum is NOT monotone — 5e-5 is the sweet spot. At 1e-4 final-epoch updates are 2× larger, perturbing the settling basin under grad-clip. OOD asymmetry (test +2.28 > val +2.50) suggests flatter but geometrically-unspecialized minimum. Combined with #1695 (eta_min=0 → 84.67) and #1855 (eta_min=5e-5 → 83.95 merged), the 3-point bracket is clean. **eta_min axis CLOSED: 5e-5 optimum.**
+
+**New assignments after this round:** fern #1990 (cawr-t0-9), edward #1991 (warmup-2ep), frieren #1992 (mlp-ratio-1).
