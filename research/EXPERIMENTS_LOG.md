@@ -168,6 +168,64 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 05:05 — PR #1869: Huber δ down-sweep (0.25, 0.1) on #1745 stack (alphonse) — **CLOSED (P10: Huber δ has sharp non-monotone optimum at 0.5)**
+**Branch:** `charliepai2g24h3-alphonse/huber-delta-0p25-0p1-on-1745` | **Status: CLOSED**
+
+- **Hypothesis:** Extending the 1.0→0.5 trend, smaller Huber δ should continue to improve on #1745. Predicted δ=0.25 in val 90-91 range, δ=0.1 less certain.
+- **Pass criterion FAIL on both arms:**
+
+| δ | val_avg/mae_surf_p | test_avg/mae_surf_p (safe) | PR | Δ vs #1745 (val) |
+|---:|---:|---:|---|---:|
+| 1.0 | 109.59 | 102.40 | #1484 v2 Arm B | +19.8% |
+| 0.5 | **91.507** | **85.611** | #1745 (baseline) | — |
+| 0.25 | 94.675 | 89.924 | #1869 Arm A | +3.46% ❌ |
+| 0.1 | 95.418 | 90.130 | #1869 Arm B | +4.27% ❌ |
+
+- **Per-split test deltas vs #1745 (regression concentrated on val_single_in_dist):**
+
+| Split | #1745 test | Arm A δ=0.25 | Δ% | Arm B δ=0.1 | Δ% |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 96.26 | 107.70 | **+11.9%** | 107.95 | **+12.1%** |
+| camber_rc | 88.65 | 92.29 | +4.1% | 91.60 | +3.3% |
+| camber_cruise | 77.18 | 77.96 | +1.0% | 77.97 | +1.0% |
+| re_rand | 80.36 | 81.75 | +1.7% | 82.99 | +3.3% |
+
+- **Analysis:** The 1.0→0.5 trend does NOT extrapolate. Regression dominated by val_single_in_dist (+12%), the high-Re bottleneck split. Mechanism: smaller δ approaches MAE for almost all residuals (the quadratic region |r|<δ becomes negligible), removing magnitude information that discriminates high-Re samples. The Huber quadratic region was carrying useful signal on the bottleneck split, not dampening noise — the OPPOSITE of the naive "smaller δ helps with outliers" intuition. δ=0.25 ≈ δ=0.1 (94.68 vs 95.42) — past the inflection at 0.5, gradient distribution is already near-MAE. camber_cruise nearly invariant (Δ ≤ +1.0%): its target magnitudes are smallest, residuals mostly below δ even at 0.25, so δ in [0.5, 0.25, 0.1] barely shifts its gradient distribution.
+- **New universal principle P10 added.** Huber δ optimum is sharp at 0.5, not monotone; δ-down hurts the hardest split disproportionately. Spatial dual of P8 (curriculum Goldilocks plateau at sw=20).
+- **Next:** alphonse #1931 tests δ=0.6/0.75 up-direction to resolve inflection-vs-optimum question and close the axis for good.
+- **Artifacts:** `models/model-huber-d0p25-curriculum-cosine14-20260513-030243/{metrics.jsonl,test_safe_eval.json}`, `models/model-huber-d0p1-curriculum-cosine14-20260513-035748/{metrics.jsonl,test_safe_eval.json}`.
+
+---
+
+### 2026-05-13 05:00 — PR #1850: slice_num up-sweep (96, 128) on #1745 stack (fern) — **CLOSED (budget-cap binding; extends P7 to attention-resolution)**
+**Branch:** `charliepai2g24h3-fern/slice-num-sweep-96-128` | **Status: CLOSED**
+
+- **Hypothesis:** Increasing slice_num (96, 128) gives Transolver finer semantic partitioning of the mesh; targeting boundary-layer clustering under surf_weight=20 curriculum.
+- **Pass criterion FAIL on both arms — AND budget-cap blocked:**
+
+| Arm | slice_num | sec/epoch | epochs completed | val_avg | test_avg (safe) | Δ vs #1745 |
+|---|---:|---:|---:|---:|---:|---:|
+| Baseline (#1745) | 64 | ~130 | 14/14 | **91.507** | **85.611** | — |
+| A | 96 | 152 | **12/14** | 101.686 | 95.587 | +10.18% / +9.98% ❌ |
+| B | 128 | 171 | **11/14** | 105.271 | 99.735 | +13.76% / +14.12% ❌ |
+
+- **Per-split val (best epoch) — worst regression on the bottleneck split:**
+
+| Split | #1745 val | Arm A val (96) | Δ | Arm B val (128) | Δ |
+|---|---:|---:|---:|---:|---:|
+| val_single_in_dist | 110.04 | 126.21 | **+16.17** | 131.60 | **+21.56** |
+| val_geom_camber_rc | 100.44 | 114.81 | +14.37 | 116.22 | +15.78 |
+| val_geom_camber_cruise | 71.16 | 75.35 | +4.19 | 78.74 | +7.58 |
+| val_re_rand | 84.38 | 90.36 | +5.99 | 94.52 | +10.14 |
+
+- **Analysis:** Same budget-cap binding pattern as #1770 (depth scaling). slice_num=96 ran at 152 s/ep (only 91% of cosine schedule); slice_num=128 ran at 171 s/ep (only 79% of cosine schedule). Both arms left the LR at ~25-37% of peak, undelivered. Per-split signature (worst regression on val_single_in_dist, the hardest split) is consistent with under-convergence — NOT with the slice-partitioning hypothesis being wrong. The hypothesis remains UNDETERMINED, not falsified.
+- **P7 refined.** P7 generalizes from depth-only to all sec/epoch-expanding axes. Confirmed on depth (#1770) AND attention-resolution (#1850). Implication: prefer budget-neutral / budget-reducing axes in this 30-min/14-epoch regime.
+- **Carry-forward:** fern's Config-field wiring change for slice_num (added Config field + model_config wiring) is correct and useful infrastructure for future sweeps. Will carry it forward.
+- **Next:** fern #1935 tests slice_num=32/48 DOWN direction (faster than baseline → budget-respecting, full 14/14 epochs). Calibrated curve test.
+- **Artifacts:** `models/model-slice-num-96-cosine14-20260513-031132/{metrics.jsonl,test_safe_eval.json}`, `models/model-charliepai2g24h3-fern-slice-num-128-cosine14-20260513-035527/{metrics.jsonl,test_safe_eval.json}`.
+
+---
+
 ### 2026-05-13 04:30 — PR #1822: Domain over-sampling 2×/3× racecar_single (askeladd) — **CLOSED (P9: per-domain sampling is gradient zero-sum)**
 **Branch:** `charliepai2g24h3-askeladd/domain-oversample-racecar-single` | **Status: CLOSED**
 

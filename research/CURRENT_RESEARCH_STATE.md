@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 05:20 UTC
+- **Date**: 2026-05-13 05:40 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -30,10 +30,10 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
-| alphonse | #1869 | `huber-delta-0p25-0p1-on-1745` | WIP — Huber δ=0.25 (Arm A) / δ=0.1 (Arm B) on #1745 stack. #1736 was closed during rebase attempt; reassigned with fresh branch off current HEAD (no rebase). |
+| alphonse | #1931 | `huber-delta-0p6-0p75-up-sweep` | WIP — Huber δ=0.6 (Arm A) / δ=0.75 (Arm B) on #1745 stack. Tests up-direction after #1869 closed (δ=0.25/0.1 both regressed). Resolves inflection-vs-optimum question; expected to close axis for good. |
 | askeladd | #1912 | `per-domain-loss-weighting` | WIP — per-domain LOSS reweighting λ=0.3 (Arm A) / λ=1.0 (Arm B) on racecar_single. Tests whether off-domain regression in #1822 was sampler-specific (sample-exclusion) or gradient-share fundamental (P9). λ=1.0 ≈ matches 2× sampler gradient share in-batch. (#1822 closed — sampling-level both arms regressed val_avg despite single_in_dist −10.5 at 3×, established P9.) |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
-| fern | #1850 | `slice-num-sweep-96-128` | WIP — slice_num=96 (Arm A) / slice_num=128 (Arm B) on merged stack. Tests attention partitioning granularity. |
+| fern | #1935 | `slice-num-down-sweep-32-48` | WIP — slice_num=48 (Arm A) / slice_num=32 (Arm B) on merged stack. Tests opposite direction after #1850 was budget-blocked at slice_num=96/128. Budget-respecting (both arms faster than baseline → full 14/14 epochs). Calibrated curve test. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP v3 — v2 PASSED (Arm B surface-only L=4: val 95.598 / test 89.895, beats #1686 by −2.07%/−2.23%). Sent back for v3 verification on full merged stack (Huber+curriculum+EMA). |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on full merged stack (#1745 now baseline). |
@@ -64,6 +64,8 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 - **n_layers depth scaling** (fern #1770): Both arms (n_layers=6/7) regress +13%/+22% vs #1745 baseline. Budget-cap binding: +20-40% sec/epoch reduces completed epochs, cosine schedule never anneals fully, LR still in steep-descent phase at termination. Split predicted to improve most (val_single_in_dist) regressed most (+19.7% at Arm A). New P7: under binding wall-clock cap, sec/epoch increases trade against schedule completion — prefer width/gating/loss axes over depth axis.
 - **surf_weight=30/50 sweep** (thorfinn #1827): Both arms regress +4-6% val / +5-6% test vs #1745 baseline. Volume mae_vol_p regresses 7.5% (sw=30) and 16% (sw=50). Curriculum plateau is past optimum at sw=20 — pushing harder degrades the surface/volume gradient balance that Huber×curriculum unlocked. Non-monotonic (sw=50 < sw=30) likely single-seed noise on a flat-bottom landscape. New P8: two-stage curriculum has a Goldilocks plateau ~20× base; beyond this, gradient-balance failure dominates and surface MAE follows volume MAE down.
 - **Per-domain SAMPLING oversample** (askeladd #1822): Both arms (2×/3× racecar_single) regress on val_avg (+3.5%/+5.7%) and test_avg (+3.6%/+6.0%) vs #1745 baseline despite the targeted split **improving substantially**: Arm B 3× hit val_single_in_dist 99.55 (−10.49 pts, best ever observed on the bottleneck). Off-domain splits regressed in lock-step at 3×: camber_rc +15.4, camber_cruise +8.8, re_rand +12.3. Mechanism IS real — boosting racecar_single sample share boosts that split's training signal — but the regression is dose-monotonic in the off-domains (2× < 3×). New P9: per-domain SAMPLING-level oversampling is zero-sum at the gradient level under fixed compute. Boosting one domain by k× linearly trades against off-domain generalization. Loss-level reweighting (askeladd #1912) tests whether re-allocating gradient share *within* an unmodified batch escapes the sample-exclusion failure mode.
+- **Huber δ down-sweep** (alphonse #1869): Both arms (δ=0.25/0.1) regress vs #1745 baseline. δ=0.25 → val 94.675 (+3.46%) / test 89.924 (+5.04%); δ=0.1 → val 95.418 (+4.27%) / test 90.130 (+5.28%). The 1.0→0.5 trend does NOT extrapolate. Regression dominated by val_single_in_dist (+11.9%/+12.1%) — the high-Re bottleneck split. Mechanism: smaller δ removes magnitude information from large-residual high-Re samples, which were carrying useful signal (not noise) in the quadratic region. New P10: Huber δ has a sharp non-monotone optimum at ~0.5; δ-down removes magnitude info from the bottleneck split. Spatial dual of P8 (curriculum Goldilocks at sw=20). Up-direction (δ=0.6/0.75, alphonse #1931) tests whether 0.5 is at a true local minimum or inflection.
+- **slice_num up-sweep** (fern #1850): Both arms (slice_num=96/128) regress vs #1745 baseline (+10/+14% val). BUDGET-CAP BINDING — same mechanism as #1770 depth scaling. slice_num=96 ran 152 sec/ep × 12 epochs (only 91% schedule); slice_num=128 ran 171 sec/ep × 11 epochs (only 79% schedule). Hypothesis is NOT falsified — *undetermined* due to incomplete cosine anneal. Per-split signature (worst regression on bottleneck split) is consistent with under-convergence, not architectural pathology. Generalizes P7 from depth-only to all sec/epoch-expanding axes. Down-direction (slice_num=32/48, fern #1935) is budget-respecting and gives a fair signal.
 
 ### Closed (disproved on fair comparison)
 - **FiLM Re-conditioning** (tanjiro #1494 v3): val_avg = 104.98 (+1.8% over 103.10 baseline) / test = 98.59 (+4.0% over 94.76 baseline) on cosine T_max=14 + augment + FiLM (exact #1495 protocol + FiLM only). val_re_rand WORSE under FiLM (+3.6%) — opposite of predicted direction. Root cause: log(Re) already at input dim 13 → FiLM adds redundant route; augmentation + FiLM compete on small dataset. v2's 100.99 was rebase artifact, not FiLM signal.
@@ -130,18 +132,26 @@ model's task-relevant input sensitivity. Rules out the entire family
 of "perturb a meaningful input axis at test time" approaches for
 surrogate models.
 
-**P7 (PR #1770): Under a binding wall-clock cap with cosine T_max=N,
-architectural changes that increase sec/epoch trade against schedule
-completion.** n_layers=6 (+20% sec/epoch) completed only 12/14 epochs;
-n_layers=7 (+40%) only 10/14 epochs. The cosine schedule never reached
-its annealing tail, leaving LR too high for fine-grained surface pressure
-learning. The predicted "val_single_in_dist benefits from depth" inverted:
-the most compute-hungry split (largest in-distribution gradients) regressed
-most when under-trained. Implication: in this budget regime, prefer axes
-that keep sec/epoch ≈ baseline (width, FFN gating, loss, slice_num) over
-axes that scale it (depth, attention resolution, mesh resolution). Depth
-scaling requires either a longer per-run budget or adaptive schedule
-matching epochs to available compute.
+**P7 (refined, PR #1770 + PR #1850): Under a binding wall-clock cap with
+cosine T_max=N, ANY architectural axis that increases sec/epoch trades
+against schedule completion.** Confirmed on:
+- Depth: n_layers=6 (+20% sec/epoch) → 12/14 epochs; n_layers=7 (+40%) → 10/14 (PR #1770).
+- Attention partition resolution: slice_num=96 (+17%) → 12/14; slice_num=128 (+31%) → 11/14 (PR #1850).
+
+The cosine schedule never reaches its annealing tail, leaving LR too high
+for fine-grained surface pressure learning. The predicted "val_single_in_dist
+benefits from refinement" inverted in both cases: the bottleneck split
+regressed *most* when under-trained. Per-split signature (worst
+regression on bottleneck) is the diagnostic — it is consistent with
+under-convergence, NOT with architectural pathology. The hypothesis
+remains UNDETERMINED, not falsified.
+
+Implication: in this 30-min/14-epoch regime, prefer budget-neutral or
+budget-reducing axes (loss shape, schedule shape, augmentation, dropout,
+EMA decay, regularization, smaller slice_num) over budget-expanding
+axes. To honestly test budget-expanding axes, either (a) reduce
+T_max to match achievable epochs, OR (b) raise the per-run budget.
+Both are scope changes that need explicit advisor approval.
 
 **P8 (PR #1827): Two-stage surf_weight curriculum has a Goldilocks
 plateau around 20× base.** Pushing the plateau higher (sw=30, sw=50)
@@ -181,16 +191,38 @@ sample-exclusion failure mode by preserving off-domain samples in
 each batch while still up-weighting the target domain's gradient
 contribution.
 
+**P10 (PR #1869): Huber δ has a sharp non-monotone optimum at ~0.5
+on the curriculum-composed stack.** The 1.0→0.5 trend does NOT
+extrapolate. δ=0.25 and δ=0.1 both regress, with the regression
+concentrated on val_single_in_dist (+12% at δ=0.1). Mechanism: small
+δ approaches MAE for almost all residuals (quadratic region |r|<δ
+becomes negligible), removing the magnitude information that
+discriminates high-Re samples. The Huber quadratic region was
+carrying useful signal on the bottleneck split, not dampening noise —
+the opposite of the naive "smaller δ helps with outliers" intuition.
+Per-split sensitivity confirms δ acts on training-dynamic stability
+(single_in_dist) rather than per-channel signal balance (uniform
+across channels within a split). P10 is the **spatial dual** of P8:
+both 'loss-shape' levers (δ, sw) have local optima not boundary
+points, and pushing either past optimum hurts the hardest split
+disproportionately. Up-direction test (δ=0.6/0.75, alphonse #1931 in
+flight) closes the axis definitively.
+
 ### Potential next directions (round 3+)
-- **Even smaller Huber δ** (alphonse #1869, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability. (#1736 was closed during rebase; reassigned fresh.)
+- **Huber δ up-direction** (alphonse #1931, in flight): δ=0.6/0.75 on #1745 merged stack. Resolves inflection-vs-optimum question after #1869 closed δ-down direction. Expected to close the Huber-δ axis for good after this PR.
+- **slice_num down-direction** (fern #1935, in flight): slice_num=32/48 on #1745 merged stack. Budget-respecting (both arms faster than baseline → full 14/14 epochs). Tests opposite slope after #1850 was budget-blocked at slice_num=96/128. Calibrated curve test.
 - **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. Tests whether the 5-epoch ramp from #1686 is itself a hyperparameter to tune. (#1827 closed — plateau axis past optimum.)
-- **Per-domain LOSS reweighting** (askeladd #1912, in flight): λ=0.3/1.0 multiplier on racecar_single loss with unmodified batch composition. Tests P9 escape route — does gradient-share reallocation *within* an intact batch avoid the off-domain regression that sampling-level (#1822) suffered? λ=1.0 ≈ matches #1822 Arm A's 2× sampler gradient share. If pass: single_in_dist drop with bounded off-domain regression. If fail: P9 generalizes beyond sampling to loss weighting → "gradient-share zero-sum" is the deeper principle.
-- **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack.
-- **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack.
-- **slice_num sweep** (fern #1850, just assigned): slice_num=96/128 on #1745 merged stack. Tests attention partitioning granularity. Mechanically efficient (tiny extra compute). Targeting boundary-layer clustering under surf_weight=20 curriculum.
-- **Larger surf_weight ramp endpoint (100)** — only if thorfinn's 50 arm passes, test 100.
-- **Surface-only Huber**: apply Huber to surface nodes, MSE to volume. Different from whole-loss Huber; could help single_in_dist where surface-pressure-range is large.
+- **Per-domain LOSS reweighting** (askeladd #1912, in flight): λ=0.3/1.0 multiplier on racecar_single loss with unmodified batch composition. Tests P9 escape route — does gradient-share reallocation *within* an intact batch avoid the off-domain regression that sampling-level (#1822) suffered?
+- **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack. Persistent rebase challenge.
+- **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack. Persistent rebase challenge.
+- **Larger surf_weight ramp endpoint (100)** — DEPRIORITIZED. P8 closed plateau-axis as past optimum; further upward push would just compound the volume-MAE regression.
+- **Surface-only Huber** — DEPRIORITIZED based on #1869 per-split analysis (δ acts on training dynamics, not per-channel signal balance). Skip unless a different per-channel motivation emerges.
+- **EMA decay sweep** (UNTOUCHED LEVER): 0.9995, 0.998 vs current 0.999. Single-axis HP sweep, budget-neutral. Good candidate after current sweeps complete.
+- **β2 (AdamW) sweep** (UNTOUCHED LEVER): 0.99 vs current default. Tests adaptive LR responsiveness on small-batch regression.
+- **Augmentation magnitude sweep** (UNTOUCHED LEVER): aoa_jitter_rad 2× / 0.5× current 0.00873. Tests if augment strength is well-tuned.
 - **Mesh-aware positional encoding**: signed distance / arc length as Fourier features (nezuko #1662 v2 covers raw-coord; arc-length is the next step).
 - **Stack winners**: SwiGLU + Fourier PE together once both verify. Architecture changes should compose with Huber+curriculum.
+- **Plateau Protocol watch**: 10+ consecutive closes since #1745 baseline. After current loss-shape/architectural sweeps complete, consider higher-level changes: SAM (Sharpness-Aware Minimization), hierarchical multi-scale attention, FNO components, mesh-aware multi-scale models. These are bigger swings; require code work.
 - **Relative MAE in physical space**: scale-invariant loss for multi-Re training — still unassigned.
 - **dsdf shape descriptor augmentation** (dims 4-11): deeper geometry augmentation vs. scalar AoA/NACA — still unassigned.
+- **Spectral / smoothness regularization**: penalty on |∇y_pred| at surface nodes (physics-motivated smoothing of pressure).
