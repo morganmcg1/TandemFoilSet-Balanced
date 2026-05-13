@@ -372,6 +372,12 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    swa_val_metrics: dict | None = None,
+    swa_val_avg: dict | None = None,
+    swa_test_metrics: dict | None = None,
+    swa_test_avg: dict | None = None,
+    swa_epochs: list[int] | None = None,
+    swa_checkpoint: Path | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -399,6 +405,24 @@ def write_experiment_summary(
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
                     summary[f"test/{split_name}/{k}"] = v
+
+    # H58 SWA: report SWA val/test on a separate set of keys so the advisor can compare
+    # without disturbing the existing best-checkpoint metric paths.
+    if swa_val_avg is not None:
+        summary["swa_val_avg/mae_surf_p"] = swa_val_avg["avg/mae_surf_p"]
+        summary["swa_epochs"] = swa_epochs or []
+        if swa_checkpoint is not None:
+            summary["swa_checkpoint"] = str(swa_checkpoint)
+        if swa_val_metrics is not None:
+            for split_name, m in swa_val_metrics.items():
+                for k, v in m.items():
+                    summary[f"swa_val/{split_name}/{k}"] = v
+    if swa_test_avg is not None and "avg/mae_surf_p" in swa_test_avg:
+        summary["swa_test_avg/mae_surf_p"] = swa_test_avg["avg/mae_surf_p"]
+        if swa_test_metrics is not None:
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    summary[f"swa_test/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -580,6 +604,11 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+# H58 SWA: rolling window of last 3 epochs' state_dicts (model + fourier_enc), CPU-resident
+SWA_WINDOW = 3
+swa_model_sds: list[dict[str, torch.Tensor]] = []
+swa_fenc_sds: list[dict[str, torch.Tensor]] = []
+swa_epochs: list[int] = []
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -650,8 +679,28 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # H58 SWA: persist fourier_enc state with model so test eval can restore
+        # both even after SWA has overwritten the global fourier_enc in-place.
+        torch.save(
+            {"model": model.state_dict(), "fourier_enc": fourier_enc.state_dict()},
+            model_path,
+        )
         tag = " *"
+
+    # H58 SWA: snapshot model + fourier_enc state into the rolling window (CPU, detached).
+    # We append every epoch and trim to the last SWA_WINDOW; this is robust to the wall-clock
+    # timeout that often cuts training short of MAX_EPOCHS.
+    swa_model_sds.append({k: v.detach().cpu().clone() for k, v in model.state_dict().items()})
+    swa_fenc_sds.append({k: v.detach().cpu().clone() for k, v in fourier_enc.state_dict().items()})
+    swa_epochs.append(epoch + 1)
+    if len(swa_model_sds) > SWA_WINDOW:
+        swa_model_sds.pop(0)
+        swa_fenc_sds.pop(0)
+        swa_epochs.pop(0)
+    print(
+        f"[H58 SWA] snapshot at epoch {epoch+1}; window epochs={swa_epochs} "
+        f"(size {len(swa_model_sds)}/{SWA_WINDOW})"
+    )
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
@@ -728,22 +777,104 @@ for k in range(N_FREQS):
         f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
     )
 
+# --- H58 SWA: average last 3 epochs' state_dicts and evaluate ---
+# We share test_loaders between the SWA eval and the best-checkpoint eval to avoid loading
+# the test data twice.
+test_loaders = None
+test_datasets = None
+if best_metrics and not cfg.skip_test:
+    print("\nPreparing held-out test splits (shared for SWA + best-checkpoint eval)...")
+    test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
+    test_loaders = {
+        name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+        for name, ds in test_datasets.items()
+    }
+
+swa_val_metrics: dict | None = None
+swa_val_avg: dict | None = None
+swa_test_metrics: dict | None = None
+swa_test_avg: dict | None = None
+swa_checkpoint_path: Path | None = None
+if len(swa_model_sds) >= 2:
+    print(
+        f"\n[H58 SWA] averaging {len(swa_model_sds)} state_dicts "
+        f"(epochs {swa_epochs})"
+    )
+    avg_model_sd: dict[str, torch.Tensor] = {}
+    for key in swa_model_sds[0].keys():
+        stacked = torch.stack([sd[key].float() for sd in swa_model_sds], dim=0)
+        avg_model_sd[key] = stacked.mean(dim=0).to(swa_model_sds[0][key].dtype)
+    avg_fenc_sd: dict[str, torch.Tensor] = {}
+    for key in swa_fenc_sds[0].keys():
+        stacked = torch.stack([sd[key].float() for sd in swa_fenc_sds], dim=0)
+        avg_fenc_sd[key] = stacked.mean(dim=0).to(swa_fenc_sds[0][key].dtype)
+
+    swa_checkpoint_path = model_dir / "swa_checkpoint.pt"
+    torch.save(
+        {
+            "model": avg_model_sd,
+            "fourier_enc": avg_fenc_sd,
+            "n_snapshots": len(swa_model_sds),
+            "epochs": swa_epochs,
+        },
+        swa_checkpoint_path,
+    )
+    print(f"[H58 SWA] saved SWA checkpoint to {swa_checkpoint_path}")
+
+    # Load averaged weights into the live modules and eval.
+    model.load_state_dict({k: v.to(device) for k, v in avg_model_sd.items()})
+    fourier_enc.load_state_dict({k: v.to(device) for k, v in avg_fenc_sd.items()})
+    model.eval()
+
+    print("[H58 SWA] running val eval on SWA-averaged weights...")
+    swa_val_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    swa_val_avg = aggregate_splits(swa_val_metrics)
+    print(f"[H58 SWA] swa_val_avg/mae_surf_p = {swa_val_avg['avg/mae_surf_p']:.4f}")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, swa_val_metrics[name])
+
+    if test_loaders is not None:
+        print("[H58 SWA] running test eval on SWA-averaged weights...")
+        swa_test_metrics = {
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            for name, loader in test_loaders.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"[H58 SWA] swa_test_avg/mae_surf_p = {swa_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, swa_test_metrics[name])
+
+    swa_record: dict = {
+        "event": "swa",
+        "n_swa_snapshots": len(swa_model_sds),
+        "swa_epochs": swa_epochs,
+        "swa_val_avg": swa_val_avg,
+        "swa_val_splits": swa_val_metrics,
+    }
+    if swa_test_avg is not None:
+        swa_record["swa_test_avg"] = swa_test_avg
+        swa_record["swa_test_splits"] = swa_test_metrics
+    append_metrics_jsonl(metrics_jsonl_path, swa_record)
+else:
+    print(f"\n[H58 SWA] only {len(swa_model_sds)} snapshot(s); SWA skipped")
+
 # --- Test evaluation + local summary ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ckpt = torch.load(model_path, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt["model"])
+    fourier_enc.load_state_dict(ckpt["fourier_enc"])
     model.eval()
 
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
-        test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
-        test_loaders = {
-            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
-            for name, ds in test_datasets.items()
-        }
+        assert test_loaders is not None
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
@@ -759,6 +890,21 @@ if best_metrics:
             "test_splits": test_metrics,
         })
 
+    # H58 SWA: report a single comparison table so the advisor can read terminal vs SWA at a glance.
+    if swa_val_avg is not None:
+        terminal_val_avg = aggregate_splits(split_metrics)
+        terminal_val_p = terminal_val_avg["avg/mae_surf_p"]
+        swa_val_p = swa_val_avg["avg/mae_surf_p"]
+        print("\n[H58 SWA] Terminal-epoch vs SWA comparison:")
+        print(f"  terminal_val_avg/mae_surf_p (epoch {swa_epochs[-1]}) = {terminal_val_p:.4f}")
+        print(f"  swa_val_avg/mae_surf_p (mean of {swa_epochs})    = {swa_val_p:.4f} (Δ {swa_val_p - terminal_val_p:+.4f})")
+        print(f"  best_val_avg/mae_surf_p (epoch {best_metrics['epoch']})       = {best_avg_surf_p:.4f}")
+        if swa_test_avg is not None and test_avg is not None:
+            swa_test_p = swa_test_avg["avg/mae_surf_p"]
+            best_test_p = test_avg["avg/mae_surf_p"]
+            print(f"  best_test_avg/mae_surf_p                       = {best_test_p:.4f}")
+            print(f"  swa_test_avg/mae_surf_p                        = {swa_test_p:.4f} (Δ {swa_test_p - best_test_p:+.4f})")
+
     write_experiment_summary(
         model_path=model_path,
         model_dir=model_dir,
@@ -769,6 +915,12 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        swa_val_metrics=swa_val_metrics,
+        swa_val_avg=swa_val_avg,
+        swa_test_metrics=swa_test_metrics,
+        swa_test_avg=swa_test_avg,
+        swa_epochs=swa_epochs if len(swa_model_sds) >= 2 else [],
+        swa_checkpoint=swa_checkpoint_path,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
