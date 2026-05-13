@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 09:40 UTC
+- **Date / time:** 2026-05-13 10:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -69,7 +69,8 @@ p_weight=1.5 (#2022 frieren) closed — 5 silent retries without SENPAI-RESULT, 
 - p_weight=1.5: ties old baseline but misses new baseline 73.88 by +3.83% (#2022 closed cycle 29)
 - anneal_strategy: linear beats cosine -3.13% in truncated regime (#2055 MERGED); axis now under linear
 - grad_clip=0.5: +12%, undershoots optimizer step magnitude
-- smooth_l1 β<0.25: high seed variance at β=0.10, neither run beats new baseline; β=0.25 confirmed optimum
+- smooth_l1 β<0.25: 0.10 closed (cycle 22), 0.15 closed (#2133 cycle 30, val +1.90% ✗); 0.20 in-flight (#2152) closes axis
+- OneCycleLR max_lr downward: 1.5e-3 closed (#2132 cycle 30, val +1.45% ✗); 2e-3 confirmed optimum under linear
 - EMA model weights: all decay values tested (0.9999, 0.999, 0.99 with/without warmup) regress ~20-25%; OneCycleLR aggressive anneal makes live model strictly better than any EMA snapshot (closed cycle 26)
 
 ### In-flight WIP
@@ -77,11 +78,11 @@ p_weight=1.5 (#2022 frieren) closed — 5 silent retries without SENPAI-RESULT, 
 | PR | Student | Hypothesis |
 |---|---|---|
 | #2085 | fern | batch_size=2 (effective batch 8→4: conjugate to failed grad_accum=4; AdamW tolerates noisier steps) |
-| #2132 | tanjiro | OneCycleLR max_lr 2e-3→1.5e-3 (compound with linear anneal) |
+| #2148 | tanjiro | OneCycleLR three_phase=True (extra anneal phase under linear; untested axis) |
 | #2103 | alphonse | AdamW → NAdam (Nesterov-momentum, more anticipatory than AMSGrad's failed conservatism) |
 | #2101 | edward | AdamW beta1 0.95→0.94 (confirm peak from other side; 0.97 failed +3.6%) |
 | #2087 | thorfinn | AdamW beta2 0.98→0.97 (sweep continuation) |
-| #2133 | frieren | smooth_l1 β 0.25→0.15 midpoint retest under linear (replaces closed #2022 p_weight=1.5) |
+| #2152 | frieren | smooth_l1 β 0.25→0.20 (close axis: 0.15 fail at +1.90%, 0.25 is winner) |
 | #2025 | askeladd | grad_clip max_norm=1.5 midpoint (2.0 traded in-dist for OOD; 1.5 sent back for retry vs new baseline 76.2707) |
 | #2104 | nezuko | OneCycleLR max_lr 2e-3→2.5e-3 (higher peak; 4e-3 diverged under OLD stack only) |
 

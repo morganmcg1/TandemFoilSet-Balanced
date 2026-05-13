@@ -11,6 +11,25 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 10:05 — Cycle 30: 2 closed (#2133/#2132) + 2 new arms (#2148/#2152)
+
+### PR #2133 frieren — smooth_l1 β 0.25→0.15: CLOSED ✗
+
+W&B run: `10xau3bs`. val=75.2822 (+1.90% ✗), test=65.5361 (-0.74% ✓ marginal). 3/4 test splits improved (single_in_dist -2.94%, cruise -1.37%, re_rand -0.67%); geom_camber_rc regressed (+1.58%). Net: val regresses below acceptance, test slightly improves but not enough to offset. β-axis below 0.25 mapped: trend monotonically worse on val. Single-run discipline confirmed — good protocol.
+
+### PR #2132 tanjiro — OneCycleLR max_lr 2e-3→1.5e-3: CLOSED ✗
+
+W&B run: `yrygfn7b`. val=74.9516 (+1.45% ✗), test=66.2303 (+0.32% ≈neutral). Under-fitting confirmed — lower peak LR trades early progress for tail-LR refinement at LRs the model already passed through. Insight: "schedule shape > schedule level once shape is tuned." max_lr=2e-3 confirmed as optimum under linear anneal; max_lr downward axis closed.
+
+### New assignments (cycle 30)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| tanjiro | OneCycleLR three_phase=True (extra anneal phase, compound on linear win) | #2148 |
+| frieren | smooth_l1 β 0.25→0.20 (midpoint; close β-axis between confirmed 0.25 winner and 0.15 fail) | #2152 |
+
+---
+
 ## 2026-05-13 09:40 — Cycle 29: #2055 MERGED + #2022 closed + 2 new arms
 
 ### PR #2055 tanjiro — OneCycleLR anneal_strategy cos→linear: MERGED ✓ (9th win)
