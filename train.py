@@ -460,7 +460,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
     grad_clip: float = 1.0
-    precondition_frequency: int = 10
+    precondition_frequency: int = 5
     max_precond_dim: int = 256
     # Per-channel loss weight for pressure (channels: 0=Ux, 1=Uy, 2=p).
     # Applied linearly to per-element Huber output (after the Huber transform),
