@@ -1,22 +1,26 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 01:55 (round-12: closed #1652 frieren warmup-500 rebase (−0.12% val noise / +0.81% test regression; warmup is *substituted* by β=0.5, not additive); closed #1660 tanjiro EMA (pod stuck 3+hrs in GraphQL rate-limit, never started); assigned #1788 frieren attention-dropout=0.1 (orthogonal regularization axis); assigned #1789 tanjiro surf_weight=15 (loss-balance axis, 1-line change for low failure surface). Key insight: early-training-stabilization axis (warmup + grad-clip + β-shape) is *one* lever with multiple substitutable implementations. Baseline still 64.07.)
+- **As of:** 2026-05-13 02:20 (round-13: **MERGED #1700 L1 loss** — pure L1 wins over β=0.5; val=59.54 (−7.08%), test=51.47 (−7.26%). New baseline. β monotone trend closed: β=2.0>1.0>0.5>0.25>0 all confirmed. Sent back #1775 fern WD=5e-5 and #1653 askeladd grad-clip for L1 rebase. Assigned #1826 thorfinn cosine eta_min=5e-5 (schedule floor on L1 base). Five merged winners total.)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None yet on this branch; instructions
   scoped to the launch (treat experiments as isolated, no W&B logging,
   `SENPAI_TIMEOUT_MINUTES=30` cap per training execution).
 
-## Round-12 research focus
+## Round-13 research focus
 
-4 merged winners → baseline 64.07 (from 110.76 at round-1 start, -42%). Primary focus:
-1. **Stacking sampler 2x on β=0.5** — nezuko #1619 (highest-confidence win).
-2. **Loss shape sweep β=0.25/L1** — thorfinn #1700 (monotone β signal: 2.0>1.0>0.5).
-3. **Grad-clip β=0.5 rebase** — askeladd #1653 (lever is real: -14.92% on old β=1.0 base; must rebase to test stacking).
-4. **FFN capacity** — edward #1741 (mlp_ratio=3: targeted capacity vs uniform widening).
-5. **LR bump** — alphonse #1774 (lr=7.5e-4: step-size increase orthogonal to schedule).
-6. **WD bracket DOWN** — fern #1775 (weight_decay=5e-5: completes the 3-point bracket around 1e-4 default).
-7. **Attention dropout** — frieren #1788 (p=0.1: activation-level regularization, distinct from L2).
-8. **Loss balancing** — tanjiro #1789 (surf_weight=15: up-weight surface loss for surf-p-primary metric).
+**5 merged winners → NEW baseline 59.5354 L1 (from 110.76 at round-1 start, -46%).** Primary focus:
+1. **Grad-clip on L1 baseline** — askeladd #1653 (rebase; grad-clip +β=0.5 gave −6.94% → test if stacks with L1).
+2. **WD=5e-5 on L1 baseline** — fern #1775 (rebase; WD alone gave −4.43% on β=0.5 → likely stacks).
+3. **Cosine floor** — thorfinn #1826 (eta_min=5e-5; ~0.5-2% expected on L1 base).
+4. **Stacking sampler 2x on β=0.5** — nezuko #1619 (will need L1 rebase if result not already < 59.54).
+5. **LR bump** — alphonse #1774 (lr=7.5e-4; was on β=0.5 baseline, will need L1 rebase if win).
+6. **Attention dropout** — frieren #1788 (p=0.1; was on β=0.5 baseline, will need L1 rebase if win).
+7. **Loss balancing** — tanjiro #1789 (surf_weight=15; was on β=0.5 baseline, will need L1 rebase if win).
+8. **FFN capacity** — edward #1741 (mlp_ratio=3; was on β=0.5 baseline, will need L1 rebase if win).
+
+**Key insight from rounds 9-13:** β monotone trend fully confirmed (β=2.0→1.0→0.5→0.25→L1 all monotone). The β=0 limit (L1) is the best loss. "Early-stabilization" cluster (warmup/grad-clip/β-shape) partially substitutes. Capacity axes closed at 30-min cap. WD appears to favor lower values; L1 rebase needed for confirmation.
+
+**Warning for in-flight PRs:** PRs #1619, #1774, #1788, #1789, #1741 were all running against old β=0.5 baseline (64.07). When they submit, compare against new L1 baseline (59.54). Most will need L1 rebase unless they independently beat 59.54.
 
 **Architecture axis status:** Depth (n_layers) CLOSED by #1413+#1588. Uniform width (n_hidden) CLOSED by #1398+#1587+#1688. Only mlp_ratio (FFN-only) and n_head untested.
 
@@ -25,17 +29,18 @@
 ### Merged winners
 | PR | Student | Hypothesis | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |---|---|---|---|---|---|
-| #1633 ✓ | charliepai2g48h5-thorfinn | Huber β=0.5 (sharper loss) | **64.07** | **55.50** | Epoch 37 of 37; still descending; -8.2% vs #1568; wins all 4 splits |
+| #1700 ✓ | charliepai2g48h5-thorfinn | Pure L1 loss (β→0 limit) | **59.54** | **51.47** | Epoch 37 of 37; still descending; -7.08% vs #1633; wins ALL 4 val splits |
+| #1633 ✓ | charliepai2g48h5-thorfinn | Huber β=0.5 (sharper loss) | 64.07 | 55.50 | Epoch 37 of 37; still descending; -8.2% vs #1568; wins all 4 splits |
 | #1568 ✓ | charliepai2g48h5-thorfinn | torch.compile(dynamic=True) + bf16 AMP | 69.83 | 61.87 | Epoch 36 of 36; still improving; -30.9% vs #1532; 2× throughput |
 | #1532 ✓ | charliepai2g48h5-thorfinn | bf16 AMP + scoring-NaN fix | 101.12 | 91.50 | Epoch 17 of 19; -8.7% vs #1444 |
 | #1444 ✓ | charliepai2g48h5-thorfinn | MSE → Smooth-L1 (Huber, β=1.0) | 110.76 | NaN (bug) | Prior baseline |
 
-**Current baseline: val_avg/mae_surf_p = 64.0705, test_avg/mae_surf_p = 55.4961 (PR #1633)**
+**Current baseline: val_avg/mae_surf_p = 59.5354, test_avg/mae_surf_p = 51.4666 (PR #1700 L1)**
 
-> Current advisor branch has: Smooth-L1 (β=0.5) + bf16 AMP + torch.compile(dynamic=True)
+> Current advisor branch has: **Pure L1 loss** + bf16 AMP + torch.compile(dynamic=True)
 > + scoring-NaN workaround. All new PRs inherit these. Epoch budget at 30-min cap: **~37 epochs
-> at ~49.5 s/epoch**. Peak GPU memory: ~24 GB (abundant headroom on 96 GB).
-> **Key signal:** β monotone decreasing — β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07). Sweep continues toward β=0.25 / L1.
+> at ~49.6 s/epoch**. Peak GPU memory: ~24 GB (abundant headroom on 96 GB).
+> **β sweep CLOSED:** β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07) > β=0.25 (60.76) > L1 (59.54). L1 is the best point.
 
 ### Closed (not winners)
 | PR | Student | Hypothesis | val_avg/mae_surf_p | Reason |
@@ -60,32 +65,17 @@
 | #1375 ✗ | charliepai2g48h5-alphonse | `surf_weight` 10 → 30 | 120.394 | Biases away from volume manifold |
 | #1439 ✗ | charliepai2g48h5-tanjiro | `batch_size` 4 → 8 | 155.504 | Wall-clock binding at fp32; now irrelevant |
 
-### In-flight (WIP)
-| PR | Student | Hypothesis | Theme |
-|---|---|---|---|
-| #1619 | charliepai2g48h5-nezuko | Sampler 2× — **3rd rebase onto β=0.5** (highest-confidence next win) | Data/sampler |
-| #1652 | charliepai2g48h5-frieren | Warmup-500 — **2nd rebase onto β=0.5** (OOD lever confirmed, expects compounding) | Schedule |
-| #1700 | charliepai2g48h5-thorfinn | Huber β=0.25 + pure L1 sweep (continue from β=0.5 win) | Loss shape |
-| #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 — **β=0.5 REBASE** (was on stale β=1.0 baseline) | Optimization × diagnostic |
-| #1700 | charliepai2g48h5-thorfinn | Huber β=0.25 + pure L1 sweep (continue from β=0.5 win) | Loss shape |
-| #1619 | charliepai2g48h5-nezuko | Sampler 2× — **3rd rebase onto β=0.5** | Data/sampler |
-| #1741 | charliepai2g48h5-edward | `mlp_ratio` 2 → 3: targeted FFN capacity | Architecture |
-| #1774 | charliepai2g48h5-alphonse | lr 5e-4 → 7.5e-4: faster steps per epoch | Optimizer/LR |
-| #1775 | charliepai2g48h5-fern | weight_decay 1e-4 → 5e-5: WD bracket DOWN sweep | Regularization |
-| #1788 | charliepai2g48h5-frieren | attention dropout=0.1: activation-level regularization | Regularization |
-| #1789 | charliepai2g48h5-tanjiro | surf_weight 10 → 15: up-weight surface loss term | Loss balance |
-
-> **Note on #1700:** Sweeping β downward from 0.5 (merged winner). β=0.25 narrows
-> the quadratic region to |e|<0.25, further L1-ifying the loss. Arm B tests pure L1.
-> Clear monotone signal: β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07).
-
-> **Note on #1701:** Retesting batch=8 from PR #1439 in compile era. At fp32, batch=8
-> hit ~340 s/epoch (5 epochs). At compile+bf16, batch=8 should give ~65-75 s/epoch
-> (~24-27 epochs). Quality vs. epoch-count trade-off.
-
-> **Note on #1688:** n_hidden=160+compile. Per-epoch cost ~65-75 s → ~24-27 epochs in
-> 30 min. Depth ruled out by #1413+#1588; width is the last untested capacity axis.
-> If #1688 wins, follow up with n_hidden=192+compile.
+### In-flight (WIP) — all now against L1 baseline (59.54)
+| PR | Student | Hypothesis | Theme | Notes |
+|---|---|---|---|---|
+| #1653 | charliepai2g48h5-askeladd | Grad clip max_norm=1.0 — **L1 REBASE** (β=0.5 result: −6.94%) | Optimization | Sent back for L1 rebase |
+| #1775 | charliepai2g48h5-fern | weight_decay 5e-5 — **L1 REBASE** (β=0.5 result: −4.43%) | Regularization | Sent back for L1 rebase |
+| #1826 | charliepai2g48h5-thorfinn | CosineAnnealingLR eta_min=5e-5 (LR floor on L1) | Schedule | New assignment |
+| #1619 | charliepai2g48h5-nezuko | Sampler 2× — measured on old baseline; may need L1 rebase | Data/sampler | Monitor when submitted |
+| #1741 | charliepai2g48h5-edward | `mlp_ratio` 2 → 3: targeted FFN capacity | Architecture | Measured on β=0.5; will need L1 rebase if win |
+| #1774 | charliepai2g48h5-alphonse | lr 5e-4 → 7.5e-4: faster steps per epoch | Optimizer/LR | Measured on β=0.5; will need L1 rebase if win |
+| #1788 | charliepai2g48h5-frieren | attention dropout=0.1 | Regularization | Measured on β=0.5; will need L1 rebase if win |
+| #1789 | charliepai2g48h5-tanjiro | surf_weight 10 → 15 | Loss balance | Measured on β=0.5; will need L1 rebase if win |
 
 ## Open research questions
 

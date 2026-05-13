@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-13 02:20 — PR #1700: β=0.25 + L1 sweep — MERGED (L1 wins, new baseline 59.54)
+
+- **Branch:** `charliepai2g48h5-thorfinn/huber-beta-0.25-l1-sweep`
+- **Student:** charliepai2g48h5-thorfinn
+- **Hypothesis:** Continue the monotone β trend: β=0.5 → 0.25 → 0 (pure L1). Two arms.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs #1633 | test_avg/mae_surf_p | Δ vs #1633 |
+|---|---:|---:|---:|---:|
+| β=0.5 baseline (#1633) | 64.0705 | — | 55.4961 | — |
+| **Arm A: β=0.25** | **60.7558** | **−5.17%** | **52.3312** | **−5.70%** |
+| **Arm B: L1 (β→0)** | **59.5354** | **−7.08%** ✓ | **51.4666** | **−7.26%** ✓ |
+
+| Split | β=0.5 | β=0.25 | L1 |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 72.5692 | 66.4260 | **64.8899** |
+| `val_geom_camber_rc` | 78.3209 | 74.3348 | **74.0437** |
+| `val_geom_camber_cruise` | 43.3744 | 42.7601 | **39.9687** |
+| `val_re_rand` | 62.0174 | 59.5022 | **59.2391** |
+
+- **Best epoch:** 37/37 (both arms; still descending at timeout).
+- **Time/epoch:** ~49.6s (unchanged). **Memory:** 23.83 GB.
+- **Artifacts:**
+  - `models/model-charliepai2g48h5-thorfinn-l1-loss-20260513-005443/metrics.jsonl`
+  - `models/model-charliepai2g48h5-thorfinn-huber-beta-0.25-20260513-000538/metrics.jsonl`
+
+### Analysis
+
+**Complete β sweep: β=2.0 (77.81) > β=1.0 (69.83) > β=0.5 (64.07) > β=0.25 (60.76) > L1 (59.54).** Monotone with diminishing returns: 8.2% → 5.2% → 2.0% per halving. The gain saturates near L1 — likely the heavy-tailed surface-pressure residual distribution is well-matched to L1's unit-magnitude gradient throughout training.
+
+**Why L1 > β=0.25:** β=0.25 keeps a small quadratic central region (|e|<0.25), down-weighting small but useful gradient signal. Pure L1 uses subgradient ±1 sign everywhere, giving consistent step size across all residual magnitudes. This pays off in the late cosine tail (visible in smoother trajectory: epoch 33-37 less bouncy on L1).
+
+**Mechanism closed:** β axis is fully characterized. No further β sweep needed — L1 is the optimal point under the 30-min budget.
+
+### Conclusions
+
+- **Merged as new advisor baseline.** val_avg = 59.5354, test_avg = 51.4666.
+- All in-flight PRs that were on β=0.5 baseline (64.07) need L1 rebase to be comparable.
+- L1 + grad-clip and L1 + WD=5e-5 are the next two high-confidence stack candidates.
+
+---
+
+## 2026-05-13 02:20 — PR #1775: WD=5e-5 on β=0.5 — SENT BACK (L1 rebase needed)
+
+- **Student:** charliepai2g48h5-fern
+- **Result:** val_avg=61.2311 (−4.43% vs 64.07); test_avg=53.8792 (−2.91%); wins ALL 4 splits.
+- **Why sent back:** L1 merged (new baseline 59.54); 61.23 does not beat it. WD lever likely stacks.
+- **Per-split analysis:** Mirror-image prediction failed — model under-regularized everywhere. Monotone: WD lower → better across all splits.
+- **Artifacts:** `models/model-charliepai2g48h5-fern-weight-decay-5e-5-20260513-012009/metrics.jsonl`
+
+---
+
+## 2026-05-13 02:20 — PR #1653: grad-clip on β=0.5 — SENT BACK (L1 rebase needed)
+
+- **Student:** charliepai2g48h5-askeladd
+- **Rebase result:** val_avg=59.6214 (−6.94% vs 64.07); test_avg=52.6522 (−5.13%).
+- **Why sent back:** L1 merged (new baseline 59.54); 59.62 does not beat it (within noise margin).
+- **Key diagnostic:** Pre-clip p50 grew from 28→36 at epoch 1 under β=0.5 (sharper β → larger grads). clip_frac ≈ 1.0 throughout. Lever confirmed real on β=0.5; need to test on L1.
+- **Old result (β=1.0):** val_avg=59.42 (−14.92% vs β=1.0 baseline 69.83).
+- **Artifacts:** `models/model-charliepai2g48h5-askeladd-grad-clip-1.0-beta-0.5-rebase-20260513-011736/metrics.jsonl`
+
+---
+
+## 2026-05-13 02:20 — PR #1826: cosine eta_min=5e-5 — ASSIGNED (thorfinn)
+
+- **Branch:** `charliepai2g48h5-thorfinn/cosine-eta-min-5e-5`
+- **Hypothesis:** Add a non-zero LR floor to CosineAnnealingLR (eta_min=5e-5 = lr/10). Prevents gradient collapse in the low-LR tail; motivated by best_epoch=terminal in all recent runs.
+- **Baseline to beat:** val_avg < 59.5354.
+
+---
+
 ## 2026-05-13 01:55 — PR #1652: warmup-500 + cosine (β=0.5 rebase) — CLOSED (substituted by β)
 
 - **Branch:** `charliepai2g48h5-frieren/warmup-500-cosine`
