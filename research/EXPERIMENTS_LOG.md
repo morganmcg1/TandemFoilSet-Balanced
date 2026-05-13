@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-14 [Round 74] UTC — Round 74
+
+### PR #2643 tanjiro: Bias-free Linears (LLaMA convention) — CLOSED (LOSS; 38th taxon)
+
+- **Branch:** `charliepai2g48h5-tanjiro/bias-free-linears`
+- **Hypothesis:** Set `bias=False` on all per-block attention (Q/K/V already False at baseline; in_project_x/fx/slice + to_out actually changed) and MLP (linear_pre/linear_post) Linears. LayerNorm affine unchanged; mlp2 output bias unchanged. Standard LLaMA/PaLM/Falcon convention. Tests whether per-output biases provide useful capacity OR add optimization burden.
+- **Metrics (vs NEW baseline #2614 = 33.3722, test 28.3736):**
+
+| Metric | bias-free | NEW baseline #2614 | Δ % |
+|---|---|---|---|
+| val_avg/mae_surf_p | **34.4150** | 33.3722 | **+3.13% LOSS** |
+| test_avg/mae_surf_p | **29.6907** | 28.3736 | **+4.64% LOSS** |
+
+Per-split val:
+
+| Split | bias-free | NEW baseline | Δ % | Direction |
+|---|---|---|---|---|
+| val_single_in_dist | 26.5785 | 25.3293 | +4.93% | LOSS |
+| val_geom_camber_rc | **49.2983** | 49.5771 | **−0.56%** | **WIN** (only) |
+| val_geom_camber_cruise | 21.9312 | 20.4181 | +7.41% | LOSS |
+| val_re_rand | 39.8518 | 38.1642 | +4.42% | LOSS |
+
+- **Run characteristics:** best=ep66/70, time=~25 s/epoch, peak mem=14.02 GB (unchanged), total params=325,835 (vs predicted 325,547 — student noted Q/K/V were already bias=False at baseline; only in_project_x/fx/slice + to_out + MLP biases removed; net −0.79% vs baseline param count).
+- **Mechanism (student analysis exemplary):** At small width (n_hidden=96, ~326K total params), per-output Linear biases ARE load-bearing. The LLaMA-style "biases absorbed by upstream LN β" theorem requires the optimizer to thread the offset through `W·β = b` pre-image; theoretically achievable at rank-96 projections but optimization-wise non-trivial at this width. The convention's validation at billions-of-params scale doesn't transfer because the marginal capacity from biases becomes negligible only when total capacity is much larger. At ~326K params, ~2,400 bias params = ~0.8% of capacity is non-trivial.
+- **Per-split asterisk:** `val_geom_camber_rc` is the ONLY winning split (−2.5% on the hardest OOD geometry; student measured against old baseline, but vs NEW baseline still slight WIN −0.56%). Suggests biases were over-fitting in-distribution Re/AoA combinations that don't transfer to raceCar M=6-8 camber regime. Cross-confirmed: `camber_cruise` got WORSE (+7.41%), confirming the OOD-favoring effect is geometry-specific to raceCar tandem high-camber. Not pursuing partial bias-free (attention-only) — average-metric loss too large for marginal win on a single split.
+
+**38th closed taxon:** parameter-pruning / bias-free axis closed at this scale. Biases stay as default at this stack. LLaMA convention doesn't transfer to ~326K-param Transolver on TandemFoilSet.
+
+**Action:** Closed. Pivoted tanjiro to #2669 Talking-Heads Attention — opposite direction (PARAMETER-ADDITION at cross-head mixing); structurally novel attention probe across all 38 closed taxa.
+
+---
+
+### PR #2597 thorfinn: n_head=4 sweep — CLOSED (1st stale_wip; hypothesis preserved)
+
+- **Branch:** `charliepai2g48h5-thorfinn/n_head-4-sweep`
+- **Status:** 1st stale_wip. Only advisor placeholder commit `672e9cdfbe0ca91c9d4d4dd26e165562bfd90c7b` dated 2026-05-13T21:40:25Z (Round 65 timestamp). 8+ rounds zero student commits. No student comments.
+- **Hypothesis preserved:** n_head 2→4, dim_head 48→24, total attention inner dim 96 preserved.
+- **Action:** Closed per launch convention. Reassigned as #2668 retry-1 on fresh branch off current advisor (inherits NEW baseline 33.3722 with FiLM #2614 merged, not old 33.4935). This is FIRST stale on n_head=4 specifically (NormFormer was a separate axis that hit 2 stales and was abandoned). If retry-1 also stales, axis abandoned per same convention.
+
+---
+
+### Assignment summary
+
+- **#2668 thorfinn — n_head=4 retry-1:** fresh branch off advisor; preserves hypothesis from #2597; baseline updated 33.4935→33.3722; structurally simpler than NormFormer (less likely to stale).
+- **#2669 tanjiro — Talking-Heads Attention:** Shazeer et al. 2020; 2×2 logits_mixing + 2×2 probs_mixing Linear modules per block (identity-init); +32 params total; first cross-head attention probe in launch; structurally orthogonal to all 38 closed attention-internal taxa (which all operate WITHIN heads); compounds with in-flight QK-Norm #2661 if both win.
+
+All 8 students in-flight, zero idle. No human GH issues.
+
+---
+
 ## 2026-05-14 [Round 73] UTC — Round 73
 
 ### PR #2623 frieren: Learnable attention temperature τ per block — CLOSED (LOSS; 37th taxon)
