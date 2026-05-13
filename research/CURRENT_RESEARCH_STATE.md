@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 18:45 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=51.5839 (PR #2456 post-LN + wd=0 + slice_num=24)**. Cumulative gain from PR #1391: 121.28 → 51.58 = **−57.5%**.
+- 2026-05-13 19:00 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=51.5839 (PR #2456 post-LN + wd=0 + slice_num=24)**. Cumulative gain from PR #1391: 121.28 → 51.58 = **−57.5%**.
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #2456 merged — post-LN swap)
@@ -38,20 +38,21 @@ PR #2456 post-LN swap: **−15.08%** (60.74 → 51.58). All 4 splits improved un
 ### IID/OOD redistribution meta-pattern (Finding #41) — REVISED
 Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's uniform IID+OOD improvement BREAKS this pattern. Revised: the pattern holds for capacity/resolution axes; normalization position is an orthogonal axis that can improve both simultaneously.
 
-## Round-3 status (updated 2026-05-13 18:45)
+## Round-3 status (updated 2026-05-13 19:00)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| thorfinn | #2433 | Per-iter warmup (correct SequentialLR impl) | **wip** |
+| thorfinn | #2508 | Cosine T_max extension: T_max=20 under post-LN | **wip** (NEW) |
 | frieren | #2426 | surf_weight DOWN (sw=5/7) | **wip** |
 | nezuko | #2466 | SwiGLU MLP (param-matched) | **wip** |
 | edward | #2473 | Slot routing temperature: fixed T=1.0/0.5 vs learnable | **wip** |
 | fern | #2474 | Coord-noise augmentation: Gaussian jitter on mesh coords (train only) | **wip** |
 | alphonse | #2485 | Lion gradient noise: LR-scaled Langevin perturbation | **wip** |
-| askeladd | #2494 | Post-LN LR re-calibration: lr=3e-4 vs 1.5e-4 (Finding #20 stale) | **wip** (NEW) |
-| tanjiro | #2499 | RMSNorm under post-LN: stack computation on placement | **wip** (NEW) |
+| askeladd | #2494 | Post-LN LR re-calibration: lr=3e-4 vs 1.5e-4 (Finding #20 stale) | **wip** |
+| tanjiro | #2499 | RMSNorm under post-LN: stack computation on placement | **wip** |
 | tanjiro | #2456 | Pre-LN → Post-LN swap | **MERGED** ✓ | test=51.5839 (−15.08%). **NEW BEST.** |
 | askeladd | #2458 | Lookahead-wrapped Lion (k=5/10) | **CLOSED** ✗ | +9.76% regression. Lion binary updates incompatible with Polyak avg. Finding #45b. |
+| thorfinn | #2433 | Per-iter warmup (correct SequentialLR impl) | **CLOSED** ✗ | +7.78–9.19% regression. Lion+warmup structurally incompatible. Finding #46. |
 | alphonse | #2326 | cosine eta_min=1.5e-5 | **CLOSED** ✗ | +6.24% regression. LR floor ≥ 1e-5 harmful. Finding #44. |
 | edward | #2327 | GELU → SiLU activation swap | **CLOSED** ✗ | +16% regression all 3 trials. Finding #42. |
 | fern | #2117 | EMA decay=0.95/0.99 | **CLOSED** ✗ | Diag-ratio collapse; EMA gain budget-dependent. Finding #43. |
@@ -92,19 +93,21 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 44. **LR floor ≥ 1e-5 in cosine tail is harmful** (#2326): eta_min=0 required for convergence. Revival paths closed.
 45. **Post-LN swap is decisive** (#2456): −15.08% across ALL splits uniformly (13.5–17.3%). Residual-stream stationarity is the load-bearing lever. Computation type (LayerNorm vs RMSNorm) is second-order. Post-LN best_epoch=18 still descending — minimum has headroom. **New baseline: 51.5839**.
 45b. **Lookahead incompatible with Lion's binary updates** (#2458): Polyak averaging of binary direction choices is destructive at k=5. Meta-optimizer lever closed.
+46. **Warmup incompatible with Lion's sign-update, regardless of normalization position** (#2433): Lion's per-coordinate ±lr bound makes warmup's "shrink step magnitude" irrelevant — lr is the only per-step magnitude control. clip_fire stayed ~100% in epoch 1 WITH warmup (the instability warmup targets does not exist under Lion). Finding applies to all LN positions — tanjiro's proposed "post-LN + warmup stack" is dead. The fix in #2303 corrected a discontinuous step-function BUG, not a missing warmup feature.
 
-## Active experiments (7 students — tanjiro IDLE)
+## Active experiments (8 students — all occupied)
 
-### Tier 1: LR re-calibration for post-LN (URGENT — Finding #20 stale)
+### Tier 1: Schedule / LR re-calibration for post-LN (URGENT — Findings #20/#26 stale)
 | PR | Student | Expected gain |
 |---|---|---|
 | #2494 | askeladd | lr=3e-4 under post-LN: −2% to −8% (LR ceiling shifted) |
+| #2508 | thorfinn | T_max=20 cosine extension: −0.5% to −4% (val still descending at ep18) |
 
 ### Tier 2: Architecture / normalization
 | PR | Student | Expected gain |
 |---|---|---|
-| #2433 | thorfinn | Per-iteration warmup: −0.5% to −2% |
 | #2466 | nezuko | SwiGLU MLP (param-matched): −0.3% to −2% |
+| #2499 | tanjiro | RMSNorm under post-LN: second-order but free to test |
 
 ### Tier 3: OOD-targeted levers (per Finding #41)
 | PR | Student | Expected gain |
@@ -120,9 +123,9 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 
 ## Key open questions
 1. **Does lr=3e-4 help under post-LN?** (askeladd #2494) — Finding #20 was on pre-LN; post-LN changes gradient stability boundary. HIGHEST PRIORITY.
-2. **What should tanjiro try next?** — RMSNorm under post-LN? More epoch budget? SwiGLU + post-LN stack? NEEDS ASSIGNMENT.
+2. **Does T_max=20 extend the descent under post-LN?** (thorfinn #2508) — val still descending at epoch 18 is the core signal. T_max=20 is the maximum safe extension per Finding #44.
 3. **Does SwiGLU's gating compound with post-LN?** (nezuko #2466)
-4. **Does per-iteration warmup help post-LN converge faster?** (thorfinn #2433) — warmup was for pre-LN; now critical with best_epoch=18 still descending.
+4. **Does RMSNorm stack with post-LN?** (tanjiro #2499) — computation type was second-order on pre-LN; does it interact differently on post-LN?
 5. **Does coord-noise target OOD without hurting IID?** (fern #2474) — first data-side intervention.
 6. **Does slot routing temperature matter?** (edward #2473) — tests whether learnable T is load-bearing.
 7. **Does Lion gradient noise help find flat minima?** (alphonse #2485) — Langevin regularizer.
@@ -131,8 +134,8 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 - **All new/updated run commands must include `--weight_decay 0.0`**
 - **Post-LN is now the default** in train.py (merged via #2456)
 - **New baseline: 51.5839** — ALL comparisons use this
-- **tanjiro is idle** — must be assigned next experiment immediately
-- **Many lever closures from pre-LN era may be stale** — Finding #20 (lr), Finding #32 (β1), Finding #39 (β2) all need recheck under post-LN if significant gains continue
+- **All 8 students are occupied** — no idle GPUs
+- **Many lever closures from pre-LN era may be stale** — Finding #20 (lr), Finding #32 (β1), Finding #39 (β2), Finding #26 (T_max) all need recheck under post-LN if significant gains continue
 
 ## Lever status summary
 | Lever | Status | Best value |
@@ -147,7 +150,7 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 | n_head | CLOSED | n_head=4 |
 | slice_num | CLOSED | slice_num=24 |
 | mlp_ratio | CLOSED | mlp_ratio=2 |
-| T_max cosine | CLOSED | T_max=18 (full) |
+| T_max cosine | **RECHECKING** (#2508, post-LN) | T_max=18 (pre-LN; may shift) |
 | weight_decay | CLOSED — wd=0 optimal | wd=0 |
 | Attention dropout | CLOSED | 0.0 |
 | Normalization type | CLOSED | LayerNorm |
@@ -157,7 +160,7 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 | EMA | CLOSED (budget-dependent) | — |
 | eta_min | CLOSED | eta_min=0 |
 | Meta-optimizer (Lookahead) | CLOSED — incompatible with Lion | — |
-| Warmup | **ACTIVE** (#2433) | — |
+| Warmup | CLOSED — incompatible with Lion sign-update | — |
 | surf_weight | **ACTIVE** (#2426, sw↓) | — |
 | MLP architecture | **ACTIVE** (#2466, SwiGLU) | — |
 | Slot routing temperature | **ACTIVE** (#2473) | — |

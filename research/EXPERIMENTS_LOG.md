@@ -1801,3 +1801,26 @@ Per-split (Arm 1, k=5): in_dist=70.90 (+13.69%), rc=75.89 (+7.00%), cruise=51.02
 - **Analysis**: Lookahead's slow-step Polyak averaging started from initialization (slow weights=0). In epoch 1, the first slow-step at k=5 iterations pulled parameters back toward the origin — classic "early-training anchor drag." This is fundamentally incompatible with Lion's structure: Lion's sign-based binary updates have no local-exploration phase that Polyak averaging is designed to smooth. Averaging binary direction choices is destructive, not regularizing. The meta-optimizer lever is closed for Lion. Finding #45b established.
 
 → Assigned askeladd LR re-calibration (PR #2494): test lr=3e-4 under post-LN.
+
+## 2026-05-13 19:00 — PR #2433: Per-iteration warmup under Lion+post-LN (CLOSED ✗)
+- willowpai2g48h1-thorfinn/lion-warmup-correct
+- **Hypothesis**: PR #2303 removed a per-epoch step-function warmup bug. This PR re-implemented warmup correctly as a smooth per-iteration LinearLR schedule (total_iters=steps_per_epoch). The hypothesis was that reducing early LR 10× would stabilize noisy early gradients and improve convergence. Tested at 2-epoch (Arm 1) and 1-epoch (Arm 2) warmup durations.
+- **Results**:
+
+| Arm | warmup | test_avg | vs OLD baseline (60.74) | vs NEW baseline (51.58) | W&B |
+|---|---|---|---|---|---|
+| Arm 1 | 2-epoch | ~65.45 | **+7.78%** | **~+26.9%** | — |
+| Arm 2 | 1-epoch | ~66.31 | **+9.19%** | **~+28.6%** | — |
+
+All 4 splits regressed in both arms. Implementation verified correct: LR trajectory exact (1.5e-5 → 1.5e-4 over warmup), scheduler firing per optimizer.step().
+
+- **Analysis**: **The load-bearing finding is a mechanism inversion.** Warmup's "noisy early grad → big step" intuition is an Adam-era heuristic. Under Lion's sign-based update, this intuition does NOT apply:
+  - Lion's update is `±lr` per coordinate regardless of gradient magnitude — lr is the only per-step magnitude control
+  - Reducing lr 10× via warmup just shrinks the step; it does NOT add signal or stabilize directions
+  - gn_mean dropped only from ~99 → 82 (not the predicted 15–25) — confirming LR doesn't change gradient direction statistics, only step size
+  - clip_fire stayed ~100% in epoch 1 WITH warmup — the gradient instability warmup targets is not present in this regime
+  - Lookahead (#2458) had the same incompatibility signature from a different angle: both meta-optimizer interventions assume Adam-like local exploration that Lion's binary quantization eliminates
+- **Finding #46**: Lion+warmup interaction is fundamentally negative, **regardless of normalization position**. Warmup is structurally incompatible with Lion's sign-update. The warmup heuristic is an Adam-era idea; it does not transfer. Also: the fix in PR #2303 was correct, but the gain was never from "adding good warmup" — it came from removing a discontinuous step-function bug.
+- **Corollary**: Tanjiro's proposed "post-LN + warmup stack" experiment is dead. Finding #46 applies regardless of LN placement.
+
+→ Assigned thorfinn cosine T_max extension under post-LN (PR #2508): T_max=20 vs T_max=18 (current). Hypothesis: post-LN's best_epoch=18 with loss still descending signals the schedule is too short. T_max=20 keeps LR higher across training without violating the LR-floor harm threshold from Finding #44.
