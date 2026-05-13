@@ -485,7 +485,7 @@ val_loaders = {
 }
 
 N_FREQS = 6
-GAUSSIAN_SIGMA = 1.0
+GAUSSIAN_SIGMA = 3.0
 fourier_enc = GaussianRFFEnc(n_freqs=N_FREQS, sigma=GAUSSIAN_SIGMA, seed=42).to(device)
 print(
     f"GaussianRFFEnc: n_freqs={N_FREQS}, sigma={GAUSSIAN_SIGMA}, seed=42, "
