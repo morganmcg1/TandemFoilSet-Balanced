@@ -1,5 +1,59 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 16:41 — PR #2405: Lion β1 sweep β1=0.85 (WINNER — new baseline 43.73/41.86)
+
+- Student branch: `charliepai2g24h5-askeladd/lion-beta1-sweep`
+- Hypothesis: Lion's β1 controls how much the current gradient contributes to the sign update vs. the EMA momentum. Lower β1 → more reactive (current grad weighted heavier); higher β1 → more inertial (EMA dominated). Two-arm sweep: β1∈{0.85, 0.95} vs default 0.9.
+
+### Results (vs GeGLU baseline #2287: val=45.92, test=44.35)
+
+| Arm | β1 | best_epoch | val_avg/mae_surf_p | Δval | test_avg/mae_surf_p | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| **A** | **0.85** | 15 | **43.73** | **−4.8%** | **41.86** | **−5.6%** |
+| B | 0.95 | 15 | 54.97 | +19.7% | 52.21 | +17.7% |
+
+**Arm A (β1=0.85) beats baseline on both val and test, evaluated at only 15/16 epochs (30-min cap hit at epoch 15).** Arm B (β1=0.95) catastrophically regresses.
+
+### Per-split (Arm A β1=0.85, epoch 15)
+
+| Split | val_mae_surf_p | test_mae_surf_p |
+|---|---:|---:|
+| single_in_dist | 48.34 | 41.42 |
+| geom_camber_rc | 56.87 | 50.62 |
+| geom_camber_cruise | 26.95 | 40.33 |
+| re_rand | 42.77 | 35.09 |
+| **avg** | **43.73** | **41.86** |
+
+### grad_norm trace
+
+| Epoch | Arm A (β1=0.85) | Arm B (β1=0.95) |
+|---:|---:|---:|
+| 1  | 28.83 | 18.99 |
+| 4  |  8.43 |  5.16 |
+| 8  |  5.50 |  3.62 |
+| 12 |  3.84 |  2.48 |
+| 15 |  3.16 |  1.98 |
+
+Monotonically decaying grad_norm for both arms. No instability at β1=0.85.
+
+### Metric artifacts
+- `models/model-lion_beta1_0p85_20260513-152032-20260513-152034/metrics.jsonl` (Arm A)
+- `models/model-charliepai2g24h5-askeladd-lion_beta1_0p95-20260513-155636/metrics.jsonl` (Arm B)
+
+### Analysis
+
+**Strong confirmation of the direction-smoothness axis.** β1=0.85 (more current-gradient weight inside Lion's sign) converges faster on the val MAE objective; β1=0.95 (sign dominated by stale EMA) significantly underperforms. With B=4 (noisy gradients), the conventional wisdom would favor a higher β1 to smooth noise — but empirically the opposite holds. The per-step Lion sign update at high β1 is dominated by an EMA that cannot track the rapidly changing gradient field of CFD with small batches. β1=0.85 balances freshness and smoothing.
+
+The result is conservative: 15/16 epochs, so the 16th epoch would likely have improved Arm A further.
+
+**New baseline: val=43.73, test=41.86** (pending merge of #2405).
+
+### Follow-ups
+- Try β1∈{0.80, 0.875} to determine whether optimum is even more reactive or 0.85 is near the sweet spot
+- β1=0.85 + lion_lr=2.5e-4 (more reactive sign + larger step, potentially additive)
+
+---
+
 ## 2026-05-13 16:15 — PR #2315: RMSNorm on GeGLU stack (CLOSED — pod stalled, no result)
 
 - Student branch: `charliepai2g24h5-thorfinn/rmsnorm-vs-layernorm`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 16:15
+- 2026-05-13 16:41
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -14,29 +14,32 @@ Edward's #2177 arms produced bit-identical metrics to baseline. Diagnosis: `p.da
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **45.92** | #2287 (GeGLU gated block-MLPs, merged 2026-05-13) |
-| **test_avg/mae_surf_p** | **44.35** | #2287 — all 4 splits finite; epoch-15 best checkpoint |
-| Peak VRAM | ~42.5 GB | #2287 — GeGLU hidden=216, same as SwiGLU |
-| s/epoch | ~126 s | #2287 — 15 epochs completed within 30-min cap |
+| **val_avg/mae_surf_p** | **43.73** | #2405 (Lion β1=0.85, merging 2026-05-13) |
+| **test_avg/mae_surf_p** | **41.86** | #2405 — all 4 splits finite; epoch-15 best checkpoint |
+| Peak VRAM | ~42.5 GB | #2405 — unchanged from #2287 |
+| s/epoch | ~126 s | #2287/#2405 — 15 epochs completed within 30-min cap |
 
-Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=2e-4, wd=6e-5)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160** + **GeGLU block-MLPs (hidden=216, gate×GELU)** + **dropout=0.1**, epochs=**16**, batch=4, seed=42.
+Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=2e-4, wd=6e-5, β1=0.85, β2=0.99)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160** + **GeGLU block-MLPs (hidden=216, gate×GELU)** + **dropout=0.1**, epochs=**16**, batch=4, seed=42.
 
 **Note on wd:** wd=6e-5 is a FP32 ulp no-op at lr=2e-4 (effective wd=0). Real wd being probed on GeGLU stack at #2352.
 
 **Reproduce current best:**
 ```bash
-cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name geglu_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --lion_beta1 0.85 --experiment_name beta1_085_baseline_check --agent <student>
 ```
 
-### Per-split val/test (new baseline, PR #2287)
+### Per-split val/test (new baseline, PR #2405, epoch 15)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 48.87 | 43.19 |
-| geom_camber_rc | 58.78 | 52.54 |
-| geom_camber_cruise | 29.99 | 43.55 |
-| re_rand | 46.03 | 38.14 |
-| **avg** | **45.92** | **44.35** |
+| single_in_dist | 48.34 | 41.42 |
+| geom_camber_rc | 56.87 | 50.62 |
+| geom_camber_cruise | 26.95 | 40.33 |
+| re_rand | 42.77 | 35.09 |
+| **avg** | **43.73** | **41.86** |
+
+### Previous baseline (PR #2287 GeGLU, now superseded)
+val=45.92, test=44.35 — beat this to confirm any stack improvement relative to pre-β1 work.
 
 ## Key round-5 findings to date
 
@@ -62,7 +65,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | **Lion wd ≤ 1.49e-4 is FP32 ulp no-op at lr=2e-4 (#2177, RE-ARMED)** | **All Lion experiments to date have effectively trained with wd=0. `(1−lr·wd)` rounds to 1.0 in FP32 for wd in our merged range. Re-armed at wd ∈ {5e-4, 2e-3} (firing values). The wd axis is genuinely unexplored.** |
 | **Dropout axis SATURATED at attn=0.1 (#2161, CLOSED)** | **Arm A (attn=0.1+MLP=0.1): val +5.1%, test +5.5%. Arm B (attn=0.05+MLP=0.0): val +2.0%, test +1.9%. Thin-ridge local optimum: more reg → worse, less reg → worse, different locus → worse. Dropout magnitude/locus sweeps no longer pay back GPU time.** |
 | **SwiGLU gated MLP → −9.9% val (#2196, MERGED)** | **val 52.63→47.43, test 49.22→45.01. All 8 splits improve. Gate mechanism: selective per-channel feature suppression. Hardest OOD split gained most.** |
-| **GeGLU (gate×GELU) beats SwiGLU (gate×SiLU) → −3.2% val (#2287, MERGED)** | **val 47.43→45.92, test 45.01→44.35. All 8 splits improve. Mechanism: GELU inside gate aligns with Lion's optimizer-calibrated gradient surface. Resolves paradox: bare-SiLU regresses, gated-SiLU wins, gated-GELU wins more. New baseline 45.92/44.35.** |
+| **GeGLU (gate×GELU) beats SwiGLU (gate×SiLU) → −3.2% val (#2287, MERGED)** | **val 47.43→45.92, test 45.01→44.35. All 8 splits improve. Mechanism: GELU inside gate aligns with Lion's optimizer-calibrated gradient surface. Resolves paradox: bare-SiLU regresses, gated-SiLU wins, gated-GELU wins more. Baseline 45.92/44.35.** |
+| **Lion β1=0.85 → −4.8% val (#2405, MERGED)** | **val 45.92→43.73, test 44.35→41.86. All 4 splits improve. β1 direction-smoothness axis: lower β1 weights current gradient more in sign decision; β1=0.95 (inertial) catastrophically regresses +19.7%. At B=4 noisy regime, fresh gradient signal > EMA smoothing. New baseline 43.73/41.86.** |
 | **LLRD factor=0.85 regresses +7% (#2182, CLOSED)** | **All 8 splits worse by 2.5–4.4 MAE. Lion sign-step is linearly LR-sensitive (no preconditioning) → 52% lr cut on input blocks = 52% step cut, no recovery. Transolver is too shallow (5 blocks vs BERT-12) for safe LLRD factor at 0.85.** |
 | Lion lr=3.5e-4 plateau on n160+δ=0.3 stack (#2035, CLOSED) | val=55.90 (flat vs 55.92). LR bowl wide-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts 3 OOD splits — mild over-stepping. Mechanism: wider model over-rides δ-driven LR shift. |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
@@ -79,19 +83,20 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2288 | frieren | Lion lr sweep on GeGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP (stale, status-checked) | Beat 45.92 |
-| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP | Beat 45.92 |
-| #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, now testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 45.92 |
-| #2405 | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | WIP | Beat 45.92 |
-| #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 45.92 |
-| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP | Beat 45.92 |
-| #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP — new (replaced stalled #2315) | Beat 45.92 |
-| #1979 | alphonse | n_layers=6 depth sweep, actively running (stale baseline, directionally informative) | WIP (stale baseline) | Beat 45.92 |
+| #2288 | frieren | Lion lr sweep on GeGLU+β1=0.85 baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP (stale) | Beat 43.73 |
+| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP | Beat 43.73 |
+| #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 43.73 |
+| #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 43.73 |
+| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP | Beat 43.73 |
+| #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP | Beat 43.73 |
+| #1979 | alphonse | n_layers=6 depth sweep (stale pre-β1 baseline; directionally informative) | WIP (stale) | Beat 43.73 |
+| (new) | askeladd | β1 lower-bound: β1∈{0.80, 0.875} to narrow optimum | Pending assign | Beat 43.73 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
+| #2405 | askeladd | **MERGED** | Lion β1=0.85: val=43.73 (−4.8% vs 45.92), test=41.86 (−5.6%). Arm A (β1=0.85) clear winner; Arm B (β1=0.95) catastrophically regresses +19.7%. **New baseline 43.73/41.86.** Direction-smoothness axis: lower β1 → more reactive sign update → faster val convergence with B=4 noisy gradients. |
 | #2315 | thorfinn | CLOSED | RMSNorm: pod stalled. 0 commits, 0 comments, GPU dropped to 0% over 3.5h. Hypothesis untested. Replaced with simpler single-line slice_num=48 assignment (#2432). |
 | #2403 | tanjiro | SENT BACK | swiglu_hidden=320 (mlp_ratio=2): val=48.13 (+4.8%), test=46.19 (+4.2%) at only 14/16 epochs (30-min cap hit). Per-epoch overhead 20%, not 5% as expected. Val −4.5/ep at termination (extrapolated 39–43 range at ep16). Inconclusive — sent back to test swiglu_hidden=256. |
 | #2352 | edward | CLOSED | Lion wd sweep on GeGLU stack. Neither arm beats primary val. Arm A (wd=2e-3): val=46.49 (+1.21%); Arm B (wd=5e-3): val=45.96 (+0.08% noise) but **test=43.90 (−1.01% real)**. Param L2 grows ~58% from init regardless of wd — sign-update dominates, wd axis is shallow on this stack. |
@@ -139,7 +144,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 - **surf_weight=15 on GeGLU+Lion stack (#2005 CLOSED)**: val +2.13%, test +0.54%, both axes regress. Lion's sign quantization makes loss-balance reweighting weak (changes which params get stepped, not step magnitude). Don't assign further surf_weight sweeps on Lion stacks.
 - **SwiGLU gating at the preprocess entry projector (#2332 CLOSED)**: +10.8% val regression. Gating below dim~32 discards information rather than routing it — no feature diversity for selective suppression. **Principle: GeGLU gating only works at scale (input dim ≥ 160).**
 - **n_layers=6 on GeGLU stack (#2349 CLOSED)**: +10.6% val at termination. +18% per-epoch cost → only 12 of 13 epochs within 30-min cap; still in steep-descent regime. Depth axis alive, but needs budget > 30-min or cost reduction (smaller n_hidden/slice_num).
-- **Lion β2=0.999 on GeGLU stack (#1844 CLOSED)**: +6.3% val. ~10× longer EMA timescale costs too much warmup within 30-min/16-epoch cap. β2=0.99 confirmed optimal. β1 is a separate axis (now assigned).
+- **Lion β2=0.999 on GeGLU stack (#1844 CLOSED)**: +6.3% val. ~10× longer EMA timescale costs too much warmup within 30-min/16-epoch cap. β2=0.99 confirmed optimal.
+- **Lion β1=0.95 (#2405 Arm B)**: +19.7% val vs baseline. Inertial β1 (sign dominated by stale EMA) badly underperforms at B=4. β1=0.85 is the winner; explore β1∈{0.80, 0.875} to find lower bound of optimum.
 - **SWA mid-training (#1463)**: regresses in 13-epoch monotonic regime. Partial camber_rc signal — revisit at 24+ epochs.
 - **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test. Obsoleted by Lion switch.
 - **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
