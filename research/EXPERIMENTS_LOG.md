@@ -523,3 +523,19 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 **Conclusion:** Strongest single result on this branch — −18.7% val, −18.3% test. The T_max=47 baseline was schedule-starved: at epoch 14, the prior schedule had decayed only 23% of its arc (LR ~6.9e-4, near peak). With T_max=12, by epoch 14 the cosine had decayed 92% (LR 5.1e-5). The entire gain is concentrated in the late-epoch low-LR phase that was previously locked out. The prior floor improvements (Huber β, chan_w) were genuine but were measured on a schedule-starved baseline — this run shows the full extent of those changes with a well-calibrated decay.
 
 **Key insight:** Schedule calibration to wall-clock budget is as important as the schedule choice itself. CosineAnnealingLR with T_max matched to actual epochs delivers a qualitatively different optimization trajectory: the model reaches the refinement regime (low LR, small gradient steps) within the timeout window rather than never getting there. All future runs now default to T_max matched to --epochs.
+
+## 2026-05-13 08:00 — PR #1891: OneCycleLR super-convergence — CLOSED
+
+- Branch: `charliepai2g24h2-tanjiro/onecycle-lr-7p5e4`
+- Hypothesis: OneCycleLR (max_lr=7.5e-4, pct_start=0.15, per-batch step) replaces SequentialLR(warmup+cosine) for better convergence under the 30-min/14-epoch budget.
+- Result: REGRESSION
+
+| Metric | T_max=12 floor (#1751) | OneCycle (#1891) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 85.9338 | 88.7936 | **+3.32%** |
+| test_avg (bs=1) | 77.6488 | 79.0530 | **+1.81%** |
+| val_geom_camber_cruise | 61.1470 | 66.0317 | **+7.99%** (worst) |
+
+**Why closed:** Student's structural analysis is correct — OneCycle's pct_start=0.15 sits at peak LR for ~5 of 14 epochs (vs cosine T_max=12 which drops to ~1.4e-4 by epoch 7), then over-anneals to 3e-9 in the final 2 epochs where the model is essentially done improving. OneCycle's signature long-tail anneal is wasted in this budget. Per-batch step resolution did not yield smoother descent. The OOD splits did NOT benefit as predicted — the worst regression is on cruise (low-magnitude split), consistent with too much high-LR time over-fitting to high-magnitude training samples.
+
+**Conclusion:** OneCycle is strictly inferior to cosine T_max=12 on this wall-clock regime. Closed rather than re-tuned because pct_start tuning would at best match the floor — higher-EV directions (architecture capacity, AMP, regularization) are available.

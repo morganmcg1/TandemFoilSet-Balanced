@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 07:15
+- **Date:** 2026-05-13 08:05
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
@@ -24,7 +24,7 @@ bs=1 clean test_avg = **77.6488** (floor progression: 122.70 → 111.15 → 105.
 | #1927 | edward | Huber β lower: β=0.1, per-channel β (Ux=0.1, p=0.5) | Loss tuning | Needs rebase onto T_max=12 |
 | #1489 | thorfinn | AoA flip p=0.25 on Huber floor | Augmentation | Needs rebase onto T_max=12 |
 | #1477 | fern | AMP bf16 + Huber β=0.3 + T_max=12 floor stack (r3) | Training efficiency | Needs rebase onto T_max=12 |
-| #1891 | tanjiro | OneCycleLR (max_lr=7.5e-4, per-batch) | Schedule | Needs rebase onto T_max=12 |
+| #2061 | tanjiro | mlp_ratio=4 (conventional transformer capacity) | Architecture | Just assigned |
 | #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | Needs rebase onto T_max=12 |
 | #2019 | frieren | Cosine completion: T_max=11 (complete) vs eta_min=1e-7 | Schedule | Just assigned |
 
@@ -35,7 +35,8 @@ bs=1 clean test_avg = **77.6488** (floor progression: 122.70 → 111.15 → 105.
 - **#1947 (alphonse chan_w sweep) ASSIGNED**: [1,1,3] vs [1,1,7] under Huber β=0.3 — needs rebase onto T_max=12.
 - **#1849 (edward Huber β sweep) MERGED**: val_avg 111.15 → 105.68 (−4.92%). β=0.3 best overall; cruise prefers β=0.5. Per-channel β assigned as follow-up (#1927).
 - **#1524 (tanjiro grad-accum r3) CLOSED**: +6.2% regression.
-- **#1891 (tanjiro OneCycleLR) ASSIGNED**: needs rebase onto T_max=12.
+- **#1891 (tanjiro OneCycleLR) CLOSED**: +3.32% regression. OneCycle structurally mismatched to 14-epoch budget — too much high-LR time, over-anneals at end. Cosine T_max=12 is strictly better for this wall-clock regime.
+- **#2061 (tanjiro mlp_ratio=4) ASSIGNED**: conventional transformer choice (mlp_ratio=2 is conservative). Larger MLP per block, ~0.85M params. T_max adjusted for slower per-epoch compute.
 - **#1927 (edward) ASSIGNED**: β=0.1 sweep + per-channel β; needs rebase onto T_max=12.
 
 ## Key findings so far
