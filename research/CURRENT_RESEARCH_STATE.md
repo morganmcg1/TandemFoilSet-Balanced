@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 01:05 UTC
+- **Date / time:** 2026-05-13 01:40 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,28 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-11 update — EMA + LR-sweep directions ruled out; capacity + regularization arms launched
+
+### PR #1718 edward — EMA decay=0.999: CLOSED (2nd EMA attempt; direction ruled out)
+
+EMA val=126.4 vs live val=119.5 vs baseline 110.27. With LR cosine-decaying from 5e-4 toward 0 (T_max=50 but only 17 visible epochs), **live weights are still descending at the final epoch** — EMA average cannot catch up to a moving target. Student's own analysis recommended skipping EMA for short runs. EMA direction is now decisively ruled out at this training budget.
+
+### PR #1717 frieren — lr=1e-3: CLOSED (LR sweep decisive at 5e-4)
+
+Clean +10 MAE regression (val=120.2 / test=110.1 vs baseline 110.27 / 99.41) with persistent val oscillation. Combined with #1469 fern's pending lr=2e-3 result, **lr=5e-4 is at or near optimum** on the new p_weight+clip recipe stack.
+
+### PR #1666 tanjiro — smooth_l1 (Huber β=1): SENT BACK (stale baseline)
+
+Direction is promising (smooth_l1 aligns train and eval, less mass on outliers) but the run was on the OLD baseline (val=116.30). Sent back with detailed rebase + code-snippet instructions for combining smooth_l1 with `ch_weights = [1.0, 1.0, p_weight]` per-channel multiplier.
+
+### PR #1749 frieren — mlp_ratio 2 → 3: NEW ASSIGNMENT
+
+33% FFN capacity bump per Transolver block. Justified by: model still descending at final epoch (no plateau/overfit signature) → capacity headroom unused. Throughput drop modest (~15-16 epochs); param count +8%. Orthogonal to all other axes. OOD-vs-IID split behavior will tell us whether capacity is helping generalization or memorization.
+
+### PR #1750 edward — weight_decay 1e-4 → 5e-5: NEW ASSIGNMENT
+
+Halve L2 regularization pressure. Justified by: (a) grad clip is binding on nearly every step — adding L2 on top of an aggressively damped step is "double penalty" on weights; (b) model is under-fitting at the budget cap (still descending) — regularizer should be eased, not tightened; (c) wd was never re-tuned after the r2 recipe stack landed. Diagnostic-rich: train-vs-val gap tells us whether wd was load-bearing.
 
 ## Cycle-10 update — thorfinn cosine-T18 closed + reassigned to AdamW beta2
 
@@ -143,23 +165,25 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-8)
+## Current leaderboard (post cycle-11)
 
 **Active baseline: val=110.27 / test=99.41** (PRs #1480+#1471, merged). Beat 110.27 to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **thorfinn #1738** (AdamW beta2=0.95) | TBD | TBD | WIP (new, cycle-10) | Fast variance EMA for short transformer runs |
-| **frieren #1717** (lr=1e-3) | TBD | TBD | WIP (cycle-8) | LR bracket; justified by clip step-size cap + batch scaling |
-| **edward #1718** (EMA 0.999) | TBD | TBD | WIP (cycle-8) | Budget-calibrated EMA retry (~4.6 half-lives) |
+| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (new, cycle-11) | 33% FFN capacity bump per block |
+| **edward #1750** (wd=5e-5) | TBD | TBD | WIP (new, cycle-11) | Relax L2 (model still under-fitting at budget cap) |
+| **thorfinn #1738** (AdamW beta2=0.95) | TBD | TBD | WIP (cycle-10) | Fast variance EMA for short transformer runs |
 | **nezuko #1665** (n_layers=6) | TBD | TBD | WIP (cycle-7) | Single block; capacity bump within budget |
-| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (cycle-7) | Train/eval shape alignment |
-| ~~thorfinn #1651~~ (cosine T18) | — | — | CLOSED cycle-10 | Stale + dominated by alphonse OneCycleLR |
+| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (sent-back cycle-11) | Stale baseline → rebase + re-run instructed |
 | alphonse #1655 (OneCycleLR) | 111.65 | 101.67 | WIP (sent-back) | Rebase+retry on new base; high-value stack hypothesis |
 | fern #1469 (lr=2e-3+clip) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | askeladd #1465 (surf_w=30) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | New baseline |
 | **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Prior baseline |
+| ~~edward #1718~~ (EMA 0.999) | 126.4 (EMA) / 119.5 (live) | — | CLOSED cycle-11 | EMA lag persists; live still descending at end |
+| ~~frieren #1717~~ (lr=1e-3) | 120.2 | 110.1 | CLOSED cycle-11 | +10 MAE regression with persistent val oscillation |
+| ~~thorfinn #1651~~ (cosine T18) | — | — | CLOSED cycle-10 | Stale + dominated by alphonse OneCycleLR |
 | ~~edward #1654~~ (EMA 0.9995) | 195.33 | 182.94 | CLOSED cycle-8 | EMA half-life mistuned (2.3 vs needed ≥4) |
 | ~~tanjiro #1476~~ (per-field heads) | 137 (W&B) | — | CLOSED cycle-7 | Regression |
 | ~~nezuko #1475~~ (wider 256/8h) | 176 (W&B) | — | CLOSED cycle-7 | Under-trained |

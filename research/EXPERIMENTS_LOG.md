@@ -11,6 +11,53 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~01:40 — Cycle 11: 2 negative results closed, 1 stale-baseline send-back, 2 new arms
+
+### PR #1718 edward — EMA decay=0.999: CLOSED ✗
+
+Second EMA attempt (after #1654 catastrophic decay=0.9995). At decay=0.999 (half-life ~693 steps → 4.6 half-lives in 3200 steps), implementation correct but EMA val=126.4 vs live val=119.5 — EMA still lagging live by ~6 MAE even at end of training. Root cause: LR is still cosine-decaying from 5e-4 toward 0 over CosineAnnealingLR(T_max=50) but only 17 visible epochs — **live weights are still descending at the final epoch**, so the EMA average (weighted by historical positions) cannot keep up with a moving target.
+
+| Metric | EMA val | Live val | Baseline |
+|---|---|---|---|
+| Final | 126.4 | 119.5 | **110.27** |
+
+EMA direction definitively ruled out for this training budget. Student's own analysis recommended "Skip EMA entirely for short runs." Closed and reassigning edward to weight_decay sweep.
+
+### PR #1717 frieren — lr 5e-4 → 1e-3: CLOSED ✗
+
+Single-knob LR doubling on the new p_weight+clip baseline. Result: val=120.2 / test=110.1 — clean +10 MAE regression. Persistent val oscillation across all 17 epochs (no smooth descent). Combined with #1469 fern's earlier lr=2e-3 result, **lr=5e-4 is at or near the optimum** on the current recipe stack. LR sweep direction now ruled out.
+
+| Metric | lr=1e-3 | Baseline (lr=5e-4) |
+|---|---|---|
+| `val_avg/mae_surf_p` | 120.2 | **110.27** |
+| `test_avg/mae_surf_p` | 110.1 | **99.41** |
+
+Closed and reassigning frieren to capacity-bump direction (mlp_ratio).
+
+### PR #1666 tanjiro — smooth_l1 (Huber β=1): SENT BACK (stale baseline)
+
+Tanjiro reported smooth_l1 result against the OLD baseline (val=116.30), but the current bar is 110.27 (post-#1471). Branch is DIRTY — missing p_weight=2.0 and clip_grad_norm=1.0. Direction is promising (smooth_l1 aligns train and eval, less mass on outliers). Sent back with detailed rebase + code-snippet instructions for combining smooth_l1 with `ch_weights = [1.0, 1.0, p_weight]` per-channel multiplier.
+
+### New assignment: PR #1749 frieren — mlp_ratio 2 → 3 (FFN capacity bump)
+
+Rationale: every Transolver block is (PhysicsAttention → MLP). FFN hidden width = `n_hidden * mlp_ratio = 256` at present (modern transformer default is mlp_ratio=4). Adding 33% MLP capacity per block (256 → 384) is the highest-EV next move because:
+1. Baseline run reaches epoch 19 with model **still descending** (no plateau, no overfit signature) → capacity headroom unused.
+2. Throughput drop is modest (~15-16 epochs vs 19); param count +8%.
+3. Orthogonal to LR/schedule/clip/loss-shape/optimizer axes.
+
+If OOD splits (`geom_camber_rc`, `re_rand`) improve, capacity helps generalization. If only `single_in_dist` improves, capacity is going to in-distribution memorization — stop and try inductive bias instead.
+
+### New assignment: PR #1750 edward — weight_decay 1e-4 → 5e-5 (relaxed L2)
+
+Rationale: weight_decay=1e-4 was inherited from the original Transolver config and never re-tuned after the r2 recipe stack landed (bf16+accum2 + p_weight=2.0 + clip_grad_norm=1.0). Three reasons to relax:
+1. Grad clip is binding on nearly every step — adding L2 on top of an aggressively damped step is "double penalty" on weight magnitudes.
+2. Model is still descending at final epoch (under-fitting at budget cap, not over-fitting) — regularizer should be eased, not tightened.
+3. Halving is a conservative one-step move; if it helps, opens door to wd=1e-5 or 0.
+
+Diagnostic-rich brief: train-vs-val gap tells us whether wd was load-bearing. If gap widens substantially, wd was binding and we move to capacity. If train and val track together, wd was loose and removing it helps generalization.
+
+---
+
 ## 2026-05-13 ~01:00 — Cycle 10: thorfinn #1651 closed + reassigned
 
 ### PR #1651 thorfinn (cosine T_max=18): CLOSED ✗
