@@ -861,3 +861,49 @@ Pending round-1 WIPs: #1374 (edward huber-loss, ETA ~20:30 UTC), #1394 (frieren 
 **Conclusion: depth axis fully bracketed and CLOSED.** n_layers ∈ {5, 6, 7} confirms 5 is optimal under global grad-clip. Adding capacity via depth is contraindicated for the current training budget and clipping strategy. If depth becomes relevant again, the approach would need per-layer clip budgets (layerwise gradient clipping) or a longer training budget.
 
 alphonse reassigned to PR #1914 (lr-3e-4): lower peak LR 5e-4→3e-4.
+
+---
+
+## 2026-05-13 04:55 — PR #1888: [adamw-beta1-0.95] β1=0.9→0.95 — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-tanjiro/adamw-beta1-0.95`
+- Hypothesis: Smoother momentum at β1=0.95 (vs default 0.9) for late-training stability under T_max=18 cosine schedule.
+
+| Metric | β1=0.9 (#1695 baseline) | β1=0.95 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 84.67 | **88.32** | **+3.65 (+4.3%)** |
+| test_avg/mae_surf_p | 74.94 | 78.58 | +3.64 (+4.9%) |
+| val single_in_dist | 96.25 | 98.66 | +2.41 |
+| val geom_camber_rc | 93.25 | 97.22 | +3.97 |
+| val geom_camber_cruise | 65.39 | 68.88 | +3.49 |
+| val re_rand | 83.78 | 88.54 | +4.76 |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-adamw-beta1-0.95-20260513-040431/metrics.jsonl`
+- 18/18 epochs, 30.9 min wall-clock
+
+**Analysis:** Uniform regression across all 4 splits. β1=0.95 oversmooths the momentum estimator: at batch_size=4 with bf16 noise, β1=0.9 already provides ~10-step momentum averaging that tracks the loss landscape responsively. Increasing to β1=0.95 (~20-step average) creates lag between actual gradient direction and momentum direction, slowing late-training fine-tuning. Combined with #1886 (β2=0.98 also regressed), the AdamW betas axis is bracketed and CLOSED. Defaults (0.9, 0.999) are optimal under this recipe.
+
+tanjiro reassigned to PR #1923 (wd-1e-5): reduce weight decay 1e-4→1e-5.
+
+---
+
+## 2026-05-13 04:55 — PR #1886: [adamw-beta2-0.98] β2=0.999→0.98 — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-frieren/adamw-beta2-0.98`
+- Hypothesis: Faster variance adaptation at β2=0.98 (Vaswani-2017 default for Transformers) would help under our small-batch noisy regime.
+
+| Metric | β2=0.999 (#1695 baseline) | β2=0.98 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 84.67 | **85.94** | **+1.27 (+1.5%)** |
+| test_avg/mae_surf_p | 74.94 | 76.16 | +1.22 (+1.6%) |
+| val single_in_dist | 96.25 | 97.77 | +1.52 |
+| val geom_camber_rc | 93.25 | 92.57 | −0.68 (flat) |
+| val geom_camber_cruise | 65.39 | 67.40 | +2.01 |
+| val re_rand | 83.78 | 86.01 | +2.23 |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-adamw-beta2-0.98-20260513-040527/metrics.jsonl`
+- 18/18 epochs, 30.9 min wall-clock
+
+**Analysis:** 3/4 splits regress; only geom_camber_rc is flat. β2=0.999's long-horizon variance averaging serves as additional implicit smoothing on top of bf16+small-batch noise. Replacing it with β2=0.98 makes per-parameter step sizes noisier without the Vaswani-2017 warmup that originally justified that beta choice. Faster variance adaptation is the wrong remedy in our regime — grad-clip already normalizes step direction; the variance estimate isn't the bottleneck.
+
+**AdamW betas axis fully bracketed:** β1=0.9 optimum (β1=0.95 +4.3%), β2=0.999 optimum (β2=0.98 +1.5%). Defaults are optimal.
+
+frieren reassigned to PR #1919 (mlp-ratio-4): double Transolver FFN width 2→4.
