@@ -1597,3 +1597,56 @@ The GraphQL rate-limit pattern has been observed across the fleet (see prior not
 
 All 4 assignments fork from new baseline (val=73.81, test=65.04 post-#1831 merge). Each tests a distinct mechanism axis with high-info decision rules (merge / send-back / close) tied to the new variance band (σ=0.86 val from #1731's 2-seed record).
 
+---
+
+## 2026-05-13 — Wave-7 first-results batch review (4 PRs: 2 close + 2 send-back; 2 new assignments)
+
+Four review-ready PRs reviewed. No clean merge candidate — strongest absolute test number (#1757 frieren val=72.11/test=62.91) had a config confound (ran with `--max_norm 1.0`, not the current 0.5 baseline). Two closes on mechanism-clean negatives; two send-backs for cleaner reruns.
+
+### PR #1909 (tanjiro, tanh-bound FiLM) — CLOSED
+
+- **Branch:** `willowpai2g48h2-tanjiro/film-tanh-bound-on-clipfilm`
+- **Hypothesis:** `tanh(γ_raw), tanh(β_raw)` to bound modulation magnitudes to (-1, 1) — addresses #1760 (width) + #1838 (depth) finding that more FiLM capacity → bigger γ/β without metric benefit.
+- **Result:** clean negative — val and test both regress, all splits worse. Tanh saturation fraction = 0% throughout training (the bound never engaged). Baseline modulation magnitudes (|γ|≈0.235, |β|≈0.162) are deep inside tanh's near-linear region, so tanh acts only as a mild sub-linear compression — and that mild compression hurt broadly.
+- **Verdict: CLOSE.** PR's own decision rule triggered: tanh saturation 0% + broad regression = "FiLM magnitudes already bounded by training, tanh is a no-op" + "mild compression destabilizes the FiLM head".
+- **Mechanism finding:** FiLM-output-bound axis closes. The FiLM head's modulation magnitudes are load-bearing where they sit; sub-linear compression of those magnitudes breaks the modulation. Together with #1760/#1838 capacity closures, this confirms **the FiLM head is well-tuned at its current size and shape** — both capacity scaling (width/depth) AND output-bound axes have closed. The next FiLM-related lever must be **structural**, not capacity- or magnitude-related.
+- **Reassigned:** tanjiro → #1938 per-token (is_surface-aware) FiLM — the first structural FiLM change (separate (γ, β) heads for surface vs volume tokens, gated by `is_surface` mask).
+
+### PR #1856 (alphonse, slice_num=32 — 2nd seed) — CLOSED
+
+- **Branch:** `willowpai2g48h2-alphonse/slice-num-32-on-clipfilm`
+- **History:** Round 1 (seed 0) was 74.86 val / 64.13 test on the old baseline frame (fork=74.62) — sent back for 2nd seed against the current 73.81 baseline.
+- **Result:** 2-seed apples-to-apples evaluation against new 73.81 baseline. Val regression exceeds σ=0.86 variance band (clean directional signal, not noise). Seed 1 showed **routing collapse** in block 1 (entropy 0.57, effective slice count ≈ 1.77 — well below the 1.5-entropy starvation floor) — slice_num=32 with this stack is unstable across seeds.
+- **Verdict: CLOSE.** The seed-0 test win didn't survive a 2nd seed under apples-to-apples conditions. Slice-routing downward direction closes for now on this dataset/stack — block-1 collapsed routing is direct evidence that 32 slices is insufficient capacity for at least one Physics-Attention block.
+- **Mechanism finding:** Slice-routing capacity has both directions tested cleanly: upward closed at slice_num=128 (#1818 wall-clock cap), downward closed at slice_num=32 (this PR, routing collapse in 1 of 2 seeds). slice_num=64 is at/near the optimum for this architecture.
+- **Reassigned:** alphonse → #1937 max-norm further-tighten 2-arm sweep {0.25, 0.1} — continues the monotonic tighten-helps signal from #1831 (0.5 beats 1.0 beats 2.0; clip_fraction 99.2% at 0.5).
+
+### PR #1907 (edward, position-jitter σ=0.01) — SEND BACK
+
+- **Branch:** `willowpai2g48h2-edward/pos-jitter-0p01-on-clipfilm`
+- **Hypothesis:** Per-node Gaussian jitter (σ=0.01) on volume mesh coordinates (non-conditioning input augmentation, mechanism-orthogonal to closed Re-jitter #1787).
+- **Result:** Near-baseline / slight regression. Critical finding from the student: the PR-body σ=0.01 spec assumed coords were in [-1, 1], but **the actual coord range is [-9.55, +10.55]** (verified via `x_raw.min/max` from a debug print) — σ=0.01 was wrong-scaled by ~10x relative to the mechanism's intended effect (≈0.1% of coord std). Either the jitter never engaged meaningfully, or it engaged at a near-zero level.
+- **Verdict: SEND BACK** for rerun at **σ=0.05** (≈3% of coord std, 5x larger). This is the cleaner test of the mechanism at its intended scale. Closing at σ=0.01 would be premature — the test never had a fair chance to fire.
+- **Mechanism note:** Student's coord-scale diagnosis is a high-info side finding. Future input-augmentation hypotheses must compute jitter σ relative to the actual feature std, not assume normalized inputs.
+
+### PR #1757 (frieren, β=0.3 on FiLM) — SEND BACK
+
+- **Branch:** `willowpai2g48h2-frieren/beta-0p3-on-filmed`
+- **Hypothesis:** Smooth-L1 β=0.3 (gentler-quadratic-near-zero compression of pressure residuals); port of best β-arm from closed #1600.
+- **Result:** val=72.11 / test=62.91 — strong absolute numbers, both well below the current 73.81 / 65.04 baseline. BUT: the student ran with `--max_norm 1.0` (the old #1731 baseline), not `--max_norm 0.5` (the current #1831 baseline). The result is not apples-to-apples; merging would undo the #1831 max_norm=0.5 win.
+- **Verdict: SEND BACK** for rebase onto current advisor branch (so the max_norm=0.5 baseline is included) and rerun with `--max_norm 0.5`. If β=0.3 still wins on the 73.81 bar, that's a clean merge.
+- **Mechanism note:** The strong absolute numbers suggest β=0.3 mechanism is real — the question is whether it composes with max_norm=0.5 or whether the two stability levers are partially redundant. The rerun answers that directly.
+
+### New assignments
+
+| PR | Student | Slug | Mechanism axis | Forked from |
+|---|---|---|---|---|
+| #1937 | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 |
+| #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change after capacity + output-bound axes closed | 73.81 |
+
+### Wave-7 portfolio status (post first-results batch)
+
+8 students, all active. Carry-over: #1873 fern (SDF), #1906 askeladd (Kendall), #1908 nezuko (routing-temp), #1734 thorfinn (asinh, rebase pending). Reruns: #1907 edward (pos-jitter σ=0.05), #1757 frieren (β=0.3 + max_norm=0.5). New: #1937 alphonse (max-norm-tight), #1938 tanjiro (per-token FiLM).
+
+---
+
