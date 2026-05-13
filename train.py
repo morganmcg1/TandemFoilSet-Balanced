@@ -296,12 +296,14 @@ class FiLMTransolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   vol_loss_kind: str = "huber") -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
-    ``score.py`` (float64, non-finite samples skipped).
+    ``score.py`` (float64, non-finite samples skipped). Surface uses Huber;
+    volume uses ``vol_loss_kind`` (huber or mse) to mirror the training split.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -319,15 +321,19 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            sq_err_huber = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
+            if vol_loss_kind == "huber":
+                vol_err = sq_err_huber
+            else:  # "mse"
+                vol_err = (pred - y_norm).pow(2)
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (vol_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err_huber * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -467,6 +473,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    vol_loss_kind: str = "huber"  # "huber" (Smooth-L1 β=1) or "mse"; surface always Huber
 
 
 cfg = sp.parse(Config)
@@ -601,7 +608,10 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        # Per-element residuals in both loss kinds; surface always uses Huber,
+        # volume picks one of them per cfg.vol_loss_kind. Cheap: two elementwise ops.
+        sq_err_huber = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+        sq_err_mse = (pred - y_norm).pow(2)
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
         m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
@@ -616,17 +626,26 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        # Apply per-sample re_weight to the per-element error; surf_weight stays on top.
-        weighted_err = sq_err * re_weight_expanded
-        vol_loss = (weighted_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (weighted_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # Apply per-sample re_weight to both per-element residual variants; surf_weight stays on top.
+        weighted_huber = sq_err_huber * re_weight_expanded
+        weighted_mse = sq_err_mse * re_weight_expanded
+
+        surf_loss = (weighted_huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        if cfg.vol_loss_kind == "huber":
+            vol_loss = (weighted_huber * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        else:  # "mse"
+            vol_loss = (weighted_mse * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        # Diagnostic: also compute the unweighted loss (does not flow through .backward()).
+        # Diagnostic: unweighted Huber loss (legacy), plus both vol residuals + ratio.
         with torch.no_grad():
-            vol_loss_unw = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss_unw = (sq_err_huber * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss_unw = (sq_err_huber * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
+            loss_vol_huber = (weighted_huber * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            loss_vol_mse = (weighted_mse * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            loss_surf_huber = surf_loss
+            ratio = loss_vol_huber / loss_vol_mse.clamp(min=1e-12)
 
         optimizer.zero_grad()
         loss.backward()
@@ -635,6 +654,10 @@ for epoch in range(MAX_EPOCHS):
         wandb.log({
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
+            "train/loss_surf_huber": loss_surf_huber.item(),
+            "train/loss_vol_huber": loss_vol_huber.item(),
+            "train/loss_vol_mse": loss_vol_mse.item(),
+            "train/loss_vol_huber_to_mse_ratio": ratio.item(),
             "train/re_weight_min": re_weight.min().item(),
             "train/re_weight_max": re_weight.max().item(),
             "train/re_weight_mean": re_weight.mean().item(),
@@ -662,7 +685,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, vol_loss_kind=cfg.vol_loss_kind)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -757,7 +780,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         base_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, vol_loss_kind=cfg.vol_loss_kind)
             for name, loader in test_loaders.items()
         }
         base_test_avg = aggregate_splits(base_test_metrics)
@@ -773,7 +796,7 @@ if best_metrics:
 
     print("\nEvaluating SWA model on val splits...")
     swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, vol_loss_kind=cfg.vol_loss_kind)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -787,7 +810,7 @@ if best_metrics:
     if not cfg.skip_test and test_loaders is not None:
         print("\nEvaluating SWA model on test splits...")
         swa_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, vol_loss_kind=cfg.vol_loss_kind)
             for name, loader in test_loaders.items()
         }
         swa_test_avg = aggregate_splits(swa_test_metrics)
