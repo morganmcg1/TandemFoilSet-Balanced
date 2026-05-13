@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 03:30 UTC
+- **Date**: 2026-05-13 04:30 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -30,7 +30,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 
 | Student | PR | Slug | Status |
 |---|---|---|---|
-| alphonse | #1736 | `huber-delta-smaller` | WIP — Huber δ sweep: 0.25 + 0.1 on merged stack. Should rebase on #1745 to test smaller δ on top of Huber+curriculum stack. |
+| alphonse | #1869 | `huber-delta-0p25-0p1-on-1745` | WIP — Huber δ=0.25 (Arm A) / δ=0.1 (Arm B) on #1745 stack. #1736 was closed during rebase attempt; reassigned with fresh branch off current HEAD (no rebase). |
 | askeladd | #1822 | `domain-oversample-racecar-single` | WIP (just assigned) — over-sample racecar_single domain 2x (Arm A) / 3x (Arm B) to target single_in_dist bottleneck (110.04). Different from focal weighting (per-domain sampling, not per-sample loss reweighting). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1850 | `slice-num-sweep-96-128` | WIP — slice_num=96 (Arm A) / slice_num=128 (Arm B) on merged stack. Tests attention partitioning granularity. |
@@ -142,7 +142,7 @@ scaling requires either a longer per-run budget or adaptive schedule
 matching epochs to available compute.
 
 ### Potential next directions (round 3+)
-- **Even smaller Huber δ** (alphonse #1736, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability.
+- **Even smaller Huber δ** (alphonse #1869, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability. (#1736 was closed during rebase; reassigned fresh.)
 - **surf_weight push** (thorfinn #1827, in flight): surf_weight=30/50 on #1745 stack. Directly tests whether optimal final weight > 20; expected gain from targeting val_single_in_dist bottleneck (110.04).
 - **Per-domain data curriculum** (askeladd #1822, in flight): over-sample racecar_single training domain 2x/3x. Direct orthogonal approach to single_in_dist bottleneck after focal weighting failure.
 - **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack.
