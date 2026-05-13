@@ -426,6 +426,8 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    re_loss_weight: bool = False  # If True, apply log(Re)-tail multiplicative per-sample loss weight
+    re_loss_alpha: float = 0.5  # Tail boost strength (0 ⇒ no boost; typical 0.5-1.0)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -443,6 +445,45 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
+
+# ── Precompute log(Re) statistics for per-sample Re-tail loss weighting ──────
+# Feature dim 13 of x is log(Re); it is constant across all nodes of a sample
+# (per program.md), so x[0, 13] is the per-sample log(Re). We sweep once over
+# train_ds to get median/std, then in the training loop we multiply the per-
+# sample loss by w_re = 1 + alpha * |log(Re) - median| / std, composed with
+# BIVW, then per-batch normalized. Skipped if cfg.re_loss_weight=False.
+log_re_median = 0.0
+log_re_std = 1.0
+if cfg.re_loss_weight:
+    print(f"[re_loss_weight] computing log(Re) over {len(train_ds)} train samples ...")
+    _all_log_re = []
+    for _i in range(len(train_ds)):
+        _x_i, _, _ = train_ds[_i]
+        _all_log_re.append(float(_x_i[0, 13]))
+    _all_log_re_t = torch.tensor(_all_log_re, dtype=torch.float32)
+    log_re_median = float(_all_log_re_t.median())
+    log_re_std = float(_all_log_re_t.std())
+    if log_re_std < 1e-6:
+        print(f"[re_loss_weight] WARNING: log_re_std={log_re_std:.6e} too small; "
+              f"disabling re_loss_weight to avoid division by zero")
+        cfg.re_loss_weight = False
+    else:
+        _unnorm_re_w = 1.0 + cfg.re_loss_alpha * (_all_log_re_t - log_re_median).abs() / log_re_std
+        _sw_norm = sample_weights.to(torch.float32) / sample_weights.sum()
+        _re_w_sampler_mean = float((_unnorm_re_w * _sw_norm).sum())
+        # Inspect possible BIVW–Re correlation: a strong positive correlation
+        # would mean BIVW already up-weights tail-Re, so re_w amplifies an
+        # existing bias rather than adding fresh signal.
+        _abs_dev = (_all_log_re_t - log_re_median).abs()
+        print(
+            f"[re_loss_weight] alpha={cfg.re_loss_alpha} | "
+            f"log(Re) median={log_re_median:.3f} std={log_re_std:.3f} "
+            f"range=[{float(_all_log_re_t.min()):.2f}, {float(_all_log_re_t.max()):.2f}]"
+        )
+        print(
+            f"[re_loss_weight] re_w (sampler-weighted) mean={_re_w_sampler_mean:.4f} "
+            f"max={float(_unnorm_re_w.max()):.3f} min={float(_unnorm_re_w.min()):.3f}"
+        )
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
@@ -576,6 +617,19 @@ for epoch in range(MAX_EPOCHS):
                     y_var[b] = valid.var().clamp(min=1e-4)
             sample_w = 1.0 / y_var
             sample_w = sample_w / sample_w.mean()
+
+            # ── Re-tail loss weight (composed multiplicatively with BIVW) ────
+            # w_re = 1 + alpha * |log(Re) - median| / std, then product with
+            # sample_w is per-batch normalized to mean=1 (matches BIVW pattern,
+            # keeps effective LR stable). x[:, 0, 13] is the raw log(Re) since
+            # x is unnormalized at this point.
+            if cfg.re_loss_weight:
+                log_re_batch = x[:, 0, 13]
+                re_w = 1.0 + cfg.re_loss_alpha * (log_re_batch - log_re_median).abs() / log_re_std
+                sample_w = sample_w * re_w
+                sample_w = sample_w / sample_w.mean()
+            else:
+                re_w = None
         sw = sample_w[:, None, None]
 
         vol_mask = mask & ~is_surface
@@ -595,7 +649,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = (surf_abs >= delta).float().mean().item()
             else:
                 surf_l1_frac = 0.0
-        wandb.log({
+        _log_payload = {
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
@@ -604,7 +658,13 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
             "global_step": global_step,
-        })
+        }
+        if cfg.re_loss_weight and re_w is not None:
+            _log_payload["train/re_w_mean"] = re_w.mean().item()
+            _log_payload["train/re_w_max"] = re_w.max().item()
+            _log_payload["train/re_w_min"] = re_w.min().item()
+            _log_payload["train/re_w_std"] = re_w.std().item() if re_w.numel() > 1 else 0.0
+        wandb.log(_log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
