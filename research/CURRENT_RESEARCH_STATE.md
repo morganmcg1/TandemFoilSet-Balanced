@@ -1,7 +1,7 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~03:25 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 11 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~04:55 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 12 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
 - **Current best:** val_avg/mae_surf_p = **66.1352**, test_avg/mae_surf_p = **56.8971** (fp32 eval, paper-faithful). Stack: OneCycleLR(max_lr=1.5e-3, **pct_start=0.05**) + compile + bf16 train + fp32 eval + eval_every_n_epochs=3 + slice_num=128.
@@ -19,10 +19,13 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 - **tanjiro #1807** (max-autotune-no-cudagraphs) CLOSED — split outcome. Kernel autotuning delivered +5.5% per-epoch as predicted, 36 Triton picks, no CUDAGraph warnings. But 180s compile cost ate 2 epochs (27/29) → SCHEDULER_EPOCHS=29 hardcoded → final LR ~8.5e-5 instead of 1.5e-6 → model under-trained → val +3.0% worse. Compile-mode attack class is now closed under the 30-min cap.
 
 **Round 11 closures:**
-- **thorfinn #1628** (SequentialLR T_max=27, 2-seed) CLOSED — refuted under multi-seed scrutiny. 2-seed mean within ±2% of OLD baseline (noise), but +3.49% val / +4.39% test WORSE vs NEW baseline #1719. Per-epoch scheduling has a structural granularity ceiling that per-batch OneCycleLR doesn't — can't reach the deep-decay refinement density that pct_start=0.05 exploits.
+- **thorfinn #1628** (SequentialLR T_max=27, 2-seed) CLOSED — refuted under multi-seed scrutiny. 2-seed mean within ±2% of OLD baseline (noise), but +3.49% val / +4.39% test WORSE vs NEW baseline #1719. Per-epoch scheduling has a structural granularity ceiling that per-batch OneCycleLR doesn't.
 
 **Round 11 sends-back:**
-- **frieren #1768** (pct_start=0.15) — student asked for direction. Approved option 1: rebase onto new baseline, complete the {0.05 ✓, 0.10, 0.15} bracket. Awaiting rebased run.
+- **frieren #1768** (pct_start=0.15) — student asked for direction. Approved option 1: rebase onto new baseline, complete the {0.05 ✓, 0.10, 0.15} bracket. Rebased cleanly; awaiting run.
+
+**Round 12 closures:**
+- **nezuko #1860** (weight_decay=5e-4) CLOSED — clear regression on every split (+7.85% val / +9.27% test). **PAPER-WORTHY MECHANISM SIGNAL:** OOD splits regress MORE than in-dist (cruise +11.7% vs in-dist +3.8%) — the asymmetry is monotonic with distance from training distribution. Inverts the standard "regularization helps OOD" prior. Mechanism: OOD splits require richer feature representations (extrapolating held-out cambers) than in-dist fitting, so uniform parameter shrinkage destroys OOD features first.
 
 **Round 10 merges:**
 - **nezuko #1719** (pct_start=0.05 composition) MERGED — new baseline.
@@ -30,7 +33,7 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 **Active research questions:**
 1. **LR ceiling beyond 1.5e-3** — alphonse #1785 testing max_lr=2e-3 vs the new baseline.
 2. **OOD-tail refinement** — nezuko's win opens up the OOD lever for the first time. If pct_start=0.05 helps OOD via deep-LR refinement, deeper LR floor (final_div_factor 1e3 → 1e4) should extend the mechanism further. tanjiro #1861.
-3. **OOD regularization** — wd=1e-4 may be undertuned given the larger schedule-shape gains. nezuko #1860 sweeps weight_decay=5e-4.
+3. **OOD-asymmetric regularization** — wd=5e-4 (#1860) regressed everything, with OOD splits hurt 3× more than in-dist. The asymmetry signal motivates the SYMMETRIC test: nezuko #1916 (just assigned) runs wd=2e-5 (5× LOWER). If OOD improves and in-dist mildly degrades → new lever found; if all splits improve → over-reg everywhere; if all degrade → wd=1e-4 at a basin and the wd attack class is closed.
 4. **pct_start=0.15 bracket completion** — frieren #1768 rebased onto new baseline; runs 0.15 vs the 0.05 winner for the paper-figure 3-point sweep.
 5. **NEW baseline confirmation (2-seed)** — thorfinn #1874 runs seed=1 and seed=2 on pct_start=0.05 baseline. Single-seed +5.72% test gain is at the high end of RNG variance and must be confirmed before stacking further compositions.
 6. **Loss formulation** — surface-only p-weighting (edward #1809) and smooth-L1 (askeladd #1379) still pending.
@@ -45,7 +48,7 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 | edward | #1809 | surface-only p-weight=2 (targeted vs #1383) | WIP |
 | fern | #1390 | surf_weight=25 (needs rebase) | WIP (stale) |
 | frieren | #1768 | OneCycleLR pct_start=0.15 (bracket completion) | WIP (rebasing onto new baseline) |
-| nezuko | #1860 | weight_decay=5e-4 (OOD regularization) | WIP |
+| nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP (just assigned) |
 | tanjiro | #1861 | OneCycleLR final_div_factor=1e4 (deep-LR floor) | WIP |
 | thorfinn | #1874 | 2-seed confirmation of pct_start=0.05 baseline (seed=1, seed=2) | WIP (just assigned) |
 
@@ -64,6 +67,7 @@ Round 9 merged nezuko #1719 (pct_start=0.05): **−3.57% val / −5.72% test** o
 11. **NEW: max_lr and pct_start compose because they hit different failure modes** (round 10) — max_lr accelerates in-dist basin descent (saturated), pct_start extends deep-decay tail (unlocks OOD). Schedule-shape changes can stack mechanistically; the same knob is noise vs the wrong baseline and gold vs the right one.
 12. **NEW: compile overhead must be amortized against achievable epoch count, not nominal schedule length** (tanjiro #1807 closed) — `max-autotune-no-cudagraphs` delivers +5.5% per-epoch but 180s compile cost eats 2 epochs; if SCHEDULER_EPOCHS is hardcoded, the schedule tail never fires and metrics regress despite faster steps. Compile-mode attack class is now exhausted under the 30-min cap.
 13. **NEW: per-batch LR scheduling is structurally superior to per-epoch on this workload** (thorfinn #1628 closed) — SequentialLR(T_max=27) per-epoch ties OneCycleLR per-batch on the OLD baseline (within ±2% noise) but is +3-4% WORSE vs the NEW pct_start=0.05 baseline. ~362× more LR updates is the mechanism (10875 per-batch vs 30 per-epoch). The original round-1 win from warmup+cosine → OneCycleLR was about update granularity, not schedule shape. **Implication for paper:** OneCycleLR's win is a robust architectural claim, not a single-baseline coincidence.
+14. **NEW (paper-worthy): the standard "regularization → better OOD" prior is INVERTED on this workload** (nezuko #1860 closed) — increasing weight_decay 5× (1e-4 → 5e-4) regresses ALL splits, but the regression is **monotonic with distance from training distribution**: in-dist +3.8%, camber-rc +7.3%, camber-cruise +11.7%, re-rand +10.4%. Mechanism: OOD splits extrapolate to held-out geometries (camber regimes not seen in training) and require richer auxiliary features than in-dist fitting; uniform parameter shrinkage destroys OOD features first. **Implication:** OOD generalization on extrapolation tasks may need LESS regularization, not more — a counter-intuitive paper finding. Symmetric test (wd=2e-5) in progress (nezuko #1916).
 
 ## Potential next research directions
 

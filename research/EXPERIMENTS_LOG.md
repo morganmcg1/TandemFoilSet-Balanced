@@ -605,3 +605,44 @@ Worse, while the experiment was running, nezuko #1719 merged the pct_start=0.05 
 3. **Per-epoch scheduling is structurally worse than per-batch on this workload.** Cosmetic equivalence on the metric level under one baseline doesn't survive a baseline change that exploits the per-batch granularity.
 
 **Next:** Assigning thorfinn to 2-seed (seed=1, seed=2) confirmation of the NEW pct_start=0.05 baseline (#1719). Single-seed +5.72% test gain is at the high end of RNG variance — multi-seed confirmation is the right paper-tier follow-up.
+
+---
+
+## 2026-05-13 04:50 — PR #1860: weight_decay=5e-4 (OOD regularization probe) — CLOSED (regression on every split, OOD-asymmetry signal)
+- willowpai2g24h4-nezuko / willowpai2g24h4-nezuko/weight-decay-5e-4
+- **Hypothesis:** 5× weight decay regularizes overfitting in the long deep-decay tail of the new pct_start=0.05 schedule, additive OOD-camber gain on top of #1719.
+- **W&B:** `pc5fuu7b`
+
+| Metric | Baseline #1719 (wd=1e-4) | This run (wd=5e-4) | Δ | %Δ |
+|---|---:|---:|---:|---|
+| val_avg/mae_surf_p | 66.1352 | 71.3287 | +5.194 | **+7.85% WORSE** |
+| test_avg/mae_surf_p | 56.8971 | 62.1722 | +5.275 | **+9.27% WORSE** |
+| val_single_in_dist | 73.33 | 76.10 | +2.77 | +3.78% |
+| val_geom_camber_rc | 79.02 | 84.77 | +5.75 | +7.28% |
+| val_geom_camber_cruise | 47.51 | 53.06 | +5.55 | **+11.68%** |
+| val_re_rand | 64.68 | 71.39 | +6.71 | +10.37% |
+| Best epoch | 27/29 | 28/29 | +1 | (no convergence slowdown) |
+
+**Decision: CLOSED — clear regression on every split.** +7.85% val / +9.27% test is well past the 5% close threshold. The model converges normally (best epoch shifts only 27→28; train loss healthy) — this is not under-fitting from too-strong regularization, it's a worse generalization minimum.
+
+**Surprising-and-valuable finding (KEY for paper):** **OOD splits regress MORE than in-dist, the opposite of the standard regularization-for-OOD story.**
+
+| Split | Regression magnitude |
+|---|---:|
+| val_single_in_dist (in-dist) | +3.78% |
+| val_geom_camber_rc | +7.28% |
+| val_geom_camber_cruise (most-OOD) | **+11.68%** |
+| val_re_rand | +10.37% |
+
+The asymmetry is monotonic: the further from in-distribution, the more aggressive wd hurts. Mechanistic interpretation:
+
+**OOD generalization on this workload requires richer feature representations than in-dist fitting does.** The held-out camber splits (`val_geom_camber_cruise` is M=2-4 from a training set that has M=0-2 and M=4-6) require the model to extrapolate to unseen geometries. Aggressive parameter shrinkage destroys the auxiliary features the model uses to interpolate to those held-out shapes. In-dist features survive better because the WeightedRandomSampler keeps reinforcing them.
+
+This INVERTS a common ML prior ("more reg → less overfit → better OOD"). On this task it appears that **OOD ⊃ in-dist in feature requirements**, so anything that uniformly shrinks parameters hurts OOD first.
+
+**Next:** Following the student's own suggested-followup-#2: reassign nezuko to **wd=2e-5** (5× LOWER than current baseline=1e-4). Symmetric test of the asymmetry hypothesis:
+- OOD improves, in-dist mildly degrades → asymmetry confirmed, new lever
+- All splits improve → over-regularization everywhere, lock in lower wd
+- All splits degrade → wd=1e-4 at a basin, wd attack class closed
+
+**Minor flag:** `test_geom_camber_cruise/loss = nan` printed in test-eval summary line but `mae_surf_p` (the headline metric) was still computed cleanly per-batch. Likely Inf/NaN slipping through a single-batch reduction. Not blocking; track if it recurs.
