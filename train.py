@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -410,6 +411,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_fn: str = "mse"  # "mse", "smooth_l1", or "l1"
     smooth_l1_beta: float = 0.1
+    ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
 
 
 cfg = sp.parse(Config)
@@ -455,6 +457,13 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema_model = deepcopy(model) if cfg.ema_decay > 0 else None
+if ema_model is not None:
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    ema_model.eval()
+    print(f"EMA enabled (decay={cfg.ema_decay})")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -484,6 +493,7 @@ wandb.define_metric("lr", step_metric="global_step")
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+model_no_ema_path = model_dir / "checkpoint_no_ema.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
@@ -531,6 +541,12 @@ for epoch in range(MAX_EPOCHS):
         clip_value = cfg.grad_clip if cfg.grad_clip > 0 else float('inf')
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
         optimizer.step()
+        if ema_model is not None:
+            with torch.no_grad():
+                for ep, p in zip(ema_model.parameters(), model.parameters()):
+                    ep.data.mul_(cfg.ema_decay).add_(p.data, alpha=1.0 - cfg.ema_decay)
+                for eb, b in zip(ema_model.buffers(), model.buffers()):
+                    eb.data.copy_(b.data)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -548,8 +564,9 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
+    eval_model = ema_model if ema_model is not None else model
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device,
                              loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
         for name, loader in val_loaders.items()
     }
@@ -581,7 +598,9 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        torch.save(eval_model.state_dict(), model_path)
+        if ema_model is not None:
+            torch.save(model.state_dict(), model_no_ema_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -605,8 +624,9 @@ if best_metrics:
         "total_train_minutes": total_time,
     })
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    test_eval_model = ema_model if ema_model is not None else model
+    test_eval_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    test_eval_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -618,7 +638,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+            name: evaluate_split(test_eval_model, loader, stats, cfg.surf_weight, device,
                                  loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
             for name, loader in test_loaders.items()
         }
@@ -635,6 +655,32 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        # Dual test eval: when EMA is enabled, also evaluate the non-EMA
+        # snapshot saved at the same best-EMA-val epoch so we can isolate
+        # variance-reduction-on-eval from any underlying-weights effect.
+        if ema_model is not None and model_no_ema_path.exists():
+            print("\nEvaluating non-EMA model at the same best-val epoch on test splits...")
+            model.load_state_dict(torch.load(model_no_ema_path, map_location=device, weights_only=True))
+            model.eval()
+            test_metrics_no_ema = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
+                                     loss_fn=cfg.loss_fn, smooth_l1_beta=cfg.smooth_l1_beta)
+                for name, loader in test_loaders.items()
+            }
+            test_avg_no_ema = aggregate_splits(test_metrics_no_ema)
+            print(f"  TEST(no-EMA)  avg_surf_p={test_avg_no_ema['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(f"{name}_no_ema", test_metrics_no_ema[name])
+
+            test_log_no_ema: dict[str, float] = {}
+            for split_name, m in test_metrics_no_ema.items():
+                for k, v in m.items():
+                    test_log_no_ema[f"test_no_ema/{split_name}/{k}"] = v
+            for k, v in test_avg_no_ema.items():
+                test_log_no_ema[f"test_no_ema_{k}"] = v
+            wandb.log(test_log_no_ema)
+            wandb.summary.update(test_log_no_ema)
 
     save_model_artifact(
         run=run,
