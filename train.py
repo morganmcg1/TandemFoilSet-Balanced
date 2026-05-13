@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from einops import rearrange
-from timm.layers import trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
@@ -152,7 +152,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -163,6 +164,10 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # Stochastic Depth: independent Bernoulli mask per residual branch.
+        # `scale_by_keep=True` (timm default) preserves E[output] = input.
+        self.drop_path1 = DropPath(drop_path) if drop_path > 0 else nn.Identity()
+        self.drop_path2 = DropPath(drop_path) if drop_path > 0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -171,8 +176,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, gamma=None, beta=None):
-        fx = self.attn(self.ln_1(fx), gamma, beta) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path1(self.attn(self.ln_1(fx), gamma, beta)) + fx
+        fx = self.drop_path2(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -183,7 +188,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -199,11 +205,16 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear stochastic-depth schedule: block 0 = 0.0, block N-1 = drop_path_rate.
+        # Matches timm/DeiT default; deeper layers get more drop.
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, n_layers)]
+        self.drop_path_rates = dpr
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -506,6 +517,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path_rate=0.05,
 )
 
 model = Transolver(**model_config).to(device)
@@ -517,6 +529,7 @@ print(
     f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
     f"+ ReScaleHead ({n_params_head} params)"
 )
+print(f"DropPath per-block schedule: {[round(r, 4) for r in model.drop_path_rates]}")
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
 # (slice entropy capture). Diagnostics toggle a Python flag that would otherwise
@@ -599,6 +612,11 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "setup",
+    "drop_path_rate": model_config.get("drop_path_rate", 0.0),
+    "drop_path_per_block": list(uncompiled_model.drop_path_rates),
+})
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
