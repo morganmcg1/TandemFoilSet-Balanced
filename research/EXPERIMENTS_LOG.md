@@ -1,5 +1,29 @@
 # SENPAI Research Results
 
+## 2026-05-13 01:00 — PR #1573: Warmup + lr=7.5e-4 + gradient clipping — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-frieren/warmup-lr75e-4-gradclip`
+- Hypothesis: Lower peak lr (1e-3 → 7.5e-4) backs off numerical instability; gradient clip (max_norm=1.0) stabilises train steps
+- Artifacts: `models/model-charliepai2g24h2-frieren-warmup-lr75e-4-gradclip-20260512-235148/metrics.jsonl`
+
+| Split | val mae_surf_p (lr=7.5e-4+clip) | Floor #1482 (lr=1e-3) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 159.59 | 162.05 | −1.5% |
+| val_geom_camber_rc     | 134.74 | 137.15 | −1.8% |
+| val_geom_camber_cruise |  89.18 | 101.34 | −12.0% |
+| val_re_rand            | 107.31 | 111.83 | −4.0% |
+| **val_avg**            | **122.70** | **128.09** | **−4.2%** |
+| test_avg (bs=1)        | **110.25** | 117.40 | **−6.1%** |
+| test_geom_camber_cruise (bs=1) | **75.55** | NaN | finite! |
+
+**Config:** 3-ep warmup + lr=7.5e-4 + cosine(T_max=47) + gradclip(max_norm=1.0), chan_w=[1,1,5], bs=4, wd=1e-4. 12 epochs (timeout 31.2 min). Peak VRAM 42.12 GB.
+
+**Decision: MERGED — new floor val_avg/mae_surf_p=122.7043 (beats 128.09 by 4.2%).**
+
+**Analysis:** Third confirmed win. The largest gain is on val_geom_camber_cruise (−12%), which is the split most affected by the lr=1e-3 attention NaN. Reducing peak LR to 7.5e-4 backs off the numerical boundary; gradient clipping prevents sporadic large updates that contributed to the instability. Notably, train-side clip did NOT fix the bs=4 test NaN (frieren diagnosed this correctly: it's an inference-time attention computation issue with specific batch compositions, not a training-side issue). bs=1 test_avg=110.25 is the cleanest end-to-end metric we have. The `eval_bs1.py` helper script is now in the advisor branch — use it for clean test evaluation going forward.
+
+---
+
 ## 2026-05-13 00:05 — PR #1603: EMA of weights (decay=0.999) — all variants regress
 
 - Branch: `charliepai2g24h2-edward/ema-weights-decay-0p999`

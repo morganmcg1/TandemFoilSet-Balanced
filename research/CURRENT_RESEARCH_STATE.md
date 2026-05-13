@@ -1,76 +1,74 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 00:10
+- **Date:** 2026-05-13 01:05
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
 
 ## Current floor
 
-**val_avg/mae_surf_p = 128.0916** (PR #1482, merged)  
-Config: 3-ep warmup + lr=1e-3 + cosine(T_max=47, eta_min=1e-6), bs=4, chan_w=[1,1,5], wd=1e-4, ~0.66M model, 14 epochs (timeout-cut)  
-Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); bs=1 test_avg = 117.40  
-**Note:** Measured WITHOUT chan_w (pre-#1464 base). Advisor branch now has BOTH chan_w + warmup. True stacked floor unmeasured — expected < 128.09. askeladd's #1536 (sent back for rebase) will measure this.
+**val_avg/mae_surf_p = 122.7043** (PR #1573, merged 2026-05-13)
+Config: 3-ep warmup + lr=7.5e-4 + cosine(T_max=47) + gradclip(max_norm=1.0), bs=4, chan_w=[1,1,5], wd=1e-4, ~0.66M model, 12 epochs (timeout-cut)
+bs=1 clean test_avg = **110.2527** (all 4 splits finite; val 122.70 beats prior floor 128.09 by 4.2%)
 
-**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Fix in train.py `evaluate_split` (NaN guard code NOW PUSHED by askeladd — branch rebased with warmup preserved). Awaiting post-rebase rerun with `--lr 1e-3`. First finite test_avg = 133.04 (unofficial run at old config).
+**Known test NaN:** bs=4 test_geom_camber_cruise still NaN — deterministic inference-time attention numerics edge case with specific batch compositions at this model+weight. Train-side gradclip doesn't fix it. bs=1 eval is fully clean. Askeladd's #1536 addresses the separate data-bug NaN (Type 1).
+
+**eval_bs1.py** now in advisor branch — use for clean bs=1 test evaluation going forward.
 
 ## Active experiments (WIP)
 
 | PR | Student | Hypothesis | Lever | Round |
 |---|---|---|---|---|
-| #1536 | askeladd | NaN guard + rebase + re-run with lr=1e-3 | Bug fix / measurement | 2-revised (sent back) |
+| #1536 | askeladd | NaN guard + lr=1e-3 rerun stacked on NEW floor | Bug fix / measurement | 3 (training) |
 | #1559 | alphonse | Decoupled surf/vol chan_w: [1,1,5] surf, [1,1,1] vol | Loss alignment | 3 (training) |
-| #1524 | tanjiro | Stack chan_w + grad-accum=4 + lr=1e-3 + T_max=14 | Stacking / opt | 2-revised (training) |
-| #1489 | thorfinn | Stack chan_w + per-sample AoA flip p=0.25 | Stacking / aug | 2-revised (training) |
-| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (training, rate-limit retries) |
-| #1573 | frieren | Warmup + lr=7.5e-4 + gradient clipping | Stability / optimization | 3 (training) |
-| #1708 | edward | Lookahead optimizer (k=5, α=0.5) wrapping AdamW | Optimizer/averaging | 4 (just assigned) |
-| #1681 | nezuko | Higher weight decay (wd=1e-4 → 5e-4) | Regularization | 3 (just assigned) |
+| #1524 | tanjiro | chan_w + grad-accum=4 + lr=7.5e-4 + T_max=14 | Stacking / opt | 3-revised (training) |
+| #1489 | thorfinn | chan_w + per-sample AoA flip p=0.25 | Stacking / aug | 3-revised (training) |
+| #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (recovering, now training) |
+| #1708 | edward | Lookahead optimizer (k=5, α=0.5) wrapping AdamW | Optimizer | 4 (training) |
+| #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | 3 (training) |
+| (frieren) | frieren | NEW — assigning next hypothesis | TBD | 4 |
 
 ## Recent decisions
 
-- **#1485 (nezuko) CLOSED**: slice_num=128 stacked on floor → +25.4% regression (160.67 vs 128.09). Wall-clock budget is the binding constraint, not capacity. Revisit only with AMP (#1477).
-- **#1536 (askeladd) SENT BACK**: Code not pushed; branch pre-#1482 (would revert warmup). NaN guard logic correct — test_avg 133.04 is first-ever finite result. Needs rebase + push + re-run at lr=1e-3.
-- **#1603 (edward EMA) CLOSED**: All 3 variants regress. Root cause: rapid-descent regime — EMA averages older-worse with newer-better weights. Best variant tie (+0.52%). Assigned #1708 Lookahead instead.
+- **#1573 (frieren) MERGED — NEW FLOOR** val_avg 128.09 → 122.70 (−4.2%), bs=1 test 117.40 → 110.25 (−6.1%). lr=7.5e-4 + gradclip. val_geom_camber_cruise most improved (−12%). Gradient clip didn't fix bs=4 inference NaN (confirmed: it's inference-time, not training-time).
+- **#1485 (nezuko) CLOSED**: +25.4% regression, wall-clock budget binding.
+- **#1536 (askeladd) SENT BACK**: NaN guard code now pushed + rebased. Awaiting lr=1e-3 rerun at new floor.
+- **#1603 (edward EMA) CLOSED**: rapid-descent regime mismatch. Assigned Lookahead #1708 instead.
 
 ## Key findings so far
 
-1. **Channel weight [1,1,5] is a confirmed win** (+6.4% on floor, PR #1464 merged, floor 133.94).
-2. **Warmup + lr=1e-3 is a confirmed win** (+4.4%, PR #1482 merged, floor 128.09). val_re_rand most improved (−14%).
-3. **chan_w + warmup are now STACKED in advisor train.py** — new experiments start with both. True stacked floor unmeasured (expected < 128.09).
-4. **chan_w response curve is non-monotonic** — p=10 is 14% WORSE than p=5 (PR #1531 closed). Over-weighting pressure starves velocity convergence.
-5. **surf_weight=30 alone is WORSE than baseline** (-18% regression, PR #1468 closed).
-6. **Grad-accum=4 + sqrt-LR beats pre-chan_w floor by 2.4%** at half the VRAM of bs=8. Stacking with chan_w + T_max=14 in progress (#1524 revised).
-7. **Per-sample AoA flip p=0.25 fixes Uy regression** (−50%). Primary metric flat without chan_w stack. Stacking in progress (#1489 revised).
-8. **Cosine T_max=50 barely decays in 14-epoch budget** — set T_max≈14 for meaningful LR decay.
-9. **pad_collate makes batch scaling expensive** — bs=8 uses 84 GB. Grad-accum is the correct lever.
-10. **224-7-8 model at bs=2 only reached 6 epochs — undertrained, inconclusive** (PR #1526 closed). Retry after fern's AMP/bf16 result.
-11. **Test NaN Type 1** (data bug): 0×NaN from 000020.pt corrupt p-channel. Fix in train.py evaluate_split (#1536 sent back, correct logic confirmed).
-12. **Test NaN Type 2** (numerical): lr=1e-3 causes non-finite attention weights for specific bs=4 batches in test_geom_camber_cruise. Fix: lr=7.5e-4 + gradient clipping (#1573 frieren in progress).
-13. **VRAM budget:** bs=4 baseline uses ~42 GB; slice_num=128 uses ~55 GB. bf16 (fern, GPU 99% active) expected ~21-25 GB.
-14. **slice_num=128 doesn't compound with stacked floor at 30-min cap** (+25.4% regression, PR #1485 closed). Need AMP first.
-15. **EMA doesn't fit rapid-descent regime** (#1603 closed): At 30-min timeout the model descends 10-50 MAE/epoch, so EMA averages older-worse with newer-better weights. All 3 variants regress. EMA becomes viable only when model is near-converged (needs AMP + longer runs first).
-16. **First finite test_avg on branch: 133.04** (askeladd's unofficial run at old config). True clean test_avg at floor config = unmeasured.
-17. **Lookahead vs EMA distinction**: Lookahead averages only the last k=5 steps (all recent productive steps in same descent direction), not history. Compatible with rapid descent. Assigned to edward #1708.
+1. **Channel weight [1,1,5] is a confirmed win** (+6.4%, PR #1464, floor 133.94).
+2. **Warmup + lr=1e-3 is a confirmed win** (+4.4%, PR #1482, floor 128.09).
+3. **lr=7.5e-4 + gradient clipping is a confirmed win** (+4.2%, PR #1573, floor 122.70). val_geom_camber_cruise most improved (−12%).
+4. **Three wins stacked in advisor train.py**: chan_w + warmup + gradclip. New experiments start with all three.
+5. **chan_w response curve non-monotonic** — p=10 14% worse, optimal ≈5.
+6. **Grad-accum=4 beats pre-chan_w floor by 2.4%** at half VRAM. Stacking in progress.
+7. **Per-sample AoA flip (p=0.25) fixes Uy** (−50%). Primary metric flat without chan_w stack.
+8. **Cosine T_max=50 barely decays in 12-14 epoch budget** — set T_max≈12-14.
+9. **pad_collate expensive at bs=8** (84 GB). Grad-accum is the correct lever.
+10. **slice_num=128 doesn't compound at 30-min cap** (close pending AMP).
+11. **Test NaN Type 1** (data bug, 000020.pt): fix in train.py evaluate_split (askeladd #1536).
+12. **Test NaN Type 2** (numerical, bs=4 inference): lr=1e-3 → lr=7.5e-4 REDUCES it. But bs=4 cruise NaN persists at 7.5e-4 — it's an inference-time attention computation issue. bs=1 eval is fully clean.
+13. **EMA doesn't fit rapid-descent regime**: averages older-worse with newer-better. #1603 closed.
+14. **eval_bs1.py** now in advisor branch for clean test-avg evaluation.
+15. **Frieren's gradclip key insight**: the bs=4 NaN is deterministic and identical across lr=1e-3 and lr=7.5e-4 runs — it's a property of model weights × specific batch composition in PhysicsAttention, not optimizer-related.
 
-## Round-3 hypothesis pipeline
+## Round-4 hypothesis pipeline
 
 ### High priority (active)
-- **askeladd NaN guard rebased + rerun** (#1536 sent back): first confirmed clean test_avg measurement at floor config. Critical unlock.
-- **alphonse decoupled surf/vol chan_w** (#1559 training): [1,1,5] surf only — addresses Ux degradation at p=10.
-- **tanjiro chan_w + grad-accum + T_max=14** (#1524 revised training): stack two orthogonal levers + fix LR decay.
-- **thorfinn chan_w + per-sample AoA flip** (#1489 revised training): orthogonal stacking.
-- **frieren lr=7.5e-4 + gradclip** (#1573 training): fix test NaN Type 2 while staying near peak LR.
-- **edward Lookahead optimizer** (#1708 just assigned): k=5, α=0.5 wrap around AdamW. Orthogonal to all active WIPs.
-- **fern AMP bf16** (#1477 training, GPU 99% active): unlock 2x faster training → more epochs, enables 224-7-8 retry.
-- **nezuko weight decay 5e-4** (#1681 just assigned): regularization to reduce final-epoch val noise.
+- **askeladd NaN guard rerun** (#1536): first clean test_avg at current floor. Critical unlock.
+- **alphonse decoupled surf/vol chan_w** (#1559): [1,1,5] surf only — vs new floor 122.70.
+- **tanjiro chan_w + grad-accum** (#1524): now needs rebase on new floor (lr changed to 7.5e-4).
+- **thorfinn AoA flip** (#1489): now needs rebase on new floor.
+- **fern AMP bf16** (#1477): recovering from rate-limit, now training. VRAM unlock → 224-7-8 + slice_num=128 retry.
+- **edward Lookahead** (#1708): k=5, α=0.5. Compatible with rapid-descent regime.
+- **nezuko WD=5e-4** (#1681): regularization.
 
-### Next round priorities (if current WIPs complete)
-- If AMP (fern) wins: retry 224-7-8 + slice_num=128 with bf16 (both need the VRAM headroom).
-- Stack best winners: chan_w + warmup + AMP + EMA + WD (if wins compound).
-- Sort-by-size sampler (reduce pad_collate waste, enables higher effective batch).
-- SmoothL1/Huber loss for pressure channel (handles outlier p spikes in training, orthogonal to chan_w).
-- If NaN guard (#1536) merges cleanly, propagate to all future PRs via advisor train.py commit.
-- Dual surface/volume heads (AB-UPT style) if loss-alignment levers saturate.
-- Fourier positional encoding for (x, z) coordinates.
-- Lookahead optimizer wrapper (orthogonal to AdamW + schedule, 0.5-2% typical gain).
+### Next round (after current WIPs complete)
+- **Frieren (idle)**: assign next lever — try even lower lr (5e-4 or 6e-4) to push further into the stable regime, OR try LR=7.5e-4 with T_max=12 cosine (tighter decay for 12-epoch budget).
+- **Stack Lookahead + WD** (if both win independently).
+- If AMP wins: retry 224-7-8 + slice_num=128 with bf16.
+- Stack gradclip + askeladd NaN guard once #1536 merges.
+- Sort-by-size sampler (pad_collate waste reduction, higher effective bs).
+- SmoothL1/Huber loss for pressure channel.
+- Note: tanjiro #1524 and thorfinn #1489 need rebase onto new floor (lr changed from 1e-3 → 7.5e-4 in advisor train.py after #1573 merge). Their current PRs reference old floor. May need to send-back again.
