@@ -1,5 +1,63 @@
 # SENPAI Research Results — charlie-pai2g-48h-r1
 
+## 2026-05-13 00:10 — PR #1602: Gradient clipping sweep (0/0.5/1.0) ↩ SENT BACK for OneCycle re-run
+
+- **Student branch:** `charliepai2g48h1-fern/grad-clip-l1`
+- **Hypothesis:** `clip_grad_norm_(max_norm)` stabilizes training, reduces overfitting on `val_single_in_dist`; sweep 0/0.5/1.0.
+
+### Result (on OLD L1-only baseline 94.291)
+
+| Arm | grad_clip | val_avg/mae_surf_p | test_avg (3/4) | Δ vs control mean |
+|-----|----------:|-------------------:|---------------:|------------------:|
+| A1 control (run 1) | 0.0 | 91.373 | 89.293 | — |
+| A2 control (run 2) | 0.0 | 90.965 | 89.022 | — |
+| **B (winner)** | **1.0** | **89.196** | **88.320** | **-2.0%** |
+| C | 0.5 | 94.184 | 92.442 | +3.3% (worse) |
+
+Within-PR 2-seed control mean = 91.169 ± 0.20. gc=1.0 vs control delta = -2.0% val / -0.7% test.
+
+### Action: SENT BACK — beaten by OneCycle baseline (85.615), but signal is real
+
+**Why send-back not close:** gc=1.0 has a real within-PR -2.0% effect on L1+cosine. But ran with default `--lr 5e-4` (no OneCycleLR), so 89.196 is +4.2% worse than the merged 85.615 baseline.
+
+**Re-run instructions issued:** drop gc=0.5 (strictly worse), sweep gc=1.0 vs gc=2.0 on OneCycleLR+L1 baseline. Tests whether clipping helps under OneCycle's 4× higher peak LR (where grad spikes should be more destabilizing).
+
+**Key mechanism insight** (load-bearing for the re-run): `max_norm=1.0` is acting as a **per-step renormaliser** (mean pre-clip grad norm ~45-50), not a rare-spike cap. It's equivalent to a constant-magnitude / adaptive-direction update — closer to LARS/LAMB than to conventional clipping. This is why gc=0.5 is worse than no clipping (starves the optimizer of LR magnitude) and why higher LR may compensate.
+
+---
+
+## 2026-05-13 00:05 — PR #1605: asinh transform on pressure target ↩ SENT BACK for OneCycle re-run
+
+- **Student branch:** `charliepai2g48h1-edward/asinh-pressure-target`
+- **Hypothesis:** `asinh(p/scale)` compresses the heavy pressure tail without distorting low-magnitude regions, balancing L1 gradients across pressure ranges. Two scales: 100 (aggressive) vs 680 (≈σ_p, gentle).
+
+### Result (on OLD L1-only baseline 94.291)
+
+| Arm | scale | best ep | val_avg/mae_surf_p | test_avg (3/4) | Δ vs L1 baseline |
+|-----|------:|--------:|-------------------:|---------------:|-----------------:|
+| A | 100 | 14 | 89.893 | 88.904 | -4.66% |
+| **B (winner)** | **680** | **14** | **88.643** | **86.505** | **-5.99%** |
+
+Per-split val (Arm B): cruise=64.73 (-9.67%), re_rand=83.54 (-4.52%), single=105.45 (-4.49%), rc=100.84 (-6.27%). All four splits improved.
+
+### Setup deviation: recomputed pressure stats on `asinh(p/scale)`
+
+Edward caught a showstopper before launching: applying raw-`p` stats (mean=-129.22, std=679.45) on top of `asinh(p/scale)` collapsed `y_norm_p` to std ~0.003 (near-constant), shutting off pressure gradient. **1-epoch test of this broken version showed val_avg=264k** (vs 94.29). Fix (approved): recompute `y_mean[2]` and `y_std[2]` on `asinh(p/scale)` from the training set. With fix applied, `y_norm_p` mean~0/std~O(1) and inverse round-trip stable.
+
+Recomputed stats logged to metrics.yaml:
+- scale=100: post-asinh (mean, std) = (-0.2141, 1.5242)
+- scale=680: post-asinh (mean, std) = (-0.1093, 0.5707)
+
+### Action: SENT BACK — beaten by OneCycle baseline (85.615), but signal is real and clean
+
+**Why send-back not close:** asinh@680 has a real -6.0% effect on L1+cosine. But ran with default `--lr 5e-4` (no OneCycleLR), so 88.643 is +3.5% worse than the merged 85.615 baseline.
+
+**Re-run instructions issued:** single arm with scale=680 on OneCycleLR+L1 baseline.
+
+**Compound expectation:** if asinh stacks with OneCycle, expect ~80-81 val_avg (L1 baseline 94.29 → OneCycle -9.2% → 85.6 → asinh -6% → ~80). If interaction is destructive (e.g. asinh's gentler gradients can't tolerate higher peak LR), arm may regress. Either outcome is informative.
+
+---
+
 ## 2026-05-12 23:15 — PR #1601: EMA of model weights (decay 0.999 vs 0.9999) ❌ CLOSED
 
 - **Student branch:** `charliepai2g48h1-thorfinn/ema-model-weights`

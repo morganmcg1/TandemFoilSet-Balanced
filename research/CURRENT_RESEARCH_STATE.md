@@ -145,24 +145,35 @@ losses on the volume field as auxiliary heads.
 
 ## Active in-flight PRs (round 2/3 + round-1 stragglers)
 
-Status as of 23:20 UTC. All 8 students have a WIP PR — zero idle GPUs.
+Status as of 00:15 UTC (2026-05-13). All 8 students have a WIP PR — zero idle GPUs.
 
 | PR | Student | Hypothesis | State |
 |----|---------|-----------|-------|
-| **#1667** | **frieren** | **OneCycleLR peak LR push: 3/4/5e-3 sweep (new baseline = 85.61)** | Round-3 WIP (dispatched 23:05) |
-| **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 WIP |
-| **TBD** | **thorfinn** | **SAM optimizer (rho 0.05/0.1) on L1+OneCycleLR baseline** | Round-3 WIP (branch created, PR pending) |
-| **#1602** | **fern** | **Gradient clipping sweep (0 / 0.5 / 1.0) on L1 baseline** | Round-2 WIP |
-| **#1605** | **edward** | **asinh transform on pressure target (fixed stats, scale 100 vs 680) with L1** | Round-2 WIP (rerunning with corrected normalization) |
-| **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP |
-| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 in flight |
-| #1405 | tanjiro | bf16 + rebase + re-run on OneCycleLR baseline | Sent back for rebase (conflict) + re-run on new baseline |
+| **#1697** | **thorfinn** | **SAM optimizer (rho 0.05/0.1) on L1+OneCycleLR baseline** | Round-3 WIP (dispatched 23:33 UTC) |
+| **#1667** | **frieren** | **OneCycleLR peak LR push: 3/4/5e-3 sweep** | Round-3 WIP (dispatched 23:05 UTC) |
+| **#1582** | **alphonse** | **surf_weight sweep (5/10/20) on L1 baseline** | Round-2 WIP (training started ~23:52 UTC after rate-limit recovery) |
+| **#1602** | **fern** | **Grad-clip 1.0/2.0 on L1+OneCycleLR baseline** | Round-2 RE-RUN (sent back 00:10 UTC) |
+| **#1605** | **edward** | **asinh(p/scale=680) on L1+OneCycleLR baseline** | Round-2 RE-RUN (sent back 00:05 UTC) |
+| **#1625** | **nezuko** | **Per-channel pressure surf weight [1,1,2/3/5] on L1 baseline** | Round-2 WIP (training at 100% GPU as of 00:00 UTC) |
+| #1381 | askeladd | Wider Transolver: n_hidden 128→256, mlp_ratio 2→4 | Round-1 — pod stuck in poll-fail loop, no progress since 17:50 |
+| #1405 | tanjiro | bf16 + rebase + re-run on OneCycleLR baseline | Conflicting; pod stuck in poll-fail loop |
+
+**Recently sent back (round-2 → round-2 rerun):**
+- **#1605 edward asinh** — beat OLD L1 baseline (-6%, val=88.6) but worse than NEW OneCycle baseline (85.6). Re-running scale=680 on OneCycle. **Tail-compression mechanism validated; tested if it stacks.**
+- **#1602 fern grad-clip** — gc=1.0 has real -2% on L1+cosine, mechanism = per-step renormaliser (not rare-spike cap). Re-running gc=1.0 vs gc=2.0 on OneCycle (4× higher peak LR).
 
 **Recently closed:**
-- #1601 thorfinn EMA — CLOSED. val=94.014 (+9.8% vs 85.615 new baseline). EMA doesn't benefit smooth L1+OneCycle descent — no oscillation to average over. Round-3 reassignment: SAM optimizer.
+- #1601 thorfinn EMA — CLOSED. val=94.014 vs 85.615 new baseline = +9.8% worse. EMA doesn't help smooth L1+OneCycle descent. Reassigned to SAM (#1697).
 
-**Action items:** All in-flight round-2/3 PRs compare against baseline 85.615. Any result below 85.61 merges immediately. Tanjiro's rerun (bf16 + OneCycle) is a key test: does bf16 stack with OneCycle?
+**Action items:**
+- Watch nezuko #1625 — actively training, could submit next
+- Watch frieren #1667 LR-push — only one of the round-2/3 PRs explicitly testing the new baseline directly
+- Tanjiro/askeladd pods stuck in rate-limit poll-fail loop — host harvest workflow will handle if needed
+- Any result below 85.615 merges immediately
 
-**Key compound insight (frieren #1581):** L1 + OneCycle compounds to -9.2% on top of just L1. L1's bounded gradient allows higher peak LR without instability — monotone signal from 1e-3→2e-3 motivates the #1667 push to 3/4/5e-3.
+**Compound progress:** Each merged step has roughly halved the gap to a hypothetical floor.
+- MSE-era → PR #1355 (pure L1): -57% step
+- PR #1355 (94.29) → PR #1581 (85.62): -9.2% step
+- PR #1581 (85.62) → next merge: target ~80-82 range
 
-**SAM rationale (#thorfinn round-3):** SAM reshapes the loss landscape by finding flat minima. Known to help small-dataset OOD generalization (Foret et al. 2021). Doubles per-step compute so ~7 epochs realized. Two arms: rho=0.05 vs 0.1. Key watch: `val_geom_camber_rc` and `val_geom_camber_cruise` gap.
+**SAM rationale (#1697 thorfinn round-3):** SAM reshapes the loss landscape by finding flat minima. Known to help small-dataset OOD generalization (Foret et al. 2021). Doubles per-step compute so ~7 epochs realized. Two arms: rho=0.05 vs 0.1. Key watch: `val_geom_camber_rc` gap.
