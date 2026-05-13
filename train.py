@@ -508,6 +508,70 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Optimizers
+# ---------------------------------------------------------------------------
+
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al. 2023, 'Symbolic Discovery of Optimization Algorithms').
+
+    Sign-of-interpolated-EMA-gradient update with decoupled weight decay. Recommended
+    hyperparams are ~3-10× smaller lr and ~3-10× larger weight_decay than AdamW.
+
+    Stores per-step ``last_update_sq_norm`` / ``last_exp_avg_sq_norm`` GPU scalar
+    tensors so the training loop can log update-magnitude and EMA-state diagnostics
+    (sum of squares across all params with gradients).
+    """
+
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta2: {betas[1]}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+        self.last_update_sq_norm: torch.Tensor | None = None
+        self.last_exp_avg_sq_norm: torch.Tensor | None = None
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        update_sq_total: torch.Tensor | None = None
+        exp_avg_sq_total: torch.Tensor | None = None
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                if wd != 0:
+                    p.data.mul_(1.0 - lr * wd)
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                exp_avg = state["exp_avg"]
+                # Sign of (beta1 * m + (1-beta1) * g) — bounded magnitude update.
+                update = exp_avg.mul(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                # EMA update with separate beta2.
+                exp_avg.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+                upd_sq = update.pow(2).sum()
+                ema_sq = exp_avg.pow(2).sum()
+                update_sq_total = upd_sq if update_sq_total is None else update_sq_total + upd_sq
+                exp_avg_sq_total = ema_sq if exp_avg_sq_total is None else exp_avg_sq_total + ema_sq
+        self.last_update_sq_norm = update_sq_total.detach() if update_sq_total is not None else None
+        self.last_exp_avg_sq_norm = exp_avg_sq_total.detach() if exp_avg_sq_total is not None else None
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -535,6 +599,7 @@ class Config:
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
+    optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
 
 
 cfg = sp.parse(Config)
@@ -609,20 +674,41 @@ if cfg.fourier_features:
 # Channel order matches loss decomposition: [surf_p, surf_ux, surf_uy, vol_p, vol_ux, vol_uy].
 KENDALL_CHANNELS = ("surf_p", "surf_ux", "surf_uy", "vol_p", "vol_ux", "vol_uy")
 KENDALL_LOG_SIGMA_CLAMP = 3.0  # clamp |log_sigma| ≤ 3, so sigma ∈ [exp(-3), exp(3)] ≈ [0.05, 20]
+def _build_optimizer(name: str, param_groups, lr: float, default_wd: float):
+    """Builds an AdamW or Lion optimizer from a param_groups iterable.
+
+    ``param_groups`` may be ``model.parameters()`` (single group) or a list of dicts
+    when Kendall log_sigmas need a separate weight_decay=0 group.
+    """
+    name = name.lower()
+    if name == "lion":
+        if isinstance(param_groups, list):
+            return Lion(param_groups, lr=lr, betas=(0.9, 0.99))
+        return Lion(param_groups, lr=lr, weight_decay=default_wd, betas=(0.9, 0.99))
+    if name == "adamw":
+        if isinstance(param_groups, list):
+            return torch.optim.AdamW(param_groups, lr=lr)
+        return torch.optim.AdamW(param_groups, lr=lr, weight_decay=default_wd)
+    raise ValueError(f"Unknown optimizer: {name!r}")
+
+
 if cfg.use_kendall_uncertainty:
     log_sigmas = nn.Parameter(torch.zeros(len(KENDALL_CHANNELS), device=device))
     # Separate param group with weight_decay=0 — weight decay on log_sigma acts as an unwanted prior toward sigma=1.
-    optimizer = torch.optim.AdamW(
+    optimizer = _build_optimizer(
+        cfg.optimizer,
         [
             {"params": list(model.parameters()), "weight_decay": cfg.weight_decay},
             {"params": [log_sigmas], "weight_decay": 0.0},
         ],
         lr=cfg.lr,
+        default_wd=cfg.weight_decay,
     )
     print(f"Kendall uncertainty: ON (6 log_sigmas, clamp ±{KENDALL_LOG_SIGMA_CLAMP}, no weight decay on log_sigmas)")
 else:
     log_sigmas = None
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = _build_optimizer(cfg.optimizer, model.parameters(), lr=cfg.lr, default_wd=cfg.weight_decay)
+print(f"Optimizer: {cfg.optimizer.upper()} (lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e})")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
@@ -774,6 +860,11 @@ for epoch in range(MAX_EPOCHS):
         if grad_norm_val is not None:
             log_payload["train/grad_norm"] = grad_norm_val
             log_payload["train/clip_fraction"] = clip_fired
+        if cfg.optimizer == "lion" and isinstance(optimizer, Lion):
+            if optimizer.last_update_sq_norm is not None:
+                log_payload["train/optimizer_update_norm"] = optimizer.last_update_sq_norm.sqrt().item()
+            if optimizer.last_exp_avg_sq_norm is not None:
+                log_payload["train/exp_avg_norm"] = optimizer.last_exp_avg_sq_norm.sqrt().item()
         if cfg.use_kendall_uncertainty:
             with torch.no_grad():
                 ls = log_sigmas.detach()
