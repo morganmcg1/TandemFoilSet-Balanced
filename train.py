@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -495,14 +496,17 @@ warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=1e-8, end_factor=1.0, total_iters=batches_per_epoch
 )
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=14 * batches_per_epoch
+    optimizer, T_max=12 * batches_per_epoch  # H41: calibrate to actual 12-13 ep budget
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[warmup_scheduler, cosine_scheduler],
     milestones=[batches_per_epoch],
 )
-print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={14 * batches_per_epoch} batches (14 epochs)")
+print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={12 * batches_per_epoch} batches (12 epochs)")
+lr_at_ep12 = 0.5 * cfg.lr * (1 + math.cos(math.pi * 12 / 12))
+lr_at_ep13 = 0.5 * cfg.lr * (1 + math.cos(math.pi * 13 / 12))
+print(f"[H41] T_max=12: cosine LR at ep12 = {lr_at_ep12:.2e}, ep13 = {lr_at_ep13:.2e} (expect <1e-5 at ep12)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
