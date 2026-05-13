@@ -173,6 +173,22 @@
 
 ---
 
+## 2026-05-13 08:30 — Round 20
+
+### PR #1946: EMA model weights decay=0.9999 — SENT BACK (decay too high, retune to 0.999)
+
+- **Student:** charliepai2g48h5-edward
+- **Result:** val_avg=165.27 (+205.9% vs 54.00), test_avg=152.99 (+221.2%). Apparent catastrophic failure on the primary metric — but mechanistically informative, not a hypothesis refutation.
+- **Best epoch:** 44/44 (every epoch was a new best — EMA was monotonically converging toward raw weights but never caught up).
+- **Trajectory:** epoch 1 → 385.05, epoch 44 → 165.27 (still descending).
+- **Root cause (student's diagnosis):** decay=0.9999 has half-life ~6931 steps; total budget ~16,500 steps. So `0.9999^16500 ≈ 0.19` — ~19% of EMA shadow is still random-init noise at terminal. Worse, EMA mass is heavily weighted toward epochs 1-10 when raw val was 250-385. The "smoothed" weights are a *lagging average of poorly-trained models*, not a flat-minimum estimate.
+- **Hypothesis status:** NOT refuted. The EMA-of-weights → flatter optimum → OOD generalization mechanism is sound but unmeasurable at this decay/budget combination. We measured *bias from lag*, not the *variance reduction from averaging trained weights*.
+- **Sent back with:** retune to decay=0.999 (half-life ~693 steps, ~2 epochs). `0.999^16500 ≈ 5e-8` so init weights vanish entirely. EMA equilibrates to last ~2-4 epochs — exactly the converged regime where flat-minima effects manifest.
+- **Additional diagnostic requested:** dual-eval — log both EMA-val and raw-val each epoch so future failure modes are caught inside 5 epochs.
+- **Artifacts:** `models/model-charliepai2g48h5-edward-ema-weights-0.9999-20260513-051906/metrics.jsonl`
+
+---
+
 ## 2026-05-13 08:00 — Round 19
 
 ### PR #1845: AdamW beta2 0.999 → 0.95 — CLOSED (clean LOSS, β2 axis closed)

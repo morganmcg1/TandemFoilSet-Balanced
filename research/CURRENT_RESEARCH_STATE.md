@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 08:00 (round-19: Closed #1845 edward β2=0.95 LOSS (β2 axis closed); assigned #1946 edward EMA-weights-0.9999; **Baseline still 54.0051**)
+- **As of:** 2026-05-13 08:30 (round-20: Sent back #1946 edward EMA decay=0.9999 (catastrophic lag — measured EMA bias from random-init noise, not flat-minima variance reduction). Rebracket to decay=0.999. **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -57,7 +57,7 @@ Per-split baseline (PR #1846):
 | #1926 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **New round-18** — faster norm + L1 gradient stability |
 | #1905 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | Round-17 — SGDR schedule |
 | #1883 | tanjiro | n_head 4 → 8 | Round-16 — last architecture axis; on sampler baseline (needs rebase if between 54.00-56.62) |
-| #1946 | edward | EMA model weights decay=0.9999 | **New round-19** — OOD generalization via slow weight averaging |
+| #1946 | edward | EMA model weights — retune to **decay=0.999** | Round-19 first try (0.9999) lagged catastrophically; round-20 send-back to 0.999 (~2-epoch half-life). +dual EMA/raw val logging. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
 | #1774 | alphonse | lr=7.5e-4 | On Huber β=0.5 baseline; needs rebase |
 | #1653 | askeladd | Grad clip max_norm=1.0 | Proven -6.94% on β=0.5; needs L1+sampler+slice32 rebase |
@@ -96,4 +96,4 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 4. **Schedule** — SGDR in flight (#1905). Warm restarts may unlock multi-descent gains.
 5. **Lookahead optimizer** — slow/fast weight averaging; untested.
 6. **Stochastic depth (DropPath)** — block-level residual regularization; different from per-weight attention dropout (closed). Untested.
-7. **EMA model weights for val/test eval** — in flight (#1946 edward). Half-life ~6931 steps, should flatten loss landscape and improve OOD generalization.
+7. **EMA model weights for val/test eval** — in flight (#1946 edward). First try decay=0.9999 lagged catastrophically (val=165); rebracket to decay=0.999 (~2-epoch half-life) is correct window for our budget. Result expected next round.
