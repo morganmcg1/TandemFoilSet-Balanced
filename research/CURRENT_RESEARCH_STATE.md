@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:30
+- **Date:** 2026-05-13 15:38
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -95,14 +95,16 @@
 | tanjiro | #2408 | **slice_num=8 on n_layers=3+epochs=38** (next partition floor probe) | n_layers=3 |
 | fern | #2409 | **lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36** (LR at NEW baseline stack) | n_layers=3 |
 | edward | #2383 | n_head=2 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
-| thorfinn | #2353 | lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
+| thorfinn | #2417 | **n_head=2 on n_layers=3+slice_num=12+epochs=36** (attention-head axis at NEW stack) | n_layers=3 |
 | frieren | #2402 | lr=5e-5 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
 | nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack — informative for axis, cannot win) | n_layers=3 |
 
 **⚠️ NOTE:** alphonse/askeladd/edward/thorfinn/frieren/nezuko all testing at slice_num=24 or older stacks. Cannot beat new baseline 35.969. Will confirm axes when results land but will be closed.
 
-**Merged this turn:** #2351 (tanjiro slice_num=12, val=35.969, −3.74%) — new baseline
-**Closed this turn:** #2301 (fern lr=1.5e-4 old stack — baseline shifted, no path to victory)
+**Merged round 27:** #2351 (tanjiro slice_num=12, val=35.969, −3.74%) — new baseline
+**Closed this turn:** #2353 (thorfinn lr=1.5e-4 at old stack — won vs old, lost vs new; LR signal recorded), #2301 (fern lr=1.5e-4 older stack)
+
+**Key signal from #2353:** lr=1.5e-4 beats lr=1e-4 at slice_num=24 (−1.41% val). This validates fern's in-flight #2409 (lr=1.5e-4 at slice_num=12). If the signal carries over to the new stack, fern's experiment could yield val ~35.4.
 
 **Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → **35.969** (−10.5% total from round start)
 

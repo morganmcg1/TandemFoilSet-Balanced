@@ -6,6 +6,33 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 15:35 — PR #2353 — CLOSED (lr=1.5e-4 won vs old baseline, can't beat new; strong LR signal)
+
+**thorfinn: lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33**
+- vs OLD baseline (PR #2229 val=37.366): val=36.841 (**−1.41% WIN**), test=30.859 (−1.63%) 
+- vs NEW baseline (PR #2351 val=35.969): val=36.841 (**+2.42% WORSE**), test=30.859 (+1.96%)
+- best_epoch: 33/33 (final — still descending)
+- 53.55s/epoch, 29.45 min total, params 514,263, peak 19.84 GB
+- Training stable: no instability at lr=1.5e-4
+
+| Split | val lr=1.5e-4 | val OLD baseline | Δ |
+|---|---|---|---|
+| single_in_dist | 36.655 | 38.082 | **−3.75%** |
+| geom_camber_rc | 52.177 | 51.356 | +1.60% |
+| geom_camber_cruise | 20.718 | 20.702 | +0.08% |
+| re_rand | 37.813 | 39.325 | **−3.85%** |
+| **avg** | **36.841** | **37.366** | **−1.41%** |
+
+**KEY SIGNAL:** lr=1.5e-4 IS better than lr=1e-4 at slice_num=24. Gains concentrate on in-distribution (single_in_dist −3.75%) and re_rand (−3.85%) — the splits where optimization budget helps most. Geometry-OOD splits flat. This is a real LR signal at the OLD stack — validates the lr=1.5e-4 direction for fern's in-flight test at slice_num=12 (#2409).
+
+**Why closed:** Baseline shifted to slice_num=12 stack while this was running. The slice_num=24 stack is ~1.4 val units behind the new baseline — even an LR win at slice_num=24 can't close that gap.
+
+**Metric artifacts:** `models/model-lr-1p5e-4-nlayers3-slicenum24-20260513-145401/metrics.jsonl`
+
+**Reassignment:** thorfinn → PR #2417 (n_head=2 at NEW slice_num=12 stack)
+
+---
+
 ## 2026-05-13 15:28 — PR #2351 — MERGED ✓ NEW BASELINE val=35.969 (slice_num=12 floor probe wins!)
 
 **tanjiro: slice_num=12 on n_layers=3+epochs=36 (reduced from 38 due to 51.89s/epoch)**
