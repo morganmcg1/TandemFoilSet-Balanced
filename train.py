@@ -504,29 +504,40 @@ for i, b in enumerate(model.blocks):
 # Other params: lr=cfg.lr, wd=cfg.weight_decay; freqs: lr=10*cfg.lr, wd=0.
 # Rationale: default wd=1e-4 pulls freqs toward 0 each step, and the global lr=5e-4
 # was too small to move them off their dyadic init (top freqs essentially fixed in #2312).
+# H55: slice attention temperature params in 10x lr, no-WD group.
+# temperature: [1, n_heads, 1, 1] per block. 5 blocks * 1 per block = 5 param tensors * 4 heads each = 20 scalars total.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
-other_params = list(model.parameters())
+temp_params = [p for n, p in model.named_parameters() if "temperature" in n]
+other_model_params = [p for n, p in model.named_parameters() if "temperature" not in n]
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_params) == (
+assert len(temp_params) == 5, f"Expected 5 temperature tensors (one per block), got {len(temp_params)}"
+assert sum(p.numel() for p in temp_params) == 5 * 4, (
+    f"Expected 20 temperature scalars (5 blocks x 4 heads), got {sum(p.numel() for p in temp_params)}"
+)
+assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_model_params) + sum(p.numel() for p in temp_params) == (
     sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
 )
 optimizer = torch.optim.AdamW(
     [
-        {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+        {"params": other_model_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": temp_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H40] Optimizer param groups: "
-    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
-    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
+    f"[H55] Optimizer groups: "
+    f"other ({sum(p.numel() for p in other_model_params)} params) lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
+    f"freqs ({sum(p.numel() for p in freq_params)} params) lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}, "
+    f"temps ({sum(p.numel() for p in temp_params)} scalars) lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e}"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+for i, b in enumerate(model.blocks):
+    print(f"[H55] block {i} temperature init: {b.attn.temperature.flatten().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -690,6 +701,23 @@ append_metrics_jsonl(
     metrics_jsonl_path,
     {"event": "final", **final_layer_scale_stats, **freqs_summary},
 )
+# H55: final temperature stats (per block-head + per-block summary).
+final_temp_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    t = b.attn.temperature.detach().flatten()
+    for h, v in enumerate(t.tolist()):
+        final_temp_stats[f"final/temperature_l{i}_h{h}"] = v
+    final_temp_stats[f"final/temperature_l{i}_mean"] = float(t.mean().item())
+    final_temp_stats[f"final/temperature_l{i}_std"] = float(t.std().item())
+append_metrics_jsonl(metrics_jsonl_path, {"event": "final_temps", **final_temp_stats})
+print("[H55] Final temperatures (init=0.5):")
+for i, b in enumerate(model.blocks):
+    t = b.attn.temperature.detach().flatten().tolist()
+    print(
+        f"  block {i}: heads=[{', '.join(f'{v:+.4f}' for v in t)}] "
+        f"mean={final_temp_stats[f'final/temperature_l{i}_mean']:+.4f} "
+        f"std={final_temp_stats[f'final/temperature_l{i}_std']:.4f}"
+    )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
     print(
