@@ -8,36 +8,50 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **55.92** | PR #1755 (merged 2026-05-13) — n_hidden=160 on Huber δ=0.3+Lion+BF16+epochs=16 stack |
-| **test_avg/mae_surf_p** | **51.92** | PR #1755 — all 4 splits finite |
-| Peak VRAM | 37.99 GB | PR #1755 — BF16, batch=4, n_hidden=160 |
-| s/epoch | ~115 s | PR #1755 — 16 epochs ≈ 30.7 min total |
+| **val_avg/mae_surf_p** | **53.62** | PR #2028 (merged 2026-05-13) — per-channel Huber δ=[0.5,0.5,0.2] on n_hidden=160+Lion+BF16+epochs=16 stack |
+| **test_avg/mae_surf_p** | **49.65** | PR #2028 — all 4 splits finite |
+| Peak VRAM | 37.99 GB | PR #2028 — BF16, batch=4, n_hidden=160 |
+| s/epoch | ~115 s | PR #2028 — 16 epochs ≈ 30.7 min total |
 
-### Per-split val (PR #1755, epoch 16, n_hidden=160 + δ=0.3)
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 61.14 |
-| val_geom_camber_rc | 69.82 |
-| val_geom_camber_cruise | 37.23 |
-| val_re_rand | 55.51 |
-| **val_avg** | **55.92** |
-
-### Per-split test (PR #1755, epoch 16 best checkpoint, n_hidden=160 + δ=0.3)
+### Per-split val (PR #2028, epoch 16, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 51.41 |
-| test_geom_camber_rc | 60.85 |
-| test_geom_camber_cruise | 48.82 |
-| test_re_rand | 46.61 |
-| **test_avg** | **51.92** |
+| val_single_in_dist | 58.46 |
+| val_geom_camber_rc | 67.34 |
+| val_geom_camber_cruise | 35.10 |
+| val_re_rand | 53.58 |
+| **val_avg** | **53.62** |
+
+### Per-split test (PR #2028, epoch 16 best checkpoint, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 48.40 |
+| test_geom_camber_rc | 58.75 |
+| test_geom_camber_cruise | 47.64 |
+| test_re_rand | 43.83 |
+| **test_avg** | **49.65** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --experiment_name nhidden160_d03_ep16 --agent <student>
+cd target/ && python train.py --epochs 16 --experiment_name per_channel_huber_delta_ep16 --agent <student>
 ```
-(n_hidden=160 is now default in train.py; Huber δ=0.3 + Lion lr=3e-4 + wd=6e-5 + epochs=16 required)
+(n_hidden=160, Lion lr=3e-4, wd=6e-5, epochs=16; per-channel δ=[Ux=0.5, Uy=0.5, p=0.2] is now in train.py)
+
+## 2026-05-13 08:00 — PR #2028: Per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2] on n_hidden=160 stack (MERGED)
+
+- **val_avg/mae_surf_p: 53.6194** (↓ 4.1% from 55.92 — decoupling pressure vs velocity outlier capping)
+- **test_avg/mae_surf_p: 49.6534** (↓ 4.4% from 51.92 — all 4 splits improve uniformly)
+- **Peak VRAM: 37.99 GB** (unchanged); s/epoch ~115 s; total wall-clock ~30.7 min
+- **Metric artifacts:** `models/model-per_channel_huber_delta-20260513-071528/metrics.jsonl`
+- **What changed:** Replaced scalar δ=0.3 with per-channel tensor `delta = abs_err.new_tensor([0.5, 0.5, 0.2])` (Ux δ=0.5, Uy δ=0.5, p δ=0.2). The `torch.where` broadcast over the channel dim applies channel-specific thresholds.
+- **Why it worked:** Pressure (p) and velocity (Ux/Uy) have different residual distributions. Pressure residuals are high-variance (large outliers near surface geometry), so a tight δ=0.2 cap is optimal (same trend as the uniform δ=0.3 win vs δ=0.5). Velocity residuals are lower-variance — the old δ=0.3 was over-aggressive, saturating too many velocity gradient signals into the linear regime. Expanding velocity δ to 0.5 restores quadratic signal for velocity channels. All 8 splits improve (−1.93 to −2.68 on val, similar on test), confirming orthogonal axis to width (n_hidden=160) and optimizer (Lion).
+- **Baseline configuration delta:** Uniform `δ=0.3` → per-channel `delta=abs_err.new_tensor([0.5, 0.5, 0.2])` in train.py Huber loss.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --experiment_name per_channel_huber_delta_ep16 --agent <student>
+  ```
 
 ## 2026-05-13 07:10 — PR #1755: n_hidden=160 on Huber δ=0.3+Lion+BF16+epochs=16 stack (MERGED)
 
@@ -184,9 +198,9 @@ cd target/ && python train.py --epochs 16 --experiment_name nhidden160_d03_ep16 
 
 | Lever | Value |
 |---|---|
-| Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 |
+| Model | Transolver, n_hidden=160, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 |
 | Activation | GELU |
-| Loss | MSE in normalized space: `vol_loss + 10 * surf_loss` |
+| Loss | Per-channel Huber (Smooth-L1): δ=[Ux=0.5, Uy=0.5, p=0.2]; `vol_loss + 10 * surf_loss` |
 | Surface weight | 10.0 |
 | Optimizer | **Lion, lr=3e-4, weight_decay=6e-5** (changed from AdamW lr=1e-3) |
 | LR schedule | LambdaLR, 3-epoch warmup + cosine to T_max=epochs |
