@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 10:00 UTC (Wave 11 kick-off: CLOSE #1828 frieren SmoothL1 β-bracket absorbed by LayerScale; CLOSE #1549 fern FiLM stalled 24h+; CLOSE #1753 askeladd adaptive-grad-clip +3.30%; CLOSE #2060 tanjiro coord-jitter-0.002 axis falsified; ASSIGN #2098 frieren lion-optimizer, #2099 fern weight-decay-3x, #2102 askeladd rmsnorm, #2105 tanjiro swiglu-activation)
+- **Last updated**: 2026-05-13 10:20 UTC (Wave 11 progress: MERGE #1754 nezuko LR warmup H19 as 11th compound win (val=73.958 −0.61%, test=64.502 −1.56%); CLOSE #2078 edward Gaussian Fourier σ=10 (+36.6%, σ scale mismatch); CLOSE #2059 alphonse n_head=8 (+7.81%, head-fragmentation + wall-time incompatible); ASSIGN #2135 edward gaussian-σ-calibrated, #2136 alphonse n_head=2, #2137 nezuko lr-3e-4)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,17 +11,16 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #2018 merged — LayerScale init=0.025, -0.08% val / -0.74% test)
+## Current best baseline (PR #1754 merged — LR warmup H19, -0.61% val / -1.56% test)
 
-- `val_avg/mae_surf_p` = **74.415** (LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **65.524**
-- Per-split val: single_in_dist=80.907 / camber_rc=84.613 / camber_cruise=58.100 / re_rand=74.039
-- Per-split test: single_in_dist=70.626 / camber_rc=73.856 / camber_cruise=49.491 / re_rand=68.125
-- Δ vs PR #1896 baseline (74.476 / 66.014): **−0.08%** val_avg, **−0.74%** test_avg
-- **1/4 val splits improve** (single_in_dist dominant −4.90%; OOD splits regress slightly)
-- **Mechanism (LayerScale init=0.025)**: γ_l std/mean crosses 1.0 at block-0 attn (110.5%) — ~half of per-channel entries are sign-flipped (negative γ_l). Diminishing-returns curve: gain per halving of init → -1.21% (0.1→0.05) → -0.08% (0.05→0.025). MLP branch not yet at sign-flip (47–73% std/mean).
-- **Surf-ch-weight axis fully mapped**: [1,1,1]=78.260 baseline / [0.5,0.5,2.0]=75.391 (4×, optimum) / [0.33,0.33,2.33]=76.890 (7×, Outcome C). Direction closed — do not exceed 4×.
-- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→**#2018** → val_avg has improved from 100.957 to **74.415** = **−26.3% over 10 merges**.
+- `val_avg/mae_surf_p` = **73.958** (LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 14)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **64.502**
+- Per-split val: single_in_dist=81.293 / camber_rc=85.285 / camber_cruise=56.390 / re_rand=72.862
+- Per-split test: single_in_dist=71.563 / camber_rc=74.317 / camber_cruise=46.766 / re_rand=65.362
+- Δ vs PR #2018 baseline (74.415 / 65.524): **−0.61%** val_avg, **−1.56%** test_avg
+- **2/4 val splits improve**: camber_cruise −2.94%, re_rand −1.59% (same OOD splits that LayerScale-0.025 had regressed). single_in_dist and camber_rc slightly regress.
+- **Mechanism (LR warmup)**: per-batch LinearLR over epoch 1 reduces ep1 grad-norm; gives LayerScale γ_l a stable starting trajectory before cosine peak; OOD splits benefit most (rescues LayerScale-0.025 OOD degradation). Test gain exceeds val gain — warmup reduces generalization noise.
+- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→**#1754** → val_avg has improved from 100.957 to **73.958** = **−26.7% over 11 merges**.
 
 ## Current research focus
 
@@ -39,10 +38,10 @@ The compound stack has 10 merged wins (100.957 → 74.415 = **−26.3%**): L1 lo
 
 | Student | PR | Slug | Hypothesis |
 |---------|----|----|---------|
-| alphonse | #2059 | n_head=4→8 | Attention diversity at zero param cost |
-| edward | #2078 | gaussian-fourier-σ=10 | Continuous Fourier distribution vs dyadic L=8 plateau |
+| alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features |
+| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) |
 | thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep |
-| nezuko | #1754 | lr-warmup-H19 | LR warmup rebase onto post-#2018 stack |
+| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack |
 | frieren | #2098 | lion-optimizer | Sign-momentum optimizer — orthogonal to all merged stack |
 | fern | #2099 | weight-decay-3x | wd=1e-4→3e-4: compound stack has more regularization now |
 | askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling |
@@ -72,6 +71,8 @@ The compound stack has 10 merged wins (100.957 → 74.415 = **−26.3%**): L1 lo
 - Stoch-depth single-knob: V-shape; 0.05 (+13.7%) and 0.15 (+7.69%) both worse; 0.10 is optimum
 - Attn-mlp-dropout: compute tax + stoch-depth redundancy
 - AdamW betas (0.9, 0.95): non-uniform regression, regime mismatch
+- n_head=8: +7.81% regression, head fragmentation (dim_head=16) destroys OOD cross-geom features, +42% wall-time incompatible with 30-min cap
+- Gaussian Fourier σ=10: +36.6% regression, σ scale mismatch for std-normalized coords (direction NOT closed — σ-calibration in-flight)
 
 **Output-side calibration is fully exhausted** after wave-4 results: #1610
 (full log1p), #1636 (pressure-only log1p), #1675 (per-channel γ, β output

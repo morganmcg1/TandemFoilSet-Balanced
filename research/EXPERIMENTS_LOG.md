@@ -8,6 +8,83 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 10:10 — PR #1754 (nezuko LR warmup H19) — **MERGED** (11th compound win)
+
+- Branch: `charliepai2g24h4-nezuko/lr-warmup-h19`
+- Hypothesis: Linear LR warm-up over epoch 1 (per-batch LinearLR) + cosine T_max=14 (SequentialLR). Addresses ep1 grad-norm spike on compound stack; orthogonal to all prior merged components.
+- Metric artifacts: `models/model-charliepai2g24h4-nezuko-lr-warmup-h19-20260513-075103/metrics.jsonl`
+
+| Metric | LR warmup H19 (#1754) | Baseline (#2018) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **73.958** | 74.415 | **−0.61% WIN** |
+| test_avg/mae_surf_p (4-split) | **64.502** | 65.524 | **−1.56% WIN** |
+
+Per-split val: single_in_dist=81.293 (+0.48%) / camber_rc=85.285 (+0.79%) / camber_cruise=56.390 (**−2.94%**) / re_rand=72.862 (**−1.59%**). Split pattern inverted vs original pre-rebase run (old: single_in_dist led; new: camber_cruise and re_rand lead). 
+
+**Mechanism — warmup rescues LayerScale-0.025 OOD degradation:**
+
+The compound stack's latest merge (#2018, LayerScale init=0.025 with block-0 attn sign-flip at 110.5% std/mean) had regressed on the OOD splits: camber_cruise +1.93%, re_rand +1.34% vs #1896. These same splits are exactly where warmup provides the most gain (−2.94%, −1.59%). The per-batch linear ramp over epoch 1 reduces ep1 grad-norm, giving γ_l parameters a stable starting trajectory before the cosine LR peaks — the sign-flip channel dynamics resolve more cleanly on OOD splits as a result.
+
+Test gain (−1.56%) again exceeds val gain (−0.61%) — consistent with original pre-rebase H19 signal. Orthogonality to LayerScale, Fourier, and surf-ch-weight confirmed.
+
+New compound progress: 100.957 → **73.958 = −26.7%** over 11 merges. Zero new parameters (schedule change only).
+
+---
+
+## 2026-05-13 10:10 — PR #2078 (edward Gaussian Fourier σ=10) — **CLOSED** (+36.6% regression; σ scale mismatch)
+
+- Branch: `charliepai2g24h4-edward/gaussian-fourier-sigma-10`
+- Hypothesis: Gaussian RFF (Tancik NeurIPS 2020) with σ=10. Tests whether continuous Fourier distribution sidesteps the dyadic-L=8 val_re_rand/surf-ch-weight interaction.
+- Metric artifacts: `models/model-charliepai2g24h4-edward-gaussian-fourier-sigma-10-20260513-082642/metrics.jsonl`
+
+| Metric | Gaussian σ=10 | Baseline (#2018, at submission time) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **101.620** | 74.415 | **+36.6% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **90.775** | 65.524 | **+38.5% REGRESSION** |
+
+Still descending at ep14 (val trajectory: 221.9 → 185.9 → ... → 101.6) — not converged.
+
+**Root cause (student's diagnosis confirmed): σ=10 badly miscalibrated for standardized coords.**
+
+Our coords are `x_norm = (x - x_mean)/x_std` with std~1. The projected argument `2π · coord · B` has expected magnitude ~`2π × σ_coord × σ_B = 2π × 1 × 10 ≈ 63` — placing Fourier features in extreme aliasing territory. Tancik's σ recommendation targets coords in [-1,1]. For our standardized space, correct σ range is ~[0.3, 1.5].
+
+**Axis NOT closed** — Gaussian RFF with calibrated σ is a valid direction. Follow-up PR #2135 assigned with σ=1.0 (arm A) + σ=0.5 (arm B) to find the correct operating point.
+
+---
+
+## 2026-05-13 10:10 — PR #2059 (alphonse n_head=4→8) — **CLOSED** (+7.81% val regression; head-fragmentation mechanism confirmed)
+
+- Branch: `charliepai2g24h4-alphonse/n-head-4-to-8`
+- Hypothesis: Increase n_head from 4 to 8 at zero param cost. Tests whether finer-grained slice attention patterns improve feature diversity.
+- Metric artifacts: `models/model-charliepai2g24h4-alphonse-n-head-4-to-8-20260513-081035/metrics.jsonl`
+
+| Metric | n_head=8 | Baseline (#1896, at submission time) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 11) | **80.290** | 74.476 | **+7.81% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **71.949** | 66.014 | **+9.00% REGRESSION** |
+| epochs completed | **11** | 14-15 | confound: 30-min cap |
+| wall-time/epoch | 172.8s | ~120s | **+42%** |
+| n_params | 652,651 | 669,271 | −2.5% (unexpected!) |
+
+**Wall-time confound:** n_head=8 is 42% slower/epoch. Only 11 epochs completed in 30 min; val curve still descending. Even so, val=80.3 at ep11 vs baseline ~74 at the same epoch: gap is ~8 units, unlikely to close in 3 more epochs.
+
+**Head-fragmentation mechanism confirmed:**
+
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| camber_rc | **+9.56%** | **+14.65%** ← largest both |
+| re_rand | +8.66% | +7.36% |
+| camber_cruise | +6.32% | +6.87% |
+| single_in_dist | +6.36% | +6.22% |
+
+OOD-geom split camber_rc leads by far on test (+14.65%). This is the same pattern as per-channel decoder experiments (#1811, #2020): when the per-head feature space shrinks from 32 to 16 dims, the cross-geometry correlations that enable OOD transfer degrade. A single 32-dim head can't fit the full cross-airfoil-shape correlation it needs to generalize, fragmented into 16-dim subspaces that are even more constrained.
+
+**Param count discrepancy:** n_head=8 dropped 2.5% params (dim_head=16 → Q/K/V projections shrink). The "zero param cost" assumption in the PR was wrong — useful calibration.
+
+**Follow-up: n_head=2 (#2136, alphonse).** Opposite direction: 2 heads × 64-dim each. Wider heads should preserve cross-geometry correlations better than the baseline 4×32.
+
+---
+
 ## 2026-05-13 09:40 — PR #2060 (tanjiro coord-jitter-std=0.002) — **CLOSED** (+1.47% val regression; jitter axis closed)
 
 - Branch: `charliepai2g24h4-tanjiro/coord-jitter-std-0.002`
