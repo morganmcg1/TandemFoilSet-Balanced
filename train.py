@@ -463,6 +463,7 @@ class Config:
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
+    lion_beta2: float = 0.99   # Lion momentum EMA decay (beta2); default matches Lion canonical
 
 
 cfg = sp.parse(Config)
@@ -533,7 +534,8 @@ scaler = GradScaler(device="cuda", enabled=amp_enabled)
 print(f"BF16 autocast: {'enabled' if amp_enabled else 'disabled'}")
 
 if cfg.optimizer == "lion":
-    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay,
+                     betas=(0.9, cfg.lion_beta2))
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer}")
