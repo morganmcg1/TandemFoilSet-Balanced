@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 13:45 (reviewed #2032 plateau-swa-v3 CLOSED +3.44%, #2204 sorted-pressure-dist CLOSED, #2198 refilm-per-block CLOSED, #2147 cosine-long-tail CLOSED, #2169 re-input-jitter CLOSED; assigned soap-betas-0p9-0p99 #2252 thorfinn, refilm-hidden-16 #2253 fern, soap-precond-freq-5 #2255 askeladd, mlp-ratio-3 #2256 tanjiro, surf-weight-15 #2264 edward)
+- **Date**: 2026-05-13 17:00 (closed 7 experiments total: #2252 soap-betas +3.18%, #2253 refilm-hidden-16 +2.52%, #2233 weight-decay-5e-4 +1.86%, #2256 mlp-ratio-3 +23.9%, #2264 surf-weight-15 +3.18%, #2255 soap-precond-freq-5 +3.52% NEGATIVE, #1966 ema-beta-0p99-rampup mean +2.60% NEGATIVE — EMA axis CLOSED on ReFiLM stack; assigned 7 new WIP PRs #2319-#2325)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -24,7 +24,7 @@ Per-split val: single_in_dist=28.6013, rc=41.9483, cruise=14.1462, re_rand=30.80
 Single-seed run-to-run variance is **~1-2%** on val_avg/mae_surf_p. Deltas below 1.5% need multi-seed confirmation.
 
 ### Convergence/Budget-Limited
-Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA) remain high value.
+Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA) remain high value — but EMA axis is now CLOSED (see below).
 
 ### Re-Conditioning Stack — 3 confirmed mechanisms
 - **ReScaleHead** (output rescaling, -1.95%): learned Re→scale applied to Transolver output
@@ -34,7 +34,7 @@ Model converges monotonically to cutoff in every run — best epoch is always th
 ### Re-Conditioning Architecture — Shared > Per-Block
 - **refilm-per-block** (#2198, +2.9%): per-block gates DID specialize (block4 absmax 0.81 vs block0 0.51), but overfitted — shared FiLM acts as regularizer
 - **re-input-jitter** (#2169, +5.5%): Re channel is load-bearing; any noise corrupts ReFiLM conditioning. Re augmentation axis CLOSED.
-- **Open**: refilm-hidden-16 (#2253) — tests if FiLM MLP capacity (hidden=8→16) helps without the overfitting risk of per-block independence
+- **refilm-hidden-16** (#2253, +2.52%): gamma/beta absmax tripled (0.44→1.36); slice entropy collapsed in layer 3 head 1 (4.13→1.06). ReFiLM capacity expansion CLOSED. hidden=8 is the correct regularizing bottleneck.
 
 ### Loss-Shape Axis CLOSED (all 3 variants regressed)
 - Huber δ_v-loose (#2081): +1.16%
@@ -61,26 +61,39 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - OneCycleLR (#1884): +3.52%; grad_clip saturated throughout peak window
 - Cosine T_max=40 (#2147): +11.4%; Cosine T_max=56: +31.4%; T_max=28 confirmed optimal
 
+### SOAP Optimizer Axis — Most Hyperparameters Exhausted
+- **soap-betas-0p9-0p99** (#2252, +3.18%): beta2=0.99 → Kronecker factors only updated ~1050 times at precond_freq=10 over 10k steps → stale curvature. Baseline (0.95, 0.95) well-calibrated for 10k-step SOAP.
+- **weight-decay-5e-4** (#2233, +1.86%): convergence-limited; higher wd consumes larger fraction of effective update step. wd=1e-4 is local optimum.
+- **soap-precond-freq-5** (#2255, +3.52%): halving precond_freq from 10 to 5 introduced excess Kronecker-factor noise at bs=4, overwhelming any responsiveness gain. freq=10 confirmed optimal.
+- **OPEN**: max_precond_dim 256→128 (#2323 frieren WIP) — faster Kronecker refresh per step without changing how often steps happen
+
+### Surface Loss Weight Axis CLOSED
+- **surf-weight-7** (#1936, +2.94%): rc went WRONG direction
+- **surf-weight-15** (#2264, +3.18%): single=+9.50%, rc=+3.11%; bilateral failure. Loss-scale ≠ metric-scale when surface loss dominates. surf_weight=10 is local optimum. RC bottleneck is NOT a surface/volume balance issue.
+
+### Architecture Capacity Expansion Findings
+- **mlp-ratio-3** (#2256, +23.9%): compute-bound underfitting — 25.6% more params, same 30-min budget → less training signal per parameter. Under fixed compute, smaller model wins. FFN capacity expansion CLOSED.
+
 ### SWA Axis CLOSED (all 3 variants regressed)
 - SWA last-k (#1933): no weight-space spread at LR=1e-5
 - SWA v2-hybrid LR=1e-4 (#2032): +1.24% val miss; SWA averaging real (−0.94) but LR plateau costs base quality
 - SWA v3 LR=5e-5 (#2032): +3.44% val; lower plateau even worse. SWA incompatible with 28-ep cosine budget.
 
+### EMA Axis CLOSED (permanently on ReFiLM stack)
+- **ema-beta-0p99-rampup** (#1966): 4 independent rebased runs all regressed (+1.72% to +3.40%), mean +2.60%. Root cause: per-epoch `load_state_dict` swap between live and EMA weights interacts with `torch.compile(mode='default', dynamic=True)` + zero-initialized ReFiLM FiLM gates, degrading live training trajectory by ~0.83 MAE average. EMA smoothing dividend real (~-0.1 MAE within a run) but cannot overcome trajectory penalty. EMA axis CLOSED. Lookahead (no state-swap overhead) is the preferred alternative to explore.
+
 ---
 
 ## Current Research Focus
 
-**SOAP optimizer internals, model capacity, and convergence mechanisms.** Programme is now exploring:
-1. **SOAP beta asymmetry**: betas (0.95, 0.95) → (0.9, 0.99) (thorfinn #2252 NEW)
-2. **ReFiLM capacity**: shared FiLM hidden=8→16 (fern #2253 NEW)
-3. **SOAP preconditioner**: precondition_frequency 10→5 (askeladd #2255 NEW)
-4. **FFN capacity**: mlp_ratio 2→3 (tanjiro #2256 NEW)
-5. **Surface loss weight**: surf_weight 10→15, targeting rc split (edward #2264 NEW)
-6. **EMA β=0.99**: rampup from 0.9 (frieren #1966 WIP REBASE)
-7. **Weight decay 5×**: SOAP wd 1e-4→5e-4 (alphonse #2233 NEW)
-8. **slice_num=128**: Capacity doubling (nezuko #1467 WIP STALE)
-
-All 8 students active.
+**Broad convergence, architecture, physics-informed, and conditioning axes.** After closing EMA and SOAP precond-freq as negative, the track is now fully loaded with 8 concurrent experiments spanning diverse mechanisms:
+1. **Input conditioning breadth** (alphonse #2319): extend ReFiLM to AoA + geometry inputs alongside Re
+2. **Slice granularity sweep** (askeladd #2320, nezuko #1467): slice_num=32 vs 128 — both directions from baseline=64
+3. **Layer-wise LR decay** (edward #2321): LLRD across Transolver blocks (decay=0.7) may decouple early/late feature learning rates
+4. **Geometry-conditioned output head** (fern #2322): per-sample scale MLP from gap/stagger/AoA input
+5. **SOAP max_precond_dim=128** (frieren #2323): faster Kronecker factor refresh than reducing precond_freq
+6. **Gradient accumulation** (tanjiro #2324): effective batch 4→8 via accum_steps=2
+7. **Physics-informed Laplacian loss** (thorfinn #2325): smoothness regulariser on predicted pressure field
 
 ---
 
@@ -88,14 +101,14 @@ All 8 students active.
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2252 | thorfinn | `soap-betas-0p9-0p99` | NEW | **HIGH** | SOAP betas (0.95,0.95)→(0.9,0.99); faster gradient response + stable precond |
-| #2253 | fern | `refilm-hidden-16` | NEW | **HIGH** | ReFiLM hidden=8→16; wider shared FiLM MLP without per-block overfitting risk |
-| #2255 | askeladd | `soap-precond-freq-5` | NEW | **HIGH** | precondition_frequency 10→5; 2× Kronecker factor refresh rate |
-| #2256 | tanjiro | `mlp-ratio-3` | NEW | **HIGH** | mlp_ratio 2→3; ~+655K FFN params, ~2× model capacity |
-| #2264 | edward | `surf-weight-15` | NEW | **HIGH** | surf_weight 10→15; targets rc split (41.95) using direction from #1936 |
-| #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99 from 0.9 rampup; needs rebase onto 28.8762 |
-| #2233 | alphonse | `weight-decay-5e-4` | NEW | **HIGH** | SOAP wd 1e-4→5e-4 (5×); OOD generalization via stronger L2 regularization |
-| #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=128; baseline update sent |
+| #2319 | alphonse | `aoa-film-conditioning` | WIP | HIGH | extend ReFiLM conditioning to (Re, AoA, gap, stagger, camber) |
+| #2320 | askeladd | `slice-num-32` | WIP | HIGH | halve slices 64→32; more epochs per 30-min budget |
+| #2321 | edward | `llrd-transolver` | WIP | HIGH | layer-wise LR decay across Transolver blocks (decay=0.7) |
+| #2322 | fern | `geom-conditioned-output-head` | WIP | HIGH | geometry-conditioned output scale: (gap, stagger, AoA) → per-sample scale |
+| #2323 | frieren | `soap-max-precond-dim-128` | WIP | HIGH | SOAP max_precond_dim 256→128 (faster Kronecker refresh) |
+| #2324 | tanjiro | `grad-accum-batch8` | WIP | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
+| #2325 | thorfinn | `pressure-laplacian-loss` | WIP | MEDIUM | physics-informed Laplacian smoothness regulariser on predicted pressure |
+| #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=64→128; last advisor instruction 12:42Z, no response yet |
 
 ---
 
@@ -144,18 +157,27 @@ All 8 students active.
 - **refilm-per-block** (#2198): +2.9%; per-block overfitting, shared FiLM acts as regularizer.
 - **cosine-long-tail T_max=40/56** (#2147): +11.4%/+31.4%; T_max=28 is confirmed optimal. Schedule axis CLOSED.
 - **re-input-jitter** (#2169): +5.5%/+14.1%; Re channel is load-bearing for ReFiLM. Re-augmentation CLOSED.
+- **soap-betas-0p9-0p99** (#2252): +3.18%; beta2=0.99 → stale Kronecker preconditioner at 10k-step/precond_freq=10 regime. Baseline (0.95,0.95) confirmed optimal.
+- **refilm-hidden-16** (#2253): +2.52%; FiLM capacity overfitting — gamma/beta absmax tripled, slice entropy collapsed. ReFiLM capacity expansion CLOSED.
+- **weight-decay-5e-4** (#2233): +1.86%; convergence-limited; wd=1e-4 is local optimum.
+- **mlp-ratio-3** (#2256): +23.9%; compute-bound underfitting under fixed 30-min budget. FFN capacity axis CLOSED.
+- **surf-weight-15** (#2264): +3.18%; bilateral surf_weight failure (7 and 15 both worse). surf_weight=10 is local optimum. RC bottleneck is NOT surface/volume balance.
+- **soap-precond-freq-5** (#2255): +3.52%; halving precond_freq introduced Kronecker-factor noise at bs=4. freq=10 confirmed optimal. SOAP optimizer tuning axis largely exhausted (betas, wd, precond_freq all tested; max_precond_dim still open).
+- **ema-beta-0p99-rampup** (#1966): mean +2.60% over 4 seeds; per-epoch EMA/live state-swap interacts with torch.compile+ReFiLM degrading live trajectory. EMA smoothing dividend real (~-0.1 MAE) but cannot overcome trajectory penalty. EMA axis CLOSED permanently on this stack.
 
 ---
 
 ## Potential Next Directions
 
 **After current in-flight experiments land**:
-- **SOAP beta/precond results** (#2252, #2255): if optimizer internals help, test combined (lower beta1 + higher beta2 + freq=5)
-- **FFN capacity result** (#2256 mlp-ratio-3): if helps, also test wider hidden=192 (ruled out earlier at mlp_ratio=2 — worth retesting at ratio=3)
-- **ReFiLM hidden-16 result** (#2253): if helps, test hidden=32 or combined with mlp-ratio-3
-- **EMA convergence** (#1966): still the priority — model converges monotonically to cutoff in every run; SWA now closed
-- **Geometry-specific augmentation**: camber/chord perturbation for geom_camber splits (rc split remains worst at 41.95)
-- **Auxiliary losses**: divergence/curl of predicted velocity as regularizer
-- **Multi-seed baseline**: 3 runs to firm up noise floor at 28.88
+- **Lookahead wrapper**: Lookahead(SOAP, k=5, α=0.5) — slow-weights averaging on top of SOAP; substitutes for EMA/SWA benefit WITHOUT the per-epoch state-swap that breaks torch.compile+ReFiLM. Highest-priority untested convergence mechanism.
+- **Extended budget**: 30→45 min would let mlp_ratio=3/larger models fully train; may unlock capacity wins blocked by compute ceiling
+- **Geometry-specific conditioning** (pending #2319 alphonse result): domain-specific attention or adapter heads for rc vs cruise; rc=41.95 is 3× cruise=14.15
+- **Auxiliary velocity losses**: Divergence/curl of predicted velocity as Navier-Stokes regularizer; supplements Laplacian pressure (#2325)
+- **Coordinate-based positional encodings**: Fourier positional encoding of (x,z) mesh coordinates instead of/in addition to raw mesh dimensions
+- **Multi-scale architecture**: hierarchical attention over coarse+fine mesh resolutions
+- **SOAP max_precond_dim=64**: if 128 helps (#2323), go smaller for even faster Kronecker refresh
+- **Slice count both directions**: if slice_num=32 wins (more epochs), reconsider n_layers decrease; if =128 wins (more capacity), check if T_max needs adjustment
+- **Multi-seed baseline confirmation**: 3 runs at 28.8762 to firm up the noise floor before declaring any ~1% gain a winner
 
-**The model is still converging at ep 28-29 in every run.** Convergence-aware mechanisms (EMA, SWA) remain the top priority — if either lands, it should be merged immediately.
+**The model is still converging at ep 28-29 in every run.** Lookahead wrapping SOAP (no state-swap overhead) remains the highest-priority untested convergence mechanism. rc split (41.95 vs cruise=14.15) is a 3× gap — domain-specific/geometry-conditioned mechanisms are the second-highest priority, now being probed by alphonse (#2319) and fern (#2322).
