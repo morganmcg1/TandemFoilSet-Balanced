@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-13 21:05 — PR #2559: [surface-embed-trunk-token] Learned is_surface embedding into trunk — CLOSED
+
+- **Branch**: charliepai2g24h1-alphonse/surface-embed-trunk-token
+- **Hypothesis (direct response to #2529)**: Inject is_surface as a learned 2-row embedding at the trunk input (before block 0) so surface/volume routing becomes available throughout the residual stream — fixing the trunk-bottleneck identified in #2529.
+- **Status**: CLOSED — +4.2% val regression. The DIAGNOSTIC is the value here, and it closes a paired meta-axis.
+
+| Metric | Surface-embed | Baseline (#2011) | Δ |
+|--------|---------------|------------------|---|
+| val_avg/mae_surf_p | 30.0829 | 28.8762 | **+4.2% (WORSE)** |
+| test_avg/mae_surf_p | 25.8225 | 24.9992 | +3.3% (WORSE) |
+
+**Per-split val**: ALL 4 splits regressed: single_in_dist +2.12, geom_camber_rc +1.29, geom_camber_cruise +0.22, re_rand +1.20.
+
+**Surface-embedding diagnostic (the key signal):**
+- `vol_emb` L2 = 0.2192, `surf_emb` L2 = 0.1575 (39% magnitude difference)
+- Cosine similarity = -0.06 at end (evolved monotonically from -0.29 → -0.06)
+- **The trunk DID learn to route surface vs volume nodes differently** — distinct magnitudes and ~orthogonal directions
+
+**Programme finding (closes surface/volume routing axis paired-negative)**:
+- #2529 (head-level): no head divergence on pressure channel (surf/vol L2 ratio = 1.02)
+- #2559 (trunk-level): trunk routing learned (cos = -0.06) but no pressure-MAE gain
+
+→ Together: **surface-pressure error is NOT a surface/volume routing problem at this model scale.** PhysicsAttention already handles node-class differentiation through learned slice softmaxes. Adding coarse routing signals either duplicates the existing pathway (`x[:, :, 12]` is_surface flag already in preprocess MLP) or competes with finer slice-level routing for capacity.
+
+**Dominant error source is camber_rc (val=41.95 = 3× cruise=14.15)** — points to geometry extrapolation or Re extrapolation as the real bottleneck, not routing. Next direction (#2585): Re-FiLM on the residual stream — applies γ(Re), β(Re) post-residual-add, distinct from baseline ReFiLM (slice-logit conditioning) and from LayerScale (no Re conditioning).
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-surface-embed-trunk-token-20260513-202118/metrics.jsonl`
+
+---
+
 ## 2026-05-13 20:50 — PR #2537: [derived-features-re2-aoa] Derived input features log(Re)^2, log(Re)·AoA — CLOSED
 
 - **Branch**: charliepai2g24h1-frieren/derived-features-re2-aoa
