@@ -4,6 +4,88 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 18:10 — PR #2500 (ASSIGNED, alphonse): Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — fix mean drift, preserve spread + test gain
+
+- **Branch:** `willowpai2g48h2-alphonse/anchor-mean-log-sigma-on-sigma0p5`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** #2443 showed Lion+AdamW-eq-init preserves spread (0.000→0.478) and improves test (−0.40) but mean drifts ~0.6 nats more negative → all eff_w inflate 3× → val regresses +0.61. An L2 anchor loss `λ * (mean(log_σ) − (−1.4))²` should pin the mean at AdamW-equilibrium while letting per-channel Kendall gradient drive spread freely. Lion sees the gradient sign — anchor flips the average direction when mean drifts below target. **2-arm sweep λ ∈ {1, 5}** brackets the anchor strength.
+- **Why this is high-value:** Targets the open mean-drift mechanism directly identified in #2443. Single new loss term + 1 hyperparameter. Orthogonal to all in-flight work (no other PR touches Kendall loss formulation). If wins, compounds with fern's #2311 (which fixes spread via optimizer split; this fixes mean via loss term — independent mechanisms).
+
+---
+
+## 2026-05-13 18:10 — PR #2443 (CLOSED, alphonse): Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion — **cleanest σ-collapse mechanism finding on Wave 12**
+
+- **Branch:** `willowpai2g48h2-alphonse/kendall-log-sigma-init-at-adamw-equilibrium`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Initialize log_σ at AdamW-equilibrium values [−1.34, −1.49, −1.47, −1.38, −1.34, −1.35] instead of zero. Tests whether Lion's sign-update is wholly responsible for collapse (collapse-must-occur), or whether init is the load-bearing variable (init-can-prevent-collapse).
+
+### Result table
+
+| Metric | Baseline #2168 | This run | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 45.7648 | 46.3740 | **+0.609 (regression)** |
+| test_avg/mae_surf_p | 39.6619 | **39.2570** | **−0.405 (improvement)** |
+| log_σ spread (final) | 0.000 (collapsed) | **0.4782** | mechanism preserved |
+| log_σ mean (final) | −0.9037 | −1.985 | drifted down 0.6 nats |
+
+**W&B run:** `uj6k9q8q` (state: finished, 30.6 min wall-clock).
+
+### Per-split SWA (paper-facing test in bold)
+
+| Split | val (this) | test (this) | Δ test vs baseline |
+|---|---:|---:|---:|
+| single_in_dist | 48.917 (+0.14) | **41.414** | **−1.04** |
+| geom_camber_rc | 59.632 (+1.34) | **53.875** | **−0.72** |
+| geom_camber_cruise | 29.672 (+0.56) | 23.498 | +0.05 |
+| re_rand | 47.274 (+0.39) | 38.241 | +0.09 |
+
+**Test gains concentrated on the load-bearing OOD splits** — geom_camber_rc and single_in_dist. Cruise and re_rand essentially flat on test.
+
+### log_σ trajectory — spread grows monotonically (key diagnostic)
+
+| ep | spread | mean |
+|---:|---:|---:|
+| INIT | 0.150 | −1.394 |
+| 1 | 0.247 | −1.310 |
+| 3 | 0.371 | −1.455 |
+| 5 | 0.373 | −1.648 |
+| 7 | 0.411 | −1.789 |
+| 9 | 0.470 | −1.882 |
+| 11 | 0.477 | −1.946 |
+| 13 | 0.478 | −1.985 |
+
+**Spread NEVER collapsed.** Grew from 0.150 (init) → 0.478 (final). Per-channel Kendall gradient sign is sufficient to maintain differentiation under Lion. The strong-form claim "Lion's sign-update FORCES collapse" is REFUTED.
+
+### Commentary and conclusions
+
+**Three-tier σ-spread mechanism ordering on σ=0.5 Lion stack:**
+
+| Mechanism | spread | val | test | Cost |
+|---|---:|---:|---:|---|
+| Lion+Kendall (baseline #2168) | 0.000 (collapsed) | 45.77 | 39.66 | — |
+| AdamW+Kendall (#1906/#2270 reference) | ~0.15 | — | — | optimizer swap |
+| **Lion + AdamW-eq init (this)** | **0.478** | 46.37 | **39.26** | **1-line init** |
+| Hybrid Lion+AdamW (fern #2311 PENDING) | 0.81 | 45.22 | 38.77 | 2-optimizer plumbing |
+
+Init alone gets us 3× more spread than AdamW equilibrium and ~60% of fern's hybrid mechanism, at zero engineering cost.
+
+**Why val regressed:** mean drifted from −1.394 to −1.985 over 13 epochs (~0.045/epoch under Lion's sign-update). All effective weights grew 3× (e.g., surf_uy eff_w 7→46). The model over-emphasized Kendall regularization globally while differentiation locally was maintained. The val/test divergence (val +0.61, test −0.40) is consistent with Kendall over-weighting acting as an OOD regularizer — slight in-distribution degradation, real OOD test gain.
+
+**Banked findings (5):**
+
+1. **Init pattern alone PREVENTS Lion's σ-collapse** — strong-form refutation of previously-banked "sign-update is the entire driver of collapse". Per-channel Kendall gradient sign is sufficient signal given a non-degenerate starting point.
+2. **Three-tier σ-spread ordering identified** (baseline < AdamW < init-only < hybrid).
+3. **Test-set improvement (−0.40 MAE) without val improvement** — first Wave-12 finding with val/test divergence in this direction. Connects to #2390 askeladd's wd-not-shrinkage finding (Lion has multiple knobs that act through OOD-regularization channels).
+4. **Mean drift is the OPEN issue** — Lion's sign-update still drifts mean ~0.6 nats more negative. This is the mechanism behind the val regression. **#2500 anchor-mean fix tests this directly.**
+5. **Compounds orthogonally with fern's #2311 hybrid** — fern fixes spread via optimizer; init fixes spread via starting point; anchor (#2500) fixes mean via loss term. All three can stack.
+
+**Suggested follow-ups:**
+- alphonse's own #2 (anchor-mean loss) → **#2500 assigned**.
+- Compound test (init + hybrid + anchor) — pending fern's #2311 confirmation rerun and #2500 result.
+- Per-split test analysis — clamping mean(log_σ) ≥ −1.6 might preserve val while keeping OOD test gain. Subsumed by #2500's λ=5 arm (stronger anchor).
+
+---
+
 ## 2026-05-13 17:30 — PR #2484 (ASSIGNED, frieren): Skip SWALR — let cosine continue through SWA window; direct test of SWALR-overrides-cosine mental model
 
 - **Branch:** `willowpai2g48h2-frieren/skip-swalr-cosine-through-swa-window`

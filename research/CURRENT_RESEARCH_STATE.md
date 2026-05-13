@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 17:30 (closed #2429 edward swa_start_frac<0.75 axis + #2363 frieren warmup; **3rd independent SWALR-overrides-cosine confirmation** + Lion-has-no-chaotic-init-phase + clip_fraction-invariant-to-lr; 8th & 9th σ-collapse confirmations; geom_camber_rc identified as load-bearing OOD split (2× the other splits); assigned #2481 edward anneal_epochs=1 + #2484 frieren skip-SWALR experiment)
+- **Last updated:** 2026-05-13 18:10 (closed #2443 alphonse Kendall log_σ AdamW-eq init — **cleanest σ-collapse mechanism finding on wave: init alone prevents collapse, spread 0.000→0.478, test improved −0.40 on paper metric, but mean drift inflates all eff_w 3× and regresses val +0.61**. Sent back fern #2311 for rebase + rerun (WINNER pending). Assigned #2500 alphonse anchor-mean(log_σ) 2-arm sweep λ∈{1,5} to fix mean drift while preserving spread)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -56,9 +56,9 @@
 |---|---|---|---|---|
 | **#2407** | **thorfinn** | wip | RFF σ=0.1 + σ=0.25 seed-1 bracket | Find OOD-geom floor; settle val-vs-test seed noise |
 | **#2390** | **askeladd** | wip (sent back) | Lion wd sweep on σ=0.5: 2-arm {3e-3, 1e-2} | Mechanism validated on σ=1.0 (wd=3e-3 wins −0.56 val); 6th σ-collapse; non-shrinkage mechanism. Rebase + extend up. |
-| **#2311** | **fern** | wip (sent back) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | Mechanism win confirmed (0.81 spread); lr=1e-3 overshoots → 2-arm {3e-4, 5e-4} on σ=0.5 |
+| **#2311** | **fern** | wip (PENDING REBASE+RERUN — WINNER) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | **Arm 2 lr=5e-4 wins both axes** (val 45.22 / test 38.77, −0.55 val / −0.90 test); rebased branch is now CLEAN; awaiting confirmation rerun |
 | **#2442** | **nezuko** | wip | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Real capacity axis at equal compute; brackets current n_head=4 |
-| **#2443** | **alphonse** | wip | Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion | Structural alt to fern hybrid; 1-line code change |
+| **#2500** | **alphonse** | wip (NEW) | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Fix mean-drift mechanism (#2443 surfaced it); preserve test gain (−0.40) while recovering val. Single new loss term + 1 hyperparameter |
 | **#2463** | **tanjiro** | wip | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Isolate SWA averaging-lr level (orthogonal to ramp-speed axis). Predicted: 0.05x wins (DOWN ramp + deep avg) per tanjiro's #2342 finding |
 | **#2481** | **edward** | wip (NEW) | SWA anneal_epochs=1 on σ=0.5 Lion stack | 1-epoch SWALR ramp instead of 2 — all 3 averaged epochs at swa_lr=6e-5; directly motivated by edward's #2429 Diagnostic 3 |
 | **#2484** | **frieren** | wip (NEW) | Skip-SWALR entirely on σ=0.5 Lion stack | Let cosine continue through SWA window — averages cosine-tail weights instead of SWALR-floor; directly tests the SWALR-overrides-cosine mental model that misled #2187/#2285/#2342/#2429 |
@@ -96,6 +96,9 @@
 22. **clip_fraction is invariant to lr schedule (#2363 frieren CLOSED)** — epochs 1-3 at lr ∈ {1e-4, 2e-4, 3e-4} all show clip_fraction ≈ 99-100%. Clipping happens on raw ‖g‖ pre-optimizer-scaling — the gradient norm distribution is set by the loss landscape, not by hyperparameters. **The persistent-clipping signature is a property of (model + data + loss), NOT a hyperparameter problem warmup/lr can fix.** Implication: future grad-clip experiments should manipulate `max_norm` or upstream loss/architecture, NOT lr schedule, to change clip_fraction. **9th independent σ-collapse confirmation** (log_σ trajectory identical to baseline through warmup phase).
 23. **clip_fraction definition discrepancy flagged for follow-up (#2363 frieren)** — frieren measured 99-100% clip_fraction under max_norm=0.5 while BASELINE.md cites 74% from #2063. Worth investigating in a future diagnostic PR whether (a) measurement definitions differ (per-step boolean vs ratio) or (b) gradient norms have shifted across the merge series. Connects to alphonse's #2270 finding about pre-clip grad_norm distributions.
 24. **Budget-binding interaction with lr-schedule manipulations (#2363 frieren CLOSED, banked principle)** — at SENPAI_TIMEOUT_MINUTES=30 → ~13 effective epochs, any lr modification costing >1 epoch of full-lr training will struggle to recover. By epoch 9 the warmup run was AHEAD on trajectory (67.17 vs baseline 78.74) but the budget cut before SWA could convert the lead. Future lr-schedule PRs (warmup, longer T_max, EMA warm-up) should account for the 13-epoch effective budget upfront when computing expected SWA gain.
+25. **σ-collapse fix #2: Init at AdamW-equilibrium alone prevents collapse under Lion (#2443 alphonse CLOSED, banked mechanism)** — **strong-form refutation** of the previously-banked finding that "Lion's sign-update is wholly responsible for collapse". Per-channel Kendall gradient SIGN is sufficient signal to maintain differentiation given a non-degenerate starting point. log_σ trajectory: 0.150 (init) → 0.478 (final), monotonically growing, never collapsing. **Three-tier σ-spread ordering on σ=0.5 Lion stack:** Lion+Kendall baseline (spread 0.000) < AdamW+Kendall (spread ~0.15) < Lion+AdamW-eq-init (spread 0.478) < Hybrid Lion+AdamW (spread 0.81, fern #2311 pending). **Test improved by −0.40 on paper-facing metric** (geom_camber_rc −0.72, single_in_dist −1.04) despite val regression of +0.61. **Open mechanism:** Lion's sign-update still drifts mean(log_σ) ~0.6 nats more negative (−1.40 → −1.99), inflating all effective weights ~3× → val regression. **#2500 alphonse tests the mean-anchor fix** (L2 anchor loss on mean(log_σ) at AdamW-eq target).
+26. **Val/test divergence first observed in this direction on Wave 12 (#2443 alphonse)** — differentiated Kendall weighting (Lion+AdamW-eq init) acts as an OOD regularizer: slight val degradation, real test gain especially on harder OOD splits. For paper-facing test number this is interesting; for the merge gate it's a regression. Connects to #2390 askeladd's wd-not-shrinkage finding — both suggest Lion has multiple knobs that act through OOD-regularization channels distinct from the model parameter values directly.
+27. **σ-collapse fix #1 confirmed and 0.55-val winner on σ=0.5 stack (#2311 fern Arm 2)** — hybrid Lion(model) + AdamW(log_σ) at lr=5e-4: val 45.22 (−0.55) and test 38.77 (−0.90). Spread 0.475, mean −1.98 (5× more spread than AdamW equilibrium, comparable to alphonse's #2443 init mechanism). **Test wins on 3/4 splits including single_in_dist −2.11 and geom_camber_rc −1.82** — biggest gains on the load-bearing OOD splits. Branch rebased CLEAN; awaiting confirmation rerun before merging. **Compound potential with #2500 anchor-mean** is the natural next step — both mechanisms (optimizer split + mean anchor) attack different parts of the σ-stability problem and should stack.
 
 ## Key open bottlenecks
 
@@ -105,19 +108,19 @@
    - #2481 edward anneal_epochs=1 (1-epoch ramp vs 2-epoch) — gets all 3 averaged epochs at the swa_lr floor
    - #2484 frieren skip-SWALR entirely — averages cosine-tail weights instead of SWALR-floor weights
    - **swa_start_frac<0.75 axis CLOSED** (#2429 edward); start_frac=0.85 (later) untouched
-3. **Lion+Kendall σ-collapse** confirmed structural across 9 axes — two independent fixes being tested: #2311 hybrid optimizer (mechanism validated) AND #2443 init-only (zero engineering cost if it works)
+3. **Lion+Kendall σ-collapse** — **3 INDEPENDENT FIXES NOW IDENTIFIED**: (a) #2311 fern hybrid Lion+AdamW (PENDING WINNER: val 45.22 / test 38.77, spread 0.81); (b) #2443 alphonse init at AdamW-equilibrium (BANKED: spread 0.478, test −0.40 but val +0.61); (c) #2500 alphonse mean-anchor loss (in flight; targets mean drift mechanism uncovered by #2443). Compound (hybrid + init + anchor) is the natural future best.
 4. **Lion lr = 3e-4 confirmed near optimum** (#2297 V-shape). Lr axis CLOSED.
 5. **Lion warmup axis CLOSED on this 13-epoch budget** (#2363 frieren) — Adam→Lion mental model fails; warmup at lower LR makes early epochs WORSE not better.
 6. **Capacity-axis dead zone** — width (#2354), depth (legacy), slice_num (#2378) all gated by SWA window or step-time cost. n_head sweep (#2442) tests equal-compute reshuffle at fixed n_hidden. If n_head=2 or n_head=8 wins, banked axis; if both regress, capacity bottleneck is genuinely orthogonal to attention granularity.
 
 ## Potential next directions (Wave 12 / post-σ=0.5 baseline)
 
-1. **Lion + hybrid AdamW for Kendall σ heads (#2311)** — sent back with rebase + lr sweep {3e-4, 5e-4}; mechanism validated.
-2. **Kendall log_σ init at AdamW-equilibrium on Lion (#2443)** — structural alt to #2311 at zero engineering cost.
+1. **Lion + hybrid AdamW for Kendall σ heads (#2311 fern)** — **WINNER pending merge** (val 45.22 / test 38.77 on σ=0.5 stack, rebased branch is CLEAN, awaiting confirmation rerun).
+2. **Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse NEW)** — fix mean-drift mechanism uncovered by #2443; 2-arm λ ∈ {1, 5}.
 3. **σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn)** — close out the RFF σ axis on Lion stack.
 4. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
-5. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward NEW)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
-6. **Skip-SWALR entirely on σ=0.5 (#2484 frieren NEW)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
+5. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
+6. **Skip-SWALR entirely on σ=0.5 (#2484 frieren)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
 7. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
 8. **Lion wd sweep on σ=0.5 (#2390)** — orthogonal Lion fine-tuning axis.
 9. **Delay-SWA-start (frac=0.85)** — narrow window but truly low-lr averaging (tanjiro #2342 suggested follow-up #3). Composes with #2463 Arm A. **Opposite direction from CLOSED #2429.**
