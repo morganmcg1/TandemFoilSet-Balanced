@@ -74,23 +74,24 @@ def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
 
 # ---------------------------------------------------------------------------
 # Random Fourier Feature (RFF) positional encoding (PR #1657, Tancik et al. 2020)
-# Replace first 2 normalized (x,z) coordinate dims with a 64-dim RFF embedding
+# Replace first 2 normalized (x,z) coordinate dims with a 128-dim RFF embedding
 # [cos(B x), sin(B x)] where B ~ N(0, σ²). Provides multi-scale spatial
 # frequency content to the input MLP, freeing it from learning sinusoidal
 # bases from scratch. B is fixed (no gradient) and initialized once.
+# Capacity probe (#2197): RFF_DIM 64 → 128 (n_features 32 → 64) at fixed σ=3.0.
 # ---------------------------------------------------------------------------
 
 RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
-RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
+RFF_DIM = 128          # output embedding dim (64 cos + 64 sin) — #2197 capacity probe
 _rff_B = None          # initialized after device is known
 
 
 def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
-    """Replace first 2 dims (x,z coords) with 64-dim RFF embedding."""
-    coords = x_batch[..., :2]                                    # [B, N, 2]
-    proj = coords @ _rff_B                                       # [B, N, 32]
-    rff = torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)  # [B, N, 64]
-    return torch.cat([rff, x_batch[..., 2:]], dim=-1)            # [B, N, 86]
+    """Replace first 2 dims (x,z coords) with RFF_DIM-dim RFF embedding."""
+    coords = x_batch[..., :2]                                          # [B, N, 2]
+    proj = coords @ _rff_B                                             # [B, N, RFF_DIM//2]
+    rff = torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)        # [B, N, RFF_DIM]
+    return torch.cat([rff, x_batch[..., 2:]], dim=-1)                  # [B, N, RFF_DIM+22]
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +443,13 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
-# RFF projection matrix: [2, 32] maps (x,z) → 64-dim embedding (32 cos + 32 sin).
+# RFF projection matrix: [2, RFF_DIM//2] maps (x,z) → RFF_DIM-dim embedding.
 # Seeded for reproducibility across runs; B is fixed (no gradient). (PR #1657)
+# Capacity probe (#2197): RFF_DIM=128 (64 frequencies, 64 cos + 64 sin) at σ=3.0.
 torch.manual_seed(42)
 _rff_B = torch.randn(2, RFF_DIM // 2, device=device) * RFF_SIGMA
 _rff_B.requires_grad_(False)
-print(f"RFF: B shape={tuple(_rff_B.shape)}, σ={RFF_SIGMA}, embed_dim={RFF_DIM}")
+print(f"RFF: B shape={tuple(_rff_B.shape)}, σ={RFF_SIGMA}, embed_dim={RFF_DIM}, n_features={RFF_DIM // 2}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -469,7 +471,7 @@ val_loaders = {
 }
 
 model_config = dict(
-    space_dim=RFF_DIM,    # was 2 — now 64-dim RFF embedding replaces (x,z) (PR #1657)
+    space_dim=RFF_DIM,    # was 2 — now RFF_DIM-dim RFF embedding replaces (x,z) (PR #1657, #2197 sets RFF_DIM=128)
     fun_dim=X_DIM - 2,    # unchanged: 22 non-coordinate features
     out_dim=3,
     n_hidden=128,
@@ -535,7 +537,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = compress_pressure(y_norm)
-        x_in = apply_rff(x_norm)  # 24 → 86 dims; replaces raw (x,z) with RFF embedding
+        x_in = apply_rff(x_norm)  # 24 → 22+RFF_DIM dims; replaces raw (x,z) with RFF embedding
         pred = model({"x": x_in})["preds"]
 
         if epoch == 0 and n_batches == 0:
