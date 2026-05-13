@@ -575,3 +575,39 @@ Future capacity wins need to change *what* is computed (alphonse's #1735 SwiGLU 
 
 - **edward → PR #2017 (weight_decay 1e-4 → 5e-4 on compile baseline):** compute-cheap optimization-axis hypothesis. Weight decay was tuned on the 14-epoch budget; at 35 epochs there is ~2.5× more cumulative shrinkage than the regime it was set for. Orthogonal to all in-flight axes (grad-clip, AdamW betas, cosine T_max, SwiGLU, β=0.75 Huber, vol-Huber, bs=8). Single-line change.
 
+## 2026-05-13 07:30 — PR #1910 (MERGED): vol-Huber β=0.5 on compile baseline
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/vol-huber
+- **Hypothesis:** Extend Huber β=0.5 from surface loss to volume loss (train + eval). Mechanism: outlier vol nodes (near wake regions with sharp pressure gradients) contribute quadratically to vol gradient under MSE; Huber's linear tail suppresses their blow-up, recovering smoother gradients in the bulk — same mechanism that won on surf in PR #1505.
+
+### Results
+
+| Seed | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | total_epochs |
+|---|---|---:|---:|---:|
+| 1 (BETTER) | r9zfwd4y | 65.469 | 57.837 | 35 |
+| 2 | yc366tji | 66.271 | 58.576 | 35 |
+| **baseline #1810** | o142jibw | **67.831** | **59.784** | 35 |
+
+Per-split test surf_p (seed 1): single_in_dist=64.95, geom_camber_rc=71.19, geom_camber_cruise=39.25, re_rand=55.96
+Per-split test vol_p (seed 1): single_in_dist=82.61, geom_camber_rc=77.35, geom_camber_cruise=41.22, re_rand=58.13
+
+- **−3.5% val (65.47 vs 67.83), −3.3% test (57.84 vs 59.78).** Both seeds beat bar. All four test splits finite.
+- Best=last (35/35) on both seeds — still compute-bound; vol-Huber does not change the convergence trajectory.
+- Zero compute overhead: same ~52s/epoch, peak VRAM 24.1 GB.
+- W&B: `r9zfwd4y` (seed 1, BETTER), `yc366tji` (seed 2). All 20 metrics across both seeds verified against W&B to within 0.005 rounding.
+- Implementation: 2-character change — `sq_err` → `huber_err` in both vol_loss accumulator (train ~line 515) and `evaluate_split` (~line 265). `huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")` was already computed on the line above; change just routes it to the vol term.
+
+### Conclusion
+
+**MERGED (5th baseline shift).** New baseline: val=65.469, test=57.837.
+
+Key finding from per-split analysis: **OOD splits drive the win** (rc −5.7%, cruise −4.1%, re_rand −6.9%), consistent with the surf-Huber mechanism (OOD samples have more outlier errors, Huber suppression helps proportionally more). The `single_in_dist/mae_surf_p` regressed +3.8% — plausibly noise, or a signal that surf_weight=10 is now slightly over-aggressive with vol gradients cleaned up. Thorfinn flagged this explicitly; vol_p tracks the same OOD-vs-in-dist gradient as surf_p.
+
+Stacking wins so far: mask+Huber_surf+bf16+compile+vol_Huber = val 119.45 → 65.47 (−45.2%), test 109.67 → 57.84 (−47.3%).
+
+### Follow-up
+
+- **thorfinn → PR #2041 (surf_weight 10 → 5):** re-calibrate surf_weight after vol-Huber changed effective gradient balance. `surf_weight=10` was calibrated when vol used noisy MSE; with vol now using Huber, the effective surf dominance has increased. Single-line change; directly motivated by #1910's per-split in-dist regression.
+- **β sweep on vol:** vol's outlier tail is populated differently from surf (100-1000× more nodes); β=1.0 or 0.25 may be more optimal. Lower-priority since #1910 already secured the stacking win.
+

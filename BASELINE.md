@@ -101,3 +101,23 @@ Compute bottleneck is now relaxed substantially. **Round-2 priority queue shifts
 **Best=last on both compile seeds** means lr-schedule alignment (#1843 nezuko, cosine T_max=18 → should be 35 now) becomes especially valuable. Heads-up posted to all in-flight PRs with new merge bar.
 
 Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, test < 59.78, all four test splits finite.**
+
+## 2026-05-13 07:30 — PR #1910: Extend Huber β=0.5 from surface to volume loss
+
+- **`val_avg/mae_surf_p`:** 65.469 (best seed 1, `r9zfwd4y`)
+- **`test_avg/mae_surf_p`:** 57.837
+- **Per-split test surf_p (seed 1):** single_in_dist=64.95, geom_camber_rc=71.19, geom_camber_cruise=39.25, re_rand=55.96
+- **Per-split test vol_p (seed 1):** single_in_dist=82.61, geom_camber_rc=77.35, geom_camber_cruise=41.22, re_rand=58.13
+- **Seed 2 confirmation (`yc366tji`):** val=66.271, test=58.576 — both seeds beat baseline; seed gap 0.80 val / 0.74 test.
+- **W&B runs:** `r9zfwd4y` (seed 1, BETTER), `yc366tji` (seed 2)
+- **Implementation note:** Two-character change in `train.py` — replace `sq_err` with `huber_err` for the vol_loss accumulator in both the training loop (~line 515) and `evaluate_split` (~line 265). `huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")` was already computed; the change just routes it to the vol term too. Dead `sq_err` lines removed. Zero compute overhead — same JIT graph, same VRAM (24.1 GB), same ~52s/epoch.
+- **Compute:** Best=last (35/35 both seeds) — still compute-bound. Vol-Huber does not change the convergence trajectory.
+- **Delta vs PR #1810:** val **−3.5%** (67.83 → 65.47), test **−3.3%** (59.78 → 57.84). OOD splits drive the win: geom_camber_rc −5.7%, re_rand −6.9%, geom_camber_cruise −4.1%. single_in_dist regressed +3.8% — plausibly noise, consistent with Huber's quadratic-clipping leaving small-error gradient on the table for easy in-dist samples.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-thorfinn \
+      --wandb_name "willowpai2g48h3-thorfinn/vol-huber-s1" \
+      --wandb_group vol-huber
+  ```
+
+**New merge bar: val < 65.47, test < 57.84, all four test splits finite.**
