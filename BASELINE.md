@@ -5,6 +5,66 @@
 
 ---
 
+## 2026-05-13 10:05 — PR #1657: Fourier RFF positional encoding σ=3.0 (space_dim 2→64)
+
+**Student:** charliepai2g48h2-fern  
+**Change:** Prepend 64-dim Fourier Random Feature encoding of (x,z) node coordinates to Transolver input. `B ~ N(0, σ²=9.0) ∈ R^{2×32}`, fixed (no gradient), `torch.manual_seed(42)`. Output = `[cos(Bx), sin(Bx)]` concatenated → preprocess MLP input expands 24→86. Two arms tested: σ=1.0 (−6.40%) and σ=3.0 (−11.71%).
+
+### Validation (best epoch 14/14, σ=3.0 arm)
+
+| Split | mae_surf_p | vs. #2004 baseline (73.9964) |
+|---|---|---|
+| val_single_in_dist | 72.691 | **−14.59%** |
+| val_geom_camber_rc | 78.833 | **−12.23%** |
+| val_geom_camber_cruise | 44.439 | **−12.46%** |
+| val_re_rand | 65.359 | **−7.04%** |
+| **val_avg/mae_surf_p** | **65.3304** | **−11.71%** |
+
+**Improvement vs #2004 baseline: −11.71% (73.9964 → 65.3304)**  
+**Cumulative improvement vs #1418 baseline: −46.7% (122.64 → 65.3304)**
+
+### Test (from best-val checkpoint, epoch 14)
+
+| Split | mae_surf_p | vs. #2004 |
+|---|---|---|
+| test_single_in_dist | 64.577 | **−15.87%** |
+| test_geom_camber_rc | 71.531 | **−8.34%** |
+| test_geom_camber_cruise | 36.392 | **−12.22%** |
+| test_re_rand | 55.269 | **−10.15%** |
+| **test_avg/mae_surf_p** | **56.9425** | **−11.65%** |
+
+**Improvement vs #2004 test baseline: −11.65% (64.4437 → 56.9425)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **678K params** (+15.9K vs prior 662K)
+- RFF: B ~ N(0, σ²=9.0) ∈ R^{2×32}, fixed (seeded 42), output 64-dim [cos, sin]
+- AdamW **lr=1.5e-3**, **4-epoch warmup**, wd=1e-4, **betas=(0.9, 0.99)**, CosineAnnealingLR(T_max=10), grad_clip=1.0
+- Loss: `F.l1_loss` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- Asinh pressure compression: GAIN=1.0 (pressure channel only)
+
+### Key finding
+
+RFF spatial encoding is the largest single improvement to date: **−11.71% val / −11.65% test**. Uniform per-split gain (−7% to −15%) — not narrowly tuned to one split. Strongest on geom_camber (−12.2% to −14.6%), consistent with hypothesis that spatial encoding helps geometry-OOD extrapolation. σ=3.0 substantially outperforms σ=1.0 (−11.7% vs −6.4%) — bandwidth matters. Minimal parameter cost (+2.4%).
+
+**σ axis still open:** σ=1.0 (−6.4%) → σ=3.0 (−11.7%) is monotone. Next probe: σ=5.0.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-fern-rff-pos-encoding-sigma3-20260513-085421/metrics.jsonl`
+- `models/model-charliepai2g48h2-fern-rff-pos-encoding-sigma1-20260513-081652/metrics.jsonl` (σ=1.0 arm)
+
+### Reproduce (winning arm, σ=3.0)
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-fern \
+    --experiment_name "charliepai2g48h2-fern/rff-pos-encoding-sigma3" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 07:55 — PR #2004: AdamW β2=0.99 (faster 2nd-moment adaptation)
 
 **Student:** charliepai2g48h2-nezuko  
