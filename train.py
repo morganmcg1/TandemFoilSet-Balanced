@@ -93,6 +93,7 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.tau = nn.Parameter(torch.ones(1))
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -118,7 +119,7 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature * self.tau)
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -457,6 +458,10 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"Learnable attention temperature: τ per-block scalar init=1.0 (identity at step 0); "
+      f"{model_config['n_layers']} blocks → +{model_config['n_layers']} params; "
+      f"slice softmax becomes softmax(QK^T / temperature * τ); "
+      f"baseline to beat: val_avg/mae_surf_p < 33.4935 (PR #2553)")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -692,6 +697,22 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Attention temperature diagnostic: per-block τ at terminal (best-checkpoint weights).
+    # τ multiplies slice logits before softmax: τ>1 = sharper routing, τ<1 = softer routing
+    # (relative to the existing per-head temperature divisor).
+    _tau_log = {"event": "attn_temperature_tau", "epoch": int(best_metrics["epoch"]), "blocks": []}
+    print("\nAttention temperature τ per block (best-checkpoint weights):")
+    for _i, _blk in enumerate(_inner.blocks):
+        _tau = _blk.attn.tau.detach().float().item()
+        _temp_per_head = _blk.attn.temperature.detach().float().flatten().tolist()
+        print(f"  block[{_i}]: τ={_tau:.4f} | per-head temperature={[f'{t:.4f}' for t in _temp_per_head]}")
+        _tau_log["blocks"].append({
+            "block_idx": _i,
+            "tau": _tau,
+            "temperature_per_head": _temp_per_head,
+        })
+    append_metrics_jsonl(metrics_jsonl_path, _tau_log)
 
     test_metrics = None
     test_avg = None
