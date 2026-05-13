@@ -414,7 +414,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
+    p_weight: float = 3.0  # per-channel weight on pressure (dim 2) in sq_err
     epochs: int = 50
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
