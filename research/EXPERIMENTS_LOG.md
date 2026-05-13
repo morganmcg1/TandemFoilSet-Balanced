@@ -11,6 +11,28 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~02:40 — Cycle 13b: 2 more rebased-arms negatives closed (askeladd, fern), 2 more arms launched
+
+Mid-cycle, askeladd #1465 (surf_weight=30) and fern #1469 (lr=2e-3) flipped from sent-back/wip to review and both came back negative. Closed both and assigned fresh hypotheses.
+
+### PR #1465 askeladd — surf_weight=30 (rebased): CLOSED ✗ (partial-direction signal)
+
+val=111.95 / test=102.51. The damage was concentrated on `test_single_in_dist` (+8.4%) while OOD splits stayed flat (`geom_camber_rc` flat, cruise flat). Reading: **the surface-weighting direction is interesting (OOD didn't suffer) but the magnitude (10→30) was too aggressive on top of `p_weight=2.0`**. Student's diagnostic identified the mechanism precisely: multiplicative surf_weight × p_weight stacking pushed past the in-distribution Pareto frontier.
+
+### PR #1469 fern — lr=2e-3 (rebased): CLOSED ✗
+
+val=121.33 / test=111.80 (+10% / +12.5%). Persistent val oscillation throughout training, with grad-norm staying at ~7× the clip threshold — confirming most steps were governed by the clip, not the LR. **Third datapoint on the LR axis** (baseline 5e-4 / frieren #1717 lr=1e-3 +10MAE / fern #1469 lr=2e-3 +11MAE): lr=5e-4 is at or very near the optimum. LR axis is conclusively closed.
+
+### New assignment: PR #1816 askeladd — surf_weight 10 → 15
+
+Midpoint follow-up to your own #1465 result (surf=30 was too aggressive; baseline=10). The direction is interesting because OOD splits held flat at surf=30 — meaning the surface-priority gradient isn't hurting OOD. The optimum likely sits between 10 and 15 if it exists.
+
+### New assignment: PR #1819 fern — n_head 4 → 8 (with dim_head 32 → 16)
+
+Orthogonal architectural axis (no in-flight experiment touches attention head count). Keeps total `n_head × dim_head = 128` unchanged (no param-count change), but doubles attention parallelism per block. Bet: at the current tandem-foil scene complexity (multiple coexisting flow regimes), more specialized heads might mix the flow more cleanly.
+
+---
+
 ## 2026-05-13 ~02:25 — Cycle 13: 3 negatives closed, 3 follow-up arms launched
 
 ### Key discovery: weight_decay was load-bearing for OOD (`geom_camber_rc`)

@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 02:25 UTC
+- **Date / time:** 2026-05-13 02:40 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,11 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-13b update — 2 more negatives closed (askeladd, fern), 2 more arms launched
+
+- **#1465 askeladd surf=30** → val=111.95 / test=102.51. Damage concentrated on `single_in_dist` (+8.4%); OOD held flat. Direction interesting (surface-priority doesn't hurt OOD) but magnitude too aggressive on top of p_weight=2. Reassigned to surf=15 midpoint (#1816).
+- **#1469 fern lr=2e-3** → val=121.33 / test=111.80 (+10%/+12.5%). Third datapoint confirming lr=5e-4 is at optimum. LR axis is conclusively closed. Reassigned to architectural axis n_head=8 (#1819).
 
 ## Cycle-13 update — 3 negative results closed, 3 follow-up arms launched. KEY FINDING: wd is OOD-load-bearing.
 
@@ -197,22 +202,27 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-13)
+## Current leaderboard (post cycle-13b)
 
 **Active baseline: val=110.27 / test=99.41** (PRs #1480+#1471, merged). Beat 110.27 to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (new, cycle-13) | Inversion of #1750; tests if more wd → better OOD |
-| **nezuko #1803** (T_max=20) | TBD | TBD | WIP (new, cycle-13) | Schedule recalibration; anneal-to-zero alignment |
-| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (new, cycle-13) | Caps low-variance step-size scaling (same noise floor as #1738) |
-| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | 33% FFN capacity bump per block; param-count arm |
+| **askeladd #1816** (surf=15) | TBD | TBD | WIP (new, cycle-13b) | Midpoint of #1465 axis (surf=30 too aggressive) |
+| **fern #1819** (n_head=8) | TBD | TBD | WIP (new, cycle-13b) | More attention diversity, same total head_dim |
+| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (cycle-13) | Inversion of #1750; tests if more wd → better OOD |
+| **nezuko #1803** (T_max=20) | TBD | TBD | WIP (cycle-13) | Schedule recalibration; anneal-to-zero alignment |
+| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (cycle-13) | Caps low-variance step-size scaling |
+| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | 33% FFN capacity bump per block |
+| **alphonse #1655** (OneCycleLR max_lr=2e-3) | TBD | TBD | WIP (sent-back cycle-8) | Awaiting rebased re-run |
 | **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (sent-back cycle-11) | Stale baseline → rebase + re-run instructed |
 | alphonse #1655 (OneCycleLR) | 111.65 | 101.67 | WIP (sent-back) | Rebase+retry on new base; high-value stack hypothesis |
 | fern #1469 (lr=2e-3+clip) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | askeladd #1465 (surf_w=30) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | New baseline |
 | **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Prior baseline |
+| ~~askeladd #1465~~ (surf=30) | 111.95 | 102.51 | CLOSED cycle-13b | In-dist hit (+8.4%); OOD held flat — direction has signal at lower magnitude |
+| ~~fern #1469~~ (lr=2e-3) | 121.33 | 111.80 | CLOSED cycle-13b | Third LR datapoint — axis closed at 5e-4 optimum |
 | ~~nezuko #1778~~ (slice_num=128) | 125.03 | 111.65 | CLOSED cycle-13 | +13%/+12% regression; throughput cost 52% |
 | ~~edward #1750~~ (wd=5e-5) | 113.15 | 103.08 | CLOSED cycle-13 | OOD-concentrated regression — **wd is OOD-load-bearing** |
 | ~~thorfinn #1738~~ (beta2=0.95) | 124.63 | 111.16 | CLOSED cycle-13 | Mid-train acceleration real but late-phase noise dominated |
