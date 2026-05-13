@@ -262,19 +262,21 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            sq_err = (pred - y_norm) ** 2
+            # smooth_l1 (Huber, beta=1.0) — train/eval shape parity with the
+            # training step so val/loss is comparable.
+            per_elem = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction="none")
             # Zero out contributions from skipped samples so NaN doesn't leak
             # into the loss running mean either.
-            sq_err = torch.where(
-                keep.view(B, 1, 1).expand_as(sq_err),
-                sq_err, torch.zeros_like(sq_err),
+            per_elem = torch.where(
+                keep.view(B, 1, 1).expand_as(per_elem),
+                per_elem, torch.zeros_like(per_elem),
             )
             vol_loss_sum += (
-                (sq_err * vol_mask.unsqueeze(-1)).sum()
+                (per_elem * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (per_elem * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -544,24 +546,33 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            # Channel weights: [Ux, Uy, p] — upweight pressure to prioritize the ranking metric
+            # smooth_l1 (Huber, beta=1.0) in float32 for numerical stability.
+            # Aligns the gradient with the MAE-based evaluation metric for
+            # large normalized residuals; identical to MSE near zero.
+            # Channel weights: [Ux, Uy, p] — upweight pressure (applied on the
+            # smooth_l1 output so the linear-region gradient scales by p_weight).
             ch_weights = torch.tensor(
                 [1.0, 1.0, cfg.p_weight], device=device, dtype=torch.float32
             )
-            # Loss in float32 for numerical stability
-            sq_err = (pred.float() - y_norm.float()) ** 2 * ch_weights[None, None, :]
+            per_elem = F.smooth_l1_loss(
+                pred.float(), y_norm.float(), beta=1.0, reduction="none"
+            ) * ch_weights[None, None, :]
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (per_elem * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (per_elem * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = (vol_loss + cfg.surf_weight * surf_loss) / cfg.grad_accum
 
         loss.backward()
 
         is_step = ((step_idx + 1) % cfg.grad_accum == 0) or ((step_idx + 1) == len(train_loader))
         if is_step:
+            # clip_grad_norm_ returns the *pre-clip* total norm; log whether the
+            # cap (max_norm=1.0) was binding so we can compare smooth_l1's
+            # already-bounded per-elem gradient against the global clip.
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            clip_active = float(grad_norm.item() > 1.0)
             optimizer.step()
             optimizer.zero_grad()
             # OneCycleLR steps per optimizer step. Guard against overflow if
@@ -569,9 +580,9 @@ for epoch in range(MAX_EPOCHS):
             if global_step < total_steps:
                 scheduler.step()
             global_step += 1
-            # Log the un-scaled loss for human readability
             wandb.log({"train/loss": loss.item() * cfg.grad_accum,
                        "train/grad_norm": grad_norm.item(),
+                       "train/grad_clip_active": clip_active,
                        "train/lr": scheduler.get_last_lr()[0],
                        "global_step": global_step})
 
