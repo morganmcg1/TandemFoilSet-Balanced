@@ -8,6 +8,41 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 06:51 — PR #1440: bfloat16 AMP (torch.autocast) on top of EMA+SmoothL1+grad-clip (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **77.3716** (W&B run `30wvu5r0`; AMP-only supplementary arm `rn1gkw8h` at 86.03)
+- **`test_avg/mae_surf_p` (4-split, finite):** **68.2053**
+- **Per-split val surface-p MAE (`30wvu5r0`, AMP+EMA, best-val epoch 19):**
+  - val_single_in_dist: 90.76  (vs 108.52 EMA-only → −16.4%)
+  - val_geom_camber_rc: 90.73  (vs 104.81 → −13.4%)
+  - val_geom_camber_cruise: 54.88  (vs 68.50 → −19.9%)
+  - val_re_rand: 73.12  (vs 84.78 → −13.7%)
+- **Per-split test surface-p MAE (`30wvu5r0`, 4-split clean):**
+  - test_single_in_dist: 79.88
+  - test_geom_camber_rc: 81.08
+  - test_geom_camber_cruise: 45.88
+  - test_re_rand: 65.99
+- **W&B run:** `30wvu5r0` (AMP+EMA merge candidate); supplementary AMP-only arm `rn1gkw8h`
+- **W&B group:** `willow-r3-amp-bf16` in `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp
+  ```
+
+**Mechanism summary**: `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` wraps the forward pass and loss computation. BF16 uses the same exponent range as FP32 (no overflow risk), cuts per-epoch wall-clock ~25% (97.8s vs 131s), frees ~22% VRAM (32.9 GB vs 42 GB), and delivers +35% more gradient steps inside the 30-min cap (19 epochs vs ~14). AMP and EMA are orthogonal: AMP touches the per-step precision pipeline (forward + loss in bf16, master weights fp32 inside AdamW), EMA averages the parameter trajectory in fp32 buffers outside the autocast context. No numerical interaction. Val curve was strictly monotonic through all 19 completed epochs — the 30-min cap fires while training is still actively improving (LR at 37% of peak with T_max=50).
+
+**EMA decomposition at same step (AMP+EMA arm, best-val epoch 19):**
+
+| Branch | test_avg/mae_surf_p |
+|--------|-------------------:|
+| EMA weights (saved ckpt, primary) | **68.21** |
+| Raw weights at same step (`test_no_ema/*`) | 71.39 |
+| AMP-only arm best-val (`rn1gkw8h`) | 74.28 |
+
+EMA on top of AMP adds ≈ −4.5% (variance-reduction-at-eval) + ≈ −3.7% (better-epoch-selection).
+
+**Key open question**: val curve still strictly descending at epoch 19 with T_max=50. With AMP, the cosine LR at epoch 19 is still ~37% of peak — the optimizer is cut off mid-schedule. The next natural hypothesis is `--epochs 20` (matching T_max to the AMP epoch budget) so cosine LR completes a full annealing cycle within 30 min.
+
 ## 2026-05-13 04:52 — PR #1437: EMA of model weights (decay=0.999) for val/test/checkpoint (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **91.6553** (best of two EMA reproductions; sibling at 93.70; baselines at 101.06/104.03/105.18, mean ≈ 103.4)
