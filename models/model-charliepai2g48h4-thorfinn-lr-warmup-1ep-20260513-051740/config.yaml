@@ -27,7 +27,7 @@ n_params: 678231
 seed: 42
 skip_test: false
 splits_dir: /mnt/new-pvc/datasets/tandemfoil/splits_v2
-surf_weight: 10.0
+surf_weight: 5.0
 train_samples: 1499
 val_samples:
   val_geom_camber_cruise: 100
