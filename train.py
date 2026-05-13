@@ -229,7 +229,27 @@ class Transolver(nn.Module):
         # is the per-sample normalized log(Re). Same channel ReScaleHead uses.
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
-        fx = self.preprocess(x) + self.placeholder[None, None, :]
+
+        # Derived polynomial features: log_re_n^2 and log_re_n * aoa1_n. Channel 13
+        # is normalized log_re; channel 18 is AoA foil 2 (= AoA1_rad in prepare_splits,
+        # the PR's "AoA1"). Computed on normalized channels (already mean~0, std~1 at
+        # real nodes), so log_re_n^2 sits at mean~1, std~√2 and the cross term at
+        # mean~0, std~1 — already on a similar scale to the existing normalized
+        # inputs. The mask zeros padding so the squared feature (which would otherwise
+        # be ~365 at padding via the -19 normalized-zero value) doesn't pollute
+        # preprocess.
+        log_re_chan = x[..., 13:14]
+        aoa1_chan = x[..., 18:19]
+        log_re_sq = log_re_chan * log_re_chan
+        cross = log_re_chan * aoa1_chan
+        mask = data.get("mask", None)
+        if mask is not None:
+            mask_unsq = mask.unsqueeze(-1).to(x.dtype)
+            log_re_sq = log_re_sq * mask_unsq
+            cross = cross * mask_unsq
+        x_aug = torch.cat([x, log_re_sq, cross], dim=-1)
+
+        fx = self.preprocess(x_aug) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx, gamma, beta)
         return {"preds": fx}
@@ -334,7 +354,7 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "mask": mask})["preds"] * scale
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -497,7 +517,10 @@ val_loaders = {
 
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2,
+    # fun_dim = X_DIM - 2 (22 raw input channels minus 2 position dims handled by
+    # space_dim) + 2 derived features (log_re_n^2, log_re_n * aoa1_n) appended in
+    # Transolver.forward, giving preprocess input dim = space_dim + fun_dim = 26.
+    fun_dim=X_DIM - 2 + 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -566,7 +589,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
                     "std": beta.std().item(),
                     "absmax": beta.abs().max().item(),
                 }
-                _ = uncompiled({"x": x_norm})
+                _ = uncompiled({"x": x_norm, "mask": mask})
                 captured = [
                     [float(v) for v in a._last_slice_entropy.tolist()]
                     if a._last_slice_entropy is not None else []
@@ -658,7 +681,7 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "mask": mask})["preds"] * scale
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
