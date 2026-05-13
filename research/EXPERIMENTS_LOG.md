@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-13 12:25 — PR #2207: cosine-eta-min-1e-4 (nezuko) — CLOSED (dead end, eta_min axis)
+
+- **Branch:** `charliepai2g48h2-nezuko/cosine-eta-min-1e-4`
+- **Hypothesis:** best_epoch=14/14 → model not converged; non-zero LR floor (1e-4) could sustain learning at terminal epoch.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-cosine-eta-min-1e-4-20260513-111354/metrics.jsonl`
+
+### Results vs. #1657 baseline (65.3304)
+
+| Split | Baseline | eta_min=1e-4 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 72.681 | −0.01% |
+| val_geom_camber_rc | 78.833 | 79.252 | +0.53% ❌ |
+| val_geom_camber_cruise | 44.439 | 46.989 | **+5.74%** ❌ |
+| val_re_rand | 65.359 | 67.010 | +2.53% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **66.483** | **+1.77%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 58.502 | +2.74% ❌ |
+
+**Closed as dead end.** eta_min axis CLOSED.
+
+### Analysis
+
+**Mechanism diagnosed:** eta_min=1e-4 raises the ENTIRE cosine curve, not just the terminal point. At epoch 12, LR was 3.886e-4 vs baseline ~3.09e-4 (+26%). The result: more mid-late optimization noise, not "continued learning momentum" as hypothesized. val_cruise (easiest, narrowest-minimum split) regresses most (+5.74%) — exactly the over-shoot signature.
+
+**Trajectory:** val_avg at epoch 12 was 74.55 (vs baseline's ~67), epoch 14 was 66.48 (vs baseline's 65.33). The model is still "catching up" at the end, not pushing past the baseline.
+
+**The PR identified a real problem** (budget-limited convergence) but the lever was wrong: eta_min=1e-4 raises mid-curve LR, not terminal-only LR.
+
+### Key insights
+
+- **eta_min axis CLOSED.** Don't probe higher values (3e-4, 1e-3) — they'd widen the over-shoot.
+- **Cosine schedule shape is highly sensitive:** any modification that raises mid-curve LR causes over-shoot, even if the terminal-only intent was good.
+- **Underlying problem persists:** model not converged in 14 epochs (best_epoch=14/14). Better levers: gradient clipping (target the +91-unit epoch-5 spike) or smaller-step optimization.
+
+### Next assignment for nezuko: grad_clip 1.0 → 0.5 (#2260)
+
+Direct attack on the epoch-5 spike diagnostic from this PR's predecessor (#2130 ε=1e-6). Tighter clipping should reduce the +91-unit spike magnitude without affecting normal-step training.
+
+---
+
 ## 2026-05-13 12:15 — PR #2197: rff-nfeatures-64 (frieren) — CLOSED (dead end, capacity axis at d=32)
 
 - **Branch:** `charliepai2g48h2-frieren/rff-nfeatures-64`

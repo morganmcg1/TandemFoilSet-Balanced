@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~12:20 (closed #2197 frieren rff-nfeatures-64 +1.78% dead end, repeated per-split signature across 3 RFF mods: cruise gains, rc/single regress; assigned frieren #2257 foil-mirror-aug, switching to data augmentation lever)
+- **Last updated:** 2026-05-13 ~12:30 (closed #2207 nezuko cosine-eta-min +1.77% dead end, eta_min raised entire curve not just terminal; assigned nezuko #2260 grad-clip-0p5 to target the +91-unit epoch-5 spike directly)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -39,7 +39,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 | #2184 | alphonse | `lr-2e-3-rff` | LR ceiling retest on RFF base: 1.5e-3 → 2e-3 | **--epochs 14** ✓ | WIP |
 | #2257 | frieren | `foil-mirror-aug` | Foil z-axis mirroring augmentation (doubles effective training data via reflection symmetry) | **--epochs 14** ✓ | WIP — just assigned |
 | #2238 | fern | `rff-trainable-b` | Trainable RFF B matrix: learnable frequencies (requires_grad=True, +64 params) | **--epochs 14** ✓ | WIP — just assigned |
-| #2207 | nezuko | `cosine-eta-min-1e-4` | Cosine eta_min=1e-4: sustain learning at epoch 14 (best_epoch=14/14 consistently) | **--epochs 14** ✓ | WIP — just assigned |
+| #2260 | nezuko | `grad-clip-0p5` | Tighten grad_clip 1.0 → 0.5 to dampen the +91-unit epoch-5 spike on RFF base | **--epochs 14** ✓ | WIP — just assigned |
 | #1815 | askeladd | `node-dropout-0.9` | Node dropout 0.9 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
@@ -51,6 +51,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082)
 
 ### Closed as dead ends (this round)
+- #2207 nezuko cosine-eta-min-1e-4: +1.77% val (eta_min raises entire cosine curve not just terminal; over-shoot on easy splits, val_cruise +5.74%). eta_min axis CLOSED.
 - #2197 frieren rff-nfeatures-64: +1.78% val regression; same per-split signature as #2206 (cruise gains, rc/single regress). Capacity axis CLOSED at d=32.
 - #2206 fern rff-anisotropic-sx3-sz1p5: +0.51% val (regression), **−0.81% test** (mixed); per-split tradeoff: cruise/re_rand improve, rc/single regress on both val and test. Anisotropy axis CLOSED; isotropic σ=3.0 optimal.
 - #2158 fern rff-sigma5: +2.75% vs 65.3304 (σ axis non-monotone; {1.0: −6.4%, 3.0: −11.71%, 5.0: +2.75%}; σ=3.0 is sweet spot, bandwidth axis CLOSED)
@@ -70,8 +71,8 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
    - **#2238 fern rff-trainable-b**: B initialized at σ=3.0, set `requires_grad=True`. Lets gradient descent find optimal per-frequency bandwidth. Adds only 64 params (0.009% of model). Motivated by per-split bandwidth tradeoff observed in #2206 anisotropic result.
    - **#2184 alphonse lr-2e-3-rff**: Does the RFF input expansion shift the LR ceiling? Pre-RFF: 1.5e-3 sweet spot, 2e-3 regressed +2.99%. RFF gradients larger (+91-unit spike), ceiling may shift. Informative either way.
 
-2. **LR schedule sub-axes:**
-   - **#2207 nezuko cosine-eta-min-1e-4**: best_epoch=14/14 in all recent runs; current eta_min=0 freezes model at epoch 14 (~3.5e-5 LR). Non-zero floor (1e-4) may sustain learning. Motivated by the model not having converged within budget.
+2. **Optimization stability — target the epoch-5 spike:**
+   - **#2260 nezuko grad-clip-0p5**: Tighten grad_clip 1.0 → 0.5 to cap the +91-unit epoch-5 spike that ε=1e-6 (#2130) couldn't reach. Single-number change; if natural gradient norms are smaller than 0.5 most of the time, only the spike-driven outliers are affected.
 
 3. **Orthogonal axes rebasing on RFF** (askeladd, tanjiro, thorfinn, edward):
    - All notified to rebase on RFF base and compare against 65.3304.
