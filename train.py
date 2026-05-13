@@ -454,7 +454,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     max_lr=1.5e-3,
     total_steps=SCHEDULER_EPOCHS * steps_per_epoch,
     pct_start=0.05,
-    anneal_strategy="cos",
+    anneal_strategy="linear",
     div_factor=10.0,
     final_div_factor=1e3,
 )
@@ -477,6 +477,7 @@ run = wandb.init(
         "pct_start": 0.05,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
+        "anneal_strategy": "linear",
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -497,6 +498,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
+steps_below_1e4 = 0  # PR #2002: integrated deep-decay budget for anneal-shape probe
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -537,7 +539,10 @@ for epoch in range(MAX_EPOCHS):
         if scheduler._step_count <= scheduler.total_steps:
             scheduler.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "lr": scheduler.get_last_lr()[0], "global_step": global_step})
+        cur_lr = scheduler.get_last_lr()[0]
+        if cur_lr < 1e-4:
+            steps_below_1e4 += 1
+        wandb.log({"train/loss": loss.item(), "lr": cur_lr, "global_step": global_step})
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -607,6 +612,14 @@ for epoch in range(MAX_EPOCHS):
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
+
+frac_steps_below_1e4 = steps_below_1e4 / max(global_step, 1)
+print(f"Steps below lr<1e-4: {steps_below_1e4}/{global_step} ({frac_steps_below_1e4:.4f})")
+wandb.summary.update({
+    "lr/steps_below_1e4": steps_below_1e4,
+    "lr/total_train_steps": global_step,
+    "lr/frac_steps_below_1e4": frac_steps_below_1e4,
+})
 
 # --- Test evaluation + artifact upload ---
 if best_metrics:
