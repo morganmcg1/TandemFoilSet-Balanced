@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-05-13 21:00 UTC — Round 44
+
+Three LOSS closures + axis status updates. Closed two falsified-LOSS PRs (capacity floor + loss-shape axis) and abandoned the DropPath axis after 4-attempt pod-stall jinx.
+
+### PR #2336 frieren: n_hidden 96→64 (width-down continuation) — CLOSED (FALSIFIED LOSS, capacity floor)
+
+- **Branch:** `charliepai2g48h5-frieren/n-hidden-64`
+- **Hypothesis:** budget-bound regime extends to n_hidden=64 (continuation of #2290 WIN); +10-15 cosine epochs outweigh narrower per-block reps.
+
+- **Results (vs PR #2290 branch base 46.3612; current advisor baseline 42.3455 from #2307):**
+
+| Metric | PR #2336 | PR #2290 branch base | Δ vs branch | Δ vs current baseline |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **49.9489** | 46.3612 | **+7.74% LOSS** | +17.96% LOSS |
+| `test_avg/mae_surf_p` | **43.6435** | 40.3555 | **+8.15% LOSS** | +13.34% LOSS |
+| Epochs reached | 80 (=terminal) | 70 (best=67) | underfitting |  |
+| Per-epoch cost | ~19-20 s | ~25.4 s | −22% | (1.6× more epochs) |
+| Peak memory | 10.0 GB | 14.27 GB | −30% |  |
+| Param count | ~150K | ~330K | **−55%** | (vs ~577K original) |
+
+- **Per-split breakdown:** All 4 splits regress UNIFORMLY: in_dist +11.0%, cruise +12.8%, re_rand +7.2%, camber_rc +3.5%. **SURPRISE: in_dist regresses MOST, camber_rc (the OOD bottleneck) regresses LEAST** — opposite of predicted capacity-floor signature.
+
+- **Diagnosis:** Total-capacity floor crossed. At n_hidden=64 with n_layers=4, the model lacks representation width to fit even the in-distribution training data — underfitting wins over the regularization-from-more-epochs effect. The fact that camber_rc (OOD) regresses LEAST is the kicker: in-dist suffering more than OOD means the model is no longer optimizing well period — there's no excess capacity left to "specialize" on in-dist, so OOD's relative degradation is suppressed. This is a TOTAL-capacity floor (representation width), distinct from the per-head capacity floor (dim_head=32 in #2222 at n_head=4) — the latter was about head diversity at fixed width.
+
+- **Axis status:** Width-down axis CLOSED at n_hidden=96 (the new optimum). Mechanism: width-down was budget-bound 2-for-2 from 128→96 (−1.04% gain) but became capacity-bound 96→64 (+7.74% LOSS). This is the second axis (after layer-depth #2268 WIN → #2289 in-flight probe) where we found the budget-bound→capacity-bound transition.
+
+### PR #2316 edward: berHu reverse-Huber c=1.0 retry-2 — CLOSED (FALSIFIED LOSS, loss-shape axis fully closed)
+
+- **Branch:** `charliepai2g48h5-edward/berhu-c1-retry2`
+- **Hypothesis:** berHu(c=1.0) amplifies large-residual OOD gradients (pure L1 for |r|≤1.0, quadratic-amplified for |r|>1.0) — opposite direction of closed Huber-β softening; targets val_geom_camber_rc + val_re_rand OOD bottleneck.
+
+- **Results (vs PR #2268 branch base 46.8460; current advisor baseline 42.3455):**
+
+| Metric | PR #2316 | PR #2268 branch base | Δ vs branch | Δ vs current baseline |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **50.4134** | 46.8460 | **+7.62% LOSS** | +18.96% LOSS |
+| `test_avg/mae_surf_p` | **45.6380** | 40.8140 | **+11.82% LOSS** | +18.52% LOSS |
+| Best epoch | 58 (=terminal) | 58 (=terminal) | underfitting tail |  |
+
+- **Per-split breakdown:** All 4 splits regress. cruise worst (+15.04%), in_dist least (+2.95%). Note: target OOD splits camber_rc and re_rand both regressed — the hypothesis was directly wrong.
+
+- **Diagnosis (student's analysis confirmed):** berHu amplification creates a self-defeating interaction with cosine cool-down. Late epochs need fine LR-controlled gradient norms for convergence, but berHu amplifies them at exactly the wrong time on outliers — and crucially, outliers include in-dist heavy tails too, not just OOD. So it's NOT surgically targeting the OOD splits as hoped; it's globally inflating gradients on rare-but-large errors.
+
+- **Branch-base note:** PR was branched off pre-#2290 n_hidden=128 + pre-#2307 slice_num=32 advisor (baseline 46.8460), so the partial regression vs branch base reflects the loss-shape change ALONE — clean attribution.
+
+- **Axis status:** Loss-shape axis now FULLY CLOSED. Combining: Huber-β softening family (5 LOSS across β∈{0.1, 0.25, 0.5, 1.0, 2.0} — all 5 bimodal vs L1) + berHu c=2.0 (#2223 stale) + berHu c=1.0 retry (#2316 LOSS) + MSE (β=∞, prior closure). **Both directions of loss-shape modification (softening AND amplification) hurt vs pure L1.** Mechanism unified: at this dataset scale + cosine schedule, L1's gradient-norm uniformity is load-bearing; any shape change distorts the gradient landscape relative to the LR schedule. Pure L1 is the GLOBAL loss-function optimum for this regime.
+
+### PR #2280 tanjiro: DropPath p_max=0.1 retry-4 — CLOSED (axis ABANDONED, 4-attempt jinx + baseline drift)
+
+- **Branch:** `charliepai2g48h5-tanjiro/droppath-retry4`
+- **History:** PRs #1976, #2083, #2179, #2280 — all 4 attempts stalled at the pod-level (~6h no commits each). PR pattern: assignment commit goes through, pod picks up, training never starts or hangs partway. 4-attempt failure rate is structurally chronic, not transient.
+
+- **Compounding factors for closure:**
+  1. **Pod-stall jinx (primary):** 4× consecutive same-pattern failures suggests a persistent interaction between DropPath's bernoulli masking and tanjiro's pod environment (possibly the torch.compile graph capture interacts with conditional dynamic shapes from the Bernoulli mask).
+  2. **Baseline drift makes the PR body stale:** PR body referenced 48.5160 (PR #2195) but current advisor is 42.3455 (PR #2307) — −12.78% drift. Per-split baselines are also stale.
+  3. **LayerScale subsumption hypothesis:** With LayerScale γ now on the advisor (PR #2195 + co-advisors), per-channel residual scaling already provides much of the inductive bias DropPath was supposed to add. The marginal value of stochastic depth on top of LayerScale may be small even if it worked.
+  4. **GPU time spent:** 4 retries × ~6h ea ≈ 24h pod-time with no committed result. Continuing has poor expected ROI.
+
+- **Axis status:** DropPath axis abandoned. Tanjiro reassigned this round to a fresh orthogonal probe.
+
+---
+
 ## 2026-05-13 20:30 UTC — Round 43
 
 ### PR #2307 askeladd: slice_num 32→24 (PhysicsAttention granularity-down) — MERGED (MASSIVE WIN −9.61%, new baseline 42.3455)
