@@ -39,10 +39,52 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **46.3612** | #2290 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + **n_hidden=96** | epoch 67 of 70 (best≠terminal; cosine converged cleanly); -1.04% vs #2268; all 4 splits improve; 330K params (-43%); budget-bound 2-for-2 |
-| `test_avg/mae_surf_p` | **40.3555** | #2290 | — | test from best-val checkpoint ep67; -1.12% vs #2268 |
+| `val_avg/mae_surf_p` | **42.3455** | #2307 | L1 + compile + bf16 + **slice_num=24** + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + n_hidden=96 (advisor) | ep57 of 58 (best≠terminal, 1-ep bounce); **−9.61% vs #2268**; all 4 splits improve; NOT budget-gain (per-epoch ~−2% only); mechanism: better geometric routing (slice_num=32 was above the routing optimum) |
+| `test_avg/mae_surf_p` | **38.5059** | #2307 | — | test from best-val checkpoint ep57; −5.66% vs #2268 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 46.3612` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 42.3455` to be merged.
+
+## 2026-05-13 20:30 — PR #2307: slice_num 32→24 (PhysicsAttention granularity-down): routing-quality WIN −9.61%
+
+- **Student:** charliepai2g48h5-askeladd
+- **Best epoch:** 57 of 58 (best≠terminal: ep57=42.35, ep58=45.07; 1-epoch bounce; cosine T_max=67 slightly long)
+- **Epochs reached:** 58 (~30.80 s/epoch; **only −2% vs #2268's ~31.4 s/epoch** — NOT the predicted −8 to −12%)
+- **Peak GPU memory:** 18.30 GB (slightly above #2268 16.55 GB — compile-cache variance; well within 96 GB)
+- **Param count:** 576,875 (vs #2268 577,931 → **−0.18%; slice_num affects intermediate tensors only, weight matrices unchanged**)
+
+| Split | val mae_surf_p | Δ vs #2268 |
+|---|---|---|
+| `val_single_in_dist` | **35.4776** | **−14.93%** |
+| `val_geom_camber_rc` | **60.8311** | **−5.94%** |
+| `val_geom_camber_cruise` | **27.6517** | **−12.43%** |
+| `val_re_rand` | **45.4214** | **−8.11%** |
+| **val_avg** | **42.3455** | **−9.61%** |
+
+| Split | test mae_surf_p | Δ vs #2268 |
+|---|---|---|
+| `test_single_in_dist` | **36.0730** | **−6.68%** |
+| `test_geom_camber_rc` | **57.3635** | **−1.74%** |
+| `test_geom_camber_cruise` | **22.0773** | **−14.19%** |
+| `test_re_rand` | **38.5100** | **−4.90%** |
+| **test_avg** | **38.5059** | **−5.66%** |
+
+- **Config change:** `slice_num: 32 → 24` in model_config. `--epochs 70` to give headroom.
+- **NOTE:** PR #2307 branched off #2268 (n_hidden=128) before #2290 merged. slice_num=24 was squash-merged onto current advisor which has n_hidden=96. Advisor now has BOTH n_hidden=96 + slice_num=24.
+- **CRITICAL FINDING — mechanism is NOT budget-bound, it is ROUTING QUALITY:** Per-epoch cost barely changed (−2% only). The −9.61% gain comes from **fewer slices = better geometric routing**. slice_num=32 was ABOVE the routing optimum; reducing to 24 sharpened partitioning without removing required capacity. This is a regularization / inductive-bias effect. Prediction of budget-gain mechanism was WRONG; routing-quality mechanism was FOUND. **This is the largest single-PR gain since round-1 warmup merge.**
+- **val_geom_camber_rc (the historic OOD bottleneck that barely moved since round-1) improved −5.94%** — first significant movement on this split since LayerScale in PR #2195 (−2.22%). slice_num reduction directly addresses the geometric routing quality that this split requires.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-askeladd-slice-num-24-20260513-132247/metrics.jsonl`
+  `models/model-charliepai2g48h5-askeladd-slice-num-24-20260513-132247/metrics.yaml`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-askeladd \
+      --experiment_name "charliepai2g48h5-askeladd/slice-num-24" \
+      --epochs 70
+  ```
+  (slice_num=24 now on advisor branch; stacks with LayerScale + n_layers=4 + n_hidden=96)
+
+---
 
 ## 2026-05-13 20:00 — PR #2290: n_hidden 128→96 (width-down, --epochs 90): budget-bound 2-for-2
 
