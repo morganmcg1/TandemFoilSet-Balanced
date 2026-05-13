@@ -213,15 +213,37 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        # Optional FiLM params [B, L, 2, H] — sliced per block as (gamma, beta) each [B, 1, H].
+        # Optional FiLM params:
+        #   per-sample  [B, L, 2, H]    — broadcast as (γ, β) each [B, 1, H]
+        #   per-token   [B, L, 2, 2, H] — axis -3 = (γ, β); axis -2 = (surface, volume)
         film_params = data.get("film", None)
+        is_surface = data.get("is_surface", None)
+        # Hoist is_surf_f out of the block loop so the [B, N, 1] cast happens once,
+        # not once per layer — reduces kernel launches for per-token FiLM.
+        is_surf_f = (
+            is_surface.unsqueeze(-1).to(fx.dtype)
+            if (film_params is not None and film_params.dim() == 5 and is_surface is not None)
+            else None
+        )
         for i, block in enumerate(self.blocks):
-            if film_params is not None:
+            if film_params is None:
+                fx = block(fx)
+                continue
+            if film_params.dim() == 5:
+                # Per-token FiLM: lerp(γ_vol, γ_surf, is_surface) — 1 fused kernel
+                # vs. (is*a + (1-is)*b)'s 4 separate kernels. Same semantics.
+                if is_surf_f is None:
+                    raise ValueError("Per-token FiLM requires data['is_surface'].")
+                gamma_surf = film_params[:, i, 0, 0, :].unsqueeze(1)  # [B, 1, H]
+                beta_surf = film_params[:, i, 1, 0, :].unsqueeze(1)
+                gamma_vol = film_params[:, i, 0, 1, :].unsqueeze(1)
+                beta_vol = film_params[:, i, 1, 1, :].unsqueeze(1)
+                gamma = torch.lerp(gamma_vol, gamma_surf, is_surf_f)
+                beta = torch.lerp(beta_vol, beta_surf, is_surf_f)
+            else:
                 gamma = film_params[:, i, 0, :].unsqueeze(1)
                 beta = film_params[:, i, 1, :].unsqueeze(1)
-                fx = block(fx, film=(gamma, beta))
-            else:
-                fx = block(fx)
+            fx = block(fx, film=(gamma, beta))
         return {"preds": fx}
 
 
@@ -236,17 +258,24 @@ class FiLMConditioner(nn.Module):
     Zero-init on the final linear (both weight and bias) so the FiLM transform
     starts as identity ((1 + 0) * h + 0 = h) and does not disturb the
     Transolver init.
+
+    When ``per_token=True``, predict two distinct (gamma, beta) pairs per layer
+    — one for surface tokens and one for volume tokens. Output shape becomes
+    ``[B, L, 2, 2, H]`` where the trailing pair-axis is (surface, volume).
     """
 
-    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64):
+    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64, per_token=False):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.cond_dim = cond_dim
+        self.per_token = per_token
+        n_groups = 4 if per_token else 2  # γ_surf, β_surf, γ_vol, β_vol vs (γ, β)
+        self.n_groups = n_groups
         self.net = nn.Sequential(
             nn.Linear(cond_dim, mid_dim),
             nn.GELU(),
-            nn.Linear(mid_dim, 2 * n_layers * n_hidden),
+            nn.Linear(mid_dim, n_groups * n_layers * n_hidden),
         )
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
@@ -257,7 +286,11 @@ class FiLMConditioner(nn.Module):
         m = mask.unsqueeze(-1).float()
         denom = m.sum(dim=1).clamp(min=1)
         cond = (x[:, :, 13:24] * m).sum(dim=1) / denom    # [B, cond_dim]
-        out = self.net(cond)                              # [B, 2*L*H]
+        out = self.net(cond)                              # [B, n_groups*L*H]
+        if self.per_token:
+            # [B, L, 2, 2, H]: axis -3 = (γ, β); axis -2 = (surface, volume).
+            # γ_surf=[:,:,0,0,:], γ_vol=[:,:,0,1,:], β_surf=[:,:,1,0,:], β_vol=[:,:,1,1,:].
+            return out.view(-1, self.n_layers, 2, 2, self.n_hidden)
         return out.view(-1, self.n_layers, 2, self.n_hidden)  # [B, L, 2, H]
 
 
@@ -271,7 +304,7 @@ class FiLMTransolver(nn.Module):
     """
 
     def __init__(self, n_layers, n_hidden, cond_dim=11, film_mid_dim=64,
-                 **transolver_kwargs):
+                 film_per_token=False, **transolver_kwargs):
         super().__init__()
         self.transolver = Transolver(
             n_layers=n_layers, n_hidden=n_hidden, **transolver_kwargs
@@ -279,7 +312,9 @@ class FiLMTransolver(nn.Module):
         self.film = FiLMConditioner(
             n_layers=n_layers, n_hidden=n_hidden,
             cond_dim=cond_dim, mid_dim=film_mid_dim,
+            per_token=film_per_token,
         )
+        self.film_per_token = film_per_token
         self._last_film: torch.Tensor | None = None  # detached, for diagnostics
 
     def forward(self, data, **kwargs):
@@ -317,7 +352,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm, "mask": mask})["preds"]
+            pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
 
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
             vol_mask = mask & ~is_surface
@@ -467,6 +502,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    film_per_token: bool = False  # per-token (surface vs volume) FiLM heads
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
 
 
@@ -517,6 +553,7 @@ model = FiLMTransolver(
     n_hidden=model_config["n_hidden"],
     cond_dim=11,
     film_mid_dim=cfg.film_mid_dim,
+    film_per_token=cfg.film_per_token,
     space_dim=model_config["space_dim"],
     fun_dim=model_config["fun_dim"],
     out_dim=model_config["out_dim"],
@@ -528,7 +565,10 @@ model = FiLMTransolver(
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
-print(f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K)")
+print(
+    f"Model: FiLMTransolver ({n_params/1e6:.2f}M params, FiLM head {n_params_film/1e3:.1f}K"
+    f"{', per_token' if cfg.film_per_token else ''})"
+)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -604,7 +644,7 @@ for epoch in range(MAX_EPOCHS):
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
-        pred = model({"x": x_norm, "mask": mask})["preds"]
+        pred = model({"x": x_norm, "mask": mask, "is_surface": is_surface})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
@@ -708,16 +748,49 @@ for epoch in range(MAX_EPOCHS):
 
     # FiLM diagnostics: per-layer mean |gamma| and |beta| from last forward.
     if isinstance(model, FiLMTransolver) and model._last_film is not None:
-        film_t = model._last_film  # [B, L, 2, H]
-        gamma_per_layer = film_t[:, :, 0, :].abs().mean(dim=(0, 2))  # [L]
-        beta_per_layer = film_t[:, :, 1, :].abs().mean(dim=(0, 2))   # [L]
-        log_metrics["film/gamma_abs_mean"] = gamma_per_layer.mean().item()
-        log_metrics["film/beta_abs_mean"] = beta_per_layer.mean().item()
-        log_metrics["film/gamma_l2"] = film_t[:, :, 0, :].norm().item()
-        log_metrics["film/beta_l2"] = film_t[:, :, 1, :].norm().item()
-        for li in range(gamma_per_layer.numel()):
-            log_metrics[f"film/gamma_abs_L{li}"] = gamma_per_layer[li].item()
-            log_metrics[f"film/beta_abs_L{li}"] = beta_per_layer[li].item()
+        film_t = model._last_film  # [B, L, 2, H] or [B, L, 2, 2, H]
+        if film_t.dim() == 5:
+            # Per-token: axis -3 = (γ, β), axis -2 = (surf, vol)
+            gamma_surf = film_t[:, :, 0, 0, :]  # [B, L, H]
+            beta_surf = film_t[:, :, 1, 0, :]
+            gamma_vol = film_t[:, :, 0, 1, :]
+            beta_vol = film_t[:, :, 1, 1, :]
+            g_surf_per_layer = gamma_surf.abs().mean(dim=(0, 2))  # [L]
+            g_vol_per_layer = gamma_vol.abs().mean(dim=(0, 2))
+            b_surf_per_layer = beta_surf.abs().mean(dim=(0, 2))
+            b_vol_per_layer = beta_vol.abs().mean(dim=(0, 2))
+            # Cosine similarity per layer (mean over batch).
+            eps = 1e-8
+            cos_gamma = F.cosine_similarity(gamma_surf, gamma_vol, dim=-1, eps=eps).mean(dim=0)
+            cos_beta = F.cosine_similarity(beta_surf, beta_vol, dim=-1, eps=eps).mean(dim=0)
+            log_metrics["film/gamma_surf_abs_mean"] = g_surf_per_layer.mean().item()
+            log_metrics["film/gamma_vol_abs_mean"] = g_vol_per_layer.mean().item()
+            log_metrics["film/beta_surf_abs_mean"] = b_surf_per_layer.mean().item()
+            log_metrics["film/beta_vol_abs_mean"] = b_vol_per_layer.mean().item()
+            log_metrics["film/gamma_cos_surf_vol_mean"] = cos_gamma.mean().item()
+            log_metrics["film/beta_cos_surf_vol_mean"] = cos_beta.mean().item()
+            # Aggregate (for comparability with single-head baseline diagnostics).
+            log_metrics["film/gamma_abs_mean"] = (g_surf_per_layer.mean() + g_vol_per_layer.mean()).item() / 2.0
+            log_metrics["film/beta_abs_mean"] = (b_surf_per_layer.mean() + b_vol_per_layer.mean()).item() / 2.0
+            log_metrics["film/gamma_l2"] = (gamma_surf.norm().item() + gamma_vol.norm().item()) / 2.0
+            log_metrics["film/beta_l2"] = (beta_surf.norm().item() + beta_vol.norm().item()) / 2.0
+            for li in range(g_surf_per_layer.numel()):
+                log_metrics[f"film/gamma_surf_abs_L{li}"] = g_surf_per_layer[li].item()
+                log_metrics[f"film/gamma_vol_abs_L{li}"] = g_vol_per_layer[li].item()
+                log_metrics[f"film/beta_surf_abs_L{li}"] = b_surf_per_layer[li].item()
+                log_metrics[f"film/beta_vol_abs_L{li}"] = b_vol_per_layer[li].item()
+                log_metrics[f"film/gamma_cos_surf_vol_L{li}"] = cos_gamma[li].item()
+                log_metrics[f"film/beta_cos_surf_vol_L{li}"] = cos_beta[li].item()
+        else:
+            gamma_per_layer = film_t[:, :, 0, :].abs().mean(dim=(0, 2))  # [L]
+            beta_per_layer = film_t[:, :, 1, :].abs().mean(dim=(0, 2))   # [L]
+            log_metrics["film/gamma_abs_mean"] = gamma_per_layer.mean().item()
+            log_metrics["film/beta_abs_mean"] = beta_per_layer.mean().item()
+            log_metrics["film/gamma_l2"] = film_t[:, :, 0, :].norm().item()
+            log_metrics["film/beta_l2"] = film_t[:, :, 1, :].norm().item()
+            for li in range(gamma_per_layer.numel()):
+                log_metrics[f"film/gamma_abs_L{li}"] = gamma_per_layer[li].item()
+                log_metrics[f"film/beta_abs_L{li}"] = beta_per_layer[li].item()
 
     wandb.log(log_metrics)
 
