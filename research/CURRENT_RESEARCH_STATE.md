@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 09:00 (round-21: Closed #1883 tanjiro n_head=8 stale (3rd GraphQL rate-limit); assigned #1976 tanjiro DropPath p_max=0.1. **Baseline still 54.0051**)
+- **As of:** 2026-05-13 09:30 (round-22: Closed #1921 nezuko pos-jitter LOSS (+3.1% val); closed #1905 thorfinn SGDR stale; assigned #1988 nezuko fun-jitter-re-aoa-0.05 + #1989 thorfinn sgdr-t0-10-retry. **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -53,9 +53,9 @@ Per-split baseline (PR #1846):
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
-| #1921 | nezuko | Position-jitter σ=0.01 on volume nodes | **New round-18** — OOD generalization via input augmentation |
+| #1988 | nezuko | Per-sample fun_dim jitter on dims 13/14/18 (Re/AoA/AoA2), σ=0.05 | **New round-22** — OOD generalization via condition-channel augmentation; follow-up to closed #1921 pos-jitter |
 | #1926 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **New round-18** — faster norm + L1 gradient stability |
-| #1905 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | Round-17 — SGDR schedule |
+| #1989 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | **Round-22 retry** — SGDR schedule; resubmit of stale #1905 |
 | #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **New round-21** — OOD generalization via block-level residual-branch regularization |
 | #1946 | edward | EMA model weights — retune to **decay=0.999** | Round-19 first try (0.9999) lagged catastrophically; round-20 send-back to 0.999 (~2-epoch half-life). +dual EMA/raw val logging. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
@@ -87,8 +87,9 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 
 ## Open questions / next experiments
 
-1. **OOD generalization** — primary bottleneck. Both `val_geom_camber_rc` (72.37) and `val_re_rand` (58.23) are 30-40% higher than geom_camber_cruise. Do NOT respond to sampler changes.
-   - Input augmentation in flight (#1921 pos-jitter).
+1. **OOD generalization** — primary bottleneck. Both `val_geom_camber_rc` (67.45) and `val_re_rand` (53.76) are 30-40% higher than geom_camber_cruise. Do NOT respond to sampler changes.
+   - **Coord-jitter (#1921) CLOSED (LOSS):** -13.7% in-dist, but all OOD splits degraded. Spatial precision is load-bearing for camber inference. Coord-jitter is the wrong axis for shape-OOD.
+   - **Condition-jitter (#1988 in flight):** Per-sample noise on Re/AoA dims (13/14/18), σ=0.05 — directly targets the condition mapping bottleneck identified by #1921 diagnosis.
    - Domain conditional embedding (student suggestion #1904-followup-4) — structural signal vs. resampling. Untested; would require architecture change.
    - AoA reflection augmentation — physically motivated for cambered foils but tricky for racecar (one-sided AoA range).
 2. **Normalization** — RMSNorm in flight (#1926). Pre-LN vs Post-LN placement also untested.

@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-05-13 09:30 — Round 22
+
+### PR #1921 nezuko: pos-jitter σ=0.01 — CLOSED (LOSS, informative split-level signal)
+
+- **Branch:** `charliepai2g48h5-nezuko/pos-jitter-0.01`
+- **Hypothesis:** Small gaussian noise on volume-node coords (σ=0.01 on z-score normalized coords, training only) to break mesh-pattern memorization and improve OOD generalization.
+- **Result:** val_avg/mae_surf_p = **55.6766** (+3.1% vs baseline 54.0051). test_avg = **48.8222** (+2.5%). LOSS.
+
+| Split | Baseline (#1846) | Pos-jitter | Δ |
+|---|---:|---:|---:|
+| `val_single_in_dist` | 59.0943 | **51.0** | **-13.7%** ✓ |
+| `val_geom_camber_rc` | 67.4450 | ~79.6 | +18.0% ✗ |
+| `val_geom_camber_cruise` | 35.7197 | ~42.1 | +17.9% ✗ |
+| `val_re_rand` | 53.7616 | ~57.8 | +7.5% ✗ |
+
+- **Analysis:** The per-split signal is the key finding. Coord jitter regularizes against mesh-pattern memorization (-13.7% in-dist win), but the OOD bottleneck is **shape generalization** (held-out camber values), not mesh-pattern generalization. Spatial precision is load-bearing for held-out camber inference. The OOD splits need MORE precise spatial reasoning, not less. Wrong regularizer for the bottleneck.
+- **Axis reframe:** The bottleneck is not "memorize less" but "generalize the CONDITION mapping" — the model needs to better extrapolate AoA/Re/camber across operating conditions. Coord-jitter axis is mechanistically demonstrated to be the wrong lever for OOD generalization.
+- **Next:** Per-sample jitter on condition channels (dims 13/14/18 = Re/AoA1/AoA2), σ=0.05 — assigned to nezuko as PR #1988.
+
+### PR #1905 thorfinn: SGDR warm restarts — CLOSED (STALE, 2h zero activity)
+
+- **Branch:** `charliepai2g48h5-thorfinn/warm-restarts`
+- **Hypothesis:** Replace CosineAnnealingLR(T_max=50) with CosineAnnealingWarmRestarts(T_0=10, T_mult=2, eta_min=0).
+- **Result:** Zero training activity. Only assignment commit on branch; pod never started the run (likely GraphQL rate-limit, same pattern as tanjiro #1660, #1789, #1883).
+- **Axis status:** UNTESTED. Hypothesis intact, SGDR is still worth exploring under the slice_num=32 baseline where best ≠ terminal.
+- **Next:** Reassigned to thorfinn under fresh PR #1989 (same experiment, new PR to unstick pod).
+
+### Assignments: Round 22
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1988 | nezuko | Per-sample fun_dim jitter on dims 13/14/18 (Re/AoA1/AoA2), σ=0.05, training only |
+| #1989 | thorfinn | SGDR warm restarts T_0=10 T_mult=2 (retry of stale #1905) |
+
+---
+
 ## 2026-05-13 02:20 — PR #1700: β=0.25 + L1 sweep — MERGED (L1 wins, new baseline 59.54)
 
 - **Branch:** `charliepai2g48h5-thorfinn/huber-beta-0.25-l1-sweep`
