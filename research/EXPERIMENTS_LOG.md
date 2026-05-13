@@ -2,6 +2,68 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:00 — PR #1695: [tmax-18] T_max=15→18 rerun on surf_weight=5 HEAD — **MERGED (NEW BEST: val=84.67)**
+- Student branch: `charliepai2g48h4-nezuko/tmax-18`
+- Hypothesis: The 30-min wall-clock cap allows ~18 epochs. Setting T_max=18 (vs 15) aligns the cosine schedule minimum with the true end of training, preventing the LR from rising back up in a second cycle at epoch 16–18.
+
+| Metric | surf_weight=5 baseline (#1762) | T_max=18 rerun (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 90.58 | **84.67** | **−5.91 (−6.5%)** |
+| test_avg/mae_surf_p | 80.00 | **74.94** | **−5.06 (−6.3%)** |
+| val single_in_dist | 106.31 | 96.25 | −10.06 |
+| val geom_camber_rc | 98.84 | 93.25 | −5.59 |
+| val geom_camber_cruise | 69.35 | 65.39 | −3.96 |
+| val re_rand | 87.82 | 83.78 | −4.04 |
+| test single_in_dist | 93.61 | 85.31 | −8.30 |
+| test geom_camber_rc | 86.86 | 83.17 | −3.69 |
+| test geom_camber_cruise | 58.37 | 55.11 | −3.26 |
+| test re_rand | 81.18 | 76.18 | −5.02 |
+
+- Artifact: `models/model-charliepai2g48h4-nezuko-tmax-18-20260513-021955/metrics.jsonl`
+- Run context: Rebased onto surf_weight=5 HEAD (41c30ab, the current best). Clean comparison. All 4 val + all 4 test splits improved.
+
+**Analysis:** Second consecutive 6%+ single-lever gain. The mechanism is clean: T_max=15 caused the cosine to reach zero LR at epoch 15, then start rising again for epochs 16–18 — wasted training budget. T_max=18 keeps LR in clean decay throughout the full epoch window. The improvement is consistent and uniform across all 4 splits (range Δ−3.96 to Δ−10.06 val), suggesting this is a global optimization quality lift rather than a split-specific effect. `single_in_dist` benefits most (−10.06 val), which is the hardest split.
+
+**Merged as 10th effective improvement to advisor-branch recipe.** New recipe: `T_max=18` replaces `T_max=15`.
+
+---
+
+## 2026-05-13 03:00 — PR #1759: [max-norm-0.5] max_norm=0.5 rerun on surf_weight=5 HEAD — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-frieren/max-norm-0.5`
+- Hypothesis: Tighter clipping (0.5 vs 1.0) reduces effective step size further, potentially helping generalization in the low-gradient regime.
+
+| Metric | surf_weight=5 baseline (#1762, T_max=15) | max_norm=0.5 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 90.58 | 91.01 | **+0.43 (+0.5%)** |
+| test_avg/mae_surf_p | 80.00 | 80.20 | +0.20 (+0.3%) |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-max-norm-0.5-20260513-021846/metrics.jsonl`
+- Run context: Rebased onto surf_weight=5 HEAD. Direct comparison against #1762 baseline.
+
+**Analysis:** Null result. Δ+0.43 val is within σ noise, trend is regression. Under surf_weight=5, gradient norms are 2-5 (mean). max_norm=0.5 still clips all steps (norms >> 0.5), but halves effective step size vs max_norm=1.0. The extra step-size reduction provides no benefit — the model is already well-regularized by the normalized gradient descent at max_norm=1.0. Tighter clipping beyond the point of full-step-normalization adds no incremental regularization. max_norm=0.5 is confirmed dead end on this recipe.
+
+**Closed.** frieren reassigned to max_norm=3.0 probe (selective clipping, #1851).
+
+---
+
+## 2026-05-13 03:00 — PR #1635: [log-cosh-loss] Log-cosh rerun on surf_weight=5 + grad-clip HEAD — **CLOSED (regression)**
+- Student branch: `charliepai2g48h4-fern/log-cosh-loss`
+- Hypothesis: Log-cosh is smoother than Huber at the piecewise kink and may combine better with grad-clip.
+
+| Metric | surf_weight=5 baseline (#1762, T_max=15) | log-cosh (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 90.58 | 91.19 | **+0.61 (+0.7%)** |
+| test_avg/mae_surf_p | 80.00 | 81.72 | +1.72 (+2.2%) |
+
+- Artifact: `models/model-charliepai2g48h4-fern-log-cosh-loss-20260513-022203/metrics.jsonl`
+- Run context: Rebased onto surf_weight=5 HEAD (41c30ab). Huber replaced with log-cosh at both call sites (lines 272 and 510 per student's report).
+
+**Analysis:** Null result on the full recipe. Log-cosh showed clear improvement over Huber on the pre-grad-clip baseline (+5.68 val on Huber base). But under grad-clip's normalized gradient descent, the choice of loss shape is suppressed: global norm clipping already bounds outlier gradient magnitudes before the optimizer step, making the tail behavior of the loss function largely irrelevant. Both log-cosh and Huber reduce to MSE near zero, which dominates under grad-clip. The loss-shape axis is now closed.
+
+**Closed.** fern reassigned to eta_min=5e-5 (schedule LR floor, #1855) — different lever.
+
+---
+
 ## 2026-05-13 02:10 — PR #1762: [surf-weight-5] surf_weight 10→5 — **MERGED (NEW BEST: val=90.58)**
 - Student branch: `charliepai2g48h4-tanjiro/surf-weight-5`
 - Hypothesis: With grad-clip normalizing every step, surface gradients no longer need heavy weighting to dominate the loss — clipping equalizes step magnitudes. Halving surf_weight from 10→5 better balances surface-vs-volume residuals.
