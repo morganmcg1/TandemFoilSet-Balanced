@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-14 20:50 UTC — Round 60
+
+### PR #2550 frieren: Lookahead(k=5, α=0.5) wraps AdamW — CLOSED (LOSS, 26th taxon)
+
+- **Branch:** `charliepai2g48h5-frieren/lookahead-k5-a05`
+- **Hypothesis:** Wrap AdamW with Lookahead (k=5 inner steps + outer slow-step toward fast with α=0.5); first slow-fast 2-loop meta-optimization probe.
+- **Metrics:**
+
+| Metric | Lookahead val | Baseline (old) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 53.6305 | 42.3455 | **+26.6%** |
+| `test_avg/mae_surf_p` | 47.5413 | 38.5059 | **+23.5%** |
+
+Per-split (regression-toward-mean signature):
+
+| Split | Lookahead val | Baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 49.38 | 35.48 | +39.2% |
+| `val_geom_camber_rc` | 68.88 | 60.83 | +13.2% (least) |
+| `val_geom_camber_cruise` | 39.40 | 27.65 | +42.5% (worst) |
+| `val_re_rand` | 56.87 | 45.42 | +25.2% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-frieren-lookahead-k5-a05-20260513-200521/metrics.jsonl`
+- **Trajectory:** monotonically descending at ep70 (53.63, still falling); LR≈0; cosine cooldown WASTED
+- **Tail val std (last 10 ep):** 0.26 — trajectory IS smooth, but smooth around a bad plateau
+- **Per-cycle motion:** 0.5·Δfast → effective step HALVED → 70 Lookahead epochs ≈ 35 effective AdamW epochs
+- **Lookahead diagnostics at terminal:** drift=0.0 (artifact: 375 batches × k=5 → terminal is outer-step boundary so fast==slow)
+
+**Analysis / 26th taxon — meta-optimizer halves effective step → under-convergence in budget-bound regime + cosine schedule mis-alignment:**
+1. Over 1 Lookahead cycle (5 inner + 1 outer): Δfast = sum of 5 AdamW updates; outer step → slow ← slow + α·Δfast; fast ← slow → **net per-cycle motion = 0.5·Δfast = HALVED step**.
+2. 70 Lookahead epochs ≈ 35 effective AdamW epochs. Cosine schedule completes cooldown before convergence.
+3. Per-epoch trajectory monotonically descending at ep70 with LR≈0 → convergence-bound, NOT plateaued.
+4. **Per-split "regression-toward-mean":** easiest baseline split (cruise 27.65) hit WORST (+42.5%); hardest baseline split (camber_rc 60.83) hit LEAST (+13.2%). Under-converged model can't differentiate splits — all drift to a common ~50-60 plateau. OPPOSITE of predicted SWAD-style OOD-favoring pattern — no flat-minima benefit because model never reached a minimum.
+5. **Combined with #2544 EMA LOSS, the parameter-space averaging meta-family is now 2-LOSS** with one in-flight arm (#2567 SWA-late, nezuko). Both share root cause: budget-bound regime can't afford weight-averaging-related mechanisms that delay effective convergence. The base optimizer (now Lion) just barely converges in 70 epochs.
+
+**Action:** Pivoting frieren to a structurally distinct mechanism (NOT another weight-averaging arm — that family is closing). Assigned #2580 frieren spectral normalization on attention Linear layers (Lipschitz constraint; 1-Lipschitz Q/K/V/proj; Bartlett-style margin bounds; Miyato et al. 2018; targets camber_rc OOD bottleneck via tighter generalization bound; does NOT slow convergence — per-step normalization with no time-lag effect).
+
+**Human GH issues:** None found.
+
+---
+
 ## 2026-05-14 20:30 UTC — Round 59
 
 ### PR #2544 nezuko: EMA Polyak weight averaging α=0.999 — CLOSED (LOSS, 25th taxon)
