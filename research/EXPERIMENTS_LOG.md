@@ -1027,3 +1027,148 @@ Two-seed mean test: (51.08 + 52.77)/2 = **51.93** vs baseline 52.36 → −0.83%
 - **geom_camber_rc gained the most** (−6.36 pts on s1) — consistent with the prior over-regularization story from wd=5e-4 being reversed cleanly at wd=2e-4.
 
 ---
+
+## 2026-05-13 17:45 — PR #2415 CLOSED: Stochastic Depth (DropPath p=0.1) on Transolver blocks
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/droppath-0p1
+- **Hypothesis:** Add timm-style stochastic depth (uniform p=0.1) per residual branch in TransolverBlock. Layer-ensembling regularization should generalize better than feature-dropout for small-data CFD.
+
+### Results (2 seeds, post-wd=2e-4 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `q0ygof4u` | 1 (better) | 67.893 | 59.542 | 34 | 30.12 min |
+| `7gisco96` | 2 | 71.692 | 62.674 | 33 | 30.09 min |
+| **Baseline #2017** | 1 (`scg45qnb`) | **58.883** | **51.078** | 35 | 30.5 min |
+
+Δ vs baseline: val **+15.3%** (s1) / **+21.7%** (s2), test **+16.6%** (s1) / **+22.7%** (s2). All four splits regress on both seeds.
+
+### Per-split test surf_p
+
+| Split | Baseline | s1 | s2 | Δ s1 | Δ s2 |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 56.03 | 65.99 | 70.61 | +17.8% | +26.0% |
+| geom_camber_rc | 63.11 | 74.90 | 78.66 | +18.7% | +24.6% |
+| geom_camber_cruise | 34.30 | 39.20 | 41.31 | +14.3% | +20.4% |
+| re_rand | 50.87 | 58.09 | 60.12 | +14.2% | +18.2% |
+
+### Conclusion
+
+**CLOSED — over-regularization.** Train loss elevated (0.765–0.773 vs ~0.6 baseline) AND val noisy (4× baseline late-epoch range), the classic over-regularization signature. The baseline already has grad_clip max_norm=1.0 (100% engagement) + wd=2e-4 + bf16 + AdamW β2=0.95 + small param count + batch_size=4. p=0.1 DropPath as a fourth structural regularizer pushes past the optimum.
+
+**Combined with #2180 (alphonse dropout=0.1: +2.5%/+10.8%, same direction) the regularization noise-injection axis is fully closed for round 1.** Mechanism: small-model + small-data + already-well-regularized regime is structurally hostile to layer/feature-level ensembling. ViT literature's p=0.1 prior is for 12-24 layer models with much less explicit regularization.
+
+### Follow-up
+
+- thorfinn → fresh architecture-side axis (not regularization).
+
+---
+
+## 2026-05-13 17:45 — PR #2399 CLOSED: EMA weight averaging (decay=0.999) on wd=2e-4 baseline
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/ema-0p999
+- **Hypothesis:** Maintain shadow copy of model weights with EMA decay=0.999, evaluate/test on EMA weights instead of live. Should smooth terminal-epoch noise.
+
+### Results (2 seeds, post-wd=2e-4 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `8etd4zmc` | 2 (better) | **58.984** | **51.228** | 35 | 30.5 min |
+| `1n1mqq0z` | 1 | 59.543 | 51.466 | 35 | 30.5 min |
+| **Baseline #2017** | 1 (`scg45qnb`) | 58.883 | 51.078 | 35 | 30.5 min |
+
+Δ vs baseline (better seed): val **+0.17%**, test **+0.29%**. Two-seed mean: val +0.65%, test +0.53%. **Below merge bar.**
+
+### Most valuable diagnostic — EMA-vs-live at terminal epoch
+
+| Seed | EMA val@35 | Live val@35 | Δ (EMA − live) |
+|---|---:|---:|---:|
+| s1 `1n1mqq0z` | 59.543 | 62.270 | **−2.727** |
+| s2 `8etd4zmc` | 58.984 | 62.680 | **−3.696** |
+
+**EMA mechanism IS working** — ~3pt smoothing of terminal noise vs live. But that smoothing benefit cancels with EMA-lag penalty (decay=0.999 ≈ 4-epoch memory; trajectory is monotonically improving so EMA is ~4 epochs behind optimum).
+
+### Conclusion
+
+**CLOSED — wash mechanism.** Not "EMA does nothing" but "EMA's smoothing benefit ≈ EMA-lag penalty on this cooling cosine schedule." EMA parked, not killed — if a future schedule change (e.g. eta_min > 0 or warmup) exposes more terminal trajectory noise, EMA becomes worth re-testing.
+
+### Follow-up
+
+- frieren → fresh axis (representation/normalization, not optimizer-numerical since 4 of those are already in-flight).
+
+---
+
+## 2026-05-13 17:45 — PR #2180 CLOSED: Dropout p=0.1 in PhysicsAttention
+
+- **Student:** willowpai2g48h3-alphonse
+- **Branch:** willowpai2g48h3-alphonse/dropout-0p1
+- **Hypothesis:** Add `dropout=0.1` via `model_config` propagated into PhysicsAttention (SDPA's native `dropout_p` + post-projection `nn.Dropout`).
+
+### Results (2 seeds, post-wd=2e-4 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `n2uhi3pi` | 1 (better) | 60.364 | 52.036 | 35 | 30.6 min |
+| `cibgg3ld` | 2 | 65.261 | 55.473 | 33 | 30.5 min |
+| **Baseline #2017** | 1 (`scg45qnb`) | **58.883** | **51.078** | 35 | 30.5 min |
+
+Δ vs baseline: val **+2.5%** (s1) / **+10.8%** (s2), test **+1.9%** / **+8.6%**. **Seed spread val=4.9 pts** vs baseline ~1 pt (5× the variance — destabilizing).
+
+### Most valuable diagnostic — train/val ratio unchanged
+
+| | baseline | s1 | s2 |
+|---|---|---|---|
+| train/surf + vol | 0.157 | 0.159 | 0.169 |
+| val/loss | 0.639 | 0.660 | 0.711 |
+| ratio | 4.1× | 4.1× | 4.2× |
+
+**Dropout did NOT widen the generalization gap.** It only added training-time noise the model had to fight through. The "regularization paying its cost" signature is absent.
+
+### Conclusion
+
+**CLOSED — over-regularization confirmed; combined with #2415 (DropPath) the noise-injection regularization axis is fully closed.** Mechanism is identical to #2415: stacked regularizers (grad_clip 100% engagement + wd=2e-4 + bf16 + small model + 30min compute cap) saturate the regularization budget. p=0.1 dropout in 5-block 662K-param model is dose-independent over-regularization.
+
+### Follow-up
+
+- alphonse → fresh axis (representation/normalization side).
+
+---
+
+## 2026-05-13 17:45 — PR #2163 CLOSED: Per-channel Huber β on surface (β_p=0.25, β_Ux=β_Uy=0.5)
+
+- **Student:** willowpai2g48h3-askeladd
+- **Branch:** willowpai2g48h3-askeladd/huber-surf-pchan-betap0p25
+- **Hypothesis:** Use per-channel Huber β: tighter (more L1-like) β=0.25 on pressure channel, β=0.5 on Ux/Uy. Vol unchanged at uniform β=0.5.
+
+### Results (2 seeds, post-wd=2e-4 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `4ja41v6i` | 2 (better) | **59.587** | 52.168 | 35 | 30.6 min |
+| `zot8rxp7` | 1 | 59.634 | **51.659** | 35 | 30.5 min |
+| **Baseline #2017** | 1 (`scg45qnb`) | 58.883 | 51.078 | 35 | 30.5 min |
+
+Δ vs baseline (better seed): val **+1.2%**, test **+1.1%**. Two-seed mean: val +1.24%, test +1.63%. Small uniform miss.
+
+### Per-split signature — the real result
+
+| Split | s1 Δ | s2 Δ | Pattern |
+|---|---:|---:|---|
+| single_in_dist (high abs err) | +0.77 | +3.03 | regresses on both — HARD |
+| geom_camber_rc (highest abs err) | +3.58 | +3.82 | regresses on both — HARDEST |
+| geom_camber_cruise (low abs err) | **−0.87** | **−2.00** | improves on both — EASY |
+| re_rand (low abs err) | **−1.16** | −0.49 | improves on both — EASY |
+
+**Hard splits regress; easy splits improve.** Student's diagnosis (CFD-grounded): β=0.25 puts MORE of the error distribution in the L1-linear regime → smaller per-node gradient at large pressure errors → under-fitting on stagnation/transition outliers. Pressure outliers carry **physical information** (stagnation, transition), unlike vol-p outliers which behave more like noise. The vol-Huber analogy fails at surface.
+
+### Conclusion
+
+**CLOSED — natural reassignment to upward bisection.** Direction is inverted from initial hypothesis: per-channel β_p should move UP (toward MSE), not DOWN. The per-channel axis is not closed; only the downward direction is. The student's CFD-grounded mechanism is sharp enough to predict β_p=0.625 or 0.75 produces *uniform* improvement across all 4 splits (vs current mixed pattern).
+
+### Follow-up
+
+- askeladd → β_p upward bisection (next assignment).
+
+---

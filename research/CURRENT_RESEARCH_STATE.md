@@ -1,6 +1,6 @@
 # SENPAI Research State — Willow-pai2g-48h-r3
 
-- **Date:** 2026-05-13 16:10
+- **Date:** 2026-05-13 18:00
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r3`
 - **Target task:** TandemFoilSet (CFD surrogate, predict (Ux, Uy, p) on 2D irregular meshes)
 - **Primary metric:** `val_avg/mae_surf_p` (selection) and `test_avg/mae_surf_p` (paper-facing)
@@ -33,18 +33,15 @@ The current `train.py` now has **eight** stacked changes: mask after slice softm
 - **Loss-formulation wins stack:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) combined to −8% on val.
 - **Scalar-capacity axis cluster firmly retired across all 3 baselines** (6 total failures).
 
-Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
-- **#2246 fern (grad-clip max_norm=5.0 bisect)**: on grad-clip baseline (just assigned; bisect clip threshold between 1.0 winner and unclipped)
-- **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline, grad-clip heads-up posted
-- **#2163 askeladd (per-channel β: β_p=0.25)**: on vol-Huber baseline, grad-clip heads-up posted
-- **#2379 nezuko (cosine T_max=35 + eta_min=1e-5)**: NEWLY ASSIGNED (15:00); floor residual LR to avoid over-annealing — directly follows #1843's finding that lr=0 at epoch 35 is too aggressive
-- **#2341 thorfinn (surf_weight 10 → 20)**: NEWLY ASSIGNED (14:00); bisect surf_weight upward
-- **#2017 edward (weight_decay → 2e-4)**: sent back for bisection, grad-clip heads-up posted
-- **#1940 frieren (batch_size=8 + sqrt-LR)**: on compile baseline, code committed (11:12), grad-clip heads-up posted
-- **#1843 nezuko (Cosine T_max=35)**: on compile baseline, code committed (09:21), grad-clip heads-up posted
-- **#1589 tanjiro (AdamW betas 0.9, 0.95)**: freshly rebased (11:19), grad-clip heads-up posted
+Round 1 in-flight (4 WIP PRs) — all must beat **val < 58.88, test < 51.08**:
+- **#2486 nezuko (AdamW eps=1e-6)**: just assigned (17:00); fixes bf16 subnormal denominator floor (default eps=1e-8 < bf16 min normal 1.175e-7). 1-line change, well-precedented (LLaMA-2/Mistral eps≥1e-5 in bf16).
+- **#2440 edward (LR warmup 3-epoch linear ramp)**: just assigned (16:14); tests cold-start instability mechanism on grad-clip 100%-engagement baseline.
+- **#2420 tanjiro (lr=7e-4 with merged betas=(0.9, 0.95))**: in flight; tests LR-betas interaction at +40% lr with reactive beta2=0.95.
+- **#2397 fern (grad-clip max_norm=0.5 downward bisect)**: in flight; symmetric bisect of clip threshold.
 
-**New merge bar: val < 60.09, test < 53.37, all four test splits finite.**
+**Idle students (4):** alphonse, askeladd, frieren, thorfinn — all just had PRs closed at 17:45; new hypotheses being generated.
+
+**Current merge bar: val < 58.88, test < 51.08, all four test splits finite.**
 
 **Latest diagnostic finding (2026-05-13 03:00 from PR #1509 close):** The cosine schedule `T_max=MAX_EPOCHS=50` mis-tunes the LR decay to a never-reached horizon. At the bf16 baseline's 18 epochs, end-of-run LR is at ~81% of peak (4.07e-4 vs 5e-4) — the schedule never actually decays. PR #1843 isolates this as a single-axis test.
 
@@ -86,14 +83,21 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1910 | thorfinn  | Volume Huber β=0.5               | **MERGED** 07:30 (val=65.47, test=57.84) — OOD splits drove win; in-dist regressed slightly; zero compute overhead |
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
 | #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | CLOSED: val +11.5%, test +10.5% — both mechanisms refuted. Per-step 2.15× (compute-bound, not launch-bound). Grad-clip × sqrt-LR anti-synergistic: clip clamps every step to unit-norm so sqrt-LR rule breaks. bs axis flagged as low-payoff on grad-clip baseline. |
-| #2399 | frieren   | EMA weights (decay=0.999)        | WIP, grad-clip baseline (just assigned; orthogonal to all in-flight axes; ~20 lines, targets terminal-epoch trajectory smoothing) |
+| #2399 | frieren   | EMA weights (decay=0.999)        | CLOSED 17:45 — near-wash (val +0.17%, test +0.29%). EMA mechanism active (~3pt smooth) but cancels with EMA-lag on cooling cosine; parked pending schedule-axis change. |
 | #2017 | edward    | weight_decay 1e-4 → 2e-4 (bisect) | **MERGED** 16:10 (val=58.883, test=51.078) — 8th baseline shift, −1.8% val / −2.4% test; wd=5e-4 over-regularized rc tail, wd=2e-4 landed correctly |
-| #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
+| #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | CLOSED 17:45 — sharp per-split pattern: HARD splits regress, EASY improve. Mechanism: β<0.5 under-fits pressure outliers (physically informative). Direction inverted; β_p>0.5 untested. |
 | #2041 | thorfinn  | surf_weight 10 → 5               | CLOSED: regresses +2.7%/+2.6% under grad-clip — directional reversal. surf_w=10 was better-calibrated when grad-clip normalises per-batch scale variance. |
 | #2341 | thorfinn  | surf_weight 10 → 20              | CLOSED: val +7.0%, test +8.6% worse. Axis fully bracketed (5 fails, 10 optimum, 20 fails). Convex asymmetric — over-weighting steals capacity from volume → OOD regresses hardest. |
-| #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | WIP, grad-clip baseline (just assigned; layer-level structural regularization, orthogonal to all in-flight axes) |
+| #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | CLOSED 17:45 — clean regression (+15.3% s1, +21.7% s2). Train AND val elevated = over-regularization signature; 4× baseline late-epoch noise. |
+| #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | CLOSED 17:45 — regression with high seed variance (+2.5% s1, +10.8% s2). Train/val ratio unchanged: noise without payoff. Combined with #2415, noise-injection axis CLOSED. |
 
-**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 17. **Open:** 8 (nezuko #2486 adamw-eps-1e6, edward #2440 lr-warmup, tanjiro #2420, fern #2397, frieren #2399, thorfinn #2415, askeladd #2163, alphonse #2180).
+**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 21. **Open:** 4 WIP (nezuko #2486 adamw-eps-1e6, edward #2440 lr-warmup, tanjiro #2420, fern #2397). **Idle: 4 (alphonse, askeladd, frieren, thorfinn) — pending reassignment.**
+
+### Newly-closed axes (2026-05-13 17:45)
+
+1. **Regularization noise-injection axis CLOSED** (#2415 DropPath + #2180 dropout). Mechanism: regularization stack already saturated (grad_clip 100% engagement + wd=2e-4 + bf16 + small model + 30min compute cap). Adding structural or feature-level noise pushes past the optimal regularization floor; both train AND val regress with high seed variance.
+2. **EMA-weights axis PARKED** (#2399). Mechanism is active (EMA smooths terminal ~3pt) but cancels with EMA-lag on cooling cosine schedule. Re-test on a future schedule change that exposes more terminal noise.
+3. **Per-channel β downward CLOSED** (#2163 β_p=0.25). HARD splits regress, EASY improve — pressure outliers carry physical information; β<0.5 under-fits high-error regions. Per-channel axis NOT fully closed; β_p>0.5 (upward, toward MSE) remains untested and well-motivated. askeladd reassignment target.
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
