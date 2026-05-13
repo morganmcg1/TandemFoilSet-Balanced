@@ -498,3 +498,28 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 **Conclusion:** Clear win. L2→Huber is significant at −9.4% val, −10.2% test. Largest gain: single_in_dist (−15.9%) — consistent with Huber's robustness to the high-error tails in out-of-distribution samples. First sub-100 test_avg (99.06) on this branch. Huber now stacked in advisor train.py.
 
 **Key insight:** The L2/L1 training-metric mismatch was actively harming OOD splits (single_in_dist is the most OOD split). Switching to Huber acts as implicit outlier weighting — reduces gradient magnitude for high-residual samples that were pulling optimization away from the bulk distribution.
+
+## 2026-05-13 07:10 — PR #1751: Tighter cosine T_max=12 — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-frieren/tighter-cosine-t-max-12`
+- Hypothesis: The scheduler T_max=47 is wildly miscalibrated for the ~12-epoch training window. Aligning T_max to the actual epoch budget (T_max=12) should unlock the low-LR decay phase that the prior schedule never reached, dramatically improving convergence.
+- Artifacts: `models/model-charliepai2g24h2-frieren-tighter-cosine-t-max-12-20260513-055432/metrics.jsonl`
+
+| Split | T_max=12 (this PR) | Floor #1849 (T_max=47) | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 108.0187 | 126.2130 | **−14.4%** |
+| val_geom_camber_rc | 96.3656 | 116.3601 | **−17.2%** |
+| val_geom_camber_cruise | 61.1470 | 82.2281 | **−25.6%** |
+| val_re_rand | 78.2041 | 97.9218 | **−20.1%** |
+| **val_avg** | **85.9338** | **105.6808** | **−18.7%** |
+| test_single_in_dist (bs=1) | 97.6661 | 113.4328 | **−13.9%** |
+| test_geom_camber_rc (bs=1) | 88.6578 | 104.1052 | **−14.9%** |
+| test_geom_camber_cruise (bs=1) | 51.3197 | 68.1068 | **−24.7%** |
+| test_re_rand (bs=1) | 72.9518 | 94.2933 | **−22.6%** |
+| **test_avg (bs=1)** | **77.6488** | **94.9845** | **−18.3%** |
+
+**Config:** Full floor stack + T_max=12 in CosineAnnealingLR. 14 epochs (30 min cap). Peak VRAM 42.11 GB.
+
+**Conclusion:** Strongest single result on this branch — −18.7% val, −18.3% test. The T_max=47 baseline was schedule-starved: at epoch 14, the prior schedule had decayed only 23% of its arc (LR ~6.9e-4, near peak). With T_max=12, by epoch 14 the cosine had decayed 92% (LR 5.1e-5). The entire gain is concentrated in the late-epoch low-LR phase that was previously locked out. The prior floor improvements (Huber β, chan_w) were genuine but were measured on a schedule-starved baseline — this run shows the full extent of those changes with a well-calibrated decay.
+
+**Key insight:** Schedule calibration to wall-clock budget is as important as the schedule choice itself. CosineAnnealingLR with T_max matched to actual epochs delivers a qualitatively different optimization trajectory: the model reaches the refinement regime (low LR, small gradient steps) within the timeout window rather than never getting there. All future runs now default to T_max matched to --epochs.
