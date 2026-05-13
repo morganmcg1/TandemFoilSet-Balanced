@@ -475,3 +475,27 @@ Post-LN keeps the residual-stream distribution stationary. At depth=5 this is no
 ### Mechanism
 
 T_max=20 stretches the cosine schedule so the LR at epoch 18 is 3.67e-6 (vs ~0 with T_max=18). The crossover happens at epoch 16 and the improvement margin widens through epoch 18 (val Δ: −1.15 → −1.28 → −2.64). The load-bearing factor is the **extended tail LR** — not higher mid-training LR (epochs 9–12 were actually slightly worse with T_max=20). T_max=18 cut the cosine at exactly the moment the loss landscape still had productive gradient to follow; T_max=20 provided non-zero LR through the final epoch. Finding #47: T_max=18 was optimal for the pre-LN stack (Finding #26); post-LN's deeper convergence trajectory requires T_max=20. Constraint: T_max≤20 to stay below Finding #44's 1e-5 harm threshold.
+
+## 2026-05-13 19:30 — PR #2494: Post-LN LR re-calibration — lr=2e-4 wins (Finding #20 superseded)
+
+- **test_avg/mae_surf_p: 47.9076** (NEW BEST — −2.92% vs previous 49.3466)
+- **val_avg/mae_surf_p:** 55.9044 (best epoch 18/18)
+- **Per-split:** in_dist=47.82 (−6.04%), rc=60.53 (−2.08%), cruise=34.40 (−2.20%), re_rand=48.88 (−1.27%)
+- **W&B run:** 1vr2l3if (postln-lr-sweep group, Arm 2)
+- **Companion Arm 1 (lr=3e-4):** test=48.3743 / val=55.7911 — also beats baseline but loses to Arm 2 on 3 of 4 splits
+- **Config change:** `--lr 2e-4` (Lion lr: 1.5e-4 → 2e-4); T_max=18 (post-LN baseline, pre #2508 merge)
+- **Full config:** bf16 + bs=4 + accum=2 + Lion **lr=2e-4** + β1=0.9 + β2=0.99 + wd=0 + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + post-LN + t_max=18 + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2e-4`
+
+### Per-split test mae_surf_p
+
+| Split | mae_surf_p | Δ vs prev baseline (49.3466 / T_max=20) |
+|---|---|---|
+| test_single_in_dist | 47.82 | **−6.04%** |
+| test_geom_camber_rc | 60.53 | −2.08% |
+| test_geom_camber_cruise | 34.40 | −2.20% |
+| test_re_rand | 48.88 | −1.27% |
+
+### Mechanism
+
+Finding #20 (pre-LN: lr=1.5e-4 optimal, lr=2e-4 +9.5% regression) was calibrated to pre-LN's unbounded residual stream. Under post-LN's bounded activations, the loss-landscape curvature absorbs higher LR cleanly — e1 gn_mean for lr=3e-4 was 95.9 vs predicted 120–160. The new post-LN LR optimum is **lr=2e-4** (1.33× the pre-LN value, not 2×). Both arms hit best_epoch=18/18 — schedule still has headroom even before stacking with T_max=20. The IID gains dominate (in_dist −6.04%, comfortably beating noise floor ~1.4%); rc remains the largest-headroom split. **Note:** This entry merges lr=2e-4 with T_max=18 (the post-LN baseline at the time of the experiment). The lr=2e-4 + T_max=20 stack is the natural next step and is being assigned immediately.
