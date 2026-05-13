@@ -236,13 +236,27 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Sample-level filter for non-finite ground truth. scoring's
+            # accumulate_batch intends to skip such samples, but its err*mask
+            # multiplication still propagates NaN (NaN*0 = NaN). We pre-skip
+            # non-finite samples by adjusting `mask` and sanitize y so the
+            # remaining arithmetic stays finite.
+            B = y.shape[0]
+            y_finite_sample = torch.isfinite(y.reshape(B, -1)).all(dim=-1)
+            mask = mask & y_finite_sample.unsqueeze(-1)
+            y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
             sq_err = (pred - y_norm) ** 2
-            chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
-            sq_err = sq_err * chan_w[None, None, :]
+            chan_w_surf = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
+            chan_w_vol = torch.tensor([1.0, 1.0, 1.0], device=device, dtype=sq_err.dtype)
+            surf_flag = is_surface.unsqueeze(-1).to(sq_err.dtype)
+            vol_flag = 1.0 - surf_flag
+            per_pos_chan_w = surf_flag * chan_w_surf[None, None, :] + vol_flag * chan_w_vol[None, None, :]
+            sq_err = sq_err * per_pos_chan_w
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -447,8 +461,12 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
         sq_err = (pred - y_norm) ** 2
-        chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
-        sq_err = sq_err * chan_w[None, None, :]
+        chan_w_surf = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=sq_err.dtype)
+        chan_w_vol = torch.tensor([1.0, 1.0, 1.0], device=device, dtype=sq_err.dtype)
+        surf_flag = is_surface.unsqueeze(-1).to(sq_err.dtype)
+        vol_flag = 1.0 - surf_flag
+        per_pos_chan_w = surf_flag * chan_w_surf[None, None, :] + vol_flag * chan_w_vol[None, None, :]
+        sq_err = sq_err * per_pos_chan_w
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
