@@ -395,6 +395,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_fn: str = "mse"  # "mse" or "smooth_l1"
     smooth_l1_beta: float = 0.1
+    p_weight: float = 1.0  # multiplicative weight on the p channel in training loss
 
 
 cfg = sp.parse(Config)
@@ -502,6 +503,12 @@ for epoch in range(MAX_EPOCHS):
             )
         else:
             per_elem = (pred - y_norm) ** 2
+
+        if cfg.p_weight != 1.0:
+            channel_weights = torch.tensor(
+                [1.0, 1.0, cfg.p_weight], device=per_elem.device, dtype=per_elem.dtype
+            )
+            per_elem = per_elem * channel_weights  # broadcasts over [B, N, 3]
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
