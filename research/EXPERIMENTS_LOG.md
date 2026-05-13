@@ -6,6 +6,31 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 06:05 — PR #1793: CosineAnnealingLR T_max=12 on RMSNorm+GeGLU+Lion — MERGED (−7.9% val, −8.9% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/lion-tmax-12-aligned
+- **Hypothesis:** T_max=50 with 30-min cap fires only ~13% of cosine decay; T_max=12 aligns to actual epoch budget for proper late-epoch LR decay to 0.
+- **Result:** val=52.798, test=44.972 (epoch 12/12, 30-min cap, surf_weight=10)
+
+| Split | val (T_max=12, sw=10) | val (prev baseline sw=5, T=50) | Δ |
+|---|---|---|---|
+| single_in_dist | 58.907 | 60.960 | −3.4% |
+| geom_camber_rc | 67.658 | 72.044 | −6.1% |
+| geom_camber_cruise | 33.380 | 38.721 | **−13.8%** |
+| re_rand | 51.248 | 57.586 | **−11.0%** |
+| **avg** | **52.798** | **57.328** | **−7.9% ✓** |
+
+- **Test:** 44.972 vs 49.387 = **−8.9% ✓**
+- **Same-surf_weight comparison vs PR #1837 (sw=10, T=50, val=63.017):** **−16.2% val / −17.8% test** — pure T_max=12 effect
+- **Mechanism confirmed:** LR trajectory from epoch 9→12 dropped 11.3% as cosine fully decayed (2.07e-5 → 0). Lion's sign(m) steps get 10× finer in late epochs as designed.
+- **Easy splits benefit most:** geom_camber_cruise (−13.8%) and re_rand (−11.0%) — late-epoch fine-tuning matters more when surrounding fit is already good
+- **Note:** student rebase pre-dated PR #1836 (surf_weight=5) merge, so this used surf_weight=10. Compound `T_max=12 + surf_weight=5` is the natural next experiment.
+- **Metric artifacts:** `models/model-charliepai2g48h3-nezuko-lion-tmax-12-aligned-v2-20260513-045129/metrics.jsonl`
+- **Reassigned nezuko:** PR #1956 T_max=12 + surf_weight=5 compound (orthogonal mechanism stacking)
+
+---
+
 ## 2026-05-13 05:45 — PR #1836: surf_weight=5 on RMSNorm+GeGLU+Lion — MERGED (−9.03% val, −9.76% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-thorfinn

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~06:00
+- **Date:** 2026-05-13 ~06:10
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,16 +9,18 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 57.328** (surf_weight=5 + RMSNorm+GeGLU+Lion, PR #1836, epoch 14)
-**`test_avg/mae_surf_p` = 49.387**
+**`val_avg/mae_surf_p` = 52.798** (T_max=12 + RMSNorm+GeGLU+Lion+surf_weight=10, PR #1793, epoch 12)
+**`test_avg/mae_surf_p` = 44.972**
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 60.960 | 53.010 |
-| geom_camber_rc | **72.044** | 62.463 |
-| geom_camber_cruise | 38.721 | 32.843 |
-| re_rand | 57.586 | 49.231 |
-| **avg** | **57.328** | **49.387** |
+| single_in_dist | 58.907 | 50.239 |
+| geom_camber_rc | **67.658** | 59.561 |
+| geom_camber_cruise | 33.380 | 27.740 |
+| re_rand | 51.248 | 42.345 |
+| **avg** | **52.798** | **44.972** |
+
+**Note:** Compound `T_max=12 + surf_weight=5` is in flight (nezuko #1956). If positive, the baseline shifts down again.
 
 ## What we've learned
 
@@ -28,19 +30,22 @@
 3. **Lion optimizer lr=1e-4**: −14.3% (PR #1725)
 4. **n_layers=6**: −9.4% (PR #1392)
 5. **surf_weight=5**: −9.0% val / −9.8% test (PR #1836) ← single_in_dist −20.5%
-6. **mlp_ratio=4**: −5% (PR #1408)
-7. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
-8. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
+6. **T_max=12 (cosine aligned to epoch budget)**: −7.9% val / −8.9% test (PR #1793) ← all 4 splits improved, cruise −13.8%, re_rand −11.0%
+7. **mlp_ratio=4**: −5% (PR #1408)
+8. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
+9. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
 
-### Current stack (all defaults in train.py)
-- L1 (MAE) loss in normalized space, **surf_weight=5** (PR #1836)
+### Current stack (defaults + CLI overrides)
+- L1 (MAE) loss in normalized space, **surf_weight=10** (CLI; reverted from 5 with T_max=12 merge — compound still in flight)
 - n_layers=6, **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128, n_head=4, slice_num=64
 - Lion optimizer lr=1e-4, weight_decay=1e-4
-- CosineAnnealingLR T_max=50
+- **CosineAnnealingLR T_max=12 (epochs=12)** ← PR #1793, cosine fully decays to 0
 - bf16 mixed precision (autocast)
-- ~14 epochs in 30 min (~138s/epoch)
+- 12 epochs in 30 min (~138s/epoch)
+
+**Reproduce command:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -70,21 +75,22 @@
 7. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc became easier; single_in_dist became the primary bottleneck. surf_weight=5 cracked single_in_dist (−20.5% val).
 8. **geom_camber_rc (72.0 val) is now the hardest split** — primary target for further improvement.
 
-## Active experiments (Round 10 — all on RMSNorm+GeGLU+Lion+surf_weight=5 baseline)
+## Active experiments (Round 11 — all on T_max=12 + RMSNorm+GeGLU+Lion baseline)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR on RMSNorm+surf_w=5 stack | SENT BACK (pivot) |
-| askeladd | #1766 | Lion WD=1e-2 on RMSNorm+GeGLU+Lion (stale, needs rebase) | STALE WIP |
+| alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR | WIP (rerun) |
+| askeladd | #1766 | Lion WD=1e-2: paper-recommended on full stack | WIP (stale) |
 | edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | WIP |
-| tanjiro | #1872 | mlp_ratio=8 + GeGLU+Lion: recover fc2 capacity | WIP |
-| fern | #1790 | Lion + 2-epoch cosine warmup on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| nezuko | #1793 | Lion + T_max=12 aligned to budget on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | NEW |
+| tanjiro | #1872 | mlp_ratio=8 + GeGLU+Lion: recover fc2 capacity | WIP (stale, nudged) |
+| fern | #1790 | Lion + 2-epoch cosine warmup | WIP (rerun) |
+| nezuko | #1956 | **T_max=12 + surf_weight=5 compound** | NEW |
+| thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | WIP |
 | frieren | #1920 | CosineAnnealingLR eta_min=1e-5: non-zero LR floor for Lion tail | WIP |
 
 **Recently merged:**
-- thorfinn #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (−9.03% val / −9.76% test) ← NEW BASELINE 57.328/49.387
+- nezuko #1793: T_max=12 on RMSNorm+GeGLU+Lion (−7.9% val / −8.9% test) ← NEW BASELINE 52.798/44.972
+- thorfinn #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (−9.03% val / −9.76% test)
 - frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
@@ -98,32 +104,33 @@
 
 Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`lr=cfg.lr`, plus `Config.lr` default updated to 1e-4). Once either PR rebases cleanly onto the new baseline and is merged, the bug is resolved. **Until then, any LR experiment with `--lr != 1e-4` is silently broken.** alphonse confirmed fix works (config shows lr=0.0002 was applied correctly in their rerun).
 
-## Round 10 priorities (surf_weight=5 + RMSNorm+GeGLU+Lion baseline, val=57.328)
+## Round 11 priorities (T_max=12 + RMSNorm+GeGLU+Lion baseline, val=52.798)
 
-**Tier 1 (direct surf_weight sweep):**
-1. **surf_weight=3** (thorfinn #1948): sweep further — mechanism is confirmed monotonic; geom_camber_rc at 72.0 still has significant room.
+**Tier 1 (compound the two recent wins):**
+1. **T_max=12 + surf_weight=5 compound** (nezuko #1956): pure orthogonal stacking; predicted val ~48-50 if mechanisms compound additively.
+2. **surf_weight=3 with T_max=12** (thorfinn #1948): if running on old T_max=50 stack, may need re-evaluation against new baseline.
 
-**Tier 2 (optimizer tuning — need rebase to new surf_weight=5 baseline):**
-2. **Lion WD=1e-2** (askeladd #1766, stale): confirmed −10.4% on Lion+GELU; rebase to new baseline and rerun. Critical to land — WD bracket experiments depend on it.
-3. **Lion WD=3e-2** (edward #1925): brackets WD optimum; in-flight.
-4. **Lion lr=1.5e-4** (alphonse #1765): pivot from 2e-4 which overshot; first time lr > 1e-4 is tested on full stack.
+**Tier 2 (optimizer tuning — older PRs may need rebase to T_max=12 baseline):**
+3. **Lion WD=1e-2** (askeladd #1766, stale): confirmed −10.4% on Lion+GELU; needs rebase to T_max=12.
+4. **Lion WD=3e-2** (edward #1925): brackets WD optimum; may need to re-evaluate at T_max=12.
+5. **Lion lr=1.5e-4** (alphonse #1765): pivot from 2e-4; at T_max=12 the cosine fully decays — higher initial LR may now be tolerable.
 
-**Tier 3 (schedule/architecture — need rebase):**
-5. **Lion + 2-epoch warmup** (fern #1790): confirmed −9.9% on Lion+GELU; rerun on full stack.
-6. **Lion + T_max=12** (nezuko #1793): confirmed −9.18% on Lion+GELU; rerun on full stack.
-7. **mlp_ratio=8 + GeGLU** (tanjiro #1872): recover fc2 capacity halved by GeGLU split.
-8. **CosineAnnealingLR eta_min=1e-5** (frieren #1920): non-zero LR floor for Lion tail.
+**Tier 3 (schedule/architecture — older PRs may need rebase):**
+6. **Lion + 2-epoch warmup** (fern #1790): at T_max=12, warmup eats 17% of budget — may not compound.
+7. **mlp_ratio=8 + GeGLU** (tanjiro #1872, stale — nudged): recover fc2 capacity halved by GeGLU split.
+8. **CosineAnnealingLR eta_min=1e-5** (frieren #1920): non-zero LR floor for Lion tail; potentially redundant with T_max=12 now that LR reaches 0 cleanly.
 
 **Queued ideas for next idle students (after current round lands):**
-- **surf_weight=2**: if surf_weight=3 still improves, keep sweeping
-- **geom_camber_rc-targeted experiments**: this split (72.0 val) now dominates the average; worth targeted interventions
+- **T_max=10 or T_max=11**: push cosine further (LR closer to 0 earlier); cheap to test
+- **surf_weight=2 with T_max=12**: if compound holds, keep sweeping
+- **geom_camber_rc-targeted experiments**: 67.7 val still dominates the average; worth targeted interventions
 - **n_hidden widening 128→160**: capacity without restructuring MLP; ~225s/epoch is tight (~9 epochs, risky)
-- **PhysicsAttention slice_num=48**: slight reduction for faster epochs; might help convergence
-- **Lion WD=5e-2 or WD=2e-2**: further brackets after edward's WD=3e-2 and askeladd's WD=1e-2 land
+- **PhysicsAttention slice_num=48**: slight reduction for faster epochs
+- **Higher LR (1.5e-4 or 2e-4) + T_max=12 compound**: now that LR decays to 0, larger initial steps may be tolerable
 
 ## Key constraints
 
-- 30 min / run cap: ~14 epochs at 138s/epoch
+- 30 min / run cap: 12 epochs at ~138s/epoch with T_max=12 (cosine fully decays)
 - Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~160s/epoch even with RMSNorm+Lion; confirmed dead in PR #1890)
 - EMA: cold-start drag, incompatible with short budget
 - Batch increase: always worse (step-count limited)
