@@ -1283,5 +1283,81 @@ All 7 other in-flight wave-6 PRs were forked from the **old** FiLM baseline (val
 | #1760 | tanjiro | film-mid-dim-128 | Forked from 80.82 |
 | #1787 | edward | re-jitter-0p05 | Forked from 80.82 |
 
+---
+
+## 2026-05-13 03:25 — PR #1760 closure (tanjiro, FiLM mid_dim 64→128 on FiLM-only baseline)
+
+- **Branch:** `willowpai2g48h2-tanjiro/film-mid-dim-128-on-filmed`
+- **Hypothesis:** Expand FiLM `mid_dim` from 64 to 128 to test intra-FiLM capacity expansion (NOT generic n_hidden/mlp_ratio). Forked from old FiLM-only baseline (80.82).
+
+### Result table (W&B run `l4jmvy3m`, terminal SENPAI-RESULT)
+
+| Metric | mid_dim=128 | vs OLD FiLM-only baseline (80.82 / 71.30) | vs NEW grad-clip+FiLM baseline (74.62 / 66.14) |
+|---|---|---|---|
+| **swa_val_avg/mae_surf_p** | **79.41** | **−1.74%** (within seed-variance ±1.23) | **+6.42%** (close-zone) |
+| **swa_test_avg/mae_surf_p** | **71.11** | **−0.27%** (within seed-variance ±1.64) | **+7.51%** (no test override) |
+| base val | 80.70 | −0.15% (essentially flat) | +8.16% |
+| base test | 72.69 | +1.95% (worse) | +9.91% |
+| FiLM head params | 167K | +99% vs 84K baseline ✓ | — |
+| Total params | 0.83M | +10.4% | — |
+
+### Per-split val (this PR vs OLD baseline seed 2)
+
+| Split | SWA mid_dim=128 | baseline seed=2 (base) | Δ |
+|---|---|---|---|
+| val_single_in_dist | 85.01 | 88.39 | **−2.47%** |
+| **val_geom_camber_rc** (FiLM bottleneck) | **95.48** | 97.36 | +2.05% (base) / −1.93% (SWA) |
+| val_geom_camber_cruise | 58.97 | 59.69 | −1.16% |
+| val_re_rand | 78.19 | 77.83 | +0.53% |
+
+### FiLM modulation diagnostics
+
+| Layer | mid_dim=128 mean(|γ|) | baseline (mid_dim=64) | mid_dim=128 mean(|β|) | baseline |
+|---|---|---|---|---|
+| L0 | 0.328 | 0.233 | 0.202 | 0.117 |
+| L4 | 0.347 | 0.225 | 0.330 | 0.190 |
+| **mean** | **0.335** | **0.235** (+43%) | **0.278** | **0.162** (+72%) |
+
+‖γ‖_L2 = 21.7 vs baseline 15.3. ‖β‖_L2 = 18.0 vs baseline 10.6. **The bigger MLP DOES use its extra capacity to drive more aggressive modulation.**
+
+### Decision
+
+- **Closed** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1760#issuecomment-4436741788
+- Rationale: Against new 74.62 baseline (which merged after this PR's assignment), val=79.41 fires the close rule (val≥78.0 → close). Real per-seed win on OLD baseline doesn't translate.
+
+### Analysis — mechanism finding
+
+**FiLM mid_dim doubling makes the modulation more aggressive but doesn't fix the cross-camber bottleneck.** The bigger head DOES use its capacity (+43%/+72% modulation magnitudes), but gains land on val_single_in_dist (−2.47%) and val_geom_camber_cruise (−1.16%) — *not* on the bottleneck val_geom_camber_rc, which actually got worse on base eval (+2.05%) and test SWA (+2.85%).
+
+**Mechanism implication:** the 11-dim global → per-layer (γ, β) mapping is not the limiting factor for cross-camber generalization. **FiLM-capacity axis (width direction) is closed upward at mid_dim=64.** At mid_dim=64 we have the right balance; doubling forces over-aggressive modulation that overfits in-distribution patterns without improving the cross-rc-camber distribution.
+
+### Reassignment to PR #1838: FiLM depth 2→3 (compositional capacity, NOT width)
+
+Pivoting tanjiro onto the depth-direction follow-up:
+- **Mechanism:** depth axis tests a *functionally different* modulation form. 2-layer MLP can only represent linear-of-features; 3-layer can represent compositional interactions (e.g., "camber × Re × cruise-flag").
+- Same mid_dim=64 (preserves modulation magnitudes, doesn't over-amplify).
+- One extra 64×64 hidden layer = +4K params (~0.5% increase, negligible). Param count goes 84K → 88K.
+- Predicted: −0.5 to −3% val. Largest gain on val_geom_camber_rc if compositional features matter for cross-camber.
+- If lands → FiLM-axis becomes 2-dimensional (depth × width). If doesn't land → FiLM capacity exhausted, next family is geometry-feature augmentation (per-node SDF, surface arc-length).
+
+### Wave-6 portfolio status
+
+8 students, all active. 1 reassignment this round.
+
+| PR | Student | Status | Mechanism axis | Forked from |
+|---|---|---|---|---|
+| #1838 | tanjiro | WIP (NEW) | FiLM depth 2→3 | 74.62 (new) |
+| #1831 | nezuko | WIP | Max-norm sweep {0.5, 2.0} | 74.62 (new) |
+| #1818 | alphonse | WIP | Slice_num 64→128 | 80.82 (old) |
+| #1821 | askeladd | WIP | Vol Ux/Uy weight 2.0× | 80.82 (old) |
+| #1734 | thorfinn | WIP | asinh α=0.5 | 80.82 (old) |
+| #1757 | frieren | WIP | β=0.3 | 80.82 (old) |
+| #1758 | fern | WIP | Mesh subsample 0.9 | 80.82 (old) |
+| #1787 | edward | WIP | Re-jitter σ=0.05 | 80.82 (old) |
+
+**6 PRs still forked from old baseline** — merge bar tightened by ~6 points for those when they terminate.
+
+
+
 
 

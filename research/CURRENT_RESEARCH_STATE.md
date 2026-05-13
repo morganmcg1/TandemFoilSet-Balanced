@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 03:15 (#1731 grad-clip MERGED → new baseline val=74.62 / test=66.14; nezuko reassigned to #1831 max_norm sweep)
+- **Last updated:** 2026-05-13 03:30 (#1760 closed against new baseline → tanjiro reassigned to #1838 FiLM depth=3; mechanism follow-up to closed width axis)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -20,11 +20,12 @@
 
 ## 🔥 Hottest signals this session
 
-- **PR #1731 (nezuko, grad-clip on FiLM):** **MERGED.** SWA val 74.62 (−7.67%) / test 66.14 (−7.25%). Two-seed variance tightens vs FiLM-alone (val std 0.86 vs 1.23). ~93% clip-fraction at threshold 1.0; base→SWA gap −3.3% confirms mechanism (clipping → cleaner late-epoch updates → better SWA averaging). FiLM bottleneck `val_geom_camber_rc` improved by −6.44 absolute (97.36 → 90.92). **Reassigned to #1831 max_norm sweep {0.5, 2.0}.**
-- **All 7 in-flight wave-6 PRs were forked from the OLD 80.82 baseline.** Decision rules now compare to 74.62. Merge bar raised by ~6 points; most likely most close cleanly against new baseline.
-- **#1739 (alphonse, surf-Huber/vol-MSE) close:** FiLM absorbed the per-domain optimization mechanism. Cross-condition splits all within seed-variance.
-- **#1702 (askeladd, per-channel p-weight) close:** Diagnostic falsified premise — pressure is *easier* in normalized space. Inverse direction tested as #1821 (uxuy_weight=2.0).
-- **#1734 (thorfinn, asinh-pressure α=1.0) result earlier:** val=80.00 / test=72.71 within seed-variance on FiLM-alone frame. Mechanism is real and structural per-split. Now re-running at α=0.5 (gentler).
+- **PR #1731 (nezuko, grad-clip on FiLM):** **MERGED.** SWA val 74.62 (−7.67%) / test 66.14 (−7.25%). Two-seed variance tightens vs FiLM-alone (val std 0.86 vs 1.23). ~93% clip-fraction at threshold 1.0; base→SWA gap −3.3% confirms mechanism. FiLM bottleneck `val_geom_camber_rc` improved by −6.44 absolute (97.36 → 90.92). Reassigned to #1831 max_norm sweep.
+- **PR #1760 (tanjiro, FiLM mid_dim=128) close 2026-05-13 03:25:** val=79.41 / test=71.11. Real per-seed −1.74% win on OLD baseline but fires close-rule against new 74.62 baseline (+6.42%). **High-information finding:** doubling mid_dim makes modulation +43%/+72% more aggressive but DOESN'T crack `val_geom_camber_rc` (actually +2.05% base, +2.85% test SWA). **FiLM-capacity axis (width direction) closed upward at mid_dim=64.** Reassigned to #1838 (FiLM depth 2→3 — compositional capacity, functionally different from width).
+- **6 in-flight wave-6 PRs still forked from OLD 80.82 baseline.** Merge bar tightened by ~6 points; expect most to close cleanly against new 74.62.
+- **#1739 (alphonse, surf-Huber/vol-MSE) close:** FiLM absorbed the per-domain optimization mechanism.
+- **#1702 (askeladd, per-channel p-weight) close:** Diagnostic falsified premise — pressure is *easier* in normalized space.
+- **#1734 (thorfinn, asinh-pressure α=1.0) result earlier:** val=80.00 / test=72.71 within seed-variance on FiLM-alone frame. Mechanism is real and structural per-split. Now re-running at α=0.5.
 
 ## Most recent direction from human researcher team
 
@@ -46,13 +47,13 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 
 | PR | Student | Slug | Mechanism axis | Forked from | New merge bar (vs 74.62) |
 |---|---|---|---|---|---|
-| #1831 | nezuko | `max-norm-sweep-on-clipfilm` | **Max-norm bracket {0.5, 2.0}** (sensitivity test of merged 1.0) ← NEW, forked from 74.62 | 74.62 | best-arm < 74.62 |
+| #1838 | tanjiro | `film-depth-3-on-clipfilm` | **FiLM depth 2→3** (compositional modulation capacity; orthogonal to closed width direction) ← NEW, forked from 74.62 | 74.62 | best-arm < 74.62 |
+| #1831 | nezuko | `max-norm-sweep-on-clipfilm` | Max-norm bracket {0.5, 2.0} (sensitivity test of merged 1.0) | 74.62 | best-arm < 74.62 |
 | #1818 | alphonse | `slice-num-128-on-filmed` | Slice_num 64→128 (intra-routing categorical capacity) | 80.82 | merge bar tightened by ~6 |
 | #1821 | askeladd | `uxuy-weight-2p0-on-filmed` | Vol Ux/Uy loss-weight 2.0× (inverse of #1702) | 80.82 | merge bar tightened by ~6 |
 | #1734 | thorfinn | `asinh-0p5-pressure-on-filmed` | Value-level pressure-target compression (gentler α=0.5) | 80.82 | merge bar tightened by ~6 |
 | #1757 | frieren | `beta-0p3-on-filmed` | β=0.3 port from closed #1600 | 80.82 | merge bar tightened by ~6 |
 | #1758 | fern | `mesh-subsample-0p9-on-filmed` | Random mesh-node subsampling (data-side aug, node-level) | 80.82 | merge bar tightened by ~6 |
-| #1760 | tanjiro | `film-mid-dim-128-on-filmed` | FiLM mid_dim 64 → 128 (intra-FiLM capacity) | 80.82 | merge bar tightened by ~6 |
 | #1787 | edward | `re-jitter-0p05-on-filmed` | Re-jitter (data-side aug, sample-level) | 80.82 | merge bar tightened by ~6 |
 
 ### Reframe decision rule (vs new 74.62 baseline)
@@ -85,12 +86,13 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
 - **#1691 (edward, surf_weight=5):** val=98.61. Surf/vol axis closed both directions.
 - **#1739 (alphonse, surf-Huber/vol-MSE on FiLM):** val=84.18. FiLM absorbed the per-domain mechanism. Reassigned to #1818.
 - **#1702 (askeladd, per-channel p-weight on FiLM):** Best val=84.00. Diagnostic falsified premise; reassigned to #1821 inverse direction.
+- **#1760 (tanjiro, FiLM mid_dim=128 on FiLM-only):** SWA val=79.41 / test=71.11. Real per-seed −1.74% win on OLD baseline but fires close-rule against new 74.62. **High-info finding:** modulation magnitudes +43%/+72% but val_geom_camber_rc gets *worse*. **FiLM-capacity width-direction closed at mid_dim=64.** Reassigned to #1838 depth-direction.
 
 ## ⚠ Active operational notes
 
 - **The GraphQL rate-limit pattern continues; pods recover automatically.** REST helpers preferred.
 - **Mixed-baseline portfolio:** 7 of 8 wave-6 PRs forked from old 80.82 baseline; only #1831 (new nezuko) forked from new 74.62 baseline. Decision-rule recalibration noted in PR-by-PR review.
-- **11 mechanism axes definitively closed on this dataset/scale:**
+- **12 mechanism axes definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1) — closed once
   - Token-level stochastic regularization (attention_dropout=0.1) — closed once
@@ -99,6 +101,7 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
   - Surf/vol loss-weighting (both directions) — closed; sw=10 brackets optimum
   - Loss-kind per domain at FiLM-scale (surf-Huber/vol-MSE) — closed (FiLM absorbed)
   - Per-channel pressure-up weighting — closed (diagnostic falsified premise)
+  - **FiLM intra-capacity width-direction (mid_dim 64→128)** — closed; doubling makes modulation more aggressive but doesn't crack cross-camber bottleneck (#1760)
 - **4 axes have produced strong landings:**
   - Loss-shape: Huber (#1452 merged)
   - Loss-weighting: per-sample Re-weight (#1586 merged)
@@ -118,13 +121,14 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
 - **Optimizer-stability (grad-clip max_norm):** **LANDED in baseline (#1731)** — sweep on the new baseline (#1831 nezuko)
 - **Data-side input augmentation (node-level):** mesh-node subsampling (#1758 fern) — pending
 - **Data-side input augmentation (sample-level):** Re-jitter (#1787 edward) — pending
-- **Architecture-conditioning (intra-FiLM-capacity):** FiLM mid_dim 64→128 (#1760 tanjiro) — pending
+- **Architecture-conditioning (intra-FiLM-capacity, width):** **CLOSED** at mid_dim=64 (#1760; doubling over-aggressive)
+- **Architecture-conditioning (intra-FiLM-capacity, depth):** FiLM depth 2→3 (#1838 tanjiro) ← NEW — compositional modulation, functionally different from width
 - **Architecture-conditioning (intra-routing-capacity):** slice_num 64→128 (#1818 alphonse) — pending
 - **Architecture-conditioning (head):** FiLM — LANDED in baseline (#1585)
 - **Schedule / SWA-window:** definitively closed
 - **Internal regularization:** definitively closed (3 sub-axes)
 
-**11 orthogonal mechanism axes total — 4 landed (Huber, Re-weight, FiLM, grad-clip), 8 closed, 7 pending.** Composition pattern: stability levers (grad-clip) and conditioning levers (FiLM) compose constructively.
+**12 orthogonal mechanism axes total — 4 landed (Huber, Re-weight, FiLM, grad-clip), 9 closed, 7 pending.** Composition pattern: stability levers (grad-clip) and conditioning levers (FiLM) compose constructively.
 
 ## Potential next research directions (wave 7+)
 
