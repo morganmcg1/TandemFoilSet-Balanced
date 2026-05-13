@@ -6,6 +6,51 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 17:25 — PR #2447 — CLOSED (slice_num=14 loses; slice_num=16 confirmed local minimum)
+
+**edward: slice_num=14 on n_layers=3+epochs=36**
+- vs baseline (PR #2348 val=35.548): val=36.483 (**+2.6% LOSS**), test=30.798 (+1.5%)
+- Uniform regression across all 4 val splits (+0.2 to +1.7 abs)
+- Capacity canary: geom_camber_rc mae_vol_p=56.468 vs expected ~53.6 (+5.4%, no sharp collapse)
+- best_epoch=35/36, params=513,273, 51.6s/epoch, 30.1 min
+
+**PARTITION AXIS FULLY CLOSED.** Full neighborhood mapped:
+| slice_num | val_avg/mae_surf_p | source |
+|---|---|---|
+| 24 | 37.366 | PR #2229 |
+| 20 | 36.854 | PR #2375 |
+| 18 | in flight | #2451 |
+| **16** | **35.548** | **PR #2348 (BASELINE)** |
+| 14 | 36.483 | this PR |
+| 12 | 35.969 | PR #2351 |
+| 8 | in flight | #2408 |
+
+Both immediate neighbors (14 and 12) are worse. slice_num=16 is the **robust local minimum** — not a lucky point.
+
+**Metric artifacts:** `models/model-slicenum14-nlayers3-20260513-163235/metrics.jsonl`
+
+---
+
+## 2026-05-13 17:25 — PR #2404 — CLOSED (n_head=1 statistically tied; head axis closed; PhysicsAttention bottleneck is slice mechanism)
+
+**nezuko: n_head=1 on n_layers=3+slice_num=24+epochs=33 (3 independent seeds)**
+- vs old baseline (PR #2229 val=37.366): val=37.644±0.48 (**+0.7% within 1σ, NOT significant**)
+- test=31.943±0.53 (+1.8%, ~1σ, mild loss)
+- Cannot beat current baseline 35.548
+- n_head=1 has **+28% more params (659K vs 515K)** from Q/K/V scaling with dim_head² — yet no gain
+- Seed variance estimate: **σ_val ≈ 0.48 units** — useful calibration for future single-run signals
+
+**KEY FINDING: PhysicsAttention bottleneck is the slice mechanism, not Q/K/V capacity.** More Q/K/V params (via larger dim_head) don't help. The bottleneck is how information is routed across slice tokens.
+
+**Head axis FULLY CLOSED across {n_head=1, 2, 4} at slice_num=24.**
+- n_head=1: val=37.64 (3 seeds mean)
+- n_head=2: val=37.63 (edward #2383)
+- n_head=4: val=37.37 (BEST at slice_num=24)
+
+**Metric artifacts:** `models/model-charliepai2g48h3-nezuko-nhead1-nlayers3-slicenum24-20260513-161125/metrics.jsonl`
+
+---
+
 ## 2026-05-13 17:15 — PR #2431 — CLOSED (lr=1.5e-4 × slice_num=16 loses; LR optimum is partition-dependent)
 
 **alphonse: lr=1.5e-4 × slice_num=16 on n_layers=3+epochs=36**

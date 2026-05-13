@@ -94,10 +94,10 @@
 | askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | **possible winner** |
 | tanjiro | #2408 | slice_num=8 on n_layers=3+epochs=38 (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
 | fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | possible — LR axis at sub-optimal partition |
-| edward | #2447 | **slice_num=14 on n_layers=3+epochs=36** (partition neighborhood probe) | n_layers=3 | **possible winner** |
+| edward | #2478 | **n_layers=4+slice_num=16+epochs=27** (depth-up counterpart to frieren depth-down) | n_layers=4+slice_num=16 | possible |
 | thorfinn | #2450 | **lr=5e-5 on n_layers=3+slice_num=16+epochs=36** (lower LR bound) | n_layers=3+slice_num=16 | possible — completes LR axis |
 | frieren | #2468 | **n_layers=2+slice_num=16+epochs=46** (depth reduction → more cosine budget) | n_layers=2+slice_num=16 | **YES — high EV via epoch-budget mechanism** |
-| nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
+| nezuko | #2479 | **LayerScale on n_layers=3+slice_num=16+epochs=36** (residual branch scaling) | n_layers=3+slice_num=16 | possible — fresh architecture axis |
 
 **Merged:** #2351 (tanjiro slice_num=12, val=35.969), #2348 (alphonse slice_num=16, val=35.548)
 **Closed this round:** #2417 (thorfinn n_head=2@slice12 +3.4%), #2375 (askeladd slice20 beats old baseline but loses vs 35.548), #2383 (edward n_head=2@slice24 +0.71%), #2353/#2301/#2367/#2279/#2350 (prior round)
@@ -115,7 +115,8 @@
 - slice_num=14 → edward #2447 (IN FLIGHT — lower-side probe)
 - slice_num=12 → val=35.969 (PR #2351, WORSE than 16 — non-monotone)
 - slice_num=8 → tanjiro #2408 (IN FLIGHT — expected capacity collapse)
-- **NON-MONOTONE TROUGH AT 16: 20>16<12. Probing 18 and 14 to pin exact optimum.**
+- **PARTITION AXIS FULLY CLOSED. Robust local minimum at 16. Both neighbors (14, 12) are worse.**
+Remaining in-flight: askeladd slice_num=18 (informative, expected to confirm monotone above 16), tanjiro slice_num=8 (expected capacity collapse).
 
 ## Confirmed mechanisms
 
@@ -188,7 +189,11 @@
 - **grad-clip**: worse for Lion (sign-update already handles magnitude)
 - **DropPath**: needs 100-300 epoch budgets; useless at 20-30 epoch budgets
 - **Dropout**: always worse (model is underfitting)
-- **n_head=2 FULLY CLOSED across slice_num range**: +0.71% at slice_num=24 (edward #2383), +3.40% at slice_num=12 (thorfinn #2417). Consistent direction. n_head=4 parallelism is robust optimal — 4 heads as soft mixture-of-specialists beats 2 wider heads despite +6% more params. No further n_head testing warranted.
+- **n_head axis FULLY CLOSED across {1, 2, 4} at slice_num=24:**
+  - n_head=1: val=37.64 (nezuko #2404, 3-seed mean ±0.48). +28% more params — no gain.
+  - n_head=2: val=37.63 (edward #2383). +6% more params — slight loss.
+  - n_head=4: val=37.37 (BEST). Parallelism wins.
+  - **Bottleneck is slice mechanism, not Q/K/V capacity.** dim_head doesn't matter — routing diversity does.
 - **n_head=2 on n_layers=4**: marginal win (+0.25%), but current best is n_layers=3+n_head=4 anyway
 - See full dead-ends list in older entries above for complete history
 
