@@ -9,6 +9,39 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 05:30 — PR #1863: tanjiro — smooth_l1 β 1.0 → 0.25 (MERGED)
+
+**New best val and test. 6th consecutive compounding win: -6.8% val / -4.8% test.**
+
+- **val_avg/mae_surf_p:** 80.03 (was 85.84) — **-6.8%**
+- **test_avg/mae_surf_p:** **70.89** (was 74.45) — **-4.8%**
+- **W&B run:** `ct6gh2ao` (β=0.25), `lhvrcdok` (β=0.5 confirmation)
+- **Epochs:** 18 in ~30 min (best epoch 18)
+
+Per-split test `mae_surf_p` (β=0.25 run `ct6gh2ao`):
+
+| Split | test | vs prev baseline (#1867) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 78.49 | 81.64 | **-3.9%** |
+| `geom_camber_rc` | 84.21 | 85.23 | **-1.2%** |
+| `geom_camber_cruise` | 50.12 | 54.52 | **-8.1%** |
+| `re_rand` | 70.75 | 76.43 | **-7.4%** |
+
+Changes vs prior baseline (#1867):
+- `F.smooth_l1_loss(beta=0.25)` — linear (MAE-like) regime now kicks in at |r| ≥ 0.125 (was ≥ 0.5). More aggressively MAE-aligned loss shape; better gradient alignment with the MAE eval metric. Gain from 1.0→0.5 was -0.77 val; gain from 0.5→0.25 was -3.76 val (accelerating sweep, not yet saturated). Independently confirmed by frieren (#1893, val=79.88) who also ran β=0.25 simultaneously.
+
+Note: β=0.5 arm also wins (val=83.79, test=72.93) — confirming monotone improvement in β ↓ direction. Both arms merged into this squash.
+
+Stack: smooth_l1(β=0.25) + beta1=0.95 + OneCycleLR + p_weight=2 + grad_clip=1.0 + bf16 + grad_accum=2.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/smooth-l1-beta-0.25" --wandb_group "willow-r2-loss-shape"
+```
+(smooth_l1 β=0.25 is now the default)
+
+---
+
 ## 2026-05-13 06:30 — PR #1867: fern — AdamW beta1=0.9 → 0.95 (MERGED)
 
 **New best val and test. +2.5% val / +5.1% test improvement on smooth_l1+OneCycleLR stack.**
@@ -195,14 +228,15 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-**Best val (merged):** `val_avg/mae_surf_p` = **85.84** (PR #1867, fern, run `s2trerq4`)
-**Best test (merged):** `test_avg/mae_surf_p` = **74.45** (same run)
+**Best val (merged):** `val_avg/mae_surf_p` = **80.03** (PR #1863, tanjiro, run `ct6gh2ao`)
+**Best test (merged):** `test_avg/mae_surf_p` = **70.89** (same run)
 
 Prior merged baselines (for reference):
 
 | PR | What landed | val_avg | test_avg |
 |---|---|---|---|
-| #1867 (fern) | AdamW beta1=0.95 | **85.84** | **74.45** |
+| #1863 (tanjiro) | smooth_l1(β=0.25) | **80.03** | **70.89** |
+| #1867 (fern) | AdamW beta1=0.95 | 85.84 | 74.45 |
 | #1666 (tanjiro) | smooth_l1(β=1) loss | 88.06 | 78.46 |
 | #1655 (alphonse) | OneCycleLR max_lr=2e-3 | 97.07 | 85.71 |
 | #1471 (frieren) | p_weight=2.0 + clip_grad_norm=1.0 | 110.27 | 99.41 |
@@ -210,11 +244,11 @@ Prior merged baselines (for reference):
 
 ## Notes for students
 
-- **Baseline as of PR #1867:** `val_avg/mae_surf_p = 85.84`, `test_avg/mae_surf_p = 74.45`.
+- **Baseline as of PR #1863:** `val_avg/mae_surf_p = 80.03`, `test_avg/mae_surf_p = 70.89`.
 - **cruise-NaN workaround is landed.** All runs produce finite `test_avg` — no per-PR code needed.
-- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **85.84** to be a winner.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **80.03** to be a winner.
 - OneCycleLR is the default scheduler (max_lr=2e-3, pct_start=0.1, cosine anneal).
-- smooth_l1_loss(β=1) is the default per-element loss.
+- smooth_l1_loss(β=0.25) is the default per-element loss.
 - AdamW beta1=0.95 is now the default (betas=(0.95, 0.999), eps=1e-8).
 - Grad clip at max_norm=1.0 is in the training loop default.
 - Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
