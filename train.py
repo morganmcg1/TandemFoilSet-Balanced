@@ -107,6 +107,36 @@ class FourierCoordEnc(nn.Module):
         return torch.cat([fourier, x[..., 2:]], dim=-1)
 
 
+class GaussianFourierEnc(nn.Module):
+    """Gaussian Random Fourier Features (Tancik et al. NeurIPS 2020).
+
+    Drop-in replacement for FourierCoordEnc: replaces the 2 normalized coord
+    dims with 2*m_freqs Fourier features and concatenates with x[..., 2:].
+    Output shape matches FourierCoordEnc(n_freqs=m_freqs/2).
+
+    Samples a fixed random projection matrix B ~ N(0, sigma^2 * I) of shape
+    (m_freqs, 2) from an isolated CPU generator seeded by ``seed``, so global
+    RNG state is unaffected. Registered as a (persistent) buffer — parameter
+    count unchanged, and B round-trips through state-dict for checkpoints.
+    """
+
+    def __init__(self, m_freqs: int = 12, sigma: float = 10.0, seed: int = 42):
+        super().__init__()
+        self.m_freqs = m_freqs
+        self.sigma = sigma
+        self.seed = seed
+        gen = torch.Generator(device="cpu").manual_seed(seed)
+        B = torch.randn(m_freqs, 2, generator=gen) * sigma
+        self.register_buffer("B", B)
+        self.out_dim = 2 * m_freqs
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        coords = x[..., :2]
+        projected = 2.0 * torch.pi * (coords @ self.B.T)
+        fourier = torch.cat([torch.sin(projected), torch.cos(projected)], dim=-1)
+        return torch.cat([fourier, x[..., 2:]], dim=-1)
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -435,12 +465,14 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-N_FREQS = 6
-fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
+M_FREQS = 12
+GFF_SIGMA = 10.0
+GFF_SEED = 42
+fourier_enc = GaussianFourierEnc(m_freqs=M_FREQS, sigma=GFF_SIGMA, seed=GFF_SEED).to(device)
 
 model_config = dict(
     space_dim=2,
-    fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
+    fun_dim=2 * M_FREQS + (X_DIM - 2) - 2,
     out_dim=3,
     n_hidden=128,
     n_layers=5,
