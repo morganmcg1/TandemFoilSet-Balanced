@@ -445,6 +445,7 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 print(f"slice_num: {model_config['slice_num']}")
+print(f"fun_jitter_sigma: 0.05 (per-sample on dims 13/14/18 = Re/AoA1/AoA2, training only)")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
@@ -512,6 +513,21 @@ for epoch in range(MAX_EPOCHS):
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # Per-sample jitter on condition channels (Re=13, AoA1=14, AoA2=18).
+            # Same noise broadcast to all nodes within a sample. Training only.
+            FUN_JITTER_SIGMA = 0.05
+            if model.training:
+                per_sample_noise = torch.randn(
+                    x_norm.shape[0], 1, x_norm.shape[-1],
+                    device=x_norm.device, dtype=x_norm.dtype,
+                ) * FUN_JITTER_SIGMA
+                channel_mask = torch.zeros(
+                    x_norm.shape[-1], device=x_norm.device, dtype=x_norm.dtype,
+                )
+                channel_mask[13] = 1.0  # log(Re)
+                channel_mask[14] = 1.0  # AoA foil 1
+                channel_mask[18] = 1.0  # AoA foil 2
+                x_norm = x_norm + per_sample_noise * channel_mask
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
