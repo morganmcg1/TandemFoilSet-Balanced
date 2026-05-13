@@ -1,5 +1,44 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 04:35 — PR #1755: Width sweep 2-arm follow-up — n_hidden=160 / n_hidden=192+lr4e-4 (SENT BACK — baseline moved)
+
+- Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
+- Hypothesis: Original PR found n_hidden=192 had better per-epoch trajectory but lost the wall-clock race (12 vs 13 epochs). Two-arm follow-up: (A) intermediate width n_hidden=160 + Lion lr=3e-4 (apples-to-apples 13-epoch budget) vs (B) wider n_hidden=192 + Lion lr=4e-4 (scaled LR to recover lost epoch via faster per-step progress).
+
+### Results (vs OLD Lion baseline 73.15 / 66.76 — baseline since moved to 66.32 / 61.14)
+
+| Config | val_avg | test_avg | s/epoch | Epochs | n_params | vs OLD 73.15 | vs NEW 66.32 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| OLD baseline (n128 lr3e-4) | 73.15 | 66.76 | 100.87 | 13 | 656k | — | +6.83 |
+| **Arm A (n160 lr3e-4)** | **71.44** | **66.25** | 115.96 | 13 | 1.03M | **−1.71 val / −0.51 test** | **+5.12 val / +5.11 test** |
+| Arm B (n192 lr4e-4) | 73.90 | 68.91 | 127.81 | 12 | 1.47M | +0.75 val / +2.15 test (regress) | +7.58 val / +7.77 test |
+
+### Per-epoch val_avg trajectory (Arm A clearly beats n128 baseline at matched steps)
+
+| Epoch | n128 (baseline) | **Arm A n160** | Arm B n192 |
+|---:|---:|---:|---:|
+| 8 | 96.93 | 96.23 | 104.04 |
+| 9 | 90.45 | 88.52 | 96.37 |
+| 10 | 83.76 | 86.25 | 81.04 |
+| 11 | 80.47 | 78.59 | 77.51 |
+| 12 | 76.10 | 73.12 | 73.90 |
+| 13 | 73.15 | **71.44** | (no budget) |
+
+- Arm A metrics: `models/model-nhidden160_bf16_lion-20260513-030220/metrics.jsonl`
+- Arm B metrics: `models/model-nhidden192_lr4e4-20260513-035213/metrics.jsonl`
+
+### Analysis & disposition
+
+**Arm A was a clean, real signal:** −1.71 val / −0.51 test against the (then-current) Lion baseline 73.15, all val splits improved, no widened gen gap, trajectory still falling at epoch 13. The 1.6× param model used 38 GB VRAM with 116 s/epoch and consumed the full 13-epoch budget.
+
+**Arm B confirmed n_hidden=192 dead end:** Higher LR (4e-4) didn't recover the lost epoch — val regresses +0.75, test regresses +2.15. Grad_norm spiked to 94 at epoch 6 (vs ~37 at same epoch in Arm A), indicating instability. Two PRs now (the original #1755 and this Arm B) show n_hidden=192 regresses on test; direction is closed.
+
+**Why sent back, not merged:** PR ran before #1780 (Lion+epochs=16) and #1639 (Huber δ=0.5) merged, which moved baseline to 66.32 val / 61.14 test. Arm A is +5 on both vs new baseline. The width gain was small (−1.71 val on a 73.15 base = ~2.3% relative) and we don't know if it composes with the new Huber+epochs=16 stack. Sent fern back to re-run **Arm A only** with `--epochs 16` on the merged Huber stack (n_hidden=160). Dropped Arm B.
+
+**Expected outcome of re-run:** If the width gain composes with epochs=16+Huber, val should be ~63-65 (∼−1.7 vs 66.32). If gain was specific to the old Lion-only stack, val will be flat/slightly worse and the n_hidden direction is closed.
+
+---
+
 ## 2026-05-13 03:51 — PR #1639: Huber δ=0.5 loss on Lion stack (MERGED — new baseline 66.32)
 
 - Student branch: `charliepai2g24h5-alphonse/huber-loss`

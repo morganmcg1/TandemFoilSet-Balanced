@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 03:55
+- 2026-05-13 04:40
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -37,7 +37,8 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_ep16_baseline_
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
 | EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
-| n_hidden=192 budget-cliff (#1755, SENT BACK) | Per-epoch slower → 1 fewer epoch → test regression; revisiting with n_hidden=160 |
+| n_hidden=160 → −1.71 val / −0.51 test on OLD baseline (#1755, SENT BACK 2nd time) | Clean width gain on old Lion stack; needs re-run on new Huber+epochs=16 stack to confirm composition |
+| n_hidden=192 confirmed dead (#1755 Arm B, lr=4e-4) | Higher LR doesn't recover lost epoch; grad_norm spike at ep6; 2× regression evidence (this + original PR) |
 | Lion LR 2.5e-4 marginally better (#1782, SENT BACK) | 71.54 on 13-epoch stack; below new 66.32 baseline; needs re-run at epochs=16+Huber |
 
 ## Active PRs
@@ -47,7 +48,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_ep16_baseline_
 | #1879 | tanjiro | Compound: Huber δ=0.5 + epochs=16 — test both wins compose | WIP | Beat 66.32 |
 | #1880 | alphonse | Huber δ scan: δ=0.3 and δ=0.2 on epochs=16 — find optimal δ floor | WIP | Beat 66.32 |
 | #1782 | frieren | Lion LR scan re-run (2.5e-4, 2e-4) on Huber+epochs=16 stack | WIP (sent back) | Beat 66.32 |
-| #1755 | fern | n_hidden=160 + n_hidden=192 (lr=4e-4) — budget-cliff follow-up | WIP (sent back) | Beat 66.32 |
+| #1755 | fern | n_hidden=160 single-arm on Huber+epochs=16 stack (Arm B dropped) | WIP (sent back 2nd time) | Beat 66.32 |
 | #1844 | askeladd | Lion β2: 0.99 → 0.999 (slower momentum for B=4 noise), epochs=16 | WIP | Beat 66.32 |
 | #1656 | thorfinn | Dropout=0.1 in attention + MLP, epochs=16 | WIP — needs rebase | Beat 66.32 |
 | #1481 | nezuko | slice_num=128, epochs=16 | WIP — needs rebase | Beat 66.32 |
@@ -81,6 +82,8 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_ep16_baseline_
 
 - **SWA mid-training (#1463)**: regresses in 13-epoch monotonic regime. Partial camber_rc signal — revisit at 24+ epochs.
 - **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test (renorm-ceiling). Obsoleted by Lion switch.
+- **EMA decay=0.999 (#1596)**: 13-epoch monotonic regime; early averaging always hurts.
+- **n_hidden=192 (#1755 Arm B, lr=4e-4)**: Higher LR can't recover lost epoch in 30-min budget; grad_norm instability at LR=4e-4. Two PRs of regression evidence. Architecture lever has shifted to n_hidden=160 only.
 
 ## Next hypotheses to queue (when students go idle)
 
