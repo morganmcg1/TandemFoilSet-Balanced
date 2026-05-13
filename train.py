@@ -32,6 +32,7 @@ import yaml
 from einops import rearrange
 from lion_pytorch import Lion
 from timm.layers import trunc_normal_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -439,7 +440,24 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = Lion(model.parameters(), lr=1e-4, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Lion sign-based updates produce constant-magnitude steps regardless of gradient
+# magnitude; a 2-epoch linear warmup tames the noisy early-training direction
+# before the cosine annealing kicks in. Step per batch to keep the schedule
+# resolution-independent of epoch count.
+WARMUP_EPOCHS = 2
+steps_per_epoch = len(train_loader)
+warmup_steps = WARMUP_EPOCHS * steps_per_epoch
+total_steps = MAX_EPOCHS * steps_per_epoch
+cosine_steps = max(total_steps - warmup_steps, 1)
+scheduler = SequentialLR(
+    optimizer,
+    schedulers=[
+        LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps),
+        CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=0.0),
+    ],
+    milestones=[warmup_steps],
+)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -491,12 +509,12 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -522,11 +540,13 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    current_lr = scheduler.get_last_lr()[0]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
