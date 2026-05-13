@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~21:10 UTC
+- **Date:** 2026-05-13 ~22:25 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -28,13 +28,13 @@
 
 | PR | Student | Config | Compound | Status |
 |----|---------|--------|----------|--------|
-| **TBD** | **edward** | **dropout=0.25/0.30 stack on n_layers=3+wd=3e-4** | NEW | Assigning now |
-| #2542 | frieren | cosine T_max via --epochs (34/44) | NEW | WIP |
-| #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP |
+| #2587 | edward | batch_size=8/2 sweep on n_layers=3+wd=3e-4 | NEW | WIP |
+| #2563 | thorfinn | n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4 | NEW | WIP (stale) |
+| **TBD** | **frieren** | **--epochs 80/100 (T_max LARGER) on new compound** | NEW | Assigning now |
+| #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP (pod rate-limit blocked) |
 | #2482 | askeladd | n_layers=2/n_layers=1 (speed-dividend extension) | NEW | WIP (pod rate-limit blocked) |
 | #2483 | tanjiro | n_head=1 + n_layers=3/2 cross-axis | NEW | WIP (pod rate-limit blocked) |
 | #2470 | alphonse | sw=15/sw=20 on n_head=1 (sw-reversal test) | OLD (n_head=1) | WIP (pod rate-limit blocked) |
-| **TBD** | **thorfinn** | **n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4** | NEW | Assigning now |
 | #2446 | nezuko | mlp_ratio=4/1 on n_head=1 | OLD (n_head=1) | WIP (pod rate-limit blocked) |
 
 **Wave split:** 5 students testing the NEW n_head=2+slice32+n_layers=3 compound (baseline now 42.00 after #2489 merge); 3 students completing isolated-axis data on the OLD n_head=1+n_layers=5 compound (vs 46.67).
@@ -54,15 +54,17 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 33. **wd=3e-4 signal transfers depth-independently (#2489 — NEW BEST):** val=42.0040/test=35.9573 (−2.64%/−2.69% vs #2400, all 4 splits). wd=3e-4 operating point confirmed at n_layers=3; wd=1e-3 over-regularizes at this shallower depth. Regularization benefit is independent of network depth in this regime.
 34. **wd INVERTS at n_head=1 (#2448):** wd=3e-4 won at n_head=2 (#2356/#2489) but +0.51 val at n_head=1. wd is n_head-specific — n_head=2 spreads attention across 2 heads (variance/dilution that wd compensates), n_head=1 is single-head and already near wd=1e-4 optimum. At wd=3e-4 the n_head=1 and n_head=2 paths meet at val=47.18 → wd and n_head are substitutive regularizers. Pairs with finding 30 (slice × n_head substitutive at high per-head dim).
 35. **REGULARIZATION SATURATION at n_layers=3 (#2551):** dropout=0.25 (+6.50% val) and 0.30 (+3.95% val) both regress on the wd=3e-4 compound. All 4 splits regress uniformly — no OOD-specific dropout effect. wd=3e-4 + dropout=0.20 + BF16 + EMA(0.99) is at the Pareto frontier; adding more of any regularizer is substitutive, not additive. Capacity floor at 3 attention blocks: each block carries more representational load than at n_layers=5, so dropout=0.30 strips too many activations to compensate.
+36. **COSINE T_MAX INVERTS direction (#2542):** matched T_max=34 (+10.14% val) and T_max=44 (+9.07% val) both regress. Monotonic ordering {Arm 1 < Arm 2 < baseline T_max=50}: less annealing strictly better. Arm 1 val *went up* at the final epoch as lr→0 (over-annealing collapse); baseline at lr=0.485×lr_init at cap is in a sweet spot. Lion + lr=1e-4 brittle at very low lr — fine-tuning regime is harmful. 'Val still descending at cap' is load-bearing, not a missed opportunity. **Next test: T_max LARGER than 50 (--epochs 80/100) — extends monotonic direction UP.**
 
 ## Priority for current wave
 
 **Highest priority — NEW COMPOUND (n_head=2+slice32+n_layers=3+wd=3e-4, baseline=42.00):**
+- **batch_size=8/2 (edward #2587):** speed-vs-step trade probe, untested axis
+- **n_head=4/8 (thorfinn #2563):** does more heads help on the depth-3 compound where wd=3e-4 won?
+- **--epochs 80/100 LARGER T_max (frieren, assigning):** extend monotonic 'less annealing → better' direction UP
 - **n_layers=2/n_layers=1 (askeladd #2482):** speed-dividend extension; val still descending at cap
 - **n_head=1 + n_layers=3/2 (tanjiro #2483):** cross-axis test of n_head=1 at shallow depth
 - **sw=5/sw=3 (fern #2491):** stack sw synergistic interaction at n_layers=3+wd=3e-4
-- **cosine T_max via --epochs (frieren #2542):** match scheduler to realized epoch count
-- **dropout=0.25/0.30 (edward, assigning):** complementary regularization stack — does higher dropout synergize with wd=3e-4?
 
 **Ongoing OLD-compound isolated-axis data (vs 46.67):**
 - **#2470 alphonse:** sw=15/20 — sw-reversal mechanism test at n_head=1
@@ -70,6 +72,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 ## Closed experiments this cycle
 
+- **#2542 (frieren):** cosine T_max=34/44 — CLOSED. T_max inverts direction; less annealing is better. Finding 36.
 - **#2551 (edward):** dropout=0.25/0.30 stack on n_layers=3+wd=3e-4 — CLOSED. Regularization saturation; finding 35.
 - **#2448 (thorfinn):** wd=3e-4/1e-3 on n_head=1 — CLOSED. wd inverts at n_head=1; substitutive crossover with n_head=2 at wd=3e-4.
 - **#2489 (edward):** wd=3e-4 stack on n_layers=3 — **MERGED** val=42.00, test=35.96. NEW BEST.

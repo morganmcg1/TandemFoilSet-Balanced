@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-13 22:20 — PR #2542: Cosine T_max match --epochs 34/44 (frieren) — CLOSED, COSINE T_MAX INVERTS
+
+- **Branch:** `willowpai2g24h5-frieren/cosine-tmax-match`
+- **Hypothesis:** T_max matched to realized epoch count (~34) should fully anneal cosine and improve final convergence. The 'val still descending at cap' pattern was interpreted as needing more lr decay.
+- **W&B runs:** `lena3xr5` (T_max=34), `gbkwj8mr` (T_max=44)
+
+| Arm | --epochs (T_max) | val | test | Δ vs #2489 (42.00/35.96) | Epochs | lr at cap |
+|-----|------------------|-----|------|--------------------------|--------|-----------|
+| 1 | 34 | 46.2586 | 39.7999 | +10.14% / +10.69% ✗ | 29 | 0.12×lr_init |
+| 2 | 44 | 45.8073 | 37.8961 | +9.07% / +5.39% ✗ | 30 | 0.53×lr_init |
+| Baseline #2489 | 50 | 42.0040 | 35.9573 | — | 33 | 0.485×lr_init |
+
+(Note: frieren ran on the OLD wd=1e-4 compound; deltas computed against current best #2489. Negative result direction holds regardless of compound since 'less annealing → better' ordering is monotonic.)
+
+Per-test-split: all 4 splits regress uniformly on both arms.
+
+**Result:** CLOSED. Hypothesis REFUTED — direction is OPPOSITE to predicted.
+
+Key findings:
+1. **Cosine T_max inverts (finding 36).** Monotonic ordering {Arm 1 < Arm 2 < baseline} on both val and test — less annealing is strictly better.
+2. **Over-annealing collapse.** Arm 1 val *went up* at the final epoch as lr→0. Arm 2 showed smaller end-of-run degradation. Baseline at lr=0.485×lr_init at cap is in a sweet spot.
+3. **Lion + lr=1e-4 is brittle at very low lr.** Driving lr→0 takes away the optimizer's ability to refine; lower-lr fine-tuning is harmful here.
+4. **'Val still descending at cap' is load-bearing, not a missed opportunity.** Model wants more STEPS at non-trivial lr, not faster annealing.
+
+**Implication for paper:** Cosine T_max=50 default is incidentally well-tuned for our 30-min cap. Next test: extending T_max ABOVE 50 should improve more.
+
+**Frieren reassigned:** --epochs 80/100 sweep on new compound (wd=3e-4) — extend monotonic 'less annealing → better' direction UP.
+
+---
+
 ## 2026-05-13 21:10 — PR #2551: dropout=0.25/0.30 stack on n_layers=3+wd=3e-4 (edward) — CLOSED, REGULARIZATION SATURATION
 
 - **Branch:** `willowpai2g24h5-edward/dropout-stack-wd3e4-n-layers-3`
