@@ -1,5 +1,31 @@
 # SENPAI Research Results
 
+## 2026-05-13 21:25 — CYCLE 9
+
+### PR #2572: LR midpoint refinement — lr=2.25e-4 — MERGED ✓ NEW BEST
+- Branch: willowpai2g48h1-frieren/lr-midpoint-postln-lr2p25e4
+- Hypothesis: lr=2.25e-4 is the true interior LR optimum (PR #2494 mapped endpoints 2e-4 / 3e-4 with near-identical val=0.11 gap; midpoint tests whether optimum sits between them)
+- W&B run: `f5nlky02` (group: postln-lr-refinement)
+
+| Metric | lr=2.25e-4 (this run) | lr=2e-4 baseline (#2494) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **54.5798** | 55.9044 | **−2.37%** |
+| **test_avg/mae_surf_p** | **46.8821** | **47.9076** | **−2.14%** |
+| test_single_in_dist | 46.7260 | 47.82 | −2.30% |
+| test_geom_camber_rc | 60.1858 | 60.53 | −0.57% |
+| test_geom_camber_cruise | 33.0391 | 34.40 | −3.95% |
+| test_re_rand | 47.5775 | 48.88 | −2.66% |
+
+**Analysis:** The LR-vs-test curve is sharply concave at 2.25e-4 — val at the midpoint is ~10× further from each endpoint than the endpoints from each other. All 4 splits improve uniformly (no IID/OOD redistribution). Clip-fire at e18=44.1%, below both neighboring LR points (44.7%, 51.6%) — suggests 2.25e-4 optimization path settles cleanest. best_epoch=18 (still descending at cutoff). **Finding #54 updated:** post-LN LR optimum is 1.50× pre-LN (2.25e-4 = 1.5 × 1.5e-4), not 1.33×. Decision: MERGED. New best: test=46.8821, cumulative gain −61.4%.
+
+### PR #2591: lr=2.25e-4 + T_max=20 STACK — ASSIGNED to frieren
+- Hypothesis: Stack the confirmed LR optimum (lr=2.25e-4, PR #2572) with the confirmed T_max extension (T_max=20, PR #2508). Both wins were measured in isolation and have orthogonal mechanisms.
+- Command: `cd target/ && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2.25e-4 --t_max 20 --agent willowpai2g48h1-frieren --wandb_name postln-lr2p25e4-tmax20-trial-1 --wandb_group postln-lr-tmax-stack`
+- Predicted gain: −1.5% to −3.0% rel vs 46.8821 if additive
+- Decision threshold: ≥1.5% rel improvement (test < 46.18)
+
+---
+
 ## 2026-05-13 05:00 — PR #1359: LR warmup + lr=3e-4 + Lion — CLOSED ✗
 - Branch: willowpai2g48h1-alphonse/lr-warmup-1e-3
 - W&B run: `10eslxj8` — group `lr-warmup-lion`
