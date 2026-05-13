@@ -2,6 +2,75 @@
 
 ---
 
+## 2026-05-13 10:30 UTC — Round 33
+
+### PR #2112 thorfinn: Warmup-2-cosine — CLOSED (LOSS, bracket-completion result)
+
+- **Branch:** `charliepai2g48h5-thorfinn/warmup-2-cosine`
+- **Hypothesis:** Bimodal symmetric-flip prediction — swap 1 warmup epoch for 1 settling epoch (warmup-3 → warmup-2) should flip the signs of warmup-5's bimodal: small in-dist regression, larger OOD gain.
+- **Result:** val_avg = **51.9279** (+2.62% vs 50.6001 baseline, LOSS), test_avg = **45.5111** (+3.51% vs 43.9680).
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | warmup-2 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 48.7827 | +1.75% (slight regress, predicted) |
+| `val_geom_camber_rc` | 67.3675 | 66.5205 | **−1.26%** (only OOD WIN ever observed on camber_rc) |
+| `val_geom_camber_cruise` | 34.3430 | 37.8216 | +10.13% (large LOSS, opposite of prediction) |
+| `val_re_rand` | 52.7481 | 54.5868 | +3.49% (LOSS, opposite of prediction) |
+
+**Bimodal symmetric-flip prediction FALSIFIED:**
+
+1. **Warmup bracket {2, 3, 5} on val_avg = {51.93, 50.60, 50.72}** — sharply asymmetric peak at warmup-3, much steeper to the under-warm side.
+2. **Mechanism: warmup duration bounds OOD from below.** Under-warm training destabilises OOD feature learning, not just in-dist basin selection. The warmup phase appears to do qualitatively different work than the cosine settling phase; they don't trade epochs symmetrically.
+3. **Single bright spot:** `val_geom_camber_rc` -1.26% is the ONLY OOD WIN we've seen on the camber_rc bottleneck across the entire launch. But cost on cruise (+10.13%) and re_rand (+3.49%) far outweighs.
+4. **Warmup duration axis fully closed at warmup-3.** Schedule axis (warmup+cosine) is now exhausted in this launch.
+
+### PR #2072 edward: NACA geometry jitter σ=0.01 (channels 15-17, 19-21) — CLOSED (LOSS, 2nd broadcast-scalar prior corruption confirmation)
+
+- **Branch:** `charliepai2g48h5-edward/naca-jitter-s0.01`
+- **Hypothesis:** σ=0.01 noise on NACA shape descriptors should force camber-invariant features and selectively improve val_geom_camber_rc / val_geom_camber_cruise (the two camber-OOD splits).
+- **Result:** val_avg = **53.0530** (+4.85% vs 50.6001 baseline, LOSS), test_avg = **46.7074** (+6.23% vs 43.9680).
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | NACA-jitter | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 48.0415 | +0.21% (wash) |
+| `val_geom_camber_rc` | 67.3675 | 70.8960 | +5.24% (camber-OOD LOSS) |
+| `val_geom_camber_cruise` | 34.3430 | 36.6436 | +6.70% (camber-OOD LOSS) |
+| `val_re_rand` | 52.7481 | 56.6308 | **+7.36%** (worst hit) |
+
+**2nd confirmation of broadcast-scalar prior corruption — identical pattern to gap/stagger #2114:**
+
+1. **All 4 splits regress uniformly** with val_re_rand worst hit at +7.36%.
+2. **Smoking gun: val_re_rand has NO camber variation** but is the worst regressor. Under "NACA channels encode domain-shift noise" hypothesis, val_re_rand should be neutral. Instead it's the worst → confirms NACA channels are used as conditioning priors that interact with Re/AoA channels.
+3. **Mechanism (same as gap/stagger #2114):** NACA channels are per-sample-broadcast scalars (6 numbers per foil broadcast to all N points). The model uses them as LOAD-BEARING priors for "this sample's geometric configuration is X". Perturbing them is belief-corruption, not data augmentation. The student's analysis is exactly right: NACA is "informational backbone, not domain-shift noise".
+4. **Generalizable rule across rounds 30-32-33:** the per-sample-broadcast scalar channel class is NOT augmentation-safe. Confirmed at:
+   - NACA channels 15-17, 19-21 (#2072, this round)
+   - gap/stagger channels 22-23 (#2114, round 32)
+   - fun_dim channels 13/14/18 at σ=0.05 (#1988 nezuko, σ=0.025 was bimodal-with-Goldilocks but σ=0.05 was uniform LOSS — same pattern)
+
+**Implication:** any further input-channel-noise experiment on a per-sample-broadcast scalar channel is predicted to LOSS. The remaining augmentation-safe channels are per-point (coords 0-1, currently being tested via translation aug #2138 nezuko; mesh arc-length 2-3 and is_surface 12 are mesh-topology, not augmentation candidates).
+
+### Round-33 failure-mode taxonomy update
+
+Through rounds 25-33 we now have 4 distinct failure-mode patterns documented (vs 3 at end of round 32):
+
+1. **Averaging-style bimodal (7× confirmed):** in-dist ↓, OOD ↑. Mechanisms: coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead, warmup-5, fun-jitter (σ=0.025).
+2. **Broadcast-scalar prior corruption (2× confirmed):** uniform regression all splits, val_re_rand worst. Mechanisms: gap/stagger jitter (#2114), NACA jitter (#2072, this round).
+3. **Momentum-lag overshoots cosine (1×):** uniform regression all splits. Mechanism: AdamW β1=0.95 (#2093).
+4. **Warmup-duration asymmetry (1× this round):** non-bimodal but non-uniform regression; warmup duration bounds OOD from below. Mechanism: warmup-2 (#2112).
+
+### Assignments for Round 33
+
+| PR | Student | Hypothesis | Mechanism class |
+|---|---|---|---|
+| #2173 | thorfinn | n_head 4→2 (dim_head 32→64) | Architectural probe — attention head sizing closer to literature dim_head=64 optimum |
+| #2174 | edward | Huber β=0.1 (smooth-L1 training loss) | Loss-function probe — addresses L1 sign-flip noise at the loss level (orthogonal to amsgrad #2155) |
+
+---
+
 ## 2026-05-13 10:05 UTC — Round 32
 
 ### PR #2114 askeladd: Gap/stagger jitter σ=0.02 (channels 22-23) — CLOSED (LOSS, NEW failure-mode pattern)
