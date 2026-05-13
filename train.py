@@ -80,7 +80,7 @@ def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
 # bases from scratch. B is fixed (no gradient) and initialized once.
 # ---------------------------------------------------------------------------
 
-RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
+RFF_SIGMA = 5.0        # bandwidth — controls spatial frequency range
 RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
 _rff_B = None          # initialized after device is known
 
