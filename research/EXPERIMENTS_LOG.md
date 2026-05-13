@@ -55,10 +55,61 @@ Closing as LOSS.
 - **Branch:** `charliepai2g48h5-tanjiro/droppath-retry3`
 - **Status:** STALE — no commits since assignment (10:25 UTC → 17:00 UTC = ~6.5h). 4th consecutive stale for tanjiro DropPath (after #1976, #2083, #2179). Matches frieren RMSNorm pattern (took 3 attempts before #2139 picked up). Reassigned as #2280 retry-4 on fresh branch via REST.
 
-### Round 39 assignment summary
+### PR #2268 thorfinn: n_layers 5→4 (depth-down, --epochs 60) — MERGED (WIN, new baseline 46.8460)
+
+- **Branch:** `charliepai2g48h5-thorfinn/n-layers-4`
+- **Hypothesis:** Depth-down probe: n_layers=5 → 4. Budget-bound diagnostic. ~20% per-epoch savings → ~10 extra cosine refinement epochs. Complementary to in-flight mlp_ratio=4 (ADD capacity) — this REDUCES capacity.
+- **Note:** This PR was branched BEFORE LayerScale (#2195) merged. It was measured WITHOUT LayerScale. After squash-merge onto current advisor (which includes LayerScale), the resulting advisor has n_layers=4 + LayerScale stacked.
+
+| Metric | n_layers=4 | Assigned baseline #2195 (LayerScale) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **46.8460** | 48.5160 | **−3.44% WIN** |
+| `test_avg/mae_surf_p` | **40.8140** | 42.8162 | **−4.70% WIN** |
+| Epochs reached | 58/60 (terminal) | 43/50 (terminal) | +15 more |
+| Time per epoch | 31.4 s | 42.25 s | −25.6% |
+| Params | 577,931 | 658,359 | −12.2% |
+
+**Per-split val breakdown:**
+
+| Split | baseline (LayerScale) | n_layers=4 | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 44.6149 | 41.7031 | **−6.51%** |
+| `val_geom_camber_rc` | 65.9411 | 64.6729 | **−1.93%** |
+| `val_geom_camber_cruise` | 33.2325 | 31.5759 | **−4.99%** |
+| `val_re_rand` | 50.2756 | 49.4322 | **−1.67%** |
+
+All 4 splits improve — uniform-direction architectural WIN, not bimodal.
+
+**BUDGET-BOUND REGIME CONFIRMED:**
+- Best epoch = terminal (58/60, timeout at 30.4 min)
+- -25.6% per-epoch cost → 15 more epochs → more late-stage cosine refinement
+- All splits improve proportionally — capacity reduction (one fewer TransolverBlock) is NOT the binding constraint
+- Combined with mlp_ratio=4 budget cliff (same round): "adding capacity loses, reducing capacity wins" → clear evidence the model is budget-bound at hidden_dim=128, n_head=2, 30-min cap
+
+**MERGED as new baseline 46.8460.**
+
+### PR #2235 nezuko: Translation augmentation σ=0.01 retry-2 — CLOSED (LOSS)
+
+- val 52.2027 (+11.5% vs 46.8460 new baseline), test 45.1602 (+10.7%)
+- Uniform regression all 4 splits; val_geom_camber_cruise worst (+9.69%), in-dist least (+1.42%)
+- NOT bimodal (no in-dist benefit), NOT broadcast-scalar corruption
+- **Mechanism:** Absolute coordinate channels 0-1 are load-bearing positional priors — the model routes attention and computes flow features based on absolute mesh position, not just relative shape. Per-sample translation of coords changes the absolute position statistics in a way the model can't compensate for. Physical translation invariance of Navier-Stokes does not transfer to this normalized-coordinate model.
+- **Input-coordinate augmentation axis fully closed:** per-sample-broadcast scalars (NACA, gap/stagger, Re/AoA = 2× prior closures) + per-point absolute coords (translation aug). All input-channel augmentation is harmful in this regime.
+
+### PR #2234 frieren: mlp_ratio 2→4 (FFN width expansion) — CLOSED (LOSS, budget cliff)
+
+- val 66.7281 (+42.5% vs 46.8460 new baseline), test 58.7484 (+44%)
+- 34/50 epochs reached (budget cliff threshold was 38) — +15% per-epoch cost cut off the final 13-16 epochs of cosine descent
+- Per-split uniform-additive +26-44% — classic undertraining, not architectural failure
+- **Mechanism:** Budget cliff exactly as diagnosed. The per-epoch compute cost of 2× wider FFN removes exactly the extra epochs that produce late-stage refinement (now confirmed by n_layers=4 WIN: that extra ~15 epochs = -3.44% improvement). mlp_ratio=4 might win at a longer budget (60 min) but is definitively LOSS at 30 min.
+- **Unified finding with #2268 merge:** budget-bound regime means: REDUCE capacity → win (n_layers=4, expected n_layers=3, n_hidden=96), ADD capacity → lose (mlp_ratio=4, n_layers=6, n_hidden=160). All capacity-adding probes at this constraint face the same budget cliff. MLPratio=4 is not ruled out architecturally — it's budget-ruled-out.
+
+### Round 39 assignment summary (updated)
 
 | PR | Student | Hypothesis | Round |
 |---|---|---|---|
+| #2290 | frieren | n_hidden 128→96 (--epochs 90; width-down; ~40-45% per-epoch savings; ~330K params) | round-39 addendum |
+| #2289 | nezuko | n_layers 4→3 (--epochs 75; depth-down continuation; ~25% per-epoch savings; ~450K params) | round-39 addendum |
 | #2283 | alphonse | Squared ReLU (ReLU²) at all 3 MLP sites — Primer-style sharp activation, opposite-direction probe of closed SiLU LOSS | round-39 |
 | #2280 | tanjiro | DropPath p_max=0.1 retry-4 (on LayerScale-gated branches) | round-39 |
 
