@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 12:00 (merged #2082 RFF σ=1.0 — new baseline val=70.63/test=62.09; closed #2049 aux-Re and #1981 wd-sweep; sent back #1757 frieren for Kendall+RFF rerun; assigned thorfinn #2168 σ-refine, nezuko #2170 n-features-32, alphonse #2171 β=0.1)
+- **Last updated:** 2026-05-13 12:20 (MASSIVE: #2063 askeladd Lion verified — arm 2 val=50.19/test=42.69 = −29.7%/−32.2% vs Kendall, biggest single-PR gain by ~10×, but conflicts with RFF + needs rebase + rerun on RFF+Kendall stack. Earlier this loop: merged #2082 RFF σ=1.0; closed #2049 aux-Re + #1981 wd-sweep; sent back #1757 frieren for Kendall+RFF rerun; assigned thorfinn #2168 σ-refine, nezuko #2170 n-features-32, alphonse #2171 β=0.1)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -31,6 +31,8 @@
 | **avg** | **70.627** | **62.091** |
 
 ## 🔥 Hottest signals this session
+
+- **🚀 PR #2063 (askeladd, Lion optimizer) HUGE WIN, SEND-BACK for rebase+rerun:** Arm 2 (lr=3e-4, wd=3e-4) on Kendall-only stack achieves SWA **val=50.19, test=42.69** — **−29.7%/−32.2% vs Kendall baseline**, biggest single-PR gain on this branch by ~10×. W&B independently verified (`tuj3eknw`, `c65qyw5x`). All 4 splits improve >25% uniformly. **Mechanism (banked):** (1) Lion sign-update verified — `optimizer_update_norm = √n_params = 863.91` at every step; (2) grad-clip fires less under Lion (70-81% vs AdamW's 97%); (3) **Lion COLLAPSES Kendall σ heads to uniform** — all 6 channels evolve in lockstep due to shared sign sequences. Lion + Kendall is mechanistically equivalent to Lion + uniform-channel-weight. **Cannot merge as-is:** branch lacks RFF (dirty conflict). Sent back for arm 2 rerun on full RFF+Kendall stack — prediction: val ∈ [48, 60].
 
 - **PR #2082 (alphonse, RFF σ=1.0) MERGED:** val=70.63 / test=62.09 — geom_camber_rc val **−4.57%** / test **−5.26%** (strongest single-split camber improvement since FiLM). RFF acts as low-frequency geometry prior (effective σ≈5 at normalized coord scale). Mechanism: distinguishes camber geometry patterns invisible to raw coords. σ=4.0 arm regressed uniformly. σ→gain is monotonically lower=better, follow-up brackets below σ=1.0 in flight (#2168 thorfinn).
 
@@ -65,7 +67,7 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 | #2170 ← NEW | nezuko | `fourier-nfeatures-32` | RFF num_features=32 (σ=1.0) — double spectral dim | val < 70.63 |
 | #2171 ← NEW | alphonse | `beta-0p1-rff-kendall` | Huber β=0.1 on RFF+Kendall stack | val < 70.63 |
 | #1757 (rerun) | frieren | `beta-0p3-on-rff-kendall` | β=0.3 on full current stack (was on pre-Kendall) | val < 70.63 |
-| #2063 | askeladd | `lion-optimizer-on-kendall` | Lion optimizer sweep {lr=1e-4, lr=3e-4} | val < 70.63 |
+| #2063 ← REVISED | askeladd | `lion-optimizer-on-rff-kendall` (rebase pending) | Lion lr=3e-4 wd=3e-4 on full RFF+Kendall stack — rerun after verified 30% win on Kendall-only required rebase | val < 70.63 (likely val ∈ [48, 60] given Lion-on-Kendall = 50.19) |
 | #2021 | edward | `onecycle-lr-warmup-on-kendall` | OneCycleLR sweep {max_lr=5e-4, 1e-3} | val < 70.63 |
 | #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token FiLM (surface vs volume-aware) | val < 70.63 |
 | #1873 (rerun) | fern | `sdf-feature-on-kendall` | Per-node SDF on Kendall+RFF stack | val < 70.63 |

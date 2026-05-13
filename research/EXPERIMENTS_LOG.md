@@ -2140,3 +2140,54 @@ The β=0.3 mechanism (monotonic improvement, test asymmetry, camber_rc / test_re
 
 ### Decision: SENT BACK for rerun on Kendall+RFF stack
 
+
+---
+## 2026-05-13 12:15 — PR #2063 SEND-BACK willowpai2g48h2-askeladd (Lion optimizer on Kendall): MASSIVE win verified, rebase + rerun on RFF+Kendall stack required
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-optimizer-on-kendall`
+- **Result (Kendall-only stack, no RFF):** Arm 2 (lr=3e-4, wd=3e-4) SWA val=**50.1862**, SWA test=**42.6893**
+- **W&B independent verification:** confirmed `tuj3eknw` (arm 1: val=60.12, test=51.06), `c65qyw5x` (arm 2: val=50.19, test=42.69) — metrics match student claim exactly
+- vs Kendall baseline #1906 (71.43/62.99): arm 2 = **−29.74% val / −32.23% test**
+- vs RFF baseline #2082 (70.63/62.09): arm 2 = **−28.93% val / −31.25% test**
+
+### This is the biggest single-PR gain on this branch by ~10× (largest prior was Kendall's −3.22%)
+
+### Per-split SWA (arm 2)
+
+| Split | val (Lion) | test (Lion) | val (Kendall) | test (Kendall) | Δ val | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 54.13 | 43.77 | 79.18 | 68.64 | −31.6% | −36.2% |
+| geom_camber_rc | 64.89 | 58.30 | 88.09 | 79.95 | −26.3% | −27.1% |
+| geom_camber_cruise | 31.15 | 25.94 | 49.19 | 41.44 | −36.7% | −37.4% |
+| re_rand | 50.57 | 42.74 | 69.29 | 61.92 | −27.0% | −31.0% |
+
+All 4 splits improve >25%. No regression. Mechanism is real, broad, and uniform.
+
+### Mechanism (banked, three findings)
+
+1. **Lion's sign-update verified:** `optimizer_update_norm = √n_params = 863.91` at every single step. Lion is applying unit-magnitude sign updates as designed. The scale knob is purely lr.
+2. **Grad-clip fires less under Lion:** 70-81% of steps clipped (vs AdamW's 97%). Lion's intrinsic bounded-update makes grad-clip partially redundant. Mean grad-norm is comparable (~1.1), but Lion's gradient distribution has a lower right tail.
+3. **Lion COLLAPSES Kendall σ heads to uniform.** All 6 log_sigma channels evolve in lockstep (identical step-by-step values across 4875 train steps). Mechanism: sign(EMA) update strips magnitude, all 6 channels share the same sign sequence → identical ±lr update → identical final values. **Lion + Kendall is mechanistically equivalent to Lion + uniform-channel-weighting.**
+
+### Cannot merge as-is (two issues)
+
+1. **Merge conflict:** Branch is dirty against current advisor (RFF #2082 merged after assignment). Mergeable_state = "dirty".
+2. **Untested composition:** Lion run lacked RFF. We need to confirm Lion + RFF + Kendall compose before merging (Lion alone is already a 30% win; the question is whether RFF adds further or interferes).
+
+### Decision: SEND BACK for rebase + rerun arm 2 only on RFF+Kendall stack
+
+```bash
+cd target/ && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --optimizer lion --lr 3e-4 --weight_decay 3e-4 \
+  --seed 0 \
+  --agent willowpai2g48h2-askeladd \
+  --wandb_name willowpai2g48h2-askeladd/lion-lr3e-4-wd3e-4-on-rff-kendall \
+  --wandb_group lion-on-rff-kendall
+```
+
+**Prediction:** Lion + RFF will land val ∈ [48, 60]. Lion is dominant; RFF may add 1-3% on top or be largely subsumed. If val < 70.63, merge. If val < 60, that's a clean massive win.
+
+**Skip arm 1** (lr=1e-4) — dominated by arm 2.
+
