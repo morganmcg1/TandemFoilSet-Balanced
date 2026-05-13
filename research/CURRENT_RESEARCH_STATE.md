@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~11:30
+- **Date:** 2026-05-13 ~12:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,20 +9,20 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 46.344** (n_layers=4 + slice_num=48 + T_max=17, PR #2080)
-**`test_avg/mae_surf_p` = 39.950**
+**`val_avg/mae_surf_p` = 42.815** (n_layers=4 + slice_num=32 + T_max=21, PR #2108)
+**`test_avg/mae_surf_p` = 36.899**
 
-**⚠ Note:** best_epoch=17 was STILL DESCENDING at the final epoch — n_layers=4 was not fully saturated. This suggests n_layers=3 may extract more. Also: lr=cfg.lr bug **now fixed** in advisor branch (was hardcoded to 1e-4 regardless of --lr flag).
+**⚠ Note:** best_epoch=21 was STILL DESCENDING at the final epoch. Val descended 43.08→42.81 between epochs 20 and 21 — epoch headroom remains. The "epoch-count is the binding constraint" mechanism continues to dominate.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 49.979 | 44.746 |
-| geom_camber_rc | **61.558** | 54.155 |
-| geom_camber_cruise | 27.318 | 22.876 |
-| re_rand | 46.518 | 38.025 |
-| **avg** | **46.344** | **39.950** |
+| single_in_dist | 44.963 | 40.717 |
+| geom_camber_rc | **56.766** | 51.074 |
+| geom_camber_cruise | 25.476 | 21.158 |
+| re_rand | 44.053 | 34.646 |
+| **avg** | **42.815** | **36.899** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 17 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4`
+**Reproduce:** `cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32`
 
 ## What we've learned
 
@@ -42,19 +42,19 @@
 13. **n_layers=4 + T_max=17**: −1.07% val / −2.17% test (PR #2080) ← same mechanism; 17 epochs at ~94s/epoch; lr=cfg.lr bug fixed; best_epoch=17 STILL DESCENDING
 
 ### Current stack (defaults + CLI overrides)
-- L1 (MAE) loss in normalized space, **surf_weight=10** (sw=2 compound now being tested: nezuko #2109)
+- L1 (MAE) loss in normalized space, **surf_weight=10**
 - **n_layers=4** (PR #2080) ← CLI `--n_layers 4` (default is 5)
-- **slice_num=48** (PR #1996)
+- **slice_num=32** (PR #2108) ← CLI `--slice_num 32` (default is 48)
 - **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128, n_head=4
 - Lion optimizer, **lr=cfg.lr** (bug fixed in PR #2080), lr=1e-4, weight_decay=1e-4
-- **CosineAnnealingLR T_max=MAX_EPOCHS** (auto-aligns to epoch count)
+- **CosineAnnealingLR T_max=21** (=epochs, aligned)
 - bf16 mixed precision (autocast)
-- **17 epochs in 30 min** (~94s/epoch; best_epoch=17 STILL DESCENDING)
-- n_params: 670,035 (−31% vs prior baseline)
+- **21 epochs in 30 min** (~74s/epoch; best_epoch=21 STILL DESCENDING)
+- n_params: 667,923 (−31.7% vs original 976,827 baseline)
 
-**Reproduce command:** `cd target/ && python train.py --epochs 17 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4`
+**Reproduce command:** `cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -94,35 +94,38 @@
 8. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc improved −17.2%; it remains the single highest-loss split at val=64.886.
 9. **geom_camber_rc (64.886 val) is the dominant bottleneck** — primary target for further improvement.
 
-## Active experiments (Round 17)
+## Active experiments (Round 18)
 
-⚠ **Baseline now at 46.344.** PRs on OLD stacks (#2006 frieren, #2038 askeladd, #2043 alphonse, #2062 fern, #2048 edward) may not beat current baseline — assess relative signal and direction when they land.
+⚠ **Baseline now at 42.815 (PR #2108 slice_num=32).** In-flight PRs on OLD slice_num=48 stack (#2107, #2109, #2134, #2143, #2062) will be evaluated against this harder threshold — their results on the old stack are still informative for axis direction even if below new baseline.
 
 | Student | PR | Hypothesis | Base stack |
 |---------|-----|------------|-----------|
-| tanjiro | #2107 | n_layers=3 + T_max=22 (depth sweep step 3) | NEW n_layers=4 |
-| thorfinn | #2108 | slice_num=32 + n_layers=4 (slice sweep step 2) | NEW n_layers=4 |
-| nezuko | #2109 | surf_weight=2 + n_layers=4 (compound both mechanisms) | NEW n_layers=4 |
-| alphonse | #2134 | lr=1.5e-4 on n_layers=4 stack (first clean LR test) | NEW n_layers=4 |
-| edward | #2048 | surf_weight=5 on n_layers=5+T_max=14 | n_layers=5 (slightly old) |
-| fern | #2062 | n_layers=5 + slice_num=48 compound verification | n_layers=5 (now stale stack) |
-| frieren | #2006 | Lion lr=8e-5 (lr bug now fixed in advisor!) | OLD n_layers=6 |
-| askeladd | #2038 | n_head=2 | OLD n_layers=6 |
+| thorfinn | #2151 | slice_num=24 + n_layers=4 (slice sweep step 3) | NEW slice_num=32 stack |
+| askeladd | #2149 | n_head=2 on NEW stack (head capacity vs diversity tradeoff) | NEW slice_num=32 stack |
+| frieren | #2150 | lr=8e-5 on NEW stack (LR bracket below default) | NEW slice_num=32 stack |
+| tanjiro | #2107 | n_layers=3 + T_max=22 (depth sweep step 3) | OLD slice_num=48 stack |
+| nezuko | #2109 | surf_weight=2 + n_layers=4 | OLD slice_num=48 stack |
+| alphonse | #2134 | lr=1.5e-4 on n_layers=4 | OLD slice_num=48 stack |
+| edward | #2143 | surf_weight=15 on n_layers=4 (reverse direction bracket) | OLD slice_num=48 stack |
+| fern | #2062 | n_layers=5 + slice_num=48 compound verification | n_layers=5 (stale stack) |
 
 **Recently merged:**
-- tanjiro #2080: n_layers=4 + T_max=17 (−1.07% val) ← **NEW BASELINE 46.344/39.950** (lr bug also fixed)
+- thorfinn #2108: slice_num=32 + n_layers=4 (−7.6% val) ← **NEW BASELINE 42.815/36.899** (best_epoch=21 STILL DESCENDING)
+- tanjiro #2080: n_layers=4 + T_max=17 (−1.07% val, lr bug fixed)
 - fern #1996: slice_num=48 + T_max=15 (−1.33% val)
-- edward #1995: n_layers=5 + T_max=14 (−6.98% val)
 
 **Recently closed:**
-- alphonse #2043: DropPath rate=0.1 (+25.2% vs current) — DropPath needs 100-300 epoch budgets; model is underfitting at 12-17 epochs so reg strictly hurts
-- thorfinn #2040: grad-clip max_norm=1.0 (+14.1% vs current) — max_norm=1 is 25× too small for this stack; grad norms are 20–140; Lion sign-update already handles magnitude
-- nezuko #2029: surf_weight=2 on OLD n_layers=6 stack (+6.32% vs current) — direction confirmed strong; immediately retested on new stack (PR #2109)
-- tanjiro #2007: mlp_ratio=2 (+9.95% vs current) — speedup too small for new epoch unlock
+- edward #2048: surf_weight=5 on n_layers=5 (+3.16% vs current) — vol-gradient mechanism active but stack-depth dependent; shallow models may need MORE surface weight
+- askeladd #2038: n_head=2 on old n_layers=6 stack (+12.4% vs current) — draft PR never readied; attention diversity > per-head capacity on deep stack; retesting on compact stack
+- frieren #2006: lr=8e-5 never started (old stack, lr bug present) — clean retest on new stack assigned
+- alphonse #2043: DropPath rate=0.1 (+25.2% vs current) — DropPath needs 100-300 epoch budgets; model is underfitting at 12-17 epochs
+- thorfinn #2040: grad-clip max_norm=1.0 (+14.1% vs current) — max_norm=1 fires on 100% of batches; wrong regime
+- nezuko #2029: surf_weight=2 on old n_layers=6 stack (+6.32% vs current, strong signal) — retesting on new stack
 
-## Infrastructure: lr=cfg.lr bug FIXED (PR #2080)
+## Infrastructure notes
 
-`train.py:442` now correctly passes `lr=cfg.lr` to Lion. Prior bug: `lr=1e-4` was hardcoded, so `--lr` flag was silently ignored. Fixed in PR #2080 merge (tanjiro applied it opportunistically). All future LR variation experiments (frieren #2006 lr=8e-5) will now work correctly.
+- **lr=cfg.lr bug FIXED** (PR #2080): Lion now uses `cfg.lr`; `--lr` flag works correctly.
+- **slice_num plumbed as CLI arg** (PR #2108): `--slice_num` now accepted in Config dataclass; model reads `slice_num=cfg.slice_num`.
 
 ## The epoch-count mechanism: trajectory so far
 
@@ -130,23 +133,26 @@
 - n_layers=6→5: 116s/epoch → 14 epochs (PR #1995, val −6.98%)
 - slice_num=64→48: 123s→ ~100s/epoch → 15-16 epochs (PR #1996, val −1.33%)
 - n_layers=5→4: 94s/epoch → 17 epochs (PR #2080, val −1.07%) — best_epoch=17 STILL DESCENDING
-- n_layers=4→3: ~75s/epoch → ~22 epochs (PR #2107, in flight)
+- slice_num=48→32: 94s→74s/epoch → 21 epochs (PR #2108, val **−7.6%**) — best_epoch=21 STILL DESCENDING
+- slice_num=32→24: ~74s→~65s/epoch → ~26 epochs (PR #2151, in flight)
+- n_layers=4→3: ~75s/epoch → ~22 epochs (PR #2107, in flight; but at OLD slice_num=48 stack)
 
-**Gains are diminishing** (−6.98%, −1.33%, −1.07%) but each step still wins. The key signal is best_epoch=17 descending — model hasn't saturated yet, just budget-limited.
+**Gains are NOT diminishing** — PR #2108 at −7.6% reversed the trend. The slice_num axis appears orthogonal to the depth axis and has substantial headroom. Both axes produce wins via the same epoch-budget mechanism.
 
 **Critical open questions:**
-1. Does n_layers=3 break the model (too shallow for 2D CFD) or continue the trend?
-2. Does surf_weight=2 compound with the n_layers=4 stack? (nezuko #2109, in flight — expected ~44-45 val if mechanisms compound cleanly)
-3. Does slice_num=32 add another epoch increment? (thorfinn #2108, in flight)
+1. Does slice_num=24 continue the trend or do we hit the PhysicsAttention granularity floor? (thorfinn #2151)
+2. Does n_layers=3 break the model (too shallow) or compound with slice_num=32? (tanjiro #2107 on old stack)
+3. Does lr=8e-5 help on the new compact stack? (frieren #2150)
+4. Does n_head=2 benefit the compact stack (less per-head capacity per 32-slice partition)? (askeladd #2149)
 
-## Next queued ideas (for when Round 17 slots open up)
+## Next queued ideas (for when Round 18 slots open up)
 
-- **n_layers=2**: if n_layers=3 wins, test whether the mechanism has a hard floor
-- **surf_weight=1**: next step in gradient sweep if nezuko #2109 (sw=2) wins
-- **n_head=2 on new stack**: once askeladd #2038 lands — if n_head=2 shows directional signal on old stack, retest on n_layers=4 stack
-- **DropPath on new stack**: alphonse #2043 testing on old stack; if shows any signal, compound with n_layers=4
-- **lr=8e-5 now unblocked**: frieren #2006 was testing lr=8e-5 on OLD stack WITH the lr bug (bug now fixed). frieren should pick up the fix automatically. If frieren results show lr=8e-5 improves vs baseline even on old stack, retest on new compound stack.
-- **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD bottleneck (~61.5 val)
+- **slice_num=16**: if #2151 wins, continue the floor-finding sweep
+- **n_layers=3 + slice_num=32**: compound both depth and slice axes if both win independently
+- **surf_weight=2 on new slice_num=32 stack**: nezuko #2109 ran on OLD stack; if direction holds, retest on new
+- **surf_weight=1**: next step in gradient sweep if nezuko wins
+- **lr combinations**: once #2150 (frieren lr=8e-5) and #2134 (alphonse lr=1.5e-4) land, narrow in on optimal
+- **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD bottleneck (~56.7 val on new baseline)
 - **PINN-style auxiliary loss** (divergence/curl regularization) — physics-informed volume constraint
 
 ## Key constraints

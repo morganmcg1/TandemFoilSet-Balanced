@@ -1,5 +1,70 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 ~10:30 — PR #2108: slice_num=32 + n_layers=4 + T_max=21 (thorfinn)
+
+**New best: `val_avg/mae_surf_p` = 42.815** (epoch 21/21, best_epoch=21 STILL DESCENDING, surf_weight=10, n_layers=4, slice_num=32)
+
+> Also included: **slice_num plumbed as CLI arg** — `train.py` now accepts `--slice_num` in Config dataclass; model_config reads `slice_num=cfg.slice_num` (was hardcoded 48).
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 4 |
+| `n_head` | 4 |
+| `slice_num` | **32** ← updated (was 48) |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=21 (=epochs) |
+| `epochs` | 21 (still improving at epoch 21!) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 667,923 (−0.3% vs #2080 baseline 670,035) |
+
+> **Mechanism:** Continued "epoch-count is the binding constraint" pattern — slice_num=48→32 → ~21% per-epoch speedup (94s→74s) → 21 epochs in 30-min budget → T_max=21 alignment. Val still descending at final epoch — headroom remains. Best epoch was 21 (final), suggesting slice_num=24 next.
+
+### Val metrics (best checkpoint, epoch 21)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 44.963 | 53.475 |
+| val_geom_camber_rc | 56.766 | 62.445 |
+| val_geom_camber_cruise | 25.476 | 26.903 |
+| val_re_rand | 44.053 | 46.070 |
+| **val_avg/mae_surf_p** | **42.815** | **47.223** |
+
+### Test metrics (best-val checkpoint, epoch 21)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| test_single_in_dist | 40.717 | 49.150 |
+| test_geom_camber_rc | 51.074 | 56.662 |
+| test_geom_camber_cruise | 21.158 | 22.850 |
+| test_re_rand | 34.646 | 36.806 |
+| **test_avg/mae_surf_p** | **36.899** | **41.367** |
+
+### Improvement vs PR #2080 baseline (46.344 val / 39.950 test)
+
+| Split | Old val | New val | Δ val | Old test | New test | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 49.979 | 44.963 | −10.0% | 44.746 | 40.717 | −9.0% |
+| geom_camber_rc | 61.558 | 56.766 | −7.8% | 54.155 | 51.074 | −5.7% |
+| geom_camber_cruise | 27.318 | 25.476 | −6.7% | 22.876 | 21.158 | −7.5% |
+| re_rand | 46.518 | 44.053 | −5.3% | 38.025 | 34.646 | −8.9% |
+| **avg** | **46.344** | **42.815** | **−7.6% ✓** | **39.950** | **36.899** | **−7.6% ✓** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 21 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 4 --slice_num 32
+```
+
+**Metric artifacts:** `models/model-charliepai2g48h3-thorfinn-slice-num-32-nlayers4-20260513-091144/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~11:10 — PR #2080: n_layers=4 + T_max=17 (tanjiro)
 
 **New best: `val_avg/mae_surf_p` = 46.344** (epoch 17/17, best_epoch=17, surf_weight=10, n_layers=4, slice_num=48)

@@ -6,6 +6,78 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~12:00 — PR #2108: slice_num=32 + n_layers=4 — MERGED (−7.6% val, −7.6% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/slice-num-32
+- **Hypothesis:** slice_num=48→32 → ~21% per-epoch speedup on n_layers=4 → 21 epochs in 30-min budget → T_max=21 alignment. Continued "epoch-count is binding" mechanism.
+- **Result:** val=42.815 / test=36.899 (best_epoch=21/21 — STILL DESCENDING AT FINAL EPOCH)
+
+| Split | val (baseline #2080, 46.344) | val (slice_num=32) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 49.979 | 44.963 | **−10.0%** | 40.717 |
+| geom_camber_rc | 61.558 | 56.766 | **−7.8%** | 51.074 |
+| geom_camber_cruise | 27.318 | 25.476 | **−6.7%** | 21.158 |
+| re_rand | 46.518 | 44.053 | **−5.3%** | 34.646 |
+| **avg** | **46.344** | **42.815** | **−7.6% ✓** | **36.899** |
+
+- **Best epoch=21 STILL DESCENDING** — val curve descended from 43.08 (ep20) to 42.81 (ep21). Headroom remains.
+- **Volume MAE also −7.6%** (val_avg vol: 51.107 → 47.223) — clean improvement on both surface and volume reconstruction.
+- **Timing:** 74s/epoch (21% speedup vs 94s at slice_num=48) — prediction was ~80s/epoch; actual was better.
+- **n_params:** 667,923 (−0.3% vs 670,035 baseline) — slice_num doesn't meaningfully change param count.
+- **All 8 per-split val/test metrics improved** — clean, monotone win.
+- **Also included:** slice_num plumbed as CLI arg (`--slice_num`) — `train.py` now accepts it in Config dataclass; model_config reads `slice_num=cfg.slice_num`.
+- **Student's prediction confirmed:** slice_num=48 over-specifies partition granularity; 32 slices still capture CFD subregions (boundary layer / wake / freestream).
+- **Metric artifacts:** `models/model-charliepai2g48h3-thorfinn-slice-num-32-nlayers4-20260513-091144/metrics.jsonl`
+- **Reassigned thorfinn:** PR #2151 slice_num=24 on new stack (student's own suggestion!)
+
+---
+
+## 2026-05-13 ~11:30 — PR #2048: surf_weight=5 on n_layers=5 stack — CLOSED (+3.16% vs new baseline)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/surf-weight-5-nlayers5
+- **Hypothesis:** surf_weight=5 reduces surface loss weight, reallocating gradient toward volume; volume → surface via geometric context. Previously won on n_layers=6 (PR #1956, −3.33%).
+- **Result:** val=47.808 / test=41.148 (vs current baseline 46.344 = +3.16%; vs n_layers=5 baseline 49.780 = −4.0%)
+
+| Split | val (n_layers=5 baseline) | val (sw=5 on n_layers=5) | Δ (vs n_layers=5) | test |
+|---|---|---|---|---|
+| single_in_dist | 52.199 | 50.101 | −4.0% | 45.163 |
+| geom_camber_rc | 64.004 | 64.001 | 0.0% | 55.836 |
+| geom_camber_cruise | 27.965 | 24.684 | −11.7% | 20.617 |
+| re_rand | 54.952 | 52.445 | −4.6% | 43.177 |
+| **avg** | **49.780** | **47.808** | **−4.0% ✓ vs n_layers=5** | **41.148** |
+
+- **Why closed:** Beat n_layers=5 baseline by −4.0% but could not beat the CURRENT baseline (n_layers=4+T_max=17 = 46.344). Stack mismatch — student ran on n_layers=5+T_max=14 (an intermediate, now-superseded stack).
+- **Key diagnostic from edward:** Volume MAE DID improve (−8% avg), confirming the volume-gradient mechanism is active. BUT vol→surface pathway didn't translate to surface gains enough. Student noted: "mechanism seems real but the epoch/depth context matters."
+- **Surface-volume pathway is stack-depth dependent:** sw=5 won on n_layers=6 (−3.33%), won vs n_layers=5 baseline (−4.0%), but sits above the current n_layers=4 baseline. Shallower models may need MORE surface weight, not less.
+- **Reassigned edward:** PR #2143 surf_weight=15 on new n_layers=4 stack (opposite direction to test the bracket)
+
+---
+
+## 2026-05-13 ~11:30 — PR #2038: n_head=2 on old n_layers=6+slice_num=64 stack — CLOSED (+12.4% vs current)
+
+- **Student:** charliepai2g48h3-askeladd
+- **Branch:** charliepai2g48h3-askeladd/nhead-2
+- **Hypothesis:** n_head=2 → head_dim=64 (vs current 32) — larger per-head capacity for physics-aware slice partitions.
+- **Result:** val=52.174 / test=45.394 (vs old baseline 51.040 = +2.22%; vs current 46.344 = +12.4%)
+- **Why closed:** PR was posted as draft/WIP, never properly readied. Student forgot the submission skill. Result beat old baseline slightly (+2.22%) but was far above the current baseline (which uses a much better stack). Direction signal: negative — attention diversity mattered more than per-head capacity on the deep stack with n_head=4 × head_dim=32.
+- **Note:** Old stack (n_layers=6 + slice_num=64) had 6 layers processing 64 partitions — more diverse attention modes may be load-bearing at that depth. Retesting on new compact stack (n_layers=4 + slice_num=32) where each head has fewer partitions to attend over (PR #2149 askeladd).
+- **Reassigned askeladd:** PR #2149 n_head=2 on NEW n_layers=4+slice_num=32 stack
+
+---
+
+## 2026-05-13 ~11:30 — PR #2006: lr=8e-5 on old n_layers=6 stack — CLOSED (never started)
+
+- **Student:** charliepai2g48h3-frieren
+- **Branch:** charliepai2g48h3-frieren/lr-8e-5
+- **Hypothesis:** lr=8e-5 (−20% below default 1e-4) tests the lower LR bracket on Lion optimizer.
+- **Result:** No training was ever run. Student never started the experiment.
+- **Context:** Assignment was created when lr=cfg.lr bug was still present AND the stack was n_layers=6. Both issues now resolved (bug fixed in PR #2080; stack updated to n_layers=4+slice_num=32).
+- **Reassigned frieren:** PR #2150 lr=8e-5 on NEW n_layers=4+slice_num=32 stack — now a proper clean LR test
+
+---
+
 ## 2026-05-13 ~11:30 — PR #2043: DropPath rate=0.1 — CLOSED (+25.2% val, +25.2% test vs current)
 
 - **Student:** charliepai2g48h3-alphonse
