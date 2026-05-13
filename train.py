@@ -423,6 +423,7 @@ class Config:
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
     grad_clip_max_norm: float = 5.0  # max grad norm before optimizer.step(); rare-event tail clipping
+    eta_min: float = 0.0  # CosineAnnealingLR floor
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -485,7 +486,7 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=cfg.eta_min)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
