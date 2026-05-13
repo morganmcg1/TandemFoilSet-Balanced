@@ -479,8 +479,8 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             abs_err = (pred - y_norm).abs()
-            # Per-channel Huber δ: [δ_Ux, δ_Uy, δ_p] = [0.5, 0.5, 0.2]
-            delta = abs_err.new_tensor([0.5, 0.5, 0.2])  # shape [3], broadcasts over [B, N, 3]
+            # Per-channel Huber δ: [δ_Ux, δ_Uy, δ_p] = [0.5, 0.5, 0.10]
+            delta = abs_err.new_tensor([0.5, 0.5, 0.10])  # shape [3], broadcasts over [B, N, 3]
             huber_err = torch.where(abs_err < delta, 0.5 * abs_err ** 2, delta * abs_err - 0.5 * delta ** 2)
 
             vol_mask = mask & ~is_surface
