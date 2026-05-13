@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 31)
+- **As of:** 2026-05-13 (updated cycle 33)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 93.6198`** — PR #2031 (weight_decay=5e-4), merged 2026-05-13 cycle 30.
-**Test 4-split mean: 83.8825** (test_avg/mae_surf_p).
+**`val_avg/mae_surf_p = 89.7197`** — PR #2091 (torch.compile default mode, WD=1e-4, 21 epochs), merged 2026-05-13 cycle 33.
+**Test 4-split mean: 79.3167** (test_avg/mae_surf_p).
 
 ## Improvement trajectory
 
@@ -19,14 +19,17 @@
 | 10 | #1558 | Huber surface loss δ=0.5 | 98.1642 | −17.72% |
 | 18 | #1795 | Decoupled LR surf_head (5e-3) | 97.9914 | −0.18% |
 | 30 | **#2031** | **Weight decay 1e-4 → 5e-4** | **93.6198** | **−4.46%** |
+| 33 | **#2091** | **torch.compile default (21 epochs vs 14)** | **89.7197** | **−4.16%** |
 
 ## Current research focus
 
-**Cycle 30.** Five stacked mechanisms now merged (BIVW + surf-head + Huber + decoupled surf_head LR + weight_decay=5e-4) giving 25.8% total improvement from cycle-2 baseline. New baseline 93.6198 establishes a fresh frontier — 6 fresh hypotheses now in flight targeting the next gain.
+**Cycle 33.** Six stacked mechanisms now merged (BIVW + surf-head + Huber + decoupled surf_head LR + weight_decay=5e-4 + torch.compile) giving 28.8% total improvement from cycle-2 baseline. New baseline **89.7197** via pure throughput unlock — 21 epochs vs 14 in the same 30-min wall-clock budget. **Highest-priority next experiment: compose torch.compile with weight_decay=5e-4 (PR #2178, frieren) — expected to stack both gains.**
 
-**Post-#2031 insights:**
+**Post-#2031 and #2091 insights:**
 - **Hyperparameter staleness is real**: WD=1e-4 survived BIVW, Huber, and decoupled-LR unquestioned. 5× increase to 5e-4 yielded −4.46% — largest optimizer-side gain since Huber. Every other hyperparameter (LR, β2, δ) should be audited for staleness.
 - **Late-epoch oscillation characterization**: The e11→e12 spike pattern is steady-state, confirmed across β2 (#2015), warmup (#1949), gradient clipping (#2058), and wider head (#2057). The three closed in cycle 30 (#2058, #2057, #1949 previously) all failed to dampen it. Untested: denominator-floor (ε) and cosine-schedule (T_max).
+- **torch.compile(default, dynamic=True) is a pure throughput unlock**: 1.43× per-epoch speedup, 21 epochs vs 14 in 30 min. Only 2 compile frames needed despite 74K–242K node mesh range. mode="reduce-overhead" OOM'd (CUDA Graph private pool + variable shapes). Val_avg 89.72 was achieved with OLD WD=1e-4 — composing with WD=5e-4 is the highest-priority next step (PR #2178).
+- **Recipe is wall-clock-bound, not data/capacity-bound**: giving it 50% more epochs yielded −4.16% val / −5.44% test. The model had headroom in every epoch budget tested.
 - **surf_head is NOT the capacity bottleneck** (#2057): hidden_dim 64→128 gave +5.36% regression. The encoder is the limiter for OOD geometry.
 - **Gradient clipping on surf_head is NOT the mechanism** (#2058): sh_grad_norm is 0.77× encoder norm, not larger. The spike is in the step magnitude (LR × m/√v), not the gradient. The untested levers: AdamW ε (denominator floor), cosine T_max (LR schedule), per-group step decay.
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
@@ -36,7 +39,8 @@
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 2013 | tanjiro | logcosh-surface-loss | WIP | C²-smooth logcosh vs Huber δ kink; arms scale={1.0, 0.5}; stacks on #2031 baseline |
-| 2091 | frieren | torch-compile | WIP | torch.compile mode ∈ {default, reduce-overhead}; throughput unlock → 18+ epochs in 30 min |
+| 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
+| 2178 | frieren | compile-wd-compose | WIP (NEW) | Compose torch.compile + WD=5e-4 (now default); arms: WD=5e-4, WD=3e-4 |
 | 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
 | 2153 | fern | wd-bracket | WIP (NEW) | Finer WD sweep {4e-4, 5.5e-4, 6e-4} — brackets the peak on both sides; preserves weight_norm logging |
 | 2122 | edward | decoupled-wd | WIP (NEW) | Per-group WD: encoder vs surf_head (10× LR → 10× effective shrinkage at coupled WD) |
@@ -59,7 +63,8 @@
 9a. **log(Re) quantile bucketing** — **rejected** (PR #1868, +8.4% regression). Structural no-op.
 9b. **Re-curriculum via per-sample loss multiplier** — **rejected** (PR #1978, +16.87% regression). BIVW × Re-tail double-weights low-Re, cancels high-Re boost. Entire Re-reweighting direction closed.
 10. **BF16/AMP** — **rejected** (PR #1572, +3.62% val / +30.09% val at n256). Precision-sensitive surface MAE: val_geom_camber_rc +11.33%. FP32 required.
-10a. **torch.compile** — testing (#2091 frieren, WIP). FP32 preserved; pure throughput unlock.
+10a. **torch.compile(default, dynamic=True)** — **confirmed** (PR #2091, **−4.16% val / −5.44% test**). 21 epochs in 30 min (1.43× speedup). reduce-overhead OOM'd. **New baseline 89.7197.**
+10b. **torch.compile + weight_decay=5e-4 compose** — testing (#2178 frieren, NEW). Stack both top wins.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97%). Wall-clock-bound.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30%). Wall-clock-bound.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39%). Underfitting. Depth=5/14ep is Pareto.
@@ -140,6 +145,7 @@
 
 ## Potential next directions (after cycle 30 in-flight)
 
+- **Re-screen wall-clock-bound rejections at 21 epochs**: EMA (#1808, was +7.8-16.2%), n_head=8 (#1924, was +18.84%), DropPath (#1987, was +3.31%). All were closed for being wall-clock-bound. With torch.compile giving +50% epoch budget, these should be re-evaluated.
 - **Cosine restart** (SGDR): single restart mid-training may escape the e12 local basin
 - **Discriminative LR decay** (per-layer LR scaling): some encoder layers may be over-regularized
 - **n_hidden=256 + FP32** (if torch.compile #2091 unlocks epochs): capacity unlock under budget-neutral throughput gain

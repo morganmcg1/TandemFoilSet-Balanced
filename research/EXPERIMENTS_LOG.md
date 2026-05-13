@@ -2,6 +2,64 @@
 
 ---
 
+## 2026-05-13 11:45 — PR #2091: torch.compile throughput unlock **[WINNER — NEW BASELINE]**
+
+- **Branch:** `willowpai2g48h4-frieren/torch-compile` (MERGED)
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** `fvlekakd` (Arm 1 default — WINNER), `807sxrb9` (Arm 2 reduce-overhead — OOM)
+
+### Results
+
+| Metric | Baseline #2031 (WD=5e-4) | Arm 1 (default, WD=1e-4) | Δ |
+|--------|------------------------|--------------------------|---|
+| `val_avg/mae_surf_p` | 93.6198 | **89.7197** | **−4.16%** |
+| `test_avg/mae_surf_p` | 83.8825 | **79.3167** | **−5.44%** |
+| Epochs in 30 min | 14 | 21 | **+50%** |
+| Per-epoch wall-clock | ~125s | ~87s | **1.43×** |
+| Peak VRAM | ~43 GB | 43 GB | unchanged |
+| Best epoch | 14 | 18 | shift expected |
+
+### Per-split val (epoch 18)
+
+| Split | Baseline | Arm1 | Δ |
+|-------|---------|------|---|
+| `val_single_in_dist` | 109.61 | 114.92 | +4.9% ↑ (slight regression) |
+| `val_geom_camber_rc` | 118.05 | 108.66 | **−8.0%** ✓ |
+| `val_geom_camber_cruise` | 61.07 | 55.45 | **−9.2%** ✓ |
+| `val_re_rand` | 85.75 | 79.85 | **−6.9%** ✓ |
+
+### Per-split test
+
+| Split | Baseline | Arm1 | Δ |
+|-------|---------|------|---|
+| `test_single_in_dist` | 101.87 | 104.29 | +2.4% ↑ |
+| `test_geom_camber_rc` | 105.24 | 96.30 | **−8.5%** ✓ |
+| `test_geom_camber_cruise` | 51.43 | 46.12 | **−10.3%** ✓ |
+| `test_re_rand` | 76.99 | 70.55 | **−8.4%** ✓ |
+
+### Analysis
+
+**The recipe was wall-clock-bound, not capacity-bound.** +50% more epochs (14→21) on the same recipe yields −4.16%/−5.44% — far beyond the predicted −0.5% to −2.5% from the PR. The val curve was still descending at epoch 14 when the baseline run hit the timeout; the model had genuine headroom.
+
+**Critical note on per-split pattern**: `val_single_in_dist` slightly regressed (+4.9%) while all OOD geometry splits improved dramatically (cruise −9.2%, geom_camber_rc −8%). This matches the prediction for WD=1e-4 at 21 epochs: the model trains longer than the in-distribution regularization supports, but the extra epochs help OOD generalization. **This regressor should be recoverable by composing with WD=5e-4 (PR #2178, frieren).**
+
+**Arm 2 (reduce-overhead) OOM analysis**: CUDA Graph private pool accumulation at 94.77GB (72GB in pools). Root cause: each unique padded mesh size allocates a separate CUDA Graph + private pool, and with N_max spanning 74K–242K nodes, hundreds of unique shapes exhaust memory. Requires upstream bucketed-padding to fix — out of scope.
+
+**torch.compile mechanics confirmed:**
+- dynamic=True: only 2 compile frames despite 74K-242K node range (symbolic-shape graph)
+- First-batch compile warmup: 8.8s (negligible)
+- `torch.set_float32_matmul_precision("high")` (TF32 matmul) + `cudnn.benchmark=True` are safe
+
+**Implication for wall-clock-bound rejections**: EMA (#1808), n_head=8 (#1924), DropPath (#1987) were all closed because 14 epochs wasn't enough. At 21 epochs, these should be re-screened — especially EMA (needs stable late-training trajectory) and DropPath (oscillation smoothing matters more at longer training).
+
+### Highest-priority follow-ups
+
+1. **torch.compile + WD=5e-4 compose** (#2178 frieren, NEW) — stack two top wins
+2. **Re-screen wall-clock-bound regularizers at 21 epochs** — EMA, DropPath, n_head=8
+3. **Cosine T_max recalibration with compile** — T_max=50 at 21 epochs means ~42% of cosine cycle; askeladd's #2123 tests this direction (still valid, but calibration point shifts)
+
+---
+
 ## 2026-05-13 11:30 — PR #2120: Deeper weight_decay sweep {7e-4, 1e-3, 2e-3}
 
 - **Branch:** `willowpai2g48h4-fern/wd-deeper` (CLOSED — WD=5e-4 is sharp peak)
