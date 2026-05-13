@@ -1762,3 +1762,23 @@ Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (eac
 - **Re-run instructions**: hidden=4, apply only at blocks ≥2 (deeper half of stack), one arm.
 - **Expected completion**: ~22:50 UTC.
 
+
+## 2026-05-13 22:35 — PR #2598: AOA rotation augmentation θ∈±2° — CLOSED
+- **Branch**: `charliepai2g24h1-askeladd/aoa-rotation-aug-2deg`
+- **Hypothesis**: Random ±2° in-plane rotation of coords+velocity targets+AoA channel augments AoA manifold via Galilean rotation symmetry of NSE.
+- **Status**: **CLOSED — large regression** val +7.21%, test +6.97%
+
+| Split | Baseline (#2011) | AOA-rot ±2° | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 31.72 | +10.91% |
+| val_geom_camber_rc | 41.95 | 42.34 | **+0.93% (flat!)** |
+| val_geom_camber_cruise | 14.15 | 17.53 | +23.91% |
+| val_re_rand | 30.81 | 32.24 | +4.65% |
+| **val_avg** | **28.8762** | **30.9579** | **+7.21%** |
+| **test_avg** | **24.9992** | **26.7421** | **+6.97%** |
+
+- **Diagnostic**: The targeted OOD split barely moved while easier splits regressed sharply — classic signature of "augmentation on wrong axis". Student's own analysis: "Camber-rc generalization is not bottlenecked by AoA coverage — it's bottlenecked by camber shape. Rotating doesn't add camber variants. The hypothesis misdiagnosed the OOD axis."
+- **Metrics JSONL**: `models/model-charliepai2g24h1-askeladd-aoa-rotation-aug-2deg-20260513-215702/metrics.jsonl`
+
+**Programme learning**: SECOND independent confirmation (with #2594) that the OOD axis is **shape-distribution NOT mesh-position-distribution**. AoA rotation perturbs the AoA manifold but the rc bottleneck doesn't live on that manifold. Reassigning askeladd to surface-normal feature (genuinely new shape info, orthogonal to SDF magnitude / curvature 2nd-derivative).
+
