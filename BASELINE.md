@@ -4,6 +4,30 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 10:00 — PR #2012: [loss-beta-0-5] Halve smooth_l1 beta 1.0→0.5 on bs=1 baseline (edward)
+
+- **`val_avg/mae_surf_p`:** **66.32** (best epoch 21/21)
+- **`test_avg/mae_surf_p`:** **59.68** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=69.98, geom_camber_rc=81.07, geom_camber_cruise=49.11, re_rand=65.10
+- **Per-split surface-p MAE (test):** single_in_dist=61.70, geom_camber_rc=74.20, geom_camber_cruise=41.61, re_rand=61.20
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=1, seed=42, SequentialLR(LinearLR(1ep warmup) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), smooth_l1_loss(beta=0.5), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
+- **Key change:** `beta=1.0 → beta=0.5` in training smooth_l1_loss only. Narrower quadratic zone means more residuals hit the L1 slope sooner — under our grad-clip normalized-step regime this reshapes which examples drive direction updates.
+- **Improvement vs #2036 (bs=1+beta=1.0, val=70.30):** val −3.98 (−5.66%), test −1.71 (−2.79%)
+- **3/4 val splits improved:** single_in_dist −4.17, cruise −4.56, re_rand −7.18 (largest); rc flat −0.04
+- **3/4 test splits improved:** single_in_dist −3.12, cruise −3.12, re_rand −0.89; rc slight +0.28 (noise)
+- **Metric artifacts:** `models/model-charliepai2g48h4-edward-loss-beta-0-5-bs1-20260513-091012/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-edward --experiment_name "charliepai2g48h4-edward/loss-beta-0-5-bs1"`
+- **15th effective merge**
+
+**Open questions after this merge:**
+- **Beta bracket on bs=1:** 0.5 < 1.0 confirmed, but where is the optimum? Try beta ∈ {0.25, 0.75} to pin the curve shape.
+- **Pure L1:** Natural limit beta→0 (F.l1_loss). Does the quadratic zone provide any benefit at all under bs=1+grad-clip?
+- **EMA (askeladd #1540):** Still training. Expected to stack on top — loss-shape and EMA are independent mechanisms.
+- **Beta-volume asymmetry:** Volume residuals (MAE ~3) vs surface residuals (MAE ~80) operate at very different scales. Independent betas per-component could compound.
+- **LR retuning at bs=1:** lr=4e-4 bracket (alphonse #2106) still in flight.
+
+---
+
 ### 2026-05-13 09:00 — PR #2036: [batch-size-1] Extreme batch bracket: batch_size 2→1 (alphonse)
 
 - **`val_avg/mae_surf_p`:** **70.30** (best epoch 18/19)
@@ -11,17 +35,8 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 - **Per-split surface-p MAE (val):** single_in_dist=74.15, geom_camber_rc=81.11, geom_camber_cruise=53.67, re_rand=72.28
 - **Per-split surface-p MAE (test):** single_in_dist=64.82, geom_camber_rc=73.92, geom_camber_cruise=44.73, re_rand=62.09
 - **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=1, seed=42, SequentialLR(LinearLR(1ep warmup) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
-- **Key change:** batch_size 2→1. n_batches_per_epoch doubled again (750→1500) — same wall-clock per epoch (~95s), 4x optimizer steps vs original bs=4. VRAM halved again (~8.5 GB). 19 epochs completed.
-- **Improvement vs #1972 (bs=2, val=76.24):** val −5.94 (−7.78%), test −5.46 (−8.17%)
-- **All 8 splits improved:** rc val −5.95 / test −3.64 (smallest), cruise val −5.72 / test −5.90, single_in_dist val −7.63 / test −6.12 (biggest val), re_rand val −4.46 / test −6.19
 - **Metric artifacts:** `models/model-charliepai2g48h4-alphonse-batch-size-1-20260513-075224/metrics.jsonl`
 - **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-alphonse --experiment_name "charliepai2g48h4-alphonse/batch-size-1"`
-
-**Open questions after this merge:**
-- Does lr need retuning for bs=1? With 1500 steps/epoch, effective LR per epoch is 4x the bs=4 baseline. lr=4e-4 or 3e-4 tests downward bracket at bs=1.
-- Does EMA (askeladd #1540) still win on top of bs=1? Training completed, result pending rate-limit resolution.
-- Do other in-flight experiments (thorfinn lr-7e-4, nezuko OneCycle, edward beta-0.5, frieren mlp_ratio=1, tanjiro slice_num=32, fern wd-2e-4) still beat the new baseline val=70.30?
-- Batch size axis: bs=1 is the floor. If more steps is the mechanism, gradient accumulation or a different paradigm is next.
 
 ---
 
