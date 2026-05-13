@@ -168,3 +168,38 @@ All three arms hit the 30-min wall-clock cap at 14 epochs (~28% through the cosi
 - Cruise-NaN-y filter works: all three arms produced finite 4-split `test_avg/mae_surf_p`. Independent confirmation that #1433's fix is correct.
 - Follow-up direction (assigned to alphonse as next PR): **`slice_num` sweep on Transolver's Physics Attention layer.** Listed as an open question in `CURRENT_RESEARCH_STATE.md`; tests whether 64 slices saturate on the 242K-node cruise meshes. Default 64; arms at 32/96/128 to bracket. Compute trade-off (slower epochs vs finer representation) similar to but milder than the closed #1443 wider-n192.
 - The Bernoulli-coupling mechanism finding will be cited in future hypothesis assignments. "Reweight surface" is now a known dead end for surface-MAE-on-coupled-physics.
+
+## 2026-05-13 01:20 — PR #1537: Tune cosine T_max to budget — --epochs 13 instead of 50 (CLOSED)
+
+- Student branch: `willowpai2g24h3-thorfinn/schedule-tuned-e13`
+- Hypothesis: matching cosine `T_max` to the actually-achievable epoch count converts the unused tail of the schedule into a proper cool-down; predicted 3–10% reduction in `val_avg/mae_surf_p`. (Direct data-driven follow-up to thorfinn's own #1443 baseline arm trajectory.)
+
+### Results — W&B group `willow-r3-schedule-tuned-e13`
+
+| Run | val_avg/mae_surf_p | test_avg/mae_surf_p | Epochs | Wall-clock | State |
+|---|---:|---:|---:|---:|---|
+| x4sqeaqz | **118.77** (best) | NaN | 13 | 28:50 | finished |
+| nx1tvtp1 | 119.26 | NaN | 13 | 28:54 | finished |
+| rfxdtryp | 120.64 | NaN | 13 | 28:49 | finished |
+| afft3f1v | 122.25 | NaN | 13 | 28:57 | finished |
+| slsutjdn | 122.41 | NaN | 13 | 28:51 | finished |
+| k6h7anq3 | 192.27 (div) | NaN | — | — | crashed |
+| crwqx3mb | 172.03 (div) | NaN | — | — | crashed |
+| navwrdyg | 186.59 (in-prog) | NaN | mid-run | 0:18 | running (div) |
+
+Best of 5 finished arms is **118.77 — +14 MAE points above merged baseline 104.70, +28 above the advisor-branch ~91 lower noise band.** The variant arm (e13) does not move the metric over thorfinn's own e50 baseline trajectory, and no arm enters the noise band of the current advisor baseline.
+
+### Analysis
+
+The mechanism prediction was that cool-down of the cosine schedule would harvest the last few percentage points of capacity. Empirically, finishing a 13-epoch cosine cycle does cool the LR but produces no measurable improvement vs running 14 of 50 epochs at near-peak LR — across 5 independent seeds. Implication: at the merged-baseline operating point (SmoothL1 + grad-clip on advisor branch), the LR-cooling regime contributes less than the seed-to-seed noise (±7). 
+
+Two crashes + one in-flight diverging run also suggest the e13-config + WeightedRandomSampler-with-replacement combination may have a borderline-stable training regime — likely a separate effect from the hypothesis itself, but worth noting.
+
+No SENPAI-RESULT terminal marker was posted on the PR; advisor closed based on the W&B group readout directly.
+
+### Conclusions
+
+- Closed. Hypothesis falsified at the merged advisor-branch operating point — schedule-cooling alone is not a 5%+ lever here.
+- **Schedule reformulation is not abandoned** — frieren's #1438 (warmup-5ep) tests the complementary half (LR warmup before the cosine). If warmup wins, then a **warmup + tuned T_max combo** would be the natural Round 2 stack and bears revisiting.
+- All test_avg/mae_surf_p were NaN, suggesting thorfinn's branch may not have absorbed the cruise-NaN-y fix from #1433 — but the comparison against the val metric is unaffected.
+- Follow-up direction (assigned to thorfinn as next PR): **AdamW weight_decay sweep**. Single-knob regularization test on a baseline that is now characterized to ±7 noise. Pure compute-neutral lever — no time cost per epoch, predicted to differentiate cleanly on per-split signal (especially val_single_in_dist and val_geom_camber_rc which have the highest per-split MAE).
