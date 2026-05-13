@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-13 23:15 — PR #2563: n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4 (thorfinn) — CLOSED, PER-HEAD DIM=64 SWEET SPOT
+
+- **Branch:** `willowpai2g24h5-thorfinn/n-head-4-8-sweep-wd3e4`
+- **Hypothesis:** n_head=2 optimum may shift at shallower depth (n_layers=3). Test n_head=4 (dim_head=32) and n_head=8 (dim_head=16).
+- **W&B runs:** `vsp6j6ib` (n_head=4), `jkp3cjeh` (n_head=8)
+
+| Arm | n_head | dim_head | val | test | Δ vs #2489 | epochs | s/ep | peak VRAM |
+|-----|--------|----------|-----|------|------------|--------|------|-----------|
+| Baseline #2489 | 2 | 64 | 42.00 | 35.96 | — | 33 | 53.1 | 93.5 GB |
+| Arm 1 | 4 | 32 | 43.93 | 37.33 | +4.58% / +3.82% ✗ | 31 | 59.3 (+11.7%) | 81.1 GB |
+| Arm 2 | 8 | 16 | 46.93 | 39.55 | +11.73% / +10.00% ✗ | 26 | 72.0 (+35.6%) | 58.0 GB |
+
+All 4 splits regress in both arms. single_in_dist worst-hit (+15.72% on Arm 2 — predicted rank-collapse symptom).
+
+**Result:** CLOSED. Hypothesis REFUTED — n_head=2 optimum is depth-independent.
+
+Key findings:
+1. **Per-head dim=64 is slice-attention sweet spot (finding 38).** Monotonic {n_head=2 < n_head=4 < n_head=8} at n_layers=3+wd=3e-4. Below dim_head=32 the soft virtual-token mechanism loses rank.
+2. **Architecture cost is NON-zero across n_head.** MHA reshape/permute overhead scales with head count: n_head=4 → +11.7% s/ep, n_head=8 → +35.6%. Contradicts PR prediction of equal compute. With 30-min cap, fewer faster epochs at higher per-head dim WIN (speed-dividend logic, pairs with findings 28 + 37).
+3. **wd × n_head ruled out as explanation.** Regression magnitude (+10% test on n_head=8) dwarfs any plausible wd correction. Capacity finding, not regularization mismatch (separates cleanly from finding 34).
+4. **val/test gap is consistent across all three head counts (val ≈ test + 7).** Result is NOT overfitting; it's pure attention capacity. Pareto frontier at n_head=2 + slice_num=32 + n_layers=3.
+
+**Implication for paper:** Per-head dim=64 + slice_num=32 + n_layers=3 together define a Pareto-optimal architecture surface at the 30-min budget — three independent axes converge to this single operating point.
+
+**Thorfinn reassigned:** dropout=0.10/0.05 sweep on new compound — counter-direction test to finding 35 (regularization saturation). Does inherited dropout=0.2 over-regularize the now-heavily-wd-regularized compound?
+
+---
+
 ## 2026-05-13 22:50 — PR #2587: batch_size=8/2 sweep on n_layers=3+wd=3e-4 (edward) — CLOSED, NO SPEED DIVIDEND ON BS AXIS
 
 - **Branch:** `willowpai2g24h5-edward/batch-size-sweep-wd3e4-n-layers-3`

@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~22:55 UTC
+- **Date:** 2026-05-13 ~23:15 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -28,9 +28,9 @@
 
 | PR | Student | Config | Compound | Status |
 |----|---------|--------|----------|--------|
-| **TBD** | **edward** | **lr=8e-5/1.5e-4 sweep on n_layers=3+wd=3e-4** | NEW | Assigning now |
+| #2641 | edward | lr=8e-5/1.5e-4 sweep on n_layers=3+wd=3e-4 | NEW | WIP |
 | #2618 | frieren | --epochs 80/100 (T_max LARGER) on new compound | NEW | WIP |
-| #2563 | thorfinn | n_head=4/n_head=8 sweep on n_layers=3+wd=3e-4 | NEW | WIP (stale) |
+| **TBD** | **thorfinn** | **dropout=0.10/0.05 sweep (counter-direction to finding 35)** | NEW | Assigning now |
 | #2491 | fern | sw=5/sw=3 stack on n_layers=3 | NEW | WIP (pod rate-limit blocked) |
 | #2482 | askeladd | n_layers=2/n_layers=1 (speed-dividend extension) | NEW | WIP (pod rate-limit blocked) |
 | #2483 | tanjiro | n_head=1 + n_layers=3/2 cross-axis | NEW | WIP (pod rate-limit blocked) |
@@ -56,13 +56,14 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 35. **REGULARIZATION SATURATION at n_layers=3 (#2551):** dropout=0.25 (+6.50% val) and 0.30 (+3.95% val) both regress on the wd=3e-4 compound. All 4 splits regress uniformly — no OOD-specific dropout effect. wd=3e-4 + dropout=0.20 + BF16 + EMA(0.99) is at the Pareto frontier; adding more of any regularizer is substitutive, not additive. Capacity floor at 3 attention blocks: each block carries more representational load than at n_layers=5, so dropout=0.30 strips too many activations to compensate.
 36. **COSINE T_MAX INVERTS direction (#2542):** matched T_max=34 (+10.14% val) and T_max=44 (+9.07% val) both regress. Monotonic ordering {Arm 1 < Arm 2 < baseline T_max=50}: less annealing strictly better. Arm 1 val *went up* at the final epoch as lr→0 (over-annealing collapse); baseline at lr=0.485×lr_init at cap is in a sweet spot. Lion + lr=1e-4 brittle at very low lr — fine-tuning regime is harmful. 'Val still descending at cap' is load-bearing, not a missed opportunity. **Next test: T_max LARGER than 50 (--epochs 80/100) — extends monotonic direction UP.**
 37. **NO SPEED DIVIDEND ON BATCH_SIZE AXIS (#2587):** bs ∈ {2, 4, 8} produces 51-54 s/ep (essentially batch_size-INVARIANT). Per-step GPU compute is NOT the bottleneck — data loading + padding to N_max=242K + val pass dominate. Both arms regress (bs=8 +15.1%, bs=2 +9.6%). GPU is near-saturated at bs=4 (97.8% reserved memory). bs=16 would likely OOM. Step count drives performance, with Lion sign-update + small dataset compounding gradient variance into a noise penalty at bs=2. bs=4 is the noise-step Pareto sweet spot. **Speed-dividend mechanism applies to architecture-driven per-step compute reduction (n_layers, slice_num) but NOT to batch_size axis where data loading + padding dominate.** Padding-waste reduction (length-bucketed sampler) is the real lever for budget-extension — requires data-loader code, not a CLI flag.
+38. **PER-HEAD DIM=64 SLICE-ATTENTION SWEET SPOT (#2563):** Monotonic {n_head=2 (dim_head=64) < n_head=4 (dim_head=32) < n_head=8 (dim_head=16)} at n_layers=3+wd=3e-4. n_head=4: +4.58% val. n_head=8: +11.73% val. Below dim_head=32 the soft virtual-token mechanism loses rank — single_in_dist worst-hit (+15.72% at n_head=8). Architecture cost is NON-zero: n_head=4 +11.7% s/ep, n_head=8 +35.6% s/ep. Speed-dividend at higher per-head dim wins. wd × n_head ruled out as explanation (regression magnitude dwarfs any wd correction). **n_head=2 + slice_num=32 + n_layers=3 are mutually Pareto-optimal at our budget — three independent axes converge to a single operating point.** n_head=2 optimum is depth-independent.
 
 ## Priority for current wave
 
 **Highest priority — NEW COMPOUND (n_head=2+slice32+n_layers=3+wd=3e-4, baseline=42.00):**
-- **lr=8e-5/1.5e-4 (edward, assigning):** does wd=3e-4 stabilization permit higher lr for more effective steps?
+- **lr=8e-5/1.5e-4 (edward #2641):** does wd=3e-4 stabilization permit higher lr for more effective steps?
 - **--epochs 80/100 LARGER T_max (frieren #2618):** extends monotonic 'less annealing → better' direction UP
-- **n_head=4/8 (thorfinn #2563):** does more heads help on the depth-3 compound where wd=3e-4 won?
+- **dropout=0.10/0.05 (thorfinn, assigning):** counter-direction test to finding 35 — does inherited dropout=0.2 over-regularize now?
 - **n_layers=2/n_layers=1 (askeladd #2482):** speed-dividend extension; val still descending at cap
 - **n_head=1 + n_layers=3/2 (tanjiro #2483):** cross-axis test of n_head=1 at shallow depth
 - **sw=5/sw=3 (fern #2491):** stack sw synergistic interaction at n_layers=3+wd=3e-4
@@ -73,6 +74,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 ## Closed experiments this cycle
 
+- **#2563 (thorfinn):** n_head=4/8 sweep on n_layers=3+wd=3e-4 — CLOSED. Per-head dim=64 is sweet spot; n_head=2 optimum depth-independent. Finding 38.
 - **#2587 (edward):** batch_size=8/2 sweep on n_layers=3+wd=3e-4 — CLOSED. No speed dividend on bs axis; GPU near-saturated. Finding 37.
 - **#2542 (frieren):** cosine T_max=34/44 — CLOSED. T_max inverts direction; less annealing is better. Finding 36.
 - **#2551 (edward):** dropout=0.25/0.30 stack on n_layers=3+wd=3e-4 — CLOSED. Regularization saturation; finding 35.
