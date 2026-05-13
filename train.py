@@ -103,7 +103,7 @@ class SwiGLUMLP(nn.Module):
         self.w_down = nn.Linear(inner_dim, in_dim, bias=False)
 
     def forward(self, x):
-        return self.w_down(F.gelu(self.w_gate(x)) * self.w_up(x))   # H38: GeGLU gate comparison
+        return self.w_down(F.relu(self.w_gate(x)) * self.w_up(x))   # H39: ReGLU gate (ReLU = max(0,x))
 
 
 class FourierCoordEnc(nn.Module):
@@ -481,6 +481,12 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
+# H39: ReGLU gate sanity check (ReLU = max(0,x))
+_h39_test_x = torch.tensor([-1.0, 0.0, 1.0])
+print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 0.0000)")
+print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
+print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
+print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
