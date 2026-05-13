@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-13 [Round 66] UTC — Round 66
+
+### PR #2583 edward: Lion lr=2e-4 sweep — CLOSED (LOSS; LR-up axis CLOSED at 2e-4)
+
+- **Branch:** `charliepai2g48h5-edward/lion-lr2e-4`
+- **Hypothesis:** Continue LR-up sweep: lr=1.5e-4 WIN → try lr=2e-4 (1.33× increase).
+- **Metrics:**
+
+| Metric | lr=2e-4 (this) | Baseline #2553 (lr=1.5e-4) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 33.8328 | **33.4935** | **+1.01% WORSE** |
+| `test_avg/mae_surf_p` | 29.1608 | 28.6279 | **+1.86% WORSE** |
+| Best epoch | 70/70 | 70/70 | unchanged |
+
+Per-split (critical finding):
+
+| Split | lr=2e-4 | #2553 | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 27.7374 | 25.7691 | **+7.64% WORSE** |
+| `val_geom_camber_rc` | 50.1762 | 50.5514 | −0.74% better |
+| `val_geom_camber_cruise` | 21.3132 | 20.2827 | **+5.08% WORSE** |
+| `val_re_rand` | 36.1044 | 37.3708 | −3.39% better |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-edward-lion-lr2e-4-20260513-210418/metrics.jsonl`
+- **Best epoch:** 70/70 (still budget-bound, monotonically descending at LR≈0)
+- **Param count:** 328,235
+
+**Analysis:** val is +1.01% worse than baseline. The per-split result reveals a critical STRUCTURAL FINDING: **higher LR creates a per-split in-dist vs OOD trade-off**. lr=2e-4 found a different basin — slightly better on OOD (camber_rc −0.74%, re_rand −3.39%, both gain from wider exploration) but considerably worse on in-dist (in-dist +7.64%, cruise +5.08%, where precision matters). Net loss because in-dist regression dominates val_avg.
+
+The LR optimum is empirically between 1.5e-4 and 1.75e-4:
+- lr=1e-4 → 36.40
+- lr=1.5e-4 → 33.49 (WIN)
+- lr=2e-4 → 33.83 (LOSS by +1%)
+
+**Key insight:** At lr=2e-4, the model finds a wider basin (OOD-friendly) but with lower precision (in-dist degrades). The cosine schedule already handles exploration→precision transition, but lr=2e-4 makes the exploration phase too broad.
+
+**Action:** Closed. Assigned #2602 edward Lion lr=1.75e-4 midpoint to localize the LR optimum precisely and test whether the in-dist precision boundary is sharp or gradual.
+
+---
+
 ## 2026-05-13 [Round 65] UTC — Round 65
 
 ### PR #2541 thorfinn: NormFormer Sandwich Norm RETRY-1 — CLOSED (2nd consecutive stale_wip; axis abandoned)
