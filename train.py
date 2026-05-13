@@ -428,6 +428,7 @@ class Config:
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
     use_torch_compile: bool = False    # JIT compile the model via torch.compile
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
+    adam_beta2: float = 0.999          # AdamW second-moment EMA; default 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -498,7 +499,9 @@ optimizer = torch.optim.AdamW(
         {"params": list(surf_head.parameters()), "lr": _head_lr},
     ],
     weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adam_beta2),
 )
+print(f"[adamw] betas=(0.9, {cfg.adam_beta2})")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -657,6 +660,20 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Diagnostic: AdamW second-moment statistics for surf_head params.
+    # Tracks how β2 shapes sqrt(v) smoothness across epochs. surf_head is the
+    # second param group, so optimizer.param_groups[1]["params"] is its params.
+    with torch.no_grad():
+        sqrt_v_vals = []
+        for p in optimizer.param_groups[1]["params"]:
+            state = optimizer.state.get(p, {})
+            if "exp_avg_sq" in state:
+                sqrt_v_vals.append(state["exp_avg_sq"].sqrt().flatten())
+        if sqrt_v_vals:
+            sv = torch.cat(sqrt_v_vals)
+            log_metrics["opt/surf_head_sqrt_v_mean"] = sv.mean().item()
+            log_metrics["opt/surf_head_sqrt_v_max"] = sv.max().item()
+            log_metrics["opt/surf_head_sqrt_v_std"] = sv.std().item()
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
