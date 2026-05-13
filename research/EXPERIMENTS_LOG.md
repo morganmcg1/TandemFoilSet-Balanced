@@ -2191,3 +2191,76 @@ cd target/ && python train.py \
 
 **Skip arm 1** (lr=1e-4) — dominated by arm 2.
 
+
+---
+## 2026-05-13 12:45 — PR #2021 SEND-BACK willowpai2g48h2-edward (OneCycleLR max_lr=1e-3 on Kendall): BIG WIN verified, rebase + rerun on RFF+Kendall stack required
+
+- **Branch:** `willowpai2g48h2-edward/onecycle-lr-on-kendall`
+- **Result (Kendall-only stack, no RFF):** Arm 2 (max_lr=1e-3, pct_start=0.1) SWA val=**67.1895**, SWA test=**59.0139**
+- vs Kendall baseline #1906 (71.43/62.99): **−5.94% val / −6.31% test**
+- vs RFF baseline #2082 (70.63/62.09): **−4.87% val / −4.97% test** (wins even without RFF!)
+- W&B runs: `ce4cko32` (arm 1: val=69.81, test=61.72), `cw0dxu3k` (arm 2: val=67.19, test=59.01)
+
+### Per-split SWA arm 2 (max_lr=1e-3)
+
+| Split | val | test | Δ val vs Kendall | Δ test vs Kendall |
+|---|---:|---:|---:|---:|
+| single_in_dist | 77.993 | 68.544 | −1.18 | −0.09 |
+| geom_camber_rc | 80.528 | 73.523 | **−7.56** | **−6.43** |
+| geom_camber_cruise | 45.012 | 37.470 | **−4.18** | **−3.97** |
+| re_rand | 65.225 | 56.519 | **−4.06** | **−5.40** |
+
+Every OOD split improves. Biggest gain: geom_camber_rc (the persistent FiLM bottleneck).
+
+### Mechanism (banked)
+
+1. **Super-convergence as Smith 2018 predicts** — 2× peak lr + warmup finds a wider, flatter optimum
+2. **Kendall σ heads sharpen dramatically** in arm 2 vs baseline: surf_Ux log_σ −2.402 vs baseline −1.500 (σ halved from 0.22 → 0.09). All 6 channels. The model reached a flatter optimum where it can confidently weight all channels more aggressively.
+3. **Warmup did NOT destabilize σ** — contra pre-registered risk; warmup gave σ heads a clean settling period
+4. **Arm 1 (max_lr=5e-4 + warmup):** val=69.81, test=61.72 — warmup alone helps (−2.27% val); combined lr-bump is the real lever
+
+### Cannot merge as-is
+
+Branch lacks RFF (dirty conflict with current advisor). Sent back for arm 2 rerun on full RFF+Kendall stack with same OneCycleLR config.
+
+**Rerun command:**
+```bash
+cd target/ && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --scheduler onecycle --onecycle_max_lr 1e-3 --onecycle_pct_start 0.1 \
+  --seed 0 --agent willowpai2g48h2-edward \
+  --wandb_name willowpai2g48h2-edward/onecycle-maxlr-1e-3-on-rff-kendall \
+  --wandb_group onecycle-on-rff-kendall
+```
+
+Prediction: OneCycle + RFF compose constructively → val ∈ [62, 67].
+
+---
+## 2026-05-13 12:45 — PR #1938 CLOSED willowpai2g48h2-tanjiro (per-token FiLM on max_norm=0.5 baseline): CLEAN REGRESSION — 4th FiLM-head modification to regress
+
+- **Branch:** `willowpai2g48h2-tanjiro/film-per-token`
+- **Result:** SWA val=**77.91** (+5.55% vs #1831 baseline 73.81), test=**68.77** (+5.73%)
+- vs current RFF+Kendall baseline #2082 (70.63): val regression of +10.3%
+- W&B run: `yeyreqgs`
+
+### Per-split (vs #1831 baseline)
+
+All splits regress. OOD splits worst: geom_camber_cruise val +10.78%, re_rand test +9.55%.
+
+### Mechanism (banked — important)
+
+- γ_surf/γ_vol cosine similarity = 0.44 (< 0.5 threshold) — structural mechanism ENGAGED; heads do learn distinct directions
+- Yet model gets worse → **shared-γ constraint IS the right inductive bias** on 1499-sample dataset
+- Removing shared constraint lets heads overfit per-sample noise (classic OOD-hit signature)
+- γ_vol grows ~26% larger than γ_surf — same volume-token-count effect seen in #1760 and #1838
+
+### Closed axes: FiLM head modifications (4 total, all regress)
+
+1. #1760 width-double → regressed
+2. #1838 depth-bump → regressed
+3. #1909 tanh-bound → regressed
+4. #1938 per-token (this PR) → regressed
+
+**Next FiLM lever must operate OUTSIDE the head architecture.** The FiLM head itself is well-tuned; the next opportunity is: what the head SEES (input conditioning), what it FEEDS INTO (surface-only gating), or how it COMPOSES (deeper stack at different abstraction levels with different conditioners).
+

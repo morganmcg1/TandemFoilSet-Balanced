@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 12:20 (MASSIVE: #2063 askeladd Lion verified — arm 2 val=50.19/test=42.69 = −29.7%/−32.2% vs Kendall, biggest single-PR gain by ~10×, but conflicts with RFF + needs rebase + rerun on RFF+Kendall stack. Earlier this loop: merged #2082 RFF σ=1.0; closed #2049 aux-Re + #1981 wd-sweep; sent back #1757 frieren for Kendall+RFF rerun; assigned thorfinn #2168 σ-refine, nezuko #2170 n-features-32, alphonse #2171 β=0.1)
+- **Last updated:** 2026-05-13 12:50 (ANOTHER BIG WIN: #2021 edward OneCycleLR max_lr=1e-3 verified val=67.19/test=59.01 = −5.94%/−6.31% vs Kendall — even beats new RFF baseline WITHOUT RFF — sent back for RFF+Kendall rerun; closed #1938 tanjiro per-token FiLM (4th FiLM-head modification to regress, key finding: shared-γ is the right inductive bias); assigned tanjiro #2187 swa-start-0p6. Two massive rebases pending: #2063 Lion (30%) and #2021 OneCycle (6%). Previous: #2063 Lion verified; merged #2082 RFF σ=1.0)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -31,6 +31,8 @@
 | **avg** | **70.627** | **62.091** |
 
 ## 🔥 Hottest signals this session
+
+- **🚀 PR #2021 (edward, OneCycleLR max_lr=1e-3) BIG WIN, SEND-BACK for rebase+rerun:** Arm 2 val=**67.19**, test=**59.01** on Kendall-only (no RFF). −5.94% val / −6.31% test vs Kendall. Even vs RFF baseline: −4.87% val / −4.97% test. ALL 4 OOD splits improve; biggest gain geom_camber_rc (−7.56 val, −6.43 test). Kendall σ heads sharpen dramatically (surf_Ux log_σ: −1.500 baseline → −2.402 arm2 = σ halved). Warmup did NOT destabilize. Branch lacks RFF (dirty conflict). Sent back for arm 2 rerun on full RFF+Kendall — prediction: val ∈ [62, 67].
 
 - **🚀 PR #2063 (askeladd, Lion optimizer) HUGE WIN, SEND-BACK for rebase+rerun:** Arm 2 (lr=3e-4, wd=3e-4) on Kendall-only stack achieves SWA **val=50.19, test=42.69** — **−29.7%/−32.2% vs Kendall baseline**, biggest single-PR gain on this branch by ~10×. W&B independently verified (`tuj3eknw`, `c65qyw5x`). All 4 splits improve >25% uniformly. **Mechanism (banked):** (1) Lion sign-update verified — `optimizer_update_norm = √n_params = 863.91` at every step; (2) grad-clip fires less under Lion (70-81% vs AdamW's 97%); (3) **Lion COLLAPSES Kendall σ heads to uniform** — all 6 channels evolve in lockstep due to shared sign sequences. Lion + Kendall is mechanistically equivalent to Lion + uniform-channel-weight. **Cannot merge as-is:** branch lacks RFF (dirty conflict). Sent back for arm 2 rerun on full RFF+Kendall stack — prediction: val ∈ [48, 60].
 
@@ -68,13 +70,11 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 | #2171 ← NEW | alphonse | `beta-0p1-rff-kendall` | Huber β=0.1 on RFF+Kendall stack | val < 70.63 |
 | #1757 (rerun) | frieren | `beta-0p3-on-rff-kendall` | β=0.3 on full current stack (was on pre-Kendall) | val < 70.63 |
 | #2063 ← REVISED | askeladd | `lion-optimizer-on-rff-kendall` (rebase pending) | Lion lr=3e-4 wd=3e-4 on full RFF+Kendall stack — rerun after verified 30% win on Kendall-only required rebase | val < 70.63 (likely val ∈ [48, 60] given Lion-on-Kendall = 50.19) |
-| #2021 | edward | `onecycle-lr-warmup-on-kendall` | OneCycleLR sweep {max_lr=5e-4, 1e-3} | val < 70.63 |
-| #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token FiLM (surface vs volume-aware) | val < 70.63 |
+| #2021 ← RERUN | edward | `onecycle-maxlr-1e-3-on-rff-kendall` (rebase pending) | OneCycleLR max_lr=1e-3 + warmup on full RFF+Kendall stack — verified win val=67.19/test=59.01 on Kendall-only (−5.94%) | val < 70.63 (likely val ∈ [62, 67]) |
+| #2187 ← NEW | tanjiro | `swa-start-0p6` | Earlier SWA start (frac=0.6 → 4 SWA epochs vs 2) on RFF+Kendall | val < 70.63 |
 | #1873 (rerun) | fern | `sdf-feature-on-kendall` | Per-node SDF on Kendall+RFF stack | val < 70.63 |
 
-**Note on #1938 tanjiro:** W&B shows finished arm (yeyreqgs, val=79.34) — significant regression vs new 70.63 baseline. 2nd arm currently training (qckqcfky). Expect closure when terminal result posts.
-
-**Note on #2021 edward:** W&B shows arm 1 finished (nczhfo6i, val=71.39 — within noise of old Kendall bar, regresses vs new 70.63 baseline). 2nd arm currently training. Will need to assess both arms at terminal result.
+**#1938 tanjiro CLOSED:** per-token FiLM regressed +5.55% val. 4th FiLM-head modification to regress. Shared-γ IS the right inductive bias on 1499-sample dataset. FiLM-head axis is saturated.
 
 ## Decision rule (vs new 70.63 baseline)
 
