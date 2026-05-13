@@ -81,6 +81,30 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+class SwiGLUMLP(nn.Module):
+    """SwiGLU feed-forward block (Shazeer 2020).
+
+    Replaces a standard 2-matrix MLP `W2 · GELU(W1 · x)` with the gated
+    variant `W_down · (SiLU(W_gate · x) ⊙ W_up · x)`.
+
+    `hidden_dim` is the original MLP inner dim; we scale to `2/3 * hidden_dim`
+    (rounded up to a multiple of 8) so the SwiGLU 3-matrix block has roughly
+    the same parameter count as the original 2-matrix MLP.
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: int):
+        super().__init__()
+        inner_dim = int(hidden_dim * 2 / 3)
+        inner_dim = ((inner_dim + 7) // 8) * 8
+        self.inner_dim = inner_dim
+        self.w_gate = nn.Linear(in_dim, inner_dim, bias=False)
+        self.w_up = nn.Linear(in_dim, inner_dim, bias=False)
+        self.w_down = nn.Linear(inner_dim, in_dim, bias=False)
+
+    def forward(self, x):
+        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
+
+
 class FourierCoordEnc(nn.Module):
     """Replace the 2 normalized coord dims with 2*2*n_freqs Fourier features.
 
@@ -176,8 +200,7 @@ class TransolverBlock(nn.Module):
             dropout=dropout, slice_num=slice_num,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
-                       n_layers=0, res=False, act=act)
+        self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio)
         self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         if self.last_layer:
@@ -455,6 +478,8 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
+swiglu_inner_dim = model.blocks[0].mlp.inner_dim
+print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
