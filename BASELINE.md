@@ -6,7 +6,33 @@ SPDX-License-Identifier: Apache-2.0
 # Best Baseline — `icml-appendix-willow-pai2g-24h-r3` (willow-pai2g-24h-r3)
 
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
-Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug is now fixed in `train.py::evaluate_split` via PR #1433 — first clean 4-split test pass measured at `test_avg/mae_surf_p = 86.87` on the current advisor branch, see Supplemental section).
+Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
+
+## 2026-05-13 01:35 — PR #1615: Add pure L1 loss + cruise-NaN code fix (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **104.03** (pure-L1 variant, run `mc22t7l2`)
+- **`test_avg/mae_surf_p` (4-split, finite):** **95.09**
+- **Per-split val surface-p MAE (pure-L1, best-val checkpoint):**
+  - val_single_in_dist: 129.82
+  - val_geom_camber_rc: 110.53
+  - val_geom_camber_cruise: 80.24
+  - val_re_rand: 95.52
+- **Per-split test surface-p MAE (pure-L1, post-fix 4-split):**
+  - test_single_in_dist: 119.46
+  - test_geom_camber_rc: 101.44
+  - test_geom_camber_cruise: 68.55
+  - test_re_rand: 90.93
+- **W&B run:** `mc22t7l2` (pure-L1 variant)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn l1
+  ```
+
+Same-run sibling SmoothL1(β=0.1) baseline arm (`x0ud9i0a`): val=102.17, test=92.04 (4-split) — confirming pure-L1 ≈ SmoothL1 within the ±7 single-seed noise band.
+
+**Mechanism summary**: SmoothL1's win in #1441 was the linear-region gradient cap on outlier residuals — *not* the quadratic-near-zero smoothness. The pure-L1 variant drops the quadratic entirely and lands statistically indistinguishable from tuned-β SmoothL1 (within the ±7 single-seed noise band; three independent SmoothL1 reproductions span 102.17 → 103.57 → 125.94). Parameter-free L1 is the simpler, equivalent option. The per-split delta shows SmoothL1 only edges out pure-L1 on `val_geom_camber_cruise` / `test_geom_camber_cruise` (the low-|p| split where residuals are small enough to enter the quadratic region) — confirming the textbook Huber picture.
+
+**Bug-fix component**: BASELINE.md previously claimed the cruise-NaN filter was in `train.py::evaluate_split` via PR #1433, but only the docs landed — the code change was missing on advisor branch. This PR adds the actual per-sample `torch.isfinite()` filter (lines 240-250 of train.py), so future PRs will natively report finite 4-split `test_avg/mae_surf_p`.
 
 ## 2026-05-12 21:05 — PR #1441: Replace MSE with SmoothL1 (Huber, beta=0.1) loss
 

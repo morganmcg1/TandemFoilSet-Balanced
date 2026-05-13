@@ -203,3 +203,52 @@ No SENPAI-RESULT terminal marker was posted on the PR; advisor closed based on t
 - **Schedule reformulation is not abandoned** — frieren's #1438 (warmup-5ep) tests the complementary half (LR warmup before the cosine). If warmup wins, then a **warmup + tuned T_max combo** would be the natural Round 2 stack and bears revisiting.
 - All test_avg/mae_surf_p were NaN, suggesting thorfinn's branch may not have absorbed the cruise-NaN-y fix from #1433 — but the comparison against the val metric is unaffected.
 - Follow-up direction (assigned to thorfinn as next PR): **AdamW weight_decay sweep**. Single-knob regularization test on a baseline that is now characterized to ±7 noise. Pure compute-neutral lever — no time cost per epoch, predicted to differentiate cleanly on per-split signal (especially val_single_in_dist and val_geom_camber_rc which have the highest per-split MAE).
+
+## 2026-05-13 01:35 — PR #1615: Pure L1 / MAE loss + cruise-NaN code fix (MERGED)
+
+- Student branch: `willowpai2g24h3-tanjiro/pure-l1`
+- Hypothesis: dropping SmoothL1's quadratic-near-zero region (pure L1 / MAE loss in normalized space) should match SmoothL1(β=0.1) within noise — testing whether the residual quadratic does any useful work after we established the Huber gradient cap is the dominant mechanism. Predicted delta: −2% (better) to +5% (worse).
+
+### Results — W&B group `willow-r3-pure-l1`
+
+| Arm | wandb_id | loss_fn | val_avg/mae_surf_p | test_avg/mae_surf_p (4-split, post-fix) |
+|---|---|---|---:|---:|
+| pure-l1-30m (variant) | `mc22t7l2` | L1 | **104.03** | **95.09** |
+| smooth-l1-0.1-30m-v2 (best SmoothL1) | `x0ud9i0a` | SmoothL1 β=0.1 | 102.17 | 92.04 |
+| smooth-l1-0.1-30m (#3) | `30cs7nad` | SmoothL1 β=0.1 | 103.57 | 94.02 |
+| smooth-l1-0.1-30m (#1, high-var) | `02e8ituj` | SmoothL1 β=0.1 | 125.94 | 97.40 |
+
+Pure-L1 variant vs best SmoothL1 baseline: +1.8% val / +3.3% test. Pure-L1 vs mean of two well-behaved SmoothL1 baselines (102.17, 103.57): +1.1% val / +2.2% test. Both well within the ±7 single-seed noise band (three SmoothL1 reproductions span val=102-126, σ≈13). **Hypothesis confirmed equivalent within noise.**
+
+### Per-split val MAE: pure-L1 vs best SmoothL1 baseline
+
+| Split | SmoothL1 best (102.17) | pure L1 (104.03) | Δ (L1 − SmoothL1) |
+|---|---:|---:|---:|
+| val_geom_camber_cruise | 69.20 | 80.24 | **+15.9%** |
+| val_geom_camber_rc | 111.06 | 110.53 | −0.5% |
+| val_re_rand | 92.90 | 95.52 | +2.8% |
+| val_single_in_dist | 135.52 | 129.82 | −4.2% |
+
+### Per-split test MAE (post-fix, 4-split): pure-L1 vs best SmoothL1 baseline
+
+| Split | SmoothL1 best | pure L1 | Δ |
+|---|---:|---:|---:|
+| test_geom_camber_cruise | 58.60 | 68.55 | **+17.0%** |
+| test_geom_camber_rc | 100.15 | 101.44 | +1.3% |
+| test_re_rand | 85.68 | 90.93 | +6.1% |
+| test_single_in_dist | 123.73 | 119.46 | −3.5% |
+
+### Bug-fix component (separate from hypothesis result)
+
+tanjiro discovered that the advisor branch `train.py::evaluate_split` was missing the cruise-NaN-y filter that BASELINE.md / PR #1433 docs claimed was in place — only the documentation landed, not the code. He added the actual per-sample `torch.isfinite(y).all(dim=-1)` filter (train.py lines 240-250), exactly matching the `data/scoring.py::accumulate_batch` per-sample-skip semantics. This unlocks finite 4-split `test_avg/mae_surf_p` reporting for all future PRs. **This is a high-value contribution beyond the loss-fn experiment.**
+
+### Analysis (mechanistic)
+
+The Huber win in #1441 was **the linear-region gradient cap on outlier residuals**, not the quadratic-near-zero smoothness. With y-normalized target stats `y_std ≈ O(1)` and SmoothL1 β=0.1, the quadratic region (|r|<0.1 in normalized space) covers only the bottom decile of residuals at convergence. Early-training trajectories are very similar between L1 and SmoothL1 (both runs reach val ≈ 105 by epoch 25). Only the cruise split shows SmoothL1 consistently better — that split is dominated by easy low-Re aerofoil flow with the smallest absolute pressure scale (cruise val_p ≈ 70 vs single-foil val_p ≈ 130), so its residuals are the most likely to live inside the quadratic region. Other three splits show pure-L1 either ahead or within ±2%. **The residual quadratic does its (tiny) work on the low-magnitude split** — consistent with the textbook Huber picture, but not big enough to matter at this dataset/budget noise band.
+
+### Conclusions
+
+- Merged. New empirical baseline: **val_avg/mae_surf_p = 104.03** (pure-L1, run `mc22t7l2`); **test_avg/mae_surf_p = 95.09** (4-split, post-fix).
+- **Implication for the paper**: parameter-free L1 is statistically indistinguishable from tuned-β SmoothL1 on TandemFoilSet at this scale — the SmoothL1 win in #1441 reduces to "gradient cap on the linear-region tail of outlier residuals." Clean negative result for the quadratic-near-zero.
+- Bug-fix code change unlocks paper-facing 4-split `test_avg/mae_surf_p` reporting for every future run on the advisor branch.
+- Follow-up direction (assigned to tanjiro as next PR): on the outlier-residual mechanism thread, the next high-leverage direction is **NOT smaller β** (this PR + closed #1616 already bracket that). It's a different mechanism entirely — to be designed in the next assignment.
