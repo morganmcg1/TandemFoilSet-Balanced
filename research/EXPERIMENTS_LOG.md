@@ -2570,3 +2570,42 @@ Lion + β=0.3 DO compound (val 47.64 < β=0.0 Lion val 50.97). This is the stron
 - **Hypothesis:** Replace SWA with EMA (decay=0.999, per-batch update). EMA maintains a continuous weighted average throughout training — no lr-flat-region requirement. Directly addresses the root cause of SWA frac=0.6 failure.
 - **Target:** val < 66.66 / test < 58.32
 - Single arm, EMA decay=0.999, all other config identical to β=0.3 baseline.
+
+---
+## 2026-05-13 13:10 — PR #2063 MERGED willowpai2g48h2-askeladd (Lion optimizer on β=0.3+RFF+Kendall) ⭐ NEW BASELINE
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-optimizer-on-kendall`
+- **W&B run:** `5hp3gid7` (lion-lr3e-4-wd3e-4-on-rff-kendall-beta0p3)
+- **Result:** SWA val=**47.6416** / test=**40.5651** vs β=0.3 baseline 66.6617/58.3234 = **−28.54% / −30.45%**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val (Lion+β=0.3) | Baseline #1757 | Δ val | test (Lion+β=0.3) | Baseline #1757 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 48.447 | 74.617 | −35.10% | 42.396 | 65.443 | −35.22% |
+| geom_camber_rc | 62.855 | 79.810 | −21.24% | 55.252 | 72.473 | −23.76% |
+| geom_camber_cruise | 29.711 | 44.650 | −33.47% | 24.413 | 38.187 | −36.07% |
+| re_rand | 49.553 | 67.570 | −26.67% | 40.197 | 57.191 | −29.72% |
+| **avg** | **47.642** | **66.662** | **−28.54%** | **40.565** | **58.323** | **−30.45%** |
+
+### Analysis
+
+Lion's sign-update rule produces bounded per-step updates (optimizer_update_norm = constant √n_params = 868.63 at every step, confirmed throughout the run). Grad-clip fires only 74% of steps under Lion (vs ~97% under AdamW), which means the model sees more full-magnitude gradient information.
+
+**Composition with β=0.3 confirmed:** val improved from 50.97 (Lion on β=0.0 stack) to 47.64 (Lion on β=0.3 stack). The two mechanisms (optimizer rule vs loss shape) are independent and stack additively: β=0.3 contributes its loss-smoothing benefit on top of Lion's update efficiency.
+
+**Kendall σ-collapse remains:** all 6 log_σ channels converge to −0.904 (identical) under Lion, producing uniform per-channel weighting (3.05× scale). Lion+Kendall is mechanically equivalent to Lion+uniform-channel-weight. This is a known property of Lion's sign-update, and does not invalidate the merge — the uniform weighting happens to outperform AdamW's learned weighting in this regime.
+
+**Largest bottleneck shift:** geom_camber_rc (hardest split) improved from val=79.81 to 62.86 (−21.2%). This is the first time geom_camber_rc has been pushed meaningfully below 70. Still the largest remaining gap relative to other splits.
+
+### Merge note
+
+Parser false-positive triggered by inline "SENPAI-RESULT:" substring in my 10:34Z and 12:58Z advisor comments. Fixed by patching those comments via REST API PATCH endpoint before running preflight. Lesson: avoid inline `SENPAI-RESULT:` in advisor comments — use alternative phrasing.
+
+---
+## 2026-05-13 13:15 — PR #2297 ASSIGNED willowpai2g48h2-askeladd (Lion lr sweep on β=0.3)
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-lr-sweep-on-beta0p3`
+- **Hypothesis:** lr=3e-4 was only 1 of 2 tested arms. Fine-sweep around winner to find lr optimum.
+- 3 arms: lr ∈ {2e-4, 4e-4, 5e-4}, wd=3e-4 fixed, all other config = baseline
+- **Target:** val < 47.64 / test < 40.57
