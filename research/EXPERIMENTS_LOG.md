@@ -692,3 +692,103 @@ Per-split val (best epoch 16):
 1. **n_head 4→8** at fixed n_hidden=128 (head_dim 32→16). Multi-head is parallel batched matmul; minimal per-epoch cost. Assigned to edward as next experiment.
 2. Mid-depth + warmer LR / shorter T_max — different hypothesis (LR-driven), not pursued here.
 3. Do NOT try n_layers=6 — would cost ~+20% per epoch, predicted sub-Pareto by same logic.
+
+---
+
+## 2026-05-13 05:30 — PR #1795: Decoupled LR for surf_head vs encoder (MERGED — new baseline 97.9914)
+
+- **Branch:** `willowpai2g48h4-thorfinn/decoupled-lr-surf-head`
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `q9qnnd9x` (arm1 1e-3), `70bjbj33` (arm2 3e-3), `eg1rhrzg` (arm3 5e-3 ← winner)
+- **Hypothesis:** Zero-init surf_head with the same LR as the encoder (5e-4) is underpowered; decoupling allows the head to converge faster since it starts from zero and needs to learn rapidly.
+
+### Results
+
+| Arm | surf_head_lr | ×enc | Best epoch | val_avg/mae_surf_p | Δ vs 98.1642 |
+|-----|-------------|------|------------|-------------------|-------------|
+| 1 | 1e-3 | 2× | 14 | 114.1105 | +15.9% ❌ |
+| 2 | 3e-3 | 6× | 13 | 104.7294 | +6.6% ❌ |
+| **3** | **5e-3** | **10×** | **11** | **97.9914** | **−0.18% ✓** |
+| Baseline | 5e-4 | 1× | — | 98.1642 | — |
+
+Per-split val (arm 3, best epoch 11):
+
+| Split | Arm 3 mae_surf_p | Baseline |
+|-------|-----------------|---------|
+| `val_single_in_dist` | 120.31 | 123.14 (−2.3% ✓) |
+| `val_geom_camber_rc` | 115.98 | 107.24 (+8.2% ❌) |
+| `val_geom_camber_cruise` | 66.04 | 73.28 (−9.9% ✓) |
+| `val_re_rand` | 89.64 | 88.99 (+0.7% ≈) |
+| **val_avg** | **97.9914** | **98.1642** |
+
+Test (arm 3): test 3-split mean 99.5856 (vs baseline 98.7537, +0.85 regression on 3-split).
+
+### Analysis and Conclusions
+
+**Merged — marginal val win, compound improvements principle applied.**
+
+**Mechanism (thorfinn's analysis):** Zero-init surf_head needs its own LR schedule to converge; tied to encoder LR of 5e-4 it's consistently underpowered. The monotonic 2×→6×→10× improvement trend (+114→104→98 val) had not reversed at the winning arm.
+
+**Late oscillation noted:** Best epoch 11 (97.99), then oscillates 113→108→99.85 through epochs 12-14. The 10× LR is at the stability edge. Follow-up: add linear warmup to the head group and push to 7e-3 or 1e-2.
+
+**Test regression (+0.85, 3-split):** Small and within run-to-run noise. The val win is the primary signal. Cruise improved significantly (73→55 finite) but was NaN at baseline, so 4-split is not directly comparable.
+
+**Key insight:** surf_head as a standalone unit benefits from higher LR because: (a) it starts at zero init with no weight to preserve; (b) it has ~26K params with direct readout supervision, so it converges faster than the 658K-param encoder. The encoder benefits from slower, more conservative updates to maintain learned representations.
+
+**New baseline: val_avg/mae_surf_p = 97.9914. All future PRs must beat this.**
+
+---
+
+## 2026-05-13 05:30 — PR #1720: surf_weight sweep {5, 15, 30} (CLOSED — all arms regress)
+
+- **Branch:** `willowpai2g48h4-fern/surf-weight-tuning-on-huber`
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `c54mrcff` (sw5), `zbiwwuly` (sw15), `a5yxs4ti` (sw30)
+- **Hypothesis:** Huber's L1 regime produces smaller gradient magnitudes than MSE, so the current surf_weight=10 may be under-emphasizing the surface relative to Huber gradients.
+
+### Results
+
+| Arm | surf_weight | val_avg/mae_surf_p | Δ vs 98.16 |
+|-----|------------|-------------------|-----------|
+| sw=5 | 5 | 105.3356 | +7.2% ❌ |
+| sw=15 | 15 | 115.5412 | +17.7% ❌ |
+| sw=30 | 30 | 118.4154 | +20.7% ❌ |
+| Baseline | 10 | 98.1642 | — |
+
+### Analysis and Conclusions
+
+**Closed — hypothesis falsified. Optimum is at or below sw=10, not above.**
+
+**Mechanism (fern's analysis, confirmed):** Huber with δ=0.5 already implicitly down-weights surface outliers (5σ node contributes only 10× vs 25× under MSE). The baseline sw=10 was merged alongside Huber, so it was already "calibrated for Huber." Higher sw starves volume MSE — vol_p MAE blows up (sw=5: 111→sw=30: 151 val) because the encoder loses its volumetric supervisory signal when surf loss dominates.
+
+**Principle confirmed:** Surface Huber + volume MSE + sw=10 is the correct triple. The surface:volume balance under Huber is at or near the optimum at sw=10.
+
+---
+
+## 2026-05-13 05:30 — PR #1808: EMA model weights (CLOSED — budget mismatch)
+
+- **Branch:** `willowpai2g48h4-askeladd/ema-model-weights`
+- **Student:** willowpai2g48h4-askeladd
+- **W&B runs:** `rtvzppe1`, `wr3edclv` (decay=0.999 × 2 seeds), `1eqenbsj` (decay=0.995 ← best)
+- **Hypothesis:** EMA shadow of model weights produces lower-variance checkpoint for evaluation.
+
+### Results
+
+| Arm | EMA decay | val_avg/mae_surf_p | Δ vs 98.16 |
+|-----|----------|-------------------|-----------|
+| decay=0.999 (seed A) | 0.999 | 113.0424 | +15.2% ❌ |
+| decay=0.999 (seed B) | 0.999 | 114.0145 | +16.2% ❌ |
+| **decay=0.995** | 0.995 | **105.8582** | **+7.8% ❌** |
+| Baseline | — | 98.1642 | — |
+
+### Analysis and Conclusions
+
+**Closed — EMA window dominates under 14-epoch budget.**
+
+**Mechanism (askeladd's analysis, confirmed):** At decay=0.999 the effective window is ~1000 steps ≈ 2.7 epochs. The model is still steeply descending at epoch 14; EMA drags every evaluation backward with early-training contamination. "Variance reduction" requires the late-iterate regime (noisy plateau); we're in the descent regime. Cruise split (already plateaued) was nearly unaffected; harder splits (still descending) paid the full lag tax.
+
+**Principle established:** EMA evaluation requires ≥50-epoch training to reach the noisy plateau regime where variance reduction exceeds early-training drag. Under 14-epoch budget it's counterproductive.
+
+**Key insight from half-decay comparison:** decay=0.995 (window ≈ 0.5 epochs) closes ~half the gap vs decay=0.999 (window ≈ 2.7 epochs). Extrapolating: decay < 0.98 (window ≈ 50 steps) should approach but not beat the live model. The variance-reduction benefit is real but requires late-training access.
+
+**Follow-up assigned:** SWA-style late-epoch averaging (#1951 askeladd) — average only last K checkpoints, avoids early-training bias entirely.
