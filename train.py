@@ -426,6 +426,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    surf_head_hidden: int = 64  # hidden dim for SurfaceCorrection head (legacy = 64)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -474,10 +475,12 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
+surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=cfg.surf_head_hidden).to(device)
 all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
+surf_head_params = sum(p.numel() for p in surf_head.parameters())
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
+print(f"[surf_head] hidden={cfg.surf_head_hidden}, params={surf_head_params/1e6:.4f}M")
 
 _head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
 optimizer = torch.optim.AdamW(
@@ -499,6 +502,7 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "surf_head_params": surf_head_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
