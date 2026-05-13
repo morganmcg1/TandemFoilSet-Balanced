@@ -8,6 +8,107 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 01:00 — PR #1713 (askeladd grad-clip max_norm=10 — H15 bracket below) — **CLOSED**
+
+- Branch: `charliepai2g24h4-askeladd/grad-clip-10`
+- Hypothesis: bracket below merged max_norm=25 (single-line edit). Completes
+  the fixed-threshold sweep around 25.
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | 94.121 | 90.294 | **+4.24%** |
+| test_avg/mae_surf_p (4-split) | 84.561 | 81.243 | +4.08% |
+| Epochs with pre-clip norm > threshold | 15/15 (100%) | n/a | — |
+
+- **Outcome B confirmed: max_norm=25 is the local optimum.** Bracket
+  geometry: +5.4% (1.0) / +4.24% (10) / 0% (25) / +3.32% (50). Asymmetric
+  — tighter direction (10 → +4.24%) costs more than looser direction
+  (50 → +3.32%). Heavy 30–70 norms carry partial signal; clipping them
+  to 25 helps via variance reduction, clipping all the way to 10 destroys
+  signal.
+- **All four val splits regress uniformly** (largest hit val_single_in_dist
+  +6.16%, smallest val_re_rand +2.85%). Same uniform-direction pattern
+  as #1637 (the merged win) and #1674 (the upper-bracket loss), confirming
+  this is a global regularization mechanism.
+- **15/15 epochs had pre-clip norms above the threshold** — the entire
+  training trajectory was continuously clipped, basically destroying the
+  per-step gradient direction. The 100% clipping is qualitatively
+  different from #1674's 40% — too aggressive.
+- **Fixed-threshold grad-clip direction now closed.** Bracket fully
+  characterized. Next: adaptive clipping (running-quantile based) per
+  the PR's pre-registered follow-up.
+
+## 2026-05-13 00:55 — PR #1677 (nezuko H12 per-node adaptive temperature) — **CLOSED**
+
+- Branch: `charliepai2g24h4-nezuko/per-node-temp-h12`
+- Hypothesis: per-node deterministic temperature `τ_i = τ_0 + Linear(x_mid)_i`
+  clamped at floor 0.1. Identity-init (zero linear weights). Attacks
+  slice-collapse without sampling noise (clean pivot from #1553 Gumbel).
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14/15) | 93.097 | 90.294 | **+3.11%** |
+| test_avg/mae_surf_p (4-split) | 82.813 | 81.243 | +1.93% |
+| n_params | 662,509 | 662,359 | +150 (+660 nominal, weight tying counted) |
+| τ.std @ ep 14 | 0.340 | n/a | — |
+| τ floor_fraction @ ep 8 | 0.361 | n/a | — |
+
+- **Mechanism verified, outcome rejected.** τ head learned: identity-init
+  → non-trivial spread (std=0.34, range [0.10, 1.80]) by best epoch.
+  But 36% floor-fraction by ep8 indicates the model is pushing roughly
+  a third of nodes to maximally sharp slice assignments. The PR pre-flagged
+  this as a "binding too often" signal.
+- **Per-split regression concentrated on splits the hypothesis predicted
+  would benefit most** — val_single_in_dist (+5.29 absolute MAE),
+  val_geom_camber_rc (+5.03). The cruise and re_rand splits are nearly
+  neutral, as expected since they have less boundary-layer structure.
+- **Student's mechanistic interpretation:** "aggressive sharpening on
+  boundary-layer nodes commits the slice assignment too early, before
+  the slice-token MLP has converged on good slice-level representations."
+  Plausible and matches the per-split asymmetry.
+- **Slice-collapse direction closed.** Three independent arms have now
+  failed:
+  - #1514 Ada-Temp v1/v2 (per-head scalar τ) — closed +3.4%
+  - #1553 Gumbel-Softmax slice noise — closed +4.4% (3-run mean)
+  - #1677 H12 per-node deterministic τ — closed +3.11%
+- The wave-5-candidate H12-followup-floor-sweep is **dropped**: re-perturbing
+  the same dimension we've now shown doesn't carry the signal would just
+  burn GPU on a closed direction.
+
+## 2026-05-13 00:50 — PR #1612 (tanjiro stoch-depth drop_rate=0.05) — **CLOSED**
+
+- Branch: `charliepai2g24h4-tanjiro/stoch-depth-0.05`
+- Hypothesis: halve the linear stoch-depth schedule from
+  `[0,0.025,0.05,0.075,0.10]` to `[0,0.0125,0.025,0.0375,0.05]`. The
+  PR body's original target was the +1.77% regression on val_re_rand
+  vs pre-#1552 baseline.
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 13/14) | 102.65 | 90.294 | **+13.7%** |
+| test_avg/mae_surf_p (4-split) | 91.264 | 81.243 | +12.3% |
+
+- **Note: writeup compared against pre-#1611/#1637 baseline (98.353), giving
+  +4.4%.** Against the current advisor HEAD baseline (90.294), the
+  regression is +13.7%. The mechanistic conclusions still hold — they're
+  about per-split direction, not absolute level.
+- **Split-asymmetric response — the key finding.** val_re_rand DID recover
+  as hypothesised (-3.03% from the prior over-regularization), but
+  val_geom_camber_rc blew up by +13.33% in the opposite direction. OOD
+  geometry splits want MORE regularization; the Re sweep wants LESS.
+  A single global drop rate can't satisfy both.
+- **No overfitting under merged 0.10** — train surf_loss 0.282 ≈ val
+  surf_loss 0.285 at the best epoch. Cutting drop in half didn't liberate
+  any frozen useful capacity; it just produced noisier gradients with
+  weaker implicit ensembling.
+- **Reproducibility check:** independent launch at 23:03 produced val_avg
+  101.5 — same regression direction, small run-to-run noise.
+- **Pivot direction: pre-registered drop_rate=0.15 follow-up.** Test
+  whether hard OOD geometry splits want even more regularization. If
+  0.15 helps val_geom_camber_rc while keeping val_re_rand neutral, that's
+  a winner. If 0.15 also regresses, the stoch-depth single-knob direction
+  is at its local optimum at 0.10.
+
 ## 2026-05-13 00:08 — PR #1675 (alphonse H17 per-channel output γ, β) — **CLOSED**
 
 - Branch: `charliepai2g24h4-alphonse/out-scale-bias-h17`
