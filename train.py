@@ -47,6 +47,40 @@ from data import (
     pad_collate,
 )
 
+
+class ModelEMA:
+    """Exponential moving average of model parameters for evaluation."""
+    def __init__(self, model, decay=0.9999):
+        self.decay = decay
+        self.shadow = {name: p.detach().clone()
+                       for name, p in model.named_parameters() if p.requires_grad}
+        self._backup = None
+
+    @torch.no_grad()
+    def update(self, model):
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            self.shadow[name].mul_(self.decay).add_(p.detach(), alpha=1.0 - self.decay)
+
+    @torch.no_grad()
+    def apply_to(self, model):
+        assert self._backup is None, "apply_to called twice without restore"
+        self._backup = {}
+        for name, p in model.named_parameters():
+            if name in self.shadow:
+                self._backup[name] = p.detach().clone()
+                p.data.copy_(self.shadow[name])
+
+    @torch.no_grad()
+    def restore(self, model):
+        assert self._backup is not None, "restore called without apply_to"
+        for name, p in model.named_parameters():
+            if name in self._backup:
+                p.data.copy_(self._backup[name])
+        self._backup = None
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -463,6 +497,9 @@ except Exception as e:
     compile_error = repr(e)
     print(f"torch.compile: skipped ({compile_error})")
 
+ema = ModelEMA(model, decay=0.9999)
+print(f"EMA: decay=0.9999 (half-life ~6931 steps)")
+
 
 def amp_ctx_factory():
     if torch.cuda.is_available():
@@ -525,6 +562,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -534,7 +572,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate using EMA weights ---
+    ema.apply_to(model)
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
@@ -542,6 +581,7 @@ for epoch in range(MAX_EPOCHS):
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+    ema.restore(model)
     dt = time.time() - t0
 
     tag = ""
@@ -552,7 +592,10 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Save EMA weights (which produced this val score)
+        ema.apply_to(model)
         torch.save(model.state_dict(), model_path)
+        ema.restore(model)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -571,7 +614,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p(EMA)={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
