@@ -8,6 +8,31 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 10:50 — PR #1438: 5-epoch linear LR warmup before cosine decay (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **75.9562** (W&B run `d1lqln08`; warmup-3ep sibling `fzxx54lu` at 76.72)
+- **`test_avg/mae_surf_p` (4-split, finite):** **67.5326**
+- **Per-split val surface-p MAE (`d1lqln08`, warmup-5ep, best-val epoch 19):**
+  - val_single_in_dist: 88.79  (vs 90.76 baseline → −2.2%)
+  - val_geom_camber_rc: 89.23  (vs 90.73 → −1.7%)
+  - val_geom_camber_cruise: 54.47  (vs 54.88 → −0.7%)
+  - val_re_rand: 71.33  (vs 73.12 → −2.4%)
+- **Per-split test surface-p MAE (`d1lqln08`, 4-split clean):**
+  - test_single_in_dist: 80.20  (vs 79.88 → +0.3% slight regress)
+  - test_geom_camber_rc: 79.83  (vs 81.08 → −1.5%)
+  - test_geom_camber_cruise: 45.41  (vs 45.88 → −1.0%)
+  - test_re_rand: 64.70  (vs 65.99 → −2.0%)
+- **W&B run:** `d1lqln08` (warmup-5ep); sibling `fzxx54lu` (warmup-3ep, val=76.72 / test=67.24)
+- **W&B group:** `willow-r3-warmup-5ep`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5
+  ```
+
+**Mechanism summary**: 5-epoch linear LR warmup ramps from 0 to peak LR over epochs 1-5, then hands off to the existing CosineAnnealingLR(T_max=50). Improvement is small but consistent: 4/4 val splits improve, 3/4 test splits improve, test_avg −1.00%. Both warmup arms beat baseline; warmup-5ep slightly better on val, warmup-3ep slightly better on test_avg (67.24 vs 67.53). The directional signal across 8 sub-metrics is clean despite in-band magnitude. The improvement is plausibly from stabilized early-training dynamics — warmup prevents overshooting the initial learning-rate peak and landing in a worse basin.
+
+**Key open question**: warmup effect may be larger if combined with a longer schedule. The cosine LR was still at ~37% of peak at epoch 19 (same as AMP baseline) — warmup doesn't change epoch budget. The principal next gain axis is improving the per-epoch learning rate coverage, not reducing early-epoch instability.
+
 ## 2026-05-13 06:51 — PR #1440: bfloat16 AMP (torch.autocast) on top of EMA+SmoothL1+grad-clip (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **77.3716** (W&B run `30wvu5r0`; AMP-only supplementary arm `rn1gkw8h` at 86.03)
