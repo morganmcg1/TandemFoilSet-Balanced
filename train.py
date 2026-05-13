@@ -246,12 +246,47 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict[str, float]:
+# --- Reflection TTA helpers -------------------------------------------------
+# Dataset axis convention: input x dim 0 = global x (chord-direction), dim 1 = global z
+# (perpendicular-to-chord). Target channel 1 is Uy (= U_z, velocity z-component).
+# For a chord-perpendicular reflection the following raw features negate sign:
+#   - dim 1  (z position)
+#   - dim 14 (AoA foil 1, radians)
+#   - dim 18 (AoA foil 2, radians)
+# Output Uy negates. saf/dsdf semantics are not documented in this repo, so we
+# leave them unchanged (conservative). NACA is camber magnitude (always >=0).
+REFLECT_X_DIMS = (1, 14, 18)
+
+
+def _reflect_x_norm(x_norm: torch.Tensor, x_mean: torch.Tensor, x_std: torch.Tensor) -> torch.Tensor:
+    """Apply chord-perpendicular reflection in normalized feature space.
+
+    For raw feature v at dim d, mirrored value is -v. In normalized space:
+        norm(-v) = (-v - mean[d]) / std[d] = -norm(v) - 2 * mean[d] / std[d].
+    """
+    x_ref = x_norm.clone()
+    for d in REFLECT_X_DIMS:
+        x_ref[..., d] = -x_norm[..., d] - 2.0 * x_mean[d] / x_std[d]
+    return x_ref
+
+
+def _reflect_pred(pred: torch.Tensor) -> torch.Tensor:
+    """Reflect the prediction back to original frame: negate Uy (channel 1)."""
+    pred_ref = pred.clone()
+    pred_ref[..., 1] = -pred[..., 1]
+    return pred_ref
+
+
+def evaluate_split(model, surf_head, loader, stats, surf_weight, device,
+                   use_tta: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    If ``use_tta`` is True, applies chord-perpendicular reflection TTA: forward
+    on (x, reflect(x)), reflect the second prediction back, average.
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -269,6 +304,12 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             pred = surf_head(pred, x_norm, is_surface)
+            if use_tta:
+                x_norm_ref = _reflect_x_norm(x_norm, stats["x_mean"], stats["x_std"])
+                pred_ref = model({"x": x_norm_ref})["preds"]
+                pred_ref = surf_head(pred_ref, x_norm_ref, is_surface)
+                pred_ref = _reflect_pred(pred_ref)
+                pred = 0.5 * (pred + pred_ref)
 
             # Guard: data/scoring.py:accumulate_batch has inf*0=NaN when GT has
             # non-finite values. Pre-filter here: nan_to_num both tensors so no
@@ -437,6 +478,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    use_reflection_tta: bool = False  # If True, also evaluate val + test with chord-perpendicular reflection TTA after training. The per-epoch val (used for checkpoint selection) always runs without TTA, so checkpoint selection matches the baseline.
 
 
 cfg = sp.parse(Config)
@@ -743,12 +785,14 @@ if best_metrics:
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
             for name, ds in test_datasets.items()
         }
+        _t_eval_start = time.time()
         test_metrics = {
             name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
+        test_eval_s = time.time() - _t_eval_start
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}  (eval {test_eval_s:.1f}s)")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
 
@@ -758,8 +802,65 @@ if best_metrics:
                 test_log[f"test/{split_name}/{k}"] = v
         for k, v in test_avg.items():
             test_log[f"test_{k}"] = v
+        test_log["test_eval/no_tta_seconds"] = test_eval_s
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # --- Reflection-TTA evaluation on the best checkpoint -------------------
+    if cfg.use_reflection_tta:
+        print("\nRe-evaluating best checkpoint with chord-perpendicular reflection TTA...")
+        _t_val_start = time.time()
+        val_tta_metrics = {
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                                 use_tta=True)
+            for name, loader in val_loaders.items()
+        }
+        val_tta_eval_s = time.time() - _t_val_start
+        val_tta_avg = aggregate_splits(val_tta_metrics)
+        print(f"\n  VAL-TTA  avg_surf_p={val_tta_avg['avg/mae_surf_p']:.4f}  (eval {val_tta_eval_s:.1f}s)")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, val_tta_metrics[name])
+
+        val_tta_log: dict[str, float] = {}
+        for split_name, m in val_tta_metrics.items():
+            for k, v in m.items():
+                val_tta_log[f"val_tta/{split_name}/{k}"] = v
+        for k, v in val_tta_avg.items():
+            val_tta_log[f"val_tta_{k}"] = v
+        val_tta_log["val_tta_eval/seconds"] = val_tta_eval_s
+        wandb.log(val_tta_log)
+        wandb.summary.update(val_tta_log)
+        # Convenience: baseline (epoch-best, no TTA) val numbers in same units
+        best_per_split = best_metrics.get("per_split", {})
+        baseline_val_log: dict[str, float] = {}
+        for split_name, m in best_per_split.items():
+            for k, v in m.items():
+                baseline_val_log[f"val_baseline/{split_name}/{k}"] = v
+        baseline_val_log["val_baseline/avg_surf_p"] = best_avg_surf_p
+        wandb.summary.update(baseline_val_log)
+
+        if not cfg.skip_test:
+            _t_test_start = time.time()
+            test_tta_metrics = {
+                name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                                     use_tta=True)
+                for name, loader in test_loaders.items()
+            }
+            test_tta_eval_s = time.time() - _t_test_start
+            test_tta_avg = aggregate_splits(test_tta_metrics)
+            print(f"\n  TEST-TTA  avg_surf_p={test_tta_avg['avg/mae_surf_p']:.4f}  (eval {test_tta_eval_s:.1f}s)")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, test_tta_metrics[name])
+
+            test_tta_log: dict[str, float] = {}
+            for split_name, m in test_tta_metrics.items():
+                for k, v in m.items():
+                    test_tta_log[f"test_tta/{split_name}/{k}"] = v
+            for k, v in test_tta_avg.items():
+                test_tta_log[f"test_tta_{k}"] = v
+            test_tta_log["test_tta_eval/seconds"] = test_tta_eval_s
+            wandb.log(test_tta_log)
+            wandb.summary.update(test_tta_log)
 
     save_model_artifact(
         run=run,
