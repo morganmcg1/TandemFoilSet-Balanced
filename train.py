@@ -467,6 +467,9 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    # Per-sample Gaussian jitter on log(Re) (input dim 13), train-only.
+    # Applied to a clone of x so the Re-weight loss term sees the original value.
+    re_jitter_std: float = 0.0
 
 
 cfg = sp.parse(Config)
@@ -598,7 +601,24 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
-        x_norm = (x - stats["x_mean"]) / stats["x_std"]
+        # Re-jitter on the model-input copy of dim 13 (log(Re)) only.
+        # Clone first so the Re-weight loss term below reads the original value.
+        jitter_diag: dict | None = None
+        if cfg.re_jitter_std > 0:
+            re_noise = torch.randn(x.shape[0], 1, 1, device=x.device) * cfg.re_jitter_std  # [B, 1, 1]
+            x_for_model = x.clone()
+            pre_re_mean = x[..., 13].mean().item()
+            x_for_model[..., 13:14] = x_for_model[..., 13:14] + re_noise
+            post_re_mean = x_for_model[..., 13].mean().item()
+            jitter_diag = {
+                "train/x_re_input_pre_jitter_mean": pre_re_mean,
+                "train/x_re_input_post_jitter_mean": post_re_mean,
+                "train/re_jitter_realized_std": re_noise.std().item() if re_noise.numel() > 1 else 0.0,
+            }
+        else:
+            x_for_model = x
+
+        x_norm = (x_for_model - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
         sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
@@ -632,7 +652,7 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        wandb.log({
+        batch_log = {
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
             "train/re_weight_min": re_weight.min().item(),
@@ -641,7 +661,10 @@ for epoch in range(MAX_EPOCHS):
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
             "global_step": global_step,
-        })
+        }
+        if jitter_diag is not None:
+            batch_log.update(jitter_diag)
+        wandb.log(batch_log)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
