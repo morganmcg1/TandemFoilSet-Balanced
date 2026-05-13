@@ -2264,3 +2264,68 @@ All splits regress. OOD splits worst: geom_camber_cruise val +10.78%, re_rand te
 
 **Next FiLM lever must operate OUTSIDE the head architecture.** The FiLM head itself is well-tuned; the next opportunity is: what the head SEES (input conditioning), what it FEEDS INTO (surface-only gating), or how it COMPOSES (deeper stack at different abstraction levels with different conditioners).
 
+---
+## 2026-05-13 13:30 — PR #1873 CLOSED willowpai2g48h2-fern (SDF on RFF+Kendall): CLEAN NEGATIVE — geometry-as-raw-input axis confirmed closed
+
+- **Branch:** `willowpai2g48h2-fern/sdf-feature-on-clipfilm`
+- **Result:** SWA val=**74.92** (+6.08% vs RFF+Kendall baseline 70.63), test=**65.69** (+5.79% vs 62.09)
+- W&B run: (per student's PR comment)
+
+### Per-split regression (vs RFF baseline)
+
+| Split | RFF baseline | #1873 (SDF) | Δ val | Δ test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 78.74 / 69.24 | 84.16 / 73.61 | +6.88% | +6.32% |
+| geom_camber_rc | 84.06 / 75.74 | 88.45 / 80.21 | +5.22% | +5.91% |
+| geom_camber_cruise | 50.11 / 41.42 | 52.91 / 43.79 | +5.59% | +5.72% |
+| re_rand | 69.59 / 61.96 | 74.16 / 65.16 | +6.57% | +5.17% |
+| **avg** | **70.63 / 62.09** | **74.92 / 65.69** | **+6.08%** | **+5.79%** |
+
+ALL four splits regress uniformly. Even the original target bottleneck (geom_camber_rc) gets worse. Student concurs CLOSE.
+
+### Mechanism findings (banked — important)
+
+1. **SDF and Kendall compete (not compound) on `test_single_in_dist` headroom.** Pre-Kendall SDF baseline had val=74.89; Kendall+SDF has val=74.92 — Kendall is essentially a no-op when stacked on top of SDF. Both mechanisms appear to draw on the same in-distribution improvement budget.
+
+2. **Kendall σ-head is robust to input-channel additions.** Adding +1 SDF channel produced σ drift ≤0.006 vs Kendall-only. σ-adaptation conditions on output statistics, not input dimensionality. (Useful for evaluating future input-encoding experiments.)
+
+3. **Geometry-as-raw-input axis closes on the RFF+Kendall stack.** Sign that geometry features need to be injected through learned representations (coordinate encoding via RFF, attention biases) rather than concatenated as raw scalars. RFF itself is the working mechanism for adding geometric structure.
+
+### Closed axes: geometry-as-raw-input attempts (this is the 2nd close in the family)
+
+- Curvature features were considered (researcher-agent idea #3) — same family as SDF, deferred indefinitely.
+- Next geometry attack must be **through attention or coordinate encoding**, not channel concat.
+
+---
+## 2026-05-13 13:35 — PR #2215 WITHDRAWN willowpai2g48h2-fern (DropPath on RFF+Kendall): closed before student start, prior closure registry hit
+
+- **Branch:** `willowpai2g48h2-fern/droppath-on-rff-kendall`
+- **Why withdrawn:** Audit revealed PR #1680 already tested `drop_path_rate=0.1` uniform on the same 5-layer architecture (fern, closed 2026-05-13). Result: val=109.52 / test=99.35 = +14.4% / +15.3% regression. **Mechanism finding from #1680 closure: at 5 layers, dropping any block removes 20% of the effective forward path — layer-count-dependent under-convergence pathology, not strength-dependent.** PR #2016 (askeladd-edward) was withdrawn 2026-05-13 07:07 for the same reason. My linear-0.1 setting (avg 5%) was what #2016 had flagged as "too gentle to matter on 5 blocks" — even if it converged, the literature-prior gain is correspondingly weaker.
+- **Process lesson:** must search closure registry before assigning. Tracked.
+
+---
+## 2026-05-13 13:50 — PR #2220 ASSIGNED willowpai2g48h2-fern (LayerScale CaiT-style on RFF+Kendall): residual-rescaling regularization (replaces #2215)
+
+- **Branch:** `willowpai2g48h2-fern/layerscale-on-rff-kendall`
+- **Hypothesis:** LayerScale (Touvron et al. ICCV 2021 "Going Deeper with Image Transformers / CaiT") — replace each residual addition `x + branch(x)` with `x + γ ⊙ branch(x)` where γ is a learnable per-channel parameter initialized at 1e-4. **Mechanism-distinct from DropPath:** scales residuals continuously rather than dropping them stochastically — no under-convergence risk.
+- **Mechanism axis:** Architecture-level residual rescaling (orthogonal to all 7 in-flight PRs). Effectively a soft depth-annealer: t=0 residuals nearly inactive, growing where signal is useful.
+- **Why this clears #1680's closure:** DropPath was closed for *removing forward-path fraction* on a 5-layer net. LayerScale never removes the forward path — γ is continuous and gradient-driven. Plus LayerScale has been the de-facto regularizer in modern ViTs (CaiT, ConvNeXt, BEiT) since 2021.
+- **Prediction:** val < 70.63 by 0.5–1.5%, biggest gain on `val_geom_camber_rc` (84.06 still our largest bottleneck) — γ should amplify FiLM-conditioned channels that RFF helped on camber.
+- **Run:** single-arm, layerscale_init=1e-4, all other config identical to PR #2082 reproduce command.
+
+### Banked: known-tried regularization axes (do not re-launch)
+
+- ✗ DropPath uniform 0.1 (#1680) — under-convergence at 5 layers
+- ✗ DropPath sweep {0.1, 0.2} linear (#2016 withdrawn) — same mechanism concern
+- ✗ Attention dropout 0.1 (#1733) — closed
+- ✗ Position-jitter σ=0.01 (#1907) — closed
+- ✗ Re-jitter σ=0.05 (#1787) — closed
+- ✗ AdamW weight decay sweep {3e-4, 1e-3} (#1981) — wd not biting
+
+### Open regularization axes after #2220 launches
+
+- LayerScale (CaiT, this PR #2220) — residual rescaling
+- Mixup / sample interpolation — never tried, could close OOD gap
+- Surface-normal aux head — never tried, geometry signal without input concat
+- Re-conditional attention bias — directly addresses #2049 finding (test_re_rand from Re-conditional interactions, not Re-info loss)
+

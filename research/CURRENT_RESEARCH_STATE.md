@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 12:50 (ANOTHER BIG WIN: #2021 edward OneCycleLR max_lr=1e-3 verified val=67.19/test=59.01 = −5.94%/−6.31% vs Kendall — even beats new RFF baseline WITHOUT RFF — sent back for RFF+Kendall rerun; closed #1938 tanjiro per-token FiLM (4th FiLM-head modification to regress, key finding: shared-γ is the right inductive bias); assigned tanjiro #2187 swa-start-0p6. Two massive rebases pending: #2063 Lion (30%) and #2021 OneCycle (6%). Previous: #2063 Lion verified; merged #2082 RFF σ=1.0)
+- **Last updated:** 2026-05-13 13:55 (closed #1873 fern SDF clean negative on RFF+Kendall — SDF/Kendall compete on test_single_in_dist, geometry-as-raw-input axis confirmed closed; assigned fern #2220 LayerScale (CaiT-style residual gain γ_init=1e-4) — fresh architecture-rescaling axis. Withdrew #2215 DropPath after discovering prior closure #1680 (under-convergence at 5 layers) — process lesson logged. Two massive rebases pending: #2063 Lion (30%) and #2021 OneCycle (6%). Previous: merged #2082 RFF σ=1.0; closed #1938 per-token FiLM)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -42,7 +42,11 @@
 
 - **PR #1981 (nezuko, wd-sweep) CLOSED:** Best arm val=71.35, well within noise of Kendall baseline (71.43), now regresses vs new RFF baseline (70.63). Student's L2-norm diagnostics confirmed wd is not biting (total L2 delta of 0.043 over 13 epochs). Axis closes: wd is not a lever at lr=5e-4 and this run length.
 
-- **PR #1873 (fern, SDF) STILL WIP:** Sent back earlier for rebase+rerun on Kendall stack. Mechanism confirmed on pre-Kendall stack (test_single_in_dist −5.30%, test_geom_camber_rc −2.33%). Geometry-aware × multi-task-weighting are orthogonal axes. Need to confirm SDF × Kendall+RFF compounding.
+- **PR #1873 (fern, SDF) CLOSED 2026-05-13 13:30:** Clean negative on RFF+Kendall — val=74.92 (+6.08%), test=65.69 (+5.79%). ALL 4 splits regress; even original target bottleneck geom_camber_rc gets worse (+5.22% val). **Banked mechanism findings:** (1) SDF + Kendall **compete** on test_single_in_dist headroom (pre-Kendall SDF val=74.89 ≈ Kendall+SDF val=74.92 — Kendall is no-op on top of SDF); (2) Kendall σ-head is robust to input-channel additions (σ drift ≤0.006 with +1 SDF channel); (3) **Geometry-as-raw-input axis closes on RFF+Kendall stack** — geometry needs to be injected through learned representations (RFF/attention biases), not raw scalar concat.
+
+- **PR #2215 fern DropPath WITHDRAWN 2026-05-13 13:35:** Closed before student start. Process error: prior closure registry hit (PR #1680, fern, val=109.52 = +14.4% regression; **layer-count-dependent under-convergence pathology — at 5 layers, dropping any block removes 20% of forward path**). Same mechanism concern as #2016 withdrawal. Lesson: must search closure registry before assigning DropPath-family experiments.
+
+- **PR #2220 fern LayerScale ASSIGNED 2026-05-13 13:50:** Replacement for #2215 — CaiT-style learnable per-channel residual gain γ initialized at 1e-4 (Touvron et al. ICCV 2021). Mechanism-distinct from DropPath: scales residuals continuously rather than dropping stochastically — no under-convergence risk. Single-arm on RFF+Kendall stack.
 
 ## Most recent direction from human researcher team
 
@@ -72,9 +76,13 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 | #2063 ← REVISED | askeladd | `lion-optimizer-on-rff-kendall` (rebase pending) | Lion lr=3e-4 wd=3e-4 on full RFF+Kendall stack — rerun after verified 30% win on Kendall-only required rebase | val < 70.63 (likely val ∈ [48, 60] given Lion-on-Kendall = 50.19) |
 | #2021 ← RERUN | edward | `onecycle-maxlr-1e-3-on-rff-kendall` (rebase pending) | OneCycleLR max_lr=1e-3 + warmup on full RFF+Kendall stack — verified win val=67.19/test=59.01 on Kendall-only (−5.94%) | val < 70.63 (likely val ∈ [62, 67]) |
 | #2187 ← NEW | tanjiro | `swa-start-0p6` | Earlier SWA start (frac=0.6 → 4 SWA epochs vs 2) on RFF+Kendall | val < 70.63 |
-| #1873 (rerun) | fern | `sdf-feature-on-kendall` | Per-node SDF on Kendall+RFF stack | val < 70.63 |
+| #2220 ← NEW | fern | `layerscale-on-rff-kendall` | CaiT LayerScale γ_init=1e-4 — per-channel residual rescaling, mechanism-orthogonal | val < 70.63 |
 
 **#1938 tanjiro CLOSED:** per-token FiLM regressed +5.55% val. 4th FiLM-head modification to regress. Shared-γ IS the right inductive bias on 1499-sample dataset. FiLM-head axis is saturated.
+
+**#1873 fern CLOSED 2026-05-13:** SDF on RFF+Kendall, val=74.92 = +6.08% regression. Banked: SDF/Kendall compete; geometry-as-raw-input axis closed on RFF+Kendall stack.
+
+**#2215 fern DropPath WITHDRAWN:** prior closure #1680 (layer-count-dependent under-convergence at 5 blocks). Process error — registry not searched. Replaced with #2220 LayerScale (continuous residual rescaling, no under-convergence risk).
 
 ## Decision rule (vs new 70.63 baseline)
 
@@ -103,8 +111,8 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 - RFF num_features=32 (#2170 nezuko) — more spectral coverage
 - Lion optimizer sweep (#2063 askeladd) — fresh optimizer-family axis
 - OneCycleLR sweep (#2021 edward) — schedule-axis
-- Per-token FiLM (#1938 tanjiro) — structural FiLM modification
-- Per-node SDF (#1873 fern) — geometry-aware input axis
+- SWA earlier-start (#2187 tanjiro) — `swa_start_frac=0.6` (4 averaging epochs vs current 2)
+- LayerScale (#2220 fern) — CaiT-style per-channel residual gain, architecture-rescaling axis
 
 ### ✗ Closed (26 axes)
 
@@ -128,9 +136,10 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 - Asinh transform + Kendall: σ-adaptation mechanism incompatibility — closed
 - Learnable routing temperature: drift <10%, routing-sharpness axis closed
 - Position-jitter (node coord noise): 2-arm × 2-baseline regression — closed
-- DropPath sweep: withdrawn (15-epoch under-convergence)
-- **Aux-Re prediction (pooled hidden state)**: FiLM already preserves Re — closed ← NEW
-- **AdamW weight decay sweep {3e-4, 1e-3}**: not biting at this lr/budget — closed ← NEW
+- DropPath sweep: closed (#1680 uniform 0.1 val=109.52 = +14.4% regression, layer-count-dependent under-convergence at 5 blocks; #2016 + #2215 withdrawn for same mechanism concern)
+- **Aux-Re prediction (pooled hidden state)**: FiLM already preserves Re — closed
+- **AdamW weight decay sweep {3e-4, 1e-3}**: not biting at this lr/budget — closed
+- **Per-node SDF as input channel**: closed on RFF+Kendall (#1873) — SDF/Kendall compete on test_single_in_dist; geometry-as-raw-input axis closed ← NEW
 
 ## Key open bottlenecks
 
@@ -154,8 +163,12 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 ## Open questions to revisit on next review
 
 - **#2021 edward OneCycleLR:** arm 1 (max_lr=5e-4) finished at val=71.39 > new bar (70.63). Does arm 2 (max_lr=1e-3) clear 70.63?
-- **#1938 tanjiro per-token FiLM:** arm 1 finished at val=79.34 (big regression). Does arm 2 recover? Or close axis?
-- **#2063 askeladd Lion:** no result yet — Lion with {lr=1e-4 wd=1e-3, lr=3e-4 wd=3e-4}. High-information experiment: first non-AdamW optimizer test on this stack.
-- **#1873 fern SDF:** Rebase to Kendall+RFF in progress. SDF × RFF × Kendall compound test — three mechanism-orthogonal axes.
+- **#2063 askeladd Lion rebase:** rerun on full RFF+Kendall pending. Verified 30% win on Kendall-only — prediction val ∈ [48, 60].
+- **#2021 edward OneCycle rebase:** rerun on full RFF+Kendall pending. Verified 6% win on Kendall-only — prediction val ∈ [62, 67].
 - **#1757 frieren β=0.3:** Rerun on full current stack pending. High confidence this will improve (mechanism confirmed on 3 prior stacks).
-- **Researcher-agent output:** running in background — new creative hypotheses expected in `/research/RESEARCH_IDEAS_2026-05-13_12:00.md`
+- **#2168 thorfinn σ-refine {0.5, 2.0}:** brackets winning σ=1.0. If σ=0.5 lands → continue to σ=0.25.
+- **#2170 nezuko nfeatures=32:** more spectral coverage at σ=1.0.
+- **#2171 alphonse β=0.1:** outlier-suppression on RFF+Kendall stack.
+- **#2187 tanjiro swa-start-0.6:** 4 averaging epochs vs 2 — directly attacks the 30-min timeout SWA clip.
+- **#2220 fern LayerScale γ_init=1e-4:** fresh axis just assigned 2026-05-13 13:50.
+- **Researcher-agent output:** `/research/RESEARCH_IDEAS_2026-05-13_12:00.md` available for wave-9+ ideas.
