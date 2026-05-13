@@ -480,7 +480,81 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# --- Per-group LR scaling: optimizer-axis probe (PR #2457)
+# embed (preprocess/placeholder) and LayerScale gamma get 2x LR; attn/mlp/ln/other get 1x LR (base).
+# Use unwrapped model for clean named_parameters() iteration (avoids _orig_mod. prefix from torch.compile).
+_inner_for_groups = getattr(model, "_orig_mod", model)
+_embed_params: list[torch.nn.Parameter] = []
+_attn_params: list[torch.nn.Parameter] = []
+_mlp_params: list[torch.nn.Parameter] = []
+_ln_params: list[torch.nn.Parameter] = []
+_gamma_params: list[torch.nn.Parameter] = []
+_other_params: list[torch.nn.Parameter] = []
+_assigned_group: dict[str, str] = {}
+for _name, _p in _inner_for_groups.named_parameters():
+    if not _p.requires_grad:
+        continue
+    _nl = _name.lower()
+    if "preprocess" in _nl or "placeholder" in _nl or "slice_embed" in _nl:
+        _embed_params.append(_p)
+        _assigned_group[_name] = "embed"
+    elif "gamma" in _nl or "layerscale" in _nl:
+        _gamma_params.append(_p)
+        _assigned_group[_name] = "gamma"
+    elif "attn" in _nl or "attention" in _nl:
+        _attn_params.append(_p)
+        _assigned_group[_name] = "attn"
+    elif "mlp" in _nl or "ffn" in _nl:
+        _mlp_params.append(_p)
+        _assigned_group[_name] = "mlp"
+    elif "ln" in _nl or "norm" in _nl:
+        _ln_params.append(_p)
+        _assigned_group[_name] = "ln"
+    else:
+        _other_params.append(_p)
+        _assigned_group[_name] = "other"
+
+_embed_n = sum(p.numel() for p in _embed_params)
+_attn_n = sum(p.numel() for p in _attn_params)
+_mlp_n = sum(p.numel() for p in _mlp_params)
+_ln_n = sum(p.numel() for p in _ln_params)
+_gamma_n = sum(p.numel() for p in _gamma_params)
+_other_n = sum(p.numel() for p in _other_params)
+_grouped_n = _embed_n + _attn_n + _mlp_n + _ln_n + _gamma_n + _other_n
+_total_n = sum(p.numel() for p in _inner_for_groups.parameters() if p.requires_grad)
+print("Per-group LR sanity:")
+print(f"  embed={_embed_n} attn={_attn_n} mlp={_mlp_n} ln={_ln_n} gamma={_gamma_n} other={_other_n}")
+print(f"  group_sum={_grouped_n} model_total={_total_n} (must match)")
+if _grouped_n != _total_n:
+    print("Per-group assignment table:")
+    for _name, _group in _assigned_group.items():
+        print(f"  {_name} -> {_group}")
+    raise AssertionError(
+        f"Param grouping incomplete: group_sum={_grouped_n} != model_total={_total_n}"
+    )
+if _other_n > 0:
+    _other_names = [n for n, g in _assigned_group.items() if g == "other"]
+    print(f"  other_group members ({len(_other_names)}): {_other_names}")
+
+_groups_spec = [
+    ("embed", _embed_params, 2.0),
+    ("attn", _attn_params, 1.0),
+    ("mlp", _mlp_params, 1.0),
+    ("ln", _ln_params, 1.0),
+    ("gamma", _gamma_params, 2.0),
+    ("other", _other_params, 1.0),
+]
+_active_groups = [(n, ps, m) for n, ps, m in _groups_spec if len(ps) > 0]
+_group_names = [n for n, _, _ in _active_groups]
+optimizer = torch.optim.AdamW(
+    [{"params": ps, "lr": cfg.lr * m} for _, ps, m in _active_groups],
+    betas=(0.9, 0.999),
+    weight_decay=cfg.weight_decay,
+)
+print(
+    f"Per-group LR scaling: embed=2x ({cfg.lr*2.0:.2e}), gamma=2x ({cfg.lr*2.0:.2e}), "
+    f"attn/mlp/ln/other=1x ({cfg.lr:.2e}); first per-group LR optimizer probe; AdamW base unchanged"
+)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -495,7 +569,9 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     milestones=[warmup_epochs],
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print("LR check ep0 (per-group, post LinearLR warmup-factor 0.1 init):")
+for _i, _g in enumerate(optimizer.param_groups):
+    print(f"  group[{_i}] {_group_names[_i]:<6s} lr={_g['lr']:.6e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -553,7 +629,14 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
-    lr_now = optimizer.param_groups[0]['lr']
+    # Per-group LR (PR #2457): group 1 (attn) is the base 1x scale group, matches the
+    # historical single-group headline lr; per-group dict captured for the JSONL log.
+    lr_per_group = {_group_names[_i]: _g['lr'] for _i, _g in enumerate(optimizer.param_groups)}
+    lr_now = lr_per_group["attn"]
+    # Per-epoch LayerScale gamma growth tracking (mean |gamma| across blocks)
+    _gamma_inner = getattr(model, "_orig_mod", model)
+    _gamma_attn_abs = sum(blk.gamma_attn.detach().float().abs().mean().item() for blk in _gamma_inner.blocks) / len(_gamma_inner.blocks)
+    _gamma_mlp_abs = sum(blk.gamma_mlp.detach().float().abs().mean().item() for blk in _gamma_inner.blocks) / len(_gamma_inner.blocks)
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -585,6 +668,9 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": lr_now,
+        "lr_per_group": lr_per_group,
+        "gamma_attn_abs_mean": _gamma_attn_abs,
+        "gamma_mlp_abs_mean": _gamma_mlp_abs,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
@@ -595,6 +681,8 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"lr[base={lr_now:.3e} embed={lr_per_group['embed']:.3e} gamma={lr_per_group['gamma']:.3e}]  "
+        f"g[attn={_gamma_attn_abs:.4f} mlp={_gamma_mlp_abs:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
