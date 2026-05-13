@@ -305,7 +305,7 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             x_in = apply_rff(x_norm)  # PR #1657: replace raw (x,z) with RFF embedding
             pred = model({"x": x_in})["preds"]
 
-            # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+            # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,5]/7
             abs_err = (pred - y_target).abs()
             weighted = abs_err * channel_weights
             vol_mask = safe_mask & ~is_surface
@@ -497,7 +497,8 @@ warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_fact
 cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
-channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
+channel_weights = torch.tensor([1.0, 1.0, 5.0], device=device).view(1, 1, 3)
+print(f"channel_weights = {channel_weights.flatten().tolist()}  (sum={float(channel_weights.sum()):.1f}; loss normalized by sum)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -572,7 +573,7 @@ for epoch in range(MAX_EPOCHS):
                 f"(should be ~[-1,1])  x_in shape={tuple(x_in.shape)}"
             )
 
-        # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+        # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,5]/7
         abs_err = (pred - y_target).abs()
         weighted = abs_err * channel_weights
         vol_mask = mask & ~is_surface
