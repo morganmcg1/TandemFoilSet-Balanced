@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-13 09:35 — PR #2081: [per-channel-huber-delta] δ_v=0.5, δ_p=0.1 — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/per-channel-huber-delta
+- **Hypothesis**: Loosen velocity Huber δ (0.1→0.5) while keeping pressure δ=0.1. Physical intuition: velocity errors at high Re are physically meaningful and should not be over-clipped.
+- **Status**: CLOSED — +1.16% val regression. Mechanism clearly understood.
+
+| Metric | δ_v=0.5, δ_p=0.1 | Baseline (#2011) | Δ |
+|--------|------------------|-----------------|---|
+| val_avg/mae_surf_p | 29.2115 | 28.8762 | **+1.16% (WORSE)** |
+| test_avg/mae_surf_p | 25.0824 | 24.9992 | +0.33% |
+
+**Per-split:**
+
+| Split | val this | val base | Δval | test this | test base | Δtest |
+|-------|---------|---------|------|----------|---------|------|
+| single_in_dist | 28.8386 | 28.6013 | +0.83% | 28.5907 | 29.5300 | −3.18% |
+| geom_camber_rc | 40.9788 | 41.9483 | −2.31% | 38.2637 | 37.0266 | +3.34% |
+| geom_camber_cruise | 14.9267 | 14.1462 | +5.52% | 11.3704 | 11.0171 | +3.21% |
+| re_rand | 32.1018 | 30.8090 | +4.20% | 22.1046 | 22.4230 | −1.42% |
+| **avg** | **29.2115** | **28.8762** | **+1.16%** | **25.0824** | **24.9992** | **+0.33%** |
+
+**Diagnostic**: huber_l2_frac climbed 0.72→0.97 across training. Loosening velocity δ to 0.5 pushed nearly all velocity residuals into the quadratic regime — effectively making velocity loss pure rel-L2, removing the Huber tail entirely. This shifted optimization gradient mass away from pressure (primary metric). re_rand val regressed +4.20% — opposite of hypothesis.
+
+**Programme conclusion**: Loosening velocity δ is harmful. The inverse direction (tighter δ_p=0.05, velocity δ=0.1 unchanged) is better-motivated — concentrating pressure gradient signal in the quadratic regime — assigned to thorfinn as #2111.
+
+**Artifact**: `models/model-per-channel-huber-delta-20260513-082400/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:20 — PR #2077: [soap-linear-warmup] 3-epoch linear LR warmup before cosine — CLOSED
 
 - **Branch**: charliepai2g24h1-askeladd/soap-linear-warmup

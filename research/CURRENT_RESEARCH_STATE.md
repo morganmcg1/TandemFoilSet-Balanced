@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 09:25 (reviewed #2077 soap-linear-warmup closed; assigned tanjiro coord-translation-aug #2092, askeladd sgdr-warm-restarts #2095)
+- **Date**: 2026-05-13 09:40 (reviewed #2077/#2081 closed; re-assigned askeladd sgdr-warm-restarts-v2 #2110; assigned thorfinn huber-delta-p-tighter #2111)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -56,9 +56,9 @@ Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound wi
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2095 | askeladd | `sgdr-warm-restarts` | NEW | **HIGH** | CosineAnnealingWarmRestarts T_0=14, T_mult=1; 2 cosine cycles in 28 epochs |
+| #2110 | askeladd | `sgdr-warm-restarts-v2` | NEW | **HIGH** | CosineAnnealingWarmRestarts T_0=14, T_mult=1; 2 cosine cycles in 28 epochs |
+| #2111 | thorfinn | `huber-delta-p-tighter` | NEW | **HIGH** | δ_p=0.05 (tighter for pressure), δ_v=0.1 unchanged; concentrate p gradient |
 | #2092 | tanjiro | `coord-translation-aug` | NEW | **HIGH** | Rigid mesh translation NSE-invariant aug; distinct from per-node jitter |
-| #2081 | thorfinn | `per-channel-huber-delta` | WIP | **HIGH** | velocity δ=0.5, pressure δ=0.1 in Huber loss |
 | #2079 | fern | `n-layers-6` | WIP | **HIGH** | Deeper Transolver stack n_layers 5→6 (+20% depth) |
 | #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure; needs rebase onto 28.8762 |
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; needs rebase onto 28.8762 |
@@ -102,6 +102,7 @@ All 8 students active.
 - **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling. p_weight=5 is optimum.
 - **coord-jitter-aug** (#1963): +1.93% on rebased stack; per-node jitter doesn't compound with p_weight+ReFiLM
 - **soap-linear-warmup** (#2077): +1.38% val; no instability to fix + wastes budget epochs
+- **per-channel-huber-delta v1** (#2081): +1.16% val; loosening velocity δ to 0.5 removes Huber tail → pure L2 for velocity → gradient mass shifts away from pressure
 
 ---
 
