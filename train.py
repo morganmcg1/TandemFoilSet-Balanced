@@ -450,6 +450,7 @@ class Config:
     loss_fn: str = "mse"  # "mse", "smooth_l1", or "l1"
     smooth_l1_beta: float = 0.1
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
+    switch_ema_interval: int = 0  # 0 disables; >0 = every N global steps copy EMA params into live model (arxiv 2402.09240)
     amp: bool = False  # bfloat16 mixed precision autocast for fwd + loss
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 = disabled)
     fourier_k: int = 0  # 0 = off (baseline); K > 0 enables Fourier expansion of (x, z) into 4K features
@@ -593,6 +594,7 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 global_step = 0
+switch_count = 0
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -647,9 +649,25 @@ for epoch in range(MAX_EPOCHS):
                 for eb, b in zip(ema_model.buffers(), model.buffers()):
                     eb.data.copy_(b.data)
         global_step += 1
+        switch_event = 0
+        if (
+            ema_model is not None
+            and cfg.switch_ema_interval > 0
+            and global_step % cfg.switch_ema_interval == 0
+        ):
+            with torch.no_grad():
+                for p_live, p_ema in zip(model.parameters(), ema_model.parameters()):
+                    p_live.data.copy_(p_ema.data)
+                for b_live, b_ema in zip(model.buffers(), ema_model.buffers()):
+                    b_live.data.copy_(b_ema.data)
+            switch_count += 1
+            switch_event = 1
+            print(f"[SwitchEMA] step={global_step} swap #{switch_count}: EMA -> live")
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_norm": grad_norm.item(),
+            "train/switch_ema_event": switch_event,
+            "train/switch_ema_count": switch_count,
             "global_step": global_step,
         })
 
