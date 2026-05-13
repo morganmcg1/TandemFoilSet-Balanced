@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-14 05:50 UTC — Round 57
+
+**MAJOR WIN MERGED.** Lion optimizer #2524 beats AdamW baseline by -14.05% val / -18.92% test — largest single-PR gain since round-1. New baseline 36.3994. All subsequent PRs must beat this new bar.
+
+### PR #2524 edward: Lion optimizer (lr=1e-4, wd=3e-4, betas=(0.9, 0.99)) — MERGED ✓ (NEW BASELINE)
+
+- **Branch:** charliepai2g48h5-edward/lion-lr1e-4 (squash-merged 2026-05-14)
+- **Hypothesis:** Replace AdamW with Lion (Chen et al. 2023 sign-based momentum); update = sign(β₁m + (1-β₁)g); uniform step magnitude vs AdamW's adaptive 2nd-moment normalization.
+- **Metrics artifact:** `models/model-charliepai2g48h5-edward-lion-lr1e-4-20260513-191121/metrics.jsonl`
+
+| Metric | Lion (ep65) | Baseline #2307 (AdamW) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **36.3994** | 42.3455 | **−14.05% (WIN)** |
+| `test_avg/mae_surf_p` | **31.2200** | 38.5059 | **−18.92% (WIN)** |
+| `val_single_in_dist` | **28.5065** | 35.4776 | **−19.65%** |
+| `val_geom_camber_rc` | **52.3873** | 60.8311 | **−13.88%** (largest rc movement in launch) |
+| `val_geom_camber_cruise` | **23.6834** | 27.6517 | **−14.35%** |
+| `val_re_rand` | **41.0204** | 45.4214 | **−9.69%** |
+
+- **67/70 epochs (timeout), best=ep65, still improving monotonically at terminal.**
+- **CRITICAL diagnostic:** Lion momentum non-zero fraction = 0.9986 → fully populated; no stuck/zero-update pathology.
+- **Mechanism:** L1 loss already provides sign-based gradients; AdamW's 2nd-moment normalization approximately redundant in this sign-gradient regime. Lion's `sign(β₁m + (1-β₁)g)` commits to sign-direction signal directly. Additionally, Lion has no `v_hat` to track in bf16 — more numerically stable than AdamW's 2nd-moment EMA in low-precision. Test improves MORE than val (−18.92% vs −14.05%) → consistent with uniform step magnitudes providing slight regularization effect.
+- **val_geom_camber_rc: 60.83→52.39 (−13.88%)** — LARGEST single-PR rc OOD bottleneck movement in launch history.
+- **NOTE on in-flight PRs:** All 7 currently in-flight PRs (#2526, #2531, #2536, #2541, #2544, #2550, [various]) were assigned against the OLD AdamW baseline (42.3455). They will now be compared against the NEW Lion baseline (36.3994). Some may not beat it; this is expected as they were designed for AdamW-era stack.
+
+### New assignment
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2553 | edward | Lion lr=1.5e-4: 1.5× sweep above #2524 baseline lr=1e-4 (--epochs 70) | Lion LR optimization; ep65/67 still improving in #2524 → tests if faster convergence within budget; all other params unchanged; advisor branch has Lion merged |
+
+---
+
 ## 2026-05-14 05:30 UTC — Round 56
 
 One review-ready LOSS closed (24th closed taxon: input-encoding-noise interferes with slice-routing softmax) + 1 fresh hypothesis assigned (first slow-fast 2-loop meta-optimization probe).
