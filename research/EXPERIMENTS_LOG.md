@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-13 04:00 — PR #1814: lr=1e-3 + asinh stack (alphonse) — MERGED ✓
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-1e-3-warmup4`
+- **Hypothesis:** Push peak LR 7e-4 → 1e-3 with the 4-epoch warmup buffer, rebased on asinh base. Super-additive stacking predicted (asinh redistributes bulk capacity → higher LR escapes harder-split local minima without cruise overshoot).
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-1e-3-warmup4-asinh-20260513-032210/metrics.jsonl`
+
+### Results vs. #1777 baseline (asinh-only, 79.8623)
+
+| Split | Baseline (#1777) | lr=1e-3+asinh | Δ |
+|---|---|---|---|
+| val_single_in_dist | 97.455 | 89.672 | **−7.99%** |
+| val_geom_camber_rc | 94.889 | 92.482 | **−2.54%** |
+| val_geom_camber_cruise | 54.000 | 54.093 | +0.17% |
+| val_re_rand | 73.105 | 72.321 | **−1.07%** |
+| **val_avg/mae_surf_p** | **79.8623** | **77.1419** | **−3.40%** |
+| test_avg/mae_surf_p | 70.4297 | 67.6796 | −3.91% |
+
+**New baseline: val_avg/mae_surf_p = 77.1419**
+
+### Analysis
+
+**Super-additive stacking**: lr=1e-3 alone gave −0.52%, asinh alone gave −1.04%, combined gives −4.41% (2.8× super-additive). Mechanism: asinh compresses heavy-tail residuals → uniform gradient → higher LR can escape local minima on hard splits without overshooting easy splits. val_single −7.99% largest single-split gain in this branch. Epoch-5 peak-LR spike (seen in pre-asinh run) GONE — strict monotone descent. Asinh provides additional LR-peak gradient stability beyond its static bulk-redistribution effect.
+
+**Next axis:** lr=1.5e-3 (probe LR ceiling — monotone descent suggests headroom remains).
+
+---
+
 ## 2026-05-13 03:01 — PR #1815: Mesh node dropout 0.9 (askeladd) — SENT BACK (rebase + re-run)
 
 - **Branch:** `charliepai2g48h2-askeladd/node-dropout-0.9`
