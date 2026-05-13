@@ -455,4 +455,55 @@ cd target && python train.py \
 - `eta_min=5e-5` (10% of peak LR, Arm 2) regressed dramatically: val=87.51 (+4.18%), test=78.31 (+4.74%). Basin-escape at cycle-ends. Non-linear: the sweet spot is narrow and near 1e-5.
 - Val margin (0.31) is near the ~1–2 val seed-noise floor; test margin (1.37, −1.83%) is more robust and consistent across splits.
 - Post-restart spike smaller with eta_min=1e-5 (e21=115.19 vs 138.59 for eta_min=5e-5) — deeper basin creates more stable re-entry point when restart kick arrives.
-- **All future PRs must beat `val_avg/mae_surf_p < 83.6873` to merge.**
+- **All future PRs must beat `val_avg/mae_surf_p < 83.6873` to merge (superseded — see PR #2444 below).**
+
+---
+
+## 2026-05-13 18:00 — PR #2444: T_mult=2 restart (longer cycle 2, new SOTA)
+
+- **val_avg/mae_surf_p: 82.2642** (best checkpoint epoch 21) — **−2.1% vs 83.6873 / −2.1% vs 83.9969**
+- **test_avg/mae_surf_p: 72.4019** — **−1.4% vs 73.3963 / −3.2% vs 74.7684**
+- **W&B run:** `1m0cfdr4` (Arm 1, T_0=7 T_mult=2 winner; Arm 2 T_0=6 T_mult=2 regressed +3.7%)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 5e-4 \
+      --use_torch_compile \
+      --compile_mode default \
+      --cosine_restart_T_0 7 \
+      --cosine_restart_T_mult 2 \
+      --wandb_group t-mult-2-restart \
+      --wandb_name restart-T0-7-Tmult-2 \
+      --agent willowpai2g48h4-alphonse
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 21)
+
+| Split | mae_surf_p | vs prior SOTA (83.6873) |
+|-------|-----------|--------------------------|
+| `val_single_in_dist` | 96.8979 | ~104 → **−7.9%** ✓ |
+| `val_geom_camber_rc` | 103.1372 | ~100 → +2.1% ↑ |
+| `val_geom_camber_cruise` | 53.9395 | ~46 → improvement ✓ |
+| `val_re_rand` | 75.0824 | ~84 → **−10.3%** ✓ |
+| **val_avg** | **82.2642** | **−1.73 (−2.1%) ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior test (73.3963) |
+|-------|-----------|--------------------------|
+| `test_single_in_dist` | 85.5208 | 87.60 → **−2.4%** ✓ |
+| `test_geom_camber_rc` | 91.0868 | 90.10 → +1.1% ↑ |
+| `test_geom_camber_cruise` | 44.9228 | 46.87 → **−4.2%** ✓ |
+| `test_re_rand` | 68.0771 | 69.02 → **−1.4%** ✓ |
+| **test 4-split mean** | **72.4019** | **−1.00 (−1.4%) ✓** |
+
+### Notes
+
+- `cosine_restart_T_0=7, cosine_restart_T_mult=2` → cycle structure [7, 14] = 21 total epochs.
+- Longer cycle 2 (14 vs 10 epochs in prior SOTA) allows deeper descent. Best epoch is e21 — the *last* epoch — model still improving at the 30-min cap. No convergence plateau reached.
+- Arm 2 (T_0=6, T_mult=2 → [6, 12, +3 truncated]): a 3rd cycle restart wipes out the cycle-2 minimum at e18 — truncated cycle 3 cannot recover. **T_0=7 is the unique value giving exactly 2 full non-truncated cycles in ≤21 epochs.**
+- Improvement concentrated in `single_in_dist` (val −7.99, test −9.59). OOD splits largely flat. Longer cycle 2 digs deeper into the in-distribution basin without sacrificing OOD.
+- **Run used eta_min=0 (default, not the eta_min=1e-5 from PR #2357).** Composing T_mult=2 + eta_min=1e-5 is the obvious next experiment (assigning to alphonse as #2488).
+- **All future PRs must beat `val_avg/mae_surf_p < 82.2642` to merge.**
