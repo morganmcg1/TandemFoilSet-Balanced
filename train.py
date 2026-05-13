@@ -460,6 +460,10 @@ best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
 
+SWA_START_EPOCH = 25  # start averaging after this epoch (1-indexed); covers eps 26-30
+swa_count = 0
+swa_state: dict[str, torch.Tensor] = {}  # running mean of model.state_dict() over SWA window
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -541,6 +545,18 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+
+    # SWA accumulation (after scheduler.step, before validation). fp32 Welford
+    # online mean over the last (epochs - SWA_START_EPOCH) state_dicts.
+    if (epoch + 1) > SWA_START_EPOCH:
+        swa_count += 1
+        sd = model.state_dict()
+        for k, v in sd.items():
+            v_fp = v.detach().float()
+            if swa_count == 1:
+                swa_state[k] = v_fp.clone()
+            else:
+                swa_state[k] = swa_state[k] + (v_fp - swa_state[k]) / swa_count
 
     # --- Validate ---
     model.eval()
@@ -632,6 +648,44 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+        # SWA evaluation: load averaged weights and evaluate on val + test splits.
+        if swa_count > 0:
+            print(f"\n--- SWA evaluation (averaged over last {swa_count} epochs) ---")
+            saved_state = {k: v.clone() for k, v in model.state_dict().items()}
+            swa_load = {k: swa_state[k].to(saved_state[k].dtype) for k in swa_state}
+            model.load_state_dict(swa_load)
+            model.eval()
+
+            swa_val_splits = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            swa_val_avg = aggregate_splits(swa_val_splits)
+            swa_val_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+            print(f"SWA val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f}  (baseline 30.4412)")
+            for name in VAL_SPLIT_NAMES:
+                print_split_metrics(f"swa/{name}", swa_val_splits[name])
+
+            swa_test_splits = {
+                name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_splits)
+            swa_test_avg_surf_p = swa_test_avg["avg/mae_surf_p"]
+            print(f"SWA test_avg/mae_surf_p = {swa_test_avg_surf_p:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(f"swa/test/{name}", swa_test_splits[name])
+
+            append_metrics_jsonl(metrics_jsonl_path, {
+                "event": "swa_final",
+                "swa_count": swa_count,
+                "swa_start_epoch": SWA_START_EPOCH,
+                "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
+                "swa_test_avg/mae_surf_p": swa_test_avg_surf_p,
+                "swa_val_splits": swa_val_splits,
+                "swa_test_splits": swa_test_splits,
+            })
 
     write_experiment_summary(
         model_path=model_path,
