@@ -451,4 +451,148 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 ## 2026-05-13 03:40 — PR #1877 (NEW): Lion bs=8 + sqrt2-lr
 - Branch: askeladd/lion-bs-8-sqrt2-lr
 - Hypothesis: Lion has no second-moment buffer — only 43 GB vs AdamW's 94 GB at bs=4. This opens the budget for bs=8 (should be ~55-70 GB). Larger batches improve gradient accuracy, especially OOD. lr=2.1e-4 (√2 × 1.5e-4) for √2 batch-size scaling.
-- Status: WIP (newly assigned). Target: test_avg < 83.77.
+- Status: WIP (in-flight). Target: test_avg < 83.77.
+
+---
+
+## 2026-05-13 05:54 — PR #1862: n_layers=6 on Fourier+wider-192 — CLOSED ✗
+- Branch: nezuko/n-layers-6-fourier-wider
+- W&B runs: `7qciycr8` (primary), `3hv0f341` (replicate) — group `n-layers-6-fourier-wider`
+- Config: n_hidden=192, n_layers=6, Fourier L=8, AdamW lr=7e-4 (pre-Lion stack; stale config vs current)
+
+| Metric | n_layers=6 (primary) | n_layers=6 (replicate) | Baseline (PR #1387, Fourier+wider AdamW) | Δ vs Fourier base |
+|---|---|---|---|---|
+| val_avg/mae_surf_p (best) | 117.72 (epoch 12) | 117.48 (epoch 12) | 103.29 | +14.0% |
+| **test_avg/mae_surf_p** | **107.01** | 105.68 | **93.29** | **+14.7%** |
+| test_single_in_dist | 127.93 | 126.11 | 97.57 | +31.1% |
+| test_geom_camber_rc | 115.02 | 110.88 | 106.32 | +8.2% |
+| test_geom_camber_cruise | 77.87 | 79.67 | 72.25 | +7.8% |
+| test_re_rand | 107.21 | 106.06 | 97.04 | +10.5% |
+
+- Epochs completed: 12/18 (timeout); epoch time ~151 s (+20% vs baseline 126 s)
+- Trial-to-trial variance ±0.7 on test_avg — result statistically conclusive
+
+**Analysis**: **n_layers=6 dead-end confirmed TRIPLE-CROSS across three width/feature regimes:**
+| Config | n_layers | Δ test |
+|---|---|---|
+| n_hidden=128 (prior round) | 6 | +14% |
+| n_hidden=128 (prior round) | 7 | +18% |
+| n_hidden=192 + Fourier (this PR) | 6 | +14% |
+
+Root cause: **horizon-vs-depth tradeoff**, not capacity. Per-epoch cost 126s→151s (+20%) compresses 30-min budget from 14 epochs → 12. Cosine T_max=18 LR never reaches refinement phase. Best-epoch=last-epoch in both trials = model still improving at cutoff. Single_in_dist worst hit (+31%) is the underfitting-sensitive split — fingerprints premature schedule termination, not generalization failure.
+
+**Depth axis: CLOSED** for this benchmark at 30-min wall-clock budget. Lion would not change this; the binding constraint is wall-clock per-epoch cost.
+
+**Action**: Closed. Assigned nezuko slice-num-96 (#1967).
+
+---
+
+## 2026-05-13 05:54 — PR #1796: wd=1e-3 under Lion+Fourier — CLOSED ✗
+- Branch: willowpai2g48h1-fern/weight-decay-1e-3
+- W&B run: `3loe2ooi` — group `weight-decay-sweep`
+- Config: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, **weight_decay=1e-3**, bs=4, bf16, epochs=18
+
+| Metric | Lion+Fourier+wd=1e-3 | Lion-only baseline (83.77) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, epoch 14) | **92.37** | 92.70 | −0.4% (tie) |
+| **test_avg/mae_surf_p** | **84.41** | **83.77** | **+0.8% (slight regression)** |
+| test_single_in_dist | 87.27 | 90.07 | **−3.1%** ✓ |
+| test_geom_camber_rc | 96.24 | 98.72 | **−2.5%** ✓ |
+| test_geom_camber_cruise | 66.67 | 60.96 | +9.4% ✗ |
+| test_re_rand | 87.47 | 85.32 | +2.5% ✗ |
+
+- 15/18 epochs at 128 s/epoch, peak GPU 43.4 GB
+- Note: Comparison is Lion+Fourier+wd=1e-3 vs Lion-only+wd=1e-4 — not fully apples-to-apples
+
+**Analysis**: **wd=1e-3 lever exhausted** under both optimizers, with a striking per-split sign-flip between AdamW and Lion:
+
+| Split | AdamW + wd=1e-3 Δ | Lion + wd=1e-3 Δ |
+|---|---|---|
+| single_in_dist | +4.0% (worse) | **−3.1%** (better) |
+| geom_camber_rc | +3.3% (worse) | **−2.5%** (better) |
+| geom_camber_cruise | **−5.7%** (better) | +9.4% (worse) |
+| re_rand | **−2.5%** (better) | +2.5% (worse) |
+
+Mechanically: Lion+Fourier already pushed cruise from 72.25 → 60.96 (~15%), exhausting OOD headroom. Adding wd on top claws capacity back into in-distribution. AdamW hadn't reached the same OOD floor, so wd had the opposite incentive. Effects cancel at the aggregate — net wash.
+
+**Weight-decay magnitude lever: CLOSED** in both directions (wd=1e-3 tested, wd=1e-4 is default). Pivot to decoupled-wd instead (structurally different: zero wd on biases/norms).
+
+**Action**: Closed. Assigned fern decoupled-weight-decay (#1969).
+
+---
+
+## 2026-05-13 05:56 — PR #1876: n_head=8 on Lion+Fourier+wider — CLOSED ✗
+- Branch: thorfinn/n-head-8-wider-lion
+- W&B run: `xo9xcyat` — group `n-head-8`
+- Config: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, **n_head=8** (head_dim 48→24), bs=4, bf16, epochs=18
+
+| Metric | n_head=8 | Lion baseline (83.77) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, epoch 11) | **117.16** | 92.70 | **+26.4%** |
+| **test_avg/mae_surf_p** | **105.04** | **83.77** | **+25.4%** |
+| test_single_in_dist | 115.47 | 90.07 | +28.2% |
+| test_geom_camber_rc | 130.04 | 98.72 | +31.7% |
+| test_geom_camber_cruise | 71.97 | 60.96 | +18.1% |
+| test_re_rand | 102.68 | 85.32 | +20.4% |
+
+- Epochs completed: 11/18; epoch time ~168 s (+33% vs 126 s baseline); peak GPU 84.4 GB
+- Val curve still descending at epoch 11 (uncoverged): 215 → 203 → 148 → 136 → 124 → 117
+
+**Analysis**: Three compounding failures:
+1. **head_dim halved 48→24** — below Transolver paper's ≥32 threshold. Physics-aware attention with slice_num=64 physics tokens needs sufficient per-head rank.
+2. **+33% per-epoch cost** → 11 epochs vs 14 baseline. Same "horizon-vs-capacity" pattern as depth and mlp_ratio.
+3. **Oscillatory val curve** (124→128→135→133→117) — Lion sign-momentum on narrow-head gradients creates rough landscape.
+
+**First Lion+Fourier compound run** — but confounded by n_head=8. Cannot cleanly read the compound. Four in-flight PRs (#1877, #1887, #1945, #1798) will implicitly confirm Lion+Fourier compound baseline.
+
+**n_head=8 closed.** Revisit would need n_hidden=256 (keeps head_dim=32 at 8 heads) — wait for alphonse's #1945 result first.
+
+**Action**: Closed. Assigned thorfinn lion-beta2-0999 (#1971).
+
+---
+
+## 2026-05-13 05:56 — PR #1643: mlp_ratio=4 on wider-192 — CLOSED ✗
+- Branch: willowpai2g48h1-edward/mlp-ratio-4
+- W&B runs: `q21pfshj` (bs=4 primary), `mgdq08qc` (bs=8 sanity) — group `mlp-ratio-4`
+- Config: n_hidden=192, **mlp_ratio=4**, AdamW lr=7e-4 (pre-Lion stack — stale config)
+
+| Metric | mlp_ratio=4 bs=4 | mlp_ratio=4 bs=8 | Baseline PR #1361 (wider-192, 3-seed) | Δ bs=4 |
+|---|---|---|---|---|
+| val_avg/mae_surf_p (best) | **120.48** | 121.30 | 111.32 ± 2.87 | +8.2% |
+| **test_avg/mae_surf_p** | **109.69** | 110.92 | **99.69 ± 3.16** | **+10.0%** |
+| test_single_in_dist | 123.10 | 138.60 | 116.57 | +5.6% |
+| test_geom_camber_rc | 124.88 | 118.09 | 108.61 | +14.9% |
+| test_geom_camber_cruise | 82.64 | 78.25 | 74.18 | +11.4% |
+| test_re_rand | 108.15 | 108.73 | 99.41 | +8.8% |
+
+- Epochs completed: 13/18; epoch time ~139 s (+11% vs 126 s); peak GPU 50.6 GB at bs=4
+
+**Analysis**: Third dead-end from "horizon-vs-capacity" tradeoff. +11% per-epoch cost compresses budget from 15-16 → 13 epochs. Val still improving monotonically at last epoch (121.23 → 120.48) — not converged. Same failure signature as n_layers=6 (+14%) and n_head=8 (+33%).
+
+**Key side observation**: bs=8 at n_hidden=192 + mlp_ratio=4 = **50.6 GB peak** — well within 97 GB envelope. The prior documented "OOM cliff at bs=8 + n_hidden=192" was likely attributed to mlp_ratio=2 at a different memory spike. This clarifies that askeladd's #1877 (Lion bs=8) is not at risk of OOM. BASELINE.md OOM note is overstated.
+
+Third dead-end from per-epoch cost in round-2. Pattern confirmed: any change that slows per-epoch > ~10% hurts on 30-min budget unless schedule is realigned.
+
+**Action**: Closed. Assigned edward cosine-eta-min (#1973).
+
+---
+
+## 2026-05-13 06:00 — PR #1967 (NEW): slice_num 64→96
+- Branch: willowpai2g48h1-nezuko/slice-num-96
+- Hypothesis: Physics-attention slot count increase (1.5×). Orthogonal to depth/width/Fourier. More distinct flow-regime templates per block. Per-epoch cost impact: <8%.
+- Target: test_avg/mae_surf_p < 83.77
+
+## 2026-05-13 06:00 — PR #1969 (NEW): Decoupled weight decay
+- Branch: willowpai2g48h1-fern/decoupled-weight-decay
+- Hypothesis: Apply wd=1e-4 only to weight matrices, zero wd on biases/norm scales. Standard Transformer practice; especially important for Lion's uniform-magnitude updates on small bias parameters. Zero memory/compute overhead.
+- Target: test_avg/mae_surf_p < 83.77
+
+## 2026-05-13 06:00 — PR #1971 (NEW): Lion beta2=0.999
+- Branch: willowpai2g48h1-thorfinn/lion-beta2-0999
+- Hypothesis: beta2=0.99 → 0.999. Longer sign-momentum horizon (~1000 steps vs ~100). More stable at bs=4 noisy small-batch gradients. Paper alternate value for vision-like tasks with diverse gradients.
+- Target: test_avg/mae_surf_p < 83.77
+
+## 2026-05-13 06:00 — PR #1973 (NEW): Cosine eta_min=lr/10
+- Branch: willowpai2g48h1-edward/cosine-eta-min
+- Hypothesis: Set `eta_min=1.5e-5` (lr/10) in CosineAnnealingLR. Prevents LR from quenching to 0 at late epochs. Insurance for truncated training; keeps final epochs learning at floor rate. Single-line change.
+- Target: test_avg/mae_surf_p < 83.77

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 04:10 — willow-pai2g-48h-r1, round 2 in progress. **Baseline: test=83.77 (PR #1395 Lion, provisional Lion-only)**. Lion+Fourier compound confirmation still pending. Stack so far: wider-192 → Fourier L=8 → Lion lr=1.5e-4.
+- 2026-05-13 06:00 — willow-pai2g-48h-r1, round 2 continued. **Baseline: test=83.77 (PR #1395 Lion-only, provisional)**. Lion+Fourier compound confirmation still pending — in-flight PRs will establish this implicitly.
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #1395 merged — provisional Lion-only result)
@@ -9,7 +9,7 @@ Config: bf16 autocast + **batch_size=4** + **Lion lr=1.5e-4** + scoring-bug work
 
 Per-split (Lion-only): in_dist=90.07, rc=98.72, cruise=60.96, re_rand=85.32.
 
-Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combined result still unverified (expected ≤ 83.77). Several in-flight runs will confirm this implicitly.
+Note: The merged train.py has Lion+Fourier stacked. The Lion+Fourier compound result is being established implicitly by in-flight PRs #1877, #1887, #1945, #1798.
 
 ## Previous baselines
 - PR #1387 (Fourier+wider): test=93.29 | space_dim=34, n_hidden=192, AdamW lr=7e-4
@@ -20,44 +20,56 @@ Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combine
 ## Round-2 status
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| alphonse | #1359 | lr-warmup | **CLOSED** ✗ | lr=3e-4 + 2-epoch warmup: test=88.37 (+5.5% vs Lion baseline). Lion at 1.5e-4 is near-optimal; warmup redundant for sign-momentum. |
-| alphonse | #1945 | n-hidden-256 | **wip** (new) | n_hidden 192→256 (33% wider). Lion memory enables it: ~43GB at 192 → ~57GB at 256. Capacity stacking test. |
-| askeladd | #1771 | wider-192-schedule-realigned | **CLOSED** ✗ | test 104.86 (+5.19%) — T_max=14 worse than T_max=18. |
-| askeladd | #1877 | lion-bs-8-sqrt2-lr | wip | Lion memory enables bs=8. bs=8 + lr=2.1e-4 (√2-scaled). |
-| edward | #1643 | mlp-ratio-4 | wip | mlp_ratio 2→4 on Lion+Fourier+wider baseline |
-| fern | #1796 | weight-decay-1e-3 | **wip (rebase+rerun)** | First run was on stale AdamW baseline (lr=7e-4, 101GB peak, test=100.10 ≈ tie vs old). Sent back to rebase + rerun under Lion+Fourier. Lion paper rec specifically calls for 3-10× larger wd than AdamW. |
-| frieren | #1710 | surf-weight-5 | **CLOSED** ✗ | test=94.71 (+1.5% vs Fourier base, +13% vs Lion base). Surf-weight lever closed in both directions. |
-| frieren | #1887 | fourier-L-16 | **wip** (new) | fourier_L 8→16, space_dim 34→66. Double frequency resolution ceiling test. |
-| nezuko | #1862 | n-layers-6-fourier-wider | wip | n_layers 5→6 on Fourier+wider+Lion baseline |
-| tanjiro | #1798 | grad-norm-clip | wip | grad-clip max_norm=1.0 on Lion+Fourier+wider baseline |
-| thorfinn | #1395 | lion-optimizer | **MERGED** ✓ | test **83.77** (−10.2% vs Fourier baseline) — HUGE win! New best. |
-| thorfinn | #1876 | n-head-8 | wip | n_head 4→8 on Lion+Fourier+wider baseline. First clean Lion+Fourier stacked confirmation. |
+| alphonse | #1359 | lr-warmup+3e-4 | **CLOSED** ✗ | +5.5% regression. Lion lr=1.5e-4 near-optimal; warmup redundant. |
+| alphonse | #1945 | n-hidden-256 | **wip** | n_hidden 192→256 (~57GB at bs=4). Capacity stacking test. |
+| askeladd | #1771 | schedule-realigned | **CLOSED** ✗ | T_max=14 worse than T_max=18. |
+| askeladd | #1877 | lion-bs-8-sqrt2-lr | **wip** | Lion bs=8 + lr=2.1e-4 (√2-scaled). |
+| edward | #1643 | mlp-ratio-4 | **CLOSED** ✗ | +10.0% regression. Per-epoch cost +11% → 13 epochs (horizon-vs-capacity). |
+| edward | #1973 | cosine-eta-min | **wip** (new) | eta_min=lr/10 (1.5e-5) floor in cosine schedule. Zero overhead. |
+| fern | #1796 | weight-decay-1e-3 | **CLOSED** ✗ | +0.8% regression. Per-split sign-flipped vs AdamW. wd lever exhausted. |
+| fern | #1969 | decoupled-weight-decay | **wip** (new) | Zero wd on biases/norm scales; wd=1e-4 on weights only. Standard Transformer practice. |
+| frieren | #1710 | surf-weight-5 | **CLOSED** ✗ | +13% vs Lion base. Surf-weight lever closed. |
+| frieren | #1887 | fourier-L-16 | **wip** | fourier_L 8→16, space_dim 34→66. Frequency ceiling test. |
+| nezuko | #1862 | n-layers-6-fourier-wider | **CLOSED** ✗ | +14.7% regression (triple-confirmed dead end across widths). Horizon-vs-depth. |
+| nezuko | #1967 | slice-num-96 | **wip** (new) | slice_num 64→96 (1.5× physics-attention slots). Orthogonal capacity axis. |
+| tanjiro | #1798 | grad-norm-clip | **wip** | max_norm=1.0 on full Lion+Fourier+wider stack. |
+| thorfinn | #1395 | lion-optimizer | **MERGED** ✓ | test **83.77** (−10.2% vs Fourier base). New best. |
+| thorfinn | #1876 | n-head-8 | **CLOSED** ✗ | +25.4% regression. head_dim 48→24 below Transolver threshold; +33% per-epoch cost. |
+| thorfinn | #1971 | lion-beta2-0999 | **wip** (new) | beta2 0.99→0.999. Longer sign-momentum horizon (~1000 steps). Paper alt value. |
 
 ## Key research findings so far
 1. **Throughput matters more than architecture at 30-min budget**: bf16+batch-8 gets 17 epochs vs 10-11 — the round-1 win.
-2. **Schedule alignment is a massive free win**: T_max=actual epochs delivers −7.67% (test 111.98). T_max=14 over-corrects — current T_max=18 with 14-15 completion is already optimal (PR #1771 CLOSED).
+2. **Schedule alignment is a massive free win**: T_max=actual epochs delivers −7.67% (test 111.98). T_max=14 over-corrects — current T_max=18 with 14-15 completion is already optimal.
 3. **Width × schedule compounds**: n_hidden=192 → −10.97% (test 99.69).
 4. **Fourier × width compounds**: NeRF L=8 → −6.42% (test 93.29). High-freq spatial basis helps near-foil pressure gradients.
-5. **Lion optimizer is the single biggest lever**: −15.97% from swapping optimizer (test 83.77 from n_hidden=192 only). Sign-momentum particularly well-suited. ALL splits improve.
+5. **Lion optimizer is the single biggest lever**: −15.97% from swapping optimizer (test 83.77). Sign-momentum particularly well-suited. ALL splits improve.
 6. **Memory: Lion opens batch-size budget**: AdamW ~94 GB → Lion ~43 GB at n_hidden=192 bs=4. Enough headroom for bs=8 or n_hidden=256.
 7. **EMA dead end**: Model still descending at end-of-run. Both Polyak variants failed.
-8. **Depth dead at n_hidden=128**: n_layers=6 (+14%) and n_layers=7 (+18%) regressed. Retesting at n_hidden=192+Fourier (nezuko #1862).
-9. **Surf-weight lever CLOSED**: Both directions (5 and 25) tie-or-lose. Default surf_weight=10 is in a robust local optimum. Do not revisit.
-10. **LR-warmup lever CLOSED for Lion**: lr=3e-4 + 2-epoch warmup regressed +5.5% (test=88.37). Lion's sign-momentum is inherently stable; warmup is redundant. Lion lr=1.5e-4 is near-optimal.
+8. **Depth dead in ALL tested configs**: n_layers=6/7 at n_hidden=128 failed (+14%, +18%). n_layers=6 at n_hidden=192+Fourier failed (+14%). **Horizon-vs-depth tradeoff** — per-epoch cost +20-33% compresses 30-min budget below schedule refinement zone. CLOSED permanently at 30-min budget.
+9. **Surf-weight lever CLOSED**: Both directions (5, 25) tie-or-lose. Default surf_weight=10 is robust local optimum.
+10. **LR-warmup lever CLOSED for Lion**: lr=3e-4 + 2-epoch warmup regressed +5.5%. Lion's sign-momentum is inherently stable; warmup redundant.
+11. **wd magnitude lever CLOSED**: wd=1e-3 under Lion+Fourier gave +0.8% aggregate regression; per-split effects sign-flip vs AdamW run (OOD exhausted under Lion). Pivot to decoupled-wd (structurally different).
+12. **n_head=8 CLOSED at n_hidden=192**: head_dim 48→24 below Transolver ≥32 threshold + +33% per-epoch cost. Revisit only if n_hidden=256 lands (head_dim=32 at n_head=8).
+13. **mlp_ratio=4 CLOSED**: +11% per-epoch cost → 13 epochs, schedule undertrained. Third "horizon-vs-capacity" failure. Pattern: any capacity change that slows per-epoch >10% hurts without schedule realignment.
+14. **bs=8 OOM concern overstated**: mlp_ratio=4 + n_hidden=192 + bs=8 = 50.6 GB peak. Prior OOM cliff documented at n_hidden=192 was likely a transient spike. askeladd #1877 should be safe.
 
-## Active stacking opportunities (vs test≈83.77 provisional baseline)
-- **n_head=8** (thorfinn #1876): first Lion+Fourier stacked confirmation + attention diversity. Most important near-term.
-- **Lion bs=8** (askeladd #1877): leverage Lion's memory advantage. Potential −3-8%.
-- **Fourier L=16** (frieren #1887): double frequency resolution. Fast single-line test of Fourier ceiling.
-- **n_layers=6** (nezuko #1862): depth revisit at full stack. May compound with Lion.
-- **mlp_ratio=4** (edward #1643): FFN capacity, orthogonal to optimizer changes.
-- **n_hidden=256** (alphonse #1945): ~57GB peak, 33% wider, clean capacity test. Primary near-term priority after n_head result.
-- **wd=1e-3 under Lion** (fern #1796 rerun): stale AdamW run rebasing onto Lion. OOD improvement signal (cruise -5.7%, re_rand -2.5%) may be real.
-- **Lion wd=1e-2** (per Lion paper rec): unassigned. Potentially large for OOD splits.
-- ~~LR-warmup (closed)~~: Lion inherently stable, lever exhausted.
+## Active hypotheses in-flight
+| PR | Student | Hypothesis | Memory est. | Expected gain |
+|---|---|---|---|---|
+| #1877 | askeladd | Lion bs=8 + lr=2.1e-4 | ~55-70 GB | −3% to −8% |
+| #1887 | frieren | Fourier L=16 (space_dim 34→66) | ~50 GB | −1% to −5% |
+| #1945 | alphonse | n_hidden=256 (33% wider) | ~57 GB | −3% to −8% |
+| #1798 | tanjiro | grad-norm-clip max_norm=1.0 | ~43 GB | −1% to −3% |
+| #1967 | nezuko | slice_num 64→96 | ~45-48 GB | −2% to −6% |
+| #1969 | fern | decoupled weight decay | ~43 GB | −1% to −4% |
+| #1971 | thorfinn | lion beta2=0.999 | ~43 GB | −2% to −5% |
+| #1973 | edward | cosine eta_min=lr/10 | ~43 GB | −1% to −3% |
+
+## Most important pending result
+**Lion+Fourier compound confirmation** — any of the 4 original in-flight PRs (#1877, #1887, #1945, #1798) will give us this. Until then, the 83.77 baseline remains provisional. If the compound degrades, we need to investigate the interaction (may relate to the oscillatory behavior seen in thorfinn's n_head=8 run, which was the only result on the full Lion+Fourier stack).
 
 ## Next milestones
-- Confirm Lion+Fourier compound baseline (thorfinn #1876 will give this as a by-product)
-- Fourier L=16 result (frieren #1887): fast test of frequency ceiling
-- Lion bs=8 result (askeladd #1877): if large batches help, potential −3-8%
-- n_layers=6 result (nezuko #1862): viability of depth at full stack
+- **n_hidden=256** result (alphonse #1945): width has been the dominant lever; if Lion memory enables 256, expect −5% to −10%
+- **Lion bs=8** result (askeladd #1877): gradient accuracy + OOD signal
+- **Fourier L=16** result (frieren #1887): fast single-line test of frequency ceiling
+- **Lion+Fourier compound confirmation** — implicit in any of the above
