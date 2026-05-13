@@ -8,36 +8,48 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **45.92** | PR #2287 (merged 2026-05-13) — GeGLU (gate×GELU) replaces SwiGLU (gate×SiLU) in block-MLPs |
-| **test_avg/mae_surf_p** | **44.35** | PR #2287 — all 4 splits finite; epoch-15 best checkpoint (hit 30-min cap at ep 15) |
-| Peak VRAM | ~42.5 GB | PR #2287 — identical FLOP/VRAM profile to SwiGLU |
-| s/epoch | ~126 s | PR #2287 — 15 epochs completed within 30-min cap |
+| **val_avg/mae_surf_p** | **43.73** | PR #2405 (merged 2026-05-13) — Lion β1=0.85 (more reactive sign update) on GeGLU stack |
+| **test_avg/mae_surf_p** | **41.86** | PR #2405 — all 4 splits finite; epoch-15 checkpoint (hit 30-min cap at ep 15) |
+| Peak VRAM | ~42.5 GB | PR #2405 — unchanged from #2287 (β1 is an optimizer-state-free knob) |
+| s/epoch | ~126 s | PR #2405 — 15 epochs completed within 30-min cap |
 
-### Per-split val (PR #2287, best epoch 15, GeGLU block-MLP + Lion lr=2e-4 + per-channel δ + dropout=0.1 + n_hidden=160)
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 48.87 |
-| val_geom_camber_rc | 58.78 |
-| val_geom_camber_cruise | 29.99 |
-| val_re_rand | 46.03 |
-| **val_avg** | **45.92** |
-
-### Per-split test (PR #2287, epoch-15 best checkpoint)
+### Per-split val (PR #2405, best epoch 15, β1=0.85 + GeGLU + Lion lr=2e-4 + per-channel δ + dropout=0.1 + n_hidden=160)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 43.19 |
-| test_geom_camber_rc | 52.54 |
-| test_geom_camber_cruise | 43.55 |
-| test_re_rand | 38.14 |
-| **test_avg** | **44.35** |
+| val_single_in_dist | 48.34 |
+| val_geom_camber_rc | 56.87 |
+| val_geom_camber_cruise | 26.95 |
+| val_re_rand | 42.77 |
+| **val_avg** | **43.73** |
+
+### Per-split test (PR #2405, epoch-15 best checkpoint)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 41.42 |
+| test_geom_camber_rc | 50.62 |
+| test_geom_camber_cruise | 40.33 |
+| test_re_rand | 35.09 |
+| **test_avg** | **41.86** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name geglu_gate_vs_swiglu --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --lion_beta1 0.85 --experiment_name beta1_0p85_baseline_check --agent <student>
 ```
-(GeGLU block-MLPs now in merged train.py — swaps `F.silu` → `F.gelu` inside the SwiGLU gate. Block-MLP only; preprocess MLP and mlp2 head remain GELU. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required**.)
+(Lion β1=0.85 now in merged train.py — also passes β2=0.99 as the default. GeGLU block-MLPs unchanged from #2287. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5 --lion_beta1 0.85` required for reproducing the baseline**.)
+
+### Delta from previous best (PR #2287 → PR #2405)
+
+| Split | Prev val | New val | Δval | Prev test | New test | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 48.87 | 48.34 | **−0.53** | 43.19 | 41.42 | **−1.77** |
+| geom_camber_rc | 58.78 | 56.87 | **−1.91** | 52.54 | 50.62 | **−1.92** |
+| geom_camber_cruise | 29.99 | 26.95 | **−3.04** | 43.55 | 40.33 | **−3.22** |
+| re_rand | 46.03 | 42.77 | **−3.26** | 38.14 | 35.09 | **−3.05** |
+| **avg** | **45.92** | **43.73** | **−2.19 (−4.8%)** | **44.35** | **41.86** | **−2.49 (−5.6%)** |
+
+**Mechanism:** Lion's update is `θ ← θ - lr × sign(β1·m + (1−β1)·g)` where `m` is the EMA. Lowering β1 from 0.9 → 0.85 weights the current gradient 1.5× more inside the sign, making the optimizer more reactive. At B=4 (noisy gradients), the fresh per-step gradient signal turns out to be more informative than EMA smoothing — the inertial extreme (β1=0.95) catastrophically regresses +19.7%, confirming the direction-smoothness axis. **All 4 splits improve on both val and test**, including the largest gains on `geom_camber_cruise` and `re_rand` (the hardest distribution-shift splits).
 
 ### Delta from previous best (PR #2196 → PR #2287)
 
