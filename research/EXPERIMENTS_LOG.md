@@ -8,6 +8,68 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 14:10 — PR #2304 (thorfinn reglu-gate) — **MERGED** (15th compound win)
+
+- Branch: `charliepai2g24h4-thorfinn/reglu-gate`
+- Hypothesis: Replace GELU with ReLU in the GLU gate. Closes gate-sharpness monotonicity axis (SiLU<GELU<ReLU). Zero param cost.
+- Metric artifacts: `models/model-charliepai2g24h4-thorfinn-reglu-gate-20260513-132007/metrics.jsonl`
+
+| Split | Baseline (#2266 GeGLU 64.182/56.523) | ReGLU | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 67.894 | 69.925 | +2.04% (lone regression) |
+| val_geom_camber_rc | 76.235 | **74.845** | **−1.83%** |
+| val_geom_camber_cruise | 47.790 | **44.262** | **−7.38%** |
+| val_re_rand | 64.808 | **62.765** | **−3.15%** |
+| **val_avg (primary)** | **64.182** | **62.949** | **−1.92%** |
+| test_single_in_dist | 60.676 | 61.108 | +0.71% (near-neutral) |
+| test_geom_camber_rc | 70.778 | **66.196** | **−6.46%** |
+| test_geom_camber_cruise | 39.001 | **36.305** | **−6.91%** |
+| test_re_rand | 55.636 | **53.276** | **−4.24%** |
+| **test_avg** | **56.523** | **54.221** | **−4.07%** |
+
+Best epoch: 12 (hit 30-min timeout, val still descending 76.4→71.5→68.2→62.9 across last 4 epochs). n_params: 831,191 (unchanged). Grad-norm trace: 133.8→47.1→37.5→27.3 (clean, no instability). LayerScale γ_attn means 0.017-0.024, γ_mlp 0.042-0.057 (in normal ranges).
+
+**Analysis:** Gate-sharpness monotonicity hypothesis fully confirmed. Each step wins: SiLU (−6.96% val), GELU (−4.75%), ReLU (−1.92%). The OOD gain pattern is striking: test improves −4.07% vs val −1.92%, and OOD splits gain the most (test_camber_rc −6.46%, test_camber_cruise −6.91%). ReLU's exact-zero gate provides maximum cross-channel contamination suppression at stagnation/wake features. The hard zero also acts as implicit regularization, explaining why OOD generalization benefits more than in-dist. The run was cut at ep 12 with val still strongly descending — full potential likely 1-2% higher with more compute.
+
+**Compound progress:** 15 merges, **100.957 → 62.949 = −37.7%**
+
+**Gate-sharpness axis status:** Confirmed monotonic through SiLU<GELU<ReLU. Next test: Squared ReLU (F.relu²) — Primer (So et al. 2021). If that wins too, the axis is still open. If not, ReLU is the gate optimum.
+
+---
+
+## 2026-05-13 14:10 — PR #2306 (fern geglu-inner-dim-320) — **CLOSED** (B outcome; compute-bound; below new ReGLU baseline)
+
+- Branch: `charliepai2g24h4-fern/geglu-inner-dim-320`
+- Hypothesis: Inner_dim=320 (from 256) with GeGLU stack — test capacity expansion.
+
+| Metric | GeGLU baseline (#2266) | GeGLU inner_dim=320 | vs ReGLU baseline (#2304) |
+|---|---:|---:|---:|
+| val_avg | 64.182 | 64.286 (+0.16%) | 62.949 (**+2.13%**) |
+| test_avg | 56.523 | 55.965 (−0.99%) | 54.221 (+3.24%) |
+| best_epoch | 13 | 12 (timeout) | — |
+
+3/4 val splits improve (camber_rc −4.1%, camber_cruise −3.5%, re_rand −3.7%), but val_single_in_dist regresses +11.2%. Model capacity-limited at ep 12 (every epoch was a new best). Compute overhead +10.2%/epoch.
+
+**Analysis:** Capacity expansion trades in-dist precision for OOD performance. The OOD signal is real (val_geom_camber_rc −4.08%, confirming PR #2200's signature). But val_single_in_dist regression (+11.2%) dominates the average. With ReGLU now merged (much better than GeGLU), GeGLU-320 is obsolete. **Closed against new ReGLU-256 baseline. Next: test ReGLU+inner_dim=288 (less compute-heavy step).**
+
+---
+
+## 2026-05-13 14:10 — PR #2310 (nezuko lr-bracket-up-7e-4) — **CLOSED** (B outcome; LR axis exhausted)
+
+- Branch: `charliepai2g24h4-nezuko/lr-bracket-up-7e-4`
+- Hypothesis: Peak lr=7e-4 (upper bracket from lr=5e-4).
+
+| Metric | GeGLU baseline (#2266) | lr=7e-4 | vs ReGLU baseline (#2304) |
+|---|---:|---:|---:|
+| val_avg | 64.182 | 63.628 (−0.86%) | 62.949 (**+1.07%**) |
+| test_avg | 56.523 | 56.278 (−0.43%) | 54.221 (+3.78%) |
+
+Mixed split pattern: camber_cruise −7.5% (strong OOD win), single_in_dist +3.1% (regression). Best epoch 12 (timeout).
+
+**Analysis:** Marginal near-tie on GeGLU stack, clearly worse than new ReGLU baseline. LR axis bracket complete: 3e-4=+5.95% (closed), 5e-4=optimal (baseline), 7e-4=marginal near-tie. The per-split pattern (OOD improves, in-dist regresses) mirrors ReGLU's own pattern — but at a weaker magnitude. **LR axis closed at lr=5e-4.**
+
+---
+
 ## 2026-05-13 14:00 — PR #2266 (thorfinn geglu-gate-comparison) — **MERGED** (14th compound win)
 
 - Branch: `charliepai2g24h4-thorfinn/geglu-gate-comparison`

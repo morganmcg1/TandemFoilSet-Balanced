@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 14:00 UTC (Wave 14: MERGE #2266 thorfinn GeGLU (−4.75%, 14th compound win); CLOSE #2262/#2244/#2239/#2225/#2098; Assigning new work to 6 students)
+- **Last updated**: 2026-05-13 14:20 UTC (Wave 15: MERGE #2304 thorfinn ReGLU (−1.92%, 15th compound win); CLOSE #2306/#2310; Assigning thorfinn/fern/nezuko)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -9,43 +9,45 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #2266 merged — GeGLU gate, 14th compound win)
+## Current best baseline (PR #2304 merged — ReGLU gate, 15th compound win)
 
-- `val_avg/mae_surf_p` = **64.182** (GeGLU MLP gate + SwiGLU inner_dim=256 + LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 13)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **56.523**
-- Per-split val: single_in_dist=67.894 / camber_rc=76.235 / camber_cruise=47.790 / re_rand=64.808
-- Per-split test: single_in_dist=60.676 / camber_rc=70.778 / camber_cruise=39.001 / re_rand=55.636
-- Δ vs PR #2175 baseline (67.381 / 57.800): **−4.75%** val_avg, **−2.21%** test_avg
-- **Mechanism (GeGLU)**: single-char `F.silu → F.gelu` in SwiGLUMLP.forward(). GELU's harder switch for x<0 suppresses cross-channel contamination at stagnation/wake pressure-peak regions. Under L1+surf-ch-weight [0.5,0.5,2.0], gradient is dominated by extreme p values → gate sharpness matters most at those features. Zero param cost; same best epoch (13).
-- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→**#2266** → val_avg has improved from 100.957 to **64.182** = **−36.4% over 14 merges**.
+- `val_avg/mae_surf_p` = **62.949** (ReGLU MLP gate + SwiGLU inner_dim=256 + LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 12)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **54.221**
+- Per-split val: single_in_dist=69.925 / camber_rc=74.845 / camber_cruise=44.262 / re_rand=62.765
+- Per-split test: single_in_dist=61.108 / camber_rc=66.196 / camber_cruise=36.305 / re_rand=53.276
+- Δ vs PR #2266 baseline (64.182 / 56.523): **−1.92%** val_avg, **−4.07%** test_avg
+- **Mechanism (ReGLU)**: `F.gelu → F.relu` in SwiGLUMLP.forward(). ReLU's exact-zero gate for x<0 maximally suppresses cross-channel contamination. Gate-sharpness monotonicity confirmed: SiLU<GELU<ReLU wins. OOD splits gain more than in-dist (test −4.07% vs val −1.92%). Run hit 30-min cap at ep 12 with val still descending — full potential likely higher.
+- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→#2266→**#2304** → val_avg has improved from 100.957 to **62.949** = **−37.7% over 15 merges**.
 
 ## Current research focus
 
-**Wave 14 — Gate activation axis + Fourier encoder variants + orthogonal probes.**
+**Wave 15 — Gate-sharpness continuation + Fourier encoder variants + capacity bisect.**
 
-The compound stack has 14 merged wins (100.957 → 64.182 = **−36.4%**). The GeGLU win (−4.75%) is the largest single-PR gain from a 1-character change, confirming that gate activation sharpness is an important lever on the current stack. Two axes remain open: (1) gate activation sharpness (SiLU < GELU < ReLU — need ReGLU to close the monotonicity question), and (2) Fourier encoder structure (dyadic wins over pure-Gaussian RFF, but hybrid dyadic+RFF and learned frequencies untested).
+The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). The ReGLU win (−1.92% val, −4.07% test) confirmed the gate-sharpness monotonicity: SiLU→GELU→ReLU each improved, with OOD splits benefiting most from harder gates. The next question: does gate sharpness continue past ReLU (Squared ReLU = F.relu²)? Simultaneously, Fourier encoder axis (hybrid dyadic+RFF, learned frequencies) and capacity bisect (ReGLU+inner_dim=288) are in-flight. The LR and depth axes are now closed.
 
-**Wave 14 active threads:**
+**Wave 15 active threads:**
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| askeladd | #2286 | flow-cond-fourier-re-aoa | Fourier encode log_Re+AoA0+AoA1 dims (n_freqs=2); +12 features, fun_dim 44→56 | IN FLIGHT |
-| tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320: bisect between won-256 and lost-384. NOTE: branched pre-GeGLU; compare vs old SwiGLU baseline 67.381, then evaluate vs new 64.182 | IN FLIGHT |
-| thorfinn | #2304 | reglu-gate | ReGLU gate: F.gelu → F.relu in SwiGLUMLP. Closes gate-sharpness monotonicity (SiLU<GELU<ReLU). | WIP |
-| alphonse | #2308 | cosine-tmax-12 | T_max=14→12: calibrate cosine schedule to actual ~12-13 epoch budget post-SwiGLU/GeGLU | WIP |
-| edward | #2309 | hybrid-fourier-dyadic-rff | Keep dyadic L=6 + concatenate small Gaussian RFF block (m=6, σ=1.0): combine high-freq precision + OOD-cruise generalization | WIP |
-| fern | #2306 | geglu-inner-dim-320 | GeGLU + inner_dim=320: does wider inner_dim compound with GeGLU gate win? | WIP |
-| nezuko | #2310 | lr-bracket-up-7e-4 | LR=5e-4→7e-4: close upper side of LR bracket (only lower side tested) | WIP |
-| frieren | #2312 | learned-fourier-freqs | FourierCoordEnc.freqs as nn.Parameter (dyadic init): let network learn optimal frequency spectrum | WIP |
+| askeladd | #2286 | flow-cond-fourier-re-aoa | Fourier encode log_Re+AoA0+AoA1 dims; +12 features, fun_dim 44→56 | IN FLIGHT |
+| tanjiro | #2281 | swiglu-inner-dim-320 | SwiGLU inner_dim 256→320 (pre-ReGLU branch; compare vs old SwiGLU baseline 67.381) | IN FLIGHT |
+| alphonse | #2308 | cosine-tmax-12 | T_max=14→12 cosine schedule recalibration | IN FLIGHT |
+| edward | #2309 | hybrid-fourier-dyadic-rff | Dyadic L=6 + Gaussian RFF m=6 σ=1.0 concatenated Fourier encoder | IN FLIGHT |
+| frieren | #2312 | learned-fourier-freqs | FourierCoordEnc.freqs as nn.Parameter (dyadic init) | IN FLIGHT |
+| thorfinn | NEW | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | ASSIGNED |
+| fern | NEW | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | ASSIGNED |
+| nezuko | NEW | stoch-depth-0.05 | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | ASSIGNED |
 
-## Key findings from Wave 13/14
+## Key findings from Wave 13/14/15
 
-**Gate activation axis (#2266 win + context):**
-- SiLU → GELU: **−4.75% val, −2.21% test** (14th compound win). Largest single-character gain.
-- Mechanism: GELU < SiLU for x<0 → sharper gate suppresses cross-channel contamination at high-magnitude p features
-- Gate-sharpness monotonicity hypothesis: SiLU < GELU — next test is ReLU (harshest: zero for x<0)
-- If ReGLU also wins → activate monotonic, harder is better, try `abs(x)*x/2` or learned gates
-- If ReGLU regresses → GELU is the optimal operating point (Goldilocks gate sharpness)
+**Gate activation axis (fully confirmed monotonic):**
+- SiLU → GELU: **−4.75% val, −2.21% test** (14th compound win)
+- GELU → ReLU: **−1.92% val, −4.07% test** (15th compound win; test gain > val gain)
+- Gate-sharpness monotonicity: SiLU < GELU < ReLU — each harder gate wins
+- OOD splits benefit more from harder gates than in-dist (camber_cruise, camber_rc, re_rand all improved most)
+- val_single_in_dist small regression (+2.03) with ReGLU — harder gate may slightly over-suppress in-dist features
+- **Next: Squared ReLU** (F.relu²) — Primer (So et al. 2021) — tests whether monotonicity continues past ReLU
+- If squared ReLU wins → axis still open; if not → ReLU is the gate optimum
 
 **Encoder axis (from #2225 Gaussian RFF + in-flight #2286):**
 - Pure Gaussian RFF acts as low-pass filter vs dyadic broadband — misses high-freq pressure structure
@@ -70,20 +72,20 @@ The compound stack has 14 merged wins (100.957 → 64.182 = **−36.4%**). The G
 | Axis | Best setting | Closure reason |
 |---|---|---|
 | L1 vs MSE | L1 | First merged win |
-| Stoch-depth | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum |
-| Cosine T_max | T_max=14 (per-batch) | T_max=15/50 both worse |
-| LR warmup | epoch-1 linear ramp | Merged; T_max adjustment still open |
+| Stoch-depth single-knob | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum (re-testing on ReGLU stack: nezuko #stoch-depth-0.05) |
+| Cosine T_max | T_max=14 (per-batch) | T_max adjustment: alphonse #2308 in-flight |
+| LR warmup | epoch-1 linear ramp | Merged |
 | Grad-clip | max_norm=25 | {1.0,10,25,50} bracket complete |
 | Fourier L | L=6 dyadic | L=8 plateau, L=4 baseline |
 | LayerScale init | γ_l=0.025 | Sweep 0.1→0.05→0.025→0.0125 complete |
-| Surf-ch-weight | [0.5,0.5,2.0] | 4× p:v ratio optimum; vol-pressure-weight conflict |
+| Surf-ch-weight | [0.5,0.5,2.0] | 4× p:v ratio optimum |
 | n_head | 4 | n_head=8 +7.81%, n_head=2 +1.24% |
-| Vol-loss ch-weight | off | Conflicts with surf-ch-weight; merged axis |
-| Normalization | LayerNorm + β | RMSNorm +20.2%; mean-centering essential for SwiGLU |
+| Vol-loss ch-weight | off | Conflicts with surf-ch-weight |
+| Normalization | LayerNorm + β | RMSNorm +20.2% catastrophic |
 | Depth | n_layers=5 | n_layers=6 +5.43%, compute-bound |
 | Slice_num | 64 | slice_num=96 +8.82%, dilution |
-| LR bracket-down | lr=5e-4 | lr=3e-4 +5.95%, schedule mismatch |
-| Lion optimizer | AdamW (with SwiGLU) | Partially redundant + schedule mismatch |
+| LR axis | lr=5e-4 | 3e-4=+5.95%, 5e-4=optimal, 7e-4=marginal near-tie; CLOSED |
+| Lion optimizer | AdamW (post-SwiGLU) | Redundant + schedule mismatch |
 | AdamW betas | (0.9, 0.999) default | β₂=0.95 non-uniform regression |
 | EMA weights | off | Fights Fourier high-freq sharpening |
 | Output-side calibration | off | log1p, γ-bias, per-channel all regressed |
@@ -94,15 +96,15 @@ The compound stack has 14 merged wins (100.957 → 64.182 = **−36.4%**). The G
 | Adaptive grad-clip | off | Over-clips on LayerScale-attenuated stack |
 | Gaussian RFF (pure) | dyadic L=6 | Low-pass filter, in-dist regression |
 
-## Prioritized open research themes (Wave 15+)
+## Prioritized open research themes (Wave 16+)
 
-1. **ReGLU gate** (thorfinn, assigned): closes gate-sharpness axis; if monotonic, try harder gates
-2. **GeGLU inner_dim=320** (fern, assigned): does inner_dim expansion compound with GeGLU win?
-3. **Hybrid dyadic+RFF encoder** (edward, assigned): combine structural high-freq + smooth OOD coverage
-4. **Learned Fourier frequencies** (frieren, assigned): B as nn.Parameter — most principled frequency learning
-5. **LR bracket-up 7e-4** (nezuko, assigned): close LR axis from upper direction
-6. **T_max adjustment** (alphonse, assigned): calibrate cosine schedule to actual ~12-epoch budget
-7. **FlowCond Fourier** (askeladd, in-flight): non-spatial Fourier for log_Re/AoA — could open val_re_rand
-8. **SwiGLU inner_dim=320** (tanjiro, in-flight): if beats SwiGLU-256, also need GeGLU-320 comparison
-9. **Width increase n_hidden=144**: only if inner_dim hits saturation
-10. **Data augmentation**: MixUp across foil geometries, or Re/AoA perturbation (after architecture plateau)
+1. **Squared ReLU gate** (thorfinn, NEW): F.relu(x)^2 — Primer-style gate; tests whether monotonicity continues past ReLU
+2. **ReGLU inner_dim=288** (fern, NEW): bisect between 256 (win) and 320 (B) on current ReGLU stack
+3. **Stoch-depth on ReGLU** (nezuko, NEW): reduce max drop 0.10→0.05; ReGLU sparsity may reduce need for explicit drop
+4. **FlowCond Fourier** (askeladd, in-flight #2286): non-spatial Fourier for log_Re/AoA — targets val_re_rand
+5. **Hybrid dyadic+RFF Fourier** (edward, in-flight #2309): combine high-freq + smooth OOD coverage
+6. **Learned Fourier frequencies** (frieren, in-flight #2312): discover optimal frequency spectrum
+7. **Cosine T_max=12** (alphonse, in-flight #2308): schedule recalibration
+8. **SwiGLU inner_dim=320** (tanjiro, in-flight #2281): pre-ReGLU branch; compare vs old SwiGLU baseline 67.381
+9. **Harder gates**: Cube ReLU, or learned per-channel gate (nn.PReLU); only if Squared ReLU wins
+10. **Width n_hidden=144**: only if gate/capacity axes saturate
