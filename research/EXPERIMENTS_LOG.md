@@ -1656,3 +1656,33 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 
 **Programme learning**: Under 30-min SENPAI_TIMEOUT_MINUTES + N=1499 + already-strong SOAP+cosine, ANY 2× per-step regularizer is dominated by epoch-count loss. **The wall-cap is the binding constraint, not the optimizer.** This rules out SAM, ESAM, and LookSAM screening on this branch (all would need wall-cap-vs-epoch-count tradeoff calculations dominated by per-epoch math). Together with closed LayerScale / EMA / SWA / Lookahead / DropPath / drop-token-vol-pending — **the "drop-in stochastic regularizer" axis is essentially exhausted on Charlie.** Future regularization wins must come from data-side augmentation (zero training-step cost) or single-pass curriculum/objective tweaks.
 
+
+## 2026-05-13 21:38 — PR #2581: mlp_ratio 2→4 (double FFN hidden dim)
+- **Branch**: `charliepai2g24h1-askeladd/mlp-ratio-4-ffn-double`
+- **Hypothesis**: Per-node FFN is the bottleneck; widening FFN (canonical ViT/Llama choice) should add useful capacity
+- **Status**: **CLOSED — large regression** val +28.2%, test +27.5%
+
+| Metric | Baseline (#2011) | mlp_ratio=4 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 28.8762 | 37.0291 | +28.2% |
+| test_avg/mae_surf_p | 24.9992 | 31.8651 | +27.5% |
+| params | 662K | 995,943 | +50.4% |
+| epochs in 30-min cap | 28 | 25 | −3 |
+| s/epoch (steady) | ~64.5 | ~70-72 | +9-12% |
+
+**Per-split val deltas**: single +33.9%, rc +17.6%, **cruise +54.5%**, re_rand +25.3% — uniform regression with **largest hit on the EASIEST split** (cruise), the classic over-parameterization signature on N=1499.
+
+- **Diagnostic**: Per-epoch convergence is slower with wider FFN even controlling for wall-clock. Extra parameters slow optimization without delivering a better basin. Linear extrapolation to epoch 28 ≈ 34 (still well above baseline 28.88), so the wall-clock penalty doesn't explain the regression.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-askeladd-mlp-ratio-4-ffn-double-20260513-205356/metrics.jsonl`
+
+**Programme learning**: Combined with closed mlp_ratio=3 (#2256, +23.9%), the FFN-capacity axis is FULLY CLOSED in BOTH directions. mlp_ratio=2 is the local optimum at N=1499. The closure analysis suggested "n_layers / slice_num / n_hidden" — but all three are independently closed (n_layers=6 #2079, slice_num=128 #1467 / =32 #2320, wider-soap-192 #1797). **Capacity-expansion meta-axis is now exhausted across all 4 known capacity knobs.**
+
+## 2026-05-13 21:38 — PR #2324: grad-accum-batch8 (gradient accumulation steps=2)
+- **Branch**: `charliepai2g24h1-tanjiro/grad-accum-batch8`
+- **Hypothesis**: Effective batch size 4→8 via accumulation, no memory cost
+- **Status**: **CLOSED (infra-stale, not science-stale)**
+
+Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (each poll iteration burns ~90s on 6× gh_retry attempts that themselves contribute to the throttle, self-reinforcing the loop). PR labels were correctly set throughout but the pod could not poll to see them. Closing and reassigning to a fresh PR — when the rate-limit naturally clears the pod will pick up the new work.
+
+**Hypothesis itself remains untested.** Could be re-attempted by another student in a future round if grad-accum becomes worth revisiting.
+
