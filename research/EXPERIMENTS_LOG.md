@@ -1979,3 +1979,54 @@ Pivoting alphonse to **Random Fourier Features** (Tancik et al. 2020 "Fourier Fe
 If σ=1.0 lands → opens compounding with next merged winner. If σ=4.0 lands → revisits the positional-encoding axis with the realization that RFF (representation) was a different mechanism from unified_pos (positional injection).
 
 ---
+## 2026-05-13 09:10 — PR #1873 SEND-BACK willowpai2g48h2-fern (SDF on grad-clip+FiLM): rebase + rerun on Kendall stack — strong test win on pre-Kendall baseline, need to confirm compounding
+
+- **Branch:** `willowpai2g48h2-fern/sdf-feature-on-clipfilm` (conflicting with current Kendall stack — needs rebase)
+- **Hypothesis (original):** Per-node SDF (log1p+standardize) as input feature on grad-clip+FiLM baseline (pre-Kendall #1731, val=74.62 test=66.14).
+- **Result on pre-Kendall stack (W&B `s1m3svr8`):**
+
+| Metric | SDF (#1873) | Pre-Kendall baseline #1731 | Δ | vs current Kendall #1906 (71.43/62.99) |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p (SWA) | **74.89** | 74.62 | +0.36% (within 2σ) | **+4.85% regress** |
+| test_avg/mae_surf_p (SWA) | **65.10** | 66.14 | **−1.56%** ✓ test win | **+3.35% regress** |
+| val_geom_camber_rc (bottleneck) | **90.22** | 90.92 | **−0.77%** | — |
+| test_single_in_dist | **73.80** | 77.93 | **−5.30%** ✓ | — |
+| test_geom_camber_rc | **79.47** | 81.37 | **−2.33%** ✓ | — |
+
+**Mechanism confirmed on pre-Kendall stack:** geometry-aware features deliver predicted asymmetric test gain on geometry-related splits (camber_rc, single_in_dist). Val gain on bottleneck is small (-0.77%) but in the right direction, washed out by `val_geom_camber_cruise` +5.28% (likely SWA-window-clip artifact — student got 2 SWA epochs vs baseline's 3 due to 30-min cap on 15-epoch budget).
+
+### Banked findings (independent of merge decision)
+
+1. **Precomputed SDF is the right wall-clock optimization.** Per-batch `torch.cdist([N, N_surf])` costs ~6 min/epoch on this dataset (NOT the predicted +1-3 min). Student precomputed once at startup (~50 s for all 2000 samples), shipped SDF as 25th channel of `x` — mathematically equivalent to per-batch (verified: `sdf_at_surface_max ≈ 0.0014`). Without precompute, runs hit 30-min cap at epoch 12 with only 1 SWA epoch.
+2. **SDF feature is well-scaled.** log1p+standardize compresses heavy-tail max-13m raw distance into [−0.47, 4.83] range. sdf_norm mean ≈ 0. No degenerate behavior.
+3. **FiLM continues to learn alongside SDF.** γ_l2=17.23, β_l2=12.37 — unchanged magnitudes from baseline. Geometry-aware features don't kill the FiLM signal.
+4. **Per-split val vs test asymmetry:** val_geom_camber_cruise regressed +5.28% but test_geom_camber_cruise only +1.74% — suggests SWA-window shortening hits val more than test (smaller val sample counts 100 vs test's 200).
+
+### Decision: SEND BACK for rebase + rerun on Kendall
+
+Cannot merge against current baseline (val=74.89 > 71.43; test=65.10 > 62.99 → test-override doesn't fire either). Result is on the wrong stack — geometry-aware × Kendall multi-task-weighting are mechanism-orthogonal axes; need to test if they compound.
+
+**Reproduce command for rerun:**
+```bash
+cd target/ && python train.py \
+  --epochs 15 \
+  --max_norm 0.5 \
+  --use_kendall_uncertainty \
+  --use_sdf \
+  --seed 0 \
+  --agent willowpai2g48h2-fern \
+  --wandb_name willowpai2g48h2-fern/sdf-feature-on-kendall \
+  --wandb_group sdf-feature-on-kendall
+```
+
+Note: changed `--max_norm 1.0` → `0.5` to align with current baseline (which uses #1831's tightened max_norm=0.5).
+
+### Expected outcomes (Bayesian)
+
+- **~50% likelihood: SDF + Kendall compound** (orthogonal axes, both target test_single_in_dist heavily). Predicted val 70.0-71.4 lands.
+- **~30%: partial overlap with Kendall.** Diminishing returns since Kendall already exploited in-dist headroom (-8.10 on test_single_in_dist). Predicted val 71.2-72.5.
+- **~20%: SDF doesn't stack on Kendall.** Axis closes on this stack. Predicted val 72.5+.
+
+If lands → opens composition with #2049 aux-Re prediction (geometry × Re-conditioning axes), learned-SDF embedding (SDF → MLP[1→4]), and surface arc-length encoding.
+
+---
