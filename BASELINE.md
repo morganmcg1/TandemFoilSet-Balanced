@@ -500,6 +500,29 @@ T_max=20 stretches the cosine schedule so the LR at epoch 18 is 3.67e-6 (vs ~0 w
 
 Finding #20 (pre-LN: lr=1.5e-4 optimal, lr=2e-4 +9.5% regression) was calibrated to pre-LN's unbounded residual stream. Under post-LN's bounded activations, the loss-landscape curvature absorbs higher LR cleanly — e1 gn_mean for lr=3e-4 was 95.9 vs predicted 120–160. The new post-LN LR optimum is **lr=2e-4** (1.33× the pre-LN value, not 2×). Both arms hit best_epoch=18/18 — schedule still has headroom even before stacking with T_max=20. The IID gains dominate (in_dist −6.04%, comfortably beating noise floor ~1.4%); rc remains the largest-headroom split. **Note:** This entry merges lr=2e-4 with T_max=18 (the post-LN baseline at the time of the experiment). The lr=2e-4 + T_max=20 stack is the natural next step and is being assigned immediately.
 
+## 2026-05-13 22:40 — PR #2568: Stack lr=2e-4 + T_max=20 — OOD tail extension compounds
+
+- **test_avg/mae_surf_p: 46.2751** (NEW BEST — −1.30% vs previous 46.8821)
+- **val_avg/mae_surf_p:** 53.1311 (best epoch 18/18)
+- **Per-split:** in_dist=47.8109 (flat −0.02%), rc=58.8461 (−2.78%), cruise=32.0006 (−3.95%), re_rand=46.4428 (−4.97%)
+- **W&B run:** lym1yzlo (postln-lr-tmax-stack group)
+- **Config change:** `--t_max 20` added to lr=2e-4 config; T_max: 18 → 20
+- **Full config:** bf16 + bs=4 + accum=2 + Lion **lr=2e-4** + β1=0.9 + β2=0.99 + wd=0 + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + post-LN + **t_max=20** + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0 --lr 2e-4 --t_max 20`
+
+### Per-split test mae_surf_p
+
+| Split | mae_surf_p | Δ vs prev baseline (46.8821) |
+|---|---|---|
+| test_single_in_dist | 47.8109 | flat (−0.02%) |
+| test_geom_camber_rc | 58.8461 | −2.78% |
+| test_geom_camber_cruise | 32.0006 | **−3.95%** |
+| test_re_rand | 46.4428 | −4.97% |
+
+### Mechanism
+
+T_max=20 tail-LR extension (Finding #47) confirmed at the new lr=2e-4 baseline. IID flat (lr=2e-4 already maximized in-dist in PR #2494); all OOD splits gain from the extra cosine tail. Val crossover at e17 (−1.29 below lr=2e-4+T_max=18), then widens to −2.77 at e18 — exact Finding #47 pattern. The lr=2e-4 + T_max=20 stack supersedes the lr=2.25e-4 + T_max=18 result from PR #2572 (46.88 → 46.28).
+
 ## 2026-05-13 21:25 — PR #2572: LR midpoint refinement — lr=2.25e-4 wins (Finding #54 updated)
 
 - **test_avg/mae_surf_p: 46.8821** (NEW BEST — −2.14% vs previous 47.9076)
