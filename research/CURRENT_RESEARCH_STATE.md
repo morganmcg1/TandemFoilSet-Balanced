@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~13:25 — PR #2260 (grad_clip=0.5) MERGED new best 65.2170; PRs #2238 (trainable-B), #2265 (lr-1.25e-3) CLOSED; assigned nezuko #2291 clip=0.25, alphonse #2293 wd=1e-3, fern #2292 n-head-8
+- **Last updated:** 2026-05-13 ~14:25 — PRs #2291 (clip=0.25) and #2292 (n-head-8) CLOSED; clip axis fully mapped (0.5 optimal); n_head=8 revealed critical Transolver param-scaling quirk (q/k/v scale as dim_head²); assigned fern #2346 slice-num-96, nezuko #2345 batch-size-2
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -37,9 +37,9 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 
 | PR | Student | Slug | Axis | Status |
 |----|---------|------|------|---|
-| #2291 | nezuko | `grad-clip-0p25` | Clip bracket: 0.5→0.25; completes the clip axis monotone test | **WIP — just assigned** |
-| #2293 | alphonse | `wd-1e-3` | Weight decay 1e-4→1e-3 (10×); untested axis on new stack | **WIP — just assigned** |
-| #2292 | fern | `n-head-8` | Transolver n_head 4→8; same params/FLOPs, finer-grained attention | **WIP — just assigned** |
+| #2345 | nezuko | `batch-size-2` | bsz 4→2; gradient-noise regularization, 2× opt steps/epoch; targets OOD via flatter minima | **WIP — just assigned** |
+| #2346 | fern | `slice-num-96` | Transolver slice_num 64→96 (+50% physics slices); +5K params; risk: ~35min for 14 epochs | **WIP — just assigned** |
+| #2293 | alphonse | `wd-1e-3` | Weight decay 1e-4→1e-3 (10×); untested axis on new stack | **WIP — training** |
 | #2257 | frieren | `foil-mirror-aug` | Z-axis foil reflection augmentation; doubles effective training data | **WIP — in training** |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 50× (1e-4→5e-3); nudged to rebase onto clip=0.5 HEAD | **WIP — nudged** |
 | #1421 | edward | `surf-only-channel-weight` | **PROMISING**: val=64.2691 vs 65.2170 baseline on PRE-clip=0.5 HEAD; sent back for rerun on clip=0.5 stack | **WIP — rerun requested** |
@@ -59,6 +59,8 @@ Test: test_avg=56.4581 (test_single=64.4538, test_rc=71.6744, test_cruise=35.253
 | warmup duration (RFF) | **CLOSED** at 4 epochs | warmup=5 +0.85% on RFF (doesn't stack from pre-RFF) |
 | AdamW ε | **CLOSED** on RFF | ε=1e-6 tie; spike is gradient-magnitude not ε-driven |
 | β2 | **CLOSED** at 0.99 | β2=0.95 +1.12% (non-monotone, 0.99 sweet spot) |
+| grad_clip | **CLOSED** at 0.5 | 0.25 gives +0.65% val; clipping 100% saturated at peak-LR window; halving clip halves effective LR |
+| n_head | **CLOSED** at 4 | n=8 gave +23.4% val / +24.6% test; **CRITICAL implementation quirk**: Transolver q/k/v scale as `dim_head²`, so n_head=8 actually LOSES 16.6K params |
 
 ## Key research insights
 

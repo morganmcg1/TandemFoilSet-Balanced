@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-05-13 14:25 — PR #2291: grad-clip-0p25 (nezuko) — CLOSED (clip axis fully mapped at 0.5)
+
+- **Branch:** `charliepai2g48h2-nezuko/grad-clip-0p25`
+- **Hypothesis:** Tighter clipping to 0.25 may further dampen the (already-gone) epoch-5 spike and help OOD generalization.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-grad-clip-0p25-20260513-131103/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170)
+
+| Split | Baseline | clip=0.25 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | 73.3757 | **−0.53%** ✓ |
+| val_geom_camber_rc | 79.4389 | 79.1200 | **−0.40%** ✓ |
+| val_geom_camber_cruise | 42.8481 | 44.0489 | +2.80% ❌ |
+| val_re_rand | 64.8172 | 66.0262 | +1.87% ❌ |
+| **val_avg/mae_surf_p** | **65.2170** | **65.6427** | **+0.65%** ❌ |
+| **test_avg/mae_surf_p** | 56.4581 | 57.0366 | +1.02% ❌ |
+
+### Key diagnostic — clipping saturation
+
+Pre-clip grad norms in peak-LR window (epochs 4–7): **mean 11–12, max 28–31, frac>0.25 = 100%**.
+
+Clipping fully saturates at BOTH clip=0.5 and clip=0.25 — every step is clipped at every epoch during peak-LR window. The only difference is the step magnitude:
+- clip=0.5 → effective LR ≈ 6.6e-5 per saturated step
+- clip=0.25 → effective LR ≈ 3.3e-5 per saturated step (half)
+
+Epoch-5 transition: +91 (clip=1.0) → −58 (clip=0.5) → **−5.7 (clip=0.25)**. The spike is gone, but progress in the peak-LR window is much slower at clip=0.25, leaving less room for the cosine tail to refine.
+
+### Outcome
+
+**Clip axis CLOSED at 0.5.** Going tighter (0.25) over-constrains peak-LR-window progress. The single/rc improvement was real (matching the "OOD over-constraint helps" hypothesis), but the cruise/re_rand regression is larger. Net regression rules out merging.
+
+**Mechanistic understanding:** Clipping is the LR governor in the peak-LR window, not the cosine schedule. The product (LR × clip) is what matters for effective step size. With clip=0.5 saturating every step at peak LR, the schedule is effectively a constant max-step regime for ~3–4 epochs. Going lower halves the effective LR during that window.
+
+---
+
+## 2026-05-13 14:25 — PR #2292: n-head-8 (fern) — CLOSED (catastrophic regression + critical insight)
+
+- **Branch:** `charliepai2g48h2-fern/n-head-8`
+- **Hypothesis:** Double Transolver attention heads from 4→8, expecting same params/FLOPs but finer-grained attention.
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-n-head-8-20260513-131812/metrics.jsonl`
+
+### Results vs. #2260 baseline (65.2170)
+
+| Split | Baseline | n_head=8 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 73.7639 | 98.2805 | +33.2% ❌ |
+| val_geom_camber_rc | 79.4389 | 95.3060 | +20.0% ❌ |
+| val_geom_camber_cruise | 42.8481 | 52.6446 | +22.9% ❌ |
+| val_re_rand | 64.8172 | 75.7341 | +16.8% ❌ |
+| **val_avg/mae_surf_p** | **65.2170** | **80.4913** | **+23.4%** ❌ |
+| **test_avg/mae_surf_p** | 56.4581 | 70.3284 | **+24.6%** ❌ |
+
+Run was **timeout-truncated at epoch 11/14**.
+
+### Critical insight: Transolver n_head is NOT param-invariant
+
+The PR predicted equal params at n_head=8 (`n_head × d_head² = n_hidden² = const`). The actual measurement: **n_head=8 has 661,611 params (−16.6K, −2.4%)**.
+
+Root cause: the `to_q/k/v` projections in `train.py:151-153` are `nn.Linear(dim_head, dim_head)`, not `nn.Linear(n_hidden, n_hidden)`. So q/k/v params scale as `(n_hidden/n_head)²`:
+- n_head=4: dim_head=32 → q/k/v = 3 × 32² = 3,072 params/layer
+- n_head=8: dim_head=16 → q/k/v = 3 × 16² = 768 params/layer
+
+Plus `in_project_slice = Linear(dim_head, slice_num)` shrinks 32×64=2048 → 16×64=1024 per layer.
+
+Net per layer: −3.3K, × 5 layers = **−16.6K total** (matches observed exactly).
+
+### Outcome
+
+**n_head axis CLOSED on this implementation.** Going to higher n_head explicitly REDUCES attention capacity. This is an implementation quirk (the q/k/v projections fix `dim_head` in-out, not `n_hidden`). Going to n_head=2 (dim_head=64) would INCREASE per-layer attention params by ~3× to ~9.2K (vs 3.1K at n_head=4).
+
+**Future architecture experiments must explicitly account for the (n_hidden/n_head)² scaling in Transolver q/k/v.** This invalidates the standard "n_head is free expressivity reshape" intuition for this codebase.
+
+---
+
 ## 2026-05-13 13:20 — PR #2260: grad-clip-0p5 (nezuko) — MERGED ✅ NEW BEST: 65.2170
 
 - **Branch:** `charliepai2g48h2-nezuko/grad-clip-0p5`
