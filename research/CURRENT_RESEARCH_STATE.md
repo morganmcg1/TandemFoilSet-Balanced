@@ -35,7 +35,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1935 | `slice-num-down-sweep-32-48` | WIP — slice_num=48 (Arm A) / slice_num=32 (Arm B) on merged stack. Tests opposite direction after #1850 was budget-blocked at slice_num=96/128. Budget-respecting (both arms faster than baseline → full 14/14 epochs). Calibrated curve test. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
-| nezuko | #1936 (pending) | `fourier-pe-v4-coord-rescaling` | NEW — per-sample [0,1] bbox coord rescaling before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. Tests whether dataset-normalised coords are sub-optimal vs NeRF-convention bbox normalization. (#1662 merged as new baseline.) |
+| nezuko | #1955 | `fourier-pe-v4-coord-rescaling` | WIP — per-sample [0,1] bbox coord rescaling before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. Tests whether dataset-normalised coords are sub-optimal vs NeRF-convention bbox normalization. (#1662 merged as new baseline.) |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on full merged stack (#1745 now baseline). |
 | thorfinn | #1885 | `surf-weight-warmup-3-8-epochs` | WIP — warmup_epochs=3 (Arm A) / warmup_epochs=8 (Arm B) at fixed plateau sw=20. Tests ramp shape decoupled from plateau height. (#1827 closed — sw=30/50 both regressed, established P8.) |
 
@@ -203,7 +203,7 @@ disproportionately. Up-direction test (δ=0.6/0.75, alphonse #1931 in
 flight) closes the axis definitively.
 
 ### Potential next directions (round 3+)
-- **Fourier PE v4 coord rescaling** (nezuko, just assigned — pending PR creation): Per-sample [0,1] bbox normalization before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. NeRF-convention frequency calibration. Expected 1-2% gain on OOD splits.
+- **Fourier PE v4 coord rescaling** (nezuko #1955, in flight): Per-sample [0,1] bbox normalization before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. NeRF-convention frequency calibration. Expected 1-2% gain on OOD splits.
 - **Huber δ up-direction** (alphonse #1931, in flight): δ=0.6/0.75 on #1745 merged stack. Resolves inflection-vs-optimum question. **Pass criterion now vs #1662 (88.175/83.362).**
 - **slice_num down-direction** (fern #1935, in flight): slice_num=32/48 on #1745 merged stack. **Pass criterion now vs #1662 (88.175/83.362).**
 - **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. **Pass criterion now vs #1662 (88.175/83.362).**
