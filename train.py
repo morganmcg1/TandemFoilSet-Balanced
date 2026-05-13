@@ -389,6 +389,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.95
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -469,7 +471,12 @@ print(
     f"ema params: {sum(p.numel() for p in ema_model.parameters())}"
 )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(cfg.adam_beta1, cfg.adam_beta2),
+)
 
 # Linear LR warmup over the first epoch, then cosine decay over the remaining
 # epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
