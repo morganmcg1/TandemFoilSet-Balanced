@@ -8,6 +8,58 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 08:15 — PR #2020 (alphonse per-channel-decoder-heads) — **CLOSED** (+4.20% regression)
+
+- Branch: `charliepai2g24h4-alphonse/per-channel-decoder-heads`
+- Hypothesis: Replace shared `mlp2` decoder with 3 fully independent `Sequential(Linear(128→128), GELU, Linear(128→1))` per-channel heads. Full-capacity design (128-hidden each) to fix the capacity confound in failed PR #1811 (half-capacity 128→64→1).
+- Metric artifacts: `target/models/model-charliepai2g24h4-alphonse-per-channel-decoder-heads-20260513-071517/metrics.jsonl`
+
+| Metric | Per-channel heads (#2020) | Baseline (#1896) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 13) | **77.605** | 74.476 | **+4.20% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **67.329** | 66.014 | +1.99% REGRESSION |
+
+Per-split val: single_in_dist=85.863 (+0.93%) / camber_rc=90.964 (**+9.91%**) / camber_cruise=58.140 (+1.99%) / re_rand=75.454 (+3.27%). **All 4 val splits regress; camber_rc worst by far.**
+Per-split test: single_in_dist=76.076 (+1.40%) / camber_rc=76.844 (+3.88%) / camber_cruise=48.277 (−0.34%) / re_rand=68.119 (+2.25%).
+
+**Sanity checks passed:** param count exact (702,295 vs 702,000 predicted), val_single_in_dist regression collapsed from +5.34% (#1811 half-capacity) → +0.93% (full capacity), VRAM 49.15 GB. The capacity confound was real — fixing it reduced the in-dist regression 6×.
+
+**BUT per-channel specialization still regresses overall.** Key mechanism: camber_rc regressed +9.91% — geometry-interpolation OOD splits need the **cross-channel features** (Ux↔Uy↔p correlations) that the shared decoder learns through its single 128→3 projection. Per-channel heads sacrifice these cross-channel correlations for per-head capacity, which is net-negative on OOD generalization.
+
+**Axis closure (2 experiments):** Both half-capacity (#1811) and full-capacity (#2020) per-channel-output directions tested. Both regressed. The shared cross-channel decoder is load-bearing and should not be split. If per-channel granularity is desired, do it on the **loss-side** (already done, #1711) or **input-side** (unexplored).
+
+---
+
+## 2026-05-13 08:10 — PR #1852 (tanjiro coord-jitter-aug std=0.005) — **CLOSED** (+0.92% regression with direction-inverted split pattern)
+
+- Branch: `charliepai2g24h4-tanjiro/coord-jitter-aug-0.005`
+- Hypothesis: Gaussian noise (std=0.005) on input spatial dims [x, z] during training, applied before Fourier encoding. Forces mesh-position perturbation invariance, regularizes high-freq Fourier features.
+- Metric artifacts: `models/model-charliepai2g24h4-tanjiro-coord-jitter-aug-0.005-20260513-071736/metrics.jsonl`
+
+| Metric | Coord-jitter std=0.005 (#1852) | Baseline (#1896) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **75.159** | 74.476 | **+0.92% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **66.445** | 66.014 | +0.65% REGRESSION |
+
+**Direction-inverted per-split pattern (key finding):**
+
+| Split | val Δ | test Δ |
+|---|---:|---:|
+| `val_single_in_dist` | **−4.83%** | **−3.88%** |
+| `val_geom_camber_rc` | +4.92% | +5.23% |
+| `val_geom_camber_cruise` | +3.35% | +1.69% |
+| `val_re_rand` | +1.19% | −0.09% |
+
+**Mechanism analysis (student's insight, confirmed):** Coord jitter only perturbs the 2 spatial dims [x, y]. OOD-geom splits hold out *new airfoil cambers* distinguished by **shape features** in dims 2–11 (saf, dsdf) and NACA params dims 15–17 — not spatial positions. So coord jitter is a **position-conditioned regularizer** that helps where in-dist position is densely sampled, but doesn't help when the underlying shape function is OOD.
+
+**Strong in-dist signal preserved:** val_single_in_dist = −4.83% (val + test both robust). This is real regularization, not noise.
+
+**Net negative:** 3 OOD splits regress enough to overwhelm the 1 in-dist gain. val_avg +0.92%.
+
+**Implication:** Input regularization works but on the wrong axis at std=0.005. Follow-up: bracket-down to std=0.002. At 2.5× smaller amplitude, in-dist gain may partially survive while OOD damage shrinks toward zero. Sweet spot may exist.
+
+---
+
 ## 2026-05-13 07:05 — PR #1896 (thorfinn LayerScale init=0.05) — **MERGED** (9th compound win)
 
 - Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.05`
