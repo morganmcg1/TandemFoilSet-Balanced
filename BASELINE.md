@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 09:35 — PR #2055: tanjiro — OneCycleLR anneal_strategy cos → linear (MERGED)
+
+**New best val and test. 9th consecutive compounding win: -3.13% val / -1.13% test.**
+
+- **val_avg/mae_surf_p:** 73.8808 (was 76.2707) — **-3.13%**
+- **test_avg/mae_surf_p:** **66.0211** (was 66.7732) — **-1.13%**
+- **W&B run:** `yf3i9e24`
+- **Epochs:** 18 in ~30 min (best epoch 18; completed full OneCycleLR schedule)
+
+Per-split test `mae_surf_p` (run `yf3i9e24`):
+
+| Split | test | vs prev baseline (#2008) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 72.8217 | 71.8614 | +1.34% |
+| `geom_camber_rc` | 80.2973 | 80.1858 | +0.14% |
+| `geom_camber_cruise` | 45.5883 | 48.2707 | **-5.56%** |
+| `re_rand` | 65.3769 | 66.7750 | **-2.09%** |
+
+Changes vs prior baseline (#2008):
+- `anneal_strategy="linear"` in OneCycleLR (was `"cos"`). Under our 30-min/18-epoch truncated regime, cosine spends most time near peak LR and only deeply anneals at the very end — truncated training cuts off the deep anneal. Linear anneal gives constant decrease, so the last third of training sees much more time at refinement LR. Best gains on `geom_camber_cruise` (-5.56%) and `re_rand` (-2.09%) — the OOD splits that benefit most from extra fine-tuning. `single_in_dist` slightly regresses (+1.34%) but net val/test are both better.
+
+Stack: anneal_strategy=linear + beta2=0.98 + beta1=0.95 + smooth_l1(β=0.25) + p_weight=2 + grad_clip=1.0 + bf16 + grad_accum=2 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+**Notes for students:** Current baseline is `val_avg/mae_surf_p = 73.8808`. To beat: val < 73.8808. OneCycleLR `anneal_strategy="linear"` is now default in train.py.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/anneal-linear" --wandb_group "willow-r2-schedule"
+```
+
+---
+
 ## 2026-05-13 08:55 — PR #2008: thorfinn — AdamW beta2 0.99 → 0.98 (MERGED)
 
 **New best val and test. 8th consecutive compounding win: -1.77% val / -2.11% test.**
