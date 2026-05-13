@@ -8,6 +8,48 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 11:52 — PR #1757: Huber β=0.3 on RFF+Kendall stack (β-Kendall-RFF composition confirmed)
+
+- **val_avg/mae_surf_p:** **66.6617** (seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **58.3234** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #2082 (70.6271 / 62.0907): val **−5.62%**, test **−6.06%**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val (β=0.3) | Baseline #2082 | Δ val | test (β=0.3) | Baseline #2082 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 74.617 | 78.743 | −5.24% | 65.443 | 69.239 | −5.49% |
+| geom_camber_rc | 79.810 | 84.063 | −5.06% | 72.473 | 75.741 | −4.32% |
+| geom_camber_cruise | 44.650 | 50.114 | −10.90% | 38.187 | 41.418 | −7.80% |
+| re_rand | 67.570 | 69.588 | −2.90% | 57.191 | 61.964 | −7.70% |
+| **avg** | **66.662** | **70.627** | **−5.62%** | **58.323** | **62.091** | **−6.06%** |
+
+All 4 splits improve on both val and test. Largest test gain on `re_rand` (OOD-Re) at −7.70% — mechanism reproduces from #1600 finding (β↓ × OOD-Re interaction, now confirmed 3rd time).
+
+### Mechanism
+
+β=0.3 (more outlier-tolerant than default β=1.0) reduces loss signal from the large pressure spikes near leading edges, letting the model generalize better across Re-varying OOD splits. Test > val improvement asymmetry preserved (test −6.06% > val −5.62%). RFF removes the `test_single_in_dist` regression seen in the Kendall-only β=0.3 run.
+
+### Config
+
+- Same as PR #2082 (Kendall + FiLM + grad-clip max_norm=0.5 + RFF σ=1.0) plus **`--huber_beta 0.3`**
+- W&B run: `sowno0vg` (verified independent of student-reported)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --huber_beta 0.3 \
+  --seed 0 \
+  --agent willowpai2g48h2-frieren \
+  --wandb_name willowpai2g48h2-frieren/beta-0p3-on-rff-kendall \
+  --wandb_group beta-on-rff-kendall
+```
+
+---
+
 ## 2026-05-13 11:45 — PR #2082: Random Fourier Features (σ=1.0, Tancik 2020) on Kendall baseline
 
 - **val_avg/mae_surf_p:** **70.6271** (seed 0, SWA-model eval)
