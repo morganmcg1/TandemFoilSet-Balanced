@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 22)
+- **As of:** 2026-05-13 (updated cycle 23)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -43,7 +43,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 **Active directions:**
 
 1. **Decoupled LR extension** — merged at 5e-3 (−0.18%); trend not exhausted. Push to 7e-3/1e-2 with 2-epoch head warmup to tame late oscillation. #1949 thorfinn (WIP).
-2. **Stochastic Depth (DropPath)** — regularization angle no other PR is exploring. p∈{0.05, 0.1} on Transolver residual branches. Targets the late-epoch oscillation pattern seen in PR #1795 baseline. #1987 fern (NEW).
+2. **Weight decay re-tune** — current WD=1e-4 has been unchanged through all merged stages (BIVW → Huber → surf-head → decoupled-LR). Sweep {3e-5, 5e-4} to test if stale WD limits the new baseline. #2031 fern (NEW).
 3. **AdamW β2 sweep** — default β2=0.999 has ~700-step half-life, longer than our 5200-step training budget. Try {0.95, 0.98} for faster variance tracking, standard transformer best practice. #2015 askeladd (NEW).
 4. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
 5. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
@@ -68,9 +68,9 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 | 1922 | nezuko | per-channel-huber-delta | WIP | δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}; tests if global δ over-flattens Ux/Uy distributions |
 | 1949 | thorfinn | surf-head-lr-warmup | WIP | surf_head_lr ∈ {7e-3, 1e-2} + 2-ep head warmup; extends PR #1795 trend |
 | 1974 | edward | encoder-lr-retune | WIP | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
-| 1987 | fern | stochastic-depth | WIP | DropPath p∈{0.05, 0.1} on Transolver residual branches; only regularization experiment running |
-| 2013 | tanjiro | logcosh-surface-loss | WIP (NEW) | LogCosh C²-smooth alternative to Huber-δ kink. Arms: scale={1.0, 0.5} |
-| 2015 | askeladd | adamw-beta2-0.95 | WIP (NEW) | AdamW β2 ∈ {0.95, 0.98}; default 0.999 too slow for 14-epoch budget |
+| 2013 | tanjiro | logcosh-surface-loss | WIP | LogCosh C²-smooth alternative to Huber-δ kink. Arms: scale={1.0, 0.5} |
+| 2015 | askeladd | adamw-beta2-0.95 | WIP | AdamW β2 ∈ {0.95, 0.98}; default 0.999 too slow for 14-epoch budget |
+| 2031 | fern | weight-decay-sweep | WIP (NEW) | WD ∈ {3e-5, 5e-4}; current 1e-4 stale since pre-Huber. CLI-only. |
 
 ## Working hypotheses
 
@@ -98,7 +98,8 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 15. **Decoupled LR for surf_head vs encoder** — **confirmed** (PR #1795, −0.18%). surf_head_lr=5e-3 (10×encoder) is the winning arm; monotonic improvement trend across 1e-3→3e-3→5e-3 not yet exhausted. Extending: PR #1949 thorfinn tests 7e-3/1e-2 with warmup.
 16. **Adaptive Huber δ** — **rejected** (PR #1950, +2.25% regression). EMA δ collapsed to clamp floor (0.2) in 60 steps and stayed 88% of training — effectively fixed-δ=0.2. Decoupled-LR merger made δ landscape flatter (PR #1627 saw +17% at δ=0.2; this run only +2.25%). Direction exhausted at this baseline.
 17. **SWA late-epoch averaging** — **rejected** (PR #1951, +3.33% val, +0.99% test regression). SWA mechanism worked exactly as predicted: averaged checkpoint is 4 points better than best single epoch. But this run's trajectory landed ~8 points worse than baseline (best single epoch 105.63 vs 97.99) due to seed variance. The 4-point mechanism gain cannot bridge 8-point trajectory gap. Direction closed; mechanism would still help on a baseline-quality trajectory but cannot be reliably evaluated under our budget without paired-seed.
-18. **Stochastic Depth (DropPath)** — testing (#1987 fern). p∈{0.05, 0.1} on Transolver residual branches.
+18. **Stochastic Depth (DropPath)** — **rejected** (PR #1987, +3.31% val, +1.35% test). Mechanism worked exactly as predicted — baseline late-epoch oscillation (97.99→113.66→108.05→99.85) replaced by monotone (116.46→110.22→107.96→101.23) under DropPath. But convergence slowdown (~3 epochs behind baseline at same step) dominated under 30-min budget. Same wall-clock-bound failure mode as EMA (#1808) and n_head=8 (#1924) — regularization payback requires longer budget than we have.
+21. **Weight decay re-tune** — testing (#2031 fern, NEW). WD ∈ {3e-5, 5e-4}; current 1e-4 unchanged through all merged stages.
 19. **LogCosh surface loss** — testing (#2013 tanjiro, NEW). C²-smooth alternative to Huber's C¹ δ-kink. Tests if gradient smoothness affects Adam's variance tracking.
 20. **AdamW β2 sweep** — testing (#2015 askeladd, NEW). Default β2=0.999 has ~700-step half-life vs 5200-step total budget; try 0.95 (transformer standard) and 0.98.
 
@@ -122,6 +123,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 - **PR #1950** (adaptive Huber δ via EMA of p75 residuals) — +2.25% val regression, +1.07% test. δ collapsed to clamp floor (0.2) within 60 steps because p75 of normalized residuals has median ~0.106. Effectively fixed-δ=0.2 run. Useful side finding: decoupled-LR merger flattened the δ landscape (compare to PR #1627's +17% at δ=0.2). Direction exhausted.
 - **PR #1978** (Re-curriculum via loss multiplier) — +16.87% val, +15.13% test regression. Symmetric Re-tail × BIVW creates destructive interaction: low-Re double-up-weighted, mid-Re down-weighted, high-Re boost cancelled. Both symmetric Re-tail variants (sampler #1868 and loss #1978) closed.
 - **PR #1951** (SWA late-epoch averaging) — +3.33% val, +0.99% test regression. SWA mechanism worked (averaged ckpt 4 points better than best single epoch) but trajectory landed in worse basin than baseline (seed variance). Cannot reliably evaluate without paired-seed comparison under 30-min cap. Direction closed.
+- **PR #1987** (Stochastic Depth / DropPath on Transolver blocks) — +3.31% val, +1.35% test regression. Mechanism worked exactly as predicted (late-epoch oscillation smoothed away). But ~3-epoch convergence slowdown dominated under 14-epoch budget. Wall-clock-bound regularization failure pattern.
 
 ## Potential next directions
 

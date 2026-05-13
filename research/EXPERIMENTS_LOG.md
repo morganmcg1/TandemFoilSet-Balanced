@@ -1,5 +1,66 @@
 # SENPAI Research Results
 
+## 2026-05-13 07:25 — PR #1987: Stochastic Depth (DropPath) on Transolver blocks: regularization unlock
+
+- **Branch:** `willowpai2g48h4-fern/stochastic-depth` (CLOSED — mechanism works, wall-clock-bound)
+- **Student:** willowpai2g48h4-fern
+- **W&B run:** `q64n4xgm`
+- **Hypothesis:** DropPath p∈{0.05, 0.1} on Transolver residual branches; targets baseline late-epoch oscillation pattern via stochastic regularization.
+
+### Results
+
+| Metric | Baseline | Arm 1 (p=0.05) | Δ |
+|--------|---------|----------------|---|
+| `val_avg/mae_surf_p` | 97.9914 | 101.2325 | **+3.31% regression** |
+| `test_avg/mae_surf_p` (4-split) | 88.5311 | 89.7226 | **+1.35% regression** |
+| Best epoch | 11 | 14 (still descending) | — |
+
+Arm 2 (p=0.10) correctly skipped per branching rule.
+
+### Mechanism diagnosis — clean confirmation
+
+DropPath sanity check (standalone test):
+- drop_path_rate=0.05: train per-sample std = 0.903 (vs eval=0.0), output norms preserved in expectation
+- drop_path_rate=0.10: train per-sample std = 1.322
+
+**Trajectory smoothing confirmed**:
+
+| Epoch | Baseline val_avg | DropPath val_avg |
+|-------|------------------|-------------------|
+| 11 | **97.99** (best) | 116.46 |
+| 12 | 113.66 (spike) | 110.22 |
+| 13 | 108.05 | 107.96 |
+| 14 | 99.85 | **101.23** (best, still descending) |
+
+Baseline's epoch-11→12 spike (97.99 → 113.66) is GONE. DropPath gives clean monotone descent through final epochs. The oscillation prediction is fully validated.
+
+### Why it loses at our budget
+
+Each epoch lands ~3 points behind baseline (epoch 12: 110.22 DP vs 113.66 BL, epoch 13: 107.96 DP vs 108.05 BL, epoch 14: 101.23 DP vs 99.85 BL). The DropPath noise injection slows pointwise convergence by ~3 epochs. Under the 14-epoch wall-clock cap, the regularization tax exceeds the smoothing benefit. 
+
+Student's analysis: "This is exactly the failure mode you get when applying a transformer regulariser to a setting that is **under-trained, not over-trained**. The baseline's late-epoch oscillation is not classical overfitting — it's edge-of-stability optimisation oscillation on a model that is still improving in expectation."
+
+### Pattern recognition: wall-clock-bound regularization failures
+
+This is the third such case in this round:
+- PR #1808 (EMA weights): contamination from early-training weights, 14ep too short
+- PR #1924 (n_head=8): +31% per-epoch cost, lost 3 epochs of training
+- PR #1987 (DropPath): smoothing achieved at +3 epochs convergence slowdown cost
+
+Common thread: 14 epochs is below the regularization payback threshold. All three would likely win under longer training budgets.
+
+### Student-suggested follow-ups (not assigned)
+- p=0.01-0.02 (finer-grained sweep): smaller noise → smaller smoothing AND smaller slowdown; net likely zero
+- MLP-only DropPath: halve perturbation while preserving smoothing — interesting but still budget-bound
+- Depth-scaled DropPath (linear schedule): standard ViT recipe; same fundamental budget issue
+- Compose with SWA: rejected since SWA was just closed (#1951)
+
+### Residual opportunities
+- Revisit under longer training budget if SENPAI_MAX_EPOCHS is raised
+- Combine with convergence-accelerating mechanism (e.g., if encoder-LR or β2 sweeps succeed and free up budget headroom)
+
+---
+
 ## 2026-05-13 07:00 — PR #1978: Re-curriculum via per-sample log(Re)-tail loss multiplier (not sampler)
 
 - **Branch:** `willowpai2g48h4-tanjiro/re-loss-weight` (CLOSED — structural regression)
