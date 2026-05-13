@@ -1865,3 +1865,62 @@ Per-split: in_dist=50.894 (−1.4%), rc=61.814 (+0.7%, within noise), cruise=35.
 - **Results** (run on pre-LN stack, against OLD baseline 60.74): sigma=0.005 test −0.96% (within noise floor); sigma=0.01 test +0.71% (regression). Per-split: sigma=0.005 improved cruise −6.58% and re_rand −2.31%, but rc REGRESSED +2.96%. Narrow, per-split-heterogeneous response surface.
 - **Mechanism**: rc (highest-camber OOD) behaves opposite to cruise/re_rand under coord noise. Speculative: sub-pixel jitter smears the high-frequency Fourier components needed for sharp curvature resolution at rc's extreme camber angles. At sigma=0.01, the model may learn to ignore these components entirely (rescuing rc) while losing useful low-noise geometry detail (hurting cruise). Finding #50: coord-noise has narrow per-split-heterogeneous σ-curve; aggregate improvement within seed noise; rc sensitivity to high-frequency geometry perturbation is the most interesting mechanistic finding.
 → Assigned fern Lion β2 re-calibration under post-LN (PR #2533): Finding #39 (β2=0.99 sharp sweet spot) was pre-LN; post-LN's cleaner gradient signal may broaden or shift the β2 optimum.
+
+## 2026-05-13 19:30 — PR #2494: Post-LN LR re-calibration — lr=2e-4 wins, NEW BEST ✓ MERGED
+- willowpai2g48h1-askeladd/postln-lr-recal
+- **Hypothesis**: Finding #20 (lr=1.5e-4 optimal) was calibrated to pre-LN's unbounded residual stream. Post-LN's bounded activations should tolerate higher LR. Test lr=3e-4 (Arm 1) and lr=2e-4 (Arm 2).
+- **Results**: BOTH arms beat the post-LN baseline (51.5839). **Arm 2 (lr=2e-4) wins on test_avg with −7.13% rel** (test=47.9076 vs post-LN baseline 51.5839, vs current best (T_max=20) 49.3466 = **−2.92% rel**, NEW BEST). Arm 1 (lr=3e-4): test=48.3743 (−6.22%). Per-split: Arm 2 wins on 3 of 4 splits (in_dist 47.82 vs 50.11, cruise 34.40 vs 34.50, re_rand 48.88 vs 49.25); Arm 1 wins narrowly on rc (59.63 vs 60.53).
+  | Metric | Baseline (lr=1.5e-4) | Arm 1 (lr=3e-4) | Arm 2 (lr=2e-4) |
+  |---|---|---|---|
+  | val_avg | 59.1952 | 55.7911 | **55.9044** |
+  | test_avg | 51.5839 | 48.3743 | **47.9076** |
+  | best_epoch | 18 | 18 | 18 |
+  | W&B run | (ovv9h3s7) | o0r24h0j | 1vr2l3if |
+  | e1 gn_mean | ~83.6 | 95.9 | 88.8 |
+- **Mechanism**: Post-LN's bounded residual stream absorbs the higher LR scale cleanly — e1 gn_mean for lr=3e-4 was 95.9 vs predicted 120–160 (the prediction was too pessimistic). The optimum shifts to **lr=2e-4 (1.33× the pre-LN value, NOT 2×)**. The two val curves are within 0.1 by epoch 18 — the test gap (0.47 abs) opens primarily on in_dist (50.11 vs 47.82). Interpretation: 2e-4 is closer to the post-LN optimum; 3e-4 is mildly over-aggressive but not destabilizing. Clip fire rate at e18: Arm 1 44.7%, Arm 2 51.6% — clip is genuinely tight at these LRs (still 50%+ firing at end of schedule).
+- **Best epoch is still 18/18** for both arms — cosine schedule has more headroom. lr=2e-4 + T_max=20 stack is the obvious next step.
+- Finding #54: **Lion lr=2e-4 optimal under post-LN.** Pre-LN's lr=1.5e-4 (Finding #20) was a pre-LN-specific calibration. The post-LN loss landscape has substantial unused headroom.
+- **New baseline: test_avg/mae_surf_p = 47.9076**
+
+→ Assigned askeladd lr=2e-4 + T_max=20 STACK (PR #2568): compound the two recent wins.
+
+## 2026-05-13 20:00 — PR #2533: Lion β2 re-calibration under post-LN CLOSED ✗
+- willowpai2g48h1-fern/postln-beta2-recal
+- **Hypothesis**: Finding #39 (β2=0.99 sharp ±13% sweet spot on pre-LN) was calibrated to pre-LN's gradient variance profile. Post-LN's cleaner gradient signal may broaden or shift the β2 optimum. Test β2=0.999 (more EMA history) first; conditional Arm 2 (β2=0.95) on signal.
+- **Results**: Arm 1 (β2=0.999): val_avg=75.0811, test_avg=66.6924 — **+35.1% catastrophic regression** vs baseline (49.3466). Per-split all regress: in_dist +31.9%, rc +24.7%, cruise +50.5%, re_rand +40.6%. Decision rule triggered → Arm 2 (β2=0.95) skipped per PR instructions.
+- **Trajectory**: monotonically descending (still improving at e18, val=75.08 down from e5=150) but never approaches baseline — **smooth but under-converged**. gn_mean drops from 64 (e5) → 25-30 mid → 19.6 (e18), lower than expected for non-converging run.
+- **Mechanism**: β2=0.999 produces an over-smoothed Lion update — longer EMA strips out the gradient variance that Lion's sign-of-momentum needs to make adaptive per-coordinate decisions. Post-LN's cleaner gradient statistics make this **worse not better** — the optimistic prior is rejected. The β2 valley is **NARROWER under post-LN, not broader**, at least in the upward direction. OOD splits suffer worst (cruise +50.5%, re_rand +40.6%) vs IID (rc +24.7%) — consistent with under-convergence leaving most refinement on OOD geometries.
+- Finding #51: **β2=0.99 confirmed optimal under post-LN.** Asymmetric sensitivity — β2 increase is now MORE punishing than under pre-LN. β2 lever closed for the round.
+→ Re-assigned fern: mlp_ratio=3 capacity width (PR #2573).
+
+## 2026-05-13 20:00 — PR #2528: n_layers=6 depth increase under post-LN CLOSED ✗
+- willowpai2g48h1-edward/postln-depth-6
+- **Hypothesis**: Pre-LN's gradient variance accumulation made depth=5 the ceiling. Post-LN removes the instability, so depth=6 should now be feasible and improve OOD splits.
+- **Results**: val_avg=60.6003, test_avg=53.6791 — **+8.78% regression** vs current best (49.3466). All splits regress uniformly (5.7–10.1%): in_dist +9.88%, rc +10.11%, cruise +5.70%, re_rand +8.18%. **Run was timeout-cut at epoch 15/18** — per-epoch time was **122s (+23%)** vs ~99s baseline.
+- **Mechanism**: Sanity gates passed (e1 val 242.9, e1 gn 90.7, descending by e3); training was stable through e15 (gn_mean monotonically 90.7→13.3); val descent was still steep at e15 (Δ=−5.4 per epoch). The mechanism part of the hypothesis holds — **post-LN does enable stable depth-6 training**. The failure is structural: under the fixed 30-min cap, +23% per-epoch overhead loses 3 epochs of cosine annealing precisely when the baseline does its productive consolidation. Per-split regressions are uniform — no preferential OOD benefit emerged in the 15 epochs that ran.
+- **Schedule completion analysis**: At ep15 the n_layers=6 model was descending at ~5/epoch and LR had only cooled to ~15% of max. Three more annealing epochs would have been needed. Cannot fit in 30-min cap.
+- Finding #52: **depth=6 is timeout-bound under 30-min cap.** Mechanism viable, budget constraint blocks merge. Reinforces Finding #27 (>+5% per-epoch overhead = net loser, here +23% = clear loser).
+- Student's suggested rescue (n_layers=6 + T_max=15 + epochs=15) is plausible but deprioritized — with #2494 just merging, the LR axis has higher EV than depth re-validation under shortened schedules.
+→ Re-assigned edward: slice_num=32 physics-aware re-cal under post-LN+lr=2e-4 (PR #2577).
+
+## 2026-05-13 20:00 — PR #2426: surf_weight DOWN (sw=5) under post-LN CLOSED ✗ (per-split lever FLIP)
+- willowpai2g48h1-frieren/surf-weight-down-sweep
+- **Hypothesis**: Lower surf_weight → more volumetric loss weight → better rc OOD generalization. Pre-LN result: sw=5 → rc −0.74 (matching direction). Post-LN: predicted similar.
+- **Results**: post-LN sw=5: val=58.8216, test=51.8905 — **+0.60% rel** vs post-LN baseline (51.58, within 1.4% noise floor at headline). Per-split pattern **inverted vs pre-LN prediction**: rc REGRESSED +1.49 (predicted improvement), in_dist regressed +1.61, cruise IMPROVED −1.21, re_rand improved −0.66. Pre-LN sw=5 run (incidental, `9nogl7ur`) DID mildly improve rc (−0.74) under pre-LN — confirming the flip occurred at the LN-position transition.
+- **Mechanism**: Under post-LN's compressed residual stream, surface and volume tokens have more similar effective representations than under pre-LN. The surf_weight DOWN direction (which boosts volumetric loss relative to surface loss) now pushes the model toward volumetric averaging that loses the locally-detailed surface signal needed for rc's small-camber-shift OOD samples. The cruise mirror-improvement is consistent — cruise has more volumetric character than rc.
+- Finding #53: **Per-split lever-flip under post-LN.** The pre-LN sign of the surf_weight→rc relationship flipped to negative under post-LN. **Implication for round design**: pre-LN findings are not transferable wholesale; per-split mechanism findings should be re-validated case-by-case under each new optimizer/normalization config.
+- Student's suggestion to test sw=12, sw=15 (UP direction) under post-LN is mechanistically motivated by the inversion. Deprioritized for this round (LR/schedule levers have higher EV); stretch experiment for next round.
+→ Re-assigned frieren: lr=2.25e-4 LR midpoint refinement (PR #2572).
+
+## 2026-05-13 20:15 — Round 3 cycle 7 assignment: lr=2e-4 baseline-shift propagation
+
+After merging #2494 (NEW BEST 47.9076), assigned 4 new experiments to idle students:
+
+| PR | Student | Title | Lever |
+|---|---|---|---|
+| #2568 | askeladd | Stack winners: lr=2e-4 + T_max=20 under post-LN | Winners compound |
+| #2572 | frieren | LR midpoint refinement under post-LN: lr=2.25e-4 | LR neighborhood |
+| #2573 | fern | mlp_ratio=3 under post-LN+lr=2e-4: width without depth | Capacity-via-width |
+| #2577 | edward | slice_num=32 under post-LN+lr=2e-4: physics-aware re-cal | Physics-aware scale |
+
+Also sent status check #2 to nezuko (#2466 SwiGLU, finished run `d0nsbeam` at test=51.59 on OLD config, awaiting lr=2e-4 retry confirmation) and tanjiro (#2499 RMSNorm under post-LN, last run `r2oxlnwy` crashed).
