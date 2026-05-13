@@ -222,7 +222,7 @@ class SOAP(optim.Optimizer):
             if not precondition_1d or grad.shape[0] > max_precond_dim:
                 state['GG'].append([])
             else:
-                state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device))
+                state['GG'].append(torch.zeros(grad.shape[0], grad.shape[0], device=grad.device, dtype=torch.float32))
         else:
             if merge_dims:
                 grad = self.merge_dims(grad, max_precond_dim)
@@ -231,7 +231,7 @@ class SOAP(optim.Optimizer):
                 if sh > max_precond_dim:
                     state['GG'].append([])
                 else:
-                    state['GG'].append(torch.zeros(sh, sh, device=grad.device))
+                    state['GG'].append(torch.zeros(sh, sh, device=grad.device, dtype=torch.float32))
                     
         state['Q'] = None # Will hold all the eigenbases of the preconditioner.
         state['precondition_frequency'] = precondition_frequency
@@ -241,6 +241,8 @@ class SOAP(optim.Optimizer):
         """
         Projects the gradient to the eigenbases of the preconditioner.
         """
+        original_dtype = grad.dtype
+        grad = grad.float()
         original_shape = grad.shape
         if merge_dims:
             if grad.dim() == 4 and self._data_format == 'channels_last':
@@ -257,13 +259,13 @@ class SOAP(optim.Optimizer):
             else:
                 permute_order = list(range(1, len(grad.shape))) + [0]
                 grad = grad.permute(permute_order)
-        
+
         if merge_dims:
             if self._data_format == 'channels_last' and len(original_shape) == 4:
                 grad = grad.reshape(permuted_shape).permute(0, 2, 3, 1)
             else:
                 grad = grad.reshape(original_shape)
-        return grad
+        return grad.to(original_dtype)
         
     def update_preconditioner(self, grad, state, 
                               max_precond_dim=10000, merge_dims=False, precondition_1d=False):
@@ -272,6 +274,8 @@ class SOAP(optim.Optimizer):
         """
         if state["Q"] is not None:
             state["exp_avg"] = self.project_back(state["exp_avg"], state, merge_dims=merge_dims, max_precond_dim=max_precond_dim)
+        # Keep preconditioner outer-product updates in fp32 so lerp_ does not downcast GG.
+        grad = grad.float()
         if grad.dim() == 1:
             if precondition_1d and grad.shape[0] <= max_precond_dim:
                 state['GG'][0].lerp_(grad.unsqueeze(1) @ grad.unsqueeze(0), 1-state['shampoo_beta'])
@@ -310,6 +314,8 @@ class SOAP(optim.Optimizer):
         """
         Projects the gradient back to the original space.
         """
+        original_dtype = grad.dtype
+        grad = grad.float()
         original_shape = grad.shape
         if merge_dims:
             if self._data_format == 'channels_last' and grad.dim() == 4:
@@ -325,13 +331,13 @@ class SOAP(optim.Optimizer):
             else:
                 permute_order = list(range(1, len(grad.shape))) + [0]
                 grad = grad.permute(permute_order)
-                
+
         if merge_dims:
             if self._data_format == 'channels_last' and len(original_shape) == 4:
                 grad = grad.reshape(permuted_shape).permute(0, 2, 3, 1)
             else:
                 grad = grad.reshape(original_shape)
-        return grad
+        return grad.to(original_dtype)
         
 
     def get_orthogonal_matrix(self, mat):
@@ -364,11 +370,11 @@ class SOAP(optim.Optimizer):
                 Q = Q.to(m.dtype)
             Q = torch.flip(Q, [1])
 
-            if not float_data:
-                Q = Q.to(original_device).type(original_type)
+            # Keep Q in fp32 (do NOT cast back to parameter dtype) — preserves
+            # preconditioner eigenbasis precision under bf16 AMP.
             final.append(Q)
         return final
-        
+
 
     def get_orthogonal_matrix_QR(self, state, max_precond_dim=10000, merge_dims=False):
         """
@@ -416,8 +422,8 @@ class SOAP(optim.Optimizer):
             power_iter = m @ o
             Q, _ = torch.linalg.qr(power_iter)
 
-            if not float_data:
-                Q = Q.to(original_device).type(original_type)
+            # Keep Q in fp32 (do NOT cast back to parameter dtype) — preserves
+            # preconditioner eigenbasis precision under bf16 AMP.
             final.append(Q)
         
         if merge_dims:
