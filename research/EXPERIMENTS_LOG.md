@@ -482,3 +482,23 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Confounder flagged by student**: cosine `T_max=29` (vs baseline T_max=30) → late-phase LR ~6% higher at epoch 17. Honest disclosure.
 - **Decision: SEND BACK for retest on β=0.5 baseline + fixed T_max** (`T_max=MAX_EPOCHS * len(train_loader) - warmup_steps`). Mechanism may still stack on β=0.5; clean retest needed.
 
+## 2026-05-13 00:55 — PR #1427 v2: askeladd surf_weight=30 on β=0.5 baseline (review 2, closed)
+
+- Branch: `willowpai2g48h5-askeladd/surf-weight-30`
+- W&B run: `2r3nyj6o` (17 epochs; rebased on Huber β=0.5+EMA+bf16; default `surf_weight: float = 30.0`)
+- Hypothesis (retest): surf_weight 10→30 amplifies gradient signal on the primary metric (surface-p) — should compound with Huber β=0.5.
+
+| Metric | surf_weight=30 (2r3nyj6o) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 88.9891 | 85.9197 | +3.07 (+3.57%) |
+| `test_avg/mae_surf_p` | 78.9516 | 76.5495 | +2.40 (+3.14%) |
+| `test/test_single_in_dist/mae_surf_p` | 93.07 | 88.03 | +5.03 |
+| `test/test_geom_camber_rc/mae_surf_p` | 86.80 | 85.46 | +1.34 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 57.76 | 56.40 | +1.36 |
+| `test/test_re_rand/mae_surf_p` | 78.19 | 76.30 | +1.88 |
+
+- **All 4 test splits regressed.** Mechanism falsified on the current stack.
+- **EMA-vs-live gap widened to −22 (vs −10.5 baseline)** — direct evidence that higher surf_weight amplifies gradient variance. Live trajectory val=110.5 (vs baseline live ~96.4). EMA absorbs most of the noise but cannot fully close the gap.
+- **Mechanism explanation**: Huber β=0.5 is itself an MAE-alignment lever (linear gradient in the moderate-error bulk where surface-p errors live). With both Huber and 3× surf weight, the surface signal is now over-emphasized; the volume head loses gradient mass without compensating surface gain.
+- **Decision: CLOSE.** Surf_weight=30 is clearly worse on the current stack. Assigning askeladd to surf_weight=5 (opposite direction): test whether the optimal surf_weight has shifted below 10 now that Huber carries the MAE-alignment role.
+
