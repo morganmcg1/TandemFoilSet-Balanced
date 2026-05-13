@@ -36,7 +36,7 @@ Test: test_avg=70.4297 (test_single=86.938, test_rc=84.142, test_cruise=44.901, 
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (vol nodes only, data augmentation) | **--epochs 14** ✓ | WIP — just assigned |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — just assigned |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (L2 regularization) | **--epochs 14** ✓ | WIP — just assigned |
-| #1821 | nezuko | `asinh-gain-0.5` | ASINH_GAIN 1.0→0.5 (wider linear region, milder compression) | **--epochs 14** ✓ | WIP — just assigned |
+| #1835 | nezuko | `asinh-gain-0.5` | ASINH_GAIN 1.0→0.5 (wider linear region, milder compression) | **--epochs 14** ✓ | WIP — just assigned |
 | #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale (notified of 80.70 target) |
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
 
