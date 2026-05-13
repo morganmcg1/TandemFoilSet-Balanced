@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 10:25 (reviewed #2110/#2111/#2079/#2092 all closed; assigned log-cosh #2146/cosine-long-tail #2147/n-head-8 #2154/re-input-jitter #2169)
+- **Date**: 2026-05-13 11:15 (reviewed #2154 n-head-8 CLOSED +14.2%; #2146 log-cosh CLOSED +2.93%; assigned refilm-per-block #2198 fern / sorted-pressure-dist #2204 thorfinn)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -24,31 +24,44 @@ Per-split val: single_in_dist=28.6013, rc=41.9483, cruise=14.1462, re_rand=30.80
 Single-seed run-to-run variance is **~1-2%** on val_avg/mae_surf_p. Deltas below 1.5% need multi-seed confirmation.
 
 ### Convergence/Budget-Limited
-Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA, SGDR warm restarts, OneCycleLR) are high value.
+Model converges monotonically to cutoff in every run — best epoch is always the last epoch. Budget-aware mechanisms (EMA, SWA, OneCycleLR) remain high value.
 
 ### Re-Conditioning Stack — 3 confirmed mechanisms
 - **ReScaleHead** (output rescaling, -1.95%): learned Re→scale applied to Transolver output
-- **p_channel_weight=5** (loss reweighting, -2.11%): 5× post-Huber pressure weight  
+- **p_channel_weight=5** (loss reweighting, -2.11%): 5× post-Huber pressure weight
 - **ReFiLM** (attention conditioning, -1.17%): FiLM gates on slice logits — Re-dependent mode selection, confirmed by 33% entropy drop
 
-### Loss-Weighting Axis CLOSED
-p_weight=5 is the optimum. p_weight=15 regressed +4.20% — cross-channel backbone coupling prevents monotonic improvement.
+### Loss-Shape Axis CLOSED (all 3 variants regressed)
+- Huber δ_v-loose (#2081): +1.16%
+- Huber δ_p-tight (#2111): +1.50%
+- Log-cosh (#2146): +2.93%
+Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in quadratic regime by end of training.
 
-### Input Augmentation Axis — per-node jitter CLOSED
-Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound with p_weight+ReFiLM stack. **Translation augmentation** (whole-mesh rigid shift, NSE-invariant) is being tested as a physically valid alternative.
+### Input Augmentation Axis CLOSED
+- Coord-jitter per-node (#1963): +1.93% regression
+- Translation augmentation (#2092): +3.3% regression (bounded BVP breaks translation invariance)
+
+### Architecture Scaling CLOSED for current budget
+- n_layers=6 (#2079): +6.22% regression (23% epoch slowdown → under-trained)
+- n_head=8 (#2154): +14.2% regression (dim_head=16 below bf16 GEMM efficiency → 23% epoch slowdown, budget cut at epoch 23/28)
 
 ### LR Warmup for SOAP CLOSED
-3-epoch LinearLR warmup regressed +1.38% val. SOAP already trains stably from lr=1e-3 — no instability to fix. Warmup wastes budget epochs. Direction closed.
+3-epoch LinearLR warmup regressed +1.38%. SOAP already trains stably from lr=1e-3.
+
+### SGDR Warm Restarts CLOSED for 30-min budget
+Restart shock destroyed cycle-2 convergence (#2110 +8.13%).
 
 ---
 
-## Current Research Focus — Convergence + Budget-Aware Mechanisms
+## Current Research Focus
 
-**Three confirmed Re-conditioning mechanisms in baseline**: SOAP + ReScaleHead + p_weight + ReFiLM. Programme is now exploring:
-1. **Budget-aware training**: EMA β=0.99 (frieren, rebasing), SWA plateau with η_min=1e-4 (edward, rebasing), OneCycleLR peak 2e-3 (alphonse), SGDR warm restarts T_0=14 (askeladd NEW)
-2. **Architecture depth/capacity**: n_layers=6 (fern), slice_num=128 (nezuko)
-3. **Loss reformulation**: Per-channel Huber δ (thorfinn: velocity δ=0.5, pressure δ=0.1)
-4. **Augmentation**: Translation augmentation (tanjiro: rigid mesh shift, NSE-invariant NEW)
+**Re-conditioning axis expansion and distribution matching**. Programme is now exploring:
+1. **Budget-aware training**: EMA β=0.99 (frieren, rebasing), SWA plateau (edward, rebasing), OneCycleLR peak 2e-3 (alphonse)
+2. **Re-conditioning depth**: ReFiLM per-block (fern #2198 — 5 independent FiLMs vs shared)
+3. **Cosine schedule extension**: T_max=40/56 (askeladd #2147)
+4. **Re input robustness**: Gaussian noise on log(Re) (tanjiro #2169)
+5. **Distribution matching**: Sorted pressure W1 loss (thorfinn #2204)
+6. **Capacity**: slice_num=128 (nezuko #1467)
 
 ---
 
@@ -56,16 +69,14 @@ Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound wi
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2169 | tanjiro | `re-input-jitter` | NEW | **HIGH** | Gaussian noise σ=0.05/0.10 on log(Re) channel; targets re_rand OOD-Re |
-| #2154 | fern | `n-head-8` | NEW | **HIGH** | n_head 4→8; same inner_dim=128; doubles ReFiLM gating degrees of freedom |
-| #2147 | askeladd | `cosine-long-tail` | NEW | **HIGH** | T_max=40/56 so cosine never completes within 28-ep budget; higher final LR |
-| #2146 | thorfinn | `log-cosh-loss` | NEW | **HIGH** | Log-cosh C∞ replacement for Huber; smooth gradient for SOAP Hessian approx |
-| #2079 | fern | `n-layers-6` | WIP | **HIGH** | Deeper Transolver stack n_layers 5→6 (+20% depth) |
-| #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure; needs rebase onto 28.8762 |
+| #2204 | thorfinn | `sorted-pressure-dist` | NEW | **HIGH** | W1 regularizer on sorted surface pressure quantiles; per-sample per-split pressure distribution matching |
+| #2198 | fern | `refilm-per-block` | NEW | **HIGH** | 5 independent FiLMs (one per Transolver block) vs current single shared; +18K params; depth-specific Re gating |
+| #2169 | tanjiro | `re-input-jitter` | WIP | **HIGH** | Gaussian noise σ=0.05/0.10 on log(Re) channel; targets re_rand OOD-Re |
+| #2147 | askeladd | `cosine-long-tail` | WIP | **HIGH** | T_max=40/56 so cosine never completes within 28-ep budget; higher final LR |
+| #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; needs rebase onto 28.8762 |
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; needs rebase onto 28.8762 |
 | #1884 | alphonse | `onecycle-lr` | WIP | **HIGH** | OneCycleLR(max_lr=2e-3); higher peak LR than warmup-only tests |
-| #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128; baseline update sent |
-| #1457 | askeladd | `surf-weight-50` | CLOSED/REPLACED | — | Replaced by sgdr-warm-restarts |
+| #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=128; baseline update sent |
 
 All 8 students active.
 
@@ -102,12 +113,14 @@ All 8 students active.
 - **rescale-head-2ch** (#1952): +4.63% on rebased stack; Ux channel load-bearing with p_weight=5
 - **p-channel-weight-15** (#1985): +4.20% ALL splits; cross-channel coupling. p_weight=5 is optimum.
 - **coord-jitter-aug** (#1963): +1.93% on rebased stack; per-node jitter doesn't compound with p_weight+ReFiLM
-- **coord-translation-aug** (#2092): +3.3% val; bounded BVP breaks NSE translation invariance — absolute-position encoding destroyed
+- **coord-translation-aug** (#2092): +3.3% val; bounded BVP breaks NSE translation invariance
 - **soap-linear-warmup** (#2077): +1.38% val; no instability to fix + wastes budget epochs
-- **per-channel-huber-delta v1** (#2081): +1.16% val; loosening velocity δ to 0.5 removes Huber tail → pure L2 for velocity → gradient mass shifts away from pressure
-- **huber-delta-p-tighter** (#2111): +1.50% val; tightening δ_p to 0.05 truncates informative-outlier pressure gradients (pressure already 88% in quadratic regime). Huber δ axis CLOSED.
-- **sgdr-warm-restarts-v2** (#2110): +8.13% val; restart shock at epoch 15 (val 37.95→64.52) burned full cycle-2 budget on recovery. Warm restarts CLOSED for 30-min budget.
-- **n-layers-6** (#2079): +6.22% val; ~19% epoch slowdown trimmed budget 28→24 epochs; model still on downslope (under-trained). n_layers=6 closed for current budget.
+- **per-channel-huber-delta v1** (#2081): +1.16% val; loosening velocity δ removes Huber tail pressure gradients
+- **huber-delta-p-tighter** (#2111): +1.50% val; tightening δ_p truncates informative-outlier gradients. Huber δ axis CLOSED.
+- **log-cosh-loss** (#2146): +2.93% val; weaker gradients in transition band (tanh(1)≈0.76 < Huber 1.0). Loss-shape axis CLOSED.
+- **sgdr-warm-restarts-v2** (#2110): +8.13% val; restart shock burned cycle-2 budget. Warm restarts CLOSED.
+- **n-layers-6** (#2079): +6.22% val; ~19% epoch slowdown trimmed budget. n_layers=6 closed for current budget.
+- **n-head-8** (#2154): +14.2% val; dim_head=16 below bf16 GEMM efficiency → 23% epoch slowdown → epoch 23/28 cutoff.
 
 ---
 
@@ -115,12 +128,11 @@ All 8 students active.
 
 **After current in-flight experiments land**:
 - **Cosine T_max=40/56 results** (#2147): if long-tail helps, confirm best T_max and merge
-- **n_head=8 result** (#2154): if more heads help, test n_head=16 or combine with n_head=8 + n_layers=6 (2× depth, 2× heads)
-- **ReFiLM per-block (not shared)**: Current ReFiLM is shared across all 5 blocks; per-block FiLM adds 4×more params but allows layer-specific Re gating
-- **Geometry-specific augmentation**: camber/chord perturbation to directly improve geom_camber splits
-- **Mixup on input features**: blend 2 samples for OOD generalization
-- **Auxiliary losses**: predict vorticity/divergence as auxiliary targets
-- **Multi-seed baseline validation**: 3 runs to firm up noise floor now that baseline is tighter
-- **Karras post-hoc EMA**: average across multiple β values offline (zero training cost) — needs EMA mechanism first
+- **EMA/SWA convergence** (#1966, #2032): high priority — model still improving at ep 28/29 in every run
+- **ReFiLM per-block result** (#2198): if per-block gating helps, test per-block with wider hidden dim (hidden=16 vs 8)
+- **Sorted distribution result** (#2204): if W1 regularizer helps, tune λ and test on val splits
+- **Geometry-specific augmentation**: camber/chord perturbation for geom_camber splits
+- **Auxiliary losses**: divergence/curl of predicted velocity as regularizer
+- **Multi-seed baseline**: 3 runs to firm up noise floor at 28.88
 
-**The model is still converging at ep 28-29 in every run.** Convergence-aware mechanisms (EMA, SWA, SGDR, OneCycleLR) remain the priority.
+**The model is still converging at ep 28-29 in every run.** Convergence-aware mechanisms remain the priority.

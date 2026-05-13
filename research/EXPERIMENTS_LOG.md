@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-13 11:10 — PR #2154: [n-head-8] n_head 4→8, same inner_dim=128 — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/n-head-8
+- **Hypothesis**: Doubling attention heads to 8 (dim_head 32→16) doubles ReFiLM conditioning degrees of freedom (256→512) at zero compute cost. Heads should specialize on distinct physical regimes.
+- **Status**: CLOSED — +14.2% val regression (compute-budget failure, not hypothesis failure)
+
+| Metric | n_head=8 | Baseline (#2011) | Δ |
+|--------|----------|-----------------|---|
+| val_avg/mae_surf_p | 32.9800 | 28.8762 | **+14.2% (WORSE)** |
+| test_avg/mae_surf_p | 28.9306 | 24.9992 | **+15.7% (WORSE)** |
+| Best epoch | 23 | 28 | — |
+| s/epoch (steady-state) | ~79.1 | ~64.3 | +23% slower |
+
+**Root cause**: dim_head=16 is below bf16 GEMM efficiency sweet spot on this hardware (+23% per-epoch slowdown). CosineAnnealingLR(T_max=28) was cut off at epoch 23/28 → model never reached low-LR convergence phase. Same-epoch comparison (epoch 23): n_head=8 only −2.3% behind baseline — the heads *do* specialize (entropy spread 1.74–3.61, ReFiLM γ absmax 0.28→1.23) but the compute-budget effect dominates.
+
+**Programme finding**: n_head=4 with dim_head=32 retained for this stack. Scaling head count without scaling inner_dim is net negative under bf16+compile at this kernel size.
+
+**Artifact**: `models/model-n-head-8-20260513-100820/metrics.jsonl`
+
+---
+
+## 2026-05-13 11:10 — PR #2146: [log-cosh-loss] Log-cosh C∞ replacement for Huber — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/log-cosh-loss
+- **Hypothesis**: Log-cosh (`δ²·log(cosh(x/δ))`) is a smooth C∞ alternative to Huber — no gradient discontinuity at |x|=δ, should benefit SOAP's Hessian approximation.
+- **Status**: CLOSED — +2.93% val regression. Confirmed loss-shape axis closed.
+
+| Metric | log-cosh | Baseline (#2011) | Δ |
+|--------|----------|-----------------|---|
+| val_avg/mae_surf_p | 29.7218 | 28.8762 | **+2.93% (WORSE)** |
+| test_avg/mae_surf_p | 25.9905 | 24.9992 | **+3.97% (WORSE)** |
+| Best epoch | 28 | 28 | — |
+
+**Root cause**: Log-cosh has *weaker* gradients than Huber in the transition band (tanh(1)≈0.762 vs Huber's 1.0 at |x|=δ). With 88% of residuals already in quadratic regime by epoch 28, only the ~12% of tail residuals differ — and those are pulled *less* aggressively by log-cosh. Worst splits: re_rand (+5.0%), geom_camber_rc (+3.4%) — exactly the splits where pressure residuals are heaviest.
+
+**Programme finding**: Loss-shape axis firmly closed across all three variants (#2081 δ_v-loose +1.16%, #2111 δ_p-tight +1.50%, #2146 log-cosh +2.93%). Huber(δ=0.1) is a robust local optimum for SOAP.
+
+**Artifact**: `models/model-charliepai2g24h1-thorfinn-log-cosh-loss-20260513-101114/metrics.jsonl`
+
+---
+
 ## 2026-05-13 10:20 — PR #2092: [coord-translation-aug] Rigid mesh translation augmentation — CLOSED
 
 - **Branch**: charliepai2g24h1-tanjiro/coord-translation-aug
