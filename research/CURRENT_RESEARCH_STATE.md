@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 09:00 UTC
+- **Date / time:** 2026-05-13 09:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -54,6 +54,9 @@ Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly 
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
 - beta2: 0.999→0.99 (-2.98%, #1959), 0.99→0.98 (-1.77%, #2008 MERGED); 0.97 in-flight (#2087)
+- beta1: 0.90→0.95 won (-2.5%, #1867), 0.95→0.97 failed (+3.6%, #2076 closed); 0.94 in-flight (#2101)
+- AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
+- weight_decay: 1e-4 confirmed local optimum (5e-5 worse #2026, 2e-4 worse #2064); axis closed
 - eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal in upward direction
 - grad_accum=4: +18%, eff_batch=8 optimal
 - max_lr=4e-3: diverges
@@ -72,12 +75,12 @@ Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly 
 |---|---|---|
 | #2085 | fern | batch_size=2 (effective batch 8→4: conjugate to failed grad_accum=4; AdamW tolerates noisier steps) |
 | #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
-| #2065 | alphonse | AdamW amsgrad=True (max v_t stabilizer with beta2=0.99) |
-| #2076 | edward | AdamW beta1 0.95→0.97 (push first-moment memory further) |
+| #2103 | alphonse | AdamW → NAdam (Nesterov-momentum, more anticipatory than AMSGrad's failed conservatism) |
+| #2101 | edward | AdamW beta1 0.95→0.94 (confirm peak from other side; 0.97 failed +3.6%) |
 | #2087 | thorfinn | AdamW beta2 0.98→0.97 (sweep continuation) |
 | #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
 | #2025 | askeladd | grad_clip max_norm=1.5 midpoint (2.0 traded in-dist for OOD; 1.5 sent back for retry vs new baseline 76.2707) |
-| #2064 | nezuko | weight_decay 1e-4→2e-4 (upward conjugate — more OOD regularization) |
+| #2104 | nezuko | OneCycleLR max_lr 2e-3→2.5e-3 (higher peak; 4e-3 diverged under OLD stack only) |
 
 ### Priority research directions
 

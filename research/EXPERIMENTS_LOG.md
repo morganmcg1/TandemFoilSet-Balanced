@@ -11,6 +11,30 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 09:30 — Cycle 28: 3 closed (#2076/#2065/#2064) + 3 new arms
+
+### PR #2076 edward — AdamW beta1 0.95→0.97: CLOSED ✗
+
+W&B run: `de7iobk5`. val=80.4474 (+3.6% vs old baseline 77.6444, +5.5% vs new 76.2707), test=70.7293. Best val at epoch 18, no improvement during anneal. single_in_dist regressed +8.5% (under-refinement). At beta1=0.97, momentum becomes too sticky for the cosine anneal tail. Beta1 axis closed upward; testing 0.94 next.
+
+### PR #2065 alphonse — AdamW amsgrad=True: CLOSED ✗
+
+W&B run: `uoesgtsq`. val=79.4139 (+2.3% vs old, +4.1% vs new 76.2707), test=69.4696. 3 of 4 splits regressed. AMSGrad's max-tracking of v_t pins denominator at early-training peak — too conservative for our 18/50 epoch truncated regime. Reddi et al. guarantee is asymptotic, we never reach asymptotic. AMSGrad axis closed.
+
+### PR #2064 nezuko — weight_decay 1e-4→2e-4: CLOSED ✗
+
+W&B run: `g5xw9t7a`. val=79.1145 (+1.9% vs old, +3.7% vs new 76.2707), test=70.0346. IID +1.79, re_rand +2.95 (opposite of predicted OOD rescue). Combined with #2026 (wd=5e-5 also worse), wd=1e-4 is local optimum from both directions. Weight decay axis fully closed.
+
+### New assignments (cycle 28)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| edward | AdamW beta1 0.95→0.94 (confirm peak from other side) | #2101 |
+| alphonse | AdamW → NAdam (Nesterov-momentum Adam) | #2103 |
+| nezuko | OneCycleLR max_lr 2e-3 → 2.5e-3 (higher peak under bounded-gradient stack) | #2104 |
+
+---
+
 ## 2026-05-13 09:00 — Cycle 27: #2008 MERGED + #2025 sent back + #2087 assigned
 
 ### PR #2008 thorfinn — AdamW beta2 0.99→0.98: MERGED ✓ (8th win)
