@@ -417,7 +417,7 @@ class Config:
     p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
     epochs: int = 50
     amp: bool = True              # bfloat16 autocast on forward+loss
-    grad_accum: int = 2           # accumulate over N mini-batches before stepping
+    grad_accum: int = 4           # accumulate over N mini-batches before stepping
     onecycle_target_epochs: int = 18   # OneCycleLR total_steps calibration
     onecycle_pct_start: float = 0.1
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
