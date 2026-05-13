@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-13 11:00 — Round 25
+
+### PR #1989 thorfinn: SGDR T_0=10 T_mult=2 — CLOSED (LOSS, restart-disruption + L1 mismatch confirmed)
+
+- **Branch:** `charliepai2g48h5-thorfinn/sgdr-t0-10-retry`
+- **Hypothesis:** Replace CosineAnnealingLR(T_max=50) with CosineAnnealingWarmRestarts(T_0=10, T_mult=2, eta_min=0).
+- **Result:** val_avg = **68.96 (+27.7%)**, test = 61.07 (+28.2%). Clean LOSS.
+
+**Trajectory at restart boundaries (the key diagnostic):**
+
+| Epoch | val_avg | Phase |
+|---:|---:|---|
+| 10 (end of cycle 1) | 108.86 | restart #1 minimum |
+| 30 (end of cycle 2) | **70.81** | restart #2 minimum (better than #1) |
+| 45 (terminal, mid-cycle 3) | 68.96 | best, still mid-descent |
+
+- **Analysis:** SGDR's cycle-level mechanism IS working (restart #2 min 70.81 < restart #1 min 108.86 — progressively improving minima). But T_0=10, T_mult=2 means cycle 3 needs 40 epochs (10+20+40=70 cumulative) to complete; we get 15 truncated. Baseline gets one uninterrupted 50-epoch descent.
+- **Deeper finding on L1:** Sign-gradient regime needs sustained low-LR phases for residual-sign fine-tuning. Each SGDR restart resets LR to peak, destroying the converged signs from the prior cycle. The PR's own loss-case prediction ("restarts disrupt the late-stage settling that L1 sign gradients need") matched exactly.
+- **Axis status:** SGDR closed. Budget-aligned variants (T_0=15, T_0=22) might fix cycle structure but L1+restart-disruption is the binding mechanism, not budget-fit.
+- **Next:** Assigned thorfinn warmup+monotone-cosine (his strongest recommendation) as PR #2033 — captures "high-LR exploration" benefit SGDR aimed for without disrupting final descent.
+
+### PR #1926 frieren: RMSNorm at all 3 norm sites — CLOSED (STALE, 5+ hours zero activity)
+
+- **Branch:** `charliepai2g48h5-frieren/rmsnorm`
+- **Hypothesis:** Replace LayerNorm with RMSNorm at ln_1, ln_2, ln_3 in TransolverBlock.
+- **Result:** Zero training activity. Only assignment commit (9f04e42) on branch; pod never started the run (likely GraphQL rate-limit, identical pattern to tanjiro #1660/#1789/#1883 and thorfinn #1905).
+- **Axis status:** UNTESTED. Hypothesis intact, RMSNorm is still worth exploring under the L1+slice=32 baseline.
+- **Next:** Reassigned to frieren under fresh PR #2034 (same experiment, new PR to unstick pod).
+
+### Assignments: Round 25
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2033 | thorfinn | Linear warmup 3ep (0.1→1.0) + monotone cosine (T_max=47) |
+| #2034 | frieren | RMSNorm replaces LayerNorm at all 3 sites (retry of stale #1926) |
+
+---
+
 ## 2026-05-13 10:30 — Round 24
 
 ### PR #1988 nezuko: fun-jitter σ=0.05 on Re/AoA — SENT BACK (LOSS, retune σ=0.025 for axis closure)

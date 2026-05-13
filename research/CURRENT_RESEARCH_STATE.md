@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 10:30 (round-24: Sent back #1988 nezuko fun-jitter σ=0.05 LOSS → σ=0.025 for axis closure; sent back #1946 edward EMA decay=0.999 (test tied at 47.60, mechanism confirmed by dual-eval) → drop diagnostic for full-budget rerun. **Baseline still 54.0051**. Cross-experiment pattern: in-dist headroom ~14% (pos-jitter -13.7%, EMA -12.9% both on val_single_in_dist); OOD needs structurally different interventions)
+- **As of:** 2026-05-13 11:00 (round-25: Closed #1989 thorfinn SGDR T_0=10 LOSS (+27.7% — L1+restart fundamentally incompatible; cycle 3 truncation confirmed); closed #1926 frieren RMSNorm stale; assigned #2033 thorfinn warmup-3-cosine + #2034 frieren RMSNorm retry. **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -54,8 +54,8 @@ Per-split baseline (PR #1846):
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
 | #1988 | nezuko | Per-sample fun_dim jitter Re/AoA — **retune σ=0.025** | **Round-24 send-back** — σ=0.05 LOSS (+11.9%); σ=0.025 probe for clean axis closure |
-| #1926 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **New round-18** — faster norm + L1 gradient stability |
-| #1989 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | **Round-22 retry** — SGDR schedule; resubmit of stale #1905 |
+| #2034 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **Round-25 retry** — RMSNorm hypothesis; resubmit of stale #1926 |
+| #2033 | thorfinn | Linear warmup 3ep + monotone cosine (T_max=47) | **Round-25** — schedule axis follow-up to closed #1989 SGDR; captures exploration without restart disruption |
 | #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **New round-21** — OOD generalization via block-level residual-branch regularization |
 | #1946 | edward | EMA decay=0.999 — **drop diagnostic, full-budget rerun** | **Round-24 send-back** — mechanism confirmed by dual-eval (EMA<raw from ep10); test tied at 47.60. Need full 50-epoch budget. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
@@ -85,6 +85,7 @@ Most long-running in-flight PRs (#1653, #1775, #1774, #1845, #1883) were assigne
 - **AdamW β2=0.95:** LOSS on L1 (+4.42% on L1 base, +15% vs current). Shorter second-moment memory amplifies L1 sign-flip noise (PR #1845). β2 axis closed.
 - **AdamW β2=0.95 (earlier β=0.5 test):** near-wash on β=0.5, no clear signal (PR #1676).
 - **lr=7.5e-4 (+50% lr-UP):** LOSS on L1+slice=32 (+16% vs current, n=3 mean 62.66) — closed across all 3 landscape variants tested (β=0.5 wash, L1+slice=64 wash-with-loss-tail, L1+slice=32 LOSS) (PR #1774). lr-UP axis closed; capacity↔LR coupling DOWN probe in flight as #1997.
+- **SGDR T_0=10 T_mult=2:** LOSS on L1+slice=32 (+27.7% val, n=1, 68.96 vs 54.00). Mechanism worked at cycle level (restart #2 min < restart #1 min) but L1 sign-gradient regime is fundamentally hostile to LR restarts (signs reset, late settling destroyed). Budget-fit variants deferred — L1+restart is the binding incompatibility (PR #1989). Schedule axis continues with warmup+monotone-cosine in flight as #2033.
 
 ## Open questions / next experiments
 
