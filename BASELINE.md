@@ -415,3 +415,33 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
   (huber_beta=0.25 now baked into advisor branch train.py from this merge; grad-clip=2.5, T_max=50 also baked in)
 - **All subsequent experiments should target val < 50.3812 and test < 43.7187** as the merge threshold.
+
+## 2026-05-13 18:45 — PR #2247: frieren batch_size 4 → 2 (2× opt-step density per epoch)
+
+**New best — 15th compound improvement (opt-step density axis, massive OOD gain)**
+
+- **val_avg/mae_surf_p:** **46.6788** (vs #2142 baseline 50.3812; **−7.35%**, −3.70 absolute)
+- **test_avg/mae_surf_p:** **39.7696** (vs #2142 baseline 43.7187; **−9.04%**, −3.95 absolute)
+
+**Per-split test (EMA, best-val checkpoint epoch 34 — all 4 splits improve sharply):**
+
+| Split | mae_surf_p | vs #2142 | Δ% |
+|-------|----------:|----------:|---:|
+| `test_single_in_dist` | 44.0421 | −4.92 | −10.05% |
+| `test_geom_camber_rc` | 53.1169 | −4.25 | −7.41% |
+| `test_geom_camber_cruise` | 24.1470 | −2.83 | −10.48% |
+| `test_re_rand` | 37.7723 | −3.80 | −9.13% |
+| **test_avg** | **39.7696** | **−3.95** | **−9.04%** |
+
+- **Best epoch:** 34/50 (EMA val still descending at termination — epoch-saturated again)
+- **Opt-steps:** 25,500 (750/epoch × 34 ep) vs baseline 12,375 (375/epoch × 33 ep) — **2.06× multiplier**
+- **Throughput:** 53.02 s/epoch (same as bs=4 baseline — doubling opt-steps costs nothing in wall time)
+- **Clip rate:** 94.70% (dropped from 98.93% at bs=4 — FIRST measured clip-saturation loosening that wins) — norm_p50=12.96, norm_p99=85.4
+- **EMA-live gap:** −4.71 test (tightened from −6.08 at baseline; opposite of PR prediction — more opt-steps produced a smoother effective trajectory)
+- **Mechanism:** Doubling opt-step density per epoch (bs=4→2) doubles gradient update count at fixed LR, schedule shape, and wall-clock budget. Net: 2.06× optimizer step exposure in same training time. Clip rate eases from 98.93%→94.70% — first measured saturation loosening that doesn't fail. This is consistent with "the bs=4 stack was opt-step-saturated: the clip-saturation we observed was symptomatic of insufficient update count, not gradient pathology."
+- **Variance note:** Student ran 3 times due to GPU contention; first 2 at degraded throughput reached only 25-24 epochs and landed val ~55-56 (near baseline). Canonical run t5xloer3 at clean throughput (53s/epoch) is the merge target. Result is throughput-dependent — metric valid only at ≥30 epochs in 30-min window.
+- **W&B run:** `t5xloer3`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --batch_size 2 --epochs 50`
+  (batch_size=2 must be specified; all other 14-compound stack settings baked into advisor branch train.py)
+- **All subsequent experiments should target val < 46.6788 and test < 39.7696** as the merge threshold.
+- **CRITICAL THROUGHPUT NOTE:** batch_size=2 doubles opt-steps at same wall-clock per epoch (~53s). Compound retests MUST run with `--batch_size 2` to land on the new baseline. Any run at bs=4 measures on a different stack and cannot beat this baseline.
