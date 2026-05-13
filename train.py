@@ -95,8 +95,8 @@ class SwiGLUMLP(nn.Module):
 
     def __init__(self, in_dim: int, hidden_dim: int):
         super().__init__()
-        inner_dim = hidden_dim
-        inner_dim = ((inner_dim + 7) // 8) * 8
+        inner_dim = 288  # H46: bisect capacity (was hidden_dim=256; 320 was compute-bound)
+        inner_dim = ((inner_dim + 7) // 8) * 8  # stays 288 (multiple of 8)
         self.inner_dim = inner_dim
         self.w_gate = nn.Linear(in_dim, inner_dim, bias=False)
         self.w_up = nn.Linear(in_dim, inner_dim, bias=False)
@@ -487,6 +487,8 @@ print(f"[H39] ReGLU gate at x=-1: {F.relu(_h39_test_x[0]).item():.4f} (expected 
 print(f"[H39] ReGLU gate at x= 0: {F.relu(_h39_test_x[1]).item():.4f} (expected 0.0000)")
 print(f"[H39] ReGLU gate at x=+1: {F.relu(_h39_test_x[2]).item():.4f} (expected 1.0000)")
 print(f"[H39] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}, n_params: {n_params}")
+print(f"[H46] SwiGLU inner_dim: {model.blocks[0].mlp.inner_dim}")  # should print 288
+print(f"[H46] n_params: {n_params}")  # should print ~892,631
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
