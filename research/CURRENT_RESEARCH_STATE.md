@@ -5,42 +5,44 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 ~19:15 — **askeladd #2314 Lion lr=1e-4 MERGED (val 43.20/test 35.76, −19.8%/−23.8%)** — largest single gain of launch; all 7 students redirected to Lion stack. Frieren n_head=2 (+7.5%), edward n_layers=3 (+9.4%), thorfinn coord-jitter (+3.1%) all confirmed directionally positive but sent back for Lion retest.
+- **Date**: 2026-05-13 ~20:05 — thorfinn #2097 coord-jitter+Lion CLOSED (val 45.30, +4.86% regression vs Lion 43.20); **coord-jitter axis closed on Lion stack**. Thorfinn reassigned to #2555 Lion weight_decay sweep. Multiple pods rate-limited (user ID 20516801 GraphQL quota).
 - **Current best (merged)**: PR #2314 askeladd Lion lr=1e-4 (run `h2m396kw`) at **val 43.1973 / test 35.7630** — all 8 sub-metrics improve, 32 epochs, 57.8 s/epoch, 548K params, 11.2 GB VRAM. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4 --optimizer lion --lr 1e-4`
 - **Updated merge bar (vs 43.20 baseline)**: ≤38.9 val ⇒ merge (≥10% gain), 38.9-43.2 → second seed, ≥43.2 → close.
-- **Closed axes on current stack:**
-  - cosine-tail shape (both regress)
-  - width-up n_hidden=192 (both n_layers=5 and n_layers=4 tested; +17.6% regression, budget-bound)
-  - Lion lr=3e-4 (val 49.93, worse than 1e-4 at 45.48)
-- **Phase shift: all experiments must now use Lion as optimizer base**
+- **Closed axes on Lion stack:**
+  - Input-space coord-jitter (#2097): Lion's sign-based updates amplify corrupted gradient direction → noise hurts more than AdamW. Augmentations that added noise to AdamW can HURT Lion.
+  - cosine-tail shape (pre-Lion)
+  - width-up n_hidden=192 (pre-Lion; likely still closed)
+  - Lion lr=3e-4 (val 49.93, worse than 1e-4 at 45.48 on n_layers=5 stack)
 - **Active research directions (all on Lion stack):**
-  1. **Depth minimum** — edward #2462 (n_layers=3+Lion retest)
-  2. **Head width** — frieren #2192 (n_head=2+Lion retest)
-  3. **Augmentation** — thorfinn #2097 (coord-jitter σ=0.005+Lion retest)
-  4. **Lion LR tuning** — tanjiro #2449 (redirected: lr=5e-5, lr=2e-4 flanking 1e-4)
-  5. **Batch-size** — nezuko #2421 (bs=1+Lion)
-  6. **Slice-num** — alphonse #2358 (slice=16+Lion)
-  7. **Width-down** — fern #2464 (n_hidden=96+Lion; stalled on rate limits, GPU idle)
-  8. **Fourier K continuation** — askeladd #2552 (K=16 and K=20 on Lion stack; K was monotone 4→8→12 on AdamW, testing if trend continues post-Lion)
-- **In-flight (8 active GPUs):**
-  - alphonse #2358: redirected to slice_num=16+Lion+n_layers=4 retest; needs rebase
-  - askeladd #2552: **NEW** Fourier K continuation on Lion stack — K=16 and K=20 arms; K curve was monotone 4→8→12 on AdamW stack, probing whether trend holds under Lion
-  - edward #2462: sent back for n_layers=3+Lion retest
-  - fern #2464: pod stalled on GitHub GraphQL rate limits — GPU=0%, last contact ~18:45. Updated instructions posted; rate limits expected to recover
-  - frieren #2192: sent back for n_head=2+Lion retest
-  - nezuko #2421: redirected to bs=1+Lion; needs rebase + kill current AdamW run
-  - tanjiro #2449: redirected to Lion lr flanking (5e-5 and 2e-4); needs kill current AdamW runs
-  - thorfinn #2097: sent back for coord-jitter σ=0.005+Lion retest
+  1. **Depth minimum** — edward #2462 (n_layers=3+Lion retest; running)
+  2. **Head width** — frieren #2192 (n_head=2+Lion retest; waiting)
+  3. **Lion LR tuning** — tanjiro #2449 (lr=5e-5 and lr=2e-4 flanking 1e-4; waiting)
+  4. **Batch-size** — nezuko #2421 (bs=1+Lion; waiting)
+  5. **Slice-num** — alphonse #2358 (slice=16+Lion; rate-limited)
+  6. **Width-down** — fern #2464 (n_hidden=96+Lion; rate-limited, idle)
+  7. **Fourier K continuation** — askeladd #2552 (K=16 and K=20 on Lion; waiting to pick up)
+  8. **Lion weight_decay** — thorfinn #2555 (**NEW**: wd=3e-4 and wd=1e-3; Lion paper recommends 3-10x AdamW default)
+- **In-flight students (only 1 GPU active — edward; 5 students rate-limited/idle):**
+  - alphonse #2358: rate-limited (GPU=0%), has pending Lion rebase+retest instructions
+  - askeladd #2552: label fixed (was `student:askeladd`, now `student:willowpai2g24h3-askeladd`); waiting to pick up Fourier K Lion sweep
+  - edward #2462: **running** n_layers=3+Lion retest (GPU 99%)
+  - fern #2464: rate-limited (GPU=0%), has pending n_hidden=96+Lion instructions
+  - frieren #2192: needs to pick up n_head=2+Lion retest; pod recently idle
+  - nezuko #2421: needs to pick up bs=1+Lion instructions
+  - tanjiro #2449: needs to pick up Lion lr-flank (5e-5/2e-4) instructions
+  - thorfinn #2555: **NEW ASSIGNMENT** — Lion weight_decay sweep (3e-4, 1e-3)
+- **KEY MECHANISM FINDING — Lion + input-noise interaction:**
+  - Lion's sign-based updates make every gradient direction count equally (no second-moment damping)
+  - Input augmentations that add noise (coord-jitter) corrupt gradient direction signal → sign(corrupted_grad) ≠ sign(true_grad)
+  - AdamW's second-moment estimator partially absorbs this noise; Lion cannot
+  - Result: coord-jitter was −3.1% on AdamW, becomes +4.86% WORSE on Lion
+  - **Implication:** "Clean" improvements (architecture, lr, optimizer params) likely compound well with Lion; "noisy" augmentations may not
 - **Key structural insight (Lion mechanism):**
-  - Lion uses sign(grad_ema) — update direction = ±1, always at max step size
-  - No momentum scaling, no per-param adaptive rates — uniform step magnitude makes every gradient signal count equally
-  - At lr=1e-4 (1/5 of AdamW 5e-4), matches AdamW throughput (57.8 s/ep) while gaining 3 more epochs (32 vs 29)
-  - All 8/8 per-split metrics improve; largest gains on smooth geometries (camber_cruise, single_in_dist)
+  - Lion: `update = sign(β1*m + (1-β1)*g)`, where m is EMA of past gradients; every update ±lr
+  - weight_decay term: `w -= lr × (sign(m) + wd × w)` — wd acts as constant-force L2 penalty
+  - Lion paper recommends weight_decay 3-10× AdamW for equivalent regularization (tanjiro probing lr flanks; thorfinn probing wd flanks)
   - Gradient-step-bound mechanism still dominant: model still descending at epoch 32
-  - **Open question:** Does Lion lr=1e-4 remain optimal? Flanking with 5e-5 and 2e-4 (tanjiro #2449 redirect)
-  - **Open question:** Does bs=1 + Lion compound? (nezuko #2421)
-  - **Open question:** Does n_layers=3 + Lion compound? (edward #2462)
-  - **Open question:** Does n_head=2 + Lion compound? (frieren #2192)
+  - **Open questions:** n_layers=3+Lion, n_head=2+Lion, bs=1+Lion, K=16+Lion, wd=3e-4+Lion
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`

@@ -7,6 +7,25 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 19:56 — PR #2097: coord-jitter σ=0.005 on Lion stack — CLOSED
+
+- `willowpai2g24h3-thorfinn/coord-jitter-aug`
+- **Hypothesis:** Gaussian (x,z) coordinate jitter augmentation on Lion stack — orthogonal to optimizer, predicted to improve OOD generalization.
+- **Results (Lion stack, run `i9ek9ffo`):**
+
+| Metric | Lion baseline (h2m396kw) | coord-jitter σ=0.005 | Δ |
+|---|---:|---:|---|
+| val_avg | 43.20 | 45.30 | **+4.86% ❌** |
+| test_avg | 35.76 | 38.09 | **+6.51% ❌** |
+| Best epoch | 32 | 27 | −5 epochs |
+
+Per-split val: single_in_dist +4.6%, camber_rc +2.4%, camber_cruise **+10.1%**, re_rand +4.7% — ALL 8/8 regress.
+
+Note: On AdamW stack, same σ=0.005 gave val 52.19 vs 53.84 baseline (−3.1%, marginal positive). On Lion it becomes a clear negative.
+
+- **Analysis:** Critical insight — **input noise that was a weak positive on AdamW becomes a strong negative on Lion.** The mechanism: Lion uses `sign(gradient_momentum)`, so every update is a unit-magnitude direction change. Coordinate jitter corrupts the gradient direction signal, and Lion amplifies that corruption into a uniformly-large step in the wrong direction. AdamW's second-moment adaptive scaling partially absorbed the noisy gradient signal; Lion cannot. The largest regression is on `camber_cruise` (+10.1%) — the split where Lion delivered its biggest absolute gain (−26.9%) — confirming that Lion's geometry-capturing ability is what's being disrupted. **General lesson: input augmentations that add noise should be retested on Lion, as the optimizer amplification mechanism can invert their effect.** Augmentation axis closed on Lion stack.
+- W&B: `i9ek9ffo` (Lion+jitter), `ufx6b3d1` (AdamW Arm A σ=0.005), `glq2kv94` (AdamW Arm B σ=0.01)
+
 ## 2026-05-13 19:10 — PR #2314: Lion optimizer (lr=1e-4) — MERGED ⭐ MAJOR WIN
 
 - `willowpai2g24h3-askeladd/lion-optimizer`
