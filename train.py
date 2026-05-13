@@ -62,6 +62,21 @@ ACTIVATION = {
 }
 
 
+def drop_path(x: torch.Tensor, drop_prob: float = 0.0, training: bool = False) -> torch.Tensor:
+    """Stochastic depth: zero entire residual contribution with prob drop_prob.
+
+    Rescales kept samples by 1/keep_prob so E[output] == input — no eval-time
+    correction needed.
+    """
+    if drop_prob == 0.0 or not training:
+        return x
+    keep_prob = 1 - drop_prob
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()  # binarize: 0 (drop) or 1 (keep)
+    return x.div(keep_prob) * random_tensor
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -143,9 +158,11 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
+        self.drop_path = drop_path
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
@@ -162,8 +179,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, mask=None):
-        fx = self.attn(self.ln_1(fx), mask=mask) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = drop_path(self.attn(self.ln_1(fx), mask=mask), self.drop_path, self.training) + fx
+        fx = drop_path(self.mlp(self.ln_2(fx)), self.drop_path, self.training) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -174,7 +191,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path=0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -195,6 +213,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=drop_path,
             )
             for i in range(n_layers)
         ])
@@ -443,6 +462,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path=0.1,
 )
 
 model = Transolver(**model_config).to(device)
