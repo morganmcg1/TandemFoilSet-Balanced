@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 17:20 — PR #2356: Lion wd sweep on n_head=2+slice_num=32 (thorfinn) — CLOSED, WD=3E-4 BEATS OLD BASELINE, ASSIGNED TO N_HEAD=1
+
+- **Branch:** `willowpai2g24h5-thorfinn/lion-wd-sweep-v2`
+- **Hypothesis:** wd=1e-4 has never been swept on the n_head=2+slice32 compound; with doubled per-head dim (32→64), regularization regime may have shifted.
+- **W&B runs:** `9ejpl0q4` (Arm 1: wd=3e-4), `oiymazx0` (Arm 2: wd=3e-5)
+
+| Arm | wd | val | test | Δ val vs #2218 (49.86) | Best epoch |
+|-----|-----|-----|------|----------------------|-----------|
+| Arm 1 | **3e-4** | **47.18** | **41.03** | **−2.68 (−5.4%)** | 23 |
+| Baseline #2218 | 1e-4 | 49.86 | 42.19 | — | 23 |
+| Arm 2 | 3e-5 | 52.51 | 44.40 | +2.65 (+5.3%) ✗ | 19 |
+| **Current baseline #2338** | 1e-4 (n_head=1) | **46.67** | **40.69** | — | 26 |
+
+**Per-test-split (wd=3e-4 vs #2218):** single_in_dist=43.50 (−1.96 ✓), geom_camber_rc=55.29 (−0.75 ✓), geom_camber_cruise=24.94 (−0.74 ✓), re_rand=40.39 (−1.18 ✓) — **all 4 splits improve uniformly**.
+
+**Result:** CLOSED (wd=3e-4 val=47.18 beats #2218 by −5.4% but loses to #2338 val=46.67 by +0.51). Key findings:
+1. **Monotonic wd signal on n_head=2+slice32**: wd=3e-5 (52.51) < wd=1e-4 (49.86) < wd=3e-4 (47.18). Monotone over 10× range.
+2. **5.4% relative improvement from 3× wd**: non-trivial Lion-decoupled-wd effect; n_head=2+slice32 was under-regularized at wd=1e-4.
+3. **Uniform improvement across all splits** — whole-model regularization story, not OOD-camber-specific. Biggest gain on single_in_dist (−1.96).
+4. **Natural follow-up: wd=3e-4 on n_head=1 compound.** If signal stacks, projection: val 46.67 → ~44.
+
+**Thorfinn reassigned:** PR #2448 — wd=3e-4 and wd=1e-3 on n_head=1 compound (stack test + monotonic extension).
+
+---
+
 ## 2026-05-13 17:00 — PR #2372: sw=2 vs sw=3 on n_head=2+slice_num=32 (nezuko) — CLOSED, SW=3 BEATS OLD BASELINE, ASSIGNED TO MLP RATIO
 
 - **Branch:** `willowpai2g24h5-nezuko/sw-low-slice32`

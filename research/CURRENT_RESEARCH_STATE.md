@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~17:05 UTC
+- **Date:** 2026-05-13 ~17:25 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -32,7 +32,7 @@
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
 | **#2416** | **alphonse** | **n_head=1 + surf_weight=5 interaction: stack both wins on slice32** | **WIP — new** |
-| **#2356** | **thorfinn** | **Lion wd sweep on slice_num=32 compound: wd=3e-4 vs wd=3e-5** | **WIP** |
+| **#2448** | **thorfinn** | **Lion wd sweep on n_head=1: wd=3e-4 vs wd=1e-3 (stack wd signal)** | **WIP — new** |
 | **#2430** | **frieren** | **slice_num=16 on n_head=1 compound: test if monotonic slice trend stacks** | **WIP — new** |
 | **#2446** | **nezuko** | **mlp_ratio sweep on n_head=1: mlp_ratio=4 vs mlp_ratio=1** | **WIP — new** |
 | **#2419** | **edward** | **lr sweep on n_head=1 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
@@ -45,6 +45,7 @@
 - **#2337 (frieren):** slice_num=16 on n_head=2+sw=10 — CLOSED (val=48.08/test=41.02). Beats old #2218 baseline but loses to current #2338 (val=46.67). Monotonic trend confirmed: 16 < 32 < 64 < 128. Speed: 75.9s/ep, 24 epochs in 30 min, val still descending. Reassigned to #2430 (slice_num=16 on n_head=1 compound).
 - **#2338 (edward):** n_head=1 on slice32+sw10 — **MERGED** val=46.67, test=40.69. Monotonic trend extends to n_head=1 (1 < 2 < 4 < 8). 26 epochs in 31 min (71.1s/ep). All 4 splits improve. Reassigned to #2419 (lr sweep on n_head=1).
 - **#2335 (alphonse):** slice32+sw5 interaction on n_head=2 — **MERGED** val=48.57, test=41.48. Synergistic: observed −2.54 val vs additive −1.45 (1.75×). 3/4 splits improve. Reassigned to #2416 (n_head=1+sw5).
+- **#2356 (thorfinn):** Lion wd=3e-4/3e-5 on n_head=2+slice32 — wd=3e-4 (47.18/41.03) beats #2218 by −5.4% but loses to #2338 (46.67). Monotonic: wd=3e-5 (52.51) < wd=1e-4 (49.86) < wd=3e-4 (47.18). Under-regularized at wd=1e-4; uniform all-split improvement. Closed; reassigned to #2448 (wd=3e-4/1e-3 on n_head=1 compound — stack test).
 - **#2372 (nezuko):** sw=2/sw=3 on n_head=2+slice32 — sw=3 (48.47/41.20) beats #2218 by −2.78% but loses to #2338 (46.67). sw=2 regresses all 4 splits. U-curve at sw=3 minimum on n_head=2+slice32. cruise gain at sw=3 (−7.59%) strongest single-split this round. Closed; reassigned to #2446 (mlp_ratio=4/1 on n_head=1).
 - **#2295 (fern):** EMA decay sweep on n_head=2+sw=5 — ema_decay=0.99 confirmed locally optimal. Both directions regress (0.999: 50% crash + 12-pt spread; 0.95: +2.32 val). Main-vs-EMA gap at best epoch identical (5.06/5.00) — sweet spot at ~100-step window (¼ epoch). Closed; reassigned to #2438 (β2 sweep on n_head=1).
 - **#2271 (askeladd):** β2=0.995 vs β2=0.999 on n_head=2+slice_num=64 — β2 effect reverses from n_head=4 (#2144). Canonical β2=0.99 confirmed optimal on n_head=2. Main-vs-EMA gap diagnostic: 7.31 (β2=0.995) vs 2.81 (β2=0.999). Closed; reassigned to #2400 (n_layers reduce).
@@ -95,6 +96,7 @@
 22. **slice_num=16 confirmed monotonic on n_head=2 (#2337):** val=48.08/test=41.02 — beats old #2218 (49.86/42.19) but loses to new #2338 (46.67). Trend holds: 16 < 32 < 64 < 128. Speed gain 75.9s/ep (−6.8% vs slice32), +1 epoch in 30 min. Val still descending at cap. Next: test slice_num=16 on n_head=1 compound (#2430 frieren).
 23. **ema_decay=0.99 confirmed locally optimal (#2295):** Both decay=0.999 (+1.76 val, 50% crashes) and decay=0.95 (+2.32 val) regress on n_head=2+sw=5. EMA-main gap at best epoch identical (5.06/5.00) — window length matters mid-training not at convergence. 0.99 (100-step window ≈ ¼ epoch) is the sweet spot for this training horizon. EMA decay sweep closed.
 24. **sw U-curve on n_head=2+slice32 confirmed at sw=3 minimum (#2372):** sw=3 (48.47) beats old #2218 (49.86) by −2.78% but loses to #2338 (46.67). sw=2 regresses all 4 splits (+2.84%). U-shaped curve: sw=10 (49.86) ≥ sw=5 (48.57) ≈ sw=3 (48.47) ≪ sw=2 (51.28). Cruise gain at sw=3 (−7.59%) is the largest single-split win this round; floor at ≥3× weighting on slice32.
+25. **Monotonic wd signal on n_head=2+slice32 (#2356):** wd=3e-5 (52.51) < wd=1e-4 (49.86) < wd=3e-4 (47.18). 5.4% rel gain from 3× wd — non-trivial Lion-decoupled-wd effect; compound was under-regularized. Uniform improvement all splits. wd=3e-4 loses to #2338 (46.67) by +0.51 — natural follow-up: stack wd=3e-4 on n_head=1 compound (#2448 thorfinn).
 
 ## Priority for current wave
 
@@ -104,6 +106,7 @@
 - **lr sweep on n_head=1 (#2419 edward)** — lr=1.5e-4 vs lr=1.25e-4; slice64 winner was 1.5e-4; n_head=1 may prefer different lr
 - **n_layers reduce (#2400 askeladd)** — n_layers=4/3 on slice_num=32; speed-dividend thesis
 - **mlp_ratio=4 vs mlp_ratio=1 (#2446 nezuko)** — unexplored FFN axis; Transolver paper used mlp_ratio=4; mlp_ratio=1 trades capacity for epochs (~30-32 vs 26)
+- **Lion wd=3e-4 vs wd=1e-3 on n_head=1 (#2448 thorfinn)** — direct stack test of monotonic wd signal: wd=3e-4 was −5.4% val on n_head=2; if it stacks on n_head=1, projects val ~44
 
 **Optimizer hparams:**
 
