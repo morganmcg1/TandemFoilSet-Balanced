@@ -22,14 +22,14 @@ Note: The merged train.py now has Lion + Fourier stacked. The Lion+Fourier combi
 |---------|-----|-----------|--------|--------|
 | alphonse | #1359 | lr-warmup-1e-3 | wip | lr=1e-3 + warmup on new baseline |
 | askeladd | #1771 | wider-192-schedule-realigned | **CLOSED** ✗ | test 104.86 (+5.19%) — T_max=14 worse than T_max=18. Current 14-15/18 epochs is already optimal operating point. |
-| askeladd | TBD | lion-bs-8-sqrt2-lr | wip (assigning) | Lion memory budget (43GB vs 94GB AdamW) enables bs=8. bs=8 + lr=2.1e-4 (√2-scaled from 1.5e-4). |
+| askeladd | #1877 | lion-bs-8-sqrt2-lr | wip (new) | Lion memory budget (43GB vs 94GB AdamW) enables bs=8. bs=8 + lr=2.1e-4 (√2-scaled from 1.5e-4). |
 | edward | #1643 | mlp-ratio-4 | wip | mlp_ratio 2→4 on Lion+Fourier+wider baseline |
 | fern | #1796 | weight-decay-1e-3 | wip | wd 1e-4→1e-3 on Lion+Fourier+wider baseline |
 | frieren | #1710 | surf-weight-5 | wip | surf_weight 10→5 on Lion+Fourier+wider baseline |
 | nezuko | #1862 | n-layers-6-fourier-wider | wip (new) | n_layers 5→6 on Fourier+wider baseline (pre-Lion merge — will inherit Lion from branch) |
 | tanjiro | #1798 | grad-norm-clip | wip | grad-clip max_norm=1.0 on Lion+Fourier+wider baseline |
 | thorfinn | #1395 | lion-optimizer | **MERGED** ✓ | test **83.77** (−10.2% vs Fourier baseline) — HUGE win! New best. |
-| thorfinn | TBD | n-head-8 | wip (assigning) | n_head 4→8 on Lion+Fourier+wider baseline. First clean Lion+Fourier stacked confirmation + attention diversity test. |
+| thorfinn | #1876 | n-head-8 | wip (new) | n_head 4→8 on Lion+Fourier+wider baseline. First clean Lion+Fourier stacked confirmation + attention diversity test. |
 
 ## Key research findings so far
 1. **Throughput matters more than architecture at 30-min budget**: bf16+batch-8 gets 17 epochs vs 10-11 — the round-1 win.

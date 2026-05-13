@@ -382,3 +382,13 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 **Analysis**: Negative result. T_max=14 is worse than T_max=18 despite training 14 complete epochs. The current model completes 14-15 of 18 epochs, which means the last 1-2 epochs have very low LR (~1e-6 range) — but this "slow landing" phase appears beneficial for final weight averaging. Setting T_max=14 makes LR reach exactly 0 at ep 14, which may cause premature over-refinement without the very-low-LR exploration phase. Direction closed.
 
 **Action**: Closed. Assigned askeladd lion-bs-8-sqrt2-lr.
+
+## 2026-05-13 03:40 — PR #1876 (NEW): n_head 4→8 on Lion+Fourier+wider baseline
+- Branch: thorfinn/n-head-8-wider-lion
+- Hypothesis: n_head=4 at n_hidden=192 gives head_dim=48. Doubling to n_head=8 (head_dim=24) creates 2× more distinct attention patterns, allowing finer-grained physical specialization. Also the first run on fully stacked Lion+Fourier baseline — serves as Lion+Fourier confirmation.
+- Status: WIP (newly assigned). Target: test_avg < 83.77.
+
+## 2026-05-13 03:40 — PR #1877 (NEW): Lion bs=8 + sqrt2-lr
+- Branch: askeladd/lion-bs-8-sqrt2-lr
+- Hypothesis: Lion has no second-moment buffer — only 43 GB vs AdamW's 94 GB at bs=4. This opens the budget for bs=8 (should be ~55-70 GB). Larger batches improve gradient accuracy, especially OOD. lr=2.1e-4 (√2 × 1.5e-4) for √2 batch-size scaling.
+- Status: WIP (newly assigned). Target: test_avg < 83.77.
