@@ -173,6 +173,54 @@
 
 ---
 
+## 2026-05-13 07:30 — Round 18
+
+### PR #1903: slice_num 32 → 16 — CLOSED (wash, closes slice-DOWN axis)
+
+- **Student:** charliepai2g48h5-frieren
+- **Result:** val_avg=54.2251 (+0.41% vs 54.0051 baseline, **miss**); test_avg=46.9815 (-1.35%, modest test win).
+- **Best epoch:** 47/47 (best==terminal; unconverged, wall-clock hit at epoch 47).
+- **Per-epoch time:** 37.81 s (-13% vs #1846). Memory: 20.11 GB. 47 epochs in 30 min.
+- **Per-split val:** single_in_dist -14.15% (59.09→50.73) [huge gain]; geom_camber_rc +3.91%; geom_camber_cruise +7.60%; re_rand +7.24%.
+- **Interpretation:** Striking in-dist/OOD trade-off: slice=16 under-resolves OOD spatial structure (camber, Re-shift regimes) but concentrates capacity on dominant in-dist patterns. Mean cancels to a wash. **slice_num=32 is the global val optimum.** 64→32 was a -9.30% win; 32→16 is a ±0.4% wash — the bottleneck lever is exhausted.
+- **Additional finding:** Best==terminal again (vs PR #1846's converged best=40≠terminal=41). Lighter slice=16 model trained faster but still budget-hit before true convergence.
+- **Closed axis:** slice_num below 32. The two-point bracket (16 and 64) around 32 is complete.
+- **Artifacts:** `models/model-charliepai2g48h5-frieren-slice-num-16-20260513-041626/metrics.jsonl`
+
+---
+
+### PR #1904: sampler racecar_single 1.5× — CLOSED (clean LOSS, 2× optimum confirmed)
+
+- **Student:** charliepai2g48h5-nezuko
+- **Result:** val_avg=55.8769 (+3.47% vs 54.0051 baseline). test_avg=49.3745 (+3.67%). Clear LOSS.
+- **Best epoch:** 42/42 (unconverged, wall-clock-bound).
+- **Per-split vs #1846:** geom_camber_rc=72.37 (unchanged from 2×); re_rand=58.23 (unchanged); cruise improved -6.38% vs old 2× pre-slice run; single improved -4.01% vs old 2× pre-slice run. Both OOD-dominated splits unaffected.
+- **Sampler confirmed:** boost_factor=1.5 applied correctly (single=37.5%, tandem=31.25%, cruise=31.25%).
+- **Confirmed optimum:** 2.0× boost is the peak. 1.5× under-concentrates single-foil coverage; 2× both-racecar (#1870) over-dilutes; 2× single (#1619) is the sweet spot.
+- **Key insight:** `val_geom_camber_rc` (72.37) and `val_re_rand` (58.23) dominate val_avg and don't respond to sampler reweighting at any single-domain boost factor. These OOD splits require architectural or loss-level interventions, not sampler tuning.
+- **Closed axis:** Sampler boost factor sweep (both up and down). 2× single is canonical.
+- **Artifacts:** `models/model-charliepai2g48h5-nezuko-sampler-single-1.5x-20260513-041540/metrics.jsonl`
+
+---
+
+### PR #1921: pos-jitter σ=0.01 on volume mesh coords — ASSIGNED (nezuko)
+
+- **Branch:** `charliepai2g48h5-nezuko/pos-jitter-0.01`
+- **Hypothesis:** Gaussian perturbation (σ=0.01 on z-score-normalized coords) on volume (non-surface) nodes during training only. Forces Transolver's slice routing to abstract away exact mesh node positions — should improve OOD generalization on `val_geom_camber_rc` and `val_re_rand`, which dominate val_avg and don't respond to sampler changes.
+- **Target splits:** geom_camber_rc (72.37) and re_rand (58.23).
+- **Baseline to beat:** val_avg < 54.0051.
+
+---
+
+### PR #1926: RMSNorm replacing LayerNorm — ASSIGNED (frieren)
+
+- **Branch:** `charliepai2g48h5-frieren/rmsnorm`
+- **Hypothesis:** Replace all 3 `nn.LayerNorm` sites in `TransolverBlock` (ln_1, ln_2, ln_3) with `nn.RMSNorm`. Drops mean-centering and bias; ~7-10% faster norm op under torch.compile + bf16; Llama-style normalization. May help L1 sign-gradient regime where mean-centering adds noise.
+- **Expected:** ~1-3% faster per-epoch → 1 extra epoch in budget. Small direct quality improvement possible.
+- **Baseline to beat:** val_avg < 54.0051.
+
+---
+
 ## 2026-05-13 05:30 — Round 16
 
 ### PR #1789: surf_weight 10 → 15 — CLOSED (stale, tanjiro rate-limited)
