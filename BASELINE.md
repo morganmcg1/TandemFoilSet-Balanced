@@ -5,6 +5,63 @@
 
 ---
 
+## 2026-05-13 00:53 — PR #1682: Pure L1 loss (F.l1_loss, remove Smooth L1 quadratic regime)
+
+**Student:** charliepai2g48h2-tanjiro  
+**Change:** Replace `F.smooth_l1_loss(beta=0.1)` with `F.l1_loss` (no quadratic regime). Applied in both training loop and `evaluate_split`. In normalized space, the L1-aligned gradient is a tighter surrogate for the MAE evaluation criterion — the β=0.1 quadratic zone was lightly load-shedding small-residual gradient pressure relative to large-residual. Pure L1 removes that distortion. All other config unchanged: channel_weights=[1,1,3], lr=7e-4 warmup, grad_clip=1.0, NaN-skip, --epochs 14.
+
+### Validation (best epoch 14/14 — cosine fully annealed, still descending at cutoff)
+
+| Split | mae_surf_p | vs. #1684 baseline |
+|---|---|---|
+| val_single_in_dist | 99.310 | −3.8% |
+| val_geom_camber_rc | 95.316 | +0.06% |
+| val_geom_camber_cruise | 61.818 | +2.0% |
+| val_re_rand | 76.477 | **−3.4%** |
+| **val_avg/mae_surf_p** | **83.230** | **−1.58%** |
+
+**Improvement vs #1684 baseline: −1.58% (84.562 → 83.230)**  
+**Cumulative improvement vs #1418 baseline: −32.1% (122.64 → 83.230)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 88.714 |
+| test_geom_camber_rc | 83.649 |
+| test_geom_camber_cruise | 50.535 |
+| test_re_rand | 71.156 |
+| **test_avg/mae_surf_p** | **73.513** |
+
+**Improvement vs #1684 test baseline: −1.91% (74.947 → 73.513)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW lr=7e-4 (peak), 2-epoch warmup, wd=1e-4, CosineAnnealingLR(T_max=14), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: **`F.l1_loss(reduction='none')`** × channel_weights[1,1,3] / 5 in normalized space
+- NaN-skip guard in `evaluate_split`
+
+### Key finding
+
+Removing the Smooth L1 quadratic regime (β=0.1 → β=0, pure L1) confirms the MAE-criterion alignment hypothesis. Pure L1 is a tighter surrogate for MAE than Smooth L1 with any finite β. Gradient stability is maintained by grad_clip=1.0 — peak |pred_abs_max| ≈ 8.5K (normal CFD scale), 117× below the 1e6 alarm threshold.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-tanjiro-pure-l1-loss-20260513-001624/metrics.jsonl`
+- `models/model-charliepai2g48h2-tanjiro-pure-l1-loss-20260513-001624/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-tanjiro \
+    --experiment_name "charliepai2g48h2-tanjiro/pure-l1-loss" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-12 23:52 — PR #1684: T_max alignment (--epochs 14, cosine fully anneals)
 
 **Student:** charliepai2g48h2-frieren  
