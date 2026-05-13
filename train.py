@@ -153,7 +153,7 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init: float = 1e-4):
+                 layerscale_init: float = 0.1):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -592,13 +592,27 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+_ls_decay_params = []
+_ls_no_decay_params = []
+for _name, _p in list(model.named_parameters()) + list(rescale_head.named_parameters()):
+    if _p.requires_grad and ("ls_attn" in _name or "ls_mlp" in _name):
+        _ls_no_decay_params.append(_p)
+    elif _p.requires_grad:
+        _ls_decay_params.append(_p)
 optimizer = SOAP(
-    list(model.parameters()) + list(rescale_head.parameters()),
+    [
+        {"params": _ls_decay_params, "weight_decay": cfg.weight_decay},
+        {"params": _ls_no_decay_params, "weight_decay": 0.0},
+    ],
     lr=cfg.lr,
     betas=(0.95, 0.95),
     weight_decay=cfg.weight_decay,
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
+)
+print(
+    f"SOAP param groups: decay={sum(p.numel() for p in _ls_decay_params)} "
+    f"no_decay={sum(p.numel() for p in _ls_no_decay_params)} (ls_attn+ls_mlp)"
 )
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
@@ -610,10 +624,11 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
-# Mirror metrics to the PR-requested path (PR #2428 layerscale-init-1e-4) so
-# the advisor can find this run's metrics at a stable location regardless of
-# the timestamped model_dir.
-metrics_extra_path = Path("metrics") / "charliepai2g24h1-nezuko" / "layerscale-init-1e-4.jsonl"
+# Mirror metrics to the PR-requested path (PR #2428 layerscale-init-0.1-nodecay
+# follow-up: γ₀=0.1 with ls_* excluded from weight decay) so the advisor can
+# find this run's metrics at a stable location regardless of the timestamped
+# model_dir.
+metrics_extra_path = Path("metrics") / "charliepai2g24h1-nezuko" / "layerscale-init-0.1-nodecay.jsonl"
 metrics_extra_path.parent.mkdir(parents=True, exist_ok=True)
 if metrics_extra_path.exists() or metrics_extra_path.is_symlink():
     metrics_extra_path.unlink()
@@ -870,7 +885,8 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
-        "layerscale/init": 1e-4,
+        "layerscale/init": 0.1,
+        "layerscale/wd_excluded": True,
         "layerscale/ls_attn_mean_per_block": ls_attn_mean,
         "layerscale/ls_mlp_mean_per_block": ls_mlp_mean,
         "layerscale/ls_attn_absmax_per_block": ls_attn_absmax,
