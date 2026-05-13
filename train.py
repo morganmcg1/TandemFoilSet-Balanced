@@ -590,7 +590,24 @@ optimizer = SOAP(
     max_precond_dim=cfg.max_precond_dim,
 )
 SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
+WARMUP_EPOCHS = 3
+COSINE_EPOCHS = SCHEDULER_T_MAX - WARMUP_EPOCHS  # 25 epochs of cosine after warmup
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=1e-3,  # starts at lr * 1e-3 = 1e-6
+    end_factor=1.0,     # ends at lr * 1.0 = 1e-3
+    total_iters=WARMUP_EPOCHS,
+)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=COSINE_EPOCHS,
+    eta_min=1e-5,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[WARMUP_EPOCHS],
+)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -818,8 +835,11 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
+        "scheduler": "linear_warmup_then_cosine",
         "scheduler_T_max": SCHEDULER_T_MAX,
+        "scheduler_warmup_epochs": WARMUP_EPOCHS,
+        "scheduler_cosine_epochs": COSINE_EPOCHS,
+        "scheduler_warmup_start_factor": 1e-3,
         "scheduler_eta_min": 1e-5,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
