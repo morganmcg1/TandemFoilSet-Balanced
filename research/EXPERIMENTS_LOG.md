@@ -614,3 +614,49 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 
 **Net programme lesson**: Data-bottleneck manifests in TWO ways — (1) wider models can't fill representation space, (2) larger batches halve optimizer steps without providing extra information. Both ruled out for 1,499-sample dataset.
 
+
+---
+
+## 2026-05-13 04:45 — PR #1854: [soap-fp32-precond] SOAP GG/Q in fp32 under bf16 AMP — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/soap-fp32-precond
+- **Hypothesis**: bf16 precision in SOAP's GG/Q eigenbases degraded preconditioner quality; keeping them in fp32 would improve OOD generalization.
+- **Status**: **CLOSED** — hypothesis inverted, bf16 Q acts as implicit regularization
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 31.7537 | **+4.31% (worse)** |
+| test_avg/mae_surf_p | 27.1862 | **+4.16% (worse)** |
+| val_single_in_dist | 33.40 | -2.5% (better!) |
+| val_geom_camber_rc | 45.01 | +8.6% (worse) |
+| val_geom_camber_cruise | 15.04 | +7.1% (worse) |
+| val_re_rand | 33.57 | +4.8% (worse) |
+
+**Pattern**: in-dist improved, ALL 3 OOD splits degraded. This is NOT numerical noise — it's the signature of overfitting. Sharp fp32 preconditioner fit training distribution tighter; bf16 Q's rounding noise acted as implicit regularization that generalized better to OOD.
+
+**Key finding**: All changes confirmed applied (GG fp32 init, fp32 grad for lerp_, Q stays fp32, project/project_back cast to fp32). Memory unchanged (23.87 GB ≈ 24 GB baseline).
+
+**This is the third consecutive experiment showing the same OOD-worse pattern (wider, deeper, more precise preconditioner). Model is regularization-limited, not capacity/precision-limited.**
+
+---
+
+## 2026-05-13 04:45 — PR #1848: [deeper-soap] n_layers 5→7 — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/deeper-soap
+- **Hypothesis**: depth increases representational power more data-efficiently than width; n_layers 5→7 with n_hidden=128 keeps params moderate (880K→904K).
+- **Status**: **CLOSED** — compute-budget falsification (still descending at ep 21 cutoff)
+
+| Metric | Value | vs baseline (30.4412) |
+|--------|-------|----------------------|
+| val_avg/mae_surf_p | 33.9762 | **+11.6% (worse)** |
+| test_avg/mae_surf_p | 29.1507 | **+11.7% (worse)** |
+| Per-epoch wall time | 84s | was 60-65s (+30%) |
+| Epochs in 30 min | 21 | was 30 |
+| Peak GPU | 32.4 GB | was 24 GB |
+
+**Val trajectory at cutoff**: 38.53 → 36.04 → 34.75 → **33.98** (ep 21, steep ~1/ep descent). Model was still converging fast; **compute-budget verdict, not intrinsic verdict**. BUT: at fixed 30-min wall-clock, the 662K/5-layer model dominates by running 30 epochs vs 21.
+
+**Uniform regression across all splits** (not OOD-targeted) → simple undertraining, not compositionality issue.
+
+**Programme lesson**: Both width (wider-soap-192) AND depth (deeper-soap) fail at fixed 30-min budget on 1,499 samples. Current 662K/5-layer is in the optimal compute zone. Data-bottleneck is confirmed. Moving to regularization-based improvements.
+
