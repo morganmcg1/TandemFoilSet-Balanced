@@ -5,14 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 09:10 — after #1842 mlp-ratio closed under AMP + edward reassigned to n_layers depth sweep)
+- **Date**: 2026-05-13 (updated 10:55 — #1438 warmup-5ep merged, frieren reassigned to n_head-sweep #2192)
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
 - **Target metric** (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 splits)
 - **Paper-facing test metric**: `test_avg/mae_surf_p`
 - **Hard caps**: 30 min wall-clock per training run, 50 epochs, 1 GPU (96GB) per student
-- **Verified best (merged)**: `val_avg/mae_surf_p = 77.3716` / `test_avg/mae_surf_p = 68.2053` (PR #1440, run `30wvu5r0`, SmoothL1+grad-clip+EMA+**AMP bfloat16**). −15.6% val / −16.1% test vs prior best 91.66/81.28. Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp`.
+- **Verified best (merged)**: `val_avg/mae_surf_p = 75.9562` / `test_avg/mae_surf_p = 67.5326` (PR #1438, run `d1lqln08`, warmup-5ep on top of AMP+EMA+SmoothL1+grad-clip). −1.83%/−1.00% vs prior 77.37/68.21. Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5`.
 - **Cruise-test NaN bug — FULLY FIXED in code (PR #1615, MERGED)**: `test_geom_camber_cruise/000020.pt` has 761 Inf values in the p channel of `y`. The advisor branch was previously missing the per-sample finite-y filter in `train.py::evaluate_split` (BASELINE.md / PR #1433 docs claimed it was in code, but only the docs landed). PR #1615 adds `y_finite = torch.isfinite(y).all(dim=-1)` filter before forward pass at train.py:240-250, exactly matching `data/scoring.py::accumulate_batch` per-sample-skip semantics. All future PRs will natively report finite 4-split `test_avg/mae_surf_p` without student-side workarounds.
 - **Single-seed noise band ≈ ±7 around mean ≈ 99** (confirmed by three independent SmoothL1 reproductions of the same code at 102.17 / 103.57 / 125.94 in PR #1615 alone, plus advisor-branch baselines 90.91, 102.17, 104.84). Implication: hypotheses claiming <5% improvement need multi-seed confirmation. "Headline" Round 2 merges need ≥10% relative gain to be visibly real on a single seed.
 
@@ -39,7 +39,7 @@ The baseline Transolver recipe has several obvious soft spots:
 | ~~`grad-clip-norm1`~~ (askeladd, #1433) | **MERGED** | clip_grad_norm_ at 1.0; ALSO ships cruise-NaN fix. 114.18 (−13.5%) under MSE | Low |
 | ~~`p-channel-weight3x`~~ (edward, #1434) | **CLOSED** | 3× p_weight catastrophic (157.16, +62%); 5× also catastrophic (138.92, +43%). Same Bernoulli-coupling failure mode as alphonse's closed #1431 (channel reweighting breaks coupled physics) | — |
 | ~~`ema-decay999`~~ (fern, #1437) | **MERGED (WINNER)** | EMA decay=0.999 on top of SmoothL1+grad-clip. Variant 91.66 val / 81.28 test (best), sibling 93.70/83.46 — both well outside ±7 noise. New high-water mark. Mechanism: variance-reduction-at-eval (~5%) + better-epoch-selection (~4%), dual-eval logging now on advisor branch. | Low |
-| `warmup-5ep` (frieren, #1438) | WIP-rebase-needed | 5-epoch linear LR warmup; advisor told frieren to rebase onto current advisor branch | Low |
+| ~~`warmup-5ep`~~ (frieren, #1438) | **MERGED** | 5-epoch linear LR warmup. warmup-5ep (d1lqln08): val=75.96/test=67.53, −1.41/−0.68 vs baseline; all 4 val splits improve, 3/4 test splits improve. Small compound win; directional signal clean. **New baseline: 75.96/67.53.** | Low |
 | `amp-bf16` (nezuko, #1440) | WIP-likely-dead | bfloat16 autocast; multiple finished arms all 131–184, plus 1 crash. Likely close after terminal results post | Medium |
 | ~~`smooth-l1-beta01`~~ (tanjiro, #1441) | **MERGED (WINNER)** | SmoothL1(β=0.1). **104.70 (−20.6%)** — new best | Medium |
 | ~~`wider-n192`~~ (thorfinn, #1443) | **CLOSED** | n_hidden 128→192, n_head 4→6 — variant +33% (compute-bound under 30-min cap) | — |
@@ -62,6 +62,7 @@ The baseline Transolver recipe has several obvious soft spots:
 | `cosine-budget-match` (nezuko, #1998) | WIP (just assigned) | Sweep `--epochs {15, 20, 25}` to match T_max to the ~19-epoch AMP budget. With T_max=50, cosine LR is only 37% spent when 30-min cap fires — AMP val curve was still strictly descending. Hypothesis: `--epochs 20` lets cosine LR fully anneal within budget → better-converged final checkpoint. | Low |
 | `coord-jitter-aug` (thorfinn, #2097) | WIP (just assigned) | Gaussian coordinate jitter on input (x, z) channels of `x` (dims 0-1) at train time, σ proportional to per-coord x_std. Sweep σ_rel ∈ {0.005, 0.01, 0.02}. Predicted to help OOD-camber splits preferentially by augmenting near-miss geometries. Triggered by thorfinn's per-split asymmetry diagnosis from #1779 (model capacity matched-to-task → input-side augmentation rather than weight regularization). Orthogonal to every in-flight axis (loss/capacity/regularization/schedule/sampling/features). | Low–Med |
 | `n-layers-sweep` (edward, #2119) | WIP (just assigned) | Transolver depth sweep at AMP operating point: `n_layers` ∈ {4, 5, 6}. Direct follow-up to closed #1842 (mlp-ratio subsumed by AMP) and the pre-AMP closed #1443 (width compute-bound). Mechanism: AMP has freed ~25% wall-clock — can that budget be reinvested into deeper iterative refinement rather than additional EMA cool-down? Each layer is a full TransolverBlock (attention + MLP), so deeper = more iterative refinement passes per node. Predicted: shallower (4 layers) hits ~21 epochs, deeper (6 layers) ~16 epochs. Capacity-vs-budget tradeoff at the new throughput floor. | Med |
+| `n-head-sweep` (frieren, #2192) | WIP (just assigned) | Transolver attention head count sweep at AMP+warmup operating point: `n_head` ∈ {2, 4, 8} with `n_hidden=128`. Tests whether per-head dimensionality (32 dims at current n_head=4) is optimal. n_head=2 → 64 dims per head (richer, fewer patterns); n_head=8 → 16 dims per head (more diverse, less per-head capacity). Baseline: 75.96/67.53. | Low–Med |
 
 All prior in-flight PRs were notified of the 91.66/81.28 baseline + EMA-rebase guidance. New baseline is 77.37/68.21 (PR #1440 AMP merged) — they should rebase, include `--ema_decay 0.999` on their best variant arms, and compare against the new baseline. EMA stacks orthogonally with every Round 2 hypothesis (loss-shape, capacity, regularization, sampling, precision, schedule), so existing hypotheses remain valid; merge bar is now ~86 val / ~76 test for a clean ≥10% gain over the new baseline.
 
