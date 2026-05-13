@@ -534,6 +534,11 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    # Learning-rate schedule. 'cosine' = current baseline (per-epoch CosineAnnealingLR).
+    # 'onecycle' = OneCycleLR (linear warmup + cosine anneal, stepped per batch).
+    scheduler: str = "cosine"
+    onecycle_max_lr: float = 5e-4  # peak LR for OneCycleLR (only used if scheduler=onecycle)
+    onecycle_pct_start: float = 0.1  # fraction of total steps for warmup phase (default 0.10 = 10 percent)
 
 
 cfg = sp.parse(Config)
@@ -622,7 +627,37 @@ if cfg.use_kendall_uncertainty:
 else:
     log_sigmas = None
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+if cfg.scheduler not in ("cosine", "onecycle"):
+    raise ValueError(f"--scheduler must be one of {{cosine, onecycle}}, got {cfg.scheduler!r}")
+
+steps_per_epoch = len(train_loader)
+if cfg.scheduler == "onecycle":
+    # OneCycleLR steps PER BATCH. Total steps spans the full epoch budget so the
+    # cosine anneal shape is set over the whole training horizon; the SWA region
+    # (final 25%) takes over the optimizer's LR and we stop stepping OneCycle
+    # there. div_factor=25 / final_div_factor=1e4 are PyTorch defaults: initial_lr
+    # = max_lr/25, terminal_lr = max_lr/(25*1e4).
+    onecycle_total_steps = MAX_EPOCHS * steps_per_epoch
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.onecycle_max_lr,
+        total_steps=onecycle_total_steps,
+        pct_start=cfg.onecycle_pct_start,
+        anneal_strategy="cos",
+        div_factor=25.0,
+        final_div_factor=1e4,
+    )
+    scheduler_step_per_batch = True
+    print(
+        f"Scheduler: OneCycleLR(max_lr={cfg.onecycle_max_lr:.2e}, "
+        f"pct_start={cfg.onecycle_pct_start:.3f}, total_steps={onecycle_total_steps}, "
+        f"div_factor=25, final_div_factor=1e4, anneal=cos) — stepped per batch"
+    )
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler_step_per_batch = False
+    print(f"Scheduler: CosineAnnealingLR(T_max={MAX_EPOCHS}) — stepped per epoch")
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
@@ -652,6 +687,8 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "steps_per_epoch": steps_per_epoch,
+        "onecycle_total_steps": (onecycle_total_steps if cfg.scheduler == "onecycle" else None),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -681,6 +718,7 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    in_swa_region = (epoch >= swa_start_epoch)
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
@@ -759,7 +797,12 @@ for epoch in range(MAX_EPOCHS):
             epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm_val)
             epoch_clip_fraction_sum += clip_fired
         optimizer.step()
+        # OneCycleLR: step per batch during non-SWA epochs only. SWALR takes over
+        # in the SWA region (handled below at end-of-epoch).
+        if scheduler_step_per_batch and not in_swa_region:
+            scheduler.step()
         global_step += 1
+        batch_lr = optimizer.param_groups[0]["lr"]
         log_payload = {
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
@@ -768,6 +811,7 @@ for epoch in range(MAX_EPOCHS):
             "train/re_weight_mean": re_weight.mean().item(),
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            "lr": batch_lr,
             "global_step": global_step,
         }
         if grad_norm_val is not None:
@@ -807,14 +851,16 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    if epoch >= swa_start_epoch:
+    if in_swa_region:
         swa_model.update_parameters(model)
         swa_scheduler.step()
         current_lr = swa_scheduler.get_last_lr()[0]
         swa_active = True
     else:
-        scheduler.step()
-        current_lr = scheduler.get_last_lr()[0]
+        # Per-epoch step for cosine; OneCycleLR was already stepped per batch above.
+        if not scheduler_step_per_batch:
+            scheduler.step()
+        current_lr = optimizer.param_groups[0]["lr"]
         swa_active = False
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
