@@ -388,6 +388,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    n_layers: int = 5
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -426,7 +427,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=48,
     mlp_ratio=4,
@@ -438,7 +439,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = Lion(model.parameters(), lr=1e-4, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
+optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
