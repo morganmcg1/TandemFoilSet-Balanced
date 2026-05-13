@@ -8,6 +8,128 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 14:00 — PR #2266 (thorfinn geglu-gate-comparison) — **MERGED** (14th compound win)
+
+- Branch: `charliepai2g24h4-thorfinn/geglu-gate-comparison`
+- Hypothesis: Replace SiLU with GELU in the GLU gate: `F.silu → F.gelu` in `SwiGLUMLP.forward()`. GELU's harder switch in the negative-input regime should suppress cross-channel contamination at high-magnitude pressure features. Zero parameter cost.
+- Metric artifacts: `models/model-charliepai2g24h4-thorfinn-geglu-gate-comparison-20260513-121756/metrics.jsonl`
+
+| Split | Baseline (#2175 67.381/57.800) | GeGLU | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 73.341 | **67.894** | **−7.43%** |
+| val_geom_camber_rc | 80.673 | **76.235** | **−5.50%** |
+| val_geom_camber_cruise | 48.675 | **47.790** | **−1.82%** |
+| val_re_rand | 66.834 | **64.808** | **−3.03%** |
+| **val_avg (primary)** | **67.381** | **64.182** | **−4.75%** |
+| test_single_in_dist | 64.685 | **60.676** | **−6.20%** |
+| test_geom_camber_rc | 69.035 | 70.778 | +2.53% (lone regression) |
+| test_geom_camber_cruise | 40.356 | **39.001** | **−3.36%** |
+| test_re_rand | 57.121 | **55.636** | **−2.60%** |
+| **test_avg** | **57.800** | **56.523** | **−2.21%** |
+
+Best epoch: 13 (identical to baseline). n_params: 831,191 (unchanged). Peak GPU: 57.1 GB.
+
+**Analysis:** Largest single-PR gain from a 1-character change in the programme. All 4 val splits beat baseline; 3 of 4 test splits beat baseline. The lone test_geom_camber_rc regression (+2.53%) is attributed to val/test camber_rc decorrelation rather than a GeGLU artifact (val_geom_camber_rc improved strongly −5.50%). The student's grad-norm trace is clean — GELU's harder gate did not destabilize early training.
+
+**Mechanism:** GELU < SiLU for x < 0, suppressing the gate path in negative-valued features. Under L1 + surf-ch-weight [0.5,0.5,2.0], gradient signal is dominated by extreme pressure values at stagnation points and wakes — precisely where the gate sharpness matters most. Per-channel pressure gains (mae_surf_p) exceed velocity gains, exactly matching the mechanism prediction. **Gate activation axis open — ReGLU (ReLU gate) is the natural next test to close the monotonicity question.**
+
+**New compound progress:** 14 merges, **100.957 → 64.182 = −36.4%**
+
+---
+
+## 2026-05-13 14:00 — PR #2262 (alphonse slice-num-96) — **CLOSED** (representation dilution)
+
+- Branch: `charliepai2g24h4-alphonse/slice-num-96`
+- Hypothesis: slice_num=64→96: increase Transolver physics-slice token capacity (+50% inter-token states).
+
+| metric | Baseline (#2175) | slice_num=96 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 67.381 | 73.322 | **+8.82%** |
+| **test_avg** | 57.800 | 64.110 | **+10.92%** |
+| val_single_in_dist | 73.341 | 86.259 | +17.61% |
+| val_geom_camber_rc | 80.673 | 82.265 | +1.97% |
+
+Best epoch: 11. Sec/epoch: 169.5 vs 137 (+23.7%). n_params: 836,471 (+5,280 — note: in_project_slice is single Linear per layer, not per-head).
+
+**Analysis:** Striking inversion of the prediction — val_single_in_dist (easiest, in-dist) is hit hardest (+17.6%), while val_geom_camber_rc (hardest OOD) barely moves (+2.0%). The hypothesis predicted OOD splits would benefit most. The actual pattern is representation dilution: at 831k params / 5 layers / 1499 train samples, 96 slices over-partitions the representation. Extra slices dilute per-slice gradient signal across more slots than the model can usefully populate. **Slice_num axis exhausted: 64 is the operating point at this model scale.**
+
+---
+
+## 2026-05-13 14:00 — PR #2244 (fern n-layers-6-depth) — **CLOSED** (compute-bound overfitting)
+
+- Branch: `charliepai2g24h4-fern/n-layers-6-depth`
+- Hypothesis: n_layers=5→6: depth increase on SwiGLU stack.
+
+| metric | Baseline (#2175) | n_layers=6 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 67.381 | 71.039 | **+5.43%** |
+| **test_avg** | 57.800 | 62.755 | **+8.57%** |
+| val_single_in_dist | 73.341 | 82.117 | +11.97% |
+| val_geom_camber_rc | 80.673 | 80.601 | **−0.09%** (tie) |
+| val_geom_camber_cruise | 48.675 | 52.620 | +8.10% |
+| val_re_rand | 66.834 | 68.817 | +2.97% |
+
+Best epoch: 11 (vs 13 baseline). Sec/epoch: 178 vs ~145 (+22.8%). n_params: 984,987 (+153,796 / +18.5%). Peak GPU: 67.57 GB. Trajectory still descending at ep 11 cap (−4.8 from ep10).
+
+**Notable:** Block-5 (new) has the largest attn γ of all blocks (0.0247), meaning the model actively uses the new layer — yet generalization degrades. Classic capacity-vs-epoch-budget overfitting on 1499 train samples. Two compounding effects: per-epoch compute grew +23% → 2 fewer epochs; and model has more parameters than it can fit in this epoch/data budget. **Depth axis exhausted: n_layers=5 is sweet-spot at this data scale and 30-min budget.**
+
+---
+
+## 2026-05-13 14:00 — PR #2239 (nezuko lr-3e-4-bracket-post-swiglu) — **CLOSED** (schedule mismatch)
+
+- Branch: `charliepai2g24h4-nezuko/lr-bracket-down-3e-4-post-swiglu`
+- Hypothesis: Peak lr=5e-4→3e-4 on post-SwiGLU stack (SwiGLU gating may prefer smaller lr).
+
+| metric | Baseline (#2175) | lr=3e-4 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 67.381 | 71.335 | **+5.95%** |
+| **test_avg** | 57.800 | 62.055 | **+7.36%** |
+| val_single_in_dist | 73.341 | 84.437 | +15.10% |
+
+Best epoch: 12 (still improving at cap). Ep5 grad norm: 115.3 (counter-hypothesis — no suppression).
+
+**Analysis:** lr=3e-4 simply can't complete enough cosine schedule descent in 30 min. LR at ep12 bottom: 3.27e-05 — model hasn't descended far enough. The warmup+cosine T_max=14 already provides the early-training stability the hypothesis was reaching for. Grad norm trace disproves the mechanism: ep5 norm=115.3 with lr=3e-4, not suppressed. **LR axis: 5e-4 confirmed optimal on the downward side. Upper bracket (7e-4) still untested.**
+
+---
+
+## 2026-05-13 14:00 — PR #2225 (edward gaussian-rff-sigma-calibrated) — **CLOSED** (low-pass filter, in-dist regression)
+
+- Branch: `charliepai2g24h4-edward/gaussian-rff-sigma-calibrated`
+- Hypothesis: Calibrated Gaussian RFF σ∈{1.0, 3.0} to match std-normalized coordinate scale. Two-arm comparison vs dyadic L=6.
+
+| arm | val_avg | test_avg | vs baseline |
+|---|---:|---:|---:|
+| Arm A σ=1.0 | 70.283 | 62.129 | **+4.31% / +7.49%** |
+| Arm B σ=3.0 | 67.939 | 58.954 | **+0.83% / +2.00%** |
+| Baseline (dyadic L=6) | 67.381 | 57.800 | — |
+
+Best epoch both arms: 12 (vs 13 baseline, 1 epoch shorter). Arm B still descending at cap (Δ=−2.93 ep11→12).
+
+**Key split pattern:** Both arms improve val_geom_camber_cruise and val_re_rand vs baseline, but lose hard on val_single_in_dist (+13.1 for A, +5.6 for B). Dyadic's broadband octave structure covers up to 32π ≈ 100 rad/unit; 12 random frequencies from N(0,9·I) reach max ~5-7 rad/unit, missing the high-freq pressure structure near leading/trailing edges.
+
+**Mechanism confirmed:** Gaussian RFF acts as a low-pass filter vs dyadic. Better OOD-cruise generalization (smoother features) but loses in-dist precision. **Pure Gaussian RFF direction closed. Hybrid dyadic+RFF encoder is the promising follow-up** (keep dyadic high-freq structure + add RFF smooth coverage). Learned frequencies (B as nn.Parameter) also noted as natural next step.
+
+---
+
+## 2026-05-13 14:00 — PR #2098 (frieren lion-optimizer post-SwiGLU) — **CLOSED** (mechanism redundancy + schedule mismatch)
+
+- Branch: `charliepai2g24h4-frieren/lion-optimizer` (rebased, 2 seeds)
+- Hypothesis: Lion optimizer (sign-momentum, lr=1e-4, wd=3e-4, betas=(0.9,0.99)) on post-SwiGLU stack. Pre-SwiGLU Lion won −8.83% val on an older baseline.
+
+| run | val_avg | test_avg | vs post-#2175 baseline |
+|---|---:|---:|---:|
+| Seed A (-110800, primary) | 69.406 | 59.068 | **+3.00% / +2.19%** |
+| Seed B (-115847, confirmation) | 69.561 | 59.040 | +3.25% / +2.15% |
+| Current baseline (GeGLU) | **64.182** | **56.523** | — |
+
+Best epoch: 12 (both seeds, vs 14 for pre-SwiGLU Lion). Sec/epoch: 151 vs 136 (+11%, SwiGLU compute overhead). n_params: 831,191.
+
+**Critical insight from student analysis:** Pre-SwiGLU Lion's gain (−8.83%) accrued almost entirely in epochs 13-14 (val 73.24 → 67.85 = −7.4% in final 2 epochs). SwiGLU's +11% compute cost means only 12 epochs fit → those 2 crucial low-lr epochs are cut. Additionally, SwiGLU's gated forward path provides per-channel scale adaptation (forward path), while Lion provides scale invariance in the backward path — they address the same underlying issue (per-channel grad heterogeneity from LayerScale sign-flip channels). **Partial redundancy + schedule mismatch.**
+
+**Suggested follow-up (from student):** T_max=11 adjustment — cosine schedule calibrated to actual SwiGLU/GeGLU epoch budget (12 epochs) rather than pre-SwiGLU budget (14 epochs). Worth testing as a scheduler-only PR. **Lion optimizer direction closed on this stack.**
+
+---
+
 ## 2026-05-13 13:30 — PR #2221 (askeladd rmsnorm-post-swiglu) — **CLOSED** (catastrophic regression)
 
 - Branch: `charliepai2g24h4-askeladd/rmsnorm-post-swiglu`
