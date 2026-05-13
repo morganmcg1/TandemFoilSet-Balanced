@@ -49,6 +49,41 @@ from data import (
     pad_collate,
 )
 
+
+class Lion(torch.optim.Optimizer):
+    """Lion optimizer (Chen et al., 2023, Algorithm 2 — canonical convention).
+
+    Update rule (with default betas=(0.9, 0.99)):
+        c_t   = beta1 * m_{t-1} + (1 - beta1) * g_t       # interpolation
+        theta = theta - lr * (sign(c_t) + weight_decay * theta)
+        m_t   = beta2 * m_{t-1} + (1 - beta2) * g_t       # momentum EMA update
+    """
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                g = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["m"] = torch.zeros_like(p)
+                m = state["m"]
+                beta1, beta2 = group["betas"]
+                update = (beta1 * m + (1 - beta1) * g).sign_()
+                p.add_(update, alpha=-group["lr"])
+                if group["weight_decay"] > 0:
+                    p.add_(p, alpha=-group["lr"] * group["weight_decay"])
+                m.mul_(beta2).add_(g, alpha=1 - beta2)
+        return loss
+
 # ---------------------------------------------------------------------------
 # Fourier positional encoding (Tancik et al., NeurIPS 2020)
 # ---------------------------------------------------------------------------
@@ -421,6 +456,7 @@ class Config:
     fourier_min_freq: float = 1.0   # min frequency (rad/unit on standardized coords)
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
+    optimizer: str = "adamw"   # "adamw" or "lion"
 
 
 cfg = sp.parse(Config)
@@ -490,7 +526,11 @@ amp_enabled = cfg.amp and device.type == "cuda"
 scaler = GradScaler(device="cuda", enabled=amp_enabled)
 print(f"BF16 autocast: {'enabled' if amp_enabled else 'disabled'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+else:
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+print(f"Optimizer: {cfg.optimizer}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
