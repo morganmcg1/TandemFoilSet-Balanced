@@ -152,7 +152,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 head_hidden=64):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -165,16 +166,28 @@ class TransolverBlock(nn.Module):
                        n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
-                nn.Linear(hidden_dim, out_dim),
+            self.head_ux = nn.Sequential(
+                nn.Linear(hidden_dim, head_hidden), nn.GELU(),
+                nn.Linear(head_hidden, 1),
+            )
+            self.head_uy = nn.Sequential(
+                nn.Linear(hidden_dim, head_hidden), nn.GELU(),
+                nn.Linear(head_hidden, 1),
+            )
+            self.head_p = nn.Sequential(
+                nn.Linear(hidden_dim, head_hidden), nn.GELU(),
+                nn.Linear(head_hidden, 1),
             )
 
     def forward(self, fx, gamma=None, beta=None):
         fx = self.attn(self.ln_1(fx), gamma, beta) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            ux = self.head_ux(h)
+            uy = self.head_uy(h)
+            p = self.head_p(h)
+            return torch.cat([ux, uy, p], dim=-1)
         return fx
 
 
@@ -209,6 +222,13 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # Zero-init final linears of per-channel heads. Must come AFTER
+        # self.apply(_init_weights), which would otherwise overwrite them.
+        for block in self.blocks:
+            if block.last_layer:
+                for head in (block.head_ux, block.head_uy, block.head_p):
+                    nn.init.zeros_(head[-1].weight)
+                    nn.init.zeros_(head[-1].bias)
         # FiLM Re-conditioning of slice logits. Shared single instance — gamma/beta
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
