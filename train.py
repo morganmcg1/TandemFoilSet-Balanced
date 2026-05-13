@@ -31,6 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -306,6 +307,8 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    best_pre_swa_metrics: dict | None = None,
+    best_swa_metrics: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -317,16 +320,33 @@ def write_experiment_summary(
         "checkpoint": str(model_path),
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_used_swa": best_metrics.get("swa_used", False),
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "seed": SEED,
+        "swa_start_epoch": SWA_START_EPOCH,
+        "swa_lr": SWA_LR,
+        "swa_anneal_epochs": SWA_ANNEAL_EPOCHS,
     }
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
             summary[f"best_val/{split_name}/{k}"] = v
+    if best_pre_swa_metrics:
+        summary["best_pre_swa/epoch"] = best_pre_swa_metrics["epoch"]
+        summary["best_pre_swa/val_avg/mae_surf_p"] = best_pre_swa_metrics["val_avg/mae_surf_p"]
+        for split_name, m in best_pre_swa_metrics["per_split"].items():
+            for k, v in m.items():
+                summary[f"best_pre_swa/{split_name}/{k}"] = v
+    if best_swa_metrics:
+        summary["best_swa/epoch"] = best_swa_metrics["epoch"]
+        summary["best_swa/val_avg/mae_surf_p"] = best_swa_metrics["val_avg/mae_surf_p"]
+        for split_name, m in best_swa_metrics["per_split"].items():
+            for k, v in m.items():
+                summary[f"best_swa/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
         summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
@@ -436,6 +456,18 @@ def lr_lambda(epoch):
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+# Stochastic Weight Averaging on top of warmup+cosine: average weights across
+# the cosine-decayed tail to escape sharp minima. Transolver uses LayerNorm only,
+# so update_bn is a no-op. With --epochs 13 and start=8 we get 6 epochs of
+# averaging in the post-warmup low-LR valley; SWALR anneals from the live
+# cosine LR at epoch 8 down to SWA_LR over SWA_ANNEAL_EPOCHS.
+SWA_START_EPOCH = 8
+SWA_LR = 5e-5
+SWA_ANNEAL_EPOCHS = 5
+swa_model = AveragedModel(model)
+swa_scheduler = SWALR(optimizer, swa_lr=SWA_LR, anneal_epochs=SWA_ANNEAL_EPOCHS)
+swa_active = False
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -456,6 +488,11 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+# Per-regime best for SWA-vs-non-SWA attribution.
+best_pre_swa_avg_surf_p = float("inf")
+best_pre_swa_metrics: dict = {}
+best_swa_avg_surf_p = float("inf")
+best_swa_metrics: dict = {}
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -496,19 +533,33 @@ for epoch in range(MAX_EPOCHS):
         epoch_grad_norm += grad_norm.item()
         n_batches += 1
 
-    scheduler.step()
+    # SWA-aware LR step: from SWA_START_EPOCH onward, update SWA weights from
+    # the live model and step SWALR (which anneals from current cosine LR down
+    # to SWA_LR over SWA_ANNEAL_EPOCHS). Before that, keep warmup+cosine.
+    if (epoch + 1) >= SWA_START_EPOCH:
+        swa_model.update_parameters(model)
+        swa_scheduler.step()
+        swa_active = True
+    else:
+        scheduler.step()
+
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
+    # When SWA is active, evaluate the SWA-averaged weights for checkpoint
+    # selection. Keep `model` and `swa_model` decoupled throughout training
+    # (standard SWA practice): save SWA weights directly when SWA is the best.
+    eval_model = swa_model if swa_active else model
+    eval_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
+    current_lr = optimizer.param_groups[0]["lr"]
     dt = time.time() - t0
 
     tag = ""
@@ -518,9 +569,29 @@ for epoch in range(MAX_EPOCHS):
             "epoch": epoch + 1,
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
+            "swa_used": swa_active,
         }
-        torch.save(model.state_dict(), model_path)
+        state_to_save = swa_model.module.state_dict() if swa_active else model.state_dict()
+        torch.save(state_to_save, model_path)
         tag = " *"
+
+    # Per-regime trackers (independent of overall best) for SWA-vs-non-SWA attribution.
+    if swa_active:
+        if avg_surf_p < best_swa_avg_surf_p:
+            best_swa_avg_surf_p = avg_surf_p
+            best_swa_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
+    else:
+        if avg_surf_p < best_pre_swa_avg_surf_p:
+            best_pre_swa_avg_surf_p = avg_surf_p
+            best_pre_swa_metrics = {
+                "epoch": epoch + 1,
+                "val_avg/mae_surf_p": avg_surf_p,
+                "per_split": split_metrics,
+            }
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -531,6 +602,8 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm": epoch_grad_norm,
+        "lr": current_lr,
+        "swa_active": swa_active,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -549,6 +622,16 @@ print(f"\nTraining done in {total_time:.1f} min")
 # --- Test evaluation + local summary ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if best_pre_swa_metrics:
+        print(
+            f"  Best pre-SWA  : epoch {best_pre_swa_metrics['epoch']}, "
+            f"val_avg/mae_surf_p = {best_pre_swa_avg_surf_p:.4f}"
+        )
+    if best_swa_metrics:
+        print(
+            f"  Best SWA-avg  : epoch {best_swa_metrics['epoch']}, "
+            f"val_avg/mae_surf_p = {best_swa_avg_surf_p:.4f}"
+        )
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -587,6 +670,8 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        best_pre_swa_metrics=best_pre_swa_metrics or None,
+        best_swa_metrics=best_swa_metrics or None,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
