@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-13 13:35 — PR #2189: EMA model weights re-screen at 21-epoch budget (CLOSED)
+
+- **Branch:** `willowpai2g48h4-tanjiro/ema-21epoch-rescreen` (CLOSED — both arms regressed)
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `ganjm31s` (Arm 1), `dj3doney` (Arm 2)
+
+### Results
+
+| Arm | EMA decay | EMA start | val_avg (EMA, e18) | Δ vs 89.7197 | test_avg | Δ vs 79.3167 |
+|-----|-----------|-----------|---------------------|--------------|----------|--------------|
+| Arm 1 | 0.999 | e0 | **97.86** | **+9.07% ✗** | **87.98** | **+10.93% ✗** |
+| Arm 2 | 0.9995 | e5 | **104.49** | **+16.46% ✗** | **95.45** | **+20.34% ✗** |
+
+Both arms violate the 3% regression threshold by 3-5×.
+
+### Mechanism diagnosis
+
+1. **ema_init_bias decay too slow at 20 epochs**: even at e18 Arm 2's ema_init_bias was 0.034 (5%+ contribution from warmup-period weights). Earlier epochs with val=130-200 contaminate the EMA snapshot.
+2. **Live model still descending throughout**: Arm 1 best live e18=95.87, Arm 2 e14/e19=87.07. No plateau exists for EMA to help.
+3. **Arm 2 LIVE e14=87.07 beat baseline 89.72** (and matches new SOTA 87.01 from #2178). EMA selection BURIED this real-time win.
+4. **Test damage > val damage**: Arm 2 test +20.34% suggests EMA averaging from warmup phase corrupts OOD generalization specifically.
+
+### Conclusion
+
+EMA on weights is fundamentally incompatible with this training regime. The mechanism requires either (a) a much longer training budget where cosine LR plateaus, or (b) a different LR schedule with a long flat tail. We have neither. **EMA direction CLOSED.**
+
+### Cross-link: live e14=87.07 (Arm 2) matches WD=5e-4 dynamics from #2178
+
+Tanjiro's live-trajectory data shows WD=5e-4 + compile produces an e14 transient low (~87) but oscillates back up. This is consistent with #2178's finding that WD=5e-4 AMPLIFIES the e12 spike, producing volatile late-epoch trajectories. Confirms cycle 42 insight: WD=5e-4 over-regularizes at 21 epochs.
+
+---
+
 ## 2026-05-13 13:25 — PR #2178: Compose torch.compile + weight_decay={5e-4, 3e-4}
 
 - **Branch:** `willowpai2g48h4-frieren/compile-wd-compose` (MERGED — NEW BASELINE)

@@ -44,7 +44,7 @@
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 2013 | tanjiro | logcosh-surface-loss | CLOSED | Both arms regressed (+3.51%, +14.18% vs 97.99). C² smoothness was a non-issue. Surface-loss family well-characterized as dead end. |
-| 2189 | tanjiro | ema-21epoch | WIP (NEW) | EMA re-screen at 21 epochs (compose w/ compile); arms: decay=0.999 from e0, decay=0.9995 from e5 |
+| 2189 | tanjiro | ema-21epoch | CLOSED | Both arms regressed (+9.07%/+16.46% val, +10.93%/+20.34% test). EMA init bias decay too slow; live model still descending at e21. EMA direction permanently closed. |
 | 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
 | 2178 | frieren | compile-wd-compose | **MERGED** | WD=3e-4+compile; val 87.0144/test 78.9539 — NEW BASELINE. WD=5e-4 regressed (+1.17%). |
 | 2284 | frieren | finer-wd-sweep-21epoch | WIP (NEW) | Finer WD sweep {2e-4, 2.5e-4, 4e-4}: map WD curve at 21 epochs around 3e-4 optimum |
@@ -97,7 +97,7 @@
 23. **Wider surf_head** — **rejected** (PR #2057, +5.36% val). hidden_dim=128 regressed vs 64. Encoder is the capacity bottleneck, not the head.
 24. **Per-group surf_head gradient clipping** — **rejected** (PR #2058, +10.39% val). sh_grad_norm is 0.77× encoder norm — gradient is NOT the problem. The update magnitude spike is m/√v driven, not ‖g‖ driven. Wrong mechanism.
 25. **LogCosh surface loss** — **rejected** (PR #2013, +3.51% Arm 1 / +14.18% Arm 2). C² smoothness was a non-issue (oscillation amplitude unchanged). Quadratic-regime gradient at typical residuals ~half of Huber — under-trained surf_head. **Surface-loss family is now well-characterized as a dead end** (#1558 δ=0.5 winner, #1627 δ-sweep, #1950 adaptive, #1922 per-channel δ, #2013 LogCosh).
-25a. **EMA model weights re-screen at 21-epoch budget** — testing (#2189 tanjiro, NEW). #1808 was wall-clock-bound at 14 epochs; torch.compile unlock makes EMA viable.
+25a. **EMA model weights re-screen at 21-epoch budget** — **rejected** (PR #2189, +9.07%/+16.46% val, +10.93%/+20.34% test). Both arms regressed. Mechanism: ema_init_bias decay too slow at 20 epochs (still 0.034 at e18); live model still descending at e21 (no plateau for EMA to help). Arm 2 live e14=87.07 matched new SOTA but EMA buried it. **EMA direction PERMANENTLY CLOSED.**
 26. **Deeper WD sweep {7e-4, 1e-3, 2e-3}** — **rejected** (PR #2120, +18.85% val at 7e-4). Branching rule correctly halted Arms 2-3. **WD=5e-4 is a SHARP peak**, not a plateau — confirmed by uniform regression across all 4 splits and an attenuated e14 breakthrough.
 26a. **WD bracket sweep {4e-4, 5.5e-4, 6e-4}** — **rejected** (PR #2153, +15.43%/+12.60%). WD=5e-4 SHARP bilateral peak confirmed. Critical finding: per-split asymmetry (rc wants more WD, sid wants less); e14 breakthrough is load-bearing (−13.5% at optimum vs −2.4% off-peak). Weight-norm growth is FLAT across WD range — WD acts on trajectory, not final parameter scale.
 26b. **Stratified per-domain batch sampler** — testing (#2259 fern, NEW). Guarantees all 3 domains in every batch (strict: 1+1+1+1weighted; rotated: 2+1+1 cycling). Tests whether per-batch domain variance is the source of the rc↔sid asymmetry found in #2153.
@@ -168,6 +168,7 @@
 - #2122 (decoupled WD head-down) — +9.17%/+18.62% regression. Reversed hypothesis: head NEEDS 10× effective shrinkage per step (coupled WD is protective). val_geom_camber_rc hit hardest. Head-up direction (#2232) is the untested symmetric point.
 - #2153 (WD bracket 4e-4/5.5e-4) — +15.43%/+12.60% regression vs 89.7197 baseline. Key insight: e14 breakthrough load-bearing, weight-norm FLAT. Note: this experiment was at 14-epoch budget; the WD axis at 21 epochs (post-compile) is distinct — WD=3e-4 wins there (#2178).
 - #2178 Arm 1 (WD=5e-4 + compile) — +1.17% regression vs 89.7197. WD=5e-4 over-regularizes at 21 epochs, amplifies e12 spike. WD=3e-4 is the 21-epoch optimum.
+- #2189 (EMA 21-epoch re-screen) — +9.07%/+16.46% regression. ema_init_bias decay too slow; live model still descending at e21. EMA direction permanently closed across two attempts (#1808 at 14ep, #2189 at 21ep).
 
 ## Potential next directions (after cycle 30 in-flight)
 
