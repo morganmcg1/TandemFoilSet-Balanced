@@ -310,6 +310,84 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
     return out
 
 
+def evaluate_alpha_sweep(model_a, head_a, model_b, head_b, alphas, loader,
+                         stats, surf_weight, device) -> dict[float, dict[str, float]]:
+    """Evaluate ``α·pred_a + (1-α)·pred_b`` for every α in one pass.
+
+    Each (model, head) is forwarded once per batch; the weighted sums + metric
+    accumulations are cheap tensor ops, so the cost is ~2 forward passes per
+    batch regardless of how many α values are swept. Returns a dict keyed by α,
+    each value matching the metric dict shape of ``evaluate_split``.
+    """
+    n_alphas = len(alphas)
+    vol_loss_sum = [0.0] * n_alphas
+    surf_loss_sum = [0.0] * n_alphas
+    mae_surf = [torch.zeros(3, dtype=torch.float64, device=device) for _ in range(n_alphas)]
+    mae_vol = [torch.zeros(3, dtype=torch.float64, device=device) for _ in range(n_alphas)]
+    n_surf = [0] * n_alphas
+    n_vol = [0] * n_alphas
+    n_batches = 0
+
+    with torch.no_grad():
+        for x, y, is_surface, mask in loader:
+            x = x.to(device, non_blocking=True)
+            y = y.to(device, non_blocking=True)
+            is_surface = is_surface.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+
+            x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+            pred_a = model_a({"x": x_norm})["preds"]
+            pred_a = head_a(pred_a, x_norm, is_surface)
+            pred_b = model_b({"x": x_norm})["preds"]
+            pred_b = head_b(pred_b, x_norm, is_surface)
+
+            _B = y.shape[0]
+            _y_ok = torch.isfinite(y.reshape(_B, -1)).all(dim=-1)
+            _y_norm_safe = torch.nan_to_num(y_norm, nan=0.0, posinf=0.0, neginf=0.0)
+            _safe_mask = mask & _y_ok[:, None]
+            vol_mask = _safe_mask & ~is_surface
+            surf_mask = _safe_mask & is_surface
+            _y_safe = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
+            for i, alpha in enumerate(alphas):
+                pred = alpha * pred_a + (1.0 - alpha) * pred_b
+                _pred_safe = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
+                sq_err = (_pred_safe - _y_norm_safe) ** 2
+                vol_loss_sum[i] += (
+                    (sq_err * vol_mask.unsqueeze(-1)).sum()
+                    / vol_mask.sum().clamp(min=1)
+                ).item()
+                surf_loss_sum[i] += (
+                    (sq_err * surf_mask.unsqueeze(-1)).sum()
+                    / surf_mask.sum().clamp(min=1)
+                ).item()
+
+                pred_orig = pred * stats["y_std"] + stats["y_mean"]
+                ds, dv = accumulate_batch(
+                    torch.nan_to_num(pred_orig, nan=0.0, posinf=0.0, neginf=0.0),
+                    _y_safe,
+                    is_surface,
+                    _safe_mask,
+                    mae_surf[i], mae_vol[i],
+                )
+                n_surf[i] += ds
+                n_vol[i] += dv
+
+            n_batches += 1
+
+    results: dict[float, dict[str, float]] = {}
+    for i, alpha in enumerate(alphas):
+        vol_loss = vol_loss_sum[i] / max(n_batches, 1)
+        surf_loss = surf_loss_sum[i] / max(n_batches, 1)
+        out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
+               "loss": vol_loss + surf_weight * surf_loss}
+        out.update(finalize_split(mae_surf[i], mae_vol[i], n_surf[i], n_vol[i]))
+        results[alpha] = out
+    return results
+
+
 def _sanitize_artifact_token(s: str) -> str:
     """wandb artifact names allow alnum, '-', '_', '.' — replace everything else."""
     out = "".join(c if c.isalnum() or c in "-_." else "-" for c in s)
@@ -692,6 +770,18 @@ for epoch in range(MAX_EPOCHS):
         )
         tag = " *"
 
+    # Snapshot ensemble: save end-of-cycle-1 checkpoint for prediction-space
+    # ensembling (Huang et al. 2017). Cycle ends at T_0 with T_mult=1, so e10
+    # is a distinct basin from the e20 best per the SWA closure (#2331).
+    if cfg.cosine_restart_T_0 > 0 and (epoch + 1) == cfg.cosine_restart_T_0:
+        e10_path = model_dir / f"checkpoint_e{epoch+1}.pt"
+        torch.save(
+            {"model": model.state_dict(), "surf_head": surf_head.state_dict(),
+             "epoch": epoch + 1, "val_avg/mae_surf_p": avg_surf_p},
+            e10_path,
+        )
+        print(f"[snapshot-ensemble] Saved cycle-end checkpoint at epoch {epoch+1}: {e10_path}")
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -758,6 +848,109 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+    # --- Snapshot ensemble evaluation (val + test + α sweep) ---
+    e10_path = model_dir / f"checkpoint_e{cfg.cosine_restart_T_0}.pt"
+    if cfg.cosine_restart_T_0 > 0 and e10_path.exists():
+        print(f"\n[snapshot-ensemble] Loading cycle-1 checkpoint from {e10_path}")
+        e10_ckpt = torch.load(e10_path, map_location=device, weights_only=True)
+        e10_epoch = e10_ckpt.get("epoch", cfg.cosine_restart_T_0)
+
+        model_e10 = Transolver(**model_config).to(device)
+        surf_head_e10 = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
+        if cfg.use_torch_compile:
+            model_e10 = torch.compile(model_e10, mode=cfg.compile_mode, dynamic=True)
+        model_e10.load_state_dict(e10_ckpt["model"])
+        surf_head_e10.load_state_dict(e10_ckpt["surf_head"])
+        model_e10.eval()
+        surf_head_e10.eval()
+
+        # α=1.0 → e10 alone | α=0.0 → e20 (best) alone | α=0.5 → 50/50 ensemble.
+        # Sweep also includes 0.1-0.4 for the cheap α study.
+        ALPHAS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0]
+
+        print(f"\n[snapshot-ensemble] α sweep on val splits (e10@{e10_epoch} × best@{best_metrics['epoch']})...")
+        val_alpha_metrics: dict[float, dict[str, dict[str, float]]] = {a: {} for a in ALPHAS}
+        for split_name, loader in val_loaders.items():
+            sweep = evaluate_alpha_sweep(
+                model_e10, surf_head_e10, model, surf_head, ALPHAS,
+                loader, stats, cfg.surf_weight, device,
+            )
+            for alpha, m in sweep.items():
+                val_alpha_metrics[alpha][split_name] = m
+        val_alpha_avg = {a: aggregate_splits(val_alpha_metrics[a]) for a in ALPHAS}
+
+        test_alpha_metrics: dict[float, dict[str, dict[str, float]]] = {a: {} for a in ALPHAS}
+        test_alpha_avg: dict[float, dict[str, float]] = {}
+        if not cfg.skip_test:
+            print("[snapshot-ensemble] α sweep on test splits...")
+            for split_name, loader in test_loaders.items():
+                sweep = evaluate_alpha_sweep(
+                    model_e10, surf_head_e10, model, surf_head, ALPHAS,
+                    loader, stats, cfg.surf_weight, device,
+                )
+                for alpha, m in sweep.items():
+                    test_alpha_metrics[alpha][split_name] = m
+            test_alpha_avg = {a: aggregate_splits(test_alpha_metrics[a]) for a in ALPHAS}
+
+        def _alpha_label(a: float) -> str:
+            if a == 1.0:
+                return f"e{e10_epoch} alone"
+            if a == 0.0:
+                return f"e{best_metrics['epoch']} (best) alone"
+            return f"α={a:.2f} (e{e10_epoch}={a:.2f})"
+
+        print("\n[snapshot-ensemble] VAL summary (avg/mae_surf_p across 4 splits):")
+        for a in ALPHAS:
+            print(f"  {_alpha_label(a):<32s} {val_alpha_avg[a]['avg/mae_surf_p']:.4f}")
+        if test_alpha_avg:
+            print("\n[snapshot-ensemble] TEST summary (avg/mae_surf_p across 4 splits):")
+            for a in ALPHAS:
+                print(f"  {_alpha_label(a):<32s} {test_alpha_avg[a]['avg/mae_surf_p']:.4f}")
+
+        # Per-split tables for the three named cases.
+        ea, eb = f"e{e10_epoch}", f"e{best_metrics['epoch']}"
+        for name in VAL_SPLIT_NAMES:
+            print(f"\n[snapshot-ensemble] {name} (val):")
+            print(f"    {ea} alone:        surf_p={val_alpha_metrics[1.0][name]['mae_surf_p']:.4f}")
+            print(f"    {eb} (best):       surf_p={val_alpha_metrics[0.0][name]['mae_surf_p']:.4f}")
+            print(f"    ensemble 0.5:      surf_p={val_alpha_metrics[0.5][name]['mae_surf_p']:.4f}")
+        if test_alpha_avg:
+            for name in TEST_SPLIT_NAMES:
+                print(f"\n[snapshot-ensemble] {name} (test):")
+                print(f"    {ea} alone:        surf_p={test_alpha_metrics[1.0][name]['mae_surf_p']:.4f}")
+                print(f"    {eb} (best):       surf_p={test_alpha_metrics[0.0][name]['mae_surf_p']:.4f}")
+                print(f"    ensemble 0.5:      surf_p={test_alpha_metrics[0.5][name]['mae_surf_p']:.4f}")
+
+        # --- Log to wandb (val_e10/*, val_e20/*, val_ensemble/*, test_*, α sweep) ---
+        ensemble_log: dict[str, float] = {}
+        NAMED = {1.0: "e10", 0.0: "e20", 0.5: "ensemble"}
+
+        for a, tag in NAMED.items():
+            for split, m in val_alpha_metrics[a].items():
+                for k, v in m.items():
+                    ensemble_log[f"val_{tag}/{split}/{k}"] = v
+            for k, v in val_alpha_avg[a].items():
+                key = k.replace("avg/", "")
+                ensemble_log[f"val_{tag}/{key}"] = v
+            if test_alpha_avg:
+                for split, m in test_alpha_metrics[a].items():
+                    for k, v in m.items():
+                        ensemble_log[f"test_{tag}/{split}/{k}"] = v
+                for k, v in test_alpha_avg[a].items():
+                    key = k.replace("avg/", "")
+                    ensemble_log[f"test_{tag}/{key}"] = v
+
+        # α sweep — log primary metric for each α as both log and summary.
+        for a in ALPHAS:
+            ensemble_log[f"val_alpha_{a:.2f}/mae_surf_p"] = val_alpha_avg[a]["avg/mae_surf_p"]
+            if test_alpha_avg:
+                ensemble_log[f"test_alpha_{a:.2f}/mae_surf_p"] = test_alpha_avg[a]["avg/mae_surf_p"]
+
+        wandb.log(ensemble_log)
+        wandb.summary.update(ensemble_log)
+        wandb.summary["snapshot_ensemble/e10_epoch"] = e10_epoch
+        wandb.summary["snapshot_ensemble/e20_epoch"] = best_metrics["epoch"]
 
     save_model_artifact(
         run=run,
