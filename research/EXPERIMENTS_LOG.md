@@ -1,5 +1,83 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 13:00 — PR #2182: Layer-wise LR decay (LLRD factor=0.85) (CLOSED — Lion + shallow stack + from-scratch training incompatible with LLRD)
+
+- Student branch: `charliepai2g24h5-frieren/layerwise-lr-decay`
+- Hypothesis: BERT-style LLRD (factor=0.85 per block inward) improves OOD generalization by applying higher LR to later blocks (output representations) and lower LR to earlier blocks (input features).
+
+### Results (vs baseline #1656: 52.63/49.22)
+
+| Metric | LLRD f=0.85 | Baseline | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 56.4927 | 52.6345 | **+3.86 (+7.3% worse)** |
+| **test_avg/mae_surf_p** | 52.6110 | 49.2183 | **+3.39 (+6.9% worse)** |
+
+All 8 splits regress uniformly by 2.5–4.4 MAE. Effective per-group LRs at run end: blocks[4]=2e-4, blocks[3]=1.7e-4, blocks[2]=1.445e-4, blocks[1]=1.228e-4, blocks[0]+preprocess=1.044e-4.
+
+### Mechanism analysis
+
+Frieren's own analysis is excellent and definitive:
+1. **Lion's sign-step is linearly LR-sensitive**: no adaptive preconditioning; a 50% lr cut = 50% step cut, no recovery possible.
+2. **Model is too shallow**: BERT-12-layers uses 0.85^11≈0.17 decay (gentle). Transolver-5 uses 0.85^4≈0.52, starving input-side blocks of gradient by 50%.
+3. **Trained from scratch**: BERT/ViT LLRD protects pretrained early-layer representations. Transolver's preprocess + blocks[0] ARE the primary feature extractors — they need full lr, not protection.
+4. **Already-regularized stack**: dropout + per-channel Huber + grad_clip are providing regularization. LR-side regularization on top just suppresses learning.
+
+### Disposition
+
+**CLOSED.** Do NOT use LLRD factor ≤ 0.85 on this stack. "Inverted LLRD" (higher LR on input-side) is theoretically interesting but lower priority. Reassigned frieren to **Lion lr sweep on SwiGLU baseline** (#2288): confirm whether the merged SwiGLU architecture shifts the lr optimum from 2e-4.
+
+- Metrics: `models/model-llrd_factor085_n160_pcd-20260513-115539/metrics.jsonl`
+
+---
+
+## 2026-05-13 12:55 — PR #2196: SwiGLU gated MLP replacing GELU in block MLPs (MERGED — largest single-PR gain since Lion, val −9.9%)
+
+- Student branch: `charliepai2g24h5-fern/swiglu-gated-mlp`
+- Hypothesis: Bare SiLU activation swap (PR #2176) regressed every split. But gated GLU-family variants — where the activation is multiplied by a learned gate — are the actual source of "SiLU wins" in modern transformer papers. SwiGLU at parameter parity (hidden=216 = ceil(160×4/3)) tests whether multiplicative gating, not slope, is the load-bearing factor.
+
+### Results (vs baseline #1656: 52.63/49.22)
+
+| Metric | SwiGLU (this run) | Baseline | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **47.4287** | 52.6345 | **−5.20 (−9.9%) ← NEW BEST** |
+| **test_avg/mae_surf_p** | **45.0147** | 49.2183 | **−4.21 (−8.6%)** |
+
+Every single split improves, val and test. Broad gain — not concentrated on one regime.
+
+### Per-split
+
+| Split | val SwiGLU | val baseline | Δval | test SwiGLU | test baseline | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 52.19 | 56.52 | −4.33 | 43.52 | 47.14 | −3.62 |
+| geom_camber_rc | 59.75 | 67.35 | **−7.60** | 53.81 | 59.44 | −5.63 |
+| geom_camber_cruise | 30.87 | 34.17 | −3.30 | 43.91 | 46.76 | −2.85 |
+| re_rand | 46.90 | 52.50 | −5.60 | 38.82 | 43.54 | −4.72 |
+
+Largest gain on val_geom_camber_rc (67.35→59.75, −7.60) — the hardest OOD split. Gate most valuable for uncertain input regimes where GELU over-weights ambiguous features.
+
+### Implementation
+
+`SwiGLU` class with `out = w_out(silu(w_in(x)) * w_gate(x))`. Hardcoded into `TransolverBlock.mlp` with `swiglu_hidden = ((n_hidden*4//3)+7)//8*8 = 216` for hidden_dim=160. Block-MLP only — preprocess MLP and mlp2 head remain GELU.
+
+Config: n_params=1,034,183 (≈param-matched to GELU baseline). Peak VRAM=42.5 GB (+3.7 GB vs GELU). Training hit 30-min cap at epoch 15 (of 16 planned) — epoch 15 was best val.
+
+One note: `test_geom_camber_cruise/loss = NaN` (pre-existing scoring quirk in data/scoring.py for non-finite GT volume nodes). MAE for that split is finite (43.91) and correct — scoring code skips non-finite GT correctly.
+
+### Mechanism
+
+GELU→SiLU slope swap (PR #2176) hurt because Lion is calibrated to GELU's gradient surface. SwiGLU doesn't change the slope — it adds a multiplicative gate that selectively suppresses low-confidence feature channels. The gate adds learned per-channel routing capacity without growing params (same mlp_ratio at 4/3 vs 2 for GELU). Hardest OOD split benefits most (geom_camber_rc −7.6): gate is most useful where uncertainty is highest.
+
+### Disposition
+
+**MERGED.** New baseline: val=47.43/test=45.01. Assigned follow-ups:
+- fern → **GeGLU gate ablation** (#2287): SiLU→GELU inside the gate. Disentangles whether SiLU-in-gate is load-bearing or gating itself is the primitive.
+- frieren → **Lion lr sweep on SwiGLU stack** (#2288): confirms whether lr=2e-4 remains optimal with SwiGLU's changed gradient surface.
+
+- Metrics: `models/model-swiglu_mlp_ratio_4_3_n160-20260513-115449/metrics.jsonl`
+- Result link: https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/2196#issuecomment-4441183779
+
+---
+
 ## 2026-05-13 12:00 — PR #2177: Lion weight_decay sweep at lr=2e-4 (RE-ARMED — wd is FP32 ulp no-op for wd ≤ 1.49e-4)
 
 - Student branch: `charliepai2g24h5-edward/wd-sweep-lr2e4`
