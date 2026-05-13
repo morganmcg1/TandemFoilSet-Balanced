@@ -467,6 +467,11 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Tikhonov-style geometric regularizer: Gaussian noise added to the (x, z)
+    # coord channels (x_norm dims 0-1) of volume nodes only, applied AFTER
+    # normalization so sigma is in unit-std normalized space. Surface nodes
+    # and padding never receive noise. Disabled at val/test.
+    coord_jitter_sigma: float = 0.005
 
 
 cfg = sp.parse(Config)
@@ -635,6 +640,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
     n_batches = 0
+    # coord_jitter diagnostics: track applied sigma + mean per-node displacement
+    coord_jitter_disp_sum = 0.0
+    coord_jitter_disp_n = 0
     # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
     surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
     vol_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
@@ -656,6 +664,17 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+            # Coord jitter (training only). Gaussian noise on volume-node (x, z)
+            # in normalized coord space, sigma ≈ 0.5% of unit-std coord range.
+            # Surface nodes preserve foil-shape definition; padding nodes get no
+            # noise. Fresh independent noise per sample per forward pass.
+            if cfg.coord_jitter_sigma > 0:
+                vol_node_mask = (mask & ~is_surface).unsqueeze(-1).to(x_norm.dtype)
+                coord_noise = (
+                    torch.randn_like(x_norm[:, :, 0:2]) * cfg.coord_jitter_sigma
+                    * vol_node_mask
+                )
+                x_norm = torch.cat([x_norm[:, :, 0:2] + coord_noise, x_norm[:, :, 2:]], dim=-1)
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
@@ -705,6 +724,13 @@ for epoch in range(MAX_EPOCHS):
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
             surf_count_total += surf_mask.sum().to(torch.float64)
             vol_count_total += vol_mask.sum().to(torch.float64)
+            if cfg.coord_jitter_sigma > 0:
+                # mean L2 norm of applied noise across volume nodes (sanity:
+                # expected sigma * sqrt(2) for 2D iid gaussian).
+                vol_n = vol_node_mask.sum().to(torch.float64).clamp(min=1)
+                disp = (coord_noise.detach().to(torch.float64) ** 2).sum(dim=-1).sqrt()
+                coord_jitter_disp_sum += float(disp.sum().item())
+                coord_jitter_disp_n += float(vol_n.item())
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -812,6 +838,9 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    coord_jitter_mean_disp = (
+        coord_jitter_disp_sum / coord_jitter_disp_n if coord_jitter_disp_n > 0 else 0.0
+    )
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,6 +873,11 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "coord_jitter/sigma_applied": cfg.coord_jitter_sigma,
+        "coord_jitter/active": 1,
+        "coord_jitter/mean_displacement": coord_jitter_mean_disp,
+        # E[||x||] for x ~ N(0, sigma^2 I_2) = sigma * sqrt(pi/2) ≈ 1.2533 * sigma.
+        "coord_jitter/expected_mean_displacement_2d_iid": cfg.coord_jitter_sigma * ((3.141592653589793 / 2.0) ** 0.5),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +905,14 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    if cfg.coord_jitter_sigma > 0:
+        # E[||x||] for x ~ N(0, sigma^2 I_2) is sigma * sqrt(pi/2).
+        _expected_disp = cfg.coord_jitter_sigma * ((3.141592653589793 / 2.0) ** 0.5)
+        print(
+            f"    CoordJitter  sigma={cfg.coord_jitter_sigma}  active=1 (train)  "
+            f"mean_disp={coord_jitter_mean_disp:.5f}  "
+            f"expected={_expected_disp:.5f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
