@@ -411,6 +411,63 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lion optimizer (Chen et al. 2023, arXiv:2302.06675)
+# ---------------------------------------------------------------------------
+
+
+class Lion(torch.optim.Optimizer):
+    """Lion: sign-based momentum optimizer (Chen et al. 2023).
+
+    Per Algorithm 2 of the paper:
+      c_t = β1 * m_{t-1} + (1 - β1) * g_t        # update direction (interpolation)
+      w_t = w_{t-1} - lr * (sign(c_t) + wd * w_{t-1})  # decoupled WD applied with update
+      m_t = β2 * m_{t-1} + (1 - β2) * g_t        # state update (separate β)
+
+    Optimizer state: only `exp_avg` per parameter (half of AdamW's footprint).
+    Update magnitude per coordinate is exactly `lr` (sign output is ±1, plus a
+    small wd-proportional term on the weight itself).
+    """
+
+    def __init__(self, params, lr: float = 1e-4, betas=(0.9, 0.99), weight_decay: float = 0.0):
+        if lr <= 0.0:
+            raise ValueError(f"Invalid lr: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid β1: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid β2: {betas[1]}")
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                # Decoupled weight decay (AdamW-style: applied as part of the sign-magnitude update).
+                if wd != 0.0:
+                    p.mul_(1.0 - lr * wd)
+                # c_t = β1 * m + (1 - β1) * g, then sign() → constant-magnitude update.
+                update = m.clone().mul_(beta1).add_(grad, alpha=1.0 - beta1).sign_()
+                p.add_(update, alpha=-lr)
+                # State EMA for next step uses β2 (NOT AdamW's β2 — there's no v_t here).
+                m.mul_(beta2).add_(grad, alpha=1.0 - beta2)
+        return loss
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -431,6 +488,11 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    use_lion: bool = False  # If True, replace AdamW with Lion (Chen et al. 2023, arXiv:2302.06675)
+    lion_lr_scale: float = 0.2  # Multiplier applied to lr / surf_head_lr when use_lion=True (paper: ~1/5)
+    lion_wd_scale: float = 3.0  # Multiplier applied to weight_decay when use_lion=True (paper: ~3x)
+    lion_beta1: float = 0.9   # Lion β1 (default per Chen 2023 Algorithm 2)
+    lion_beta2: float = 0.99  # Lion β2 — NOT AdamW β2 (no v_t in Lion)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -495,13 +557,34 @@ if cfg.use_torch_compile:
     model = torch.compile(model, mode=cfg.compile_mode, dynamic=True)
 
 _head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
-optimizer = torch.optim.AdamW(
-    [
-        {"params": list(model.parameters()), "lr": cfg.lr},
-        {"params": list(surf_head.parameters()), "lr": _head_lr},
-    ],
-    weight_decay=cfg.weight_decay,
-)
+if cfg.use_lion:
+    # Lion needs LR ~5× smaller and WD ~3× larger than AdamW (Chen et al. 2023).
+    # Apply lion_lr_scale to BOTH the encoder lr and the surf-head lr so the
+    # per-group ratio is preserved and the cosine scheduler cycles the scaled LRs.
+    _enc_lr_lion = cfg.lr * cfg.lion_lr_scale
+    _head_lr_lion = _head_lr * cfg.lion_lr_scale
+    _wd_lion = cfg.weight_decay * cfg.lion_wd_scale
+    optimizer = Lion(
+        [
+            {"params": list(model.parameters()), "lr": _enc_lr_lion},
+            {"params": list(surf_head.parameters()), "lr": _head_lr_lion},
+        ],
+        betas=(cfg.lion_beta1, cfg.lion_beta2),
+        weight_decay=_wd_lion,
+    )
+    print(
+        f"[opt] Lion β=({cfg.lion_beta1},{cfg.lion_beta2}) "
+        f"lr_enc={_enc_lr_lion:.2e} lr_head={_head_lr_lion:.2e} wd={_wd_lion:.2e} "
+        f"(lr_scale={cfg.lion_lr_scale} wd_scale={cfg.lion_wd_scale})"
+    )
+else:
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": list(model.parameters()), "lr": cfg.lr},
+            {"params": list(surf_head.parameters()), "lr": _head_lr},
+        ],
+        weight_decay=cfg.weight_decay,
+    )
 if cfg.cosine_restart_T_0 > 0:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
