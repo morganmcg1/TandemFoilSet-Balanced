@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~14:15
+- **Date:** 2026-05-13 ~15:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,22 +9,24 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 39.143** (n_head=4 + n_layers=3 + slice_num=32 + epochs=27, PR #2107)
-**`test_avg/mae_surf_p` = 33.571**
+**`val_avg/mae_surf_p` = 38.270** (n_head=4 + n_layers=3 + slice_num=32 + epochs=30, PR #2228)
+**`test_avg/mae_surf_p` = 32.470**
+
+> **Capacity floor identified:** n_layers=2 lost (PR #2230, +0.94% val). The single_in_dist and geom_camber_rc splits regressed — n_layers=3 is the depth floor. Stop pushing n_layers lower.
 
 > **Config note:** `train.py` default is `n_head=4` (line 392). PR #2149 plumbed `--n_head` as CLI arg but did NOT change the default. All runs that did NOT pass `--n_head` explicitly have been running with n_head=4.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 40.405 | 35.977 |
-| geom_camber_rc | **51.895** | 47.136 |
-| geom_camber_cruise | 22.756 | 19.101 |
-| re_rand | 41.517 | 32.070 |
-| **avg** | **39.143** | **33.571** |
+| single_in_dist | 40.481 | 36.568 |
+| geom_camber_rc | **52.042** | 46.624 |
+| geom_camber_cruise | 20.785 | 16.956 |
+| re_rand | 39.772 | 29.734 |
+| **avg** | **38.270** | **32.470** |
 
-**Reproduce:** `cd target/ && python train.py --epochs 27 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 32`
+**Reproduce:** `cd target/ && python train.py --epochs 30 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10 --n_layers 3 --slice_num 32`
 
-**best_epoch=27/27 STILL DESCENDING** — epoch axis is STILL budget-limited. Per-epoch ~57s × 27 = 25.6 min; 4.4 min headroom remains.
+**best_epoch=30/30 STILL DESCENDING** at 58s/epoch — 28.5 min used, only 1.5 min margin. The epoch axis is now tight; further extensions require per-epoch speedups (slice_num=24 in flight, code-change axes available).
 
 ## What we've learned
 
@@ -79,22 +81,24 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 20)
+## Active experiments (Round 22)
 
-**New baseline: val=39.143 (PR #2107)**
+**New baseline: val=38.270 (PR #2228), test=32.470**
 
-| Student | PR | Hypothesis | Expected per-epoch | Expected epochs |
-|---------|-----|------------|---------------------|-----------------|
-| tanjiro | #2228 | **epochs=30** on n_layers=3+slice_num=32 (squeeze headroom) | ~57s | 30 |
-| alphonse | #2229 | **slice_num=24** on n_layers=3 (continue partition sweep) | ~50s | 33 |
-| frieren | #2230 | **n_layers=2** on slice_num=32 (continue depth sweep) | ~48s | 33 |
-| nezuko | #2214 | surf_weight=5 on n_layers=4+slice_num=32+epochs=24 (n_head=4 confirmed) | ~74s | 24 |
-| fern | #2213 | n_head=2+epochs=24 on n_layers=4 (may already be running; redirected to n_layers=3 if not) | ~65s | 24-28 |
-| askeladd | #2193 | n_head=1 on n_layers=4+slice_num=32 (bracket per-head capacity) | ~74s | 24 |
-| edward | #2185 | mlp_ratio=6 on n_layers=4+slice_num=32 | ~74s | 21+ |
-| thorfinn | #2151 | slice_num=24 on n_layers=4 (slice sweep on OLD depth — useful datapoint) | ~65s | ~26 |
+| Student | PR | Hypothesis | Stack |
+|---------|-----|------------|-----------|
+| tanjiro | #2273 | **Linear warmup (2 ep) + cosine** on n_layers=3+epochs=30 (code change) | n_layers=3 |
+| alphonse | #2229 | slice_num=24 on n_layers=3+epochs=33 (in flight) | n_layers=3 |
+| frieren | #2274 | weight_decay=0 on n_layers=3+epochs=30 (test if compact model needs reg) | n_layers=3 |
+| fern | #2245 | surf_weight=5 on n_layers=3+epochs=27 (vol-gradient mechanism) | n_layers=3 |
+| askeladd | #2248 | surf_weight=2 on n_layers=3+epochs=27 (bracket vol-gradient axis below) | n_layers=3 |
+| nezuko | #2214 | surf_weight=5 on n_layers=4+slice_num=32+epochs=24 (n_head=4 confirmed) | n_layers=4 |
+| edward | #2185 | mlp_ratio=6 on n_layers=4+slice_num=32+epochs=24 (legacy stack) | n_layers=4 |
+| thorfinn | #2151 | slice_num=24 on n_layers=4 (legacy stack) | n_layers=4 |
 
-**⚠ WIP note:** #2213, #2193, #2185, #2151 are testing n_layers=4 configurations. Their results must beat 39.143 to merge. Most likely won't — but provide useful data about orthogonal axes at n_layers=4. If they lose, corresponding tests at n_layers=3 become the next priority.
+**Round summary:** 5/8 students on the n_layers=3 stack testing orthogonal axes (warmup, slice_num, WD, surf_weight×2). 3/8 on legacy n_layers=4 stack — will need to beat 38.270 to win.
+
+**Closed this turn:** #2213 (fern n_head=2+epochs=24, +2.01% val), #2193 (askeladd n_head=1, +12.4% val), #2230 (frieren n_layers=2, +0.94% val capacity floor identified).
 
 ## Next priority hypotheses (when slots open)
 

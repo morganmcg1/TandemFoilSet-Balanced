@@ -6,6 +6,40 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~15:00 — PR #2230: n_layers=2 + slice_num=32 + epochs=33 (frieren) — CLOSED (capacity floor at n_layers=3 identified)
+
+- val=39.507 / test=33.419 vs new baseline (39.143 / 33.571) — val +0.94%, test −0.45%. The val direction is the loss verdict.
+- **Per-split: single_in_dist +3.47%, geom_camber_rc +3.29% regressed** — the two capacity-demanding splits. cruise (−2.23%) and re_rand (−2.77%) improved.
+- **Capacity floor identified at n_layers=3.** The 9-experiment streak of "depth reduction → fits more epochs → wins" terminates at n_layers=2.
+- Run characteristics: 41.7s/epoch, 33 epochs in 26 min, 362K params (~30% capacity reduction from 515K).
+- best_epoch=33/33 still descending — model never saturated, just hit capacity floor on hard splits.
+- Closed; frieren reassigned to weight_decay=0 test on new baseline.
+
+---
+
+## 2026-05-13 ~14:55 — PR #2228: epochs=30 on n_layers=3+slice_num=32 (tanjiro) — MERGED (−2.2% val, −3.3% test) ← NEW BASELINE 38.270
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Hypothesis:** Squeeze remaining ~4.4 min of headroom from PR #2107's run (27 epochs in 25.6 min). best_epoch=27 still descending — model still budget-limited at n_layers=3+slice_num=32.
+- **Result:** val=38.270 / test=32.470 vs PR #2107 baseline (39.143 / 33.571) = **−2.2% val / −3.3% test**
+
+| Split | val (#2107) | val (this) | Δ | test (#2107) | test (this) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | 40.405 | 40.481 | +0.2% | 35.977 | 36.568 | +1.6% |
+| geom_camber_rc | 51.895 | 52.042 | +0.3% | 47.136 | 46.624 | −1.1% |
+| geom_camber_cruise | 22.756 | 20.785 | **−8.7%** | 19.101 | 16.956 | **−11.2%** |
+| re_rand | 41.517 | 39.772 | **−4.2%** | 32.070 | 29.734 | **−7.3%** |
+| **avg** | **39.143** | **38.270** | **−2.2% ✓** | **33.571** | **32.470** | **−3.3% ✓** |
+
+- **9th consecutive winning experiment with best_epoch=final** — epoch-budget mechanism still binding!
+- Per-epoch: 58s, total 28.5 min (1.5 min margin to 30-min cap)
+- The improvement is concentrated in the splits with headroom: cruise (lower-magnitude, easier to refine) and re_rand (cross-regime). The harder splits (single_in_dist, geom_camber_rc) stayed essentially flat — within noise.
+- Per-epoch trajectory ep27→30: 38.92 → 39.04 → 38.42 → 38.27 (−0.65 absolute, ~1.7% relative descent in 3 extra epochs)
+- 515K params, 20.96 GB peak memory
+- **Metric artifacts:** `models/model-epochs-30-nlayers3-slicenum32-20260513-115035/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~14:35 — PRs #2213, #2193 — CLOSED (n_head axis fully exhausted)
 
 - **PR #2213 (fern n_head=2+epochs=24 on n_layers=4):** val=40.966 / test=35.255 — **+2.01% vs PR #2172** (n_head=4 same stack), **+4.66% vs new baseline 39.143**. Student's diagnostic insight: PR #2149's marginal n_head=2 win (−0.25% at epoch 21) was a "less-bad slow learner" artifact — at full 24-epoch budget, n_head=4 wins clearly. n_head=2 still descending at epoch 24 but never catches up.
