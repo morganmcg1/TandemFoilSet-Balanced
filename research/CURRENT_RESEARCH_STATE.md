@@ -1,10 +1,10 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~00:55 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 6 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~01:10 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 7 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
-- **Current best:** val_avg/mae_surf_p = **70.9449**, test_avg/mae_surf_p = **61.8276** (PR #1404, OneCycleLR max_lr=1e-3, SCHEDULER_EPOCHS=29, per-batch stepping, on compile+bf16+slice128)
+- **Current best:** val_avg/mae_surf_p = **70.9449**, test_avg/mae_surf_p (faithful, fp32 eval) **to be re-measured on next post-PR-#1556 run** (was 61.8276 under bf16 eval with cruise zeroed). Stack: OneCycleLR + compile + bf16 train + fp32 eval + eval_every_n_epochs=3 + slice_num=128.
 
 ## Current research focus
 
@@ -32,13 +32,13 @@ Active threads:
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1716 | OneCycleLR max_lr=1.5e-3 | WIP (just assigned) |
-| askeladd | #1379 | smooth-L1 loss (warmup+cosine baseline) | WIP, run in flight |
-| edward | #1383 | p-channel-weight (warmup+cosine baseline) | WIP, run in flight |
+| alphonse | #1716 | OneCycleLR max_lr=1.5e-3 | WIP |
+| askeladd | #1379 | smooth-L1 loss | WIP |
+| edward | #1383 | p-channel-weight | WIP |
 | fern | #1390 | surf_weight=25 (needs rebase again) | WIP (stale) |
-| frieren | #1556 | fp32-eval every 3 epochs | WIP, run in flight |
-| nezuko | #1719 | OneCycleLR pct_start=0.05 | WIP (just assigned) |
-| tanjiro | #1522 | hidden-192 on compile+bf16 (warmup+cosine) | WIP, run in flight |
+| frieren | #1556 | fp32-eval every 3 epochs | **MERGED** (round 7) |
+| nezuko | #1719 | OneCycleLR pct_start=0.05 | WIP |
+| tanjiro | #1522 | hidden-192 (clear regression) | **CLOSED** (round 7) |
 | thorfinn | #1628 | SequentialLR(T_max=27) vs OneCycleLR shootout, 2-seed | WIP (sent back for rebase + multi-seed) |
 
 ## Key learnings so far

@@ -338,3 +338,50 @@ Per-split test (all 4 clean):
 - Test delta of 3.6% is just above the 2% reliability floor — but this is a single seed, RNG variance is ±5%, AND a different scheduler architecture entirely. Multi-seed confirmation is essential before considering reverting OneCycleLR.
 
 **Conclusion: SENT BACK** for proper rebase + intentional SequentialLR revert + 2-seed confirmation. If 2-seed mean still beats OneCycleLR by >2% test, this becomes a baseline revert candidate. The single-seed lucky-draw possibility is real.
+
+---
+
+## 2026-05-13 01:00 — PR #1522: hidden-192 + n_head=6 on OneCycleLR baseline (CLOSED — clear regression)
+- willowpai2g24h4-tanjiro/hidden-192-on-slice-128
+- **Hypothesis:** Wider hidden dim (128→192) + more heads (4→6) compounds with merged slice_num=128 to give better representational capacity for surface pressure.
+- **W&B:** `smyi09m6` (iter2 on rebased OneCycleLR baseline)
+
+| Metric | OneCycleLR baseline #1404 | This run (hidden-192, OneCycleLR) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 70.9449 | 79.0117 | **+8.07 (+11.4%)** ❌ |
+| test_avg/mae_surf_p (4-split) | 61.8276 | 69.0873 | **+7.26 (+11.7%)** ❌ |
+| Test 3-split mean (excl. cruise) | 68.12 | 76.83 | +8.71 (+12.8%) |
+| Epochs completed | 29 | 20 | −9 epochs |
+| Sec/epoch | 62.5 | 92.4 | +47.9% slower |
+| Peak GPU | 50.97 GB | 76.87 GB | +25.9 GB |
+
+All 4 splits regressed (in-dist +17.1%, rc +14.5%, cruise +5.4%, re_rand +5.6%). The wider model is bottlenecked by the 30-min cap: it only sees 20 epochs vs baseline's 29, and OneCycleLR's per-batch decay schedule (sized for 29 epochs) only consumes 7500/10875 steps (69%) — the LR decay tail to 1e-7 never fires (terminal LR was 2.7e-4).
+
+**Mixed per-split signal:** Wider hidden hurts in-distribution + rc-camber (likely needs full schedule for fine-detail fitting) but partially helps OOD-Re and cruise even at truncated training. Direction may be valid but isolated test under the cap is impossible.
+
+**Conclusion: CLOSED.** Tanjiro's analysis identified all three correct levers (right-size OneCycleLR for the wider model, trade depth for width, drop slice_num back to 64). Cap-bottlenecked experiment — capacity-via-width is dominated by capacity-via-more-epochs under the 30-min budget. Tanjiro reassigned to throughput experiment (reduce-overhead compile mode) to attack the cap directly.
+
+---
+
+## 2026-05-13 01:05 — PR #1556: fp32 eval + eval_every_n_epochs=3 — MERGED (paper-faithful test_avg)
+- willowpai2g24h4-frieren/fp32-eval
+- **Hypothesis:** Remove bf16 autocast from `evaluate_split` to eliminate the cruise-pressure inf overflow that was being zeroed by `nan_to_num`. Gate eval frequency to recover wall-clock cost.
+- **W&B:** `uwk17oc0` (iter2 with eval_every_n_epochs=3)
+
+| Metric | Pre-merge baseline #1404 (bf16 eval) | Iter2 this PR (CosineAnneal stack + fp32-eval) | Notes |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 70.9449 | 72.9137 | +2.8% — but iter2 used pre-OneCycleLR cosine, NOT a direct comparison |
+| test_avg/mae_surf_p (4-split) | 61.8276 (bf16 eval, cruise biased low) | 64.3287 (fp32 eval, cruise faithful) | Numbers not directly comparable — different cruise treatment |
+| test_geom_camber_cruise | 42.96 (biased low by nan_to_num zeroing) | **43.71** (finite, no inf) | Fidelity recovered |
+| Best epoch | 29/29 | 28/30 | Eval gate fired at ep 28 |
+| Sec/epoch (mean) | ~62.5 | ~60.6 | Train ~57s + eval epochs ~66s |
+| Peak GPU | 50.97 GB | 29.8 GB | Much lower |
+| fp32 eval | ❌ | ✓ (every 3 epochs + final-epoch guard) | |
+
+**Decision: MERGED as metric-FIDELITY improvement, not metric-VALUE.** The diff is clean (no scheduler changes), so squash-merging onto current OneCycleLR baseline yields OneCycleLR + fp32 eval + 3-epoch gate. The val metric (70.94) stays valid because val cruise was always finite under bf16. The test metric of 61.83 (cruise zeroed) is no longer the right comparison — future runs will produce a slightly higher, paper-faithful test_avg on this stack.
+
+**Key insight:** This is the first paper-faithful 4-split test_avg/mae_surf_p — cruise contribution recovered from artificial 42.96 (zeroed) to genuine 43.71 (finite). The wall-clock cost of fp32 eval (45s/epoch) is recovered by the eval_every_n_epochs=3 gate (10 evals across 30 epochs instead of 30).
+
+**Residual issue (cosmetic, not metric-affecting):** `test_geom_camber_cruise/vol_loss` still shows Infinity due to NaN-GT propagation in `evaluate_split`'s normalized-space loss path. Easy fix-up PR available. Headline metric unaffected (flows through patched `data/scoring.py`).
+
+**Next target:** beat val_avg/mae_surf_p = **70.9449** on the new fp32-eval stack. The next experiment on this stack will establish the new faithful test_avg baseline.
