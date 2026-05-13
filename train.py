@@ -426,8 +426,21 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 from lion_pytorch import Lion
 LION_LR = cfg.lion_lr
 LION_WD = cfg.lion_weight_decay
-optimizer = Lion(model.parameters(), lr=LION_LR, weight_decay=LION_WD)
-print(f"Optimizer: Lion (lr={LION_LR}, weight_decay={LION_WD}) — ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
+LLRD_FACTOR = 0.85
+n_blocks = len(model.blocks)  # 5
+param_groups = []
+for i, block in enumerate(model.blocks):
+    blk_lr = LION_LR * (LLRD_FACTOR ** (n_blocks - 1 - i))
+    param_groups.append({"params": list(block.parameters()), "lr": blk_lr, "weight_decay": LION_WD})
+input_lr = LION_LR * (LLRD_FACTOR ** (n_blocks - 1))
+param_groups.append({
+    "params": list(model.preprocess.parameters()) + [model.placeholder],
+    "lr": input_lr,
+    "weight_decay": LION_WD,
+})
+optimizer = Lion(param_groups, lr=LION_LR, weight_decay=LION_WD)
+print(f"Optimizer: Lion LLRD (base_lr={LION_LR:.2e}, wd={LION_WD}, decay={LLRD_FACTOR}) — {n_blocks} blocks, lr=[{input_lr:.2e}..{LION_LR:.2e}]")
+print(f"Optimizer: ignores cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay}")
 import math
 WARMUP_EPOCHS = 3
 def lr_lambda(epoch):
