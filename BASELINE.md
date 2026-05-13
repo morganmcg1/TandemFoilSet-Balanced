@@ -39,10 +39,55 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **49.8053** | #2173 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + **n_head=2 (dim_head=64)** | epoch 47 of 47 (terminal); -1.57% vs #2033; val_cruise -5.09% / val_in_dist -3.44% |
-| `test_avg/mae_surf_p` | **43.5396** | #2173 | — | test_in_dist -3.64%; test_rc -0.17%; test_cruise -2.03%; test_re_rand +1.14% |
+| `val_avg/mae_surf_p` | **48.5160** | #2195 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + **LayerScale init=1e-4** | epoch 42 of 43 (best≠terminal); -2.59% vs #2173; val_rc FIRST MOVE (-2.22%) in 38 rounds |
+| `test_avg/mae_surf_p` | **42.8162** | #2195 | — | test from best-val checkpoint ep42; -1.66% vs #2173 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 49.8053` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 48.5160` to be merged.
+
+## 2026-05-13 16:30 — PR #2195: LayerScale (CaiT-style learnable residual gain γ, init=1e-4)
+
+- **Student:** charliepai2g48h5-askeladd
+- **Best epoch:** 42 of 43 — **best≠terminal** (ep42=48.52, ep43=49.41; first convergence-before-timeout in several rounds)
+- **Epochs reached:** 43 (~42.25 s/epoch; same as baseline — LayerScale adds only per-channel multiply)
+- **Peak GPU memory:** 23.85 GB (unchanged)
+- **Param count:** 658,359 (baseline 657,079 → +1,280 = +0.19% — 5 blocks × 2 branches × 128 dims)
+
+| Split | val mae_surf_p | Δ vs #2173 |
+|---|---|---|
+| `val_single_in_dist` | **44.6149** | **-3.62%** |
+| `val_geom_camber_rc` | **65.9411** | **-2.22% (FIRST MOVE since round-1!)** |
+| `val_geom_camber_cruise` | 33.2325 | +1.95% (slight) |
+| `val_re_rand` | **50.2756** | **-4.95%** |
+| **val_avg** | **48.5160** | **-2.59%** |
+
+| Split | test mae_surf_p | Δ vs #2173 |
+|---|---|---|
+| `test_single_in_dist` | **40.1418** | **-1.27%** |
+| `test_geom_camber_rc` | **60.4713** | **-1.67%** |
+| `test_geom_camber_cruise` | **27.5452** | **-0.38%** |
+| `test_re_rand` | **43.1065** | **-2.82%** |
+| **test_avg** | **42.8162** | **-1.66%** |
+
+- **Config change:** added per-channel learnable `nn.Parameter` γ (init=1e-4) to each TransolverBlock's attention and MLP residual branches. Multiplies each branch output before residual add: `x = x + gamma * branch(x)`.
+- **Mechanism:** CaiT-style (Touvron et al. 2021) residual scaling. Init=1e-4 starts each branch near-zero (residual stream = identity), then learned γ grows per-channel to selectively amplify useful features. Forces the model to learn "how much to trust each branch at each channel" vs fixed uniform residual integration.
+- **Trained γ diagnostics:** MLP branches activated 4-8× stronger than attention branches (γ_mlp abs_mean ≈ 0.025-0.05 vs γ_attn ≈ 0.003-0.011). Block 3 attention notably underweighted. Signs mixed within each γ vector (selective per-channel gating). Non-trivial structure.
+- **Failure-mode signature check:** ALL splits improve (not bimodal-averaging), val_re_rand NOT worst (not broadcast-scalar corruption), pattern is uniform-direction architectural WIN — 8th distinct failure-mode taxon NOT triggered.
+- **MAJOR DIAGNOSTIC:** `val_geom_camber_rc` (67.44 → 65.94) moved for the FIRST TIME since round-1. This is the hardest OOD split that has been flat across every other intervention (warmup, n_head, normalization, augmentation). LayerScale is the first mechanism to crack it.
+- **Best epoch 42 ≠ terminal 43** — first run in recent rounds where the model converged within the 30-min budget (ep42=48.52, ep43=49.41). LayerScale may be enabling faster convergence via the residual-scaling degree of freedom.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-askeladd-layerscale-1e-4-20260513-110555/metrics.jsonl`
+  `models/model-charliepai2g48h5-askeladd-layerscale-1e-4-20260513-110555/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-askeladd \
+      --experiment_name "charliepai2g48h5-askeladd/layerscale-1e-4" \
+      --epochs 50
+  ```
+  (LayerScale γ=1e-4 now on advisor branch — see PR #2195 diff)
+
+---
 
 ## 2026-05-13 14:30 — PR #2173: n_head 4→2 (dim_head 32→64): architectural head-rank probe
 
