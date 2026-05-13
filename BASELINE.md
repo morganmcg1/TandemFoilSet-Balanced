@@ -429,3 +429,26 @@ cd "target/" && python train.py \
 - **Config change:** `--weight_decay 0.0` (was 1e-4)
 - **Full config:** bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + β1=0.9 + β2=0.99 + **wd=0** + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + epochs=18
 - **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0`
+
+## 2026-05-13 18:30 — PR #2456: Pre-LN → Post-LN swap in TransolverBlock (4-line change)
+
+- **test_avg/mae_surf_p: 51.5839** (NEW BEST — −15.08% vs previous 60.7447)
+- **val_avg/mae_surf_p:** 59.1952 (best epoch 18/18)
+- **Per-split:** in_dist=51.59, rc=61.37, cruise=39.33, re_rand=54.04
+- **W&B run:** ovv9h3s7 (postln-swap group)
+- **Config change:** pre-LN → post-LN in `TransolverBlock.forward()` (4-line change)
+- **Full config:** bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + β1=0.9 + β2=0.99 + **wd=0** + Fourier L=8 + n_hidden=192 + n_layers=5 + n_head=4 + slice_num=24 + mlp_ratio=2 + grad_clip_max_norm=5.0 + act=gelu + eta_min=0 + dropout=0 + **post-LN** + epochs=18
+- **Reproduce:** `cd "target/" && python train.py --batch_size 4 --accumulation_steps 2 --grad_clip_max_norm 5.0 --weight_decay 0.0`
+
+### Per-split test mae_surf_p
+
+| Split | mae_surf_p | Δ vs prev baseline (60.7447) |
+|---|---|---|
+| test_single_in_dist | 51.59 | **−17.30%** |
+| test_geom_camber_rc | 61.37 | −13.46% |
+| test_geom_camber_cruise | 39.33 | **−16.17%** |
+| test_re_rand | 54.04 | −13.91% |
+
+### Mechanism
+
+Post-LN keeps the residual-stream distribution stationary. At depth=5 this is not needed for stability (no divergence with pre-LN) but is decisive for convergence to a deeper minimum. Gain is uniform across IID and OOD splits — a representation-level effect, not the IID/OOD redistribution pattern. Sharp contrast with RMSNorm (#2425): placement-after-residual is the load-bearing lever; computation type is second-order. best_epoch=18 with loss still descending at schedule cutoff — minimum has more headroom.
