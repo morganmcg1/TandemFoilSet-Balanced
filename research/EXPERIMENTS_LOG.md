@@ -4,6 +4,49 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 19:10 — PR #2311 (**MERGED** ⭐, fern): Hybrid Lion+AdamW for Kendall σ heads on σ=0.5 stack — σ-collapse fix + compound win
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-adamw-for-kendall-sigma-on-lion`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Lion's sign-of-EMA-gradient update collapses all 6 `log_σ` channels to −0.9037, making Kendall multi-task weighting ≡ uniform weighting. Route `log_σ` through a separate AdamW optimizer (lr=5e-4, wd=0) while keeping Lion for all model params. AdamW preserves gradient-magnitude signal on the σ heads, allowing per-channel differentiation while Lion drives the model.
+
+### Result table
+
+| Metric | Baseline #2168 | Hybrid Arm 2 (lr=5e-4) | Δ | Confirmation `objur0b9` | Δ |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 45.7648 | **45.2181** | **−0.547 (−1.20%)** | 45.2181 | identical |
+| test_avg/mae_surf_p | 39.6619 | **38.7661** | **−0.896 (−2.26%)** | 38.7661 | identical |
+
+**W&B runs:** `3s60eja4` (original Arm 2), `objur0b9` (rebased confirmation), `9knvxnso` (Arm 1 lr=3e-4, miss).
+
+### Per-split SWA (paper-facing test in bold)
+
+| Split | val #2168 | val Hybrid | Δ val | test #2168 | test Hybrid | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 48.774 | **46.967** | **−1.81** | 42.451 | **40.340** | **−2.11** |
+| geom_camber_rc | 58.290 | **58.126** | **−0.16** | 54.596 | **52.781** | **−1.82** |
+| geom_camber_cruise | 29.111 | 29.496 | +0.38 | 23.445 | 23.712 | +0.27 |
+| re_rand | 46.885 | **46.283** | **−0.60** | 38.156 | 38.231 | +0.08 |
+
+Wins on 3/4 val and 3/4 test splits; cruise slight regression (+0.27 test, already strongest split). Load-bearing OOD splits (geom_camber_rc, single_in_dist) show largest absolute test gains — matching mechanism prediction.
+
+### Key mechanism findings
+
+1. **σ spread restored: 0.000 → 0.475** (6 distinct channels from near-uniform collapse). surf_ux/surf_uy weighted higher than vol channels → surface velocity re-emphasis drives `single_in_dist` and `geom_camber_rc` gains.
+2. **Dose-response validated:** lr=3e-4 → spread=0.07, val=47.07 (miss); lr=5e-4 → spread=0.475, val=45.22 (winner). Linear response confirms mechanism causality.
+3. **Rebase stability:** confirmation run `objur0b9` bit-for-bit identical to original (`3s60eja4`) → rebase didn't disturb the result.
+4. **Open mechanism: mean drift.** `mean(log_σ)` drifted to −1.98 (vs AdamW-eq −1.40), inflating all eff_w ~3×. Partially offset by spread. #2500 alphonse tests mean-anchor fix.
+5. **σ-collapse fix #1 of 3 confirmed and merged.** Fern's hybrid optimizer is now part of the merged codebase. Other two fixes (#2443 alphonse init, #2500 alphonse anchor-mean) remain banked/in-flight.
+
+### New baseline (post-merge)
+
+- **val:** 45.2181 (was 45.7648 — −1.20%)
+- **test:** 38.7661 (was 39.6619 — −2.26%)
+- **Merge threshold for all subsequent PRs:** val < 45.22, test < 38.77
+- All 7 in-flight PRs notified of new baseline via advisor comment.
+
+---
+
 ## 2026-05-13 18:45 — PR #2512 (ASSIGNED, thorfinn): Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 on Lion stack (Tancik §5) — compose resolution + regularization
 
 - **Branch:** `willowpai2g48h2-thorfinn/multiscale-rff-8sigma0p5-8sigma0p1`

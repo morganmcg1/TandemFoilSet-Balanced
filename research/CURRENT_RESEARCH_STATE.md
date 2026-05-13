@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 18:55 (Loop 15 — no review-ready PRs; 0 idle students. **Fleet-wide GraphQL API rate-limit exhaustion** on student token (user ID 20516801) blocks comment posting and PR fetches; my advisor token unaffected. **5 PRs have completed training but pending API recovery before results post:** #2390 askeladd σ=0.5 wd 2-arm (training done ~17:48), #2442 nezuko n_head sweep (~17:34), #2463 tanjiro swa_lr (~18:05), #2481 edward anneal=1 (~18:00), #2484 frieren skip-SWALR (~18:04). **3 PRs actively training:** #2311 fern confirmation rerun (rebased branch is MERGEABLE), #2500 alphonse anchor-mean, #2512 thorfinn multi-scale RFF. Stale_wip flag on #2442 is the rate-limit artifact, NOT a real stall. Will pick up reviews next invocation. Previous loop: closed #2407 thorfinn σ bracket, assigned #2512 thorfinn multi-scale RFF (Tancik §5))
+- **Last updated:** 2026-05-13 19:20 (**#2311 fern MERGED ⭐ — hybrid Lion+AdamW for Kendall σ**. val 45.2181 / test 38.7661. Baseline updated. All 7 in-flight WIP PRs notified of new threshold. 5 PRs have completed training but haven't posted results yet due to earlier GraphQL rate-limit exhaustion; results expected to arrive as students recover API access. Fern now idle — no current PR. All other 7 students active.)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -10,24 +10,27 @@
 - **Idle students:** 0 (all 8 active)
 - **⚠ Parser gotcha:** Avoid inline `SENPAI-RESULT:` substring in advisor comments — parser treats any line with that substring as a terminal marker and tries `json.loads` on what follows. Use "terminal-result post" or "SENPAI_RESULT" (underscore) in prose.
 
-## ⭐ Current baseline (PR #2168 merged 2026-05-13 15:30 — RFF σ=0.5 on Lion+β=0.3+RFF+Kendall)
+## ⭐ Current baseline (PR #2311 merged 2026-05-13 19:10 — hybrid Lion+AdamW Kendall σ fix on σ=0.5 stack)
 
-- **val_avg/mae_surf_p:** **45.7648** (seed 0, SWA-model)
-- **test_avg/mae_surf_p:** **39.6619** (seed 0, SWA-model, 4-split finite)
-- Improvement over prior #2063 (47.6416 / 40.5651): val **−3.94%**, test **−2.23%**
-- Cumulative improvement vs #1757: val **−31.34%**, test **−31.99%**
-- Config: Transolver + FiLM (mid_dim=64) + Huber β=0.3 + Re-weight + Kendall σ + grad-clip max_norm=0.5 + **RFF (16-dim, σ=0.5)** + Lion lr=3e-4 wd=3e-4
-- W&B: `7f6pqafs`
+- **val_avg/mae_surf_p:** **45.2181** (seed 0, SWA-model)
+- **test_avg/mae_surf_p:** **38.7661** (seed 0, SWA-model, 4-split finite)
+- Improvement over prior #2168 (45.7648 / 39.6619): val **−1.20%**, test **−2.26%**
+- Cumulative improvement vs #1757: val **−32.14%**, test **−33.53%**
+- Config: Transolver + FiLM (mid_dim=64) + Huber β=0.3 + Re-weight + Kendall σ + grad-clip max_norm=0.5 + RFF (16-dim, σ=0.5) + **Lion lr=3e-4 wd=3e-4 (model) + AdamW lr=5e-4 wd=0 (log_σ heads, hybrid_kendall_lr=5e-4)**
+- W&B confirmation run: `objur0b9`
 
 ### Per-split (SWA)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 48.774 | 42.451 |
-| geom_camber_rc | 58.290 | 54.596 |
-| geom_camber_cruise | 29.111 | 23.445 |
-| re_rand | 46.885 | 38.156 |
-| **avg** | **45.765** | **39.662** |
+| single_in_dist | 46.967 | 40.340 |
+| geom_camber_rc | 58.126 | 52.781 |
+| geom_camber_cruise | 29.496 | 23.712 |
+| re_rand | 46.283 | 38.231 |
+| **avg** | **45.218** | **38.766** |
+
+### Prior baseline (PR #2168 — RFF σ=0.5 on Lion)
+- val 45.7648 / test 39.6619 (for reference in reviewing pending in-flight PRs)
 
 ## ✓ Merged improvements (all-time)
 
@@ -43,25 +46,27 @@
 | #2082 | fourier-coord-features | RFF σ=1.0 | val=70.63, test=62.09 |
 | #1757 | beta-0p3-on-rff-kendall | Huber β=0.3 | val=66.66, test=58.32 |
 | #2063 | lion-optimizer-on-beta0p3 | Lion lr=3e-4 | val=47.64, test=40.57 |
-| **#2168** | **rff-sigma-0p5-on-lion** | **RFF σ=0.5 (lower-freq prior)** | **val=45.76, test=39.66 ← CURRENT** |
+| #2168 | rff-sigma-0p5-on-lion | RFF σ=0.5 (lower-freq prior) | val=45.76, test=39.66 |
+| **#2311** | **hybrid-adamw-kendall-sigma** | **Hybrid Lion+AdamW(σ=5e-4), σ-spread restored** | **val=45.22, test=38.77 ← CURRENT** |
 
-## Current active PRs — Wave 12 (post-σ=0.5 baseline)
+## Current active PRs — Wave 12 (post-hybrid-optimizer baseline 45.22/38.77)
 
-**Decision rule (vs σ=0.5 baseline 45.76/39.66):**
-- val < 45.76: **merge** (true compound win)
-- 45.76–47.64: directional win on σ=1.0 stack but doesn't beat σ=0.5 — send back to test composition with σ=0.5
-- val ≥ 47.64: regression vs prior baseline — close
+**Decision rule (vs hybrid baseline 45.22/38.77):**
+- val < 45.22: **merge** (true compound win on new baseline)
+- 45.22–45.76: directional win on old σ=0.5 stack only, doesn't beat new baseline — request changes (composition test on new train.py if mechanism is orthogonal)
+- val ≥ 45.76: regression vs σ=0.5 baseline — likely close
+- ⚠ **All WIP PRs trained on the OLD codebase** (pre-hybrid-optimizer). If a PR's mechanism is orthogonal to σ-collapse (most SWA/RFF/wd PRs should be), it should compose. If it interacts with Kendall σ dynamics (unlikely but check per-PR), may need rerun on new train.py.
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **#2512** | **thorfinn** | wip (NEW) | Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (Tancik §5) | Test additivity: σ=0.5 gives resolution (val), σ=0.1 gives regularization (test single_in_dist). One-line code change to FourierCoordFeatures (tuple-of-sigmas); total channels unchanged → zero compute increase |
-| **#2390** | **askeladd** | wip (sent back) | Lion wd sweep on σ=0.5: 2-arm {3e-3, 1e-2} | Mechanism validated on σ=1.0 (wd=3e-3 wins −0.56 val); 6th σ-collapse; non-shrinkage mechanism. Rebase + extend up. |
-| **#2311** | **fern** | wip (PENDING REBASE+RERUN — WINNER) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | **Arm 2 lr=5e-4 wins both axes** (val 45.22 / test 38.77, −0.55 val / −0.90 test); rebased branch is now CLEAN; awaiting confirmation rerun |
-| **#2442** | **nezuko** | wip | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Real capacity axis at equal compute; brackets current n_head=4 |
-| **#2500** | **alphonse** | wip | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Fix mean-drift mechanism (#2443 surfaced it); preserve test gain (−0.40) while recovering val. Single new loss term + 1 hyperparameter |
-| **#2463** | **tanjiro** | wip | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Isolate SWA averaging-lr level (orthogonal to ramp-speed axis). Predicted: 0.05x wins (DOWN ramp + deep avg) per tanjiro's #2342 finding |
-| **#2481** | **edward** | wip | SWA anneal_epochs=1 on σ=0.5 Lion stack | 1-epoch SWALR ramp instead of 2 — all 3 averaged epochs at swa_lr=6e-5; directly motivated by edward's #2429 Diagnostic 3 |
-| **#2484** | **frieren** | wip | Skip-SWALR entirely on σ=0.5 Lion stack | Let cosine continue through SWA window — averages cosine-tail weights instead of SWALR-floor; directly tests the SWALR-overrides-cosine mental model that misled #2187/#2285/#2342/#2429 |
+| **#2512** | **thorfinn** | wip (training) | Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (Tancik §5) | Test additivity: σ=0.5 resolution + σ=0.1 regularization. Zero compute increase. Baseline shift notice sent. |
+| **#2390** | **askeladd** | wip (training done, pending API) | Lion wd 2-arm {3e-3, 1e-2} on σ=0.5 | Mechanism validated on σ=1.0 (wd=3e-3 wins −0.56 val); composition test on σ=0.5 stack done. Results pending API recovery. Baseline shift notice sent. |
+| **#2442** | **nezuko** | wip (training done, pending API) | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Equal-compute capacity reshuffle; targets geom_camber_rc. Baseline shift notice sent. |
+| **#2500** | **alphonse** | wip (training) | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Targets mean drift mechanism from #2443. **Note:** fern's hybrid fix (#2311 merged) independently changes σ dynamics. #2500's anchor loss should compose with the new hybrid setup. Baseline shift notice sent. |
+| **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
+| **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
+| **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
+| **IDLE** | **fern** | **IDLE — needs new assignment** | — | Fern's PR #2311 just merged; needs a new experiment |
 
 **⚠ Mid-wave baseline shift:** σ=0.5 merged while 7 PRs were in-flight on σ=1.0 Lion stack. Notice posted to all 7 with updated thresholds. Triage rule for these landing runs:
 - val < 45.76 → MERGE (mechanism compounded with σ=0.5 implicitly via independence)
@@ -106,7 +111,7 @@
 
 ## Key open bottlenecks
 
-1. **geom_camber_rc** — **load-bearing OOD split, ~2× the other splits' error** (#2429 edward confirmed). val=58.29, test=54.60 at σ=0.5. Reduced by −7.26% val with σ=0.5 but still the hardest split. Being attacked via #2442 (n_head sweep — true architectural capacity axis), #2407 (σ=0.1 floor), #2390 (Lion wd on σ=0.5 stack — wd=3e-3 won −1.49 here on σ=1.0). **Future architecture/data work should prioritize this split.**
+1. **geom_camber_rc** — **load-bearing OOD split, ~2× the other splits' error**. val=58.13, test=52.78 at new hybrid baseline (improved from 58.29/54.60 at σ=0.5 baseline; PR #2311 gave −1.82 test gain here). Being attacked via #2442 nezuko (n_head sweep — capacity axis), #2390 askeladd (Lion wd), #2512 thorfinn (multi-scale RFF). **Future architecture/data work should prioritize this split.**
 2. **SWA window only averages 2-3 epochs at swa_lr=6e-5** (timeout at 13/15 epochs) — **MULTIPLE axes now in flight after the SWALR-overrides-cosine mechanism characterization**:
    - #2463 tanjiro swa_lr value (0.05x vs 0.5x baseline floor)
    - #2481 edward anneal_epochs=1 (1-epoch ramp vs 2-epoch) — gets all 3 averaged epochs at the swa_lr floor
@@ -117,9 +122,9 @@
 5. **Lion warmup axis CLOSED on this 13-epoch budget** (#2363 frieren) — Adam→Lion mental model fails; warmup at lower LR makes early epochs WORSE not better.
 6. **Capacity-axis dead zone** — width (#2354), depth (legacy), slice_num (#2378) all gated by SWA window or step-time cost. n_head sweep (#2442) tests equal-compute reshuffle at fixed n_hidden. If n_head=2 or n_head=8 wins, banked axis; if both regress, capacity bottleneck is genuinely orthogonal to attention granularity.
 
-## Potential next directions (Wave 12 / post-σ=0.5 baseline)
+## Potential next directions (Wave 12 / post-hybrid-optimizer baseline)
 
-1. **Lion + hybrid AdamW for Kendall σ heads (#2311 fern)** — **WINNER pending merge** (val 45.22 / test 38.77 on σ=0.5 stack, rebased branch is CLEAN, awaiting confirmation rerun).
+1. ~~**Lion + hybrid AdamW for Kendall σ heads (#2311 fern)**~~ — **MERGED ✓** (val 45.22 / test 38.77).
 2. **Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse)** — fix mean-drift mechanism uncovered by #2443; 2-arm λ ∈ {1, 5}.
 3. **Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (#2512 thorfinn NEW)** — test additivity of resolution + regularization from #2407 mechanism revision. Tancik 2020 §5 backing. One-line code change, total channels unchanged.
 4. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
@@ -128,7 +133,7 @@
 7. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442 nezuko)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
 8. **Lion wd sweep on σ=0.5 (#2390 askeladd)** — orthogonal Lion fine-tuning axis.
 9. **Delay-SWA-start (frac=0.85)** — narrow window but truly low-lr averaging (tanjiro #2342 suggested follow-up #3). Composes with #2463 Arm A. **Opposite direction from CLOSED #2429.**
-10. **huber_beta re-sweep on RFF baseline** — β=0.3 came from pre-RFF stack, never re-validated on Lion+RFF+Kendall (thorfinn #2407 suggested follow-up). Possible test gain orthogonal to RFF σ.
+10. **huber_beta re-sweep on hybrid merged baseline** — β=0.3 came from pre-Lion, pre-RFF, pre-hybrid stack. With σ-spread restored (hybrid fixes collapse), per-channel Kendall weights now differentiated → optimal β may shift. β ∈ {0.5, 1.0} flanks current 0.3. Assigning to fern.
 11. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
 12. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
 13. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
@@ -152,6 +157,9 @@
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — averaging-lr level axis; isolates SWALR ramp direction effect
 - SWA anneal_epochs=1 on σ=0.5 (#2481 edward) — 1-epoch ramp instead of 2; all 3 averaged epochs at swa_lr=6e-5
 - Skip-SWALR entirely on σ=0.5 (#2484 frieren) — direct test of SWALR-overrides-cosine mental model
+
+### ⭐ Merged (Wave 12 winners)
+- hybrid Lion+AdamW for Kendall σ heads (#2311 fern, 2026-05-13 19:10): val 45.2181 / test 38.7661, −1.20% val / −2.26% test. σ-spread 0→0.475. Structural σ-collapse fix.
 
 ### ✗ Closed (30+ axes)
 - drop-grad-clip-on-Lion (#2347, 2026-05-13 16:00): max_norm=0.5 is right setting, 4 banked findings inc. 4th σ-collapse confirmation
