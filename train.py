@@ -63,6 +63,26 @@ ACTIVATION = {
 }
 
 
+class DropPath(nn.Module):
+    """Per-sample stochastic depth on a residual branch.
+
+    During training, drops the entire branch output with probability `drop_prob`
+    (replacing it with zero) and scales the surviving paths by 1/(1 - drop_prob).
+    At inference, identity.
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = x.new_empty(shape).bernoulli_(keep_prob).div_(keep_prob)
+        return x * mask
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
@@ -139,7 +159,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path_rate=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -150,6 +171,8 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        self.drop_path_attn = DropPath(drop_path_rate)
+        self.drop_path_mlp = DropPath(drop_path_rate)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -158,8 +181,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.drop_path_attn(self.attn(self.ln_1(fx))) + fx
+        fx = self.drop_path_mlp(self.mlp(self.ln_2(fx))) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -170,7 +193,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 drop_path_rate: float = 0.0):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -186,11 +210,14 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linear stochastic depth schedule: 0 at layer 0, drop_path_rate at last layer
+        dpr = [drop_path_rate * i / max(n_layers - 1, 1) for i in range(n_layers)]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path_rate=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -429,6 +456,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    drop_path_rate: float = 0.0  # max DropPath rate in linear schedule (0 at layer 0)
 
 
 cfg = sp.parse(Config)
@@ -472,6 +500,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    drop_path_rate=cfg.drop_path_rate,
 )
 
 model = Transolver(**model_config).to(device)
@@ -498,6 +527,7 @@ run = wandb.init(
         "n_params": n_params,
         "fourier_L": L_fourier,
         "fourier_pos_dim": fourier_pos_dim,
+        "drop_path_rate": cfg.drop_path_rate,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     },
