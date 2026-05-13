@@ -419,3 +419,118 @@ This is now strong empirical support for the portfolio constraint adopted at #16
 
 - **thorfinn → PR #1910 (Volume Huber β=0.5):** Extend Huber loss from surf to vol (two-line change). Zero compute overhead, mirrors the #1505 mechanism on vol. Single-axis test. Slot was open after closing #1511.
 
+
+## 2026-05-13 05:15 — PR #1810 (MERGED): torch.compile dynamic=True on top of bf16
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/torch-compile
+- **Hypothesis:** Wrap the model with `torch.compile(model, dynamic=True)` after instantiation. `dynamic=True` is essential because `pad_collate` produces variable `max_n` per batch — without it, Inductor would retrace on every shape change. Expected gain: 10-30% per-epoch speedup translating into more epochs in the 30-min budget (bf16 baseline was best=last at 17/18, still descending).
+- **Baseline (#1715):** val=89.597, test=79.907, 18 epochs, best at epoch 17/18.
+
+### Results — LARGEST single-axis win of round 1
+
+| Metric | seed 1 (`o142jibw`, BETTER) | seed 2 (`3d1aizjm`) | #1715 baseline | Δ (better seed) |
+|---|---:|---:|---:|---:|
+| `val_avg/mae_surf_p` | **67.831** | 68.520 | 89.597 | **−24.3%** |
+| `test_avg/mae_surf_p` | **59.784** | 60.480 | 79.907 | **−25.2%** |
+| Total epochs | 35 | 35 | 18 | **+94%** |
+| Steady-state s/epoch | ~52s | ~52s | ~103s | **−49%** |
+| Peak VRAM | — | — | — | 24.1 GB (75% headroom) |
+
+**All four test splits finite on both seeds.** Both seeds within ~1% on val (much tighter than the pre-compile ~5pt seed variance, because best=last on both runs eliminates early-stop randomness). W&B verification matched the student's reported numbers to 3-4 sig figs.
+
+### Per-split test (seed 1)
+
+| Split | bf16 baseline | compile (this) | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 91.40 | 62.60 | **−31.5%** |
+| geom_camber_rc | 89.33 | 75.52 | **−15.5%** |
+| geom_camber_cruise | 60.15 | **40.91** | **−32.0%** |
+| re_rand | 78.75 | 60.10 | **−23.7%** |
+
+### Mechanism — three-way amplification
+
+The 2× per-epoch speedup is ~3-4× larger than the published 10-30% torch.compile benefit on big models. The student's analysis is precise:
+
+1. **Small Transolver (~1M params) at bs=4 is heavily Python/kernel-launch bound.** Inductor's kernel fusion absorbs a much bigger fraction of total step time than on a 100M+ param model.
+2. **Compile + dynamic shapes worked cleanly on `pad_collate`.** Rank-and-stride specialization absorbed shape variation; no visible per-batch recompile.
+3. **bf16 had already left the val curve descending at its 18-epoch cap.** Doubling the epoch budget to 35 produced a super-linear-in-epochs metric gain because we crossed the bf16-final val by epoch ~18 and kept descending another 17 epochs.
+
+### Implementation
+
+Single-line change in `train.py:450-451`:
+```python
+model = Transolver(**model_config).to(device)
+model = torch.compile(model, dynamic=True)   # <-- added
+```
+
+State-dict save/load round-trips cleanly through the `_orig_mod.` prefix (PyTorch's standard compile wrapping). No GradScaler, no AMP changes — pure compute optimization that doesn't change *what* is computed.
+
+### Conclusion — MERGED
+
+This is the largest single-axis win of round 1, even bigger than bf16 itself (which was −21.3% val, −21.5% test). Baseline now at val=67.83, test=59.78. Best=last on both compile seeds means **compute is still the binding constraint at 35 epochs** — more compute-side or schedule-side levers are likely still profitable.
+
+### Implications for the rest of round 1
+
+- **Round-2 priority queue shifts:** scalar-capacity axes that closed compute-bound now have a 35-epoch budget vs 14-18 previously. mlp_ratio=4 (#1623, +18% per-epoch) is the highest-priority revisit candidate; reassigned to edward as PR #1939.
+- **LR schedule misalignment is now more acute.** Cosine T_max=50 with only 35 epochs reached means lr never anneals below ~75% of peak. Nezuko's #1843 (originally `T_max=18`) target shifts to `T_max=35`.
+- **Compile-baseline acceptance criteria for all in-flight PRs:** val < 67.83, test < 59.78. Heads-up posted to all 6 active in-flight PRs (#1735 alphonse, #1843 nezuko, #1882 askeladd, #1910 thorfinn, #1692 fern, #1589 tanjiro).
+
+### Follow-up
+
+- **frieren → PR #1940 (batch_size=8 with sqrt-LR scaling lr=7e-4):** their own follow-up #2 from this PR. Stacks orthogonally with compile (different bottleneck: per-step parallelism vs kernel-launch overhead).
+
+## 2026-05-13 05:20 — PR #1506 (closed): Wider Transolver (n_hidden=128 → 192) on bf16 baseline
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/wider-192
+- **Hypothesis:** Widen hidden dim 128→192 for richer representation. Pre-mask attempt was compute-bound; revisited on bf16 baseline (18-epoch budget vs 14) per round-2 portfolio update.
+- **Baseline (#1715):** val=89.597, test=79.907.
+
+### Results — regression, 6th scalar-capacity axis to close compute-bound
+
+| Metric | wider-192 (`8l4j3aaf`) | #1715 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **106.95** | 89.60 | **+19.4%** |
+| `test_avg/mae_surf_p` | **96.55** | 79.91 | **+20.8%** |
+
+All 4 test splits finite ✓ (mask carries from baseline).
+
+### Per-epoch trajectory — still descending at timeout
+
+| Epoch | val |
+|---|---:|
+| 9  | 120.12 |
+| 11 | 118.03 |
+| 12 | 115.18 |
+| 13 | 107.71 |
+| 14 | 106.95 ← best (epoch 15 = 126.60 cut off by wall) |
+
+Compute: +47% params × +28% per-epoch cost ⇒ 15 epochs vs baseline 18 in the 30-min cap. Cosine `T_max=50` never anneals.
+
+### Conclusion — clean negative; depth/width/slice/mlp-ratio axis cluster now firmly retired
+
+Six scalar-capacity axes have now closed compute-bound across two baselines:
+
+| PR | Axis | Era | Result |
+|---|---|---|---|
+| #1506 | n_hidden=192 (this) | bf16 | +19.4% val (this PR) |
+| #1507 | slice_num=128 | pre-mask | compute-bound |
+| #1511 | n_layers=7 (pre-bf16) | pre-mask | compute-bound |
+| #1511 | n_layers=7 (bf16 retry) | bf16 | +19.5% val (closed) |
+| #1623 | mlp_ratio=4 | mask-aware | compute-bound +18% |
+| #1715 | (bf16 = compute optimization, opposite direction) | — | MERGED |
+
+The portfolio rule **"capacity moves should change *what* is computed (gating, attention reformulation, conditioning), not scale existing components"** is now firmly empirical. SwiGLU (alphonse #1735) is the canonical example of the right kind of move.
+
+Edward's analysis identifies the LR-schedule alignment issue as the dominant compute-budget mismatch — consistent with the #1509 close diagnostic and exactly what nezuko's #1843 isolates.
+
+### Student-suggested follow-ups (mapping)
+
+- **#1 Cap T_max to actual epoch count:** Already in flight (nezuko #1843, originally `T_max=18`, now target `T_max=35` on compile baseline).
+- **#4 Revisit width once compile lands:** Compile just landed (#1810). Width-revisit reassigned as **mlp_ratio=4 retry** (lower per-epoch overhead than width) since width at 1.47M params is now 6× regressed.
+
+### Follow-up
+
+- **edward → PR #1939 (mlp_ratio=2 → 4 on compile baseline):** highest-priority bf16-revisit candidate; lowest per-epoch overhead of all capacity axes (~+18%); 35-epoch budget vs the previous 14 should fully bracket the previous compute-bound regime.
+
