@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 15:40 (sent back #2311 fern hybrid Lion+AdamW: mechanism win confirmed, val=47.34 lands in σ=0.5-rebase zone; requested 2-arm hybrid_kendall_lr sweep {3e-4, 5e-4} on σ=0.5 stack to fix AdamW overshoot)
+- **Last updated:** 2026-05-13 16:00 (closed #2347 edward grad-clip-on-Lion: clean refutation, max_norm=0.5 is right setting, 4 banked findings; assigned #2429 edward SWA start_frac sweep {0.5, 0.6} on σ=0.5 stack)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -59,7 +59,7 @@
 | **#2311** | **fern** | wip (sent back) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | Mechanism win confirmed (0.81 spread); lr=1e-3 overshoots → 2-arm {3e-4, 5e-4} on σ=0.5 |
 | **#2270** | **alphonse** | wip | max_norm {0.75, 1.0} on β=0.3 | Pre-Lion stack; needs eventual Lion rebase regardless |
 | **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
-| **#2347** | **edward** | wip | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
+| **#2429** | **edward** | wip (new) | SWA start_frac ∈ {0.5, 0.6} on σ=0.5 stack | Replace #2347 — target SWA-window starvation bottleneck under Lion's faster plateau |
 | **#2378** | **nezuko** | wip | slice_num=96 on Lion stack | Compute-frugal capacity axis; target geom_camber_rc |
 | **#2363** | **frieren** | wip | Lion + linear warmup 3 epochs | Fix early-epoch oscillation diagnosed in #2240; Lion paper recommends warmup |
 
@@ -75,7 +75,7 @@
 1. **Lion = the biggest single lever** — 28.5% win vs β=0.3 baseline; 37.7% vs RFF baseline; 52.8% vs Kendall baseline
 2. **Lion collapses Kendall σ heads** — all 6 log_σ identical. Lion+Kendall ≡ Lion+uniform-weight. **Structural, NOT capacity- OR encoding-driven**: confirmed at 1.61M params (nezuko #2354) AND at RFF σ ∈ {0.25, 0.5, 1.0} (thorfinn #2168). **Hybrid Lion(model) + AdamW(log_σ) confirmed as the structural fix (fern #2311):** 0.81 log-unit spread restored at AdamW lr=1e-3; surface-velocity emphasis 5× volume; mechanism prediction fully validated. Next: lr sweep + σ=0.5 rebase to convert mechanism win into metric win.
 3. **β=0.3 and Lion compound** — val improved 50.97→47.64 going from β=0.0 to β=0.3 on Lion stack. Mechanisms are independent.
-4. **clip_fraction=100% under β** regime → max_norm relaxation (#2270) still worth testing on Lion stack.
+4. **max_norm=0.5 is the right grad-clip setting under Lion (#2347 CLOSED)** — Arm A (no clip) regressed +9% val; Arm B (max_norm=2.0) flat. Lion's sign-update does NOT smooth out outlier gradient spikes — the EMA carries forward magnitude-biased sign sequences. Refutes the Lion-paper intuition that grad-clip is optional under sign-update. **Fourth independent confirmation of σ-collapse robustness** (across max_norm ∈ {0.0, 0.5, 2.0}).
 5. **SWA frac bounded below** — only frac≥0.75 averages in flat-loss region. EMA decay=0.999 (#2285) did NOT fix it (val=70.34, regression) — its 5-epoch window dilutes late-epoch low-lr updates with stale high-lr snapshots. Right fix is schedule shape: faster cosine T_max → eta_min plateau covers more averaging window. → testing now in #2342.
 6. **RFF σ↓ wins under Lion+β=0.3 (NEW BASELINE)** — σ=0.5 compounds (−3.94% val / −2.23% test vs σ=1.0); σ=0.25 wins test by additional −0.65 (mechanism: low-freq Fourier = OOD-geometry smoothness prior in z-score-normalized coords). σ floor not yet found — #2407 probes σ=0.1.
 7. **LayerScale γ=1e-4 fails at 5 layers** — ReZero γ=1.0 is the fix (#2269 fern)
@@ -96,15 +96,17 @@
 
 ## Potential next directions (Wave 12 / post-σ=0.5 baseline)
 
-1. **Lion + hybrid AdamW for Kendall σ heads (#2311)** — restore per-channel σ differentiation. Mechanism likely orthogonal to RFF σ bandwidth (confirmed by σ-collapse invariance across σ ∈ {0.25, 0.5, 1.0}).
+1. **Lion + hybrid AdamW for Kendall σ heads (#2311)** — sent back with rebase + lr sweep {3e-4, 5e-4}; mechanism validated, only overshoot to fix.
 2. **σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn)** — close out the RFF σ axis on Lion stack
 3. **Lion + T_max sweep (#2342)** — currently testing. If T_max=10 wins, schedule-shape lever bankable.
-4. **Lion + warmup (#2363) / drop-grad-clip (#2347) / wd sweep (#2390)** — three orthogonal Lion fine-tuning axes; mechanism-independent of RFF σ.
-5. **Lion + slice_num=96 (#2378)** — compute-frugal capacity bump targeting geom_camber_rc bottleneck.
-6. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
-7. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
-8. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
-9. **Beyond σ=0.1** — if #2407 confirms σ=0.1 continues winning test, the axis becomes "DC Fourier features only" (σ→0). At that point the Fourier head degenerates to a sin/cos of (near-)constant phase = a learned bias. Either useful as a global geometric prior or equivalent to dropping RFF.
+4. **SWA start_frac sweep on σ=0.5 (#2429 edward NEW)** — earlier averaging under Lion's faster plateau; 2-7× SWA window.
+5. **Lion + warmup (#2363) / wd sweep (#2390)** — orthogonal Lion fine-tuning axes; mechanism-independent of RFF σ. ~~drop-grad-clip~~ CLOSED.
+6. **Lion + slice_num=96 (#2378)** — compute-frugal capacity bump targeting geom_camber_rc bottleneck.
+7. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
+8. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
+9. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
+10. **Beyond σ=0.1** — if #2407 confirms σ=0.1 continues winning test, the axis becomes "DC Fourier features only" (σ→0). At that point the Fourier head degenerates to a sin/cos of (near-)constant phase = a learned bias. Either useful as a global geometric prior or equivalent to dropping RFF.
+11. **Fixed (non-learnable) per-channel loss weights** matching AdamW+Kendall #1906 pattern — structural alternative to fern's hybrid optimizer; cleaner test of "what's the right weight?" decoupled from "how do we learn it?".
 
 ## Mechanism-axis coverage
 
@@ -115,10 +117,10 @@
 - RFF σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn) — find OOD-geom floor
 - Lion wd sweep (#2390 askeladd) — test if Lion needs higher wd than AdamW
 - T_max cosine sweep on Lion (#2342 tanjiro) — schedule shape
-- Hybrid Lion+AdamW for Kendall σ (#2311 fern) — restore σ differentiation
-- Drop grad-clip on Lion (#2347 edward) — clip fires 74% under sign-update
+- Hybrid Lion+AdamW for Kendall σ on σ=0.5 + lr sweep {3e-4, 5e-4} (#2311 fern) — fix AdamW overshoot
+- SWA start_frac sweep {0.5, 0.6} on σ=0.5 (#2429 edward NEW) — target SWA-window starvation
 - Lion + slice_num=96 (#2378 nezuko) — compute-frugal capacity, targets geom_camber_rc
 - Lion + linear warmup 3 epochs (#2363 frieren) — fix early-oscillation
 - max_norm {0.75,1.0} (#2270 alphonse) — pre-Lion stack, needs Lion rebase
 
-### ✗ Closed (25+ axes) — see prior entries
+### ✗ Closed (26+ axes) — drop-grad-clip-on-Lion CLOSED (#2347, 2026-05-13): max_norm=0.5 is right setting, 4 banked findings including 4th σ-collapse confirmation

@@ -4,6 +4,46 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 16:00 — PR #2347 (CLOSED): Drop/relax grad-clip on Lion (max_norm ∈ {0.0, 2.0}) — clean refutation, max_norm=0.5 is the right setting
+
+- **Branch:** `willowpai2g48h2-edward/drop-grad-clip-on-lion`
+- **Student:** willowpai2g48h2-edward
+- **Hypothesis:** Lion's sign-update naturally bounds per-step weight changes; external grad-clip at max_norm=0.5 (clip_fraction=74%) is redundant or counterproductive. Predict val improves −0.5 to −2.0 by removing the clip.
+
+### Result table (σ=1.0 stack)
+
+| Arm | max_norm | clip_frac | val_avg | Δ vs #2063 | test_avg | Δ vs #2063 | W&B |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Baseline #2063 | 0.5 | 0.74 | 47.6416 | — | 40.5651 | — | `5hp3gid7` |
+| **Arm A** (no clip) | 0.0 | n/a | **51.9515** | **+4.31 (+9.04%)** | 44.7157 | +4.15 (+10.23%) | `4kkcfwk2` |
+| **Arm B** (relaxed) | 2.0 | 0.41 | 47.9299 | +0.29 (+0.62%) | 40.6789 | +0.11 (+0.28%) | `v505h4fp` |
+
+### Commentary and conclusions
+
+Hypothesis **clearly refuted**. The 74% clip-firing rate at max_norm=0.5 is NOT over-constraining — it's gentle normalization of a gradient distribution clustered around 0.5-2.5. Removing the clip entirely (Arm A) regresses by 9% on val because Lion's `update = sign(EMA(grad))` does NOT smooth out 17× gradient spikes; the magnitude bias survives the EMA and flips signs on borderline coordinates for many subsequent steps. Relaxing to max_norm=2.0 (Arm B) drops clip rate to 41% but produces no improvement — the typical gradient is right at the boundary, so the relaxation is empirically meaningless.
+
+vs σ=0.5 baseline (#2168) gaps are 2.16 (Arm B) and 6.19 (Arm A) — both outside the rebase-to-test range. Axis closed.
+
+### Banked findings
+
+1. **max_norm=0.5 is the right setting under Lion** on this stack — gradient distribution clusters near the boundary, clip is gentle normalization not over-constraining.
+2. **Lion's sign-update does NOT make grad-clip redundant** — sign(EMA) doesn't smooth out outlier spikes; magnitude bias survives EMA and propagates sign perturbations for many steps. Refutes common Lion-paper intuition. **Implication for paper:** Lion+RFF+Kendall on irregular-mesh CFD needs explicit grad-clipping despite Lion's intrinsic update bound.
+3. **σ-collapse robust across max_norm ∈ {0.0, 0.5, 2.0}** — fourth independent confirmation (after #2063, #2354, #2168). All 6 log_σ converge to identical −0.9037 regardless of grad-clip strength. Lion+Kendall mechanical equivalence is fully insensitive to gradient-magnitude regulation.
+4. **clip_fraction is a misleading "tightness" signal** — 74% at max_norm=0.5 sounds aggressive but actually means "most gradients are within ~2× of the cap." Relaxing to max_norm=2.0 drops clip_frac to 41% (NOT to <10% as predicted) because gradients cluster at 2.0-2.5.
+
+Grad-clip-on-Lion axis CLOSED. Edward suggested asymmetric/per-group clipping as low-confidence follow-ups; not pursuing.
+
+---
+
+## 2026-05-13 16:00 — PR #2429 (ASSIGNED, edward): SWA start_frac sweep {0.5, 0.6} on σ=0.5 baseline
+
+- **Branch:** `willowpai2g48h2-edward/swa-start-frac-sweep-on-sigma0p5`
+- **Hypothesis:** SWA-window starvation (currently averages only 2-3 epochs at 30-min timeout) is a key open bottleneck. Under Lion's faster convergence, loss plateau likely starts earlier than under AdamW — so earlier `swa_start_frac` could give 2-7× wider averaging window without picking up high-loss epochs.
+- **Predicted:** Arm 1 (frac=0.6, conservative) likely safer; Arm 2 (frac=0.5, aggressive) brackets to find if plateau onset is mid-cosine.
+- **Mechanism orthogonality:** Independent of all in-flight axes (RFF σ knob, hybrid σ optimizer, capacity, optimizer fine-tuning). tanjiro #2342 changes cosine T_max (schedule shape); this changes when averaging starts — different lever.
+
+---
+
 ## 2026-05-13 15:35 — PR #2311 (SENT BACK): Hybrid Lion (model) + AdamW (Kendall σ) on β=0.3+RFF σ=1.0+Kendall — mechanism validated, hyperparameter overshoot diagnosed
 
 - **Branch:** `willowpai2g48h2-fern/hybrid-adamw-for-kendall-sigma-on-lion`
