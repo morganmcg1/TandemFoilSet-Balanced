@@ -464,6 +464,8 @@ class Config:
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
     n_head: int = 4   # Transolver attention heads (head_dim = n_hidden / n_head)
+    scheduler_type: str = "cosine"   # "cosine" or "onecycle"
+    onecycle_pct_start: float = 0.3  # fraction of steps for lr warmup phase
 
 
 cfg = sp.parse(Config)
@@ -538,7 +540,23 @@ if cfg.optimizer == "lion":
 else:
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer}")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.scheduler_type == "onecycle":
+    total_steps = MAX_EPOCHS * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=cfg.lr,
+        total_steps=total_steps,
+        pct_start=cfg.onecycle_pct_start,
+        div_factor=25,
+        final_div_factor=1e4,
+        anneal_strategy="cos",
+    )
+    scheduler_step_per_batch = True
+    print(f"Scheduler: OneCycleLR(pct_start={cfg.onecycle_pct_start}, total_steps={total_steps})")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler_step_per_batch = False
+    print(f"Scheduler: CosineAnnealingLR(T_max={MAX_EPOCHS})")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -624,11 +642,14 @@ for epoch in range(MAX_EPOCHS):
         scaler.step(optimizer)
         scaler.update()
         ema_update(ema_model, model, cfg.ema_decay)
+        if scheduler_step_per_batch:
+            scheduler.step()
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
             "train/grad_scale": scaler.get_scale() if amp_enabled else 1.0,
             "train/grad_norm": grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm),
+            "train/lr": scheduler.get_last_lr()[0],
             "global_step": global_step,
         })
 
@@ -636,7 +657,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
+    if not scheduler_step_per_batch:
+        scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
