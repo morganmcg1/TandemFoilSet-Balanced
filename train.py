@@ -442,7 +442,7 @@ steps_per_epoch = max(1, len(train_loader))
 SCHEDULER_EPOCHS = 29
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    max_lr=1e-3,
+    max_lr=1.5e-3,
     total_steps=SCHEDULER_EPOCHS * steps_per_epoch,
     pct_start=0.1,
     anneal_strategy="cos",
@@ -464,7 +464,7 @@ run = wandb.init(
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "scheduler": "onecycle",
         "scheduler_epochs": SCHEDULER_EPOCHS,
-        "max_lr": 1e-3,
+        "max_lr": 1.5e-3,
         "pct_start": 0.1,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
