@@ -428,6 +428,8 @@ class Config:
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
     use_torch_compile: bool = False    # JIT compile the model via torch.compile
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
+    cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
+    cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -499,7 +501,16 @@ optimizer = torch.optim.AdamW(
     ],
     weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+if cfg.cosine_restart_T_0 > 0:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=cfg.cosine_restart_T_0,
+        T_mult=cfg.cosine_restart_T_mult,
+    )
+    print(f"[lr] CosineAnnealingWarmRestarts T_0={cfg.cosine_restart_T_0} T_mult={cfg.cosine_restart_T_mult}")
+else:
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    print(f"[lr] CosineAnnealingLR T_max={MAX_EPOCHS}")
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -654,6 +665,9 @@ for epoch in range(MAX_EPOCHS):
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "lr_surf_head": scheduler.get_last_lr()[-1],
+        "train/lr_encoder": optimizer.param_groups[0]["lr"],
+        "train/lr_surf_head": optimizer.param_groups[1]["lr"],
+        "epoch": epoch + 1,
         "epoch_time_s": dt,
         "global_step": global_step,
     }
