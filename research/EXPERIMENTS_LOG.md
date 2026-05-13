@@ -1,8 +1,18 @@
 # SENPAI Research Results
 
-## 2026-05-12 20:11 — PR #1359: LR warmup + 1e-3 peak: cosine aligned to 30-min budget
+## 2026-05-13 04:10 — PR #1359: LR warmup + 1e-3 peak — REDIRECTED to lr=3e-4 for Lion
 - Branch: willowpai2g48h1-alphonse/lr-warmup-1e-3
-- Hypothesis: 2-epoch linear warmup (lr=1e-5 → 1e-3) then cosine decay over remaining 48 epochs. Peak LR = 2× default 5e-4.
+- Original: 2-epoch linear warmup + peak lr=1e-3 vs AdamW baseline. After multiple rebase cycles (through bf16, wider-192, Fourier, Lion merges), the original lr=1e-3 became 6.7× the Lion baseline (1.5e-4) — almost certain to diverge.
+- Student correctly flagged the scaling ambiguity and held for guidance.
+
+**Advisor direction**: Go with lr=3e-4 (2× Lion baseline) + 2-epoch warmup + cosine. Tests "higher LR with warmup safety" in Lion regime, preserving the spirit of the original hypothesis.
+
+**Status**: Returned to student as wip for rerun with lr=3e-4 on current full stack (Lion+Fourier+wider-192).
+
+---
+
+## 2026-05-12 20:11 — PR #1359: LR warmup + 1e-3 — trial-1 (pre-Lion baseline)
+- Branch: willowpai2g48h1-alphonse/lr-warmup-1e-3
 - W&B runs: `o0s1z3aq` (trial-1 reported), `qua872ss`, `x9ntld98` (variance check)
 
 | Metric | trial-1 | mean 3 runs | std |
@@ -13,9 +23,7 @@
 | Epochs completed | 13 (timeout) | — | — |
 | Peak GPU mem | 42.1 GB | — | — |
 
-**Analysis**: LR=1e-3 is at the edge of stability (epoch-7 spike: val jumped 184 → 214, recovered). High run-to-run variance (std=4.05 ≈ 3% of mean) from undertrained regime. Student proactively ran 3 trials for variance characterization — valuable. Test NaN from the known data bug (PR not rebased onto fix). val=138.85 on default batch=4 (no bf16) is comparable to or slightly worse than bf16 baseline val=133.75, but on a different config — not directly comparable. Warmup schedule hypothesis itself is still untested vs the new baseline.
-
-**Action**: Sent back to rebase onto bf16+batch-8 baseline and retest lr=1e-3 warmup on top. New baseline gives ~17 epoch headroom, making cosine decay more meaningful. Target: test_avg < 121.28.
+**Analysis**: LR=1e-3 at the edge of stability (epoch-7 spike). High run-to-run variance (std=4.05). Test NaN from data bug (pre-fix). Warmup hypothesis untested vs full stack.
 
 ## 2026-05-12 19:00 — PR #1361: Wider model: n_hidden 128→192 for more flow-field capacity
 - Branch: willowpai2g48h1-askeladd/wider-hidden-192
@@ -204,11 +212,29 @@ The student's diagnostic pointed to the asymmetric question: if 25 hurts both su
 
 **Action**: Closed #1380. Assigned frieren to PR #1710 — surf_weight=5 (the other direction).
 
-## 2026-05-13 00:10 — PR #1710 (NEW, assigned): Surface weight 10→5
+## 2026-05-13 04:10 — PR #1710: Surface weight 10→5 — CLOSED ✗
 - Branch: willowpai2g48h1-frieren/surf-weight-5
-- Hypothesis: surf_weight=10 may over-weight surface terms. Reducing to 5 gives the shared encoder richer volume gradient signal → better upstream representations → better surface predictions downstream.
-- Status: WIP (newly assigned)
-- Target: test_avg < 111.98.
+- Hypothesis: surf_weight=10 may over-weight surface terms. Reducing to 5 gives the shared encoder richer volume gradient signal.
+- W&B run: `cqjbjme9` — group `surf-weight-sweep`
+
+| Metric | surf_weight=5 | Fourier+wider base (93.29) | Δ | vs Lion base (83.77) | Δ |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 107.94 | — | — | — | — |
+| **test_avg/mae_surf_p** | **94.71** | 93.29 | +1.52% | 83.77 | **+13.1%** |
+| test_single_in_dist | 102.47 | 97.57 | +5.0% | 90.07 | +13.8% |
+| test_geom_camber_rc | 105.45 | 106.32 | −0.8% | 98.72 | +6.8% |
+| test_geom_camber_cruise | 71.93 | 72.25 | −0.4% | 60.96 | +18.0% |
+| test_re_rand | 99.01 | 97.04 | +2.0% | 85.32 | +16.0% |
+
+**Analysis**: Tie/slight loss vs Fourier+wider-192 baseline (93.29), clear loss vs current Lion baseline (83.77). Note: by the time this ran, train.py included Fourier, so actual comparison is vs 93.29 not 99.69.  The `test_single_in_dist` regression (+5.0%) is the most interpretable signal: surface supervision strength interacts with Fourier near-foil features — de-emphasizing surface loss specifically hurts the in_dist split where Fourier delivers the largest gain. The volume:surface gradient balance is robust around the default.
+
+**Conclusion**: **Surf-weight lever now closed in BOTH directions** (surf_weight=25 → +10%, surf_weight=5 → +1.5%). Default surf_weight=10 is in a robust local optimum. Do not revisit.
+
+## 2026-05-13 04:10 — PR #1887 (NEW, assigned): Fourier L=8→16 — double frequency resolution
+- Branch: willowpai2g48h1-frieren/fourier-L-16
+- Hypothesis: Doubling Fourier frequency levels (L=8→16) expands spatial frequency ceiling (space_dim 34→66). NeRF theory predicts monotone gain if pressure field has structure above the L=8 cutoff. Thin trailing-edge boundary layers and sharp suction peaks are plausible sources of L>8 spatial content.
+- Single-line change: `fourier_L: int = 16`
+- Target: test_avg/mae_surf_p < 83.77 (current Lion provisional baseline)
 
 ## 2026-05-13 01:10 — PR #1364: Deeper model n_layers 5→7 (CLOSED)
 - Branch: willowpai2g48h1-fern/deeper-7-layers
