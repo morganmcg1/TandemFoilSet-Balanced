@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-05-13 19:35 — PR #2548: Reflection-symmetric TTA at inference (assignment to askeladd, NEW cycle 67)
+
+- **Branch:** `willowpai2g48h4-askeladd/reflection-tta-inference`
+- **Student:** willowpai2g48h4-askeladd (idle after closure of #2487)
+- **Hypothesis:** Pure inference-time ensemble via y-axis reflection. Forward pass on input + reflected input, average predictions (negating Uy component of reflected pred). Mechanism: variance reduction + symmetric-bias cancellation. Krizhevsky 2012 / Shanmugam 2020. Tests whether model has learned approximate symmetry-equivariance. Mechanistically distinct from ALL training-time regularizers in scope — only purely inference-time ensemble being tested.
+- **Arms:** baseline (no TTA), reflection-TTA. Optimization tip given: single training run + 2 eval passes.
+- **Branching rule:** TTA Δval > 0.7 (2σ) → confident win.
+
+---
+
+## 2026-05-13 19:35 — PR #2546: Stochastic Depth (DropPath) with depth-progressive p (assignment to edward, NEW cycle 67)
+
+- **Branch:** `willowpai2g48h4-edward/stochastic-depth-droppath`
+- **Student:** willowpai2g48h4-edward (idle after closure of #2380)
+- **Hypothesis:** Drop ENTIRE residual blocks (both attn and mlp residuals) with probability p_drop linearly increasing from 0 (first block) to drop_path_max (last block). Huang et al. 2016. Mechanistically distinct from MLP dropout (closed #2477) because it preserves per-block capacity when active and regularizes inter-block redundancy, not intra-block representations.
+- **Arms:** drop_path_max ∈ {0.1, 0.2} on T_mult=2 stack + optional 2nd seed of winner.
+- **Branching rule:** Both arms regress >1.0 val → close. Either beats SOTA by >0.7 val → merge candidate.
+
+---
+
+## 2026-05-13 19:30 — PR #2487: eta_min refinement {5e-6, 2e-5} on T_0=10 (CLOSED — both arms regress, unique optimum at 1e-5)
+
+- **Branch:** `willowpai2g48h4-askeladd/eta-min-refinement`
+- **Student:** willowpai2g48h4-askeladd
+- **W&B runs:** `cx2y5387` (eta_min=2e-5), `wqa2hx0k` (eta_min=5e-6)
+- **Hypothesis:** Refine eta_min around the cycle-61 SOTA (eta_min=1e-5) by testing {5e-6, 2e-5} bracket.
+
+### Results
+
+| eta_min | val_avg | test_avg | source | Δ vs SOTA #2357 (1e-5) | Δ vs CURRENT SOTA #2444 (82.26) |
+|---------|---------|----------|--------|------------------------|-------------------------------|
+| 0       | 83.9969 | 74.7684  | #2227 baseline | +0.31 | +1.73 |
+| 5e-6    | **85.4421** | **75.2284** | this PR Arm 2 | **+1.75** ❌ | **+3.18** ❌ |
+| 1e-5    | 83.6873 | 73.3963  | SOTA #2357 (e50) | 0 | +1.43 |
+| 2e-5    | **84.6121** | **75.2890** | this PR Arm 1 | **+0.92** ❌ | **+2.35** ❌ |
+| 5e-5    | 87.51   | —        | PR #2357 Arm 2 | +3.82 | +5.25 |
+
+**Sub-decadal basin width at the eta_min=1e-5 optimum.** Both arms regress; basin is clearly basin-shaped with 1e-5 as the unique optimum in the explored range. Per-epoch trajectory consistent with eta_min's mechanism (late-cycle basin polish).
+
+**Cycle-budget caveat noted:** the SOTA #2357 reference is at e50 cycle-5 end; this PR arms are at e20 cycle-2 end. Internally consistent comparison, but absolute numbers carry that caveat.
+
+**Closure reason:** Both arms regress per branching rule. Useful basin-shape mapping for the paper. eta_min refinement axis closed within T_0=10 schedule. (Current SOTA #2444 uses T_mult=2 with eta_min=0; alphonse #2498 is testing T_mult=2 × eta_min=1e-5 compose.)
+
+---
+
+## 2026-05-13 19:25 — PR #2380: Head-up WD × cosine_restart compose (CLOSED — both arms regress, head_wd × restart not additive)
+
+- **Branch:** `willowpai2g48h4-edward/head-wd-restart-compose`
+- **Student:** willowpai2g48h4-edward
+- **W&B runs:** A1 (head_wd=2e-3, 4 replicates): `pxyvw1t3`, `0xhftsee`, `a4x7z4ya`, `vhh874sj`; A2 (head_wd=3e-3, 2 replicates): `8v77n7kf`, `ztkjrwmc`
+- **Hypothesis:** Compose `surf_head_weight_decay ∈ {2e-3, 3e-3}` × cosine_restart T_0=10 T_mult=1. Test whether head_wd↑ wins persist under restart (PR #2227 was no-restart baseline for the prior #2232 head-up result).
+
+### Results
+
+| Arm | head_wd | val_avg mean ± std | test_avg mean ± std | Δval vs OLD #2227 (83.9969) | Δval vs CURRENT #2444 (82.26) |
+|-----|---------|---------------------|---------------------|------------------------------|-------------------------------|
+| A1 (n=4) | 2e-3 | **85.38 ± 1.30** | 75.83 ± 0.87 | +1.65% ❌ | **+3.79%** ❌ |
+| A2 (n=2) | 3e-3 | **85.31 ± 0.09** | 75.47 ± 0.02 | +1.56% ❌ | **+3.70%** ❌ |
+
+**Mechanism (edward's finding):** head_wd × restart is NOT additive. Restart already provides the spike-recovery dynamic head_wd was a proxy for in the no-restart regime.
+
+**Per-split sign-flip on val_geom_camber_rc:** rc REVERSES from −5.5% (#2232 no-restart) to +3-4% (this PR with restart). Restart's deep cycle-2 descent on rc is exactly what head shrinkage suppresses.
+
+**Wide A1 spread (std=1.30):** Significantly wider than nezuko's σ=0.34 measurement on bare config. head_wd × restart compose AMPLIFIES seed variance — useful paper insight.
+
+**Code-drift caveat noted by student:** If kt5pk5qu's 83.9969 is unreproducible (current-code mean ≈ 86.71), arm means (85.3) beat current-code restart baseline by ~1.4 val. But this is a baseline-recalibration issue, not a result.
+
+**Closure reason:** Both arms regress in the mean per branching rule. head_wd lever is now closed under BOTH no-restart and restart regimes.
+
+---
+
 ## 2026-05-13 19:45 — PR #2477: MLP dropout sweep in encoder (CLOSED — both arms regress, feature-level dropout exhausted)
 
 - **Branch:** `willowpai2g48h4-thorfinn/mlp-dropout-sweep`
