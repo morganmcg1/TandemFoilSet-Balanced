@@ -238,18 +238,22 @@ class FiLMConditioner(nn.Module):
     Transolver init.
     """
 
-    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64):
+    def __init__(self, n_layers, n_hidden, cond_dim=11, mid_dim=64, depth=2):
         super().__init__()
         self.n_layers = n_layers
         self.n_hidden = n_hidden
         self.cond_dim = cond_dim
-        self.net = nn.Sequential(
-            nn.Linear(cond_dim, mid_dim),
-            nn.GELU(),
-            nn.Linear(mid_dim, 2 * n_layers * n_hidden),
-        )
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
+        self.depth = depth
+        if depth < 2:
+            raise ValueError(f"FiLMConditioner depth must be >= 2 (got {depth}).")
+        layers: list[nn.Module] = [nn.Linear(cond_dim, mid_dim), nn.GELU()]
+        for _ in range(depth - 2):
+            layers += [nn.Linear(mid_dim, mid_dim), nn.GELU()]
+        last = nn.Linear(mid_dim, 2 * n_layers * n_hidden)
+        nn.init.zeros_(last.weight)
+        nn.init.zeros_(last.bias)
+        layers.append(last)
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x, mask):
         # x: [B, N, 24]  (already normalized by upstream pipeline)
@@ -271,14 +275,14 @@ class FiLMTransolver(nn.Module):
     """
 
     def __init__(self, n_layers, n_hidden, cond_dim=11, film_mid_dim=64,
-                 **transolver_kwargs):
+                 film_depth=2, **transolver_kwargs):
         super().__init__()
         self.transolver = Transolver(
             n_layers=n_layers, n_hidden=n_hidden, **transolver_kwargs
         )
         self.film = FiLMConditioner(
             n_layers=n_layers, n_hidden=n_hidden,
-            cond_dim=cond_dim, mid_dim=film_mid_dim,
+            cond_dim=cond_dim, mid_dim=film_mid_dim, depth=film_depth,
         )
         self._last_film: torch.Tensor | None = None  # detached, for diagnostics
 
@@ -467,6 +471,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    film_depth: int = 2  # depth of FiLM head MLP (2 = baseline; 3 = +1 hidden layer)
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
 
 
@@ -517,6 +522,7 @@ model = FiLMTransolver(
     n_hidden=model_config["n_hidden"],
     cond_dim=11,
     film_mid_dim=cfg.film_mid_dim,
+    film_depth=cfg.film_depth,
     space_dim=model_config["space_dim"],
     fun_dim=model_config["fun_dim"],
     out_dim=model_config["out_dim"],
@@ -555,6 +561,7 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "film_head_params": n_params_film,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "swa_start_frac": swa_start_frac,
