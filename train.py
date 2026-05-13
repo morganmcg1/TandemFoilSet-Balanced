@@ -162,6 +162,8 @@ class TransolverBlock(nn.Module):
         # SwiGLU: mlp_ratio=4/3 for param parity with standard MLP at mlp_ratio=2
         swiglu_hidden = ((hidden_dim * 4 // 3) + 7) // 8 * 8  # round up to multiple of 8: 216 for hidden_dim=160
         self.mlp = SwiGLU(hidden_dim, swiglu_hidden, hidden_dim)
+        self.attn_scale = nn.Parameter(torch.ones(hidden_dim) * 0.1)
+        self.ffn_scale = nn.Parameter(torch.ones(hidden_dim) * 0.1)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -170,8 +172,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.attn_scale * self.attn(self.ln_1(fx)) + fx
+        fx = self.ffn_scale * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -542,6 +544,12 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    gamma_stats = {}
+    for bi, blk in enumerate(model.blocks):
+        gamma_stats[f"block_{bi}/attn_scale_mean"] = blk.attn_scale.mean().item()
+        gamma_stats[f"block_{bi}/attn_scale_std"] = blk.attn_scale.std().item()
+        gamma_stats[f"block_{bi}/ffn_scale_mean"] = blk.ffn_scale.mean().item()
+        gamma_stats[f"block_{bi}/ffn_scale_std"] = blk.ffn_scale.std().item()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -553,6 +561,7 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "layerscale": gamma_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
