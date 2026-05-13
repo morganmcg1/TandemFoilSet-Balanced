@@ -395,6 +395,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     loss_fn: str = "mse"  # "mse" or "smooth_l1"
     smooth_l1_beta: float = 0.1
+    re_weight_temp: float = 0.0  # 0 = uniform (baseline); >0 upweights high-Re samples via exp(temp*(log_Re - mean(log_Re)))
 
 
 cfg = sp.parse(Config)
@@ -410,11 +411,37 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+sampling_weight_stats: dict[str, float] | None = None
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
 else:
-    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
+    combined_weights = sample_weights.clone()
+    if cfg.re_weight_temp > 0.0:
+        log_re_per_sample = torch.tensor(
+            [float(train_ds[i][0][0, 13]) for i in range(len(train_ds))],
+            dtype=torch.float64,
+        )
+        log_re_centered = log_re_per_sample - log_re_per_sample.mean()
+        re_weights = torch.exp(cfg.re_weight_temp * log_re_centered)
+        combined_weights = combined_weights * re_weights
+        sampling_weight_stats = {
+            "sampling_weights/mean": float(combined_weights.mean()),
+            "sampling_weights/max": float(combined_weights.max()),
+            "sampling_weights/p99": float(torch.quantile(combined_weights, 0.99)),
+            "sampling_weights/min": float(combined_weights.min()),
+            "sampling_weights/p01": float(torch.quantile(combined_weights, 0.01)),
+            "log_re/mean": float(log_re_per_sample.mean()),
+            "log_re/min": float(log_re_per_sample.min()),
+            "log_re/max": float(log_re_per_sample.max()),
+        }
+        print(
+            f"Re-resample: temp={cfg.re_weight_temp}, log_re∈[{log_re_per_sample.min():.2f}, "
+            f"{log_re_per_sample.max():.2f}], "
+            f"weights mean={combined_weights.mean():.4g}, p99={torch.quantile(combined_weights, 0.99):.4g}, "
+            f"max={combined_weights.max():.4g}"
+        )
+    sampler = WeightedRandomSampler(combined_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
 
@@ -465,6 +492,9 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+if sampling_weight_stats is not None:
+    wandb.summary.update(sampling_weight_stats)
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
