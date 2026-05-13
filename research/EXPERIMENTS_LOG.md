@@ -1481,3 +1481,94 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
   - (B) val 52.0-53.5 → β plateau region above optimum; β=0.5 was already near-optimal
   - (C) val > 54.0 → β=0.25 destabilizes quadratic transition; regression despite tighter MAE alignment
 - **Diagnostics:** grad-clip rate at termination (predict 98.5-99.5%), mean grad-norm distribution (compare to β=0.5 baseline), per-split test breakdown, EMA-live gap.
+
+## 2026-05-13 14:30 — PR #2113: askeladd slice_num=96 capacity-up — CLOSED (throughput-induced epoch deficit)
+
+- Branch: `willowpai2g48h5-askeladd/slice-num-96-capacity-up`
+- Hypothesis: Dual to #1841. Tests whether wider hidden state benefits from richer slicing pathway. Predicted ~3.2% throughput penalty.
+- W&B run: `umdt6f8w` (27/50 epochs, hard timeout)
+
+| Metric | This (slice=96) | Baseline #1982 (slice=64) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **57.7869** | 52.6406 | **+9.77% regression** |
+| `test_avg/mae_surf_p` | **49.4074** | 44.9791 | **+9.85% regression** |
+| `test_single_in_dist` | 57.9273 | 49.8555 | **+16.18%** (largest hit) |
+| `test_geom_camber_rc` | 62.2946 | 57.7726 | +7.83% |
+| `test_geom_camber_cruise` | 30.8522 | 28.9446 | +6.59% |
+| `test_re_rand` | 46.5555 | 43.3437 | +7.39% |
+| Throughput penalty (measured) | ~7% (66.5 s/ep) | ~62 s/ep | predicted 3.2% — much worse |
+| Epochs completed | **27/50** | 30/50 | 3-epoch deficit |
+| Val descent at terminal | **−1.4/ep monotonic** | — | epoch-saturated, no plateau |
+| Peak GPU memory | **25.8 GB** | similar | predicted ~78 GiB (overestimated) |
+
+- **Decision: CLOSE.** All 4 splits regress; val and test both >5% threshold.
+- **Mechanism: throughput-induced epoch deficit, NOT capacity wash.** Predicted 3.2% slowdown → measured 7% (super-linear cost). Lost 3 epochs of training. Linear extrapolation: 3 more epochs would reach val ≈ 53.6, still slightly above baseline. The cost curve in slice_num is super-linear at this width, not symmetric to the 64→48 direction.
+- **Per-split asymmetry insight:** in_dist takes the LARGEST hit (+16.18%), not OOD. Inverse of #2067 (where all 4 splits regressed uniformly under direction-normalization fail). Says: single-foil samples are already over-parameterized by 64 slice tokens; adding 32 more dilutes attention without useful capacity.
+
+**Slice axis at n_hidden=224 is now fully bracketed:**
+
+| slice_num | val | test | regime |
+|---:|---:|---:|---|
+| 48 (#1841 v2) | 52.57 | 46.29 | val-wash, +2.93% test regression |
+| **64 (#1982)** | **52.64** | **44.98** | **OPTIMUM** |
+| 96 (this) | 57.79 | 49.41 | epoch-saturated by throughput cost |
+
+- **Slice axis CLOSED at this stack.** Plateau region narrow; throughput-budget interaction means broader exploration is net-negative. The slicing-vs-budget tradeoff is the real bottleneck.
+- **Next:** askeladd #2159 — peak LR 5e-4→7.5e-4 (different axis, epoch-saturated escape via amplitude).
+
+## 2026-05-13 14:30 — PR #2094: frieren grad-clip max_norm=2.0 fine-scan — CLOSED (2.5 optimum holds)
+
+- Branch: `willowpai2g48h5-frieren/grad-clip-2p0-fine-scan`
+- Hypothesis: Fine-grain test between WIN (2.5) and FAIL (1.5). Predicted mean downscaling ~9× (between 7.1× and 14.2×).
+- W&B run: `4rhtvua7` (33/50 epochs)
+
+| Metric | This (max_norm=2.0) | Baseline #1982 (max_norm=2.5) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **53.1096** | 52.6406 | **+0.90% regression** |
+| `test_avg/mae_surf_p` | **45.7294** | 44.9791 | **+1.70% regression** |
+| `test_single_in_dist` | 52.7295 | 49.8555 | +5.80% |
+| `test_geom_camber_rc` | 59.3584 | 57.7726 | +2.70% |
+| `test_geom_camber_cruise` | 27.5591 | 28.9446 | **−4.80% ✓** |
+| `test_re_rand` | 43.2707 | 43.3437 | −0.20% (wash) |
+| Clip rate (measured) | **99.46%** | 98.9% | predicted 99.5% — bang on |
+| Mean downscale | **9.2×** | 7.1× | predicted 9× — bang on |
+
+- **Decision: CLOSE.** Outcome (B) tilting toward (C). Falls in close zone (52.64-55.0 = "doesn't beat baseline").
+- **Mechanism: soft shoulder, not flat plateau.** The transition into direction-normalization begins gradually around 2.0, becomes catastrophic at 1.5. Above ~9× downscale, the gradient signal starts losing useful magnitude information but doesn't fully collapse.
+- **Per-split insight:** in_dist + camber_rc regress while camber_cruise improves (−4.80%). Tighter clip over-smooths high-gradient single-foil samples while helping the lower-magnitude cruise domain. Same single-foil-takes-hit pattern as #2067 (+25%) and #1805 anneal (+6.4%).
+
+**Threshold scan FULLY CHARACTERIZED:**
+
+| max_norm | clip rate | mean downscale | val_avg | regime |
+|---:|---:|---:|---:|---|
+| 10.0 (#1784) | 72.4% | ~2.1× | 65.98 | soft-scaling WIN |
+| 5.0 (#1930) | 90.1% | ~4.3× | 63.48 | moderate-scaling WIN |
+| **2.5 (#1982)** | **98.9%** | **~7.1×** | **52.64** | **OPTIMUM** |
+| **2.0 (this)** | **99.46%** | **~9.2×** | **53.11** | **soft-shoulder regression** |
+| 1.5 (#2067) | 100.0% | ~14.2× | 62.59 | direction-norm FAIL |
+| 1.0 | ~100% | ~22× | regression | direction-norm FAIL |
+
+- **Threshold scan CLOSED.** 2.5 is the optimum with a soft shoulder between 2.0-2.5, sharp cliff between 2.0-1.5. Diminishing returns to fine-scanning further.
+- **Student suggestion (out of scope):** domain-conditioned clip thresholds or per-domain gradient pre-scaling could recover the cruise improvement (−4.80% here) without the in_dist regression.
+- **Next:** frieren #2160 — weight_decay 0 → 1e-5 (different axis: regularization, untested).
+
+## 2026-05-13 14:30 — PR #2159: askeladd assigned peak LR 5e-4 → 7.5e-4 (amplitude scaling)
+
+- Branch: `willowpai2g48h5-askeladd/lr-peak-7p5e-4`
+- Hypothesis: Test whether the model is LR-amplitude-limited rather than schedule-limited (which alphonse #2000 is testing via T_max=80). Higher peak LR → more "exploration LR" during mid-training where the model is doing most of its learning.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50 --lr 7.5e-4` (or code-constant change).
+- Targets: val < 52.6406, test < 44.9791.
+- **Distinct from alphonse #2000 (T_max=80):** schedule extension keeps amplitude, this scales amplitude with same schedule length. Both axes could compound in future.
+- **Three outcomes:** (A) val<52.64 win, LR-limited; (B) wash, near-optimal already; (C) val>54 clip rate hits 100%, direction-norm fail like #2067.
+- **Diagnostics:** clip rate at termination (predict 99.5%+; if 100%, regime saturated), mean grad norm, per-split test, EMA-live gap (predict wider, ~−15 to −20 vs −12 baseline).
+
+## 2026-05-13 14:30 — PR #2160: frieren assigned weight_decay 0 → 1e-5 (untested regularization)
+
+- Branch: `willowpai2g48h5-frieren/weight-decay-1e-5`
+- Hypothesis: Test explicit L2 regularization on 1.26M-param model + 1500-sample dataset. The capacity/sample ratio is ~840 params per sample — substantial enough that explicit weight_decay may close the train/val gap that EMA averaging alone misses.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50` + `weight_decay=1e-5` constant in AdamW constructor.
+- Targets: val < 52.6406, test < 44.9791.
+- **Distinct from grad-clip work:** grad-clip operates on gradient magnitudes (post-backward); weight_decay operates on weight magnitudes (during update). Different mechanism.
+- **First task: verify current weight_decay value.** PyTorch AdamW default is 0.01, but the optimizer setup may explicitly set 0. Log the value before/after change.
+- **Three outcomes:** (A) val<52.64 win, weight_decay closes train/val gap; (B) wash, no overfit at this scale; (C) val>54 wd too strong, try 1e-6.
+- **Diagnostics:** train/val gap at ep 5/15/25/terminal (should narrow if overfitting is real), mean weight magnitude, clip rate (predict ~98.9% similar), per-split test, EMA-live gap.
