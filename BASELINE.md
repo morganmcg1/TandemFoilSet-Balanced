@@ -8,36 +8,51 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **52.78** | PR #2027 (merged 2026-05-13) — Lion lr=2e-4 on per-channel δ + n_hidden=160 stack |
-| **test_avg/mae_surf_p** | **49.42** | PR #2027 — all 4 splits finite |
-| Peak VRAM | 37.99 GB | PR #2027 — BF16, batch=4, n_hidden=160 |
-| s/epoch | ~109 s | PR #2027 — 16 epochs ≈ 29 min total |
+| **val_avg/mae_surf_p** | **52.63** | PR #1656 (merged 2026-05-13) — dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 stack |
+| **test_avg/mae_surf_p** | **49.22** | PR #1656 — all 4 splits finite |
+| Peak VRAM | ~38 GB | PR #1656 — BF16, batch=4, n_hidden=160, dropout=0.1 |
+| s/epoch | ~117 s | PR #1656 — 16 epochs ≈ 31 min total (slightly over cap; test eval adds ~30s) |
 
-### Per-split val (PR #2027, epoch 16, lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 56.24 |
-| val_geom_camber_rc | 67.45 |
-| val_geom_camber_cruise | 34.25 |
-| val_re_rand | 53.17 |
-| **val_avg** | **52.78** |
-
-### Per-split test (PR #2027, epoch 16 best checkpoint, lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+### Per-split val (PR #1656, epoch 16, dropout=0.1 + lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 46.75 |
-| test_geom_camber_rc | 59.92 |
-| test_geom_camber_cruise | 47.47 |
-| test_re_rand | 43.52 |
-| **test_avg** | **49.42** |
+| val_single_in_dist | 56.52 |
+| val_geom_camber_rc | 67.35 |
+| val_geom_camber_cruise | 34.17 |
+| val_re_rand | 52.50 |
+| **val_avg** | **52.63** |
+
+### Per-split test (PR #1656, epoch 16 best checkpoint, dropout=0.1 + lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 47.14 |
+| test_geom_camber_rc | 59.44 |
+| test_geom_camber_cruise | 46.76 |
+| test_re_rand | 43.54 |
+| **test_avg** | **49.22** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name pcd_lr2e4_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --drop_path 0.0 --dropout 0.1 --experiment_name dropout01_pcd_lr2e4_baseline_check --agent <student>
 ```
-(n_hidden=160, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2] in train.py defaults. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required** — train.py defaults `lion_lr=1.5e-4 / lion_weight_decay=3e-5` are stale from #1641 and do not match the current best config.)
+(n_hidden=160, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2], dropout=0.1 in merged defaults. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required** — train.py defaults `lion_lr=1.5e-4 / lion_weight_decay=3e-5` are stale from #1641 and do not match the current best config.)
+
+## 2026-05-13 09:58 — PR #1656: dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 (MERGED)
+
+- **val_avg/mae_surf_p: 52.6345** (↓ 0.27% from 52.78 — small but consistent with middle-case additive hypothesis)
+- **test_avg/mae_surf_p: 49.2183** (↓ 0.41% from 49.42 — both primary and test metrics improve)
+- **Peak VRAM: ~38 GB** (consistent with n_hidden=160 stack + minor dropout overhead); s/epoch ~117 s; ~31 min total
+- **Metric artifacts:** `models/model-charliepai2g24h5-thorfinn-dropout_0_1_n160_pcd_lr2e4-20260513-091653/metrics.jsonl`
+- **What changed:** Added `dropout=0.1` to the Transolver model config, flowing through `Transolver(dropout=0.1) → TransolverBlock(dropout=0.1) → PhysicsAttention(dropout=0.1)`. Two gates: `nn.Dropout(p=0.1)` in `PhysicsAttention.to_out` (attention output dropout) and `dropout_p=0.1` in `F.scaled_dot_product_attention` when `self.training=True`. No change to optimizer, scheduler, loss, or architecture.
+- **Why it worked:** Feature-level stochastic masking is orthogonal to gradient-level regularization (Huber, grad_clip) and width regularization (n_hidden=160). Dropout forces representational redundancy — each forward pass uses a random subset of feature channels, preventing individual channels from over-specializing. The cross-stack ablation shows diminishing returns (5.7% on n_hidden=128 → 1.0% on n_hidden=160 without lr alignment → 0.27% on full aligned stack), consistent with a saturating regularization budget: per-channel δ=0.2 already provides tight gradient-magnitude capping on the pressure channel, and n_hidden=160 provides additional width regularization capacity. However, dropout's 0.27% val gain is strictly additive and test-side signal is even stronger (−0.41%), confirming the regularization axes remain non-redundant. Val curve strictly monotone-decreasing at epoch 16 — headroom with longer training.
+- **Baseline configuration delta:** `dropout=0.1` in `model_config` dict (train.py). All other config identical to PR #2027.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name dropout01_pcd_lr2e4_check --agent <student>
+  ```
+  (`dropout=0.1` must now be the train.py default after this merge; explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` still required)
 
 ## 2026-05-13 09:00 — PR #2027: Lion lr=2e-4 on per-channel δ + n_hidden=160 stack (MERGED)
 
