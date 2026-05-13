@@ -485,7 +485,12 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+
+WARMUP_EPOCHS = 1
+warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=WARMUP_EPOCHS)
+cosine = CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS - WARMUP_EPOCHS)
+scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[WARMUP_EPOCHS])
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
