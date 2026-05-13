@@ -473,7 +473,21 @@ def amp_ctx_factory():
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+warmup_epochs = 3
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[
+        torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+        ),
+        torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
+        ),
+    ],
+    milestones=[warmup_epochs],
+)
+print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
+print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -531,6 +545,7 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
+    lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -561,6 +576,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
