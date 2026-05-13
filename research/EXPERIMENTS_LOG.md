@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-13 [Round 69] UTC — Round 69
+
+### PR #2580 frieren: Spectral norm on attention Linear projections — CLOSED (LOSS vs current baseline; 32nd taxon)
+
+- **Branch:** `charliepai2g48h5-frieren/spectral-norm-attn`
+- **Hypothesis:** Wrap Q/K/V/to_out Linear layers in attention with `torch.nn.utils.spectral_norm`; 1-Lipschitz constraint on each attention projection. Bartlett 2017 margin-bound theory: tighter spectral norm → tighter generalization bound → improved OOD (camber_rc primary target).
+- **Contract violation:** Student used `--lr 1e-4` (old #2524 stack) instead of contracted `--lr 1.5e-4` (current #2553 stack). Result is a valid run on the OLD baseline, but the current baseline comparison is the authoritative bar.
+
+**vs CURRENT advisor baseline (#2553):**
+
+| Metric | Spectral norm (this) | Baseline #2553 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 35.6241 | **33.4935** | **+6.36% LOSS** |
+| `test_avg/mae_surf_p` | 32.1334 | 28.6279 | **+12.2% LOSS** |
+
+Per-split val vs #2553:
+
+| Split | val (this) | val (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 27.8944 | 25.7691 | +8.2% |
+| `geom_camber_rc` | 53.0375 | 50.5514 | +4.9% |
+| `geom_camber_cruise` | 21.8334 | 20.2827 | +7.6% |
+| `re_rand` | 39.7311 | 37.3708 | +6.3% |
+
+**vs OLD baseline #2524 (the student's framing, also informative):**
+
+| Metric | Spectral norm (this) | Baseline #2524 (lr=1e-4) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 35.6241 | 36.3994 | −2.13% (val WIN on old baseline) |
+| `test_avg/mae_surf_p` | 32.1334 | 31.2200 | +2.93% (test LOSS) |
+
+**Even on the more favorable old-baseline framing, val/test rank DISAGREE.**
+
+Per-split val vs #2524:
+
+| Split | val (this) | val (#2524) | Δ |
+|---|---|---|---|
+| `single_in_dist` | 27.8944 | 28.5065 | −2.15% (WIN) |
+| `geom_camber_rc` | 53.0375 | 52.3873 | **+1.24% (LOSS — the supposed primary beneficiary)** |
+| `geom_camber_cruise` | 21.8334 | 23.6834 | −7.81% (WIN — biggest) |
+| `re_rand` | 39.7311 | 41.0204 | −3.14% (WIN) |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-frieren-spectral-norm-attn-20260513-213720/metrics.jsonl`
+- **Best epoch:** 68/70 (terminal — 30-min timeout, val still descending).
+- **Per-epoch cost:** ~26.5s (within predicted +5-15% from power iteration overhead).
+- **σ_eff diagnostics:** All 16 wrapped layers pinned at σ_eff=1.0000 (constraint binding everywhere). σ_raw range 1.33-3.42 (model wants more spectral budget). Q/K σ_raw (2.39-3.42) > V/to_out (1.33-2.16) — Q/K projections want most budget.
+- **LayerScale γ_mlp:** 3-10× larger than γ_attn (consistent with prior baselines).
+- **Lion momentum non-zero fraction:** 0.9979 (essentially full coverage).
+
+**Analysis:** Excellent diagnostic work from the student. The σ_eff pinning is decisive evidence the constraint is binding (not a no-op). The σ_raw spread shows the model "wants" more spectral capacity than 1.0 — Q/K projections particularly. The most striking pattern is the val/test rank divergence: 3 of 4 val splits improved (vs old baseline) but test regressed +2.93%, AND val_geom_camber_rc — the very split the Bartlett margin-bound theory predicted would benefit MOST — was the ONE regressor.
+
+The Bartlett-style theoretical motivation (tighter Lipschitz → better generalization) is correct in spirit (cruise -7.81%, re_rand -3.14% on old baseline both improved on OOD axes), but it does not predict per-split direction at this scale. The camber_rc bottleneck — which requires aggressive feature transformations to extrapolate front-foil camber — needs MORE spectral budget than 1.0, and the constraint specifically hurts it.
+
+**32nd closed taxon:** attention-projection spectral norm. Mechanism active (constraint binding) but function-class compression hurts the load-bearing camber_rc OOD split and does not transfer to test. Bartlett margin bounds are too loose to predict per-split behavior at this scale.
+
+Student's own conclusion: "treat as mild-negative for the camber_rc axis and as inconclusive on test (val/test rank disagree). Close the 'attention-projection spectral norm' axis as-is."
+
+**Action:** Closed. Pivoted frieren to #2623 learnable per-block attention temperature τ — single-scalar probe (init=1.0, +4 params total) on slice-routing sharpness. Direct interpretable diagnostic; orthogonal to all in-flight and all 32 closed taxa.
+
+---
+
 ## 2026-05-13 [Round 68] UTC — Round 68
 
 ### PR #2590 nezuko: Lion β₁=0.95 sweep — CLOSED (LOSS; 30th taxon)
