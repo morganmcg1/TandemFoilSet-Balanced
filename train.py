@@ -90,6 +90,7 @@ class PhysicsAttention(nn.Module):
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -102,6 +103,7 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self._last_slice_entropy: torch.Tensor | None = None
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -119,6 +121,13 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        # Slice-routing entropy diagnostic: mean over (B, heads, N) of
+        # -sum_g(p_g log p_g). Detached scalar — sanity check that the
+        # categorical routing distribution is being used (entropy approaches
+        # log(slice_num) when uniform, 0 when collapsed onto one slice).
+        with torch.no_grad():
+            entropy_per_node = -(slice_weights * (slice_weights.clamp_min(1e-12)).log()).sum(dim=-1)
+            self._last_slice_entropy = entropy_per_node.mean().detach()
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -467,6 +476,7 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    slice_num: int = 64
 
 
 cfg = sp.parse(Config)
@@ -505,7 +515,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -590,6 +600,7 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_slice_entropy = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -632,6 +643,13 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+
+        # Slice-routing entropy averaged across blocks (sanity check on slice usage).
+        blocks = model.transolver.blocks if isinstance(model, FiLMTransolver) else model.blocks
+        batch_slice_entropy = float(torch.stack(
+            [b.attn._last_slice_entropy for b in blocks]
+        ).mean().item())
+
         wandb.log({
             "train/loss": loss.item(),
             "train/loss_unweighted": loss_unweighted.item(),
@@ -640,11 +658,13 @@ for epoch in range(MAX_EPOCHS):
             "train/re_weight_mean": re_weight.mean().item(),
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            "train/slice_entropy_mean": batch_slice_entropy,
             "global_step": global_step,
         })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_slice_entropy += batch_slice_entropy
         n_batches += 1
 
     if epoch >= swa_start_epoch:
@@ -658,6 +678,7 @@ for epoch in range(MAX_EPOCHS):
         swa_active = False
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_slice_entropy /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -673,6 +694,7 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/epoch_slice_entropy_mean": epoch_slice_entropy,
         "val/loss": val_loss_mean,
         "lr": current_lr,
         "swa_active": int(swa_active),
