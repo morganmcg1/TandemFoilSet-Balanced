@@ -411,6 +411,58 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper (Zhang et al., 2019 — arXiv:1907.08610)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead:
+    """Wraps a base optimizer with k-step fast / 1-step slow lookahead."""
+
+    def __init__(self, base_optimizer, k: int = 5, alpha: float = 0.5):
+        self.optimizer = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self._la_step_count = 0
+        self.slow_weights = [
+            p.data.clone().detach()
+            for group in base_optimizer.param_groups
+            for p in group["params"]
+        ]
+
+    def step(self, closure=None):
+        loss = self.optimizer.step(closure)
+        self._la_step_count += 1
+        if self._la_step_count % self.k == 0:
+            i = 0
+            for group in self.optimizer.param_groups:
+                for p in group["params"]:
+                    slow = self.slow_weights[i]
+                    slow.add_(self.alpha * (p.data - slow))
+                    p.data.copy_(slow)
+                    i += 1
+        return loss
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
+
+    def state_dict(self):
+        return {
+            "base": self.optimizer.state_dict(),
+            "slow": self.slow_weights,
+            "step": self._la_step_count,
+        }
+
+    def load_state_dict(self, d):
+        self.optimizer.load_state_dict(d["base"])
+        self.slow_weights = d["slow"]
+        self._la_step_count = d["step"]
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -431,6 +483,8 @@ class Config:
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
     cosine_restart_eta_min: float = 0.0  # Floor LR at cycle-ends for CosineAnnealingWarmRestarts
+    lookahead_k: int = 0     # Lookahead slow-step interval; 0 = disabled
+    lookahead_alpha: float = 0.5  # Slow-weight interpolation coefficient
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -495,23 +549,31 @@ if cfg.use_torch_compile:
     model = torch.compile(model, mode=cfg.compile_mode, dynamic=True)
 
 _head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
-optimizer = torch.optim.AdamW(
+base_optimizer = torch.optim.AdamW(
     [
         {"params": list(model.parameters()), "lr": cfg.lr},
         {"params": list(surf_head.parameters()), "lr": _head_lr},
     ],
     weight_decay=cfg.weight_decay,
 )
+if cfg.lookahead_k > 0:
+    optimizer = Lookahead(base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
+    print(f"[lookahead] k={cfg.lookahead_k} alpha={cfg.lookahead_alpha}")
+else:
+    optimizer = base_optimizer
+# Scheduler holds a direct reference to the inner AdamW (PyTorch 2.11
+# LRScheduler enforces isinstance(opt, Optimizer)). Lookahead.param_groups
+# returns the same list, so LR updates propagate through both views.
 if cfg.cosine_restart_T_0 > 0:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
+        base_optimizer,
         T_0=cfg.cosine_restart_T_0,
         T_mult=cfg.cosine_restart_T_mult,
         eta_min=cfg.cosine_restart_eta_min,
     )
     print(f"[lr] CosineAnnealingWarmRestarts T_0={cfg.cosine_restart_T_0} T_mult={cfg.cosine_restart_T_mult} eta_min={cfg.cosine_restart_eta_min}")
 else:
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(base_optimizer, T_max=MAX_EPOCHS)
     print(f"[lr] CosineAnnealingLR T_max={MAX_EPOCHS}")
 
 run = wandb.init(
