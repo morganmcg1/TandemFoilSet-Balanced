@@ -7,6 +7,23 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:31 — PR #2413: Cosine tail compression (--epochs 25, --epochs 22) on slice32+bs2 stack — CLOSED
+
+- `willowpai2g24h3-tanjiro/cosine-tail-compress`
+- **Hypothesis:** At bs=2 (T_max=45, cap at ~25 epochs → terminal LR ≈ 0.59× peak), compressing the cosine tail (T_max=20 via --epochs 25) would lower terminal LR to ~0.05× peak and extract more learning in the last few epochs. Arm A: --epochs 25 (mild tail curl), Arm B: --epochs 22 (full decay to 0). Per pre-stated rule, Arm B skipped when Arm A regresses.
+
+| Metric | Arm A (qkscl3sh) | Baseline (jc24jr52) | Δ |
+|--------|---:|---:|---|
+| val_avg | 60.8314 | 57.7122 | +5.41% ❌ |
+| test_avg | 52.4963 | 49.5412 | +5.96% ❌ |
+
+Per-split val: single_in_dist=61.93 (+1.42%), camber_rc=70.79 (+3.93%), camber_cruise=48.01 (+11.71%), re_rand=62.60 (+6.63%). Per-split test: 54.03 (+4.1%), 62.19 (+5.1%), 38.96 (+8.4%), 54.81 (+7.3%). All 8 sub-metrics regress; largest hit on cruise.
+
+GPU contention caveat: epochs 19-22 ran ~150 s (2× normal) due to duplicate process competition; extrapolation to clean run lands ~58-59 val, still above the 57.7 close bar.
+
+- **Analysis:** Cosine-tail-compression axis settled. The gradient-step-bound mechanism confirmed also at bs=2: the baseline's "high" terminal LR (0.59× peak at epoch 25) is doing real work. Replacing it with near-zero LR via compressed T_max uniformly hurts all 4 splits. The "shape" axis on the cosine schedule is now fully characterized: both aggressive (T_max=15, #2302) and mild (T_max=20, this PR) compressions regress. Next experiment: "magnitude" axis — peak LR sweep (lr=7e-4, lr=1e-3) assigned to tanjiro #2449.
+- W&B: `qkscl3sh` (group: `willow-r3-cosine-tail-compress`)
+
 ## 2026-05-13 15:51 — PR #2389: batch_size=2 — more grad steps per 30-min cap — MERGED
 
 - `willowpai2g24h3-nezuko/bs2-retest`

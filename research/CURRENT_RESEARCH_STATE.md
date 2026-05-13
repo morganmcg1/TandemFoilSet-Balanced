@@ -5,18 +5,19 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~16:10 — fleet GPU snapshot: 7/8 students 97-99% active; **frieren #2192 arms all complete @ 16:05, terminal pending**)
+- **Date**: 2026-05-13 (updated ~16:35 — tanjiro #2413 closed (cosine-tail +5.4% regression, axis settled); tanjiro reassigned #2449 lr-peak-sweep)
 - **Current best (merged)**: PR #2389 nezuko bs=2 (run `jc24jr52`) at **val 57.7122 / test 49.5412** — all 4 splits improve, 26/50 epochs, 71 s/epoch, VRAM **13.6 GB** (83% reduction, opens capacity experiments). Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2`
 - **Updated merge bar (vs 57.71 baseline)**: ≤51.9 val ⇒ merge (≥10% gain), 51.9-57.7 → second seed, ≥57.7 → close.
+- **Closed axes on bs=2+slice32 stack:** cosine-tail shape (#2302 –epochs 20, #2413 –epochs 25 both regress). **Confirmed: gradient-step-bound. Peak-LR magnitude is the next lever.**
 - **In-flight (8 students, 0 idle):**
-  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32+bs4, Arm B slice_num=16+bs4; running. Notified of new 57.71 baseline.
-  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: likely mid-run. Notified of new 57.71 baseline.
-  - edward #2119 n-layers-sweep: rebased onto current advisor HEAD (851b526); retest n_layers=4+slice32+bs=2 running (GPU 99%, isDraft=false but still status:wip awaiting terminal).
-  - fern #2423 wider-model-bs2: **newly assigned** — n_hidden=192 on bs=2 stack. VRAM headroom (82 GB free) reopens width axis.
-  - frieren #2192 n-head-sweep (2,4,8): **all 3 arms complete (GPU 99→0% at 16:05), terminal comment expected next student iter (~16:13)**. Pod GPU pattern: arm1 ~14:45–14:51 (45.8 GB), arm2 ~15:01–15:30 (57.6 GB), arm3 ~15:35–16:05 (27.4 GB).
-  - nezuko #2421 bs1-sweep: **newly assigned** — bs=1, zero padding waste, ~2× more grad steps vs bs=2.
-  - tanjiro #2413 cosine-tail-compress: Arm A `--epochs 25` running on bs=2 stack (per 15:56 ack — full cosine cycle to LR≈0 at bs=2 timing); Arm B `--epochs 22` queued.
-  - thorfinn #2097 coord-jitter-aug: actively running (GPU 97%, 54.9 GB) — no terminal yet but pod is busy.
+  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32+bs4, Arm B slice_num=16+bs4; running.
+  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: running (GPU 97-99%).
+  - edward #2119 n-layers-sweep: retest n_layers=4+slice32+bs=2 running (GPU 99%, awaiting terminal).
+  - fern #2423 wider-model-bs2: n_hidden=192 on bs=2 stack (86 GB VRAM — near cap, stable).
+  - frieren #2192 n-head-sweep (2,4,8): back at 95% GPU / 47.7 GB — running another arm or seed after brief idle gap.
+  - nezuko #2421 bs1-sweep: bs=1 sweep running (GPU 97-99%).
+  - tanjiro #2449 lr-peak-sweep: **newly assigned** — lr=7e-4 (Arm A) and lr=1e-3 (Arm B) on bs=2+slice32 stack. Peak-LR magnitude axis, skip-Arm-B rule if Arm A regresses.
+  - thorfinn #2097 coord-jitter-aug: actively running (GPU 98%, 55 GB) — no terminal yet.
 - **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks.
 - **Key structural observations from merged stack:**
   - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + **batch_size=2**
