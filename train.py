@@ -62,17 +62,33 @@ ACTIVATION = {
 }
 
 
+class GeGLU(nn.Module):
+    """Gated GELU unit. Input must be double-width; splits last dim 2x."""
+    def forward(self, x):
+        x, gate = x.chunk(2, dim=-1)
+        return x * F.gelu(gate)
+
+
 class MLP(nn.Module):
     def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
         super().__init__()
-        act_fn = ACTIVATION[act]
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
+        if act == "geglu":
+            self.linear_pre = nn.Sequential(
+                nn.Linear(n_input, n_hidden * 2),
+                GeGLU(),
+            )
+            self.linears = nn.ModuleList(
+                [nn.Sequential(nn.Linear(n_hidden, n_hidden * 2), GeGLU()) for _ in range(n_layers)]
+            )
+        else:
+            act_fn = ACTIVATION[act]
+            self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act_fn())
+            self.linears = nn.ModuleList(
+                [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
+            )
         self.linear_post = nn.Linear(n_hidden, n_output)
-        self.linears = nn.ModuleList(
-            [nn.Sequential(nn.Linear(n_hidden, n_hidden), act_fn()) for _ in range(n_layers)]
-        )
 
     def forward(self, x):
         x = self.linear_pre(x)
@@ -406,9 +422,10 @@ model_config = dict(
     n_layers=6,
     n_head=4,
     slice_num=64,
-    mlp_ratio=4,
+    mlp_ratio=3,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    act="geglu",
 )
 
 model = Transolver(**model_config).to(device)
