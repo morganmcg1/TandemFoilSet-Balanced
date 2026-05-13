@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 18:40 UTC (Wave 17: MERGE #2436 fern layerscale-lr-10x (18th compound win, −1.60% val, −1.59% test); CLOSE #2435 thorfinn 50× lr (mechanism falsified, top freqs gradient-limited; lift was n_params architectural confound); ASSIGN #2469 thorfinn freqs-xy-separate (direction-separated learnable freqs))
+- **Last updated**: 2026-05-13 19:10 UTC (Wave 17+: CLOSE #2414 alphonse attn-layerscale-0.05 (Outcome C +7.92% vs current; mechanism inverted — optimizer drove attn γ DOWN, mlp γ UP); ASSIGN #2475 fern layerscale-init-0.1 (re-tune init on post-#2436 stack); ASSIGN #2476 alphonse swa-last-3-epochs (Stochastic Weight Averaging))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -40,7 +40,7 @@ New Wave 17+ threads testing refined hypotheses:
 - `freqs-xy-separate` (thorfinn #2469): direction-separated learnable freqs — tests whether top-freq gradient cancellation was between x and y directions
 - `flow-cond-film-v2` (askeladd #2453): FiLM γ/β = MLP(log_Re, AoA0, AoA1) — global conditioning
 
-**Wave 17+ active threads:**
+**Wave 17+ active threads (all 8 students busy):**
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
@@ -49,9 +49,9 @@ New Wave 17+ threads testing refined hypotheses:
 | nezuko | #2465 | norm-bias-no-wd | LayerNorm γ/β + Linear biases + placeholder + attn.temperature → wd=0 (standard transformer recipe, orthogonal to fern #2436) | ASSIGNED |
 | askeladd | #2453 | flow-cond-film-v2 | FiLM γ/β = MLP(log_Re,AoA0,AoA1) — refreshed (v1 stale, never picked up); zero-init heads AFTER apply, cond_indices=[35,36,40] | ASSIGNED |
 | edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | ASSIGNED |
-| alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric | IN FLIGHT |
 | tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD | IN FLIGHT |
-| fern | TBD | (idle after #2436 merge — new assignment pending) | — | IDLE |
+| fern | #2475 | layerscale-init-0.1 | LayerScale init=0.1 (4× current 0.025) — tests if init was implicitly retuned by the post-#2436 no-WD 10× lr group dynamics | ASSIGNED |
+| alphonse | #2476 | swa-last-3-epochs | Stochastic Weight Averaging: average state_dicts from last 3 training epochs and evaluate; Kaggle-staple OOD generalizer | ASSIGNED |
 
 ## Key findings from Wave 13/14/15/16/17
 
@@ -110,6 +110,7 @@ New Wave 17+ threads testing refined hypotheses:
 | Coord jitter | off | std=0.002/0.005 direction-inverted |
 | Slice temperature at 10× lr | n/a (don't raise lr) | #2437 CLOSED Outcome C: +4.81%; softmax-internal routing destabilized |
 | Learned freqs at 50× lr | n/a (lr ≥ 10× is plenty) | #2435 CLOSED: top freqs are gradient-magnitude-limited, NOT lr-limited |
+| Asymmetric LayerScale init (attn>mlp) | symmetric 0.025 | #2414 CLOSED Outcome C: +7.92% vs current; optimizer inverts the asymmetry (final mlp γ > attn γ in all 5 blocks) — the hypothesized direction was wrong |
 
 ## Prioritized open research themes (Wave 17+)
 
@@ -122,8 +123,9 @@ New Wave 17+ threads testing refined hypotheses:
 7. **FiLM conditioning** (askeladd #2453): proper global conditioning for Re/AoA scalars (refreshed from stale #2368 on post-#2370 stack)
 8. **Hybrid RFF + learned freqs** (edward #2441): additive Gaussian σ=3 RFF ON TOP of current learned-freqs stack — tests orthogonality of mechanisms
 9. **QK-norm v2** (tanjiro #2427 IN FLIGHT): with corrected init=0 and tau no-WD
-10. **Asymmetric LayerScale** (alphonse #2414 IN FLIGHT): attn=0.05, mlp=0.025
-11. **All-param optimizer sweep**: if LayerScale + norm-bias both win, test joint no-WD config for all 1D params simultaneously
-12. **Per-block learned freqs (30 params)**: natural escalation if direction-separation doesn't unlock — block-specific freq pools allow each block its own scale
-13. **Slice temp init sweep (not lr sweep)**: if Wave 18 reopens this axis, try init ∈ {0.3, 0.7} at default lr — gradient signal in #2437 suggested sharper is preferred but lr was too aggressive
-14. **fern next assignment** (idle after #2436 merge): top candidates — (a) per-block LayerScale γ no-WD/no-share group (analog to per-block freqs), (b) MLP-only LayerScale 10× lr (test whether attn-path or MLP-path is dominant), (c) Wave 17+ additive-scale extension
+10. ~~Asymmetric LayerScale~~ **CLOSED #2414** (Outcome C; mechanism inverted — optimizer prefers final mlp γ > attn γ)
+11. **LayerScale init=0.1 retune** (fern #2475 NEW): re-tune LayerScale init on post-#2436 dynamics (γ wants 5–6× off init=0.025)
+12. **SWA last-3-epochs** (alphonse #2476 NEW): post-hoc stochastic weight averaging at end of training
+13. **All-param optimizer sweep**: if LayerScale + norm-bias both win, test joint no-WD config for all 1D params simultaneously
+14. **Per-block learned freqs (30 params)**: natural escalation if direction-separation doesn't unlock — block-specific freq pools allow each block its own scale
+15. **Slice temp init sweep (not lr sweep)**: if Wave 18 reopens this axis, try init ∈ {0.3, 0.7} at default lr — gradient signal in #2437 suggested sharper is preferred but lr was too aggressive

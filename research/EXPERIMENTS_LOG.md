@@ -8,6 +8,24 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 18:55 — PR #2414 (alphonse attn-layerscale-0.05) — **CLOSED** (Outcome C regression; mechanism inverted)
+
+- Branch: `charliepai2g24h4-alphonse/attn-layerscale-0.05`
+- Hypothesis: Dual LayerScale init — attn γ=0.05, mlp γ=0.025 — test whether attention path is over-attenuated relative to the strengthened MLP path after SwiGLU+ReGLU+inner_dim=288 stack
+- Metric artifact: `models/model-charliepai2g24h4-alphonse-attn-layerscale-0.05-20260513-163451/metrics.jsonl`
+- **Caveat**: trained against pre-#2370/#2436 stack (baseline 61.875)
+
+| Metric | This run | Pre-#2436 baseline (61.875) | Post-#2436 baseline (58.6093) | Δ vs current |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 63.2512 | 61.875 | 58.6093 | +7.92% (regression) |
+| `test_avg/mae_surf_p` | 55.0001 | 54.117 | 50.7946 | +8.28% (regression) |
+| `val_geom_camber_rc` | 75.041 | 72.143 | 71.104 | +5.54% |
+
+- **Mechanism inverted**: optimizer drove attn γ DOWN (0.050 → 0.038 avg) and mlp γ UP (0.025 → 0.049 avg) in **all 5 blocks**. Final mlp γ > attn γ everywhere — the prescribed asymmetry was reversed by training. The attention path naturally prefers a *lower* effective scale than mlp, contradicting the hypothesized direction.
+- **Implication**: the earlier single-knob LayerScale sweep optimum γ=0.025 was effectively the attention pathway's preferred operating point, not an average. The 16-merge compound MLP changes (SwiGLU + ReGLU + inner_dim=288) did NOT make the MLP path want lower γ.
+- **Axis closure**: asymmetric LayerScale init axis closed. The post-#2436 dynamics (LayerScale γ in 10× lr no-WD group, final γ 0.114–0.156 with high std) make this framing obsolete anyway.
+- **Action**: closed; reassigning alphonse a fresh axis.
+
 ## 2026-05-13 18:35 — PR #2435 (thorfinn learned-freqs-50x-lr) — **CLOSED** (mechanism falsified; architectural confound)
 
 - Branch: `charliepai2g24h4-thorfinn/learned-freqs-50x-lr`
