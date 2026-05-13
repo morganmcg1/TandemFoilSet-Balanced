@@ -106,6 +106,37 @@ class SwiGLUMLP(nn.Module):
         return self.w_down(F.relu(self.w_gate(x)) * self.w_up(x))   # H39: ReGLU gate (ReLU = max(0,x))
 
 
+class FiLMGenerator(nn.Module):
+    """Maps 3 per-sample condition scalars to (γ, β) per channel, per block.
+
+    Output `γ` is shifted to start at 1.0 (residual-init style): with zero-init
+    heads, the modulation begins as identity so the baseline behavior is preserved
+    at t=0 and any regression directly attributes to learned FiLM modulation.
+    """
+
+    def __init__(self, n_cond: int, n_hidden: int, n_blocks: int):
+        super().__init__()
+        self.trunk = nn.Sequential(
+            nn.Linear(n_cond, 4 * n_cond),
+            nn.GELU(),
+            nn.Linear(4 * n_cond, 4 * n_cond),
+            nn.GELU(),
+        )
+        self.heads = nn.ModuleList([
+            nn.Linear(4 * n_cond, 2 * n_hidden) for _ in range(n_blocks)
+        ])
+
+    def forward(self, cond_scalars):
+        h = self.trunk(cond_scalars)
+        out = []
+        for head in self.heads:
+            gb = head(h)
+            gamma, beta = gb.chunk(2, dim=-1)
+            gamma = gamma + 1.0
+            out.append((gamma, beta))
+        return out
+
+
 class FourierCoordEnc(nn.Module):
     """Replace the 2 normalized coord dims with 2*2*n_freqs Fourier features.
 
@@ -214,7 +245,7 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
+    def forward(self, fx, film_params=None):
         if self.training and self.stoch_depth_prob > 0.0:
             if torch.rand(1, device=fx.device).item() < self.stoch_depth_prob:
                 if self.last_layer:
@@ -222,6 +253,10 @@ class TransolverBlock(nn.Module):
                 return fx
         fx = self.layer_scale_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.layer_scale_mlp * self.mlp(self.ln_2(fx)) + fx
+        # H52: FiLM modulation — per-sample (γ, β) broadcast over N nodes.
+        if film_params is not None:
+            gamma, beta = film_params
+            fx = gamma.unsqueeze(1) * fx + beta.unsqueeze(1)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -260,6 +295,17 @@ class Transolver(nn.Module):
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
 
+        # H52: FiLM global conditioning (added AFTER self.apply so head zero-init
+        # survives the trunc_normal_ override in _init_weights).
+        self.register_buffer(
+            "cond_indices",
+            torch.tensor([35, 36, 40], dtype=torch.long),
+        )
+        self.film = FiLMGenerator(n_cond=3, n_hidden=n_hidden, n_blocks=n_layers)
+        for head in self.film.heads:
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -271,9 +317,11 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        cond_scalars = x[:, 0, self.cond_indices]
+        film_list = self.film(cond_scalars)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            fx = block(fx, film_params=film_list[i])
         return {"preds": fx}
 
 
@@ -527,6 +575,25 @@ print(
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+# H52: FiLM diagnostic
+n_film_params = sum(p.numel() for p in model.film.parameters())
+print(f"[H52] FiLM params: {n_film_params} (in other_params group, lr={cfg.lr:.2e}, wd={cfg.weight_decay:.0e})")
+print(f"[H52] cond_indices: {model.cond_indices.tolist()}")
+# Pull one training batch and confirm cond scalar values look reasonable
+with torch.no_grad():
+    for x_dbg, _y_dbg, _is_surf_dbg, _mask_dbg in train_loader:
+        x_dbg = x_dbg.to(device)
+        x_norm_dbg = (x_dbg - stats["x_mean"]) / stats["x_std"]
+        x_norm_dbg = fourier_enc(x_norm_dbg)
+        print(
+            f"[H52] sample0 cond (normalized log_Re/AoA0/AoA1): "
+            f"{x_norm_dbg[0, 0, model.cond_indices].tolist()}"
+        )
+        print(
+            f"[H52] sample0 raw cond (raw log_Re/AoA0/AoA1):    "
+            f"{x_dbg[0, 0, [13, 14, 18]].tolist()}"
+        )
+        break
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -686,9 +753,19 @@ freqs_summary = {
     "final/freqs_abs_drift": freq_drift,
     "final/freqs_rel_drift": freq_rel_drift,
 }
+# H52: Final FiLM γ/β stats at the population-mean (zero) condition.
+final_film_stats: dict[str, float] = {}
+with torch.no_grad():
+    cond0 = torch.zeros(1, 3, device=device)
+    film0 = model.film(cond0)
+    for li, (g, b) in enumerate(film0):
+        final_film_stats[f"final/film_gamma_l{li}_mean"] = float(g.mean().item())
+        final_film_stats[f"final/film_gamma_l{li}_std"] = float(g.std().item())
+        final_film_stats[f"final/film_beta_l{li}_mean"] = float(b.mean().item())
+        final_film_stats[f"final/film_beta_l{li}_std"] = float(b.std().item())
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **freqs_summary, **final_film_stats},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -703,6 +780,14 @@ for k in range(N_FREQS):
     print(
         f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
         f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
+    )
+print("[H52] Final FiLM γ/β stats (cond=zero, population-mean):")
+for li in range(len(model.blocks)):
+    print(
+        f"  block {li}: γ mean={final_film_stats[f'final/film_gamma_l{li}_mean']:.4f} "
+        f"std={final_film_stats[f'final/film_gamma_l{li}_std']:.4f}  "
+        f"β mean={final_film_stats[f'final/film_beta_l{li}_mean']:.4f} "
+        f"std={final_film_stats[f'final/film_beta_l{li}_std']:.4f}"
     )
 
 # --- Test evaluation + local summary ---
