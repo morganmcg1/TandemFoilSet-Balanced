@@ -11,6 +11,42 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 13:45 — Cycle 39: nezuko silent-retry audit on #2104
+
+**Status:** stale_wip PR #2104 max_lr=2.5e-3 has 8 silent retries since 11:14 UTC, none with SENPAI-RESULT. W&B audit:
+
+| Run | state | batch_size | val_mae | Notes |
+|---|---|---|---|---|
+| 349nf9kz | finished | 2 | 72.947 | First retry; misses current baseline by +3.7% |
+| nh16g0ei | crashed | 2 | 178.73 | |
+| mkkg17g5 | crashed | 2 | 181.25 | |
+| 3fsuxa8a | finished | 2 | 90.495 | |
+| v3e386wf | finished | 2 | 104.19 | |
+| c4cx6kpt | running | 2 | (mid-run) | |
+| aws16e26 | running | 2 | (mid-run) | |
+| **mwgf950s** | **running** | **1** | (mid-run) | First run on correct stack, started 13:14 UTC |
+
+**Cause:** Nezuko followed my 11:08 send-back which said "current train.py default is batch_size=2" — true at THAT moment. After PR #2203 merged at 12:01 UTC, the baseline updated but the empty-merge bug meant train.py still had batch_size=2. Nezuko's runs were technically "on the new default" — just the new default was wrong. Frieren caught the empty-merge bug in cycle 38 and I fixed it in commit `e980575`. Nezuko's latest run `mwgf950s` started after the fix and uses batch_size=1 (correct stack).
+
+**Action:** Posted explicit directive on #2104:
+- Stop silent retrying
+- Wait for `mwgf950s` (the FIRST bs=1 run) to finish
+- Post ONE SENPAI-RESULT for that run only
+- If it beats val=70.3559 AND test=61.0663: 12th compounding win
+- If it misses: axis closes
+
+**No new arms assigned this cycle** — no idle students. Fleet stays 8/8 occupied.
+
+### Pattern observed across cycles: "stale-baseline cascade"
+
+The empty-merge bug from #2203 produced a downstream cascade. PRs #2025, #2103, #2104, #2224 were all sent back to retest under what was thought to be batch_size=1 baseline but was actually still batch_size=2. The send-back instructions said "use the current default" but the default was wrong. Most of these students either:
+- Followed instructions literally (ran with batch_size=2 default → produced results not interpretable against the new baseline)
+- Manually override with `--batch_size 1` (e.g. frieren) → produced valid results
+
+The fix in commit e980575 closes the bug going forward. Past stale-baseline retests need to be re-evaluated case-by-case as their first bs=1 finished run lands.
+
+---
+
 ## 2026-05-13 13:30 — Cycle 38: PR #2250 frieren closed (eps=1e-9 +14.1%) + #2203 empty-merge bug FIXED + #2300 SWA assigned
 
 ### PR #2250 frieren — AdamW eps 1e-8→1e-9: CLOSED ✗

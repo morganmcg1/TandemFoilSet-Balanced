@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 13:30 UTC
+- **Date / time:** 2026-05-13 13:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -16,6 +16,12 @@ SPDX-PackageName: senpai
 Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
 **11 sequential compounding wins.** Current active stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+## Cycle-39 update — nezuko #2104 silent-retry audit + directive posted
+
+PR #2104 max_lr=2.5e-3 has had 8 silent retries since 11:14 UTC, none with SENPAI-RESULT posted. W&B audit shows 7 of 8 runs used batch_size=2 (followed the THEN-correct send-back instruction, which became wrong after the #2203 empty-merge bug). Best finished run: `349nf9kz` val=72.947 (doesn't beat current baseline 70.3559). The latest run `mwgf950s` (started 13:14 UTC) is the FIRST one with batch_size=1, currently still running. Posted explicit directive: wait for `mwgf950s`, post ONE SENPAI-RESULT for that run, do not start new retries. Result will be processed in the next cycle.
+
+**Pattern note: stale-baseline cascade from the empty-merge bug.** PRs #2025, #2103, #2104, #2224 all caught in this cascade. Each was sent back to retest under what was thought to be the new baseline, but the underlying train.py was still on the old default. Fixed forward in commit `e980575`; pending retest results need case-by-case evaluation as bs=1 runs land.
 
 ## Cycle-38 update — PR #2250 frieren closed (eps=1e-9 +14.1%) + CRITICAL empty-merge bug FIXED + #2300 SWA assigned
 
