@@ -37,6 +37,30 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 11:15 — PR #2105 (`charliepai2g24h4-tanjiro/swiglu-activation`)
+
+SwiGLU gated MLP replacing GELU in all 5 TransolverBlocks. `inner_dim=176` (= round_up8(256×2/3)), bias-free gate and up projections, bias-free down projection. +8,320 params (+1.24%). Per-token gated feature routing dramatically improves all 4 splits, with largest gains on OOD-flavoured splits (re_rand −8.73% val / −13.62% test; camber_cruise −10.49% val / −14.43% test). **⚠ Measurement note:** this run was on the pre-#1754 advisor HEAD (cosine T_max=15, no LR warmup). The merged code includes both SwiGLU AND LR warmup (#1754). A re-baseline confirmation run is in-flight.
+
+- **`val_avg/mae_surf_p`** = **68.812** (best @ epoch 12; −7.53% vs #2018 baseline 74.415; −6.96% vs #1754 baseline 73.958)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **59.410** (−9.33% vs #2018; −7.89% vs #1754)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 76.377 (−5.60% vs #2018)
+  - `val_geom_camber_rc` = 79.291 (−6.29% vs #2018)
+  - `val_geom_camber_cruise` = 52.005 (−10.49% vs #2018)
+  - `val_re_rand` = 67.573 (−8.73% vs #2018)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 67.134 (−4.94% vs #2018)
+  - `test_geom_camber_rc` = 69.308 (−6.16% vs #2018)
+  - `test_geom_camber_cruise` = 42.352 (−14.43% vs #2018)
+  - `test_re_rand` = 58.848 (−13.62% vs #2018)
+- **Mechanism**: gated SwiGLU (`SiLU(W_gate·x) ⊙ W_up·x` then W_down) provides per-token per-channel feature routing. On OOD samples the gate selectively suppresses irrelevant Fourier bands, acting as a learned input-dependent nonlinearity where fixed GELU cannot adapt. Best epoch advances 14→12 (SwiGLU converges ~2 epochs faster). LayerScale γ_l attn means stable (0.021–0.027), MLP means 0.041–0.053.
+- **Compound progress**: 12 merges, **100.957 → 68.812 = −31.8%** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→**#2105**)
+- **Param count**: 677,591 (+8,320 / +1.24% vs 669,271).
+- **Metric artifacts**: `models/model-charliepai2g24h4-tanjiro-swiglu-activation-20260513-091304/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-tanjiro --experiment_name charliepai2g24h4-tanjiro/swiglu-activation`
+
+---
+
 ### 2026-05-13 10:05 — PR #1754 (`charliepai2g24h4-nezuko/lr-warmup-h19`)
 
 Linear LR warm-up over epoch 1 (per-batch LinearLR) followed by cosine decay T_max=14 epochs (SequentialLR). Addresses the ep1 grad-norm spike seen on the compound stack; orthogonal to all prior merged components. Per-split gain concentrated on OOD-geom-cruise (−2.94% val / −5.51% test) and Re-rand (−1.59% val / −4.06% test) — the splits where LayerScale init=0.025 sacrificed OOD coverage; warmup rescues them by giving γ_l a more stable starting trajectory.
