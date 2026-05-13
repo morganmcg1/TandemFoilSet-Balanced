@@ -469,13 +469,14 @@ print(
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-# Linear LR warmup over the first epoch, then cosine decay over the remaining
-# epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
-# so T_max for the cosine phase is expressed in batch steps, not epochs.
+# Linear LR warmup over the first epoch, then SGDR cosine annealing with warm
+# restarts. SequentialLR is stepped per *training step* (see scheduler.step
+# below), so T_0 is expressed in batch steps, not epochs.
+# T_0 = 10 epochs in steps, T_mult = 2 → cycles at epochs 10, 30, 70, ...
 warmup_steps = len(train_loader)
-cosine_steps = max((MAX_EPOCHS - 1) * len(train_loader), 1)
-cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=cosine_steps
+sgdr_T_0 = 10 * len(train_loader)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=sgdr_T_0, T_mult=2, eta_min=0.0
 )
 warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer,
