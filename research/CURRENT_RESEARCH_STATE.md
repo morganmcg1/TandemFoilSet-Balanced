@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 08:35 UTC
+- **Date / time:** 2026-05-13 08:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -60,12 +60,13 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 - p_weight=3.0: +6.3%, over-emphasises pressure under MAE-like gradient regime
 - grad_clip=0.5: +12%, undershoots optimizer step magnitude
 - smooth_l1 β<0.25: high seed variance at β=0.10, neither run beats new baseline; β=0.25 confirmed optimum
+- EMA model weights: all decay values tested (0.9999, 0.999, 0.99 with/without warmup) regress ~20-25%; OneCycleLR aggressive anneal makes live model strictly better than any EMA snapshot (closed cycle 26)
 
 ### In-flight WIP
 
 | PR | Student | Hypothesis |
 |---|---|---|
-| #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
+| #2085 | fern | batch_size=2 (effective batch 8→4: conjugate to failed grad_accum=4; AdamW tolerates noisier steps) |
 | #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
 | #2065 | alphonse | AdamW amsgrad=True (max v_t stabilizer with beta2=0.99) |
 | #2076 | edward | AdamW beta1 0.95→0.97 (push first-moment memory further) |
@@ -78,9 +79,9 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 
 1. **β sweep closed below 0.25** — β=0.10 closed (seed variance ≥2.6, neither run beats new baseline). β=0.25 confirmed optimum; further reduction adds noise without clear gain.
 2. **beta2 continuation** — 0.99 won convincingly, 0.98 in-flight (#2008). If that also wins, the optimum may be near 0.97-0.95.
-3. **eps tuning** (#1977 edward) — pairs naturally with beta2 (controls denominator floor in AdamW update).
+3. **beta1 continuation** (#2076 edward) — 0.95 won (#1867); testing 0.97 (more memory). eps axis closed upward (1e-6 worse).
 4. **p_weight rebalancing** (#1958 frieren) — under β=0.25, gradient magnitudes are more uniform; p_weight=3 may push too hard.
-5. **EMA model weights** (#1892 fern) — zero-cost technique, just needs correct decay for our training horizon.
+5. **Effective batch size** (#2085 fern) — smaller effective batch (4 vs 8) to add gradient noise that AdamW beta2=0.99 can handle. EMA axis fully closed (all decays ~20-25% worse).
 6. **Post-wins: per-channel β** — if β=0.10 confirms the trend, try β_p=0.05, β_U=0.25 (channel-specific loss shaping — novel direction not yet tried).
 7. **Optimizer: weight_decay retest** — wd was never retuned after 6 compounding merges changed the gradient regime substantially.
 

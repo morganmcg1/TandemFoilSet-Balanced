@@ -32,6 +32,31 @@ Silent-retry note issued again. This is a recurring pattern with edward. Pod res
 
 ---
 
+## 2026-05-13 08:35 — Cycle 26: #1892 fern EMA closed + #2085 assigned
+
+### PR #1892 fern — EMA model weights (decay sweep 0.999/0.99 + warmup): CLOSED ✗
+
+W&B diagnosis (runs after 2026-05-13T06:20Z):
+| Run | Config | Status | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|-----|--------|--------|-------------------|---------------------|
+| 9aeq4sqd | decay=0.999, warmup | finished | 97.24 | 87.10 |
+| 8ie3udu0 | decay=0.999, warmup | crash @7m | — | — |
+| 7mrqtnmm | decay=0.99, warmup | running @step2462 | 94.93 (trajectory) | — |
+
+**All tested decay values regress ~20-25%** vs baseline 77.6444. Prior runs: decay=0.9999 without warmup also failed. Full axis closure: 4 values tested (0.9999, 0.999, 0.99 with/without warmup), none beats live model.
+
+**Root cause:** Short 18-epoch training + OneCycleLR cosine anneal to near-zero forces convergence so aggressively that the live model is still descending at termination. Any EMA snapshot lags behind a live model that's still improving. EMA helps when training noise dominates near a flat optimum — here OneCycleLR's aggressive final anneal makes the lag mechanism dominant.
+
+EMA axis fully closed.
+
+### New assignment (cycle 26)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| fern | batch_size=2 (effective batch 4→4→8: reverse-conjugate to failed grad_accum=4 attempt) | #2085 |
+
+---
+
 ## 2026-05-13 08:10 — Cycle 24: 2 closed + 2 new arms
 
 ### PR #2026 nezuko — weight_decay=5e-5: CLOSED ✗
