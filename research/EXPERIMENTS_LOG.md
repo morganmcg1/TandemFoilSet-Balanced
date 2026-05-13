@@ -1,5 +1,143 @@
 # SENPAI Research Results
 
+---
+
+## 2026-05-13 10:30 — PR #2031: Weight decay re-tune 1e-4 → 5e-4 **[WINNER — NEW BASELINE]**
+
+- **Branch:** `willowpai2g48h4-fern/weight-decay-sweep` (MERGED)
+- **Student:** willowpai2g48h4-fern
+- **W&B run:** `u3q47f4s` (WD=5e-4 arm)
+
+### Results
+
+| Metric | Baseline (#1795) | WD=3e-5 | WD=5e-4 | Δ (5e-4) |
+|--------|-----------------|---------|---------|----------|
+| `val_avg/mae_surf_p` | 97.9914 | ~99 | **93.6198** | **−4.46%** |
+| `test_avg/mae_surf_p` | 88.5311 | — | **83.8825** | **−5.26%** |
+| `val_single_in_dist` | — | — | best arm | −8.9% |
+| `val_geom_camber_cruise` | — | — | best arm | −7.5% |
+| `val_re_rand` | — | — | best arm | −4.3% |
+| `val_geom_camber_rc` | — | — | flat | +1.8% |
+| Best epoch | 11-14 | — | 14 (descending) | — |
+
+### Analysis
+
+WD=1e-4 was a survivor from the BIVW era (cycles 2-3) — it had been untouched through BIVW, Huber, decoupled-LR merges. This is **hyperparameter staleness in action**: each merged stage changed the loss landscape and the "correct" WD changed too, but we never re-swept it.
+
+Mechanism: heavier regularization at 5e-4 limits overfitting on the high-Re in-distribution split (val_single_in_dist −8.9%) while also improving OOD geometry splits (cruise −7.5%). The flat result on val_geom_camber_rc (+1.8%) suggests head-capacity or encoder features may limit OOD generalization on extreme camber geometries — consistent with #2057's negative finding that wider surf_head doesn't help.
+
+**Lesson:** Hyperparameter staleness is real but per-axis. WD was stale; encoder LR (confirmed optimal in #1974) was not. Always audit optimizer hyperparameters when the loss formulation changes.
+
+---
+
+## 2026-05-13 10:30 — PR #2057: Wider surf_head hidden_dim {64→128, 64→256}
+
+- **Branch:** `willowpai2g48h4-askeladd/wider-surf-head` (CLOSED — head not the bottleneck)
+- **Student:** willowpai2g48h4-askeladd
+- **W&B run:** (reported in PR comments)
+
+### Results
+
+| Metric | Baseline | Arm 1 (h=128) | Δ |
+|--------|---------|--------------|---|
+| `val_avg/mae_surf_p` | 93.6198 | ~98.6 | **+5.36% regression** |
+
+Arm 2 (h=256) skipped per branching rule.
+
+### Analysis
+
+The surf_head hidden_dim 64→128 experiment falsified the capacity-bottleneck hypothesis for the head. The head has 0.026M params; the Transolver encoder has the overwhelming share of parameters and representations. Wider head adds parameters that cannot improve what the encoder provides.
+
+**Key diagnostic from #2057 + #2058**: the student logged both `sh_grad_norm` (0.77× encoder) and per-epoch weight norms. The head is NOT gradient-saturated, NOT capacity-limited, and NOT gradient-clipped-limited. The late-epoch oscillation source is in the optimizer step (LR × m/√v), specifically the 10× LR differential between head and encoder.
+
+**Lesson:** Encoder is the representation bottleneck. Capacity scaling on surf_head is wasted unless encoder is scaled simultaneously.
+
+---
+
+## 2026-05-13 10:30 — PR #2058: Per-group gradient clipping on surf_head {max_norm=0.5, 1.0}
+
+- **Branch:** `willowpai2g48h4-thorfinn/surf-head-grad-clip` (CLOSED — wrong mechanism)
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B run:** (reported in PR comments)
+
+### Results
+
+| Metric | Baseline | Arm 1 (clip=0.5) | Arm 2 (clip=1.0) | Best Δ |
+|--------|---------|-----------------|-----------------|--------|
+| `val_avg/mae_surf_p` | 93.6198 | ~103 | ~104 | **+10.39% regression** |
+
+### Analysis
+
+The diagnostic logging was the most valuable output of this experiment: `sh_grad_norm` was consistently 0.77× the encoder grad norm across training. The "large update" in the late-epoch spike comes from the 10× LR multiplier, not from large gradients. Gradient clipping at max_norm ∈ {0.5, 1.0} on surf_head therefore clips BOTH the noise AND the productive signal, causing regression.
+
+**Key insight (falsification):** The stabilization mechanism for the e12 spike must target the optimizer step magnitude (LR × m/√v), not the gradient ‖g‖. This narrows the search space to: (a) step-decay surf_head LR at late epochs, (b) AdamW ε (denominator floor), (c) cosine T_max (LR schedule that decays faster). All three assigned in cycle 30.
+
+---
+
+## 2026-05-13 10:30 — PR #1974: Encoder LR re-tune {3e-4, 7e-4}
+
+- **Branch:** `willowpai2g48h4-edward/encoder-lr-retune` (CLOSED — encoder LR confirmed optimal)
+- **Student:** willowpai2g48h4-edward
+- **W&B run:** (reported in PR comments)
+
+### Results
+
+| Metric | Baseline | Arm 1 (lr=3e-4) | Arm 2 (lr=7e-4) | Best Δ |
+|--------|---------|----------------|----------------|--------|
+| `val_avg/mae_surf_p` | 93.6198 | ~99 | ~98 | **+5.42% regression** |
+| `test_avg/mae_surf_p` | 83.8825 | — | — | +3.18% regression |
+
+### Analysis
+
+Encoder LR=5e-4 is the local optimum even at the new WD=5e-4 baseline. The 3e-4 arm underfits (model doesn't descend fast enough under 14-epoch cap), and 7e-4 overshoots (late-epoch spike exacerbated at higher LR).
+
+**Important finding:** Encoder LR and WD are roughly orthogonal — the WD win (#2031) did not shift the LR optimum. This confirms that the two axes were genuinely independent.
+
+---
+
+## 2026-05-13 10:30 — PR #1922: Per-channel Huber delta {δ_p=0.5, δ_ux/uy=1.0/2.0}
+
+- **Branch:** `willowpai2g48h4-nezuko/per-channel-huber-delta` (CLOSED — global δ=0.5 is correct)
+- **Student:** willowpai2g48h4-nezuko
+- **W&B run:** (reported in PR comments)
+
+### Results
+
+| Metric | Baseline | Arm 1 (δ_ux=1.0, δ_p=0.5) | Arm 2 (δ_ux=2.0, δ_p=0.5) | Best Δ |
+|--------|---------|--------------------------|--------------------------|--------|
+| `val_avg/mae_surf_p` | 93.6198 | ~98 | ~99 | **+5.61% regression** |
+| `test_avg/mae_surf_p` | 83.8825 | — | — | +3.70% regression |
+
+### Analysis
+
+Larger δ on Ux/Uy flattens mid-magnitude velocity gradients. With δ=2.0, residuals <2.0 see MSE behavior — this over-smooths the Ux/Uy signal that the encoder uses for geometry reasoning. The global δ=0.5 is the correct balanced value.
+
+**Why this was surprising:** The hypothesis was that Ux/Uy have smoother residual distributions than pressure and might benefit from larger δ. But surface pressure residuals are the hardest to fit (largest MAE), and they drive backprop indirectly through the shared encoder. Flattening Ux/Uy gradients weakens the encoder's geometry signal, which then hurts the very pressure prediction we're trying to improve.
+
+---
+
+## 2026-05-13 10:30 — PR #1496: Pressure-channel emphasis {pw=3, pw=5} on both vol+surf loss
+
+- **Branch:** `willowpai2g48h4-alphonse/pressure-channel-prioritized-loss` (CLOSED — mean-normalisation bug)
+- **Student:** willowpai2g48h4-alphonse
+- **W&B run:** (reported in PR comments)
+
+### Results
+
+| Metric | Baseline | Arm 1 (pw=3) | Arm 2 (pw=5) | Best Δ |
+|--------|---------|-------------|-------------|--------|
+| `val_avg/mae_surf_p` | 93.6198 | ~112 | ~114 | **+20.04% regression** |
+
+### Analysis
+
+The implementation used mean-normalisation: with pw=3, normalised weights become [0.6, 0.6, 1.8] — meaning Ux/Uy were DOWN-weighted 40% and pressure only mildly up-weighted relative to uniform. Net effect: worse at velocity AND worse at pressure. The hypothesis was sound but the implementation was backwards.
+
+**Root cause:** Mean-normalisation with [1, 1, 3] yields weights ÷ mean=5/3 → [0.6, 0.6, 1.8]. Both 3× and 5× arms regress monotonically, consistent with the optimal weight being in the sub-unit range once you correct the normalisation.
+
+**Follow-up (#2124):** Surface-only pressure weight WITHOUT mean-normalisation, with k∈{0.5, 1.5} to explicitly test sub-unit pressure weighting. Volume loss kept uniform.
+
+---
+
 ## 2026-05-13 07:25 — PR #1987: Stochastic Depth (DropPath) on Transolver blocks: regularization unlock
 
 - **Branch:** `willowpai2g48h4-fern/stochastic-depth` (CLOSED — mechanism works, wall-clock-bound)
