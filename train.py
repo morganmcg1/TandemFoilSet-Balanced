@@ -385,7 +385,8 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
-SINGLE_DOMAIN_BOOST = 2.0
+SINGLE_DOMAIN_BOOST = 1.5
+print(f"[sampler-reweight] boost_factor: {SINGLE_DOMAIN_BOOST}x")
 
 if not cfg.debug:
     with open(Path(cfg.splits_dir) / "meta.json") as f:
