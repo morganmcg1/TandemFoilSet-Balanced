@@ -493,6 +493,11 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
+# Determinism seed (PR #1421 advisor request): eliminate seed noise across runs.
+# Set AFTER RFF B matrix (seed=42) is drawn so RFF stays reproducible across all
+# experiments; this fixes the downstream draws used for model init / sampler / dropout.
+torch.manual_seed(0)
+
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
