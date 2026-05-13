@@ -600,6 +600,7 @@ class Config:
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
+    t_max: int = -1  # CosineAnnealingLR T_max; -1 = use MAX_EPOCHS (current behavior)
 
 
 cfg = sp.parse(Config)
@@ -709,12 +710,16 @@ else:
     log_sigmas = None
     optimizer = _build_optimizer(cfg.optimizer, model.parameters(), lr=cfg.lr, default_wd=cfg.weight_decay)
 print(f"Optimizer: {cfg.optimizer.upper()} (lr={cfg.lr:.2e}, wd={cfg.weight_decay:.2e})")
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+effective_t_max = cfg.t_max if cfg.t_max > 0 else MAX_EPOCHS
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=effective_t_max, eta_min=cfg.lr * 0.05
+)
+print(f"Cosine schedule: T_max={effective_t_max}, eta_min={cfg.lr * 0.05:.2e}")
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
 swa_start_frac = 0.75
-swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
+swa_start_epoch = max(int(swa_start_frac * MAX_EPOCHS), effective_t_max)
 swa_model = AveragedModel(model)
 swa_lr = cfg.lr * 0.2
 swa_scheduler = SWALR(optimizer, swa_lr=swa_lr, anneal_epochs=2, anneal_strategy="cos")
@@ -739,6 +744,9 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "t_max": cfg.t_max,
+        "effective_t_max": effective_t_max,
+        "cosine_eta_min": cfg.lr * 0.05,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -1116,6 +1124,9 @@ if best_metrics:
         "swa_start_frac": swa_start_frac,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "t_max": cfg.t_max,
+        "effective_t_max": effective_t_max,
+        "cosine_eta_min": cfg.lr * 0.05,
         "swa_val_avg/mae_surf_p": swa_val_avg_surf_p,
         "swa_test_avg/mae_surf_p": (swa_test_avg["avg/mae_surf_p"] if swa_test_avg else None),
         "base_best_epoch": best_metrics["epoch"],
