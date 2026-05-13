@@ -191,7 +191,8 @@ class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
                  stoch_depth_prob: float = 0.0,
-                 layer_scale_init: float = 0.025):
+                 layer_scale_init: float = 0.025,
+                 layer_scale_init_attn: float = 0.05):
         super().__init__()
         self.last_layer = last_layer
         self.stoch_depth_prob = stoch_depth_prob
@@ -202,7 +203,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = SwiGLUMLP(hidden_dim, hidden_dim * mlp_ratio)
-        self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
+        self.layer_scale_attn = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init_attn)
         self.layer_scale_mlp = nn.Parameter(torch.ones(hidden_dim) * layer_scale_init)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
