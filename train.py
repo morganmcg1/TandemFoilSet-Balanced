@@ -535,6 +535,7 @@ class Config:
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
+    use_gc: bool = False  # Gradient Centralization (Yong et al. 2020) on 2D+ weight grads.
 
 
 cfg = sp.parse(Config)
@@ -623,6 +624,42 @@ if cfg.use_kendall_uncertainty:
 else:
     log_sigmas = None
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+# Gradient Centralization (Yong et al. ECCV 2020): subtract gradient mean over
+# input-fan dims so each weight update is on a zero-mean hyperplane. Only applied
+# to 2D+ weight tensors; biases / 1D LayerNorm params are skipped.
+def _apply_gc(grad):
+    if grad is not None and grad.ndim >= 2:
+        reduce_dims = list(range(1, grad.ndim))
+        return grad - grad.mean(dim=reduce_dims, keepdim=True)
+    return grad
+
+gc_param_names: list[str] = []
+gc_diag: dict = {"param_name": None, "pre_mean_abs_max": None, "post_mean_abs_max": None}
+if cfg.use_gc:
+    # Pick the first 2D+ weight and register a diagnostic recorder BEFORE the GC hook.
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.ndim >= 2 and 'bias' not in name:
+            gc_diag["param_name"] = name
+
+            def _record_pre_gc(grad, _gd=gc_diag):
+                if _gd["pre_mean_abs_max"] is None and grad is not None and grad.ndim >= 2:
+                    rd = list(range(1, grad.ndim))
+                    _gd["pre_mean_abs_max"] = grad.mean(dim=rd).abs().max().item()
+                return None  # leave grad unchanged
+
+            param.register_hook(_record_pre_gc)
+            break
+
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.ndim >= 2 and 'bias' not in name:
+            param.register_hook(_apply_gc)
+            gc_param_names.append(name)
+    print(
+        f"Gradient Centralization: ON — hooks registered on {len(gc_param_names)} "
+        f"weight tensors (2D+, no biases). Diagnostic param: {gc_diag['param_name']}"
+    )
+
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
@@ -750,6 +787,27 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        if (
+            cfg.use_gc
+            and gc_diag["post_mean_abs_max"] is None
+            and gc_diag["param_name"] is not None
+        ):
+            # First-step GC verification: after backward, param.grad reflects the
+            # GC-modified gradient. Should be ~0 mean per fan-in row.
+            for _name, _p in model.named_parameters():
+                if _name == gc_diag["param_name"] and _p.grad is not None:
+                    rd = list(range(1, _p.grad.ndim))
+                    gc_diag["post_mean_abs_max"] = _p.grad.mean(dim=rd).abs().max().item()
+                    print(
+                        f"GC hook confirmed on '{_name}': "
+                        f"pre_mean_abs_max={gc_diag['pre_mean_abs_max']:.3e} → "
+                        f"post_mean_abs_max={gc_diag['post_mean_abs_max']:.3e}"
+                    )
+                    wandb.summary["gc_diag/param_name"] = _name
+                    wandb.summary["gc_diag/pre_mean_abs_max"] = gc_diag["pre_mean_abs_max"]
+                    wandb.summary["gc_diag/post_mean_abs_max"] = gc_diag["post_mean_abs_max"]
+                    wandb.summary["gc_diag/n_hooked_params"] = len(gc_param_names)
+                    break
         grad_norm_val = None
         clip_fired = 0.0
         if cfg.max_norm > 0:
