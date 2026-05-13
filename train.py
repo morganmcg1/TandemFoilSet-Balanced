@@ -503,6 +503,11 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup,
 
 channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
 
+# Node dropout (PR #1815): randomly drop volume nodes from the training loss
+# mask each step. Surface nodes are always kept (surf_weight=10 makes surface
+# the dominant metric driver). Eval uses the unmodified mask.
+NODE_KEEP_PROB = 0.9
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -540,11 +545,22 @@ for epoch in range(MAX_EPOCHS):
     log_grad_norms = 4 <= (epoch + 1) <= 7
     pre_clip_norms: list[float] = []
 
+    node_dropout_logged = False
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Node dropout (PR #1815): keep all surface nodes, randomly drop volume
+        # nodes with probability (1 - NODE_KEEP_PROB). Model still sees the full
+        # padded tensor; only the loss-aggregation mask is shrunk.
+        vol_real = mask & ~is_surface
+        surf_real = mask & is_surface
+        keep_vol = torch.bernoulli(
+            torch.full(vol_real.shape, NODE_KEEP_PROB, device=device, dtype=torch.float32)
+        ).bool()
+        mask_train = surf_real | (vol_real & keep_vol)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -579,8 +595,8 @@ for epoch in range(MAX_EPOCHS):
         # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
         abs_err = (pred - y_target).abs()
         weighted = abs_err * channel_weights
-        vol_mask = mask & ~is_surface
-        surf_mask = mask & is_surface
+        vol_mask = mask_train & ~is_surface
+        surf_mask = mask_train & is_surface
         vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
         surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
@@ -595,6 +611,19 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+        if epoch == 0 and not node_dropout_logged:
+            real_n = mask.sum().item()
+            vol_n = vol_real.sum().item()
+            kept_n = mask_train.sum().item()
+            kept_vol_n = (vol_real & keep_vol).sum().item()
+            print(
+                f"  [node-dropout] keep_prob={NODE_KEEP_PROB:.2f}  "
+                f"mask_train.mean={mask_train.float().mean().item():.4f}  "
+                f"kept/real={kept_n / max(real_n, 1):.4f}  "
+                f"vol_kept_ratio={kept_vol_n / max(vol_n, 1):.4f}"
+            )
+            node_dropout_logged = True
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
@@ -640,6 +669,7 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": lr_epoch,
+        "node_keep_prob": NODE_KEEP_PROB,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
