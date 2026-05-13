@@ -559,8 +559,9 @@ model_config = dict(
     output_dims=[1, 1, 1],
     # Random Fourier Features (frozen Gaussian basis) on the (x, z) coords.
     # 2*num_fourier_freq extra dims appended to the 24-d input before preprocess.
+    # SIGMA recalibrated for observed post-norm coord std ≈ 4 (range ~[-7,+7]).
     num_fourier_freq=4,
-    fourier_sigma=1.0,
+    fourier_sigma=0.05,
 )
 
 model = Transolver(**model_config).to(device)
