@@ -152,7 +152,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 layerscale_init: float = 1e-4):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -163,6 +164,12 @@ class TransolverBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
                        n_layers=0, res=False, act=act)
+        # LayerScale (Touvron et al., CaiT 2021, arXiv:2103.17239) — per-feature
+        # learnable multiplier on each residual branch, initialized small so the
+        # model starts near identity. Lets the optimiser learn per-block
+        # contribution magnitudes during training.
+        self.ls_attn = nn.Parameter(torch.full((hidden_dim,), layerscale_init))
+        self.ls_mlp = nn.Parameter(torch.full((hidden_dim,), layerscale_init))
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -171,8 +178,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx, gamma=None, beta=None):
-        fx = self.attn(self.ln_1(fx), gamma, beta) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ls_attn * self.attn(self.ln_1(fx), gamma, beta) + fx
+        fx = self.ls_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -381,9 +388,13 @@ def _git_commit_short() -> str:
         return "unknown"
 
 
-def append_metrics_jsonl(metrics_path: Path, record: dict) -> None:
+def append_metrics_jsonl(metrics_path: Path, record: dict, extra_path: Path | None = None) -> None:
+    line = json.dumps(record, sort_keys=True) + "\n"
     with open(metrics_path, "a") as f:
-        f.write(json.dumps(record, sort_keys=True) + "\n")
+        f.write(line)
+    if extra_path is not None:
+        with open(extra_path, "a") as f:
+            f.write(line)
 
 
 def write_experiment_summary(
@@ -599,6 +610,13 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+# Mirror metrics to the PR-requested path (PR #2428 layerscale-init-1e-4) so
+# the advisor can find this run's metrics at a stable location regardless of
+# the timestamped model_dir.
+metrics_extra_path = Path("metrics") / "charliepai2g24h1-nezuko" / "layerscale-init-1e-4.jsonl"
+metrics_extra_path.parent.mkdir(parents=True, exist_ok=True)
+if metrics_extra_path.exists() or metrics_extra_path.is_symlink():
+    metrics_extra_path.unlink()
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
@@ -812,6 +830,14 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    # LayerScale (CaiT) per-block telemetry — captured every epoch (cheap).
+    # If ls_* grew O(0.1-1.0) by training end, model is using LayerScale.
+    # If they stayed near 1e-4 init, the model didn't find LayerScale useful.
+    ls_attn_mean = [float(b.ls_attn.detach().mean().item()) for b in uncompiled_model.blocks]
+    ls_mlp_mean = [float(b.ls_mlp.detach().mean().item()) for b in uncompiled_model.blocks]
+    ls_attn_absmax = [float(b.ls_attn.detach().abs().max().item()) for b in uncompiled_model.blocks]
+    ls_mlp_absmax = [float(b.ls_mlp.detach().abs().max().item()) for b in uncompiled_model.blocks]
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,7 +870,12 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
-    })
+        "layerscale/init": 1e-4,
+        "layerscale/ls_attn_mean_per_block": ls_attn_mean,
+        "layerscale/ls_mlp_mean_per_block": ls_mlp_mean,
+        "layerscale/ls_attn_absmax_per_block": ls_attn_absmax,
+        "layerscale/ls_mlp_absmax_per_block": ls_mlp_absmax,
+    }, extra_path=metrics_extra_path)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
@@ -871,6 +902,10 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    print(
+        f"    LayerScale  attn_mean={[f'{v:.4g}' for v in ls_attn_mean]}  "
+        f"mlp_mean={[f'{v:.4g}' for v in ls_mlp_mean]}"
+    )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -901,7 +936,7 @@ append_metrics_jsonl(metrics_jsonl_path, {
         "slice_entropy_per_head": slice_entropy_last,
         "film_stats": slice_entropy_film_stats_last,
     },
-})
+}, extra_path=metrics_extra_path)
 
 # --- Test evaluation + local summary ---
 if best_metrics:
@@ -935,7 +970,7 @@ if best_metrics:
             "best_epoch": best_metrics["epoch"],
             "test_avg": test_avg,
             "test_splits": test_metrics,
-        })
+        }, extra_path=metrics_extra_path)
 
     write_experiment_summary(
         model_path=model_path,
