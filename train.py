@@ -427,7 +427,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    fourier_L: int = 16  # log-scale Fourier positional encoding levels (was 8 — doubling frequency resolution)
 
 
 cfg = sp.parse(Config)
