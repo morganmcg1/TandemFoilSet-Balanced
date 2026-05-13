@@ -1560,3 +1560,55 @@ val→test gap widened vs slice=24: cruise val=57.30 → test=48.14 (Δ=9.16) vs
 **Finding #34 (locality-prior OOD tradeoff)**: The slice_num lever trades off OOD generalization, not in-distribution accuracy. in_dist was the *least* sensitive split throughout the entire scan (96→48→32→24→16). Cruise/rc/re_rand move first and largest. Important prior: future capacity-tuning experiments should be evaluated first on cruise/re_rand, not in_dist.
 
 **Follow-up**: Assigned nezuko Fourier L sweep (#2393) — orthogonal positional encoding quality lever.
+
+## 2026-05-13 16:15 — PR #2344: Attention dropout=0.1: OOD regularization in PhysicsAttention — CLOSED ✗
+- Branch: willowpai2g48h1-tanjiro/attention-dropout
+- W&B runs: `apzr1rqr` (dropout=0.1), `k01964pt` (dropout=0.05)
+
+| Arm | dropout | val (best, ep) | test_avg | Δ vs 61.85 |
+|---|---|---|---|---|
+| primary | 0.1 | 70.7730 (ep 18) | **62.0441** | **+0.32% ✗** |
+| secondary | 0.05 | 72.3159 (ep 18) | **63.2177** | **+2.22% ✗** |
+
+Per-split (dropout=0.1, best arm):
+- in_dist: 63.58 (−0.98 vs 64.56 baseline — *improved*)
+- rc: 71.90 (−0.39 vs 72.29 — *slightly improved*)
+- cruise: 48.06 (**+1.34** vs 46.72 — regressed)
+- re_rand: 64.64 (+0.83 vs 63.82 — slightly regressed)
+
+Per-epoch time: 102.5s (0.1), 104.4s (0.05) — no change. Best epoch: 18 for both arms (same as baseline — no shift earlier).
+
+**Analysis**: DEFINITIVE NEGATIVE — two important findings established.
+
+**Finding #35 (capacity-limited regime confirmed)**: Best epoch unchanged at 18/18 in BOTH arms. If dropout were suppressing overfitting, best epoch would shift earlier. It didn't. The 1.47M-param Transolver at 18 epochs is **capacity-limited, not overfitting-limited**. Standard ViT regularizers (LayerScale, attention dropout) do not transfer to this regime.
+
+**Finding #36 (locality regularization incompatible with stochastic attention)**: cruise +2.86% regression confirms the prediction from the PR body: "dropout interferes with the locality regularization from slice_num=24." Mechanism: PhysicsAttention applies dropout at two sites — inside scaled_dot_product_attention on slice-to-slice attention weights, and after to_out projection. Randomly dropping individual slice-token interactions during training disrupts the geometric basis the model allocates to physics structures. The slot routing wants determinism. in_dist and rc both slightly *improved* at dropout=0.1, but cruise/re_rand regressed, confirming the effect is mediated through the locality prior, not raw fit quality.
+
+**Attention dropout lever CLOSED.** Future regularization attempts should respect the slot-routing determinism constraint.
+
+**Follow-up**: Assigned tanjiro LayerNorm → RMSNorm swap (#2425) — orthogonal normalization-type test, not regularization.
+
+## 2026-05-13 16:15 — PR #2294: surf_weight sweep (15/20): amplify surface training signal — CLOSED ✗
+- Branch: willowpai2g48h1-frieren/surf-weight-sweep
+- W&B run: `iqquyfi9` (sw=15 only; arm 2 sw=20 aborted per decision rule)
+
+| Arm | sw | val (best, ep) | test_avg | Δ vs 61.85 (slice24 best) | Δ vs 62.80 (slice32 PR-body ref) |
+|---|---|---|---|---|---|
+| primary | 15 | 71.1137 (ep 17) | **63.0596** | **+1.21% ✗** | +0.26% ✗ |
+
+Per-split (sw=15 on slice=32 stack):
+- in_dist: 63.22 (−1.49 vs sw=10 slice32 ref 64.70 — *improved*)
+- rc: 75.39 (**+3.42** vs sw=10 ref 71.97 — large regression)
+- cruise: 47.99 (−0.80 vs 48.79 — *improved*)
+- re_rand: 65.65 (−0.10 — flat)
+
+Note: ran on slice=32 stack (assigned at old baseline). Arm 2 (sw=20) correctly aborted when arm 1 regressed.
+Per-epoch time: ~108s (slice=32, as expected). Timeout at 17/18 epochs.
+
+**Analysis**: DIRECTIONALLY INFORMATIVE NEGATIVE — 3 of 4 splits *improved* with sw=15; only rc regressed (and dominated the test_avg).
+
+**Finding #37 (surf_weight has split-asymmetric effects)**: Higher surf_weight → better in_dist + cruise (more surface-specialized), but worse rc (harder to extrapolate to unseen camber geometries). Mechanism: more surface-loss weighting → model over-fits surface patterns observed during training → weakens volumetric context → hurts geometry-camber OOD split. Val improved (−0.64 vs PR-body ref) while test got worse — textbook inductive-bias mismatch on OOD splits.
+
+**Implication**: The optimum for surf_weight is BELOW 10, not above. Sweeping UP was the wrong direction. Symmetric argument: sw=5 should improve rc by ~3.4 while only losing ~2.3 on in_dist+cruise → net improvement.
+
+**Lever NOT closed**: Sweep redirected downward. Assigned sw=5 + sw=7 on current slice=24 stack (#2426).
