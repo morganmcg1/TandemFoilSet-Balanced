@@ -425,6 +425,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -478,7 +479,14 @@ all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
 
-optimizer = torch.optim.AdamW(all_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
+_head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
+optimizer = torch.optim.AdamW(
+    [
+        {"params": list(model.parameters()), "lr": cfg.lr},
+        {"params": list(surf_head.parameters()), "lr": _head_lr},
+    ],
+    weight_decay=cfg.weight_decay,
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -503,6 +511,7 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("lr_surf_head", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -622,6 +631,7 @@ for epoch in range(MAX_EPOCHS):
         "train/surf_loss": epoch_surf,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
+        "lr_surf_head": scheduler.get_last_lr()[-1],
         "epoch_time_s": dt,
         "global_step": global_step,
     }
