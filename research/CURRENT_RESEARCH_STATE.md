@@ -5,15 +5,22 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated 13:40 — Round 2 multi-arm sweeps mid-flight; W&B-observed finished arms not yet posted to PRs)
+- **Date**: 2026-05-13 (updated 14:40 — fourier-K12 merged as new baseline; Round 2 retest cycle initiated)
+- **Newly merged baseline**: PR #1986 tanjiro fourier-K12 (run `osxp8woj`) at **val 73.16 / test 63.89** (−3.7% val / −5.4% test over previous 75.96/67.53 warmup-5ep baseline). Per-split test gains: single_in_dist −11.4%, camber_rc −11.4%, camber_cruise +5.4% (regression on smooth-pressure split), re_rand +1.8%.
+- **Closed this turn**:
+  - PR #1918 fern droppath: monotone degradation 0.0→0.1→0.2 = 76.39→82.17→86.45. EMA already captures DropPath's variance-reduction effect. Stochastic-depth axis closed on EMA stack.
+  - PR #1721 askeladd re-loss-weight: monotone degradation 0.0→0.3→1.0 = 76.43→78.50→81.77. SmoothL1 already addresses gradient-dominance loss-side. Re-weighting axis fully closed (both sampling and loss-weighting).
 - **In-flight intelligence (W&B-observed, not yet PR-terminal):**
-  - alphonse #1747 slice-num=32 (run `mux49i3k`, finished 12:38): **val 65.89 / test 57.31** — likely strongest winner candidate of Round 2 (−13.3% val / −15.1% test vs new 75.96/67.53 baseline). Per-split val: 76.89 / 79.32 / 44.05 / 63.31, all 4 splits improve.
-  - edward #2119 n-layers=4 (run `7hfmeaa3`, finished 12:32): val 68.52 / test 59.38 — also clear winner (−9.8% val / −12.1% test); all 4 val splits improve.
-  - tanjiro #1986 fourier-K=12 retest on warmup stack (run `osxp8woj`, finished 12:29): val 73.16 / test 63.89 — winner candidate (−3.7% val / −5.4% test). Validates prior fourier-K=12 result post-rebase.
-  - nezuko #2202 lr=1e-3 (run `4ns00uan`, finished 12:38): val 74.14 / test 64.71 — marginal winner (−2.4% val / −4.2% test); other arms (5e-4, 2e-3) status unknown.
-  - frieren #2192 n-head=8 (run `ram7l00l`, finished 12:36): val 103.6 / test 93.2 — severe regression. Pending 2/4 arms.
-  - Still running: askeladd t=1.0, fern droppath-0.2, thorfinn jitter-0.005.
-- **Merge order plan once terminals post**: rank by val_avg, merge winners sequentially. Current ordering: alphonse slice-32 (val 65.89) → edward n-layers-4 (val 68.52) → tanjiro fourier-K12 (val 73.16) → nezuko lr-1e-3 (val 74.14). Each merge updates baseline; subsequent PRs are re-evaluated against new baseline.
+  - alphonse #1747 slice-num=32 (pre-fourier baseline): had W&B val 65.89 / test 57.31 — **sent back this turn for rebase+retest on new fourier-K12 baseline** (single arm slice_num=32, group `willow-r3-slice-32-retest-fourier`).
+  - edward #2119 n-layers-sweep: self-rebased onto current advisor HEAD (post-#1986), running all 3 arms (n_layers={4,5,6}) with full fourier+warmup+AMP+EMA+SmoothL1 stack. Arm A `pgdyrz7c` n_layers=5 launched 13:19.
+  - nezuko #2202 lr=1e-3 on pre-fourier baseline: was val 74.14. Now vs new 73.16 baseline likely loses; awaiting terminal.
+  - frieren #2192 n-head=8: pre-fourier W&B regression (val 103.6); 2/4 arms still TBD.
+  - tanjiro #2302 cosine-budget-match (--epochs 20, single arm): assigned 13:10 to address "cosine-22% spent" observation from #1986 terminal.
+  - thorfinn #2097 coord-jitter-aug: pod has had multiple restarts; awaiting terminal.
+- **New assignments this turn (2 idle students)**:
+  - fern #2313 higher-fourier-k {K=16, K=20}: direct extension of just-merged K=12 winner. Tests whether K curve continues monotone or has optimum.
+  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: optimizer axis (AdamW → Lion sign-based update). Orthogonal to lr-peak-sweep (different optimizer regime). Lion is in timm.optim, no new deps.
+- **Updated merge bar (vs new 73.16 baseline)**: ≤65.8 val ⇒ merge (≥10% gain), 65.8-73.2 → second seed, ≥73.2 → close.
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
@@ -72,6 +79,12 @@ The baseline Transolver recipe has several obvious soft spots:
 | `coord-jitter-aug` (thorfinn, #2097) | WIP (just assigned) | Gaussian coordinate jitter on input (x, z) channels of `x` (dims 0-1) at train time, σ proportional to per-coord x_std. Sweep σ_rel ∈ {0.005, 0.01, 0.02}. Predicted to help OOD-camber splits preferentially by augmenting near-miss geometries. Triggered by thorfinn's per-split asymmetry diagnosis from #1779 (model capacity matched-to-task → input-side augmentation rather than weight regularization). Orthogonal to every in-flight axis (loss/capacity/regularization/schedule/sampling/features). | Low–Med |
 | `n-layers-sweep` (edward, #2119) | WIP (just assigned) | Transolver depth sweep at AMP operating point: `n_layers` ∈ {4, 5, 6}. Direct follow-up to closed #1842 (mlp-ratio subsumed by AMP) and the pre-AMP closed #1443 (width compute-bound). Mechanism: AMP has freed ~25% wall-clock — can that budget be reinvested into deeper iterative refinement rather than additional EMA cool-down? Each layer is a full TransolverBlock (attention + MLP), so deeper = more iterative refinement passes per node. Predicted: shallower (4 layers) hits ~21 epochs, deeper (6 layers) ~16 epochs. Capacity-vs-budget tradeoff at the new throughput floor. | Med |
 | `n-head-sweep` (frieren, #2192) | WIP (just assigned) | Transolver attention head count sweep at AMP+warmup operating point: `n_head` ∈ {2, 4, 8} with `n_hidden=128`. Tests whether per-head dimensionality (32 dims at current n_head=4) is optimal. n_head=2 → 64 dims per head (richer, fewer patterns); n_head=8 → 16 dims per head (more diverse, less per-head capacity). Baseline: 75.96/67.53. | Low–Med |
+| ~~`fourier-positional-features`~~ (tanjiro, #1986) | **MERGED** | K=12 Fourier features for (x,z) coords. Run `osxp8woj` val 73.16 / test 63.89, −3.7% val / −5.4% test over warmup-5ep baseline. Per-split test: single_in_dist −11.4%, camber_rc −11.4%, camber_cruise +5.4% (smooth-pressure regression), re_rand +1.8%. K curve monotone over {4,8,12} so K=16/20 worth probing (fern #2313). | Low |
+| ~~`droppath-stochastic-depth`~~ (fern, #1918) | **CLOSED** | DropPath {0.0, 0.1, 0.2}: monotone degradation 76.39→82.17→86.45 val. Prediction failed — all 4 splits degrade proportionally; no preferential camber_rc benefit. Mechanism: EMA already captures stochastic-depth's variance-reduction effect (EMA gap narrowed 19.77→11.69 at 0.1). **Dropout/stochastic-depth axis declared closed on EMA+AMP stack.** | — |
+| ~~`re-loss-weight`~~ (askeladd, #1721) | **CLOSED** | Re-weight loss by re_factor ∈ {0.0, 0.3, 1.0}. Monotone degradation 76.43→78.50→81.77 val. At t=1.0 re_factor spans 50× (0.046-2.299), starving low-Re same as discrete re-sampling did in closed #1616. SmoothL1 already addresses gradient-dominance loss-side. **Re-weighting axis fully closed (both sampling AND loss-weighting).** | — |
+| `cosine-budget-match` (tanjiro, #2302) | WIP (just assigned) | `--epochs 20` to make cosine T_max=15 schedule fully cool by 30-min wall-clock cap (vs current T_max=50 at 22% spent at cap). Direct follow-up to tanjiro's #1986 terminal observation that "schedule is the binding constraint at AMP throughput floor". Single arm. | Med |
+| `higher-fourier-k` (fern, #2313) | WIP (just assigned post-fourier-merge) | Higher Fourier K sweep on top of just-merged K=12: arms K=16 and K=20. Tests whether K monotone curve continues beyond K=12 or has an optimum. Risk: higher K may further regress camber_cruise (smooth-pressure split) — would set up K-per-split schedule axis. | Low |
+| `lion-optimizer` (askeladd, #2314) | WIP (just assigned post-re-loss-weight-close) | AdamW → Lion (Chen et al. 2023, sign-based momentum). 2 arms: Lion lr=1e-4 (recommended centroid, AdamW_lr/5) and Lion lr=3e-4 (probe near-AdamW). Lion in timm.optim, no new deps. Orthogonal to every in-flight axis (different update rule, not different lr/schedule/architecture). | Med |
 
 All prior in-flight PRs were notified of the 91.66/81.28 baseline + EMA-rebase guidance. New baseline is 77.37/68.21 (PR #1440 AMP merged) — they should rebase, include `--ema_decay 0.999` on their best variant arms, and compare against the new baseline. EMA stacks orthogonally with every Round 2 hypothesis (loss-shape, capacity, regularization, sampling, precision, schedule), so existing hypotheses remain valid; merge bar is now ~86 val / ~76 test for a clean ≥10% gain over the new baseline.
 
