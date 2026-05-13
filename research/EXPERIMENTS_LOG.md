@@ -7,6 +7,37 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 10:50 — PR #1438: 5-epoch linear LR warmup before cosine decay — MERGED
+
+- Student branch: `willowpai2g24h3-frieren/warmup-5ep`
+- Hypothesis: 5-epoch linear LR warmup from 0→peak before handing off to CosineAnnealingLR prevents early-training instability, reduces outlier basin risk (the "125.94 outlier" baseline run), and improves optimization convergence.
+
+### Results (2 arms, both rebased onto current advisor stack `--amp --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999`)
+
+| arm | warmup_epochs | val_avg | Δ val | test_avg (EMA) | Δ test | best epoch | run id |
+|---|---:|---:|---:|---:|---:|---:|---|
+| warmup-5ep (primary, **merged**) | 5 | **75.96** | **−1.41** | **67.53** | **−0.68** | 19 | `d1lqln08` |
+| warmup-3ep (bracket) | 3 | 76.72 | −0.65 | 67.24 | −0.97 | 19 | `fzxx54lu` |
+| advisor baseline (#1440 AMP+EMA) | 0 | 77.37 | — | 68.21 | — | 19 | `30wvu5r0` |
+
+Per-split val/test (warmup-5ep `d1lqln08` vs advisor baseline):
+
+| split | val (warmup-5ep) | Δ val | test (warmup-5ep) | Δ test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 88.79 | −1.97 | 80.20 | +0.32 |
+| geom_camber_rc | 89.23 | −1.50 | 79.83 | −1.25 |
+| geom_camber_cruise | 54.47 | −0.41 | 45.41 | −0.47 |
+| re_rand | 71.33 | −1.79 | 64.70 | −1.29 |
+| **avg** | **75.96** | **−1.41** | **67.53** | **−0.68** |
+
+### Analysis
+
+- In-band result (val=75.96, ±7 noise band). Merge justified by: (1) all 4 val splits improve, (2) 3/4 test splits improve, (3) both warmup arms beat baseline, (4) compound-improvements principle.
+- Epoch count = 19 (same as baseline) — warmup doesn't change throughput. The 5-epoch linear ramp has negligible overhead.
+- Mechanism signal: warmup-3ep has better test_avg (67.24 vs 67.53) but worse val_avg. warmup-5ep has slightly wider EMA window (test vs no-EMA: 67.53 vs 78.16 — EMA helps +10.6); warmup-3ep shows worse test-no-EMA (87.70), suggesting its raw trajectory was noisier.
+- Per the test-split tie-breaker lesson: 3/4 test splits favor warmup → merge confirmed.
+- **New baseline: val_avg=75.96 / test_avg=67.53** (reproduce: `--amp --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --warmup_epochs 5`)
+
 ## 2026-05-13 09:10 — PR #1842: Transolver mlp_ratio sweep (post-rebase under AMP) — CLOSED
 
 - Student branch: `willowpai2g24h3-edward/mlp-ratio-sweep`
