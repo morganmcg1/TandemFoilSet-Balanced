@@ -228,6 +228,8 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    pred_abs_max_norm = 0.0
+    pred_abs_max_orig = 0.0
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -250,12 +252,9 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
-            err = pred - y_norm
-            abs_err = err.abs()
-            beta = 0.1
-            huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
-            weighted = huber * channel_weights
+            # Pure L1 normalized-space loss, channel-weighted [1,1,3]/5
+            abs_err = (pred - y_norm).abs()
+            weighted = abs_err * channel_weights
             vol_mask = safe_mask & ~is_surface
             surf_mask = safe_mask & is_surface
             vol_loss_sum += (
@@ -273,10 +272,20 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             n_surf += ds
             n_vol += dv
 
+            # Pure-L1 numerical-stability probe (PR #1682): if pred explodes
+            # we want to catch it; mask out padded positions before the max.
+            valid = safe_mask.unsqueeze(-1)
+            pred_abs_max_norm = max(pred_abs_max_norm,
+                                    (pred.abs() * valid).max().item())
+            pred_abs_max_orig = max(pred_abs_max_orig,
+                                    (pred_orig.abs() * valid).max().item())
+
     vol_loss = vol_loss_sum / max(n_batches, 1)
     surf_loss = surf_loss_sum / max(n_batches, 1)
     out = {"vol_loss": vol_loss, "surf_loss": surf_loss,
-           "loss": vol_loss + surf_weight * surf_loss}
+           "loss": vol_loss + surf_weight * surf_loss,
+           "pred_abs_max_norm": pred_abs_max_norm,
+           "pred_abs_max_orig": pred_abs_max_orig}
     out.update(finalize_split(mae_surf, mae_vol, n_surf, n_vol))
     return out
 
@@ -465,12 +474,9 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
 
-        # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
-        err = pred - y_norm
-        abs_err = err.abs()
-        beta = 0.1
-        huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
-        weighted = huber * channel_weights
+        # Pure L1 normalized-space loss, channel-weighted [1,1,3]/5
+        abs_err = (pred - y_norm).abs()
+        weighted = abs_err * channel_weights
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
@@ -523,11 +529,16 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
     })
+    pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
+    pred_abs_max_norm_worst = max(m["pred_abs_max_norm"] for m in split_metrics.values())
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
+        f"pred_abs_max[norm={pred_abs_max_norm_worst:.2f} orig={pred_abs_max_orig_worst:.1f}]"
     )
+    if pred_abs_max_orig_worst > 1e6:
+        print(f"WARN: pred_abs_max_orig {pred_abs_max_orig_worst:.3e} exceeds 1e6 threshold (PR #1682 stability probe)")
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
