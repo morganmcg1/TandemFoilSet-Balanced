@@ -248,12 +248,17 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # H62: concentrate stoch-depth in deeper blocks (anti-redundancy training).
+        # Replaces linear schedule [0, 0.025, 0.05, 0.075, 0.1] with explicit list.
+        assert n_layers == 5, f"H62 schedule hardcoded for 5 layers, got {n_layers}"
+        stoch_depths = [0.0, 0.0, 0.05, 0.10, 0.15]
+        print(f"[H62] stoch-depth schedule: {stoch_depths}")
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
-                stoch_depth_prob=0.1 * (i / max(n_layers - 1, 1)),
+                stoch_depth_prob=stoch_depths[i],
             )
             for i in range(n_layers)
         ])
