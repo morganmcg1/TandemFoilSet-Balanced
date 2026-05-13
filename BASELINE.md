@@ -1295,3 +1295,57 @@ Note: `mlp_ratio=4` is now the default in `train.py` (merged from PR #1408). No 
 All new student experiments should compare against this number. The per-split breakdown above
 shows `val_single_in_dist` (159.7) and `val_geom_camber_rc` (136.5) are the hardest splits to
 improve; `val_geom_camber_cruise` (102.4) and `val_re_rand` (113.8) are relatively stronger.
+
+## 2026-05-13 ~16:10 — PR #2229: slice_num=24 on n_layers=3+epochs=33 (alphonse)
+
+**New best: `val_avg/mae_surf_p` = 37.366** (epoch 33/33, best_epoch=33 STILL DESCENDING, n_head=4, n_layers=3, slice_num=24, surf_weight=10)
+
+> slice_num 32→24 freed ~4s/epoch (57s→53.7s), allowing 33 epochs in the 30-min cap (29.51 min). All four splits improved on both val and test. Epoch-budget mechanism continues as dominant lever. −2.36% val / −3.38% test vs previous baseline (#2228 val=38.270).
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 3 |
+| `n_head` | 4 (default) |
+| `slice_num` | **24** |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE), `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR T_max=33 (=epochs) |
+| `epochs` | **33** (still improving at epoch 33! best_epoch=33) |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| `n_params` | 514,263 (~514K) |
+| Peak memory | 19.84 GB |
+
+### Val metrics (best checkpoint, epoch 33)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 38.082 | 46.882 |
+| geom_camber_rc | 51.356 | 56.684 |
+| geom_camber_cruise | 20.702 | 23.922 |
+| re_rand | 39.325 | 41.285 |
+| **avg** | **37.366** | **42.193** |
+
+### Test metrics (from best-val checkpoint)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 33.836 | 41.286 |
+| geom_camber_rc | 45.411 | 51.513 |
+| geom_camber_cruise | 16.874 | 20.058 |
+| re_rand | 29.365 | 33.553 |
+| **avg** | **31.371** | **36.603** |
+
+**Metric artifacts:** `models/model-slicenum24-nlayers3-epochs33-20260513-122356/metrics.jsonl`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --epochs 33 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
+  --surf_weight 10 --n_layers 3 --slice_num 24
+```
