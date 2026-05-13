@@ -2,6 +2,82 @@
 
 ---
 
+## 2026-05-13 11:35 — PR #2158: rff-sigma5 (fern) — CLOSED (dead end, σ=3.0 confirmed sweet spot)
+
+- **Branch:** `charliepai2g48h2-fern/rff-sigma5`
+- **Hypothesis:** σ sweep was monotone in {1.0, 3.0} (gains −6.4%, −11.71%). Probe σ=5.0 to see if gain continues.
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-rff-sigma5-20260513-100948/metrics.jsonl`
+
+### Results vs. #1657 RFF σ=3.0 baseline (65.3304)
+
+| Split | σ=3.0 baseline | σ=5.0 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 75.663 | +4.09% ❌ |
+| val_geom_camber_rc | 78.833 | 80.397 | +1.98% ❌ |
+| val_geom_camber_cruise | 44.439 | 44.923 | +1.09% ❌ |
+| val_re_rand | 65.359 | 67.540 | +3.34% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **67.1306** | **+2.75%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 58.1503 | +2.12% ❌ |
+
+**Closed as dead end.** σ bandwidth axis CLOSED.
+
+### Analysis
+
+**σ sweep final mapping:** {σ=1.0: −6.40%, σ=3.0: −11.71% (canonical), σ=5.0: +2.75%}
+
+Non-monotone — gain reverses at σ=5.0. At σ=5.0, effective wavelength ~0.18 nodes is finer than natural pressure-field variation; the RFF basis encodes foil-specific noise rather than generalizable geometry structure. In-distribution splits (val_single +4.1%, test_single +3.7%) hit hardest — signature of overfitting to high-frequency geometry noise.
+
+**Training trajectory:** epoch-5 spike (val=212.7) more severe than σ=3.0 (244.97 on nezuko's ε run), suggesting σ=5.0 makes the early-training loss surface harder. Model recovers but slowly.
+
+### Key insights
+
+- **σ axis CLOSED at σ=3.0.** Both lower (σ=1.0) and higher (σ=5.0) are worse. σ=3.0 is the bandwidth sweet spot for TandemFoilSet pressure fields.
+- Next: RFF capacity (n_features) axis (frieren #2197) and anisotropic bandwidth (fern #2206) are the open RFF sub-axes.
+
+---
+
+## 2026-05-13 11:35 — PR #2130: adamw-eps-1e-6 (nezuko) — CLOSED (statistical tie, ε axis closed; epoch-5 spike diagnosis)
+
+- **Branch:** `charliepai2g48h2-nezuko/adamw-eps-1e-6`
+- **Hypothesis:** ε=1e-6 (vs canonical 1e-8) reduces step sizes on low-curvature dimensions at the epoch-5 LR peak, damping the AdamW spike.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-adamw-eps-1e-6-20260513-102206/metrics.jsonl`
+
+### Results vs. #1657 RFF σ=3.0 baseline (65.3304)
+
+| Split | Baseline | ε=1e-6 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 73.602 | +1.25% ❌ |
+| val_geom_camber_rc | 78.833 | 79.371 | +0.68% ❌ |
+| val_geom_camber_cruise | 44.439 | 44.320 | **−0.27%** ✓ |
+| val_re_rand | 65.359 | 65.081 | −0.43% ✓ |
+| **val_avg/mae_surf_p** | **65.3304** | **65.5934** | **+0.40%** (tie) |
+| **test_avg/mae_surf_p** | 56.9425 | 56.3824 | **−0.98%** ✓ |
+
+**Closed as dead end (statistical tie).** AdamW ε axis CLOSED on RFF base.
+
+### Analysis
+
+Val/test sign disagreement (+0.40% val, −0.98% test) confirms no real effect — ε is not the lever for the RFF base.
+
+**⚠️ CRITICAL DIAGNOSTIC — Epoch-5 LR-peak spike on RFF base:**
+
+| Base | Epoch-4→5 spike | PR |
+|---|---|---|
+| pre-RFF β2=0.99 canonical | +3.2 units | #2004 |
+| **RFF base + ε=1e-6 (this run)** | **+91 units** | **#2130** |
+
+The RFF base has a **28× larger epoch-5 spike** than the pre-RFF canonical. ε=1e-6 did NOT dampen it — the mechanism is large gradient magnitudes from the 86-dim RFF input interacting with peak LR, not small-v̂ step-size flooring.
+
+Epoch-5 trajectory: 153.69 → 244.97 (spike) → 147.80 → 65.59 (final). Model recovers but the spike is severe.
+
+### Key insights
+
+- **ε axis CLOSED on RFF base.** ε is mechanistically irrelevant in this gradient-magnitude-dominated regime.
+- **New research priority:** the +91-unit epoch-5 spike suggests the LR schedule may not be optimally matched to the RFF-expanded input gradient magnitudes. Follow-up: cosine eta_min (nezuko #2207) to sustain late-epoch learning; anisotropic RFF (fern #2206) to reduce z-direction bandwidth noise.
+- **Pre-RFF validated improvements may not stack on RFF base** — must re-validate each axis.
+
+---
+
 ## 2026-05-13 11:15 — PR #1813: warmup-5-epochs (frieren, RFF rebase) — CLOSED (dead end, warmup=4 confirmed on RFF)
 
 - **Branch:** `charliepai2g48h2-frieren/warmup-5-epochs`

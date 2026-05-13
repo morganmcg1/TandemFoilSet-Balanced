@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~11:20 (closed #1813 frieren warmup-5 +0.85% dead end on RFF base, warmup axis locked at 4; assigned frieren #2197 rff-nfeatures-64 capacity probe)
+- **Last updated:** 2026-05-13 ~11:40 (closed #2158 fern σ=5.0 +2.75% dead end; closed #2130 nezuko ε=1e-6 tie; assigned fern #2206 anisotropic-RFF, nezuko #2207 cosine-eta-min-1e-4; epoch-5 spike diagnostic: +91 units on RFF base)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -29,21 +29,21 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in asinh-compressed target space
 - **Asinh pressure compression**: ASINH_GAIN=1.0 (pressure channel only)
 - **RFF positional encoding**: σ=3.0, 64-dim [cos, sin] of (x,z) coordinates, preprocess MLP input 24→86
-- AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0, **betas=(0.9, 0.99)**
+- AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10, **eta_min=0**), grad_clip=1.0, **betas=(0.9, 0.99)**
 - batch_size=4, surf_weight=10, NaN-skip in evaluate_split
 
 ## In-flight PRs
 
-| PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
+| PR | Student | Slug | Axis | Epoch setting | Status |
 |----|---------|------|------|------|---|
-| #2158 | fern | `rff-sigma5` | RFF bandwidth sweep: σ=3.0 → 5.0 (monotone test) | **--epochs 14** ✓ | WIP — just assigned |
-| #2197 | frieren | `rff-nfeatures-64` | RFF capacity probe: 32→64 frequencies at σ=3.0 (output 64→128 dim) | **--epochs 14** ✓ | WIP — just assigned |
-| #2184 | alphonse | `lr-2e-3-rff` | LR ceiling retest on RFF base: 1.5e-3 → 2e-3 (was +2.99% on pre-RFF; RFF may shift ceiling) | **--epochs 14** ✓ | WIP — just assigned |
-| #1815 | askeladd | `node-dropout-0.9` | Node dropout 0.9 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
-| #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
-| #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
-| #2130 | nezuko | `adamw-eps-1e-6` | AdamW ε=1e-6 (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
-| #1421 | edward | `surf-weight-25` | Decoupled surf/vol channel weighting (needs rebase on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
+| #2184 | alphonse | `lr-2e-3-rff` | LR ceiling retest on RFF base: 1.5e-3 → 2e-3 | **--epochs 14** ✓ | WIP |
+| #2197 | frieren | `rff-nfeatures-64` | RFF capacity: 32→64 frequencies at σ=3.0 (64→128 dim output) | **--epochs 14** ✓ | WIP |
+| #2206 | fern | `rff-anisotropic-sx3-sz1p5` | Anisotropic RFF: σ_x=3.0, σ_z=1.5 (chord vs height bandwidth) | **--epochs 14** ✓ | WIP — just assigned |
+| #2207 | nezuko | `cosine-eta-min-1e-4` | Cosine eta_min=1e-4: sustain learning at epoch 14 (best_epoch=14/14 consistently) | **--epochs 14** ✓ | WIP — just assigned |
+| #1815 | askeladd | `node-dropout-0.9` | Node dropout 0.9 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
+| #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
+| #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
+| #1421 | edward | `surf-weight-25` | Decoupled surf/vol weighting (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 
 ### Merged PRs (this round — new bests)
 - #1657 fern rff-pos-encoding σ=3.0: **−11.71%** val (73.9964 → 65.3304), −11.65% test — LARGEST SINGLE JUMP
@@ -51,30 +51,29 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082)
 
 ### Closed as dead ends (this round)
-- #1813 frieren warmup-5 on RFF: +0.85% vs 65.3304 (pre-RFF win −0.52% did NOT stack on RFF; warmup=4 confirmed optimum on RFF base)
-- #2045 alphonse lr-1.75e-3: +4.13% vs 74.2082 (LR axis fully mapped on pre-RFF: {1e-3: +3.96%, **1.5e-3 sweet spot**, 1.75e-3: +4.13%, 2e-3: +2.99%}; non-parabolic floor)
-- #2054 nezuko adamw-beta2-0.95: +1.12% (β2 axis mapped; non-monotone, 0.99 is sweet spot)
-- #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but optimization quality degraded)
+- #2158 fern rff-sigma5: +2.75% vs 65.3304 (σ axis non-monotone; {1.0: −6.4%, 3.0: −11.71%, 5.0: +2.75%}; σ=3.0 is sweet spot, bandwidth axis CLOSED)
+- #2130 nezuko adamw-eps-1e-6: +0.40% val (tie); **CRITICAL DIAGNOSTIC: epoch-5 spike +91 units on RFF base** (vs +3.2 pre-RFF); ε axis CLOSED on RFF base
+- #1813 frieren warmup-5 on RFF: +0.85% (pre-RFF win −0.52% DID NOT stack; warmup axis CLOSED at 4 on RFF base)
+- #2045 alphonse lr-1.75e-3: +4.13% vs 74.2082 (LR axis mapped pre-RFF; non-parabolic floor at 1.5e-3)
+- #2054 nezuko adamw-beta2-0.95: +1.12% (β2 non-monotone, 0.99 is sweet spot; β2 axis CLOSED)
+- #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but degraded pre-RFF)
 - #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419
 - #1970 nezuko drop-path-0.1: +6.99% vs 74.2082 (capacity-reducing at 14-epoch budget)
-- #1941 nezuko asinh-all-channels: +2.75% vs 74.2082 (mechanism pressure-specific)
+- #1941 nezuko asinh-all-channels: +2.75% vs 74.2082 (asinh mechanism pressure-specific)
 
 ## Current research focus
 
-1. **RFF bandwidth axis — sweep σ upward:**
-   - **#2158 fern rff-sigma5**: σ=3.0 (winner) → σ=5.0. Monotone in {1, 3}; does gain continue? If yes: push higher. If neutral/regresses: σ=3.0 is the bandwidth optimum, move to RFF capacity axis.
+1. **RFF sub-axes (3 independent experiments):**
+   - **#2197 frieren rff-nfeatures-64**: At σ=3.0, double frequency count 32→64 (output 64→128 dim). Tests kernel approximation quality. Param increase tiny (~8K). If wins → RFF capacity axis open.
+   - **#2206 fern rff-anisotropic-sx3-sz1p5**: σ_x=3.0, σ_z=1.5. Foil pressure anisotropic — sharper chord-wise variation, smoother height-wise. Tests if equal-bandwidth assumption is suboptimal.
+   - **#2184 alphonse lr-2e-3-rff**: Does the RFF input expansion shift the LR ceiling? Pre-RFF: 1.5e-3 sweet spot, 2e-3 regressed +2.99%. RFF gradients larger (+91-unit spike), ceiling may shift. Informative either way.
 
-2. **RFF capacity axis — n_features probe:**
-   - **#2197 frieren rff-nfeatures-64**: At fixed σ=3.0, double frequency count 32→64 (output 64→128 dim). Tests kernel-approx quality axis: with d=32, per-pair error ~18%; d=64 cuts to ~12.5%. Tiny param increase (~8K). If wins → capacity-limited; probe 128 next.
+2. **LR schedule sub-axes:**
+   - **#2207 nezuko cosine-eta-min-1e-4**: best_epoch=14/14 in all recent runs; current eta_min=0 freezes model at epoch 14 (~3.5e-5 LR). Non-zero floor (1e-4) may sustain learning. Motivated by the model not having converged within budget.
 
-3. **LR axis — retest ceiling on RFF base:**
-   - **#2184 alphonse lr-2e-3-rff**: Pre-RFF mapping closed (sweet spot 1.5e-3, non-parabolic floor). RFF transforms input geometry (24→86 dim), may shift LR ceiling upward. Retest lr=2e-3 directly on RFF base. If <65.33 → RFF shifts ceiling; if regresses → ceiling locked at 1.5e-3 across bases.
-
-4. **AdamW ε axis:**
-   - **#2130 nezuko adamw-eps-1e-6**: Notified of RFF baseline, rebase needed.
-
-5. **Orthogonal axes rebasing on RFF:**
-   - All other in-flight PRs (#1815 askeladd, #1817 tanjiro, #1820 thorfinn, #1421 edward) notified to rebase on RFF base.
+3. **Orthogonal axes rebasing on RFF** (askeladd, tanjiro, thorfinn, edward):
+   - All notified to rebase on RFF base and compare against 65.3304.
+   - These are low-signal hypotheses on the old base; results on RFF base may differ.
 
 ## Key research insights so far
 
@@ -86,23 +85,27 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - **Asinh pressure compression (GAIN=1.0):** −1.04%. PRESSURE-SPECIFIC.
 - **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base.
 - **lr=1.5e-3 + asinh:** −3.80% further gain.
-- **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed. β2 axis MAPPED.
-- **RFF σ=3.0 BREAKTHROUGH:** −11.71% val / −11.65% test. ALL FOUR SPLITS improve. Largest single gain in programme. σ axis: {1.0: −6.4%, 3.0: −11.7%} — monotone, σ=5.0 next.
-- **Warmup axis CLOSED on RFF base:** warmup=3 (dead end pre-RFF), warmup=4 (canonical optimum), warmup=5 (+0.85% regression on RFF — pre-RFF win DID NOT stack; RFF changes gradient dynamics, extra warmup epoch loses cosine tail).
-- **14-epoch budget constraint:** Capacity-reducing regularizers fail. Confirmed by DropPath, SWA failures.
-- **Architecture/capacity axes: EXHAUSTED** (pre-RFF). RFF opens new spatial-encoding axis.
+- **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed pre-RFF. β2 axis CLOSED.
+- **RFF σ=3.0 BREAKTHROUGH:** −11.71% val / −11.65% test. ALL FOUR SPLITS improve. Largest single gain in programme.
+- **σ axis CLOSED at σ=3.0:** {1.0: −6.4%, 3.0: −11.71%, 5.0: +2.75%} — non-monotone, σ=3.0 sweet spot.
+- **Warmup axis CLOSED at warmup=4 on RFF:** warmup=5 −0.52% on pre-RFF but +0.85% on RFF. Stacking does not hold across base shifts.
+- **ε axis CLOSED on RFF base.** ε=1e-6 is mechanistically irrelevant when epoch-5 spike is gradient-magnitude dominated.
+- **EPOCH-5 SPIKE DIAGNOSTIC:** RFF base has +91-unit spike (vs +3.2 pre-RFF). Root cause: large gradient magnitudes from 86-dim RFF input × peak LR. Not addressable by ε or warmup-duration alone.
+- **14-epoch budget:** best_epoch=14/14 consistently — model never fully converged within budget. eta_min=0 freezes at ~3.5e-5 LR, leaving late-epoch learning potential on the table.
+- **Pre-RFF validated improvements may NOT stack on RFF base** — must re-validate each axis independently.
 
 ## Next research directions (when new slots open)
 
-1. **RFF capacity probe** (n_features 32→64: double 64-dim output to 128-dim) — if σ=5.0 plateau, test wider features at σ=3.0
-2. **RFF on surface normals** (add surface normal vector to RFF input, not just (x,z)) — may help cruise/rc further
-3. **Learned RFF frequencies** (train B jointly rather than fixing it) — higher capacity but adds params
-4. **lr=1.75e-3 on RFF base** (if alphonse shows ceiling above 1.5e-3 on old base)
-5. **Longer training (--epochs 18)** — best_epoch=14/14 multiple times, RFF might benefit more from longer cosine tail
-6. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip) — doubled effective data
+1. **Cosine T_max shorter** — if eta_min=1e-4 (nezuko #2207) wins, the follow-up is probing T_max=8 (keeps LR higher longer, more high-LR epochs for RFF-input optimization)
+2. **Anisotropic σ follow-up** — if fern #2206 wins (z smaller), probe σ_z=1.0 or σ_z=0.5; if ties, probe σ_x=4.0 (chord benefits from even higher bandwidth)
+3. **RFF capacity higher** — if frieren #2197 (32→64) wins, probe n_features=128 (output 256 dim)
+4. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip) — doubled effective data, likely orthogonal to all current axes
+5. **Lower LR on RFF base (lr=1e-3 retest)** — if alphonse #2184 shows lr=2e-3 regresses AND epoch-5 spike remains, lower LR may be the remedy
+6. **RFF on additional features** — apply RFF to surface normals (n_x, n_z) in addition to (x, z)
 
 ## Epoch budget arithmetic
 
-- Epoch time: ~131s (678K params, RFF negligible overhead)
+- Epoch time: ~131–133s (678K params, RFF overhead ~1s/epoch)
 - 30-min cap: **14 epochs max** (confirmed)
 - **Canonical schedule: --epochs 14, warmup_epochs=4, T_max=10 (cosine) after warmup**
+- best_epoch=14/14 consistently → model not converged; consider eta_min or longer T_max in future
