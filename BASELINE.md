@@ -1,5 +1,69 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 09:00 — PR #1995: n_layers=5 + T_max=14 (edward)
+
+**New best: `val_avg/mae_surf_p` = 47.478** (epoch 14, 30-min wall-clock cap, surf_weight=10)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | **5** ← updated |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE) in normalized space, `surf_weight=10` ← note: sw=5 not yet tested on n_layers=5 |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| Scheduler | CosineAnnealingLR **T_max=14** ← updated |
+| `epochs` | **14** ← updated |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+| `n_params` | 826,071 (−15.7% vs n_layers=6 ≈ 979,995) |
+
+> **Mechanism:** n_layers=5 reduces per-epoch time from ~138s to ~116s, enabling 14 epochs in the 30-min budget (vs 12 epochs with n_layers=6). T_max=14 aligns cosine decay to the new epoch count — the same mechanism that won PR #1793 (T_max=12 for 12 epochs), now extended by 2 extra low-LR refinement epochs. This is NOT a capacity trade-off: the model trains for longer and converges better. Peak VRAM also drops from ~50 GB to ~40 GB (−20%). surf_weight=5 compound not yet tested on this stack — immediate priority.
+
+### Val metrics (best checkpoint, epoch 14/14)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| val_single_in_dist | 52.253 | 62.425 |
+| val_geom_camber_rc | **60.809** | 67.690 |
+| val_geom_camber_cruise | 29.174 | 30.132 |
+| val_re_rand | 47.675 | 49.484 |
+| **val_avg/mae_surf_p** | **47.478** | — |
+
+### Test metrics (best-val checkpoint, epoch 14)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 46.980 |
+| test_geom_camber_rc | 54.123 |
+| test_geom_camber_cruise | 24.263 |
+| test_re_rand | 39.794 |
+| **test_avg/mae_surf_p** | **41.290** |
+
+### Improvement vs PR #1956 baseline (51.040 val / 44.390 test)
+
+| Split | Old val (n_layers=6, T=12, sw=5) | New val (n_layers=5, T=14, sw=10) | Δ val |
+|---|---|---|---|
+| single_in_dist | 56.933 | 52.253 | −8.2% |
+| geom_camber_rc | 64.886 | 60.809 | −6.3% |
+| geom_camber_cruise | 31.056 | 29.174 | −6.1% |
+| re_rand | 51.287 | 47.675 | −7.0% |
+| **avg** | **51.040** | **47.478** | **−6.98% ✓** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 14 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10
+```
+
+**Metric artifacts:** `models/model-charliepai2g48h3-edward-n-layers-5-20260513-065528/metrics.yaml`
+
+---
+
 ## 2026-05-13 07:25 — PR #1956: T_max=12 + surf_weight=5 compound (nezuko)
 
 **New best: `val_avg/mae_surf_p` = 51.040** (epoch 12, 30-min wall-clock cap, surf_weight=5)
