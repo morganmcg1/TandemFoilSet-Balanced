@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 03:25
+- 2026-05-13 03:55
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -8,11 +8,17 @@
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **73.15** | #1641 (Lion lr=3e-4, merged 2026-05-13) |
-| **test_avg/mae_surf_p** | **66.76** | #1641 — all 4 splits finite |
-| Peak VRAM | 42.11 GB | #1641 — FP32 run; merged stack has BF16 so ~33 GB expected |
+| **val_avg/mae_surf_p** | **66.32** | #1639 (Huber δ=0.5, merged 2026-05-13) |
+| **test_avg/mae_surf_p** | **61.14** | #1639 — all 4 splits finite |
+| Peak VRAM | 32.95 GB | #1639 — BF16 |
+| s/epoch | ~101 s | BF16+Lion |
 
-Merged stack: warmup3+cosine13 + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=3e-4, wd=6e-5)** + **BF16 autocast**, batch=4, seed=42.
+Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=3e-4, wd=6e-5)** + **BF16 autocast** + **Huber δ=0.5 loss**, epochs=**16** (new standard), batch=4, seed=42.
+
+**Reproduce current best (Huber δ=0.5, note: merged code is 13 epochs by default; use --epochs 16 to get combined stack):**
+```bash
+cd target/ && python train.py --epochs 16 --experiment_name huber_ep16_baseline_check --agent <student>
+```
 
 ## Key round-5 findings to date
 
@@ -21,86 +27,81 @@ Merged stack: warmup3+cosine13 + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(l
 | Baseline does ~13 epochs in 30 min (not 50) | All schedule hyperparams must be matched to budget |
 | CosineAnnealingLR(T_max=50) barely decays in 13 epochs | Matching T_max=13 alone gave 8.6% improvement (#1519) |
 | 3-epoch warmup stabilises early training | Composes cleanly with schedule fix |
-| GT NaN at cruise test sample 20 | Fixed in #1564: gt_finite_mask filter before accumulate_batch |
-| Gradient clipping max_norm=1.0 gives −7.8% (#1483, MERGED) | Pre-clip norms 45-112 >> 1.0: clipping fires EVERY step = gradient renorm |
-| lr=1e-3 + grad_clip → −9.5% (#1638, MERGED) | Biggest gain so far. Renorm every step = safe 2× LR. |
-| BF16 autocast → −1.3% val, −22% VRAM (#1565, MERGED) | Unlocks n_hidden=192, n_layers=7, batch=8 experiments |
-| **Lion optimizer (lr=3e-4) → −22.4% val (#1641, MERGED)** | **Largest single gain. Per-parameter sign quantization >> global L2 renorm** |
-| LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs (LR, clip) tapped out; both arms regressed on test |
-| EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: EMA averages early bad model |
-| n_hidden=192 regresses +47.7% (#1478, CLOSED) | Only 10/50 epochs ran; T_max=50 mismatch; revisitable with BF16+Lion |
-| surf_weight=20 regresses (#1459, CLOSED) | Budget too short for changed loss landscape |
-| Surface skip regresses (#1487, CLOSED) | Schedule absorbed the skip headroom |
+| GT NaN at cruise test sample 20 | Fixed in #1564 |
+| Gradient clipping max_norm=1.0 → −7.8% (#1483, MERGED) | Renorm-every-step regime |
+| lr=1e-3 + grad_clip → −9.5% (#1638, MERGED) | Renorm ceiling: safe 2× LR |
+| BF16 autocast → −1.3% val, −22% VRAM (#1565, MERGED) | Enables 16 epochs in budget |
+| **Lion optimizer (lr=3e-4) → −22.4% val (#1641, MERGED)** | **Per-parameter sign quantization >> global L2 renorm** |
+| **Lion + epochs=16 → −9.2% further (#1780, MERGED)** | **Non-converged at 13 epochs; cosine tail provides 3 more improvement epochs** |
+| **Huber δ=0.5 → −9.3% further (#1639, MERGED)** | **Per-element outlier capping stacks with grad_clip; δ=0.5 > δ=1.0 uniformly** |
+| LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
+| SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
+| EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
+| n_hidden=192 budget-cliff (#1755, SENT BACK) | Per-epoch slower → 1 fewer epoch → test regression; revisiting with n_hidden=160 |
+| Lion LR 2.5e-4 marginally better (#1782, SENT BACK) | 71.54 on 13-epoch stack; below new 66.32 baseline; needs re-run at epochs=16+Huber |
 
 ## Active PRs
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #1780 | tanjiro | Lion + longer cosine (epochs=16, BF16) — exploit non-convergence at epoch 13 | WIP | Beat 73.15 |
-| #1782 | frieren | Lion LR scan (2e-4, 2.5e-4, 4e-4) — narrow optimal between 1.5e-4 and 3e-4 | WIP | Beat 73.15 |
-| #1755 | fern | n_hidden=160 + n_hidden=192 (lr=4e-4) — budget-cliff follow-up after first arm tied val + test regressed | WIP (sent back) | Beat 73.15 |
-| #1656 | thorfinn | Dropout=0.1 in attention + MLP on Lion stack | WIP — needs Lion rebase | Beat 73.15 |
-| #1639 | alphonse | Huber/Smooth-L1 loss (delta=1.0) on Lion stack | WIP — needs Lion rebase | Beat 73.15 |
-| #1481 | nezuko | slice_num=128 | WIP | Beat 73.15 |
-| #1470 | edward | Instance-norm loss | WIP | Beat 73.15 |
-| #1844 | askeladd | Lion β2: 0.99 → 0.999 (slower momentum for B=4 noise) | WIP | Beat 73.15 |
+| #1879 | tanjiro | Compound: Huber δ=0.5 + epochs=16 — test both wins compose | WIP | Beat 66.32 |
+| #1880 | alphonse | Huber δ scan: δ=0.3 and δ=0.2 on epochs=16 — find optimal δ floor | WIP | Beat 66.32 |
+| #1782 | frieren | Lion LR scan re-run (2.5e-4, 2e-4) on Huber+epochs=16 stack | WIP (sent back) | Beat 66.32 |
+| #1755 | fern | n_hidden=160 + n_hidden=192 (lr=4e-4) — budget-cliff follow-up | WIP (sent back) | Beat 66.32 |
+| #1844 | askeladd | Lion β2: 0.99 → 0.999 (slower momentum for B=4 noise), epochs=16 | WIP | Beat 66.32 |
+| #1656 | thorfinn | Dropout=0.1 in attention + MLP, epochs=16 | WIP — needs rebase | Beat 66.32 |
+| #1481 | nezuko | slice_num=128, epochs=16 | WIP — needs rebase | Beat 66.32 |
+| #1470 | edward | Instance-norm loss, epochs=16 | WIP — needs rebase | Beat 66.32 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
-| #1463 | askeladd | CLOSED | SWA from epoch 25 on Lion stack — val +2.99 / test +3.53 regression. Avg in early bad weights + SWALR fights Lion's cosine. camber_rc improvement (−3.67) is real but minority signal. |
-| #1641 | frieren | **MERGED** | Lion optimizer (lr=3e-4) → **new baseline 73.15** (−22.4%). Largest single-PR gain. |
-| #1683 | tanjiro | CLOSED | LR2e3/maxnorm=4 sweep — both arms regress on test (renorm-ceiling confirmed). |
-| #1565 | fern | MERGED | BF16 autocast → baseline 94.22 (−1.3%). VRAM −22% unlocks wider models. |
+| #1639 | alphonse | **MERGED** | Huber δ=0.5 → **new baseline 66.32** (−9.3%). Uniformly better across all splits. δ curve not bottomed out. |
+| #1780 | tanjiro | **MERGED** | Lion+epochs=16 → baseline 66.44 (−9.2%). Structural: epochs=16 is now standard. |
+| #1782 | frieren | SENT BACK | val=71.54 (LR scan 2.5e-4, 13 epochs) — below new baseline 66.32; re-run at epochs=16+Huber |
+| #1463 | askeladd | CLOSED | SWA → val +2.99 regression. SWALR fights Lion cosine; early checkpoint averaging bad. |
+| #1641 | frieren | **MERGED** | Lion optimizer (lr=3e-4) → baseline 73.15 (−22.4%). Largest single-PR gain. |
+| #1683 | tanjiro | CLOSED | LR ceiling confirmed — both arms regress on test. |
+| #1565 | fern | MERGED | BF16 autocast → baseline 94.22 (−1.3%). VRAM −22%. |
 | #1638 | tanjiro | MERGED | lr=1e-3 + grad_clip → baseline 95.44 (−9.5%). |
-| #1487 | thorfinn | CLOSED | Surface skip compose (+13% worse). |
-| #1483 | tanjiro | MERGED | grad_clip max_norm=1.0 → baseline 105.46. |
-| #1596 | alphonse | CLOSED | EMA decay=0.999 regressed +16%. |
-| #1478 | frieren | CLOSED | n_hidden=192 regressed +47% (now revisitable with BF16+Lion). |
 
 ## Open questions from active experiments
 
-1. **Does Lion+epochs=16 (BF16) extend the monotonic improvement past 13?** (#1780 tanjiro)
-2. **Does Lion lr 2e-4 or 2.5e-4 beat lr=3e-4?** (#1782 frieren)
-3. **Does intermediate width n_hidden=160 (full 13 epochs) or n_hidden=192 + lr=4e-4 (recover lost epoch) clear the budget cliff?** (#1755 fern, 2-arm follow-up)
-4. **Does Lion β2=0.999 (slower momentum) help on B=4 noisy gradients?** (#1844 askeladd)
-5. **Does dropout=0.1 improve OOD on Lion stack?** (#1656 thorfinn) — needs Lion rebase
-6. **Does Huber loss complement Lion?** (#1639 alphonse) — needs Lion rebase
-7. **Does instance-norm loss help val_re_rand with Lion?** (#1470 edward)
-8. **Does slice_num=128 help?** (#1481 nezuko)
+1. **Does Huber+epochs=16 compound both wins?** (#1879 tanjiro) — expected ~62-65
+2. **Is δ=0.3 or δ=0.2 better than δ=0.5?** (#1880 alphonse) — monotonic trend suggests yes
+3. **Does LR 2.5e-4 advantage hold on Huber+epochs=16 stack?** (#1782 frieren, re-run)
+4. **Does n_hidden=160/192 clear the budget cliff on Lion stack?** (#1755 fern, 2-arm)
+5. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — now running with epochs=16
+6. **Does dropout=0.1 improve OOD on full combined stack?** (#1656 thorfinn)
+7. **Does slice_num=128 help?** (#1481 nezuko) — with epochs=16
+8. **Does instance-norm loss help val_re_rand?** (#1470 edward) — with epochs=16
 
-## Confirmed dead ends (Lion stack)
+## Confirmed dead ends
 
-- **SWA from mid-training (#1463 askeladd, CLOSED)**: regresses val +2.99 / test +3.53 in 13-epoch monotonic regime. SWALR perturbs Lion's cosine; averaging early checkpoints poisons the average. *Partial signal:* val_geom_camber_rc improves −3.67 — preserve for revisit when training budget extends to 24+ epochs.
+- **SWA mid-training (#1463)**: regresses in 13-epoch monotonic regime. Partial camber_rc signal — revisit at 24+ epochs.
+- **LR/clip ceiling at AdamW stage (#1683)**: both 2× arms regress on test (renorm-ceiling). Obsoleted by Lion switch.
 
 ## Next hypotheses to queue (when students go idle)
 
 ### Currently active (don't duplicate)
-- #1780 tanjiro: Lion + epochs=16
-- #1782 frieren: Lion LR scan (2e-4, 2.5e-4)
+- #1879 tanjiro: Huber δ=0.5 + epochs=16
+- #1880 alphonse: Huber δ=0.3, δ=0.2
+- #1782 frieren: LR scan 2.5e-4, 2e-4 (re-run on new stack)
 - #1755 fern: width sweep n_hidden=160 + n_hidden=192/lr=4e-4
-- #1844 askeladd: Lion β2 sweep 0.99 → 0.999
-- #1656 thorfinn: Dropout=0.1 (needs Lion rebase)
-- #1639 alphonse: Huber loss (needs Lion rebase)
-- #1481 nezuko: slice_num=128
-- #1470 edward: instance-norm loss
+- #1844 askeladd: Lion β2 sweep 0.99 → 0.999 + epochs=16
+- #1656 thorfinn: Dropout=0.1 + epochs=16
+- #1481 nezuko: slice_num=128 + epochs=16
+- #1470 edward: instance-norm loss + epochs=16
 
-### Queued ideas (no current assignee)
+### Queued ideas (when students finish above)
 
-1. **batch=8 + Lion** — Lion's uniform steps may compose well with larger effective batch; BF16 leaves headroom.
-2. **n_layers=7 + Lion** — depth instead of width; same VRAM headroom story as #1755.
-3. **DropPath / stochastic depth** — targeted at Transolver's residual structure.
-4. **Activation sweep** — GELU → SwiGLU/SiLU (on Lion stack).
-5. **Mixup / CutMix on point clouds** — pair perturbation as input regularization; complementary to weight regularization.
-6. **EMA (lighter than SWA) starting after final cosine descent** — averages only the last 2-3 stable epochs; avoids #1463 failure modes (no SWALR, no early averaging).
-7. **Layer-wise LR decay** — different LR per Transolver layer (lower for early layers, higher for later) on Lion stack.
-8. **Surface vs volume loss reweighting under Lion** — sweep surf_weight ∈ {5, 15, 20} now that the optimizer changed.
-
-### Lion optimizer insight (PR #1641 analysis)
-
-Lion's per-parameter sign update is strictly stronger than global L2 renorm. The 13-epoch trajectory shows monotonic improvement still at epoch 13 — **not converged**. This means:
-- More epochs (#1780 tests this; up to 16 fits in budget) will improve further
-- LR scan (#1782 fills 2e-4, 2.5e-4 gap)
-- β2 sweep (#1844 tests momentum half-life on noisy gradients)
-- Architecture experiments (#1755 fern's wider model 2-arm; #1656 dropout) should clear budget cliff to validate on Lion stack
+1. **n_layers=6 + Lion + epochs=16** — depth instead of width; one extra attention+MLP layer.
+2. **batch=8 + Lion + epochs=13** — larger effective batch on full stack; ~30 min with batch=8.
+3. **Huber δ=0.1 + epochs=16** — if δ scan finds 0.3/0.2 wins, push further.
+4. **surf_weight=15 or 5 under Huber+Lion** — optimal weighting may shift with changed loss landscape.
+5. **DropPath / stochastic depth** — targeted at Transolver's residual structure.
+6. **Activation sweep** — GELU → SwiGLU/SiLU (on full combined stack).
+7. **Layer-wise LR decay** — different LR per Transolver layer.
+8. **EMA post-convergence (last 2 epochs only)** — avoids #1463 failure mode; averages only the final stable checkpoints.
+9. **Lion lr=2.5e-4 as new default** — if frieren's re-run confirms 2.5e-4 consistently beats 3e-4, update the merged default.

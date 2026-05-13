@@ -1,5 +1,118 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 03:51 — PR #1639: Huber δ=0.5 loss on Lion stack (MERGED — new baseline 66.32)
+
+- Student branch: `charliepai2g24h5-alphonse/huber-loss`
+- Hypothesis: Huber (Smooth-L1) loss with δ=0.5 replaces MSE. Outlier residuals (high-Re tandem near-surface samples) dominate MSE gradients; Huber caps per-element gradient at δ pre-aggregation, complementing grad_clip which caps the global gradient norm post-aggregation. Two arms: δ=1.0 and δ=0.5. Stack: Lion lr=3e-4 + BF16 + grad_clip + warmup3+cosine13, epochs=13.
+
+### Results
+
+| Config | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (73.15) |
+|---|---:|---:|---:|
+| Baseline (Lion lr=3e-4, MSE) | 73.15 | 66.76 | — |
+| Huber δ=1.0 (Arm 1) | 67.41 | 62.65 | −7.85% val |
+| **Huber δ=0.5 (winner)** | **66.32** | **61.14** | **−9.34% val** |
+
+### Per-split val (δ=0.5 winner, epoch 13)
+
+| Split | Baseline | Huber δ=0.5 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 80.78 | 71.66 | −11.3% |
+| val_geom_camber_rc | 90.86 | 82.99 | −8.7% |
+| val_geom_camber_cruise | 51.56 | 46.06 | −10.7% |
+| val_re_rand | 69.39 | 64.56 | −7.0% |
+| **val_avg** | **73.15** | **66.32** | **−9.3%** |
+
+### Per-split test (δ=0.5 winner)
+
+| Split | Baseline | Huber δ=0.5 | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | 69.02 | 62.73 | −9.1% |
+| test_geom_camber_rc | 77.38 | 69.80 | −9.8% |
+| test_geom_camber_cruise | 59.49 | 56.26 | −5.4% |
+| test_re_rand | 61.14 | 55.79 | −8.8% |
+| **test_avg** | **66.76** | **61.14** | **−8.4%** |
+
+- Metrics (δ=0.5 winner): `models/model-charliepai2g24h5-alphonse-huber_delta0_5_lion-20260513-025216/metrics.jsonl`
+- Metrics (δ=1.0 arm): `models/model-charliepai2g24h5-alphonse-huber_delta1_lion-20260513-021619/metrics.jsonl`
+
+### Analysis
+
+**Outstanding across-the-board result.** δ=0.5 uniformly beats δ=1.0 on ALL 8 splits (4 val + 4 test). No tradeoff — smaller δ is better everywhere. This confirms the outlier-capping hypothesis and critically suggests the **response curve hasn't bottomed out** (monotonic improvement from 1.0 → 0.5 → smaller?).
+
+The orthogonality with grad_clip is confirmed: Huber caps outliers at the per-element level (before mean reduction), while grad_clip normalizes the full parameter gradient (after backprop aggregation). They stack cleanly.
+
+Key implication: **the optimal δ is below 0.5**. alphonse's next assignment is a δ scan at 0.3 and 0.2.
+
+Also notable: this result (66.32) slightly beats #1780's epochs=16 result (66.44) using only 13 epochs. The combination of Huber+epochs=16 should compound both improvements (tanjiro's #1879).
+
+---
+
+## 2026-05-13 03:50 — PR #1780: Lion + epochs 13→16 (MERGED — new baseline 66.44)
+
+- Student branch: `charliepai2g24h5-tanjiro/longer-cosine-lion-epochs16`
+- Hypothesis: Lion's training was non-converged at epoch 13 (trajectory still monotonically descending). With BF16 reducing s/epoch to ~101s, 16 epochs = 27.1 min — within the 30-min cap. Extended cosine schedule (T_max = 16−3 = 13) fully decays LR to ~0 at epoch 16. No code change needed — runtime flag only.
+
+### Results
+
+| Epoch | val_avg/mae_surf_p | Δ vs prev |
+|---:|---:|---:|
+| 13 | 73.81 | (matches old baseline 73.15 within noise) |
+| 14 | 69.97 | −3.84 |
+| 15 | 68.38 | −1.59 |
+| **16 (best)** | **66.44** | **−1.94** |
+
+| Metric | Value | vs baseline (73.15) |
+|---|---:|---:|
+| val_avg/mae_surf_p | **66.44** | **−9.2%** |
+| test_avg/mae_surf_p | **61.78** | **−7.5%** |
+| Wall-clock | 27.1 min | within 30-min cap |
+
+### Per-split val (epoch 16)
+
+| Split | val_avg/mae_surf_p | Δ |
+|---|---:|---:|
+| val_single_in_dist | 71.11 | −12.0% |
+| val_geom_camber_rc | 81.78 | −10.0% |
+| val_geom_camber_cruise | 48.92 | −5.1% |
+| val_re_rand | 63.96 | −7.8% |
+| **val_avg** | **66.44** | **−9.2%** |
+
+- Metrics: `models/model-lion_epochs16-20260513-015116/metrics.jsonl`
+
+### Analysis
+
+Clean confirmation that Lion was non-converged at epoch 13. The per-epoch improvement sequence (−3.84, −1.59, −1.94) shows the model still making meaningful progress through the final epoch. Cosine LR reached ≈0 exactly at epoch 16 — fully decayed as expected.
+
+This is a structural improvement: the `--epochs 16` flag becomes the new standard for all future experiments on this stack (BF16 budget allows it). All in-flight WIP students notified to re-run with `--epochs 16`.
+
+---
+
+## 2026-05-13 03:26 — PR #1782: Lion LR scan (2e-4, 2.5e-4, 4e-4) (SENT BACK — below new baseline)
+
+- Student branch: `charliepai2g24h5-frieren/lion-lr-scan`
+- Hypothesis: Scan the LR gap between winning 3e-4 and arm-1 1.5e-4. Three arms: lr=2e-4, 2.5e-4, 4e-4 (and the existing 1.5e-4/3e-4 data from #1641).
+- All ran epochs=13 (old schedule) on Lion+BF16 stack.
+
+### Results
+
+| lion_lr | val_avg/mae_surf_p | test_avg/mae_surf_p | vs baseline (73.15) |
+|---:|---:|---:|---:|
+| 2.0e-4 | 72.08 | 66.31 | −1.47% |
+| **2.5e-4 (best)** | **71.54** | **65.95** | **−2.21%** |
+| 3.0e-4 (baseline) | 73.15 | 66.76 | — |
+| 4.0e-4 | 74.40 | 67.96 | +1.72% |
+
+### Analysis
+
+Clear minimum at lr≈2.5e-4. Both 2e-4 and 2.5e-4 beat old baseline; 4e-4 worse. The finding: **2.5e-4 is marginally better than 3e-4 on 13 epochs**. Difference is small (71.54 vs 73.15).
+
+However, after merging #1780 (66.44) and #1639 (66.32), the new baseline is **66.32**. Frieren's best (val=71.54) doesn't beat it.
+
+Sent back with request to re-run both lr=2.5e-4 and lr=2e-4 on the new combined stack (Huber δ=0.5 + epochs=16). If lr=2.5e-4 holds its ~1.6-point advantage on the new stack, expected outcome is ~64.
+
+---
+
 ## 2026-05-13 03:10 — PR #1755: n_hidden=192 + BF16 + Lion (SENT BACK — budget-cliff regression)
 
 - Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
