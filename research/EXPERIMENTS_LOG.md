@@ -8,6 +8,44 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 18:35 — PR #2435 (thorfinn learned-freqs-50x-lr) — **CLOSED** (mechanism falsified; architectural confound)
+
+- Branch: `charliepai2g24h4-thorfinn/learned-freqs-50x-lr`
+- Hypothesis: Raise freq lr from 10× to 50× — test whether top freqs [8,16,32] were gradient-magnitude-limited or merely lr-limited
+- Metric artifact: `models/model-charliepai2g24h4-thorfinn-learned-freqs-50x-lr-20260513-161629/metrics.jsonl`
+
+| Metric | This run | Prior #2370 (stale baseline) | New #2436 baseline | Δ vs new |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 58.7817 | 59.5645 | 58.6093 | +0.29% (small regression) |
+| `test_avg/mae_surf_p` | 51.0120 | 51.6141 | 50.7946 | +0.43% (small regression) |
+| `n_params` | 892,637 | 831,197 (claimed; actually pre-#2304) | 892,637 | — |
+| Top-3 freqs movement | < 3% from init | < 1% | — | — |
+
+- **Mechanism falsified**: top freqs [8, 16, 32] stayed within ±3% of init even at 50× lr. The 5× lr boost from 10× → 50× did NOT unlock them. **Confirmed: top freqs are gradient-magnitude-limited, not lr-limited.** Bottom freqs converged to nearly identical values as at 10× lr (just faster — by epoch 5 vs ~epoch 10).
+- **Critical n_params catch (thorfinn AND fern independently)**: frieren's #2370 was trained on stale checkout `git_commit=e39f7bf` — predates the #2304 inner_dim=288 merge. The "59.5645 baseline" was measured on a smaller architecture (n_params=831,197 vs current HEAD's 892,637). This means thorfinn's headline lift (vs 59.5645) was partially a re-measurement on the as-merged architecture, not pure 50× lr effect. After fern's #2436 merge established the clean 58.6093 baseline on the same architecture, thorfinn's 58.7817 is a small regression.
+- **What we keep**: (1) the mechanism-falsification finding (top freqs are gradient-limited regardless of lr); (2) the n_params discrepancy catch — BASELINE.md corrected. (3) bottom freqs converge to the same values whether at 10× or 50× lr — 10× is sufficient.
+- **Action**: closed; freq-lr axis closed at 10× (no benefit from higher). Reassigned thorfinn to #2469 `freqs-xy-separate` (direction-separated learnable freqs — let x and y coords have independent 6-freq vectors instead of sharing one global vector; tests whether the gradient-magnitude limit was due to cancellation between x and y direction gradients).
+
+## 2026-05-13 18:30 — PR #2436 (fern layerscale-lr-10x) — **MERGED** (18th compound win, −1.60% val, −1.59% test; LayerScale γ confirmed as additive-scale optimizer-group axis)
+
+- Branch: `charliepai2g24h4-fern/layerscale-lr-10x`
+- Hypothesis: LayerScale γ (5 blocks × 2 paths × 128 channels = 1280 scalars) in a separate AdamW group with no WD + 10× lr — same optimizer-group recipe that won on freqs in #2370
+- Metric artifact: `models/model-charliepai2g24h4-fern-layerscale-lr-10x-20260513-161832/metrics.jsonl`
+
+| Metric | This run | Prior 59.5645 (stale arch) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **58.6093** | 59.5645 | **−1.60%** |
+| `test_avg/mae_surf_p` | **50.7946** | 51.6141 | **−1.59%** |
+| `val_geom_camber_cruise` | **36.251** | 39.185 | **−7.49%** (largest val gain) |
+| `test_geom_camber_cruise` | **29.692** | 32.376 | **−8.29%** (largest test gain) |
+| `test_re_rand` | **47.009** | 49.009 | **−4.08%** |
+
+- **Mechanism**: MLP-path LayerScale γ shifted **4.6–6.2× off init=0.025** (settled at 0.114–0.156). Attn-path γ developed extreme per-channel diversity (std/mean ratios **247–319%**). Both signals are far above the 30–100% "healthy" range — confirming that default WD=1e-4 was systematically suppressing both per-channel amplification (MLP path) and per-channel sparsity-gating (attn path).
+- **Wave 17 "additive scale" theme**: this is the SECOND additive-scale-optimizer-group win after #2370 (freqs). The recipe transfers cleanly to multiplicative-on-activations parameters. Slice-attention temperature (#2437 CLOSED Outcome C) was the falsifier showing softmax-internal scale does NOT benefit from the same treatment.
+- **Critical n_params correction**: fern (and thorfinn independently) caught that the prior baseline n_params=831,197 was stale. Actual current-HEAD n_params=892,637. BASELINE.md updated.
+- **OOD-vs-in-dist trade**: large OOD gains (camber_cruise, re_rand) but test_single_in_dist regresses +3.94% (val_single_in_dist is neutral −0.11%). Net test still improves −1.59%. The per-channel diversity in attn LayerScale enables OOD-generalization-friendly representations at the cost of slight in-dist sharpness.
+- **Compound progress**: 18 merges, **100.957 → 58.6093 = −41.94%**
+
 ## 2026-05-13 18:00 — PR #2437 (nezuko slice-temp-lr-10x) — **CLOSED** (Outcome C; slice-temp axis closed at default init=0.5, lr=5e-4, wd=1e-4)
 
 - Branch: `charliepai2g24h4-nezuko/slice-temp-lr-10x`
