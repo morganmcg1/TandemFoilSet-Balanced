@@ -31,6 +31,7 @@ import wandb
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -430,6 +431,9 @@ class Config:
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
+    use_swa: bool = False           # Enable Stochastic Weight Averaging over SGDR cycle-ends.
+    swa_start_epoch: int = 9        # First epoch index (0-based) eligible for an SWA update; e=9 ⇒ end of 10th epoch.
+    swa_dense_in_last_cycle: bool = False  # Arm 2: update SWA every epoch from swa_start_epoch onward (vs. only at cycle-ends).
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -482,6 +486,19 @@ surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
 all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
+
+# SWA wrappers: deepcopy uncompiled modules so the averaged copy is a clean
+# nn.Module. update_parameters() iterates parameter tensors, which torch.compile
+# leaves untouched, so updates flow correctly even after the live model is
+# compiled below. The SWA module itself stays uncompiled — used only at val/test.
+swa_model = AveragedModel(model).to(device) if cfg.use_swa else None
+swa_surf_head = AveragedModel(surf_head).to(device) if cfg.use_swa else None
+if cfg.use_swa:
+    _swa_mode = "dense-in-last-cycle" if cfg.swa_dense_in_last_cycle else "cycle-ends-only"
+    print(
+        f"[SWA] enabled — start_epoch={cfg.swa_start_epoch} "
+        f"mode={_swa_mode} cosine_T_0={cfg.cosine_restart_T_0}"
+    )
 
 if cfg.use_torch_compile:
     # Variable mesh sizes (74K-242K nodes) → use dynamic=True so we get a
@@ -539,11 +556,14 @@ wandb.define_metric("lr_surf_head", step_metric="global_step")
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
+swa_model_path = model_dir / "swa_checkpoint.pt"
 with open(model_dir / "config.yaml", "w") as f:
     yaml.dump(model_config, f)
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+best_swa_avg_surf_p = float("inf")
+best_swa_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 compile_warmup_s = 0.0
@@ -647,6 +667,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # --- SWA update ---
+    # Capture model state at well-defined points of the SGDR schedule.
+    # cycle-end mode (Arm 1): update only at the end of each cosine cycle.
+    # dense mode (Arm 2): update every epoch from swa_start_epoch onward.
+    swa_updated_this_epoch = False
+    if swa_model is not None and epoch >= cfg.swa_start_epoch:
+        if cfg.swa_dense_in_last_cycle:
+            swa_model.update_parameters(model)
+            swa_surf_head.update_parameters(surf_head)
+            swa_updated_this_epoch = True
+        elif cfg.cosine_restart_T_0 > 0 and (epoch + 1) % cfg.cosine_restart_T_0 == 0:
+            swa_model.update_parameters(model)
+            swa_surf_head.update_parameters(surf_head)
+            swa_updated_this_epoch = True
+
     # --- Validate ---
     model.eval()
     surf_head.eval()
@@ -657,6 +692,24 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
+
+    # SWA val: only on epochs where the SWA state actually changed (i.e., we
+    # just updated). For Arm 1 (cycle-end mode) this is just 2 evals (e10,e20);
+    # for Arm 2 (dense) it is every epoch from swa_start_epoch onward. No BN in
+    # this model (LayerNorm throughout), so no update_bn pass is required.
+    swa_split_metrics = None
+    swa_val_avg = None
+    swa_avg_surf_p = None
+    if swa_updated_this_epoch:
+        swa_model.eval()
+        swa_surf_head.eval()
+        swa_split_metrics = {
+            name: evaluate_split(swa_model, swa_surf_head, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_split_metrics)
+        swa_avg_surf_p = swa_val_avg["avg/mae_surf_p"]
+
     dt = time.time() - t0
 
     log_metrics = {
@@ -676,6 +729,16 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    if swa_split_metrics is not None:
+        for split_name, m in swa_split_metrics.items():
+            for k, v in m.items():
+                log_metrics[f"{split_name}_swa/{k}"] = v
+        for k, v in swa_val_avg.items():
+            log_metrics[f"val_swa_{k}"] = v  # val_swa_avg/mae_surf_p etc.
+        log_metrics["swa/n_averaged"] = int(swa_model.n_averaged.item())
+        log_metrics["swa/updated_this_epoch"] = int(swa_updated_this_epoch)
+
     wandb.log(log_metrics)
 
     tag = ""
@@ -692,11 +755,30 @@ for epoch in range(MAX_EPOCHS):
         )
         tag = " *"
 
+    swa_tag = ""
+    if swa_avg_surf_p is not None and swa_avg_surf_p < best_swa_avg_surf_p:
+        best_swa_avg_surf_p = swa_avg_surf_p
+        best_swa_metrics = {
+            "epoch": epoch + 1,
+            "val_swa_avg/mae_surf_p": swa_avg_surf_p,
+            "per_split": swa_split_metrics,
+            "n_averaged": int(swa_model.n_averaged.item()),
+        }
+        torch.save(
+            {"swa_model": swa_model.state_dict(), "swa_surf_head": swa_surf_head.state_dict()},
+            swa_model_path,
+        )
+        swa_tag = " (SWA*)"
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    swa_str = (
+        f"  val_swa_avg_surf_p={swa_avg_surf_p:.4f}{swa_tag} (n_avg={int(swa_model.n_averaged.item())})"
+        if swa_avg_surf_p is not None else ""
+    )
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"val_avg_surf_p={avg_surf_p:.4f}{tag}{swa_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -720,11 +802,23 @@ if cfg.use_torch_compile:
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    if best_swa_metrics:
+        print(
+            f"Best SWA val: epoch {best_swa_metrics['epoch']}, "
+            f"val_swa_avg/mae_surf_p = {best_swa_avg_surf_p:.4f} "
+            f"(n_averaged={best_swa_metrics['n_averaged']})"
+        )
     wandb.summary.update({
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
     })
+    if best_swa_metrics:
+        wandb.summary.update({
+            "best_swa_epoch": best_swa_metrics["epoch"],
+            "best_val_swa_avg/mae_surf_p": best_swa_avg_surf_p,
+            "best_swa_n_averaged": best_swa_metrics["n_averaged"],
+        })
 
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(ckpt["model"])
@@ -734,6 +828,9 @@ if best_metrics:
 
     test_metrics = None
     test_avg = None
+    swa_test_metrics = None
+    swa_test_avg = None
+    test_loaders = None
     if not cfg.skip_test:
         print("\nEvaluating on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
@@ -758,6 +855,32 @@ if best_metrics:
             test_log[f"test_{k}"] = v
         wandb.log(test_log)
         wandb.summary.update(test_log)
+
+        # Test eval on best-SWA checkpoint, if we ever recorded one.
+        if best_swa_metrics and swa_model_path.exists():
+            print("\nEvaluating SWA model on held-out test splits...")
+            swa_ckpt = torch.load(swa_model_path, map_location=device, weights_only=True)
+            swa_model.load_state_dict(swa_ckpt["swa_model"])
+            swa_surf_head.load_state_dict(swa_ckpt["swa_surf_head"])
+            swa_model.eval()
+            swa_surf_head.eval()
+            swa_test_metrics = {
+                name: evaluate_split(swa_model, swa_surf_head, loader, stats, cfg.surf_weight, device)
+                for name, loader in test_loaders.items()
+            }
+            swa_test_avg = aggregate_splits(swa_test_metrics)
+            print(f"\n  TEST (SWA)  avg_surf_p={swa_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, swa_test_metrics[name])
+
+            swa_test_log: dict[str, float] = {}
+            for split_name, m in swa_test_metrics.items():
+                for k, v in m.items():
+                    swa_test_log[f"test_swa/{split_name}/{k}"] = v
+            for k, v in swa_test_avg.items():
+                swa_test_log[f"test_swa_{k}"] = v
+            wandb.log(swa_test_log)
+            wandb.summary.update(swa_test_log)
 
     save_model_artifact(
         run=run,
