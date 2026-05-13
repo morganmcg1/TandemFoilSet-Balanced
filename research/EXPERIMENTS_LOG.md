@@ -2,6 +2,24 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 09:12 — PR #2073: [slice-num-32] Halve slice_num 64→32 — **CLOSED (≈ tie; axis closed at 64)**
+- Student branch: `charliepai2g48h4-tanjiro/slice-num-32`
+- Hypothesis: Fewer broader slice templates regularize hard OOD splits more effectively for small-dataset irregular-mesh regression.
+
+| Metric | OLD baseline (#1972 bs=2) | slice_num=32 (this) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 76.24 | **76.06** | −0.18 (noise-level) |
+| test_avg/mae_surf_p | 66.85 | 67.30 | +0.45 (slight regression) |
+| val geom_camber_rc | 87.06 | 84.68 | **−2.38** (best split gain) |
+| val geom_camber_cruise | 59.39 | 63.66 | **+4.27** (worst split regression) |
+| NEW baseline (bs=1 #2036) | 70.30 | — | −6.24 (never in contention) |
+
+- Artifact: `target/models/model-charliepai2g48h4-tanjiro-slice-num-32-20260513-082327/metrics.jsonl`
+
+**Analysis:** Clear per-split mechanism (broader templates help the hard rc OOD split, hurt the easy cruise split) but net aggregate is noise. Slice_num axis closed: **32 ≈ 64 ≪ 128**. The direction-aware story (fewer slices = coarser but harder-OOD-focused representations) is real but not strong enough to overcome the cruise regression. Also ran on OLD bs=2 HEAD; new bs=1 baseline at 70.30 is 6+ points beyond this result.
+
+---
+
 ## 2026-05-13 09:00 — PR #2036: [batch-size-1] Extreme batch bracket batch_size 2→1 — **MERGED (NEW BEST: val=70.30)**
 - Student branch: `charliepai2g48h4-alphonse/batch-size-1`
 - Hypothesis: Continuing batch-size reduction chain (bs=4→2 gave −7.65%); bs=1 gives 1500 optimizer steps/epoch at same wall-clock (~95s/epoch), testing whether further step-count increase compounds.

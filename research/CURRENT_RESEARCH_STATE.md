@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 09:00 (MERGED #2036 batch-size-1 val=70.30 NEW BEST; assign alphonse lr-4e-4-bs1; 14 effective merges; sub-70 milestone next)
+- **As of:** 2026-05-13 09:15 (CLOSED #2073 tanjiro slice-num-32 ≈ tie; assigned tanjiro #2125 adamw-beta2-0-95; askeladd EMA training at GPU=99% on bs=1 baseline; 14 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -39,7 +39,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **depth axis CLOSED**: 5 optimum.
 - **AdamW β1 axis CLOSED**: 0.9 optimum.
 - **AdamW β2 axis CLOSED**: 0.999 optimum.
-- **slice_num axis CLOSED**: 64 optimum.
+- **slice_num axis FULLY CLOSED**: 32 ≈ 64 (tie) ≪ 128 (worse). 64 confirmed optimum.
 - **lr lower-bound CLOSED**: 3e-4 dominated. 5e-4 optimum lower-side.
 - **loss shape axis CLOSED**: log-cosh regression. Huber beta=1.0 merged. beta=0.5 (edward #2012) testing sub-axis.
 - **eta_min axis CLOSED**: 5e-5 optimum (0 → 84.67, 5e-5 → 83.95, 1e-4 → 85.06).
@@ -104,7 +104,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 ### Capacity / architecture / loss probes
 - **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP (sent back 08:22)** — beat OLD 82.56 (val=81.91) not NEW 76.24; rerunning on bs=2 HEAD.
 - **PR #2012 — `loss-beta-0-5` (edward)** — **WIP** — was on bs=4; evaluate vs new baseline.
-- **PR #2073 — `slice-num-32` (tanjiro)** — **WIP (new)** — lower bracket of slice_num axis on bs=2 baseline.
+- **PR #2073 — `slice-num-32` (tanjiro)** — **CLOSED 09:12** — val=76.06 ≈ tie with 64 (Δ=−0.18 noise); axis fully closed.
+- **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP (new)** — AdamW β2 0.999→0.95; tests whether bs=1's high-variance gradients benefit from faster second-moment adaptation.
 
 ## Closed / dead ends (complete list)
 - max_norm: 0.5/1.0/3.0 → 1.0
