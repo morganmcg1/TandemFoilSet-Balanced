@@ -268,3 +268,43 @@ Per-split test (all 4 splits clean):
 **Notable finding:** `test_geom_camber_cruise` showed NaN in both runs. Fern correctly diagnosed this: higher surf_weight forces more aggressive pressure predictions; on OOD cruise samples the normalised MSE can overflow fp32, sending vol_loss to inf and contaminating the split metric. On the compile+bf16 baseline the nan_to_num scoring fix (#1521) should mitigate this, but it may still NaN if predictions genuinely overflow before scoring. Worth monitoring on rebase.
 
 **Conclusion: SENT BACK.** Rebase on current advisor branch (gets compile + bf16 + warmup + lr=1e-3 automatically), keep only surf_weight=25 change, re-run. Once rebased, surf_weight=25 gets 29 epochs at 61s/epoch — a real head-to-head test. Also flagged the cruise NaN failure mode to watch after rebase.
+
+---
+
+## 2026-05-13 00:00 — PR #1404: OneCycleLR (max_lr=1e-3, SCHEDULER_EPOCHS=29, per-batch) — nezuko
+- willowpai2g24h4-nezuko/onecycle-lr
+- **Hypothesis:** OneCycleLR with `SCHEDULER_EPOCHS` correctly sized to the compile budget (29 epochs) should outperform warmup+cosine by fully firing the decay tail (LR → 1e-7) within the 30-min wall.
+- **W&B:** `wd9na4r7`
+
+| Metric | Baseline #1373 | PR #1404 (OneCycleLR) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best ckpt) | 75.8473 | **70.9449** | **−4.90 (−6.5%)** |
+| test_avg/mae_surf_p (4-split) | 67.3037 | **61.8276** | **−5.48 (−8.1%)** |
+| Test 3-split mean (excl. cruise) | 74.80 | **68.12** | **−6.68 (−8.9%)** |
+| Best epoch | 27/29 | **29/29 (last)** | Still descending! |
+| Median sec/epoch | ~61.2s | 62.5s | +1.3s negligible |
+| Peak GPU | 48.60 GB | 50.97 GB | +2.4 GB |
+
+Per-split val (best epoch 29):
+
+| Split | mae_surf_p |
+|---|---|
+| val_single_in_dist | 80.87 |
+| val_geom_camber_rc | 80.80 |
+| val_geom_camber_cruise | 51.75 |
+| val_re_rand | 70.36 |
+| **avg** | **70.94** |
+
+Per-split test (all 4 clean):
+
+| Split | mae_surf_p |
+|---|---|
+| test_single_in_dist | 70.98 |
+| test_geom_camber_rc | 72.75 |
+| test_geom_camber_cruise | 42.96 (nan_to_num biased low) |
+| test_re_rand | 60.63 |
+| **avg (4-split)** | **61.83** |
+
+**LR curve:** 1e-4 (start) → 1e-3 (peak, ~ep3) → 1e-7 (final, ep29). Decay tail fully fired. 10875 per-batch LR updates (vs 29 for epoch-level cosine). Noisy phase ep11-13 (during early decay) then smooth descent from ep14-29.
+
+**Conclusion: MERGED. Massive −6.5%/−8.1% win on both metrics.** All 4 splits improved consistently. Best epoch = last epoch = still descending at cutoff. Key mechanism: per-batch LR stepping + full decay tail gives the model much better convergence structure than per-epoch warmup+cosine. This is now the default stack. T_max retune (thorfinn #1628) and warmup+cosine LR sweep (alphonse #1687) are both superseded — redirecting to OneCycleLR-based follow-ups.

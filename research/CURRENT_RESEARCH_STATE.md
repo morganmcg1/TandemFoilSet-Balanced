@@ -1,66 +1,73 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-12 ~23:30 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 5 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~00:30 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 6 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
-- **Current best:** val_avg/mae_surf_p = **75.8473**, test_avg/mae_surf_p = **67.3037** (PR #1373, lr=1e-3 + 3-epoch linear warmup + cosine + torch.compile + bf16 + slice_num=128)
+- **Current best:** val_avg/mae_surf_p = **70.9449**, test_avg/mae_surf_p = **61.8276** (PR #1404, OneCycleLR max_lr=1e-3, SCHEDULER_EPOCHS=29, per-batch stepping, on compile+bf16+slice128)
 
 ## Current research focus
 
-Round-5 stacked a modest but consistent LR gain on top of the round-4 compile win. The stack so far: torch.compile (1.58× throughput), bf16 (memory headroom), slice_num=128 (richer attention), lr=1e-3 + warmup (slightly better descent). All gains are additive and orthogonal.
+Round-6 brought the biggest single gain so far: OneCycleLR with per-batch stepping and correctly-sized SCHEDULER_EPOCHS fully fires the LR decay tail (1e-7) within the 30-min cap. The key insight: cosine-per-epoch gave 29 LR updates; OneCycleLR per-batch gives 10875 updates, with much finer decay and a proven deep-LR refinement tail.
 
-The model is still compute-starved. Every lever that buys more epochs or better per-epoch descent pays off directly. Active threads:
+The model's best checkpoint is still the LAST epoch (29/29) — we are firmly compute-bottlenecked. Two parallel directions:
 
-1. **T_max retune on current stack** — thorfinn #1628: `epochs=30` gives cosine T_max=27 on top of 3-epoch warmup. By epoch 29, LR → 0. Suppresses late-epoch noise that caused uptick at epochs 28-29 in #1584.
-2. **fp32 eval + eval every 3 epochs** — frieren #1556: produces paper-faithful test_avg on the current best baseline. The biased cruise test (nan_to_num zeroing) limits our understanding of real generalization.
-3. **Hidden-192 on compile+bf16** — tanjiro #1522: rebased, run in flight. Width helps OOD splits (cruise/re_rand). With compile+bf16, should get ~25+ epochs and ~50-55 GB peak.
-4. **Channel-weighted loss (p:3)** — edward #1383: rebased, run in flight. Directly biases toward the primary metric.
-5. **Smooth-L1 loss** — askeladd #1379: rebased at 22:56, run in flight. MAE-aligned loss may improve surface pressure directly.
-6. **OneCycleLR (corrected budget)** — nezuko #1404: re-pinged with SCHEDULER_EPOCHS=29. Tests whether triangular schedule outperforms warmup+cosine on the new stack.
-7. **surf_weight=25 on compile** — fern #1390: sent back for rebase. Test impact of gradient bias toward surface nodes with full epoch budget.
+1. **OneCycleLR hyperparameter sweep** — max_lr and pct_start are the most impactful knobs on the new schedule
+2. **Compute efficiency** — `reduce-overhead` compile mode may give 10-20% more throughput, yielding 3-5 extra epochs of descent
+
+Active threads:
+- **OneCycleLR max_lr=1.5e-3** — does higher peak LR on the winning stack improve further? (alphonse #1716)
+- **OneCycleLR pct_start=0.05** — shorter warmup, more decay time per budget (nezuko #1719)
+- **Thorfinn #1628** — T_max=30 run in flight (cosine stack, superseded by OneCycleLR, but run already started — closing and redirecting after results posted)
+- **Askeladd #1379** — smooth-L1 loss on warmup+cosine baseline, in flight. If it beats 75.85, directional signal; won't beat 70.94.
+- **Edward #1383** — channel-weighted loss (p:3) on warmup+cosine, in flight. Same.
+- **Tanjiro #1522** — hidden-192 on compile+bf16, in flight. Same.
+- **Frieren #1556** — fp32-eval every 3 epochs. Not metric-improving; establishing faithful test_avg.
+- **Fern #1390** — surf_weight=25 on compile baseline (needs rebase again after OneCycleLR merge).
 
 ## Active PRs
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1373 | lr=1e-3 + 3-epoch warmup | **MERGED** ✓ — new baseline 75.85 |
-| askeladd | #1379 | smooth-l1-loss on compile baseline | WIP, run in flight (rebased 22:56) |
-| edward | #1383 | p-channel-weight (rebased ~22:11) | WIP, run in flight |
-| fern | #1390 | higher-surf-weight on compile baseline | WIP (sent back — rebase needed) |
-| frieren | #1556 | fp32-eval (eval every N=3) | WIP (sent back, rebase needed) |
-| nezuko | #1404 | onecycle-lr (SCHEDULER_EPOCHS=29) | WIP (re-pinged — rebase needed) |
-| tanjiro | #1522 | hidden192-on-compile+bf16 (rebased ~22:08) | WIP, run in flight |
-| thorfinn | #1628 | tmax-compile-retune (epochs=30) | WIP (assigned ~22:01, no code yet) |
+| alphonse | #1716 | OneCycleLR max_lr=1.5e-3 | WIP (just assigned) |
+| askeladd | #1379 | smooth-L1 loss (warmup+cosine baseline) | WIP, run in flight |
+| edward | #1383 | p-channel-weight (warmup+cosine baseline) | WIP, run in flight |
+| fern | #1390 | surf_weight=25 (needs rebase again) | WIP (stale) |
+| frieren | #1556 | fp32-eval every 3 epochs | WIP, run in flight |
+| nezuko | #1719 | OneCycleLR pct_start=0.05 | WIP (just assigned) |
+| tanjiro | #1522 | hidden-192 on compile+bf16 (warmup+cosine) | WIP, run in flight |
+| thorfinn | #1628 | T_max=30 (cosine — superseded, run in flight) | WIP, will close after result |
 
 ## Key learnings so far
 
-1. **Compute is the bottleneck** — model descends through every achievable epoch. More epochs = lower val, period.
-2. **torch.compile is the biggest single lever** — 1.58× free throughput. Stack with everything.
-3. **bf16 eval causes cruise overflow** — nan_to_num zeros it (biased low). fp32 eval needed for faithful paper test_avg.
-4. **LR schedule alignment matters** — T_max=50 was near-optimal for 18-epoch regime; with 29 epochs, T_max=30 (→ cosine portion 27 epochs) is the right retune.
-5. **Higher LR (1e-3) + warmup helps modestly** — 0.76% val, 2.12% test improvement. Single-seed, within noise, but direction is consistent.
-6. **Hidden-192 directional signal** — helps cruise/re_rand OOD; needs re-test on full compile+bf16 budget.
-7. **RNG variance ≈ ±5%** — alphonse measured 3 seeds pre-compile. Sub-1% deltas require multi-seed confirmation; 2%+ test improvements are more reliable signals.
+1. **Compute is the bottleneck** — model still descending at epoch 29. Every extra epoch of compute pays off.
+2. **torch.compile is the biggest infrastructure lever** — 1.58× throughput. Stack with everything.
+3. **OneCycleLR per-batch beats warmup+cosine per-epoch by −6.5% val / −8.1% test** — largest single gain. Key: 10875 per-batch LR updates vs 29 per-epoch; full decay tail fires in budget.
+4. **LR schedule shape matters more than LR magnitude** — Moving from warmup+cosine to OneCycleLR (same max_lr=1e-3) gave 6.5% improvement; moving from lr=5e-4 to lr=1e-3 gave only 0.76%.
+5. **bf16 eval causes cruise overflow** — nan_to_num zeros it (biased low). fp32 eval needed for faithful paper test_avg.
+6. **Hidden-192 directional signal** — pending on compile+bf16 stack with full epoch budget.
+7. **RNG variance ≈ ±5%** — sub-1% val deltas need multi-seed confirmation; 2%+ test changes are reliable.
 
 ## Potential next research directions
 
 ### Immediate (waiting on current PRs)
-- T_max=30 result (thorfinn #1628) — expected soon
-- Smooth-L1 loss vs MSE (askeladd #1379) — run in flight
-- Channel-weighted loss (edward #1383) — run in flight
-- Hidden-192 on compile (tanjiro #1522) — run in flight
-- fp32 eval (frieren #1556) — paper-faithful test_avg needed
+- OneCycleLR max_lr sweep: 1.5e-3 (alphonse #1716) — is 1e-3 the ceiling?
+- OneCycleLR pct_start=0.05 (nezuko #1719) — shorter warmup, more decay time
+- Results from askeladd/edward/tanjiro — directional signal on loss/architecture on old stack
+- fp32 eval (frieren #1556) — paper-faithful test_avg
 
-### Short-term
-- **Stack confirmed wins:** After T_max retune and smooth-L1/channel-weight results come in, stack any improvements. compile + bf16 + lr=1e-3+warmup + T_max=30 + best-loss-fn is the target config.
-- **LR sweep continuation:** alphonse suggested lr=7.5e-4 and lr=1.5e-3 brackets. If T_max retune confirms the late-epoch decay is the residual bottleneck, lr=1.5e-3 may allow faster early descent.
-- **mode="reduce-overhead" compile** — CUDA graphs, larger speedup but risky with dynamic=True. Try once T_max and loss_fn choices are locked.
-- **Multi-seed baseline** — to cleanly measure sub-1% improvements, fix a seed in train.py. Can request as tiny separate PR.
+### Short-term (round 7)
+- **reduce-overhead compile** — CUDA graph fused kernels may give 10-20% more throughput → 3-5 extra epochs
+- **OneCycleLR max_lr=2e-3** — if 1.5e-3 is still improving, push further
+- **OneCycleLR pct_start=0.15** — complement to pct_start=0.05 bracket
+- **Smooth-L1 on OneCycleLR baseline** — if askeladd shows directional signal on old stack
+- **Hidden-192 on OneCycleLR** — if tanjiro shows width helps, re-test on new default
+- **Channel-weighted loss on OneCycleLR** — if edward shows directional signal
+- **surf_weight=25 on OneCycleLR** — fern still pending proper rebase
 
-### Architecture and signal
-- SwiGLU MLP — swap GELU FF layers, modest gain expected
-- Per-domain LR warm-start — higher LR for OOD splits (re_rand/cruise) vs in-dist
+### Architecture and signal (longer term)
+- SwiGLU MLP — swap GELU FF layers
+- Per-domain LR — higher LR for OOD splits (re_rand/cruise) vs in-dist
 - Explicit signed-distance-to-surface as positional feature
 - Loss: relative-MAE for pressure (handles dynamic range across Re)
 - Test-time augmentation: average predictions over mirrored geometry
