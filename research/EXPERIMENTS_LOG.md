@@ -852,3 +852,141 @@ Interesting datapoint: peak GPU 93.7 GB at accum=4 is much higher than expected 
 - Branch: willowpai2g48h1-tanjiro/grad-norm-clip-5-on-lion-stack
 - Hypothesis: With max_norm=5.0 (vs Lion-implicit-normalized inputs), clipping fires on ~10-15% of batches — only genuine outlier-mesh-induced spikes. Tests the *original* tail-stabilizer mechanism that PR #1798's clip=1.0 over-aggressive setting couldn't actually probe. clip on *accumulated* gradient (post-accum, pre-Lion-momentum) so it intercepts spikes before sign-momentum absorbs them. Includes detailed per-epoch grad_norm diagnostics.
 - Target: test_avg/mae_surf_p < 80.62 (new baseline from #1980)
+
+---
+
+## 2026-05-13 09:13 — PR #2050: EMA weight averaging (decay=0.999) — CLOSED (mechanism mismatch)
+- Branch: willowpai2g48h1-frieren/ema-weights-decay-0999
+- Hypothesis: EMA shadow with decay=0.999 averages over ~1000-step horizon, smoothing Lion sign-momentum late-cosine endpoint variance.
+- W&B run: q8hk1y8t (frieren, ema-decay-0999-trial-1, group `ema-weights`)
+- Config: bs=4, accum=2, Lion lr=1.5e-4, fourier_L=8, use_ema=True, ema_decay=0.999
+
+| Metric | EMA decay=0.999 | accum=2 baseline (80.62) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **104.71** | **80.62** | **+29.9%** |
+| val_avg/mae_surf_p (best ep14) | 113.29 | 90.82 | +24.7% |
+| val_avg raw (same step, non-EMA) | 93.31 | 90.82 | +2.7% |
+| test_single_in_dist | 121.77 | 82.23 | +48.1% |
+| test_geom_camber_rc | 114.26 | 93.60 | +22.1% |
+| test_geom_camber_cruise | 79.16 | 61.57 | +28.6% |
+| test_re_rand | 103.66 | 85.06 | +21.9% |
+
+- 14/18 epochs at ~130s/epoch (EMA overhead truncated to 4 fewer epochs)
+- Diagnostic `||model−ema||/||model||` ratio: ended at **~20% at ep14** (predicted 1-3%); never plateaued, fell monotonically 50%→20%
+- Peak GPU: 43.4 GB (baseline +0.4 GB ✓ — EMA shadow ~6 MB)
+
+**Analysis (student diagnosis adopted)**: EMA at decay=0.999 implies a ~1000-step averaging horizon, but our 18-epoch (2632-step) training is in **rapid descent throughout** — per-epoch val drops ~10% even at epoch 14. The EMA shadow lagged 3-4 epochs behind a still-moving target. The ratio never reaching 1-3% (predicted plateau) directly falsified the "stationary trajectory" assumption. EMA acted as a *stale lag*, not a *smoother*. Per-split sig was opposite to the PR's prediction: easiest split (`in_dist`) most damaged (+48%); the model still had a lot to learn even on in-dist.
+
+**Important per-split-direction reversal**: PR predicted EMA would help hardest splits (rc, re_rand) most via "trajectory center". In practice the *easiest* split was *most* damaged — because rapid-descent overfitting-correction is a bigger effect on the easy split where there's more remaining headroom to exploit data.
+
+**EMA at decay=0.999 lever CLOSED.** Direction reversed and reassigned to fern as #2117 (EMA decay=0.95, 14-step half-life, tracks the rapid descent rather than lagging it).
+
+**Action**: Closed. Reassigned fern ema-decay-095 (#2117).
+
+---
+
+## 2026-05-13 09:13 — PR #2047: n_hidden=224 + epochs=12 (budget-aligned) — CLOSED (width saturated at 30-min budget)
+- Branch: willowpai2g48h1-alphonse/n-hidden-224-rescaled-cosine
+- Hypothesis: Moderate 17% width bump with rescaled epochs so cosine schedule completes. PR projected 117s/epoch × 15 = 29.3 min.
+- W&B runs: j24ljcnp (trial-1 killed after 3 epochs — actual 141s/epoch not 117s), ewx4364j (trial-2 epochs=12)
+- Config: n_hidden=224, n_layers=5, n_head=4 (head_dim=56), slice_num=64, mlp_ratio=2, bs=4, accum=2, Lion lr=1.5e-4, fourier_L=8, epochs=12, T_max=12
+
+| Metric | n_hidden=224 + ep=12 | accum=2 baseline (80.62) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **90.17** | **80.62** | **+11.8%** |
+| val_avg/mae_surf_p (best ep12, last) | 99.09 | 90.82 | +9.1% |
+| test_single_in_dist | 96.45 | 82.23 | +17.3% |
+| test_geom_camber_rc | 105.25 | 93.60 | +12.4% |
+| test_geom_camber_cruise | 67.08 | 61.57 | +8.9% |
+| test_re_rand | 91.91 | 85.06 | +8.1% |
+
+- 12/12 epochs at 141.3s/epoch (cosine T_max=12 fully consumed)
+- Peak GPU: 89.07 GB (well within 96 GB cap, much higher than PR's 58 GB projection)
+- Model params: 2.01M (vs 1.47M baseline, +37%)
+- Val trajectory still descending at ep12 (last delta −0.36 = ~0.4%/epoch) — under-trained, not capacity-saturated
+
+**Analysis (student diagnosis adopted)**: **Empirical width-scaling exponent is ≈2.43, not the PR's 1.4.** Concretely: 192:96s, 224:141s gives exp(log(141/96)/log(224/192)) ≈ 2.49. This forced epochs=12 (vs 18 baseline) = 33% epoch handicap. The smooth tail of val trajectory + zero overfitting signatures strongly suggest width *capacity* is still productive but *budget* is binding.
+
+Combined with PR #1945 (n_hidden=256 only 12/18 epochs completed at T_max=18), we now have TWO clean negative results above width=192 at 30-min cap.
+
+**Width >192 lever CLOSED at 30-min budget.** A revisit with width=208 + epochs=14 (closer-to-fair budget) is the natural follow-up, but slot priority is on untested orthogonal levers (mesh-node dropout, EMA-0.95, per-axis Fourier).
+
+**Action**: Closed. Reassigned alphonse mesh-node-dropout (#2115).
+
+---
+
+## 2026-05-13 09:13 — PR #1967: slice_num 64→96 — CLOSED (capacity-up cost dominates budget)
+- Branch: willowpai2g48h1-nezuko/slice-num-96
+- Hypothesis: 1.5× physics-attention slots; PR predicted <8% per-epoch cost, −2 to −6% test gain.
+- W&B run: slywy5dg (nezuko, slice-num-96-trial-1, group `slice-num-sweep`)
+- Config: slice_num=96, bs=4 (run WITHOUT --accumulation_steps 2 flag → comparable to Lion-only baseline 83.77, not current 80.62), Lion lr=1.5e-4, fourier_L=8
+
+| Metric | slice_num=96 | Lion-only baseline (83.77) | Δ | vs current 80.62 |
+|---|---|---|---|---|
+| **test_avg/mae_surf_p** | **89.77** | **83.77** | **+7.17%** | +11.35% |
+| val_avg/mae_surf_p (best ep13) | 98.70 | 92.70 | +6.46% | — |
+| test_single_in_dist | 95.61 | 90.07 | +6.15% | — |
+| test_geom_camber_rc | 105.63 | 98.72 | +7.00% | — |
+| test_geom_camber_cruise | 65.54 | 60.96 | +7.51% | — |
+| test_re_rand | 92.32 | 85.32 | +8.20% | — |
+
+- 13/18 epochs at 149.3s/epoch (+16.6% vs Lion-only 128s, vs predicted <8%)
+- Final LR 3e-5 (cosine T_max=18 never reached the LR floor)
+- Peak GPU: 84.5 GB (~doubled from ~43 GB Lion-only) — N×slice_num attention intermediate cached for backward
+
+**Analysis (student diagnosis adopted)**: Capacity-up + truncated schedule = double regression. Cost grew more than predicted (linear-in-slice attention term scales O(N·slice) for both compute and memory; cached intermediates 2× memory). Cosine schedule truncation contributes meaningful share of the +7% delta — val curve still descending at ep13.
+
+**Slice_num=96 lever CLOSED.** Direction reversed and reassigned to nezuko as #2121 (slice_num=48 — opposite direction, free per-epoch budget for more cosine refinement).
+
+**Action**: Closed. Reassigned nezuko slice-num-48 (#2121).
+
+---
+
+## 2026-05-13 09:13 — PR #1969: Decoupled weight decay (zero wd on biases/norms) — CLOSED (null result)
+- Branch: willowpai2g48h1-fern/decoupled-weight-decay
+- Hypothesis: Zero wd on biases/LayerNorm/placeholder; standard Transformer recipe to improve OOD generalization under Lion.
+- W&B run: tdfjim5o (fern, decoupled-wd-trial-1, group `decoupled-wd`)
+- Config: bs=4 (run WITHOUT --accumulation_steps 2 flag → comparable to Lion-only baseline 83.77, not current 80.62), Lion lr=1.5e-4, decay group 1.467M params, no-decay group 11.27K params (extended filter `("bias", "ln_", "norm", "placeholder")` to capture codebase's `ln_1/ln_2/ln_3` LayerNorm naming)
+
+| Metric | decoupled-wd | Lion-only baseline (83.77) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **84.77** | **83.77** | **+1.20%** (null) |
+| val_avg/mae_surf_p (best ep14) | 92.26 | 92.70 | −0.47% |
+| test_single_in_dist | 85.74 | 90.07 | **−4.81%** (single positive split) |
+| test_geom_camber_rc | 103.69 | 98.72 | **+5.04%** (largest regression) |
+| test_geom_camber_cruise | 62.30 | 60.96 | +2.20% |
+| test_re_rand | 87.35 | 85.32 | +2.38% |
+
+- 15/18 epochs at ~128s/epoch (matches Lion-only baseline; zero overhead confirmed)
+- Peak GPU: 43.4 GB (unchanged)
+
+**Analysis (student diagnosis adopted)**: Net null at +1.2% on the primary metric. **Per-split picture explicitly contradicts the OOD-generalization hypothesis**: in_dist improved −4.8% (real-looking) but all 3 OOD splits regressed (rc +5.0%, cruise +2.2%, re_rand +2.4%). Lion's effective wd per step is `lr·wd = 1.5e-8` — tiny in magnitude — so non-trivial deltas must flow through sign-momentum dynamics rather than direct shrinkage. The val/test direction-flip (val −0.5%, test +1.2%) is consistent with the "inside-noise-floor" read.
+
+**Weight-decay lever CLOSED across both axes**: magnitude (#1796 wd=1e-3 closed +0.8%) and structure (this PR, +1.2% null). Selective wd-on-LN-only is mentioned as a tighter follow-up by fern but expected ceiling −1 to −4% is too small for a slot when untried levers remain.
+
+**Action**: Closed. Reassigned fern ema-decay-095 (#2117).
+
+---
+
+## 2026-05-13 09:13 — PR #2115 (NEW): Mesh-node dropout=0.1 on input mesh during training
+- Branch: willowpai2g48h1-alphonse/mesh-node-dropout
+- Hypothesis: Drop 10% of input mesh nodes per batch during training (Bernoulli mask on x_norm + attention mask). Forces robustness to spatial sampling — the held-out geometry splits (rc, cruise) have different mesh densities than train. Domain-specific input regularizer for irregular meshes, analogous to PointNet/DGCNN point dropout. Zero memory, ~negligible compute. Orthogonal to DropPath (#2030, in-flight): node dropout is input-side; DropPath is structural.
+- References: Qi 2017 (PointNet), Wang 2019 (DGCNN), Park 2019 (DeepSDF).
+- Target: test_avg/mae_surf_p < 80.62
+
+## 2026-05-13 09:13 — PR #2117 (NEW): EMA decay=0.95 (short-horizon, 14-step half-life)
+- Branch: willowpai2g48h1-fern/ema-decay-095
+- Hypothesis: Direct follow-up to closed #2050 (decay=0.999 +29.9% mechanism mismatch). At decay=0.95 the half-life is 14 steps (vs 1000 at 0.999), so EMA tracks the rapid-descent trajectory within ~14 optimizer steps. Diagnostic ratio should plateau quickly inside epoch 1 at ~1-3% (the signal #2050 never reached). Expected mechanism: remove per-step Lion sign-flip noise, NOT trajectory-centering (which requires a stationary trajectory we don't have). Reasonable null prior if Lion's sign-of-momentum already implicitly smooths.
+- Target: test_avg/mae_surf_p < 80.62
+
+## 2026-05-13 09:13 — PR #2118 (NEW): Per-axis Fourier L (Lx=8 chordwise, Ly=4 cross-flow)
+- Branch: willowpai2g48h1-frieren/fourier-per-axis-L
+- Hypothesis: Direct follow-up to closed #1887 (uniform L=16, +4.6% aliasing). The TandemFoilSet mesh is anisotropic — chordwise (x) dense, cross-flow (y) sparse. Per-axis Fourier matches the basis to data's spatial structure: keep x at L=8 (current optimum), halve y to L=4 (no aliasing). space_dim drops 34→26 = ~24% input feature reduction → slight per-epoch speedup + mild regularization. Compounds with Lion+grad-accum on the same Lion-sign-vote-quality mechanism that #1395 established for uniform L=8.
+- References: Tancik 2020, Mildenhall 2020 (NeRF).
+- Target: test_avg/mae_surf_p < 80.62
+
+## 2026-05-13 09:13 — PR #2121 (NEW): slice_num 64→48 (reverse direction of closed #1967)
+- Branch: willowpai2g48h1-nezuko/slice-num-48
+- Hypothesis: Direct reverse direction of closed #1967 (slice_num=96 +11.3% — capacity-up cost dominated). Reduce slots to 48 to **free per-epoch budget** for more cosine refinement. Linearly-extrapolated cost: 48-slot @ ~118s/epoch (−8% vs baseline 128s), enabling 19-20 epochs at the 30-min cap (vs 18 currently). Tests whether budget-for-refinement compounds with Lion+grad-accum on the trade where 48 slots is sufficient capacity. Single-line model_config change.
+- References: Transolver original ablations (Wu 2024) used slice_num=32 in many configs; 64 was high-capacity.
+- Target: test_avg/mae_surf_p < 80.62
