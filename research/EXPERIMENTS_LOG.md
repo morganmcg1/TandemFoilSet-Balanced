@@ -349,6 +349,36 @@ All 4 test splits were finite (PR #1527 NaN guard working).
 
 ---
 
+## 2026-05-13 00:56 — PR #1650: Huber volume loss (CLOSED — val regressed)
+
+- **Branch:** `willowpai2g48h4-tanjiro/huber-on-volume-loss`
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `rzv2hb5d` (vd=0.3), `ri4vj1nk` (vd=0.5, best), `qfvyn8wp` (vd=1.0)
+- **Hypothesis:** Applying Huber to volume nodes reduces encoder gradient noise from volume outliers, indirectly improving surface MAE.
+
+### Results
+
+| Arm | vol_huber_delta | val_avg/mae_surf_p | Δ vs 98.16 | test_avg (4-split) |
+|-----|-----------------|--------------------|-----------|---------------------|
+| Baseline | 0 (MSE) | **98.1642** | — | — |
+| vd=0.3 | 0.3 | 111.5928 | +13.7% ❌ | 101.68 |
+| **vd=0.5** (best) | 0.5 | **106.6946** | **+8.7% ❌** | **96.83** |
+| vd=1.0 | 1.0 | 117.7356 | +19.9% ❌ | 106.30 |
+
+### Analysis and Conclusions
+
+**Closed — all arms regressed.** Unimodal ordering around vd=0.5. The hypothesis that Huber on volume helps encoder quality is wrong.
+
+**Root cause (tanjiro's analysis, confirmed):** Surface and volume play fundamentally different roles. Surface is the evaluated readout where Huber-MAE alignment matters; volume is the *supervisory signal* that shapes the shared encoder. Scale information from volume MSE is more valuable to encoder learning than outlier robustness. Huber on volume removes gradient scale information that was beneficial.
+
+The unimodal ordering (vd=0.5 best of three, not monotone) confirms this is a noise minimisation over delta-tuning, not a true hypothesis-validates signal.
+
+**Principle established:** Surface Huber + volume MSE is the correct recipe. Do not apply Huber to volume.
+
+**Residual opportunity (not yet assigned):** Heavy-tail-only Huber on volume (apply only where |err| > 95th percentile) would more precisely target outliers without removing bulk gradient scale. Low priority given clean negative result.
+
+---
+
 ## 2026-05-13 00:07 — PR #1499: Grad-clip + higher LR on Huber baseline (CLOSED — val regressed)
 
 - **Branch:** `willowpai2g48h4-fern/gradient-clipping-and-higher-lr`
