@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -80,6 +81,37 @@ class MLP(nn.Module):
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
+
+
+class FourierFeatures(nn.Module):
+    """Replace the first 2 dims of the input (x, z node positions) with
+    Fourier feature expansion at K exponentially-spaced frequencies.
+
+    Input shape:  [..., D]  where D = X_DIM.
+    Output shape: [..., 4*K + (D-2)]  when K > 0; identity when K == 0.
+
+    Frequencies are logspaced from 1.0 to ``max_freq``. Operates on the
+    NORMALIZED input (x_norm = (x - x_mean) / x_std), so positions are
+    already O(1) magnitude. No learnable parameters — freqs is a buffer.
+    """
+
+    def __init__(self, k: int, max_freq: float = 10.0):
+        super().__init__()
+        self.k = int(k)
+        if self.k > 0:
+            freqs = torch.logspace(0.0, math.log10(max_freq), self.k)
+            self.register_buffer("freqs", freqs)
+
+    def forward(self, x):
+        if self.k == 0:
+            return x
+        pos = x[..., :2]
+        rest = x[..., 2:]
+        scaled = pos.unsqueeze(-1) * self.freqs.view(*([1] * pos.ndim), -1) * 2.0 * math.pi
+        # scaled: [..., 2, K]
+        sin_feats = scaled.sin().reshape(*pos.shape[:-1], 2 * self.k)
+        cos_feats = scaled.cos().reshape(*pos.shape[:-1], 2 * self.k)
+        return torch.cat([sin_feats, cos_feats, rest], dim=-1)
 
 
 class PhysicsAttention(nn.Module):
@@ -420,6 +452,8 @@ class Config:
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
     amp: bool = False  # bfloat16 mixed precision autocast for fwd + loss
     warmup_epochs: int = 0  # linear LR warmup epochs before cosine decay (0 = disabled)
+    fourier_k: int = 0  # 0 = off (baseline); K > 0 enables Fourier expansion of (x, z) into 4K features
+    fourier_max_freq: float = 10.0  # max frequency in the logspaced band; positions are O(1) post-norm
 
 
 cfg = sp.parse(Config)
@@ -461,9 +495,34 @@ model_config = dict(
     output_dims=[1, 1, 1],
 )
 
-model = Transolver(**model_config).to(device)
+if cfg.fourier_k > 0:
+    model_config["space_dim"] = 4 * cfg.fourier_k
+    model_config["fun_dim"] = X_DIM - 2
+
+
+class FourierModel(nn.Module):
+    """Wraps Transolver with a FourierFeatures expansion of the first 2 input dims."""
+
+    def __init__(self, fourier: FourierFeatures, base: Transolver):
+        super().__init__()
+        self.fourier = fourier
+        self.base = base
+
+    def forward(self, data, **kwargs):
+        x_aug = self.fourier(data["x"])
+        new_data = {k: v for k, v in data.items() if k != "x"}
+        new_data["x"] = x_aug
+        return self.base(new_data, **kwargs)
+
+
+fourier = FourierFeatures(cfg.fourier_k, cfg.fourier_max_freq).to(device)
+base_model = Transolver(**model_config).to(device)
+model = FourierModel(fourier, base_model)
 n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(
+    f"Model: Transolver+FourierFeatures(K={cfg.fourier_k}, max_freq={cfg.fourier_max_freq}) "
+    f"({n_params/1e6:.2f}M params)"
+)
 
 ema_model = deepcopy(model) if cfg.ema_decay > 0 else None
 if ema_model is not None:
