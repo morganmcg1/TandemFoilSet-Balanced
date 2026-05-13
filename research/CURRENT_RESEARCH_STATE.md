@@ -23,7 +23,8 @@ Note: The merged train.py has Lion+Fourier stacked. The Lion+Fourier compound re
 | alphonse | #1359 | lr-warmup+3e-4 | **CLOSED** ✗ | +5.5% regression. Lion lr=1.5e-4 near-optimal; warmup redundant. |
 | alphonse | #1945 | n-hidden-256 | **wip** | n_hidden 192→256 (~57GB at bs=4). Capacity stacking test. |
 | askeladd | #1771 | schedule-realigned | **CLOSED** ✗ | T_max=14 worse than T_max=18. |
-| askeladd | #1877 | lion-bs-8-sqrt2-lr | **wip** | Lion bs=8 + lr=2.1e-4 (√2-scaled). |
+| askeladd | #1877 | lion-bs-8-sqrt2-lr | **CLOSED** ✗ | +6.5% regression. 2.1× fewer steps starvation. rc split -4.5% = OOD signal real. |
+| askeladd | #1980 | gradient-accumulation | **wip** (new) | accum=2, eff_bs=8, same step count as bs=4. Better gradient quality without step starvation. |
 | edward | #1643 | mlp-ratio-4 | **CLOSED** ✗ | +10.0% regression. Per-epoch cost +11% → 13 epochs (horizon-vs-capacity). |
 | edward | #1973 | cosine-eta-min | **wip** (new) | eta_min=lr/10 (1.5e-5) floor in cosine schedule. Zero overhead. |
 | fern | #1796 | weight-decay-1e-3 | **CLOSED** ✗ | +0.8% regression. Per-split sign-flipped vs AdamW. wd lever exhausted. |
@@ -51,12 +52,13 @@ Note: The merged train.py has Lion+Fourier stacked. The Lion+Fourier compound re
 11. **wd magnitude lever CLOSED**: wd=1e-3 under Lion+Fourier gave +0.8% aggregate regression; per-split effects sign-flip vs AdamW run (OOD exhausted under Lion). Pivot to decoupled-wd (structurally different).
 12. **n_head=8 CLOSED at n_hidden=192**: head_dim 48→24 below Transolver ≥32 threshold + +33% per-epoch cost. Revisit only if n_hidden=256 lands (head_dim=32 at n_head=8).
 13. **mlp_ratio=4 CLOSED**: +11% per-epoch cost → 13 epochs, schedule undertrained. Third "horizon-vs-capacity" failure. Pattern: any capacity change that slows per-epoch >10% hurts without schedule realignment.
-14. **bs=8 OOM concern overstated**: mlp_ratio=4 + n_hidden=192 + bs=8 = 50.6 GB peak. Prior OOM cliff documented at n_hidden=192 was likely a transient spike. askeladd #1877 should be safe.
+14. **bs=8 OOM concern overstated**: mlp_ratio=4 + n_hidden=192 + bs=8 = 50.6 GB peak. bs=8 + Lion at default config also ran at ~89 GB (not OOM). Prior OOM cliff was likely a transient spike under AdamW.
+15. **Batch-size lever closed as direct increase**: bs=8 fails due to 2.1× step starvation (+6.5% regression). Gradient accumulation (same steps, eff_bs=8) is the structurally correct alternative. Assigned askeladd #1980.
 
 ## Active hypotheses in-flight
 | PR | Student | Hypothesis | Memory est. | Expected gain |
 |---|---|---|---|---|
-| #1877 | askeladd | Lion bs=8 + lr=2.1e-4 | ~55-70 GB | −3% to −8% |
+| #1980 | askeladd | Gradient accumulation (accum=2, eff_bs=8) | ~43 GB | −2% to −5% |
 | #1887 | frieren | Fourier L=16 (space_dim 34→66) | ~50 GB | −1% to −5% |
 | #1945 | alphonse | n_hidden=256 (33% wider) | ~57 GB | −3% to −8% |
 | #1798 | tanjiro | grad-norm-clip max_norm=1.0 | ~43 GB | −1% to −3% |

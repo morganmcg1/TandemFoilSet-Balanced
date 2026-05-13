@@ -596,3 +596,35 @@ Third dead-end from per-epoch cost in round-2. Pattern confirmed: any change tha
 - Branch: willowpai2g48h1-edward/cosine-eta-min
 - Hypothesis: Set `eta_min=1.5e-5` (lr/10) in CosineAnnealingLR. Prevents LR from quenching to 0 at late epochs. Insurance for truncated training; keeps final epochs learning at floor rate. Single-line change.
 - Target: test_avg/mae_surf_p < 83.77
+
+---
+
+## 2026-05-13 06:00 — PR #1877: Lion bs=8 + sqrt2-lr — CLOSED ✗
+- Branch: askeladd/lion-bs-8-sqrt2-lr
+- W&B runs: `7w5h25xi` (bs=8 primary), `ycm0yf98` (bs=6 fallback), `g4cbgm98` (OOM'd attempt) — group `lion-bs-8`
+
+| Metric | bs=8 lr=2.1e-4 | bs=6 lr=1.84e-4 | Lion-bs=4 baseline | Δ bs=8 |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 99.005 (ep 12) | 94.719 (ep 14) | 92.70 | +6.8% |
+| **test_avg/mae_surf_p** | **89.213** | 86.032 | **83.77** | **+6.5%** |
+| test_single_in_dist | 95.342 | 92.384 | 90.07 | +5.9% |
+| test_geom_camber_rc | 102.546 | **94.288** | 98.72 | +3.9% / **−4.5%** ← |
+| test_geom_camber_cruise | 67.575 | 68.730 | 60.96 | +10.9% |
+| test_re_rand | 91.388 | 88.727 | 85.32 | +7.1% |
+
+- bs=8 epoch time: ~136 s (+6% vs 128 s); peak GPU ~89 GB; 14/18 epochs; 2632 optimizer steps
+- bs=6 epoch time: ~130 s; peak GPU ~99 GB; 14/18 epochs; 3514 optimizer steps
+- Baseline optimizer steps (bs=4): 5640
+
+**Analysis**: Step-count starvation is the binding constraint. bs=8 gets 2.1× fewer optimizer steps than bs=4 (2632 vs 5640). Lion sign-momentum needs update count to converge; halving steps halves total weight displacement. Per-epoch val table: baseline still improving at ep 15 (val 92.7); bs=8 plateaus at val ~99 from ep 12.
+
+**Interesting signal**: bs=6 improved test_geom_camber_rc by **−4.5%** (only split that beat baseline). Partially validates that better gradient signal helps noisy OOD rc geometry. But cruise regressed +12.7% in both runs.
+
+**Gradient accumulation as next step**: Accumulate 2 micro-batches at bs=4 → effective bs=8, same 5640 update steps, same 43 GB peak memory. Gets the gradient quality benefit without step-starvation. Assigned to askeladd.
+
+**Action**: Closed. Assigned askeladd gradient-accumulation (#1980).
+
+## 2026-05-13 06:05 — PR #1980 (NEW): Gradient accumulation (accum=2, eff_bs=8)
+- Branch: willowpai2g48h1-askeladd/gradient-accumulation
+- Hypothesis: 2 micro-batches at bs=4 → effective bs=8 but same step count as bs=4 (5640 updates). Gets the gradient quality benefit without step-starvation. Sign vote over accumulated gradient = better directional signal. Zero memory change (43 GB peak).
+- Target: test_avg/mae_surf_p < 83.77
