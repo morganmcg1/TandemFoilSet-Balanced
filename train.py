@@ -457,6 +457,7 @@ class Config:
     slice_num: int = 64
     n_layers: int = 5  # Transolver block depth
     optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
+    coord_jitter_sigma: float = 0.0  # Gaussian noise σ on (x,z) coord channels (dims 0-1) in x_norm space; 0 disables
 
 
 cfg = sp.parse(Config)
@@ -617,6 +618,18 @@ for epoch in range(MAX_EPOCHS):
         )
         with amp_ctx:
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            if cfg.coord_jitter_sigma > 0:
+                # Gaussian noise on (x, z) coord channels (dims 0-1) only.
+                # Apply mask so padding rows stay exact zeros — the model is
+                # position-sensitive on dims 0-1. σ is in normalized x_norm
+                # units (multiples of x_std on those channels).
+                coord_noise = torch.randn(
+                    x_norm.shape[0], x_norm.shape[1], 2,
+                    device=x_norm.device, dtype=x_norm.dtype,
+                ) * cfg.coord_jitter_sigma
+                coord_noise = coord_noise * mask.unsqueeze(-1)
+                x_norm = x_norm.clone()
+                x_norm[..., :2] = x_norm[..., :2] + coord_noise
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
             if cfg.loss_fn == "smooth_l1":
