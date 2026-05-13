@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 06:15 UTC (post-#1711 merge stabilized; new baseline 75.391 val / 66.608 test; all 8 students actively training: #1962 alphonse surf-ch-weight-aggressive [0.33,0.33,2.33], #1753 askeladd adaptive grad-clip, #1830 edward Fourier L=8 rebase-2, #1549 fern FiLM (pod restart resolved, training now), #1828 frieren SmoothL1 β=0.005 close-out, #1754 nezuko LR warmup, #1852 tanjiro coord jitter aug, #1896 thorfinn LayerScale init=0.05; compound progress 100.957 → 75.391 = -25.3% over 8 merges; 7/8 GPUs at 99-100% util, 1 just-restarted just spinning up)
+- **Last updated**: 2026-05-13 07:15 UTC (MERGE #1896 thorfinn LayerScale init=0.05 as 9th compound win — val 74.476 (-1.21%) / test 66.014 (-0.89%); CLOSE #1962 alphonse surf-ch-weight aggressive [0.33,0.33,2.33] Outcome C confirmed (+1.99% regression, p:vel=7× too aggressive); surf-ch-weight axis fully mapped (optimum is 4×); new assignments: #2018 thorfinn layerscale-init-0.025, #2020 alphonse per-channel-decoder-heads; compound progress 100.957 → 74.476 = -26.2% over 9 merges)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,17 +11,17 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1711 merged — surf-ch-weight [0.5,0.5,2.0], -3.67%)
+## Current best baseline (PR #1896 merged — LayerScale init=0.05, -1.21%)
 
-- `val_avg/mae_surf_p` = **75.391** (surf-ch-weight + LayerScale + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **66.608**
-- Per-split val: single_in_dist=82.287 / camber_rc=85.631 / camber_cruise=58.630 / re_rand=75.015
-- Per-split test: single_in_dist=72.554 / camber_rc=74.210 / camber_cruise=50.877 / re_rand=68.792
-- Δ vs PR #1799 baseline (78.260 / 69.903): **-3.67%** on val_avg, **-4.71%** on 4-split test
-- **All 4 val splits + all 4 test splits improve** — clean monotone direction
-- **Mechanism (per-channel surf weighting [0.5, 0.5, 2.0])**: Loss-surface rebalance, mass-preserved (sum=3), zero new params. Pressure error reduced -3.8% relative-to-pred, Ux +21%, Uy +12% — model trades a small amount of velocity precision for a larger pressure gain that the val_avg metric was bottlenecked on.
-- **Why surf-ch-weight worked when output-side attempts (#1610, #1636, #1675) failed**: All three prior output-side calibrations (full log1p, pressure log1p, per-channel γ/β at output) regressed because they modified the prediction map (the optimizer drifted away from a useful init). Per-channel surf-loss weighting moves the rebalance upstream to the **loss-surface gradient**, leaving the prediction map untouched. Strategic pivot from "fix the predictions" to "fix the loss surface" is validated.
-- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → #1799 LayerScale → **#1711 surf-ch-weight** → val_avg has improved from 100.957 to **75.391** = **-25.3% over 8 merges**.
+- `val_avg/mae_surf_p` = **74.476** (LayerScale init=0.05 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 14)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **66.014**
+- Per-split val: single_in_dist=85.075 / camber_rc=82.764 / camber_cruise=57.002 / re_rand=73.063
+- Per-split test: single_in_dist=75.023 / camber_rc=73.975 / camber_cruise=48.442 / re_rand=66.617
+- Δ vs PR #1711 baseline (75.391 / 66.608): **-1.21%** on val_avg, **-0.89%** on 4-split test
+- **3/4 val + 3/4 test splits improve** (single_in_dist regresses +3.4% — interaction with p:vel=4× weighting)
+- **Mechanism (LayerScale init=0.05)**: Per-channel γ_l means scale ~linearly with init (~0.043/0.063 attn/mlp). Block-0 attn std/mean jumps 38.8% (init=0.1) → 70.7% (init=0.05) — model compensates lower amplitude via wider per-channel diversification. Depth-decreasing MLP trend preserved (0.063→0.047 blocks 0→4).
+- **Surf-ch-weight axis fully mapped**: [1,1,1]=78.260 baseline / [0.5,0.5,2.0]=75.391 (4×, optimum) / [0.33,0.33,2.33]=76.890 (7×, Outcome C). Direction closed — do not exceed 4×.
+- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→**#1896** → val_avg has improved from 100.957 to **74.476** = **−26.2% over 9 merges**.
 
 ## Current research focus
 
@@ -256,20 +256,20 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 - **Optimizer family pivots** — Lion (Chen 2023), Sophia (Liu 2023). Only if both
   betas-refresh (#1773) and warmup (#1754) regress.
 
-## All 8 students currently assigned (post-#1711 merge)
+## All 8 students currently assigned (post-#1896 merge / 9th compound win)
 
 | Student | PR | Status |
 |---------|----|--------|
-| alphonse | #1962 | WIP — H18-B surf-ch-weight-aggressive [0.33, 0.33, 2.33] (p:vel ratio 7× — bracket up from merged 4×) |
-| askeladd | #1753 | WIP — adaptive grad-clip (1.5× running median K=100, pivot from closed fixed-threshold bracket) |
-| edward | #1830 | WIP — Fourier coords L=8 (rebase-2 onto post-#1711 baseline; orthogonal compound expected) |
-| fern | #1549 | WIP — FiLM global-cond (pod restart resolved 05:54 UTC, training fresh on current baseline) |
-| frieren | #1828 | WIP — SmoothL1 β=0.005 close-out (β=0.01 landed flat on val, narrow window bracket) |
-| nezuko | #1754 | WIP — LR warmup H19 (rebased; warmup orthogonal to LayerScale/surf-weight) |
-| tanjiro | #1852 | WIP — coord jitter aug std=0.005 (data-aug pivot, regularizes high-freq Fourier responses) |
-| thorfinn | #1896 | WIP — LayerScale init=0.05 (init bracket from merged init=0.1; tests per-channel-granularity hypothesis) |
+| alphonse | #2020 | NEW — full-capacity per-channel decoder heads (3×128→128→1, fixes H17 half-capacity confound) |
+| askeladd | #1753 | WIP — adaptive grad-clip (1.5× running median K=100; pod restart instability ~11 crashes) |
+| edward | #1830 | WIP — Fourier coords L=8 rebase-2 (orthogonal compound expected; training 99% GPU) |
+| fern | #1549 | WIP — FiLM global-cond (pod restart resolved, training 99% GPU) |
+| frieren | #1828 | WIP — SmoothL1 β=0.005 close-out (β=0.01 flat; narrow-window bracket; pod restart iter 1) |
+| nezuko | #1754 | WIP — LR warmup H19 (rebased onto current stack; training 100% GPU) |
+| tanjiro | #1852 | WIP — coord jitter aug std=0.005 (data-aug pivot; training 100% GPU) |
+| thorfinn | #2018 | NEW — LayerScale init=0.025 (continue operating-point sweep; tests per-channel diversity ceiling) |
 
-Zero idle students. Zero idle GPUs. 7/8 GPUs at 99-100% utilization, 1 just-restarted spinning up training.
+Zero idle students. Zero idle GPUs.
 
 ## Wave 8 candidate pool (held — depending on in-flight outcomes)
 

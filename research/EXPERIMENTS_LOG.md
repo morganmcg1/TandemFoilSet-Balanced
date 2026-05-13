@@ -8,6 +8,52 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 07:05 — PR #1896 (thorfinn LayerScale init=0.05) — **MERGED** (9th compound win)
+
+- Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.05`
+- Hypothesis: bracket the merged LayerScale init=0.1 downward to init=0.05. Tests "per-channel granularity hypothesis" — does the model converge to the same γ_l plateau regardless of init, or does the operating-point magnitude matter?
+- Metric artifacts: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.05-20260513-061249/metrics.jsonl`
+
+| Metric | init=0.05 (#1896) | Baseline (#1711) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **74.476** | 75.391 | **−1.21%** |
+| test_avg/mae_surf_p (4-split) | **66.014** | 66.608 | **−0.89%** |
+
+Per-split val: single_in_dist=85.075 (+3.39% ← only regression) / camber_rc=82.764 (−3.35%) / camber_cruise=57.002 (−2.78%) / re_rand=73.063 (−2.60%). **3/4 val splits improve.**
+Per-split test: single_in_dist=75.023 (+3.40%) / camber_rc=73.975 (−0.32%) / camber_cruise=48.442 (−4.78%) / re_rand=66.617 (−3.16%). **3/4 test splits improve.**
+
+**Mechanism — hybrid Outcome A/B:**
+- Headline metrics: Outcome A range (val -1.21%, test -0.89% — marginal win, compounding cleanly)
+- γ_l means: scale ~linearly with init (0.05 → means ~0.043/0.063 vs 0.1 → means ~0.119/0.083) — Outcome B (model stays near init, NOT converging to a single plateau)
+- Per-channel std/mean ratio: **block-0 attn jumps 38.8% → 70.7%** — model compensates for lower amplitude by widening per-channel diversity
+- Depth-decreasing MLP trend preserved (blocks 0→4: 0.063→0.064→0.055→0.044→0.047)
+
+**Key insight:** Per-channel granularity IS load-bearing, but the operating-point magnitude co-varies with init. Lower init = smaller residual amplitude = more per-channel diversification used for compensation. The `single_in_dist` regression (+3.4%) is likely an interaction with #1711's p:vel=4× weighting: reduced residual gain on the pressure-dominated single-foil split costs accuracy there, while geom/Re-shift splits benefit from the mild regularization.
+
+**Compound progress: 100.957 → 74.476 = −26.2% over 9 merges** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896)
+Thorfinn assigned follow-up: init=0.025 bracket to continue the operating-point sweep.
+
+---
+
+## 2026-05-13 07:08 — PR #1962 (alphonse surf-ch-weight [0.33,0.33,2.33] — H18-B) — **CLOSED** (Outcome C)
+
+- Branch: `charliepai2g24h4-alphonse/surf-ch-weight-aggressive`
+- Hypothesis: bracket-up from merged H18 `[0.5,0.5,2.0]` (4×) to `[0.33,0.33,2.33]` (7×). Pre-registered Outcome C protocol if val regresses.
+- Metric artifacts: `models/model-charliepai2g24h4-alphonse-surf-ch-weight-aggressive-20260513-060655/metrics.jsonl`
+
+| Metric | H18-B (7×) | Baseline H18 (4×) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **76.890** | 75.391 | **+1.99% REGRESSION** |
+| test_avg/mae_surf_p | **67.388** | 66.608 | +1.17% REGRESSION |
+
+**Outcome C confirmed (bracket-up regresses).** Pressure regressed on all 4 val splits (+0.4% to +5.4%). Velocity degraded only +6-13% (vs predicted +30-40%), meaning the optimizer isn't redistributing capacity — it's descending less effectively overall.
+
+**Mechanism:** At p:vel=7×, velocity-side gradient is too weak. Pressure prediction partially relies on velocity-field coherence (continuity-like relationships); starving Ux/Uy gradients harms pressure prediction back through the shared encoder. The two val splits with highest pressure errors (single_in_dist +5.4%, camber_rc +1.1%) regressed most sharply.
+
+**Axis closure:** surf-loss-weighting axis mapped at 3 points: implicit [1,1,1]=78.260 / [0.5,0.5,2.0]=75.391 (optimum) / [0.33,0.33,2.33]=76.890. 4× is the local maximum. Direction fully closed. Alphonse reassigned to new direction.
+
+---
+
 ## 2026-05-13 05:57 — PR #1711 (alphonse surf-ch-weight [0.5,0.5,2.0] — H18) — **MERGED** (8th compound win)
 
 - Branch: `charliepai2g24h4-alphonse/surf-ch-weight-h18`
