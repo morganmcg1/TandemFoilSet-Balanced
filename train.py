@@ -82,7 +82,7 @@ class MLP(nn.Module):
 
 
 class SwiGLU(nn.Module):
-    """Gated SiLU MLP: param-equivalent to MLP(mlp_ratio=2) at hidden_dim=4/3*dim."""
+    """GeGLU (GELU-gated) MLP: param-equivalent to MLP(mlp_ratio=2) at hidden_dim=4/3*dim."""
     def __init__(self, dim, hidden_dim, out_dim):
         super().__init__()
         self.w_in = nn.Linear(dim, hidden_dim)
@@ -90,7 +90,7 @@ class SwiGLU(nn.Module):
         self.w_out = nn.Linear(hidden_dim, out_dim)
 
     def forward(self, x):
-        return self.w_out(F.silu(self.w_in(x)) * self.w_gate(x))
+        return self.w_out(F.gelu(self.w_in(x)) * self.w_gate(x))
 
 
 class PhysicsAttention(nn.Module):
