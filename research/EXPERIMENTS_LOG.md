@@ -2389,3 +2389,118 @@ Pre-SWA val reached 75.65 at epoch 13 — significant overshoot indicator. SWA r
 - **Target:** val < 66.66 — expected ∈ [63, 67] based on monotonic β→improvement trend
 - Single arm, `--huber_beta 0.2`.
 
+---
+## 2026-05-13 12:08 — PR #2220 CLOSED willowpai2g48h2-fern (LayerScale γ-init=1e-4 on RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-fern/layerscale-on-rff-kendall`
+- **W&B:** `cvep380q`
+- **Result:** SWA val=**78.5117** / test=**68.5817** vs baseline 70.6271/62.0907 = **+11.16% / +10.46% regression**
+
+### Per-split SWA
+
+| Split | val (LayerScale) | Baseline val | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 89.44 | 78.74 | +13.6% |
+| geom_camber_rc | 90.45 | 84.06 | +7.6% |
+| geom_camber_cruise | 55.02 | 50.11 | +9.8% |
+| re_rand | 75.04 | 69.59 | +7.8% |
+| **avg** | **78.51** | **70.63** | **+11.2%** |
+
+### γ trajectory (failed convergence)
+
+| Epoch | val | γ_attn_all | γ_mlp_all |
+|---|---:|---:|---:|
+| 1 | 187.39 | −1.7e-4 | 3.7e-3 |
+| 8 | 89.38 | 9.6e-5 | 6.3e-3 |
+| 13 | 78.99 | 2.4e-5 | 6.6e-3 |
+
+### Analysis
+
+Same depth-starvation failure mode as #1680 DropPath. At 5 layers, γ_attn never left initialization (mean ~2e-5), γ_mlp grew only ~66× to mean ~6.6e-3 (needs ~0.1-1.0 for useful residual contribution). CaiT's γ_init=1e-4 requires 24+ layers to warm up to useful magnitudes within typical epoch budgets. At 5 layers, the 15-epoch budget is insufficient.
+
+**Critical distinction from DropPath:** DropPath *stochastically drops* blocks (removes 20% of forward path per block at 5 layers). LayerScale *attenuates* residuals by 100× — different mechanism, same starvation outcome. The init regime, not the drop mechanism, was the fatal design choice for shallow networks.
+
+**Key mechanistic finding:** Kendall σ collapsed to near-uniform (σ range 0.222-0.243 = 9% spread) because the under-fit dominates all per-channel signals — same failure mode as Lion+Kendall at insufficient fit quality.
+
+**Student suggested follow-up (assigned next):** ReZero variant with γ_init=1.0 — start at full residual strength, let optimizer prune. Assigned as PR #2269.
+
+---
+## 2026-05-13 12:09 — PR #2171 CLOSED willowpai2g48h2-alphonse (β=0.1 on RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-alphonse/beta-0p1-rff-kendall`
+- **W&B:** `1fi58ajy`
+- **Result:** SWA val=**67.5473** / test=**59.5508** vs new β=0.3 baseline 66.6617/58.3234 = **+1.34% / +2.11% regression**
+
+### Per-split SWA (vs old β=1.0 RFF+Kendall baseline, which β=0.1 beats)
+
+| Split | val baseline (β=1.0) | val β=0.1 | Δ (vs β=1.0) | test β=0.1 | Δ (vs β=1.0) |
+|---|---:|---:|---:|---:|---:|
+| single_in_dist | 78.743 | 76.404 | −2.34 | 68.416 | −0.82 |
+| geom_camber_rc | 84.063 | 80.422 | −3.64 | 74.081 | −1.66 |
+| geom_camber_cruise | 50.114 | 45.763 | −4.35 | 37.523 | −3.90 |
+| re_rand | 69.588 | 67.600 | −1.99 | 58.183 | −3.78 |
+| **avg** | **70.627** | **67.547** | **−4.4%** | **59.551** | **−4.1%** |
+
+### Analysis
+
+**Monotonic β trend does NOT hold past β=0.3.** The prediction "smaller β = better" fails at β=0.1:
+- β=1.0 → β=0.3: val 70.63 → 66.66 (−5.62% improvement)
+- β=0.3 → β=0.1: val 66.66 → 67.55 (+1.34% regression)
+
+β=0.3 appears to be the optimum on this stack. β=0.2 (edward #2243, in flight) confirms the bracket.
+
+**Key diagnostic (mechanism):** `train/clip_fraction=1.000` throughout entire run. β=0.1 makes the loss near-linear (L1 everywhere), producing uniform-magnitude gradients that exceed max_norm=0.5 on every batch. This hard caps effective step sizes and slows early convergence. Despite this, β=0.1 still beat the OLD β=1.0 baseline — but doesn't beat β=0.3 because the grad-clip binds more under β=0.1 than under β=0.3.
+
+**Interaction banked:** clip_fraction under β=0.3 is also likely high (alphonse confirmed it for β=0.1; the β=0.3 baseline clip_fraction is unverified). max_norm relaxation sweep assigned to alphonse (#2270).
+
+---
+## 2026-05-13 12:09 — PR #2168 SENT BACK willowpai2g48h2-thorfinn (RFF σ=0.5 needs β=0.3 rerun)
+
+- **Branch:** `willowpai2g48h2-thorfinn/fourier-sigma-refine`
+- **W&B:** `4voem505` (σ=0.5, win arm), `qwauxcii` (σ=2.0, regression arm)
+- **Result:** σ=0.5 SWA val=**70.1600** / test=**61.4093** vs old β=0.0 baseline 70.6271/62.0907 = **−0.47/−0.68** (marginal win)
+
+### Per-split (σ=0.5, SWA, vs old baseline)
+
+| Split | val σ=0.5 | Δ val | test σ=0.5 | Δ test |
+|---|---:|---:|---:|---:|
+| single_in_dist | 78.010 | −0.93% | 69.649 | +0.59% |
+| geom_camber_rc | 82.186 | −2.23% | 74.567 | −1.55% |
+| geom_camber_cruise | 51.500 | +2.77% | 41.710 | +0.70% |
+| re_rand | 68.945 | −0.92% | 59.711 | −3.64% |
+| **avg** | **70.160** | **−0.66%** | **61.409** | **−1.10%** |
+
+### Analysis
+
+σ=0.5 beats OLD baseline (β=0.0) but loses to NEW baseline (β=0.3, val=66.66). Decision:
+- σ direction is real and monotonic: σ=4.0 worst → σ=2.0 regression → σ=1.0 current → σ=0.5 best → σ=0.25 (untested)
+- Mechanism: lower σ = smoother/lower-frequency Fourier features = global smoothness prior, benefits irregular CFD mesh
+- σ and β=0.3 are orthogonal (input encoding vs loss), likely compose
+- Sent back for σ=0.5 rerun on β=0.3 stack. Projection: val ∈ [65.0, 66.5] if additive.
+
+---
+## 2026-05-13 12:10 — PR #2063 SENPAI-RESULT POSTED willowpai2g48h2-askeladd (Lion on β=0.0+RFF+Kendall — record keeping)
+
+- **W&B:** `6tfv6y76` (lion-lr3e-4-wd3e-4-on-rff-kendall, β=0.0 stack)
+- **Result:** SWA val=**50.9680** / test=**43.4003** vs old β=0.0 baseline 70.63/62.09 = **−27.85% / −30.10%**
+
+Student posted SENPAI-RESULT for this historical record. β=0.3 rerun now in progress (W&B `5hp3gid7`, started 12:03Z). Expected val ∈ [44, 52] if Lion and β=0.3 compound.
+
+**Pending:** Monitor `5hp3gid7` completion. Once done, run preflight and merge.
+
+---
+## 2026-05-13 12:50 — PR #2269 ASSIGNED willowpai2g48h2-fern (ReZero γ-init=1.0 on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-fern/rezero-gamma-1p0-on-rff-kendall-beta0p3`
+- **Hypothesis:** Per-channel learnable residual gain initialized at 1.0 (full strength) instead of LayerScale's 1e-4. Addresses depth-starvation: at 5 layers, γ starts at "already fully contributing" and optimizer prunes where unhelpful. Based on ReZero (Bachlechner 2020) and student's #2220 follow-up suggestion #1.
+- **Target:** val < 66.66 / test < 58.32
+- Single arm with γ trajectory + per-block + Kendall σ logging.
+
+---
+## 2026-05-13 12:50 — PR #2270 ASSIGNED willowpai2g48h2-alphonse (max_norm relaxation on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-alphonse/max-norm-relax-sweep-on-beta0p3`
+- **Hypothesis:** clip_fraction=100% throughout β=0.1 and likely β=0.3 runs. max_norm=0.5 hard-caps every gradient step. Relaxing to 0.75 or 1.0 may accelerate convergence at our 13-epoch timeout-bound budget.
+- **Target:** val < 66.66 / test < 58.32
+- 2-arm sweep: max_norm=0.75 (arm 1) and max_norm=1.0 (arm 2). All other config identical to β=0.3 baseline.
+
