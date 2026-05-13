@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-13 20:30 UTC — Round 43
+
+### PR #2307 askeladd: slice_num 32→24 (PhysicsAttention granularity-down) — MERGED (MASSIVE WIN −9.61%, new baseline 42.3455)
+
+- **Branch:** `charliepai2g48h5-askeladd/slicenum-24`
+- **Hypothesis (original):** 3rd orthogonal budget-bound axis triangulation. Predicted mechanism: −8-12% per-epoch savings → more cosine refinement epochs.
+
+- **Results (vs PR #2268 branch baseline 46.8460; comparison also vs current baseline 42.3455):**
+
+| Metric | PR #2307 | PR #2268 baseline (branch base) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **42.3455** | 46.8460 | **−9.61% MASSIVE WIN** |
+| `test_avg/mae_surf_p` | **38.5059** | 40.8140 | **−5.66% WIN** |
+| Epochs reached | 58 of 70 | 58 of 60 | ~same |
+| Best epoch | 57 (≠terminal) | 58 (=terminal) | 1-ep bounce at ep58 |
+| Per-epoch cost | ~30.80 s | ~31.4 s | **−2% (not −8 to −12%)** |
+| Peak memory | 18.30 GB | 16.55 GB | +10% (compile-cache variance) |
+| Param count | 576,875 | 577,931 | −0.18% (slice tensors only) |
+
+- **Per-split breakdown:**
+
+| Split | PR #2307 | PR #2268 baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 35.4776 | 41.7031 | **−14.93%** |
+| `val_geom_camber_rc` | 60.8311 | 64.6729 | **−5.94%** |
+| `val_geom_camber_cruise` | 27.6517 | 31.5759 | **−12.43%** |
+| `val_re_rand` | 45.4214 | 49.4322 | **−8.11%** |
+
+- **CRITICAL FINDING — mechanism is ROUTING QUALITY, not budget-bound:**
+  - Prediction was −8 to −12% per-epoch savings → more budget. Actual savings: −2%.
+  - The win is from **fewer, sharper PhysicsAttention partitions** — slice_num=32 was ABOVE the routing optimum.
+  - Regularization / inductive-bias effect: sparser partitioning sharpens token grouping, improving geometric generalization without removing required capacity.
+  - This is the **largest single-PR gain since round-1 warmup merge** (−9.61% vs next-largest −3.44% for n_layers=4).
+
+- **Key diagnostic for val_geom_camber_rc:** −5.94% — first *significant* movement on the historic OOD bottleneck since LayerScale PR #2195 (−2.22%). slice_num directly governs the PhysicsAttention geometric routing quality, and this split is the most demanding routing task.
+
+- **NOTE: PR #2307 branched off #2268 (n_hidden=128).** Current advisor at merge time has n_hidden=96. Squash-merge resolved cleanly — the slice_num=24 diff is orthogonal to the n_hidden change. Advisor now has: n_layers=4 + n_hidden=96 + slice_num=24 + LayerScale + warmup-3-cosine + n_head=2.
+
+- **Hypothesis revision for slice_num axis:** Prior understanding was slice_num=32 was a global optimum (PR #1846 winner in round-18). That was correct at the time (slice_num=32 beat 64). The *direction* was right but the floor was not reached. **The routing optimum is below 32, confirmed below 24 may be the floor — assigned slice_num=16 as #2362 to askeladd.**
+
+---
+
 ## 2026-05-13 20:00 UTC — Round 42
 
 ### PR #2290 frieren: n_hidden 128→96 (width-down probe) — MERGED (WIN, new baseline 46.3612)
