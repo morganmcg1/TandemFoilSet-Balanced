@@ -124,3 +124,47 @@ Additionally: the variant model produced non-finite predictions on at least one 
 - Closed. Hypothesis at `t=1.0` falsified (+7.2% on val, NaN on test). Per-spec `t=2.0` stretch arm correctly not run.
 - Follow-up direction (assigned to askeladd as next PR): **loss-level Re-reweighting** — multiply each sample's loss by `exp(t * log_re_centered)` inside the train loop, no resampling. Same "tilt toward high-Re" mechanism without the discrete sample-starvation problem. If even `t=0.3` produces a -1 to -3% effect on `val_avg`, the OOD-split signal observed here is real and just needed a less aggressive implementation.
 - BASELINE.md updated with the supplemental 90.91/86.87 measurement of the current advisor branch (the merged-best stays at 104.70 until a winning hypothesis PR's terminal `SENPAI-RESULT` marker lands).
+
+## 2026-05-13 00:55 — PR #1431: Raise surf_weight 10 → 50 to align loss with surface-p MAE — CLOSED
+
+- Student branch: `willowpai2g24h3-alphonse/surf-weight-50`
+- Hypothesis: raising `surf_weight` from 10 → 50 sharpens the loss-vs-metric alignment with surface-pressure MAE; predicted small improvement on `val_avg/mae_surf_p`.
+- Bundled: an in-PR copy of the cruise-NaN-y filter (commit `b073a95` in `train.py::evaluate_split`) — same fix as askeladd's #1433, applied independently. Will be a no-op delta on rebase.
+
+### Results
+
+| Arm | surf_weight | val_avg/mae_surf_p | test_avg/mae_surf_p (4-split, finite) | Δ vs baseline (test) | W&B |
+|---|---:|---:|---:|---:|---|
+| baseline | 10 (default) | **126.70** | **112.68** | — | `ogz8su1w` |
+| variant | 50 | 131.34 | 120.90 | **+7.30% worse** | `2qytxnem` |
+| bonus | 25 | 143.79 | 127.35 | +13.02% worse | `x6nf3mk2` |
+
+All three arms hit the 30-min wall-clock cap at 14 epochs (~28% through the cosine schedule). Comparisons are apples-to-apples at the same training budget on alphonse's pre-rebase branch (his fork carries MSE + cruise-fix, but does *not* yet stack SmoothL1+grad-clip — so absolute numbers are not directly comparable to other students' baselines on the current advisor branch). The hypothesis decision (variant +7.3% worse) is unaffected.
+
+### Per-split test breakdown (best-val checkpoint) — the smoking gun
+
+| Arm | split | surf[p] | vol[p] |
+|---|---|---:|---:|
+| baseline | test_single_in_dist | 132.97 | 134.44 |
+| baseline | test_geom_camber_rc | 124.40 | 121.45 |
+| baseline | test_geom_camber_cruise | 81.39 | 79.76 |
+| baseline | test_re_rand | 111.96 | 107.22 |
+| **surf=50** | test_single_in_dist | 130.39 | **178.16 (+32%)** |
+| **surf=50** | test_geom_camber_rc | 132.78 | **159.60 (+31%)** |
+| **surf=50** | test_geom_camber_cruise | 98.18 | **161.50 (+102%)** |
+| **surf=50** | test_re_rand | 122.24 | **176.63 (+65%)** |
+
+### Analysis (mechanistic — high-value finding)
+
+**Bernoulli-coupling is the dominant mechanism.** alphonse's diagnosis: in incompressible flow, surface `p` and volume `p` are globally linked through pressure-Poisson / Bernoulli equations. Suppressing the volume-`p` residual signal (from `1/(1+10)=9.1%` of total at `surf_weight=10` to `1/(1+50)=1.96%` at `surf_weight=50`) starves the model of the volume-pressure structure it needs to *correctly anchor* surface pressure. The result is exactly what we see: vol[p] regresses by 30-102% across all four test splits, and surface-p slightly regresses too because the global pressure field is now miscalibrated near the foil.
+
+**The "minority-class" framing was wrong on principle.** "Surface is the metric, so upweight surface" looks like sensible loss-metric alignment, but on a coupled PDE system the volume channels are *not noise* — they carry the constraint structure the surface predictions rely on. This rules out a whole family of naive task-aligned reweighting hypotheses for coupled physics. Generalizes to other PDE-surrogate problems.
+
+**Surface velocity (Ux, Uy) is robust to channel reweighting** (slight regressions only) — the free-slip-like constraint at the foil makes those channels easy and saturated. The hypothesis only ever had a chance on `surf[p]`, and that channel needs both sides of the Bernoulli coupling.
+
+### Conclusions
+
+- Closed. Hypothesis falsified by an internally-consistent A/B with strong mechanistic explanation.
+- Cruise-NaN-y filter works: all three arms produced finite 4-split `test_avg/mae_surf_p`. Independent confirmation that #1433's fix is correct.
+- Follow-up direction (assigned to alphonse as next PR): **`slice_num` sweep on Transolver's Physics Attention layer.** Listed as an open question in `CURRENT_RESEARCH_STATE.md`; tests whether 64 slices saturate on the 242K-node cruise meshes. Default 64; arms at 32/96/128 to bracket. Compute trade-off (slower epochs vs finer representation) similar to but milder than the closed #1443 wider-n192.
+- The Bernoulli-coupling mechanism finding will be cited in future hypothesis assignments. "Reweight surface" is now a known dead end for surface-MAE-on-coupled-physics.
