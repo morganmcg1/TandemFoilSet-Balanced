@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -425,6 +426,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    ema_decay: float = 0.0   # If 0.0, EMA is disabled (baseline behaviour)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -477,6 +479,18 @@ surf_head = SurfaceCorrection(in_dim=3 + X_DIM, out_dim=3, hidden=64).to(device)
 all_params = list(model.parameters()) + list(surf_head.parameters())
 n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
+
+# EMA shadow copies — only used if ema_decay > 0
+if cfg.ema_decay > 0.0:
+    ema_model = deepcopy(model)
+    ema_surf_head = deepcopy(surf_head)
+    for p in ema_model.parameters():
+        p.requires_grad_(False)
+    for p in ema_surf_head.parameters():
+        p.requires_grad_(False)
+    print(f"EMA enabled (decay={cfg.ema_decay})")
+else:
+    ema_model = ema_surf_head = None
 
 optimizer = torch.optim.AdamW(all_params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
@@ -578,6 +592,12 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        if ema_model is not None:
+            with torch.no_grad():
+                for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+                    ema_p.mul_(cfg.ema_decay).add_(p, alpha=1.0 - cfg.ema_decay)
+                for ema_p, p in zip(ema_surf_head.parameters(), surf_head.parameters()):
+                    ema_p.mul_(cfg.ema_decay).add_(p, alpha=1.0 - cfg.ema_decay)
         global_step += 1
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
         with torch.no_grad():
@@ -606,10 +626,12 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
 
     # --- Validate ---
-    model.eval()
-    surf_head.eval()
+    eval_model = ema_model if ema_model is not None else model
+    eval_surf_head = ema_surf_head if ema_surf_head is not None else surf_head
+    eval_model.eval()
+    eval_surf_head.eval()
     split_metrics = {
-        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(eval_model, eval_surf_head, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -641,7 +663,10 @@ for epoch in range(MAX_EPOCHS):
             "per_split": split_metrics,
         }
         torch.save(
-            {"model": model.state_dict(), "surf_head": surf_head.state_dict()},
+            {
+                "model": (ema_model if ema_model is not None else model).state_dict(),
+                "surf_head": (ema_surf_head if ema_surf_head is not None else surf_head).state_dict(),
+            },
             model_path,
         )
         tag = " *"
