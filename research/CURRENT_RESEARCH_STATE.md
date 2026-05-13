@@ -104,11 +104,18 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments
+## Active Experiments (round 19:30 — bold post-plateau directions)
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2324 | tanjiro | `grad-accum-batch8` | WIP (token rate-limited until 19:49) | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
+| #2529 | alphonse | `surf-vol-split-head` | WIP | **HIGH** | Two-headed output (surf vs vol) — hard inductive bias, ~6K params extra |
+| #2532 | askeladd | `drop-path-0p1` | WIP | **HIGH** | Stochastic Depth across 5 blocks (linear schedule 0→0.1) — only ViT regularizer untested |
+| #2534 | edward | `tta-re-bracket` | WIP | **HIGH** | TTA averaging at Re ± 5% log-space — zero training cost, pure scoring |
+| #2535 | fern | `mixup-scalar-alpha-0p4` | WIP | **HIGH** | Mixup on broadcast scalar features only (Re, AoA, gap, stagger, NACA) + targets |
+| #2537 | frieren | `derived-features-re2-aoa` | WIP | MEDIUM | Explicit log(Re)² + log(Re)×AoA1 input channels (24→26) |
+| #2538 | nezuko | `bernoulli-surface-loss` | WIP | MEDIUM | Bernoulli soft constraint on surface nodes (var(p+½U²)) at λ=0.01 |
+| #2539 | thorfinn | `fourier-pos-encoding` | WIP | MEDIUM | Frozen Gaussian Fourier features for (x,z) coords (num_freq=4, σ=1.0) |
+| #2324 | tanjiro | `grad-accum-batch8` | WIP (rate-limited) | MEDIUM | gradient accumulation steps=2 (effective batch 4→8); token resets 19:49 |
 
 ---
 
