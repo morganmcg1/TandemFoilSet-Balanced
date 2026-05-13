@@ -431,6 +431,9 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    use_stratified_sampler: bool = False  # pre-compute frozen p-var sample weights
+    stratified_eps: float = 1e-3          # floor for p-variance (avoids 1/~0 blow-up)
+    disable_bivw: bool = False            # zero out per-sample BIVW weights (debug isolation)
 
 
 cfg = sp.parse(Config)
@@ -446,13 +449,46 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
-if cfg.debug:
+if cfg.use_stratified_sampler:
+    # One-pass pre-compute of per-sample pressure variance over the FULL training
+    # corpus. Weight ∝ 1/var(p) so low-Re samples (small p variance) are sampled
+    # more often. We REPLACE the domain-balanced sampler — the new weights are
+    # the only source of sampling probability, which makes the Re-curriculum
+    # explicit and orthogonal to the loss-level BIVW.
+    print("Precomputing p-variance sample weights for stratified sampler...")
+    raw_p_vars: list[float] = []
+    for _i in range(len(train_ds)):
+        # train_ds returns (x, y, is_surface); we only need y[:, 2] = pressure.
+        _, _y, _ = train_ds[_i]
+        _p_var = float(_y[:, 2].var().item())
+        raw_p_vars.append(max(_p_var, cfg.stratified_eps))
+    _sample_w = torch.tensor([1.0 / v for v in raw_p_vars], dtype=torch.float64)
+    _sample_w = _sample_w / _sample_w.mean()  # mean=1
+    sampler = WeightedRandomSampler(_sample_w, num_samples=len(train_ds), replacement=True)
+    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
+                              sampler=sampler, **loader_kwargs)
+    _sampler_w_min = float(_sample_w.min())
+    _sampler_w_max = float(_sample_w.max())
+    _sampler_w_std = float(_sample_w.std())
+    _sampler_p_var_min = float(min(raw_p_vars))
+    _sampler_p_var_max = float(max(raw_p_vars))
+    print(
+        f"  p-var range: {_sampler_p_var_min:.4g} – {_sampler_p_var_max:.4g}\n"
+        f"  Sample weight range: {_sampler_w_min:.4f} – {_sampler_w_max:.4f}\n"
+        f"  Effective upweight of lowest-Re sample: "
+        f"{_sampler_w_max/max(_sampler_w_min, 1e-12):.1f}×"
+    )
+elif cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+    _sampler_w_min = _sampler_w_max = _sampler_w_std = None
+    _sampler_p_var_min = _sampler_p_var_max = None
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
+    _sampler_w_min = _sampler_w_max = _sampler_w_std = None
+    _sampler_p_var_min = _sampler_p_var_max = None
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -503,6 +539,16 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+if cfg.use_stratified_sampler and _sampler_w_min is not None:
+    wandb.log({
+        "sampler/weight_min": _sampler_w_min,
+        "sampler/weight_max": _sampler_w_max,
+        "sampler/weight_std": _sampler_w_std,
+        "sampler/p_var_min": _sampler_p_var_min,
+        "sampler/p_var_max": _sampler_p_var_max,
+        "global_step": 0,
+    })
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -565,8 +611,11 @@ for epoch in range(MAX_EPOCHS):
                     y_var[b] = 1.0
                 else:
                     y_var[b] = valid.var().clamp(min=1e-4)
-            sample_w = 1.0 / y_var
-            sample_w = sample_w / sample_w.mean()
+            if cfg.disable_bivw:
+                sample_w = torch.ones(B, device=y_norm.device, dtype=y_norm.dtype)
+            else:
+                sample_w = 1.0 / y_var
+                sample_w = sample_w / sample_w.mean()
         sw = sample_w[:, None, None]
 
         vol_mask = mask & ~is_surface
