@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 13:15 UTC
+- **Date / time:** 2026-05-13 13:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -16,6 +16,14 @@ SPDX-PackageName: senpai
 Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
 **11 sequential compounding wins.** Current active stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+## Cycle-38 update — PR #2250 frieren closed (eps=1e-9 +14.1%) + CRITICAL empty-merge bug FIXED + #2300 SWA assigned
+
+**eps axis CLOSED both directions** — frieren's bracketing of eps=1e-9 (+14.07% val) confirms eps=1e-8 is a sharp local optimum. Combined with #1804 eps=1e-6 (+2.12%), eps axis is done.
+
+**CRITICAL workflow bug discovered:** PR #2203 (fern batch_size=1, 11th win, MERGED in cycle 35) was an EMPTY merge — fern never committed the train.py change to the branch. BASELINE.md said batch_size=1 was default but train.py still had batch_size=2. Frieren caught this by comparing his explicit-override run (val=80.25) to a duplicate entrypoint run (val=89.85 = batch_size=2). Fixed in advisor commit `e980575`. The 11-win compounding sequence integrity remains intact (fern's reported metrics are still valid; the bug is purely in the merge propagation), but in-flight PRs have been running with mixed stacks. No retroactive action needed for completed work; future reproduce commands now work as written.
+
+**New #2300 frieren:** Stochastic Weight Averaging (SWA) over last 30% of training epochs. Mechanistically distinct from EMA (which averages throughout, including warmup — closed at -20-25%). SWA averages only the converged tail when LR is small and the model is in a flat neighborhood. Frieren's own #2250 followup #2 motivated this: `geom_camber_cruise` was fragile to optimizer-only changes, suggesting averaging across multiple checkpoints in the flat region could help.
 
 ## Cycle-37 update — PR #2205 thorfinn closed (cycle_momentum=False fatal) + new #2275
 
@@ -63,7 +71,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 | PR | Student | Hypothesis |
 |---|---|---|
 | #2254 | fern | grad_accum 2→1 (eff_batch 2→1, true SGD; continue winning trend) |
-| #2250 | frieren | AdamW eps 1e-8 → 1e-9 (untested direction; lower variance-denominator floor) |
+| #2300 | frieren | SWA over last 30% of training (terminal weight averaging; #2250 followup #2) |
 | #2275 | thorfinn | OneCycleLR max_momentum 0.95→0.99 (raise cycle PEAK; base=0.85 preserved; #2205 follow-up) |
 | #2103 | alphonse | NAdam (retest under linear+batch_size=1 stack) |
 | #2104 | nezuko | max_lr=2.5e-3 (retest under batch_size=1 stack) |
@@ -82,7 +90,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 - beta2: 0.99 (-2.98% #1959), 0.98 (-1.77% #2008, MERGED), 0.97 CLOSED (#2087: both runs ~5% worse); peak confirmed at 0.98
 - beta1: 0.90→0.95 won (-2.5% #1867), 0.95→0.97 failed (+3.6% #2076), 0.95→0.94 failed (+12.0% #2101); **axis closed both sides** — 0.95 sharp local optimum
 - AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
-- eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal
+- eps=1e-6: +2.12% (#1804); eps=1e-9: +14.07% (#2250 closed cycle 38); **eps axis CLOSED both sides — 1e-8 sharp local optimum under current stack**
 - grad_accum=4: +18%, eff_batch=8 was optimal (now eff_batch=4 since batch_size=2 merged)
 - max_lr=4e-3: diverges; max_lr=1.5e-3 CLOSED (+1.45%); 2.5e-3 being retested under new stack
 - pct_start=0.3 (cosine): +9.5%; 0.05 in-flight under linear (#2241) — direction reopened by tanjiro's #2148 mechanistic analysis
@@ -101,7 +109,7 @@ Mechanism: continued the eff_batch trend (8→4→2). Halving microbatch from 2�
 
 1. **Batch/noise axis at the limit** — fern eff_batch=1 in-flight (#2254). The axis (8→4→2→?) has yielded 2 consecutive wins; this tests true SGD as the noise saturation point.
 2. **Compounding grad_clip win** — askeladd retest max_norm=1.5 under batch_size=1 (#2025). Two related but distinct gradient-noise levers; do they compound?
-3. **AdamW eps downward** — frieren eps=1e-9 (#2250). Untested direction on a partially-closed axis under fundamentally different gradient dynamics from when eps=1e-6 was tested.
+3. **SWA terminal weight averaging** — frieren (#2300). Fresh axis — averages weights only over the final 30% of training (mechanistically distinct from closed EMA). Addresses frieren's own #2250 observation about geom_camber_cruise fragility.
 4. **WD parameter groups** — edward (#2224). Standard transformer practice (exclude biases + LayerNorm); shape change in regularisation.
 5. **Momentum cycle RANGE tuning** — thorfinn max_momentum=0.99 (#2275). Cycle is load-bearing (disabling caused +18.1% regression, PR #2205 closed). Now tuning the RANGE. PyTorch defaults (0.85, 0.95) are untested implicit HPs; max_momentum=0.99 is the highest-leverage first move.
 6. **pct_start downward** — tanjiro 0.05 (#2241). His own analysis from failed #2148 — extends refinement tail without curtailing exploration.

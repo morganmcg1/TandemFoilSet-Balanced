@@ -11,6 +11,63 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 13:30 — Cycle 38: PR #2250 frieren closed (eps=1e-9 +14.1%) + #2203 empty-merge bug FIXED + #2300 SWA assigned
+
+### PR #2250 frieren — AdamW eps 1e-8→1e-9: CLOSED ✗
+
+W&B run: `o397xzdy` (CORRECT stack — frieren explicitly passed `--batch_size 1` to override the broken default; see merge-bug section below)
+
+| Metric | Baseline (#2203) | This run | Δ |
+|--------|----------------:|---------:|---|
+| val_avg/mae_surf_p | 70.3559 | 80.2539 | **+14.07% ✗** |
+| test_avg/mae_surf_p | 61.0663 | 71.3413 | **+16.83% ✗** |
+| test single_in_dist | 66.0608 | 76.9840 | +16.53% ✗ |
+| test geom_camber_rc | 73.5254 | 81.7083 | +11.13% ✗ |
+| test geom_camber_cruise | 43.1260 | 55.1819 | **+27.95% ✗** |
+| test re_rand | 61.5528 | 71.4909 | +16.14% ✗ |
+
+**Analysis (frieren's own analysis is correct):** Under noisy batch_size=1 gradients, `v` estimates for most parameters sit comfortably above eps=1e-8 — they're not floored by it. Lowering eps to 1e-9 instead REMOVED an implicit numerical regularizer on the long tail of low-signal parameters (deep biases, rarely-activated paths). Those got amplified update magnitudes `|m|/sqrt(v)` and the resulting instability hurt convergence — exactly the failure mode Kingma & Ba's original eps default was designed to prevent. No NaN, just optimized to a worse fixed point.
+
+The OOD `geom_camber_cruise` split moved most (+28%) — pattern of optimization instability rather than overfitting (which would affect in_dist most). This is a useful datapoint: that split is **fragile to optimizer-only changes**, suggesting the loss landscape in that direction has narrow basins that small per-parameter step changes can miss.
+
+### eps axis bracketed CLOSED
+
+| eps | Source | val Δ |
+|---|---|---|
+| 1e-6 | (#1804, old stack) | +2.12% |
+| **1e-8** | **baseline (#2203, current)** | **0** |
+| 1e-9 | #2250 | +14.07% |
+
+Both directions hurt under both old and new stacks. PyTorch default eps=1e-8 is locally optimal. Axis CLOSED.
+
+### CRITICAL bug discovered and fixed: PR #2203 was an EMPTY merge
+
+Frieren's careful instrumentation caught a serious workflow bug:
+- `BASELINE.md:35` claimed `batch_size=1 is now default in train.py`
+- `train.py:415` ACTUALLY had `batch_size: int = 2`
+- The mergeCommit recorded for #2203 (2d33279) was just the assignment commit — **0 file changes, 0 additions, 0 deletions**
+- Fern (the student) had run the experiment with batch_size=1 (uncommitted local change in pod), reported SENPAI-RESULT, but never committed the train.py change to the branch. The senpai:merge-winner squash produced an empty diff.
+
+**Impact:** All in-flight PRs assigned in cycles 33-37 had reproduce commands that didn't pass `--batch_size 1`. Students using the unmodified command have been silently running with `batch_size=2` instead of the intended `batch_size=1` stack. Frieren caught this by noticing his duplicate run `kqx50wfi` (no override) hit val~89.85 (i.e. batch_size=2) versus his override run `o397xzdy` at val=80.25 (batch_size=1).
+
+**Fix:** Advisor commit `e980575` applies the missing `batch_size: int = 2 → 1` change to train.py on the advisor branch. From now on, reproduce commands work as written.
+
+**Implication for in-flight PRs:** No retroactive rebase needed for PRs already running (their pods have their own local state). Future runs and any retests get the correct default. The 4 stale-baseline retests already in flight (askeladd, alphonse, nezuko, edward) need to be aware of this when they pull/rebase.
+
+### Fleet state after cycle 38
+
+7 students WIP (frieren just got a new assignment, so 8/8 occupied):
+- #2025 askeladd grad_clip max_norm=1.5 (retest under b=1)
+- #2103 alphonse NAdam (retest under b=1)
+- #2104 nezuko max_lr=2.5e-3 (retest under b=1)
+- #2224 edward WD param groups (retest under b=1)
+- #2241 tanjiro OneCycleLR pct_start=0.05
+- #2254 fern grad_accum=1 eff_batch=1
+- #2275 thorfinn OneCycleLR max_momentum=0.99
+- #2300 frieren SWA over last 30% of training ← NEW this cycle
+
+---
+
 ## 2026-05-13 13:15 — Cycle 37: PR #2205 thorfinn closed (cycle_momentum=False fatal +18.1%) + #2275 assigned
 
 ### PR #2205 thorfinn — OneCycleLR cycle_momentum=False: CLOSED ✗
