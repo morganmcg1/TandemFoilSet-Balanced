@@ -530,7 +530,7 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
-GRAD_CLIP_MAX_NORM = 5.0
+GRAD_CLIP_MAX_NORM = 2.5
 grad_norm_history: list[float] = []
 clip_count_total = 0
 norm_max_global = 0.0
