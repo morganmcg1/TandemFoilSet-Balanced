@@ -424,7 +424,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=160,
     n_layers=5,
-    n_head=4,
+    n_head=8,
     slice_num=64,
     mlp_ratio=2,
     dropout=0.1,
@@ -593,6 +593,31 @@ if best_metrics:
             "test_avg": test_avg,
             "test_splits": test_metrics,
         })
+
+    # --- Per-head attention diagnostics ---
+    # For each Transolver block, compute the L2 norm of each head's slice of
+    # `attn.to_out[0].weight`. Shape is [dim, heads*dim_head]; we split the
+    # input dim into (heads, dim_head) and take the Frobenius norm per head.
+    # This is a cheap signal of whether heads have specialized (uniform norms
+    # → underutilized heads, varied norms → meaningful per-head routing).
+    try:
+        n_heads = model_config["n_head"]
+        head_dim = model_config["n_hidden"] // n_heads
+        head_norms_by_layer = []
+        for li, block in enumerate(model.blocks):
+            w = block.attn.to_out[0].weight  # [n_hidden, n_heads*head_dim]
+            w_per_head = w.view(w.shape[0], n_heads, head_dim)
+            per_head_l2 = w_per_head.detach().float().pow(2).sum(dim=(0, 2)).sqrt().tolist()
+            head_norms_by_layer.append({"layer": li, "per_head_l2_to_out": per_head_l2})
+            print(f"  layer {li}  to_out per-head L2: " + " ".join(f"{v:.3f}" for v in per_head_l2))
+        append_metrics_jsonl(metrics_jsonl_path, {
+            "event": "attention_diagnostics",
+            "n_heads": n_heads,
+            "head_dim": head_dim,
+            "per_layer": head_norms_by_layer,
+        })
+    except Exception as e:
+        print(f"  (per-head diagnostic skipped: {e})")
 
     write_experiment_summary(
         model_path=model_path,
