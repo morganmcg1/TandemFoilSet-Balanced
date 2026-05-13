@@ -85,7 +85,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 shared_slice_proj=None):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -96,8 +97,11 @@ class PhysicsAttention(nn.Module):
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
-        torch.nn.init.orthogonal_(self.in_project_slice.weight)
+        if shared_slice_proj is not None:
+            self.in_project_slice = shared_slice_proj
+        else:
+            self.in_project_slice = nn.Linear(dim_head, slice_num)
+            torch.nn.init.orthogonal_(self.in_project_slice.weight)
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
@@ -140,13 +144,14 @@ class PhysicsAttention(nn.Module):
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
                  mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
-                 layerscale_init=1e-4):
+                 layerscale_init=1e-4, shared_slice_proj=None):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            shared_slice_proj=shared_slice_proj,
         )
         self.gamma_attn = nn.Parameter(layerscale_init * torch.ones(hidden_dim))
         self.ln_2 = nn.LayerNorm(hidden_dim)
@@ -189,11 +194,16 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Block-shared slice projection: single Linear referenced by every block (PR #2642).
+        dim_head = n_hidden // n_head
+        shared_slice_proj = nn.Linear(dim_head, slice_num)
+        torch.nn.init.orthogonal_(shared_slice_proj.weight)
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                shared_slice_proj=shared_slice_proj,
             )
             for i in range(n_layers)
         ])
@@ -457,6 +467,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+
+# --- Block-shared slice projection diagnostic (PR #2642) ---
+_slice_proj_ids = [id(blk.attn.in_project_slice) for blk in model.blocks]
+_all_shared = all(pid == _slice_proj_ids[0] for pid in _slice_proj_ids)
+print(f"Shared slice projection: ids per block = {_slice_proj_ids}")
+print(f"Shared slice projection: all blocks share single Linear = {_all_shared}")
+assert _all_shared, "in_project_slice NOT shared across blocks!"
+print(
+    f"Block-shared slice projection: {model_config['n_layers']} blocks "
+    f"-> 1 shared in_project_slice Linear(dim_head={model_config['n_hidden'] // model_config['n_head']}, "
+    f"slice_num={model_config['slice_num']}); tests slice-routing redundancy across depth; "
+    f"total params={n_params}; baseline to beat: val_avg/mae_surf_p < 33.4935 (PR #2553)"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
