@@ -30,7 +30,7 @@ Active threads:
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | (next) | OneCycleLR max_lr=2e-3 | idle — assigning |
+| alphonse | #1785 | OneCycleLR max_lr=2e-3 (LR ceiling probe) | WIP (just assigned) |
 | askeladd | #1379 | smooth-L1 loss | WIP |
 | edward | #1383 | p-channel-weight | WIP |
 | fern | #1390 | surf_weight=25 (needs rebase) | WIP (stale) |
