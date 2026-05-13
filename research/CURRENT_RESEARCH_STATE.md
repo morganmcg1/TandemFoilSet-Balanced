@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 20:45 UTC (Wave 17+: MERGE #2475 fern layerscale-init-0.1 (19th compound win, val −0.49% / test +0.29%; anti-correlated init mechanism); CLOSE #2469/#2434/#2453/#2476 (4 dead-ends with mechanism findings captured); ASSIGN #2510 alphonse decoupled-layerscale-init / #2511 thorfinn input-feature-gate / #2513 frieren stoch-depth-deep-concentrated / #2514 askeladd reflection-tta)
+- **Last updated**: 2026-05-13 21:00 UTC (Wave 17+: MERGE #2475 fern layerscale-init-0.1 (19th compound win); CLOSE 7 dead-ends with mechanism findings (#2469 freqs-xy / #2434 freq-eq-init / #2453 FiLM v2 / #2476 SWA / #2441 hybrid RFF / #2465 norm-bias-no-WD / #2488 RMSNorm-QK-γ); ASSIGN 8 new (#2510 decoupled-LS-init / #2511 input-gate / #2513 stoch-depth-deep / #2514 reflection-TTA / #2515 per-block-LS-lr / #2517 Q-bias / #2518 β2=0.99 / #2519 sharper-attn-τ))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -60,9 +60,9 @@ The merge of #2475 LayerScale init=0.1 retuning revealed a striking pattern:
 | thorfinn | #2511 | input-feature-gate | Per-feature input gate γ_input (44 params, no-WD 10× lr) — extends additive-scale theme to input position | ASSIGNED |
 | frieren | #2513 | stoch-depth-deep-block-concentrated | Concentrate stoch-depth in deeper blocks `[0,0,0.05,0.10,0.15]` vs linear `[0,0.025,0.05,0.075,0.1]` — anti-redundancy training | ASSIGNED |
 | askeladd | #2514 | reflection-tta-at-inference | Y-axis reflection test-time augmentation at val/test eval; predict on (x,y) AND (x,-y) with Uy sign flip; average outputs | ASSIGNED |
-| nezuko | #2465 | norm-bias-no-wd | LayerNorm γ/β + Linear biases + placeholder + attn.temperature → wd=0 (standard transformer recipe, orthogonal to fern #2436) | IN FLIGHT |
-| edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | IN FLIGHT |
-| tanjiro | #2488 | rmsnorm-qk-gamma | QK-norm v3 — RMSNorm-Q/K with learnable per-head per-channel γ (1280 new params, no-WD 10× lr group); preserves magnitude while controlling variance (Gemma/DeepSeek-V3 formulation) | IN FLIGHT |
+| edward | #2517 | q-projection-bias | Q-projection learnable bias (640 params, no-WD 10× lr group); additive-scale theme at a new attention position | ASSIGNED |
+| nezuko | #2518 | adamw-beta2-0.99 | AdamW β2=0.99 (default 0.999) — ~10× faster second-moment forget, may improve per-group adaptation for the 3-group optimizer | ASSIGNED |
+| tanjiro | #2519 | attn-temp-fixed-sharper | Fixed sharper attention temperature τ=√2 × default (no learnable scale); tests if the #2488 RMSNorm-γ "wants slight sharpening" finding holds at fixed cost | ASSIGNED |
 | fern | #2515 | layerscale-per-block-lr | Per-block-separate LayerScale lr scaling (5×→15× linearly from block 0 to 4) — directly tests #2475's per-block heterogeneity finding (deep blocks have higher std/mean) | ASSIGNED |
 
 ## Key findings from Wave 13/14/15/16/17
@@ -128,6 +128,9 @@ The merge of #2475 LayerScale init=0.1 retuning revealed a striking pattern:
 | Freq-init at equilibrium | dyadic init | #2434 CLOSED Outcome C +4.16%; equilibrium init OVERSHOOTS rather than relaxes — same anti-correlated-init pattern as #2475 LayerScale γ; the no-WD 10× lr group has a flat landscape where init bias compounds |
 | FiLM with zero-init γ/β heads | no FiLM | #2453 CLOSED Outcome C +4.45%; FiLM IS active but generalizes in wrong direction — helps single_in_dist (−4.86%), hurts all OOD splits (camber_cruise +16.46%); zero-init heads can't build robust per-cond representations in 12 epochs |
 | SWA (last-N epochs averaging) | no SWA | #2476 CLOSED Outcome C +7.79%; cosine T_max=14 + 30-min cap means val_avg drops 9.7% in single epoch (e11→e12); model still mid-descent at training cut-off; no plateau to average over |
+| Hybrid fixed RFF + learned freqs | learned freqs only | #2441 CLOSED Outcome D +5.66%; RFF and learned-freqs SHARE low-frequency information rather than orthogonal coverage; camber_cruise regression is smoking gun (both encoders had won there individually); future Fourier work should refine single encoding (per-block/head/channel) not ensemble |
+| Bias + norm γ/β + temp blanket no-WD | bias + norm γ/β + temp use default WD | #2465 CLOSED Outcome C +5.16%; bias-WD removal is the regression source (biases drift unbounded without WD anchor); LayerScale γ already provides per-channel offset, so bias-no-WD adds redundant competing path; isolated norm-γ/β-only test not yet done |
+| RMSNorm-Q/K with learnable γ | no QK-norm | #2488 CLOSED Outcome B (γ activates but std/mean peaks 33%, below 50% threshold for diversification); competes with LayerScale γ in the residual; Q/K-norm axis fully closed across both F.normalize (#2377/#2427 magnitude collapse) AND RMSNorm (#2488 redundant scaling) |
 
 ## Prioritized open research themes (Wave 17+)
 
@@ -138,10 +141,10 @@ The merge of #2475 LayerScale init=0.1 retuning revealed a striking pattern:
 4. **Stoch-depth deep-concentrated** (frieren #2513 NEW): `[0,0,0.05,0.10,0.15]` vs current linear `[0,0.025,0.05,0.075,0.1]` — anti-redundancy theory; deeper blocks should tolerate more drop
 5. **Reflection TTA** (askeladd #2514 NEW): y-axis reflection test-time augmentation at val/test eval; risk-free (no retraining, doubles eval cost only)
 
-**In flight**:
-6. **Norm-bias no-WD** (nezuko #2465 IN FLIGHT): broad standard-transformer recipe — LN γ/β + Linear bias + placeholder + attn temp → wd=0
-7. **Hybrid RFF + learned freqs** (edward #2441 IN FLIGHT but stale, may need re-check): additive Gaussian σ=3 RFF ON TOP of current learned-freqs stack
-8. **RMSNorm-Q/K + learnable γ** (tanjiro #2488 IN FLIGHT): QK-norm v3 — preserves magnitude while controlling variance (Gemma/DeepSeek-V3 formulation)
+**Newly active (assigned in this iteration's second batch)**:
+6. **Q-projection learnable bias** (edward #2517 NEW): 640 params no-WD 10× lr; additive-scale theme at attention's Q position; never tested
+7. **AdamW β2=0.99** (nezuko #2518 NEW): single HP scan from default 0.999; ~10× faster second-moment forget; tests if our 3-group optimizer benefits from faster per-group adaptation
+8. **Fixed sharper attention τ=√2** (tanjiro #2519 NEW): no learnable scale; directly tests #2488 RMSNorm-γ "wants mild sharpening" finding without the per-channel-γ overhead
 
 **Future ideas (queued)**:
 9. **All-param optimizer sweep**: if LayerScale + norm-bias both win, test joint no-WD config for all 1D params simultaneously

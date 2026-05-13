@@ -8,6 +8,61 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 20:55 — PR #2488 (tanjiro rmsnorm-qk-gamma) — **CLOSED** (Outcome B mechanism activated; +1.57% val regression; per-channel γ doesn't diversify enough)
+
+- Branch: `charliepai2g24h4-tanjiro/rmsnorm-qk-gamma`
+- Hypothesis: QK-norm v3 — RMSNorm-Q/K with learnable per-head per-channel γ (1280 params, no-WD 10× lr group); preserves Q/K magnitude (unlike F.normalize) while controlling variance (Gemma/DeepSeek-V3 formulation)
+- Metric artifact: `models/model-charliepai2g24h4-tanjiro-rmsnorm-qk-gamma-20260513-175834/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 59.2438 | 58.3244 | **+1.57% regression** |
+| `test_avg/mae_surf_p` | 52.2847 | 50.9438 | +2.93% regression |
+
+- **Mechanism — RMSNorm-Q/K-γ activates but doesn't diversify enough**:
+  - γ moved across all 5 blocks (above "≥3 blocks moved" threshold for Outcome B)
+  - Per-channel std/mean ratio peaks at 33% — below the 50% "strong diversification" threshold
+  - γ_k stats identical to γ_q within fp32 precision (Δ ~1e-7)
+  - Test regression > val regression — RMSNorm-Q/K hurts generalization specifically
+- **Why this fails on top of #2475**: the LayerScale γ no-WD 10× lr recipe already gives a per-channel multiplicative knob in the attention RESIDUAL. Adding RMSNorm-Q/K-γ creates a second per-channel multiplicative knob INSIDE attention; the two compete for the same regulatory role and the optimizer can't allocate cleanly in 12 epochs.
+- **Axis status**: QK-norm with learnable γ closed across BOTH F.normalize-based (#2377, #2427) and RMSNorm-based (#2488); the Q/K-norm axis is fully closed for our LayerScale-γ-no-WD stack. Future attention-magnitude work should target softmax temperature scheduling (fixed, not learnable scale) — reassigning tanjiro to #2519 attn-temp-fixed-sharper.
+
+## 2026-05-13 20:53 — PR #2465 (nezuko norm-bias-no-wd) — **CLOSED** (Outcome C +5.16% regression; bias-WD removal is the regression source)
+
+- Branch: `charliepai2g24h4-nezuko/norm-bias-no-wd`
+- Hypothesis: broad standard-transformer recipe — LayerNorm γ/β + all Linear biases + placeholder + attn.temperature → wd=0 (orthogonal to fern #2436 LayerScale γ work)
+- Metric artifact: `models/model-charliepai2g24h4-nezuko-norm-bias-no-wd-20260513-175648/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 61.3288 | 58.3244 | **+5.16% regression** |
+| `test_avg/mae_surf_p` | 53.4048 | 50.9438 | +4.83% regression |
+| `val_geom_camber_rc` | 74.822 | 71.041 | +5.32% (largest regression) |
+
+- **Mechanism — bias-WD removal is the regression source, not LN γ/β**:
+  - LN γ/β did NOT drift far enough in 12 epochs to reshape activations (student diagnosed as borderline Outcome D for γ/β specifically)
+  - The regression therefore comes from **Linear biases** — without WD anchor they drift unbounded
+  - The LayerScale γ no-WD treatment already gives the model a per-channel offset mechanism; biases-no-WD adds a redundant offset path that competes for the same role
+- **Axis status**: blanket no-WD across γ/β + biases + placeholder closed. Future tests on this axis must isolate biases specifically. The norm γ/β axis remains untested individually. Reassigning nezuko to #2518 adamw-beta2-0.99.
+
+## 2026-05-13 20:51 — PR #2441 (edward hybrid-rff-plus-learned-freqs) — **CLOSED** (Outcome D +5.66% regression; RFF and learned-freqs share mechanism, not orthogonal)
+
+- Branch: `charliepai2g24h4-edward/hybrid-rff-plus-learned-freqs`
+- Hypothesis: additive Gaussian σ=3 RFF (6 fixed freqs) concatenated to FourierCoordEnc output, on top of learned-freqs stack; tests whether RFF and learned-freqs provide orthogonal spectral coverage
+- Metric artifact: `models/model-charliepai2g24h4-edward-hybrid-rff-plus-learned-freqs-20260513-175551/metrics.jsonl`
+
+| Metric | This run | Current #2475 baseline (58.3244) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 61.6371 | 58.3244 | **+5.66% regression** |
+| `test_avg/mae_surf_p` | 54.6430 | 50.9438 | +7.27% regression |
+
+- **Mechanism — RFF and learned-freqs SHARE low-frequency information, not orthogonal**:
+  - Both encode geometry at scales captured by 6 frequencies; combination creates redundant capacity
+  - The learned-freqs trajectory (#2370/#2436/#2475 stack) has already settled into a specific spectral allocation
+  - Adding fixed Gaussian σ=3 RFF on top forces the downstream MLP to disambiguate two encodings of the same information, destroying the carefully-tuned freq distribution
+- **Camber_cruise regression is the smoking gun**: RFF-only (#2369 on old baseline) had given camber_cruise −15.35%; learned-freqs (#2370) had given −14.62%. Both had won on camber_cruise; gain hypothesis was that combining would compound, but the regression proves they were mechanism-overlap winners on the same physical structure.
+- **Axis status**: hybrid fixed+learned Fourier closed. Future Fourier-axis work should pursue single-encoding refinements (per-block, per-head, per-channel) rather than ensembles. Reassigning edward to #2517 q-projection-bias.
+
 ## 2026-05-13 20:30 — PR #2475 (fern layerscale-init-0.1) — **MERGED** (19th compound win; val −0.49%, test +0.29%; anti-correlated init mechanism captured)
 
 - Branch: `charliepai2g24h4-fern/layerscale-init-0.1`
