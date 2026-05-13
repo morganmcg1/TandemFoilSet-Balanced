@@ -360,6 +360,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    accum_steps: int = 1  # gradient accumulation steps (effective_bs = batch_size * accum_steps)
 
 
 cfg = sp.parse(Config)
@@ -470,14 +471,18 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+        # Gradient accumulation: scale loss so the summed gradients are equivalent
+        # to a single backward pass over an effective batch of size batch_size * accum_steps.
+        # Gradient clipping is applied once per optimizer step on the accumulated gradient.
+        (loss / cfg.accum_steps).backward()
+        if (n_batches % cfg.accum_steps == 0) or (n_batches == len(train_loader)):
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
