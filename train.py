@@ -630,6 +630,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     rescale_head.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_sorted_dist_loss = 0.0
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
@@ -692,6 +693,22 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (surf_sq / surf_denom).mean()
             loss = vol_loss + cfg.surf_weight * surf_loss
 
+            # Sorted surface pressure distribution matching: 1-Wasserstein regularizer.
+            # Per-sample: sort predicted and target normalized surface pressure,
+            # penalize MAE between sorted sequences (= discrete W1 distance on distribution).
+            LAMBDA_SORTED_DIST = 0.02
+            sorted_dist_loss = loss.new_zeros(1)
+            for b in range(x.shape[0]):
+                surf_b = is_surface[b] & mask[b]  # [N_max] — valid surface nodes
+                if surf_b.sum() < 2:
+                    continue
+                pred_p_b = pred[b, surf_b, 2]          # [n_surf] normalized predicted pressure
+                targ_p_b = y_norm[b, surf_b, 2]        # [n_surf] normalized target pressure
+                w1 = (pred_p_b.sort().values - targ_p_b.sort().values.detach()).abs().mean()
+                sorted_dist_loss = sorted_dist_loss + w1
+            sorted_dist_loss = sorted_dist_loss / x.shape[0]
+            loss = loss + LAMBDA_SORTED_DIST * sorted_dist_loss
+
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
         # and per-channel unweighted Huber loss (so we can compare the raw
         # pressure-channel error signal against velocity channels).
@@ -735,6 +752,7 @@ for epoch in range(MAX_EPOCHS):
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_sorted_dist_loss += sorted_dist_loss.item()
         epoch_l2_frac += l2_frac_batch
         n_batches += 1
 
@@ -742,6 +760,7 @@ for epoch in range(MAX_EPOCHS):
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_sorted_dist_loss /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
@@ -826,6 +845,8 @@ for epoch in range(MAX_EPOCHS):
         "torch_compile_dynamic": torch_compile_dynamic,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/sorted_dist_loss": epoch_sorted_dist_loss,
+        "train/sorted_dist_lambda": 0.02,
         "train/grad_norm_mean": grad_norm_mean,
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
@@ -847,7 +868,7 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} sorted_dist={epoch_sorted_dist_loss:.5f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
