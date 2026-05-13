@@ -1,0 +1,80 @@
+{
+  "aoa_jitter_rad": 0.0,
+  "audit": {
+    "test_geom_camber_cruise": {
+      "mean_pred_std_surf_p": NaN,
+      "n_samples_total": 200,
+      "n_samples_with_nonfinite_y": 1,
+      "n_surf_accumulated": 648502,
+      "n_vol_accumulated": 40988075
+    },
+    "test_geom_camber_rc": {
+      "mean_pred_std_surf_p": NaN,
+      "n_samples_total": 200,
+      "n_samples_with_nonfinite_y": 0,
+      "n_surf_accumulated": 495325,
+      "n_vol_accumulated": 25625023
+    },
+    "test_re_rand": {
+      "mean_pred_std_surf_p": NaN,
+      "n_samples_total": 200,
+      "n_samples_with_nonfinite_y": 0,
+      "n_surf_accumulated": 576126,
+      "n_vol_accumulated": 34085067
+    },
+    "test_single_in_dist": {
+      "mean_pred_std_surf_p": NaN,
+      "n_samples_total": 200,
+      "n_samples_with_nonfinite_y": 0,
+      "n_surf_accumulated": 317003,
+      "n_vol_accumulated": 16894200
+    }
+  },
+  "checkpoint": "checkpoint.pt",
+  "event": "tta_test_eval",
+  "model_dir": "/workspace/senpai/target/models/model-tta-baseline-train-20260512-235907",
+  "n_passes": 1,
+  "seed": 0,
+  "test_avg": {
+    "avg/mae_surf_Ux": 1.4278866916591535,
+    "avg/mae_surf_Uy": 0.7203691873174967,
+    "avg/mae_surf_p": 95.43741003007463,
+    "avg/mae_vol_Ux": 4.169616755199573,
+    "avg/mae_vol_Uy": 1.896610477779743,
+    "avg/mae_vol_p": 98.94006697999959
+  },
+  "test_splits": {
+    "test_geom_camber_cruise": {
+      "mae_surf_Ux": 0.8913971846597033,
+      "mae_surf_Uy": 0.5357441291963767,
+      "mae_surf_p": 84.30263157886228,
+      "mae_vol_Ux": 3.252318347185362,
+      "mae_vol_Uy": 1.2919030804777705,
+      "mae_vol_p": 84.23608031859726
+    },
+    "test_geom_camber_rc": {
+      "mae_surf_Ux": 2.076531594874418,
+      "mae_surf_Uy": 0.9307843062806417,
+      "mae_surf_p": 96.82310666490008,
+      "mae_vol_Ux": 4.977923976886172,
+      "mae_vol_Uy": 2.5781885975157253,
+      "mae_vol_p": 103.54985406176662
+    },
+    "test_re_rand": {
+      "mae_surf_Ux": 1.3343585770866189,
+      "mae_surf_Uy": 0.7143066424647306,
+      "mae_surf_p": 92.23401958543323,
+      "mae_vol_Ux": 3.879159001141985,
+      "mae_vol_Uy": 1.7804467906694883,
+      "mae_vol_p": 90.56830899666934
+    },
+    "test_single_in_dist": {
+      "mae_surf_Ux": 1.4092594100158737,
+      "mae_surf_Uy": 0.7006416713282372,
+      "mae_surf_p": 108.38988229110296,
+      "mae_vol_Ux": 4.569065695584771,
+      "mae_vol_Uy": 1.9359034424559878,
+      "mae_vol_p": 117.40602454296507
+    }
+  }
+}

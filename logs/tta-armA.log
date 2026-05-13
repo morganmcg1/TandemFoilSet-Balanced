@@ -1,0 +1,11 @@
+Train: 1499, val_single_in_dist: 100, val_geom_camber_rc: 100, val_geom_camber_cruise: 100, val_re_rand: 100
+Test: test_single_in_dist: 200, test_geom_camber_rc: 200, test_geom_camber_cruise: 200, test_re_rand: 200
+Wrote /workspace/senpai/target/models/model-tta-baseline-train-20260512-235907/tta_eval_N5_jit0.00873.json
+
+test_avg (TTA N=5, jitter=0.00873):
+  avg/mae_surf_Ux: 1.4281
+  avg/mae_surf_Uy: 0.7222
+  avg/mae_surf_p: 95.8370
+  avg/mae_vol_Ux: 4.1712
+  avg/mae_vol_Uy: 1.8996
+  avg/mae_vol_p: 99.2729
