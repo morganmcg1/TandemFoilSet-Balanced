@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-14 04:10 UTC — Round 53
+
+One review-ready LOSS closed (21st closed taxon: routing-sharpness over-commitment at warm-start) + 1 fresh hypothesis assigned (axis: PaLM-style parallel attention+MLP — first decoupled-branch architectural probe).
+
+### PR #2502 askeladd: PhysicsAttention temperature init τ=0.5 → 0.25 — CLOSED (ROUTING-SHARPNESS AXIS)
+
+- **Branch:** charliepai2g48h5-askeladd/temp-init-025
+- **Hypothesis:** Initialize the learnable per-head PhysicsAttention temperature parameter at τ=0.25 instead of default τ=0.5; sharper slice routing at warm-start. Zero param-count change.
+- **Metrics artifact:** `models/model-charliepai2g48h5-askeladd-temp-init-025-20260513-181842/metrics.jsonl`
+
+| Metric | τ=0.25 | Baseline #2307 (τ=0.5) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **45.4153** | 42.3455 | **+7.25% (LOSS)** |
+| `test_avg/mae_surf_p` | **39.3021** | 38.5059 | **+2.07% (LOSS)** |
+| `val_single_in_dist` | 40.1635 | 35.4776 | +13.20% |
+| `val_geom_camber_rc` | 61.4312 | 60.8311 | +0.99% (~flat) |
+| `val_geom_camber_cruise` | 30.9050 | 27.6517 | +11.77% |
+| `val_re_rand` | 49.1613 | 45.4214 | +8.24% |
+| `test_geom_camber_rc` | **56.4143** | 57.3635 | **−1.65% (mild WIN)** |
+
+- **70/70 epochs, best=ep69, terminal=ep70** (still descending; not undertrained).
+- **CRITICAL trained-τ diagnostic** (8 values across 4 blocks × 2 heads):
+  - block_0 mean=0.286, block_1 mean=0.284, block_2 mean=0.294, block_3 mean=0.323
+  - Overall mean = 0.297 (vs init 0.25; +18.7% drift)
+  - Per-head std ≤ 0.035 within block; no head specialization on τ axis
+  - Deeper-block tilt UPWARD: block_3 prefers softer routing (0.323) than block_0 (0.286)
+- **DECISION: Close as LOSS.** 21st closed-axis taxon: routing-sharpness over-commitment at warm-start.
+- **MECHANISM:** Hard-commit routing (τ=0.25 → ~0.97 max softmax weight per slice) at init forces tokens into mostly-noise slots when slice prototypes are random and placeholder representation is near-zero. Optimizer back-pedals τ upward during training but the resulting representations never fully recover the slice-prototype diversity that a moderate-τ init would have allowed. Trained-τ landing at 0.30 represents the equilibrium between routing-sharpness incentive (L1+slice_num=24) and diversity-preservation incentive.
+- **CRITICAL FINDING — second sharpening-helps-camber-rc signal:** test_geom_camber_rc slight WIN (−1.65%) — the ONLY positive movement across all val/test splits. Combined with PR #2418 ReLU² (val_geom_camber_rc WIN −2.50% only across all 4 splits), this is the **2nd confirmation that selective sharpening interventions help camber_rc OOD specifically**, even when they cause uniform regression elsewhere. Pattern suggests camber_rc bottleneck is addressable by sharpening if the sharpening can be confined to camber-OOD-relevant tokens/channels.
+- **AXIS BRACKETING:** temperature-init axis now has 2 data points: τ=0.5 (default, optimum) → 42.3455; τ=0.25 (over-sharp) → 45.4153 LOSS. Routing-sharpness axis essentially saturated by slice_num=24 + L1 + LayerScale stack.
+
+---
+
+### Assignment — Round 53
+
+#### PR #2526 askeladd: PaLM-style parallel attention+MLP (Chowdhery et al. 2022)
+- **Branch:** charliepai2g48h5-askeladd/palm-parallel-attn-mlp
+- **Hypothesis:** Restructure each TransolverBlock to compute attention and MLP IN PARALLEL on the same LN-input rather than SEQUENTIALLY. New forward: `fx + γ_attn * attn(h) + γ_mlp * mlp(h)` where `h = ln_1(fx)` (single shared LN input; ln_2 stays instantiated but unused). Zero new params; saves one LN evaluation per block (~5-10% epoch speedup expected).
+- **Rationale:** In LayerScale-damped regime (γ_attn ≈ 0.005), sequential and parallel are numerically nearly equivalent; the test is on the DECOUPLED GRADIENT mechanism. Hypothesis: orthogonal decomposition lets γ_attn grow into a more productive equilibrium (currently suppressed because attention's effect on fx is immediately re-mixed by mlp via residual; parallel decouples this).
+- **First decoupled-branch architectural probe** in this launch. Structurally distinct from in-flight NormFormer (sandwich Pre+Post-LN), split-heads (decoder bifurcation), decoder-skip (decoder linear path), and all 21 closed taxa.
+- **Predicted:** -0.5% to -2% val if γ_attn grows; wash (most likely given LayerScale damping) if decoupling effect is too small; LOSS if sequential composition was load-bearing (γ_attn collapses to zero).
+- **CRITICAL diagnostic:** trained γ_attn at terminal — values > 0.01 (vs baseline ~0.005) confirm decoupling hypothesis regardless of val_avg outcome.
+
+---
+
 ## 2026-05-14 03:50 UTC — Round 52
 
 One review-ready LOSS closed (20th closed taxon: per-group-LR axis closes BOTH directions; uniform-LR AdamW confirmed optimum on optimizer-group axis) + 1 fresh hypothesis assigned (axis: optimizer-family, Lion sign-based momentum).
