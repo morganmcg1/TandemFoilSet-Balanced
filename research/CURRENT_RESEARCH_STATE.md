@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 19:35
+- **Date:** 2026-05-13 20:10
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -97,15 +97,18 @@
 | fern | #2492 | surf_weight=8 × n_layers=3+slice_num=16 | OLD STACK | possible if large sw gain |
 | tanjiro | #2493 | weight_decay=5e-5 × n_layers=3+slice_num=16 | OLD STACK | possible if large wd gain |
 | frieren | **#2523** | **n_layers=2+slice_num=16+epochs=50** (push winner +4 epochs) | **NEW STACK** | **HIGH EV** — 3.1 min margin |
-| askeladd | **#2525** | **lr=1.5e-4 × n_layers=2+slice_num=16+epochs=46** (LR upper probe at new depth) | **NEW STACK** | possible |
+| askeladd | **#2558** | **n_head=2 × n_layers=2+slice_num=16+epochs=46** (wider heads at new stack; targets OOD bottleneck) | **NEW STACK** | possible — addresses OOD/in-dist tradeoff |
 | alphonse | **#2543** | **lr=1.2e-4 × n_layers=2+slice_num=16+epochs=46** (LR fine probe at new depth) | **NEW STACK** | possible |
 | edward | **#2545** | **slice_num=20 × n_layers=2+epochs=44** (partition retest at new depth — counter in-dist regression) | **NEW STACK** | possible |
 | nezuko | **#2547** | **LayerScale × n_layers=2+slice_num=16+epochs=46** (stabilization at new depth) | **NEW STACK** | possible if large arch gain |
 | thorfinn | **#2549** | **lr=5e-5 × n_layers=2+slice_num=16+epochs=46** (LR lower probe at new depth) | **NEW STACK** | possible — completes LR axis |
 
-**LR axis sweep at n_layers=2 stack (4 points):** 5e-5 (thorfinn) → 1e-4 (BASELINE 35.256) → 1.2e-4 (alphonse) → 1.5e-4 (askeladd) — clean triangulation possible.
+**LR axis sweep at n_layers=2 stack (3 in-flight + 1 done):** 5e-5 (thorfinn) → 1e-4 (BASELINE 35.256) → 1.2e-4 (alphonse) → **1.5e-4 (#2525 CLOSED, +3.30% LOSS — OOD bottleneck confirmed)**
+
+**Key insight from #2525 result (in-dist vs OOD tradeoff):** Higher LR fixed n_layers=2 in-dist regression (−6.35%) but worsened all 3 OOD splits (+3.4% to +10.5%). The OOD splits dominate the avg metric. Next experiments need to target OOD generalization (wider heads, regularization, architecture priors) — NOT optimization aggressiveness.
 
 **Merged:** #2348 (val=35.548), #2468 (val=35.256 NEW BEST)
+**Closed Round 33:** #2525 (askeladd lr=1.5e-4 +3.30% loss — informative on in-dist/OOD tradeoff)
 **Closed Round 32:** #2471 (alphonse stale old-stack), #2478 (edward stale old-stack), #2479 (nezuko stale old-stack), #2450 (thorfinn stale old-stack)
 **Closed earlier:** #2451 (askeladd slice18 +4.3%), #2447, #2404, #2431, #2402, #2417, #2375, #2383, #2409, #2408
 

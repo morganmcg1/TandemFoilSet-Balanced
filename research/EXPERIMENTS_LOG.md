@@ -6,6 +6,36 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 20:05 — PR #2525 — CLOSED (lr=1.5e-4 +3.30% LOSS at n_layers=2; in-dist vs OOD tradeoff confirmed)
+
+**askeladd: lr=1.5e-4 on n_layers=2+slice_num=16+epochs=46**
+- val_avg/mae_surf_p = 36.419 vs baseline 35.256 (**+1.163, +3.30% WORSE**)
+- test_avg/mae_surf_p = 30.869 vs baseline 30.245 (+0.624, +2.06% WORSE)
+- best_epoch = 43/46 (run timed out at 30 min, but extrapolation says still losing)
+- Per-epoch: 42.2s (GPU contention spike, not LR-induced)
+
+| Split | val mae_surf_p | val Δ vs baseline | test mae_surf_p | test Δ |
+|---|---|---|---|---|
+| single_in_dist | **34.161** | **−2.315 (−6.35%)** ✓ | **31.629** | **−1.406 (−4.25%)** ✓ |
+| geom_camber_rc | 51.816 | +3.519 (+7.29%) | 45.840 | +1.507 (+3.40%) |
+| geom_camber_cruise | 20.251 | +1.925 (+10.51%) | 16.886 | +1.390 (+8.97%) |
+| re_rand | 39.449 | +1.526 (+4.02%) | 29.122 | +1.006 (+3.58%) |
+| **avg** | **36.419** | **+1.163 (+3.30%)** | **30.869** | **+0.624 (+2.06%)** |
+
+**KEY INSIGHT — in-dist vs OOD tradeoff confirmed:** Higher LR fixed the n_layers=2 in-dist regression (val_single_in_dist −6.35%, test −4.25%) — H3 confirmed cleanly. BUT it worsened all 3 OOD splits (+3.4% to +10.5%), netting a clear net loss because OOD dominates the avg (3 of 4 splits, larger magnitudes).
+
+**Pattern (LR ceiling is partition-bound, not depth-bound):**
+- lr=1.5e-4 at n_layers=3+slice_num=16: LOST
+- lr=1.5e-4 at n_layers=3+slice_num=24: WON
+- lr=1.5e-4 at n_layers=2+slice_num=16: LOST (this run)
+The LR optimum at slice_num=16 is robust to depth changes. lr=1e-4 dominates at slice_num=16 regardless of n_layers.
+
+**Metric artifacts:** `models/model-lr1p5e-4-nlayers2-slicenum16-epochs46-20260513-190526/metrics.jsonl`
+
+**Reassigned:** askeladd → PR #2558 (n_head=2 at new stack — wider heads to target OOD bottleneck).
+
+---
+
 ## 2026-05-13 19:30 — Round 32: Close 4 stale old-stack PRs; reassign at n_layers=2 stack
 
 After PR #2468 merged (n_layers=2+epochs=46, val=35.256 NEW BEST), the partition axis is fully closed at slice_num=16 and the depth axis closed at n_layers=2. Several earlier-round PRs were still testing axes against the OLD n_layers=3 baseline (35.548) — their results would not be informative against the new 35.256 baseline. Additionally, 6 of 8 student pods were stuck on rate-limited polling cycles for ~2 hours and had not started training their previously assigned old-stack experiments.
