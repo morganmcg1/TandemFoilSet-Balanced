@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 13:00
+- **Date:** 2026-05-13 13:25
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -58,7 +58,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
 | alphonse | #2000 | T_max=80 retest on grad-clip=2.5 stack | Schedule + Gradient stability | WIP-RETEST | First pass: val=54.51 (beat #1953 55.76 by −2.25% — schedule mechanism confirmed) but +3.55% vs current #1982 baseline (52.64). Retest with current default grad-clip=2.5. Watch clip rate — predicted ≥99.5% (warning regime). Outcomes: (A) val<52.64 compound win; (B) clip-near-100% direction-normalization fail |
-| askeladd | #1841 | slice_num=48 — retest on full 8-merge stack (n_layers=3 + grad-clip=10) | Architecture / throughput | WIP-REBASE | First-pass val=70.76 beat OLD baseline (71.44) but not n_layers=3 (69.45) or new grad-clip baseline (65.98). Mechanism (3/4 splits improve, capacity-right-sizing) is clean. Expected retest val ≈ 65.35 if relative −0.95% holds |
+| askeladd | #2113 | slice_num=96 — capacity-up dual to closed #1841 (slice=48 failed on wider stack) | Architecture (slice tokens) | WIP | #1841 CLOSED (v2 retest val=52.57 wash vs #1982 baseline 52.64 but test=46.29 = +2.93% regression on all 4 splits; mechanism: at n_hidden=224 slice token compute share is 3.2% — capacity reduction irrelevant, throughput gain marginal). Tests opposite direction: does wider hidden state benefit from richer slicing (more attention pathway capacity)? Outcomes: (A) val<52.64 win; (B) wash; (C) val>54 throughput penalty + over-parameterization |
 | edward | #2024 | EMA decay 0.999 → 0.998 on 11-compound stack | Optimization (EMA) | WIP | #1833 CLOSED (stale, never completed training). At #1953 EMA−live gap is −8.32 (vs +0.42 at #1899). Halving EMA half-life (693→346 steps) should let EMA track the live model's improvements in the new T_max=50 schedule tail |
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 11-merge stack |
 | frieren | #2094 | grad-clip max_norm=2.0 fine-scan | Gradient stability (threshold scan) | WIP | #2067 CLOSED (max_norm=1.5 val=62.59, +18.91% — direction-normalization failure confirmed; clip rate hit 100%, downscaling 14.2× ≈ predicted 12×). Fine-grain test between FAIL (1.5) and WIN (2.5). Outcomes: (A) optimum shifts to 2.0; (B) flat region [2.0, 2.5]; (C) regime transition sharp at 2.5 |

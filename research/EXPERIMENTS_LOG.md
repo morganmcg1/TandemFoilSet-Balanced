@@ -1346,3 +1346,43 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
   - (B) val ≈ 52.0-53.5 (within noise) → flat optimum [2.0, 2.5]; 2.5 holds as conservative choice
   - (C) val > 54.0 → regime transition happens between 2.0 and 2.5; threshold optimum is sharp at 2.5
 - **Key diagnostic: clip rate.** If 100% (like 1.5 did), direction-normalization regime regardless of downscaling ratio.
+
+## 2026-05-13 13:25 — PR #1841: askeladd slice_num=48 v2 retest — CLOSED (test regression on wider stack)
+
+- Branch: `willowpai2g48h5-askeladd/slice-num-48`
+- Hypothesis (v2): retest the slice=48 capacity-down win from v1 (n_hidden=128 stack, val −0.95%) on the current 13-compound stack (n_hidden=224 + grad-clip=2.5 + n_layers=3 + T_max=50). Predicted val ~50-52 if compounds; ~52-53 if washes.
+- W&B run: `24e26js0` (30/50 epochs, wall-clock cap)
+
+| Metric | This (slice=48) | Baseline #1982 (slice=64) | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | **52.5697** | 52.6406 | **−0.13% (wash)** |
+| `test_avg/mae_surf_p` | **46.2937** | 44.9791 | **+2.93% regression** |
+| `test_single_in_dist` | 51.1522 | 49.8555 | +2.6% |
+| `test_geom_camber_rc` | 59.8315 | 57.7726 | +3.6% |
+| `test_geom_camber_cruise` | 29.2476 | 28.9446 | +1.0% |
+| `test_re_rand` | 44.9435 | 43.3437 | +3.7% |
+| Param count | 1.263M | 1.263M | −560 (~0.04%) |
+| Peak GPU | 74.27 GiB | similar | ~no change |
+| Speedup (steady state) | 60.0 s/ep | ~62 s/ep | +3.2% |
+| Epochs completed | 30/50 | 33/50 | both wall-clock capped |
+| EMA-live gap (val final) | −12.16 | — | strong EMA averaging benefit |
+
+- **Decision: CLOSE.** Val washes (within noise floor) but test regresses cleanly +2.93% on the paper metric. All 4 test splits regress with uniform magnitude (~1-4%). No path forward.
+- **Mechanism analysis (clean):**
+  - At n_hidden=224, slice token compute share shrinks (3.2% throughput swing 64↔48 vs 5.4% at n_hidden=128). FFN dominates at wider hidden.
+  - Param delta negligible (~0.04% of 1.26M) — slice tokens are tiny share of capacity at wider hidden.
+  - EMA−live gap −12.16 confirms strong variance-absorbing benefit; val still descending at ep 30/50 (epoch-saturated, not capacity-saturated — same as #1982).
+- **Key insight: slice axis behaves differently at different hidden widths.** v1 (n_hidden=128, slice=48) won −0.95% — capacity reduction meaningful. v2 (n_hidden=224, slice=48) lost on test — capacity reduction irrelevant. **Capacity-down levers don't compose cleanly across widths.**
+- **Slice axis CLOSED for capacity-down direction at wider hidden.** Next askeladd test: opposite direction (slice=96, capacity-up) on the wider stack.
+
+## 2026-05-13 13:25 — PR #2113: askeladd assigned slice_num=96 capacity-up (dual to #1841)
+
+- Branch: `willowpai2g48h5-askeladd/slice-num-96-capacity-up`
+- Hypothesis: Dual to closed #1841. Tests whether **wider hidden state benefits from richer slicing pathway** (more slice tokens → more attention-addressable geometry roles). At n_hidden=224 we have 1.26M params but only 64 slice tokens — perhaps the slicing axis has untapped headroom.
+- Reproduce: `--n_hidden 224 --n_layers 3 --epochs 50 --slice_num 96` (single CLI flag change; --slice_num wiring already in train.py from #1841 v1).
+- Targets: val < 52.6406, test < 44.9791.
+- **Three possible outcomes:**
+  - (A) val < 52.64 → slice axis capacity-up compounds with wider hidden; 14th compound winner
+  - (B) val ≈ 52.0-53.5 (within noise) → slice_num plateau region above 64; 64 holds as conservative default
+  - (C) val > 54.0 → throughput penalty (~3.2% slower → ~28 vs 30 epochs in budget) + potential over-parameterization erodes performance
+- **Mechanism diagnostics:** per-epoch wall time (predict ~64 s/ep), param count (+560 weights to 1.264M), peak GPU (~78 GiB vs 74 at slice=48), val trajectory at ep 25/28/final (plateau or still descending), EMA-live gap (was −12.16 at slice=48; if similar, EMA still doing variance-absorbing work).
