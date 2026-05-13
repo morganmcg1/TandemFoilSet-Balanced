@@ -6,6 +6,48 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 02:45 — PR #1769: GeGLU + Lion — MERGED (**new best: val=64.918, −25.3%**)
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/geglu-lion
+- **Hypothesis:** GeGLU gated MLP activation (GELU(x1) * x2 where fc1 output is split in two) with Lion optimizer. Prior GeGLU+AdamW (PR #1728) was essentially baseline. Lion's sign-based updates may complement GeGLU's gating differently.
+
+| Split | val mae_surf_p | test mae_surf_p | Δ val |
+|---|---|---|---|
+| single_in_dist | 72.021 | 64.947 | −27.2% |
+| geom_camber_rc | 89.234 | 80.467 | −14.8% |
+| geom_camber_cruise | 37.058 | 32.329 | **−40.3%** |
+| re_rand | 61.359 | 54.939 | −25.2% |
+| **avg** | **64.918** | **58.171** | **−25.3%** |
+
+- **vs baseline (Lion+GELU 86.938):** −25.3% — **largest single-PR improvement in the programme** (exceeds L1 −20.5%, Lion −14.3%, n_layers=6 −9.4%)
+- **Per-epoch time:** ~143s (GeGLU overhead negligible with bf16 — vs ~210s with AdamW). Got 13 epochs in 30 min vs 11 with Lion+GELU.
+- **Still improving at cutoff** (epoch 13/50, curve descending). Cruise split improved 40.3% — GeGLU routing especially effective for high-camber transonic regime.
+- **Key insight:** GeGLU's multiplicative gating acts as a learned feature router. Combined with Lion's sign-based constant-magnitude updates, the gating receives cleaner direction signals. The previous AdamW+GeGLU failure was likely due to Adam's adaptive scaling confounding the gate learning signal.
+- **Artifacts:** `models/model-charliepai2g48h3-tanjiro-geglu-lion-20260513-012007/metrics.jsonl`
+
+---
+
+## 2026-05-13 02:45 — PR #1767: Physical-space L1 + Lion — SENT BACK (beats old baseline; new baseline higher bar)
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/physical-space-l1-lion
+- **Result:** val=83.446, test=74.517 (epoch 13)
+
+| Split | val | vs Lion+GELU baseline (86.938) |
+|---|---|---|
+| single_in_dist | 100.474 | +1.5% |
+| geom_camber_rc | 96.861 | −7.9% |
+| geom_camber_cruise | 58.461 | −5.8% |
+| re_rand | 77.988 | −4.9% |
+| **avg** | **83.446** | **−4.0%** |
+
+- **vs new baseline after #1769 (64.918):** +28.5% worse — not competitive on new baseline
+- **Key student insight:** Physical-space L1 = implicit channel reweighting (p:Ux:Uy ≈ 1 : 0.03 : 0.014). p_std≈679 Pa vs Ux_std≈14, Uy_std≈6 means dividing by p_std amplifies pressure gradient ~50×. This is the real mechanism.
+- **Action:** Sent back with instruction to rebase on new GeGLU+Lion baseline and test **explicit pressure-weighted normalized loss**: `loss = mae_p_norm + 0.03 * (mae_Ux_norm + mae_Uy_norm)`
+
+---
+
 ## 2026-05-13 02:10 — PR #1678: AdamW LR 5e-4 → 7e-4 — CLOSED (stale + obsolete)
 
 - **Student:** charliepai2g48h3-nezuko
