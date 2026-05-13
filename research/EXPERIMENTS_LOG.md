@@ -8,6 +8,24 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 19:30 — PR #2427 (tanjiro qk-norm-temp-init-0 / v2) — **CLOSED** (Outcome C +7.60% vs current; mechanism didn't activate; F.normalize magnitude-collapse)
+
+- Branch: `charliepai2g24h4-tanjiro/qk-norm-temp-init-0`
+- Hypothesis: QK-norm v2 — F.normalize(Q,K) + per-head log_temperature init=0 (qk_scale=1.0) + no-WD on temp; tests whether v1 (#2377) regression was caused by init=−0.5 confound
+- Metric artifact: `models/model-charliepai2g24h4-tanjiro-qk-norm-temp-init-0-20260513-165302/metrics.jsonl`
+
+| Metric | This run | Pre-#2370 baseline (61.875) | Current #2436 baseline (58.6093) | Δ vs current |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | 63.064 | 61.875 | 58.6093 | +7.60% (regression) |
+| `test_avg/mae_surf_p` | 54.717 | 54.117 | 50.7946 | +7.72% (regression) |
+| `val_geom_camber_cruise` | **43.682** | 45.901 | 36.251 | +20.5% (regressed vs current) |
+
+- **Mechanism didn't activate**: log_temp |Δ| ≤ 0.065 in every block (threshold for "activated" was 0.2). Block 3 froze entirely at +0.001. Per-block: B0=+0.064, B1=+0.018, B2=+0.027, B3=+0.001, B4=+0.011.
+- **Why**: `F.normalize(q,k)` collapses Q and K to the unit sphere. Available logit range is fixed at [−1, +1] regardless of data — softmax over 64 slices in that range is much flatter than baseline SDPA, which uses per-query magnitude variance to sharpen attention on agreed keys. **Ep 1 val = 206.4 (~2× baseline)** is the visible footprint of this magnitude-collapse penalty; the model never recovers within 12 epochs.
+- **Per-split asymmetry**: `val_geom_camber_cruise` improves (−4.83% vs old baseline; bounded logits help the cleanest split), but `val_single_in_dist` (+6.12%) and `test_geom_camber_rc` (+5.06%) regress hard. The splits that need sharper attention to discriminate similar inputs are the most-hurt.
+- **Axis status**: F.normalize-based QK-norm closed across v1 (#2377: init confound) and v2 (#2427: magnitude collapse) through TWO distinct mechanisms. Student's analysis correctly identified RMSNorm + learnable γ as the next test.
+- **Action**: closed; reassigning tanjiro to #2488 `rmsnorm-qk-gamma` (RMSNorm-Q/K with learnable per-head per-channel γ initialized to 1.0; 1280 new params in no-WD 10× lr group; preserves magnitude while controlling variance).
+
 ## 2026-05-13 18:55 — PR #2414 (alphonse attn-layerscale-0.05) — **CLOSED** (Outcome C regression; mechanism inverted)
 
 - Branch: `charliepai2g24h4-alphonse/attn-layerscale-0.05`

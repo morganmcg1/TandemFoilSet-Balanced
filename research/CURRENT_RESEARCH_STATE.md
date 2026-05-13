@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 19:10 UTC (Wave 17+: CLOSE #2414 alphonse attn-layerscale-0.05 (Outcome C +7.92% vs current; mechanism inverted — optimizer drove attn γ DOWN, mlp γ UP); ASSIGN #2475 fern layerscale-init-0.1 (re-tune init on post-#2436 stack); ASSIGN #2476 alphonse swa-last-3-epochs (Stochastic Weight Averaging))
+- **Last updated**: 2026-05-13 19:35 UTC (Wave 17+: CLOSE #2427 tanjiro qk-norm-temp-init-0 (Outcome C +7.60%, F.normalize magnitude-collapse; log_temp |Δ|≤0.065 never activated); ASSIGN #2488 tanjiro rmsnorm-qk-gamma (RMSNorm-Q/K + learnable γ preserves magnitude))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -49,7 +49,7 @@ New Wave 17+ threads testing refined hypotheses:
 | nezuko | #2465 | norm-bias-no-wd | LayerNorm γ/β + Linear biases + placeholder + attn.temperature → wd=0 (standard transformer recipe, orthogonal to fern #2436) | ASSIGNED |
 | askeladd | #2453 | flow-cond-film-v2 | FiLM γ/β = MLP(log_Re,AoA0,AoA1) — refreshed (v1 stale, never picked up); zero-init heads AFTER apply, cond_indices=[35,36,40] | ASSIGNED |
 | edward | #2441 | hybrid-rff-plus-learned-freqs | Additive GaussianRFF σ=3 on top of learned-freqs stack (m=6 fixed RFF concatenated after existing FourierCoordEnc output) | ASSIGNED |
-| tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD | IN FLIGHT |
+| tanjiro | #2488 | rmsnorm-qk-gamma | QK-norm v3 — RMSNorm-Q/K with learnable per-head per-channel γ (1280 new params, no-WD 10× lr group); preserves magnitude while controlling variance (Gemma/DeepSeek-V3 formulation) | ASSIGNED |
 | fern | #2475 | layerscale-init-0.1 | LayerScale init=0.1 (4× current 0.025) — tests if init was implicitly retuned by the post-#2436 no-WD 10× lr group dynamics | ASSIGNED |
 | alphonse | #2476 | swa-last-3-epochs | Stochastic Weight Averaging: average state_dicts from last 3 training epochs and evaluate; Kaggle-staple OOD generalizer | ASSIGNED |
 
@@ -111,6 +111,7 @@ New Wave 17+ threads testing refined hypotheses:
 | Slice temperature at 10× lr | n/a (don't raise lr) | #2437 CLOSED Outcome C: +4.81%; softmax-internal routing destabilized |
 | Learned freqs at 50× lr | n/a (lr ≥ 10× is plenty) | #2435 CLOSED: top freqs are gradient-magnitude-limited, NOT lr-limited |
 | Asymmetric LayerScale init (attn>mlp) | symmetric 0.025 | #2414 CLOSED Outcome C: +7.92% vs current; optimizer inverts the asymmetry (final mlp γ > attn γ in all 5 blocks) — the hypothesized direction was wrong |
+| F.normalize-based QK-norm | not used | #2377 + #2427 BOTH CLOSED: v1 init confound + v2 magnitude collapse (Q/K unit-sphere destroys per-query magnitude variance needed for attention sharpening); RMSNorm variant tested in #2488 |
 
 ## Prioritized open research themes (Wave 17+)
 
