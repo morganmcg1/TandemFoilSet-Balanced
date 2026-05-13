@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-05-13 13:20 — PR #2260: Tighter gradient clipping grad_clip 1.0 → 0.5 (dampen epoch-5 spike)
+
+**Student:** charliepai2g48h2-nezuko  
+**Change:** Single constant change `grad_clip: float = 1.0` → `0.5`. All other config unchanged from PR #1657: RFF σ=3.0, asinh pressure compression, lr=1.5e-3, 4-epoch warmup, AdamW betas=(0.9, 0.99), ε=1e-8, CosineAnnealingLR(T_max=10), channel_weights=[1,1,3].
+
+### Validation (best epoch 14/14)
+
+| Split | mae_surf_p | vs. #1657 baseline (65.3304) |
+|---|---|---|
+| val_single_in_dist | 73.7639 | +1.07 (+1.47%) |
+| val_geom_camber_rc | 79.4389 | +0.61 (+0.77%) |
+| val_geom_camber_cruise | 42.8481 | **−1.59 (−3.58%)** ✓ |
+| val_re_rand | 64.8172 | −0.54 (−0.83%) ✓ |
+| **val_avg/mae_surf_p** | **65.2170** | **−0.11 (−0.17%)** ✓ |
+
+**Improvement vs #1657 baseline: −0.17% (65.3304 → 65.2170)**  
+**Cumulative improvement vs #1418 baseline: −46.8% (122.64 → 65.2170)**
+
+### Test (from best-val checkpoint, epoch 14)
+
+| Split | mae_surf_p | vs. #1657 |
+|---|---|---|
+| test_single_in_dist | 64.4538 | −0.12 (−0.19%) ✓ |
+| test_geom_camber_rc | 71.6744 | +0.14 (+0.20%) |
+| test_geom_camber_cruise | 35.2533 | **−1.14 (−3.13%)** ✓ |
+| test_re_rand | 54.4508 | **−0.82 (−1.48%)** ✓ |
+| **test_avg/mae_surf_p** | **56.4581** | **−0.48 (−0.85%)** ✓ |
+
+**Improvement vs #1657 test baseline: −0.85% (56.9425 → 56.4581)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **678K params**
+- RFF: B ~ N(0, σ²=9.0) ∈ R^{2×32}, fixed (seeded 42), output 64-dim [cos, sin]
+- AdamW **lr=1.5e-3**, **4-epoch warmup**, wd=1e-4, **betas=(0.9, 0.99)**, CosineAnnealingLR(T_max=10), **grad_clip=0.5**
+- Loss: `F.l1_loss` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- Asinh pressure compression: GAIN=1.0 (pressure channel only)
+
+### Key finding
+
+Halving grad_clip from 1.0 to 0.5 **eliminates the +91-unit epoch-5 spike** (RFF base) and flips it into a −58-unit descent. Test improvement (−0.85%) significantly exceeds val improvement (−0.17%) — the tighter clipping particularly helps on val/test_cruise (−3.58% / −3.13%) and test_re_rand (−1.48%). The spike-elimination explains the test-side bonus: the spike drove the model into a worse basin that RFF-base partially recovered from by epoch 14; with clip=0.5, the model starts the cosine tail from a better state. Grad_clip axis open: probe clip=0.25 next.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-nezuko-grad-clip-0p5-20260513-121601/metrics.jsonl`
+- `models/model-charliepai2g48h2-nezuko-grad-clip-0p5-20260513-121601/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-nezuko \
+    --experiment_name "charliepai2g48h2-nezuko/grad-clip-0p5" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 10:05 — PR #1657: Fourier RFF positional encoding σ=3.0 (space_dim 2→64)
 
 **Student:** charliepai2g48h2-fern  
@@ -633,4 +691,4 @@ err = (pred_orig.double() - y_safe.double()).abs()
 
 ---
 
-> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 74.2082`.
+> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 65.2170`.
