@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~04:00
+- **Date:** 2026-05-13 ~04:20
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -68,12 +68,12 @@
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1765 | Lion lr=2e-4 with lr=cfg.lr bug fix | WIP (rerun on GeGLU+Lion) |
-| askeladd | #1766 | Lion WD=1e-2 on GeGLU+Lion (compound test) | SENT BACK (rerun on GeGLU+Lion) |
-| edward | #1859 | SmoothL1 β=0.1 on GeGLU+Lion (remove L1 gradient discontinuity at zero) | NEW |
-| tanjiro | #1872 | mlp_ratio=8 + GeGLU: recover fc2 capacity halved by gating split | NEW |
-| fern | #1790 | Lion + 2-epoch cosine warmup on GeGLU+Lion | SENT BACK (rerun on GeGLU+Lion) |
-| nezuko | #1793 | Lion + T_max=12 aligned to budget | WIP (on pre-GeGLU; check upon completion) |
+| alphonse | #1765 | Lion lr=2e-4 (bug fix now landed): rerun on GeGLU+Lion | SENT BACK (rerun needed) |
+| askeladd | #1766 | Lion WD=1e-2 on GeGLU+Lion (compound test) | SENT BACK (rerun needed) |
+| edward | #1859 | SmoothL1 β=0.1 on GeGLU+Lion (remove L1 gradient discontinuity at zero) | WIP |
+| tanjiro | #1872 | mlp_ratio=8 + GeGLU: recover fc2 capacity halved by gating split | WIP |
+| fern | #1790 | Lion + 2-epoch cosine warmup on GeGLU+Lion | SENT BACK (rerun needed) |
+| nezuko | #1793 | Lion + T_max=12 aligned to budget on GeGLU+Lion | SENT BACK (rerun needed) |
 | thorfinn | #1836 | surf_weight 10 → 5 on GeGLU+Lion | WIP |
 | frieren | #1837 | RMSNorm replaces LayerNorm on GeGLU+Lion | WIP |
 
@@ -83,9 +83,9 @@
 
 ## Critical infra issue: train.py:440 LR hardcoding bug
 
-`optimizer = Lion(model.parameters(), lr=1e-4, ...)` hardcodes lr=1e-4, ignoring `cfg.lr`. Discovered by askeladd in PR #1766; fix in flight (`lr=cfg.lr`). Until merged, any LR experiment with `--lr != 1e-4` is silently broken. alphonse's lr=2e-4 in #1765 actually ran at 1e-4 on the old baseline.
+Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`lr=cfg.lr`, plus `Config.lr` default updated to 1e-4). Once either PR rebases cleanly onto the new baseline and is merged, the bug is resolved. Until then, any LR experiment with `--lr != 1e-4` is silently broken.
 
-> Note: #1793 (nezuko T_max=12) is still on the pre-GeGLU Lion+GELU baseline. When it lands, evaluate relative to 86.938; if positive, retest on 64.918.
+> Note: This is the first round where 0 students are running on the Lion+GELU pre-GeGLU baseline. All experiments now target the GeGLU+Lion 64.918 baseline.
 
 ## Round 8/9 priorities (GeGLU+Lion baseline)
 
@@ -93,13 +93,11 @@
 1. **mlp_ratio=8 + GeGLU** (tanjiro #1872): recover fc2 capacity halved by GeGLU split; tests "gating alone vs gating+capacity"
 2. **SmoothL1 β=0.1 + GeGLU+Lion** (edward #1859): remove L1 gradient discontinuity at zero for Lion sign updates.
 
-**Tier 2 (mechanism confirmation on GeGLU+Lion):**
-3. **Lion WD=1e-2** (askeladd #1766 rerun): confirmed −10.4% on Lion+GELU; testing if it compounds with GeGLU.
-4. **Lion + 2-epoch warmup** (fern #1790 rerun): confirmed −9.9% on Lion+GELU; testing on GeGLU stack.
-5. **Lion lr=2e-4 + bug fix** (alphonse #1765): previous run silently used 1e-4; now re-running with actual 2e-4.
-
-**Tier 3 (pre-GeGLU, check upon completion):**
-6. **Lion + T_max=12** (nezuko #1793): still on Lion+GELU; if positive → retest on 64.918.
+**Tier 2 (mechanism confirmation on GeGLU+Lion — all sent back, awaiting rerun):**
+3. **Lion WD=1e-2** (askeladd #1766): confirmed −10.4% on Lion+GELU; rerun on GeGLU+Lion in flight.
+4. **Lion + 2-epoch warmup** (fern #1790): confirmed −9.9% on Lion+GELU; rerun on GeGLU+Lion in flight.
+5. **Lion lr=2e-4** (alphonse #1765): confirmed −7.8% on Lion+GELU (first true measurement post-bug-fix); rerun on GeGLU+Lion in flight.
+6. **Lion + T_max=12** (nezuko #1793): confirmed −9.18% on Lion+GELU; rerun on GeGLU+Lion in flight.
 
 **Queued ideas for next idle students:**
 - **RMSNorm + GeGLU + Lion**: frieren testing RMSNorm (#1837); if positive, it's already on GeGLU+Lion

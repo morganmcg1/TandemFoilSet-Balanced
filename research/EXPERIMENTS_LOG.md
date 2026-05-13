@@ -6,6 +6,49 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 04:20 — PR #1765: Lion lr=2e-4 (with bug fix) — SENT BACK (−7.8% on Lion+GELU; obsolete vs GeGLU+Lion)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/lion-lr-2e-4
+- **Hypothesis:** 2× LR (1e-4 → 2e-4) leverages Lion's higher LR tolerance from sign-based updates
+- **Bug fix included:** `train.py:421` `lr=1e-4` → `lr=cfg.lr` (the `--lr` flag was silently ignored before this PR). Default `Config.lr` changed from 5e-4 (AdamW carryover) to 1e-4 to preserve current baseline behavior.
+- **Result:** val=80.127, test=71.126 (Lion+GELU stack, epoch 13/13)
+
+| Split | val (lr=2e-4) | val (baseline lr=1e-4) | Δ |
+|---|---|---|---|
+| single_in_dist | 84.028 | 98.979 | **−15.1%** |
+| geom_camber_rc | 98.809 | 104.737 | −5.7% |
+| geom_camber_cruise | 59.025 | 62.041 | −4.9% |
+| re_rand | 78.646 | 81.995 | −4.1% |
+| **avg** | **80.127** | **86.938** | **−7.8% ✓** |
+
+- **vs Lion+GELU baseline (86.938):** −7.8% ✓ (first true measurement of lr=2e-4 because bug fixed)
+- **vs new GeGLU+Lion baseline (64.918):** +23.4% worse — needs rerun on GeGLU+Lion
+- **Action:** Sent back to retest on GeGLU+Lion stack. lr=2e-4 mechanism (Lion's sign updates absorb higher LR) is orthogonal to activation function.
+
+---
+
+## 2026-05-13 04:20 — PR #1793: Lion + T_max=12 (cosine aligned to budget) — SENT BACK (−9.18% on Lion+GELU; obsolete vs GeGLU+Lion)
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/lion-tmax-12-aligned
+- **Hypothesis:** T_max=50 with 30-min cap fires only 13% of cosine decay; T_max=12 aligns to actual epoch budget for proper late-epoch LR decay
+- **Result:** val=78.962, test=68.931 (Lion+GELU stack)
+
+| Split | val (T_max=12) | val (baseline T_max=50) | Δ |
+|---|---|---|---|
+| single_in_dist | 91.381 | 98.979 | −7.7% |
+| geom_camber_rc | 93.613 | 104.737 | −10.6% |
+| geom_camber_cruise | 57.362 | 62.041 | −7.5% |
+| re_rand | 73.491 | 81.995 | −10.4% |
+| **avg** | **78.962** | **86.938** | **−9.18% ✓** |
+
+- **vs Lion+GELU baseline (86.938):** −9.18% ✓ (uniform improvement across all 8 val+test splits)
+- **vs new GeGLU+Lion baseline (64.918):** +21.6% worse — needs rerun on GeGLU+Lion
+- **Action:** Sent back to retest on GeGLU+Lion stack. Schedule mechanism (proper cosine decay in budget) is orthogonal to activation function.
+
+---
+
 ## 2026-05-13 04:00 — PR #1824: SwiGLU (SiLU gate) vs GeGLU — CLOSED (+1.6% val regression)
 
 - **Student:** charliepai2g48h3-tanjiro
