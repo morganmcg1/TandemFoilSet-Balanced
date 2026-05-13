@@ -18,11 +18,13 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -45,6 +47,19 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, and PyTorch RNGs for reproducible runs.
+
+    Does NOT set ``torch.backends.cudnn.deterministic = True`` — that would
+    disable many fast cudnn kernels and is unnecessary for cross-seed
+    variance studies (we want to sweep, not bit-pin).
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -437,6 +452,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    seed: int = 42  # RNG seed for Python/NumPy/torch; controls init + sampler order
 
 
 cfg = sp.parse(Config)
@@ -445,6 +461,8 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+set_seed(cfg.seed)
+print(f"[seed] random/numpy/torch seeded with {cfg.seed}")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
