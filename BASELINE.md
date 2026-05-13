@@ -8,6 +8,29 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 16:43 — PR #2119: n_layers=4 on bs=2+slice32+fourier_k=12 stack (MERGED)
+
+- **`val_avg/mae_surf_p` (primary):** **53.8380** (W&B run `qttr6jay`) — **−6.71%** vs prior baseline 57.71
+- **`test_avg/mae_surf_p` (4-split, finite):** **46.9320** — **−5.27%** vs prior 49.54
+- **`test_no_ema_avg/mae_surf_p`:** 56.6107
+- **Per-split val surface-p MAE (`qttr6jay`, n_layers=4+bs=2+slice32+fourier_k=12, best-val epoch 29):**
+  - val_single_in_dist: 57.24  (vs 61.06 → −6.3%) ✅
+  - val_geom_camber_rc: 62.57  (vs 68.11 → −8.1%) ✅
+  - val_geom_camber_cruise: 40.50  (vs 42.98 → −5.8%) ✅
+  - val_re_rand: 55.05  (vs 58.71 → −6.2%) ✅
+- **Per-split test surface-p MAE (`qttr6jay`, 4-split clean):**
+  - test_single_in_dist: 50.16  (vs 51.92 → −3.4%) ✅
+  - test_geom_camber_rc: 56.06  (vs 59.20 → −5.3%) ✅
+  - test_geom_camber_cruise: 33.72  (vs 35.95 → −6.2%) ✅
+  - test_re_rand: 47.79  (vs 51.09 → −6.5%) ✅
+- **Mechanism:** `n_layers=4` (vs default 5) saves 1 Transolver block of compute per forward pass. Per-layer wall-clock scaling holds exactly (4/5 ratio → 0.81×, measured 57.8 s/ep vs 71.0 s/ep). That converts to 29 epochs vs 26 epochs in 30 min (+11.5% grad steps). Both depth (fewer layers = fewer params to converge) and throughput (more epochs in budget) contribute. All 8/8 per-split val+test metrics improve — unambiguous directional signal.
+- **Compute:** 29/50 epochs, 57.8 s/epoch, 30.7 min total, ~13-14 GB VRAM, **548,755 params** (−18% vs n=5 baseline 668,855).
+- **Merge bar update (vs val 53.84 / test 46.93):**
+  - ≤ 48.4 val → **merge** (≥10% gain)
+  - 48.4 – 53.8 → **second seed**
+  - ≥ 53.8 → **close**
+- **Reproduce:** `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4`
+
 ## 2026-05-13 15:51 — PR #2389: Batch size down bs=2 — more grad steps per 30-min cap (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **57.7122** (W&B run `jc24jr52`) — **−11.7%** vs prior baseline 65.40
