@@ -160,12 +160,45 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
+    def forward(self, fx, gamma=None, beta=None):
+        h = self.ln_1(fx)
+        if gamma is not None:  # FiLM modulation: γ · LN(h) + β, broadcast across N nodes
+            h = gamma.unsqueeze(1) * h + beta.unsqueeze(1)
+        fx = self.gamma_attn * self.attn(h) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
+
+
+class FiLMConditioner(nn.Module):
+    """Per-block affine conditioning from broadcast scalar inputs.
+
+    Reads channels 13-23 of x (log(Re), AoA-1, NACA-1, AoA-2, NACA-2, gap, stagger
+    — all per-sample constants broadcast across N nodes) from node 0 and emits
+    (γ, β) ∈ R^{B × n_blocks × H} per sample. Zero-init of the final linear keeps
+    γ=1, β=0 at step 0 → identity init → no destabilization vs no-FiLM baseline.
+    """
+
+    def __init__(self, n_blocks: int, hidden_dim: int, cond_dim: int = 11):
+        super().__init__()
+        self.n_blocks = n_blocks
+        self.hidden_dim = hidden_dim
+        self.mlp = nn.Sequential(
+            nn.Linear(cond_dim, 48),
+            nn.GELU(),
+            nn.Linear(48, n_blocks * hidden_dim * 2),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # x: [B, N, 24]; node 0's broadcast scalars equal every other node's
+        scalars = x[:, 0, 13:24]  # [B, 11]
+        out = self.mlp(scalars).view(-1, self.n_blocks, self.hidden_dim, 2)
+        gamma = 1.0 + out[..., 0]  # centered at 1 (identity)
+        beta = out[..., 1]          # centered at 0
+        return gamma, beta
 
 
 class Transolver(nn.Module):
@@ -199,6 +232,9 @@ class Transolver(nn.Module):
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
         self.apply(self._init_weights)
+        # FiLM constructed AFTER self.apply so its zero-init of the final linear
+        # is not overwritten by trunc_normal_ in _init_weights.
+        self.film = FiLMConditioner(n_blocks=n_layers, hidden_dim=n_hidden, cond_dim=11)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -212,8 +248,9 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
-            fx = block(fx)
+        gamma_all, beta_all = self.film(x)  # each [B, n_blocks, H]
+        for i, block in enumerate(self.blocks):
+            fx = block(fx, gamma=gamma_all[:, i], beta=beta_all[:, i])
         return {"preds": fx}
 
 
@@ -457,6 +494,13 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+n_film_params = sum(p.numel() for p in model.film.parameters())
+print(
+    f"FiLM: per-block affine conditioning on broadcast scalars (channels 13-23, 11 dims); "
+    f"zero-init for identity start; n_blocks={model_config['n_layers']}, "
+    f"output dim {model_config['n_hidden']*2*model_config['n_layers']} per sample; "
+    f"n_film_params={n_film_params}"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -629,6 +673,38 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # FiLM diagnostic: forward a small batch from each val split, record per-block
+    # gamma/beta mean & std across samples in that batch (best-checkpoint weights).
+    _film_log = {"event": "film_stats", "epoch": int(best_metrics["epoch"]), "splits": {}}
+    print("\nFiLM final per-block γ/β stats (best-checkpoint, one batch per val split):")
+    with torch.no_grad():
+        for _name, _loader in val_loaders.items():
+            try:
+                _x, _, _, _ = next(iter(_loader))
+            except StopIteration:
+                continue
+            _x = _x.to(device, non_blocking=True)
+            _x_norm = (_x - stats["x_mean"]) / stats["x_std"]
+            with amp_ctx_factory():
+                _g, _b = _inner.film(_x_norm)
+            _g = _g.detach().float()
+            _b = _b.detach().float()
+            _entry = {"blocks": []}
+            for _i in range(_g.shape[1]):
+                _gm = _g[:, _i].mean().item()
+                _gs = _g[:, _i].std().item()
+                _bm = _b[:, _i].mean().item()
+                _bs = _b[:, _i].std().item()
+                _entry["blocks"].append({
+                    "block_idx": _i,
+                    "gamma_mean": _gm, "gamma_std": _gs,
+                    "beta_mean": _bm, "beta_std": _bs,
+                })
+                print(f"  {_name:<26s} block[{_i}]: γ mean={_gm:.4f} std={_gs:.4f} | "
+                      f"β mean={_bm:.4f} std={_bs:.4f}")
+            _film_log["splits"][_name] = _entry
+    append_metrics_jsonl(metrics_jsonl_path, _film_log)
 
     test_metrics = None
     test_avg = None
