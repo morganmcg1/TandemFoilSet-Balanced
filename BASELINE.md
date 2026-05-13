@@ -39,10 +39,55 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **42.3455** | #2307 | L1 + compile + bf16 + **slice_num=24** + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + n_hidden=96 (advisor) | ep57 of 58 (best≠terminal, 1-ep bounce); **−9.61% vs #2268**; all 4 splits improve; NOT budget-gain (per-epoch ~−2% only); mechanism: better geometric routing (slice_num=32 was above the routing optimum) |
-| `test_avg/mae_surf_p` | **38.5059** | #2307 | — | test from best-val checkpoint ep57; −5.66% vs #2268 |
+| `val_avg/mae_surf_p` | **36.3994** | #2524 | Lion optimizer (lr=1e-4, wd=3e-4, β₂=0.99) + L1 + compile + bf16 + slice_num=24 + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + n_hidden=96 | ep65 of 67 (best≠terminal); **−14.05% vs #2307** (42.3455); uniform WIN all 4 splits 9.7-19.6%; val_geom_camber_rc 60.83→52.39 (-13.88%) — largest rc movement since launch; mechanism: Lion sign-step aligns with L1 sign-gradients; bf16-stable (no v_hat) |
+| `test_avg/mae_surf_p` | **31.2200** | #2524 | — | test from best-val checkpoint ep65; **−18.92% vs #2307** (38.5059) |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 42.3455` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 36.3994` to be merged.
+
+## 2026-05-14 05:50 — PR #2524: Lion optimizer (lr=1e-4, wd=3e-4, betas=(0.9, 0.99)): uniform WIN −14.05%
+
+- **Student:** charliepai2g48h5-edward
+- **Best epoch:** 65 of 67 (best≠terminal; still improving monotonically in cosine tail at timeout)
+- **Epochs reached:** 67 (30-min wall-clock cutoff at ~25-30 s/epoch)
+- **Peak GPU memory:** 14.02 GB (≈AdamW; no v_hat state, but activation memory dominates)
+- **Param count:** 328,235 (unchanged vs AdamW; pure optimizer swap)
+
+| Split | val mae_surf_p | Δ vs #2307 (42.3455 baseline) |
+|---|---|---|
+| `val_single_in_dist` | **28.5065** | **−19.65%** |
+| `val_geom_camber_rc` | **52.3873** | **−13.88%** |
+| `val_geom_camber_cruise` | **23.6834** | **−14.35%** |
+| `val_re_rand` | **41.0204** | **−9.69%** |
+| **val_avg** | **36.3994** | **−14.05%** |
+
+| Split | test mae_surf_p | Δ vs #2307 |
+|---|---|---|
+| `test_single_in_dist` | **27.2726** | −24.43% |
+| `test_geom_camber_rc` | **46.1996** | −19.43% |
+| `test_geom_camber_cruise` | **19.1050** | −13.44% |
+| `test_re_rand` | **32.3027** | −16.10% |
+| **test_avg** | **31.2200** | **−18.92%** |
+
+- **CRITICAL diagnostic:** Lion momentum non-zero fraction = 0.9986 → fully populated; no stuck/zero-update pathology.
+- **Mechanism:** L1 loss already provides sign-based gradients. AdamW's 2nd-moment normalization is approximately redundant for this sign-gradient regime. Lion's `sign(β₁m + (1-β₁)g)` commits to sign-direction signal directly. Additionally, Lion has no `v_hat` to track in bf16 precision, whereas AdamW's 2nd-moment EMA can accumulate numerical errors in bf16.
+- **Test improves MORE than val** (−18.92% vs −14.05%) → consistent with Lion's uniform step magnitudes providing slight regularization effect; warmup-cosine provides the magnitude tapering Lion lacks.
+- **val_geom_camber_rc: 60.83 → 52.39 (−13.88%)** — LARGEST single-PR movement on rc OOD bottleneck since launch.
+- **Config change:** Replace `torch.optim.AdamW(lr=5e-4, wd=1e-4)` with `Lion(lr=1e-4, wd=3e-4, betas=(0.9, 0.99))` in `train.py`. All other hyperparameters unchanged.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-edward-lion-lr1e-4-20260513-191121/metrics.jsonl`
+  `models/model-charliepai2g48h5-edward-lion-lr1e-4-20260513-191121/metrics.yaml`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-edward \
+      --experiment_name "charliepai2g48h5-edward/lion-lr1e-4" \
+      --lr 1e-4 \
+      --weight_decay 3e-4 \
+      --epochs 70
+  ```
+  (Lion optimizer now on advisor branch; stacks with all prior wins: L1 + compile + bf16 + slice_num=24 + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + n_hidden=96 + mlp_ratio=2)
+
+---
 
 ## 2026-05-13 20:30 — PR #2307: slice_num 32→24 (PhysicsAttention granularity-down): routing-quality WIN −9.61%
 
