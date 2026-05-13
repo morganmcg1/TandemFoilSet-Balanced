@@ -11,11 +11,11 @@
 | LR / Scheduler | OneCycleLR(max_lr=1e-3, total_steps=29×steps/ep, pct_start=0.1, div_factor=10, final_div_factor=1e3) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
-| Epochs | 50 (capped at 30 min wall) |
+| Epochs | 50 (capped at 30 min wall); eval_every_n_epochs=3 |
 | Loss | MSE, `vol_loss + 10 * surf_loss` |
 | Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=128, mlp_ratio=2 |
 | Compile | torch.compile(model, mode="default", dynamic=True) |
-| Precision | bf16 autocast train+eval, grad_clip_norm=1.0 |
+| Precision | bf16 autocast train, **fp32 eval (no autocast)**, grad_clip_norm=1.0 |
 
 ## Primary ranking metric
 
@@ -24,6 +24,32 @@
 Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
+
+### 2026-05-13 01:05 — PR #1556: fp32 eval + eval_every_n_epochs=3 — paper-faithful test_avg (composes onto OneCycleLR)
+
+- **val_avg/mae_surf_p:** **70.9449** (carried forward — unchanged, val cruise was always finite under bf16) ✓ NEW BASELINE STACK
+- **test_avg/mae_surf_p (4-split, fp32 eval):** to be re-measured on next post-merge run — frieren's iter2 produced **64.3287** on the pre-OneCycleLR scheduler (Cosine); the fp32-eval contribution is orthogonal and should compose additively with OneCycleLR. Future PRs will re-establish the faithful number on this stack.
+- **Cruise test fidelity:** `test_geom_camber_cruise/mae_surf_p` = **43.71** (frieren iter2, finite — no bf16 inf, no nan_to_num zeroing)
+- **W&B run (orthogonal-merge reference, not OneCycleLR stack):** `uwk17oc0` (CosineAnnealingLR + fp32-eval-gate, 30 epochs / 30 min)
+- **Peak GPU:** 29.8 GB | **Sec/epoch:** ~60.6s (mean across train + 10 eval epochs) | **Epochs:** 30/30 cap
+- **Model diff vs prior baseline (#1404, OneCycleLR):**
+  - Removed `torch.amp.autocast(bfloat16)` from `evaluate_split` — eval now runs in fp32
+  - Added `eval_every_n_epochs: int = 3` to Config with final-epoch guard
+  - `should_eval = (epoch % cfg.eval_every_n_epochs == 0) or (epoch == MAX_EPOCHS - 1)`
+  - Best-checkpoint selection gated by `should_eval`
+- **Reproduce:**
+  ```bash
+  cd target
+  python train.py --agent willowpai2g24h4-frieren --wandb_name "willowpai2g24h4-frieren/fp32-eval-n3"
+  ```
+
+**Key insight:** This is a metric-FIDELITY improvement, not a metric-VALUE improvement. The val 70.94 stays valid (val cruise was always finite under bf16). The test_avg of 61.83 (under bf16 eval, cruise zeroed) is no longer the right comparison — future runs producing test_avg under fp32 eval will be higher in absolute terms but more honest. Cruise contribution recovers from artificial 42.96 (zeroed) to faithful ~43.71.
+
+**Note on next target:** The first post-merge run on this stack will establish the new faithful test_avg/mae_surf_p baseline. Until then, beat val_avg/mae_surf_p = **70.9449** and recognize that test_avg numbers from this merge forward are not directly comparable to the pre-merge `61.8276` value.
+
+**Next target:** beat val_avg/mae_surf_p = 70.9449 (test_avg/mae_surf_p baseline to be re-established by next experiment on this stack)
+
+---
 
 ### 2026-05-13 00:00 — PR #1404: OneCycleLR (max_lr=1e-3, SCHEDULER_EPOCHS=29, per-batch step) — schedule shape win
 
