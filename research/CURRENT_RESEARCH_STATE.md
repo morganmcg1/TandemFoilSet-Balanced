@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 06:15
+- 2026-05-13 06:30
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -38,7 +38,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
 | SWA mid-training regresses +4.1% (#1463, CLOSED) | Averages early bad checkpoints; SWALR fights Lion cosine |
 | EMA decay=0.999 regresses +16.1% (#1596, CLOSED) | 13-epoch monotonic regime: early averaging always hurts |
-| n_hidden=160 → −1.71 val on OLD baseline (#1755, SENT BACK 3rd time) | Clean width gain; needs re-run on new δ=0.3+epochs=16 stack |
+| **n_hidden=160 → −8.97 val on Huber δ=0.5 stack (#1755 re-run, SENT BACK 4th time)** | val=57.34, test=53.69; +0.44 above new 56.90 δ=0.3 baseline. Compound n160+δ=0.3 likely beats baseline (orthogonal levers) |
 | n_hidden=192 confirmed dead (#1755 Arm B, lr=4e-4) | Budget cliff, grad_norm instability; 2× regression evidence |
 | Lion lr=2e-4 wins on Huber δ=0.5 stack (#1782, SENT BACK) | LR optimum shifted 2.5e-4→2e-4; needs re-run on new δ=0.3 stack |
 | Dropout=0.1 → −5.7% val on OLD 66.32 baseline (#1656, SENT BACK) | Feature-level regularization works; needs re-run on δ=0.3 stack |
@@ -50,7 +50,7 @@ cd target/ && python train.py --epochs 16 --experiment_name huber_d03_ep16_basel
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP — new | Beat 56.90 |
 | #1879 | tanjiro | Huber δ=0.5 + epochs=16 compound (now on δ=0.3 default) | WIP (stale, baseline notification sent) | Beat 56.90 |
 | #1782 | frieren | Lion lr=2e-4 single-arm on δ=0.3 stack | WIP (sent back 3rd time) | Beat 56.90 |
-| #1755 | fern | n_hidden=160 single-arm on δ=0.3+epochs=16 stack | WIP (sent back 3rd time) | Beat 56.90 |
+| #1755 | fern | n_hidden=160 final-gate single-arm on δ=0.3+epochs=16 stack | WIP (sent back 4th time — FINAL gate) | Beat 56.90 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline notification sent) | Beat 56.90 |
 | #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 56.90 |
 | #1481 | nezuko | slice_num=128, epochs=16 | WIP (baseline notification sent) | Beat 56.90 |

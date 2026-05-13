@@ -1,5 +1,37 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 06:30 — PR #1755: n_hidden=160 single-arm on Huber δ=0.5+epochs=16 stack (SENT BACK — baseline moved 3rd time)
+
+- Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
+- Hypothesis: n_hidden=160 on the new Lion+Huber δ=0.5+epochs=16 stack — does the −1.71 val width gain from old Lion-only stack compose with epochs=16 + Huber δ=0.5?
+
+### Results vs OLD δ=0.5 baseline 66.32 / 61.14 (baseline moved to 56.90 during run)
+
+| Metric | Baseline n128+δ=0.5 | **This PR n160+δ=0.5** | Δ vs OLD | Δ vs NEW 56.90 |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 66.32 | **57.34** | **−8.97 (−13.5%)** | +0.44 (above new baseline) |
+| test_avg/mae_surf_p | 61.14 | **53.69** | **−7.45 (−12.2%)** | +0.49 |
+
+### Per-split val/test (n160 winner)
+
+| Split | val_n160 | test_n160 |
+|---|---:|---:|
+| single_in_dist | 60.74 | 52.56 |
+| geom_camber_rc | 72.74 | 63.32 |
+| geom_camber_cruise | 38.72 | 50.59 |
+| re_rand | 57.18 | 48.30 |
+| **avg** | **57.34** | **53.69** |
+
+### Analysis
+
+**Strong architectural signal:** every val and test split improved over the old 66.32 baseline. Gen gap narrowed from −5.18 → −3.65 (test better generalizing). Per-epoch trajectory still descending at epoch 16 (slope −1.7/epoch). Peak VRAM 38 GB, s/epoch 115, 30.7 min wall-clock.
+
+**Why sent back (3rd time):** PR #1880 (Huber δ=0.3) merged during fern's run, dropping the baseline from 66.32 → 56.90. Fern's n_hidden=160 + δ=0.5 result (57.34) is now +0.44 above the new baseline. Need one more single-arm run with n_hidden=160 + δ=0.3 (current default) to test compound. If width's gain is orthogonal to loss shape, expected val ~52-55. Final gate framing: this is the last re-run for this hypothesis — either it beats 56.90 and merges, or we close the n_hidden direction.
+
+- Metrics: `models/model-nhidden160_huber_ep16-20260513-051534/metrics.jsonl`
+
+---
+
 ## 2026-05-13 06:01 — PR #1782: Lion LR re-scan on Huber+epochs=16 stack (SENT BACK — baseline moved again)
 
 - Student branch: `charliepai2g24h5-frieren/lion-lr-scan`
