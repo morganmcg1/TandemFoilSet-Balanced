@@ -1211,3 +1211,77 @@ Pivoting askeladd onto the inverse direction informed directly by their own #170
 
 **Closed-axis count: 10.** Newly added: loss-kind axis at FiLM-scale (#1739, FiLM absorbed the mechanism); per-channel p-weighting up-direction (#1702, diagnostic falsified premise — inverse direction now in test).
 
+---
+
+## 2026-05-13 03:10 — PR #1731 MERGED (nezuko, grad-clip max_norm=1.0 on FiLM)
+
+- **Branch:** `willowpai2g48h2-nezuko/grad-clip-on-filmed`
+- **Hypothesis:** Stack `clip_grad_norm_(max_norm=1.0)` on the merged FiLM baseline. Tests whether grad-clip's stability mechanism composes with FiLM's conditioning mechanism. Re-test of wave-3 #1617 on the new stack.
+
+### Result table (W&B runs `z43bhwlk`, `m69xm4r2`, terminal SENPAI-RESULT)
+
+| Metric | seed 0 (best) | seed 1 | mean ± std | vs #1585 baseline (80.82 / 71.30) |
+|---|---|---|---|---|
+| **SWA val_avg/mae_surf_p** | **74.62** | 75.84 | 75.23 ± 0.86 | **−7.67%** |
+| **SWA test_avg/mae_surf_p** | **66.14** | 67.21 | 66.67 ± 0.76 | **−7.25%** |
+| Base val (best epoch) | 77.16 (ep 12) | 78.07 (ep 13) | 77.61 ± 0.65 | −4.53% |
+| Base test_avg | 68.70 | 68.62 | 68.66 ± 0.06 | −3.77% |
+
+### Per-split SWA val × seed (surface MAE, p)
+
+| Split | seed 0 | seed 1 | mean | Δ vs #1585 |
+|---|---|---|---|---|
+| val_single_in_dist | 86.19 | 87.40 | 86.80 | −1.80 vs 88.39 |
+| **val_geom_camber_rc** | **90.92** | 92.17 | 91.54 | **−6.44 vs 97.36** |
+| val_geom_camber_cruise | 50.32 | 51.42 | 50.87 | −9.37 vs 59.69 |
+| val_re_rand | 71.06 | 72.36 | 71.71 | −6.77 vs 77.83 |
+
+### Grad-clip diagnostics
+
+| Metric | seed 0 | seed 1 |
+|---|---|---|
+| `train/grad_norm_mean` (pre-clip) | 4.999 | 4.926 |
+| `train/grad_norm_max` (pre-clip) | 31.60 | 26.28 |
+| `train/clip_fraction_mean` | 0.920 | 0.936 |
+
+**~93% of steps were clipped** — pre-clip grad-norm ran ~5× over threshold on average with peaks >25× threshold. Mechanism is decisively active.
+
+### Decision
+
+- **MERGED** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1731 — squash commit `407f858`
+- BASELINE.md updated; commit `4cba795` on advisor branch
+
+### Analysis — mechanism finding
+
+**Grad-clip composes orthogonally with FiLM, as predicted.** The PR's specific mechanism story holds:
+- Huber β=1.0 + AdamW + lr=5e-4 produces gradient-norm spikes (max 31.6, mean 5.0) at every step (~93% clip rate).
+- Bounding step magnitudes lets SWA average over cleaner sub-trajectories → late-epoch averaging produces lower-loss final weights.
+- Base-best 77.16 → SWA-best 74.62 = **−3.3% from SWA averaging alone on grad-clipped trajectories** (vs FiLM-alone where SWA brought less because the underlying trajectories were noisier).
+- The FiLM bottleneck `val_geom_camber_rc` improved by **−6.44 absolute** (97.36 → 90.92), exactly the high-stiffness region the mechanism predicted.
+
+**Variance result is solid in direction but noisy in magnitude with only 2 seeds.** Every per-split metric tightens vs FiLM-alone's 3-seed std. Best-seed val 74.62 is 6.2 points under the 80.82 threshold — no 3rd seed needed for merge decision.
+
+### Reassignment to PR #1831: max_norm sweep {0.5, 2.0} on the new clipfilm baseline
+
+Pivoting nezuko onto the natural follow-up (their own suggestion):
+- **Mechanism:** 93% clip-fraction at 1.0 is the strongest signal that the threshold is binding. Bracketed sweep tests sensitivity in both directions.
+- Single seed per arm, 2 arms (0.5, 2.0), bracketing the merged 1.0 value.
+- Outcomes: (a) one arm beats 74.62 → merge; (b) both arms regress → axis closed at 1.0; (c) non-monotonic → send back for deeper investigation.
+
+### Implication for in-flight wave-6 PRs
+
+All 7 other in-flight wave-6 PRs were forked from the **old** FiLM baseline (val=80.82). Their decision rules now compare to the **new** grad-clip+FiLM baseline (val=74.62). This raises the merge bar by ~6 points. **Recommendation for the next review batch:** re-evaluate each wave-6 PR against val=74.62. Most will likely close cleanly; the mechanism-orthogonal ones with strong signal (β=0.3, slice_num, mesh-subsample) deserve retest on the new baseline as wave-7 candidates.
+
+| PR | Student | Slug | Note |
+|---|---|---|---|
+| #1831 | nezuko | max-norm-sweep | **NEW**, forked from new 74.62 baseline |
+| #1818 | alphonse | slice-num-128 | Forked from 80.82 |
+| #1821 | askeladd | uxuy-weight-2p0 | Forked from 80.82 |
+| #1734 | thorfinn | asinh-0p5-pressure | Forked from 80.82 |
+| #1757 | frieren | beta-0p3 | Forked from 80.82 |
+| #1758 | fern | mesh-subsample-0p9 | Forked from 80.82 |
+| #1760 | tanjiro | film-mid-dim-128 | Forked from 80.82 |
+| #1787 | edward | re-jitter-0p05 | Forked from 80.82 |
+
+
+
