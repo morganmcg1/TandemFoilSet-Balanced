@@ -1738,3 +1738,42 @@ If aggregate val on new bar remains in σ band, recommend trying α=0.3 (knee at
 
 ---
 
+## 2026-05-13 06:05 — PR #1908 (nezuko, learnable routing-temp) CLOSE
+
+- **Branch:** `willowpai2g48h2-nezuko/learnable-routing-temp-on-clipfilm`
+- **Hypothesis:** Per-block learnable softmax temperature (`routing_log_temp`) on PhysicsAttention slice-routing — explicit temperature axis on top of fixed routing.
+- **Result (W&B `81wlep3i`):** val=76.28, test=68.01 (clean negative vs both 73.81 and 71.43 bars; +6.79%/+7.97% vs Kendall baseline). All 4 val + 4 test splits regress. `test_re_rand` (predicted-largest-gain) got worse by +3.23.
+
+### High-info precondition finding
+
+Student found that **PhysicsAttention already has a per-head learnable `self.temperature` parameter** (init=0.5, in `train.py:95`), and the routing softmax was already temperature-scaled. The PR-body hypothesis assumed no temperature existed. Student chose the **multiplicative stack** interpretation (zero-init the new per-block `routing_log_temp`, multiply with existing per-head temperature) to preserve baseline behavior at init.
+
+### Learned trajectory
+
+Across 5 blocks × 12 epochs, `routing_log_temp` drifts <10% from init=1.0:
+- L0–L3 drift sharper (down), L4 essentially pinned at 1.0.
+- Largest move: L2 (1.0 → 0.917, ~−5%).
+- **Optimizer found minimal gradient signal in the new DOF.**
+
+### Decision: CLOSE
+
+- Decision rule (75.5 ≤ val < 77.5) fires clean negative.
+- Test override does not trigger (68.01 > 65.04 > 62.99).
+- **Mechanism finding:** routing-sharpness is not lever-limited — the existing per-head `self.temperature` already exhausts whatever sharpness modulation the optimizer wants. A per-block multiplicative gain is redundant.
+- **Combined with #1818 (slice_num=128, capacity-up cap-bound) + #1856 (slice_num=32, capacity-down routing collapse): slice-routing mechanism family fully tested in 3 orthogonal directions (capacity-up, capacity-down, sharpness). All three close.**
+
+### Reassignment to PR #1981 (wd-sweep on Kendall)
+
+Pivoting nezuko to the **classical OOD-regularization axis** — AdamW `weight_decay` sweep {3e-4, 1e-3} on Kendall baseline (val=71.43, test=62.99).
+
+**Rationale:** Kendall merge concentrated wins on test_single_in_dist (−8.10); OOD splits (camber_rc/cruise/re_rand) barely moved. **OOD generalization is the dominant remaining challenge.** Weight decay is the cheapest, most-universal regularization knob untested on this stack (current wd=1e-4 has been baseline since #1452 Smooth-L1 merge).
+
+- **Arm 1: wd=3e-4** (3× current, most-likely-to-land)
+- **Arm 2: wd=1e-3** (10× current, tests stronger-wd ceiling)
+- **Decision rule:** best-arm val < 71.43 → MERGE; both regress → axis closes at 1e-4
+- **Mechanism orthogonal to** everything in flight: optimizer-stability (max-norm #1937), loss-shape (β #1757), value-compression (asinh #1734), loss-weighting (Kendall in baseline), input-augmentation (#1907, #1873), structural arch (#1938), sample-rebalancing (#1954)
+
+If 3e-4 lands → follow-up finer sweep {2e-4, 5e-4} or compound with another wave-7 lever. If both regress → axis closes; move to schedule-side levers (warmup, OneCycleLR).
+
+---
+
