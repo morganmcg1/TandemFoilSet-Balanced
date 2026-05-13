@@ -1824,3 +1824,44 @@ All 4 splits regressed in both arms. Implementation verified correct: LR traject
 - **Corollary**: Tanjiro's proposed "post-LN + warmup stack" experiment is dead. Finding #46 applies regardless of LN placement.
 
 → Assigned thorfinn cosine T_max extension under post-LN (PR #2508): T_max=20 vs T_max=18 (current). Hypothesis: post-LN's best_epoch=18 with loss still descending signals the schedule is too short. T_max=20 keeps LR higher across training without violating the LR-floor harm threshold from Finding #44.
+
+## 2026-05-13 19:15 — PR #2508: Cosine T_max=20 under post-LN (WINNER)
+- willowpai2g48h1-thorfinn/postln-tmax-extension
+- **Hypothesis**: post-LN's best_epoch=18 with val still descending at schedule cutoff (Δ=−2.64 ep17→18) signals the cosine T_max=18 cuts off the descent mid-flight. T_max=20 keeps LR non-zero at ep-18 (3.67e-6, safe per Finding #44) by stretching the cosine decay over 20 steps instead of 18.
+- **Results**:
+
+| Metric | T_max=20 | Baseline (T_max=18, PR #2456) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **49.3466** | 51.5839 | **−4.34%** |
+| val_avg/mae_surf_p | 56.5563 | 59.1952 | −4.45% |
+| best_epoch | 18 | 18 | — |
+| W&B run | i2pxi78b | ovv9h3s7 | — |
+
+Per-split: in_dist=50.894 (−1.4%), rc=61.814 (+0.7%, within noise), cruise=35.172 (−10.6%), re_rand=49.507 (−8.4%).
+
+- **Analysis**: The per-epoch crossover is decisive: baseline leads through epochs 1-15, T_max=20 crosses over at epoch 16 and widens margin (Δ=−1.15→−1.28→−2.64). The load-bearing factor is **extended tail LR** (ep-18 LR: 3.67e-6 with T_max=20 vs 0 with T_max=18) — NOT higher mid-training LR (which actually hurt in epochs 9-12). LR schedule verified exact (ep-1: 1.49e-4, ep-9: 8.67e-5, ep-18: 3.67e-6). Finding #47 established: T_max=18 was optimal for pre-LN; post-LN's deeper minimum needs T_max=20. Finding #26 revised: constraint was stack-specific. 
+- **Model still descending steeply at epoch 18** (Δ=−2.64 ep17→18, accelerating). Next: T_max=22 probe (thorfinn #2527).
+- **New baseline: test_avg/mae_surf_p = 49.3466**
+
+→ Assigned thorfinn T_max=22 probe (PR #2527): tests whether Finding #44 applies to stretched cosine (decaying LR passes through 1.21e-5 at ep-18) vs fixed floor (eta_min pinned at 1.5e-5).
+
+## 2026-05-13 19:20 — PR #2485: Lion gradient noise (LR-scaled Langevin, sigma=0.01) CLOSED ✗
+- willowpai2g48h1-alphonse/lion-grad-noise
+- **Hypothesis**: LR-scaled Gaussian noise injected into Lion update vector (sigma_eff = sigma_base * lr/lr_peak → 0 in tail) would search for flatter minima without destabilizing the converged tail.
+- **Results**: test +3.46% regression (62.85 vs OLD baseline 60.74). All 4 splits regressed; 3/4 above noise floor. Mid-training val spikes (ep5: +22%, ep7: +11%) show noise destabilized training before tail scaling could help. Arm 2 aborted per decision rule.
+- **Mechanism**: Lion's sign-update is already a noisy direction estimator; adding Gaussian noise compounds dithering rather than enabling flat-minimum search. The clip=5.0 + accum=2 stack already occupies the variance-management slot. OOD splits hurt MOST (opposite of flat-minimum prediction). Finding #49: gradient noise is contraindicated for Lion on TandemFoilSet.
+→ Assigned alphonse Lion β1 re-calibration under post-LN (PR #2530): Finding #32 (β1=0.9) was pre-LN; test β1=0.95 and β1=0.85.
+
+## 2026-05-13 19:20 — PR #2473: Slot routing temperature T=1.0 fixed vs learnable CLOSED ✗
+- willowpai2g48h1-edward/slot-temp-non-learnable
+- **Hypothesis**: The per-head learnable temperature scalars in the slot routing attention are dead weight at 1.47M params — the optimizer likely drives T to ~1.0 anyway.
+- **Results**: test +4.87% regression (63.70 vs OLD baseline 60.74). Uniform regression all 4 splits. Timing confound: node throttle cut epoch 18 (ep15-17 spiked 131/214/186s vs normal 99s). Even granting a completed ep18 (extrapolated val ≈ 69.4 ≈ baseline), no improvement in best case.
+- **Mechanism**: Learnable T is load-bearing at this scale — removing it makes routing uniformly worse across IID and OOD. Finding #48: slot routing temperature T is not dead weight; learnability matters. Interestingly, the regression does NOT follow Finding #41's IID-up/OOD-down redistribution pattern — it's uniform. This means T affects representation quality directly, not just OOD vs IID balance.
+→ Assigned edward n_layers=6 depth increase under post-LN (PR #2528): Finding on pre-LN depth ceiling should be re-tested; post-LN removes gradient variance accumulation.
+
+## 2026-05-13 19:20 — PR #2474: Coord-noise augmentation (sigma=0.005/0.01) CLOSED ✗
+- willowpai2g48h1-fern/coord-noise-aug
+- **Hypothesis**: Gaussian jitter on mesh coordinates during training would improve OOD generalization (particularly rc split) by preventing overfitting to exact mesh geometry.
+- **Results** (run on pre-LN stack, against OLD baseline 60.74): sigma=0.005 test −0.96% (within noise floor); sigma=0.01 test +0.71% (regression). Per-split: sigma=0.005 improved cruise −6.58% and re_rand −2.31%, but rc REGRESSED +2.96%. Narrow, per-split-heterogeneous response surface.
+- **Mechanism**: rc (highest-camber OOD) behaves opposite to cruise/re_rand under coord noise. Speculative: sub-pixel jitter smears the high-frequency Fourier components needed for sharp curvature resolution at rc's extreme camber angles. At sigma=0.01, the model may learn to ignore these components entirely (rescuing rc) while losing useful low-noise geometry detail (hurting cruise). Finding #50: coord-noise has narrow per-split-heterogeneous σ-curve; aggregate improvement within seed noise; rc sensitivity to high-frequency geometry perturbation is the most interesting mechanistic finding.
+→ Assigned fern Lion β2 re-calibration under post-LN (PR #2533): Finding #39 (β2=0.99 sharp sweet spot) was pre-LN; post-LN's cleaner gradient signal may broaden or shift the β2 optimum.
