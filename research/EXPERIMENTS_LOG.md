@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 15:35 — PR #2271: Lion β2 on n_head=2: β2=0.995 vs β2=0.999 (askeladd) — CLOSED, BOTH ARMS REGRESS, β2 DIRECTION REVERSED FROM n_head=4
+
+- **Branch:** `willowpai2g24h5-askeladd/lion-beta2-n-head-2`
+- **Hypothesis:** β2=0.995 won −2.9% on n_head=4 compound (#2144). Retest on n_head=2 and push to β2=0.999.
+- **W&B runs:** `2768vmk2` (Arm 1: β2=0.995 best), `zvny3ajq` (Arm 2: β2=0.999)
+
+| Arm | β2 | run_id | val | test | Δ vs #2218 (49.86/42.19) |
+|-----|-----|--------|------|------|--------------------------|
+| **Arm 1 best** | **0.995** | **`2768vmk2`** | **51.54** | **44.43** | **+3.4% / +5.3% (regress)** |
+| Arm 1 v3 | 0.995 | `pnan6q97` | 52.07 | 44.65 | +4.4% / +5.8% |
+| Arm 1 repl | 0.995 | `epuo44ec` | 57.92 | 49.38 | +16.2% / +17.0% |
+| Arm 2 | 0.999 | `zvny3ajq` | 53.82 | 46.43 | +7.9% / +10.0% |
+
+Arm 1 finishers spread: [51.54, 52.07, 57.92] — 12% variance. EMA gap (main-vs-EMA): 7.31 (β2=0.995), 2.81 (β2=0.999).
+
+**Result:** CLOSED. Key finding: **β2 effect reverses at n_head=2 vs n_head=4.**
+- n_head=4 (#2144): 0.95<0.99<0.995 (β2=0.995 wins −2.9%)
+- n_head=2 (#2271): 0.99<0.995<0.999 (canonical β2=0.99 wins)
+
+**Mechanism:** Doubling per-head dim 32→64 shifts optimal momentum window. Richer per-head capacity already filters noise; extra de-noising via slower β2 over-smooths the sign(·) direction. Runs also on slice_num=64 (pre-#2218), so couldn't merge regardless. **β2 sweep closed on n_head=2. Canonical β2=0.99 confirmed.**
+
+**Askeladd reassigned:** PR #2400 — n_layers=4 vs n_layers=3 on slice_num=32 compound (speed-dividend extension of slice_num=32 win).
+
+---
+
 ## 2026-05-13 15:20 — PR #2251: lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) (tanjiro) — CLOSED, NEITHER ARM BEATS #2218 BASELINE
 
 - **Branch:** `willowpai2g24h5-tanjiro/lr-sweep-n-head-2`

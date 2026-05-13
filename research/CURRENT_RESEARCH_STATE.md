@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~15:20 UTC
+- **Date:** 2026-05-13 ~15:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -36,10 +36,11 @@
 | **#2338** | **edward** | **n_head=1 on n_head=2+slice_num=32 baseline: extend monotonic trend** | **WIP** |
 | **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
 | **#2376** | **tanjiro** | **lr sweep on slice_num=32 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
-| **#2271** | **askeladd** | **Lion β2 on n_head=2: β2=0.995 + β2=0.999** | **WIP — both arms done, regress; awaiting terminal SENPAI-RESULT** |
+| **#2400** | **askeladd** | **n_layers reduce on slice_num=32: n_layers=4 vs n_layers=3** | **WIP — new** |
 
 ## Closed experiments this round
 
+- **#2271 (askeladd):** β2=0.995 vs β2=0.999 on n_head=2+slice_num=64 — β2 effect reverses from n_head=4 (#2144). Canonical β2=0.99 confirmed optimal on n_head=2. Main-vs-EMA gap diagnostic: 7.31 (β2=0.995) vs 2.81 (β2=0.999). Closed; reassigned to #2400 (n_layers reduce).
 - **#2251 (tanjiro):** lr=2e-4 vs lr=1.5e-4 on n_head=2+slice_num=64 — Arm 2 (lr=1.5e-4, val=50.36, test=42.53) beats #2069 (−0.75/−1.65) but loses to new #2218 baseline; both ran on slice_num=64 (pre-#2218 default). Key signal: lr=1.5e-4 is the optimal lr at slice_num=64. 60% crash rate at lr=2e-4 (instability). Closed; reassigned to #2376 (lr=1.5e-4 vs lr=1.25e-4 on slice_num=32).
 - **#2277 (nezuko):** sw=4/sw=3 on n_head=2+slice_num=64 — sw=3 wins vs old #2210 (val=50.23 vs 50.91, −1.34%) but loses to new #2218 (49.86) by +0.7%. Non-monotonic in [3,5]: sw=3 < sw=5 < sw=4. Strong geom_camber_cruise improvement (−5.6%) at lower sw. Closed; reassigned to #2372 (sw=2/sw=3 on slice_num=32).
 - **#2218 (alphonse):** slice_num=32 — **MERGED** val=49.86, test=42.19. Monotonic: 32 < 64 < 128. Also 23 epochs in budget (vs 20) — speed dividend. Interaction with sw=5 untested (#2335).
@@ -75,7 +76,7 @@
 10. **Batch size falsified (#2052):** bs=8 halves optimizer steps in same wall-clock; step-count-limited not gradient-noise-limited. VRAM near limit at bs=8.
 11. **BF16:** foundational (+4 epochs in 30-min window).
 12. **Dropout=0.2 confirmed locally optimal (#2131):** dropout=0.3 mean ≈ 0.2 within noise (±0.38 val), 0.1 regresses +4.3%. Under-regularization signal from mlp_ratio=4 (#1961) does NOT transfer to mlp_ratio=2; main-vs-EMA gap already moderate (~6–11) on this compound.
-13. **Lion β2=0.995 wins −2.9% on OLD compound (#2144, closed):** Monotonic ordering 0.95<0.99<0.995 at three points. β2=0.95 regresses +15.7% (asymmetric). Mechanism: longer momentum window (~200 steps) de-noises direction signal before `sign(·)` taken. Retest on n_head=2 in #2271 — direct merge candidate if win transfers.
+13. **β2 effect REVERSES at n_head=2 (#2271):** On n_head=4 (#2144): β2=0.995 won −2.9% (monotonic 0.95<0.99<0.995). On n_head=2 (#2271): **β2=0.99 < β2=0.995 < β2=0.999** — canonical β2=0.99 is now optimal. Doubling per-head dim 32→64 shifts optimal momentum window; richer heads already filter noise internally. **β2 sweep closed on n_head=2 compound.**
 14. **surf_weight=5 merged (#2210):** −0.39%/−1.13% val/test vs n_head=2 baseline. Non-monotonic response: sw=5 < sw=10 < sw=7. Win concentrated in in-dist splits (single_in_dist −2.81). Lower probe (sw=3/4) in #2277.
 15. **Cosine schedule changes consistently regress at 30-min budget (#1999, #2167, #2211):** Three independent schedule experiments (T_max-matching, eta_min, OneCycleLR) all regress. At both lr=1e-4 and lr=2e-4 the model is still in the early exploration regime at the cap — forcing LR down faster cuts off productive learning. Schedule shape is not a viable lever at current budget.
 16. **AdamW+EMA+MAE diagnostic (#2183, in progress):** Both lr arms show val~73-74 (+44-45% vs baseline). 2×2 mechanism table: Lion+EMA=50.91, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× more than EMA; EMA contribution is larger in the noisier AdamW cell.
@@ -88,13 +89,14 @@
 **Architecture — slice_num sweep (monotonic signal):**
 - slice_num=16 (#2337 frieren) — extend monotonic trend below 32; may yield 26+ epochs in 30 min
 - n_head=1 (#2338 edward) — extend head-count monotonic trend; n_head=1 gives per-head dim=128; risk: multi-head diversity lost
+- **n_layers reduce (#2400 askeladd)** — n_layers=4/3 on slice_num=32; extends speed-dividend thesis: fewer layers → faster epochs → more training steps in 30-min budget; hypothesis: undertrained model benefits from depth reduction not capacity
 
 **Architecture — interaction:**
 - slice_num=32 × sw=5 (#2335 alphonse) — stack both individual wins; interaction unexplored
 
 **Optimizer hparams:**
 - Lion wd sweep (#2356 thorfinn) — wd=3e-4 vs wd=3e-5 on new slice_num=32 compound
-- Lion β2 (#2271 askeladd) — β2=0.995 won −2.9% on old compound; retest on n_head=2; direct merge candidate
+- **Lion β2 CLOSED (#2271)** — canonical β2=0.99 confirmed optimal on n_head=2; direction reversed from n_head=4
 - **lr sweep on slice_num=32 (#2376 tanjiro)** — lr=1.5e-4 (slice64 winner) vs lr=1.25e-4; transfer lr signal to new compound; #2251 confirmed optimal ~1.5e-4 at slice_num=64
 
 **EMA:**
@@ -107,15 +109,8 @@
 **EMA weight averaging:**
 - EMA decay sweep (#2295 fern) — decay=0.999 vs 0.95 on sw=5+n_head=2; hasn't been re-tuned since #1607
 
-**Optimizer momentum:**
-- AdamW+EMA+MAE 2×2 fill (#2183 edward) — diagnostic-only; both arms regressing ~44%, confirms Lion dominance. Awaiting terminal SENPAI-RESULT.
-- Lion β2 on n_head=2 (#2271 askeladd) — β2=0.995 wins on old compound; direct merge candidate if transfer confirmed
-
 **lr × architecture interaction:**
-- lr sweep on slice_num=32 (#2376 tanjiro) — #2251 confirmed lr=1.5e-4 is optimal at slice_num=64+n_head=2 (val=50.36 vs 50.91 at lr=1e-4); now testing transfer to slice_num=32 compound; {1.25e-4, 1.5e-4} bracket pins down optimum with stability
-
-**Lion momentum parameter (β2):**
-- β2 sweep on n_head=2 (#2271 askeladd) — β2=0.995 wins −2.9% on old compound; confirm transfer + push to β2=0.999; merge candidate
+- lr sweep on slice_num=32 (#2376 tanjiro) — #2251 confirmed lr=1.5e-4 is optimal at slice_num=64+n_head=2; now testing transfer to slice_num=32 compound; {1.25e-4, 1.5e-4} bracket
 
 ## Potential next directions (post-current-wave)
 
