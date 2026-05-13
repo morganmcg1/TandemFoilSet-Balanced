@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 09:05
+- 2026-05-13 09:15
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -57,7 +57,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | Lion lr=2e-4 wins on δ=0.5 stack but LOSES on δ=0.3 (#1782 final, CLOSED) | **LR optimum is non-monotone in δ**: MSE→δ=0.5 moved DOWN, δ=0.5→δ=0.3 reversed UP. Mechanism: more residuals enter quadratic regime → smaller per-step → need higher LR |
 | Lion lr=2e-4 beats lr=3e-4 on n160+uniform-δ=0.3 stack (#2027, SENT BACK) | val 52.795 < 55.92 on old code — strong signal. But ran on old uniform-δ codebase; needs rerun on current per-channel δ stack |
 | Instance-norm dead end (#1470, CLOSED) | 1e-6 clamp → 1271-2230× amplification on near-uniform low-Re samples |
-| Dropout=0.1 → −5.7% val on OLD 66.32 baseline (#1656, SENT BACK) | Feature-level regularization works; needs re-run on δ=0.3 stack |
+| Dropout=0.1 → −5.7% val on OLD 66.32 baseline (#1656, SENT BACK ×2) | Re-ran on n160+per-ch δ stack with lion_lr=3e-4: val=53.087 (close but above new 52.78 target); test=49.215 BEATS baseline 49.42 (−0.4%). Mechanism: dropout still composes but margin shrinks. Sent back for rerun on lion_lr=2e-4 to isolate effect on current best optimizer config. |
 
 ## Active PRs
 
@@ -70,7 +70,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP | Beat 52.78 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (baseline updated) | Beat 52.78 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline updated) | Beat 52.78 |
-| #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 52.78 |
+| #1656 | thorfinn | Dropout=0.1 + lion_lr=2e-4 on per-channel δ + n_hidden=160 (rerun, isolates dropout on current best optimizer) | WIP (sent back ×2) | Beat 52.78 |
 
 ## Recently closed/merged
 
@@ -84,7 +84,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #1880 | alphonse | **MERGED** | Huber δ=0.3 → baseline 56.90/53.20 (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
 | #1470 | edward | CLOSED | Instance-norm loss → val=59.02 (+3.7%). 1e-6 clamp let inst_scale reach 2230× on near-uniform low-Re samples |
 | #1782 (3rd) | frieren | CLOSED | lr=2e-4 on δ=0.3 → val=58.82 (+1.92). LR optimum reversed direction (DOWN then UP); mechanism: δ-driven residual-regime shift |
-| #1656 | thorfinn | SENT BACK | Dropout=0.1 → val=62.52 on OLD baseline; above new 53.62; needs δ=0.3 stack re-run |
+| #1656 | thorfinn | SENT BACK ×2 | (1st) Dropout=0.1 → val=62.52 on OLD baseline; (2nd) Re-ran on n160+per-ch δ with lion_lr=3e-4 → val=53.087/test=49.215. Test BEATS new baseline (−0.4%); val falls 0.6% short. Sent back for rerun on lion_lr=2e-4 to align optimizer config with current best (PR #2027). |
 | #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
 
 ## Open questions from active experiments
@@ -93,7 +93,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 2. **Does Lion lr=1.5e-4 continue beating lr=2e-4 (bracket-from-below)?** (#2100 tanjiro) — LR optimum has moved 3e-4 → 2e-4; testing if it keeps falling toward original Lion paper defaults
 3. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
 4. **Does cosine LR floor (eta_min=lr×0.05) prevent over-decay and improve final-epoch performance?** (#2084 frieren) — epoch 16 always best, curve still descending; floor at 1.5e-5 may squeeze more improvement
-5. **Does dropout=0.1 compose with per-channel δ+n160?** (#1656 thorfinn) — orthogonal regularization axes
+5. **Does dropout=0.1 stack on top of lion_lr=2e-4 (the new optimizer optimum) or does the tighter cosine tail absorb it?** (#1656 thorfinn rerun) — first arm on lion_lr=3e-4 hit val=53.087 (0.6% above target) but test=49.215 BEATS new baseline by 0.4%; rerun isolates dropout's effect on current best optimizer config
 6. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
 7. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko) — loss balance may have changed
 8. **Does DropPath (0.05, 0.1) help generalisation on Transolver residual structure?** (#2044 edward) — orthogonal to dropout

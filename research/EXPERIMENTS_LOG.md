@@ -1,5 +1,68 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 09:15 — PR #1656: Dropout=0.1 on n_hidden=160 + per-channel δ stack (SENT BACK ×2 — close, test wins but val falls 0.6% short)
+
+- Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
+- Hypothesis (rerun): Add `dropout=0.1` to PhysicsAttention to introduce feature-level stochastic noise on top of the upgraded baseline (n_hidden=160 + per-channel Huber δ). Dropout's regularization axis (feature masking) is orthogonal to width (n_hidden) and loss-shape (δ); compose-or-absorb test.
+
+### Results (vs merged baseline 52.78 / 49.42, PR #2027 — Lion lr=2e-4 + per-channel δ + n_hidden=160)
+
+**IMPORTANT caveat:** thorfinn's rerun used `--lion_lr 3e-4` (per advisor's previous instructions, before PR #2027 merged), NOT the new merged baseline's `--lion_lr 2e-4`. The PR #2027 baseline (lion_lr=2e-4) merged after thorfinn launched, so this run isolates dropout on the OLD optimizer config.
+
+| Metric | Baseline (lion_lr=2e-4, no dropout) | This PR (lion_lr=3e-4 + dropout=0.1) | Δ vs new baseline |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **52.78** | 53.087 | +0.31 (+0.6%) ✗ |
+| **test_avg/mae_surf_p** | **49.42** | **49.215** | **−0.20 (−0.4%)** ✓ |
+
+| Comparison | Your val | Baseline val | Δ | Your test | Baseline test | Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| vs new merged baseline (lion_lr=2e-4) | 53.087 | **52.78** | +0.31 (+0.6%) | 49.215 | 49.42 | **−0.20 (−0.4%)** ✓ |
+| vs old baseline (lion_lr=3e-4, no dropout) | 53.087 | 53.62 | **−0.53 (−1.0%)** ✓ | 49.215 | 49.65 | **−0.44 (−0.9%)** ✓ |
+
+### Per-split val at epoch 16 (best checkpoint)
+
+| Split | mae_surf_p |
+|---|---:|
+| val_single_in_dist | 56.66 |
+| val_geom_camber_rc | 66.73 |
+| val_geom_camber_cruise | 35.72 |
+| val_re_rand | 53.24 |
+| **val_avg** | **53.087** |
+
+### Per-split test at epoch 16
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 47.10 |
+| test_geom_camber_rc | 58.65 |
+| test_geom_camber_cruise | 47.48 |
+| test_re_rand | 43.63 |
+| **test_avg** | **49.215** |
+
+### Analysis
+
+**Dropout's gain shrinks but doesn't vanish.** Two perspectives:
+
+1. **Vs old lr=3e-4 baseline:** Dropout reduces val by −1.0% and test by −0.9% — gain has shrunk from −5.7% (on n_hidden=128 + Huber δ=0.5 + lr=1.5e-4) to −1.0% on this stronger stack. This is consistent with a *saturating regularization budget*: width (n_hidden=160) and loss-shape (per-channel δ) already absorb some of the variance that dropout was previously soaking up. Dropout still helps because feature-level stochastic masking attacks a different axis (representational redundancy).
+
+2. **Vs new lr=2e-4 baseline:** Test BEATS baseline by 0.4%, val falls 0.6% short. The val gap is small enough that the difference between thorfinn's lr=3e-4 and the new baseline's lr=2e-4 likely explains it — lr=2e-4 alone gave −0.84 val gain; if dropout adds ~−0.3 to ~−0.5 on top of lr=2e-4, the result would be 52.3–52.5 val, comfortably below baseline.
+
+**Test-side signal is the most interesting result.** Even with the "wrong" lr=3e-4 optimizer config, dropout still pulls test down by 0.4% vs the new baseline. This is real evidence that dropout adds something the optimizer-config improvement of #2027 can't capture.
+
+### Disposition
+
+**SENT BACK** for a single re-run on the current best optimizer config (lion_lr=2e-4 + lion_weight_decay=6e-5). This isolates dropout's marginal effect on the new baseline and answers the key open question:
+
+- **Best case (additive):** dropout's −0.53 val gain stacks on top of lr=2e-4's −0.84 → val~52.2 (clean merge).
+- **Middle case (diminishing returns):** dropout gives ~−0.3 → val~52.45 (still merge).
+- **Worst case (fully absorbed):** dropout no longer helps → val flat at ~52.78 (close as "regularization budget saturated").
+
+Test-side signal suggests middle case is most likely.
+
+- Metrics: `models/model-charliepai2g24h5-thorfinn-dropout_0_1_pchan_huber-20260513-082622/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:00 — PR #2027: Lion lr=2e-4 on per-channel δ + n_hidden=160 stack (MERGED — new baseline 52.78)
 
 - Student branch: `charliepai2g24h5-tanjiro/lion-lr-sweep-n160`
