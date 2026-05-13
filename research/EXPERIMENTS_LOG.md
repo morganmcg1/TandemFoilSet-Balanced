@@ -6,6 +6,32 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 21:00 — Round 35: Close 2 review-ready losses; reassign frieren(sw=12) askeladd(compound LR+WD)
+
+Both review-ready PRs lost; close and reassign with bigger swings to clear the seed-variance noise floor.
+
+**PR #2523 — frieren epochs=50 — CLOSED (+2.30% val LOSS)**
+- val_avg = 36.061 vs baseline 35.256 (+0.805); test_avg = 30.482 vs 30.245 (+0.237)
+- best_epoch = 50/50 (within-run slope held at −0.1/epoch)
+- **CRITICAL INSIGHT:** Within-run, the model DID improve from epoch 46→50 (Δ −0.36). BUT cross-run, this run's epoch-46 val_avg (36.42) was +1.16 worse than PR #2468's epoch 46 (35.26). **Seed variance (~±1.0 val units) >> marginal gain from 4 extra epochs (~−0.4).**
+- **Strategic implication:** Single-seed comparisons of small tweaks are below the noise floor. Future experiments must either: (a) make BIGGER changes that produce signal above noise, or (b) use multiple seeds.
+- Student's suggestion to set torch.manual_seed in train.py is a valuable code-change PR for the future.
+- Metric artifacts: `models/model-nlayers2-slicenum16-epochs50-20260513-193847/metrics.jsonl`
+
+**PR #2558 — askeladd n_head=2 — CLOSED (+3.16% val LOSS, +2.27% test LOSS)**
+- val_avg = 36.369 vs baseline 35.256 (+1.113); test_avg = 30.932 vs 30.245 (+0.687)
+- EVERY split regressed: single_in_dist (+3.73%), geom_camber_rc (+3.06%), geom_camber_cruise (+6.04%), re_rand (+1.35%)
+- Param count: 380,583 (+5.39% vs baseline 361,131)
+- Peak memory: 12.75 GB (−0.74 GB vs baseline — only mild positive)
+- **Conclusion confirmed across stacks:** n_head=4 "bottleneck is slice routing not Q/K/V capacity" insight generalizes from (n_layers=3, slice_num=24) to (n_layers=2, slice_num=16). n_head=4 is robust optimum across explored architecture space.
+- Metric artifacts: `models/model-charliepai2g48h3-askeladd-nhead2-nlayers2-slicenum16-epochs46-20260513-201608/metrics.jsonl`
+
+**Reassignments (Round 35, target signal-above-noise):**
+- PR #2600 (frieren): surf_weight=12 × n_layers=2 — 20% sw change, untested intermediate point (sw=10 winning, sw=15 neutral at deeper stack); targets OOD bottleneck via stronger surface loss
+- PR #2601 (askeladd): COMPOUND lr=1.5e-4 + weight_decay=3e-4 × n_layers=2 — tests whether 3× WD rescues the OOD damage from lr=1.5e-4 while preserving the in-dist gain (−6.35% from #2525). 50% LR + 200% WD swing, well above noise floor.
+
+---
+
 ## 2026-05-13 20:40 — Round 34: Close 2 stale_wip old-stack PRs (#2492 fern, #2493 tanjiro); reassign at new stack
 
 Both PRs (created 17:53-17:56 UTC) had no commits or comments for 2.7+ hours. Same systemic rate-limit polling issue affecting pods. Both tested old-stack n_layers=3+slice_num=16+epochs=36 hypotheses against the OLD baseline 35.548 — now superseded by 35.256.

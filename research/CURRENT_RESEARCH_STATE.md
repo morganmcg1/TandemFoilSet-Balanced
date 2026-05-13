@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 20:40
+- **Date:** 2026-05-13 21:05
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -96,8 +96,8 @@
 |---------|-----|------------|-----------|---|
 | fern | **#2570** | **surf_weight=8 × n_layers=2+slice_num=16+epochs=46** (loss-weight axis at new stack; targets OOD) | **NEW STACK** | possible — addresses OOD bottleneck |
 | tanjiro | **#2571** | **mlp_ratio=3 × n_layers=2+slice_num=16+epochs=46** (FFN width intermediate untested point) | **NEW STACK** | possible — narrower FFN may help OOD |
-| frieren | **#2523** | **n_layers=2+slice_num=16+epochs=50** (push winner +4 epochs) | **NEW STACK** | **HIGH EV** — 3.1 min margin |
-| askeladd | **#2558** | **n_head=2 × n_layers=2+slice_num=16+epochs=46** (wider heads at new stack; targets OOD bottleneck) | **NEW STACK** | possible — addresses OOD/in-dist tradeoff |
+| frieren | **#2600** | **surf_weight=12 × n_layers=2+slice_num=16+epochs=46** (HIGHER sw; targets OOD via stronger surface loss) | **NEW STACK** | possible — 20% sw change above noise floor |
+| askeladd | **#2601** | **COMPOUND lr=1.5e-4 + wd=3e-4 × n_layers=2** (rescue OOD damage from high LR via 3× WD) | **NEW STACK** | high-EV compound test |
 | alphonse | **#2543** | **lr=1.2e-4 × n_layers=2+slice_num=16+epochs=46** (LR fine probe at new depth) | **NEW STACK** | possible |
 | edward | **#2545** | **slice_num=20 × n_layers=2+epochs=44** (partition retest at new depth — counter in-dist regression) | **NEW STACK** | possible |
 | nezuko | **#2547** | **LayerScale × n_layers=2+slice_num=16+epochs=46** (stabilization at new depth) | **NEW STACK** | possible if large arch gain |
@@ -107,7 +107,10 @@
 
 **Key insight from #2525 result (in-dist vs OOD tradeoff):** Higher LR fixed n_layers=2 in-dist regression (−6.35%) but worsened all 3 OOD splits (+3.4% to +10.5%). The OOD splits dominate the avg metric. Next experiments need to target OOD generalization (wider heads, regularization, architecture priors) — NOT optimization aggressiveness.
 
+**Critical insight from #2523 result (seed variance):** Run-to-run variance is ~±1.0 val units (the same config produced epoch-46 vals of 35.26 vs 36.42 across two runs). Single-seed comparisons of small tweaks (<5% change) are below the noise floor. **Strategy shift: prioritize bigger experimental swings (compounds, 20%+ axis changes) over marginal tuning.**
+
 **Merged:** #2348 (val=35.548), #2468 (val=35.256 NEW BEST)
+**Closed Round 35:** #2523 (frieren epochs=50 +2.30% loss — seed variance insight); #2558 (askeladd n_head=2 +3.16% loss — every split regressed)
 **Closed Round 34:** #2492 (fern stale_wip old-stack), #2493 (tanjiro stale_wip old-stack)
 **Closed Round 33:** #2525 (askeladd lr=1.5e-4 +3.30% loss — informative on in-dist/OOD tradeoff)
 **Closed Round 32:** #2471 (alphonse stale old-stack), #2478 (edward stale old-stack), #2479 (nezuko stale old-stack), #2450 (thorfinn stale old-stack)
