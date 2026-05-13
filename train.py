@@ -443,7 +443,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 model = torch.compile(model, mode="default", dynamic=True)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95))
 steps_per_epoch = max(1, len(train_loader))
 # Size OneCycleLR to the wall-clock-achievable budget under torch.compile (~29 epochs
 # in 30 min at slice_num=128) so the decay tail actually fires within the timeout —
@@ -477,6 +477,7 @@ run = wandb.init(
         "pct_start": 0.05,
         "div_factor": 10.0,
         "final_div_factor": 1e3,
+        "adamw_betas": (0.9, 0.95),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
