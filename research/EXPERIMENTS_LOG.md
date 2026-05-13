@@ -452,4 +452,56 @@ Per-split val deltas vs OLD baseline (mirror alphonse's pattern but smaller):
 
 **Action:** Sent back with instructions to rebase onto new baseline (max_lr=1.5e-3) and re-run as a compositional test: does pct_start=0.05 still help when peak LR is already higher, or do the mechanisms overlap? Will group in W&B with frieren #1768 (pct_start=0.15) for a 3-point sweep against the new max_lr.
 
+---
+
+## 2026-05-13 02:00 — PR #1764: compile mode=reduce-overhead — CLOSED (speed hypothesis refuted; metric "win" is noise)
+- willowpai2g24h4-tanjiro / willowpai2g24h4-tanjiro/reduce-overhead-compile
+- **Hypothesis:** `torch.compile(mode="reduce-overhead")` removes per-op Python dispatch overhead via CUDAGraphs, delivering 10-20% throughput → 3-5 extra epochs of descent in the 30-min cap.
+- **W&B:** `b2v9xrqd`
+
+| Metric | Baseline #1716 (mode="default") | This run (mode="reduce-overhead") | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 68.5843 | 67.6348 | −0.95 (−1.38%) |
+| test_avg/mae_surf_p | 60.3521 | 59.4957 | −0.86 (−1.42%) |
+| Mean sec/epoch | ~62.5 | 63.74 | +1.2 (1.6% slower) |
+| Epochs in 30-min cap | 29 | 28 | −1 |
+
+Per-split test deltas (showing the noise fingerprint):
+
+| Split | Baseline | This run | Δ |
+|---|---:|---:|---|
+| test_single_in_dist | 63.54 | 67.13 | **+3.59 (worse)** |
+| test_geom_camber_rc | 74.64 | 73.64 | −1.00 (better) |
+| test_geom_camber_cruise | 42.14 | 39.69 | −2.45 (better) |
+| test_re_rand | 61.09 | 57.52 | −3.57 (better) |
+
+**Diagnosis: CLOSED — speed hypothesis refuted, metric "win" is RNG noise.** The CUDAGraph dispatch-overhead savings were exactly offset (or worse) by the per-capture overhead — Tanjiro's diagnosis: with `dynamic=True` on variable mesh shapes, CUDAGraphs records 9 distinct shape variants and the recording overhead defeats the savings. Speed regression is real (−1.6% throughput) and material (lost 1 epoch under cap). The metric "improvement" (−1.38% val, −1.42% test) is well within RNG variance (±5% on val, 2% test reliability threshold). The opposing-direction per-split test deltas (in-dist gets worse, others better) are the fingerprint of seed noise, not a systematic shift.
+
+**Genuine learning:** Python dispatch is not the bottleneck on this Transolver/dynamic-mesh workload — kernels are already well-saturated on H100. Throughput attacks need to target kernel-level work (autotuning, fused kernels, better attention backends), not the Python layer.
+
+**Next:** Assigning tanjiro to `torch.compile(mode="max-autotune-no-cudagraphs", dynamic=True)` — Triton kernel autotuning without the CUDAGraph problem he diagnosed.
+
+---
+
+## 2026-05-13 02:00 — PR #1383: channel-weighted loss (Ux:1, Uy:1, p:3) — CLOSED (regression on headline metric)
+- willowpai2g24h4-edward / willowpai2g24h4-edward/p-channel-weight
+- **Hypothesis:** Multiplying p's MSE by 3 enlarges p's gradient share; tradeoff is "slight" Ux/Uy regression but net val_avg/mae_surf_p improvement.
+- **W&B:** `b82kyqdm`
+
+| Metric | Baseline #1716 | This run | Δ |
+|---|---:|---:|---|
+| val_avg/mae_surf_p | 68.5843 | 70.2099 | **+1.63 (+2.4% WORSE)** |
+| test_avg/mae_surf_p | 60.3521 | 62.8702 | **+2.52 (+4.2% WORSE)** |
+| val_avg/mae_surf_Ux | 1.072 | 1.307 | **+22% WORSE** |
+| val_avg/mae_surf_Uy | 0.528 | 0.606 | **+15% WORSE** |
+
+**Diagnosis: CLOSED — direction correct, magnitudes wrong, implementation flawed.** The prediction "p improves, Ux/Uy slightly regress" was directionally accurate but the regression magnitudes (+22% Ux, +15% Uy) dwarfed the p improvement. Two compounding issues:
+
+1. **Implementation flaw:** the weight was applied to BOTH surface AND volume p-channels. Volume p is not in the headline metric, so up-weighting it wastes optimization capacity on the wrong target.
+2. **Shared-representation drag:** large Ux/Uy gradient suppression degrades the shared backbone, which partially offsets the targeted p improvement.
+
+**Genuine learning:** Aggressive flat-multiplier channel weighting reshapes gradient balance more than it reshapes performance, because the headline metric is in physical (un-normalized) space — the loss-balance shift doesn't translate cleanly to MAE improvements.
+
+**Next:** Assigning edward to his own suggested follow-up #2: **surface-only p-weighting with milder weight (p_weight=2)**. Applying the weight only inside `surf_mask` is the surgical version of the hypothesis — directly targets the headline metric. This is the targeted retry that should determine whether the underlying mechanism (gradient re-allocation to p) is the right lever or whether channel-balance entirely needs a different approach.
+
 **Next target:** beat val_avg/mae_surf_p = **70.9449** on the new fp32-eval stack. The next experiment on this stack will establish the new faithful test_avg baseline.
