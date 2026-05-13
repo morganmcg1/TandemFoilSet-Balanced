@@ -52,12 +52,15 @@ from data import (
 # Fourier positional encoding (Tancik et al., NeurIPS 2020)
 # ---------------------------------------------------------------------------
 
-def fourier_encode_positions(x: torch.Tensor, L: int, min_freq: float, max_freq: float) -> torch.Tensor:
-    """Replace dims 0-1 (node x,z) with Fourier features, keep dims 2+ unchanged.
+def fourier_encode_positions(
+    x: torch.Tensor, L: int, min_freq: float, max_freq: float, concat: bool = False
+) -> torch.Tensor:
+    """Fourier-encode dims 0-1 (node x,z), keep dims 2+ unchanged.
 
     Expects positions in dims 0-1 to already be standardized (mean 0, unit std).
-    Input:  x  [B, N, 24]  (dims 0-1 normalized; dims 2+ normalized)
-    Output: x' [B, N, 4L + 22]
+
+    concat=False (replace mode):  [B, N, 24] → [B, N, 4L + 22]
+    concat=True (concat-raw):     [B, N, 24] → [B, N, 2 + 4L + 22]
     """
     pos = x[..., :2]   # [B, N, 2]  — normalized (x_coord, z_coord)
     rest = x[..., 2:]  # [B, N, 22] — normalized non-position features
@@ -67,6 +70,8 @@ def fourier_encode_positions(x: torch.Tensor, L: int, min_freq: float, max_freq:
     angles = pos.unsqueeze(-1) * freqs  # [B, N, 2, L]
     enc = torch.cat([angles.sin(), angles.cos()], dim=-1)  # [B, N, 2, 2L]
     enc = enc.flatten(-2)  # [B, N, 4L]
+    if concat:
+        return torch.cat([pos, enc, rest], dim=-1)  # [B, N, 2 + 4L + 22]
     return torch.cat([enc, rest], dim=-1)  # [B, N, 4L + 22]
 
 
@@ -242,7 +247,8 @@ class Transolver(nn.Module):
 # ---------------------------------------------------------------------------
 
 def evaluate_split(model, loader, stats, surf_weight, device,
-                   fourier_L: int, fourier_min_freq: float, fourier_max_freq: float) -> dict[str, float]:
+                   fourier_L: int, fourier_min_freq: float, fourier_max_freq: float,
+                   fourier_concat: bool = False) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -262,7 +268,9 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             mask = mask.to(device, non_blocking=True)
 
             x_std_norm = (x - stats["x_mean"]) / stats["x_std"]
-            x_norm = fourier_encode_positions(x_std_norm, fourier_L, fourier_min_freq, fourier_max_freq)
+            x_norm = fourier_encode_positions(
+                x_std_norm, fourier_L, fourier_min_freq, fourier_max_freq, concat=fourier_concat
+            )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
@@ -413,9 +421,10 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     amp: bool = True  # BF16 autocast
-    fourier_L: int = 6        # number of frequency octaves for Fourier pos encoding
+    fourier_L: int = 8        # number of frequency octaves for Fourier pos encoding
     fourier_min_freq: float = 1.0   # min frequency (rad/unit on standardized coords)
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
+    fourier_concat: bool = False  # if True, concat raw (x,z) with Fourier features (else replace)
 
 
 cfg = sp.parse(Config)
@@ -444,10 +453,13 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-fourier_extra = 4 * cfg.fourier_L - 2   # replaces raw 2D coords with 4L dims
+if cfg.fourier_concat:
+    fourier_extra = 4 * cfg.fourier_L          # concat: keep raw 2, add 4L Fourier → net +4L
+else:
+    fourier_extra = 4 * cfg.fourier_L - 2      # replace: swap raw 2 for 4L Fourier → net 4L-2
 model_config = dict(
     space_dim=2,
-    fun_dim=X_DIM - 2 + fourier_extra,   # Fourier encoding adds 4L − 2 extra channels
+    fun_dim=X_DIM - 2 + fourier_extra,   # fun_dim + space_dim must equal encoded x dim
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -524,7 +536,8 @@ for epoch in range(MAX_EPOCHS):
             # (positions in standardized space → Fourier features in [-1, 1]).
             x_std_norm = (x - stats["x_mean"]) / stats["x_std"]
             x_norm = fourier_encode_positions(
-                x_std_norm, cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq
+                x_std_norm, cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                concat=cfg.fourier_concat,
             )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -559,7 +572,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                             cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+                             cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                             fourier_concat=cfg.fourier_concat)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -628,7 +642,8 @@ if best_metrics:
         }
         test_metrics = {
             name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
-                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq,
+                                 fourier_concat=cfg.fourier_concat)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
