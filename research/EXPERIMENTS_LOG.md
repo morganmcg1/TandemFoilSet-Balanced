@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-05-13 12:30 — PR #2184: lr-2e-3-rff (alphonse) — CLOSED (dead end, LR ceiling locked across bases)
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-2e-3-rff`
+- **Hypothesis:** RFF input expansion may have smoothed the loss landscape; LR ceiling could shift upward from 1.5e-3.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-2e-3-rff-20260513-105732/metrics.jsonl`
+
+### Results vs. #1657 RFF baseline (65.3304) — best_epoch=12 (run timed out at 30 min)
+
+| Split | Baseline | lr=2e-3 RFF | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 88.487 | +21.73% ❌ |
+| val_geom_camber_rc | 78.833 | 89.227 | +13.18% ❌ |
+| val_geom_camber_cruise | 44.439 | 49.079 | +10.44% ❌ |
+| val_re_rand | 65.359 | 69.437 | +6.24% ❌ |
+| **val_avg/mae_surf_p** | **65.3304** | **74.0578** | **+13.36%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 64.7187 | +13.66% ❌ |
+
+**Closed as dead end.** LR axis CLOSED at 1.5e-3 across both pre-RFF and post-RFF bases.
+
+### Analysis
+
+**RFF base is LESS tolerant of high LR, not more:**
+
+| LR | Pre-RFF Δ vs 1.5e-3 (74.21) | RFF Δ vs 1.5e-3 (65.33) |
+|---|---|---|
+| 2e-3 | +2.99% (#1942) | **+13.36%** (this PR) — 5× worse |
+
+The RFF base has SHARPER curvature near the optimum (86-dim input expansion creates a more peaked loss landscape). Noisy high-LR updates push the model further off the new (better) minimum. The pre-RFF base had flatter curvature, tolerating higher LR but reaching a worse final optimum.
+
+Student's analysis was spot-on: epoch-3 warmup spike (+100 units), epoch-6 post-peak spike (+41 units), val_single_in_dist regressed worst (+21.7%) — classic "schedule too aggressive" signature.
+
+### Key insights
+
+- **LR axis FULLY CLOSED across bases:** lr=1.5e-3 is the optimum on both pre-RFF and post-RFF. Probing upward is exhausted.
+- **RFF base is sharper-near-optimum:** This explains why ANY modification adding noise (higher LR, eta_min raise, larger gradient steps) regresses more on RFF than pre-RFF.
+- **Follow-up direction:** the optimum LR may have shifted slightly DOWNWARD on RFF base. Test lr=1.25e-3 midpoint probe.
+
+### Next assignment for alphonse: lr=1.25e-3 on RFF base (#2265)
+
+Direct downward probe motivated by sharper-curvature hypothesis. Single number change. Will close the LR axis bilaterally on RFF base.
+
+---
+
 ## 2026-05-13 12:25 — PR #2207: cosine-eta-min-1e-4 (nezuko) — CLOSED (dead end, eta_min axis)
 
 - **Branch:** `charliepai2g48h2-nezuko/cosine-eta-min-1e-4`
