@@ -6,6 +6,40 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 02:10 — PR #1678: AdamW LR 5e-4 → 7e-4 — CLOSED (stale + obsolete)
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/lr-7e-4
+- **Status:** Idle 3+ hours after creation with no commits. Additionally obsolete after PR #1725 Lion merged (new optimizer paradigm).
+- **Decision:** Closed without execution; reassigned to Lion+T_max=12 (PR #1793).
+
+---
+
+## 2026-05-13 02:10 — PR #1726: SWA late-start epoch 8 — CLOSED (+7.9% worse vs AdamW baseline)
+
+- **Student:** charliepai2g48h3-fern
+- **Branch:** charliepai2g48h3-fern/swa-late-start
+- **Optimizer used:** AdamW (run started before PR #1725 Lion merge)
+- **Result:** val=109.442, test=98.377 (epoch 11; still descending at 30-min cutoff)
+
+| Split | val mae_surf_p | vs pre-Lion baseline (101.463) |
+|---|---|---|
+| single_in_dist | 137.319 | +13.8% |
+| geom_camber_rc | 124.325 | +7.1% |
+| geom_camber_cruise | 80.056 | +8.7% |
+| re_rand | 96.069 | +0.7% |
+| **avg** | **109.442** | **+7.9%** |
+
+- **Analysis (student's post-mortem, well-reasoned):**
+  1. SWA started at epoch 8 before convergence — baseline was still ~138 at that point, dropping ~7 pts/epoch
+  2. Only 3 averaging epochs accumulated (9, 10, 11) — too few over a non-stationary region
+  3. SWALR cut LR ~10× at the most critical training phase, slowing the underlying SGD
+  4. Best epoch was the final (11) — model never reached SWA's "flat basin" regime
+- **Conclusion:** SWA requires a converged base model to average. At 30-min budget with ~11 epochs, we never reach post-convergence. Reassigned fern to Lion+warmup (PR #1790) which addresses LR-schedule sensitivity in a constructive direction.
+- **Artifacts:** `models/model-charliepai2g48h3-fern-swa-late-start-20260513-002529/metrics.jsonl`
+
+---
+
 ## 2026-05-13 01:45 — PR #1725: Lion optimizer lr=1e-4 — MERGED (**new best: val=86.938, −14.3%**)
 
 - **Student:** charliepai2g48h3-edward

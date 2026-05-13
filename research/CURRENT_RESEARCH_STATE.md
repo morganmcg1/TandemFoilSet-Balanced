@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~01:50
+- **Date:** 2026-05-13 ~02:15
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -67,14 +67,18 @@
 | askeladd | #1766 | Lion WD=1e-2: paper-recommended WD (100× higher than current) | NEW |
 | edward | #1767 | Physical-space L1 + Lion: loss in Pa units aligns with metric | NEW |
 | tanjiro | #1769 | GeGLU + Lion: gated activation with sign-based optimizer | NEW |
+| fern | #1790 | Lion + 2-epoch cosine warmup: stabilize sign-update init | NEW |
+| nezuko | #1793 | Lion + T_max=12 aligned: proper cosine decay over actual budget | NEW |
 
-**Still WIP from Round 6 (all running under AdamW — results will compare to 86.938):**
-- frieren #1729: RMSNorm (architectural change)
-- fern #1726: SWA late-start epoch 8 (regularization)
+**Still WIP from Round 6 (running under AdamW — results will compare to 86.938):**
+- frieren #1729: RMSNorm (architectural change — may compound with Lion if positive)
 - thorfinn #1737: surf_weight 10 → 5 (loss weighting)
-- nezuko #1678: LR 5e-4 → 7e-4 (AdamW LR, now obsolete)
 
-> Note: The WIP AdamW experiments will almost certainly lose to the new Lion baseline. When they land, close and reassign unless they show an architecturally relevant insight (RMSNorm being the exception — it may compound with Lion).
+**Recently closed:**
+- fern #1726 SWA: +7.9% worse (premature start, only 3 avg epochs, SWALR cut LR 10×)
+- nezuko #1678 lr=7e-4: stale 3h, obsolete after Lion merge
+
+> Note: The remaining WIP AdamW experiments may still produce useful insights. RMSNorm in particular may transfer to Lion. surf_weight is loss-formulation orthogonal to optimizer.
 
 ## Round 7 hypotheses and priorities
 
