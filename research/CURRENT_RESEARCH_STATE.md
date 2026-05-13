@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 07:50 UTC
+- **Date / time:** 2026-05-13 08:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -45,7 +45,7 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 
 - surf_weight: optimum at 10.0 (tried 7, 15, 30)
 - n_head: n_head=4 (dim_head=32) optimal; n_head=8 catastrophic
-- weight_decay: 1e-4 on OLD stack — retesting 5e-5 under new 7-merge stack (#2026)
+- weight_decay downward (5e-5): confirmed worse, wd still load-bearing for OOD; testing upward (2e-4, #2064)
 - mlp_ratio=3, n_layers=6: capacity-at-budget failures
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
@@ -66,12 +66,12 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 |---|---|---|
 | #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
 | #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
-| #1975 | alphonse | OneCycleLR pct_start 0.1→0.05 (shorter warmup) |
+| #2065 | alphonse | AdamW amsgrad=True (max v_t stabilizer with beta2=0.99) |
 | #1977 | edward | AdamW eps 1e-8→1e-6 |
 | #2008 | thorfinn | AdamW beta2 0.99→0.98 |
 | #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
 | #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen, conjugate test) |
-| #2026 | nezuko | weight_decay 1e-4→5e-5 (retest under 7-merge stack) |
+| #2064 | nezuko | weight_decay 1e-4→2e-4 (upward conjugate — more OOD regularization) |
 
 ### Priority research directions
 

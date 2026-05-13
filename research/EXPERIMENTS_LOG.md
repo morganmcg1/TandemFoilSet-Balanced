@@ -11,6 +11,25 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 08:10 — Cycle 24: 2 closed + 2 new arms
+
+### PR #2026 nezuko — weight_decay=5e-5: CLOSED ✗
+
+val=78.40 vs baseline 77.6444 (+0.97%), test=68.93 (+1.04%). OOD load-bearing confirmed (re_rand +1.98%, geom_camber_rc +1.73%) but attenuated vs #1750 (where geom_camber_rc was +11.9% under old stack). The new stack reduces wd's leverage but doesn't eliminate it — wd=1e-4 still optimal in downward direction. Conjugate (upward) direction untested.
+
+### PR #1975 alphonse — OneCycleLR pct_start=0.05: CLOSED ✗
+
+val=80.0249 vs NEW baseline 77.6444 (+3.07%); note student compared against old #1863 baseline (80.03) and claimed near-tie. Against actual current baseline, clearly worse. Test mixed: OOD splits slightly improved but single_in_dist +3.48 dominated. pct_start=0.1 confirmed optimal — both 0.05 and 0.3 tested, neither wins. Schedule shape axis saturated at current operating point.
+
+### New assignments (cycle 24)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| nezuko | weight_decay 1e-4→2e-4 (conjugate upward direction — more OOD regularization) | #2064 |
+| alphonse | AdamW amsgrad=True (max v_t prevents v from forgetting large gradients with beta2=0.99) | #2065 |
+
+---
+
 ## 2026-05-13 07:45 — Cycle 23: #1957 closed + #2055 assigned
 
 ### PR #1957 tanjiro — smooth_l1 β=0.10: CLOSED ✗
