@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 02:40 UTC (close #1608 frieren EMA-0.999 +2.93% val/+4.12% test on rebased run — EMA's weight-space smoothing fights Fourier high-frequency feature responses (val_single_in_dist +6.17% inverse-correlates with Fourier's largest gain); assign #1828 frieren SmoothL1 β=0.01 — loss-landscape smoothing rather than weight-space smoothing; in-flight: #1711, #1753, #1772, #1799, #1811, #1828; rebasing: #1549, #1754)
+- **Last updated**: 2026-05-13 02:55 UTC (**MERGE #1772 edward Fourier L=6** as 6th compound win — new baseline **82.311 val / 73.330 test, -18.5% over 6 merges**; close #1608 frieren EMA-0.999 +2.93% val/+4.12% test on rebased run — EMA's weight-space smoothing fights Fourier high-frequency feature responses (val_single_in_dist +6.17% inverse-correlates with Fourier's largest gain); assign #1828 frieren SmoothL1 β=0.01, #1830 edward Fourier L=8 plateau-probe; in-flight: #1711, #1753, #1799, #1811, #1828, #1830; rebasing: #1549, #1754)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -11,31 +11,35 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #1548 merged — Fourier coords L=4, -6.13%)
+## Current best baseline (PR #1772 merged — Fourier coords L=6, -2.89%)
 
-- `val_avg/mae_surf_p` = **84.762** (Fourier L=4 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 15)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **74.659**
-- Per-split val: single_in_dist=97.074 / camber_rc=94.997 / camber_cruise=63.711 / re_rand=83.266
-- Per-split test: single_in_dist=85.819 / camber_rc=83.023 / camber_cruise=54.879 / re_rand=74.916
-- Δ vs PR #1637 baseline (90.294 / 81.243): **-6.13%** on val_avg, **-8.10%** on 4-split test
-- **Test gain exceeds val gain** — model generalizes the Fourier features well
-- Per-split pattern matches spectral-bias hypothesis: largest gains where high-frequency spatial structure dominates (in_dist -11.35%, camber_cruise -7.94%); minimal on val_re_rand (-0.30%) whose OOD axis is Reynolds, not spatial coords
-- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → val_avg has improved from 100.957 to 84.762 = **-16.0% over 5 merges**.
+- `val_avg/mae_surf_p` = **82.311** (Fourier L=6 + grad-clip-25 + cosine-T_max-15 + L1 + stoch-depth; best @ ep 15)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **73.330**
+- Per-split val: single_in_dist=93.299 / camber_rc=92.965 / camber_cruise=63.131 / re_rand=79.848
+- Per-split test: single_in_dist=83.323 / camber_rc=81.867 / camber_cruise=54.094 / re_rand=74.038
+- Δ vs PR #1548 baseline (84.762 / 74.659): **-2.89%** on val_avg, **-1.78%** on 4-split test
+- **All 4 val splits + all 4 test splits improve** — clean monotone direction
+- **Surprise on `val_re_rand`** (-4.10%, pre-registered as ~flat): plausible mechanism is that L=4 was over-spending MLP capacity on low-freq geometry encoding; L=6 frees capacity for Reynolds-dependent features. Test_re_rand -1.17% corroborates.
+- **`val_geom_camber_cruise` only -0.91%** — leading-edge plateau indicator (cruise split already exhausted most spatial-freq information at L=4).
+- Compound progress: #1397 L1 → #1552 stoch-depth → #1611 cosine T_max=15 → #1637 grad-clip → #1548 Fourier L=4 → #1772 Fourier L=6 → val_avg has improved from 100.957 to 82.311 = **-18.5% over 6 merges**.
 
 ## Current research focus
 
-**Stacking compound wins.** The merged baseline is now **84.762** with five
+**Stacking compound wins.** The merged baseline is now **82.311** with six
 mechanisms stacked: L1 loss, stoch-depth schedule, cosine T_max=15,
-grad-clip max_norm=25, and Fourier coord encoding L=4. Each individual
-mechanism has been confirmed beneficial on this dataset; the compound is
-now **-16.0%** better than the original L1-only baseline (100.957 → 84.762).
+grad-clip max_norm=25, Fourier coord encoding L=4, and Fourier coord
+encoding bumped to L=6. Each individual mechanism has been confirmed
+beneficial on this dataset; the compound is now **-18.5%** better than
+the original L1-only baseline (100.957 → 82.311).
 
-**The Fourier merge (PR #1548) is the strongest single-experiment signal of
-the round** — test gain (-8.10%) exceeds val gain (-6.13%), per-split
-pattern exactly matches the spectral-bias mechanism prediction, and stacks
-cleanly with all four prior compound merges. Spectral-bias / positional
-encoding is the most productive direction for the immediate follow-up
-(bracket sweep + Gaussian Fourier variant).
+**The Fourier merges (PR #1548 L=4, PR #1772 L=6) are the strongest direction
+of the round** — combined -8.91% val, -9.74% test over the previous post-#1637
+baseline. PR #1772 confirmed the direction is still on the upward slope
+(all 8 splits improve, with surprise -4.10% on val_re_rand suggesting the
+mechanism is freeing MLP capacity for non-spatial features). Pre-registered
+follow-up: PR #1830 (Fourier L=8) is the plateau-probe; if L=8 plateaus or
+regresses, pivot to Gaussian Fourier features (Tancik §3) which can push
+past the dyadic-frequency plateau.
 
 **Three single-knob directions now fully bracketed and closed:**
 - **Grad-clip fixed-threshold**: bracket {1.0, 10, 25, 50} complete. 25 is
@@ -62,17 +66,20 @@ pure spike suppression. The 1.0 / 25 / 50 bracket points map to a clear
 asymmetric profile around 25. **Lower bracket point (max_norm=10, #1713)
 now in flight** to complete the curve.
 
-Active threads (post #1608 close, fresh #1828 SmoothL1 assignment):
+Active threads (post #1772 merge → #1830 follow-up; post #1608 close → #1828):
 
 1. **Per-channel surf-loss weighting** (alphonse #1711, H18,
    `[0.5, 0.5, 2.0]`) — loss-layer rebalancing toward pressure channel.
 2. **Adaptive grad-clip** (askeladd #1753, 1.5× running median over K=100
    step deque) — pivot from closed fixed-threshold bracket.
 3. **LR warm-up REBASING** (nezuko #1754, H19) — WON on old baseline
-   (-0.64% val, -1.71% test); pending re-confirmation on new 84.762 baseline.
+   (-0.64% val, -1.71% test); pending re-confirmation on new 82.311 baseline.
    Highest-EV merge-candidate after rebase.
-4. **Fourier coord encoding `n_freqs=6`** (edward #1772) — pre-registered
-   bracket-up from his merged #1548 L=4.
+4. **Fourier coord encoding `n_freqs=8`** (edward #1830, H26) —
+   pre-registered bracket-up from just-merged #1772 L=6. Plateau-probe;
+   Tancik's curve predicts plateau at L=8-10. Three clean outcomes:
+   win (continue to L=10), plateau (pivot to Gaussian Fourier),
+   regress (locate plateau just below L=8, pivot to Gaussian).
 5. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
    pivot after closed AdamW betas direction. Per-channel learnable γ_l
    gates each residual branch; +0.19% params; compounds with stoch-depth.
@@ -88,14 +95,15 @@ Active threads (post #1608 close, fresh #1828 SmoothL1 assignment):
    function representation) — different axis from EMA's weight-space
    smoothing which fought Fourier sharpening.
 
-Note: all wave-5 in-flight experiments (#1711, #1753, #1754, #1756) are
-measured against the **new 84.762 baseline**, not against the 90.294 they
-were assigned on. Most are testing orthogonal levers (loss layer,
-optimization, regularization) so should still stack if the mechanism works.
+Note: all wave-5/6/7 in-flight experiments (#1711, #1753, #1799, #1811,
+#1828, #1830) are measured against the **new 82.311 baseline** (post #1772
+merge). Most are testing orthogonal levers (loss layer, optimization,
+regularization, output decoder, input encoding) so should still stack if
+the mechanism works.
 
 One extraordinary signal still pending rebase confirmation:
 
-- **fern #1549 FiLM = 81.291** posted on old base (missing stoch-depth, cosine, grad-clip, Fourier). **-19.5% vs #1611 baseline.** If rebased and the gap holds against the new 84.762 baseline, this is the highest-EV lever in flight. Now competing against a much stronger baseline so the absolute delta will be smaller.
+- **fern #1549 FiLM = 81.291** posted on old base (missing stoch-depth, cosine, grad-clip, Fourier). **-19.5% vs #1611 baseline.** If rebased and the gap holds against the new 82.311 baseline, this is the highest-EV lever in flight. Now competing against a much stronger baseline so the absolute delta will be smaller.
 
 The recurring round-1 finding holds: **surf_weight=10 is at or above the
 optimum**. Three independent confirmations bracket the optimum near 10.
@@ -129,21 +137,22 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | alphonse | #1711 | `surf-ch-weight-h18` | WIP | tbd |
 | askeladd | #1753 | `adaptive-grad-clip-q50-a1.5` | WIP | tbd |
 
-## Round 2 wave 6 — partial resolution (#1773 closed, #1772/#1799/#1811 in flight)
+## Round 2 wave 6 — partial resolution (#1772 MERGED, #1773 closed, #1799/#1811 in flight)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
+| edward | #1772 | `fourier-coords-L6` | **MERGED** (new baseline 82.311) | -2.89% val, -1.78% test |
 | thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
-| edward | #1772 | `fourier-coords-L6` | WIP | tbd |
 | thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | WIP | tbd |
 
-## Round 2 wave 7 — kick-off (#1608 closed → fresh axis #1828)
+## Round 2 wave 7 — kick-off (#1608 closed → fresh #1828; #1830 follow-up to merged #1772)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
 | frieren | #1608 | `ema-weights-0.999` | **CLOSED** (rebased: weight-space smoothing fights Fourier sharpening, inverse-correlates per-split) | +2.93% val, +4.12% test |
 | frieren | #1828 | `smooth-l1-loss-beta-001` | WIP | tbd |
+| edward | #1830 | `fourier-coords-L8` | WIP — plateau-probe follow-up to merged #1772 L=6 | tbd |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 
@@ -169,8 +178,9 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
 - **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:40 UTC)
+## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:55 UTC)
 
+- **#1772 fourier-coords-L6 (edward)** — **MERGED** as new baseline **82.311** val / **73.330** test. -2.89% val, -1.78% test vs #1548 baseline. 6th compound win on this branch. All 8 splits improve (-0.91% to -4.10% on val, -1.17% to -2.91% on test). Surprise -4.10% on val_re_rand (pre-registered as ~flat) — mechanism finding: at L=4 the network was over-spending preprocess MLP capacity on low-freq geometry; L=6 frees capacity for Reynolds-dependent features. `val_geom_camber_cruise` only -0.91% (was -7.94% at L=4) — leading-edge plateau indicator. No overfit signature (best ep=15, wall time unchanged). Pre-registered follow-up: #1830 L=8 plateau-probe.
 - **#1608 ema-weights-0.999 (frieren)** — **CLOSED** at +2.93% val, +4.12% test (rebased onto current 84.762 baseline). Pre-rebase had won -2.64% val on old 98.353 baseline, but the rebase flipped the sign: EMA's low-pass smoothing on weights fights Fourier's high-frequency feature responses. Per-split: `val_single_in_dist` (Fourier's biggest gain at -11.35%) regressed +6.17% under EMA; `test_single_in_dist` regressed +7.80%. Clean inverse correlation between Fourier-gain magnitude and EMA-regression magnitude. Two compounding mechanisms: (a) decay=0.999 effective window ≈ 2.7 epochs is too long for T_max=15 cosine cooldown, so the EMA copy structurally trails the live model into the final cooldown; (b) EMA's spectral smoothing undoes Fourier's spectral sharpening. **Axis-wide finding: weight-space smoothing is closed on this compound; future variance-reduction PRs must target loss-landscape or trajectory features instead. Picked SmoothL1 (β=0.01) as the loss-landscape pivot.**
 - **#1754 lr-warmup-h19 (nezuko)** — **REBASING**. Won on old baseline at -0.64% val, -1.71% test (3/4 val splits improve, all 4 test splits improve). Mechanism check passes (ep1 last-batch pre-clip grad-norm dropped ~35%). Sent back to re-measure on new 84.762 baseline post-Fourier-merge. Expected post-rebase: -0.3% to -1.5% on val_avg (warmup is orthogonal to Fourier input encoding).
 - **#1756 stoch-depth-0.15 (tanjiro)** — **CLOSED** at +7.69% val. Outcome C confirmed: merged 0.10 is local optimum (V-shape: 0.05→+13.7%, 0.10→0%, 0.15→+7.69%). Both endpoints regress on val_geom_camber_rc, falsifying the "OOD geometry wants more drop" narrative I had built. Train-vs-val gap stays val > train (no ensemble-dropout signature). Single-knob direction fully closed.
@@ -233,10 +243,10 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 |---------|----|--------|
 | alphonse | #1711 | WIP (H18 surf-ch-weight [0.5, 0.5, 2.0]) |
 | askeladd | #1753 | WIP (adaptive grad-clip — 1.5× running median K=100) |
-| edward | #1772 | WIP (Fourier coords L=6 — bracket up from merged L=4) |
-| fern | #1549 | rebasing (FiLM 81.291 signal pending vs 84.762 baseline) |
+| edward | #1830 | WIP (H26 Fourier coords L=8 — plateau-probe follow-up to just-merged #1772 L=6) |
+| fern | #1549 | rebasing (FiLM 81.291 signal pending vs 82.311 baseline) |
 | frieren | #1828 | WIP (H25 SmoothL1 β=0.01 — Huber loss replacing L1, loss-landscape pivot after closed EMA) |
-| nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 84.762) |
+| nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 82.311) |
 | tanjiro | #1811 | WIP (H24 per-channel output head MLPs — 3 × Linear→GELU→Linear) |
 | thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
 

@@ -8,6 +8,45 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:50 — PR #1772 (edward Fourier coord encoding `n_freqs=6` — bracket up from merged L=4) — **MERGED**
+
+- Branch: `charliepai2g24h4-edward/fourier-coords-L6`
+- Hypothesis: pre-registered bracket-up from merged #1548 L=4. Tancik's curve
+  predicts plateau at L=8-10; L=6 is the next probe on the upward slope.
+
+**6th compound win on this branch.** New baseline 82.311 / 73.330.
+
+| Metric | This PR | Previous baseline (#1548) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | **82.311** | 84.762 | **-2.89%** |
+| test_avg/mae_surf_p (4-split) | **73.330** | 74.659 | **-1.78%** |
+| Param count | 667,991 | 665,943 | +2,048 (+0.31%) |
+
+- **All 4 val splits improve** (-0.91% to -4.10%): single_in_dist -3.89%,
+  camber_rc -2.14%, camber_cruise -0.91%, re_rand -4.10%.
+- **All 4 test splits improve** (-1.17% to -2.91%): single_in_dist -2.91%,
+  camber_rc -1.39%, camber_cruise -1.43%, re_rand -1.17%.
+- **Surprise finding**: `val_re_rand` improved -4.10% (pre-registered as
+  "likely stays flat" since its OOD axis is Reynolds, not spatial frequency).
+  Plausible mechanism: at L=4 the network was over-spending preprocess MLP
+  capacity on encoding geometry in low-frequency bands; with L=6 it can push
+  geometry into higher Fourier bands and free MLP capacity for Reynolds-
+  dependent features. Test gain on test_re_rand (-1.17%) is smaller but
+  consistent — argues against pure noise.
+- **`val_geom_camber_cruise` only -0.91%**: pre-registered as a strong gainer
+  (it was -7.94% at L=4); marginal gain is plateauing first on this split.
+  Hypothesis: cruise split already extracted most spatial-freq info at L=4,
+  and the marginal L=4→6 frequencies are beyond its dominant surface-pressure
+  modes. Leading-edge plateau indicator.
+- **No overfit signature**: best ep = 15 (cosine endpoint), wall time
+  unchanged, no early plateau in val curve.
+- **Magnitude at upper end of predicted band** (-0.5% to -2.5% predicted,
+  -2.89% actual). Two reads: (a) L=4→L=6 jump is steeper than Tancik's
+  curve at this dimensional regime; (b) L=4 result was on the noisy side
+  of its run-to-run distribution. Either way, still on the upward slope.
+- Compound progress: 100.957 → 84.762 → **82.311** = **-18.5% over 6 merges**.
+- Follow-up assigned: PR #1830 (edward Fourier L=8 bracket-up to find plateau).
+
 ## 2026-05-13 02:35 — PR #1608 (frieren EMA-of-model-weights decay=0.999) — **CLOSED**
 
 - Branch: `charliepai2g24h4-frieren/ema-weights-0.999`
