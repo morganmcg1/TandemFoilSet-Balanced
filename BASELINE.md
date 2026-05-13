@@ -214,3 +214,30 @@ Merged. bf16 mixed-precision training (`torch.amp.autocast(dtype=torch.bfloat16)
 - **W&B run:** `fsqr0yp5`
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_layers 3 --epochs 30`
 - **Mechanism:** PhysicsAttention slicing carries the heavy representational load; 3 attention layers is sufficient for this 1500-sample dataset. Depth reduction frees ~35% compute per epoch → more training epochs in budget → better convergence despite 77% fewer params.
+
+## 2026-05-13 07:00 — PR #1784: tanjiro gradient-clip max_norm=10 + diagnostics
+
+**New best — 8th compound improvement (gradient-shape lever)**
+
+Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code applies cleanly on top of current n_layers=3 advisor branch):
+
+- **val_avg/mae_surf_p:** 65.9757 (↓ from 71.4371 compile baseline, **−7.65%**)
+- **test_avg/mae_surf_p:** 57.0711 (↓ from 62.5927, **−8.83%**)
+
+**Per-split test (all 4 splits improved cleanly):**
+
+| Split | mae_surf_p | vs PR #1763 (n_layers=5 compile) |
+|-------|----------:|----------:|
+| `test_single_in_dist` | 64.5497 | −5.88 |
+| `test_geom_camber_rc` | 70.5841 | −3.50 |
+| `test_geom_camber_cruise` | 37.9291 | −6.58 |
+| `test_re_rand` | 55.2217 | −6.13 |
+
+- **Config (as measured):** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, dropout=0.0, torch.compile(model, dynamic=True), **`torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)` after .backward(), before .step()**
+- **Epochs:** 29 in 31.05 min (~63.4 s/epoch, identical to compile baseline)
+- **Mechanism (soft scaling regime):** clip rate 72.4% (vs 100% at max_norm=1.0 in #1534 v2). Gradient norm distribution on compile stack: p50=16.2, p90=40.6, p99=91.8, max=262. At threshold 10, the heavy upper tail gets ~2.2× downscaling on typical clipped steps; bulk gradient direction preserved. Sweet spot between v2's full direction-normalization (100% clip, ~22× scaling) and unmeasured safety-net regime (<10% clip at threshold ≥50).
+- **Why this works**: by dampening rare large-magnitude updates without erasing AdamW's direction information on typical steps, the optimizer follows a smoother trajectory through the loss landscape. EMA shadow benefits from lower variance per update, narrowing the EMA-live gap throughout training.
+- **W&B run:** `vy49aq06`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+  (grad-clip + diagnostics now in train.py defaults; no extra flags needed)
+- **Caveat on combined baseline**: The advisor branch now has **n_layers=3 + grad-clip=10 + everything else**, but the measured number above is on **n_layers=5 + grad-clip=10**. The combined n_layers=3 + grad-clip=10 has not been directly measured. Mechanism (gradient-norm scaling, orthogonal to architecture) suggests these compound additively → expected val ≤ 65.98 on the combined stack, but the next n_layers=3 experiment will confirm directly. **All subsequent experiments should target val < 65.98 and test < 57.07** as the merge threshold.
