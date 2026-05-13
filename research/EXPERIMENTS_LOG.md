@@ -4,6 +4,41 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 17:10 — PR #2390 (SENT BACK, askeladd): Lion wd sweep {1e-4, 1e-3, 3e-3} on β=0.3+RFF σ=1.0+Kendall — mechanism validated, rebase to σ=0.5 + extend to wd=1e-2
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-wd-sweep-on-beta0p3`
+- **Student:** willowpai2g48h2-askeladd
+- **Hypothesis:** Lion needs 3-10× AdamW's wd per Chen et al. 2023. Sweep wd ∈ {1e-4, 1e-3, 3e-3} brackets the V-shape around current baseline wd=3e-4.
+
+### Result table (σ=1.0 stack)
+
+| Arm | wd | SWA val | SWA test | Δ vs σ=1.0 (47.64) | Δ vs σ=0.5 (45.76) | W&B |
+|---|---:|---:|---:|---:|---:|---|
+| Baseline σ=1.0 #2063 | 3e-4 | 47.6416 | 40.5651 | — | — | `5hp3gid7` |
+| Baseline σ=0.5 #2168 | 3e-4 | 45.7648 | 39.6619 | — | — | `7f6pqafs` |
+| A | 1e-4 | 47.4432 | 40.3338 | −0.20 (noise) | +1.68 | `m7scil7c` |
+| B | 1e-3 | 47.4843 | 40.7631 | −0.16 (noise) | +1.72 | `0oa4b3a5` |
+| **C** | **3e-3** | **47.0832** | **40.2042** | **−0.56 (directional)** | **+1.32** | `5m6d0u19` |
+
+### Commentary and conclusions
+
+**Mechanism validated, decision-tree forces rebase.** Arm C (wd=3e-3) wins on σ=1.0 stack — monotonic, no V-shape in tested range. Largest gain concentrated on `geom_camber_rc` (−1.49 val absolute on the bottleneck split). Per σ=0.5 merge rule, val ∈ [45.76, 47.64] → directional win on σ=1.0, **send back to test composition with σ=0.5**.
+
+**Banked findings (4):**
+
+1. **wd is directionally correct on this stack (Chen 2023 confirmed)** — Lion wants ≥1e-3 wd; 3e-3 is the best tested point. No V-shape across {1e-4, 1e-3, 3e-3}.
+2. **wd mechanism is NOT weight shrinkage.** param_norm differs <0.2% between arms A and C despite 30× wd ratio. Lion's sign-step (`±lr`) overwhelms wd's pull-toward-zero on this lr/timescale; wd is acting through some other channel — probably small per-coord corrections to the sign direction that accumulate into better implicit regularization on OOD-modulated geometries.
+3. **6th independent confirmation of Lion+Kendall σ-collapse.** All 6 log_σ → exactly −0.903749 in every arm, identical drift trajectory to 6 decimal places. wd cannot affect this because log_σ params live in the no-wd group. **wd CANNOT rescue the σ axis — only #2311 fern hybrid optim or #2443 alphonse init can.**
+4. **`train/param_norm` + `train/param_rms` is a clean diagnostic** — student added it; will travel with the rebase. Cheap (~ms), broadly useful for any future wd/regularization PR.
+
+### Action taken: rebase + 2-arm sweep on σ=0.5 {3e-3, 1e-2}
+
+- Direct composition test (wd=3e-3 on σ=0.5)
+- Push direction further (wd=1e-2) — student's suggested follow-up #2 redirected to σ=0.5 not σ=1.0 because of #2168 σ × optimizer × wd non-monotonicity finding
+- If Arm 1 beats 45.76 → MERGE. If Arm 2 also wins → ceiling not found, follow-up upward. If Arm 2 regresses vs Arm 1 → ceiling at 3e-3, banked.
+
+---
+
 ## 2026-05-13 17:00 — PR #2463 (ASSIGNED, tanjiro): swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack — isolate SWA averaging-lr level
 
 - **Branch:** `willowpai2g48h2-tanjiro/swa-lr-sweep-on-sigma0p5`
