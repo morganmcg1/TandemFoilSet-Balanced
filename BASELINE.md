@@ -1401,3 +1401,41 @@ cd target/ && python train.py \
   --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
   --surf_weight 10 --n_layers 3 --slice_num 12
 ```
+
+---
+
+## 2026-05-13 15:00 — PR #2348: slice_num=16+n_layers=3+epochs=36
+
+**val_avg/mae_surf_p: 35.548** | test_avg/mae_surf_p: 30.345
+
+- Params: 513,471 | best_epoch: 35/36 | ~49.8 s/epoch | peak ~18.72 GB
+- Partition sweep: non-monotone — slice_num=16 beats slice_num=12 (nearly iso-cost at ~50s/epoch)
+
+### Val metrics (best checkpoint, epoch 35)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 35.263 | 43.060 |
+| geom_camber_rc | 49.105 | 53.613 |
+| geom_camber_cruise | 19.392 | 22.085 |
+| re_rand | 38.431 | 40.088 |
+| **avg** | **35.548** | **39.712** |
+
+### Test metrics (from best-val checkpoint)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 32.248 | 39.726 |
+| geom_camber_rc | 44.663 | 49.829 |
+| geom_camber_cruise | 16.188 | 18.932 |
+| re_rand | 28.282 | 31.629 |
+| **avg** | **30.345** | **35.029** |
+
+**Metric artifacts:** `models/model-charliepai2g48h3-alphonse-slicenum16-nlayers3-20260513-141223/metrics.jsonl`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
+  --surf_weight 10 --n_layers 3 --slice_num 16
+```
