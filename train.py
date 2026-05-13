@@ -500,6 +500,17 @@ for epoch in range(MAX_EPOCHS):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+        # H27 coord jitter: Gaussian noise (std=0.005) on first 2 normalized
+        # coord dims, masked to real (non-padded) nodes, training-only.
+        if model.training:
+            coord_jitter = torch.randn_like(x_norm[..., :2]) * 0.005
+            coord_jitter = coord_jitter * mask.unsqueeze(-1).float()
+            x_norm = torch.cat([
+                x_norm[..., :2] + coord_jitter,
+                x_norm[..., 2:],
+            ], dim=-1)
+
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
