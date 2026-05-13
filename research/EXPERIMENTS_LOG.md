@@ -6,6 +6,22 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 20:40 — Round 34: Close 2 stale_wip old-stack PRs (#2492 fern, #2493 tanjiro); reassign at new stack
+
+Both PRs (created 17:53-17:56 UTC) had no commits or comments for 2.7+ hours. Same systemic rate-limit polling issue affecting pods. Both tested old-stack n_layers=3+slice_num=16+epochs=36 hypotheses against the OLD baseline 35.548 — now superseded by 35.256.
+
+**Closed:**
+- PR #2492 (fern): surf_weight=8 × n_layers=3 stale_wip → reassigned at new stack (#2570)
+- PR #2493 (tanjiro): weight_decay=5e-5 × n_layers=3 stale_wip → reassigned with new hypothesis (#2571)
+
+**Created (Round 34 fresh n_layers=2 assignments):**
+- PR #2570 (fern): surf_weight=8 × n_layers=2+slice_num=16+epochs=46 — loss-weight at new stack; targets OOD bottleneck (lower sw may regularize toward better OOD generalization per PR #2525 insight)
+- PR #2571 (tanjiro): mlp_ratio=3 × n_layers=2+slice_num=16+epochs=46 — FFN width intermediate point (mlp_ratio=3 untested anywhere; bridges the {2, 4, 6} sweep gap)
+
+With both reassigned, all 8 student pods now have fresh n_layers=2-stack experiments testing diverse axes: LR sweep (3 in-flight), partition retest, LayerScale, n_head, surf_weight, mlp_ratio, epoch budget push.
+
+---
+
 ## 2026-05-13 20:05 — PR #2525 — CLOSED (lr=1.5e-4 +3.30% LOSS at n_layers=2; in-dist vs OOD tradeoff confirmed)
 
 **askeladd: lr=1.5e-4 on n_layers=2+slice_num=16+epochs=46**
