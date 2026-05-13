@@ -371,6 +371,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    llrd_decay: float = 0.7
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -480,7 +481,67 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# ---------------------------------------------------------------------------
+# LLRD param groups: output→input depth-indexed LR scaling by decay^k.
+# block_{N-1} stays at base_lr; earlier blocks and preprocess+placeholder are
+# slowed exponentially. Scheduler scales every group's lr uniformly.
+# ---------------------------------------------------------------------------
+_model_inner = getattr(model, "_orig_mod", model)
+_llrd_decay = cfg.llrd_decay
+_num_blocks = len(_model_inner.blocks)
+
+param_groups: list[dict] = []
+for _i, _block in enumerate(_model_inner.blocks):
+    _depth_from_output = _num_blocks - 1 - _i
+    _lr_i = cfg.lr * (_llrd_decay ** _depth_from_output)
+    param_groups.append({
+        "params": [p for p in _block.parameters() if p.requires_grad],
+        "lr": _lr_i,
+        "name": f"block_{_i}",
+    })
+
+_embed_params: list[torch.nn.Parameter] = []
+if hasattr(_model_inner, "preprocess"):
+    _embed_params.extend(p for p in _model_inner.preprocess.parameters() if p.requires_grad)
+if hasattr(_model_inner, "placeholder"):
+    if _model_inner.placeholder.requires_grad:
+        _embed_params.append(_model_inner.placeholder)
+_lr_embed = cfg.lr * (_llrd_decay ** _num_blocks)
+param_groups.append({
+    "params": _embed_params,
+    "lr": _lr_embed,
+    "name": "preprocess",
+})
+
+_captured_ids = set()
+for _g in param_groups:
+    for _p in _g["params"]:
+        _captured_ids.add(id(_p))
+_other_params = [
+    p for p in _model_inner.parameters()
+    if p.requires_grad and id(p) not in _captured_ids
+]
+if _other_params:
+    param_groups.append({"params": _other_params, "lr": cfg.lr, "name": "other"})
+
+print(f"LLRD param groups (decay={_llrd_decay}):")
+_group_sum = 0
+for _g in param_groups:
+    _n = sum(p.numel() for p in _g["params"])
+    _group_sum += _n
+    print(f"  {_g['name']:>12}  lr={_g['lr']:.3e}  params={_n}")
+_model_total = sum(p.numel() for p in _model_inner.parameters() if p.requires_grad)
+print(f"  group_sum={_group_sum}  model_total={_model_total}  (must match)")
+assert _group_sum == _model_total, (
+    f"LLRD group_sum {_group_sum} != model_total {_model_total}; some params un-optimized"
+)
+print(
+    f"Layer-wise LR Decay (LLRD): decay={cfg.llrd_decay}; preprocess @ lr*{cfg.llrd_decay**_num_blocks:.3f}, "
+    f"block_0 @ lr*{cfg.llrd_decay**(_num_blocks-1):.3f}, ..., block_{_num_blocks-1} @ lr*1.0; "
+    "zero param change; optimizer-only intervention"
+)
+
+optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.weight_decay)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -495,7 +556,9 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     milestones=[warmup_epochs],
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print("LR check ep0 (post-init, all groups; LinearLR scales each by 0.1):")
+for _g in optimizer.param_groups:
+    print(f"  {_g['name']:>12}  lr={_g['lr']:.6e}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -554,6 +617,7 @@ for epoch in range(MAX_EPOCHS):
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
+    lr_by_group = {g["name"]: g["lr"] for g in optimizer.param_groups}
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -585,6 +649,8 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": lr_now,
+        "lr_by_group": lr_by_group,
+        "llrd_decay": cfg.llrd_decay,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
