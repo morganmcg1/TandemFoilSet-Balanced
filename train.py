@@ -483,6 +483,7 @@ optimizer = torch.optim.AdamW(
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
     betas=(0.95, 0.98),
+    eps=1e-9,
 )
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
