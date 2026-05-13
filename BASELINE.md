@@ -8,36 +8,60 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **52.63** | PR #1656 (merged 2026-05-13) — dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 stack |
-| **test_avg/mae_surf_p** | **49.22** | PR #1656 — all 4 splits finite |
-| Peak VRAM | ~38 GB | PR #1656 — BF16, batch=4, n_hidden=160, dropout=0.1 |
-| s/epoch | ~117 s | PR #1656 — 16 epochs ≈ 31 min total (slightly over cap; test eval adds ~30s) |
+| **val_avg/mae_surf_p** | **47.43** | PR #2196 (merged 2026-05-13) — SwiGLU gated MLP block replacing GELU; same param count |
+| **test_avg/mae_surf_p** | **45.01** | PR #2196 — all 4 splits finite; epoch-15 best checkpoint (hit 30-min cap at ep 15) |
+| Peak VRAM | ~42.5 GB | PR #2196 — SwiGLU hidden=216 vs GELU hidden=320 at same mlp_ratio |
+| s/epoch | ~117 s | PR #2196 — 16-epoch schedule, 15 epochs completed within cap |
 
-### Per-split val (PR #1656, epoch 16, dropout=0.1 + lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 56.52 |
-| val_geom_camber_rc | 67.35 |
-| val_geom_camber_cruise | 34.17 |
-| val_re_rand | 52.50 |
-| **val_avg** | **52.63** |
-
-### Per-split test (PR #1656, epoch 16 best checkpoint, dropout=0.1 + lion_lr=2e-4 + per-channel δ=[Ux=0.5, Uy=0.5, p=0.2])
+### Per-split val (PR #2196, best epoch 15, SwiGLU block-MLP + Lion lr=2e-4 + per-channel δ + dropout=0.1 + n_hidden=160)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 47.14 |
-| test_geom_camber_rc | 59.44 |
-| test_geom_camber_cruise | 46.76 |
-| test_re_rand | 43.54 |
-| **test_avg** | **49.22** |
+| val_single_in_dist | 52.19 |
+| val_geom_camber_rc | 59.75 |
+| val_geom_camber_cruise | 30.87 |
+| val_re_rand | 46.90 |
+| **val_avg** | **47.43** |
+
+### Per-split test (PR #2196, epoch-15 best checkpoint)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 43.52 |
+| test_geom_camber_rc | 53.81 |
+| test_geom_camber_cruise | 43.91 |
+| test_re_rand | 38.82 |
+| **test_avg** | **45.01** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --drop_path 0.0 --dropout 0.1 --experiment_name dropout01_pcd_lr2e4_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name swiglu_mlp_ratio_4_3_n160 --agent <student>
 ```
-(n_hidden=160, per-channel δ=[Ux=0.5, Uy=0.5, p=0.2], dropout=0.1 in merged defaults. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required** — train.py defaults `lion_lr=1.5e-4 / lion_weight_decay=3e-5` are stale from #1641 and do not match the current best config.)
+(SwiGLU block-MLPs now in merged train.py defaults — hidden=ceil(160×4/3)=216, gate×SiLU(input). Block-MLP only; preprocess MLP and mlp2 head remain GELU. **Explicit `--lion_lr 2e-4 --lion_weight_decay 6e-5` required** — train.py defaults are stale.)
+
+### Delta from previous best (PR #1656 → PR #2196)
+
+| Split | Prev val | New val | Δval | Prev test | New test | Δtest |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 56.52 | 52.19 | **−4.33** | 47.14 | 43.52 | **−3.62** |
+| geom_camber_rc | 67.35 | 59.75 | **−7.60** | 59.44 | 53.81 | **−5.63** |
+| geom_camber_cruise | 34.17 | 30.87 | **−3.30** | 46.76 | 43.91 | **−2.85** |
+| re_rand | 52.50 | 46.90 | **−5.60** | 43.54 | 38.82 | **−4.72** |
+| **avg** | **52.63** | **47.43** | **−5.20 (−9.9%)** | **49.22** | **45.01** | **−4.21 (−8.6%)** |
+
+## 2026-05-13 12:53 — PR #2196: SwiGLU gated MLP block replacing GELU (MERGED)
+
+- **val_avg/mae_surf_p: 47.4287** (↓ 9.9% from 52.63 — largest single-PR gain since Lion introduction)
+- **test_avg/mae_surf_p: 45.0147** (↓ 8.6% from 49.22 — all 4 splits finite, all improve)
+- **Peak VRAM: ~42.5 GB** (BF16, batch=4, n_hidden=160, SwiGLU hidden=216); s/epoch ~117 s; 15 of 16 epochs completed (hit 30-min cap)
+- **Metric artifacts:** `models/model-swiglu_mlp_ratio_4_3_n160-20260513-115449/metrics.jsonl`
+- **What changed:** Block-MLP activation replaced GELU with SwiGLU gated variant: `out = (W₁·x) * SiLU(W₂·x)` where both projection matrices have hidden=ceil(160×4/3)=216 (parameter-equivalent to GELU baseline at standard mlp_ratio=2). Preprocess MLP and final `mlp2` head unchanged (remain GELU). New `mlp_ratio` for block-SwiGLU is 4/3 of the outer dimension — both weight matrices in the gate product use hidden=216.
+- **Why it worked:** PR #2176 showed that bare SiLU (GELU→SiLU slope swap) regresses every split by +6.9 val — Lion sign-updates are tuned for GELU's gradient surface. SwiGLU adds a multiplicative *gate* `σ(W₂x)` that modulates how much input signal passes through; this is architecturally distinct from a slope change. The gate gives each channel the ability to selectively suppress low-confidence features before the output projection, effectively adding learned feature routing at zero parameter cost vs GELU at the same mlp_ratio. The 7.6 val-MAE improvement on the hardest OOD split (val_geom_camber_rc: 67.35→59.75) suggests the gate is most valuable for uncertain input regimes where GELU's uniform passthrough over-weights ambiguous features. Gain is uniform (all 8 splits improve) — not a fluke on one split.
+- **Baseline configuration delta:** Block-MLP `act=gelu` → SwiGLU gate with `hidden=ceil(n_hidden × 4/3)`.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name swiglu_mlp_ratio_4_3_n160 --agent <student>
+  ```
 
 ## 2026-05-13 09:58 — PR #1656: dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 (MERGED)
 
