@@ -7,6 +7,48 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 14:05 — PR #1986: Fourier positional features for (x,z) node coordinates — MERGED
+
+- `willowpai2g24h3-tanjiro/fourier-positional-features`
+- **Hypothesis:** Fourier position encoding (sin/cos bands over x,z with K frequencies) adds spatial inductive bias for sharp pressure peak localization, improving high-spatial-frequency splits (single_in_dist, camber_rc).
+
+| Run | K | val_avg | test_avg | W&B |
+|-----|---|---------|----------|-----|
+| Pre-warmup K=4 | 4 | 76.18 | 66.58 | `kdv1oe8h` |
+| Pre-warmup K=8 | 8 | 74.91 | 64.56 | `hjewmotx` |
+| Pre-warmup K=12 | 12 | 73.33 | 63.85 | `5agqa3bm` |
+| **K=12 + warmup5 retest** | 12 | **73.16** | **63.89** | `osxp8woj` |
+| Baseline (d1lqln08) | — | 75.96 | 67.53 | `d1lqln08` |
+
+- **Merge decision:** val 73.16 is in 68.4-76.0 in-band zone (−3.7% val, −5.4% test). MERGED per pre-committed in-band rule + confirmed mechanism + decisive test-mean improvement. Per-split: single_in_dist (−9.6%), camber_rc (−8.2%) improve strongly; cruise (+6.4%) and re_rand (+1.7%) mildly worse.
+- **Analysis:** Monotone in K; K=12 is best. Zero latency overhead (sin/cos buffers, no learnable params). Key lesson: Fourier features trade cruise headroom for sharp-peak splits. The cruise regression is the main open negative — future work should target per-split Fourier scale or K optimization for smooth vs. sharp regimes. Schedule was noted as binding constraint (cosine 22% spent at cap) → motivates cosine-budget-match follow-up (#2302).
+
+## 2026-05-13 14:05 — PR #1918: Stochastic Depth (DropPath) in TransolverBlock — CLOSED
+
+- `willowpai2g24h3-fern/droppath-regularization`
+- **Hypothesis:** DropPath regularization at standard transformer rates on residual paths would disproportionately help the under-regularized camber_rc OOD split.
+
+| Arm | drop_path | val_avg | test_avg | W&B |
+|-----|-----------|---------|----------|-----|
+| 1 | 0.0 (baseline) | 76.39 | 67.44 | `41xzohdn` |
+| 2 | 0.1 | 82.17 | 72.62 | `uxdbut8u` |
+| 3 | 0.2 | 86.45 | 76.18 | `yzxvvjc7` |
+
+- **Analysis:** Monotone degradation as drop_path rises. Prediction failed — all 4 splits degrade proportionally. Mechanism: EMA already captures DropPath's variance-reduction effect (EMA gap narrows: 19.77 → 11.69). DropPath is redundant on this stack and adds regularization overhead. **Dropout/stochastic-depth axis closed on EMA+AMP stack.**
+
+## 2026-05-13 14:05 — PR #1721: Loss-level Re-reweighting by Reynolds number — CLOSED
+
+- `willowpai2g24h3-askeladd/re-loss-reweight`
+- **Hypothesis:** Continuous Re-temperature reweighting (re_loss_weight_temp) to tilt gradient toward high-Re samples without discrete sampler starvation.
+
+| Arm | temp | val_avg | test_avg | W&B |
+|-----|------|---------|----------|-----|
+| 1 | 0.0 (baseline) | 76.43 | 67.20 | `33a6sx2k` |
+| 2 | 0.3 | 78.50 | 69.26 | `6j9207pd` |
+| 3 | 1.0 | 81.77 | 72.47 | `np0pm394` |
+
+- **Analysis:** Monotone degradation as temperature rises — same failure as discrete Re-resampling (#1616). At t=1.0, re_factor spans 50× (0.046–2.299) which starves low-Re samples the same way. SmoothL1 already addresses gradient-dominance loss-side; adding sample-level Re-reweighting is redundant and harmful. **Re-weighting axis now fully closed** (tested via sampling #1616 and loss-weighting #1721).
+
 ## 2026-05-13 11:05 — PR #1998: Match cosine LR schedule T_max to AMP epoch budget — CLOSED
 
 - Student branch: `willowpai2g24h3-nezuko/cosine-budget-match`
