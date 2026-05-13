@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~05:35
+- **Date:** 2026-05-13 ~06:00
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,16 +9,16 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 63.017** (RMSNorm+GeGLU+Lion, PR #1837, epoch 13)
-**`test_avg/mae_surf_p` = 54.731**
+**`val_avg/mae_surf_p` = 57.328** (surf_weight=5 + RMSNorm+GeGLU+Lion, PR #1836, epoch 14)
+**`test_avg/mae_surf_p` = 49.387**
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 76.710 | 67.384 |
-| geom_camber_rc | 73.930 | 64.508 |
-| geom_camber_cruise | 40.746 | 34.707 |
-| re_rand | 60.683 | 52.327 |
-| **avg** | **63.017** | **54.731** |
+| single_in_dist | 60.960 | 53.010 |
+| geom_camber_rc | **72.044** | 62.463 |
+| geom_camber_cruise | 38.721 | 32.843 |
+| re_rand | 57.586 | 49.231 |
+| **avg** | **57.328** | **49.387** |
 
 ## What we've learned
 
@@ -27,19 +27,20 @@
 2. **GeGLU+Lion compound**: −25.3% (PR #1769)
 3. **Lion optimizer lr=1e-4**: −14.3% (PR #1725)
 4. **n_layers=6**: −9.4% (PR #1392)
-5. **mlp_ratio=4**: −5% (PR #1408)
-6. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
-7. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
+5. **surf_weight=5**: −9.0% val / −9.8% test (PR #1836) ← single_in_dist −20.5%
+6. **mlp_ratio=4**: −5% (PR #1408)
+7. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
+8. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
 
 ### Current stack (all defaults in train.py)
-- L1 (MAE) loss in normalized space, surf_weight=10
+- L1 (MAE) loss in normalized space, **surf_weight=5** (PR #1836)
 - n_layers=6, **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128, n_head=4, slice_num=64
 - Lion optimizer lr=1e-4, weight_decay=1e-4
 - CosineAnnealingLR T_max=50
 - bf16 mixed precision (autocast)
-- ~14 epochs in 30 min (RMSNorm ~138s/epoch vs 143s before)
+- ~14 epochs in 30 min (~138s/epoch)
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -51,77 +52,80 @@
 - **SmoothL1 β=0.1 on GeGLU+Lion**: +7.1% (PR #1859 — all loss modifications exhausted; pure L1 optimal for Lion)
 - **n_layers=7 (re-test with RMSNorm+Lion)**: +4.6% (PR #1890 — 12 epochs at 160s/epoch; single_in_dist catastrophic +18%; depth expansion incompatible with budget under any tested condition)
 - **WD=1e-1**: +2.72% (PR #1889 — over-regularizes; best_epoch=10, train descending while val climbs; WD space above 1e-2 exhausted)
+- **lr=2e-4 on RMSNorm stack**: +0.98% val (PR #1765 — RMSNorm tightened loss surface; lr=2e-4 overshoots on geom_camber_rc; test −1.23% ✓; pivot to lr=1.5e-4)
 - n_head=8: +43% per-epoch cost, +15.7% worse
 - slice_num=128: +12% per-epoch cost, +17.8% worse
 - EMA decay=0.999: cold-start drag (+41% worse)
 - Batch=8 (accum_steps=2): +23.6% worse (step-count limited)
 - Fourier L=4: +5.6% worse (doesn't compound with L1)
 - Width n_hidden=192: too slow/epoch
-- GeGLU with AdamW: essentially baseline (+0.04%), but too slow (210s/epoch); reassigned to Lion
 
 ### Key insights
 1. **Lion is structurally complementary to L1**: Both operate via sign direction; combined signal is clean
-2. **Budget is the constraint**: 30 min → ~13 epochs with GeGLU+Lion (~143s/epoch).
+2. **Budget is the constraint**: 30 min → ~14 epochs with current stack (~138s/epoch).
 3. **L1 loss in normalized space is validated**: channel-weighted loss hurts on GeGLU+Lion (+11%); GeGLU gates do implicit channel balancing — the gradient channel weights must stay equal.
-4. **AdamW hyperparameter space is exhausted**: All optimizer knobs tested. Lion is the new baseline optimizer.
-5. **Lion warmup (+2-epoch linear) confirmed on Lion+GELU (−9.9%)**: awaiting retest on GeGLU+Lion baseline.
-6. **Lion WD=1e-2 confirmed on Lion+GELU (−10.4%)**: awaiting retest on GeGLU+Lion baseline.
-7. **geom_camber_rc (89.2) and single_in_dist (72.0)** are now the hardest splits — reduced but still dominant
+4. **surf_weight=5 mechanism confirmed**: halving surface:volume ratio reallocates L1 gradient to volume nodes → richer volumetric features → better surface via geometric context. All 4 splits improved, vol MAE improved −7% to −26%.
+5. **AdamW hyperparameter space is exhausted**: All optimizer knobs tested. Lion is the new baseline optimizer.
+6. **Lion WD=1e-2 confirmed on Lion+GELU (−10.4%)**: awaiting retest on full RMSNorm+GeGLU+Lion+surf_weight=5 stack.
+7. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc became easier; single_in_dist became the primary bottleneck. surf_weight=5 cracked single_in_dist (−20.5% val).
+8. **geom_camber_rc (72.0 val) is now the hardest split** — primary target for further improvement.
 
-## Active experiments (Round 9 — all on RMSNorm+GeGLU+Lion baseline)
+## Active experiments (Round 10 — all on RMSNorm+GeGLU+Lion+surf_weight=5 baseline)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1765 | Lion lr=2e-4 (bug fix landed): rerun on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| askeladd | #1766 | Lion WD=1e-2 on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | NEW |
+| alphonse | #1765 | Lion lr=1.5e-4 (pivot from 2e-4): midpoint LR on RMSNorm+surf_w=5 stack | SENT BACK (pivot) |
+| askeladd | #1766 | Lion WD=1e-2 on RMSNorm+GeGLU+Lion (stale, needs rebase) | STALE WIP |
+| edward | #1925 | Lion WD=3e-2: bracket WD optimum between 1e-2 and 1e-1 | WIP |
 | tanjiro | #1872 | mlp_ratio=8 + GeGLU+Lion: recover fc2 capacity | WIP |
 | fern | #1790 | Lion + 2-epoch cosine warmup on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
 | nezuko | #1793 | Lion + T_max=12 aligned to budget on RMSNorm+GeGLU+Lion | SENT BACK (rerun needed) |
-| thorfinn | #1836 | surf_weight 5 on RMSNorm+GeGLU+Lion (rebase needed) | SENT BACK (rerun needed) |
-| frieren | #1920 | CosineAnnealingLR eta_min=1e-5: non-zero LR floor for Lion tail | NEW |
+| thorfinn | #1948 | surf_weight=3: sweep gradient budget further toward volume | NEW |
+| frieren | #1920 | CosineAnnealingLR eta_min=1e-5: non-zero LR floor for Lion tail | WIP |
 
 **Recently merged:**
-- frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test) ← new baseline 63.017
+- thorfinn #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (−9.03% val / −9.76% test) ← NEW BASELINE 57.328/49.387
+- frieren #1837: RMSNorm on GeGLU+Lion (−2.9% val / −5.9% test)
 
 **Recently closed:**
-- frieren #1890: n_layers=7 (+4.6%) — 160s/epoch → 12 epochs; single_in_dist catastrophic (+18%); depth incompatible with budget
-- edward #1889: WD=1e-1 (+2.72%) — over-regularizes; best_epoch=10, then val climbs while train descends
-- edward #1859: SmoothL1 β=0.1 (+7.1%) — all loss modifications exhausted; pure L1 optimal for Lion
+- frieren #1890: n_layers=7 (+4.6%) — depth incompatible with budget
+- edward #1889: WD=1e-1 (+2.72%) — over-regularizes
+- edward #1859: SmoothL1 β=0.1 (+7.1%) — all loss modifications exhausted
 - edward #1767: channel-weighted L1 (+11%) — GeGLU gates do implicit channel balancing
 - tanjiro #1824: SwiGLU (+1.6%) — GELU's negative gate range benefits CFD features
 
 ## Critical infra issue: train.py:440 LR hardcoding bug
 
-Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`lr=cfg.lr`, plus `Config.lr` default updated to 1e-4). Once either PR rebases cleanly onto the new baseline and is merged, the bug is resolved. Until then, any LR experiment with `--lr != 1e-4` is silently broken.
+Discovered by askeladd in #1766; alphonse's #1765 also contains the same fix (`lr=cfg.lr`, plus `Config.lr` default updated to 1e-4). Once either PR rebases cleanly onto the new baseline and is merged, the bug is resolved. **Until then, any LR experiment with `--lr != 1e-4` is silently broken.** alphonse confirmed fix works (config shows lr=0.0002 was applied correctly in their rerun).
 
-> Note: This is the first round where 0 students are running on the Lion+GELU pre-GeGLU baseline. All experiments now target the GeGLU+Lion 64.918 baseline.
+## Round 10 priorities (surf_weight=5 + RMSNorm+GeGLU+Lion baseline, val=57.328)
 
-## Round 8/9 priorities (GeGLU+Lion baseline)
+**Tier 1 (direct surf_weight sweep):**
+1. **surf_weight=3** (thorfinn #1948): sweep further — mechanism is confirmed monotonic; geom_camber_rc at 72.0 still has significant room.
 
-**Tier 1 (directly on new RMSNorm baseline):**
-1. **n_layers=7** (frieren #1890): previous failure was at 205s/epoch on AdamW; RMSNorm+Lion+GeGLU+bf16 now ~138s → 11 epochs at 7 layers. Re-test under much better conditions.
-2. **mlp_ratio=8 + GeGLU** (tanjiro #1872): recover fc2 capacity halved by GeGLU split.
-3. **Lion WD=1e-1** (edward #1889): upper end of paper recommendation; brackets optimum vs askeladd's concurrent WD=1e-2.
+**Tier 2 (optimizer tuning — need rebase to new surf_weight=5 baseline):**
+2. **Lion WD=1e-2** (askeladd #1766, stale): confirmed −10.4% on Lion+GELU; rebase to new baseline and rerun. Critical to land — WD bracket experiments depend on it.
+3. **Lion WD=3e-2** (edward #1925): brackets WD optimum; in-flight.
+4. **Lion lr=1.5e-4** (alphonse #1765): pivot from 2e-4 which overshot; first time lr > 1e-4 is tested on full stack.
 
-**Tier 2 (mechanism confirmation — confirmed on pre-GeGLU/pre-RMSNorm; need rebase+rerun):**
-4. **Lion WD=1e-2** (askeladd #1766): confirmed −10.4% on Lion+GELU; now rerun on full RMSNorm+GeGLU+Lion stack.
-5. **Lion + 2-epoch warmup** (fern #1790): confirmed −9.9% on Lion+GELU; now rerun on full stack.
-6. **Lion lr=2e-4** (alphonse #1765): confirmed −7.8% on Lion+GELU; now rerun on full stack.
-7. **Lion + T_max=12** (nezuko #1793): confirmed −9.18% on Lion+GELU; now rerun on full stack.
-8. **surf_weight=5** (thorfinn #1836): confirmed −2.74% on GeGLU+Lion (just missed RMSNorm baseline); rerun on RMSNorm stack.
+**Tier 3 (schedule/architecture — need rebase):**
+5. **Lion + 2-epoch warmup** (fern #1790): confirmed −9.9% on Lion+GELU; rerun on full stack.
+6. **Lion + T_max=12** (nezuko #1793): confirmed −9.18% on Lion+GELU; rerun on full stack.
+7. **mlp_ratio=8 + GeGLU** (tanjiro #1872): recover fc2 capacity halved by GeGLU split.
+8. **CosineAnnealingLR eta_min=1e-5** (frieren #1920): non-zero LR floor for Lion tail.
 
 **Queued ideas for next idle students (after current round lands):**
-- **RMSNorm + surf_weight=5**: if thorfinn's rerun lands positive, compound already confirmed
+- **surf_weight=2**: if surf_weight=3 still improves, keep sweeping
+- **geom_camber_rc-targeted experiments**: this split (72.0 val) now dominates the average; worth targeted interventions
 - **n_hidden widening 128→160**: capacity without restructuring MLP; ~225s/epoch is tight (~9 epochs, risky)
 - **PhysicsAttention slice_num=48**: slight reduction for faster epochs; might help convergence
 - **Lion WD=5e-2 or WD=2e-2**: further brackets after edward's WD=3e-2 and askeladd's WD=1e-2 land
 
 ## Key constraints
 
-- 30 min / run cap: Lion → ~11 epochs (~165s/epoch estimated with bf16+Lion)
+- 30 min / run cap: ~14 epochs at 138s/epoch
 - Per-epoch time eliminates: n_head=8 (+43%), slice_num=128 (+12%), n_layers=7 (~160s/epoch even with RMSNorm+Lion; confirmed dead in PR #1890)
 - EMA: cold-start drag, incompatible with short budget
 - Batch increase: always worse (step-count limited)
 - Gradient clipping: always worse (oscillations are useful)
-- Dropout: always worse (model is underfitting at 11 epochs)
+- Dropout: always worse (model is underfitting at 14 epochs)

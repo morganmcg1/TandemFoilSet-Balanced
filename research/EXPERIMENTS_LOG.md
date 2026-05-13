@@ -6,6 +6,49 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 05:45 — PR #1836: surf_weight=5 on RMSNorm+GeGLU+Lion — MERGED (−9.03% val, −9.76% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/surf-weight-5-rmsnorm-geglu-lion
+- **Hypothesis:** Halving surf_weight (10→5) reallocates L1 gradient budget toward volume nodes; richer volumetric features improve surface accuracy via geometric context. Hardest splits (geom_camber_rc, single_in_dist) benefit most.
+- **Result:** val=57.328, test=49.387 (epoch 14, 30-min cap, ~138s/epoch)
+
+| Split | val (surf_w=5) | val (baseline surf_w=10) | Δ | test (surf_w=5) | test (baseline) | Δ |
+|---|---|---|---|---|---|---|
+| single_in_dist | **60.960** | 76.710 | **−20.5%** | **53.010** | 67.384 | **−21.3%** |
+| geom_camber_rc | **72.044** | 73.930 | −2.6% | **62.463** | 64.508 | −3.2% |
+| geom_camber_cruise | 38.721 | 40.746 | −5.0% | 32.843 | 34.707 | −5.4% |
+| re_rand | 57.586 | 60.683 | −5.1% | 49.231 | 52.327 | −5.9% |
+| **avg** | **57.328** | **63.017** | **−9.03% ✓** | **49.387** | **54.731** | **−9.76% ✓** |
+
+- **Volume MAE confirmed improved** on all 4 splits (−7% to −26%), confirming gradient-reallocation mechanism
+- **single_in_dist standout** (−20.5% val): after RMSNorm fixed geom_camber_rc (−17.2%), single_in_dist became most volume-starved — surf_weight=5 cracked it
+- **All four splits improved** on both val and test — the cleanest, most uniform sweep win yet
+- **Metric artifacts:** `models/model-charliepai2g48h3-thorfinn-surf-weight-5-rmsnorm-geglu-lion-20260513-041441/metrics.jsonl`
+- **Reassigned thorfinn:** PR #1948 surf_weight=3 (sweep further down)
+
+---
+
+## 2026-05-13 05:40 — PR #1765: Lion lr=2e-4 (rebased onto RMSNorm stack) — SENT BACK (pivot to lr=1.5e-4)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/lion-lr-2e-4
+- **Result on new RMSNorm+GeGLU+Lion stack:** val=63.635, test=54.060 vs baseline 63.017/54.731
+
+| Split | val (lr=2e-4) | val (baseline lr=1e-4) | Δ |
+|---|---|---|---|
+| single_in_dist | 72.015 | 76.710 | **−6.1%** |
+| geom_camber_rc | 82.155 | 73.930 | **+11.1%** |
+| geom_camber_cruise | 38.985 | 40.746 | −4.3% |
+| re_rand | 61.384 | 60.683 | +1.2% |
+| **avg** | **63.635** | **63.017** | **+0.98%** (misses) |
+
+- **Test avg:** 54.060 vs 54.731 = −1.23% ✓ (test improves but val is primary metric)
+- **Insight:** RMSNorm tightened the loss surface — lr=2e-4 overshoots specifically on geom_camber_rc (the OOD geometry split now with a tighter noise landscape post-RMSNorm). Three of four splits improved. LR sweet spot has shifted down on the new stack.
+- **Action:** Sent back to try lr=1.5e-4. Also updated target to new baseline (57.328 / 49.387 after #1836 merge). lr=cfg.lr bug fix preserved.
+
+---
+
 ## 2026-05-13 05:30 — PR #1890: n_layers=7 + RMSNorm+GeGLU+Lion — CLOSED (+4.6% val regression)
 
 - **Student:** charliepai2g48h3-frieren
