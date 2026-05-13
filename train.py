@@ -446,7 +446,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=192,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -465,10 +465,12 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.we
 # OneCycleLR(max_lr=8e-4) — single super-convergence schedule replacing SequentialLR.
 # pct_start=0.1 => ~2.1ep warmup at bs=1 (750 batches/ep), smooth C1-continuous curve.
 # div_factor=25 => initial_lr=3.2e-5; final_div_factor=10 => final_lr=3.2e-6.
-# T_MAX_EPOCHS=21 matches current bs=1 baseline (#2012 fit 21 epochs at 30-min cap).
+# T_MAX_EPOCHS=15 for n_hidden=192: per-epoch ~108s observed (vs ~85s at n_hidden=128),
+# so only ~16 epochs fit in 30-min cap; reducing to 15 leaves headroom for test eval
+# and lets OneCycleLR fully anneal in the available time (formula: floor(1800/108)-1).
 # Loop is capped at T_MAX_EPOCHS to prevent stepping past total_steps (OneCycleLR
 # would raise on the (total_steps+1)-th call).
-T_MAX_EPOCHS = 21
+T_MAX_EPOCHS = 15
 n_batches_per_epoch = math.ceil(len(train_loader))
 total_steps = T_MAX_EPOCHS * n_batches_per_epoch
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
