@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-13 14:35 — PR #2277: surf_weight lower probe sw=4 vs sw=3 on n_head=2 (nezuko) — CLOSED, sw=3 BEATS OLD BASELINE BUT LOSES TO NEW
+
+- **Branch:** `willowpai2g24h5-nezuko/surf-weight-lower`
+- **Hypothesis:** Extend monotonic sw curve below sw=5 (#2210 winner). Test sw=4 and sw=3.
+- **W&B runs:** `pn9utnpz` (Arm 1: sw=4), `g1gbebnj` (Arm 2: sw=3, winner)
+
+| Arm | sw | val | test | Δ vs #2210 (50.91/43.68) | Δ vs #2218 (49.86/42.19) |
+|-----|-----|------|------|--------------------------|--------------------------|
+| 1 | 4 | 51.16 | 43.66 | +0.49% / −0.05% | +2.6% / +3.5% |
+| **2 (winner)** | **3** | **50.23** | **42.84** | **−1.34% / −1.92%** | +0.7% / +1.5% |
+
+**Per-test-split (Arm 2, sw=3):** single_in_dist=46.87 (+0.45), geom_camber_rc=57.81 (−0.79), geom_camber_cruise=25.79 (−1.54), re_rand=40.90 (−1.49). Wins 3/4 test splits.
+
+**Result:** CLOSED. sw=3 cleanly beats the OLD baseline (#2210, sw=5) but cannot merge on the NEW baseline (#2218, slice_num=32). Key findings:
+1. **Non-monotonic in [3, 5]:** sw=3 < sw=5 < sw=4 on val (sw=4 is local maximum).
+2. **Strong geom_camber_cruise improvement** at lower sw (Arm 1: −6.1%, Arm 2: −5.6%) — surface emphasis was under-fitting OOD camber.
+3. **All arms still descending at cap** — absolute numbers under-converged.
+
+These runs used slice_num=64 (pre-#2218). Combined with #2335 (alphonse, sw=5 on slice_num=32 in progress), the natural follow-up tests lower sw on the new compound.
+
+**Nezuko reassigned:** PR #2372 — sw=2 vs sw=3 on slice_num=32 baseline (extend low end + confirm transfer of #2277 win).
+
+---
+
 ## 2026-05-13 13:50 — PR #2218: slice_num sweep slice_num=32 vs slice_num=128 on n_head=2 (alphonse) — MERGED NEW BEST
 
 - **Branch:** `willowpai2g24h5-alphonse/slice-num-sweep-n-head-2`
