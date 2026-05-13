@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 10:15 (MERGED #2012 edward loss-beta-0-5 val=66.32 NEW BEST; CLOSED #2089 fern wd-2e-4 flat; SENT BACK #2125 tanjiro β2=0.95 for rerun on new HEAD; assigned edward #2162 t-max-20-bs1, fern #2164 loss-beta-0-25-bs1, tanjiro #2125 β2 rerun; 15 effective merges)
+- **As of:** 2026-05-13 11:00 (SENT BACK #2106 alphonse lr-4e-4 val=69.75 — beat OLD bs=1 not NEW bs=1+beta=0.5, rerun on new HEAD; status-sync to #1540 askeladd EMA pod actively training on val=66.32 HEAD; #1992 frieren and #1968 thorfinn bumped to rebase; 15 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -79,6 +79,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 | **loss-beta-0-5 + bs=1 (edward #2012)** | **66.32** | **59.68** | **MERGED — CURRENT BEST** |
 | batch-size-1 (alphonse #2036) | 70.30 | 61.39 | MERGED → superseded |
 | adamw-beta2-0-95 (tanjiro #2125) | 69.74 | 62.37 | SENT BACK — val improved OLD baseline, test regressed; rerun on new HEAD |
+| lr-4e-4-bs1 (alphonse #2106) | 69.75 | 61.03 | SENT BACK — val −0.55 vs OLD bs=1, but doesn't beat NEW; rerun with beta=0.5 stack |
 | batch-size-2 (alphonse #1972) | 76.24 | 66.85 | MERGED → superseded |
 | loss-beta-0-5 on bs=4 (edward #2012 first run) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
 | mlp-ratio-1 (frieren #1992) | 81.91 | 73.12 | SENT BACK — beat old, not new baseline |
@@ -97,7 +98,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP (sent back)** — Rerun on new HEAD (beta=0.5). Two arms: β2=0.95 and β2=0.99.
 
 ### LR tuning
-- **PR #2106 — `lr-4e-4-bs1` (alphonse)** — **WIP** — LR downward bracket at bs=1.
+- **PR #2106 — `lr-4e-4-bs1` (alphonse)** — **WIP (sent back 10:57)** — first run val=69.75 (−0.55 OLD bs=1 baseline, doesn't beat NEW 66.32). Rerun with lr=4e-4 + beta=0.5 stack.
 - **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP** — LR upper bracket at bs=1 (rerunning).
 
 ### Schedule shape

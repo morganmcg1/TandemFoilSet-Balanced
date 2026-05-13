@@ -2,6 +2,27 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:00 — PR #2106: [lr-4e-4-bs1] Lower LR 5e-4→4e-4 at bs=1 — **SENT BACK (val improved OLD baseline, not NEW)**
+- Student branch: `charliepai2g48h4-alphonse/lr-4e-4-bs1`
+- Hypothesis: At bs=1 (1500 steps/epoch, 4× the original bs=4 regime), the LR optimum shifts downward; lr=4e-4 should improve generalization.
+
+| Metric | lr=4e-4 (this) | OLD baseline bs=1+beta=1.0 (#2036) | Δ vs OLD | NEW baseline bs=1+beta=0.5 (#2012) | Δ vs NEW |
+|---|---|---|---|---|---|
+| val_avg/mae_surf_p | 69.75 | 70.30 | **−0.55 ✓** | 66.32 | **+3.43 ❌** |
+| test_avg/mae_surf_p | 61.03 | 61.39 | **−0.36 ✓** | 59.68 | **+1.35 ❌** |
+| val single_in_dist | 73.26 | 74.15 | −0.89 | — | — |
+| val geom_camber_rc | 83.86 | 81.11 | +2.75 ❌ | — | — |
+| val geom_camber_cruise | 51.69 | 53.67 | −1.98 ✓ | — | — |
+| val re_rand | 70.17 | 72.28 | −2.11 ✓ | — | — |
+| best_epoch | 20/21 | 18/19 | +2 | — | — |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-lr-4e-4-bs1-20260513-095248/metrics.jsonl`
+- 21 epochs; best epoch 20 on the cosine rebound (cosine T_max=17 ends at ep18 then lr rises ep19-21: 5.3e-5 → 6.2e-5 → 7.6e-5).
+
+**Analysis:** The lower-LR mechanism holds — best-epoch shifted later (18→20) and 3/4 splits improved both val and test, consistent with "slower convergence yields tighter checkpoint before cosine rebound". camber_rc val regressed +2.75 but test improved −1.86, so split-level noise more than signal. Net result is robust but small (within seed-σ band). Since edward's beta=0.5 merge (PR #2012) advanced baseline to val=66.32, this result no longer wins. **Sent back to rerun with lr=4e-4 + beta=0.5 stacked on current HEAD.** Mechanisms should compound: LR (step magnitude) and beta (loss shape) operate orthogonally. Worth noting alphonse independently observed the same T_max=17 schedule misalignment that edward's #2162 (T_max=20) is now testing.
+
+---
+
 ## 2026-05-13 10:10 — PR #2125: [adamw-beta2-0-95] AdamW β2 0.999→0.95 at bs=1 — **SENT BACK (val/test split, rerun on new HEAD)**
 - Student branch: `charliepai2g48h4-tanjiro/adamw-beta2-0-95`
 - Hypothesis: bs=1's high-variance single-sample gradients benefit from faster second-moment adaptation (EMA half-life ~14 steps vs ~693 at β2=0.999).
