@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import subprocess
@@ -47,6 +48,11 @@ from data import (
     load_test_data,
     pad_collate,
 )
+
+def log_cosh_loss(x):
+    """Log-cosh: log(cosh(x)). Smooth robust loss, no threshold hyperparameter."""
+    return x + torch.nn.functional.softplus(-2.0 * x) - math.log(2.0)
+
 
 # ---------------------------------------------------------------------------
 # Transolver model
@@ -263,7 +269,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            elem_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            elem_err = log_cosh_loss(pred - y_norm)
             vol_mask = mask & ~is_surface & sample_mask
             surf_mask = mask & is_surface & sample_mask
             vol_loss_sum += (
@@ -507,12 +513,13 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            elem_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            elem_err = log_cosh_loss(pred - y_norm)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum().clamp(min=1) * pred.shape[-1])
-            surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * pred.shape[-1])
+            n_channels = pred.shape[-1]
+            vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum().clamp(min=1) * n_channels)
+            surf_loss = (elem_err * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum().clamp(min=1) * n_channels)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
             if not torch.isfinite(loss):
