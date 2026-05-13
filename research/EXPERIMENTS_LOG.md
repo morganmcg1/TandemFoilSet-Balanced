@@ -1121,3 +1121,93 @@ The three regularization closures in this branch (mlp_ratio, drop_path, attentio
 
 **Data-side augmentation family now has 2 parallel tests:** fern (node-level) and edward (sample-level). If either lands, opens a productive wave-7 family. If both land, compound stack test becomes wave-7 priority.
 
+---
+
+## 2026-05-13 02:50 — PR #1739 closure (alphonse, surf-Huber/vol-MSE on FiLM)
+
+- **Branch:** `willowpai2g48h2-alphonse/loss-kind-surf-huber-vol-mse-on-filmed`
+- **Hypothesis:** Apply Smooth-L1 (Huber β=1.0) to surface loss, swap volume loss to MSE on the merged FiLM baseline. Tests whether the surf-Huber/vol-MSE mechanism from alphonse's wave-3 #1618 win still operates compositionally with FiLM.
+
+### Result table (W&B run, terminal SENPAI-RESULT)
+
+| Metric | Value | vs FiLM baseline (80.82 / 71.30) | Note |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (SWA) | **84.18** | **+4.16%** (z=+1.61 vs σ=1.23) | Outside seed-variance band, in close-zone |
+| `test_avg/mae_surf_p` (SWA, 4-split) | 74.61 | +4.64% (z=+0.93 vs σ=1.64) | Inside seed-variance on test |
+| `val_single_in_dist` | — | +12.93% | Concentrated regression on ID split |
+| `val_geom_camber_rc` | — | z≤+0.59 | Within seed-variance |
+| `val_geom_camber_cruise` | — | z≤+0.59 | Within seed-variance |
+| `val_re_rand` | — | z≤+0.59 | Within seed-variance |
+
+### Decision
+
+- **Closed** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1739#issuecomment-4436510726
+- Rationale: clean negative on val (val≥84 close-zone per decision rule), regression concentrated on `single_in_dist`, cross-condition splits all within seed-variance.
+
+### Analysis — mechanism finding
+
+**FiLM has absorbed the per-domain optimization mechanism.** The wave-3 #1618 win (-3% from surf-Huber/vol-MSE on no-FiLM stack) was substituting for what FiLM now provides explicitly via per-layer global modulation. With FiLM in the stack:
+- Cross-condition splits (camber_rc, camber_cruise, re_rand) all land within seed-variance (z≤+0.59) — FiLM's per-sample modulation handles the cross-condition adaptation that surf-Huber/vol-MSE used to provide.
+- Regression concentrates on `single_in_dist` (+12.93% val) — pure in-distribution capacity loss from vol-MSE's harder optimization landscape.
+
+**Implication:** the loss-kind-per-domain axis is **closed at FiLM-scale** — FiLM provides the mechanism more cleanly than loss-shape. The wave-3 → wave-6 progression shows mechanisms absorbed by architectural innovations.
+
+### Reassignment to PR #1818: slice_num 64→128 (intra-slice-routing capacity)
+
+Pivoting alphonse onto the slice-routing capacity axis (alphonse's own follow-up suggestion):
+- Mechanism: expand `slice_num` from 64 to 128 — mechanism-orthogonal to closed generic-capacity axes (n_hidden, mlp_ratio).
+- Slice_num expansion targets the discrete categorical capacity in slice-routing (number of "physics slices"), not per-feature dimensional capacity.
+- Compositional bet: FiLM provides per-sample routing-modulation context; more slices give FiLM more routing options to differentiate.
+
+---
+
+## 2026-05-13 02:55 — PR #1702 closure (askeladd, per-channel p-weight 2.0/3.0)
+
+- **Branch:** `willowpai2g48h2-askeladd/per-channel-p-weight-on-filmed`
+- **Hypothesis:** Up-weight surface-pressure loss (p_weight ∈ {2.0, 3.0}) on the merged FiLM baseline. Tests whether pressure prediction is gradient-starved relative to Ux/Uy in normalized space.
+
+### Result table (W&B run, terminal SENPAI-RESULT)
+
+| Arm | val_avg/mae_surf_p (SWA) | test_avg/mae_surf_p | val Δ vs 80.82 |
+|---|---|---|---|
+| p_weight=2.0 | 83.40 | 73.78 | +3.20% |
+| p_weight=3.0 | **84.00** | 74.92 | **+3.92%** |
+
+### Decision
+
+- **Closed** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1702#issuecomment-4436512231
+- Rationale: best arm (p=3.0) val=84.00, outside seed-variance band, clean negative on val.
+
+### Analysis — mechanism finding (diagnostic falsified premise)
+
+**The premise was wrong.** Askeladd's per-batch loss-component logging showed:
+- `p_vol / Ux_vol` ratio: 0.78 → 0.60 over training
+- `p_vol / Uy_vol` ratio: 0.88 → 0.56 over training
+- **Pressure is easier in normalized space**, not harder. Ux and Uy account for the larger residual fraction.
+
+Up-weighting pressure was the wrong direction: it focused the optimizer on what was already easy. Only the `geom_camber_cruise` split improved (physically pressure-dominated due to small velocity changes at cruise) — confirming the physics-direction of the perturbation is intelligible, just inverted.
+
+**High-information finding:** the per-channel loss balance asymmetry is real but pointing toward Ux/Uy being under-optimized, not pressure.
+
+### Reassignment to PR #1821: uxuy_weight=2.0 (inverse direction)
+
+Pivoting askeladd onto the inverse direction informed directly by their own #1702 diagnostic:
+- Mechanism: up-weight vol Ux and Uy loss components by 2.0× (NOT surface-pressure).
+- Headline-metric-friendly: surface-pressure loss is unchanged; the effect on `val_avg/mae_surf_p` should propagate via the shared backbone's better-balanced vol optimization.
+- This is the direct scientific follow-up to their own diagnostic. The per-channel-weighting axis is now testing both directions cleanly.
+
+### Wave-6 portfolio status (8 students, all active, two reassignments)
+
+| PR | Student | Status | Mechanism axis |
+|---|---|---|---|
+| #1818 | alphonse | WIP (NEW) | Slice_num 64→128 (intra-routing capacity) |
+| #1821 | askeladd | WIP (NEW) | uxuy_weight=2.0 (inverse direction from #1702) |
+| #1731 | nezuko | WIP | Gradient clipping |
+| #1734 | thorfinn | WIP (re-running asinh(0.5·p)) | Value-level transform (gentler) |
+| #1757 | frieren | WIP | β=0.3 on FiLM |
+| #1758 | fern | WIP | Mesh-node subsampling (data-side aug, node-level) |
+| #1760 | tanjiro | WIP | FiLM mid_dim 64→128 |
+| #1787 | edward | WIP | Re-jitter (data-side aug, sample-level) |
+
+**Closed-axis count: 10.** Newly added: loss-kind axis at FiLM-scale (#1739, FiLM absorbed the mechanism); per-channel p-weighting up-direction (#1702, diagnostic falsified premise — inverse direction now in test).
+
