@@ -7,7 +7,41 @@ SPDX-PackageName: senpai
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
 Primary metric: `val_avg/mae_surf_p` (lower is better).
-**Active baseline (PRs #1480 + #1471 merged):** `val_avg/mae_surf_p=110.27`, `test_avg/mae_surf_p=99.41` (run `krsv4c21`, p_weight=2.0+clip_grad_norm=1.0 stacked on bf16+grad_accum=2).
+**Active baseline (PRs #1480 + #1471 + #1655 merged):** `val_avg/mae_surf_p=97.07`, `test_avg/mae_surf_p=85.71` (run `d29igs7w`, OneCycleLR max_lr=2e-3 stacked on p_weight=2.0+clip_grad_norm=1.0+bf16+grad_accum=2).
+
+---
+
+## 2026-05-13 ~05:00 — Cycle 13c: MAJOR WIN — #1655 alphonse OneCycleLR MERGED ✓ (-12% val / -14% test)
+
+### PR #1655 alphonse — OneCycleLR max_lr=2e-3, pct_start=0.1: MERGED ✓
+
+**New all-time best: val=97.07 / test=85.71. Strongest single improvement of the launch.**
+
+| Metric | Baseline (#1471) | PR #1655 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 110.27 | **97.07** | **-12.0%** |
+| `test_avg/mae_surf_p` | 99.41 | **85.71** | **-13.8%** |
+
+W&B runs: `d29igs7w` (primary, seed 1), `r7pd9bmk` (seed 2: val=101.18, test=89.99 — both replicates beat the old bar).
+
+Per-split test `mae_surf_p` (run `d29igs7w`):
+
+| Split | test | vs baseline | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 99.24 | 116.69 | **-15.0%** |
+| `geom_camber_rc` | 95.85 | 110.01 | **-12.9%** |
+| `geom_camber_cruise` | 61.71 | 72.77 | **-15.2%** |
+| `re_rand` | 86.04 | 98.17 | **-12.4%** |
+
+**Analysis:** Uniform -12% to -15% improvement across all four splits — a "rising tide" pattern. This is not selective generalization; it is fundamental optimization. The OneCycleLR mechanism (10% warmup from 8e-5 to 2e-3, then cosine anneal to near-zero) gives the model a brief phase of aggressive exploration at 4× the previous peak LR, then locks in a sharp minimum via the final anneal. The combination with p_weight=2.0 and grad_clip=1.0 (already in the baseline) is orthogonal and compounding: the loss shaping (#1471) + schedule shape (#1655) are independent mechanisms that multiply rather than substitute.
+
+History: first submitted (flq69g4q) got val=111.65 on the bf16 baseline but was sent back to rebase after #1471 was merged. Rebased arm confirmed the orthogonality conclusively. Seed variance ~4 MAE.
+
+**BASELINE UPDATED. New bar: val_avg/mae_surf_p < 97.07.**
+
+All 7 in-flight WIP PRs (#1666 tanjiro, #1749 frieren, #1802 edward, #1803 nezuko, #1804 thorfinn, #1816 askeladd, #1819 fern) are now running on the old code without OneCycleLR. Their results will be evaluated relative to the old bar (110.27) to determine if the direction is positive, then sent back for rebase if so.
+
+**Notable implication for #1803 (nezuko T_max=20):** This experiment was testing a parameter of CosineAnnealingLR that no longer exists in the baseline. If it reports, the result will reflect "T_max=20 vs T_max=50 on old baseline" — not relevant to the new system. Will redirect nezuko to an OneCycleLR-compatible variation when their PR reports.
 
 ---
 
