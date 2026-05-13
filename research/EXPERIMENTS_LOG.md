@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-13 03:01 — PR #1815: Mesh node dropout 0.9 (askeladd) — SENT BACK (rebase + re-run)
+
+- **Branch:** `charliepai2g48h2-askeladd/node-dropout-0.9`
+- **Hypothesis:** Random Bernoulli(0.9) keep-mask on volume mesh nodes during training only (surface nodes always kept). Regularizes memorization of per-sample node-position → value mappings.
+- **Metric artifacts:** `models/model-charliepai2g48h2-askeladd-node-dropout-0.9-20260513-021700/metrics.jsonl`
+
+### Results vs. pre-asinh baseline (#1776, 80.7014)
+
+| Split | Baseline (#1776) | Node-drop 0.9 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 97.712 | 95.792 | **−1.97%** |
+| val_geom_camber_rc | 94.420 | 94.444 | +0.03% |
+| val_geom_camber_cruise | 55.330 | 55.119 | −0.38% |
+| val_re_rand | 75.344 | 73.867 | **−1.96%** |
+| **val_avg/mae_surf_p** | **80.7014** | **79.8056** | **−1.11%** |
+| test_avg/mae_surf_p | 71.9145 | 70.8162 | −1.53% |
+
+**Decision:** Sent back for rebase. Result vs current baseline 79.8623 is only −0.07% (within noise) because askeladd's run did not include asinh-pressure compression (PR #1777 merged mid-run). The per-split signal (val_single −1.97%, val_re_rand −1.96%) is a real memorization-regularizer mechanism, on different splits than asinh's wins (val_cruise −2.40%, val_re_rand −2.97%). Predicted stacking combined val_avg: ~78.5–79.0. Rebased re-run will confirm or refute.
+
+---
+
+## 2026-05-13 03:01 — PR #1814: lr=1e-3 + 4-epoch warmup (alphonse) — SENT BACK (rebase + re-run)
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-1e-3-warmup4`
+- **Hypothesis:** Push peak LR 7e-4 → 1e-3 on the 4-epoch warmup buffer. Hypothesis: 7e-4 was implicitly calibrated for 2-epoch warmup; with 4-epoch warmup the stability floor for peak LR has shifted.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-1e-3-warmup4-20260513-020847/metrics.jsonl`
+
+### Results vs. pre-asinh baseline (#1776, 80.7014)
+
+| Split | Baseline (#1776) | lr=1e-3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 97.712 | 93.876 | **−3.93%** |
+| val_geom_camber_rc | 94.420 | 94.522 | +0.11% |
+| val_geom_camber_cruise | 55.330 | 57.766 | **+4.40%** |
+| val_re_rand | 75.344 | 74.973 | −0.49% |
+| **val_avg/mae_surf_p** | **80.7014** | **80.2842** | **−0.52%** |
+| test_avg/mae_surf_p | 71.9145 | 70.6729 | −1.73% |
+
+**Decision:** Sent back for rebase. Result vs current baseline 79.8623 is +0.53% (regressed) because run did not include asinh-pressure. The val_single −3.93% is the largest single-split gain we've measured from a 1-line change; val_cruise +4.40% is a regression but asinh-pressure's largest win was on exactly that split (−2.40%). Strong reason to expect constructive stacking: alphonse's higher LR escapes local minima on val_single/val_re_rand while asinh holds val_cruise. Predicted combined val_avg: ~78.6–79.2. Rebased re-run will confirm.
+
+---
+
 ## 2026-05-12 18:55 — PR #1418: Per-channel loss weight: upweight pressure 3×
 
 - **Branch:** `charliepai2g48h2-askeladd/pressure-channel-weight`
