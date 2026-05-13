@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 11:30
+- **Date:** 2026-05-13 11:50
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -52,7 +52,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | edward | #2024 | EMA decay 0.999 → 0.998 on 11-compound stack | Optimization (EMA) | WIP | #1833 CLOSED (stale, never completed training). At #1953 EMA−live gap is −8.32 (vs +0.42 at #1899). Halving EMA half-life (693→346 steps) should let EMA track the live model's improvements in the new T_max=50 schedule tail |
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 11-merge stack |
 | frieren | #2023 | n_hidden 192 → 224 width push on 11-compound stack | Architecture (width) | WIP | #1898 CLOSED (mechanism fully captured by #1953 merge; n_hidden=128 not competitive vs 192 on T_max=50 stack). Compact-but-wide hypothesis says width compounds further. Tests if 224 still improves or width plateaus |
-| nezuko | #1994 | n_head=4→8 — attention head diversity | Architecture (attention) | WIP | #1878 CLOSED (+10.5% regression; mlp_ratio=1 already +0.99% on n_layers=3 stack). FFN capacity-down bracketed: mlp_ratio=2 is optimum. Testing attention diversity: 8 heads with head_dim=24 on n_hidden=192. PRE-T_max=50 stack — likely needs retest |
+| nezuko | #2053 | mlp_ratio 2 → 3 — FFN capacity bracket on 11-compound + T_max=50 | Architecture (FFN width) | WIP | #1994 CLOSED (n_head=8 gave uniform slight regression across all 4 splits at +13.6% vs new baseline; mechanism falsified, not just protocol-stale). mlp_ratio=4 failed on n_layers=5 stack (#1544); mlp_ratio=1 failed on n_layers=3 (#1878). Tests if longer schedule + wider model surfaces FFN headroom |
 | tanjiro | #1982 | grad-clip max_norm=2.5 — RETEST with --epochs 50 | Gradient stability (threshold scan) | WIP-REBASE | Initial v1 result (val=66.13) ran at --epochs 30 / T_max=30 — protocol-stale post-#1953. Sent back for clean `--epochs 50 --n_hidden 192 --n_layers 3` retest. Two outcomes: (A) val < 55.76 → grad-clip threshold further compounded; (B) val ≥ 55.76 → U-shape confirmed at 2.5/5.0 |
 | thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
@@ -107,8 +107,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 ### Architecture (FFN capacity-down — LOSS)
 - **mlp_ratio=1** (#1878, nezuko) — +10.5% vs current 10-compound baseline; +0.99% vs n_layers=3 baseline. **CLOSED.** FFN capacity is not the bottleneck at n_layers=3 + n_hidden=192. mlp_ratio=2 is the optimum for this 1500-sample dataset. Per-axis capacity-down matrix: depth-down WIN, FFN-down LOSS, slice-down in-flight (#1841).
 
-### Attention configuration (NEW direction — opens with nezuko #1994)
-- **n_head=8** (#1994, nezuko) — in progress. Doubles attention heads 4→8, head_dim 48→24. Tests whether attention diversity improves generalization on geometry+physics+Re multi-aspect task.
+### Attention configuration
+- **n_head=8** (#1994, nezuko) — **CLOSED**. val=63.35 (vs new baseline 55.76, **+13.61% regression**). All 4 splits regress slightly uniformly (in_dist +0.054, camber_rc +0.549, camber_cruise +0.289, re_rand +0.279). Mechanism falsified: head_dim=24 is below the bottleneck threshold; PhysicsAttention slice geometry already partitions the input space, further sub-partitioning dilutes signal. n_head=4 (head_dim=48 at n_hidden=192) confirmed local optimum. Attention-head axis now bracketed.
 
 ### Architecture (capacity-down + width reinvestment — winning direction)
 - **n_layers=3** (#1875 v2, frieren) — MERGED, −2.78% val. 35% throughput boost, param count 0.23× baseline. Val descending at final epoch.

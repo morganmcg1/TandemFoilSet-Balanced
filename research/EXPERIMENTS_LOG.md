@@ -1161,3 +1161,30 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Single-line code change in `train.py`. Diagnostic: log EMA-live gap at epochs 10, 25, 40, 50 — gap should close toward zero.
 - Predicted: val ≤ 55.0 if EMA-live gap closes, ~55.7 if neutral, > 56.0 if too reactive (loses smoothing value).
 - Targets: val < 55.7634, test < 48.0960.
+
+## 2026-05-13 11:50 — PR #1994: nezuko n_head=4→8 — CLOSED (mechanism falsified)
+
+- Branch: `willowpai2g48h5-nezuko/n-head-8`
+- Hypothesis: Double attention heads 4→8 at n_hidden=192. At head_dim 48→24, more attention patterns per slice may improve OOD generalization (geometry + physics + Re).
+- W&B run: `p5w8w78y` (21/30 epochs at T_max=30 — hit timeout)
+
+| Metric | n_head=8 | vs #1930 (then current) | vs #1953 (new baseline) |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 63.3548 | −0.20% (wash) | **+13.61% regression** |
+| `test_avg/mae_surf_p` | 55.2761 | +0.53% (wash) | **+14.93% regression** |
+| `test_single_in_dist` | 62.4992 | +0.054 | — |
+| `test_geom_camber_rc` | 68.9251 | +0.549 | — |
+| `test_geom_camber_cruise` | 36.1069 | +0.289 | — |
+| `test_re_rand` | 53.5733 | +0.279 | — |
+
+- **Decision: CLOSE.** Result was protocol-stale (T_max=30) but the mechanism evidence is decisive even apples-to-apples. **All 4 splits regress slightly and uniformly** — no split shows the hypothesized OOD-specific benefit. Camber-rc and re-rand (the supposed OOD-help splits) regress alongside in_dist. Mechanism is falsified at the architecture level, not the schedule level. A T_max=50 retest would burn 30 min to confirm null.
+- **Diagnostic insight:** head_dim=24 is below the bottleneck threshold for this dataset. The PhysicsAttention slice geometry already partitions the input space; further sub-partitioning via more attention heads dilutes signal rather than diversifying it. n_head=4 (head_dim=48 at n_hidden=192) is the local optimum — attention-head axis is now bracketed.
+- **Next:** nezuko reassigned to PR #2053 — mlp_ratio=3 (FFN capacity bracket on 11-compound + T_max=50 stack).
+
+## 2026-05-13 11:50 — PR #2053: nezuko assigned mlp_ratio=3 FFN capacity bracket
+
+- Branch: `willowpai2g48h5-nezuko/mlp-ratio-3`
+- Hypothesis: FFN axis is currently bracketed by failed upper (mlp_ratio=4 was +5.3% on n_layers=5 stack — #1544) and failed lower (mlp_ratio=1 was +0.99% on n_layers=3 — #1878). Both bounds tested PRE-T_max=50. mlp_ratio=3 brackets between current optimum (2) and the previously-falsified upper. With #1953 showing val descending at −0.84/ep at termination (model is compute-bound, not capacity-bound), modest FFN capacity-up may surface headroom that didn't exist at the shorter schedule.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50 --wandb_group willow-pai2g-48h-r5-mlp-ratio-scan`, with `mlp_ratio=3` in `train.py`.
+- Predicted: val ≤ 55.0 if FFN headroom unlocked; 55.0–56.5 neutral; > 56.5 capacity-up regression confirmed.
+- Targets: val < 55.7634, test < 48.0960.
