@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 12:00 UTC (Wave 13: CLOSE #2102 askeladd RMSNorm + #2135 edward Gaussian-σ — crash-loop (uncommitted local changes); ASSIGN #2221 askeladd rmsnorm-post-swiglu; ASSIGN #2225 edward gaussian-rff-σ-calibrated; frieren #2098 rebased+training Lion+SwiGLU; thorfinn #2075 training LayerScale 0.0125)
+- **Last updated**: 2026-05-13 12:30 UTC (Wave 13 mid-cycle: CLOSE #2137 nezuko lr-3e-4 (crash-loop); CLOSE #2157 fern vol-ch-weight (+1.28%, multi-objective tension); SEND-BACK #2075 thorfinn (pre-SwiGLU branch); frieren #2098 training stopped, re-run needed; alphonse #2136 training in progress (pre-SwiGLU, rebase pending); ASSIGN #2239 nezuko lr-3e-4-post-swiglu; ASSIGN #2244 fern n_layers=6)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -33,14 +33,14 @@ The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 lo
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features | WIP |
-| askeladd | #2221 | rmsnorm-post-swiglu | LayerNorm→RMSNorm: LLaMA recipe, removes mean-centering, pairs with SwiGLU | NEW |
-| edward | #2225 | gaussian-rff-σ-calibrated | Gaussian RFF σ=1.0 + σ=3.0 arms (vs dyadic L=6, σ=10 failed +36.6%) | NEW |
-| fern | #2157 | vol-ch-weight-pressure | vol_loss per-channel weight [1,1,2]: pressure emphasis in volume domain | WIP |
-| frieren | #2098 | lion-optimizer | Lion (rebase → re-run on post-#2175 baseline 67.381); strong signal on old baseline (67.846 < 68.812) | WIP (rebase) |
-| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack | WIP |
-| tanjiro | #2200 | swiglu-inner-dim-384 | SwiGLU inner_dim 256→384: next bisect in capacity sweep (OOM fallback to 320) | NEW |
-| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep (just picked up after rate-limit clear) | WIP |
+| alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads, OOD cross-geom features | TRAINING (pre-SwiGLU; rebase needed post-run) |
+| askeladd | #2221 | rmsnorm-post-swiglu | LayerNorm→RMSNorm: LLaMA recipe, removes mean-centering, pairs with SwiGLU | WIP |
+| edward | #2225 | gaussian-rff-σ-calibrated | Gaussian RFF σ=1.0 + σ=3.0 arms (vs dyadic L=6, σ=10 failed +36.6%) | WIP |
+| fern | #2244 | n-layers-6-depth | n_layers=5→6: depth bump on SwiGLU stack, stoch-depth auto-adjusted | NEW |
+| frieren | #2098 | lion-optimizer | Lion+SwiGLU rebase; training stopped GPU=0% without committing metrics; re-run in progress | WIP (re-run) |
+| nezuko | #2239 | lr-3e-4-bracket-post-swiglu | Peak lr=5e-4→3e-4 on post-SwiGLU stack (prior #2137 closed, crash-loop) | NEW |
+| tanjiro | #2200 | swiglu-inner-dim-384 | SwiGLU inner_dim 256→384: next bisect in capacity sweep (OOM fallback to 320) | WIP (training) |
+| thorfinn | #2075 | layerscale-init-0.0125 | LayerScale init=0.025→0.0125 bracket; sent back for rebase (was on pre-SwiGLU branch) | WIP (rebase) |
 
 **Merged/closed in Wave 12/13:**
 - **#2105 tanjiro SwiGLU** — MERGED (val=68.812 −6.96% vs 73.958; 12th compound win; largest single-PR gain)
@@ -48,20 +48,23 @@ The compound stack has 13 merged wins (100.957 → 67.381 = **−33.3%**): L1 lo
 - **#2099 fern wd-3x** — CLOSED (+2.24%/+2.67% vs new baseline; wd axis confirmed at 1e-4)
 - **#2102 askeladd RMSNorm** — CLOSED (crash-loop: pod uncommitted changes blocking branch checkout; reassigned as #2221)
 - **#2135 edward Gaussian σ-calibrated** — CLOSED (same crash-loop cause; reassigned as #2225)
+- **#2137 nezuko lr-3e-4** — CLOSED (crash-loop: M train.py, divergent branch 59+5 commits; reassigned as #2239)
+- **#2157 fern vol-ch-weight-pressure** — CLOSED (+1.28% val net regression; multi-objective tension: 3/4 splits improve but val_single_in_dist +6.81% drives the net regression; vol-pressure axis closed)
 
-**Frieren Lion (#2098) context:** pre-rebase val=67.846 was already below current baseline 67.381 by only 0.46; barely misses. After rebase+re-run with SwiGLU inner_dim=256, Lion+SwiGLU composition needs testing. Predicted outcome: ~63–65 val if fully orthogonal, ~67 if partially redundant.
+**Frieren Lion (#2098) context:** Lion+SwiGLU rebase ran (GPU 99% → 0% at iter 34, ~17 min run); training stopped without committing metrics. Re-run in progress. Pre-rebase Lion val=67.846 < current baseline 67.381 by only 0.46. Lion+SwiGLU composition could be the biggest single win if orthogonal — predicted val ~63–65 if fully orthogonal, ~67 if partially redundant.
 
 **Prioritized research themes for Wave 14** (after in-flight results):
 
-1. **SwiGLU width sweep**: if #2200 (inner_dim=384) wins, next bisect is 512 or check capacity vs compute; if plateaus at 384, inner_dim=256 is the optimum.
-2. **Lion optimizer** (#2098 rebase): strongest orthogonal candidate — operates on different axis from all merged stack components.
-3. **SwiGLU + RMSNorm**: LLaMA/Mistral recipe is SwiGLU + RMSNorm — if #2102 wins, combine with SwiGLU.
-4. **Attention depth**: if Lion wins, test n_layers=6 — SwiGLU wider per-layer may compound with depth.
-5. **Gaussian Fourier σ-calibration** (#2135): camber_cruise test now 40.356; σ-calibrated RFF may further improve OOD generalization.
-6. **n_head=2** (#2136): wider heads + SwiGLU wider MLP may be synergistic.
-7. **vol-ch-weight** (#2157): pressure weighting in volume domain, orthogonal to surf-ch-weight already merged.
-8. **lr=3e-4 bracket** (#2137): LR may need re-tuning with wider SwiGLU model.
+1. **SwiGLU width sweep**: #2200 (inner_dim=384) is next bisect — if wins, try 512; if plateaus, 256 is optimum.
+2. **Depth** (#2244 n_layers=6): fundamental lever never tested; depth × SwiGLU interaction unknown.
+3. **Lion optimizer** (#2098 re-run): strongest optimizer-level orthogonal candidate — sign-update vs AdamW.
+4. **RMSNorm** (#2221): LLaMA recipe (SwiGLU + RMSNorm) — most likely to win when both normalization and gating change together.
+5. **Gaussian Fourier σ-calibration** (#2225): σ=1.0 and σ=3.0 arms — σ-matched RFF for std-normalized CFD coords.
+6. **LR bracket-down** (#2239): lr=5e-4 may be sub-optimal post-SwiGLU (wider param space, gated interactions).
+7. **n_head=2** (#2136, post-rebase): if current run shows improvement vs old baseline, test on SwiGLU stack.
+8. **LayerScale bracket-down** (#2075, post-rebase): LayerScale init=0.0125 on post-SwiGLU stack.
 9. **GeGLU comparison**: replace SiLU with GELU in the gate — test whether SiLU's non-zero negative activations add value vs GELU's smooth approximation.
+10. **n_layers=7**: if #2244 n_layers=6 wins, continue depth sweep.
 
 **Closed axes (do not re-test):**
 - Dyadic Fourier: L=4 merged, L=6 merged, L=8 closed (val_re_rand × surf-ch-weight interaction) → Gaussian Fourier in-flight

@@ -8,6 +8,31 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 12:30 — PR #2157 (fern vol-ch-weight-pressure) — **CLOSED** (net regression)
+
+- Branch: `charliepai2g24h4-fern/vol-ch-weight-pressure`
+- Hypothesis: Add per-channel weighting to vol_loss: `vol_loss = mean([1.0, 1.0, 2.0] * |y_pred - y_vol| / y_std)`. Mirror the pressure emphasis already in surf_loss [0.5, 0.5, 2.0], motivated by the gap between surf and vol MAE on pressure channel.
+- Metric artifacts: `models/model-charliepai2g24h4-fern-vol-ch-weight-pressure-*/metrics.jsonl`
+
+| Split | Baseline (#2175 67.381/57.800) | vol-ch-weight [1,1,2] | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | 73.341 | 78.338 | **+6.81%** |
+| val_geom_camber_rc | 80.673 | 80.048 | **−0.77%** |
+| val_geom_camber_cruise | 48.675 | 48.034 | **−1.32%** |
+| val_re_rand | 66.834 | 66.069 | **−1.14%** |
+| **val_avg (primary)** | **67.381** | **68.248** | **+1.28%** (regression) |
+| test_single_in_dist | 64.685 | 67.855 | **+4.90%** |
+| test_geom_camber_rc | 69.035 | 68.442 | **−0.86%** |
+| test_geom_camber_cruise | 40.356 | 39.803 | **−1.37%** |
+| test_re_rand | 57.121 | 56.638 | **−0.85%** |
+| **test_avg** | **57.800** | **58.302** | **+0.87%** (regression) |
+
+**Analysis:** Multi-objective tension between vol and surf pressure channels. 3/4 val splits and 3/4 test splits improve by 0.77–1.37%, but val_single_in_dist regresses sharply +6.81% (test +4.90%). This is the dominant in-distribution split — its regression drives the net average to +1.28% val, just over the 1% close threshold.
+
+**Mechanism**: The vol-pressure upweight ([1,1,2]) conflicts with the surf-loss pressure emphasis ([0.5,0.5,2.0]). Both try to steer the pressure channel in different directions through the shared decoder: vol_loss pressure gradient pushes toward volume-field accuracy while surf_loss pressure gradient (already 2× weighted) pushes toward surface accuracy. The model has to compromise, and the compromise is worse on val_single_in_dist (in-dist full-domain pressure patterns) while marginally better on OOD splits (where the vol-pressure signal overlaps with geom/Re variation).
+
+**Axis-wide finding**: vol-loss per-channel pressure weighting conflicts with merged surf-ch-weight [0.5,0.5,2.0]. Axis closed. The `[1.0,1.0,1.5]` follow-up would suffer the same mechanism at smaller magnitude. Per-channel vol weighting would need a fundamentally different architecture (separate vol/surf decoders) to avoid the interference.
+
 ## 2026-05-13 11:20 — PR #2175 (tanjiro swiglu-inner-dim-256) — **MERGED** (13th compound win)
 
 - Branch: `charliepai2g24h4-tanjiro/swiglu-inner-dim-256`
