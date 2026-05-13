@@ -23,14 +23,14 @@
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| #1748 | edward | EMA=0.99 + dropout=0.2 compound verification | WIP — new |
-| #1752 | nezuko | surf_weight sweep: 5 (primary), 7 (secondary) on EMA+Huber+Dropout base | WIP — new |
-| #1761 | tanjiro | n_layers=6: +1 Transolver depth block | WIP — new |
+| #1748 | edward | EMA=0.99 + dropout=0.2 compound verification | WIP |
+| #1752 | nezuko | surf_weight sweep: 5 (primary), 7 (secondary) on EMA+Huber+Dropout base | WIP |
+| #1761 | tanjiro | n_layers=6: +1 Transolver depth block | WIP |
+| #1781 | thorfinn | Lion optimizer (lr=5e-5 primary, 1e-4 secondary) on EMA base | WIP — new |
 | #1706 | fern | Dropout rate sweep: 0.15/0.25/0.30 on Fourier+Huber+Dropout base | WIP |
 | #1703 | askeladd | Huber δ sweep: δ=0.5, δ=2.0 on compound base | WIP |
 | #1694 | frieren | n_head=8 attention heads | WIP |
-| #1604 | alphonse | Asinh transform on pressure target | WIP — rebasing |
-| #1583 | thorfinn | T_max=18 cosine schedule | WIP — rebasing |
+| #1604 | alphonse | Asinh transform on pressure target (rebasing onto EMA base) | WIP — re-rebase |
 
 All 8 students active.
 
@@ -38,6 +38,7 @@ All 8 students active.
 
 - **#1690 (nezuko):** Fourier L=8 and L=6 concat-raw — both arms regress. L=6 normalized remains sweet spot.
 - **#1400 (tanjiro):** Aux surf-p head λ∈{2,5} — dominated by Fourier, consistently worse on compound base.
+- **#1583 (thorfinn):** T_max=18 cosine schedule — closed as stale (2.5h silent) and direction dominated by EMA (which solves late-epoch wobble more elegantly than schedule truncation).
 
 ## Key findings (all rounds)
 
