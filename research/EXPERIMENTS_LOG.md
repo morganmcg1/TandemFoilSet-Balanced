@@ -53,6 +53,39 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 02:30 — PR #1745: Huber δ=0.5 × curriculum 1→20 composition (thorfinn) — **MERGED ⭐ NEW BASELINE**
+**Branch:** `charliepai2g24h3-thorfinn/huber-plus-curriculum-compose` | **Status: MERGED**
+
+- **Hypothesis:** Huber δ=0.5 (from #1484) and surf_weight curriculum 1→20 (from #1686) are orthogonal mechanisms — Huber clips per-node gradient magnitude, curriculum steers surface/volume gradient share over time. Composing them in one run should be super-additive.
+- **val_avg/mae_surf_p: 91.507** — **−6.27% vs #1686 baseline (97.620)**.
+- **test_avg/mae_surf_p (safe 4-split): 85.611** — **−6.91% vs #1686 baseline (91.947)**.
+- **Per-split val:** single=110.04 (−4.65), rc=100.44 (**−10.62** — super-additive!), cruise=71.16 (−2.83), re_rand=84.38 (−6.36).
+- **Per-split test:** single=96.26, rc=88.65, cruise=77.18, re_rand=80.36.
+- **Super-additivity analysis:** Huber alone had rc=118.37 (#1484), curriculum alone had rc=111.06 (#1686). Sum-of-deltas predicts ~104.5; actual = **100.44**. Non-additive gain of ~4 points on camber_rc. Mechanism: Huber stabilises per-node gradient distribution → curriculum's surf_weight ramp can steer gradients more precisely → both objectives (geometry-OOD generalisation + surface emphasis) are satisfied together, where neither alone was sufficient.
+- **Bottleneck remaining:** val_single_in_dist = 110.04 (WORST split, 26+ points above avg 91.507). Architecture changes (SwiGLU, deeper model) and domain over-sampling are the active next-steps for this split.
+- **Composability note (alphonse #1736):** alphonse's Huber-δ sweep (0.25, 0.1) ran on the pre-#1745 stack (before curriculum merge). Should rebase on #1745 to test whether even smaller δ further improves on the Huber+curriculum baseline.
+- **Artifacts:** `models/model-huber-d0p5-curriculum-1to20-cosine14-20260513-010447/{metrics.jsonl,metrics.yaml,test_safe_eval.json}`
+
+---
+
+### 2026-05-13 02:20 — PR #1709: Focal per-sample loss weighting (askeladd) — **CLOSED (P3 disproved)**
+**Branch:** `charliepai2g24h3-askeladd/focal-per-sample-loss-weighting` | **Status: CLOSED**
+
+- **Hypothesis:** Per-sample focal weighting `w_i = (mse_i / mean_mse)^γ` would compound with augmentation by amplifying gradients on hard samples (mechanistic complement to P1/P2).
+- **val_avg/mae_surf_p (γ=2.0 best):** 112.404 — **+9.0% regression vs #1495 baseline (103.10)**. γ=1.0 was 113.78 (+10.4%).
+- **test_avg/mae_surf_p (γ=2.0):** 105.516 — **+11.3% regression vs baseline (94.757)**.
+- **Per-split regression:** UNIFORM — all four splits got worse, including val_single_in_dist (+6.5-8% for both γ values). The predicted "hardest split improves" signal never appeared.
+- **Focal weight diagnostics (key):** At γ=2.0, effective batch size ≈ 1.65/4 (≈41% utilisation). At γ=1.0, eff_bs ≈ 2.25/4. The focal weighting functions as a stochastic batch-size reducer at B=4.
+- **Root causes (student's analysis, accepted):**
+  1. **Eff_bs collapse.** B=4 is too small for focal weighting — one outlier sample captures disproportionate gradient mass. Uniform regression is the expected failure mode.
+  2. **Hard samples are noisy targets, not under-fit signal.** val_single_in_dist residuals are large because y-range is large (±29k vs ±2.5k median) — amplifying their gradient amplifies label noise, not learnable signal.
+  3. **Gradient-budget competition with augmentation.** surf_weight + augmentation already route gradient to hard channels; focal weighting is a third lever on the same axis.
+- **New principle (P3 revised):** Focal per-sample reweighting fails at B≤4 with high-y-variance regression targets. Per-domain data curriculum (askeladd #1822) avoids eff_bs collapse by changing which samples appear in a batch (not within-batch loss weights).
+- **Assigned follow-up:** askeladd PR #1822 domain over-sampling (racecar_single 2x/3x) — orthogonal approach to same single_in_dist bottleneck.
+- **Artifacts:** `models/model-charliepai2g24h3-askeladd-focal-gamma{1,2}-cosine14-20260513-*/{metrics.jsonl,test_safe_eval.jsonl}`
+
+---
+
 ### 2026-05-13 02:00 — PR #1662 v2: Fourier mesh PE — both arms PASS, **SENT BACK for v3 verification on merged stack**
 **Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: SENT BACK v3**
 

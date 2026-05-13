@@ -40,12 +40,10 @@ val splits (`val_single_in_dist`, `val_geom_camber_rc`, `val_geom_camber_cruise`
 
 | Metric | Value | PR |
 |--------|-------|----|
-| `val_avg/mae_surf_p` | **97.620** | [#1686](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1686) |
-| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **91.947** | #1686 |
+| `val_avg/mae_surf_p` | **91.507** | [#1745](https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1745) |
+| `test_avg/mae_surf_p` (safe re-eval, 4-split) | **85.611** | #1745 |
 
-Previous bests (superseded): #1484 (Huber δ=0.5) val 99.879 / test 93.596 → #1495 (augment) val 103.100 / test 94.757.
-
-**Composability note on #1484 vs #1686:** thorfinn's curriculum ran on the *pre-#1484* train.py (MSE loss, cosine T_max=14) — so the Huber-loss winning ingredient from #1484 has NOT been composed with the curriculum. This is an open follow-up that could yield further gains.
+Previous bests (superseded): #1686 (curriculum) val 97.620 / test 91.947 → #1484 (Huber δ=0.5) val 99.879 / test 93.596 → #1495 (augment) val 103.100 / test 94.757.
 
 > **⚠ test_geom_camber_cruise NaN (all current runs):** `data/scoring.py`
 > (read-only) uses `err * surf_mask` where `Inf * 0 = NaN` in IEEE 754.
@@ -377,3 +375,67 @@ cd target/ && python train.py --agent charliepai2g24h3-thorfinn \
 Metrics: `models/model-charliepai2g24h3-thorfinn-curriculum-armB-1to20-5ep-20260512-235512/{metrics.yaml,test_safe_eval.jsonl}`
 
 **Open composability question:** thorfinn ran with **MSE loss**, not Huber. Composing Huber δ=0.5 (from #1484) with the curriculum is an obvious next step — could be additive or substitutive depending on whether they target overlapping failure modes.
+
+---
+
+## 2026-05-13 02:05 — PR #1745: Huber δ=0.5 × surf_weight curriculum 1→20 (composition)
+
+**New best result. Replaces PR #1686 as running baseline.**
+
+Explicit composition of the two most impactful individual wins: Huber loss δ=0.5 (PR #1484, −3.1% val) and surf_weight curriculum 1→20 (PR #1686, −2.3% val). Both proven as individual improvements; this PR answers whether they compound.
+
+**Answer: YES — they compound super-additively on camber_rc.**
+
+**Per-split val (best checkpoint, epoch 14, EMA weights, cosine T_max=14):**
+
+| Split | `mae_surf_p` | vs #1686 | vs #1484 |
+|-------|---:|---:|---:|
+| val_single_in_dist | **110.04** | −4.65 | −13.22 |
+| val_geom_camber_rc | **100.44** | **−10.62** | −17.93 |
+| val_geom_camber_cruise | **71.16** | −2.83 | +1.89 |
+| val_re_rand | **84.38** | −6.36 | −4.24 |
+| **avg** | **91.507** | **−6.11** | **−8.37** |
+
+**Per-split test (safe 4-split re-eval via `safe_test_eval.py`):**
+
+| Split | `mae_surf_p` | vs #1686 |
+|-------|---:|---:|
+| test_single_in_dist | **96.26** | −6.36 |
+| test_geom_camber_rc | **88.65** | **−9.97** |
+| test_geom_camber_cruise | **77.18** | −2.51 |
+| test_re_rand | **80.36** | −6.50 |
+| **avg (4-split safe re-eval)** | **85.611** | **−6.34** |
+
+**Key finding — camber_rc super-additivity:** Huber alone (PR #1484) val_camber_rc=118.37; curriculum alone (PR #1686) val_camber_rc=111.06; composition = **100.44**. Sum-of-individual deltas would predict ~104.5; observed is 100.44 — clearly non-additive gain. Mechanism: Huber stabilises the per-node gradient distribution, which then enables the curriculum's surf_weight ramp to steer gradients more precisely between surface and volume objectives. Neither alone was sufficient for the geometry-OOD camber_rc split; both together unlock it.
+
+**Config (merged into advisor branch train.py):**
+
+| Param | Value |
+|-------|-------|
+| `huber_delta` | 0.5 (from #1484) |
+| `surf_weight_warmup_epochs` | 5 (from #1686) |
+| `surf_weight_init` | 1.0 (from #1686) |
+| `surf_weight` | 20.0 (from #1686) |
+| `use_onecycle` | **False** (cosine T_max=14) |
+| `ema_decay` | 0.999 |
+| `augment` | True, aoa_jitter_rad=0.00873, naca_jitter=0.002 |
+| `grad_clip` | 1.0 |
+| `weight_decay` | 1e-3 |
+| `lr` | 5e-4 |
+| `batch_size` | 4 |
+| epochs | 14 / 14 completed (wall-clock cap; still descending) |
+
+Reproduce:
+```
+cd target/ && python train.py \
+  --experiment_name huber-d0p5-curriculum-1to20-cosine14 \
+  --huber_delta 0.5 \
+  --surf_weight_warmup_epochs 5 --surf_weight_init 1.0 --surf_weight 20.0 \
+  --epochs 14 --use_onecycle False --ema_decay 0.999 \
+  --aoa_jitter_rad 0.00873 --naca_jitter 0.002 \
+  --grad_clip 1.0 --weight_decay 1e-3
+```
+
+Metrics: `models/model-huber-d0p5-curriculum-1to20-cosine14-20260513-010447/{metrics.jsonl,metrics.yaml,test_safe_eval.json}`
+
+Peak GPU memory: 42.12 GB. Model still converging at epoch 14 cap.
