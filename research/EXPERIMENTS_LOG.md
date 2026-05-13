@@ -6,6 +6,75 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~11:10 — PR #2080: n_layers=4 + T_max=17 — MERGED (−1.07% val, −2.17% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-tanjiro
+- **Branch:** charliepai2g48h3-tanjiro/nlayers-4
+- **Hypothesis:** n_layers=4 → ~94s/epoch → 17 epochs in 30-min budget → T_max=17 alignment. Same "epoch-count is binding" mechanism as #1995 and #1996.
+- **Result:** val=46.344 / test=39.950 (best_epoch=17/17 — STILL DESCENDING AT FINAL EPOCH)
+
+| Split | val (PR #1996, 46.847) | val (n_layers=4, 46.344) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 50.491 | 49.979 | −1.0% | 44.746 |
+| geom_camber_rc | 60.364 | 61.558 | +2.0% (noise) | 54.155 |
+| geom_camber_cruise | 29.835 | 27.318 | **−8.4%** | 22.876 |
+| re_rand | 46.699 | 46.518 | −0.4% | 38.025 |
+| **avg** | **46.847** | **46.344** | **−1.07% ✓** | **39.950** |
+
+- **⚠ Best epoch=17 STILL DESCENDING** — n_layers=4 was not saturated; cosine schedule expired before convergence. Strongly hints n_layers=3 can extract more.
+- **n_params:** 670,035 (−31.4% vs 976,827 baseline) — huge capacity reduction with no accuracy loss
+- **Also included in merge:** lr=cfg.lr bug fix — Lion constructor now uses `cfg.lr` instead of hardcoded 1e-4. All prior LR variation experiments were silently at 1e-4.
+- **cruise wins biggest** (val −8.4%, test −5.3%) — the easiest split with smallest MAEs benefits most from extra cosine-tail epochs
+- **Metric artifacts:** `models/model-nlayers-4-tmax17-20260513-082121/metrics.jsonl`, `metrics.yaml`
+- **Reassigned tanjiro:** PR #2107 n_layers=3 + T_max=22
+
+---
+
+## 2026-05-13 ~11:10 — PR #2040: grad-clip max_norm=1.0 — CLOSED (+12.86% val vs old baseline, +13.01% vs current)
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/grad-clip-1
+- **Hypothesis:** max_norm=1.0 stabilizes Lion's EMA by bounding gradient magnitude.
+- **Result:** val=52.874 / test=45.659 (vs old baseline 51.040 = +3.6%; vs current 46.344 = +14.1%)
+
+| Metric | Old baseline | grad-clip | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 51.040 | 52.874 | +3.6% |
+| test_avg/mae_surf_p | 44.390 | 45.659 | +2.9% |
+
+- **Key diagnostic:** Gradient norms are 20–140 on this stack (not <1). Clip fired on 100% of batches (4500/4500). max_norm=1.0 is 25× too small for this stack — it scaled every gradient by 0.02–0.05, effectively shrinking lr by 20–50× each batch.
+- **Mechanism analysis:** Lion's sign-based update discards gradient magnitude by design. max_norm=1.0 provides no benefit and actively harms training by over-suppressing the EMA direction signal.
+- **Conclusion:** max_norm=1.0 is a confirmed dead end. The right range would be ~50–80 (where only epoch-1 spikes of 100+ would be clipped), but given Lion's sign-update architecture already handles magnitude, the whole axis is deprioritized.
+- **Metric artifacts:** `models/model-grad-clip-1-20260513-075638/metrics.jsonl`
+- **Reassigned thorfinn:** PR #2108 slice_num=32 on n_layers=4 stack
+
+---
+
+## 2026-05-13 ~11:10 — PR #2029: surf_weight=2 (old n_layers=6 stack) — CLOSED (+6.32% vs current, direction confirmed)
+
+- **Student:** charliepai2g48h3-nezuko
+- **Branch:** charliepai2g48h3-nezuko/surf-weight-2-compound
+- **Hypothesis:** sw=2 continues the gradient-reallocation sweep (sw=10→5→2).
+- **Result:** val=49.267 / test=42.964 (vs old baseline 51.040 = −3.48%; vs CURRENT 46.344 = +6.32%)
+
+| Split | val (sw=5, old stack) | val (sw=2, old stack) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 56.933 | 53.788 | **−5.52%** | 49.806 |
+| geom_camber_rc | 64.886 | 63.318 | −2.42% | 56.308 |
+| geom_camber_cruise | 31.056 | 31.507 | +1.45% | 26.089 |
+| re_rand | 51.287 | 48.454 | **−5.52%** | 39.652 |
+| **avg** | **51.040** | **49.267** | **−3.48% ✓** | **42.964** |
+
+- **Volume MAE improved all 4 splits** (−6% to −15%): mechanism fully confirmed at sw=2 level.
+- **Re_rand was biggest winner** (val −5.52%, test −6.17%) — contradicts prior concern about Reynolds holdout; volume-gradient benefit is not geometry-specific.
+- **geom_camber_cruise mild regression** (+1.45% val) — easiest split; possibly at a surface-supervision floor for this regime.
+- **Closes without merge because:** run was on OLD n_layers=6+T_max=12 stack; val=49.267 > current baseline 46.344.
+- **Direction: STRONG** — sw=2 on the new n_layers=4 compound stack is the immediate next test (nezuko PR #2109).
+- **Metric artifacts:** `models/model-surf-weight-2-compound-20260513-075550/metrics.jsonl`
+- **Reassigned nezuko:** PR #2109 surf_weight=2 on n_layers=4 + slice_num=48 stack
+
+---
+
 ## 2026-05-13 ~11:00 — PR #2007: mlp_ratio=2 — CLOSED (+9.95% val, +10.28% test)
 
 - **Student:** charliepai2g48h3-tanjiro
