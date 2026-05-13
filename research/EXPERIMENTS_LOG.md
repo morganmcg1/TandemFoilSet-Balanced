@@ -2,6 +2,69 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 10:10 — PR #2125: [adamw-beta2-0-95] AdamW β2 0.999→0.95 at bs=1 — **SENT BACK (val/test split, rerun on new HEAD)**
+- Student branch: `charliepai2g48h4-tanjiro/adamw-beta2-0-95`
+- Hypothesis: bs=1's high-variance single-sample gradients benefit from faster second-moment adaptation (EMA half-life ~14 steps vs ~693 at β2=0.999).
+
+| Metric | β2=0.95 (this) | Baseline bs=1+beta=1.0 (#2036) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 69.74 | 70.30 | **−0.56 ✓ (vs OLD baseline)** |
+| test_avg/mae_surf_p | 62.37 | 61.39 | **+0.98 ❌ (regressed)** |
+| val single_in_dist | 70.84 | 74.15 | −3.31 ✓ |
+| val geom_camber_rc | 78.99 | 81.11 | −2.12 ✓ |
+| val geom_camber_cruise | 56.76 | 53.67 | +3.09 ❌ |
+| val re_rand | 72.35 | 72.28 | +0.07 ≈flat |
+| NEW baseline (bs=1+beta=0.5 #2012) | 66.32 | — | +3.42 (never in contention) |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-adamw-beta2-0-95-20260513-092030/metrics.jsonl`
+- 22 epochs completed; best epoch 18/22.
+
+**Analysis:** Mixed signal — val improved from OLD baseline (−0.56) but test regressed (+0.98). The split-level story is coherent: β2=0.95 helps the harder/higher-variance splits (single_in_dist −3.31, rc −2.12) but over-adapts on the smooth-gradient cruise split (+3.09 both val and test). Since PR #2012 (edward, beta=0.5) merged with NEW BEST val=66.32, this result (val=69.74) is above the new baseline. **Sent back to rerun on new HEAD (which now has beta=0.5) — test two arms: β2=0.95 and β2=0.99. If neither beats 66.32, β2 axis CLOSED at 0.999.**
+
+---
+
+## 2026-05-13 10:05 — PR #2089: [wd-2e-4] Double weight decay 1e-4→2e-4 (bs=2) — **CLOSED (flat; wd axis closed)**
+- Student branch: `charliepai2g48h4-fern/wd-2e-4`
+- Hypothesis: At bs=2 (750 steps/epoch vs 375 for bs=4), effective per-epoch L2 decay is 2× stronger at wd=2e-4 vs wd=1e-4 — recalibrating for the new step-count regime.
+
+| Metric | wd=2e-4 (this) | Baseline bs=2 (#1972) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 76.12 | 76.24 | −0.12 (noise-level, σ≈8.5) |
+| test_avg/mae_surf_p | 66.88 | 66.85 | +0.03 (opposite direction) |
+| val single_in_dist | 80.58 | 81.78 | −1.20 ✓ |
+| val geom_camber_rc | 87.22 | 87.06 | +0.16 ❌ |
+| val geom_camber_cruise | 60.20 | 59.39 | +0.81 ❌ |
+| val re_rand | 76.47 | 76.74 | −0.28 ✓ |
+
+- Artifact: `models/model-charliepai2g48h4-fern-wd-2e-4-20260513-085606/metrics.jsonl`
+- 19 epochs completed; same best-epoch-18 shape as baseline.
+
+**Analysis:** Perfectly flat result. The per-step decay factor difference (0.9963 vs 0.9927 per epoch) is too small in absolute weight terms to matter — the model is in a regime where weight magnitudes are constrained by bf16, grad-clip, and the small model scale. Per-split deltas are incoherent (random ± within σ). **wd axis FULLY CLOSED in both directions: wd=1e-5 (worse), wd=1e-4 (optimum), wd=2e-4 (≈ tie/noise).** Fern's own conclusion: "no signal in either direction past 1e-4." Fern reassigned to loss-beta-0-25-bs1 #2164.
+
+---
+
+## 2026-05-13 10:00 — PR #2012: [loss-beta-0-5] Halve smooth_l1 beta 1.0→0.5 at bs=1 — **MERGED (NEW BEST: val=66.32)**
+- Student branch: `charliepai2g48h4-edward/loss-beta-0-5`
+- Hypothesis: beta=1.0 operates mostly in L1 regime (residuals >> 1.0). Narrowing the quadratic zone to |r|<0.5 → more residuals get full L1 gradient → better update direction under grad-clip normalized steps.
+
+| Metric | beta=0.5 + bs=1 (this) | Baseline bs=1+beta=1.0 (#2036) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **66.32** | 70.30 | **−3.98 (−5.66%) ✓** |
+| test_avg/mae_surf_p | **59.68** | 61.39 | **−1.71 (−2.79%) ✓** |
+| val single_in_dist | 69.98 | 74.15 | −4.17 ✓ |
+| val geom_camber_rc | 81.07 | 81.11 | −0.04 (≈flat) |
+| val geom_camber_cruise | 49.11 | 53.67 | −4.56 ✓ |
+| val re_rand | 65.10 | 72.28 | **−7.18 ✓ (largest gain)** |
+| test geom_camber_rc | 74.20 | 73.92 | +0.28 (slight regression) |
+
+- Artifact: `models/model-charliepai2g48h4-edward-loss-beta-0-5-bs1-20260513-091012/metrics.jsonl`
+- 21 epochs completed; **best epoch 21 (final — model still descending)**. T_max=17 schedule ends at epoch 18; epochs 19–21 in cosine restart upswing. Val at epoch 18: 67.12, further improves to 66.32 at epoch 21.
+- First run (bs=4 HEAD) showed val=81.21 — correct mechanism, wrong baseline.
+
+**Analysis:** Clean stacking — loss-shape (beta) and step-count (batch_size) are independent mechanisms that compound additively. 3/4 val splits improved; rc essentially flat. The rc split's flatness (both val −0.04 and test +0.28) suggests it's already near-optimal on the beta axis. **15th effective merge. New best: val=66.32 / test=59.68.** Key observation: best epoch is the FINAL epoch — the cosine schedule restarts at epoch 18, and the model keeps improving. T_max=20 (edward #2162) is the natural follow-up to align the schedule minimum with the actual budget end.
+
+---
+
 ## 2026-05-13 09:12 — PR #2073: [slice-num-32] Halve slice_num 64→32 — **CLOSED (≈ tie; axis closed at 64)**
 - Student branch: `charliepai2g48h4-tanjiro/slice-num-32`
 - Hypothesis: Fewer broader slice templates regularize hard OOD splits more effectively for small-dataset irregular-mesh regression.

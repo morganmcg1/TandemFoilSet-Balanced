@@ -1,19 +1,22 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 09:15 (CLOSED #2073 tanjiro slice-num-32 ≈ tie; assigned tanjiro #2125 adamw-beta2-0-95; askeladd EMA training at GPU=99% on bs=1 baseline; 14 effective merges)
+- **As of:** 2026-05-13 10:15 (MERGED #2012 edward loss-beta-0-5 val=66.32 NEW BEST; CLOSED #2089 fern wd-2e-4 flat; SENT BACK #2125 tanjiro β2=0.95 for rerun on new HEAD; assigned edward #2162 t-max-20-bs1, fern #2164 loss-beta-0-25-bs1, tanjiro #2125 β2 rerun; 15 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
 
 ## Current focus
 
-TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=70.30 / test=61.39 (alphonse #2036 batch-size-1). Batch_size=1 is the 14th merge — 1500 optimizer steps/epoch at same wall-clock. VRAM at ~8.5 GB / 98 GB (massive headroom).
+TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=66.32 / test=59.68 (edward #2012 loss-beta-0-5 at bs=1). This is the 15th merge — batch_size=1 + smooth_l1_loss(beta=0.5).
 
-**Key diagnostic:** val still actively descending at final epoch (best ep18/19, cap hit). Model is undertrained. Gradient noise from bs=1 is acting as effective regularization. Sub-70 milestone is only 0.30 val pts away — within reach of next round.
+**Key diagnostics:**
+- Val still actively descending at epoch 21 (FINAL). T_max=17 schedule ends at epoch 18; epochs 19–21 are in cosine restart upswing (lr rising). Model still improving — **undertrained**.
+- rc split (val=81.07) is the hardest OOD split; flat to beta change (−0.04). Other splits all benefited −4 to −7 val pts.
+- Sub-65 val milestone is ~1.3 val pts away.
 
-**Sub-70 val is the next milestone.** EMA (askeladd #1540) expected to push further. VRAM headroom at bs=1 (8.5 GB/98 GB) enables larger architectures too.
+**Sub-65 val is the next milestone.** T_max alignment (edward #2162) and beta bracket below 0.5 (fern #2164) are the highest-confidence next steps.
 
-## Merged recipe (current advisor base — 13 effective merges)
+## Merged recipe (current advisor base — 15 effective merges)
 
 1. **#1512** (`data/scoring.py` NaN fix) — baseline = 123.99
 2. **#1513** (bf16 autocast) — 24% per-epoch speedup
@@ -28,9 +31,10 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 11. **#1855** (eta_min=5e-5) — val=83.95
 12. **#1812** (lr-warmup-1ep) — val=82.56
 13. **#1972** (batch_size=4→2) — val=76.24
-14. **#2036** (batch_size=2→1) — val=70.30 **CURRENT BEST**
+14. **#2036** (batch_size=2→1) — val=70.30
+15. **#2012** (smooth_l1 beta=1.0→0.5) — val=66.32 **CURRENT BEST**
 
-**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=1, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=1, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=0.5), clip_grad_norm_(max_norm=1.0)`
 
 ## Confirmed null results / closed axes
 
@@ -38,16 +42,17 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **surf_weight axis CLOSED**: 5 optimum.
 - **depth axis CLOSED**: 5 optimum.
 - **AdamW β1 axis CLOSED**: 0.9 optimum.
-- **AdamW β2 axis CLOSED**: 0.999 optimum.
+- **AdamW β2 axis SEMI-CLOSED**: 0.999 best so far; β2=0.95 val-improves OLD baseline but test-regresses; rerunning on new HEAD (beta=0.5 stack). β2=0.99 also in rerun arm.
 - **slice_num axis FULLY CLOSED**: 32 ≈ 64 (tie) ≪ 128 (worse). 64 confirmed optimum.
 - **lr lower-bound CLOSED**: 3e-4 dominated. 5e-4 optimum lower-side.
-- **loss shape axis CLOSED**: log-cosh regression. Huber beta=1.0 merged. beta=0.5 (edward #2012) testing sub-axis.
-- **eta_min axis CLOSED**: 5e-5 optimum (0 → 84.67, 5e-5 → 83.95, 1e-4 → 85.06).
+- **loss shape axis OPEN**: Huber → beta=1.0 → beta=0.5 (current best). beta=0.25 (fern #2164) and T_max alignment (edward #2162) testing.
+- **eta_min axis CLOSED**: 5e-5 optimum.
 - **ref axis CLOSED**: ref=8 optimum.
-- **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses. mlp_ratio=1 (frieren #1992) testing lower.
-- **wd axis CLOSED (1e-4 vs 1e-5)**: wd=1e-4 optimum. Upward bracket (wd=2e-4) being tested on bs=2 baseline by fern.
+- **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses. mlp_ratio=1 (frieren #1992) still WIP.
+- **wd axis FULLY CLOSED**: wd=1e-4 optimum (1e-5 worse; 2e-4 ≈ tie within noise — both directions closed).
 - **warmup length CLOSED**: 1-epoch optimum.
-- **n_head axis FULLY CLOSED**: n_head=8 (#1853, val=96.33) and n_head=2 (#1993, val=83.78) both worse. n_head=4 unimodal optimum.
+- **n_head axis FULLY CLOSED**: n_head=8 (+16.7%) and n_head=2 (+1.9%) both worse. n_head=4 unimodal optimum.
+- **CAWR schedules CLOSED** for 30-min budget: catastrophic (#1990 val=100.46).
 
 ## Themes
 
@@ -56,83 +61,79 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 3. **LR schedule alignment — MERGED.** T_max=18.
 4. **LR floor — MERGED.** eta_min=5e-5.
 5. **LR warmup — MERGED.** 1-epoch warmup (#1812) — val=82.56.
-6. **Batch size — MERGED.** batch_size=2 (#1972) — val=76.24 (+7.65% improvement).
-7. **EMA weight averaging.** Askeladd #1540. Actively training on new HEAD. Expected sub-70.
-8. **LR upper bracket.** Thorfinn #1968 (lr=7e-4, sent back) — rerunning with bs=2 baseline.
-9. **Batch size lower bracket.** Alphonse #2036 (batch-size-1) — MERGED val=70.30 (−7.78%). bs axis fully closed at 1.
-16. **LR tuning at bs=1.** Alphonse #2106 (lr-4e-4-bs1) — NEW. Tests whether 4x step count shifts LR optimum downward from 5e-4.
-10. **LR schedule restart.** Fern #1990 (cawr-t0-9) — CLOSED 08:50 (val=100.46 catastrophic). Low-LR tail is productive consolidation; restarts need longer budgets.
-15. **wd upward bracket.** Fern #2089 (wd-2e-4) — NEW. Tests whether bs=2's doubled steps shift wd optimum upward.
-11. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP on old HEAD.
-12. **Loss shape sub-axis.** Edward #2012 (loss-beta-0-5) — WIP.
-13. **OneCycleLR schedule.** Nezuko #2014 (onecycle-lr, max_lr=8e-4) — WIP.
-14. **Attention head lower bracket.** Tanjiro #1993 (n-head-2) — CLOSED val=83.78 worse than 4. n_head axis fully bracketed.
+6. **Batch size — MERGED.** batch_size=1 (#2036) — val=70.30 (−7.78%). bs axis fully closed at 1.
+7. **Loss beta reduction — MERGED.** beta=0.5 (#2012) — val=66.32 (−5.66%). Loss-beta axis open below 0.5.
+8. **T_max alignment for bs=1.** Edward #2162 — T_max=17→20 to match ~21 epochs/30min at bs=1.
+9. **Loss beta bracket below 0.5.** Fern #2164 — beta=0.5→0.25. Next step in L1 approach.
+10. **AdamW β2 bracket.** Tanjiro #2125 (rerun) — β2=0.95 and β2=0.99 on new HEAD with beta=0.5.
+11. **EMA weight averaging.** Askeladd #1540. Actively training on bs=1 baseline.
+12. **LR tuning at bs=1.** Alphonse #2106 (lr-4e-4-bs1) — WIP.
+13. **FFN capacity.** Frieren #1992 (mlp-ratio-1) — WIP rerun.
+14. **OneCycleLR schedule.** Nezuko #2014 — WIP rerun.
+15. **LR upper bracket at bs=1.** Thorfinn #1968 (lr-7e-4 rerun) — WIP.
 
 ## Leaderboard (val_avg/mae_surf_p)
 
 | Lever | val_avg | test_avg | Status |
 |---|---|---|---|
-| **batch-size-1 (alphonse #2036)** | **70.30** | **61.39** | **MERGED — CURRENT BEST** |
+| **loss-beta-0-5 + bs=1 (edward #2012)** | **66.32** | **59.68** | **MERGED — CURRENT BEST** |
+| batch-size-1 (alphonse #2036) | 70.30 | 61.39 | MERGED → superseded |
+| adamw-beta2-0-95 (tanjiro #2125) | 69.74 | 62.37 | SENT BACK — val improved OLD baseline, test regressed; rerun on new HEAD |
 | batch-size-2 (alphonse #1972) | 76.24 | 66.85 | MERGED → superseded |
-| loss-beta-0-5 (edward #2012) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
+| loss-beta-0-5 on bs=4 (edward #2012 first run) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
 | mlp-ratio-1 (frieren #1992) | 81.91 | 73.12 | SENT BACK — beat old, not new baseline |
 | lr-warmup-1ep (thorfinn #1812) | 82.56 | 74.13 | MERGED → superseded |
 | lr-7e-4 (thorfinn #1968) | 79.77 | 72.06 | SENT BACK — beat old, not new baseline |
-| n-head-2 (tanjiro #1993) | 83.78 | 73.71 | CLOSED — n_head=4 unimodal optimum |
-| eta_min=5e-5 (fern #1855) | 83.95 | 74.70 | MERGED → superseded |
-| warmup-2ep (edward #1991) | 83.35 | 75.06 | CLOSED — warmup saturates at 1ep |
-| T_max=18 (nezuko #1695) | 84.67 | 74.94 | MERGED → superseded |
-| eta_min=1e-4 (fern #1901) | 85.06 | 76.41 | CLOSED — eta_min 5e-5 optimum |
-| n_head=8 (nezuko #1853) | 96.33 | 86.97 | CLOSED — n_head=4 unimodal optimum |
-| EMA (askeladd #1540) | stale | — | Actively training on new HEAD — highest priority |
 
 ## Active student assignments (all 8)
 
-### Priority: EMA + stacking on new baseline
-- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Training at 99% GPU. Results likely on old HEAD. Will evaluate vs new 76.24.
+### Schedule alignment (undertrained model — highest priority)
+- **PR #2162 — `t-max-20-bs1` (edward)** — **WIP (new)** — Align T_max with actual bs=1 budget (~21 ep/30min). One-line change: T_max=17→20. Descending epoch 21 result is the clearest signal in the programme.
 
-### Batch size bracket
-- **PR #2036 — `batch-size-1` (alphonse)** — **MERGED 09:00** — val=70.30 NEW BEST; bs axis closed at 1.
-- **PR #2106 — `lr-4e-4-bs1` (alphonse)** — **WIP (new)** — LR downward bracket for bs=1 regime.
+### Loss beta bracket
+- **PR #2164 — `loss-beta-0-25-bs1` (fern)** — **WIP (new)** — Narrow beta=0.5→0.25. Continues L1 approach. Closes axis below current optimum.
 
-### LR + schedule probes (running on new bs=2 HEAD)
-- **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP (sent back)** — rerunning with bs=2 + lr=7e-4.
-- **PR #1990 — `cawr-t0-9` (fern)** — **CLOSED 08:50** — catastrophic val=100.46; CAWR not viable for 30-min budget.
-- **PR #2089 — `wd-2e-4` (fern)** — **WIP (new)** — upward bracket of wd axis; tests bs=2 doubled-step wd rebalance.
-- **PR #2014 — `onecycle-lr` (nezuko)** — **WIP** — was on bs=4; evaluate vs new baseline.
+### AdamW β2 bracket
+- **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP (sent back)** — Rerun on new HEAD (beta=0.5). Two arms: β2=0.95 and β2=0.99.
 
-### Capacity / architecture / loss probes
-- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP (sent back 08:22)** — beat OLD 82.56 (val=81.91) not NEW 76.24; rerunning on bs=2 HEAD.
-- **PR #2012 — `loss-beta-0-5` (edward)** — **WIP** — was on bs=4; evaluate vs new baseline.
-- **PR #2073 — `slice-num-32` (tanjiro)** — **CLOSED 09:12** — val=76.06 ≈ tie with 64 (Δ=−0.18 noise); axis fully closed.
-- **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP (new)** — AdamW β2 0.999→0.95; tests whether bs=1's high-variance gradients benefit from faster second-moment adaptation.
+### LR tuning
+- **PR #2106 — `lr-4e-4-bs1` (alphonse)** — **WIP** — LR downward bracket at bs=1.
+- **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP** — LR upper bracket at bs=1 (rerunning).
+
+### Schedule shape
+- **PR #2014 — `onecycle-lr` (nezuko)** — **WIP** — Evaluate vs bs=1 baseline.
+
+### EMA + capacity
+- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Training at ~99% GPU. Highest priority stacking candidate.
+- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — Evaluate vs bs=1 baseline.
 
 ## Closed / dead ends (complete list)
 - max_norm: 0.5/1.0/3.0 → 1.0
 - surf_weight: 3/5/10/20 → 5
 - depth: 5/6/7 → 5
 - AdamW β1: 0.9
-- AdamW β2: 0.999
-- slice_num: 64
+- slice_num: 64 (32≈64≪128)
 - lr lower: 3e-4 dominated
 - log-cosh loss
 - hidden192/256
 - ref: 8 optimum (16 worse)
-- mlp_ratio upper: 4 worse (1 in flight)
-- eta_min: 3-pt bracket, 5e-5 optimum
-- wd: 1e-4 optimum (1e-5 worse; 2e-4 upper bracket in flight)
-- CAWR schedules in 30-min budget: catastrophic (#1990 val=100.46, +17.90 regression)
-- warmup length: 1ep optimum (2ep worse)
-- n_head: 4 unimodal optimum (2 worse +1.48%, 8 worse +16.7% — FULL BRACKET)
+- mlp_ratio upper: 4 worse
+- eta_min: 5e-5 optimum
+- wd: 1e-4 optimum (1e-5 worse; 2e-4 ≈ tie — FULLY CLOSED)
+- CAWR schedules in 30-min budget: catastrophic
+- warmup length: 1ep optimum
+- n_head: 4 unimodal optimum (FULL BRACKET)
 
-## Highest-priority stacking target
+## Highest-priority stacking targets
 
-**EMA (askeladd #1540)** — actively training. On old bs=4 HEAD, results will arrive shortly. Even if on old HEAD, if it shows meaningful val improvement, we'll evaluate whether to send back for rerun on new bs=2 HEAD.
+1. **T_max alignment (edward #2162)** — Model was still descending at epoch 21 (final). T_max=20 aligns schedule minimum with actual budget. Highest confidence immediate win.
+2. **EMA (askeladd #1540)** — Actively training. Independent mechanism from all current merges. Expected sub-65.
+3. **Loss beta bracket (fern #2164)** — beta=0.25 could improve further if L1 approach continues.
 
 ## Next frontier after current round
 
-With val=76.24 (sub-80 milestone achieved!), next targets:
-- Sub-70 val with EMA + bs=2 stacking
-- LR exploration: lr=7e-4 + bs=2 (thorfinn rerun)
-- Schedule: CAWR, OneCycleLR on new baseline
-- Capacity: VRAM freed by bs=2 → could test n_hidden=192 again (wall-clock concern may ease)
+- Sub-65 val achievable via T_max alignment + EMA stacking
+- Loss beta axis: bracket below 0.5 (beta=0.25, pure L1) to find minimum
+- Architectural VRAM exploitation: VRAM at 8.5/98GB — n_hidden=192 could be tested
+- β2 axis: clarify whether intermediate β2 (0.97, 0.99) helps at bs=1
+- Extended schedule: if T_max=20 wins, can we push further with modified budget
