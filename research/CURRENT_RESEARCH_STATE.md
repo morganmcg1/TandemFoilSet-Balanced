@@ -57,7 +57,7 @@
 | edward | #1725 | Lion optimizer lr=1e-4: sign-based updates for L1 gradients | NEW |
 | askeladd | #1673 | AdamW eps 1e-8→1e-4 (adaptive scaling floor) | WIP |
 | frieren | #1729 | RMSNorm replaces LayerNorm: faster norm, ~13-14 epochs | NEW |
-| thorfinn | #1670 | weight_decay 1e-4 → 5e-4 (stronger L2) | WIP |
+| thorfinn | #1737 | surf_weight 10 → 5 (lower surface emphasis on L1) | NEW |
 
 **Round 5 closed (all worse than baseline 101.810):** #1592 alphonse T_max=14 (+0.5%, seed noise across 3 seeds), #1661 fern warm restarts (+2.7%), #1671 edward β1=0.85 (+5.9%), #1634 tanjiro batch=8 (+23.6%), #1384 frieren surf_weight=25 (stale, never rebased).
 
@@ -94,6 +94,7 @@
 - Dropout=0.1: +11.8% worse. Model is underfitting; regularizing an underfit model is counterproductive.
 - AdamW betas (0.95, 0.99): +15.4% worse. β2=0.99 amplifies sign-flip noise for L1. Standard (0.9, 0.999) is correct.
 - weight_decay=0: +3.2% worse (closest miss of round 4). WD provides useful regularization for high-magnitude splits.
+- weight_decay=5e-4: +14.9% worse. Combined with WD=0 (+3.2%), a clean U-curve confirms WD=1e-4 is optimal. STOP sweeping WD.
 - AdamW β1=0.85: +5.9% worse. Combined with β1=0.95 from round 4 (+15.4%), default β1=0.9 is correct in both directions. STOP tuning betas.
 - CosineAnnealingWarmRestarts (T_0=4, T_mult=2): +2.7% worse. Restart at epoch 5 disrupts progress; needs longer budgets.
 - Cosine T_max=14 (aligned to actual budget): essentially baseline (3 seeds: 102.30/104.11/107.09 = pure noise). Schedule decay is NOT the bottleneck.

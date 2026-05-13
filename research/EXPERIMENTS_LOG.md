@@ -6,6 +6,18 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 00:45 — PR #1670: weight_decay 1e-4 → 5e-4 — CLOSED (+14.9% worse)
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Branch:** charliepai2g48h3-thorfinn/weight-decay-5e-4
+- val=117.013, test=106.801
+- **Combined with PR #1649 (WD=0, +3.2% worse), this completes a clean U-curve around the WD=1e-4 baseline.** Over-regularization (5×) costs ~5× more than under-regularization, suggesting baseline is at or very near the regularization sweet spot.
+- All splits regressed (single_in_dist +19.1% worst hit; cruise +20.4%). High-magnitude OOD splits need MORE capacity, not less.
+- **Conclusion:** WD parameter space fully explored — baseline WD=1e-4 is optimal. Stop sweeping WD.
+- **Artifacts:** `target/models/model-weight-decay-5e-4-20260512-230745/metrics.jsonl`
+
+---
+
 ## 2026-05-13 00:05 — ROUND 5 BATCH: 5 experiments — ALL CLOSED (PLATEAU CONFIRMED)
 
 **Key cross-experiment finding:** Round 5 confirms ROUND 4 META-INSIGHT (convergence-limited at 30-min budget) extends across optimizer, schedule, and batch-size knobs. ALL 4 returning experiments regressed; the closest miss (alphonse T_max=14 at +0.5%) is pure seed variance (3 seeds: 102.30 / 104.11 / 107.09). **Plateau Protocol triggered — escalating to bolder hypotheses (loss reformulations, mixed precision, optimizer paradigm shifts).**
