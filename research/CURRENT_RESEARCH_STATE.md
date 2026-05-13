@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 00:10 (Huber merged val=110.59 new best; σ calibrated ~3.5 val; alphonse #1714 Huber-seed7 assigned; all 8 students active)
+- **As of:** 2026-05-13 00:22 (edward #1730 layers-6 assigned; all 8 students active; tanjiro+fern+askeladd actively training)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -28,7 +28,7 @@ Seven merges (after surf_weight=20 effectively reverted):
 1. **Robust loss functions — MERGED.** Huber loss (#1374, edward) merged — val=110.59 new best (−3.7% vs T_max=15). Stack-target: now add EMA on top of Huber. Log-cosh (fern #1635) still in flight as orthogonal alt.
 2. **EMA weight averaging — HIGHEST PRIORITY.** Askeladd #1540 (EMA decay=0.999) needs rebase onto new HEAD (now includes Huber). Branch was CONFLICTING; student picked up work at 00:00 UTC. Seeded rerun on Huber recipe expected to stack cleanly. Prior result val=121.16 unseeded/pre-Huber — expected improvement on this HEAD.
 3. **LR schedule.** T_max=15 merged (val=114.81, superseded by Huber). T_max=18 follow-up (nezuko #1695) running — may give another 1-2 pts on top of Huber.
-4. **Architecture / capacity.** hidden256 (tanjiro #1575) running — GPU 100% since 23:58 UTC. First fair capacity test on merged recipe.
+4. **Architecture / capacity.** hidden256 (tanjiro #1575) training at GPU 100%. Edward #1730 (layers-6, n_layers 5→6) assigned — orthogonal depth test. Together: 2×2 design {5,6 layers} × {128,256 hidden}. Key diagnostic: single_in_dist (127.85) is worse than OOD cruise (95.72) — suggests depth-capacity bottleneck on training distribution.
 5. **Gradient regularization.** Gradient clipping max_norm=1.0 (frieren #1696) in flight.
 6. **Positional encoding.** Global pos norm (thorfinn #1576) — sent back for seeded rerun on new HEAD.
 7. **Cross-seed σ calibration.** σ on pre-Huber recipe: ≈3.5 val / 0.5 test (alphonse #1685). Alphonse #1714 will measure σ on Huber recipe specifically.
@@ -53,11 +53,11 @@ Seven merges (after surf_weight=20 effectively reverted):
 ### Round-2 in flight
 - **PR #1575 — `hidden256-bf16` (tanjiro)** — **WIP (training)** — GPU at 100% since 23:58. First capacity test on merged recipe.
 - **PR #1576 — `unified-pos-global-norm` (thorfinn)** — **WIP (sent back)** — seeded rerun on Huber HEAD required
-- **PR #1635 — `log-cosh-loss` (fern)** — **WIP** — log-cosh alt to Huber (both are robust loss comparisons)
-- **PR #1685 — `seed7-variance` (alphonse)** — **CLOSED** — σ calibrated (≈3.5 val / 0.5 test on pre-Huber recipe)
-- **PR #1695 — `tmax-18` (nezuko)** — **WIP** — T_max=15→18 schedule refinement on Huber recipe
-- **PR #1696 — `grad-clip-1.0` (frieren)** — **WIP** — gradient clipping as stability regularizer
+- **PR #1635 — `log-cosh-loss` (fern)** — **WIP (training, GPU 98%)** — log-cosh alt to Huber
+- **PR #1695 — `tmax-18` (nezuko)** — **WIP** — T_max=15→18 schedule refinement
+- **PR #1696 — `grad-clip-1.0` (frieren)** — **WIP** — gradient clipping max_norm=1.0
 - **PR #1714 — `huber-seed7-variance` (alphonse)** — **WIP** — σ calibration on Huber recipe
+- **PR #1730 — `layers-6` (edward)** — **WIP** — n_layers=5→6 depth capacity test
 
 ## Closed / dead ends
 - wd5e-4 (#1394): regression on val_avg (+9.2%); mixed per-split signal not net positive
