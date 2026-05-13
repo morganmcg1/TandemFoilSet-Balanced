@@ -237,6 +237,19 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             is_surface = is_surface.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
 
+            # Drop samples whose y contains any non-finite value; matches
+            # scoring.py::accumulate_batch's per-sample skip and prevents
+            # Inf*0=NaN propagation through loss/err arithmetic. The
+            # test_geom_camber_cruise/000020.pt sample has 761 Inf in y[..., p].
+            y_finite_sample = torch.isfinite(y.reshape(y.shape[0], -1)).all(dim=-1)
+            if not bool(y_finite_sample.all()):
+                if not bool(y_finite_sample.any()):
+                    continue
+                x = x[y_finite_sample]
+                y = y[y_finite_sample]
+                is_surface = is_surface[y_finite_sample]
+                mask = mask[y_finite_sample]
+
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
@@ -245,6 +258,8 @@ def evaluate_split(model, loader, stats, surf_weight, device,
                 per_elem = F.smooth_l1_loss(
                     pred, y_norm, reduction="none", beta=smooth_l1_beta
                 )
+            elif loss_fn == "l1":
+                per_elem = torch.abs(pred - y_norm)
             else:
                 per_elem = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -393,7 +408,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    loss_fn: str = "mse"  # "mse" or "smooth_l1"
+    loss_fn: str = "mse"  # "mse", "smooth_l1", or "l1"
     smooth_l1_beta: float = 0.1
 
 
@@ -500,6 +515,8 @@ for epoch in range(MAX_EPOCHS):
             per_elem = F.smooth_l1_loss(
                 pred, y_norm, reduction="none", beta=cfg.smooth_l1_beta
             )
+        elif cfg.loss_fn == "l1":
+            per_elem = torch.abs(pred - y_norm)
         else:
             per_elem = (pred - y_norm) ** 2
 
