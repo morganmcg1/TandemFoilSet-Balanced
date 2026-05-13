@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-05-13 [Round 64] UTC — Round 64
+
+### PR #2536 tanjiro: Split decoder (retry-2) — CLOSED (3rd consecutive stale_wip; axis abandoned)
+
+- **Branch:** `charliepai2g48h5-tanjiro/split-surf-vol-heads-retry2`
+- **Hypothesis:** Separate output heads `mlp2_surf + mlp2_vol` blended by `is_surface` mask; physically motivated by different prediction tasks for surface vs volume nodes.
+- **History:** #2396 stale → #2472 stale → #2536 stale. Three consecutive non-starts.
+- **Result:** Not run. Only advisor placeholder commit. Third consecutive pod non-pickup.
+
+**Analysis:** Three stale-wips on the same hypothesis indicates structural blocker — likely the mask-blended dual-head implementation complexity relative to the student's pickup cadence. The hypothesis itself is scientifically valid (surface vs volume prediction specialization) but the implementation difficulty prevents it from being picked up. **Axis abandoned.**
+
+**Action:** Closed. Pivoted tanjiro to #2595 SwiGLU MLP — a single-class swap with no mask-blending complexity.
+
+---
+
 ## 2026-05-13 [Round 63] UTC — Round 63
 
 ### PR #2567 nezuko: SWA late-start ep30-70 — CLOSED (LOSS, 28th taxon)
