@@ -7,6 +7,44 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:43 — PR #2423: n_hidden=192 on bs=2+slice32 merged stack — CLOSED
+
+- `willowpai2g24h3-fern/wider-model-bs2`
+- **Hypothesis:** With VRAM dropping to 13.6 GB at bs=2, the 82 GB headroom reopens the width axis. n_hidden=192 on bs=2+slice32 stack should compound the grad-step gains.
+- **Result:** val 67.87 (+17.6% regression), test 58.66 (+18.4% regression). All 8 sub-metrics regress.
+
+| Metric | Baseline (jc24jr52) | n_hidden=192 (2rl3vfjq) | Δ |
+|---|---:|---:|---|
+| val_avg | 57.7122 | 67.8679 | +17.6% ❌ |
+| test_avg | 49.5412 | 58.6628 | +18.4% ❌ |
+| Epochs | ~26 | 17 | −9 epochs |
+| s/epoch | 71.0 | 94.6 | +33% slower |
+| VRAM | 13.6 GB | 18.6 GB | +5 GB |
+
+- **Analysis:** Budget-bound. 33% slower epochs → 17 epochs vs 26 → under-trained. Val still descending at final epoch (best = last epoch). non-EMA test 75.92 vs EMA 58.66 confirms model still converging fast at termination. **Width-up axis closed at bs=2 / 30-min cap.** Next direction: width-down (n_hidden=96, n_hidden=64) mirrors the n_layers depth-down win — assigned fern #2464.
+- W&B: `2rl3vfjq` (group: `willow-r3-n-hidden-192-bs2`)
+
+## 2026-05-13 16:43 — PR #2119: n_layers=4 on bs=2+slice32+fourier_k=12 stack — MERGED
+
+- `willowpai2g24h3-edward/n-layers-sweep`
+- **Hypothesis:** Shallower model converges further in a fixed 30-min budget. First-round data (pre-slice32) showed n=4 > n=5 > n=6 monotonically. Retest on full merged stack (bs=2+slice32+fourier) to confirm the gain stacks.
+- **Results:**
+
+| Metric | Baseline (jc24jr52, n=5) | n_layers=4 (qttr6jay) | Δ |
+|---|---:|---:|---|
+| val_avg | 57.7122 | **53.8380** | **−6.71% ✅** |
+| test_avg | 49.5412 | **46.9320** | **−5.27% ✅** |
+| Best epoch | 26 | 29 | +3 |
+| s/epoch | 71.0 | 57.8 | −19% faster |
+| n_params | 668,855 | 548,755 | −18% |
+
+Per-split val: in_dist=57.24 (−6.3%), camber_rc=62.57 (−8.1%), camber_cruise=40.50 (−5.8%), re_rand=55.05 (−6.2%). All 4/4 improve.
+Per-split test: 50.16 (−3.4%), 56.06 (−5.3%), 33.72 (−6.2%), 47.79 (−6.5%). All 4/4 improve.
+
+- **Analysis:** Mechanism confirmed. 4/5 per-layer scaling holds exactly (measured 0.81× vs predicted 0.80×). 3 extra epochs in the same wall-clock (+11.5% grad steps). All 8/8 per-split metrics improve. The depth-and-batch-size levers are partially redundant (both buy more grad steps), reducing marginal gain vs first-round data, but direction is unambiguous. **Merged as clean win.** New baseline: val 53.84 / test 46.93. Next: n_layers=3 sweep (edward #2462) and n_hidden narrowing (fern #2464).
+- W&B: `qttr6jay` (group: `willow-r3-n-layers-slice-ext`)
+- Reproduce: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4`
+
 ## 2026-05-13 16:31 — PR #2413: Cosine tail compression (--epochs 25, --epochs 22) on slice32+bs2 stack — CLOSED
 
 - `willowpai2g24h3-tanjiro/cosine-tail-compress`

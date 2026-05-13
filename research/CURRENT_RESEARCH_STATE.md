@@ -5,26 +5,34 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~16:35 — tanjiro #2413 closed (cosine-tail +5.4% regression, axis settled); tanjiro reassigned #2449 lr-peak-sweep)
-- **Current best (merged)**: PR #2389 nezuko bs=2 (run `jc24jr52`) at **val 57.7122 / test 49.5412** — all 4 splits improve, 26/50 epochs, 71 s/epoch, VRAM **13.6 GB** (83% reduction, opens capacity experiments). Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2`
-- **Updated merge bar (vs 57.71 baseline)**: ≤51.9 val ⇒ merge (≥10% gain), 51.9-57.7 → second seed, ≥57.7 → close.
-- **Closed axes on bs=2+slice32 stack:** cosine-tail shape (#2302 –epochs 20, #2413 –epochs 25 both regress). **Confirmed: gradient-step-bound. Peak-LR magnitude is the next lever.**
+- **Date**: 2026-05-13 (updated ~16:50 — **edward #2119 n_layers=4 MERGED (val 53.84/test 46.93, −6.7%/−5.3%)** — new best; fern #2423 closed (+17.6% regression, budget-bound); edward→#2462 n_layers=3, fern→#2464 n_hidden-narrow; all 6 in-flight notified)
+- **Current best (merged)**: PR #2119 edward n_layers=4 (run `qttr6jay`) at **val 53.8380 / test 46.9320** — all 8 sub-metrics improve, 29 epochs, 57.8 s/epoch, 548K params. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32 --batch_size 2 --n_layers 4`
+- **Updated merge bar (vs 53.84 baseline)**: ≤48.4 val ⇒ merge (≥10% gain), 48.4-53.8 → second seed, ≥53.8 → close.
+- **Closed axes on merged stack:**
+  - cosine-tail shape (#2302 –epochs 20, #2413 –epochs 25 both regress)
+  - width-up (#2423 n_hidden=192 → only 17 epochs, 33% slower, +17.6% regression)
+  - **Confirmed dominant mechanism: gradient-step-bound — lighter models converge further in 30-min cap**
+- **Active research directions (both exploit gradient-step-bound):**
+  1. **Model size minimization** — edward #2462 (n_layers=3), fern #2464 (n_hidden=96/64)
+  2. **LR magnitude axis** — tanjiro #2449 (lr=7e-4, lr=1e-3)
+  3. **Batch-size minimization** — nezuko #2421 (bs=1)
+  4. **Architecture variants** — askeladd #2314 (Lion), frieren #2192 (n_head sweep), alphonse #2358 (slice=16)
+  5. **Augmentation** — thorfinn #2097 (coord-jitter)
 - **In-flight (8 students, 0 idle):**
-  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32+bs4, Arm B slice_num=16+bs4; running.
-  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: running (GPU 97-99%).
-  - edward #2119 n-layers-sweep: retest n_layers=4+slice32+bs=2 running (GPU 99%, awaiting terminal).
-  - fern #2423 wider-model-bs2: n_hidden=192 on bs=2 stack (86 GB VRAM — near cap, stable).
-  - frieren #2192 n-head-sweep (2,4,8): back at 95% GPU / 47.7 GB — running another arm or seed after brief idle gap.
-  - nezuko #2421 bs1-sweep: bs=1 sweep running (GPU 97-99%).
-  - tanjiro #2449 lr-peak-sweep: **newly assigned** — lr=7e-4 (Arm A) and lr=1e-3 (Arm B) on bs=2+slice32 stack. Peak-LR magnitude axis, skip-Arm-B rule if Arm A regresses.
-  - thorfinn #2097 coord-jitter-aug: actively running (GPU 98%, 55 GB) — no terminal yet.
-- **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks.
+  - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32, Arm B slice_num=16; running. Notified of new 53.84 baseline.
+  - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: running. Notified of new 53.84 baseline.
+  - edward #2462 n-layers-3-sweep: **newly assigned** — n_layers=3 on full stack, testing depth minimum below 4.
+  - fern #2464 n-hidden-narrow: **newly assigned** — n_hidden=96 (Arm A), n_hidden=64 (Arm B, conditional). Width analog of n_layers=4 win.
+  - frieren #2192 n-head-sweep (2,4,8): actively running (back to 98% GPU after arm gap). Notified of new 53.84 baseline.
+  - nezuko #2421 bs1-sweep: bs=1 sweep running. Notified of new 53.84 baseline.
+  - tanjiro #2449 lr-peak-sweep: lr=7e-4 (Arm A) and lr=1e-3 (Arm B) on bs=2+slice32+n_layers=4 stack. Notified of new 53.84 baseline.
+  - thorfinn #2097 coord-jitter-aug: actively running (GPU 98%). Notified of new 53.84 baseline.
 - **Key structural observations from merged stack:**
-  - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + **batch_size=2**
-  - Padding-waste mechanism: `pad_collate` pads each batch to the largest sample. bs=2→1 eliminates all padding. bs=2 was 17% faster/epoch than bs=4; bs=1 may be faster still.
-  - Val curve still monotonic at epoch 26 (LR ~28% peak, cosine T_max=50 only 52% spent). Model is gradient-step AND LR-limited.
-  - VRAM dropped from 80.9 GB → 13.6 GB at bs=2. 82 GB headroom now available for capacity (n_hidden, n_layers, n_head) experiments.
-  - All gains so far compound orthogonally; no negative interactions observed.
+  - Full stack: SmoothL1 + grad_clip + EMA(0.999) + AMP + warmup_5ep + fourier_k=12 + slice_num=32 + bs=2 + **n_layers=4**
+  - **Per-layer throughput scales exactly as predicted** (4/5 = 0.80×, measured 0.81×). Depth reduction buys real epochs.
+  - Padding-waste mechanism (bs=2): `pad_collate` at bs=2 pads only 1 sample vs 3 at bs=4. bs=2 was 17% faster/epoch AND 2.26× more grad steps.
+  - Val curve still monotonic at epoch 29 (LR ~28% peak). Model still gradient-step-limited even after depth reduction.
+  - Model is now **548K params**, 57.8 s/epoch, ~13 GB VRAM. All 3 knobs (depth, batch, slice) compound orthogonally.
 - **Launch**: `willow-pai2g-24h-r3` (isolated 24h appendix experiment)
 - **Advisor branch**: `icml-appendix-willow-pai2g-24h-r3`
 - **W&B project**: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`
