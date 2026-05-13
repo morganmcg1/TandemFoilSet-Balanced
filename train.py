@@ -429,6 +429,7 @@ class Config:
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
     fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    node_dropout: float = 0.0  # fraction of input mesh nodes to drop during training; 0 disables
 
 
 cfg = sp.parse(Config)
@@ -546,14 +547,29 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+
+            # Mesh-node dropout: randomly zero a fraction of valid input nodes and
+            # exclude them from the loss. Input-side regularizer for mesh-density
+            # variation across geometry holdout splits. Training-only.
+            if cfg.node_dropout > 0.0 and model.training:
+                keep_prob = 1.0 - cfg.node_dropout
+                node_keep = torch.bernoulli(
+                    torch.full_like(mask, keep_prob, dtype=torch.float32)
+                ) * mask.float()
+                x_norm = x_norm * node_keep.unsqueeze(-1)
+                effective_mask = node_keep.bool()
+            else:
+                node_keep = None
+                effective_mask = mask
+
             pos_enc = fourier_enc(x_norm[:, :, :2])
             x_fourier = torch.cat([pos_enc, x_norm[:, :, 2:]], dim=-1)
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_fourier})["preds"]
             sq_err = (pred - y_norm) ** 2
 
-            vol_mask = mask & ~is_surface
-            surf_mask = mask & is_surface
+            vol_mask = effective_mask & ~is_surface
+            surf_mask = effective_mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
@@ -568,11 +584,15 @@ for epoch in range(MAX_EPOCHS):
             optimizer.step()
             optimizer.zero_grad()
             global_step += 1
-            wandb.log({
+            log_payload = {
                 "train/loss": accum_loss / max(n_micro_in_accum, 1),
                 "train/effective_batch_size": cfg.batch_size * n_micro_in_accum,
                 "global_step": global_step,
-            })
+            }
+            if node_keep is not None and global_step % 25 == 0:
+                realized_drop = 1.0 - (node_keep.sum() / mask.float().sum().clamp(min=1)).item()
+                log_payload["train/node_drop_rate"] = realized_drop
+            wandb.log(log_payload)
             accum_loss = 0.0
             n_micro_in_accum = 0
 
