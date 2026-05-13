@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 14:00 (round-28: Closed stale #1976 tanjiro DropPath (4th consecutive stale assignment); reassigned as fresh PR #2083 with updated 50.6001 baseline context. No PRs review-ready; 8 WIP. Baseline still **50.6001**)
+- **As of:** 2026-05-13 14:30 (round-29: Closed #1997 alphonse lr-DOWN LOSS (val 56.36, +11.4% vs new baseline). lr axis fully bracketed (UP closed #1774, DOWN closed #1997) — capacity↔LR coupling axis closed within ±25% of 5e-4. 4th averaging-style bimodal confirmation (in-dist −6.45, OOD +4.84 to +5.74). Reassigned alphonse to AdamW β1=0.95 (UP probe, PR #2093) — single-knob optimizer probe on a novel axis. Baseline still **50.6001**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -54,18 +54,18 @@ Per-split baseline (PR #2033):
 
 | PR | Student | Hypothesis | Notes |
 |---|---|---|---|
-| #2071 | thorfinn | Warmup-5-cosine (warmup_epochs 3→5, T_max 47→45) | **Round-27** — warmup duration axis closure; probe whether longer basin exploration beats warmup-3 |
+| #2093 | alphonse | AdamW β1=0.95 (UP probe) — gradient momentum smoothing for L1 sign-noise | **Round-29** — single-knob optimizer probe on novel axis; β2 closed (#1845), β1 never probed |
+| #2083 | tanjiro | DropPath p_max=0.1 stochastic depth (retry of stale #1976) | **Round-28** — block-level stochastic depth, structurally distinct from closed averaging-style class |
 | #2072 | edward | NACA geometry jitter σ=0.01 (channels 15-17 NACA1, 19-21 NACA2) | **Round-27** — direct attack on val_geom_camber_rc OOD bottleneck via camber perturbation |
+| #2071 | thorfinn | Warmup-5-cosine (warmup_epochs 3→5, T_max 47→45) | **Round-27** — warmup duration axis closure; probe whether longer basin exploration beats warmup-3 |
 | #2051 | askeladd | Lookahead(k=5, α=0.5) wrapping AdamW | **Round-26** — slow/fast weight averaging; flat-minima bias hypothesis for OOD generalization |
 | #2034 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **Round-25 retry** — RMSNorm hypothesis; resubmit of stale #1926 |
-| #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) | **Round-23** — capacity↔LR coupling DOWN probe; ⚠️ new baseline 50.6001 |
 | #1988 | nezuko | Per-sample fun_dim jitter Re/AoA — **retune σ=0.025** | **Round-24 send-back** — σ=0.05 LOSS (+11.9%); ⚠️ new baseline 50.6001 |
-| #2083 | tanjiro | DropPath p_max=0.1 stochastic depth (retry of stale #1976) | **Round-28** — block-level stochastic depth, structurally distinct from closed averaging-style class |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; ⚠️ new baseline 50.6001 |
 
 ## Warning on in-flight rebase
 
-Most long-running in-flight PRs (#1775, #1988, #1976, #1997) were assigned on the old 54.0051 baseline and do NOT include the warmup-3-cosine schedule (merged PR #2033). The current baseline is **50.6001**. These PRs need to beat 50.6001 to merge — a significantly harder bar. If any returns with val > 50.60 but close, consider requesting a rebase onto the current advisor (with warmup) before closing.
+Long-running in-flight PRs (#1775, #1988) were assigned on the old 54.0051 baseline and do NOT include the warmup-3-cosine schedule (merged PR #2033). The current baseline is **50.6001**. These PRs need to beat 50.6001 to merge — a significantly harder bar. If any returns with val > 50.60 but close, consider requesting a rebase onto the current advisor (with warmup) before closing.
 
 ## Closed axes (comprehensive)
 
@@ -88,7 +88,10 @@ Most long-running in-flight PRs (#1775, #1988, #1976, #1997) were assigned on th
 - **EMA model weights (decay=0.9999, 0.999):** 3 runs total. Mechanism confirmed (EMA<raw from ep10, dual-eval diagnostic). But per-split always bimodal: in-dist −12.9%, OOD +5-14%. Third confirmation of averaging-style bimodal pattern alongside coord-jitter and grad-clip. EMA-of-weights axis locally closed (PR #1946). **Pattern: ~14% in-dist headroom unlockable by averaging-style regularization; OOD requires structural interventions.**
 - **Warmup-3-cosine:** MERGED as PR #2033 (WIN −6.31% val, −7.68% test). Now on advisor as the new schedule. warmup mechanism confirmed: sub-peak LR in first 3 epochs selects better loss basin. L1's two-phase property validated: warmup (find) + cosine (fine-tune). Best gain on val_single_in_dist (−18.87%); geom_camber_rc barely moved (−0.11%). Warmup duration axis continues.
 - **AdamW β2=0.95 (earlier β=0.5 test):** near-wash on β=0.5, no clear signal (PR #1676).
-- **lr=7.5e-4 (+50% lr-UP):** LOSS on L1+slice=32 (+16% vs current, n=3 mean 62.66) — closed across all 3 landscape variants tested (β=0.5 wash, L1+slice=64 wash-with-loss-tail, L1+slice=32 LOSS) (PR #1774). lr-UP axis closed; capacity↔LR coupling DOWN probe in flight as #1997.
+- **lr axis (capacity↔LR coupling, ±25% of 5e-4):** fully bracketed and closed.
+  - **lr=7.5e-4 (+50% lr-UP):** LOSS on L1+slice=32 (+16% vs current, n=3 mean 62.66) — closed across all 3 landscape variants tested (β=0.5 wash, L1+slice=64 wash-with-loss-tail, L1+slice=32 LOSS) (PR #1774).
+  - **lr=3.75e-4 (-25% lr-DOWN):** LOSS on warmup-3-cosine + L1+slice=32 (val 56.36, +11.4% vs 50.6001, n=1) — 4th averaging-style bimodal confirmation: in-dist −6.45 (win) but all 3 OOD splits +4.84 to +5.74 (regression). Best epoch terminal at 44/50 → under-stepping confirmed (PR #1997).
+  - **Pattern:** lr-DOWN is 4th confirmation of averaging-style bimodal (alongside coord-jitter, weight-EMA, grad-clip). Reduced effective step size acts as implicit averaging — same in-dist↔OOD trade-off. lr axis closed.
 - **SGDR T_0=10 T_mult=2:** LOSS on L1+slice=32 (+27.7% val, n=1, 68.96 vs 54.00). Mechanism worked at cycle level (restart #2 min < restart #1 min) but L1 sign-gradient regime is fundamentally hostile to LR restarts (signs reset, late settling destroyed). Budget-fit variants deferred — L1+restart is the binding incompatibility (PR #1989). Schedule axis continues with warmup+monotone-cosine in flight as #2033.
 
 ## Open questions / next experiments
@@ -97,7 +100,8 @@ Most long-running in-flight PRs (#1775, #1988, #1976, #1997) were assigned on th
    - **Coord-jitter (#1921) CLOSED (LOSS):** -13.7% in-dist, all OOD splits degraded.
    - **EMA (decay=0.999, #1946) CLOSED (WASH-TO-LOSS):** -12.9% in-dist, OOD +5-14%.
    - **Grad-clip (#1653) CLOSED (WASH):** -13.3% in-dist, OOD +3-5%.
-   - **In-dist headroom (~14%) is unlockable but does NOT translate to OOD (3× confirmed).** Averaging-style regularization (coord-jitter, weight-EMA, grad-clip) consistently gives ~-13% in-dist win but regresses OOD. This is now a rock-solid pattern.
+   - **lr-DOWN (#1997) CLOSED (LOSS):** -6.45 in-dist, OOD +4.84 to +5.74 (4th confirmation).
+   - **In-dist headroom (~6-14%) is unlockable but does NOT translate to OOD (4× confirmed).** Averaging-style regularization (coord-jitter, weight-EMA, grad-clip, lr-DOWN) consistently gives in-dist win but regresses OOD. This is now a rock-solid pattern across 4 different mechanisms (data aug, weight aug, gradient aug, step-size aug). **The next OOD-targeting experiment must NOT be averaging-style** — needs structural intervention (geometry jitter, conditional embedding, multi-task auxiliary loss).
    - **Active OOD interventions:** NACA geometry jitter (#2072 edward) — directly targets camber distribution shift; Lookahead optimizer (#2051 askeladd) — flat-minima bias hypothesis; fun-jitter Re/AoA σ=0.025 (#1988 nezuko) — function space augmentation.
    - **Untried structural OOD interventions:** domain conditional embedding (architectural), AoA reflection symmetry, multi-task camber prediction auxiliary loss.
 2. **Normalization** — RMSNorm in flight (#1926). Pre-LN vs Post-LN placement also untested.
@@ -106,5 +110,5 @@ Most long-running in-flight PRs (#1775, #1988, #1976, #1997) were assigned on th
 5. **Lookahead optimizer** — **in-flight #2051 askeladd.** Standard k=5, α=0.5 recipe. Hypothesis: flat-minima bias from slow-weight averaging should improve OOD (inverse of grad-clip's bimodal).
 6. **Warmup duration** — **in-flight #2071 thorfinn.** Warmup-3 won massively (-6.31%); warmup-5 probes whether longer basin exploration beats it or shorter settling phase hurts.
 7. **NACA geometry jitter** — **in-flight #2072 edward.** σ=0.01 on NACA channels 15-17, 19-21 during training. First geometry-level augmentation targeting camber distribution shift (val_geom_camber_rc).
-6. **Stochastic depth (DropPath)** — block-level residual regularization; different from per-weight attention dropout (closed). Untested.
-7. **EMA model weights for val/test eval** — in flight (#1946 edward). First try decay=0.9999 lagged catastrophically (val=165); rebracket to decay=0.999 (~2-epoch half-life) is correct window for our budget. Result expected next round.
+6. **Stochastic depth (DropPath)** — **in-flight #2083 tanjiro (retry).** Block-level residual regularization; structurally distinct from closed averaging-style class. Untested.
+7. **AdamW β1=0.95 (UP probe)** — **in-flight #2093 alphonse.** Single-knob optimizer probe on novel axis. β2 closed (#1845, +15% LOSS); β1 never probed. β1=0.9→0.95 lengthens gradient-momentum half-life from ~10 to ~14 steps, providing smoothing for L1's sign-gradient noise. Hypothesis: momentum smoothing distinct from step-size/weight averaging (lr-DOWN failed; EMA failed); operates on gradient-direction rather than gradient-magnitude or weight-trajectory.

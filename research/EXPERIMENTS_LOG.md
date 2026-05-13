@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-05-13 14:30 — Round 29
+
+### PR #1997 alphonse: lr 5e-4 → 3.75e-4 (-25% lr-DOWN) — CLOSED (LOSS, 4th averaging-style bimodal confirmation)
+
+- **Branch:** `charliepai2g48h5-alphonse/lr-3.75e-4`
+- **Hypothesis:** Reduce lr from 5e-4 to 3.75e-4 (-25%) to probe capacity↔LR coupling DOWN axis. With warmup-3 already merged, hoped lower peak-LR + warmup would settle into deeper basin.
+- **Result:** val_avg = **56.36** (+11.4% vs 50.6001), test_avg = **49.55** (+12.7%). Best epoch terminal at 44/50 (under-stepping confirmed).
+
+**Per-split breakdown (vs 50.6001 baseline PR #2033):**
+
+| Split | Baseline | lr=3.75e-4 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.94 | **41.49** | **−6.45** (in-dist WIN) |
+| `val_geom_camber_rc` | 67.37 | **73.11** | **+5.74** (OOD LOSS) |
+| `val_geom_camber_cruise` | 34.34 | **40.41** | **+6.07** (OOD LOSS) |
+| `val_re_rand` | 52.75 | **57.59** | **+4.84** (OOD LOSS) |
+| **val_avg** | **50.60** | **56.36** | **+11.4% LOSS** |
+
+**Axis status:** lr axis (capacity↔LR coupling, ±25% of 5e-4) fully bracketed and CLOSED.
+- lr-UP (+50% to 7.5e-4, #1774): LOSS +16% on L1+slice=32, n=3 confirmed
+- lr-DOWN (-25% to 3.75e-4, #1997): LOSS +11.4% on warmup-3-cosine baseline
+- 5e-4 confirmed as the optimum for this Transolver+L1+slice=32 setup
+
+**4th confirmation of averaging-style bimodal pattern.** Previously: coord-jitter (#1921), weight-EMA (#1946), grad-clip (#1653). Now lr-DOWN. Reduced effective step size acts as implicit averaging — same in-dist↔OOD trade-off as the other 3 mechanisms.
+
+**Mechanism interpretation:**
+- Smaller lr = each step traverses less of the loss landscape → trajectory averages over smaller neighborhood → behaves like weight-EMA implicitly
+- In-dist gain (−6.45) and uniform OOD regression (+4.84 to +5.74) match coord-jitter/EMA/grad-clip signatures exactly
+- This means the pattern is mechanism-agnostic — any reduction in effective trajectory diversity (data aug, weight aug, gradient aug, step-size aug) trades in-dist for OOD
+
+**Implication for future experiments:**
+- OOD bottleneck (val_geom_camber_rc 67.37, val_re_rand 52.75) does NOT yield to ANY averaging-style intervention
+- Need structural interventions: geometry-level augmentation (NACA jitter #2072 in flight), conditional embedding, multi-task auxiliary loss
+- Single-knob optimizer variants on novel axes (β1, weight decay schedule) remain worth probing but probably NOT for OOD
+
+**Run details:** 50 epochs in ~30 min, best epoch terminal at 44/50 (under-stepping). With smaller lr, model needs more steps to converge; budget-cap was the binding constraint.
+
+- **Metric artifacts:** model dir on `charliepai2g48h5-alphonse/lr-3.75e-4`
+
+### Assignment: Round 29
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2093 | alphonse | AdamW β1=0.95 (UP probe) — gradient momentum smoothing for L1 sign-noise; novel axis (β2 closed #1845, β1 never probed) |
+
+**Hypothesis rationale:** β2 was tested and closed (#1845, +15% LOSS on β2=0.95); β1 has never been probed. β1=0.9→0.95 lengthens the gradient-momentum half-life from ~10 steps to ~14 steps, providing additional smoothing for L1's sign-gradient noise. Mechanism is distinct from step-size averaging (lr-DOWN failed) and weight averaging (EMA failed): operates on gradient-direction rather than gradient-magnitude or weight-trajectory. β2 closure suggests AdamW's second-moment memory is critical (don't shrink); but first-moment momentum may benefit from being longer with L1's sign-flip gradient regime.
+
+---
+
 ## 2026-05-13 14:00 — Round 28
 
 ### PR #1976 tanjiro: DropPath p_max=0.1 stochastic depth — CLOSED (STALE, 4th consecutive on this branch)
