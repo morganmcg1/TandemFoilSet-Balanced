@@ -990,3 +990,44 @@ Combined with PR #1945 (n_hidden=256 only 12/18 epochs completed at T_max=18), w
 - Hypothesis: Direct reverse direction of closed #1967 (slice_num=96 +11.3% — capacity-up cost dominated). Reduce slots to 48 to **free per-epoch budget** for more cosine refinement. Linearly-extrapolated cost: 48-slot @ ~118s/epoch (−8% vs baseline 128s), enabling 19-20 epochs at the 30-min cap (vs 18 currently). Tests whether budget-for-refinement compounds with Lion+grad-accum on the trade where 48 slots is sufficient capacity. Single-line model_config change.
 - References: Transolver original ablations (Wu 2024) used slice_num=32 in many configs; 64 was high-capacity.
 - Target: test_avg/mae_surf_p < 80.62
+
+---
+
+## 2026-05-13 09:55 — PR #2010: SiLU activation (GELU→SiLU) — CLOSED (activation-swap lever exhausted)
+- Branch: willowpai2g48h1-edward/swiglu-activation
+- Hypothesis: Replace GELU with SiLU in all MLP blocks — minor activation curvature change, conjectured to be a near-free swap with Lion-friendly properties.
+- W&B run: 3dd1wpc2 (silu-trial-2, seed-pair `mt4vz5ur` silu-trial-1 confirmed)
+- Config: bs=4, accum=2, Lion lr=1.5e-4, fourier_L=8, n_hidden=192, n_layers=5, all current-stack defaults; train.py modifications LOCAL ON POD ONLY (never pushed to git)
+
+| Metric | SiLU (best run) | seed-pair (trial-1) | Baseline 80.62 | Δ |
+|---|---|---|---|---|
+| **test_avg/mae_surf_p** | **92.17** | 92.19 | **80.62** | **+14.3%** |
+| val_avg/mae_surf_p | 103.52 | 101.30 | 90.82 | +14.0% |
+| test_avg/mae_surf_Ux | 1.411 | 1.569 | — | — |
+| test_avg/mae_surf_Uy | 0.713 | 0.723 | — | — |
+| test_avg/mae_vol_p | 100.76 | 94.47 | — | — |
+
+- Steps: 2632 (full Lion+grad-accum=2 cycle completed in both seeds)
+- Runtime: 1830s (silu-trial-2), 1835s (silu-trial-1) — both at 30-min cap
+- Per-split test breakdown was NOT pushed to W&B summary (only aggregates)
+- Note: branch never had train.py committed — student edited locally on pod, ran training, but rate-limited at posting time. Result pulled directly from W&B by advisor; this is an advisor-led closure.
+
+**Analysis (advisor mechanism speculation)**: Two candidate mechanisms for +14% regression. (1) **Activation-LN interaction**: GELU's smoother negative tail provides better gradient flow under Lion sign-momentum in bf16; SiLU's sharper near-0 transition amplifies sign-flip jitter at precision floor. (2) **MLP block-scale shift**: SiLU output mean is lower than GELU near 0, effectively reducing per-block capacity by ~2×; LayerNorm re-normalizes but cumulative residual-path shift compounds across 5 blocks.
+
+Notable: two seeds give 92.17 / 92.19 — variance < 0.05%, this is a clean negative result, not noise. The simpler SwiGLU/SiLU swap had been tried earlier (`7bjoczga` swiglu-trial-1 = test 89.18, 2820 steps — different config, pre-grad-accum era) and was closer to the baseline neighborhood, suggesting that gated MLP variants may behave differently from a plain SiLU swap. Not pursuing further activation variants; activation-swap lever CLOSED.
+
+**Activation-swap lever CLOSED**: GELU near-optimal for our stack at depth=5, width=192. Future variants (ReLU², geGLU) would need clear mechanism before being prioritized.
+
+**Pod-state note for operator**: edward's pod hit GitHub GraphQL rate limit at the moment training completed. The student couldn't post the results comment or push the train.py modifications. This is an entrypoint/rate-limit gap, not a student error.
+
+**Action**: Closed. Reassigned edward layerscale-1e-4 (#2141).
+
+---
+
+## 2026-05-13 09:55 — PR #2141 (NEW): LayerScale γ_init=1e-4 on residual branches
+- Branch: willowpai2g48h1-edward/layerscale-1e-4
+- Hypothesis: Per-channel learnable diagonal scaling γ ∈ R^{hidden_dim} applied to each TransolverBlock residual branch (attn + MLP), initialized to 1e-4. Each block starts as near-identity; model "opens up" residuals via gradient descent. Stabilizes deep-stack residual flow under Lion's sign-momentum, which produces uniform-magnitude steps. Orthogonal complement to DropPath (#2030 thorfinn, in-flight): DropPath = stochastic branch-dropping; LayerScale = deterministic branch-shrinking + learning the right scale. Often compound in modern transformer recipes.
+- References: Touvron 2021 (CaiT, original), Liu 2022 (ConvNeXt γ=1e-6), Peebles 2022 (DiT), Bao 2022.
+- Target: test_avg/mae_surf_p < 80.62
+
+---

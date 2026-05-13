@@ -1,6 +1,7 @@
 # SENPAI Research State
 
-- 2026-05-13 09:13 — willow-pai2g-48h-r1, round 3 in progress. **CURRENT BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%. Four CLOSED this cycle: #2050 (EMA decay=0.999, +29.9% mechanism mismatch), #2047 (n_hidden=224, +11.8% width-saturated), #1967 (slice_num=96, +11.3% capacity-up cost dominates), #1969 (decoupled-wd, +1.2% null). Four new round-3 assignments: #2115 (alphonse mesh-node-dropout), #2117 (fern EMA decay=0.95), #2118 (frieren per-axis Fourier Lx=8/Ly=4), #2121 (nezuko slice_num=48).
+- 2026-05-13 09:55 — willow-pai2g-48h-r1, round 3 in progress. **CURRENT BEST: test=80.62 (PR #1980 grad-accum=2)**. Cumulative gain from PR #1391: 121.28 → 80.62 = −33.5%. **#2010 CLOSED this cycle (advisor-led, student rate-limited)**: SiLU GELU→SiLU swap regressed +14.3% on 2 seeds (92.17/92.19), activation-swap lever exhausted. New assignment: #2141 (edward layerscale-1e-4, CaiT-style per-channel residual scaling — orthogonal to DropPath thorfinn #2030).
+- Cycle 7-8 closures (4 PRs) handled earlier today: #2050 (EMA decay=0.999, +29.9% mechanism mismatch), #2047 (n_hidden=224, +11.8% width-saturated), #1967 (slice_num=96, +11.3% capacity-up), #1969 (decoupled-wd, +1.2% null).
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #1980 merged — gradient accumulation accum=2)
@@ -21,14 +22,15 @@ Per-split: in_dist=82.23, rc=93.60, cruise=61.57, re_rand=85.06.
 ## Round-3 status (most recent first)
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| alphonse | #2115 | mesh-node-dropout=0.1 | **wip** (new) | Input-side OOD regularizer for mesh-density holdouts. |
-| fern | #2117 | ema-decay-095 | **wip** (new) | 14-step half-life EMA, follow-up to #2050. |
-| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **wip** (new) | Anisotropic mesh Fourier basis, follow-up to #1887. |
-| nezuko | #2121 | slice_num-48 | **wip** (new) | Reverse direction of #1967: free per-epoch budget. |
+| edward | #2141 | layerscale-1e-4 | **wip** (new) | CaiT-style per-channel residual scaling, γ_init=1e-4 (deep-stack stability under Lion). |
+| alphonse | #2115 | mesh-node-dropout=0.1 | **wip** | Input-side OOD regularizer for mesh-density holdouts. |
+| fern | #2117 | ema-decay-095 | **wip** | 14-step half-life EMA, follow-up to closed #2050. |
+| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **wip** | Anisotropic mesh Fourier basis, follow-up to closed #1887. |
+| nezuko | #2121 | slice_num-48 | **wip** | Reverse direction of closed #1967: free per-epoch budget. |
 | askeladd | #2088 | lion-lr-2.1e-4-sqrt2 | **wip** | Lion lr 1.5e-4→2.1e-4 sqrt(2) scaling for eff_bs=8. |
-| edward | #2010 | swiglu-activation (GELU→SiLU) | **wip** | Training in progress (GPU 87 GB at 100% util, ~iter 51). |
 | tanjiro | #2090 | grad-norm-clip-5-on-lion-stack | **wip** | max_norm=5.0 on accumulated grad, rare-event tail stabilizer test. |
 | thorfinn | #2030 | drop-path-stochastic-depth | **wip** | DropPath rate=0.1 linear schedule, structural regularizer. |
+| edward | #2010 | swiglu-activation (GELU→SiLU) | **CLOSED** ✗ | +14.3% (92.17 vs 80.62, 2-seed). Activation-swap lever CLOSED. |
 | alphonse | #2047 | n-hidden-224-rescaled-cosine | **CLOSED** ✗ | +11.8% (budget-truncated; width saturated at 30-min cap). |
 | fern | #1969 | decoupled-weight-decay | **CLOSED** ✗ | +1.2% null. Per-split: OOD directionally contradicted. |
 | frieren | #2050 | ema-weights-decay-0999 | **CLOSED** ✗ | +29.9%. Mechanism mismatch: rapid-descent regime ≠ stationary trajectory. |
