@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 13:50
+- 2026-05-13 14:10
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -82,7 +82,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #2288 | frieren | Lion lr sweep on SwiGLU baseline: Arm A=2.5e-4, Arm B=3e-4 (SwiGLU changes gradient surface — confirm lr=2e-4 optimal) | WIP — new | Beat 47.43 |
 | #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe, SwiGLU co-change) | WIP — new | Beat 47.43 |
 | #2177 | edward | Lion wd sweep re-arm: wd ∈ {5e-4, 2e-3} — first real wd signal above FP32 ulp floor | WIP — re-armed | Beat 47.43 |
-| #2181 | tanjiro | batch_size=8: test Lion sign-vote quality at lower gradient noise | WIP | Beat 47.43 |
+| #2332 | tanjiro | SwiGLU preprocess MLP: replace GELU entry projector with SwiGLU gating (hidden=280, param parity) | WIP — new | Beat 47.43 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion stack | WIP (stale baseline) | Beat 47.43 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (stale baseline) | Beat 47.43 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (stale baseline) | Beat 47.43 |
@@ -92,6 +92,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | PR | Student | Outcome | Note |
 |---|---|---|---|
 | #2196 | fern | **MERGED** | SwiGLU gated MLP (hidden=216, param-equiv to GELU) → **new baseline 47.43/45.01** (−9.9% val, −8.6% test). All 8 splits improve. Hardest OOD (geom_camber_rc) gained most (−7.60 val). Largest single-PR gain since Lion. |
+| #2181 | tanjiro | CLOSED | batch=8 at lr=2e-4: val=64.91 (+36.9% vs current baseline). Epoch-budget cliff: halved step count (188 vs 376) with Lion's magnitude-invariant sign update → 2× under-training at same lr. Val still descending at −1.8/epoch at epoch 15. Untestable without LR compensation. |
 | #2249 | thorfinn | CLOSED | Lookahead wrapper (k=5, α=0.5 vs 0.8): Arm A val=57.61 (+21.5% vs current baseline), Arm B val=53.45 (+12.7%). Both still descending at epoch 16 — epoch-budget cliff. Lookahead+Lion needs ≥30 epochs to amortise slow-weight lag; 16-epoch cap insufficient. |
 | #2182 | frieren | CLOSED | LLRD factor=0.85: all 8 splits regress +7.3% val. Lion sign-step linearly LR-sensitive → 52% input-block lr cut = 52% step reduction, no recovery. Too shallow (5 layers) for BERT-style LLRD. |
 | #2161 | thorfinn | CLOSED | MLP+attention dropout rate sweep. Arm A (attn=0.1+MLP=0.1): val=55.317 (+5.1%), test=51.951 (+5.5%). Arm B (attn=0.05+MLP=0.0): val=53.657 (+2.0%), test=50.135 (+1.9%). Both regress → dropout=0.1 attention-only is thin-ridge local optimum. **Dropout axis SATURATED.** |
@@ -118,7 +119,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 2. **Does the Lion lr optimum shift on the SwiGLU baseline?** (#2288 frieren, new) — lr=2e-4 was proven optimal for GELU. SwiGLU changes the gradient Jacobian structure. Probing lr∈{2.5e-4, 3e-4}.
 3. **Does RMSNorm (scale-only, bias-free) outperform LayerNorm on the SwiGLU stack?** (#2315 thorfinn) — LLaMA-recipe co-change: SwiGLU+RMSNorm widely paired in modern transformers; mean-centering may erase PhysicsAttention slice-token offsets.
 4. **Does Lion weight_decay=5e-4 or 2e-3 beat the effective-wd=0 baseline?** (#2177 edward, re-armed) — First real wd signal above FP32 ulp floor. Important to test on SwiGLU stack eventually, but first get baseline wd result.
-5. **Does batch_size=8 improve Lion sign-vote quality?** (#2181 tanjiro) — lower gradient noise before sign quantization.
+5. **Does SwiGLU gating on the preprocess MLP stack on top of block-MLP SwiGLU?** (#2332 tanjiro) — extend gating to the mesh-feature entry projector (input dim=24, hidden=280 at param parity).
 6. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width, stale baseline)
 7. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd — slower momentum for noisy small-batch, stale baseline)
 8. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko — loss balance, stale baseline)
@@ -133,6 +134,7 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 - **Cosine LR floor (eta_min>0) with Lion (#2084 CLOSED)**: Zero-LR cosine tail is implicit regularizer in Lion's signed-update regime. Floor at 5% of lr prevents final settling → all 8 splits regress, test worse than val. Do not add eta_min to Lion runs.
 - **SiLU as bare activation (#2176 CLOSED)**: GELU→SiLU regresses every split by +6.9 val/+6.5 test. Lion's sign update was tuned for GELU's gradient surface. Gated SwiGLU (#2196) is categorically different and won — mechanism confirmed to be the gate, not the activation slope.
 - **MLP dropout + attention dropout rate sweep at attn∈{0.05,0.1}, MLP∈{0,0.1} (#2161 CLOSED)**: Both directions regress. Dropout=0.1 attention-only is a thin-ridge local optimum. **Dropout axis SATURATED.**
+- **batch=8 at fixed lr=2e-4 (#2181 CLOSED)**: Lion sign update magnitude = lr × 1.0 regardless of gradient magnitude; B=8 halves per-epoch step count → 2× under-training at same LR. Would require lr_B8 ≈ 4e-4 (linear scaling) to be a fair comparison — risky without first confirming SwiGLU lr bowl via #2288. Do not assign B=8 experiments without LR compensation.
 - **Lookahead wrapper (k=5, α∈{0.5,0.8}) around Lion (#2249 CLOSED)**: Epoch-budget cliff. Slow-weight anchor drags fast weights back to lagged interpolant; both arms still descending at epoch 16 with slopes −1.1 and −0.75/epoch vs baseline ~−0.27. Lookahead+Lion requires ≥30 epochs to amortise the lag cost; incompatible with 16-epoch hard cap.
 - **LLRD factor=0.85 (#2182 CLOSED)**: All 8 splits regress +7.3% val. Lion sign-step is linearly LR-sensitive — no preconditioning to recover from 50% step reduction on input blocks. Transolver (5 layers, from-scratch) is wrong regime for BERT-style LLRD.
 - **Lion wd ∈ [0, ~1.49e-4] at lr=2e-4 (#2177 part-A diagnostic)**: FP32 ulp truncation makes `(1−lr·wd)` a literal 1.0 in FP32 for all wd < 1.49e-4. **Do not assign wd sweeps < 2e-4 at lr=2e-4.** First firing values being probed at #2177.

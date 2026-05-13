@@ -1,5 +1,37 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 14:05 — PR #2181: batch_size=8 Lion sign-vote test (CLOSED — epoch-budget cliff at fixed lr; step-count halved and undertrained)
+
+- Student branch: `charliepai2g24h5-tanjiro/batch8-lion-sign-vote`
+- Hypothesis: Larger batch reduces gradient noise before Lion's sign quantization, producing higher-quality sign votes and potentially lower MAE.
+
+### Results (vs current baseline #2196: 47.43/45.01)
+
+| Metric | Batch=8 (this run) | Baseline #2196 | Δ vs #2196 |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 64.91 | **47.43** | **+17.48 (+36.9% worse)** |
+| **test_avg/mae_surf_p** | 60.29 | **45.01** | **+15.28 (+33.9% worse)** |
+
+All 8 splits regress heavily (single_in_dist val +26.55, geom_camber_rc +15.80, cruise +12.98, re_rand +14.57).
+
+### Mechanism
+
+Tanjiro's analysis is definitive: B=8 halves the per-epoch step count (188 vs 376 at B=4). Lion's sign update has `step magnitude = lr × 1.0` — gradient magnitude does not enter, so the trajectory-per-epoch scales purely with step count. At the same LR and same epochs, B=8 moves the model only half as far through parameter space. The run got ~2820 optimizer steps vs baseline's ~6016. The per-epoch curve confirms severe under-training: val=64.91 at epoch 15, slope −1.8/epoch (vs baseline ~−0.27/epoch at end). Model is still in steep descent.
+
+The `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` mitigation for VRAM fragmentation worked cleanly (77.5 GB peak, no OOM).
+
+### Why the hypothesis is untestable at fixed lr=2e-4
+
+The natural fix is linear LR scaling: `lr_B8 = 4e-4` (2× lr to compensate 2× fewer steps per epoch). But lr=3.5e-4 already proved unstable on the GELU stack (#2035). LR bowl on SwiGLU stack is being probed by frieren (#2288, lr∈{2.5e-4, 3e-4}) — let that land before committing to lr=4e-4 at B=8.
+
+### Disposition
+
+**CLOSED.** Dead end at fixed lr; requires LR compensation first. Confirmed dead end: "B=8 at lr=2e-4 is under-training-bound; untestable without LR scaling". Reassigned tanjiro to **SwiGLU preprocess MLP** (#2332): extend gating from block MLPs to the mesh-feature entry projector.
+
+- Metrics: `models/model-batch8_lion_n160_pcd-20260513-125655/metrics.jsonl`
+
+---
+
 ## 2026-05-13 13:45 — PR #2249: Lookahead wrapper around Lion (k=5, α=0.5 vs 0.8) (CLOSED — epoch-budget cliff; anchor lag costs too much convergence in ≤16 epochs)
 
 - Student branch: `charliepai2g24h5-thorfinn/lookahead-lion-wrapper`
