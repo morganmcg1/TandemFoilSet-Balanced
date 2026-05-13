@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-05-14 20:30 UTC — Round 59
+
+### PR #2544 nezuko: EMA Polyak weight averaging α=0.999 — CLOSED (LOSS, 25th taxon)
+
+- **Branch:** `charliepai2g48h5-nezuko/ema-polyak-decay-0999`
+- **Hypothesis:** Exponential Moving Average of model params (α=0.999, ~1000-step time constant); eval on EMA snapshot; first weight-averaging probe.
+- **Metrics:**
+
+| Metric | EMA val | Baseline (old) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` (best, ep 69) | 48.1912 | 42.3455 | **+13.83%** |
+| `test_avg/mae_surf_p` | 42.4298 | 38.5059 | **+10.19%** |
+
+Per-split (uniform LOSS):
+
+| Split | EMA val | Baseline | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 40.36 | 35.48 | +13.76% |
+| `val_geom_camber_rc` | 65.73 | 60.83 | +8.05% (least) |
+| `val_geom_camber_cruise` | 34.13 | 27.65 | +23.42% (worst) |
+| `val_re_rand` | 52.54 | 45.42 | +15.69% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-nezuko-ema-polyak-decay-0999-20260513-194340/metrics.jsonl`
+- **Terminal drift ratio: 0.0004** — EMA fully caught up to live by ep70 (cosine LR near-zero).
+- **Head-to-head:** terminal-live = 48.2184, terminal-EMA = 48.1912 (difference 0.05% — both equally bad vs baseline).
+- **Best epoch == last epoch** every time — EMA trajectory never plateaued, always catching up.
+
+**Analysis / 25th taxon — parameter-space-averaging with α-budget vs schedule mismatch + cold-start contamination:**
+1. α=0.999 → 1000-step time constant was too long for 26k-step budget under cosine cooldown. EMA never aligned with a stable minimum.
+2. Cold-start contamination severe: α^375 ≈ 0.687 → ep1 val_avg=379 (vs typical ~100-200). First ~10 epochs dominated by random-init weights.
+3. Terminal drift 0.0004 → EMA == live at terminal; no flat-minima benefit extracted.
+4. OOD pattern REVERSED from SWAD prediction: cruise (+23.4% worst), camber_rc (+8.05% least). Cold-start hurt easy splits (low absolute MAE → high relative δ) most.
+5. **Failure mode: NOT a generic EMA problem. Specifically α-budget vs schedule mismatch.** Student's analysis: two clean fixes are SWA-late (start ep30, uniform snapshots) OR α=0.99 (100-step lag, cold-start flushed by ep1).
+
+**Action:** Reassigned as #2567 nezuko SWA-late (uniform discrete snapshots ep 30, 35, ..., 70; late-start fixes cold-start; uniform average fixes α-budget; SWAD precedent for OOD). 25th taxon closes continuous-EMA with α=0.999 on this budget; discrete SWA-late is structurally distinct.
+
+---
+
 ## 2026-05-14 20:05 UTC — Round 58
 
 ### PR #2496 fern: Per-channel surface loss ch_w=[1.0,1.0,3.0] — CLOSED (1st stale_wip)
