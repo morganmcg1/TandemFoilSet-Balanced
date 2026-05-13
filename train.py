@@ -95,8 +95,8 @@ class SwiGLUMLP(nn.Module):
 
     def __init__(self, in_dim: int, hidden_dim: int):
         super().__init__()
-        inner_dim = hidden_dim
-        inner_dim = ((inner_dim + 7) // 8) * 8
+        inner_dim = 320  # H40: GeGLU inner_dim=320 (was hidden_dim=256)
+        inner_dim = ((inner_dim + 7) // 8) * 8  # stays 320 (already multiple of 8)
         self.inner_dim = inner_dim
         self.w_gate = nn.Linear(in_dim, inner_dim, bias=False)
         self.w_up = nn.Linear(in_dim, inner_dim, bias=False)
@@ -481,6 +481,9 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"n_params: {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
+print(f"[H40] SwiGLU inner_dim: {swiglu_inner_dim}")  # should print 320
+print(f"[H40] n_params: {n_params}")  # should print ~954,071
+print(f"[H40] Expected inner_dim=320, n_params=954,071")
 for i, b in enumerate(model.blocks):
     print(
         f"block {i}: layer_scale_attn init avg={b.layer_scale_attn.mean().item():.4f}, "
