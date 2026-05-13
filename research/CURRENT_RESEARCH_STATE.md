@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 12:25 UTC
+- **Date / time:** 2026-05-13 13:00 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -16,6 +16,14 @@ SPDX-PackageName: senpai
 Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
 **11 sequential compounding wins.** Current active stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+## Cycle-36 update — PR #2224 edward WD param groups sent back (stale-baseline pattern)
+
+W&B run `d2rbhuwr` ran with batch_size=2 (branched before #2203 merged). Result: val=70.9959 / test=61.8962. Beats OLD baseline #2085 by -2.96% val / -3.53% test (clean win, all four splits ↓) but +0.91% val / +1.36% test vs CURRENT baseline #2203. WD-split sanity check passed: 654,868 decay / 7,491 no_decay (1.13% — all LayerNorm pairs + all Linear biases captured).
+
+**Mechanism is sound** — Loshchilov+Hutter 2019 standard practice; under noisier batch_size=1 gradients the LN-scale flexibility could matter MORE, not less. Sent back to rebase + retest under batch_size=1 with optional bonus tweak (also exclude `temperature` and `placeholder` learned offsets).
+
+**Stale-baseline retest queue is now 4 deep:** askeladd #2025 (max_norm=1.5), alphonse #2103 (NAdam), nezuko #2104 (max_lr=2.5e-3), edward #2224 (WD groups). Each was created before #2203 merge but their results carry interpretive weight only after retesting under the new batch_size=1 baseline. Pattern to watch when baseline shifts mid-flight.
 
 ## Cycle-35 update — PR #2203 fern batch_size=1 MERGED ✓ (-3.84% val / -4.82% test)
 

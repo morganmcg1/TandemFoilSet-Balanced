@@ -11,6 +11,43 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 13:00 — Cycle 36: PR #2224 edward sent back (stale-baseline pattern, mechanism sound)
+
+### PR #2224 edward — AdamW WD parameter groups (exclude biases + LayerNorm): SENT BACK
+
+W&B run: `d2rbhuwr` (batch_size=2 — branched before #2203 merged)
+
+| Metric | Run | vs OLD (#2085, b=2) | vs CURRENT (#2203, b=1) |
+|--------|----:|--------------------:|------------------------:|
+| val_avg/mae_surf_p | 70.9959 | -2.96% ✓ | +0.91% ✗ |
+| test_avg/mae_surf_p | 61.8962 | -3.53% ✓ | +1.36% ✗ |
+| test single_in_dist | 64.3440 | -6.46% ✓ | -2.60% (better) |
+| test geom_camber_rc | 76.4961 | -1.11% ✓ | +4.04% (worse) |
+| test geom_camber_cruise | 44.5599 | -2.00% ✓ | +3.33% (worse) |
+| test re_rand | 62.1848 | -4.36% ✓ | +1.03% (worse) |
+
+**Analysis:** Loshchilov+Hutter 2019 AdamW practice — decay weight matrices only, exclude bias + LayerNorm. Sanity-check split confirmed: decay=654,868 (98.87%) / no_decay=7,491 (1.13%), all 11 LayerNorm pairs + all Linear biases captured (no q/k/v leaks since those are bias=False). Strong win against the old batch_size=2 baseline (-2.96% val, -3.53% test, all four splits improved). But PR #2203 (batch_size=1) merged during cycle 35 between PR creation and student execution, moving the baseline to val=70.3559. Against the new baseline edward is +0.91% val / +1.36% test.
+
+**Note on splits:** `single_in_dist` is the ONLY split where edward beats current baseline (64.34 < 66.06). The three OOD/generalization splits all regress. This is consistent with the mechanism: freeing LN scales under batch_size=2 fit better but under batch_size=1's higher gradient noise the same change may interact differently. The right test is to actually run it under batch_size=1.
+
+**Sent back** to rebase onto current advisor branch and retest under batch_size=1. WD-param-groups is mechanistically orthogonal to batch_size (regularization SHAPE vs. gradient noise), and with noisier gradients the LN-scale flexibility could matter more. Offered the optional bonus tweak of also excluding `temperature` and `placeholder` (student's own followups #1+#2) since these are learned offsets/scales of the same nature.
+
+### Fleet state after cycle 36
+
+All 8 students WIP, zero idle:
+- #2025 askeladd grad_clip max_norm=1.5 (retest under b=1)
+- #2103 alphonse NAdam (retest under b=1)
+- #2104 nezuko max_lr=2.5e-3 (retest under b=1)
+- #2205 thorfinn OneCycleLR cycle_momentum=False
+- #2224 edward WD param groups (retest under b=1) ← sent back this cycle
+- #2241 tanjiro OneCycleLR pct_start=0.05
+- #2250 frieren AdamW eps=1e-9
+- #2254 fern grad_accum=1 (eff_batch 2→1)
+
+Heavy retest queue (4 PRs need batch_size=1 retest after #2203 merge): askeladd, alphonse, nezuko, edward. Each one stale-baseline'd from creating PR before #2203 merged. Pattern to watch — when a strong baseline shift like #2203 happens, all in-flight PRs need to rebase before their results carry interpretive weight.
+
+---
+
 ## 2026-05-13 12:25 — Cycle 35: PR #2203 MERGED (11th win, batch_size=1) + #2025 sent back + #2152 closed + #2025/#2203 results + 2 new arms
 
 ### PR #2203 fern — batch_size 2→1 (effective batch 4→2): MERGED ✓ (11th win)
