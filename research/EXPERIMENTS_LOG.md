@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`
+- **Hypothesis:** Wider FFN at fixed n_hidden gives Transolver more per-block representation capacity at low extra cost vs depth/width.
+- **W&B runs:** `0la90jp4` (Arm 1: mlp_ratio=3, best), `3vii7yyo` (Arm 2: mlp_ratio=4), `y9byrbsb` (Arm 1 replicate)
+
+| Metric | Lion+EMA baseline (old) | Lion+MAE+lr=2e-4 (current) | Arm 1 (ratio=3) | Arm 2 (ratio=4) |
+|--------|-------------------------|----------------------------|-----------------|-----------------|
+| val_avg/mae_surf_p | 61.302 | **55.41** | 62.368 | 63.483 |
+| test_avg/mae_surf_p | 52.682 | **47.90** | 54.270 | 54.241 |
+| Δ vs current baseline | — | — | **+12.6%** | **+14.6%** |
+| Epochs (30-min cap) | 16 | 16 | 16 | 15 |
+| Main_val vs EMA_val gap (epoch 16, Arm 2) | — | — | — | **85.3 vs 63.5 = 22pt** |
+
+**Result:** CLOSED. **Third consecutive capacity-expansion failure** at the 30-min cap — joins #1761 (n_layers=6) and #1934 (n_hidden=192/256) in the compute-wall pattern.
+
+**Key finding from tanjiro's analysis:** Arm 2 (ratio=4) showed a 22-point gap between main_val (85.3) and EMA_val (63.5) — EMA averaging out heavy noise. This is the **under-regularization signal**: capacity expansion at fixed dropout=0.2 produces a noisier training trajectory. Hints that even the baseline compound may have regularization headroom — direct lead-in to tanjiro's next experiment.
+
+**Architectural takeaway (final):** All three capacity axes (depth, width, FFN width) regress at 30-min cap. The model sits in a near-Pareto region for this budget. Future architecture experiments must be compute-neutral (n_head, slice_num) OR paired with budget-aware tradeoffs (e.g., bs↑ to compensate for epoch loss).
+
+**Tanjiro reassigned:** PR #2131 — dropout sweep (0.1 vs 0.3) on Lion+MAE+lr=2e-4. Direct probe of tanjiro's own under-regularization observation.
+
+---
+
 ## 2026-05-13 08:30 — PR #1932: Lion lr=2e-4 scaling on Lion+MAE compound (thorfinn) — MERGED NEW BEST
 
 - **Branch:** `willowpai2g24h5-thorfinn/lion-lr-scaling`

@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~08:35 UTC
+- **Date:** 2026-05-13 ~09:12 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -33,7 +33,7 @@
 | #2052 | frieren | batch_size=8: lr=2e-4 linear (Arm1), lr=1e-4 batch-only (Arm2) | WIP |
 | #2001 | askeladd | Lion β1 sweep: β1=0.95 (Arm1), β1=0.85 (Arm2) | WIP |
 | #1999 | fern | Cosine T_max tuning: T_max=16 (Arm1), T_max=16+eta_min=1e-5 (Arm2) | WIP |
-| #1961 | tanjiro | FFN width: mlp_ratio=3 (Arm1), mlp_ratio=4 (Arm2) | WIP — stale (nudged) |
+| **#2131** | **tanjiro** | **Dropout sweep on Lion+MAE+lr=2e-4: dropout=0.3 (Arm1), dropout=0.1 (Arm2)** | **WIP — new** |
 
 ## Closed experiments this round
 
@@ -41,6 +41,7 @@
 - **#1825 (askeladd):** MAE loss on Lion+EMA — **MERGED** val=56.58, test=48.82.
 - **#1823 (fern):** wd=5e-4 on AdamW base — regression. Closed.
 - **#1781 (thorfinn):** Lion optimizer — **MERGED** val=61.30, test=52.68.
+- **#1961 (tanjiro):** mlp_ratio=3/4 — monotonic regression, third capacity-expansion failure. Main-vs-EMA gap diagnostic flagged for follow-up.
 - **#1761 (tanjiro):** n_layers=6 — compute-budget bound, +4% regression.
 - **#1934 (alphonse):** n_hidden=192/256 — monotonic regression, compute-bound.
 - **#1857 (edward):** EMA decay 0.995/0.999 — val regression (nuanced test signal at 0.995).
@@ -57,7 +58,8 @@
 4. **EMA weight averaging (decay=0.99):** −22.1% val — foundational.
 5. **Fourier positional encoding:** −14.8% test — foundational.
 6. **Canonical wd scaling disconfirmed on Lion+MAE:** wd=5e-4 regresses vs wd=1e-4 at lr=2e-4. EMA+dropout already saturate regularization; additional wd over-constrains.
-7. **Architectural compute-budget wall:** n_layers=6 (+19%/epoch) and n_hidden=192/256 (+30-53%/epoch) both regress at 30-min cap. Only compute-neutral architecture changes viable (n_head, mlp_ratio).
+7. **Architectural compute-budget wall (all 3 capacity axes confirmed):** depth (n_layers=6, +19%/epoch), width (n_hidden=192/256, +30-53%/epoch), AND FFN-width (mlp_ratio=3/4, +1ep cost + main/EMA 22pt gap) ALL regress at 30-min cap. Only compute-neutral architecture changes viable (n_head, slice_num).
+8. **Under-regularization signal (new):** mlp_ratio=4 showed main_val=85.3 vs ema_val=63.5 — 22pt gap, EMA absorbing heavy noise. Suggests baseline compound has regularization headroom. Tanjiro's #2131 dropout sweep probes this directly.
 8. **BF16:** foundational (+4 epochs in 30-min window).
 
 ## Priority for current wave
@@ -69,7 +71,7 @@
 - surf_weight on Lion+MAE (#2056 nezuko) — sw=15 direction untested with MAE's uniform weighting
 - batch_size + LR scaling (#2052 frieren)
 - n_head sweep (#2069 alphonse) — only compute-neutral attention-side knob untested
-- mlp_ratio=3/4 FFN expansion (#1961 tanjiro, stale)
+- Dropout sweep on Lion+MAE+lr=2e-4 (#2131 tanjiro) — direct probe of under-regularization signal from #1961
 
 **Diagnostic / paper:**
 - Lion-no-EMA ablation (#2070 edward) — mechanism story for ICML appendix
