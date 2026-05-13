@@ -162,3 +162,29 @@ Merged. bf16 mixed-precision training (`torch.amp.autocast(dtype=torch.bfloat16)
 - **W&B run:** `1hn6ur4l`
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
   (warmup is now merged into train.py defaults; no extra flags needed)
+
+## 2026-05-13 02:10 — PR #1763: edward torch.compile
+
+**New best — 6th compound improvement (massive throughput win)**
+
+- **val_avg/mae_surf_p:** 71.4371 (↓ from 85.0926, −16.06%)
+- **test_avg/mae_surf_p:** 62.5927 (↓ from 75.5171, −17.11%)
+
+**Per-split test (all four improved dramatically):**
+
+| Split | mae_surf_p |
+|-------|----------:|
+| `test_single_in_dist` | 70.4261 |
+| `test_geom_camber_rc` | 74.0859 |
+| `test_geom_camber_cruise` | 44.5085 |
+| `test_re_rand` | 61.3503 |
+
+- **Config:** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, n_hidden=128, n_layers=5, slice_num=64, mlp_ratio=2, dropout=0.0, **torch.compile(model, dynamic=True, mode='default')**
+- **Epochs:** **29 in 30.7 min** (~63 s/epoch steady state, +12 s compile warmup on epoch 1)
+- **Speedup:** −44% per-epoch wall time vs no-compile; +12 epochs in budget (+71%)
+- **Peak GPU memory:** 23.8 GB / 96 GB
+- **EMA-vs-live gap:** −1.0 at epoch 29 (EMA 71.44, live 70.55 — both healthy)
+- **W&B run:** `o6k5dj4g`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
+  (torch.compile is now applied to the live model by default in train.py; dynamic=True handles variable mesh sizes; no extra flags needed)
+- **Confounder noted:** `--epochs 30` makes cosine T_max=30 (vs implicit baseline T_max=50). Part of the gain may be from a more aggressive cosine schedule. Throughput component is clean either way.
