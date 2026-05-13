@@ -456,6 +456,7 @@ class Config:
     fourier_max_freq: float = 10.0  # max frequency in the logspaced band; positions are O(1) post-norm
     slice_num: int = 64
     n_layers: int = 5  # Transolver block depth
+    optimizer: str = "adamw"  # "adamw" (default — bit-identical to prior) or "lion"
 
 
 cfg = sp.parse(Config)
@@ -533,7 +534,15 @@ if ema_model is not None:
     ema_model.eval()
     print(f"EMA enabled (decay={cfg.ema_decay})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+if cfg.optimizer == "lion":
+    from timm.optim import Lion
+    optimizer = Lion(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    print(f"Optimizer: Lion (lr={cfg.lr}, weight_decay={cfg.weight_decay})")
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'lion')")
+
 if cfg.warmup_epochs > 0:
     warmup = torch.optim.lr_scheduler.LinearLR(
         optimizer,
