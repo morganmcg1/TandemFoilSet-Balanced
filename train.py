@@ -503,6 +503,7 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    grad_norms_epoch: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -524,15 +525,27 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Capture pre-clip grad norm for diagnostic logging.
+        grad_norm_pre = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        grad_norms_epoch.append(grad_norm_pre.item())
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+
+    gn_arr = torch.tensor(grad_norms_epoch) if grad_norms_epoch else torch.zeros(1)
+    grad_norm_stats = {
+        "grad_norm_min": gn_arr.min().item(),
+        "grad_norm_p50": gn_arr.median().item(),
+        "grad_norm_mean": gn_arr.mean().item(),
+        "grad_norm_max": gn_arr.max().item(),
+        "grad_norm_clip_frac": (gn_arr > 1.0).float().mean().item(),
+    }
 
     # --- Validate ---
     model.eval()
@@ -567,10 +580,13 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        **grad_norm_stats,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"gn[p50={grad_norm_stats['grad_norm_p50']:.3f} max={grad_norm_stats['grad_norm_max']:.3f} "
+        f"clip={grad_norm_stats['grad_norm_clip_frac']:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
