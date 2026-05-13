@@ -57,7 +57,8 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
 | 1720 | fern | surf-weight-tuning-on-huber | WIP | surf_weight ∈ {5, 15, 30} on Huber baseline |
 | 1746 | tanjiro | frozen-p-variance-stratified-sampling | WIP | Pre-compute p-var weights over corpus; WeightedRandomSampler |
-| 1765 | thorfinn | decoupled-lr-surf-head | WIP (NEW) | surf_head_lr ∈ {2e-4, 1e-3, 3e-3}; encoder lr fixed at 5e-4 |
+| 1795 | thorfinn | decoupled-lr-surf-head | WIP | surf_head_lr ∈ {1e-3, 3e-3, 5e-3}; encoder lr fixed at 5e-4 |
+| 1808 | askeladd | ema-model-weights | WIP (NEW) | EMA shadow weights for eval; decay ∈ {0.999, 0.995} |
 
 ## Working hypotheses
 
@@ -72,8 +73,9 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 9. **Frozen p-variance stratified sampling** — testing (PR #1746 tanjiro). Makes BIVW's implicit Re-curriculum explicit at data-loader level; removes within-batch estimation noise from batch-of-4 estimator.
 10. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
 11. **Capacity (MLP width, slices)** — WIP (#1498, #1501); on Huber base with explicit huber_delta=0.5.
-12. **Warmup schedule** — WIP (#1497); on Huber base.
+12. **Warmup schedule** — **rejected** (PR #1497, +17.98% regression). Wall-clock-bound training (~14 epochs) makes warmup a liability — 5 warmup epochs consume the most productive early steps. The CosineAnnealingLR(T_max=50) baseline is effectively flat at lr=5e-4 for 14 epochs and wins. No instability observed in baseline; the hypothesis was wrong.
 13. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
+14. **EMA model weights** — testing (#1808 askeladd). EMA shadow copies evaluated at inference; decay ∈ {0.999, 0.995}. Orthogonal to all training changes — only affects which checkpoint is evaluated.
 14. **Decoupled LR for surf_head vs encoder** — testing (PR #1765 thorfinn). surf_head_lr ∈ {2e-4, 1e-3, 3e-3}; encoder lr fixed at 5e-4. Hypothesis: zero-init surf_head head may benefit from higher LR than the encoder.
 
 ## Closed / rejected hypotheses
@@ -84,6 +86,7 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 - **PR #1499** (grad-clip + higher LR on Huber base) — 1.45% val regression. Huber already compresses grad norms; clip is redundant. Test marginal (3-split: −1.1%). Closed.
 - **PR #1650** (Huber on volume loss) — all arms regressed (+8.7% to +19.9%). Volume MSE is the encoder's supervisory signal; Huber removes needed scale information. Principle: surface Huber + volume MSE is the correct recipe. Closed.
 - **PR #1627** (Huber delta sweep δ=0.2, 0.3) — both arms regressed (+15.6%, +17.2%). With δ=1.0 also worse (+1.3%), δ=0.5 is a narrow local optimum. Principle: do not re-sweep delta without first changing other levers.
+- **PR #1497** (5-epoch linear warmup + CosineAnnealingLR) — +17.98% regression. With T_max=50 but only ~14 epochs run, warmup costs productive steps without delivering cosine tail benefit. Principle: under 30-min cap, T_max must ≤ epochs_actually_run for scheduling to matter.
 
 ## Potential next directions
 

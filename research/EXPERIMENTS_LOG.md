@@ -379,6 +379,47 @@ The unimodal ordering (vd=0.5 best of three, not monotone) confirms this is a no
 
 ---
 
+## 2026-05-13 02:10 — PR #1497: 5-epoch linear warmup + CosineAnnealingLR (CLOSED — val regressed)
+
+- **Branch:** `willowpai2g48h4-askeladd/warmup-cosine-lr`
+- **Student:** willowpai2g48h4-askeladd
+- **W&B run:** `fhdmn0xr` (warmup-5-cosine-huber0.5)
+- **Hypothesis:** Adding 5-epoch linear LR warmup before CosineAnnealingLR prevents early-epoch instability in the slice-attention softmax weights and enables a higher effective LR.
+
+### Results
+
+| Arm | Warmup epochs | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p |
+|-----|---------------|--------------------|-----------|---------------------|
+| **Baseline (PR #1558)** | 0 (flat CosineAnnealingLR T_max=50) | **98.1642** | — | 98.7537 (3-split) |
+| warmup-5 | 5 | **115.8073** (best epoch 13) | **+17.98% ❌** | 106.82 (4-split, all finite) |
+
+Per-split val (best checkpoint, epoch 13):
+
+| Split | val mae_surf_p (warmup-5) | vs baseline |
+|-------|--------------------------|------------|
+| `val_single_in_dist` | 147.36 | 123.14 → **+19.7% ❌** |
+| `val_geom_camber_rc` | 135.03 | 107.24 → **+25.9% ❌** |
+| `val_geom_camber_cruise` | 92.27 | 73.28 → **+25.9% ❌** |
+| `val_re_rand` | 102.35 | 88.99 → **+15.0% ❌** |
+| **val_avg** | **115.8073** | **+17.98%** |
+
+LR trajectory confirmed correct: epoch 1→5 ramps linearly 1e-4→5e-4, then cosine from epoch 6.
+
+### Analysis and Conclusions
+
+**Closed — large regression, no instability to justify warmup.** The failure is structural, not tuning-related.
+
+**Root cause — wall-clock-bound training makes warmup a liability:**
+Training is capped at 30 min ≈ 14 epochs (out of 50 configured). A 5-epoch warmup spends 4 of the 14 most-productive epochs at 20–80% of peak LR. CosineAnnealingLR(T_max=50) barely decays by epoch 14 (we're at ~96% of peak), so the baseline is effectively a **flat LR at 5e-4** — and that flat schedule wins. No instability was observed in the baseline trajectory, so the premise (warmup prevents divergence) was wrong.
+
+**The cosine tail benefit (gradual late refinement) never materializes** because T_max=50 far exceeds the actual training duration. We paid the warmup cost without collecting the dividend.
+
+**Principle established:** Under the 30-min / ~14-epoch wall-clock cap, LR schedules with T_max >> epochs_run are effectively flat. If testing schedules, must set T_max ≤ epochs_actually_run.
+
+**Residual opportunity (askeladd's suggestion):** OneCycleLR (Smith 2018) is designed for short-budget regimes. Set pct_start=0.1 (10% of total steps = ~525 warmup steps) with `total_steps = estimated_epochs × len(train_loader)`. This gives rapid warmup + full decay in the actual training window, not the 50-epoch hypothetical.
+
+---
+
 ## 2026-05-13 00:07 — PR #1499: Grad-clip + higher LR on Huber baseline (CLOSED — val regressed)
 
 - **Branch:** `willowpai2g48h4-fern/gradient-clipping-and-higher-lr`
