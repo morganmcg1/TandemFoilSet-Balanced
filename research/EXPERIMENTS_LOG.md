@@ -37,6 +37,25 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 00:18 — PR #1662 v2: Fourier mesh positional encoding (nezuko) — SENT BACK
+**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: SENT BACK**
+
+- **v1 hypothesis:** Replace raw (x, y) mesh coords with sinusoidal Fourier features γ(x) = [sin(2π·2ᵏ·x), cos(2π·2ᵏ·x)] for k=0..5 (L=6). NeRF-style positional encoding for boundary-layer / wake / stagnation high-frequency structure.
+- **v1 results: val_avg/mae_surf_p = 107.19 (+3.97% vs 103.10 baseline), test_avg = 101.67 (+7.30%) — FAIL.**
+- **Per-split val:** `val_single_in_dist = 118.03 vs 125.91 = −6.26% IMPROVED` ✅ — the only substantial improvement on the historically worst split we've seen. But `rc = +13.7%`, `re_rand = +7.2%`, `cruise = +2.2%` all regressed.
+- **Two distinct fixable causes identified by student:**
+  1. **Over-capacity at L=6** — high-freq basis absorbed into memorising training-set detail; OOD splits suffer.
+  2. **Wrong spatial scope** — high-freq PE applied uniformly to bulk-flow nodes is wasted; only boundary-layer-adjacent nodes need it.
+- **Schedule confound:** v1 used `--use_onecycle True --epochs 11` (broken per PR #1574). Not a fair comparison to baseline.
+- **Why sent back, not closed:** val_single_in_dist −6.26% is exceptional; the failure modes are mechanistically clear; cosine T_max=14 + fixes will give a fair test.
+- **v2 instructions (2 arms):**
+  - Arm A: L=2 + cosine T_max=14 (lower capacity test)
+  - Arm B: L=4 surface-only (gated by is_surface mask) + cosine T_max=14 (location-restriction test)
+- **Pass criterion (v2):** val_avg < 103.10 AND test < 94.76 for either arm.
+- **Artifacts (v1):** `models/model-fourier-pos-encode-L6-20260512-231202/{metrics.jsonl,test_safe_eval.jsonl}`
+
+---
+
 ### 2026-05-13 00:02 — PR #1709: Focal per-sample loss weighting (askeladd) — WIP (assigned)
 **Branch:** `charliepai2g24h3-askeladd/focal-per-sample-loss-weighting` | **Status: WIP**
 
