@@ -21,12 +21,12 @@ The model's best checkpoint is still the LAST epoch (29/29) — we are firmly co
 Active threads:
 - **OneCycleLR max_lr=1.5e-3** — does higher peak LR on the winning stack improve further? (alphonse #1716)
 - **OneCycleLR pct_start=0.05** — shorter warmup, more decay time per budget (nezuko #1719)
-- **Thorfinn #1628** — SENT BACK for 2-seed SequentialLR(T_max=27) shootout on current OneCycleLR base
-- **Askeladd #1379** — smooth-L1 loss on warmup+cosine baseline, in flight. If it beats 75.85, directional signal; won't beat 70.94.
-- **Edward #1383** — channel-weighted loss (p:3) on warmup+cosine, in flight. Same.
-- **Tanjiro #1522** — hidden-192 on compile+bf16, in flight. Same.
-- **Frieren #1556** — fp32-eval every 3 epochs. Not metric-improving; establishing faithful test_avg.
-- **Fern #1390** — surf_weight=25 on compile baseline (needs rebase again after OneCycleLR merge).
+- **OneCycleLR pct_start=0.15** — longer warmup bracket, completing 3-point sweep (frieren #1768)
+- **reduce-overhead compile** — 10-20% throughput gains → 3-5 extra epochs per 30 min (tanjiro #1764)
+- **Thorfinn #1628** — 2-seed SequentialLR(T_max=27) vs OneCycleLR shootout (single-seed hot signal: 3.6% test)
+- **Askeladd #1379** — smooth-L1 loss on rebased OneCycleLR baseline, in flight
+- **Edward #1383** — channel-weighted loss (p:3) on rebased OneCycleLR baseline, in flight
+- **Fern #1390** — surf_weight=25 on compile baseline (needs rebase after fp32-eval merge)
 
 ## Active PRs
 
@@ -36,10 +36,10 @@ Active threads:
 | askeladd | #1379 | smooth-L1 loss | WIP |
 | edward | #1383 | p-channel-weight | WIP |
 | fern | #1390 | surf_weight=25 (needs rebase again) | WIP (stale) |
-| frieren | #1556 | fp32-eval every 3 epochs | **MERGED** (round 7) |
+| frieren | #1768 | OneCycleLR pct_start=0.15 (longer warmup bracket) | WIP (just assigned) |
 | nezuko | #1719 | OneCycleLR pct_start=0.05 | WIP |
-| tanjiro | #1522 | hidden-192 (clear regression) | **CLOSED** (round 7) |
-| thorfinn | #1628 | SequentialLR(T_max=27) vs OneCycleLR shootout, 2-seed | WIP (sent back for rebase + multi-seed) |
+| tanjiro | #1764 | reduce-overhead compile mode (throughput) | WIP (just assigned) |
+| thorfinn | #1628 | SequentialLR(T_max=27) vs OneCycleLR shootout, 2-seed | WIP (rebasing + multi-seed) |
 
 ## Key learnings so far
 
@@ -47,27 +47,27 @@ Active threads:
 2. **torch.compile is the biggest infrastructure lever** — 1.58× throughput. Stack with everything.
 3. **OneCycleLR per-batch beats warmup+cosine per-epoch by −6.5% val / −8.1% test** — largest single gain. Key: 10875 per-batch LR updates vs 29 per-epoch; full decay tail fires in budget.
 4. **LR schedule shape matters more than LR magnitude** — Moving from warmup+cosine to OneCycleLR (same max_lr=1e-3) gave 6.5% improvement; moving from lr=5e-4 to lr=1e-3 gave only 0.76%.
-5. **bf16 eval causes cruise overflow** — nan_to_num zeros it (biased low). fp32 eval needed for faithful paper test_avg.
-6. **Hidden-192 directional signal** — pending on compile+bf16 stack with full epoch budget.
-7. **RNG variance ≈ ±5%** — sub-1% val deltas need multi-seed confirmation; 2%+ test changes are reliable.
+5. **bf16 eval causes cruise overflow** — nan_to_num zeros it (biased low). fp32 eval needed for faithful paper test_avg. FIXED in PR #1556 (eval_every_n_epochs=3 gate recovers wall-clock).
+6. **Hidden-192 bottlenecked by epoch count** — 1.47× slower per epoch costs 9 epochs → truncated OneCycleLR decay → all 4 splits regress. Capacity-via-width dominated by capacity-via-more-epochs under 30-min cap.
+7. **Single-seed warmup+cosine(T_max=27) hot signal** — val 69.26 / test 59.61 beats OneCycleLR baseline by 3.6% test on one seed. Multi-seed confirmation in progress (thorfinn #1628). Could indicate per-epoch schedule is competitive at aligned T_max.
+8. **RNG variance ≈ ±5%** — sub-1% val deltas need multi-seed confirmation; 2%+ test changes are reliable.
 
 ## Potential next research directions
 
 ### Immediate (waiting on current PRs)
 - OneCycleLR max_lr sweep: 1.5e-3 (alphonse #1716) — is 1e-3 the ceiling?
-- OneCycleLR pct_start=0.05 (nezuko #1719) — shorter warmup, more decay time
+- OneCycleLR pct_start={0.05, 0.10, 0.15} bracket (nezuko #1719, current, frieren #1768) — map warmup trade-off
+- reduce-overhead compile (tanjiro #1764) — throughput gain → more epochs per 30 min
 - Scheduler shootout 2-seed: SequentialLR(T_max=27) vs OneCycleLR (thorfinn #1628) — hot signal needs confirmation
-- Results from askeladd/edward/tanjiro — directional signal on loss/architecture on old stack
-- fp32 eval (frieren #1556) — paper-faithful test_avg
+- Results from askeladd/edward (loss formulation on rebased OneCycleLR baseline)
 
-### Short-term (round 7)
-- **reduce-overhead compile** — CUDA graph fused kernels may give 10-20% more throughput → 3-5 extra epochs
-- **OneCycleLR max_lr=2e-3** — if 1.5e-3 is still improving, push further
-- **OneCycleLR pct_start=0.15** — complement to pct_start=0.05 bracket
-- **Smooth-L1 on OneCycleLR baseline** — if askeladd shows directional signal on old stack
-- **Hidden-192 on OneCycleLR** — if tanjiro shows width helps, re-test on new default
+### Short-term (round 8)
+- **OneCycleLR max_lr=2e-3** — if alphonse shows 1.5e-3 still improving, push further
+- **pct_start winner → additional tuning** — 3-point bracket informs best warmup fraction
+- **Smooth-L1 on OneCycleLR baseline** — if askeladd shows directional signal
 - **Channel-weighted loss on OneCycleLR** — if edward shows directional signal
 - **surf_weight=25 on OneCycleLR** — fern still pending proper rebase
+- **SequentialLR(T_max=27) as baseline candidate** — if thorfinn's multi-seed confirms 3.6% test gain
 
 ### Architecture and signal (longer term)
 - SwiGLU MLP — swap GELU FF layers
