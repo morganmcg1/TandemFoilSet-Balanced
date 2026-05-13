@@ -441,7 +441,10 @@ def amp_ctx_factory():
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=MAX_EPOCHS, eta_min=5e-5
+)
+print(f"CosineAnnealingLR eta_min: {scheduler.eta_min}")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -468,6 +471,8 @@ for epoch in range(MAX_EPOCHS):
         break
 
     t0 = time.time()
+    current_lr = scheduler.get_last_lr()[0] if epoch > 0 else cfg.lr
+    print(f"Epoch {epoch+1} start lr: {current_lr:.2e}")
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
@@ -529,6 +534,7 @@ for epoch in range(MAX_EPOCHS):
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
+        "lr": current_lr,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
