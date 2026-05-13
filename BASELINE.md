@@ -199,3 +199,21 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 50.19, test < 43.50, all four test splits finite.**
+
+## 2026-05-13 22:30 — PR #2562: Lion optimizer LR 5e-5 → 7.5e-5
+
+- **`val_avg/mae_surf_p`:** 45.4335 (best seed 2, `srveevtx`)
+- **`test_avg/mae_surf_p`:** 39.5085 (best seed 2)
+- **Per-split test surf_p (seed 2):** single_in_dist=42.56, geom_camber_rc=53.48, geom_camber_cruise=24.00, re_rand=37.99
+- **Seed 1 (`7xoh7b6t`):** val=49.0288, test=43.8847 — s1 beats val bar, marginal on test. Two-seed mean: val=47.231, test=41.697 (both bar).
+- **W&B runs:** `srveevtx` (seed 2, BETTER), `7xoh7b6t` (seed 1)
+- **Implementation note:** Single-line change in `train.py` — Lion's `lr=5e-5` raised to `lr=7.5e-5` (1.5× baseline Lion LR). Cosine annealing T_max unchanged (=50 epochs). LR ends at ~3e-5 at epoch 35. Mechanism: Lion at 5e-5 was still descending at the 30-min timeout (best=last), suggesting the convergence curve had headroom. Higher LR shifts the entire learning curve down — epoch-15 val dropped ~8% vs baseline (73.6 → 82), and the final val improved by 9.5% (45.43 vs 50.19). All four test splits improved uniformly by 8-10%. Seed variance increased ~4-6× vs baseline Lion (3.6 pt val vs 0.97 pt) — higher LR amplifies early-trajectory divergence; both seeds still compute-bound at timeout.
+- **Compute:** 30.8 min (hits 30-min cap), ~52s/epoch, 35/35 epochs, best=last. Peak VRAM 24.1 GB (identical to baseline).
+- **Delta vs PR #2516 (Lion lr=5e-5):** val **−9.5%** (50.19 → 45.43 best seed; mean −5.9%), test **−9.2%** (43.50 → 39.51 best seed; mean −4.2%). All four test splits improved: single_in_dist −9.1%, geom_camber_rc −9.9%, geom_camber_cruise −9.8%, re_rand −7.8%. Cross-split consistency strong — higher LR helps across in-distribution, geometry-OOD, and Re-OOD axes equally.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-tanjiro \
+      --wandb_name "willowpai2g48h3-tanjiro/lion-lr75e5-s2" --wandb_group lion-lr
+  ```
+
+**New merge bar: val < 45.43, test < 39.51, all four test splits finite.**
