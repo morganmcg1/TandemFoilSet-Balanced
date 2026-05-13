@@ -80,6 +80,37 @@ class Lion(torch.optim.Optimizer):
 
 
 # ---------------------------------------------------------------------------
+# Loss configuration
+# ---------------------------------------------------------------------------
+
+# Per-channel Huber β for the SURFACE loss term. Volume uses uniform β=0.5.
+# (Ux, Uy, p) — β_p=0.625 shifts the pressure channel toward MSE (upward
+# bisection from baseline 0.5; opposite direction from closed PR #2163's 0.25).
+SURF_BETA_VALUES = (0.5, 0.5, 0.625)
+
+
+def _huber_losses(pred, y_norm, vol_mask, surf_mask):
+    """Return (vol_loss, surf_loss) scalar tensors.
+
+    Volume term uses uniform β=0.5. Surface term uses per-channel SURF_BETA_VALUES.
+    Differentiable. Replicates the original normalization: total error across all
+    channels / number of valid nodes in that mask.
+    """
+    huber_err_uniform = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
+    vol_loss = (huber_err_uniform * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+
+    surf_count = surf_mask.sum().clamp(min=1)
+    surf_loss = pred.new_zeros(())
+    for c, beta_c in enumerate(SURF_BETA_VALUES):
+        if beta_c == 0.5:
+            ch_err = huber_err_uniform[..., c]
+        else:
+            ch_err = F.smooth_l1_loss(pred[..., c], y_norm[..., c], beta=beta_c, reduction="none")
+        surf_loss = surf_loss + (ch_err * surf_mask).sum() / surf_count
+    return vol_loss, surf_loss
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -291,17 +322,11 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 pred = model({"x": x_norm, "mask": mask})["preds"]
             pred = pred.float()  # back to fp32 for downstream metric accumulation
 
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss_sum += (
-                (huber_err * vol_mask.unsqueeze(-1)).sum()
-                / vol_mask.sum().clamp(min=1)
-            ).item()
-            surf_loss_sum += (
-                (huber_err * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
-            ).item()
+            vol_loss, surf_loss = _huber_losses(pred, y_norm, vol_mask, surf_mask)
+            vol_loss_sum += vol_loss.item()
+            surf_loss_sum += surf_loss.item()
             n_batches += 1
 
             pred_orig = pred * stats["y_std"] + stats["y_mean"]
@@ -503,6 +528,7 @@ run = wandb.init(
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "surf_beta_values": SURF_BETA_VALUES,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -545,12 +571,10 @@ for epoch in range(MAX_EPOCHS):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
-            huber_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss, surf_loss = _huber_losses(pred, y_norm, vol_mask, surf_mask)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
