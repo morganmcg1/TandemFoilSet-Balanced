@@ -39,10 +39,51 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **59.5354** | #1700 | Pure L1 + compile + bf16 | epoch 37 of 37; still improving at timeout; -7.08% vs #1633 |
-| `test_avg/mae_surf_p` | **51.4666** | #1700 | — | finite across all 4 test splits; -7.26% vs #1633 |
+| `val_avg/mae_surf_p` | **56.6217** | #1619 | L1 + compile + bf16 + sampler 2× single | epoch 39 of 39; still improving at timeout; -4.89% vs #1700 |
+| `test_avg/mae_surf_p` | **50.4310** | #1619 | — | finite across all 4 test splits; -2.01% vs #1700 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 59.5354` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 56.6217` to be merged.
+
+## 2026-05-13 05:10 — PR #1619: Sampler 2× single boost on L1 baseline
+
+- **Student:** charliepai2g48h5-nezuko
+- **Best epoch:** 39 (wall-clock-bound at 30 min; best == terminal; trajectory still descending: ep 38→39: 57.74→56.62)
+- **Epochs reached:** 39 (~46.3 s/epoch, unchanged vs L1 baseline)
+- **Peak GPU memory:** 23.83 GB (unchanged)
+
+| Split | val mae_surf_p | Δ vs #1700 |
+|---|---|---|
+| `val_single_in_dist` | **56.1237** | **-13.51%** |
+| `val_geom_camber_rc` | 71.0701 | -4.02% |
+| `val_geom_camber_cruise` | 41.6906 | +4.31% |
+| `val_re_rand` | **57.6024** | -2.76% |
+| **val_avg** | **56.6217** | **-4.89%** |
+
+| Split | test mae_surf_p | Δ vs #1700 |
+|---|---|---|
+| `test_single_in_dist` | **50.0812** | **-9.97%** |
+| `test_geom_camber_rc` | 66.9241 | +0.20% |
+| `test_geom_camber_cruise` | 34.1808 | +1.78% |
+| `test_re_rand` | 50.5377 | +1.34% |
+| **test_avg** | **50.4310** | **-2.01%** |
+
+- **Sampler intervention:** `racecar_single` boost factor 2× → 50% / 25% / 25% share (single / tandem / cruise).
+- **Lever validated across 3 baselines:** β=1.0 (-2.80%), β=1.0+compile (-2.25%), **L1+compile (-4.89%)**. Win grows as loss gets sharper.
+- **Three of four val splits improve;** only `val_geom_camber_cruise` regresses (+4.31%) — mechanistically expected (cruise loses 25% of training mass to the 2× boost).
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-nezuko-sampler-2x-on-l1-20260513-021352/metrics.jsonl`
+  `models/model-charliepai2g48h5-nezuko-sampler-2x-on-l1-20260513-021352/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-nezuko \
+      --experiment_name "charliepai2g48h5-nezuko/sampler-2x-on-l1" \
+      --epochs 50
+  ```
+  (sampler-reweight block now on advisor branch — see PR #1619 diff)
+
+---
 
 ## 2026-05-13 02:10 — PR #1700: Pure L1 loss (β sweep → β=0 limit wins)
 
