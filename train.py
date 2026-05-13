@@ -489,7 +489,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.we
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
 warmup_epochs = 4
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1), eta_min=1e-4)
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
 channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
@@ -507,6 +507,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
+        "cosine_eta_min": 1e-4,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
