@@ -1681,3 +1681,35 @@ Per-epoch: −4.2% faster than LayerNorm (~98.4s vs ~102.7s, saves ~75s total). 
 **Normalization-type lever CLOSED.** LayerNorm remains default. RMSNorm is compute-equivalent but OOD-inferior.
 
 → Assigned tanjiro Pre-LN→Post-LN swap (PR #2456): normalization-position axis (orthogonal to computation type).
+
+## 2026-05-13 17:30 — PR #2393: Fourier L sweep (L=12/L=4) — CLOSED ✗ (Finding #41)
+- Branch: willowpai2g48h1-nezuko/fourier-L-sweep
+- W&B runs: `k6rklsu2` (L=12), `01q97p5g` (L=4)
+
+| Arm | L | Epochs | test_avg | Δ vs OLD (61.85) | Δ vs NEW (60.74) |
+|---|---|---|---|---|---|
+| **Baseline** | **8** | **18/18** | **60.7447** | — | — |
+| Arm 1 | 12 | 18/18 | 61.8174 | −0.05% (within noise) | **+1.77%** ✗ |
+| Arm 2 | 4 | 15/18† | 63.3922 | +2.50% | **+4.36%** ✗ |
+
+†Arm 2 truncated at ep15 due to transient system slowdown (ep10-12 ran ~80s over baseline ~91s), not encoding-related.
+
+Per-split (L=12 arm):
+- in_dist: **63.13 (−2.21% ✓)** — above noise, consistent improvement
+- rc: 73.22 (+1.28% ✗)
+- cruise: 47.13 (+0.87% ✗)
+- re_rand: 63.79 (−0.05%, flat)
+
+**Finding #41 (IID/OOD redistribution meta-finding — Finding #41)**: Fourier L=12 shows the SAME per-split signature as Finding #40 (RMSNorm) and Finding #37 (surf_weight↑): **in_dist improves, OOD splits regress uniformly.** Three independent axes now confirm this pattern:
+
+| Lever | in_dist Δ | OOD Δ | Source |
+|---|---|---|---|
+| surf_weight↑ (sw=15) | −1.49% | rc +3.42% | Finding #37 (#2294) |
+| RMSNorm swap | −5.61% | OOD +0.78–2.10% | Finding #40 (#2425) |
+| Fourier L=12 | −2.21% | OOD +0.87–1.28% | Finding #41 (#2393) |
+
+**Meta-pattern established**: Any lever that adds capacity/resolution/expressivity to fit the training distribution harder → IID improves, OOD regresses. Improvements to test_avg must come from levers that explicitly address the train→OOD shift (not just fitting training harder).
+
+Fourier L lever confirmed CLOSED at L=8. Encoding resolution is not cruise/rc bottleneck.
+
+→ Assigned nezuko SwiGLU MLP (PR #2466): MLP expressivity test at param-matched budget.
