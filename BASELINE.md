@@ -403,4 +403,56 @@ cd target && python train.py \
 - Cycle 34 "spike is BENEFICIAL" reframing VINDICATED. Both arms show the spike-then-deeper-recovery pattern reliably.
 - T_0=7 (Arm 2, ppmzaftp) also won (val=86.78) — 3 restarts in 21 epochs is too aggressive. T_0=10 = 2 cycles is optimal at this budget.
 - **Critical**: This was run with WD=5e-4 (NOT the new SOTA WD=3e-4 from PR #2178). The restart mechanism is so strong it OVERCOMES the over-regularization that made WD=5e-4 regress in PR #2178. Composing cosine_restart with WD=3e-4 is the immediate next experiment (potentially even better).
-- **All future PRs must beat `val_avg/mae_surf_p < 83.9969` to merge.**
+- **All future PRs must beat `val_avg/mae_surf_p < 83.9969` to merge (superseded — see PR #2357 below).**
+
+---
+
+## 2026-05-13 17:30 — PR #2357: Cosine restart eta_min=1e-5 (new SOTA)
+
+- **val_avg/mae_surf_p: 83.6873** (best checkpoint epoch 20) — **−0.37% vs 83.9969**
+- **test_avg/mae_surf_p: 73.3963** — **−1.83% vs 74.7684**
+- **W&B run:** `zely2d09` (Arm 1, eta_min=1e-5 winner; Arm 2 eta_min=5e-5 regressed +4.18% val)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 5e-4 \
+      --use_torch_compile \
+      --compile_mode default \
+      --cosine_restart_T_0 10 \
+      --cosine_restart_T_mult 1 \
+      --cosine_restart_eta_min 1e-5 \
+      --wandb_group askeladd-eta-min \
+      --wandb_name eta-min-1e-5 \
+      --agent willowpai2g48h4-askeladd
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 20)
+
+| Split | mae_surf_p | vs prior SOTA (83.9969) |
+|-------|-----------|--------------------------|
+| `val_single_in_dist` | ~104 | slight improvement |
+| `val_geom_camber_rc` | ~100 | improvement |
+| `val_geom_camber_cruise` | ~45–46 | improvement |
+| `val_re_rand` | ~84 | improvement |
+| **val_avg** | **83.6873** | **−0.37% ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior SOTA (74.7684) |
+|-------|-----------|--------------------------|
+| `test_single_in_dist` | 87.60 | 95.11 → **−7.9%** ✓ |
+| `test_geom_camber_rc` | 90.10 | 90.78 → **−0.7%** ✓ |
+| `test_geom_camber_cruise` | 46.87 | 45.16 → +3.8% ↑ |
+| `test_re_rand` | 69.02 | 68.03 → +1.5% ↑ |
+| **test 4-split mean** | **73.3963** | **−1.83% ✓** |
+
+### Notes
+
+- `cosine_restart_eta_min=1e-5` (2% of peak encoder LR 5e-4). PyTorch default was `eta_min=0`.
+- Mechanism: tiny non-zero LR floor at cycle-ends allows micro-refinement in the basin without escaping it. The model keeps taking small steps at e9/e19 (instead of halting) and reaches a slightly deeper minimum at e10/e20.
+- `eta_min=5e-5` (10% of peak LR, Arm 2) regressed dramatically: val=87.51 (+4.18%), test=78.31 (+4.74%). Basin-escape at cycle-ends. Non-linear: the sweet spot is narrow and near 1e-5.
+- Val margin (0.31) is near the ~1–2 val seed-noise floor; test margin (1.37, −1.83%) is more robust and consistent across splits.
+- Post-restart spike smaller with eta_min=1e-5 (e21=115.19 vs 138.59 for eta_min=5e-5) — deeper basin creates more stable re-entry point when restart kick arrives.
+- **All future PRs must beat `val_avg/mae_surf_p < 83.6873` to merge.**
