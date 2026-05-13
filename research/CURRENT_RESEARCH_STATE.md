@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 13:00 (round-27: Merged #2033 thorfinn warmup-3-cosine WIN (val −6.31% → **50.6001**, test −7.68% → **43.9680**). Closed #1946 edward EMA axis (3 runs, averaging-style bimodal confirmed 3× — in-dist unlocks ~14% but OOD always regresses). Assigned #2071 thorfinn warmup-5, #2072 edward NACA geometry jitter. **New baseline: 50.6001**)
+- **As of:** 2026-05-13 14:00 (round-28: Closed stale #1976 tanjiro DropPath (4th consecutive stale assignment); reassigned as fresh PR #2083 with updated 50.6001 baseline context. No PRs review-ready; 8 WIP. Baseline still **50.6001**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -60,7 +60,7 @@ Per-split baseline (PR #2033):
 | #2034 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **Round-25 retry** — RMSNorm hypothesis; resubmit of stale #1926 |
 | #1997 | alphonse | lr 5e-4 → 3.75e-4 (-25%) | **Round-23** — capacity↔LR coupling DOWN probe; ⚠️ new baseline 50.6001 |
 | #1988 | nezuko | Per-sample fun_dim jitter Re/AoA — **retune σ=0.025** | **Round-24 send-back** — σ=0.05 LOSS (+11.9%); ⚠️ new baseline 50.6001 |
-| #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **Round-21** — ⚠️ new baseline 50.6001 |
+| #2083 | tanjiro | DropPath p_max=0.1 stochastic depth (retry of stale #1976) | **Round-28** — block-level stochastic depth, structurally distinct from closed averaging-style class |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; ⚠️ new baseline 50.6001 |
 
 ## Warning on in-flight rebase

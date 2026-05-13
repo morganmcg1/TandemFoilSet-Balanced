@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-13 14:00 — Round 28
+
+### PR #1976 tanjiro: DropPath p_max=0.1 stochastic depth — CLOSED (STALE, 4th consecutive on this branch)
+
+- **Branch:** `charliepai2g48h5-tanjiro/droppath-p-max-0.1`
+- **Hypothesis:** Block-level stochastic depth (linear schedule p=0→0.1) for OOD generalization via implicit ensembling.
+- **Result:** Zero training activity. Only the round-21 assignment commit (c41ceb3); no further commits, no pod activity. Same GraphQL rate-limit pattern as tanjiro's prior 3 stale PRs (#1660, #1789, #1883).
+- **Axis status:** UNTESTED. DropPath hypothesis intact and worth one test on new 50.6001 baseline.
+- **Next:** Reassigned to tanjiro under fresh PR #2083 (same hypothesis, new PR to unstick pod) with updated baseline context.
+
+### Assignment: Round 28
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #2083 | tanjiro | DropPath p_max=0.1 stochastic depth (retry of stale #1976; on new 50.6001 baseline) |
+
+---
+
 ## 2026-05-13 13:00 — Round 27
 
 ### PR #2033 thorfinn: Linear warmup 3ep + monotone cosine (T_max=47) — MERGED (WIN -6.31% val / -7.68% test)
