@@ -174,3 +174,38 @@ The hypothesis is correct in principle but tested on the wrong baseline. Polyak 
 - Hypothesis: EMA failure modes from #1578 are config-specific, not fundamental. Schedule-aligned baseline gives Polyak its proper conditions (low-LR oscillation), and Adam-style bias correction (`ema / (1 - decay^t)`) cancels random-init contamination.
 - Status: WIP (newly assigned)
 - Target: test_avg < 111.98.
+
+**Action**: Closed #1578. Reassigned tanjiro to PR #1664 — bias-corrected EMA on schedule-aligned baseline.
+
+## 2026-05-12 22:45 — PR #1664 (NEW, assigned): Bias-corrected Polyak EMA on schedule-aligned baseline
+- Branch: willowpai2g48h1-tanjiro/ema-bias-corrected
+- Hypothesis: EMA failure modes from #1578 are config-specific, not fundamental. Schedule-aligned baseline gives Polyak its proper conditions (low-LR oscillation), and Adam-style bias correction (`ema / (1 - decay^t)`) cancels random-init contamination.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.
+
+## 2026-05-13 00:10 — PR #1380: Higher surface weight surf_weight 10→25 (CLOSED)
+- Branch: willowpai2g48h1-frieren/surf-weight-25
+- Hypothesis: Reweight training objective toward surface terms to directly compress surface MAE (the primary metric).
+- W&B run: `5lmlsuai` — group `surf-weight-25`
+- Status: **CLOSED ✗**
+
+| Metric | surf_weight=25 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 140.27 | 125.36 | +11.9% (worse) |
+| **test_avg/mae_surf_p** | **123.41** | 111.98 | **+10.2%** (worse) |
+| test_single_in_dist | 173.99 | 148.79 | +17% |
+| test_geom_camber_rc | 126.64 | 117.15 | +8.1% |
+| test_geom_camber_cruise | 80.13 | 77.85 | +2.9% |
+| test_re_rand | 112.90 | 104.13 | +8.4% |
+
+**Analysis**: Regression is uniform across all 4 splits — not a distribution-sensitivity issue, a global optimization effect. The loss is `vol_loss + surf_weight * surf_loss`; raising surf_weight from 10→25 scales the surface gradient 2.5× without rescaling lr, equivalent to a much hotter effective LR on surface-coupled parameters. Under 18-epoch cosine schedule there's no time to settle. Additionally, volume nodes are 97–99% of mesh points; de-emphasizing volume loss starves the shared encoder of the representation signal that surface decoding depends on. Training surf_loss dropped (model overfits surface targets) but val surf MAE rose — classic gradient-imbalance overfitting signature.
+
+The student's diagnostic pointed to the asymmetric question: if 25 hurts both surf and vol, maybe we're already over-weighting at 10. Worth testing the other direction.
+
+**Action**: Closed #1380. Assigned frieren to PR #1710 — surf_weight=5 (the other direction).
+
+## 2026-05-13 00:10 — PR #1710 (NEW, assigned): Surface weight 10→5
+- Branch: willowpai2g48h1-frieren/surf-weight-5
+- Hypothesis: surf_weight=10 may over-weight surface terms. Reducing to 5 gives the shared encoder richer volume gradient signal → better upstream representations → better surface predictions downstream.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.

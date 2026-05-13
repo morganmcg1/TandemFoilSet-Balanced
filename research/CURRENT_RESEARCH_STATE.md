@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-12 22:45 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
+- 2026-05-13 00:10 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
 ## Current baseline (PR #1591 merged)
@@ -20,7 +20,8 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | edward | #1591 | cosine-aligned-epochs | **MERGED** ✓ | test **111.98** (−7.67%) — new baseline |
 | edward | #1643 | mlp-ratio-4 | wip (new) | Assigned: mlp_ratio 2→4, richer FFN per block |
 | fern | #1364 | deeper-7-layers | stale_wip | No result yet |
-| frieren | #1380 | surf-weight-25 | stale_wip | No result yet |
+| frieren | #1380 | surf-weight-25 | **CLOSED** ✗ | test 123.41 (+10.2% worse) — gradient imbalance: higher surf gradient = hotter effective LR on surface-coupled params, no time to settle in 18 epochs |
+| frieren | #1710 | surf-weight-5 | wip (new) | Assigned: surf_weight 10→5 (other direction). Hypothesis: 10 may already over-weight surface; fewer surface grad signal → richer volume repr → better surface pred |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
 | tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
 | tanjiro | #1578 | ema-eval-weights | **CLOSED** ✗ | test 141.87 (+17.0% vs old baseline) — classical Polyak failed: (a) EMA lagged still-descending model in undertrained regime, (b) random-init contamination ~5% via 0.999^3000 |
