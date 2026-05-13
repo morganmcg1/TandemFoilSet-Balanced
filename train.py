@@ -419,6 +419,7 @@ class Config:
     smooth_l1_beta: float = 0.1
     ema_decay: float = 0.0  # 0.0 disables EMA; >0 enables EMA of weights for val/test/ckpt
     amp: bool = False  # bfloat16 mixed precision autocast for fwd + loss
+    mlp_ratio: int = 2
 
 
 cfg = sp.parse(Config)
@@ -455,7 +456,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
