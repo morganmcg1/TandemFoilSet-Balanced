@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 01:30
+- **Date:** 2026-05-13 02:00
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -34,11 +34,11 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
-| alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
+| alphonse | #1791 | lr=7e-4 (raise peak LR, keep T_max=30 hot-cosine shape) | LR magnitude | WIP | #1647 T_max=18 closed: aligned cosine starves LR at end; inverted angle = raise peak LR |
 | askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
 | edward | #1763 | torch.compile (attack throughput bottleneck) | Throughput | WIP | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
 | fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
-| frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
+| frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
 | nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
 | tanjiro | #1784 | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | WIP | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
 | thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
@@ -75,8 +75,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 - **slice_num=128** (#1451, thorfinn) — confounded by bs=2 OOM. Superseded.
 - **batch_size=8** (#1447, tanjiro) — dataloader bottleneck; no per-epoch speedup.
 - **lr=1e-3 + warmup** (#1430, edward) — cosine T_max mismatch; schedule under-annealed. Reassigned to LR schedule alignment.
+- **n_hidden=192 v2 (post-rebase)** (#1442 v2, frieren) — val=96.66 (+12.5% vs β=0.5 baseline). All 4 splits regress, in_dist worst (+16.93). 4/4 capacity-up pattern complete.
 
-**Pattern**: 4 of 4 architecture capacity experiments (wider/deeper/more slices/more MLP) fail under our 30-min cap. Capacity is NOT the bottleneck at 1500 training samples. The bottleneck is training duration, schedule alignment, and optimization quality — that's where remaining experiments should focus.
+**Pattern**: 4 of 4 architecture capacity experiments (wider/deeper/more slices/more MLP/wider hidden) fail under our 30-min cap. Capacity is NOT the bottleneck at 1500 training samples. The bottleneck is training duration, schedule alignment, and optimization quality — that's where remaining experiments should focus. Open inversion: shallower (`n_layers=3`) under test in #1792 to convert capacity savings into throughput.
+
+### LR schedule
+- **Cosine T_max=18 aligned to actual epoch budget** (#1647, alphonse) — val=94.44 (+9.9% vs β=0.5 baseline). All 4 splits regress. LR-magnitude math: at T_max=30 epoch 17 LR ≈ 1.5e-4 (moderate); at T_max=18 same epoch LR ≈ 4e-6 (near-zero). The "mismatch" wasn't a bug — it was effectively a hot-LR plateau throughout training. Inverted angle: raise peak LR (lr=7e-4 under test in #1791) rather than decay faster.
 
 ## Key observations
 

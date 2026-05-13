@@ -556,3 +556,42 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Diagnostic from student**: 6375/6375 training steps clipped (100%) with peak gradient norm ≈140 after β=0.5 (down from ~837 pre-Huber). With every step clipped, max_norm=1.0 is no longer a safety net against rare spikes — it is acting as full direction normalization, projecting every gradient onto the unit ball.
 - **Mechanism**: normalized gradients give a flatter loss-landscape traversal — that explains the OOD/IID split (better generalization at the cost of fitting the bulk). IID hurt outweighs OOD help on the 4-split average.
 - **Decision: CLOSE.** Assigning tanjiro to max_norm=10 — with observed peak norms 70–140, this threshold only fires on genuine rare-spike outliers (the original purpose of clipping) while leaving bulk steps unchanged. Will isolate whether the v2 effect was the safety-net mechanism or the direction-normalization mechanism.
+
+## 2026-05-13 01:55 — PR #1647: alphonse cosine T_max=18 aligned (review 1, closed)
+
+- Branch: `willowpai2g48h5-alphonse/cosine-tmax-aligned`
+- W&B run: `mtvgypux` (18 epochs in 32 min; `--epochs 18` so T_max aligned to actual budget)
+- Hypothesis: setting cosine T_max=18 (matching actual epoch count) eliminates the "schedule mismatch" where baseline cuts off at 17/30 with LR still at ~30% of peak.
+
+| Metric | T_max=18 (mtvgypux) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 17) | 94.44 | 85.92 | +8.52 (+9.92%) |
+| `test_avg/mae_surf_p` | 85.24 | 76.55 | +8.69 (+11.36%) |
+| `test/test_single_in_dist/mae_surf_p` | 95.81 | 88.03 | +7.78 |
+| `test/test_geom_camber_rc/mae_surf_p` | 94.44 | 85.46 | +8.98 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 64.99 | 56.40 | +8.59 |
+| `test/test_re_rand/mae_surf_p` | 85.74 | 76.30 | +9.44 |
+
+- **All 4 splits regress meaningfully.** Counter-intuitive given the alignment hypothesis.
+- **Mechanism (LR magnitude math):** At baseline T_max=30, epoch 17 LR ≈ 5e-4 × (1+cos(17π/30))/2 ≈ 1.5e-4 (moderate). At T_max=18, same epoch LR ≈ 5e-4 × (1+cos(17π/18))/2 ≈ 4e-6 (near-zero). The "aligned" schedule starves the model of effective LR in the final 30% of training where val is still descending ~2.5 MAE/epoch.
+- **Pattern**: this isn't a schedule mismatch bug — the baseline benefits from a hot-LR plateau throughout training. Inverting the angle: raise peak LR (lr=7e-4) rather than decay it faster.
+- **Decision: CLOSE.** Reassigning alphonse to lr=7e-4 with T_max=30 (same hot-cosine shape, shifted up).
+
+## 2026-05-13 01:55 — PR #1442 v2: frieren wider Transolver n_hidden=192 post-rebase (review 2, closed)
+
+- Branch: `willowpai2g48h5-frieren/wider-n-hidden-192`
+- W&B run: `pxrllu0a` (30 epochs config, post-rebase on bf16+Huber β=0.5+EMA)
+- Hypothesis (retest): wider model with current stack improves val.
+
+| Metric | n_hidden=192 v2 (pxrllu0a) | β=0.5 baseline (liurnqyo) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA) | 96.66 | 85.92 | +10.74 (+12.50%) |
+| `test_avg/mae_surf_p` (best-val EMA ckpt) | 87.19 | 76.55 | +10.64 (+13.90%) |
+| `test/test_single_in_dist/mae_surf_p` | 104.96 | 88.03 | +16.93 (worst) |
+| `test/test_geom_camber_rc/mae_surf_p` | 94.16 | 85.46 | +8.70 |
+| `test/test_geom_camber_cruise/mae_surf_p` | 63.21 | 56.40 | +6.81 |
+| `test/test_re_rand/mae_surf_p` | 86.45 | 76.30 | +10.15 |
+
+- **EMA−Live gap = −9.88** (EMA helps as expected); wider model converges more slowly so terminal-live underperforms terminal-EMA noticeably.
+- **Pattern complete**: 4/4 architecture-capacity experiments regress under 30-min cap (n_layers=8, mlp_ratio=4, slice_num=96, n_hidden=192). Capacity is NOT the bottleneck at 1500 training samples — training duration / step count is.
+- **Decision: CLOSE.** Reassigning frieren to opposite direction: `n_layers=3` (shallower). Tests throughput-vs-capacity at the depth axis — we've only tested deeper so far. If shallow gives ~25–30% per-epoch speedup (~22 epochs in budget), the extra 5 epochs × ~2.5 MAE/epoch could net positive if convergence trajectory holds.
