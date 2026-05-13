@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-05-14 04:45 UTC — Round 54 addendum (tanjiro 2nd stale)
+
+PR #2472 tanjiro split-surf-vol-heads RETRY-1 (assignment 2026-05-13T17:15:47Z; no student commits in ~11h) closed as 2nd consecutive stale_wip. Original #2396 was also stale before retry-1. Tanjiro pod has now produced 2 consecutive stalls on the same hypothesis. Reassigned as #2536 RETRY-2 on fresh branch off current advisor (full advisor stack inherited). If RETRY-2 also stalls without committed work, the axis will be deprioritized per same pattern as DropPath (abandoned in round-39 after 4 stalls). Hypothesis remains structurally fresh: decoder-architecture probe bifurcating mlp2 into mlp2_surf + mlp2_vol by is_surface mask, complementary to in-flight alphonse flow-bias #2531 (output-bias from flow conditions), in-flight askeladd PaLM #2526 (block-internal restructure), and closed decoder-skip #2503 (latent-conditioned readout split).
+
+### New assignment
+
+| PR | Student | Hypothesis | Axis |
+|---|---|---|---|
+| #2536 | tanjiro | Split decoder: mlp2_surf + mlp2_vol per is_surface mask (RETRY-2); ~+9.5K params; --epochs 70 | Decoder-architecture probe bifurcating output heads by node type; 3rd attempt; if also stalls, axis will be deprioritized |
+
+---
+
 ## 2026-05-14 04:30 UTC — Round 54
 
 One review-ready LOSS closed (22nd closed taxon: redundant-readout-pathway interference — skip is load-bearing but harmful) + 1 fresh hypothesis assigned (axis: flow-condition-conditional output bias — first probe; physically motivated by freestream + perturbation decomposition).
