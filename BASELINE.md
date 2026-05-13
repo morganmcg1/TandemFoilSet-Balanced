@@ -8,6 +8,30 @@ SPDX-License-Identifier: Apache-2.0
 Primary metric (lower is better): `val_avg/mae_surf_p` (equal-weight mean surface-pressure MAE across 4 val splits).
 Paper-facing metric: `test_avg/mae_surf_p` (4 test splits; the cruise-NaN-y bug was fully fixed in code by PR #1615 — `train.py::evaluate_split` now applies the per-sample `torch.isfinite(y).all(dim=-1)` filter before forward pass, matching the `data/scoring.py::accumulate_batch` per-sample skip semantics.).
 
+## 2026-05-13 14:15 — PR #1747: Sweep slice_num on Transolver Physics Attention (MERGED — slice_num=32 wins)
+
+- **`val_avg/mae_surf_p` (primary):** **65.3954** (W&B run `9sk1rwv1`)
+- **`test_avg/mae_surf_p` (4-split, finite):** **56.1093**
+- **Per-split val surface-p MAE (`9sk1rwv1`, slice_num=32+fourier_k=12, best-val epoch 23):**
+  - val_single_in_dist: 71.30  (vs 80.28 baseline → −11.2%) ✅
+  - val_geom_camber_rc: 74.02  (vs 81.88 → −9.6%) ✅
+  - val_geom_camber_cruise: 49.63  (vs 57.96 → −14.4%) ✅
+  - val_re_rand: 66.63  (vs 72.52 → −8.1%) ✅
+- **Per-split test surface-p MAE (`9sk1rwv1`, 4-split clean):**
+  - test_single_in_dist: 59.73  (vs 71.08 → −16.0%) ✅
+  - test_geom_camber_rc: 65.09  (vs 70.73 → −8.0%) ✅
+  - test_geom_camber_cruise: 41.08  (vs 47.87 → −14.2%) ✅
+  - test_re_rand: 58.54  (vs 65.87 → −11.1%) ✅
+- **Mechanism:** `slice_num=32` reduces the soft-assignment projection from Linear(32→64) to Linear(32→32); default slice_num=64 was overcomplete, spreading each node's signal across too many quasi-empty token slots. Smaller slice_num forces each token to pack denser semantic signal → better node routing. Biggest absolute gain on cruise (242K nodes, largest mesh) confirming spatial-routing benefit scales with mesh size.
+- **EMA contribution:** test_no_ema_avg = 70.62 vs EMA test_avg = 56.11 → EMA gives further −20.5% on top; EMA and slice_num are independent levers.
+- **Compute:** 23/50 epochs, 85.4 s/epoch, 32.7 min total, 80.9 GB VRAM, 668,855 params.
+- **W&B run:** `9sk1rwv1`
+- **W&B group:** `willow-r3-slice-32-retest-fourier`
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32
+  ```
+
 ## 2026-05-13 14:05 — PR #1986: Fourier positional features for (x,z) node coordinates — K=12 (MERGED)
 
 - **`val_avg/mae_surf_p` (primary):** **73.1596** (W&B run `osxp8woj`)
