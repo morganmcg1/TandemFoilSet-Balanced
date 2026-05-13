@@ -4,6 +4,49 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 22:30 — PR #2616 (ASSIGNED, alphonse): film_mid_dim sweep {32, 128} on merged hybrid — bracket the only untouched capacity axis
+
+- **Branch:** `willowpai2g48h2-alphonse/film-mid-dim-sweep-on-hybrid`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** FiLM mid-dim is the one capacity knob with a single CLI flag that has NEVER been bracketed. Width (#2354), slice_num (#2378), n_head (#2442 in-flight) all touched the Transolver capacity, but FiLM (the geometry→feature conditioning bottleneck) is at default 64. Bracket {32, 128} to test whether geometry conditioning is over- or under-parameterized.
+- **Motivation:** alphonse's #2500 closing revealed a per-split asymmetry — spread expansion helped in-distribution splits but hurt `geom_camber_rc`. FiLM is the architectural module that conditions on the geometry parameters defining OOD splits (camber, Re). Different FiLM capacities may differentially affect OOD generalization.
+- **Why this is high-value:** Single CLI flag, zero code change, low compute-cost interaction (FiLM is small fraction of model). Untouched axis. Bidirectional bracket gives mechanism direction either way.
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-13 22:15 — PR #2500 (CLOSED, alphonse): Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — fix mean drift, preserve spread + test gain
+
+- **Branch:** `willowpai2g48h2-alphonse/anchor-mean-log-sigma-on-sigma0p5`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** Address the mean-drift mechanism uncovered in #2443 by adding L2 anchor loss on `mean(log_σ)` toward AdamW-eq target (−1.4) + per-channel init at AdamW-eq, on σ=0.5 Lion stack. 2-arm λ ∈ {1, 5}.
+
+### Result table (vs new hybrid baseline #2311)
+
+| Arm | λ | val | test | mean(log_σ) end | spread end | Δval | Δtest | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| baseline #2311 | — | 45.2181 | 38.7661 | (post-fix natural) | 0.475 | — | — | — |
+| Arm 1 `utf2umbc` | 1 | 45.8952 | 38.9192 | −1.996 | 0.697 | +0.68 | +0.15 | regress |
+| Arm 2 `ym5bb855` | 5 | 47.2847 | 39.6587 | −1.748 | 0.717 | +2.07 | +0.89 | regress |
+
+**Verdict:** both arms regress; **anchor mechanism is invalid in post-#2311 regime** (hybrid AdamW already differentiates channels without needing the anchor; forcing mean toward AdamW-only-eq target actively pulls the model away from the better equilibrium hybrid finds).
+
+### Banked findings (4 + 1 per-split observation)
+
+1. **Anchor on mean(log_σ) is a clean control knob on equilibrium mean (NEW mechanism)** — λ=1 → mean=−1.996, λ=5 → mean=−1.748. Mathematics: per-channel anchor grad = (2λ/N)·(mean−target), balances against Kendall drives. **Banked for future Kendall-σ work — the anchor mechanism cleanly decouples mean from per-channel differentiation.**
+
+2. **Per-channel AdamW-eq init expands σ-spread (NEW mechanism)** — scalar init at −1.4 produces final spread 0.70 vs hybrid baseline's 0.475 from zero-init. Mechanism: scalar init at "deeper σ" makes initial residuals smaller, log_σ_i finds its per-channel value faster, spread expansion accelerates. **Banked: init magnitude affects equilibrium spread, NOT just convergence speed.**
+
+3. **Natural hybrid-AdamW equilibrium (~mean −2.0) outperforms target mean −1.4 by val ≈ 1.0–2.0 MAE units.** AdamW-eq target measured in #2270/#1906 was specific to AdamW with weight decay on the main model. New hybrid (lr=5e-4 + wd=0 on log_σ) reaches a structurally different per-channel optimum at deeper σ. **The hybrid optimizer doesn't just unblock differentiation — it shifts the optimum mean too.**
+
+4. **Per-split mechanism: spread expansion HURTS `geom_camber_rc`, HELPS other splits (CRUCIAL per-split observation)** — Arm 1 vs new baseline (val): single_in_dist 46.84 vs 46.97 (WIN −0.13), cruise 29.05 vs 29.50 (WIN −0.45), re_rand 46.85 vs 46.28 (LOSS +0.57), **geom_camber_rc 60.84 vs 58.13 (LOSS +2.72)**. The OOD bottleneck has the OPPOSITE preference from other splits on σ-spread axis. **Important context for fern's #2604 hybrid_kendall_lr push — if pushing spread UP wins on average, it may regress further on geom_camber_rc.** This per-split tension may require architectural-level fixes, not just σ-tuning.
+
+### Closing rationale
+
+Mean-drift fix is invalid in the post-#2311 regime; the natural hybrid-AdamW equilibrium dominates. Student suggested follow-up #4 (log_sigma_init=−1.4 + anchor=0 to isolate init effect) would confirm finding #2 but predicts val ≈ 45.90 (regression) — banked but lower-value GPU use. Assigning alphonse the film_mid_dim sweep instead (untouched capacity axis with merge potential).
+
+---
+
 ## 2026-05-13 20:50 — PR #2606 (ASSIGNED, thorfinn): max_norm sweep {1.0, 2.0} on merged hybrid baseline — relax saturating clip
 
 - **Branch:** `willowpai2g48h2-thorfinn/max-norm-sweep-on-hybrid`

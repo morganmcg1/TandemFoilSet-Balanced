@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 20:55 (Loop 18: #2540 fern β sweep CLOSED — monotonic regression β∈{0.5,1.0}; β=0.3 axis robust + **NEW β–σ coupling mechanism**. #2512 thorfinn multi-scale RFF CLOSED — σ axis exhausted (10 configs). Both → 5 banked findings each, motivating two new assignments. Assigned #2604 fern hybrid_kendall_lr push {1e-3, 2e-3} (test σ-spread ceiling), #2606 thorfinn max_norm sweep {1.0, 2.0} (relax saturating clip — 4 confirmations now). All 8 students active. 5 PRs still stale_wip pending API rate-limit recovery.)
+- **Last updated:** 2026-05-13 22:35 (Loop 19: #2500 alphonse anchor-mean CLOSED — both arms regress (λ=1: val 45.90, λ=5: val 47.28); mean-drift fix invalid in post-#2311 regime. 4 banked findings inc. **NEW per-split asymmetry: spread expansion HURTS `geom_camber_rc` (+2.72 val) but HELPS other splits** — important context for fern's #2604. Assigned #2616 alphonse film_mid_dim sweep {32, 128} — only untouched single-CLI capacity axis. All 8 students active. 5 PRs still stale_wip pending API rate-limit recovery.)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -59,9 +59,9 @@
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **#2604** | **fern** | wip (new, training) | hybrid_kendall_lr push {1e-3, 2e-3} on hybrid baseline | Test σ-spread ceiling; motivated by β–σ coupling discovery from #2540. Single CLI flag, zero code change. |
-| **#2606** | **thorfinn** | wip (new, training) | max_norm sweep {1.0, 2.0} on hybrid baseline | Relax saturating clip_fraction=1.0; 4 independent confirmations of clip saturation (#2168/#2363/#2407/#2512). Single CLI flag. |
-| **#2500** | **alphonse** | wip (training) | Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} | Targets mean drift mechanism from #2443. Baseline shift notice sent. |
+| **#2604** | **fern** | wip (new, training) | hybrid_kendall_lr push {1e-3, 2e-3} on hybrid baseline | Test σ-spread ceiling; motivated by β–σ coupling discovery from #2540. **Per-split caveat from #2500:** spread expansion hurts geom_camber_rc — watch the per-split breakdown. |
+| **#2606** | **thorfinn** | wip (new, training) | max_norm sweep {1.0, 2.0} on hybrid baseline | Relax saturating clip_fraction=1.0; 4 independent confirmations of clip saturation. Single CLI flag. |
+| **#2616** | **alphonse** | wip (new, training) | film_mid_dim sweep {32, 128} on hybrid baseline | Only untouched single-CLI capacity axis. Motivated by #2500 per-split asymmetry. Single CLI flag, zero code change. |
 | **#2484** | **frieren** | wip (training done, pending API) | Skip-SWALR entirely on σ=0.5 | Baseline shift notice sent. SWA mechanism orthogonal to σ. |
 | **#2481** | **edward** | wip (training done, pending API) | SWA anneal_epochs=1 on σ=0.5 | Baseline shift notice sent. |
 | **#2463** | **tanjiro** | wip (training done, pending API) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Baseline shift notice sent. SWA mechanism fully orthogonal to σ. |
@@ -112,6 +112,9 @@
 33. **Refuted grad-norm prediction for smooth-L1 (#2540 methodology finding)** — PR-body predicted p99‖g‖ ordering β=1.0 > β=0.5 > β=0.3. Observed: β=0.5 (36.06) > β=1.0 (28.57). Smooth-L1 grad slope is 1/β in |r|<β region; bulk of residual mass at mid-late training lies there → slope-1/β regime dominates → lower β → higher grad-norm. **grad-norm is NOT a valid proxy for "MSE-likeness" in this regime.** Useful for future Huber-tuning hypotheses.
 34. **12th independent clip_fraction confirmation (#2540 β=0.5 arm: 0.9949, β=1.0 arm: 0.9590)** — clip-saturation under max_norm=0.5 is now 12-strong. Strongly motivates #2606 max_norm relaxation experiment.
 35. **σ axis decisively closed at σ=0.5 (#2512 thorfinn CLOSED)** — multi-scale RFF 8×σ=0.5 + 8×σ=0.1 does NOT compose on hybrid stack (val +2.66%, test +1.20%). Mechanism revision: σ=0.1's #2407 single_in_dist test gain was **σ-collapse-conditional** — once #2311 fixed σ-collapse via hybrid AdamW, the regularizer effect dissolves. **single_in_dist test trajectory:** 42.45 (collapsed-σ + σ=0.5 RFF) → 40.34 (hybrid-σ + σ=0.5 RFF, #2311 win) → 41.39 (hybrid-σ + multi-scale RFF, this PR). Banked structural finding: **Multi-scale RFF and Kendall σ-differentiation share an information channel — #2311 substitutes for the regularization role low-σ RFF was filling.** 10 distinct σ configs evaluated total since Lion adoption; σ=0.5 wins everywhere. **Next σ-related axes (multi-scale, σ-bracketing) are exhausted.**
+36. **Anchor mean(log_σ) is a clean control knob — but the natural hybrid-AdamW equilibrium dominates (#2500 alphonse CLOSED)** — λ=1 → mean=−1.996, λ=5 → mean=−1.748; mechanism decouples mean from per-channel differentiation. **Important finding:** the natural hybrid-AdamW equilibrium (~mean −2.0) outperforms target mean −1.4 (AdamW-only-eq) by val ≈ 1–2 MAE units. The AdamW-eq target measured in #2270/#1906 was specific to AdamW with weight decay on the main model; the new hybrid (lr=5e-4 + wd=0 on log_σ) reaches a structurally different per-channel optimum at deeper σ. **The hybrid optimizer doesn't just unblock differentiation — it shifts the optimum mean too.**
+37. **AdamW-eq init expands σ-spread (#2500 alphonse, NEW)** — scalar init at −1.4 produces final spread 0.70 vs hybrid baseline's 0.475 from zero-init. Mechanism: scalar init at "deeper σ" makes initial residuals smaller, log_σ_i differentiates faster, spread expansion accelerates. **Init magnitude affects equilibrium spread, NOT just convergence speed.**
+38. **Per-split σ-spread asymmetry: spread expansion HURTS `geom_camber_rc`, HELPS other splits (#2500 alphonse, CRUCIAL)** — Arm 1 vs new baseline (val): single_in_dist −0.13 (WIN), cruise −0.45 (WIN), re_rand +0.57 (LOSS), **geom_camber_rc +2.72 (LOSS)**. The OOD bottleneck has the OPPOSITE preference from other splits on σ-spread axis. **Direct implication for fern's #2604 hybrid_kendall_lr push:** pushing spread UP may regress further on geom_camber_rc, even if it wins on average. Per-split tension may require architectural-level fixes (e.g., FiLM capacity, alphonse's #2616) rather than σ-tuning alone.
 
 ## Key open bottlenecks
 
@@ -131,9 +134,10 @@
 1. ~~**Lion + hybrid AdamW for Kendall σ heads (#2311 fern)**~~ — **MERGED ✓** (val 45.22 / test 38.77).
 2. ~~**Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (#2512 thorfinn)**~~ — **CLOSED ✗** (val +2.66%, test +1.20%; σ axis exhausted).
 3. ~~**huber_beta re-sweep on hybrid merged baseline (#2540 fern)**~~ — **CLOSED ✗** (β=0.3 robust; new β–σ coupling mechanism banked).
-4. **hybrid_kendall_lr push {1e-3, 2e-3} on hybrid (#2604 fern NEW)** — directly tests if σ-spread is the lever. β–σ coupling from #2540 confirms σ-spread is load-bearing; push lr=5e-4→{1e-3, 2e-3} to widen spread further.
-5. **max_norm sweep {1.0, 2.0} on hybrid (#2606 thorfinn NEW)** — 4 independent confirmations of clip_fraction=1.000 (saturating clip on every step under max_norm=0.5); relax to see if more gradient direction through compounds.
-6. **Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse, ACTIVE)** — fix mean-drift mechanism uncovered by #2443; 2-arm λ ∈ {1, 5}.
+4. ~~**Anchor mean(log_σ) loss at AdamW-eq + init at eq (#2500 alphonse)**~~ — **CLOSED ✗** (both arms regress; per-split asymmetry banked).
+5. **hybrid_kendall_lr push {1e-3, 2e-3} on hybrid (#2604 fern)** — directly tests if σ-spread is the lever. β–σ coupling from #2540 confirms σ-spread is load-bearing; push lr=5e-4→{1e-3, 2e-3} to widen spread further. **Caveat from #2500:** may regress geom_camber_rc.
+6. **max_norm sweep {1.0, 2.0} on hybrid (#2606 thorfinn)** — 4 independent confirmations of clip_fraction=1.000 (saturating clip on every step under max_norm=0.5); relax to see if more gradient direction through compounds.
+7. **film_mid_dim sweep {32, 128} on hybrid (#2616 alphonse NEW)** — only untouched single-CLI capacity axis; targets the geom_camber_rc per-split asymmetry from #2500.
 7. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro)** — averaging-lr level axis from #2342 mechanism finding.
 8. **SWA anneal_epochs=1 on σ=0.5 (#2481 edward)** — SWALR ramp speed; all 3 averaged epochs at swa_lr.
 9. **Skip-SWALR entirely on σ=0.5 (#2484 frieren)** — direct test of SWALR-overrides-cosine mental model; cosine-tail vs SWALR-floor averaging.
@@ -154,10 +158,10 @@
 ### ✓ Landed (10 axes)
 1. Huber β=1.0 (#1452), 2. Per-sample Re-weight (#1586), 3. FiLM (#1585), 4. Grad-clip 1.0 (#1731), 5. Grad-clip 0.5 (#1831), 6. Kendall σ (#1906), 7. RFF σ=1.0 (#2082), 8. Huber β=0.3 (#1757), 9. Lion lr=3e-4 wd=3e-4 (#2063), 10. **RFF σ=0.5 (#2168)** ← CURRENT
 
-### 🔬 In-flight (Wave 12 — post-Loop-18)
-- **hybrid_kendall_lr push {1e-3, 2e-3} on merged hybrid (#2604 fern NEW)** — test σ-spread ceiling; β–σ coupling from #2540 confirms σ-spread is the lever
-- **max_norm sweep {1.0, 2.0} on merged hybrid (#2606 thorfinn NEW)** — relax saturating clip (4 independent confirmations of clip_fraction=1.0)
-- Anchor mean(log_σ) at AdamW-eq + init at eq on σ=0.5 — 2-arm λ ∈ {1, 5} (#2500 alphonse) — fix mean drift from #2443
+### 🔬 In-flight (Wave 12 — post-Loop-19)
+- **hybrid_kendall_lr push {1e-3, 2e-3} on merged hybrid (#2604 fern)** — test σ-spread ceiling; β–σ coupling from #2540 confirms σ-spread is the lever; per-split caveat from #2500
+- **max_norm sweep {1.0, 2.0} on merged hybrid (#2606 thorfinn)** — relax saturating clip (4 independent confirmations of clip_fraction=1.0)
+- **film_mid_dim sweep {32, 128} on merged hybrid (#2616 alphonse NEW)** — only untouched single-CLI capacity axis; targets geom_camber_rc per-split asymmetry from #2500
 - Lion wd sweep on σ=0.5 {3e-3, 1e-2} (#2390 askeladd, REBASED) — pending API recovery
 - n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — pending API recovery
 - swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro) — pending API recovery
@@ -178,3 +182,4 @@
 - RFF σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn, 2026-05-13 18:45): σ axis exhausted on val; σ=0.25 test win refuted as seed-0 outlier; **σ=0.1 = regularizer NOT OOD-prior** (driver = single_in_dist, not OOD-geom); 2nd clip_fraction≈0.99 confirmation; 10th + 11th σ-collapse confirmations; motivates #2512 multi-scale RFF
 - Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 (#2512 thorfinn, 2026-05-13 20:15): does NOT compose on hybrid stack (val +2.66%, test +1.20%); **σ axis decisively closed at σ=0.5** (10 configs evaluated since Lion adoption); banked: σ=0.1 regularizer effect was σ-collapse-conditional — #2311 substitutes for it; 3rd–4th clip_fraction=1.0 confirmations; motivates #2606 max_norm sweep
 - Huber β sweep {0.5, 1.0} on hybrid (#2540 fern, 2026-05-13 20:45): monotonic regression both arms (β=0.5 +3.54% val, β=1.0 +10.12% val); **β=0.3 robust to hybrid optimizer change**; **NEW β–σ coupling mechanism** (β↑ collapses σ-spread); 12th clip_fraction confirmation; refuted grad-norm prediction (smooth-L1 slope 1/β); motivates #2604 hybrid_kendall_lr push
+- Anchor mean(log_σ) + AdamW-eq init on hybrid (#2500 alphonse, 2026-05-13 22:15): both arms regress (λ=1 val 45.90, λ=5 val 47.28); mean-drift fix invalid post-#2311; 4 banked findings inc. **NEW per-split asymmetry: spread expansion hurts geom_camber_rc but helps other splits** (important context for #2604), AdamW-eq init expands spread to 0.70, natural hybrid equilibrium (~mean −2.0) outperforms target −1.4; motivates #2616 film_mid_dim sweep
