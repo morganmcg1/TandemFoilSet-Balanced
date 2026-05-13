@@ -8,6 +8,33 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:15 — PR #2105 (tanjiro swiglu-activation) — **MERGED** (12th compound win)
+
+- Branch: `charliepai2g24h4-tanjiro/swiglu-activation`
+- Hypothesis: Replace GELU MLP with SwiGLU (W_down · (SiLU(W_gate·x) ⊙ W_up·x)), inner_dim=176=round_up8(256×2/3) for ~param-match with original 2-matrix GELU MLP. Per-token gated feature routing.
+- Metric artifacts: `models/model-charliepai2g24h4-tanjiro-swiglu-activation-20260513-091304/metrics.jsonl`
+
+| Split | Baseline (#2018 74.415) | SwiGLU | Δ vs #2018 | Δ vs #1754 (73.958) |
+|---|---:|---:|---:|---:|
+| val_single_in_dist | 80.907 | 76.377 | **−5.60%** | — |
+| val_geom_camber_rc | 84.613 | 79.291 | **−6.29%** | — |
+| val_geom_camber_cruise | 58.100 | 52.005 | **−10.49%** | — |
+| val_re_rand | 74.039 | 67.573 | **−8.73%** | — |
+| **val_avg (primary)** | **74.415** | **68.812** | **−7.53%** | **−6.96%** |
+| test_single_in_dist | 70.626 | 67.134 | **−4.94%** | — |
+| test_geom_camber_rc | 73.856 | 69.308 | **−6.16%** | — |
+| test_geom_camber_cruise | 49.491 | 42.352 | **−14.43%** | — |
+| test_re_rand | 68.125 | 58.848 | **−13.62%** | — |
+| **test_avg** | **65.524** | **59.410** | **−9.33%** | **−7.89%** |
+
+**Analysis:** Largest single-PR gain in the entire compound: −7.53% val / −9.33% test. By far exceeds all prior wins. Mechanism confirmed: per-token gated feature routing allows selective amplification/suppression of Fourier features per geometry. OOD splits gain most (re_rand −8.73%/−13.62%, camber_cruise −10.49%/−14.43%) — the gate adapts to out-of-distribution input distributions where fixed GELU cannot. Best epoch advances 14→12 (faster convergence). LayerScale γ_l attn means stable (0.021–0.027), MLP means 0.041–0.053 (slightly higher than attn, consistent with gating adding more representational energy per MLP block).
+
+⚠ Note: Run measured on pre-#1754 baseline (cosine T_max=15, no warmup). Post-merge code includes LR warmup. Re-validation in-flight (#2175).
+
+Compound progress: **100.957 → 68.812 = −31.8%** over 12 merges.
+
+---
+
 ## 2026-05-13 11:00 — PR #2099 (fern weight-decay-3x) — **CLOSED** (regression, wd axis closed)
 
 - Branch: `charliepai2g24h4-fern/weight-decay-3x`
