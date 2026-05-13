@@ -1,5 +1,52 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 09:58 — PR #1656: Dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 (MERGED — new baseline 52.63/49.22)
+
+- Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
+- Hypothesis (final rerun): Add `dropout=0.1` to PhysicsAttention on the fully-aligned current-best stack (lion_lr=2e-4 + per-channel δ + n_hidden=160). Final arm after two earlier runs confirmed the direction but with stale optimizer configs.
+
+### Results (vs baseline 52.78 / 49.42, PR #2027 — Lion lr=2e-4 + per-channel δ + n_hidden=160)
+
+| Metric | Baseline (no dropout) | **This PR (dropout=0.1)** | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.78 | **52.6345** | **−0.15 (−0.27%)** ✅ |
+| **test_avg/mae_surf_p** | 49.42 | **49.2183** | **−0.20 (−0.41%)** ✅ |
+
+### Per-split val/test (epoch 16, best checkpoint)
+
+| Split | val baseline | val this PR | test baseline | test this PR |
+|---|---:|---:|---:|---:|
+| single_in_dist | 56.24 | 56.52 | 46.75 | 47.14 |
+| geom_camber_rc | 67.45 | 67.35 | 59.92 | 59.44 |
+| geom_camber_cruise | 34.25 | 34.17 | 47.47 | 46.76 |
+| re_rand | 53.17 | 52.50 | 43.52 | 43.54 |
+| **avg** | **52.78** | **52.6345** | **49.42** | **49.2183** |
+
+### Val curve (strictly monotone-decreasing)
+
+All 16 epochs descending — final best at epoch 16 (53.78 → 52.63). No dropout-induced instability.
+
+### Cross-stack ablation summary (thorfinn's 3 runs)
+
+| Stack | Val | Test | Dropout gain (val) |
+|---|---:|---:|---:|
+| Lion δ=0.5 + n128 + lr=1.5e-4 baseline | 66.32 | — | — |
+| + dropout=0.1 | 62.52 | 57.85 | −5.7% |
+| Lion per-ch δ + n160 + lr=3e-4 baseline | 53.62 | 49.65 | — |
+| + dropout=0.1 | 53.087 | 49.215 | −1.0% |
+| **Lion per-ch δ + n160 + lr=2e-4 baseline** | **52.78** | **49.42** | — |
+| **+ dropout=0.1 (MERGED)** | **52.63** | **49.22** | **−0.27%** |
+
+Diminishing returns consistent with saturating regularization budget: each additional regularization axis captures a narrower slice of the remaining variance. The direction is strictly additive; feature masking and gradient/loss/width regularization remain non-redundant.
+
+### Disposition
+
+**MERGED.** Both primary metrics improve. New baseline val=52.63/test=49.22.
+
+- Metrics: `models/model-charliepai2g24h5-thorfinn-dropout_0_1_n160_pcd_lr2e4-20260513-091653/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:15 — PR #1656: Dropout=0.1 on n_hidden=160 + per-channel δ stack (SENT BACK ×2 — close, test wins but val falls 0.6% short)
 
 - Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
