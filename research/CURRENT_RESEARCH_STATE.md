@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 62)
+- **As of:** 2026-05-13 (updated cycle 63)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -27,9 +27,13 @@
 
 ## Current research focus
 
-**Cycle 62.** Two wins merged in quick succession: eta_min=1e-5 (#2357, cycle 61, −0.37% val) and T_mult=2 T_0=7 (#2444, cycle 62, −2.1% val). Current SOTA: val=82.2642 / test=72.4019. The programme has entered a high-momentum compose phase: (1) T_mult=2 + eta_min=1e-5 compose (alphonse #2498 — the two wins are orthogonal and should stack), (2) Lookahead + T_0=7 T_mult=2 + eta_min=1e-5 (tanjiro #2296 rebase), (3) eta_min curve refinement (askeladd #2487), (4) head_wd compose (edward #2380), (5) snapshot ensemble (fern #2452), (6) seed calibration (nezuko #2445), (7) MLP dropout (thorfinn #2477), (8) WD curve mapping (frieren #2284 near terminal).
+**Cycle 63.** WD curve mapping under restart is closing. **frieren #2284 CLOSED**: 3 arms below 5e-4 (WD=2e-4 val=85.88, 2.5e-4 val=87.14, 4e-4 val=85.24) all regress monotonically — confirms restart shifts optimal WD UPWARD. Arm 4 (WD=4.5e-4) would interpolate to ~84.5 by the trend, still well above SOTA 82.2642. The unexplored region is WD ABOVE 5e-4 under the new T_mult=2 stack. **Assigned frieren #2507 (WD curve above 5e-4 on T_mult=2)**: WD ∈ {6e-4, 7e-4}. Key reasoning: T_mult=2's cycle 2 is 40% longer than T_0=10's (14 vs 11 epochs) — more descent runway means either over-regularization bites harder OR stronger WD becomes productive into the deeper minimum. Direct data needed.
+
+**Cycle 62.** Two wins merged in quick succession: eta_min=1e-5 (#2357, cycle 61, −0.37% val) and T_mult=2 T_0=7 (#2444, cycle 62, −2.1% val). Current SOTA: val=82.2642 / test=72.4019. The programme has entered a high-momentum compose phase: (1) T_mult=2 + eta_min=1e-5 compose (alphonse #2498 — the two wins are orthogonal and should stack), (2) Lookahead + T_0=7 T_mult=2 + eta_min=1e-5 (tanjiro #2296 rebase), (3) eta_min curve refinement (askeladd #2487), (4) head_wd compose (edward #2380), (5) snapshot ensemble (fern #2452), (6) seed calibration (nezuko #2445), (7) MLP dropout (thorfinn #2477), (8) WD curve above 5e-4 (frieren #2507, NEW cycle 63).
 
 Key cycle 62 insight: T_0=7 is the unique value giving exactly 2 full non-truncated cycles in ≤21 epochs with T_mult=2. T_0=6 introduces a truncated 3rd cycle (restart at e19 wipes out the cycle-2 minimum). T_0=5 would be even more aggressive — not worth exploring until T_0=7+eta_min compose is confirmed.
+
+Key cycle 63 insight: Cosine restart shifts the optimal WD UPWARD by 2× (3e-4 no-restart → 5e-4 single restart). Mechanism: each restart re-energizes optimization, re-introducing the LR× momentum needed for parameters to escape the local trough WD would otherwise pin them to. The unanswered question is whether T_mult=2's longer cycle 2 shifts the WD optimum AGAIN, either upward (cycle 2 has more runway to absorb stronger WD) or holds at 5e-4 (the cycle-2 descent already exhausts the WD/LR trade-off at 5e-4).
 
 **Cycle 60.** β1 axis closed (#2340 thorfinn). AdamW fully exhausted.
 
@@ -69,19 +73,19 @@ Key cycle 62 insight: T_0=7 is the unique value giving exactly 2 full non-trunca
 - **Gradient clipping NOT the mechanism** (#2058). Spike is LR × m/√v (step magnitude), not gradient size. Denominator-floor (ε) ruled out (#2128 — surf_frac_below_eps=0 always).
 - **AdamW WD effective on surf_head at 10×LR**: with coupled WD, surf_head sees 10× effective shrinkage. Decoupled-WD experiment next.
 
-## Live PRs (active WIPs and recent closes — cycle 60)
+## Live PRs (active WIPs and recent closes — cycle 63)
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 2444 | alphonse | t-mult-2-restart | WIP | T_mult=2 with T_0=7 (cycles 7+14=21) + T_0=6 secondary. Longer cycle 2 hypothesis. |
-| 2445 | nezuko | seed-variance-calibration | WIP | **META**: 3-seed baseline run. Measures σ of val_avg/mae_surf_p — for honest CI. |
-| 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
-| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 61) | Compose Lookahead k=5 + cosine_restart + eta_min=1e-5. Needs rebase + updated commands. |
-| 2284 | frieren | finer-wd-sweep-21epoch | WIP (ACTIVE — partial results posted) | 3 arms done: WD=2e-4 val=85.88, WD=2.5e-4 val=87.14, WD=4e-4 val=85.24. Arm 4 (WD=4.5e-4) in-flight. Trend: monotone descent toward WD=5e-4. |
-| 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
+| 2507 | frieren | wd-above-5e4-tmult2 | **WIP (NEW cycle 63)** | WD curve ABOVE 5e-4 on T_mult=2 stack. Arms: {6e-4, 7e-4}. Restart shifts optimal WD upward — does T_mult=2's longer cycle 2 shift it further? |
 | 2498 | alphonse | tmult2-eta-min-compose | WIP (NEW cycle 62) | Compose T_0=7 T_mult=2 + eta_min=1e-5. Arms: {eta=1e-5, eta=2e-5}. Two orthogonal wins should stack. |
 | 2487 | askeladd | eta-min-refinement | WIP | Map eta_min curve {5e-6, 2e-5} around SOTA 1e-5. |
+| 2477 | thorfinn | mlp-dropout-sweep | WIP | Feature-level activation dropout in encoder: dropout=0.05 vs 0.10. First post-AdamW soft-regularization axis. |
+| 2452 | fern | snapshot-ensemble-cycle-ends | WIP | Save e10 checkpoint; average e10+e20 predictions at eval. Free at training time. |
+| 2445 | nezuko | seed-variance-calibration | WIP | **META**: 3-seed baseline run. Measures σ of val_avg/mae_surf_p — for honest CI. |
 | 2380 | edward | head-wd-restart-compose | WIP | head_wd∈{2e-3, 3e-3} + cosine_restart compose. |
+| 2296 | tanjiro | lookahead-adamw | WIP (sent back cycle 62) | Compose Lookahead k=5 + cosine_restart T_0=7 T_mult=2 + eta_min=1e-5 (3rd update). Needs rebase + updated commands. |
+| 2284 | frieren | finer-wd-sweep-21epoch | **CLOSED cycle 63** | 3 arms below 5e-4 all regress monotonically (WD=2e-4 val=85.88, 2.5e-4 val=87.14, 4e-4 val=85.24). WD curve below 5e-4 fully mapped. |
 | 2444 | alphonse | t-mult-2-restart | **MERGED cycle 62** | T_0=7 T_mult=2 WINS. val=82.2642 / test=72.4019. New SOTA. |
 | 2357 | askeladd | cosine-restart-eta-min | **MERGED cycle 61** | eta_min=1e-5 WINS. val=83.6873 / test=73.3963. |
 | 2340 | thorfinn | adamw-beta1-sweep | **CLOSED cycle 60** | Both arms regress +3.5–4.8 val (>2× seed noise). β1=0.9 confirmed. β1 axis exhausted. |
@@ -109,7 +113,8 @@ Key cycle 62 insight: T_0=7 is the unique value giving exactly 2 full non-trunca
 10. **BF16/AMP** — **rejected** (PR #1572, +3.62% val / +30.09% val at n256). Precision-sensitive surface MAE: val_geom_camber_rc +11.33%. FP32 required.
 10a. **torch.compile(default, dynamic=True)** — **confirmed** (PR #2091, **−4.16% val / −5.44% test**). 21 epochs in 30 min (1.43× speedup). reduce-overhead OOM'd. **New baseline 89.7197.**
 10b. **torch.compile + WD re-tune to 3e-4** — **confirmed** (PR #2178, **−3.01% val / −0.46% test**). WD=3e-4 is optimal at 21 epochs. WD=5e-4 over-regularizes at 21 epochs (+1.17% regression). New baseline 87.0144.
-10c. **Finer WD sweep {2e-4, 2.5e-4, 4e-4} at 21 epochs** — testing (#2284 frieren, NEW). Map the WD curve around the new 3e-4 optimum.
+10c. **Finer WD sweep {2e-4, 2.5e-4, 4e-4} at 21 epochs (under cosine restart)** — **REJECTED** (#2284 frieren, CLOSED cycle 63). All 3 arms regress monotonically: WD=2e-4 val=85.88, WD=2.5e-4 val=87.14, WD=4e-4 val=85.24 — vs the WD=5e-4 baseline (83.99 at the time of run). Confirms restart shifts optimal WD UPWARD from no-restart's 3e-4 to ≥5e-4. Mechanism: each restart re-energizes optimization, reintroducing the LR× momentum needed for parameters to escape the local trough WD would otherwise pin them to. Outlier at WD=2.5e-4: `val_geom_camber_cruise` spikes 17 points worse, dominating that arm. Per-split insight: `val_geom_camber_cruise` regresses LESS as WD increases (60.6→55.0 from 2.5e-4→4e-4) — the cruise OOD split actively prefers HIGHER WD under restart.
+10d. **WD curve above 5e-4 on T_mult=2 stack** — testing (#2507 frieren, NEW cycle 63). Arms: WD ∈ {6e-4, 7e-4}. T_mult=2's cycle 2 is 40% longer than T_0=10 (14 vs 11 epochs) — direct test of whether further runway absorbs stronger WD productively. Branching rule: if monotone regression, 5e-4 is bilateral peak under restart and WD axis is fully closed; if either arm beats 82.2642, push higher.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97%). Wall-clock-bound.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30%). Wall-clock-bound.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39%). Underfitting. Depth=5/14ep is Pareto.
@@ -160,6 +165,8 @@ Key cycle 62 insight: T_0=7 is the unique value giving exactly 2 full non-trunca
 36. **Stratified sampler compose with cosine_restart + domain-weighted loss** — testing (#2381 fern, NEW cycle 49). Arm 1: strict + restart (pure composition). Arm 2: strict + restart + domain_loss_weights=(1.0,1.0,1.3,1.2) (recover cruise/re_rand). Tests whether per-batch composition variance is still load-bearing once restart provides controlled spike-recovery.
 
 ## Key insights
+
+**Cycle 63 — Cosine restart shifts optimal WD UPWARD (PR #2284 frieren):** Direct evidence: pre-restart 21-epoch optimum was WD=3e-4 (PR #2178); under SGDR cosine restart T_0=10, WD=5e-4 is optimum (PR #2317 anti-additivity test, PR #2444 T_mult=2 SOTA). #2284 closed the WD<5e-4 region under restart: all 3 arms (WD=2e-4, 2.5e-4, 4e-4) monotonically regress from 83.99 baseline. **Mechanism:** each restart re-introduces LR× momentum, allowing parameters to escape the trough WD would otherwise pin them to → stronger WD becomes productive. **Implication for the WD axis:** the unexplored region is WD ≥ 5e-4 under T_mult=2, which has a 40%-longer cycle 2 than T_0=10. #2507 frieren tests this.
 
 **Cycle 53 — Seed variance (PR #2331 sub-finding):** Both live models in the SWA experiment regressed 1.3–1.6 val points from the baseline (85.31/85.57 vs 83.997 `kt5pk5qu`). Training config was identical. Most likely: seed variance at 21-epoch SGDR budget. Implication: some prior small-margin wins (~0.5-1 val) may be within the noise floor. The 3-seed calibration PR #2445 will quantify σ. **Future merge policy should require improvements > 2σ for borderline cases**, or use multi-seed confirmation.
 

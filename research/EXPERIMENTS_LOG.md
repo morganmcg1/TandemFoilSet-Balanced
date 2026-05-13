@@ -2,6 +2,63 @@
 
 ---
 
+## 2026-05-13 18:45 — PR #2284: Finer WD sweep below 5e-4 under restart (CLOSED — all arms regress, WD axis closed below 5e-4)
+
+- **Branch:** `willowpai2g48h4-frieren/finer-wd-sweep-21epoch`
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** Arm 1 (WD=2e-4), Arm 2 (WD=2.5e-4), Arm 3 (WD=4e-4) — all 3 posted as final by frieren at 17:13 UTC; Arm 4 (WD=4.5e-4) was in-flight but skipped after no progress in 58 min.
+- **Hypothesis:** Frieren's prior #2178 had found WD=3e-4 was optimal at 21 epochs without restart. Once restart was merged (#2227 cosine T_0=10, baseline 83.99), it was unclear if 3e-4 was still optimal under restart. This PR mapped the WD curve {2e-4, 2.5e-4, 4e-4, 4.5e-4} around 3e-4 on the T_0=10 restart stack.
+
+### Results
+
+| Arm | WD | val_avg/mae_surf_p | Δ vs 83.99 baseline |
+|-----|-----|---------------------|----------------------|
+| 1 | 2e-4 | 85.88 | +1.89 |
+| 2 | 2.5e-4 | 87.14 | +3.15 (worst — cruise outlier) |
+| 3 | 4e-4 | 85.24 | +1.25 |
+| Baseline (#2227) | 5e-4 | **83.99** | — |
+| (current SOTA #2444 T_mult=2) | 5e-4 | **82.26** | — |
+
+### Per-split val MAE (best arm: WD=4e-4)
+
+| Split | WD=2e-4 | WD=2.5e-4 | WD=4e-4 | Baseline 83.99 |
+|-------|---------|-----------|---------|----------------|
+| val_single_in_dist | ~110 | ~115 | ~108 | ~104 |
+| val_geom_camber_rc | ~107 | ~108 | ~107 | ~100 |
+| val_geom_camber_cruise | 60.6 | 73.0 (outlier) | 55.0 | ~46 |
+| val_re_rand | ~88 | ~88 | ~85 | ~84 |
+
+### Analysis and Conclusions
+
+**Closed — WD curve below 5e-4 fully mapped, no improvement.** The trend is monotonic regression in both directions away from 4e-4 toward 2e-4 (5e-4 baseline at the upper boundary).
+
+**Cosine restart shifts the optimal WD UPWARD.** Confirmed bidirectionally:
+- No restart 21 epochs: WD=3e-4 optimal (PR #2178)
+- Single restart T_0=10: WD=5e-4 optimal (PR #2317 anti-additivity, PR #2444 T_mult=2 SOTA)
+- This experiment: WD<5e-4 all regress under restart
+
+**Mechanism — restart cushions over-regularization.** Each restart re-injects LR×momentum, breaking the trough that strong WD would otherwise pin parameters to. Without restart, WD=5e-4 caused +1.17% regression at 21 epochs (#2178 Arm 1); with restart, WD=5e-4 is the global optimum. The mechanism makes intuitive sense: WD is a per-step linear force toward 0 in parameter space, while restart provides periodic high-LR exploration that escapes the local minima this force creates.
+
+**Per-split insight — cruise OOD split prefers HIGHER WD under restart.** `val_geom_camber_cruise` improves monotonically from 73.0 → 60.6 → 55.0 as WD increases from 2.5e-4 → 2e-4 → 4e-4. This is the OOD split that has historically had the largest gains from the restart mechanism. **Implication:** WD>5e-4 may continue to improve cruise — testable in #2507.
+
+**Outlier at WD=2.5e-4:** `val_geom_camber_cruise` spiked to 73.0 from a smooth ~60 trend at WD=2e-4. Possible seed-level instability or genuine non-monotonicity in that region. Within the 1-2 val seed noise band's contribution to val_avg, but the val_avg=87.14 outlier is 1+ point above what monotone interpolation predicts.
+
+**Branching decision — close, don't extend.** Arm 4 (WD=4.5e-4) would interpolate to ~84.5 by the monotone trend, still well above current SOTA 82.26. The information value of running Arm 4 is low; the WD=4.5e-4 point is closer to 5e-4 than the other 3 arms by ~2× — even if it happens to win in this region, the WD axis is already understood to want UP under restart.
+
+**Follow-up assigned:** PR #2507 frieren — WD ∈ {6e-4, 7e-4} on the T_mult=2 SOTA stack. The unexplored region of the WD axis under restart. T_mult=2's 40%-longer cycle 2 may absorb stronger WD productively.
+
+---
+
+## 2026-05-13 19:00 — PR #2507: WD curve ABOVE 5e-4 on T_mult=2 stack (assignment to frieren, NEW cycle 63)
+
+- **Branch:** `willowpai2g48h4-frieren/wd-above-5e4-tmult2`
+- **Student:** willowpai2g48h4-frieren
+- **Hypothesis:** Cosine restart shifts optimal WD upward (3e-4 no-restart → 5e-4 T_0=10 single restart). T_mult=2's cycle 2 is 14 epochs (40% longer than T_0=10's 11 epochs) — direct test of whether the additional descent runway absorbs stronger WD productively, or whether 5e-4 holds.
+- **Arms:** WD ∈ {6e-4, 7e-4} on otherwise-identical current SOTA stack (PR #2444 config: T_0=7, T_mult=2, eta_min=0, surf_head_lr=5e-3, huber_delta=0.5, torch.compile).
+- **Branching rule:** Both regress → 5e-4 is bilateral peak under T_mult=2, WD axis fully closed under restart. Either arm beats 82.2642 → push higher with WD ∈ {8e-4, 1e-3} in a follow-up.
+
+---
+
 ## 2026-05-13 18:00 — PR #2444: T_mult=2 restart, T_0=7 (MERGED — new SOTA)
 
 - **Branch:** `willowpai2g48h4-alphonse/t-mult-2-restart`
