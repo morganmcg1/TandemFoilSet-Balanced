@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **46.8460** | #2268 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + LayerScale + **n_layers=4** | epoch 58 of 58 (terminal); -3.44% vs #2195; all 4 splits improve; 577K params (-18%); budget-bound confirmed |
-| `test_avg/mae_surf_p` | **40.8140** | #2268 | — | test from best-val checkpoint ep58; -4.70% vs #2195 |
+| `val_avg/mae_surf_p` | **46.3612** | #2290 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + LayerScale + n_layers=4 + **n_hidden=96** | epoch 67 of 70 (best≠terminal; cosine converged cleanly); -1.04% vs #2268; all 4 splits improve; 330K params (-43%); budget-bound 2-for-2 |
+| `test_avg/mae_surf_p` | **40.3555** | #2290 | — | test from best-val checkpoint ep67; -1.12% vs #2268 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 46.8460` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 46.3612` to be merged.
+
+## 2026-05-13 20:00 — PR #2290: n_hidden 128→96 (width-down, --epochs 90): budget-bound 2-for-2
+
+- **Student:** charliepai2g48h5-frieren
+- **Best epoch:** 67 of 70 (best≠terminal; cosine schedule converged cleanly within 30-min cap)
+- **Epochs reached:** 70 (~25.4 s/epoch; ~15% savings vs n_layers=4 baseline ~30 s/epoch)
+- **Peak GPU memory:** 14.27 GB (-13% vs n_layers=4 ~16.4 GB)
+- **Param count:** 329,803 (~330K; -43% vs n_layers=4 ~578K)
+
+| Split | val mae_surf_p | Δ vs #2268 (n_layers=4) |
+|---|---|---|
+| `val_single_in_dist` | **40.7757** | **-2.22%** |
+| `val_geom_camber_rc` | **64.2563** | **-0.64%** |
+| `val_geom_camber_cruise` | **31.5251** | **-0.16%** |
+| `val_re_rand` | **48.8877** | **-1.10%** |
+| **val_avg** | **46.3612** | **-1.04%** |
+
+| Split | test mae_surf_p | Δ vs #2268 |
+|---|---|---|
+| `test_single_in_dist` | **38.2124** | — |
+| `test_geom_camber_rc` | **56.6784** | — |
+| `test_geom_camber_cruise` | **25.2465** | — |
+| `test_re_rand` | **41.2846** | — |
+| **test_avg** | **40.3555** | **-1.12%** |
+
+- **Config change:** `n_hidden: 128 → 96` in model_config. `--epochs 90` to give headroom; cosine completed at ep67.
+- **Budget-bound 2-for-2:** width-down WIN follows depth-down WIN (#2268). All 4 val splits improve uniformly — classic budget-bound signature. Per-epoch savings ~15% (not predicted 40-45%: slice ops scale ~linearly in n_hidden, not as n_hidden²). 17% more cosine epochs (60→70) drove improvement.
+- **LayerScale γ shape:** adapted automatically from (128,) to (96,). Convergence preserved: MLP γ ~0.063–0.078 vs attn γ ~0.004–0.012 (6–10× ratio, consistent with PR #2195 pattern).
+- **Budget-bound signal:** best epoch 67 ≠ terminal 70 — cosine converged cleanly; no plateau overshoot. Width axis open further (n_hidden=64 is the natural next probe).
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-frieren-n-hidden-96-20260513-130602/metrics.jsonl`
+  `models/model-charliepai2g48h5-frieren-n-hidden-96-20260513-130602/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-frieren \
+      --experiment_name "charliepai2g48h5-frieren/n-hidden-96" \
+      --epochs 90
+  ```
+  (n_hidden=96 now on advisor branch; stacks with LayerScale + n_layers=4)
+
+---
 
 ## 2026-05-13 17:30 — PR #2268: n_layers 5→4 (depth-down, --epochs 60): budget-bound regime confirmed
 
