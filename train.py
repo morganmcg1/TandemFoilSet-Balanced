@@ -425,6 +425,11 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    # Per-channel Huber delta overrides (Ux, Uy, p). >0 overrides huber_delta for
+    # that channel; <=0 means use the global huber_delta.
+    huber_delta_ux: float = -1.0
+    huber_delta_uy: float = -1.0
+    huber_delta_p: float = -1.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -537,18 +542,26 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         pred = surf_head(pred, x_norm, is_surface)
 
-        # Per-node Huber (SmoothL1) for surface to align with MAE metric;
-        # keep MSE for volume. delta=0 falls back to MSE for surface too.
-        delta = cfg.huber_delta
+        # Per-node, per-channel Huber (SmoothL1) for surface to align with MAE
+        # metric; keep MSE for volume. Per-channel delta lets Ux/Uy/p have
+        # different thresholds since their residual distributions differ. Any
+        # channel with delta<=0 falls back to MSE for that channel.
+        ch_deltas = [
+            cfg.huber_delta_ux if cfg.huber_delta_ux > 0 else cfg.huber_delta,
+            cfg.huber_delta_uy if cfg.huber_delta_uy > 0 else cfg.huber_delta,
+            cfg.huber_delta_p  if cfg.huber_delta_p  > 0 else cfg.huber_delta,
+        ]
+        delta_per_ch = torch.tensor(ch_deltas, device=pred.device, dtype=pred.dtype)  # [3]
+        delta_b = delta_per_ch.view(1, 1, 3)
         abs_err = (pred - y_norm).abs()
-        if delta > 0:
-            surf_node_loss = torch.where(
-                abs_err < delta,
-                0.5 * abs_err.pow(2) / delta,
-                abs_err - 0.5 * delta,
-            )
-        else:
-            surf_node_loss = abs_err.pow(2)
+        # Vectorised Huber: quadratic regime if |x| < delta, linear otherwise.
+        # Channels with delta<=0 fall back to MSE.
+        huber = torch.where(
+            abs_err < delta_b,
+            0.5 * abs_err.pow(2) / delta_b.clamp(min=1e-12),
+            abs_err - 0.5 * delta_b,
+        )
+        surf_node_loss = torch.where(delta_b > 0, huber, abs_err.pow(2))
         sq_err = abs_err.pow(2)  # MSE for volume
 
         # ── Per-sample inverse-variance weighting (BIVW) ─────────────────────
@@ -579,13 +592,22 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
+        # Fraction of surface errors in the L1 (linear) regime, per channel —
+        # informs per-channel delta choice.
         with torch.no_grad():
-            if delta > 0 and surf_mask.any():
-                surf_abs = abs_err[surf_mask.unsqueeze(-1).expand_as(abs_err)]
-                surf_l1_frac = (surf_abs >= delta).float().mean().item()
+            if surf_mask.any():
+                # abs_err: [B, N, 3]; surf_mask: [B, N]. Per-channel L1 fraction:
+                # fraction of surface nodes where |residual_c| >= delta_c.
+                ge = (abs_err >= delta_b).float()  # [B, N, 3]
+                sm = surf_mask.unsqueeze(-1).float()  # [B, N, 1]
+                denom = surf_mask.sum().clamp(min=1)
+                l1_per_ch = ((ge * sm).sum(dim=(0, 1)) / denom)  # [3]
+                surf_l1_frac_ux = l1_per_ch[0].item()
+                surf_l1_frac_uy = l1_per_ch[1].item()
+                surf_l1_frac_p  = l1_per_ch[2].item()
+                surf_l1_frac = (surf_l1_frac_ux + surf_l1_frac_uy + surf_l1_frac_p) / 3.0
             else:
-                surf_l1_frac = 0.0
+                surf_l1_frac_ux = surf_l1_frac_uy = surf_l1_frac_p = surf_l1_frac = 0.0
         wandb.log({
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
@@ -594,6 +616,9 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_max": y_var.max().item(),
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
+            "train/surf_l1_frac_ux": surf_l1_frac_ux,
+            "train/surf_l1_frac_uy": surf_l1_frac_uy,
+            "train/surf_l1_frac_p": surf_l1_frac_p,
             "global_step": global_step,
         })
 
