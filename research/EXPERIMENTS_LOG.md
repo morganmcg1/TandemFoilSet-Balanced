@@ -8,6 +8,73 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:15 — PR #1754 (nezuko linear LR warmup + cosine T_max=14 — H19) — **SENT BACK FOR REBASE**
+
+- Branch: `charliepai2g24h4-nezuko/lr-warmup-h19`
+- Hypothesis: linear LR warmup over epoch 1 (per-batch, total_iters=375)
+  + CosineAnnealingLR(T_max=14*375=5250). Addresses ep1 pre-clip grad-norm
+  spike (60-100) consistently observed in recent grad-clip experiments.
+
+**This is a WIN on the old baseline** — but measured against pre-#1548
+baseline (90.294), not current 84.762. Sent back for rebase + re-run.
+
+| Metric | This PR (vs old) | Old baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 89.718 | 90.294 | **-0.64%** |
+| test_avg/mae_surf_p (4-split) | 79.852 | 81.243 | **-1.71%** |
+
+- **Per-split val MAE (3/4 splits improve)**:
+  - val_single_in_dist     -1.94%
+  - val_geom_camber_rc     -1.37%
+  - val_geom_camber_cruise -0.33%
+  - val_re_rand            +1.68% (small split-specific noise)
+- **All 4 test splits improve** (avg -1.71%; test gain exceeds val gain).
+- **Mechanism check passes**: ep1 last-batch pre-clip grad-norm dropped
+  ~35% (99 → 65); LR trace matches design (peak at end ep1, half at ep8,
+  zero at ep15).
+- **Implementation refinement** from the student: PR draft suggested
+  per-epoch SequentialLR (coarse 2-point step); student moved scheduler
+  inside batch loop with `total_iters=375, milestones=[375], T_max=5250`
+  for smooth per-batch ramp. Sharper than the original spec.
+- **Sent back for rebase**: technically MERGEABLE (no textual conflict)
+  but base is `0668de7` (pre-#1548 Fourier merge); current is `90b33ba`.
+  Run must be re-measured against new baseline 84.762.
+- Expected post-rebase: -0.3% to -1.5% on val_avg (warmup mechanism is
+  orthogonal to Fourier input encoding).
+
+## 2026-05-13 02:10 — PR #1756 (tanjiro stoch-depth drop_rate=0.15 — H bracket-up) — **CLOSED**
+
+- Branch: `charliepai2g24h4-tanjiro/stoch-depth-0.15`
+- Hypothesis: pre-registered bracket-up follow-up from closed #1612 at 0.05.
+  Push schedule above merged 0.10 to `[0.0, 0.0375, 0.075, 0.1125, 0.15]`.
+
+| Metric | This PR | Old baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 97.235 | 90.294 | **+7.69%** |
+| test_avg/mae_surf_p (4-split) | 87.236 | 81.243 | +7.38% |
+| Param count | 662,359 | 662,359 | unchanged |
+
+- **All four val splits regress uniformly** (+5.31% to +12.14%); largest
+  hit on val_single_in_dist +12.14%.
+- **Outcome C confirmed**: the merged 0.10 is the genuine local optimum
+  of the single-knob bracket. {0.05 → +13.7%, 0.10 → 0%, 0.15 → +7.69%}
+  is a clear asymmetric V around 0.10.
+- **Student's sharp finding**: both endpoints regress on val_geom_camber_rc
+  (+13.33% at 0.05 from #1612; +5.31% at 0.15 here). The "OOD geometry
+  wants more regularization" narrative is now falsified on BOTH sides of
+  the bracket — should not appear in future regularization PR hypotheses.
+- **Train-vs-val gap direction**: val > train (standard generalization
+  gap), NOT train > val (which would have been the ensemble-dropout
+  signature). Independent evidence that 0.15 is operating as just-more-noise,
+  not stronger ensemble.
+- **Mechanism limit**: with n_layers=5 and last block never dropped, the
+  effective per-step drop variance at p=0.15 is still small — explains
+  why higher drop rates don't unlock new ensemble behavior at this depth.
+- Single-knob stoch-depth direction fully closed. Future regularization
+  PRs should target different mechanism (per-layer schedule shape, weight
+  decay, label smoothing, or output head reshaping).
+- Follow-up assigned: PR #1811 (tanjiro per-channel output head MLPs).
+
 ## 2026-05-13 02:00 — PR #1773 (thorfinn AdamW betas (0.9, 0.95) — H22) — **CLOSED**
 
 - Branch: `charliepai2g24h4-thorfinn/adamw-betas-0.95`

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 02:05 UTC (close #1773 thorfinn AdamW betas (0.9, 0.95) +1.97%; assign #1799 thorfinn LayerScale CaiT init=0.1; wave 5 in-flight: #1711, #1753, #1754, #1756; wave 6 in-flight: #1772 edward Fourier L=6, #1799 thorfinn LayerScale; rebasing: #1549, #1608)
+- **Last updated**: 2026-05-13 02:20 UTC (close #1773 thorfinn AdamW betas +1.97%; close #1756 tanjiro stoch-depth-0.15 +7.69%; **#1754 nezuko LR warmup WINS on old baseline -0.64%/-1.71%, sent back for rebase to new 84.762 baseline**; assign #1799 thorfinn LayerScale, #1811 tanjiro per-channel output heads; in-flight: #1711, #1753, #1754(rebasing), #1772, #1799, #1811; rebasing: #1549, #1608)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -62,22 +62,25 @@ pure spike suppression. The 1.0 / 25 / 50 bracket points map to a clear
 asymmetric profile around 25. **Lower bracket point (max_norm=10, #1713)
 now in flight** to complete the curve.
 
-Active threads (post #1773 close + wave-5/6 in-flight):
+Active threads (post #1756/#1773 close, #1754 sent back for rebase):
 
 1. **Per-channel surf-loss weighting** (alphonse #1711, H18,
    `[0.5, 0.5, 2.0]`) — loss-layer rebalancing toward pressure channel.
 2. **Adaptive grad-clip** (askeladd #1753, 1.5× running median over K=100
    step deque) — pivot from closed fixed-threshold bracket.
-3. **Linear LR warm-up** (nezuko #1754, H19, 1-epoch warmup + cosine
-   T_max=14) — addresses consistent ep1 pre-clip grad-norm spike.
-4. **Stoch-depth above-the-merged-optimum** (tanjiro #1756,
-   `drop_rate=0.15`) — bracket above merged 0.10.
-5. **Fourier coord encoding `n_freqs=6`** (edward #1772) — pre-registered
+3. **LR warm-up REBASING** (nezuko #1754, H19) — WON on old baseline
+   (-0.64% val, -1.71% test); pending re-confirmation on new 84.762 baseline.
+   Highest-EV merge-candidate after rebase.
+4. **Fourier coord encoding `n_freqs=6`** (edward #1772) — pre-registered
    bracket-up from his merged #1548 L=4.
-6. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
+5. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
    pivot after closed AdamW betas direction. Per-channel learnable γ_l
-   gates each residual branch; +0.19% params; compounds with stoch-depth
-   (Touvron 2021 Table 3 evidence).
+   gates each residual branch; +0.19% params; compounds with stoch-depth.
+6. **Per-channel output head MLPs** (tanjiro #1811, H24) — fresh
+   architecture pivot after closed stoch-depth single-knob direction.
+   3 × Sequential(Linear(128→64), GELU, Linear(64→1)) replace shared
+   final linear; +3.72% params; strengthens closed H17 γ/β idea with
+   non-linear per-channel decoders.
 
 Note: all wave-5 in-flight experiments (#1711, #1753, #1754, #1756) are
 measured against the **new 84.762 baseline**, not against the 90.294 they
@@ -109,24 +112,25 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | nezuko | #1677 | `per-node-temp-h12` | **CLOSED** (slice-collapse 3rd failure; mechanism learned, outcome rejected) | +3.11% |
 | tanjiro | #1612 | `stoch-depth-0.05` | **CLOSED** (split-asymmetric; OOD geom wants more drop) | +13.7% vs current baseline |
 
-## Round 2 wave 5 — resolution (partial: #1548 merged, #1699 closed; 4 still in flight)
+## Round 2 wave 5 — resolution (4 closures, 1 winner pending rebase, 2 in flight)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
 | edward | #1548 | `fourier-coords-L4-rebased` | **MERGED** (new baseline 84.762) | -6.13% val, -8.10% test |
 | thorfinn | #1699 | `attn-mlp-dropout-0.05` | **CLOSED** (mechanism conflict + compute tax) | +2.27% |
+| tanjiro | #1756 | `stoch-depth-0.15` | **CLOSED** (uniform regression, V around 0.10 confirmed) | +7.69% val |
+| nezuko | #1754 | `lr-warmup-h19` | **REBASING** (won on old baseline -0.64%/-1.71%) | tbd vs 84.762 |
 | alphonse | #1711 | `surf-ch-weight-h18` | WIP | tbd |
 | askeladd | #1753 | `adaptive-grad-clip-q50-a1.5` | WIP | tbd |
-| nezuko | #1754 | `lr-warmup-h19` | WIP | tbd |
-| tanjiro | #1756 | `stoch-depth-0.15` | WIP | tbd |
 
-## Round 2 wave 6 — partial resolution (#1773 closed, #1772 + #1799 in flight)
+## Round 2 wave 6 — partial resolution (#1773 closed, #1772/#1799/#1811 in flight)
 
 | Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
 |---------|----|----|---------|---------------|
 | thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
 | edward | #1772 | `fourier-coords-L6` | WIP | tbd |
 | thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
+| tanjiro | #1811 | `output-head-per-channel-mlp` | WIP | tbd |
 
 ## Wave-1 / wave-2 carryover (still WIP)
 
@@ -153,8 +157,10 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
 - **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:05 UTC)
+## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:20 UTC)
 
+- **#1754 lr-warmup-h19 (nezuko)** — **REBASING**. Won on old baseline at -0.64% val, -1.71% test (3/4 val splits improve, all 4 test splits improve). Mechanism check passes (ep1 last-batch pre-clip grad-norm dropped ~35%). Sent back to re-measure on new 84.762 baseline post-Fourier-merge. Expected post-rebase: -0.3% to -1.5% on val_avg (warmup is orthogonal to Fourier input encoding).
+- **#1756 stoch-depth-0.15 (tanjiro)** — **CLOSED** at +7.69% val. Outcome C confirmed: merged 0.10 is local optimum (V-shape: 0.05→+13.7%, 0.10→0%, 0.15→+7.69%). Both endpoints regress on val_geom_camber_rc, falsifying the "OOD geometry wants more drop" narrative I had built. Train-vs-val gap stays val > train (no ensemble-dropout signature). Single-knob direction fully closed.
 - **#1773 adamw-betas-0.95 (thorfinn)** — **CLOSED** at +1.97% val, +1.61% test. Non-uniform regression confirms two falsified predictions (best-epoch unchanged, per-split non-uniform). Deeper finding: merged stack (grad-clip-25 + cosine T_max=15) already addresses the non-stationarity that motivated short-EMA β₂; the regime gap to LLaMA/PaLM (batch=10³-10⁶× larger, 10⁵-10⁶ steps) makes β₂=0.95 a worse fit. Optimizer-betas direction closed.
 - **#1548 fourier-coords-L4-rebased (edward)** — **MERGED** as new baseline **84.762** (val) / **74.659** (test). -6.13% val, -8.10% test vs #1637 baseline. Strongest single-experiment signal of the round; test gain exceeds val gain. Per-split pattern matches spectral-bias hypothesis exactly. 5th compound win on this branch.
 - **#1699 attn-mlp-dropout-0.05 (thorfinn)** — **CLOSED** at +2.27%. Three mechanisms: compute tax (+12% epoch wall-clock), stoch-depth was already at regularization optimum, slice-attention double-use of softmax weights disrupts unit-sum. Single-knob fine-grained dropout direction closed.
@@ -218,8 +224,8 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 | edward | #1772 | WIP (Fourier coords L=6 — bracket up from merged L=4) |
 | fern | #1549 | rebasing (FiLM 81.291 signal pending vs 84.762 baseline) |
 | frieren | #1608 | rebasing (EMA 0.999) |
-| nezuko | #1754 | WIP (H19 LR warmup epoch 1 + cosine T_max=14) |
-| tanjiro | #1756 | WIP (stoch-depth 0.15 — bracket above merged 0.10) |
+| nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 84.762) |
+| tanjiro | #1811 | WIP (H24 per-channel output head MLPs — 3 × Linear→GELU→Linear) |
 | thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
 
 Zero idle students. Zero idle GPUs.
