@@ -468,6 +468,7 @@ def save_model_artifact(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "slice_num": effective_slice_num,
     }
 
     description = (
@@ -600,6 +601,7 @@ class Config:
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
+    slice_num: int = -1  # override model_config["slice_num"]; -1 = use default (64)
 
 
 cfg = sp.parse(Config)
@@ -631,6 +633,7 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+effective_slice_num = cfg.slice_num if cfg.slice_num > 0 else 64
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
@@ -638,11 +641,12 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=effective_slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
+print(f"Model slice_num: {effective_slice_num} (default 64)")
 
 model = FiLMTransolver(
     n_layers=model_config["n_layers"],
@@ -739,6 +743,7 @@ run = wandb.init(
         "swa_start_epoch": swa_start_epoch,
         "swa_lr": swa_lr,
         "swa_anneal_epochs": 2,
+        "slice_num": effective_slice_num,
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -1126,6 +1131,7 @@ if best_metrics:
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "slice_num": effective_slice_num,
     }
     description = (
         f"Transolver SWA checkpoint — swa val_avg/mae_surf_p = {swa_val_avg_surf_p:.4f} "
