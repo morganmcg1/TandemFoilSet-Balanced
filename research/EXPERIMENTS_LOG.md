@@ -1686,3 +1686,79 @@ Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (eac
 
 **Hypothesis itself remains untested.** Could be re-attempted by another student in a future round if grad-accum becomes worth revisiting.
 
+
+## 2026-05-13 22:30 — PR #2582: DropToken (token random masking, p=0.10) — CLOSED
+- **Branch**: `charliepai2g24h1-frieren/drop-token-vol-only`
+- **Hypothesis**: Random per-token volume-only masking acts as drop-in regularization (forces model to be robust to missing nodes).
+- **Status**: **CLOSED — catastrophic regression** val +18.0%, test +17.4%
+
+| Split | Baseline (#2011) | DropToken p=0.1 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | **39.61** | **+38.5%** |
+| val_geom_camber_rc | 41.95 | 47.93 | +14.3% |
+| val_geom_camber_cruise | 14.15 | 16.85 | +19.1% |
+| val_re_rand | 30.81 | 31.92 | +3.6% |
+| **val_avg** | **28.8762** | **34.0739** | **+18.0%** |
+| **test_avg** | **24.9992** | **29.3543** | **+17.4%** |
+
+- **Diagnostic**: Worst hit on the EASIEST split (single_in_dist +38.5%) — classic under-converged signature. PhysicsAttention's softmax over slice-tokens is sensitive to token-count perturbation. Token dropout breaks the prior that all nodes are visible at evaluation.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-frieren-drop-token-vol-only-20260513-211*/metrics.jsonl`
+
+**Programme learning**: Combined with closed coord-jitter (#2594), translation, re-input-jitter, Mixup — **the "input-side perturbation augmentation" axis is now FULLY CLOSED**. The model needs all tokens visible because slice attention computes affinity over the full token set. Future augmentation must operate on labels (e.g., target smoothing) or features (e.g., shape descriptors), not input topology.
+
+## 2026-05-13 22:30 — PR #2592: SDF (signed-distance-to-foil) input feature — CLOSED
+- **Branch**: `charliepai2g24h1-nezuko/sdf-input-feature`
+- **Hypothesis**: Adding per-node signed-distance to nearest foil surface as 25th input channel helps Transolver disambiguate volume nodes near vs far from the foil.
+- **Status**: **CLOSED** — val +2.6%, test +1.9%; student self-diagnosed SDF info as redundant with slice attention's softmax-as-NN.
+
+| Metric | Baseline (#2011) | SDF feature | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 28.8762 | 29.6193 | +2.57% |
+| test_avg/mae_surf_p | 24.9992 | 25.4625 | +1.85% |
+| input feature dim | 24 | 25 | +1 |
+| params | 662K | 663K | +0.2% |
+
+- **Diagnostic**: SDF column grad_norm decayed 10× over training (from 0.34 → 0.034) — model actively learned to **ignore** the channel. PhysicsAttention slice softmax already produces a soft distance-weighted neighborhood; an explicit Euclidean distance feature is **redundant** with the learned attention prior. Student's own analysis (very thorough) noted SDF magnitude is dominated by coord scale, which is already present.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-nezuko-sdf-input-feature-20260513-213*/metrics.jsonl`
+
+**Programme learning**: Geometric distance features that overlap with attention softmax are dead-ends here. **The "explicit distance feature" axis is closed.** Curvature (2nd derivative) and shape-descriptor jitter remain unexplored and target genuinely new information not captured by slice attention.
+
+## 2026-05-13 22:30 — PR #2594: Coordinate jitter (σ=0.01, training-only) — CLOSED
+- **Branch**: `charliepai2g24h1-fern/coord-jitter-sigma-0p01`
+- **Hypothesis**: Per-node Gaussian noise σ=0.01 on coordinates during training acts as smoothness regularizer.
+- **Status**: **CLOSED** — val +3.7%, test +2.9%.
+
+| Metric | Baseline (#2011) | Coord-jitter σ=0.01 | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 28.8762 | 29.9469 | +3.71% |
+| test_avg/mae_surf_p | 24.9992 | 25.7204 | +2.89% |
+| val_geom_camber_rc | 35.30 | 36.62 | +3.74% |
+
+- **Diagnostic**: Mesh-position perturbation doesn't address the bottleneck. The geom_camber_rc split differs from training in **NACA shape parameters** (camber, thickness) — NOT in mesh-position distribution. Coord-jitter perturbs the wrong axis.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-fern-coord-jitter-sigma-0p01-20260513-214*/metrics.jsonl`
+
+**Programme learning**: Critical empirical insight — **the OOD axis is shape-distribution, NOT mesh-position-distribution**. This redirects the augmentation search: instead of jittering coords, jitter the shape-descriptor channels (NACA-4 parameters) directly. Reassigned to fern as #2625 `naca-feature-jitter-sigma-0p02`.
+
+## 2026-05-13 22:30 — PR #2539: Fourier positional encoding (3 arms σ=1.0, 0.1, 0.05) — CLOSED
+- **Branch**: `charliepai2g24h1-thorfinn/fourier-pos-encoding-rff`
+- **Hypothesis**: NeRF-style Random Fourier Features on (x,y) coords add high-frequency representational capacity to position encoding.
+- **Status**: **CLOSED** — all 3 σ scales regress (+3.1%, +1.4%, +1.8%).
+
+| σ | val_avg | Δ vs baseline | test_avg | Δ |
+|---|---|---|---|---|
+| baseline (#2011) | 28.8762 | — | 24.9992 | — |
+| 1.0 | 29.79 | +3.16% | 25.34 | +1.36% |
+| 0.1 | 29.27 | +1.36% | 25.54 | +2.19% |
+| 0.05 | 29.40 | +1.81% | 25.51 | +2.06% |
+
+- **Diagnostic**: Asymptotic ordering across the 3 scales (σ=0.1 best, then 0.05, then 1.0) shows there is no monotonic improvement — moving σ in any direction doesn't unlock a better basin. The PhysicsAttention slice-softmax over (xy)-coords already implicitly learns multi-scale position representations.
+- **Metrics JSONL**: 3 separate runs under `models/model-charliepai2g24h1-thorfinn-fourier-pos-encoding-rff-*/metrics.jsonl`
+
+**Programme learning**: **Fixed-frequency positional encoding axis is closed** — RFF features are redundant with raw coordinates when the architecture has flexible slice attention. Combined with closed coord-jitter, the "coord-side input augmentation/encoding" meta-axis is now thoroughly explored and exhausted.
+
+## 2026-05-13 22:30 — PR #2585 (PENDING re-run): ReFiLM-residual hidden=4, deeper blocks ≥2
+- **Branch**: `charliepai2g24h1-alphonse/refilm-residual-conditioning`
+- **Status**: SENT BACK FOR ONE ARM. Mechanism real (corr -0.934 with log_Re), test_avg -1.70%, but val_avg tied (+0.06%) and val_geom_camber_rc +2.04% with |γ|max=0.854 indicates over-conditioning.
+- **Re-run instructions**: hidden=4, apply only at blocks ≥2 (deeper half of stack), one arm.
+- **Expected completion**: ~22:50 UTC.
+

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 21:42 — PLATEAU CONTINUING. Round 21:38 closures: #2581 askeladd mlp_ratio=4 (+28.2% val catastrophic; over-parameterization on N=1499 — combined with closed mlp_ratio=3 closes FFN-ratio axis BOTH directions; capacity-expansion meta-axis fully closed across n_layers/n_head/slice_num/mlp_ratio/n_hidden), #2324 tanjiro grad-accum-batch8 (infra-stale, pod stuck ~5h on rate-limit cycle; hypothesis remains untested). Round 21:42 fresh assignments: **#2598 askeladd aoa-rotation-aug-2deg** (random θ∈±2° rotation of coords+velocity targets during training — clean Galilean rotation symmetry of unbounded steady NSE, augments AOA manifold; orthogonal to all in-flight work), **#2599 tanjiro se-channel-attention-r8** (Squeeze-and-Excitation channel-attention after each transformer block with zero-init residual-gate — adds the missing global-context modulation pathway; complementary to ReFiLM which is slice-attention-focused). Active arms: alphonse #2585 ReFiLM-residual, frieren #2582 DropToken-volume, nezuko #2592 sdf-input-feature, fern #2594 coord-jitter, thorfinn #2539 Fourier σ=0.1, edward #2534 TTA per-epoch+2-seed.
+- **Date**: 2026-05-13 22:30 — PLATEAU CONTINUING. Round 22:25 closures: **#2582 frieren DropToken-volume** (+18.0% val, +17.4% test catastrophic; worst hit on EASIEST split single +38.5% = under-converged signature; **input-side perturbation axis FULLY CLOSED** combining with closed coord-jitter, translation, re-input-jitter, Mixup), **#2592 nezuko sdf-input-feature** (+2.57% val; SDF column grad_norm decayed 10× — model actively ignored it; redundant with slice attention softmax; "explicit distance feature" axis closed), **#2594 fern coord-jitter** (+3.71% val; CRITICAL INSIGHT: **the OOD axis is shape-distribution NOT mesh-position-distribution** — geom_camber_rc differs in NACA-4 shape parameters, not mesh-position), **#2539 thorfinn Fourier-positional-encoding 3 arms σ=1.0/0.1/0.05** (all 3 regress +3.16%/+1.36%/+1.81%; asymptotic ordering shows redundancy with raw coords; **fixed-frequency positional encoding axis closed**). #2585 alphonse ReFiLM-residual SENT BACK for one arm (hidden=4, blocks ≥2; mechanism real but over-conditioning). Round 22:25 fresh assignments based on the "shape-distribution NOT mesh-position" pivot: **#2622 frieren focal-mae-surface-gamma2** (element-wise focal weighting on surface residuals, γ=2; loss-side reweighting on the dominant error component), **#2624 nezuko surface-curvature-feature** (local discrete curvature κ=|cross|/|tangent|³ as 25th input feature; genuinely new info beyond SDF — first-derivative signal), **#2625 fern naca-feature-jitter-sigma-0p02** (σ=0.02 Gaussian noise on NACA-4 shape-descriptor channels 15-17 during training — perturbs the EXACT OOD axis that coord-jitter missed), **#2626 thorfinn per-channel-separate-heads** (3 independent MLPs for Ux/Uy/p outputs — decouples cross-channel gradient interference, lets each channel learn its optimal projection). Active arms: alphonse #2585 ReFiLM-residual re-run, askeladd #2598 aoa-rotation, tanjiro #2599 SE-channel-attention, frieren #2622 focal-mae, nezuko #2624 curvature, fern #2625 naca-jitter, thorfinn #2626 per-channel-heads, edward #2534 TTA.
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 - **CRITICAL INFRA NOTE**: PR #2319-#2325 were originally created with short-form student labels (`student:alphonse` etc.) instead of full-form (`student:charliepai2g24h1-alphonse`). This made them invisible to student pod polling (which uses exact full-name label match per senpai-gh.sh:669). 3-hour stuck period until labels were patched at 17:01. All future `assign-experiment` calls MUST use full student name.
@@ -104,18 +104,18 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 21:42 — geometric-OOD focus continues)
+## Active Experiments (round 22:25 — shape-distribution OOD focus)
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2585 | alphonse | `refilm-residual-stream-shared` | WIP | **HIGH** | Re-FiLM on residual stream (shared, zero-init) — trunk-level Re conditioning beyond slice logits |
-| #2598 | askeladd | `aoa-rotation-aug-2deg` | WIP | **HIGH** | Random θ∈±2° rotation of coords + velocity-target rotation during training — clean Galilean symmetry of unbounded steady NSE, augments AOA manifold (orthogonal to coord-jitter #2594 which is non-rigid local noise) |
-| #2582 | frieren | `droptoken-volume-stratified-0p1` | WIP | **HIGH** | Stratified DropToken — 10% volume nodes masked, 0% surface (input-side regularization, distinct from #2532 DropPath) |
-| #2592 | nezuko | `sdf-to-foil-input-feature` | WIP | **HIGH** | Signed-distance-to-foil per-node scalar as input feature — explicit non-local geometric proximity signal; directly targets val_geom_camber_rc OOD bottleneck |
-| #2594 | fern | `coord-jitter-volume-aug` | WIP | **HIGH** | Gaussian coord jitter σ=0.005 on volume nodes during training only — Tikhonov-style geometric regularizer; zero compute cost, preserves shape topology (unlike Mixup #2535) |
-| #2599 | tanjiro | `se-channel-attention-r8` | WIP | **HIGH** | Squeeze-and-Excitation channel-attention after each block with zero-init residual gate — adds missing global-context (token-mean-pool) modulation pathway; complementary to ReFiLM (slice-attention-focused) |
-| #2539 | thorfinn | `fourier-pos-encoding` | WIP (sent back) | MEDIUM | Re-run with σ=0.1 (sigma was mis-calibrated 4× too high; coord post-norm std≈4 not 1) |
-| #2534 | edward | `tta-re-bracket` | WIP (sent back) | MEDIUM | Per-epoch TTA-val for checkpoint selection + 2-seed run to bound variance (TTA arm-vs-arm mechanism validated) |
+| #2585 | alphonse | `refilm-residual-stream-shared` | WIP (sent back, re-run) | **HIGH** | Re-FiLM on residual stream re-run with hidden=4, blocks≥2 only — mechanism real but over-conditioning at hidden=8 |
+| #2598 | askeladd | `aoa-rotation-aug-2deg` | WIP | **HIGH** | Random θ∈±2° rotation of coords + velocity-target rotation during training — clean Galilean symmetry of unbounded steady NSE |
+| #2599 | tanjiro | `se-channel-attention-r8` | WIP | **HIGH** | Squeeze-and-Excitation channel-attention after each block with zero-init residual gate — adds missing global-context modulation pathway |
+| #2622 | frieren | `focal-mae-surface-gamma2` | WIP | **HIGH** | Element-wise focal MAE weighting on surface residuals (γ=2, clamp [0.1,10]) — loss-side reweighting on the dominant error component |
+| #2624 | nezuko | `surface-curvature-feature` | WIP | **HIGH** | Local discrete curvature κ=|cross|/|tangent|³ as 25th input channel — genuinely new info beyond SDF, first-derivative shape signal |
+| #2625 | fern | `naca-feature-jitter-sigma-0p02` | WIP | **HIGH** | σ=0.02 Gaussian noise on NACA-4 shape-descriptor channels 15-17 (training-only) — perturbs the actual OOD axis (shape-distribution) that coord-jitter missed |
+| #2626 | thorfinn | `per-channel-separate-heads` | WIP | **HIGH** | 3 independent 2-layer MLPs (hidden=64) for Ux/Uy/p outputs replacing shared head — decouples cross-channel gradient interference |
+| #2534 | edward | `tta-re-bracket` | WIP (active, in progress) | MEDIUM | Per-epoch TTA-val for checkpoint selection + 2-seed run to bound variance |
 
 ---
 
@@ -189,6 +189,10 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **sam-rho-0p02-soap-wrap** (#2560): +53.4% val / +57.8% test CATASTROPHIC. NOT an optimizer bug — SAM was working as designed (perturbed loss reliably 20% > unperturbed, gradient norm decayed 3× over the run). PURE compute-budget failure: 2× per-step cost → 16 epochs vs 28 baseline → still falling 1.3%/2-epochs at wall-cap. Under 30-min SENPAI_TIMEOUT_MINUTES + N=1499 + SOAP+cosine baseline, **any 2× per-step regularizer is dominated by epoch-count loss**. Drop-in stochastic regularizer axis FULLY CLOSED (SAM/ESAM/LookSAM all wall-cap-dominated; together with closed EMA/SWA/Lookahead/LayerScale/DropPath this exhausts the entire "stochastic regularizer" category).
 - **mlp-ratio-4-ffn-double** (#2581): +28.2% val / +27.5% test catastrophic; over-parameterization on N=1499 with 50% more params. Per-epoch convergence is slower with wider FFN even controlling for wall-clock. Largest hit on the EASIEST split (cruise +54.5%) — classic over-parameterization signature. **Combined with closed mlp_ratio=3 (#2256, +23.9%), FFN-ratio axis FULLY CLOSED both directions**; together with closed n_layers=6 (#2079), n_head=8 (#2154), slice_num=128 (#1467) / =32 (#2320), and wider-soap-192 (#1797), the **capacity-expansion meta-axis is exhausted across all 5 known capacity knobs**. Future capacity expansion is essentially impossible at this N + compute budget.
 - **grad-accum-batch8** (#2324): NOT a science closure — infrastructure-stale. Tanjiro pod stuck ~5 hours on a pod-side secondary rate-limit cycle (gh_retry burns ~90s/iter that themselves contribute to the throttle, self-reinforcing). PR labels correctly set but pod can't poll. Closed to clear queue; hypothesis (effective batch 4→8 via accum) remains untested and could be re-attempted by another student.
+- **drop-token-vol-only** (#2582): +18.0% val / +17.4% test CATASTROPHIC. Worst hit on EASIEST split single_in_dist (+38.5%) = classic under-converged signature. PhysicsAttention's softmax over slice-tokens is sensitive to token-count perturbation; token dropout breaks the prior that all nodes are visible at evaluation. **Combined with closed coord-jitter, translation, re-input-jitter, Mixup, DropToken — the "input-side perturbation augmentation" axis is FULLY CLOSED.** Future augmentation must operate on labels (target smoothing) or features (shape descriptors), not input topology.
+- **sdf-input-feature** (#2592): +2.57% val / +1.85% test. SDF column grad_norm decayed 10× over training (0.34 → 0.034) — model actively learned to **ignore** the channel. PhysicsAttention slice softmax already produces a soft distance-weighted neighborhood; an explicit Euclidean distance feature is redundant with the learned attention prior. **Explicit distance-feature axis CLOSED**; curvature (2nd derivative) and shape-descriptor jitter remain unexplored as genuinely new information.
+- **coord-jitter-sigma-0p01** (#2594): +3.71% val / +2.89% test. Mesh-position perturbation doesn't address the bottleneck. **CRITICAL EMPIRICAL INSIGHT: the OOD axis is shape-distribution NOT mesh-position-distribution.** geom_camber_rc differs from training in NACA-4 shape parameters (camber, thickness), not in mesh-position distribution. Coord-jitter perturbs the wrong axis. Redirects augmentation search to the shape-descriptor channels (reassigned to fern as #2625 `naca-feature-jitter-sigma-0p02`).
+- **fourier-pos-encoding-rff (3 σ-arms)** (#2539): all 3 σ scales regress (σ=1.0: +3.16%, σ=0.1: +1.36%, σ=0.05: +1.81%). Asymptotic ordering shows no monotonic improvement direction. The PhysicsAttention slice-softmax over (xy)-coords already implicitly learns multi-scale position representations. **Fixed-frequency positional encoding axis CLOSED** — RFF features redundant with raw coordinates when the architecture has flexible slice attention. Combined with closed coord-jitter, the "coord-side input augmentation/encoding" meta-axis is exhausted.
 
 ---
 
@@ -208,10 +212,24 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 **The rc split (val=41.95, 3× cruise=14.15) is the dominant error source.** Any new direction should be evaluated on whether it specifically targets rc-OOD, not just average val.
 
-**Round 21:25 strategic pivot:** With the drop-in stochastic regularizer axis fully closed (SAM #2560 catastrophic) and norm-replacement closed (#2569), the wall-cap reality is now central:
-- Any 2× per-step compute is dominated by epoch-count loss → rules out SAM/ESAM/LookSAM/dual-forward methods.
-- Wall-cap-friendly directions must be either (a) zero-compute input-side (data augmentation, derived features), (b) zero-compute output-side (calibration heads), or (c) train-loop-friendly architectural micro-changes (mlp_ratio expansion, FiLM placement).
-- Round 21:25 assignments selected accordingly:
-  - **#2592 nezuko sdf-to-foil**: zero-compute input-side; per-node SDF feature (precomputed). Targets rc-OOD directly via shape-invariant proximity signal.
-  - **#2594 fern coord-jitter**: zero-compute input-side; Gaussian perturbation only on volume nodes during training. Targets rc-OOD via smooth-manifold inductive bias.
-- Geometric-OOD is now the primary attack surface. Recent ruled-out closures eliminate Re-conditioning expansion, surface/volume routing, and physics-informed soft constraints — leaving **shape-features and shape-equivariance/augmentation** as the active hypothesis cluster.
+**Round 22:25 strategic pivot — shape-distribution NOT mesh-position-distribution:** The geom_camber_rc OOD bottleneck has been mis-identified for several rounds. With coord-jitter (#2594), translation, Mixup, DropToken all closed, the actual OOD axis is now understood:
+
+**The bottleneck is NACA-4 shape-parameter distribution shift, not mesh-position distribution shift.**
+
+Confirmed by:
+- coord-jitter (#2594): perturbs mesh-position, +3.7% regression — doesn't help rc-OOD
+- DropToken (#2582): perturbs mesh topology, catastrophic
+- SDF feature (#2592): adds explicit distance-to-foil, redundant with slice attention softmax (grad_norm decays 10×)
+- Fourier RFF (#2539): adds higher-frequency position basis, no improvement at any σ
+
+This redirects the entire augmentation/feature search to **shape-descriptor channels** (NACA-4 parameters: camber, camber-position, thickness):
+- **#2625 fern naca-feature-jitter-sigma-0p02**: σ=0.02 Gaussian noise on shape-descriptor channels 15-17 (training only) — perturbs the EXACT axis the rc split varies on.
+- **#2624 nezuko surface-curvature-feature**: local discrete curvature κ as 25th input channel — genuinely new info (first-derivative of shape) NOT captured by SDF/coords.
+
+Other Round 22:25 directions (orthogonal to shape-axis):
+- **#2622 frieren focal-mae-surface-gamma2**: loss-side hard-mining on surface residuals (the dominant error component); zero extra compute.
+- **#2626 thorfinn per-channel-separate-heads**: 3 independent MLPs for Ux/Uy/p — decouples cross-channel gradient interference.
+
+Wall-cap-friendly principle still binding: every Round 22:25 assignment is either zero-compute (input feature, loss reweighting, head replacement) or near-zero (curvature precomputed once). NO 2× per-step regularizers; SAM-family axis remains closed.
+
+**Active hypothesis cluster: shape-axis perturbation + shape-axis feature engineering + loss/head structure micro-changes.** The next plateau-break is expected from shape-axis interventions (fern/nezuko); the focal-MAE and per-channel-heads experiments serve as orthogonal architectural and loss-side baselines.
