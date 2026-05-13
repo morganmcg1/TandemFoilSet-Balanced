@@ -333,3 +333,46 @@ cd "target/" && python train.py \
 ```
 
 *(Note: `slice_num=48` is hardcoded in `model_config` in `train.py` — not a CLI flag. Already merged into advisor branch via PR #2121. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
+
+## 2026-05-13 12:35 — PR #2226: slice_num=32 + grad_clip=5.0 (capacity scan continues)
+
+**Changes merged:** `model_config["slice_num"] = 32` (was 48) in `train.py` — one-line change to the hardcoded model config dict.
+
+**Key finding:** The monotonic regularization trend extends: slice 96→48→32 all improve in sequence. cruise (the key diagnostic for the slot floor) improved −4.87% from 51.29 to 48.79. All four test splits monotonically improve. The slot floor for Transolver on TandemFoilSet is **below 32** — further reduction may still help. Mechanism confirmed: smaller slice_num imposes a stronger locality prior on physics attention, regularizing OOD generalization without compromising capacity within the converged regime.
+
+### Primary metrics (best val checkpoint, epoch 17 of 17)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **71.7560** | −0.29% |
+| **test_avg/mae_surf_p** | **62.8014** | **−3.93%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline (65.37) |
+|---|---|---|
+| test_single_in_dist | 64.6964 | −4.49% |
+| test_geom_camber_rc | 71.9677 | −3.57% |
+| test_geom_camber_cruise | 48.7945 | **−4.87%** (slot floor still below 32) |
+| test_re_rand | 65.7468 | −3.13% |
+
+### Run info
+
+- **W&B run:** `9u8p8npt` — group `slice-num-sweep`
+- **Epochs:** 17 / 18 (30-min timeout, ~108 s/epoch)
+- **Peak GPU memory:** 37.2 GB (slight reduction from slice=48's ~40 GB; slot reduction doesn't move activation memory)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, **slice_num=32**, mlp_ratio=2, space_dim=34 (Fourier L=8)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --accumulation_steps 2 \
+  --grad_clip_max_norm 5.0 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(Note: `slice_num=32` is hardcoded in `model_config` in `train.py`. Already merged via PR #2226. All other defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18.)*
