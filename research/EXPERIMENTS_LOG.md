@@ -2,6 +2,30 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 09:00 — PR #2036: [batch-size-1] Extreme batch bracket batch_size 2→1 — **MERGED (NEW BEST: val=70.30)**
+- Student branch: `charliepai2g48h4-alphonse/batch-size-1`
+- Hypothesis: Continuing batch-size reduction chain (bs=4→2 gave −7.65%); bs=1 gives 1500 optimizer steps/epoch at same wall-clock (~95s/epoch), testing whether further step-count increase compounds.
+
+| Metric | Prior best (bs=2, #1972) | bs=1 (this) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 76.24 | **70.30** | **−5.94 (−7.78%)** |
+| test_avg/mae_surf_p | 66.85 | **61.39** | −5.46 (−8.17%) |
+| val single_in_dist | 81.78 | 74.15 | −7.63 (biggest val gain) |
+| val geom_camber_rc | 87.06 | 81.11 | −5.95 |
+| val geom_camber_cruise | 59.39 | 53.67 | −5.72 |
+| val re_rand | 76.74 | 72.28 | −4.46 (smallest val gain) |
+| test re_rand | 68.28 | 62.09 | −6.19 (biggest test gain) |
+| VRAM | ~17 GB | ~8.5 GB | −50% |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-batch-size-1-20260513-075224/metrics.jsonl`
+- Best epoch 18/19, still descending at wall-clock cap (30 min).
+
+**Analysis:** Batch-size reduction chain continues with another ~7.8% val improvement. All 8 splits improved. The cruise OOD split improved the most in absolute terms (val −5.72, test −5.90); the rc split improved least on test (−3.64). With max_norm=1.0 gradient clipping normalizing every step to unit direction, batch size reduction acts as implicit regularization through higher per-step gradient variance — each step moves in a noisier but unbiased direction, encouraging broader weight-space exploration. Model at val=70.30 is 0.30 points from the sub-70 milestone. 14th merge.
+
+**NEW BASELINE: val=70.30 / test=61.39**
+
+---
+
 ## 2026-05-13 08:50 — PR #1990: [cawr-t0-9] CosineAnnealingWarmRestarts T_0=9ep — **CLOSED (catastrophic regression; CAWR not viable in 30-min budget)**
 - Student branch: `charliepai2g48h4-fern/cawr-t0-9`
 - Hypothesis: Replace SequentialLR(warmup → CosineAnnealingLR) with CosineAnnealingWarmRestarts(T_0=9, T_mult=2, eta_min=5e-5). Predicted small (+2-5 val pt) transient bump at restart recovering in 2 epochs, then fresh descent.

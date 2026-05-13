@@ -1,17 +1,17 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 08:50 (CLOSED #1990 fern cawr-t0-9 catastrophic val=100.46; CAWR axis closed for 30-min budget; assigning fern wd-2e-4 upward bracket; 13 effective merges)
+- **As of:** 2026-05-13 09:00 (MERGED #2036 batch-size-1 val=70.30 NEW BEST; assign alphonse lr-4e-4-bs1; 14 effective merges; sub-70 milestone next)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
 
 ## Current focus
 
-TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=76.24 / test=66.85 (alphonse #1972 batch-size-2). Batch_size=2 is the 13th merge — it doubles optimizer steps/epoch at the same wall-clock, providing 2x gradient refinement per unit time without increased compute cost.
+TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** val=70.30 / test=61.39 (alphonse #2036 batch-size-1). Batch_size=1 is the 14th merge — 1500 optimizer steps/epoch at same wall-clock. VRAM at ~8.5 GB / 98 GB (massive headroom).
 
-**Key diagnostic:** val still actively descending at final epoch (ep17→18 delta=2.44 in prior warmup run; bs=2 got 19 epochs and best at ep18). Model is undertrained. Batch_size=2 directly addresses this by 2x more parameter updates per wall-clock minute.
+**Key diagnostic:** val still actively descending at final epoch (best ep18/19, cap hit). Model is undertrained. Gradient noise from bs=1 is acting as effective regularization. Sub-70 milestone is only 0.30 val pts away — within reach of next round.
 
-**Sub-70 val is the next milestone.** EMA (askeladd #1540) expected to push further. VRAM headroom at bs=2 (17GB of 98GB) enables bigger architectures too.
+**Sub-70 val is the next milestone.** EMA (askeladd #1540) expected to push further. VRAM headroom at bs=1 (8.5 GB/98 GB) enables larger architectures too.
 
 ## Merged recipe (current advisor base — 13 effective merges)
 
@@ -27,9 +27,10 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 10. **#1695** (T_max=18) — val=84.67
 11. **#1855** (eta_min=5e-5) — val=83.95
 12. **#1812** (lr-warmup-1ep) — val=82.56
-13. **#1972** (batch_size=4→2) — val=76.24 **CURRENT BEST**
+13. **#1972** (batch_size=4→2) — val=76.24
+14. **#2036** (batch_size=2→1) — val=70.30 **CURRENT BEST**
 
-**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=2, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+**Current `train.py` recipe:** `unified_pos=True, ref=8, bf16 autocast, n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, seed=42, batch_size=1, SequentialLR(LinearLR(1ep warmup, 5e-6→5e-4) → CosineAnnealingLR(T_max=17ep, eta_min=5e-5)), AdamW(0.9,0.999), loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
 
 ## Confirmed null results / closed axes
 
@@ -58,7 +59,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 6. **Batch size — MERGED.** batch_size=2 (#1972) — val=76.24 (+7.65% improvement).
 7. **EMA weight averaging.** Askeladd #1540. Actively training on new HEAD. Expected sub-70.
 8. **LR upper bracket.** Thorfinn #1968 (lr=7e-4, sent back) — rerunning with bs=2 baseline.
-9. **Batch size lower bracket.** Alphonse #2036 (batch-size-1) — NEW. Closes bs axis.
+9. **Batch size lower bracket.** Alphonse #2036 (batch-size-1) — MERGED val=70.30 (−7.78%). bs axis fully closed at 1.
+16. **LR tuning at bs=1.** Alphonse #2106 (lr-4e-4-bs1) — NEW. Tests whether 4x step count shifts LR optimum downward from 5e-4.
 10. **LR schedule restart.** Fern #1990 (cawr-t0-9) — CLOSED 08:50 (val=100.46 catastrophic). Low-LR tail is productive consolidation; restarts need longer budgets.
 15. **wd upward bracket.** Fern #2089 (wd-2e-4) — NEW. Tests whether bs=2's doubled steps shift wd optimum upward.
 11. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP on old HEAD.
@@ -70,7 +72,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 
 | Lever | val_avg | test_avg | Status |
 |---|---|---|---|
-| **batch-size-2 (alphonse #1972)** | **76.24** | **66.85** | **MERGED — CURRENT BEST** |
+| **batch-size-1 (alphonse #2036)** | **70.30** | **61.39** | **MERGED — CURRENT BEST** |
+| batch-size-2 (alphonse #1972) | 76.24 | 66.85 | MERGED → superseded |
 | loss-beta-0-5 (edward #2012) | 81.21 | 72.52 | SENT BACK — beat old, not new baseline |
 | mlp-ratio-1 (frieren #1992) | 81.91 | 73.12 | SENT BACK — beat old, not new baseline |
 | lr-warmup-1ep (thorfinn #1812) | 82.56 | 74.13 | MERGED → superseded |
@@ -89,7 +92,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Training at 99% GPU. Results likely on old HEAD. Will evaluate vs new 76.24.
 
 ### Batch size bracket
-- **PR #2036 — `batch-size-1` (alphonse)** — **WIP (new)** — extreme batch bracket.
+- **PR #2036 — `batch-size-1` (alphonse)** — **MERGED 09:00** — val=70.30 NEW BEST; bs axis closed at 1.
+- **PR #2106 — `lr-4e-4-bs1` (alphonse)** — **WIP (new)** — LR downward bracket for bs=1 regime.
 
 ### LR + schedule probes (running on new bs=2 HEAD)
 - **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP (sent back)** — rerunning with bs=2 + lr=7e-4.
