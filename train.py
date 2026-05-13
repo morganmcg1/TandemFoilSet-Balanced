@@ -439,7 +439,7 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=96,
     n_layers=4,
     n_head=2,
     slice_num=32,
@@ -450,6 +450,7 @@ model_config = dict(
 print(f"slice_num: {model_config['slice_num']}")
 print(f"n_head: {model_config['n_head']} (dim_head={model_config['n_hidden'] // model_config['n_head']})")
 print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bound vs capacity-saturated diagnostic")
+print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
