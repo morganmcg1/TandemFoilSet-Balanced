@@ -390,6 +390,15 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
+_WARMUP_EPOCHS = 3
+
+
+def _warmup_lr(epoch: int) -> float:
+    """Linear warmup for _WARMUP_EPOCHS, then constant at peak LR."""
+    if epoch < _WARMUP_EPOCHS:
+        return max(0.01, (epoch + 1) / _WARMUP_EPOCHS)
+    return 1.0
+
 
 @dataclass
 class Config:
@@ -456,7 +465,7 @@ optimizer = torch.optim.AdamW(
     weight_decay=cfg.weight_decay,
     betas=(0.9, 0.95),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lr)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
