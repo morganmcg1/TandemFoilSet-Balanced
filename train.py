@@ -394,6 +394,7 @@ class Config:
     epochs: int = 50
     ema_decay: float = 0.999
     n_layers: int = 5
+    accumulation_steps: int = 1  # effective batch = batch_size * accumulation_steps
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -471,10 +472,15 @@ print(
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
 # Linear LR warmup over the first epoch, then cosine decay over the remaining
-# epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
-# so T_max for the cosine phase is expressed in batch steps, not epochs.
-warmup_steps = len(train_loader)
-cosine_steps = max((MAX_EPOCHS - 1) * len(train_loader), 1)
+# epochs. SequentialLR is stepped per *optimizer step* (see scheduler.step below),
+# so T_max for the cosine phase is expressed in optimizer steps. With
+# accumulation_steps>1, the optimizer steps once per accumulation_steps batches,
+# so opt_steps_per_epoch = len(train_loader) // accumulation_steps. This keeps
+# the cosine curve fully resolved regardless of accumulation_steps (per
+# effective update, LR moves accumulation_steps times further through cosine).
+opt_steps_per_epoch = max(len(train_loader) // cfg.accumulation_steps, 1)
+warmup_steps = opt_steps_per_epoch
+cosine_steps = max((MAX_EPOCHS - 1) * opt_steps_per_epoch, 1)
 cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=cosine_steps
 )
@@ -505,6 +511,9 @@ run = wandb.init(
         "torch_compile": compile_enabled,
         "torch_compile_mode": "default" if compile_enabled else None,
         "torch_compile_dynamic": True if compile_enabled else None,
+        "effective_batch_size": cfg.batch_size * cfg.accumulation_steps,
+        "opt_steps_per_epoch": opt_steps_per_epoch,
+        "batches_per_epoch": len(train_loader),
     },
     mode=os.environ.get("WANDB_MODE", "online"),
 )
@@ -538,8 +547,12 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    accum_loss_sum = 0.0  # unscaled total-loss sum across the current accumulation window
+    optimizer.zero_grad()
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for batch_idx, (x, y, is_surface, mask) in enumerate(
+        tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)
+    ):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -555,31 +568,37 @@ for epoch in range(MAX_EPOCHS):
             sq_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            full_loss = vol_loss + cfg.surf_weight * surf_loss
+            # Scale loss so the accumulated gradient is the mean over the
+            # accumulation window (matches effective batch_size * accumulation_steps).
+            loss = full_loss / cfg.accumulation_steps
 
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
-        scheduler.step()
-
-        # EMA update on fp32 master weights. Buffers copied defensively
-        # (Transolver has none stateful, but stays correct if that changes).
-        with torch.no_grad():
-            for p_ema, p in zip(ema_model.parameters(), model.parameters()):
-                p_ema.data.mul_(cfg.ema_decay).add_(p.data, alpha=1.0 - cfg.ema_decay)
-            for b_ema, b in zip(ema_model.buffers(), model.buffers()):
-                b_ema.data.copy_(b.data)
-
-        global_step += 1
-        wandb.log({
-            "train/loss": loss.item(),
-            "train/lr": scheduler.get_last_lr()[0],
-            "global_step": global_step,
-        })
-
+        accum_loss_sum += full_loss.item()
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+        if (batch_idx + 1) % cfg.accumulation_steps == 0:
+            optimizer.step()
+            scheduler.step()
+
+            # EMA update on fp32 master weights. Buffers copied defensively
+            # (Transolver has none stateful, but stays correct if that changes).
+            with torch.no_grad():
+                for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+                    p_ema.data.mul_(cfg.ema_decay).add_(p.data, alpha=1.0 - cfg.ema_decay)
+                for b_ema, b in zip(ema_model.buffers(), model.buffers()):
+                    b_ema.data.copy_(b.data)
+
+            optimizer.zero_grad()
+            global_step += 1
+            wandb.log({
+                "train/loss": accum_loss_sum / cfg.accumulation_steps,
+                "train/lr": scheduler.get_last_lr()[0],
+                "global_step": global_step,
+            })
+            accum_loss_sum = 0.0
 
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
