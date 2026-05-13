@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~08:00 (merged #2004 nezuko adamw-beta2-0.99 −0.29% new best 73.9964; assigned nezuko #2054 β2=0.95)
+- **Last updated:** 2026-05-13 ~09:15 (closed #2054 nezuko β2=0.95 +1.12% dead end; assigned nezuko #2130 adamw-eps-1e-6)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -35,7 +35,7 @@ Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
 | #2045 | alphonse | `lr-1.75e-3` | LR midpoint probe: binary-search ceiling between 1.5e-3 (winner) and 2e-3 (dead-end) | **--epochs 14** ✓ | WIP — just assigned |
-| #2054 | nezuko | `adamw-beta2-0.95` | β2 axis: probe 0.95 (monotone test toward RoFormer/DeiT) | **--epochs 14** ✓ | WIP — just assigned |
+| #2130 | nezuko | `adamw-eps-1e-6` | AdamW ε axis: 1e-8 → 1e-6 step-size regularization (root-cause probe on LR-peak shock) | **--epochs 14** ✓ | WIP — just assigned |
 | #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — needs new 73.9964 target |
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — in progress |
@@ -48,6 +48,7 @@ Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, 
 - #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082) — previous best
 
 ### Closed as dead ends (this round)
+- #2054 nezuko adamw-beta2-0.95: +1.12% vs 73.9964 (β2 axis non-monotone, 0.99 is sweet spot; spike re-amplified to +13 units; test_rc reversed +3.85%)
 - #1942 alphonse lr-2e-3: +2.99% vs 74.2082 (stable but optimization quality degraded; LR ceiling between 1.5e-3 and 2e-3; binary-search → #2045 lr-1.75e-3)
 - #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419 (3-epoch ramp too steep at lr=1e-3)
 - #1970 nezuko drop-path-0.1: +6.99% vs 74.2082 (capacity-reducing regularizer incompatible with 14-epoch budget; DropPath needs 100s+ epochs)
@@ -73,8 +74,8 @@ Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, 
 1. **LR axis — binary search in progress:**
    - **#2045 alphonse lr-1.75e-3**: midpoint between confirmed winner 1.5e-3 and confirmed dead-end 2e-3. Confirms ceiling location or finds marginal gain.
 
-2. **Optimizer β2 axis — probe β2=0.95:**
-   - β2=0.99 won by −0.29% val, −1.03% test with test_rc −4.9% breakthrough. Nezuko's follow-up #1: β2=0.95 (RoFormer/DeiT recipe). Monotone test: does faster adaptation continue to help?
+2. **AdamW ε axis (β2 axis closed at 0.99):**
+   - **#2130 nezuko adamw-eps-1e-6**: ε=1e-8 → 1e-6. Mechanistically distinct from β2 — regularizes small-v̂ step sizes. Tests whether the +3.2-unit residual epoch-5 spike at β2=0.99 has a deeper root cause in the ε floor.
 
 3. **Schedule axis — warmup-duration sweep:**
    - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch. ⚠️ Frieren needs to be notified of new **73.9964** target (was tracking 74.2082).
@@ -98,7 +99,8 @@ Test: test_avg=64.4437 (test_single=76.764, test_rc=78.036, test_cruise=41.463, 
 - **Asinh pressure compression (GAIN=1.0):** −1.04% on warmup-4 base. Bulk-redistribution mechanism. Cruise gains most. PRESSURE-SPECIFIC — velocity channels Gaussian.
 - **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts).
 - **lr=1.5e-3 + asinh:** −3.80% further gain (77.14 → 74.21). LR ceiling NOT closed.
-- **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed (+20.4 → +3.2 units). Test_rc breakthrough −4.9%. **β2 axis: probe 0.95 next.**
+- **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed (+20.4 → +3.2 units). Test_rc breakthrough −4.9%.
+- **β2 axis MAPPED:** {0.999: +20.4u spike, 0.99: +3.2u (winner), 0.95: +13.0u}. Non-monotone — ~100-step window is bias-variance optimum at this LR/budget. Closed at 0.99.
 - **Warmup duration axis CONVERGING:** warmup=3 (too steep), warmup=4 (canonical winner), warmup=5 (in flight).
 - **14-epoch-budget constraint on regularizers:** Capacity-reducing regularizers (DropPath, SWA) require 100s+ epochs. Only convergence-preserving mechanisms safe.
 - **val_rc RESISTANT SPLIT:** was −0.86% at lr=1.5e-3; β2=0.99 now shows −2.04% val_rc and −4.9% test_rc breakthrough. β2 adaptation rate interacts with multi-foil geometry generalization.

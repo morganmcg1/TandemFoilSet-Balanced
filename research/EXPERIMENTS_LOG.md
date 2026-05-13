@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-13 09:10 — PR #2054: adamw-beta2-0.95 (nezuko) — CLOSED (dead end, β2 axis mapped)
+
+- **Branch:** `charliepai2g48h2-nezuko/adamw-beta2-0.95`
+- **Hypothesis:** Monotone test on β2 axis: 0.99 (winner) → 0.95 (RoFormer/DeiT recipe). If gain monotone in 1/β2-window, further improvement expected.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-adamw-beta2-0.95-20260513-080047/metrics.jsonl`
+
+### Results vs. #2004 baseline (73.9964)
+
+| Split | β2=0.99 baseline | β2=0.95 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 85.100 | 85.755 | +0.77% |
+| val_geom_camber_rc | 89.815 | 90.883 | +1.19% |
+| val_geom_camber_cruise | 50.761 | 51.987 | +2.41% |
+| val_re_rand | 70.309 | 70.664 | +0.50% |
+| **val_avg/mae_surf_p** | **73.9964** | **74.8222** | **+1.12%** ❌ |
+| **test_avg/mae_surf_p** | 64.4437 | 65.5435 | **+1.71%** ❌ |
+| test_geom_camber_rc | 78.036 | 81.044 | **+3.85%** ❌ (reversal!) |
+
+**Closed as dead end.** β2 axis mapped: 0.99 is the genuine sweet spot.
+
+### Analysis
+
+**β2 axis final mapping:**
+
+| β2 | val_avg | epoch-5 spike |
+|---|---|---|
+| 0.999 (default) | 74.2082 | +20.4 units |
+| **0.99 (winner)** | **73.9964** | **+3.2 units (minimum)** |
+| 0.95 | 74.8222 | +13.0 units |
+
+**Spike magnitude is non-monotone in β2** — pushing window shorter (β2=0.95, ~20-step window) re-amplifies LR-peak shock. Mechanism: ~20-step v_t window has high steady-state variance → noisy per-parameter step sizes → both larger LR-peak spike *and* worse converged val_avg.
+
+The `test_rc` reversal is the strongest signal: it gained −4.9% at β2=0.99 (the breakthrough), but gives back +3.85% at β2=0.95. The "resistant-split rescue" is NOT monotone in faster β2.
+
+**Key insight:** 2nd-moment EMA window has real bias-variance tradeoff. Short windows are noisier in steady state, not just at the LR peak. The "spike size" and "final convergence" are governed by the same underlying knob — ~100-step window is the optimum at this LR/budget.
+
+**Next axis (nezuko follow-up #2):** AdamW ε=1e-6 (mechanistically distinct from β2 — regularizes small-v̂ step sizes, not v̂'s smoothness). Assigned as PR #2130.
+
+---
+
 ## 2026-05-13 07:55 — PR #2004: adamw-beta2-0.99 (nezuko) — MERGED (new best)
 
 - **Branch:** `charliepai2g48h2-nezuko/adamw-beta2-0.99`
