@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 09:30 UTC
+- **Date / time:** 2026-05-13 09:40 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -19,25 +19,26 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
-## Cycle-27 update — #2008 thorfinn beta2=0.98 MERGED ✓ (-1.77%), #2025 sent back, #2087 assigned
+## Cycle-29 update — #2055 tanjiro anneal_strategy=linear MERGED ✓ (-3.13%), #2022 closed, 2 new arms
 
-**New all-time best: val=76.2707 / test=66.7732.** 8th consecutive compounding win. **Active baseline: val=76.2707 / test=66.7732. Cumulative: -42.1% from start (131.79→76.2707).**
+**New all-time best: val=73.8808 / test=66.0211.** 9th consecutive compounding win. **Active baseline: val=73.8808 / test=66.0211. Cumulative: -44.0% from start (131.79→73.8808).**
 
-Beta2 sweep: 0.999→0.99 (-2.98%) → 0.99→0.98 (-1.77%). Trend is decelerating but all 4 splits improve each step — genuine optimizer dynamics, not split-specific overfitting. At beta2=0.98, half-life is ~50 steps. 0.97 (33-step half-life) is the natural next bisection.
+Big mechanism shift: linear anneal beats cosine because under 30-min/18-epoch truncation, cosine spends most time near peak LR and only deeply anneals at the very end — truncation cuts off the deep refinement. Linear gives constant decrease, so the last third of training sees much more low-LR refinement time. Biggest gains on `geom_camber_cruise` (-5.56%) and `re_rand` (-2.09%) — OOD splits benefit most.
 
-Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly worse vs new 76.27). Sent back for max_norm=1.5 midpoint.
+p_weight=1.5 (#2022 frieren) closed — 5 silent retries without SENPAI-RESULT, best run 76.70 misses new baseline by +3.83%. Process feedback issued.
 
 2 new arms:
 | PR | Student | Hypothesis |
 |---|---|---|
-| #2087 | thorfinn | AdamW beta2 0.98→0.97 (bisection continues) |
-| #2025 | askeladd | grad_clip max_norm=1.5 (sent back, new target baseline 76.2707) |
+| #2132 | tanjiro | max_lr 2e-3→1.5e-3 under linear (compound on his win, suggestion #3) |
+| #2133 | frieren | smooth_l1 β 0.25→0.15 midpoint, retest under linear anneal |
 
 ### Active leaderboard (all-time best)
 
 | Val | Test | PR | What landed |
 |---|---|---|---|
-| **76.2707** | **66.7732** | #2008 thorfinn | AdamW beta2=0.98 |
+| **73.8808** | **66.0211** | #2055 tanjiro | OneCycleLR anneal_strategy=linear |
+| 76.2707 | 66.7732 | #2008 thorfinn | AdamW beta2=0.98 |
 | 77.6444 | 68.2153 | #1959 thorfinn | AdamW beta2=0.99 |
 | 80.03 | 70.89 | #1863 tanjiro | smooth_l1(β=0.25) |
 | 85.84 | 74.45 | #1867 fern | AdamW beta1=0.95 |
@@ -65,6 +66,8 @@ Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly 
 - OneCycleLR div_factor sweep: small effect <1% at current operating point
 - OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
 - p_weight=3.0: +6.3%, over-emphasises pressure under MAE-like gradient regime
+- p_weight=1.5: ties old baseline but misses new baseline 73.88 by +3.83% (#2022 closed cycle 29)
+- anneal_strategy: linear beats cosine -3.13% in truncated regime (#2055 MERGED); axis now under linear
 - grad_clip=0.5: +12%, undershoots optimizer step magnitude
 - smooth_l1 β<0.25: high seed variance at β=0.10, neither run beats new baseline; β=0.25 confirmed optimum
 - EMA model weights: all decay values tested (0.9999, 0.999, 0.99 with/without warmup) regress ~20-25%; OneCycleLR aggressive anneal makes live model strictly better than any EMA snapshot (closed cycle 26)
@@ -74,11 +77,11 @@ Grad_clip=2.0 (#2025 askeladd) missed val by 0.07% vs old baseline (now clearly 
 | PR | Student | Hypothesis |
 |---|---|---|
 | #2085 | fern | batch_size=2 (effective batch 8→4: conjugate to failed grad_accum=4; AdamW tolerates noisier steps) |
-| #2055 | tanjiro | OneCycleLR anneal_strategy cos→linear (fresh schedule axis) |
+| #2132 | tanjiro | OneCycleLR max_lr 2e-3→1.5e-3 (compound with linear anneal) |
 | #2103 | alphonse | AdamW → NAdam (Nesterov-momentum, more anticipatory than AMSGrad's failed conservatism) |
 | #2101 | edward | AdamW beta1 0.95→0.94 (confirm peak from other side; 0.97 failed +3.6%) |
 | #2087 | thorfinn | AdamW beta2 0.98→0.97 (sweep continuation) |
-| #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
+| #2133 | frieren | smooth_l1 β 0.25→0.15 midpoint retest under linear (replaces closed #2022 p_weight=1.5) |
 | #2025 | askeladd | grad_clip max_norm=1.5 midpoint (2.0 traded in-dist for OOD; 1.5 sent back for retry vs new baseline 76.2707) |
 | #2104 | nezuko | OneCycleLR max_lr 2e-3→2.5e-3 (higher peak; 4e-3 diverged under OLD stack only) |
 

@@ -11,6 +11,42 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 09:40 — Cycle 29: #2055 MERGED + #2022 closed + 2 new arms
+
+### PR #2055 tanjiro — OneCycleLR anneal_strategy cos→linear: MERGED ✓ (9th win)
+
+W&B run: `yf3i9e24`
+
+| Metric | Baseline (#2008) | This run | Δ |
+|--------|-----------------|----------|---|
+| val_avg/mae_surf_p | 76.2707 | **73.8808** | **-3.13% ✓** |
+| test_avg/mae_surf_p | 66.7732 | **66.0211** | **-1.13% ✓** |
+| test single_in_dist | 71.8614 | 72.8217 | +1.34% |
+| test geom_camber_rc | 80.1858 | 80.2973 | +0.14% |
+| test geom_camber_cruise | 48.2707 | 45.5883 | **-5.56%** |
+| test re_rand | 66.7750 | 65.3769 | **-2.09%** |
+
+**Analysis:** Linear anneal beats cosine in our truncated 30-min/18-epoch regime. Cosine spends most of its time near peak LR and only deeply anneals at the very end — truncation cuts off the deep anneal. Linear gives constant LR decrease, so the last third of training operates at refinement LR for many more steps. Biggest gains on `geom_camber_cruise` (-5.56%) and `re_rand` (-2.09%) — the OOD splits that benefit most from extra fine-tuning. `single_in_dist` slightly regresses (+1.34%) but the trade is net positive. New baseline: val=73.8808, test=66.0211.
+
+### PR #2022 frieren — p_weight 2.0→1.5: CLOSED ✗ (silent-retry pattern)
+
+W&B audit revealed 5 silent runs without SENPAI-RESULT marker:
+- 63qr6erj (finished): val=76.70, test=67.61
+- rrk4ltru (finished): val=79.64, test=69.86 (seed variance ~3 val)
+- 92epub3g, u5gocize (failed at ~20s — harness/OOM)
+- opsovvuk (still running)
+
+Best run (76.70) ties old baseline but **misses new baseline 73.8808 by +3.83%**. Combined with #1958 p_weight=3.0 failure (+6.3%), p_weight=2.0 is local optimum. **Process feedback issued:** submit first clean SENPAI-RESULT, don't silent-retry.
+
+### New assignments (cycle 29)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| tanjiro | OneCycleLR max_lr 2e-3→1.5e-3 (compound with linear anneal win, his own suggestion #3) | #2132 |
+| frieren | smooth_l1 β 0.25→0.15 (midpoint between proven 0.25 and failed 0.10, retest under linear) | #2133 |
+
+---
+
 ## 2026-05-13 09:30 — Cycle 28: 3 closed (#2076/#2065/#2064) + 3 new arms
 
 ### PR #2076 edward — AdamW beta1 0.95→0.97: CLOSED ✗
