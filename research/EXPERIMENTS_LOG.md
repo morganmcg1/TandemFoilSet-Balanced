@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-05-13 16:50 — PR #2384: [lookahead-soap-k5] Lookahead(SOAP, k=5, α=0.5) — CLOSED
+
+- **Branch**: charliepai2g24h1-nezuko/lookahead-soap-k5
+- **Hypothesis**: Lookahead wrapper around SOAP with k=5, α=0.5; smoothing without state-swap overhead (the EMA failure mode from #1966). No load_state_dict, no torch.compile recompile.
+- **Status**: CLOSED — +6.3% val regression. Mechanical claim confirmed (no recompile, drift/slow ≤0.04, zero wall-clock overhead), but α=0.5 pull-back is a 50% effective LR brake in budget-limited regime.
+
+| Metric | Lookahead | Baseline (#2011) | Δ |
+|--------|-----------|------------------|---|
+| val_avg/mae_surf_p | 30.6801 | 28.8762 | **+6.3% (WORSE)** |
+| test_avg/mae_surf_p | 26.2470 | 24.9992 | **+5.0% (WORSE)** |
+| Wall-clock per epoch | 64-65s | 64s | ≈0 (✅ no recompile) |
+| drift/slow ratio | ≤0.04 (max) | — | — |
+
+**Per-split val**: single_in_dist +3.83, camber_rc +1.96, camber_cruise **−0.19** (✅ smoothing helps the most-converged split), re_rand +1.62.
+
+**Root cause analysis** (from student): the α=0.5 pull-back means each k-step window contributes only `α(fast−slow) = 0.5×normal` of the gradient update. Effective LR ≈ 50% of SOAP. Val was still descending at epoch 28 (Δ −0.20/ep over last 4 eps), would linearly cross baseline only at ~ep 37 — out of budget. Lookahead's smoothing dividend is a convergence-phase effect; in a budget-limited monotonic descent it just brakes you. The only split that improved (cruise, the lowest-loss / most-converged) confirms the mechanism but also confirms it's the wrong regime.
+
+**Programme finding (meta-axis)**: Trajectory smoothing of SOAP under 28-ep cosine budget is fully closed. Three independent mechanisms (EMA #1966 +2.60%, SWA #2032 +1.24-3.44%, Lookahead +6.3%) — all averaging in-run weight states — fail under the same root cause: in a still-descending model, averaging the past trajectory for the per-step optimum costs more than the noise it removes. Stop pursuing in-run smoothing variants.
+
+**Artifact**: `models/model-charliepai2g24h1-nezuko-lookahead-soap-k5-20260513-152016/metrics.jsonl`
+
+---
+
 ## 2026-05-13 15:30 — PR #1467: [more-slices-128] slice_num 64→128 — CLOSED
 
 - **Branch**: charliepai2g24h1-nezuko/more-slices-128

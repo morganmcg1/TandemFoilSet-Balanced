@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 15:35 (closed #1467 more-slices-128 +13.5% — slice_num=128 overfits with 1499 samples; assigned nezuko lookahead-soap-k5 #2384 — preferred EMA alternative from #1966 closure)
+- **Date**: 2026-05-13 16:55 (closed #2384 lookahead-soap-k5 +6.3% — trajectory-smoothing meta-axis fully CLOSED across EMA/SWA/Lookahead; assigned nezuko layerscale-init-1e-4 #2428 — orthogonal training-dynamics axis)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -108,7 +108,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 | #2323 | frieren | `soap-max-precond-dim-128` | WIP | HIGH | SOAP max_precond_dim 256→128 (faster Kronecker refresh) |
 | #2324 | tanjiro | `grad-accum-batch8` | WIP | MEDIUM | gradient accumulation steps=2, effective batch 4→8 |
 | #2325 | thorfinn | `pressure-laplacian-loss` | WIP | MEDIUM | physics-informed Laplacian smoothness regulariser on predicted pressure |
-| #2384 | nezuko | `lookahead-soap-k5` | NEW | **HIGH** | Lookahead(SOAP, k=5, α=0.5); smoothing without state-swap overhead (preferred EMA alternative) |
+| #2428 | nezuko | `layerscale-init-1e-4` | NEW | **HIGH** | LayerScale γ=1e-4 on residual branches (per-channel learnable); orthogonal training-dynamics axis (CaiT) |
 
 ---
 
@@ -165,6 +165,7 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **soap-precond-freq-5** (#2255): +3.52%; halving precond_freq introduced Kronecker-factor noise at bs=4. freq=10 confirmed optimal. SOAP optimizer tuning axis largely exhausted (betas, wd, precond_freq all tested; max_precond_dim still open).
 - **ema-beta-0p99-rampup** (#1966): mean +2.60% over 4 seeds; per-epoch EMA/live state-swap interacts with torch.compile+ReFiLM degrading live trajectory. EMA smoothing dividend real (~-0.1 MAE) but cannot overcome trajectory penalty. EMA axis CLOSED permanently on this stack.
 - **more-slices-128** (#1467): +13.5% val / +12.5% test; all 4 splits regressed including OOD geometry splits the hypothesis targeted. Train surf_loss collapsed to 0.003 (~20× drop) by epoch 18 — classic overfit. With 1499 training samples, slice_num=64 is the local maximum. Slice-num upper axis CLOSED.
+- **lookahead-soap-k5** (#2384): +6.3% val. Mechanical claim landed (no recompile, drift/slow ≤0.04, zero overhead) but α=0.5 pull-back acts as 50% effective LR brake. Val still descending at ep 28. Only `val_geom_camber_cruise` (most-converged split) improved (−0.19). **Trajectory-smoothing meta-axis fully CLOSED: EMA (+2.60%), SWA v1-v3 (+1.24-3.44%), Lookahead (+6.3%) — three independent mechanisms, same root cause: averaging past trajectory hurts a still-descending model in budget-limited regime.**
 
 ---
 
