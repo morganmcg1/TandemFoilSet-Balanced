@@ -1617,3 +1617,42 @@ All 3 students now have active rebases against the SOAP baseline. PR #1630 had a
 - **Metrics JSONL**: `target/metrics/charliepai2g24h1-nezuko/layerscale-init-1e-4.jsonl` + `layerscale-init-0.1-nodecay.jsonl`
 
 **Programme learning**: First arm (γ₀=1e-4) failed due to (a) SOAP blew through tiny init in 1 epoch, (b) WD=1e-4 = 100% relative decay/step. Second arm (γ₀=0.1 + WD-exclude) addressed both — γ stays 0.08-0.12, no blowthrough, no decay collapse — but STILL +2.93% val regression. Baseline isn't unstable, so LayerScale's stabilization mechanism doesn't apply. Per-feature damping costs effective capacity. **LayerScale residual scaling axis FULLY CLOSED across both γ₀ regimes.**
+
+## 2026-05-13 21:20 — PR #2569: RMSNorm replaces LayerNorm in all transformer blocks
+- **Branch**: `charliepai2g24h1-nezuko/rmsnorm-replace-layernorm`
+- **Hypothesis**: Drop LN mean-centering + β-bias → preserve gauge-pressure offsets and gain ~10% throughput (RMSNorm canonical in Llama/Mistral)
+- **Status**: **CLOSED** — small regression on both val (+2.67%) and test (+2.37%), no wall-clock speedup
+
+| Split | Baseline (#2011) | RMSNorm | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.6013 | 29.3784 | +2.72% |
+| val_geom_camber_rc | 41.9483 | 43.9530 | **+4.78%** |
+| val_geom_camber_cruise | 14.1462 | **13.9074** | −1.69% |
+| val_re_rand | 30.8090 | 31.3507 | +1.76% |
+| **val_avg** | **28.8762** | **29.6474** | **+2.67%** |
+| **test_avg** | **24.9992** | **25.5906** | **+2.37%** |
+- **Diagnostic**: Train loss IDENTICAL at ep 28 (RMSNorm 0.0079 vs LN 0.0081). Gap is purely in generalization. Regression concentrated on the hardest OOD split (geom_camber_rc) — confirms LN mean-centering + β-bias is acting as a useful regularizer at this scale.
+- **Speedup**: Promised ~10% did NOT materialize (64.12 vs 63.94 s/epoch). `torch.compile(default,dynamic)` already fuses the LN kernel, so dropping mean-subtraction yields 0% throughput gain.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-nezuko-rmsnorm-replace-layernorm-20260513-203949/metrics.jsonl`
+
+**Programme learning**: At this scale (N=1499, 5 blocks) + compile + bf16 AMP, LayerNorm is the right choice. RMSNorm's compute story is killed by torch.compile fusion; its inductive-bias story is mildly anti-correlated with our OOD generalization. **Normalization-replacement axis closed**; ReFiLM γ-amplitude on RMSNorm pushed harder (|γ|max 0.880 vs 0.70) but didn't translate to lower val MAE — confirming the bottleneck is not in modulation capacity.
+
+## 2026-05-13 21:20 — PR #2560: SAM (ρ=0.02) wrapping SOAP — flat-minima search at 2× per-step compute
+- **Branch**: `charliepai2g24h1-fern/sam-rho-0p02-soap-wrap`
+- **Hypothesis**: Two-step adversarial perturbation (Foret et al. 2021) flattens the loss landscape, improves OOD generalization (small-N + N=1499)
+- **Status**: **CLOSED — catastrophic regression** val +53.4%, test +57.8%
+
+| Split | Baseline (16 ep would-be) | SAM @ 16 ep | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 53.97 | +88.7% |
+| val_geom_camber_rc | 41.95 | 56.99 | +35.9% |
+| val_geom_camber_cruise | 14.15 | 23.73 | +67.7% |
+| val_re_rand | 30.81 | 42.44 | +37.7% |
+| **val_avg** | **28.88 (28 ep)** | **44.28 (16 ep)** | **+53.4%** |
+| **test_avg** | **25.00 (28 ep)** | **39.45 (16 ep)** | **+57.8%** |
+
+- **Diagnostic**: SAM was working as designed — perturbed loss reliably 20% > unperturbed, gradient norm decayed 3× over the run (3.83 → 1.27). NOT a bug. Pure compute-budget failure: 2× per-step compute → 16 epochs vs 28 baseline → still falling 1.3%/2-epochs at the wall-cap.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-fern-sam-rho-0p02-soap-wrap-20260513-203405/metrics.jsonl`
+
+**Programme learning**: Under 30-min SENPAI_TIMEOUT_MINUTES + N=1499 + already-strong SOAP+cosine, ANY 2× per-step regularizer is dominated by epoch-count loss. **The wall-cap is the binding constraint, not the optimizer.** This rules out SAM, ESAM, and LookSAM screening on this branch (all would need wall-cap-vs-epoch-count tradeoff calculations dominated by per-epoch math). Together with closed LayerScale / EMA / SWA / Lookahead / DropPath / drop-token-vol-pending — **the "drop-in stochastic regularizer" axis is essentially exhausted on Charlie.** Future regularization wins must come from data-side augmentation (zero training-step cost) or single-pass curriculum/objective tweaks.
+

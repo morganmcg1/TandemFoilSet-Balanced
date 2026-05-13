@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 20:55 — PLATEAU CONTINUING. Round 19:30 plateau-breaking experiments all regressed (#2529 surf-vol-split +2.39%, #2535 mixup +52.7%, #2538 bernoulli +4.1%, #2532 drop-path +5.7%, #2537 derived-features +3.26%). Round 20:50 fresh assignments out: #2581 askeladd mlp-ratio-4, #2582 frieren droptoken. Plus from earlier this session: #2559 alphonse surface-embed-trunk, #2560 fern SAM, #2569 nezuko RMSNorm, #2539 thorfinn fourier-pos (sent back with σ=0.1), #2534 edward TTA (sent back for per-epoch + multi-seed). **Tanjiro #2324 pod stuck ~4 hours** on a pod-side secondary rate-limit death-spiral (gh CLI in pod hits 'API rate limit already exceeded' despite global rate_limit endpoint showing 4639/5000 GraphQL remaining; pod retries 6×/iter keep throttle hot). User declined to restart pod.
+- **Date**: 2026-05-13 21:25 — PLATEAU CONTINUING. Round 21:20 closures: #2569 nezuko RMSNorm (+2.67% val) and #2560 fern SAM (+53.4% catastrophic — wall-cap is binding constraint, not optimizer). 6 axis closures this session: surface/volume routing (#2529 + #2559 paired), Mixup family (#2535), Bernoulli/Laplacian physics on RANS data (#2538), branch-level stochastic depth on shallow stacks (#2532), explicit polynomial features (#2537), drop-in stochastic regularizers (#2560 SAM closes axis), and normalization replacement (#2569 RMSNorm). Round 21:25 fresh assignments: **#2592 nezuko sdf-to-foil-input-feature** (signed-distance scalar as per-node input — non-local geometric proximity signal targeting val_geom_camber_rc bottleneck), **#2594 fern coord-jitter-volume-aug** (σ=0.005 Gaussian noise on volume coords during training only — Tikhonov-style regularizer on geometric input manifold). Active arms: alphonse #2585 ReFiLM-residual, askeladd #2581 mlp_ratio=4, frieren #2582 DropToken-volume, thorfinn #2539 Fourier σ=0.1, edward #2534 TTA per-epoch+2-seed. **Tanjiro #2324 pod still stuck ~5 hours** on secondary rate-limit death-spiral. User declined to restart pod.
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 - **CRITICAL INFRA NOTE**: PR #2319-#2325 were originally created with short-form student labels (`student:alphonse` etc.) instead of full-form (`student:charliepai2g24h1-alphonse`). This made them invisible to student pod polling (which uses exact full-name label match per senpai-gh.sh:669). 3-hour stuck period until labels were patched at 17:01. All future `assign-experiment` calls MUST use full student name.
@@ -104,18 +104,18 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 
 ---
 
-## Active Experiments (round 20:50 — second-wave plateau-breaking)
+## Active Experiments (round 21:25 — geometric-OOD focus)
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2559 | alphonse | `surface-embed-trunk-token` | WIP | **HIGH** | Learned is_surface_emb[2,d] added to node tokens before block 0 — direct response to #2529 trunk-bottleneck finding |
-| #2560 | fern | `sam-rho-0p02-soap-wrap` | WIP | **HIGH** | SAM (Sharpness-Aware Min) wrapping SOAP, ρ=0.02 — explicit flat-minima search, 2× per-step compute |
-| #2569 | nezuko | `rmsnorm-replace-layernorm` | WIP | **HIGH** | RMSNorm drop-in for nn.LayerNorm in all blocks — preserves nonzero mean signal in residual stream |
+| #2585 | alphonse | `refilm-residual-stream-shared` | WIP | **HIGH** | Re-FiLM on residual stream (shared, zero-init) — trunk-level Re conditioning beyond slice logits |
 | #2581 | askeladd | `mlp-ratio-4-ffn-double` | WIP | **HIGH** | mlp_ratio 2→4 (canonical ViT choice, unexplored upward from baseline; closed list only sampled mlp_ratio=3) |
 | #2582 | frieren | `droptoken-volume-stratified-0p1` | WIP | **HIGH** | Stratified DropToken — 10% volume nodes masked, 0% surface (input-side regularization, distinct from #2532 DropPath) |
+| #2592 | nezuko | `sdf-to-foil-input-feature` | WIP | **HIGH** | Signed-distance-to-foil per-node scalar as input feature — explicit non-local geometric proximity signal; directly targets val_geom_camber_rc OOD bottleneck |
+| #2594 | fern | `coord-jitter-volume-aug` | WIP | **HIGH** | Gaussian coord jitter σ=0.005 on volume nodes during training only — Tikhonov-style geometric regularizer; zero compute cost, preserves shape topology (unlike Mixup #2535) |
 | #2539 | thorfinn | `fourier-pos-encoding` | WIP (sent back) | MEDIUM | Re-run with σ=0.1 (sigma was mis-calibrated 4× too high; coord post-norm std≈4 not 1) |
 | #2534 | edward | `tta-re-bracket` | WIP (sent back) | MEDIUM | Per-epoch TTA-val for checkpoint selection + 2-seed run to bound variance (TTA arm-vs-arm mechanism validated) |
-| #2324 | tanjiro | `grad-accum-batch8` | WIP (pod-stuck) | LOW | Pod rate-limit death-spiral ~4 hours; correctly labeled but pod can't poll |
+| #2324 | tanjiro | `grad-accum-batch8` | WIP (pod-stuck) | LOW | Pod rate-limit death-spiral ~5 hours; correctly labeled but pod can't poll |
 
 ---
 
@@ -185,6 +185,8 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **bernoulli-surface-loss** (#2538): +4.1%; TandemFoilSet is viscous (RANS) data, Bernoulli p+½ρ|U|² constraint does NOT hold across surface. ID-split degradation pattern + train/bernoulli_loss INCREASING over training confirms data violates the constraint. Physics-informed soft constraints on viscous data CLOSED (Bernoulli + Laplacian).
 - **drop-path-0p1** (#2532): +5.7% (both 0.1 and 0.05 arms); 5-block stack too shallow for branch-level stochastic depth (DeiT evidence relies on 12+ blocks for keep-rate compounding). Branch-level dropout on shallow physics-attention stacks CLOSED.
 - **derived-features-re2-aoa** (#2537): +3.26%; explicit polynomial features duplicate information that ReFiLM + ReScaleHead already extract through their nonlinearities. Cross-feature predicted-best splits (re_rand, camber_rc) regressed most. Tabular-ML feature engineering orthogonality argument doesn't transfer when explicit Re-conditioning hooks already exist.
+- **rmsnorm-replace-layernorm** (#2569): +2.67% val / +2.37% test; train loss IDENTICAL between RMSNorm and LayerNorm — gap purely in generalization. Regression concentrated on geom_camber_rc (+4.78% val / +7.11% test) confirms LN β-bias + mean-centering is acting as a useful regularizer at N=1499 scale. Promised 10% speedup did not materialize (torch.compile already fuses the LN kernel — 64.12→63.94 s/epoch). Norm-replacement axis CLOSED at this scale/compile/bf16 regime.
+- **sam-rho-0p02-soap-wrap** (#2560): +53.4% val / +57.8% test CATASTROPHIC. NOT an optimizer bug — SAM was working as designed (perturbed loss reliably 20% > unperturbed, gradient norm decayed 3× over the run). PURE compute-budget failure: 2× per-step cost → 16 epochs vs 28 baseline → still falling 1.3%/2-epochs at wall-cap. Under 30-min SENPAI_TIMEOUT_MINUTES + N=1499 + SOAP+cosine baseline, **any 2× per-step regularizer is dominated by epoch-count loss**. Drop-in stochastic regularizer axis FULLY CLOSED (SAM/ESAM/LookSAM all wall-cap-dominated; together with closed EMA/SWA/Lookahead/LayerScale/DropPath this exhausts the entire "stochastic regularizer" category).
 
 ---
 
@@ -203,3 +205,11 @@ Huber(δ=0.1) is a robust local optimum. 88% of pressure residuals already in qu
 - **Pretraining/SSL on mesh**: pretrain encoder on a self-supervised mesh task before joint training
 
 **The rc split (val=41.95, 3× cruise=14.15) is the dominant error source.** Any new direction should be evaluated on whether it specifically targets rc-OOD, not just average val.
+
+**Round 21:25 strategic pivot:** With the drop-in stochastic regularizer axis fully closed (SAM #2560 catastrophic) and norm-replacement closed (#2569), the wall-cap reality is now central:
+- Any 2× per-step compute is dominated by epoch-count loss → rules out SAM/ESAM/LookSAM/dual-forward methods.
+- Wall-cap-friendly directions must be either (a) zero-compute input-side (data augmentation, derived features), (b) zero-compute output-side (calibration heads), or (c) train-loop-friendly architectural micro-changes (mlp_ratio expansion, FiLM placement).
+- Round 21:25 assignments selected accordingly:
+  - **#2592 nezuko sdf-to-foil**: zero-compute input-side; per-node SDF feature (precomputed). Targets rc-OOD directly via shape-invariant proximity signal.
+  - **#2594 fern coord-jitter**: zero-compute input-side; Gaussian perturbation only on volume nodes during training. Targets rc-OOD via smooth-manifold inductive bias.
+- Geometric-OOD is now the primary attack surface. Recent ruled-out closures eliminate Re-conditioning expansion, surface/volume routing, and physics-informed soft constraints — leaving **shape-features and shape-equivariance/augmentation** as the active hypothesis cluster.
