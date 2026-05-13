@@ -443,6 +443,44 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# H49: OOD-upweighted training sampling. Multiplies the per-sample balanced
+# weight (1/group_size) by a per-domain multiplier so harder OOD val splits get
+# more training exposure. Training data has 3 domains; mapping to val tracks:
+#   racecar_single  -> val_single_in_dist        (1.0×, baseline)
+#   racecar_tandem  -> val_geom_camber_rc        (2.5×, hardest OOD split)
+#   cruise          -> val_geom_camber_cruise    (1.5×, moderately hard OOD)
+# val_re_rand is a Re-stratified hold-out across both tandems (no dedicated
+# training partition); the tandem-side 2.5×/1.5× boost addresses it implicitly.
+# Val/test loaders are unchanged below — multiplier only affects the train sampler.
+OOD_DOMAIN_MULTIPLIER = {
+    "racecar_single": 1.0,
+    "racecar_tandem": 2.5,
+    "cruise": 1.5,
+}
+sample_domain_labels: list[str] = []
+if not cfg.debug:
+    with open(Path(cfg.splits_dir) / "meta.json") as _f:
+        _meta = json.load(_f)
+    _idx_to_group: dict[int, str] = {}
+    for _name, _idxs in _meta["domain_groups"].items():
+        for _i in _idxs:
+            _idx_to_group[_i] = _name
+    sample_domain_labels = [_idx_to_group[i] for i in range(len(train_ds))]
+    _mult = torch.tensor(
+        [OOD_DOMAIN_MULTIPLIER[d] for d in sample_domain_labels],
+        dtype=sample_weights.dtype,
+    )
+    sample_weights = sample_weights * _mult
+    _total = sample_weights.sum().item()
+    print(f"[H49] OOD-upweighted sampling — multipliers: {OOD_DOMAIN_MULTIPLIER}")
+    for _domain in OOD_DOMAIN_MULTIPLIER:
+        _idx = [_i for _i, _d in enumerate(sample_domain_labels) if _d == _domain]
+        _w = sample_weights[_idx].sum().item()
+        print(
+            f"[H49] {_domain}: {100*_w/_total:.1f}% of training samples "
+            f"(was ~33.3% with equal weights; n={len(_idx)})"
+        )
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
@@ -525,7 +563,25 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "h49_ood_domain_multiplier": OOD_DOMAIN_MULTIPLIER,
     }, f, sort_keys=True)
+
+# H49: persist sampler config + actual training-domain proportions in metrics.jsonl
+if not cfg.debug and sample_domain_labels:
+    _h49_proportions = {}
+    _total_w = sample_weights.sum().item()
+    for _domain in OOD_DOMAIN_MULTIPLIER:
+        _idx = [_i for _i, _d in enumerate(sample_domain_labels) if _d == _domain]
+        _h49_proportions[_domain] = sample_weights[_idx].sum().item() / _total_w
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "h49_sampler_config",
+        "ood_domain_multiplier": OOD_DOMAIN_MULTIPLIER,
+        "domain_proportions": _h49_proportions,
+        "domain_counts": {
+            d: sum(1 for x in sample_domain_labels if x == d)
+            for d in OOD_DOMAIN_MULTIPLIER
+        },
+    })
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
