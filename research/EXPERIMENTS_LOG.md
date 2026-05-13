@@ -520,3 +520,39 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Mechanism takeaway**: EMA decay is exquisitely sensitive to wall-clock-bounded training. The merged 0.999 is near-optimal for our 17-epoch effective budget; wider windows would only help if epoch budget ≥20.
 - **Decision: CLOSE.** Hypothesis is plausible at higher budgets but cannot be tested under SENPAI_TIMEOUT_MINUTES=30. Assigning edward to torch.compile — directly attack the binding throughput constraint that killed this hypothesis (and slice_num, n_hidden=192, n_layers=8).
 
+
+## 2026-05-13 01:25 — PR #1629 v2/v3: thorfinn dropout=0.1/0.05 on β=0.5 baseline (review 2, closed)
+
+- Branch: `willowpai2g48h5-thorfinn/dropout-0p1`
+- v2 W&B run: dropout=0.1 (retest on Huber β=0.5+EMA+bf16)
+- v3 W&B run: dropout=0.05 (probe smaller magnitude after v2 regression)
+- Hypothesis (retest): attention dropout would stack with β=0.5 to give a further OOD generalization gain.
+
+| Run | dropout | val_avg/mae_surf_p (best EMA) | vs β=0.5 baseline 85.9197 |
+|-----|--------:|----------:|---:|
+| v2 | 0.10 | 87.61 | +1.97% |
+| v3 | 0.05 | 87.91 | +2.32% |
+
+- **Monotonicity violation**: halving dropout did NOT recover toward baseline — it made things slightly worse. Rules out a "wrong magnitude" interpretation; if the effect were purely about noise magnitude, p=0.05 should sit between baseline (0.0) and p=0.1.
+- **Mechanism (revised)**: Huber β=0.5 sharpens the loss curvature in the small-residual regime (|x| < 0.5 quadratic). The optimizer is now operating on a finer-grained loss landscape near the optimum, where dropout's per-step Bernoulli noise looks less like regularization and more like coordinate-wise gradient corruption. EMA at 0.999 (1.85-epoch half-life) cannot fully wash this out within the 17-epoch budget.
+- **Pattern with #1427 v2 (surf_weight=30) and #1534 v2 (grad-clip 1.0)**: three independent regularization/noise mechanisms that helped on the old MSE/Huber-β=1.0 stack all regress on the β=0.5 stack. Loss-shape tightening has displaced these levers.
+- **Decision: CLOSE.** Assigning thorfinn to Lookahead optimizer (k=5 inner / α=0.5 outer slow-weight averaging) — modifies the training trajectory rather than per-step noise, complementary layer to EMA.
+
+## 2026-05-13 01:25 — PR #1534 v2: tanjiro gradient clipping max_norm=1.0 on β=0.5 baseline (review 2, closed)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-1p0`
+- W&B run: grad-clip 1.0 retest on Huber β=0.5+EMA+bf16
+- Hypothesis (retest): clipping at max_norm=1.0 stabilizes optimization on the β=0.5 stack where the L1 kink near zero could in principle add gradient noise.
+
+| Metric | grad-clip 1.0 | β=0.5 baseline | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA) | 87.27 | 85.92 | +1.57% |
+| `test/test_single_in_dist/mae_surf_p` | 90.95 | 88.03 | +2.92 (hurts) |
+| `test/test_geom_camber_rc/mae_surf_p` | 90.20 | 85.46 | +4.74 (hurts) |
+| `test/test_geom_camber_cruise/mae_surf_p` | 53.14 | 56.40 | −3.26 (helps) |
+| `test/test_re_rand/mae_surf_p` | 74.59 | 76.30 | −1.71 (helps) |
+
+- **OOD splits helped, IID splits hurt** — clean directional split, not noise.
+- **Diagnostic from student**: 6375/6375 training steps clipped (100%) with peak gradient norm ≈140 after β=0.5 (down from ~837 pre-Huber). With every step clipped, max_norm=1.0 is no longer a safety net against rare spikes — it is acting as full direction normalization, projecting every gradient onto the unit ball.
+- **Mechanism**: normalized gradients give a flatter loss-landscape traversal — that explains the OOD/IID split (better generalization at the cost of fitting the bulk). IID hurt outweighs OOD help on the 4-split average.
+- **Decision: CLOSE.** Assigning tanjiro to max_norm=10 — with observed peak norms 70–140, this threshold only fires on genuine rare-spike outliers (the original purpose of clipping) while leaving bulk steps unchanged. Will isolate whether the v2 effect was the safety-net mechanism or the direction-normalization mechanism.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 01:05
+- **Date:** 2026-05-13 01:30
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -40,8 +40,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
-| tanjiro | #1534 | Gradient clipping `max_norm=1.0` | Gradient stability | WIP (rebased 21:18) | v2 rerun on bf16+Huber+EMA |
-| thorfinn | #1629 | Dropout=0.1 v2 on β=0.5 baseline | OOD regularization | WIP (sent back) | beat old baseline (90.08); retest needed on new baseline (85.92) |
+| tanjiro | TBA | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | Idle — reassigning | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
+| thorfinn | TBA | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | Idle — reassigning | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
 
 **Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.9197` (PR #1689 Huber β=0.5, test=76.5495). PRs that beat the old EMA baseline (92.35) but not the current baseline will be sent back for retest on the new stack.
 
@@ -51,6 +51,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 - **per-channel surface weights (0.5, 0.5, 2.0)** (#1445 v2, nezuko) — val=93.60 (+1.4% worse). p already dominates gradient signal; re-weighting backfired, U down-weighting removed geometric regularization.
 - **SiLU activation** (#1648, edward) — val=96.99 (+5.0% worse). "Smoother but slower" trajectory; GELU/lr=5e-4 is well-tuned for this regime.
 - **surf_weight=30 on β=0.5 baseline** (#1427 v2, askeladd) — val=88.99 (+3.6% worse). Huber β=0.5 already does the MAE-alignment work surf_weight was reaching for; over-weighting amplifies gradient variance (EMA-vs-live gap widens from −10.5 to −22).
+
+### Regularization / noise on β=0.5 stack
+- **Dropout=0.1 then 0.05 on β=0.5 baseline** (#1629 v2/v3, thorfinn) — val=87.61 (p=0.1) then 87.91 (p=0.05); both +2% worse. Monotonicity violation (p=0.05 worse than p=0.1) rules out tuning. β=0.5 sharpens loss curvature in small-residual regime; per-step Bernoulli noise becomes coordinate-wise gradient corruption, not regularization. EMA half-life 1.85 ep insufficient to wash out.
+- **Gradient clipping max_norm=1.0 on β=0.5 baseline** (#1534 v2, tanjiro) — val=87.27 (+1.6% worse). 6375/6375 steps clipped (100%) at peak norm 140 → effectively normalized SGD (direction-only). Clean OOD-helps (camber_cruise/re_rand) / IID-hurts (in_dist/camber_rc) split — flatter loss-landscape traversal at IID cost. Different mechanism than originally hypothesized; new attempt with max_norm=10 (rare-spike safety net only).
+
+**Pattern**: 3 of 3 noise/regularization mechanisms (surf_weight=30, dropout, grad-clip 1.0) that helped or were neutral on the old MSE/Huber-β=1.0 stack now regress on the β=0.5 stack. Loss-shape sharpening from β=0.5 has tightened the optimization neighborhood; mechanisms that perturb gradient direction or per-step gradients interfere with the finer adjustment.
 
 ### Loss shape / Huber β
 - **Huber β=0.5** (#1689, fern) — val=85.92 (−6.96% vs β=1.0 baseline). MERGED. All 4 splits improved; largest gains on hardest splits (in_dist −7.6%, camber_rc −7.0%). Mechanism: β=0.5 moves L1 gradient into the moderate-error bulk where loss density lives, directly aligning with MAE metric.
