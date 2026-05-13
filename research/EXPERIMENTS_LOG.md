@@ -8,6 +8,30 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:00 — PR #2099 (fern weight-decay-3x) — **CLOSED** (regression, wd axis closed)
+
+- Branch: `charliepai2g24h4-fern/weight-decay-3x`
+- Hypothesis: wd=1e-4 → 3e-4 (3× bracket). Compound regularization stack (stoch-depth + grad-clip + LayerScale) may have effectively raised regularization load, making wd=1e-4 too weak.
+- Metric artifacts: `models/model-charliepai2g24h4-fern-weight-decay-3x-20260513-091704/metrics.jsonl`
+
+| Metric | wd=3e-4 (#2099) | Old Baseline (#2018) | New Baseline (#1754) | Δ vs old | Δ vs new |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | 75.615 | 74.415 | **73.958** | **+1.61%** | **+2.24%** |
+| test_avg/mae_surf_p (4-split) | 66.227 | 65.524 | **64.502** | **+1.07%** | **+2.67%** |
+
+Per-split val: single_in_dist=83.453 (+3.15%) / camber_rc=86.665 (+2.43%) / camber_cruise=57.428 (**−1.16%**) / re_rand=74.915 (+1.18%). In-dist and rc regress most; only camber_cruise improves.
+
+**Analysis:** Three clean mechanism findings:
+1. **Fit/generalization gap already tight** at wd=1e-4 (surf 17%, vol 14% val/train ratio) — no overfitting slack for extra L2 to recover.
+2. **In-dist splits regress worst** (single_in_dist val +3.15%, test +6.43%) — opposite of the overfitting prediction. Extra wd damages fitting capacity when generalization gap is already tight.
+3. **Only camber_cruise improves** (−1.16%/−4.01%) — easiest OOD split benefits from more constraint; harder splits lose more than they gain. Textbook signature of wd already at/past optimum.
+
+LayerScale γ_l final values at ep 14 (l0=0.052 → l4=0.028) healthy — wd=3e-4 didn't collapse γ_l. Trajectory shows run still descending at ep 14 (75.62 = best), suggesting schedule/wd coupling problem.
+
+**Closed axis.** No wd=5e-4 bracket-up; no wd=5e-5 bracket-down. wd=1e-4 confirmed as optimum for current compound.
+
+---
+
 ## 2026-05-13 10:10 — PR #1754 (nezuko LR warmup H19) — **MERGED** (11th compound win)
 
 - Branch: `charliepai2g24h4-nezuko/lr-warmup-h19`

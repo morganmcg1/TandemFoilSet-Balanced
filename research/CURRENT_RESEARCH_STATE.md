@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 10:20 UTC (Wave 11 progress: MERGE #1754 nezuko LR warmup H19 as 11th compound win (val=73.958 −0.61%, test=64.502 −1.56%); CLOSE #2078 edward Gaussian Fourier σ=10 (+36.6%, σ scale mismatch); CLOSE #2059 alphonse n_head=8 (+7.81%, head-fragmentation + wall-time incompatible); ASSIGN #2135 edward gaussian-σ-calibrated, #2136 alphonse n_head=2, #2137 nezuko lr-3e-4)
+- **Last updated**: 2026-05-13 11:10 UTC (Wave 12 kick-off: CLOSE #2099 fern wd-3x (+1.61%/+1.07% vs old; +2.24%/+2.67% vs new baseline, wd axis confirmed at 1e-4); ASSIGN #2157 fern vol-ch-weight-pressure [1,1,2] for vol_loss; 8 students all assigned)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -34,18 +34,21 @@ The compound stack has 10 merged wins (100.957 → 74.415 = **−26.3%**): L1 lo
 - **Coord-jitter (#2060)**: direction-inverted at both tested std values (0.005, 0.002); OOD damage grows as std decreases (camber_rc +4.91%→+6.47%), opposite of linear-shrinkage. Structural mechanism conflict with Fourier L=6 features. Axis closed.
 - **FiLM (#1549)**: stalled 24h+, 4 rebase requests, no terminal result. **Execution failure, not mechanism failure** — FiLM direction is not conclusively closed but needs a fresh implementation with simpler steps.
 
-**Wave 11 active threads** (all 8 students assigned):
+**Wave 12 active threads** (all 8 students assigned):
 
-| Student | PR | Slug | Hypothesis |
-|---------|----|----|---------|
-| alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features |
-| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) |
-| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep |
-| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack |
-| frieren | #2098 | lion-optimizer | Sign-momentum optimizer — orthogonal to all merged stack |
-| fern | #2099 | weight-decay-3x | wd=1e-4→3e-4: compound stack has more regularization now |
-| askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling |
-| tanjiro | #2105 | swiglu-activation | GELU→SwiGLU in MLP blocks: gated nonlinearity for flow routing |
+| Student | PR | Slug | Hypothesis | Status |
+|---------|----|----|---------|--------|
+| alphonse | #2136 | n_head=2-wider | n_head=4→2 (dim_head=64): wider heads preserve OOD cross-geom features | WIP |
+| edward | #2135 | gaussian-σ-calibrated | Gaussian RFF σ=1.0 + σ=0.5 (calibrated for std-normalized coords) | WIP |
+| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep | WIP |
+| nezuko | #2137 | lr-3e-4-bracket | Peak lr=5e-4→3e-4 with merged warmup+cosine stack | WIP |
+| frieren | #2098 | lion-optimizer | Sign-momentum optimizer (sign momentum, decoupled wd) replacing AdamW | WIP |
+| fern | #2157 | vol-ch-weight-pressure | vol_loss per-channel weight [1,1,2]: pressure emphasis in volume domain | NEW |
+| askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling | WIP |
+| tanjiro | #2105 | swiglu-activation | GELU→SwiGLU in MLP blocks: gated nonlinearity for flow routing | WIP |
+
+**Closed in Wave 11/12 boundary:**
+- **#2099 fern wd-3x** (+1.61%/+1.07% vs old; +2.24%/+2.67% vs new — wd axis confirmed at 1e-4 optimum)
 
 **Prioritized research themes for Wave 12** (depending on in-flight outcomes):
 
@@ -72,7 +75,8 @@ The compound stack has 10 merged wins (100.957 → 74.415 = **−26.3%**): L1 lo
 - Attn-mlp-dropout: compute tax + stoch-depth redundancy
 - AdamW betas (0.9, 0.95): non-uniform regression, regime mismatch
 - n_head=8: +7.81% regression, head fragmentation (dim_head=16) destroys OOD cross-geom features, +42% wall-time incompatible with 30-min cap
-- Gaussian Fourier σ=10: +36.6% regression, σ scale mismatch for std-normalized coords (direction NOT closed — σ-calibration in-flight)
+- Gaussian Fourier σ=10: +36.6% regression, σ scale mismatch for std-normalized coords (direction NOT closed — σ-calibration in-flight at #2135)
+- Weight decay 3×: wd=3e-4 regressed +1.61%/+1.07% (old) vs +2.24%/+2.67% (new baseline 73.958); fit/generalization gap already tight at wd=1e-4; wd axis confirmed at 1e-4 optimum
 
 **Output-side calibration is fully exhausted** after wave-4 results: #1610
 (full log1p), #1636 (pressure-only log1p), #1675 (per-channel γ, β output
