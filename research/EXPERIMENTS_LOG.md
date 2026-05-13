@@ -2,6 +2,74 @@
 
 ---
 
+## 2026-05-13 10:05 UTC — Round 32
+
+### PR #2114 askeladd: Gap/stagger jitter σ=0.02 (channels 22-23) — CLOSED (LOSS, NEW failure-mode pattern)
+
+- **Branch:** `charliepai2g48h5-askeladd/gap-stagger-jitter-s0.02`
+- **Hypothesis:** Tandem-foil arrangement (gap, stagger) jitter on the last untouched geometric input channels — predicted to NOT show bimodal signature (different mechanism class from averaging).
+- **Result:** val_avg = **51.3681** (+1.52% vs 50.6001 baseline, LOSS), test_avg = **44.7212** (+1.71% vs 43.9680). All 4 val splits regress uniformly.
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | gap/stagger σ=0.02 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 49.07 | +2.36% (in-dist LOSS) |
+| `val_geom_camber_rc` | 67.3675 | 68.20 | +1.24% |
+| `val_geom_camber_cruise` | 34.3430 | 35.25 | +2.65% |
+| `val_re_rand` | 52.7481 | 54.90 | **+4.07%** (worst hit) |
+
+**NEW failure-mode pattern discovered — broadcast-scalar prior corruption (NOT 8th averaging-style bimodal):**
+
+1. **Uniform regression across all splits.** No bimodal signature. This is a DIFFERENT failure mode from the 7× averaging-style class (which always shows in-dist gain ↔ OOD regression).
+2. **val_re_rand worst hit at +4.07%.** This is the split that varies Re — and the gap/stagger channels are *correlated* with the Reynolds-dependent flow regime. Corrupting them most disrupts the OOD split where the prior is most load-bearing.
+3. **Mechanism: per-sample-constant input channels are NOT augmentation-safe.** Unlike per-point channels (NACA #2072, coords #1921), channels 22-23 are CONSTANTS within a sample — broadcast to all N points. The model uses them as **load-bearing priors** for "this sample is configuration X". Perturbing them is NOT data augmentation, it's belief-corruption.
+4. **Implication for future augmentation:** the per-sample broadcast vs per-point distinction matters fundamentally. Per-point channel jitter (NACA, coord) is bona-fide augmentation; per-sample-constant channel jitter is prior-corruption. The askeladd experiment cleanly isolates this taxonomy.
+
+### PR #2093 alphonse: AdamW β1=0.95 (UP probe) — CLOSED (LOSS, NEW failure-mode pattern)
+
+- **Branch:** `charliepai2g48h5-alphonse/adamw-beta1-0.95`
+- **Hypothesis:** Gradient momentum smoothing for L1 sign-noise — β1=0.9→0.95 extends momentum half-life from ~10 to ~14 steps. Predicted: smoothing helps in noisy-gradient regime.
+- **Result:** val_avg = **54.3714** (+7.45% vs 50.6001 baseline, LOSS), test_avg = **47.9036** (+8.94% vs 43.9680). All 4 splits regress uniformly.
+
+**Per-split breakdown (vs 50.6001 baseline):**
+
+| Split | Baseline | β1=0.95 | Δ |
+|---:|---:|---:|---:|
+| `val_single_in_dist` | 47.9418 | 51.32 | +7.04% |
+| `val_geom_camber_rc` | 67.3675 | 70.14 | +4.10% |
+| `val_geom_camber_cruise` | 34.3430 | 39.24 | **+14.27%** (worst hit) |
+| `val_re_rand` | 52.7481 | 56.79 | +7.66% |
+
+**NEW failure-mode pattern — momentum-lag overshoots cosine LR (NOT 8th averaging-style bimodal):**
+
+1. **Uniform regression across all 4 splits** (4.10% to 14.27%). NOT bimodal — in-dist did NOT win. This is a DIFFERENT failure mode from the 7× averaging-style class.
+2. **val_geom_camber_cruise worst hit** (NOT val_re_rand, which would have been the bimodal signature). The failure pattern is shape-distribution-sensitive, not Re-shift-sensitive.
+3. **Mechanism: β1=0.95 keeps the optimizer oriented to historical gradients that are increasingly stale as cosine LR decays.** As the schedule shrinks LR, momentum-lag means the optimizer still applies β1=0.95-weighted historical updates → systematic overshoots at every split.
+4. **AdamW (lr, β1, β2) hyperparameter axis now closed 4-LOSS-for-4** in this launch:
+   - lr=7.5e-4 (UP, #1774): LOSS +16%
+   - lr=3.75e-4 (DOWN, #1997): LOSS +11.4%, 4th averaging-style bimodal
+   - β2=0.95 (#1845): LOSS +15%
+   - β1=0.95 (#2093, this PR): LOSS +7.45%, momentum-lag overshoot
+   - Defaults (lr=5e-4, β1=0.9, β2=0.999) are locally optimal.
+
+### Round-32 new failure-mode taxonomy
+
+Through rounds 25-32 we now have THREE distinct failure-mode patterns documented across mechanism classes:
+
+1. **Averaging-style bimodal (7× confirmed):** in-dist ↓, OOD ↑. Mechanisms: coord-jitter, EMA, grad-clip, lr-DOWN, Lookahead, warmup-5, fun-jitter. Cause: reduced effective late-stage exploration trades in-dist precision for OOD robustness, but inversely.
+2. **Broadcast-scalar prior corruption (1× confirmed, this round):** all splits regress, val_re_rand worst. Mechanism: gap/stagger jitter (#2114). Cause: per-sample-constant channels are load-bearing priors; perturbing them is belief-corruption, not augmentation.
+3. **Momentum-lag overshoots cosine (1× confirmed, this round):** all splits regress uniformly. Mechanism: AdamW β1=0.95 (#2093). Cause: high momentum can't track shrinking LR → systematic overshoots.
+
+### Assignments for Round 32
+
+| PR | Student | Hypothesis | Mechanism class |
+|---|---|---|---|
+| #2155 | alphonse | AdamW amsgrad=True (max-tracking 2nd-moment) | Novel optimizer-stability lever (orthogonal to lr/β1/β2 axis). Tracks MAX of 2nd-moment EMA → robust to L1 sign-flip noise. |
+| #2156 | askeladd | GELU → SiLU activation swap (all 3 MLP sites) | Architectural probe; NOT averaging, NOT broadcast-scalar. Literature: 0.3-1% gain typical on Transformer benchmarks. |
+
+---
+
 ## 2026-05-13 09:30 UTC — Round 31
 
 ### PR #1988 nezuko: Per-sample fun_dim jitter Re/AoA (channels 13/14/18) — CLOSED after 2 σ-points (7th averaging-style bimodal confirmation)
