@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~08:50
+- **Date:** 2026-05-13 ~09:05
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -9,18 +9,20 @@
 
 ## Current baseline
 
-**`val_avg/mae_surf_p` = 51.040** (T_max=12 + RMSNorm+GeGLU+Lion+surf_weight=5, PR #1956, epoch 12)
-**`test_avg/mae_surf_p` = 44.390**
+**`val_avg/mae_surf_p` = 47.478** (n_layers=5 + T_max=14 + RMSNorm+GeGLU+Lion+surf_weight=10, PR #1995, epoch 14)
+**`test_avg/mae_surf_p` = 41.290**
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
-| single_in_dist | 56.933 | 50.459 |
-| geom_camber_rc | **64.886** | 59.341 |
-| geom_camber_cruise | 31.056 | 25.501 |
-| re_rand | 51.287 | 42.260 |
-| **avg** | **51.040** | **44.390** |
+| single_in_dist | 52.253 | 46.980 |
+| geom_camber_rc | **60.809** | 54.123 |
+| geom_camber_cruise | 29.174 | 24.263 |
+| re_rand | 47.675 | 39.794 |
+| **avg** | **47.478** | **41.290** |
 
-**Reproduce:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5`
+**Reproduce:** `python train.py --epochs 14 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
+
+> **surf_weight=5 NOT yet tested on n_layers=5 stack** — edward #2048 in flight. Expected to give another ~3-9% improvement.
 
 ## What we've learned
 
@@ -34,19 +36,22 @@
 7. **mlp_ratio=4**: −5% (PR #1408)
 8. **RMSNorm**: −2.9% val / −5.9% test (PR #1837) ← geom_camber_rc −17.2%
 9. **bf16 mixed precision**: −0.34% (PR #1724) ← infrastructure win, +1-2 epochs/run
-10. **T_max=12 + surf_weight=5 compound**: −3.33% val / −1.29% test (PR #1956) ← volume MAE −6% to −14% across all splits; cruise −6.96% val
+10. **T_max=12 + surf_weight=5 compound**: −3.33% val / −1.29% test (PR #1956) ← volume MAE −6% to −14% across all splits
+11. **n_layers=5 + T_max=14**: −6.98% val / −6.98% test (PR #1995) ← epoch count was binding constraint; 14 vs 12 epochs in 30-min budget; ALL 4 splits improved; −20% VRAM
 
 ### Current stack (defaults + CLI overrides)
-- L1 (MAE) loss in normalized space, **surf_weight=5** (PR #1956 compound confirmed)
-- n_layers=6, **mlp_ratio=4, GeGLU activation** (PR #1769)
+- L1 (MAE) loss in normalized space, **surf_weight=10** (PR #1995; sw=5 compound pending edward #2048)
+- **n_layers=5** (PR #1995) ← updated; shallower enables 14 epochs in 30-min budget
+- **mlp_ratio=4, GeGLU activation** (PR #1769)
 - **RMSNorm** (PR #1837, replaces LayerNorm)
 - n_hidden=128, n_head=4, slice_num=64
 - Lion optimizer lr=1e-4, weight_decay=1e-4
-- **CosineAnnealingLR T_max=12 (epochs=12)** ← PR #1793, cosine fully decays to 0
+- **CosineAnnealingLR T_max=14 (epochs=14)** ← PR #1995, cosine fully decays to 0
 - bf16 mixed precision (autocast)
-- 12 epochs in 30 min (~138s/epoch)
+- **14 epochs in 30 min (~116s/epoch)**
+- n_params: 826,071 (−15.7% vs previous 979,995)
 
-**Reproduce command:** `python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 5`
+**Reproduce command:** `python train.py --epochs 14 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
 
 ### Dead ends
 - **AdamW hyperparameter space fully exhausted:** WD (0, 1e-4 optimal, 5e-4), LR (5e-4 only), betas (0.85/0.9/0.95 for β1, 0.99/0.999 for β2), eps (1e-8, 1e-4), schedule (T_max=14/50, warmup, cosine restarts)
@@ -83,44 +88,52 @@
 8. **RMSNorm shifts the hardest split**: After RMSNorm, geom_camber_rc improved −17.2%; it remains the single highest-loss split at val=64.886.
 9. **geom_camber_rc (64.886 val) is the dominant bottleneck** — primary target for further improvement.
 
-## Active experiments (Round 14 — all on T_max=12+sw=5 compound baseline, val=51.040)
+## Active experiments (Round 15)
 
-| Student | PR | Hypothesis | Status |
-|---------|-----|------------|--------|
-| edward | #1995 | n_layers=5: shallower model → more epochs in 30-min budget | WIP |
-| fern | #1996 | slice_num=48: tighter PhysicsAttention partitions | WIP |
-| frieren | #2006 | Lion lr=8e-5: bracket LR from below (⚠ bug fix required) | WIP |
-| tanjiro | #2007 | mlp_ratio=2: test if gating dominates at half-width MLP | WIP |
-| nezuko | #2029 | surf_weight=2: continue gradient sweep below sw=5 | WIP |
-| askeladd | #2038 | n_head=2: trade attention parallelism for per-head capacity (head_dim 32→64) | NEW |
-| thorfinn | #2040 | grad-clip max_norm=1.0: stabilize Lion EMA (different mechanism from old AdamW test) | NEW |
-| alphonse | #2043 | DropPath stochastic depth rate=0.1: path-level regularization | NEW |
+⚠ **Baseline shifted:** PRs #1996, #2006, #2007, #2029, #2038, #2040, #2043 are all running on the OLD n_layers=6 + T_max=12 stack. Their results will need comparison against the NEW baseline (val=47.478). Most will likely produce val ~50-53 (worse than new baseline), but their relative improvements vs their starting stack (51.040) indicate whether those axes are worth compounding on the n_layers=5 + T_max=14 stack.
+
+| Student | PR | Hypothesis | Base stack | Expected vs new baseline |
+|---------|-----|------------|-----------|--------------------------|
+| edward | #2048 | surf_weight=5 on n_layers=5+T_max=14: compound gradient-budget win | NEW (n_layers=5) | ~43-46? |
+| fern | #1996 | slice_num=48 | OLD n_layers=6 | likely ~50-53 |
+| frieren | #2006 | Lion lr=8e-5 (⚠ apply lr=cfg.lr fix) | OLD n_layers=6 | likely ~50-53 |
+| tanjiro | #2007 | mlp_ratio=2 | OLD n_layers=6 | likely ~50-53 |
+| nezuko | #2029 | surf_weight=2 | OLD n_layers=6 | likely ~50-53 |
+| askeladd | #2038 | n_head=2 | OLD n_layers=6 | likely ~50-53 |
+| thorfinn | #2040 | grad-clip max_norm=1.0 | OLD n_layers=6 | likely ~50-53 |
+| alphonse | #2043 | DropPath rate=0.1 | OLD n_layers=6 | likely ~50-53 |
+
+**Review strategy for old-stack PRs:** Compare each against new baseline (47.478). Close if worse. Note any relative improvement for potential re-test on n_layers=5 stack.
 
 **Recently merged:**
-- nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val / −1.29% test) ← **NEW BASELINE 51.040/44.390**
+- edward #1995: n_layers=5 + T_max=14 (−6.98% val / −6.98% test) ← **NEW BASELINE 47.478/41.290**
+- nezuko #1956: T_max=12 + surf_weight=5 compound (−3.33% val / −1.29% test)
 
-**Recently closed (Round 14):**
-- alphonse #1765: Lion lr=1.5e-4 (+4.21% worse) — LR axis saturated, lr=1e-4 confirmed optimum from both sides
-- askeladd #1766: Lion WD=1e-2 rerun (+16.6% worse) — WD axis saturated; RMSNorm+GeGLU provides implicit regularization
-- thorfinn #1948: surf_weight=3 stale draft — surf_weight axis covered by nezuko #2029
-
-**Earlier closures:**
-- frieren #1983: T_max=10 (+10.96%) — CosineAnnealingLR cyclic; T_max < cfg.epochs always strictly worse
-- tanjiro #1984: n_hidden=160 (val/test inversion) — OOD bottleneck is geometric extrapolation, not feature capacity
-- edward #1925: WD=3e-2 — WD axis saturated
+**Recently closed (Rounds 13–14):**
+- alphonse #1765: Lion lr=1.5e-4 (+4.21% worse) — LR axis saturated
+- askeladd #1766: Lion WD=1e-2 rerun (+16.6% worse) — WD axis saturated
+- thorfinn #1948: surf_weight=3 stale draft
 
 ## Critical infra issue: train.py:441 LR hardcoding bug
 
 `optimizer = Lion(model.parameters(), lr=1e-4, ...)` — `--lr` CLI flag silently ignored. Fix: `lr=cfg.lr`. **NOT yet in advisor branch.** Frieren #2006 (lr=8e-5) has been alerted. Any LR experiment with `--lr != 1e-4` must apply this fix first.
 
-## Next queued ideas (for when Round 14 slots open up)
+## Depth sweep — key open question
 
-- **surf_weight=4** (bracket between 5 and 2) — only after nezuko sw=2 result
+PR #1995 shows: **n_layers=5 beats n_layers=6** when both fit the 30-min budget. Does this pattern continue?
+- n_layers=4 → ~100s/epoch → ~18 epochs → T_max=18? Peak capacity risk.
+- n_layers=3 → ~85s/epoch → ~21 epochs → probably too shallow.
+
+Test n_layers=4 + T_max=18 is the bold next move if edward #2048 (sw=5 compound) wins.
+
+## Next queued ideas (for when Round 15 slots open up)
+
+- **n_layers=4 + T_max=18**: continue depth sweep — does "shallower = more epochs" keep winning?
+- **surf_weight=5 on n_layers=5 + T_max=14**: edward #2048 in flight (HIGHEST PRIORITY)
+- **Any winning axis from old-stack screening** (n_head, grad-clip, droppath) re-tested on n_layers=5 + T_max=14
 - **Geometric data augmentation** (flip/scale) — targets geom_camber_rc OOD
 - **PINN-style auxiliary loss** (divergence/curl) — physics-informed volume regularization
-- **n_head=1** — only if askeladd n_head=2 wins
 - **FNO-style global filter** — alternative to PhysicsAttention
-- **AdamW re-test** on full current stack — was beaten on old stack by 14.3%; worth confirming persists
 
 ## Key constraints
 

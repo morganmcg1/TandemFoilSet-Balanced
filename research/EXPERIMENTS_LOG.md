@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 09:00 — PR #1995: n_layers=5 + T_max=14 — MERGED (−6.98% val, −6.98% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-edward
+- **Branch:** charliepai2g48h3-edward/n-layers-5
+- **Hypothesis:** Shallower model (n_layers=5) → faster epochs (~116s vs ~138s) → 14 epochs fit in 30-min budget → 2 extra cosine-tail refinement epochs → better convergence. Trading capacity for training duration.
+- **Result:** val=47.478 / test=41.290 (best_epoch=14, surf_weight=10)
+
+| Split | val (n_layers=6, T=12, sw=5) | val (n_layers=5, T=14, sw=10) | Δ val | test (n_layers=5) |
+|---|---|---|---|---|
+| single_in_dist | 56.933 | 52.253 | −8.2% | 46.980 |
+| geom_camber_rc | **64.886** | **60.809** | **−6.3%** | 54.123 |
+| geom_camber_cruise | 31.056 | 29.174 | −6.1% | 24.263 |
+| re_rand | 51.287 | 47.675 | −7.0% | 39.794 |
+| **avg** | **51.040** | **47.478** | **−6.98% ✓** | **41.290** |
+
+- **Key stats:** n_params=826,071 (−15.7%), VRAM 40GB (−20%), 116s/epoch (−16%)
+- **Mechanism:** "Epoch count was the binding constraint, not capacity." T_max=14 aligns cosine decay to the new budget; monotonic val descent to epoch 14.
+- **Important:** surf_weight=10 (NOT 5). The surf_weight=5 compound on this new stack is the immediate next priority (edward #2048).
+- **train.py change:** n_layers 6→5 (no other changes; lr=cfg.lr bug still NOT fixed)
+- **Metric artifacts:** `models/model-charliepai2g48h3-edward-n-layers-5-20260513-065528/metrics.yaml`
+- **Reassigned edward:** PR #2048 surf_weight=5 on n_layers=5 + T_max=14 (compound)
+
+---
+
 ## 2026-05-13 08:45 — PR #1765: Lion lr=1.5e-4 — CLOSED (+4.21% val, +1.11% test)
 
 - **Student:** charliepai2g48h3-alphonse
