@@ -462,29 +462,24 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# 1-epoch linear warmup followed by cosine annealing over the remaining epochs.
-# SequentialLR milestones are in scheduler steps, so we step per-batch and express
-# both schedulers in batch units. T_MAX_EPOCHS=18 matches the achievable epochs under
-# the 30-min cap (aligns with merged tmax-18 baseline); 1 warmup + 17 cosine = 18.
-# eta_min=5e-5 retains the merged eta-min-5e-5 (#1855) advantage so the warmup is
-# evaluated apples-to-apples against the current pure-cosine best (val=83.95).
-T_MAX_EPOCHS = 18
+# OneCycleLR(max_lr=8e-4) — single super-convergence schedule replacing SequentialLR.
+# pct_start=0.1 => ~2.1ep warmup at bs=1 (750 batches/ep), smooth C1-continuous curve.
+# div_factor=25 => initial_lr=3.2e-5; final_div_factor=10 => final_lr=3.2e-6.
+# T_MAX_EPOCHS=21 matches current bs=1 baseline (#2012 fit 21 epochs at 30-min cap).
+# Loop is capped at T_MAX_EPOCHS to prevent stepping past total_steps (OneCycleLR
+# would raise on the (total_steps+1)-th call).
+T_MAX_EPOCHS = 21
 n_batches_per_epoch = math.ceil(len(train_loader))
-warmup_sched = torch.optim.lr_scheduler.LinearLR(
+total_steps = T_MAX_EPOCHS * n_batches_per_epoch
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    start_factor=0.01,   # ramp from 1% of lr (5e-6) to 100% (5e-4)
-    end_factor=1.0,
-    total_iters=n_batches_per_epoch,
-)
-cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
-    T_max=(T_MAX_EPOCHS - 1) * n_batches_per_epoch,  # 17 epochs of cosine, in batch units
-    eta_min=5e-5,
-)
-scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
-    schedulers=[warmup_sched, cosine_sched],
-    milestones=[n_batches_per_epoch],
+    max_lr=8e-4,
+    total_steps=total_steps,
+    pct_start=0.1,
+    anneal_strategy='cos',
+    div_factor=25.0,
+    final_div_factor=10.0,
+    three_phase=False,
 )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -507,6 +502,9 @@ best_metrics: dict = {}
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
+    if epoch >= T_MAX_EPOCHS:
+        print(f"Reached T_MAX_EPOCHS={T_MAX_EPOCHS} (OneCycleLR total_steps fully consumed). Stopping.")
+        break
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
         break
