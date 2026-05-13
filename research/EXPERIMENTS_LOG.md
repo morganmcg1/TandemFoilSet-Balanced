@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-05-14 20:05 UTC — Round 58
+
+### PR #2496 fern: Per-channel surface loss ch_w=[1.0,1.0,3.0] — CLOSED (1st stale_wip)
+
+- **Branch:** `charliepai2g48h5-fern/per-channel-surf-p3`
+- **Hypothesis:** Per-channel surface loss with `ch_w=[1.0, 1.0, 3.0]` (3× weight on pressure channel in surf_loss only; vol_loss uniform; surf_weight=10 unchanged; zero param change). First per-channel gradient allocation probe in launch.
+- **Outcome:** 1st stale_wip — no commits since assignment at 18:00 UTC; only advisor-assignment commit present.
+- **Action:** Closed as stale_wip. Hypothesis preserved and reassigned as retry-1 (#2557).
+
+**Analysis:** Hypothesis remains structurally sound. After Lion merge, a novel interaction emerges: Lion's sign-step means per-channel loss weights translate into per-channel *sign-direction* allocation rather than just magnitude rescaling. The pressure channel at 3× weight will have its sign dominate more often in the aggregated sign across the 3 surface channels — a mechanism distinct from anything tested previously.
+
+**Assignment:** #2557 fern per-channel-surf-p3-retry1 created on fresh branch off current advisor (Lion baseline 36.3994). NEW bar: `val_avg/mae_surf_p < 36.3994`.
+
+**Human GH issues:** None found.
+
+---
+
 ## 2026-05-14 05:50 UTC — Round 57
 
 **MAJOR WIN MERGED.** Lion optimizer #2524 beats AdamW baseline by -14.05% val / -18.92% test — largest single-PR gain since round-1. New baseline 36.3994. All subsequent PRs must beat this new bar.
