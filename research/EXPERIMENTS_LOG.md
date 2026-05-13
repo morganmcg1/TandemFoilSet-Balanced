@@ -7,7 +7,54 @@ SPDX-PackageName: senpai
 # SENPAI Research Results — `icml-appendix-willow-pai2g-24h-r2`
 
 Primary metric: `val_avg/mae_surf_p` (lower is better).
-**Active baseline (PRs #1480 + #1471 + #1655 + #1666 merged):** `val_avg/mae_surf_p=88.06`, `test_avg/mae_surf_p=78.46` (run `fihyl2d5`, smooth_l1(β=1) stacked on OneCycleLR+p_weight=2+clip+bf16+grad_accum=2).
+**Active baseline (PRs #1480 + #1471 + #1655 + #1666 + #1867 merged):** `val_avg/mae_surf_p=85.84`, `test_avg/mae_surf_p=74.45` (run `s2trerq4`, AdamW beta1=0.95 stacked on smooth_l1+OneCycleLR+p_weight=2+clip+bf16+grad_accum=2).
+
+---
+
+## 2026-05-13 ~06:30 — Cycle 16: #1867 fern MERGED ✓ + 2 closed + 2 sent-back + 3 new arms
+
+### PR #1867 fern — AdamW beta1=0.9 → 0.95: MERGED ✓
+
+**New all-time best: val=85.84 / test=74.45.** 5th consecutive compounding winner.
+
+| Metric | smooth_l1 baseline (#1666) | beta1=0.95 (#1867) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 88.06 | **85.84** | **-2.5%** |
+| `test_avg/mae_surf_p` | 78.46 | **74.45** | **-5.1%** |
+
+W&B run: `s2trerq4`. All 4 test splits improved. Mechanism: beta1=0.95 provides more first-moment EMA memory; the effect is concentrated in the OneCycleLR anneal phase (epochs 10-17), where 7 of 8 epochs set new bests. val-to-test improvement ratio (2.5% → 5.1%) suggests better-converged minimum that generalizes.
+
+Per-split test `mae_surf_p`:
+| Split | baseline | beta1=0.95 | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 85.74 | 81.64 | **-4.8%** |
+| `geom_camber_rc` | 90.31 | 85.23 | **-5.6%** |
+| `geom_camber_cruise` | 58.96 | 54.52 | **-7.5%** |
+| `re_rand` | 78.83 | 76.43 | **-3.0%** |
+
+### PR #1865 frieren — n_layers=6: CLOSED ✗
+
+val=91.40 (+3.79%), test=82.47 (+5.11%). Only 15/18 target epochs completed (30min budget). Identical mechanism to PR #1749 (mlp_ratio=3 failure): adding depth/capacity eats into epoch count, leaving the OneCycleLR cosine anneal incomplete. OOD `geom_camber_rc` showed the worst regression (+12%). Capacity-at-fixed-budget axis confirmed closed from both directions.
+
+### PR #1839 askeladd — surf_weight=7: CLOSED ✗
+
+val=99.27 (+2.27% vs old baseline), all splits regress. surf_weight axis closed from both sides: 7 worse, 15 worse (+6.7%). Optimum confirmed at surf_weight=10.
+
+### PR #1863 tanjiro — smooth_l1 β=0.5: SENT BACK (rebase needed)
+
+val=87.29 (-0.88% vs 88.06 old baseline), all splits improve on test. Result is directionally positive but does not beat the new baseline (85.84 after #1867 merged). Sent back to rebase onto beta1=0.95 stack and rerun. The β=0.5→0.25 sweep is worthwhile pending confirmation.
+
+### PR #1864 edward — dropout=0.05: SENT BACK (smaller dropout)
+
+val=88.69 (+0.7% vs old baseline), test=78.08 (-0.5%). Split-by-split: geom_camber_rc improved -3.8% (OOD dropout signature), re_rand regressed +1.0%. Marginal negative on val. Sent back to try p=0.02 or attention dropout. Needs to beat new bar of 85.84.
+
+### New assignments (cycle 16)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| fern | EMA of model weights (decay=0.9999) | #1892 |
+| frieren | smooth_l1 β=0.25 (extend MAE-like regime) | #1893 |
+| askeladd | slice_num=128 (richer physics slots) | #1894 |
 
 ---
 

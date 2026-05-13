@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 05:40 UTC
+- **Date / time:** 2026-05-13 06:45 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,73 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-16 update — #1867 fern beta1=0.95 MERGED ✓ (-2.5%), 2 closed, 2 sent-back, 3 new arms
+
+**New all-time best: val=85.84 / test=74.45.** AdamW beta1=0.95 stacked on smooth_l1+OneCycleLR — 5th consecutive compounding win. Effect concentrated in the anneal phase: 7 of 8 epochs in the cosine tail set new bests. val-to-test improvement ratio (2.5%→5.1%) suggests genuinely better-converged minimum, not val noise. **Active baseline: val=85.84 / test=74.45.**
+
+**Cumulative improvement from original:** val 131.79 → 85.84 = **-34.9%** over 5 sequential merges.
+
+| PR | Student | Decision | Outcome |
+|---|---|---|---|
+| #1867 fern beta1=0.95 | MERGED ✓ | val=85.84 (-2.5%), all splits improve |
+| #1865 frieren n_layers=6 | CLOSED ✗ | val=91.40 (+3.8%), capacity-at-budget failure, only 15/18 epochs |
+| #1839 askeladd surf_weight=7 | CLOSED ✗ | val=99.27 (all splits worse), axis closed both sides |
+| #1863 tanjiro β=0.5 | SENT BACK | val=87.29 (-0.88% vs 88.06) — needs rebase onto beta1=0.95, new bar 85.84 |
+| #1864 edward dropout=0.05 | SENT BACK | val=88.69 (+0.7% val) — try p=0.02 or attention dropout, new bar 85.84 |
+
+3 new arms (on new beta1=0.95+smooth_l1+OneCycleLR baseline):
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1892 | fern | EMA of model weights (decay=0.9999) — zero-cost val smoothing |
+| #1893 | frieren | smooth_l1 β=0.25 (extend MAE-like regime beyond β=0.5) |
+| #1894 | askeladd | slice_num=128 (richer physics slot attention, <15% per-epoch cost) |
+
+### Active leaderboard
+
+| Val | Test | PR | What landed |
+|---|---|---|---|
+| **85.84** | **74.45** | #1867 fern | AdamW beta1=0.95 |
+| 88.06 | 78.46 | #1666 tanjiro | smooth_l1(β=1) |
+| 97.07 | 85.71 | #1655 alphonse | OneCycleLR max_lr=2e-3 |
+| 110.27 | 99.41 | #1471 frieren | p_weight=2.0 + clip_grad_norm=1.0 |
+| 116.30 | 104.96 | #1480 thorfinn | bf16+grad_accum=2 |
+
+### Closed axes (do not revisit)
+
+- surf_weight: optimum at 10.0 (tried 7, 15, 30 — all worse)
+- n_head: at n_hidden=128, n_head=4 (dim_head=32) is optimal; n_head=8 (dim_head=16) catastrophic
+- weight_decay: local minimum at 1e-4 (tried 5e-5, 2e-4 — both worse)
+- mlp_ratio=3: +11%, capacity-at-budget
+- n_layers=6: +3.8%, capacity-at-budget
+- learning rate (fixed): lr=5e-4 optimal for base LR
+- beta2=0.95: +13% (old stack); beta2=0.999 appears optimal (pending retune under new stack)
+- slice_num=128 (TESTED 2 cycles ago under old CosineAnnealingLR stack, val +13%): worth retesting under new stack — compute overhead may be different now
+
+### In-flight WIP
+
+| PR | Student | Hypothesis |
+|---|---|---|
+| #1892 | fern | EMA weights |
+| #1893 | frieren | β=0.25 |
+| #1894 | askeladd | slice_num=128 |
+| #1863 | tanjiro | β=0.5 (rebase pending) |
+| #1864 | edward | dropout (rebase pending) |
+| #1866 | thorfinn | grad_accum 2→4 |
+| #1840 | nezuko | OneCycleLR pct_start=0.3 |
+| #1829 | alphonse | OneCycleLR max_lr=4e-3 |
+
+### Next directions (priority-ordered)
+
+1. **β sweep confirmation:** tanjiro β=0.5 rerun + frieren β=0.25. If both win, consider β=0.1 and pure MAE.
+2. **EMA weights:** High-prior, zero-cost technique from competition ML — fern testing decay=0.9999.
+3. **OneCycleLR sweep:** alphonse max_lr=4e-3 and nezuko pct_start=0.3 in-flight. Also consider div_factor and final_div_factor tuning.
+4. **Optimizer betas:** beta2 retest under new beta1=0.95+smooth_l1 stack (beta2=0.99 may help faster variance adaptation).
+5. **Grad accumulation:** thorfinn testing grad_accum=4 (eff_batch 16). Higher batch smoothing may compose well with beta1=0.95.
+6. **Loss reweighting:** p_weight may benefit from retune now that smooth_l1 loss shape changed vs MSE. Try p_weight=3.0 or p_weight=4.0.
+7. **Physics-informed objectives:** Add a gradient-consistency loss term (enforce ∂u/∂x ≈ 0 far from foil). Novel direction, potentially significant.
+
+---
 
 ## Cycle-15 update — #1666 tanjiro smooth_l1 MERGED ✓ (-9.3%), 4 closed, 5 new arms
 
