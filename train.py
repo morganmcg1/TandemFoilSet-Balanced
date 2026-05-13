@@ -302,15 +302,20 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            if cfg.loss_type == "mae":
+                err = F.l1_loss(pred, y_norm, reduction="none")
+            elif cfg.loss_type == "mse":
+                err = F.mse_loss(pred, y_norm, reduction="none")
+            else:
+                err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (huber_err * vol_mask.unsqueeze(-1)).sum()
+                (err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (huber_err * surf_mask.unsqueeze(-1)).sum()
+                (err * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -442,6 +447,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     huber_delta: float = 1.0
+    loss_type: str = "huber"   # "huber", "mae", or "mse"
     epochs: int = 50
     dropout: float = 0.1
     clip_grad_norm: float = 1.0
@@ -594,12 +600,17 @@ for epoch in range(MAX_EPOCHS):
             )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            huber_err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            if cfg.loss_type == "mae":
+                err = F.l1_loss(pred, y_norm, reduction="none")
+            elif cfg.loss_type == "mse":
+                err = F.mse_loss(pred, y_norm, reduction="none")
+            else:
+                err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
