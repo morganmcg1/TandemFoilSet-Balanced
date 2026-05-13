@@ -2,6 +2,27 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 01:25 — PR #1695: [tmax-18] CosineAnnealingLR T_max=15→18 — **SENT BACK (Huber base, pre-grad-clip)**
+- Student branch: `charliepai2g48h4-nezuko/tmax-18`
+- Hypothesis: With ~18 epochs achievable in 30-min cap, T_max=18 bottoms the cosine exactly at the budget edge, so the best-epoch checkpoint sits at the end of the anneal (lr→0) rather than starting a second cycle (lr climbing back).
+
+| Metric | Value | vs T_max=15 Huber base (#1374) |
+|---|---|---|
+| val_avg/mae_surf_p | **109.43** (best epoch 17/18) | −1.16 (−1.05%) |
+| test_avg/mae_surf_p | **101.08** | −1.20 (−1.17%) |
+| val single_in_dist | 128.53 | −11.29 |
+| val geom_camber_rc | 115.37 | −5.22 |
+| val geom_camber_cruise | 88.02 | +0.27 (flat) |
+| val re_rand | 105.79 | −5.27 |
+| LR at best epoch (17) | 1.51e-5 | well-annealed (3% of init) |
+
+- Artifact: `models/model-charliepai2g48h4-nezuko-tmax-18-20260512-235324/metrics.jsonl`
+- Run context: ran on Huber HEAD (pre-grad-clip merge). Does not beat current best (96.78, grad-clip HEAD).
+
+**Analysis:** The cosine-bottoming-at-epoch-18 mechanism worked exactly as predicted: 3/4 splits improve cleanly (single_in_dist −11.3 the largest), only cruise flat (already near floor at 87.75 in T_max=15). lr trace confirms epoch 17 sits in lr→0 tail rather than climbing back into a second cycle. Per-split Δs are above σ noise for 3 splits.
+
+**Decision:** SENT BACK to rerun on grad-clip HEAD. Δ−1.16 val is within σ ≈ 3.5 noise vs the directly-comparable Huber base, but the per-split signal is consistent. Grad-clip changes optimization dynamics dramatically (normalized gradient descent), so the schedule's interaction may differ — but the epoch-budget argument (cosine should bottom at the achievable epoch count) is independent of optimizer and should still hold. Stack test: T_max=18 on top of Huber+grad-clip targeting <96.78 val.
+
 ## 2026-05-13 01:19 — PR #1696: [grad-clip-1.0] Gradient clipping max_norm=1.0 — **MERGED (NEW BEST: val=96.78)**
 - Student branch: `charliepai2g48h4-frieren/grad-clip-1.0`
 - Hypothesis: Gradient clipping with max_norm=1.0 between loss.backward() and optimizer.step() caps per-step update magnitude, reducing instability from outlier high-Re batches.
