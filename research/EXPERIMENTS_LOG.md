@@ -6,6 +6,48 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 00:05 — ROUND 5 BATCH: 5 experiments — ALL CLOSED (PLATEAU CONFIRMED)
+
+**Key cross-experiment finding:** Round 5 confirms ROUND 4 META-INSIGHT (convergence-limited at 30-min budget) extends across optimizer, schedule, and batch-size knobs. ALL 4 returning experiments regressed; the closest miss (alphonse T_max=14 at +0.5%) is pure seed variance (3 seeds: 102.30 / 104.11 / 107.09). **Plateau Protocol triggered — escalating to bolder hypotheses (loss reformulations, mixed precision, optimizer paradigm shifts).**
+
+### PR #1592: Cosine T_max 50 → 14 (align to budget) — CLOSED (+0.5% worse, noise)
+- **Student:** charliepai2g48h3-alphonse
+- val=102.301, test=92.704 (3 seeds: 102.30 / 104.11 / 107.09; mean +2.64% worse, pure noise)
+- Cosine LR alignment to actual epoch budget had no detectable effect
+- **Conclusion:** Schedule decay isn't the bottleneck — LR=5e-4 throughout the 11-epoch run is already near-optimal for this regime
+- **Artifacts:** `models/model-charliepai2g48h3-alphonse-cosine-tmax-14-20260512-225513/metrics.jsonl`
+
+### PR #1661: CosineAnnealingWarmRestarts T_0=4 T_mult=2 — CLOSED (+2.7% worse)
+- **Student:** charliepai2g48h3-fern
+- val=104.515, test=94.113
+- Schedule played as predicted; the restart at epoch 5 disrupted progress (val_avg jumped 168 → 186 → 150 → ...)
+- **Conclusion:** Multi-cycle schedules need budgets that allow full cycle completion. At 11 epochs, single-cycle wins.
+- **Artifacts:** `models/model-charliepai2g48h3-fern-cosine-warm-restarts-20260512-225827/metrics.jsonl`
+
+### PR #1671: AdamW β1 0.9 → 0.85 — CLOSED (+5.9% worse)
+- **Student:** charliepai2g48h3-edward
+- val=107.826, test=98.917
+- Both β1 directions (0.85 here, 0.95 in #1622 askeladd) now confirmed worse than default 0.9
+- Edward's analysis: oscillations live at macro/epoch scale, not micro/step scale — β1 (4-7 step half-life) can't address them
+- **Conclusion:** AdamW betas FULLY EXPLORED. Default (0.9, 0.999) is correct. Stop tuning betas.
+- **Artifacts:** `models/model-adamw-beta1-085-20260512-230405/metrics.jsonl`
+
+### PR #1634: Batch size 4 → 8 (via accum_steps=2) — CLOSED (+23.6% worse)
+- **Student:** charliepai2g48h3-tanjiro
+- val=125.836, test=116.763
+- bs=8 OOMed; student used accum_steps=2 as mathematical equivalent (defensible workaround)
+- Effective batch=8 halved optimizer steps per epoch (375 → 187); ran out of training steps in the 30-min cap
+- **Conclusion:** Direct evidence we are step-count-limited. Increasing effective batch is unambiguously wrong direction.
+- **Artifacts:** `models/model-batch-size-8-20260512-231353/metrics.jsonl`
+
+### PR #1384: surf_weight 10 → 25 (stale, never rebased) — CLOSED (no clean result)
+- **Student:** charliepai2g48h3-frieren
+- Stale 25h+ rebase blocker; original run on pre-L1 baseline produced val=136.78 (not comparable to current 101.81 baseline)
+- Closed without merge; hypothesis itself remains untested on current arch — may revisit later from fresh branch
+- **NaN-skip fix in evaluate_split was already independently merged in PR #1358**, so frieren's main contribution is preserved.
+
+---
+
 ## 2026-05-13 00:20 — ROUND 4 BATCH: 4 experiments — ALL CLOSED
 
 **Key cross-experiment finding:** At the 30-min/~11-13 epoch budget, we are CONVERGENCE-LIMITED. Any change that slows per-epoch progress consistently loses, even if theoretically sound with more training time.

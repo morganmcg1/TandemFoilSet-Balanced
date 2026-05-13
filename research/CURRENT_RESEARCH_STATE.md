@@ -1,10 +1,11 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 ~23:00
+- **Date:** 2026-05-13 ~00:10
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none yet — controlled 24h/48h Charlie-vs-Willow logging ablation.
 - **Per-run wall-clock cap:** 30 minutes (`SENPAI_TIMEOUT_MINUTES=30`).
+- **Plateau Protocol:** ACTIVE — 5+ consecutive failed experiments. Researcher-agent dispatched for bolder hypotheses (mixed precision, Lion optimizer, loss reformulations, modern transformer ingredients).
 
 ## Current baseline
 
@@ -49,14 +50,16 @@
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1592 | Cosine T_max 50 → 14 (align to budget) | WIP |
-| nezuko | #1678 | LR 5e-4 → 7e-4 (upper-stable range) | New |
-| tanjiro | #1634 | Batch size 4 → 8 (lower gradient noise) | WIP |
-| fern | #1661 | CosineAnnealingWarmRestarts T_0=4 T_mult=2 | WIP |
-| edward | #1671 | AdamW β1 0.9→0.85 (looser momentum) | New |
-| askeladd | #1673 | AdamW eps 1e-8→1e-4 (adaptive scaling floor) | New |
-| frieren | #1384 | surf_weight 10 → 25 (rebase needed) | WIP/CONFLICTING |
-| thorfinn | #1670 | weight_decay 1e-4 → 5e-4 (stronger L2) | New |
+| alphonse | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| nezuko | #1678 | LR 5e-4 → 7e-4 (upper-stable range) | WIP |
+| tanjiro | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| fern | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| edward | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| askeladd | #1673 | AdamW eps 1e-8→1e-4 (adaptive scaling floor) | WIP |
+| frieren | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| thorfinn | #1670 | weight_decay 1e-4 → 5e-4 (stronger L2) | WIP |
+
+**Round 5 closed (all worse than baseline 101.810):** #1592 alphonse T_max=14 (+0.5%, seed noise across 3 seeds), #1661 fern warm restarts (+2.7%), #1671 edward β1=0.85 (+5.9%), #1634 tanjiro batch=8 (+23.6%), #1384 frieren surf_weight=25 (stale, never rebased).
 
 ## Round 3/4 themes and open questions
 
@@ -91,4 +94,9 @@
 - Dropout=0.1: +11.8% worse. Model is underfitting; regularizing an underfit model is counterproductive.
 - AdamW betas (0.95, 0.99): +15.4% worse. β2=0.99 amplifies sign-flip noise for L1. Standard (0.9, 0.999) is correct.
 - weight_decay=0: +3.2% worse (closest miss of round 4). WD provides useful regularization for high-magnitude splits.
+- AdamW β1=0.85: +5.9% worse. Combined with β1=0.95 from round 4 (+15.4%), default β1=0.9 is correct in both directions. STOP tuning betas.
+- CosineAnnealingWarmRestarts (T_0=4, T_mult=2): +2.7% worse. Restart at epoch 5 disrupts progress; needs longer budgets.
+- Cosine T_max=14 (aligned to actual budget): essentially baseline (3 seeds: 102.30/104.11/107.09 = pure noise). Schedule decay is NOT the bottleneck.
+- Batch=8 via accum_steps=2: +23.6% worse. Direct evidence we are step-count-limited; doubling effective batch halves optimizer steps in the budget. Stop increasing batch.
 - **Round 4 meta-insight: CONVERGENCE-LIMITED. Anything slowing per-epoch progress loses at 30-min budget.**
+- **Round 5 meta-insight: optimizer/schedule/batch hyperparameter space is FULLY EXHAUSTED. Plateau Protocol active — next round must be structural (loss reformulation, mixed precision, optimizer paradigm shift, architecture changes).**
