@@ -412,6 +412,46 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 
 
+class Lookahead(torch.optim.Optimizer):
+    """Lookahead Optimizer (Zhang et al. 2019). Wraps a fast optimizer.
+    Every k fast steps, performs a Polyak step:
+        phi <- phi + alpha * (theta - phi)
+        theta <- phi
+    """
+    def __init__(self, base_optimizer: torch.optim.Optimizer, k: int = 5, alpha: float = 0.5):
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+        if k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_counter = 0
+        # Store slow weights as a deep clone of each parameter group's params
+        self.slow_weights = [
+            [p.clone().detach() for p in group["params"]]
+            for group in base_optimizer.param_groups
+        ]
+        # Forward param_groups to expose base optimizer's structure
+        self.param_groups = base_optimizer.param_groups
+        self.defaults = base_optimizer.defaults
+        self.state = base_optimizer.state
+
+    def step(self, closure=None):
+        loss = self.base.step(closure)
+        self.step_counter += 1
+        if self.step_counter % self.k == 0:
+            for group_idx, group in enumerate(self.base.param_groups):
+                for p_idx, p in enumerate(group["params"]):
+                    slow = self.slow_weights[group_idx][p_idx]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+        return loss
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base.zero_grad(set_to_none=set_to_none)
+
+
 @dataclass
 class Config:
     lr: float = 1.5e-4  # Lion uses ~1/5th of AdamW lr (was 7e-4)
@@ -421,6 +461,8 @@ class Config:
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
+    lookahead_k: int = 0      # 0 = disabled; positive = enable Lookahead with this k
+    lookahead_alpha: float = 0.5
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
     grad_clip_max_norm: float = 5.0  # max grad norm before optimizer.step(); rare-event tail clipping
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
@@ -485,6 +527,8 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
+if cfg.lookahead_k > 0:
+    optimizer = Lookahead(optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
