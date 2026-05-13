@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -430,6 +431,8 @@ class Config:
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
     cosine_restart_T_0: int = 0    # First cycle length; 0 = disabled (use single-cycle cosine)
     cosine_restart_T_mult: int = 1  # Cycle length multiplier on each restart; 1 = constant length
+    stratified_sampler: str = "off"  # "off" = WeightedRandomSampler; "strict" = batch=[single, rc, cruise, weighted]
+    domain_loss_weights: str = "1.0,1.0,1.0,1.0"  # surf-loss weights per batch slot in strict mode (single, rc, cruise, re_rand)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -448,12 +451,95 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# Build per-sample training-domain id from meta.json domain_groups.
+# 0 = racecar_single, 1 = racecar_tandem, 2 = cruise. Used for stratified batches
+# and (positionally) for per-domain surf-loss reweighting.
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _meta = json.load(_f)
+_dgroups = _meta["domain_groups"]
+_DOMAIN_NAME_TO_ID = {"racecar_single": 0, "racecar_tandem": 1, "cruise": 2}
+N_DOMAINS = 3
+domain_ids = torch.full((len(train_ds),), -1, dtype=torch.long)
+for _name, _idxs in _dgroups.items():
+    _did = _DOMAIN_NAME_TO_ID[_name]
+    for _i in _idxs:
+        if _i < len(train_ds):
+            domain_ids[_i] = _did
+assert (domain_ids >= 0).all(), "Some train samples have no domain label"
+
+# Parse domain_loss_weights (surface-loss multiplier per batch slot in strict mode).
+domain_weights_tensor = torch.tensor(
+    [float(x) for x in cfg.domain_loss_weights.split(",")],
+    dtype=torch.float32,
+    device=device,
+)
+assert domain_weights_tensor.numel() == 4, "domain_loss_weights must have 4 values"
+# Per-batch surface-loss multiplier: strict mode uses the parsed weights; off
+# mode is a no-op (all ones). Sliced to [:B] in the loss to support the rare
+# tail batch with B<4 if a future sampler ever yields one.
+_surf_domain_w_strict = domain_weights_tensor.clone()
+_surf_domain_w_off = torch.ones_like(domain_weights_tensor)
+surf_domain_w = _surf_domain_w_strict if (
+    cfg.stratified_sampler == "strict" and not cfg.debug
+) else _surf_domain_w_off
+
+
+class StratifiedBatchSampler:
+    """Strict per-batch stratification: each batch is [single, rc, cruise, weighted].
+
+    Positions 0-2 sample one index per training domain via per-domain weighted
+    multinomial; position 3 is a globally-weighted random sample. With
+    batch_size=4 this guarantees every batch sees all three training domains
+    while preserving WeightedRandomSampler-equivalent global statistics.
+    """
+
+    def __init__(self, domain_ids, sample_weights, batch_size, num_batches):
+        assert batch_size == 4, "strict stratified sampler requires batch_size=4"
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        # Per-domain index lists and matching weight slices.
+        self._domain_indices = [
+            (domain_ids == d).nonzero(as_tuple=False).flatten()
+            for d in range(N_DOMAINS)
+        ]
+        self._domain_weights = [
+            sample_weights[idxs].to(dtype=torch.float64) for idxs in self._domain_indices
+        ]
+        for d, idxs in enumerate(self._domain_indices):
+            assert idxs.numel() > 0, f"strict sampler: domain {d} has no train samples"
+        self._global_weights = sample_weights.to(dtype=torch.float64)
+
+    def __iter__(self):
+        for _ in range(self.num_batches):
+            batch = []
+            for d in range(N_DOMAINS):
+                pick = torch.multinomial(self._domain_weights[d], 1, replacement=True).item()
+                batch.append(int(self._domain_indices[d][pick].item()))
+            pick = torch.multinomial(self._global_weights, 1, replacement=True).item()
+            batch.append(pick)
+            yield batch
+
+    def __len__(self):
+        return self.num_batches
+
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+use_strict = cfg.stratified_sampler == "strict" and not cfg.debug
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+elif use_strict:
+    num_batches = (len(train_ds) + cfg.batch_size - 1) // cfg.batch_size
+    batch_sampler = StratifiedBatchSampler(
+        domain_ids, sample_weights, cfg.batch_size, num_batches,
+    )
+    train_loader = DataLoader(train_ds, batch_sampler=batch_sampler, **loader_kwargs)
+    print(
+        f"[sampler] strict stratified: batch=[single, rc, cruise, weighted], "
+        f"{num_batches} batches/epoch, domain_loss_weights={domain_weights_tensor.tolist()}"
+    )
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
@@ -605,10 +691,17 @@ for epoch in range(MAX_EPOCHS):
             sample_w = sample_w / sample_w.mean()
         sw = sample_w[:, None, None]
 
+        # Per-sample SURFACE-loss multiplier from --domain_loss_weights, indexed
+        # positionally in strict mode where batch slots are fixed (0=single,
+        # 1=rc, 2=cruise, 3=re_rand). In off-mode the multiplier tensor is all
+        # ones (no-op).
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (sq_err * sw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (surf_node_loss * sw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (
+            (surf_node_loss * sw * surf_domain_w[:B, None, None] * surf_mask.unsqueeze(-1)).sum()
+            / surf_mask.sum().clamp(min=1)
+        )
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
