@@ -2,6 +2,70 @@
 
 ---
 
+## 2026-05-13 11:30 — PR #2120: Deeper weight_decay sweep {7e-4, 1e-3, 2e-3}
+
+- **Branch:** `willowpai2g48h4-fern/wd-deeper` (CLOSED — WD=5e-4 is sharp peak)
+- **Student:** willowpai2g48h4-fern
+- **W&B run:** `rdpj0afc` (WD=7e-4 arm only; arms 2-3 correctly halted by branching rule)
+
+### Results
+
+| Metric | Baseline #2031 (WD=5e-4) | Arm 1 (WD=7e-4) | Δ |
+|--------|------------------------|----------------|---|
+| `val_avg/mae_surf_p` | 93.6198 | 111.2633 | **+18.85% regression** |
+| `test_avg/mae_surf_p` | 83.8825 | 99.1562 | +18.22% regression |
+| `val_single_in_dist` | 109.615 | 127.540 | +16.4% |
+| `val_geom_camber_rc` | 118.046 | 144.471 | +22.4% |
+| `val_geom_camber_cruise` | 61.066 | 74.502 | +22.0% |
+| `val_re_rand` | 85.753 | 98.540 | +14.9% |
+| Best epoch | 14 (descending) | 14 (descending) | same |
+
+### Analysis
+
+The hypothesis was "monotone gain at 5× WD says deeper is better." The data sharply falsified this: +40% (5e-4→7e-4) crashed all 4 splits uniformly. WD=5e-4 is a **sharp peak**, not a plateau or inflection. There is no OOD geometry gain to offset the in-distribution loss.
+
+### Trajectory diagnostic (high-signal)
+
+| Epoch | Baseline 5e-4 | Arm1 7e-4 | Δ |
+|-------|--------------|----------|---|
+| 4 | 155.84 | 135.09 | −13.3% (arm1 briefly leads — early-overfit damping) |
+| 6 | 125.11 | 132.12 | +5.6% (baseline pulls ahead, never gives lead back) |
+| 9 | 111.07 | **152.09** | +36.9% (arm1 spike — equivalent magnitude to baseline e12, 3 epochs earlier) |
+| 12 | **152.99** | 146.34 | (baseline spike) |
+| 14 | **93.62** | 111.26 | +18.8% (baseline e14 breakthrough −13%; arm1 only −3% in same epoch) |
+
+Two key trajectory patterns:
+1. **Spike location depends on WD**: baseline has e12 spike; arm1 has spikes at BOTH e9 (new) AND e12. Higher WD makes optimization MORE unstable, not less.
+2. **e14 breakthrough is LR-schedule driven**: both runs have the same "final-epoch jump" shape but the absolute magnitudes differ (baseline 108→94 = −13%; arm1 114→111 = −3%). The e14 breakthrough is load-bearing for the merge result.
+
+### Weight-norm logging diagnostic (NEW — highest-signal output)
+
+| Step | Encoder norm | Surf_head norm |
+|------|-------------|----------------|
+| 49 | 41.01 | 7.79 |
+| 1352 | 42.97 | 17.04 |
+| 2656 | 43.94 | 21.35 |
+| 3959 | 44.79 | 24.44 |
+| 5262 | 45.56 | 26.91 |
+
+Even at WD=7e-4, encoder norm GROWS +11% over training; surf_head norm grows 3.5×. **WD is not actually shrinking parameters — it is just damping the rate of growth.** This reframes the regularization regime: the optimum WD is the one that damps growth enough to prevent overfitting WITHOUT slowing the productive directions (e.g., the e14 breakthrough).
+
+This is a high-signal diagnostic that should be preserved in ALL future WD experiments. See assignment #2153 (fern wd-bracket).
+
+### Key insight
+
+WD operates as a "growth-rate damper" on the implicit-bias trajectory of AdamW, not as a "shrink-to-zero" force. Combined with the e14 breakthrough as the load-bearing event for merge, the regularization curve has a sharp optimum at 5e-4 because that's exactly the rate that lets the model overfit the early-training noise but still descend at e14.
+
+### Student-suggested follow-ups
+
+1. **Finer WD sweep in (5e-4, 7e-4): 5.5e-4, 6e-4, 6.5e-4** — implemented as #2153 (fern wd-bracket), extended with 4e-4 to bracket below the peak.
+2. **Asymmetric WD: encoder=5e-4, head=1e-4** — already in flight as #2122 (edward decoupled-wd). The weight_norm data motivates this directly.
+3. **LR-tweak instead of WD-tweak** — overlaps with #2123 (askeladd cosine T_max).
+4. **Don't retroactively log weight_norm on existing baseline; do log on every new WD run** — applied to #2153.
+5. **Spike investigation at e9/e12: add per-batch loss logging on spike epochs** — defer; the spikes are now known to be steady-state, not pathological.
+
+---
+
 ## 2026-05-13 10:30 — PR #2031: Weight decay re-tune 1e-4 → 5e-4 **[WINNER — NEW BASELINE]**
 
 - **Branch:** `willowpai2g48h4-fern/weight-decay-sweep` (MERGED)

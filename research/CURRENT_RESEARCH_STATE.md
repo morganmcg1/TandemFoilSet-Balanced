@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 30)
+- **As of:** 2026-05-13 (updated cycle 31)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -37,7 +37,8 @@
 |---|---------|------|--------|-------|
 | 2013 | tanjiro | logcosh-surface-loss | WIP | C²-smooth logcosh vs Huber δ kink; arms scale={1.0, 0.5}; stacks on #2031 baseline |
 | 2091 | frieren | torch-compile | WIP | torch.compile mode ∈ {default, reduce-overhead}; throughput unlock → 18+ epochs in 30 min |
-| 2120 | fern | wd-deeper | WIP (NEW) | WD sweep {7e-4, 1e-3, 2e-3}: exploit #2031's winning trajectory |
+| 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
+| 2153 | fern | wd-bracket | WIP (NEW) | Finer WD sweep {4e-4, 5.5e-4, 6e-4} — brackets the peak on both sides; preserves weight_norm logging |
 | 2122 | edward | decoupled-wd | WIP (NEW) | Per-group WD: encoder vs surf_head (10× LR → 10× effective shrinkage at coupled WD) |
 | 2123 | askeladd | cosine-tmax | WIP (NEW) | T_max sweep {15, 20, 25}: T_max=50 wastes 72% of cosine cycle at 14-ep wall-clock cap |
 | 2124 | alphonse | surf-only-pw | WIP (NEW) | Surface-only pressure weight {0.5, 1.5}: NO mean-normalisation (avoids #1496 bug) |
@@ -78,7 +79,8 @@
 23. **Wider surf_head** — **rejected** (PR #2057, +5.36% val). hidden_dim=128 regressed vs 64. Encoder is the capacity bottleneck, not the head.
 24. **Per-group surf_head gradient clipping** — **rejected** (PR #2058, +10.39% val). sh_grad_norm is 0.77× encoder norm — gradient is NOT the problem. The update magnitude spike is m/√v driven, not ‖g‖ driven. Wrong mechanism.
 25. **LogCosh surface loss** — testing (#2013 tanjiro, WIP). C²-smooth alternative to Huber kink.
-26. **Deeper WD sweep {7e-4, 1e-3, 2e-3}** — testing (#2120 fern, NEW). Exploits #2031's win trajectory; checks if 5e-4 is a local optimum or inflection.
+26. **Deeper WD sweep {7e-4, 1e-3, 2e-3}** — **rejected** (PR #2120, +18.85% val at 7e-4). Branching rule correctly halted Arms 2-3. **WD=5e-4 is a SHARP peak**, not a plateau — confirmed by uniform regression across all 4 splits and an attenuated e14 breakthrough.
+26a. **WD bracket sweep {4e-4, 5.5e-4, 6e-4}** — testing (#2153 fern, NEW). Brackets the peak symmetrically; weight_norm logging preserved as primary diagnostic.
 27. **Decoupled weight_decay per param group** — testing (#2122 edward, NEW). surf_head at 10× LR sees 10× effective WD shrinkage; decoupling may unlock further gains.
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
 29. **Surface-only pressure weight {0.5, 1.5}** — testing (#2124 alphonse, NEW). Sub-unit weight on surface pressure only, NO mean-normalisation (corrects #1496's bug).
@@ -134,6 +136,7 @@
 - #1974 (encoder LR retune) — 5.42% regression, LR=5e-4 confirmed optimal
 - #1922 (per-channel Huber delta) — 5.61% regression, global δ=0.5 is correct
 - #1496 (pressure-channel emphasis) — 20.04% regression, mean-normalisation bug
+- #2120 (deeper WD 7e-4) — 18.85% val / 18.22% test regression, WD=5e-4 is sharp peak not plateau
 
 ## Potential next directions (after cycle 30 in-flight)
 
