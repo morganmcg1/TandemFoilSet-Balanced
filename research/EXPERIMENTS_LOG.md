@@ -427,3 +427,24 @@ Per-test-split (L=6):
 
 **Key insight:** Aux head improved on the pre-Fourier base (val=118.88 vs ~123 pre-Fourier), confirming the mechanism works. It's specifically Fourier's input-feature improvement that makes the aux head redundant. The `return_hidden=True` pattern in train.py is a useful implementation pattern for future auxiliary-task hypotheses.
 
+
+## 2026-05-13 03:10 — PR #1748 CLOSED: EMA-0.99 + Dropout=0.2 compound regresses (edward)
+
+- **Branch:** `willowpai2g24h5-edward/ema-dropout-compound`
+- **Hypothesis:** EMA-0.99 (trajectory smoothing) and Dropout=0.2 (feature decorrelation) are orthogonal regularisers; the full Fourier+Huber+Dropout(0.2)+EMA stack should beat the merged EMA-with-dropout=0.1 baseline.
+
+| Run | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
+|-----|--------|---------------------|----------------------|-------|
+| **Baseline (merged PR #1607)** | EMA-0.99 + dropout=0.1 | **77.054** | **68.265** | Reference |
+| `fv69guww` (Arm 1 seed 1) | EMA-0.99 + dropout=0.2 | 78.869 | 69.880 | +2.4% / +2.4% (worse) |
+| `yzgt1otg` (Arm 1 seed 2) | EMA-0.99 + dropout=0.2 | 80.139 | 69.241 | +4.0% / +1.4% (worse) |
+
+- Mean Arm 1 val ≈ 79.5 (vs baseline 77.05), inter-seed spread ≈ 1.3 pts. Clearly outside noise.
+- Every val split regresses, including easy `geom_camber_cruise` (+4.0%) — not a hard-tail-only effect.
+- Best epoch=16 in both seeds (still descending at cap), same as baseline; not an under-training artefact.
+
+**Result:** CLOSED. EMA-0.99 + dropout=0.2 over-regularises on the EMA base. Mechanism: main-model val is slightly better with dr=0.2 (96.1 vs ~100), but the EMA trajectory averages a less-faithful approximation when dropout adds stochastic noise. EMA already provides strong implicit regularisation, so the dr=0.1→0.2 step (which won on the *non-EMA* base in PR #1367) is past the sweet spot once EMA is in place.
+
+**Key insight:** The merged EMA baseline (PR #1607, val=77.05, test=68.27, dropout=0.1) is the load-bearing reference — it IS the true compound. We do NOT need to revisit dropout=0.2 + EMA combinations. Dropout=0.15 on EMA base is worth testing later (interpolation between 0.1 and 0.2). The PR #1367 dropout=0.2 win was on a pre-EMA base with regularisation headroom that EMA now fills.
+
+**Reassigned:** edward → EMA decay sweep on compound (0.995, 0.999 vs merged 0.99).
