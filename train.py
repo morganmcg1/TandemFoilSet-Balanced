@@ -310,6 +310,8 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    live_val_avg_surf_p: float | None = None,
+    live_split_metrics: dict | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -320,23 +322,30 @@ def write_experiment_summary(
         "model_config": model_config,
         "checkpoint": str(model_path),
         "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_ema_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "ema_beta": EMA_BETA,
     }
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
-            summary[f"best_val/{split_name}/{k}"] = v
+            summary[f"best_ema_val/{split_name}/{k}"] = v
+    if live_val_avg_surf_p is not None:
+        summary["live_val_avg/mae_surf_p"] = live_val_avg_surf_p
+        if live_split_metrics is not None:
+            for split_name, m in live_split_metrics.items():
+                for k, v in m.items():
+                    summary[f"live_val/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
-        summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
+        summary["ema_test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
-                    summary[f"test/{split_name}/{k}"] = v
+                    summary[f"ema_test/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -428,6 +437,14 @@ torch_compile_mode = "default"
 torch_compile_dynamic = True
 print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
 model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
+
+# EMA of model weights — per-epoch validation runs on the EMA model only, to keep
+# the protocol baseline-aligned in wall-clock (one val pass per epoch). The live
+# model is val'd once after training for reference. See PR #1917.
+EMA_BETA = 0.999
+with torch.no_grad():
+    ema_params = {k: v.detach().clone() for k, v in model.state_dict().items()}
+print(f"EMA initialized: beta={EMA_BETA}, {len(ema_params)} tensors")
 
 optimizer = SOAP(
     model.parameters(),
@@ -531,6 +548,11 @@ for epoch in range(MAX_EPOCHS):
         scaler.step(optimizer)
         scaler.update()
 
+        # EMA update of model weights (after each optimizer step).
+        with torch.no_grad():
+            for k, v in model.state_dict().items():
+                ema_params[k].mul_(EMA_BETA).add_(v, alpha=1.0 - EMA_BETA)
+
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
@@ -542,26 +564,34 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate on EMA model only (one val pass per epoch, matches baseline wall-clock). ---
     model.eval()
-    split_metrics = {
+    # Stash live weights, swap in EMA, val on EMA, then restore live weights.
+    with torch.no_grad():
+        live_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    model.load_state_dict(ema_params)
+    ema_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
     dt = time.time() - t0
 
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
+    if ema_avg_surf_p < best_avg_surf_p:
+        best_avg_surf_p = ema_avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+            "per_split": ema_split_metrics,
         }
+        # Save EMA weights (model currently holds EMA state).
         torch.save(model.state_dict(), model_path)
         tag = " *"
+
+    # Restore live weights so the next epoch trains from the live state.
+    model.load_state_dict(live_state)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
@@ -586,25 +616,49 @@ for epoch in range(MAX_EPOCHS):
         "train/huber_l2_frac": epoch_l2_frac,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2",
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
+        "ema_beta": EMA_BETA,
+        "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+        "ema_val_splits": ema_split_metrics,
         "is_best": tag == " *",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"ema_val_avg_surf_p={ema_avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(name, ema_split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# --- One-shot live-model val for reference (model currently holds live weights). ---
+live_val_avg_surf_p = None
+live_split_metrics = None
+if best_metrics:
+    print("\nRunning one-shot live-model val (reference)...")
+    model.eval()
+    t_live = time.time()
+    live_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_val_avg_surf_p = live_val_avg["avg/mae_surf_p"]
+    print(f"  live val_avg/mae_surf_p = {live_val_avg_surf_p:.4f} (in {time.time()-t_live:.0f}s)")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, live_split_metrics[name])
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "live_val_final",
+        "epoch": best_metrics["epoch"],
+        "val_avg/mae_surf_p": live_val_avg_surf_p,
+        "val_splits": live_split_metrics,
+    })
+
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val: epoch {best_metrics['epoch']}, ema_val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -612,7 +666,7 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (best EMA checkpoint)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -623,14 +677,14 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  EMA TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
-            "test_avg": test_avg,
-            "test_splits": test_metrics,
+            "ema_test_avg": test_avg,
+            "ema_test_splits": test_metrics,
         })
 
     write_experiment_summary(
@@ -643,6 +697,8 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        live_val_avg_surf_p=live_val_avg_surf_p,
+        live_split_metrics=live_split_metrics,
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
