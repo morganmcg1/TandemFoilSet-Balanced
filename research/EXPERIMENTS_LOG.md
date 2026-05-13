@@ -168,6 +168,36 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 04:30 — PR #1822: Domain over-sampling 2×/3× racecar_single (askeladd) — **CLOSED (P9: per-domain sampling is gradient zero-sum)**
+**Branch:** `charliepai2g24h3-askeladd/domain-oversample-racecar-single` | **Status: CLOSED**
+
+- **Hypothesis:** Over-sample racecar_single domain 2× (Arm A) / 3× (Arm B) via WeightedRandomSampler to direct more gradient at val_single_in_dist (the bottleneck split). Orthogonal to focal weighting (#1709) — changes WHICH samples appear per batch rather than within-batch loss weights.
+- **Pass criterion FAIL on both arms:**
+
+| Arm | val_avg | test_avg (safe) | Δ vs #1745 val | Δ vs #1745 test |
+|---|---:|---:|---:|---:|
+| Baseline (#1745) | **91.507** | **85.611** | — | — |
+| A (2×) | 96.794 | 91.026 | +5.29 | +5.41 |
+| B (3×) | 98.001 | 93.368 | +6.49 | +7.76 |
+
+- **The bottleneck mechanism DID work — partially.** Arm B val_single_in_dist **99.55** (−10.5 vs #1745's 110.04) and test_single_in_dist **89.33** (−6.93) — the **largest improvements ever seen on this split** in this research track.
+- **Off-domain regression dominates net val_avg:**
+
+| Split | #1745 val | Arm A val (Δ) | Arm B val (Δ) |
+|---|---:|---:|---:|
+| val_single_in_dist (target) | 110.04 | 106.80 (**−3.24**) ✅ | 99.55 (**−10.49**) ✅ |
+| val_geom_camber_rc | 100.44 | 109.39 (+8.95) ❌ | 115.81 (+15.37) ❌ |
+| val_geom_camber_cruise | 71.16 | 77.91 (+6.75) ❌ | 79.96 (+8.80) ❌ |
+| val_re_rand | 84.38 | 93.08 (+8.70) ❌ | 96.69 (+12.31) ❌ |
+
+- **Sampler verified working** via diagnostic: empirical per-domain fractions match expected (Arm A 0.500/0.250/0.250; Arm B 0.600/0.200/0.200). No diagnostic-level bug.
+- **Mechanism (student's analysis, accepted):** Sampler displacement is zero-sum at the gradient level for fixed total training steps. Shifting more samples to one domain starves the others by exactly that amount. The 3 non-target domains each lose >5.8 pts of test MAE — no free generalization lunch from this manipulation alone.
+- **New universal principle (P9):** **Per-domain SAMPLING-level oversampling is zero-sum at the gradient level for fixed compute.** Boosting one domain's exposure linearly trades against others' generalization. The mechanism (gradient share for racecar_single) IS active — single_in_dist improvement is monotone in factor — but off-domain regression is larger than in-domain gain at every factor tested. This rules out the entire family of "reweight-the-data-distribution" approaches as a STANDALONE fix for a single bottleneck split. Compatible with P3 (focal-weight failure): both are data-level rebalancing under fixed compute. P9 generalizes P3 to *deterministic* per-domain rebalancing.
+- **Follow-up assignment:** askeladd → #1912 per-domain LOSS weighting (in-batch, λ ∈ {0.3, 1.0}). Tests whether the off-domain regression was sampler-specific (sample-exclusion failure mode) or gradient-share-fundamental (P9 generalization). If λ=1.0 ALSO regresses off-domain at matched gradient share, P9 extends from sampling to loss weighting — and the bottleneck needs an architecture/representation fix instead.
+- **Artifacts:** `models/model-charliepai2g24h3-askeladd-racecar-single-oversample-{2x,3x}-20260513-*/{metrics.jsonl,test_safe_eval.json}`
+
+---
+
 ### 2026-05-13 04:00 — PR #1827: surf_weight=30/50 sweep on #1745 stack (thorfinn) — **CLOSED (curriculum axis past optimum at sw=20)**
 **Branch:** `charliepai2g24h3-thorfinn/surf-weight-sweep-30-50` | **Status: CLOSED**
 

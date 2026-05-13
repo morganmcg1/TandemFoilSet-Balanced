@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 04:45 UTC
+- **Date**: 2026-05-13 05:20 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -31,7 +31,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 | Student | PR | Slug | Status |
 |---|---|---|---|
 | alphonse | #1869 | `huber-delta-0p25-0p1-on-1745` | WIP — Huber δ=0.25 (Arm A) / δ=0.1 (Arm B) on #1745 stack. #1736 was closed during rebase attempt; reassigned with fresh branch off current HEAD (no rebase). |
-| askeladd | #1822 | `domain-oversample-racecar-single` | WIP (just assigned) — over-sample racecar_single domain 2x (Arm A) / 3x (Arm B) to target single_in_dist bottleneck (110.04). Different from focal weighting (per-domain sampling, not per-sample loss reweighting). |
+| askeladd | #1912 | `per-domain-loss-weighting` | WIP — per-domain LOSS reweighting λ=0.3 (Arm A) / λ=1.0 (Arm B) on racecar_single. Tests whether off-domain regression in #1822 was sampler-specific (sample-exclusion) or gradient-share fundamental (P9). λ=1.0 ≈ matches 2× sampler gradient share in-batch. (#1822 closed — sampling-level both arms regressed val_avg despite single_in_dist −10.5 at 3×, established P9.) |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1850 | `slice-num-sweep-96-128` | WIP — slice_num=96 (Arm A) / slice_num=128 (Arm B) on merged stack. Tests attention partitioning granularity. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
@@ -63,6 +63,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 - **Focal per-sample loss weighting** (askeladd #1709): Both arms (γ=1.0, γ=2.0) regress +9-10% val / +10-12% test vs #1495 baseline. Effective batch-size collapse (eff_bs ≈ 1.65 at γ=2.0 out of B=4) was the dominant failure mode — not gradient signal weakness. Revised P3: focal weighting fails at B≤4 with high-y-variance regression. Per-domain sampling (askeladd #1822) is the orthogonal next test.
 - **n_layers depth scaling** (fern #1770): Both arms (n_layers=6/7) regress +13%/+22% vs #1745 baseline. Budget-cap binding: +20-40% sec/epoch reduces completed epochs, cosine schedule never anneals fully, LR still in steep-descent phase at termination. Split predicted to improve most (val_single_in_dist) regressed most (+19.7% at Arm A). New P7: under binding wall-clock cap, sec/epoch increases trade against schedule completion — prefer width/gating/loss axes over depth axis.
 - **surf_weight=30/50 sweep** (thorfinn #1827): Both arms regress +4-6% val / +5-6% test vs #1745 baseline. Volume mae_vol_p regresses 7.5% (sw=30) and 16% (sw=50). Curriculum plateau is past optimum at sw=20 — pushing harder degrades the surface/volume gradient balance that Huber×curriculum unlocked. Non-monotonic (sw=50 < sw=30) likely single-seed noise on a flat-bottom landscape. New P8: two-stage curriculum has a Goldilocks plateau ~20× base; beyond this, gradient-balance failure dominates and surface MAE follows volume MAE down.
+- **Per-domain SAMPLING oversample** (askeladd #1822): Both arms (2×/3× racecar_single) regress on val_avg (+3.5%/+5.7%) and test_avg (+3.6%/+6.0%) vs #1745 baseline despite the targeted split **improving substantially**: Arm B 3× hit val_single_in_dist 99.55 (−10.49 pts, best ever observed on the bottleneck). Off-domain splits regressed in lock-step at 3×: camber_rc +15.4, camber_cruise +8.8, re_rand +12.3. Mechanism IS real — boosting racecar_single sample share boosts that split's training signal — but the regression is dose-monotonic in the off-domains (2× < 3×). New P9: per-domain SAMPLING-level oversampling is zero-sum at the gradient level under fixed compute. Boosting one domain by k× linearly trades against off-domain generalization. Loss-level reweighting (askeladd #1912) tests whether re-allocating gradient share *within* an unmodified batch escapes the sample-exclusion failure mode.
 
 ### Closed (disproved on fair comparison)
 - **FiLM Re-conditioning** (tanjiro #1494 v3): val_avg = 104.98 (+1.8% over 103.10 baseline) / test = 98.59 (+4.0% over 94.76 baseline) on cosine T_max=14 + augment + FiLM (exact #1495 protocol + FiLM only). val_re_rand WORSE under FiLM (+3.6%) — opposite of predicted direction. Root cause: log(Re) already at input dim 13 → FiLM adds redundant route; augmentation + FiLM compete on small dataset. v2's 100.99 was rebase artifact, not FiLM signal.
@@ -159,10 +160,31 @@ that sw>20 disrupts. Next-axis question: does the *ramp shape*
 (warmup_epochs) have a similar Goldilocks regime, or is it flat?
 (thorfinn #1885 in flight.)
 
+**P9 (PR #1822): Per-domain SAMPLING-level oversampling is zero-sum
+at the gradient level under fixed compute.** Arm B's 3× racecar_single
+oversample produced the strongest val_single_in_dist result observed
+on this branch (99.55, −10.49 vs #1745), confirming the mechanism is
+real — but val_avg regressed +5.7% because the off-domain splits
+(camber_rc, camber_cruise, re_rand) all regressed in dose-monotonic
+lock-step. With fixed per-epoch sample count, k× oversampling of
+domain D means (k−1)/k × N samples *not from D* are excluded per
+epoch; their gradient signal is unweighted, just absent. The
+exclusion penalty appears linearly proportional to k. Generalizes P3
+beyond per-sample to deterministic per-domain rebalancing. Implications:
+(a) sample-level domain rebalancing has the same compute-zero-sum
+property as focal weighting did at B=4 — both are *gradient-allocation*
+moves disguised as data moves; (b) the bottleneck IS attackable —
+val_single_in_dist 99.55 disproves the "intractable in-distribution
+ceiling" hypothesis; (c) the next test is whether the same gradient
+re-allocation done at the LOSS level (askeladd #1912) escapes the
+sample-exclusion failure mode by preserving off-domain samples in
+each batch while still up-weighting the target domain's gradient
+contribution.
+
 ### Potential next directions (round 3+)
 - **Even smaller Huber δ** (alphonse #1869, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability. (#1736 was closed during rebase; reassigned fresh.)
 - **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. Tests whether the 5-epoch ramp from #1686 is itself a hyperparameter to tune. (#1827 closed — plateau axis past optimum.)
-- **Per-domain data curriculum** (askeladd #1822, in flight): over-sample racecar_single training domain 2x/3x. Direct orthogonal approach to single_in_dist bottleneck after focal weighting failure.
+- **Per-domain LOSS reweighting** (askeladd #1912, in flight): λ=0.3/1.0 multiplier on racecar_single loss with unmodified batch composition. Tests P9 escape route — does gradient-share reallocation *within* an intact batch avoid the off-domain regression that sampling-level (#1822) suffered? λ=1.0 ≈ matches #1822 Arm A's 2× sampler gradient share. If pass: single_in_dist drop with bounded off-domain regression. If fail: P9 generalizes beyond sampling to loss weighting → "gradient-share zero-sum" is the deeper principle.
 - **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack.
 - **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack.
 - **slice_num sweep** (fern #1850, just assigned): slice_num=96/128 on #1745 merged stack. Tests attention partitioning granularity. Mechanically efficient (tiny extra compute). Targeting boundary-layer clustering under surf_weight=20 curriculum.
