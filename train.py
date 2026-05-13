@@ -487,7 +487,41 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+class Lion(torch.optim.Optimizer):
+    """Evolved Sign Momentum optimizer (Chen et al. NeurIPS 2023, arxiv:2302.06675)."""
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+                state = self.state[p]
+                if len(state) == 0:
+                    state['exp_avg'] = torch.zeros_like(p)
+                exp_avg = state['exp_avg']
+                beta1, beta2 = group['betas']
+                update = exp_avg * beta1 + grad * (1 - beta1)
+                p.mul_(1 - group['lr'] * group['weight_decay'])
+                p.add_(update.sign_(), alpha=-group['lr'])
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+        return loss
+
+
+# H26: Lion (sign-momentum) optimizer. lr ~5x smaller, wd ~3x larger than AdamW recipe.
+# cfg.lr / cfg.weight_decay remain in cfg for downstream logging only.
+lion_lr = 1e-4
+lion_wd = 3e-4
+lion_betas = (0.9, 0.99)
+optimizer = Lion(model.parameters(), lr=lion_lr, betas=lion_betas, weight_decay=lion_wd)
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -502,6 +536,10 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(
     schedulers=[warmup_scheduler, cosine_scheduler],
     milestones=[batches_per_epoch],
 )
+print(
+    f"Optimizer: Lion lr={lion_lr:.2e} betas={lion_betas} wd={lion_wd:.2e} "
+    f"(cfg.lr={cfg.lr}, cfg.weight_decay={cfg.weight_decay} retained for logging only)"
+)
 print(f"LR schedule: linear warmup over {batches_per_epoch} batches (1 epoch), then cosine T_max={14 * batches_per_epoch} batches (14 epochs)")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -510,14 +548,27 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+optimizer_config = {
+    "name": "Lion",
+    "lr": lion_lr,
+    "betas": list(lion_betas),
+    "weight_decay": lion_wd,
+    "scheduler": "SequentialLR(LinearLR_warmup_1ep + CosineAnnealingLR_14ep)",
+    "scheduler_warmup_iters": batches_per_epoch,
+    "scheduler_cosine_T_max_iters": 14 * batches_per_epoch,
+    "scheduler_batches_per_epoch": batches_per_epoch,
+    "grad_clip_max_norm": 25.0,
+}
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
         "model_config": model_config,
+        "optimizer_config": optimizer_config,
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
+append_metrics_jsonl(metrics_jsonl_path, {"event": "config", "optimizer_config": optimizer_config})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
