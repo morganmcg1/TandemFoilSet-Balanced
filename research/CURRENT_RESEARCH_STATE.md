@@ -91,18 +91,18 @@
 | frieren | #2274 | weight_decay=0 on n_layers=3+epochs=30 (test if compact model needs reg) | n_layers=3 |
 | edward | #2278 | **mlp_ratio=6 on n_layers=3+epochs=28** (mechanism transfer from PR #2185) | n_layers=3 |
 | nezuko | #2279 | **surf_weight=3 on n_layers=3+epochs=27** (fill sw curve at compact stack) | n_layers=3 |
-| fern | #2245 | surf_weight=5 on n_layers=3+epochs=27 (vol-gradient mechanism) | n_layers=3 |
+| fern | #2301 | **lr=1.5e-4 on n_layers=3+epochs=30** (retest LR axis at compact stack) | n_layers=3 |
 | askeladd | #2248 | surf_weight=2 on n_layers=3+epochs=27 (bracket vol-gradient axis below) | n_layers=3 |
 | alphonse | #2229 | slice_num=24 on n_layers=3+epochs=33 (per-epoch speedup) | n_layers=3 |
 | thorfinn | #2151 | slice_num=24 on n_layers=4 (legacy stack) | n_layers=4 |
 
 **Round summary:** 7/8 students on the n_layers=3 stack. The vol-gradient axis (surf_weight) is being thoroughly bracketed at compact stack: sw=2 (askeladd), sw=3 (nezuko), sw=5 (fern), sw=10 (baseline). Combined with mlp_ratio=6 mechanism transfer, warmup schedule test, WD floor test, and slice_num=24 speedup — covers most orthogonal axes simultaneously.
 
-**Closed this turn:** #2214 (nezuko sw=5 on n_layers=4, val=39.693 +3.7% lose vs new baseline but confirms vol-gradient mechanism); #2185 (edward mlp_ratio=6 on n_layers=4, val=41.496 +8.4% lose vs new baseline but confirms mlp_ratio mechanism — both mechanisms reassigned to n_layers=3 stack via PRs #2278/#2279).
+**Closed this turn:** #2214 (nezuko sw=5 on n_layers=4, val=39.693 +3.7% lose); #2185 (edward mlp_ratio=6 on n_layers=4, val=41.496 +8.4% lose); #2245 (fern sw=5 on n_layers=3, val=39.254 +2.57% lose — vol-gradient mechanism does NOT transfer to compact stack). sw axis at compact stack now fully bracketed: sw=2/3/5/10 all tested or in-flight.
 
 ## Confirmed mechanisms (orthogonal to compact stack)
 
-**PR #2214 (sw=5 on n_layers=4):** Per-split mae_vol_p improved on every split (−7.9 to −14.9%). Test surface −3.42%. Surface MAE rises slightly because per-split val gradient mass on surface drops 2× — but vol-gradient mechanism is real and transfers. → **fern #2245 (sw=5) and nezuko #2279 (sw=3) will exercise this mechanism at compact stack.**
+**PR #2214 (sw=5 on n_layers=4):** Per-split mae_vol_p improved on every split (−7.9 to −14.9%). But **PR #2245 (fern sw=5 on n_layers=3) shows this does NOT produce net surface improvements at compact depth** — all splits regressed vs current baseline. Vol-gradient mechanism is depth-sensitive; sw=10 remains optimal at n_layers=3. → nezuko #2279 (sw=3) testing whether more aggressive gradient reallocation changes the picture.
 
 **PR #2185 (mlp_ratio=6 on n_layers=4):** Every split improved on test, test gain −4.12% > val gain. Still descending at best_epoch=22/22. → **edward #2278 testing this on n_layers=3+epochs=28; projected val ~37.1 if additive.**
 
@@ -127,7 +127,8 @@
 
 ## Dead ends
 
-- **LR axis fully saturated at 1e-4**: lr=1.5e-4 neutral on n_layers=4+slice_num=32, lr=8e-5 regressed +12.4% vs new baseline
+- **Vol-gradient mechanism (surf_weight<10) at n_layers=3**: sw=5 regressed +2.57% vs baseline (PR #2245); mechanism is depth-sensitive and does not compound at compact stack. sw=2/sw=3 still in flight (askeladd #2248 / nezuko #2279).
+- **LR axis fully saturated at 1e-4** on n_layers=4: lr=1.5e-4 neutral on n_layers=4+slice_num=32, lr=8e-5 regressed +12.4% vs old baseline. **Retesting lr=1.5e-4 at n_layers=3** (fern #2301 in flight).
 - **surf_weight=15**: neutral on n_layers=4 — sw=10 near optimum in high direction
 - **n_head=8**: +43% per-epoch, +15.7% worse
 - **n_layers=7**: +4.6% (epoch budget dominates; 160s/epoch too slow)

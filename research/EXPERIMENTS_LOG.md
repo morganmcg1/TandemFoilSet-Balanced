@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~16:00 — PR #2245 — CLOSED (vol-gradient sw=5 does NOT transfer to compact stack)
+
+**fern: surf_weight=5 on n_layers=3+slice_num=32+epochs=27**
+- val_avg/mae_surf_p: **39.254** (vs baseline 38.270 → **+2.57% WORSE**)
+- test_avg/mae_surf_p: **33.197** (vs baseline 32.470 → **+2.24% WORSE**)
+
+| Split | val sw=5 | val baseline (PR #2228) | Δ |
+|---|---|---|---|
+| single_in_dist | 41.527 | 40.481 | +2.58% |
+| geom_camber_rc | 53.713 | 52.042 | +3.21% |
+| geom_camber_cruise | 21.489 | 20.785 | +3.39% |
+| re_rand | 40.288 | 39.772 | +1.30% |
+| **avg** | **39.254** | **38.270** | **+2.57%** |
+
+**Analysis:** Fern compared against the OLD baseline PR #2107 (epochs=27, val=39.143) where it looked neutral (+0.28% val) with a bimodal pattern (cruise/re_rand improved, single/camber_rc worsened). Against the CURRENT baseline PR #2228 (epochs=30, val=38.270), ALL splits regress. The 3-epoch budget difference (27 vs 30) accounts for the discrepancy — the apparent "neutral" was misleading.
+
+The vol-gradient mechanism confirmed active on n_layers=4 (PR #2214 saw mae_vol_p improve −7.9% to −14.9%) but **does NOT produce net surface improvements at n_layers=3**. At compact depth, the vol→surface feedback pathway is either weaker or the 3 fewer epochs vs the baseline compound to dominate. The mechanism is depth-sensitive.
+
+**Implication:** sw axis at n_layers=3 is well-bracketed (askeladd sw=2, nezuko sw=3, fern sw=5, baseline sw=10) — all running or closed. The sw optimum at compact stack appears to be sw=10 (baseline). Fern reassigned to LR axis test: PR #2301 (lr=1.5e-4).
+
+**Metric artifacts:** `models/model-surf-weight-5-nlayers3-slicenum32-20260513-120536/metrics.jsonl`
+
+---
+
 ## 2026-05-13 ~15:25 — PRs #2214, #2185 — CLOSED (lose vs new baseline but confirm orthogonal mechanisms)
 
 Both PRs were originally targeted at the OLD n_layers=4 baseline (40.158/34.904); both win comfortably against that old stack but lose against the new n_layers=3 baseline (38.270/32.470). The depth-reduction advantage from PR #2107/#2228 is the dominant gain.
