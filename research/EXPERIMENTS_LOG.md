@@ -7,6 +7,49 @@ SPDX-License-Identifier: Apache-2.0
 
 Lower is better for `val_avg/mae_surf_p` and `test_avg/mae_surf_p`.
 
+## 2026-05-13 06:35 — PR #1440: Enable bfloat16 mixed precision (AMP + EMA) — MERGED (WINNER)
+
+- Student branch: `willowpai2g24h3-nezuko/amp-bf16`
+- Hypothesis: `torch.autocast("cuda", dtype=torch.bfloat16)` for forward + loss reduces per-epoch wall-clock ~25-30%, giving ~35% more gradient steps within the 30-min budget. AMP and EMA are orthogonal — AMP changes per-step precision, EMA averages the parameter trajectory.
+
+### Results
+
+| arm | run | epochs (30-min cap) | s/epoch | peak VRAM | val_avg | test_avg | Δ vs merged 91.66/81.28 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Baseline (EMA, no AMP, advisor `emqh79b0`) | `emqh79b0` | ~14 | ~131 | ~42 GB | 91.6553 | 81.2845 | baseline |
+| AMP only (no EMA, supplementary) | `rn1gkw8h` | 19 | 98.4 | 32.9 GB | 86.0296 | 74.2780 | −6.2% val |
+| **AMP + EMA (merge candidate)** | `30wvu5r0` | 19 | 97.8 | 32.9 GB | **77.3716** | **68.2053** | **−15.6% val / −16.1% test** |
+
+W&B group: `willow-r3-amp-bf16` in `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r3`.
+
+### Per-split breakdown (AMP+EMA `30wvu5r0` vs baseline `emqh79b0`)
+
+| split | baseline val | AMP+EMA val | Δ | baseline test | AMP+EMA test | Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 108.52 | **90.76** | −16.4% | 98.53 | **79.88** | −18.9% |
+| geom_camber_rc | 104.81 | **90.73** | −13.4% | 89.74 | **81.08** | −9.7% |
+| geom_camber_cruise | 68.50 | **54.88** | −19.9% | 57.58 | **45.88** | −20.3% |
+| re_rand | 84.78 | **73.12** | −13.7% | 79.30 | **65.99** | −16.8% |
+| **avg** | **91.66** | **77.37** | **−15.6%** | **81.28** | **68.21** | **−16.1%** |
+
+### EMA decomposition at same step (best-val epoch 19)
+
+| evaluation branch | test_avg/mae_surf_p |
+|---|---:|
+| EMA weights (saved ckpt, primary) | **68.21** |
+| Raw weights at same step (`test_no_ema/*`) | 71.39 |
+| AMP-only arm (different ckpt, no EMA training, `rn1gkw8h`) | 74.28 |
+
+EMA on top of AMP adds ≈ −4.5% (variance-reduction-at-eval) + ≈ −3.7% (better-epoch-selection via smoother val curve) = ≈ −8% from EMA alone, fully consistent with the EMA mechanism from PR #1437.
+
+### Analysis and conclusions
+
+1. **AMP + EMA compose cleanly.** AMP changes the per-step precision pipeline (forward + loss in bf16, master weights fp32 inside AdamW). EMA averages the parameter trajectory outside the autocast context (fp32 EMA buffers). No numerical interaction. EMA overhead invisible at AMP speed (97.8 vs 98.4 s/epoch).
+2. **Mechanism is throughput → more cooling.** With T_max=50 cosine schedule and ~14 baseline epochs (no AMP), only ~28% of the annealing budget is used. AMP pushes to ~19 epochs, still only 38% — but the extra 5 epochs correspond to additional LR cool-down where the optimizer makes more conservative, higher-quality steps. Val curve was **strictly monotonic** through epoch 19 (no plateau), meaning the 30-min cap fires while training is still actively improving.
+3. **Cruise NaN bug fully resolved.** `test_geom_camber_cruise/mae_surf_p = 45.88` (finite). The per-sample `isfinite(y)` filter from PR #1615 handles this cleanly.
+4. **Key open question**: val curve still descending monotonically at epoch 19 with T_max=50 → only 38% of cosine schedule spent. The implicit next hypothesis is matching T_max to the AMP epoch budget (~20 epochs) so cosine LR fully anneals within 30 min.
+5. **New reproduce baseline**: `cd target && python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp`
+
 ## 2026-05-13 06:08 — PR #1800: Truncated L1 (zero-gradient cliff at τ) — CLOSED
 
 - Student branch: `willowpai2g24h3-tanjiro/truncated-l1`
