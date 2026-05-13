@@ -346,3 +346,44 @@ All 4 test splits were finite (PR #1527 NaN guard working).
 **Potentially valuable follow-ups flagged by tanjiro (not assigned here):**
 - Pre-compute frozen p-variance sample weights over the full corpus (makes the implicit curriculum explicit)
 - EMA per-channel variance (cuts within-batch-of-4 noise)
+
+---
+
+## 2026-05-13 00:07 — PR #1499: Grad-clip + higher LR on Huber baseline (CLOSED — val regressed)
+
+- **Branch:** `willowpai2g48h4-fern/gradient-clipping-and-higher-lr`
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `8p20jj30` (clip=1.0), `624phqjd` (clip=10.0)
+- **Hypothesis:** Adding gradient clipping + higher LR (1e-3 vs 5e-4) stacks on top of the Huber baseline.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p (4-split) |
+|-----|-------------------|-----------|-------------------------------|
+| clip=1.0, lr=1e-3 | 99.6393 | +1.50% ❌ | 90.07 |
+| clip=10.0, lr=1e-3 | **99.5928** | +1.45% ❌ | **87.37** |
+| Baseline (PR #1558) | 98.1642 | — | NaN (3-split: 98.75) |
+
+Per-split val (best arm, clip=10.0):
+
+| Split | val mae_surf_p | vs baseline |
+|-------|---------------|------------|
+| `val_single_in_dist` | 122.75 | 123.14 → −0.3% |
+| `val_geom_camber_rc` | 117.04 | 107.24 → **+9.1% ❌** |
+| `val_geom_camber_cruise` | 66.68 | 73.28 → −9.0% ✓ |
+| `val_re_rand` | 91.91 | 88.99 → +3.3% |
+| **val_avg** | **99.5928** | **+1.45%** |
+
+### Analysis and Conclusions
+
+**Closed — val regressed.** Neither arm beats 98.16. The main driver is `val_geom_camber_rc` regression (+9.1%).
+
+**Key discovery — Huber compresses grad norms by 5×:** Raw pre-clip gradient norms with Huber active have median ~7 and max ~96, vs median ~31 and max ~720 in the pre-Huber run. Huber is doing exactly its job — capping per-node gradient magnitude in the L1 regime. This makes `clip=1.0` still too aggressive (100% of steps clipped — uniform renormaliser). `clip=10.0` correctly clips only the right tail (~27% of steps).
+
+**But clip doesn't stack:** Huber already removes within-sample per-node gradient outliers. Adding batch-level clipping is redundant — both are attacking the same source of gradient noise. Not orthogonal like BIVW+surf-head+Huber were.
+
+**Test divergence noted:** Test 3-split comparison (fair): (108.12+100.75+84.04)/3 = 97.64 vs baseline 98.75 = **−1.1% improvement**. This marginal test improvement while val regresses is not enough to override the val decision.
+
+**For future clip experiments:** if composing clip with Huber, use `grad_clip=10.0` (not 1.0). And note that the benefit case is weak — both are targeting the same gradient noise source.
+
+**Gotcha documented:** PR #1558 left dataclass `huber_delta: float = 1.0` but winning baseline used `--huber_delta 0.5`. All rebased PRs must pass explicit `--huber_delta 0.5`.

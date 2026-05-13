@@ -37,14 +37,14 @@
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 1496 | alphonse | pressure-channel-prioritized-loss | WIP (stale) | Baseline updated to 98.16; recovering from rate-limit |
-| 1497 | askeladd | warmup-cosine-lr | WIP (stale) | Baseline updated to 98.16; rebasing onto Huber |
-| 1498 | edward | wider-mlp-ratio (2 to 4) | WIP (stale) | Baseline updated to 98.16; rebasing |
-| 1499 | fern | gradient-clipping-and-higher-lr | WIP (rebase) | Baseline updated to 98.16; add grad_clip=10.0 arm |
-| 1501 | nezuko | more-slices (64 to 128) | WIP | Baseline updated to 98.16; rebasing |
-| 1572 | frieren | bf16-mixed-precision | WIP | BF16 arms running |
-| 1627 | thorfinn | huber-delta-sweep | WIP | delta=0.2 and 0.3 arms; running |
-| 1650 | tanjiro | huber-on-volume-loss | WIP | NEW: vol_huber_delta ∈ {0.3, 0.5, 1.0} |
+| 1496 | alphonse | pressure-channel-prioritized-loss | WIP | Huber default correction sent; use --huber_delta 0.5 |
+| 1497 | askeladd | warmup-cosine-lr | WIP | Huber default correction sent |
+| 1498 | edward | wider-mlp-ratio (2 to 4) | WIP | Huber default correction sent |
+| 1501 | nezuko | more-slices (64 to 128) | WIP | Confirmed huber_delta=0.5 explicit; running |
+| 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
+| 1627 | thorfinn | huber-delta-sweep | WIP | delta=0.2 and 0.3 arms; no results yet |
+| 1650 | tanjiro | huber-on-volume-loss | WIP | vol_huber_delta ∈ {0.3, 0.5, 1.0}; no results yet |
+| 1720 | fern | surf-weight-tuning-on-huber | WIP (NEW) | surf_weight ∈ {5, 15, 30} on Huber baseline |
 
 ## Working hypotheses
 
@@ -52,19 +52,21 @@
 2. **BIVW + surf-head** — confirmed (PR #1528, −5.4% additional).
 3. **Huber surface loss delta=0.5** — confirmed (PR #1558, **−17.7%**). The largest gain yet.
 4. **Per-channel BIVW** — **rejected** (PR #1580, +29.6% regression). Scalar BIVW's p-dominated coupling is beneficial — do not break it.
-5. **Smaller Huber delta** — testing (PR #1627). surf_l1_frac high at delta=0.5; smaller delta may push more into L1 regime.
-6. **Huber on volume loss** — testing (PR #1650). Orthogonal extension of surface Huber; volume MSE has same outlier-amplification problem.
-7. **Grad-clip + higher LR** — rebasing on new 98.16 baseline (#1499).
-8. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
-9. **Capacity (MLP width, slices)** — still WIP (#1498, #1501); rebasing onto Huber base.
-10. **Warmup schedule** — WIP (#1497); rebasing onto Huber base.
-11. **Pressure-channel emphasis** — WIP (#1496); rebasing onto Huber base.
+5. **Grad-clip + higher LR on Huber base** — **rejected** (PR #1499, +1.45% regression). Huber already compresses grad norms 5×; clip is redundant. Key signal: grad norms now median 7 (not 31), max 96 (not 720). clip=10 is the right threshold if ever composing.
+6. **Smaller Huber delta** — testing (PR #1627). delta=0.2 and 0.3 arms running.
+7. **Huber on volume loss** — testing (PR #1650). vol_huber_delta ∈ {0.3, 0.5, 1.0} running.
+8. **surf_weight tuning on Huber baseline** — testing (PR #1720 fern). surf_weight ∈ {5, 15, 30}. Huber L1 reduces surface loss magnitude → optimal weight may have shifted upward.
+9. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
+10. **Capacity (MLP width, slices)** — WIP (#1498, #1501); on Huber base with explicit huber_delta=0.5.
+11. **Warmup schedule** — WIP (#1497); on Huber base.
+12. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
 
 ## Closed / rejected hypotheses
 
 - **PR #1503** (standalone surf-head, no BIVW) — 6.2% worse.
 - **PR #1500** (n_hidden=256 at FP32) — budget failure; BF16 unlock in progress (#1572).
 - **PR #1580** (per-channel BIVW) — 29.6% regression. Scalar BIVW implicitly p-dominated; decoupling removed the Re-curriculum.
+- **PR #1499** (grad-clip + higher LR on Huber base) — 1.45% val regression. Huber already compresses grad norms; clip is redundant. Test marginal (3-split: −1.1%). Closed.
 
 ## Potential next directions
 
