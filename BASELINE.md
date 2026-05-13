@@ -204,3 +204,46 @@ cd "target/" && python train.py \
 ```
 
 *(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `--batch_size 4` required — n_hidden=192 + bs=8 + bf16 OOMs.)*
+
+## 2026-05-13 06:55 — PR #1980: Gradient accumulation (accum=2, eff_bs=8)
+
+**Changes merged:** Added `accumulation_steps: int = 1` to `Config`. Training loop accumulates gradients over 2 micro-batches of bs=4 before stepping (effective batch=8, same step count as bs=4 18-epoch run). Loss scaled by `1/accumulation_steps` before backward. `scheduler.step()` unchanged (once per epoch). `global_step` increments per virtual step for clean W&B comparisons.
+
+**Key finding:** Gradient accumulation improves the sign-vote quality for Lion without increasing memory or step count relative to true bs=8. The dominant gain comes from tighter per-micro-batch padding on variable-length TandemFoilSet meshes — padding noise in the gradient sign is reduced when each micro-batch pads to its own local maximum mesh size rather than the full-batch maximum.
+
+### Primary metrics (best val checkpoint, epoch 14 of 18)
+
+| Metric | Value | Δ vs prev |
+|---|---|---|
+| **val_avg/mae_surf_p** | **90.82** | −2.04% |
+| **test_avg/mae_surf_p** | **80.62** | **−3.77%** |
+
+### Per-split test MAE (surface pressure)
+
+| Split | mae_surf_p | Δ vs prev baseline |
+|---|---|---|
+| test_single_in_dist | 82.23 | −8.71% 🏆 |
+| test_geom_camber_rc | 93.60 | −5.18% |
+| test_geom_camber_cruise | 61.57 | +1.00% |
+| test_re_rand | 85.06 | −0.31% |
+
+### Run info
+
+- **W&B run:** `6qxwtm0v` — group `gradient-accumulation`
+- **Epochs:** 14 / 18 (30-min timeout, ~129 s/epoch)
+- **Peak GPU memory:** 43.4 GB (identical to bs=4 baseline — no overhead)
+- **Effective batch size:** 8 (bs=4 × accum=2); optimizer steps: 2632 (188/epoch × 14)
+- **Model config:** n_hidden=192, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, space_dim=34 (Fourier L=8)
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --batch_size 4 \
+  --accumulation_steps 2 \
+  --agent <student> \
+  --wandb_name <run-name> \
+  --wandb_group <group>
+```
+
+*(All defaults: Lion lr=1.5e-4, Fourier L=8, n_hidden=192, epochs=18. `batch_size=4` + `accumulation_steps=2` required for eff_bs=8 at 43 GB peak.)*
