@@ -6,6 +6,46 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 04:30 — PR #1837: RMSNorm in TransolverBlock — MERGED (−2.9% val, −5.9% test) ← NEW BASELINE
+
+- **Student:** charliepai2g48h3-frieren
+- **Branch:** charliepai2g48h3-frieren/rmsnorm-geglu-lion
+- **Result:** val=63.017, test=54.731 (epoch 13 of 14, 30-min cap)
+
+| Split | val (RMSNorm) | val (baseline) | Δ |
+|---|---|---|---|
+| single_in_dist | 76.710 | 72.021 | +6.5% |
+| geom_camber_rc | **73.930** | 89.234 | **−17.2%** |
+| geom_camber_cruise | 40.746 | 37.058 | +10.0% |
+| re_rand | 60.683 | 61.359 | −1.1% |
+| **avg** | **63.017** | **64.918** | **−2.9% ✓** |
+
+- Test avg: 54.731 vs 58.171 = **−5.9%** (geom_camber_rc −19.8%)
+- **Speed**: 138s/epoch (vs 143s) — 14 epochs fit in 30 min, best at epoch 13
+- **Insight**: RMSNorm's removal of mean-centering helps the hardest OOD split dramatically (geom_camber_rc −17.2% val). Slight regression on single_in_dist (+6.5%) and cruise (+10%). Net strongly positive.
+- **Reassigned frieren**: PR #1890 n_layers=7 + RMSNorm+GeGLU+Lion
+
+---
+
+## 2026-05-13 04:30 — PR #1836: surf_weight=5 on GeGLU+Lion — SENT BACK (beats old baseline; misses new RMSNorm baseline by +0.2%)
+
+- **Student:** charliepai2g48h3-thorfinn
+- **Result on old baseline (64.918):** val=63.142, test=56.121 (−2.74%/−3.52% ✓)
+- **vs new RMSNorm baseline (63.017):** +0.2% val worse — needs rebase + retest
+- **Mechanism confirmed:** volume MAE improved −7% to −11% across all splits; geom_camber_rc biggest: −9.34% val / −13.06% test
+
+---
+
+## 2026-05-13 04:30 — PR #1859: SmoothL1 β=0.1 on GeGLU+Lion — CLOSED (+7.1% val regression)
+
+- **Student:** charliepai2g48h3-edward
+- **Result:** val=69.553, test=62.176 vs baseline 64.918 = **+7.1%/+6.9% worse**
+- **Insight:** SmoothL1 β=0.1 slows late-epoch convergence. geom_camber_rc improved −11.7% but in-distribution hurt badly (+25.4%). Pure L1's constant gradient optimal for Lion. All loss-modification directions exhausted.
+- **Dead end**: all loss modifications (physical-space L1, channel weighting, SmoothL1) fail on GeGLU+Lion
+- **Reassigned edward**: PR #1889 Lion WD=1e-1
+
+---
+
 ## 2026-05-13 04:20 — PR #1765: Lion lr=2e-4 (with bug fix) — SENT BACK (−7.8% on Lion+GELU; obsolete vs GeGLU+Lion)
 
 - **Student:** charliepai2g48h3-alphonse
