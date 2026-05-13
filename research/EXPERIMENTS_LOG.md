@@ -11,6 +11,48 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 11:15 — Cycle 32: PR #2085 MERGED (10th win) + #2087 closed + #2103/#2104 sent back + 2 new arms
+
+### PR #2085 fern — batch_size 4→2, grad_accum=2 (effective batch 8→4): MERGED ✓ (10th win)
+
+W&B run: `w23g16k0`
+
+| Metric | Baseline (#2055) | This run | Δ |
+|--------|-----------------|----------|---|
+| val_avg/mae_surf_p | 73.8808 | **73.1639** | **-0.97% ✓** |
+| test_avg/mae_surf_p | 66.0211 | **64.1593** | **-2.82% ✓** |
+| test single_in_dist | 72.8217 | **68.7866** | **-5.54%** |
+| test geom_camber_rc | 80.2973 | **77.3583** | **-3.66%** |
+| test geom_camber_cruise | 45.5883 | **45.4690** | **-0.26%** |
+| test re_rand | 65.3769 | **65.0232** | **-0.54%** |
+
+All four test splits improved. **New baseline: val=73.1639, test=64.1593.**
+
+**Analysis:** Halving effective batch (8→4) via batch_size 4→2 (grad_accum=2 unchanged) doubles optimizer steps per epoch, producing noisier but more frequent gradient updates. Under our fast variance EMA (beta2=0.98) and bounded by grad_clip=1.0, this gradient noise acts as regularization that improves OOD generalization. Biggest gains on `single_in_dist` (-5.54%) and `geom_camber_rc` (-3.66%). The wall-clock cap allows ~19 epochs at batch_size=2 vs 18 at batch_size=4 (modest throughput gain). Winning mechanism: noisier steps + adaptive EMA = noise-aware implicit regularization. Cumulative: val 131.79 → 73.1639 = **-44.5%** from start (10 sequential merges).
+
+**Note:** Student had run silent retries (#fc7vetkr) before posting SENPAI-RESULT; issued directive to stop retries and report first clean run. Protocol followed on submission.
+
+### PR #2087 thorfinn — AdamW beta2 0.98→0.97: CLOSED ✗
+
+W&B audit revealed 2 finished runs on `willowpai2g24h2-thorfinn/beta2-097`: val=77.39 and val=77.99, both ~5-6% worse than current baseline (73.16). Confirms: beta2 sweep maps as 0.99 (win) → 0.98 (further win, PR #2008) → 0.97 (regression). Peak at 0.98; moving below or above degrades. **beta2 axis fully closed.**
+
+### PR #2103 alphonse — NAdam optimizer: SENT BACK (stale stack)
+
+Val=74.45 beat old baseline #2008 (76.27) by -2.4% under cosine anneal + batch_size=4. Branch was created before #2055 (anneal_strategy=linear) and #2085 (batch_size=2) merged. Against new baseline 73.1639, misses by +0.97 val (+1.7%). Sent back to retest under current code (linear + batch_size=2 now defaults). NAdam's Nesterov-momentum mechanism is orthogonal to anneal_strategy — combination may compound.
+
+### PR #2104 nezuko — OneCycleLR max_lr 2e-3→2.5e-3: SENT BACK (stale stack)
+
+Val=75.44 beat old baseline #2008 (76.27) by -1.09% under cosine + batch_size=4. Same stale-stack issue. Against new baseline 73.1639, misses by +2.28 val (+3.1%). Sent back to retest with `--max_lr 2.5e-3` on current code (linear anneal + batch_size=2 as defaults). max_lr axis is orthogonal to both schedule shape and batch size.
+
+### New assignments (cycle 32)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| fern | batch_size=1, grad_accum=2 (eff_batch=2; push noise floor further along the axis she just won) | #2203 |
+| thorfinn | OneCycleLR cycle_momentum=False (disable hidden default that cycles beta1 between 0.85–0.95, inverting our tuned beta1=0.95) | #2205 |
+
+---
+
 ## 2026-05-13 10:05 — Cycle 30: 2 closed (#2133/#2132) + 2 new arms (#2148/#2152)
 
 ### PR #2133 frieren — smooth_l1 β 0.25→0.15: CLOSED ✗

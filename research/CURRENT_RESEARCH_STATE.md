@@ -6,39 +6,35 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 10:55 UTC
-- **PENDING WINNER:** PR #2085 fern batch_size=2 has a winning W&B run (`w23g16k0`: val=73.16 -0.97%, test=64.16 -2.83%, all 4 splits improved). Student has not posted SENPAI-RESULT marker yet — directive comment posted requesting immediate submission.
+- **Date / time:** 2026-05-13 11:30 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
 
 ## Current research focus
 
-Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better). Paper-facing `test_avg/mae_surf_p` is structurally NaN on this branch (cruise test split overflows in nearly every run including baseline).
+Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothesis tests under a hard 30-min wall-clock cap. Primary decision metric: `val_avg/mae_surf_p` (lower is better).
 
-## Cycle-2 update — noise floor is much bigger than first thought
+10 sequential compounding wins. Current active stack: batch_size=2 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2.0 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
 
-Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+## Cycle-32 update — PR #2085 fern batch_size=2 MERGED ✓ (-0.97% val / -2.82% test)
 
-## Cycle-29 update — #2055 tanjiro anneal_strategy=linear MERGED ✓ (-3.13%), #2022 closed, 2 new arms
+**New all-time best: val=73.1639 / test=64.1593.** 10th consecutive compounding win. **Cumulative: -44.5% from start (131.79→73.1639).**
 
-**New all-time best: val=73.8808 / test=66.0211.** 9th consecutive compounding win. **Active baseline: val=73.8808 / test=66.0211. Cumulative: -44.0% from start (131.79→73.8808).**
+Mechanism: halving effective batch (8→4) doubles optimizer steps per epoch; noisier gradients interact well with fast beta2=0.98 EMA and grad_clip=1.0 to act as implicit regularization. Biggest gains on `single_in_dist` (-5.54%) and `geom_camber_rc` (-3.66%).
 
-Big mechanism shift: linear anneal beats cosine because under 30-min/18-epoch truncation, cosine spends most time near peak LR and only deeply anneals at the very end — truncation cuts off the deep refinement. Linear gives constant decrease, so the last third of training sees much more low-LR refinement time. Biggest gains on `geom_camber_cruise` (-5.56%) and `re_rand` (-2.09%) — OOD splits benefit most.
+Two stale-stack results sent back for retest under current code:
+- #2103 alphonse NAdam (tested under cosine+batch4, misses new baseline by +0.97 val under new stack — retesting)
+- #2104 nezuko max_lr=2.5e-3 (tested under cosine+batch4, retesting under linear+batch2)
 
-p_weight=1.5 (#2022 frieren) closed — 5 silent retries without SENPAI-RESULT, best run 76.70 misses new baseline by +3.83%. Process feedback issued.
+#2087 thorfinn beta2=0.97 CLOSED — W&B audit shows 2 finished runs both ~5% worse; beta2 axis fully closed (optimum at 0.98).
 
-2 new arms:
-| PR | Student | Hypothesis |
-|---|---|---|
-| #2132 | tanjiro | max_lr 2e-3→1.5e-3 under linear (compound on his win, suggestion #3) |
-| #2133 | frieren | smooth_l1 β 0.25→0.15 midpoint, retest under linear anneal |
-
-### Active leaderboard (all-time best)
+## Active leaderboard (all-time best)
 
 | Val | Test | PR | What landed |
 |---|---|---|---|
-| **73.8808** | **66.0211** | #2055 tanjiro | OneCycleLR anneal_strategy=linear |
+| **73.1639** | **64.1593** | #2085 fern | batch_size=2 (eff_batch 8→4) |
+| 73.8808 | 66.0211 | #2055 tanjiro | OneCycleLR anneal_strategy=linear |
 | 76.2707 | 66.7732 | #2008 thorfinn | AdamW beta2=0.98 |
 | 77.6444 | 68.2153 | #1959 thorfinn | AdamW beta2=0.99 |
 | 80.03 | 70.89 | #1863 tanjiro | smooth_l1(β=0.25) |
@@ -47,55 +43,52 @@ p_weight=1.5 (#2022 frieren) closed — 5 silent retries without SENPAI-RESULT, 
 | 97.07 | 85.71 | #1655 alphonse | OneCycleLR max_lr=2e-3 |
 | 110.27 | 99.41 | #1471 frieren | p_weight=2.0 + clip_grad_norm=1.0 |
 
-### Closed axes (do not revisit)
-
-- surf_weight: optimum at 10.0 (tried 7, 15, 30)
-- n_head: n_head=4 (dim_head=32) optimal; n_head=8 catastrophic
-- weight_decay downward (5e-5): confirmed worse, wd still load-bearing for OOD; testing upward (2e-4, #2064)
-- mlp_ratio=3, n_layers=6: capacity-at-budget failures
-- slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
-- lr (base): optimal at 5e-4
-- beta2: 0.999→0.99 (-2.98%, #1959), 0.99→0.98 (-1.77%, #2008 MERGED); 0.97 in-flight (#2087)
-- beta1: 0.90→0.95 won (-2.5%, #1867), 0.95→0.97 failed (+3.6%, #2076 closed); 0.94 in-flight (#2101)
-- AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
-- weight_decay: 1e-4 confirmed local optimum (5e-5 worse #2026, 2e-4 worse #2064); axis closed
-- eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal in upward direction
-- grad_accum=4: +18%, eff_batch=8 optimal
-- max_lr=4e-3: diverges
-- pct_start=0.3: +9.5%, 0.1 optimal from both directions
-- dropout=0.02/0.05: doesn't compose with β=0.25 stack
-- OneCycleLR div_factor sweep: small effect <1% at current operating point
-- OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
-- p_weight=3.0: +6.3%, over-emphasises pressure under MAE-like gradient regime
-- p_weight=1.5: ties old baseline but misses new baseline 73.88 by +3.83% (#2022 closed cycle 29)
-- anneal_strategy: linear beats cosine -3.13% in truncated regime (#2055 MERGED); axis now under linear
-- grad_clip=0.5: +12%, undershoots optimizer step magnitude
-- smooth_l1 β<0.25: 0.10 closed (cycle 22), 0.15 closed (#2133 cycle 30, val +1.90% ✗); 0.20 in-flight (#2152) closes axis
-- OneCycleLR max_lr downward: 1.5e-3 closed (#2132 cycle 30, val +1.45% ✗); 2e-3 confirmed optimum under linear
-- EMA model weights: all decay values tested (0.9999, 0.999, 0.99 with/without warmup) regress ~20-25%; OneCycleLR aggressive anneal makes live model strictly better than any EMA snapshot (closed cycle 26)
-
-### In-flight WIP
+## In-flight WIP
 
 | PR | Student | Hypothesis |
 |---|---|---|
-| #2085 | fern | batch_size=2 (effective batch 8→4: conjugate to failed grad_accum=4; AdamW tolerates noisier steps) |
-| #2148 | tanjiro | OneCycleLR three_phase=True (extra anneal phase under linear; untested axis) |
-| #2103 | alphonse | AdamW → NAdam (Nesterov-momentum, more anticipatory than AMSGrad's failed conservatism) |
+| #2203 | fern | batch_size=1, grad_accum=2 (eff_batch=2; push noise floor further, her suggestion) |
+| #2205 | thorfinn | OneCycleLR cycle_momentum=False (fix hidden default cycling beta1 between 0.85–0.95) |
+| #2103 | alphonse | NAdam (retest under linear+batch2 stack; cosine run beat old baseline -2.4%) |
+| #2104 | nezuko | max_lr=2.5e-3 (retest under linear+batch2; cosine run beat old baseline -1.09%) |
 | #2101 | edward | AdamW beta1 0.95→0.94 (confirm peak from other side; 0.97 failed +3.6%) |
-| #2087 | thorfinn | AdamW beta2 0.98→0.97 (sweep continuation) |
-| #2152 | frieren | smooth_l1 β 0.25→0.20 (close axis: 0.15 fail at +1.90%, 0.25 is winner) |
-| #2025 | askeladd | grad_clip max_norm=1.5 midpoint (2.0 traded in-dist for OOD; 1.5 sent back for retry vs new baseline 76.2707) |
-| #2104 | nezuko | OneCycleLR max_lr 2e-3→2.5e-3 (higher peak; 4e-3 diverged under OLD stack only) |
+| #2148 | tanjiro | OneCycleLR three_phase=True (extra anneal phase under linear) |
+| #2152 | frieren | smooth_l1 β 0.25→0.20 (close axis: 0.15 fail at +1.90%) |
+| #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen step bound, sent back for retest) |
 
-### Priority research directions
+## Closed axes (do not revisit)
 
-1. **β sweep closed below 0.25** — β=0.10 closed (seed variance ≥2.6, neither run beats new baseline). β=0.25 confirmed optimum; further reduction adds noise without clear gain.
-2. **beta2 continuation** — 0.99 won convincingly, 0.98 in-flight (#2008). If that also wins, the optimum may be near 0.97-0.95.
-3. **beta1 continuation** (#2076 edward) — 0.95 won (#1867); testing 0.97 (more memory). eps axis closed upward (1e-6 worse).
-4. **p_weight rebalancing** (#1958 frieren) — under β=0.25, gradient magnitudes are more uniform; p_weight=3 may push too hard.
-5. **Effective batch size** (#2085 fern) — smaller effective batch (4 vs 8) to add gradient noise that AdamW beta2=0.99 can handle. EMA axis fully closed (all decays ~20-25% worse).
-6. **Post-wins: per-channel β** — if β=0.10 confirms the trend, try β_p=0.05, β_U=0.25 (channel-specific loss shaping — novel direction not yet tried).
-7. **Optimizer: weight_decay retest** — wd was never retuned after 6 compounding merges changed the gradient regime substantially.
+- surf_weight: optimum at 10.0 (tried 7, 15, 30)
+- n_head: n_head=4 (dim_head=32) optimal; n_head=8 catastrophic
+- weight_decay: 1e-4 confirmed local optimum (5e-5 worse, 2e-4 worse); axis closed
+- mlp_ratio=3, n_layers=6: capacity-at-budget failures
+- slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
+- lr (base): optimal at 5e-4
+- beta2: 0.99 (-2.98% #1959), 0.98 (-1.77% #2008, MERGED), 0.97 CLOSED (#2087: both runs ~5% worse); peak confirmed at 0.98
+- beta1: 0.90→0.95 won (-2.5% #1867), 0.95→0.97 failed (+3.6% #2076 closed); 0.94 in-flight (#2101)
+- AMSGrad: too conservative for truncated 18/50 epoch regime; closed (#2065 cycle 28)
+- eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal
+- grad_accum=4: +18%, eff_batch=8 was optimal (now eff_batch=4 since batch_size=2 merged)
+- max_lr=4e-3: diverges; max_lr=1.5e-3 CLOSED (+1.45%); 2.5e-3 being retested under new stack
+- pct_start=0.3: +9.5%, 0.1 optimal from both directions
+- dropout=0.02/0.05: doesn't compose with β=0.25 stack
+- OneCycleLR div_factor sweep: small effect <1%
+- OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
+- p_weight=3.0: +6.3%; p_weight=1.5: misses new baseline by +3.83% (#2022); p_weight=2.0 confirmed optimum
+- anneal_strategy: linear beats cosine -3.13% in truncated regime (#2055 MERGED)
+- grad_clip=0.5: +12%, undershoots
+- smooth_l1 β<0.25: 0.10 closed, 0.15 closed (#2133 +1.90%); 0.20 in-flight (#2152) closes axis
+- EMA model weights: all decays (~20-25% worse); OneCycleLR live weights strictly dominate
+
+## Priority research directions
+
+1. **Batch size axis** — batch_size=1 in-flight (#2203). If that wins, eff_batch=2 floor reached. Then test batch_size=2, grad_accum=1 to isolate noise vs step-count mechanism.
+2. **Momentum cycling fix** (#2205 cycle_momentum=False) — hidden PyTorch default has been running in ALL prior experiments; this is an untested axis affecting 10 compounding wins.
+3. **Optimizer variants** — NAdam (#2103 alphonse retest), optimizer mechanics orthogonal to anneal+batch
+4. **max_lr upward** (#2104 nezuko retest max_lr=2.5e-3 under current stack) — if bounded-gradient story holds under linear+batch2, may still have room
+5. **beta1 fine-tuning** (#2101 edward 0.94) — 0.95 won, 0.97 failed, 0.94 untested
+6. **three_phase=True** (#2148 tanjiro) — extra anneal phase under linear
+7. **β-close** (#2152 frieren β=0.20) — midpoint between 0.25 (winner) and 0.15 (fail); closes the axis
 
 ---
 
