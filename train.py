@@ -49,6 +49,51 @@ from data import (
 from soap import SOAP
 
 # ---------------------------------------------------------------------------
+# EMA of model weights (Polyak averaging)
+# ---------------------------------------------------------------------------
+
+
+class ModelEMA:
+    """Step-frequency EMA shadow of model parameters, FP32, on-device.
+
+    Shadow initialized to the live params so there's no early-step bias toward
+    zero (unlike Adam's m_t). At eval time, swap shadow into the model via
+    load_state_dict; this is an in-place .copy_ on existing tensors so
+    torch.compile does not recompile.
+    """
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {
+            k: v.detach().clone().float()
+            for k, v in model.state_dict().items()
+            if v.dtype.is_floating_point
+        }
+
+    @torch.no_grad()
+    def update(self, model):
+        for k, v in model.state_dict().items():
+            if k in self.shadow:
+                self.shadow[k].mul_(self.decay).add_(v.detach().float(), alpha=1.0 - self.decay)
+
+    @torch.no_grad()
+    def apply_and_save_live(self, model):
+        """Swap EMA weights into model; return live state for restore()."""
+        target = model.state_dict()
+        live_state = {k: v.detach().clone() for k, v in target.items()}
+        new_state = {
+            k: (self.shadow[k].to(v.dtype) if k in self.shadow else v)
+            for k, v in target.items()
+        }
+        model.load_state_dict(new_state)
+        return live_state
+
+    @torch.no_grad()
+    def restore(self, model, live_state):
+        model.load_state_dict(live_state)
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -441,6 +486,12 @@ SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
+# EMA of model weights. β=0.999 gives an effective window of ~1000 steps
+# (~2.7 epochs at ~375 steps/epoch). Shadow stored in FP32, on-device.
+EMA_DECAY = 0.999
+ema = ModelEMA(model, decay=EMA_DECAY)
+print(f"EMA: decay={EMA_DECAY}, shadow_params={sum(t.numel() for t in ema.shadow.values())/1e6:.2f}M")
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -456,8 +507,10 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
-best_avg_surf_p = float("inf")
+best_avg_surf_p = float("inf")  # tracks EMA val (primary, used for checkpoint)
 best_metrics: dict = {}
+best_live_avg_surf_p = float("inf")  # tracks live val (diagnostic only)
+best_live_metrics: dict = {}
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -530,6 +583,7 @@ for epoch in range(MAX_EPOCHS):
                 epoch_grad_clipped += 1
         scaler.step(optimizer)
         scaler.update()
+        ema.update(model)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -542,30 +596,57 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate (live weights first, then EMA weights) ---
     model.eval()
-    split_metrics = {
+    live_split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
-    val_avg = aggregate_splits(split_metrics)
-    avg_surf_p = val_avg["avg/mae_surf_p"]
-    dt = time.time() - t0
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_avg_surf_p = live_val_avg["avg/mae_surf_p"]
 
+    # Swap to EMA weights and re-evaluate
+    live_state = ema.apply_and_save_live(model)
+    ema_split_metrics = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    ema_val_avg = aggregate_splits(ema_split_metrics)
+    ema_avg_surf_p = ema_val_avg["avg/mae_surf_p"]
+
+    # Save best EMA checkpoint (model currently has EMA weights loaded)
     tag = ""
-    if avg_surf_p < best_avg_surf_p:
-        best_avg_surf_p = avg_surf_p
+    if ema_avg_surf_p < best_avg_surf_p:
+        best_avg_surf_p = ema_avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
-            "per_split": split_metrics,
+            "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+            "live_val_avg/mae_surf_p": live_avg_surf_p,
+            "per_split": ema_split_metrics,
+            "live_per_split": live_split_metrics,
         }
         torch.save(model.state_dict(), model_path)
         tag = " *"
 
+    # Restore live weights so the next epoch's training uses the actual params
+    ema.restore(model, live_state)
+
+    live_tag = ""
+    if live_avg_surf_p < best_live_avg_surf_p:
+        best_live_avg_surf_p = live_avg_surf_p
+        best_live_metrics = {
+            "epoch": epoch + 1,
+            "val_avg/mae_surf_p": live_avg_surf_p,
+            "per_split": live_split_metrics,
+        }
+        live_tag = " (L*)"
+
+    dt = time.time() - t0
+
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
     grad_clip_frac = epoch_grad_clipped / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
+    ema_live_delta = ema_avg_surf_p - live_avg_surf_p
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -586,25 +667,41 @@ for epoch in range(MAX_EPOCHS):
         "train/huber_l2_frac": epoch_l2_frac,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2",
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
+        "ema_decay": EMA_DECAY,
+        "val_avg/mae_surf_p": live_avg_surf_p,
+        "val_splits": live_split_metrics,
+        "ema_val_avg/mae_surf_p": ema_avg_surf_p,
+        "ema_val_splits": ema_split_metrics,
+        "ema_live_delta": ema_live_delta,
         "is_best": tag == " *",
+        "is_best_live": live_tag != "",
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"live={live_avg_surf_p:.4f}{live_tag}  ema={ema_avg_surf_p:.4f}{tag}  Δ={ema_live_delta:+.3f}"
     )
     for name in VAL_SPLIT_NAMES:
-        print_split_metrics(name, split_metrics[name])
+        print_split_metrics(f"{name} (ema)", ema_split_metrics[name])
 
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
 # --- Test evaluation + local summary ---
+# The saved checkpoint (model_path) holds the EMA weights from the best-EMA epoch.
+# Test eval below runs on those EMA weights → reported as ema_test_avg/mae_surf_p.
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(
+        f"\nBest EMA val: epoch {best_metrics['epoch']}, "
+        f"ema_val_avg/mae_surf_p = {best_avg_surf_p:.4f} "
+        f"(live val at that epoch = {best_metrics['live_val_avg/mae_surf_p']:.4f})"
+    )
+    if best_live_metrics:
+        print(
+            f"Best LIVE val: epoch {best_live_metrics['epoch']}, "
+            f"val_avg/mae_surf_p = {best_live_avg_surf_p:.4f}"
+        )
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
@@ -612,7 +709,7 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating EMA weights on held-out test splits...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -623,13 +720,16 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  TEST (EMA)  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
+            "ema_decay": EMA_DECAY,
+            "checkpoint_weights": "ema",
             "test_avg": test_avg,
+            "ema_test_avg/mae_surf_p": test_avg["avg/mae_surf_p"],
             "test_splits": test_metrics,
         })
 
@@ -645,4 +745,4 @@ if best_metrics:
         model_config=model_config,
     )
 else:
-    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
+    print("\nNo checkpoint was saved (no epoch improved on ema_val_avg/mae_surf_p). Skipping test evaluation.")
