@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 13:15 (MERGED #2063 Lion+β=0.3 → NEW BASELINE val=47.64/test=40.57; assigned #2297 askeladd Lion lr fine-sweep)
+- **Last updated:** 2026-05-13 13:25 (closed #2269 fern ReZero null/regression; assigned #2311 fern hybrid Lion+AdamW-for-Kendall-σ)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -57,7 +57,7 @@
 | #2170 | nezuko | wip (rebase sent) | nfeatures=32 on β=0.3 stack | Same — needs Lion rebase |
 | #2240 | frieren | wip | GC on β=0.3 | Needs rebase to Lion after finishing |
 | #2243 | edward | wip | β=0.2 bracket | Needs rebase to Lion after finishing |
-| #2269 | fern | wip | ReZero γ=1.0 on β=0.3 | Needs rebase to Lion after finishing |
+| **#2311** | **fern** | wip (new) | Hybrid Lion+AdamW-for-σ on Lion stack | Restores Kendall σ differentiation |
 | #2270 | alphonse | wip | max_norm {0.75, 1.0} on β=0.3 | Needs rebase to Lion after finishing |
 | #2285 | tanjiro | wip | EMA weights on β=0.3 | Needs rebase to Lion after finishing |
 

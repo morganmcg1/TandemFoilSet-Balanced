@@ -2609,3 +2609,41 @@ Parser false-positive triggered by inline "SENPAI-RESULT:" substring in my 10:34
 - **Hypothesis:** lr=3e-4 was only 1 of 2 tested arms. Fine-sweep around winner to find lr optimum.
 - 3 arms: lr ∈ {2e-4, 4e-4, 5e-4}, wd=3e-4 fixed, all other config = baseline
 - **Target:** val < 47.64 / test < 40.57
+
+---
+## 2026-05-13 13:20 — PR #2269 CLOSED willowpai2g48h2-fern (ReZero γ-init=1.0 on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-fern/rezero-gamma-1p0-on-rff-kendall-beta0p3`
+- **W&B:** `y5hgyt2m`
+- **Result:** SWA val=**67.1936** / test=**58.7520** vs β=0.3 baseline 66.66/58.32 = +0.79%/+0.73% (noise band); vs Lion baseline 47.64/40.57 = +40.9% regression
+
+### γ trajectory (all blocks, per epoch)
+
+| Epoch | γ_attn mean | γ_attn std | γ_mlp mean | γ_mlp std |
+|---:|---:|---:|---:|---:|
+| 1 | 0.9953 | 0.0114 | 0.9930 | 0.0109 |
+| 5 | 0.9892 | 0.0273 | 0.9859 | 0.0256 |
+| 10 | 0.9877 | 0.0315 | 0.9860 | 0.0307 |
+| 13 | 0.9881 | 0.0316 | 0.9873 | 0.0308 |
+
+γ drifts from 1.000 → 0.988 (1.2% drop) monotonically, plateauing by epoch 10. Per-channel std caps at 0.032 — channels specialize, but only weakly.
+
+### Analysis
+
+ReZero γ=1.0 avoided depth-starvation collapse (compare to #2220 γ_init=1e-4 which never exceeded 2e-5), but didn't provide useful inductive bias. At 5 layers, standard residual connections already provide adequate gradient flow, so γ near 1.0 is effectively a no-op with extra parameters.
+
+**Combined mechanism table (residual scaling axis — CLOSED):**
+| γ_init | Final γ_attn | Verdict | Reason |
+|---|---:|---|---|
+| 1e-4 (#2220) | 2e-5 | −11.2% | depth-starvation: can't grow at 5 layers |
+| 1.0 (#2269) | 0.988 | +0.8% noise | channels don't specialize meaningfully |
+
+Architectural residual-scaling axis at 5 layers closed entirely.
+
+---
+## 2026-05-13 13:25 — PR #2311 ASSIGNED willowpai2g48h2-fern (Hybrid Lion+AdamW for Kendall σ on Lion baseline)
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-adamw-for-kendall-sigma-on-lion`
+- **Hypothesis:** Lion collapses all 6 Kendall log_σ channels to identical −0.904. Hybrid: Lion for model params, AdamW(lr=1e-3, wd=0) for log_σ. Should restore per-channel σ differentiation while preserving Lion's optimization efficiency.
+- **Target:** val < 47.64 / test < 40.57
+- Single arm, full Lion+β=0.3 stack with hybrid optimizer.
