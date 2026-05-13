@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -441,6 +442,96 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Augmentation
+# ---------------------------------------------------------------------------
+
+def apply_rotation_aug(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    mask: torch.Tensor,
+    theta_max: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Random in-plane rotation of the whole scene (train-only).
+
+    Rotates by per-sample θ ∈ [-theta_max, +theta_max] (radians). Identical θ
+    applied to all nodes within a sample (the entire scene rotates rigidly):
+
+      - x[..., 0:2]  (pos): rotates by R(θ).
+      - x[..., 2:4]  (saf, a 2D Cartesian displacement to nearest surface):
+                     rotates by R(θ) since it's in the same Cartesian frame.
+      - y[..., 0:2]  (Ux, Uy/Uz velocity): rotates by R(θ).
+      - x[..., 14]   (AoA foil 1): shifted by −θ (rotating the foil by θ in the
+                     foil-relative frame ↔ changing AoA by −θ since free-stream
+                     comes from +x̂). Only on REAL nodes — padded nodes keep
+                     raw zero so the model's padding distribution is preserved.
+      - x[..., 18]   (AoA foil 2): same shift, but ONLY for tandem samples.
+                     Single-foil samples have foil-2 dims 18..23 all zero by
+                     construction; we keep them zero to avoid introducing a
+                     synthetic "ghost foil-2" placeholder.
+
+    Other features are rotation-invariant: dsdf (scalar distances), is_surface,
+    log(Re), NACA shape codes, gap, stagger, and pressure y[..., 2].
+
+    Args:
+        x: [B, N, 24] raw features (pre-normalization).
+        y: [B, N, 3]  raw targets (pre-normalization).
+        mask: [B, N] bool, True for real nodes.
+        theta_max: max |θ| in radians.
+
+    Returns:
+        (x_new, y_new, theta) — rotated tensors and the per-sample θ [B].
+    """
+    B = x.shape[0]
+    device, dtype = x.device, x.dtype
+
+    theta = (torch.rand(B, device=device, dtype=dtype) * 2 - 1) * theta_max  # [B]
+    c = torch.cos(theta).unsqueeze(-1)  # [B, 1] broadcasts over N
+    s = torch.sin(theta).unsqueeze(-1)
+
+    # Rotate (x, z) coords. Padded coords are 0 → stay 0.
+    cx, cz = x[..., 0], x[..., 1]
+    cx_rot = c * cx - s * cz
+    cz_rot = s * cx + c * cz
+
+    # Rotate saf — 2D Cartesian displacement vector to nearest surface point.
+    # Padded saf are 0 → stay 0.
+    sx, sz = x[..., 2], x[..., 3]
+    sx_rot = c * sx - s * sz
+    sz_rot = s * sx + c * sz
+
+    # Rotate velocity targets (Ux, Uy/Uz). Padded y are 0 → stay 0. Pressure
+    # (y[..., 2]) is scalar-invariant.
+    ux, uz = y[..., 0], y[..., 1]
+    ux_rot = c * ux - s * uz
+    uz_rot = s * ux + c * uz
+
+    # AoA shifts on REAL nodes only — padded nodes keep raw zero so the model's
+    # padded-input distribution (all-zero raw features) is preserved.
+    mask_f = mask.to(dtype)                          # [B, N]
+    theta_e = theta.unsqueeze(-1)                    # [B, 1]
+    aoa1 = x[..., 14] - theta_e * mask_f             # always meaningful
+
+    # Detect tandem samples: single-foil has dims 18..23 (AoA2, NACA2, gap,
+    # stagger) all exactly zero. Anything non-zero ⇒ tandem.
+    is_tandem = (x[:, 0, 18:24].abs().sum(dim=-1) > 0).to(dtype).unsqueeze(-1)  # [B, 1]
+    aoa2 = x[..., 18] - theta_e * mask_f * is_tandem
+
+    x_new = x.clone()
+    x_new[..., 0] = cx_rot
+    x_new[..., 1] = cz_rot
+    x_new[..., 2] = sx_rot
+    x_new[..., 3] = sz_rot
+    x_new[..., 14] = aoa1
+    x_new[..., 18] = aoa2
+
+    y_new = y.clone()
+    y_new[..., 0] = ux_rot
+    y_new[..., 1] = uz_rot
+
+    return x_new, y_new, theta
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -467,6 +558,11 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Random in-plane rotation augmentation (train only). theta drawn uniformly
+    # in [-theta_max, +theta_max] radians per sample per step. theta_max = 2° by
+    # default — a tiny Galilean AOA shift via NSE rotation symmetry.
+    rotation_aug: bool = True
+    rotation_aug_theta_max_deg: float = 2.0
 
 
 cfg = sp.parse(Config)
@@ -646,12 +742,27 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # Rotation augmentation diagnostics (train-only).
+    rot_theta_abs_sum = 0.0
+    rot_theta_abs_max = 0.0
+    rot_theta_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Rotation augmentation (train only). Applied before normalization in
+        # the raw-feature/raw-target frame; the entire scene rotates rigidly by a
+        # per-sample θ ∈ [-θ_max, +θ_max]. AOA shifts by −θ. See apply_rotation_aug.
+        if cfg.rotation_aug:
+            theta_max = math.radians(cfg.rotation_aug_theta_max_deg)
+            x, y, theta = apply_rotation_aug(x, y, mask, theta_max=theta_max)
+            with torch.no_grad():
+                rot_theta_abs_sum += theta.abs().sum().item()
+                rot_theta_abs_max = max(rot_theta_abs_max, theta.abs().max().item())
+                rot_theta_n += theta.shape[0]
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -844,6 +955,10 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "rotation_aug/active": 1.0 if cfg.rotation_aug else 0.0,
+        "rotation_aug/theta_max_deg_config": cfg.rotation_aug_theta_max_deg,
+        "rotation_aug/theta_mean_abs": (rot_theta_abs_sum / max(rot_theta_n, 1)) if cfg.rotation_aug else 0.0,
+        "rotation_aug/theta_max_abs": rot_theta_abs_max if cfg.rotation_aug else 0.0,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -862,6 +977,13 @@ for epoch in range(MAX_EPOCHS):
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
     )
+    if cfg.rotation_aug:
+        rot_mean_deg = math.degrees(rot_theta_abs_sum / max(rot_theta_n, 1))
+        rot_max_deg = math.degrees(rot_theta_abs_max)
+        print(
+            f"    RotationAug  mean|θ|={rot_mean_deg:.3f}°  max|θ|={rot_max_deg:.3f}°  "
+            f"cap={cfg.rotation_aug_theta_max_deg:.2f}°"
+        )
     if epoch_slice_entropy is not None:
         flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
         if flat_ent:
