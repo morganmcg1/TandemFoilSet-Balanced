@@ -420,6 +420,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     t_max: int = 18  # cosine annealing period; usually equals epochs
+    n_layers: int = 5  # number of Transolver blocks
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
@@ -468,7 +469,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=192,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=24,
     mlp_ratio=2,
