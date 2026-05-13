@@ -480,7 +480,88 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+class SAM(torch.optim.Optimizer):
+    """Sharpness-Aware Minimization wrapper around a base optimizer.
+
+    Foret et al. 2021. Two-step update: ascend to worst case within the
+    rho-radius neighborhood, compute the gradient at the perturbed weights,
+    restore the original weights, then apply the base optimizer step with the
+    worst-case gradient.
+
+    Gradient-norm computation runs in fp32 to be safe under bf16 AMP, where
+    small gradient magnitudes can otherwise underflow.
+    """
+
+    def __init__(self, params, base_optimizer_cls, rho=0.05, **kwargs):
+        defaults = dict(rho=rho, **kwargs)
+        super().__init__(params, defaults)
+        self.base_optimizer = base_optimizer_cls(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                # Compute the perturbation in fp32 for bf16 AMP safety, then
+                # cast back to the parameter dtype before storing/applying.
+                e_w_fp32 = p.grad.detach().float() * scale.to(p.grad.device)
+                e_w = e_w_fp32.to(p.dtype)
+                p.add_(e_w)
+                self.state[p]["e_w"] = e_w
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None or "e_w" not in self.state[p]:
+                    continue
+                p.sub_(self.state[p]["e_w"])
+        self.base_optimizer.step()
+        # Mark the SAM optimizer itself as stepped so PyTorch's LRScheduler
+        # warning about "scheduler.step() before optimizer.step()" stays quiet.
+        self._opt_called = True
+        if zero_grad:
+            self.zero_grad()
+
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device
+        norm = torch.norm(
+            torch.stack([
+                p.grad.detach().float().norm(p=2).to(shared_device)
+                for group in self.param_groups for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2,
+        )
+        return norm
+
+    def step(self, closure=None):
+        raise RuntimeError(
+            "SAM requires explicit first_step()/second_step() calls; "
+            "do not call optimizer.step() directly."
+        )
+
+
+optimizer = SAM(
+    model.parameters(),
+    torch.optim.AdamW,
+    rho=0.05,
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+)
+print(
+    f"Optimizer: SAM(rho=0.05) wrapping AdamW(lr={cfg.lr}, wd={cfg.weight_decay}); "
+    f"2x per-step cost; --epochs {cfg.epochs} (T_max={max(cfg.epochs - 3, 1)} ~= actual SAM epochs in 30-min budget); "
+    f"flat-minima search for OOD generalization"
+)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -510,7 +591,27 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
+        "optimizer": "SAM(rho=0.05) wrapping AdamW",
+        "sam_rho": 0.05,
+        "sam_base_optimizer": "AdamW",
     }, f, sort_keys=True)
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "startup",
+    "optimizer": "SAM",
+    "sam_rho": 0.05,
+    "sam_base_optimizer": "AdamW",
+    "sam_per_step_cost_x": 2,
+    "epochs_configured": cfg.epochs,
+    "warmup_epochs": warmup_epochs,
+    "T_max": max(MAX_EPOCHS - warmup_epochs, 1),
+    "lr": cfg.lr,
+    "weight_decay": cfg.weight_decay,
+    "batch_size": cfg.batch_size,
+    "surf_weight": cfg.surf_weight,
+    "n_params": n_params,
+    "model_config": model_config,
+})
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
@@ -532,6 +633,8 @@ for epoch in range(MAX_EPOCHS):
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
 
+        # SAM first pass: forward + backward at current weights.
+        optimizer.zero_grad(set_to_none=True)
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -544,10 +647,22 @@ for epoch in range(MAX_EPOCHS):
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        optimizer.first_step(zero_grad=True)
 
+        # SAM second pass: forward + backward at perturbed weights, then apply
+        # the base optimizer step with the worst-case gradient.
+        with amp_ctx_factory():
+            pred2 = model({"x": x_norm})["preds"]
+            sq_err2 = F.l1_loss(pred2, y_norm, reduction='none')
+            vol_loss2 = (sq_err2 * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss2 = (sq_err2 * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            loss2 = vol_loss2 + cfg.surf_weight * surf_loss2
+
+        loss2.backward()
+        optimizer.second_step(zero_grad=True)
+
+        # Log the first-pass (unperturbed) loss — it reflects the actual model.
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
