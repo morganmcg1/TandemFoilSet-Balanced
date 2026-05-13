@@ -8,6 +8,79 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 — PR #1906: Kendall uncertainty-weighted multi-task loss (learned per-channel σ) on grad-clip+FiLM baseline
+
+- **val_avg/mae_surf_p:** **71.4346** (seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **62.9866** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #1831 (73.81 / 65.04): val **−3.22%**, test **−3.15%** (2.76× the σ=0.86 variance band on val)
+
+### Per-split SWA val (surface MAE, p)
+
+| Split | val (Kendall) | Δ vs #1831 (73.81) |
+|---|---|---|
+| val_single_in_dist | 79.177 | −5.88 vs 85.06 |
+| val_geom_camber_rc | 88.087 | −2.23 vs 90.32 |
+| val_geom_camber_cruise | 49.189 | −0.43 vs 49.62 |
+| val_re_rand | 69.286 | −0.84 vs 70.13 |
+| **swa_val_avg** | **71.435** | **−2.375 vs 73.81** |
+
+### Per-split SWA test (surface MAE, p)
+
+| Split | test (Kendall) | Δ vs #1831 (65.04) |
+|---|---|---|
+| test_single_in_dist | 68.638 | −8.10 vs 76.74 |
+| test_geom_camber_rc | 79.950 | −0.39 vs 80.34 |
+| test_geom_camber_cruise | 41.435 | −0.05 vs 41.49 |
+| test_re_rand | 61.923 | +0.33 vs 61.59 (within noise) |
+| **swa_test_avg** | **62.987** | **−2.05 vs 65.04** |
+
+### Learned σ (final epoch, log_σ; clamp [-3, 3])
+
+| Channel | log_σ | σ | Eff. weight (1/2σ²) |
+|---|---|---|---|
+| surf_p | −1.408 | 0.245 | 8.36 |
+| surf_ux | −1.500 | 0.223 | 10.04 |
+| surf_uy | −1.486 | 0.226 | 9.77 |
+| vol_p | −1.433 | 0.239 | 8.78 |
+| vol_ux | −1.438 | 0.238 | 8.86 |
+| vol_uy | −1.440 | 0.237 | 8.91 |
+
+Max/min weight spread: **1.20×** (nearly uniform with slight Ux/Uy emphasis — consistent with #1821 residual-ratio diagnosis). No clamp saturation; no collapse.
+
+### Config
+
+- Same as PR #1831 except **Kendall uncertainty heads replace fixed `surf_weight=10`** (6 learnable log_σ params, one per (domain, channel))
+- Total loss = `sum_c (1/(2σ_c²) * L_c + log_σ_c)` over 6 (domain, channel) heads
+- Architecture: Transolver + FiLM (mid_dim=64) — unchanged
+- Loss: Smooth-L1 (Huber β=1.0) — unchanged shape
+- Optimizer: AdamW lr=5e-4, weight_decay=1e-4 — unchanged
+- Gradient clipping: `max_norm=0.5` — unchanged
+- Scheduler: CosineAnnealingLR(T_max=15) — unchanged
+- Batch size: 4
+- Per-sample Re-weight (`1/log_re_shifted`, normalized) — unchanged
+- SWA: swa_start_frac=0.75, swa_lr=1e-4, anneal_epochs=2 — unchanged
+- Epochs: 15
+- W&B run: `dkfjae5o`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --max_norm 0.5 \
+  --use_kendall_uncertainty \
+  --seed 0 \
+  --agent willowpai2g48h2-askeladd \
+  --wandb_name willowpai2g48h2-askeladd/kendall-uncertainty \
+  --wandb_group kendall-uncertainty
+```
+
+### Mechanism finding
+
+The learned-σ axis **succeeded where fixed per-channel weighting failed** (#1702 p-up, #1821 uxuy-up both closed). The Kendall heads autonomously discover a near-uniform per-channel weighting that beats fixed `surf_weight=10` AND avoids the constant-budget redistribution trap. Confirms **principled task-uncertainty estimation is the correct lever** on the per-channel-weighting axis. Largest test gain on `test_single_in_dist` (−8.10) — the densest evaluation split.
+
+---
+
 ## 2026-05-13 04:15 — PR #1831: Gradient clipping (max_norm=0.5) — tighter clip on FiLM+grad-clip baseline
 
 - **val_avg/mae_surf_p:** **73.8093** (seed 0, SWA-model eval)
