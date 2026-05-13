@@ -1,16 +1,16 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~04:15 (closed #1835 nezuko asinh-gain-0.5 +1.96% dead end; assigned nezuko #1911 warmup-3-epochs)
+- **Last updated:** 2026-05-13 ~05:20 (merged #1895 alphonse lr-1.5e-3 −3.80%; assigned alphonse #1942 lr-2e-3, nezuko #1941 asinh-all-channels)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 77.1419`** — PR #1814 (lr=1e-3 + 4-epoch warmup on asinh-compressed targets), epoch 14/14, 0.66M param Transolver.
+**`val_avg/mae_surf_p = 74.2082`** — PR #1895 (lr=1.5e-3 + asinh+warmup-4 stack), epoch 14/14, 0.66M param Transolver.
 
-Per-split: val_single=89.672, val_rc=92.482, val_cruise=54.093, val_re_rand=72.321.  
-Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, test_re_rand=64.791).
+Per-split: val_single=83.733, val_rc=91.690, val_cruise=50.392, val_re_rand=71.018.  
+Test: test_avg=65.1123 (test_single=75.443, test_rc=82.056, test_cruise=41.545, test_re_rand=61.405).
 
 **Historical trajectory:**
 - 122.64 (#1418 channel_weights=[1,1,3])
@@ -20,29 +20,31 @@ Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, 
 - 83.230 (#1682 pure-L1 loss)
 - 80.7014 (#1776 4-epoch warmup)
 - 79.8623 (#1777 asinh pressure compression GAIN=1.0)
-- **77.1419** (#1814 lr=1e-3 + asinh super-additive stack) — **current**
+- 77.1419 (#1814 lr=1e-3 + asinh super-additive stack)
+- **74.2082** (#1895 lr=1.5e-3 ceiling probe) — **current**
 
 **Canonical config on advisor HEAD:**
 - `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 (on asinh-compressed targets in normalized space)
-- **Asinh pressure compression**: `compress_pressure(y_norm)` / `decompress_pressure(y_c)` with ASINH_GAIN=1.0
-- AdamW **lr=1e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0
+- **Asinh pressure compression**: `compress_pressure(y_norm)` / `decompress_pressure(y_c)` with ASINH_GAIN=1.0 (pressure channel only)
+- AdamW **lr=1.5e-3**, **4-epoch linear warmup**, CosineAnnealingLR(T_max=10), grad_clip=1.0
 - batch_size=4, surf_weight=10, NaN-skip in evaluate_split
 
 ## In-flight PRs
 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
-| #1895 | alphonse | `lr-1.5e-3` | LR ceiling probe: 1e-3→1.5e-3 on asinh+warmup4 | **--epochs 14** ✓ | WIP — just assigned |
-| #1911 | nezuko | `warmup-3-epochs` | warmup_epochs 4→3 (bracket below, pairs with frieren's warmup=5) | **--epochs 14** ✓ | WIP — just assigned |
-| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target) |
-| #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing to confirm stacking |
+| #1942 | alphonse | `lr-2e-3` | LR ceiling: 1.5e-3→2e-3 (ceiling still open per #1895) | **--epochs 14** ✓ | WIP — just assigned |
+| #1941 | nezuko | `asinh-all-channels` | Extend asinh compression to Ux/Uy velocity channels | **--epochs 14** ✓ | WIP — just assigned |
+| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target; now needs 74.21) |
+| #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — in progress |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (L2 regularization) | **--epochs 14** ✓ | WIP — in progress |
-| #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale (notified of 77.14 target) |
+| #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale |
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
 
 ### Closed as dead ends (this round)
-- #1835 nezuko asinh-gain-0.5: +1.96% vs 79.8623 (asymmetric axis — GAIN<1 erodes bulk-redistribution without enough rc benefit)
+- #1911 nezuko warmup-3-epochs: +1.56% vs 77.1419 (3-epoch ramp too steep at lr=1e-3)
+- #1835 nezuko asinh-gain-0.5: +1.96% vs 79.8623 (asymmetric axis — GAIN<1 erodes bulk-redistribution)
 - #1426 frieren hidden-192-head-6: +12.8% worse
 - #1429 nezuko slice-128-mlp-4: +6.97% worse, overflow
 - #1517 askeladd ema-0.99-adaptive: neutral (+0.40%)
@@ -60,24 +62,23 @@ Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, 
 
 ## Current research focus
 
-1. **LR axis — ceiling probe:**
-   - **#1895 alphonse lr-1.5e-3**: probe LR ceiling above 1e-3. Strict monotone descent at 1e-3 (no peak-LR spike with asinh) suggests headroom. Next ceiling bracket.
+1. **LR axis — ceiling still open:**
+   - **#1942 alphonse lr-2e-3**: #1895 showed best_epoch=final, largest epoch-14 drop (−7.38 units), cosine still productive at cutoff → lr ceiling still open. Probing 2e-3. Key risk: epoch-5 spike will be larger; monitor pred_abs_max for runaway vs bouncy-bounded.
 
-2. **Schedule axis — warmup-duration sweep:**
-   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch (43% peak position).
-   - **#1911 nezuko warmup-3-epochs**: bracket below the winning 4-epoch. Together with frieren, localizes warmup optimum under the new lr=1e-3 canonical config.
+2. **Target representation axis — velocity channels:**
+   - **#1941 nezuko asinh-all-channels**: Extend asinh from pressure-only (channel 2) to all 3 channels (Ux, Uy, p). Tests whether bulk-redistribution mechanism is pressure-specific or generalizable. Simple drop-in extension.
 
-3. **Data augmentation axis:**
-   - **#1815 askeladd node-dropout-0.9**: rebasing onto asinh base to confirm stacking. Pre-asinh: val_single −1.97%, val_re_rand −1.96% (memorization regularization).
+3. **Schedule axis — warmup-duration sweep:**
+   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch. ⚠️ Frieren needs to be notified of new 74.2082 target (was tracking 77.14).
 
-4. **Loss smoothness axis:**
+4. **Data augmentation axis:**
+   - **#1815 askeladd node-dropout-0.9**: rebasing onto asinh base to confirm stacking.
+
+5. **Loss smoothness axis:**
    - **#1817 tanjiro charbonnier-eps-1e-3**: smooth-near-zero L1 on asinh-compressed targets.
 
-5. **Regularization axis:**
-   - **#1820 thorfinn weight-decay-5e-3**: moderate L2 on asinh+lr=1e-3 base.
-
-6. **ASINH_GAIN sweep:**
-   - **#1835 nezuko asinh-gain-0.5**: GAIN 1.0→0.5 (milder compression). But note: now that lr=1e-3 is canonical, this is testing GAIN effect on the new base.
+6. **Regularization axis:**
+   - **#1820 thorfinn weight-decay-5e-3**: moderate L2 on asinh+lr=1.5e-3 base.
 
 ## Key research insights so far
 
@@ -87,19 +88,19 @@ Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, 
 - **T_max alignment (--epochs 14):** −11.3% — critical!
 - **4-epoch warmup:** −3.04% on pure-L1 base. Canonical.
 - **Asinh pressure compression (GAIN=1.0):** −1.04% on warmup-4 base. Bulk-redistribution mechanism. Cruise gains most.
-- **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts). Mechanism: asinh stabilizes high-LR gradient → escape local minima on hard splits while holding cruise. val_single −7.99% largest single-split gain. Epoch-5 peak-LR spike GONE with asinh active.
+- **lr=1e-3 + asinh SUPER-ADDITIVE:** −4.41% vs old base (2.8× sum-of-parts). Mechanism: asinh stabilizes high-LR gradient → escape local minima on hard splits while holding cruise.
+- **lr=1.5e-3 + asinh:** −3.80% further gain (77.14 → 74.21). Epoch-5 peak-LR spike re-emerges but bounded and recoverable. LR ceiling NOT closed.
+- **Warmup duration axis CONVERGING:** warmup=3 (too steep), warmup=4 (canonical winner), warmup=5 (in flight). Best_epoch=final at all tested LRs → cosine still productive.
+- **val_rc RESISTANT SPLIT:** gains −0.86% at lr=1.5e-3, −2.54% at lr=1e-3 vs 5%+ on other splits. Architecture or data limitation for multi-foil configurations.
 - **Architecture/capacity axes: EXHAUSTED.** All depth/width/slice-num variations regress.
-- **Gradient accumulation (4×, no LR scaling):** update-count-bounded.
-- **SWA/EMA:** don't fit 14-epoch budget cleanly.
-- **Schedule-shape axis:** saturated (OneCycleLR tied vs pure-L1).
 
 ## Next research directions (when new slots open)
 
-1. **lr=2e-3** (if lr=1.5e-3 wins, push ceiling further)
-2. **warmup_epochs=3** (bracket below 4, fully localize warmup optimum)
-3. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip — high EV but complex)
-4. **Gradient accumulation + linear LR scaling** (ACCUM_STEPS=2 with lr=2e-3 — enables effectively longer training while respecting the update-count constraint)
-5. **Asinh on Ux/Uy channels** (bulk-redistribution may help velocity channels too)
+1. **lr=3e-3** (if lr=2e-3 still improves — push LR ceiling until instability dominates)
+2. **Foil mirroring augmentation** (z-coord flip + AoA sign flip + Uy sign flip — 2× effective data, high EV but implementation-complex)
+3. **Gradient accumulation + linear LR scaling** (ACCUM_STEPS=2 with lr=3e-3 — effective BS doubles)
+4. **Longer training (--epochs 18)** if LR ceiling closes (best_epoch=final multiple times is strong signal for more budget)
+5. **val_rc targeted probe** (dedicated experiment for the most resistant split — geometry augmentation, separate loss weight sweep)
 
 ## Epoch budget arithmetic
 

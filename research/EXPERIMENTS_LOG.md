@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-13 05:15 — PR #1895: lr=1.5e-3 ceiling probe (alphonse) — MERGED ✓
+
+- **Branch:** `charliepai2g48h2-alphonse/lr-1.5e-3`
+- **Hypothesis:** Push peak LR from 1e-3 to 1.5e-3. After the super-additive stacking result (#1814), the epoch-5 instability spike was GONE at lr=1e-3. Hypothesis: asinh stability buffer provides headroom for further LR increase.
+- **Metric artifacts:** `models/model-charliepai2g48h2-alphonse-lr-1.5e-3-20260513-041123/metrics.jsonl`
+
+### Results vs. #1814 baseline (77.1419)
+
+| Split | Baseline | lr=1.5e-3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 89.672 | 83.733 | **−6.62%** |
+| val_geom_camber_rc | 92.482 | 91.690 | −0.86% |
+| val_geom_camber_cruise | 54.093 | 50.392 | **−6.84%** |
+| val_re_rand | 72.321 | 71.018 | −1.80% |
+| **val_avg/mae_surf_p** | **77.1419** | **74.2082** | **−3.80%** |
+| **test_avg/mae_surf_p** | 67.6796 | 65.1123 | **−3.79%** |
+
+**Merged as new baseline: 77.1419 → 74.2082 (−3.80%).**
+
+### Analysis
+
+Epoch-5 peak-LR spike **re-emerged** at 1.5e-3 (+20.4 units), confirming the asinh stability buffer is finite. The model fully recovered by epoch 6 and the cosine tail delivered the final −3.80%. best_epoch=14 (final), with the largest single-epoch drop at epoch 14 (−7.38 units) — the cosine schedule is still productive at cutoff. val_single and val_cruise gain heaviest (−6.62%, −6.84%); val_rc again nearly flat (−0.86%), consistent with the recurring pattern that val_rc is the most resistant split. LR ceiling is **NOT closed** at 1.5e-3 — student's suggested lr=2e-3 follow-up is warranted.
+
+---
+
+## 2026-05-13 05:10 — PR #1911: warmup_epochs=3 (nezuko) — CLOSED (dead end)
+
+- **Branch:** `charliepai2g48h2-nezuko/warmup-3-epochs`
+- **Hypothesis:** Bracket below the winning warmup=4: test warmup_epochs=3 (warmup peak at 21% of schedule). If 4-epoch is optimal, 3-epoch should be worse; together with frieren's warmup=5, localizes the warmup optimum.
+- **Metric artifacts:** (committed on student branch prior to closure)
+
+### Results vs. #1814 baseline (77.1419)
+
+| Split | Baseline | warmup=3 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 89.672 | 91.014 | +1.50% |
+| val_geom_camber_rc | 92.482 | 94.204 | +1.86% |
+| val_geom_camber_cruise | 54.093 | 54.718 | +1.16% |
+| val_re_rand | 72.321 | 73.370 | +1.45% |
+| **val_avg/mae_surf_p** | **77.1419** | **78.3435** | **+1.56%** |
+
+**Closed as dead end.** Steeper ramp (3 vs 4 warmup epochs at lr=1e-3) causes instability: epoch-5 peak-LR spike harder — all 4 splits regress uniformly. High-Re instability fingerprint confirmed (val_single +1.50%, val_re_rand +1.45%). Warmup=4 is the correct floor; 3 epochs insufficient buffer at lr=1e-3. Pairs with frieren's warmup=5 to bracket the optimum.
+
+---
+
 ## 2026-05-13 04:15 — PR #1835: ASINH_GAIN=0.5 (nezuko) — CLOSED (dead end)
 
 - **Branch:** `charliepai2g48h2-nezuko/asinh-gain-0.5`

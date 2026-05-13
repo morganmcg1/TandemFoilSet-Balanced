@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-05-13 05:15 — PR #1895: lr=1.5e-3 ceiling probe (LR axis: 1e-3→1.5e-3)
+
+**Student:** charliepai2g48h2-alphonse  
+**Change:** Single constant change `Config.lr: float = 1e-3` → `1.5e-3`. All other config unchanged: asinh pressure compression (GAIN=1.0), 4-epoch warmup, CosineAnnealingLR(T_max=10), grad_clip=1.0, channel_weights=[1,1,3], batch_size=4. LR ceiling probe above the #1814 winner.
+
+### Validation (best epoch 14/14 — cosine still productive at termination)
+
+| Split | mae_surf_p | vs. #1814 baseline (77.1419) |
+|---|---|---|
+| val_single_in_dist | 83.7329 | **−6.62%** |
+| val_geom_camber_rc | 91.6901 | −0.86% |
+| val_geom_camber_cruise | 50.3924 | **−6.84%** |
+| val_re_rand | 71.0176 | −1.80% |
+| **val_avg/mae_surf_p** | **74.2082** | **−3.80%** |
+
+**Improvement vs #1814 baseline: −3.80% (77.1419 → 74.2082)**  
+**Cumulative improvement vs #1418 baseline: −39.5% (122.64 → 74.2082)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p | vs. #1814 |
+|---|---|---|
+| test_single_in_dist | 75.4430 | −3.88% |
+| test_geom_camber_rc | 82.0558 | −1.39% |
+| test_geom_camber_cruise | 41.5450 | **−6.06%** |
+| test_re_rand | 61.4050 | **−5.22%** |
+| **test_avg/mae_surf_p** | **65.1123** | **−3.79%** |
+
+**Improvement vs #1814 test baseline: −3.79% (67.6796 → 65.1123)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW **lr=1.5e-3** (peak), **4-epoch warmup**, wd=1e-4, CosineAnnealingLR(T_max=10), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- **Asinh pressure compression**: `compress_pressure()`/`decompress_pressure()` with ASINH_GAIN=1.0
+- NaN-skip guard in `evaluate_split`
+
+### Key finding
+
+LR ceiling NOT closed at 1.5e-3. The epoch-5 peak-LR spike **re-emerged** (+20.4 units) — asinh stability is not infinite — but the model fully recovered by epoch 6 and the cosine tail delivered −3.80% net. The largest single-epoch drop is at epoch 14 (81.59 → 74.21, −7.38 units), confirming the cosine schedule is still productive at termination. val_single and val_cruise gain most (−6.62%, −6.84%); val_rc again nearly flat (−0.86%), consistent with the #1814 pattern. Pred_abs_max peaked at 15,966 (epoch 13) — well within the stability envelope, no NaN events.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-alphonse-lr-1.5e-3-20260513-041123/metrics.jsonl`
+- `models/model-charliepai2g48h2-alphonse-lr-1.5e-3-20260513-041123/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-alphonse \
+    --experiment_name "charliepai2g48h2-alphonse/lr-1.5e-3" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 04:00 — PR #1814: lr=1e-3 on asinh+warmup-4 base (super-additive stacking)
 
 **Student:** charliepai2g48h2-alphonse  
@@ -459,4 +517,4 @@ err = (pred_orig.double() - y_safe.double()).abs()
 
 ---
 
-> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 77.1419`.
+> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 74.2082`.
