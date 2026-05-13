@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -464,6 +465,13 @@ for i, b in enumerate(model.blocks):
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
 
+# Adaptive grad-clip (PR #1753): running-quantile threshold replaces fixed max_norm=25.
+# Threshold = ALPHA * median(last K pre-clip norms); fallback to WARMUP for the first K steps.
+GRAD_NORM_WINDOW = 100
+GRAD_NORM_ALPHA = 1.5
+GRAD_NORM_WARMUP_THRESHOLD = 100.0
+grad_norm_history: deque[float] = deque(maxlen=GRAD_NORM_WINDOW)
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -492,6 +500,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    epoch_clipped_steps = 0
+    last_pre_clip_norm = 0.0
+    last_adaptive_threshold = 0.0
+    last_clipped = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -516,7 +528,32 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
+        # Adaptive grad-clip (PR #1753): clip to ALPHA * median(last K pre-clip norms).
+        # Step 1: compute pre-clip norm without clipping.
+        pre_clip_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float("inf"))
+        pre_clip_norm_value = float(pre_clip_norm)
+        # Step 2: decide threshold from running median (fallback to warmup before K samples).
+        if len(grad_norm_history) >= GRAD_NORM_WINDOW:
+            sorted_norms = sorted(grad_norm_history)
+            median_norm = sorted_norms[GRAD_NORM_WINDOW // 2]
+            threshold = GRAD_NORM_ALPHA * median_norm
+        else:
+            threshold = GRAD_NORM_WARMUP_THRESHOLD
+        # Step 3: append BEFORE clip so the running median tracks pre-clip distribution.
+        grad_norm_history.append(pre_clip_norm_value)
+        # Step 4: apply clip if over threshold.
+        clipped_this_step = pre_clip_norm_value > threshold
+        if clipped_this_step:
+            scale = threshold / (pre_clip_norm_value + 1e-6)
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad.detach().mul_(scale)
+        total_norm = pre_clip_norm
+        last_pre_clip_norm = pre_clip_norm_value
+        last_adaptive_threshold = float(threshold)
+        last_clipped = int(clipped_this_step)
+        if clipped_this_step:
+            epoch_clipped_steps += 1
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -550,6 +587,7 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    clip_fraction_this_epoch = epoch_clipped_steps / max(n_batches, 1)
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -559,6 +597,10 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
+        "train/last_pre_clip_norm": last_pre_clip_norm,
+        "train/last_adaptive_threshold": last_adaptive_threshold,
+        "train/clipped_this_step": last_clipped,
+        "train/clip_fraction_this_epoch": clip_fraction_this_epoch,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
