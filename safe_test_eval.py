@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -50,6 +51,18 @@ class MLP(nn.Module):
         for i in range(self.n_layers):
             x = self.linears[i](x) + x if self.res else self.linears[i](x)
         return self.linear_post(x)
+
+
+class SwiGLUFFN(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim, dropout=0.0):
+        super().__init__()
+        self.w_gate = nn.Linear(in_dim, hidden_dim)
+        self.w_value = nn.Linear(in_dim, hidden_dim)
+        self.w_out = nn.Linear(hidden_dim, out_dim)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
+    def forward(self, x):
+        return self.dropout(self.w_out(F.silu(self.w_gate(x)) * self.w_value(x)))
 
 
 class PhysicsAttention(nn.Module):
@@ -89,7 +102,7 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu", mlp_ratio=4,
-                 last_layer=False, out_dim=1, slice_num=32):
+                 last_layer=False, out_dim=1, slice_num=32, use_swiglu=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
@@ -97,7 +110,10 @@ class TransolverBlock(nn.Module):
                                      dim_head=hidden_dim // num_heads,
                                      dropout=dropout, slice_num=slice_num)
         self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
+        if use_swiglu:
+            self.mlp = SwiGLUFFN(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, dropout=dropout)
+        else:
+            self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim, n_layers=0, res=False, act=act)
         if self.last_layer:
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.mlp2 = nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
@@ -115,20 +131,30 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 pos_freq_bands: int = 0,
+                 pos_freq_surface_only: bool = False,
+                 use_swiglu=False,
                  output_fields=None, output_dims=None):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
+        self.pos_freq_bands = pos_freq_bands
+        self.pos_freq_surface_only = pos_freq_surface_only
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
-        self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+        fourier_dim = 2 * space_dim * pos_freq_bands if pos_freq_bands > 0 else 0
+        self.preprocess = MLP(fun_dim + space_dim + fourier_dim, n_hidden * 2, n_hidden,
                               n_layers=0, res=False, act=act)
+        if pos_freq_bands > 0:
+            freqs = 2.0 ** torch.arange(pos_freq_bands, dtype=torch.float32)
+            self.register_buffer("_fourier_freqs", freqs)
         self.n_hidden = n_hidden
         self.space_dim = space_dim
         self.blocks = nn.ModuleList([
             TransolverBlock(num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                             act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
-                            slice_num=slice_num, last_layer=(i == n_layers - 1))
+                            slice_num=slice_num, last_layer=(i == n_layers - 1),
+                            use_swiglu=use_swiglu)
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
@@ -143,8 +169,20 @@ class Transolver(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def fourier_encode(self, coords: torch.Tensor) -> torch.Tensor:
+        proj = coords.unsqueeze(-1) * (2.0 * math.pi * self._fourier_freqs)
+        return torch.cat([proj.sin(), proj.cos()], dim=-1).flatten(start_dim=-2)
+
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.pos_freq_bands > 0:
+            coords = x[..., :self.space_dim]
+            fun = x[..., self.space_dim:]
+            fourier = self.fourier_encode(coords)
+            if self.pos_freq_surface_only:
+                is_surface = data["is_surface"].to(fourier.dtype).unsqueeze(-1)
+                fourier = fourier * is_surface
+            x = torch.cat([coords, fourier, fun], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -165,7 +203,7 @@ def safe_evaluate_split(model, loader, stats, device):
         mask = mask.to(device, non_blocking=True)
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
-        pred = model({"x": x_norm})["preds"]
+        pred = model({"x": x_norm, "is_surface": is_surface})["preds"]
         pred_orig = pred * stats["y_std"] + stats["y_mean"]
 
         y_finite = torch.isfinite(y)  # [B, N, 3]
@@ -210,6 +248,9 @@ def main():
         space_dim=mc["space_dim"], fun_dim=mc["fun_dim"], out_dim=mc["out_dim"],
         n_hidden=mc["n_hidden"], n_layers=mc["n_layers"], n_head=mc["n_head"],
         slice_num=mc["slice_num"], mlp_ratio=mc["mlp_ratio"],
+        pos_freq_bands=mc.get("pos_freq_bands", 0),
+        pos_freq_surface_only=mc.get("pos_freq_surface_only", False),
+        use_swiglu=mc.get("use_swiglu", False),
         output_fields=mc["output_fields"], output_dims=mc["output_dims"],
     ).to(device)
     model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
