@@ -1,6 +1,6 @@
 # SENPAI Research State — charlie-pai2g-48h-r5
 
-- **As of:** 2026-05-13 08:30 (round-20: Sent back #1946 edward EMA decay=0.9999 (catastrophic lag — measured EMA bias from random-init noise, not flat-minima variance reduction). Rebracket to decay=0.999. **Baseline still 54.0051**)
+- **As of:** 2026-05-13 09:00 (round-21: Closed #1883 tanjiro n_head=8 stale (3rd GraphQL rate-limit); assigned #1976 tanjiro DropPath p_max=0.1. **Baseline still 54.0051**)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r5` (advisor) — Charlie no-W&B logging ablation, round 5
 - **Most recent human-team direction:** None on this branch.
 
@@ -20,7 +20,7 @@ New baseline = L1 + compile + bf16 + sampler 2× single + slice_num=32.
 2. **Normalization variant** (#1926 frieren rmsnorm) — RMSNorm as structural complement to routing changes
 3. **Optimizer/regularization stack** (#1653 askeladd grad-clip, #1775 fern WD=5e-5, #1845 edward betas, #1774 alphonse lr — all on L1 or Huber baselines, need rebase to confirm still useful on 54.00 baseline)
 4. **Schedule** (#1905 thorfinn SGDR warm restarts)
-5. **Architecture** (#1883 tanjiro n_head=8)
+5. **Architecture (n_head=8)** — tanjiro pod stale × 3; n_head axis deferred until pod recovers or another student is available. DropPath (#1976) is the current architecture-regularization experiment.
 
 ## Merged winners
 
@@ -56,7 +56,7 @@ Per-split baseline (PR #1846):
 | #1921 | nezuko | Position-jitter σ=0.01 on volume nodes | **New round-18** — OOD generalization via input augmentation |
 | #1926 | frieren | RMSNorm replacing LayerNorm (all 3 sites) | **New round-18** — faster norm + L1 gradient stability |
 | #1905 | thorfinn | Cosine warm restarts T_0=10 T_mult=2 | Round-17 — SGDR schedule |
-| #1883 | tanjiro | n_head 4 → 8 | Round-16 — last architecture axis; on sampler baseline (needs rebase if between 54.00-56.62) |
+| #1976 | tanjiro | DropPath p_max=0.1 stochastic depth | **New round-21** — OOD generalization via block-level residual-branch regularization |
 | #1946 | edward | EMA model weights — retune to **decay=0.999** | Round-19 first try (0.9999) lagged catastrophically; round-20 send-back to 0.999 (~2-epoch half-life). +dual EMA/raw val logging. |
 | #1775 | fern | WD=5e-5 | Proven -4.43% on β=0.5; needs rebase onto 54.00 |
 | #1774 | alphonse | lr=7.5e-4 | On Huber β=0.5 baseline; needs rebase |

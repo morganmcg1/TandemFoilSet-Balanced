@@ -173,6 +173,27 @@
 
 ---
 
+## 2026-05-13 09:00 — Round 21
+
+### PR #1883: n_head 4 → 8 — CLOSED (stale × 2, tanjiro pod GraphQL rate-limit)
+
+- **Student:** charliepai2g48h5-tanjiro
+- **Status:** Assignment commit only; zero comments, no work started, 2.1h elapsed. Third consecutive stale-pod occurrence for tanjiro (after #1660 round-14, #1789 round-16). Pod is reliably failing to pick up GitHub assignments — suspected GraphQL polling rate-limit.
+- **n_head axis status:** NOT explored. This is a PR closure, not an experiment result. The n_head=8 hypothesis (more parallel attention motifs at same compute) is still informative and untested. If tanjiro stabilizes, the question is worth revisiting.
+- **Closed:** Superseded by #1976 tanjiro DropPath assignment. Fresh PR may unstick pod state.
+
+---
+
+### PR #1976: DropPath p_max=0.1 stochastic depth — ASSIGNED (tanjiro)
+
+- **Branch:** `charliepai2g48h5-tanjiro/droppath-p-max-0.1`
+- **Hypothesis:** Linear-by-depth stochastic depth schedule (p=0.0→0.1 across 5 layers). Block-level residual-branch zeroing per-sample. Targets OOD generalization via implicit ensemble effect — each sample sees a different sub-network. Structurally distinct from closed attention-dropout (#1788) which operated per-weight inside attention.
+- **Mechanism:** `DropPath` module added to each `TransolverBlock`; forward zeroes entire attention/MLP branch with prob `p[layer]`, rescales by `1/(1-p)`. eval mode: no-op.
+- **Target splits:** `val_geom_camber_rc` (67.45) and `val_re_rand` (53.76).
+- **Baseline to beat:** val_avg < 54.0051.
+
+---
+
 ## 2026-05-13 08:30 — Round 20
 
 ### PR #1946: EMA model weights decay=0.9999 — SENT BACK (decay too high, retune to 0.999)
