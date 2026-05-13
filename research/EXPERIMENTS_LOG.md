@@ -6,6 +6,22 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 16:30 — PR #2383 — CLOSED (n_head=2 loses at slice_num=24; n_head=4 confirmed optimal)
+
+**edward: n_head=2 on n_layers=3+slice_num=24+epochs=33**
+- Hypothesis: n_head=2 (head_dim=64) vs n_head=4 (head_dim=32) — richer per-head capacity vs parallelism
+- vs PR #2229 baseline (val=37.366): val=37.633 (**+0.71% LOSS**), test=32.480 (+3.53%)
+- Cannot beat current baseline 35.548 — this was a stale stack test, informative only
+- n_head=2 has **more params** (544,209 vs 514K — +5.8%), yet still loses on 3/4 val splits
+- single_in_dist val improved (−1.6%) but test worsened (+6.5%) — sign of overfitting without generalization
+- 50.3s/epoch, 30.44 min, params 544,209 (QKV scales with dim_head²; halving n_head doubles dim_head)
+
+**Conclusion:** Parallelism wins. Four heads function as soft mixture-of-specialists across slice tokens; 2 wider heads can't compensate for reduced routing diversity. n_head=4 confirmed optimal at n_layers=3+slice_num=24. **n_head axis closed at this partition.** Retest at slice_num=16 would be needed before claiming axis closed globally.
+
+**Metric artifacts:** `models/model-charliepai2g48h3-edward-nhead2-nlayers3-slicenum24-20260513-150642/metrics.jsonl`
+
+---
+
 ## 2026-05-13 16:00 — PR #2348 — MERGED (slice_num=16 beats slice_num=12; non-monotone partition sweep)
 
 **alphonse: slice_num=16 on n_layers=3+epochs=36**

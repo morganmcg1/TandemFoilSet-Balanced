@@ -94,7 +94,7 @@
 | askeladd | #2375 | slice_num=20 on n_layers=3+epochs=34 (partition sweep informative) | n_layers=3 | probably not (35.9–36.5 expected) |
 | tanjiro | #2408 | **slice_num=8 on n_layers=3+epochs=38** (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
 | fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | **possible** — tests lr at non-optimal slice_num |
-| edward | #2383 | n_head=2 on n_layers=3+slice_num=24+epochs=33 (stale stack, axis info) | n_layers=3+slice_num=24 | NO — stale slice_num |
+| edward | #2447 | **slice_num=14 on n_layers=3+epochs=36** (partition neighborhood probe) | n_layers=3 | **possible winner** |
 | thorfinn | #2417 | n_head=2 on n_layers=3+slice_num=12+epochs=36 (head axis at old best) | n_layers=3+slice_num=12 | unlikely — sub-optimal slice_num |
 | frieren | #2402 | lr=5e-5 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
 | nezuko | #2404 | n_head=1 on n_layers=3+slice_num=24+epochs=33 (stale stack) | n_layers=3+slice_num=24 | NO — stale slice_num |
@@ -174,6 +174,7 @@
 - **grad-clip**: worse for Lion (sign-update already handles magnitude)
 - **DropPath**: needs 100-300 epoch budgets; useless at 20-30 epoch budgets
 - **Dropout**: always worse (model is underfitting)
+- **n_head=2 on n_layers=3+slice_num=24**: +0.71% val / +3.53% test worse (PR #2383). Parallelism wins — 4 heads as soft mixture-of-specialists beats 2 wider heads despite +6% more params. n_head axis closed at slice_num=24; not yet retested at slice_num=16.
 - **n_head=2 on n_layers=4**: marginal win (+0.25%), but current best is n_layers=3+n_head=4 anyway
 - See full dead-ends list in older entries above for complete history
 
