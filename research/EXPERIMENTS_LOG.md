@@ -11,6 +11,18 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~01:00 — Cycle 10: thorfinn #1651 closed + reassigned
+
+### PR #1651 thorfinn (cosine T_max=18): CLOSED ✗
+
+Stale ~2 hours with no comments, no code commits beyond empty `assign`, pod was presumably throttled. Cosine T_max=18 hypothesis was also strictly dominated by alphonse #1655 (OneCycleLR rebased on new p_weight+clip baseline) — OneCycleLR provides anneal-to-zero (the cosine-T18 benefit) plus warmup plus peak-LR boost. Closed and reassigned.
+
+### New assignment: PR #1738 thorfinn — AdamW beta2 (0.999 → 0.95)
+
+Rationale: default beta2=0.999 has half-life ~693 optimizer steps. In a ~3200-step run, the variance EMA is barely warm by mid-training, leaving the optimizer with stale adaptive step sizes during the high-LR phase. beta2=0.95 (half-life ~14 steps) is the standard short-transformer choice (GPT-3-class default). With clip binding on nearly every step in our setup, faster variance EMA should let AdamW produce better-shaped per-parameter steps within the clip budget. Fully orthogonal to all in-flight hypotheses.
+
+---
+
 ## 2026-05-13 00:10 — Cycle 8: #1471 MERGED, 2 sends-back, 1 close, 2 new assignments
 
 ### PR #1471 frieren — p_weight=2.0 + clip_grad_norm=1.0: MERGED ✓

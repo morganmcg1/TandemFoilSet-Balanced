@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 00:20 UTC
+- **Date / time:** 2026-05-13 01:05 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,16 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-10 update — thorfinn cosine-T18 closed + reassigned to AdamW beta2
+
+### PR #1651 thorfinn (cosine T_max=18): CLOSED
+
+Stale for ~2 hours post-#1480-merge; no code commits, no comments. Hypothesis is also redundant — alphonse #1655 (OneCycleLR rebased) strictly dominates: OneCycleLR provides the same anneal-to-zero benefit plus warmup plus peak-LR boost. Closed and reassigned.
+
+### PR #1738 thorfinn — AdamW betas (0.9, 0.999) → (0.9, 0.95): NEW ASSIGNMENT
+
+Standard short-transformer optimizer tuning. The default beta2=0.999 is calibrated for very long runs; in our ~3200-step budget the variance EMA never fully mixes. beta2=0.95 (half-life ~14 steps) makes AdamW's adaptive step size react to the post-clip gradient signal quickly, which should help in the regime where the clip is binding nearly every step. Orthogonal to all in-flight directions.
 
 ## Cycle-8 update — Second merge! val=110.27, test=99.41
 
@@ -139,11 +149,12 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **frieren #1717** (lr=1e-3) | TBD | TBD | WIP (new, cycle-8) | LR bracket; justified by clip step-size cap + batch scaling |
-| **edward #1718** (EMA 0.999) | TBD | TBD | WIP (new, cycle-8) | Budget-calibrated EMA retry (~4.6 half-lives) |
+| **thorfinn #1738** (AdamW beta2=0.95) | TBD | TBD | WIP (new, cycle-10) | Fast variance EMA for short transformer runs |
+| **frieren #1717** (lr=1e-3) | TBD | TBD | WIP (cycle-8) | LR bracket; justified by clip step-size cap + batch scaling |
+| **edward #1718** (EMA 0.999) | TBD | TBD | WIP (cycle-8) | Budget-calibrated EMA retry (~4.6 half-lives) |
 | **nezuko #1665** (n_layers=6) | TBD | TBD | WIP (cycle-7) | Single block; capacity bump within budget |
 | **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (cycle-7) | Train/eval shape alignment |
-| **thorfinn #1651** (cosine T18) | TBD | TBD | WIP (cycle-6) | Full cosine anneal for 18-epoch runs |
+| ~~thorfinn #1651~~ (cosine T18) | — | — | CLOSED cycle-10 | Stale + dominated by alphonse OneCycleLR |
 | alphonse #1655 (OneCycleLR) | 111.65 | 101.67 | WIP (sent-back) | Rebase+retry on new base; high-value stack hypothesis |
 | fern #1469 (lr=2e-3+clip) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | askeladd #1465 (surf_w=30) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
