@@ -30,8 +30,8 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 | alphonse | #1785 | OneCycleLR max_lr=2e-3 (LR ceiling probe) | WIP |
 | askeladd | #1379 | Smooth-L1 β=0.5 (gradient-fairness mechanism probe, rebased β=1.0 sent back) | WIP |
 | edward | #1809 | surface-only p-weight=2 (targeted vs #1383) | WIP |
-| fern | #1390 | surf_weight=25 (needs rebase) | WIP (stale) |
-| frieren | #1768 | OneCycleLR pct_start=0.15 (bracket completion) | WIP |
+| fern | NEW | surf_weight=15 (mild upward step + 3-seed) | TBA |
+| frieren | NEW | OneCycleLR anneal_strategy=linear (cosine-tail shape probe, 3-seed) | TBA |
 | nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP |
 | tanjiro | #1965 | batch_size=4 → 8 (gradient quality vs step-count probe, 3-seed) | WIP |
 | thorfinn | — | OneCycleLR pct_start=0.10 (3-seed, bracket midpoint + in-dist regression test) | NEW |

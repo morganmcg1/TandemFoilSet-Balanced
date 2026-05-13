@@ -735,4 +735,56 @@ The 3-rep mean (65.92 val / 57.45 test) is suggestive — it beats the MSE 3-see
 
 **Next:** Pivoting tanjiro to non-LR direction per student's own suggestion. Assigning **batch_size=4 → 8** with 3 seeds — tests gradient-quality vs per-batch-step-count trade-off; uses unused GPU (~46GB / 96GB); is a clean compute-utilization probe.
 
+---
+
+## 2026-05-13 06:30 — PR #1768: OneCycleLR pct_start=0.15 (longer warmup bracket completion) — CLOSED (bracket complete, axis exhausted)
+- willowpai2g24h4-frieren / willowpai2g24h4-frieren/onecycle-pct-start-0p15
+- **Hypothesis:** Test whether pct_start=0.05 single-seed win is monotonic (0.15 should clearly lose) or basin-related (0.15 might be intermediate).
+- **W&B:** `tnw02wnh`
+
+| pct_start | val_avg | test_avg | Note |
+|---:|---:|---:|---|
+| 0.05 (single-seed, current best) | 66.14 | 56.90 | seed=0 lucky tail |
+| 0.05 (3-seed mean, #1874) | 68.88 ± 2.40 | 59.61 ± 2.36 | true ground truth |
+| **0.15 (this PR, single-seed)** | **67.35** | **58.07** | between single & 3-seed mean |
+| 0.10 (pre-#1719 baseline #1716) | 68.58 | 60.35 | older baseline |
+
+**Decision: CLOSED — single-seed bracket complete, multi-seed picture is more ambiguous.** Frieren's 0.15 result (val=67.35) is BETWEEN the lucky seed=0 baseline (66.14) and the 3-seed MSE mean (68.88). The verdict 'pct_start=0.15 loses' was tied to the seed=0 anchor; under 3-seed comparison, 0.15 and 0.05 may be within noise of each other.
+
+**Genuine learnings:**
+1. **LR-schedule axis is exhausted under 30-min cap** — max_lr (#1716), pct_start (#1719/#1874), final_div_factor (#1861) all characterized. Further LR-schedule tuning is likely sub-noise.
+2. **Multi-seed reframing changes bracket interpretation** — single-seed pct_start comparisons against the seed=0 lucky tail will systematically overstate any 'win' or 'loss'. The bracket figure will firm up once thorfinn #1944 returns with 3-seed pct_start=0.10.
+3. **Best epoch=28 stable** at 0.15 — schedule is stable, the regression isn't from convergence issues.
+
+**Next:** Reassigning frieren to non-LR experiment. Assigning **OneCycleLR anneal_strategy='cos' → 'linear'** with 3 seeds — tests whether the cosine-tail SHAPE matters or just total deep-LR time. Same axis (schedule) but different dimension (shape, not parameters).
+
+---
+
+## 2026-05-13 06:30 — PR #1390: surf_weight 10 → 25 (push surface emphasis) — CLOSED (clear regression, OneCycleLR-stack calibrated for 10)
+- willowpai2g24h4-fern / willowpai2g24h4-fern/surf-weight-25
+- **Hypothesis:** Higher surf_weight biases training toward surface MAE; predicted 3-10% improvement.
+- **W&B (final rebased run on new baseline):** `ptso127p`
+
+| Metric | Baseline #1719 single-seed | 3-seed mean #1874 | surf_weight=25 (this PR) | Δ vs single-seed |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 66.1352 | 68.88 ± 2.40 | **79.86** | **+20.7%** (~5σ outside noise) |
+| test_avg/mae_surf_p | 56.8971 | 59.61 ± 2.36 | **69.82** | **+22.7%** (~4.3σ) |
+| val_single_in_dist | 73.33 | 77.12 | 89.69 | +22.3% |
+| val_geom_camber_rc | 79.02 | 80.85 | 93.37 | +18.2% |
+| val_geom_camber_cruise | 47.51 | 50.01 | 60.05 | +26.4% |
+| val_re_rand | 64.68 | 67.55 | 76.34 | +18.0% |
+
+**Decision: CLOSED — clean regression on every split (+18-28%), 4-5σ outside noise.** The student's mechanistic analysis is excellent:
+
+1. **Surface and volume share parameters** via the Transolver backbone. Increasing surf_weight to 25 multiplies surface gradient magnitude by 2.5×, effectively pushing surface-term LR to ~3.75e-3 while volume stays at 1.5e-3. The 1.5e-3 ceiling (#1716) means surface is now OVER-LR'd, volume UNDER-prioritized.
+2. **Uniform regression across all splits** confirms it's not a local OOD effect — the joint optimization is destabilized.
+3. **Cruise pressure overflow recurs** at surf_weight=25 even with the nan_to_num fix in place — confirms over-emphasis on surface gradients produces extreme predictions on OOD geometry.
+
+**Genuine learnings:**
+1. **surf_weight=10 is at or near the joint optimum** for this stack. The compile + OneCycleLR + bf16 stack is calibrated for 10:1 ratio; aggressive deviation up destabilizes.
+2. **Loss-weight changes interact with effective LR**, especially on a shared-backbone model. A future surf_weight bump should be paired with a downward LR adjustment for the gradient-scale-invariant test.
+3. **OneCycleLR+max_lr=1.5e-3 baseline is tightly calibrated** — major loss formulation knobs (channel weights, surf_weight) need to compensate to avoid destabilization.
+
+**Next:** Reassigning fern to **surf_weight=15** with 3 seeds. Tight upward step (50% increase, vs the failed 150% jump). Tests whether the curve from 10 is locally monotonic or has any room for a smaller bump.
+
 **Minor flag:** `test_geom_camber_cruise/loss = nan` printed in test-eval summary line but `mae_surf_p` (the headline metric) was still computed cleanly per-batch. Likely Inf/NaN slipping through a single-batch reduction. Not blocking; track if it recurs.
