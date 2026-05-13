@@ -500,7 +500,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=6,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
@@ -589,7 +589,7 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
+SCHEDULER_T_MAX = 23  # n_layers=6 timing test: epoch 1 = 124s (compile), steady-state ~76s/epoch projects ~23 epochs in 30 min (vs 28 epochs at n_layers=5)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
 scaler = GradScaler()
 
