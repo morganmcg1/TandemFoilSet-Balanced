@@ -1812,3 +1812,69 @@ Tanjiro pod was stuck for ~5 hours on a pod-side secondary rate-limit cycle (eac
 
 **Programme learning**: **Residual-stream FiLM injection point CLOSED**. The mechanism works but the in-dist-vs-OOD trade-off is fundamental at this injection point. The unbounded amplification potential of γ⊙h+β before the next norm distorts in-distribution features. Reassigned alphonse to **#2650 re-conditional-layernorm-affine** — same Re-conditioning idea at a DIFFERENT injection point: LN's γ/β (post-normalization affine), which operates in a feature-bounded regime by construction. Canonical Conditional-InstanceNorm pattern from Dumoulin et al. 2017 — different inductive bias than residual-stream gating.
 
+
+
+## 2026-05-13 23:38 — PR #2622: Element-level focal-MAE (γ=2, clamp=10) — CLOSED
+- **Branch**: `charliepai2g24h1-frieren/element-level-focal-mae-gamma2`
+- **Hypothesis**: Apply focal weighting (1 + |r/δ|^γ).clamp(1,10) per-element on Huber residuals to upweight hard pressure outliers — pull the heavy-tailed surface-p error tail toward the median.
+- **Status**: **CLOSED — catastrophic regression** val +18.1%, test +12.1%
+
+| Split | Baseline (#2011) | Focal-MAE γ=2 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 34.42 | +20.31% |
+| val_geom_camber_rc | 41.95 | 49.31 | +17.55% |
+| val_geom_camber_cruise | 14.15 | 16.27 | +15.01% |
+| val_re_rand | 30.81 | 36.43 | +18.27% |
+| **val_avg** | **28.8762** | **34.1062** | **+18.10%** ❌ |
+
+- **Diagnostic**: Clamp saturated immediately. On heavy-tailed pressure residuals, |r/δ|^2 produces enormous values that get clipped at 10, but the saturating mass dominates the gradient — model trains to fit the loud outliers at the expense of the bulk distribution. Element-level reweighting is fundamentally incompatible with the long-tailed residual structure of surface pressure.
+- **Metrics JSONL**: `models/model-charliepai2g24h1-frieren-element-level-focal-mae-gamma2-20260513-223*/metrics.jsonl`
+
+**Programme learning**: **Element-level focal-MAE CLOSED**. The pressure residual distribution is too heavy-tailed for per-element weighting — every batch has elements that saturate the clamp, and gradient flow collapses to those elements. Reassigned frieren to **#2659 sample-level-focal-mae-gamma1**: same focal idea at a DIFFERENT granularity (per-sample weighting averaged over elements), γ=1 (linear, not quadratic) to avoid saturation. Should be more stable since per-sample loss averaging smooths out the heavy-tailed element distribution before the focal weight is applied.
+
+
+## 2026-05-13 23:39 — PR #2624: Surface curvature as input feature — CLOSED
+- **Branch**: `charliepai2g24h1-nezuko/surface-curvature-input-feature`
+- **Hypothesis**: Inject local surface curvature κ as an additional input channel — give the model explicit geometric 2nd-order information at surface elements, hypothesized to help with shape-OOD generalization (the rc/cruise camber-shape splits).
+- **Status**: **CLOSED — small regression with fat OOD tails** val +0.91%, test -0.49%
+
+| Split | Baseline (#2011) | Curvature input | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 28.45 | -0.52% |
+| val_geom_camber_rc | 41.95 | 43.95 | **+4.77%** |
+| val_geom_camber_cruise | 14.15 | 13.74 | -2.90% |
+| val_re_rand | 30.81 | 31.43 | +2.01% |
+| **val_avg** | **28.8762** | **29.1395** | **+0.91%** ❌ |
+| **test_avg** | **24.9992** | **24.8770** | **-0.49%** ✓ small win |
+
+- **Diagnostic**: val_geom_camber_rc gets WORSE (+4.77%), val_geom_camber_cruise improves slightly. Same shape-axis dichotomy as #2625 (NACA jitter). Curvature is computed FROM the geometry the model already sees — the slice attention's softmax over element coords is functionally a learned local curvature estimator already. Explicit curvature provides redundant information that confuses the optimizer when the test distribution shifts (rc OOD).
+- **Metrics JSONL**: `models/model-charliepai2g24h1-nezuko-surface-curvature-input-feature-20260513-22*/metrics.jsonl`
+
+**Programme learning**: **Explicit curvature input CLOSED**. Confirms that the architecture already has access to local geometric information via slice attention. Reassigned nezuko to **#2660 surface-normal-auxiliary-output-head** — same surface-normal information at a DIFFERENT injection point: an auxiliary output head (Kendall, Gal, Cipolla 2017 multi-task learning) that forces the trunk to develop normal-aware representations rather than reading normals from an input channel. Output-task regularization is fundamentally different signal from input-feature augmentation.
+
+
+## 2026-05-13 23:40 — PR #2625: NACA-4 parameter jitter σ=0.02 (3-channel) — CLOSED
+- **Branch**: `charliepai2g24h1-fern/naca-feature-jitter-sigma-0p02`
+- **Hypothesis**: Jitter NACA-4 channels (camber amplitude, camber position, thickness) σ=0.02 at training time — directly augment the SHAPE-axis (the actual OOD axis identified in #2594/#2598).
+- **Status**: **CLOSED — dichotomy** val +3.45% overall, but **DRAMATIC per-split split**
+
+| Split | Baseline (#2011) | NACA-jitter | Δ |
+|---|---|---|---|
+| val_single_in_dist | 28.60 | 31.91 | +11.59% |
+| val_geom_camber_rc | 41.95 | **52.10** | **+24.20%** ❌ catastrophic |
+| val_geom_camber_cruise | 14.15 | **7.96** | **−43.71%** ✅ MASSIVE WIN |
+| val_re_rand | 30.81 | 30.51 | -0.96% |
+| **val_avg** | **28.8762** | **29.8728** | **+3.45%** ❌ |
+
+- **Diagnostic**: Striking dichotomy. cruise wins by -43.7% (huge!) while rc regresses by +24.2%. THORFINN #2626 per-channel-heads showed a parallel pattern (cruise -44%, rc +21%) — cross-evidence for a unifying structural insight.
+
+- **🔑 KEY PROGRAMME FINDING** (this round):
+  > **rc camber-position is an EXTRAPOLATION problem; cruise camber is an INTERPOLATION problem.**
+  >
+  > The rc split is held out on the camber-position channel — its test values lie *outside* the train distribution on that axis. Augmenting along channel 16 (camber position) with σ=0.02 expands the training distribution *inward* (toward in-dist), making the rc gap relatively wider. The cruise split is interpolated within the train distribution along the other shape axes — generic shape smoothing helps there.
+  >
+  > **Implication**: input-side shape augmentation must be CHANNEL-SELECTIVE — augment channels NOT held out in the test splits, never augment along the OOD axis itself.
+
+- **Metrics JSONL**: `models/model-charliepai2g24h1-fern-naca-feature-jitter-sigma-0p02-20260513-22*/metrics.jsonl`
+
+**Programme learning**: **5th confirmed input-side perturbation augmentation closure**. The full-channel jitter strategy is closed. Reassigned fern to **#2662 naca-jitter-ch15-17-only-sigma02** — same σ=0.02 jitter, but channel 16 (camber position, the rc OOD axis) masked to zero. Targets preserving the cruise -43.7% win without the rc +24.2% regression. If successful, demonstrates the channel-selective augmentation principle and unlocks a new class of OOD-aware input augmentations.
