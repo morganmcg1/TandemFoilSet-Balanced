@@ -3,7 +3,7 @@ batch_size: 4
 debug: false
 epochs: 14
 experiment_name: charliepai2g48h2-askeladd/node-dropout-0.9
-lr: 0.0007
+lr: 0.001
 model_config:
   fun_dim: 22
   mlp_ratio: 2
