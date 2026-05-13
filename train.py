@@ -425,6 +425,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    use_re_bucketing: bool = False    # log(Re) quantile bucketing sampler
+    re_bucket_count: int = 10         # number of log(Re) quantile buckets
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -445,6 +447,49 @@ stats = {k: v.to(device) for k, v in stats.items()}
 
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
+
+# Pre-compute log(Re) quantile bucket weights, composed with the domain-balanced
+# weights from load_data. Feature index 13 is already log(Re) per program.md, so
+# we read it directly without applying np.log again. log(Re) is constant per
+# sample, so we read only x[0, 13] from each .pt rather than going through the
+# full DataLoader / pad_collate pipeline.
+re_bucket_stats: dict | None = None
+if cfg.use_re_bucketing and not cfg.debug:
+    import numpy as np
+    import time as _time
+    t0 = _time.time()
+    print(f"Precomputing log(Re) quantile bucket weights ({cfg.re_bucket_count} buckets)...")
+    log_re = np.empty(len(train_ds), dtype=np.float64)
+    for i, fp in enumerate(train_ds.files):
+        s = torch.load(fp, weights_only=True)
+        log_re[i] = float(s["x"][0, 13].item())
+    edges = np.quantile(log_re, np.linspace(0.0, 1.0, cfg.re_bucket_count + 1))
+    edges[0] -= 1e-6  # ensure leftmost sample lands in bucket 0
+    bucket_ids = np.digitize(log_re, edges[1:-1])  # 0..N-1
+    counts = np.bincount(bucket_ids, minlength=cfg.re_bucket_count)
+    re_bucket_w = 1.0 / counts[bucket_ids].astype(np.float64)
+    re_bucket_w = re_bucket_w / re_bucket_w.mean()
+    print(f"  log(Re) range: [{log_re.min():.3f}, {log_re.max():.3f}]")
+    print(f"  Bucket counts: {counts.tolist()}")
+    print(f"  Bucket edges: {[round(float(e), 3) for e in edges]}")
+    print(f"  Bucket weight range: [{re_bucket_w.min():.3f}, {re_bucket_w.max():.3f}]")
+
+    composed_w = sample_weights.numpy() * re_bucket_w
+    composed_w = composed_w / composed_w.mean()
+    sample_weights = torch.tensor(composed_w, dtype=torch.float64)
+    print(f"  Composed weight range: [{composed_w.min():.3f}, {composed_w.max():.3f}]")
+    print(f"  Precompute took {_time.time() - t0:.1f}s")
+    re_bucket_stats = {
+        "sampler/log_re_min": float(log_re.min()),
+        "sampler/log_re_max": float(log_re.max()),
+        "sampler/bucket_w_min": float(re_bucket_w.min()),
+        "sampler/bucket_w_max": float(re_bucket_w.max()),
+        "sampler/composed_w_min": float(composed_w.min()),
+        "sampler/composed_w_max": float(composed_w.max()),
+        "sampler/bucket_counts": counts.tolist(),
+        "sampler/bucket_edges": [round(float(e), 4) for e in edges],
+        "sampler/n_buckets": int(cfg.re_bucket_count),
+    }
 
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
@@ -503,6 +548,9 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+
+if re_bucket_stats is not None:
+    wandb.summary.update(re_bucket_stats)
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
