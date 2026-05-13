@@ -2,6 +2,69 @@
 
 ---
 
+## 2026-05-13 10:05 — PR #2110: [sgdr-warm-restarts-v2] SGDR T_0=14, T_mult=1 — CLOSED
+
+- **Branch**: charliepai2g24h1-askeladd/sgdr-warm-restarts-v2
+- **Hypothesis**: CosineAnnealingWarmRestarts T_0=14, T_mult=1 — two cosine cycles in 28 epochs; LR resets to 1e-3 at epoch 15 from warm SOAP preconditioner.
+- **Status**: CLOSED — +8.13% val regression. Restart shock destroyed cycle-2 convergence.
+
+| Metric | SGDR | Baseline (#2011) | Δ |
+|--------|------|-----------------|---|
+| val_avg/mae_surf_p | 31.2245 | 28.8762 | **+8.13% (WORSE)** |
+| test_avg/mae_surf_p | 27.4939 | 24.9992 | **+9.98% (WORSE)** |
+
+**LR trace**: ep1=1e-3, ep14≈2e-5 (cycle-1 floor, val=37.95), ep15=1e-3 (RESTART → val JUMPED to 64.52, +70%), ep28≈2e-5 (cycle-2 floor, val=31.22).
+
+**Failure mechanism**: The restart at epoch 15 hit a sharp minimum from cycle-1's eta_min. Resetting to lr=1e-3 with warm SOAP preconditioner produced an aggressive update landing far outside the local basin. Cycle-2 took all 14 epochs to re-anneal back down. End of cycle-2 (31.22) beat end of cycle-1 (37.95) by ~18%, confirming the warm-init benefit is real but not enough to overcome the restart penalty within the 28-epoch budget. Askeladd's analysis: "budget arithmetic kills the idea" — 28-epoch budget accommodates exactly two 14-epoch cycles with no room to capitalize on re-exploration.
+
+**Programme conclusion**: Periodic warm restarts CLOSED for this budget. The correct next step (per askeladd's follow-up) is extending T_max to keep LR higher without resetting. Assigned cosine-long-tail (#2147).
+
+**Artifact**: `models/model-sgdr-warm-restarts-20260513-090346/metrics.jsonl`
+
+---
+
+## 2026-05-13 10:05 — PR #2079: [n-layers-6] Deeper Transolver stack 5→6 layers — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/n-layers-6
+- **Hypothesis**: Extra Transolver block at same hidden_dim for more representational depth.
+- **Status**: CLOSED — +6.22% val regression. Slowdown trimmed budget from 28→24 epochs; model still on downslope.
+
+| Metric | n=6 | Baseline (#2011) | Δ |
+|--------|-----|-----------------|---|
+| val_avg/mae_surf_p | 30.6712 | 28.8762 | **+6.22% (WORSE)** |
+| test_avg/mae_surf_p | 26.7463 | 24.9992 | **+6.99% (WORSE)** |
+
+**Cause**: Steady-state epoch time 75.9s vs ~64s (baseline) — ~19% slowdown matching +20% params. Trimmed budget 28→24 epochs. Best epoch=24 (last), still descending. Deeper model is **under-trained** in this budget, not over-fit. Peak GPU 32.84 GB (unchanged), so this is not memory-limited — purely compute throughput.
+
+**Single_in_dist regression was worst** (+12.86% val): the cleanest split requires the most fine-tuning steps to reach its optimum. OOD splits (rc +2.29%, cruise +3.63%) are less sensitive to the 4 missing epochs.
+
+**Programme conclusion**: n_layers=6 closed for 30-min budget. Next step: n_head=8 (same inner_dim, no slowdown, doubles FiLM gating degrees of freedom) assigned to fern as #2154.
+
+**Artifact**: `models/model-n-layers-6-20260513-085622/metrics.jsonl`
+
+---
+
+## 2026-05-13 10:05 — PR #2111: [huber-delta-p-tighter] δ_p=0.05, δ_v=0.1 — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/huber-delta-p-tighter
+- **Hypothesis**: Tighten pressure δ from 0.1→0.05 to concentrate pressure gradient in pure-L2 quadratic regime.
+- **Status**: CLOSED — +1.50% val regression. Pressure was already mostly in quadratic regime.
+
+| Metric | δ_p=0.05 | Baseline (#2011) | Δ |
+|--------|---------|-----------------|---|
+| val_avg/mae_surf_p | 29.3080 | 28.8762 | **+1.50% (WORSE)** |
+| test_avg/mae_surf_p | 25.0658 | 24.9992 | +0.27% |
+
+**Key diagnostic**: Per-channel l2-fraction at end of training — p (0.877), Uy (0.877), Ux (0.843). **Pressure was already nearly identical to velocity in the quadratic regime.** Tightening δ_p from 0.1 to 0.05 moved the cap into the distribution interior, halving gradient magnitude for moderate-outlier pressure residuals (those in |r|∈(0.05, 0.1]) — exactly the informative samples that drive learning on hard cases. single_in_dist regressed +5.28%.
+
+**Root cause**: After ReScaleHead + ReFiLM + p_weight=5 stack, normalized pressure residuals are already small and concentrated near zero. The Huber δ=0.1 was already in the "right zone." Tightening removed gradient signal from remaining hard cases.
+
+**Programme conclusion**: Huber δ axis CLOSED (both directions tried — looser velocity in #2081, tighter pressure in #2111 — both regressed). Loss shape is well-calibrated at δ=0.1. Next step: log-cosh smooth replacement assigned to thorfinn (#2146).
+
+**Artifact**: `models/model-charliepai2g24h1-thorfinn-huber-delta-p-tighter-20260513-091929/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:35 — PR #2081: [per-channel-huber-delta] δ_v=0.5, δ_p=0.1 — CLOSED
 
 - **Branch**: charliepai2g24h1-thorfinn/per-channel-huber-delta

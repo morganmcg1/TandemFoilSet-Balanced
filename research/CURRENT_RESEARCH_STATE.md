@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 09:40 (reviewed #2077/#2081 closed; re-assigned askeladd sgdr-warm-restarts-v2 #2110; assigned thorfinn huber-delta-p-tighter #2111)
+- **Date**: 2026-05-13 10:10 (reviewed #2110/#2111/#2079 all closed; assigned thorfinn log-cosh-loss #2146, askeladd cosine-long-tail #2147, fern n-head-8 #2154)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -56,8 +56,9 @@ Coord-jitter (per-node, +1.93% regression on rebased stack) does not compound wi
 
 | PR | Student | Slug | Status | Priority | Notes |
 |----|---------|------|--------|----------|-------|
-| #2110 | askeladd | `sgdr-warm-restarts-v2` | NEW | **HIGH** | CosineAnnealingWarmRestarts T_0=14, T_mult=1; 2 cosine cycles in 28 epochs |
-| #2111 | thorfinn | `huber-delta-p-tighter` | NEW | **HIGH** | δ_p=0.05 (tighter for pressure), δ_v=0.1 unchanged; concentrate p gradient |
+| #2154 | fern | `n-head-8` | NEW | **HIGH** | n_head 4→8; same inner_dim=128; doubles ReFiLM gating degrees of freedom |
+| #2147 | askeladd | `cosine-long-tail` | NEW | **HIGH** | T_max=40/56 so cosine never completes within 28-ep budget; higher final LR |
+| #2146 | thorfinn | `log-cosh-loss` | NEW | **HIGH** | Log-cosh C∞ replacement for Huber; smooth gradient for SOAP Hessian approx |
 | #2092 | tanjiro | `coord-translation-aug` | NEW | **HIGH** | Rigid mesh translation NSE-invariant aug; distinct from per-node jitter |
 | #2079 | fern | `n-layers-6` | WIP | **HIGH** | Deeper Transolver stack n_layers 5→6 (+20% depth) |
 | #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; fixes zero-spread failure; needs rebase onto 28.8762 |
@@ -103,14 +104,17 @@ All 8 students active.
 - **coord-jitter-aug** (#1963): +1.93% on rebased stack; per-node jitter doesn't compound with p_weight+ReFiLM
 - **soap-linear-warmup** (#2077): +1.38% val; no instability to fix + wastes budget epochs
 - **per-channel-huber-delta v1** (#2081): +1.16% val; loosening velocity δ to 0.5 removes Huber tail → pure L2 for velocity → gradient mass shifts away from pressure
+- **huber-delta-p-tighter** (#2111): +1.50% val; tightening δ_p to 0.05 truncates informative-outlier pressure gradients (pressure already 88% in quadratic regime). Huber δ axis CLOSED.
+- **sgdr-warm-restarts-v2** (#2110): +8.13% val; restart shock at epoch 15 (val 37.95→64.52) burned full cycle-2 budget on recovery. Warm restarts CLOSED for 30-min budget.
+- **n-layers-6** (#2079): +6.22% val; ~19% epoch slowdown trimmed budget 28→24 epochs; model still on downslope (under-trained). n_layers=6 closed for current budget.
 
 ---
 
 ## Potential Next Directions
 
 **After current in-flight experiments land**:
-- **SGDR cycle length sweep**: If T_0=14 T_mult=1 works, test T_0=10 T_mult=2 (shorter first cycle, longer second)
-- **Higher peak LR**: OneCycleLR (#1884) tests peak 2e-3; if that works, try peak 3e-3 with SGDR
+- **Cosine T_max=40/56 results** (#2147): if long-tail helps, confirm best T_max and merge
+- **n_head=8 result** (#2154): if more heads help, test n_head=16 or combine with n_head=8 + n_layers=6 (2× depth, 2× heads)
 - **ReFiLM per-block (not shared)**: Current ReFiLM is shared across all 5 blocks; per-block FiLM adds 4×more params but allows layer-specific Re gating
 - **Geometry-specific augmentation**: camber/chord perturbation to directly improve geom_camber splits
 - **Mixup on input features**: blend 2 samples for OOD generalization
