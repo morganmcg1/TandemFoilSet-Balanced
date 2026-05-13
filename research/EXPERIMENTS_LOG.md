@@ -1,5 +1,50 @@
 # SENPAI Research Results
 
+## 2026-05-13 04:15 — PR #1524 (r3): Gradient accumulation accum=4 + floor stack — CLOSED
+
+- Branch: `charliepai2g24h2-tanjiro/grad-accum-eff-bs16`
+- Hypothesis: grad-accum=4 (eff_bs=16) cleans gradient signal, compounds with Huber+chan_w+warmup stack
+- Artifacts: `models/model-charliepai2g24h2-tanjiro-grad-accum-stack-floor-r3-20260513-032140/metrics.jsonl`
+
+| Split | mae_surf_p (accum=4) | Huber floor #1801 | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist     | 145.64 | 134.21 | +8.5% |
+| val_geom_camber_rc     | 130.21 | 133.88 | −2.7% |
+| val_geom_camber_cruise |  90.39 |  77.59 | +16.5% |
+| val_re_rand            | 106.14 |  98.93 | +7.3% |
+| **val_avg**            | **118.09** | **111.15** | **+6.2%** |
+| test_avg (3-split, excl cruise) | 118.04 | 109.56 | +7.7% |
+
+**Config:** accum_steps=4, lr=7.5e-4, chan_w=[1,1,5], 3-ep warmup + cosine T_max=47, gradclip(max_norm=1.0), Huber β=1.0. 14 epochs (timeout-cut at 30 min). Peak VRAM 42.11 GB.
+
+**Decision: CLOSED — +6.2% regression vs Huber floor. Clean dead-end on the current stack.**
+
+**Analysis:** Student's root-cause diagnosis is excellent and correct: at the 30-min timeout, accum_steps=4 reduces optimizer steps per epoch from ~375 to ~94 — the model sees 4× fewer total gradient updates (1313 vs 5250). Under a timeout-cut training regime, optimizer step throughput dominates over gradient cleanliness. On the *old* floor (122.70), accum compounded cleanly (+3.8% improvement). On the Huber floor, it doesn't — because the Huber stack is already producing high-quality per-step learning, and the throughput cost kills gains. **Do not revisit** grad-accum in the timeout-cut regime. If the training budget extends to >60 min, this hypothesis may be worth retesting.
+
+---
+
+## 2026-05-13 03:15 — PR #1477 (r2, AMP bf16 + L2 base): Outstanding results, sent back for Huber rebase
+
+- Branch: `charliepai2g24h2-fern/amp-bf16-gradclip`
+- Hypothesis: AMP bf16 unlocks +58% epochs in same wall clock; floor-stack rebase
+- Artifacts: `models/model-charliepai2g24h2-fern-amp-bf16-on-floor-r2-seed-a-20260513-020635/metrics.jsonl`, `...-seed-b-20260513-024157/metrics.jsonl`
+
+| Metric | seed-a | seed-b | Mean | Old floor #1573 | Δ vs #1573 |
+|---|---:|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | **104.71** | **101.22** | **102.97** | 122.70 | **−16.1%** |
+| test_avg (bs=4 clean!) | 93.52 | 93.36 | 93.44 | NaN | clean ✓ |
+| best_epoch (of 50) | 19 | 18 | 18.5 | 12 | +58% |
+| mean epoch time (s) | 98.6 | 98.6 | — | ~156 | −37% |
+| peak GPU memory (GB) | 32.95 | 32.95 | — | 42.12 | −22% |
+
+**Spread between seeds:** 3.49 val points (3.3%). Both seeds far under 115 threshold.
+
+**Decision: SENT BACK — branch rebased on pre-Huber HEAD `3b30bfc`. Needs one final rebase onto post-Huber `d0b582f` + ONE confirm seed.**
+
+**Analysis:** AMP bf16 is the largest single structural improvement since chan_w. Three wins compound: (1) 37% faster epochs → 58% more epochs in budget, (2) 22% less VRAM, (3) fern's non-finite-y prefilter in evaluate_split kills the bs=4 test NaN (test_geom_camber_cruise clean at 65/67 each seed). BUT: Huber PR #1801 merged DURING her rebase — branch HEAD `ad91591` was rebased onto `3b30bfc` (pre-Huber), so it now conflicts with `d0b582f`. Both seed-b at 101.22 and Huber floor at 111.15 are measured on incompatible configs. Expected result with Huber+AMP stacked: ~91-95 val_avg. Win condition: val_avg < 111.15.
+
+---
+
 ## 2026-05-13 01:00 — PR #1573: Warmup + lr=7.5e-4 + gradient clipping — **NEW FLOOR**
 
 - Branch: `charliepai2g24h2-frieren/warmup-lr75e-4-gradclip`
