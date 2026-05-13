@@ -8,6 +8,53 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 13:10 — PR #2063: Lion optimizer (lr=3e-4, wd=3e-4) on β=0.3+RFF+Kendall — Lion+β compound confirmed
+
+- **val_avg/mae_surf_p:** **47.6416** (seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **40.5651** (seed 0, SWA-model, 4-split all finite)
+- Improvement vs. PR #1757 (66.6617 / 58.3234): val **−28.54%**, test **−30.45%**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val (Lion+β=0.3) | Baseline #1757 | Δ val | test (Lion+β=0.3) | Baseline #1757 | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 48.447 | 74.617 | −35.10% | 42.396 | 65.443 | −35.22% |
+| geom_camber_rc | 62.855 | 79.810 | −21.24% | 55.252 | 72.473 | −23.76% |
+| geom_camber_cruise | 29.711 | 44.650 | −33.47% | 24.413 | 38.187 | −36.07% |
+| re_rand | 49.553 | 67.570 | −26.67% | 40.197 | 57.191 | −29.72% |
+| **avg** | **47.642** | **66.662** | **−28.54%** | **40.565** | **58.323** | **−30.45%** |
+
+All 4 splits improve on both val and test. Largest gains: `geom_camber_cruise` (−36.1% test) and `single_in_dist` (−35.2% test).
+
+### Mechanism
+
+Lion optimizer (Chen et al. 2023) with lr=3e-4, wd=3e-4. Key properties:
+- **Sign-update:** every param update is exactly ±lr × sign(EMA), producing a bounded per-step magnitude of √n_params at every step (verified: optimizer_update_norm = 868.6 = √754519 at every logged step)
+- **Memory efficient:** 1× param memory vs 2× for AdamW
+- **Grad-clip interaction:** clip fires ~74% of steps under Lion (vs ~97% under AdamW) — Lion's intrinsic bound reduces gradient spikes
+- **Kendall σ collapse:** all 6 log_σ channels converge to identical value (−0.904) under Lion's sign-update. Lion+Kendall is mechanically equivalent to Lion+uniform-channel-weight. **Does not invalidate the win.**
+- **Composition with β=0.3:** val improved from 50.97 (Lion on β=0.0) to 47.64 (Lion on β=0.3) — Lion and β=0.3 are mechanistically independent (optimizer vs loss shape) and compound additively.
+
+### Config
+
+Transolver + FiLM (mid_dim=64) + Huber **β=0.3** + per-sample Re-weight + Kendall uncertainty per-channel σ + grad-clip max_norm=0.5 + RFF (16-dim, σ=1.0) + **Lion optimizer lr=3e-4 wd=3e-4**
+Schedule: CosineAnnealingLR(T_max=15), SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2)
+
+W&B run: `5hp3gid7`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 --max_norm 0.5 --use_kendall_uncertainty \
+  --fourier_features --fourier_num_features 16 --fourier_sigma 1.0 \
+  --huber_beta 0.3 \
+  --optimizer lion --lr 3e-4 --weight_decay 3e-4 \
+  --seed 0
+```
+
+---
+
 ## 2026-05-13 11:52 — PR #1757: Huber β=0.3 on RFF+Kendall stack (β-Kendall-RFF composition confirmed)
 
 - **val_avg/mae_surf_p:** **66.6617** (seed 0, SWA-model eval)
