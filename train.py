@@ -469,6 +469,7 @@ class Config:
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
+    pos_jitter_std: float = 0.0  # std-dev of Gaussian noise added to mesh coord dims 0:2 of non-boundary nodes (training only). 0.0 = disabled.
 
 
 cfg = sp.parse(Config)
@@ -619,6 +620,42 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Position-jitter (PR #1907): perturb mesh coord dims (0:2 = node x,z) of
+        # non-boundary (volume) nodes only, training-only, in raw coord space
+        # before normalization. Surface and padded coords are untouched so the
+        # airfoil geometry the model conditions on is preserved bit-for-bit.
+        # Re-weight reads dim 13 (log_re) so it is unaffected by coord jitter.
+        if cfg.pos_jitter_std > 0:
+            vol_mask = mask & ~is_surface
+            coord_noise = torch.randn(
+                x.shape[0], x.shape[1], 2, device=x.device, dtype=x.dtype,
+            ) * cfg.pos_jitter_std
+            coord_noise = coord_noise * vol_mask.unsqueeze(-1).to(x.dtype)
+
+            # Diagnostic for first 5 train batches: confirm jitter hits volume only.
+            if global_step < 5:
+                surf_full = mask & is_surface
+                vol_coords_pre = x[..., 0:2][vol_mask]
+                surf_coords_pre = x[..., 0:2][surf_full]
+                x_post = x.clone()
+                x_post[..., 0:2] = x_post[..., 0:2] + coord_noise
+                vol_coords_post = x_post[..., 0:2][vol_mask]
+                surf_coords_post = x_post[..., 0:2][surf_full]
+                wandb.log({
+                    "train/coord_pre_jitter_volume_std": vol_coords_pre.std().item() if vol_coords_pre.numel() > 1 else 0.0,
+                    "train/coord_post_jitter_volume_std": vol_coords_post.std().item() if vol_coords_post.numel() > 1 else 0.0,
+                    "train/coord_pre_jitter_surface_std": surf_coords_pre.std().item() if surf_coords_pre.numel() > 1 else 0.0,
+                    "train/coord_post_jitter_surface_std": surf_coords_post.std().item() if surf_coords_post.numel() > 1 else 0.0,
+                    "train/n_volume_nodes": int(vol_mask.sum().item()),
+                    "train/n_surface_nodes": int(surf_full.sum().item()),
+                    "train/surface_coords_max_drift": (surf_coords_post - surf_coords_pre).abs().max().item() if surf_coords_pre.numel() > 0 else 0.0,
+                    "global_step": global_step,
+                })
+                x = x_post
+            else:
+                x = x.clone()
+                x[..., 0:2] = x[..., 0:2] + coord_noise
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
