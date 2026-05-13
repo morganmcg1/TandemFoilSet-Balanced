@@ -458,6 +458,20 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
 
+# Reflection augmentation (50% per batch): physical y-flip symmetry of incompressible NS.
+# Reflects every directional input + target channel consistently.
+#   ch  1  pos y                           → negate
+#   ch  3  saf y-component                 → negate
+#   ch  4-11 dsdf 8-ray scan (0°,45°,90°,135°,180°,225°,270°,315°)
+#                                          → permute [0,7,6,5,4,3,2,1] (mirror across x-axis)
+#   ch 14  AoA foil 1 (radians)            → negate
+#   ch 18  AoA foil 2 (radians)            → negate
+#   ch 22  gap (signed y-offset)           → negate
+#   y[..., 1] (Uy)                         → negate
+# All operations on raw (un-normalized) values, so negation maps directly to physical reflection.
+REFL_DSDF_PERM = torch.tensor([0, 7, 6, 5, 4, 3, 2, 1], device=device, dtype=torch.long)
+print(f"Reflection aug: 50% chance per training step; flips ch1(y), ch3(saf_y), ch4-11(dsdf perm), ch14/18(AoA), ch22(gap), target Uy; physical-symmetry NS y-flip aug")
+
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
 # would retrace on every new shape.
@@ -531,6 +545,16 @@ for epoch in range(MAX_EPOCHS):
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Reflection aug: physical NS y-flip on raw (un-normalized) values.
+        if torch.rand(1).item() < 0.5:
+            x[..., 1] = -x[..., 1]
+            x[..., 3] = -x[..., 3]
+            x[..., 4:12] = x[..., 4:12].index_select(-1, REFL_DSDF_PERM)
+            x[..., 14] = -x[..., 14]
+            x[..., 18] = -x[..., 18]
+            x[..., 22] = -x[..., 22]
+            y[..., 1] = -y[..., 1]
 
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
