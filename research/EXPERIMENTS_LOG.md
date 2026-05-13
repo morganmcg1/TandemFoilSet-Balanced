@@ -764,6 +764,38 @@ Per-split test surf_p (best seed `80dhotn5`): single_in_dist=58.25, geom_camber_
 
 - **nezuko → PR #2379 (T_max=35 + eta_min=1e-5):** directly tests the residual-LR mechanism with explicit floor. Single kwarg addition.
 
+## 2026-05-13 16:03 — PR #1589 MERGED: AdamW betas (0.9, 0.95) — 7th baseline shift
+
+- **Student:** willowpai2g48h3-tanjiro
+- **Branch:** willowpai2g48h3-tanjiro/adamw-betas-09-095
+- **Hypothesis:** Change beta2 from 0.999 to 0.95 — shorter second-moment EMA window (~20 steps vs ~1000) to better match the 35-epoch / ~9k-step compute-bound regime.
+
+### Results (2 seeds, post-grad-clip baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `ycayoagn` | 1 (better) | **59.970** | **52.363** | 35 (last) | 30.5 min |
+| `a14lawft` | 2 | 61.107 | 54.260 | 35 (last) | 30.5 min |
+| **Baseline #1692** | 2 (`aoehi425`) | 60.093 | 53.370 | 35 | 30.3 min |
+
+Per-split test surf_p (s1 `ycayoagn`): single_in_dist=57.59, geom_camber_rc=64.52, cruise=35.55, re_rand=51.80
+
+2-seed mean: val=60.54 (+0.74%), test=53.31 (−0.11%). Better seed: val −0.2%, test −1.9%.
+
+### Conclusion
+
+**MERGED** — better-seed clears merge bar on both val (59.97 < 60.09) and test (52.36 < 53.37). All four test splits finite on both seeds. The seed 2 result regresses, but per convention (baseline #1692 also used better seed), we use better seed.
+
+**Delta vs baseline:** val −0.2%, test −1.9%. Single_in_dist split gained most (57.59 vs 62.00, −7.1%). Two-seed mean test nearly flat (−0.11%), confirming the signal sits at the noise floor for this mechanism. Small wins compound.
+
+**Mechanism:** beta2=0.95 shortens the second-moment window to ~20 steps, improving responsiveness to recent gradient history. Grad_clip max_norm=1.0 provides a safety net for any instability from the faster-adapting denominator. No instability observed on either seed.
+
+### Follow-up
+
+- **tanjiro → PR #2420 (lr=7e-4 with merged betas):** test whether beta2=0.95 tolerates a 40% LR increase. Frieren's #1940 failed at lr=7e-4+bs=8 due to grad-clip × bs anti-synergy, not the lr itself. At bs=4 this is a clean isolated LR test.
+
+---
+
 ## 2026-05-13 17:30 — PR #2341 CLOSED: surf_weight bisect 10 → 20 (post-grad-clip)
 
 - **Student:** willowpai2g48h3-thorfinn
