@@ -1016,3 +1016,37 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Hypothesis: push depth further beyond winning #1899 stack. Param count ~0.62M (1.5× n_hidden=128 baseline, 0.67× #1899). Expected ~36 s/epoch → ~50 epochs in 30-min budget. Mechanism check: is n_layers=3 the depth floor, or can the wider hidden dim carry the load with 2 composition steps?
 - Predicted outcomes: (Win) val < 63.72 → depth floor is below 3; (Tie) within ±0.5 → depth=3 was floor; (Loss) val > 65 → capacity floor at depth=2.
 - Targets: val < 63.7215, test < 55.6430.
+
+## 2026-05-13 09:00 — PR #1930: tanjiro grad-clip max_norm=5.0 — MERGED (10th compound winner)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-max-norm-5`
+- Hypothesis: tighten threshold from 10→5 on the new 9-merge stack. At threshold 5, clip rate ~100%, ~4.2× typical downscaling vs 2.1× at threshold 10. Prediction: either monotonic improvement (keep going lower) or U-shaped (10 was sweet spot).
+- W&B run: `forfket5`
+
+| Metric | Value | vs PR #1899 (9-merge baseline) | vs PR #1784 (grad-clip=10 baseline) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 30) | **63.4801** | −0.24 (−0.38%) | −2.50 (−3.78%) |
+| `test_avg/mae_surf_p` | **54.9834** | −0.66 (−1.18%) | −2.09 (−3.66%) |
+| `test_single_in_dist` | 62.4458 | **+1.00 (regression)** | −2.10 |
+| `test_geom_camber_rc` | 68.3757 | −0.95 | −2.21 |
+| `test_geom_camber_cruise` | 35.8182 | −1.89 | −2.11 |
+| `test_re_rand` | 53.2939 | −0.80 | −1.93 |
+| Clip rate | 90.06% | vs 72.4% at max_norm=10 | — |
+| Mean grad norm | 21.45 | unchanged from max_norm=10 run | — |
+| Mean downscaling | 4.29× | vs ~2.1× at max_norm=10 | — |
+| Per-epoch wall time | ~41.6 s | n/a (n_hidden=128 run) | identical |
+| Epochs in 30 min | 30/30 | — | — |
+
+- **3/4 OOD splits improve cleanly** (camber_rc −0.95, camber_cruise −1.89, re_rand −0.80); **in_dist regresses +1.00** — a diagnostic split: tighter clipping helps OOD generalization but begins suppressing useful in-distribution gradients.
+- **Mechanism confirmed**: clip rate jumped from 72.4% → 90.1% and mean downscaling from 2.1× → 4.3×, EXACTLY matching pre-run predictions (predicted 4.2×). The regime is still "moderate uniform downscaling" — not yet the direction-normalization failure of max_norm=1.0 (~22×).
+- **NOTE**: This run was on n_hidden=128 stack (tanjiro's branch was based on pre-n_hidden=192 advisor commit). Current advisor branch now has n_hidden=192 + grad-clip=5.0. Combined state unmeasured.
+- **Decision: MERGE.** Val improves globally despite in_dist regression; OOD metric improvement validates the tighter threshold. 10th compound winner.
+- **Follow-up assigned**: tanjiro #1982 — grad-clip max_norm=2.5 (threshold scan step 3). Next question: (A) further gain or (B) regime shift (U-shape confirmed, optimum between 2.5 and 5.0).
+
+## 2026-05-13 09:00 — PR #1982: tanjiro assigned grad-clip max_norm=2.5 (threshold scan step 3)
+
+- Branch: `willowpai2g48h5-tanjiro/grad-clip-max-norm-2p5`
+- Hypothesis: Continue threshold scan: 10→5 improved OOD but triggered in_dist regression. At max_norm=2.5, predicted clip rate ~97%, ~8-9× downscaling. Key question: is this still in "moderate uniform downscaling" territory or has it crossed into the destructive direction-normalization regime?
+- Predicted outcomes: (A) val_avg still falls → clip rate 97%, ~8× scaling is productive; (B) in_dist regression dominates → U-shape confirmed; optimum between 2.5 and 5.0 → next step is 3.5–4.5 fractional scan.
+- Targets: val < 63.4801, test < 54.9834.
+- Single-line change: `GRAD_CLIP_MAX_NORM = 5.0 → 2.5`

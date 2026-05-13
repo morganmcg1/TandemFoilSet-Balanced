@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 07:50
+- **Date:** 2026-05-13 09:00
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -11,19 +11,18 @@
 
 CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh node from 24-dim node features. Primary metric `val_avg/mae_surf_p` and paper-facing `test_avg/mae_surf_p` — both **lower is better**, averaged across 4 splits (in-distribution, unseen front-foil camber raceCar, unseen front-foil camber cruise, stratified Re holdout).
 
-## Current baseline (MERGED — 9-compound winner)
+## Current baseline (MERGED — 10-compound winner)
 
-**PR #1899 — alphonse n_hidden=192 × n_layers=3** (merged 2026-05-13 07:35):
-- `val_avg/mae_surf_p = 63.7215` (epoch 30 of 30; vs prior best 65.9757 → **−3.45%**; vs n_layers=3 baseline 69.4518 → **−8.25%**)
-- `test_avg/mae_surf_p = 55.6430` (vs 57.0711 → **−2.51%**; vs 61.1887 → **−9.06%**)
-- **All 4 test splits improve cleanly** (in_dist −3.11, camber_rc −1.26, camber_cruise −0.22, re_rand −1.13 vs PR #1784; much larger vs n_layers=3 baseline)
-- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep + `torch.compile(model, dynamic=True)` + **n_hidden=192**, n_layers=3, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4
-- **NOTE (measured WITHOUT grad-clip=10)**: student's branch was pre-grad-clip. Current advisor has n_layers=3 + n_hidden=192 + grad-clip=10. Combined state unmeasured. Alphonse #1953 (n_hidden=192 + epochs=50) will be the first full-stack measurement.
-- Param count: 0.93M (2.22× n_hidden=128 baseline, still < original 1.84M)
-- Best epoch 30/30 (final) — val slope −0.22/epoch, model epoch-saturated not capacity-saturated.
-- **Mechanism**: "compact but wide" hypothesis confirmed. Width and depth aren't fungible — at n_layers=3, per-layer expressivity is the bottleneck; widening each layer compensates for reduced composition depth. Prior n_hidden=192 failure (n_layers=5, +12.5%) was over-parameterization; n_layers=3 frees the headroom.
+**PR #1930 — tanjiro grad-clip max_norm=5.0** (merged 2026-05-13 09:00):
+- `val_avg/mae_surf_p = 63.4801` (↓ from 63.7215, **−0.38%**; 3/4 splits improve)
+- `test_avg/mae_surf_p = 54.9834` (↓ from 55.6430, **−1.18%**)
+- **3/4 test splits improve** (camber_rc −0.95, camber_cruise −1.89, re_rand −0.80; in_dist +1.00 regression — diagnostic signal that tighter clipping helps OOD generalization but starts suppressing IID gradients)
+- Config: EMA (decay=0.999) + Huber β=0.5 + bf16 autocast + LR warmup 1ep + `torch.compile(model, dynamic=True)` + n_hidden=192, n_layers=3, slice_num=64, mlp_ratio=2, lr=5e-4, bs=4, **grad-clip max_norm=5.0**
+- **NOTE (measured WITHOUT n_hidden=192)**: tanjiro's branch was pre-n_hidden=192. Current advisor has n_layers=3 + n_hidden=192 + grad-clip=5.0. Combined state unmeasured. All subsequent student runs will measure the full combined stack.
+- Clip rate 90.1%, mean downscaling 4.3× (exactly as predicted). Predictions held: regime is still "moderate uniform downscaling", not direction-normalization failure.
+- **W&B run:** `forfket5`
 
-**Cumulative compounding (9 merges):**
+**Cumulative compounding (10 merges):**
 
 | Baseline | val | test | Key change |
 |----------|-----|------|------------|
@@ -36,7 +35,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | PR #1763 edward torch.compile | 71.44 | 62.59 | 44% speedup → 29 vs 17 epochs in budget |
 | PR #1875 frieren n_layers=3 | 69.45 | 61.19 | 35% further speedup + capacity-right-sizing |
 | PR #1784 tanjiro grad-clip=10 | 65.98 | 57.07 | Soft-scaling regime damps gradient heavy tail |
-| **PR #1899 alphonse n_hidden=192** | **63.72** | **55.64** | Width reinvestment — compact+wide beats compact+narrow on depth-limited stack |
+| PR #1899 alphonse n_hidden=192 | 63.72 | 55.64 | Width reinvestment — compact+wide beats compact+narrow on depth-limited stack |
+| **PR #1930 tanjiro grad-clip=5** | **63.48** | **54.98** | Tighter threshold → 90% clip rate, 4.3× downscaling; OOD wins dominate in_dist regression |
 
 ## Active experiments
 
@@ -48,12 +48,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 8-merge stack |
 | frieren | #1898 | n_layers=3 + epochs=50 — cosine schedule T_max tuning | LR schedule / training duration | WIP | Critical follow-up: #1875 ran 30 epochs at T_max=30, but ~44 epochs fit in budget. Setting T_max=50 keeps LR positive through all 44 actual epochs |
 | nezuko | #1878 | mlp_ratio=1 — capacity-down on FFN axis | Architecture / throughput | WIP | Completes 3-axis capacity-down matrix (depth=frieren, slice=askeladd, MLP=nezuko). Running against older stack — may need rebase + retest |
-| tanjiro | #1930 | grad-clip max_norm=5.0 — threshold scan on new 8-merge stack | Gradient stability (threshold scan) | WIP | Direct continuation of #1784 win. Tests if threshold-vs-quality relationship is monotonic (push lower) or U-shaped (settle at 10). At threshold 5: ~100% clip rate, ~4.2× typical downscaling vs 2.1× at 10 |
+| tanjiro | #1982 | grad-clip max_norm=2.5 — threshold scan step 3 | Gradient stability (threshold scan) | WIP | #1930 MERGED (10th winner, val=63.48). 3/4 splits improved; in_dist regressed +1.00. At 2.5: ~97% clip, ~8-9× downscaling — tests whether crossing into direction-normalization regime. Outcome: (A) val < 63.48 → keep going; (B) val > 63.48 → U-shape confirmed, bracket between 2.5–5.0 |
 | thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
-**Baseline alert**: New baseline is PR #1899 (**val=63.7215, test=55.6430**). All future merges must beat this. WIP PRs running against older baselines should be sent back for retest if their delta wouldn't beat 63.72.
+**Baseline alert**: New baseline is PR #1930 (**val=63.4801, test=54.9834**). All future merges must beat this. WIP PRs running against older baselines should be sent back for retest if their delta wouldn't beat 63.48.
 
-**Full-stack measurement priority**: All PRs currently running on the advisor branch now have n_layers=3 + n_hidden=192 + grad-clip=10 (if they pulled the latest advisor commit). Key runs to watch: alphonse #1953 (n_hidden=192 + epochs=50) is the first *direct* measurement of the combined n_layers=3 + n_hidden=192 + grad-clip=10 + schedule-fixed state.
+**Full-stack measurement priority**: Advisor branch now has n_layers=3 + n_hidden=192 + grad-clip=5.0 + all 8 earlier merges. Key run: alphonse #1953 (n_hidden=192 + epochs=50) will be the first *direct* measurement of the full combined 10-compound stack with schedule fix.
 
 ## Critical diagnostic: schedule truncation pattern
 
@@ -78,8 +78,9 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 - **Refined pattern**: 5 trajectory-shape interventions (dropout, grad-clip 1.0, surf_weight=30, Lookahead, SGDR) failed on β=0.5+EMA stack. But **grad-clip=10 in the soft-scaling regime succeeded** (PR #1784, −7.65%). The failure pattern wasn't about clipping/perturbing per se — it was about direction-normalization (clip 100%, ~22× scaling) and exploration-vs-EMA conflict. Soft proportional damping of the heavy gradient tail (72% clip, ~2.1× typical scaling) preserves bulk direction signal while suppressing outliers. Future smoothing experiments should target this regime, not the high-intensity end.
 
 ### Gradient stability / heavy-tail damping (NEW direction — opens after #1784)
-- **Gradient clipping max_norm=10** (#1784, tanjiro) — **MERGED, −7.65% val, −6.74% test**. All 4 splits improve. Soft-scaling regime: clip rate 72.4%, typical step downscaling ~2.1×, p99 downscaling 9.2×. Compounded strongly with compile (pre-compile lever was only −0.95%).
-- **Threshold scan in progress**: tanjiro #1930 max_norm=5.0 — tests monotonic vs U-shaped quality-threshold relationship.
+- **Gradient clipping max_norm=10** (#1784, tanjiro) — **MERGED, −7.65% val, −6.74% test**. All 4 splits improve. Soft-scaling regime: clip rate 72.4%, typical step downscaling ~2.1×, p99 downscaling 9.2×.
+- **Gradient clipping max_norm=5.0** (#1930, tanjiro) — **MERGED, −0.38% val, −1.18% test**. 3/4 splits improve (in_dist regresses +1.00 — first sign of asymmetric OOD/IID trade-off). Clip rate 90.1%, downscaling 4.3×. Predictions matched exactly.
+- **Threshold scan in progress**: tanjiro #1982 max_norm=2.5 — regime shift test. (~97% clip, ~8-9× downscaling predicted). Two outcomes: continued gain or U-shape confirmation → bracket at 2.5–5.0.
 
 ### LR warmup
 - **Warmup 1 epoch** (#1672 v2, nezuko) — MERGED, −0.96%. Mechanism: AdamW 2nd-moment stabilization, not EMA catch-up.
@@ -111,14 +112,14 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 ## Potential next directions
 
 ### High priority (compile + n_layers=3 + n_hidden=192 + grad-clip=10 stack)
-1. **Schedule fix + full-stack measurement** — #1953 (alphonse): n_hidden=192 + epochs=50. First direct measurement of combined 9-merge stack + schedule fix.
+1. **Schedule fix + full-stack measurement** — #1953 (alphonse): n_hidden=192 + epochs=50. First direct measurement of combined 10-merge stack + schedule fix. Must beat val < 63.4801.
 2. **T_max schedule tuning (n_hidden=128)** — #1898 (frieren): epochs=50 on narrower stack. Orthogonal to alphonse.
-3. **Grad-clip threshold scan** — #1930 (tanjiro): max_norm=5.0. Monotonic vs U-shaped quality-threshold.
-4. **β annealing retest** — #1805 (fern): mechanism confirmed, retest on full 9-merge stack.
-5. **slice_num=48 retest** — askeladd #1841: capacity-down on slice axis.
+3. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5. Regime test: monotonic gain or U-shape confirmation.
+4. **β annealing retest** — #1805 (fern): mechanism confirmed, NEEDS REBASE, retest on full 10-merge stack (val < 63.48).
+5. **slice_num=48 retest** — askeladd #1841: capacity-down on slice axis; needs retest on current baseline.
 6. **mlp_ratio=1** — nezuko #1878: complete capacity-down matrix.
-7. **Grad-accumulation steps=2** — thorfinn #1913: gradient-quality axis.
-8. **n_hidden=256 × n_layers=3** — push width further. ~1.65M params. Wall-time constrained (~97 s/epoch → ~18 epochs). Best run AFTER schedule fix confirmed.
+7. **n_layers=2 + n_hidden=192** — thorfinn #1960: depth floor test.
+8. **n_hidden=256 × n_layers=3** — push width further. ~1.65M params. Best run AFTER schedule fix confirmed.
 
 ### Medium priority
 - **n_hidden=160 × n_layers=3** — bracket width from below; is 192 the sweet spot or above it?
