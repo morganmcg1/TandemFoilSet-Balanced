@@ -17,6 +17,7 @@ dependencies = [
     "tqdm",
     "rich",
     "pyyaml",
+    "lion-pytorch>=0.2.0",
 ]
 
 [build-system]
