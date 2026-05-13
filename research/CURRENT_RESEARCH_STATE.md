@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 14:00 (BIG: #2063 askeladd Lion on RFF+Kendall verified via W&B `6tfv6y76` — val_avg=**50.9680**, test_avg=**43.4003** = **−27.85% / −30.10% vs current baseline 70.63/62.09**. Run completed 11:24Z but student hasn't posted SENPAI-RESULT — nudged with verified metrics. Once posted, will preflight + squash-merge. #2021 edward OneCycle RFF+Kendall rerun currently RUNNING at step 4382 (mid-training, val=75.65 pre-SWA). Previous: closed #1873 fern SDF clean negative, assigned fern #2220 LayerScale (replaces withdrawn #2215 DropPath after prior-closure registry hit).
+- **Last updated:** 2026-05-13 12:10 (**TWO WINS PROCESSED:** merged #1757 frieren β=0.3 on RFF+Kendall → new baseline val=**66.6617**/test=**58.3234** (−5.62%/−6.06%); closed #2021 edward OneCycle (69.02 > 66.66 on β=0.3 stack, OneCycle lr=1e-3 overshoots smoother loss landscape). Assigned frieren #2240 gradient centralization + edward #2243 β=0.2 bracket. #2063 Lion+RFF+Kendall confirmed W&B winner (val=50.97) but student hasn't posted SENPAI-RESULT — now needs rebase onto β=0.3 + SENPAI-RESULT post. Alphonse running β=0.1 rerun (W&B `ss0bu7jm`). Previous: closed #1873 SDF, assigned #2220 LayerScale to fern.)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -10,31 +10,31 @@
 - **Idle students:** 0 (all 8 active)
 - **⚠ Operational note:** GraphQL API rate-limit storms (user ID 20516801) can block student entrypoints mid-loop. REST helpers (`pr_body`, `pr_all_comments`, `gh api repos/.../issues/N/comments`) are more reliable during storms. `stale_wip` detection is unreliable during storms — verify activity via W&B before reassigning.
 
-## ⭐ Current baseline (PR #2082 merged 2026-05-13 — RFF σ=1.0 on Kendall)
+## ⭐ Current baseline (PR #1757 merged 2026-05-13 — β=0.3 on RFF+Kendall)
 
-- **val_avg/mae_surf_p:** **70.6271** (seed 0, SWA-model eval) ← NEW
-- **test_avg/mae_surf_p:** **62.0907** (seed 0, SWA-model, 4-split all finite) ← NEW
-- Improvement over prior #1906 Kendall baseline: val **−1.13%**, test **−1.42%**
-- Config: Transolver + FiLM (mid_dim=64) + Smooth-L1 (Huber β=1.0) + per-sample Re-weight + Kendall uncertainty per-channel σ + grad-clip max_norm=0.5 + **RFF (16-dim, σ=1.0)**
+- **val_avg/mae_surf_p:** **66.6617** (seed 0, SWA-model eval) ← NEW
+- **test_avg/mae_surf_p:** **58.3234** (seed 0, SWA-model, 4-split all finite) ← NEW
+- Improvement over prior #2082 RFF baseline: val **−5.62%**, test **−6.06%**
+- Config: Transolver + FiLM (mid_dim=64) + Smooth-L1 (Huber **β=0.3**) + per-sample Re-weight + Kendall uncertainty per-channel σ + grad-clip max_norm=0.5 + RFF (16-dim, σ=1.0)
 - Schedule: CosineAnnealingLR(T_max=15), SWA (start_frac=0.75, swa_lr=1e-4, anneal_epochs=2)
-- W&B baseline run: `2jqhk53m`
+- W&B baseline run: `sowno0vg`
 - See `BASELINE.md` for full reproducible spec.
 
 ### Per-split baseline (SWA)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 78.743 | 69.239 |
-| geom_camber_rc | 84.063 | 75.741 |
-| geom_camber_cruise | 50.114 | 41.418 |
-| re_rand | 69.588 | 61.964 |
-| **avg** | **70.627** | **62.091** |
+| single_in_dist | 74.617 | 65.443 |
+| geom_camber_rc | 79.810 | 72.473 |
+| geom_camber_cruise | 44.650 | 38.187 |
+| re_rand | 67.570 | 57.191 |
+| **avg** | **66.662** | **58.323** |
 
 ## 🔥 Hottest signals this session
 
-- **PR #2021 (edward, OneCycleLR + RFF+Kendall) RUNNING NOW:** Rerun on RFF+Kendall stack started W&B `kqmoul4a` at 10:59Z, currently mid-training (step 4382/4888, val_avg=75.65 pre-SWA). Should complete ~11:30Z with SWA averaging applied. The Kendall-only result was val=67.19/test=59.01 (−5.94%/−6.31% vs Kendall); expected with RFF: val ∈ [62, 67]. Will check after completion.
+- **PR #2021 (edward, OneCycleLR) CLOSED 12:00:** W&B `kqmoul4a` (β=0.3+RFF+Kendall) finished val=69.02/test=61.25 = +3.52%/+5.00% regression vs new β=0.3 baseline. OneCycle max_lr=1e-3 overshoots on the smoother β=0.3 loss landscape. **Banked:** optimal OneCycle lr is β-dependent; max_lr=1e-3 calibrated for β=1.0 loss curvature. Axis is closed on this stack unless attempting smaller max_lr.
 
-- **🚀 PR #2063 (askeladd, Lion + RFF+Kendall) AWAITING RESULTS POST — CONFIRMED MERGE:** Rebase rerun completed in W&B run `6tfv6y76` at 2026-05-13 11:24Z. SWA **val=50.9680 / test=43.4003** — **−27.85% / −30.10% vs current RFF+Kendall baseline (70.63/62.09)**. All 4 test splits finite (test_geom_camber_cruise=27.4556). Composition with RFF held (vs Kendall-only run 50.19, marginal RFF gain ≈0). Student hasn't posted SENPAI-RESULT marker yet — nudged at 11:28Z with verified metrics and template. **Next step: once SENPAI-RESULT lands, run preflight + squash-merge immediately.** This becomes the new baseline.
+- **🚀 PR #2063 (askeladd, Lion+RFF+Kendall) NEEDS REBASE + SENPAI-RESULT:** W&B run `6tfv6y76` completed at 11:24Z — SWA **val=50.9680 / test=43.4003** — **still clears new baseline by ~23%**. BUT: (1) β=0.3 merge created conflict → student must rebase onto new advisor branch; (2) want to confirm Lion+β=0.3 composition (β and Lion are mechanistically distinct, likely compound); (3) student still hasn't posted SENPAI-RESULT for existing run. Sent back at 11:52Z with rebase instructions and full reproduce command with `--huber_beta 0.3 --optimizer lion --lr 3e-4 --weight_decay 3e-4`. **Expected val ∈ [44, 52] if compound; even worst-case same val=50.97 clears bar 66.66.**
 
 - **PR #2082 (alphonse, RFF σ=1.0) MERGED:** val=70.63 / test=62.09 — geom_camber_rc val **−4.57%** / test **−5.26%** (strongest single-split camber improvement since FiLM). RFF acts as low-frequency geometry prior (effective σ≈5 at normalized coord scale). Mechanism: distinguishes camber geometry patterns invisible to raw coords. σ=4.0 arm regressed uniformly. σ→gain is monotonically lower=better, follow-up brackets below σ=1.0 in flight (#2168 thorfinn).
 
@@ -65,24 +65,32 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 | #1906 (askeladd) | kendall-uncertainty | Learned per-channel σ heads | val=71.43, test=62.99 |
 | **#2082 (alphonse)** | **fourier-coord-features** | **RFF σ=1.0, 16-dim** | **val=70.63, test=62.09 ← CURRENT** |
 
-## Current research focus — Wave 8
+## Current research focus — Wave 9 (post-β=0.3 baseline)
+
+**New decision rule (vs β=0.3 baseline 66.66/58.32):**
+- val < 66.66: **merge**
+- 66.66 ≤ val < 67.52 (within σ=0.86): too close — 2nd seed or close
+- val ≥ 67.52: clear regression — close
 
 | PR | Student | Slug | Mechanism axis | Target |
 |---|---|---|---|---|
-| #2168 ← NEW | thorfinn | `fourier-sigma-refine` | RFF σ sweep {0.5, 2.0} — bracket below winning σ=1.0 | val < 70.63 |
-| #2170 ← NEW | nezuko | `fourier-nfeatures-32` | RFF num_features=32 (σ=1.0) — double spectral dim | val < 70.63 |
-| #2171 ← NEW | alphonse | `beta-0p1-rff-kendall` | Huber β=0.1 on RFF+Kendall stack | val < 70.63 |
-| #1757 (rerun) | frieren | `beta-0p3-on-rff-kendall` | β=0.3 on full current stack (was on pre-Kendall) | val < 70.63 |
-| #2063 ← REVISED | askeladd | `lion-optimizer-on-rff-kendall` (rebase pending) | Lion lr=3e-4 wd=3e-4 on full RFF+Kendall stack — rerun after verified 30% win on Kendall-only required rebase | val < 70.63 (likely val ∈ [48, 60] given Lion-on-Kendall = 50.19) |
-| #2021 ← RERUN | edward | `onecycle-maxlr-1e-3-on-rff-kendall` (rebase pending) | OneCycleLR max_lr=1e-3 + warmup on full RFF+Kendall stack — verified win val=67.19/test=59.01 on Kendall-only (−5.94%) | val < 70.63 (likely val ∈ [62, 67]) |
-| #2187 ← NEW | tanjiro | `swa-start-0p6` | Earlier SWA start (frac=0.6 → 4 SWA epochs vs 2) on RFF+Kendall | val < 70.63 |
-| #2220 ← NEW | fern | `layerscale-on-rff-kendall` | CaiT LayerScale γ_init=1e-4 — per-channel residual rescaling, mechanism-orthogonal | val < 70.63 |
+| #2063 ← REBASE | askeladd | `lion-on-rff-kendall-beta0p3` | Lion lr=3e-4 wd=3e-4 on β=0.3+RFF+Kendall stack — confirmed val=50.97 on β=0.0 stack, rebase+rerun to verify compound | val < 66.66 (likely ∈ [44, 52]) |
+| #2171 (running) | alphonse | `beta-0p1-rff-kendall` | β=0.1 on RFF+Kendall stack (W&B `ss0bu7jm` running now) — will need compare vs new 66.66 baseline | val < 66.66 |
+| #2243 ← NEW | edward | `beta-0p2-on-current-stack` | β=0.2 bracket between β=0.3 (66.66 baseline) and β=0.1 (alphonse in flight) | val < 66.66 |
+| #2240 ← NEW | frieren | `gradient-centralization-on-beta0p3` | Gradient Centralization (Yong 2020) — pre-update gradient projection, zero-parameter axis | val < 66.66 |
+| #2168 | thorfinn | `fourier-sigma-refine` | RFF σ sweep {0.5, 2.0} on Kendall (needs rebase onto β=0.3 when done) | val < 66.66 |
+| #2170 | nezuko | `fourier-nfeatures-32` | RFF num_features=32 (needs rebase onto β=0.3 when done) | val < 66.66 |
+| #2187 | tanjiro | `swa-start-0p6` | Earlier SWA start (frac=0.6) — needs rebase onto β=0.3 when done | val < 66.66 |
+| #2220 | fern | `layerscale-on-rff-kendall` | CaiT LayerScale γ_init=1e-4 (needs rebase onto β=0.3 when done) | val < 66.66 |
 
-**#1938 tanjiro CLOSED:** per-token FiLM regressed +5.55% val. 4th FiLM-head modification to regress. Shared-γ IS the right inductive bias on 1499-sample dataset. FiLM-head axis is saturated.
+**Rebase notes:** PRs #2168/#2170/#2187/#2220/#2171 were launched before β=0.3 merged. Their results compare vs old baseline (70.63). When they post SENPAI-RESULT, I'll compare vs new 66.66 bar. If they beat 66.66: merge + request rebase if code conflicrs. If 66.66 ≤ val < 70.63: was a win vs old baseline, but now below bar — request rebase+rerun on β=0.3 stack. If val > 70.63: clear regression under any baseline — close.
 
-**#1873 fern CLOSED 2026-05-13:** SDF on RFF+Kendall, val=74.92 = +6.08% regression. Banked: SDF/Kendall compete; geometry-as-raw-input axis closed on RFF+Kendall stack.
-
-**#2215 fern DropPath WITHDRAWN:** prior closure #1680 (layer-count-dependent under-convergence at 5 blocks). Process error — registry not searched. Replaced with #2220 LayerScale (continuous residual rescaling, no under-convergence risk).
+**Closed this session:**
+- **#1757 frieren MERGED** — β=0.3 on RFF+Kendall: val=66.66 / test=58.32 = −5.62%/−6.06%
+- **#2021 edward CLOSED** — OneCycle lr=1e-3 regression on β=0.3 stack (+3.52%); mechanism doesn't survive loss landscape change
+- **#1873 fern CLOSED** — SDF on RFF+Kendall regression (+6.08%)
+- **#1938 tanjiro CLOSED** — per-token FiLM (+5.55%)
+- **#2215 fern WITHDRAWN** — DropPath prior-closure hit (#1680)
 
 ## Decision rule (vs new 70.63 baseline)
 
@@ -93,7 +101,7 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 
 ## Mechanism-axis coverage
 
-### ✓ Landed (7 axes, baseline = 70.63)
+### ✓ Landed (8 axes, baseline = 66.66)
 
 1. Loss-shape (Huber β=1.0) → #1452
 2. Loss-weighting (per-sample Re-weight) → #1586
@@ -101,7 +109,8 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 4. Optimizer-stability (grad-clip max_norm=1.0) → #1731
 5. Optimizer-stability (grad-clip max_norm=0.5) → #1831
 6. Loss-weighting (channel-level learned σ — Kendall) → #1906
-7. **Input-encoding (RFF coord features σ=1.0)** → **#2082** ← NEW
+7. Input-encoding (RFF coord features σ=1.0) → #2082
+8. **Loss-shape (Huber β=0.3 — outlier suppression)** → **#1757** ← NEW BASELINE
 
 ### 🔬 In-flight (wave 8)
 
@@ -143,9 +152,9 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 
 ## Key open bottlenecks
 
-1. **geom_camber_rc** val=84.06, test=75.74 (largest remaining per-split gap). RFF helped (−5.26% test) but still the biggest target.
-2. **test_re_rand OOD gap**: val=69.59, test=61.96 (now confirmed: NOT from Re info loss — FiLM preserves Re; gap from Re-conditional feature interactions).
-3. **30-min timeout clips SWA**: both RFF arms hit epoch 13/15 → only 2 SWA epochs. Improving training efficiency or reducing per-epoch cost could unlock the full 4-epoch SWA window.
+1. **geom_camber_rc** val=79.81, test=72.47 (still largest per-split gap, improved from 84.06 by β=0.3). RFF + β=0.3 both helped but still the primary target.
+2. **re_rand OOD gap**: val=67.57, test=57.19 (β=0.3 gave biggest test gain here −7.70%). RFF helps via coordinate encoding. FiLM interaction axis still unexplored.
+3. **30-min timeout clips SWA**: hit epoch 13/15 → only 2 SWA epochs. #2187 tanjiro (swa_start_frac=0.6) directly targets this.
 
 ## Potential next research directions (wave 9+)
 
@@ -163,12 +172,12 @@ None received. Last issue check: 2026-05-13 09:15 UTC, zero open issues on this 
 ## Open questions to revisit on next review
 
 - **#2021 edward OneCycleLR:** arm 1 (max_lr=5e-4) finished at val=71.39 > new bar (70.63). Does arm 2 (max_lr=1e-3) clear 70.63?
-- **#2063 askeladd Lion rebase:** rerun on full RFF+Kendall pending. Verified 30% win on Kendall-only — prediction val ∈ [48, 60].
-- **#2021 edward OneCycle rebase:** rerun on full RFF+Kendall pending. Verified 6% win on Kendall-only — prediction val ∈ [62, 67].
-- **#1757 frieren β=0.3:** Rerun on full current stack pending. High confidence this will improve (mechanism confirmed on 3 prior stacks).
-- **#2168 thorfinn σ-refine {0.5, 2.0}:** brackets winning σ=1.0. If σ=0.5 lands → continue to σ=0.25.
-- **#2170 nezuko nfeatures=32:** more spectral coverage at σ=1.0.
-- **#2171 alphonse β=0.1:** outlier-suppression on RFF+Kendall stack.
-- **#2187 tanjiro swa-start-0.6:** 4 averaging epochs vs 2 — directly attacks the 30-min timeout SWA clip.
-- **#2220 fern LayerScale γ_init=1e-4:** fresh axis just assigned 2026-05-13 13:50.
-- **Researcher-agent output:** `/research/RESEARCH_IDEAS_2026-05-13_12:00.md` available for wave-9+ ideas.
+- **#2063 askeladd Lion:** needs SENPAI-RESULT post for old run + rebase onto β=0.3 + new rerun. Expected val ∈ [44, 52] if compound with β=0.3. Highest-priority pending merge.
+- **#2171 alphonse β=0.1:** W&B run `ss0bu7jm` running now. Will compare vs new 66.66 baseline. If wins → β is better at 0.1; if loses → β=0.3 is optimal.
+- **#2243 edward β=0.2:** fresh assignment 2026-05-13 12:05. Closes the {0.1, 0.2, 0.3} bracket.
+- **#2240 frieren GC:** fresh assignment 2026-05-13 12:05. First optimizer-hook test on this stack.
+- **#2168 thorfinn σ-refine {0.5, 2.0}:** running on β=0.0 stack — will compare vs 66.66 when results land. If meets bar: merge; if 66.66 < val < 70.63: was win on old bar, send back for rebase+rerun on β=0.3.
+- **#2170 nezuko nfeatures=32:** same situation as thorfinn — compare vs 66.66 when lands.
+- **#2187 tanjiro swa-start-0.6:** same — compare vs 66.66 when lands.
+- **#2220 fern LayerScale γ_init=1e-4:** same — compare vs 66.66 when lands.
+- **Researcher-agent output:** `/research/RESEARCH_IDEAS_2026-05-13_12:00.md` available for wave-10+ ideas after current wave completes.

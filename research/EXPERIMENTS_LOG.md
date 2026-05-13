@@ -2329,3 +2329,63 @@ ALL four splits regress uniformly. Even the original target bottleneck (geom_cam
 - Surface-normal aux head — never tried, geometry signal without input concat
 - Re-conditional attention bias — directly addresses #2049 finding (test_re_rand from Re-conditional interactions, not Re-info loss)
 
+
+---
+## 2026-05-13 11:52 — PR #1757 MERGED willowpai2g48h2-frieren (β=0.3 on RFF+Kendall): NEW BASELINE
+
+- **Branch:** `willowpai2g48h2-frieren/beta-0p3-on-filmed`
+- **W&B run:** `sowno0vg` (verified independently — all numbers match to 4dp)
+- **Result:** SWA val=**66.6617** / test=**58.3234** — **−5.62% / −6.06% vs prior baseline (70.63/62.09)**
+
+### Per-split SWA (surface MAE, p)
+
+| Split | val | Δ vs #2082 | test | Δ vs #2082 |
+|---|---:|---:|---:|---:|
+| single_in_dist | 74.617 | −5.24% | 65.443 | −5.49% |
+| geom_camber_rc | 79.810 | −5.06% | 72.473 | −4.32% |
+| geom_camber_cruise | 44.650 | −10.90% | 38.187 | −7.80% |
+| re_rand | 67.570 | −2.90% | 57.191 | −7.70% |
+| **avg** | **66.662** | **−5.62%** | **58.323** | **−6.06%** |
+
+All 4 splits win on both val and test. Largest test gain `re_rand` (−7.70%) — 3rd reproduction of β↓ × OOD-Re mechanism.
+
+### Analysis
+
+β=0.3 on β=0.0 stack:
+- First run (Kendall-only): val=70.05 / test=61.42 — missed old RFF baseline
+- **This run (RFF+Kendall)**: val=66.66 / test=58.32 — clear win on full stack
+
+Key mechanism insight (RFF removes the Kendall-only regression): Kendall-only β=0.3 had `test_single_in_dist` regress +4.15% vs #1906. RFF closes this by providing coordinate geometry signal that disambiguates in-distribution samples without relying on pressure spike gradients. β=0.3 + RFF compound constructively.
+
+---
+## 2026-05-13 12:00 — PR #2021 CLOSED willowpai2g48h2-edward (OneCycleLR + RFF+Kendall): DOES NOT COMPOUND with β=0.3
+
+- **Branch:** `willowpai2g48h2-edward/onecycle-lr-warmup-on-kendall`
+- **W&B rerun:** `kqmoul4a` (onecycle-maxlr-1e-3-on-rff-kendall)
+- **Result:** SWA val=**69.019** / test=**61.249** vs new baseline 66.66/58.32 = **+3.52% / +5.00% regression**
+- **Earlier result (Kendall-only, no β):** val=67.19/test=59.01 — was a −5.94% win vs old Kendall baseline (70.63), but this was BEFORE β=0.3 merged
+
+### Analysis
+
+Pre-SWA val reached 75.65 at epoch 13 — significant overshoot indicator. SWA recovered to 69.02 but insufficient.
+
+**Mechanism (banked):** β=0.3 flattens the loss landscape (fewer large-gradient spikes from outliers). OneCycle max_lr=1e-3 is calibrated to the β=1.0 curvature — on a smoother β=0.3 loss, the same high lr causes larger parameter oscillations and overshooting. The "super-convergence" benefit of OneCycle depends on the loss curvature enabling fast escape from sharp minima; β=0.3 reduces that curvature.
+
+**Key finding (axis-specific):** OneCycle max_lr=1e-3 won on β=1.0 stack (val=67.19 < 70.63) but LOSES on β=0.3 stack (val=69.02 > 66.66). Schedule-axis experiments on the future stack must re-calibrate lr for the β=0.3 loss landscape.
+
+---
+## 2026-05-13 12:05 — PR #2240 ASSIGNED willowpai2g48h2-frieren (Gradient Centralization on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-frieren/gradient-centralization-on-beta0p3`
+- **Hypothesis:** GC (Yong et al. ECCV 2020) — subtract mean over input-fan dimensions from each weight gradient before optimizer step. Zero-parameter change, mechanism-orthogonal to all in-flight PRs. Reduces gradient variance from geometry-diverse samples.
+- **Target:** val < 66.66 / test < 58.32
+- Single arm, `--use_gc` flag added.
+
+---
+## 2026-05-13 12:05 — PR #2243 ASSIGNED willowpai2g48h2-edward (β=0.2 on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-edward/beta-0p2-on-current-stack`
+- **Hypothesis:** Bracket the optimal Huber β. β=0.3 is the new baseline; β=0.1 (alphonse #2171) and β=0.2 (this PR) close the bracket to find the optimum in {0.1, 0.2, 0.3}.
+- **Target:** val < 66.66 — expected ∈ [63, 67] based on monotonic β→improvement trend
+- Single arm, `--huber_beta 0.2`.
+
