@@ -40,8 +40,8 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
-| tanjiro | TBA | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | Idle — reassigning | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
-| thorfinn | TBA | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | Idle — reassigning | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
+| tanjiro | #1784 | max_norm=10 (true safety-net threshold above 70–140 peak norms) | Gradient stability | WIP | grad-clip=1.0 v2 closed: 100% clip rate = direction normalization, OOD-helps/IID-hurts |
+| thorfinn | #1783 | Lookahead optimizer (k=5 inner / α=0.5 outer) | Optimizer / trajectory averaging | WIP | dropout 0.1/0.05 both regress on β=0.5; monotonicity violation rules out tuning |
 
 **Critical baseline note**: All PRs must now beat `val_avg/mae_surf_p < 85.9197` (PR #1689 Huber β=0.5, test=76.5495). PRs that beat the old EMA baseline (92.35) but not the current baseline will be sent back for retest on the new stack.
 
