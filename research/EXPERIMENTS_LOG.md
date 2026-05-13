@@ -960,3 +960,34 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Predicted outcomes: (A) val < 65.98 → keep going lower; (B) val > 67 → crossed sweet spot, settle at 10.
 - Single-line change: GRAD_CLIP_MAX_NORM = 10.0 → 5.0. Diagnostics inherited from #1784 merge.
 - Targets compile + n_layers=3 + grad-clip baseline: val < 65.9757, test < 57.0711.
+
+## 2026-05-13 07:35 — PR #1899: alphonse n_layers=3 + n_hidden=192 — MERGED (9th compound winner)
+
+- Branch: `willowpai2g48h5-alphonse/n-layers-3-n-hidden-192`
+- Hypothesis: Reinvest freed depth-compute into width: n_hidden=192 on the n_layers=3 stack. Prior n_hidden=192 on n_layers=5 was +12.5% worse (capacity saturation). On n_layers=3 (0.42M params), per-layer expressivity is the bottleneck — widening compensates for reduced composition depth.
+- W&B run: `r10qkcgd`
+
+| Metric | Value | vs PR #1875 (n_layers=3 baseline) | vs PR #1784 (grad-clip=10) |
+|--------|-------|-----|-----|
+| `val_avg/mae_surf_p` (best, epoch 30) | **63.7215** | −5.73 (−8.25%) | −2.25 (−3.45%) |
+| `test_avg/mae_surf_p` | **55.6430** | −5.55 (−9.06%) | −1.43 (−2.51%) |
+| `test_single_in_dist` | 61.4444 | −6.39 | −3.11 |
+| `test_geom_camber_rc` | 69.3247 | −4.90 | −1.26 |
+| `test_geom_camber_cruise` | 37.7067 | −5.12 | −0.22 |
+| `test_re_rand` | 54.0962 | −5.78 | −1.13 |
+| Param count | 931,791 (0.93M) | 2.22× n_hidden=128 baseline | — |
+| Per-epoch wall time | ~54.3 s | +33% overhead | n/a |
+| Epochs in 30 min | 30/30 | identical | — |
+
+- **All 4 splits improve** vs both baselines. Best epoch 30/30 (final); val slope still −0.22/epoch at end. Model epoch-saturated, not capacity-saturated.
+- **Mechanism**: width and depth aren't fungible. At n_layers=5, adding width compounds over-parameterization. At n_layers=3, per-layer expressivity is the bottleneck — widening each layer compensates for reduced composition depth.
+- **NOTE**: this run was on the n_layers=3 stack WITHOUT grad-clip=10 (student branch was pre-grad-clip). Result val=63.72 still beats current advisor baseline (65.98). Merged. Combined n_layers=3 + n_hidden=192 + grad-clip=10 unmeasured.
+- **Decision: MERGE.** New best: val=63.7215, test=55.6430.
+- **Follow-up assigned**: alphonse #1953 — n_hidden=192 + epochs=50 (schedule fix: val still descending at ep 30, LR hits zero at T_max=30 while ~33 epochs fit in budget).
+
+## 2026-05-13 07:35 — PR #1953: alphonse assigned n_hidden=192 + epochs=50 (compound + schedule fix)
+
+- Branch: `willowpai2g48h5-alphonse/n-hidden-192-epochs-50`
+- Hypothesis: Combine the width win (#1899) with the schedule fix. At ~54 s/epoch, only ~33 epochs fit in 30-min budget. With `--epochs 50` (T_max=50), LR at epoch 33 ≈ 1.0e-4 (productive); with `--epochs 30`, LR=0 by epoch 30 (dead zone for last 3 epochs). Val slope at epoch 30 was −0.22/epoch — clear epoch-saturation signal.
+- **This is also the first run to measure the full combined stack: n_layers=3 + n_hidden=192 + grad-clip=10 + epochs=50**.
+- Targets: val < 63.7215, test < 55.6430.
