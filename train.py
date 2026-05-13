@@ -213,6 +213,11 @@ class Transolver(nn.Module):
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
         self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+        # Learned surface/volume token offset added to node embeddings before
+        # block 0. Zero-init means the model starts identical to baseline; the
+        # optimiser must actively differentiate the two rows.
+        self.is_surface_emb = nn.Embedding(2, n_hidden)
+        nn.init.zeros_(self.is_surface_emb.weight)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -230,6 +235,8 @@ class Transolver(nn.Module):
         log_re = x[:, 0, 13:14]
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
+        is_surface = data["is_surface"]
+        fx = fx + self.is_surface_emb(is_surface.long())
         for block in self.blocks:
             fx = block(fx, gamma, beta)
         return {"preds": fx}
@@ -334,7 +341,7 @@ def evaluate_split(model, rescale_head, loader, stats, surf_weight, device) -> d
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"] * scale
 
             sq_err = (pred - y_norm) ** 2
             vol_mask = mask & ~is_surface
@@ -550,8 +557,9 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
     gamma_stats = beta_stats = None
     try:
         with torch.no_grad():
-            for x, _y, _is_surface, mask in val_loader:
+            for x, _y, is_surface_, mask in val_loader:
                 x = x.to(device_, non_blocking=True)
+                is_surface_ = is_surface_.to(device_, non_blocking=True)
                 mask = mask.to(device_, non_blocking=True)
                 x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
                 log_re = x_norm[:, 0, 13:14]
@@ -566,7 +574,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
                     "std": beta.std().item(),
                     "absmax": beta.abs().max().item(),
                 }
-                _ = uncompiled({"x": x_norm})
+                _ = uncompiled({"x": x_norm, "is_surface": is_surface_})
                 captured = [
                     [float(v) for v in a._last_slice_entropy.tolist()]
                     if a._last_slice_entropy is not None else []
@@ -658,7 +666,7 @@ for epoch in range(MAX_EPOCHS):
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
-            pred = model({"x": x_norm})["preds"] * scale
+            pred = model({"x": x_norm, "is_surface": is_surface})["preds"] * scale
 
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
@@ -812,6 +820,18 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    # is_surface_emb diagnostics: L2 norm per row + cosine similarity. Tracks
+    # whether the trunk learns to route surface vs volume nodes differently.
+    with torch.no_grad():
+        emb_w = uncompiled_model.is_surface_emb.weight.detach().to(torch.float32)
+        surf_emb_l2 = [float(emb_w[0].norm().item()), float(emb_w[1].norm().item())]
+        n0 = emb_w[0].norm().clamp(min=1e-12)
+        n1 = emb_w[1].norm().clamp(min=1e-12)
+        surf_emb_cos = float((emb_w[0] @ emb_w[1] / (n0 * n1)).item())
+        # Output-head pressure-channel row L2 (mlp2[-1].weight is [out_dim=3, hidden]).
+        out_w = uncompiled_model.blocks[-1].mlp2[-1].weight.detach().to(torch.float32)
+        out_head_row_l2 = [float(out_w[c].norm().item()) for c in range(out_w.shape[0])]
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,6 +864,9 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "surf_emb/row_l2": surf_emb_l2,
+        "surf_emb/cosine": surf_emb_cos,
+        "out_head/row_l2_per_ch": out_head_row_l2,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +894,11 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    print(
+        f"    SurfEmb  L2[vol={surf_emb_l2[0]:.4f} surf={surf_emb_l2[1]:.4f}]  "
+        f"cos={surf_emb_cos:+.3f}  "
+        f"OutHeadRowL2[Ux={out_head_row_l2[0]:.3f} Uy={out_head_row_l2[1]:.3f} p={out_head_row_l2[2]:.3f}]"
+    )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
