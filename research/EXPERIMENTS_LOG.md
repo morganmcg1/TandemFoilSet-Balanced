@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-13 00:25 — PR #1630: [cosine-eta-min] CosineAnnealingLR eta_min=1e-5 floor on SOAP
+
+- **Branch**: charliepai2g24h1-tanjiro/sgdr-restarts (pivoted from SGDR to cosine-eta-min)
+- **Hypothesis**: Prevent CosineAnnealingLR from reaching near-zero at the terminal epoch by adding `eta_min=1e-5`. The SOAP baseline uses `T_max=14` but only completes 13 epochs — epoch 13 is both the budget-limited final epoch and the best checkpoint. Without a floor, the cosine schedule drives LR to ~4.95e-5 at ep 13; with `eta_min=1e-5`, LR is ~5.90e-5 (+19% relative).
+- **Status**: MERGED — new baseline 39.8693
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 13) | **39.8693** |
+| val_single_in_dist | 47.81 (+1.72 vs prev) |
+| val_geom_camber_rc | 52.28 (−3.70) |
+| val_geom_camber_cruise | **20.89** (−3.43) |
+| val_re_rand | **38.49** (−4.73) |
+| test_avg/mae_surf_p | **35.2214** |
+| test_geom_camber_cruise | **17.24** |
+| test_re_rand | **31.37** |
+| Epochs | 13 (~30-min cap) |
+| LR at ep 13 | 5.90e-5 (vs 4.95e-5 without floor) |
+| Baseline | 42.4015 |
+| Delta | **−2.53 (−5.97%)** |
+
+**Analysis**: Single-line change. The +19% relative LR boost at epoch 13 (the best-checkpoint epoch) gives meaningful gradient signal in the final step. 3/4 OOD splits improved; single_in_dist slightly worse (+1.72) likely because it was already well-fit. Val still monotone descending — model has not converged. This is a free compounding gain on top of SOAP.
+
+**Key insight**: The cosine schedule's late-epoch LR matters most when the budget-limited final epoch equals the best checkpoint. This will compound further when bf16-amp provides more epochs.
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-cosine-eta-min-20260512-231540/metrics.jsonl`
+
+---
+
 ## 2026-05-13 00:00 — PR #1579: [pcgrad-surgery] Gradient surgery for vol/surf conflict
 
 - **Branch**: charliepai2g24h1-frieren/pcgrad-surgery
