@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -396,6 +397,10 @@ def write_experiment_summary(
     test_avg: dict | None,
     n_params: int,
     model_config: dict,
+    live_val_avg_surf_p: float | None = None,
+    live_split_metrics: dict | None = None,
+    ema_beta: float | None = None,
+    ema_rampup_fraction: float | None = None,
 ) -> None:
     """Write a local summary next to the best checkpoint."""
     summary: dict = {
@@ -406,24 +411,32 @@ def write_experiment_summary(
         "model_config": model_config,
         "checkpoint": str(model_path),
         "best_epoch": best_metrics["epoch"],
-        "best_val_avg/mae_surf_p": best_avg_surf_p,
+        "best_ema_val_avg/mae_surf_p": best_avg_surf_p,
         "lr": cfg.lr,
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "p_channel_weight": cfg.p_channel_weight,
         "epochs_configured": cfg.epochs,
+        "ema_beta": ema_beta,
+        "ema_rampup_fraction": ema_rampup_fraction,
     }
 
     for split_name, m in best_metrics["per_split"].items():
         for k, v in m.items():
-            summary[f"best_val/{split_name}/{k}"] = v
+            summary[f"best_ema_val/{split_name}/{k}"] = v
+    if live_val_avg_surf_p is not None:
+        summary["live_val_avg/mae_surf_p"] = live_val_avg_surf_p
+        if live_split_metrics is not None:
+            for split_name, m in live_split_metrics.items():
+                for k, v in m.items():
+                    summary[f"live_val/{split_name}/{k}"] = v
     if test_avg is not None and "avg/mae_surf_p" in test_avg:
-        summary["test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
+        summary["ema_test_avg/mae_surf_p"] = test_avg["avg/mae_surf_p"]
         if test_metrics is not None:
             for split_name, m in test_metrics.items():
                 for k, v in m.items():
-                    summary[f"test/{split_name}/{k}"] = v
+                    summary[f"ema_test/{split_name}/{k}"] = v
 
     summary_path = model_dir / "metrics.yaml"
     with open(summary_path, "w") as f:
@@ -581,6 +594,29 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
             uncompiled.train()
     return captured or [], gamma_stats, beta_stats
 
+
+# EMA of model + rescale_head weights. Per v3 (PR #1966): β=0.99 (effective window
+# ~100 steps ≈ 0.27 epoch — tight tracking with per-batch noise smoothing) plus
+# Karras-style rampup over the first 10% of training (β_eff(s) = β·(1 − exp(−s/rampup_steps)))
+# to avoid the "EMA stuck at random init" failure observed in v2.
+# Reference: Karras et al. 2024 "Analyzing and Improving the Training Dynamics
+# of Diffusion Models". Per-epoch val runs on the EMA model only (matches baseline
+# wall-clock); a single live-model val is done at end of training for diagnostic.
+EMA_BETA = 0.99
+EMA_RAMPUP_FRACTION = 0.1
+# Rampup denominator uses 30 epochs (typical actual epoch count under SENPAI_TIMEOUT_MINUTES=30)
+# rather than MAX_EPOCHS=50, so β_eff reaches ~0.99 around epoch 3-4 instead of epoch 50.
+# Per advisor note on prior v3 run (denominator=50 capped ramp at β_eff≈0.987 by ep29).
+EMA_RAMPUP_EPOCHS = 30
+with torch.no_grad():
+    ema_model_params = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    ema_head_params = {k: v.detach().clone() for k, v in rescale_head.state_dict().items()}
+print(
+    f"EMA initialized: beta={EMA_BETA}, rampup_fraction={EMA_RAMPUP_FRACTION}, "
+    f"rampup_epochs={EMA_RAMPUP_EPOCHS}, "
+    f"model_tensors={len(ema_model_params)}, head_tensors={len(ema_head_params)}"
+)
+
 optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
@@ -620,6 +656,18 @@ slice_entropy_film_stats_last: dict | None = None
 last_completed_epoch: int = 0
 diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
 train_start = time.time()
+
+# Karras rampup denominator. Uses EMA_RAMPUP_EPOCHS=30 (typical actual epoch count
+# under SENPAI_TIMEOUT_MINUTES=30) rather than MAX_EPOCHS, so β_eff asymptotes to
+# EMA_BETA around epoch 3-4 instead of being stretched across the full configured
+# horizon (which previously left β_eff≈0.987 by ep29 when MAX_EPOCHS=50).
+global_step = 0
+rampup_steps = max(1, int(EMA_RAMPUP_FRACTION * EMA_RAMPUP_EPOCHS * len(train_loader)))
+beta_eff = 0.0
+print(
+    f"EMA rampup_steps={rampup_steps} "
+    f"(= {EMA_RAMPUP_FRACTION:.2f} × {EMA_RAMPUP_EPOCHS} epochs × {len(train_loader)} batches)"
+)
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
@@ -723,6 +771,17 @@ for epoch in range(MAX_EPOCHS):
         scaler.step(optimizer)
         scaler.update()
 
+        # Karras EMA rampup: β_eff ramps from 0 (no EMA influence — equals live)
+        # to EMA_BETA over rampup_steps. global_step uses 1-indexed step so the
+        # very first update has a non-zero β_eff.
+        global_step += 1
+        beta_eff = EMA_BETA * (1.0 - math.exp(-global_step / rampup_steps))
+        with torch.no_grad():
+            for k, v in model.state_dict().items():
+                ema_model_params[k].mul_(beta_eff).add_(v.detach(), alpha=1.0 - beta_eff)
+            for k, v in rescale_head.state_dict().items():
+                ema_head_params[k].mul_(beta_eff).add_(v.detach(), alpha=1.0 - beta_eff)
+
         with torch.no_grad():
             sc = scale.squeeze(1).to(torch.float64)              # [B, 3]
             lr = log_re_norm.squeeze(1).to(torch.float64)        # [B]
@@ -744,9 +803,14 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate on EMA weights only (one val pass per epoch, matches baseline wall-clock). ---
     model.eval()
     rescale_head.eval()
+    with torch.no_grad():
+        live_model_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        live_head_state = {k: v.detach().clone() for k, v in rescale_head.state_dict().items()}
+    model.load_state_dict(ema_model_params)
+    rescale_head.load_state_dict(ema_head_params)
     split_metrics = {
         name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
@@ -760,14 +824,19 @@ for epoch in range(MAX_EPOCHS):
         best_avg_surf_p = avg_surf_p
         best_metrics = {
             "epoch": epoch + 1,
-            "val_avg/mae_surf_p": avg_surf_p,
+            "ema_val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Save EMA weights (model + rescale_head currently hold EMA state).
         torch.save(
             {"model": model.state_dict(), "rescale_head": rescale_head.state_dict()},
             model_path,
         )
         tag = " *"
+
+    # Restore live weights so the next epoch trains from the live state.
+    model.load_state_dict(live_model_state)
+    rescale_head.load_state_dict(live_head_state)
 
     # Re-conditioned scale diagnostics (per-channel mean/std across epoch + corr w/ log(Re)).
     if scale_n > 0:
@@ -835,8 +904,14 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
-        "val_avg/mae_surf_p": avg_surf_p,
-        "val_splits": split_metrics,
+        "ema_beta": EMA_BETA,
+        "ema_beta_eff_end_of_epoch": beta_eff,
+        "ema_rampup_fraction": EMA_RAMPUP_FRACTION,
+        "ema_rampup_epochs": EMA_RAMPUP_EPOCHS,
+        "ema_rampup_steps": rampup_steps,
+        "ema_global_step_end_of_epoch": global_step,
+        "ema_val_avg/mae_surf_p": avg_surf_p,
+        "ema_val_splits": split_metrics,
         "is_best": tag == " *",
         "rescale/scale_mean": scale_mean,
         "rescale/scale_std": scale_std,
@@ -849,7 +924,7 @@ for epoch in range(MAX_EPOCHS):
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"ema_val_avg_surf_p={avg_surf_p:.4f} β_eff={beta_eff:.4f}{tag}"
     )
     print(
         f"    HuberPerCh (unweighted)  surf[Ux={surf_huber_per_ch[0]:.5f} "
@@ -903,9 +978,36 @@ append_metrics_jsonl(metrics_jsonl_path, {
     },
 })
 
+# --- One-shot live-model val for reference (model + head currently hold live weights). ---
+live_val_avg_surf_p = None
+live_split_metrics = None
+if best_metrics:
+    print("\nRunning one-shot live-model val (reference)...")
+    model.eval()
+    rescale_head.eval()
+    t_live = time.time()
+    live_split_metrics = {
+        name: evaluate_split(model, rescale_head, loader, stats, cfg.surf_weight, device)
+        for name, loader in val_loaders.items()
+    }
+    live_val_avg = aggregate_splits(live_split_metrics)
+    live_val_avg_surf_p = live_val_avg["avg/mae_surf_p"]
+    print(f"  live val_avg/mae_surf_p = {live_val_avg_surf_p:.4f} (in {time.time()-t_live:.0f}s)")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, live_split_metrics[name])
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "live_val_final",
+        "epoch": best_metrics["epoch"],
+        "ema_beta": EMA_BETA,
+        "ema_beta_eff_end_of_train": beta_eff,
+        "ema_global_step_end_of_train": global_step,
+        "live_val_avg/mae_surf_p": live_val_avg_surf_p,
+        "live_val_splits": live_split_metrics,
+    })
+
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val: epoch {best_metrics['epoch']}, ema_val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
     ckpt = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(ckpt["model"])
@@ -916,7 +1018,7 @@ if best_metrics:
     test_metrics = None
     test_avg = None
     if not cfg.skip_test:
-        print("\nEvaluating on held-out test splits...")
+        print("\nEvaluating on held-out test splits (best EMA checkpoint)...")
         test_datasets = load_test_data(cfg.splits_dir, debug=cfg.debug)
         test_loaders = {
             name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -927,14 +1029,14 @@ if best_metrics:
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
-        print(f"\n  TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
+        print(f"\n  EMA TEST  avg_surf_p={test_avg['avg/mae_surf_p']:.4f}")
         for name in TEST_SPLIT_NAMES:
             print_split_metrics(name, test_metrics[name])
         append_metrics_jsonl(metrics_jsonl_path, {
             "event": "test",
             "best_epoch": best_metrics["epoch"],
-            "test_avg": test_avg,
-            "test_splits": test_metrics,
+            "ema_test_avg": test_avg,
+            "ema_test_splits": test_metrics,
         })
 
     write_experiment_summary(
@@ -947,6 +1049,10 @@ if best_metrics:
         test_avg=test_avg,
         n_params=n_params,
         model_config=model_config,
+        live_val_avg_surf_p=live_val_avg_surf_p,
+        live_split_metrics=live_split_metrics,
+        ema_beta=EMA_BETA,
+        ema_rampup_fraction=EMA_RAMPUP_FRACTION,
     )
 else:
-    print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping test evaluation.")
+    print("\nNo checkpoint was saved (no epoch improved on ema_val_avg/mae_surf_p). Skipping test evaluation.")
