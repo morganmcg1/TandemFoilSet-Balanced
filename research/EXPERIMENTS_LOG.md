@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-13 [Round 63] UTC — Round 63
+
+### PR #2567 nezuko: SWA late-start ep30-70 — CLOSED (LOSS, 28th taxon)
+
+- **Branch:** `charliepai2g48h5-nezuko/swa-late-start30`
+- **Hypothesis:** Collect 9 model snapshots at ep 30, 35, ..., 70 and average at terminal. Primary result = SWA-averaged model val/test. Motivated by SWAD (Cha et al. 2021) for OOD generalization via flat-minima averaging.
+- **Metrics:**
+
+| Model | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|---|---|---|
+| **SWA-averaged (primary)** | **40.7580** | **34.1421** |
+| Best-live (ep 61) | 36.8058 | 31.6228 |
+| Baseline #2524 Lion lr=1e-4 | 36.3994 | 31.2200 |
+| NEW baseline #2553 Lion lr=1.5e-4 | **33.4935** | **28.6279** |
+
+Per-split (SWA vs best-live):
+
+| Split | SWA-val | best-live | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 36.2867 | 31.6752 | +14.6% |
+| `val_geom_camber_rc` | 55.8101 | 51.4040 | +8.6% (least) |
+| `val_geom_camber_cruise` | 26.9445 | 23.4415 | +14.9% (worst) |
+| `val_re_rand` | 43.9905 | 40.7027 | +8.1% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-nezuko-swa-late-start30-every5-20260513-204012/metrics.jsonl`
+- **Snapshots collected:** 7 of 9 (ep 30, 35, 40, 45, 50, 55, 60; missing ep 65, 70 due to timeout)
+- **Total epochs reached:** 61/70
+- **Critical diagnostic:** drift_ratio = 2.09%, val_degradation = 10.7% → **5× loss sensitivity per unit drift**
+
+**Analysis:** LOSS on all fronts. The decisive finding is the **drift diagnostic**: SWA displaced the model by only 2.09% in parameter space, yet val degraded by 10.7%. This is the opposite of a flat minimum — it proves Lion's sign-step stack converges to a **narrow valley**, not the broad basin SWAD assumes. Combined with the "trajectory still improving" problem (val went from ~50 at ep30 to 36.81 at ep61 — averaging across a 25% descent integrates over the improving trajectory and biases backward), the failure is structural.
+
+The OOD-favoring pattern (camber_rc improves more than in-dist) did NOT occur — in-dist degraded worst (+14.6-14.9% for easy splits) while OOD degraded least (+8.1-8.6%). Uniform regression, no SWAD benefit.
+
+**28th taxon: trajectory-averaging methods face structural headwind on Lion sign-step stacks.** Lion converges to narrow minima (SWAD flat-minima assumption violated). Weight-averaging meta-family is now 3-LOSS closed:
+- #2544 EMA α=0.999 → α-budget vs schedule mismatch
+- #2550 Lookahead k=5, α=0.5 → effective step halved
+- #2567 SWA late-start → narrow minimum + averaging-while-descending
+
+**Action:** Closed. Assigned #2590 nezuko Lion β₁=0.95 (test whether more persistent momentum reduces sign-direction noise; single-value change from betas=(0.90, 0.99) → (0.95, 0.99)).
+
+---
+
 ## 2026-05-13 [Round 62] UTC — Round 62
 
 ### PR #2531 alphonse: Flow-conditional output bias — CLOSED (LOSS, 27th taxon)
