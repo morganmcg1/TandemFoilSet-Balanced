@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import time
@@ -634,8 +635,9 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
+    epoch_logcosh_l2_frac = 0.0
     n_batches = 0
-    # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
+    # Unweighted per-channel log-cosh loss diagnostics (sum / count, batch-summed).
     surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
     vol_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
     surf_count_total = torch.zeros(1, dtype=torch.float64, device=device)
@@ -660,17 +662,20 @@ for epoch in range(MAX_EPOCHS):
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
 
-            # Huber-shaped per-node residuals in normalized space.
-            # Replaces the squared error in the relative-L2 numerator, combining
-            # per-sample relative scaling with per-node outlier capping.
+            # Log-cosh-shaped per-node residuals in normalized space.
+            # Smooth C-infinity replacement for Huber: L(x, delta) = delta^2 * log(cosh(x/delta)).
+            # Same x^2/2 quadratic regime for |x|<<delta and same |x|-delta*log(2) linear
+            # regime for |x|>>delta, but with no gradient kink at |x|=delta. Gradient is
+            # delta * tanh(x/delta), Hessian is sech^2(x/delta) — smooth everywhere.
+            # Numerically stable: softplus(-2|x|) avoids cosh overflow in bf16.
             HUBER_DELTA = 0.1
             residual = pred - y_norm
             abs_residual = residual.abs()
-            sq_err = torch.where(
-                abs_residual <= HUBER_DELTA,
-                0.5 * residual ** 2,
-                HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
+            x_scaled_abs = abs_residual / HUBER_DELTA
+            log_cosh_scaled = (
+                x_scaled_abs + F.softplus(-2.0 * x_scaled_abs) - math.log(2.0)
             )
+            sq_err = (HUBER_DELTA * HUBER_DELTA) * log_cosh_scaled
             vol_mask = (mask & ~is_surface).unsqueeze(-1)
             surf_mask = (mask & is_surface).unsqueeze(-1)
 
@@ -693,13 +698,18 @@ for epoch in range(MAX_EPOCHS):
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
-        # and per-channel unweighted Huber loss (so we can compare the raw
+        # and per-channel unweighted log-cosh loss (so we can compare the raw
         # pressure-channel error signal against velocity channels).
+        # huber_l2_frac (|x| <= delta) is kept under the same name for direct
+        # comparability with baseline Huber runs; logcosh_l2_frac (|x_scaled|<0.5)
+        # is the tighter near-quadratic regime suggested by the log-cosh hypothesis.
         with torch.no_grad():
             valid = mask.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
             n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
+            n_l2_tight = ((abs_residual <= 0.5 * HUBER_DELTA) & valid).sum()
+            logcosh_l2_frac_batch = (n_l2_tight.float() / n_valid.float()).item()
             sq_err_f64 = sq_err.detach().to(torch.float64)
             surf_huber_per_ch_sum += (sq_err_f64 * surf_mask).sum(dim=(0, 1))
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
@@ -736,6 +746,7 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
+        epoch_logcosh_l2_frac += logcosh_l2_frac_batch
         n_batches += 1
 
     current_lr = scheduler.get_last_lr()[0]
@@ -743,6 +754,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+    epoch_logcosh_l2_frac /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -794,6 +806,10 @@ for epoch in range(MAX_EPOCHS):
     vol_count_safe = vol_count_total.clamp(min=1)
     surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
     vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
+    # Global mean unweighted log-cosh loss across all valid (B, N, 3) entries.
+    total_logcosh_sum = (surf_huber_per_ch_sum + vol_huber_per_ch_sum).sum()
+    total_count = (surf_count_total + vol_count_total).clamp(min=1) * 3.0
+    mean_logcosh_loss = (total_logcosh_sum / total_count).item()
 
     # Slice entropy diagnostic — capture at epoch 1 and on every later epoch
     # (the loop overwrites `last`, so after training ends, last reflects the
@@ -830,11 +846,13 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
         "train/huber_l2_frac": epoch_l2_frac,
+        "train/logcosh_l2_frac": epoch_logcosh_l2_frac,
+        "train/mean_logcosh_loss": mean_logcosh_loss,
         "train/surf_huber_per_ch": surf_huber_per_ch,
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
-        "loss_type": "huber_relative_l2_channel_weighted",
+        "loss_type": "logcosh_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -847,7 +865,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f} "
+        f"logcosh_l2_frac={epoch_logcosh_l2_frac:.3f} mean_logcosh={mean_logcosh_loss:.5f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
