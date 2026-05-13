@@ -300,6 +300,52 @@ class ReFiLM(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# DropToken: stratified volume-node masking
+# ---------------------------------------------------------------------------
+
+def apply_droptoken(
+    x_norm: "torch.Tensor",
+    mask: "torch.Tensor",
+    is_surface: "torch.Tensor",
+    vol_drop_rate: float,
+) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor]":
+    """Stratified DropToken: zero dims 0-12 of random volume nodes during training.
+
+    Mask convention: mask=True means real node, mask=False means padding.
+    Surface nodes are never dropped (surf_drop_rate=0.0 hardcoded).
+    Dims 13-23 (global physics constants: log_Re, AoA, NACA, gap, stagger)
+    are preserved so the model retains the per-sample flow regime.
+    Dropped nodes are excluded from loss via mask_masked[drop]=False.
+
+    Soft-drop: dropped nodes (zeroed dims 0-12) still participate in
+    PhysicsAttention slice aggregation with uniform softmax weights because
+    PhysicsAttention.forward() has no mask parameter. At 10% vol drop rate
+    this contributes a minor ~1/slice_num uniform dilution.
+
+    Returns:
+        x_norm_masked: x_norm with dims 0-12 zeroed at drop positions
+        mask_masked:   mask with drop positions set to False
+        drop:          bool tensor of shape [B, N], True where dropped
+    """
+    if vol_drop_rate <= 0.0:
+        return x_norm, mask, torch.zeros_like(mask)
+
+    is_real = mask.bool()                        # True = real (mask=True means real)
+    is_vol = is_real & ~is_surface.bool()        # real volume nodes only
+
+    drop_prob = torch.zeros(mask.shape, dtype=torch.float32, device=mask.device)
+    drop_prob[is_vol] = vol_drop_rate
+    drop = torch.bernoulli(drop_prob).bool()
+    drop = drop & ~is_surface.bool()             # safety: never drop surface nodes
+
+    x_masked = x_norm.clone()
+    x_masked[drop, :13] = 0.0                   # zero only local geometry dims 0-12
+
+    mask_masked = mask & ~drop                   # dropped nodes → False (excluded from loss)
+    return x_masked, mask_masked, drop
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -467,6 +513,15 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # DropToken: fraction of volume nodes to randomly mask during training.
+    # Surface nodes are never dropped (surf_drop_rate=0.0 hardcoded).
+    # Applied to x_norm in normalized space; only dims 0-12 (local geometry) are
+    # zeroed — dims 13-23 (global physics constants log_Re, AoA, NACA, gap,
+    # stagger) are preserved so the model retains the per-sample flow regime.
+    # Masked nodes are excluded from loss (mask[drop]=False) but still participate
+    # in PhysicsAttention slice aggregation with uniform softmax weights (soft-drop).
+    # Default 0.1 matches PR #2582 spec; pass --vol_drop_rate 0.0 to disable.
+    vol_drop_rate: float = 0.1
 
 
 cfg = sp.parse(Config)
@@ -634,6 +689,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
+    epoch_droptoken_frac_vol = 0.0  # mean fraction of volume nodes dropped per batch
     n_batches = 0
     # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
     surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
@@ -656,6 +712,15 @@ for epoch in range(MAX_EPOCHS):
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
+
+            # DropToken: stratified volume-node masking (training only)
+            drop_flags = None
+            if cfg.vol_drop_rate > 0.0:
+                x_norm, mask, drop_flags = apply_droptoken(
+                    x_norm, mask, is_surface, cfg.vol_drop_rate
+                )
+
+            # Dims 13-23 are preserved by apply_droptoken, so log_re_norm is safe.
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
             pred = model({"x": x_norm})["preds"] * scale
@@ -736,6 +801,14 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
+        # Diagnostic: fraction of volume nodes actually dropped this batch.
+        # drop_flags marks dropped nodes; (mask | drop_flags) recovers original real nodes.
+        if drop_flags is not None:
+            with torch.no_grad():
+                original_vol = (mask | drop_flags) & ~is_surface
+                n_vol_total = original_vol.sum().float().item()
+                n_dropped = drop_flags.sum().float().item()
+                epoch_droptoken_frac_vol += n_dropped / max(n_vol_total, 1.0)
         n_batches += 1
 
     current_lr = scheduler.get_last_lr()[0]
@@ -743,6 +816,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+    epoch_droptoken_frac_vol /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -832,6 +906,8 @@ for epoch in range(MAX_EPOCHS):
         "train/huber_l2_frac": epoch_l2_frac,
         "train/surf_huber_per_ch": surf_huber_per_ch,
         "train/vol_huber_per_ch": vol_huber_per_ch,
+        "train/droptoken_frac_vol": epoch_droptoken_frac_vol,
+        "droptoken/vol_drop_rate": cfg.vol_drop_rate,
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
@@ -871,6 +947,11 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    if cfg.vol_drop_rate > 0.0:
+        print(
+            f"    DropToken  target_vol={cfg.vol_drop_rate:.3f}  "
+            f"actual_vol={epoch_droptoken_frac_vol:.4f}"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
