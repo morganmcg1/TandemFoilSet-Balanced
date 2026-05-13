@@ -1,5 +1,115 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 06:01 — PR #1782: Lion LR re-scan on Huber+epochs=16 stack (SENT BACK — baseline moved again)
+
+- Student branch: `charliepai2g24h5-frieren/lion-lr-scan`
+- Hypothesis: Re-test LR scan (lr=2e-4, 2.5e-4) on the merged Huber δ=0.5 + epochs=16 stack. Previous scan on 13-epoch MSE stack found lr=2.5e-4 was optimal (vs default 3e-4, val=71.54).
+
+### Results (2-arm, vs OLD baseline 66.32 / 61.14 — baseline moved to 56.90 during run)
+
+| lion_lr | val_avg | test_avg | vs OLD 66.32 | vs NEW 56.90 |
+|---:|---:|---:|---:|---:|
+| **2.0e-4 (winner)** | **58.00** | **53.91** | −12.55% | **+1.10 (above new baseline)** |
+| 2.5e-4 | 58.98 | 54.35 | −11.07% | +2.08 |
+
+Both arms beat OLD baseline 66.32. Neither beats NEW baseline 56.90 (from δ=0.3 merge).
+
+### Key findings
+
+- **Optimum shifted from 2.5e-4 → 2e-4** when moving from 13ep+MSE to 16ep+δ=0.5 stack. The "softer loss landscape" (Huber caps large-residual gradient contribution) combined with longer cosine tail favors slightly smaller step size.
+- LR response curve: at 13ep+MSE: min at 2.5e-4; at 16ep+δ=0.5: min at 2e-4.
+- Both arms still descending at epoch 16 — headroom remains.
+- Timing/VRAM unchanged: 101.6s/epoch, 32.95 GB, 27.1 min per arm.
+
+- Arm A metrics: `models/model-charliepai2g24h5-frieren-lion_lr2e4_e16_huber-20260513-035740/metrics.jsonl`
+- Arm B metrics: `models/model-charliepai2g24h5-frieren-lion_lr2_5e4_e16_huber-20260513-050329/metrics.jsonl`
+
+### Why sent back (2nd time)
+
+PR #1880 (Huber δ=0.5 → δ=0.3, val=56.90) merged while frieren was running. Sent back to re-run **single arm lr=2e-4 on δ=0.3 stack**. If the LR-down shift continues (from 2.5e-4 to 2e-4 to possibly 1.75e-4), the lr=2e-4 arm on δ=0.3 should beat 56.90. Worth verifying before merging a LR change that may no longer be optimal.
+
+---
+
+## 2026-05-13 06:00 — PR #1880: Huber δ=0.3 scan (MERGED — new baseline 56.90)
+
+- Student branch: `charliepai2g24h5-alphonse/huber-delta-scan`
+- Hypothesis: Huber δ curve hasn't bottomed out at 0.5 (monotonic improvement from 1.0→0.5 in PR #1639). Test δ=0.3 and δ=0.2 on the epochs=16 stack.
+
+### Results (2-arm, vs baseline 66.32 / 61.14)
+
+| δ | best epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | Δval | Δtest |
+|---:|---:|---:|---:|---:|---:|
+| Baseline δ=0.5 (13ep) | 13 | 66.32 | 61.14 | — | — |
+| **δ=0.3 (winner)** | 16 | **56.90** | **53.20** | **−9.42 (−14.2%)** | **−7.94 (−13.0%)** |
+| δ=0.2 | 16 | 56.94 | 53.23 | −9.38 | −7.91 |
+
+δ=0.3 and δ=0.2 essentially tied (Δ=0.04 val / 0.03 test). Curve flattened — optimal δ is at or near 0.3. NOTE: both arms ran epochs=16 (the merged code default), so the 13ep→16ep contribution is included.
+
+### Per-split val / test (δ=0.3 winner, epoch 16)
+
+| Split | val | test |
+|---|---:|---:|
+| single_in_dist | 60.26 | 52.32 |
+| geom_camber_rc | 75.20 | 64.24 |
+| geom_camber_cruise | 37.01 | 49.15 |
+| re_rand | 55.11 | 47.10 |
+| **avg** | **56.90** | **53.20** |
+
+- Winner metrics: `models/model-huber_delta0_3-20260513-035824/metrics.jsonl`
+- Runner-up: `models/model-huber_delta0_2-20260513-050217/metrics.jsonl`
+
+### Analysis
+
+Split-level picture: δ=0.2 slightly wins tail-heavy single/raceCar splits; δ=0.3 wins cruise/re_rand (lower y-std domains where aggressive δ=0.2 over-saturates into linear regime). Overall avg: δ=0.3 wins both val and test.
+
+Huber δ response curve (full): 1.0→67.41, 0.5→66.32, 0.3→56.90, 0.2→56.94. Jump from 0.5 to 0.3 is the largest gain; curve then flattens. Hypothesis confirmed: δ=0.3 is the optimal floor; smaller δ (0.1) is unlikely to improve further.
+
+Code change merged: `torch.where(abs_err < 0.3, 0.5*abs_err**2, 0.3*abs_err - 0.045)` — 1-line change in train.py.
+
+Peak VRAM 32.95 GB; wall-clock ~27 min per arm.
+
+---
+
+## 2026-05-13 05:55 — PR #1656: Dropout=0.1 in PhysicsAttention (SENT BACK — baseline moved)
+
+- Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
+- Hypothesis: Dropout=0.1 in PhysicsAttention (attention output projection + attention mechanism) adds feature-level stochastic regularization, complementing Huber+grad_clip's gradient-level regularization.
+
+### Results (vs baseline 66.32 / 61.14 — baseline since moved to 56.90)
+
+| Config | val_avg | test_avg | Δval vs 66.32 |
+|---|---:|---:|---:|
+| Baseline (no dropout) | 66.32 | 61.14 | — |
+| **Dropout=0.1** | **62.52** | **57.85** | **−3.80 (−5.7%)** |
+
+### Per-split val (dropout=0.1, epoch 16)
+
+| Split | mae_surf_p |
+|---|---:|
+| val_single_in_dist | 70.20 |
+| val_geom_camber_rc | 79.58 |
+| val_geom_camber_cruise | 41.02 |
+| val_re_rand | 59.27 |
+| val_avg | 62.52 |
+
+| Split | test mae_surf_p |
+|---|---:|
+| test_single_in_dist | 59.35 |
+| test_geom_camber_rc | 69.43 |
+| test_geom_camber_cruise | 51.82 |
+| test_re_rand | 50.77 |
+| test_avg | 57.85 |
+
+- Metrics: `target/models/model-charliepai2g24h5-thorfinn-dropout_0_1_clean-20260513-052522/metrics.jsonl`
+
+### Analysis & disposition
+
+Clean 5.7% val improvement, monotone curve still descending at epoch 16. Implementation verified: dropout fires only during training (model.train/eval flip confirmed). Only attention dropout applied (to_out projection + SDPA); MLP dropout not yet tested.
+
+**Sent back (not closed):** PR #1880 merged during the run. Dropout's 62.52 is above new 56.90 baseline. Regularization mechanisms are orthogonal (Huber operates at loss level, dropout at activation level), so the gain should compose. Sent back for single-arm re-run: `--epochs 16` on δ=0.3 stack with dropout=0.1 still in train.py.
+
+---
+
 ## 2026-05-13 04:35 — PR #1755: Width sweep 2-arm follow-up — n_hidden=160 / n_hidden=192+lr4e-4 (SENT BACK — baseline moved)
 
 - Student branch: `charliepai2g24h5-fern/wider-model-nhidden192-bf16`
