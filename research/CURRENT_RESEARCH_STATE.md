@@ -20,7 +20,8 @@ Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combine
 ## Round-2 status
 | Student | PR | Hypothesis | Status | Result |
 |---------|-----|-----------|--------|--------|
-| alphonse | #1359 | lr-warmup-3e-4-lion | **wip** (rerun) | Redirected: lr=3e-4 (2× Lion baseline) + 2-epoch warmup. Original lr=1e-3 would diverge with Lion. |
+| alphonse | #1359 | lr-warmup | **CLOSED** ✗ | lr=3e-4 + 2-epoch warmup: test=88.37 (+5.5% vs Lion baseline). Lion at 1.5e-4 is near-optimal; warmup redundant for sign-momentum. |
+| alphonse | #1945 | n-hidden-256 | **wip** (new) | n_hidden 192→256 (33% wider). Lion memory enables it: ~43GB at 192 → ~57GB at 256. Capacity stacking test. |
 | askeladd | #1771 | wider-192-schedule-realigned | **CLOSED** ✗ | test 104.86 (+5.19%) — T_max=14 worse than T_max=18. |
 | askeladd | #1877 | lion-bs-8-sqrt2-lr | wip | Lion memory enables bs=8. bs=8 + lr=2.1e-4 (√2-scaled). |
 | edward | #1643 | mlp-ratio-4 | wip | mlp_ratio 2→4 on Lion+Fourier+wider baseline |
@@ -42,6 +43,7 @@ Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combine
 7. **EMA dead end**: Model still descending at end-of-run. Both Polyak variants failed.
 8. **Depth dead at n_hidden=128**: n_layers=6 (+14%) and n_layers=7 (+18%) regressed. Retesting at n_hidden=192+Fourier (nezuko #1862).
 9. **Surf-weight lever CLOSED**: Both directions (5 and 25) tie-or-lose. Default surf_weight=10 is in a robust local optimum. Do not revisit.
+10. **LR-warmup lever CLOSED for Lion**: lr=3e-4 + 2-epoch warmup regressed +5.5% (test=88.37). Lion's sign-momentum is inherently stable; warmup is redundant. Lion lr=1.5e-4 is near-optimal.
 
 ## Active stacking opportunities (vs test≈83.77 provisional baseline)
 - **n_head=8** (thorfinn #1876): first Lion+Fourier stacked confirmation + attention diversity. Most important near-term.
@@ -49,9 +51,10 @@ Note: The merged train.py now has Lion+Fourier stacked. The Lion+Fourier combine
 - **Fourier L=16** (frieren #1887): double frequency resolution. Fast single-line test of Fourier ceiling.
 - **n_layers=6** (nezuko #1862): depth revisit at full stack. May compound with Lion.
 - **mlp_ratio=4** (edward #1643): FFN capacity, orthogonal to optimizer changes.
-- **Lion LR warmup** (alphonse #1359 rerun): lr=3e-4 + 2-epoch warmup. Tests if Lion benefits from higher LR with warmup safety.
+- **n_hidden=256** (alphonse #1945): ~57GB peak, 33% wider, clean capacity test. Primary near-term priority after n_head result.
+- **wd=1e-3 under Lion** (fern #1796 rerun): stale AdamW run rebasing onto Lion. OOD improvement signal (cruise -5.7%, re_rand -2.5%) may be real.
 - **Lion wd=1e-2** (per Lion paper rec): unassigned. Potentially large for OOD splits.
-- **n_hidden=256**: Lion memory budget now has headroom. Not yet assigned.
+- ~~LR-warmup (closed)~~: Lion inherently stable, lever exhausted.
 
 ## Next milestones
 - Confirm Lion+Fourier compound baseline (thorfinn #1876 will give this as a by-product)

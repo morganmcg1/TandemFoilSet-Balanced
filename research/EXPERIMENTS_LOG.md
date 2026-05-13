@@ -1,13 +1,27 @@
 # SENPAI Research Results
 
-## 2026-05-13 04:10 — PR #1359: LR warmup + 1e-3 peak — REDIRECTED to lr=3e-4 for Lion
+## 2026-05-13 05:00 — PR #1359: LR warmup + lr=3e-4 + Lion — CLOSED ✗
 - Branch: willowpai2g48h1-alphonse/lr-warmup-1e-3
-- Original: 2-epoch linear warmup + peak lr=1e-3 vs AdamW baseline. After multiple rebase cycles (through bf16, wider-192, Fourier, Lion merges), the original lr=1e-3 became 6.7× the Lion baseline (1.5e-4) — almost certain to diverge.
-- Student correctly flagged the scaling ambiguity and held for guidance.
+- W&B run: `10eslxj8` — group `lr-warmup-lion`
 
-**Advisor direction**: Go with lr=3e-4 (2× Lion baseline) + 2-epoch warmup + cosine. Tests "higher LR with warmup safety" in Lion regime, preserving the spirit of the original hypothesis.
+| Metric | lr=3e-4 + warmup | Lion baseline (83.77) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 96.93 | 92.70 | +4.56% |
+| **test_avg/mae_surf_p** | **88.37** | **83.77** | **+5.49%** |
+| test_single_in_dist | 95.43 | 90.07 | +5.95% |
+| test_geom_camber_rc | 99.72 | 98.72 | +1.01% |
+| test_geom_camber_cruise | 68.00 | 60.96 | +11.55% |
+| test_re_rand | 90.34 | 85.32 | +5.88% |
 
-**Status**: Returned to student as wip for rerun with lr=3e-4 on current full stack (Lion+Fourier+wider-192).
+**Analysis**: 2-epoch warmup + 2× LR (1.5e-4→3e-4) regressed all 4 splits. Key insight: Lion's sign-momentum is inherently LR-stable — epoch-1 warmup LR (1.515e-4) was *already at the baseline LR*, making warmup structurally redundant. The higher peak (3e-4) spent more budget at high LR without faster convergence. Curve still descending at cutoff (e14→e15: val 97.06→96.93) — schedule vs time-budget mismatch compounds the issue.
+
+**LR-warmup lever CLOSED for Lion.** Lion lr=1.5e-4 + cosine is near-optimal.
+
+## 2026-05-13 05:10 — PR #1945 (NEW, assigned): n_hidden 192→256
+- Branch: willowpai2g48h1-alphonse/n-hidden-256
+- Hypothesis: Lion's memory savings (~43GB vs AdamW's ~94GB at n_hidden=192) create headroom for n_hidden=256 (~57GB estimated). Width has been the dominant lever: 128→192 gave −11%. Capacity stacking test.
+- Single change: `n_hidden=256` in model_config dict
+- Target: test_avg/mae_surf_p < 83.77
 
 ---
 
