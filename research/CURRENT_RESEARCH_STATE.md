@@ -1,8 +1,14 @@
 # SENPAI Research State
 
-- 2026-05-13 11:00
+- 2026-05-13 12:05
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
+
+## ⚡ Mechanistic finding (2026-05-13 12:00) — Lion `wd` is FP32 ulp no-op for wd ≤ 1.49e-4 at lr=2e-4
+
+Edward's #2177 arms produced bit-identical metrics to baseline. Diagnosis: `p.data.mul_(1. - lr*wd)` in Lion materialises `(1−lr·wd)` as an FP32 scalar; at lr=2e-4, wd ∈ {4e-5, 6e-5, 8e-5} all give `lr·wd < 2⁻²⁴ ≈ 5.96e-8` (one ulp below 1.0), so the multiplier rounds to **exactly 1.0** and decay is a literal no-op. Empirical: zero weight shrink measured over 6000 steps.
+
+**Implication:** Every Lion experiment to date — including the merged baseline #1656 with wd=6e-5 — has effectively trained with **wd = 0**. The wd axis has not actually been explored. Re-armed #2177 with wd ∈ {5e-4, 2e-3} (firing values: lr·wd ≈ 1.68×–6.7× ulp).
 
 ## Merged baseline
 
@@ -51,6 +57,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | **Dropout=0.1 → −0.27% val further (#1656, MERGED)** | **Feature-level masking adds additive gain on top of gradient/loss/width regularization. Diminishing returns: 5.7%→1.0%→0.27% across 3 compound stacks. Test side stronger (−0.41%). Val curve still descending at epoch 16. New baseline 52.63/49.22.** |
 | **LR bowl confirmed bottomed at lr=2e-4 (#2100/#2035, both CLOSED)** | **lr=1.5e-4: val=53.156/test=50.149 (both worse). lr=3.5e-4: val=55.90 (flat). Bowl confirmed from both sides. Do not probe outside [1.8e-4, 2.5e-4] on this stack.** |
 | **Zero-LR cosine tail is implicit regularizer for Lion (#2084, CLOSED)** | **Cosine floor eta_min=5%: val=54.05/test=51.09 — all 8 splits regress; test hit harder (+1.44 vs val +0.43). Mechanism: Lion's sign(m)*lr step magnitude scales with lr only — floor LR prevents final settling by keeping perturbations nonzero. Do NOT add LR floor to Lion runs.** |
+| **Lion wd ≤ 1.49e-4 is FP32 ulp no-op at lr=2e-4 (#2177, RE-ARMED)** | **All Lion experiments to date have effectively trained with wd=0. `(1−lr·wd)` rounds to 1.0 in FP32 for wd in our merged range. Re-armed at wd ∈ {5e-4, 2e-3} (firing values). The wd axis is genuinely unexplored.** |
+| **Dropout axis SATURATED at attn=0.1 (#2161, CLOSED)** | **Arm A (attn=0.1+MLP=0.1): val +5.1%, test +5.5%. Arm B (attn=0.05+MLP=0.0): val +2.0%, test +1.9%. Thin-ridge local optimum: more reg → worse, less reg → worse, different locus → worse. Dropout magnitude/locus sweeps no longer pay back GPU time.** |
 | Lion lr=3.5e-4 plateau on n160+δ=0.3 stack (#2035, CLOSED) | val=55.90 (flat vs 55.92). LR bowl wide-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts 3 OOD splits — mild over-stepping. Mechanism: wider model over-rides δ-driven LR shift. |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
@@ -66,19 +74,20 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2196 | fern | SwiGLU gated MLP (param-equiv to GELU baseline, mlp_ratio=4/3) | WIP — new | Beat 52.63 |
-| #2177 | edward | Lion weight_decay sweep at lr=2e-4: wd=4e-5 (Arm A) and wd=8e-5 (Arm B) | WIP | Beat 52.63 |
+| #2249 | thorfinn | Lookahead wrapper around Lion (k=5, α=0.5 vs 0.8) — orthogonal outer-loop optimizer-side axis | WIP — new | Beat 52.63 |
+| #2196 | fern | SwiGLU gated MLP (param-equiv to GELU baseline, mlp_ratio=4/3) | WIP | Beat 52.63 |
+| #2177 | edward | Lion weight_decay sweep at lr=2e-4: **re-armed to wd ∈ {5e-4, 2e-3}** (firing values above FP32 ulp floor) | WIP — re-armed | Beat 52.63 |
 | #2181 | tanjiro | batch_size=8: test Lion sign-vote quality at lower gradient noise | WIP | Beat 52.63 |
 | #2182 | frieren | Layer-wise LR decay: outer blocks full LR, inner blocks 0.85x decay | WIP | Beat 52.63 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP (stale baseline) | Beat 52.63 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (stale baseline) | Beat 52.63 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (stale baseline) | Beat 52.63 |
-| #2161 | thorfinn | MLP dropout=0.1 (Arm A) + attention dropout=0.05 rate sweep (Arm B) on merged dropout=0.1 stack | WIP | Beat 52.63 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
+| #2161 | thorfinn | CLOSED | MLP+attention dropout rate sweep. Arm A (attn=0.1+MLP=0.1): val=55.317 (+5.1%), test=51.951 (+5.5%). Arm B (attn=0.05+MLP=0.0): val=53.657 (+2.0%), test=50.135 (+1.9%). Both regress in both directions → dropout=0.1 attention-only is thin-ridge local optimum. **Dropout axis SATURATED.** Reassigned thorfinn to Lookahead optimizer wrapper (#2249). |
 | #1656 | thorfinn | **MERGED** | Dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 → **new baseline 52.63/49.22** (−0.27% val, −0.41% test). Feature-level masking adds strictly additive gain. Val curve still descending at epoch 16. |
 | #2027 | tanjiro | **MERGED** | Lion lr=2e-4 on per-channel δ + n_hidden=160 → baseline 52.78/49.42 (−1.6% val, −0.5% test). 3/4 val splits improve. Compounds with #2028. |
 | #2028 | fern | **MERGED** | Per-channel Huber δ=[Ux=0.5,Uy=0.5,p=0.2] → baseline 53.62/49.65 (−4.1% val, −4.4% test). Uniform gain across all 8 splits. |
@@ -98,14 +107,14 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 ## Open questions from active experiments
 
-1. **Does SwiGLU gating beat GELU in block MLPs?** (#2196 fern, new) — bare SiLU lost (#2176), but gated GLU-family variants are where transformer-paper wins actually come from. Param-equivalent at mlp_ratio=4/3.
-2. **Does Lion weight_decay=4e-5 or 8e-5 beat 6e-5 at lr=2e-4?** (#2177 edward) — wd was set when lr=3e-4; LR halving may have shifted wd optimum.
-3. **Does batch_size=8 improve Lion sign-vote quality?** (#2181 tanjiro) — lower gradient noise before sign quantization may yield tighter minimum within 16 epochs.
-4. **Does layer-wise LR decay (0.85x per block inward) improve OOD generalization?** (#2182 frieren) — outer blocks full lr=2e-4, inner blocks down to 1.044e-4; BERT-style structural LR taper.
-5. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width, stale baseline)
-6. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd — slower momentum for noisy small-batch, stale baseline)
-7. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko — loss balance, stale baseline)
-8. **Does MLP-level dropout + attention rate sweep improve on merged attention-only dropout=0.1?** (#2161 thorfinn)
+1. **Does Lookahead wrapper around Lion (k=5, α∈{0.5,0.8}) improve on bare Lion?** (#2249 thorfinn, new) — Outer-loop EMA-snap is a *different* optimization mechanism from anything previously tested. Variance reduction expected especially in late-epoch sign-update oscillation at batch=4.
+2. **Does SwiGLU gating beat GELU in block MLPs?** (#2196 fern) — bare SiLU lost (#2176), but gated GLU-family variants are where transformer-paper wins actually come from. Param-equivalent at mlp_ratio=4/3.
+3. **Does Lion weight_decay=5e-4 or 2e-3 beat the effective-wd=0 baseline at lr=2e-4?** (#2177 edward, re-armed) — Previous arms were FP32 ulp no-ops; re-armed at firing values. First *real* exploration of the wd axis.
+4. **Does batch_size=8 improve Lion sign-vote quality?** (#2181 tanjiro) — lower gradient noise before sign quantization may yield tighter minimum within 16 epochs.
+5. **Does layer-wise LR decay (0.85x per block inward) improve OOD generalization?** (#2182 frieren) — outer blocks full lr=2e-4, inner blocks down to 1.044e-4; BERT-style structural LR taper.
+6. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width, stale baseline)
+7. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd — slower momentum for noisy small-batch, stale baseline)
+8. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko — loss balance, stale baseline)
 
 ## Confirmed dead ends
 
@@ -116,6 +125,8 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 - **Lion lr≤1.5e-4 or ≥3.5e-4 on per-channel δ+n160 stack**: LR bowl confirmed bottomed at lr=2e-4. lr=1.5e-4 (#2100 CLOSED) and lr=3.5e-4 (#2035 CLOSED) both confirmed losing. Do not probe outside [1.8e-4, 2.5e-4] without a stack change.
 - **Cosine LR floor (eta_min>0) with Lion (#2084 CLOSED)**: Zero-LR cosine tail is implicit regularizer in Lion's signed-update regime. Floor at 5% of lr prevents final settling → all 8 splits regress, test worse than val. Do not add eta_min to Lion runs.
 - **SiLU as bare activation (#2176 CLOSED)**: GELU→SiLU regresses every split by +6.9 val/+6.5 test. Mechanism: Lion's sign update was tuned for GELU's gradient surface. GELU locally optimal at lr=2e-4 — confirmed. Bare activation swaps without lr re-tuning are dead direction. (Gated SwiGLU is a different hypothesis, being tested at #2196.)
+- **MLP dropout + attention dropout rate sweep at attn∈{0.05,0.1}, MLP∈{0,0.1} (#2161 CLOSED)**: Both directions regress (attn=0.1+MLP=0.1: +5.1% val; attn=0.05+MLP=0.0: +2.0% val). Dropout=0.1 attention-only (merged #1656) is a thin-ridge local optimum where any perturbation in magnitude OR locus hurts. **Dropout axis SATURATED on this stack.**
+- **Lion wd ∈ [0, ~1.49e-4] at lr=2e-4 (#2177 part-A diagnostic)**: FP32 ulp truncation in `(1−lr·wd)` collapses the entire low-wd range to a literal no-op. Not a dead end of wd-axis itself (that's being properly probed in re-armed #2177 at wd∈{5e-4, 2e-3}), but **do not assign any wd sweep < 2e-4 at lr=2e-4** — it cannot produce signal.
 - **Huber δ_p<0.20 (#2074 CLOSED)**: δ_p=0.15 and δ_p=0.10 both lose; val/test gap shrinks = over-regularization. δ_p=0.20 is optimal with velocity at 0.5.
 - **DropPath rates 0.05/0.10 (#2044 CLOSED)**: 10 residual paths × stochastic drop requires 40+ epochs to converge; catastrophic within 16-epoch budget. Within-layer dropout (merged #1656) is the right regularization axis.
 - **Instance-norm loss with 1e-6 clamp (#1470)**: +3.7% val regression. Near-uniform low-Re samples (y_std ≈ 5e-4) got amplified 1000-2000×.

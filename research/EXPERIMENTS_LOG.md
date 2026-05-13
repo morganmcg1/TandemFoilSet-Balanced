@@ -1,5 +1,85 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 12:00 — PR #2177: Lion weight_decay sweep at lr=2e-4 (RE-ARMED — wd is FP32 ulp no-op for wd ≤ 1.49e-4)
+
+- Student branch: `charliepai2g24h5-edward/wd-sweep-lr2e4`
+- Hypothesis: Lion `wd` was set as wd=lr/5 at lr=3e-4 (giving wd=6e-5) and never re-tuned when lr moved to 2e-4. Probe wd ∈ {4e-5, 8e-5} for an optimum-shift signal.
+
+### Results (vs baseline #1656: 52.63/49.22)
+
+| Metric | Baseline (wd=6e-5) | Arm A (wd=4e-5) | Arm B (wd=8e-5) | Δ |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.63 | **52.6345** | **52.6345** | **0.0000** |
+| **test_avg/mae_surf_p** | 49.22 | **49.2183** | **49.2183** | **0.0000** |
+
+**Both arms produced bit-identical metrics to baseline** — every loss, every per-split MAE, every test result byte-for-byte the same. Edward diffed `metrics.jsonl` line-by-line: the only differences are wall-clock `seconds` fields.
+
+### Mechanism (the actual finding)
+
+The Lion update applies decoupled wd as `p.data.mul_(1. - lr * wd)`. The decay multiplier `(1 − lr·wd)` is computed in Python (FP64) then materialised as an FP32 scalar for the in-place `mul_`. Master weights `p` are FP32 (BF16 is compute-only).
+
+| wd | lr·wd at lr=2e-4 | FP32 ulp = 2⁻²⁴ ≈ 5.96e-8 | (1 − lr·wd) in FP32 |
+|---:|---:|---:|---:|
+| 4e-5 (Arm A) | 8.0e-9 | « ulp | rounds to **1.0** → no-op |
+| 6e-5 (baseline) | 1.2e-8 | « ulp | rounds to **1.0** → no-op |
+| 8e-5 (Arm B) | 1.6e-8 | « ulp | rounds to **1.0** → no-op |
+
+Empirical: edward measured 6000 mul_ steps at FP32 init N(0, 0.02²) and observed **zero** relative weight shrink for wd ∈ {4e-5, 6e-5, 8e-5}, vs analytical expectation 4.8e-5–9.6e-5. Threshold for the multiplier to land at ≤ 0.99999994 (one-ulp below 1.0) at lr=2e-4 is **wd > 1.49e-4**. The entire sweep + the merged baseline live in the no-op band.
+
+### Retroactive reinterpretation of the Lion history
+
+- PR #1641 (frieren) introduced wd=6e-5 at lr=3e-4. `lr·wd = 1.8e-8`, also « ulp. **No-op.**
+- PR #2027 (merged Lion lr=2e-4). Inherited wd=6e-5. **No-op.**
+- Every Lion experiment in this round has effectively trained with **wd = 0**. The "wd" field in BASELINE.md is currently load-bearing nominally only.
+
+This is a single most-important mechanistic finding of the round so far: we have an entire unexplored axis of the optimizer.
+
+### Disposition
+
+**SEND BACK (re-armed).** Not merged (bit-identical to baseline, not an improvement). Not closed (the hypothesis is now actionable). Next arms target wd values that actually fire:
+
+- **Arm C: wd=5e-4** (lr·wd ≈ 1.68× ulp, first clean signal above FP32 floor; 10× the on-paper wd).
+- **Arm D: wd=2e-3** (Lion paper's sweet spot region ≈ 10× AdamW wd; lr·wd ≈ 6.7× ulp).
+
+Predictions: modest gain (0.3–1.0% val) at C; D is higher-risk, could be a clear win or a regression if it over-shrinks the 1.03M params.
+
+- Metrics: `models/model-wd_4e5_lr2e4-20260513-102424/metrics.jsonl`, `models/model-wd_8e5_lr2e4-20260513-110201/metrics.jsonl` (bit-identical-to-baseline arms; reference only).
+- Result link: https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/2177#issuecomment-4440717183
+
+---
+
+## 2026-05-13 11:55 — PR #2161: MLP dropout + attention dropout rate sweep (CLOSED — dropout=0.1 attention-only is saturated)
+
+- Student branch: `charliepai2g24h5-thorfinn/mlp-dropout-attn-dropout-sweep`
+- Hypothesis: Test whether (a) moving regularization locus by adding MLP dropout on top of attention dropout (Arm A: attn=0.1+MLP=0.1) or (b) reducing the regularization rate (Arm B: attn=0.05+MLP=0.0) improves on PR #1656's attn=0.1 only.
+
+### Results (vs baseline #1656: 52.63/49.22)
+
+| Metric | Baseline | Arm A (attn=0.1+MLP=0.1) | Arm B (attn=0.05+MLP=0.0) |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 52.63 | 55.317 (+5.1%) | 53.657 (+2.0%) |
+| **test_avg/mae_surf_p** | 49.22 | 51.951 (+5.5%) | 50.135 (+1.9%) |
+
+Both arms regress, in both directions (more reg → worse; less reg → worse). Per-split: regression most pronounced on val_geom_camber_rc and val_re_rand across both arms (i.e. the harder OOD splits suffer the most).
+
+### Mechanism analysis
+
+PR #1656 already established that **attention-dropout=0.1 alone** beats no-dropout (val 53.10 → 52.63). This result completes the picture:
+
+- **Arm A regresses (+5%)**: adding MLP dropout on top of attn dropout double-regularizes — the dropout=0.1 sweet spot is locus-specific, not magnitude-specific. The model's MLP blocks need *full* signal; dropping attention features is OK because the PhysicsAttention slice tokens are over-complete by construction.
+- **Arm B regresses (+2%)**: lowering attention dropout to 0.05 with no MLP dropout under-regularizes — the attn=0.1 rate is at a thin-ridge local optimum where small perturbations in either direction hurt.
+
+**Dropout axis SATURATED on this stack.** The local neighborhood of attn=0.1, MLP=0.0 has been thoroughly explored (PR #1656, PR #2074 δ_p sweep nearby, this PR). No further dropout-magnitude or dropout-locus sweeps will pay back the GPU time at the current stack.
+
+### Disposition
+
+**CLOSED**. Reassigned thorfinn to **Lookahead optimizer wrapper around Lion (k=5, α∈{0.5, 0.8})** via PR #2249 — orthogonal optimizer-side mechanism (different math, different effect), not yet another regularization sweep.
+
+- Arm A metrics: `models/model-mlp_drop_01_attn_drop_01-20260513-*/metrics.jsonl`
+- Arm B metrics: `models/model-attn_drop_005_mlp_drop_0-20260513-*/metrics.jsonl`
+
+---
+
 ## 2026-05-13 11:00 — PR #2176: SiLU activation swap GELU → SiLU in MLP blocks (CLOSED — GELU locally optimal)
 
 - Student branch: `charliepai2g24h5-fern/silu-activation-swap`
