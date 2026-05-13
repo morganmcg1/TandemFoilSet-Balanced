@@ -26,24 +26,27 @@ Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_
 
 ---
 
-## 2026-05-13 11:00 — PR #2106: [lr-4e-4-bs1] Lower LR 5e-4→4e-4 at bs=1 — **SENT BACK (val improved OLD baseline, not NEW)**
+## 2026-05-13 11:53 — PR #2106: [lr-4e-4-bs1 → max_lr=6e-4] OneCycleLR lower max_lr bracket — **CLOSED (clear regression)**
 - Student branch: `charliepai2g48h4-alphonse/lr-4e-4-bs1`
-- Hypothesis: At bs=1 (1500 steps/epoch, 4× the original bs=4 regime), the LR optimum shifts downward; lr=4e-4 should improve generalization.
+- Hypothesis (final redirect): max_lr=8e-4→6e-4 on OneCycleLR — lower bracket of the LR axis. (Original hypothesis of cfg.lr=4e-4 was made moot after OneCycleLR merge #2014.)
 
-| Metric | lr=4e-4 (this) | OLD baseline bs=1+beta=1.0 (#2036) | Δ vs OLD | NEW baseline bs=1+beta=0.5 (#2012) | Δ vs NEW |
-|---|---|---|---|---|---|
-| val_avg/mae_surf_p | 69.75 | 70.30 | **−0.55 ✓** | 66.32 | **+3.43 ❌** |
-| test_avg/mae_surf_p | 61.03 | 61.39 | **−0.36 ✓** | 59.68 | **+1.35 ❌** |
-| val single_in_dist | 73.26 | 74.15 | −0.89 | — | — |
-| val geom_camber_rc | 83.86 | 81.11 | +2.75 ❌ | — | — |
-| val geom_camber_cruise | 51.69 | 53.67 | −1.98 ✓ | — | — |
-| val re_rand | 70.17 | 72.28 | −2.11 ✓ | — | — |
-| best_epoch | 20/21 | 18/19 | +2 | — | — |
+| Metric | max_lr=6e-4 (this) | Baseline OneCycleLR max_lr=8e-4 (#2014) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 62.49 | **60.98** | **+1.51 ❌ (+2.5%)** |
+| test_avg/mae_surf_p | 54.95 | **52.48** | **+2.47 ❌ (+4.7%)** |
+| val single_in_dist | 65.66 | 63.34 | +2.32 ❌ |
+| val geom_camber_rc | 72.03 | 72.79 | −0.76 ✓ (only split that improved) |
+| val geom_camber_cruise | 48.46 | 45.90 | +2.56 ❌ |
+| val re_rand | 63.82 | 61.91 | +1.91 ❌ |
+| test single_in_dist | 56.89 | 54.75 | +2.14 ❌ |
+| test geom_camber_rc | 66.87 | 64.08 | +2.79 ❌ |
+| test geom_camber_cruise | 39.62 | 37.43 | +2.19 ❌ |
+| test re_rand | 56.42 | 53.66 | +2.76 ❌ |
 
-- Artifact: `models/model-charliepai2g48h4-alphonse-lr-4e-4-bs1-20260513-095248/metrics.jsonl`
-- 21 epochs; best epoch 20 on the cosine rebound (cosine T_max=17 ends at ep18 then lr rises ep19-21: 5.3e-5 → 6.2e-5 → 7.6e-5).
+- Artifact: `models/model-charliepai2g48h4-alphonse-max-lr-6e-4-20260513-112009/metrics.jsonl`
+- 19/21 epochs (wall-clock timeout at 30.9 min); best epoch = final epoch 19. LR at ep19: 1.87e-5.
 
-**Analysis:** The lower-LR mechanism holds — best-epoch shifted later (18→20) and 3/4 splits improved both val and test, consistent with "slower convergence yields tighter checkpoint before cosine rebound". camber_rc val regressed +2.75 but test improved −1.86, so split-level noise more than signal. Net result is robust but small (within seed-σ band). Since edward's beta=0.5 merge (PR #2012) advanced baseline to val=66.32, this result no longer wins. **Sent back to rerun with lr=4e-4 + beta=0.5 stacked on current HEAD.** Mechanisms should compound: LR (step magnitude) and beta (loss shape) operate orthogonally. Worth noting alphonse independently observed the same T_max=17 schedule misalignment that edward's #2162 (T_max=20) is now testing.
+**Analysis:** Hypothesis falsified. Lower max_lr clips BOTH the productive exploration phase AND the regularisation-via-noise benefit of OneCycleLR's super-convergence peak. 3/4 val splits regressed; **all 4 test splits regressed** by ~2-2.8 pts — a uniform signal, not noise. The lower LR bracket definitively loses; the LR axis on OneCycleLR is at or above 8e-4. Combined with the lower-bracket result, the closed range for max_lr is (6e-4, ∞) — thorfinn #1968 (max_lr=1e-3) covers the upper side. Student's detailed warmup-overhead analysis (ep1-2 take ~3min for CUDA kernel compilation) is noted for potential infra optimisation. **Closed. Alphonse re-assigned to pct_start=0.15 bracket test (PR #2242).**
 
 ---
 

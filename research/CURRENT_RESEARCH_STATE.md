@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 11:30 (MERGED #2014 nezuko OneCycleLR val=60.98 HUGE WIN; CLOSED #2162 T_max=20 moot; REDIRECTED #1968 thorfinn to max_lr=1e-3, #2106 alphonse to max_lr=6e-4; assigned nezuko #2212 pct_start=0.05, edward #2217 n_hidden=192; 16 effective merges)
+- **As of:** 2026-05-13 12:05 (CLOSED #2106 alphonse max_lr=6e-4 clear regression +2.5%; assigned alphonse #2242 pct_start=0.15 bracket; lower max_lr bracket fully closed, upper in-flight via thorfinn #1968; pct_start now bracketed: 0.05 (nezuko #2212), 0.15 (alphonse #2242))
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm. Local JSONL metrics only.
@@ -44,65 +44,64 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **surf_weight axis CLOSED**: 5 optimum (tested on SequentialLR — may need revisit on OneCycleLR).
 - **depth axis CLOSED**: 5 optimum.
 - **AdamW β1 axis CLOSED**: 0.9 optimum.
-- **AdamW β2 axis SEMI-OPEN**: 0.999 best on SequentialLR; tanjiro #2125 testing β2={0.95,0.99} on new OneCycleLR HEAD.
+- **AdamW β2 axis SEMI-OPEN**: 0.999 best on SequentialLR; tanjiro #2125 testing β2={0.95,0.99} on OneCycleLR HEAD.
 - **slice_num axis FULLY CLOSED**: 64 confirmed optimum.
-- **lr lower-bound (SequentialLR era) CLOSED**: 5e-4 optimum lower-side. Moot now (max_lr bracket open).
+- **lr lower-bound (SequentialLR era) CLOSED**: moot now; max_lr bracket open on OneCycleLR.
 - **loss beta axis OPEN**: 1.0→0.5 merged; beta=0.25 (fern #2164) in flight.
-- **eta_min axis CLOSED (SequentialLR era)**: 5e-5 optimum. Moot now (no CosineAnnealing).
+- **eta_min axis CLOSED (SequentialLR era)**: moot now (no CosineAnnealing).
 - **ref axis CLOSED**: ref=8 optimum.
 - **mlp_ratio axis**: upper CLOSED (4 worse), lower OPEN (1 < 2 on SequentialLR; frieren #1992 retesting on OneCycleLR HEAD).
 - **wd axis FULLY CLOSED**: 1e-4 optimum.
-- **warmup length axis CLOSED (SequentialLR era)**: 1-epoch optimum. Now controlled by pct_start in OneCycleLR.
 - **n_head axis FULLY CLOSED**: n_head=4 unimodal optimum.
 - **CAWR schedules CLOSED** for 30-min budget.
 - **SequentialLR T_max axis CLOSED**: replaced by OneCycleLR entirely.
 - **cfg.lr axis MOOT** on new HEAD: OneCycleLR overrides it. max_lr bracket now open.
-- **n_hidden axis**: 192/256 tested on EARLY baseline (val ~90-100); REOPEN on OneCycleLR HEAD.
+- **n_hidden axis**: 192/256 tested on EARLY baseline (val ~90-100); REOPEN on OneCycleLR HEAD. Edward #2217 testing.
+- **max_lr axis (OneCycleLR) LOWER CLOSED**: 6e-4 < 8e-4 (alphonse #2106 confirmed +2.5% regression, uniform across all splits). Optimum is at 8e-4 or above. Upper bracket (1e-3) in-flight via thorfinn #1968.
+- **pct_start axis (OneCycleLR) BRACKETED**: 0.05 (nezuko #2212, 1-epoch warmup), 0.15 (alphonse #2242, 3-epoch warmup) both in-flight against default 0.10.
 
 ## Themes
 
 1. **Schedule optimization — MERGED.** OneCycleLR(max_lr=8e-4, T_MAX_EPOCHS=21) replaces SequentialLR. Huge win.
-2. **max_lr bracket (OneCycleLR).** Thorfinn #1968 (max_lr=1e-3 upper), alphonse #2106 (max_lr=6e-4 lower).
-3. **pct_start bracket.** Nezuko #2212 (pct_start=0.05).
-4. **Architecture.** Edward #2217 (n_hidden=192, VRAM headroom at 8.5/98GB).
-5. **EMA stacking.** Askeladd #1540. Actively training on bs=1+beta=0.5 HEAD (~11:19 finish expected). Result imminent.
-6. **Loss beta bracket.** Fern #2164 (beta=0.25).
-7. **AdamW β2 bracket.** Tanjiro #2125 (β2={0.95,0.99} rerun on new HEAD).
-8. **FFN capacity.** Frieren #1992 (mlp-ratio-1 rerun on new HEAD).
+2. **max_lr bracket (OneCycleLR).** Lower closed (6e-4 regressed +2.5%). Upper: thorfinn #1968 (max_lr=1e-3) in flight.
+3. **pct_start bracket.** Nezuko #2212 (pct_start=0.05, 1-epoch warmup) + alphonse #2242 (pct_start=0.15, 3-epoch warmup). Bracket: {0.05, 0.10 current, 0.15}.
+4. **Architecture.** Edward #2217 (n_hidden=192). rc split (72.79) is hardest — wider model may help.
+5. **EMA stacking.** Askeladd #1540. Rebased onto OneCycleLR HEAD, actively training.
+6. **Loss beta bracket.** Fern #2164 (beta=0.25). Mechanism: narrower quadratic zone = more L1 character.
+7. **AdamW β2 bracket.** Tanjiro #2125 (β2={0.95,0.99} rerun on OneCycleLR HEAD — higher max_lr makes β2 even more relevant).
+8. **FFN capacity.** Frieren #1992 (mlp_ratio=1 rerun on OneCycleLR HEAD).
 
 ## Leaderboard (val_avg/mae_surf_p)
 
 | Lever | val_avg | test_avg | Status |
 |---|---|---|---|
-| **OneCycleLR (nezuko #2014)** | **60.98** | **52.48** | **MERGED — CURRENT BEST** |
+| **OneCycleLR max_lr=8e-4 (nezuko #2014)** | **60.98** | **52.48** | **MERGED — CURRENT BEST** |
+| OneCycleLR max_lr=6e-4 (alphonse #2106) | 62.49 | 54.95 | CLOSED — regression +2.5% |
 | loss-beta-0-5 + bs=1 (edward #2012) | 66.32 | 59.68 | MERGED → superseded |
 | batch-size-1 (alphonse #2036) | 70.30 | 61.39 | MERGED → superseded |
-| adamw-beta2-0-95 (tanjiro #2125) | 69.74 | 62.37 | SENT BACK — rerun on new HEAD |
-| lr-4e-4-bs1 (alphonse #2106) | 69.75 | 61.03 | REDIRECTED → max_lr=6e-4 bracket |
-| lr-7e-4 (thorfinn #1968) | 79.77 | 72.06 | REDIRECTED → max_lr=1e-3 bracket |
 
 ## Active student assignments (all 8)
 
-### max_lr bracket (OneCycleLR tune — highest confidence)
-- **PR #2106 — `max_lr-6e-4` (alphonse)** — **WIP (redirected 11:10)** — max_lr lower bracket on OneCycleLR
-- **PR #1968 — `max_lr-1e-3` (thorfinn)** — **WIP (redirected 11:10)** — max_lr upper bracket on OneCycleLR
+### pct_start bracket (OneCycleLR warmup length)
+- **PR #2212 — `onecycle-pct-start-0-05` (nezuko)** — **WIP** — pct_start=0.05 (1-epoch warmup, shorter)
+- **PR #2242 — `onecycle-pct-start-0-15` (alphonse)** — **WIP (new 12:05)** — pct_start=0.15 (3-epoch warmup, longer; β2 half-life argument)
 
-### pct_start bracket
-- **PR #2212 — `onecycle-pct-start-0-05` (nezuko)** — **WIP (new)** — pct_start=0.05 (1 epoch warmup vs current 2.1)
+### max_lr bracket upper side
+- **PR #1968 — `max_lr-1e-3` (thorfinn)** — **WIP** — max_lr=8e-4→1e-3 upper bracket
 
 ### Architecture
-- **PR #2217 — `n-hidden-192-onecycle` (edward)** — **WIP (new)** — wider attention n_hidden=128→192
+- **PR #2217 — `n-hidden-192-onecycle` (edward)** — **WIP** — n_hidden=128→192; VRAM headroom at 8.5/98GB
 
 ### EMA + loss + β2 + FFN
-- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — Training on bs=1+beta=0.5 HEAD; result imminent (~11:19 finish)
-- **PR #2164 — `loss-beta-0-25-bs1` (fern)** — **WIP** — beta=0.25 bracket
-- **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP** — β2={0.95,0.99} rerun on new HEAD (will need rebase)
-- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — mlp_ratio=1 rerun on new HEAD (will need rebase)
+- **PR #1540 — `ema-weights` (askeladd)** — **WIP** — EMA decay=0.999 on OneCycleLR HEAD (rebased)
+- **PR #2164 — `loss-beta-0-25-bs1` (fern)** — **WIP** — smooth_l1 beta=0.5→0.25
+- **PR #2125 — `adamw-beta2-0-95` (tanjiro)** — **WIP** — β2={0.95,0.99} rerun on OneCycleLR HEAD
+- **PR #1992 — `mlp-ratio-1` (frieren)** — **WIP** — mlp_ratio=2→1 rerun on OneCycleLR HEAD
 
 ## Next frontier after current round
 
-- Sub-60 val via EMA + max_lr tuning + architecture
-- max_lr bracket closure: {6e-4, 8e-4, 1e-3} — one or more should beat 60.98
-- EMA expected sub-59 val if mechanism compounds (1-3% improvement on 60.98)
-- pct_start tuning: 0.05 vs 0.1 — extra annealing time
-- n_hidden=192: VRAM headroom allows it; was tested on OLD baseline only
+- Sub-60 val via EMA + upper-max_lr + architecture
+- pct_start bracket closure: {0.05, 0.10, 0.15} — one should emerge as winner
+- max_lr upper side: if 1e-3 beats 8e-4, next bracket is {8e-4, 1e-3, 1.2e-3}
+- EMA stacking: rebased on OneCycleLR; if val drops below 59, it's the biggest lever remaining
+- n_hidden=192: VRAM headroom allows; if it wins, next is 256
