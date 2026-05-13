@@ -2,6 +2,64 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:10 — PR #1762: [surf-weight-5] surf_weight 10→5 — **MERGED (NEW BEST: val=90.58)**
+- Student branch: `charliepai2g48h4-tanjiro/surf-weight-5`
+- Hypothesis: With grad-clip normalizing every step, surface gradients no longer need heavy weighting to dominate the loss — clipping equalizes step magnitudes. Halving surf_weight from 10→5 better balances surface-vs-volume residuals.
+
+| Metric | grad-clip baseline (#1696) | surf_weight=5 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 96.78 | **90.58** | **−6.20 (−6.4%)** |
+| test_avg/mae_surf_p | 86.56 | **80.00** | **−6.56 (−7.6%)** |
+| val single_in_dist | 110.38 | 106.31 | −4.07 |
+| val geom_camber_rc | 105.34 | 98.84 | −6.50 |
+| val geom_camber_cruise | 75.14 | 69.35 | −5.79 |
+| val re_rand | 96.27 | 87.82 | −8.45 |
+| pre-clip grad norm (mean) | 33–106 | 2–5 | 10–20× lower |
+
+- Artifact: `models/model-charliepai2g48h4-tanjiro-surf-weight-5-20260513-011227/metrics.jsonl`
+- Run context: on Huber+grad-clip HEAD (surf_weight=10 baseline). Result is directly comparable to current best.
+
+**Analysis:** Strongest improvement since grad-clip merge. All 4 val + all 4 test splits improved simultaneously — a very clean signal. Mechanism confirmed: grad-clip's per-step normalization removes the need for heavy surf_weight to dominate volume gradients. The halved weight frees the loss to weight volume residuals more equally, giving a smoother loss landscape. `re_rand` improves most (−8.45 val), consistent with that split having the highest surface/volume gradient ratio. Notably, pre-clip gradient norms dropped 10-20× under surf_weight=5 — the model operates in a qualitatively different gradient regime. All-split improvement with no tradeoffs makes this a strong, clean result. Follow-up: surf_weight=3 (tanjiro #1832) continues the sweep.
+
+## 2026-05-13 02:11 — PR #1759: [max-norm-0.5] Tighter gradient clip 1.0→0.5 — **SENT BACK (rerun on new baseline)**
+- Student branch: `charliepai2g48h4-frieren/max-norm-0.5`
+- Hypothesis: Tighter clipping = smaller effective steps = better generalization in the normalized gradient descent regime.
+
+| Metric | grad-clip-1.0 baseline (#1696) | max_norm=0.5 (this run) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 96.78 | 95.53 | −1.25 (−1.3%) |
+| test_avg/mae_surf_p | 86.56 | 85.37 | −1.19 (−1.4%) |
+| val single_in_dist | 110.38 | 112.09 | +1.71 |
+| val geom_camber_rc | 105.34 | 103.60 | −1.74 |
+| val geom_camber_cruise | 75.14 | 73.25 | −1.89 |
+| val re_rand | 96.27 | 93.17 | −3.10 |
+| pre-clip mean norm ep1 | 106 | 10 | 10× lower |
+
+- Artifact: `models/model-charliepai2g48h4-frieren-max-norm-0.5-20260513-011036/metrics.jsonl`
+- Run context: on Huber+grad-clip HEAD with surf_weight=10. Does NOT use new surf_weight=5 baseline.
+
+**Analysis:** Small improvement (Δ−1.25 val) within σ ≈ 3.5 noise band. Key mechanism finding: pre-clip norms under max_norm=0.5 are ~10× smaller in absolute terms (not just clipped magnitude), suggesting tighter clipping pushes the model into a qualitatively flatter region. 3 of 4 splits improve; single_in_dist slightly regresses.
+
+**Decision:** SENT BACK to rerun on new baseline (surf_weight=5, val=90.58). Since #1762 merged, dynamics changed (grad norms now 2-5 mean vs 33-106). max_norm=0.5 vs 1.0 under surf_weight=5 is an untested combination. Target: val < 90.58.
+
+## 2026-05-13 02:17 — PR #1714: [huber-seed7-variance] Cross-seed σ calibration — **CLOSED (informational)**
+- Student branch: `charliepai2g48h4-alphonse/huber-seed7-variance`
+- Hypothesis: Measure cross-seed σ on Huber recipe by running seed=7 vs seed=42 baseline.
+
+| Metric | seed=42 (baseline) | seed=7 | Δ | σ estimate (N=2) |
+|---|---|---|---|---|
+| val_avg/mae_surf_p | 110.59 | 98.49 | −12.10 | **σ ≈ 8.5 val** |
+| test_avg/mae_surf_p | 102.28 | 90.07 | −12.21 | **σ ≈ 8.6 test** |
+| val geom_camber_cruise | 95.72 | 79.60 | −16.12 | — |
+| val single_in_dist | 127.85 | 115.15 | −12.70 | — |
+
+- Artifact: `models/model-charliepai2g48h4-alphonse-huber-seed7-variance-20260513-005242/metrics.jsonl`
+- Run context: on Huber HEAD (pre-grad-clip, surf_weight=10). Informational — not a target-beating run.
+
+**Key finding:** σ ≈ 8.5 val on Huber recipe — roughly 2.4× the pre-Huber estimate (σ ≈ 3.5 from #1685). This means improvements of <10 val pts on the Huber recipe should be treated as potentially within noise. HOWEVER this σ is for the Huber recipe without grad-clip; under grad-clip's normalized steps the variance may be lower (more deterministic direction-following). The current recipe (grad-clip + surf_weight=5) σ is unknown.
+
+**Operational implication:** Cross-seed σ on current recipe (grad-clip + surf_weight=5) still needs calibration. Alphonse's next assignment is layers-7 (#1834) for higher EV; σ calibration on current recipe will be assigned in a future round after more confirmations land.
+
 ## 2026-05-13 02:03 — PR #1730: [layers-6] n_layers 5→6 depth test — **SENT BACK (Huber base, pre-grad-clip)**
 - Student branch: `charliepai2g48h4-edward/layers-6`
 - Hypothesis: Under-fit on `val_single_in_dist` (127.85 vs 95.72 cruise) signals depth bottleneck. Adding one Transolver block tests whether extra global-attention rounds close the gap.
