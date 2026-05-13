@@ -9,6 +9,36 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 06:30 — PR #1867: fern — AdamW beta1=0.9 → 0.95 (MERGED)
+
+**New best val and test. +2.5% val / +5.1% test improvement on smooth_l1+OneCycleLR stack.**
+
+- **val_avg/mae_surf_p:** 85.84 (was 88.06) — **-2.5%**
+- **test_avg/mae_surf_p:** **74.45** (was 78.46) — **-5.1%**
+- **W&B run:** `s2trerq4`
+- **Epochs:** 18 in ~30 min (best epoch 17)
+
+Per-split test `mae_surf_p` (run `s2trerq4`):
+
+| Split | test | vs prev baseline (#1666) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 81.64 | 85.74 | **-4.8%** |
+| `geom_camber_rc` | 85.23 | 90.31 | **-5.6%** |
+| `geom_camber_cruise` | 54.52 | 58.96 | **-7.5%** |
+| `re_rand` | 76.43 | 78.83 | **-3.0%** |
+
+Changes vs prior baseline (#1666):
+- `betas=(0.95, 0.999)` in AdamW (beta1 0.9 → 0.95). Under smooth_l1's lower-noise gradient regime, longer first-moment EMA memory helps the optimizer maintain direction through the cosine anneal LR tail. Effect strongest in anneal phase — new best in 7 of 8 epochs 10-17.
+
+Stack: beta1=0.95 + smooth_l1(β=1) + OneCycleLR + p_weight=2 + grad_clip=1.0 + bf16 + grad_accum=2.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/adamw-beta1-0.95" --wandb_group "willow-r2-optimizer"
+```
+
+---
+
 ## 2026-05-13 05:30 — PR #1666: tanjiro — smooth_l1(β=1) loss replaces MSE (MERGED)
 
 **New best val and test. Second compounding winner on top of OneCycleLR: -9.3% val / -8.5% test.**
@@ -157,7 +187,7 @@ Transolver from `train.py` at HEAD — includes bf16 (PR #1480), grad_accum=2 (#
 | `mlp_ratio` | 2 |
 | Schedule | `OneCycleLR(max_lr=2e-3, pct_start=0.1, anneal_strategy="cos")` |
 | Loss | `smooth_l1(β=1)` per-element, then `p_weight`-weighted, `vol_loss + 10.0 * surf_loss` |
-| Optimizer | AdamW (default betas, eps=1e-8) |
+| Optimizer | AdamW (`betas=(0.95, 0.999)`, eps=1e-8) |
 
 Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/baseline"`.
 
@@ -165,24 +195,26 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-**Best val (merged):** `val_avg/mae_surf_p` = **88.06** (PR #1666, tanjiro, run `fihyl2d5`)
-**Best test (merged):** `test_avg/mae_surf_p` = **78.46** (same run)
+**Best val (merged):** `val_avg/mae_surf_p` = **85.84** (PR #1867, fern, run `s2trerq4`)
+**Best test (merged):** `test_avg/mae_surf_p` = **74.45** (same run)
 
 Prior merged baselines (for reference):
 
 | PR | What landed | val_avg | test_avg |
 |---|---|---|---|
-| #1666 (tanjiro) | smooth_l1(β=1) loss | **88.06** | **78.46** |
+| #1867 (fern) | AdamW beta1=0.95 | **85.84** | **74.45** |
+| #1666 (tanjiro) | smooth_l1(β=1) loss | 88.06 | 78.46 |
 | #1655 (alphonse) | OneCycleLR max_lr=2e-3 | 97.07 | 85.71 |
 | #1471 (frieren) | p_weight=2.0 + clip_grad_norm=1.0 | 110.27 | 99.41 |
 | #1480 (thorfinn) | bf16 autocast + grad_accum=2 + cruise-NaN fix | 116.30 | 104.96 |
 
 ## Notes for students
 
-- **Baseline as of PR #1666:** `val_avg/mae_surf_p = 88.06`, `test_avg/mae_surf_p = 78.46`.
+- **Baseline as of PR #1867:** `val_avg/mae_surf_p = 85.84`, `test_avg/mae_surf_p = 74.45`.
 - **cruise-NaN workaround is landed.** All runs produce finite `test_avg` — no per-PR code needed.
-- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **88.06** to be a winner.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **85.84** to be a winner.
 - OneCycleLR is the default scheduler (max_lr=2e-3, pct_start=0.1, cosine anneal).
-- smooth_l1_loss(β=1) is the default per-element loss (replaces MSE).
-- Grad clip at max_norm=1.0 is in the training loop default. Note: pre-clip grad_norm is ~3-4× lower with smooth_l1 vs MSE baseline, but clip still binds on nearly every step.
+- smooth_l1_loss(β=1) is the default per-element loss.
+- AdamW beta1=0.95 is now the default (betas=(0.95, 0.999), eps=1e-8).
+- Grad clip at max_norm=1.0 is in the training loop default.
 - Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
