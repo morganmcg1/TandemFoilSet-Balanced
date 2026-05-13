@@ -180,3 +180,22 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 58.88, test < 51.08, all four test splits finite.**
+
+## 2026-05-13 20:05 — PR #2516: Lion optimizer (Chen et al. 2023)
+
+- **`val_avg/mae_surf_p`:** 50.193 (best seed 2, `1dj10zec`)
+- **`test_avg/mae_surf_p`:** 43.501 (best seed 2)
+- **Per-split test surf_p (seed 2):** single_in_dist=46.82, geom_camber_rc=59.38, geom_camber_cruise=26.60, re_rand=41.21
+- **Per-split test vol_p (seed 2):** single_in_dist=56.48, geom_camber_rc=66.05, geom_camber_cruise=28.05, re_rand=43.11
+- **Seed 1 confirmation (`2aehgwoh`):** val=51.162, test=44.288 — both seeds beat baseline by ~14-15%. Seed variance: 0.97 pt val (1.9%), 0.79 pt test (1.8%).
+- **W&B runs:** `2aehgwoh` (seed 1), `1dj10zec` (seed 2, BETTER)
+- **Implementation note:** Replaced `torch.optim.AdamW` with Lion optimizer class (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms"). Lion uses signed momentum: `update = sign(beta1 * m + (1-beta1) * grad)`, followed by `p += -lr * update`. LR scaled 10× lower than AdamW (lr=5e-5 vs 5e-4); weight_decay scaled 10× higher (wd=2e-3 vs 2e-4); betas=(0.9, 0.99). Mechanism: grad_clip max_norm=1.0 was already performing global step-size normalization (100% clip rate); Lion replaces AdamW's per-parameter adaptive denominator with a uniform sign operation, composing cleanly with the global clip. No `v` second-moment state. Parameter count identical (0.66M); optimizer state 2.6 MB (vs ~5 MB AdamW). Peak VRAM unchanged at 24.1 GB (optimizer state negligible vs ~24 GB activation memory for this small model).
+- **Compute:** 30.7 min (hits 30-min cap), ~52-53s/epoch, 35/35 epochs, best=last (still compute-bound). Lion's early-epoch trajectory (e5 val≈118, e15 val≈82) identical to AdamW; win opens in late training regime where AdamW plateaus at ~59 but Lion descends to ~50.
+- **Delta vs PR #2017 (weight_decay=2e-4 baseline):** val **−14.8%** (58.88 → 50.19), test **−14.8%** (51.08 → 43.50). Third-largest single-axis win of round 1 (after bf16 #1715 at −21% and torch.compile #1810 at −24%). All four test splits improved uniformly; cruise −22.4% (26.60 vs 34.30), in_dist −16.4%, re_rand −19.0%, rc −5.9%.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-edward \
+      --wandb_name "willowpai2g48h3-edward/lion-s2" --wandb_group lion-opt
+  ```
+
+**New merge bar: val < 50.19, test < 43.50, all four test splits finite.**
