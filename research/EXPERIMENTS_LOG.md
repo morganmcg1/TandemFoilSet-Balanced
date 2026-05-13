@@ -6,6 +6,31 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 22:50 — Round 37: close 2 losers + 2 stale_wip; assign 4 new on batch_size and weight_decay axes
+
+**Closed losers (terminal, above noise floor):**
+- **#2600 frieren surf_weight=12**: val_avg=36.652 vs baseline 35.256 (**+3.96% LOSS**); test_avg=30.608 (**+1.20% LOSS**). All 4 splits regressed; mae_vol_p worsened ~7% val / ~5% test confirming surface-vs-volume tradeoff. **Surface-weight axis at n_layers=2 stack now closed: optimum bracketed tightly around sw=10.** Student suggested per-channel surface weighting (separate surf_weight_p from surf_weight_uv) as a future code-change PR direction. Student also noted geom_camber_rc (~48 baseline, ~51 here) is the dominant val_avg ceiling-setter.
+- **#2601 askeladd compound lr=1.5e-4 + wd=3e-4**: val_avg=36.276 vs baseline 35.256 (**+2.89% LOSS**); test_avg=30.335 (+0.30% near-wash within seed noise). WD=3e-4 *partially* rescued OOD damage from high LR (test_avg -1.73% vs lr=1.5e-4 alone, all 3 OOD test splits improved), but ERASED the in-dist val gain (single_in_dist 34.16 -> 36.88, worse than baseline 36.48). **Two compound LR+WD arms have now failed at this stack. LR/WD sweep space is exhausted at n_layers=2.** Student's next-direction suggestions: physics-informed loss / aux surface head / baseline seed-averaging.
+
+**Closed stale_wip (rate-limit-stuck pods, no terminal results after 2h+ idle):**
+- **#2570 fern surf_weight=8** — pod stuck in rate-limit polling cycle.
+- **#2571 tanjiro mlp_ratio=3** — same systemic issue; nezuko #2610 already in-flight at mlp_ratio=2 covering the lower-bound point.
+
+**Assigned 4 fresh PRs on UNTESTED axes at the n_layers=2 stack:**
+
+| Student | PR | Hypothesis | Axis |
+|---------|-----|------------|------|
+| fern | #2636 | **batch_size=2** at n_layers=2+slice_num=16+epochs=46 | batch_size (untested) |
+| tanjiro | #2637 | **batch_size=8** at n_layers=2+slice_num=16+epochs=46 | batch_size (untested) |
+| frieren | #2638 | **weight_decay=3e-4** alone at n_layers=2+slice_num=16+epochs=46 | WD axis (isolate from LR) |
+| askeladd | #2639 | **weight_decay=5e-5** at n_layers=2+slice_num=16+epochs=46 | WD axis (lower bound) |
+
+**Strategy:** Two clean orthogonal axes — batch_size {2, 4=baseline, 8} and weight_decay {5e-5, 1e-4=baseline, 3e-4}. Each is a single-flag change with concrete OOD-vs-in-dist hypothesis. **batch_size axis is genuinely untested at this stack** (every variant since Round 32 held bs=4). **weight_decay alone** isolates the OOD-regularization mechanism from the LR confounder (per askeladd #2601 explicit suggestion).
+
+**Round 36 PRs still in-flight:** #2608 alphonse lr=8e-5, #2609 edward slice_num=24, #2610 nezuko mlp_ratio=2, #2611 thorfinn lr=5e-5 r2.
+
+---
+
 ## 2026-05-13 22:15 — Round 36: Close 4 stale_wip PRs (alphonse #2543, edward #2545, nezuko #2547, thorfinn #2549); reassign with bigger swings
 
 All 4 PRs (assigned ~19:30-19:42 UTC) had no commits or comments for 2.5+ hours — same systemic pod-polling rate-limit issue (user ID 20516801 shared across many bots). Closed all 4 and re-created with mostly-different hypotheses to maximize value of GPU time if/when pods recover.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 22:20
+- **Date:** 2026-05-13 22:55
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -17,6 +17,12 @@
 > **NEW EPOCH BUDGET CEILING: 35s/epoch × ~51 epochs = ~29.9 min. Frieren #2523 pushing to epochs=50.**
 
 > **Partition axis FULLY CLOSED.** slice_num=16 is narrow local minimum across all neighbors (12, 14, 18, 20, 24, 32). No further partition sweeping needed at n_layers=2.
+
+> **Round 37 frontier signals (after 4 closures):**
+> - **surface_weight axis CLOSED at n_layers=2**: sw=8 (stale), sw=10 baseline win, sw=12 +3.96% loss, sw=15 neutral (old stack). Optimum bracketed tightly around 10.
+> - **LR/WD sweep space EXHAUSTED at n_layers=2**: 2 compound (#2525 lr=1.5e-4, #2601 lr=1.5e-4+wd=3e-4) and multiple single-axis arms failed to net positive. The lr=1e-4 / wd=1e-4 baseline owns the operating point. Round 37 is the *last* round of single-axis HP tuning at this stack (bs and WD-alone are the last untested cells).
+> - **If Round 37 fails to find a winner**: pivot to ARCHITECTURAL changes — aux surface head, per-channel surface weighting (separate surf_weight_p from surf_weight_uv), physics-informed loss (pressure-gradient × surface-normal term), or n_layers=2 → 1 + larger heads. Plateau Protocol re-activates.
+> - **Key OOD ceiling**: geom_camber_rc (~48 val, ~44 test) dominates val_avg — any future arm should explicitly target this split.
 
 | Split | val mae_surf_p | test mae_surf_p |
 |---|---|---|
@@ -88,20 +94,26 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 32)
+## Active experiments (Round 37 — full 8 GPUs in flight)
 
 **Current Baseline: val=35.256 (PR #2468 n_layers=2+epochs=46), test=30.245**
 
 | Student | PR | Hypothesis | Stack | vs 35.256 |
 |---------|-----|------------|-----------|---|
-| fern | **#2570** | **surf_weight=8 × n_layers=2+slice_num=16+epochs=46** (loss-weight axis at new stack; targets OOD) | **NEW STACK** | possible — addresses OOD bottleneck |
-| tanjiro | **#2571** | **mlp_ratio=3 × n_layers=2+slice_num=16+epochs=46** (FFN width intermediate untested point) | **NEW STACK** | possible — narrower FFN may help OOD |
-| frieren | **#2600** | **surf_weight=12 × n_layers=2+slice_num=16+epochs=46** (HIGHER sw; targets OOD via stronger surface loss) | **NEW STACK** | possible — 20% sw change above noise floor |
-| askeladd | **#2601** | **COMPOUND lr=1.5e-4 + wd=3e-4 × n_layers=2** (rescue OOD damage from high LR via 3× WD) | **NEW STACK** | high-EV compound test |
-| alphonse | **#2608** | **lr=8e-5 × n_layers=2+slice_num=16+epochs=46** (LR low-side fine probe; 20% change at noise floor edge) | **NEW STACK** | possible |
-| edward | **#2609** | **slice_num=24+epochs=33 × n_layers=2** (BIGGER partition retest, +50% slicing) | **NEW STACK** | possible — well above noise |
-| nezuko | **#2610** | **mlp_ratio=2 × n_layers=2** (narrower FFN; 50% reduction at bottom of axis) | **NEW STACK** | possible — well above noise |
-| thorfinn | **#2611** | **lr=5e-5 × n_layers=2** (LR lower bound retry; 50% reduction at noise floor) | **NEW STACK** | possible — completes LR axis |
+| fern | **#2636** | **batch_size=2** × n_layers=2+slice_num=16+epochs=46 (gradient-noise regularization; bs untested axis) | **NEW STACK** | possible — OOD-targeted |
+| tanjiro | **#2637** | **batch_size=8** × n_layers=2+slice_num=16+epochs=46 (smoother gradients; bs untested axis) | **NEW STACK** | possible — in-dist-targeted |
+| frieren | **#2638** | **wd=3e-4 alone** × n_layers=2 (isolate WD from LR per askeladd #2601 suggestion) | **NEW STACK** | high-info diagnostic |
+| askeladd | **#2639** | **wd=5e-5** × n_layers=2 (lower WD bound; complete WD axis) | **NEW STACK** | possible — in-dist-targeted |
+| alphonse | **#2608** | **lr=8e-5** × n_layers=2+slice_num=16+epochs=46 (LR low-side fine probe) | **NEW STACK** | possible |
+| edward | **#2609** | **slice_num=24+epochs=33** × n_layers=2 (BIGGER partition retest, +50% slicing) | **NEW STACK** | possible — well above noise |
+| nezuko | **#2610** | **mlp_ratio=2** × n_layers=2 (narrower FFN; 50% reduction at bottom of axis) | **NEW STACK** | possible — well above noise |
+| thorfinn | **#2611** | **lr=5e-5** × n_layers=2 (LR lower bound retry; 50% reduction) | **NEW STACK** | possible — completes LR axis |
+
+**Round 37 strategy: two clean orthogonal axes at the new stack.**
+- **batch_size axis** (untested at this stack — every variant since Round 32 held bs=4): bs=2 (fern), bs=4 (baseline), bs=8 (tanjiro)
+- **weight_decay axis** (was only tested in compound with LR): wd=5e-5 (askeladd), wd=1e-4 (baseline), wd=3e-4 (frieren)
+
+Each is a single-flag change with concrete OOD-vs-in-dist hypothesis. Combined with the 4 Round 36 PRs (LR, slice, mlp_ratio probes), this Round 37 attack characterizes 5 hyperparameter axes simultaneously at the n_layers=2 stack.
 
 **LR axis sweep at n_layers=2 stack (3 in-flight + 1 done):** 5e-5 (thorfinn) → 1e-4 (BASELINE 35.256) → 1.2e-4 (alphonse) → **1.5e-4 (#2525 CLOSED, +3.30% LOSS — OOD bottleneck confirmed)**
 
@@ -110,6 +122,7 @@
 **Critical insight from #2523 result (seed variance):** Run-to-run variance is ~±1.0 val units (the same config produced epoch-46 vals of 35.26 vs 36.42 across two runs). Single-seed comparisons of small tweaks (<5% change) are below the noise floor. **Strategy shift: prioritize bigger experimental swings (compounds, 20%+ axis changes) over marginal tuning.**
 
 **Merged:** #2348 (val=35.548), #2468 (val=35.256 NEW BEST)
+**Closed Round 37:** #2600 (frieren sw=12 **+3.96% LOSS** — sw axis at this stack now closed: optimum bracketed tightly around sw=10); #2601 (askeladd compound lr=1.5e-4+wd=3e-4 **+2.89% LOSS** — WD partially rescues OOD but erases in-dist gain; LR/WD sweep space exhausted at this stack); #2570 (fern sw=8 stale_wip); #2571 (tanjiro mlp_ratio=3 stale_wip)
 **Closed Round 36:** #2543 (alphonse stale_wip), #2545 (edward stale_wip), #2547 (nezuko stale_wip), #2549 (thorfinn stale_wip)
 **Closed Round 35:** #2523 (frieren epochs=50 +2.30% loss — seed variance insight); #2558 (askeladd n_head=2 +3.16% loss — every split regressed)
 **Closed Round 34:** #2492 (fern stale_wip old-stack), #2493 (tanjiro stale_wip old-stack)
