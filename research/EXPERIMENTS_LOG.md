@@ -2,6 +2,108 @@
 
 ---
 
+## 2026-05-13 12:45 — PR #2127: surf_head step decay at e10 {×0.5, ×0.3}
+
+- **Branch:** `willowpai2g48h4-thorfinn/surf-head-step-decay` (CLOSED — mechanism confirmed, harmful intervention)
+- **Student:** willowpai2g48h4-thorfinn
+- **W&B runs:** `ap4569i2` (Arm 1 ×0.5), `ttrb3tmz` (Arm 2 ×0.3)
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs #2031 (93.62) | test_avg/mae_surf_p | Δ vs #2031 (83.88) |
+|-----|---------------------|---------------------|---------------------|---------------------|
+| Arm 1 (e10, ×0.5) | 100.2247 | +7.05% | 89.8721 | +7.14% |
+| Arm 2 (e10, ×0.3) | 96.2736 | +2.83% | 87.9542 | +4.86% |
+
+Monotonic trend: more aggressive decay → closer to baseline. Suggests optimum decay factor is **1.0** (no decay).
+
+### Key insight (reframing)
+
+**The e12 spike is fully damped** in both arms — mechanism confirmed. Per-epoch trajectory:
+```
+ep:    1    2    3    4    5    6    7    8    9   10   11   12   13   14
+base: 189  164  160  156  144  125  131  120  111  111  110  153  108  94  ← spike + deep recovery
+arm1: 203  245  157  150  132  142  131  124  122  114  113  108  108  100 ← smooth, no spike
+arm2: 191  194  149  173  130  144  141  128  123  115  111  107  103  96  ← smooth, no spike
+```
+
+**The spike+recovery is a BENEFICIAL training dynamic, not pathology.** Without the e12 spike, the e13-e14 sequence that breached the baseline's new minimum disappears. Both arms continue descending smoothly but converge at WORSE final values. The aggressive arm (×0.3) regresses LESS than the gentle arm (×0.5) — exactly OPPOSITE to what we'd expect if the spike were pathological.
+
+### LR trace verification
+
+| Epoch | Encoder LR | Arm 1 surf_head LR | Arm 2 surf_head LR |
+|-------|-----------|--------------------|--------------------|
+| e9 | 0.000461 | 0.004611 (×1.0) | 0.004611 (×1.0) |
+| e10 | 0.000452 | **0.002261 (×0.49)** | **0.001357 (×0.29)** |
+| e14 | 0.000409 | 0.002047 | 0.001228 |
+
+Step decay engages cleanly at e10 as configured.
+
+### Analysis
+
+This is the THIRD PR to triangulate the late-epoch oscillation mechanism:
+- #2058 (grad-clip): gradient size is NOT the mechanism (sh_grad_norm 0.77× encoder)
+- #1949 (head LR warmup): head LR cold-start is NOT the mechanism
+- #2127 (head LR step decay): head LR magnitude IS coupled to the spike, but damping it removes a beneficial dynamic
+
+**The e12 spike is an exploration burst that enables a deeper minimum at e14.** Damping the spike (via any head-LR-side intervention) loses the deep recovery. The mechanism is now characterized: the encoder enters a new region of loss landscape around e10-11, and the head's pre-positioned weights become "too forward" relative to the encoder's new locality — producing the spike. The recovery is the head re-aligning.
+
+### Implications
+
+**Closed directions** (head-LR-side modulation): step decay (this PR), warmup (#1949), gradient clipping (#2058), wider head (#2057). All head-side levers have been characterized.
+
+**Open: encoder-side modulation.** Thorfinn's suggested follow-up: encoder LR boost at e10-12 — same coupling, opposite intervention. Brief encoder speedup during transition might give cleaner alignment WITHOUT losing the spike-recovery. Assigned as #2188 (thorfinn encoder-lr-boost).
+
+---
+
+## 2026-05-13 12:30 — PR #2013: LogCosh surface loss (C²-smooth alternative to Huber kink)
+
+- **Branch:** `willowpai2g48h4-tanjiro/logcosh-surface-loss` (CLOSED — surface-loss family closed)
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `mbvj746h` (Arm 1 scale=1.0), `v80mlvz7` (Arm 2 scale=0.5)
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs #1795 (97.99) | test_avg/mae_surf_p | Δ vs #1795 (88.53) |
+|-----|---------------------|---------------------|---------------------|---------------------|
+| Arm 1 (scale=1.0) | 101.4307 | +3.51% | 91.5855 | +3.45% |
+| Arm 2 (scale=0.5) | 111.8905 | +14.18% | 100.0830 | +13.05% |
+
+Vs the new #2091 baseline (89.7197), the regressions are even larger (Arm 1 +13.1%, Arm 2 +24.7%).
+
+### Key diagnostic: late-epoch oscillation amplitude
+
+| Run | max−min over E11-E14 | ratio max/min |
+|-----|---------------------|---------------|
+| Baseline | 15.7 | 1.16 |
+| Arm 1 LogCosh | 17.7 | 1.17 |
+| Arm 2 LogCosh | 16.9 | 1.15 |
+
+**The C² smoothness hypothesis was unsupported** — oscillation amplitude essentially unchanged. Thrashing at the Huber kink is NOT the dominant source of late-epoch oscillation.
+
+### Why LogCosh failed (mechanism analysis)
+
+1. **Quadratic-regime gradient mismatch**: at typical residuals r≈0.106, Huber-δ=0.5 gradient is 2r=0.21, LogCosh scale=1.0 is tanh(r)≈0.106 — **half the gradient signal**. The 10× surf_head_lr cannot fully compensate.
+2. **Asymptotic L1 behavior is softer**: Huber cleanly transitions to ±1 at |r|≥δ. LogCosh asymptotes to ±1 but at scale=0.5, even at r=1.0 the gradient is tanh(2)≈0.964. **Outlier nodes get weaker, smoother signal under LogCosh** — opposite of what Huber's hard-clip does for the rare-but-important large-residual surface nodes that drive MAE.
+3. **C¹ vs C² distinction is empirically irrelevant** here. AdamW's running statistics either don't see meaningful discontinuities at the δ-kink at this scale, or the oscillation source is elsewhere (sampler/batch composition variance, cosine-decay endpoint).
+
+### Surface-loss family closure
+
+Now five PRs span the surface-loss family:
+- #1558 Huber δ=0.5 → WIN (−17.72%)
+- #1627 δ ∈ {0.2, 0.3} → both regress
+- #1950 adaptive δ (EMA tracking) → +2.25%
+- #1922 per-channel δ (δ_p=0.5, δ_u=2.0) → +5.61%
+- #2013 LogCosh {scale=1.0, 0.5} → +3.51% / +14.18%
+
+**Huber δ=0.5 is a stable local optimum**; finer perturbations of the surface loss function family do not unlock further gains. Future loss-function work should target volume loss or per-sample weighting (BIVW family).
+
+### Per-split pattern (interesting subordinate finding)
+
+Arm 1 matches or slightly beats baseline on OOD splits (val_geom_camber_rc, val_geom_camber_cruise, val_re_rand, test_geom_camber_rc) — the regression is concentrated on `val_single_in_dist` (+13.6%). The hardest OOD splits actually improved marginally under LogCosh; it's the in-distribution sanity split that suffered. This suggests LogCosh's softer signal helps generalization slightly but penalizes in-distribution fit — too costly for the primary metric.
+
+---
+
 ## 2026-05-13 11:45 — PR #2091: torch.compile throughput unlock **[WINNER — NEW BASELINE]**
 
 - **Branch:** `willowpai2g48h4-frieren/torch-compile` (MERGED)

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 33)
+- **As of:** 2026-05-13 (updated cycle 34)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -38,7 +38,8 @@
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
-| 2013 | tanjiro | logcosh-surface-loss | WIP | C²-smooth logcosh vs Huber δ kink; arms scale={1.0, 0.5}; stacks on #2031 baseline |
+| 2013 | tanjiro | logcosh-surface-loss | CLOSED | Both arms regressed (+3.51%, +14.18% vs 97.99). C² smoothness was a non-issue. Surface-loss family well-characterized as dead end. |
+| 2189 | tanjiro | ema-21epoch | WIP (NEW) | EMA re-screen at 21 epochs (compose w/ compile); arms: decay=0.999 from e0, decay=0.9995 from e5 |
 | 2091 | frieren | torch-compile | **MERGED** | torch.compile default mode; 21 epochs in 30 min; val 89.7197 / test 79.3167 — NEW BASELINE |
 | 2178 | frieren | compile-wd-compose | WIP (NEW) | Compose torch.compile + WD=5e-4 (now default); arms: WD=5e-4, WD=3e-4 |
 | 2120 | fern | wd-deeper | CLOSED | Arm 1 (WD=7e-4) regressed +18.85% val / +18.22% test. Branching rule halted Arms 2-3. WD=5e-4 is a SHARP peak. |
@@ -46,7 +47,8 @@
 | 2122 | edward | decoupled-wd | WIP (NEW) | Per-group WD: encoder vs surf_head (10× LR → 10× effective shrinkage at coupled WD) |
 | 2123 | askeladd | cosine-tmax | WIP (NEW) | T_max sweep {15, 20, 25}: T_max=50 wastes 72% of cosine cycle at 14-ep wall-clock cap |
 | 2124 | alphonse | surf-only-pw | WIP (NEW) | Surface-only pressure weight {0.5, 1.5}: NO mean-normalisation (avoids #1496 bug) |
-| 2127 | thorfinn | surf-head-step-decay | WIP (NEW) | Step decay surf_head LR at e10 {×0.5, ×0.3}: directly targets late-epoch oscillation |
+| 2127 | thorfinn | surf-head-step-decay | CLOSED | Both arms regressed (+7.05%, +2.83%). MECHANISM CONFIRMED (spike damped) but spike+recovery is BENEFICIAL — damping spike loses recovery. |
+| 2188 | thorfinn | encoder-lr-boost | WIP (NEW) | Encoder LR boost at e15-18 (dual to head-LR damp); arms: ×2.0, ×3.0; composes w/ compile |
 | 2128 | nezuko | adamw-eps | WIP (NEW) | AdamW ε sweep {1e-7, 1e-6}: denominator-floor stabilizer (orthogonal to β2/WD/clip) |
 
 ## Working hypotheses
@@ -83,13 +85,15 @@
 22. **Decoupled LR + head warmup** — **rejected** (PR #1949, best arm +1.30%). LR axis fully exhausted at 5e-3.
 23. **Wider surf_head** — **rejected** (PR #2057, +5.36% val). hidden_dim=128 regressed vs 64. Encoder is the capacity bottleneck, not the head.
 24. **Per-group surf_head gradient clipping** — **rejected** (PR #2058, +10.39% val). sh_grad_norm is 0.77× encoder norm — gradient is NOT the problem. The update magnitude spike is m/√v driven, not ‖g‖ driven. Wrong mechanism.
-25. **LogCosh surface loss** — testing (#2013 tanjiro, WIP). C²-smooth alternative to Huber kink.
+25. **LogCosh surface loss** — **rejected** (PR #2013, +3.51% Arm 1 / +14.18% Arm 2). C² smoothness was a non-issue (oscillation amplitude unchanged). Quadratic-regime gradient at typical residuals ~half of Huber — under-trained surf_head. **Surface-loss family is now well-characterized as a dead end** (#1558 δ=0.5 winner, #1627 δ-sweep, #1950 adaptive, #1922 per-channel δ, #2013 LogCosh).
+25a. **EMA model weights re-screen at 21-epoch budget** — testing (#2189 tanjiro, NEW). #1808 was wall-clock-bound at 14 epochs; torch.compile unlock makes EMA viable.
 26. **Deeper WD sweep {7e-4, 1e-3, 2e-3}** — **rejected** (PR #2120, +18.85% val at 7e-4). Branching rule correctly halted Arms 2-3. **WD=5e-4 is a SHARP peak**, not a plateau — confirmed by uniform regression across all 4 splits and an attenuated e14 breakthrough.
 26a. **WD bracket sweep {4e-4, 5.5e-4, 6e-4}** — testing (#2153 fern, NEW). Brackets the peak symmetrically; weight_norm logging preserved as primary diagnostic.
 27. **Decoupled weight_decay per param group** — testing (#2122 edward, NEW). surf_head at 10× LR sees 10× effective WD shrinkage; decoupling may unlock further gains.
 28. **Cosine T_max sweep {15, 20, 25}** — testing (#2123 askeladd, NEW). T_max=50 means only 28% of cosine cycle is traversed in 14 epochs — effectively a slowly-decaying constant LR.
 29. **Surface-only pressure weight {0.5, 1.5}** — testing (#2124 alphonse, NEW). Sub-unit weight on surface pressure only, NO mean-normalisation (corrects #1496's bug).
-30. **surf_head step decay at e10 {×0.5, ×0.3}** — testing (#2127 thorfinn, NEW). Step-decays surf_head LR in late training; per #2058 diagnostics, the update magnitude comes from the 10× LR, not gradient size.
+30. **surf_head step decay at e10 {×0.5, ×0.3}** — **rejected** (PR #2127, +7.05% / +2.83%). MECHANISM CONFIRMED (clean spike damping observed) but the spike+recovery is a beneficial training dynamic — damping the spike also damps the e14 deep minimum. **Reframing:** the e12 spike is an exploration burst, not pathology.
+30a. **Encoder LR boost at e15-18 (dual to head-LR damp)** — testing (#2188 thorfinn, NEW). If the spike comes from encoder entering a new landscape where the head is pre-positioned "too forward," briefly speeding up the encoder during transition might preserve recovery while smoothing the misalignment.
 31. **AdamW ε sweep {1e-7, 1e-6}** — testing (#2128 nezuko, NEW). Denominator-floor stabilizer; orthogonal to β2/WD/grad-clip; small-batch sampler creates low-v regimes where ε becomes the dominant denominator term.
 
 ## Key insights
@@ -142,6 +146,8 @@
 - #1922 (per-channel Huber delta) — 5.61% regression, global δ=0.5 is correct
 - #1496 (pressure-channel emphasis) — 20.04% regression, mean-normalisation bug
 - #2120 (deeper WD 7e-4) — 18.85% val / 18.22% test regression, WD=5e-4 is sharp peak not plateau
+- #2127 (surf_head step decay) — 7.05% / 2.83% regression, but key reframing: e12 spike+recovery is BENEFICIAL
+- #2013 (LogCosh surface loss) — 3.51% / 14.18% regression, C² smoothness was non-issue, surface-loss family closed
 
 ## Potential next directions (after cycle 30 in-flight)
 
