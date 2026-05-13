@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 17:50
+- **Date:** 2026-05-13 17:55
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -59,7 +59,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | fern | #2299 | Huber β=0.25 → 0.1 (continue scan — 3 consecutive β halving wins) | Loss shape | WIP | **#2142 MERGED** (14th compound, −4.29% val / −2.80% test, all 4 splits). Scan: β=1.0(MERGE), 0.5(MERGE), 0.25(MERGE) → 0.1 (this PR). At β=0.1, nearly pure MAE loss (quadratic region only |e|<0.1). Tests whether the β floor is at 0.25 or whether full L1 wins further. Outcomes: (A) val<50.38 win — pure MAE is the floor; (B) wash; (C) val>51.5 fail — β=0.25 floor confirmed |
 | frieren | #2247 | batch_size 4 → 2 at n_hidden=192 — opt-step density axis (2× opt-steps per epoch, 375→750) | Optimization (effective opt-step count) | WIP | #2160 CLOSED — weight_decay=1e-5 (10× REDUCTION from baseline 1e-4 — student baseline-framing catch); replicate-pair (luy0nfhu val=52.41/test=45.63; n62k4mdt val=54.62/test=47.13) gave mean val 53.52 = +1.66%, mean test 46.38 = +3.11%. Inter-replicate spread ±1.1 val pts > effect size — wash/loss on mean. Clip rate eased slightly (98.93%→96.67%) confirming regularization axis NOT blocked by clip-saturation, but net OOD-negative (3/4 OOD splits regress on mean). This PR tests opt-step density (untested, distinct from amplitude). Opposite direction from failed #1913 grad-accum which halved opt-steps. Outcomes: (A) val<52.64 win — opt-step density matters; (B) wash; (C) val>54 fail — batch noise floor hurts |
 | nezuko | #2267 | slice_num 64 → 48 — capacity-down on slice axis at n_hidden=192 | Architecture (slice partition) | WIP | #2053 CLOSED — v2 retest (n_hidden=224 + mlp_ratio=3 + grad-clip=2.5) gave val 56.15 = +6.66% / test 48.53 = +7.91% at 99.57% clip rate (FOURTH clip-saturation interaction). mlp_ratio axis now confirmed in amplitude-axis category. Student v1 vs v2 decomposition was strong: mlp_ratio=3 mechanism IS real at grad-clip=5.0 (won −1.70% at v1) but channel closed by saturation at threshold=2.5. This PR tests slice-axis floor — symmetric to old #1550 slice_num=96 ceiling fail at n_layers=5 stack. Untested at current 13-compound stack. Slice axis is geometry (input partition), orthogonal to all four blocked amplitude axes. Compute lever: 48/64 = 0.75 slice tokens → ~42 epochs/budget vs 33. Outcomes: (A) val<52.64 win (capacity-down frees compute); (B) wash; (C) val>53.5 fail (slice axis bracketed [48, 64(OPT), 96]) |
-| tanjiro | #2199 | --epochs 33 cosine-schedule alignment with realized 30-min budget | Schedule (alignment) | WIP | #2066 CLOSED with critical finding: n_hidden=224 + grad-clip=2.5 + T_max=50 = val 54.34/test 47.19 (+3.22%/+4.92% regression on all 4 splits). Mechanism: 30-min cap × T_max=50 cosine leaves cosine LR at 26-37% of base at termination — under-converged. This PR tests T_max=epochs=33 alignment: cosine fully decays by realized 33-epoch budget at n_hidden=192. Distinct from alphonse #2000 T_max=80 (opposite direction — extend cosine, keep LR high). Outcomes: (A) val<52.64 win, late-phase low-LR refinement matters; (B) wash; (C) val>53.5 fail, LR=0 final phase hurts |
+| tanjiro | #2305 | weight_decay 1e-4 → 3e-4 (3× tighter regularization, opposite direction from failed frieren #2160 at 1e-5) | Regularization (parameter scale) | WIP | #2199 CLOSED — --epochs 33 schedule alignment FAILED (val 55.10 = +4.66% vs old / +9.36% vs new baseline #2142; test 47.42 = +5.43% / +8.47%; all 4 splits regress, camber_rc worst at +7.19%). Mechanism: model still descending at epoch 33 with slope −0.32/ep, forcing LR=0 at termination cuts useful gradient updates that T_max=50 cosine still delivers; EMA-live gap sign-flipped from baseline −8.32 to +0.41 confirming LR=0 stops live model progression. SCHEDULE AXIS FULLY BRACKETED: T_max=33 fail / T_max=50 OPTIMUM / T_max=80 fail. This PR shifts to regularization axis (opposite direction from failed frieren #2160 at wd=1e-5). 1500-sample dataset with 0.93M params is sample-scarce → more constraint may help OOD. Decoupled weight decay operates on parameter shrinkage downstream of clipped gradient — orthogonal to clip saturation (confirmed by #2160 which dropped clip rate 98.93%→96.67%). Outcomes: (A) val<50.38 win — 1e-4 was the floor, tighter helps OOD; (B) wash — wd axis flat at this stack; (C) val>52 fail — wd bracketed [1e-5 LOSS, 1e-4 OPT, 3e-4 LOSS] |
 | thorfinn | #2276 | n_layers 3 → 2 at n_hidden=192 — depth-axis compact push | Architecture (depth, compact+wide) | WIP | #2186 CLOSED — AdamW β₂=0.95 (val 54.80 = +4.10% / test 47.36 = +5.30% at 99.29% clip rate — FIFTH clip-saturation interaction; mechanism: β₂ shrinking variance-window 1000→20 steps amplified direction noise post-clip, optimizer-internal axis NOT bypassed by saturation as predicted; student diagnosis sharp — clipping renormalizes amplitude but passes direction faithfully so noisier directions land at 2.5/||g|| scale, averaging slower). This PR shifts to architecture axis: untested depth-down direction (n_layers=2). Compute lever: ~30-35% epoch reduction → ~43 epochs/budget vs 33. Composition-depth capacity-down vs throughput gain. Outcomes: (A) val<52.64 win — depth=2 sufficient + extended schedule completion; (B) wash; (C) val>53.5 fail — composition depth bracketed [2, 3(OPT)] |
 
 **Baseline alert**: New baseline is PR #1953 (**val=55.7634, test=48.0960**). All future merges must beat this. WIP PRs running against the older PR #1930 baseline (val=63.48) MUST be rebased and retested with `--epochs 50` (T_max=50). The schedule fix alone is the dominant lift — any experiment without it cannot beat the new baseline.
@@ -134,21 +134,20 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); alphonse #2219 testing the floor side.
 
-1. **n_hidden=160 width-floor test** — #2219 (alphonse, n_hidden=160): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget.
-2. **Peak LR 5e-4 → 3e-4 lower-amplitude** — #2231 (askeladd, n_hidden=192): tests whether lower LR exits clip saturation (target clip rate ~95%).
-3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward, n_hidden=224 — sub-optimal width).
-4. **Huber β=0.25** — #2142 (fern): loss-shape axis.
-5. **batch_size=2 opt-step density** — #2247 (frieren, n_hidden=192).
-6. **slice_num 64 → 48 capacity-down** — #2267 (nezuko, n_hidden=192).
-7. **n_layers 3 → 2 depth-axis compact push** — #2276 (thorfinn, n_hidden=192).
-8. **Huber β=0.1** — #2299 (fern, n_hidden=192 — continue scan on new 14-compound baseline).
+1. **n_hidden=160 width-floor test** — #2219 (alphonse, n_hidden=160, COMPOUND RETEST): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget.
+2. **Peak LR 5e-4 → 3e-4 lower-amplitude** — #2231 (askeladd, n_hidden=192): tests whether lower LR exits clip saturation (target clip rate ~95%). CRITICAL inverse-saturation test.
+3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward, COMPOUND RETEST at n_hidden=192 v3).
+4. **batch_size=2 opt-step density** — #2247 (frieren, n_hidden=192). Opposite of failed #1913 grad-accum.
+5. **slice_num 64 → 48 capacity-down** — #2267 (nezuko, n_hidden=192). Input-geometry axis, untested at current stack.
+6. **n_layers 3 → 2 depth-axis compact push** — #2276 (thorfinn, n_hidden=192). Composition-depth floor test.
+7. **Huber β=0.1** — #2299 (fern, n_hidden=192). Continue successful β-halving scan on new 14-compound baseline.
+8. **weight_decay 1e-4 → 3e-4** — #2305 (tanjiro, n_hidden=192). 3× tighter regularization, opposite direction from failed #2160 (1e-5).
 
 **New baseline for all active/pending experiments:** val < 50.3812 / test < 43.7187 (PR #2142). Students on compound retests (#2219, #2024) should target this new bar.
-8. **--epochs 33 schedule alignment** — #2199 (tanjiro, n_hidden=192).
 
 **Sub-optimal-width caveat:** PR #2024 was assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Result still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
 
-### Closed (cycles 27-33)
+### Closed (cycles 27-35)
 - #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit; width axis ceiling at 30-min budget)
 - #2066 tanjiro n_hidden=224+grad-clip=2.5 compound (val 54.34 = +3.22% / test +4.92% — direct measurement, width axis bracketed at 192 from above)
 - #2000 alphonse T_max=80 retest at grad-clip=2.5 (val 55.03 = +4.54% / test 48.05 = +6.84% — clip rate climbed to 99.44%, direction-normalization regime; schedule extension axis closed under current clip threshold)
@@ -156,6 +155,7 @@ Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); a
 - #2160 frieren weight_decay=1e-5 (10× REDUCTION from baseline 1e-4 per student catch; replicate-pair mean val 53.52 = +1.66% / mean test 46.38 = +3.11%; inter-replicate spread ±1.1 val pts > effect size — wash/loss on mean; clip rate eased 98.93%→96.67% confirming regularization axis is NOT blocked by saturation but net OOD-negative; 3/4 OOD splits regress)
 - #2053 nezuko mlp_ratio=3 retest at n_hidden=224+grad-clip=2.5 (val 56.15 = +6.66% / test 48.53 = +7.91% at 99.57% clip rate — FOURTH clip-saturation interaction; mlp_ratio axis confirmed amplitude-mediated; mechanism real at grad-clip=5.0 v1 −1.70% won, destroyed at threshold=2.5; n_hidden=224 throughput penalty also contributes)
 - #2186 thorfinn AdamW β₂=0.95 (val 54.80 = +4.10% / test 47.36 = +5.30% at 99.29% clip rate — FIFTH clip-saturation interaction; first OPTIMIZER-INTERNAL axis confirmed blocked; mechanism: β₂ shrinking variance-window 1000→20 steps amplifies direction noise post-clip — clipping renormalizes amplitude but passes direction faithfully so noisier directions land at fixed 2.5/||g|| magnitude with slower averaging; CONFIRMS clip saturation closes any axis that amplifies update-direction variance, not just amplitude axes)
+- #2199 tanjiro --epochs 33 schedule alignment (val 55.10 = +4.66% vs old / +9.36% vs new baseline #2142; test 47.42 = +5.43% / +8.47%; all 4 splits regress with camber_rc worst at +7.19%; mechanism: model still descending at epoch 33 with slope −0.32/ep, forcing LR=0 at termination cuts useful gradient updates; EMA-live gap sign-flipped from baseline −8.32 to +0.41 — diagnostic that LR=0 stops live model progression so EMA catches up; SCHEDULE AXIS FULLY BRACKETED: T_max=33 fail / T_max=50 OPTIMUM #1982-#2142 / T_max=80 fail — U-shape, no remaining schedule headroom under current clip threshold)
 
 ### Clip-saturation interaction pattern (CRITICAL FINDING — FIVE confirmed instances; pattern now extends beyond amplitude axes)
 
@@ -190,11 +190,11 @@ Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); a
 |---|---|---:|---:|---|
 | grad-clip=5.0 + T_max=50 (#1953) | 50 | ~73% | 55.76 | superseded |
 | grad-clip=5.0 + T_max=80 (alphonse 1st run) | 80 | 93.86% | 54.51 | won −2.25% (now stale stack) |
-| **grad-clip=2.5 + T_max=50 (#1982)** | **50** | **98.93%** | **52.64** | **OPTIMUM** |
+| **grad-clip=2.5 + T_max=50 (#1982 → #2142)** | **50** | **98.93%** | **52.64 → 50.38** | **OPTIMUM** |
 | grad-clip=2.5 + T_max=80 (#2000) | 80 | 99.44% | 55.03 | FAIL +4.54% |
-| grad-clip=2.5 + T_max=33 (#2199 in flight) | 33 | TBD | TBD | tests opposite direction |
+| grad-clip=2.5 + T_max=33 (#2199) | 33 | TBD | 55.10 | FAIL +4.66% |
 
-The schedule lever requires headroom in the clip distribution — when grad-clip pushes the clip rate above ~99%, extending T_max doesn't translate into useful effective LR. Direction-only SGD has no benefit from "keep LR high in mid-training."
+**SCHEDULE AXIS FULLY BRACKETED** — U-shape confirmed with T_max=50 in the trough. Both directions fail symmetrically (extension +4.54%, alignment +4.66%). The schedule lever requires headroom in the clip distribution — when grad-clip pushes the clip rate above ~99%, extending T_max doesn't translate into useful effective LR. And shortening T_max truncates the model's late-phase descent at LR=0, losing useful gradient updates. Direction-only SGD has no benefit from "keep LR high in mid-training" but ALSO requires "keep delivering gradient updates" — the U-shape closes both ends.
 
 ### Next after current round
 - **n_hidden=192 retest of any winner at sub-optimal width** — confirm intrinsic axis lift
@@ -205,10 +205,10 @@ The schedule lever requires headroom in the clip distribution — when grad-clip
 - **Huber β=0.1** — if fern's 0.25 wins, continue tightening
 - **Compound winners** — once individual axis wins land at n_hidden=192, test best-of-each compound
 
-### Open questions raised by #2066 finding
-- Does T_max=epochs=33 (tanjiro #2199) win? If yes, **late-phase low-LR refinement** is the dominant unrealized lift.
-- Does T_max=80 + n_hidden=192 (alphonse #2000 retest) win? If yes, **extending high-LR exploration** is dominant. These two are direct opposites — at most one wins.
-- Where is the n_hidden=160 floor? Untested under current stack. Might be even better than 192 if throughput frees more epochs.
+### Open questions raised by #2066 finding (status update)
+- ~~Does T_max=epochs=33 (tanjiro #2199) win?~~ **ANSWERED — NO** (#2199 FAIL +4.66% val). Late-phase low-LR phase IS needed; LR=0 truncates useful descent.
+- ~~Does T_max=80 + n_hidden=192 (alphonse #2000 retest) win?~~ **ANSWERED — NO** (#2000 FAIL +4.54%). Schedule extension also fails. **Both directions closed → schedule axis fully bracketed**, U-shape with T_max=50 in the trough.
+- Where is the n_hidden=160 floor? Untested under current stack at the new huber_beta=0.25 baseline (compound retest in flight, #2219).
 
 ### Medium priority
 - **n_hidden=160 × n_layers=3** — bracket width from below; is 192 the sweet spot or above it?

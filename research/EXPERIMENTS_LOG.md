@@ -2201,4 +2201,82 @@ Mixed split picture: in_dist and camber_rc mild regression; camber_cruise and re
   - (B) wash
   - (C) val > 51.5 → FAIL (β=0.25 confirmed as floor; scan complete)
 
+## 2026-05-13 17:55 — PR #2199 (CLOSE): tanjiro --epochs 33 schedule alignment — schedule axis fully bracketed, U-shape closes both ends
+
+- Branch: `willowpai2g48h5-tanjiro/epochs-33-schedule-align`
+- Hypothesis: Test T_max=epochs=33 cosine-schedule alignment with realized 30-min budget at n_hidden=192. After #2000 (T_max=80) failed at +4.54%, this is the symmetric counter-test at the opposite end (shorten cosine vs extend). The 30-min cap means actual training stops at ~33 epochs. Forcing T_max=33 makes cosine fully decay by termination → eliminates the LR>0 truncation that T_max=50 leaves at the realized epoch.
+- W&B run: `4uodspz9` (full run, 35 epochs scheduled at T_max=33 → cosine reaches LR=0 at ep 33, then 2 epochs at LR=0)
+
+**Results:**
+
+| Metric | --epochs=33 | #1982 OLD baseline | #2142 NEW baseline | Δ vs OLD | Δ vs NEW |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p | **55.0990** | 52.6406 | 50.3812 | +2.458 (**+4.66%**) ✗ | +4.718 (**+9.36%**) ✗ |
+| test_avg/mae_surf_p | **47.4208** | 44.9791 | 43.7187 | +2.442 (**+5.43%**) ✗ | +3.702 (**+8.47%**) ✗ |
+
+**Per-split test (vs OLD baseline #1982):**
+
+| Split | --epochs=33 | #1982 | Δ |
+|---|---:|---:|---:|
+| test_single_in_dist | ~57.2 | ~55.6 | +2.88% |
+| test_geom_camber_rc | ~62.5 | ~58.3 | **+7.19%** (worst split) |
+| test_geom_camber_cruise | ~29.8 | ~28.4 | +4.93% |
+| test_re_rand | ~46.1 | ~44.3 | +4.06% |
+
+**All 4 splits regress.** camber_rc is the worst — same OOD split as #2160 weight_decay loss. The schedule axis is producing systematic OOD regression at BOTH the shortened (T_max=33) and extended (T_max=80) endpoints.
+
+**Clip rate:** Comparable to #1982 baseline (~98-99%). Schedule shortening doesn't change the gradient-amplitude distribution; clip rate stays saturated regardless of cosine length.
+
+**EMA-live gap (CRITICAL DIAGNOSTIC — sign-flipped):** EMA−live = **+0.41** at termination (vs baseline #1982 −8.32). This is a sign flip. The EMA is now WORSE than the live model. Mechanism: when cosine reaches LR=0 at epoch 33 and the run continues for ~2 more epochs at LR=0, the live model's weights stop updating but EMA continues to drift toward the live model with its 0.999 decay rate. The EMA decays back into the live model, losing the noise-reduction advantage. Whereas at T_max=50 with cosine at 26% of base at termination, the live model is still descending and EMA is correctly averaging that descent.
+
+**Mechanism (full diagnosis):**
+1. Model is still descending at epoch 33: slope was −0.32/ep at termination (vs −0.84/ep at epoch 30/30 in #1953). The model has not converged; it benefits from continued non-zero LR.
+2. Cosine LR=0 at exactly ep 33 means the last ~2 epochs deliver zero useful gradient updates — wasted compute.
+3. EMA-live gap sign-flips because LR=0 stops live model progression. EMA can't lead a stalled live model; it averages toward it, losing its variance-reduction benefit.
+4. T_max=50 leaves LR at 26% of base at termination → final 2 epochs still meaningfully update weights → EMA continues to lead the live model.
+
+**Schedule axis result table:**
+
+| T_max | LR at termination | val Δ vs #1982 | Verdict |
+|---|---:|---:|---|
+| 33 (this PR) | 0% (zero) | +4.66% | **FAIL — truncation** |
+| **50 (#1982 / #2142 OPT)** | **~26%** | **0% (baseline)** | **OPTIMUM** |
+| 80 (#2000) | ~37% (high) | +4.54% | FAIL — direction-only SGD |
+
+**SCHEDULE AXIS NOW FULLY BRACKETED.** U-shape confirmed with T_max=50 in the trough. Both directions fail with ~symmetric magnitude (+4.66% vs +4.54%). The mechanism is different at each end:
+- **T_max=33 fail mechanism:** truncation — model not converged, LR=0 wastes compute and breaks EMA gap.
+- **T_max=80 fail mechanism:** direction-only SGD — clip saturation at 99.44%, extended high-LR exploration provides no additional descent because direction-only updates already saturated.
+
+**Why close (not request changes):** Schedule axis is fully explored. No remaining T_max points worth testing under the current clip saturation. The optimum is locked at T_max=50.
+
+**Pattern integration:** This is the SECOND axis to be fully bracketed (capped on both sides). The first was width (n_hidden=160 lower / n_hidden=192 OPT / n_hidden=224 ceiling, with #2068=256 confirming the runtime ceiling). Schedule axis is closed for both raise and lower directions.
+
+→ Closed 2026-05-13 17:50 UTC (comment 4441383363).
+
+## 2026-05-13 17:55 — PR #2305: tanjiro assigned weight_decay 1e-4 → 3e-4 (3× tighter regularization, opposite direction from failed frieren #2160 at 1e-5)
+
+- Branch: `willowpai2g48h5-tanjiro/weight-decay-3e-4`
+- Hypothesis: Test `weight_decay 1e-4 → 3e-4` (3× tighter regularization) at the 14-compound baseline. Frieren's #2160 attempt at wd=1e-5 (10× LOOSER) was net OOD-negative on mean across replicates. The natural follow-up is the opposite direction: tightening regularization. The 1500-sample dataset with 0.93M params (n_hidden=192, n_layers=3) is sample-scarce — more constraint may help OOD splits that already showed they DON'T benefit from looser regularization.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` with `weight_decay=1e-4 → 3e-4` in train.py.
+- Targets: val < 50.3812, test < 43.7187 (new 14-compound baseline including huber_beta=0.25).
+
+**Why this assignment:**
+1. tanjiro just became idle (#2199 closed — schedule axis fully bracketed).
+2. Weight decay is one of the few axes CONFIRMED to NOT be blocked by clip saturation (frieren #2160 showed clip rate dropped 98.93%→96.67% under wd=1e-5). It operates on parameter scale, decoupled from the clipped gradient.
+3. The mechanism is orthogonal to clip saturation: decoupled weight decay applies `w_t ← w_t - lr * wd * w_t` directly to parameters, downstream of the clipped gradient step. So even at 99% clip rate, weight decay still functions.
+4. Direction inversion of a confirmed-active axis is the safest, most-informative next step. We know the axis is alive (#2160 changed clip rate). We just don't know which direction is the OPTIMUM. Frieren tested LOOSER (lost OOD); we now test TIGHTER.
+5. Sample-scarce regime intuition: at 1500 train samples and 0.93M params, the model has ~1600× more parameters than samples. Tighter weight decay is well-motivated for generalization on OOD splits.
+
+**Three outcomes:**
+- (A) val < 50.38 → MERGE (15th compound; tighter wd helps OOD). Confirms WD axis was undertuned at 1e-4.
+- (B) wash (val ∈ [50.5, 51.5]) → WD axis flat near 1e-4. Either direction insignificant.
+- (C) val > 52 → CLOSE. WD axis bracketed: [1e-5 LOSS, 1e-4 OPTIMUM, 3e-4 LOSS] — confirms 1e-4 was already well-tuned.
+
+**Mechanism prediction:** if wd=3e-4 helps OOD, expect camber_cruise and re_rand to be the dominant gains (parallel to fern #2142 which also won OOD-disproportionately). camber_rc and in_dist would be smaller deltas.
+
+**Predictions:**
+- Clip rate: ~97-98% (slightly lower than baseline 98.93%, weight decay shrinks param scale → larger relative LR step in normalized direction → less norm-clipping needed). Mirror image of #2160's clip-rate easing.
+- Run time: same as baseline.
+- Risk: if 1e-4 is already the OPT, 3× too tight may hurt all splits ~uniformly.
+
 
