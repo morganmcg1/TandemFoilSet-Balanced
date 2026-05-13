@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -411,6 +412,79 @@ def print_split_metrics(split_name: str, m: dict[str, float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stratified per-batch domain sampler
+# ---------------------------------------------------------------------------
+
+class StratifiedBatchSampler:
+    """Per-batch domain-stratified BatchSampler.
+
+    Guarantees every batch contains samples from all 3 domains
+    (racecar_single, racecar_tandem, cruise). Tests whether per-batch
+    composition variance drives the per-split asymmetry seen in PR #2153
+    and the late-epoch dynamics flagged in PRs #2015 / #2058 / #2128.
+
+    Modes:
+      ``strict``  — 1 per domain (3 total) + remaining slots globally
+                    weighted-random. At ``batch_size=4`` this yields
+                    composition ``[1, 1, 1, 1g]``.
+      ``rotated`` — 2 + 1 + 1, cycling which domain gets two samples by
+                    batch index. At ``batch_size=4`` this yields
+                    composition ``[2, 1, 1]``.
+
+    Within-domain selection is weighted by ``sample_weights`` restricted
+    to the domain; since the existing BIVW domain-balanced weights are
+    uniform within each domain, this is uniform sampling within domain.
+    """
+
+    def __init__(self, domain_ids, sample_weights, batch_size, num_batches, mode="strict"):
+        if mode not in ("strict", "rotated"):
+            raise ValueError(f"mode must be 'strict' or 'rotated', got {mode!r}")
+        self.domain_ids = torch.as_tensor(domain_ids, dtype=torch.long)
+        self.sample_weights = torch.as_tensor(sample_weights, dtype=torch.float64)
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.mode = mode
+        self.num_domains = int(self.domain_ids.max().item()) + 1
+
+        self.domain_indices = [
+            (self.domain_ids == d).nonzero(as_tuple=False).flatten().tolist()
+            for d in range(self.num_domains)
+        ]
+        self.domain_weights = [
+            self.sample_weights[(self.domain_ids == d).nonzero(as_tuple=False).flatten()]
+            for d in range(self.num_domains)
+        ]
+        if any(len(idxs) == 0 for idxs in self.domain_indices):
+            raise ValueError("Stratified sampler: every domain must have ≥1 sample")
+
+    def __iter__(self):
+        if self.mode == "strict":
+            n_extra = max(0, self.batch_size - self.num_domains)
+            for _ in range(self.num_batches):
+                batch = []
+                for d in range(self.num_domains):
+                    j = torch.multinomial(self.domain_weights[d], 1, replacement=True).item()
+                    batch.append(self.domain_indices[d][j])
+                if n_extra > 0:
+                    extra = torch.multinomial(self.sample_weights, n_extra, replacement=True).tolist()
+                    batch.extend(int(i) for i in extra)
+                yield batch[: self.batch_size]
+        else:  # rotated
+            for b in range(self.num_batches):
+                batch = []
+                doubled = b % self.num_domains
+                for d in range(self.num_domains):
+                    n = 2 if d == doubled else 1
+                    js = torch.multinomial(self.domain_weights[d], n, replacement=True).tolist()
+                    for j in js:
+                        batch.append(self.domain_indices[d][int(j)])
+                yield batch[: self.batch_size]
+
+    def __len__(self):
+        return self.num_batches
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -428,6 +502,7 @@ class Config:
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
     use_torch_compile: bool = False    # JIT compile the model via torch.compile
     compile_mode: str = "default"      # "default" | "reduce-overhead" | "max-autotune"
+    stratified_sampler: str = "off"    # "off" | "strict" (1+1+1+1g) | "rotated" (2+1+1)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -449,9 +524,44 @@ stats = {k: v.to(device) for k, v in stats.items()}
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
+# Build per-sample domain ids from meta.json so the stratified sampler can
+# guarantee per-batch domain coverage. domain_ids[i] ∈ {0,1,2} for
+# {racecar_single, racecar_tandem, cruise}.
+_DOMAIN_ORDER = ("racecar_single", "racecar_tandem", "cruise")
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _meta = json.load(_f)
+_domain_groups = _meta["domain_groups"]
+domain_ids = [-1] * len(train_ds)
+for _d, _name in enumerate(_DOMAIN_ORDER):
+    for _idx in _domain_groups[_name]:
+        if _idx < len(train_ds):
+            domain_ids[_idx] = _d
+if not cfg.debug:
+    assert all(d >= 0 for d in domain_ids), "Some train indices not in any domain group"
+
 if cfg.debug:
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               shuffle=True, **loader_kwargs)
+elif cfg.stratified_sampler != "off":
+    num_batches = (len(train_ds) + cfg.batch_size - 1) // cfg.batch_size
+    batch_sampler = StratifiedBatchSampler(
+        domain_ids, sample_weights, cfg.batch_size, num_batches,
+        mode=cfg.stratified_sampler,
+    )
+    # Diagnostic: confirm per-batch composition for the first 10 batches
+    # (iter() returns a fresh generator each call, so this does not consume
+    # the iterator used by the DataLoader).
+    _diag_counts: list[list[int]] = []
+    for _b in batch_sampler:
+        if len(_diag_counts) >= 10:
+            break
+        _counts = [0] * 3
+        for _i in _b:
+            _counts[domain_ids[_i]] += 1
+        _diag_counts.append(_counts)
+    print(f"[stratified] mode={cfg.stratified_sampler} "
+          f"num_batches={num_batches} first10_batches={_diag_counts}")
+    train_loader = DataLoader(train_ds, batch_sampler=batch_sampler, **loader_kwargs)
 else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
