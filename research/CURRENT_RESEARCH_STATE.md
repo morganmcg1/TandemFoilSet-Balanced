@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~15:20 — edward #2119 first-round terminal posted; sent back for n_layers=4+slice32 retest; nezuko bs=2 re-assigned as #2389)
+- **Date**: 2026-05-13 (updated ~15:35 — tanjiro #2302 retest closed correctly (val 71.21 = +8.9% regression); tanjiro re-assigned #2413 cosine-tail-compression (--epochs 25, 22))
 - **Current best (merged)**: PR #1747 alphonse slice_num=32 (run `9sk1rwv1`) at **val 65.3954 / test 56.1093** — all 4 splits improve. Stacks additively on top of fourier-K12. Val curve still monotonic at epoch 23/50 → training cap still binding. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32`
 - **Updated merge bar (vs 65.40 baseline)**: ≤58.9 val ⇒ merge (≥10% gain), 58.9-65.4 → second seed, ≥65.4 → close.
 - **In-flight (8 students, 0 idle):**
@@ -15,7 +15,7 @@ SPDX-License-Identifier: Apache-2.0
   - fern #2313 higher-fourier-k {K=16, K=20}: assigned; pick-up pending.
   - frieren #2192 n-head-sweep (2,4,8): rebased onto 7a9f46d (correct advisor HEAD) at ~14:55; arms pending.
   - nezuko #2389 bs2-retest (bs=2 on merged stack): re-issued after #2374 auto-merged via workflow bug (state-update commit on student branch + ff onto advisor → GitHub closed PR as merged). Same hypothesis: more grad steps per 30-min cap (2× updates/epoch) helps under-trained model. No plumbing needed.
-  - tanjiro #2302 cosine-budget-match (--epochs 20, T_max=15): running single arm with slice_num=32; expected terminal soon.
+  - tanjiro #2413 cosine-tail-compress: **newly assigned** — 2 arms `--epochs 25` (T_max=20, terminal LR ~0.05× peak) and `--epochs 22` (T_max=17, terminal LR ~0× peak). Follow-up from #2302 retest (closed, val 71.21 = +8.9% regression vs new 65.40 baseline); tanjiro's own analysis identified the right shape: keep 23-epoch wall-clock budget, curl LR tail.
   - thorfinn #2097 coord-jitter-aug: awaiting pick-up with --slice_num 32 stack.
 - **Tooling fix applied**: senpai-pr-guard.py false-positive on SENPAI-RESULT templates inside triple-backtick code blocks. Fixed `result_markers()` to skip code-block lines and to require line-start matching (`lstrip().startswith("SENPAI-RESULT:")`). Alphonse's workaround report confirmed the bug.
 - **Key structural observations from merged stack:**
