@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-05-13 05:25 — PR #1761: n_layers=6 depth expansion (tanjiro) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-tanjiro/n-layers-6`
+- **Hypothesis:** Adding a 6th Transolver block (n_layers 5→6) gives the model more sequential processing capacity for complex flow features.
+- **W&B runs:** `sy8axvhz` (drop=0.2 arm), `mr69aglv` (drop=0.1 arm retry)
+
+| Metric | n_layers=6, drop=0.2 | n_layers=6, drop=0.1 | Baseline #1607 | Δ vs old base | vs Lion #1781 |
+|--------|---------------------|---------------------|----------------|---------------|----------------|
+| val_avg/mae_surf_p | 80.174 | 80.452 | 77.054 | +4.1% / +4.4% | +30.9% / +31.3% |
+| test_avg/mae_surf_p | 70.816 | 70.862 | 68.265 | +3.7% / +3.8% | +34.4% / +34.5% |
+| Epochs (30-min cap) | 14/50 | 14/50 | 16/50 | — | — |
+| Epoch time | ~133.7s | ~133.7s | ~112s | +19% | +19% |
+
+**Result:** CLOSED. Per decision rule (val > 78.5 → close definitively).
+
+**Analysis:** Depth=6 increases per-epoch cost by ~19% (133.7s vs 112s), reducing total epochs from 16 → 14 at the 30-min cap. The trajectory data shows the model is *compute-budget bound, not depth-broken*: dropout=0.2 arm descended ~3.7 pts/epoch at the cap, dropout=0.1 arm descended ~1.4 pts/epoch. Lower dropout improved main_val (94.5 vs 105) — the underlying model was closer to converged with less regularization — but EMA's long-horizon average smoothed out the early-epoch advantage and the late-epoch plateau dominates.
+
+**Architectural takeaway:** At the 30-min cap, n_layers=5 is locally optimal. Depth-6 needs more compute than this launch allows. The depth-vs-budget knee is now characterized for the architecture.
+
+---
+
 ## 2026-05-13 05:10 — PR #1781: Lion optimizer lr=1e-4+EMA (thorfinn) — MERGED NEW BEST
 
 - **Branch:** `willowpai2g24h5-thorfinn/lion-optimizer`
