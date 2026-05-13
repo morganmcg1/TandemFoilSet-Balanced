@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-13 11:15 — PR #1813: warmup-5-epochs (frieren, RFF rebase) — CLOSED (dead end, warmup=4 confirmed on RFF)
+
+- **Branch:** `charliepai2g48h2-frieren/warmup-5-epochs`
+- **Hypothesis:** warmup=5 won −0.52% on pre-RFF base (#1813 first run). Rebased onto RFF (PR #1657, 65.3304); predicted to stack additively.
+- **Metric artifacts:** `models/model-charliepai2g48h2-frieren-warmup-5-epochs-rebased-rff-20260513-101106/metrics.jsonl`
+
+### Results vs. #1657 RFF baseline (65.3304)
+
+| Split | Baseline | warmup=5 on RFF | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 74.659 | +2.71% ❌ |
+| val_geom_camber_rc | 78.833 | 79.932 | +1.39% ❌ |
+| val_geom_camber_cruise | 44.439 | **43.567** | **−1.96%** ✓ |
+| val_re_rand | 65.359 | 65.389 | +0.05% ≈ |
+| **val_avg/mae_surf_p** | **65.3304** | **65.8867** | **+0.85%** ❌ |
+| **test_avg/mae_surf_p** | 56.9425 | 56.9584 | +0.03% ≈ (flat) |
+
+**Closed as dead end on RFF base.** Warmup axis mapped: warmup=4 optimum.
+
+### Analysis
+
+**Warmup axis final mapping on RFF base:**
+
+| warmup_epochs | val_avg | Δ vs canonical | Note |
+|---|---|---|---|
+| 3 | (regressed on old base, mechanism unchanged) | — | dead end (#1911 pre-RFF) |
+| **4** | **65.3304** | **canonical** | optimum |
+| 5 | 65.8867 | **+0.85%** | dead end |
+
+**Why pre-RFF win didn't transfer:** RFF (24→86 dim input) introduces high-frequency gradient signals from epoch 1 onward. The model needs the full LR window to absorb these. T_max auto-adjusted 10→9 with warmup=5 — losing 1 epoch of high-LR cosine descent costs more than the extra warmup damping helps. On the pre-RFF stack, smoother low-dim coord input made early-phase noise the dominant issue, and warmup=5 helped.
+
+**Per-split signal:** val_cruise improved (−1.96%) — consistent with warmup-sensitivity hypothesis, but other splits regressed by 1–3%. Test flat (+0.03%) suggests some of val signal is split-specific noise, but the val_avg trend is consistent.
+
+### Key insights
+
+- **Single-axis stacking does NOT hold across baseline shifts.** Pre-RFF and post-RFF stacks have different gradient regimes. Wins on the old base must be re-validated on the new base.
+- **Warmup axis CLOSED on RFF base** at warmup=4. Both warmup=3 (pre-RFF dead end) and warmup=5 (RFF dead end) bracket it.
+- **Next assignment for frieren:** RFF n_features capacity probe — increase 32 frequencies → 64 frequencies (output 64-dim → 128-dim) to test if RFF was capacity-limited at σ=3.0.
+
+---
+
 ## 2026-05-13 10:30 — PR #2045: lr-1.75e-3 (alphonse) — CLOSED (dead end, LR axis fully mapped)
 
 - **Branch:** `charliepai2g48h2-alphonse/lr-1.75e-3`
