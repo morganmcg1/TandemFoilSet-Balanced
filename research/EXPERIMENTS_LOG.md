@@ -2,6 +2,131 @@
 
 ---
 
+## 2026-05-13 21:00 — PR #2579: QK-Norm attention scoring (Henry 2020) — assignment to alphonse (NEW cycle 70)
+
+- **Branch:** `willowpai2g48h4-alphonse/qk-norm-attention`
+- **Student:** willowpai2g48h4-alphonse (idle after closure of #2498 T_mult=2 + eta_min compose)
+- **Hypothesis:** Inside `PhysicsAttention.forward` (train.py:125-132), L2-normalize Q and K along feature dim before computing attention scores. Replace standard `softmax(QK^T/sqrt(d_k))` with `softmax(g * Q̂K̂^T)` where `g` is a learnable per-head temperature initialized at `sqrt(d_k)` so step-0 behavior is equivalent to baseline. Mechanism: stabilizes attention scaling by bounding scores in [-d_k, d_k] regardless of weight norm, and decouples weight norm growth from softmax temperature. Henry et al. 2020 (arXiv:2010.04245) showed +0.2-0.4 BLEU on NMT; Swin v2 adopted ("scaled cosine attention") with significant improvements at scale.
+- **Mechanistic distinctness:**
+  - From #2566 GeGLU (frieren): GeGLU modifies the MLP block; QK-norm modifies the attention scoring step. Both architectural, different components.
+  - From all other in-flight work: optimizer/regularizer/inference-side.
+  - From #2057 wider surf_head, #1498 wider MLP, etc.: those are SIZE changes; QK-norm is a STRUCTURAL change to the attention scoring computation at near-identical params.
+- **Arms:** Single arm with `--use_qk_norm` on CURRENT SOTA #2444 config. Param delta: +heads*n_layers = +40 scalars total. Compute overhead: 2 cheap fused normalize ops per forward.
+- **Branching rule:** ≥0.7 val improvement = confident win → 2nd seed; ±0.4 borderline = close; ≥1.0 regression → close (try `qk_scale=1.0` init as a 2nd arm to disambiguate init vs mechanism first).
+- **Implementation:** Adds `use_qk_norm` flag, threads through `Transolver.__init__` → `TransolverBlock.__init__` → `PhysicsAttention.__init__`. Adds learnable `qk_scale` parameter init at `sqrt(dim_head)`. In forward, `F.normalize(q, dim=-1)` and `F.normalize(k, dim=-1)`, then scale `q` by `qk_scale`.
+
+---
+
+## 2026-05-13 21:00 — PR #2578: Lion optimizer (Chen 2023) — assignment to fern (NEW cycle 70)
+
+- **Branch:** `willowpai2g48h4-fern/lion-optimizer`
+- **Student:** willowpai2g48h4-fern (idle after closure of #2522 within-cycle SWA, ending the SWA family)
+- **Hypothesis:** Lion (Chen et al. 2023, "Symbolic Discovery of Optimization Algorithms", arXiv:2302.06675) replaces AdamW with sign-based momentum: `update = lr*sign(β1*m+(1-β1)*g)` with separate β2 EMA for m. Constant per-coordinate magnitude — no variance accumulator. Mechanistically very distinct from tanjiro's AdaBelief #2554 (which retains AdamW's adaptive-magnitude framework with variance-based denominator) and from all prior AdamW axis closures. Half the optimizer-state memory. Discovered via evolutionary search; strong empirical record on transformer training (Google's discovery paper). Directly addresses fern's "sharp minima" conjecture from her #2522 closure — Lion's constant-magnitude updates effectively act as implicit gradient clipping, conjectured to encourage flatter minima.
+- **Mechanistic distinctness:**
+  - From #2554 AdaBelief: AdaBelief keeps adaptive magnitude with variance-based denominator; Lion uses sign() and has no variance term at all.
+  - From #2201 β2, #2340 β1, #2128 ε: those tune AdamW's existing computation; Lion is a different update rule.
+  - From #2296 Lookahead: Lookahead time-averages weights across k steps; Lion is per-step internal change with no time-averaging.
+  - From #1808/#2189 EMA: weight-space averaging; Lion is single-trajectory optimizer.
+- **Arms:** Single arm with `--use_lion --lion_lr_scale 0.2 --lion_wd_scale 3.0` on CURRENT SOTA #2444 config. Paper-recommended 5× LR reduction and 3× WD increase (sign-based steps don't scale down for noisy gradients, so step magnitude must be smaller to compensate; weight decay must be stronger to maintain comparable regularization).
+- **Branching rule:** ≥0.7 val improvement = confident win → 2nd seed; ≥1.5 val regression → close axis; ±0.4 borderline → try `lion_lr_scale=0.33` (3× scaling, less aggressive) before closing.
+- **Implementation:** Adds Lion class (only `exp_avg` state, no `exp_avg_sq`), `--use_lion` flag, `--lion_lr_scale` and `--lion_wd_scale` rescaling, and optimizer-construction conditional.
+
+---
+
+## 2026-05-13 20:50 — PR #2498: T_mult=2 + eta_min=1e-5 compose — CLOSED (4 seeds, mean regresses both val AND test, σ_val≈1.85 anomalously wide)
+
+- **Branch:** `willowpai2g48h4-alphonse/tmult2-eta-min-compose`
+- **Student:** willowpai2g48h4-alphonse
+- **W&B runs (4 seeds):** `lnwuse3i`, `i42w5vvj`, `dgxmszyk`, `4dtoknyq` (config identical: T_0=7, T_mult=2, eta_min=1e-5, WD=5e-4)
+- **Hypothesis:** Compose two previously-merged restart wins: T_mult=2 (#2444, val=82.26/test=72.40) and eta_min=1e-5 (#2357 at T_0=10, val=83.69/test=73.40). Two orthogonal mechanisms — should stack additively.
+
+### Results — 4 seeds, all same config
+
+| Seed | run id | best val | best ckpt epoch | terminal test | Δ val vs SOTA | Δ test vs SOTA |
+|---|---|---:|:---:|---:|---:|---:|
+| Baseline #2444 | 1m0cfdr4 | 82.2642 | 21 | 72.4019 | — | — |
+| Seed 1 | `lnwuse3i` | **81.816** | 21 | **72.761** | **−0.45** ✓ | **+0.36** ❌ |
+| Seed 2 | `i42w5vvj` | 85.354 | 21 | 75.638 | +3.09 ❌ | +3.24 ❌ |
+| Seed 3 | `dgxmszyk` | 85.426 | 21 | 74.391 | +3.16 ❌ | +1.99 ❌ |
+| Seed 4 | `4dtoknyq` | 82.259 | 20 | 73.276 | −0.005 ≈ | +0.88 ❌ |
+| **mean** | — | **83.71** | — | **74.02** | **+1.45** ❌ | **+1.62** ❌ |
+| σ | — | **1.85** | — | **1.21** | — | — |
+
+### Mechanism
+
+- **0 of 4 seeds beats SOTA on TEST**, the paper-facing metric.
+- **Mean regresses on both val AND test** outside the seed-noise band (nezuko #2445 measured σ≈0.34 val on the prior baseline; here σ≈1.85 is 5× wider).
+- **σ_val ≈ 1.85** across 4 seeds — the compose has HIGHER intrinsic seed variance than either piece alone. **Seed variance is config-dependent, not codebase-dependent** — useful methodological insight for the paper.
+- **Why doesn't it stack:** T_mult=2's 14-epoch cycle-2 cosine LR profile already drops to ~0 at e21 — cycle-end is naturally a deep-LR refinement zone. Adding eta_min=1e-5 raises the floor from 0 to 1e-5 (~0.2% of peak). On T_0=10 11-epoch cycle 2 (where eta_min=1e-5 succeeded in #2357), this floor matters because the cosine drops fast. On T_0=7 14-epoch cycle 2, the floor is too small a fraction of the already-slow descent — and may actually displace the trajectory off the deep minimum the longer cycle would reach.
+
+### Closure
+
+1. Mean regresses on val AND test outside noise band.
+2. 0 of 4 seeds beats SOTA on test.
+3. σ_val≈1.85 too wide to support "we got unlucky" — compose is intrinsically more variable.
+4. eta_min refinement axis closed under both T_0=10 (#2487) and T_mult=2 (#2498). Composition specificity now mechanistically explained.
+
+### Survives standalone
+
+- T_mult=2 (#2444 val=82.26 / test=72.40) — SOTA.
+- eta_min=1e-5 at T_0=10 (#2357 val=83.69 / test=73.40) — prior SOTA, superseded.
+
+---
+
+## 2026-05-13 20:45 — PR #2522: Within-cycle-2 SWA — CLOSED (2 seeds both regress +6 val; SWA / weight-averaging family permanently exhausted)
+
+- **Branch:** `willowpai2g48h4-fern/within-cycle-swa`
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `55hacqjx`, `xl5kq9nf` (2 seeds, identical config)
+- **Hypothesis:** Within-basin SWA — average weights of e15, e17, e19, e21 (all within cycle 2 of T_mult=2, same descent basin). Distinct from #2331 (cross-basin, rejected) and #2452 (prediction-space, rejected). Fourth attempt; Izmailov 2018's intended regime.
+
+### Results — 2 seeds independent
+
+| Seed | run id | e21 val | SWA val | Δ val | e21 test | SWA test | Δ test |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | `55hacqjx` | 83.6969 | **89.6853** | **+5.99** ❌ | 74.5636 | **80.1464** | **+5.58** ❌ |
+| 2 | `xl5kq9nf` | 85.9701 | **92.4702** | **+6.50** ❌ | 75.5406 | **81.6769** | **+6.14** ❌ |
+| mean | — | 84.83 | **91.08** | **+6.24** | 75.05 | **80.91** | **+5.86** |
+
+Both Δval and Δtest are ~10× the 2σ threshold (0.7 val) and ~18× the 1σ noise floor (0.34 val), direction-consistent across seeds.
+
+### Per-snapshot val (fern's precondition diagnostic — falsified the within-basin assumption)
+
+| Epoch | Seed 1 | Seed 2 |
+|---|---:|---:|
+| e15 | 97.32 | 104.68 |
+| e17 | **110.99** | 101.23 |
+| e19 | 87.06 | 87.54 |
+| e21 | 83.70 | 85.97 |
+| spread | 27.30 | 18.71 |
+
+**Within-basin assumption FALSIFIED.** Predicted snapshots within 10-15 val of each other; actual spread is 27/19. Seed 1's e17=110.99 is *worse than e15=97.32*. Cycle 2 of T_mult=2 is NOT a clean monotone descent — the high-LR explore phase ACTIVELY moves the model in weight space. Mid-cycle snapshots are high-bias mid-flight models, not perturbations of a common solution.
+
+### SWA / weight-averaging family closure — six attempts across three mechanism axes
+
+| PR | Mechanism | Outcome |
+|----|-----------|---------|
+| #1808 | EMA model weights | Rejected (init-bias decay too slow at 14-ep) |
+| #1951 | SWA late-epoch (pre-restart) | Rejected (+3.33%, no cycle structure) |
+| #2189 | EMA re-screen at 21-ep restart | Rejected (+9.07-16.46% val) |
+| #2331 | SWA over SGDR cycle-ends (cross-basin) | Rejected (definitive null, distinct basins) |
+| #2452 | Snapshot ensemble e10+e20 (prediction-space) | Rejected (monotone α-degradation, e10 too high-bias) |
+| **#2522** | **Within-cycle-2 SWA (same basin)** | **Rejected (within-basin assumption falsified)** |
+
+**Permanently exhausted.** Averaging-based ensembles fundamentally don't compose with our SGDR cycle-2 descent dynamics regardless of where snapshots are taken. Load-bearing null result for the paper.
+
+### Cycle-2 descent observation
+
+Fern's per-snapshot data is the cleanest signal yet that **cycle 2 of T_mult=2 is NOT a clean monotone descent**. The high-LR explore phase moves the model in weight space far enough that intermediate snapshots are functionally different solutions. Important mechanistic information for the paper's discussion of restart dynamics.
+
+### Suggested follow-ups (fern's note)
+
+1. **SAM (Sharpness-Aware Minimization).** If the codebase finds sharp minima (consistent with all 3 SWA failures), SAM optimizes for flatness during training rather than post-hoc. But SAM doubles per-step compute → halves epoch count → not workable under 30-min cap. Could try efficient variants (ESAM, sparse-SAM, late-stage-only) but each is its own engineering problem.
+2. **Variance-weighted ensembling of late-cycle snapshots** (e19, e20, e21) in prediction space — sidesteps high-bias e15/e17 problem AND weight-space sharpness problem.
+3. Move on from averaging entirely — try Lion optimizer or other distinct optimizer families.
+
+---
+
 ## 2026-05-13 20:30 — PR #2566: GeGLU MLP block (Shazeer 2020) — assignment to frieren (NEW cycle 69)
 
 - **Branch:** `willowpai2g48h4-frieren/geglu-mlp-block`
