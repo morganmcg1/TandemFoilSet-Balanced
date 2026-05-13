@@ -524,7 +524,8 @@ optimizer = Lion(
     betas=(0.9, 0.99),
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Lion LR sweep midpoint: lr={cfg.lr} (1.75e-4 midpoint between #2553 lr=1.5e-4 WIN and #2583 lr=2e-4 LOSS); "
+      f"wd={cfg.weight_decay}, betas=(0.9, 0.99); baseline to beat: val_avg/mae_surf_p < 33.4935")
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
