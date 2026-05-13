@@ -524,6 +524,35 @@ Pre-merge floor reference: 143.15 (PR #1486, no chan_w, no warmup). Best run 135
 
 **Key insight:** Schedule calibration to wall-clock budget is as important as the schedule choice itself. CosineAnnealingLR with T_max matched to actual epochs delivers a qualitatively different optimization trajectory: the model reaches the refinement regime (low LR, small gradient steps) within the timeout window rather than never getting there. All future runs now default to T_max matched to --epochs.
 
+## 2026-05-13 08:49 — PR #1477: AMP bf16 + non-finite-y prefilter — **NEW FLOOR**
+
+- Branch: `charliepai2g24h2-fern/amp-bf16-on-t12-floor`
+- Hypothesis: AMP bf16 autocast reduces VRAM by ~9 GB and epoch time by 37%, enabling full 15-epoch cosine completion within the 30-min budget. Non-finite-y prefilter fixes the bs=4 test NaN on geom_camber_cruise.
+- Artifacts: `models/model-charliepai2g24h2-fern-amp-bf16-on-t12-floor-20260513-075400/` (best seed), `models/model-charliepai2g24h2-fern-amp-bf16-on-floor-r4-20260513-072325/` (seed-a)
+
+| Split | Seed-a | Seed-b (best) | Floor #1751 | Δ (best vs floor) |
+|---|---:|---:|---:|---:|
+| val_single_in_dist | 101.28 | 97.86 | 108.02 | **−9.4%** |
+| val_geom_camber_rc | 97.27 | 96.96 | 96.37 | +0.6% |
+| val_geom_camber_cruise | 64.01 | 63.29 | 61.15 | +3.5% |
+| val_re_rand | 79.96 | 80.05 | 78.20 | +2.4% |
+| **val_avg** | **85.6280** | **84.5393** | **85.9338** | **−1.6%** |
+| test_single_in_dist (bs=1) | 89.35 | 87.56 | 97.67 | **−10.3%** |
+| test_geom_camber_rc (bs=1) | 87.14 | 87.18 | 88.66 | −1.7% |
+| test_geom_camber_cruise (bs=1) | 53.07 | 52.69 | 51.32 | +2.7% |
+| test_re_rand (bs=1) | 73.02 | 72.23 | 72.95 | −1.0% |
+| **test_avg bs=1** | **75.6460** | **74.9122** | **77.6488** | **−3.5%** |
+| test_avg bs=4 | 75.1056 | 74.6655 | NaN† | clean! |
+| best_epoch | 15/15 | 15/15 | 14/15 (timeout) | cosine completes |
+| peak VRAM | 32.95 GB | 32.94 GB | 42.11 GB | −22% |
+| wall clock | 24.6 min | 24.6 min | 30.0 min | −18% |
+
+†Floor's bs=4 test_avg was NaN due to FP overflow from non-finite GT sample; prefilter fixes this.
+
+**Config:** Full floor stack + AMP bf16 + prefilter. 15 epochs in 24.6 min.
+
+**Conclusion:** AMP bf16 is a structural win — not primarily from the marginal val improvement but from unlocking: (a) full cosine completion every run, (b) ~9 GB VRAM headroom for future n_hidden/slice_num scaling, (c) clean bs=4 test reporting. The marginal val gain is modest at −1.6% (single seed vs single seed comparison) because T_max=12 already captured most of the "schedule-completion" headroom. Two seeds: mean val=85.08 (both beat floor), mean test bs=1=75.28. AMP now stacked in advisor train.py.
+
 ## 2026-05-13 08:00 — PR #1891: OneCycleLR super-convergence — CLOSED
 
 - Branch: `charliepai2g24h2-tanjiro/onecycle-lr-7p5e4`
