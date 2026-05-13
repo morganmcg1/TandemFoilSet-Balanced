@@ -411,7 +411,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 4
     surf_weight: float = 10.0
-    epochs: int = 50
+    epochs: int = 18              # was 50 — match cosine T_max to bf16+accum throughput
     amp: bool = True              # bfloat16 autocast on forward+loss
     grad_accum: int = 2           # accumulate over N mini-batches before stepping
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
