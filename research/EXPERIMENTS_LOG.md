@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-05-14 [Round 72] UTC — Round 72
+
+### PR #2602 edward: Lion lr=1.75e-4 midpoint — CLOSED (LOSS; 36th taxon)
+
+- **Branch:** `charliepai2g48h5-edward/lion-lr175e-4`
+- **Hypothesis:** Bracket Lion LR optimum between 1.5e-4 WIN (#2553) and 2e-4 LOSS (#2583). Test whether midpoint captures both in-dist precision AND OOD exploration.
+
+| Metric | lr=1.75e-4 (this) | NEW Baseline #2614 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **33.8115** | 33.3722 | **+1.32% LOSS** |
+| `test_avg/mae_surf_p` | **29.0217** | 28.3736 | **+2.28% LOSS** |
+| Param count | 328,235 | 328,619 | unchanged (pre-FiLM) |
+| Best epoch | 70/70 | 70/70 | unchanged |
+
+Per-split val:
+
+| Split | lr=1.75 | lr=1.5 (#2553) | Δ |
+|---|---|---|---|
+| `single_in_dist` | **25.5546** | 25.7691 | **−0.83%** |
+| `geom_camber_rc` | **50.2278** | 50.5514 | **−0.64%** |
+| `geom_camber_cruise` | 21.6963 | 20.2827 | **+6.97% (DOMINANT LOSS)** |
+| `re_rand` | 37.7673 | 37.3708 | +1.06% |
+
+LR bracket (decisive):
+
+| LR | val_avg | Verdict |
+|---|---|---|
+| 1e-4 (#2524) | 36.3994 | Old WIN, beaten |
+| **1.5e-4 (#2553)** | **33.4935** | **OPTIMUM** |
+| 1.75e-4 (this) | 33.8115 | LOSS +0.95% (sharp step) |
+| 2e-4 (#2583) | 33.8328 | LOSS +1.01% |
+
+- **Committed metrics:** `models/model-charliepai2g48h5-edward-lion-lr175e-4-20260513-223212/metrics.jsonl`
+
+**Analysis (excellent student diagnostic):** val_avg at lr=1.75 (33.81) is essentially indistinguishable from lr=2 (33.83) — the LR-up regression sets in BETWEEN 1.5 and 1.75 as a STEP, not a slope. lr=1.5 is on a sharp boundary.
+
+**Critical mechanism finding:** in-dist and camber_rc both IMPROVED at lr=1.75 (the OOD-exploration-friendly direction), but camber_cruise REGRESSED HARD (+6.97%) — dominant LOSS driver. camber_rc and camber_cruise have OPPOSING LR preferences. Higher LR explores wider terrain → benefits OOD camber_rc (historic bottleneck), but camber_cruise sits at a sharp minimum that prefers precision (lower LR). lr=1.5e-4 is the equilibrium that best balances both.
+
+**36th closed taxon:** Lion LR-up axis fully closed at lr=1.5e-4. Combined with 35th taxon (Lion β₁ axis at 0.90), the Lion-internal LR + β₁ axes are saturated. The camber_rc / camber_cruise opposing LR preference is a finding that informs future architectural decisions — any intervention specifically helping camber_cruise without hurting other splits would be high-value.
+
+**Action:** Closed. Pivoted edward to Lion weight_decay 3e-4 → 1e-4 (#2658) — WD axis is structurally distinct from LR/β₁, never swept under Lion.
+
+---
+
+### Assignment (Round 72)
+
+- **#2658 edward** — Lion weight_decay 3e-4 → 1e-4 (1/3 lower); tests whether Lion paper's 3× AdamW WD rule-of-thumb over-regularizes budget-bound stack; single-value change; orthogonal to in-flight #2647 β₂; NEW bar = val < 33.3722
+
+---
+
 ## 2026-05-14 [Round 71] UTC — Round 71
 
 ### PR #2614 alphonse: FiLM feature-stream gate — MERGED (WIN; NEW BASELINE 33.3722)
