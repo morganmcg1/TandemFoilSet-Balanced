@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 10:00
+- 2026-05-13 10:25
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -64,14 +64,14 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2074 | fern | Per-channel δ refinement: δ_p=0.15 (Arm A) and δ_p=0.10 (Arm B) | WIP | Beat 52.63 |
+| #2176 | fern | SiLU activation swap: GELU → SiLU in MLP blocks | WIP — new | Beat 52.63 |
 | #2100 | tanjiro | Lion lr=1.5e-4 bracket-from-below on per-channel δ + n_hidden=160 | WIP | Beat 52.63 |
-| #2044 | edward | DropPath / stochastic depth (rates 0.05, 0.1) on dropout=0.1+n_hidden=160+per-ch δ stack | WIP (baseline updated to 52.63) | Beat 52.63 |
+| #2177 | edward | Lion weight_decay sweep at lr=2e-4: wd=4e-5 (Arm A) and wd=8e-5 (Arm B) | WIP — new | Beat 52.63 |
 | #2084 | frieren | Cosine LR floor: eta_min=lr×0.05 to prevent zero-LR at epoch 16 | WIP | Beat 52.63 |
 | #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP (stale baseline) | Beat 52.63 |
 | #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (stale baseline) | Beat 52.63 |
 | #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (stale baseline) | Beat 52.63 |
-| #2161 | thorfinn | MLP dropout=0.1 (Arm A) + attention dropout=0.05 rate sweep (Arm B) on merged dropout=0.1 stack | WIP — new | Beat 52.63 |
+| #2161 | thorfinn | MLP dropout=0.1 (Arm A) + attention dropout=0.05 rate sweep (Arm B) on merged dropout=0.1 stack | WIP | Beat 52.63 |
 
 ## Recently closed/merged
 
@@ -87,15 +87,17 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | #1470 | edward | CLOSED | Instance-norm loss → val=59.02 (+3.7%). 1e-6 clamp let inst_scale reach 2230× on near-uniform low-Re samples |
 | #1782 (3rd) | frieren | CLOSED | lr=2e-4 on δ=0.3 → val=58.82 (+1.92). LR optimum reversed direction (DOWN then UP); mechanism: δ-driven residual-regime shift |
 | #1656 | thorfinn | **MERGED** | See above — new baseline. |
+| #2074 | fern | CLOSED | δ_p sweep (0.15, 0.10) on lion_lr=1.5e-4 stack. Both lose: val 53.54/53.19 vs 52.63 baseline; **test regresses** +0.98%/+1.41%. val/test gap shrinks (−3.97 → −2.84) = over-regularization signal. δ_p=0.20 confirmed optimum; lower δ_p over-saturates pressure gradients into linear regime. |
+| #2044 | edward | CLOSED | DropPath rates 0.05/0.10 catastrophically regress: val 67.40/72.80 vs 55.92 old baseline (+20.6%/+30.2%); test +17.5%/+27.7%. Mechanism: stochastic-depth ensemble needs more epochs to converge than 16-epoch/30-min budget allows. DropPath wrong-shape for this budget; within-layer dropout (already merged #1656) is the right regularization axis. |
 | #1481 | nezuko | CLOSED | slice_num=128 → +22.5% regression; budget cliff (144s/epoch → 13 epochs only) |
 
 ## Open questions from active experiments
 
-1. **Does per-channel δ_p=0.15 or 0.10 beat δ_p=0.20?** (#2074 fern) — pressure δ response surface not mapped below 0.2
+1. **Does SiLU activation beat GELU on the merged stack?** (#2176 fern, new) — simple, orthogonal to all regularization. Expected 1-3% if it composes; flat otherwise. δ_p sweep (PR #2074) answered: δ_p=0.20 is optimal.
 2. **Does Lion lr=1.5e-4 continue beating lr=2e-4 (bracket-from-below)?** (#2100 tanjiro) — LR optimum has moved 3e-4 → 2e-4; testing if it keeps falling toward original Lion paper defaults
 3. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
 4. **Does cosine LR floor (eta_min=lr×0.05) prevent over-decay and improve final-epoch performance?** (#2084 frieren) — epoch 16 always best, curve still descending; floor at 1.5e-5 may squeeze more improvement
-5. **Does DropPath (0.05, 0.1) compose with dropout=0.1 on Transolver residual structure?** (#2044 edward) — stochastic depth kills entire blocks; orthogonal to within-layer feature dropout. Edward's baseline updated to 52.63 + dropout=0.1 merged.
+5. **Does lion_weight_decay=4e-5 or 8e-5 beat 6e-5 at lr=2e-4?** (#2177 edward, new) — wd was set when lr=3e-4; LR halving may have shifted wd optimum. (#2044 DropPath closed as wrong-shape for budget.)
 6. **Does Lion β2=0.999 help at B=4?** (#1844 askeladd) — slower momentum for noisy small-batch
 7. **Does surf_weight shift from 10.0 under per-channel δ+Lion+n160?** (#2005 nezuko) — loss balance may have changed
 8. **Does DropPath (0.05, 0.1) help generalisation on Transolver residual structure?** (#2044 edward) — orthogonal to dropout

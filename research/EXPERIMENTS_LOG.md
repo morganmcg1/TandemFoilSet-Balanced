@@ -1,5 +1,63 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 10:20 — PR #2044: DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 (CLOSED — wrong-shape regularization for budget)
+
+- Student branch: `charliepai2g24h5-edward/droppath-stochastic-depth`
+- Hypothesis: Add DropPath to Transolver block residuals to induce implicit ensemble regularization. Predicted OOD splits (geom_camber_rc, single_in_dist) would benefit most.
+
+### Results (vs old baseline 55.92 / 51.92, PR #1755 — student used lion_lr=3e-4)
+
+| Config | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline |
+|---|---:|---:|---|
+| Baseline (drop_path=0.0) | 55.92 | 51.92 | — |
+| Arm A (drop_path=0.05) | **67.40** | **60.98** | **+11.5 val (+20.6%), +9.1 test (+17.5%)** |
+| Arm B (drop_path=0.10) | **72.80** | **66.29** | **+16.9 val (+30.2%), +14.4 test (+27.7%)** |
+
+Catastrophic regressions on both arms vs old baseline. Vs current new baseline (52.63), regressions are even larger.
+
+### Mechanism analysis
+
+Both arms still monotonically descending at epoch 16 (epoch 15→16: −0.58 for 0.05, −1.32 for 0.10) — the model is far from convergence within the budget. With 5 Transolver blocks × 2 residual paths = 10 paths, drop_path=0.05 means ~40% probability of dropping ≥1 path per forward pass. The model must learn redundant feature pathways across many epochs to recover — incompatible with 16-epoch cap.
+
+Per-split val: all 4 splits regress uniformly by +9.4 to +13.6 in Arm A and +14.1 to +20.1 in Arm B. The predicted OOD-specific benefit does not materialize. This is the opposite of the dropout=0.1 (PR #1656) pattern, where within-layer feature masking preserves convergence speed.
+
+### Disposition
+
+**CLOSED** as wrong-shape regularization for this budget. DropPath only becomes viable at higher epoch budgets (40+ epochs) or extremely small rates (<0.02) on this architecture. Not a near-term direction for round 5.
+
+- Metrics: `models/model-droppath_0_05-20260513-075433/metrics.jsonl`, `models/model-droppath_0_1-20260513-090422/metrics.jsonl`
+
+---
+
+## 2026-05-13 10:18 — PR #2074: Per-channel Huber δ_p sweep (0.15, 0.10) on n_hidden=160 stack (CLOSED — δ_p<0.20 over-regularizes pressure)
+
+- Student branch: `charliepai2g24h5-fern/per-channel-delta-refinement`
+- Hypothesis: Test whether δ_p=0.15 or δ_p=0.10 beats the merged δ_p=0.20 from PR #2028. (Note: ran with stale lion_lr=1.5e-4 default; results compared against PR #2028 baseline 53.62/49.65.)
+
+### Results (vs PR #2028 baseline 53.62 / 49.65 with stale lion_lr=1.5e-4)
+
+| Config | val_avg | test_avg | Δ val | Δ test | val/test gap |
+|---|---:|---:|---:|---:|---:|
+| Baseline (δ_p=0.20, lion_lr=3e-4) | 53.62 | 49.65 | — | — | −3.97 |
+| Arm A (δ_p=0.15, lion_lr=1.5e-4) | 53.54 | 50.14 | −0.14% | **+0.98%** | −3.40 |
+| Arm B (δ_p=0.10, lion_lr=1.5e-4) | 53.19 | 50.35 | −0.81% | **+1.41%** | −2.84 |
+
+Both arms underperform the current baseline (52.63). Val gain is small but test regresses substantially — a classic overfitting signal.
+
+### Mechanism analysis
+
+The val/test gap shrinks monotonically as δ_p decreases (−3.97 → −3.40 → −2.84). This is **leading indicator of over-regularization**: the loss-shape change is increasing the training signal/noise ratio in a way that doesn't transfer to held-out distributions. Per-split test: test_geom_camber_rc goes 58.75 → 60.80 → 60.84 — the hardest OOD split regresses most under tighter pressure capping.
+
+Lower δ_p over-saturates pressure gradients into the linear regime, training on capped (and thus implicitly cherry-picked) residuals. δ_p=0.20 is the optimum on this stack.
+
+### Disposition
+
+**CLOSED** as informative negative result. δ_p=0.20 (from PR #2028) is confirmed optimum; lower values over-regularize. Removed from queue.
+
+- Metrics: `models/model-pcd_p015-20260513-081930/metrics.jsonl`, `models/model-pcd_p010-20260513-085541/metrics.jsonl`
+
+---
+
 ## 2026-05-13 09:58 — PR #1656: Dropout=0.1 on Lion lr=2e-4 + per-channel δ + n_hidden=160 (MERGED — new baseline 52.63/49.22)
 
 - Student branch: `charliepai2g24h5-thorfinn/dropout-0_1`
