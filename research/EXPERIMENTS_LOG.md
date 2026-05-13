@@ -4,6 +4,61 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 23:55 — PR #2666 (ASSIGNED, fern): huber_beta LOW sweep {0.2, 0.15} on merged hybrid — test β-side of β–σ coupling
+
+- **Branch:** `willowpai2g48h2-fern/huber-beta-low-on-hybrid`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** β–σ coupling banked in #2540 (β↑ → spread↓). Direct hybrid_kendall_lr push in #2604 falsified the "more-spread-compounds" hypothesis via premature-commitment failure mode. Test the OTHER side of the coupling: β LOWER changes the residual SHAPE (smaller quadratic region) without accelerating the AdamW-on-log_σ head. If σ-spread is genuinely load-bearing AND the issue with #2604 was the premature-commitment mechanism rather than spread itself, β=0.2 should give MORE spread with BETTER metrics. Bracket {0.2, 0.15} on hybrid baseline.
+- **Decision rule:** val < 45.2181 AND test < 38.7661 → MERGE; val ≥ 45.50 AND spread > 0.475 → U-curve confirmed via independent mechanism (definitively closes σ-spread axis at 0.475); divergence at β=0.15 → β safety floor found.
+- **Why this is the strongest remaining axis on σ-spread:** Direct from fern's own #2604 suggested follow-up #2. Two clean outcomes: (a) σ-spread re-opens via residual-shape (Compound win), (b) U-curve is structural (definitive close). Channel-ordering and Kendall-weight-per-channel comparison vs #2604 is mechanism-rich either way.
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-13 23:50 — PR #2604 (CLOSED, fern): hybrid_kendall_lr push {1e-3, 2e-3} — σ-spread ceiling found at 0.475
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-kendall-lr-push-1e3-2e3`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Push hybrid_kendall_lr to extract more σ-spread, following #2311 monotonic gradient (3e-4→5e-4 increased spread 0.07→0.475). Bracket {1e-3, 2e-3}.
+
+### Result table (vs hybrid baseline #2311)
+
+| Arm | lr | W&B | val | test | spread | Δval | Δtest | Verdict |
+|---|---:|---|---:|---:|---:|---:|---:|---|
+| baseline | 5e-4 | `objur0b9` | 45.2181 | 38.7661 | 0.475 | — | — | — |
+| Arm 1 | 1e-3 | `h7lbjxxx` | 46.9337 | 39.8195 | 0.816 | +1.72 | +1.05 | regress |
+| Arm 2 | 2e-3 | `7fmitz0s` | 46.9372 | 39.8446 | 0.915 | +1.72 | +1.08 | regress |
+
+**Apples-to-apples:** all 3 runs hit 30-min timeout at exactly epoch 13/15, identical 1887s wall-clock. Clean comparison, no epoch artifact.
+
+**Verdict:** lr axis ceiling found at 5e-4 / spread=0.475. Both arms regress monotonically; "more-spread-compounds" hypothesis from #2540 is FALSIFIED.
+
+### Per-split SWA test (the most decisive evidence)
+
+| Split | Baseline 5e-4 | Arm 1 1e-3 | Arm 2 2e-3 |
+|---|---:|---:|---:|
+| single_in_dist | 40.340 | 41.385 (+1.04) | 42.694 (+2.35) |
+| geom_camber_rc | 52.781 | 55.114 (+2.33) | 53.821 (+1.04) |
+| geom_camber_cruise | 23.712 | 23.684 (−0.03) | 23.870 (+0.16) |
+| re_rand | 38.231 | 39.096 (+0.86) | 38.994 (+0.76) |
+
+### Banked findings (9 total)
+
+1. **σ-spread ceiling at hybrid_kendall_lr=5e-4 (spread=0.475)** — the 0.475 spread is the model's NATURAL EQUILIBRIUM under joint Lion(model) + AdamW(log_σ) dynamics, not a partial harvest.
+2. **NEW: Channel-level falsification of "compounding" hypothesis** — `single_in_dist` test gained −2.11% from spread 0→0.475 in #2311 but now LOSES +1.04 (Arm 1) to +2.35 (Arm 2) from spread 0.475→0.82/0.92. **U-shaped, not monotonic.** Clean reviewer-ready story for paper appendix.
+3. **NEW: Premature-commitment mechanism** — Kendall weight on surf_ux reaches ~120 (Arm 2) vs ~22 (baseline). At higher kendall_lr, log_σ heads adapt faster than model adapts to them → surf_ux dominates gradient, other 5 channels under-trained. "More spread looks like richer differentiation" = "premature commitment to surf_ux dominance".
+4. **NEW: No "needs more training" escape hatch** — Arm 2 crosses baseline-final spread (0.475) by 25% of training, has remaining 75% to consolidate, STILL regresses. lr-controllable axis is genuinely saturated.
+5. **NEW: SWA does rescue work proportional to lr** — Arm 1 SWA−base = −1.74; baseline SWA−base = −1.07 (1.6× more rescue at higher lr). SWA value scales with optimization noise.
+6. **NEW: σ-spread monotonic, not oscillatory on AdamW** — Arm 2 trajectory 0→0.55→0.68→0.75→0.92 monotonic+smooth. No divergence pattern → rules out "lr too high" as the failure mode. The regression IS the equilibrium-shift.
+7. **5th independent clip_fraction=1.0 confirmation** (13+ total). Orthogonal to σ-spread axis.
+8. **NEW: log_σ channel ordering is lr-invariant** — surf_ux=min / vol_ux=max preserved across all three lrs. The ordering encodes which channels carry harder-to-predict residuals — property of the data, not optimizer.
+9. **Pre-existing nan bug confirmed in baseline** — `test_geom_camber_cruise/loss=nan` in baseline AND both arms. Kendall vol_loss aggregate has inf; MAEs finite. Bug-fix PR worth doing separately, not blocking decisions.
+
+### Why this is a top-tier closing PR
+Apples-to-apples experimental design + channel-level mechanism analysis + clean falsification of the simpler hypothesis. The U-curve plot (spread vs val/test) is paper-worthy. Closes the head-lr direction of the σ-spread axis decisively; opens the β-LOWER direction (PR #2666).
+
+---
+
 ## 2026-05-13 22:30 — PR #2616 (ASSIGNED, alphonse): film_mid_dim sweep {32, 128} on merged hybrid — bracket the only untouched capacity axis
 
 - **Branch:** `willowpai2g48h2-alphonse/film-mid-dim-sweep-on-hybrid`
