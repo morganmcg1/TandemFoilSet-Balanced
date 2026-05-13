@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-05-13 08:08 — PR #1934: Width expansion n_hidden=192/256 on Lion+EMA (alphonse) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-alphonse/width-expansion`
+- **Hypothesis:** Lion's faster optimization exposes a capacity ceiling at n_hidden=128; widening to 192 or 256 absorbs extra training signal.
+- **W&B runs:** `bfqtvd10` (Arm 1: n_hidden=192), `6ez4cyaf` (Arm 2: n_hidden=256), `g4l7y8ic` (Arm 1 replicate)
+
+| Metric | Baseline #1781 (n_hidden=128) | Arm 1 (192) | Arm 2 (256) |
+|--------|-------------------------------|-------------|-------------|
+| Params | 0.67M | 1.48M | 2.46M |
+| val_avg/mae_surf_p | **61.302** | 62.709 (+2.3%) | 66.393 (+8.3%) |
+| test_avg/mae_surf_p | **52.682** | 54.235 (+2.9%) | 57.480 (+9.1%) |
+| Epochs (30-min cap) | 13 | 13 | 11 |
+| s/epoch | 112 | 145 | 171 |
+
+**Result:** CLOSED. Monotonic regression with width — Arm 2 worse than Arm 1, both worse than baseline. vs current Lion+MAE baseline (val=56.58): +10.8% / +17.3%.
+
+**Key finding:** Hypothesis falsified. The model is **compute-bound, not capacity-bound** at the 30-min cap. Wider models trained *fewer* epochs (171s/epoch at width=256 vs 112s at 128), and per-epoch val improvement was NOT faster on wider arms — they're tracking toward the same basin but trailing. Student's analysis was sharp: OOD splits regressed *most* on width, ruling out the under-capacity story (which would predict in-dist improvements). At fixed 30-min wall-clock, n_hidden=128 is the right operating point on this base.
+
+**Architectural conclusion (combined with #1761):** Both depth (n_layers=6 → +19% epoch cost) and width (n_hidden=192/256 → +30%/53% epoch cost) are compute-bound losers at the 30-min cap. The only architectural directions left are **compute-neutral** (head count, MLP ratio if cheap) or **structural** (different attention pattern). Alphonse reassigned to **n_head=8 vs n_head=2 sweep** (PR #2069) — head count is FLOPs-neutral (parallel heads at smaller head_dim).
+
+---
+
+## 2026-05-13 08:10 — PR #1857: EMA decay sweep 0.995/0.999 on pre-Lion base (edward) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-edward/ema-decay-sweep`
+- **Hypothesis:** Higher EMA decay (slower update) might sample a broader weight-space neighborhood → flatter basin.
+- **W&B runs:** `ihgn5cko` (Arm 1: 0.995), `qyoo8y0j` (Arm 2: 0.999)
+
+| Metric | Baseline #1607 (0.99) | Arm 1 (0.995) | Arm 2 (0.999) |
+|--------|-----------------------|---------------|---------------|
+| val_avg/mae_surf_p | **77.054** | 77.594 (+0.7%) | 81.489 (+5.8%) |
+| test_avg/mae_surf_p | 68.265 | **66.978 (−1.9%)** | 70.828 (+3.8%) |
+
+**Result:** CLOSED. vs old AdamW+EMA baseline: val regression on both arms. vs current Lion+MAE baseline (val=56.58): +37.2% even on best arm. Cannot merge by val rule.
+
+**Important nuanced finding for record:** **Arm 1 (decay=0.995) improved test by −1.9% despite val +0.7% regression**. All 4 test splits improved monotonically. Val/test ratio shifted 1.129 → 1.158, consistent with a slightly more conservative shadow producing better OOD generalization (genuine signal, not noise). This effect was on the OLD pre-Lion AdamW base — would need to be re-tested on Lion+MAE to know if it transfers (Lion's gradient statistics differ from AdamW's).
+
+**Mechanism (student analysis):** Effective averaging window ≈ 1/(1−α): 0.99→100 steps, 0.995→200, 0.999→1000. At the 16-epoch (~6000 step) budget, 0.999 averages over basically the entire post-warmup trajectory including under-trained early weights — predicted failure mode. 0.995 sits in the sweet spot for test, just past it for val.
+
+**Edward reassigned:** PR #2070 — Lion-no-EMA ablation. Diagnostic for ICML appendix: how much of the Lion+EMA gain is Lion vs EMA?
+
+---
+
 ## 2026-05-13 07:55 — PR #1786: Higher LR (1e-3/2e-3) on AdamW+EMA base (frieren) — CLOSED SUPERSEDED
 
 - **Branch:** `willowpai2g24h5-frieren/higher-lr-ema`
