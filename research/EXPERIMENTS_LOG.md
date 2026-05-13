@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-05-13 16:30 — PR #2337: slice_num=16 on n_head=2+sw=10 baseline (frieren) — CLOSED, BEATS OLD BASELINE, ASSIGNED TO COMPOUND
+
+- **Branch:** `willowpai2g24h5-frieren/slice-num-16-sweep`
+- **Hypothesis:** Extend monotonic slice_num trend below 32. slice_num=16 doubles per-slice node coverage vs slice_num=32; should also run ~7% faster, buying extra epochs.
+- **W&B run:** `45r8syhx`
+
+| Config | slice_num | val | test | Epochs/30min | s/ep |
+|--------|-----------|-----|------|-------------|------|
+| Baseline #2218 | 32 | 49.86 | 42.19 | 23 | 81.4 |
+| **This PR** | **16** | **48.08** | **41.02** | **24** | **75.9** |
+| **Current best #2338** | 32 (n_head=1) | **46.67** | **40.69** | 26 | 71.1 |
+
+**Per-test-split (slice_num=16):** single_in_dist=43.78, geom_camber_rc=55.82, geom_camber_cruise=24.62, re_rand=39.85 — **all 4 splits improve vs old baseline**.
+
+**Result:** CLOSED (doesn't beat current baseline #2338 val=46.67 on n_head=1 compound). Key findings:
+1. **Monotonic slice_num trend confirmed below 32**: 16 < 32 < 64 < 128 — strict order maintained on n_head=2+sw=10.
+2. **Speed gain**: 75.9 s/ep vs 81.4 s/ep (−6.8%), +1 epoch in 30 min cap. Val still descending at cap — further headroom likely.
+3. **Marginal gain shrinking** on older baseline (Δ 5.06 → 1.25 → 1.78): last delta grew slightly — may be noise or true headroom remains.
+4. **Natural follow-up:** slice_num=16 + n_head=1 compound. **Assigned as PR #2430 to frieren.**
+
+---
+
 ## 2026-05-13 16:00 — PR #2338: n_head=1 on n_head=2+slice_num=32 baseline (edward) — MERGED NEW BEST
 
 - **Branch:** `willowpai2g24h5-edward/n-head-1-sweep`

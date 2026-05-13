@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~16:05 UTC
+- **Date:** 2026-05-13 ~16:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -33,7 +33,7 @@
 |----|---------|--------|--------|
 | **#2416** | **alphonse** | **n_head=1 + surf_weight=5 interaction: stack both wins on slice32** | **WIP — new** |
 | **#2356** | **thorfinn** | **Lion wd sweep on slice_num=32 compound: wd=3e-4 vs wd=3e-5** | **WIP** |
-| **#2337** | **frieren** | **slice_num=16 on n_head=2: extend monotonic trend below 32** | **WIP** |
+| **#2430** | **frieren** | **slice_num=16 on n_head=1 compound: test if monotonic slice trend stacks** | **WIP — new** |
 | **#2372** | **nezuko** | **surf_weight low probe on slice_num=32: sw=2 vs sw=3** | **WIP** |
 | **#2419** | **edward** | **lr sweep on n_head=1 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
 | **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
@@ -42,6 +42,7 @@
 
 ## Closed experiments this round
 
+- **#2337 (frieren):** slice_num=16 on n_head=2+sw=10 — CLOSED (val=48.08/test=41.02). Beats old #2218 baseline but loses to current #2338 (val=46.67). Monotonic trend confirmed: 16 < 32 < 64 < 128. Speed: 75.9s/ep, 24 epochs in 30 min, val still descending. Reassigned to #2430 (slice_num=16 on n_head=1 compound).
 - **#2338 (edward):** n_head=1 on slice32+sw10 — **MERGED** val=46.67, test=40.69. Monotonic trend extends to n_head=1 (1 < 2 < 4 < 8). 26 epochs in 31 min (71.1s/ep). All 4 splits improve. Reassigned to #2419 (lr sweep on n_head=1).
 - **#2335 (alphonse):** slice32+sw5 interaction on n_head=2 — **MERGED** val=48.57, test=41.48. Synergistic: observed −2.54 val vs additive −1.45 (1.75×). 3/4 splits improve. Reassigned to #2416 (n_head=1+sw5).
 - **#2271 (askeladd):** β2=0.995 vs β2=0.999 on n_head=2+slice_num=64 — β2 effect reverses from n_head=4 (#2144). Canonical β2=0.99 confirmed optimal on n_head=2. Main-vs-EMA gap diagnostic: 7.31 (β2=0.995) vs 2.81 (β2=0.999). Closed; reassigned to #2400 (n_layers reduce).
@@ -89,16 +90,17 @@
 19. **AdamW+EMA+MAE 2×2 table complete (#2183):** Lion+EMA=49.86, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× EMA.
 20. **slice32+sw5 synergistic interaction MERGED (#2335):** val=48.57/test=41.48. Stacking slice32 and sw5 yields 1.75× additive gain on val. OOD splits (camber, re_rand) gain most; single_in_dist regresses slightly.
 21. **n_head=1 MERGED (#2338):** val=46.67/test=40.69 — new best. Monotonic trend extends: n_head=1 < 2 < 4 < 8. Per-head dim=128 concentrates global attention; 26 epochs in 31 min (71.1s/ep). All 4 test splits improve. val still descending at cap.
+22. **slice_num=16 confirmed monotonic on n_head=2 (#2337):** val=48.08/test=41.02 — beats old #2218 (49.86/42.19) but loses to new #2338 (46.67). Trend holds: 16 < 32 < 64 < 128. Speed gain 75.9s/ep (−6.8% vs slice32), +1 epoch in 30 min. Val still descending at cap. Next: test slice_num=16 on n_head=1 compound (#2430 frieren).
 
 ## Priority for current wave
 
-**Architecture — slice_num sweep (monotonic signal):**
-- slice_num=16 (#2337 frieren) — extend monotonic trend below 32; may yield 26+ epochs in 30 min
-- n_head=1 (#2338 edward) — extend head-count monotonic trend; n_head=1 gives per-head dim=128; risk: multi-head diversity lost
-- **n_layers reduce (#2400 askeladd)** — n_layers=4/3 on slice_num=32; extends speed-dividend thesis: fewer layers → faster epochs → more training steps in 30-min budget; hypothesis: undertrained model benefits from depth reduction not capacity
+**Architecture — slice_num × n_head compound (highest priority):**
+- **slice_num=16 on n_head=1 (#2430 frieren)** — slice_num=16 confirmed +1.78 val win on n_head=2; n_head=1 confirmed −1.77 val win; if stacking holds, combined gain could push val toward ~44-45; speed projection: ~65-68s/ep → 27-28 epochs
+- **n_head=1 + sw=5 (#2416 alphonse)** — stack sw=5 on top of n_head=1 compound; sw=5 was synergistic with slice32 (+1.75× additive); test if same synergy transfers to n_head=1
+- **lr sweep on n_head=1 (#2419 edward)** — lr=1.5e-4 vs lr=1.25e-4; slice64 winner was 1.5e-4; n_head=1 may prefer different lr
+- **n_layers reduce (#2400 askeladd)** — n_layers=4/3 on slice_num=32; speed-dividend thesis
 
-**Architecture — interaction:**
-- slice_num=32 × sw=5 (#2335 alphonse) — stack both individual wins; interaction unexplored
+**Optimizer hparams:**
 
 **Optimizer hparams:**
 - Lion wd sweep (#2356 thorfinn) — wd=3e-4 vs wd=3e-5 on new slice_num=32 compound
