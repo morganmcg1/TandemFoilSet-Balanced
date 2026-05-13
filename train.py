@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import subprocess
@@ -419,6 +420,7 @@ class Config:
     fourier_L: int = 6        # number of frequency octaves for Fourier pos encoding
     fourier_min_freq: float = 1.0   # min frequency (rad/unit on standardized coords)
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
+    ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
 
 
 cfg = sp.parse(Config)
@@ -466,6 +468,24 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+ema_enabled = cfg.ema_decay > 0
+ema_model = copy.deepcopy(model).eval() if ema_enabled else None
+if ema_model is not None:
+    for p in ema_model.parameters():
+        p.requires_grad = False
+print(f"EMA: {'enabled (decay=' + str(cfg.ema_decay) + ')' if ema_enabled else 'disabled'}")
+
+
+@torch.no_grad()
+def ema_update(ema_model, model, decay):
+    """In-place EMA: ema_p = decay * ema_p + (1 - decay) * p"""
+    if ema_model is None:
+        return
+    for ema_p, p in zip(ema_model.parameters(), model.parameters()):
+        ema_p.mul_(decay).add_(p.detach(), alpha=1 - decay)
+    for ema_b, b in zip(ema_model.buffers(), model.buffers()):
+        ema_b.copy_(b)
+
 amp_enabled = cfg.amp and device.type == "cuda"
 scaler = GradScaler(device="cuda", enabled=amp_enabled)
 print(f"BF16 autocast: {'enabled' if amp_enabled else 'disabled'}")
@@ -492,8 +512,10 @@ run = wandb.init(
 wandb.define_metric("global_step")
 wandb.define_metric("train/*", step_metric="global_step")
 wandb.define_metric("val/*", step_metric="global_step")
+wandb.define_metric("main_val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
+    wandb.define_metric(f"main_{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
@@ -549,6 +571,7 @@ for epoch in range(MAX_EPOCHS):
             grad_norm = torch.tensor(0.0)
         scaler.step(optimizer)
         scaler.update()
+        ema_update(ema_model, model, cfg.ema_decay)
         global_step += 1
         wandb.log({
             "train/loss": loss.item(),
@@ -567,11 +590,22 @@ for epoch in range(MAX_EPOCHS):
 
     # --- Validate ---
     model.eval()
-    split_metrics = {
+    split_metrics_main = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device,
                              cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
         for name, loader in val_loaders.items()
     }
+    if ema_model is not None:
+        split_metrics_ema = {
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device,
+                                 cfg.fourier_L, cfg.fourier_min_freq, cfg.fourier_max_freq)
+            for name, loader in val_loaders.items()
+        }
+    else:
+        split_metrics_ema = None
+
+    # Primary tracking: EMA if enabled, else main model
+    split_metrics = split_metrics_ema if split_metrics_ema is not None else split_metrics_main
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     val_loss_mean = sum(m["loss"] for m in split_metrics.values()) / len(split_metrics)
@@ -585,11 +619,20 @@ for epoch in range(MAX_EPOCHS):
         "epoch_time_s": dt,
         "global_step": global_step,
     }
+    # Primary namespace: EMA-tracked metrics if enabled, else main
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+    # Always log main-model metrics under main_* prefix when EMA is enabled
+    if ema_model is not None:
+        for split_name, m in split_metrics_main.items():
+            for k, v in m.items():
+                log_metrics[f"main_{split_name}/{k}"] = v
+        val_avg_main = aggregate_splits(split_metrics_main)
+        for k, v in val_avg_main.items():
+            log_metrics[f"main_val_{k}"] = v
     wandb.log(log_metrics)
 
     tag = ""
@@ -600,14 +643,19 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        save_state = ema_model.state_dict() if ema_model is not None else model.state_dict()
+        torch.save(save_state, model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    if ema_model is not None:
+        main_avg_surf_p = aggregate_splits(split_metrics_main)["avg/mae_surf_p"]
+        ema_str = f"  ema={avg_surf_p:.4f}{tag}  main={main_avg_surf_p:.4f}"
+    else:
+        ema_str = f"  val_avg_surf_p={avg_surf_p:.4f}{tag}"
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]{ema_str}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
