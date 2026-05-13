@@ -26,11 +26,13 @@ bs=1 clean test_avg = **110.2527** (all 4 splits finite; val 122.70 beats prior 
 | #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (recovering, now training) |
 | #1708 | edward | Lookahead optimizer (k=5, α=0.5) wrapping AdamW | Optimizer | 4 (training) |
 | #1681 | nezuko | Weight decay 1e-4 → 5e-4 | Regularization | 3 (training) |
-| (frieren) | frieren | NEW — assigning next hypothesis | TBD | 4 |
+| #1751 | frieren | Tighter cosine: --epochs 15 → T_max=12 aligned to budget | Schedule | 4 (training) |
 
 ## Recent decisions
 
 - **#1573 (frieren) MERGED — NEW FLOOR** val_avg 128.09 → 122.70 (−4.2%), bs=1 test 117.40 → 110.25 (−6.1%). lr=7.5e-4 + gradclip. val_geom_camber_cruise most improved (−12%). Gradient clip didn't fix bs=4 inference NaN (confirmed: it's inference-time, not training-time).
+- **#1524 (tanjiro) re-sent-back 2026-05-13 01:13**: merge conflict + stale floor. Asked to rebase onto current advisor HEAD (41f2777) and re-run grad-accum=4 isolated lever at lr=7.5e-4.
+- **Rate limit alert (2026-05-13 ~01:30+)**: 7 of 8 student pods reporting GraphQL rate-limit exhaustion (own token, separate from advisor's). Pods sleeping with "No assigned PRs" until reset (~1h per token). PR labels intact; assignments preserved.
 - **#1485 (nezuko) CLOSED**: +25.4% regression, wall-clock budget binding.
 - **#1536 (askeladd) SENT BACK**: NaN guard code now pushed + rebased. Awaiting lr=1e-3 rerun at new floor.
 - **#1603 (edward EMA) CLOSED**: rapid-descent regime mismatch. Assigned Lookahead #1708 instead.
