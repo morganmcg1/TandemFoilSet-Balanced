@@ -296,12 +296,22 @@ class FiLMTransolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, device,
+                   asinh_pressure: bool = False,
+                   asinh_alpha: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
     channels are in the original target space and accumulated per organizer
     ``score.py`` (float64, non-finite samples skipped).
+
+    When ``asinh_pressure`` is enabled, the pressure channel of ``y_norm`` is
+    transformed as ``asinh(alpha * y_p)`` before the loss compare (so the loss
+    lives in the same transformed space the model trains in) and the model's
+    pressure prediction is inverted as ``sinh(pred_p) / alpha`` before
+    denormalization so the MAE is computed in physical pressure space against
+    the untransformed ``y``. ``asinh_alpha < 1`` widens the linear regime
+    (gentler tail compression).
     """
     vol_loss_sum = surf_loss_sum = 0.0
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
@@ -319,7 +329,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm, "mask": mask})["preds"]
 
-            sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            if asinh_pressure:
+                target = y_norm.clone()
+                target[..., 2] = torch.asinh(asinh_alpha * y_norm[..., 2])
+            else:
+                target = y_norm
+            sq_err = F.smooth_l1_loss(pred, target, beta=1.0, reduction='none')
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
@@ -332,7 +347,12 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             ).item()
             n_batches += 1
 
-            pred_orig = pred * stats["y_std"] + stats["y_mean"]
+            if asinh_pressure:
+                pred_inv = pred.clone()
+                pred_inv[..., 2] = torch.sinh(pred[..., 2]) / asinh_alpha
+            else:
+                pred_inv = pred
+            pred_orig = pred_inv * stats["y_std"] + stats["y_mean"]
             ds, dv = accumulate_batch(pred_orig, y, is_surface, mask, mae_surf, mae_vol)
             n_surf += ds
             n_vol += dv
@@ -469,6 +489,8 @@ class Config:
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
     use_kendall_uncertainty: bool = False  # learn per-channel log_sigma weighting (Kendall 2018) — overrides surf_weight
+    asinh_pressure: bool = False  # apply asinh(alpha*p) to the normalized pressure target before training; sinh()/alpha inverse before MAE
+    asinh_alpha: float = 1.0  # strength factor for asinh compression: asinh(alpha*p). Smaller alpha => gentler compression (wider linear regime).
 
 
 cfg = sp.parse(Config)
@@ -623,7 +645,16 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm, "mask": mask})["preds"]
-        sq_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+
+        # Optional value-level pressure-target compression: apply asinh(alpha*p)
+        # to the normalized pressure channel before the loss compare. Ux/Uy untouched.
+        # Inverse is sinh(pred)/alpha, applied to pred before scoring.
+        if cfg.asinh_pressure:
+            target = y_norm.clone()
+            target[..., 2] = torch.asinh(cfg.asinh_alpha * y_norm[..., 2])
+        else:
+            target = y_norm
+        sq_err = F.smooth_l1_loss(pred, target, beta=1.0, reduction='none')
 
         # Per-sample log(Re) from raw (un-normalized) feature dim 13 — constant per real node within a sample.
         m_b = mask.unsqueeze(-1).float()                                   # [B, N, 1]
@@ -673,6 +704,22 @@ for epoch in range(MAX_EPOCHS):
             surf_loss_unw = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss_unweighted = vol_loss_unw + cfg.surf_weight * surf_loss_unw
 
+            # asinh-pressure diagnostics: tail compression + un-asinh'd p-channel loss.
+            mask_f = mask.float()
+            mask_sum = mask_f.sum().clamp(min=1)
+            y_p_norm_masked = y_norm[..., 2].masked_select(mask)
+            y_p_max_pretransform = y_p_norm_masked.abs().max().item() if y_p_norm_masked.numel() > 0 else 0.0
+            y_p_target_masked = target[..., 2].masked_select(mask)
+            y_p_max_posttransform = y_p_target_masked.abs().max().item() if y_p_target_masked.numel() > 0 else 0.0
+            # un-asinh'd Smooth-L1 on pressure: bring pred back to z-score space via sinh
+            # (no-op when asinh disabled) and compare to y_norm[..., 2].
+            if cfg.asinh_pressure:
+                pred_p_z = torch.sinh(pred[..., 2]) / cfg.asinh_alpha
+            else:
+                pred_p_z = pred[..., 2]
+            sq_err_p = F.smooth_l1_loss(pred_p_z, y_norm[..., 2], beta=1.0, reduction='none')
+            loss_p_channel = (sq_err_p * mask_f).sum() / mask_sum
+
         optimizer.zero_grad()
         loss.backward()
         grad_norm_val = None
@@ -694,6 +741,9 @@ for epoch in range(MAX_EPOCHS):
             "train/re_weight_mean": re_weight.mean().item(),
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            "train/y_p_max_pretransform": y_p_max_pretransform,
+            "train/y_p_max_posttransform": y_p_max_posttransform,
+            "train/loss_p_channel": loss_p_channel.item(),
             "global_step": global_step,
         }
         if grad_norm_val is not None:
@@ -729,7 +779,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, asinh_pressure=cfg.asinh_pressure, asinh_alpha=cfg.asinh_alpha)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -849,7 +899,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         base_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, asinh_pressure=cfg.asinh_pressure, asinh_alpha=cfg.asinh_alpha)
             for name, loader in test_loaders.items()
         }
         base_test_avg = aggregate_splits(base_test_metrics)
@@ -865,7 +915,7 @@ if best_metrics:
 
     print("\nEvaluating SWA model on val splits...")
     swa_val_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, asinh_pressure=cfg.asinh_pressure, asinh_alpha=cfg.asinh_alpha)
         for name, loader in val_loaders.items()
     }
     swa_val_avg = aggregate_splits(swa_val_metrics)
@@ -879,7 +929,7 @@ if best_metrics:
     if not cfg.skip_test and test_loaders is not None:
         print("\nEvaluating SWA model on test splits...")
         swa_test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, device, asinh_pressure=cfg.asinh_pressure, asinh_alpha=cfg.asinh_alpha)
             for name, loader in test_loaders.items()
         }
         swa_test_avg = aggregate_splits(swa_test_metrics)
