@@ -437,6 +437,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    save_cycle2_snapshots: bool = False  # save weights at e15/e17/e19/e21 for within-cycle-2 SWA eval (PR #2522)
 
 
 cfg = sp.parse(Config)
@@ -649,6 +650,17 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
+    # Cycle-2 snapshot saving for within-cycle-2 SWA (PR #2522).
+    # Under T_0=7, T_mult=2: cycle 2 spans e8–e21 with cycle-end at e21.
+    # We save weights at e15, e17, e19, e21 — all within cycle 2's descent.
+    if cfg.save_cycle2_snapshots and (epoch + 1) in (15, 17, 19, 21):
+        snap_path = model_dir / f"cycle2_snap_e{epoch+1}.pt"
+        torch.save(
+            {"model": model.state_dict(), "surf_head": surf_head.state_dict()},
+            snap_path,
+        )
+        print(f"[cycle2-snap] saved {snap_path.name}")
+
     # --- Validate ---
     model.eval()
     surf_head.eval()
@@ -775,5 +787,159 @@ if best_metrics:
     )
 else:
     print("\nNo checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping artifact upload.")
+
+# Within-cycle-2 SWA A/B evaluation (PR #2522).
+# A/B: (a) e21 standalone model vs (b) averaged weights of e15+e17+e19+e21.
+# Model uses LayerNorm only (no BatchNorm running stats), so no BN
+# recalibration is required after loading the averaged state_dict.
+if cfg.save_cycle2_snapshots:
+    print("\n=== Within-cycle-2 SWA A/B comparison (PR #2522) ===")
+    target_epochs = [15, 17, 19, 21]
+    snap_files = {e: model_dir / f"cycle2_snap_e{e}.pt" for e in target_epochs}
+    available = [(e, p) for e, p in snap_files.items() if p.exists()]
+    available_epochs = [e for e, _ in available]
+    print(f"  Available snapshots: e{available_epochs}")
+
+    if not available:
+        print("  WARNING: no cycle-2 snapshots saved (likely timed out before e15). Skipping.")
+    else:
+        # 1) Per-snapshot val — verifies the within-basin hypothesis,
+        #    and accumulates for SWA averaging in one pass over disk.
+        swa_model_state: dict | None = None
+        swa_head_state: dict | None = None
+        per_snap_val_full: dict[int, tuple[dict, dict]] = {}
+
+        for _e, _p in available:
+            _ckpt = torch.load(_p, map_location=device, weights_only=True)
+            model.load_state_dict(_ckpt["model"])
+            surf_head.load_state_dict(_ckpt["surf_head"])
+            model.eval()
+            surf_head.eval()
+            _split_m = {
+                name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+                for name, loader in val_loaders.items()
+            }
+            _agg = aggregate_splits(_split_m)
+            per_snap_val_full[_e] = (_split_m, _agg)
+            print(f"  e{_e}: val_avg/mae_surf_p = {_agg['avg/mae_surf_p']:.4f}")
+
+            if swa_model_state is None:
+                swa_model_state = {k: v.float().clone() for k, v in _ckpt["model"].items()}
+                swa_head_state = {k: v.float().clone() for k, v in _ckpt["surf_head"].items()}
+            else:
+                for k in swa_model_state:
+                    swa_model_state[k] += _ckpt["model"][k].float()
+                for k in swa_head_state:
+                    swa_head_state[k] += _ckpt["surf_head"][k].float()
+
+            for k, v in _agg.items():
+                wandb.summary[f"swa/snap_e{_e}/{k}"] = v
+            for split_name, m in _split_m.items():
+                for k, v in m.items():
+                    wandb.summary[f"swa/snap_e{_e}/{split_name}/{k}"] = v
+
+        n_snaps = len(available)
+        for k in swa_model_state:
+            swa_model_state[k] /= n_snaps
+        for k in swa_head_state:
+            swa_head_state[k] /= n_snaps
+        print(f"\n  SWA: averaged {n_snaps} snapshots: e{available_epochs}")
+
+        _snap_vals = [per_snap_val_full[_e][1]["avg/mae_surf_p"] for _e in available_epochs]
+        _snap_spread = max(_snap_vals) - min(_snap_vals)
+        print(f"  Snapshot val_avg spread (max-min): {_snap_spread:.4f}")
+        wandb.summary["swa/snap_val_spread"] = _snap_spread
+        wandb.summary["swa/n_snapshots"] = n_snaps
+        wandb.summary["swa/snap_epochs"] = ",".join(str(e) for e in available_epochs)
+
+        # Always rebuild test loaders (cheap; avoids skip_test path scoping).
+        print("\n  Loading test splits for A/B comparison...")
+        _test_datasets_swa = load_test_data(cfg.splits_dir, debug=cfg.debug)
+        _test_loaders_swa = {
+            name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
+            for name, ds in _test_datasets_swa.items()
+        }
+
+        # 2) e21 standalone — explicit A/B baseline (val + test).
+        e21_val_full = per_snap_val_full.get(21)
+        e21_test_metrics = None
+        e21_test_avg = None
+        if 21 in available_epochs:
+            print("\n  Loading e21 snapshot for explicit A/B baseline test eval...")
+            _ckpt = torch.load(snap_files[21], map_location=device, weights_only=True)
+            model.load_state_dict(_ckpt["model"])
+            surf_head.load_state_dict(_ckpt["surf_head"])
+            model.eval()
+            surf_head.eval()
+            e21_test_metrics = {
+                name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+                for name, loader in _test_loaders_swa.items()
+            }
+            e21_test_avg = aggregate_splits(e21_test_metrics)
+            print(f"  e21 test_avg/mae_surf_p = {e21_test_avg['avg/mae_surf_p']:.4f}")
+            for name in TEST_SPLIT_NAMES:
+                print_split_metrics(name, e21_test_metrics[name])
+            for k, v in e21_test_avg.items():
+                wandb.summary[f"swa/e21_test_{k}"] = v
+            for split_name, m in e21_test_metrics.items():
+                for k, v in m.items():
+                    wandb.summary[f"swa/e21_test/{split_name}/{k}"] = v
+        else:
+            print("\n  WARN: e21 snapshot missing — no clean A/B baseline available.")
+
+        # 3) SWA averaged model — val + test.
+        print("\n  Loading SWA-averaged state and evaluating on val + test...")
+        model.load_state_dict(swa_model_state)
+        surf_head.load_state_dict(swa_head_state)
+        model.eval()
+        surf_head.eval()
+
+        swa_val_split = {
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            for name, loader in val_loaders.items()
+        }
+        swa_val_avg = aggregate_splits(swa_val_split)
+        print(f"  SWA val_avg/mae_surf_p = {swa_val_avg['avg/mae_surf_p']:.4f}")
+        for name in VAL_SPLIT_NAMES:
+            print_split_metrics(name, swa_val_split[name])
+
+        swa_test_metrics = {
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            for name, loader in _test_loaders_swa.items()
+        }
+        swa_test_avg = aggregate_splits(swa_test_metrics)
+        print(f"  SWA test_avg/mae_surf_p = {swa_test_avg['avg/mae_surf_p']:.4f}")
+        for name in TEST_SPLIT_NAMES:
+            print_split_metrics(name, swa_test_metrics[name])
+
+        for k, v in swa_val_avg.items():
+            wandb.summary[f"swa/swa_val_{k}"] = v
+        for k, v in swa_test_avg.items():
+            wandb.summary[f"swa/swa_test_{k}"] = v
+        for split_name, m in swa_val_split.items():
+            for k, v in m.items():
+                wandb.summary[f"swa/swa_val/{split_name}/{k}"] = v
+        for split_name, m in swa_test_metrics.items():
+            for k, v in m.items():
+                wandb.summary[f"swa/swa_test/{split_name}/{k}"] = v
+
+        # 4) Headline A/B
+        print("\n  === Headline A/B (e21 vs SWA) ===")
+        if e21_val_full is not None:
+            _e21_val = e21_val_full[1]["avg/mae_surf_p"]
+            _swa_val = swa_val_avg["avg/mae_surf_p"]
+            _dv = _swa_val - _e21_val
+            print(f"  val:  e21={_e21_val:.4f}   SWA={_swa_val:.4f}   Δ={_dv:+.4f} (SWA-e21; lower-is-better)")
+            wandb.summary["swa/headline_e21_val"] = _e21_val
+            wandb.summary["swa/headline_swa_val"] = _swa_val
+            wandb.summary["swa/headline_delta_val"] = _dv
+        if e21_test_avg is not None:
+            _e21_test = e21_test_avg["avg/mae_surf_p"]
+            _swa_test = swa_test_avg["avg/mae_surf_p"]
+            _dt = _swa_test - _e21_test
+            print(f"  test: e21={_e21_test:.4f}   SWA={_swa_test:.4f}   Δ={_dt:+.4f} (SWA-e21; lower-is-better)")
+            wandb.summary["swa/headline_e21_test"] = _e21_test
+            wandb.summary["swa/headline_swa_test"] = _swa_test
+            wandb.summary["swa/headline_delta_test"] = _dt
 
 wandb.finish()
