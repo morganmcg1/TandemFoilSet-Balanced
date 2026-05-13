@@ -114,19 +114,30 @@ class FourierCoordEnc(nn.Module):
     Output shape: [B, N, in_dim + (4*n_freqs - 2)]  -- 2 coord dims replaced by 4*n_freqs
                                                        Fourier features.
 
-    Freqs are learnable (dyadic init), trained with their own optimizer group
-    (10x lr, no weight decay) and clamped to [0.1, 100] after each step.
+    H57: separate learnable freqs per coord direction (x-freqs, y-freqs) — each direction
+    has its own n_freqs-element freq vector instead of sharing a single global vector.
+    Tests whether the gradient-magnitude limit at the top freqs (#2435 closed) was caused
+    by cancellation between x-direction and y-direction gradients. At dyadic init with
+    freqs_x == freqs_y, output is bit-identical to the prior single-freqs encoder.
+    Freqs are trained with their own optimizer group (10x lr, no weight decay) and
+    clamped to [0.1, 100] after each step.
     """
 
     def __init__(self, n_freqs: int = 4):
         super().__init__()
         self.n_freqs = n_freqs
-        freqs = 2.0 ** torch.arange(n_freqs).float()
-        self.freqs = nn.Parameter(freqs)
+        freqs_init = 2.0 ** torch.arange(n_freqs).float()
+        self.freqs_x = nn.Parameter(freqs_init.clone())
+        self.freqs_y = nn.Parameter(freqs_init.clone())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         coords = x[..., :2]
-        angles = coords.unsqueeze(-1) * self.freqs[None, None, None, :] * torch.pi
+        # angles_x: [B, N, n_freqs], angles_y: [B, N, n_freqs]
+        angles_x = coords[..., 0:1] * self.freqs_x[None, None, :] * torch.pi
+        angles_y = coords[..., 1:2] * self.freqs_y[None, None, :] * torch.pi
+        # Stack as [B, N, 2, n_freqs] in (x, y) order so the reshape layout matches
+        # the legacy encoder's (sin_xs, cos_xs, sin_ys, cos_ys) channel order.
+        angles = torch.stack([angles_x, angles_y], dim=-2)
         sin_feats = torch.sin(angles)
         cos_feats = torch.cos(angles)
         fourier = torch.cat([sin_feats, cos_feats], dim=-1).reshape(
@@ -465,6 +476,27 @@ val_loaders = {
 N_FREQS = 6
 fourier_enc = FourierCoordEnc(n_freqs=N_FREQS).to(device)
 
+# H57 sanity: x-y separate freqs at dyadic init must give bit-identical output
+# to the legacy shared-freqs encoder (forward parity guarantee at t=0).
+with torch.no_grad():
+    _test_x = torch.randn(2, 100, X_DIM, device=device)
+    _test_y = fourier_enc(_test_x)
+    # Build a legacy shared-freqs encoder with the same dyadic init.
+    _legacy_freqs = (2.0 ** torch.arange(N_FREQS).float()).to(device)
+    _coords = _test_x[..., :2]
+    _angles = _coords.unsqueeze(-1) * _legacy_freqs[None, None, None, :] * torch.pi
+    _legacy_fourier = torch.cat([torch.sin(_angles), torch.cos(_angles)], dim=-1).reshape(
+        *_test_x.shape[:-1], 4 * N_FREQS
+    )
+    _legacy_y = torch.cat([_legacy_fourier, _test_x[..., 2:]], dim=-1)
+    _max_diff = (_test_y - _legacy_y).abs().max().item()
+    assert torch.allclose(_test_y, _legacy_y, atol=1e-6), (
+        f"H57 sanity check FAILED — output layout differs from legacy encoder at "
+        f"dyadic init. max abs diff: {_max_diff:.2e}"
+    )
+print(f"[H57] sanity check passed: x-y separate freqs at dyadic init match legacy "
+      f"encoder output (max abs diff: {_max_diff:.2e})")
+
 model_config = dict(
     space_dim=2,
     fun_dim=4 * N_FREQS + (X_DIM - 2) - 2,
@@ -505,11 +537,12 @@ for i, b in enumerate(model.blocks):
 # channels = 1280 params) also moved to a 10x lr, no-WD group. Same insight as H40: WD pulls
 # scaling factors toward zero (init=0.025), fighting the model's learned per-channel
 # diversification, and default lr=5e-4 under-trains them.
-freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
+# H57: route both freqs_x and freqs_y to the same no-WD 10× lr group.
+freq_params = [p for n, p in fourier_enc.named_parameters() if n in ("freqs_x", "freqs_y")]
 layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
 other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
-assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
-    f"Expected 1 freq tensor with {N_FREQS} elems, "
+assert len(freq_params) == 2 and all(p.numel() == N_FREQS for p in freq_params), (
+    f"Expected 2 freq tensors (x, y) with {N_FREQS} elems each, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
 # H54: param-group consistency check — every model param ends up in exactly one of
@@ -546,7 +579,8 @@ print(
     f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
     f"({n_layer_scale} params, expected {expected_layer_scale})"
 )
-print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+print(f"[H57] Initial freqs_x: {fourier_enc.freqs_x.detach().cpu().tolist()}")
+print(f"[H57] Initial freqs_y: {fourier_enc.freqs_y.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -620,9 +654,10 @@ for epoch in range(MAX_EPOCHS):
             list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
         )
         optimizer.step()
-        # H40: keep freqs bounded after the update. Safety net for the higher freqs lr.
+        # H40/H57: keep freqs bounded after the update. Safety net for the higher freqs lr.
         with torch.no_grad():
-            fourier_enc.freqs.clamp_(0.1, 100.0)
+            fourier_enc.freqs_x.clamp_(0.1, 100.0)
+            fourier_enc.freqs_y.clamp_(0.1, 100.0)
         scheduler.step()
 
         epoch_vol += vol_loss.item()
@@ -657,7 +692,8 @@ for epoch in range(MAX_EPOCHS):
     current_lr = optimizer.param_groups[0]["lr"]
     freqs_lr = optimizer.param_groups[1]["lr"]
     layer_scale_lr = optimizer.param_groups[2]["lr"]
-    freqs_now = fourier_enc.freqs.detach().cpu().tolist()
+    freqs_x_now = fourier_enc.freqs_x.detach().cpu().tolist()
+    freqs_y_now = fourier_enc.freqs_y.detach().cpu().tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -667,7 +703,8 @@ for epoch in range(MAX_EPOCHS):
         "train/current_lr": current_lr,
         "train/freqs_lr": freqs_lr,
         "train/layer_scale_lr": layer_scale_lr,
-        "train/freqs": freqs_now,
+        "train/freqs_x": freqs_x_now,
+        "train/freqs_y": freqs_y_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
@@ -681,8 +718,12 @@ for epoch in range(MAX_EPOCHS):
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     print(
-        f"    freqs (lr={freqs_lr:.2e}): "
-        f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
+        f"    freqs_x (lr={freqs_lr:.2e}): "
+        f"[{', '.join(f'{v:.4f}' for v in freqs_x_now)}]"
+    )
+    print(
+        f"    freqs_y (lr={freqs_lr:.2e}): "
+        f"[{', '.join(f'{v:.4f}' for v in freqs_y_now)}]"
     )
     print(f"    layer_scale (lr={layer_scale_lr:.2e})")
     for name in VAL_SPLIT_NAMES:
@@ -698,16 +739,27 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-# H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
-final_freqs = fourier_enc.freqs.detach().cpu().tolist()
+# H40/H57: final learned freqs values per direction (compare to dyadic init 1, 2, 4, 8, 16, 32).
+final_freqs_x = fourier_enc.freqs_x.detach().cpu().tolist()
+final_freqs_y = fourier_enc.freqs_y.detach().cpu().tolist()
 init_freqs = [2.0**k for k in range(N_FREQS)]
-freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
-freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
+freq_x_drift = [f - i for f, i in zip(final_freqs_x, init_freqs)]
+freq_y_drift = [f - i for f, i in zip(final_freqs_y, init_freqs)]
+freq_x_rel_drift = [(f - i) / i for f, i in zip(final_freqs_x, init_freqs)]
+freq_y_rel_drift = [(f - i) / i for f, i in zip(final_freqs_y, init_freqs)]
+# H57 direction-asymmetry: |freqs_x[i] - freqs_y[i]| / freqs_x[i] (Outcome D falsifier)
+xy_asymmetry = [
+    abs(fx - fy) / max(abs(fx), 1e-12) for fx, fy in zip(final_freqs_x, final_freqs_y)
+]
 freqs_summary = {
-    "final/freqs": final_freqs,
+    "final/freqs_x": final_freqs_x,
+    "final/freqs_y": final_freqs_y,
     "final/freqs_init": init_freqs,
-    "final/freqs_abs_drift": freq_drift,
-    "final/freqs_rel_drift": freq_rel_drift,
+    "final/freqs_x_abs_drift": freq_x_drift,
+    "final/freqs_y_abs_drift": freq_y_drift,
+    "final/freqs_x_rel_drift": freq_x_rel_drift,
+    "final/freqs_y_rel_drift": freq_y_rel_drift,
+    "final/freqs_xy_asymmetry": xy_asymmetry,
 }
 append_metrics_jsonl(
     metrics_jsonl_path,
@@ -721,11 +773,23 @@ for i in range(len(model.blocks)):
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
     )
-print("[H40] Final learned freqs vs dyadic init:")
+print("[H57] Final learned freqs_x vs dyadic init:")
 for k in range(N_FREQS):
     print(
-        f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
-        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
+        f"  freqs_x[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs_x[k]:.4f} "
+        f"(drift {freq_x_drift[k]:+.4f}, {freq_x_rel_drift[k]*100:+.2f}%)"
+    )
+print("[H57] Final learned freqs_y vs dyadic init:")
+for k in range(N_FREQS):
+    print(
+        f"  freqs_y[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs_y[k]:.4f} "
+        f"(drift {freq_y_drift[k]:+.4f}, {freq_y_rel_drift[k]*100:+.2f}%)"
+    )
+print("[H57] Direction asymmetry |freqs_x - freqs_y| / freqs_x:")
+for k in range(N_FREQS):
+    print(
+        f"  freq[{k}]: x={final_freqs_x[k]:.4f} y={final_freqs_y[k]:.4f} "
+        f"|x-y|/x={xy_asymmetry[k]*100:.2f}%"
     )
 
 # --- Test evaluation + local summary ---
