@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-05-13 22:50 — PR #2587: batch_size=8/2 sweep on n_layers=3+wd=3e-4 (edward) — CLOSED, NO SPEED DIVIDEND ON BS AXIS
+
+- **Branch:** `willowpai2g24h5-edward/batch-size-sweep-wd3e4-n-layers-3`
+- **Hypothesis:** GPU underutilized at bs=4 (~25 GB); bs=8 should give speed dividend → more epochs/30 min. bs=2 acts as 'reverse direction' test.
+- **W&B runs:** `0xslx16k` (bs=8), `vz8to30q` (bs=2)
+
+| Arm | bs | val | test | Δ vs #2489 | epochs | ep_time | peak VRAM |
+|-----|----|-----|------|------------|--------|---------|-----------|
+| Baseline #2489 | 4 | 42.00 | 35.96 | — | 34 | 53.1 s | 93.5 GB (97.8%) |
+| Arm 1 | 8 | 48.36 | 40.87 | +15.1% / +13.7% ✗ | 34 | 54.2 s | 87.5 GB (91.5%) |
+| Arm 2 | 2 | 46.02 | 38.87 | +9.6% / +8.1% ✗ | 29 | 51.6 s | 93.5 GB (97.8%) |
+
+All 4 test splits regress uniformly for both arms.
+
+**Result:** CLOSED. Hypothesis REFUTED on two counts.
+
+Key findings:
+1. **No speed dividend on batch_size axis (finding 37).** Per-epoch time is essentially batch_size-INVARIANT (51-54s for bs ∈ {2,4,8}). Per-step GPU compute is NOT the bottleneck — data loading + padding to N_max=242K + val pass dominate.
+2. **GPU is near-saturated at bs=4.** System-level reserved memory is 97.8% — the earlier '25 GB' figure was active-tensor memory excluding cache. bs=16 would likely OOM. **Future memory-optimization wins are NOT via larger batches.**
+3. **Step count drives performance with noise penalty.** bs=8 → halves opt steps → loses by 6.4 val points. bs=2 → 1.76× more steps but still loses by 4 (Lion sign-update + small dataset compounds gradient variance). bs=4 is a noise-step Pareto sweet spot.
+4. **Cosine confound is not the explanation.** bs=8 and baseline both terminate at lr ≈ 2.32e-5; bs=8 did NOT enter the over-anneal collapse regime.
+
+**Implication for paper:** Speed-dividend mechanism applies to architecture (n_layers, slice_num) where per-step compute is the lever, but NOT to batch_size axis where data loading + padding dominate. 'Padding-waste reduction' (length-bucketed sampler) is the real lever for the budget-extension story — requires data-loader code, not a CLI flag.
+
+**Edward reassigned:** lr=8e-5/1.5e-4 sweep on new compound — tests whether wd=3e-4 regularization stabilization permits higher lr for more effective per-step progress. Untested on n_layers=3+wd=3e-4.
+
+---
+
 ## 2026-05-13 22:20 — PR #2542: Cosine T_max match --epochs 34/44 (frieren) — CLOSED, COSINE T_MAX INVERTS
 
 - **Branch:** `willowpai2g24h5-frieren/cosine-tmax-match`
