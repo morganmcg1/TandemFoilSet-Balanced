@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -384,6 +385,7 @@ class Config:
     surf_weight: float = 5.0
     epochs: int = 50
     seed: int = 42
+    ema_decay: float = 0.999
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -460,6 +462,13 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+
+# EMA copy used for validation and test evaluation (Polyak averaging).
+ema_model = copy.deepcopy(model).to(device).eval()
+for p in ema_model.parameters():
+    p.requires_grad_(False)
+ema_decay = cfg.ema_decay
+print(f"EMA: decay={ema_decay}")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 # OneCycleLR(max_lr=8e-4) — single super-convergence schedule replacing SequentialLR.
@@ -546,6 +555,12 @@ for epoch in range(MAX_EPOCHS):
         optimizer.step()
         scheduler.step()
 
+        with torch.no_grad():
+            for ep, p in zip(ema_model.parameters(), model.parameters()):
+                ep.data.mul_(ema_decay).add_(p.data, alpha=1.0 - ema_decay)
+            for eb, b in zip(ema_model.buffers(), model.buffers()):
+                eb.data.copy_(b.data)
+
         gn = grad_norm.item() if torch.is_tensor(grad_norm) else float(grad_norm)
         epoch_grad_norm_sum += gn
         if gn > epoch_grad_norm_max:
@@ -559,10 +574,10 @@ for epoch in range(MAX_EPOCHS):
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
 
-    # --- Validate ---
-    model.eval()
+    # --- Validate with EMA weights ---
+    ema_model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -577,7 +592,8 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # Save EMA state — test eval below loads it back into ema_model.
+        torch.save(ema_model.state_dict(), model_path)
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
@@ -612,8 +628,8 @@ print(f"\nTraining done in {total_time:.1f} min")
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval()
+    ema_model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    ema_model.eval()
 
     test_metrics = None
     test_avg = None
@@ -625,7 +641,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(ema_model, loader, stats, cfg.surf_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
