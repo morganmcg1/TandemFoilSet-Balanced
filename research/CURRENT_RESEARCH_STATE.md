@@ -33,7 +33,7 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 | fern | #1390 | surf_weight=25 (needs rebase) | WIP (stale) |
 | frieren | #1768 | OneCycleLR pct_start=0.15 (bracket completion) | WIP |
 | nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP |
-| tanjiro | #1861 | OneCycleLR final_div_factor=1e4 (deep-LR floor) | WIP |
+| tanjiro | #1965 | batch_size=4 → 8 (gradient quality vs step-count probe, 3-seed) | WIP |
 | thorfinn | — | OneCycleLR pct_start=0.10 (3-seed, bracket midpoint + in-dist regression test) | NEW |
 
 ## Key learnings so far
@@ -58,10 +58,10 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 ## Potential next research directions
 
 ### Immediate (waiting on current PRs)
-- **pct_start=0.10 multi-seed** (thorfinn NEW) — fills bracket midpoint; tests whether 0.10 avoids the in-dist regression seen at 0.05 while retaining some OOD gain.
+- **pct_start=0.10 multi-seed** (thorfinn #1944) — fills bracket midpoint; tests whether 0.10 avoids the in-dist regression seen at 0.05 while retaining some OOD gain.
 - **pct_start=0.15** (frieren #1768) — bracket completion.
 - **max_lr=2e-3** (alphonse #1785) — LR ceiling probe.
-- **final_div_factor=1e4** (tanjiro #1861) — deeper LR floor for OOD refinement.
+- **batch_size=4 → 8** (tanjiro #1965, 3-seed) — gradient quality vs per-batch-step-count probe; uses unused GPU (~46GB / 96GB). LR-schedule axis now exhausted (max_lr/#1716, pct_start/#1719, final_div_factor/#1861 all closed).
 - **wd=2e-5** (nezuko #1916) — symmetric test of OOD-asymmetry.
 - **Smooth-L1 β=0.5** (askeladd #1379) — first real gradient-fairness probe.
 - **surface-only p-weight=2** (edward #1809).
