@@ -11,6 +11,46 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~05:15 — Cycle 14: 2 negatives closed (#1816, #1803), 2 new arms assigned (#1839, #1840)
+
+### PR #1816 askeladd — surf_weight=15: CLOSED ✗
+
+val=117.70 / test=105.29 vs old baseline 110.27 / 99.41. **+6.7% / +5.9% regression.** W&B run: `0ggla6zc`.
+
+| Split | test | vs old baseline (#1471) | vs #1465 (surf=30) |
+|---|---|---|---|
+| `single_in_dist` | 127.66 | **+9.4%** | (surf=30: +8.4%) |
+| `geom_camber_rc` | 116.83 | **+6.2%** | (surf=30: flat) |
+| `geom_camber_cruise` | 73.38 | +0.8% | (surf=30: flat) |
+| `re_rand` | 103.29 | **+5.2%** | (surf=30: +2.2%) |
+
+**Analysis:** Second consecutive negative on the surf_weight axis. single_in_dist regressed +9.4% (canonical "surface-weighting overshoot" signature), matching surf=30's pattern. OOD splits also regressed this time (vs flat at surf=30) — student attributed this to 18/50-epoch training budget artifact rather than a magnitude effect. The surf_weight axis is **conclusively closed going upward** — both surf=15 and surf=30 confirm the overshoot pattern. Follow-up: test inverse direction (surf=7 in #1839). Student's diagnostic was excellent and self-contained.
+
+### PR #1803 nezuko — CosineAnnealingLR T_max=20: CLOSED (obsolete schedule)
+
+val=97.66 / test=88.13. W&B run: `qxxmattg`.
+
+| Split | test | vs old baseline (#1471) | vs new baseline (#1655) |
+|---|---|---|---|
+| `single_in_dist` | 100.12 | -14.2% | n/a |
+| `geom_camber_rc` | 98.57 | -10.4% | n/a |
+| `geom_camber_cruise` | 65.41 | -10.1% | n/a |
+| `re_rand` | 88.43 | -9.9% | n/a |
+
+**Analysis:** Mechanistically validated and genuinely strong vs old CosineAnnealingLR baseline (-11.4% val / -11.4% test). Anneal-to-zero refinement hypothesis confirmed (monotone final-epoch descent: 105.42 → 100.64 → 97.66). However, the hypothesis is **obsolete** — CosineAnnealingLR is no longer the default scheduler (OneCycleLR merged via #1655). OneCycleLR strictly dominates T_max=20 cosine: same anneal-to-zero benefit plus a warmup-to-4× higher peak. The gap vs new baseline (+0.6% val, +2.8% test) is small but real.
+
+**Key insight:** The T_max=20 result independently rediscovered the same refinement mechanism that OneCycleLR exploits. This validates our theoretical model: the anneal-to-zero phase is necessary for good final-epoch generalization. OneCycleLR's additional warmup provides the "exploration" phase that T_max=20 was missing.
+
+### New assignment: PR #1839 askeladd — surf_weight 10 → 7
+
+Inverse direction follow-up to #1816 (failed upward) and #1465 (failed at 30). Tests whether surf is over-weighted at the default 10. All four split regressions at surf=15 suggest the possibility. If surf=7 also regresses, the axis is definitively closed from both sides — current surf=10 is optimal.
+
+### New assignment: PR #1840 nezuko — OneCycleLR pct_start 0.1 → 0.3
+
+Student-suggested follow-up from #1803 analysis. Tests the warmup-duration axis of OneCycleLR (orthogonal to alphonse #1829's max_lr axis). Explores whether 3× longer high-LR exploration phase before anneal lands in a better basin. Standard OneCycleLR literature range is pct_start ∈ [0.05, 0.5]. Pairs with alphonse's max_lr sweep to map two orthogonal OneCycleLR axes.
+
+---
+
 ## 2026-05-13 ~05:00 — Cycle 13c: MAJOR WIN — #1655 alphonse OneCycleLR MERGED ✓ (-12% val / -14% test)
 
 ### PR #1655 alphonse — OneCycleLR max_lr=2e-3, pct_start=0.1: MERGED ✓

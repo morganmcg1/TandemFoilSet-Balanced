@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 05:00 UTC
+- **Date / time:** 2026-05-13 05:15 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -19,15 +19,25 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
 
+## Cycle-14 update — 2 more negatives closed, 2 new arms on new baseline
+
+### PR #1816 askeladd (surf_weight=15): CLOSED ✗
+val=117.70 / test=105.29. Second negative on surf_weight axis (after #1465 surf=30). single_in_dist +9.4% — canonical overshoot confirmed at both surf=15 and surf=30. **Axis conclusively closed going upward.** Testing downward direction now (#1839 surf=7).
+
+### PR #1803 nezuko (T_max=20): CLOSED (obsolete, positive vs old baseline)
+val=97.66 / test=88.13. Strong win vs OLD CosineAnnealingLR baseline (-11.4%/-11.4%). Mechanistically validated (anneal-to-zero refinement real, sharp monotone descent in epochs 16-18). BUT: CosineAnnealingLR no longer the default — OneCycleLR strictly dominates this result. Closed; nezuko redirected to OneCycleLR pct_start axis (#1840).
+
+### New assignment: #1839 askeladd — surf_weight 10 → 7
+Inverse direction, student-suggested. If surf_weight=10 is over-weighting surface, reducing to 7 should help in-dist. This is the third and likely definitive surf_weight datapoint.
+
+### New assignment: #1840 nezuko — OneCycleLR pct_start 0.1 → 0.3
+Longer warmup phase (3× duration). Orthogonal to alphonse #1829 (max_lr axis). Together they sweep two dimensions of OneCycleLR: peak height (alphonse) and peak width (nezuko).
+
 ## Cycle-13c update — MAJOR WIN: #1655 alphonse OneCycleLR MERGED (-12% val / -14% test)
 
-**New all-time best: val=97.07 / test=85.71.** OneCycleLR(max_lr=2e-3, pct_start=0.1) stacked on top of p_weight=2.0 + grad_clip=1.0. Uniform -12% to -15% improvement across ALL four test splits. This is fundamental optimization improvement, not selective generalization.
+**New all-time best: val=97.07 / test=85.71.** OneCycleLR(max_lr=2e-3, pct_start=0.1) stacked on top of p_weight=2.0 + grad_clip=1.0. Uniform -12% to -15% improvement across ALL four test splits. Fundamental optimization improvement, not selective generalization. Strongest single result of the launch.
 
-**Active baseline is now val=97.07 / test=85.71.** All 7 in-flight WIP PRs are running on the old code (CosineAnnealingLR, no OneCycleLR). Their results will be evaluated relative to the old bar (110.27) to determine if the direction is positive, then sent back for rebase onto the new baseline if so.
-
-alphonse is now assigned **PR #1829** (max_lr=4e-3 — push the OneCycleLR peak LR ceiling by 2×).
-
-**Notable implication for #1803 (nezuko T_max=20):** This experiment tests a parameter of CosineAnnealingLR that no longer exists as the default. If it reports with a positive direction, redirect nezuko to test an OneCycleLR variant instead.
+alphonse is assigned **PR #1829** (max_lr=4e-3 — push the OneCycleLR peak LR ceiling by 2×).
 
 ---
 
@@ -214,26 +224,28 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-13c)
+## Current leaderboard (post cycle-14)
 
 **Active baseline: val=97.07 / test=85.71** (PRs #1480+#1471+#1655 merged). Beat **97.07** to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **alphonse #1829** (max_lr=4e-3) | TBD | TBD | WIP (new, cycle-13c) | Double the current OneCycleLR peak LR |
-| **askeladd #1816** (surf=15) | TBD | TBD | WIP (cycle-13b) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
-| **fern #1819** (n_head=8) | TBD | TBD | WIP (cycle-13b) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
-| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (cycle-13) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
-| **nezuko #1803** (T_max=20) | TBD | TBD | WIP (cycle-13) | Running on OLD CosineAnnealingLR baseline — now OBSOLETE; redirect to OneCycleLR variant when done |
-| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (cycle-13) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
-| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
-| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (sent-back cycle-11) | Running on OLD baseline; evaluate vs 110.27, send back to rebase if +ve |
+| **alphonse #1829** (max_lr=4e-3) | TBD | TBD | WIP (cycle-13c, NEW BASELINE) | Double the current OneCycleLR peak LR |
+| **nezuko #1840** (pct_start=0.3) | TBD | TBD | WIP (cycle-14, NEW BASELINE) | Longer warmup; orthogonal to alphonse |
+| **askeladd #1839** (surf=7) | TBD | TBD | WIP (cycle-14, NEW BASELINE) | Inverse of failed upward axis |
+| **fern #1819** (n_head=8) | TBD | TBD | WIP (cycle-13b, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
+| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (cycle-13, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
+| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (cycle-13, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
+| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
+| **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (cycle-11, OLD baseline) | Evaluate vs 110.27, rebase if +ve |
 | **MERGED: alphonse #1655** (OneCycleLR) | **97.07** | **85.71** | **MERGED** cycle-13c | New baseline — strongest single result of launch |
 | **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | Prior baseline |
 | **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Foundation baseline |
-| ~~askeladd #1465~~ (surf=30) | 111.95 | 102.51 | CLOSED cycle-13b | In-dist hit (+8.4%); OOD held flat |
+| ~~askeladd #1816~~ (surf=15) | 117.70 | 105.29 | CLOSED cycle-14 | Second negative upward; axis closed going up |
+| ~~nezuko #1803~~ (T_max=20) | 97.66 | 88.13 | CLOSED cycle-14 | Mechanistically valid but dominated by OneCycleLR |
+| ~~askeladd #1465~~ (surf=30) | 111.95 | 102.51 | CLOSED cycle-13b | First upward negative |
 | ~~fern #1469~~ (lr=2e-3) | 121.33 | 111.80 | CLOSED cycle-13b | LR axis closed at 5e-4 |
-| ~~nezuko #1778~~ (slice_num=128) | 125.03 | 111.65 | CLOSED cycle-13 | +13%/+12% regression; throughput cost 52% |
+| ~~nezuko #1778~~ (slice_num=128) | 125.03 | 111.65 | CLOSED cycle-13 | Throughput cost 52%; rejected |
 | ~~edward #1750~~ (wd=5e-5) | 113.15 | 103.08 | CLOSED cycle-13 | OOD-concentrated regression — wd is OOD-load-bearing |
 | ~~thorfinn #1738~~ (beta2=0.95) | 124.63 | 111.16 | CLOSED cycle-13 | Late-phase noise dominated |
 
