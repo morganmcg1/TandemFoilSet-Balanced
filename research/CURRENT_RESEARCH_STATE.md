@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 08:45 UTC (MERGE #2018 thorfinn LayerScale init=0.025 as 10th compound win val=74.415 −0.08% / test=65.524 −0.74%; γ_l sign-flip at 110.5% std/mean; CLOSE #1830 edward Fourier L=8 val_re_rand +9.19% interaction with surf-ch-weight; assign #2075 thorfinn layerscale-init-0.0125 bracket-down; assign #2078 edward gaussian-fourier-σ=10 pivot)
+- **Last updated**: 2026-05-13 10:00 UTC (Wave 11 kick-off: CLOSE #1828 frieren SmoothL1 β-bracket absorbed by LayerScale; CLOSE #1549 fern FiLM stalled 24h+; CLOSE #1753 askeladd adaptive-grad-clip +3.30%; CLOSE #2060 tanjiro coord-jitter-0.002 axis falsified; ASSIGN #2098 frieren lion-optimizer, #2099 fern weight-decay-3x, #2102 askeladd rmsnorm, #2105 tanjiro swiglu-activation)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -25,33 +25,53 @@ None received yet on this branch.
 
 ## Current research focus
 
-**Compounding past 9 merges (-26.2% total).** The merged baseline is now **74.476 val / 66.014 test** — 9 mechanisms stacked: L1 loss, stoch-depth schedule, cosine T_max=15, grad-clip max_norm=25, Fourier L=4, Fourier L=6, LayerScale CaiT init=0.05, per-channel surf-weight [0.5, 0.5, 2.0].
+**Wave 11 — diversifying optimizer/normalizer/activation axes after Wave 10 mechanism closures.**
 
-**Key mechanism insight from Wave 9 closures:**
-- Per-channel-decoder (#2020): shared cross-channel decoder features are **load-bearing** for OOD-geom generalization. Per-channel decoder axis closed after 2 tests (both half-capacity #1811 and full-capacity #2020 regressed). camber_rc splits regress most severely when channel specialization is forced.
-- Coord-jitter (#1852): position-conditioned regularization works (in-dist −4.83%) but the OOD-geom splits hold out different shapes, not re-meshed positions. OOD damage outweighs in-dist gain at std=0.005. Sweet spot search ongoing (std=0.002, tanjiro #2060).
+The compound stack has 10 merged wins (100.957 → 74.415 = **−26.3%**): L1 loss, stoch-depth [0,0.025,0.05,0.075,0.1], cosine T_max=15, grad-clip max_norm=25, Fourier L=4→L=6, LayerScale CaiT init=0.1→0.05→0.025, per-channel surf-weight [0.5,0.5,2.0].
 
-**Active hypothesis threads (Wave 10):**
-1. **n_head=4→8** (alphonse #2059): attention diversity at zero param cost. Tests whether finer-grained slice attention patterns help.
-2. **coord-jitter std=0.002** (tanjiro #2060): bracket-down from #1852 std=0.005. In-dist gain was -4.83%; find the operating-point sweet spot.
-3. **LayerScale init=0.0125** (thorfinn #2075): next bracket-down. Gain curve: -1.21% → -0.08%. Predicts floor at this level. Tests Outcome A (still winning), B (plateau), or C (regression).
-4. **Gaussian Fourier σ=10** (edward #2078): pivot from dyadic L=8 plateau. Fixed random Fourier features (Tancik NeurIPS 2020) to sidestep the val_re_rand / surf-ch-weight interaction.
-5. **SmoothL1 β=0.005** (frieren #1828): close-out bracket. Needs rebase onto post-#2018 baseline (74.415 / 65.524).
-6. **LR warmup H19** (nezuko #1754): won on old baseline. Needs rebase onto current stack.
-7. **Adaptive grad-clip K=100 α=1.5** (askeladd #1753): pod restart instability (14 restarts); push-before-train nudge sent.
-8. **FiLM global-cond** (fern #1549): highest-EV pending hypothesis. In 4th rebase cycle; CONFLICTING branch.
+**Wave 10 mechanism closures** established clear no-go zones:
+- **SmoothL1 (#1828)**: loss-landscape smoothing absorbed by LayerScale γ_l per-channel residual gating. Mechanism monotonically compressed as γ_l init decreased (0.1→0.05→0.025), with grad@ep14 rising 13.9→28.5→68.22. Axis closed.
+- **Adaptive grad-clip (#1753)**: over-clips on LayerScale-attenuated stack (1.5×q50 is too aggressive; uniform +3.30% regression across all splits). Axis closed.
+- **Coord-jitter (#2060)**: direction-inverted at both tested std values (0.005, 0.002); OOD damage grows as std decreases (camber_rc +4.91%→+6.47%), opposite of linear-shrinkage. Structural mechanism conflict with Fourier L=6 features. Axis closed.
+- **FiLM (#1549)**: stalled 24h+, 4 rebase requests, no terminal result. **Execution failure, not mechanism failure** — FiLM direction is not conclusively closed but needs a fresh implementation with simpler steps.
+
+**Wave 11 active threads** (all 8 students assigned):
+
+| Student | PR | Slug | Hypothesis |
+|---------|----|----|---------|
+| alphonse | #2059 | n_head=4→8 | Attention diversity at zero param cost |
+| edward | #2078 | gaussian-fourier-σ=10 | Continuous Fourier distribution vs dyadic L=8 plateau |
+| thorfinn | #2075 | layerscale-init-0.0125 | Test floor of LayerScale operating-point sweep |
+| nezuko | #1754 | lr-warmup-H19 | LR warmup rebase onto post-#2018 stack |
+| frieren | #2098 | lion-optimizer | Sign-momentum optimizer — orthogonal to all merged stack |
+| fern | #2099 | weight-decay-3x | wd=1e-4→3e-4: compound stack has more regularization now |
+| askeladd | #2102 | rmsnorm | LayerNorm→RMSNorm: no mean-centering, avoids LayerScale coupling |
+| tanjiro | #2105 | swiglu-activation | GELU→SwiGLU in MLP blocks: gated nonlinearity for flow routing |
+
+**Prioritized research themes for Wave 12** (depending on in-flight outcomes):
+
+1. **Encoder/representation**: Gaussian Fourier follow-ups if σ=10 wins (σ bracket {5,15,20}; learnable σ per-frequency); Re/AoA Fourier features on flow-condition dims (targets val_re_rand).
+2. **Architecture quality**: n_head follow-ups; deeper MLP (mlp_ratio=4 with SwiGLU capacity budgeting); separate Re/AoA token prepended to slice pool.
+3. **Optimizer**: Lion lr bracket (1e-4→2e-4→5e-5) if Lion wins; Sophia second-order if Lion regresses.
+4. **Normalization**: RMSNorm follow-ups (pre-norm vs post-norm placement); Group Norm on slice dimension.
+5. **Physics**: divergence-free auxiliary loss (λ∇·u penalty via autograd); Bernoulli pressure boundary constraint.
+6. **Conditioning**: FiLM conditioning with fresh implementation (simpler: add global Re/AoA embedding before first TransolverBlock only, not all blocks).
+7. **LayerScale finale**: init=0.0125 bracket (thorfinn in-flight); if Outcome C (regression), the LayerScale axis is bracketed at 0.025 optimum.
 
 **Closed axes (do not re-test):**
-- Dyadic Fourier: L=4 merged, L=6 merged, L=8 closed (val_re_rand × surf-ch-weight interaction) — pivot to Gaussian Fourier
+- Dyadic Fourier: L=4 merged, L=6 merged, L=8 closed (val_re_rand × surf-ch-weight interaction) → Gaussian Fourier in-flight
 - Per-channel decoder output heads (both half-capacity #1811 and full-capacity #2020)
 - Per-channel surf-weight: 4× is local optimum; 7× and 1× both worse
-- Output-side prediction calibration (log1p, γ-bias)
-- Gumbel/Ada-Temp slice collapse (3 tests)
-- Fixed-threshold grad-clip (bracket {1.0, 10, 25, 50} complete, 25 is optimum)
-- Stoch-depth single-knob (0.05 and 0.15 both worse, 0.10 is optimum)
-- Attn-mlp-dropout (compute tax + conflicts)
-- EMA weights (fights Fourier feature sharpening)
-- AdamW betas (0.9, 0.95) (non-uniform regression)
+- Coord jitter: std=0.005 direction-inverted, std=0.002 amplified regression; axis fully closed
+- SmoothL1 / loss-landscape smoothing: absorbed by LayerScale γ_l gating; all β values plateau
+- Adaptive grad-clip: over-clips on LayerScale-attenuated stack (static max_norm=25 is optimum)
+- EMA weights: fights Fourier high-freq feature sharpening
+- Output-side calibration: log1p (#1610, #1636), γ-bias (#1675) — all regressed
+- Gumbel/Ada-Temp slice collapse (3 tests, mechanism learned but outcome rejected)
+- Fixed-threshold grad-clip: bracket {1.0, 10, 25, 50} complete, 25 is optimum
+- Stoch-depth single-knob: V-shape; 0.05 (+13.7%) and 0.15 (+7.69%) both worse; 0.10 is optimum
+- Attn-mlp-dropout: compute tax + stoch-depth redundancy
+- AdamW betas (0.9, 0.95): non-uniform regression, regime mismatch
 
 **Output-side calibration is fully exhausted** after wave-4 results: #1610
 (full log1p), #1636 (pressure-only log1p), #1675 (per-channel γ, β output
@@ -256,18 +276,18 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 - **Optimizer family pivots** — Lion (Chen 2023), Sophia (Liu 2023). Only if both
   betas-refresh (#1773) and warmup (#1754) regress.
 
-## All 8 students currently assigned (post-#2018 merge / 10th compound win — Wave 10)
+## All 8 students assigned — Wave 11
 
 | Student | PR | Status |
 |---------|----|--------|
 | alphonse | #2059 | WIP — n_head=4→8 attention diversity at zero param cost |
-| askeladd | #1753 | WIP — adaptive grad-clip (1.5× running median K=100; 14 pod restarts, push-before-train nudge sent) |
-| edward | #2078 | NEW — Gaussian Fourier σ=10 pivot from dyadic L=8 (val_re_rand interaction blocked L=8) |
-| fern | #1549 | WIP — FiLM global-cond rebase-v2 (4th send-back; CONFLICTING) |
-| frieren | #1828 | WIP — SmoothL1 β=0.005 (CONFLICTING; rebase + re-run nudge sent) |
-| nezuko | #1754 | WIP — LR warmup H19 rebase (stale; nudge sent) |
-| tanjiro | #2060 | WIP — coord-jitter std=0.002 bracket-down |
-| thorfinn | #2075 | NEW — LayerScale init=0.0125 (bracket-down from merged 0.025; tests floor of operating-point sweep) |
+| askeladd | #2102 | NEW Wave 11 — RMSNorm replacing LayerNorm in all TransolverBlocks |
+| edward | #2078 | WIP — Gaussian Fourier σ=10 pivot from dyadic L=8 |
+| fern | #2099 | NEW Wave 11 — weight decay 3× bracket (wd=1e-4→3e-4) |
+| frieren | #2098 | NEW Wave 11 — Lion optimizer (sign-momentum, lr=1e-4, wd=3e-4) |
+| nezuko | #1754 | WIP — LR warmup H19 rebase onto post-#2018 stack |
+| tanjiro | #2105 | NEW Wave 11 — SwiGLU activation (gated nonlinearity in MLP blocks) |
+| thorfinn | #2075 | WIP — LayerScale init=0.0125 bracket-down from merged 0.025 |
 
 Zero idle students. Zero idle GPUs.
 

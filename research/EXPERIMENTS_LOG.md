@@ -8,6 +8,96 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 09:40 — PR #2060 (tanjiro coord-jitter-std=0.002) — **CLOSED** (+1.47% val regression; jitter axis closed)
+
+- Branch: `charliepai2g24h4-tanjiro/coord-jitter-std-0.002`
+- Hypothesis: Bracket-down from #1852 (std=0.005): halve jitter intensity to std=0.002. Tests whether reduced std preserves in-dist gain while shrinking OOD-geom regression.
+- Metric artifacts: `target/models/model-charliepai2g24h4-tanjiro-coord-jitter-std-0.002-20260513-081718/metrics.jsonl`
+
+| Metric | std=0.002 (#2060) | std=0.005 (#1852) | Baseline (#1896) |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **75.569** | 75.159 | **74.476** |
+| Δ vs baseline | **+1.47% REGRESSION** | +0.92% | — |
+| test_avg/mae_surf_p | **67.273** | 66.445 | **66.014** |
+| Δ vs baseline | **+1.91% REGRESSION** | +0.65% | — |
+
+Per-split val (bracket comparison):
+
+| Split | std=0.002 | std=0.005 | Baseline |
+|---|---:|---:|---:|
+| val_single_in_dist     | 80.442 (−5.45%) | 80.960 (−4.84%) | 85.075 |
+| val_geom_camber_rc     | 88.115 (+6.47%) | 86.831 (+4.91%) | 82.764 |
+| val_geom_camber_cruise | 59.128 (+3.73%) | 58.914 (+3.35%) | 57.002 |
+| val_re_rand            | 74.592 (+2.09%) | 73.931 (+1.19%) | 73.063 |
+| **val_avg**            | **75.569 (+1.47%)** | **75.159 (+0.92%)** | **74.476** |
+
+**Hypothesis falsified — direction-inverted, not parameterized:** Both OOD-geom splits (camber_rc, camber_cruise) regress MORE as std decreases (camber_rc: +4.91% → +6.47%), while the in-dist split improves MORE as std decreases (−4.84% → −5.45%). This is the opposite of a linear-shrinkage parameterization — the mechanism conflict is structural, not intensity-dependent.
+
+The in-dist split sees jitter as noise-regularization (benefiting from any amount); the OOD-geom splits see jitter as a corrupting perturbation of the spatial position representation that they need clean for geometry extrapolation. No std setting resolves this split.
+
+**Axis closure (2 experiments):** Both std=0.005 and std=0.002 falsify the coord-jitter direction on the post-Fourier compound stack. Closed with mechanism finding: "coord jitter is a position-conditioned regularizer that conflicts with Fourier L=6's high-frequency spatial features; the conflict grows as jitter std decreases, indicating a structural coupling that bracket-down cannot resolve."
+
+---
+
+## 2026-05-13 09:40 — PR #1753 (askeladd adaptive-grad-clip K=100 α=1.5) — **CLOSED** (+3.30% val regression)
+
+- Branch: `charliepai2g24h4-askeladd/adaptive-grad-clip-q50-a1.5`
+- Hypothesis: Replace static max_norm=25 with adaptive clip at 1.5× running q50 (K=100 steps) + warmup_threshold=100. Tests whether the gradient distribution's median is a better scale reference than a global max_norm constant.
+- Metric artifacts: `models/model-charliepai2g24h4-askeladd-adaptive-grad-clip-q50-a1.5-20260513-075927/metrics.jsonl`
+
+| Metric | Adaptive clip (#1753) | Baseline (#2018) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | **76.931** | **74.415** | **+3.30% REGRESSION** |
+| test_avg/mae_surf_p (4-split) | **68.005** | **65.524** | **+3.79% REGRESSION** |
+
+Per-split val: single_in_dist=84.902 (+4.83%) / camber_rc=84.969 (+0.27%) / camber_cruise=61.892 (+7.74%) / re_rand=75.961 (+1.65%). Uniform regression across all splits — consistent with global regularization.
+
+**Mechanism analysis:** Adaptive clip at 1.5× q50 is significantly more aggressive than static max_norm=25 on the LayerScale-attenuated stack. With LayerScale γ_l=0.025 and block-0 sign-flip channels (std/mean=110.5%), per-step gradient norm distributions are highly variable per-channel. The median q50 of these distributions sits far below the static max_norm=25 — meaning the adaptive ceil clips the majority of normal training steps where static does not. This over-regularization explains the uniform regression across all splits.
+
+**Context:** The static grad-clip max_norm=25 (PR #1637) was explicitly tuned on this architecture. Adaptive variants require separate calibration; no obvious parameterization wins. Gradient-clip axis closed.
+
+---
+
+## 2026-05-13 09:40 — PR #1828 (frieren SmoothL1 β-bracket, β=0.005 close-out) — **CLOSED** (+0.38% val; mechanism absorbed by LayerScale)
+
+- Branch: `charliepai2g24h4-frieren/smooth-l1-loss-beta-001`
+- Hypothesis (H25): Replace L1 loss with SmoothL1 (Huber, β=0.01 → β=0.005 close-out). Tests whether smooth-near-zero gradient eliminates late-training zigzag oscillation that L1's subgradient discontinuity causes.
+- Metric artifacts: `models/model-charliepai2g24h4-frieren-smooth-l1-loss-beta-0.005-20260513-075416/metrics.jsonl`
+
+**β-bracket trajectory summary:**
+
+| Stack | γ_l init | β | val Δ% | test Δ% | grad@ep14 |
+|---|---:|---:|---:|---:|---:|
+| post-#1548 (L=4, no LS) | n/a | 0.01 | **−0.97% WIN** | **−1.82% WIN** | 13.9 |
+| post-#1799 (L=6, LS=0.1) | 0.1 | 0.01 | +0.05% flat | −1.03% | 28.5 |
+| post-#2018 (L=6, LS=0.025) | 0.025 | 0.005 | **+0.38% REGRESSION** | −0.39% | 68.22 |
+
+**Key mechanism finding — SmoothL1 absorbed by LayerScale:**
+
+The grad@ep14 trace (13.9 → 28.5 → 68.22) directly demonstrates the absorption: as LayerScale γ_l init decreases (0.1 → 0.05 → 0.025), per-channel residual gating becomes more aggressive, absorbing the late-cooldown gradient-pinning effect that SmoothL1 provides. At γ_l init=0.025 with sign-flip channels (std/mean=110.5%), the per-channel gradient flow is too variable for SmoothL1's smooth-near-zero window to dominate late-epoch behavior.
+
+The per-split signature also inverted between post-#1799 (test_single_in_dist was the biggest winner at −3.40%) and post-#2018 (test_single_in_dist became the biggest loser at +3.01%). Consistent with LayerScale's sign-flip channels placing different splits' residuals inside/outside the β-window.
+
+**Axis closure:** Loss-landscape smoothing (SmoothL1) on the post-LayerScale stack is absorbed by the per-channel residual gating mechanism. Both β values (0.01 and 0.005) land in plateau territory. Tighter β-windows don't re-engage the mechanism. The loss-landscape direction is closed on this compound stack.
+
+---
+
+## 2026-05-13 09:40 — PR #1549 (fern FiLM global conditioning) — **CLOSED** (stalled, no terminal result)
+
+- Branch: `charliepai2g24h4-fern/film-global-cond`
+- Hypothesis: FiLM (Feature-wise Linear Modulation) conditioning on global flow params (Re, AoA) in each Transolver block. Tests whether explicit global-flow awareness improves cross-regime generalization.
+- Metric artifacts: None committed on the current stack (stalled at pre-merge baseline from 2026-05-12 21:55 UTC)
+
+**Status:** 4 rebase requests over 10+ hours with no terminal result. Last student commit was at 21:55 UTC on 2026-05-12; pod had 2 restarts in 15h. Baseline has moved 8 compound wins since the one preliminary result (81.291 on baseline 90.294).
+
+**The original pre-merge result** (val=81.291 on baseline 90.294, 10.5% improvement) was among the strongest single-direction signals in early rounds but was never confirmed on the compounding stack.
+
+**Hypothesis note:** FiLM conditioning on flow parameters is a theoretically strong direction (Perez et al. 2018, tested in many conditional regression settings). The lack of a terminal result is a student-execution issue, not a direction issue. If reassigned with simpler instructions and cleaner implementation, this direction could still be tested.
+
+**Closed due to execution failure, not mechanism failure.** FiLM axis is NOT conclusively closed — reassignment with a fresh, simpler implementation approach recommended.
+
+---
+
 ## 2026-05-13 08:35 — PR #2018 (thorfinn LayerScale init=0.025) — **MERGED** (10th compound win)
 
 - Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.025`
