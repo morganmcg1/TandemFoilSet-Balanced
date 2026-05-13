@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-05-13 07:55 — PR #1786: Higher LR (1e-3/2e-3) on AdamW+EMA base (frieren) — CLOSED SUPERSEDED
+
+- **Branch:** `willowpai2g24h5-frieren/higher-lr-ema`
+- **Hypothesis:** EMA smoothing absorbs main-model noise, so 2–4× the baseline AdamW lr=5e-4 should be safe and reach a lower-loss basin within 16 epochs.
+- **W&B runs:** `uvc7ljtw` (Arm 1: lr=1e-3), `17oh10lv` (Arm 2: lr=2e-3)
+
+| Metric | Baseline #1607 (lr=5e-4) | Arm 1 (lr=1e-3) | Arm 2 (lr=2e-3) |
+|--------|--------------------------|-----------------|-----------------|
+| val_avg/mae_surf_p | 77.054 | **74.508 (−3.30%)** | 74.595 (−3.19%) |
+| test_avg/mae_surf_p | 68.265 | **64.380 (−5.69%)** | 65.522 (−4.02%) |
+| test/geom_camber_cruise | 48.52 | **44.51 (−8.3%)** | 44.30 (−8.7%) |
+| test/single_in_dist | 75.31 | **70.64 (−6.2%)** | 73.65 (−2.2%) |
+
+**Result:** CLOSED (direction superseded). Arm 1 (lr=1e-3) was a genuine improvement on the pre-Lion AdamW+EMA base (−3.3% val / −5.7% test), validating the EMA-absorbs-noise hypothesis. However, two subsequent merges moved the baseline to val=56.58 (Lion+MAE), and Arm 1's result (val=74.51) is +31.7% vs the current best. The LR scaling direction on the new compound is covered by thorfinn's #1932 (Lion lr=2e-4). Frieren reassigned to batch_size+LR scaling (PR #2052).
+
+**Key finding:** Mechanism confirmed — EMA val descended monotonically from 197.79 to 74.51 despite main-model wobble (88–227 range). Cruise split (−8.3%) and single_in_dist (−6.2%) are the biggest movers. lr=2e-3 without warmup: good val but worse test (65.52 vs 64.38), consistent with over-aggressive LR degrading OOD generalization.
+
+---
+
+## 2026-05-13 07:54 — PR #1752: surf_weight=5 on pre-Lion AdamW+EMA base (nezuko) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-nezuko/surf-weight-sweep`
+- **Hypothesis:** surf_weight=10 may be overcorrecting post-Huber+EMA; reducing to 5 or 7 might improve balance between surface and volume.
+- **W&B run:** `4pvy6khr` (Arm 1: surf_weight=5; Arm 2 skipped per stop rule)
+
+| Metric | Baseline #1607 | Arm 1 (surf_weight=5) | Δ |
+|--------|----------------|-----------------------|---|
+| val_avg/mae_surf_p | 77.054 | 83.511 | **+8.4% (regression)** |
+| test_avg/mae_surf_p | 68.265 | 73.759 | **+8.0% (regression)** |
+| val/single_in_dist | 85.45 | 93.557 | +9.5% |
+| val/geom_camber_cruise | 57.80 | 63.291 | +9.5% |
+
+**Result:** CLOSED. Hypothesis falsified definitively. surf_weight=5 is uniformly worse on every val and test split — *including* volume MAE (also regressed), so this isn't a surface/volume tradeoff; it's a uniform loss of gradient signal. Stop rule triggered (Arm 1 +8.4% > 3pt threshold); Arm 2 (surf_weight=7) not run. vs Lion+MAE baseline (val=56.58): +47.6% regression.
+
+**Key finding:** Surface nodes are underfit at the 30-min compute budget. Reducing surf_weight starves surface gradient signal — model spends capacity on volume, which is also underfit and doesn't improve either. surf_weight=10 was tuned correctly; the 'EMA+Huber adds slack for lower weighting' intuition was wrong. The unexplored direction is *upward* (surf_weight=15–20), especially with MAE loss where there's no Huber quadratic dampening near zero.
+
+**Nezuko reassigned:** PR #2056 — surf_weight sweep on Lion+MAE (Arm 1: sw=5 apples-to-apples, Arm 2: sw=15 heavier emphasis).
+
+---
+
 ## 2026-05-13 06:35 — PR #1825: MAE (L1) loss on Lion+EMA base (askeladd) — MERGED NEW BEST
 
 - **Branch:** `willowpai2g24h5-askeladd/mae-loss`
