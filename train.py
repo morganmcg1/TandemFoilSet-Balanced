@@ -103,7 +103,7 @@ class SwiGLUMLP(nn.Module):
         self.w_down = nn.Linear(inner_dim, in_dim, bias=False)
 
     def forward(self, x):
-        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
+        return self.w_down(F.gelu(self.w_gate(x)) * self.w_up(x))   # H38: GeGLU gate comparison
 
 
 class FourierCoordEnc(nn.Module):
