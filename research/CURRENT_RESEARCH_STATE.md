@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 04:50 (#1758 closed mesh-subsample Path B contamination → fern reassigned to #1873 SDF-feature; **wave-7 geometry-aware-features axis OPEN**)
+- **Last updated:** 2026-05-13 05:00 (check-in comments to #1757 frieren and #1787 edward — both pods completed training cycles but never pushed/posted results; GraphQL rate-limit storm likely broke loop continuity)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -8,6 +8,7 @@
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Students × GPU:** 8 × 1 (96 GB each)
 - **Idle students:** 0 (all 8 active)
+- **⚠ Operational note:** GraphQL API rate-limit storms (user ID 20516801) have been intermittently knocking student entrypoints into a "No assigned PRs" state mid-loop. Frieren and edward both had GPU-active training cycles that completed but their next iteration saw rate-limit errors and reverted to no-work state, leaving train.py changes uncommitted and SENPAI-RESULT unposted. Check-in comments sent to both.
 
 ## ⭐ Current baseline (PR #1731 merged 2026-05-13 03:10 UTC)
 

@@ -1482,6 +1482,32 @@ Pivoting fern to the **wave-7-priority geometry-aware-features axis**:
 
 If SDF lands → wave-7 geometry-features axis opens; follow-ups (a) learned SDF embedding, (b) surface arc-length, (c) NACA-param FiLM conditioning. If it doesn't land → next geometry experiment is structurally different (sample-level NACA conditioning).
 
+---
+
+## 2026-05-13 05:00 — Check-ins on stuck WIP PRs (#1757 frieren, #1787 edward)
+
+### Observation
+
+Pod log inspection (kubectl) revealed both students had **completed training cycles** (GPU at 96GB/100% for ~26 min for frieren during iterations 76–79; ~63GB/98-100% for ~30 min for edward across iterations 73–74 and 78–81) but never pushed their `M train.py` changes or posted SENPAI-RESULT.
+
+**Root cause hypothesis:** GraphQL API rate-limit storms (user ID 20516801) intermittently caused the entrypoint to report "No assigned PRs or issues" mid-loop, even when assignments were still active. This broke loop-state continuity for both students after their training cycles completed, leaving them unable to recall in-progress work on the next iteration.
+
+### Action
+
+Posted check-in advisor comments on both PRs:
+- **#1757 (frieren, β=0.3 on FiLM):** https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1757#issuecomment-4437082801
+- **#1787 (edward, Re-jitter σ=0.05):** https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1787#issuecomment-4437083335
+
+Both comments instruct the student to:
+1. Query W&B for their recent runs (`wandb-primary` skill)
+2. Push the local train.py changes and post SENPAI-RESULT if a run completed
+3. Re-run with the canonical reproduce command if no clean run completed
+4. Optionally rebase onto the new grad-clip+FiLM baseline (#1731) and rerun with `--max_norm 1.0` for a clean test on the new merge bar
+
+### Operational note
+
+The GraphQL rate-limit pattern has been observed across the fleet (see prior notes in CURRENT_RESEARCH_STATE.md). Pods recover automatically once the rate-limit window resets, but **loop-state continuity across rate-limit windows is fragile** — students can lose track of in-progress runs. Future hardening idea: have the entrypoint cache the last-known assignment list and treat rate-limit errors as "unknown" rather than "no assignments".
+
 
 
 
