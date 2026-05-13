@@ -2504,3 +2504,69 @@ Student posted SENPAI-RESULT for this historical record. β=0.3 rerun now in pro
 - **Target:** val < 66.66 / test < 58.32
 - 2-arm sweep: max_norm=0.75 (arm 1) and max_norm=1.0 (arm 2). All other config identical to β=0.3 baseline.
 
+
+---
+## 2026-05-13 12:53 — PR #2187 CLOSED willowpai2g48h2-tanjiro (Earlier SWA start frac=0.6)
+
+- **Branch:** `willowpai2g48h2-tanjiro/swa-start-0p6`
+- **W&B:** `cxxo7tnp`
+- **Result:** SWA val=**72.2168** / test=**63.3307** vs β=0.3 baseline 66.66/58.32 = **+8.34% / +8.59% regression** (also +2.25% / +2.00% vs old #2082 baseline)
+
+### Per-split SWA (vs old #2082 baseline, since this ran on β=0.0 stack)
+
+| Split | Baseline #2082 | frac=0.6 SWA | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 78.743 | 82.332 | +4.6% |
+| geom_camber_rc | 84.063 | 86.381 | +2.8% |
+| geom_camber_cruise | 50.114 | 50.025 | −0.2% |
+| re_rand | 69.588 | 70.129 | +0.8% |
+| **avg** | **70.627** | **72.217** | **+2.25%** |
+
+### Analysis — root cause proven mechanistically by student
+
+Per-epoch base model val during the SWA window (frac=0.6):
+- epoch 10 (1st SWA epoch, frac=0.6): val=83.45 — model still rapidly descending
+- epoch 11 (2nd SWA epoch): val=81.02
+- epoch 12 (1st SWA epoch at frac=0.75): val=73.70 — approaching convergence
+- epoch 13 (best base): val=71.30
+
+SWA from frac=0.6 includes 2 very high-error snapshots (epochs 10-11) that drag the average UP. The cosine schedule doesn't reach flat-loss territory until epoch 12-13 with T_max=15 and 30-min timeout.
+
+**Banked mechanism (important):** SWA requires lr to be at <0.3× initial lr. With CosineAnnealingLR(T_max=15) and 30-min timeout cutting at epoch 13, the flat region only begins at epoch ~12 (frac≈0.80). Any SWA frac < 0.75 samples pre-convergence snapshots. This bounds swa_start_frac from below.
+
+**Follow-up assigned:** EMA model weights (#2285 tanjiro) — continuous averaging that doesn't require lr plateau assumption.
+
+---
+## 2026-05-13 12:55 — PR #2063 W&B VERIFIED + SENPAI-RESULT NUDGE
+
+- **W&B run `5hp3gid7`** (`lion-lr3e-4-wd3e-4-on-rff-kendall-beta0p3`) completed at 12:26Z
+- **Result:** SWA val=**47.6400** / test=**40.5700** — confirmed by independent W&B subagent
+
+### Verified per-split SWA (vs β=0.3 baseline 66.66/58.32)
+
+| Split | SWA Val | SWA Test |
+|---|---:|---:|
+| single_in_dist | 48.45 | 42.40 |
+| geom_camber_rc | 62.85 | 55.25 |
+| geom_camber_cruise | 29.71 | 24.41 |
+| re_rand | 49.55 | 40.20 |
+| **avg** | **47.64** | **40.57** |
+
+Lion + β=0.3 DO compound (val 47.64 < β=0.0 Lion val 50.97). This is the strongest result on the TandemFoilSet benchmark in the programme. Advisor nudged student to post SENPAI-RESULT — pending merge.
+
+---
+## 2026-05-13 12:56 — PR #2170 SENT BACK willowpai2g48h2-nezuko (nfeatures=32 needs β=0.3 rerun)
+
+- **W&B run `ak3bfwtb`** completed 12:26Z
+- **Result:** val=**67.7300** / test=**58.9600** vs β=0.3 baseline 66.66/58.32 = +1.6% / +1.1% regression
+- **vs OLD #2082 baseline (70.63):** −4.1% win — but baseline moved while running
+
+67.73 is 0.21 above the 67.52 close threshold. Sent back for β=0.3 rerun to test composition. If wins: compound improvement. If still 67+ on β=0.3: close.
+
+---
+## 2026-05-13 12:57 — PR #2285 ASSIGNED willowpai2g48h2-tanjiro (EMA weights on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-tanjiro/ema-weights-on-beta0p3`
+- **Hypothesis:** Replace SWA with EMA (decay=0.999, per-batch update). EMA maintains a continuous weighted average throughout training — no lr-flat-region requirement. Directly addresses the root cause of SWA frac=0.6 failure.
+- **Target:** val < 66.66 / test < 58.32
+- Single arm, EMA decay=0.999, all other config identical to β=0.3 baseline.
