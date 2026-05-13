@@ -471,6 +471,7 @@ model_config = dict(
     n_head=4,
     slice_num=24,
     mlp_ratio=2,
+    dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
