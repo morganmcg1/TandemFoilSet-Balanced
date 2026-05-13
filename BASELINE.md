@@ -200,3 +200,52 @@ cd target && python train.py \
 - Late training oscillation at 5e-3: best epoch 11 (97.99), oscillates to ~108-113 before settling to 99.85 at epoch 14.
 - Test 3-split slightly regresses (+0.85) vs val improvement (−0.17); cruise (finite now) dramatically improves (73→55).
 - **All future PRs must beat `val_avg/mae_surf_p < 97.9914` to merge.**
+
+---
+
+## 2026-05-13 09:00 — PR #2031: Weight decay re-tune {1e-4 → 5e-4}
+
+- **val_avg/mae_surf_p: 93.6198** (best checkpoint epoch 14, still improving at wall-clock cap) — **−4.46% vs 97.9914**
+- **test_avg/mae_surf_p: 83.8825** — **−5.26% vs 88.5311**
+- **W&B run:** `u3q47f4s` (weight_decay=5e-4 arm)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 5e-4 \
+      --wandb_group weight-decay-sweep \
+      --wandb_name weight-decay-5e-4 \
+      --agent willowpai2g48h4-fern
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 14)
+
+| Split | mae_surf_p | vs prior baseline (97.9914) |
+|-------|-----------|------------------------------|
+| `val_single_in_dist` | 109.61 | 120.31 → **−8.9%** ✓ |
+| `val_geom_camber_rc` | 118.05 | 115.98 → +1.8% ≈ |
+| `val_geom_camber_cruise` | 61.07 | 66.04 → **−7.5%** ✓ |
+| `val_re_rand` | 85.75 | 89.64 → **−4.3%** ✓ |
+| **val_avg** | **93.6198** | **−4.46% ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior baseline (88.5311) |
+|-------|-----------|------------------------------|
+| `test_single_in_dist` | 101.87 | 112.27 → **−9.3%** ✓ |
+| `test_geom_camber_rc` | 105.24 | 104.81 → +0.4% ≈ |
+| `test_geom_camber_cruise` | 51.43 | 55.36 → **−7.1%** ✓ |
+| `test_re_rand` | 76.99 | 81.69 → **−5.8%** ✓ |
+| **test 4-split mean** | **83.8825** | **−5.26% ✓** |
+| **test 3-split mean (no cruise)** | **94.7000** | |
+
+### Notes
+
+- `weight_decay=5e-4` (5× prior `1e-4`). Stacks on the full Huber δ=0.5 + decoupled surf_head_lr=5e-3 recipe.
+- Best epoch=14 means trajectory was still descending at the wall-clock cap. Cosine LR `T_max=50` means we've only traversed 28% of the cycle; true plateau not reached.
+- **Test gain (−5.26%) stronger than val gain (−4.46%)** — not val-overfitting; the regularization gain generalizes.
+- Wins on 3 of 4 val/test splits cleanly; flat on `geom_camber_rc` (the OOD camber holdout). The biggest wins are on splits where the surf_head's 10× LR was pushing hardest (`single_in_dist`, `cruise`).
+- Late-epoch trajectory note: WD=5e-4 had a transient epoch-12 spike (152.99) followed by recovery to 93.62 at epoch 14 — same late-epoch oscillation pattern observed across other baselines, but the post-spike recovery breached a new minimum.
+- **All future PRs must beat `val_avg/mae_surf_p < 93.6198` to merge.**
+- **Hyperparameter staleness principle confirmed:** the −4.46% gain from a single 5× WD bump validates that the optimizer hyperparameters inherited pre-Huber/pre-decoupled-LR are systematically suspect. Re-evaluation of other axes (encoder_lr, β2, etc.) on the new baseline is warranted.
