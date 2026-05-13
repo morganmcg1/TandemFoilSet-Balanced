@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-13 19:30 — PR #2490: slice_num=16/8 stack on n_head=2+n_layers=3 (frieren) — CLOSED, ANTI-STACKS
+
+- **Branch:** `willowpai2g24h5-frieren/slice16-stack-n-layers-3`
+- **Hypothesis:** slice_num=16 (and #2 deeper probe slice_num=8) should stack with new n_layers=3 baseline since per-head dim=64 unchanged from #2337 (where slice16 won at n_layers=5).
+- **W&B runs:** `mj9gjpgp` (slice16), `5nq5jrp6` (slice8)
+
+| Arm | slice_num | val | test | Δ vs #2400 (43.14/36.95) | Epochs |
+|-----|-----------|-----|------|--------------------------|--------|
+| 1 | 16 | 46.22 | 39.88 | +3.08 / +2.93 ✗ | 28 |
+| 2 | 8 | 46.67 | 39.09 | +3.53 / +2.14 ✗ | 29 |
+| Baseline #2400 | 32 | **43.14** | **36.95** | — | 34 |
+
+Per-test-split (mae_surf_p): all 4 splits regress on both arms. single_in_dist +1.94/+4.75, geom_camber_rc +1.42/+3.58, geom_camber_cruise +1.19/+2.34, re_rand +1.82/+3.20.
+
+**Result:** CLOSED. slice_num=32 is the local optimum at n_layers=3.
+
+Key findings:
+1. **slice_num signal INVERTS with depth.** At n_layers=5: monotonic slice16 < slice32 < slice64 (#2337 etc.). At n_layers=3: opposite — slice32 < slice16 < slice8. Depth and tokens are not independent.
+2. **Mechanism reframe (frieren's analysis):** at deeper stacks the network compensates for coarser tokens via depth-stacked representation; at shallow depth, finer tokens are needed to preserve spatial bandwidth in the *input* itself. The per-head-dim framing (which was load-bearing on a single #2337 datapoint) does not survive depth change.
+3. **slice_num=8 anomalous epoch_time_s spike (96.95 final vs ~45 expected):** wandb shows it ramping up sharply in last ~8 epochs from low baseline. Likely host-side I/O contention with parallel arm1 run. Training quality unaffected.
+4. **Methodology lesson:** future stack-from-X-to-Y predictions require ≥1 same-axis datapoint in the destination compound; cross-compound transfer is not safe.
+
+**Frieren reassigned:** cosine T_max tuning via --epochs (matched scheduler to realized epoch count).
+
+---
+
 ## 2026-05-13 19:00 — PR #2438: Lion β2 sweep on n_head=1 (fern) — CLOSED, β2=0.99 LOCKED AT N_HEAD=1
 
 - **Branch:** `willowpai2g24h5-fern/beta2-n-head-1-slice32`
