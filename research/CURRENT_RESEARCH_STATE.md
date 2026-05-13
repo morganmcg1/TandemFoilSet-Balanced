@@ -33,7 +33,7 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 - **#2246 fern (grad-clip max_norm=5.0 bisect)**: on grad-clip baseline (just assigned; bisect clip threshold between 1.0 winner and unclipped)
 - **#2180 alphonse (dropout=0.1 in PhysicsAttention)**: on vol-Huber baseline, grad-clip heads-up posted
 - **#2163 askeladd (per-channel β: β_p=0.25)**: on vol-Huber baseline, grad-clip heads-up posted
-- **#2041 thorfinn (surf_weight 10 → 5)**: on vol-Huber baseline, grad-clip heads-up posted; code committed (11:12)
+- **#2341 thorfinn (surf_weight 10 → 20)**: NEWLY ASSIGNED (14:00); bisect surf_weight upward — thorfinn's own analysis shows surf under-weighted under grad-clip at w=5, testing if w=20 over-corrects or wins
 - **#2017 edward (weight_decay → 2e-4)**: sent back for bisection, grad-clip heads-up posted
 - **#1940 frieren (batch_size=8 + sqrt-LR)**: on compile baseline, code committed (11:12), grad-clip heads-up posted
 - **#1843 nezuko (Cosine T_max=35)**: on compile baseline, code committed (09:21), grad-clip heads-up posted
@@ -79,9 +79,10 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | WIP, current compile baseline — vol-Huber heads-up posted |
 | #2017 | edward    | weight_decay 1e-4 → 5e-4         | SENT BACK for wd=2e-4 bisection (val +0.67% miss; in-dist improves, rc OOD regresses — over-regularization signature) |
 | #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
-| #2041 | thorfinn  | surf_weight 10 → 5               | WIP, vol-Huber baseline (just assigned; re-calibrate after vol-Huber shifted gradient balance) |
+| #2041 | thorfinn  | surf_weight 10 → 5               | CLOSED: regresses +2.7%/+2.6% under grad-clip — directional reversal. surf_w=10 was better-calibrated when grad-clip normalises per-batch scale variance. |
+| #2341 | thorfinn  | surf_weight 10 → 20              | WIP, grad-clip baseline (just assigned 14:00; bisect upward per thorfinn's mechanism analysis) |
 
-**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 11. **Open:** 8 (tanjiro #1589, frieren #1940, nezuko #1843, thorfinn #2041, edward #2017, askeladd #2163, alphonse #2180, **fern #2246**).
+**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 12 (+#2041 surf_w=5 directional reversal under grad-clip). **Open:** 8 (tanjiro #1589, frieren #1940, nezuko #1843, **thorfinn #2341**, edward #2017, askeladd #2163, alphonse #2180, fern #2246).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -91,7 +92,7 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 
 - **Compute is STILL binding at 35 epochs** (both #1910 vol-Huber seeds best=last, same as compile). Highest-EV remaining levers: lr-schedule alignment (#1843 nezuko T_max=35), batch-size scaling (#1940 frieren bs=8), possibly max-autotune compile mode.
 - **Loss-formulation wins have stacked:** surf-Huber (#1505, −4.7%) + vol-Huber (#1910, −3.5%) = −8% combined. The OOD splits continue to be where Huber suppression helps most. β=0.75 (#1882 askeladd) is in-flight as a tune above the β=0.5 optimum.
-- **surf_weight re-calibration is the natural next step** after vol-Huber (#2041 thorfinn): surf_weight=10 was calibrated with noisy-MSE vol; now that vol uses Huber, the 10× upweighting may over-emphasize surf. vol-Huber's in-dist surf_p +3.8% regression is the key motivating signal.
+- **surf_weight axis update:** surf_w=5 (#2041) REGRESSED under grad-clip (+2.7%). Mechanism: grad-clip absorbs per-batch scale variance; surf_w=10 was already appropriately calibrated, lowering it starved surface signal. **Next test: surf_w=20 (#2341 thorfinn)** — bisect the upward direction. If surf_w=20 also regresses, close the axis (surf_w=10 is optimal). If wins, bisect at 15.
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.

@@ -733,3 +733,33 @@ Broadcast heads-up to all 7 in-flight PRs with new bar val < 60.09, test < 53.37
 - **fern → PR #2246 (max_norm=5.0 bisect):** bisect between 1.0 (winner) and unclipped (~∞ baseline). max_norm=5.0 still clips most steps but at 5× magnitude. Tests if softer normalisation finds a better sweet spot.
 - **If the bisect finds an optimum above 1.0:** the step-size-decoupling story is confirmed; the optimal max_norm is the geometric mean of the raw-norm distribution.
 - **Long-term question:** could an adaptive clip (clip by quantile of running norm, not fixed threshold) do even better? Lower priority for round 1.
+
+## 2026-05-13 14:00 — PR #2041 CLOSED: surf_weight 10 → 5 (post-grad-clip)
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/surf-weight-5
+- **Hypothesis:** vol-Huber shifted the loss balance; lowering surf_weight from 10→5 would recover in-dist surf_p quality. Originally predicted −1% to −3% val under the vol-Huber baseline.
+
+### Results (2 seeds, post-grad-clip rebase)
+
+| Run | Seed | `best_val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `8lezw188` | 1 | 62.540 | 56.882 | 34 | 30.5 min |
+| `cx7j7aza` | 2 | **61.692** | **54.764** | 34 | 30.6 min |
+| **Baseline #1692** | 2 (`aoehi425`) | **60.093** | **53.370** | 35 | 30.3 min |
+
+Per-split test surf_p (better seed `cx7j7aza`): single_in_dist=63.66, geom_camber_rc=69.33, geom_camber_cruise=33.94, re_rand=52.14
+
+Δ vs baseline: val **+2.7%** (worse), test **+2.6%** (worse). 3/4 splits regressed including the in-dist split the hypothesis aimed to fix.
+
+### Conclusion
+
+**CLOSED — hypothesis falsified.** surf_weight=5 regresses under grad-clip, opposite the predicted direction. The student's own mechanistic analysis explains the reversal cleanly: with clip_grad_norm_(max_norm=1.0) engaging 100% of steps, the per-batch scale variance that surf_weight=10 was implicitly compensating for is already absorbed by the normalised gradient direction. Lowering surf_weight from 10→5 reduces surf's share of the unit-norm step from ~50% to ~33%, directly under-training the surface prediction in all splits.
+
+Pre-grad-clip data point (`9tj1jm2b`): surf_w=5 on vol-Huber only baseline gave val=65.154, test=57.621 (tiny −0.4/−0.5% win within noise). The reversal is a pure grad-clip interaction, not a noise effect.
+
+### Follow-up
+
+- **thorfinn → PR #2341 (surf_weight=20 bisect):** test inverse direction — if surf is under-weighted at 10, going to 20 should win. Closes the axis whether it wins or loses.
+- If surf_w=20 also regresses: surf_w=10 is the optimum and the axis is closed.
+- Per-node loss normalization (divide loss terms by node count) noted as a cleaner long-term fix to remove the surf_weight heuristic entirely.
