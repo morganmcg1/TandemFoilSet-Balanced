@@ -1,6 +1,54 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1613 (soap-optimizer)
+## Current Baseline — PR #1630 (cosine-eta-min)
+
+**val_avg/mae_surf_p = 39.8693** (epoch 13 / 13 completed in 30-min cap) — **-5.97% vs previous 42.4015**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- **`CosineAnnealingLR(T_max=14, eta_min=1e-5)`** ← key addition (was `eta_min=0`)
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1) on relative-L2 normalized residuals
+- ~13 epochs in ~30 min; peak GPU 42.15 GB
+
+**Per-split val at best epoch (13):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| val_single_in_dist | 47.81 | +1.72 (worse) |
+| val_geom_camber_rc | **52.28** | −3.70 |
+| val_geom_camber_cruise | **20.89** | −3.43 |
+| val_re_rand | **38.49** | −4.73 |
+| **val_avg** | **39.8693** | **−2.53 (−5.97%)** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| test_single_in_dist | 45.95 | +4.19 (worse) |
+| test_geom_camber_rc | **46.33** | −1.77 |
+| test_geom_camber_cruise | **17.24** | −2.55 |
+| test_re_rand | **31.37** | −4.60 |
+| **test_avg** | **35.2214** | **−1.18 (−3.24%)** |
+
+**LR trace (epoch 13)**: LR at ep 13 ≈ 5.90e-5 (vs 4.95e-5 without eta_min floor — +19% relative LR at the critical final epoch). Every earlier epoch is essentially identical to eta_min=0.
+
+**Convergence trace**: 167.84 → 134.09 → 107.90 → 97.98 → 84.20 → 81.79 → 76.84 → 62.82 → 52.34 → 50.44 → 45.42 → 42.63 → **39.87** (monotone descent, still falling).
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-cosine-eta-min-20260512-231540/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# SOAP + CosineAnnealingLR(T_max=14, eta_min=1e-5) are now defaults on this branch
+```
+
+**Key insight**: `eta_min=1e-5` prevents the cosine schedule from reaching near-zero at epoch 13 (the run's last/best epoch). The +19% relative LR boost at the terminal epoch is enough to squeeze 3 additional OOD improvement without any other change. Single-line, zero-risk compounding on SOAP. Val still monotone descending at ep 13.
+
+---
+
+## Previous Baseline — PR #1613 (soap-optimizer)
 
 **val_avg/mae_surf_p = 42.4015** (epoch 13 / 13 completed in 30-min cap) — **-52.6% vs previous 89.3940**
 
