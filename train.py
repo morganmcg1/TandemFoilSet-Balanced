@@ -412,7 +412,7 @@ class Config:
     lr: float = 5e-4              # initial_lr (OneCycleLR starting point)
     max_lr: float = 2e-3          # peak LR for OneCycleLR
     weight_decay: float = 1e-4
-    batch_size: int = 2
+    batch_size: int = 1
     surf_weight: float = 10.0
     p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
     epochs: int = 50
@@ -478,7 +478,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-no_decay_keywords = ("bias", "ln_1", "ln_2", "ln_3", "LayerNorm")
+no_decay_keywords = ("bias", "ln_1", "ln_2", "ln_3", "LayerNorm", "temperature", "placeholder")
 decay_params = [p for n, p in model.named_parameters() if p.requires_grad and not any(k in n for k in no_decay_keywords)]
 no_decay_params = [p for n, p in model.named_parameters() if p.requires_grad and any(k in n for k in no_decay_keywords)]
 n_decay = sum(p.numel() for p in decay_params)
