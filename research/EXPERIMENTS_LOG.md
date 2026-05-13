@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 20:25 — PR #2538: [bernoulli-surface-loss] Bernoulli surface-pressure constraint — CLOSED
+
+- **Branch**: charliepai2g24h1-nezuko/bernoulli-surface-loss
+- **Hypothesis**: Soft physics constraint penalizing variance of `p + ½|U|²` on surface nodes; `bernoulli_weight=0.01` as auxiliary loss.
+- **Status**: CLOSED — +4.1% val regression. Hypothesis falsified on both physics grounds and implementation grounds.
+
+| Metric | Bernoulli λ=0.01 | Baseline (#2011) | Δ |
+|--------|------------------|------------------|---|
+| val_avg/mae_surf_p | 30.0466 | 28.8762 | **+4.1% (WORSE)** |
+| test_avg/mae_surf_p | 25.8175 | 24.9992 | +3.3% (WORSE) |
+
+**Per-split val** (Δ vs baseline): single_in_dist +2.99 (smoking gun — ID hit hardest), geom_camber_rc +0.22, geom_camber_cruise +0.57, re_rand +0.90.
+
+**Bernoulli loss diagnostic**: train/bernoulli_loss INCREASED over training: epoch 1 = 0.36 → epoch 28 = 0.75. The model rationally chose to pay the 0.0075 regularizer cost to fit the data, indicating the constraint is fighting the main loss.
+
+**Programme finding (closes 2 axes)**:
+1. **Physics conceptual**: TandemFoilSet is RANS (viscous) data. Bernoulli p + ½ρ|U|² = const is an inviscid constraint that does NOT hold across the surface in this data — even at the optimum. The ID-split degradation pattern confirms data does not satisfy the constraint.
+2. **Implementation**: Loss computed in normalized prediction space where Ux/Uy/p have different normalization scales — the 'Bernoulli sum' is a meaningless mixture. Even un-normalizing wouldn't help due to (1).
+
+Physics-informed soft constraints on viscous RANS data are now closed. Volumetric Laplacian (#2325) and surface Bernoulli (#2538) — both physics-soft-constraints — are CLOSED. Stagnation-point-only Bernoulli is theoretically valid but requires reliable LE detection from predictions.
+
+**Artifact**: `models/model-charliepai2g24h1-nezuko-bernoulli-surface-loss-20260513-194319/metrics.jsonl`
+
+---
+
 ## 2026-05-13 20:08 — PR #2535: [mixup-scalar-alpha-0p4] Scalar-only Mixup α=0.4 — CLOSED
 
 - **Branch**: charliepai2g24h1-fern/mixup-scalar-alpha-0p4
