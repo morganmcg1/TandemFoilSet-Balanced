@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -426,6 +427,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    n_warmup: int = 0  # Linear warmup epochs for surf_head LR only (0 disables)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -487,7 +489,24 @@ optimizer = torch.optim.AdamW(
     ],
     weight_decay=cfg.weight_decay,
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+
+# Cosine annealing on both groups, with a linear warmup multiplier on group 1
+# (surf_head). Composed as a single LambdaLR because chaining
+# CosineAnnealingLR + LambdaLR would overwrite each other on .step().
+def _encoder_lr_lambda(epoch: int) -> float:
+    return 0.5 * (1.0 + math.cos(math.pi * epoch / MAX_EPOCHS))
+
+
+def _surf_head_lr_lambda(epoch: int) -> float:
+    cosine = 0.5 * (1.0 + math.cos(math.pi * epoch / MAX_EPOCHS))
+    warmup = min(1.0, epoch / cfg.n_warmup) if cfg.n_warmup > 0 else 1.0
+    return cosine * warmup
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(
+    optimizer, lr_lambda=[_encoder_lr_lambda, _surf_head_lr_lambda]
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
