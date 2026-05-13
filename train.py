@@ -584,7 +584,7 @@ def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
 optimizer = SOAP(
     list(model.parameters()) + list(rescale_head.parameters()),
     lr=cfg.lr,
-    betas=(0.95, 0.95),
+    betas=(0.9, 0.99),
     weight_decay=cfg.weight_decay,
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
