@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-12 23:15
+- **Date:** 2026-05-13 00:10
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
@@ -12,7 +12,7 @@ Config: 3-ep warmup + lr=1e-3 + cosine(T_max=47, eta_min=1e-6), bs=4, chan_w=[1,
 Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); bs=1 test_avg = 117.40  
 **Note:** Measured WITHOUT chan_w (pre-#1464 base). Advisor branch now has BOTH chan_w + warmup. True stacked floor unmeasured — expected < 128.09. askeladd's #1536 (sent back for rebase) will measure this.
 
-**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Fix in train.py `evaluate_split` (guard by askeladd — code not yet pushed). First finite test_avg = 133.04 (askeladd's unofficial 3-run mean 130.0).
+**Known test NaN bug:** `data/scoring.py` `0*NaN` propagation from `test_geom_camber_cruise/000020.pt` NaN p-channel GT. Affects test_avg but not val_avg (4 val splits are clean). Fix in train.py `evaluate_split` (NaN guard code NOW PUSHED by askeladd — branch rebased with warmup preserved). Awaiting post-rebase rerun with `--lr 1e-3`. First finite test_avg = 133.04 (unofficial run at old config).
 
 ## Active experiments (WIP)
 
@@ -24,14 +24,14 @@ Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); 
 | #1489 | thorfinn | Stack chan_w + per-sample AoA flip p=0.25 | Stacking / aug | 2-revised (training) |
 | #1477 | fern | AMP bf16 + gradient clipping | Training efficiency | 1 (training, rate-limit retries) |
 | #1573 | frieren | Warmup + lr=7.5e-4 + gradient clipping | Stability / optimization | 3 (training) |
-| #1603 | edward | EMA weights (decay=0.999) — v2 with snapshot fix | Inference-time averaging | 3 (training fix) |
+| #1708 | edward | Lookahead optimizer (k=5, α=0.5) wrapping AdamW | Optimizer/averaging | 4 (just assigned) |
 | #1681 | nezuko | Higher weight decay (wd=1e-4 → 5e-4) | Regularization | 3 (just assigned) |
 
 ## Recent decisions
 
 - **#1485 (nezuko) CLOSED**: slice_num=128 stacked on floor → +25.4% regression (160.67 vs 128.09). Wall-clock budget is the binding constraint, not capacity. Revisit only with AMP (#1477).
 - **#1536 (askeladd) SENT BACK**: Code not pushed; branch pre-#1482 (would revert warmup). NaN guard logic correct — test_avg 133.04 is first-ever finite result. Needs rebase + push + re-run at lr=1e-3.
-- **#1603 (edward) v1 regression**: -7.8% from random-init EMA bias. Edward applied fix (snapshot model on first post-warmup step), v2 running.
+- **#1603 (edward EMA) CLOSED**: All 3 variants regress. Root cause: rapid-descent regime — EMA averages older-worse with newer-better weights. Best variant tie (+0.52%). Assigned #1708 Lookahead instead.
 
 ## Key findings so far
 
@@ -49,8 +49,9 @@ Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); 
 12. **Test NaN Type 2** (numerical): lr=1e-3 causes non-finite attention weights for specific bs=4 batches in test_geom_camber_cruise. Fix: lr=7.5e-4 + gradient clipping (#1573 frieren in progress).
 13. **VRAM budget:** bs=4 baseline uses ~42 GB; slice_num=128 uses ~55 GB. bf16 (fern, GPU 99% active) expected ~21-25 GB.
 14. **slice_num=128 doesn't compound with stacked floor at 30-min cap** (+25.4% regression, PR #1485 closed). Need AMP first.
-15. **EMA random-init bias**: literal `copy.deepcopy(model)` after random init has stale random weights in EMA for many steps. Fix: snapshot model into EMA on first post-warmup step (#1603 edward v2 in progress).
+15. **EMA doesn't fit rapid-descent regime** (#1603 closed): At 30-min timeout the model descends 10-50 MAE/epoch, so EMA averages older-worse with newer-better weights. All 3 variants regress. EMA becomes viable only when model is near-converged (needs AMP + longer runs first).
 16. **First finite test_avg on branch: 133.04** (askeladd's unofficial run at old config). True clean test_avg at floor config = unmeasured.
+17. **Lookahead vs EMA distinction**: Lookahead averages only the last k=5 steps (all recent productive steps in same descent direction), not history. Compatible with rapid descent. Assigned to edward #1708.
 
 ## Round-3 hypothesis pipeline
 
@@ -60,7 +61,7 @@ Test NaN on cruise (model-level batch sensitivity at lr=1e-3 — NOT data bug); 
 - **tanjiro chan_w + grad-accum + T_max=14** (#1524 revised training): stack two orthogonal levers + fix LR decay.
 - **thorfinn chan_w + per-sample AoA flip** (#1489 revised training): orthogonal stacking.
 - **frieren lr=7.5e-4 + gradclip** (#1573 training): fix test NaN Type 2 while staying near peak LR.
-- **edward EMA weights v2** (#1603 fix running): snapshot fix applied, v2 in flight.
+- **edward Lookahead optimizer** (#1708 just assigned): k=5, α=0.5 wrap around AdamW. Orthogonal to all active WIPs.
 - **fern AMP bf16** (#1477 training, GPU 99% active): unlock 2x faster training → more epochs, enables 224-7-8 retry.
 - **nezuko weight decay 5e-4** (#1681 just assigned): regularization to reduce final-epoch val noise.
 

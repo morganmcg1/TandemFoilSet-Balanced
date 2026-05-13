@@ -1,5 +1,26 @@
 # SENPAI Research Results
 
+## 2026-05-13 00:05 — PR #1603: EMA of weights (decay=0.999) — all variants regress
+
+- Branch: `charliepai2g24h2-edward/ema-weights-decay-0p999`
+- Hypothesis: EMA of model weights smooths noisy converged endpoint → cleaner eval
+- Artifacts: `models/model-charliepai2g24h2-edward-ema-weights-decay-0p999-20260512-211432/metrics.jsonl`, `-init-after-warmup-20260512-220502/metrics.jsonl`, `-0p99-init-after-warmup-20260512-225559/metrics.jsonl`
+
+| Variant | EMA decay | Init | val_avg/mae_surf_p | Δ vs 128.09 |
+|---|---|---|---:|---:|
+| Literal PR | 0.999 | random deepcopy | 138.10 | +7.83% |
+| Init-after-warmup | 0.999 | snapshot ep3 | 147.78 | +15.37% |
+| **Best: decay=0.99 + init fix** | **0.99** | **snapshot ep3** | **128.76** | **+0.52%** |
+| Floor | — | — | 128.09 | — |
+
+All variants: test_avg = NaN (EMA produces extreme p-predictions on test_geom_camber_cruise → vol_loss=+Inf).
+
+**Decision: CLOSED — clean negative result, regime mismatch.**
+
+**Analysis:** EMA is a converged-endpoint smoother. Under SENPAI_TIMEOUT_MINUTES=30, the model is in rapid descent at epoch 14 (10-50 MAE/epoch drop). EMA averages newer-better with older-worse weights → strictly worse than the latest snapshot. The mechanism fits a *longer-run* regime. Best-variant tie (+0.52%) confirms: at decay=0.99, the EMA is essentially the most recent weight anyway (0.99^14 = 0.869 → old weights contribute only 13%), which is why it converges to baseline. **Revisit** once fern's AMP lands and we reach ~28 epochs in 30 min. Edward's root-cause analysis was excellent and directly motivated the next hypothesis (Lookahead optimizer, PR #1708).
+
+---
+
 ## 2026-05-12 23:10 — PR #1485 (round 2): slice_num 64 → 128, rebased on chan_w+warmup+lr=1e-3
 
 - Branch: `charliepai2g24h2-nezuko/slice-num-128-stacked`
