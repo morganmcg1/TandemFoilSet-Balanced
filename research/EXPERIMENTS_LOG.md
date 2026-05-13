@@ -63,6 +63,73 @@
 
 ---
 
+## 2026-05-13 13:30 — PR #2204: [sorted-pressure-dist] W1 regularizer on sorted surface pressure quantiles — CLOSED
+
+- **Branch**: charliepai2g24h1-thorfinn/sorted-pressure-dist
+- **Hypothesis**: Add Wasserstein-1 regularizer (sorted MSE on pressure quantiles) to align predicted per-sample pressure distributions with ground truth, closing the W1 gap between predicted and true pressure histograms.
+- **Status**: CLOSED — +1.01% val regression. W1 mechanism learned but doesn't transfer to surf_p MAE.
+
+| Metric | sorted-pressure-dist | Baseline (#2011) | Δ |
+|--------|---------------------|-----------------|---|
+| val_avg/mae_surf_p | 29.1672 | 28.8762 | **+1.01% (WORSE)** |
+| test_avg/mae_surf_p | 25.2059 | 24.9992 | **+0.83% (WORSE)** |
+| Best epoch | 28 | 28 | — |
+
+**Root cause**: The W1 regularizer successfully learned distribution alignment (W1 gap reduced 15×), but this came at the cost of pointwise MAE — the model traded spatial precision for distributional correctness. Distribution matching and pointwise accuracy are partially competing objectives in this setting.
+
+**Programme finding**: Sorted W1 pressure regularizer axis closed. Distribution matching alone is insufficient; pointwise spatial accuracy is what drives surf_p MAE. If distribution matching is to help, it would need to be combined with a stronger pointwise signal.
+
+---
+
+## 2026-05-13 13:30 — PR #2198: [refilm-per-block] 5 independent FiLM blocks vs shared — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/refilm-per-block
+- **Hypothesis**: Replace single shared ReFiLM with 5 independent FiLMs (one per Transolver block). Each block gets its own Re→(γ,β) mapping — deeper layers may need different Re-conditioning from shallow layers.
+- **Status**: CLOSED — +2.9% val regression. Per-block gates DID specialize but overfitted.
+
+| Metric | refilm-per-block | Baseline (#2011) | Δ |
+|--------|-----------------|-----------------|---|
+| val_avg/mae_surf_p | 29.72 | 28.8762 | **+2.9% (WORSE)** |
+| Best epoch | 28 | 28 | — |
+
+**Key observation**: Block specialization confirmed (block4 absmax 0.81 vs block0 0.51), but geom_camber_rc worst split (+2.05%). Extra per-block capacity overfitted to in-distribution Re variation rather than generalizing to OOD splits. The shared FiLM acts as an implicit regularizer that forces all blocks to agree on Re-dependent behavior.
+
+**Programme finding**: Per-block FiLM axis closed for this model size. Shared ReFiLM is optimal. Follow-up: test wider shared MLP (refilm-hidden-16) to improve capacity without the overfitting risk of per-block independence.
+
+---
+
+## 2026-05-13 13:30 — PR #2147: [cosine-long-tail] T_max=40/56 cosine beyond 28-epoch budget — CLOSED
+
+- **Branch**: charliepai2g24h1-askeladd/cosine-long-tail
+- **Hypothesis**: Extending T_max beyond 28 keeps LR higher throughout training (cosine never reaches eta_min=1e-5 within budget), avoiding premature LR starvation.
+- **Status**: CLOSED — T_max=40 +11.4%, T_max=56 +31.4%. Monotonically worse.
+
+| Metric | T_max=40 | T_max=56 | Baseline T_max=28 | 
+|--------|----------|----------|-------------------|
+| val_avg/mae_surf_p | 32.16 | 38.05 | 28.8762 |
+
+**Root cause**: Higher final LR (cosine plateau) means the model never reaches the low-noise convergence regime. The cosine anneal to eta_min=1e-5 is *doing real work* — the final low-LR phase is where the model fine-tunes its pressure predictions. T_max=28 was correctly identified as the optimal schedule for a 28-epoch budget.
+
+**Programme finding**: T_max=28 is the confirmed optimal cosine schedule. Cosine-schedule axis fully closed: T_max<28 (too fast), T_max=28 (optimal), T_max>28 (starves final convergence). SGDR and OneCycleLR also closed.
+
+---
+
+## 2026-05-13 13:30 — PR #2169: [re-input-jitter] Gaussian noise σ=0.05/0.10 on log(Re) — CLOSED
+
+- **Branch**: charliepai2g24h1-tanjiro/re-input-jitter
+- **Hypothesis**: Add Gaussian noise to log(Re) input channel during training to improve OOD-Re generalization (re_rand split). Targets the model's sensitivity to exact Re values.
+- **Status**: CLOSED — σ=0.05 +5.51%, σ=0.10 +14.14%. Re channel is critical.
+
+| Metric | σ=0.05 | σ=0.10 | Baseline |
+|--------|--------|--------|----------|
+| val_avg/mae_surf_p | 30.47 | 33.03 | 28.8762 |
+
+**Root cause**: The Re channel is load-bearing for the entire ReFiLM conditioning stack. Even σ=0.05 (~5% jitter on log(Re)) disrupted the precise Re-to-attention-gate mapping that ReFiLM learned. All 4 val splits degraded — the jitter doesn't generalize to re_rand; it just corrupts the Re-dependent physics the model has learned.
+
+**Programme finding**: Re input axis firmly closed. Re conditioning is a strength, not a weakness. Augmenting it degrades the model. The re_rand OOD-Re generalization gap is better addressed through better Re-conditioning architecture, not by blurring the Re signal.
+
+---
+
 ## 2026-05-13 10:20 — PR #2092: [coord-translation-aug] Rigid mesh translation augmentation — CLOSED
 
 - **Branch**: charliepai2g24h1-tanjiro/coord-translation-aug
