@@ -54,7 +54,7 @@ from data import (
 # space — decompress predictions before unnormalising. (PR #1777)
 # ---------------------------------------------------------------------------
 
-ASINH_GAIN = 1.0
+ASINH_GAIN = 0.5
 
 
 def compress_pressure(y_norm: torch.Tensor) -> torch.Tensor:
