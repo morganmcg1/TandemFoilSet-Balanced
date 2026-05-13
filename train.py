@@ -278,17 +278,17 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            abs_err = (pred - y_norm).abs()
+            elem_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.005)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (abs_err * vol_mask.unsqueeze(-1)).sum()
+                (elem_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             # H18: per-channel surf-loss weighting (mirrors training loop).
-            surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
+            surf_ch_weights = elem_err.new_tensor([0.5, 0.5, 2.0])
             surf_loss_sum += (
-                ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum()
+                ((elem_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -503,15 +503,17 @@ for epoch in range(MAX_EPOCHS):
         x_norm = fourier_enc(x_norm)
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        abs_err = (pred - y_norm).abs()
+        elem_err = F.smooth_l1_loss(pred, y_norm, reduction='none', beta=0.005)
+        if epoch == 0 and n_batches == 0:
+            print(f"elem_err shape: {tuple(elem_err.shape)}, min={elem_err.min().item():.4f}, max={elem_err.max().item():.4f}")
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+        vol_loss = (elem_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
         # H18: per-channel surf-loss weighting. Mass-preserving (sum = 3.0).
         # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
-        surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
-        surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_ch_weights = elem_err.new_tensor([0.5, 0.5, 2.0])
+        surf_loss = ((elem_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
