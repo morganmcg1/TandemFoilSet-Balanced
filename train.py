@@ -440,7 +440,13 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(0.9, 0.95),
+)
+print(f"AdamW betas: (0.9, 0.95)")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
