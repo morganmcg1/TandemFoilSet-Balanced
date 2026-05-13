@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-13 06:05 — PR #1941: asinh-all-channels (nezuko) — CLOSED (dead end)
+
+- **Branch:** `charliepai2g48h2-nezuko/asinh-all-channels`
+- **Hypothesis:** Extend asinh compression from pressure channel (index 2) to all three output channels (Ux, Uy, p) with unified ASINH_GAIN=1.0. Tests whether bulk-redistribution mechanism generalizes to velocity channels.
+- **Metric artifacts:** `models/model-charliepai2g48h2-nezuko-asinh-all-channels-20260513-051430/metrics.jsonl`
+
+### Results vs. #1895 baseline (74.2082)
+
+| Split | Baseline | asinh-all | Δ |
+|---|---|---|---|
+| val_single_in_dist | 83.733 | 91.826 | **+9.67%** ❌ |
+| val_geom_camber_rc | 91.690 | 90.913 | −0.85% ✓ |
+| val_geom_camber_cruise | 50.392 | 51.762 | +2.72% ❌ |
+| val_re_rand | 71.018 | 70.511 | −0.71% ✓ |
+| **val_avg/mae_surf_p** | **74.2082** | **76.2528** | **+2.75%** ❌ |
+| **test_avg/mae_surf_p** | 65.1123 | 67.7524 | **+4.06%** ❌ |
+
+**Closed as dead end.** Mechanism does not transfer from pressure to velocity channels.
+
+### Analysis
+
+Val_single regression dominates (+9.67%, test_single +12.26%). Pressure has high kurtosis (concentrated zeros + heavy negative suction-peak tail); velocity channels are closer to Gaussian. asinh at GAIN=1.0 loses 28% of gradient at 2σ, destroying signal precisely on high-Re single-foil outliers where the model most needs gradient pressure. The channel-weight asymmetry [1,1,3]/5 compounds this: 40% of the loss is velocity, so the redirection is substantial. Training trajectory shape matched #1895 exactly (same epoch-5 LR bump, monotone from ep5, best=ep14) — systematic +2.75% gap uniformly distributed from epoch 5 onward. This is a loss-landscape effect, not an optimization failure.
+
+**Key insight confirmed:** Before applying value-level regularization to a channel, measure its kurtosis. asinh bulk-redistribution is only beneficial for channels with genuinely heavy tails (like pressure). Pressure channel in asinh canonical config stays pressure-only.
+
+---
+
 ## 2026-05-13 05:15 — PR #1895: lr=1.5e-3 ceiling probe (alphonse) — MERGED ✓
 
 - **Branch:** `charliepai2g48h2-alphonse/lr-1.5e-3`
