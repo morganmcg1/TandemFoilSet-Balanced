@@ -1,6 +1,54 @@
 # Baseline Metrics
 
-## Current Baseline — PR #1456 (bf16-amp + cosine-eta-min)
+## Current Baseline — PR #1794 (torch-compile)
+
+**val_avg/mae_surf_p = 30.4412** (epoch 30 of 30 completed in 30-min cap) — **-17.5% vs previous 36.8778**
+
+- Architecture: `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2` (662K params)
+- Optimizer: **SOAP** (`precondition_frequency=10, max_precond_dim=256`, `lr=1e-3, wd=1e-4`)
+- **`CosineAnnealingLR(T_max=28, eta_min=1e-5)`** ← updated for 30-epoch budget
+- **`torch.compile(mode="default", dynamic=True)`** ← key addition (+76% throughput)
+- **bf16 AMP enabled**
+- `grad_clip=1.0`, `batch_size=4`, `surf_weight=10.0`
+- Loss: Huber(δ=0.1) on relative-L2 normalized residuals
+- **30 epochs in ~30 min** (vs 17 previously, +76% throughput from torch.compile)
+- Peak GPU 24 GB (down from 33 GB — compile reduces memory fragmentation)
+- `dynamic=True` required because `pad_collate` produces variable-shape tensors (reduce-overhead would trigger recompilation storms)
+
+**Per-split val at best epoch (30):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| val_single_in_dist | **34.27** | −8.65 (−20.2%) |
+| val_geom_camber_rc | **41.43** | −6.35 (−13.3%) |
+| val_geom_camber_cruise | **14.04** | −4.56 (−24.5%) |
+| val_re_rand | **32.02** | −6.19 (−16.2%) |
+| **val_avg** | **30.4412** | **−6.44 (−17.5%)** |
+
+**Test (all 4 splits):**
+
+| Split | mae_surf_p | vs prev |
+|-------|-----------|---------|
+| test_single_in_dist | **32.96** | −9.19 (−21.8%) |
+| test_geom_camber_rc | **37.90** | −4.79 (−11.2%) |
+| test_geom_camber_cruise | **11.38** | −3.88 (−25.4%) |
+| test_re_rand | **22.16** | −5.37 (−19.5%) |
+| **test_avg** | **26.1013** | **−5.80 (−18.2%)** |
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-torch-compile-20260513-021531/metrics.jsonl`
+
+**Reproduce**:
+```bash
+cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
+  --agent <name> --experiment_name <name> --epochs 50
+# SOAP + bf16 + torch.compile(mode="default", dynamic=True) + CosineAnnealingLR(T_max=28, eta_min=1e-5) now defaults
+```
+
+**Key insight**: `torch.compile` delivers +76% throughput (+47% more epochs per 30-min run), enabling 30 epochs vs 17. All 8 splits improved. Model was still improving at ep 30 (best was ep 30). `mode="default"` with `dynamic=True` is the correct setting — pad_collate produces variable-length tensors that cause recompilation storms under `reduce-overhead`. Peak memory dropped 33→24 GB. Cumulative gain now **-74.0%** vs initial 117.17 baseline.
+
+---
+
+## Previous Baseline — PR #1456 (bf16-amp + cosine-eta-min)
 
 **val_avg/mae_surf_p = 36.8778** (epoch 16 of 17 completed in 30-min cap) — **-7.51% vs previous 39.8693**
 
@@ -292,5 +340,11 @@ cd target/ && SENPAI_TIMEOUT_MINUTES=30 python train.py \
 
 | Date | PR | val_avg/mae_surf_p | test_avg | Notes |
 |------|----|--------------------|---------|-------|
+| 2026-05-13 | #1794 | **30.4412** | **26.1013** | torch.compile(default,dynamic=True); 30 epochs / 30 min; -17.5% |
+| 2026-05-13 | #1456 | **36.8778** | **31.9058** | bf16-amp + cosine-eta-min T_max=17; 17 epochs / 30 min; -7.51% |
+| 2026-05-13 | #1630 | **39.8693** | **35.2214** | cosine-eta-min (eta_min=1e-5); 13 epochs / 30 min; -5.97% |
+| 2026-05-12 | #1613 | **42.4015** | **36.4017** | SOAP optimizer; 13 epochs / 30 min; -52.6% |
+| 2026-05-12 | #1460 | **89.6121** | **78.14** | relative-l2-loss; 14 epochs / 30 min; -7.20% |
+| 2026-05-12 | #1473 | **89.3940** | **79.5993** | huber-relative-l2-compound; 14 epochs / 30 min; -0.24% |
 | 2026-05-12 | #1518 | **96.5587** | **85.87** (4-split) | Round 2 winner. lr=1e-3, T_max=14; 14 epochs / 30 min |
 | 2026-05-12 | #1479 | 117.17 | 116.17 (3-split) | Round 1 winner. grad_clip=1.0; 14 epochs / 30 min |
