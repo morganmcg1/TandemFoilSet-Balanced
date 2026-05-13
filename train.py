@@ -285,8 +285,10 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
                 (abs_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
+            # H18: per-channel surf-loss weighting (mirrors training loop).
+            surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
             surf_loss_sum += (
-                (abs_err * surf_mask.unsqueeze(-1)).sum()
+                ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -506,7 +508,10 @@ for epoch in range(MAX_EPOCHS):
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
         vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (abs_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        # H18: per-channel surf-loss weighting. Mass-preserving (sum = 3.0).
+        # Upweights pressure (channel 2 = p) which defines the primary metric val_avg/mae_surf_p.
+        surf_ch_weights = abs_err.new_tensor([0.5, 0.5, 2.0])
+        surf_loss = ((abs_err * surf_ch_weights) * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
