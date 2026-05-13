@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~13:35 UTC
+- **Date:** 2026-05-13 ~14:00 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -9,7 +9,8 @@
 
 | PR | What | val | test |
 |----|------|-----|------|
-| **#2210** | **sw=5 on n_head=2+Lion+MAE+lr=1e-4** | **50.91** | **43.68** |
+| **#2218** | **slice_num=32 on n_head=2+Lion+MAE+lr=1e-4** | **49.86** | **42.19** |
+| #2210 | sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 |
 | #2069 | n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 |
 | #1932 | Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 |
 | #1825 | MAE (L1) loss on Lion+EMA | 56.58 | 48.82 |
@@ -20,26 +21,29 @@
 | #1357 | Huber δ=1.0 | 98.79 | 88.90 |
 | #1367 | Dropout=0.2 + clip | 98.96 | 88.74 |
 
-**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **surf_weight=5**
+**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **slice_num=32** + surf_weight=10
 
-**Note:** Every merged win has had val still descending at the 30-min cap. The model is NOT converged. n_head=2 ran 20 epochs in the same window as n_head=4's 16 — architecture unlocking faster epochs is a compound benefit.
+**Note:** Every merged win has had val still descending at the 30-min cap. The model is NOT converged. slice_num=32 runs at 23 epochs in 30 min (vs 20 at slice_num=64) — faster-per-epoch benefit compounds on top of the accuracy gain. Note: surf_weight=5 from #2210 is NOT in this compound (run used default sw=10); interaction slice_num=32 × sw=5 explored in #2335.
 
 ## Active experiments (8/8 students assigned)
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| **#2218** | **alphonse** | **slice_num sweep on n_head=2: slice_num=32 vs slice_num=128** | **WIP — awaiting terminal result (slice32 wins, nudged)** |
-| **#2318** | **thorfinn** | **Lion weight_decay sweep on n_head=2+sw=5: wd=3e-4 (Arm1) vs wd=3e-5 (Arm2)** | **WIP — new** |
-| **#2216** | **frieren** | **Split loss on n_head=2: surf-MAE + vol-Huber (Arm1), surf-MAE + vol-MSE (Arm2)** | **WIP — regressing, awaiting terminal result** |
+| **#2335** | **alphonse** | **slice_num=32 + surf_weight=5 interaction test** | **WIP — new** |
+| **#2339** | **thorfinn** | **Lion wd sweep on slice_num=32 compound: wd=3e-4 vs wd=3e-5** | **WIP — new** |
+| **#2337** | **frieren** | **slice_num=16 on n_head=2: extend monotonic trend below 32** | **WIP — new** |
 | **#2277** | **nezuko** | **surf_weight lower probe on n_head=2+sw=5 baseline: sw=4 (Arm1) vs sw=3 (Arm2)** | **WIP** |
-| #2183 | edward | AdamW+EMA+MAE: lr=5e-4 (Arm1) + lr=2e-4 (Arm2) — fill missing 2×2 cell | WIP |
+| **#2338** | **edward** | **n_head=1 on n_head=2+slice_num=32 baseline: extend monotonic trend** | **WIP — new** |
 | **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
 | #2251 | tanjiro | lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) | WIP |
 | **#2271** | **askeladd** | **Lion β2 on n_head=2: β2=0.995 confirm (Arm1) + β2=0.999 push (Arm2) at lr=1e-4** | **WIP** |
 
 ## Closed experiments this round
 
-- **#2211 (thorfinn):** OneCycleLR pct_start=0.3/0.1 on n_head=2 — both regress (+5.8%/+6.7% and +15.5%/+15.7% vs baseline #2210). Root cause: OneCycleLR integrated LR ~half of cosine baseline (div_factor=25, start=4e-6); Lion sign-steps at lower integrated LR = fewer effective explorations. Arm 1 also crashed at OneCycle peak (zbwa7pwv, step 3066 diverge). Third consecutive schedule experiment to regress. Closed; reassigned to #2318 (Lion wd sweep).
+- **#2218 (alphonse):** slice_num=32 — **MERGED** val=49.86, test=42.19. Monotonic: 32 < 64 < 128. Also 23 epochs in budget (vs 20) — speed dividend. Interaction with sw=5 untested (#2335).
+- **#2216 (frieren):** Split loss (surf-MAE + vol-Huber/MSE) — all 3 arms regress (+4.5–7.1%). Formulation adds tension without signal benefit. Closed; reassigned to #2337 (slice_num=16).
+- **#2183 (edward):** AdamW+EMA+MAE diagnostic — val=73.38 vs baseline 49.86 (+47%). 2×2 mechanism table complete. Lion ~2× EMA. Closed; reassigned to #2338 (n_head=1).
+- **#2211 (thorfinn):** OneCycleLR pct_start=0.3/0.1 on n_head=2 — both regress (+5.8%/+6.7% and +15.5%/+15.7% vs baseline #2210). Root cause: OneCycleLR integrated LR ~half of cosine baseline (div_factor=25, start=4e-6); Lion sign-steps at lower integrated LR = fewer effective explorations. Arm 1 also crashed at OneCycle peak (zbwa7pwv, step 3066 diverge). Third consecutive schedule experiment to regress. Closed; reassigned to #2339 (Lion wd sweep).
 - **#2086 (thorfinn):** Lion lr=4e-4/3e-4 — both regress vs baseline (+3.83%/+4.10%). **lr-doubling trend saturated at lr=2e-4** after 3 octaves. Flat minimum: 4e-4 only 2 pts worse than 3e-4 despite 4× higher lr. Closed; reassigned to #2211 (OneCycleLR).
 - **#2069 (alphonse):** n_head=2 — **MERGED** val=51.11, test=44.18. Biggest win of the round.
 - **#2056 (nezuko):** sw=5 at lr=1e-4 beat OLD baseline (54.46 < 55.41) but can't merge onto new n_head=2 code as-is. Closed; reassigned to #2210 (sw=5+sw=7 on n_head=2).
@@ -73,15 +77,26 @@
 14. **surf_weight=5 merged (#2210):** −0.39%/−1.13% val/test vs n_head=2 baseline. Non-monotonic response: sw=5 < sw=10 < sw=7. Win concentrated in in-dist splits (single_in_dist −2.81). Lower probe (sw=3/4) in #2277.
 15. **Cosine schedule changes consistently regress at 30-min budget (#1999, #2167, #2211):** Three independent schedule experiments (T_max-matching, eta_min, OneCycleLR) all regress. At both lr=1e-4 and lr=2e-4 the model is still in the early exploration regime at the cap — forcing LR down faster cuts off productive learning. Schedule shape is not a viable lever at current budget.
 16. **AdamW+EMA+MAE diagnostic (#2183, in progress):** Both lr arms show val~73-74 (+44-45% vs baseline). 2×2 mechanism table: Lion+EMA=50.91, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× more than EMA; EMA contribution is larger in the noisier AdamW cell.
-17. **slice_num=32 wins on n_head=2 (#2218, awaiting terminal result):** val≈49.86/test≈42.19 — beats baseline #2210 by −1.05/−1.49. slice_num=128 regresses +5.3/+5.1. First exploration below slice_num=64; coarser spatial abstraction works better at n_head=2 with per-head dim=64.
+17. **slice_num=32 MERGED (#2218):** val=49.86/test=42.19 — −2.06%/−3.40% vs #2210 baseline. Monotonic: 32 < 64 < 128. Coarser slicing is faster (81.4s/ep vs 93.5s) → 23 epochs in 30 min vs 20. All 4 test splits improve. slice_num=16 (#2337) and slice32×sw5 (#2335) follow up.
+18. **Split-loss formulation falsified (#2216):** surf-MAE + vol-Huber/MSE — 3 runs, 2 formulations, all regress (+4.5–7.1%). MAE uniform weighting already aligned with the metric.
+19. **AdamW+EMA+MAE 2×2 table complete (#2183):** Lion+EMA=49.86, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× EMA. AdamW is lr-insensitive in this range (lr=5e-4 ≈ lr=2e-4 within noise).
 
 ## Priority for current wave
 
-**Architecture:**
-- slice_num=32 (#2218 alphonse) — **confirmed win** val=49.86/test=42.19 in W&B; awaiting terminal SENPAI-RESULT before merge
+**Architecture — slice_num sweep (monotonic signal):**
+- slice_num=16 (#2337 frieren) — extend monotonic trend below 32; may yield 26+ epochs in 30 min
+- n_head=1 (#2338 edward) — extend head-count monotonic trend; n_head=1 gives per-head dim=128; risk: multi-head diversity lost
+
+**Architecture — interaction:**
+- slice_num=32 × sw=5 (#2335 alphonse) — stack both individual wins; interaction unexplored
 
 **Optimizer hparams:**
-- Lion wd sweep (#2318 thorfinn) — wd=3e-4 vs wd=3e-5 on new compound; first decoupled-wd sweep on n_head=2+sw=5
+- Lion wd sweep (#2339 thorfinn) — wd=3e-4 vs wd=3e-5 on new slice_num=32 compound
+- Lion β2 (#2271 askeladd) — β2=0.995 won −2.9% on old compound; retest on n_head=2; direct merge candidate
+- lr sweep (#2251 tanjiro) — lr=2e-4 won at n_head=4; retest at n_head=2
+
+**EMA:**
+- EMA decay (#2295 fern) — 0.999 vs 0.95 on new compound
 
 **Loss:**
 - Split loss: surface-MAE + volume-Huber (#2216 frieren) — aligns train signal with eval metric; volume Huber reduces outlier noise

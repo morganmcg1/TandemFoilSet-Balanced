@@ -2,7 +2,74 @@
 
 ---
 
-## 2026-05-13 11:09 — PR #2069: n_head sweep n_head=8 vs n_head=2 on Lion+MAE+EMA (alphonse) — MERGED NEW BEST
+## 2026-05-13 13:50 — PR #2218: slice_num sweep slice_num=32 vs slice_num=128 on n_head=2 (alphonse) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-alphonse/slice-num-sweep-n-head-2`
+- **Hypothesis:** slice_num=64 (default) may be over-parameterized for n_head=2 (per-head dim=64). Coarser slicing concentrates capacity; finer slicing may dilute it. Both directions tested.
+- **W&B runs:** `8qjqtb70` (slice_num=32, winner), `mzkmh2fh` (slice_num=128), `uitkeygr` (slice_num=32 replicate, similar)
+
+| Config | slice_num | val_avg/mae_surf_p | test_avg/mae_surf_p | Epochs in 30 min | s/epoch |
+|--------|-----------|---------------------|----------------------|-----------------|---------|
+| Baseline #2210 | 64 | 50.91 | 43.68 | 20 | ~93.5 |
+| **Arm 1 (8qjqtb70)** | **32** | **49.864** | **42.187** | **23** | **81.4** |
+| Arm 1 replicate (uitkeygr) | 32 | 49.96 | 41.76 | ~23 | 81.4 |
+| Arm 2 (mzkmh2fh) | 128 | 56.17 | 48.78 | 16 | 114.8 |
+
+**Per-test-split (slice_num=32 winner):** single_in_dist=45.46 (−0.96 vs 46.42), geom_camber_rc=56.04 (−2.56 vs 58.60), geom_camber_cruise=25.68 (−1.65 vs 27.33), re_rand=41.57 (−0.82 vs 42.39) — **all 4 splits improve**.
+
+**Result:** MERGED. New best: val=49.86, test=42.19. Key findings:
+1. **Monotonic signal confirmed: 32 < 64 < 128** — coarser slicing beats finer, monotonically.
+2. **Compute dividend:** slice_num=32 runs at 81.4s/epoch vs 93.5s (14% faster), yielding 23 epochs in 30 min vs 20 — extra training steps amplify the accuracy gain.
+3. **OOD improvement:** camber_rc −2.56, camber_cruise −1.65 — coarser slices generalize better to unseen geometries; less risk of over-fitting per-geometry slice assignments.
+4. **slice_num=128 badly regresses** (+5.06/+4.60 val/test) AND runs slower (114.8s/ep, 16 epochs) — finer slicing hurts on all dimensions.
+5. **Note:** This run used sw=10 (default), NOT sw=5 from #2210. The slice_num=32 + sw=5 interaction is explored in follow-up #2335.
+
+**New compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **slice_num=32** + surf_weight=10
+
+**Alphonse reassigned:** PR #2335 — slice_num=32 + surf_weight=5 interaction (test whether the two wins from #2218 and #2210 stack).
+
+---
+
+## 2026-05-13 13:50 — PR #2216: Split loss surf-MAE + vol-Huber/MSE on n_head=2 (frieren) — CLOSED REGRESSION
+
+- **Branch:** `willowpai2g24h5-frieren/split-loss-n-head-2`
+- **Hypothesis:** Aligning volume loss with a robust formulation (Huber/MSE) while keeping surface as MAE may reduce noise in the gradient signal and improve the OOD camber splits.
+- **W&B runs:** `kpiec2be` (Arm 1 vol-Huber), `dnrif75z` (Arm 2 vol-MSE), `8u7db1a3` (Arm 1 retry)
+
+| Run | Formulation | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (49.86) |
+|-----|-------------|---------------------|----------------------|----------------------|
+| kpiec2be | surf-MAE + vol-Huber | 53.40 | 44.72 | +7.1% |
+| 8u7db1a3 | surf-MAE + vol-Huber (retry) | 52.09 | 45.15 | +4.5% |
+| dnrif75z | surf-MAE + vol-MSE | 52.81 | 44.45 | +5.9% |
+
+**Result:** CLOSED. All three runs regress vs baseline. The split-loss formulation introduces optimization tension without signal benefit — MAE's uniform per-node weighting is already aligned with the primary metric. The volume-specific loss formulation doesn't improve surface pressure prediction. Two distinct formulations tested with consistent negative results.
+
+**Frieren reassigned:** PR #2337 — slice_num=16 (extend slice_num monotonic trend below 32).
+
+---
+
+## 2026-05-13 13:50 — PR #2183: AdamW+EMA+MAE mechanism fill (edward) — CLOSED, DIAGNOSTIC COMPLETE
+
+- **Branch:** `willowpai2g24h5-edward/adamw-ema-mae-lr-sweep`
+- **Hypothesis:** Fill missing 2×2 cell (AdamW+EMA+MAE) to complete the mechanism table. Diagnostic-only.
+- **W&B runs:** `aaz608bi`, `5cmntgh1`, `ztnpmk0i` (lr=5e-4 arms), `avm05bdd` (lr=2e-4)
+
+| Cell | val_avg/mae_surf_p | test_avg/mae_surf_p |
+|------|--------------------|---------------------|
+| Lion+EMA (baseline) | **49.86** | **42.19** |
+| Lion no-EMA (#2070) | 62.47 | 54.42 |
+| **AdamW+EMA (this PR)** | **73.38 (best)** | **64.29** |
+| AdamW no-EMA (#2070) | 82.46 | 71.69 |
+
+Arm 1 replicate variance: val 73.38–74.52 (mean 73.94 ± 0.47); lr=2e-4 arm (74.06) inside noise band — AdamW is lr-insensitive in this range.
+
+**Result:** CLOSED (diagnostic-only, regression as expected). 2×2 mechanism table complete. **Summary:** Replacing Lion with AdamW costs +22.5 val (EMA fixed); removing EMA costs +11.6 val (Lion fixed). Lion contributes ~2× more than EMA. Strong justification for Lion-first exploration strategy.
+
+**Edward reassigned:** PR #2338 — n_head=1 on n_head=2+slice_num=32 baseline (extend architectural monotonic trend).
+
+---
+
+## 2026-05-13 13:30 — PR #2211: OneCycleLR on n_head=2 baseline: pct_start=0.3 vs 0.1 (thorfinn) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-alphonse/n-head-8-lion-mae`
 - **Hypothesis:** n_head=4 (baseline) may be over-/under-parameterized for slice_num=64 with n_hidden=128. n_head=2 doubles per-head dim (32→64); n_head=8 halves it (32→16).
