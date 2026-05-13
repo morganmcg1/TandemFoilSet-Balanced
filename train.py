@@ -82,6 +82,22 @@ class MLP(nn.Module):
         return self.linear_post(x)
 
 
+def fourier_features(coords: torch.Tensor, K: int) -> torch.Tensor:
+    """NeRF-style sin/cos positional encoding on 2D coords.
+
+    coords: [..., 2] — spatial coordinates (channels 0-1 of the input).
+    K: number of frequency bands; freqs = 2^k * pi for k=0..K-1.
+    Returns: [..., 4*K] tensor — sin and cos at each frequency for each of the 2 axes.
+    """
+    if K == 0:
+        return coords[..., 0:0]
+    freqs = (2.0 ** torch.arange(K, dtype=coords.dtype, device=coords.device)) * torch.pi  # [K]
+    coords_scaled = coords.unsqueeze(-1) * freqs  # [..., 2, K]
+    sin_part = torch.sin(coords_scaled).flatten(-2)  # [..., 2K]
+    cos_part = torch.cos(coords_scaled).flatten(-2)  # [..., 2K]
+    return torch.cat([sin_part, cos_part], dim=-1)  # [..., 4K]
+
+
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
@@ -171,7 +187,7 @@ class TransolverBlock(nn.Module):
 class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
-                 slice_num=32, ref=8, unified_pos=False,
+                 slice_num=32, ref=8, unified_pos=False, fourier_K=0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -179,12 +195,14 @@ class Transolver(nn.Module):
         self.unified_pos = unified_pos
         self.output_fields = output_fields or []
         self.output_dims = output_dims or []
+        self.fourier_K = fourier_K
+        extra_dim = 4 * fourier_K if fourier_K > 0 else 0
 
         if self.unified_pos:
-            self.preprocess = MLP(fun_dim + ref**3, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + ref**3 + extra_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
         else:
-            self.preprocess = MLP(fun_dim + space_dim, n_hidden * 2, n_hidden,
+            self.preprocess = MLP(fun_dim + space_dim + extra_dim, n_hidden * 2, n_hidden,
                                   n_layers=0, res=False, act=act)
 
         self.n_hidden = n_hidden
@@ -211,6 +229,10 @@ class Transolver(nn.Module):
 
     def forward(self, data, **kwargs):
         x = data["x"]
+        if self.fourier_K > 0:
+            coords = x[..., :2]
+            ff = fourier_features(coords, self.fourier_K)
+            x = torch.cat([x, ff], dim=-1)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
             fx = block(fx)
@@ -376,6 +398,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    fourier_K: int = 4  # NeRF-style sin/cos bands on spatial coords (channels 0-1); 0 disables
 
 
 cfg = sp.parse(Config)
@@ -444,6 +467,7 @@ model_config = dict(
     n_head=2,
     slice_num=24,
     mlp_ratio=2,
+    fourier_K=cfg.fourier_K,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -457,6 +481,19 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+
+# Fourier feature encoding diagnostic
+_ff_extra = 4 * cfg.fourier_K
+_in_dim_orig = model_config['fun_dim'] + model_config['space_dim']
+_in_dim_new = _in_dim_orig + _ff_extra
+_preproc_hidden = model_config['n_hidden'] * 2  # MLP preprocess has hidden=n_hidden*2
+_delta_params = (_in_dim_new - _in_dim_orig) * _preproc_hidden
+print(
+    f"Fourier feature encoding: K={cfg.fourier_K} bands on spatial coords (channels 0-1); "
+    f"frequencies 2^k * pi for k=0..K-1; +{_ff_extra} input channels; "
+    f"preprocess MLP input dim {_in_dim_orig} -> {_in_dim_new}; "
+    f"+{_delta_params} params (preprocess first Linear)"
+)
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -515,6 +552,43 @@ with open(model_dir / "config.yaml", "w") as f:
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
+
+# Fourier feature sanity check on first training batch (computed outside model so we don't
+# perturb compile graph). Confirms FF magnitudes are non-zero and in a reasonable range.
+if cfg.fourier_K > 0 and not cfg.debug:
+    try:
+        _sanity_iter = iter(train_loader)
+        _x_s, _y_s, _is_surf_s, _mask_s = next(_sanity_iter)
+        _x_s = _x_s.to(device, non_blocking=True)
+        _mask_s = _mask_s.to(device, non_blocking=True)
+        with torch.no_grad():
+            _x_norm_s = (_x_s - stats["x_mean"]) / stats["x_std"]
+            _coords_s = _x_norm_s[..., :2]
+            _ff_s = fourier_features(_coords_s, cfg.fourier_K)  # [B, N, 4K]
+            _valid = _mask_s.unsqueeze(-1).expand_as(_ff_s)
+            _ff_valid = _ff_s[_valid]
+            _ff_l2_node = _ff_s.float().norm(dim=-1)  # [B, N]
+            _ff_l2_mean = _ff_l2_node[_mask_s].mean().item()
+            _ff_l2_min = _ff_l2_node[_mask_s].min().item()
+            _ff_l2_max = _ff_l2_node[_mask_s].max().item()
+            _ff_val_min = _ff_valid.float().min().item()
+            _ff_val_max = _ff_valid.float().max().item()
+            _ff_first = _ff_s[0, 0, :8].float().tolist()
+        _expected_l2 = (2 * cfg.fourier_K * model_config['space_dim']) ** 0.5  # sin^2 + cos^2 = 1 per pair
+        print(
+            f"[FF-diag] first-batch Fourier features L2-per-node: "
+            f"mean={_ff_l2_mean:.4f} min={_ff_l2_min:.4f} max={_ff_l2_max:.4f} "
+            f"(expected ~sqrt(2*K*space_dim)={_expected_l2:.3f} — sin^2+cos^2=1 per freq/axis pair)"
+        )
+        print(
+            f"[FF-diag] first-batch Fourier feature value range: "
+            f"[{_ff_val_min:.4f}, {_ff_val_max:.4f}] (expected ~[-1, 1])"
+        )
+        print(f"[FF-diag] first node, first 8 FF values: {_ff_first}")
+        del _x_s, _y_s, _is_surf_s, _mask_s, _x_norm_s, _coords_s, _ff_s
+        del _sanity_iter
+    except StopIteration:
+        print("[FF-diag] could not fetch sanity batch (loader empty?)")
 
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
