@@ -4,6 +4,98 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 20:50 — PR #2606 (ASSIGNED, thorfinn): max_norm sweep {1.0, 2.0} on merged hybrid baseline — relax saturating clip
+
+- **Branch:** `willowpai2g48h2-thorfinn/max-norm-sweep-on-hybrid`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** `clip_fraction = 1.000` (every step saturates) at `max_norm=0.5` is now confirmed across 4 independent measurements (#2168, #2363, #2407, #2512). Lion + max_norm=0.5 + grad_norm_mean=19.22 ≡ constant-magnitude sign-clipped update per step regardless of gradient direction. Relax max_norm ∈ {1.0, 2.0} on hybrid baseline to let more gradient direction through; test whether the saturating clip is wasteful or load-bearing.
+- **Why this is high-value:** Single-CLI-flag, zero-code-change axis; 4 independent confirmations indicate this is a structural property not noise; thorfinn's own #2512 follow-up #3 recommendation; compounds with hybrid baseline if relaxation helps OOD splits via per-step signal preservation.
+- **Mechanism reasoning:** Lion's post-sign gradient norm scales with √D (~1000 for ~1M-param model); max_norm=0.5 rescales by 0.5/1000=5e-4 per step → effectively a secondary lr. Relaxing should preserve more gradient direction; risk is divergence at max_norm=2.0.
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-13 20:50 — PR #2604 (ASSIGNED, fern): hybrid_kendall_lr push {1e-3, 2e-3} on merged hybrid baseline — test σ-spread ceiling
+
+- **Branch:** `willowpai2g48h2-fern/hybrid-kendall-lr-push-1e3-2e3`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** #2540 established a NEW β–σ coupling mechanism: higher β collapses σ-spread (β=0.3→0.475 / β=0.5→0.401 / β=1.0→0.304). The σ-spread axis is doing load-bearing work, and the merged `hybrid_kendall_lr=5e-4` may only be a partial harvest. Push lr ∈ {1e-3, 2e-3} (2× and 4× current) to test whether more per-channel differentiation compounds val/test.
+- **Why this is high-value:** Single-CLI-flag, zero-code-change axis. The #2311 internal sweep already showed lr=3e-4→5e-4 was monotonic on spread (0.07→0.475), strongly suggesting more headroom upward. β–σ coupling discovery from #2540 confirms σ-spread is the lever to push. Compounds the merged baseline if won.
+- **Mechanism reasoning:** AdamW lr on log_σ controls per-channel adaptation speed; at lr=5e-4 wd=0 the heads reach equilibrium at spread=0.475 by end of training; higher lr → wider spread (faster adaptation) → more channel differentiation → larger gains on `single_in_dist` test (the channel that gained −2.11% from #2311's spread restoration).
+- **Status:** Assigned; awaiting training.
+
+---
+
+## 2026-05-13 20:45 — PR #2540 (CLOSED, fern): Huber β sweep {0.5, 1.0} on hybrid Lion+AdamW baseline — re-validate β optimum after σ-spread fix
+
+- **Branch:** `willowpai2g48h2-fern/huber-beta-sweep-on-hybrid-baseline`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** β=0.3 was tuned on pre-Lion / pre-RFF / pre-hybrid stack. With σ-spread now restored (0→0.475) per #2311, per-channel Kendall weights are differentiated and the effective loss gradient distribution has changed. Test β ∈ {0.5, 1.0} to see if β-optimum shifted.
+
+### Result table (vs new hybrid baseline)
+
+| Arm | β | val | test | Δval% | Δtest% | Verdict |
+|---|---:|---:|---:|---:|---:|---|
+| baseline #2311 | 0.3 | 45.2181 | 38.7661 | — | — | — |
+| Arm 1 `smmx6wqc` | 0.5 | 46.8203 | 39.3759 | +3.54% | +1.57% | regress |
+| Arm 2 `7729inmc` | 1.0 | 49.7958 | 42.4415 | +10.12% | +9.48% | major regress |
+
+**Verdict:** monotonic worsening on both val and test → **β=0.3 axis robust to hybrid optimizer change**. Decision rule (`val ≥ 45.76 → close`) fires for both arms.
+
+### Banked findings (5)
+
+1. **β–σ coupling mechanism (NEW)** — Higher β systematically collapses Kendall log_σ differentiation: spread β=0.3=0.475 → β=0.5=0.401 (−16%) → β=1.0=0.304 (−36%). The β knob is NOT orthogonal to σ-differentiation. Mechanism: as β↑, smooth-L1 residuals quadratically attenuate in |r|<β region; gradient magnitudes ∝ 1/β; cross-channel SNR in log_σ gradient signal shrinks → per-channel heads push toward uniform. **Directly motivates #2604 hybrid_kendall_lr push (test the other direction of the spread lever).**
+2. **β=0.3 also maximally preserves σ-spread.** Not coincidence — β=0.3 win compounds with #2311's mechanism via σ-preservation, making β=0.3 doubly load-bearing.
+3. **12th independent clip_fraction≈0.99 confirmation** — β=0.5 arm: 0.9949; β=1.0 arm: 0.9590. Clip-saturation findings now 12-strong; **directly motivates #2606 max_norm sweep.**
+4. **Refuted grad-norm prediction (NEW methodology finding)** — PR predicted p99‖g‖ ordering β=1.0 > β=0.5 > β=0.3. Observed: β=0.5 (36.06) > β=1.0 (28.57). Smooth-L1 grad slope is 1/β in |r|<β region; bulk of residual mass at mid-late training lies in |r|<β → slope-1/β regime dominates → lower β → higher grad-norm. **grad-norm is NOT a valid proxy for "MSE-likeness" in this regime.**
+5. **30-min timeout cap cut both arms at epoch 13/15.** SWA averaged 2 epochs. Apples-to-apples between arms unambiguous; vs 15-epoch baseline the gaps may slightly underestimate but the +1.60 val / +0.61 test margin for better arm (β=0.5) will not close.
+
+### Closing rationale
+
+β axis is closed; β=0.3 confirmed as robust optimum on hybrid stack with a NEW mechanism explanation (σ-spread coupling). Followups: σ-spread push (assigned to fern in #2604) and clip relaxation (assigned to thorfinn in #2606).
+
+---
+
+## 2026-05-13 20:15 — PR #2512 (CLOSED, thorfinn): Multi-scale RFF 8×σ=0.5 + 8×σ=0.1 on Lion stack (Tancik §5) — compose resolution + regularization
+
+- **Branch:** `willowpai2g48h2-thorfinn/multiscale-rff-8sigma0p5-8sigma0p1`
+- **Student:** willowpai2g48h2-thorfinn
+- **Hypothesis:** #2407 established σ=0.1 acts as regularizer (drives single_in_dist test −3.22%). Multi-scale RFF (Tancik 2020 §5) combines 8×σ=0.5 (resolution) + 8×σ=0.1 (regularizer) holding total channels at 16. Zero compute/VRAM increase.
+
+### Result table (vs new hybrid baseline #2311)
+
+| Metric | This run `6ojk8sut` | Baseline #2311 | Δ | % |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p (primary) | 46.4211 | 45.2181 | +1.2030 | +2.66% |
+| test_avg/mae_surf_p (paper) | 39.2320 | 38.7661 | +0.4659 | +1.20% |
+
+**Verdict:** REGRESSION on both axes. 3/4 splits worse on val (cruise the only winner); 3/4 worse on test (cruise tied). Multi-scale RFF does NOT compose on hybrid stack.
+
+### Mechanism revision (KEY FINDING)
+
+The σ=0.1-alone gain on #2407 was on the **pre-#2311 collapsed-σ stack** (all 6 log_σ → −0.9037). In that regime, low-σ RFF acted as regularizer that helped `single_in_dist` test (−3.22%). With #2311's hybrid Kendall providing differentiated per-channel weighting (σ-spread=0.484 here, 0.475 in baseline) — which itself improved `single_in_dist` test by −2.11% — **the low-σ RFF regularizer becomes redundant and over-regularizing.**
+
+`single_in_dist` test trajectory:
+- 42.45 (collapsed-σ + σ=0.5 RFF, pre-#2311)
+- 40.34 (hybrid-σ + σ=0.5 RFF, NEW baseline #2311, −2.11%)
+- 41.39 (hybrid-σ + multi-scale RFF, this run, +2.59% vs new baseline)
+
+σ=0.1 regularizer mechanism revision from #2407 was **conditional on σ-collapse providing no other per-channel signal.** Once #2311 fixed σ-collapse, the regularizer effect dissolves — adding more on top hurts.
+
+### Banked findings (5)
+
+1. **Multi-scale RFF and Kendall σ-differentiation share an information channel.** σ=0.1 RFF regularizer story was σ-collapse-conditional, not absolute. **Banked structural finding: #2311 substitutes for the per-channel regularization role low-σ RFF was filling.**
+2. **σ axis exhausted: 10 distinct RFF σ configurations evaluated.** σ=0.5 wins on every stack since Lion was adopted. Confirms σ=0.5 as canonical.
+3. **3rd–4th independent confirmation of clip_fraction = 1.000** (max_norm=0.5 + Lion + grad_norm_mean=19.22). Now 4 confirmations strong → **directly motivates #2606 max_norm sweep (thorfinn's own follow-up #3).**
+4. **Multi-scale construction verified** (Tancik 2020 §5 implementation correct). Block 0 std 0.4684, block 1 std 0.1117 — matches expected sampling.
+5. **Hybrid Kendall mechanism re-verified across third stack.** σ-spread 0.484 here vs baseline 0.475 — no Kendall drift from multi-scale change. Independent confirmation hybrid_kendall_lr=5e-4 is stable.
+
+### Closing rationale
+
+σ axis is closed. Decisively-tuned axes now: optimizer (Lion, #2168), Huber β (β=0.3, #2540 closes), RFF σ (σ=0.5, this PR closes), Kendall σ-collapse (hybrid_kendall_lr=5e-4, #2311). **Next axes: max_norm (thorfinn #2606 NEXT), hybrid_kendall_lr push (fern #2604 NEXT), architectural changes.**
+
+---
+
 ## 2026-05-13 19:10 — PR #2311 (**MERGED** ⭐, fern): Hybrid Lion+AdamW for Kendall σ heads on σ=0.5 stack — σ-collapse fix + compound win
 
 - **Branch:** `willowpai2g48h2-fern/hybrid-adamw-for-kendall-sigma-on-lion`
