@@ -2,6 +2,69 @@
 
 ---
 
+## 2026-05-13 16:30 UTC — Round 38 addendum: LayerScale merge
+
+### PR #2195 askeladd: LayerScale init=1e-4 (CaiT-style learnable residual gain γ) — MERGED (WIN, new baseline)
+
+- **Branch:** `charliepai2g48h5-askeladd/layerscale-1e-4`
+- **Hypothesis:** CaiT-style per-channel learnable γ (init=1e-4) on attention and MLP residual branches in all 5 TransolverBlocks. Forces the model to learn per-channel contribution magnitude rather than uniform residual integration. Predicted uniform per-split delta, NOT averaging-style bimodal.
+- **Results vs NEW baseline #2173 (val 49.8053):**
+
+| Metric | LayerScale | New baseline #2173 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **48.5160** | 49.8053 | **−2.59% WIN** |
+| `test_avg/mae_surf_p` | **42.8162** | 43.5396 | **−1.66% WIN** |
+| Best epoch | 42 | 47 | — |
+| Terminal epoch | 43 | 47 | — |
+| Time per epoch | 42.25 s | 37.5 s | +12.7% (compile overhead) |
+| Params | 658,359 | 657,079 | +1,280 (+0.19%) |
+
+**Per-split val breakdown:**
+
+| Split | baseline (n_head=2) | LayerScale | Δ |
+|---|---|---|---|
+| `val_single_in_dist` | 46.2915 | 44.6149 | **−3.62%** |
+| `val_geom_camber_rc` | 67.4416 | 65.9411 | **−2.22% — FIRST MOVE SINCE ROUND-1** |
+| `val_geom_camber_cruise` | 32.5963 | 33.2325 | +1.95% (slight) |
+| `val_re_rand` | 52.8918 | 50.2756 | **−4.95%** |
+
+**Per-split test breakdown:**
+
+| Split | baseline test | LayerScale test | Δ |
+|---|---|---|---|
+| `test_single_in_dist` | 40.6576 | 40.1418 | −1.27% |
+| `test_geom_camber_rc` | 61.4956 | 60.4713 | **−1.67%** |
+| `test_geom_camber_cruise` | 27.6519 | 27.5452 | −0.38% |
+| `test_re_rand` | 44.3531 | 43.1065 | −2.82% |
+
+**MAJOR FINDING: val_geom_camber_rc (67.44 → 65.94) moved for the FIRST TIME since round-1.** Every previous intervention — warmup, n_head, normalization, augmentation, loss function, optimizer — left this split flat. LayerScale's per-channel selective residual gating is the first mechanism to crack the camber-rc OOD bottleneck.
+
+**Failure-mode taxonomy check:**
+- Uniform direction (3 of 4 splits improved, cruise slight +1.95%): NOT averaging-style bimodal (which would show large in-dist WIN + OOD LOSS).
+- val_re_rand is NOT the worst regressor: NOT broadcast-scalar prior corruption.
+- Pattern is consistent with "architectural-residual-gating WIN" — 9th distinct mechanism (confirmed distinct from all 8 closed failure taxa).
+
+**Trained γ diagnostics (from epoch-42 weights):**
+- MLP branches activated 4-8× stronger than attention at every layer (γ_mlp abs_mean ≈ 0.025-0.05 vs γ_attn ≈ 0.003-0.011) — model leans more on FFN residuals.
+- Block 3 attention notably underweighted (γ_attn abs_mean 0.0032, ~32× init — smallest activation).
+- Signs mixed within each γ vector — per-channel selective gating, not simple uniform scaling.
+- All branches activated (none stuck at 1e-4 init) — init not too aggressive.
+
+**Best epoch 42 ≠ terminal 43** (first convergence-within-budget in recent rounds). LayerScale may enable faster convergence by providing per-channel residual-scaling freedom that reduces effective optimization landscape roughness.
+
+**Metric artifacts:**
+`models/model-charliepai2g48h5-askeladd-layerscale-1e-4-20260513-110555/metrics.jsonl`
+`models/model-charliepai2g48h5-askeladd-layerscale-1e-4-20260513-110555/metrics.yaml`
+
+**MERGED as new baseline. New bar: val_avg/mae_surf_p < 48.5160.**
+
+**Suggested follow-ups (student-proposed, high priority):**
+1. γ init sweep: 1e-3 and 1e-2 (larger init → fewer "branches off" early epochs → more productive time in 30-min budget)
+2. Per-branch asymmetric init: γ_attn init=1e-4, γ_mlp init=1e-3 (data-driven from trained γ diagnostics)
+3. Scalar γ ablation (shape () instead of (hidden_dim,)) to confirm per-channel freedom is essential
+
+---
+
 ## 2026-05-13 16:00 UTC — Round 38
 
 ### PR #2222 thorfinn: n_head 2→1 (dim_head 64→128) — CLOSED (LOSS, concave-axis closure)
