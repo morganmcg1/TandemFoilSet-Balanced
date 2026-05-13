@@ -188,3 +188,29 @@ Merged. bf16 mixed-precision training (`torch.amp.autocast(dtype=torch.bfloat16)
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --epochs 30`
   (torch.compile is now applied to the live model by default in train.py; dynamic=True handles variable mesh sizes; no extra flags needed)
 - **Confounder noted:** `--epochs 30` makes cosine T_max=30 (vs implicit baseline T_max=50). Part of the gain may be from a more aggressive cosine schedule. Throughput component is clean either way.
+
+## 2026-05-13 05:50 — PR #1875: frieren n_layers=3 v2 — fresh retry on compile-stack baseline
+
+**New best — 7th compound improvement (architecture capacity-down + throughput win)**
+
+- **val_avg/mae_surf_p:** 69.4518 (↓ from 71.4371, −2.78%)
+- **test_avg/mae_surf_p:** 61.1887 (↓ from 62.5927, −2.24%)
+
+**Per-split test (3/4 improved, camber_rc within noise +0.14):**
+
+| Split | mae_surf_p | vs PR #1763 |
+|-------|----------:|----------:|
+| `test_single_in_dist` | 67.8314 | −2.60 |
+| `test_geom_camber_rc` | 74.2256 | +0.14 (noise) |
+| `test_geom_camber_cruise` | 42.8224 | −1.69 |
+| `test_re_rand` | 59.8755 | −1.47 |
+
+- **Config:** EMA decay=0.999, Huber β=0.5, bf16 autocast, LR warmup 1ep, lr=5e-4, batch_size=4, surf_weight=10, n_hidden=128, **n_layers=3**, slice_num=64, mlp_ratio=2, dropout=0.0, torch.compile(model, dynamic=True, mode='default')
+- **Epochs:** **30 in 20.6 min** (~40.8 s/epoch steady state — 35% speedup vs compile baseline ~63 s)
+- **Budget headroom:** ~9 min unused in 30-min budget; projected ~44 epochs if run to cap
+- **Param count:** 420,047 (0.23× compile baseline 1.84M)
+- **Best epoch:** 30/30 (final) — val trajectory still descending; model had not fully converged → more headroom
+- **EMA-vs-live gap:** small and healthy
+- **W&B run:** `fsqr0yp5`
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_layers 3 --epochs 30`
+- **Mechanism:** PhysicsAttention slicing carries the heavy representational load; 3 attention layers is sufficient for this 1500-sample dataset. Depth reduction frees ~35% compute per epoch → more training epochs in budget → better convergence despite 77% fewer params.
