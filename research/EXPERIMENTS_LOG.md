@@ -2831,3 +2831,43 @@ With swa_start_epoch=11 (0-indexed) but only 11 epochs (0-indexed 0-10) running,
 - **Code change:** Add `--slice_num` CLI flag, wire into model_config.
 - **Predicted params:** ~1.07M (vs 0.76M baseline, 1.61M failed n_hidden=192). Slice_num scales linearly.
 - **Target:** val < 47.64. Bonus signal: if geom_camber_rc specifically improves >3 points even on close-call avg, banked even if not merged.
+
+---
+## 2026-05-13 15:00 — PR #2297 CLOSED willowpai2g48h2-askeladd (Lion lr sweep {2e-4, 4e-4, 5e-4} on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-lr-sweep-on-beta0p3`
+- **Hypothesis:** Map Lion lr response curve around baseline 3e-4.
+- **Results (terminal, 3 arms):**
+
+| Arm | lr | SWA val | SWA test | Δ val | Δ test | W&B |
+|---|---|---|---|---|---|---|
+| 1 | 2e-4 | 49.55 | 42.54 | +1.91 | +1.98 | `vztg915e` |
+| 2 | 4e-4 | 47.57 | 40.62 | −0.07 | +0.06 | `t2mva61k` |
+| 3 | 5e-4 | 48.45 | 41.38 | +0.81 | +0.81 | `xo8scxgh` |
+| baseline | 3e-4 | 47.64 | 40.57 | — | — | `5hp3gid7` |
+
+### Decision: close (not merge arm 2)
+
+Arm 2 has mixed val/test direction (val −0.07, test +0.06) at noise-level. Per CLAUDE.md "insist on the matching test metric" for paper-facing comparisons, this is not decision-grade evidence.
+
+### Three banked findings
+
+1. **V-shape confirmed, lr=3e-4 near optimum.** Cost grows roughly symmetrically in log-lr space. **Lr axis CLOSED.**
+2. **Kendall log_σ collapse rate scales tightly with lr** (−0.60 / −1.20 / −1.51 at lr 2e-4/4e-4/5e-4). Higher lr → faster σ-collapse. **Third independent confirmation** that fern's #2311 hybrid Lion+AdamW-for-σ is the right approach.
+3. **clip_fraction=1.00 across all 3 lr arms.** **Third independent source** (after frieren #2240 and baseline). Strong evidence max_norm=0.5 is over-constraining — directly validates edward's #2347 drop-grad-clip experiment.
+
+---
+## 2026-05-13 15:05 — PR #2270 STATUS CHECK posted willowpai2g48h2-alphonse
+
+- Pod healthy, GPU at 100% util, but no PR commits/comments in 2h45m since 12:20 UTC assignment
+- Posted status-check comment asking student for state update + flagging that Lion baseline merged AFTER their run started (decision target moved from val<66.66 to val<47.64; may need rebase + rerun)
+
+---
+## 2026-05-13 15:07 — PR #2390 ASSIGNED willowpai2g48h2-askeladd (Lion wd sweep {1e-4, 1e-3, 3e-3} on β=0.3+RFF+Kendall, lr=3e-4 fixed)
+
+- **Branch:** `willowpai2g48h2-askeladd/lion-wd-sweep-on-beta0p3`
+- **Hypothesis:** Current wd=3e-4 inherited from AdamW tuning may be sub-optimal for Lion. Chen 2023 paper notes Lion typically needs 3-10× higher wd than AdamW because sign-update magnitude is bounded.
+- **Three-arm bracket:** wd ∈ {1e-4, 1e-3, 3e-3} (under-decay control, 3× current, 10× current).
+- **No code changes needed** — `--weight_decay` already a CLI flag.
+- **Target:** val < 47.64 AND test ≤ 40.57. Bonus signal: wd=3e-3 may close geom_camber_rc gap via stronger OOD regularization.
+- Builds on askeladd's lr-sweep template (#2297 closed, banked V-shape findings).

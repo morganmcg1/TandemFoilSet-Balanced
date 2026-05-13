@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 14:57 (closed #2354 nezuko n_hidden=192 SWA starvation; assigned #2378 nezuko slice_num=96 compute-frugal capacity bump)
+- **Last updated:** 2026-05-13 15:07 (closed #2297 askeladd Lion lr sweep V-shape lr=3e-4 optimum; assigned #2390 askeladd Lion wd sweep)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -52,7 +52,7 @@
 
 | PR | Student | Status | Mechanism | Notes |
 |---|---|---|---|---|
-| **#2297** | **askeladd** | wip | Lion lr sweep {2e-4, 4e-4, 5e-4} | Fine-bracket the winning lr=3e-4 |
+| **#2390** | **askeladd** | wip (new) | Lion wd sweep {1e-4, 1e-3, 3e-3} | Test if Lion needs 3-10× AdamW wd (Chen 2023) |
 | #2168 | thorfinn | wip (rebase sent) | σ=0.5 on β=0.3 stack | Needs further rebase to Lion baseline now |
 | **#2311** | **fern** | wip | Hybrid Lion+AdamW-for-σ on Lion stack | Restores Kendall σ differentiation |
 | #2270 | alphonse | wip | max_norm {0.75, 1.0} on β=0.3 | Needs rebase to Lion after finishing |
@@ -83,7 +83,7 @@
 
 1. **geom_camber_rc** — still the largest absolute gap (val=62.86, test=55.25). All mechanisms help but it's still the hardest split.
 2. **SWA only 2 averaging epochs** (timeout at 13/15 epochs) — EMA may help
-3. **Lion lr = 3e-4 not yet confirmed as global optimum** — #2297 will map the curve
+3. **Lion lr = 3e-4 confirmed near optimum** (#2297 V-shape: 2e-4 +1.91 / 4e-4 −0.07 mixed / 5e-4 +0.81). Lr axis CLOSED.
 
 ## Potential next directions (Wave 11)
 
@@ -102,7 +102,7 @@
 1. Huber β=1.0 (#1452), 2. Per-sample Re-weight (#1586), 3. FiLM (#1585), 4. Grad-clip 1.0 (#1731), 5. Grad-clip 0.5 (#1831), 6. Kendall σ (#1906), 7. RFF σ=1.0 (#2082), 8. Huber β=0.3 (#1757), 9. **Lion lr=3e-4 wd=3e-4 (#2063)** ← CURRENT
 
 ### 🔬 In-flight (Wave 10)
-- Lion lr fine-sweep (#2297 askeladd) — map lr optimum around 3e-4
+- Lion wd sweep (#2390 askeladd) — test if Lion needs higher wd than AdamW
 - T_max cosine sweep on Lion (#2342 tanjiro) — schedule shape
 - Hybrid Lion+AdamW for Kendall σ (#2311 fern) — restore σ differentiation
 - Drop grad-clip on Lion (#2347 edward) — clip fires 74% under sign-update
