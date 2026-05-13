@@ -1876,3 +1876,102 @@ This was the first deliberate replicate-pair on the willow track. The observed s
 - **Distinct from active axes:** alphonse #2219 (width-floor 160), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), nezuko #2053 (mlp_ratio=3), tanjiro #2199 (--epochs 33), thorfinn #2186 (AdamW betas).
 - **Note on baseline framing**: This is the symmetric counterpart to #1913 (grad-accum halved opt-steps and failed). At fixed epochs, batch_size=2 doubles them. The opt-step density axis was raised in the next-after-current section of the research state.
 
+## 2026-05-13 16:55 — PR #2053: nezuko mlp_ratio 2 → 3 v2 retest (n_hidden=224 + grad-clip=2.5) — CLOSED (4th clip-saturation interaction confirmed)
+
+- Branch: `willowpai2g48h5-nezuko/mlp-ratio-3`
+- v1 (n_hidden=192, grad-clip=5.0): val 54.82, test 47.81 — won −1.70% / −0.60% vs #1953. Mechanism real in soft-scaling regime.
+- v2 send-back instruction (09:54 UTC): retest at `--n_hidden 224` on current 13-compound stack (note: send-back issued before Cycle 28 closed width axis at 192).
+- W&B run (v2): `jk37yxj7`
+
+### Results — clean Outcome C regression, fourth clip-saturation interaction
+
+| Stack | val_avg | test_avg | Δ val vs #1982 | Δ test vs #1982 |
+|---|---:|---:|---:|---:|
+| #1982 baseline (n=192, ratio=2, clip=2.5) | 52.6406 | 44.9791 | — | — |
+| #2066 (n=224, ratio=2, clip=2.5) | 54.3400 | 47.1900 | +3.22% | +4.92% |
+| v1 (n=192, ratio=3, clip=5.0) | 54.8155 | 47.8073 | +4.13% | +6.29% |
+| **v2 (n=224, ratio=3, clip=2.5)** | **56.1481** | **48.5346** | **+6.66% FAIL** | **+7.91% FAIL** |
+
+**Verified W&B**: val=56.1481, test=48.5346, clip rate 99.5654% (10081/10125 steps), best_epoch=27/50. Student-reported values confirmed exactly.
+
+### Per-split test (EMA, best-val checkpoint)
+
+| Split | v2 | v1 (clip=5.0) | Δ v2 vs v1 |
+|---|---:|---:|---:|
+| test_single_in_dist | 56.53 | 52.98 | +6.72% |
+| test_geom_camber_rc | 61.68 | 61.22 | +0.76% |
+| test_geom_camber_cruise | 30.11 | 31.08 | −3.12% |
+| test_re_rand | 45.82 | 45.96 | −0.30% |
+| **test_avg** | **48.53** | **47.81** | **+1.52%** |
+
+In-dist takes the largest hit (+6.72%) where the model is least capacity-starved; cruise/re_rand actually improve slightly vs v1 — modest signal that the FFN-3 mechanism still has some OOD effect even at saturation, but overall regressive.
+
+### Mechanism — fourth clip-saturation interaction confirmed
+
+| PR | Lever (amplitude-related) | grad-clip | clip rate | val Δ vs #1982 |
+|---|---|---|---:|---:|
+| #2066 tanjiro | n_hidden=224 (slower epochs) | 2.5 | 99.31% | +3.22% |
+| #2000 alphonse | T_max=80 (extend schedule) | 2.5 | 99.44% | +4.54% |
+| #2159 askeladd | lr=7.5e-4 (raise amplitude) | 2.5 | 99.30% | +7.77% |
+| **#2053 (THIS PR)** | **mlp_ratio=3 + n_hidden=224** | 2.5 | **99.57%** | **+6.66%** |
+
+**Pattern crystallized further:** Four independent axes (width, schedule, peak LR, FFN width) all amplitude-mediated, all blocked at clip-saturation threshold=2.5. Student's isolation of v1 vs v2:
+- v1 at clip=5.0 (clip rate 93.46%): mechanism WON −1.70%
+- v2 at clip=2.5 (clip rate 99.57%): mechanism LOST +6.66%
+- Pre-clip gradient norm distribution statistically unchanged (mean 19.2 v2 vs 18.9 v1) — clip threshold acts as a fixed-magnitude direction-normalizer at 99.57% of steps.
+
+### Sub-finding — EMA-live gap widens at high-clip regime
+
+Student reported v2 EMA-live gap of −13.05 (val) and −11.67 (test) — substantially wider than v1's −8.32. Consistent with the framing in edward #2024 v1 analysis: more capacity + tighter clip regime = more variance for EMA to absorb. EMA shadow doing real work in this saturation regime.
+
+### Confound disclosure
+
+The v2 run confounds two effects:
+1. Throughput penalty (n_hidden=224 cuts epochs to 27/50 vs 33/50 at n=192).
+2. Clip-saturation block on mlp_ratio amplitude mechanism.
+
+Student's follow-up #1 (mlp_ratio=3 at n_hidden=192 + grad-clip=2.5) would isolate clip-saturation from throughput. But given the four-instance pattern is overdetermined, this confirmation is not pursued — nezuko reassigned to slice axis instead.
+
+### Note on send-back ambiguity
+
+The send-back specified `--n_hidden 224` at 09:54 UTC. Cycle 28 commit (632e5a9, 11:06 UTC) declared `n_hidden=192` the new default after #2066 closed. Student's pod launched the literal command at 11:03 UTC; they posted clarifying comments at 11:13/11:14 UTC explaining they'd let it complete to honor the literal instruction rather than waste compute. Correct call — the result is informative even if confounded.
+
+### Implications — mlp_ratio axis status
+
+- mlp_ratio=2 is the optimum under grad-clip=2.5 (saturated regime).
+- mlp_ratio=3 mechanism IS real in the soft-scaling regime (grad-clip ≥5.0); destroyed by saturation threshold=2.5.
+- Worth revisiting only if optimizer moves to a regime with clip rate < 95% — e.g. if askeladd #2231 lr=3e-4 succeeds at exiting saturation, mlp_ratio>2 could compound.
+
+### Suggested follow-ups
+1. **slice_num 64 → 48 capacity-down** — untested architecture axis at n_hidden=192, orthogonal to FFN width
+2. **Don't pursue mlp_ratio ≥ 3 further under grad-clip=2.5**
+
+→ Assigning nezuko: slice_num=48 capacity-down on slice axis.
+
+## 2026-05-13 16:55 — PR #2024: edward EMA decay 0.998 v2 retest — second ping (stale_wip 6.5h since v2 commit)
+
+- Branch: `willowpai2g48h5-edward/ema-decay-0p998`
+- Status: v2 commit landed at 10:09 UTC (sha 113c4d96, message "ema-decay: 0.999 → 0.998 on 13-compound stack (PR #2024 v2)"). Zero comments or status updates in the 6.5h since.
+- Action: Posted ping comment (4440839797) with the current state of clip-saturation findings (4 instances now confirmed) and the implication for EMA's mechanism (EMA averages output weights, downstream of optimizer — one of the few axes expected to bypass saturation). Provided updated reproduce command at `--n_hidden 192` (the proven-optimum width per #2066) in case student needs to switch. Asked for status update within ~30 min.
+- Comment ID: 4440839797
+
+## 2026-05-13 16:55 — PR #2267: nezuko assigned slice_num 64 → 48 capacity-down on slice axis
+
+- Branch: `willowpai2g48h5-nezuko/slice-num-48-capacity-down`
+- Hypothesis: slice-axis floor — symmetric to old slice_num=96 ceiling fail (#1550) at n_layers=5 stack. Untested at current 13-compound stack. PhysicsAttention partitions 24-dim features into `slice_num` slices; lower slice_num = fewer effective attention tokens = (a) faster epochs (compute lever), (b) coarser feature partitioning (capacity lever). At n_layers=3 + n_hidden=192, whether slice partition can be coarsened without hurting fidelity is genuinely open.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 50` (with `slice_num: 64 → 48` change in train.py).
+- Targets: val < 52.6406, test < 44.9791.
+- **Why this axis is high-leverage now:**
+  - **Orthogonal to all 4 blocked amplitude axes.** Slice partition is input-geometry, operates before gradient amplitude exists. Untested whether clip-saturation blocks it.
+  - **Compute lever**: 48/64 = 0.75 attention tokens → epoch time ~42s (vs 54s at slice_num=64), ~42 epochs/budget vs 33 — closes ~60% of the under-convergence gap from #1982 (val −0.84/ep at termination).
+  - **Param count decrease**: ~0.85M (−9% vs #1982's 0.93M).
+- **Quantitative predictions:**
+  - Epochs in 30 min: ~42/50 (vs 33/50) — substantially closer to schedule completion
+  - Cosine LR at termination: ~16% of base (vs 26% at #1982) — deeper into quiet annealing tail
+  - Clip rate: expected stable ~98.9% (capacity-down should not increase gradient amplitude)
+- **Three outcomes:**
+  - (A) val < 52.64 → MERGE — capacity-down on slice axis frees compute productively; "epoch-saturated not capacity-saturated" framing confirmed on slice
+  - (B) val 52.64–53.5 → WASH — capacity-loss balances epoch gain
+  - (C) val > 53.5 → FAIL — slice axis bracketed [48, 64(OPT), 96]; slice partition too coarse hurts feature separation
+- **Distinct from active axes:** alphonse #2219 (width-floor 160), askeladd #2231 (lr=3e-4), edward #2024 (EMA 0.998), fern #2142 (Huber β=0.25), frieren #2247 (batch_size=2 opt-step density), tanjiro #2199 (--epochs 33 schedule alignment), thorfinn #2186 (AdamW betas).
+

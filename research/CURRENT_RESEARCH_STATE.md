@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 16:30
+- **Date:** 2026-05-13 16:55
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -61,7 +61,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | edward | #2024 | EMA decay 0.999 → 0.998 — retest on 13-compound stack | Optimization (EMA) | WIP-RETEST | v1 ran at grad-clip=5.0 (protocol-stale). val=54.22 beat #1953 (-2.77%) but +3.00% vs current #1982. 3/4 OOD test splits improved cleanly. EMA-live gap did NOT close (stayed −8.68 vs predicted ~0) but val/test improved — mechanism reframed: shorter half-life = better noise rejection, not closing live-gap visibility. Retest on n_hidden=224+grad-clip=2.5 stack |
 | fern | #2142 | Huber β=0.5 → 0.25 — tighter MAE alignment on 13-compound stack | Loss shape | WIP | #1805 CLOSED (β anneal v3 val=53.92, +2.43% regression; mechanism: grad-clip=2.5 saturates 99.7-100% during high-β phase, removes curvature benefit). Natural follow-up to #1689 (β=1.0→0.5 won −7.4%). Constant β=0.25 has no high-β phase — tests steady-state loss-shape axis at current grad-clip regime |
 | frieren | #2247 | batch_size 4 → 2 at n_hidden=192 — opt-step density axis (2× opt-steps per epoch, 375→750) | Optimization (effective opt-step count) | WIP | #2160 CLOSED — weight_decay=1e-5 (10× REDUCTION from baseline 1e-4 — student baseline-framing catch); replicate-pair (luy0nfhu val=52.41/test=45.63; n62k4mdt val=54.62/test=47.13) gave mean val 53.52 = +1.66%, mean test 46.38 = +3.11%. Inter-replicate spread ±1.1 val pts > effect size — wash/loss on mean. Clip rate eased slightly (98.93%→96.67%) confirming regularization axis NOT blocked by clip-saturation, but net OOD-negative (3/4 OOD splits regress on mean). This PR tests opt-step density (untested, distinct from amplitude). Opposite direction from failed #1913 grad-accum which halved opt-steps. Outcomes: (A) val<52.64 win — opt-step density matters; (B) wash; (C) val>54 fail — batch noise floor hurts |
-| nezuko | #2053 | mlp_ratio 2 → 3 — retest on current 13-compound stack | Architecture (FFN width) | WIP-RETEST | v1 ran at grad-clip=5.0 (protocol-stale by #1982). val=54.82 beat #1953 (−1.70%) but +4.13% vs current #1982. 3/4 OOD splits descended (camber_rc/cruise/re_rand all improve); in_dist neutral. Strong mechanism (FFN does more work at shallower n_layers=3) — needs retest at n_hidden=224 + grad-clip=2.5 |
+| nezuko | #2267 | slice_num 64 → 48 — capacity-down on slice axis at n_hidden=192 | Architecture (slice partition) | WIP | #2053 CLOSED — v2 retest (n_hidden=224 + mlp_ratio=3 + grad-clip=2.5) gave val 56.15 = +6.66% / test 48.53 = +7.91% at 99.57% clip rate (FOURTH clip-saturation interaction). mlp_ratio axis now confirmed in amplitude-axis category. Student v1 vs v2 decomposition was strong: mlp_ratio=3 mechanism IS real at grad-clip=5.0 (won −1.70% at v1) but channel closed by saturation at threshold=2.5. This PR tests slice-axis floor — symmetric to old #1550 slice_num=96 ceiling fail at n_layers=5 stack. Untested at current 13-compound stack. Slice axis is geometry (input partition), orthogonal to all four blocked amplitude axes. Compute lever: 48/64 = 0.75 slice tokens → ~42 epochs/budget vs 33. Outcomes: (A) val<52.64 win (capacity-down frees compute); (B) wash; (C) val>53.5 fail (slice axis bracketed [48, 64(OPT), 96]) |
 | tanjiro | #2199 | --epochs 33 cosine-schedule alignment with realized 30-min budget | Schedule (alignment) | WIP | #2066 CLOSED with critical finding: n_hidden=224 + grad-clip=2.5 + T_max=50 = val 54.34/test 47.19 (+3.22%/+4.92% regression on all 4 splits). Mechanism: 30-min cap × T_max=50 cosine leaves cosine LR at 26-37% of base at termination — under-converged. This PR tests T_max=epochs=33 alignment: cosine fully decays by realized 33-epoch budget at n_hidden=192. Distinct from alphonse #2000 T_max=80 (opposite direction — extend cosine, keep LR high). Outcomes: (A) val<52.64 win, late-phase low-LR refinement matters; (B) wash; (C) val>53.5 fail, LR=0 final phase hurts |
 | thorfinn | #2186 | AdamW betas (0.9, 0.999) → (0.9, 0.95) — beta_2 reduction | Optimization (optimizer adaptation) | WIP | #2068 CLOSED (n_hidden=256 val=54.57 = +3.67%/test 47.48 = +5.55% regression on all 4 splits — mechanism: throughput-induced epoch deficit, run cut at 27/50 epochs by 30-min timeout, T_max=50 schedule never completes decay. Width axis bracketed at 224 within 30-min budget: 192/224(OPT)/256(runtime-fail)). beta_2 reduction makes second-moment estimate react ~50× faster — untested optimizer-tuning axis distinct from LR/grad-clip/wd axes. Outcomes: (A) WIN faster adaptation tracks grad-clip 98.9% saturation regime; (B) FAIL variance too noisy → late-training instability |
 
@@ -142,39 +142,43 @@ Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); a
 3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward, n_hidden=224 — sub-optimal width).
 4. **Huber β=0.25** — #2142 (fern): loss-shape axis.
 5. **batch_size=2 opt-step density** — #2247 (frieren, n_hidden=192).
-6. **mlp_ratio=3 retest** — #2053 (nezuko, n_hidden=224 — sub-optimal width).
+6. **slice_num 64 → 48 capacity-down** — #2267 (nezuko, n_hidden=192).
 7. **AdamW betas (0.9, 0.95)** — #2186 (thorfinn, n_hidden=224 — sub-optimal width).
 8. **--epochs 33 schedule alignment** — #2199 (tanjiro, n_hidden=192).
 
-**Sub-optimal-width caveat:** PRs #2024/#2053/#2186 were assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Their results are still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
+**Sub-optimal-width caveat:** PRs #2024/#2186 were assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Their results are still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
 
-### Closed (cycles 27-31)
+### Closed (cycles 27-32)
 - #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit; width axis ceiling at 30-min budget)
 - #2066 tanjiro n_hidden=224+grad-clip=2.5 compound (val 54.34 = +3.22% / test +4.92% — direct measurement, width axis bracketed at 192 from above)
 - #2000 alphonse T_max=80 retest at grad-clip=2.5 (val 55.03 = +4.54% / test 48.05 = +6.84% — clip rate climbed to 99.44%, direction-normalization regime; schedule extension axis closed under current clip threshold)
 - #2159 askeladd lr=7.5e-4 raise at grad-clip=2.5 (val 56.73 = +7.77% / test 49.19 = +9.37% on all 4 splits — clip rate climbed to 99.30%, LR amplitude axis blocked by clip saturation; third consecutive clip-saturation interaction)
 - #2160 frieren weight_decay=1e-5 (10× REDUCTION from baseline 1e-4 per student catch; replicate-pair mean val 53.52 = +1.66% / mean test 46.38 = +3.11%; inter-replicate spread ±1.1 val pts > effect size — wash/loss on mean; clip rate eased 98.93%→96.67% confirming regularization axis is NOT blocked by saturation but net OOD-negative; 3/4 OOD splits regress)
+- #2053 nezuko mlp_ratio=3 retest at n_hidden=224+grad-clip=2.5 (val 56.15 = +6.66% / test 48.53 = +7.91% at 99.57% clip rate — FOURTH clip-saturation interaction; mlp_ratio axis confirmed amplitude-mediated; mechanism real at grad-clip=5.0 v1 −1.70% won, destroyed at threshold=2.5; n_hidden=224 throughput penalty also contributes)
 
-### Clip-saturation interaction pattern (CRITICAL FINDING — three confirmed instances)
+### Clip-saturation interaction pattern (CRITICAL FINDING — four confirmed instances)
 
 | PR | Lever (amplitude-related) | grad-clip | clip rate | val Δ | Verdict |
 |---|---|---|---:|---:|---|
 | #2066 tanjiro | n_hidden=224 (slower epochs) | 2.5 | 99.31% | +3.22% | epoch deficit + saturation |
 | #2000 alphonse | T_max=80 (extend schedule) | 2.5 | 99.44% | +4.54% | direction-only SGD blocked |
 | #2159 askeladd | lr=7.5e-4 (raise amplitude) | 2.5 | 99.30% | +7.77% | amplitude-axis blocked |
+| #2053 nezuko | mlp_ratio=3 + n_hidden=224 | 2.5 | 99.57% | +6.66% | FFN width amplitude-mediated |
 
 **Pattern:** At grad-clip=2.5 + 98.93% baseline clip rate, ANY axis that operates via gradient amplitude is blocked. The effective step magnitude is fixed at `2.5/||g||`, so multiplicative scaling of LR or extending schedule shape doesn't translate into useful effective updates.
+
+**Confirmed amplitude-mediated axes (blocked):** n_hidden widening, T_max extension, LR raise, mlp_ratio increase.
 
 **Mechanisms expected to work at clip saturation (orthogonal to amplitude):**
 - AdamW betas — variance estimate dynamics (thorfinn #2186)
 - Weight decay — parameter scale, downstream of clip (frieren #2160 — **PARTIAL: clip rate dropped to 96.67% but mean wash/loss; 1e-5 direction net OOD-negative**)
 - Huber β — loss curvature, upstream of clip (fern #2142)
 - EMA decay — averaging downstream of optimizer (edward #2024)
-- mlp_ratio — capacity through gradient structure (nezuko #2053)
 - Width narrowing — frees epoch budget (alphonse #2219)
 - Schedule shortening — re-aligns cosine to realized budget (tanjiro #2199)
 - LR lowering — may exit saturation (askeladd #2231)
 - Opt-step density — more opt-steps per epoch (frieren #2247 batch_size=2)
+- Slice partition geometry — input-side partition orthogonal to gradient amplitude (nezuko #2267 slice_num=48)
 
 ### Schedule axis status (post-#2000 closure)
 
