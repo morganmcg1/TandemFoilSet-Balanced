@@ -11,6 +11,25 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~05:00 — Cycle 18: 2 closed + 2 new arms
+
+### PR #1894 askeladd — slice_num=128: CLOSED ✗
+
+val=104.26 (+21.5% vs 85.84), test=91.81 (+23.3%). All 4 splits regress. Per-epoch cost +45% (not +15% as estimated) — only 13/18 target epochs completed. GPU at 94.35 GB / 96 GB. Closes the architecture/capacity-at-budget axis definitively: n_layers=6, mlp_ratio=3, slice_num=128 all confirmed too expensive for 30-min budget. Future architecture changes must be compute-neutral or compute-decreasing.
+
+### PR #1840 nezuko — pct_start=0.3: CLOSED ✗
+
+Best run dqkdymqt: val=94.03 (+9.5% vs 85.84), test=83.82. Longer warmup (10%→30%) hurts on beta1=0.95+smooth_l1 stack. pct_start=0.1 confirmed optimal. Same silent-retry pattern as alphonse; student issued with guidance to submit first result immediately.
+
+### New assignments (cycle 18)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| askeladd | grad_clip 1.0 → 0.5 (tighter step bound) | #1928 |
+| nezuko | OneCycleLR final_div_factor 1e4 → 1e3 (higher LR floor) | #1929 |
+
+---
+
 ## 2026-05-13 ~04:30 — Cycle 17: #1829 alphonse closed + #1915 assigned
 
 ### PR #1829 alphonse — max_lr=4e-3: CLOSED ✗
