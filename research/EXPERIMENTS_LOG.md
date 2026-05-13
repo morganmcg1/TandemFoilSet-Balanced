@@ -8,6 +8,69 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 00:08 — PR #1675 (alphonse H17 per-channel output γ, β) — **CLOSED**
+
+- Branch: `charliepai2g24h4-alphonse/out-scale-bias-h17`
+- Hypothesis: 6 learnable parameters `γ ∈ ℝ³, β ∈ ℝ³` on the output head,
+  identity-init, attack per-channel pressure-vs-velocity calibration
+  without compression (the closed log1p direction).
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | 93.214 | 90.294 | **+3.24%** |
+| test_avg/mae_surf_p (4-split) | 83.108 | 81.243 | +2.30% |
+| n_params | 662,365 | 662,359 | +6 |
+
+- **Mechanism behaved exactly as predicted, outcome did not.** `out_gamma[2]`
+  (pressure) drifted +6.13% by ep 15, vs +1.43% on Ux and +3.21% on Uy —
+  optimizer found pressure-channel scale up = local loss minimizer, as
+  hypothesised. Drift was smooth and monotone across all 15 epochs
+  (gradient flow healthy).
+- **All four val splits regressed**, largest hit on `val_single_in_dist`
+  (+5.07%) — exactly the split the hypothesis predicted would benefit
+  most (highest p magnitudes). The inversion is informative: identity-init
+  guarantees zero regression at step 0, but with no penalty toward
+  identity, the optimizer drifts wherever the *training* gradient pulls.
+  A 6% multiplicative drift on already-correct large-magnitude pressure
+  predictions inflates their MAE by ~6%.
+- **Output-side calibration is exhausted on this dataset.** Trio of
+  closures: #1610 (full-channel log1p +1.18%), #1636 (pressure-only log1p
+  +5.32%), #1675 (per-channel γ, β +3.24%). The existing pre-training
+  normalization is more useful than any post-hoc multiplicative correction.
+- **Pivot direction:** student's own suggestion #1 — per-channel surf-loss
+  weighting. Attack the same imbalance upstream at the loss layer instead
+  of letting the model mis-calibrate the prediction.
+
+## 2026-05-13 00:08 — PR #1674 (askeladd grad-clip max_norm=50 — H15 bracket above) — **CLOSED**
+
+- Branch: `charliepai2g24h4-askeladd/grad-clip-50`
+- Hypothesis: bracket above merged max_norm=25 to test whether pure
+  spike-only suppression (the 110-norm at ep 8 in #1637) is sufficient
+  or whether bulk 30–70 norm clipping is the active mechanism.
+
+| Metric | This PR | Baseline (#1637, max_norm=25) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | 93.286 | 90.294 | **+3.32%** |
+| test_avg/mae_surf_p (4-split) | 83.882 | 81.243 | +3.25% |
+| Epochs above 50 (clipped) | 6/15 (40%) | n/a | — |
+
+- **Outcome B (PR-predicted): bulk 30–70 norms are the active ingredient
+  at threshold 25.** Spike-only suppression at threshold 50 captures the
+  signature pattern (ep5→6, ep10→11 "spike-down" mapping correct) but
+  recovers only a fraction of the #1637 gain.
+- **Uniform regression across all four splits**, largest on
+  `val_single_in_dist` (+7.08%), smallest on `val_geom_camber_cruise`
+  (+1.43%) — same direction as the merged #1637 win was uniform, just
+  reversed.
+- **Implication:** the variance-reduction-on-heavy-steps reading is right.
+  The 25-threshold is clipping not just outliers but moderately heavy
+  (~30–50) steps, and removing that clipping when threshold = 50 is the
+  cost.
+- **Pivot direction:** student's suggestion #1 — `max_norm=10` (lower
+  bracket). If 10 wins → bracket further below; if 10 regresses → 25 is
+  at local optimum and the fixed-threshold sweep is complete (next would
+  be adaptive clipping schemes).
+
 ## 2026-05-12 23:55 — PR #1555 (thorfinn tied projection + n_hidden=144 retune) — **CLOSED**
 
 - Branch: `charliepai2g24h4-thorfinn/remove-in-project-fx`
