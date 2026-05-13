@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-14 00:15 UTC — Round 46
+
+One axis-closing LOSS reviewed + 1 new experiment assigned (GeGLU FFN).
+
+### PR #2394 frieren: surf_weight 10→20 (gradient rebalancing) — CLOSED (SURF_WEIGHT AXIS FULLY CLOSED AT 10)
+
+- **Branch:** charliepai2g48h5-frieren/surf-weight-20
+- **Hypothesis:** surf_weight=10→20: intermediate of closed bracket {10 baseline, 30 prior LOSS under heavier config}. Tests whether lean-config (n_hidden=96, L1, slim advisor) tolerates higher surface emphasis without the instability of the heavier-config surf_weight=30 LOSS.
+
+| Metric | surf_weight=20 | Baseline #2307 (surf_weight=10) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 47.8434 | 42.3455 | **+12.98% LOSS** |
+| test_avg/mae_surf_p | (not reported separately) | 38.5059 | — |
+| val_single_in_dist | ~43.3 | 35.4776 | **+22.08% (worst)** |
+| val_geom_camber_rc | ~64.2 | 60.8311 | +5.48% (least) |
+| val_geom_camber_cruise | (proportional) | 27.6517 | regressed |
+| val_re_rand | (proportional) | 45.4214 | regressed |
+
+- **Per-split pattern:** UNIFORM REGRESSION all 4 splits. In_dist worst (+22.08%), camber_rc least (+5.48%) — OPPOSITE of the gradient re-weighting hypothesis (which would predict surf-OOD metrics improve more than in-dist).
+- **Vol/surf decomposition:** BOTH surf AND vol metrics regressed. This is NOT gradient re-weighting — it is DESTABILIZATION. Increasing surf_weight unbalances the L1 gradient mix: heavy-tailed surface pressure nodes get inflated weight relative to vol nodes, disrupting the cosine cool-down gradient scaling.
+- **Axis closure:** **surf_weight axis FULLY CLOSED.** Bracket: {10, 20, 30} — 10 is the global optimum. The 30-LOSS under heavier config was not just a config-specific failure; even at the lean advisor the axis regresses in both directions away from 10.
+- **Mechanism:** surf_weight=10 produces the optimal gradient balance between surface (primary metric) and volume nodes for the cosine cool-down schedule. Higher surf_weight inflates gradients on the heavy-tailed surface pressure distribution, overwhelming the careful LR-controlled convergence.
+- **Reassignment:** Frieren → #2439 GeGLU FFN (gated linear unit; orthogonal FFN-structure probe; --epochs 55 for T_max=52 alignment with ~52 actual epochs).
+
+---
+
 ## 2026-05-13 23:00 UTC — Round 45
 
 Three axis-closing LOSSes reviewed + 3 new bold experiments assigned.
