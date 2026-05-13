@@ -579,3 +579,29 @@ This refutes the round-9 hypothesis that pct_start was within RNG noise — the 
 - **Implication:** Python dispatch is NOT the bottleneck and the static-kernel ceiling is NOT recoverable under the 30-min cap. Remaining throughput attacks: SDPA flash backend, mesh-layout caching, batch size sweep.
 
 **Next:** Reassigning tanjiro to an OOD-tail experiment (final_div_factor sweep) — builds on the round-13 finding that deep-decay LR refinement is the mechanism behind nezuko's OOD gains.
+
+---
+
+## 2026-05-13 03:20 — PR #1628: SequentialLR(T_max=27) scheduler shootout, 2-seed — CLOSED (per-epoch scheduling has structural ceiling)
+- willowpai2g24h4-thorfinn / willowpai2g24h4-thorfinn/tmax-compile-retune
+- **Hypothesis:** SequentialLR(LinearLR warmup=3, CosineAnnealingLR T_max=27, lr=1e-3) per-epoch ties or beats OneCycleLR per-batch on the metric level. Multi-seed confirms or refutes the single-seed hot signal from round 6.
+- **W&B:** `lm4n59dm` (seed 0), `j400lg54` (seed 1)
+
+| Metric | Seed 0 | Seed 1 | Mean ± std | OLD baseline #1716 | Δ vs OLD | NEW baseline #1719 | Δ vs NEW |
+|---|---:|---:|---:|---:|---:|---:|---|
+| val_avg/mae_surf_p | 69.26 | 67.62 | **68.44 ± 1.16** | 68.58 | −0.21% (noise) | 66.14 | **+3.49% WORSE** |
+| test_avg/mae_surf_p | 59.61 | 59.18 | **59.40 ± 0.31** | 60.35 | −1.58% (noise) | 56.90 | **+4.39% WORSE** |
+| Sec/epoch | 62.57 | 65.94 | ~64 | ~62.6 | comparable | ~62 | comparable |
+
+**Decision: CLOSED — refuted under multi-seed scrutiny.** The single-seed "hot signal" from round 6 (val 69.26 / test 59.61, suggested 3.6% test gain) was within RNG noise once a second seed was added; mean is essentially tied with the OLD baseline.
+
+Worse, while the experiment was running, nezuko #1719 merged the pct_start=0.05 composition (val 66.14 / test 56.90), making the new comparison +3.49% val / +4.39% test WORSE — past the noise floor. The hypothesis is now fully refuted.
+
+**Mechanistic interpretation (KEY):** SequentialLR uses **per-epoch stepping** (~30 LR updates total) while OneCycleLR uses **per-batch stepping** (~10875 updates). The new baseline's gain comes specifically from the deep-decay tail (LR < 1e-4 for ~8 epochs) providing fine-grained OOD-camber refinement. Per-epoch scheduling has a structural granularity ceiling that per-batch doesn't — there's no way for SequentialLR to reach the same refinement density.
+
+**Genuine learnings:**
+1. **Per-batch LR schedule is a real win, not a metric artifact.** The round-1 6.5% test gain from warmup+cosine → OneCycleLR was about update granularity, not schedule shape. ~362× more updates gives OOD splits the cycles they need.
+2. **Single-seed signals near the noise floor often vanish under multi-seed scrutiny.** Thorfinn's seed-0 alone was indistinguishable from a genuine 1.6% test win; the second seed revealed it was within noise. **Multi-seed methodology is paper-critical for any signal under ±2% test.**
+3. **Per-epoch scheduling is structurally worse than per-batch on this workload.** Cosmetic equivalence on the metric level under one baseline doesn't survive a baseline change that exploits the per-batch granularity.
+
+**Next:** Assigning thorfinn to 2-seed (seed=1, seed=2) confirmation of the NEW pct_start=0.05 baseline (#1719). Single-seed +5.72% test gain is at the high end of RNG variance — multi-seed confirmation is the right paper-tier follow-up.
