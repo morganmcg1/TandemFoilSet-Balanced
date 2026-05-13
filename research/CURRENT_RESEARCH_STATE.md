@@ -22,15 +22,17 @@ The current `train.py` has both fixes stacked. The mask is applied after slice s
 - All 4 of the "compute-bound" hypotheses (slice=128, deeper=7, surf_weight=25, fern's slice retry) closed because the per-epoch cost cut them below the wall-clock convergence horizon.
 - The `test_geom_camber_cruise` NaN affected every unmasked baseline. Resolved by mask. Worth a follow-up sanity check whether the underlying data issue (`scoring.py` cruise sample 20 with inf pressure) is fully neutralized or just masked.
 
-Round 1 in-flight (8 PRs) on various baselines:
-- **#1623 alphonse (mlp_ratio=4)**: pre-Huber baseline (post-mask-aware)
+Round 1 in-flight (7 PRs) on various baselines:
 - **#1506 edward (n_hidden=192)**, **#1509 nezuko (warmup+lr=1e-3)**, **#1511 thorfinn (n_layers=7)**: pre-mask baseline — need full rebase
 - **#1589 tanjiro (AdamW betas)**: rebasing from pre-mask
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber
 - **#1712 askeladd (Huber β=0.25)**: from current merged baseline
 - **#1715 frieren (bf16 AMP)**: from current merged baseline
+- **#1735 alphonse (SwiGLU FFN)**: from current merged baseline — replaces closed #1623
 
-All 6 pre-Huber PRs got a heads-up about the new baseline; they need to clear val < 113.79 / test < 101.78 to merge.
+All 5 pre-Huber PRs got a heads-up about the new baseline; they need to clear val < 113.79 / test < 101.78 to merge.
+
+**Portfolio constraint added 2026-05-13 00:35 (from #1623 close):** All four scalar-capacity axes (#1506 width, #1507 slices, #1511 depth, #1623 mlp_ratio) have regressed compute-bound on the 30-min cap. **Further scalar-knob scaling of the encoder is closed** — capacity moves must now change *what* the model computes (gating, anchor selection, geometric features, loss shaping), not scale existing components. bf16 AMP (#1715) is the one exception: if it unlocks ~1.5× more epochs within the cap, the capacity axes can be re-opened on the AMP baseline.
 
 ## Round 1 portfolio (status)
 
@@ -45,12 +47,13 @@ All 6 pre-Huber PRs got a heads-up about the new baseline; they need to clear va
 | #1510 | tanjiro   | Fourier pos enc (L=6)            | CLOSED (cruise NaN, pre-mask) |
 | #1511 | thorfinn  | Deeper (5→7 layers)              | WIP, pre-mask code, heads-up posted |
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, rebasing onto mask-aware |
-| #1623 | alphonse  | mlp_ratio 2→4                    | WIP, post-mask, pre-Huber |
+| #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) |
 | #1692 | fern      | Gradient clipping (max_norm=1.0) | WIP, post-mask, pre-Huber |
-| #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, current baseline (just assigned) |
-| #1715 | frieren   | bf16 mixed-precision (AMP)       | WIP, current baseline (just assigned) |
+| #1712 | askeladd  | Huber β=0.25 (β-tune)            | WIP, current baseline |
+| #1715 | frieren   | bf16 mixed-precision (AMP)       | WIP, current baseline |
+| #1735 | alphonse  | SwiGLU FFN (matched params)      | WIP, current baseline (just assigned) |
 
-**Merged:** 2 (mask-aware, Huber). **Closed:** 3 (Fourier, slice=128, surf_weight=25). **Open:** 8 (5 needing rebase + 3 fresh).
+**Merged:** 2 (mask-aware, Huber). **Closed:** 4 (Fourier, slice=128, surf_weight=25, mlp_ratio=4). **Open:** 7 (4 needing rebase + 3 on current baseline).
 
 ## Potential next research directions
 
@@ -59,7 +62,7 @@ Confirmed winners so far (both stack): correctness (mask) + loss formulation (Hu
 - **If Huber β-tuning wins (#1712 askeladd):** sweep β around the optimum, consider per-channel β for surface p vs Ux vs Uy (different normalized scales).
 - **If bf16 AMP wins (#1715 frieren):** the compute-bound hypotheses (slice=128, deeper=7, surf_weight=25) become reviewable again at the larger epoch budget. Re-open those as "AMP+X" combinations.
 - **If grad_clip wins (#1692 fern):** explore weight decay tuning and learning-rate revisits, since clipping decouples optimizer stability from those.
-- **If mlp_ratio=4 wins (#1623 alphonse):** try mlp_ratio=8 (transformer-recipe standard); also revisit n_hidden scaling now that FFN is wider.
+- **If SwiGLU FFN wins (#1735 alphonse):** the gating mechanism's success would suggest other modern transformer-FFN moves are worth trying (e.g. GeGLU variant, larger gating dimension, or per-block residual gating). Pairs well with bf16 (#1715) — both compose orthogonally.
 
 Larger swings to queue for round 2 if the above plateau:
 - **Surface-anchored cross-attention** (boundary nodes as queries against volume tokens) — directly addresses the "surface inherits from volume" structural relationship that frieren's surf_weight result highlighted.

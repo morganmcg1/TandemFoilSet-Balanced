@@ -221,3 +221,31 @@ All 4 test splits finite (clean rebase). Underconverged at the 30-min cap (best 
 ### Conclusion
 
 **Closed — dead end on this axis at the 30-min wall-clock budget.** Frieren's mechanistic diagnosis (heavier surf weight slows convergence because the optimizer spends more effort on the smaller surface-node population whose pressure field is harder to fit) is correct. surf_weight=25 might be competitive at a 50-epoch budget but isn't inside the cap. Frieren reassigned to PR #1715 (bf16 AMP) on a different axis.
+
+## 2026-05-13 00:35 — PR #1623 closed: mlp_ratio=2→4 (compute-bound)
+
+- **Student:** willowpai2g48h3-alphonse
+- **Branch:** willowpai2g48h3-alphonse/mlp-ratio-4
+- **W&B run:** `kt5o6q8t` (rebased onto Huber baseline #1505)
+
+### Results vs current baseline (#1505: val=113.79, test=101.78)
+
+| Metric | mlp_ratio=4 | #1505 baseline | Δ |
+|---|---:|---:|---:|
+| `val_avg/mae_surf_p` | 134.385 | 113.794 | +18.10% |
+| `test_avg/mae_surf_p` | 121.947 | 101.782 | +19.81% |
+
+Params 0.72M → 0.99M (+38%). All test splits finite (clean rebase). Best epoch 11 of 50 (run hit 30-min wall-clock with longer per-epoch time vs. baseline; effective epoch count reduced).
+
+### Conclusion
+
+**Closed — same compute-bound pattern as #1506/#1507/#1511.** Four scalar-capacity axes (width, depth, slices, mlp_ratio) have now all regressed on the 30-min cap. Alphonse's own meta-conclusion captures the right takeaway:
+
+> The baseline mlp_ratio=2 is a tuned sweet spot for this 30-min budget — combined with #1506/#1511/#1507 on width/depth/slices, further scalar-knob scaling of the encoder doesn't pay. Future capacity moves should change *what* the model computes (e.g. anchor selection, geometric features, loss shaping) rather than scale existing components.
+
+This is now adopted as a round-1 portfolio constraint.
+
+### Follow-up
+
+- **alphonse → PR #1735 (SwiGLU FFN at matched param count):** their own follow-up suggestion #3. Replaces `MLP(d, m*d, d)` with `SwiGLUMLP(d, 2/3·m·d, d)` at matched params. Single-axis, changes *what* the FFN computes (multiplicative gating) without scaling capacity. Canonical "modern transformer FFN" upgrade.
+- bf16 AMP (#1715 frieren) could re-open mlp_ratio=4 (and other capacity axes) by giving ~1.5× more epochs within the cap. Flagged for re-evaluation if AMP wins.
