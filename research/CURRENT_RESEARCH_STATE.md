@@ -56,6 +56,9 @@ The baseline Transolver recipe has several obvious soft spots:
 | `weight-decay-sweep` (thorfinn, #1779) | WIP | AdamW weight_decay sweep {1e-4, 1e-3, 1e-2, 5e-2} — regularization probe at characterized ±7 noise floor | Low |
 | `truncated-l1` (tanjiro, #1800) | WIP | Truncated L1: per-element `min(\|r\|, τ)` — zero-gradient-beyond-τ outlier rejection at τ∈{0.5, 1.0, 2.0} | Low–Med |
 | `mlp-ratio-sweep` (edward, #1842) | WIP | Transolver block `mlp_ratio` sweep {1, 2, 3, 4} — orthogonal-to-width capacity vs throughput tradeoff | Low |
+| `droppath-stochastic-depth` (fern, #1918) | WIP (just assigned post-EMA-merge) | Stochastic Depth in TransolverBlock residual paths, linear-per-depth schedule, drop_path ∈ {0.0, 0.1, 0.2}. Predicted to help under-improved `val_geom_camber_rc` split most (regime-change axis). Orthogonal-to-EMA architectural regularization. | Low–Med |
+
+All 7 prior in-flight PRs were notified of the new 91.66/81.28 baseline + EMA-rebase guidance — they should rebase, include `--ema_decay 0.999` on their best variant arms, and compare against the new baseline. EMA stacks orthogonally with every Round 2 hypothesis (loss-shape, capacity, regularization, sampling, precision, schedule), so existing hypotheses remain valid; merge bar is now ~86 val / ~76 test for a clean ≥10% gain over the new baseline.
 
 Full Round 1 hypothesis design lives in `research/RESEARCH_IDEAS_2026-05-12_initial.md`. Results log lives in `research/EXPERIMENTS_LOG.md`.
 
