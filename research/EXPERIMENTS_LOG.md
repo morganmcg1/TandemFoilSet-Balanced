@@ -6,6 +6,30 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 16:00 — PR #2348 — MERGED (slice_num=16 beats slice_num=12; non-monotone partition sweep)
+
+**alphonse: slice_num=16 on n_layers=3+epochs=36**
+- Hypothesis: continue partition sweep — does the floor lie below slice_num=12?
+- vs baseline (PR #2351 val=35.969): val=35.548 (**−1.17% WIN**), test=30.345 (+0.26% slightly worse)
+- best_epoch: 35/36 (slight cosine tail flattening vs always-final at 12/24/32)
+- 49.8s/epoch, 29.89 min total, params 513,471, peak 18.72 GB
+
+| Split | val mae_surf_p Δ | test mae_surf_p Δ |
+|---|---|---|
+| single_in_dist | 36.308 → 35.263 (**−2.9%**) | 33.241 → 32.248 (−3.0%) |
+| geom_camber_rc | 49.521 → 49.105 (−0.8%) | 43.631 → 44.663 (+2.4%) |
+| geom_camber_cruise | 19.576 → 19.392 (−0.9%) | 15.969 → 16.188 (+1.4%) |
+| re_rand | 38.470 → 38.431 (−0.1%) | 28.220 → 28.282 (+0.2%) |
+| **avg** | **35.969 → 35.548 (−1.17%)** | **30.265 → 30.345 (+0.26%)** |
+
+**Key finding: Partition sweep is NON-MONOTONE.** slice_num=16 beats slice_num=12, reversing the expectation that fewer slices = always better. At slice_num=12 the model loses capacity without gaining additional budget (per-epoch cost flattens: 16≈12≈50s). The sweet spot appears to be around slice_num=16. Tanjiro's slice_num=8 (PR #2408) will confirm if the floor has been found.
+
+**Metric artifacts:** `models/model-charliepai2g48h3-alphonse-slicenum16-nlayers3-20260513-141223/metrics.jsonl`
+
+**New baseline: val=35.548 (PR #2348). Next: alphonse assigned compound lr=1.5e-4+slice_num=16 (PR #2431).**
+
+---
+
 ## 2026-05-13 15:35 — PR #2353 — CLOSED (lr=1.5e-4 won vs old baseline, can't beat new; strong LR signal)
 
 **thorfinn: lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33**
