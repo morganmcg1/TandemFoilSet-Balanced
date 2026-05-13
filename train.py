@@ -435,6 +435,8 @@ scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup,
 
 channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
 
+ACCUM_STEPS = 4
+
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
 model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{experiment_stamp}"
@@ -463,8 +465,11 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    n_optim_steps = 0
+    n_train_batches = len(train_loader)
+    optimizer.zero_grad()
 
-    for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
+    for step, (x, y, is_surface, mask) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False)):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
@@ -483,10 +488,13 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        (loss / ACCUM_STEPS).backward()
+
+        if (step + 1) % ACCUM_STEPS == 0 or (step + 1) == n_train_batches:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+            n_optim_steps += 1
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
@@ -528,6 +536,10 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "accum_steps": ACCUM_STEPS,
+        "effective_batch_size": cfg.batch_size * ACCUM_STEPS,
+        "n_train_batches": n_train_batches,
+        "n_optim_steps": n_optim_steps,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
     pred_abs_max_norm_worst = max(m["pred_abs_max_norm"] for m in split_metrics.values())
