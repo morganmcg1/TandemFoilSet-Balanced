@@ -600,6 +600,7 @@ class Config:
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
     huber_beta: float = 1.0  # Smooth-L1 β; lower = more L1-like, higher = more MSE-like
     optimizer: str = "adamw"  # "adamw" (baseline) | "lion" (Chen et al. 2023, sign-of-EMA-grad)
+    n_hidden: int = -1  # override model_config["n_hidden"]; -1 = use default (128)
 
 
 cfg = sp.parse(Config)
@@ -631,11 +632,12 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
+effective_n_hidden = cfg.n_hidden if cfg.n_hidden > 0 else 128
 model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=effective_n_hidden,
     n_layers=5,
     n_head=4,
     slice_num=64,
@@ -643,6 +645,7 @@ model_config = dict(
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
+print(f"Model n_hidden: {effective_n_hidden} (default 128)")
 
 model = FiLMTransolver(
     n_layers=model_config["n_layers"],
@@ -733,6 +736,7 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "n_hidden": effective_n_hidden,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
         "swa_start_frac": swa_start_frac,
@@ -1111,6 +1115,7 @@ if best_metrics:
         "wandb_group": cfg.wandb_group,
         "git_commit": _git_commit_short(),
         "n_params": n_params,
+        "n_hidden": effective_n_hidden,
         "model_config": model_config,
         "swa_start_epoch": swa_start_epoch,
         "swa_start_frac": swa_start_frac,
