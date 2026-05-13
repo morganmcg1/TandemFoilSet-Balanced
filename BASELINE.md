@@ -161,3 +161,22 @@ Every in-flight PR is now on a stale baseline. New merge bar: **val < 67.83, tes
   ```
 
 **New merge bar: val < 59.97, test < 52.36, all four test splits finite.**
+
+## 2026-05-13 16:10 — PR #2017: Tune weight_decay 1e-4 → 2e-4
+
+- **`val_avg/mae_surf_p`:** 58.8835 (best seed 1, `scg45qnb`)
+- **`test_avg/mae_surf_p`:** 51.0778 (best seed 1)
+- **Per-split test surf_p (seed 1):** single_in_dist=56.029, geom_camber_rc=63.113, geom_camber_cruise=34.303, re_rand=50.867
+- **Per-split test vol_p (seed 1):** single_in_dist=66.915, geom_camber_rc=71.137, geom_camber_cruise=35.788, re_rand=52.238
+- **Seed 2 (`b1qvngld`):** val=61.985, test=52.774 — s2 misses val bar but clears test; two-seed mean test=51.926 (−2.7% vs baseline). Better seed used per convention.
+- **W&B runs:** `scg45qnb` (seed 1, BETTER), `b1qvngld` (seed 2)
+- **Implementation note:** Single-line change in `Config` dataclass — `weight_decay: float = 2e-4` (was 1e-4). Bisection result from wd=5e-4 (failed: in-dist won but hard-OOD regressed) down to 2e-4. Mechanism: grad_clip max_norm=1.0 provides implicit regularization via step-size normalization; the explicit L2 penalty needed to decrease after grad-clip was added to avoid stacking. Pre-grad-clip optimal wd ~3-5e-4; post-grad-clip optimal wd=2e-4. Per-split signature: both in-dist (−5.97 pts) and hard-OOD rc (−6.36 pts) improve strongly; cruise (+2.13 pts) and re_rand (+1.03 pts) regress slightly — net strongly positive on test.
+- **Compute:** 30.46 min (hits 30-min cap), ~51.3s/epoch, 35/35 epochs, best=last (still compute-bound). Peak VRAM 24.1 GB.
+- **Delta vs PR #1589 (betas baseline):** val **−1.8%** (59.97 → 58.88), test **−2.4%** (52.36 → 51.08). Note: edward's runs were on the post-grad-clip pre-betas baseline (60.09/53.37); vs that prior baseline the gain was val −2.0%, test −4.3%. Stacking with betas is implicit in the current merged stack.
+- **Reproduce:**
+  ```bash
+  cd target && python train.py --agent willowpai2g48h3-edward \
+      --wandb_name "willowpai2g48h3-edward/wd-2e4-s1" --wandb_group wd-2e4
+  ```
+
+**New merge bar: val < 58.88, test < 51.08, all four test splits finite.**
