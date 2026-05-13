@@ -46,6 +46,13 @@ from data import (
     pad_collate,
 )
 
+# Per-channel Huber β for surface loss. Channel order matches data/scoring.py:
+# CHANNELS = ("Ux", "Uy", "p"). Lower β on the primary-metric channel (p)
+# pushes more of its error distribution into the linear regime — surface
+# analogue of vol-Huber (#1910). Vol loss continues to use uniform β=0.5.
+SURF_BETA_VALUES = (0.5, 0.5, 0.25)
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -260,26 +267,23 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
 
             # Vol uses uniform β=0.5; surf uses per-channel β: (Ux=0.5, Uy=0.5, p=0.25).
             # Channel order is (Ux, Uy, p) per data/scoring.py:CHANNELS.
+            # Use a per-channel loop for surf to avoid (B, N, 3) intermediate
+            # tensors from broadcasting — prevents peak-VRAM OOM on raceCar batches.
             huber_err_vol = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
-            beta_surf = torch.tensor(
-                [0.5, 0.5, 0.25], device=pred.device, dtype=pred.dtype
-            ).view(1, 1, 3)
-            diff = pred - y_norm
-            abs_diff = diff.abs()
-            huber_err_surf = torch.where(
-                abs_diff < beta_surf,
-                0.5 * diff.pow(2) / beta_surf,
-                abs_diff - 0.5 * beta_surf,
-            )
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
                 (huber_err_vol * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
+            surf_err_sum = torch.zeros((), device=pred.device, dtype=pred.dtype)
+            for c, beta_c in enumerate(SURF_BETA_VALUES):
+                err_c = F.smooth_l1_loss(
+                    pred[..., c], y_norm[..., c], beta=beta_c, reduction="none"
+                )
+                surf_err_sum = surf_err_sum + (err_c * surf_mask).sum()
             surf_loss_sum += (
-                (huber_err_surf * surf_mask.unsqueeze(-1)).sum()
-                / surf_mask.sum().clamp(min=1)
+                surf_err_sum / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
 
@@ -529,22 +533,20 @@ for epoch in range(MAX_EPOCHS):
 
             # Vol uses uniform β=0.5; surf uses per-channel β: (Ux=0.5, Uy=0.5, p=0.25).
             # Channel order is (Ux, Uy, p) per data/scoring.py:CHANNELS.
+            # Surf uses a per-channel loop rather than broadcast to keep peak
+            # VRAM at the baseline level — prior broadcast version OOM'd on
+            # raceCar batches (peak >100 GB on 102 GB Blackwell).
             huber_err_vol = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction="none")
-            beta_surf = torch.tensor(
-                [0.5, 0.5, 0.25], device=pred.device, dtype=pred.dtype
-            ).view(1, 1, 3)
-            diff = pred - y_norm
-            abs_diff = diff.abs()
-            huber_err_surf = torch.where(
-                abs_diff < beta_surf,
-                0.5 * diff.pow(2) / beta_surf,
-                abs_diff - 0.5 * beta_surf,
-            )
-
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (huber_err_vol * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err_surf * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            surf_err_sum = torch.zeros((), device=pred.device, dtype=pred.dtype)
+            for c, beta_c in enumerate(SURF_BETA_VALUES):
+                err_c = F.smooth_l1_loss(
+                    pred[..., c], y_norm[..., c], beta=beta_c, reduction="none"
+                )
+                surf_err_sum = surf_err_sum + (err_c * surf_mask).sum()
+            surf_loss = surf_err_sum / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
