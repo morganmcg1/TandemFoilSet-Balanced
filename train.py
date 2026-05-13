@@ -246,7 +246,8 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, surf_head, loader, stats, surf_weight, device,
+                   surf_pressure_weight: float = 1.0) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -257,6 +258,9 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+    surf_chan_w = torch.tensor(
+        [1.0, 1.0, surf_pressure_weight], device=device, dtype=torch.float32,
+    ).view(1, 1, 3)
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -285,8 +289,9 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
                 (sq_err * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
+            # Mirror training surf-channel weighting; volume path stays uniform.
             surf_loss_sum += (
-                (sq_err * surf_mask.unsqueeze(-1)).sum()
+                (sq_err * surf_chan_w * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -426,6 +431,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    surf_pressure_weight: float = 1.0  # Per-channel weight on surface loss only (raw, no mean-normalisation); 1.0 = no-op
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -580,8 +586,16 @@ for epoch in range(MAX_EPOCHS):
 
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
+        # Per-channel weights on SURFACE loss only — raw, no mean-normalisation.
+        # Volume MSE keeps uniform weighting so the encoder retains full velocity
+        # supervision; only surface pressure emphasis is rebalanced.
+        chan_w = torch.tensor(
+            [1.0, 1.0, cfg.surf_pressure_weight],
+            device=surf_node_loss.device, dtype=surf_node_loss.dtype,
+        ).view(1, 1, 3)
+        surf_node_loss_w = surf_node_loss * chan_w
         vol_loss = (sq_err * sw * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-        surf_loss = (surf_node_loss * sw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+        surf_loss = (surf_node_loss_w * sw * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -595,6 +609,10 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = (surf_abs >= delta).float().mean().item()
             else:
                 surf_l1_frac = 0.0
+            # Per-channel raw surface Huber contribution (pre-chan-weight, pre-BIVW)
+            # — track how each channel's loss-scale evolves under different surf_pressure_weight.
+            surf_denom = surf_mask.sum().clamp(min=1)
+            per_chan_surf = (surf_node_loss * surf_mask.unsqueeze(-1)).sum(dim=(0, 1)) / surf_denom
         wandb.log({
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
@@ -603,6 +621,9 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_max": y_var.max().item(),
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
+            "train/surf_loss_ux_raw": per_chan_surf[0].item(),
+            "train/surf_loss_uy_raw": per_chan_surf[1].item(),
+            "train/surf_loss_p_raw": per_chan_surf[2].item(),
             "global_step": global_step,
         })
 
@@ -618,7 +639,8 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     surf_head.eval()
     split_metrics = {
-        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                             surf_pressure_weight=cfg.surf_pressure_weight)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -693,7 +715,8 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device,
+                             surf_pressure_weight=cfg.surf_pressure_weight)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
