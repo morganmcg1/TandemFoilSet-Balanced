@@ -14,7 +14,7 @@ SPDX-License-Identifier: Apache-2.0
   - wd=3e-4 on n_head=4 stack: val 42.85 (now +6.4% regress vs new baseline 40.27)
 - **Active research directions (all on n_head=2+Lion stack):**
   1. **n_head=1 isolation** — frieren #2593 (**NEW**, monotone n_head trend test; single 128-dim head; merges if val ≤36.2, close if ≥40.3)
-  2. **Depth minimum** — edward #2462 (n_layers=3+n_head=2+Lion; rxqavwx9 finished val 39.84 on n_head=4 stack — sent back to retest on n_head=2)
+  2. **Depth minimum** — edward #2596 (**NEW PR**, n_layers=3+n_head=2+Lion; rxqavwx9 got val 39.84 on old n_head=4 stack — strong signal, retesting on n_head=2 stack; #2462 closed by student after my rebase redirect)
   3. **Fourier K continuation** — askeladd #2552 (K=16, K=20 on n_head=2+Lion stack; sent back to rebase)
   4. **Lion weight_decay sweep** — thorfinn #2555 (wd=3e-4 and wd=1e-3 on n_head=2+Lion stack; sent back to rebase)
   5. **Lion LR flank** — tanjiro #2449 (lr=5e-5 and lr=2e-4 on n_head=2+Lion; sent back to rebase)
@@ -24,7 +24,7 @@ SPDX-License-Identifier: Apache-2.0
 - **Student status (21:20 UTC):**
   - alphonse #2358: rate-limited (GPU=0%), new baseline comment posted; has rebase+retest instructions
   - askeladd #2552: sent back to rebase + K=16/K=20 on n_head=2 stack
-  - edward #2462: sent back to rebase + n_layers=3+n_head=2+Lion (rxqavwx9 val 39.84 on old stack was promising)
+  - edward #2596: **NEW PR** — n_layers=3+n_head=2+Lion compound test (student closed #2462 after redirect; fresh assignment)
   - fern #2464: rate-limited (GPU=0%), new baseline comment posted; has n_hidden=96+n_head=2 instructions
   - frieren #2593: **NEW ASSIGNMENT** — n_head=1 isolation test
   - nezuko #2421: sent back to rebase + bs=1+n_head=2+Lion
