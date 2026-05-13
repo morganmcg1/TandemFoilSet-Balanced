@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 16:55 UTC (Wave 16: CLOSE #2377 tanjiro qk-norm v1 (Outcome B/init confound — log_temp=-1.733 too cold); ASSIGN #2427 tanjiro qk-norm-temp-init-0 (v2 with log_temp=0 + no WD on tau))
+- **Last updated**: 2026-05-13 17:10 UTC (Wave 17: MERGE #2370 frieren learned-freqs (17th win, −3.73%); CLOSE #2385 AbsGLU (+10.4%), #2386 inner_dim=320 (+6.0%), #2391 OOD-upsampling (+12.5%); ASSIGN #2434-#2437 (frieren/thorfinn/fern/nezuko optimizer-group experiments))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -9,103 +9,105 @@
 
 None received yet on this branch.
 
-## Current best baseline (PR #2360 merged — ReGLU + inner_dim=288, 16th compound win)
+## Current best baseline (PR #2370 merged — Learned Fourier freqs no-WD + 10× lr, 17th compound win)
 
-- `val_avg/mae_surf_p` = **61.875** (ReGLU MLP gate + SwiGLU inner_dim=288 + LR warmup + LayerScale init=0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 12)
-- `test_avg/mae_surf_p` (4-split, NaN-safe) = **54.117**
-- Per-split val: single_in_dist=67.276 / camber_rc=72.143 / camber_cruise=45.901 / re_rand=62.181
-- Per-split test: single_in_dist=60.873 / camber_rc=65.103 / camber_cruise=37.112 / re_rand=53.380
-- Δ vs PR #2304 baseline (62.949 / 54.221): **−1.71%** val_avg, **−0.19%** test_avg
-- **Mechanism (inner_dim=288)**: extra 32 channels per SwiGLU gate/up/down projection compensates for ReGLU's dead-channel sparsity. Epoch-budget hypothesis confirmed: +4.7% sec/epoch preserved 12-epoch window, val_single_in_dist IMPROVED −3.79% (vs prior +11.2% regression at 320). Wider capacity at right compute cost.
-- Compound progress: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→#2266→#2304→**#2360** → val_avg has improved from 100.957 to **61.875** = **−38.7% over 16 merges**.
+- `val_avg/mae_surf_p` = **59.5645** (ReGLU + inner_dim=288 + learned-freqs no-WD 10× lr + LR warmup + LayerScale 0.025 + surf-ch-weight [0.5,0.5,2.0] + Fourier L=6 learnable + grad-clip-25 + cosine-T_max-14 + L1 + stoch-depth; best @ ep 12)
+- `test_avg/mae_surf_p` (4-split, NaN-safe) = **51.6141**
+- Per-split val: single_in_dist=70.235 / camber_rc=71.466 / camber_cruise=39.185 / re_rand=57.372
+- Per-split test: single_in_dist=60.940 / camber_rc=64.131 / camber_cruise=32.376 / re_rand=49.009
+- Δ vs PR #2360 baseline (61.875 / 54.117): **−3.73%** val_avg, **−4.63%** test_avg
+- **Mechanism (learned freqs)**: no-WD + 10× lr for 6-param Fourier freq vector unblocks bottom freqs [1,2,4] → [0.75,1.46,3.44] (−15 to −27% drift). Top freqs [8,16,32] stayed within ±1.5% (gradient-magnitude limited). Camber_cruise −14.62%, re_rand −7.73%. Orthogonal to MLP capacity axis (#2360).
+- **Compound progress**: #1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→#2266→#2304→#2360→**#2370** → val_avg has improved from 100.957 to **59.5645** = **−41.0% over 17 merges**.
+- **n_params**: 831,197 (+6 freq params over prior 831,191)
 
 ## Current research focus
 
-**Wave 16 — Capacity + conditioning + spectral + attention + gate + LayerScale-asymmetry + OOD-sampling.**
+**Wave 17 — Optimizer-group axis + attention mechanisms + conditioning.**
 
-The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key Wave 16 closures: #2359 squared-relu FAILED (+5.19% vs baseline — gate axis confirmed closed at ReLU); #2371 n_hidden=144 FAILED (+19.2% vs baseline — width axis closed at 128, quadratic param scaling makes residual-stream width untenable under 30-min cap); #2360 inner_dim=288 MERGED (16th win, −1.71%). Fresh assignment #2414: alphonse dual LayerScale (asymmetric attn=0.05/mlp=0.025 init) — tests whether the deeply-augmented MLP path (SwiGLU+ReGLU+inner=288) has miscalibrated the symmetric γ=0.025 optimum.
+The 17th compound win (learned-freqs-no-WD-10×lr) revealed that default optimizer settings systematically under-train scale/frequency parameters. This opens a broad new axis: **which other model parameters benefit from the same treatment?** Wave 17 tests 4 orthogonal hypotheses:
+1. `freq-init-equilibrium` (frieren): start freqs at #2370 equilibrium, keep 10× lr — tests architectural vs dynamic component of the win
+2. `learned-freqs-50x-lr` (thorfinn): test if top freqs [8,16,32] are strictly gradient-magnitude limited or lr-limited at 50×
+3. `layerscale-lr-10x` (fern): LayerScale γ params in 10× lr no-WD group — same optimizer insight
+4. `slice-temp-lr-10x` (nezuko): slice attention temperature params in 10× lr no-WD group
 
-**Wave 16 active threads:**
+Parallel to these, still-in-flight experiments cover conditioning (FiLM #2368), hybrid Fourier (#2369), attention QK-norm (#2427), and asymmetric LayerScale (#2414).
+
+**Wave 17 active threads:**
 
 | Student | PR | Slug | Hypothesis | Status |
 |---------|----|----|---------|--------|
-| thorfinn | #2385 | abs-glu-gate | AbsGLU: replace relu→abs in SwiGLUMLP gate — symmetric threshold, no dead zone | ASSIGNED |
-| fern | #2386 | reglu-inner-dim-320 | inner_dim=288→320 on ReGLU stack (epoch-budget mechanism confirmed at 288) | ASSIGNED |
-| nezuko | #2391 | ood-upsampling | 2.5× camber_rc + 2× re_rand sampling weights — targets hardest OOD splits | ASSIGNED |
+| frieren | #2434 | freq-init-equilibrium | Start Fourier freqs at #2370 equilibrium [0.75,1.46,3.44,8,16,32] + keep 10× lr — architectural vs dynamic mechanism test | ASSIGNED |
+| thorfinn | #2435 | learned-freqs-50x-lr | Keep dyadic init, raise lr from 10× to 50× — tests gradient-magnitude limit for top freqs | ASSIGNED |
+| fern | #2436 | layerscale-lr-10x | LayerScale params (10 tensors, 1280 scalars) in 10× lr no-WD group — same optimizer insight as #2370 | ASSIGNED |
+| nezuko | #2437 | slice-temp-lr-10x | Slice attention temperature (20 scalars, 5 blocks × 4 heads) in 10× lr no-WD group | ASSIGNED |
 | askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | IN FLIGHT |
 | edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | IN FLIGHT |
-| frieren | #2370 | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | IN FLIGHT |
-| alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric; tests whether deep MLP augmentation miscalibrated symmetric γ optimum | ASSIGNED |
-| tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD (v1 #2377 closed: cold init −1.733 made attention near-uniform, mechanism never activated) | ASSIGNED |
+| alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric | IN FLIGHT |
+| tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD | IN FLIGHT |
 
-## Key findings from Wave 13/14/15/16
+## Key findings from Wave 13/14/15/16/17
 
 **Gate activation axis (FULLY CLOSED at ReLU):**
 - SiLU → GELU: **−4.75% val, −2.21% test** (14th compound win)
-- GELU → ReLU: **−1.92% val, −4.07% test** (15th compound win; test gain > val gain)
-- ReLU → Squared ReLU: **+5.19% val** (#2359 CLOSED) — quadratic amplification of positive activations catastrophic in continuous-regression regime; grad-norm peaked 120.6 in ep4; val_single_in_dist +13.83%
-- ReLU = max(0, x) is exactly right: maximum sparsity + identity slope for positive survivors
-- **AbsGLU** (thorfinn NEW): tests whether absolute-value (no dead zone, bidirectional sharpness) could win vs one-sided gate
+- GELU → ReLU: **−1.92% val, −4.07% test** (15th compound win)
+- ReLU → Squared ReLU: **+5.19%** (CLOSED) — catastrophic
+- ReLU → AbsGLU: **+10.35%** (#2385 CLOSED) — bidirectional gate destabilizes; one-sided dead zone is essential
+- **Gate axis closed at ReGLU = max(0,x)**; triple-confirmed on negative side (AbsGLU, squared-ReLU both fail)
 
-**Capacity axis (inner_dim active, n_hidden CLOSED):**
-- inner_dim=256 (baseline): val=62.949 (#2304 ReGLU)
-- inner_dim=288 (fern #2360 MERGED): val=61.875 (−1.71%) — epoch budget confirmed; +4.7% sec/epoch
-- inner_dim=320 (fern NEW): natural follow-up; ReGLU's simpler gate may keep 320 in 12-epoch window
-- n_hidden=144 (alphonse #2371 CLOSED): +19.18% — width is quadratic-cost, lost 3 epochs to wall-clock cap; residual-stream width axis closed at 128
+**Capacity axis (CLOSED):**
+- inner_dim=256 (baseline) → 288 (MERGED, 16th win) → 320 (CLOSED #2386: +6.0%, overfit despite full budget)
+- **inner_dim axis closed at 288**; bias-variance frontier confirmed between 288 and 320
+- n_hidden: closed at 128 (#2371 +19.18%, quadratic scaling under 30-min budget)
 
-**Encoder axis findings (#2225, #2286, #2309, #2312):**
-- Hybrid σ=1.0 (#2309) FAILED — redundant low-freq overlap
-- Per-sample scalar Fourier (#2286) FAILED — class falsified
-- Learned freqs (#2312) borderline — under-trained (freqs barely moved)
-- **Wave 16 follow-ups**: σ=3.0 hybrid (edward), no-wd+10×lr learned-freqs (frieren), FiLM conditioning (askeladd)
+**Encoder / Fourier axis:**
+- Fixed dyadic freqs: closed at L=6
+- Learnable freqs (#2370 MERGED, 17th win): −3.73% — bottom 3 freqs adapted strongly, top 3 gradient-limited
+- **Wave 17 follow-ups**: freq init at equilibrium (frieren), 50× lr to unlock top freqs (thorfinn)
 
-**Schedule/optimizer axes (all closed):**
-- T_max=12 (#2308 CLOSED) — +3.24% vs new baseline; runtime jitter makes T_max=14 more robust
-- T_max=14 confirmed optimal; LR=5e-4 confirmed optimal; AdamW confirmed
+**Optimizer-group insight (Wave 17 new axis):**
+- Scale/frequency parameters (freqs, LayerScale γ, slice temperature) may be systematically under-trained by default WD=1e-4 + lr=5e-4
+- Putting freqs in no-WD + 10× lr group: +17th win (−3.73%)
+- Testing same treatment for: LayerScale (fern), slice-temp (nezuko)
+
+**Sampling axis (CLOSED for camber_rc upsampling):**
+- OOD upsampling (#2391): +8.22% — camber_rc bottleneck is geometric extrapolation, NOT data density; upsampling collapses in-dist
 
 ## Permanently closed axes (do not re-test)
 
 | Axis | Best setting | Closure reason |
 |---|---|---|
 | L1 vs MSE | L1 | First merged win |
-| Stoch-depth single-knob | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum confirmed on ReGLU (#2361: 0.05 max +0.18% worse) |
-| Cosine T_max | T_max=14 (per-batch) | #2308 alphonse: T_max=12 +3.24%, runtime jitter risk |
+| Stoch-depth single-knob | [0,0.025,0.05,0.075,0.1] | V-shape; 0.10 optimum |
+| Cosine T_max | T_max=14 (per-batch) | #2308: T_max=12 +3.24% |
 | LR warmup | epoch-1 linear ramp | Merged |
 | Grad-clip | max_norm=25 | {1.0,10,25,50} bracket complete |
-| Fourier L | L=6 dyadic | L=8 plateau, L=4 baseline |
-| LayerScale init | γ_l=0.025 | Sweep 0.1→0.05→0.025→0.0125 complete |
+| Fourier L (fixed) | L=6 dyadic | L=8 plateau; now learned, see #2370 |
+| LayerScale init (symmetric) | γ_l=0.025 | Sweep complete; asymmetric test in #2414 |
 | Surf-ch-weight | [0.5,0.5,2.0] | 4× p:v ratio optimum |
 | n_head | 4 | n_head=8 +7.81%, n_head=2 +1.24% |
-| Vol-loss ch-weight | off | Conflicts with surf-ch-weight |
 | Normalization | LayerNorm + β | RMSNorm +20.2% catastrophic |
 | Depth | n_layers=5 | n_layers=6 +5.43%, compute-bound |
 | Slice_num | 64 | slice_num=96 +8.82%, dilution |
-| LR axis | lr=5e-4 | 3e-4=+5.95%, 5e-4=optimal, 7e-4=marginal; CLOSED |
-| Lion optimizer | AdamW (post-SwiGLU) | Redundant + schedule mismatch |
-| AdamW betas | (0.9, 0.999) default | β₂=0.95 non-uniform regression |
+| LR axis | lr=5e-4 | 3e-4=+5.95%, 5e-4=optimal, 7e-4=marginal |
+| Gate: all except ReGLU | ReGLU (ReLU) | SiLU<GELU<ReLU<AbsGLU<SqReLU all tested; ReLU optimum |
+| n_hidden (residual stream) | 128 | #2371: quadratic scaling, compute-bound |
+| inner_dim | 288 | #2386: 320 over-fits; 256 under-fits |
+| OOD domain upsampling (camber_rc) | equal weights | #2391: extrapolation gap, not density gap |
 | EMA weights | off | Fights Fourier high-freq sharpening |
-| Output-side calibration | off | log1p, γ-bias, per-channel all regressed |
-| Gumbel/Ada-Temp slices | off | 3 tests, mechanism learned, outcome rejected |
+| Per-sample scalar Fourier | concat | #2286 class falsified |
+| Hybrid dyadic+RFF σ=1.0 | dyadic L=6 | #2309 redundant low-freq overlap |
 | Attn/MLP dropout | off | Stoch-depth redundancy + compute tax |
 | Coord jitter | off | std=0.002/0.005 direction-inverted |
-| SmoothL1 / Huber | off | Absorbed by LayerScale |
-| Adaptive grad-clip | off | Over-clips on LayerScale-attenuated stack |
-| Gaussian RFF (pure σ=1.0) | dyadic L=6 | Low-pass filter, in-dist regression |
-| Hybrid dyadic+RFF σ=1.0 | dyadic L=6 | #2309 redundant low-freq overlap; retry at σ=3.0 |
-| Per-sample scalar Fourier | concat | #2286 class falsified — no spectral structure |
-| Gate: Squared ReLU | ReGLU (ReLU) | #2359 +5.19%; quadratic amplification breaks high-magnitude CFD regression |
-| Gate: SiLU, GELU | ReGLU (ReLU) | SiLU<GELU<ReLU monotonic; axis closed at ReLU (pending AbsGLU test) |
-| n_hidden (residual stream width) | 128 | #2371 +19.18%: quadratic param scaling (n_hidden²) drove n_params +26.07%, lost 3 epochs to wall-clock cap; width is wrong knob under 30-min compute budget |
 
-## Prioritized open research themes (Wave 16+)
+## Prioritized open research themes (Wave 17+)
 
-1. **AbsGLU gate** (thorfinn NEW): F.abs(x) gate — symmetric threshold, no dead zone; tests if exact-zero threshold vs absolute-value matters in gate design
-2. **inner_dim=320 on ReGLU** (fern NEW): natural follow-up to 288 win; ReGLU simpler than GELU, may stay in 12-epoch window
-3. **OOD-upweighted sampling** (nezuko #2391 NEW): 2.5× camber_rc + 2× re_rand training weight — directly targets the val_geom_camber_rc bottleneck (72.143, 16% above val_avg)
-4. **FiLM-style global conditioning** (askeladd #2368): γ/β = MLP(log_Re,AoA0,AoA1) — proper mechanism for per-sample scalars
-5. **Hybrid Fourier σ=3.0** (edward #2369): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
-6. **Learned freqs no-wd + 10× lr** (frieren #2370): unblock the under-trained 6-freq vector
-7. **Dual LayerScale init** (alphonse #2414 NEW): asymmetric attn γ=0.05 / mlp γ=0.025 — tests whether the augmented MLP path (SwiGLU+ReGLU+inner=288) miscalibrated the symmetric LayerScale optimum
-8. **QK-norm v2** (tanjiro #2427): log_temp init=0 (qk_scale=1.0) + tau excluded from WD — fixes v1 cold-init confound where max logit was 0.18 across 64 slice tokens (near-uniform softmax). v1 still showed mild test gain (−0.41%) → strong motivation
-9. **inner_dim=304** bisect: if 320 is compute-bound again, test midpoint between 288 (win) and 320
-10. **Per-block learned freqs**: 5 × 6 = 30 freq params — escalation if frieren no-wd still under-trains
+1. **LayerScale lr-10x** (fern #2436): does the optimizer-group insight generalize from freqs to LayerScale γ?
+2. **Slice temperature lr-10x** (nezuko #2437): does slice attention sharpness benefit from same treatment?
+3. **Freq 50× lr** (thorfinn #2435): can top freqs be unlocked with higher lr?
+4. **Freq equilibrium init** (frieren #2434): was the #2370 win architectural or dynamic?
+5. **FiLM conditioning** (askeladd #2368): proper global conditioning for Re/AoA scalars
+6. **Hybrid Fourier σ=3** (edward #2369): high-freq RFF complement to learned dyadic
+7. **QK-norm v2** (tanjiro #2427): with corrected init=0 and tau no-WD
+8. **Asymmetric LayerScale** (alphonse #2414): attn=0.05, mlp=0.025
+9. **All-param optimizer sweep**: if LayerScale + slice-temp both win, test joint 10× lr group for all scale params simultaneously
+10. **Per-block learned freqs (30 params)**: natural escalation if 50× lr doesn't unlock top freqs

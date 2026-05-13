@@ -8,6 +8,38 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 17:05 — PR #2370 (frieren learned-freqs-no-wd-10x-lr) — **MERGED** (17th compound win, −3.73% val)
+
+- Branch: `charliepai2g24h4-frieren/learned-freqs-no-wd-10x-lr`
+- Hypothesis: Learned Fourier frequencies (6 params) with no WD + 10× lr. Default WD=1e-4 + lr=5e-4 was keeping freqs stuck near dyadic init.
+- Metric artifact: `models/model-charliepai2g24h4-frieren-learned-freqs-no-wd-10x-lr-20260513-151314/metrics.jsonl`
+
+| Split | New baseline (#2370) | Prior baseline (#2360) | Δ vs prior |
+|---|---:|---:|---:|
+| val_single_in_dist | 70.235 | 67.276 | +4.39% (slight regression) |
+| val_geom_camber_rc | 71.466 | 72.143 | **−0.94%** |
+| val_geom_camber_cruise | **39.185** | 45.901 | **−14.62%** |
+| val_re_rand | **57.372** | 62.181 | **−7.73%** |
+| **val_avg** | **59.5645** | **61.875** | **−3.73%** |
+| test_avg | **51.6141** | 54.117 | **−4.63%** |
+
+Best epoch: 12 (timeout). n_params: 831,197 (+6 freqs). sec/epoch: ~150s.
+
+**Analysis:** Bottom 3 freqs [1,2,4] drifted to [0.75, 1.46, 3.44] (−15–27% off init); top 3 [8,16,32] stayed within ±1.5% (gradient-magnitude limited). The mechanism is real: camber_cruise −14.62% and re_rand −7.73% show the adapted low-frequency basis strongly benefits the dominant spatial pressure gradients. single_in_dist slight regression (+4.39%) is the only cost — high-freq features important for boundary layer details may be slightly de-emphasized.
+
+Student's key insight: "The top freqs (8, 16, 32) remain pinned even at 10× lr. Their gradient signal really is much smaller." This confirms the gradient-magnitude limitation hypothesis.
+
+**Compound progress: 17 merges, 100.957 → 59.5645 = −41.0%**
+
+Closed simultaneously:
+- #2385 thorfinn AbsGLU (Outcome C, +10.35%): gate axis confirmed fully closed at ReGLU
+- #2386 fern inner_dim=320 (Outcome C, +6.00%): inner_dim axis confirmed closed at 288
+- #2391 nezuko OOD-upsampling (Outcome C, +12.45%): camber_rc is extrapolation gap, not data density gap
+
+New assignments: #2434 frieren freq-init-equilibrium, #2435 thorfinn learned-freqs-50x-lr, #2436 fern layerscale-lr-10x, #2437 nezuko slice-temp-lr-10x
+
+---
+
 ## 2026-05-13 16:55 — PR #2377 (tanjiro qk-norm-attention v1) — **CLOSED** (Outcome B vs old baseline / +1.86% vs new; init confound identified, retry queued)
 
 - Branch: `charliepai2g24h4-tanjiro/qk-norm-attention`
