@@ -8,6 +8,66 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 22:50 — WAVE 17+ ITERATION 7 — Wholesale dead-end batch (8 PRs closed, NONE beat #2519 baseline)
+
+**Meta-finding**: The follow-up wave to #2519 saw 8 hypotheses fail simultaneously, with 4 of them being PRE-#2519 winners that collapsed when rebased onto sharper-attn. This is **mechanism-overlap evidence**: #2519's single-line `scale = 1/√(d_head/2)` change captured the same residual error signal that multiple orthogonal additive-scale + optimizer-config hypotheses were independently compensating for. The additive-scale and optimizer-config axes are now EXHAUSTED.
+
+## 2026-05-13 22:45 — PR #2575 (askeladd latent-mixup α=0.2) — **CLOSED** catastrophic Outcome C/D (+28.65% val)
+
+- Branch: `charliepai2g24h4-askeladd/latent-mixup`
+- val 72.2587 (+28.65% vs 56.1754) | test 63.6880 (+30.74% vs 48.7149)
+- **Mechanism — slice-token mixup destroys dispatch structure**: Manifold Mixup (Verma 2019) assumes the latent is a learned semantic manifold where linear interpolation is meaningful. Slice tokens in Transolver are DISPATCHED physical-feature representations (each slice indexes a position/feature combination) — linear interpolation across batch elements doesn't smooth a manifold, it scrambles distinct dispatchable representations.
+- **Mixup position axis**: slice-token-level CLOSED; if mixup is revisited, must be at post-encoder per-point output OR at MLP-block output, not at slice tokens.
+
+## 2026-05-13 22:46 — PR #2574 (alphonse attn-temp-√3 = 1.732×) — **CLOSED** Outcome C (+4.10% val)
+
+- Branch: `charliepai2g24h4-alphonse/attn-temp-sqrt3`
+- val 58.4775 (+4.10% vs 56.1754) | test 50.4603 (+3.59%)
+- **Sharpening attractor CLOSED at √2**: the curve is NOT monotonic. #2519 (√2) was −3.68% / −4.38%, #2574 (√3) is +4.10% / +3.59% — symmetric cost going past optimum vs not sharpening at all.
+- **Attention scale axis FULLY CLOSED**: 1/√(d_head) regressed in pre-#2519 era; 1/√(d_head/2) = √2 × default is optimal; 1/√(d_head/3) = √3 × default overshoots. No further sharper-attention experiments.
+
+## 2026-05-13 22:47 — PR #2518 (nezuko AdamW β2=0.99 rebased) — **CLOSED** Outcome C (+3.71% val post-rebase)
+
+- Branch: `charliepai2g24h4-nezuko/adamw-beta2-0.99` (rebased onto #2519)
+- val 58.2593 (+3.71% post-rebase) | test 50.3560 (+3.37%)
+- Pre-rebase had been val=57.18 (−1.96% vs old #2475 baseline) — a win that collapsed under sharper-attn.
+- **Mechanism overlap**: faster β2 forgetting gave 2nd-moment adaptation room to handle the residual error #2519 now directly addresses. β2=0.999 optimal under #2519. **AdamW β2 axis CLOSED**.
+
+## 2026-05-13 22:48 — PR #2515 (fern per-block-LS-lr 5×→15× rebased) — **CLOSED** Outcome C (+3.31% val post-rebase)
+
+- Branch: `charliepai2g24h4-fern/layerscale-per-block-lr` (rebased)
+- val 58.0356 (+3.31% post-rebase) | test 50.1835 (+3.02%)
+- Pre-rebase was marginal win at val=58.09; post-rebase identical at 58.04 — no win on either baseline.
+- **Mechanism**: per-block-LS-lr was supposed to address #2475's deep-block heterogeneity, but #2519's sharper attention stabilized that heterogeneity directly via cleaner per-head gradients. **Per-block-LS-lr axis CLOSED** — fixed 10× for all LayerScale params is optimal.
+
+## 2026-05-13 22:49 — PR #2513 (frieren stoch-depth-deep `[0,0,0.05,0.10,0.15]`) — **CLOSED** Outcome C (+4.31% val)
+
+- Branch: `charliepai2g24h4-frieren/stoch-depth-deep-block-concentrated`
+- val 58.5995 (+4.31% vs 56.1754)
+- Concentrating stoch-depth on deep blocks regresses. **Deep-block-redundancy theory REJECTED** for 5-block stack — early blocks are essential low-feature carriers, not redundancy targets. Linear `[0,0.025,0.05,0.075,0.1]` schedule CLOSED at current setting.
+
+## 2026-05-13 22:50 — PR #2511 (thorfinn input-feature-gate 44 params rebased) — **CLOSED** Outcome C (+3.06% val post-rebase)
+
+- Branch: `charliepai2g24h4-thorfinn/input-feature-gate` (rebased)
+- val 57.8945 (+3.06% post-rebase) | test 50.0094 (+2.66%)
+- Pre-rebase was win at val=57.70; post-rebase identical at 57.89 — no win.
+- **Mechanism overlap**: per-feature input gate (additive-scale-at-input) captured residual input-normalization-quality that sharper-attn neutralized via cleaner downstream gradients propagating back. **Additive-scale-at-input position CLOSED**.
+
+## 2026-05-13 22:51 — PR #2517 (edward q-projection-bias 640 params) — **CLOSED** predicted Outcome C without re-running
+
+- Branch: `charliepai2g24h4-edward/q-projection-bias` (pod did not pick up rebase request)
+- Pre-rebase: val=56.6918 (−2.80% vs old #2475 baseline at 58.32) — pre-#2519 win.
+- **Predicted closure**: 3 sibling additive-scale-position hypotheses (β2, per-block-LS-lr, input-gate) ALL collapsed post-#2519 with same shape. Q-bias is same mechanism family — high-confidence prediction it also collapses. Saving GPU time on a high-cost experiment with low expected value.
+- **Q-projection learnable bias position CLOSED**: confirms additive-scale theme exhaustion.
+
+## 2026-05-13 22:52 — PR #2576 (tanjiro per-head-τ-multiplier 20 params) — **CLOSED** predicted Outcome B/C without running
+
+- Branch: `charliepai2g24h4-tanjiro/per-head-tau-multiplier` (never started)
+- **Two independent failure modes converging**:
+  - (a) #2574 demonstrated √2 IS the peak of the sharpening curve (not on descending slope). Per-head bounded variation around the global optimum can't beat the global optimum.
+  - (b) #2488 RMSNorm-Q/K-γ already tested learnable per-channel scale (γ activated but std/mean peaked 33% in 12 epochs). Per-head-τ has 20 params vs #2488's 1280 — even less diversification capacity.
+- **Learnable per-head/per-channel attention scale CLOSED**: fixed scalar √2 is the answer; learnable variants don't diversify enough in 12 epochs.
+
 ## 2026-05-13 21:30 — PR #2519 (tanjiro attn-temp-fixed-sharper) — **MERGED 20th compound win** (val −3.68%, test −4.38%; biggest single-experiment win in 18 merges)
 
 - Branch: `charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`
