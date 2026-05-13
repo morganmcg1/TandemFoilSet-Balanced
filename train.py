@@ -490,7 +490,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     total_steps=total_steps,
     pct_start=cfg.onecycle_pct_start,
     anneal_strategy="cos",
-    div_factor=cfg.max_lr / cfg.lr,   # initial_lr = max_lr / div_factor = cfg.lr
+    div_factor=10.0,                  # initial_lr = max_lr / 10 = 2e-4
     final_div_factor=1e4,             # final_lr = initial_lr / 1e4
 )
 
