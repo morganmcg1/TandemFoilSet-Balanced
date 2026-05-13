@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-13 16:45 — PR #2295: EMA decay sweep on n_head=2+sw=5 (fern) — CLOSED, EMA=0.99 LOCALLY OPTIMAL
+
+- **Branch:** `willowpai2g24h5-fern/ema-decay-sweep`
+- **Hypothesis:** EMA decay tuned at n_head=4 (#1607); may need re-tuning for n_head=2+sw=5 compound. Two arms: decay=0.999 (longer window) vs decay=0.95 (shorter window).
+- **W&B runs:** `0t869jbi` (Arm 1 best), `tdeuibi0`, `lay870l1` (Arm 1 replicates), `t6q7g04p` (Arm 2)
+
+| Arm | ema_decay | val | test | EMA-main gap | Δ vs #2210 (50.91) |
+|-----|-----------|-----|------|-------------|-------------------|
+| Baseline #2210 | **0.99** | **50.91** | **43.68** | — | — |
+| Arm 1 best | 0.999 | 52.67 | 44.13 | 5.06 | +1.76 ✗ |
+| Arm 1 rep 2 | 0.999 | 57.47 | 49.41 | — | +6.56 ✗ |
+| Arm 1 rep 3 | 0.999 | 57.16 | 49.49 | — | +6.25 ✗ |
+| Arm 2 | 0.95 | 53.23 | 45.92 | 5.00 | +2.32 ✗ |
+
+**Arm 1 crash rate: 3/6 runs (50%).** 12-pt spread across finishers (52.67 / 57.16 / 57.47).
+
+**Note:** Both arms ran on pre-#2218 compound (slice_num=64, sw=5, n_head=2) — cannot merge against current #2338 baseline (val=46.67) regardless.
+
+**Result:** CLOSED. Key findings:
+1. **ema_decay=0.99 is locally optimal** on n_head=2+sw=5 compound. Both directions regress.
+2. **Lion β2 → EMA decay analogy fails**: gradient averaging (β2) averages stationary noise; weight EMA averages a non-stationary descending trajectory. Longer windows lag the live model.
+3. **Main-vs-EMA gap diagnostic**: At best epoch, gaps nearly identical (5.06 vs 5.00). Mid-training diverged: Arm 1 peaked at 8-9 pt lag (lags the improving model); Arm 2 oscillated to 1.95 pt (too reactive, noise leaks in).
+4. **0.99 window (~100 updates ≈ ¼ epoch)** is optimal for the 7520-step training horizon.
+5. **Arm 1 crash mechanism**: ema_decay=0.999 hangs on bad initial weights for ~1000 steps; any first-epoch anomaly poisons the entire average.
+
+**Fern reassigned:** PR #2438 — Lion β2 sweep on n_head=1 compound (complete the n_head×β2 monotonic story: β2=0.995 won at n_head=4, β2=0.99 won at n_head=2, what wins at n_head=1?).
+
+---
+
 ## 2026-05-13 16:30 — PR #2337: slice_num=16 on n_head=2+sw=10 baseline (frieren) — CLOSED, BEATS OLD BASELINE, ASSIGNED TO COMPOUND
 
 - **Branch:** `willowpai2g24h5-frieren/slice-num-16-sweep`

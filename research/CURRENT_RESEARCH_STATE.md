@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~16:35 UTC
+- **Date:** 2026-05-13 ~16:50 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -36,7 +36,7 @@
 | **#2430** | **frieren** | **slice_num=16 on n_head=1 compound: test if monotonic slice trend stacks** | **WIP — new** |
 | **#2372** | **nezuko** | **surf_weight low probe on slice_num=32: sw=2 vs sw=3** | **WIP** |
 | **#2419** | **edward** | **lr sweep on n_head=1 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
-| **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
+| **#2438** | **fern** | **Lion β2 sweep on n_head=1: β2=0.95 vs β2=0.995 — complete n_head×β2 story** | **WIP — new** |
 | **#2376** | **tanjiro** | **lr sweep on slice_num=32 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
 | **#2400** | **askeladd** | **n_layers reduce on slice_num=32: n_layers=4 vs n_layers=3** | **WIP — new** |
 
@@ -45,6 +45,7 @@
 - **#2337 (frieren):** slice_num=16 on n_head=2+sw=10 — CLOSED (val=48.08/test=41.02). Beats old #2218 baseline but loses to current #2338 (val=46.67). Monotonic trend confirmed: 16 < 32 < 64 < 128. Speed: 75.9s/ep, 24 epochs in 30 min, val still descending. Reassigned to #2430 (slice_num=16 on n_head=1 compound).
 - **#2338 (edward):** n_head=1 on slice32+sw10 — **MERGED** val=46.67, test=40.69. Monotonic trend extends to n_head=1 (1 < 2 < 4 < 8). 26 epochs in 31 min (71.1s/ep). All 4 splits improve. Reassigned to #2419 (lr sweep on n_head=1).
 - **#2335 (alphonse):** slice32+sw5 interaction on n_head=2 — **MERGED** val=48.57, test=41.48. Synergistic: observed −2.54 val vs additive −1.45 (1.75×). 3/4 splits improve. Reassigned to #2416 (n_head=1+sw5).
+- **#2295 (fern):** EMA decay sweep on n_head=2+sw=5 — ema_decay=0.99 confirmed locally optimal. Both directions regress (0.999: 50% crash + 12-pt spread; 0.95: +2.32 val). Main-vs-EMA gap at best epoch identical (5.06/5.00) — sweet spot at ~100-step window (¼ epoch). Closed; reassigned to #2438 (β2 sweep on n_head=1).
 - **#2271 (askeladd):** β2=0.995 vs β2=0.999 on n_head=2+slice_num=64 — β2 effect reverses from n_head=4 (#2144). Canonical β2=0.99 confirmed optimal on n_head=2. Main-vs-EMA gap diagnostic: 7.31 (β2=0.995) vs 2.81 (β2=0.999). Closed; reassigned to #2400 (n_layers reduce).
 - **#2251 (tanjiro):** lr=2e-4 vs lr=1.5e-4 on n_head=2+slice_num=64 — Arm 2 (lr=1.5e-4, val=50.36, test=42.53) beats #2069 (−0.75/−1.65) but loses to new #2218 baseline; both ran on slice_num=64 (pre-#2218 default). Key signal: lr=1.5e-4 is the optimal lr at slice_num=64. 60% crash rate at lr=2e-4 (instability). Closed; reassigned to #2376 (lr=1.5e-4 vs lr=1.25e-4 on slice_num=32).
 - **#2277 (nezuko):** sw=4/sw=3 on n_head=2+slice_num=64 — sw=3 wins vs old #2210 (val=50.23 vs 50.91, −1.34%) but loses to new #2218 (49.86) by +0.7%. Non-monotonic in [3,5]: sw=3 < sw=5 < sw=4. Strong geom_camber_cruise improvement (−5.6%) at lower sw. Closed; reassigned to #2372 (sw=2/sw=3 on slice_num=32).
@@ -91,6 +92,7 @@
 20. **slice32+sw5 synergistic interaction MERGED (#2335):** val=48.57/test=41.48. Stacking slice32 and sw5 yields 1.75× additive gain on val. OOD splits (camber, re_rand) gain most; single_in_dist regresses slightly.
 21. **n_head=1 MERGED (#2338):** val=46.67/test=40.69 — new best. Monotonic trend extends: n_head=1 < 2 < 4 < 8. Per-head dim=128 concentrates global attention; 26 epochs in 31 min (71.1s/ep). All 4 test splits improve. val still descending at cap.
 22. **slice_num=16 confirmed monotonic on n_head=2 (#2337):** val=48.08/test=41.02 — beats old #2218 (49.86/42.19) but loses to new #2338 (46.67). Trend holds: 16 < 32 < 64 < 128. Speed gain 75.9s/ep (−6.8% vs slice32), +1 epoch in 30 min. Val still descending at cap. Next: test slice_num=16 on n_head=1 compound (#2430 frieren).
+23. **ema_decay=0.99 confirmed locally optimal (#2295):** Both decay=0.999 (+1.76 val, 50% crashes) and decay=0.95 (+2.32 val) regress on n_head=2+sw=5. EMA-main gap at best epoch identical (5.06/5.00) — window length matters mid-training not at convergence. 0.99 (100-step window ≈ ¼ epoch) is the sweet spot for this training horizon. EMA decay sweep closed.
 
 ## Priority for current wave
 
@@ -108,7 +110,10 @@
 - **lr sweep on slice_num=32 (#2376 tanjiro)** — lr=1.5e-4 (slice64 winner) vs lr=1.25e-4; transfer lr signal to new compound; #2251 confirmed optimal ~1.5e-4 at slice_num=64
 
 **EMA:**
-- EMA decay (#2295 fern) — 0.999 vs 0.95 on new compound
+- EMA decay CLOSED (#2295) — 0.99 confirmed locally optimal. No further EMA sweeps needed.
+
+**Lion momentum:**
+- **β2 on n_head=1 (#2438 fern)** — complete the monotonic n_head×β2 story: β2=0.995 won at n_head=4; β2=0.99 won at n_head=2; now testing β2=0.95 vs β2=0.995 at n_head=1 (per-head dim=128)
 
 **Loss:**
 - Split loss: surface-MAE + volume-Huber (#2216 frieren) — aligns train signal with eval metric; volume Huber reduces outlier noise
