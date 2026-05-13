@@ -268,7 +268,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -> dict[str, float]:
+def evaluate_split(model, loader, stats, surf_weight, surf_channel_weights, device) -> dict[str, float]:
     """Evaluate a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -305,18 +305,22 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             x_in = apply_rff(x_norm)  # PR #1657: replace raw (x,z) with RFF embedding
             pred = model({"x": x_in})["preds"]
 
-            # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+            # Decoupled vol/surf channel weighting (PR #1421):
+            # vol_loss uses uniform [1,1,1] (3-channel mean); surf_loss uses [1,1,3]/5.
+            # Surface pressure is the ranking metric, so the 3x pressure emphasis is
+            # concentrated on surface nodes; vol gradients are balanced across all
+            # three channels instead of being biased toward interior pressure error.
             abs_err = (pred - y_target).abs()
-            weighted = abs_err * channel_weights
             vol_mask = safe_mask & ~is_surface
             surf_mask = safe_mask & is_surface
             vol_loss_sum += (
-                (weighted * vol_mask.unsqueeze(-1)).sum()
-                / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
+                (abs_err * vol_mask.unsqueeze(-1)).sum()
+                / (vol_mask.sum() * 3).clamp(min=1)
             ).item()
+            surf_weighted = abs_err * surf_channel_weights
             surf_loss_sum += (
-                (weighted * surf_mask.unsqueeze(-1)).sum()
-                / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
+                (surf_weighted * surf_mask.unsqueeze(-1)).sum()
+                / (surf_mask.sum() * surf_channel_weights.sum()).clamp(min=1)
             ).item()
             n_batches += 1
 
@@ -501,7 +505,9 @@ warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_fact
 cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
 scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
-channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
+# Surface-only pressure channel weighting (PR #1421): [1,1,3] applied to surf_loss only.
+# vol_loss uses uniform [1,1,1] (3-channel mean) — decouples vol from the surface 3x.
+surf_channel_weights = torch.tensor([1.0, 1.0, 3.0], device=device).view(1, 1, 3)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -576,13 +582,14 @@ for epoch in range(MAX_EPOCHS):
                 f"(should be ~[-1,1])  x_in shape={tuple(x_in.shape)}"
             )
 
-        # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
+        # Decoupled vol/surf channel weighting (PR #1421):
+        # vol uses uniform [1,1,1] (3-channel mean); surf keeps [1,1,3] (sum=5).
         abs_err = (pred - y_target).abs()
-        weighted = abs_err * channel_weights
         vol_mask = mask & ~is_surface
         surf_mask = mask & is_surface
-        vol_loss = (weighted * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * channel_weights.sum()).clamp(min=1)
-        surf_loss = (weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * channel_weights.sum()).clamp(min=1)
+        vol_loss = (abs_err * vol_mask.unsqueeze(-1)).sum() / (vol_mask.sum() * 3).clamp(min=1)
+        surf_weighted = abs_err * surf_channel_weights
+        surf_loss = (surf_weighted * surf_mask.unsqueeze(-1)).sum() / (surf_mask.sum() * surf_channel_weights.sum()).clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -603,7 +610,7 @@ for epoch in range(MAX_EPOCHS):
     # --- Validate ---
     model.eval()
     split_metrics = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, surf_channel_weights, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -690,7 +697,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, loader, stats, cfg.surf_weight, channel_weights, device)
+            name: evaluate_split(model, loader, stats, cfg.surf_weight, surf_channel_weights, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
