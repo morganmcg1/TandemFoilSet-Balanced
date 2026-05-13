@@ -240,7 +240,7 @@ def evaluate_split(model, loader, stats, surf_weight, device) -> dict[str, float
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=1.0, reduction='none')
+            huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=0.3, reduction='none')
             chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
             huber_err = huber_err * chan_w[None, None, :]
             vol_mask = mask & ~is_surface
@@ -460,7 +460,7 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
-        huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=1.0, reduction='none')
+        huber_err = F.smooth_l1_loss(pred.float(), y_norm.float(), beta=0.3, reduction='none')
         chan_w = torch.tensor([1.0, 1.0, 5.0], device=device, dtype=huber_err.dtype)
         huber_err = huber_err * chan_w[None, None, :]
 
