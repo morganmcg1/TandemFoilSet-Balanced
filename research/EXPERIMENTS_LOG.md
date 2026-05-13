@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 17:30 — PR #2416: n_head=1 + sw=5 interaction on slice32 (alphonse) — CLOSED, SW=5 ANTI-SYNERGISTIC AT N_HEAD=1
+
+- **Branch:** `willowpai2g24h5-alphonse/n-head-1-sw5`
+- **Hypothesis:** sw=5 was synergistic with slice32 at n_head=2 (#2335: −2.54 val, 1.75×). Test whether the synergy transfers to n_head=1.
+- **W&B run:** `c1zng9py`
+
+| Config | sw | val | test | Δ vs #2338 (46.67) |
+|--------|-----|-----|------|-------------------|
+| Baseline #2338 | 10 | **46.67** | **40.69** | — |
+| **This PR** | **5** | **48.51** | **41.05** | **+3.94% / +0.90% ✗** |
+
+**Per-test-split:** single_in_dist=45.35 (+4.26% ✗), geom_camber_rc=55.26 (−0.94% ✓), geom_camber_cruise=24.57 (−0.06% ≈flat), re_rand=39.03 (+0.37% ≈flat)
+
+**Note on run hygiene:** duplicate process ran in parallel for final 2 epochs, doubling epoch time (138/148s vs 71s). Extrapolated clean 25-epoch result ≈ val 47.4 — still ≥0.7 worse than baseline. Conclusion robust.
+
+**Result:** CLOSED. Key findings:
+1. **sw signal REVERSES at n_head=1**: sw=5 was synergistic at n_head=2 (−2.54 val), anti-synergistic at n_head=1 (+1.84 val). Reversal confirmed.
+2. **Mechanism**: at n_head=1 (dim=128), single head must allocate capacity to surface pressure detail. sw=5 strips that signal with no backup head. At n_head=2 (dim=64), head was undersized and sw=5 helped concentrate on coarse patterns.
+3. **Only OOD camber-rc marginal gain** (−0.94%) — vs #2335 where OOD gains drove the win. The surface loss pathway dominates at n_head=1.
+4. **Prediction from mechanism**: if sw<10 hurts at n_head=1, sw>10 should help. Testing sw=15/20 in #2470.
+
+**Alphonse reassigned:** PR #2470 — sw=15/sw=20 on n_head=1 compound (reversal test: does sw=10 sit at an optimum or does higher sw continue improving?).
+
+---
+
 ## 2026-05-13 17:20 — PR #2356: Lion wd sweep on n_head=2+slice_num=32 (thorfinn) — CLOSED, WD=3E-4 BEATS OLD BASELINE, ASSIGNED TO N_HEAD=1
 
 - **Branch:** `willowpai2g24h5-thorfinn/lion-wd-sweep-v2`
