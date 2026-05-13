@@ -11,6 +11,26 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~04:30 — Cycle 17: #1829 alphonse closed + #1915 assigned
+
+### PR #1829 alphonse — max_lr=4e-3: CLOSED ✗
+
+**max_lr=4e-3 is definitively too aggressive.** 4 W&B runs in the group:
+| Run | Epochs | val_avg/mae_surf_p | Notes |
+|---|---|---|---|
+| d43bqyyw | 18 | 105.00 (+22% vs 85.84) | Cleanest run |
+| veiqmxxl | 15 | 109.39 (+27%) | Timeout before full anneal |
+| 2jqygule | 0 | — | Immediate failure |
+| pt3p5yf4 | ~2 | 274.83 (diverging) | Silent retry, train_loss=23 |
+
+Student was silently retrying after failures without submitting. OneCycleLR max_lr axis fully closed: optimum at 2e-3, 4e-3 destabilizes. Note: student issued with guidance to submit first clean result immediately rather than retry.
+
+### New assignment: #1915 alphonse — OneCycleLR div_factor 25 → 10
+
+Tests warmup starting LR increase (80µs → 200µs). With beta1=0.95 requiring more initial gradient steps to build momentum, a higher starting LR may help the warmup phase be more effective. The peak LR stays at 2e-3 (confirmed optimal).
+
+---
+
 ## 2026-05-13 ~06:30 — Cycle 16: #1867 fern MERGED ✓ + 2 closed + 2 sent-back + 3 new arms
 
 ### PR #1867 fern — AdamW beta1=0.9 → 0.95: MERGED ✓
