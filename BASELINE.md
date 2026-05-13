@@ -37,7 +37,29 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
-### 2026-05-13 18:21 — PR #2475 (`charliepai2g24h4-fern/layerscale-init-0.1`)
+### 2026-05-13 21:25 — PR #2519 (`charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`)
+
+**Fixed sharper attention temperature τ = √2 × default** — single-line change to `F.scaled_dot_product_attention(..., scale=1/sqrt(d_head/2))` which is √2 sharper than the default `1/sqrt(d_head)`. No new parameters. Validates the #2488 RMSNorm-QK-γ Outcome B finding that the model wanted slight attention sharpening — but with a fixed scalar rather than learnable per-channel γ.
+
+- **`val_avg/mae_surf_p`** = **56.1754** (best @ epoch 12; **−3.68%** vs #2475 baseline 58.3244 — biggest single-experiment win in 18 merges)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **48.7149** (**−4.38%** — test improvement LARGER than val improvement; robust generalization signal)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = **66.511** (−6.77%)
+  - `val_geom_camber_rc` = **68.819** (−3.13%)
+  - `val_geom_camber_cruise` = **34.782** (−1.77%)
+  - `val_re_rand` = **54.590** (−1.65%)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = **57.795** (−9.46% — largest single-split gain)
+  - `test_geom_camber_rc` = **63.594** (−1.19%)
+  - `test_geom_camber_cruise` = **28.422** (−3.29%)
+  - `test_re_rand` = **45.048** (−2.48%)
+- **Mechanism**: a √2 sharper scaling factor in the SDPA softmax produces a more decisive attention distribution. The model wanted this without needing per-channel learnability — the learnable γ in #2488 added too many DoF (peak std/mean only 33%) without exploiting them. The fixed scalar captures the gain cleanly.
+- **Compound progress**: 20 merges, **100.957 → 56.1754 = −44.36%**
+- **Param count**: **892,637** (unchanged)
+- **Metric artifacts**: `models/model-charliepai2g24h4-tanjiro-attn-temp-fixed-sharper-20260513-185119/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-tanjiro --experiment_name charliepai2g24h4-tanjiro/attn-temp-fixed-sharper`
+
+### 2026-05-13 18:21 — PR #2475 (`charliepai2g24h4-fern/layerscale-init-0.1`) — *superseded by #2519*
 
 LayerScale γ init raised from 0.025 → 0.1 (4× current) on the post-#2436 stack. Single-line change to the `TransolverBlock` default; everything else identical (same 3-group AdamW with LayerScale γ in 10× lr no-WD group). Tests whether the prior init=0.025 was implicitly retuned by the no-WD 10× lr group dynamics (where γ drifts 4.6–6.2× off init).
 
