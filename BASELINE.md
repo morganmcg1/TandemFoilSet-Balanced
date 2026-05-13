@@ -1,5 +1,89 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 01:45 — PR #1725: Lion optimizer lr=1e-4 (edward)
+
+**New best: `val_avg/mae_surf_p` = 86.938** (epoch 11, 30-min wall-clock cap)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Loss | L1 (MAE) in normalized space, surf_weight=10 |
+| Optimizer | **Lion, lr=1e-4, weight_decay=1e-4** ← changed |
+| Scheduler | CosineAnnealingLR (T_max=epochs) |
+| `batch_size` | 4 |
+| `epochs` | 50 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+### Val metrics (best checkpoint, epoch 11)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 98.979 |
+| val_geom_camber_rc | 104.737 |
+| val_geom_camber_cruise | 62.041 |
+| val_re_rand | 81.995 |
+| **val_avg/mae_surf_p** | **86.938** |
+
+### Test metrics (best-val checkpoint, epoch 11)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | 91.606 |
+| test_geom_camber_rc | 92.561 |
+| test_geom_camber_cruise | 52.841 |
+| test_re_rand | 74.952 |
+| **test_avg/mae_surf_p** | **77.990** |
+
+### Improvement vs PR #1724 baseline (101.463)
+
+| Split | Old | New | Δ |
+|---|---|---|---|
+| val_single_in_dist | 120.699 | 98.979 | −18.0% |
+| val_geom_camber_rc | 116.096 | 104.737 | −9.8% |
+| val_geom_camber_cruise | 73.667 | 62.041 | −15.8% |
+| val_re_rand | 95.391 | 81.995 | −14.0% |
+| **val_avg** | **101.463** | **86.938** | **−14.3%** |
+
+> Run hit the 30-min wall-clock cap at epoch 11/50, still improving monotonically. Significant convergence headroom remains — Lion+lr=1e-4 was still descending at cutoff. With proper LR tuning and longer budget, further gains likely.
+
+### Metric artifacts
+
+`models/model-charliepai2g48h3-edward-lion-optimizer-20260513-001607/metrics.jsonl`
+
+### Reproduce
+
+```bash
+cd target/ && python train.py \
+  --agent <student> \
+  --experiment_name <name> \
+  --epochs 50 \
+  --lr 1e-4 \
+  --weight_decay 1e-4 \
+  --batch_size 4 \
+  --surf_weight 10
+```
+
+Note: Lion optimizer is now the default in `train.py` (merged from PR #1725). Pass `--lr 1e-4` explicitly (Lion's optimal LR is 3-10× lower than Adam's 5e-4).
+
+---
+
+## Benchmark to beat
+
+**`val_avg/mae_surf_p` < 86.938** — lower is better.
+
+Test metric benchmark: **`test_avg/mae_surf_p` < 77.990**.
+
+Per-split breakdown: single_in_dist=98.979, geom_camber_rc=104.737, geom_camber_cruise=62.041, re_rand=81.995.
+geom_camber_rc (104.7) and single_in_dist (99.0) are now the hardest splits.
+
+---
+
 ## 2026-05-13 01:20 — PR #1724: bf16 mixed precision (alphonse)
 
 **New best: `val_avg/mae_surf_p` = 101.463** (epoch 14, 30-min wall-clock cap)
