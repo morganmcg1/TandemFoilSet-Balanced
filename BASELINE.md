@@ -4,6 +4,36 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 11:05 — PR #2014: [onecycle-lr] OneCycleLR(max_lr=8e-4) replacing SequentialLR on bs=1 (nezuko)
+
+- **`val_avg/mae_surf_p`:** **60.98** (best epoch 20/21)
+- **`test_avg/mae_surf_p`:** **52.48** (from best-val checkpoint, all 4 splits)
+- **Per-split surface-p MAE (val):** single_in_dist=63.34, geom_camber_rc=72.79, geom_camber_cruise=45.90, re_rand=61.91
+- **Per-split surface-p MAE (test):** single_in_dist=54.75, geom_camber_rc=64.08, geom_camber_cruise=37.43, re_rand=53.66
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, wd=1e-4, surf_weight=5.0, batch_size=1, seed=42, OneCycleLR(max_lr=8e-4, pct_start=0.1, anneal_strategy='cos', div_factor=25, final_div_factor=10, T_MAX_EPOCHS=21), AdamW(0.9,0.999, lr=5e-4 initial), smooth_l1_loss(beta=0.5), clip_grad_norm_(max_norm=1.0), bf16, unified_pos=True, ref=8`
+- **Key change:** SequentialLR(LinearLR(warmup) → CosineAnnealingLR(T_max=17)) **replaced** by OneCycleLR. Single super-convergence schedule: lr rises from 3.2e-5 (=max_lr/25) to 8e-4 over first ~2.1 epochs (pct_start=0.1), then cosine-anneals to 3.2e-6 (=max_lr/250) over remaining 18.9 epochs. Stops exactly at T_MAX_EPOCHS=21. **Note: max_lr=8e-4 is hardcoded; cfg.lr=5e-4 is used as AdamW init but immediately overridden by OneCycleLR on step 1.**
+- **Improvement vs #2012 (bs=1+beta=0.5, val=66.32):** val −5.34 (−8.06%), test −7.20 (−12.07%)
+- **All 8 splits improved:** rc val −8.28 / test −10.12 (biggest), cruise val −3.21 / test −4.18 (smallest), single_in_dist −6.64/−6.95, re_rand −3.19/−7.54
+- **Schedule note:** OneCycleLR with T_MAX_EPOCHS=21 solves the schedule-misalignment problem that the old SequentialLR had (cosine ending at ep18, model still improving at ep21). The super-convergence schedule is fully calibrated to the bs=1 30-min budget.
+- **Metric artifacts:** `models/model-charliepai2g48h4-nezuko-onecycle-lr-bs1-20260513-100811/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-nezuko --experiment_name "charliepai2g48h4-nezuko/onecycle-lr-bs1"`
+- **16th effective merge**
+
+**Critical impact on in-flight experiments:**
+- `cfg.lr` (default 5e-4) is now irrelevant — OneCycleLR overrides it from step 1. Experiments targeting `cfg.lr` changes (thorfinn #1968, alphonse #2106) are MOOT after rebase. Reassign with `max_lr` as the lever.
+- `T_max` (CosineAnnealingLR) no longer exists. Experiments targeting T_max (edward #2162) are MOOT. Reassign.
+- `beta=0.5` (loss shape) and EMA (askeladd) and β2 (tanjiro) are independent of schedule — those can rebase cleanly.
+
+**Open questions after this merge:**
+- **max_lr bracket:** 8e-4 untested against alternatives. What's the peak? Try 6e-4 (−25%) and 1e-3 (+25%).
+- **EMA stacking:** Does EMA further smooth the OneCycleLR trajectory? askeladd #1540 testing.
+- **beta bracket:** Does beta=0.25 still help under OneCycleLR? fern #2164 testing.
+- **β2 with OneCycleLR:** The high-peak-then-anneal profile is different from cosine. Does β2=0.95 or 0.99 help? tanjiro #2125 testing.
+- **pct_start bracket:** 10% peak (2.1 epochs). Too fast? 15% (3.15 epochs) may slow the initial rise and help the rc split.
+- **T_MAX_EPOCHS=22?** If the budget allows, an extra epoch at the final very-low-lr plateau may help. But first confirm the current budget is fully used.
+
+---
+
 ### 2026-05-13 10:00 — PR #2012: [loss-beta-0-5] Halve smooth_l1 beta 1.0→0.5 on bs=1 baseline (edward)
 
 - **`val_avg/mae_surf_p`:** **66.32** (best epoch 21/21)
