@@ -170,9 +170,14 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, out_dim),
             )
 
-    def forward(self, fx, gamma=None, beta=None):
+    def forward(self, fx, gamma=None, beta=None, log_re=None, residual_film=None):
         fx = self.attn(self.ln_1(fx), gamma, beta) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
+        # ResidualFiLM modulates the post-block hidden state. Applied before the
+        # optional last-layer output projection so every block sees the same
+        # "FiLM after residual adds" treatment of the residual stream.
+        if residual_film is not None and log_re is not None:
+            fx = residual_film(fx, log_re)
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -213,6 +218,9 @@ class Transolver(nn.Module):
         # are computed once and passed to every block. Zero-init makes (gamma, beta)
         # = (0, 0) at step 0 → identical to baseline (no FiLM) at init.
         self.re_film = ReFiLM(heads=n_head, slice_num=slice_num, hidden=8)
+        # ResidualFiLM modulates the n_hidden residual stream after each block's
+        # MLP residual add (shared across all blocks; zero-init for identity start).
+        self.residual_film = ResidualFiLM(dim=n_hidden, hidden=8)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -231,7 +239,7 @@ class Transolver(nn.Module):
         gamma, beta = self.re_film(log_re)
         fx = self.preprocess(x) + self.placeholder[None, None, :]
         for block in self.blocks:
-            fx = block(fx, gamma, beta)
+            fx = block(fx, gamma, beta, log_re=log_re, residual_film=self.residual_film)
         return {"preds": fx}
 
 
@@ -297,6 +305,59 @@ class ReFiLM(nn.Module):
         gamma = gamma.reshape(B, self.heads, 1, self.slice_num)
         beta = beta.reshape(B, self.heads, 1, self.slice_num)
         return gamma, beta
+
+
+class ResidualFiLM(nn.Module):
+    """Canonical FiLM (Perez et al. 2018) on the post-block residual stream.
+
+    Maps log(Re) → per-channel (gamma, beta) used to modulate the n_hidden-
+    dimensional hidden state after each transformer block's residual adds:
+        h' = (1 + gamma) * h + beta
+    Zero-init the final projection so (gamma, beta) = (0, 0) at step 0, i.e.
+    the module is exact identity at init and must earn its modulation.
+
+    Shared across all TransolverBlocks (one instance owned by the parent
+    Transolver). Operates on n_hidden, not slice logits — this is structurally
+    distinct from ReFiLM (which gates attention slice membership).
+    """
+
+    def __init__(self, dim: int, hidden: int = 8):
+        super().__init__()
+        self.dim = dim
+        self.proj = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, 2 * dim),
+        )
+        nn.init.zeros_(self.proj[-1].weight)
+        nn.init.zeros_(self.proj[-1].bias)
+        # Diagnostic capture (uncompiled-model only). When True, the last call
+        # within a forward pass overwrites the captured stats — the shared
+        # module is called once per block so the final entry reflects the
+        # last (deepest) block's modulation magnitudes.
+        self._diag_capture = False
+        self._last_g_absmax: float | None = None
+        self._last_b_absmax: float | None = None
+        self._last_g_per_sample: torch.Tensor | None = None
+        self._last_b_per_sample: torch.Tensor | None = None
+        self._last_mod_per_sample: torch.Tensor | None = None
+
+    def forward(self, h: torch.Tensor, log_re: torch.Tensor) -> torch.Tensor:
+        # h: [B, N, d], log_re: [B, 1] (or [B], coerced)
+        if log_re.dim() == 1:
+            log_re = log_re.unsqueeze(-1)
+        gb = self.proj(log_re)                  # [B, 2d]
+        g, b = gb.chunk(2, dim=-1)              # [B, d] each
+        out = (1.0 + g.unsqueeze(1)) * h + b.unsqueeze(1)
+        if self._diag_capture:
+            with torch.no_grad():
+                self._last_g_absmax = g.abs().max().item()
+                self._last_b_absmax = b.abs().max().item()
+                self._last_g_per_sample = g.abs().mean(dim=-1).detach().to(torch.float64)
+                self._last_b_per_sample = b.abs().mean(dim=-1).detach().to(torch.float64)
+                mod = out - h  # [B, N, d] = g*h + b modulation magnitude
+                self._last_mod_per_sample = mod.abs().mean(dim=(1, 2)).detach().to(torch.float64)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -513,9 +574,10 @@ rescale_head = ReScaleHead(hidden=32, out_channels=3).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_head = sum(p.numel() for p in rescale_head.parameters())
 n_params_film = sum(p.numel() for p in model.re_film.parameters())
+n_params_residual_film = sum(p.numel() for p in model.residual_film.parameters())
 print(
-    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}) "
-    f"+ ReScaleHead ({n_params_head} params)"
+    f"Model: Transolver ({n_params/1e6:.2f}M params, incl. ReFiLM {n_params_film}, "
+    f"ResidualFiLM {n_params_residual_film}) + ReScaleHead ({n_params_head} params)"
 )
 
 # Keep a reference to the uncompiled module for diagnostic forward passes
@@ -531,6 +593,84 @@ torch_compile_mode = "default"
 torch_compile_dynamic = True
 print(f"Compiling model: mode={torch_compile_mode!r}, dynamic={torch_compile_dynamic}")
 model = torch.compile(model, mode=torch_compile_mode, dynamic=torch_compile_dynamic)
+
+
+def capture_residual_film_stats(uncompiled, val_loader, stats_, device_):
+    """Capture residual-stream FiLM modulation stats across a full val split.
+
+    Iterates the val loader, sets ``_diag_capture=True`` on the shared
+    ResidualFiLM, runs uncompiled forwards, and accumulates per-sample
+    |γ|, |β|, and |γ⊙h + β| (the modulation magnitude after the deepest
+    block) together with each sample's log(Re). Returns:
+      {"g_absmax_max":..., "b_absmax_max":...,
+       "g_per_sample_mean":..., "b_per_sample_mean":...,
+       "mod_per_sample_mean":...,
+       "corr_g_logre":..., "corr_b_logre":..., "corr_mod_logre":...,
+       "n_samples":...}
+    """
+    rf = uncompiled.residual_film
+    was_training = uncompiled.training
+    uncompiled.eval()
+    rf._diag_capture = True
+    g_absmax_max = 0.0
+    b_absmax_max = 0.0
+    log_re_all: list[torch.Tensor] = []
+    g_per_sample_all: list[torch.Tensor] = []
+    b_per_sample_all: list[torch.Tensor] = []
+    mod_per_sample_all: list[torch.Tensor] = []
+    try:
+        with torch.no_grad():
+            for x, _y, _is_surface, _mask in val_loader:
+                x = x.to(device_, non_blocking=True)
+                x_norm = (x - stats_["x_mean"]) / stats_["x_std"]
+                _ = uncompiled({"x": x_norm})
+                log_re = x_norm[:, 0, 13].to(torch.float64)  # [B]
+                log_re_all.append(log_re.cpu())
+                if rf._last_g_absmax is not None:
+                    g_absmax_max = max(g_absmax_max, rf._last_g_absmax)
+                if rf._last_b_absmax is not None:
+                    b_absmax_max = max(b_absmax_max, rf._last_b_absmax)
+                if rf._last_g_per_sample is not None:
+                    g_per_sample_all.append(rf._last_g_per_sample.cpu())
+                if rf._last_b_per_sample is not None:
+                    b_per_sample_all.append(rf._last_b_per_sample.cpu())
+                if rf._last_mod_per_sample is not None:
+                    mod_per_sample_all.append(rf._last_mod_per_sample.cpu())
+    finally:
+        rf._diag_capture = False
+        rf._last_g_absmax = None
+        rf._last_b_absmax = None
+        rf._last_g_per_sample = None
+        rf._last_b_per_sample = None
+        rf._last_mod_per_sample = None
+        if was_training:
+            uncompiled.train()
+
+    if not log_re_all or not mod_per_sample_all:
+        return {}
+
+    log_re_t = torch.cat(log_re_all)
+    g_t = torch.cat(g_per_sample_all)
+    b_t = torch.cat(b_per_sample_all)
+    mod_t = torch.cat(mod_per_sample_all)
+
+    def _corr(a: torch.Tensor, b: torch.Tensor) -> float:
+        a_c = a - a.mean()
+        b_c = b - b.mean()
+        denom = (a_c.std().clamp(min=1e-12)) * (b_c.std().clamp(min=1e-12))
+        return float((a_c * b_c).mean() / denom)
+
+    return {
+        "g_absmax_max": g_absmax_max,
+        "b_absmax_max": b_absmax_max,
+        "g_per_sample_mean": float(g_t.mean()),
+        "b_per_sample_mean": float(b_t.mean()),
+        "mod_per_sample_mean": float(mod_t.mean()),
+        "corr_g_logre": _corr(g_t, log_re_t),
+        "corr_b_logre": _corr(b_t, log_re_t),
+        "corr_mod_logre": _corr(mod_t, log_re_t),
+        "n_samples": int(log_re_t.numel()),
+    }
 
 
 def capture_slice_entropy(uncompiled, val_loader, stats_, device_):
@@ -617,6 +757,8 @@ slice_entropy_ep1: list[list[float]] | None = None
 slice_entropy_film_stats_ep1: dict | None = None
 slice_entropy_last: list[list[float]] | None = None
 slice_entropy_film_stats_last: dict | None = None
+residual_film_stats_ep1: dict | None = None
+residual_film_stats_last: dict | None = None
 last_completed_epoch: int = 0
 diag_split_name = next(iter(val_loaders.keys()))  # use one val split as the diag batch source
 train_start = time.time()
@@ -801,15 +943,21 @@ for epoch in range(MAX_EPOCHS):
     epoch_slice_entropy: list[list[float]] | None = None
     epoch_gamma_stats: dict | None = None
     epoch_beta_stats: dict | None = None
+    epoch_residual_film_stats: dict | None = None
     if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_MAX - 2, 1):
         epoch_slice_entropy, epoch_gamma_stats, epoch_beta_stats = capture_slice_entropy(
+            uncompiled_model, val_loaders[diag_split_name], stats, device,
+        )
+        epoch_residual_film_stats = capture_residual_film_stats(
             uncompiled_model, val_loaders[diag_split_name], stats, device,
         )
         if (epoch + 1) == 1:
             slice_entropy_ep1 = epoch_slice_entropy
             slice_entropy_film_stats_ep1 = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+            residual_film_stats_ep1 = epoch_residual_film_stats
         slice_entropy_last = epoch_slice_entropy
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
+        residual_film_stats_last = epoch_residual_film_stats
     last_completed_epoch = epoch + 1
 
     append_metrics_jsonl(metrics_jsonl_path, {
@@ -844,6 +992,8 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "residual_film/stats": epoch_residual_film_stats,
+        "residual_film/n_params": n_params_residual_film,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -871,6 +1021,15 @@ for epoch in range(MAX_EPOCHS):
                 f"gamma[abs_max={epoch_gamma_stats['absmax']:.3f}, std={epoch_gamma_stats['std']:.3f}]  "
                 f"beta[abs_max={epoch_beta_stats['absmax']:.3f}, std={epoch_beta_stats['std']:.3f}]"
             )
+    if epoch_residual_film_stats:
+        rfs = epoch_residual_film_stats
+        print(
+            f"    ResidualFiLM(diag)  "
+            f"g[abs_max={rfs['g_absmax_max']:.3f} mean={rfs['g_per_sample_mean']:.3f}]  "
+            f"b[abs_max={rfs['b_absmax_max']:.3f} mean={rfs['b_per_sample_mean']:.3f}]  "
+            f"mod_mean={rfs['mod_per_sample_mean']:.4f}  "
+            f"corr_logRe[g={rfs['corr_g_logre']:+.3f} b={rfs['corr_b_logre']:+.3f} mod={rfs['corr_mod_logre']:+.3f}]"
+        )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
 
@@ -886,20 +1045,26 @@ if last_completed_epoch > 0 and last_completed_epoch != 1:
     )
     slice_entropy_last = _ent
     slice_entropy_film_stats_last = {"gamma": _g, "beta": _b}
+    residual_film_stats_last = capture_residual_film_stats(
+        uncompiled_model, val_loaders[diag_split_name], stats, device,
+    )
 
 # Persist epoch-1 vs last-epoch slice-entropy comparison as a single record so it's
 # easy to surface in the results comment.
 append_metrics_jsonl(metrics_jsonl_path, {
     "event": "film_slice_entropy_summary",
     "n_params_film": n_params_film,
+    "n_params_residual_film": n_params_residual_film,
     "ep1": {
         "slice_entropy_per_head": slice_entropy_ep1,
         "film_stats": slice_entropy_film_stats_ep1,
+        "residual_film_stats": residual_film_stats_ep1,
     },
     "last": {
         "epoch": last_completed_epoch,
         "slice_entropy_per_head": slice_entropy_last,
         "film_stats": slice_entropy_film_stats_last,
+        "residual_film_stats": residual_film_stats_last,
     },
 })
 
