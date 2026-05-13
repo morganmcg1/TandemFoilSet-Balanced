@@ -521,10 +521,14 @@ optimizer = Lion(
     model.parameters(),
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
-    betas=(0.9, 0.99),
+    betas=(0.95, 0.99),
 )
-print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.95, 0.99) | sign-based momentum update | replaces AdamW")
+print(
+    f"Lion β₁ sweep: β₁=0.95 (vs baseline 0.90); β₂=0.99 unchanged; "
+    f"momentum time constant: 1/(1-0.95)=20 steps (was 10 steps); "
+    f"lr={cfg.lr}, wd={cfg.weight_decay}; baseline to beat: val_avg/mae_surf_p < 33.4935 (PR #2553)"
+)
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
