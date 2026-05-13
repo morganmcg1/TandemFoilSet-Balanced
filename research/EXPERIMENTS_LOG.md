@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-05-13 06:15 — PR #1614: [per-channel-loss-weights] Up-weight pressure channel (p_weight=5) — MERGED
+
+- **Branch**: charliepai2g24h1-edward/per-channel-loss-weights
+- **Hypothesis**: Upweighting the p channel by 5× post-Huber shifts ~7× more gradient mass to the dominant error source. Implementation: linear multiplier on per-element Huber output (post-Huber), unweighted denominator — guarantees exactly 5× amplification across Huber regimes.
+- **Status**: MERGED — new baseline: val_avg=29.2179 (-2.11%)
+
+| Metric | p_weight=5 | Baseline (#1599) | Δ |
+|--------|-----------|-----------------|---|
+| val_avg/mae_surf_p | **29.2179** | 29.8463 | **−2.11%** |
+| test_avg/mae_surf_p | **25.6024** | 26.1005 | **−1.91%** |
+| Best epoch | 29 | 29 | — |
+| Peak GPU | 23.91 GB | 24 GB | flat |
+
+**Per-split val/test (epoch 29):**
+
+| Split | val (p5) | val (base) | Δval | test (p5) | test (base) | Δtest |
+|-------|---------|-----------|------|----------|------------|-------|
+| single_in_dist | 28.562 | 30.20 | −5.43% | 30.135 | 30.09 | +0.15% |
+| geom_camber_rc | 42.689 | 43.11 | −0.97% | 38.939 | 39.41 | −1.19% |
+| geom_camber_cruise | 13.771 | 14.54 | −5.29% | 10.847 | 11.74 | −7.60% |
+| re_rand | 31.850 | 31.54 | +0.99% | 22.489 | 23.16 | −2.90% |
+| **avg** | **29.218** | **29.846** | **−2.11%** | **25.602** | **26.101** | **−1.91%** |
+
+**Per-channel trade-off:**
+
+| Channel | p5 | base (#1599) | Δ |
+|---------|----|-------------|---|
+| mae_surf_p | 29.218 | 29.846 | −2.1% |
+| mae_surf_Ux | 0.440 | 0.376 | +17.1% |
+| mae_surf_Uy | 0.248 | 0.224 | +10.7% |
+
+**Artifact**: `models/model-charliepai2g24h1-edward-per-channel-loss-weights-p5-20260513-052434/metrics.jsonl`
+
+**Analysis**: p upweighting is an orthogonal mechanism that compounds cleanly with SOAP+compile+ReScaleHead. p dominates error by ~70×; directing 7× more gradient mass to p is clearly net positive. Training was stable (no oscillation, smooth monotone improvement). Model still hitting best epoch at the last epoch → convergence-limited. Key implementation insight: post-Huber weighting preserves the δ=0.1 threshold invariance across all Huber regimes. Velocity channels degrade slightly (+11-17%) but this is expected and net positive overall.
+
+---
+
+## 2026-05-13 06:15 — PR #1952: [rescale-head-2ch] Drop Ux channel from ReScaleHead — SENT BACK FOR REBASE
+
+- **Branch**: charliepai2g24h1-fern/rescale-head-2ch
+- **Hypothesis**: Ux scale_std=0.058 (near identity, corr=+0.637 — weakest of 3 channels). Removing Ux cleans gradient routing into the Uy/p heads which have real Re-conditioning function.
+- **Status**: SENT BACK — beat old baseline (29.3842 vs 29.8463, -1.55%) but #1614 merged setting new bar at 29.2179. Need rebase to verify compounding.
+
+| Metric | 2ch head | Baseline (#1599) | Δ |
+|--------|---------|-----------------|---|
+| val_avg/mae_surf_p | 29.3842 | 29.8463 | −1.55% |
+| test_avg/mae_surf_p | 25.6407 | 26.1005 | −1.76% |
+| Head params | 130 | 163 | −33 |
+
+**Per-split val (epoch 29):**
+
+| Split | 2ch | base | Δ |
+|-------|-----|------|---|
+| single_in_dist | 28.879 | 30.20 | −4.4% |
+| geom_camber_rc | 42.408 | 43.11 | −1.6% |
+| geom_camber_cruise | 14.690 | 14.54 | +1.0% |
+| re_rand | 31.559 | 31.54 | +0.1% |
+
+**2ch head diagnostics**: Uy scale_std=0.266, corr=+0.953; p scale_std=0.518, corr=+0.876 — essentially unchanged from 3ch run. Gradient-routing effect on Transolver body is the mechanism.
+
+**Artifact**: `models/model-charliepai2g24h1-fern-rescale-head-2ch-20260513-052123/metrics.jsonl`
+
+**Next action**: Rebase onto new baseline (29.2179), re-run. If 2ch Ux-drop compounds with p_weight=5, merge.
+
+---
+
 ## 2026-05-13 05:15 — PR #1704: [ema-weights] EMA model weights for smoother final checkpoint
 
 - **Branch**: charliepai2g24h1-frieren/ema-weights
