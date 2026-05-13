@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-13 21:10 — PR #2551: dropout=0.25/0.30 stack on n_layers=3+wd=3e-4 (edward) — CLOSED, REGULARIZATION SATURATION
+
+- **Branch:** `willowpai2g24h5-edward/dropout-stack-wd3e4-n-layers-3`
+- **Hypothesis:** higher dropout (norm-control wd is independent of co-adaptation dropout) should stack on top of wd=3e-4 to improve OOD generalization.
+- **W&B runs:** `fqo669sk` (dropout=0.25), `tccwohev` (dropout=0.30)
+
+| Arm | dropout | val | test | Δ vs #2489 (42.00/35.96) | Epochs |
+|-----|---------|-----|------|--------------------------|--------|
+| 1 | 0.25 | 44.7325 | 37.4143 | +6.50% / +4.05% ✗ | 30 |
+| 2 | 0.30 | 43.6647 | 36.9328 | +3.95% / +2.71% ✗ | 34 |
+| Baseline #2489 | 0.20 | 42.0040 | 35.9573 | — | 33 |
+
+Per-test-split (mae_surf_p): all 4 splits regress on both arms uniformly (single_in_dist +2.74%/+4.27%, geom_camber_rc +3.85%/+1.01%, geom_camber_cruise +3.39%/+4.20%, re_rand +6.14%/+2.63%). No OOD-specific advantage as the hypothesis predicted.
+
+**Result:** CLOSED. Higher dropout is harmful on the shallow + already-wd-regularized compound.
+
+Key findings:
+1. **Regularization saturation at dropout=0.20.** wd=3e-4 + dropout=0.20 + BF16 + EMA(0.99) already at the Pareto frontier. Adding more of any regularizer requires substituting another.
+2. **Capacity floor at n_layers=3.** Each of 3 attention blocks carries more representational load than at n_layers=5. Dropout=0.30 removes too many activations per forward pass to compensate.
+3. **No OOD-specific dropout effect.** Regressions roughly uniform across in-dist and OOD splits — argues against 'dropout regularizes generalization' framing on this compound.
+4. **Val curves still descending at cap on all arms** — the 30-min budget is the binding constraint; further regularization slows learning without raising the asymptote.
+5. **Non-monotonic arm ordering (Arm 2 > Arm 1 on val) within 1-pt single-seed noise.** Direction conclusion (both lose to 0.20) is robust.
+
+**Edward reassigned:** batch_size=8/2 sweep on new compound — speed-vs-step trade probe, untested axis.
+
+---
+
 ## 2026-05-13 20:15 — PR #2448: Lion wd=3e-4/1e-3 on n_head=1+slice32 (thorfinn) — CLOSED, wd INVERTS AT N_HEAD=1
 
 - **Branch:** `willowpai2g24h5-thorfinn/wd-n-head-1-slice32`

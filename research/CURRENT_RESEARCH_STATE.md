@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~20:15 UTC
+- **Date:** 2026-05-13 ~21:10 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -53,6 +53,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 32. **slice_num INVERTS with depth (#2490):** slice_num=16 won at n_layers=5 (#2337) but anti-stacks at n_layers=3. Mechanism: depth and tokens not independent. **slice_num=32 confirmed as local optimum at n_layers=3.**
 33. **wd=3e-4 signal transfers depth-independently (#2489 — NEW BEST):** val=42.0040/test=35.9573 (−2.64%/−2.69% vs #2400, all 4 splits). wd=3e-4 operating point confirmed at n_layers=3; wd=1e-3 over-regularizes at this shallower depth. Regularization benefit is independent of network depth in this regime.
 34. **wd INVERTS at n_head=1 (#2448):** wd=3e-4 won at n_head=2 (#2356/#2489) but +0.51 val at n_head=1. wd is n_head-specific — n_head=2 spreads attention across 2 heads (variance/dilution that wd compensates), n_head=1 is single-head and already near wd=1e-4 optimum. At wd=3e-4 the n_head=1 and n_head=2 paths meet at val=47.18 → wd and n_head are substitutive regularizers. Pairs with finding 30 (slice × n_head substitutive at high per-head dim).
+35. **REGULARIZATION SATURATION at n_layers=3 (#2551):** dropout=0.25 (+6.50% val) and 0.30 (+3.95% val) both regress on the wd=3e-4 compound. All 4 splits regress uniformly — no OOD-specific dropout effect. wd=3e-4 + dropout=0.20 + BF16 + EMA(0.99) is at the Pareto frontier; adding more of any regularizer is substitutive, not additive. Capacity floor at 3 attention blocks: each block carries more representational load than at n_layers=5, so dropout=0.30 strips too many activations to compensate.
 
 ## Priority for current wave
 
@@ -69,6 +70,7 @@ Multiple student pods (alphonse/nezuko/askeladd/tanjiro) hitting `GraphQL: API r
 
 ## Closed experiments this cycle
 
+- **#2551 (edward):** dropout=0.25/0.30 stack on n_layers=3+wd=3e-4 — CLOSED. Regularization saturation; finding 35.
 - **#2448 (thorfinn):** wd=3e-4/1e-3 on n_head=1 — CLOSED. wd inverts at n_head=1; substitutive crossover with n_head=2 at wd=3e-4.
 - **#2489 (edward):** wd=3e-4 stack on n_layers=3 — **MERGED** val=42.00, test=35.96. NEW BEST.
 - **#2490 (frieren):** slice_num=16/8 stack on n_layers=3 — CLOSED. slice signal inverts with depth; slice32 is the local optimum.
