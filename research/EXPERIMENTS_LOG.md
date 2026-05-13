@@ -1,5 +1,38 @@
 # SENPAI Research Results
 
+## 2026-05-13 23:50 — CYCLE 11
+
+### PR #2584: lr=2e-4 + T_max=22 stack — CLOSED ✗ (Finding #57)
+
+- **Branch:** thorfinn/lr-2e4-tmax22
+- **Hypothesis:** Stack lr=2e-4 (Finding #54) + T_max=22 (Finding #56) for compound tail-extension win.
+- **Result:** test_avg/mae_surf_p = **50.8626** vs PR #2494 baseline 47.9076 (+6.17% rel regression — **~4× noise floor**). vs current best 46.2751 → +9.91% rel. Run cut at e17 by timeout.
+- **Per-split test:** in_dist +16.74%, rc within noise, cruise +5.46%, re_rand +6.20%.
+- **W&B run:** cl2zepgs (postln-lr2e4-tmax22-trial-1).
+- **Mechanism — why it failed:** Finding #56 was calibrated at lr=1.5e-4 where ep17-18 LR decays to ~1.83e-5 → 1.19e-5, reaching the productive low-LR refinement regime. At lr=2e-4 + T_max=22, the same epochs sit at ~4.3e-5 → 2.0e-5 — 2-3× higher than the productive regime, and the run never reaches the refinement window within 17 epochs (timeout-cut). Higher mid-training LR also keeps the model in a noisier optimization regime during the critical mid-late window, hurting in_dist most.
+- **Conclusion:** Finding #57 — T_max>20 only helps at very low LR (≤1.5e-4). At lr=2e-4 the optimum schedule is T_max=20. CLOSED. Thorfinn reassigned to left-side LR probe (#2664).
+
+### PR #2586: grad_clip_max_norm=3.0 — CLOSED ✗ (per-split lever-flip, aggregate tied)
+
+- **Branch:** alphonse/grad-clip-3p0-postln-lr2e4
+- **Hypothesis:** Tighten clip=3.0 (vs default 5.0) under post-LN+lr=2e-4 to filter upper-tail gradient noise.
+- **Result:** test_avg/mae_surf_p = **46.2988** vs current best 46.2751 (+0.05% rel — **within noise floor**, cannot merge a tie). vs PR #2494 baseline 47.9076 (−3.36% rel, but baseline shift makes this stale).
+- **Per-split test:** in_dist −6.74% (big IID win), cruise +4.03%, re_rand +4.93%, camber_rc ~flat.
+- **Mechanism:** Clip=3.0 filters upper-tail gradient noise → IID precision benefit (clean ablation). But the noise-filter reduces optimizer's exploratory variance → OOD regression. Same per-split lever-flip pattern as Finding #53 surf_weight, but in a different lever.
+- **Conclusion:** Mechanism interesting but aggregate within noise. Reassigned to clip=3.0 + T_max=20 STACK (#2663) — tests whether T_max=20's OOD gain combines with clip's IID gain to give a strictly better Pareto point.
+
+### Assignments — 3 idle students → 3 new high-EV experiments
+
+| PR | Student | Hypothesis | Tier |
+|---|---|---|---|
+| #2663 | alphonse | **clip=3.0 + T_max=20 stack** (compound IID×OOD) | Tier 2: optimizer × schedule |
+| #2664 | thorfinn | **lr=1.75e-4 + T_max=20** (left-side LR probe, fills gap) | Tier 1: LR×T_max landscape |
+| #2665 | askeladd | **Fourier L=12** under post-LN (Finding #41 flip test) | Tier 3: representation re-validation |
+
+After Cycle 11: still 8 students active (frieren #2591, fern #2630, edward #2632, nezuko #2634, tanjiro #2640, alphonse #2663, thorfinn #2664, askeladd #2665). **Zero idle students.**
+
+---
+
 ## 2026-05-13 22:45 — CYCLE 10
 
 ### PR #2568: lr=2e-4 + T_max=20 STACK — MERGED ✓ NEW BEST
