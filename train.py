@@ -611,6 +611,13 @@ with open(model_dir / "config.yaml", "w") as f:
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
 print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
+# Per-channel Huber δ: tighter pressure δ concentrates quadratic-regime signal on
+# the primary metric channel. Velocity unchanged at 0.1 (was already putting ~97%
+# of residuals in the quadratic regime by mid-training per #2081 diagnostics).
+HUBER_DELTAS_LIST = [0.1, 0.1, 0.05]
+HUBER_DELTAS = torch.tensor(HUBER_DELTAS_LIST, device=device).view(1, 1, 3)
+print(f"Per-channel Huber δ (Ux, Uy, p): {HUBER_DELTAS_LIST}")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 slice_entropy_ep1: list[list[float]] | None = None
@@ -634,6 +641,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_max = 0.0
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
+    epoch_l2_frac_per_ch = [0.0, 0.0, 0.0]
     n_batches = 0
     # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
     surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
@@ -663,13 +671,14 @@ for epoch in range(MAX_EPOCHS):
             # Huber-shaped per-node residuals in normalized space.
             # Replaces the squared error in the relative-L2 numerator, combining
             # per-sample relative scaling with per-node outlier capping.
-            HUBER_DELTA = 0.1
+            # Per-channel δ broadcasts over [B, N, 3]; pressure tightened to 0.05.
             residual = pred - y_norm
             abs_residual = residual.abs()
+            huber_d = HUBER_DELTAS.to(residual.dtype)
             sq_err = torch.where(
-                abs_residual <= HUBER_DELTA,
+                abs_residual <= huber_d,
                 0.5 * residual ** 2,
-                HUBER_DELTA * (abs_residual - 0.5 * HUBER_DELTA),
+                huber_d * (abs_residual - 0.5 * huber_d),
             )
             vol_mask = (mask & ~is_surface).unsqueeze(-1)
             surf_mask = (mask & is_surface).unsqueeze(-1)
@@ -698,8 +707,12 @@ for epoch in range(MAX_EPOCHS):
         with torch.no_grad():
             valid = mask.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
-            n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
+            in_l2 = (abs_residual <= huber_d) & valid
+            n_l2 = in_l2.sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
+            # Per-channel l2 fraction (denominator: per-channel valid count).
+            n_valid_per_ch = mask.sum().clamp(min=1).float()
+            l2_frac_per_ch_batch = (in_l2.sum(dim=(0, 1)).float() / n_valid_per_ch).tolist()
             sq_err_f64 = sq_err.detach().to(torch.float64)
             surf_huber_per_ch_sum += (sq_err_f64 * surf_mask).sum(dim=(0, 1))
             vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
@@ -736,6 +749,8 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_l2_frac += l2_frac_batch
+        for c in range(3):
+            epoch_l2_frac_per_ch[c] += l2_frac_per_ch_batch[c]
         n_batches += 1
 
     current_lr = scheduler.get_last_lr()[0]
@@ -743,6 +758,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_l2_frac /= max(n_batches, 1)
+    epoch_l2_frac_per_ch = [v / max(n_batches, 1) for v in epoch_l2_frac_per_ch]
 
     # --- Validate ---
     model.eval()
@@ -830,11 +846,12 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
         "train/huber_l2_frac": epoch_l2_frac,
+        "train/huber_l2_frac_per_ch": epoch_l2_frac_per_ch,
         "train/surf_huber_per_ch": surf_huber_per_ch,
         "train/vol_huber_per_ch": vol_huber_per_ch,
         "p_channel_weight": cfg.p_channel_weight,
-        "huber_delta": 0.1,
-        "loss_type": "huber_relative_l2_channel_weighted",
+        "huber_delta_per_ch": HUBER_DELTAS_LIST,
+        "loss_type": "huber_relative_l2_channel_weighted_per_ch_delta",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -847,7 +864,9 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f} "
+        f"l2_per_ch=(Ux={epoch_l2_frac_per_ch[0]:.3f} "
+        f"Uy={epoch_l2_frac_per_ch[1]:.3f} p={epoch_l2_frac_per_ch[2]:.3f})]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
