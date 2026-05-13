@@ -500,33 +500,65 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-# H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
-# Other params: lr=cfg.lr, wd=cfg.weight_decay; freqs: lr=10*cfg.lr, wd=0.
-# Rationale: default wd=1e-4 pulls freqs toward 0 each step, and the global lr=5e-4
-# was too small to move them off their dyadic init (top freqs essentially fixed in #2312).
+# H40: learned Fourier freqs — lr=10*cfg.lr, wd=0 (PR #2370 win).
+# H56: standard transformer "exclude 1D params from WD" recipe — LayerNorm γ/β, all biases,
+#      placeholder, and PhysicsAttention.temperature get wd=0 at default lr.
+#      Explicitly EXCLUDED here: layer_scale_attn/layer_scale_mlp (fern's #2436 domain),
+#      fourier_enc.freqs (already in its own group above).
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
-other_params = list(model.parameters())
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_params) == (
-    sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
-)
+
+norm_bias_params = []
+norm_bias_names = []
+other_params = []
+other_names = []
+for name, p in model.named_parameters():
+    # Skip explicit fern/freq overlap (defensive — model has no freq params, but for clarity)
+    if "fourier_enc" in name:
+        continue
+    is_layerscale = "layer_scale_attn" in name or "layer_scale_mlp" in name
+    is_norm_weight = ("ln_" in name or "norm" in name.lower()) and name.endswith(".weight")
+    is_norm_bias = ("ln_" in name or "norm" in name.lower()) and name.endswith(".bias")
+    is_linear_bias = name.endswith(".bias") and not is_norm_bias
+    is_placeholder = name == "placeholder"
+    is_attn_temp = name.endswith(".temperature")
+    if is_layerscale:
+        # leave in other_params (fern's domain — keep WD here)
+        other_params.append(p); other_names.append(name)
+    elif is_norm_weight or is_norm_bias or is_linear_bias or is_placeholder or is_attn_temp:
+        norm_bias_params.append(p); norm_bias_names.append(name)
+    else:
+        other_params.append(p); other_names.append(name)
+
+# Sanity: every model parameter is accounted for exactly once
+n_total = sum(p.numel() for p in model.parameters())
+n_split = sum(p.numel() for p in norm_bias_params) + sum(p.numel() for p in other_params)
+assert n_total == n_split, f"param count mismatch: total={n_total}, split={n_split}"
+
 optimizer = torch.optim.AdamW(
     [
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": norm_bias_params, "lr": cfg.lr, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
 )
 print(
-    f"[H40] Optimizer param groups: "
-    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
-    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
+    f"[H56] Optimizer param groups: "
+    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e} "
+    f"n_params={sum(p.numel() for p in other_params)}, "
+    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
+    f"n_params={sum(p.numel() for p in freq_params)}, "
+    f"norm/bias lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
+    f"n_params={sum(p.numel() for p in norm_bias_params)}"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+print(f"[H56] norm_bias group names ({len(norm_bias_names)}): {norm_bias_names}")
+print(f"[H56] other group names ({len(other_names)}): {other_names}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -675,6 +707,31 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
+# H56: final per-block LN γ/β stats — mechanism diagnostic for no-WD on norm/bias.
+final_ln_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    for ln_name in ("ln_1", "ln_2"):
+        ln = getattr(b, ln_name)
+        final_ln_stats[f"final/{ln_name}_l{i}_gamma_mean"] = float(ln.weight.mean().item())
+        final_ln_stats[f"final/{ln_name}_l{i}_gamma_std"]  = float(ln.weight.std().item())
+        final_ln_stats[f"final/{ln_name}_l{i}_beta_mean"]  = float(ln.bias.mean().item())
+        final_ln_stats[f"final/{ln_name}_l{i}_beta_std"]   = float(ln.bias.std().item())
+if hasattr(model.blocks[-1], "ln_3"):
+    ln = model.blocks[-1].ln_3
+    final_ln_stats["final/ln_3_gamma_mean"] = float(ln.weight.mean().item())
+    final_ln_stats["final/ln_3_gamma_std"]  = float(ln.weight.std().item())
+    final_ln_stats["final/ln_3_beta_mean"]  = float(ln.bias.mean().item())
+    final_ln_stats["final/ln_3_beta_std"]   = float(ln.bias.std().item())
+# H56: final placeholder + attn temperature stats — secondary mechanism diagnostics.
+final_misc_stats: dict[str, float] = {
+    "final/placeholder_mean": float(model.placeholder.mean().item()),
+    "final/placeholder_std":  float(model.placeholder.std().item()),
+    "final/placeholder_absmean": float(model.placeholder.abs().mean().item()),
+}
+for i, b in enumerate(model.blocks):
+    final_misc_stats[f"final/attn_temperature_l{i}_mean"] = float(b.attn.temperature.mean().item())
+    final_misc_stats[f"final/attn_temperature_l{i}_min"]  = float(b.attn.temperature.min().item())
+    final_misc_stats[f"final/attn_temperature_l{i}_max"]  = float(b.attn.temperature.max().item())
 # H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
 final_freqs = fourier_enc.freqs.detach().cpu().tolist()
 init_freqs = [2.0**k for k in range(N_FREQS)]
@@ -688,7 +745,7 @@ freqs_summary = {
 }
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **final_ln_stats, **final_misc_stats, **freqs_summary},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -697,6 +754,34 @@ for i in range(len(model.blocks)):
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
+print("[H56] Final per-block LayerNorm γ/β stats (end-of-training):")
+for i in range(len(model.blocks)):
+    for ln_name in ("ln_1", "ln_2"):
+        print(
+            f"  block {i} {ln_name}: γ mean={final_ln_stats[f'final/{ln_name}_l{i}_gamma_mean']:.4f} "
+            f"std={final_ln_stats[f'final/{ln_name}_l{i}_gamma_std']:.4f}  "
+            f"β mean={final_ln_stats[f'final/{ln_name}_l{i}_beta_mean']:.4f} "
+            f"std={final_ln_stats[f'final/{ln_name}_l{i}_beta_std']:.4f}"
+        )
+if "final/ln_3_gamma_mean" in final_ln_stats:
+    print(
+        f"  last block ln_3: γ mean={final_ln_stats['final/ln_3_gamma_mean']:.4f} "
+        f"std={final_ln_stats['final/ln_3_gamma_std']:.4f}  "
+        f"β mean={final_ln_stats['final/ln_3_beta_mean']:.4f} "
+        f"std={final_ln_stats['final/ln_3_beta_std']:.4f}"
+    )
+print(
+    f"[H56] Final placeholder: mean={final_misc_stats['final/placeholder_mean']:.4f} "
+    f"std={final_misc_stats['final/placeholder_std']:.4f} "
+    f"|μ|={final_misc_stats['final/placeholder_absmean']:.4f}"
+)
+print("[H56] Final per-block attn temperature (init=0.5):")
+for i in range(len(model.blocks)):
+    print(
+        f"  block {i}: mean={final_misc_stats[f'final/attn_temperature_l{i}_mean']:.4f} "
+        f"min={final_misc_stats[f'final/attn_temperature_l{i}_min']:.4f} "
+        f"max={final_misc_stats[f'final/attn_temperature_l{i}_max']:.4f}"
     )
 print("[H40] Final learned freqs vs dyadic init:")
 for k in range(N_FREQS):
