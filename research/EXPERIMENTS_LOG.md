@@ -8,6 +8,85 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 03:15 — PR #1799 (thorfinn LayerScale CaiT init=0.1 — H23) — **REBASING** (sent back)
+
+- Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.1`
+- Hypothesis: per-channel learnable γ_l initialized to 0.1, gating each
+  residual branch (attn + mlp) per CaiT (Touvron et al. 2021). Expected
+  -1% to -3% on val; predicted ramp-up to [0.5, 1.5] range over training.
+- Pre-rebase results (against stale baseline 84.762):
+
+| Metric | This PR | Stale baseline (#1548) | Current baseline (#1772) | Δ vs stale | Δ vs current |
+|---|---:|---:|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14) | 77.629 | 84.762 | 82.311 | **−8.42%** | −5.69% |
+| test_avg/mae_surf_p (4-split) | 68.010 | 74.659 | 73.330 | **−8.91%** | −7.26% |
+| Param count | 667,223 | 665,943 | 667,991 | +1,280 (+0.19%) | -768 |
+| Peak mem | 47.1 GB | — | — | unchanged | unchanged |
+
+Per-split val MAE @ best epoch 14 (vs stale baseline):
+
+| Split | Stale base | This PR | Δ vs stale |
+|---|---:|---:|---:|
+| val_single_in_dist     | 97.074 | 85.773 | −11.64% |
+| val_geom_camber_rc     | 94.997 | 87.713 | −7.67% |
+| val_geom_camber_cruise | 63.711 | 60.859 | −4.48% |
+| val_re_rand            | 83.266 | 76.171 | −8.52% |
+| **val_avg**            | 84.762 | **77.629** | **−8.42%** |
+
+Per-split test MAE @ best val checkpoint:
+
+| Split | Stale base | This PR | Δ vs stale |
+|---|---:|---:|---:|
+| test_single_in_dist     | 85.819 | 75.126 | −12.46% |
+| test_geom_camber_rc     | 83.023 | 74.247 | −10.57% |
+| test_geom_camber_cruise | 54.879 | 52.661 | −4.04% |
+| test_re_rand            | 74.916 | 70.005 | −6.55% |
+| **test_avg**            | 74.659 | **68.010** | **−8.91%** |
+
+- **Strong result on stale stack.** Both val and test move together
+  (~-8.4% / -8.9%), not val-overfit. All 4 splits improve. Gains
+  concentrate on in-distribution / Re-axis splits (>7%) and are smaller on
+  geom_camber_cruise (~4%, the already-lowest-error split).
+- **Mechanism check — informative**. Final γ_l statistics per block:
+  - Block 0 attn mean=0.087, std=0.029; mlp mean=0.115, std=0.039
+  - Block 4 attn mean=0.084, std=0.020; mlp mean=0.079, std=0.020
+  - Key observations: (1) model did NOT ramp γ_l up to CaiT-paper's
+    expected [0.5, 1.5] range — means stay in [0.079, 0.115], essentially
+    within ±15% of init=0.1. (2) Per-channel structure IS being used:
+    std/mean ratio reaches 30% in block-0 attn — meaningful per-channel
+    diversity. (3) MLP branches show clear depth-decreasing trend (0.115
+    → 0.079) — earlier blocks contribute more, consistent with merged
+    stoch-depth schedule already downweighting later blocks. **The win
+    looks less like "channel-specific amplification of useful Fourier
+    channels" (predicted) and more like "global attenuation of residual
+    branches with per-channel preservation of useful signal" — a
+    fine-grained learnable residual gate.**
+- **Why sent back for rebase (not merged):** student ran on pre-#1772
+  baseline (84.762, Fourier L=4 stack, `fun_dim: 36`). Current baseline is
+  82.311 (Fourier L=6, `fun_dim: 44`). Despite `mergeable=CLEAN` (changes
+  in TransolverBlock don't conflict with Fourier encoding changes), this
+  branch has now sign-flipped two PRs after rebase: #1608 frieren EMA-0.999
+  (-2.64% → +2.93%, low-pass smoothing fights Fourier spectral sharpening)
+  and #1754 nezuko LR warmup (pending). Cost of a re-run is ~31 min of one
+  GPU; benefit is a confirmed delta vs. current 82.311 baseline.
+- **Mechanism expected to compound**: LayerScale per-channel residual gate
+  is mechanistically orthogonal to Fourier input encoding. If anything,
+  sharper input features should give *more* useful signal to gate per
+  channel — strengthening rather than weakening the mechanism. Expected
+  post-rebase: val_avg in [75, 78] if clean compound; [78, 81] if modest
+  interference (still merge-eligible); >82.311 if active interference
+  (unlikely).
+- **Student's pre-registered follow-ups (queued, contingent on rebase
+  confirmation):**
+  1. Bracket init: try 0.05 (slower-ramp) and 0.3. If both converge to
+     similar plateau, confirms the model chooses operating point and
+     per-channel granularity is the load-bearing structure.
+  2. Per-block init schedule `[0.5, 0.3, 0.2, 0.1, 0.05]` (Fixup-style) —
+     interesting given the depth-decreasing trend in observed γ_l means.
+  3. Longer training with adjusted cosine T_max to see if γ_l keeps
+     drifting after the cosine cooldown finishes.
+- Single arm. Wall time 31.4 min. Metrics: `models/model-charliepai2g24h4-thorfinn-layerscale-init-0.1-20260513-020358/metrics.{jsonl,yaml}`.
+
 ## 2026-05-13 03:05 — PR #1811 (tanjiro per-channel output head MLPs — H24) — **CLOSED**
 
 - Branch: `charliepai2g24h4-tanjiro/output-head-per-channel-mlp`

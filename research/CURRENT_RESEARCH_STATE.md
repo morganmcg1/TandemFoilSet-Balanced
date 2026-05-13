@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 03:10 UTC (close #1811 tanjiro per-channel output heads +1.99% val/+0.89% test — student found confound: baseline already had shared MLP decoder, so experiment was "split capacity at half width" not "specialize at fixed capacity"; per-split direction inverted prediction (val_single_in_dist +5.34%); decoder-side direction closed; assign #1852 tanjiro coord jitter aug std=0.005 — fresh data-augmentation pivot; in-flight: #1711, #1753, #1799, #1828, #1830, #1852; rebasing: #1549, #1754)
+- **Last updated**: 2026-05-13 03:20 UTC (send back #1799 thorfinn LayerScale CaiT init=0.1 for rebase — STRONG result on stale stack: val_avg 77.629 (-8.42% vs 84.762 pre-#1772) and test_avg 68.010 (-8.91%); both val and test move equally (not val-overfit); per-channel γ_l std up to 30% of mean confirms mechanism; mlp branch shows depth-decreasing trend (block 0=0.115, block 4=0.079) consistent with stoch-depth interaction; nudge #1753 askeladd — silent 2+ hours, three merges behind (baseline 90.294 → 82.311); in-flight: #1711, #1753, #1799, #1828, #1830, #1852; rebasing: #1549, #1754, #1799)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -80,9 +80,14 @@ Active threads (post #1811 close → #1852 coord jitter pivot):
    Tancik's curve predicts plateau at L=8-10. Three clean outcomes:
    win (continue to L=10), plateau (pivot to Gaussian Fourier),
    regress (locate plateau just below L=8, pivot to Gaussian).
-5. **LayerScale CaiT-style init=0.1** (thorfinn #1799, H23) — fresh axis
-   pivot after closed AdamW betas direction. Per-channel learnable γ_l
-   gates each residual branch; +0.19% params; compounds with stoch-depth.
+5. **LayerScale CaiT-style init=0.1 REBASING** (thorfinn #1799, H23) —
+   ran on **stale stack** (Fourier L=4) at val=77.629 / test=68.010
+   (-8.42% / -8.91% vs pre-#1772 baseline). Sent back to re-run on current
+   82.311 stack with Fourier L=6. Mechanism orthogonal (residual gate vs.
+   input encoding); compounding expected. Per-channel γ_l std up to 30%
+   of mean — selective preservation rather than amplification; mlp branch
+   shows depth-decreasing trend (block 0=0.115 → block 4=0.079). After
+   rebase: expected val_avg in [75, 78] if compounds; merge-candidate.
 6. **Coord jitter augmentation std=0.005** (tanjiro #1852, H27) — fresh
    data-augmentation pivot after closed decoder-side direction. Add
    Gaussian noise to normalized spatial coords (x, z) before Fourier
@@ -145,7 +150,7 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 |---------|----|----|---------|---------------|
 | edward | #1772 | `fourier-coords-L6` | **MERGED** (new baseline 82.311) | -2.89% val, -1.78% test |
 | thorfinn | #1773 | `adamw-betas-0.95` | **CLOSED** (non-uniform regression, regime mismatch) | +1.97% val, +1.61% test |
-| thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
+| thorfinn | #1799 | `layerscale-init-0.1` | **REBASING** (won on stale stack: val=77.629, test=68.010; -8.42%/-8.91% pre-#1772; orthogonal mechanism, compound expected) | tbd vs 82.311 |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | **CLOSED** (confound: baseline had shared MLP, experiment effectively split capacity to half width; val_single_in_dist regressed +5.34%, opposite predicted direction) | +1.99% val, +0.89% test |
 
 ## Round 2 wave 7 — kick-off (#1608/#1811 closed → fresh #1828/#1852; #1830 follow-up to merged #1772)
