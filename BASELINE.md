@@ -22,6 +22,7 @@ winner sets the first numeric reference value.
 - **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
 - **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
+- **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=4)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 16 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..3`). `fun_dim` bumps `22 → 36`. _(added 2026-05-13 by PR #1548)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -33,6 +34,35 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 01:15 — PR #1548 (`charliepai2g24h4-edward/fourier-coords-L4-rebased`)
+
+Fourier positional encoding (`L=4`, 16 Fourier features replacing the 2 raw
+`(x, z)` coord dims, applied after normalization). Stacks cleanly with the
+merged compound (stoch-depth + cosine T_max=15 + grad-clip 25) — every val
+split improves, and test improves more than val. The split pattern matches
+the spectral-bias hypothesis: largest gains where high-frequency spatial
+structure dominates (`val_single_in_dist` -11.35%, `val_geom_camber_cruise`
+-7.94%), minimal movement on `val_re_rand` (-0.30%) whose OOD axis is
+Reynolds (flow-condition) not spatial coords.
+
+- **`val_avg/mae_surf_p`** = **84.762** (best @ epoch 15, last epoch before 30 min timeout)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **74.659**
+- **Per-split val** `mae_surf_p` at the best val checkpoint:
+  - `val_single_in_dist` = 97.074
+  - `val_geom_camber_rc` = 94.997
+  - `val_geom_camber_cruise` = 63.711
+  - `val_re_rand` = 83.266
+- **Per-split test** `mae_surf_p` at the best val checkpoint:
+  - `test_single_in_dist` = 85.819
+  - `test_geom_camber_rc` = 83.023
+  - `test_geom_camber_cruise` = 54.879
+  - `test_re_rand` = 74.916
+- **Δ vs PR #1637 baseline (90.294 / 81.243)**: **-6.13%** on val_avg, **-8.10%** on 4-split test.
+- **Compound progress**: #1397 → #1552 → #1611 → #1637 → #1548 → val_avg has improved from 100.957 to 84.762 = **-16.0% over 5 merges**.
+- **Param count**: 665,943 (+5.4K, +0.82% over previous baseline; from wider preprocess MLP input).
+- **Metric artifacts**: `models/model-charliepai2g24h4-edward-fourier-coords-L4-rebased-20260512-235326/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-edward --experiment_name charliepai2g24h4-edward/fourier-coords-L4-rebased`
 
 ### 2026-05-12 22:55 — PR #1637 (`charliepai2g24h4-askeladd/grad-clip-25`)
 
