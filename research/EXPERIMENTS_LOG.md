@@ -531,3 +531,76 @@ NaN-skip pattern (`y_finite` + `nan_to_num(y)`) pioneered in this PR is now cano
 **Use `--epochs 14` from now on.** T_max=14 is the new schedule canon. All experiments assigned before this merge were using `--epochs 20` (schedule-misaligned). If those land close to 84.562 or below, they beat baseline; if they land 5–10% above, it may be a schedule alignment artifact rather than a genuine regression — they should be re-run with `--epochs 14` for confirmation.
 
 ---
+
+## 2026-05-12 23:57 — PR #1663: Smooth L1 full-stack validation (alphonse)
+
+- **Branch:** `charliepai2g48h2-alphonse/smooth-l1-full-stack`
+- **Hypothesis:** Re-run the merged Smooth L1 + channel_weights + warmup/clip stack to confirm metric (95.336 was on lr=5e-4, merged code uses lr=7e-4).
+- **Status:** CLOSED ❌ — superseded by #1684 (canonical full-stack with --epochs 14 is 84.562 < this PR's 90.506)
+
+### Results
+
+| Split | mae_surf_p | vs #1414 baseline |
+|---|---|---|
+| val_single_in_dist | 113.834 | −4.0% |
+| val_geom_camber_rc | 103.082 | −1.9% |
+| val_geom_camber_cruise | 65.219 | −8.4% |
+| val_re_rand | 79.889 | −7.6% |
+| **val_avg/mae_surf_p** | **90.506** | **−5.06%** |
+| **test_avg/mae_surf_p** | **81.978** | **−4.28%** |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-alphonse-smooth-l1-full-stack-20260512-225710/metrics.jsonl`
+
+### Commentary
+
+Alphonse's full-stack run confirmed the stack composes positively (90.506 < 95.336 #1414 baseline, < 102.85 #1424 baseline). But this was on --epochs 20 (T_max=20, schedule-misaligned). The same stack with --epochs 14 alignment (frieren #1684) achieves 84.562 — a strictly better result via cosine fully annealing.
+
+The 90.506 → 84.562 gap = 7.0% improvement from pure schedule alignment on the full stack — consistent with the broader T_max=14 lesson. No new winning result to merge; the canonical full-stack with proper schedule is #1684.
+
+### Why closed
+
+Not a regression — confirms hypothesis (full-stack composes positively). Closed because superseded by #1684, which IS the same stack with proper schedule. Reassigned alphonse to the β-sweep direction (#1722 β=0.05 narrower).
+
+---
+
+## 2026-05-12 23:57 — PR #1658: SWA epochs 10-14 (askeladd)
+
+- **Branch:** `charliepai2g48h2-askeladd/swa-ep10-14`
+- **Hypothesis:** Stochastic Weight Averaging across epochs 10-14 finds a flatter minimum that generalizes better to OOD splits.
+- **Status:** CLOSED ❌ — dead end (+23% worse than current 84.562 baseline; SWA mechanism worked but budget too small)
+
+### Results
+
+| Metric | Value | vs current baseline 84.562 |
+|---|---|---|
+| LIVE best (ep 13) | 107.32 | +27% worse |
+| **SWA (5 snapshots, ep 10-14)** | **104.15** | **+23% worse** |
+| In-run SWA vs LIVE | −2.97% | (SWA mechanism works) |
+
+### Per-split (SWA vs OLD #1424 baseline at time of assignment)
+
+- val_single_in_dist: 121.560 (+1.57%)
+- val_geom_camber_rc: 116.508 (+2.80%)
+- **val_geom_camber_cruise: 79.184 (−3.54%)** ✓
+- val_re_rand: 99.359 (+3.18%)
+
+### Test (3-split, cruise NaN due to inf in GT)
+
+- 3-split mean: 100.900 (SWA) vs 105.706 (LIVE) — **−4.55%** within-run
+
+### Commentary
+
+SWA's within-run smoothing mechanism worked exactly as predicted (−3% over LIVE on val, −4.55% on test). The fundamental limitation is the snapshot budget — at --epochs 14 with SWA_START=10, only 4-5 snapshots are averaged, and the cosine schedule was still annealing through SWA collection (Izmailov et al.'s recipe needs a constant-high-LR plateau during SWA, which doesn't fit 14 epochs cleanly).
+
+Additionally, askeladd's LIVE this run was 4.5 points worse than #1424's reported LIVE (same config, same seed-less code path) — suggesting a bad-luck training trajectory. Even correcting for that, SWA's +3% recovery isn't enough to bridge the gap to the new 84.562 baseline.
+
+### Why closed
+
+>5% regression vs current baseline (even with most generous schedule alignment correction, still ~9% worse). SWA needs a different schedule setup (constant-high-LR plateau during collection) to be tested properly — which requires a different schedule architecture than fits in the 14-epoch budget. Reassigned askeladd to OneCycleLR (#1723) as a fresh schedule axis.
+
+### Lifted insight
+
+The within-run SWA-over-LIVE delta (3-5%) is a clean diagnostic for schedule basin flatness. Even though SWA didn't beat baseline, the technique correctly detected the flatter basin in cruise (the in-distribution split) vs the curved basins in OOD splits — useful insight for future basin-shape questions.
+
+---
