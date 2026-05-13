@@ -466,6 +466,7 @@ run = wandb.init(
     tags=[cfg.agent] if cfg.agent else [],
     config={
         **asdict(cfg),
+        "adamw_betas": list(optimizer.param_groups[0]["betas"]),
         "model_config": model_config,
         "n_params": n_params,
         "train_samples": len(train_ds),
