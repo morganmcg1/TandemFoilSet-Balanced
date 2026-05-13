@@ -246,7 +246,7 @@ class Transolver(nn.Module):
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
-def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict[str, float]:
+def evaluate_split(model, surf_head, loader, stats, surf_weight, pressure_weight, device) -> dict[str, float]:
     """Run inference over a split and return metrics matching the organizer scorer.
 
     ``loss`` is the normalized-space loss used for training monitoring; the MAE
@@ -257,6 +257,12 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
     mae_surf = torch.zeros(3, dtype=torch.float64, device=device)
     mae_vol = torch.zeros(3, dtype=torch.float64, device=device)
     n_surf = n_vol = n_batches = 0
+
+    # Per-channel weights mirror the training loop. Mean-normalised so absolute
+    # loss scale is comparable to the uniform-weight case.
+    chan_w_eval = torch.tensor([1.0, 1.0, pressure_weight], device=device, dtype=torch.float32)
+    chan_w_eval = chan_w_eval / chan_w_eval.mean()
+    chan_w_eval_bcast = chan_w_eval[None, None, :]
 
     with torch.no_grad():
         for x, y, is_surface, mask in loader:
@@ -278,6 +284,7 @@ def evaluate_split(model, surf_head, loader, stats, surf_weight, device) -> dict
             _y_norm_safe = torch.nan_to_num(y_norm, nan=0.0, posinf=0.0, neginf=0.0)
             _pred_safe = torch.nan_to_num(pred, nan=0.0, posinf=0.0, neginf=0.0)
             sq_err = (_pred_safe - _y_norm_safe) ** 2
+            sq_err = sq_err * chan_w_eval_bcast.to(sq_err.dtype)
             _safe_mask = mask & _y_ok[:, None]
             vol_mask = _safe_mask & ~is_surface
             surf_mask = _safe_mask & is_surface
@@ -426,6 +433,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    pressure_weight: float = 3.0  # Per-channel weight on pressure (channel 2). 1.0 = uniform.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -560,6 +568,18 @@ for epoch in range(MAX_EPOCHS):
             surf_node_loss = abs_err.pow(2)
         sq_err = abs_err.pow(2)  # MSE for volume
 
+        # Per-channel weights applied multiplicatively to align loss with the
+        # primary ranking metric (surface pressure MAE). Order: [Ux, Uy, p].
+        # Divide by mean weight so the absolute loss scale stays comparable
+        # to the uniform case (mean over 3 channels).
+        chan_w = torch.tensor(
+            [1.0, 1.0, cfg.pressure_weight], device=device, dtype=sq_err.dtype
+        )
+        chan_w_norm = chan_w / chan_w.mean()  # rescale so mean(weight) = 1
+        chan_w_bcast = chan_w_norm[None, None, :]
+        sq_err = sq_err * chan_w_bcast
+        surf_node_loss = surf_node_loss * chan_w_bcast
+
         # ── Per-sample inverse-variance weighting (BIVW) ─────────────────────
         # y_norm has shape [B, N, 3]; mask has shape [B, N]. Compute each
         # sample's variance over valid nodes only (pooled across the 3 target
@@ -618,7 +638,7 @@ for epoch in range(MAX_EPOCHS):
     model.eval()
     surf_head.eval()
     split_metrics = {
-        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+        name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, cfg.pressure_weight, device)
         for name, loader in val_loaders.items()
     }
     val_avg = aggregate_splits(split_metrics)
@@ -693,7 +713,7 @@ if best_metrics:
             for name, ds in test_datasets.items()
         }
         test_metrics = {
-            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, device)
+            name: evaluate_split(model, surf_head, loader, stats, cfg.surf_weight, cfg.pressure_weight, device)
             for name, loader in test_loaders.items()
         }
         test_avg = aggregate_splits(test_metrics)
