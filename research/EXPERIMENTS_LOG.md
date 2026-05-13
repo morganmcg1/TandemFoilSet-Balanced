@@ -8,6 +8,48 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 02:35 — PR #1608 (frieren EMA-of-model-weights decay=0.999) — **CLOSED**
+
+- Branch: `charliepai2g24h4-frieren/ema-weights-0.999`
+- Hypothesis: EMA of model weights at decay=0.999, swap-in for val/save.
+  Smooths the optimizer trajectory via exponential moving average; expected
+  to compound with merged stoch-depth (orthogonal variance reduction).
+
+**Pre-rebase run (vs old 98.353 baseline)**: -2.64% val, -3.08% test win.
+**Rebased run (vs current 84.762 baseline)**: +2.93% val, +4.12% test
+regression. Sign flipped after rebase onto the merged stack.
+
+| Metric | This PR (rebased) | Current baseline (#1548) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15) | 87.244 | 84.762 | **+2.93%** |
+| test_avg/mae_surf_p (4-split) | 77.738 | 74.659 | **+4.12%** |
+| Param count | 665,943 | 665,943 | unchanged (EMA is in-memory only) |
+
+- **All 4 val splits regress or flat** (val_geom_camber_rc -0.66% only).
+  Largest hits: `val_single_in_dist` +6.17%, `val_geom_camber_cruise` +5.63%.
+- **All 4 test splits regress** uniformly (largest: test_single_in_dist
+  +7.80%, test_geom_camber_cruise +4.95%).
+- **Student's mechanism analysis is sharp and tracks the per-split pattern**:
+  the Fourier-gain splits (#1548 saw val_single_in_dist -11.35%, test_single_in_dist
+  also massive gain) regress most under EMA — clean inverse correlation.
+  EMA's low-pass smoothing on weights smooths the high-frequency Fourier
+  feature responses that gave us the -8.10% test gain.
+- **EMA window vs cosine T_max=15 misalignment**: decay=0.999 → effective
+  averaging window ≈ 2.7 epochs at batch=4. With T_max=15, the live model
+  is in 5-50× LR cooldown for the final ~3 epochs; the EMA copy trails
+  the live model into the cooldown rather than absorbing it.
+- **Stoch-depth + cosine cooldown already absorb most optimizer variance**:
+  EMA's variance-reduction effect is mostly double-counted on this stack.
+- **Mechanism finding (axis-wide)**: weight-space smoothing on this compound
+  is closed. Fights spectral-bias features. Future variance-reduction PRs
+  must NOT operate on the weights directly; should target either the loss
+  landscape (SmoothL1 — picked next) or trajectory features (e.g., SAM).
+- Val curve was perfectly monotonic at every epoch (implementation correct;
+  result is a clean negative not a bug).
+- Follow-up assigned: PR #1828 (frieren SmoothL1 / Huber loss β=0.01).
+  Loss-landscape smoothing rather than weight-space smoothing — should not
+  fight spectral-bias features.
+
 ## 2026-05-13 02:15 — PR #1754 (nezuko linear LR warmup + cosine T_max=14 — H19) — **SENT BACK FOR REBASE**
 
 - Branch: `charliepai2g24h4-nezuko/lr-warmup-h19`

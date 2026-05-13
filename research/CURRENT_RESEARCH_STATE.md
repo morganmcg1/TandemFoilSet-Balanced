@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 02:20 UTC (close #1773 thorfinn AdamW betas +1.97%; close #1756 tanjiro stoch-depth-0.15 +7.69%; **#1754 nezuko LR warmup WINS on old baseline -0.64%/-1.71%, sent back for rebase to new 84.762 baseline**; assign #1799 thorfinn LayerScale, #1811 tanjiro per-channel output heads; in-flight: #1711, #1753, #1754(rebasing), #1772, #1799, #1811; rebasing: #1549, #1608)
+- **Last updated**: 2026-05-13 02:40 UTC (close #1608 frieren EMA-0.999 +2.93% val/+4.12% test on rebased run — EMA's weight-space smoothing fights Fourier high-frequency feature responses (val_single_in_dist +6.17% inverse-correlates with Fourier's largest gain); assign #1828 frieren SmoothL1 β=0.01 — loss-landscape smoothing rather than weight-space smoothing; in-flight: #1711, #1753, #1772, #1799, #1811, #1828; rebasing: #1549, #1754)
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging
   ablation. Each individual target training execution is capped at
   `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
@@ -62,7 +62,7 @@ pure spike suppression. The 1.0 / 25 / 50 bracket points map to a clear
 asymmetric profile around 25. **Lower bracket point (max_norm=10, #1713)
 now in flight** to complete the curve.
 
-Active threads (post #1756/#1773 close, #1754 sent back for rebase):
+Active threads (post #1608 close, fresh #1828 SmoothL1 assignment):
 
 1. **Per-channel surf-loss weighting** (alphonse #1711, H18,
    `[0.5, 0.5, 2.0]`) — loss-layer rebalancing toward pressure channel.
@@ -81,6 +81,12 @@ Active threads (post #1756/#1773 close, #1754 sent back for rebase):
    3 × Sequential(Linear(128→64), GELU, Linear(64→1)) replace shared
    final linear; +3.72% params; strengthens closed H17 γ/β idea with
    non-linear per-channel decoders.
+7. **SmoothL1 (Huber) loss with β=0.01** (frieren #1828, H25) — fresh
+   axis after closed EMA-0.999. Loss-landscape smoothing replacing L1's
+   subgradient discontinuity at zero. Mechanism predicted orthogonal to
+   Fourier features (changes loss landscape near small residuals, not the
+   function representation) — different axis from EMA's weight-space
+   smoothing which fought Fourier sharpening.
 
 Note: all wave-5 in-flight experiments (#1711, #1753, #1754, #1756) are
 measured against the **new 84.762 baseline**, not against the 90.294 they
@@ -132,14 +138,20 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 | thorfinn | #1799 | `layerscale-init-0.1` | WIP | tbd |
 | tanjiro | #1811 | `output-head-per-channel-mlp` | WIP | tbd |
 
+## Round 2 wave 7 — kick-off (#1608 closed → fresh axis #1828)
+
+| Student | PR | Slug | Verdict | Δ vs baseline-at-submission |
+|---------|----|----|---------|---------------|
+| frieren | #1608 | `ema-weights-0.999` | **CLOSED** (rebased: weight-space smoothing fights Fourier sharpening, inverse-correlates per-split) | +2.93% val, +4.12% test |
+| frieren | #1828 | `smooth-l1-loss-beta-001` | WIP | tbd |
+
 ## Wave-1 / wave-2 carryover (still WIP)
 
 | Student | PR | Slug | Status |
 |---------|----|----|--------|
 | fern | #1549 | `film-global-cond` | **REBASING** — extraordinary -19.5% signal pending re-run on current 84.762 stack |
-| frieren | #1608 | `ema-weights-0.999` | **REBASING** — needs rebase onto new Fourier-merged baseline |
 
-(edward #1548 Fourier coords now MERGED — see new best baseline above.)
+(edward #1548 Fourier coords now MERGED — see new best baseline above; frieren #1608 EMA now CLOSED — see wave 7 above.)
 
 ### Other open levers
 
@@ -157,8 +169,9 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **Log compression is dead** on this dataset (full-channel #1610 regressed +1.18%, pressure-only #1636 regressed +5.32%; channel-attribution theory falsified).
 - **Gumbel-Softmax-style noise injection is dead** in this 30-min budget regime (#1553 3-run mean +4.4%); slice-collapse must be attacked deterministically.
 
-## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:20 UTC)
+## Recent closures and merges (2026-05-12 19:48 → 2026-05-13 02:40 UTC)
 
+- **#1608 ema-weights-0.999 (frieren)** — **CLOSED** at +2.93% val, +4.12% test (rebased onto current 84.762 baseline). Pre-rebase had won -2.64% val on old 98.353 baseline, but the rebase flipped the sign: EMA's low-pass smoothing on weights fights Fourier's high-frequency feature responses. Per-split: `val_single_in_dist` (Fourier's biggest gain at -11.35%) regressed +6.17% under EMA; `test_single_in_dist` regressed +7.80%. Clean inverse correlation between Fourier-gain magnitude and EMA-regression magnitude. Two compounding mechanisms: (a) decay=0.999 effective window ≈ 2.7 epochs is too long for T_max=15 cosine cooldown, so the EMA copy structurally trails the live model into the final cooldown; (b) EMA's spectral smoothing undoes Fourier's spectral sharpening. **Axis-wide finding: weight-space smoothing is closed on this compound; future variance-reduction PRs must target loss-landscape or trajectory features instead. Picked SmoothL1 (β=0.01) as the loss-landscape pivot.**
 - **#1754 lr-warmup-h19 (nezuko)** — **REBASING**. Won on old baseline at -0.64% val, -1.71% test (3/4 val splits improve, all 4 test splits improve). Mechanism check passes (ep1 last-batch pre-clip grad-norm dropped ~35%). Sent back to re-measure on new 84.762 baseline post-Fourier-merge. Expected post-rebase: -0.3% to -1.5% on val_avg (warmup is orthogonal to Fourier input encoding).
 - **#1756 stoch-depth-0.15 (tanjiro)** — **CLOSED** at +7.69% val. Outcome C confirmed: merged 0.10 is local optimum (V-shape: 0.05→+13.7%, 0.10→0%, 0.15→+7.69%). Both endpoints regress on val_geom_camber_rc, falsifying the "OOD geometry wants more drop" narrative I had built. Train-vs-val gap stays val > train (no ensemble-dropout signature). Single-knob direction fully closed.
 - **#1773 adamw-betas-0.95 (thorfinn)** — **CLOSED** at +1.97% val, +1.61% test. Non-uniform regression confirms two falsified predictions (best-epoch unchanged, per-split non-uniform). Deeper finding: merged stack (grad-clip-25 + cosine T_max=15) already addresses the non-stationarity that motivated short-EMA β₂; the regime gap to LLaMA/PaLM (batch=10³-10⁶× larger, 10⁵-10⁶ steps) makes β₂=0.95 a worse fit. Optimizer-betas direction closed.
@@ -175,7 +188,6 @@ optimum**. Three independent confirmations bracket the optimum near 10.
 - **#1553 gumbel-slice (nezuko)** — **CLOSED** at +4.4% (3-run mean). All 3 runs underperform even the old L1 baseline. Sampling noise antagonistic to the current stoch-depth + cosine + grad-clip stack.
 - **#1611 cosine-tmax-15 (askeladd)** — **MERGED** earlier today (new baseline 94.217 at the time, now superseded).
 - **#1610 log1p-target (alphonse)** — **CLOSED** at +1.18%.
-- **#1608 ema-weights-0.999 (frieren)** — **SENT BACK** for rebase.
 - **#1549 film-global-cond (fern)** — **SENT BACK** for rebase. Extraordinary 81.291 signal pending.
 - **#1548 fourier-coords-L4 (edward)** — **SENT BACK** for rebase.
 - **#1552 stoch-depth-0.1 (frieren)** — **MERGED** (round-2 wave-1 winner).
@@ -223,7 +235,7 @@ Updated with #1548 merge + wave-5/6 in-flight assignments:
 | askeladd | #1753 | WIP (adaptive grad-clip — 1.5× running median K=100) |
 | edward | #1772 | WIP (Fourier coords L=6 — bracket up from merged L=4) |
 | fern | #1549 | rebasing (FiLM 81.291 signal pending vs 84.762 baseline) |
-| frieren | #1608 | rebasing (EMA 0.999) |
+| frieren | #1828 | WIP (H25 SmoothL1 β=0.01 — Huber loss replacing L1, loss-landscape pivot after closed EMA) |
 | nezuko | #1754 | rebasing (H19 LR warmup — won on old baseline, re-running on 84.762) |
 | tanjiro | #1811 | WIP (H24 per-channel output head MLPs — 3 × Linear→GELU→Linear) |
 | thorfinn | #1799 | WIP (LayerScale CaiT-style init=0.1 — per-block residual gating) |
