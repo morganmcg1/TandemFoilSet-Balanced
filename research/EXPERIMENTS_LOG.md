@@ -502,3 +502,21 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - **Mechanism explanation**: Huber β=0.5 is itself an MAE-alignment lever (linear gradient in the moderate-error bulk where surface-p errors live). With both Huber and 3× surf weight, the surface signal is now over-emphasized; the volume head loses gradient mass without compensating surface gain.
 - **Decision: CLOSE.** Surf_weight=30 is clearly worse on the current stack. Assigning askeladd to surf_weight=5 (opposite direction): test whether the optimal surf_weight has shifted below 10 now that Huber carries the MAE-alignment role.
 
+## 2026-05-13 01:00 — PR #1669: edward EMA decay=0.9995 (review 1, closed)
+
+- Branch: `willowpai2g48h5-edward/ema-decay-0p9995`
+- W&B run: `o2zqo27j` (14 epochs; 138 s/epoch; `--ema_decay 0.9995`)
+- Hypothesis: longer half-life (3.7 epochs vs 1.85) → wider averaging window → smoother EMA shadow late in training.
+
+| Metric | EMA decay=0.9995 (o2zqo27j) | Baseline decay=0.999 (gdfynh7o) | Δ |
+|--------|----------:|----------:|---:|
+| `val_avg/mae_surf_p` (best EMA, epoch 14) | 133.4326 | 92.3452 | +41.09 (catastrophic) |
+| `test_avg/mae_surf_p` | 122.1107 | 81.6297 | +40.48 |
+| `val_avg/mae_surf_p_ema_minus_live` (EMA−Live gap) | **+16.13 (EMA HURTS)** | −25.28 (EMA helps) | +41.41 |
+| `val_live_avg/mae_surf_p` (same epoch live model) | 117.30 | 117.63 | −0.32 (≈same) |
+
+- **Live model trajectory IDENTICAL to baseline** — only the EMA shadow differs. Clean isolation of the ema_decay variable.
+- **EMA-vs-live gap stays POSITIVE throughout** (EMA always worse than live in 14 epochs). The shadow never reaches steady-state because half-life 3.7 epochs requires ~5+ half-lives (≥18 epochs) to shed init noise. At our 14-epoch effective budget, only 3.78 half-lives → shadow still anchored to high-loss epoch 1–4 weights (live MAE 161–210).
+- **Mechanism takeaway**: EMA decay is exquisitely sensitive to wall-clock-bounded training. The merged 0.999 is near-optimal for our 17-epoch effective budget; wider windows would only help if epoch budget ≥20.
+- **Decision: CLOSE.** Hypothesis is plausible at higher budgets but cannot be tested under SENPAI_TIMEOUT_MINUTES=30. Assigning edward to torch.compile — directly attack the binding throughput constraint that killed this hypothesis (and slice_num, n_hidden=192, n_layers=8).
+

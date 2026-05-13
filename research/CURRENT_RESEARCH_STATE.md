@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 01:00
+- **Date:** 2026-05-13 01:05
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -36,7 +36,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
-| edward | #1669 | EMA decay=0.9995 (longer half-life, 3.7 epochs) | EMA variant | WIP | flag-only change; tests wider averaging window |
+| edward | TBD | torch.compile (attack throughput bottleneck) | Throughput | WIP (queued) | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
 | fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
@@ -57,6 +57,9 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 ### Training efficiency
 - **EMA without diagnostic pass** (#1626, fern) — val=92.46 (+0.12 within noise). Diagnostic overhead was ~8 s/epoch not the predicted ~25 s; +1 epoch in budget (18 vs 17) insufficient to escape noise. Bottleneck is training step, not val. Useful intel: peak mem 32.9 GB / 96 GB.
+
+### EMA variants
+- **EMA decay=0.9995** (#1669, edward) — val=133.43 (+41 MAE, catastrophic). At 30-min cap, 3.7-epoch half-life can't reach steady state — shadow stays anchored to high-loss init iterates. Clean isolation: live model trajectory identical to baseline. Mechanism plausible at ≥20 epoch budget; falsified at ours.
 
 ### Architecture / capacity
 
