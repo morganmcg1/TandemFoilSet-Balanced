@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 02:10 UTC
+- **Date / time:** 2026-05-13 02:25 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -18,6 +18,24 @@ Round 2 of the 24h Willow logging ablation on TandemFoilSet. Single-run hypothes
 ## Cycle-2 update — noise floor is much bigger than first thought
 
 Three alphonse baseline runs span **119.64 → 132.73 → 131.79** — a 13-point range (~10%) under identical config. The single-run noise floor on val_avg/mae_surf_p is therefore ~10%, not 0.5–1% as initially recorded. **Most hypotheses to date are inside this noise band.** This recalibrates the merge bar substantially.
+
+## Cycle-13 update — 3 negative results closed, 3 follow-up arms launched. KEY FINDING: wd is OOD-load-bearing.
+
+### Headline discovery (from cycle-12 edward #1750)
+
+Weight decay was load-bearing for `geom_camber_rc` OOD generalization. When wd halved (1e-4 → 5e-5), `geom_camber_rc` regressed +11.9% while `single_in_dist` was essentially flat. This is the cleanest single regularization-mechanism signal of the launch. Direct follow-up arm #1802 inverts: wd=2e-4 to test if more wd buys more OOD.
+
+### 3 negatives closed
+
+- **#1778 nezuko slice_num=128** → val=125.03 / test=111.65 (+13%/+12%). Throughput cost 52% (13 ep vs 19) due to `O(slice_num²)` dominating. Inductive-bias-via-slot-count rejected.
+- **#1750 edward wd=5e-5** → val=113.15 / test=103.08. **Informative negative** — OOD-concentrated regression confirms wd is doing real work.
+- **#1738 thorfinn beta2=0.95** → val=124.63 / test=111.16 (+13%/+12%). Mid-training acceleration window real (-44 MAE at epoch 5) but late-phase variance-noise floor (epoch 9 +49 spike) dominated final metric.
+
+### 3 new arms
+
+- **#1802 edward — wd 1e-4 → 2e-4** (inversion test: if halving hurt OOD, doubling should help OOD)
+- **#1803 nezuko — CosineAnnealingLR T_max 50 → 20** (LR currently only decays 28% over the run; anneal-to-zero might let final-epoch refinement land cleanly)
+- **#1804 thorfinn — AdamW eps 1e-8 → 1e-6** (orthogonal knob for the late-phase variance-noise mechanism his own #1738 surfaced)
 
 ## Cycle-12 update — nezuko stale-closed; reassigned to slice_num=128 (inductive-bias arm)
 
@@ -179,22 +197,25 @@ Two students independently nailed the systemic `test_geom_camber_cruise/mae_surf
 
 **Implication:** when these fixes land, every future run on this branch should produce a finite `test_avg`. This unlocks the paper-facing metric. The fix is hypothesis-agnostic and should be merged as a baseline-hardening change even if the surrounding hypothesis (edward's Huber, thorfinn's bf16+accum) doesn't win on val. Plan to cherry-pick the workaround once a student actually commits/pushes it; right now both PRs are still draft with no code on the branch beyond the empty `assign` commit.
 
-## Current leaderboard (post cycle-12)
+## Current leaderboard (post cycle-13)
 
 **Active baseline: val=110.27 / test=99.41** (PRs #1480+#1471, merged). Beat 110.27 to merge.
 
 | Student / PR | Best val_avg | test_avg | Status | Notes |
 |---|---|---|---|---|
-| **nezuko #1778** (slice_num=128) | TBD | TBD | WIP (new, cycle-12) | 2× physics-attention slots; inductive-bias arm of capacity question |
-| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | 33% FFN capacity bump per block; param-count arm of capacity question |
-| **edward #1750** (wd=5e-5) | TBD | TBD | WIP (cycle-11) | Relax L2 (model still under-fitting at budget cap) |
-| **thorfinn #1738** (AdamW beta2=0.95) | TBD | TBD | WIP (cycle-10) | Fast variance EMA for short transformer runs |
+| **edward #1802** (wd=2e-4) | TBD | TBD | WIP (new, cycle-13) | Inversion of #1750; tests if more wd → better OOD |
+| **nezuko #1803** (T_max=20) | TBD | TBD | WIP (new, cycle-13) | Schedule recalibration; anneal-to-zero alignment |
+| **thorfinn #1804** (eps=1e-6) | TBD | TBD | WIP (new, cycle-13) | Caps low-variance step-size scaling (same noise floor as #1738) |
+| **frieren #1749** (mlp_ratio=3) | TBD | TBD | WIP (cycle-11) | 33% FFN capacity bump per block; param-count arm |
 | **tanjiro #1666** (smooth_l1 loss) | TBD | TBD | WIP (sent-back cycle-11) | Stale baseline → rebase + re-run instructed |
 | alphonse #1655 (OneCycleLR) | 111.65 | 101.67 | WIP (sent-back) | Rebase+retry on new base; high-value stack hypothesis |
 | fern #1469 (lr=2e-3+clip) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | askeladd #1465 (surf_w=30) | — | — | WIP (sent-back) | No results yet; rebase+retry on new base |
 | **MERGED: frieren #1471** (p_weight=2+clip) | 110.27 | 99.41 | **MERGED** cycle-8 | New baseline |
 | **MERGED: thorfinn #1480** (bf16+accum2) | 116.30 | 104.96 | **MERGED** cycle-6 | Prior baseline |
+| ~~nezuko #1778~~ (slice_num=128) | 125.03 | 111.65 | CLOSED cycle-13 | +13%/+12% regression; throughput cost 52% |
+| ~~edward #1750~~ (wd=5e-5) | 113.15 | 103.08 | CLOSED cycle-13 | OOD-concentrated regression — **wd is OOD-load-bearing** |
+| ~~thorfinn #1738~~ (beta2=0.95) | 124.63 | 111.16 | CLOSED cycle-13 | Mid-train acceleration real but late-phase noise dominated |
 | ~~nezuko #1665~~ (n_layers=6) | — | — | CLOSED cycle-12 | Stale 3+ hrs; reassigned to slice_num=128 |
 | ~~edward #1718~~ (EMA 0.999) | 126.4 (EMA) / 119.5 (live) | — | CLOSED cycle-11 | EMA lag persists; live still descending at end |
 | ~~frieren #1717~~ (lr=1e-3) | 120.2 | 110.1 | CLOSED cycle-11 | +10 MAE regression with persistent val oscillation |

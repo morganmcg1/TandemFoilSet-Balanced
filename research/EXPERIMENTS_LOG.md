@@ -11,6 +11,38 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 ~02:25 — Cycle 13: 3 negatives closed, 3 follow-up arms launched
+
+### Key discovery: weight_decay was load-bearing for OOD (`geom_camber_rc`)
+
+The most informative result of the cycle is edward's #1750 (wd=5e-5). The regression was concentrated almost entirely on `geom_camber_rc` (+11.9%) while `single_in_dist` was essentially flat. **This is the canonical "regularization is OOD-helpful" pattern.** Direct follow-up: edward #1802 inverts the direction (wd=2e-4 to test if more wd → better OOD).
+
+### PR #1778 nezuko — slice_num=128: CLOSED ✗
+
+val=125.03 / test=111.65 (+13% / +12%). Every split regresses. Throughput cost was ~52% (13 epochs vs 19 baseline) — `O(slice_num²)` term dominated on these mesh sizes, much worse than predicted 5-10%. Inductive-bias hypothesis rejected at this hidden width. Reassigned nezuko to CosineAnnealingLR schedule recalibration.
+
+### PR #1750 edward — wd=5e-5: CLOSED ✗ (informative negative)
+
+val=113.15 / test=103.08 (+2.6% / +3.7%). OOD-concentrated regression (`geom_camber_rc` +11.9%). Wd=1e-4 is load-bearing for OOD generalization. Reassigned edward to inversion test (wd=2e-4).
+
+### PR #1738 thorfinn — AdamW beta2=0.95: CLOSED ✗
+
+val=124.63 / test=111.16 (+13% / +12%). Mid-training acceleration window real (epoch 5: -44 MAE vs baseline) but late-phase noise floor dominated final metric (+49 spike at epoch 9, +25 spike at epoch 14). Variance-EMA memory length is correctly set at default beta2=0.999. Reassigned thorfinn to AdamW eps bump (addresses the same noise-floor mechanism via orthogonal knob).
+
+### New assignment: PR #1802 edward — wd 1e-4 → 2e-4
+
+Direct OOD-follow-up to #1750. If halving wd hurt `geom_camber_rc` (+11.9%), doubling wd should help it. Single config field change. Expected signature: `geom_camber_rc` improves disproportionately, in-dist roughly flat or slightly worse.
+
+### New assignment: PR #1803 nezuko — CosineAnnealingLR T_max 50 → 20
+
+Schedule mis-calibration. Current T_max=50 with ~19 actual epochs means LR only decays from 5e-4 to ~3.6e-4 (28% range used). T_max=20 lets LR anneal all the way to ~1e-5 by final epochs — canonical anneal-to-zero pattern for short transformer training. Different from alphonse's pending OneCycleLR (which has warmup + 2× peak LR). Single-knob change.
+
+### New assignment: PR #1804 thorfinn — AdamW eps 1e-8 → 1e-6
+
+Caps per-parameter inverse-sqrt scaling from below. Targets same late-phase noise-floor mechanism as #1738 but via orthogonal knob. Reduces step-size oscillation for low-variance parameters without affecting well-conditioned directions. Single-config change.
+
+---
+
 ## 2026-05-13 ~02:10 — Cycle 12: nezuko stale-closed, reassigned to slice_num=128
 
 ### PR #1665 nezuko — n_layers 5 → 6: CLOSED (stale)
