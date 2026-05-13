@@ -46,20 +46,22 @@
 4. **LR/schedule coupling**: can't tune LR without also fixing T_max; lower LR needs shorter T_max to decay properly
 5. **Gradient clip threshold**: with L1 loss and 1.18M params, max_norm=1.0 clips virtually all updates; threshold must be >>1.0 to be useful
 
-## Active experiments
+## Active experiments (Round 6 — Plateau Protocol, bolder hypotheses)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| alphonse | #1724 | bf16 mixed precision: 2x epoch throughput (~18-22 vs 12 epochs) | NEW |
 | nezuko | #1678 | LR 5e-4 → 7e-4 (upper-stable range) | WIP |
-| tanjiro | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
-| fern | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
-| edward | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| tanjiro | #1728 | GeGLU activation: gated MLP for flow-regime routing (mlp_ratio=3) | NEW |
+| fern | #1726 | SWA late-start epoch 8: flat basin for OOD generalization | NEW |
+| edward | #1725 | Lion optimizer lr=1e-4: sign-based updates for L1 gradients | NEW |
 | askeladd | #1673 | AdamW eps 1e-8→1e-4 (adaptive scaling floor) | WIP |
-| frieren | — | Round 5 closed; awaiting Round 6 assignment | IDLE |
+| frieren | #1729 | RMSNorm replaces LayerNorm: faster norm, ~13-14 epochs | NEW |
 | thorfinn | #1670 | weight_decay 1e-4 → 5e-4 (stronger L2) | WIP |
 
 **Round 5 closed (all worse than baseline 101.810):** #1592 alphonse T_max=14 (+0.5%, seed noise across 3 seeds), #1661 fern warm restarts (+2.7%), #1671 edward β1=0.85 (+5.9%), #1634 tanjiro batch=8 (+23.6%), #1384 frieren surf_weight=25 (stale, never rebased).
+
+**Round 6 bets:** Priority is #1724 bf16 (structural throughput gain) and #1725 Lion (optimizer paradigm shift). GeGLU, RMSNorm, and SWA are quality/efficiency improvements. If any win, compound them.
 
 ## Round 3/4 themes and open questions
 
@@ -72,16 +74,14 @@
 7. **surf_weight with L1** (frieren): 10 → 25 on new baseline, after rebase
 8. **weight_decay=0** (thorfinn): L1 as implicit regularizer may not need AdamW WD; removing it frees capacity
 
-## Probable round 4/5 directions (conditional on round 3/4 signal)
+## Round 6 queued ideas (if current batch fails)
 
-- **Stacked winners**: Compound all orthogonal wins (e.g. optimal T_max + optimal batch + dropout + L1)
-- **LR+schedule joint tuning**: lr=3e-4 + T_max=14 (if alphonse's T_max=14 shows benefit)
-- **surf_weight exploration**: If surf_weight=25 fails, try surf_weight=5 (L1 may already rebalance)
 - **Physical-space L1**: Compute loss in denormalized units for direct metric alignment
-- **Data augmentation**: Mesh-coarsening, AoA jitter for OOD robustness
-- **SWA with late-start**: Initialize from post-epoch-8 live weights (fixes EMA cold-start issue)
-- **Lion optimizer**: Sign-based update complements L1 constant-gradient dynamics
+- **surf_weight=5**: Reduce from 10 toward volume balance (not tested on L1 baseline)
 - **mlp_ratio=8**: Bigger feedforward; note we're at width limit (n_hidden=128 × 8 = 1024-dim MLP). Per-epoch time TBD.
+- **Data augmentation**: Mesh-coarsening, AoA jitter for OOD robustness
+- **bf16 + Lion compound**: If both individually win, combine for max throughput + per-step quality
+- **SwiGLU activation** (alternative to GeGLU): same gating idea, SiLU gate instead of GELU gate
 
 ## Key constraints
 
