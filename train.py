@@ -274,6 +274,22 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Per-element loss helper (no reduction; reduction handled by caller via masks)
+# ---------------------------------------------------------------------------
+
+def per_element_loss(pred: torch.Tensor, target: torch.Tensor,
+                     loss_type: str, huber_delta: float = 1.0) -> torch.Tensor:
+    """Return per-element error tensor for the given loss type (no reduction)."""
+    if loss_type == "mae":
+        return F.l1_loss(pred, target, reduction="none")
+    if loss_type == "mse":
+        return F.mse_loss(pred, target, reduction="none")
+    if loss_type == "huber":
+        return F.huber_loss(pred, target, reduction="none", delta=huber_delta)
+    raise ValueError(f"Unknown loss_type: {loss_type}")
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -302,20 +318,16 @@ def evaluate_split(model, loader, stats, surf_weight, device,
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            if cfg.loss_type == "mae":
-                err = F.l1_loss(pred, y_norm, reduction="none")
-            elif cfg.loss_type == "mse":
-                err = F.mse_loss(pred, y_norm, reduction="none")
-            else:
-                err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            err_surf = per_element_loss(pred, y_norm, cfg.surf_loss_type, cfg.surf_huber_delta)
+            err_vol = per_element_loss(pred, y_norm, cfg.vol_loss_type, cfg.vol_huber_delta)
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss_sum += (
-                (err * vol_mask.unsqueeze(-1)).sum()
+                (err_vol * vol_mask.unsqueeze(-1)).sum()
                 / vol_mask.sum().clamp(min=1)
             ).item()
             surf_loss_sum += (
-                (err * surf_mask.unsqueeze(-1)).sum()
+                (err_surf * surf_mask.unsqueeze(-1)).sum()
                 / surf_mask.sum().clamp(min=1)
             ).item()
             n_batches += 1
@@ -447,7 +459,11 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     huber_delta: float = 1.0
-    loss_type: str = "huber"   # "huber", "mae", or "mse"
+    loss_type: str = "huber"   # "huber", "mae", or "mse" (legacy — superseded by surf_loss_type/vol_loss_type)
+    surf_loss_type: str = "mae"   # loss type for surface nodes: "mae", "huber", "mse"
+    vol_loss_type: str = "mae"    # loss type for volume nodes: "mae", "huber", "mse"
+    vol_huber_delta: float = 1.0  # Huber delta for volume nodes (used if vol_loss_type=="huber")
+    surf_huber_delta: float = 1.0 # Huber delta for surface nodes (used if surf_loss_type=="huber")
     epochs: int = 50
     dropout: float = 0.1
     clip_grad_norm: float = 1.0
@@ -601,17 +617,13 @@ for epoch in range(MAX_EPOCHS):
             )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
-            if cfg.loss_type == "mae":
-                err = F.l1_loss(pred, y_norm, reduction="none")
-            elif cfg.loss_type == "mse":
-                err = F.mse_loss(pred, y_norm, reduction="none")
-            else:
-                err = F.huber_loss(pred, y_norm, reduction="none", delta=cfg.huber_delta)
+            err_surf = per_element_loss(pred, y_norm, cfg.surf_loss_type, cfg.surf_huber_delta)
+            err_vol = per_element_loss(pred, y_norm, cfg.vol_loss_type, cfg.vol_huber_delta)
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (err_vol * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (err_surf * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
