@@ -209,3 +209,33 @@ The student's diagnostic pointed to the asymmetric question: if 25 hurts both su
 - Hypothesis: surf_weight=10 may over-weight surface terms. Reducing to 5 gives the shared encoder richer volume gradient signal → better upstream representations → better surface predictions downstream.
 - Status: WIP (newly assigned)
 - Target: test_avg < 111.98.
+
+## 2026-05-13 01:10 — PR #1364: Deeper model n_layers 5→7 (CLOSED)
+- Branch: willowpai2g48h1-fern/deeper-7-layers
+- Hypothesis: More Transolver blocks → richer physics representations → better generalization, especially on OOD splits
+- W&B run: `r6vksjdm` — group `deeper-7-layers`
+- Status: **CLOSED ✗ — confounded by schedule misalignment, not a fair test**
+
+| Metric | n_layers=7 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 12) | 146.46 | 125.36 | +16.8% (worse) |
+| **test_avg/mae_surf_p** | **132.06** | 111.98 | **+17.9%** (worse) |
+| test_single_in_dist | 161.05 | 148.79 | +8.2% |
+| test_geom_camber_rc | 150.73 | 117.15 | +28.6% |
+| test_geom_camber_cruise | 90.92 | 77.85 | +16.8% |
+| test_re_rand | 125.53 | 104.13 | +20.5% |
+| Epochs completed | 13/18 | 17/18 | — |
+| Epoch time | 146s | ~96s | +52% |
+| Peak GPU mem | 89.8 GB | 82.68 GB | — |
+
+**Analysis**: The regression is confounded, not an indictment of depth. At 146s/epoch (52% slower than baseline), the 30-min cap allowed only 13 of 18 scheduled epochs. The cosine schedule at epoch 13/18 has final LR ≈ 1.25e-4 (18% of peak 7e-4) — the low-LR refinement phase that produced baseline's entire win never happened. The model's val curve was still actively descending at the cutoff. This is a wall-clock budget failure, not a depth failure.
+
+Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoch cost. Architecture changes that increase epoch cost (deeper, wider-at-bs8) violate this assumption and need budget-aware re-alignment.
+
+**Action**: Closed #1364. Assigned fern to PR #1742 — n_layers=6 (~120s/epoch, fits ~15-16/18 epochs). Budget-safe depth test.
+
+## 2026-05-13 01:10 — PR #1742 (NEW, assigned): Depth n_layers 5→6, budget-safe
+- Branch: willowpai2g48h1-fern/n-layers-6
+- Hypothesis: n_layers=6 is the budget-safe depth increase — ~120s/epoch, fitting ~15-16 of 18 scheduled epochs, reaching the low-LR tail unlike n_layers=7.
+- Status: WIP (newly assigned)
+- Target: test_avg < 111.98.

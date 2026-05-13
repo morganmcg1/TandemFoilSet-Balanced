@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 00:10 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
+- 2026-05-13 01:10 — willow-pai2g-48h-r1, round 2 in progress, baseline test=111.98 (PR #1591 schedule-aligned)
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
 ## Current baseline (PR #1591 merged)
@@ -19,7 +19,8 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | edward | #1362 | more-slices-128 | **CLOSED** ✗ | trial-2 rebased: test 155.15 (+27.9% worse, near OOM 94.3GB) → dead end |
 | edward | #1591 | cosine-aligned-epochs | **MERGED** ✓ | test **111.98** (−7.67%) — new baseline |
 | edward | #1643 | mlp-ratio-4 | wip (new) | Assigned: mlp_ratio 2→4, richer FFN per block |
-| fern | #1364 | deeper-7-layers | stale_wip | No result yet |
+| fern | #1364 | deeper-7-layers | **CLOSED** ✗ | test 132.06 (+17.9%) — confounded: n_layers=7 cost 146s/ep, only 13/18 epochs completed, cosine refinement phase never reached (LR still 18% of peak at cutoff) |
+| fern | #1742 | n-layers-6 | wip (new) | Assigned: n_layers 5→6, ~120s/ep, fits ~15-16/18 epochs under budget. Budget-safe depth test. |
 | frieren | #1380 | surf-weight-25 | **CLOSED** ✗ | test 123.41 (+10.2% worse) — gradient imbalance: higher surf gradient = hotter effective LR on surface-coupled params, no time to settle in 18 epochs |
 | frieren | #1710 | surf-weight-5 | wip (new) | Assigned: surf_weight 10→5 (other direction). Hypothesis: 10 may already over-weight surface; fewer surface grad signal → richer volume repr → better surface pred |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
@@ -50,7 +51,7 @@ On the schedule-aligned baseline (test 111.98):
 - **Bias-corrected EMA × schedule** (assigned tanjiro #1664): Adam-style EMA correction on aligned baseline where late-training is in low-LR oscillation — gives Polyak its proper conditions.
 - **Sweep --epochs near the cliff** (16, 17, 18, 19): edward's run hit timeout end of ep 17; finer alignment could squeeze more.
 - **Width-split asymmetry**: investigate why n_hidden=192 helps in_dist/rc but hurts cruise/re_rand — may suggest depth (more layers) > width for cross-domain generalization.
-- **Deeper model (7 layers) + schedule fix**: fern's result pending — depth × low-LR may compound especially well.
+- **Budget-safe depth (n_layers=6)**: fern #1742 — n_layers=7 was confounded by epoch-time exceeding budget. n_layers=6 (~120s/ep) is the fair test.
 - **CosineAnnealingWarmRestarts**: edward's follow-up suggestion — may revisit late-training dynamics.
 
 ## Next milestones
