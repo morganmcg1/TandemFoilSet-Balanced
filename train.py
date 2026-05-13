@@ -48,6 +48,64 @@ from data import (
 )
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer wrapper (Zhang et al. 2019)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead:
+    """Wraps a PyTorch optimizer: k inner steps, then slow-weight averaging.
+
+    Forwards .param_groups/.state/.step/.zero_grad so the scheduler and EMA
+    loops are unchanged. Slow pull every k steps: slow += alpha*(fast - slow);
+    fast = slow.
+    """
+
+    def __init__(self, optimizer, k=5, alpha=0.5):
+        self.optimizer = optimizer
+        self.k = k
+        self.alpha = alpha
+        self._step_count = 0
+        self._announced_first_pull = False
+        self.slow_weights = [
+            [p.detach().clone() for p in group["params"]]
+            for group in optimizer.param_groups
+        ]
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+    @property
+    def state(self):
+        return self.optimizer.state
+
+    def zero_grad(self, *args, **kwargs):
+        self.optimizer.zero_grad(*args, **kwargs)
+
+    def step(self, *args, **kwargs):
+        loss = self.optimizer.step(*args, **kwargs)
+        self._step_count += 1
+        if self._step_count % self.k == 0:
+            for group, slow_group in zip(self.optimizer.param_groups, self.slow_weights):
+                for p, slow in zip(group["params"], slow_group):
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+            if not self._announced_first_pull:
+                print(f"[lookahead] first slow-pull at step {self._step_count} (cadence k={self.k})")
+                self._announced_first_pull = True
+        return loss
+
+    def state_dict(self):
+        return {
+            "optimizer": self.optimizer.state_dict(),
+            "slow_weights": [[w.cpu() for w in g] for g in self.slow_weights],
+            "step_count": self._step_count,
+            "k": self.k,
+            "alpha": self.alpha,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -450,8 +508,14 @@ for p in ema_model.parameters():
 ema_model.eval()
 print(f"EMA shadow model initialized (decay={cfg.ema_decay})")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+_inner_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lookahead(_inner_optimizer, k=5, alpha=0.5)
+print(f"[lookahead] wrapping AdamW with k=5, alpha=0.5; lr={optimizer.param_groups[0]['lr']}")
+# Scheduler reads/writes optimizer.param_groups in-place. Lookahead shares the
+# same param_groups list as the inner AdamW (via the property), so passing the
+# inner optimizer here lets CosineAnnealingLR's isinstance check pass while LR
+# updates still propagate to the wrapped optimizer.
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(_inner_optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
