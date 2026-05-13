@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 02:00 — willow-pai2g-48h-r1, round 2 in progress, **new baseline test=99.69** (PR #1361 wider-192 merged, -10.97%)
+- 2026-05-13 03:00 — willow-pai2g-48h-r1, round 2 in progress, baseline test=99.69 (PR #1361 wider-192). Depth dead end (n_layers=6 +14%, n_layers=7 +18%); EMA dead end both trials.
 - No directives from human researcher team yet. Filed issue #1569 flagging data/scoring bug for their attention.
 
 ## Current baseline (PR #1361 merged)
@@ -25,13 +25,15 @@ Config: bf16 autocast + batch_size=8 + lr=7e-4 + scoring-bug workaround; n_hidde
 | edward | #1591 | cosine-aligned-epochs | **MERGED** ✓ | test **111.98** (−7.67%) — new baseline |
 | edward | #1643 | mlp-ratio-4 | wip (new) | Assigned: mlp_ratio 2→4, richer FFN per block |
 | fern | #1364 | deeper-7-layers | **CLOSED** ✗ | test 132.06 (+17.9%) — confounded: n_layers=7 cost 146s/ep, only 13/18 epochs completed, cosine refinement phase never reached (LR still 18% of peak at cutoff) |
-| fern | #1742 | n-layers-6 | wip (new) | Assigned: n_layers 5→6, ~120s/ep, fits ~15-16/18 epochs under budget. Budget-safe depth test. |
+| fern | #1742 | n-layers-6 | **CLOSED** ✗ | test 127.69 (+14.0%) — fair test (15/18 epochs, proper cosine). Depth underfits at n_hidden=128: in_dist regressed +33%, training-bottlenecked. Depth dead end at this hidden size. |
+| fern | #1796 | weight-decay-1e-3 | wip (new) | Assigned: wd 1e-4→1e-3 (10×). Wider model (1.47M params) may benefit from stronger regularization for OOD generalization. |
 | frieren | #1380 | surf-weight-25 | **CLOSED** ✗ | test 123.41 (+10.2% worse) — gradient imbalance: higher surf gradient = hotter effective LR on surface-coupled params, no time to settle in 18 epochs |
 | frieren | #1710 | surf-weight-5 | wip (new) | Assigned: surf_weight 10→5 (other direction). Hypothesis: 10 may already over-weight surface; fewer surface grad signal → richer volume repr → better surface pred |
 | nezuko | #1387 | fourier-pos-features | wip (retrying) | val 119.70 (best val!), NaN test fixed → rebase+retest |
 | tanjiro | #1391 | bf16-batch-8 | **MERGED** ✓ | test 121.28 — new baseline |
 | tanjiro | #1578 | ema-eval-weights | **CLOSED** ✗ | test 141.87 (+17.0% vs old baseline) — classical Polyak failed: (a) EMA lagged still-descending model in undertrained regime, (b) random-init contamination ~5% via 0.999^3000 |
-| tanjiro | #1664 | ema-bias-corrected | wip (new) | Assigned: Adam-style bias-corrected EMA on schedule-aligned baseline. Decay=0.999, warmup=200, eval divides by (1-decay**t). Target test < 111.98. |
+| tanjiro | #1664 | ema-bias-corrected | **CLOSED** ✗ | test 125.38 (+11.97%) — bias correction worked (val 397→139, -65%) but lag dominates. Model still descending at end-of-run; not in basin-oscillation regime. EMA direction dead. |
+| tanjiro | #1798 | grad-norm-clip | wip (new) | Assigned: clip_grad_norm_(max_norm=1.0). Untested stability tool; bf16 + wider model may have gradient spikes. |
 | thorfinn | #1395 | lion-optimizer | stale_wip | No result yet |
 
 ## Key research findings so far
@@ -57,7 +59,9 @@ On the schedule-aligned baseline (test 111.98):
 - **Bias-corrected EMA × schedule** (assigned tanjiro #1664): Adam-style EMA correction on aligned baseline where late-training is in low-LR oscillation — gives Polyak its proper conditions.
 - **Sweep --epochs near the cliff** (16, 17, 18, 19): edward's run hit timeout end of ep 17; finer alignment could squeeze more.
 - **Width-split asymmetry**: investigate why n_hidden=192 helps in_dist/rc but hurts cruise/re_rand — may suggest depth (more layers) > width for cross-domain generalization.
-- **Budget-safe depth (n_layers=6)**: fern #1742 — n_layers=7 was confounded by epoch-time exceeding budget. n_layers=6 (~120s/ep) is the fair test.
+- **Depth direction DEAD** at n_hidden=128: both n_layers=6 (fair test, +14%) and n_layers=7 (confounded, +18%) regressed. Training-bottlenecked at this width. Not tested at n_hidden=192.
+- **Weight decay sweep** (fern #1796): wd 1e-4→1e-3. Wider model may benefit from stronger regularization.
+- **Gradient norm clipping** (tanjiro #1798): max_norm=1.0. Classic stability tool absent from train.py, potentially important for bf16 + wider model.
 - **CosineAnnealingWarmRestarts**: edward's follow-up suggestion — may revisit late-training dynamics.
 
 ## Next milestones

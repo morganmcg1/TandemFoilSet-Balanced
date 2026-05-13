@@ -268,3 +268,54 @@ Key learning: the schedule-aligned baseline (epochs=18) assumes a fixed per-epoc
 - Hypothesis: epochs=18 default was calibrated for n_hidden=128 at bs=8 (17-18 eps/30min). n_hidden=192 at bs=4 runs at ~126s/ep → 14 eps in 30min. At trial-5's cutoff (epoch 15), LR is at 4.7e-5 (6.7% of peak). Setting epochs=14 aligns T_max to actual budget → LR reaches 0 within budget. Same principle as PR #1591 (-7.67%).
 - Status: WIP (newly assigned)
 - Target: test_avg < 99.69.
+
+## 2026-05-13 03:00 — PR #1742: Depth n_layers 5→6, budget-safe (CLOSED)
+- Branch: willowpai2g48h1-fern/n-layers-6
+- W&B run: `uqrafwrn` — group `deeper-model`
+- Status: **CLOSED ✗ — fair test of depth at n_hidden=128, rejected**
+
+| Metric | n_layers=6 | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 15) | 144.86 | 125.36 | +15.6% (worse) |
+| **test_avg/mae_surf_p** | **127.69** | 111.98 | **+14.0%** (worse) |
+| test_single_in_dist | 197.26 | 148.79 | +32.6% |
+| test_geom_camber_rc | 131.66 | 117.15 | +12.4% |
+| test_geom_camber_cruise | 75.47 | 77.85 | −3.1% (improved!) |
+| test_re_rand | 106.37 | 104.13 | +2.2% |
+| Epochs completed | 15/18 | 17/18 | — |
+| Epoch time | 126.5s | ~96s | +32% |
+| Peak GPU mem | 82.97 GB | 82.68 GB | — |
+
+**Analysis**: Unlike n_layers=7 (#1364), this is a fair test — schedule was healthy (15/18 epochs, final LR 4.7e-5, proper cosine coverage). Depth itself hurts at n_hidden=128. Key diagnostic: in_dist regression was worst (+33% on the easiest split), characteristic of training-bottleneck underfitting (not generalization failure). The wider model needs more training signal per epoch than the 18-epoch schedule provides with one extra layer. Cruise actually improved slightly (-3.1%) — depth may help extreme-OOD geometric interactions, but not enough to overcome in_dist and rc losses. **Depth direction dead at n_hidden=128.** Not tested at n_hidden=192 yet.
+
+**Action**: Closed. Assigned fern to PR #1796 — weight_decay 1e-4→1e-3. Wider model (1.47M params) may benefit from stronger regularization.
+
+## 2026-05-13 03:00 — PR #1664: Bias-corrected EMA (CLOSED)
+- Branch: willowpai2g48h1-tanjiro/ema-bias-corrected
+- W&B run: `xhyqauof` — group `ema-bias-corrected`
+- Status: **CLOSED ✗ — lag dominates, wrong regime for Polyak averaging**
+
+| Metric | EMA-BC | Baseline (#1591) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best, ep 17) | 139.35 | 125.36 | +11.16% (worse) |
+| **test_avg/mae_surf_p** | **125.38** | 111.98 | **+11.97%** (worse) |
+| test_single_in_dist | 177.29 | 148.79 | +19.2% |
+| test_geom_camber_rc | 124.54 | 117.15 | +6.3% |
+| test_geom_camber_cruise | 83.52 | 77.85 | +7.3% |
+| test_re_rand | 116.17 | 104.13 | +11.6% |
+| Final EMA update_count | 2997 | — | — |
+| Final bias_correction | 0.950 | — | — |
+
+**Analysis**: Bias correction worked exactly as designed (val 397→139, -65% from trial-1 uncorrected). The (1-0.999^2997) = 0.95 divisor correctly cancelled random-init contamination. But lag remains the dominant failure mode: EMA val improved 3.3 points in the *final* epoch alone when LR was 5e-6 — EMA was still chasing live-weight gains the live model had already made epochs earlier. The model is still descending at end-of-run (not oscillating in a basin), which is the wrong regime for Polyak averaging. **EMA direction dead in this regime.** All 4 splits regressed 6-19%.
+
+**Action**: Closed. Assigned tanjiro to PR #1798 — gradient norm clipping (max_norm=1.0). Untested stability tool, potentially important for bf16 + n_hidden=192.
+
+## 2026-05-13 03:00 — PR #1796 (NEW): Weight decay 1e-4→1e-3 on wider-192 baseline
+- Branch: willowpai2g48h1-fern/weight-decay-1e-3
+- Hypothesis: n_hidden=192 (1.47M params, 2.2× more params) may benefit from stronger regularization. wd=1e-3 is 10× current, still modest by transformer standards (BERT: 0.01). Stronger wd → better cross-domain generalization.
+- Status: WIP (newly assigned). Target: test_avg < 99.69.
+
+## 2026-05-13 03:00 — PR #1798 (NEW): Gradient norm clipping max_norm=1.0
+- Branch: willowpai2g48h1-tanjiro/grad-norm-clip
+- Hypothesis: train.py has no grad clipping. Standard in transformer training (GPT, BERT). bf16 + wider model may have gradient spikes disrupting the low-LR refinement phase.
+- Status: WIP (newly assigned). Target: test_avg < 99.69.
