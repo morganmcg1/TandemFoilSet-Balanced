@@ -462,29 +462,26 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-# 1-epoch linear warmup followed by cosine annealing over the remaining epochs.
+# 2-epoch linear warmup followed by cosine annealing over the remaining epochs.
 # SequentialLR milestones are in scheduler steps, so we step per-batch and express
-# both schedulers in batch units. T_MAX_EPOCHS=18 matches the achievable epochs under
-# the 30-min cap (aligns with merged tmax-18 baseline); 1 warmup + 17 cosine = 18.
-# eta_min=5e-5 retains the merged eta-min-5e-5 (#1855) advantage so the warmup is
-# evaluated apples-to-apples against the current pure-cosine best (val=83.95).
+# both schedulers in batch units. T_MAX_EPOCHS=18; 2 warmup + 16 cosine = 18.
 T_MAX_EPOCHS = 18
 n_batches_per_epoch = math.ceil(len(train_loader))
 warmup_sched = torch.optim.lr_scheduler.LinearLR(
     optimizer,
     start_factor=0.01,   # ramp from 1% of lr (5e-6) to 100% (5e-4)
     end_factor=1.0,
-    total_iters=n_batches_per_epoch,
+    total_iters=2 * n_batches_per_epoch,
 )
 cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer,
-    T_max=(T_MAX_EPOCHS - 1) * n_batches_per_epoch,  # 17 epochs of cosine, in batch units
+    T_max=(T_MAX_EPOCHS - 2) * n_batches_per_epoch,  # 16 epochs of cosine, in batch units
     eta_min=5e-5,
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
     schedulers=[warmup_sched, cosine_sched],
-    milestones=[n_batches_per_epoch],
+    milestones=[2 * n_batches_per_epoch],
 )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
