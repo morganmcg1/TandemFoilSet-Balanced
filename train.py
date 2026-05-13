@@ -406,19 +406,15 @@ n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-warmup_epochs = 3
-scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=12, eta_min=1e-6
-)
-scheduler = torch.optim.lr_scheduler.SequentialLR(
+scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
-    schedulers=[
-        torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.02, end_factor=1.0, total_iters=warmup_epochs
-        ),
-        scheduler_cosine,
-    ],
-    milestones=[warmup_epochs],
+    max_lr=cfg.lr,
+    total_steps=MAX_EPOCHS * len(train_loader),
+    pct_start=0.15,
+    anneal_strategy="cos",
+    div_factor=25.0,
+    final_div_factor=1e4,
+    three_phase=False,
 )
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -470,16 +466,16 @@ for epoch in range(MAX_EPOCHS):
         surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
         loss = vol_loss + cfg.surf_weight * surf_loss
 
-        optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
@@ -505,12 +501,14 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    lr_end = optimizer.param_groups[0]["lr"]
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "lr": current_lr,
+        "lr_end": lr_end,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
