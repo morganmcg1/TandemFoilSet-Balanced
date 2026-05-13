@@ -84,3 +84,43 @@ Tighter clip (0.5) underperforms looser (1.0), suggesting the floor for "useful"
 - Merged. Does NOT dethrone tanjiro's 104.70 (this PR was measured under MSE, not SmoothL1). Advisor branch now ships SmoothL1 + grad-clip stacked; combined-config has never been measured.
 - The cruise-test NaN fix is now on the advisor branch. Future PRs will inherit it via rebase and report 4-split `test_avg/mae_surf_p` end-to-end.
 - Open question for Round 2: does grad-clip still help on top of SmoothL1, or does SmoothL1 already subsume it? Pre-clip norms under SmoothL1 should be much smaller — likely the marginal benefit of clip-on-top-of-Huber is near zero, but a small A/B run can confirm.
+
+## 2026-05-13 00:10 — PR #1616: Per-Re WeightedRandomSampler (upweight high-Re samples) — CLOSED
+
+- Student branch: `willowpai2g24h3-askeladd/re-resample`
+- Hypothesis: a `WeightedRandomSampler` weighted by `exp(t * log_re_centered)` shifts effective epochs toward the high-Re regime where pressure targets vary most; predicted 1–5% reduction in `val_avg/mae_surf_p`.
+
+### Results
+
+| Run | re_weight_temp | val_avg/mae_surf_p (best) | test_avg/mae_surf_p | Δ vs baseline arm | W&B |
+|---|---|---|---|---|---|
+| uniform-baseline-smoothl1-clip1 (baseline) | 0.0 | **90.91** | **86.87 (4-split, all finite)** | — | `eztvtkxc` |
+| re-resample-t1.0-smoothl1-clip1 | 1.0 | 97.41 (final 100.61) | NaN (variant produced non-finite preds on cruise test) | **+7.2% (worse)** | `stzo9xvw` |
+
+Per-split val MAE breakdown shows the mechanism cleanly:
+
+| Split | Baseline t=0 | Variant t=1.0 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 103.90 | 148.16 | **+42.6% (catastrophic)** |
+| val_geom_camber_rc | 105.34 | 102.78 | −2.4% |
+| val_geom_camber_cruise | 68.99 | 67.60 | −2.0% |
+| val_re_rand | 85.40 | 83.89 | −1.8% |
+
+### Analysis
+
+The variant *improves* every OOD-ish split (geom_camber_rc, geom_camber_cruise, re_rand) by 2–3% on both val and test — confirming the "high-Re samples generalize the OOD splits" sub-hypothesis. But the in-distribution split (`val_single_in_dist`) degrades by **+42.6%** because at `t=1.0` the max/min sampling ratio is **67.6×** — the lowest-Re training samples are seen <1× per epoch in expectation under `WeightedRandomSampler(replacement=True)`. The model is starved of low-Re training updates that the in-distribution split depends on.
+
+Mechanistic insight: Huber and re-resampling are *not* the orthogonal mechanisms the PR predicted. They fight — Huber caps the gradient on high-Re samples that re-resampling deliberately re-injects. The net effect is just less effective training on in-distribution, with no headroom gained from over-emphasized regimes (Huber already handles those).
+
+Additionally: the variant model produced non-finite predictions on at least one cruise *test* sample (`vol_loss = +Inf`, `surf_loss = NaN`), even though training-time cruise val was finite. The cruise-y filter from #1433 cannot help here — it handles non-finite *ground truth*, not non-finite *predictions* — but this is a signal that the variant model is unfit for the paper-facing pass under heavy reweighting.
+
+### Side-effects of this PR (high-value despite the close)
+
+1. **First clean end-to-end 4-split test pass for this launch.** Run `eztvtkxc` delivered `test_avg/mae_surf_p = 86.87` with all four splits finite — the cruise-y filter from PR #1433 worked.
+2. **Cleanest measurement of the current advisor branch:** 90.91 val / 86.87 test (uniform sampling on top of SmoothL1+grad-clip+cruise-fix). Combined with two other in-flight baseline measurements (#1615 at 102.17, #1437 at 104.84), this characterizes a **±7 single-seed noise band** on `val_avg/mae_surf_p`.
+
+### Conclusions
+
+- Closed. Hypothesis at `t=1.0` falsified (+7.2% on val, NaN on test). Per-spec `t=2.0` stretch arm correctly not run.
+- Follow-up direction (assigned to askeladd as next PR): **loss-level Re-reweighting** — multiply each sample's loss by `exp(t * log_re_centered)` inside the train loop, no resampling. Same "tilt toward high-Re" mechanism without the discrete sample-starvation problem. If even `t=0.3` produces a -1 to -3% effect on `val_avg`, the OOD-split signal observed here is real and just needed a less aggressive implementation.
+- BASELINE.md updated with the supplemental 90.91/86.87 measurement of the current advisor branch (the merged-best stays at 104.70 until a winning hypothesis PR's terminal `SENPAI-RESULT` marker lands).
