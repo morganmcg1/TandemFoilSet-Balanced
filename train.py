@@ -589,8 +589,16 @@ optimizer = SOAP(
     precondition_frequency=cfg.precondition_frequency,
     max_precond_dim=cfg.max_precond_dim,
 )
-SCHEDULER_T_MAX = 28  # epoch 1 measured at 73s (compile + train + val) vs 108s baseline (~32% speedup); steady-state ~60-65s/epoch projects ~27-28 epochs in 30 min
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=SCHEDULER_T_MAX, eta_min=1e-5)
+# SGDR: two cosine cycles of T_0=14 within the ~28-epoch wall-clock budget
+SCHEDULER_T_0 = 14
+SCHEDULER_T_MULT = 1
+SCHEDULER_T_TOTAL = 28  # expected total epochs (T_0 * (T_mult**0 + T_mult**1) = 14 + 14)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer,
+    T_0=SCHEDULER_T_0,
+    T_mult=SCHEDULER_T_MULT,
+    eta_min=1e-5,
+)
 scaler = GradScaler()
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
@@ -801,7 +809,7 @@ for epoch in range(MAX_EPOCHS):
     epoch_slice_entropy: list[list[float]] | None = None
     epoch_gamma_stats: dict | None = None
     epoch_beta_stats: dict | None = None
-    if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_MAX - 2, 1):
+    if (epoch + 1) == 1 or (epoch + 1) >= max(SCHEDULER_T_TOTAL - 2, 1):
         epoch_slice_entropy, epoch_gamma_stats, epoch_beta_stats = capture_slice_entropy(
             uncompiled_model, val_loaders[diag_split_name], stats, device,
         )
@@ -818,8 +826,10 @@ for epoch in range(MAX_EPOCHS):
         "seconds": dt,
         "peak_memory_gb": peak_gb,
         "train/lr": current_lr,
-        "scheduler": "cosine_annealing_lr",
-        "scheduler_T_max": SCHEDULER_T_MAX,
+        "scheduler": "cosine_annealing_warm_restarts",
+        "scheduler_T_0": SCHEDULER_T_0,
+        "scheduler_T_mult": SCHEDULER_T_MULT,
+        "scheduler_T_total": SCHEDULER_T_TOTAL,
         "scheduler_eta_min": 1e-5,
         "amp_dtype": "bfloat16",
         "torch_compile_mode": torch_compile_mode,
@@ -879,7 +889,7 @@ print(f"\nTraining done in {total_time:.1f} min")
 
 # Always capture slice entropy on the actually-completed final epoch, so the
 # "last" snapshot reflects reality even if training was cut short by the
-# timeout before the SCHEDULER_T_MAX-2 trigger range was reached.
+# timeout before the SCHEDULER_T_TOTAL-2 trigger range was reached.
 if last_completed_epoch > 0 and last_completed_epoch != 1:
     _ent, _g, _b = capture_slice_entropy(
         uncompiled_model, val_loaders[diag_split_name], stats, device,
