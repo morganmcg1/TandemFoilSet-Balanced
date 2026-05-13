@@ -84,6 +84,10 @@ RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
 RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
 _rff_B = None          # initialized after device is known
 
+# Gradient clip norm. PR #2260: tightened 1.0 → 0.5 to dampen epoch-5 spike on
+# RFF base (the +91-unit spike observed in #2130).
+GRAD_CLIP = 0.5
+
 
 def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
     """Replace first 2 dims (x,z coords) with 64-dim RFF embedding."""
@@ -487,6 +491,7 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.99))
 print(f"AdamW betas: {optimizer.param_groups[0]['betas']}")
+print(f"GRAD_CLIP max_norm: {GRAD_CLIP}")
 warmup_epochs = 4
 warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
 cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1))
@@ -507,6 +512,7 @@ with open(model_dir / "config.yaml", "w") as f:
         "n_params": n_params,
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
+        "grad_clip": GRAD_CLIP,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -525,6 +531,10 @@ for epoch in range(MAX_EPOCHS):
     model.train()
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
+    # PR #2260: collect pre-clip grad norms for epochs 4-7 (1-indexed) to confirm
+    # clipping engagement at peak LR and through the descent that follows.
+    log_grad_norms = 4 <= (epoch + 1) <= 7
+    pre_clip_norms: list[float] = []
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -573,7 +583,9 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP)
+        if log_grad_norms:
+            pre_clip_norms.append(float(total_norm))
         optimizer.step()
 
         epoch_vol += vol_loss.item()
@@ -606,6 +618,18 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+    grad_norm_summary: dict | None = None
+    if pre_clip_norms:
+        n = len(pre_clip_norms)
+        mean_norm = sum(pre_clip_norms) / n
+        max_norm_seen = max(pre_clip_norms)
+        frac_clipped = sum(1 for v in pre_clip_norms if v > GRAD_CLIP) / n
+        grad_norm_summary = {
+            "n_steps": n,
+            "mean": mean_norm,
+            "max": max_norm_seen,
+            "frac_clipped": frac_clipped,
+        }
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -619,6 +643,8 @@ for epoch in range(MAX_EPOCHS):
         "is_best": tag == " *",
         "rff_sigma": RFF_SIGMA,
         "rff_dim": RFF_DIM,
+        "grad_clip": GRAD_CLIP,
+        "pre_clip_grad_norm": grad_norm_summary,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
     pred_abs_max_norm_worst = max(m["pred_abs_max_norm"] for m in split_metrics.values())
@@ -628,6 +654,13 @@ for epoch in range(MAX_EPOCHS):
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}  "
         f"pred_abs_max[norm={pred_abs_max_norm_worst:.2f} orig={pred_abs_max_orig_worst:.1f}]"
     )
+    if grad_norm_summary is not None:
+        print(
+            f"  [grad-norm probe ep{epoch+1}] mean={grad_norm_summary['mean']:.4f} "
+            f"max={grad_norm_summary['max']:.4f} "
+            f"frac>clip({GRAD_CLIP})={grad_norm_summary['frac_clipped']:.2%} "
+            f"steps={grad_norm_summary['n_steps']}"
+        )
     if pred_abs_max_orig_worst > 1e6:
         print(f"WARN: pred_abs_max_orig {pred_abs_max_orig_worst:.3e} exceeds 1e6 threshold (PR #1682 stability probe)")
     for name in VAL_SPLIT_NAMES:
