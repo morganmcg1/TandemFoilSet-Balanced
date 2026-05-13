@@ -420,7 +420,7 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
     lion_beta1: float = 0.9
-    lion_beta2: float = 0.99
+    lion_beta2: float = 0.999  # was 0.99 — longer sign-momentum horizon (paper alt value)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
