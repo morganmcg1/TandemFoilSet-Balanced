@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-05-13 02:00 — PR #1456: [bf16-amp + cosine-eta-min] bf16 AMP with T_max=17 on SOAP
+
+- **Branch**: charliepai2g24h1-alphonse/bf16-amp (rebased onto cosine-eta-min base)
+- **Hypothesis**: bf16 AMP gives ~+29% throughput → ~17 epochs in 30 min vs 13 previously. T_max=17 aligns cosine tail to new budget. Compounds with all prior wins.
+- **Status**: MERGED — new baseline 36.8778
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 16/17) | **36.8778** |
+| val_single_in_dist | 42.92 (−10.2%) |
+| val_geom_camber_rc | 47.78 (−8.6%) |
+| val_geom_camber_cruise | **18.60** (−11.0%) |
+| val_re_rand | 38.21 (−0.7%) |
+| test_avg/mae_surf_p | **31.9058** (−9.42%) |
+| test_single_in_dist | 42.15 (−8.3%) |
+| test_geom_camber_rc | 42.69 (−7.9%) |
+| test_geom_camber_cruise | **15.26** (−11.5%) |
+| test_re_rand | 27.53 (−12.2%) |
+| Epochs | 17 (vs 13 previously) |
+| Mean epoch time | 108.6 s (vs ~131 s previously) |
+| Peak GPU memory | 32.98 GB / 96 GB |
+| clip_frac trajectory | 0.98 → 0.34 (smoothly decaying) |
+| huber_l2_frac | 0.42 → 0.86 (Huber actively capping outliers) |
+| Baseline | 39.8693 |
+| Delta | **−2.99 (−7.51%)** |
+
+**Analysis**: bf16 + T_max alignment compounds cleanly on SOAP/eta_min. All 4 val + 4 test splits improved (rare clean win across the board). No numerical issues with bf16 + SOAP + Huber-rel-L2 (SOAP preconditioner runs in fp32 internally). ep 17 (at LR floor 1.84e-5) drifts back +0.09 from ep 16 best — confirms T_max=17 is well-matched.
+
+**Key insight**: With substantial memory headroom (33/96 GB), there's room for larger batches OR larger models — next experiments target both axes.
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-bf16-amp-cosine-eta-min-20260513-005955/metrics.jsonl`
+
+---
+
+## 2026-05-13 01:55 — PR #1740: [soap-higher-lr] lr=1e-3→2e-3 under SOAP — null result
+
+- **Branch**: charliepai2g24h1-tanjiro/soap-higher-lr
+- **Hypothesis**: SOAP's curvature-aware preconditioning raises the LR ceiling well above AdamW's 1e-3 limit; lr=2e-3 should accelerate convergence without divergence.
+- **Status**: CLOSED — null result (within noise), mechanism understood
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (ep 13) | 39.7891 |
+| test_avg/mae_surf_p | 35.6166 |
+| Baseline | 39.8693 / 35.2214 |
+| Delta val | −0.08 (noise) |
+| Delta test | +0.40 (noise, wrong direction) |
+| clip_frac ep 1 | 0.952 (95% of batches clipped) |
+| clip_frac ep 13 | 0.179 |
+| Divergence | None — model trained cleanly |
+
+**Analysis**: LR ceiling confirmed — lr=2e-3 ran cleanly all 13 epochs with no NaN, no spikes (vs AdamW's divergence at lr=1.5e-3 in PR #1539). But grad_clip=1.0 normalized away the LR increase: effective per-step update `= (clip × lr) / grad_norm` was nearly identical between lr=1e-3 and 2e-3. The clip threshold (not the LR) is the bottleneck.
+
+**Key insight**: SOAP LR ceiling is ≥ 2e-3 (stable). To actually exploit higher LR, grad_clip needs to widen too — exactly what thorfinn is testing in #1668 (clip 1.0→5.0). Future LR experiments must couple with clip widening.
+
+**Artifact**: `models/model-charliepai2g24h1-tanjiro-soap-higher-lr-20260513-005527/metrics.jsonl`
+
+---
+
 ## 2026-05-13 00:25 — PR #1630: [cosine-eta-min] CosineAnnealingLR eta_min=1e-5 floor on SOAP
 
 - **Branch**: charliepai2g24h1-tanjiro/sgdr-restarts (pivoted from SGDR to cosine-eta-min)
