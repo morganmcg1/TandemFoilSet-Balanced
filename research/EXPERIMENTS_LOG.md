@@ -1,5 +1,47 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 01:05 — PR #1565: BF16 autocast (MERGED — new baseline 94.22)
+
+- Student branch: `charliepai2g24h5-fern/bf16-batch8-throughput`
+- Hypothesis: BF16 autocast in forward pass reduces VRAM without hurting quality; may unlock wider models.
+- Single change: added `torch.cuda.amp.autocast(dtype=torch.bfloat16)` in `train_epoch` forward pass. Batch=4, lr=1e-3, same 30-min/13-epoch budget.
+
+### Results
+
+| Metric | Baseline (#1638) | PR #1565 | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **95.44** | **94.22** | **−1.22 (−1.3%)** |
+| val_single_in_dist/mae_surf_p | 110.99 | 107.86 | −2.8% |
+| val_geom_camber_rc/mae_surf_p | 105.99 | 105.04 | −0.9% |
+| val_geom_camber_cruise/mae_surf_p | 75.32 | 73.65 | −2.2% |
+| val_re_rand/mae_surf_p | 89.46 | 90.33 | +1.0% (slight regression) |
+| test_avg/mae_surf_p | 87.83 | **87.10** | **−0.8%** |
+| test_single_in_dist | 92.92 | 91.78 | −1.2% |
+| test_geom_camber_rc | 93.16 | 93.27 | +0.1% |
+| test_geom_camber_cruise | 80.53 | 79.54 | −1.2% |
+| test_re_rand | 84.74 | 83.81 | −1.1% |
+| **Peak VRAM (GB)** | **42.11** | **32.94** | **−22%** |
+| **s/epoch** | **131.44** | **100.87** | **−23%** |
+
+- Metrics: `models/model-charliepai2g24h5-fern-bf16_only_lr1e3-20260513-001209/metrics.jsonl`
+
+### Analysis
+
+BF16 is a clean win on every dimension: primary metric (−1.3% val, −0.8% test), VRAM (−22%), and throughput (−23% s/epoch). All 4 test splits improved or held. The slight regression on val_re_rand (+1.0%) is small and non-systematic (test_re_rand improved).
+
+The VRAM reduction from 42.11 GB to 32.94 GB is the critical secondary outcome: it opens 9 GB of headroom on the 96 GB GPU. This unblocks:
+- **n_hidden=192** (wider model): previously infeasible in 30 min; needs BF16 to run enough epochs
+- **n_layers=7** (deeper model): same rationale  
+- **batch=8 + BF16**: if BF16 enables batch=8, could further stabilise gradient estimates
+
+The throughput improvement means 13 epochs now takes ~22 min instead of ~28.5 min — potentially enabling ~16 epochs in the same 30-min budget if the LR schedule is re-tuned.
+
+### What this reveals about the stack
+
+The merged stack now has grad-renorm (every step) + BF16 rounding, creating two complementary sources of implicit regularization. The combination appears additive — neither overwhelms the other.
+
+---
+
 ## 2026-05-12 23:05 — PR #1638: LR=1e-3 with grad_clip (MERGED — new baseline 95.44)
 
 - Student branch: `charliepai2g24h5-tanjiro/lr1e3-with-gradclip`

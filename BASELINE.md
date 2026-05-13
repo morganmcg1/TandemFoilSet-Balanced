@@ -8,28 +8,45 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **95.44** | PR #1638 (merged 2026-05-12) — lr=1e-3 with grad_clip |
-| **test_avg/mae_surf_p** | **87.83** | PR #1638 — all 4 splits finite |
+| **val_avg/mae_surf_p** | **94.22** | PR #1565 (merged 2026-05-13) — BF16 autocast on lr=1e-3+grad_clip stack |
+| **test_avg/mae_surf_p** | **87.10** | PR #1565 — all 4 splits finite |
+| Peak VRAM | 32.94 GB | PR #1565 — 22% reduction vs FP32 (42.11 GB) |
+| s/epoch | 100.87 | PR #1565 — 23% faster vs FP32 (131.44 s) |
 
-### Per-split val (PR #1638, epoch 13)
+### Per-split val (PR #1565, epoch 13)
 
 | Split | mae_surf_p | mae_surf_Ux | mae_surf_Uy |
 |---|---:|---:|---:|
-| val_single_in_dist | 110.99 | 1.293 | 0.666 |
-| val_geom_camber_rc | 105.99 | 2.065 | 0.871 |
-| val_geom_camber_cruise | 75.32 | 0.849 | 0.496 |
-| val_re_rand | 89.46 | 1.423 | 0.670 |
-| **val_avg** | **95.44** | 1.408 | 0.676 |
+| val_single_in_dist | 107.86 | 1.320 | 0.651 |
+| val_geom_camber_rc | 105.04 | 2.062 | 0.882 |
+| val_geom_camber_cruise | 73.65 | 0.816 | 0.483 |
+| val_re_rand | 90.33 | 1.432 | 0.667 |
+| **val_avg** | **94.22** | 1.408 | 0.671 |
 
-### Per-split test (PR #1638, epoch 13 best checkpoint)
+### Per-split test (PR #1565, epoch 13 best checkpoint)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 92.92 |
-| test_geom_camber_rc | 93.16 |
-| test_geom_camber_cruise | 80.53 |
-| test_re_rand | 84.74 |
-| **test_avg** | **87.83** |
+| test_single_in_dist | 91.78 |
+| test_geom_camber_rc | 93.27 |
+| test_geom_camber_cruise | 79.54 |
+| test_re_rand | 83.81 |
+| **test_avg** | **87.10** |
+
+## 2026-05-13 01:05 — PR #1565: BF16 autocast (MERGED)
+
+- **val_avg/mae_surf_p: 94.22** (↓ 1.3% from 95.44)
+- **test_avg/mae_surf_p: 87.10** (↓ 0.8% from 87.83)
+- **Peak VRAM: 32.94 GB** (↓ 22% from 42.11 GB — unlocks future wider-model experiments)
+- **s/epoch: 100.87** (↓ 23% from 131.44 — same 30-min budget now fits more iterations)
+- **Metric artifacts:** `models/model-charliepai2g24h5-fern-bf16_only_lr1e3-20260513-001209/metrics.jsonl`
+- **What changed:** Added `torch.cuda.amp.autocast(dtype=torch.bfloat16)` wrapping the forward pass inside `train_epoch`. No batch-size change (kept batch=4). No schedule change. Single-line addition.
+- **Why it worked:** BF16 reduces memory bandwidth for activations, speeding up compute. The slight metric improvement (−1.3% val, −0.8% test) likely comes from a mild implicit regularisation effect from reduced precision. The VRAM win (+9 GB headroom) is the more important outcome — it enables revisiting n_hidden=192 or n_layers=7 with the current stack.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 13 --experiment_name bf16_only_lr1e3 --agent <student>
+  ```
+  (train.py now has BF16 autocast in train_epoch by default)
 
 ## 2026-05-12 23:05 — PR #1638: LR=1e-3 with grad_clip (MERGED)
 
