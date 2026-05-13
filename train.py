@@ -455,6 +455,7 @@ class Config:
     fourier_k: int = 0  # 0 = off (baseline); K > 0 enables Fourier expansion of (x, z) into 4K features
     fourier_max_freq: float = 10.0  # max frequency in the logspaced band; positions are O(1) post-norm
     slice_num: int = 64
+    n_layers: int = 5  # Transolver block depth
 
 
 cfg = sp.parse(Config)
@@ -488,7 +489,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=cfg.slice_num,
     mlp_ratio=2,
