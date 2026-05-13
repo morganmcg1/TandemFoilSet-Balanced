@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 08:25 (SENT BACK #1992 frieren mlp-ratio-1 (val=81.91, beat OLD 82.56 not NEW 76.24); askeladd #1540 EMA retraining at GPU=97%; 7 in-flight PRs all targeting val<76.24 on bs=2 baseline; 13 effective merges)
+- **As of:** 2026-05-13 08:50 (CLOSED #1990 fern cawr-t0-9 catastrophic val=100.46; CAWR axis closed for 30-min budget; assigning fern wd-2e-4 upward bracket; 13 effective merges)
 - **Branch:** `icml-appendix-charlie-pai2g-48h-r4`
 - **Tag:** `charlie-pai2g-48h-r4`
 - **Most recent human directive:** None — controlled Charlie no-W&B arm of the 24h/48h Charlie-vs-Willow logging ablation. Local JSONL metrics only.
@@ -44,7 +44,7 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - **eta_min axis CLOSED**: 5e-5 optimum (0 → 84.67, 5e-5 → 83.95, 1e-4 → 85.06).
 - **ref axis CLOSED**: ref=8 optimum.
 - **mlp_ratio upper CLOSED**: mlp_ratio=4 regresses. mlp_ratio=1 (frieren #1992) testing lower.
-- **wd axis CLOSED**: wd=1e-4 optimum.
+- **wd axis CLOSED (1e-4 vs 1e-5)**: wd=1e-4 optimum. Upward bracket (wd=2e-4) being tested on bs=2 baseline by fern.
 - **warmup length CLOSED**: 1-epoch optimum.
 - **n_head axis FULLY CLOSED**: n_head=8 (#1853, val=96.33) and n_head=2 (#1993, val=83.78) both worse. n_head=4 unimodal optimum.
 
@@ -59,7 +59,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 7. **EMA weight averaging.** Askeladd #1540. Actively training on new HEAD. Expected sub-70.
 8. **LR upper bracket.** Thorfinn #1968 (lr=7e-4, sent back) — rerunning with bs=2 baseline.
 9. **Batch size lower bracket.** Alphonse #2036 (batch-size-1) — NEW. Closes bs axis.
-10. **LR schedule restart.** Fern #1990 (cawr-t0-9) — WIP on old bs=4 HEAD; needs rebase evaluation.
+10. **LR schedule restart.** Fern #1990 (cawr-t0-9) — CLOSED 08:50 (val=100.46 catastrophic). Low-LR tail is productive consolidation; restarts need longer budgets.
+15. **wd upward bracket.** Fern #2089 (wd-2e-4) — NEW. Tests whether bs=2's doubled steps shift wd optimum upward.
 11. **FFN capacity downward bracket.** Frieren #1992 (mlp-ratio-1) — WIP on old HEAD.
 12. **Loss shape sub-axis.** Edward #2012 (loss-beta-0-5) — WIP.
 13. **OneCycleLR schedule.** Nezuko #2014 (onecycle-lr, max_lr=8e-4) — WIP.
@@ -92,7 +93,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 
 ### LR + schedule probes (running on new bs=2 HEAD)
 - **PR #1968 — `lr-7e-4` (thorfinn)** — **WIP (sent back)** — rerunning with bs=2 + lr=7e-4.
-- **PR #1990 — `cawr-t0-9` (fern)** — **WIP** — was on bs=4; evaluate vs new baseline.
+- **PR #1990 — `cawr-t0-9` (fern)** — **CLOSED 08:50** — catastrophic val=100.46; CAWR not viable for 30-min budget.
+- **PR #2089 — `wd-2e-4` (fern)** — **WIP (new)** — upward bracket of wd axis; tests bs=2 doubled-step wd rebalance.
 - **PR #2014 — `onecycle-lr` (nezuko)** — **WIP** — was on bs=4; evaluate vs new baseline.
 
 ### Capacity / architecture / loss probes
@@ -113,7 +115,8 @@ TandemFoilSet surrogate, primary metric `val_avg/mae_surf_p`. **CURRENT BEST:** 
 - ref: 8 optimum (16 worse)
 - mlp_ratio upper: 4 worse (1 in flight)
 - eta_min: 3-pt bracket, 5e-5 optimum
-- wd: 1e-4 optimum (1e-5 worse)
+- wd: 1e-4 optimum (1e-5 worse; 2e-4 upper bracket in flight)
+- CAWR schedules in 30-min budget: catastrophic (#1990 val=100.46, +17.90 regression)
 - warmup length: 1ep optimum (2ep worse)
 - n_head: 4 unimodal optimum (2 worse +1.48%, 8 worse +16.7% — FULL BRACKET)
 

@@ -2,6 +2,35 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 08:50 — PR #1990: [cawr-t0-9] CosineAnnealingWarmRestarts T_0=9ep — **CLOSED (catastrophic regression; CAWR not viable in 30-min budget)**
+- Student branch: `charliepai2g48h4-fern/cawr-t0-9`
+- Hypothesis: Replace SequentialLR(warmup → CosineAnnealingLR) with CosineAnnealingWarmRestarts(T_0=9, T_mult=2, eta_min=5e-5). Predicted small (+2-5 val pt) transient bump at restart recovering in 2 epochs, then fresh descent.
+
+| Metric | OLD baseline (#1812) | CAWR (this) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 82.56 | **100.46** | **+17.90 (+21.7%, severe regression)** |
+| test_avg/mae_surf_p | 74.13 | 90.87 | +16.74 (+22.6%) |
+| All 4 splits | improved baseline | all regressed | — |
+
+- Artifact: `models/model-charliepai2g48h4-fern-cawr-t0-9-20260513-075317/metrics.jsonl`
+- Best epoch 10/18 — right before restart; model never recovered after restart.
+
+**Actual behavior:** Restart at ep10→11 caused a **+39.5 point val jump** (from 100→139.93), not the predicted +2-5. Model oscillated between 110-140 for remaining 8 epochs and never returned to the pre-restart floor.
+
+**Mechanism falsified:**
+1. Low-LR tail in baseline is **productive consolidation, not wasted compute**. Fern's per-epoch comparison: this run at ep10 (val=100) corresponds to baseline ep5-6 (val=150-200), NOT baseline ep18 (val=82.56). Cosine schedule **slope** (controlled by T_max) is the dominant factor, not absolute LR.
+2. **Restart disruption is severe** without re-warmup. Jumping lr 5e-5 → 5e-4 (10× increase, no ramp) creates AdamW momentum corruption analogous to the epoch-1 corruption that #1812 addressed via warmup.
+3. **CAWR requires longer budget** than 30 min to amortize restart cost — not feasible in current regime.
+
+**Key findings preserved:**
+- T_max axis: low-LR tail at eta_min produces meaningful val improvements (NOT a plateau).
+- Pure cosine + eta_min=5e-5 + 1ep warmup is locked in as the schedule shape.
+- Restart-style schedules (CAWR, SGDR) require either re-warmup OR longer total budgets. Closed for this regime.
+
+Fern's analysis was excellent — clean falsification with mechanism. Closed cleanly with high info value. Fern assigned `wd-2e-4` next.
+
+---
+
 ## 2026-05-13 08:22 — PR #1992: [mlp-ratio-1] Halve FFN width mlp_ratio 2→1 — **SENT BACK (beat OLD, not NEW; bs=2 rerun)**
 - Student branch: `charliepai2g48h4-frieren/mlp-ratio-1`
 - Hypothesis: Halving FFN hidden dim reduces overfit capacity on small (~1500-sample) irregular-mesh regression. Pairs with prior `mlp_ratio=4` closure (worse) to bracket FFN axis from below.
