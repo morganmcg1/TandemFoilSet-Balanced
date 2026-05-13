@@ -423,6 +423,7 @@ class Config:
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
     grad_clip_max_norm: float = 5.0  # max grad norm before optimizer.step(); rare-event tail clipping
+    warmup_epochs: int = 2  # per-iteration linear-LR warmup duration (in units of one epoch's optimizer steps)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -485,7 +486,32 @@ optimizer = Lion(
     weight_decay=cfg.weight_decay,
     betas=(cfg.lion_beta1, cfg.lion_beta2),
 )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+# Per-iteration scheduler: warmup_steps linear ramp -> cosine over remaining steps
+_steps_per_epoch = max(len(train_loader) // cfg.accumulation_steps, 1)
+_total_steps = MAX_EPOCHS * _steps_per_epoch
+_warmup_steps = cfg.warmup_epochs * _steps_per_epoch
+
+_warmup_sched = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=0.1,
+    end_factor=1.0,
+    total_iters=_warmup_steps,
+)
+_cosine_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=max(_total_steps - _warmup_steps, 1),
+    eta_min=0.0,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[_warmup_sched, _cosine_sched],
+    milestones=[_warmup_steps],
+)
+print(
+    f"Scheduler: per-iteration warmup ({_warmup_steps} steps, "
+    f"{cfg.warmup_epochs} epochs) -> cosine ({_total_steps - _warmup_steps} steps); "
+    f"steps_per_epoch={_steps_per_epoch}, total_steps={_total_steps}"
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -584,6 +610,7 @@ for epoch in range(MAX_EPOCHS):
             n_opt_steps_epoch += 1
 
             optimizer.step()
+            scheduler.step()   # per-iteration, not per-epoch
             optimizer.zero_grad()
             global_step += 1
             wandb.log({
@@ -591,6 +618,7 @@ for epoch in range(MAX_EPOCHS):
                 "train/effective_batch_size": cfg.batch_size * n_micro_in_accum,
                 "train/grad_norm_pre_clip": grad_norm_val,
                 "train/grad_clip_fired": float(fired),
+                "train/lr": scheduler.get_last_lr()[0],
                 "global_step": global_step,
             })
             accum_loss = 0.0
@@ -600,7 +628,6 @@ for epoch in range(MAX_EPOCHS):
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
