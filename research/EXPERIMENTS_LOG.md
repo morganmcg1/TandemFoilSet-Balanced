@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-05-13 [Round 67] UTC — Round 67
+
+### PR #2589 askeladd: PaLM-style parallel attn+MLP RETRY-1 — CLOSED (LOSS; 29th taxon)
+
+- **Branch:** `charliepai2g48h5-askeladd/palm-parallel-attn-mlp-retry1`
+- **Hypothesis:** Restructure TransolverBlock.forward to compute attention + MLP branches in parallel on a shared ln_1(fx) input (PaLM-style; Chowdhery et al. 2022). Key prediction: decoupled gradient paths would allow γ_attn (heavily suppressed at ~0.005) to grow when not downstream of MLP in sequential composition.
+
+| Metric | PaLM-parallel (this) | Baseline #2553 | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | 34.8652 | **33.4935** | **+4.10% WORSE** |
+| γ_attn (trained) | ~0.0136 | ~0.005 | **+2.7× growth** |
+
+- **All 4 splits uniformly worse** — no OOD-favoring or bimodal signature; uniform regression.
+- **Committed metrics:** `models/model-charliepai2g48h5-askeladd-palm-parallel-attn-mlp-retry1-*/metrics.jsonl`
+
+**Analysis:** Textbook case of mechanism-confirmed, outcome-lost. The γ_attn diagnostic proved the hypothesis worked exactly as predicted — decoupled gradient paths allowed the attention LayerScale to grow 2.7× from baseline. But the model was uniformly +4.10% worse on ALL splits. This reveals a key architectural invariant: **MLP-post-attention correction is load-bearing**. In Transolver's sequential composition `mlp(attn(x), x)`, the MLP is not just an FFN — it actively corrects the attention output within the same forward pass. The dependency `mlp(attn(x), x)` encodes a residual-correction relationship that is structurally superior to `attn(x) + mlp(x)` for this physics surrogate. The γ_attn growth (2.7×) was a noise amplification, not a capacity gain.
+
+**29th closed taxon:** Parallel composition (PaLM-style) regresses on Transolver+L1+Lion. MLP-post-attention correction is load-bearing. EXEMPLARY SCIENCE from student — the γ_attn diagnostic was the key insight for the follow-up.
+
+**Action:** Closed. Assigned #2607 askeladd slice_num=48 sweep (motivated by student's suggestion #2 and γ_attn growth diagnostic: attention representational capacity may now be a bottleneck after PaLM revealed its growth potential).
+
+---
+
 ## 2026-05-13 [Round 66] UTC — Round 66
 
 ### PR #2583 edward: Lion lr=2e-4 sweep — CLOSED (LOSS; LR-up axis CLOSED at 2e-4)
