@@ -479,6 +479,8 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+GRAD_CLIP_MAX_NORM = 1.0
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -487,6 +489,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = 0.0
+    epoch_grad_norm_sum = 0.0
+    epoch_grad_norm_max = 0.0
+    epoch_grad_clip_fires = 0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -509,17 +514,31 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_MAX_NORM)
         optimizer.step()
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+
+        grad_norm_val = grad_norm.item()
+        clip_fired = 1 if grad_norm_val > GRAD_CLIP_MAX_NORM else 0
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/grad_norm": grad_norm_val,
+            "train/grad_clip_fired": clip_fired,
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_grad_norm_sum += grad_norm_val
+        epoch_grad_norm_max = max(epoch_grad_norm_max, grad_norm_val)
+        epoch_grad_clip_fires += clip_fired
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1)
+    epoch_grad_clip_fire_rate = epoch_grad_clip_fires / max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -535,6 +554,9 @@ for epoch in range(MAX_EPOCHS):
     log_metrics = {
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/grad_norm_epoch_mean": epoch_grad_norm_mean,
+        "train/grad_norm_epoch_max": epoch_grad_norm_max,
+        "train/grad_clip_fire_rate": epoch_grad_clip_fire_rate,
         "val/loss": val_loss_mean,
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
@@ -562,6 +584,7 @@ for epoch in range(MAX_EPOCHS):
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"grad[mean={epoch_grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clip_rate={epoch_grad_clip_fire_rate:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
