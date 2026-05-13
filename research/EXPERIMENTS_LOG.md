@@ -2,6 +2,54 @@
 
 ---
 
+## 2026-05-13 19:58 — PR #2554: AdaBelief optimizer (variance-based step size, Zhuang 2020) — assignment to tanjiro (NEW cycle 68)
+
+- **Branch:** `willowpai2g48h4-tanjiro/adabelief-optimizer`
+- **Student:** willowpai2g48h4-tanjiro (idle after closure of #2296 Lookahead axis)
+- **Hypothesis:** AdaBelief is a drop-in AdamW replacement. `v_t = β2*v_{t-1} + (1-β2)*(g_t - m_t)² + eps` measures gradient VARIANCE from the EMA estimate, rather than AdamW's raw magnitude `g_t²`. When the gradient is CONSISTENT (low variance from EMA), AdaBelief takes LARGE steps (small √v denominator); AdamW takes small steps (large √v) — opposite intuitions for the consistent-gradient regime, exactly where AdamW under-converges in late training. Same per-step compute cost as AdamW. eps=1e-16 (vs AdamW 1e-8) because variance denominator is much smaller than magnitude. Zhuang et al. 2020 (NeurIPS, arXiv:2010.07468).
+- **Mechanistic distinctness:**
+  - From #2201 (β2 sweep): β2 changes TIMESCALE of v_t EMA; AdaBelief changes WHAT goes into v_t (variance vs magnitude).
+  - From #2340 (β1 sweep): β1 changes TIMESCALE of m_t EMA; AdaBelief uses m_t to compute residual.
+  - From #2128 (ε sweep): ε floors denominator at single value; AdaBelief reformulates denominator entirely.
+  - From #2296 (Lookahead, just closed): Lookahead time-averages weights across k steps; AdaBelief modifies AdamW's step magnitude per parameter per step (no time-averaging — avoids the slow-track × restart interference mechanism).
+  - From #1808 (EMA): EMA averages weights across all steps; AdaBelief per-step internal optimizer change.
+- **Arms:** Single run with `--use_adabelief` on CURRENT SOTA #2444 config (T_0=7, T_mult=2, WD=5e-4, eta_min=0, surf_head_lr=5e-3, huber_delta=0.5, torch.compile default).
+- **Branching rule:** Beat SOTA by ≥0.7 val (2σ via #2445) → confident win, merge candidate. Marginal 0.4-0.7 → 2nd seed. Regress >1.0 → close axis. Within ±0.4 → null, close.
+- **Implementation:** Student adds an `AdaBelief` Optimizer class to train.py with the bias-corrected (g-m)²+eps formulation and AdamW-style decoupled weight decay, plus a `--use_adabelief` flag that swaps optimizer construction.
+
+---
+
+## 2026-05-13 19:55 — PR #2296: Lookahead × cosine_restart compose (CLOSED — axis fully exhausted, all 6+ arms regress)
+
+- **Branch:** `willowpai2g48h4-tanjiro/lookahead-adamw`
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs (cumulative across compose attempts):** k=5 no-restart (`aumcndej`), k=10 no-restart (`nmv3jlsx`), k=3 no-restart (`4pscsoah`), k=7 no-restart (`zj7z3ix5`), k=5+T_0=10 (`1l036b11`), k=5+T_0=10+eta_min=1e-5 (`i420aj1i`)
+- **Hypothesis:** Lookahead k=5 fast-track AdamW + every-k slow-track update should add weight-trajectory smoothing without interfering with restart's spike-recovery dynamic.
+
+### Results (compose with restart)
+
+| Run | Config | val_avg | Δ vs CURRENT SOTA (82.26) |
+|-----|--------|---------|---------------------------|
+| `1l036b11` | k=5, α=0.5, T_0=10, WD=5e-4, no eta_min | 91.01 | **+8.75 ❌** |
+| `i420aj1i` | k=5, α=0.5, T_0=10, WD=5e-4, eta_min=1e-5 | 89.98 | **+7.72 ❌** |
+| (earlier no-restart arms, k ∈ {3,5,7,10}) | various | ~84-86 (per prior reports) | +2-4 |
+
+**Cross-cycle confirmation:** `i420aj1i` (T_0=10, eta_min=1e-5, val=89.98) is +6.3 val above the cycle-64 seeded mean (86.71 ± 0.34) for the same baseline schedule with NO Lookahead. That's a ~18σ regression — Lookahead is the clear cause, not seed variance.
+
+### Mechanism
+
+Two consistent explanations:
+1. **Slow-track interference with restart.** Lookahead's slow-track interpolates toward an "averaged" weight every k steps. Cosine restart re-injects high LR (5e-3) at restart epochs, pushing the FAST track far from the slow track between updates. The slow track's pull toward the time-averaged trajectory effectively DAMPS the restart's spike-recovery dynamic — exactly the mechanism that gave us −6.4% val going from no-restart to T_0=10 restart.
+2. **Slow-track damping of cycle-2 descent.** Under T_mult=2 (cycles [7,14]=21), cycle 2 is 14 epochs of high-LR-then-decay. Lookahead's k=5 means slow-track updates 2-3 times per cycle 2. Each update pulls weights toward the cycle-2 trajectory mean, which is between the cycle-1-end basin (e7, val ~89) and the cycle-2-end basin (e21, val ~82). Pulling toward the mean is WORSE than landing at e21.
+
+**Cross-cycle alignment:** consistent with cycle-65 closure of SWA prediction-averaging (#2452 fern): weight-space AND prediction-space averaging both fail under restart for the same underlying reason — **the restart schedule is designed to ARRIVE at the cycle-end minimum, not at the trajectory mean.**
+
+**Why not extending to T_mult=2:** Under T_mult=2, cycle 2 is 14 epochs (vs 11 under T_0=10). Lookahead's damping mechanism scales with cycle length — k=5 over 14 epochs = 2.8 slow-track updates per cycle 2, vs 2.2 under T_0=10. The damping problem gets WORSE, not better. Sufficient data; closing axis.
+
+**Conclusion:** Lookahead × restart axis fully closed. 6+ data points all going the same direction. Follow-up assigned: AdaBelief (#2554) — per-step internal AdamW change, not weight-space averaging.
+
+---
+
 ## 2026-05-13 19:35 — PR #2548: Reflection-symmetric TTA at inference (assignment to askeladd, NEW cycle 67)
 
 - **Branch:** `willowpai2g48h4-askeladd/reflection-tta-inference`
