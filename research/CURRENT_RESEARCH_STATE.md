@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 26)
+- **As of:** 2026-05-13 (updated cycle 29)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -43,7 +43,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 **Active directions:**
 
 1. **Weight decay re-tune** — current WD=1e-4 has been unchanged through all merged stages (BIVW → Huber → surf-head → decoupled-LR). Sweep {3e-5, 5e-4} to test if stale WD limits the new baseline. #2031 fern (WIP).
-2. **BF16 capacity unlock** — #1572 frieren (WIP, stale).
+2. **Throughput unlock via torch.compile** — #2091 frieren (NEW). Pure throughput unlock with zero precision tradeoff; FP32 preserved. Predicted 1.3-1.5× speedup → 18-21 epochs in 30 min. Could rescue wall-clock-bound failures (EMA #1808, n_head=8 #1924, DropPath #1987).
 3. **Pressure-channel emphasis** — #1496 alphonse (WIP, stale).
 4. **Per-channel Huber delta** — δ_p vs δ_ux/uy. #1922 nezuko (WIP).
 5. **Encoder LR re-tune** — encoder LR was calibrated pre-Huber/pre-decoupled-head; re-sweep {3e-4, 7e-4} stacked on surf_head_lr=5e-3. #1974 edward (WIP).
@@ -65,12 +65,14 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 
 **Cycles 25-26 (PR #1949):** The late-epoch oscillation (e11 best, e12 spike, e14 recovery) is a *steady-state property* of the optimization landscape, not a cold-start artifact. Same signature confirmed at surf_head_lr 5e-3 (#1795), 7e-3, 1e-2 (#1949), and β2=0.95 (#2015). Warmup addresses the wrong mechanism. The spike is driven by sampler-variance as LR anneals late in training. **Lesson:** Any new stabilization approach must target steady-state gradient variance (e.g., per-group clipping #2058), not initialization.
 
+**Cycle 29 (PR #1572):** Surface MAE on this dataset is precision-sensitive in a *load-bearing* way. BF16's 7-bit mantissa caused +11.33% on val_geom_camber_rc — the exact OOD split #1558 (Huber δ=0.5) was designed to fix. The Huber gradient is constant-magnitude in the L1 regime, so small inter-node residual differences carry the supervisory signal; BF16 rounds them away. **Lesson:** Any future precision relaxation must preserve FP32 on the surf_head + Huber loss; matmul-only precision relaxation (e.g., TF32, FP32-head autocast) is OK to try but pure BF16 is rejected.
+
 ## Live PRs
 
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 1496 | alphonse | pressure-channel-prioritized-loss | WIP | Huber default correction sent; use --huber_delta 0.5 |
-| 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
+| 2091 | frieren | torch-compile | WIP (NEW) | torch.compile mode ∈ {default, reduce-overhead}; pure throughput unlock, FP32 preserved |
 | 1922 | nezuko | per-channel-huber-delta | WIP | δ_p=0.5, δ_ux/uy ∈ {1.0, 2.0}; tests if global δ over-flattens Ux/Uy distributions |
 | 1974 | edward | encoder-lr-retune | WIP | Re-tune encoder LR {3e-4, 7e-4} stacked on surf_head_lr=5e-3; encoder LR stale since pre-Huber |
 | 2013 | tanjiro | logcosh-surface-loss | WIP | LogCosh C²-smooth alternative to Huber-δ kink. Arms: scale={1.0, 0.5} |
@@ -91,7 +93,8 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 9. **Frozen p-variance stratified sampling** — **rejected** (PR #1746, +272% regression). Variance dynamic range is 8 OOM; 1/var(p) sampler collapses effective training set to a handful of low-Re samples. Conceptually sound but wrong functional form.
 9a. **log(Re) quantile bucketing** — **rejected** (PR #1868, +8.4% regression). Quantile boundaries produce equal-count buckets; 1/count weights then ≈ uniform — structural no-op. Only adds ±2% perturbation to existing domain weights. Correct mechanism is loss-side multiplier: PR #1978.
 9b. **Re-curriculum via per-sample loss multiplier** — **rejected** (PR #1978, +16.87% regression). Symmetric tail boost composed multiplicatively with BIVW creates destructive interaction: BIVW already implicitly up-weights low-Re samples (since high-Re has larger normalized variance), so symmetric Re-tail double-up-weights low-Re and cancels high-Re boost. Mid-Re samples lose gradient signal. Entire 'symmetric Re-tail re-weighting' direction now characterized as structurally incompatible with BIVW. Both sampler (#1868) and loss-side (#1978) variants fail for related reasons. Direction closed.
-10. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
+10. **BF16/AMP** — **rejected** (PR #1572, +3.62% val / +30.09% val at n256). Throughput gain real (18 vs 14 epochs) but precision cost neutralized it; val_geom_camber_rc +11.33% confirmed surface MAE is precision-sensitive. BF16 mantissa rounds away Huber-L1 gradient signal that #1558 was designed to provide.
+10a. **torch.compile** — testing (#2091 frieren, NEW). Pure throughput unlock with FP32 preserved; predicted 1.3-1.5× speedup → 18+ epochs in 30 min.
 11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97% regression). 19% slower per-epoch → 12 vs 14 epochs → underfit. Confirms wall-clock-bound principle.
 11a. **Slice_num=128** — **rejected** (PR #1501, +19.30% regression). +37% per-epoch cost → 10 vs 14 epochs. Fourth wall-clock-bound capacity failure. Pareto frontier confirmed: depth=5/14ep is optimal; all capacity expansions on depth+slice axes lose.
 11b. **Shallower depth (n_layers=4)** — **rejected** (PR #1881, +8.39% regression). −14% per-epoch cost gained 2 extra epochs (16 vs 14) but capacity loss from 1 fewer TransolverBlock dominated. Regression uniform across all 4 splits → pure underfitting. Depth=5/14ep is Pareto frontier — both perturbations on the depth axis confirm this.
@@ -135,6 +138,7 @@ These collectively define a clear principle: **the Huber+BIVW+surf-head+decouple
 - **PR #1987** (Stochastic Depth / DropPath on Transolver blocks) — +3.31% val, +1.35% test regression. Mechanism worked exactly as predicted (late-epoch oscillation smoothed away). But ~3-epoch convergence slowdown dominated under 14-epoch budget. Wall-clock-bound regularization failure pattern.
 - **PR #2015** (AdamW β2=0.95) — +6.49% val, +6.80% test regression. β2=0.999 is a structural stabilizer (not a lag parameter) against the balanced sampler's heteroscedastic per-batch variance. Epoch-12 spike WORSE under β2=0.95 (155.90 vs baseline 113.66). β2=0.999 is REQUIRED for stability — do not tune freely.
 - **PR #1949** (surf_head_lr warmup {7e-3, 1e-2}) — best arm +1.30% regression (Arm 2: +12.73%). Warmup addressed cold-start correctly but not the steady-state oscillation. surf_head_lr=5e-3 is confirmed local optimum; LR axis fully exhausted. Implementation insight: single LambdaLR composing cosine × warmup (not two chained schedulers, which is buggy).
+- **PR #1572** (BF16 autocast AMP) — Arm 1 (n128) +3.62% val / +2.57% test; Arm 2 (n256) +30.09% val / +28.20% test. Throughput gain confirmed (18 vs 14 epochs) but BF16's 7-bit mantissa rounds away the Huber-L1 gradient signal that PR #1558 provides — val_geom_camber_rc +11.33% is the smoking gun. Surface MAE on this dataset is precision-sensitive in a load-bearing way. Code NOT merged; opt-in flag was working but adding it would invite mis-use.
 
 ## Potential next directions
 

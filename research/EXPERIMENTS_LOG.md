@@ -1150,3 +1150,43 @@ Test (arm 3): test 3-split mean 99.5856 (vs baseline 98.7537, +0.85 regression o
 **Next directions:**
 - Wider surf_head (#2057, askeladd): head *capacity* axis (orthogonal to LR)
 - Per-group gradient clipping on surf_head (#2058, thorfinn): targets the late-epoch oscillation mechanism directly
+
+## 2026-05-13 08:50 — PR #1572: BF16 autocast AMP — unlock wall-clock for capacity experiments
+
+- **Branch:** `willowpai2g48h4-frieren/bf16-mixed-precision` (CLOSED — both arms regressed, precision-sensitive task)
+- **Student:** willowpai2g48h4-frieren
+- **W&B runs:** `c6m0hv4u` (n128), `f18c09px` (n256)
+- **Hypothesis:** BF16 autocast → 2× tensor-core matmul + ~halved activation memory; expected 1.4-1.6× more epochs and/or unlock n_hidden=256. Stacked on Huber δ=0.5 + surf_head_lr=5e-3 baseline.
+
+### Results
+
+| Arm | Config | val_avg/mae_surf_p | test_avg/mae_surf_p | Best/total epoch | Δ val vs 97.99 |
+|-----|--------|---------------------|----------------------|--------------------|------------------|
+| Baseline (PR #1795) | FP32, n128 | **97.9914** | 88.5311 | 11/14 | — |
+| Arm 1 | BF16, n128 | 101.5396 | 90.8030 | 15/18 | **+3.62%** |
+| Arm 2 | BF16, n256, bs=2, lr=6e-4 | 127.4773 | 113.4968 | 7/11 | **+30.09%** |
+
+### Per-split val MAE (Arm 1)
+
+| Split | BF16 (n128) | Baseline 97.99 | Δ |
+|-------|------------|-----------------|---|
+| val_single_in_dist | 118.08 | 120.31 | −1.85% ✓ |
+| val_geom_camber_rc | 129.12 | 115.98 | **+11.33%** ✗ |
+| val_geom_camber_cruise | 66.05 | 66.04 | ≈ |
+| val_re_rand | 92.91 | 89.64 | +3.65% ✗ |
+
+### Analysis and Conclusions
+
+**Closed — BF16 is the wrong knob for this task.**
+
+**Throughput gain confirmed**: 18 epochs vs 14 in 30 min (+28%) at n128. So the *idea* that more epochs would help was correct in principle — but BF16's precision trade-off neutralizes the benefit.
+
+**Precision-sensitivity mechanism (confirmed via per-split breakdown):** `val_geom_camber_rc` regressed +11.33% — the EXACT OOD split that PR #1558 (Huber δ=0.5) was designed to fix. The Huber gradient in the L1 regime is constant-magnitude, so small inter-node residual differences carry the supervisory signal. BF16's 7-bit mantissa rounds these away, weakening the gradient signal that drove #1558's −17.7% gain. This is the smoking gun.
+
+**Capacity scaling failed:** Even with VRAM headroom (33 GB on 96 GB cap), n256 only managed 11 epochs at 169 s/epoch — well short of the convergence horizon. BF16 alone does not unlock n256 in the 30-min cap; would need architectural compute reductions (slice_num, depth, mlp_ratio).
+
+**Key insight: throughput unlocks exist, but BF16's precision cost is load-bearing.** Three of our wall-clock-bound failures (EMA #1808, n_head=8 #1924, DropPath #1987) might still be rescued by a *pure* throughput unlock with no precision trade. The right next swing: `torch.compile` (same magnitude of speedup, FP32 preserved).
+
+**Follow-up assigned:** torch.compile {default, reduce-overhead} (#2091 frieren) — pure throughput unlock with zero precision tradeoff.
+
+**Code NOT merged:** The PR contained a working BF16 implementation (use_bf16 opt-in flag, default False). Closing without merging because adding a flag for a knob we know hurts would invite future students to mis-use it.
