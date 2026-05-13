@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 01:55 (post #1734 thorfinn send-back for gentler asinh(0.5·p) — mechanism real but α=1.0 has structural per-split asymmetry)
+- **Last updated:** 2026-05-13 02:25 (post #1691 edward close + #1787 reassignment to Re-jitter — surf/vol weighting axis fully closed; data-side augmentation family now has 2 parallel tests)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
 - **W&B:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r2`
 - **Per-run cap:** `SENPAI_TIMEOUT_MINUTES=30` wall-clock
 - **Students × GPU:** 8 × 1 (96 GB each)
-- **Idle students:** 0 (all 8 actively assigned to wave-6; thorfinn re-running #1734 with gentler asinh(0.5·p))
+- **Idle students:** 0 (all 8 active: thorfinn re-running #1734 with gentler asinh(0.5·p); edward on fresh #1787 Re-jitter after #1691 surf_weight=5 close)
 
 ## ⭐ Current baseline (PR #1585 merged 2026-05-12 23:55 UTC)
 
@@ -21,6 +21,7 @@
 ## 🔥 Hottest signals this session
 
 - **PR #1585 (askeladd, FiLM-on-Huber):** MERGED. Largest single-PR gain on this branch. val=80.82 (−15.6%) / test=71.30 (−17.3%) vs prior 95.75/86.17. Architecture-conditioning axis landed.
+- **#1691 (edward, surf_weight=5) close 2026-05-13 02:20:** val=98.61 (+2.99% vs pre-FiLM frame; +22% vs current FiLM). **Surf/vol weighting axis closed in both directions** (sw=30 +7%, sw=5 +3%; sw=10 brackets optimum). Volume MAE *did* improve (-4.95% test vol), but didn't flow into surface MAE → **surface-pressure prediction is loss-weighted-attention-bound, not representation-bound**. Reassigned to #1787 (Re-jitter sample-level aug).
 - **#1734 (thorfinn, asinh-pressure α=1.0) result 2026-05-13 01:50:** val=80.00 (-1.01%) / test=72.71 (+1.97%) — both within seed-variance. **Mechanism is real and structural per-split:** cruise/re_rand improve dramatically (-7-12%), single/rc regress (+3-10%). asinh knee at α=1.0 catches mid-range values. **Sent back for asinh(0.5·p) gentler compression** — if lands clean, this is the merge candidate; if not, axis closes cleanly.
 - **Triple-close 2026-05-13 01:30:**
   - #1733 fern (attn-dropout=0.1): val=83.86 (+3.76%) — 3rd consecutive regularization-axis close. Wave conclusion: this regime needs **more training signal, not less**.
@@ -56,12 +57,13 @@ All 7 PRs forked from the new baseline. 3 fresh assignments at 01:30 UTC after t
 | #1757 | frieren | `beta-0p3-on-filmed` | **β=0.3 port from closed #1600** (single-arm composition test on FiLM stack) | −1 to −5% val / **−2 to −7% test** ← strongest expected mechanism gain |
 | #1758 | fern | `mesh-subsample-0p9-on-filmed` | **Random mesh-node subsampling** (data-side input augmentation; new mechanism family) | −0.5 to −2% |
 | #1760 | tanjiro | `film-mid-dim-128-on-filmed` | **FiLM mid_dim 64 → 128** (intra-FiLM capacity, NOT generic n_hidden/mlp_ratio) | −0.5 to −3% |
+| #1787 | edward | `re-jitter-0p05-on-filmed` | **Re-jitter** (σ=0.05 Gaussian on log_re_shifted at model input only; complement to fern's mesh-subsample at sample-level vs node-level) | −0.5 to −2% val |
 
-### Wave 5 (residual, single in-flight PR remaining)
+### Wave 5 residual: closed 2026-05-13 02:20
 
-| PR | Student | Slug | Hypothesis | Status |
-|---|---|---|---|---|
-| #1691 | edward | `surf-weight-5-on-merged` | Halve `surf_weight` 10 → 5 (opposite direction from #1620) | WIP (running pre-FiLM-merge) |
+| PR | Student | Slug | Status |
+|---|---|---|---|
+| #1691 | edward | `surf-weight-5-on-merged` | CLOSED — val=98.61 (+2.99% on pre-FiLM frame; +22% on current). Surf/vol axis closed both directions. Reassigned to #1787. |
 
 ### Reframe decision rule (vs new 80.82 baseline)
 
@@ -88,12 +90,13 @@ All 7 PRs forked from the new baseline. 3 fresh assignments at 01:30 UTC after t
 
 - **The GraphQL rate-limit pattern continues; pods recover automatically.** REST helpers preferred where possible.
 - **All 7 wave-6 PRs start from the merged FiLM baseline** — no rebase pain, clean composition tests.
-- **5 mechanism axes have been definitively closed on this dataset/scale:**
+- **6 mechanism axes have been definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1) — closed once
   - Token-level stochastic regularization (attention_dropout=0.1) — closed once (PR #1733)
   - Re-weight curve shape under per-batch normalization — closed once
   - SWA-window size (both directions: removal, enlargement) — closed once (PR #1732)
+  - **Surf/vol loss-weighting (both directions: sw=30, sw=5)** — closed; sw=10 brackets optimum (PR #1620 + #1691)
 - **Regularization axis pattern (3 closures):** the consistent signal is that this 5-layer / 0.75M / ~1500-sample regime needs **more training signal, not less**. Wave-7 input-augmentation tests should explicitly INCREASE per-epoch input variability rather than reduce model capacity. This is the motivation for fern #1758 (mesh subsampling).
 - **3 axes have produced strong landings:**
   - Loss-shape: Huber (#1452 merged)
@@ -105,17 +108,18 @@ All 7 PRs forked from the new baseline. 3 fresh assignments at 01:30 UTC after t
 
 - **Loss-shape (β):** **β=0.3 ported to FiLM stack (#1757 frieren)** ← wave-6 NEW, highest expected ROI
 - **Loss-shape (per-domain kind):** surface-Huber / volume-MSE (#1739 alphonse) ← wave-6
-- **Loss-weighting (sample-level):** surf_weight halve (#1691 edward wave-5 residual)
+- **Loss-weighting (surf/vol split):** **CLOSED both directions** (#1620 sw=30 +7%, #1691 sw=5 +3%; sw=10 brackets optimum)
 - **Loss-weighting (channel-level):** per-channel p-weight (#1702 askeladd) ← wave-6
 - **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) ← wave-6
 - **Optimizer-stability:** gradient clipping (#1731 nezuko) ← wave-6
-- **Data-side input augmentation:** **mesh-node subsampling (#1758 fern)** ← wave-6 NEW, new mechanism family
+- **Data-side input augmentation (node-level):** mesh-node subsampling (#1758 fern) ← wave-6, new mechanism family
+- **Data-side input augmentation (sample-level):** **Re-jitter (#1787 edward)** ← wave-6 NEW, complement to #1758
 - **Architecture-conditioning (intra-FiLM):** **FiLM mid_dim 64→128 (#1760 tanjiro)** ← wave-6 NEW
 - **Architecture-conditioning (head):** FiLM — LANDED in baseline (#1585)
 - **Schedule / SWA-window:** definitively closed (both directions tested)
 - **Internal regularization (drop_path / attention_dropout / mlp_ratio):** definitively closed (3 sub-axes, 3 closures)
 
-8 orthogonal mechanism axes in flight; 7 forked from the FiLM baseline directly.
+9 orthogonal mechanism axes in flight, all forked from FiLM baseline. Notable new finding: **surface-pressure prediction is loss-weighted-attention-bound, not representation-bound** (from #1691 close-out) — implies signal-addition (augmentation) is more promising than signal-reshape (loss-weighting) on this stack.
 
 ## Potential next research directions (wave 7+)
 
