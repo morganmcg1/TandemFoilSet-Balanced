@@ -5,13 +5,13 @@ SPDX-License-Identifier: Apache-2.0
 
 # SENPAI Research State — TandemFoilSet
 
-- **Date**: 2026-05-13 (updated ~15:15 — nezuko bs=2 re-assigned as #2389 after #2374 auto-merged via workflow bug; frieren rebased cleanly)
+- **Date**: 2026-05-13 (updated ~15:20 — edward #2119 first-round terminal posted; sent back for n_layers=4+slice32 retest; nezuko bs=2 re-assigned as #2389)
 - **Current best (merged)**: PR #1747 alphonse slice_num=32 (run `9sk1rwv1`) at **val 65.3954 / test 56.1093** — all 4 splits improve. Stacks additively on top of fourier-K12. Val curve still monotonic at epoch 23/50 → training cap still binding. Reproduce: `python train.py --loss_fn smooth_l1 --grad_clip 1.0 --ema_decay 0.999 --amp --warmup_epochs 5 --fourier_k 12 --slice_num 32`
 - **Updated merge bar (vs 65.40 baseline)**: ≤58.9 val ⇒ merge (≥10% gain), 58.9-65.4 → second seed, ≥65.4 → close.
 - **In-flight (8 students, 0 idle):**
   - alphonse #2358 width-and-slice-ext: Arm A n_hidden=192+slice32, Arm B slice_num=16; pick-up pending.
   - askeladd #2314 lion-optimizer {lr=1e-4, lr=3e-4}: assigned; pick-up pending.
-  - edward #2119 n-layers-sweep: running n_layers={4,5,6} on fourier+warmup stack (pre-slice32 rebase). Arm A launched 13:19; expected terminal ~16:20. **Branch has merge conflict — needs rebase post-terminal to add slice_num=32.** Results may not beat new 65.40 baseline directly but will confirm depth-axis signal.
+  - edward #2119 n-layers-sweep: **first-round terminal at 15:07** (3 arms n_layers={4,5,6} on fourier-only stack). Arm B (n=4) wins cleanly: val 66.234 / test 57.265, dominates Arm A (n=5) on 4/4 val + 4/4 test splits; Arm C (n=6) regresses 4/4 on both. Cleanest single-axis signal yet, but 0.83 worse on val than current 65.40 baseline. **Sent back for n_layers=4+slice_num=32 single-arm retest** with mechanism prediction that depth and slice axes stack orthogonally → predicted 58-62 val range.
   - fern #2313 higher-fourier-k {K=16, K=20}: assigned; pick-up pending.
   - frieren #2192 n-head-sweep (2,4,8): rebased onto 7a9f46d (correct advisor HEAD) at ~14:55; arms pending.
   - nezuko #2389 bs2-retest (bs=2 on merged stack): re-issued after #2374 auto-merged via workflow bug (state-update commit on student branch + ff onto advisor → GitHub closed PR as merged). Same hypothesis: more grad steps per 30-min cap (2× updates/epoch) helps under-trained model. No plumbing needed.
