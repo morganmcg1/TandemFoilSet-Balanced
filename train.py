@@ -467,6 +467,11 @@ class Config:
     skip_test: bool = False  # skip end-of-run test evaluation
     seed: int = 0
     film_mid_dim: int = 64
+    # Mesh-node subsampling augmentation: probability of retaining each real
+    # mesh node during training (per sample, per forward pass). Uniform over
+    # all real nodes (volume + surface). 1.0 = no subsampling (baseline
+    # behavior). Eval (val/test) always uses full mesh.
+    node_keep_prob: float = 1.0
 
 
 cfg = sp.parse(Config)
@@ -543,6 +548,10 @@ print(
     f"SWA: start_epoch={swa_start_epoch} (0-indexed), "
     f"swa_lr={swa_lr:.2e}, anneal_epochs=2"
 )
+print(
+    f"Node-subsampling: node_keep_prob={cfg.node_keep_prob} "
+    f"(uniform over real nodes; train-time only; eval uses full mesh)"
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -592,11 +601,43 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol = epoch_surf = 0.0
     n_batches = 0
 
+    epoch_n_kept = 0.0
+    epoch_n_real = 0.0
+    epoch_n_kept_surf = 0.0
+    epoch_n_real_surf = 0.0
+    epoch_n_kept_vol = 0.0
+    epoch_n_real_vol = 0.0
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Mesh-node subsampling augmentation (training only). Each real node
+        # (volume + surface) is independently kept with prob cfg.node_keep_prob.
+        # Dropped nodes have raw features zeroed (indistinguishable from
+        # padding) and are excluded from loss/FiLM by updating `mask`. Per-
+        # sample globals (dims 13-23) and log_re are constant across real
+        # nodes, so the masked-mean over the kept-real subset still recovers
+        # the correct per-sample value.
+        n_real_per_sample = mask.sum(dim=1).float()                        # [B]
+        n_real_surf = (mask & is_surface).sum(dim=1).float()                # [B]
+        n_real_vol = (mask & ~is_surface).sum(dim=1).float()                # [B]
+        if cfg.node_keep_prob < 1.0:
+            keep_rand = torch.rand(mask.shape, device=device) < cfg.node_keep_prob
+            new_mask = mask & keep_rand
+            x = x * new_mask.unsqueeze(-1).to(x.dtype)                      # zero dropped features
+            mask = new_mask
+        n_kept_per_sample = mask.sum(dim=1).float()                         # [B]
+        n_kept_surf = (mask & is_surface).sum(dim=1).float()                # [B]
+        n_kept_vol = (mask & ~is_surface).sum(dim=1).float()                # [B]
+        epoch_n_kept += n_kept_per_sample.mean().item()
+        epoch_n_real += n_real_per_sample.mean().item()
+        epoch_n_kept_surf += n_kept_surf.mean().item()
+        epoch_n_real_surf += n_real_surf.mean().item()
+        epoch_n_kept_vol += n_kept_vol.mean().item()
+        epoch_n_real_vol += n_real_vol.mean().item()
 
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
@@ -640,6 +681,15 @@ for epoch in range(MAX_EPOCHS):
             "train/re_weight_mean": re_weight.mean().item(),
             "train/log_re_per_batch_mean": log_re.mean().item(),
             "train/log_re_per_batch_std": log_re.std().item() if log_re.numel() > 1 else 0.0,
+            "train/n_kept_mean": n_kept_per_sample.mean().item(),
+            "train/n_real_mean": n_real_per_sample.mean().item(),
+            "train/n_kept_surf_mean": n_kept_surf.mean().item(),
+            "train/n_real_surf_mean": n_real_surf.mean().item(),
+            "train/n_kept_vol_mean": n_kept_vol.mean().item(),
+            "train/n_real_vol_mean": n_real_vol.mean().item(),
+            "train/keep_ratio": (n_kept_per_sample.sum() / n_real_per_sample.sum().clamp(min=1)).item(),
+            "train/surf_keep_ratio": (n_kept_surf.sum() / n_real_surf.sum().clamp(min=1)).item(),
+            "train/vol_keep_ratio": (n_kept_vol.sum() / n_real_vol.sum().clamp(min=1)).item(),
             "global_step": global_step,
         })
 
@@ -678,6 +728,21 @@ for epoch in range(MAX_EPOCHS):
         "swa_active": int(swa_active),
         "epoch_time_s": dt,
         "global_step": global_step,
+        "train/epoch_n_kept_mean": epoch_n_kept / max(n_batches, 1),
+        "train/epoch_n_real_mean": epoch_n_real / max(n_batches, 1),
+        "train/epoch_n_kept_surf_mean": epoch_n_kept_surf / max(n_batches, 1),
+        "train/epoch_n_real_surf_mean": epoch_n_real_surf / max(n_batches, 1),
+        "train/epoch_n_kept_vol_mean": epoch_n_kept_vol / max(n_batches, 1),
+        "train/epoch_n_real_vol_mean": epoch_n_real_vol / max(n_batches, 1),
+        "train/epoch_keep_ratio": (
+            epoch_n_kept / max(epoch_n_real, 1e-8)
+        ),
+        "train/epoch_surf_keep_ratio": (
+            epoch_n_kept_surf / max(epoch_n_real_surf, 1e-8)
+        ),
+        "train/epoch_vol_keep_ratio": (
+            epoch_n_kept_vol / max(epoch_n_real_vol, 1e-8)
+        ),
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
