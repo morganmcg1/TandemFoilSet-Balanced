@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 15)
+- **As of:** 2026-05-13 (updated cycle 16)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -20,23 +20,31 @@
 
 ## Current research focus
 
-**Cycle 14.** Three orthogonal mechanisms are merged (BIVW + surf-head + Huber) giving 26% total improvement. Four "stack-on-Huber" attempts have now closed cleanly with consistent negative results:
+**Cycle 16.** Three orthogonal mechanisms are merged (BIVW + surf-head + Huber) giving 26% total improvement. Three wall-clock-bound capacity/optimization failures now characterized:
+
+- **Warmup + cosine LR** (PR #1497): +17.98%. 5 warmup epochs consume the most productive early steps; T_max=50 never decays in 14 epochs.
+- **Wider MLP (ratio=4)** (PR #1498): +24.97%. ~19% slower per-epoch (152s vs 128s) → 12 epochs vs 14 → underfit.
+- **Grad-clip + higher LR** (PR #1499): +1.45%. Huber already compresses grad norms 5×; clip is redundant.
+
+Combined principle: **under the 30-min cap, baseline epoch 14 is still improving. Any change that costs ≥10% per-epoch loses ≥1 epoch and regresses unless it accelerates convergence proportionally.**
+
+Three additional stack-on-Huber attempts also closed with consistent negatives:
 
 - **Smaller Huber delta** (PR #1627): δ=0.5 is the local optimum — δ=0.2/0.3 both regress >15%, δ=1.0 also regressed.
 - **Huber on volume** (PR #1650): all arms regressed +8.7% to +19.9%. Surface Huber + volume MSE is the correct recipe.
 - **Per-channel BIVW** (PR #1580): +29.6% regression. Scalar BIVW's p-dominated coupling is load-bearing.
-- **Grad-clip + higher LR** (PR #1499): +1.45% regression. Huber already compresses grad norms 5×; redundant.
+- **Frozen 1/var(p) sampler** (PR #1746): +272% regression. var(p) spans 8 OOM; unbounded inverse weights collapse effective dataset.
 
-These four closures collectively define a clear principle: **the Huber+BIVW+surf-head baseline is a tight local optimum**. New gains will require either (a) compositions that hit a different mechanism, (b) capacity unlocks, or (c) data-side levers.
+These collectively define a clear principle: **the Huber+BIVW+surf-head baseline is a tight local optimum**. New gains will require either (a) compositions that hit a different mechanism, (b) capacity unlocks via efficiency rather than parameter count, (c) data-side levers with bounded weight functions, or (d) evaluation-time levers (EMA).
 
 **Active directions:**
 
-1. **Capacity expansions rebased onto Huber** — slice_num=128 (#1501 nezuko), wider MLP (#1498 edward), BF16 (#1572 frieren).
-2. **LR schedule on Huber base** — warmup + cosine on new optimum (#1497 askeladd, rebasing).
-3. **Pressure-channel emphasis** — still recovering from rate-limit stall (#1496 alphonse).
-4. **surf_weight retuning** — Huber lowered surface loss magnitude; the surf:vol ratio may have shifted. #1720 fern testing {5, 15, 30}.
-5. **Frozen p-variance stratified sampling** — makes BIVW's implicit Re-curriculum explicit at data-loader level. #1746 tanjiro testing.
-6. **Decoupled LR for surf_head vs encoder** — surf_head is 0.026M params with zero-init last layer; may benefit from higher LR than the encoder. #1765 thorfinn (NEW).
+1. **Capacity via efficiency, not parameter count** — slice_num=128 (#1501 nezuko), BF16 (#1572 frieren), shallower depth+more epochs (#1881 edward, NEW).
+2. **Pressure-channel emphasis** — still recovering from rate-limit stall (#1496 alphonse).
+3. **surf_weight retuning** — Huber lowered surface loss magnitude; the surf:vol ratio may have shifted. #1720 fern testing {5, 15, 30}.
+4. **Decoupled LR for surf_head vs encoder** — surf_head is 0.026M params with zero-init last layer; may benefit from higher LR than the encoder. #1795 thorfinn.
+5. **EMA evaluation weights** — orthogonal to training; pure evaluation-time gain. #1808 askeladd, decay ∈ {0.999, 0.995}.
+6. **log(Re) quantile bucketing** — bounded replacement for failed inverse-variance sampler. Re spans 1.5 OOM (vs 8 OOM for var(p)), so quantile buckets cannot explode. #1868 tanjiro, buckets ∈ {10, 5}.
 
 ## Key insights
 
@@ -51,14 +59,13 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 | # | Student | Slug | Status | Notes |
 |---|---------|------|--------|-------|
 | 1496 | alphonse | pressure-channel-prioritized-loss | WIP | Huber default correction sent; use --huber_delta 0.5 |
-| 1497 | askeladd | warmup-cosine-lr | WIP | Huber default correction sent |
-| 1498 | edward | wider-mlp-ratio (2 to 4) | WIP | Huber default correction sent |
 | 1501 | nezuko | more-slices (64 to 128) | WIP | Confirmed huber_delta=0.5 explicit; running |
 | 1572 | frieren | bf16-mixed-precision | WIP | Huber default correction sent; add --huber_delta 0.5 |
 | 1720 | fern | surf-weight-tuning-on-huber | WIP | surf_weight ∈ {5, 15, 30} on Huber baseline |
 | 1795 | thorfinn | decoupled-lr-surf-head | WIP | surf_head_lr ∈ {1e-3, 3e-3, 5e-3}; encoder lr fixed at 5e-4 |
 | 1808 | askeladd | ema-model-weights | WIP | EMA shadow weights for eval; decay ∈ {0.999, 0.995} |
-| 1868 | tanjiro | log-re-quantile-bucketing | WIP (NEW) | log(Re) quantile sampler × domain-balanced; buckets ∈ {10, 5} |
+| 1868 | tanjiro | log-re-quantile-bucketing | WIP | log(Re) quantile sampler × domain-balanced; buckets ∈ {10, 5} |
+| 1881 | edward | shallower-more-epochs | WIP (NEW) | n_layers ∈ {4, 3} on Huber baseline; tests inverse of wider-MLP failure |
 
 ## Working hypotheses
 
@@ -73,11 +80,13 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 9. **Frozen p-variance stratified sampling** — **rejected** (PR #1746, +272% regression). Variance dynamic range is 8 OOM; 1/var(p) sampler collapses effective training set to a handful of low-Re samples. Conceptually sound but wrong functional form.
 9a. **log(Re) quantile bucketing** — testing (PR #1868 tanjiro). Replaces 1/var(p) with bounded weight function: bucket log(Re) into quantiles, sample uniformly across buckets, composed with existing domain-balanced sampler.
 10. **BF16/AMP** — testing (#1572); primarily for capacity headroom.
-11. **Capacity (MLP width, slices)** — WIP (#1498, #1501); on Huber base with explicit huber_delta=0.5.
+11. **Wider MLP (ratio=4)** — **rejected** (PR #1498, +24.97% regression). 19% slower per-epoch → 12 vs 14 epochs → underfit. Confirms wall-clock-bound principle.
+11a. **Slice_num=128** — WIP (#1501 nezuko); attention scales sub-quadratically with slice count, so cost may be acceptable.
+11b. **Shallower depth (n_layers ∈ {4, 3})** — testing (#1881 edward, NEW). Inverse of wider-MLP failure: buy epochs by reducing depth. Hypothesis: at ~14 epochs the model is underfit but representation-bottlenecked, so giving up some capacity for more passes through data wins.
 12. **Warmup schedule** — **rejected** (PR #1497, +17.98% regression). Wall-clock-bound training (~14 epochs) makes warmup a liability — 5 warmup epochs consume the most productive early steps. The CosineAnnealingLR(T_max=50) baseline is effectively flat at lr=5e-4 for 14 epochs and wins. No instability observed in baseline; the hypothesis was wrong.
 13. **Pressure-channel emphasis** — WIP (#1496); on Huber base.
 14. **EMA model weights** — testing (#1808 askeladd). EMA shadow copies evaluated at inference; decay ∈ {0.999, 0.995}. Orthogonal to all training changes — only affects which checkpoint is evaluated.
-14. **Decoupled LR for surf_head vs encoder** — testing (PR #1765 thorfinn). surf_head_lr ∈ {2e-4, 1e-3, 3e-3}; encoder lr fixed at 5e-4. Hypothesis: zero-init surf_head head may benefit from higher LR than the encoder.
+15. **Decoupled LR for surf_head vs encoder** — testing (PR #1795 thorfinn). surf_head_lr ∈ {1e-3, 3e-3, 5e-3}; encoder lr fixed at 5e-4. Hypothesis: zero-init surf_head head may benefit from higher LR than the encoder.
 
 ## Closed / rejected hypotheses
 
@@ -89,6 +98,7 @@ These four closures collectively define a clear principle: **the Huber+BIVW+surf
 - **PR #1627** (Huber delta sweep δ=0.2, 0.3) — both arms regressed (+15.6%, +17.2%). With δ=1.0 also worse (+1.3%), δ=0.5 is a narrow local optimum. Principle: do not re-sweep delta without first changing other levers.
 - **PR #1497** (5-epoch linear warmup + CosineAnnealingLR) — +17.98% regression. With T_max=50 but only ~14 epochs run, warmup costs productive steps without delivering cosine tail benefit. Principle: under 30-min cap, T_max must ≤ epochs_actually_run for scheduling to matter.
 - **PR #1746** (Frozen p-variance stratified sampler) — +272% regression. var(p) dynamic range is 8 OOM; 1/var(p) sampler collapses effective training set to a few low-Re samples. Principle: inverse-variance sampling weights on this corpus must be tempered, log-compressed, or quantile-bucketed.
+- **PR #1498** (Wider MLP, mlp_ratio=2→4) — +24.97% val regression (122.68 vs 98.16). Per-epoch wall time +19% (152s vs 128s) → 12 epochs vs 14 → underfit at termination. **Third confirmed wall-clock-bound failure** (after #1497 warmup, #1499 grad-clip). Principle reinforced: under 30-min cap, any change costing ≥10% per-epoch loses ≥1 epoch and regresses unless it accelerates convergence proportionally. Closed.
 
 ## Potential next directions
 

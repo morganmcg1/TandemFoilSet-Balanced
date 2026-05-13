@@ -379,6 +379,49 @@ The unimodal ordering (vd=0.5 best of three, not monotone) confirms this is a no
 
 ---
 
+## 2026-05-13 03:45 — PR #1498: Wider TransolverBlock MLP (mlp_ratio 2→4) (CLOSED — val regressed)
+
+- **Branch:** `willowpai2g48h4-edward/wider-mlp-ratio`
+- **Student:** willowpai2g48h4-edward
+- **W&B run:** `ji5h4ww2` (mlp-ratio-4)
+- **Hypothesis:** Standard transformer mlp_ratio is 4. Going from 2→4 should add per-node nonlinear capacity, giving −3% to −8% on val_avg/mae_surf_p.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p (4-split) | params | epoch time | epochs in 30 min |
+|-----|--------------------|-----------|-------------------------------|--------|------------|------------------|
+| **Baseline (PR #1558, mlp_ratio=2)** | **98.1642** | — | 98.7537 (3-split) | 0.643 M | 128 s | 14 |
+| mlp_ratio=4 | **122.6751** | **+24.97% ❌** | 111.46 (4-split, all finite) | 0.997 M (+55%) | 152 s (+19%) | 12 |
+
+Per-split val (best epoch 11):
+
+| Split | val mae_surf_p | vs baseline |
+|-------|---------------|------------|
+| `val_single_in_dist` | 205.51 | 123.14 → **+66.9% ❌** |
+| `val_geom_camber_rc` | 140.42 | 107.24 → +30.9% ❌ |
+| `val_geom_camber_cruise` | 101.58 | 73.28 → +38.6% ❌ |
+| `val_re_rand` | 119.21 | 88.99 → +33.9% ❌ |
+| **val_avg** | **122.68** | **+24.97%** |
+
+### Analysis and Conclusions
+
+**Closed — wall-clock-bound capacity addition fails (third confirmation this cycle).**
+
+**Root cause (edward's analysis, confirmed):**
+1. Wider MLP slows per-epoch wall-clock 19% (152s vs 128s). Hard 30-min cap → 12 epochs vs baseline 14.
+2. Per-epoch convergence is NOT improved with wider MLP — just more parameters fighting for the same epochs.
+3. Worst regression on val_single_in_dist (+67%) shows extra capacity is overfitting the small (1499-sample) training set within the limited epochs.
+
+**Principle reinforced (now 3× confirmed: warmup #1497, grad-clip #1499, wider-MLP #1498):** Under the 30-min wall-clock cap, the baseline at epoch 14 is still improving. Any change that costs ≥10% per-epoch time and doesn't accelerate convergence will lose 1-2 epochs and underperform. Capacity expansions must be paired with throughput recovery (BF16 — #1572 frieren in flight) or reductions elsewhere (e.g., fewer layers, smaller slice_num).
+
+**Residual opportunities (edward's suggestions):**
+1. **Throughput-neutral capacity reallocation** — reduce n_layers when increasing mlp_ratio. Reassigned: edward to test n_layers ∈ {3, 4} (reducing depth to gain epochs).
+2. mlp_ratio=3 as compromise (deferred).
+3. Higher LR with wider MLP (ViT/GPT scaling) — would need to compose with capacity addition.
+4. mlp_ratio=4 + BF16 — composable with #1572 once that completes.
+
+---
+
 ## 2026-05-13 03:25 — PR #1746: Frozen p-variance stratified sampler (CLOSED — variance-explosion failure)
 
 - **Branch:** `willowpai2g48h4-tanjiro/frozen-p-variance-stratified-sampling`
