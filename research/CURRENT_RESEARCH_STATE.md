@@ -1,10 +1,11 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~09:30 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 30 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~10:00 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 31 of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
-- **Current best (3-seed mean, paper-publishable):** val = **65.35 ± 3.37**, test = **56.68 ± 2.66** (PR #1379 — Smooth-L1 β=0.5, 3-seed). Best seed: val=62.3972, test=54.4758 (seed=1, W&B `mqf224bq`).
+- **Current best (single-seed, merged):** val = **62.0281**, test = **52.4098** (PR #1785 — max_lr=2e-3, seed=0, W&B `tqp3jpz4`). ⚠️ Single-seed — 3-seed confirmation in progress.
+- **Current best (3-seed mean, paper-publishable):** val = **65.35 ± 3.37**, test = **56.68 ± 2.66** (PR #1379 — Smooth-L1 β=0.5). Until alphonse's 3-seed confirms, this remains the paper-publishable anchor.
 
 ## Current research focus
 
@@ -43,7 +44,7 @@ The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) reg
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
-| alphonse | #1785 | OneCycleLR max_lr=2e-3 (LR ceiling probe) | WIP |
+| alphonse | #NEW | max_lr=2e-3 3-seed confirmation (seeds 1+2, seed=0 won val=62.03) | WIP |
 | askeladd | #2037 | Smooth-L1 β=0.25 — downward bracket from β=0.5, 3-seed | WIP |
 | edward | #2039 | AdamW β2=0.95 — faster 2nd-moment adaptation, 3-seed | WIP |
 | fern | #2126 | Transolver dropout=0.1 — stochastic OOD regularization, 3-seed | WIP |
@@ -73,6 +74,7 @@ The weight_decay axis is exhausted. Both wd=5e-4 (#1860) and wd=2e-5 (#1916) reg
 17. **Weight decay basin confirmed at wd=1e-4** (nezuko #1916 closed) — wd=2e-5 (5× lower) also regresses vs baseline. Both wd directions explored (5e-4 = too much regularization; 2e-5 = too little). wd=1e-4 is the optimum; weight decay axis is exhausted.
 18. **pct_start=0.10 is the Pareto point on MSE stack** (thorfinn #1944 sent back, 3-seed) — 67.34 ± 1.98 val / 58.31 ± 1.76 test vs 0.05's 68.88 ± 2.40 / 59.61 ± 2.36. **ALL 4 val splits AND all 4 test splits improve simultaneously**, std SHRINKS in both metrics, in-dist regression at 0.05 is fully eliminated, OOD gain preserved. Result needs re-run on Smooth-L1 β=0.5 stack to validate as new baseline — β=0.5 + pct_start=0.10 is the highest-value compose-able experiment available.
 19. **surf_weight=10 is a confirmed basin** (fern #2003 closed) — +50% step (surf_weight=15) is within noise of MSE baseline, mildly worse on all splits. Combined with #1390 (surf_weight=25, +20.7% catastrophic regression), the surf_weight attack class is exhausted. Both directions explored — 10 is the joint optimum for this shared-backbone + max_lr=1.5e-3 stack. Changing surf_weight changes effective surface gradient LR; any deviation from 10 either destabilizes (too high) or under-emphasizes (too low).
+20. **max_lr ceiling moves with the loss formulation** (alphonse #1785 merged, single-seed) — at MSE, max_lr=1.5e-3 was the ceiling (#1716). At Smooth-L1 β=0.5, max_lr=2e-3 delivers a further −5.1% val / −7.5% test improvement. Mechanism: L1-regime gradient capping at β=0.5 flattens the loss landscape for large residuals, making more aggressive peak LR safe. **All 4 val and 4 test splits improve uniformly** (not a single-split effect). 3-seed confirmation in progress.
 
 ## Potential next research directions
 

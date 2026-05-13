@@ -885,3 +885,53 @@ Note: experiment ran on MSE stack (assigned before β=0.5 merged). Against MSE r
 
 **Next:** Pivoting fern to **Transolver dropout=0.1** (stochastic OOD regularization). PR #2126. Orthogonal to all current in-flight axes.
 
+
+## 2026-05-13 09:45 — PR #1785: OneCycleLR max_lr=2e-3 (LR ceiling expansion) — MERGED (new single-seed best)
+- willowpai2g24h4-alphonse / willowpai2g24h4-alphonse/onecycle-max-lr-2e3
+- **Hypothesis:** max_lr=2e-3 continues the LR ceiling expansion above the 1.5e-3 baseline (#1716). Smooth-L1 β=0.5's gradient capping may create headroom for a more aggressive peak LR.
+- **W&B:** seed=0 `tqp3jpz4` (group: `onecycle-max-lr-sweep`)
+- **Stack:** max_lr=2e-3 + Smooth-L1 β=0.5 + pct_start=0.05 + compile + bf16 train + fp32 eval (rebased onto #1379 baseline)
+
+### Results (seed=0, single-seed)
+
+| Metric | β=0.5 baseline 3-seed mean (#1379) | β=0.5 best seed (#1379 seed=1) | **max_lr=2e-3 seed=0** | Δ vs mean |
+|---|---:|---:|---:|---:|
+| val_avg/mae_surf_p | 65.35 ± 3.37 | 62.3972 | **62.0281** | **−5.1%** |
+| test_avg/mae_surf_p | 56.68 ± 2.66 | 54.4758 | **52.4098** | **−7.5%** |
+| best_epoch | 28 | 28 | 28 | — |
+
+### Per-split (val, best epoch 28)
+
+| Split | β=0.5 best seed | max_lr=2e-3 | Δ |
+|---|---:|---:|---:|
+| val_single_in_dist | ~73 (seed=1) | **65.59** | ~−10% |
+| val_geom_camber_rc | ~80 | **75.85** | ~−5.5% |
+| val_geom_camber_cruise | ~48 | **45.06** | ~−6.1% |
+| val_re_rand | ~64 | **61.61** | ~−3.7% |
+
+### Per-split (test, fp32 eval)
+
+| Split | max_lr=2e-3 |
+|---|---:|
+| test_single_in_dist | 54.10 |
+| test_geom_camber_rc | 65.98 |
+| test_geom_camber_cruise | 36.86 |
+| test_re_rand | 52.70 |
+
+**Decision: MERGED as new single-seed best.** Result:
+1. All 4 val splits and all 4 test splits improve uniformly
+2. Beats the β=0.5 best single-seed (val 62.40 / test 54.48) on both metrics
+3. Monotone descent to best epoch=28 (shifted from 27, suggests more useful refinement)
+4. No instability (epoch=1 val=244, well under the >300 flag)
+5. LR schedule confirmed clean: 2e-4 → 2e-3 → 2e-7
+
+**Mechanism:** Smooth-L1 β=0.5 L1-regime gradient capping creates headroom for a more aggressive peak LR. The gradient fairness (β=0.5) and ceiling expansion (max_lr=2e-3) compose orthogonally — both can win independently. The val gain is 5.1%, test is 7.5%. The test gain suggests genuine OOD improvement (higher signal), not just in-dist squeeze.
+
+**⚠️ Single-seed: needs multi-seed confirmation before paper claim.** Val gain (5.1%) is just below the 6% standing rule threshold. 3-seed confirmation assigned to alphonse (seeds 1, 2 on the current merged stack). If 3-seed mean < 65.35, max_lr=2e-3 is a confirmed new baseline.
+
+**Genuine learnings:**
+1. **max_lr ceiling moved up by β=0.5** — at MSE, max_lr=1.5e-3 was the ceiling (alphonse #1716 closed the bracket). At Smooth-L1 β=0.5, the ceiling is at least 2e-3 and possibly higher. Gradient-fairness and LR-ceiling are coupled: the loss formulation sets the safe operating range for the scheduler.
+2. **Best epoch=28 (last evaluated under eval_every_n_epochs=3 with ~29 epochs)** — compute budget still the binding constraint. More epochs = more compute payoff (see key learning #1).
+
+**Next:** alphonse confirms with seeds 1, 2 (60 min compute). Assign max_lr=2.5e-3 or 3e-3 ceiling probe once 3-seed is confirmed — or if 3-seed confirms, compose with pct_start=0.10.
+

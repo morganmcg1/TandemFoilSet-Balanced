@@ -8,11 +8,11 @@
 | | |
 |---|---|
 | Optimizer | AdamW |
-| LR / Scheduler | OneCycleLR(max_lr=1.5e-3, total_steps=29×steps/ep, pct_start=0.05, div_factor=10, final_div_factor=1e3) |
+| LR / Scheduler | OneCycleLR(**max_lr=2e-3**, total_steps=29×steps/ep, pct_start=0.05, div_factor=10, final_div_factor=1e3) |
 | Weight decay | 1e-4 |
 | Batch size | 4 |
 | Epochs | 50 (capped at 30 min wall); eval_every_n_epochs=3 |
-| Loss | MSE, `vol_loss + 10 * surf_loss` |
+| Loss | Smooth-L1 (Huber), β=0.5, `vol_loss + 10 * surf_loss` |
 | Model | Transolver, n_hidden=128, n_layers=5, n_head=4, slice_num=128, mlp_ratio=2 |
 | Compile | torch.compile(model, mode="default", dynamic=True) |
 | Precision | bf16 autocast train, **fp32 eval (no autocast)**, grad_clip_norm=1.0 |
