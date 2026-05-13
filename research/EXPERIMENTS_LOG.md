@@ -108,6 +108,7 @@ All 4 splits improve — uniform-direction architectural WIN, not bimodal.
 
 | PR | Student | Hypothesis | Round |
 |---|---|---|---|
+| #2298 | thorfinn | n_layers=4 --epochs 90 (budget-extrapolation diagnostic; no code changes) | round-39 final |
 | #2290 | frieren | n_hidden 128→96 (--epochs 90; width-down; ~40-45% per-epoch savings; ~330K params) | round-39 addendum |
 | #2289 | nezuko | n_layers 4→3 (--epochs 75; depth-down continuation; ~25% per-epoch savings; ~450K params) | round-39 addendum |
 | #2283 | alphonse | Squared ReLU (ReLU²) at all 3 MLP sites — Primer-style sharp activation, opposite-direction probe of closed SiLU LOSS | round-39 |
