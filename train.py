@@ -250,10 +250,10 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             pred = model({"x": x_norm})["preds"]
 
-            # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
+            # Smooth L1 normalized-space loss, beta=0.05, channel-weighted [1,1,3]/5
             err = pred - y_norm
             abs_err = err.abs()
-            beta = 0.1
+            beta = 0.05
             huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
             weighted = huber * channel_weights
             vol_mask = safe_mask & ~is_surface
@@ -465,10 +465,10 @@ for epoch in range(MAX_EPOCHS):
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         pred = model({"x": x_norm})["preds"]
 
-        # Smooth L1 normalized-space loss, beta=0.1, channel-weighted [1,1,3]/5
+        # Smooth L1 normalized-space loss, beta=0.05, channel-weighted [1,1,3]/5
         err = pred - y_norm
         abs_err = err.abs()
-        beta = 0.1
+        beta = 0.05
         huber = torch.where(abs_err < beta, 0.5 * err.pow(2) / beta, abs_err - 0.5 * beta)
         weighted = huber * channel_weights
         vol_mask = mask & ~is_surface
