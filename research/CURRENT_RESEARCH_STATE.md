@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 14:10 (closed #2243 edward β=0.2 + #2170 nezuko n=32; assigned #2347 edward drop-grad-clip-Lion + #2354 nezuko n_hidden=192-Lion)
+- **Last updated:** 2026-05-13 14:19 (closed #2240 frieren GC; assigned #2363 frieren Lion + warmup-3 — built on frieren's own early-oscillation diagnostic)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -54,14 +54,14 @@
 |---|---|---|---|---|
 | **#2297** | **askeladd** | wip | Lion lr sweep {2e-4, 4e-4, 5e-4} | Fine-bracket the winning lr=3e-4 |
 | #2168 | thorfinn | wip (rebase sent) | σ=0.5 on β=0.3 stack | Needs further rebase to Lion baseline now |
-| #2240 | frieren | wip | GC on β=0.3 | Needs rebase to Lion after finishing |
 | **#2311** | **fern** | wip | Hybrid Lion+AdamW-for-σ on Lion stack | Restores Kendall σ differentiation |
 | #2270 | alphonse | wip | max_norm {0.75, 1.0} on β=0.3 | Needs rebase to Lion after finishing |
 | **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
-| **#2347** | **edward** | wip (new) | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
-| **#2354** | **nezuko** | wip (new) | n_hidden=192 (larger model) on Lion stack | Exploit Lion's capacity-scaling property |
+| **#2347** | **edward** | wip | max_norm ∈ {0.0, 2.0} on Lion stack | Drop/relax grad-clip — clip fires 74% under Lion sign-update |
+| **#2354** | **nezuko** | wip | n_hidden=192 (larger model) on Lion stack | Exploit Lion's capacity-scaling property |
+| **#2363** | **frieren** | wip (new) | Lion + linear warmup 3 epochs | Fix early-epoch oscillation diagnosed in #2240; Lion paper recommends warmup |
 
-**⚠ Mixed rebase status:** Wave 11 has 4 direct-Lion experiments (#2297, #2311, #2342, #2347, #2354) and 3 remaining β=0.3-stack PRs needing eventual Lion rebase (#2168, #2240, #2270). Triage rule: when β=0.3-stack PRs complete, evaluate result vs Lion baseline (47.64). If <47.64: merge directly. If 47.64-66.66: send back for Lion rebase. If ≥66.66: close.
+**⚠ Mixed rebase status:** Wave 11 has 6 direct-Lion experiments (#2297, #2311, #2342, #2347, #2354, #2363) and 2 remaining β=0.3-stack PRs needing eventual Lion rebase (#2168, #2270). Triage rule for legacy PRs: when result lands vs β=0.3 baseline 66.66, evaluate vs Lion baseline 47.64. If <47.64: merge directly. If 47.64-66.66: send back for Lion rebase. If ≥66.66: close.
 
 ## Key banked mechanisms
 
@@ -74,6 +74,8 @@
 7. **LayerScale γ=1e-4 fails at 5 layers** — ReZero γ=1.0 is the fix (#2269 fern)
 8. **β=0.3 = β optimum, axis CLOSED** — β=0.1 (#2171) regressed +7.5%, β=0.2 (#2243) flat on val/+0.46% on test. Both directions exhausted. Edward's Kendall σ-relaxation mechanism confirmed (lower β → all 6 log_σ drift toward uniform).
 9. **RFF spectral-dim axis CLOSED at n=16** — n=32 (#2170) gave mixed val/test direction; banked SWA-window-gating mechanism (timeout limits useful averaging) directly feeds tanjiro's #2342.
+10. **Gradient Centralization axis CLOSED at small-data regime** — frieren #2240 cleanly disproved transfer from ImageNet (clip_fraction unchanged, SWA basin disrupted, OOD prediction direction opposite). Three banked findings inform follow-ups.
+11. **clip_fraction=100% under default max_norm=0.5** — corroborated by frieren #2240 and edward's planning for #2347. Strong evidence max_norm=0.5 is over-constraining (whether under AdamW or Lion).
 
 ## Key open bottlenecks
 
@@ -103,7 +105,8 @@
 - Hybrid Lion+AdamW for Kendall σ (#2311 fern) — restore σ differentiation
 - Drop grad-clip on Lion (#2347 edward) — clip fires 74% under sign-update
 - Lion + n_hidden=192 (#2354 nezuko) — capacity scaling
+- Lion + linear warmup 3 epochs (#2363 frieren) — fix early-oscillation
 - σ=0.5 on β=0.3 (#2168 thorfinn) — will need Lion rebase after completing
-- GC (#2240 frieren), max_norm {0.75,1.0} (#2270 alphonse) — need Lion rebase when done
+- max_norm {0.75,1.0} (#2270 alphonse) — need Lion rebase when done
 
 ### ✗ Closed (25+ axes) — see prior entries

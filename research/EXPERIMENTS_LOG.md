@@ -2751,3 +2751,46 @@ Per-epoch trajectory observed: EMA briefly overtook base val at epoch 11 (76.92 
 - **Single arm:** n_hidden 128 → 192 (1.5×) — predicted ~1.5-1.8M params, VRAM ~65-70 GB.
 - **Code change:** Add `--n_hidden` CLI flag (default -1 = use 128). Wire into model_config and wandb logging.
 - **Target:** val < 47.64. Predict 2-5% improvement if Lion's capacity-scaling hypothesis holds.
+
+---
+## 2026-05-13 14:15 — PR #2240 CLOSED willowpai2g48h2-frieren (Gradient Centralization on β=0.3+RFF+Kendall)
+
+- **Branch:** `willowpai2g48h2-frieren/gradient-centralization-on-beta0p3`
+- **Hypothesis:** GC (Yong 2020) zero-centers gradient rows to reduce variance + improve OOD generalization.
+- **Results (terminal, W&B run `t1d1vxsm`):**
+
+| Metric | β=0.3 baseline | GC | Δ |
+|---|---:|---:|---:|
+| swa_val_avg/mae_surf_p | 66.66 | 70.12 | +5.18% regression |
+| swa_test_avg/mae_surf_p | 58.32 | 61.45 | +5.36% regression |
+| base val (best, epoch 13) | 68.05 | 69.79 | +2.56% |
+
+**vs current Lion baseline (47.64/40.57):** +47% / +51% — far outside merge bracket.
+
+### Per-split SWA val (PR decision criteria)
+- val_single_in_dist: 74.62 → 80.28 (+5.66) ← largest regression on most in-dist split
+- val_geom_camber_rc: 79.81 → 85.04 (+5.23) ← OOD split, also regressed
+- val_geom_camber_cruise: 44.65 → 46.75 (+2.10)
+- val_re_rand: 67.57 → 68.39 (+0.82)
+
+### Three banked mechanism findings (excellent diagnostic work)
+
+1. **GC hook verified working** — grad row-mean abs 1.5e-3 → 3.3e-10 after hook on 56 weight tensors. Null is genuine.
+2. **GC ≠ clip-frequency reducer.** Clip_fraction=100% in BOTH baseline and GC; grad_norm_mean essentially identical (11.36 vs 11.25). GC zero-centers rows but doesn't reduce L2 norm → global-norm clipping unaffected. PR mechanism prediction wrong.
+3. **GC disrupts SWA basin geometry.** Baseline SWA improves over best-base by −1.39; GC SWA *degrades* by +0.33. GC's removed gradient DOF prevents late-epoch checkpoints from spreading across the flat basin SWA needs. Strong signal that GC perturbs the geometry SWA relies on.
+
+### Bonus banked finding (cross-experiment)
+
+Frieren independently noted clip_fraction=100% in baseline → corroborates edward's #2347 hypothesis (drop grad-clip on Lion). Two students reaching same diagnostic from different angles.
+
+**GC axis CLOSED at small-data regime.** Yong et al.'s ImageNet-scale gains don't transfer to TandemFoilSet's 1.5K-sample × 0.76M-param overparameterized regime.
+
+---
+## 2026-05-13 14:19 — PR #2363 ASSIGNED willowpai2g48h2-frieren (Lion + linear warmup 3 epochs)
+
+- **Branch:** `willowpai2g48h2-frieren/lion-linear-warmup`
+- **Hypothesis:** Frieren's #2240 epoch-by-epoch trace showed strong early-epoch oscillation (epoch 1: val=189.70, epoch 6→7 regression at lr≈2.8e-4). Combined with clip_fraction=100% diagnostic, this is the textbook signature for warmup helping. Lion paper (Chen 2023) explicitly recommends longer warmup.
+- **Code change:** Add `--warmup_epochs` CLI flag. Use SequentialLR(LinearLR + CosineAnnealingLR). Adjust swa_start_epoch to skip warmup region. Use eta_min=lr*0.05.
+- **Single arm:** warmup_epochs=3, cosine T_max=12 over remaining epochs.
+- **Target:** val < 47.64. Builds directly on frieren's domain expertise from #2240 diagnostic.
+- Independent axis from tanjiro's #2342 (T_max sweep, no warmup) and edward's #2347 (drop grad-clip) — all three target the same lr-schedule region with different mechanisms.
