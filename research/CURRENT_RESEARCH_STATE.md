@@ -34,9 +34,9 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). The R
 | alphonse | #2308 | cosine-tmax-12 | T_max=14→12 cosine schedule recalibration | IN FLIGHT |
 | edward | #2309 | hybrid-fourier-dyadic-rff | Dyadic L=6 + Gaussian RFF m=6 σ=1.0 concatenated Fourier encoder | IN FLIGHT |
 | frieren | #2312 | learned-fourier-freqs | FourierCoordEnc.freqs as nn.Parameter (dyadic init) | IN FLIGHT |
-| thorfinn | NEW | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | ASSIGNED |
-| fern | NEW | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | ASSIGNED |
-| nezuko | NEW | stoch-depth-0.05 | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | ASSIGNED |
+| thorfinn | #2359 | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | ASSIGNED |
+| fern | #2360 | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | ASSIGNED |
+| nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | ASSIGNED |
 
 ## Key findings from Wave 13/14/15
 
