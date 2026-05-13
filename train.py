@@ -113,13 +113,16 @@ class FourierCoordEnc(nn.Module):
                                   already normalized by stats["x_mean"], stats["x_std"]).
     Output shape: [B, N, in_dim + (4*n_freqs - 2)]  -- 2 coord dims replaced by 4*n_freqs
                                                        Fourier features.
+
+    Freqs are learnable (dyadic init), trained with their own optimizer group
+    (10x lr, no weight decay) and clamped to [0.1, 100] after each step.
     """
 
     def __init__(self, n_freqs: int = 4):
         super().__init__()
         self.n_freqs = n_freqs
         freqs = 2.0 ** torch.arange(n_freqs).float()
-        self.register_buffer("freqs", freqs)
+        self.freqs = nn.Parameter(freqs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         coords = x[..., :2]
@@ -476,9 +479,11 @@ model_config = dict(
 )
 
 model = Transolver(**model_config).to(device)
-n_params = sum(p.numel() for p in model.parameters())
-print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
-print(f"n_params: {n_params}")
+n_model_params = sum(p.numel() for p in model.parameters())
+n_fourier_params = sum(p.numel() for p in fourier_enc.parameters())
+n_params = n_model_params + n_fourier_params  # includes 6 learnable freqs
+print(f"Model: Transolver ({n_model_params/1e6:.2f}M params) + FourierCoordEnc ({n_fourier_params} freqs)")
+print(f"n_params (total trainable): {n_params}")
 swiglu_inner_dim = model.blocks[0].mlp.inner_dim
 print(f"SwiGLU inner_dim: {swiglu_inner_dim}, total_params: {n_params}")
 # H39: ReGLU gate sanity check (ReLU = max(0,x))
@@ -495,7 +500,33 @@ for i, b in enumerate(model.blocks):
         f"layer_scale_mlp init avg={b.layer_scale_mlp.mean().item():.4f}"
     )
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+# H40: learned Fourier freqs in a separate param group with 10x lr and no weight decay.
+# Other params: lr=cfg.lr, wd=cfg.weight_decay; freqs: lr=10*cfg.lr, wd=0.
+# Rationale: default wd=1e-4 pulls freqs toward 0 each step, and the global lr=5e-4
+# was too small to move them off their dyadic init (top freqs essentially fixed in #2312).
+freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
+other_params = list(model.parameters())
+assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
+    f"Expected 1 freq tensor with {N_FREQS} elems, "
+    f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
+)
+assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in other_params) == (
+    sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
+)
+optimizer = torch.optim.AdamW(
+    [
+        {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+        {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+    ],
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+)
+print(
+    f"[H40] Optimizer param groups: "
+    f"other lr={optimizer.param_groups[0]['lr']:.2e} wd={optimizer.param_groups[0]['weight_decay']:.0e}, "
+    f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
+)
+print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -564,8 +595,14 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
-        total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)
+        # H40: clip both model and fourier_enc params together (freqs included).
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            list(model.parameters()) + list(fourier_enc.parameters()), max_norm=25.0
+        )
         optimizer.step()
+        # H40: keep freqs bounded after the update. Safety net for the higher freqs lr.
+        with torch.no_grad():
+            fourier_enc.freqs.clamp_(0.1, 100.0)
         scheduler.step()
 
         epoch_vol += vol_loss.item()
@@ -598,6 +635,8 @@ for epoch in range(MAX_EPOCHS):
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     current_lr = optimizer.param_groups[0]["lr"]
+    freqs_lr = optimizer.param_groups[1]["lr"]
+    freqs_now = fourier_enc.freqs.detach().cpu().tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -605,6 +644,8 @@ for epoch in range(MAX_EPOCHS):
         "peak_memory_gb": peak_gb,
         "lr": current_lr,
         "train/current_lr": current_lr,
+        "train/freqs_lr": freqs_lr,
+        "train/freqs": freqs_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/last_grad_norm": float(total_norm),
@@ -616,6 +657,10 @@ for epoch in range(MAX_EPOCHS):
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"    freqs (lr={freqs_lr:.2e}): "
+        f"[{', '.join(f'{v:.4f}' for v in freqs_now)}]"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
@@ -630,7 +675,21 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-append_metrics_jsonl(metrics_jsonl_path, {"event": "final", **final_layer_scale_stats})
+# H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
+final_freqs = fourier_enc.freqs.detach().cpu().tolist()
+init_freqs = [2.0**k for k in range(N_FREQS)]
+freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
+freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
+freqs_summary = {
+    "final/freqs": final_freqs,
+    "final/freqs_init": init_freqs,
+    "final/freqs_abs_drift": freq_drift,
+    "final/freqs_rel_drift": freq_rel_drift,
+}
+append_metrics_jsonl(
+    metrics_jsonl_path,
+    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+)
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
     print(
@@ -638,6 +697,12 @@ for i in range(len(model.blocks)):
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
+print("[H40] Final learned freqs vs dyadic init:")
+for k in range(N_FREQS):
+    print(
+        f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
+        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
     )
 
 # --- Test evaluation + local summary ---
