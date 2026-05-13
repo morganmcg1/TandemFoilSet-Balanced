@@ -1617,3 +1617,64 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - **Distinct from active optimization axes:** askeladd #2159 (peak LR amplitude), frieren #2160 (weight_decay), alphonse #2000 (schedule shape), grad-clip axis (closed at 2.5). beta_2 is the variance-tracking axis, untouched.
 - **Two outcomes:** (A) WIN ~1-3% val MAE reduction — faster adaptation tracks the high-clip-rate regime (98.9% saturation at grad-clip=2.5); (B) FAIL ~2-5% val MAE increase — variance estimate too noisy at beta_2=0.95 for small-batch mesh-node scale, late-training LR-effective instability.
 - **Diagnostics:** clip rate (predict similar 98.9%, beta_2 doesn't directly change grad magnitudes), val/train gap (predict slight widening if variance-tracking is noisier), EMA-live gap (predict similar −12 to −13 baseline).
+
+## 2026-05-13 15:15 — PR #2066: tanjiro n_hidden=224 + grad-clip=2.5 compound confirmation — CLOSED (critical negative finding)
+
+- Branch: `willowpai2g48h5-tanjiro/n-hidden-224-compound-confirm`
+- Hypothesis: PRIORITY confirmation run. Directly measure the combined state from PR #1982 (grad-clip=2.5 at n_hidden=192) and PR #2023 (n_hidden=224 at grad-clip=5.0). Predicted compound val ≈ 50-52 if mechanisms are additive.
+- W&B run: `r4kgwypm` (after recovery from initial CUDA OOM during torch.compile warmup on first attempt; killed PID 88784, relaunched PID 93215)
+
+### Results — compound state WORSE than n_hidden=192 baseline
+
+| Metric | #2066 (n=224 + clip=2.5) | #1982 baseline (n=192 + clip=2.5) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **54.3382** | **52.6406** | **+3.22% REGRESSION** |
+| test_avg/mae_surf_p | **47.1909** | **44.9791** | **+4.92% REGRESSION** |
+| Epochs reached | 29/50 | 33/50 | −12% |
+
+**All 4 test splits regress** uniformly: in_dist 53.69 (+7.7%), camber_rc 60.78 (+5.2%), camber_cruise 29.14 (+0.7%), re_rand 45.15 (+4.2%). Uniformity with largest hit on the easiest split (in_dist) is the signature of under-converged training, not inductive-bias clash.
+
+### Mechanism — throughput-induced epoch deficit + cosine misalignment
+
+1. **n=224 → 12% slower epochs** (61.83 s vs ~54 s at n=192). Run cut at 29/50 epochs by 30-min cap.
+2. **Cosine LR at termination is higher**: at epoch 29 of T_max=50 cosine, LR=37.6% of base (vs 25.9% at epoch 33 in baseline). The wider net never enters cosine's quiet annealing tail.
+3. **Larger raw gradient norms × tighter clip**: norm_mean +5.8% (18.88 vs 17.85), clip rate 99.31% (vs 98.93%), mean downscaling 7.55× (vs 7.14×). Even more aggressive clipping at the wider net, compounding the under-convergence.
+4. **EMA-live gap intact** (−7.69 here, −8.32 at #1953, −6.18 at #2023 stale measurement). EMA shadow is doing its job; the *trajectory itself* is the problem.
+
+### Critical implication: PR #2023 win was protocol-stale
+
+The PR #2023 (n_hidden=224) "win" at val=53.25 was measured under the OLD grad-clip=5.0 threshold. Direct measurement under the post-#1982 stack proves n_hidden=192 is the TRUE optimum. The cumulative compounding table in BASELINE.md should be read as: PR #1982 is the actual current best; PR #2023's measured value does not transfer to the current stack.
+
+### Width axis bracketed at n_hidden=192 under 30-min budget × T_max=50 cosine
+
+| n_hidden | grad-clip | val | Epochs | Verdict |
+|---|---|---|---|---|
+| 128 | 5.0 | 55.76 | 30/30 | superseded by 192 |
+| **192** | **2.5** | **52.64** | **33/50** | **TRUE OPTIMUM** |
+| 224 | 5.0 (stale) | 53.25 | 29/50 | protocol-stale |
+| 224 | 2.5 | 54.34 | 29/50 | runtime ceiling |
+| 256 | 2.5 | 54.57 | 27/50 | runtime ceiling |
+
+### Suggested follow-ups from student (excellent diagnostic)
+
+1. T_max=30 at n_hidden=224 (re-align cosine to realized budget)
+2. n_hidden=192 + grad-clip=2.5 + T_max=30 (disentangle width vs schedule)
+3. n_hidden=208 half-step
+
+→ Assigning #2 variant: **--epochs 33** at n_hidden=192 (perfectly align T_max with realized 33-epoch budget, at the WINNING width).
+
+## 2026-05-13 15:15 — PR #2199: tanjiro assigned --epochs 33 cosine schedule alignment
+
+- Branch: `willowpai2g48h5-tanjiro/epochs-33-cosine-aligned`
+- Hypothesis: Cosine schedule mismatch with realized epoch budget. At fixed 30-min budget on n_hidden=192, the model reaches 33/50 epochs and cosine LR is still at ~26% of base — never enters the quiet annealing tail. Test T_max=epochs=33 alignment: cosine fully decays to zero by epoch 33, perfectly matching realized budget.
+- Reproduce: `--n_hidden 192 --n_layers 3 --epochs 33`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Distinct from alphonse #2000 (T_max=80):** opposite direction — extend cosine, keep LR high. These two test direct opposites; at most one wins.
+- **Three outcomes:** (A) val<52.64 win, late-phase low-LR refinement matters; (B) wash, misalignment was minor; (C) val>53.5 fail, LR=0 final phase hurts.
+- **Diagnostics:** LR at termination (predict ~0), clip rate (predict ~98.9% similar), EMA-live gap (predict tighter than −8.32 if late-phase quiet annealing helps), val slope at ep 33 (predict near 0 if fully converged).
+
+## 2026-05-13 15:15 — PR #2000 alphonse second ping (retest stalled 6h)
+
+- Branch: `willowpai2g48h5-alphonse/t-max-80-schedule-push`
+- Status: Sent back at 08:57 UTC for retest at grad-clip=2.5 stack. Branch HEAD is still the original 06:53 UTC assignment marker (no retest commit). Pod healthy (0 restarts). Issued second ping with restart command at 15:15 UTC.
+- Also notified student that #2066 finding confirms `--n_hidden 192` (already in their send-back command) is the TRUE optimal width.
