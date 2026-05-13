@@ -34,9 +34,9 @@ The compound stack has 15 merged wins (100.957 → 62.949 = **−37.7%**). Three
 | thorfinn | #2359 | squared-relu-gate | F.relu(x)^2 gate in SwiGLUMLP — Primer-style monotonic continuation of ReGLU win | IN FLIGHT |
 | fern | #2360 | reglu-inner-dim-288 | ReGLU + inner_dim=288: bisect between 256 (win) and 320 (B) on current ReGLU stack | IN FLIGHT |
 | nezuko | #2361 | stoch-depth-0.05-reglu | Reduce max stoch-depth from 0.10 to 0.05 — ReGLU sparsity may reduce need for explicit drop | IN FLIGHT |
-| askeladd | TBD | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | ASSIGNING |
-| edward | TBD | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | ASSIGNING |
-| frieren | TBD | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | ASSIGNING |
+| askeladd | #2368 | flow-cond-film | FiLM γ/β = MLP(log_Re,AoA0,AoA1) modulation of TransolverBlock activations | ASSIGNED |
+| edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | ASSIGNED |
+| frieren | #2370 | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | ASSIGNED |
 
 ## Key findings from Wave 13/14/15/16
 
