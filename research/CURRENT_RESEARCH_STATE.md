@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 09:10
+- **Date:** 2026-05-13 09:45
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
@@ -18,7 +18,7 @@ Floor progression: 122.70 → 111.15 → 105.68 → 85.93 → **84.54**
 
 | PR | Student | Hypothesis | Lever | Status |
 |---|---|---|---|---|
-| #1536 | askeladd | NaN guard + clean floor rerun | Bug fix | Rebasing onto AMP |
+| #2140 | askeladd | bs=8 with AMP bf16: lr=7.5e-4 and lr=1e-3 | Batch scaling | Just assigned |
 | #1947 | alphonse | chan_w sweep: [1,1,3] vs [1,1,7] under β=0.3 | Loss tuning | Rebasing onto AMP |
 | #1927 | edward | Huber β=0.1 | Loss tuning | Rebasing onto AMP |
 | #1489 | thorfinn | AoA flip p=0.25 | Augmentation | Rebasing onto AMP |
@@ -35,6 +35,7 @@ Floor progression: 122.70 → 111.15 → 105.68 → 85.93 → **84.54**
 - **#1751 (frieren T_max=12) MERGED**: val_avg 105.68→85.93 (−18.7%). Schedule calibration was the dominant lever.
 - **#1891 (tanjiro OneCycleLR) CLOSED**: +3.32% regression. Structurally mismatched to 14-epoch budget.
 - **#1927 (edward β=0.1) SENT BACK**: val=85.57 beats old floor 85.93 but below new fern floor 84.54. Needs rebase onto AMP.
+- **#1536 (askeladd NaN guard) CLOSED**: Superseded by AMP floor's non-finite-y prefilter (#1477). Askeladd reassigned to bs=8 + AMP sweep (#2140).
 
 ## Key findings so far
 
