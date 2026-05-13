@@ -17,7 +17,7 @@ winner sets the first numeric reference value.
   - `out_dim = 3` (`Ux`, `Uy`, `p`)
   - `unified_pos = False`
 - **Optimizer**: AdamW (`lr = 5e-4`, `weight_decay = 1e-4`)
-- **LR schedule**: CosineAnnealingLR with `T_max = 15` (aligned to actual training horizon under 30 min cap) _(updated 2026-05-12 by PR #1611)_
+- **LR schedule**: `SequentialLR([LinearLR(start_factor=1/total_warmup_iters, total_iters=total_warmup_iters), CosineAnnealingLR(T_max=T_max_iters)])` with `total_warmup_iters=batches_per_epoch` (epoch-1 linear ramp to lr=5e-4) + `T_max_iters=14*batches_per_epoch` (cosine decay over 14 epochs), `scheduler.step()` per batch. _(updated 2026-05-13 by PR #1754, was plain CosineAnnealingLR T_max=15 step-per-epoch from PR #1611)_
 - **Loss**: **L1 (MAE) in normalized target space**, `loss = vol_loss + surf_weight * surf_loss`, `surf_weight = 10.0` _(updated 2026-05-12 by PR #1397)_
 - **Stochastic depth**: per-block drop probs `[0.0, 0.025, 0.05, 0.075, 0.10]` (linear schedule, last layer is the output head and never dropped) _(added 2026-05-12 by PR #1552)_
 - **`evaluate_split` NaN-safe pre-filter**: skip samples with non-finite `y` before `accumulate_batch` to keep the 4-split test mean finite despite the `test_geom_camber_cruise/000020.pt` data bug _(added 2026-05-12 by PR #1552)_
@@ -36,6 +36,30 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 10:05 — PR #1754 (`charliepai2g24h4-nezuko/lr-warmup-h19`)
+
+Linear LR warm-up over epoch 1 (per-batch LinearLR) followed by cosine decay T_max=14 epochs (SequentialLR). Addresses the ep1 grad-norm spike seen on the compound stack; orthogonal to all prior merged components. Per-split gain concentrated on OOD-geom-cruise (−2.94% val / −5.51% test) and Re-rand (−1.59% val / −4.06% test) — the splits where LayerScale init=0.025 sacrificed OOD coverage; warmup rescues them by giving γ_l a more stable starting trajectory.
+
+- **`val_avg/mae_surf_p`** = **73.958** (best @ epoch 14; −0.61% vs #2018)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **64.502** (−1.56% vs #2018)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 81.293 (+0.48% vs #2018)
+  - `val_geom_camber_rc` = 85.285 (+0.79% vs #2018)
+  - `val_geom_camber_cruise` = 56.390 (−2.94% vs #2018)
+  - `val_re_rand` = 72.862 (−1.59% vs #2018)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 71.563 (+1.33% vs #2018)
+  - `test_geom_camber_rc` = 74.317 (+0.62% vs #2018)
+  - `test_geom_camber_cruise` = 46.766 (−5.51% vs #2018)
+  - `test_re_rand` = 65.362 (−4.06% vs #2018)
+- **Mechanism**: warmup recovers LayerScale-0.025 OOD degradation — the per-batch linear ramp over epoch 1 reduces ep1 grad-norm, giving γ_l parameters a stable starting trajectory before cosine peaks; OOD-geom-cruise and Re-rand splits gain the most (the same splits that LayerScale-0.025 regressed on vs #1896). Test gain (−1.56%) exceeds val gain (−0.61%) consistent with original pre-rebase run.
+- **Compound progress**: 11 merges, **100.957 → 73.958 = −26.7%** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→**#1754**)
+- **Param count**: 669,271 (unchanged — zero new parameters; schedule change only).
+- **Metric artifacts**: `models/model-charliepai2g24h4-nezuko-lr-warmup-h19-20260513-075103/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-nezuko --experiment_name charliepai2g24h4-nezuko/lr-warmup-h19-rebased`
+
+---
 
 ### 2026-05-13 08:30 — PR #2018 (`charliepai2g24h4-thorfinn/layerscale-init-0.025`)
 
