@@ -100,6 +100,8 @@ class PhysicsAttention(nn.Module):
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        self.q_norm = nn.RMSNorm(dim_head)
+        self.k_norm = nn.RMSNorm(dim_head)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
     def forward(self, x, mask=None):
@@ -127,8 +129,8 @@ class PhysicsAttention(nn.Module):
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
 
-        q = self.to_q(slice_token)
-        k = self.to_k(slice_token)
+        q = self.q_norm(self.to_q(slice_token))
+        k = self.k_norm(self.to_k(slice_token))
         v = self.to_v(slice_token)
         out_slice = F.scaled_dot_product_attention(
             q, k, v,
