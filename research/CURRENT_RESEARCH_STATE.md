@@ -30,11 +30,11 @@ Round 1 in-flight (8 PRs):
 - **#1735 alphonse (SwiGLU FFN)**: from Huber baseline, pre-bf16 — compile heads-up posted (third baseline shift on this branch)
 - **#1589 tanjiro (AdamW betas)**: from pre-mask — compile heads-up posted (fourth baseline shift)
 - **#1692 fern (grad_clip=1.0)**: from mask-aware baseline, pre-Huber — compile heads-up posted (third baseline shift on this branch)
-- **#1843 nezuko (Cosine T_max=18)**: bf16 baseline — **target should shift to T_max=35** on compile
+- **#1843 nezuko (Cosine T_max=35)**: bf16 baseline, T_max confirmed at 35 on compile
 - **#1882 askeladd (Huber β=0.75)**: bf16 baseline — compile heads-up posted (one baseline shift)
 - **#1910 thorfinn (Volume Huber β=0.5)**: bf16 baseline — compile heads-up posted (one baseline shift)
-- **#1939 edward (mlp_ratio=2 → 4 retry)**: current compile baseline (just assigned, highest-priority bf16-revisit candidate)
-- **#1940 frieren (batch_size=8 + sqrt-LR scaling)**: current compile baseline (just assigned, follow-up #2 from frieren's #1810)
+- **#1940 frieren (batch_size=8 + sqrt-LR scaling)**: current compile baseline (follow-up #2 from frieren's #1810)
+- **#2017 edward (weight_decay 1e-4 → 5e-4)**: current compile baseline (just assigned; compute-cheap regularization-axis test after #1939 retired the scalar-capacity axes)
 
 All got compile heads-up. **New merge bar: val < 67.83, test < 59.78, all four test splits finite.**
 
@@ -70,31 +70,33 @@ All got compile heads-up. **New merge bar: val < 67.83, test < 59.78, all four t
 | #1843 | nezuko    | Cosine T_max=18 (not 50)         | WIP, bf16 baseline — heads-up to retarget T_max=35 on compile |
 | #1882 | askeladd  | Huber β=0.75 (β-tune from above) | WIP, bf16 baseline, compile heads-up posted |
 | #1910 | thorfinn  | Volume Huber β=0.5               | WIP, bf16 baseline, compile heads-up posted |
-| #1939 | edward    | mlp_ratio 2→4 retry on compile   | WIP, current compile baseline (just assigned) |
-| #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | WIP, current compile baseline (just assigned) |
+| #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
+| #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | WIP, current compile baseline |
+| #2017 | edward    | weight_decay 1e-4 → 5e-4         | WIP, current compile baseline (just assigned) |
 
-**Merged:** 4 (mask-aware, Huber β=0.5, bf16, compile). **Closed:** 8 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, **width=192-on-bf16 #1506**). **Open:** 8 (4 needing rebase from various baselines + 4 on current compile baseline + 2 just-assigned: edward #1939 mlp_ratio=4 retry, frieren #1940 bs=8+sqrt-LR).
+**Merged:** 4 (mask-aware, Huber β=0.5, bf16, compile). **Closed:** 9 (Fourier #1510, slice=128 #1507, surf_weight=25 #1508, mlp_ratio=4-pre-bf16 #1623, warmup+lr=1e-3 #1509, β=0.25 #1712, depth=7-on-bf16 #1511, width=192-on-bf16 #1506, **mlp_ratio=4-on-compile #1939**). **Open:** 8 (3 needing rebase from various baselines + 4 on bf16/compile baselines + 1 just-assigned: edward #2017 wd=5e-4).
 
-**Width axis closed; six total scalar-capacity-axis failures.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; n_hidden and n_layers are CLOSED-on-bf16 with no further retests planned. mlp_ratio=4 retry is in progress on the compile baseline (#1939). The portfolio rule applies as default; mlp_ratio is the controlled exception because it has the lowest per-epoch overhead.
+**Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
 ## Potential next research directions
 
 Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + compute (bf16) + compute (compile). Likely follow-ups:
 
-- **Compute is STILL binding at 35 epochs** (both compile seeds best=last). Highest-EV remaining levers: lr-schedule alignment (#1843 with T_max=35), batch-size scaling (#1940 just assigned), and possibly max-autotune-no-cudagraphs (frieren's #1810 follow-up #3).
-- **If mlp_ratio=4 retry wins on compile baseline (#1939 edward):** capacity-bottlenecked regime confirmed — explore SwiGLU + mlp_ratio=4 stack, GeGLU variants, per-block residual gating.
+- **Compute is STILL binding at 35 epochs** (both compile seeds best=last). Highest-EV remaining levers: lr-schedule alignment (#1843 with T_max=35), batch-size scaling (#1940), and possibly max-autotune-no-cudagraphs (frieren's #1810 follow-up #3).
+- **Scalar-capacity axis is CLOSED for round 1.** #1939 retired mlp_ratio=4 on compile (+5.8% val); all 4 scalar-capacity dims have regressed at least once. No further scalar-capacity retries.
+- **If weight_decay=5e-4 wins (#2017 edward):** indicates the optimizer/regularization axis was undertuned for the new 35-epoch budget. Follow-up: per-block weight decay (decouple FFN vs attention), lr decoupled from wd via AdamW.
 - **If Huber β-tuning wins (#1882 askeladd):** sweep β around the optimum, consider per-channel β for surface p vs Ux vs Uy (different normalized scales). Pairs with Volume Huber (#1910 thorfinn) if both win.
 - **If grad_clip wins (#1692 fern):** explore weight decay tuning and LR revisits, since clipping decouples optimizer stability from those.
-- **If SwiGLU FFN wins (#1735 alphonse):** the gating mechanism's success would suggest other modern transformer-FFN moves are worth trying (e.g. GeGLU variant, larger gating dimension, per-block residual gating).
+- **If SwiGLU FFN wins (#1735 alphonse):** the gating mechanism's success would suggest other modern transformer-FFN moves are worth trying (e.g. GeGLU variant, larger gating dimension, per-block residual gating). This is now the LONE capacity-shape hypothesis in flight after the scalar-capacity cluster's retirement.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack; these are all schedule/optimizer levers that are mostly orthogonal to architecture.
 
 Round-2 priority queue (post-round-1-cleanup):
 
-**Compute-bound revisits on compile baseline** (1 still in queue):
-- **slice_num=128** (#1507 retry) — fern's compute-bound axis; could substantially increase model capacity if epoch budget supports it. At ~+27% per-epoch overhead, compile baseline (35 epochs) gives ~27-28 effective epochs vs 14 pre-mask — still plausibly compute-bound but worth re-testing.
-- **n_layers=7 stays OUT.** Failed twice; +41% per-epoch overhead is too much even at 35 epochs.
-- **n_hidden=192 stays OUT.** Failed twice (pre-mask + on-bf16); +28% per-epoch overhead with 1.47M params.
-- **mlp_ratio=4 in-flight as #1939 (edward).**
+**Compute-bound revisits on compile baseline:** **CLOSED for round 1.** Three scalar-capacity retries on the compile baseline (mlp_ratio=4 via #1939, n_hidden=192 via #1506, and previously slice_num/depth across baselines) all regressed. The cluster is fully retired.
+- **n_layers=7 OUT.** Failed twice; +41% per-epoch overhead too much.
+- **n_hidden=192 OUT.** Failed twice (pre-mask + on-bf16); +28% per-epoch overhead, 1.47M params.
+- **mlp_ratio=4 OUT** (#1939 closed, +5.8% val on compile baseline).
+- **slice_num=128 OUT.** Lower priority than mlp_ratio originally; since mlp_ratio (lower overhead) failed, slice_num (higher overhead) inherits the closed verdict.
 
 **Larger swings if round-1+round-2-revisits plateau:**
 - **Surface-anchored cross-attention** (boundary nodes as queries against volume tokens) — directly addresses the "surface inherits from volume" structural relationship. Promising as the next round-2 architectural move.

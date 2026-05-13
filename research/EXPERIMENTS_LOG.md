@@ -534,3 +534,44 @@ Edward's analysis identifies the LR-schedule alignment issue as the dominant com
 
 - **edward → PR #1939 (mlp_ratio=2 → 4 on compile baseline):** highest-priority bf16-revisit candidate; lowest per-epoch overhead of all capacity axes (~+18%); 35-epoch budget vs the previous 14 should fully bracket the previous compute-bound regime.
 
+## 2026-05-13 06:10 — PR #1939 (closed): mlp_ratio=2 → 4 retry on compile baseline
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/mlp-ratio-4-retry
+- **Hypothesis:** With the compile baseline unlocking a 35-epoch budget (vs 14 in the original #1623 attempt), the lowest-per-epoch-overhead capacity move (mlp_ratio=4, ~+18% per-epoch) should now have enough runway to converge.
+
+### Results
+
+| Seed | run_id | val_avg/mae_surf_p | test_avg/mae_surf_p | total_epochs | s/epoch |
+|---|---|---:|---:|---:|---:|
+| 1 | xivxs7ag | 71.738 | 63.707 | 31 | ~58 |
+| 2 | fbo9oybm | 74.984 | 66.305 | 31 | ~58 |
+| **baseline #1810** | o142jibw | **67.831** | **59.784** | 35 | ~52 |
+
+Per-split test (seed 1): `single_in_dist=66.50`, `geom_camber_rc=78.10`, `geom_camber_cruise=43.41`, `re_rand=62.94`. All four splits finite.
+
+- **+5.8% val regression** (67.83 → 71.74), **+6.6% test regression** (59.78 → 63.71). Crosses the 5%-close threshold.
+- Total params: 991k (vs 662k baseline, +50%). Per-epoch overhead: **+13%** (better than the predicted +18%) but still cost 4 epochs (31 vs 35).
+- W&B verification (sub-agent): both seeds match student-reported numbers exactly. No discrepancies.
+
+### Conclusion
+
+**Closed — clean negative.** This is the **6th scalar-capacity axis** to regress on the (n_hidden, n_layers, slice_num, mlp_ratio) cluster, and the third where the failure mode is now *convergence-quality-bound* rather than merely compute-bound:
+
+| Axis | Closed on baseline | Regression |
+|------|-------------------|-----------:|
+| n_layers=7 | pre-bf16 (#1511 @14ep) | regress |
+| n_layers=7 retry | bf16 (#1511 @18ep) | regress |
+| n_hidden=192 | bf16 (#1506 @18ep) | +19.4% val |
+| mlp_ratio=4 | pre-bf16 (#1623 @14ep) | regress |
+| **mlp_ratio=4 retry** | **compile (#1939 @31ep)** | **+5.8% val** |
+| slice_num=128 | pre-bf16 (#1507 @14ep) | regress |
+
+The compile baseline gave +114% more compute than the original #1623 attempt, and mlp_ratio=4 STILL loses. The 991k-param model with 31 epochs reaches a worse final val than the 662k-param model with 35 epochs. More params at this epoch budget actively hurts. **The scalar-capacity axis cluster is now firmly retired across THREE baselines (pre-bf16, bf16, compile).**
+
+Future capacity wins need to change *what* is computed (alphonse's #1735 SwiGLU is the lone capacity-shape axis still in flight; if SwiGLU loses, the bottleneck is upstream of the FFN block).
+
+### Follow-up
+
+- **edward → PR #2017 (weight_decay 1e-4 → 5e-4 on compile baseline):** compute-cheap optimization-axis hypothesis. Weight decay was tuned on the 14-epoch budget; at 35 epochs there is ~2.5× more cumulative shrinkage than the regime it was set for. Orthogonal to all in-flight axes (grad-clip, AdamW betas, cosine T_max, SwiGLU, β=0.75 Huber, vol-Huber, bs=8). Single-line change.
+
