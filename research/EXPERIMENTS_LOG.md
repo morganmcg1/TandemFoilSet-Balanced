@@ -1746,3 +1746,63 @@ This is the first cleanly-observed destructive interaction in our compound stack
   - Cosine LR at termination: ~6% of base (vs 26%) — fully into quiet annealing tail
 - **Three outcomes:** (A) val<52.64 win — narrower+more-epochs is right tradeoff; (B) wash — 160/192 plateau; (C) val>53.5 fail — 192 bracketed [160, 224].
 - **Distinct from active axes:** tanjiro #2199 (--epochs 33 alignment) extracts late-phase low-LR refinement via *schedule shortening*; this PR extracts it via *width narrowing*. Alternative routes to the same lift — orthogonal mechanisms.
+
+## 2026-05-13 16:05 — PR #2159: askeladd peak LR 5e-4 → 7.5e-4 — CLOSED (clip-saturation blocks LR amplitude)
+
+- Branch: `willowpai2g48h5-askeladd/lr-7p5e-4-amplitude-scale`
+- Hypothesis: Raise peak LR 1.5× to extract more progress from same per-step direction signal at clip saturation. Tests amplitude scaling axis, distinct from schedule (#2000 alphonse) and width (#2066/#2068).
+- W&B run: `kfed937m`
+
+### Results — clean fail
+
+| Metric | #2159 (lr=7.5e-4) | #1982 baseline (lr=5e-4) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | **56.7268** | 52.6406 | **+7.77% REGRESSION** |
+| test_avg/mae_surf_p | **49.1945** | 44.9791 | **+9.37% REGRESSION** |
+| Clip rate | 99.30% | 98.93% | +0.37pp |
+| Mean downscaling | ~6.5× | ~7.1× | similar |
+| EMA-live gap (final) | −5.67 | ~−6 | similar (NOT widened as predicted) |
+| Val descent at term | −1.49/ep | ~−0.84/ep | steeper but starting from worse trajectory |
+
+All 4 test splits regress uniformly: in_dist +10.5%, camber_rc +8.3%, camber_cruise +10.3%, re_rand +8.9%.
+
+### Mechanism — third clip-saturation interaction confirmed
+
+| PR | Lever | grad-clip | clip rate | val Δ |
+|---|---|---|---:|---:|
+| #2066 tanjiro | n_hidden=224 | 2.5 | 99.31% | +3.22% |
+| #2000 alphonse | T_max=80 | 2.5 | 99.44% | +4.54% |
+| **#2159 (THIS PR)** | **lr=7.5e-4** | 2.5 | 99.30% | +7.77% |
+
+**Pattern crystallized:** At grad-clip=2.5 with 98.93% baseline clip rate, any axis that operates via gradient amplitude is blocked. Effective step magnitude is fixed at `2.5/||g||`. Multiplicative scaling of LR or extending schedule doesn't translate into useful effective updates.
+
+### Sub-finding — model adapts parameter scale
+
+Student's sharp diagnostic: **norm_mean actually DECREASED at lr=7.5e-4** (17.85→16.19, −9.3%) rather than increasing as predicted. The optimization landscape compensates for higher LR by shifting parameter scale, so gradient norms stay roughly bounded. This means raising LR doesn't liberate amplitude information because the model's gradient distribution is approximately scale-invariant under these dynamics.
+
+### Implications
+
+Mechanisms blocked by clip saturation (now empirically confirmed):
+- T_max extension (#2000)
+- Peak LR raise (#2159)
+- Width increase past compute budget (#2066, #2068)
+
+Mechanisms expected to work at clip saturation (orthogonal to amplitude):
+- AdamW betas — variance dynamics (thorfinn #2186)
+- Weight decay — parameter scale (frieren #2160)
+- Huber β — loss curvature (fern #2142)
+- EMA decay — averaging (edward #2024)
+- mlp_ratio — capacity (nezuko #2053)
+- Width narrowing — frees epoch budget (alphonse #2219)
+- Schedule shortening — re-aligns cosine to realized budget (tanjiro #2199)
+- LR lowering — may exit saturation (askeladd #2231 just assigned)
+
+## 2026-05-13 16:05 — PR #2231: askeladd assigned lr=5e-4 → 3e-4 lower-amplitude (escape clip saturation)
+
+- Branch: `willowpai2g48h5-askeladd/lr-3e-4-lower-amplitude`
+- Hypothesis: Symmetric counter-test to #2159. Lower LR may exit clip saturation (target clip rate ~92-95%, vs 98.93% baseline). At lr=3e-4, raw gradient magnitudes are similar but the clip threshold (2.5) is a larger fraction of typical norms → fewer steps clipped → amplitude information flows through more often → AdamW gets diverse signal.
+- Reproduce: `--n_hidden 192 --n_layers 3 --lr 3e-4 --epochs 50`.
+- Targets: val < 52.6406, test < 44.9791.
+- **Three outcomes:** (A) val<52.64 win — amplitude liberation works at lower LR; (B) wash; (C) val>54.5 fail — undertraining dominates, LR axis bracketed at 5e-4 within [3e-4, 7.5e-4].
+- **Quantitative predictions:** clip rate drops to ~92-95%, mean downscaling ~4-5×, possible undertraining risk if val descent rate halves.
+- **Distinct from active axes:** all 7 other students are on orthogonal axes (width-floor, EMA, Huber, weight_decay, mlp_ratio, schedule alignment, AdamW betas).

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 15:40
+- **Date:** 2026-05-13 16:05
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -57,7 +57,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
 | alphonse | #2219 | n_hidden=160 width-floor test (throughput-vs-capacity tradeoff at 30-min budget) | Architecture (width, floor) | WIP | #2000 CLOSED — T_max=80 retest at grad-clip=2.5 FAILED (val 55.03 = +4.54%, test 48.05 = +6.84% on all 4 splits — mechanism: clip-rate climbed to 99.44%, direction-normalization regime same as frieren #2067 max_norm=1.5 fail; schedule extension axis closed under current clip threshold). PR #2066 bracketed width axis at 192 from above (224/256 fail on epoch deficit); this PR tests symmetric question from below: does n_hidden=160 win by giving up some capacity for ~47 epochs in budget (vs 33 at 192)? Outcomes: (A) val<52.64 win — narrower+more-epochs is right tradeoff; (B) wash; (C) val>53.5 fail — 192 bracketed [160, 224] |
-| askeladd | #2159 | Peak LR 5e-4 → 7.5e-4 (1.5×) — epoch-saturated escape via amplitude | Optimization (LR amplitude) | WIP | #2113 CLOSED (slice=96 val=57.79, +9.77% regression; 7% throughput penalty cut training to 27/50 epochs, slice axis bracketed at 64). Different mechanism from alphonse #2000 T_max=80 (schedule extension) — this tests amplitude scaling. Outcomes: (A) val<52.64 win, model was LR-limited; (B) wash, plateau region; (C) val>54 clip rate hits 100%, direction-norm fail |
+| askeladd | #2231 | Peak LR 5e-4 → 3e-4 (lower amplitude, escape clip-saturation) | Optimization (LR amplitude, floor) | WIP | #2159 CLOSED — lr=7.5e-4 FAILED (val 56.73 = +7.77%, test 49.19 = +9.37% on all 4 splits; clip rate climbed to 99.30%, third clip-saturation interaction confirmed alongside #2066 #2000). This PR tests symmetric counter-test: does lower lr exit saturation (target clip rate ~95%)? At lr=3e-4 amplitude information may flow through more often → AdamW gets more diverse signal. Outcomes: (A) val<52.64 win — amplitude liberation works; (B) wash; (C) val>54.5 fail — undertraining, LR axis bracketed at 5e-4 within [3e-4, 7.5e-4] |
 | edward | #2024 | EMA decay 0.999 → 0.998 — retest on 13-compound stack | Optimization (EMA) | WIP-RETEST | v1 ran at grad-clip=5.0 (protocol-stale). val=54.22 beat #1953 (-2.77%) but +3.00% vs current #1982. 3/4 OOD test splits improved cleanly. EMA-live gap did NOT close (stayed −8.68 vs predicted ~0) but val/test improved — mechanism reframed: shorter half-life = better noise rejection, not closing live-gap visibility. Retest on n_hidden=224+grad-clip=2.5 stack |
 | fern | #2142 | Huber β=0.5 → 0.25 — tighter MAE alignment on 13-compound stack | Loss shape | WIP | #1805 CLOSED (β anneal v3 val=53.92, +2.43% regression; mechanism: grad-clip=2.5 saturates 99.7-100% during high-β phase, removes curvature benefit). Natural follow-up to #1689 (β=1.0→0.5 won −7.4%). Constant β=0.25 has no high-β phase — tests steady-state loss-shape axis at current grad-clip regime |
 | frieren | #2160 | Weight decay 0 → 1e-5 — untested regularization axis on 13-compound stack | Optimization (regularization) | WIP | #2094 CLOSED (max_norm=2.0 val=53.11, +0.9% regression; soft shoulder, 2.5 optimum holds. Threshold scan now fully bracketed: 10/5/2.5(WIN)/2.0(soft)/1.5(FAIL)/1.0). Completely different axis from grad-clip work. Tests whether explicit L2 closes train/val gap on 1500-sample dataset with 1.26M params. Outcomes: (A) val<52.64 win; (B) wash, no overfit; (C) val>54 wd too strong |
@@ -137,21 +137,42 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 Fleet 8/8 WIP. Width axis bracketed at n_hidden=192 from above (#2066, #2068); alphonse #2219 testing the floor side.
 
-1. **n_hidden=160 width-floor test** — #2219 (alphonse): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget — ~47 epochs predicted vs 33 at n_hidden=192.
-2. **Peak LR 5e-4 → 7.5e-4** — #2159 (askeladd): amplitude-scaling axis at n_hidden=224 (assigned before #2066 finding — may be at sub-optimal width).
-3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward): protocol-stale retest at n_hidden=224 stack (sub-optimal width but axis still informative).
-4. **Huber β=0.25** — #2142 (fern): steady-state loss-shape axis at current grad-clip regime.
-5. **Weight decay 0 → 1e-5** — #2160 (frieren): untested regularization axis at n_hidden=224 (sub-optimal width).
-6. **mlp_ratio=3 retest** — #2053 (nezuko): protocol-stale retest at n_hidden=224 stack (sub-optimal width).
-7. **AdamW betas (0.9, 0.95)** — #2186 (thorfinn): beta_2 reduction, untested optimizer-adaptation axis at n_hidden=224 (sub-optimal width).
-8. **--epochs 33 schedule alignment** — #2199 (tanjiro): cosine fully decays by realized 33-epoch budget at n_hidden=192.
+1. **n_hidden=160 width-floor test** — #2219 (alphonse, n_hidden=160): symmetric to #2066/#2068 from below. Tests throughput-vs-capacity tradeoff at 30-min budget.
+2. **Peak LR 5e-4 → 3e-4 lower-amplitude** — #2231 (askeladd, n_hidden=192): tests whether lower LR exits clip saturation (target clip rate ~95%).
+3. **EMA decay 0.999 → 0.998 retest** — #2024 (edward, n_hidden=224 — sub-optimal width).
+4. **Huber β=0.25** — #2142 (fern): loss-shape axis.
+5. **Weight decay 0 → 1e-5** — #2160 (frieren, n_hidden=224 — sub-optimal width).
+6. **mlp_ratio=3 retest** — #2053 (nezuko, n_hidden=224 — sub-optimal width).
+7. **AdamW betas (0.9, 0.95)** — #2186 (thorfinn, n_hidden=224 — sub-optimal width).
+8. **--epochs 33 schedule alignment** — #2199 (tanjiro, n_hidden=192).
 
 **Sub-optimal-width caveat:** PRs #2159/#2024/#2160/#2053/#2186 were assigned at `--n_hidden 224` before tanjiro #2066 closed the width axis at 192. Their results are still informative IF the axis-effect overcomes the throughput penalty. Any winners should be retested at n_hidden=192 to confirm the lift is intrinsic to the axis change, not noise from sub-optimal stack.
 
-### Closed (cycles 27-29)
+### Closed (cycles 27-30)
 - #2068 thorfinn n_hidden=256 (runtime-induced epoch deficit; width axis ceiling at 30-min budget)
 - #2066 tanjiro n_hidden=224+grad-clip=2.5 compound (val 54.34 = +3.22% / test +4.92% — direct measurement, width axis bracketed at 192 from above)
 - #2000 alphonse T_max=80 retest at grad-clip=2.5 (val 55.03 = +4.54% / test 48.05 = +6.84% — clip rate climbed to 99.44%, direction-normalization regime; schedule extension axis closed under current clip threshold)
+- #2159 askeladd lr=7.5e-4 raise at grad-clip=2.5 (val 56.73 = +7.77% / test 49.19 = +9.37% on all 4 splits — clip rate climbed to 99.30%, LR amplitude axis blocked by clip saturation; third consecutive clip-saturation interaction)
+
+### Clip-saturation interaction pattern (CRITICAL FINDING — three confirmed instances)
+
+| PR | Lever (amplitude-related) | grad-clip | clip rate | val Δ | Verdict |
+|---|---|---|---:|---:|---|
+| #2066 tanjiro | n_hidden=224 (slower epochs) | 2.5 | 99.31% | +3.22% | epoch deficit + saturation |
+| #2000 alphonse | T_max=80 (extend schedule) | 2.5 | 99.44% | +4.54% | direction-only SGD blocked |
+| #2159 askeladd | lr=7.5e-4 (raise amplitude) | 2.5 | 99.30% | +7.77% | amplitude-axis blocked |
+
+**Pattern:** At grad-clip=2.5 + 98.93% baseline clip rate, ANY axis that operates via gradient amplitude is blocked. The effective step magnitude is fixed at `2.5/||g||`, so multiplicative scaling of LR or extending schedule shape doesn't translate into useful effective updates.
+
+**Mechanisms expected to work at clip saturation (orthogonal to amplitude):**
+- AdamW betas — variance estimate dynamics (thorfinn #2186)
+- Weight decay — parameter scale, downstream of clip (frieren #2160)
+- Huber β — loss curvature, upstream of clip (fern #2142)
+- EMA decay — averaging downstream of optimizer (edward #2024)
+- mlp_ratio — capacity through gradient structure (nezuko #2053)
+- Width narrowing — frees epoch budget (alphonse #2219)
+- Schedule shortening — re-aligns cosine to realized budget (tanjiro #2199)
+- LR lowering — may exit saturation (askeladd #2231)
 
 ### Schedule axis status (post-#2000 closure)
 
