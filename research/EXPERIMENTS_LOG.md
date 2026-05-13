@@ -8,6 +8,42 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 13:00 — PR #2075 (thorfinn layerscale-init-0.0125) — **CLOSED** (amplitude floor)
+
+- Branch: `charliepai2g24h4-thorfinn/layerscale-init-0.0125`
+- Hypothesis: LayerScale init bracket-down from 0.025 → 0.0125. Tests whether lower γ_l amplitude drives further per-channel sign-flip diversification and metric improvement.
+- Note: ran on pre-SwiGLU branch (merge base 64bc9fc, baseline #2018 val=74.415)
+
+| metric | Baseline (#2018, init=0.025) | init=0.0125 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 74.415 | 76.299 | **+2.53%** |
+| **test_avg** | 65.524 | 66.388 | +1.32% |
+| val_single_in_dist | 80.907 | 83.728 | +3.49% |
+| val_geom_camber_rc | 84.613 | 86.655 | +2.41% |
+| val_geom_camber_cruise | 58.100 | 59.755 | +2.85% |
+| val_re_rand | 74.039 | 75.060 | +1.38% |
+
+LayerScale sweep (block-0 attn std/mean): 0.1 (38.8%), 0.05 (70.7%), 0.025 (110.5%), **0.0125 (156.6%)** — diversification continues growing but absolute γ amplitude (mean ~0.014–0.017 attn) drops below useful residual-gate conditioning floor. MLP std/mean stuck at 78.2%, never crossed sign-flip threshold.
+
+**Conclusion**: LayerScale init axis exhausted at 0.025. Per-channel diversification mechanism (std/mean) keeps growing as amplitude shrinks, but absolute γ drops below conditioning floor. val_single_in_dist breakdown (+3.49%) confirms even in-dist splits can't be rescued at this amplitude. **Axis closed.**
+
+## 2026-05-13 13:00 — PR #2136 (alphonse n-head-2-wider-attention) — **CLOSED** (regression, axis exhausted)
+
+- Branch: `charliepai2g24h4-alphonse/n-head-2-wider-attention`
+- Hypothesis: n_head=4→2 (dim_head=32→64): wider attention heads to preserve OOD cross-geom features, motivated by n_head=8 failure (+7.81%) from head fragmentation.
+- Note: ran on pre-SwiGLU branch (merge base b6f687e, baseline #1754 val=73.958)
+
+| metric | Baseline (#1754) | n_head=2 | Δ |
+|---|---:|---:|---:|
+| **val_avg** | 73.958 | 74.873 | **+1.24%** |
+| **test_avg** | 64.502 | 66.190 | **+2.62%** |
+| val_single_in_dist | 81.293 | 83.549 | +2.77% |
+| val_geom_camber_rc | 85.285 | 83.978 | **−1.53%** |
+| val_geom_camber_cruise | 56.390 | 57.573 | +2.10% |
+| val_re_rand | 72.862 | 74.391 | +2.10% |
+
+Mechanism: Only val_camber_rc shows predicted improvement (−1.53%); all other splits regress. n_head=8 failed from head fragmentation (dim_head=16); n_head=2 fails from insufficient head diversity (3/4 splits regress). n_head=4 / dim_head=32 is a tight local optimum — the OOD-geom mechanism is head-count-side, not per-head-width-side. **Axis closed: n_head=4 is the optimum at n_hidden=128.**
+
 ## 2026-05-13 12:30 — PR #2157 (fern vol-ch-weight-pressure) — **CLOSED** (net regression)
 
 - Branch: `charliepai2g24h4-fern/vol-ch-weight-pressure`
