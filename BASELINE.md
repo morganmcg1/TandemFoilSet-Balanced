@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | **55.41** | **47.90** | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
+| #2069 n_head=2 on Lion+MAE+lr=1e-4 | **51.11** | **44.18** | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
+| #1932 Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 | −2.06% val / −1.88% test vs MAE baseline; wins 3/4 test splits |
 | #1825 MAE (L1) loss on Lion+EMA | 56.58 | 48.82 | −7.71% val / −7.34% test vs Lion baseline; wins all 4 test splits |
 | #1781 Lion optimizer lr=1e-4 | 61.30 | 52.68 | −20.4% val / −22.8% test vs EMA-0.99 baseline; uniform 20–28% across all 4 test splits |
 | #1607 EMA decay=0.99 | 77.05 | 68.27 | −22.1% val / −23.1% test vs prior best; uniform gains all 4 splits |
@@ -33,6 +34,22 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 11:09 — PR #2069: n_head=2 on Lion+MAE+EMA compound (alphonse)
+
+- **val_avg/mae_surf_p (best epoch 20):** 51.1069 — **−7.76% vs lr=2e-4 baseline (55.41)**
+- **test_avg/mae_surf_p:** 44.1776 — **−7.78% vs lr=2e-4 baseline (47.90)**
+- **Per-val-split:** single_in_dist=N/A (val traj: ep17=55.30, ep18=54.02, ep19=52.37, ep20=51.11 — still descending at cap)
+- **Per-test-split:** single_in_dist=49.23, geom_camber_rc=57.44, geom_camber_cruise=26.74, re_rand=43.30
+- **Epochs completed:** 20 in ~30 min; val still descending (−1.3/epoch) at cap — NOT converged
+- **Per-epoch time:** ~93.5 s/epoch (vs ~110 s/epoch at n_head=4 — architectural change unlocks faster epochs)
+- **W&B run:** `2lo9mn88`
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_head=2**
+- **Reproduce:** `cd "target/" && python train.py --n_head 2 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-alphonse --wandb_name "willowpai2g24h5-alphonse/n-head-2-lion-mae" --wandb_group "willow-pai2g-24h-r5-n-head"`
+
+**Key change:** n_head 4 → 2. At n_hidden=128 with slice_num=64, per-head dimension doubles from 32 → 64, giving each head sufficient capacity to model slice-vs-slice relationships. n_head=8 (per-head dim=16) regressed monotonically, confirming head-undersizing was the bottleneck. Note: ran at lr=1e-4 (the MAE-baseline lr), not lr=2e-4 — the lr × n_head interaction remains to be explored. Val still descending steeply at cap.
 
 ---
 
