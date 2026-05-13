@@ -2,6 +2,79 @@
 
 ---
 
+## 2026-05-13 19:00 — PR #2438: Lion β2 sweep on n_head=1 (fern) — CLOSED, β2=0.99 LOCKED AT N_HEAD=1
+
+- **Branch:** `willowpai2g24h5-fern/beta2-n-head-1-slice32`
+- **Hypothesis:** Test whether the β2 reversal pattern continues at n_head=1 (per-head dim=128). Arms: β2=0.95 (continuation), β2=0.995 (V-shape).
+- **W&B runs:** `si4ca2k6` (β2=0.95), `kbfplhq5` (β2=0.995)
+
+| Arm | β2 | val | test | Δ vs #2338 (46.67) | Δ vs new #2400 (43.14) |
+|-----|----|-----|------|-------------------|----------------------|
+| 1 | 0.95 | 55.53 | 47.78 | +19.0% / +17.4% ✗✗ | +28.7% / +29.3% ✗✗ |
+| Baseline #2338 | 0.99 | 46.67 | 40.69 | — | +8.2% / +10.1% |
+| 2 | 0.995 | 47.73 | 41.19 | +2.27% / +1.22% ✗ | +10.7% / +11.4% ✗ |
+
+**Result:** CLOSED. Both arms regress; neither beats the new baseline #2400.
+
+Key findings:
+1. **β2 axis CLOSED at n_head=1.** Canonical β2=0.99 is optimal. The "plateau-at-canonical" pattern across n_head ∈ {1,2,4} is now complete:
+   - n_head=4: β2=0.995 wins (small per-head dim → needs longer averaging window)
+   - n_head=2: β2=0.99 optimal
+   - n_head=1: β2=0.99 optimal
+2. **Main−EMA gap monotonic in β2** (9.14/6.66/7.10 for 0.95/0.99/0.995). Textbook noise-filter diagnostic.
+3. **Bug fix shipped:** student exposed `--beta2` CLI flag (single-line Config edit). Not cherry-picked separately since #2400's branch had the equivalent pattern via `--n_layers`.
+
+**Fern reassigned:** sw=5/sw=3 stack on new n_head=2+n_layers=3 compound (PR to be assigned).
+
+---
+
+## 2026-05-13 19:00 — PR #2430: slice_num=16 on n_head=1 compound (frieren) — CLOSED, SLICE16 ANTI-STACKS AT N_HEAD=1
+
+- **Branch:** `willowpai2g24h5-frieren/slice16-n-head-1`
+- **Hypothesis:** slice_num=16 won on n_head=2 (#2337); test whether it stacks with n_head=1.
+- **W&B run:** `snqtgdl7`
+
+| Metric | This run | #2338 baseline | Δ vs #2338 | Δ vs new #2400 (43.14) |
+|--------|----------|----------------|-----------|----------------------|
+| val | 50.80 | 46.67 | +8.85% ✗ | +17.7% ✗✗ |
+| test | 43.31 | 40.69 | +6.43% ✗ | +17.2% ✗✗ |
+| single_in_dist | 47.70 | 43.10 | +10.67% ✗ (worst) | — |
+
+**Result:** CLOSED. All 4 splits regress; clearly worse than the new baseline.
+
+Key findings:
+1. **slice_num × n_head SUBSTITUTIVE at high per-head dim.** At per-head dim=64 (n_head=2), head capacity was the bottleneck → coarser tokens were free. At per-head dim=128 (n_head=1), tokens become the bottleneck → coarsening throws away information.
+2. **single_in_dist hit hardest** (high-magnitude raceCar split; over-coarsening kills fine spatial structure).
+3. **Host contention noted** (epochs 7-10 at 105-142 s/ep vs steady 68-69 s/ep). Even with clean compute, projection still trails baseline.
+
+**Frieren reassigned:** slice_num=16/8 stack on new n_head=2+n_layers=3 compound (PR to be assigned).
+
+---
+
+## 2026-05-13 19:00 — PR #2419: lr sweep on n_head=1 compound (edward) — CLOSED, lr=1.25e-4 TEST-ONLY EFFECT
+
+- **Branch:** `willowpai2g24h5-edward/lr-n-head-1`
+- **Hypothesis:** Does lr re-tune at n_head=1 with concentrated gradient? Arms: lr=1.5e-4, lr=1.25e-4.
+- **W&B runs:** `yggcly1j` (lr=1.5e-4), `v9uq83co` (lr=1.25e-4)
+
+| Arm | lr | val | test | Δ vs #2338 (46.67) | Δ vs new #2400 (43.14) |
+|-----|------|-----|------|-------------------|----------------------|
+| 1 | 1.5e-4 | 47.49 | 40.90 | +1.75% / +0.52% ✗ | +10.1% / +10.7% ✗ |
+| Baseline #2338 | 1e-4 | 46.67 | 40.69 | — | +8.2% / +10.1% |
+| 2 | 1.25e-4 | 46.87 | 39.65 | +0.42% / **−2.56% test** | +8.7% / +7.3% ✗ |
+
+**Result:** CLOSED. Even Arm 2 (test-only win vs old baseline) doesn't beat new #2400 baseline.
+
+Key findings:
+1. **lr=1.25e-4 wins TEST by −2.56% on n_head=1 compound** but val essentially flat (+0.42%, within noise). Val/test divergence at n_head=1: best-val ep25 generalizes better than baseline's ep26 despite virtually identical val.
+2. **lr=1.5e-4 stability at n_head=1:** 0/1 crash rate vs 60% at n_head=2+slice64 (#2251). Single-head gradient concentration appears to stabilize Lion at higher lr (n=1).
+3. **OOD camber-rc improved most** (Arm 2: -5.36%) — n_head=1's single global head gets gentle lr tuning right for geometry generalization.
+4. With new #2400 baseline (val=43.14), the +3.73 gap to Arm 2 is too large to bridge with lr alone; new compound test needed.
+
+**Edward reassigned:** wd=3e-4/1e-3 stack on new n_head=2+n_layers=3 compound (PR to be assigned).
+
+---
+
 ## 2026-05-13 18:30 — PR #2400: n_layers=3 on n_head=2+slice32+Lion+MAE (askeladd) — MERGED, NEW BEST
 
 - **Branch:** `willowpai2g24h5-askeladd/n-layers-reduce-slice32`
