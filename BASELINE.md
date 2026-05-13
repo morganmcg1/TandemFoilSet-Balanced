@@ -20,7 +20,8 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 
 | PR | val_avg/mae_surf_p | test_avg/mae_surf_p | Notes |
 |----|--------------------|---------------------|-------|
-| **#2335 slice_num=32 + surf_weight=5 on n_head=2+Lion+MAE+lr=1e-4** | **48.57** | **41.48** | −2.59% val / −1.68% test vs #2218; synergistic: observed −2.54 val vs additive −1.45; 3/4 test splits improve; 22 epochs |
+| **#2338 n_head=1 on n_head=2+slice_num=32+Lion+MAE+lr=1e-4** | **46.67** | **40.69** | −3.9% val / −1.9% test vs #2335; wins all 4 test splits; 26 epochs in 31 min (71.1s/ep) |
+| #2335 slice_num=32 + surf_weight=5 on n_head=2+Lion+MAE+lr=1e-4 | 48.57 | 41.48 | −2.59% val / −1.68% test vs #2218; synergistic: observed −2.54 val vs additive −1.45; 3/4 test splits improve; 22 epochs |
 | #2218 slice_num=32 on n_head=2+Lion+MAE+lr=1e-4 | 49.86 | 42.19 | −2.06% val / −3.40% test vs #2210 baseline; wins all 4 test splits; 23 epochs in budget |
 | #2210 sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 | −0.39% val / −1.13% test vs n_head=2 baseline; wins 2/4 test splits (single_in_dist −2.81, re_rand −0.91) |
 | #2069 n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 | −7.76% val / −7.78% test vs lr=2e-4 baseline; wins all 4 test splits; 20 epochs in budget |
@@ -37,6 +38,20 @@ This is the per-launch baseline tracker. Branch `icml-appendix-willow-pai2g-24h-
 `data/scoring.py` now has a `torch.where(isfinite(...))` guard preventing `0×inf=NaN` from poisoning the cruise split. Merged in PR #1541. All `test_avg/mae_surf_p` values from here forward are full 4-split averages.
 
 Whenever a PR improves on the current best, update this table in the same commit that runs `senpai:merge-winner`.
+
+---
+
+## 2026-05-13 16:00 — PR #2338: n_head=1 on slice_num=32+n_head=2 compound (edward)
+
+- **val_avg/mae_surf_p (best epoch 26):** 46.672 — **−3.90% vs #2335 baseline (48.573)**
+- **test_avg/mae_surf_p:** 40.687 — **−1.92% vs #2335 baseline (41.483)**
+- **Per-test-split:** single_in_dist=43.50 (−8.2% vs #2218), geom_camber_rc=55.79 (−0.4%), geom_camber_cruise=24.58 (−4.3%), re_rand=38.88 (−6.5%) — **all 4 splits improve vs #2218**
+- **Epochs completed:** 26 in ~31 min (71.1s/ep; 8.7% faster than n_head=2 at 78s/ep)
+- **W&B run:** `g71iu8ae`
+- **Compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_head=1** + slice_num=32 + surf_weight=10
+- **Reproduce:** `cd "target/" && python train.py --n_head 1 --slice_num 32 --loss_type mae --optimizer lion --lr 1e-4 --weight_decay 1e-4 --dropout 0.2 --ema_decay 0.99 --agent willowpai2g24h5-edward --wandb_name "willowpai2g24h5-edward/n-head-1-slice32-lion-mae" --wandb_group "willow-pai2g-24h-r5-n-head-1"`
+
+**Key change:** n_head 2 → 1. Per-head dim doubles from 64 → 128. Monotonic trend confirmed all the way to n_head=1: 1 < 2 < 4 < 8. Single global attention head with full 128-dim capacity dominates multi-head diversity for physics-aware slice attention on this task. Speed dividend: 71.1s/ep vs 82s/ep (n_head=2) → 26 epochs vs 22 in 30 min. val still descending at cap (26th epoch was best). Note: runs with sw=10 (default); sw=5 interaction untested on n_head=1 (assigned to alphonse in #2416).
 
 ---
 

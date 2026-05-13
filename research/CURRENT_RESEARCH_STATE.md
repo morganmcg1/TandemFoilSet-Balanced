@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~15:35 UTC
+- **Date:** 2026-05-13 ~16:05 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -9,7 +9,9 @@
 
 | PR | What | val | test |
 |----|------|-----|------|
-| **#2218** | **slice_num=32 on n_head=2+Lion+MAE+lr=1e-4** | **49.86** | **42.19** |
+| **#2338** | **n_head=1 on slice32+Lion+MAE+lr=1e-4** | **46.67** | **40.69** |
+| #2335 | slice32+sw=5 on n_head=2 | 48.57 | 41.48 |
+| #2218 | slice_num=32 on n_head=2+Lion+MAE+lr=1e-4 | 49.86 | 42.19 |
 | #2210 | sw=5 on n_head=2+Lion+MAE+lr=1e-4 | 50.91 | 43.68 |
 | #2069 | n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 |
 | #1932 | Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 |
@@ -21,25 +23,27 @@
 | #1357 | Huber δ=1.0 | 98.79 | 88.90 |
 | #1367 | Dropout=0.2 + clip | 98.96 | 88.74 |
 
-**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **slice_num=32** + surf_weight=10
+**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_head=1** + slice_num=32 + surf_weight=10
 
-**Note:** Every merged win has had val still descending at the 30-min cap. The model is NOT converged. slice_num=32 runs at 23 epochs in 30 min (vs 20 at slice_num=64) — faster-per-epoch benefit compounds on top of the accuracy gain. Note: surf_weight=5 from #2210 is NOT in this compound (run used default sw=10); interaction slice_num=32 × sw=5 explored in #2335.
+**Note:** Every merged win has had val still descending at the 30-min cap. n_head=1 is the fastest configuration yet: 71.1s/ep → 26 epochs in 30 min. The sw=5 interaction at n_head=1 is untested and could provide another ~−1–2 val (assigned to alphonse #2416).
 
 ## Active experiments (8/8 students assigned)
 
 | PR | Student | Config | Status |
 |----|---------|--------|--------|
-| **#2335** | **alphonse** | **slice_num=32 + surf_weight=5 interaction test** | **WIP** |
-| **#2356** | **thorfinn** | **Lion wd sweep on slice_num=32 compound: wd=3e-4 vs wd=3e-5** | **WIP (v2 after auto-close of #2339)** |
+| **#2416** | **alphonse** | **n_head=1 + surf_weight=5 interaction: stack both wins on slice32** | **WIP — new** |
+| **#2356** | **thorfinn** | **Lion wd sweep on slice_num=32 compound: wd=3e-4 vs wd=3e-5** | **WIP** |
 | **#2337** | **frieren** | **slice_num=16 on n_head=2: extend monotonic trend below 32** | **WIP** |
-| **#2372** | **nezuko** | **surf_weight low probe on slice_num=32: sw=2 vs sw=3** | **WIP — new** |
-| **#2338** | **edward** | **n_head=1 on n_head=2+slice_num=32 baseline: extend monotonic trend** | **WIP** |
+| **#2372** | **nezuko** | **surf_weight low probe on slice_num=32: sw=2 vs sw=3** | **WIP** |
+| **#2419** | **edward** | **lr sweep on n_head=1 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
 | **#2295** | **fern** | **EMA decay sweep on n_head=2+sw=5: ema_decay=0.999 (Arm1) vs 0.95 (Arm2)** | **WIP** |
 | **#2376** | **tanjiro** | **lr sweep on slice_num=32 compound: lr=1.5e-4 vs lr=1.25e-4** | **WIP — new** |
 | **#2400** | **askeladd** | **n_layers reduce on slice_num=32: n_layers=4 vs n_layers=3** | **WIP — new** |
 
 ## Closed experiments this round
 
+- **#2338 (edward):** n_head=1 on slice32+sw10 — **MERGED** val=46.67, test=40.69. Monotonic trend extends to n_head=1 (1 < 2 < 4 < 8). 26 epochs in 31 min (71.1s/ep). All 4 splits improve. Reassigned to #2419 (lr sweep on n_head=1).
+- **#2335 (alphonse):** slice32+sw5 interaction on n_head=2 — **MERGED** val=48.57, test=41.48. Synergistic: observed −2.54 val vs additive −1.45 (1.75×). 3/4 splits improve. Reassigned to #2416 (n_head=1+sw5).
 - **#2271 (askeladd):** β2=0.995 vs β2=0.999 on n_head=2+slice_num=64 — β2 effect reverses from n_head=4 (#2144). Canonical β2=0.99 confirmed optimal on n_head=2. Main-vs-EMA gap diagnostic: 7.31 (β2=0.995) vs 2.81 (β2=0.999). Closed; reassigned to #2400 (n_layers reduce).
 - **#2251 (tanjiro):** lr=2e-4 vs lr=1.5e-4 on n_head=2+slice_num=64 — Arm 2 (lr=1.5e-4, val=50.36, test=42.53) beats #2069 (−0.75/−1.65) but loses to new #2218 baseline; both ran on slice_num=64 (pre-#2218 default). Key signal: lr=1.5e-4 is the optimal lr at slice_num=64. 60% crash rate at lr=2e-4 (instability). Closed; reassigned to #2376 (lr=1.5e-4 vs lr=1.25e-4 on slice_num=32).
 - **#2277 (nezuko):** sw=4/sw=3 on n_head=2+slice_num=64 — sw=3 wins vs old #2210 (val=50.23 vs 50.91, −1.34%) but loses to new #2218 (49.86) by +0.7%. Non-monotonic in [3,5]: sw=3 < sw=5 < sw=4. Strong geom_camber_cruise improvement (−5.6%) at lower sw. Closed; reassigned to #2372 (sw=2/sw=3 on slice_num=32).
@@ -80,9 +84,11 @@
 14. **surf_weight=5 merged (#2210):** −0.39%/−1.13% val/test vs n_head=2 baseline. Non-monotonic response: sw=5 < sw=10 < sw=7. Win concentrated in in-dist splits (single_in_dist −2.81). Lower probe (sw=3/4) in #2277.
 15. **Cosine schedule changes consistently regress at 30-min budget (#1999, #2167, #2211):** Three independent schedule experiments (T_max-matching, eta_min, OneCycleLR) all regress. At both lr=1e-4 and lr=2e-4 the model is still in the early exploration regime at the cap — forcing LR down faster cuts off productive learning. Schedule shape is not a viable lever at current budget.
 16. **AdamW+EMA+MAE diagnostic (#2183, in progress):** Both lr arms show val~73-74 (+44-45% vs baseline). 2×2 mechanism table: Lion+EMA=50.91, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× more than EMA; EMA contribution is larger in the noisier AdamW cell.
-17. **slice_num=32 MERGED (#2218):** val=49.86/test=42.19 — −2.06%/−3.40% vs #2210 baseline. Monotonic: 32 < 64 < 128. Coarser slicing is faster (81.4s/ep vs 93.5s) → 23 epochs in 30 min vs 20. All 4 test splits improve. slice_num=16 (#2337) and slice32×sw5 (#2335) follow up.
+17. **slice_num=32 MERGED (#2218):** val=49.86/test=42.19 — −2.06%/−3.40% vs #2210 baseline. Monotonic: 32 < 64 < 128. Coarser slicing is faster (81.4s/ep vs 93.5s) → 23 epochs in 30 min vs 20. All 4 test splits improve.
 18. **Split-loss formulation falsified (#2216):** surf-MAE + vol-Huber/MSE — 3 runs, 2 formulations, all regress (+4.5–7.1%). MAE uniform weighting already aligned with the metric.
-19. **AdamW+EMA+MAE 2×2 table complete (#2183):** Lion+EMA=49.86, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× EMA. AdamW is lr-insensitive in this range (lr=5e-4 ≈ lr=2e-4 within noise).
+19. **AdamW+EMA+MAE 2×2 table complete (#2183):** Lion+EMA=49.86, Lion-no-EMA=62.47, AdamW+EMA=73.38, AdamW-no-EMA=82.46. Lion contributes ~2× EMA.
+20. **slice32+sw5 synergistic interaction MERGED (#2335):** val=48.57/test=41.48. Stacking slice32 and sw5 yields 1.75× additive gain on val. OOD splits (camber, re_rand) gain most; single_in_dist regresses slightly.
+21. **n_head=1 MERGED (#2338):** val=46.67/test=40.69 — new best. Monotonic trend extends: n_head=1 < 2 < 4 < 8. Per-head dim=128 concentrates global attention; 26 epochs in 31 min (71.1s/ep). All 4 test splits improve. val still descending at cap.
 
 ## Priority for current wave
 

@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-05-13 16:00 — PR #2338: n_head=1 on n_head=2+slice_num=32 baseline (edward) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-edward/n-head-1-sweep`
+- **Hypothesis:** Extend monotonic n_head trend to n_head=1 on slice_num=32 compound. Per-head dim doubles 64→128; concentrated global attention may dominate multi-head diversity.
+- **W&B run:** `g71iu8ae`
+
+| Config | n_head | val | test | Epochs/30min | s/ep |
+|--------|--------|-----|------|-------------|------|
+| Baseline #2335 | 2 | 48.57 | 41.48 | 22 | 82 |
+| **This PR** | **1** | **46.67** | **40.69** | **26** | **71** |
+
+**Per-test-split (n_head=1 vs #2218 baseline):** single_in_dist=43.50 (−8.2%), geom_camber_rc=55.79 (−0.4%), geom_camber_cruise=24.58 (−4.3%), re_rand=38.88 (−6.5%) — **all 4 splits improve**.
+
+**Result:** MERGED. New best: val=46.67, test=40.69. Key findings:
+1. **Monotonic n_head trend extends to n_head=1**: 1 < 2 < 4 < 8 — all data points strictly ordered.
+2. **Speed dividend at n_head=1**: 71.1s/ep vs 82s/ep (n_head=2) → 26 epochs vs 22 in same wall-clock. Both mechanisms (accuracy + speed) compound.
+3. **Single global attention wins physics task**: at slice_num=32, the 32 learned physics slices provide spatial decomposition; additional head diversity is redundant.
+4. **Note:** ran with sw=10 (default). sw=5 interaction (#2416 alphonse) is the next natural experiment.
+
+---
+
+## 2026-05-13 15:50 — PR #2335: slice_num=32 + surf_weight=5 interaction on n_head=2 (alphonse) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-alphonse/slice32-sw5-interaction`
+- **Hypothesis:** slice_num=32 (#2218) and surf_weight=5 (#2210) are independent wins; stack them for a compound improvement.
+- **W&B run:** `k5262fzu`
+
+| Config | sw | val | test | Δ val | Δ test |
+|--------|-----|-----|------|-------|--------|
+| Baseline #2218 | 10 | 49.86 | 42.19 | — | — |
+| **This PR** | **5** | **48.57** | **41.48** | **−2.59%** | **−1.68%** |
+
+**Per-test-split:** single_in_dist=47.41 (+4.3% ⚠), geom_camber_rc=54.56 (−2.6%), geom_camber_cruise=24.63 (−4.1%), re_rand=39.33 (−5.4%) — 3/4 splits improve.
+
+**Result:** MERGED. Key findings:
+1. **Synergistic interaction on val**: observed −2.54 val vs additive −1.45 (1.75× predicted). Coarser tokens + softer surface emphasis compound on OOD splits.
+2. **single_in_dist regresses** vs slice32+sw10 — reduced surface emphasis hurts the high-magnitude in-dist regime.
+3. **Interaction confirmed**: slice32+sw5 is the new compound for follow-up. sw=5 interaction with n_head=1 is untested (#2416 alphonse).
+
+---
+
 ## 2026-05-13 15:35 — PR #2271: Lion β2 on n_head=2: β2=0.995 vs β2=0.999 (askeladd) — CLOSED, BOTH ARMS REGRESS, β2 DIRECTION REVERSED FROM n_head=4
 
 - **Branch:** `willowpai2g24h5-askeladd/lion-beta2-n-head-2`
