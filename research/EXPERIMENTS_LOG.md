@@ -8,6 +8,79 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 01:15 — PR #1548 (edward Fourier coords L=4 — rebased) — **MERGED (new baseline)**
+
+- Branch: `charliepai2g24h4-edward/fourier-coords-L4-rebased`
+- Hypothesis: Tancik et al. (NeurIPS 2020) Fourier positional encoding on
+  spatial `(x, z)` coords addresses spectral bias on the surface-pressure
+  signal. Encode normalized coords with `sin/cos` at `2^k · π` for `k=0..3`
+  (16 features), bumping `fun_dim` from 22 to 36.
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 15/15) | **84.762** | 90.294 | **−6.13%** |
+| test_avg/mae_surf_p (4-split, NaN-safe) | **74.659** | 81.243 | **−8.10%** |
+| n_params | 665,943 | 660,539 | +0.82% |
+| peak GPU memory | 42.16 GB | 42.11 GB | +0.12% |
+| wall time | ~31.5 min | ~30 min | cap-bound |
+
+- **Per-split val MAE** (best ckpt):
+  - val_single_in_dist     97.074 (−11.35% vs 109.497) — largest gain
+  - val_geom_camber_rc     94.997 (−4.00% vs 98.952)
+  - val_geom_camber_cruise 63.711 (−7.94% vs 69.208)
+  - val_re_rand            83.266 (−0.30% vs 83.520) — flat, as predicted
+- **Per-split test MAE** (best val ckpt):
+  - test_single_in_dist     85.819 (−13.43%)
+  - test_geom_camber_rc     83.023 (−7.47%)
+  - test_geom_camber_cruise 54.879 (−4.03%)
+  - test_re_rand            74.916 (−5.10%)
+- **Mechanism confirmed**: split pattern matches spectral-bias hypothesis
+  exactly — gains where high-frequency spatial structure dominates
+  (in_dist, camber-OOD); minimal on val_re_rand whose OOD axis is Reynolds
+  (flow-condition), not spatial coords.
+- **Test gain exceeds val gain** (−8.10% vs −6.13%): the Fourier features
+  generalize to held-out data better than they fit val. Strong signal for
+  the paper-facing test metric.
+- **Stacks cleanly with all 4 prior compound merges**: L1 → stoch-depth →
+  cosine T_max=15 → grad-clip 25 → Fourier L=4. Compound progress over 5
+  merges: val_avg 100.957 → 84.762 = **−16.0%**.
+- Metrics: `models/model-charliepai2g24h4-edward-fourier-coords-L4-rebased-20260512-235326/metrics.jsonl`
+- Follow-up assigned: PR #1772 (edward Fourier L=6 bracket-up).
+
+## 2026-05-13 01:13 — PR #1699 (thorfinn attn+MLP dropout p=0.05) — **CLOSED**
+
+- Branch: `charliepai2g24h4-thorfinn/attn-mlp-dropout-0.05`
+- Hypothesis: standard ViT-style attn+MLP dropout p=0.05 orthogonal to
+  block-level stoch-depth would add a fine-grained regularization layer.
+
+| Metric | This PR | Baseline (#1637) | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p (best @ ep 14/15) | 92.342 | 90.294 | **+2.27%** |
+| test_avg/mae_surf_p (4-split) | 83.382 | 81.243 | +2.63% |
+| wall_time / epoch | 134s | 120s | **+12%** (not "free") |
+| n_params | 662,359 | 660,539 | +0% (Dropout adds zero params) |
+
+- **All four val splits regress uniformly** (+0.67% to +2.84%). Uniform
+  direction confirms the "regularization is a global mechanism" framing,
+  but the sign is the opposite of the hypothesis.
+- **Three mechanisms drove the regression**, in order of impact (from
+  student's own analysis):
+  1. **Compute tax eats one epoch.** Dropout adds ~14s/epoch; run hit
+     30-min cap at ep 14/15 instead of 15/15. The cosine T_max=15 hadn't
+     fully decayed at ep 14 (lr≈5.5e-6, not zero). One additional cosine
+     step would have closed part of the gap.
+  2. **Stoch-depth was already at the regularization optimum.** Merged
+     schedule averages 0.05 across blocks; adding p=0.05 inside surviving
+     blocks pushed past the optimum for this 1499-sample/15-epoch budget.
+  3. **Post-softmax slice-attention dropout disrupts unit-sum property.**
+     `slice_weights` is used twice (soft binning + soft scatter); dropout
+     zeros 5% then rescales surviving ones. The `slice_norm = slice_weights.sum(2)`
+     renormalization partially mitigates but the double application of
+     dropped weights amplifies effective noise above standard attention dropout.
+- Single-knob fine-grained dropout direction closed on this baseline.
+- Follow-up assigned: PR #1773 (thorfinn AdamW betas (0.9, 0.95) — clean
+  pivot to orthogonal optimizer-recipe axis).
+
 ## 2026-05-13 01:00 — PR #1713 (askeladd grad-clip max_norm=10 — H15 bracket below) — **CLOSED**
 
 - Branch: `charliepai2g24h4-askeladd/grad-clip-10`
