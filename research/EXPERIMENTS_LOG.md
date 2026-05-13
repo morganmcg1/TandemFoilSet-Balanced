@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-05-13 ~10:06 — PR #1999: Cosine T_max tuning T_max=16 ± eta_min on Lion+MAE+lr=1e-4 (fern) — CLOSED REGRESSION (with strong diagnostic)
+
+- **Branch:** `willowpai2g24h5-fern/cosine-tmax-tuning`
+- **Hypothesis:** T_max=epochs=50 barely decays the LR over the 16-epoch wall-clock window. Matching T_max to actual budget should let the cosine arc complete.
+- **W&B runs:** `8csqgctq` (Arm 1: T_max=16, eta_min=0), `0mw5k64a` (Arm 2: T_max=16, eta_min=1e-5)
+- **Caveat:** Both arms ran at **lr=1e-4** (the pre-#1932 baseline). The PR was assigned before #1932 merged.
+
+| Metric | Pre-merge baseline (#1825, lr=1e-4) | Current baseline (#1932, lr=2e-4) | Arm 1 | Arm 2 |
+|--------|-------------------------------------|-----------------------------------|-------|-------|
+| val_avg/mae_surf_p | 56.58 | **55.41** | 62.02 | 59.59 |
+| test_avg/mae_surf_p | 48.82 | **47.90** | 52.55 | 51.42 |
+| Δ vs current baseline | — | — | **+11.9%** | **+7.5%** |
+| Final-epoch val Δ (last 4) | — | — | **+0.19** (uptick at lr=0) | **−1.48** (steepest descent) |
+
+**Result:** CLOSED — both arms regress vs current baseline at lr=1e-4. **But the diagnostic value is high.**
+
+**Key findings:**
+1. **eta_min=0 is strictly dominated by eta_min=1e-5** (Arm 1 vs Arm 2 differ by −2.43 val). Arm 1 had the *only* positive per-epoch delta in its last 4 epochs at the lr=0 step — the degenerate-tail effect is real. **Future cosine work must use eta_min>0.**
+2. **Arm 2 still descending at the cap** (−1.48 val in its final epoch, steepest of the last 4). At lr=1e-4 the per-step capacity is the bottleneck, not the schedule shape. Both schedules (T_max=16 and T_max=50) leave the model under-converged at lr=1e-4.
+3. **Vol_loss accumulator non-finite bug** flagged by fern (train.py:288, 313–328). Per-component MAE metrics are correct (PR #1541 path), but the vol_loss sum is unguarded. Cosmetic, not in scope.
+
+**Fern reassigned:** PR #2167 — Cosine T_max + eta_min tuning at lr=2e-4. Tests both axes: (a) schedule-match (T_max=16 + eta_min=1e-5) at the new lr, where per-step capacity is doubled; (b) eta_min=1e-5 floor on the default T_max=50 schedule (isolates final-lr regularization effect). Clean 2-axis decomposition.
+
+---
+
 ## 2026-05-13 ~10:00 — PR #2001: Lion β1 sweep β1=0.95 vs β1=0.85 on Lion+MAE+lr=2e-4 (askeladd) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-askeladd/lion-b1-sweep`

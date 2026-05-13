@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~10:00 UTC
+- **Date:** 2026-05-13 ~10:08 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -31,12 +31,13 @@
 | #2069 | alphonse | n_head sweep: n_head=8 (more) and n_head=2 (fewer) on Lion+MAE | WIP |
 | #2056 | nezuko | surf_weight sweep on Lion+MAE: sw=5 (Arm1), sw=15 (Arm2) | WIP |
 | #2052 | frieren | batch_size=8: lr=2e-4 linear (Arm1), lr=1e-4 batch-only (Arm2) | WIP |
-| **#2144** | **askeladd** | **Lion β2 sweep: β2=0.995 (Arm1), β2=0.95 (Arm2) on Lion+MAE+lr=2e-4** | **WIP — new** |
-| #1999 | fern | Cosine T_max tuning: T_max=16 (Arm1), T_max=16+eta_min=1e-5 (Arm2) | WIP |
+| #2144 | askeladd | Lion β2 sweep: β2=0.995 (Arm1), β2=0.95 (Arm2) on Lion+MAE+lr=2e-4 | WIP |
+| **#2167** | **fern** | **Cosine T_max + eta_min tuning at lr=2e-4: T_max=16+eta_min=1e-5 (Arm1), T_max=50+eta_min=1e-5 (Arm2)** | **WIP — new** |
 | #2131 | tanjiro | Dropout sweep on Lion+MAE+lr=2e-4: dropout=0.3 (Arm1), dropout=0.1 (Arm2) | WIP |
 
 ## Closed experiments this round
 
+- **#1999 (fern):** Cosine T_max=16 ± eta_min at lr=1e-4 — both arms regress (+11.9%/+7.5%). Strong diagnostics: eta_min=0 strictly dominated by eta_min=1e-5 (uptick at lr=0); Arm 2 still descending −1.48/epoch at cap (lr capacity, not schedule, was the bottleneck at lr=1e-4). Closed; reassigned to #2167 at lr=2e-4.
 - **#2001 (askeladd):** Lion β1=0.95/β1=0.85 — regression both arms (+4.0%/+6.4% vs baseline). Asymmetric: β1=0.85 hurts ~2× more. Canonical β1=0.9 confirmed optimal. Closed.
 - **#1932 (thorfinn):** Lion lr=2e-4 — **MERGED** val=55.41, test=47.90.
 - **#1825 (askeladd):** MAE loss on Lion+EMA — **MERGED** val=56.58, test=48.82.
@@ -69,7 +70,7 @@
 **Optimization frontier:**
 - Lion lr=4e-4 / 3e-4 (#2086 thorfinn) — test saturation boundary of the lr-doubling trend
 - Lion β2 sweep (#2144 askeladd) — β2=0.99 default untested; at lr=2e-4, momentum window may be the noise bottleneck (β1=0.9 confirmed optimal)
-- Cosine T_max tuning (#1999 fern) — T_max=50 barely decays LR in 16 epochs
+- Cosine T_max + eta_min tuning at lr=2e-4 (#2167 fern, follow-up to #1999) — eta_min=0 confirmed degenerate; tests schedule-match vs eta_min-floor decomposition
 - surf_weight on Lion+MAE (#2056 nezuko) — sw=15 direction untested with MAE's uniform weighting
 - batch_size + LR scaling (#2052 frieren)
 - n_head sweep (#2069 alphonse) — only compute-neutral attention-side knob untested
