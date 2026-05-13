@@ -1,8 +1,7 @@
 # SENPAI Research State
 
-- 2026-05-13 10:45 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
+- 2026-05-13 10:52 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=68.0957 (PR #2090 grad_clip=5.0)**. Cumulative gain from PR #1391: 121.28 → 68.10 = −43.8%.
 - No directives from human researcher team yet.
-- **Rate-limit advisory (10:42 UTC)**: GitHub GraphQL API rate limit hit while attempting close ops on #2118/#2115. Reset 10:49 UTC. Closes and reassignments staged but pending; PR bodies for next assignments saved to /tmp/pr_body_accum4_clip_retest.md (frieren H6) and /tmp/pr_body_depth_6_clip_retest.md (alphonse H1).
 
 ## Current baseline (PR #2090 merged — grad_clip_max_norm=5.0)
 
@@ -28,9 +27,9 @@ Per-split: in_dist=68.29, rc=82.24, cruise=50.71, re_rand=71.14.
 | tanjiro | #2165 | grad-clip-sweep (max_norm=2.0/10.0/50.0) | **wip** (NEW) | Bracket optimal clip threshold; mechanism validation |
 | thorfinn | #2166 | cosine-realign-epochs15 | **wip** (NEW) | T_max=15 to match actual 30-min budget |
 | edward | #2141 | layerscale-1e-4 | **wip** | CaiT-style per-channel residual scaling, γ_init=1e-4 |
-| alphonse | #2115 | mesh-node-dropout=0.1 | **CLOSED** ✗ (pending GitHub) | +84.7% catastrophic. Mechanism: PointNet-style dropout poisons dense physics attention. → assigned H1 n_layers=6+clip retest |
+| alphonse | #2115 | mesh-node-dropout=0.1 | **CLOSED** ✗ | +84.7% catastrophic. Mechanism: PointNet-style dropout poisons dense physics attention. → **assigned #2191 n_layers=6+clip** |
 | fern | #2117 | ema-decay-095 | **wip** | 14-step half-life EMA, follow-up to closed #2050 |
-| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **CLOSED** ✗ (pending GitHub) | +4.71%. Hypothesis falsified (in_dist hit worst → info loss, not aliasing). Fourier ceiling L=8 confirmed. → assigned H6 accum=4+clip retest |
+| frieren | #2118 | fourier-per-axis-L (Lx=8, Ly=4) | **CLOSED** ✗ | +4.71%. Hypothesis falsified (in_dist hit worst → info loss, not aliasing). Fourier ceiling L=8 confirmed. → **assigned #2190 accum=4+clip** |
 | nezuko | #2121 | slice_num-48 + clip=5.0 retest | **wip** (SENT BACK) | Retest on new baseline=68.10; previous result 79.60 vs old 80.62 |
 | askeladd | #2088 | lion-lr-2.1e-4-sqrt2 | **wip** | Lion lr sqrt(2) scaling for eff_bs=8 |
 | tanjiro | #2090 | grad-norm-clip-5-on-lion-stack | **MERGED** ✓ | **test=68.0957** (−15.5%); new best. Bulk Lion rescaler, not tail-only. |
@@ -82,11 +81,11 @@ Given new baseline test=68.10 and the clip=5.0 breakthrough, priority order shif
 | #2117 | fern | EMA decay=0.95 | −0.3% to −1.5% |
 | #2141 | edward | LayerScale γ=1e-4 | −0.3% to −1.5% |
 
-### Tier 1 NEW (post-Fourier/dropout-closure assignments — staged, pending rate-limit reset)
+### Tier 1 NEW (assigned 2026-05-13 10:52)
 | PR | Student | Hypothesis | Expected gain | Discriminating? |
 |---|---|---|---|---|
-| NEW-frieren | frieren | accumulation_steps=4 + clip=5.0 (mechanism-changed retest of closed #2009) | −1% to −3% if clip changes step-starvation; key diagnostic | YES — validates/falsifies clip-as-direction-rescaler |
-| NEW-alphonse | alphonse | n_layers=6 + clip=5.0 (mechanism-changed retest of closed #1862) | −2% to −5% if depth ceiling was clip-conditional | YES — tests whether depth=5 is genuine architectural ceiling |
+| #2190 | frieren | accumulation_steps=4 + clip=5.0 (mechanism-changed retest of closed #2009) | −1% to −3% if clip changes step-starvation | YES — validates/falsifies clip-as-direction-rescaler |
+| #2191 | alphonse | n_layers=6 + clip=5.0 (mechanism-changed retest of closed #1862) | −2% to −5% if depth ceiling was clip-conditional | YES — tests whether depth=5 is genuine architectural ceiling |
 
 ## Key open questions (updated)
 1. **Is 2.0 better or worse than 5.0 for max_norm?** (#2165) — characterizes whether bulk rescaling benefits from being even tighter, or whether 5.0 was the right trade-off.
