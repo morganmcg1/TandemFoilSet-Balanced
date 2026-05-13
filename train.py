@@ -418,7 +418,7 @@ class Config:
     weight_decay: float = 1e-4
     batch_size: int = 8
     surf_weight: float = 10.0
-    epochs: int = 18  # was 50 — aligns cosine T_max to realistic 30-min budget
+    epochs: int = 12  # was 18 — rescaled to fit n_hidden=224 budget at observed 140s/epoch (T_max follows MAX_EPOCHS)
     lion_beta1: float = 0.9
     lion_beta2: float = 0.99
     accumulation_steps: int = 1  # gradient accumulation; effective_bs = batch_size * accumulation_steps
@@ -465,9 +465,9 @@ model_config = dict(
     space_dim=fourier_pos_dim,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=192,
+    n_hidden=224,                # was 192 — 17% wider, budget-aligned with epochs=12
     n_layers=5,
-    n_head=4,
+    n_head=4,                    # head_dim becomes 224/4 = 56 (was 48)
     slice_num=64,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
