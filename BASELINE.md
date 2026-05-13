@@ -9,6 +9,38 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 12:15 — PR #2203: fern — batch_size 2 → 1, grad_accum=2 (effective batch 4 → 2) (MERGED)
+
+**New best val and test. 11th consecutive compounding win: -3.84% val / -4.82% test.**
+
+- **val_avg/mae_surf_p:** 70.3559 (was 73.1639) — **-3.84%**
+- **test_avg/mae_surf_p:** **61.0663** (was 64.1593) — **-4.82%**
+- **W&B run:** `5rqwzawl`
+- **Epochs:** 18 in ~30 min (wall-clock cap; best epoch 18; OneCycleLR auto-rescaled to doubled DataLoader iterations)
+
+Per-split test `mae_surf_p` (run `5rqwzawl`):
+
+| Split | test | vs prev baseline (#2085) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 66.0608 | 68.7866 | **-3.96%** |
+| `geom_camber_rc` | 73.5254 | 77.3583 | **-4.95%** |
+| `geom_camber_cruise` | 43.1260 | 45.4690 | **-5.15%** |
+| `re_rand` | 61.5528 | 65.0232 | **-5.34%** |
+
+Changes vs prior baseline (#2085):
+- `batch_size=1` (was `2`); `grad_accum=2` unchanged → effective batch 2 (was 4). Halving effective batch again doubles optimizer steps per epoch. The OOD splits show the largest gains (-4.95% to -5.34%) consistent with noise-as-regularisation pushing the model away from train-distribution memorisation. Peak GPU memory 45 GB (still 53% of capacity).
+
+Stack: batch_size=1 + grad_accum=2 + anneal_strategy=linear + betas=(0.95, 0.98) + smooth_l1(β=0.25) + p_weight=2 + grad_clip=1.0 + bf16 + OneCycleLR(max_lr=2e-3, pct_start=0.1).
+
+**Notes for students:** Current baseline is `val_avg/mae_surf_p = 70.3559`. To beat: val < 70.3559. `batch_size=1` is now default in train.py.
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/batch-size-1-eff2" --wandb_group "willow-r2-throughput"
+```
+
+---
+
 ## 2026-05-13 11:15 — PR #2085: fern — batch_size 4 → 2, grad_accum=2 (effective batch 4) (MERGED)
 
 **New best val and test. 10th consecutive compounding win: -0.97% val / -2.82% test.**
