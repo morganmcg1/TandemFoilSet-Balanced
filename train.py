@@ -121,7 +121,15 @@ class FourierCoordEnc(nn.Module):
     def __init__(self, n_freqs: int = 4):
         super().__init__()
         self.n_freqs = n_freqs
-        freqs = 2.0 ** torch.arange(n_freqs).float()
+        # H52: init near #2370's learned equilibrium [0.75, 1.46, 3.44, 8, 16, 32].
+        # Top 3 are unchanged from dyadic (stayed pinned in #2370).
+        # Bottom 3 are set to where #2370's training converged after 12 epochs.
+        # Tests hypothesis B: does starting at the equilibrium give the architectural gain
+        # without relying on training dynamics?
+        if n_freqs == 6:
+            freqs = torch.tensor([0.75, 1.46, 3.44, 8.0, 16.0, 32.0])
+        else:
+            freqs = 2.0 ** torch.arange(n_freqs).float()
         self.freqs = nn.Parameter(freqs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -527,6 +535,8 @@ print(
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e}"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
+print(f"[H52] Fourier freqs init: {fourier_enc.freqs.detach().tolist()}")
+# Expected: [0.75, 1.46, 3.44, 8.0, 16.0, 32.0]
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
 # scheduler.step() is called once per BATCH below, so total_iters and T_max are expressed in batches.
 batches_per_epoch = len(train_loader)
@@ -675,16 +685,29 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
-# H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
+# H40: final learned freqs values.
+# H52: equilibrium init [0.75, 1.46, 3.44, 8, 16, 32] when N_FREQS==6 (else dyadic).
+# Track drift from both the actual H52 init and the dyadic reference so we can see
+# whether the final freqs moved further from dyadic (launching-pad evidence) or back
+# toward dyadic (different-basin evidence).
 final_freqs = fourier_enc.freqs.detach().cpu().tolist()
-init_freqs = [2.0**k for k in range(N_FREQS)]
-freq_drift = [f - i for f, i in zip(final_freqs, init_freqs)]
-freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, init_freqs)]
+dyadic_init = [2.0**k for k in range(N_FREQS)]
+if N_FREQS == 6:
+    h52_init = [0.75, 1.46, 3.44, 8.0, 16.0, 32.0]
+else:
+    h52_init = dyadic_init
+freq_drift = [f - i for f, i in zip(final_freqs, h52_init)]
+freq_rel_drift = [(f - i) / i for f, i in zip(final_freqs, h52_init)]
+freq_drift_vs_dyadic = [f - i for f, i in zip(final_freqs, dyadic_init)]
+freq_rel_drift_vs_dyadic = [(f - i) / i for f, i in zip(final_freqs, dyadic_init)]
 freqs_summary = {
     "final/freqs": final_freqs,
-    "final/freqs_init": init_freqs,
+    "final/freqs_init": h52_init,
     "final/freqs_abs_drift": freq_drift,
     "final/freqs_rel_drift": freq_rel_drift,
+    "final/freqs_dyadic_init": dyadic_init,
+    "final/freqs_abs_drift_vs_dyadic": freq_drift_vs_dyadic,
+    "final/freqs_rel_drift_vs_dyadic": freq_rel_drift_vs_dyadic,
 }
 append_metrics_jsonl(
     metrics_jsonl_path,
@@ -698,11 +721,12 @@ for i in range(len(model.blocks)):
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
     )
-print("[H40] Final learned freqs vs dyadic init:")
+print("[H52] Final learned freqs vs H52 equilibrium init:")
 for k in range(N_FREQS):
     print(
-        f"  freq[{k}]: init={init_freqs[k]:.4f} -> final={final_freqs[k]:.4f} "
-        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}%)"
+        f"  freq[{k}]: init={h52_init[k]:.4f} -> final={final_freqs[k]:.4f} "
+        f"(drift {freq_drift[k]:+.4f}, {freq_rel_drift[k]*100:+.2f}% vs init; "
+        f"{freq_rel_drift_vs_dyadic[k]*100:+.2f}% vs dyadic)"
     )
 
 # --- Test evaluation + local summary ---
