@@ -161,8 +161,11 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
-        fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
+        # PaLM-style parallel composition (Chowdhery et al. 2022): attn and mlp
+        # share the same pre-norm input h=ln_1(fx); ln_2 instantiated but unused.
+        # Single residual addition decouples gradient paths of gamma_attn / gamma_mlp.
+        h = self.ln_1(fx)
+        fx = self.gamma_attn * self.attn(h) + self.gamma_mlp * self.mlp(h) + fx
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -524,7 +527,21 @@ optimizer = Lion(
     betas=(0.9, 0.99),
 )
 print(f"Optimizer: Lion (Chen et al. 2023) | lr={cfg.lr}, wd={cfg.weight_decay}, betas=(0.9, 0.99) | sign-based momentum update | replaces AdamW")
-print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 36.3994")
+print(f"Lion LR sweep: lr={cfg.lr} (1.5x the #2524 baseline lr=1e-4); wd=3e-4, betas=(0.9, 0.99); new baseline to beat: val_avg/mae_surf_p < 33.4935 (NEW Lion lr=1.5e-4 #2553)")
+# --- PaLM-parallel forward diagnostic
+_palm_inner = getattr(model, "_orig_mod", model)
+_palm_gamma_attn_init = [_b.gamma_attn.data.mean().item() for _b in _palm_inner.blocks]
+_palm_gamma_mlp_init = [_b.gamma_mlp.data.mean().item() for _b in _palm_inner.blocks]
+print(f"PaLM-parallel: attn+mlp branches run on shared h=ln_1(fx); "
+      f"single residual addition per block; ln_2 instantiated but unused; "
+      f"gamma_attn init: {_palm_gamma_attn_init}; "
+      f"baseline to beat: val_avg/mae_surf_p < 33.4935 (Lion lr=1.5e-4 from PR #2553)")
+append_metrics_jsonl_pending = {
+    "event": "palm_parallel_init",
+    "gamma_attn_init_per_block": _palm_gamma_attn_init,
+    "gamma_mlp_init_per_block": _palm_gamma_mlp_init,
+    "note": "PaLM-style parallel attn+mlp on shared h=ln_1(fx); single residual; ln_2 unused",
+}
 warmup_epochs = 3
 scheduler = torch.optim.lr_scheduler.SequentialLR(
     optimizer,
@@ -547,6 +564,7 @@ model_dir = Path("models") / f"model-{_sanitize_path_token(experiment_label)}-{e
 model_dir.mkdir(parents=True, exist_ok=True)
 model_path = model_dir / "checkpoint.pt"
 metrics_jsonl_path = model_dir / "metrics.jsonl"
+append_metrics_jsonl(metrics_jsonl_path, append_metrics_jsonl_pending)
 with open(model_dir / "config.yaml", "w") as f:
     yaml.safe_dump({
         **asdict(cfg),
