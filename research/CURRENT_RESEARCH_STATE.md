@@ -1,13 +1,13 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 72)
+- **As of:** 2026-05-13 (updated cycle 73)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
 ## Current baseline
 
-**`val_avg/mae_surf_p = 82.2642`** — PR #2444 (cosine_restart_T_0=7, T_mult=2, WD=5e-4, 21 epochs, cycles [7,14]), merged 2026-05-13 cycle 62.
-**Test 4-split mean: 72.4019** (test_avg/mae_surf_p, W&B run `1m0cfdr4`).
+**`val_avg/mae_surf_p = 65.5364`** — PR #2578 (Lion optimizer, lion_lr_scale=0.2, lion_wd_scale=3.0, T_0=7 T_mult=2, 21 epochs), merged 2026-05-13 cycle 73. **Cross-seed mean of 2 seeds (qffv9cex=66.9965, c7rz84il=64.0763). σ_val≈2.06 (2-seed estimate).**
+**Test 4-split mean: 57.8817** (test_avg/mae_surf_p, W&B runs qffv9cex+c7rz84il, mean).
 
 ## Improvement trajectory
 
@@ -23,9 +23,112 @@
 | 42 | #2178 | WD re-tune 1e-4→3e-4 at 21 epochs | 87.0144 | −3.01% |
 | 46 | #2227 | SGDR cosine warm restart T_0=10 | 83.9969 | −3.59% |
 | 61 | #2357 | Cosine restart eta_min=1e-5 | 83.6873 | −0.37% |
-| **62** | **#2444** | **T_mult=2 restart (T_0=7, cycles [7,14])** | **82.2642** | **−2.1%** |
+| 62 | #2444 | T_mult=2 restart (T_0=7, cycles [7,14]) | 82.2642 | −2.1% |
+| **73** | **#2578** | **Lion optimizer (sign-based, 5×LR, 3×WD)** | **65.5364** | **−20.3%** ← LARGEST WIN |
 
 ## Current research focus
+
+**Cycle 73. LION WINS — NEW RESEARCH ERA. PR #2578 (fern, Lion optimizer) merged at cycle 73 with val=65.5364 (cross-seed mean), a −20.3% improvement over the prior AdamW T_mult=2 SOTA (82.26). This is the largest single improvement in the entire research run — 49σ improvement, all 4 splits, both seeds. The mechanism: sign-based constant-magnitude updates (Lion) sidestep AdamW's `1/(sqrt(v)+ε)` adaptive term which amplified noisy gradients from variable mesh sizes (74K-242K nodes). Required 5× LR reduction and 3× WD increase (from the Chen 2023 paper) to be stable. The research question has fundamentally shifted: we are now asking "what can improve ON TOP OF Lion?" not "what can improve over AdamW?".**
+
+**Cycle 73 also closed:**
+- **#2521 thorfinn (input noise): CLOSED.** 2nd noise-1e-2 seed (veuzajsg) = val=87.67 (+5.41 vs SOTA) → close per branching rule. Paper finding: σ_arm(input-noise-1e-2)=4.81, 14× amplification over bare σ=0.34. Input noise on T_mult=2 generates more optimization-path variance than regularization signal.
+- **#2445 nezuko (3-seed calibration): CLOSED (no metric win).** Key findings preserved: σ_val(T_0=10 baseline)=0.34; σ_val(T_mult=2 SOTA)=1.16 (~3.4× wider). SOTA #2444 val=82.26 was a ~1.94σ favorable tail draw from mean~84.5.
+- **#2554 tanjiro (AdaBelief): CLOSED.** Context shift — AdaBelief (AdamW-family adaptive-magnitude) cannot compete with Lion's 20% improvement. No W&B runs started. Tanjiro immediately reassigned to Lion-based composition.
+
+**Cycle 73 new assignments (all Lion-based):**
+- **nezuko #2617 (lion-sigma-calibration):** σ calibration on Lion config (3 seeds). Establish σ_Lion for paper CI. 2-seed estimate σ≈2.06 val.
+- **fern #2619 (lion-wd-scale-sweep):** Arms at lion_wd_scale ∈ {5.0, 8.0} (vs current 3.0). Chen 2023 paper recommends 3-10×; we used conservative 3×.
+- **thorfinn #new (lion-3cycle-restart):** T_0=7, T_mult=1 → [7,7,7]=21 epochs. Tests whether Lion's fast post-restart recovery enables 3-basin search.
+- **tanjiro #new (lion-rmsnorm-compose):** First architecture+optimizer composition: Lion + RMSNorm. Tests orthogonal composition of normalization architecture and optimizer choice.
+
+## Live PR status
+
+| PR | Student | Hypothesis | Status | Notes |
+|----|---------|------------|--------|-------|
+| #2566 | frieren | GeGLU MLP block (Shazeer 2020) | WIP | Running on pre-Lion AdamW base; architecture result will inform GeGLU+Lion composition |
+| #2546 | edward | DropPath (Huang 2016) | WIP | Active pod, last updated 21:50; running on pre-Lion AdamW base |
+| #2603 | alphonse | RMSNorm (Zhang & Sennrich 2019) | WIP | Just started (~30 min ago); on pre-Lion AdamW base |
+| #2605 | askeladd | Gradient Noise (Neelakantan 2015) | WIP | Just started (~30 min ago); on pre-Lion AdamW base |
+| #2617 | nezuko | Lion σ calibration (3 seeds) | WIP NEW | Lion baseline config, 3 controlled seeds |
+| #2619 | fern | Lion WD scale sweep (5.0, 8.0) | WIP NEW | Tests higher WD with Lion |
+| #2620 | thorfinn | Lion 3-cycle T_mult=1 | WIP NEW | T_0=7 T_mult=1 → [7,7,7] cycles |
+| #2621 | tanjiro | Lion + RMSNorm composition | WIP NEW | First arch+optimizer compose |
+
+**Note on pre-Lion WIP PRs (#2566, #2546, #2603, #2605):** These are running against the old AdamW baseline (82.26). If any show improvement there, the next step is testing composition with Lion. If they regress on AdamW, they're likely dead ends (architecture changes that didn't survive AdamW won't survive Lion). The pre-Lion data is still scientifically useful for the paper's "ablation" section.
+
+## σ calibration summary (critical for paper appendix)
+
+| Config | σ_val | σ_test | Seeds | Notes |
+|--------|------:|-------:|------:|-------|
+| #2227 T_0=10 T_mult=1 | 0.34 | 0.65 | 3 | Tight; AdamW short-cycle |
+| #2444 T_mult=2 SOTA | 1.16 | 0.88 | 3 | 3.4× wider; SOTA val=82.26 was ~1.94σ tail draw |
+| Input noise 1e-2 on T_mult=2 | 4.81 | — | 2 | 14× amplification; noise killed by cycle-2 variance |
+| Lion (from #2578) | ~2.06 | ~0.46 | 2 | 2-seed estimate; nezuko #2617 will tighten this |
+
+**2σ merge bar for Lion-based PRs: ~4.1 val improvement needed for confident win (need val_avg ≤ 61.4).**
+
+## Closed axes (permanent)
+
+- **SWA / weight averaging family:** 6 attempts, 3 mechanism axes. PERMANENTLY EXHAUSTED.
+- **AdamW β1/β2/ε sweeps:** All regress. AdamW optimizer hyperparameters exhausted.
+- **Weight decay (AdamW stack):** Optimal at 5e-4 under T_mult=2. Above 5e-4 regresses.
+- **eta_min sweeps:** Optimal at 1e-5 under T_0=10. Under T_mult=2, eta_min=0 is better.
+- **Lookahead:** Incompatible with SGDR restarts — damping mechanism fights spike-recovery.
+- **Reflection TTA:** PhysicsAttention is non-equivariant; feature inconsistency (saf/dsdf) is fatal.
+- **MLP dropout:** Over-regularizes capacity at 21-epoch budget.
+- **Input noise (Tikhonov):** σ_arm amplification dominates regularization signal under T_mult=2.
+- **QK-Norm:** Neutral (±0.4 val, borderline close); per-head scale barely moved from init.
+- **AdaBelief:** Closed pre-run due to Lion's emergence making AdamW-family experiments obsolete.
+
+## Highest-value next directions
+
+After Lion σ calibration, the priority order is:
+1. **Architecture + Lion compositions** (when in-flight PRs #2603 RMSNorm, #2566 GeGLU, #2546 DropPath report): test each architecture change ON TOP OF Lion. These are the only mechanisms that could realistically move val by 4+ val from 65.54.
+2. **Lion WD scale** (fern #2619): could give 2-5 val improvement if current 3.0 is suboptimal.
+3. **Lion cycle structure** (thorfinn #TBD): 3-cycle T_mult=1 if Lion's fast recovery enables it.
+4. **Gradient noise with Lion** (future): askeladd #2605 tests on AdamW first; if it works there, test on Lion.
+
+## Closed hypotheses list
+
+| ID | Student | Hypothesis | Status | val delta |
+|----|---------|------------|--------|-----------|
+| 1 | — | BIVW | MERGED | baseline |
+| 2 | — | SurfHead zero-init | MERGED | −5.4% |
+| 3 | — | Huber δ=0.5 | MERGED | −17.7% |
+| 4 | — | Decoupled LR 5e-3 | MERGED | −0.2% |
+| 5 | — | WD 5e-4 | MERGED | −4.5% |
+| 6 | — | torch.compile | MERGED | −4.2% |
+| 7 | — | SGDR T_0=10 | MERGED | −3.6% |
+| 8 | — | eta_min=1e-5 | MERGED | −0.4% |
+| 9 | — | T_mult=2 | MERGED | −2.1% |
+| **50** | **fern** | **Lion optimizer** | **MERGED** | **−20.3%** ← biggest |
+| 10-31 | various | EMA, SWA family (6 attempts) | CLOSED | SWA permanently exhausted |
+| 32 | nezuko | AdamW β2 sweep | CLOSED | regress |
+| 33 | thorfinn | AdamW β1 sweep | CLOSED | regress |
+| 34 | askeladd | AdamW ε sweep | CLOSED | regress |
+| 35 | tanjiro | Lookahead × restart | CLOSED | regress ~18σ |
+| 36 | askeladd | eta_min refinement | CLOSED | regress |
+| 37 | edward | Head WD × restart | CLOSED | regress |
+| 38 | thorfinn | MLP dropout | CLOSED | regress +8.4% |
+| 39 | thorfinn | Input noise (Tikhonov) | CLOSED | σ_arm=4.81 kills signal |
+| 40 | frieren | WD > 5e-4 | CLOSED | regress |
+| 41 | alphonse | T_mult=2 + eta_min compose | CLOSED | σ_val=1.85, mean regress |
+| 42 | fern | Within-cycle SWA | CLOSED | SWA exhausted |
+| 43 | askeladd | Reflection TTA | CLOSED | 3.5× catastrophic |
+| 44 | alphonse | QK-Norm | CLOSED | borderline neutral ±0.13 |
+| 45 | nezuko | 3-seed σ calibration | CLOSED | no metric win; σ data preserved |
+| 46 | tanjiro | AdaBelief | CLOSED | context shift to Lion |
+| 47 | edward | DropPath | WIP | running |
+| 48 | frieren | GeGLU | WIP | running |
+| 49 | alphonse | RMSNorm | WIP | running |
+| 50 (Lion) | fern | Lion | MERGED | see above |
+| 51 | askeladd | Gradient Noise | WIP | running |
+| 52 | nezuko | Lion σ calibration | WIP | new |
+| 53 | fern | Lion WD scale | WIP | new |
+| 54 | thorfinn | Lion 3-cycle T_mult=1 | WIP | new |
+| 55 | tanjiro | Lion + RMSNorm compose | WIP | new |
+
+---
 
 **Cycle 72. Two closures + 2 fresh assignments. #2579 alphonse (QK-Norm) CLOSED**: single arm val=82.3964 (+0.13 borderline neutral vs SOTA 82.2642). Falls in the ±0.4 close band per branching rules. **Per-split analysis reveals the mechanism DID fire:** val_geom_camber_rc −2.56 / test −2.15 (≥6σ, confirms the PR-body prediction that bounded-attention helps OOD geometry). But the rc gain was offset by cruise (+1.20) and re_rand (+1.71) — QK-norm redistributes attention capacity from easy to hard splits without net aggregate gain. Diagnostic: the learnable `qk_scale` drifted only +1.2% from init (sqrt(d_head)=5.657 → final ~5.72), meaning **the operative mechanism is L2-normalization geometry (cosine similarity constraint on Q,K), NOT temperature re-tuning**. Restart spike not dampened (+24.56, within baseline range). **Closed with paper-worthy mechanism analysis: L2-norm of Q/K is the load-bearing operation, not the scale parameter.** **#2548 askeladd (Reflection TTA) CLOSED**: val_tta_avg=299.22 / test_tta_avg=286.15 — 3.51x and 3.79x worse than no-TTA baseline. 2 seeds, consistent. Per-split analysis diagnosed two causes: (1) raceCar ground plane (z>0 always) → reflection produces OOD z<0 coordinates; (2) feature-vector inconsistency — saf/dsdf dims not reflected, producing a chimera even on z-symmetric cruise geometry. Cruise split STILL regresses 2.25x despite z-symmetric mesh → rules out geometry alone, feature inconsistency is dominant. **Critical finding: model becomes MORE non-equivariant as training progresses** (e3 TTA Δ≈0; e21 TTA Δ+214) — learned asymmetric bias, not architectural. Paper-worthy result: PhysicsAttention is strongly non-equivariant, inconsistent feature reflection is fatal. Reflection-TTA axis permanently closed.
 

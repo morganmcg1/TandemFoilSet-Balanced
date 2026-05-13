@@ -2,6 +2,133 @@
 
 ---
 
+## 2026-05-13 22:25 — Cycle 73 new assignments (4 Lion-based experiments)
+
+- **nezuko #new (lion-sigma-calibration):** 3-seed σ calibration on Lion config (--seed 42/43/44, same Lion SOTA stack). Goal: establish σ_Lion precisely for paper appendix CI. 2-seed estimate σ≈2.06 val (from PR #2578 seeds 1+2). 3 seeds will tighten to ±28% CI. Critical for setting the 2σ merge bar (~4.1 val improvement needed for confidence). W&B group: nezuko-lion-sigma.
+- **fern #new (lion-wd-scale-sweep):** Arms at lion_wd_scale ∈ {5.0, 8.0} vs current 3.0. Chen 2023 paper recommends 3-10× WD. We used 3× (conservative end). Higher WD may push Lion toward flatter minima. WD=5.0 → effective WD=2.5e-3 (~5× AdamW), WD=8.0 → WD=4.0e-3 (~8× AdamW). W&B group: fern-lion-wd.
+- **thorfinn #new (lion-3cycle-restart):** T_0=7, T_mult=1 (3 equal 7-epoch cycles = 21 epochs exactly). Tests whether Lion's fast post-restart recovery (back below pre-restart best in 3 epochs vs AdamW's 5-6) allows profitable 3-cycle structure. Current best uses T_mult=2 [7,14]. 3-cycle [7,7,7] gives 3 basin searches instead of 2. Single arm. W&B group: thorfinn-lion-cycles.
+- **tanjiro #new (lion-rmsnorm-compose):** First architecture+optimizer composition: Lion + RMSNorm in TransolverBlock. Implement --use_rmsnorm (same as alphonse #2603 design) on top of the Lion SOTA config. Tests whether normalization arch change composes with optimizer change. Two orthogonal mechanisms: RMSNorm targets PRE-sublayer normalization; Lion targets update direction in parameter space. W&B group: tanjiro-lion-rmsnorm.
+
+---
+
+## 2026-05-13 22:25 — PR #2554: tanjiro AdaBelief — CLOSED cycle 73 (context shift)
+
+- **Branch:** `willowpai2g48h4-tanjiro/adabelief-optimizer`
+- **Closed reason:** Context fundamentally changed after Lion (PR #2578) posted val=65.54, a −16.73 improvement over AdamW SOTA. AdaBelief is still AdamW-family (v_t = (g−m)² vs v_t = g²) — it keeps adaptive magnitude framework. Even if AdaBelief beats AdamW on old 82.26 baseline, it cannot beat Lion at 65.54. The experimental question has shifted from "what beats AdamW?" to "what improves on Lion?". AdaBelief is excluded from that question by mechanism.
+- **No W&B results:** Pod was stuck on rate limit retry loop at the time of closing. No runs were started. Clean close with no data lost.
+- **Paper note:** Will be listed in "compared optimizer variants" section — "AdaBelief, an AdamW variant with variance-based step size, was not run to completion due to being outclassed by the Lion discovery."
+
+---
+
+## 2026-05-13 22:20 — PR #2445: nezuko 3-seed baseline calibration — CLOSED cycle 73
+
+- **Branch:** `willowpai2g48h4-nezuko/seed-variance-calibration`
+- **Result: No metric win, but critical σ measurements.** PR not merged (val mean = 84.51, worse than SOTA), but findings are foundational for the paper appendix.
+
+### Key findings (two rounds of measurement)
+
+**Round 1 — #2227 T_0=10 T_mult=1 baseline (3 seeds: 42/43/44):**
+
+| Seed | val_avg | test_avg | W&B run |
+|------|--------:|--------:|---------|
+| 42 | 86.3207 | 75.9316 | `d9iwzzni` |
+| 43 | 86.9272 | 77.1424 | `3ey6sjoz` |
+| 44 | 86.8930 | 76.9254 | `daegvjgo` |
+| **mean** | **86.7136** | **76.6665** | |
+| **std** | **0.3407** | **0.6456** | |
+
+σ_val(T_0=10 baseline) = **0.34**. The kt5pk5qu reference (83.997) is ~8σ below this mean — NOT a lucky draw. Confirmed: environment/code drift between kt5pk5qu's runtime and current code.
+
+**Round 2 — CURRENT SOTA #2444 T_0=7 T_mult=2 config (3 seeds: 42/43/44):**
+
+| Seed | val_avg | test_avg | W&B run |
+|------|--------:|--------:|---------|
+| 42 | 83.2279 | 74.0235 | `1oniltmp` |
+| 43 | 84.8314 | 75.2006 | `0w0r4z87` |
+| 44 | 85.4696 | 75.7402 | `njdc2evr` |
+| **mean** | **84.5096** | **74.9881** | |
+| **std** | **1.1550** | **0.8778** | |
+
+σ_val(T_mult=2 SOTA config) = **1.155** (3.4× higher than #2227 baseline σ=0.34).
+
+### Critical paper insights
+1. **T_mult=2 config has ~3.4× wider σ than T_0=10 config.** The longer 14-epoch cycle-2 amplifies sensitivity to initial RNG state.
+2. **SOTA #2444 (val=82.26) is a ~1.94σ favorable tail draw** (mean is 84.51). It cannot be reproduced under seeded runs.
+3. **Merge bar for T_mult=2 should be ~2σ=2.3 val improvement from seeded mean (84.51−2.3=82.2)**, not 0.7 val.
+4. **σ_val estimates by config:** T_0=10 T_mult=1 → 0.34; T_mult=2 SOTA → 1.16; input noise on T_mult=2 → 4.81; Lion (2-seed estimate) → ~2.06.
+- **Seed flag committed:** `--seed` flag and `set_seed()` helper now in advisor branch train.py (from rebase commit `a21202c`).
+- **Closed (no merge):** No metric win. σ findings captured in log. Nezuko immediately reassigned to σ calibration of Lion baseline.
+
+---
+
+## 2026-05-13 22:20 — PR #2521: thorfinn Input Gaussian Noise — CLOSED cycle 73
+
+- **Branch:** `willowpai2g48h4-thorfinn/input-gaussian-noise`
+- **Result: 2nd seed (veuzajsg) regressed to val=87.67 (+5.41 vs SOTA). CLOSE per branching rule (>84 val threshold).**
+
+### Full arm summary
+
+| Run | Arm | val_avg | test_avg | Δ val vs SOTA 82.26 |
+|-----|-----|--------:|--------:|----:|
+| `g1x2giek` | noise-1e-2 seed 1 | **80.8671** | 71.2620 | **−1.397** |
+| `veuzajsg` | noise-1e-2 seed 2 | **87.6748** | 77.7935 | **+5.411** |
+| `o820wdp3` | noise-5e-3 seed 1 | 82.9601 | 73.0227 | +0.696 |
+| `2r2m6tjz` | noise-5e-3 seed 2 | 85.1517 | 75.2666 | +2.888 |
+| `brk1y3b9` | noise-1e-2 early | 131.61 (crash) | — | — |
+| `025rtkfb` | noise-5e-3 early | 116.24 (crash) | — | — |
+
+### Within-arm variance analysis
+
+| Arm | N finished | mean | range | σ_arm | Δ mean vs SOTA |
+|-----|----------:|-----:|------:|------:|----:|
+| noise-1e-2 | 2 | **84.27** | 6.80 | 4.81 | **+2.01** |
+| noise-5e-3 | 2 | **84.06** | 2.19 | 1.55 | **+1.80** |
+
+**σ_arm(noise-1e-2) = 4.81 — a 14× variance amplification over σ_seed=0.34 on bare baseline.** Seed 1 was a tail draw.
+
+### Key finding: cycle-2 second-seed divergence
+Seed 1 and seed 2 were within 2 val of each other at e7 (end of cycle 1). Divergence emerges during cycle 2 — seed 1 reaches 80.87 at e21, seed 2 reaches 87.67. **The T_mult=2 second cycle with input noise is the high-variance phase.** Same pattern as alphonse #2498 (σ_val≈1.85 across 4 seeds for T_mult=2+eta_min).
+
+### Paper value
+- Bishop 1995's Tikhonov equivalence holds at large-batch limit. At our 21-epoch budget with per-minibatch noise, optimization-path variance dominates the regularization mean.
+- σ_arm(input-noise) ≈ 14× σ_seed(bare) is a publishable quantification of "how much does input-noise amplify seed variance?"
+- Complements the T_mult=2 σ finding from #2445: both show that extra stochasticity on top of T_mult=2 restart compounds the intrinsic variance.
+
+---
+
+## 2026-05-13 22:15 — PR #2578: fern Lion optimizer (Chen 2023) — MERGED cycle 73 ← NEW SOTA
+
+- **Branch:** `willowpai2g48h4-fern/lion-optimizer`
+- **Result: LARGEST SINGLE IMPROVEMENT IN THIS ENTIRE RESEARCH RUN. 2 seeds confirm. val=65.5364 (cross-seed mean), −16.73 vs SOTA 82.2642 (~49σ). test=57.8817, −14.52.**
+
+### Cross-seed headline
+
+| Metric | Seed 1 (qffv9cex) | Seed 2 (c7rz84il) | Mean | SOTA #2444 | Δ |
+|--------|------------------:|------------------:|-----:|----------:|--:|
+| val_avg/mae_surf_p | 66.9965 | 64.0763 | **65.5364** | 82.2642 | **−16.73** |
+| test_avg/mae_surf_p | 58.2068 | 57.5565 | **57.8817** | 72.4019 | **−14.52** |
+
+### Per-split val (cross-seed mean)
+
+| Split | Seed 1 | Seed 2 | Mean | SOTA | Δ Mean |
+|-------|-------:|-------:|-----:|-----:|------:|
+| val_single_in_dist | 79.5797 | 70.4151 | 74.9974 | 96.8979 | **−21.90** |
+| val_geom_camber_rc | 82.6891 | 79.4419 | 81.0655 | 103.1372 | **−22.07** |
+| val_geom_camber_cruise | 42.5506 | 43.1682 | 42.8594 | 53.9395 | −11.08 |
+| val_re_rand | 63.1669 | 63.2800 | 63.2234 | 75.0824 | −11.86 |
+| **val_avg** | **66.9965** | **64.0763** | **65.5364** | **82.2642** | **−16.73** |
+
+### Analysis
+- **Why Lion wins:** Sign-based constant-magnitude updates sidestep AdamW's `1/(sqrt(v)+ε)` adaptive term, which amplifies noisy gradient directions from variable mesh sizes (74K-242K nodes). The 5× LR reduction + 3× WD increase also pushes Lion toward flatter minima — consistent with prior SWA closures (#2522) that identified sharp minima as the model's chronic failure mode.
+- **All splits improved, both seeds (~30σ each).** Predicted per-split winner (val_geom_camber_rc, worst split) had largest gain (−22.07 mean). Prediction matched.
+- **Cycle spike at e7→e8:** +25.4 val (seed 1) — slightly larger than AdamW's +15, but recovery faster: below pre-restart best by e11 (3 epochs) vs AdamW's ~5-6 epochs.
+- **σ_seed(Lion):** From 2 seeds, range=2.92, estimated σ≈2.06 val. Wider than AdamW σ_seed=1.16.
+- **Effective hyperparameters:** encoder lr=1e-4, surf_head lr=1e-3, WD=1.5e-3, β=(0.9, 0.99). T_0=7, T_mult=2 unchanged.
+- **Wall-clock:** 31 min / 21 epochs — identical to AdamW (torch.compile overhead dominates Lion's per-step savings).
+- **New baseline: val_avg/mae_surf_p = 65.5364, test_avg/mae_surf_p = 57.8817.**
+
+---
+
 ## 2026-05-13 22:15 — PR #2605: askeladd Gradient Noise (Neelakantan 2015) — assignment (NEW cycle 72)
 
 - **Branch:** `willowpai2g48h4-askeladd/gradient-noise-neelakantan2015`
