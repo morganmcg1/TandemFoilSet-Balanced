@@ -85,7 +85,8 @@ class MLP(nn.Module):
 class PhysicsAttention(nn.Module):
     """Physics-aware attention for irregular meshes."""
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64,
+                 learnable_routing_temp=False):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -93,6 +94,14 @@ class PhysicsAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        # Optional per-block log-parameterized routing temperature. Stacks
+        # multiplicatively on top of per-head `self.temperature`. Init log_temp=0
+        # → exp(0)=1, so initial slice routing is unchanged from baseline.
+        self.learnable_routing_temp = learnable_routing_temp
+        if learnable_routing_temp:
+            self.routing_log_temp = nn.Parameter(torch.zeros(1))
+        else:
+            self.routing_log_temp = None
 
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
@@ -118,7 +127,16 @@ class PhysicsAttention(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        slice_logits = self.in_project_slice(x_mid) / self.temperature
+        if self.routing_log_temp is not None:
+            slice_logits = slice_logits / torch.exp(self.routing_log_temp)
+        slice_weights = self.softmax(slice_logits)
+        if getattr(self, "_capture_routing_entropy", False):
+            with torch.no_grad():
+                clamped = slice_weights.clamp(min=1e-12)
+                ent = -(clamped * clamped.log()).sum(dim=-1)
+                self._last_routing_entropy = ent.mean().detach()
+            self._capture_routing_entropy = False
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -139,13 +157,15 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 learnable_routing_temp=False):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.LayerNorm(hidden_dim)
         self.attn = PhysicsAttention(
             hidden_dim, heads=num_heads, dim_head=hidden_dim // num_heads,
             dropout=dropout, slice_num=slice_num,
+            learnable_routing_temp=learnable_routing_temp,
         )
         self.ln_2 = nn.LayerNorm(hidden_dim)
         self.mlp = MLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim,
@@ -174,7 +194,8 @@ class Transolver(nn.Module):
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
                  output_fields: list[str] | None = None,
-                 output_dims: list[int] | None = None):
+                 output_dims: list[int] | None = None,
+                 learnable_routing_temp=False):
         super().__init__()
         self.ref = ref
         self.unified_pos = unified_pos
@@ -195,6 +216,7 @@ class Transolver(nn.Module):
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                learnable_routing_temp=learnable_routing_temp,
             )
             for i in range(n_layers)
         ])
@@ -468,6 +490,7 @@ class Config:
     seed: int = 0
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
+    learnable_routing_temp: bool = False  # add per-block learnable softmax temperature on PhysicsAttention slice-routing
 
 
 cfg = sp.parse(Config)
@@ -510,6 +533,7 @@ model_config = dict(
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
+    learnable_routing_temp=cfg.learnable_routing_temp,
 )
 
 model = FiLMTransolver(
@@ -525,6 +549,7 @@ model = FiLMTransolver(
     mlp_ratio=model_config["mlp_ratio"],
     output_fields=model_config["output_fields"],
     output_dims=model_config["output_dims"],
+    learnable_routing_temp=cfg.learnable_routing_temp,
 ).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 n_params_film = sum(p.numel() for p in model.film.parameters())
@@ -583,6 +608,13 @@ best_metrics: dict = {}
 global_step = 0
 train_start = time.time()
 
+def _physics_attn_blocks(m):
+    """Yield PhysicsAttention modules inside a (FiLM)Transolver in block order."""
+    base = m.transolver if isinstance(m, FiLMTransolver) else m
+    for blk in base.blocks:
+        yield blk.attn
+
+
 for epoch in range(MAX_EPOCHS):
     if (time.time() - train_start) / 60.0 >= MAX_TIMEOUT_MIN:
         print(f"Timeout ({MAX_TIMEOUT_MIN} min). Stopping.")
@@ -595,6 +627,14 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    # First/last batch routing_log_temp gradient magnitudes (per block).
+    first_batch_routing_grads: list[float] | None = None
+    last_batch_routing_grads: list[float] | None = None
+
+    # Arm routing-entropy capture for the first batch of this epoch only.
+    if cfg.learnable_routing_temp:
+        for attn in _physics_attn_blocks(model):
+            attn._capture_routing_entropy = True
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -634,6 +674,17 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        # Capture per-block routing_log_temp gradient magnitudes (post-backward,
+        # pre-clip) on the first batch of the epoch (always) and update each batch
+        # for "last batch" tracking — but only sync to CPU on the first batch to
+        # avoid per-step CPU-GPU stalls. Last-batch sync happens after the loop.
+        if cfg.learnable_routing_temp and first_batch_routing_grads is None:
+            first_batch_routing_grads = []
+            for attn in _physics_attn_blocks(model):
+                p = attn.routing_log_temp
+                first_batch_routing_grads.append(
+                    0.0 if (p is None or p.grad is None) else p.grad.abs().item()
+                )
         grad_norm_val = None
         clip_fired = 0.0
         if cfg.max_norm > 0:
@@ -663,6 +714,16 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
+
+    # Last-batch routing_log_temp gradient magnitudes (post-backward on the last
+    # batch, after the dataloader loop ends but before zero_grad of next epoch).
+    if cfg.learnable_routing_temp:
+        last_batch_routing_grads = []
+        for attn in _physics_attn_blocks(model):
+            p = attn.routing_log_temp
+            last_batch_routing_grads.append(
+                0.0 if (p is None or p.grad is None) else p.grad.abs().item()
+            )
 
     if epoch >= swa_start_epoch:
         swa_model.update_parameters(model)
@@ -705,6 +766,24 @@ for epoch in range(MAX_EPOCHS):
             log_metrics[f"{split_name}/{k}"] = v
     for k, v in val_avg.items():
         log_metrics[f"val_{k}"] = v  # val_avg/mae_surf_p etc.
+
+    # Routing-temperature diagnostics: per-block learned temperature,
+    # gradient magnitudes (first/last batch), and last-batch routing entropy.
+    if cfg.learnable_routing_temp:
+        for li, attn in enumerate(_physics_attn_blocks(model)):
+            if attn.routing_log_temp is not None:
+                log_metrics[f"routing/log_temp_L{li}"] = attn.routing_log_temp.item()
+                log_metrics[f"routing/temp_L{li}"] = float(torch.exp(attn.routing_log_temp).item())
+            if hasattr(attn, "_last_routing_entropy") and attn._last_routing_entropy is not None:
+                log_metrics[f"routing/entropy_L{li}"] = float(attn._last_routing_entropy.item())
+        if first_batch_routing_grads is not None:
+            for li, g in enumerate(first_batch_routing_grads):
+                log_metrics[f"routing/grad_first_batch_L{li}"] = g
+            log_metrics["routing/grad_first_batch_mean"] = sum(first_batch_routing_grads) / max(len(first_batch_routing_grads), 1)
+        if last_batch_routing_grads is not None:
+            for li, g in enumerate(last_batch_routing_grads):
+                log_metrics[f"routing/grad_last_batch_L{li}"] = g
+            log_metrics["routing/grad_last_batch_mean"] = sum(last_batch_routing_grads) / max(len(last_batch_routing_grads), 1)
 
     # FiLM diagnostics: per-layer mean |gamma| and |beta| from last forward.
     if isinstance(model, FiLMTransolver) and model._last_film is not None:
