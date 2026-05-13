@@ -764,6 +764,72 @@ Per-split test surf_p (best seed `80dhotn5`): single_in_dist=58.25, geom_camber_
 
 - **nezuko → PR #2379 (T_max=35 + eta_min=1e-5):** directly tests the residual-LR mechanism with explicit floor. Single kwarg addition.
 
+## 2026-05-13 16:00 — PR #2246 CLOSED: Grad-clip bisect max_norm=1.0 → 5.0
+
+- **Student:** willowpai2g48h3-fern
+- **Branch:** willowpai2g48h3-fern/grad-clip-5
+- **Hypothesis:** Bisect gradient clipping upward (max_norm=1.0 → 5.0) to find whether 1.0 is over-clipping. Predicted mechanism: relaxing the clip threshold allows large-gradient-norm steps on harder OOD batches, potentially freeing the optimizer to find better minima.
+
+### Results (2 seeds, post-grad-clip baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | clip rate | best epoch | runtime |
+|---|---|---:|---:|---:|---:|---|
+| `52yrxqn3` | 1 | **62.373** | **54.665** | 92.3% | 35 | 30.4 min |
+| `w4qk7oza` | 2 | 62.651 | 55.091 | 94.4% | 35 | 30.4 min |
+| **Baseline #1692** | 2 (`aoehi425`) | **60.093** | **53.370** | ~100% | 35 | 30.3 min |
+
+Per-split test surf_p (seed 1, `52yrxqn3`): single_in_dist=59.38 (better), geom_camber_rc=69.85, cruise=35.74, re_rand=53.70
+
+Δ vs baseline: val **+3.8%** (worse), test **+2.4%** (worse).
+
+Key diagnostic: **clip rate stayed 92.3–94.4% at max_norm=5.0** — still in hard-clip regime. The expected OOD-protection mechanism (per-batch step normalisation) requires near-100% clip rate to operate; at 92–94% we're allowing the largest gradient steps through, which explains the OOD regression (cruise +3.6, re_rand +3.9). In-dist improves slightly (single_in_dist 62.00 → 59.38) because unclipped large-gradient steps happen to move in a useful in-dist direction, but OOD suffers.
+
+### Conclusion
+
+**CLOSED — max_norm=5.0 regresses.** The per-split signature matches the "unclipped steps hurt OOD" prediction exactly. At max_norm=5.0 we're still in hard-clip regime (92–94% clip rate vs ~100% at max_norm=1.0), confirming the interpretable variable is *how aggressively the per-batch step-size variance is collapsed to zero*, not the threshold value itself.
+
+Student's decision-tree analysis: "clip rate > 90% and val regression → max_norm=1.0 may be near-optimal; suggest closing the clip-bisection and pivoting." Taking the downward bisect first to check symmetry.
+
+### Follow-up
+
+- **fern → PR #2397 (max_norm=0.5 downward bisect):** symmetric closing move. If harder clipping wins, OOD protection is monotone in aggressiveness. If it loses by >2%, max_norm=1.0 is bracketed from both sides and the magnitude axis is retired.
+
+---
+
+## 2026-05-13 16:30 — PR #1940 CLOSED: batch_size=8 + sqrt-LR (lr=7e-4) on grad-clip baseline
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/bs8-lr-sqrt-scaled
+- **Hypothesis:** Increase batch_size 4→8 with sqrt-LR scaling (lr=5e-4→7e-4) to amortize kernel-launch overhead and reduce gradient noise. Predicted per-step time 1.4–1.7× bs=4 (kernel-launch amortization).
+
+### Results (2 seeds, post-grad-clip baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | per-step time | peak VRAM | epochs |
+|---|---|---:|---:|---:|---:|---:|
+| `ing0conk` | 1 | **67.0132** | **58.9605** | 2.15× bs=4 | 48.2 GB | 33 |
+| `9g7f6dyf` | 2 | 69.5268 | 61.4888 | 2.15× bs=4 | 48.2 GB | 33 |
+| **Baseline #1692** | 2 (`aoehi425`) | **60.093** | **53.370** | 1.00× | 24.1 GB | 35 |
+
+Per-split test surf_p (seed 1, `ing0conk`): single_in_dist=65.95, geom_camber_rc=73.50, cruise=38.33, re_rand=58.06
+
+Δ vs baseline: val **+11.5%** (large regression), test **+10.5%** (large regression). OOD splits: cruise +19.1%, re_rand +16.5%.
+
+### Conclusion
+
+**CLOSED — clean negative, both mechanisms refuted:**
+
+1. **Kernel-launch hypothesis refuted:** per-step time 2.15× bs=4 (predicted 1.4–1.7×) — essentially perfect linear scaling, no amortization. VRAM doubled linearly (24.1→48.2 GB). The compile baseline with `dynamic=True` already extracted available per-step parallelism; the Transolver at bs=4 is compute-bound (matmul/attention dominated), not launch-bound.
+
+2. **Sqrt-LR scaling rule refuted by grad-clip interaction:** with `clip_grad_norm_(max_norm=1.0)` binding on every step (raw norm ~18-19 ≫ 1), the optimizer step is fundamentally `lr × unit_direction` — gradient magnitude is fixed. The sqrt(2) LR boost doubles down on the direction shift without the noise-vs-magnitude balance the rule assumes. Grad-clip and bs-scaling are not orthogonal levers on this baseline: they share the step-size axis through incompatible mechanisms.
+
+**Critical meta-finding:** "grad-clip × bs anti-synergistic" warning — the bs axis as a whole may have lower payoff on the grad-clip baseline than pre-grad-clip. Flagged as a watchlist item for any in-flight bs experiments. The sqrt-LR rule is only valid when optimizer step ∝ raw gradient; always-binding clip breaks this assumption entirely.
+
+### Follow-up
+
+- **frieren → PR #2399 (EMA weights, decay=0.999):** pivot to model-state averaging — a fundamentally different lever that operates outside the optimizer step structure, orthogonal to grad-clip. EMA's smoothing of the terminal-epoch trajectory is the highest-EV next test for frieren given their demonstrated strength in optimizer-dynamics analysis.
+
+---
+
 ## 2026-05-13 14:00 — PR #2041 CLOSED: surf_weight 10 → 5 (post-grad-clip)
 
 - **Student:** willowpai2g48h3-thorfinn

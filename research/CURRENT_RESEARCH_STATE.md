@@ -67,7 +67,8 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1589 | tanjiro   | AdamW betas (0.9, 0.95)          | WIP, pre-mask, compile heads-up posted (4th baseline shift) |
 | #1623 | alphonse  | mlp_ratio 2→4                    | CLOSED (compute-bound, +18% val) — retest in progress as #1939 |
 | #1692 | fern      | Gradient clipping (max_norm=1.0) | **MERGED** 12:00 (val=60.09, test=53.37) — **6th baseline shift, −8.2% val, −7.7% test**; 100% clip rate reveals global step-size normalisation mechanism |
-| #2246 | fern      | Grad-clip bisect: max_norm=5.0   | WIP, grad-clip baseline (just assigned; bisect the clip threshold) |
+| #2246 | fern      | Grad-clip bisect: max_norm=5.0   | CLOSED: val +3.8%, test +2.4% worse. Clip rate stayed 92–94% at max_norm=5.0 (still hard-clip regime). OOD regresses (cruise +3.6, re_rand +3.9), in-dist improves slightly. max_norm=1.0 brackets from above. |
+| #2397 | fern      | Grad-clip bisect: max_norm=0.5   | WIP, grad-clip baseline (symmetric downward bisect; either confirms 1.0 optimum or reveals harder clipping helps further) |
 | #1712 | askeladd  | Huber β=0.25 (β-tune)            | CLOSED (+6.6% val on bf16; bounds β from below) |
 | #1715 | frieren   | bf16 mixed-precision (AMP)       | **MERGED** 02:00 (val=89.60, test=79.91) |
 | #1735 | alphonse  | SwiGLU FFN (matched params)      | CLOSED (stuck — 22 pod restarts, 0 commits in 10h; reset, not verdict on SwiGLU) |
@@ -78,13 +79,14 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #1882 | askeladd  | Huber β=0.75 (β-tune from above) | CLOSED (+8.6% val, +10.0% test — β-axis fully bracketed: 0.25 fails, 0.5 optimum, 0.75 fails) |
 | #1910 | thorfinn  | Volume Huber β=0.5               | **MERGED** 07:30 (val=65.47, test=57.84) — OOD splits drove win; in-dist regressed slightly; zero compute overhead |
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
-| #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | WIP, current compile baseline — vol-Huber heads-up posted |
+| #1940 | frieren   | batch_size=8 + sqrt-LR (lr=7e-4) | CLOSED: val +11.5%, test +10.5% — both mechanisms refuted. Per-step 2.15× (compute-bound, not launch-bound). Grad-clip × sqrt-LR anti-synergistic: clip clamps every step to unit-norm so sqrt-LR rule breaks. bs axis flagged as low-payoff on grad-clip baseline. |
+| #2399 | frieren   | EMA weights (decay=0.999)        | WIP, grad-clip baseline (just assigned; orthogonal to all in-flight axes; ~20 lines, targets terminal-epoch trajectory smoothing) |
 | #2017 | edward    | weight_decay 1e-4 → 5e-4         | SENT BACK for wd=2e-4 bisection (val +0.67% miss; in-dist improves, rc OOD regresses — over-regularization signature) |
 | #2163 | askeladd  | Per-channel β: β_p=0.25, β_Ux=β_Uy=0.5 | WIP, vol-Huber baseline (just assigned) |
 | #2041 | thorfinn  | surf_weight 10 → 5               | CLOSED: regresses +2.7%/+2.6% under grad-clip — directional reversal. surf_w=10 was better-calibrated when grad-clip normalises per-batch scale variance. |
 | #2341 | thorfinn  | surf_weight 10 → 20              | WIP, grad-clip baseline (just assigned 14:00; bisect upward per thorfinn's mechanism analysis) |
 
-**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 13 (+#1843 cosine T_max=35 val regresses, LR floor mechanism identified). **Open:** 8 (tanjiro #1589, frieren #1940, **nezuko #2379**, **thorfinn #2341**, edward #2017, askeladd #2163, alphonse #2180, fern #2246).
+**Merged:** 6 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, **grad_clip max_norm=1.0**). **Closed:** 15 (+#2246 max_norm=5.0 regresses, +#1940 bs=8+sqrt-LR both mechanisms refuted). **Open:** 8 (tanjiro #1589, **fern #2397**, **frieren #2399**, nezuko #2379, thorfinn #2341, edward #2017, askeladd #2163, alphonse #2180).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
@@ -99,7 +101,8 @@ Confirmed winners so far (all four stack): correctness (mask) + loss (Huber) + c
 - **Scalar-capacity axis is CLOSED for round 1.** All 4 dimensions tried, all failed; no further retries.
 - **If weight_decay=5e-4 wins (#2017 edward):** regularization was undertuned for the 35-epoch budget; follow-up with lr rescale.
 - **β-axis CLOSED** (#1882 askeladd β=0.75 failed +8.6%/+10.0%, symmetric with β=0.25 failure). β=0.5 is the global optimum. Per-channel β (#2163 askeladd) is the active next test in this loss-shape family.
-- **grad_clip MERGED (#1692, −8.2% val):** 100% clip rate = global step-size normalisation. fern #2246 bisects with max_norm=5.0 to find the sweet spot. After bisect: consider coupling with LR rescale (if max_norm=N always clips, the effective LR is lr × N/raw_norm — explicit LR tuning becomes redundant).
+- **grad_clip MERGED (#1692, −8.2% val):** 100% clip rate = global step-size normalisation. max_norm=5.0 (#2246) regressed (+3.8%, still 92–94% clip rate). fern → #2397 (max_norm=0.5) is the downward bisect. **If 0.5 also loses → max_norm=1.0 is the optimum; retire magnitude axis.** If 0.5 wins → continue bisecting toward 0.25. After axis retirement: consider coupling with LR rescale (if max_norm=N always clips, the effective LR is lr × N/raw_norm — explicit LR tuning becomes the relevant follow-up).
+- **EMA weights (frieren #2399):** model-state averaging, decay=0.999. Orthogonal to grad-clip. Targets terminal-epoch oscillation noise — the current "best=last" pattern may be capturing a noisy endpoint. Free win (~0.5–2%) if the late-training trajectory is still bouncing. Key diagnostic: EMA-vs-live Δ at epoch 35 indicates degree of terminal-epoch noise.
 - **If dropout=0.1 wins (#2180 alphonse):** attention-layer regularization stacks with grad_clip; follow-up with dropout sweep (0.05, 0.15). SwiGLU stays as round-2 capacity-shape candidate.
 - **If AdamW betas (#1589 tanjiro), Cosine T_max (#1843 nezuko), batch_size (#1940 frieren) land:** harvest and stack.
 
