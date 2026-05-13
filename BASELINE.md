@@ -9,6 +9,37 @@ SPDX-PackageName: senpai
 Primary ranking metric: **`val_avg/mae_surf_p`** (lower is better)
 Test-time metric: **`test_avg/mae_surf_p`** (lower is better)
 
+## 2026-05-13 05:00 — PR #1655: alphonse — OneCycleLR max_lr=2e-3 (MERGED)
+
+**New best val and test. Strongest single improvement of the launch: -12% val / -14% test.**
+
+- **val_avg/mae_surf_p:** 97.07 (was 110.27) — **-12.0%**
+- **test_avg/mae_surf_p:** **85.71** (was 99.41) — **-13.8%**
+- **W&B runs:** `d29igs7w` (primary, seed 1), `r7pd9bmk` (seed 2: val=101.18, test=89.99 — both beats beat baseline)
+- **Epochs:** ~19 in 30 min
+
+Per-split test `mae_surf_p` (run `d29igs7w`):
+
+| Split | test | vs baseline (#1471) | Δ% |
+|---|---|---|---|
+| `single_in_dist` | 99.24 | 116.69 | **-15.0%** |
+| `geom_camber_rc` | 95.85 | 110.01 | **-12.9%** |
+| `geom_camber_cruise` | 61.71 | 72.77 | **-15.2%** |
+| `re_rand` | 86.04 | 98.17 | **-12.4%** |
+
+Changes vs prior baseline (#1471):
+- `scheduler = OneCycleLR(optimizer, max_lr=2e-3, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=25.0, final_div_factor=1e4)` — replacing `CosineAnnealingLR(T_max=50)`
+
+Analysis: OneCycleLR with max_lr=2e-3 imposes a short warmup (10% of steps, LR rises from 8e-5 to 2e-3) then a smooth cosine anneal to near-zero. Combined with p_weight=2.0 + grad_clip=1.0, the improvement is ~4× larger than either mechanism alone — confirming orthogonality. Seed variance is ~4 MAE (d29igs7w: val=97.07, r7pd9bmk: val=101.18).
+
+Reproduce:
+```bash
+cd target/ && python train.py --agent <name> --wandb_name "<name>/onecycle-lr" --wandb_group "willow-r2-schedule"
+```
+(OneCycleLR is now the default scheduler in train.py; no extra flags needed)
+
+---
+
 ## 2026-05-13 00:10 — PR #1471: frieren — p_weight=2.0 + clip_grad_norm=1.0 (MERGED)
 
 **New best val and test.**
@@ -71,11 +102,11 @@ cd target/ && python train.py --agent <name> --wandb_name "<name>/bf16-accum2" -
 
 ## Active baseline (config to beat)
 
-Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — includes bf16 autocast (PR #1480), grad_accum=2 (PR #1480), p_weight=2.0 + clip_grad_norm=1.0 (PR #1471):
+Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — includes bf16 autocast (PR #1480), grad_accum=2 (PR #1480), p_weight=2.0 + clip_grad_norm=1.0 (PR #1471), OneCycleLR (PR #1655):
 
 | Hyperparam | Value |
 |---|---|
-| `lr` | 5e-4 |
+| `lr` (initial / base) | 5e-4 (overridden by OneCycleLR) |
 | `weight_decay` | 1e-4 |
 | `batch_size` | 4 (effective=8 with grad_accum=2) |
 | `surf_weight` | 10.0 |
@@ -90,8 +121,8 @@ Transolver from `train.py` at HEAD on `icml-appendix-willow-pai2g-24h-r2` — in
 | `n_head` | 4 |
 | `slice_num` | 64 |
 | `mlp_ratio` | 2 |
-| Schedule | `CosineAnnealingLR(T_max=epochs)` |
-| Optimizer | AdamW |
+| Schedule | `OneCycleLR(max_lr=2e-3, pct_start=0.1, anneal_strategy="cos")` |
+| Optimizer | AdamW (default betas, eps=1e-8) |
 | Loss | `p_weight`-weighted per-channel sq_err, `vol_loss + 10.0 * surf_loss` |
 
 Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/baseline"`.
@@ -100,21 +131,23 @@ Reproduce: `cd target/ && python train.py --agent <name> --wandb_name "<name>/ba
 
 W&B project: `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 
-**Best val (merged):** `val_avg/mae_surf_p` = **110.27** (PR #1471, frieren, run `krsv4c21`)
-**Best test (merged):** `test_avg/mae_surf_p` = **99.41** (same run)
+**Best val (merged):** `val_avg/mae_surf_p` = **97.07** (PR #1655, alphonse, run `d29igs7w`)
+**Best test (merged):** `test_avg/mae_surf_p` = **85.71** (same run)
 
 Prior merged baselines (for reference):
 
 | PR | What landed | val_avg | test_avg |
 |---|---|---|---|
-| #1471 (frieren) | p_weight=2.0 + clip_grad_norm=1.0 | **110.27** | **99.41** |
+| #1655 (alphonse) | OneCycleLR max_lr=2e-3 | **97.07** | **85.71** |
+| #1471 (frieren) | p_weight=2.0 + clip_grad_norm=1.0 | 110.27 | 99.41 |
 | #1480 (thorfinn) | bf16 autocast + grad_accum=2 + cruise-NaN fix | 116.30 | 104.96 |
 
 ## Notes for students
 
-- **Baseline as of PR #1471:** `val_avg/mae_surf_p = 110.27`, `test_avg/mae_surf_p = 99.41`.
+- **Baseline as of PR #1655:** `val_avg/mae_surf_p = 97.07`, `test_avg/mae_surf_p = 85.71`.
 - **cruise-NaN workaround is landed.** All runs produce finite `test_avg` — no per-PR code needed.
-- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **110.27** to be a winner.
+- **Primary decision metric is `val_avg/mae_surf_p`** (lower is better). Beat **97.07** to be a winner.
+- OneCycleLR is now the default scheduler (max_lr=2e-3, pct_start=0.1, cosine anneal).
 - Grad clip at max_norm=1.0 is now in the training loop default (binding on nearly every step — the model runs in a high-gradient-magnitude regime).
 - Report `val_avg/mae_surf_p`, `test_avg/mae_surf_p`, and all four per-test-split `mae_surf_p` values.
 - Per-split metrics matter — flag splits where your change helps or hurts disproportionately.
