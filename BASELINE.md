@@ -300,4 +300,55 @@ cd target && python train.py \
 - Also enables: `torch.set_float32_matmul_precision("high")` (TF32 matmul), `cudnn.benchmark=True`.
 - **val_single_in_dist slightly regresses** (+4.9% vs prior baseline) while OOD geometry splits dramatically improve (geom_camber_rc −8%, cruise −9.2%). This trade-off likely reflects weight_decay=1e-4 (old default) being under-regularized at 21 epochs — in-distribution split may be benefiting less from longer training than OOD.
 - **Highest-priority follow-up:** compose torch.compile + weight_decay=5e-4 (which is now the default on this branch). Expected to recover the in-distribution split regression while preserving the OOD gains.
-- **All future PRs must beat `val_avg/mae_surf_p < 89.7197` to merge.**
+- **All future PRs must beat `val_avg/mae_surf_p < 89.7197` to merge (superseded — see PR #2178 below).**
+
+---
+
+## 2026-05-13 13:25 — PR #2178: Compose torch.compile + weight_decay=3e-4 (new SOTA)
+
+- **val_avg/mae_surf_p: 87.0144** (best checkpoint epoch 21) — **−3.01% vs 89.7197**
+- **test_avg/mae_surf_p: 78.9539** — **−0.46% vs 79.3167**
+- **W&B run:** `7r9t0jab` (WD=3e-4, winning arm)
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --huber_delta 0.5 \
+      --surf_head_lr 5e-3 \
+      --weight_decay 3e-4 \
+      --use_torch_compile \
+      --compile_mode default \
+      --wandb_group compile-wd-compose \
+      --wandb_name compile-wd-3e-4 \
+      --agent willowpai2g48h4-frieren
+  ```
+
+### Per-split val surface-p MAE (best checkpoint epoch 21)
+
+| Split | mae_surf_p | vs prior baseline (89.7197) |
+|-------|-----------|------------------------------|
+| `val_single_in_dist` | 106.99 | 114.92 → **−6.9%** ✓ |
+| `val_geom_camber_rc` | 104.00 | 108.66 → **−4.3%** ✓ |
+| `val_geom_camber_cruise` | 57.33 | 55.45 → +3.4% ↑ |
+| `val_re_rand` | 79.74 | 79.85 → −0.1% ≈ |
+| **val_avg** | **87.0144** | **−3.01% ✓** |
+
+### Per-split test surface-p MAE (best checkpoint)
+
+| Split | mae_surf_p | vs prior baseline (79.3167) |
+|-------|-----------|------------------------------|
+| `test_single_in_dist` | 95.70 | 104.29 → **−8.2%** ✓ |
+| `test_geom_camber_rc` | 97.92 | 96.30 → +1.7% ↑ |
+| `test_geom_camber_cruise` | 48.06 | 46.12 → +4.2% ↑ |
+| `test_re_rand` | 74.14 | 70.55 → +5.1% ↑ |
+| **test 4-split mean** | **78.9539** | **−0.46% ✓** |
+
+### Notes
+
+- WD=3e-4 (not 5e-4) is the optimal under the 21-epoch compile budget. WD=5e-4 over-regularizes at 21 epochs — the e12 spike AMPLIFIES (+27%) under WD=5e-4 but is DAMPED under WD=3e-4 (smooth descent e10→e12).
+- WD=5e-4 arm (run `b1p4li7l`) regressed +1.17% val / +3.10% test — do not use.
+- In-distribution split fully recovered: val_single_in_dist 114.92 → 106.99 (−6.9%), reversing the +4.9% regression from PR #2091.
+- cruise OOD gives back slightly (+3.4% val, +4.2% test) under higher WD; WD=1e-4 preferred on cruise specifically.
+- Val gain (−3.01%) is notably larger than test gain (−0.46%) — regularization helps in-dist val substantially but OOD test splits are mixed.
+- Both arms at 21 epochs in ~30.7 min (same throughput as PR #2091).
+- **Critical lesson:** WD axis is budget-dependent. WD=5e-4 was optimal at 14 epochs (PR #2031); WD=3e-4 is optimal at 21 epochs. PRs in-flight using WD=5e-4 must now beat **87.0144** to merit merge.
+- **All future PRs must beat `val_avg/mae_surf_p < 87.0144` to merge.**
