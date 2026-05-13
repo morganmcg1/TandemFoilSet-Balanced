@@ -963,4 +963,30 @@ if best_metrics:
 else:
     print("\nNo base checkpoint was saved (no epoch improved on val_avg/mae_surf_p). Skipping eval + artifact upload.")
 
+# Final-state layer-wise parameter L2 norms — sanity check that weight decay
+# is doing meaningful compression and didn't compress everything uniformly.
+# At this point `model` holds SWA weights (loaded above for terminal eval).
+def _l2_norm(module: nn.Module) -> float:
+    with torch.no_grad():
+        sq = sum((p.detach().float() ** 2).sum().item()
+                 for p in module.parameters() if p.requires_grad)
+    return float(sq) ** 0.5
+
+
+_norm_summary: dict[str, float] = {}
+_norm_summary["param_l2/total"] = _l2_norm(model)
+if isinstance(model, FiLMTransolver):
+    _norm_summary["param_l2/film_head"] = _l2_norm(model.film)
+    _norm_summary["param_l2/preprocess"] = _l2_norm(model.transolver.preprocess)
+    blocks = model.transolver.blocks
+    for li in (0, len(blocks) - 1):
+        _norm_summary[f"param_l2/block{li}_attn"] = _l2_norm(blocks[li].attn)
+        _norm_summary[f"param_l2/block{li}_mlp"] = _l2_norm(blocks[li].mlp)
+    if hasattr(blocks[-1], "mlp2"):
+        _norm_summary["param_l2/last_block_mlp2"] = _l2_norm(blocks[-1].mlp2)
+print("\nFinal parameter L2 norms (SWA weights):")
+for k, v in _norm_summary.items():
+    print(f"  {k:<32s} {v:.4f}")
+wandb.summary.update(_norm_summary)
+
 wandb.finish()
