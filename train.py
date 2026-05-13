@@ -426,6 +426,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    surf_head_weight_decay: float = -1.0  # If >=0, override WD on surf_head param group; -1 = use cfg.weight_decay
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -480,13 +481,17 @@ n_params = sum(p.numel() for p in all_params)
 print(f"Model: Transolver + SurfaceCorrection ({n_params/1e6:.3f}M params)")
 
 _head_lr = cfg.surf_head_lr if cfg.surf_head_lr > 0.0 else cfg.lr
+_head_wd = cfg.surf_head_weight_decay if cfg.surf_head_weight_decay >= 0.0 else cfg.weight_decay
+encoder_params = list(model.parameters())
+surf_head_params = list(surf_head.parameters())
 optimizer = torch.optim.AdamW(
     [
-        {"params": list(model.parameters()), "lr": cfg.lr},
-        {"params": list(surf_head.parameters()), "lr": _head_lr},
+        {"params": encoder_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
+        {"params": surf_head_params, "lr": _head_lr, "weight_decay": _head_wd},
     ],
-    weight_decay=cfg.weight_decay,
 )
+print(f"[wd] encoder={cfg.weight_decay}, surf_head={_head_wd}")
+print(f"[lr] encoder={cfg.lr}, surf_head={_head_lr}")
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
@@ -595,7 +600,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = (surf_abs >= delta).float().mean().item()
             else:
                 surf_l1_frac = 0.0
-        wandb.log({
+        log_payload = {
             "train/loss": loss.item(),
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
@@ -604,7 +609,14 @@ for epoch in range(MAX_EPOCHS):
             "train/y_var_min": y_var.min().item(),
             "train/surf_l1_frac": surf_l1_frac,
             "global_step": global_step,
-        })
+        }
+        if global_step % 50 == 0:
+            with torch.no_grad():
+                enc_norm = torch.norm(torch.stack([p.detach().norm() for p in encoder_params])).item()
+                sh_norm = torch.norm(torch.stack([p.detach().norm() for p in surf_head_params])).item()
+            log_payload["train/weight_norm_encoder"] = enc_norm
+            log_payload["train/weight_norm_surf_head"] = sh_norm
+        wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
