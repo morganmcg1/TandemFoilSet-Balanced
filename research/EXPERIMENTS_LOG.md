@@ -659,3 +659,66 @@ Schedule trajectory confirmed: peak at epoch 4, monotonic descent from epoch 7, 
 OneCycleLR change is orthogonal to pure-L1 (schedule vs loss). Askeladd's result (83.397) was on the Smooth L1 stack. After tanjiro's pure-L1 merged (new baseline 83.230), stacking both should give ~82.0. Sent back to rebase onto current advisor HEAD (which has pure-L1), keep OneCycleLR schedule, re-run with --epochs 14.
 
 ---
+
+## 2026-05-13 01:30 — PR #1707: Per-sample loss normalization by pressure std (frieren) — CLOSED dead end
+
+- **Branch:** `charliepai2g48h2-frieren/per-sample-loss-norm`
+- **Hypothesis:** Normalize the per-sample surface loss by that sample's surface pressure std (`surf_p_std`), so high-variance samples don't dominate batch gradients. Target: equalize gradient influence across pressure-variance levels.
+- **Status:** CLOSED ❌ — +12.2% regression vs #1684 baseline, +14.0% vs new 83.230 baseline.
+
+### Results
+
+| Split | Baseline (#1684) | Per-sample-std-norm | Δ % |
+|---|---|---|---|
+| val_single_in_dist | 103.231 | 119.554 | +15.8% |
+| val_geom_camber_rc | 95.256 | 103.644 | +8.8% |
+| val_geom_camber_cruise | 60.589 | 69.983 | +15.5% |
+| val_re_rand | 79.170 | 86.373 | +9.1% |
+| **val_avg/mae_surf_p** | **84.562** | **94.889** | **+12.2%** |
+| **test_avg/mae_surf_p** | **74.947** | **85.848** | **+14.5%** |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-frieren-per-sample-loss-norm-20260513-000916/metrics.jsonl`
+
+### Root cause
+
+`surf_p_std` distribution spans 4+ orders of magnitude (min ≈ 5e-4, max ≈ 6.91, mean ≈ 0.8). The `clamp(min=1e-6)` was effectively never active but the actual minima at ~5e-4 still gave near-uniform-pressure samples effective batch weights of ~2000× relative to high-std samples. A small number of degenerate samples dominated every gradient step. Frieren's diagnostic was thorough: per-epoch min/max/mean of `surf_p_std` confirmed the 2000× weight pathology.
+
+The PR's own contingency (clamp(min=0.5, max=2.0), capping weight ratio at 4:1) would have been the correct implementation. However, on the pure-L1 canonical base, per-sample reweighting is a second-order correction: pure-L1 already gives constant-magnitude gradient per residual, largely mitigating the gradient-noise asymmetry the PR targeted.
+
+**Lesson learned:** clamp threshold must be calibrated against actual data distribution, not a loose machine-epsilon default.
+
+---
+
+## 2026-05-13 01:30 — PR #1659: slice_num 64→96 (nezuko) — CLOSED dead end
+
+- **Branch:** `charliepai2g48h2-nezuko/slice-96-stable`
+- **Hypothesis:** Increase physics-token count from 64 to 96 (finer mesh partitioning). The model captures more geometric detail per token, especially on OOD geometry splits. Stable regime (unlike slice_num=128 which collapsed in #1429).
+- **Status:** CLOSED ❌ — +27.9% regression vs #1684 baseline, +30% vs new 83.230 baseline.
+
+### Results (two runs)
+
+| Run | val_avg/mae_surf_p | vs #1684 |
+|---|---|---|
+| epochs=20 (old T_max) | 115.37 | +36.4% |
+| **epochs=14 (T_max aligned)** | **108.158** | **+27.9%** |
+
+| Split | ep=20 | ep=14 | Δ ep20→14 |
+|---|---|---|---|
+| val_single_in_dist | — | 131.020 | — |
+| val_geom_camber_rc | — | 118.791 | — |
+| val_geom_camber_cruise | — | 81.322 | — |
+| val_re_rand | — | 101.499 | — |
+
+**Metric artifacts:**
+- `models/model-charliepai2g48h2-nezuko-slice-96-stable-20260513-000937/metrics.jsonl`
+
+### Root cause
+
+Numerically stable (pred_abs_max ≤ 16.18, no NaN). Pure empirical regression: adding more slice tokens with the same n_hidden=128 appears to dilute per-token capacity — each attention token now represents a smaller mesh region with the same channel budget. The pred_abs_max trajectory (still growing at epoch 12/14) suggests under-fit, consistent with optimization requiring more iterations per effective degree of freedom.
+
+Combined with prior dead ends (#1429 slice_num=128: overflow, #1598 mlp_ratio=4: +7%), the architecture/capacity axis is now **exhausted on this dataset at this epoch budget**: deeper, wider, and finer-grained partitioning all regress.
+
+**Lesson learned:** The Transolver at slice_num=64, n_hidden=128, n_layers=5 appears to be well-matched to this dataset and budget. Capacity is not the bottleneck.
+
+---
