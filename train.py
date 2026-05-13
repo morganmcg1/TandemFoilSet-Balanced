@@ -410,6 +410,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
+    dropout=0.1,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
@@ -417,6 +418,7 @@ model_config = dict(
 model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
+print(f"dropout: {model_config.get('dropout', 0.0)}")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
