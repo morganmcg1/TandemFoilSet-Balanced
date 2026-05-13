@@ -8,6 +8,30 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 15:55 — PR #2281 (tanjiro swiglu-inner-dim-320) — **CLOSED** (Outcome A vs old baseline, C vs new ReGLU baseline)
+
+- Branch: `charliepai2g24h4-tanjiro/swiglu-inner-dim-320`
+- Hypothesis: Bisect between inner_dim=256 (#2175 won) and inner_dim=384 (#2200 closed) at 320, expecting +10-11% compute cost (vs 384's +21%) preserving enough epochs for cosine schedule completion.
+- Metric artifact: `models/model-charliepai2g24h4-tanjiro-swiglu-inner-dim-320-20260513-135742/metrics.jsonl`
+
+| Metric | Old SwiGLU baseline #2175 (67.381/57.800) | inner_dim=320 (SwiGLU) | New ReGLU baseline #2304 (62.949/54.221) |
+|---|---:|---:|---:|
+| val_avg | 67.381 | **66.876 (−0.75%)** | 62.949 (**+6.24% worse**) |
+| test_avg | 57.800 | **57.400 (−0.69%)** | 54.221 (+5.86% worse) |
+| n_params | 831,191 | 954,071 (+14.8%) | 831,191 |
+| sec/epoch | ~138 | ~161 (+16.7%) | ~150 |
+| best_epoch | 13 | 12 (timeout) | 12 (timeout) |
+| val_geom_camber_rc | 80.673 | 76.952 (−4.61%) | 74.845 |
+| val_re_rand | 66.834 | 65.010 (−2.73%) | 62.765 |
+
+**Mechanism finding (real and useful):** The bisect hypothesis confirmed — inner_dim=320 wins over 256 on SwiGLU stack because it stays just inside the schedule-completeness threshold (12 epochs at +16.7% sec/epoch vs 384's 11 epochs at +21%). val_geom_camber_rc and val_re_rand show the OOD capacity gain that 384 only partially captured. Student's analysis was excellent.
+
+**Why this can't merge:** PR #2304 (ReGLU) merged on the advisor branch while this experiment ran on pre-ReGLU SwiGLU. The ReGLU gate-sharpness change produced −4.75% val gain on the same width axis — far outweighing this experiment's +1.94% from widening alone. Absolute numbers are obsolete; mechanism extrapolates if ReGLU+inner_dim=320 is tested later.
+
+**Conclusion:** Outcome C in absolute terms. fern's #2360 (ReGLU + inner_dim=288) will give the direct comparable measurement on the current stack. If 288 wins on ReGLU, a future ReGLU+inner_dim=320 test would be the natural next step. Reassigning tanjiro to **QK-normalization on PhysicsAttention** — a fresh untested architectural axis (DiT/ViT-22B/SD3 standard) orthogonal to all in-flight Wave 16 experiments.
+
+---
+
 ## 2026-05-13 15:40 — PR #2308 (alphonse cosine-tmax-12) — **CLOSED** (Outcome C; schedule axis confirmed closed at T_max=14)
 
 - Branch: `charliepai2g24h4-alphonse/cosine-tmax-12`
