@@ -442,6 +442,15 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
+# Bias-corrected EMA-of-weights (Polyak averaging with Adam-style init correction).
+# Lives in fp32 on the same device as model; eval-time bias correction cancels the
+# random-init contamination: EMA_t = (1-decay^t) * <true running avg> + decay^t * w_0,
+# so dividing by (1 - decay**t) recovers an unbiased estimate.
+EMA_DECAY = 0.999
+EMA_WARMUP_STEPS = 200
+ema_state = {k: v.detach().clone().float() for k, v in model.state_dict().items()}
+ema_update_count = 0
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -511,6 +520,13 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
+
+        if global_step >= EMA_WARMUP_STEPS:
+            ema_update_count += 1
+            with torch.no_grad():
+                for k, v in model.state_dict().items():
+                    ema_state[k].mul_(EMA_DECAY).add_(v.detach().float(), alpha=1.0 - EMA_DECAY)
+
         wandb.log({"train/loss": loss.item(), "global_step": global_step})
 
         epoch_vol += vol_loss.item()
@@ -521,7 +537,18 @@ for epoch in range(MAX_EPOCHS):
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate on bias-corrected EMA weights ---
+    # Snapshot live training weights, swap in unbiased EMA, eval, then restore.
+    training_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    if ema_update_count > 0:
+        bias_correction = 1.0 - (EMA_DECAY ** ema_update_count)
+        eval_state = {k: (v / bias_correction).to(device) for k, v in ema_state.items()}
+    else:
+        # Still in EMA warmup — fall back to live weights so val is well-defined.
+        bias_correction = 0.0
+        eval_state = training_state
+
+    model.load_state_dict(eval_state)
     model.eval()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device)
@@ -539,6 +566,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": scheduler.get_last_lr()[0],
         "epoch_time_s": dt,
         "global_step": global_step,
+        "ema/update_count": ema_update_count,
+        "ema/bias_correction": float(bias_correction),
     }
     for split_name, m in split_metrics.items():
         for k, v in m.items():
@@ -555,8 +584,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
-        torch.save(model.state_dict(), model_path)
+        # eval_state already holds the bias-corrected EMA weights used for val.
+        torch.save(eval_state, model_path)
         tag = " *"
+
+    # Restore live training weights for the next epoch.
+    model.load_state_dict(training_state)
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     print(
@@ -577,6 +610,10 @@ if best_metrics:
         "best_epoch": best_metrics["epoch"],
         "best_val_avg/mae_surf_p": best_avg_surf_p,
         "total_train_minutes": total_time,
+        "ema/final_update_count": ema_update_count,
+        "ema/final_bias_correction": float(1.0 - (EMA_DECAY ** max(ema_update_count, 1))),
+        "ema/decay": EMA_DECAY,
+        "ema/warmup_steps": EMA_WARMUP_STEPS,
     })
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
