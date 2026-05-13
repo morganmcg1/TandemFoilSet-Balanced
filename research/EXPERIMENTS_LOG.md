@@ -1,5 +1,31 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 01:15 — PR #1683: LR2e3 / max_norm=4.0 sweep (CLOSED — renorm-ceiling confirmed)
+
+- Student branch: `charliepai2g24h5-tanjiro/lr2e3-or-maxnorm-sweep`
+- Hypothesis: Test whether pushing LR (Arm A: 2e-3) or loosening clip (Arm B: max_norm=4.0) extends the renorm-regime gain from #1638.
+- Both arms ran 13 epochs, FP32 (before BF16 merge), same warmup3+cosine13 + grad_clip stack.
+
+### Results
+
+| Arm | Config | val_avg | Δ vs #1638 (95.44) | Δ vs #1565 current (94.22) | test_avg | Δ vs current (87.10) |
+|---|---|---:|---:|---:|---:|---:|
+| Baseline | lr=1e-3, max_norm=1.0 | 95.44 | — | — | 87.83 | — |
+| Arm A | lr=2e-3, max_norm=1.0 | 95.40 | −0.04 | **+1.18** | 88.50 | **+1.40** |
+| Arm B | lr=1e-3, max_norm=4.0 | 95.08 | −0.36 | **+0.86** | 88.26 | **+1.16** |
+
+### Analysis (very useful negative result)
+
+**Key finding:** Both arms stayed in renorm-every-step regime (pre-clip norms 17–131 throughout, well above both clip thresholds 1.0 and 4.0). So Arm B did NOT exit the renorm regime — it just multiplied the post-clip step by 4×. Functionally Arm A and Arm B are testing the same direction (4× effective post-clip step magnitude, via different knobs).
+
+The marginal val improvement (0.4% best case, Arm B) is paired with a clear **test regression** (+0.43 to +1.40). That's a generalisation regression — the model is over-fitting the val landscape's local minima when given more aggressive steps.
+
+**Conclusion:** lr=1e-3, max_norm=1.0 was already at or near the local optimum for the renorm mechanism. More aggressive steps don't translate to better generalisation. The renorm regime ceiling is approximately 95.44 val / 87.83 test in the pre-BF16 stack — improvements must come from other mechanisms.
+
+This negative result is genuinely useful: it tells us optimization-side knobs (LR, clip threshold) are tapped out, and the path forward is architecture, training duration, loss, or regularisation changes.
+
+---
+
 ## 2026-05-13 01:05 — PR #1565: BF16 autocast (MERGED — new baseline 94.22)
 
 - Student branch: `charliepai2g24h5-fern/bf16-batch8-throughput`

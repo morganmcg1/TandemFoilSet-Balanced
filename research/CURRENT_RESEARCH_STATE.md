@@ -30,23 +30,24 @@ Merged stack: warmup3+cosine13 + GT-NaN fix + grad_clip(max_norm=1.0) + lr=1e-3 
 | surf_weight=20 regresses (#1459, CLOSED) | Budget too short for changed loss landscape |
 | Surface skip regresses (#1487, CLOSED) | Schedule absorbed the skip headroom |
 
-## Active PRs (all 8 students assigned)
+## Active PRs
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #1683 | tanjiro | LR push (2e-3) and max_norm=4.0 sweep | WIP | Beat 94.22 |
+| #1755 | fern | n_hidden=192 + BF16 (wider model unlocked by BF16 VRAM cut) | WIP | Beat 94.22 |
 | #1656 | thorfinn | Dropout=0.1 in attention + MLP | WIP | Beat 94.22 |
 | #1641 | frieren | Lion optimizer (lr=1.5e-4) | WIP | Beat 94.22 |
 | #1639 | alphonse | Huber/Smooth-L1 loss (delta=1.0) | WIP (crashloop) | Beat 94.22 |
 | #1481 | nezuko | slice_num=128 | WIP | Beat 94.22 |
 | #1470 | edward | Instance-norm loss | WIP | Beat 94.22 |
 | #1463 | askeladd | Warmup+SWA+grad_clip compose | WIP (rebase needed) | Beat 94.22 |
-| fern | fern | IDLE — assigning follow-up | Assigning | Beat 94.22 |
+| tanjiro | tanjiro | IDLE — assigning follow-up after #1683 close | Assigning | Beat 94.22 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
+| #1683 | tanjiro | CLOSED | LR2e3/maxnorm=4 sweep — both arms +0.9–1.2% val + test regress (renorm-ceiling confirmed). |
 | #1565 | fern | MERGED | BF16 autocast → **new baseline 94.22** (−1.3%). VRAM −22% unlocks wider models. |
 | #1638 | tanjiro | MERGED | lr=1e-3 + grad_clip → baseline 95.44 (−9.5%). |
 | #1487 | thorfinn | CLOSED | Surface skip compose (+13% worse). |
@@ -56,14 +57,18 @@ Merged stack: warmup3+cosine13 + GT-NaN fix + grad_clip(max_norm=1.0) + lr=1e-3 
 
 ## Open questions from active experiments
 
-1. **Does lr=2e-3 push further win?** (#1683 tanjiro) — maps renorm regime ceiling
-2. **Does max_norm=4.0 help?** (#1683 tanjiro arm B) — tests if tighter renorm was the key
-3. **Does dropout=0.1 improve OOD?** (#1656 thorfinn) — orthogonal regularization
-4. **Does Huber loss complement grad_clip?** (#1639 alphonse, currently crashlooping)
-5. **Does Lion optimizer suit renorm regime?** (#1641 frieren)
-6. **Does instance-norm loss help val_re_rand?** (#1470 edward)
-7. **Does slice_num=128 help?** (#1481 nezuko)
-8. **Does composed warmup+SWA beat current baseline?** (#1463 askeladd, rebase needed)
+1. **Does n_hidden=192 + BF16 break baseline?** (#1755 fern) — wider model unlocked by VRAM cut
+2. **Does dropout=0.1 improve OOD?** (#1656 thorfinn) — orthogonal regularization
+3. **Does Huber loss complement grad_clip?** (#1639 alphonse, currently crashlooping)
+4. **Does Lion optimizer suit renorm regime?** (#1641 frieren)
+5. **Does instance-norm loss help val_re_rand?** (#1470 edward)
+6. **Does slice_num=128 help?** (#1481 nezuko)
+7. **Does composed warmup+SWA beat current baseline?** (#1463 askeladd, rebase needed)
+8. **Does longer cosine (epochs=16) with BF16 budget exploit the speed win?** (next: tanjiro)
+
+### Renorm-regime ceiling confirmed (#1683 closure insight)
+
+Optimization-side knobs (LR, clip threshold) appear tapped out in the pre-BF16 stack. Both Arm A (2× LR) and Arm B (4× max_norm) test the same direction (4× effective post-clip step) and both regress on test. The renorm regime ceiling sits near 95.44 val / 87.83 test in FP32. With BF16 now landed, the path forward is architecture (width, depth), training duration (more epochs in same budget), or new regularisation (dropout, droppath, swa).
 
 ## Next hypotheses to queue (when students go idle)
 
