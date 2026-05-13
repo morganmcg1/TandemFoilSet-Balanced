@@ -1,5 +1,50 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 16:15 — PR #2315: RMSNorm on GeGLU stack (CLOSED — pod stalled, no result)
+
+- Student branch: `charliepai2g24h5-thorfinn/rmsnorm-vs-layernorm`
+- Hypothesis: Replace all `nn.LayerNorm` with scale-only `RMSNorm` (LLaMA recipe, SwiGLU/GeGLU + RMSNorm co-change).
+
+### Outcome
+
+**No result — pod stalled.** Over 3.5h after assignment:
+- 0 student commits, 0 student comments
+- `M train.py` (uncommitted RMSNorm edits) at iteration 89 (`grep RMSNorm train.py` not verified)
+- GPU dropped from 100% → 0% by iteration 93
+- 2 advisor status checks (15:25, 15:51) received but not actioned
+
+The pod is alive (heartbeating) but no training is running. Closing to free the queue and reassigning thorfinn to a simpler single-line config change (slice_num=48) to determine whether the pod is genuinely stuck or struggling with multi-step edits.
+
+**Hypothesis remains untested.** RMSNorm + GeGLU is a real co-change worth revisiting. Re-assign in a future cycle if pod stability improves.
+
+---
+
+## 2026-05-13 16:15 — PR #2403: GeGLU mlp_ratio=2 swiglu_hidden 216→320 (SENT BACK — budget-bound, not architecture-bound)
+
+- Student branch: `charliepai2g24h5-tanjiro/geglu-mlp-ratio-2`
+- Hypothesis: Wider GeGLU MLP (swiglu_hidden 216→320, +48% MLP capacity) should compound on GeGLU win.
+
+### Results (vs GeGLU baseline #2287: 45.92/44.35)
+
+| Metric | swiglu_hidden=320 | Baseline | Δ |
+|---|---:|---:|---:|
+| val_avg/mae_surf_p | 48.13 | 45.92 | +2.21 (+4.8%) |
+| test_avg/mae_surf_p | 46.19 | 44.35 | +1.84 (+4.2%) |
+
+**14/16 epochs completed** — 30-min cap hit. Per-epoch overhead was ~20% (vs ~5% expected). Val still descending at **−4.5/epoch** at termination.
+
+### Mechanism analysis (student)
+
+The wider GeGLU MLP has higher memory-bandwidth cost than estimated. The 20% per-epoch overhead truncated the run by 2 epochs. Linear extrapolation suggests val would have hit 39-43 range at epoch 16 — **potentially competitive with or beating baseline 45.92**. Result is inconclusive: budget-bound, not architecture-bound.
+
+### Disposition
+
+**SENT BACK** to test `swiglu_hidden=256` (mlp_ratio≈1.6, +20% capacity). Should fit ~10% per-epoch overhead → comfortable 16-epoch budget. Direct test of "is more MLP capacity helpful?" without the wall-clock confound.
+
+- Metrics: `models/model-charliepai2g24h5-tanjiro-geglu_mlp_ratio2_20260513-152412-20260513-152415/metrics.jsonl`
+
+---
+
 ## 2026-05-13 15:55 — PR #2005: surf_weight=15 on GeGLU stack (CLOSED — both axes regress)
 
 - Student branch: `charliepai2g24h5-nezuko/surf-weight-sweep`

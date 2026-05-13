@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 15:55
+- 2026-05-13 16:15
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -80,18 +80,20 @@ cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
 | #2288 | frieren | Lion lr sweep on GeGLU baseline: Arm A=2.5e-4, Arm B=3e-4 | WIP (stale, status-checked) | Beat 45.92 |
-| #2315 | thorfinn | RMSNorm: replace all `nn.LayerNorm` with scale-only RMSNorm (LLaMA recipe) | WIP (stale, status-checked) | Beat 45.92 |
-| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP — new | Beat 45.92 |
-| #2403 | tanjiro | GeGLU mlp_ratio=2 — swiglu_hidden 216→320, +48% MLP capacity | WIP — new | Beat 45.92 |
-| #2405 | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | WIP — new | Beat 45.92 |
-| #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP — new | Beat 45.92 |
-| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP — new | Beat 45.92 |
+| #2401 | fern | GeGLU gate in PhysicsAttention.to_out (hidden=56 bottleneck, param parity) | WIP | Beat 45.92 |
+| #2403 | tanjiro | GeGLU mlp_ratio sweep — sent back, now testing swiglu_hidden=256 (mlp_ratio≈1.6) | WIP (sent back) | Beat 45.92 |
+| #2405 | askeladd | Lion β1 sweep: β1∈{0.85, 0.95} vs default 0.9 (direction-smoothness axis) | WIP | Beat 45.92 |
+| #2422 | edward | n_head sweep: 4→8 (more heads, smaller per-head dim, attention diversity test) | WIP | Beat 45.92 |
+| #2424 | nezuko | n_layers=4 (cost-recovery probe vs #2349 n_layers=6 budget-cliff result) | WIP | Beat 45.92 |
+| #2432 | thorfinn | slice_num=48 (15% per-epoch cost recovery, +2 cosine-tail epochs) | WIP — new (replaced stalled #2315) | Beat 45.92 |
 | #1979 | alphonse | n_layers=6 depth sweep, actively running (stale baseline, directionally informative) | WIP (stale baseline) | Beat 45.92 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
+| #2315 | thorfinn | CLOSED | RMSNorm: pod stalled. 0 commits, 0 comments, GPU dropped to 0% over 3.5h. Hypothesis untested. Replaced with simpler single-line slice_num=48 assignment (#2432). |
+| #2403 | tanjiro | SENT BACK | swiglu_hidden=320 (mlp_ratio=2): val=48.13 (+4.8%), test=46.19 (+4.2%) at only 14/16 epochs (30-min cap hit). Per-epoch overhead 20%, not 5% as expected. Val −4.5/ep at termination (extrapolated 39–43 range at ep16). Inconclusive — sent back to test swiglu_hidden=256. |
 | #2352 | edward | CLOSED | Lion wd sweep on GeGLU stack. Neither arm beats primary val. Arm A (wd=2e-3): val=46.49 (+1.21%); Arm B (wd=5e-3): val=45.96 (+0.08% noise) but **test=43.90 (−1.01% real)**. Param L2 grows ~58% from init regardless of wd — sign-update dominates, wd axis is shallow on this stack. |
 | #2005 | nezuko | CLOSED | surf_weight=15 on GeGLU stack: val=46.90 (+2.13%), test=44.59 (+0.54%). Both axes regress. Mechanism: Lion's sign quantization makes loss-balance reweighting a weak knob — only changes which params get stepped, not step magnitude. |
 | #2349 | fern | CLOSED | n_layers=6 GeGLU: val=50.80 (+10.6%), test=47.96 (+8.1%). Budget-starved: +18% per-epoch cost → only 12/13 epochs in 30-min cap; val still descending at −4.0/ep at termination. Depth axis alive but needs wall-clock headroom. |
