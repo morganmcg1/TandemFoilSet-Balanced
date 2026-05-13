@@ -6,6 +6,33 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 15:05 — PR #2350 — CLOSED (mlp_ratio=2 loses; mlp_ratio=4 confirmed optimal at compact stack)
+
+**edward: mlp_ratio=2 on n_layers=3+slice_num=24+epochs=33**
+- val_avg: 38.225 vs baseline 37.366 → **+0.86 (+2.3%) WORSE**
+- test_avg: 32.615 vs baseline 31.371 → **+1.24 (+4.0%) WORSE**
+- All 4 splits regress on both val and test. single_in_dist takes biggest hit (val +0.93, test +2.00).
+- Parameter count: 366,039 (vs ~514K baseline) — 29% reduction from lighter FFN
+- Best epoch: 33/33 (final), mildly undertrained even with lighter model
+
+| Split | val mlp=2 | val baseline | Δ val | test mlp=2 | test baseline | Δ test |
+|---|---|---|---|---|---|---|
+| single_in_dist | 39.013 | 38.082 | +0.93 | 35.840 | 33.836 | +2.00 |
+| geom_camber_rc | 52.205 | 51.356 | +0.85 | 46.166 | 45.411 | +0.75 |
+| geom_camber_cruise | 22.082 | 20.702 | +1.38 | 17.967 | 16.874 | +1.09 |
+| re_rand | 39.601 | 39.325 | +0.28 | 30.486 | 29.365 | +1.12 |
+| **avg** | **38.225** | **37.366** | **+0.86** | **32.615** | **31.371** | **+1.24** |
+
+**MLP axis closed at compact stack.** Combined with Round 23 PR #2278 (mlp_ratio=6 also lost), both directions away from mlp_ratio=4 regress. The FFN width at n_layers=3 is load-bearing — attention is the bottleneck, not FFN expansion, but cutting FFN below 4x hurts uniform representational capacity across all splits.
+
+**Note:** PR body had template mix-up (slice_num=12 in body); student correctly inferred title intent and ran mlp_ratio=2. CLI flag `--mlp_ratio` added by student (previously hardcoded).
+
+**Metric artifacts:** `models/model-charliepai2g48h3-edward-mlp-ratio-2-nlayers3-slicenum24-20260513-141120/metrics.jsonl`
+
+**Reassignment:** edward → PR #2383 (n_head=2 at compact stack)
+
+---
+
 ## 2026-05-13 ~17:20 — PR #2248 — CLOSED (sw=2 wins vs old baseline, loses vs new; vol-grad mechanism confirmed)
 
 **askeladd: surf_weight=2 on n_layers=3+slice_num=32+epochs=27**

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~17:25
+- **Date:** 2026-05-13 15:05
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -91,7 +91,7 @@
 |---------|-----|------------|-----------|
 | alphonse | new | **slice_num=16 on n_layers=3+epochs=36** (continue partition sweep) | n_layers=3 |
 | tanjiro | new | **slice_num=12 on n_layers=3+epochs=38** (floor probe — where does slice axis saturate?) | n_layers=3 |
-| edward | new | **mlp_ratio=2 on n_layers=3+slice_num=24+epochs=33** (test lighter FFN at compact depth) | n_layers=3 |
+| edward | #2383 | **n_head=2 on n_layers=3+slice_num=24+epochs=33** (test richer per-head attention at compact depth) | n_layers=3 |
 | thorfinn | new | **lr=1.5e-4 on n_layers=3+slice_num=24+epochs=33** (LR retest at new baseline stack) | n_layers=3 |
 | frieren | #2367 | **lr=2e-4 on n_layers=3+slice_num=24+epochs=33** (LR upper bracket at new baseline) | n_layers=3 |
 | nezuko | #2279 | surf_weight=3 on n_layers=3+slice_num=32+epochs=27 (sw curve fill) | n_layers=3 |
@@ -101,7 +101,7 @@
 **Round summary:** All 8 on n_layers=3 stack. Primary focus is the partition sweep (slice_num=16/12) to continue the dominant mechanism. The frieren/nezuko/fern/askeladd PRs (#2274/#2279/#2301/#2248) are on the OLD slice_num=32 stack — they will need to beat the NEW baseline 37.366 to merge. If they test orthogonal axes that win at slice_num=32, those axes are worth compounding with slice_num=24.
 
 **Merged this turn:** #2229 (alphonse slice_num=24, val=37.366, −2.36%) — new baseline
-**Closed since baseline shift:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy n_layers=4 superseded), #2274 (frieren WD=0 +2.2%, WD axis flat), #2248 (askeladd sw=2 +3.13%, sw axis closed at n_layers=3, vol-grad mechanism confirmed but doesn't transfer to surface wins)
+**Closed since baseline shift:** #2278 (edward mlp_ratio=6 +5.4%), #2273 (tanjiro warmup +1.66%), #2151 (thorfinn legacy n_layers=4 superseded), #2274 (frieren WD=0 +2.2%, WD axis flat), #2248 (askeladd sw=2 +3.13%, sw axis closed at n_layers=3), #2350 (edward mlp_ratio=2 +2.3% — both directions from mlp_ratio=4 regress, axis closed)
 
 **Variance note (from #2274 student diagnosis):** Inter-run variance on identical configs is ~1.7 val units. Recent ~0.5 val improvements are at or near this noise floor — single-run signals require corroboration.
 
@@ -130,7 +130,7 @@
 
 **Medium priority:**
 4. **WD and LR on slice_num=24** — frieren/fern/askeladd/nezuko tests are at slice_num=32; if they show signal, retest at new baseline
-5. **mlp_ratio=2 follow-up**: if edward's run confirms lighter FFN helps, try mlp_ratio=1 (pure attention, no FFN expansion)
+5. **n_head axis beyond n_head=2**: if n_head=2 wins at compact stack, probe n_head=1 (max head_dim=128); if loses, n_head=4 confirmed optimal
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
@@ -143,8 +143,8 @@
 - **surf_weight=15**: neutral on n_layers=4 — sw=10 near optimum in high direction
 - **n_head=8**: +43% per-epoch, +15.7% worse
 - **n_layers=7**: +4.6% (epoch budget dominates; 160s/epoch too slow)
-- **mlp_ratio=6 at n_layers=3**: +5.4% worse (PR #2278) — attention bottleneck, not FFN; mlp_ratio=4 optimal at n_layers=3; mlp_ratio=2 now being tested (edward #2350)
-- **mlp_ratio=2 at older stack**: +9.95%; mlp_ratio=8: +5.95% (both worse on old stack; mlp_ratio=4 optimal there too)
+- **mlp_ratio axis at n_layers=3 CLOSED**: mlp_ratio=6 (+5.4%, PR #2278) AND mlp_ratio=2 (+2.3%, PR #2350) both lose. mlp_ratio=4 confirmed optimal at compact stack. FFN width is load-bearing (can't cut) but not the limiting factor (can't expand). The mlp_ratio flag was hardcoded; student added CLI arg `--mlp_ratio`.
+- **mlp_ratio axis fully closed**: mlp_ratio=2 +9.95% (old stack), +2.3% (PR #2350 new stack); mlp_ratio=6 +5.4% (PR #2278); mlp_ratio=8 +5.95%. mlp_ratio=4 confirmed optimal across all stacks.
 - **Linear epoch warmup (2 ep)**: +1.66% val worse (PR #2273) — compresses cosine T_max by 2 epochs, hurting the high-value late-stage descent; no benefit to Lion+L1 at lr=1e-4
 - **mlp_ratio=6 at n_layers=3**: +5.4% val worse (PR #2278) — FFN capacity is not the bottleneck at depth 3
 - **weight_decay=0 at compact stack**: +2.2% val worse vs new baseline (PR #2274), BUT confirmed compact stack does NOT overfit at WD=0 → WD axis is effectively FLAT. Future experiments can safely use WD=0 if convenient; not a winning lever.
@@ -169,4 +169,4 @@
 - **lr=cfg.lr bug FIXED** (PR #2080): Lion uses `cfg.lr`; `--lr` flag works correctly.
 - **slice_num CLI arg** (PR #2108): `--slice_num` accepted in Config.
 - **n_head CLI arg** (PR #2149): `--n_head` accepted in Config. **Default is still 4** (train.py line 392: `n_head: int = 4`).
-- **mlp_ratio=4 hardcoded** at train.py line 435: `mlp_ratio=4,` — not in Config dataclass; requires code change to vary.
+- **mlp_ratio CLI arg added** (PR #2350): `--mlp_ratio` accepted via Config. Default is still 4 (optimal, axis now closed).
