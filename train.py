@@ -534,6 +534,7 @@ class Config:
     fourier_features: bool = False  # Random Fourier Features on coords (Tancik 2020).
     fourier_num_features: int = 16  # Number of random frequency vectors B columns.
     fourier_sigma: float = 1.0  # Std of random B matrix (controls freq bandwidth).
+    swa_start_frac: float = 0.75  # Fraction of epochs after which SWA averaging activates.
 
 
 cfg = sp.parse(Config)
@@ -626,7 +627,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOC
 
 # SWA (PR #1554): average weights over the final 25% of training to find a
 # flatter optimum. Skip update_bn — Transolver uses LayerNorm only.
-swa_start_frac = 0.75
+swa_start_frac = cfg.swa_start_frac
 swa_start_epoch = int(swa_start_frac * MAX_EPOCHS)  # 0-indexed loop var
 swa_model = AveragedModel(model)
 swa_lr = cfg.lr * 0.2
