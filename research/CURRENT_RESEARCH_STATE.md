@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 (updated cycle 73)
+- **As of:** 2026-05-13 (updated cycle 74)
 - **Round:** willow-pai2g-48h-r4 (advisor branch `icml-appendix-willow-pai2g-48h-r4`)
 - **Most recent human-team direction:** (none — controlled 24/48 h Charlie-vs-Willow logging ablation, hard cap `SENPAI_TIMEOUT_MINUTES=30`)
 
@@ -45,16 +45,18 @@
 
 | PR | Student | Hypothesis | Status | Notes |
 |----|---------|------------|--------|-------|
+| #2546 | edward | DropPath (Huang 2016) | WIP | Active; running on pre-Lion AdamW base |
 | #2566 | frieren | GeGLU MLP block (Shazeer 2020) | WIP | Running on pre-Lion AdamW base; architecture result will inform GeGLU+Lion composition |
-| #2546 | edward | DropPath (Huang 2016) | WIP | Active pod, last updated 21:50; running on pre-Lion AdamW base |
-| #2603 | alphonse | RMSNorm (Zhang & Sennrich 2019) | WIP | Just started (~30 min ago); on pre-Lion AdamW base |
-| #2605 | askeladd | Gradient Noise (Neelakantan 2015) | WIP | Just started (~30 min ago); on pre-Lion AdamW base |
-| #2617 | nezuko | Lion σ calibration (3 seeds) | WIP NEW | Lion baseline config, 3 controlled seeds |
-| #2619 | fern | Lion WD scale sweep (5.0, 8.0) | WIP NEW | Tests higher WD with Lion |
-| #2620 | thorfinn | Lion 3-cycle T_mult=1 | WIP NEW | T_0=7 T_mult=1 → [7,7,7] cycles |
-| #2621 | tanjiro | Lion + RMSNorm composition | WIP NEW | First arch+optimizer compose |
+| #2603 | alphonse | RMSNorm (Zhang & Sennrich 2019) | WIP | Running on pre-Lion AdamW base |
+| #2617 | nezuko | Lion σ calibration (3 seeds) | WIP | Lion baseline config, 3 controlled seeds; started 22:24 |
+| #2619 | fern | Lion WD scale sweep (5.0, 8.0) | WIP | Tests higher WD with Lion; started 22:24 |
+| #2620 | thorfinn | Lion 3-cycle T_mult=1 | WIP | T_0=7 T_mult=1 → [7,7,7] cycles; started 22:25 |
+| #2621 | tanjiro | Lion + RMSNorm composition | WIP | First arch+optimizer compose; started 22:25 |
+| #2635 | askeladd | Lion + 1-epoch linear warmup | WIP NEW | Chen 2023 rec; sign-based Lion updates need warmup to avoid aggressive early steps |
 
-**Note on pre-Lion WIP PRs (#2566, #2546, #2603, #2605):** These are running against the old AdamW baseline (82.26). If any show improvement there, the next step is testing composition with Lion. If they regress on AdamW, they're likely dead ends (architecture changes that didn't survive AdamW won't survive Lion). The pre-Lion data is still scientifically useful for the paper's "ablation" section.
+**Note on pre-Lion WIP PRs (#2546, #2566, #2603):** These are running against the old AdamW baseline (82.26). They need to beat val=65.5364 to merge. If any show improvement on AdamW alone, the next step is testing composition with Lion. Pre-Lion data is still valuable for paper ablations.
+
+**Cycle 74 closure:** #2605 askeladd (Gradient Noise, Neelakantan 2015) CLOSED — val=88.33 (+6.07 vs SOTA 82.26, well above 5% close threshold). Two mechanism causes: (1) η=0.01 is 10-100× larger than typical gradient magnitudes O(10⁻³), drowning signal; (2) cosine restart already provides exploration via LR-spike, making gradient noise mechanistically redundant in SGDR regime. All 4 splits regressed including val_single_in_dist (+8.84 worst). askeladd reassigned to #2635 (Lion + linear warmup).
 
 ## σ calibration summary (critical for paper appendix)
 
@@ -86,7 +88,7 @@ After Lion σ calibration, the priority order is:
 1. **Architecture + Lion compositions** (when in-flight PRs #2603 RMSNorm, #2566 GeGLU, #2546 DropPath report): test each architecture change ON TOP OF Lion. These are the only mechanisms that could realistically move val by 4+ val from 65.54.
 2. **Lion WD scale** (fern #2619): could give 2-5 val improvement if current 3.0 is suboptimal.
 3. **Lion cycle structure** (thorfinn #TBD): 3-cycle T_mult=1 if Lion's fast recovery enables it.
-4. **Gradient noise with Lion** (future): askeladd #2605 tests on AdamW first; if it works there, test on Lion.
+4. **Lion linear warmup** (askeladd #2635): Chen 2023 recommends warmup; sign-based updates need LR ramp to avoid aggressive initial steps. Low-complexity, high-prior change.
 
 ## Closed hypotheses list
 
@@ -122,11 +124,12 @@ After Lion σ calibration, the priority order is:
 | 48 | frieren | GeGLU | WIP | running |
 | 49 | alphonse | RMSNorm | WIP | running |
 | 50 (Lion) | fern | Lion | MERGED | see above |
-| 51 | askeladd | Gradient Noise | WIP | running |
-| 52 | nezuko | Lion σ calibration | WIP | new |
-| 53 | fern | Lion WD scale | WIP | new |
-| 54 | thorfinn | Lion 3-cycle T_mult=1 | WIP | new |
-| 55 | tanjiro | Lion + RMSNorm compose | WIP | new |
+| 51 | askeladd | Gradient Noise | CLOSED | +6.07 val (88.33); η too large, restart makes it redundant |
+| 52 | nezuko | Lion σ calibration | WIP | running |
+| 53 | fern | Lion WD scale | WIP | running |
+| 54 | thorfinn | Lion 3-cycle T_mult=1 | WIP | running |
+| 55 | tanjiro | Lion + RMSNorm compose | WIP | running |
+| 56 | askeladd | Lion + 1-epoch warmup | WIP | new (cycle 74) |
 
 ---
 
