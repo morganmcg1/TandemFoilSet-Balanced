@@ -2,6 +2,30 @@
 
 Primary metric: `val_avg/mae_surf_p` (lower is better). Test counterpart: `test_avg/mae_surf_p`.
 
+## 2026-05-13 11:10 — PR #2014: [onecycle-lr] OneCycleLR(max_lr=8e-4) on bs=1+beta=0.5 — **MERGED (NEW BEST: val=60.98)**
+- Student branch: `charliepai2g48h4-nezuko/onecycle-lr-bs1`
+- Hypothesis: OneCycleLR(max_lr=8e-4, pct_start=0.1, cosine anneal, div_factor=25, final_div_factor=10) replacing SequentialLR(LinearLR+CosineAnnealingLR). Super-convergence schedule: rise from 3.2e-5 to 8e-4 (~2.1 epochs), then cosine descent to 3.2e-6 over remaining 18.9 epochs.
+
+| Metric | OneCycleLR (this) | Baseline bs=1+beta=0.5 (#2012) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | **60.98** | 66.32 | **−5.34 (−8.06%) ✓** |
+| test_avg/mae_surf_p | **52.48** | 59.68 | **−7.20 (−12.07%) ✓** |
+| val single_in_dist | 63.34 | 69.98 | −6.64 ✓ |
+| val geom_camber_rc | 72.79 | 81.07 | **−8.28 ✓ (largest val gain)** |
+| val geom_camber_cruise | 45.90 | 49.11 | −3.21 ✓ |
+| val re_rand | 61.91 | 65.10 | −3.19 ✓ |
+| test geom_camber_rc | 64.08 | 74.20 | **−10.12 ✓ (biggest test gain)** |
+
+- Artifact: `models/model-charliepai2g48h4-nezuko-onecycle-lr-bs1-20260513-100811/metrics.jsonl`
+- 21 epochs in 29.8 min; best epoch 20/21; epoch 21 slightly regressed (60.98 → 61.11). T_MAX_EPOCHS=21, total_steps=21×750=15750.
+- **Critical train.py change:** `cfg.lr` (5e-4) is now IRRELEVANT — OneCycleLR overrides optimizer lr from step 1. `max_lr=8e-4` is hardcoded. T_max parameter no longer exists (CosineAnnealingLR gone).
+
+**Analysis:** Biggest single improvement in the research programme (+−8% val, −12% test). ALL 8 splits improved. The super-convergence schedule solves the schedule-misalignment problem (T_max=17 → cosine ending at ep18, model still improving at ep21) by design. T_MAX_EPOCHS=21 calibrated exactly to the bs=1 30-min budget. **16th effective merge. New best: val=60.98 / test=52.48.**
+
+**Cascade impact:** Experiments targeting cfg.lr (thorfinn #1968, alphonse #2106) are MOOT — redirected to max_lr OneCycleLR bracket. Edward #2162 (T_max=20) was CLOSED — the schedule-alignment problem is solved. New assignments: nezuko #2212 (pct_start=0.05), edward #2217 (n_hidden=192).
+
+---
+
 ## 2026-05-13 11:00 — PR #2106: [lr-4e-4-bs1] Lower LR 5e-4→4e-4 at bs=1 — **SENT BACK (val improved OLD baseline, not NEW)**
 - Student branch: `charliepai2g48h4-alphonse/lr-4e-4-bs1`
 - Hypothesis: At bs=1 (1500 steps/epoch, 4× the original bs=4 regime), the LR optimum shifts downward; lr=4e-4 should improve generalization.
