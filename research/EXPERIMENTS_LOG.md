@@ -168,6 +168,37 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 05:30 — PR #1662 v3: Fourier mesh PE (surface-only L=4) on merged stack (nezuko) — **MERGED ⭐ NEW BASELINE**
+**Branch:** `charliepai2g24h3-nezuko/fourier-mesh-positional-encoding` | **Status: MERGED**
+
+- **Hypothesis:** Surface-only Fourier positional encoding (L=4 frequency bands) on the #1745 merged stack (Huber+curriculum+EMA+augment). Compounds with curriculum and Huber to improve surface-pressure modelling on OOD geometry splits.
+- **val_avg/mae_surf_p: 88.175** — **−3.64% vs baseline #1745 (91.507)**.
+- **test_avg/mae_surf_p (safe 4-split): 83.362** — **−2.63% vs baseline #1745 (85.611)**.
+- **Per-split val:**
+
+| Split | v3 val | #1745 val | Δ% |
+|---|---:|---:|---:|
+| val_single_in_dist | 104.911 | 110.04 | **−4.66%** |
+| val_geom_camber_rc | 99.544 | 100.44 | −0.89% |
+| val_geom_camber_cruise | **64.603** | 71.16 | **−9.21%** (largest gain) |
+| val_re_rand | 83.642 | 84.38 | −0.88% |
+
+- **Per-split test (safe 4-split):**
+
+| Split | v3 test | #1745 test | Δ% |
+|---|---:|---:|---:|
+| test_single_in_dist | 93.872 | 96.26 | −2.48% |
+| test_geom_camber_rc | 86.766 | 88.65 | −2.13% |
+| test_geom_camber_cruise | 74.616 | 77.18 | −3.32% |
+| test_re_rand | 78.192 | 80.36 | −2.70% |
+
+- **Composition is SUPER-ADDITIVE on val_geom_camber_cruise:** Fourier PE alone (v2, no Huber/curriculum) → val_cruise 72.07; #1745 (Huber+curriculum, no Fourier) → val_cruise 71.16; v3 (all three) → **64.603**. Neither alone came close; the composition unlocks the OOD-geometry cruise split with extraordinary efficiency.
+- **Mechanism:** Surface-only Fourier features expose boundary-layer high-frequency structure to slice-token attention; Huber stabilises per-node gradient distribution; curriculum's surf_weight ramp focuses optimisation on surface nodes once volume features converge. All three target the same surface-pressure-on-OOD-geometry objective from complementary angles and reinforce on cruise.
+- **14/14 epochs at ~31 min, 666,455 params (parameter-free PE).** Epoch 14 was best — still improving at cap.
+- **Artifacts:** `models/model-charliepai2g24h3-nezuko-fourier-L4-surf-on-merged-stack-20260513-040812/{metrics.jsonl,metrics.yaml,test_safe_eval.jsonl}`
+
+---
+
 ### 2026-05-13 05:05 — PR #1869: Huber δ down-sweep (0.25, 0.1) on #1745 stack (alphonse) — **CLOSED (P10: Huber δ has sharp non-monotone optimum at 0.5)**
 **Branch:** `charliepai2g24h3-alphonse/huber-delta-0p25-0p1-on-1745` | **Status: CLOSED**
 

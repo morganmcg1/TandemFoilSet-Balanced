@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 05:40 UTC
+- **Date**: 2026-05-13 05:45 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -13,14 +13,14 @@ None received.
 
 ## Current best baseline
 
-**val_avg/mae_surf_p = 91.507** — PR #1745 (thorfinn, Huber δ=0.5 × surf_weight curriculum 1→20).
-Test 4-split safe re-eval = **85.611** (−6.91% vs PR #1686 baseline 91.947).
-Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_delta=0.5 + surf_weight_warmup_epochs=5 + surf_weight_init=1.0 + surf_weight=20.0`.
-**Per-split val:** single=110.04, rc=100.44 (−10.6% vs #1686 — super-additive!), cruise=71.16, re_rand=84.38.
-**Per-split test:** single=96.26, rc=88.65, cruise=77.18, re_rand=80.36.
-**Key finding:** Huber + curriculum compose super-additively on camber_rc. Huber stabilises per-node gradient distribution; curriculum steers surface/volume gradient share. Together they unlock a regime neither alone was sufficient for (geometry-OOD camber_rc, 111→100). Strongest bottleneck remaining: `val_single_in_dist = 110.04`.
+**val_avg/mae_surf_p = 88.175** — PR #1662 (nezuko, Fourier PE surface-only L=4 on merged stack).
+Test 4-split safe re-eval = **83.362** (−2.63% vs PR #1745 baseline 85.611).
+Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_delta=0.5 + surf_weight_warmup_epochs=5 + surf_weight_init=1.0 + surf_weight=20.0 + pos_freq_bands=4 + pos_freq_surface_only=True`.
+**Per-split val:** single=104.911, rc=99.544, **cruise=64.603** (−9.21% — largest gain, super-additive!), re_rand=83.642.
+**Per-split test:** single=93.872, rc=86.766, cruise=74.616, re_rand=78.192.
+**Key finding:** Fourier PE + Huber + curriculum compose super-additively on camber_cruise. Surface-only L=4 Fourier features expose boundary-layer high-frequency structure; Huber stabilises per-node gradient distribution; curriculum's surf_weight ramp focuses optimisation on surface nodes. All three target the same surface-pressure-on-OOD-geometry objective and reinforce on cruise (positive but sub-additive on other splits). Strongest bottleneck remaining: `val_single_in_dist = 104.911`.
 
-**Previous baseline (#1686, curriculum):** val 97.620 / test 91.947. (#1484 Huber alone: val 99.879 / test 93.596.)
+**Previous baselines:** #1745 (Huber×curriculum) val 91.507 / test 85.611. #1686 (curriculum) val 97.620 / test 91.947. #1484 (Huber alone) val 99.879 / test 93.596.
 
 **Disproved (closed, mechanistic):** PR #1543 v2 (fern) log-cosh + augment @ 106.93 (+3.71%) / test 100.61 (+6.18%). The v2 − v1 delta ≈ 0 (augmentation added nothing on top of log-cosh, vs +9.4 on MSE) proves log-cosh and augment are SUBSTITUTES, not complements: both target high-Re gradient dominance via different mechanisms. Log-cosh's gradient cap defeats augmentation's purpose on rc split (+13.5% worse, the killer).
 
@@ -35,7 +35,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
 | fern | #1935 | `slice-num-down-sweep-32-48` | WIP — slice_num=48 (Arm A) / slice_num=32 (Arm B) on merged stack. Tests opposite direction after #1850 was budget-blocked at slice_num=96/128. Budget-respecting (both arms faster than baseline → full 14/14 epochs). Calibrated curve test. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
-| nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP v3 — v2 PASSED (Arm B surface-only L=4: val 95.598 / test 89.895, beats #1686 by −2.07%/−2.23%). Sent back for v3 verification on full merged stack (Huber+curriculum+EMA). |
+| nezuko | #1936 (pending) | `fourier-pe-v4-coord-rescaling` | NEW — per-sample [0,1] bbox coord rescaling before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. Tests whether dataset-normalised coords are sub-optimal vs NeRF-convention bbox normalization. (#1662 merged as new baseline.) |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on full merged stack (#1745 now baseline). |
 | thorfinn | #1885 | `surf-weight-warmup-3-8-epochs` | WIP — warmup_epochs=3 (Arm A) / warmup_epochs=8 (Arm B) at fixed plateau sw=20. Tests ramp shape decoupled from plateau height. (#1827 closed — sw=30/50 both regressed, established P8.) |
 
@@ -47,17 +47,11 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 3. **Geometry augmentation** (PR #1495): AoA + NACA camber jitter → 103.10.
 4. **Huber loss δ=0.5** (PR #1484 v2): Huber on top of merged stack → 99.879 val / 93.596 test.
 5. **Two-stage surf_weight curriculum 1→20** (PR #1686): Ramp surf_weight 1→20 over 5 epochs (cosine T_max=14, MSE loss) → 97.620 val / 91.947 test. First substantial improvement on val_single_in_dist (114.69).
-6. **Huber × curriculum composition** (PR #1745): Huber δ=0.5 + surf_weight 1→20 on same run → **91.507 val / 85.611 test** → **new baseline**. Super-additive on camber_rc (observed −10.6% vs predicted −7.5% from individual gains). Huber stabilises per-node gradient distribution, enabling more precise objective shaping by the curriculum. Current bottleneck: val_single_in_dist = 110.04 (still 26 points above the overall average).
+6. **Huber × curriculum composition** (PR #1745): Huber δ=0.5 + surf_weight 1→20 on same run → 91.507 val / 85.611 test. Super-additive on camber_rc (observed −10.6% vs predicted −7.5%). Huber stabilises per-node gradient distribution, enabling more precise objective shaping by the curriculum.
+7. **Fourier mesh PE (surface-only L=4)** (PR #1662): Surface-only Fourier positional encoding with L=4 frequency bands on #1745 merged stack → **88.175 val / 83.362 test** → **new baseline**. Super-additive on camber_cruise (val 64.60 vs 71.16, −9.21%; neither Fourier alone nor Huber+curriculum alone came close). All 4 val and test splits improve. Current bottleneck: val_single_in_dist = 104.911 (still ~19 points above overall average).
 
-### Promising results (sent back for verification on merged stack)
-- **Fourier mesh PE** (nezuko #1662 v2): Both arms pass against #1495 baseline.
-  - Arm A (uniform L=2): val 95.727 / test 89.989
-  - Arm B (surface-only L=4): **val 95.598 / test 89.895** (recommended)
-  - vs NEW #1686 baseline: Arm B = −2.07% val / −2.23% test → still a winner.
-  - Per-split Arm B: single 111.06 / rc 106.97 / cruise 72.07 / re_rand 92.30 — three of four splits beat #1686 per-split, only re_rand marginally regressed (+1.72%).
-  - v2 ran with `--ema_decay 0.0` (no EMA), no Huber, no curriculum — full composability with merged stack untested. v1's failure was the OneCycle@11ep scheduler confound, NOT capacity or scope — both A and B (with different fixes) produce essentially identical wins under cosine T_max=14.
-  - Sent back for v3 = surface-only L=4 on merged stack with EMA + Huber + curriculum all active.
-- **SwiGLU FFN** (tanjiro #1693 v1): val 87.278 / test 82.237 (safe 4-split) — beats #1686 by **−10.5% val / −10.6% test**, uniform 12-16% gain across ALL 4 splits. If this holds on rebase it's the strongest single-change result on this branch. v1 ran on pre-#1484/#1686 stack with EMA explicitly disabled — sent back for rebase + rerun on full merged stack to verify and to test SwiGLU × curriculum × Huber × EMA composition in one run. Param count 827K (+7% over baseline).
+### Promising results (awaiting verification on merged stack)
+- **SwiGLU FFN** (tanjiro #1693 v2, in flight): v1 val 87.278 / test 82.237 (safe 4-split) — beats OLD #1745 baseline AND the NEW #1662 baseline (88.175). v1 ran on pre-#1484/#1686/#1745/#1662 stack with EMA explicitly disabled; sent back for rebase + rerun on full merged stack. Param count 827K (+7% over baseline). If this holds under the full composition, it's a major win on top of #1662.
 
 ### Closed (disproved — negative results)
 - **Focal per-sample loss weighting** (askeladd #1709): Both arms (γ=1.0, γ=2.0) regress +9-10% val / +10-12% test vs #1495 baseline. Effective batch-size collapse (eff_bs ≈ 1.65 at γ=2.0 out of B=4) was the dominant failure mode — not gradient signal weakness. Revised P3: focal weighting fails at B≤4 with high-y-variance regression. Per-domain sampling (askeladd #1822) is the orthogonal next test.
@@ -209,12 +203,13 @@ disproportionately. Up-direction test (δ=0.6/0.75, alphonse #1931 in
 flight) closes the axis definitively.
 
 ### Potential next directions (round 3+)
-- **Huber δ up-direction** (alphonse #1931, in flight): δ=0.6/0.75 on #1745 merged stack. Resolves inflection-vs-optimum question after #1869 closed δ-down direction. Expected to close the Huber-δ axis for good after this PR.
-- **slice_num down-direction** (fern #1935, in flight): slice_num=32/48 on #1745 merged stack. Budget-respecting (both arms faster than baseline → full 14/14 epochs). Tests opposite slope after #1850 was budget-blocked at slice_num=96/128. Calibrated curve test.
-- **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. Tests whether the 5-epoch ramp from #1686 is itself a hyperparameter to tune. (#1827 closed — plateau axis past optimum.)
-- **Per-domain LOSS reweighting** (askeladd #1912, in flight): λ=0.3/1.0 multiplier on racecar_single loss with unmodified batch composition. Tests P9 escape route — does gradient-share reallocation *within* an intact batch avoid the off-domain regression that sampling-level (#1822) suffered?
-- **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack. Persistent rebase challenge.
-- **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack. Persistent rebase challenge.
+- **Fourier PE v4 coord rescaling** (nezuko, just assigned — pending PR creation): Per-sample [0,1] bbox normalization before Fourier encoding. Arm A: independent x/y; Arm B: isotropic. NeRF-convention frequency calibration. Expected 1-2% gain on OOD splits.
+- **Huber δ up-direction** (alphonse #1931, in flight): δ=0.6/0.75 on #1745 merged stack. Resolves inflection-vs-optimum question. **Pass criterion now vs #1662 (88.175/83.362).**
+- **slice_num down-direction** (fern #1935, in flight): slice_num=32/48 on #1745 merged stack. **Pass criterion now vs #1662 (88.175/83.362).**
+- **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. **Pass criterion now vs #1662 (88.175/83.362).**
+- **Per-domain LOSS reweighting** (askeladd #1912, in flight): λ=0.3/1.0 multiplier on racecar_single loss. **Pass criterion now vs #1662 (88.175/83.362).**
+- **SwiGLU composability** (tanjiro #1693 v2, in flight): v1 87.278/82.237 PASSES current baseline! Verification run on full merged stack (incl. Fourier PE) is critical. Could be next major win.
+- **Fourier PE Gaussian random Fourier features (GRFF)** (nezuko, future): Smoother spectral coverage vs dyadic 2^k bands. nezuko's suggestion #2 — defer until v4 coord-rescaling result is known.
 - **Larger surf_weight ramp endpoint (100)** — DEPRIORITIZED. P8 closed plateau-axis as past optimum; further upward push would just compound the volume-MAE regression.
 - **Surface-only Huber** — DEPRIORITIZED based on #1869 per-split analysis (δ acts on training dynamics, not per-channel signal balance). Skip unless a different per-channel motivation emerges.
 - **EMA decay sweep** (UNTOUCHED LEVER): 0.9995, 0.998 vs current 0.999. Single-axis HP sweep, budget-neutral. Good candidate after current sweeps complete.
