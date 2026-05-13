@@ -1285,3 +1285,153 @@ All 4 splits finite. Clean monotonic descent on both seeds — no crash, no NaN.
 - fern → max_norm=0.5 on Lion baseline (PR #2565)
 
 ---
+
+## 2026-05-13 22:30 — PR #2562 MERGED: Lion LR 7.5e-5 — 10th baseline shift
+
+- **Student:** willowpai2g48h3-tanjiro
+- **Branch:** willowpai2g48h3-tanjiro/lion-lr75e5
+- **Hypothesis:** Raise Lion lr from 5e-5 to 7.5e-5 (1.5× baseline). Lion at 5e-5 was still descending at epoch 35 (best=last); a slightly higher LR might extract more from the 30-min compute budget.
+
+### Results (2 seeds, post-Lion val=50.193 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `srveevtx` | 2 (BETTER) | **45.4335** | **39.5085** | 35 (last) | 30.8 min |
+| `7xoh7b6t` | 1 | 49.0288 | 43.8847 | 34 | 30.8 min |
+| **Baseline #2516 (Lion lr=5e-5)** | 2 (`1dj10zec`) | 50.193 | 43.501 | 35 | 30.7 min |
+
+**2-seed mean: val=47.231, test=41.697** (both beat bar).
+
+Per-split test surf_p (better seed s2 `srveevtx`): single_in_dist=42.56, geom_camber_rc=53.48, geom_camber_cruise=24.00, re_rand=37.99
+Seed variance: val std = 3.60 pt (7.6%) — ~4-6× higher than at lr=5e-5 (0.97 pt).
+
+### Per-split delta vs baseline (seed 2)
+
+| Split | Baseline (lr=5e-5) | This PR (lr=7.5e-5) | Δ |
+|---|---:|---:|---:|
+| single_in_dist | 46.82 | **42.56** | −9.1% |
+| geom_camber_rc | 59.38 | **53.48** | −9.9% |
+| geom_camber_cruise | 26.60 | **24.00** | −9.8% |
+| re_rand | 41.21 | **37.99** | −7.8% |
+
+Cross-split consistency strong — all four splits improved uniformly 8-10%.
+
+**Epoch-15 val:** s2=73.59, s1=77.75 vs baseline ~82 → confirms higher LR accelerates convergence (not just different basin).
+
+### Conclusion
+
+**MERGED — 10th baseline shift, −9.5% val / −9.2% test** (best seed; mean −5.9% / −4.2%). Mechanism: Lion at 5e-5 was still descending at timeout; 7.5e-5 shifts the entire convergence curve down, reaching lower val at every epoch. Seed variance increased 4-6× — higher LR amplifies early-trajectory divergence in the compute-bound regime. Both seeds beat val bar; seed 2 sweeps every test split.
+
+**New merge bar: val < 45.43, test < 39.51.**
+
+### Follow-up
+
+- tanjiro → Lion lr=1e-4 (PR #2628) — continue LR scan upward
+- thorfinn → Lion warmup (PR #2631) — address seed variance via 5-ep warmup
+- frieren → Lion wd=3e-3 (PR #2629) — test stronger regularization at higher LR
+- edward → Lion beta1=0.95 (PR #2633) — address seed variance via more conservative momentum
+- fern → max_norm=0.5 rebase (PR #2565) — sent back to rebase onto new baseline
+
+---
+
+## 2026-05-13 22:40 — PR #2565 SENT BACK: max_norm=0.5 on Lion (needs rebase)
+
+- **Student:** willowpai2g48h3-fern
+- **Branch:** willowpai2g48h3-fern/lion-clip05
+- **Hypothesis:** Tighten grad-clip from max_norm=1.0 to 0.5 on Lion baseline. Lion has no adaptive denominator; input gradient scale fully determines momentum direction.
+
+### Results (2 seeds, vs Lion lr=5e-5 baseline val=50.193)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` |
+|---|---:|---:|---:|
+| `81eee20j` | 1 | 49.985 | 42.808 |
+| `wnntjxfm` | 2 | **49.967** | **42.468** |
+| **Baseline (Lion lr=5e-5)** | 2 | 50.193 | 43.501 |
+
+2-seed mean: val=49.976, test=42.638. Beats old bar (val<50.19, test<43.50) ✓.
+
+**Key finding:** geom_camber_rc improved most (−3.8 pts), consistent with tighter clipping reducing gradient noise feeding Lion's momentum → better OOD generalization. single_in_dist slightly regressed (+0.85 pts).
+
+### Conclusion
+
+**Sent back for rebase** — Lion LR PR #2562 merged simultaneously, setting new bar val<45.43. Fern's val=49.976 no longer clears the new bar. The max_norm=0.5 mechanism is still valid on Lion+lr=7.5e-5 (gradient norms still ~32-34, 100% clip rate). Student instructed to rebase onto updated advisor branch and re-run.
+
+---
+
+## 2026-05-13 22:42 — PR #2520 CLOSED: n_head 4→8 (head_dim 32→16)
+
+- **Student:** willowpai2g48h3-thorfinn
+- **Branch:** willowpai2g48h3-thorfinn/nhead-8
+- **Hypothesis:** 8 attention heads at head_dim=16 vs 4 heads at head_dim=32 — parameter-neutral split with predicted finer-grained attention specialization.
+
+### Results (2 seeds, vs Lion val=50.193 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | epochs | runtime |
+|---|---|---:|---:|---:|---|
+| `qmo4jol6` | 1 | 73.900 | 65.958 | 27 | 30.4 min |
+| `3w6pnbt2` | 2 | **73.058** | **63.874** | 27 | 30.2 min |
+| **Baseline** | — | 50.193 | 43.501 | 35 | 30.7 min |
+
+Val regression: **+24%** vs bar. Test regression: **+25%** vs bar.
+
+**Two failure mechanisms:**
+1. **Capacity loss (not redistribution):** PhysicsAttention uses per-head Q/K/V projections of shape `dim_head × dim_head`. Halving head_dim → 4× smaller per-head QKV (1024→256 params each). Net −2.5% params — not param-neutral.
+2. **+30% per-epoch overhead** (67s vs 52s): SDPA on (B,8,64,16) hits less-optimal kernel than (B,4,64,32). Only 27 epochs vs 35 in same budget.
+
+Equal-epoch comparison (ep26): n_head=8 val=73.06 vs baseline val=79.93 — n_head=8 marginally better per-epoch but irrelevant under 30-min protocol.
+
+### Conclusion
+
+**CLOSED — clear regression, +24% val.** Architectural assumption wrong: PhysicsAttention's per-head dim_head×dim_head QKV layout makes n_head a capacity axis, not a redistribution axis. Retiring n_head=8 (and n_head=16 by extension — head_dim=8 would further degrade both mechanisms). Standard attention rewrite (full d_model×d_model QKV) would be needed to test n_head as a true redistribution axis.
+
+---
+
+## 2026-05-13 22:43 — PR #2504 CLOSED: QK-RMSNorm in PhysicsAttention
+
+- **Student:** willowpai2g48h3-frieren
+- **Branch:** willowpai2g48h3-frieren/qk-rms-norm
+- **Hypothesis:** Unit-normalize Q/K in PhysicsAttention before dot-product attention to prevent entropy collapse on high-Re tokens.
+
+### Results (2 seeds, vs old baseline val=58.883)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` |
+|---|---:|---:|---:|
+| `jewqe3f5` | 1 | 62.083 | 54.778 |
+| `dyd8f4al` | 2 | **59.750** | **52.516** |
+| **Baseline #2017** | 1 | 58.883 | 51.078 |
+
+2-seed mean: val=60.92, test=53.65. Regression vs old baseline (+1.5% val, +3.3% test). Catastrophically behind new bar (val<45.43): +14.3 pts.
+
+**Per-split signature does not match mechanism:** geom_camber_rc (the predicted biggest beneficiary of QK normalization) had the WORST regression (+3.80 pts). re_rand was the only split to improve (−0.40 pts). Frieren's diagnosis: Q/K magnitudes carry physics-discriminative information (per-domain log(Re) and dsdf scales) — unit-norming destroys this signal.
+
+### Conclusion
+
+**CLOSED — regression at both old and new baselines.** QK-RMSNorm is not the right technique for this architecture; the pre-attention LayerNorm + slice-softmax already regulate the input distribution adequately. Q/K magnitude cues are load-bearing for per-domain discrimination. Retiring QK-RMSNorm axis.
+
+---
+
+## 2026-05-13 22:50 — PR #2561 CLOSED: Lion betas (0.9, 0.95) bisect
+
+- **Student:** willowpai2g48h3-edward
+- **Branch:** willowpai2g48h3-edward/lion-betas-bisect
+- **Hypothesis:** Tighter Lion beta2 (0.95 vs 0.99) — by analogy to AdamW's beta2=0.95 win (PR #1589).
+
+### Results (2 seeds, vs Lion val=50.193 baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` |
+|---|---:|---:|---:|
+| `h79j10wp` | 1 | 58.673 | 50.634 |
+| `2s6k3728` | 2 | **57.624** | **50.697** |
+| **Baseline (beta2=0.99)** | 2 | 50.193 | 43.501 |
+
+Regression: **+14.8% val, +16.5% test.** All four test splits regressed uniformly (+10-22%).
+
+**Mechanism failure:** The AdamW beta2 analogy was wrong. AdamW beta2 = EMA of gradient variance (second moment). Lion beta2 = EMA of the only momentum buffer m. Tighter beta2 (0.95) shortens m's effective window from ~100 to ~20 steps, letting per-batch noise flip Lion's sign more frequently → structurally slower descent. The Lion paper's (0.9, 0.99) asymmetry is load-bearing: beta1 provides a fast prediction term, beta2 provides a slow momentum buffer to denoise the sign update.
+
+Late-epoch trajectory of betas=0.95 (s2): lagged ~7-10 pts behind baseline at every epoch, not just at the end.
+
+### Conclusion
+
+**CLOSED — clear regression, +14.8% val. Lion beta2 axis retired.** Keep (0.9, 0.99) as Lion paper recommends. Follow-up: Lion beta1 scan (prediction-term weight) is the more relevant knob; edward assigned PR #2633 (beta1=0.95, holding beta2=0.99).
+
+---
