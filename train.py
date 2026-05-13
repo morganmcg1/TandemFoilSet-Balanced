@@ -159,12 +159,15 @@ class TransolverBlock(nn.Module):
                 nn.Linear(hidden_dim, hidden_dim), nn.GELU(),
                 nn.Linear(hidden_dim, out_dim),
             )
+            self.skip_proj = nn.Linear(hidden_dim, out_dim)
+            nn.init.zeros_(self.skip_proj.bias)
 
     def forward(self, fx):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            return self.mlp2(h) + self.skip_proj(h)
         return fx
 
 
@@ -457,6 +460,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"Decoder skip connection: out = mlp2(ln_3(fx)) + Linear({model_config['n_hidden']}, {model_config['out_dim']})(ln_3(fx)); +{model_config['n_hidden']*model_config['out_dim']+model_config['out_dim']} params; first decoder-skip probe")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -629,6 +633,29 @@ if best_metrics:
             "gamma_mlp_abs_mean": _gm_abs,
         })
     append_metrics_jsonl(metrics_jsonl_path, _gamma_log)
+
+    # Decoder weight-norm diagnostic: load-bearing skip vs ignored skip
+    _last_block = _inner.blocks[-1]
+    _mlp2_final_w = _last_block.mlp2[-1].weight
+    _skip_w = _last_block.skip_proj.weight
+    _skip_b = _last_block.skip_proj.bias
+    _mlp2_norm = _mlp2_final_w.detach().float().norm().item()
+    _skip_norm = _skip_w.detach().float().norm().item()
+    _skip_bias_norm = _skip_b.detach().float().norm().item()
+    _ratio = _skip_norm / max(_mlp2_norm, 1e-6)
+    print(
+        f"Decoder weight norms: mlp2_final_w.norm()={_mlp2_norm:.4f}, "
+        f"skip_proj_w.norm()={_skip_norm:.4f}, skip_proj_b.norm()={_skip_bias_norm:.4f}, "
+        f"ratio={_ratio:.4f}"
+    )
+    append_metrics_jsonl(metrics_jsonl_path, {
+        "event": "decoder_weight_norms",
+        "epoch": int(best_metrics["epoch"]),
+        "mlp2_final_w_norm": _mlp2_norm,
+        "skip_proj_w_norm": _skip_norm,
+        "skip_proj_b_norm": _skip_bias_norm,
+        "ratio_skip_over_mlp2": _ratio,
+    })
 
     test_metrics = None
     test_avg = None
