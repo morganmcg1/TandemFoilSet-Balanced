@@ -451,7 +451,26 @@ ema_model.eval()
 print(f"EMA shadow model initialized (decay={cfg.ema_decay})")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+# Linear LR warmup over the first epoch, then cosine decay over the remaining
+# epochs. SequentialLR is stepped per *training step* (see scheduler.step below),
+# so T_max for the cosine phase is expressed in batch steps, not epochs.
+warmup_steps = len(train_loader)
+cosine_steps = max((MAX_EPOCHS - 1) * len(train_loader), 1)
+cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=cosine_steps
+)
+warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    optimizer,
+    start_factor=0.2,
+    end_factor=1.0,
+    total_iters=warmup_steps,
+)
+scheduler = torch.optim.lr_scheduler.SequentialLR(
+    optimizer,
+    schedulers=[warmup_scheduler, cosine_scheduler],
+    milestones=[warmup_steps],
+)
 
 run = wandb.init(
     entity=os.environ.get("WANDB_ENTITY"),
@@ -520,6 +539,7 @@ for epoch in range(MAX_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
         # EMA update on fp32 master weights. Buffers copied defensively
         # (Transolver has none stateful, but stays correct if that changes).
@@ -530,13 +550,16 @@ for epoch in range(MAX_EPOCHS):
                 b_ema.data.copy_(b.data)
 
         global_step += 1
-        wandb.log({"train/loss": loss.item(), "global_step": global_step})
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/lr": scheduler.get_last_lr()[0],
+            "global_step": global_step,
+        })
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         n_batches += 1
 
-    scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
