@@ -472,8 +472,60 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
+
+class Lookahead:
+    """Lookahead optimizer (Zhang et al., NeurIPS 2019).
+
+    Wraps an inner optimizer. Every k inner steps, the slow weights take an
+    alpha-step toward the fast weights, then fast weights are reset to slow.
+    """
+    def __init__(self, inner_optimizer, k=5, alpha=0.5):
+        self.inner = inner_optimizer
+        self.k = k
+        self.alpha = alpha
+        self.step_count = 0
+        self.slow_state = [
+            [p.detach().clone() for p in group["params"]]
+            for group in self.inner.param_groups
+        ]
+
+    @property
+    def param_groups(self):
+        return self.inner.param_groups
+
+    def zero_grad(self, set_to_none=True):
+        self.inner.zero_grad(set_to_none=set_to_none)
+
+    def step(self):
+        self.inner.step()
+        self.step_count += 1
+        if self.step_count % self.k == 0:
+            with torch.no_grad():
+                for group, slow_params in zip(self.inner.param_groups, self.slow_state):
+                    for p_fast, p_slow in zip(group["params"], slow_params):
+                        p_slow.add_(p_fast.data - p_slow, alpha=self.alpha)
+                        p_fast.data.copy_(p_slow)
+
+    def state_dict(self):
+        return {
+            "inner": self.inner.state_dict(),
+            "step_count": self.step_count,
+            "slow_state": [
+                [p.clone() for p in group_params]
+                for group_params in self.slow_state
+            ],
+        }
+
+
+_inner_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lookahead(_inner_optimizer, k=5, alpha=0.5)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(_inner_optimizer, T_max=MAX_EPOCHS)
+print(f"optimizer: Lookahead(AdamW, k=5, alpha=0.5)")
+
+n_slow = sum(p.numel() for group in optimizer.slow_state for p in group)
+n_model = sum(p.numel() for p in model.parameters())
+print(f"Lookahead slow_state params: {n_slow:,} (should match model {n_model:,})")
+assert n_slow == n_model, "Lookahead slow_state shape mismatch"
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
