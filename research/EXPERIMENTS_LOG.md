@@ -590,3 +590,105 @@ Per-split val (best arm, clip=10.0):
 - Per-channel Huber delta (different δ for p vs Ux/Uy) — channels have different residual distributions; one global δ may be suboptimal even if the mean is right.
 - Adaptive Huber (Truncated MSE-style cutoff at moving p95) — automatically tracks the outlier tail rather than fixing at normalised 0.5.
 Both deferred; not priority over orthogonal mechanisms still in flight.
+
+---
+
+## 2026-05-13 04:34 — PR #1501: PhysicsAttention slice_num 64 → 128 (CLOSED — val regressed, wall-clock-bound)
+
+- **Branch:** `willowpai2g48h4-nezuko/more-slices`
+- **Student:** willowpai2g48h4-nezuko
+- **W&B run:** `8w50j5dx` (slice-num-128)
+- **Hypothesis:** Transolver uses slice_num=64; with 3 distinct mesh zones (background + 2 foils) and complex flow topology, doubling to 128 should enable finer physical partitioning. Predicted −2 to −6% on val_avg/mae_surf_p.
+
+### Results
+
+| Arm | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p (4-split) | params | epoch time | epochs in 30 min |
+|-----|--------------------|-----------|-------------------------------|--------|------------|------------------|
+| **Baseline (PR #1558, slice_num=64)** | **98.1642** | — | 98.7537 (3-split) | 0.658 M | 128 s | 14 |
+| slice_num=128 | **117.1052** | **+19.30% ❌** | 108.7362 (4-split, all finite) | 0.679 M (+3%) | 175 s (+37%) | 10 (best) / 11 (completed) |
+
+Per-split val (best epoch 10 → 11):
+
+| Split | val mae_surf_p (epoch 11) | vs baseline |
+|-------|--------------------------|------------|
+| `val_single_in_dist` | 145.71 | 123.14 → +18.3% ❌ |
+| `val_geom_camber_rc` | 143.13 | 107.24 → +33.5% ❌ |
+| `val_geom_camber_cruise` | 84.60 | 73.28 → +15.5% ❌ |
+| `val_re_rand` | 106.00 | 88.99 → +19.1% ❌ |
+| **val_avg (best, epoch 10)** | **117.11** | **+19.3% ❌** |
+
+Per-epoch trajectory (last 4 epochs):
+
+| Epoch | val_avg_surf_p |
+|-------|----------------|
+| 8 | 157.94 |
+| 9 | 126.87 |
+| **10** | **117.11** ← best (cap) |
+| 11 | 119.86 |
+
+### Analysis and Conclusions
+
+**Closed — 4th wall-clock-bound capacity failure on this branch.**
+
+**Root cause (nezuko's analysis, confirmed):**
+1. Predicted "near-zero per-epoch overhead" did not materialize — actual cost +37% per epoch (175s vs 128s).
+2. The `in_project_slice = Linear(32, slice_num)` × 5 layers and the softmax-over-slices both scale linearly in slice_num at non-trivial constant factors.
+3. The val curve was still steeply converging at the cap (145 → 158 → 127 → 117 over epochs 7-10) — this is a budget regression, not a per-epoch quality regression.
+
+**Wall-clock-bound principle now 4× confirmed** (#1497 warmup +17.98%, #1498 wider-MLP +24.97%, #1499 grad-clip +1.45%, #1501 slice_num=128 +19.30%): under the 30-min cap, baseline epoch 14 is still improving; any change costing ≥10% per-epoch loses ≥1 epoch and regresses unless it accelerates convergence proportionally.
+
+**Residual opportunities (nezuko's suggestions):**
+1. Wall-clock-equalized comparison is structurally broken under SENPAI_TIMEOUT_MINUTES=30 for architectural changes that add per-step FLOPs. Would need fixed `--epochs N` ablation pair, which conflicts with current contract.
+2. Do NOT escalate to slice_num ∈ {192, 256} — would lose by larger margin under same cap.
+3. Richer per-slice features (higher n_hidden) is a cheaper test of the Transolver++ direction — already covered by #1572 (BF16 unlocks larger n_hidden) and previously-closed #1500.
+
+---
+
+## 2026-05-13 04:54 — PR #1881: Shallower depth + more epochs (n_layers=4) (CLOSED — val regressed)
+
+- **Branch:** `willowpai2g48h4-edward/shallower-more-epochs`
+- **Student:** willowpai2g48h4-edward
+- **W&B run:** `5cq4p2qf` (n-layers-4)
+- **Hypothesis:** Inverse of wider-MLP failure (#1498). Reduce n_layers=5→4 to save ~14% per-epoch wall-clock, gain ~2 extra epochs of SGD. Tests whether the under-30-min wall-clock cap rewards "more epochs at lower capacity" over "same capacity, less data."
+
+### Results — Arm 1 only (Arm 2 n_layers=3 correctly skipped per branching rule)
+
+| Arm | val_avg/mae_surf_p | Δ vs 98.16 | test_avg/mae_surf_p (4-split) | params | epoch time | epochs in 30 min |
+|-----|--------------------|-----------|-------------------------------|--------|------------|------------------|
+| **Baseline (PR #1558, n_layers=5)** | **98.1642** | — | 98.7537 (3-split) | 0.658 M | 128 s | 14 |
+| n_layers=4 | **106.3995** | **+8.39% ❌** | 94.5883 (4-split) / 103.93 (3-split fair) | 0.529 M (−20%) | 110.6 s (−14%) | 16 |
+
+Per-split val (best epoch 16):
+
+| Split | val mae_surf_p | vs baseline |
+|-------|---------------|------------|
+| `val_single_in_dist` | 130.49 | 123.14 → +5.97% ❌ |
+| `val_geom_camber_rc` | 120.40 | 107.24 → +12.27% ❌ |
+| `val_geom_camber_cruise` | 77.10 | 73.28 → +5.21% ❌ |
+| `val_re_rand` | 97.61 | 88.99 → +9.69% ❌ |
+| **val_avg** | **106.40** | **+8.39% ❌** |
+
+### Analysis and Conclusions
+
+**Closed — Pareto frontier confirmed at depth=5 / 14 epochs.**
+
+**Trade executed cleanly:**
+- Predicted per-epoch saving (−14%) → exact match (110.6 vs 128s).
+- Predicted epoch gain (~16 epochs in 30 min) → exact match (16 epochs).
+- Even with the trade as designed, **+8.4% regression on the primary metric.**
+
+**Root cause (edward's analysis, confirmed):**
+1. Capacity loss from dropping one TransolverBlock (~129K params, 20% of body) cannot be recovered by 14% more SGD steps on the smaller model.
+2. Regression is **uniform across all 4 val splits** (in-distribution +6.0%, hardest OOD +12.3%) — pure underfitting, no OOD artifact.
+3. Largest regression on `val_geom_camber_rc` (+12.3%, hardest split) — the deeper model has more headroom to extract OOD-generalizing signal.
+
+**Critical synthesis with prior wall-clock-bound failures:** Both directions on the depth/epoch axis regress now:
+- Spend MORE per epoch (#1497 warmup, #1498 wider-MLP, #1501 slice_num=128): regress 18-25%.
+- Spend LESS per epoch (#1881 n_layers=4): regresses 8.4%.
+
+**Principle established:** The Transolver baseline at (depth=5, mlp_ratio=2, slice_num=64, ~14 epochs) sits very close to the Pareto frontier under the 30-min cap. The next compute should go to **non-depth-axis** capacity (heads, surf_head, or non-architectural mechanisms).
+
+**Residual opportunities (edward's suggestions):**
+1. **n_head 4→8** at fixed n_hidden=128 (head_dim 32→16). Multi-head is parallel batched matmul; minimal per-epoch cost. Assigned to edward as next experiment.
+2. Mid-depth + warmer LR / shorter T_max — different hypothesis (LR-driven), not pursued here.
+3. Do NOT try n_layers=6 — would cost ~+20% per epoch, predicted sub-Pareto by same logic.
