@@ -6,6 +6,39 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 18:00 — PR #2408 — CLOSED (stale; tanjiro slice_num=8 never produced output)
+
+**tanjiro: slice_num=8 on n_layers=3+epochs=38**
+- PR opened 15:28 UTC, no commits or PR comments in 2+ hours despite 30-min training cap
+- Pod showed 0% GPU utilization with stale memory allocation — training crashed/stalled silently
+- Hypothesis low-priority: partition axis fully closed at slice_num=16 (slice_num=14 +2.6%, slice_num=12 worse than 16)
+- **Closed as stale; tanjiro reassigned to wd=5e-5 at slice_num=16 (PR #2493)**
+
+---
+
+## 2026-05-13 18:00 — PR #2409 — CLOSED (val=35.688 doesn't beat baseline 35.548; LR partition-dependence confirmed)
+
+**fern: lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36**
+- val_avg/mae_surf_p = **35.688** vs current baseline 35.548 (+0.140, **LOSS on primary metric**)
+- test_avg/mae_surf_p = 29.649 vs 30.345 (−2.29%, better on test — secondary)
+- Beats OLD baseline (PR #2351 val=35.969) by −0.28% but misses NEW baseline (PR #2348 val=35.548)
+- best_epoch=35/35 (timeout at 35 epochs), underfit signature persists at lr=1.5e-4
+- 3/4 val splits neutral or better; single_in_dist regressed +0.43
+
+| Split | baseline (35.548) | lr=1.5e-4@slice12 | Δ |
+|---|---|---|---|
+| single_in_dist | 35.263 | 36.737 | +1.474 |
+| geom_camber_rc | 49.105 | 48.270 | −0.835 |
+| geom_camber_cruise | 19.392 | 19.418 | +0.026 |
+| re_rand | 38.431 | 38.326 | −0.105 |
+| **avg** | **35.548** | **35.688** | **+0.140** |
+
+**KEY FINDING: LR partition-dependence confirmed comprehensively.** lr=1.5e-4 wins at slice_num=12 vs lr=1e-4@slice12 (35.688 vs 35.969), and at slice_num=24 vs lr=1e-4@slice24 — but loses at slice_num=16. The partition-dependent LR optimum is now robust: smaller partitions shift LR optimum toward 1e-4 or below.
+
+**Metric artifacts:** `models/model-lr-1p5e-4-nlayers3-slicenum12-clean-20260513-165911/metrics.jsonl`
+
+---
+
 ## 2026-05-13 17:25 — PR #2447 — CLOSED (slice_num=14 loses; slice_num=16 confirmed local minimum)
 
 **edward: slice_num=14 on n_layers=3+epochs=36**

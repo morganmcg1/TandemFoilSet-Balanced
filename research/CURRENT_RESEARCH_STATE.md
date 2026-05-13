@@ -84,23 +84,23 @@
 
 **Current per-epoch timing at n_layers=3+slice_num=32: ~57s → 30 epochs = 28.5 min (fits in 30-min cap)**
 
-## Active experiments (Round 28+)
+## Active experiments (Round 29+)
 
 **Current Baseline: val=35.548 (PR #2348), test=30.345**
 
 | Student | PR | Hypothesis | Stack | Can beat baseline? |
 |---------|-----|------------|-----------|---|
-| alphonse | #2471 | **lr=1.2e-4 × slice_num=16** (fine-grained LR probe above trough) | n_layers=3+slice_num=16 | **possible** |
-| askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | **possible winner** |
-| tanjiro | #2408 | slice_num=8 on n_layers=3+epochs=38 (partition floor probe) | n_layers=3 | likely NO (capacity loss) |
-| fern | #2409 | lr=1.5e-4 on n_layers=3+slice_num=12+epochs=36 | n_layers=3+slice_num=12 | possible — LR axis at sub-optimal partition |
+| alphonse | #2471 | **lr=1.2e-4 × slice_num=16** (fine-grained LR probe — between 1e-4 and 1.5e-4) | n_layers=3+slice_num=16 | **possible** |
+| askeladd | #2451 | **slice_num=18 on n_layers=3+epochs=36** (partition gap 20→16) | n_layers=3 | informative — expected slight loss |
 | edward | #2478 | **n_layers=4+slice_num=16+epochs=27** (depth-up counterpart to frieren depth-down) | n_layers=4+slice_num=16 | possible |
 | thorfinn | #2450 | **lr=5e-5 on n_layers=3+slice_num=16+epochs=36** (lower LR bound) | n_layers=3+slice_num=16 | possible — completes LR axis |
 | frieren | #2468 | **n_layers=2+slice_num=16+epochs=46** (depth reduction → more cosine budget) | n_layers=2+slice_num=16 | **YES — high EV via epoch-budget mechanism** |
 | nezuko | #2479 | **LayerScale on n_layers=3+slice_num=16+epochs=36** (residual branch scaling) | n_layers=3+slice_num=16 | possible — fresh architecture axis |
+| fern | #2492 | **surf_weight=8 on n_layers=3+slice_num=16+epochs=36** (loss-weight axis at new optimum) | n_layers=3+slice_num=16 | **possible** — sw axis not tested at slice_num=16 |
+| tanjiro | #2493 | **weight_decay=5e-5 on n_layers=3+slice_num=16+epochs=36** (WD axis at new optimum) | n_layers=3+slice_num=16 | possible — WD only tested at slice_num=24 |
 
 **Merged:** #2351 (tanjiro slice_num=12, val=35.969), #2348 (alphonse slice_num=16, val=35.548)
-**Closed this round:** #2417 (thorfinn n_head=2@slice12 +3.4%), #2375 (askeladd slice20 beats old baseline but loses vs 35.548), #2383 (edward n_head=2@slice24 +0.71%), #2353/#2301/#2367/#2279/#2350 (prior round)
+**Closed this round:** #2447 (edward slice14 +2.6%), #2404 (nezuko n_head=1 tied), #2431 (alphonse lr=1.5e-4×slice16 +7.3%), #2402 (frieren lr=5e-5@slice24 +5.1%), #2417 (thorfinn n_head=2@slice12 +3.4%), #2375 (askeladd slice20), #2383 (edward n_head=2@slice24), #2409 (fern lr=1.5e-4@slice12, val=35.688 loses vs 35.548), #2408 (tanjiro slice8 stale)
 
 **Complete baseline trajectory:** 40.158 → 39.143 → 38.270 → 37.366 → 35.969 → **35.548** (−11.5% total from round start)
 
@@ -139,13 +139,15 @@ Remaining in-flight: askeladd slice_num=18 (informative, expected to confirm mon
 5. **slice_num=20 result (askeladd #2375)**: informative for 16–24 neighborhood
 6. **slice_num=8 result (tanjiro #2408)**: confirms capacity floor at 16
 
-**Partition sweep state:**
+**Partition sweep state (FULLY CLOSED):**
 - slice_num=32: val=39.143
 - slice_num=24: val=37.366
-- slice_num=20: askeladd #2375 (in flight)
-- **slice_num=16: val=35.548 (CURRENT BASELINE, PR #2348)**
-- slice_num=12: val=35.969 (WORSE — non-monotone confirmed)
-- slice_num=8: tanjiro #2408 (in flight — expected capacity collapse)
+- slice_num=20: val=36.854 (PR #2375, worse than 16)
+- slice_num=18: askeladd #2451 (in flight — expected slightly worse)
+- **slice_num=16: val=35.548 (CURRENT BASELINE, PR #2348) ← ROBUST OPTIMUM**
+- slice_num=14: val=36.483 (PR #2447, +2.6% LOSS)
+- slice_num=12: val=35.969 (PR #2351, WORSE than 16 — non-monotone)
+- slice_num=8: CLOSED (PR #2408, stale — capacity collapse expected)
 
 **LR axis state at slice_num=16 (ACTIVE):**
 - lr=5e-5 (thorfinn #2450, IN FLIGHT — expected undertrained)
@@ -165,12 +167,23 @@ Remaining in-flight: askeladd slice_num=18 (informative, expected to confirm mon
 - lr=1e-4: TROUGH
 - lr=2e-4: +4.4% (#2367)
 
-**LR axis state at slice_num=12 (informative only):**
-- lr=1.5e-4 (fern #2409, IN FLIGHT)
+**LR axis state at slice_num=12 (CLOSED — informative only):**
+- lr=1e-4: val=35.969 (PR #2351)
+- lr=1.5e-4: val=35.688 (PR #2409 CLOSED — beats slice12 baseline but loses vs 35.548)
+
+**surf_weight axis at slice_num=16 (ACTIVE — previously only tested at slice_num=24):**
+- sw=8: fern #2492 (IN FLIGHT)
+- sw=10: val=35.548 (BASELINE)
+- sw tested at old stacks: sw=2 lost, sw=5 lost, sw=12/16 lost — ALL at slice_num=24
+
+**weight_decay axis at slice_num=16 (ACTIVE — previously only tested at slice_num=24):**
+- wd=5e-5: tanjiro #2493 (IN FLIGHT)
+- wd=1e-4: val=35.548 (BASELINE)
+- wd=0 at slice_num=24 lost +2.2% (PR #2274)
 
 **Research frontier ideas:**
 - PINN-style auxiliary loss (divergence/curl regularization) — physics-informed volume constraint
-- PhysicsAttention capacity floor: actively probing with slice_num=12/16 — where does attention quality degrade?
+- PhysicsAttention capacity floor: confirmed at slice_num=16 (both neighbors 14, 12 worse)
 
 ## Dead ends
 
