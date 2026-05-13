@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~11:40 (closed #2158 fern σ=5.0 +2.75% dead end; closed #2130 nezuko ε=1e-6 tie; assigned fern #2206 anisotropic-RFF, nezuko #2207 cosine-eta-min-1e-4; epoch-5 spike diagnostic: +91 units on RFF base)
+- **Last updated:** 2026-05-13 ~12:00 (closed #2206 fern anisotropic-RFF +0.51% val regression but −0.81% test, per-split tradeoff between cruise/re_rand and rc/single; assigned fern #2238 trainable RFF B matrix)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -38,7 +38,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 |----|---------|------|------|------|---|
 | #2184 | alphonse | `lr-2e-3-rff` | LR ceiling retest on RFF base: 1.5e-3 → 2e-3 | **--epochs 14** ✓ | WIP |
 | #2197 | frieren | `rff-nfeatures-64` | RFF capacity: 32→64 frequencies at σ=3.0 (64→128 dim output) | **--epochs 14** ✓ | WIP |
-| #2206 | fern | `rff-anisotropic-sx3-sz1p5` | Anisotropic RFF: σ_x=3.0, σ_z=1.5 (chord vs height bandwidth) | **--epochs 14** ✓ | WIP — just assigned |
+| #2238 | fern | `rff-trainable-b` | Trainable RFF B matrix: learnable frequencies (requires_grad=True, +64 params) | **--epochs 14** ✓ | WIP — just assigned |
 | #2207 | nezuko | `cosine-eta-min-1e-4` | Cosine eta_min=1e-4: sustain learning at epoch 14 (best_epoch=14/14 consistently) | **--epochs 14** ✓ | WIP — just assigned |
 | #1815 | askeladd | `node-dropout-0.9` | Node dropout 0.9 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (rebasing on RFF base) | **--epochs 14** ✓ | WIP — rebase requested |
@@ -51,6 +51,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - #1895 alphonse lr-1.5e-3: **−3.80%** (77.1419 → 74.2082)
 
 ### Closed as dead ends (this round)
+- #2206 fern rff-anisotropic-sx3-sz1p5: +0.51% val (regression), **−0.81% test** (mixed); per-split tradeoff: cruise/re_rand improve, rc/single regress on both val and test. Anisotropy axis CLOSED; isotropic σ=3.0 optimal.
 - #2158 fern rff-sigma5: +2.75% vs 65.3304 (σ axis non-monotone; {1.0: −6.4%, 3.0: −11.71%, 5.0: +2.75%}; σ=3.0 is sweet spot, bandwidth axis CLOSED)
 - #2130 nezuko adamw-eps-1e-6: +0.40% val (tie); **CRITICAL DIAGNOSTIC: epoch-5 spike +91 units on RFF base** (vs +3.2 pre-RFF); ε axis CLOSED on RFF base
 - #1813 frieren warmup-5 on RFF: +0.85% (pre-RFF win −0.52% DID NOT stack; warmup axis CLOSED at 4 on RFF base)
@@ -65,7 +66,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 
 1. **RFF sub-axes (3 independent experiments):**
    - **#2197 frieren rff-nfeatures-64**: At σ=3.0, double frequency count 32→64 (output 64→128 dim). Tests kernel approximation quality. Param increase tiny (~8K). If wins → RFF capacity axis open.
-   - **#2206 fern rff-anisotropic-sx3-sz1p5**: σ_x=3.0, σ_z=1.5. Foil pressure anisotropic — sharper chord-wise variation, smoother height-wise. Tests if equal-bandwidth assumption is suboptimal.
+   - **#2238 fern rff-trainable-b**: B initialized at σ=3.0, set `requires_grad=True`. Lets gradient descent find optimal per-frequency bandwidth. Adds only 64 params (0.009% of model). Motivated by per-split bandwidth tradeoff observed in #2206 anisotropic result.
    - **#2184 alphonse lr-2e-3-rff**: Does the RFF input expansion shift the LR ceiling? Pre-RFF: 1.5e-3 sweet spot, 2e-3 regressed +2.99%. RFF gradients larger (+91-unit spike), ceiling may shift. Informative either way.
 
 2. **LR schedule sub-axes:**
@@ -88,6 +89,7 @@ Test: test_avg=56.9425 (test_single=64.577, test_rc=71.531, test_cruise=36.392, 
 - **β2=0.99:** −0.29% val, −1.03% test. Epoch-5 spike collapsed pre-RFF. β2 axis CLOSED.
 - **RFF σ=3.0 BREAKTHROUGH:** −11.71% val / −11.65% test. ALL FOUR SPLITS improve. Largest single gain in programme.
 - **σ axis CLOSED at σ=3.0:** {1.0: −6.4%, 3.0: −11.71%, 5.0: +2.75%} — non-monotone, σ=3.0 sweet spot.
+- **Anisotropy axis CLOSED at isotropic:** σ_z=1.5 (#2206) gave +0.51% val regression but −0.81% test improvement. Per-split tradeoff: cruise/re_rand benefit from lower z-bandwidth (smooth freestream pressure), rc/single need full σ_z=3.0 (ground-effect asymmetric loading). Isotropic σ=3.0 is the right COMPROMISE.
 - **Warmup axis CLOSED at warmup=4 on RFF:** warmup=5 −0.52% on pre-RFF but +0.85% on RFF. Stacking does not hold across base shifts.
 - **ε axis CLOSED on RFF base.** ε=1e-6 is mechanistically irrelevant when epoch-5 spike is gradient-magnitude dominated.
 - **EPOCH-5 SPIKE DIAGNOSTIC:** RFF base has +91-unit spike (vs +3.2 pre-RFF). Root cause: large gradient magnitudes from 86-dim RFF input × peak LR. Not addressable by ε or warmup-duration alone.

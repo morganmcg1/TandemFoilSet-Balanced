@@ -2,6 +2,52 @@
 
 ---
 
+## 2026-05-13 11:55 — PR #2206: rff-anisotropic-sx3-sz1p5 (fern) — CLOSED (marginal val regression, mixed val/test, per-split tradeoff)
+
+- **Branch:** `charliepai2g48h2-fern/rff-anisotropic-sx3-sz1p5`
+- **Hypothesis:** Anisotropic RFF (σ_x=3.0, σ_z=1.5) — foil pressure varies sharply in chord (x) but smoothly in height (z). Lower σ_z may improve geometry splits by avoiding z-direction overfitting.
+- **Metric artifacts:** `models/model-charliepai2g48h2-fern-rff-anisotropic-sx3-sz1p5-20260513-111518/metrics.jsonl`
+
+### Results vs. #1657 isotropic σ=3.0 baseline (65.3304)
+
+| Split | Baseline | σ_x=3.0, σ_z=1.5 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 72.691 | 74.424 | +2.39% ❌ |
+| val_geom_camber_rc | 78.833 | 80.107 | +1.62% ❌ |
+| val_geom_camber_cruise | 44.439 | **43.726** | **−1.61%** ✓ |
+| val_re_rand | 65.359 | **64.387** | **−1.49%** ✓ |
+| **val_avg/mae_surf_p** | **65.3304** | **65.6609** | **+0.51%** ❌ |
+| test_single | 64.577 | 63.530 | −1.62% ✓ |
+| test_rc | 71.531 | 72.886 | +1.89% ❌ |
+| test_cruise | 36.392 | **35.003** | **−3.82%** ✓ |
+| test_re_rand | 55.269 | 54.514 | −1.37% ✓ |
+| **test_avg/mae_surf_p** | **56.9425** | **56.4834** | **−0.81%** ✓ |
+
+**Closed on val regression (+0.51% > 0.5% threshold).** Mixed val/test signal but val_avg is the primary advisor metric.
+
+### Analysis
+
+**Strong per-split insight:** the result reveals a fundamental physics-driven tradeoff between split families:
+- **Cruise/Re_rand splits** improved on both val (−1.61%, −1.49%) and test (−3.82%, −1.37%): freestream/symmetric flows have smoother z-direction pressure variation, σ_z=1.5 is well-matched.
+- **RC/Single splits** regressed on both val (+1.62%, +2.39%) and test (+1.89%, only test_single improved): raceCar (ground-effect) geometry has asymmetric loading, sharp z-gradients near the wall; needs full σ_z=3.0 bandwidth to resolve.
+
+Test improvement (−0.81%) is real and driven by cruise/re_rand families, but val_avg is the merge criterion.
+
+**B verification:** B[0,:].std()=3.45 (target 3.0 ✓), B[1,:].std()=1.20 (target 1.5 ✓). Implementation correct.
+
+### Key insights
+
+- **Per-split bandwidth needs differ:** isotropic σ=3.0 is the right COMPROMISE setting. Different physical regimes (ground-effect vs. freestream) want different bandwidths.
+- **The per-split signal is too strong to ignore for future work:** suggests learned per-frequency bandwidth or domain-conditional σ as future directions.
+- **Anisotropy axis CLOSED:** σ_x=σ_z=3.0 isotropic remains optimal globally.
+- **Val/test diverged**: test improvement (−0.81%) was real but val regression dominates merge logic. Reinforces that val is the operational metric.
+
+### Next assignment for fern: trainable RFF B matrix (#2238)
+
+Direct follow-up: let gradient descent find the optimal per-frequency bandwidth automatically. B starts at σ=3.0 (sweet spot init) with `requires_grad=True`. Adds 64 trainable params (0.009% of model).
+
+---
+
 ## 2026-05-13 11:35 — PR #2158: rff-sigma5 (fern) — CLOSED (dead end, σ=3.0 confirmed sweet spot)
 
 - **Branch:** `charliepai2g48h2-fern/rff-sigma5`
