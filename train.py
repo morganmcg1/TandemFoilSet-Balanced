@@ -530,7 +530,7 @@ for epoch in range(MAX_EPOCHS):
 
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             pred = model({"x": x_norm})["preds"]
-            elem_err = F.smooth_l1_loss(pred, y_norm, beta=1.0, reduction='none')
+            elem_err = F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
