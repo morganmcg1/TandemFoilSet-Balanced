@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-05-13 16:40 — PR #2381: Strict stratification + cosine_restart compose (CLOSED — informative null)
+
+- **Branch:** `willowpai2g48h4-fern/stratified-restart-compose`
+- **Student:** willowpai2g48h4-fern
+- **W&B runs:** `pp47gvm5` (Arm 1 strict+restart), `lfedba5o` (Arm 2 strict+restart+DW)
+
+### Results
+
+| Arm | sampler | domain weights | val_avg/mae_surf_p | Δ val vs baseline | test_avg |
+|-----|---------|----------------|--------------------|-------------------|---------|
+| Baseline `kt5pk5qu` | weighted | — | **83.9969** | — | **74.7684** |
+| Arm 1 strict+restart | strict | 1.0/1.0/1.0/1.0 | 88.1218 | +4.91% ✗ | 76.4569 |
+| Arm 2 strict+restart+DW | strict | 1.0/1.0/1.3/1.2 | **86.4076** | +2.87% ✗ | 76.6089 |
+
+### Commentary
+
+**Key mechanism finding — strict and restart are NOT orthogonal.** Under restart, the spike is LR-driven (not sampler-variance-driven), so strict's variance reduction loses its dual purpose. Spike trajectory is decisive: Arm 1 e10→e11 spike +26.28, Arm 2 +27.39 — barely damped vs baseline (~+38). The strict sampler's variance reduction is overridden by the v_t reset at restart.
+
+**Three confirmed mechanisms from #2259 do NOT compose with restart:**
+1. Per-batch composition variance was load-bearing → under restart, spike is LR-driven, not sampler-driven
+2. Strict damped spike 30-50% on old baseline → spike persists under restart
+3. Strict created cruise regression → vanished under restart (cruise val ≈56 in both arms, baseline-class)
+
+**Domain weights (Arm 2) notable sub-result:** DW reduced second-restart spike amplitude by ~31% (e20→e21: +33 vs +48 for Arm 1). This suggests domain weights can modulate cycle-injection energy. Could be useful as a compose target for longer-second-cycle configs like #2444 (T_mult=2).
+
+**Compose scorecard — what does NOT compose with restart:** WD=3e-4 (same failure mode, #2317), strict stratification (mechanism replacement, #2381). What IS promising: Lookahead (#2296 compose test assigned), T_mult=2 cycle geometry (#2444), head_wd (#2380 edward still in-flight).
+
+---
+
+## 2026-05-13 16:30 — PR #2296: Lookahead-AdamW k-sweep (SENT BACK — compose test assigned)
+
+- **Branch:** `willowpai2g48h4-tanjiro/lookahead-adamw`
+- **Student:** willowpai2g48h4-tanjiro
+- **W&B runs:** `aumcndej` (k=5, winner), `nmv3jlsx` (k=10), `4pscsoah` (k=3), `zj7z3ix5` (k=7)
+
+### Results
+
+| Arm | k | val_avg/mae_surf_p | Δ vs OLD 87.0144 | Δ vs NEW 83.9969 | test_avg |
+|-----|---|--------------------|-----------------|-----------------|---------|
+| **k=5 α=0.5** | 5 | **83.8589** | **−3.62%** | **−0.16%** | **74.0656** |
+| k=3 | 3 | 90.6018 | +4.12% | +7.86% | 80.9859 |
+| k=7 | 7 | 94.9108 | +9.08% | +13.0% | 84.3417 |
+| k=10 | 10 | 96.1672 | +10.5% | +14.5% | 88.2945 |
+
+### Commentary
+
+**k=5 is the sweet spot.** Monotonic degradation: k=3 too short (weak anchoring), k=5 optimal, k=7/k=10 too long (over-anchoring). Sensitivity is steep. Test improvement vs current baseline: −0.94% (test=74.0656 vs 74.7684).
+
+**Critical config note:** Student's winning run used WD=3e-4 (OLD WD) + NO cosine_restart. Against the current baseline (WD=5e-4 + cosine_restart), k=5 is val −0.16% (within seed noise) and test −0.94% (genuine improvement signal).
+
+**Mechanism confirmed:** Lookahead's slow-track anchor smooths late-training trajectory (e15→e21 monotonically decreasing in k=5: 100.18→83.86). Spike at e11 (shifted vs baseline e12) but amplitude preserved — Lookahead damps mid-training trajectory noise without eliminating the spike.
+
+**Next step:** Sent back for compose test (Lookahead k=5 + cosine_restart + WD=5e-4). Mechanisms are orthogonal (optimizer state vs LR schedule). If they compose, this could beat the baseline definitively.
+
+---
+
 ## 2026-05-13 22:00 — PR #2331: SWA over SGDR cycle-ends (CLOSED — definitive null, SWA permanently closed)
 
 - **Branch:** `willowpai2g48h4-nezuko/swa-cycle-end-averaging`
