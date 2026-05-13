@@ -4,6 +4,27 @@ Primary metric: **`val_avg/mae_surf_p`** (equal-weight mean surface-pressure MAE
 
 ## Current best
 
+### 2026-05-13 02:10 — PR #1762: [surf-weight-5] Halve surface loss weight 10→5 (tanjiro)
+
+- **`val_avg/mae_surf_p`:** **90.58** (best epoch 17/18)
+- **`test_avg/mae_surf_p`:** **80.00** (from best-val checkpoint, all 4 splits clean)
+- **Per-split surface-p MAE (val):** single_in_dist=106.31, geom_camber_rc=98.84, geom_camber_cruise=69.35, re_rand=87.82
+- **Per-split surface-p MAE (test):** single_in_dist=93.61, geom_camber_rc=86.86, geom_camber_cruise=58.37, re_rand=81.18
+- **Config:** `n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2, lr=5e-4, wd=1e-4, surf_weight=5.0, batch_size=4, epochs=50, seed=42, CosineAnnealingLR(T_max=15, eta_min=0.0), AdamW, unified_pos=True, ref=8, bf16 autocast, loss=F.smooth_l1_loss(beta=1.0), clip_grad_norm_(max_norm=1.0)`
+- **Key change:** `surf_weight: float = 5.0` (was 10.0 at train.py:383). With grad-clip normalizing every step, surface gradients no longer need to be cranked up to dominate the loss — clipping equalizes step magnitudes. Halving surf_weight better balances surface-vs-volume residuals in the loss, improving all 4 splits simultaneously.
+- **Gradient dynamics under new recipe:** Pre-clip gradient norms drop to mean 2–5 (vs 33–106 with surf_weight=10). Every step still clipped (norms >> max_norm=1.0). Effective step magnitude ~half what it was.
+- **Improvement vs directly-comparable reference (#1696 grad-clip-1.0, surf_weight=10):** val −6.20 (−6.4%), test −6.56 (−7.6%)
+- **All 4 val + all 4 test splits improved** (single_in_dist val −4.07, geom_camber_rc −6.50, geom_camber_cruise −5.79, re_rand −8.45)
+- **Metric artifacts:** `models/model-charliepai2g48h4-tanjiro-surf-weight-5-20260513-011227/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --agent charliepai2g48h4-tanjiro --experiment_name "charliepai2g48h4-tanjiro/surf-weight-5"`
+
+**Open questions after this merge:**
+- Is surf_weight=5 the optimum or can we push lower? surf_weight ∈ {2, 3} pending on next tanjiro assignment.
+- max_norm=0.5 tested on old baseline (surf_weight=10, val=96.78) gave val=95.53 (Δ−1.3%). Needs rerun on new baseline (surf_weight=5) to confirm it still helps.
+- All in-flight reruns (layers-6, log-cosh, EMA, T_max=18) will naturally test on new surf_weight=5 HEAD.
+
+---
+
 ### 2026-05-13 01:19 — PR #1696: [grad-clip-1.0] Gradient clipping max_norm=1.0 (frieren)
 
 - **`val_avg/mae_surf_p`:** **96.78** (best epoch 17/18)
