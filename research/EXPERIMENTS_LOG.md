@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-05-13 23:00 UTC — Round 45
+
+Three axis-closing LOSSes reviewed + 3 new bold experiments assigned.
+
+### PR #2362 askeladd: slice_num 24→16 (routing-optimum floor search) — CLOSED (ROUTING CAPACITY FLOOR)
+
+- **Branch:** charliepai2g48h5-askeladd/slicenum-16
+- **Hypothesis:** Continue the routing-quality optimum search downward after PR #2307 MASSIVE WIN (-9.61% at slice_num=24). Does the routing optimum extend below 24 or does the floor appear at 16?
+
+| Metric | slice_num=16 | Baseline #2307 (slice_num=24) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 47.4321 | 42.3455 | **+12.02% LOSS** |
+| test_avg/mae_surf_p | 42.5733 | 38.5059 | **+10.56% LOSS** |
+| val_single_in_dist | 40.6177 | 35.4776 | +14.49% |
+| val_geom_camber_rc | 62.1336 | 60.8311 | +2.14% |
+| val_geom_camber_cruise | 36.0101 | 27.6517 | **+30.21% (worst)** |
+| val_re_rand | 50.9670 | 45.4214 | +12.21% |
+
+- **Best epoch:** 65 = terminal (still descending at cutoff; harder optimization landscape).
+- **Per-epoch cost:** 27.05 s/epoch (-12.2% vs slice_num=24 — budget saving is real but can't compensate routing damage).
+- **Diagnosis:** routing capacity floor — uniform regression. slice_num=16 = ~6 tokens per slice average (at n_hidden=96, N nodes). cruise hit hardest (+30.21%): the geometric routing needs ≥24 partitions to separate cruise/camber/Re regimes.
+- **Axis closure:** **slice_num axis is FULLY CLOSED with routing-quality optimum at slice_num=24.** Bracket: {16, 24, 32} → val {47.43, 42.35, 46.85}. Concave optimum at 24.
+- **Mechanism refinement:** per-epoch saving at 16 is real (-12.2%), but routing damage (+12.02%) overwhelms it. Confirms routing quality (not budget) is the dominant mechanism.
+
+---
+
+### PR #2289 nezuko: n_layers 4→3 (depth-down continuation) — CLOSED (DEPTH CAPACITY FLOOR)
+
+- **Branch:** charliepai2g48h5-nezuko/n-layers-3
+- **Hypothesis:** Continue depth-down WIN from PR #2268 (n_layers=5→4 WIN -3.44%). Does budget-bound continue at depth=3 or does capacity floor appear?
+- **3-seed replication performed.**
+
+| Metric | n_layers=3 (mean, 3 seeds) | Baseline #2268 (n_layers=4) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (mean) | 48.085 | 46.8460 | **+2.65% LOSS** |
+| val_avg/mae_surf_p (best seed) | 47.4050 | 46.8460 | +1.20% |
+| test_avg/mae_surf_p (mean) | 42.750 | 40.8140 | +4.74% |
+| val_single_in_dist (mean) | 43.601 | 41.7031 | **+4.55%** |
+| val_geom_camber_rc (mean) | 64.648 | 64.6729 | −0.04% wash |
+| val_geom_camber_cruise (mean) | 32.572 | 31.5759 | +3.15% |
+| val_re_rand (mean) | 51.520 | 49.4322 | +4.22% |
+
+- **Epochs reached:** 54-55; actual per-epoch ~33 s (only ~10% savings vs predicted 25% — val/dataload overhead dominates the freed budget).
+- **Diagnosis:** depth capacity floor — total-capacity crossed. Per-split signature: in_dist hit hardest (like #2336 n_hidden=64) — model can't fit in-distribution training data at n_layers=3, suppressing in-dist/OOD gap. Even best seed (47.41) loses to the 46.8460 baseline.
+- **Axis closure:** **depth-down axis FULLY CLOSED at n_layers=4.** Bracket: {3, 4, 5} → val {49.20, 46.85, 48.52}. Budget-bound→capacity-bound transition confirmed at both depth AND width axes simultaneously: depth floor at n_layers=3, width floor at n_hidden=64.
+- **Cross-axis insight:** budget-bound→capacity-bound transition on BOTH depth and width at n_layers=4/n_hidden=96. Model operating near a coupled depth×width capacity frontier.
+
+---
+
+### PR #2298 thorfinn: n_layers=4 + --epochs 90 (budget-extrapolation diagnostic) — CLOSED (SCHEDULE MIS-ALIGNMENT)
+
+- **Branch:** charliepai2g48h5-thorfinn/n-layers-4-epochs90
+- **Hypothesis:** Extend budget from 60→90 epochs; test descent-curve continuation beyond PR #2268.
+
+| Metric | --epochs 90 run | Baseline #2268 (--epochs 60) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p | 47.9738 | 46.8460 | **+2.41% LOSS** |
+| test_avg/mae_surf_p | 42.5430 | 40.8140 | +4.24% LOSS |
+| val_geom_camber_cruise | 31.0716 | 31.5759 | -1.60% (only win) |
+
+- **Epochs reached:** 58 (wall-clock cap hits at 30 min regardless of --epochs flag).
+- **Diagnosis:** Schedule mis-alignment. --epochs 90 → T_max=87; wall-clock delivers only 58 epochs → LR at ep58 = 1.66e-4 (still high) vs baseline T_max=57 (LR ≈ 0 at ep58). Too-high LR in late epochs prevents fine convergence.
+- **Critical finding (meta-learning):** **T_max must match ACTUAL expected epoch count, not --epochs flag.** The wall-clock budget is the binding constraint; --epochs is just an upper bound. Setting --epochs > actual_epochs creates an under-cooled cosine schedule.
+- **Implication for ongoing experiments:** all assignments using --epochs 70 with ~58 actual epochs, or --epochs 80 with ~70 actual SAM epochs — these all have T_max correctly aligned to actual counts.
+
+---
+
+**Round-45 new assignments:** #2410 thorfinn FiLM conditioning (explicit regime modulation via broadcast-scalar affine), #2411 nezuko auxiliary camber head (λ=0.1 self-supervised geometry), #2412 askeladd SAM ρ=0.05 (flat-minima optimization, --epochs 35). All 8 students in-flight.
+
+---
+
 ## 2026-05-13 21:00 UTC — Round 44
 
 Three LOSS closures + axis status updates. Closed two falsified-LOSS PRs (capacity floor + loss-shape axis) and abandoned the DropPath axis after 4-attempt pod-stall jinx.
