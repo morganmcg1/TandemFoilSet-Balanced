@@ -461,13 +461,17 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.95, 0.999))
 # OneCycleLR(max_lr=1e-3) — upper-bracket peak LR vs merged max_lr=8e-4 (+25%).
 # pct_start=0.1 => ~2.1ep warmup at bs=1 (750 batches/ep), smooth C1-continuous curve.
 # div_factor=25 => initial_lr=4.0e-5; final_div_factor=10 => final_lr=4.0e-6.
 # T_MAX_EPOCHS=21 matches current bs=1 baseline (#2012 fit 21 epochs at 30-min cap).
 # Loop is capped at T_MAX_EPOCHS to prevent stepping past total_steps (OneCycleLR
 # would raise on the (total_steps+1)-th call).
+# cycle_momentum=False: OneCycleLR's default cycle_momentum=True overrides AdamW
+# betas[0] at init (-> max_momentum=0.95) and cycles 0.85↔0.95 inversely to lr,
+# silently negating any AdamW betas[0]. With cycle_momentum=False, β1=0.95 persists
+# throughout training — the actual mechanism this PR tests.
 T_MAX_EPOCHS = 21
 n_batches_per_epoch = math.ceil(len(train_loader))
 total_steps = T_MAX_EPOCHS * n_batches_per_epoch
@@ -480,7 +484,10 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(
     div_factor=25.0,
     final_div_factor=10.0,
     three_phase=False,
+    cycle_momentum=False,
 )
+print(f"OPTIMIZER_BETAS_CHECK after scheduler init: {optimizer.param_groups[0]['betas']}", flush=True)
+assert optimizer.param_groups[0]['betas'] == (0.95, 0.999), f"ERROR: betas not (0.95, 0.999) after scheduler init: {optimizer.param_groups[0]['betas']}"
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
