@@ -371,6 +371,7 @@ class Config:
     onecycle_final_div_factor: float = 100.0  # min_lr = initial_lr / this
     ema_decay: float = 0.999  # EMA of model weights for eval (0.0 disables)
     huber_delta: float = 1.0  # Huber loss threshold in normalized space
+    mlp_ratio: int = 2  # TransolverBlock FFN expansion ratio (hidden_dim * mlp_ratio inside FFN)
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -437,7 +438,7 @@ model_config = dict(
     n_layers=5,
     n_head=4,
     slice_num=64,
-    mlp_ratio=2,
+    mlp_ratio=cfg.mlp_ratio,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
