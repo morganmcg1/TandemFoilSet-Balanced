@@ -32,6 +32,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from timm.layers import trunc_normal_
+from torch.nn.utils.parametrizations import spectral_norm
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -454,6 +455,44 @@ print(f"Depth: n_layers=4 (TransolverBlock x 4) — depth-down probe, budget-bou
 print(f"Width: n_hidden=96 (hidden_dim=96, down from 128) — budget-freeing width-down probe; ~40-45% per-epoch wall-clock savings")
 
 model = Transolver(**model_config).to(device)
+
+
+def apply_spectral_norm_to_attention(m: nn.Module) -> int:
+    """Wrap each PhysicsAttention's to_q, to_k, to_v, to_out[0] with spectral_norm.
+
+    1-Lipschitz constraint on attention projections (Miyato et al. 2018).
+    Skips in_project_x/fx/slice (routing-related; in_project_slice has orthogonal init
+    that is critical for slice-routing softmax). The output projection here is the
+    attention's W_proj (to_out[0]), NOT mlp2 (which is the final task head and must
+    remain unconstrained).
+    """
+    inner = getattr(m, "_orig_mod", m)
+    count = 0
+    for i, block in enumerate(inner.blocks):
+        attn = block.attn
+        for name in ("to_q", "to_k", "to_v"):
+            layer = getattr(attn, name)
+            shape = tuple(layer.weight.shape)
+            wrapped = spectral_norm(layer, n_power_iterations=1)
+            setattr(attn, name, wrapped)
+            count += 1
+            print(f"[SpectralNorm] wrapped blocks[{i}].attn.{name} (shape={shape})")
+        out_lin = attn.to_out[0]
+        out_shape = tuple(out_lin.weight.shape)
+        attn.to_out[0] = spectral_norm(out_lin, n_power_iterations=1)
+        count += 1
+        print(f"[SpectralNorm] wrapped blocks[{i}].attn.to_out[0] (shape={out_shape})")
+    print(f"[SpectralNorm] total wrapped Linear layers: {count}")
+    return count
+
+
+n_wrapped = apply_spectral_norm_to_attention(model)
+assert n_wrapped == 4 * model_config["n_layers"], (
+    f"Expected {4 * model_config['n_layers']} wrapped layers (4 per block × n_layers), got {n_wrapped}"
+)
+print(f"SpectralNorm: applied to {n_wrapped} attention Linear layers (4 per block × {model_config['n_layers']} blocks)")
+print(f"Baseline to beat: val_avg/mae_surf_p < 36.3994 (Lion PR #2524)")
+
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
@@ -672,8 +711,29 @@ if best_metrics:
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
+    # SpectralNorm diagnostic: per-block effective and raw spectral radii at terminal
     _inner = getattr(model, "_orig_mod", model)
+    _sn_log = {"event": "spectral_norm_diag", "epoch": int(best_metrics["epoch"]), "layers": []}
+    print("\nSpectralNorm σ at terminal (best-checkpoint weights):")
+    with torch.no_grad():
+        for _i, _blk in enumerate(_inner.blocks):
+            _attn = _blk.attn
+            for _name in ("to_q", "to_k", "to_v", "to_out[0]"):
+                _layer = _attn.to_out[0] if _name == "to_out[0]" else getattr(_attn, _name)
+                _sigma_eff = torch.linalg.matrix_norm(_layer.weight.float(), ord=2).item()
+                _sigma_raw = torch.linalg.matrix_norm(
+                    _layer.parametrizations.weight.original.float(), ord=2
+                ).item()
+                print(f"  block[{_i}].attn.{_name}: σ_eff={_sigma_eff:.4f}  σ_raw={_sigma_raw:.4f}")
+                _sn_log["layers"].append({
+                    "block_idx": _i,
+                    "layer": _name,
+                    "sigma_eff": _sigma_eff,
+                    "sigma_raw": _sigma_raw,
+                })
+    append_metrics_jsonl(metrics_jsonl_path, _sn_log)
+
+    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
     print("\nLayerScale final gammas (best-checkpoint weights):")
     for _i, _blk in enumerate(_inner.blocks):
