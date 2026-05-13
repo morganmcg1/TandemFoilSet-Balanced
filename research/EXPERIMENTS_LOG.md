@@ -1777,3 +1777,49 @@ If 3e-4 lands → follow-up finer sweep {2e-4, 5e-4} or compound with another wa
 
 ---
 
+## 2026-05-13 07:05 — PR #1907 (edward, position-jitter) CLOSE
+
+- **Branch:** `willowpai2g48h2-edward/pos-jitter-0p01-on-clipfilm`
+- **Hypothesis:** Volume-coord position jitter (σ=0.01, then σ=0.05 send-back arm) as a non-boundary input augmentation. Predicted geometry-axis OOD gain (camber_rc).
+- **Two-arm result table:**
+
+| Arm | Baseline | val (SWA) | test (SWA) | Δ val | Δ test |
+|---|---|---:|---:|---:|---:|
+| σ=0.01 | pre-Kendall #1831 (val=73.81/test=65.04) | 74.4511 | 65.4532 | +0.87% | +0.64% |
+| σ=0.05 | Kendall #1906 (val=71.43/test=62.99) | 71.6812 | 63.1105 | +0.35% | +0.19% |
+
+W&B runs: `qt63dt0c` (σ=0.01), `k2jgdi56` (σ=0.05). Both confirmed against student-reported numbers.
+
+### Decision: CLOSE
+
+- **Same regression direction at same approximate magnitude despite stack and σ both changing.** Two-arm × two-baseline → strongest possible single-PR signal for flat-or-mild-harm axis.
+- Predicted geometry-axis gain on `val_geom_camber_rc` **did not materialize** at either σ (90.31 ≈ 90.32 on pre-Kendall; the 88.68 on Kendall came from Kendall itself, not pos-jitter).
+- Diagnostic instrumentation (pre/post-jitter coord std, max_drift=0 on surface) confirmed implementation was bit-correct — the lever just doesn't move.
+
+### Mechanism conclusion
+
+Position-jitter at volume mesh is **flat-or-mild-harm on this stack, independent of loss-weighting baseline**. The model's robustness to small volume-coord perturbations is already saturated by existing inductive biases (PhysicsAttention slot-routing, FiLM-modulated globals, surface-volume mask separation).
+
+### Axis closure status
+
+- **Closes:** input-augmentation via volume-coord noise jitter (σ ∈ {0.01, 0.05} both tested).
+- **Does NOT close:** structural geometric augmentations (e.g. SDF-as-feature #1873, still WIP) — different mechanism.
+- **Does NOT close:** OOD-attack axes generally — OOD remains the dominant bottleneck.
+
+### Reassignment to PR #2021 (OneCycleLR with warmup on Kendall) — schedule-side axis
+
+Pivoting edward to **fresh schedule-side lever** — OneCycleLR sweep on Kendall baseline.
+
+**Advisor process note:** initially assigned #2016 (DropPath sweep), but a closure-registry audit caught PR #1680 (fern, 2026-05-13 00:11) already tested `drop_path_rate=0.1` on pre-FiLM baseline with the val curve still descending at epoch 14 — the 15-epoch budget cannot absorb stochastic-depth-style regularization. **Withdrew #2016 before student started** and pivoted to OneCycleLR, which doesn't have the under-convergence pathology (same 15 epochs, just reshaped LR profile).
+
+**Why OneCycleLR specifically:** schedule is the ONE mechanism family untouched on this stack (current `CosineAnnealingLR(T_max=15)`). Mechanism-orthogonal to all 7 in-flight PRs (none of #1937, #1938, #1954, #1873, #1757, #1734, #1981 touch schedule). Literature priors strong for short-training regimes (Smith super-convergence, fastai 1cycle, Wightman timm).
+
+- **Arm 1: max_lr=5e-4, pct_start=0.1** (current lr + 10% warmup — pure schedule reshape, most-likely-to-land)
+- **Arm 2: max_lr=1e-3, pct_start=0.1** (2× lr buffered by warmup — tests if warmup unlocks lr headroom)
+- **Decision rule:** best-arm val < 71.43 → MERGE; both regress → axis closes
+- **Critical:** SWA scheduler must continue to take over in final 25% — OneCycleLR can't step past `swa_start_epoch`
+
+If arm 1 lands → finer `pct_start` sweep {0.05, 0.15}. If arm 2 lands → may invalidate #1937 max-norm-tighten direction (lr-headroom changes optimizer-stability story). If both regress → schedule axis closes.
+
+---
+

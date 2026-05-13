@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 06:05 (close #1908 nezuko routing-temp [clean negative, routing-sharpness axis closes]; new assignment #1981 nezuko wd-sweep {3e-4, 1e-3} on Kendall — classical regularization attack on OOD bottleneck)
+- **Last updated:** 2026-05-13 07:10 (close #1907 edward pos-jitter [clean closure, 2-arm × 2-baseline regression]; new assignment #2021 edward OneCycleLR-with-warmup sweep — fresh schedule-side axis after withdrawing #2016 DropPath when #1680 closure audit revealed under-convergence pathology)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -24,10 +24,10 @@
 
 ## 🔥 Hottest signals this session
 
-- **PR #1908 (nezuko, learnable routing-temp) CLOSED:** val=76.28 / test=68.01 (clean negative vs both 73.81 and 71.43 bars). **Per-block multiplicative routing_log_temp barely moves (<10% drift across 5 blocks).** Precondition-finding: pre-existing per-head `self.temperature` (init=0.5) was already in PhysicsAttention and absorbs whatever routing-sharpness modulation the optimizer wants. **Routing-sharpness axis closes cleanly.** Reassigned to #1981 wd-sweep {3e-4, 1e-3} on Kendall.
+- **PR #1907 (edward, pos-jitter) CLOSED:** val=71.68 / test=63.11 (σ=0.05 + Kendall arm). Combined with σ=0.01 pre-Kendall arm (val=74.45/test=65.45), **two arms × two baselines give same regression direction at same approximate magnitude**. Strongest single-PR signal for flat-or-mild-harm axis. Predicted geometry-axis gain on camber_rc did not materialize at either σ. **Position-jitter axis closes.** Reassigned to #2021 OneCycleLR-with-warmup sweep (after withdrawing #2016 DropPath when #1680 closure audit revealed 15-epoch under-convergence pathology).
+- **PR #1908 (nezuko, learnable routing-temp) CLOSED:** val=76.28 / test=68.01 (clean negative vs both 73.81 and 71.43 bars). **Per-block multiplicative routing_log_temp barely moves (<10% drift across 5 blocks).** Precondition-finding: pre-existing per-head `self.temperature` (init=0.5) was already in PhysicsAttention. **Routing-sharpness axis closes cleanly.** Reassigned to #1981 wd-sweep.
 - **PR #1906 (askeladd, Kendall uncertainty) MERGED:** val=**71.43** / test=**62.99** — clean win, all 8 splits improve, learned σ near-uniform (1.20× spread). Per-channel weighting axis LANDED. **OOD splits barely moved (camber_rc/cruise/re_rand) — OOD bottleneck now dominant.**
-- **PR #1734 (thorfinn, asinh α=0.5) SEND BACK:** within σ band on stale config; rerun pending.
-- **All 7 other students actively training** (GPU 64-97GB across pods, iter 98-102 each). Results pending in next 1-2 loop iterations.
+- **All 7 other students actively training** (GPU 60-97GB across pods, rate-limit storm recovering; edward, alphonse, askeladd, fern in iter-between state with branches fetched). Results pending in next 1-2 loop iterations.
 
 ## Most recent direction from human researcher team
 
@@ -55,7 +55,7 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 | #1981 ← NEW | nezuko | `wd-sweep-on-kendall` | AdamW weight decay sweep {3e-4, 1e-3} — classical OOD-regularization attack | 71.43 | best-arm val < 71.43 → merge |
 | #1937 | alphonse | `max-norm-tight-sweep-on-clipfilm` | Max-norm further-tighten 2-arm sweep {0.25, 0.1} — extends #1831 monotonic signal | 73.81 → reframe vs 71.43 | best-arm val < 71.43 → merge |
 | #1938 | tanjiro | `film-per-token-on-clipfilm` | Per-token (is_surface-aware) FiLM — first structural FiLM change | 73.81 → reframe vs 71.43 | val < 71.43 → merge |
-| #1907 ← rerun | edward | `pos-jitter-0p01-on-clipfilm` | Position-jitter on volume mesh coords; rerun at σ=0.05 after coord-scale finding | (post-rebase) 71.43 | val < 71.43 → merge |
+| #2021 ← NEW | edward | `onecycle-lr-warmup-on-kendall` | OneCycleLR sweep {max_lr=5e-4, 1e-3} + 10% warmup — fresh schedule axis | 71.43 | best-arm val < 71.43 → merge |
 | #1873 | fern | `sdf-feature-on-clipfilm` | Per-node SDF as input feature (wave-7 geometry-axis) | 74.62 → reframe vs 71.43 | val < 71.43 → merge |
 | #1757 ← rerun | frieren | `beta-0p3-on-filmed` | β=0.3 monotonic-β port; rerun after rebase + Kendall | (post-rebase) 71.43 | val < 71.43 on new bar |
 | #1734 ← rerun | thorfinn | `asinh-0p5-pressure-on-filmed` | Value-level pressure-target compression; rebase + rerun with Kendall | (post-rebase) 71.43 | val < 71.43 on new bar |
@@ -74,14 +74,14 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 - **Wave-1/3 closures:** #1454, #1455, #1448, #1453, #1446, #1449, #1450, #1551, #1621, #1645, #1620
 - **Wave-5 closures:** #1617 (stale rebase), #1680 (drop_path=0.1), #1679 (no-SWA), #1642 (sqrt-Re-weight), #1618 (surf-Huber/vol-MSE on SWA-on-Huber), #1733 (attn-dropout=0.1), #1732 (swa_start=0.65), #1600 (β-sweep on SWA-on-Huber, β=0.3 best; reassigned), #1691 (surf_weight=5), #1739 (FiLM-absorbed per-domain loss), #1702 (per-channel p-up, diagnostic falsified premise)
 - **Wave-6 closures:** #1760 (FiLM mid_dim=128 — width direction closed), #1818 (slice_num=128 — wall-clock cap), #1758 (mesh-subsample Path B — bias contamination), #1838 (FiLM depth=3 — depth direction closed), #1821 (uxuy_weight=2.0 — per-channel weighting both directions closed), #1787 (Re-jitter σ=0.05 — conditioning-feature augmentation broadly closed)
-- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed)
+- **Wave-7 closures:** #1909 (tanh-bound FiLM — output-bound axis closed, saturation 0%), #1856 (slice_num=32 2nd seed — routing collapse seed 1, slice-routing capacity downward closed), #1908 (learnable per-block routing-temp — drift <10%, precondition self.temperature already present, routing-sharpness axis closed), #1907 (pos-jitter σ∈{0.01, 0.05} — 2-arm × 2-baseline same-direction regression, volume-coord noise jitter axis closed), #2016 (DropPath sweep — withdrawn before student start, #1680 audit revealed 15-epoch under-convergence pathology)
 - **Wave-7 merges:** #1906 (Kendall uncertainty — learned per-channel σ heads, val=71.43/test=62.99 new baseline)
 
 ## ⚠ Active operational notes
 
 - **GraphQL rate-limit pattern continues.** REST helpers preferred.
 - **Mixed-baseline portfolio cleanup:** #1856 needs rebase to new 73.81 baseline before 2nd seed run. #1757, #1734 still WIP on old baselines.
-- **19 mechanism axes definitively closed on this dataset/scale:**
+- **21 mechanism axes definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1)
   - Token-level stochastic regularization (attention_dropout=0.1)
