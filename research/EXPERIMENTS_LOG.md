@@ -11,6 +11,37 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 12:05 — Cycle 34: #2148 closed (three_phase +22%) + #2025 PENDING WINNER (W&B 41y8bkyd val=70.58) + 1 new arm
+
+### PR #2148 tanjiro — OneCycleLR three_phase=True: CLOSED ✗
+
+W&B run `kb2lxivv` (finished, 18ep): val=90.35, test=81.43 vs current baseline 73.16/64.16 = **+22.3% / +23.3% regression**. All four test splits regress materially. Mechanism (per student's analysis, correct): three_phase under pct_start=0.1 puts ~80% of training below initial_lr=5e-4, starving high-LR exploration. Under 18-epoch budget, the bottleneck is reaching a basin, not refining. Val trajectory ep1→18: 262→90 monotonic descent, still under-fit at end. **Axis closed under truncated regime.**
+
+### PR #2025 askeladd — PENDING WINNER (W&B audit found 41y8bkyd)
+
+W&B audit of `willowpai2g24h2-askeladd/grad-clip-2.0` branch revealed silent-retry pattern. Best finished run `41y8bkyd` (created 11:18 UTC, AFTER #2085 merge):
+
+| Metric | Baseline (#2085) | 41y8bkyd | Δ |
+|--------|-----------------:|---------:|---:|
+| val_avg/mae_surf_p | 73.1639 | **70.583** | **-3.52% ✓** |
+| test_avg/mae_surf_p | 64.1593 | **61.295** | **-4.46% ✓** |
+| test single_in_dist | 68.7866 | **65.944** | **-4.13%** |
+| test geom_camber_rc | 77.3583 | **73.674** | **-4.76%** |
+| test geom_camber_cruise | 45.4690 | **44.266** | **-2.65%** |
+| test re_rand | 65.0232 | **61.297** | **-5.73%** |
+
+All four test splits improve decisively. Run used `batch_size=2` default (after #2085) and the only branch-level change is grad_clip `max_norm=1.0→1.5` (askeladd renamed branch contents from grad-clip-2.0 to grad-clip-1.5 silently). Mechanism: looser clip (1.0→1.5) lets the optimizer take occasional larger steps that the new noisier batch_size=2 regime makes more informative. Posted directive to student to stop silent retries, update branch to reflect max_norm=1.5, post SENPAI-RESULT marker, and mark ready.
+
+This is a candidate **11th compounding win** pending student submission.
+
+### New assignment (cycle 34)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| tanjiro | OneCycleLR `pct_start 0.1→0.05` (less warmup, extends refinement tail by ~0.9 epoch; his own follow-up suggestion from #2148 mechanistic analysis) | #2241 |
+
+---
+
 ## 2026-05-13 11:30 — Cycle 33: #2101 closed (beta1=0.94 +12%) + 1 new arm (#2224 WD param groups)
 
 ### PR #2101 edward — AdamW beta1 0.95→0.94: CLOSED ✗

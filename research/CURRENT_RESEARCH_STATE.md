@@ -6,7 +6,8 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 11:35 UTC
+- **Date / time:** 2026-05-13 12:05 UTC
+- **PENDING WINNER:** PR #2025 askeladd grad_clip=1.5 has a winning W&B run (`41y8bkyd`: val=70.58 -3.52%, test=61.30 -4.46%, all 4 splits improved by 2.65-5.73%). Student running silent retries — directive comment posted forcing SENPAI-RESULT submission. Candidate 11th compounding win.
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -52,9 +53,9 @@ Two stale-stack results sent back for retest under current code:
 | #2103 | alphonse | NAdam (retest under linear+batch2 stack; cosine run beat old baseline -2.4%) |
 | #2104 | nezuko | max_lr=2.5e-3 (retest under linear+batch2; cosine run beat old baseline -1.09%) |
 | #2224 | edward | AdamW WD parameter groups (exclude biases + LayerNorm from weight_decay; standard transformer practice) |
-| #2148 | tanjiro | OneCycleLR three_phase=True (extra anneal phase under linear) |
+| #2241 | tanjiro | OneCycleLR pct_start=0.05 (less warmup, extends refinement tail; his own follow-up from #2148 analysis) |
 | #2152 | frieren | smooth_l1 β 0.25→0.20 (close axis: 0.15 fail at +1.90%) |
-| #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen step bound, sent back for retest) |
+| #2025 | askeladd | **PENDING WINNER**: grad_clip max_norm=1.5 (W&B 41y8bkyd: val=70.58 / test=61.30, all 4 splits ↓) — awaiting SENPAI-RESULT submission |
 
 ## Closed axes (do not revisit)
 
@@ -70,9 +71,10 @@ Two stale-stack results sent back for retest under current code:
 - eps=1e-6: +2.12% vs baseline; eps=1e-8 optimal
 - grad_accum=4: +18%, eff_batch=8 was optimal (now eff_batch=4 since batch_size=2 merged)
 - max_lr=4e-3: diverges; max_lr=1.5e-3 CLOSED (+1.45%); 2.5e-3 being retested under new stack
-- pct_start=0.3: +9.5%, 0.1 optimal from both directions
+- pct_start=0.3 (cosine): +9.5%; 0.05 in-flight under linear (#2241) — direction reopened by tanjiro's #2148 mechanistic analysis
 - dropout=0.02/0.05: doesn't compose with β=0.25 stack
 - OneCycleLR div_factor sweep: small effect <1%
+- OneCycleLR three_phase=True: +22.3% under linear+18ep, starves high-LR exploration; closed (#2148 cycle 34)
 - OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
 - p_weight=3.0: +6.3%; p_weight=1.5: misses new baseline by +3.83% (#2022); p_weight=2.0 confirmed optimum
 - anneal_strategy: linear beats cosine -3.13% in truncated regime (#2055 MERGED)
