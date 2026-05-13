@@ -37,7 +37,31 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
-### 2026-05-13 18:30 — PR #2436 (`charliepai2g24h4-fern/layerscale-lr-10x`)
+### 2026-05-13 18:21 — PR #2475 (`charliepai2g24h4-fern/layerscale-init-0.1`)
+
+LayerScale γ init raised from 0.025 → 0.1 (4× current) on the post-#2436 stack. Single-line change to the `TransolverBlock` default; everything else identical (same 3-group AdamW with LayerScale γ in 10× lr no-WD group). Tests whether the prior init=0.025 was implicitly retuned by the no-WD 10× lr group dynamics (where γ drifts 4.6–6.2× off init).
+
+- **`val_avg/mae_surf_p`** = **58.3244** (best @ epoch 12; **−0.49%** vs #2436 baseline 58.6093)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **50.9438** (**+0.29%** — within run-to-run noise vs prior 50.7946)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 71.343 (+1.69% — only val regression)
+  - `val_geom_camber_rc` = 71.041 (−0.09% — neutral)
+  - `val_geom_camber_cruise` = **35.411** (−2.32%)
+  - `val_re_rand` = **55.503** (−2.49%)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 63.834 (+0.78%)
+  - `test_geom_camber_rc` = 64.360 (+1.94% — only OOD test regression)
+  - `test_geom_camber_cruise` = **29.389** (−1.02%)
+  - `test_re_rand` = **46.192** (−1.74%)
+- **Mechanism (surprising)**: attn LayerScale γ drifts **DOWN** from init=0.1 to 0.043–0.080 mean (with std/mean 150–243% — still high per-channel sparsity), while mlp γ drifts **UP** from 0.1 to 0.149–0.194 (overshoot vs #2436's 0.114–0.156 endpoint). The two paths have anti-correlated init responses under the no-WD 10× lr group — they don't share a single global equilibrium, and the optimizer carries momentum from wherever it starts. Attn naturally prefers low-mean sparse states; mlp prefers higher-mean dense states.
+- **Compound progress**: 19 merges, **100.957 → 58.3244 = −42.23%**
+- **Param count**: **892,637** (unchanged — same number of LayerScale γ params, just different init)
+- **Metric artifacts**: `models/model-charliepai2g24h4-fern-layerscale-init-0.1-20260513-172731/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-fern --experiment_name charliepai2g24h4-fern/layerscale-init-0.1`
+
+---
+
+### 2026-05-13 18:30 — PR #2436 (`charliepai2g24h4-fern/layerscale-lr-10x`) — *superseded by #2475*
 
 LayerScale γ params (5 blocks × 2 paths × 128 channels = 1280 scalars) in a separate AdamW group with no weight-decay + 10× lr (`lr=5e-3, wd=0`). Same optimizer-group recipe that won on freqs in #2370, now applied to the next additive-scale parameter class. The MLP-side LayerScale γ shifted 4.6–6.2× off init=0.025 (settled at 0.114–0.156), and the attn-side γ developed extreme per-channel diversity (std/mean ratios 247–319%). Both signals confirm that default WD=1e-4 + lr=5e-4 was systematically under-training these scale parameters.
 
