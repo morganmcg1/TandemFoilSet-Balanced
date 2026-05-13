@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 09:00
+- **Date:** 2026-05-13 09:30
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -42,12 +42,12 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 
 | Student | PR | Hypothesis | Lever | Status | Note |
 |---------|----|-----------|-------|------|-----|
-| alphonse | #1953 | n_hidden=192 + epochs=50 — schedule fix + full-stack measurement | Schedule + compound | WIP | #1899 MERGED (9th winner, val=63.72). Val slope −0.22/ep at ep 30/30, epoch-saturated. T_max=50 keeps LR positive for all ~33 actual epochs. First direct measurement of combined n_layers=3 + n_hidden=192 + grad-clip=10 state |
+| alphonse | #1953 | n_hidden=192 + epochs=50 — schedule fix + full-stack measurement | Schedule + compound | WIP | #1899 MERGED (9th winner, val=63.72). Val slope −0.22/ep at ep 30/30, epoch-saturated. T_max=50 keeps LR positive for all ~33 actual epochs. First direct measurement of combined n_layers=3 + n_hidden=192 + grad-clip=5.0 state |
 | askeladd | #1841 | slice_num=48 — retest on full 8-merge stack (n_layers=3 + grad-clip=10) | Architecture / throughput | WIP-REBASE | First-pass val=70.76 beat OLD baseline (71.44) but not n_layers=3 (69.45) or new grad-clip baseline (65.98). Mechanism (3/4 splits improve, capacity-right-sizing) is clean. Expected retest val ≈ 65.35 if relative −0.95% holds |
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | Running on older stack. Needs to beat new baseline (val < 65.98) to merge; will likely need rebase + retest if beats only intermediate baselines |
 | fern | #1805 | Adaptive Huber β annealing — retest on n_layers=3 baseline | Loss shape / schedule | WIP-REBASE | v2 result (val=71.16) beat old compile baseline but not 69.45 or 65.98; mechanism confirmed sound. Retest on full 8-merge stack |
 | frieren | #1898 | n_layers=3 + epochs=50 — cosine schedule T_max tuning | LR schedule / training duration | WIP | Critical follow-up: #1875 ran 30 epochs at T_max=30, but ~44 epochs fit in budget. Setting T_max=50 keeps LR positive through all 44 actual epochs |
-| nezuko | #1878 | mlp_ratio=1 — capacity-down on FFN axis | Architecture / throughput | WIP | Completes 3-axis capacity-down matrix (depth=frieren, slice=askeladd, MLP=nezuko). Running against older stack — may need rebase + retest |
+| nezuko | #1994 | n_head=4→8 — attention head diversity | Architecture (attention) | WIP | #1878 CLOSED (+10.5% regression; mlp_ratio=1 already +0.99% on n_layers=3 stack). FFN capacity-down bracketed: mlp_ratio=2 is optimum. Testing attention diversity: 8 heads with head_dim=24 on n_hidden=192 |
 | tanjiro | #1982 | grad-clip max_norm=2.5 — threshold scan step 3 | Gradient stability (threshold scan) | WIP | #1930 MERGED (10th winner, val=63.48). 3/4 splits improved; in_dist regressed +1.00. At 2.5: ~97% clip, ~8-9× downscaling — tests whether crossing into direction-normalization regime. Outcome: (A) val < 63.48 → keep going; (B) val > 63.48 → U-shape confirmed, bracket between 2.5–5.0 |
 | thorfinn | #1960 | n_layers=2 + n_hidden=192 — depth floor test | Architecture (depth) | WIP | #1913 grad-accum=2 closed (+8.9% val, +19.7% vs current baseline; undertrained at fixed --epochs due to half opt-steps). Pivoting from trajectory-quality to architecture axis. Expected ~36s/ep, ~50 epochs in budget |
 
@@ -97,6 +97,12 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 - **n_hidden=192** (#1442 v2, frieren) — +12.5% worse. **On n_layers=5 stack — now retesting on n_layers=3 (#1899).**
 - **Pattern**: 4/4 capacity-up fails on n_layers=5 compile stack. Capacity-up direction is closed for n_layers=5; open inversion on n_layers=3.
 
+### Architecture (FFN capacity-down — LOSS)
+- **mlp_ratio=1** (#1878, nezuko) — +10.5% vs current 10-compound baseline; +0.99% vs n_layers=3 baseline. **CLOSED.** FFN capacity is not the bottleneck at n_layers=3 + n_hidden=192. mlp_ratio=2 is the optimum for this 1500-sample dataset. Per-axis capacity-down matrix: depth-down WIN, FFN-down LOSS, slice-down in-flight (#1841).
+
+### Attention configuration (NEW direction — opens with nezuko #1994)
+- **n_head=8** (#1994, nezuko) — in progress. Doubles attention heads 4→8, head_dim 48→24. Tests whether attention diversity improves generalization on geometry+physics+Re multi-aspect task.
+
 ### Architecture (capacity-down + width reinvestment — winning direction)
 - **n_layers=3** (#1875 v2, frieren) — MERGED, −2.78% val. 35% throughput boost, param count 0.23× baseline. Val descending at final epoch.
 - **n_hidden=192 × n_layers=3** (#1899, alphonse) — **MERGED, −8.25% val, −9.06% test. All 4 splits improve.** 0.93M params, 54 s/epoch. "Compact but wide" hypothesis confirmed: per-layer expressivity was the bottleneck at n_layers=3; wider layers compensate for reduced composition depth. Val still descending at ep 30 → schedule fix in progress.
@@ -112,12 +118,12 @@ n_layers=3 gives ~44 epochs in 30 min but `--epochs 30` sets T_max=30. Cosine LR
 ## Potential next directions
 
 ### High priority (compile + n_layers=3 + n_hidden=192 + grad-clip=10 stack)
-1. **Schedule fix + full-stack measurement** — #1953 (alphonse): n_hidden=192 + epochs=50. First direct measurement of combined 10-merge stack + schedule fix. Must beat val < 63.4801.
-2. **T_max schedule tuning (n_hidden=128)** — #1898 (frieren): epochs=50 on narrower stack. Orthogonal to alphonse.
-3. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5. Regime test: monotonic gain or U-shape confirmation.
-4. **β annealing retest** — #1805 (fern): mechanism confirmed, NEEDS REBASE, retest on full 10-merge stack (val < 63.48).
-5. **slice_num=48 retest** — askeladd #1841: capacity-down on slice axis; needs retest on current baseline.
-6. **mlp_ratio=1** — nezuko #1878: complete capacity-down matrix.
+1. **Schedule fix + full-stack measurement** — #1953 (alphonse): n_hidden=192 + epochs=50. First direct measurement of combined 10-compound stack + schedule fix. Must beat val < 63.4801.
+2. **T_max schedule tuning (n_hidden=128)** — #1898 (frieren): epochs=50; STALE 2h+, nudged. If stuck, rebase and rerun with --n_hidden 192 --n_layers 3 --epochs 50.
+3. **Grad-clip threshold scan step 3** — #1982 (tanjiro): max_norm=2.5. Regime test.
+4. **n_head=8** — #1994 (nezuko): attention head diversity. Untested axis.
+5. **β annealing retest** — #1805 (fern): NEEDS REBASE (merge conflict); retest on full 10-compound stack.
+6. **slice_num=48 retest** — askeladd #1841: capacity-down on slice axis.
 7. **n_layers=2 + n_hidden=192** — thorfinn #1960: depth floor test.
 8. **n_hidden=256 × n_layers=3** — push width further. ~1.65M params. Best run AFTER schedule fix confirmed.
 

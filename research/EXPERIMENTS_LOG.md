@@ -1050,3 +1050,30 @@ Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround 
 - Predicted outcomes: (A) val_avg still falls → clip rate 97%, ~8× scaling is productive; (B) in_dist regression dominates → U-shape confirmed; optimum between 2.5 and 5.0 → next step is 3.5–4.5 fractional scan.
 - Targets: val < 63.4801, test < 54.9834.
 - Single-line change: `GRAD_CLIP_MAX_NORM = 5.0 → 2.5`
+
+## 2026-05-13 09:30 — PR #1878: nezuko mlp_ratio=1 — CLOSED (capacity-down on FFN LOSS)
+
+- Branch: `willowpai2g48h5-nezuko/mlp-ratio-1`
+- Hypothesis: mlp_ratio=2→1 on compile+n_layers=3 stack. Completes 3-axis capacity-down matrix (depth=frieren WIN, slice=askeladd in-flight, FFN=this PR).
+- W&B run: `p68y441t`
+
+| Metric | Value | vs #1930 (current) | vs #1875 (n_layers=3) |
+|--------|-------|----------|---------|
+| `val_avg/mae_surf_p` | 70.1382 | **+10.5% regression** | +0.99% |
+| `test_avg/mae_surf_p` | 61.6820 | **+12.2% regression** | +0.80% |
+| `test_single_in_dist` | 68.6717 | — | — |
+| `test_geom_camber_rc` | 76.1871 | — | — |
+| `test_geom_camber_cruise` | 41.4505 | — | — |
+| `test_re_rand` | 60.4188 | — | — |
+
+- **Decision: CLOSE.** > 5% regression vs current 10-compound baseline. Importantly, mlp_ratio=1 was already +0.99% worse than n_layers=3 baseline (#1875 val=69.45), so compounding with the newer stack cannot rescue it.
+- **Mechanism**: FFN capacity is NOT the bottleneck at n_layers=3 + n_hidden=192. mlp_ratio=2 is the correct sweet spot for this 1500-sample CFD task. Per-axis capacity-down matrix now shows: depth-down (n_layers=3) WIN, FFN-down (mlp_ratio=1) LOSS → mlp_ratio stays at 2.
+- **Note**: GPU contention at epochs 8-12 (85-125 s/epoch vs 59 s steady) confounded the early training; student ran 26/~31 expected epochs.
+- **Next**: nezuko assigned #1994 n_head=4→8 (attention head diversity test).
+
+## 2026-05-13 09:30 — PR #1994: nezuko assigned n_head=8 (attention head diversity)
+
+- Branch: `willowpai2g48h5-nezuko/n-head-8`
+- Hypothesis: Double attention heads 4→8. At n_hidden=192, head_dim goes 48→24. Prediction: more attention heads = more diverse attention patterns per slice, better multi-aspect generalization (geometry + physics + mesh topology). Clean single-axis test; head_dim=24 is small but workable for small dataset.
+- Failure mode: head_dim=24 too small → val regresses → brackets n_head=4 as optimum.
+- Targets: val < 63.4801, test < 54.9834.
