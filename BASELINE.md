@@ -37,6 +37,31 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 14:10 — PR #2304 (`charliepai2g24h4-thorfinn/reglu-gate`)
+
+ReGLU gate: `F.gelu → F.relu` in `SwiGLUMLP.forward()`. ReLU's exact-zero gate for x<0 maximally suppresses cross-channel contamination at high-magnitude pressure features. Gate-sharpness monotonicity confirmed: SiLU<GELU<ReLU, each step a compound win. Largest OOD generalization gain yet — test improves more than val (−4.07% test vs −1.92% val). All 3 non-in-dist splits improve; only single_in_dist regresses slightly (+2.03 val, +0.43 test). Model hit 30-min wall clock at ep 12 with val still descending strongly (76.4→71.5→68.2→62.9 across last 4 epochs) — full potential likely higher.
+
+- **`val_avg/mae_surf_p`** = **62.949** (best @ epoch 12; **−1.92%** vs #2266 baseline 64.182)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **54.221** (−4.07% vs #2266 baseline 56.523)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 69.925 (+2.04% vs #2266 — only regression)
+  - `val_geom_camber_rc` = 74.845 (−1.83% vs #2266)
+  - `val_geom_camber_cruise` = 44.262 (−7.38% vs #2266)
+  - `val_re_rand` = 62.765 (−3.15% vs #2266)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 61.108 (+0.71% vs #2266 — near-neutral)
+  - `test_geom_camber_rc` = 66.196 (−6.46% vs #2266)
+  - `test_geom_camber_cruise` = 36.305 (−6.91% vs #2266)
+  - `test_re_rand` = 53.276 (−4.24% vs #2266)
+- **Mechanism**: ReLU gate (max(0,x)) provides exact-zero suppression for all x<0 — hardest possible gate in the standard GLU family. Under L1 + surf-ch-weight [0.5,0.5,2.0], high-magnitude pressure extremes dominate gradients, and exact-zero gate suppression produces the strongest OOD transfer benefit. The improvement scaling with OOD difficulty is striking: single_in_dist barely affected, harder OOD splits gain most. ReLU's implicit sparsity also acts as a free regularizer.
+- **Gate-sharpness axis**: SiLU (soft pass-through) → GELU (near-zero) → **ReLU (exact-zero)** — monotonic gains at each step: −6.96%, −4.75%, −1.92% val; −9.33%, −2.21%, −4.07% test.
+- **Compound progress**: 15 merges, **100.957 → 62.949 = −37.7%** (#1397→#1552→#1611→#1637→#1548→#1772→#1799→#1711→#1896→#2018→#1754→#2105→#2175→#2266→**#2304**)
+- **Param count**: 831,191 (unchanged — 1-char gate swap, ReLU even cheaper than GELU to compute).
+- **Metric artifacts**: `models/model-charliepai2g24h4-thorfinn-reglu-gate-20260513-132007/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-thorfinn --experiment_name charliepai2g24h4-thorfinn/reglu-gate`
+
+---
+
 ### 2026-05-13 13:45 — PR #2266 (`charliepai2g24h4-thorfinn/geglu-gate-comparison`)
 
 GeGLU gate: single-character change `F.silu → F.gelu` in `SwiGLUMLP.forward()`. GELU's slightly harder switch in the negative-input regime suppresses cross-channel contamination at high-magnitude pressure features (stagnation points, wakes). L1 + surf-ch-weight [0.5,0.5,2.0] gradient signal is dominated by extreme pressure values where gate sharpness matters most. All 4 val splits improve; 3 of 4 test splits improve (test_geom_camber_rc +2.53%, attributed to pre-existing val/test camber-rc decorrelation, not GeGLU specifically). Zero parameter cost; same epoch budget as SwiGLU.
