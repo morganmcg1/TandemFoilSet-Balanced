@@ -164,7 +164,8 @@ class TransolverBlock(nn.Module):
         fx = self.gamma_attn * self.attn(self.ln_1(fx)) + fx
         fx = self.gamma_mlp * self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            h = self.ln_3(fx)
+            return self.mlp2(h), h
         return fx
 
 
@@ -198,6 +199,12 @@ class Transolver(nn.Module):
             for i in range(n_layers)
         ])
         self.placeholder = nn.Parameter((1 / n_hidden) * torch.rand(n_hidden))
+        # Auxiliary camber prediction head: surface-pooled last-block hidden -> scalar
+        self.camber_head = nn.Sequential(
+            nn.Linear(n_hidden, 32),
+            nn.GELU(),
+            nn.Linear(32, 1),
+        )
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -212,9 +219,10 @@ class Transolver(nn.Module):
     def forward(self, data, **kwargs):
         x = data["x"]
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return {"preds": fx}
+        preds, h_last = self.blocks[-1](fx)
+        return {"preds": preds, "h_last": h_last}
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +465,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 print(f"LayerScale: per-channel learnable gain init=1e-4 on both attn and mlp residual branches in all {model_config['n_layers']} TransolverBlocks")
+print(f"Auxiliary task: camber prediction head ({model_config['n_hidden']}→32→1) on surface-pooled last-block hidden; λ=0.1 * MSE(pred, x_norm[:,0,15]); target=NACA camber foil-1; self-supervised geometry consistency probe; aux head computed in fp32 outside autocast")
 
 # torch.compile with dynamic=True because pad_collate yields batches with
 # variable N_max (longest mesh in batch varies). Without dynamic, compile
@@ -523,8 +532,9 @@ for epoch in range(MAX_EPOCHS):
 
     t0 = time.time()
     model.train()
-    epoch_vol = epoch_surf = 0.0
+    epoch_vol = epoch_surf = epoch_aux = 0.0
     n_batches = 0
+    n_skipped = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -535,27 +545,55 @@ for epoch in range(MAX_EPOCHS):
         with amp_ctx_factory():
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
-            pred = model({"x": x_norm})["preds"]
+            out = model({"x": x_norm})
+            pred = out["preds"]
+            h_last = out["h_last"]
             sq_err = F.l1_loss(pred, y_norm, reduction='none')
 
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
             vol_loss = (sq_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
             surf_loss = (sq_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
-            loss = vol_loss + cfg.surf_weight * surf_loss
+            loss_primary = vol_loss + cfg.surf_weight * surf_loss
+
+        # Auxiliary camber loss: computed in fp32 outside autocast to avoid
+        # bf16 overflow / instability in the small head.
+        h_last_f = h_last.float()
+        sm = is_surface.float()  # [B, N]
+        denom = sm.sum(dim=1, keepdim=True).clamp(min=1.0)  # [B, 1]
+        h_surf = (h_last_f * sm.unsqueeze(-1)).sum(dim=1) / denom  # [B, H]
+        camber_module = model._orig_mod.camber_head if hasattr(model, "_orig_mod") else model.camber_head
+        pred_camber = camber_module(h_surf).squeeze(-1)  # [B]
+        target_camber = x_norm[:, 0, 15].float()  # [B]
+        loss_aux = F.mse_loss(pred_camber, target_camber)
+        loss = loss_primary + 0.1 * loss_aux
 
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        # NaN-safe step: if any gradient is NaN/Inf, skip the update to avoid
+        # poisoning every parameter (a single NaN grad would otherwise propagate
+        # across the whole model via subsequent forward passes).
+        bad_grad = False
+        for p in model.parameters():
+            if p.grad is not None and not torch.isfinite(p.grad).all():
+                bad_grad = True
+                break
+        if bad_grad:
+            optimizer.zero_grad()
+            n_skipped += 1
+        else:
+            optimizer.step()
 
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
+        epoch_aux += loss_aux.item()
         n_batches += 1
 
     scheduler.step()
     lr_now = optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
+    epoch_aux /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -587,6 +625,8 @@ for epoch in range(MAX_EPOCHS):
         "lr": lr_now,
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
+        "train/aux_camber_mse": epoch_aux,
+        "train/n_skipped_grad": n_skipped,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -594,7 +634,8 @@ for epoch in range(MAX_EPOCHS):
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
-        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
+        f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} aux={epoch_aux:.4f}] "
+        f"skip={n_skipped}  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
