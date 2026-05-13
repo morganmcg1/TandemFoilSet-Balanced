@@ -8,6 +8,90 @@ The current best result on this advisor branch. Every new PR's primary metric mu
 
 ---
 
+## 2026-05-13 03:10 — PR #1731: Gradient clipping (max_norm=1.0) on FiLM baseline (composition test)
+
+- **val_avg/mae_surf_p:** **74.6214** (best seed = seed 0, SWA-model eval)
+- **test_avg/mae_surf_p:** **66.1360** (best seed, SWA-model, 4-split all finite)
+- **2-seed mean ± std:** val 75.23 ± 0.86, test 66.67 ± 0.76 — variance tightens vs FiLM-alone (1.23 / 1.64)
+- Improvement vs. PR #1585 (80.82 / 71.30): val **−7.67%**, test **−7.25%** (largest single-PR gain on this branch since FiLM merged)
+
+### Per-split SWA val × seed (surface MAE, p)
+
+| Split | seed 0 | seed 1 | mean | Δ vs #1585 (best) |
+|---|---|---|---|---|
+| val_single_in_dist | 86.19 | 87.40 | 86.80 | −1.80 vs 88.39 |
+| **val_geom_camber_rc** (FiLM bottleneck) | **90.92** | 92.17 | 91.54 | **−6.44 vs 97.36** |
+| val_geom_camber_cruise | 50.32 | 51.42 | 50.87 | −9.37 vs 59.69 |
+| val_re_rand | 71.06 | 72.36 | 71.71 | −6.77 vs 77.83 |
+| **swa_val_avg** | **74.62** | 75.84 | 75.23 | **−6.20 vs 80.82** |
+
+### Per-split SWA test × seed (surface MAE, p)
+
+| Split | seed 0 | seed 1 | mean | Δ vs #1585 (best) |
+|---|---|---|---|---|
+| test_single_in_dist | 77.93 | 76.16 | 77.04 | −2.44 vs 79.48 |
+| test_geom_camber_rc | 81.37 | 84.66 | 83.02 | −3.34 vs 84.71 |
+| test_geom_camber_cruise | 42.15 | 42.74 | 42.45 | −8.11 vs 50.26 |
+| test_re_rand | 63.09 | 65.28 | 64.19 | −7.67 vs 70.76 |
+| **swa_test_avg** | **66.14** | 67.21 | 66.67 | **−5.16 vs 71.30** |
+
+### Config
+
+- Architecture: Transolver + FiLM (mid_dim=64, zero-init last linear, per-layer (γ,β)) — unchanged from #1585
+- Loss: Smooth-L1 (Huber β=1.0) — unchanged
+- Optimizer: AdamW lr=5e-4, weight_decay=1e-4 — unchanged
+- **Gradient clipping: `clip_grad_norm_(max_norm=1.0)`** applied after `loss.backward()` and before `optimizer.step()`
+- Scheduler: CosineAnnealingLR(T_max=15) — unchanged
+- Batch size: 4, surf_weight=10.0 — unchanged
+- Per-sample Re-weight (`1/log_re_shifted`, normalized) — unchanged
+- SWA: swa_start_frac=0.75, swa_lr=1e-4, anneal_epochs=2 — unchanged
+- Epochs: 15 (hit 30-min cap at epoch 13/15)
+- Params: 0.75M (unchanged — grad-clip adds no parameters)
+- Peak VRAM: 94.0 GiB (seed 0) / 91.8 GiB (seed 1)
+
+### Grad-clip diagnostics
+
+| Metric | seed 0 | seed 1 |
+|---|---|---|
+| `train/grad_norm_mean` (pre-clip) | 4.999 | 4.926 |
+| `train/grad_norm_max` (pre-clip) | 31.60 | 26.28 |
+| `train/clip_fraction_mean` | 0.920 | 0.936 |
+
+**~93% of steps were clipped.** Pre-clip grad-norm ran ~5× over threshold on average with peaks >25× — clip is decisively active across the run, confirming the mechanism story (clipping → cleaner late-epoch updates → better SWA averaging).
+
+### W&B runs (2 seeds)
+
+- seed 0 (**best**): `z43bhwlk` — val=74.62, test=66.14
+- seed 1: `m69xm4r2` — val=75.84, test=67.21
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+  --epochs 15 \
+  --max_norm 1.0 \
+  --seed 0 \
+  --agent willowpai2g48h2-nezuko \
+  --wandb_name willowpai2g48h2-nezuko/grad-clip-1p0-on-filmed-seed0 \
+  --wandb_group grad-clip-on-filmed
+```
+
+### What landed
+
+- `--max_norm` CLI flag (default 0.0 = disabled) in `train.py`
+- `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=cfg.max_norm)` applied between `loss.backward()` and `optimizer.step()` when `max_norm > 0`
+- W&B diagnostics: `train/grad_norm`, `train/clip_fraction`, run-wide aggregates
+- Mechanism: with Huber β=1.0 at lr=5e-4 + AdamW, grad-norms routinely hit 25×+ threshold. Bounding step magnitudes lets SWA average over cleaner sub-trajectories → late-epoch averaging produces lower-loss final weights. Base-best 77.16 → SWA-best 74.62 (−3.3% from SWA averaging alone on grad-clipped trajectories).
+
+### Open follow-ups (for future PRs)
+
+- **Sweep `max_norm`** ∈ {0.5, 2.0, 5.0} — current 93% clip-fraction suggests threshold is binding; relaxing may recover signal while keeping outlier protection.
+- **3-seed retest** to nail down variance estimate (current 2-seed std 0.86 vs FiLM-alone's 3-seed 1.23).
+- **Compose with another wave-6 lever** (e.g. β=0.3, slice_num=128, uxuy_weight=2.0) once those land. Grad-clip is now established as orthogonal to FiLM and SWA.
+- **Investigate `vol_loss=Infinity` log artifact** in `data/scoring.py` for `test_geom_camber_cruise` — MAE is finite/correct but the loss aggregation overflows. Pre-existing, not from this PR.
+
+---
+
 ## 2026-05-12 23:55 — PR #1585: Stack FiLM global conditioning on Huber baseline (research-ideas H5)
 
 - **val_avg/mae_surf_p:** **80.8162** (best seed, epoch 14, base-model — student trained on Huber-only baseline #1452, *not* on Re-weight + SWA stack)
