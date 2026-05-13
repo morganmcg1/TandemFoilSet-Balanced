@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 08:55
+- **Date:** 2026-05-13 09:10
 - **Branch:** `icml-appendix-charlie-pai2g-24h-r2`
 - **Track:** Charlie no-W&B 24h/48h logging-ablation arm (round 2/3)
 - **Most recent human researcher direction:** none on this branch
@@ -14,26 +14,27 @@ Floor progression: 122.70 → 111.15 → 105.68 → 85.93 → **84.54**
 
 **Key change:** AMP bf16 cuts epoch time 37% and VRAM 22%, enabling full 15-epoch cosine completion within 24.6 min. Non-finite-y prefilter resolves bs=4 test NaN — no more eval_bs1.py fallback needed.
 
-## Active experiments (WIP — all need rebase onto c550461)
+## Active experiments (WIP — all on AMP floor unless noted)
 
 | PR | Student | Hypothesis | Lever | Status |
 |---|---|---|---|---|
-| #1536 | askeladd | NaN guard + clean floor rerun | Bug fix | Needs rebase onto AMP floor |
-| #1947 | alphonse | chan_w sweep: [1,1,3] vs [1,1,7] under β=0.3 | Loss tuning | Needs rebase onto AMP floor |
-| #1927 | edward | Huber β=0.1 | Loss tuning | Needs rebase onto AMP floor |
-| #1489 | thorfinn | AoA flip p=0.25 | Augmentation | Needs rebase onto AMP floor |
-| #2019 | frieren | T_max=11 (cosine complete) vs eta_min=1e-7 | Schedule | Needs rebase onto AMP floor |
-| #2061 | tanjiro | mlp_ratio=4 | Architecture | Needs rebase onto AMP floor |
-| #1681 | nezuko | Weight decay 5e-4 | Regularization | Needs rebase onto AMP floor |
-| #2096 | fern | n_hidden=128→160 (wider Transolver) | Architecture | Just assigned |
+| #1536 | askeladd | NaN guard + clean floor rerun | Bug fix | Rebasing onto AMP |
+| #1947 | alphonse | chan_w sweep: [1,1,3] vs [1,1,7] under β=0.3 | Loss tuning | Rebasing onto AMP |
+| #1927 | edward | Huber β=0.1 | Loss tuning | Rebasing onto AMP |
+| #1489 | thorfinn | AoA flip p=0.25 | Augmentation | Rebasing onto AMP |
+| #1681 | nezuko | Weight decay 5e-4 | Regularization | Rebasing onto AMP |
+| #2096 | fern | n_hidden=128→160 (wider Transolver) | Architecture | In flight (post-AMP) |
+| #2116 | tanjiro | Dropout sweep (p=0.05/0.1/0.2 in attn+MLP) | Regularization | Just assigned |
+| #2129 | frieren | SWA-lite (avg last 3-5 ckpts at eval) | Optimization | Just assigned |
 
 ## Recent decisions
 
 - **#1477 (fern AMP bf16) MERGED — NEW FLOOR**: val_avg 85.93→84.54 (−1.6%). AMP bf16 structural win: full cosine, 9 GB VRAM freed, clean bs=4 test. Two seeds both beat floor.
+- **#2061 (tanjiro mlp_ratio=4) CLOSED**: +13.4% val regression. Bigger model didn't converge in 30-min budget (11/11 epochs, still descending at timer). Same throughput-dominance lesson as grad-accum/OneCycleLR.
+- **#2019 (frieren cosine bracket) CLOSED**: Arm 1 (T_max=11) confirmed cosine-completion gain at fp32 (val=85.78 < 85.93) but **superseded by AMP floor #1477** (val=84.54). Schedule-completion lever now fully resolved.
 - **#1751 (frieren T_max=12) MERGED**: val_avg 105.68→85.93 (−18.7%). Schedule calibration was the dominant lever.
 - **#1891 (tanjiro OneCycleLR) CLOSED**: +3.32% regression. Structurally mismatched to 14-epoch budget.
 - **#1927 (edward β=0.1) SENT BACK**: val=85.57 beats old floor 85.93 but below new fern floor 84.54. Needs rebase onto AMP.
-- **#2061 (tanjiro mlp_ratio=4) ASSIGNED**: conventional transformer mlp capacity, expected ~9-11 epochs with AMP.
 
 ## Key findings so far
 
@@ -52,19 +53,23 @@ Floor progression: 122.70 → 111.15 → 105.68 → 85.93 → **84.54**
 ### Critical
 - **edward β=0.1 rebase on AMP floor** (#1927): First β=0.1 + AMP combination. β trend is monotone, high probability of continued improvement.
 - **alphonse chan_w rebase on AMP floor** (#1947): [1,1,3] vs [1,1,7]. AMP changes VRAM budget, may shift the optimal channel weighting.
-- **fern new assignment** (IDLE): AMP unlocks headroom — best candidates: (a) n_hidden=160 (wider model, more params), (b) torch.compile reduce-overhead on top of AMP, (c) bs=8 with bf16 (~50 GB projected — fits on 96 GB GPU).
+- **fern n_hidden=160** (#2096): Wider Transolver. AMP unlocks the VRAM for larger model in the same wall-clock budget.
 
-### In flight (need rebase)
-- **frieren T_max=11 completion** (#2019): Cosine completion bracket on T_max=12. With AMP, 15 epochs completes in 24.6 min — frieren's T_max=11 may or may not still be relevant.
-- **tanjiro mlp_ratio=4** (#2061): Larger MLP capacity. With AMP, more epochs in same wall-clock.
-- **askeladd NaN guard** (#1536): Bug fix + clean floor measurement. Prefilter already in AMP floor, so askeladd's NaN guard may be superseded.
+### Just assigned (this cycle)
+- **tanjiro dropout sweep**: Untested regularization lever. Current Transolver dropout=0. Sweep p∈{0.05, 0.1, 0.2} in attention+MLP. Free in epoch budget (no compute change). May reduce overfitting on the high-residual splits (camber_rc, single_in_dist).
+- **frieren SWA-lite (checkpoint averaging)**: Save last 5 checkpoints during AMP training, average weights at eval. Known free win in literature. Matches frieren's schedule-expertise. Uses the full 15-epoch AMP cosine — the late-cosine ckpts should be high-quality.
+
+### In flight (rebasing onto AMP)
+- **askeladd NaN guard** (#1536): Bug fix + clean floor measurement. Prefilter already in AMP floor, so askeladd's NaN guard may be partially superseded.
 - **thorfinn AoA flip** (#1489): Augmentation on AMP floor.
 - **nezuko WD=5e-4** (#1681): Regularization on AMP floor.
 
 ### Next round queue
-- **n_hidden=160**: AMP frees 9 GB → VRAM headroom for larger model (~0.9M params)
-- **torch.compile reduce-overhead**: Independent of AMP, should reduce epoch time further
+- **torch.compile reduce-overhead**: Independent of AMP, should reduce epoch time further (more epochs in budget)
 - **bs=8 with bf16**: ~50 GB projected VRAM; more gradient smoothing per step
-- **β=0.05 or pure L1 (β→0)**: Continue the monotone β trend
-- **Checkpoint averaging (SWA-lite)**: With 15 full epochs, last 3-5 checkpoint average
-- **T_max=13/14 now moot**: AMP completes T_max=12 cleanly; frieren's T_max=11/eta_min experiment may show diminishing returns
+- **β=0.05 or pure L1 (β→0)**: Continue the monotone β trend (after β=0.1 confirms or breaks the trend on AMP)
+- **EMA on top of SWA-lite**: If SWA-lite wins, layer EMA decay for online ensemble
+- **Per-channel β** (Ux=Uy=0.1, p=0.5): edward's noted split-level β interaction from #1849 — low β hurts low-residual splits
+- **Mixup/CutMix on geometry features**: Augmentation in feature space rather than physical AoA flip
+- **Lookahead optimizer (k=5, α=0.5)**: Outer-loop averaging combines with SWA-lite
+- **T_max=13/14 now moot**: AMP completes T_max=12 cleanly

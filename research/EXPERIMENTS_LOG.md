@@ -1,5 +1,60 @@
 # SENPAI Research Results
 
+## 2026-05-13 09:06 — PR #2061: mlp_ratio=4 sweep — CLOSED
+
+- Branch: `charliepai2g24h2-tanjiro/mlp-ratio-sweep`
+- Hypothesis: Increase Transolver MLP expansion factor from 2 → 4 (matches "Attention Is All You Need" / ViT default) for more capacity
+- Artifacts: `models/model-charliepai2g24h2-tanjiro-mlp-ratio-4-20260513-080739/metrics.jsonl`, `eval_bs1.jsonl`
+
+| Metric | mlp_ratio=4 (0.99M) | Baseline #1751 (0.66M) | Δ% |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | **97.4175** | 85.9338 | **+13.4%** |
+| val_single_in_dist | 117.90 | 108.02 | +9.1% |
+| val_geom_camber_rc | 108.35 | 96.37 | +12.4% |
+| val_geom_camber_cruise | 74.55 | 61.15 | +21.9% |
+| val_re_rand | 88.87 | 78.20 | +13.6% |
+| **test_avg bs=1** | **87.5014** | 77.6488 | **+12.7%** |
+| epochs completed | 11/11 | 14/15 | −3 ep |
+| best_epoch | 11 (last) | 14 | still descending |
+| peak GPU memory (GB) | 52.18 | 42.12 | +24% |
+| n_params | 991,319 | ~660K | +50% |
+
+**Config:** mlp_ratio=4, lr=7.5e-4, T_max=8 (11−3 warmup), Huber β=0.3, chan_w=[1,1,5], gradclip=1.0, fp32 (pre-AMP base). 
+
+**Decision: CLOSED — +13.4% val regression. Dead end on current 30-min budget.**
+
+**Analysis:** Student's diagnosis is correct and elegant: the bigger MLP slows each epoch by 23%, cutting 3 epochs off the schedule. The trajectory shows the model dropped 9.4 val points in the FINAL epoch alone — it was still actively descending when the timer hit. Under timeout-cut training, model size that doesn't converge in budget is strictly worse than model size that does. Same lesson as grad-accum (#1524) and OneCycleLR (#1891): **step throughput dominates over per-step capacity/quality** in this regime.
+
+**Suggested follow-ups (deferred):** student proposed T_max with constant tail, mlp_ratio=3 compromise, grad-accum=2 for effective bs=8. All lower-priority than dropout/SWA/torch.compile levers currently in queue. Bonus: `--mlp_ratio` arg added to eval_bs1.py (will carry to future student work).
+
+**Follow-up:** tanjiro reassigned to dropout sweep (regularization lever, untested on this branch, free in epoch budget).
+
+---
+
+## 2026-05-13 09:06 — PR #2019: Cosine completion bracket (T_max=11 vs eta_min=1e-7) — CLOSED (superseded)
+
+- Branch: `charliepai2g24h2-frieren/cosine-completion-bracket`
+- Hypothesis: Two arms to verify cosine-completion gain — (1) T_max=11 (one fewer step, completes cleanly in 14 epochs), (2) T_max=12, eta_min=1e-7 (deeper anneal at final step)
+- Artifacts: `models/model-charliepai2g24h2-frieren-cosine-T_max-11-epochs-14-20260513-071329/metrics.jsonl`, `models/model-charliepai2g24h2-frieren-cosine-T_max-12-eta-min-1e-7-20260513-075211/metrics.jsonl`
+
+| Metric | Old floor #1751 (T_max=12, cut) | Arm 1: T_max=11 (complete) | Arm 2: T_max=12, eta_min=1e-7 | AMP floor #1477 |
+|---|---:|---:|---:|---:|
+| **val_avg/mae_surf_p** | 85.9338 | **85.7760** | 86.9659 | **84.5393** ✓ |
+| test_avg bs=1 | 77.6488 | 75.6228 | 77.6992 | **74.9122** ✓ |
+| epochs completed | 14/15 | 14/14 | 14/15 | 15/15 |
+| LR at last epoch | 5.0e-5 (cut early) | 1.6e-5 (=eta_min ✓) | 5.0e-5 (cut early) | converged |
+| peak GPU memory | 42 GB (fp32) | 42 GB (fp32) | 42 GB (fp32) | 33 GB (bf16) |
+
+**Config:** lr=7.5e-4, Huber β=0.3, chan_w=[1,1,5], gradclip=1.0, fp32 (pre-AMP base). Arm 1: T_max=11, --epochs 14; Arm 2: T_max=12, eta_min=1e-7, --epochs 15.
+
+**Decision: CLOSED — superseded by AMP floor #1477.**
+
+**Analysis:** Arm 1 confirms the cosine-completion hypothesis at fp32 — T_max=11 with 14 epochs beats T_max=12 cut at 14/15 by 0.16 val abs / 2.03 test abs. **But AMP bf16 (#1477) solves the cosine-completion problem more efficiently:** the merged AMP floor completes 15/15 epochs at T_max=12 in 24.6 min, with 9 GB VRAM headroom and a cleaner test path. Arm 2 (eta_min=1e-7) was a null result — eta_min only matters at the final cosine step, which never ran under fp32 timeout. The schedule-completion lever is now fully resolved; no further bracketing needed on T_max=11 vs 12. **Lesson:** when two orthogonal levers (faster epochs vs slower schedule) both solve the same constraint, the faster-epochs one dominates because it leaves headroom for other variables.
+
+**Follow-up:** frieren reassigned to SWA-lite checkpoint averaging (orthogonal to schedule lever, free at eval time, well-suited to 15-epoch AMP runs).
+
+---
+
 ## 2026-05-13 05:30 — PR #1559: Decoupled chan_w (surf=[1,1,5], vol=[1,1,1]) — CLOSED
 
 - Branch: `charliepai2g24h2-alphonse/decoupled-chanw-surf-vol`
