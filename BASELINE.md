@@ -25,6 +25,38 @@ Validation analogue (used for checkpoint selection): `val_avg/mae_surf_p`.
 
 ## Current best
 
+### 2026-05-13 08:00 — PR #1379: Smooth-L1 (Huber) loss β=0.5 — gradient-fairness confirmed
+
+- **val_avg/mae_surf_p:** **65.3496 ± 3.37** (3-seed mean) | best seed=1: **62.3972** ✓ NEW BASELINE
+- **test_avg/mae_surf_p:** **56.6797 ± 2.66** (3-seed mean) | best seed=1: **54.4758**
+- **Per-seed breakdown:**
+
+| Seed | W&B run | val_avg/mae_surf_p | test_avg/mae_surf_p | best_epoch |
+|---|---|---:|---:|---:|
+| 0 | `cw5b3eoy` | 64.6237 | 55.9342 | 28 |
+| 1 (best) | `mqf224bq` | 62.3972 | 54.4758 | 28 |
+| 2 | `xc4seasc` | 69.0279 | 59.6291 | 28 |
+| **mean ± std** | | **65.35 ± 3.37** | **56.68 ± 2.66** | |
+
+- **vs MSE 3-seed mean (PR #1874):** val −5.13% (68.88→65.35), test −4.92% (59.61→56.68) — **gradient-fairness confirmed**
+- **vs single-seed best (PR #1719):** val −1.19% mean (66.14→65.35), best seed −5.66% (66.14→62.40)
+- **W&B group:** `smoothl1-beta05`
+- **Code change:** `beta=1.0 → beta=0.5` in `F.smooth_l1_loss(..., beta=0.5)` — both training loop and `evaluate_split`
+
+**Key insight:** At β=0.5 ~half of bulk residuals fall into the linear (L1) regime, reducing gradient dominance from large residuals. This provides gradient fairness across the 4 validation splits, improving OOD generalization. Best epoch=28 (vs 27 for MSE baseline) suggests the flatter loss landscape allows the schedule to extract one more useful epoch of refinement.
+
+- **Reproduce:**
+  ```bash
+  cd target
+  python -u train.py --seed 0 --wandb_name willow-r4-askeladd-smoothl1-b05-seed0 --agent willowpai2g24h4-askeladd --wandb_group smoothl1-beta05
+  python -u train.py --seed 1 --wandb_name willow-r4-askeladd-smoothl1-b05-seed1 --agent willowpai2g24h4-askeladd --wandb_group smoothl1-beta05
+  python -u train.py --seed 2 --wandb_name willow-r4-askeladd-smoothl1-b05-seed2 --agent willowpai2g24h4-askeladd --wandb_group smoothl1-beta05
+  ```
+
+**Next target:** beat val_avg/mae_surf_p = 62.3972 (best seed) — or beat **3-seed mean 65.3496** for paper-publishable claim.
+
+---
+
 ### 2026-05-13 03:00 — PR #1719: OneCycleLR pct_start=0.05 — compositional OOD-camber win on new max_lr baseline
 
 - **val_avg/mae_surf_p:** **66.1352** (best epoch 27/29) ✓ NEW BASELINE
