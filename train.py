@@ -412,7 +412,7 @@ class Config:
     lr: float = 5e-4              # initial_lr (OneCycleLR starting point)
     max_lr: float = 2e-3          # peak LR for OneCycleLR
     weight_decay: float = 1e-4
-    batch_size: int = 2
+    batch_size: int = 1
     surf_weight: float = 10.0
     p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
     epochs: int = 50
@@ -426,6 +426,7 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
+    optimizer: str = "adamw"  # "adamw" or "nadam" (NAdam with decoupled_weight_decay)
 
 
 cfg = sp.parse(Config)
@@ -478,14 +479,24 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.NAdam(
-    model.parameters(),
-    lr=cfg.lr,
-    betas=(0.95, 0.98),
-    eps=1e-8,
-    weight_decay=cfg.weight_decay,
-    decoupled_weight_decay=True,
-)
+if cfg.optimizer == "nadam":
+    optimizer = torch.optim.NAdam(
+        model.parameters(),
+        lr=cfg.lr,
+        betas=(0.95, 0.98),
+        eps=1e-8,
+        weight_decay=cfg.weight_decay,
+        decoupled_weight_decay=True,
+    )
+elif cfg.optimizer == "adamw":
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
+        betas=(0.95, 0.98),
+    )
+else:
+    raise ValueError(f"Unknown optimizer: {cfg.optimizer!r} (expected 'adamw' or 'nadam')")
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer,
     max_lr=cfg.max_lr,
