@@ -426,6 +426,7 @@ class Config:
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
+    adamw_beta2: float = 0.999  # AdamW second-moment decay. Default 0.999; try 0.95 for transformer.
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
     wandb_name: str | None = None
@@ -486,6 +487,7 @@ optimizer = torch.optim.AdamW(
         {"params": list(surf_head.parameters()), "lr": _head_lr},
     ],
     weight_decay=cfg.weight_decay,
+    betas=(0.9, cfg.adamw_beta2),
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
@@ -586,6 +588,10 @@ for epoch in range(MAX_EPOCHS):
 
         optimizer.zero_grad()
         loss.backward()
+        with torch.no_grad():
+            grad_norm = torch.sqrt(sum(
+                (p.grad.detach() ** 2).sum() for p in all_params if p.grad is not None
+            )).item()
         optimizer.step()
         global_step += 1
         # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
@@ -597,6 +603,7 @@ for epoch in range(MAX_EPOCHS):
                 surf_l1_frac = 0.0
         wandb.log({
             "train/loss": loss.item(),
+            "train/grad_norm": grad_norm,
             "train/sample_w_max": sample_w.max().item(),
             "train/sample_w_min": sample_w.min().item(),
             "train/sample_w_std": sample_w.std().item() if sample_w.numel() > 1 else 0.0,
