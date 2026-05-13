@@ -37,6 +37,30 @@ winner sets the first numeric reference value.
 
 ## Current best result
 
+### 2026-05-13 16:05 — PR #2360 (`charliepai2g24h4-fern/reglu-inner-dim-288`)
+
+ReGLU + inner_dim=256→288 bisect. Extra 32 gate/up/down channels in each SwiGLU block compensates for ReGLU's exact-zero dead channels in the gate-sparse regime. At +4.7% sec/epoch (vs +10.2% for 320), the experiment fits 12 epochs within the 30-min wall — the full schedule completes and val_single_in_dist IMPROVES −3.79% (vs the +11.2% regression at 320), confirming the epoch-budget hypothesis: the 320 regression was schedule-truncation, not capacity overfit.
+
+- **`val_avg/mae_surf_p`** = **61.875** (best @ epoch 12; **−1.71%** vs #2304 baseline 62.949)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **54.117** (−0.19% vs #2304 baseline 54.221)
+- **Per-split val** `mae_surf_p` at best val checkpoint:
+  - `val_single_in_dist` = 67.276 (−3.79% vs #2304)
+  - `val_geom_camber_rc` = 72.143 (−3.61% vs #2304)
+  - `val_geom_camber_cruise` = 45.901 (+3.70% vs #2304 — slight regression, saturated split)
+  - `val_re_rand` = 62.181 (−0.93% vs #2304)
+- **Per-split test** `mae_surf_p` at best val checkpoint:
+  - `test_single_in_dist` = 60.873 (−0.38% vs #2304)
+  - `test_geom_camber_rc` = 65.103 (−1.65% vs #2304)
+  - `test_geom_camber_cruise` = 37.112 (+2.22% vs #2304)
+  - `test_re_rand` = 53.380 (+0.20% vs #2304 — near-neutral)
+- **Mechanism**: inner_dim=288 (+32 channels per gate/up/down projection) directly compensates for dead channels created by ReGLU's exact-zero gate. Single_in_dist improvement (−3.79%) vs prior 320 regression (+11.2%) proves this is not capacity overfit — epoch-budget is the binding constraint above inner_dim=288.
+- **Compound progress**: 16 merges, **100.957 → 61.875 = −38.7%**
+- **Param count**: 892,631 (+61,440 from inner_dim 256→288; n_hidden unchanged at 128)
+- **Metric artifacts**: `models/model-charliepai2g24h4-fern-reglu-inner-dim-288-20260513-141957/metrics.jsonl`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-fern --experiment_name charliepai2g24h4-fern/reglu-inner-dim-288`
+
+---
+
 ### 2026-05-13 14:10 — PR #2304 (`charliepai2g24h4-thorfinn/reglu-gate`)
 
 ReGLU gate: `F.gelu → F.relu` in `SwiGLUMLP.forward()`. ReLU's exact-zero gate for x<0 maximally suppresses cross-channel contamination at high-magnitude pressure features. Gate-sharpness monotonicity confirmed: SiLU<GELU<ReLU, each step a compound win. Largest OOD generalization gain yet — test improves more than val (−4.07% test vs −1.92% val). All 3 non-in-dist splits improve; only single_in_dist regresses slightly (+2.03 val, +0.43 test). Model hit 30-min wall clock at ep 12 with val still descending strongly (76.4→71.5→68.2→62.9 across last 4 epochs) — full potential likely higher.
