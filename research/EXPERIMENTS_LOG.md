@@ -1206,4 +1206,31 @@ Train-val gap is enormous (train_surf=0.11, val ~5.5) but in wrong direction —
 
 **Note for future**: Student's suggested follow-up #3 (drop output nodes from LOSS, not input features) is the Transolver-shaped form of this regularization and is a separate viable lever. Follow-up #4 (geometry-feature jitter on dsdf, saf, NACA params 15-17) is also worth keeping in the hypothesis bank for OOD generalization.
 
+## 2026-05-13 11:30 — PR #2121: slice_num=48 + clip=5.0 — MERGED ✓ (NEW BEST)
+- Branch: willowpai2g48h1-nezuko/slice-num-48-plus-clip
+- W&B run: `vyjph01c` — group `slice-num-sweep`
+
+| Metric | slice=48 + clip | clip-only baseline (#2090) | Δ |
+|---|---|---|---|
+| val_avg/mae_surf_p (best, ep15) | **71.9613** | 75.8431 | **−5.12%** |
+| **test_avg/mae_surf_p** | **65.3734** | **68.0957** | **−3.99%** ✓ new best |
+| test_single_in_dist | **67.70** | 68.29 | −0.87% |
+| test_geom_camber_rc | **74.63** | 82.24 | **−9.25%** ← biggest mover |
+| test_geom_camber_cruise | 51.29 | 50.71 | +1.14% (flat) |
+| test_re_rand | **67.87** | 71.14 | −4.59% |
+
+- Epochs completed: 16 / 18 (30-min timeout, ~118.8 s/epoch)
+- Config: bf16 + bs=4 + accum=2 + Lion lr=1.5e-4 + Fourier L=8 + n_hidden=192 + n_layers=5 + **slice_num=48** + mlp_ratio=2 + **grad_clip_max_norm=5.0** + epochs=18
+- Peak GPU memory: ~40 GB
+
+**Analysis**: Super-additive stacking confirmed. clip=5.0 alone gave −15.5%; slice=48 alone gave −1.27%; combined gives −3.99% on top of the clip baseline, for −18.9% total vs pre-clip stack (observed > sum-of-marginals prediction of −16.8%). The super-additivity is consistent with clip stabilizing the leaner model's optimization so it converges further.
+
+**Key mechanism finding**: cruise held flat (+1.14%) while rc, in_dist, re_rand all improved substantially. This confirms slice_num=48 is a **regularization gain**, not capacity compromise — the slot floor is below 48. With best-val at epoch 15 (not last-completed epoch 16), model converged within budget. Clip fire rate diagnostics (100%→82% over epochs) show the clip mechanism remains fully active and orthogonal to the slice change.
+
+**The rc improvement** (−9.25%, from 82.24→74.63) is the standout: rc is the most OOD split (unseen camber geometry). Leaner slot partitioning imposes stronger inductive locality bias that helps unseen geometry more than in-distribution cases.
+
+**Cumulative gain from PR #1391**: 121.28 → 65.37 = −46.1%.
+
+**Follow-up**: PR #2226 assigned to nezuko for slice_num=32 + clip=5.0 to continue the scan and find the actual slot floor.
+
 **Action**: Closed (advisor-led, after rate limit recovery). alphonse idle, will be reassigned.
