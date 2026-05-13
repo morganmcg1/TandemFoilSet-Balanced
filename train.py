@@ -73,6 +73,27 @@ def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Random Fourier Feature (RFF) positional encoding (PR #1657, Tancik et al. 2020)
+# Replace first 2 normalized (x,z) coordinate dims with a 64-dim RFF embedding
+# [cos(B x), sin(B x)] where B ~ N(0, σ²). Provides multi-scale spatial
+# frequency content to the input MLP, freeing it from learning sinusoidal
+# bases from scratch. B is fixed (no gradient) and initialized once.
+# ---------------------------------------------------------------------------
+
+RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
+RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
+_rff_B = None          # initialized after device is known
+
+
+def apply_rff(x_batch: torch.Tensor) -> torch.Tensor:
+    """Replace first 2 dims (x,z coords) with 64-dim RFF embedding."""
+    coords = x_batch[..., :2]                                    # [B, N, 2]
+    proj = coords @ _rff_B                                       # [B, N, 32]
+    rff = torch.cat([torch.cos(proj), torch.sin(proj)], dim=-1)  # [B, N, 64]
+    return torch.cat([rff, x_batch[..., 2:]], dim=-1)            # [B, N, 86]
+
+
+# ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
 
@@ -277,7 +298,8 @@ def evaluate_split(model, loader, stats, surf_weight, channel_weights, device) -
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
             y_norm = (y_safe - stats["y_mean"]) / stats["y_std"]
             y_target = compress_pressure(y_norm)
-            pred = model({"x": x_norm})["preds"]
+            x_in = apply_rff(x_norm)  # PR #1657: replace raw (x,z) with RFF embedding
+            pred = model({"x": x_in})["preds"]
 
             # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
             abs_err = (pred - y_target).abs()
@@ -420,6 +442,13 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
+# RFF projection matrix: [2, 32] maps (x,z) → 64-dim embedding (32 cos + 32 sin).
+# Seeded for reproducibility across runs; B is fixed (no gradient). (PR #1657)
+torch.manual_seed(42)
+_rff_B = torch.randn(2, RFF_DIM // 2, device=device) * RFF_SIGMA
+_rff_B.requires_grad_(False)
+print(f"RFF: B shape={tuple(_rff_B.shape)}, σ={RFF_SIGMA}, embed_dim={RFF_DIM}")
+
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
@@ -440,8 +469,8 @@ val_loaders = {
 }
 
 model_config = dict(
-    space_dim=2,
-    fun_dim=X_DIM - 2,
+    space_dim=RFF_DIM,    # was 2 — now 64-dim RFF embedding replaces (x,z) (PR #1657)
+    fun_dim=X_DIM - 2,    # unchanged: 22 non-coordinate features
     out_dim=3,
     n_hidden=128,
     n_layers=5,
@@ -476,6 +505,8 @@ with open(model_dir / "config.yaml", "w") as f:
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
+        "rff_sigma": RFF_SIGMA,
+        "rff_dim": RFF_DIM,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
@@ -504,7 +535,8 @@ for epoch in range(MAX_EPOCHS):
         x_norm = (x - stats["x_mean"]) / stats["x_std"]
         y_norm = (y - stats["y_mean"]) / stats["y_std"]
         y_target = compress_pressure(y_norm)
-        pred = model({"x": x_norm})["preds"]
+        x_in = apply_rff(x_norm)  # 24 → 86 dims; replaces raw (x,z) with RFF embedding
+        pred = model({"x": x_in})["preds"]
 
         if epoch == 0 and n_batches == 0:
             # One-time sanity probe: confirm channels 0/1 untouched, channel 2 compressed,
@@ -513,10 +545,21 @@ for epoch in range(MAX_EPOCHS):
                 rt = decompress_pressure(y_target)
                 rt_err = (rt - y_norm).abs().max().item()
                 ch01_match = torch.equal(y_target[..., :2], y_norm[..., :2])
+                # RFF coordinate-range probe — verify σ=1.0 matches normalized scale (PR #1657)
+                coord_min = x_norm[..., :2][mask].min(dim=0).values.tolist()
+                coord_max = x_norm[..., :2][mask].max(dim=0).values.tolist()
+                rff_min = x_in[..., :RFF_DIM][mask].min().item()
+                rff_max = x_in[..., :RFF_DIM][mask].max().item()
             print(
                 f"  [asinh probe] y_norm channel-2 |max|={y_norm[..., 2].abs().max().item():.3f} "
                 f"→ y_target channel-2 |max|={y_target[..., 2].abs().max().item():.3f}  "
                 f"round-trip max|err|={rt_err:.2e}  channels-01-unchanged={ch01_match}"
+            )
+            print(
+                f"  [rff probe] x_norm coord range: x∈[{coord_min[0]:.3f},{coord_max[0]:.3f}] "
+                f"z∈[{coord_min[1]:.3f},{coord_max[1]:.3f}]  "
+                f"RFF embedding range: [{rff_min:.3f},{rff_max:.3f}] "
+                f"(should be ~[-1,1])  x_in shape={tuple(x_in.shape)}"
             )
 
         # Pure L1 loss in (normalized, pressure-compressed) target space, channel-weighted [1,1,3]/5
@@ -574,6 +617,8 @@ for epoch in range(MAX_EPOCHS):
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
+        "rff_sigma": RFF_SIGMA,
+        "rff_dim": RFF_DIM,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
     pred_abs_max_norm_worst = max(m["pred_abs_max_norm"] for m in split_metrics.values())
