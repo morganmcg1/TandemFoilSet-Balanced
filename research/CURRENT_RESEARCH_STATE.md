@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 08:10
+- 2026-05-13 09:05
 - No human researcher directives (no open issues)
 - Round 5 Charlie no-W&B arm — 30-min wall-clock cap, local JSONL only
 
@@ -8,27 +8,27 @@
 
 | Metric | Value | PR |
 |---|---|---|
-| **val_avg/mae_surf_p** | **53.62** | #2028 (per-channel Huber δ=[Ux=0.5,Uy=0.5,p=0.2], merged 2026-05-13) |
-| **test_avg/mae_surf_p** | **49.65** | #2028 — all 4 test splits finite |
-| Peak VRAM | 37.99 GB | #2028 — BF16, batch=4, n_hidden=160 |
-| s/epoch | ~115 s | n_hidden=160 + Lion, 16 epochs ≈ 30.7 min |
+| **val_avg/mae_surf_p** | **52.78** | #2027 (Lion lr=2e-4 on per-channel δ + n_hidden=160, merged 2026-05-13) |
+| **test_avg/mae_surf_p** | **49.42** | #2027 — all 4 test splits finite |
+| Peak VRAM | 37.99 GB | #2027 — BF16, batch=4, n_hidden=160 |
+| s/epoch | ~109 s | n_hidden=160 + Lion lr=2e-4, 16 epochs ≈ 29 min |
 
-Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=3e-4, wd=6e-5)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160**, epochs=**16**, batch=4, seed=42.
+Merged stack: warmup3+cosine + GT-NaN fix + grad_clip(max_norm=1.0) + **Lion(lr=2e-4, wd=6e-5)** + **BF16 autocast** + **per-channel Huber δ=[Ux=0.5, Uy=0.5, p=0.2]** + **n_hidden=160**, epochs=**16**, batch=4, seed=42.
 
-**Reproduce current best:**
+**Reproduce current best (explicit Lion flags required — train.py defaults are stale):**
 ```bash
-cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check --agent <student>
+cd target/ && python train.py --epochs 16 --lion_lr 2e-4 --lion_weight_decay 6e-5 --experiment_name pcd_lr2e4_baseline_check --agent <student>
 ```
 
-### Per-split val/test (new baseline, PR #2028)
+### Per-split val/test (new baseline, PR #2027)
 
 | Split | val | test |
 |---|---:|---:|
-| single_in_dist | 58.46 | 48.40 |
-| geom_camber_rc | 67.34 | 58.75 |
-| geom_camber_cruise | 35.10 | 47.64 |
-| re_rand | 53.58 | 43.83 |
-| **avg** | **53.62** | **49.65** |
+| single_in_dist | 56.24 | 46.75 |
+| geom_camber_rc | 67.45 | 59.92 |
+| geom_camber_cruise | 34.25 | 47.47 |
+| re_rand | 53.17 | 43.52 |
+| **avg** | **52.78** | **49.42** |
 
 ## Key round-5 findings to date
 
@@ -47,6 +47,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 | **Huber δ=0.3 → −14.2% further (#1880, MERGED)** | **δ curve not bottomed at 0.5; 0.3 optimal — δ=0.2 ties within noise** |
 | **n_hidden=160 → −1.7% val further (#1755, MERGED)** | **Width gain orthogonal to loss-shape; val_geom_camber_rc (hardest OOD) benefits most (−5.38)** |
 | **Per-channel Huber δ=[0.5,0.5,0.2] → −4.1% val further (#2028, MERGED)** | **Decoupling p vs Ux/Uy δ: pressure tight (0.2), velocity expanded (0.5). Uniform improvement all 8 splits.** |
+| **Lion lr=2e-4 on per-channel δ+n160 → −1.6% val further (#2027, MERGED)** | **LR optimum continues moving down as loss landscape tightens. Compounds with #2028. 3/4 val splits improve. Best baseline 52.78/49.42.** |
 | Lion lr=3.5e-4 plateau on n160+δ=0.3 stack (#2035, CLOSED) | val=55.90 (flat vs 55.92). LR bowl wide-flat in 3.0–3.5e-4. Higher LR helps easy split, hurts 3 OOD splits — mild over-stepping. Mechanism: wider model over-rides δ-driven LR shift. |
 | slice_num=128 → +22.5% regression (#1481, CLOSED) | 41% per-epoch slowdown → 13 epochs only; same budget-cliff failure as n_hidden=192 |
 | LR/clip ceiling confirmed (#1683, CLOSED) | Optimization-side knobs tapped out at AdamW stage |
@@ -62,22 +63,22 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 
 | PR | Student | Hypothesis | Status | Target |
 |---|---|---|---|---|
-| #2074 | fern | Per-channel δ refinement: δ_p=0.15 (Arm A) and δ_p=0.10 (Arm B) | WIP — new | Beat 53.62 |
-| #2027 | tanjiro | Lion lr=2e-4 rerun on current per-channel δ stack (rebase+rerun) | WIP (sent back) | Beat 53.62 |
-| #2044 | edward | DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 | WIP | Beat 53.62 |
-| #2084 | frieren | Cosine LR floor: eta_min=lr×0.05 to prevent zero-LR at epoch 16 | WIP — new | Beat 53.62 |
-| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP | Beat 53.62 |
-| #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (baseline updated) | Beat 53.62 |
-| #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline updated) | Beat 53.62 |
-| #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 53.62 |
+| #2074 | fern | Per-channel δ refinement: δ_p=0.15 (Arm A) and δ_p=0.10 (Arm B) | WIP — new | Beat 52.78 |
+| #2100 | tanjiro | Lion lr=1.5e-4 bracket-from-below on per-channel δ + n_hidden=160 | WIP — new | Beat 52.78 |
+| #2044 | edward | DropPath / stochastic depth (rates 0.05, 0.1) on n_hidden=160 | WIP | Beat 52.78 |
+| #2084 | frieren | Cosine LR floor: eta_min=lr×0.05 to prevent zero-LR at epoch 16 | WIP — new | Beat 52.78 |
+| #2005 | nezuko | surf_weight sweep: 15 vs 5 on δ=0.3+Lion+n160 stack | WIP | Beat 52.78 |
+| #1979 | alphonse | n_layers=6 depth sweep, epochs=14 (budget-safe) | WIP (baseline updated) | Beat 52.78 |
+| #1844 | askeladd | Lion β2: 0.99→0.999 (slower momentum for B=4 noise), epochs=16 | WIP (baseline updated) | Beat 52.78 |
+| #1656 | thorfinn | Dropout=0.1 single-arm on δ=0.3 stack | WIP (sent back) | Beat 52.78 |
 
 ## Recently closed/merged
 
 | PR | Student | Outcome | Note |
 |---|---|---|---|
-| #2028 | fern | **MERGED** | Per-channel Huber δ=[Ux=0.5,Uy=0.5,p=0.2] → **new baseline 53.62/49.65** (−4.1% val, −4.4% test). Uniform gain across all 8 splits. |
+| #2027 | tanjiro | **MERGED** | Lion lr=2e-4 on per-channel δ + n_hidden=160 → **new baseline 52.78/49.42** (−1.6% val, −0.5% test). 3/4 val splits improve. Compounds with #2028. |
+| #2028 | fern | **MERGED** | Per-channel Huber δ=[Ux=0.5,Uy=0.5,p=0.2] → baseline 53.62/49.65 (−4.1% val, −4.4% test). Uniform gain across all 8 splits. |
 | #2035 | frieren | CLOSED | lr=3.5e-4 val=55.90 (flat vs 55.92 old baseline). LR plateau confirmed; bowl wide-flat at 3.0–3.5e-4. Split pattern reveals over-stepping on OOD. |
-| #2027 | tanjiro | SENT BACK | lr=2e-4 beats old baseline (52.795 < 55.92 on uniform-δ=0.3 code) but ran before #2028 merged. Needs rerun on current per-channel δ stack. |
 | #1755 | fern | **MERGED** | n_hidden=160 + δ=0.3 → baseline 55.92/51.92 (−1.7% val, −2.4% test). val_geom_camber_rc −5.38. |
 | #1879 | tanjiro | CLOSED | Huber δ=0.3+ep16 compound reproduced baseline exactly (bit-identical); hypothesis absorbed by #1880 |
 | #1880 | alphonse | **MERGED** | Huber δ=0.3 → baseline 56.90/53.20 (−14.2% val). δ=0.2 essentially tied. δ curve bottomed. |
@@ -89,7 +90,7 @@ cd target/ && python train.py --epochs 16 --experiment_name pcd_baseline_check -
 ## Open questions from active experiments
 
 1. **Does per-channel δ_p=0.15 or 0.10 beat δ_p=0.20?** (#2074 fern) — pressure δ response surface not mapped below 0.2
-2. **Does Lion lr=2e-4 beat lr=3e-4 on the combined per-channel δ + n160 stack?** (#2027 tanjiro rerun) — strong signal from old stack; confirmation run needed
+2. **Does Lion lr=1.5e-4 continue beating lr=2e-4 (bracket-from-below)?** (#2100 tanjiro) — LR optimum has moved 3e-4 → 2e-4; testing if it keeps falling toward original Lion paper defaults
 3. **Does n_layers=6 help on n_hidden=160 stack?** (#1979 alphonse — depth vs width at current baseline)
 4. **Does cosine LR floor (eta_min=lr×0.05) prevent over-decay and improve final-epoch performance?** (#2084 frieren) — epoch 16 always best, curve still descending; floor at 1.5e-5 may squeeze more improvement
 5. **Does dropout=0.1 compose with per-channel δ+n160?** (#1656 thorfinn) — orthogonal regularization axes

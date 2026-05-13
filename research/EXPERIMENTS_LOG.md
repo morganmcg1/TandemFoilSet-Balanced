@@ -1,5 +1,57 @@
 # SENPAI Research Results — icml-appendix-charlie-pai2g-24h-r5
 
+## 2026-05-13 09:00 — PR #2027: Lion lr=2e-4 on per-channel δ + n_hidden=160 stack (MERGED — new baseline 52.78)
+
+- Student branch: `charliepai2g24h5-tanjiro/lion-lr-sweep-n160`
+- Hypothesis (rerun): Lion lr=2e-4 should compound with the per-channel Huber δ change (#2028) since both narrow the loss landscape. Original run on δ=0.3 stack already showed signal; this confirms on current per-channel δ + n_hidden=160 stack.
+
+### Results (vs baseline 53.62 / 49.65, per-channel δ + n_hidden=160)
+
+| Metric | Baseline (lr=3e-4) | **This PR (lr=2e-4)** | Δ |
+|---|---:|---:|---:|
+| **val_avg/mae_surf_p** | 53.62 | **52.7778** | **−0.84 (−1.6%)** ✅ |
+| **test_avg/mae_surf_p** | 49.65 | **49.4184** | **−0.23 (−0.5%)** ✅ |
+| Peak VRAM | 37.99 GB | 37.99 GB | 0 |
+| s/epoch | ~115 s | ~109 s | −5% |
+
+### Per-split val/test (lr=2e-4 + per-channel δ + n_hidden=160, epoch 16)
+
+| Split | val baseline | val this PR | Δ val | test baseline | test this PR | Δ test |
+|---|---:|---:|---:|---:|---:|---:|
+| single_in_dist | 58.46 | **56.24** | **−2.22** | 48.40 | **46.75** | **−1.65** |
+| geom_camber_rc | 67.34 | 67.45 | +0.11 | 58.75 | 59.92 | +1.17 |
+| geom_camber_cruise | 35.10 | **34.25** | **−0.85** | 47.64 | **47.47** | −0.17 |
+| re_rand | 53.58 | **53.17** | **−0.41** | 43.83 | **43.52** | −0.31 |
+| **avg** | **53.62** | **52.78** | **−0.84** | **49.65** | **49.42** | **−0.23** |
+
+### Analysis
+
+**Three of four val splits improve, one flat.** The strongest gain is on `single_in_dist` (−2.22 val, −1.65 test), consistent with smaller LR producing tighter in-distribution fits. `geom_camber_rc` is essentially flat on val (+0.11) but +1.17 on test — the hardest OOD split is mildly worse under smaller LR (the same pattern observed in frieren's #2035 upward probe, but in reverse direction). Both directions away from lr=3e-4 hurt OOD slightly.
+
+**Per-epoch trajectory analysis:** Divergence between lr=2e-4 and lr=3e-4 only appears AFTER epoch 10 (once cosine decay and sign-voting settle). Early epochs (1–7) are near-identical. The lr=2e-4 advantage compounds in the cosine tail.
+
+**Mechanism:** Wider model (n_hidden=160, 1.6× params) has larger per-parameter gradient contributions. Lion's sign-quantized step size at lr=3e-4 over-shoots in the back half of training when the model is fine-tuning the final basin. Reducing to lr=2e-4 produces tighter convergence.
+
+**Compound stack analysis:**
+- baseline before #1755 (δ=0.3, lr=3e-4, n_hidden=128):  val=56.90 / test=53.20
+- n_hidden=160 alone (#1755, lr=3e-4):                     val=55.92 / test=51.92
+- per-channel δ alone (#2028, lr=3e-4):                    val=53.62 / test=49.65
+- **per-channel δ + lr=2e-4 (#2027):                       val=52.78 / test=49.42**
+
+Per-channel δ does most of the work (−2.30 val); lr=2e-4 adds another −0.84 on top. The Lion LR optimum continues moving down as the loss landscape tightens — consistent with the original Chen et al. paper recommending Lion lr~1.5e-4 for tight loss regimes.
+
+### Disposition
+
+**MERGED.** Both primary metrics improve. Updates baseline to val=52.78/test=49.42.
+
+**Note on train.py defaults:** train.py still has stale `lion_lr=1.5e-4 / lion_weight_decay=3e-5` defaults from #1641 sweep — these are NOT the merged baseline config. All future experiments MUST pass `--lion_lr 2e-4 --lion_weight_decay 6e-5` explicitly. Pending follow-up to update defaults in a separate bug-fix PR.
+
+**Follow-up assigned (PR #2100):** Lion lr=1.5e-4 bracket-from-below — test whether LR optimum continues falling.
+
+- Metrics: `models/model-lion_lr2e4_n160_pcd-20260513-081331/metrics.jsonl`
+
+---
+
 ## 2026-05-13 08:30 — PR #2035: Lion lr=3.5e-4 on n_hidden=160 + δ=0.3 stack (CLOSED — plateau confirmed)
 
 - Student branch: `charliepai2g24h5-frieren/lion-lr-upward-n160`
