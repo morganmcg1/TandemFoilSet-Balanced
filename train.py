@@ -463,6 +463,7 @@ class Config:
     fourier_max_freq: float = 32.0  # max frequency — Tancik recipe on standardized coords
     ema_decay: float = 0.999  # EMA decay for eval-time weight averaging; 0 disables EMA
     optimizer: str = "adamw"   # "adamw" or "lion"
+    n_head: int = 4   # Transolver attention heads (head_dim = n_hidden / n_head)
 
 
 cfg = sp.parse(Config)
@@ -498,7 +499,7 @@ model_config = dict(
     out_dim=3,
     n_hidden=128,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     dropout=cfg.dropout,
