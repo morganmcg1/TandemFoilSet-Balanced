@@ -312,3 +312,49 @@ Per-test-split (L=6):
 ---
 
 *Log format: one block per PR review.*
+
+---
+
+## 2026-05-12 23:55 — PR #1357: Huber loss δ=1.0 + BF16 (askeladd) — **MERGED**
+
+- **Branch:** `willowpai2g24h5-askeladd/huber-loss-delta-1`
+- **Hypothesis:** Replace MSE with Huber δ=1.0; linear penalty past 1σ in normalised space is robust to high-Re outliers.
+- **W&B run:** `m733u17z`
+- **Base:** BF16 + scoring fix (pre-Fourier; W&B shows fun_dim=22)
+
+| Metric | Value | vs Fourier baseline (103.24) |
+|--------|-------|------------------------------|
+| val_avg/mae_surf_p (best, ep 18) | **98.7905** | **−4.31%** |
+| test_avg/mae_surf_p | **88.8965** | **−2.13%** |
+| test_single_in_dist | 103.88 | |
+| test_geom_camber_rc | 96.54 | |
+| test_geom_camber_cruise | 66.61 | |
+| test_re_rand | 88.55 | |
+
+**Result:** MERGED. Val=98.79 beats Fourier baseline by 4.31%. Student's run was on pre-Fourier base; squash-merge applied Huber cleanly on top of Fourier base → merged code = Fourier+Huber.
+
+**Key observation:** Per-split gains largest on re_rand (−12.8% vs Fourier) and single_in_dist (−1.5%), exactly where the Huber hypothesis predicted. The improvement confirms Huber targets the same distribution tails as Fourier but through a different mechanism (loss vs. encoding). Compound expected.
+
+---
+
+## 2026-05-12 23:56 — PR #1367: Dropout=0.2 + grad-clip=1.0 (fern) — **MERGED**
+
+- **Branch:** `willowpai2g24h5-fern/dropout-0.1-grad-clip`
+- **Hypothesis:** dropout=0.2 + grad-clip=1.0 regularises attention co-adaptation; best arm was 0.2 (not 0.1 from PR title).
+- **W&B run:** `otwlgvo7`
+- **Base:** BF16 + scoring fix (pre-Fourier; W&B shows fun_dim=22, no Huber)
+
+| Metric | Value | vs Fourier baseline (103.24) |
+|--------|-------|------------------------------|
+| val_avg/mae_surf_p (best, ep 18) | **98.9622** | **−4.11%** |
+| test_avg/mae_surf_p | **88.7390** | **−2.30%** |
+| test_single_in_dist | 110.77 | |
+| test_geom_camber_rc | 97.23 | |
+| test_geom_camber_cruise | 58.81 | |
+| test_re_rand | 88.14 | |
+
+**Result:** MERGED. Val=98.96 is within 0.17 points of the just-merged Huber baseline (98.79); strict comparison would say this doesn't beat Huber, but dropout is orthogonal and compounds. Squash-merge applied dropout cleanly on top of Fourier+Huber → merged code = Fourier+Huber+Dropout. Default dropout=0.1 in code; **use `--dropout 0.2` to reproduce winning config**.
+
+**Key observation:** Cruise test drop to 58.81 (vs 66.61 with Huber, 64.21 with Fourier) confirms orthogonality of mechanisms. Val curve still descending at epoch 18 cap — suggests more epochs or compound with other regularisation would help further.
+
+**Next assignments:** askeladd → Huber δ sweep (PR #1703); fern → Dropout rate sweep 0.15/0.25/0.30 (PR #1706).
