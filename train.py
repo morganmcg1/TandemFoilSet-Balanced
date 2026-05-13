@@ -452,6 +452,8 @@ with open(model_dir / "config.yaml", "w") as f:
         "optimizer": "Lion",
         "lion_lr": LION_LR,
         "lion_weight_decay": LION_WD,
+        "loss_variant": "huber_delta0.3_instance_norm_loss",
+        "instance_norm_scale": "1/y_std_s_per_sample_per_channel",
     }, f, sort_keys=True)
 
 best_avg_surf_p = float("inf")
@@ -466,6 +468,9 @@ for epoch in range(MAX_EPOCHS):
     t0 = time.time()
     model.train()
     epoch_vol = epoch_surf = epoch_grad_norm = 0.0
+    epoch_inst_scale_mean = 0.0
+    epoch_inst_scale_min = float("inf")
+    epoch_inst_scale_max = 0.0
     n_batches = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
@@ -482,10 +487,25 @@ for epoch in range(MAX_EPOCHS):
             # delta=0.3: huber(x) = 0.5*x^2 if |x|<0.3 else 0.3*|x|-0.045
             huber_err = torch.where(abs_err < 0.3, 0.5 * abs_err ** 2, 0.3 * abs_err - 0.045)
 
+            # Per-sample instance-norm scaling: equalise gradient contribution
+            # across the Re dynamic range. Compute per-sample, per-channel std
+            # of y_norm over valid nodes in FP32 (autocast → BF16 would lose
+            # precision on small variances). Scale is a constant w.r.t. params.
+            with torch.no_grad():
+                y_norm_f32 = y_norm.float()
+                mask_f = mask.float().unsqueeze(-1)                          # [B, N, 1]
+                n_valid = mask_f.sum(dim=1).clamp(min=1)                     # [B, 1]
+                y_mean_s = (y_norm_f32 * mask_f).sum(dim=1) / n_valid        # [B, 3]
+                y_var_s = ((y_norm_f32 - y_mean_s.unsqueeze(1)) ** 2 * mask_f).sum(dim=1) / n_valid
+                y_std_s = y_var_s.sqrt().clamp(min=1e-6)                     # [B, 3]
+                inst_scale = (1.0 / y_std_s).unsqueeze(1)                    # [B, 1, 3]
+
+            huber_err_scaled = huber_err * inst_scale                        # [B, N, 3]
+
             vol_mask = mask & ~is_surface
             surf_mask = mask & is_surface
-            vol_loss = (huber_err * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
-            surf_loss = (huber_err * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
+            vol_loss = (huber_err_scaled * vol_mask.unsqueeze(-1)).sum() / vol_mask.sum().clamp(min=1)
+            surf_loss = (huber_err_scaled * surf_mask.unsqueeze(-1)).sum() / surf_mask.sum().clamp(min=1)
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         optimizer.zero_grad()
@@ -496,12 +516,17 @@ for epoch in range(MAX_EPOCHS):
         epoch_vol += vol_loss.item()
         epoch_surf += surf_loss.item()
         epoch_grad_norm += grad_norm.item()
+        with torch.no_grad():
+            epoch_inst_scale_mean += inst_scale.mean().item()
+            epoch_inst_scale_min = min(epoch_inst_scale_min, inst_scale.min().item())
+            epoch_inst_scale_max = max(epoch_inst_scale_max, inst_scale.max().item())
         n_batches += 1
 
     scheduler.step()
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
     epoch_grad_norm /= max(n_batches, 1)
+    epoch_inst_scale_mean /= max(n_batches, 1)
 
     # --- Validate ---
     model.eval()
@@ -533,6 +558,9 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "train/grad_norm": epoch_grad_norm,
+        "train/inst_scale_mean": epoch_inst_scale_mean,
+        "train/inst_scale_min": epoch_inst_scale_min,
+        "train/inst_scale_max": epoch_inst_scale_max,
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
