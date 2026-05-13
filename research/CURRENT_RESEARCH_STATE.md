@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 01:00 UTC
+- **Date**: 2026-05-13 01:05 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -32,7 +32,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + surf_w
 | alphonse | TBD | `huber-delta-smaller` | IDLE — to be assigned: δ=0.25 + δ=0.1 sweep, plus optional cosine T_max=14 isolation arm |
 | askeladd | #1709 | `focal-per-sample-loss-weighting` | WIP — focal weighting γ=1.0/2.0 (2 arms). Amplifies hard-sample gradient (mechanistic opposite of log-cosh). |
 | edward | #1490 | `scale-model-256-v2` | WIP — rebase: n_hidden=192, n_head=6 on new stack |
-| fern | #1698 | `test-time-augmentation` | WIP — TTA with 2 arms (N=5/9, jitter=0.5°/0.75°) at eval time. Pure inference-time, no training changes. |
+| fern | #1770 | `n-layers-depth-scaling` | WIP — n_layers=6 (Arm A) / n_layers=7 (Arm B) on merged stack. Tests depth as third orthogonal scaling axis. |
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP — v1 had +3.97% val (val_single_in_dist −6.26%! best ever on worst split), sent back v2 with 2 arms: L=2 + cosine, L=4 surface-only + cosine. |
 | tanjiro | #1693 | `swiglu-ffn` | WIP — SwiGLU gated linear unit FFN replacing GELU MLP (single arm, cosine T_max=14) |
@@ -52,6 +52,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + surf_w
 
 ### Closed (disproved on fair comparison)
 - **FiLM Re-conditioning** (tanjiro #1494 v3): val_avg = 104.98 (+1.8% over 103.10 baseline) / test = 98.59 (+4.0% over 94.76 baseline) on cosine T_max=14 + augment + FiLM (exact #1495 protocol + FiLM only). val_re_rand WORSE under FiLM (+3.6%) — opposite of predicted direction. Root cause: log(Re) already at input dim 13 → FiLM adds redundant route; augmentation + FiLM compete on small dataset. v2's 100.99 was rebase artifact, not FiLM signal.
+- **Test-time augmentation** (fern #1698): both arms regress (+0.40 / +0.29 vs N=1 baseline 95.437 safe re-eval). Mechanism: TTA's classification record relies on label invariance; here target y(θ_AoA) MOVES with augmentation → averaging biased neighbor predictions. Pred-std diagnostic confirms model IS responsive to jitter (10-30 m²/s²), so averages point in wrong direction — not noop. New universal principle P6 added below.
 
 ### Round 1 findings (pre-merge-base, directionally valid)
 - **Huber loss** (alphonse, pre-merge): 108.10 — strongest signal yet. With the new stack could compound further. Huber d=0.5 helps cruise/re_rand but hurts single_in_dist (high-Re). Need on-stack comparison.
@@ -92,6 +93,22 @@ no longer needs the long-tail anneal). Recommendation: when a hypothesis
 modifies the loss formulation, run BOTH `--use_onecycle True --epochs 50`
 and `--use_onecycle False --epochs 14` to isolate. When tuning
 architecture or augmentation, cosine T_max=14 remains the safer default.
+
+**P6 (PR #1698): Test-time augmentation fails when augmentation perturbs
+the target signal, not just nuisance variables.** TTA's classification
+record relies on label invariance under augmentation. For regression
+targets y(θ) where the augmentation moves θ (e.g. AoA jitter), each
+jittered prediction is the model's estimate of y(θ+Δθ), not a noisy
+reading of y(θ). Averaging pulls toward a smoothed neighborhood mean of
+the actual signal. Training-time augmentation regularizes the model's
+loss landscape (a "loss-shaped" smoothing); test-time averaging
+operates on outputs (an "output-shaped" smoothing). The two regularizations
+live on different objects and cannot substitute for each other. This is
+the mechanistic *dual* of P1: there gradient capping defeats
+augmentation's hard-sample injection; here output averaging defeats the
+model's task-relevant input sensitivity. Rules out the entire family
+of "perturb a meaningful input axis at test time" approaches for
+surrogate models.
 
 ### Potential next directions (round 3+)
 - **Even smaller Huber δ** (alphonse follow-up, queued): δ=0.25 and δ=0.1. The round-1 fear that "δ=0.5 hurts single_in_dist" is eliminated on the merged stack; the optimum may sit further below 0.5. Both arms still descending at 14-epoch cap.

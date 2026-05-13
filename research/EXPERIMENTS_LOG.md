@@ -99,15 +99,30 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
-### 2026-05-12 23:36 — PR #1698: Test-time augmentation (fern) — WIP (assigned)
-**Branch:** `charliepai2g24h3-fern/test-time-augmentation` | **Status: WIP**
+### 2026-05-13 01:00 — PR #1698: Test-time augmentation (fern) — **CLOSED (signal-perturbing TTA fails for regression)**
+**Branch:** `charliepai2g24h3-fern/test-time-augmentation` | **Status: CLOSED**
 
 - **Hypothesis:** At test time, evaluate the model on N AoA-jittered copies of each input and average the predictions. A model trained with AoA jitter (PR #1495) has been taught small AoA perturbations should yield similar flow fields — TTA cashes in that invariance at inference.
-- **Why this is clean:** No training changes (identical to #1495 baseline). No compositional risk like log-cosh + augment conflict. Pure ensemble. Direct paper-metric improvement.
-- **Arms:** Arm A (N=5, jitter=0.5° = 0.00873 rad — matches training); Arm B (N=9, jitter=0.75° = 0.0131 rad — slightly wider to exploit augment's noise-robust margin).
-- **Pass criterion:** test_avg/mae_surf_p (4-split safe re-eval) < 94.0 (≥0.76 absolute improvement on paper metric).
-- **Predicted Δ:** −1 to −4% on test_avg. Standard CV trick (DeiT, EfficientNet report 0.3-1.5 point gains).
-- **Artifacts:** TBD
+- **Arms:** Arm A (N=5, jitter=0.5°); Arm B (N=9, jitter=0.75°).
+- **Baseline reproduction (Step 1):** val 103.518 vs PR #1495's 103.100 (+0.4% drift inside 1% tolerance). Test (safe re-eval) 95.437 vs #1495's 94.757 (+0.68 absolute run-to-run drift — useful noise floor).
+- **Arm A (N=5):** test_avg/mae_surf_p (safe) = **95.837 (+0.40)** — fails.
+- **Arm B (N=9):** test_avg/mae_surf_p (safe) = **95.728 (+0.29)** — fails.
+- **Per-split:** uniform regression across all 4 splits, both arms. Not a noisy false-negative — TTA is genuinely neutral-to-mildly-harmful here.
+- **Pred-std diagnostic:** model produces 10-30 m²/s² variation across N jittered passes (vs MAE 85-110 m²/s²) → confirmed model IS responsive to jitter, so averages are pointing in the wrong direction, not noop.
+- **Mechanism (fern's analysis):** TTA's classification record relies on label invariance under augmentation. Here the target y(θ_AoA) MOVES with augmentation — averaging predictions of nearby AoAs pulls toward a smoothed neighborhood mean of the actual signal, which is exactly what regression-on-augmented-signal does NOT want. Training-time augmentation regularizes the model toward AoA-smooth representations (loss-shaped), but pred-time averaging blurs the signal itself (output-shaped). The two regularizations operate on different objects.
+- **Universal principle (P6 — see Universal principles section):** TTA fails when augmentation perturbs the target signal, not just nuisance variables. Mechanistic dual of P1: there gradient capping defeats augmentation's hard-sample injection; here output averaging defeats the model's task-relevant input sensitivity.
+- **Artifacts (preserved on branch):** `target/tta_eval.py` (generic reusable TTA wrapper — with N=1, jitter=0 functions as a safe re-eval). Not cherry-picked to advisor branch since `safe_test_eval.py` from #1484 already covers that.
+
+---
+
+### 2026-05-13 01:05 — PR #1770: n_layers depth scaling 5→6/7 (fern) — WIP (assigned)
+**Branch:** `charliepai2g24h3-fern/n-layers-depth-scaling` | **Status: WIP**
+
+- **Hypothesis:** Of three orthogonal architecture-scaling axes (width n_hidden, FFN-width mlp_ratio, depth n_layers), depth is the only untested on this branch. Increasing depth gives more sequential receptive-field passes over slice-attention, which should help on the high-frequency surface pressure (val_single_in_dist is consistently worst). The Transolver paper sweeps n_layers and n=5 is at the smaller end.
+- **Arms:** Arm A (n_layers=6, +20% compute); Arm B (n_layers=7, +40% compute, risk of underfitting at 30-min cap).
+- **All other knobs at #1686 winning values:** cosine T_max=14, augment, grad_clip, wd=1e-3, surf_weight curriculum 1→20, EMA=0.999, MSE loss.
+- **Pass criterion:** val_avg/mae_surf_p < 97.62 AND test_avg/mae_surf_p (safe 4-split) < 91.947.
+- **Predicted Δ:** −1 to −3% val_avg. Largest gain on val_single_in_dist (114.69 currently — sharpest pressure gradients should benefit most from depth).
 
 ---
 
