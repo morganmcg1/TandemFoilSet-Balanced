@@ -1460,3 +1460,49 @@ Student's two-seed protocol (e47tykkl + tj26of6c within 0.4 points on test_avg) 
 **Two-seed protocol adopted as standard practice.** Student's seed-confirmation rule ("within 1 point of test_avg = real, not noise") is now expected for budget-truncated runs.
 
 **Follow-up**: Assigned edward SiLU activation swap (#2327) — per-epoch-cost-neutral free architectural change. SiLU is the activation used in original Lion paper experiments.
+
+## 2026-05-13 14:35 — PR #2303: 1-epoch LR warmup (linear ramp) — CLOSED ✗
+- Branch: willowpai2g48h1-thorfinn/lr-warmup-1epoch
+- W&B run: `eyi0raxj`
+
+| Metric | Warmup-1ep | Current best (PR #2282) | Δ |
+|---|---|---|---|
+| **test_avg/mae_surf_p** | **67.3725** | **61.8457** | **+8.9% ✗** |
+| val_avg/mae_surf_p (best) | 77.58 (e17) | 70.74 (e18) | +9.7% |
+
+**Analysis**: IMPLEMENTATION BUG — warmup hypothesis neither confirmed nor falsified.
+
+Student's diagnosis (correct and precise):
+- `LinearLR(start_factor=0.1, end_factor=1.0, total_iters=1)` stepped once per epoch = step function: epoch 0 at 0.1×LR, hard 10× jump to 1.0×LR at epoch 1.
+- NOT a smooth ramp. The grad-norm spike to 114.86 at epoch 1 (vs 55.57 at epoch 0) confirms: "warmup" caused the largest grad-norm of the run, the opposite of what warmup should do.
+- Cosine schedule started 1 epoch late → model undertrained throughout.
+- Student also flagged: lr logging per-epoch (after scheduler.step()) hides the intra-epoch LR value — confirmed epoch-0 warmup was active via grad-norm signature, not logged LR.
+
+**Warmup lever requires per-iteration scheduler.step() to function correctly.** Closing this implementation; correct version would need scheduler.step() called per optimizer.step() (after accumulation boundary) with T_max for cosine in steps, not epochs.
+
+**Follow-up**: Assigned thorfinn weight decay ablation (#2343) — simpler orthogonal lever.
+
+## 2026-05-13 14:35 — PR #2208: Grad-clip sweep (clip=2/5/10/50) — CLOSED ✗
+- Branch: willowpai2g48h1-tanjiro/grad-clip-sweep-lion
+- W&B runs: `xuqwymgt` (clip=2.0), `tmarcbtj` (clip=2.0 rerun), `0w7kkvb8` (clip=5.0), `66idgzrw` (clip=10.0), `m0f7z28h` (clip=50.0)
+
+| Arm | test_avg/mae_surf_p | vs 61.85 (current) | vs 68.10 (old ref) |
+|---|---|---|---|
+| clip=2.0 (xuqwymgt) | 67.60 | +9.3% ✗ | −0.5% |
+| clip=2.0 rerun (tmarcbtj) | 69.04 | +11.6% ✗ | +0.9% |
+| clip=5.0 (0w7kkvb8) | 68.10 | +10.2% ✗ | ref |
+| clip=10.0 (66idgzrw) | 71.18 | +15.2% ✗ | +3.1% |
+| clip=50.0 (m0f7z28h) | 79.48 | +28.5% ✗ | +11.4% |
+
+Note: all runs on OLD pre-slice_num=32 stack (assigned before #2226 merged).
+
+**Analysis**: No arm beats current baseline 61.85. But the sweep definitively characterizes the clip mechanism:
+
+- **Bulk rescaling is the mechanism** (not tail clipping): clip=2.0 vs clip=50.0 = −11.9 MAE. clip=50 fire-rate drops to 3% in late training (tail-only) → essentially no-op.
+- **clip=5.0 is in the optimal plateau.** clip=2.0 showed −0.5 improvement vs clip=5.0 on this stack, but high variance (two seeds differ by 1.4 points). The improvement at clip=2.0 is not robust.
+- **Optimal clip range is [2, 5].** clip=5.0 is the safe-robust choice. clip=2.0 might be marginal-better but noisy.
+- **Fire-rate data**: at epoch 14, clip=2.0 still at 99.5% (near-permanent bulk rescaling), clip=5.0 at 84.6%, clip=10.0 at 52.7%, clip=50.0 at 3.2%.
+
+**Clip lever is fully characterized and closed.** Recording as discriminating positive: mechanism = bulk direction smoothing at fire-rate >80%, optimal threshold ~5.0, [2,5] range. No further clip tuning needed on this stack.
+
+**Follow-up**: Assigned tanjiro attention dropout=0.1 (#2344) — per-epoch-cost-neutral OOD regularizer for rc/re_rand splits.
