@@ -80,7 +80,9 @@ def decompress_pressure(y_c: torch.Tensor) -> torch.Tensor:
 # bases from scratch. B is fixed (no gradient) and initialized once.
 # ---------------------------------------------------------------------------
 
-RFF_SIGMA = 3.0        # bandwidth — controls spatial frequency range
+RFF_SIGMA_X = 3.0      # bandwidth for x (chord) — sharp gradients (PR #2206)
+RFF_SIGMA_Z = 1.5      # bandwidth for z (height) — smoother variation (PR #2206)
+RFF_SIGMA = RFF_SIGMA_X  # legacy alias (config logging)
 RFF_DIM = 64           # output embedding dim (32 cos + 32 sin)
 _rff_B = None          # initialized after device is known
 
@@ -444,10 +446,14 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 
 # RFF projection matrix: [2, 32] maps (x,z) → 64-dim embedding (32 cos + 32 sin).
 # Seeded for reproducibility across runs; B is fixed (no gradient). (PR #1657)
+# Anisotropic per-axis bandwidth: row 0 = x (chord), row 1 = z (height). (PR #2206)
 torch.manual_seed(42)
-_rff_B = torch.randn(2, RFF_DIM // 2, device=device) * RFF_SIGMA
+_rff_B = torch.randn(2, RFF_DIM // 2, device=device)
+_rff_B[0, :] = _rff_B[0, :] * RFF_SIGMA_X
+_rff_B[1, :] = _rff_B[1, :] * RFF_SIGMA_Z
 _rff_B.requires_grad_(False)
-print(f"RFF: B shape={tuple(_rff_B.shape)}, σ={RFF_SIGMA}, embed_dim={RFF_DIM}")
+print(f"RFF: B shape={tuple(_rff_B.shape)}, σ_x={RFF_SIGMA_X}, σ_z={RFF_SIGMA_Z}, embed_dim={RFF_DIM}")
+print(f"RFF: B[0,:].std()={_rff_B[0,:].std().item():.4f} (target≈{RFF_SIGMA_X}), B[1,:].std()={_rff_B[1,:].std().item():.4f} (target≈{RFF_SIGMA_Z})")
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -506,6 +512,8 @@ with open(model_dir / "config.yaml", "w") as f:
         "model_config": model_config,
         "n_params": n_params,
         "rff_sigma": RFF_SIGMA,
+        "rff_sigma_x": RFF_SIGMA_X,
+        "rff_sigma_z": RFF_SIGMA_Z,
         "rff_dim": RFF_DIM,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
@@ -618,6 +626,8 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "rff_sigma": RFF_SIGMA,
+        "rff_sigma_x": RFF_SIGMA_X,
+        "rff_sigma_z": RFF_SIGMA_Z,
         "rff_dim": RFF_DIM,
     })
     pred_abs_max_orig_worst = max(m["pred_abs_max_orig"] for m in split_metrics.values())
