@@ -204,6 +204,33 @@
 
 ---
 
+## 2026-05-13 12:27 — PR #2210: surf_weight sw=5 vs sw=7 on n_head=2 (nezuko) — MERGED NEW BEST
+
+- **Branch:** `willowpai2g24h5-nezuko/surf-weight-n-head-2`
+- **Hypothesis:** sw=5 (from #2056 on n_head=4) may stack onto n_head=2; sw=7 probes midpoint.
+- **W&B runs:** `qkyx47iv` (sw=5, winner), `2owd44pg` (sw=7)
+
+| Arm | sw | run_id | best_epoch | val_avg/mae_surf_p | test_avg/mae_surf_p | Δ vs baseline (51.11) |
+|-----|-----|--------|------------|---------------------|----------------------|----------------------|
+| 1 (winner) | 5 | `qkyx47iv` | 20 | **50.9119** | **43.6823** | **−0.39% / −1.13%** |
+| 2 | 7 | `2owd44pg` | 20 | 52.0234 | 45.2506 | +1.78% / +2.43% |
+
+**Per-test-split (sw=5 winner):**
+- single_in_dist=46.42 (−2.81 vs baseline), geom_camber_rc=58.60 (+1.16), geom_camber_cruise=27.33 (+0.59), re_rand=42.39 (−0.91)
+
+**Result:** MERGED. New best: val=50.91, test=43.68. Key findings:
+1. **sw=5 stacks onto n_head=2** — confirms the surface weighting insight transfers architectures
+2. **Non-monotonic response: sw=5 < sw=10 < sw=7** — sw=7 is a local maximum, not a linear interpolation; suggests complex loss landscape in [5,10]
+3. **Gain skewed toward in-dist splits** (single_in_dist −2.81, re_rand −0.91); marginal losses on OOD camber splits — sw=5 sharpens in-distribution surface accuracy
+4. Both arms reached 20 epochs (val still descending at cap — NOT converged)
+5. Peak GPU memory: sw=5 = 99.16 GB (96.6%) — near VRAM limit
+
+**New compound:** Fourier + MAE + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **surf_weight=5**
+
+**Nezuko reassigned:** PR #2277 — surf_weight lower probe: sw=4 (Arm1) vs sw=3 (Arm2). First data below sw=5; will determine if the loss landscape floor is at or below sw=5.
+
+---
+
 ## 2026-05-13 09:12 — PR #1961: FFN width sweep mlp_ratio=3/4 on Lion+EMA (tanjiro) — CLOSED REGRESSION
 
 - **Branch:** `willowpai2g24h5-tanjiro/mlp-ratio-expansion`

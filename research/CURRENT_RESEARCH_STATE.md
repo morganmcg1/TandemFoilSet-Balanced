@@ -1,6 +1,6 @@
 # SENPAI Research State — willow-pai2g-24h-r5
 
-- **Date:** 2026-05-13 ~12:20 UTC
+- **Date:** 2026-05-13 ~12:35 UTC
 - **Branch:** `icml-appendix-willow-pai2g-24h-r5`
 - **Most recent human directive:** Controlled 24h/48h Charlie-vs-Willow logging ablation. Per-training cap = 30 min wall-clock.
 - **Programme:** TandemFoilSet CFD surrogate. Primary metric = `val_avg/mae_surf_p` (training), `test_avg/mae_surf_p` (paper).
@@ -9,7 +9,8 @@
 
 | PR | What | val | test |
 |----|------|-----|------|
-| **#2069** | **n_head=2 on Lion+MAE+lr=1e-4** | **51.11** | **44.18** |
+| **#2210** | **sw=5 on n_head=2+Lion+MAE+lr=1e-4** | **50.91** | **43.68** |
+| #2069 | n_head=2 on Lion+MAE+lr=1e-4 | 51.11 | 44.18 |
 | #1932 | Lion lr=2e-4 (wd=1e-4) on Lion+MAE | 55.41 | 47.90 |
 | #1825 | MAE (L1) loss on Lion+EMA | 56.58 | 48.82 |
 | #1781 | Lion optimizer lr=1e-4+EMA | 61.30 | 52.68 |
@@ -19,7 +20,7 @@
 | #1357 | Huber δ=1.0 | 98.79 | 88.90 |
 | #1367 | Dropout=0.2 + clip | 98.96 | 88.74 |
 
-**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + **n_head=2**
+**Current compound:** Fourier + MAE loss + Dropout(0.2) + BF16 + EMA(0.99) + Lion(lr=1e-4, wd=1e-4) + n_head=2 + **surf_weight=5**
 
 **Note:** Every merged win has had val still descending at the 30-min cap. The model is NOT converged. n_head=2 ran 20 epochs in the same window as n_head=4's 16 — architecture unlocking faster epochs is a compound benefit.
 
@@ -30,7 +31,7 @@
 | **#2218** | **alphonse** | **slice_num sweep on n_head=2: slice_num=32 (Arm1) vs slice_num=128 (Arm2)** | **WIP — new** |
 | **#2211** | **thorfinn** | **OneCycleLR on n_head=2: pct_start=0.3 (Arm1) vs pct_start=0.1 (Arm2)** | **WIP — new** |
 | **#2216** | **frieren** | **Split loss on n_head=2: surf-MAE + vol-Huber (Arm1), surf-MAE + vol-MSE (Arm2)** | **WIP — new** |
-| **#2210** | **nezuko** | **surf_weight on n_head=2: sw=5 retest (Arm1), sw=7 midpoint (Arm2)** | **WIP — new** |
+| **#2277** | **nezuko** | **surf_weight lower probe on n_head=2+sw=5 baseline: sw=4 (Arm1) vs sw=3 (Arm2)** | **WIP — new** |
 | #2183 | edward | AdamW+EMA+MAE: lr=5e-4 (Arm1) + lr=2e-4 (Arm2) — fill missing 2×2 cell | WIP |
 | #2167 | fern | Cosine T_max + eta_min tuning at lr=2e-4: T_max=16+eta_min=1e-5 (Arm1 done, val=56.43), T_max=50+eta_min=1e-5 (Arm2 running) | WIP — both on n_head=2 (default) |
 | #2251 | tanjiro | lr sweep on n_head=2: lr=2e-4 (Arm1) vs lr=1.5e-4 (Arm2) | WIP — new |
@@ -44,6 +45,7 @@
 - **#2052 (frieren):** bs=8 — both arms regress (+7.9% / +18.4%). Step-count-limited regime; VRAM near limit. Closed; reassigned to #2216 (split-loss formulation).
 - **#2070 (edward):** Lion-no-EMA + AdamW-no-EMA ablation — both regress (+7.06 / +27.05). Mechanism reframed: Lion direction ~75%, EMA ~25%. Full-budget Lion-no-EMA = 62.47 (NOT 78 from truncated runs). Closed; reassigned to #2183 (fill AdamW+EMA+MAE 2×2 cell).
 - **#1999 (fern):** Cosine T_max=16 ± eta_min at lr=1e-4 — both regress (+11.9%/+7.5%). eta_min=0 strictly dominated by eta_min=1e-5. Closed; reassigned to #2167 at lr=2e-4.
+- **#2210 (nezuko):** sw=5 on n_head=2 — **MERGED** val=50.91, test=43.68. Non-monotonic: sw=5 < sw=10 < sw=7. Reassigned to #2277 (sw=4 vs sw=3).
 - **#2144 (askeladd):** Lion β2=0.995 wins −2.9% val on OLD compound (monotonic: 0.95<0.99<0.995). Can't merge on n_head=2 compound (was +5.3%). Closed; reassigned to #2271 (β2 sweep on n_head=2: confirm 0.995, push to 0.999).
 - **#2131 (tanjiro):** Dropout=0.3/0.1 on n_head=4 — **dropout=0.2 locally optimal** (0.3 mean val=55.49 ± 0.38 ≈ baseline 55.41 within noise; 0.1 regresses +4.3%). Under-reg signal from mlp_ratio=4 did NOT transfer to mlp_ratio=2. Closed; reassigned to #2251 (lr sweep on n_head=2).
 - **#2001 (askeladd):** Lion β1=0.95/β1=0.85 — regression both arms. Canonical β1=0.9 confirmed optimal. Closed.
@@ -66,6 +68,7 @@
 11. **BF16:** foundational (+4 epochs in 30-min window).
 12. **Dropout=0.2 confirmed locally optimal (#2131):** dropout=0.3 mean ≈ 0.2 within noise (±0.38 val), 0.1 regresses +4.3%. Under-regularization signal from mlp_ratio=4 (#1961) does NOT transfer to mlp_ratio=2; main-vs-EMA gap already moderate (~6–11) on this compound.
 13. **Lion β2=0.995 wins −2.9% on OLD compound (#2144, closed):** Monotonic ordering 0.95<0.99<0.995 at three points. β2=0.95 regresses +15.7% (asymmetric). Mechanism: longer momentum window (~200 steps) de-noises direction signal before `sign(·)` taken. Retest on n_head=2 in #2271 — direct merge candidate if win transfers.
+14. **surf_weight=5 merged (#2210):** −0.39%/−1.13% val/test vs n_head=2 baseline. Non-monotonic response: sw=5 < sw=10 < sw=7. Win concentrated in in-dist splits (single_in_dist −2.81). Lower probe (sw=3/4) in #2277.
 
 ## Priority for current wave
 
@@ -78,11 +81,11 @@
 
 **Loss:**
 - Split loss: surface-MAE + volume-Huber (#2216 frieren) — aligns train signal with eval metric; volume Huber reduces outlier noise
-- surf_weight=5/7 on n_head=2 (#2210 nezuko) — sw=5 at lr=1e-4 beat old baseline; retest on new compound
+- surf_weight lower probe (#2277 nezuko) — sw=4 vs sw=3; first data below current sw=5 minimum
 
 **Optimizer momentum:**
-- Lion β2 sweep (#2144 askeladd) — last untested Lion parameter
 - AdamW+EMA+MAE 2×2 fill (#2183 edward) — completes mechanism table
+- Lion β2 on n_head=2 (#2271 askeladd) — β2=0.995 wins on old compound; direct merge candidate if transfer confirmed
 
 **lr × architecture interaction:**
 - lr sweep on n_head=2 (#2251 tanjiro) — lr=2e-4 won at n_head=4, never retested on n_head=2; per-head dim doubled, optimal lr may have shifted
