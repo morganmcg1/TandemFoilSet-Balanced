@@ -46,6 +46,51 @@ from data import (
     pad_collate,
 )
 
+
+class Lookahead:
+    """Lookahead optimizer (Zhang et al. 2019). Wraps any base optimizer.
+    Every k inner steps, interpolates slow weights toward fast weights by alpha.
+    """
+
+    def __init__(self, optimizer, k=5, alpha=0.5):
+        self.optimizer = optimizer
+        self.k = k
+        self.alpha = alpha
+        self._counter = 0
+        self._slow_weights = [
+            [p.data.clone() for p in group["params"]]
+            for group in optimizer.param_groups
+        ]
+
+    def step(self):
+        self.optimizer.step()
+        self._counter += 1
+        if self._counter % self.k == 0:
+            for group, slow in zip(self.optimizer.param_groups, self._slow_weights):
+                for p, slow_p in zip(group["params"], slow):
+                    slow_p.add_(self.alpha * (p.data - slow_p))
+                    p.data.copy_(slow_p)
+
+    def zero_grad(self):
+        self.optimizer.zero_grad()
+
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
+    def state_dict(self):
+        return {
+            "optimizer": self.optimizer.state_dict(),
+            "slow": self._slow_weights,
+            "counter": self._counter,
+        }
+
+    def load_state_dict(self, state):
+        self.optimizer.load_state_dict(state["optimizer"])
+        self._slow_weights = state["slow"]
+        self._counter = state["counter"]
+
+
 # ---------------------------------------------------------------------------
 # Transolver model
 # ---------------------------------------------------------------------------
@@ -314,6 +359,8 @@ def write_experiment_summary(
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
         "epochs_configured": cfg.epochs,
+        "lookahead_k": cfg.lookahead_k,
+        "lookahead_alpha": cfg.lookahead_alpha,
     }
 
     for split_name, m in best_metrics["per_split"].items():
@@ -360,6 +407,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip final test evaluation
+    lookahead_k: int = 5
+    lookahead_alpha: float = 0.5
 
 
 cfg = sp.parse(Config)
@@ -405,16 +454,17 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+_base_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = Lookahead(_base_optimizer, k=cfg.lookahead_k, alpha=cfg.lookahead_alpha)
 warmup_epochs = 3
 scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1), eta_min=1e-6
+    _base_optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1), eta_min=1e-6
 )
 scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
+    _base_optimizer,
     schedulers=[
         torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.02, end_factor=1.0, total_iters=warmup_epochs
+            _base_optimizer, start_factor=0.02, end_factor=1.0, total_iters=warmup_epochs
         ),
         scheduler_cosine,
     ],
