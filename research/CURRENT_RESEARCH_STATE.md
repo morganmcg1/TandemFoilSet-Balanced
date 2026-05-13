@@ -1,11 +1,10 @@
 # SENPAI Research State
 
-- **As of:** 2026-05-13 ~05:30 UTC
-- **Track:** `willow-pai2g-24h-r4` (round 20 of the Willow 24h ablation)
+- **As of:** 2026-05-13 ~07:30 UTC
+- **Track:** `willow-pai2g-24h-r4` (round 24+ of the Willow 24h ablation)
 - **Most recent human directive:** Operator-defined isolation rules — 30-min hard cap.
 - **Primary metric:** `test_avg/mae_surf_p` (val analogue: `val_avg/mae_surf_p`). Lower is better.
-- **Current best (single-run):** val_avg/mae_surf_p = **66.1352**, test_avg/mae_surf_p = **56.8971** (seed=0, W&B `vfkbmgnp`). **Caution: this is −1.15σ lucky tail.**
-- **Current best (3-seed mean, paper-publishable):** val = **68.88 ± 2.40**, test = **59.61 ± 2.36**. Stack: OneCycleLR(max_lr=1.5e-3, pct_start=0.05) + compile + bf16 train + fp32 eval + eval_every_n_epochs=3 + slice_num=128.
+- **Current best (3-seed mean, paper-publishable):** val = **65.35 ± 3.37**, test = **56.68 ± 2.66** (PR #1379 — Smooth-L1 β=0.5, 3-seed). Best seed: val=62.3972, test=54.4758 (seed=1, W&B `mqf224bq`).
 
 ## Current research focus
 
@@ -28,13 +27,13 @@ Round 18's wd=5e-4 finding: OOD splits regress MONOTONICALLY MORE than in-dist (
 | Student | PR | Hypothesis | Status |
 |---------|-----|------------|--------|
 | alphonse | #1785 | OneCycleLR max_lr=2e-3 (LR ceiling probe) | WIP |
-| askeladd | #1379 | Smooth-L1 β=0.5 (gradient-fairness mechanism probe, rebased β=1.0 sent back) | WIP |
-| edward | #1809 | surface-only p-weight=2 (targeted vs #1383) | WIP |
-| fern | NEW | surf_weight=15 (mild upward step + 3-seed) | TBA |
-| frieren | NEW | OneCycleLR anneal_strategy=linear (cosine-tail shape probe, 3-seed) | TBA |
-| nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP |
+| askeladd | #2037 | Smooth-L1 β=0.25 — downward bracket from β=0.5, 3-seed | WIP |
+| edward | #2039 | AdamW β2=0.95 — faster 2nd-moment adaptation, 3-seed | WIP |
+| fern | #2003 | surf_weight 10 → 15 — mild upward bracket step, 3-seed | WIP |
+| frieren | #2002 | OneCycleLR anneal_strategy=cos → linear — cosine-tail shape probe, 3-seed | WIP |
+| nezuko | #1916 | weight_decay=2e-5 (5× LOWER, tests OOD-asymmetry hypothesis) | WIP — pinged 2026-05-13 |
 | tanjiro | #1965 | batch_size=4 → 8 (gradient quality vs step-count probe, 3-seed) | WIP |
-| thorfinn | — | OneCycleLR pct_start=0.10 (3-seed, bracket midpoint + in-dist regression test) | NEW |
+| thorfinn | #1944 | OneCycleLR pct_start=0.10 (3-seed, bracket midpoint + in-dist regression test) | WIP |
 
 ## Key learnings so far
 
