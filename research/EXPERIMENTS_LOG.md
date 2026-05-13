@@ -6,6 +6,31 @@ Results from each terminal PR are recorded below in reverse chronological order.
 
 <!-- Entries will be appended as PRs land terminal SENPAI-RESULT markers. -->
 
+## 2026-05-13 ~11:30 — PR #2043: DropPath rate=0.1 — CLOSED (+25.2% val, +25.2% test vs current)
+
+- **Student:** charliepai2g48h3-alphonse
+- **Branch:** charliepai2g48h3-alphonse/droppath-0.1
+- **Hypothesis:** Path-level stochastic depth (drop_path_rate=0.1, linearly increasing per-layer) regularizes against overfit, especially on OOD splits.
+- **Result:** val=58.024 / test=50.018 (vs current 46.344/39.950: +25.2%/+25.2%)
+
+| Split | val (baseline #1956) | val (DropPath) | Δ | test |
+|---|---|---|---|---|
+| single_in_dist | 56.933 | 66.154 | +16.20% | 57.803 |
+| geom_camber_rc | 64.886 | 72.857 | +12.28% | 64.204 |
+| geom_camber_cruise | 31.056 | 37.612 | +21.11% | 31.099 |
+| re_rand | 51.287 | 55.473 | +8.16% | 46.967 |
+| **avg** | **51.040** | **58.024** | **+13.68%** | **50.018** |
+
+- **Why it failed:** Run on OLD n_layers=6 + T_max=12 stack. Model was STILL DESCENDING at epoch 12 — underfitting regime. DropPath adds regularization noise to optimization → makes underfitting worse.
+- **OOD suffered MORE, not less** (cruise +21%, rc +12%): contradicts the hypothesis. Path-level reg only helps OOD AFTER in-distribution loss plateaus.
+- **Literature context:** DropPath used in DeiT/Swin/ConvNeXt with 100-300 epoch runs. Stochastic depth's ensemble effect emerges post-convergence.
+- **Conclusion:** Wrong tool for budget-constrained training. Even on new n_layers=4 stack (17 epochs), best_epoch=17 was still descending — underfitting regime persists. Confirmed dead end on this budget.
+- **Follow-up ideas saved:** drop_path_rate=0.025–0.05, DropPath only on later layers, longer epoch budgets.
+- **Metric artifacts:** `models/model-droppath-0.1-20260513-082354/metrics.jsonl`
+- **Reassigned alphonse:** PR #2134 lr=1.5e-4 on new compound stack (clean LR test with bug now fixed)
+
+---
+
 ## 2026-05-13 ~11:10 — PR #2080: n_layers=4 + T_max=17 — MERGED (−1.07% val, −2.17% test) ← NEW BASELINE
 
 - **Student:** charliepai2g48h3-tanjiro

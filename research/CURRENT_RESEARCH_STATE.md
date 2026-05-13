@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 ~11:20
+- **Date:** 2026-05-13 ~11:30
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r3`
 - **Target base:** `icml-appendix-charlie` (no W&B logging arm)
 - **Latest direction from human team:** none — controlled 24h/48h Charlie-vs-Willow logging ablation.
@@ -70,6 +70,7 @@
 - **mlp_ratio=8 + GeGLU**: +5.95% (PR #1872 — gating wins outright; fc2 capacity expansion beyond 256 channels adds noise pathways; mlp_ratio=4 optimal)
 - **mlp_ratio=2**: +9.95% vs PR #1996 baseline (PR #2007, n_layers=6 stack — 30% param savings, ~10% per-epoch speedup; speedup too small to unlock new epoch budget; mlp_ratio axis now bracketed: 2 worse, 4 optimal, 8 worse)
 - **grad-clip max_norm=1.0**: +14.1% vs current baseline (PR #2040 — grad norms 20–140, max_norm=1 fires 100% of batches; too aggressive; Lion sign-update already handles magnitude; dead end for this stack)
+- **DropPath rate=0.1**: +25.2% vs current baseline (PR #2043 — model is underfitting at 12-17 epoch budgets; DropPath needs 100-300 epochs to extract ensemble benefit; OOD suffered MORE not less because reg only helps OOD post-convergence)
 - **CosineAnnealingLR eta_min=1e-5**: +12.05% vs current baseline (PR #1920 — LR floor above 0 conflicts with T_max=12 which cleanly decays to 0; T_max=12 strictly dominates)
 - **Lion WD=3e-2**: +0.06% (PR #1925 — WD valley confirmed flat [1e-4→3e-2]; WD=1e-1 bends up; entire WD axis exhausted on this stack)
 - **Lion 2-epoch warmup**: mechanism conflict with T_max=12 (PR #1790 — warmup costs 17% of 12-epoch budget; cold-start problem already addressed by T_max=12 cosine; student stale on rerun)
@@ -102,11 +103,11 @@
 | tanjiro | #2107 | n_layers=3 + T_max=22 (depth sweep step 3) | NEW n_layers=4 |
 | thorfinn | #2108 | slice_num=32 + n_layers=4 (slice sweep step 2) | NEW n_layers=4 |
 | nezuko | #2109 | surf_weight=2 + n_layers=4 (compound both mechanisms) | NEW n_layers=4 |
+| alphonse | #2134 | lr=1.5e-4 on n_layers=4 stack (first clean LR test) | NEW n_layers=4 |
 | edward | #2048 | surf_weight=5 on n_layers=5+T_max=14 | n_layers=5 (slightly old) |
 | fern | #2062 | n_layers=5 + slice_num=48 compound verification | n_layers=5 (now stale stack) |
 | frieren | #2006 | Lion lr=8e-5 (lr bug now fixed in advisor!) | OLD n_layers=6 |
 | askeladd | #2038 | n_head=2 | OLD n_layers=6 |
-| alphonse | #2043 | DropPath rate=0.1 | OLD n_layers=6 |
 
 **Recently merged:**
 - tanjiro #2080: n_layers=4 + T_max=17 (−1.07% val) ← **NEW BASELINE 46.344/39.950** (lr bug also fixed)
@@ -114,6 +115,7 @@
 - edward #1995: n_layers=5 + T_max=14 (−6.98% val)
 
 **Recently closed:**
+- alphonse #2043: DropPath rate=0.1 (+25.2% vs current) — DropPath needs 100-300 epoch budgets; model is underfitting at 12-17 epochs so reg strictly hurts
 - thorfinn #2040: grad-clip max_norm=1.0 (+14.1% vs current) — max_norm=1 is 25× too small for this stack; grad norms are 20–140; Lion sign-update already handles magnitude
 - nezuko #2029: surf_weight=2 on OLD n_layers=6 stack (+6.32% vs current) — direction confirmed strong; immediately retested on new stack (PR #2109)
 - tanjiro #2007: mlp_ratio=2 (+9.95% vs current) — speedup too small for new epoch unlock
