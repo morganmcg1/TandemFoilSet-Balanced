@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-05-13 17:00 UTC — Round 39
+
+### PR #2194 alphonse: SGD(momentum=0.9, nesterov=True, lr=2e-3) — CLOSED (LOSS, optimizer-family axis fully closed)
+
+- **Branch:** `charliepai2g48h5-alphonse/sgd-momentum-lr2e-3`
+- **Hypothesis:** Optimizer-FAMILY swap from AdamW (which had closed 4-LOSS-for-4 within-family) to SGD-momentum. Test whether AdamW's adaptive 2nd-moment rescaling is load-bearing for L1+bf16+Transformer at this scale.
+- **Results:**
+
+| Metric | SGD-momentum | Baseline #2173 (n_head=2) | Δ |
+|---|---|---|---|
+| `val_avg/mae_surf_p` | **78.6405** | 49.8053 | **+57.9% LOSS** |
+| `test_avg/mae_surf_p` | **69.0819** | 43.5396 | **+58.7% LOSS** |
+| Epochs reached | 44/50 | 47/50 | -6.4% |
+| Time per epoch | 40.95 s | 37.5 s | +9.2% |
+| Best epoch | 44 (terminal) | 47 (terminal) | — |
+
+**Per-split val breakdown — uniform-additive regression:**
+
+| Split | baseline | SGD | Δ abs | Δ % |
+|---|---|---|---|---|
+| `val_single_in_dist` | 46.2915 | 84.2276 | +37.94 | +82% |
+| `val_geom_camber_rc` | 67.4416 | 96.1330 | +28.69 | +43% |
+| `val_geom_camber_cruise` | 32.5963 | 59.3718 | +26.78 | +82% |
+| `val_re_rand` | 52.8918 | 74.8295 | +21.94 | +41% |
+
+**Diagnostic finding (student's analysis, confirmed):** SGD did NOT diverge — no NaN, no Inf. Trained cleanly with warmup-3-cosine. Monotone descent from ep6 (179.7) to ep44 (78.6). Problem is convergence RATE: SGD reaches val ~80 in 44 epochs where AdamW reaches val ~50. Slope is real but ~2× too slow. Linear extrapolation: ep50 ~70-74 — still 40-50% above baseline.
+
+**Mechanistic conclusion (confirmed):** AdamW's adaptive 2nd-moment rescaling is load-bearing for this regime. Even though L1's gradient is mostly ±1 in sign, the 2nd-moment estimate tracking gradient FREQUENCY still provides meaningful per-parameter step-size info that SGD-momentum's global scaling cannot recover from within the 30-min budget.
+
+**Per-split pattern is uniform-additive** (Δ 22-38 across splits, no smoking-gun split). Pattern is NOT bimodal (in-dist worst hit, opposite of averaging-style) and NOT broadcast-scalar (val_re_rand not the worst). Consistent with "optimizer change is global, not split-specific."
+
+**Optimizer-family axis fully closed 6-LOSS-for-6:**
+
+| Probe | Direction | Δ vs baseline | Pattern |
+|---|---|---|---|
+| lr-UP +50% (PR #1774) | within-AdamW | LOSS +16% | uniform regression |
+| lr-DOWN -25% (PR #1997) | within-AdamW | LOSS +11% | 4th averaging-style bimodal |
+| β1=0.95 (PR #2093) | within-AdamW | LOSS +7.5% | momentum-lag overshoots cosine |
+| β2=0.95 (PR #1845) | within-AdamW | LOSS +4.4% | shorter 2nd-moment memory amplifies L1 sign-flip |
+| amsgrad=True (PR #2155) | within-AdamW | LOSS +9.5% | max-bound permanent v_max inflation |
+| SGD-momentum (PR #2194) | FAMILY swap | LOSS +58% | convergence-rate inadequacy |
+
+**AdamW(lr=5e-4, β1=0.9, β2=0.999, no amsgrad) is sharply pinned** as the only viable optimizer for this regime.
+
+**9th distinct failure-mode taxon added: optimizer-family convergence-rate inadequacy** — uniform-additive regression from a non-adaptive optimizer (distinct from prior optimizer failure-mode taxa: momentum-lag β1=0.95, optimizer-statistic over-conservativism amsgrad).
+
+Closing as LOSS.
+
+### PR #2179 tanjiro: DropPath p_max=0.1 retry-3 — CLOSED (STALE, pod-stall pattern, 4th time)
+
+- **Branch:** `charliepai2g48h5-tanjiro/droppath-retry3`
+- **Status:** STALE — no commits since assignment (10:25 UTC → 17:00 UTC = ~6.5h). 4th consecutive stale for tanjiro DropPath (after #1976, #2083, #2179). Matches frieren RMSNorm pattern (took 3 attempts before #2139 picked up). Reassigned as #2280 retry-4 on fresh branch via REST.
+
+### Round 39 assignment summary
+
+| PR | Student | Hypothesis | Round |
+|---|---|---|---|
+| #2283 | alphonse | Squared ReLU (ReLU²) at all 3 MLP sites — Primer-style sharp activation, opposite-direction probe of closed SiLU LOSS | round-39 |
+| #2280 | tanjiro | DropPath p_max=0.1 retry-4 (on LayerScale-gated branches) | round-39 |
+
+Idle students: 0. All 8 students in-flight.
+
+Closed-axis additions:
+- **Optimizer-family axis** — closed 6-LOSS-for-6 (AdamW lr-UP/DOWN/β1/β2/amsgrad + SGD-momentum). AdamW defaults pinned.
+
+Failure-mode taxonomy refinement: 9th distinct taxon added:
+9. **Optimizer-family convergence-rate inadequacy (1× — SGD-momentum):** uniform-additive regression from non-adaptive optimizer; trains cleanly but ~2× too slow to compete within wall-clock budget.
+
+---
+
 ## 2026-05-13 16:30 UTC — Round 38 addendum: LayerScale merge
 
 ### PR #2195 askeladd: LayerScale init=1e-4 (CaiT-style learnable residual gain γ) — MERGED (WIN, new baseline)
