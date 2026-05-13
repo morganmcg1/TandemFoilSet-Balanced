@@ -1129,3 +1129,17 @@ So n_head=8 is not a pure inductive bias test — it's (a) finer granularity AND
 **Decision:** Cannot merge — above new 76.24 baseline. Sent back to rerun with batch_size=2 + lr=7e-4 to test stacking. The combined config (more steps + bigger steps) is untested and could compound or interfere.
 
 **New assignments:** alphonse #2036 (batch-size-1).
+
+## 2026-05-13 07:55 — PR #2014: [onecycle-lr] OneCycleLR(max_lr=8e-4) replacing SequentialLR — **SENT BACK**
+- Student branch: `charliepai2g48h4-nezuko/onecycle-lr`
+- Result on old bs=4 HEAD: val=79.70 — beats old baseline 82.56 (−3.46%) but loses to new baseline 76.24 (+3.46).
+
+| Metric | OneCycleLR (this PR) | Old #1812 | New #1972 |
+|---|---|---|---|
+| val_avg/mae_surf_p | 79.70 | 82.56 (−3.46%) | 76.24 (+3.46) |
+| test_avg/mae_surf_p | 71.01 | 74.13 (−4.21%) | 66.85 (+4.16) |
+
+- Best epoch 18, val still descending. LR trace: peak 7.997e-4 at ep2 (pct_start=0.1), final 3.2e-6.
+- Clean optimization: grad_norm_max=37 ep1 → ~1 by ep18.
+
+**Decision:** Sent back for rerun on new bs=2 HEAD. With bs=2's 2x steps/epoch, the OneCycleLR curve will get 2x resolution. If it compounds, new winner. If overshoots, informs LR ceiling.
