@@ -362,3 +362,30 @@ Measured at n_layers=5 (student branch was behind #1875 merge; grad-clip code ap
 - **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 192 --n_layers 3 --epochs 50`
   (grad-clip max_norm=2.5 now baked into advisor branch train.py; no extra flag needed)
 - **All subsequent experiments should target val < 52.6406 and test < 44.9791** as the merge threshold.
+
+## 2026-05-13 12:05 — PR #2023: frieren n_hidden=192 → 224 width push
+
+**New best — 13th compound improvement (width scaling on 11-compound stack)**
+
+- **val_avg/mae_surf_p:** 53.2494 (measured against PR #1953 baseline of 55.7634; **−4.51%** at time of review)
+- **test_avg/mae_surf_p:** **46.6004** (**−3.11%** at time of review)
+
+**Per-split test (3/4 splits clearly improve; in_dist within noise):**
+
+| Split | mae_surf_p | vs PR #1953 |
+|-------|----------:|----------:|
+| `test_single_in_dist` | 53.2544 | +0.37 (noise, ~0.7%) |
+| `test_geom_camber_rc` | 58.8796 | −2.90 (−4.70%) |
+| `test_geom_camber_cruise` | 29.6831 | −1.47 (−4.72%) |
+| `test_re_rand` | 44.5845 | −1.98 (−4.25%) |
+
+- **Config (as measured):** Full 11-compound stack + n_hidden=192→**224**, grad-clip max_norm=5.0 (PRE-#1982 merge), T_max=50, n_layers=3, 1.26M params.
+- **NOTE: EMPTY DIFF MERGE** — win is CLI-only. Advisor branch defaults still have original n_hidden value. All subsequent student reproduce commands must specify `--n_hidden 224 --n_layers 3 --epochs 50`.
+- **Epochs:** 29/50 in 30-min cap. EMA val still descending at **−1.46/epoch** at termination (strongly epoch-saturated). Best epoch 29/29 — every epoch was a new EMA best.
+- **EMA-live gap:** −6.18 (tightened from −8.32 at #1953 — wider model is easier to track).
+- **W&B run:** `80b6pnb9`
+- **Param count:** 1,263,119 (1.26M), throughput ≈ same as n_hidden=192 (~62 s/epoch).
+- **Reproduce:** `cd target && python train.py --agent <student> --wandb_name "<name>" --n_hidden 224 --n_layers 3 --epochs 50`
+  (grad-clip max_norm=2.5 now in train.py defaults from PR #1982; no extra flag needed for that)
+- **COMBINED STATE (12+13): n_hidden=224 + grad-clip=2.5 is UNMEASURED.** PR #1982 was measured at n_hidden=192 (val=52.64); PR #2023 was measured at grad-clip=5.0 (val=53.25). Both mechanisms beat the 11-compound baseline independently. Predicted combined val ≈ 50–52 if mechanisms are additive. **The next priority is to directly measure val at n_hidden=224 + grad-clip=2.5 + T_max=50.**
+- **All subsequent experiments should target val < 52.6406 and test < 44.9791** (from PR #1982 — the current direct measurement). The combined n_hidden=224 + grad-clip=2.5 state will supersede this once directly measured.
