@@ -8,30 +8,50 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **66.32** | PR #1639 (merged 2026-05-13) — Huber δ=0.5 loss on Lion+BF16 stack (13 epochs) |
-| **test_avg/mae_surf_p** | **61.14** | PR #1639 — all 4 splits finite |
-| Peak VRAM | 32.95 GB | PR #1639 — BF16, batch=4 |
-| s/epoch | ~101 s | PR #1639 — BF16, 22 min total for 13 epochs |
+| **val_avg/mae_surf_p** | **56.90** | PR #1880 (merged 2026-05-13) — Huber δ=0.3 on Lion+BF16+epochs=16 stack |
+| **test_avg/mae_surf_p** | **53.20** | PR #1880 — all 4 splits finite |
+| Peak VRAM | 32.95 GB | PR #1880 — BF16, batch=4 |
+| s/epoch | ~102 s | PR #1880 — 16 epochs ≈ 27 min total |
 
-### Per-split val (PR #1639, epoch 13, δ=0.5 winning arm)
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 71.66 |
-| val_geom_camber_rc | 82.99 |
-| val_geom_camber_cruise | 46.06 |
-| val_re_rand | 64.56 |
-| **val_avg** | **66.32** |
-
-### Per-split test (PR #1639, epoch 13 best checkpoint, δ=0.5)
+### Per-split val (PR #1880, epoch 16, δ=0.3 winning arm)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 62.73 |
-| test_geom_camber_rc | 69.80 |
-| test_geom_camber_cruise | 56.26 |
-| test_re_rand | 55.79 |
-| **test_avg** | **61.14** |
+| val_single_in_dist | 60.26 |
+| val_geom_camber_rc | 75.20 |
+| val_geom_camber_cruise | 37.01 |
+| val_re_rand | 55.11 |
+| **val_avg** | **56.90** |
+
+### Per-split test (PR #1880, epoch 16 best checkpoint, δ=0.3)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 52.32 |
+| test_geom_camber_rc | 64.24 |
+| test_geom_camber_cruise | 49.15 |
+| test_re_rand | 47.10 |
+| **test_avg** | **53.20** |
+
+**Reproduce:**
+```bash
+cd target/ && python train.py --epochs 16 --experiment_name huber_delta0_3_ep16 --agent <student>
+```
+(Huber δ=0.3 + Lion lr=3e-4 + wd=6e-5 are defaults; requires `--epochs 16` flag)
+
+## 2026-05-13 06:00 — PR #1880: Huber δ scan δ=0.3 and δ=0.2 on epochs=16 stack (MERGED)
+
+- **val_avg/mae_surf_p: 56.8955** (↓ 14.2% from 66.32 — largest single-PR gain this round after Lion)
+- **test_avg/mae_surf_p: 53.2015** (↓ 13.0% from 61.14 — all 4 splits finite)
+- **Peak VRAM: 32.95 GB** (unchanged); total wall-clock ~27 min for both arms
+- **Metric artifacts:** `models/model-huber_delta0_3-20260513-035824/metrics.jsonl` (winner δ=0.3); `models/model-huber_delta0_2-20260513-050217/metrics.jsonl` (δ=0.2, val=56.94 / test=53.23 — essentially tied)
+- **What changed:** δ threshold in Huber loss: `torch.where(abs_err < δ, 0.5*abs_err**2, δ*abs_err - 0.5*δ**2)` — δ=0.5 → δ=0.3 in train.py.
+- **Why it worked:** The monotonic improvement trend from δ=1.0 (val 67.41) → δ=0.5 (val 66.32) continued to δ=0.3 with a much larger jump. Smaller δ caps the linear regime more aggressively, reducing gradient signal from larger residuals (extreme-Re tandem samples near surfaces). The jump from 0.5→0.3 is much larger than 1.0→0.5 because 0.3 starts clipping the dominant outlier mass rather than just the tails. The curve flattened between δ=0.3 and δ=0.2 (0.04 val difference), confirming 0.3 is near the optimal floor. Per-domain analysis: δ=0.2 slightly wins the tail-heavy single/raceCar splits; δ=0.3 wins cruise/re_rand splits with smaller residual magnitudes (over-saturation into linear regime at δ=0.2 degrades gradient signal for low-std domains). NOTE: 13→16 epoch contribution is included in this result (both arms ran 16 epochs on the Huber stack).
+- **Baseline configuration delta:** δ=0.5 → δ=0.3 in train.py Huber loss.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --experiment_name huber_delta0_3_ep16 --agent <student>
+  ```
 
 ## 2026-05-13 03:51 — PR #1639: Huber loss (δ=0.5) on Lion stack (MERGED)
 
