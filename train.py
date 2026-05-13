@@ -409,6 +409,8 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 class Config:
     lr: float = 5e-4
     weight_decay: float = 1e-4
+    adamw_beta1: float = 0.9
+    adamw_beta2: float = 0.95  # was default 0.999 — faster variance EMA for short runs
     batch_size: int = 4
     surf_weight: float = 10.0
     p_weight: float = 2.0  # per-channel weight on pressure (dim 2) in sq_err
@@ -466,7 +468,12 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=cfg.lr,
+    weight_decay=cfg.weight_decay,
+    betas=(cfg.adamw_beta1, cfg.adamw_beta2),
+)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS)
 
 run = wandb.init(
