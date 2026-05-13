@@ -768,3 +768,20 @@ Live model at epoch 17: test=104.70. EMA at same epoch: test=81.63. EMA is +28% 
 - Hypothesis: replace single-cycle cosine with `CosineAnnealingWarmRestarts(T_0=10, T_mult=2)` → cycle 1 = 10 ep, restart at ep 12, cycle 2 = 20 ep. LR jumps from ~0 back to 5e-4 at restart.
 - Mechanism: tests exploration via periodic LR restart, complementary to edward #1833 (longer single cycle) and alphonse #1791 (higher peak LR).
 - Targets compile-stack baseline 71.44.
+
+## 2026-05-13 03:25 — PR #1792: frieren n_layers=3 (closed without result; reassigned as #1875 v2)
+
+- Branch: `willowpai2g48h5-frieren/n-layers-3` (closed at 03:16:26 UTC)
+- W&B run: no terminal result posted; student left a rebase notice at 02:56 acknowledging compile-stack baseline shift but never posted final metrics
+- Hypothesis: capacity-down on depth axis; complement to slice-axis test (askeladd #1841).
+- **No data recovered.** PR was closed before student posted results comment — may have been killed by host harness, abandoned, or completed without posting.
+- **Decision: REASSIGN as new PR.** The hypothesis is high-value (the depth-axis capacity-down direction has not been tested on the compile stack) and worth a clean retry.
+
+## 2026-05-13 03:25 — PR #1875: frieren n_layers=3 v2 (reassigned, compile-stack)
+
+- Branch: `willowpai2g48h5-frieren/n-layers-3-v2-compile`
+- Hypothesis: reduce n_layers 5→3 on the compile stack. Expected throughput gain ~25-30% per epoch → ~38 epochs in budget. Tests whether the 4/4 capacity-up failure pattern inverts under capacity-down.
+- Companion to askeladd #1841 (slice_num=48): covers the second dimension of the capacity-down matrix.
+- Targets compile-stack baseline 71.44.
+
+Note: GraphQL rate limit hit at 5000/5000 (reset ~1h); used REST API workaround for PR creation and labels.

@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date:** 2026-05-13 03:10
+- **Date:** 2026-05-13 03:25
 - **Track:** `willow-pai2g-48h-r5` on advisor branch `icml-appendix-willow-pai2g-48h-r5`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-48h-r5`
 - **Students (8, each 1× 96GB GPU):** alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn
@@ -41,7 +41,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 | askeladd | #1841 | slice_num=48 — capacity-down on slice axis (compile-stack test) | Architecture / throughput | WIP | #1743 surf=5 closed (sweep bracketed); pivoted to capacity-down direction (slice axis). Complements frieren's n_layers=3 |
 | edward | #1833 | `--epochs 40` (T_max=40) — convert throughput headroom into more training | LR schedule / training duration | WIP | #1763 compile MERGED (new best val=71.44); val still descending at cap with T_max=30 starving LR |
 | fern | #1805 | Adaptive Huber β annealing (rebase+retest on compile stack) | Loss shape / schedule | WIP-REBASE | Pre-compile result was small win (val=84.46 vs 85.09, 3/4 splits); sent back for compile-stack retest |
-| frieren | #1792 | n_layers=3 (shallower) | Architecture (depth, throughput angle) | WIP | #1442 v2 n_hidden=192 closed: 4/4 capacity-up regress; testing capacity-down for throughput gain |
+| frieren | #1875 | n_layers=3 v2 — fresh retry on compile-stack baseline | Architecture (depth, throughput angle) | WIP | #1792 closed without result; depth-axis capacity-down test on compile stack (companion to askeladd #1841 slice axis) |
 | nezuko | #1806 | LR warmup 2 epochs (extend to test more cold-start EMA compression) | LR schedule | WIP | #1672 warmup 1ep MERGED; extend warmup to see if EMA catch-up gain scales |
 | tanjiro | #1784 | max_norm=10 (rebase+retest on compile stack) | Gradient stability | WIP-REBASE | Pre-compile result was clean win on all 4 splits (val=84.97 vs 85.92); sent back to retest on compile stack |
 | thorfinn | #1858 | SGDR cosine warm restarts (T_0=10, T_mult=2) | LR schedule / exploration | WIP | #1783 Lookahead closed (competes with EMA); pivot to LR schedule exploration via periodic restarts |
