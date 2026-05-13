@@ -467,6 +467,11 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Training-only Gaussian jitter sigma on NACA-1 shape-descriptor channels
+    # (input dims 15-17 = camber, position, thickness for front foil). Applied
+    # in normalized input space, disabled during validation/test. Targets the
+    # NACA-shape OOD axis tested by val_geom_camber_rc / val_geom_camber_cruise.
+    naca_jitter_sigma: float = 0.02
 
 
 cfg = sp.parse(Config)
@@ -611,6 +616,18 @@ with open(model_dir / "config.yaml", "w") as f:
 ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
 print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
 
+# NACA-1 shape-descriptor jitter: training-only Gaussian noise on input dims
+# 15-17 (camber, position, thickness for front foil). Applied in normalized
+# input space, disabled at val/test. Targets the NACA-shape OOD axis tested
+# by val_geom_camber_rc and val_geom_camber_cruise.
+if cfg.naca_jitter_sigma > 0:
+    print(
+        f"NACA-1 jitter: channels 15-17 (camber, position, thickness), "
+        f"sigma={cfg.naca_jitter_sigma} in normalized input space, training only"
+    )
+else:
+    print("NACA-1 jitter: disabled (naca_jitter_sigma=0)")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 slice_entropy_ep1: list[list[float]] | None = None
@@ -655,6 +672,13 @@ for epoch in range(MAX_EPOCHS):
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
+            # Training-only jitter on NACA-1 shape descriptors (channels 15-17).
+            # Targets the NACA-shape OOD axis (val_geom_camber_{rc,cruise}).
+            if cfg.naca_jitter_sigma > 0:
+                x_norm = x_norm.clone()
+                x_norm[..., 15:18] = x_norm[..., 15:18] + (
+                    torch.randn_like(x_norm[..., 15:18]) * cfg.naca_jitter_sigma
+                )
             y_norm = (y - stats["y_mean"]) / stats["y_std"]
             log_re_norm = x_norm[:, 0, 13:14]
             scale = rescale_head(log_re_norm)
@@ -835,6 +859,8 @@ for epoch in range(MAX_EPOCHS):
         "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
         "loss_type": "huber_relative_l2_channel_weighted",
+        "naca_jitter_sigma": cfg.naca_jitter_sigma,
+        "naca_jitter_channels": [15, 16, 17],
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
