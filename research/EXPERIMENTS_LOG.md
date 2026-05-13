@@ -2,6 +2,83 @@
 
 ---
 
+## 2026-05-13 07:00 — PR #1966: [ema-beta-0p99-rampup] EMA β=0.99 + Karras rampup — SENT BACK FOR REBASE
+
+- **Branch**: charliepai2g24h1-frieren/ema-beta-0p99-rampup
+- **Hypothesis**: EMA β=0.99 with Karras-style linear rampup fixes the β=0.999 window-too-long failure (PR #1917). Rampup denominator=0.1×MAX_EPOCHS×steps_per_epoch so β_eff starts near 0 and asymptotes to 0.99 over training.
+- **Status**: SENT BACK — beat old baseline (29.0776 vs 29.8463, -2.6%), but run was on old stack (no p_weight=5). New baseline is 29.2179 (from #1614). Needs rebase to verify compounding.
+
+| Metric | EMA (ep29) | Live (ep29) | Old baseline (#1599) | Δ vs old |
+|--------|-----------|-------------|---------------------|----------|
+| ema_val_avg/mae_surf_p | **29.0776** | 29.1616 | 29.8463 | **−2.6%** |
+| ema_test_avg/mae_surf_p | **25.0978** | — | 26.1005 | **−3.8%** |
+| vs new baseline (29.2179) | **−0.48%** | — | — | (borderline, needs rebase) |
+
+**Per-split ema val (best ep29):**
+
+| Split | ema val | baseline (#1599) | Δ |
+|-------|---------|-----------------|---|
+| single_in_dist | 29.44 | 30.20 | −2.5% |
+| geom_camber_rc | 42.20 | 43.11 | −2.1% |
+| geom_camber_cruise | 14.09 | 14.54 | −3.1% |
+| re_rand | 30.58 | 31.54 | −3.0% |
+
+**β_eff rampup (key epochs)**: ep1=0.18, ep5=0.63, ep10=0.86, ep15=0.94, ep20=0.97, ep25=0.98, ep29=0.987. Slower ramp than predicted because denominator used MAX_EPOCHS=50 (not actual 30 epochs). Advisory for rebase: set denominator to 30 epochs.
+
+**Artifact**: `models/model-charliepai2g24h1-frieren-ema-beta-0p99-rampup-20260513-061015/metrics.jsonl`
+
+**Analysis**: Mechanism validated — β=0.99 rampup works. EMA is 0.084 better than live at ep29 (the smoothing dividend). All 4 val splits and 4 test splits improved. re_rand showed largest absolute drop (noise from Re variance is smoothed by EMA). The hypothesis is confirmed: β=0.99 keeps the effective window narrow enough that EMA tracks live closely while still smoothing jitter.
+
+---
+
+## 2026-05-13 07:00 — PR #1964: [surf-weight-15] Raise surf_weight 10→15 — SENT BACK FOR REBASE
+
+- **Branch**: charliepai2g24h1-thorfinn/surf-weight-15
+- **Hypothesis**: surf_weight=15 (1.5× more surface emphasis than baseline) tests if the asymmetric response (-7: bad, +15: maybe good) means there's headroom above surf_weight=10.
+- **Status**: SENT BACK — mild positive on old baseline (29.6254 vs 29.8463, -0.74%) but new baseline is 29.2179. Needs rebase to verify orthogonal compounding with p_weight=5.
+
+| Metric | surf=15 | Old baseline (surf=10) | Δ |
+|--------|---------|----------------------|---|
+| val_avg/mae_surf_p | 29.6254 | 29.8463 | **−0.74%** |
+| test_avg/mae_surf_p | 25.6508 | 26.1005 | **−1.72%** |
+| vs new baseline (29.2179) | +1.36% (regression) | — | (needs rebase) |
+
+**Sensitivity curve so far**: surf=7 (+2.94% BAD) | surf=10 (29.8463 baseline) | surf=15 (−0.74%) | surf=30 (askeladd pending)
+
+**Analysis**: Asymmetric response confirmed — down hurts, up helps mildly. The direction is correct but the magnitude (−0.74% val, −1.72% test) is at noise floor. surf_weight and p_weight target orthogonal axes (region: surf-vs-vol; channel: p-vs-velocity) — possible compounding.
+
+---
+
+## 2026-05-13 07:00 — PR #1963: [coord-jitter-aug] Spatial coord jitter std=0.005 — SENT BACK FOR REBASE
+
+- **Branch**: charliepai2g24h1-tanjiro/coord-jitter-aug
+- **Hypothesis**: Adding std=0.005 Gaussian noise to spatial coordinates (training only) forces the model to learn from slightly perturbed meshes, improving OOD robustness.
+- **Status**: SENT BACK — mild positive on old baseline (29.6143 vs 29.8463, -0.78% val, -1.51% test) but new baseline is 29.2179. Needs rebase to verify compounding.
+
+| Metric | coord-jitter | Old baseline (#1599) | Δ | vs new baseline |
+|--------|-------------|---------------------|---|-----------------|
+| val_avg/mae_surf_p | 29.6143 | 29.8463 | −0.78% | +1.36% (needs rebase) |
+| test_avg/mae_surf_p | 25.7063 | 26.1005 | −1.51% | +0.41% (needs rebase) |
+
+**Analysis**: Acting as generic regularization rather than rc-targeted augmentation (re_rand test −4.06% was largest delta, not rc). single_in_dist val/test diverge (+noise). Test signal more credible than val (larger set). Mechanism is input-domain augmentation — orthogonal to loss weighting in #1614.
+
+---
+
+## 2026-05-13 07:00 — PR #1952: [rescale-head-2ch] Drop Ux from ReScaleHead — CLOSED
+
+- **Branch**: charliepai2g24h1-fern/rescale-head-2ch
+- **Hypothesis**: Drop Ux channel (near-identity, corr=+0.637) from ReScaleHead, leaving only Uy and p.
+- **Status**: CLOSED — rebased run regressed +4.63% val / +2.20% test vs new baseline (29.2179).
+
+| Metric | 2ch rebased | New baseline (#1614) | Δ |
+|--------|------------|---------------------|---|
+| val_avg/mae_surf_p | 30.5712 | 29.2179 | **+4.63% (BAD)** |
+| test_avg/mae_surf_p | 26.1663 | 25.6024 | **+2.20% (BAD)** |
+
+**Reasoning for close**: With p_weight=5 shifting gradient mass to pressure, the Ux channel was providing a balancing function. When dropped, velocity channels lose their stability anchor. The original 2ch win (vs #1599 stack) did not survive the new loss weighting — the mechanism is loss-stack-dependent and the 3ch ReScaleHead is the correct architecture.
+
+---
+
 ## 2026-05-13 06:15 — PR #1614: [per-channel-loss-weights] Up-weight pressure channel (p_weight=5) — MERGED
 
 - **Branch**: charliepai2g24h1-edward/per-channel-loss-weights
