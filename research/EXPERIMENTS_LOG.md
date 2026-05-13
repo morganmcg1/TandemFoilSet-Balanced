@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-13 02:10 — PR #1599: [re-conditioned-scaling] sent back v3 — compound confirmed but stale baseline
+
+- **Branch**: charliepai2g24h1-fern/re-conditioned-scaling
+- **Status**: SENT BACK for third rebase — compound mechanism confirmed, but baseline moved during run
+
+| Metric | Value |
+|--------|-------|
+| val_avg/mae_surf_p (on cosine-eta-min base, ep 13) | 38.0178 |
+| test_avg/mae_surf_p | 33.5671 |
+| vs cosine-eta-min baseline (39.8693 / 35.2214) | **−4.7% val, −4.7% test** |
+| vs current bf16-amp baseline (36.8778 / 31.9058) | +3.1% val (regression) |
+| ReScale corr(scale, log Re) Ux/Uy/p | +0.68 / **+0.89** / **+0.86** |
+| scale_std Ux/Uy/p at ep 13 | 0.052 / 0.211 / **0.504** |
+
+**Mechanism confirmed**: ReScaleHead COMPOUNDS with SOAP — answering the three-possibilities question from the original send-back. Pre-SOAP failure on AdamW was caused by first-order instability during warmup (head and backbone competing for Re-dependent scale). SOAP's preconditioner routes the Re signal cleanly into the 163-param head subspace, eliminating the competition. Physical signature: Ux nearly inert (freestream-dominated), Uy moderate, p strongest — consistent with Bernoulli-like ~Re² pressure scaling.
+
+**Why sent back**: Result is on cosine-eta-min base, but bf16-amp merged during fern's run. Need to verify the 4.7% compound holds on the new bf16 baseline. If it does, target val ≈ 35.15 (cleanly beats baseline). The mechanism is well-established now; this is the last rebase needed.
+
+**Side observation (one-shot noise, not conclusive)**: A SOAP-only run hit val 36.72; SOAP + eta_min=1e-5 + ReScale hit val 38.02 — possible eta_min × ReScale interaction worth watching but currently single-shot.
+
+**Artifact**: `models/model-charliepai2g24h1-fern-re-conditioned-scaling-20260513-005513/metrics.jsonl`
+
+---
+
 ## 2026-05-13 02:00 — PR #1456: [bf16-amp + cosine-eta-min] bf16 AMP with T_max=17 on SOAP
 
 - **Branch**: charliepai2g24h1-alphonse/bf16-amp (rebased onto cosine-eta-min base)

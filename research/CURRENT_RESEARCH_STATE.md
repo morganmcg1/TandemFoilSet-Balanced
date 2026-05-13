@@ -51,7 +51,7 @@ Test avg 31.91 (all 4 splits).
 |----|---------|------|--------|----------|-------|
 | #1457 | askeladd | `surf-weight-50` | WIP (v2) | MEDIUM | surf_weight=30 on SOAP base; needs rebase to bf16 base |
 | #1467 | nezuko | `more-slices-128` | WIP | MEDIUM | slice_num=128 on SOAP base; needs rebase |
-| #1599 | fern | `re-conditioned-scaling` | WIP (rebasing) | HIGH | ReScaleHead; SOAP compound test; still training |
+| #1599 | fern | `re-conditioned-scaling` | WIP (rebasing v3) | HIGH | **Compound confirmed on SOAP base (-4.7%), retesting on bf16 baseline** |
 | #1614 | edward | `per-channel-loss-weights` | WIP | MEDIUM | p_weight=5 on SOAP base; orthogonal |
 | #1668 | thorfinn | `soap-relax-clip` | WIP | **HIGH** | grad_clip 1.0→5.0; unlocks SOAP step magnitude |
 | #1704 | frieren | `ema-weights` | WIP | **HIGH** | EMA β=0.999 of SOAP weights; zero wall-clock cost |
