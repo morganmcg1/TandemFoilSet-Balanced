@@ -218,6 +218,70 @@ class Transolver(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Lookahead optimizer (Zhang et al. 2019)
+# ---------------------------------------------------------------------------
+
+
+class Lookahead:
+    """Lookahead optimizer: wraps a base optimizer with slow-fast 2-loop
+    interpolation. Every k inner steps, slow weights pull toward fast weights
+    by alpha, then fast weights snap back to slow.
+
+        slow ← slow + alpha * (fast - slow);  fast ← slow
+
+    Validation/checkpointing should use slow weights (paper Section 3,
+    Zhang et al. 2019). Use ``swap_to_slow()`` / ``restore_fast()`` around
+    eval blocks; ``step()`` keeps the underlying optimizer trajectory intact.
+    """
+
+    def __init__(self, base_optimizer, k: int = 5, alpha: float = 0.5):
+        self.base = base_optimizer
+        self.k = k
+        self.alpha = alpha
+        self._step_count = 0
+        self._slow_weights: list[list[torch.Tensor]] = []
+        for group in self.base.param_groups:
+            slow_group = [p.data.clone().detach() for p in group["params"]]
+            self._slow_weights.append(slow_group)
+
+    @torch.no_grad()
+    def step(self):
+        self.base.step()
+        self._step_count += 1
+        if self._step_count % self.k == 0:
+            for group_idx, group in enumerate(self.base.param_groups):
+                for p_idx, p in enumerate(group["params"]):
+                    slow = self._slow_weights[group_idx][p_idx]
+                    slow.add_(p.data - slow, alpha=self.alpha)
+                    p.data.copy_(slow)
+
+    def zero_grad(self, set_to_none: bool = True):
+        self.base.zero_grad(set_to_none=set_to_none)
+
+    @property
+    def param_groups(self):
+        return self.base.param_groups
+
+    @torch.no_grad()
+    def swap_to_slow(self) -> list[list[torch.Tensor]]:
+        """Push slow weights into live params; return cached fast weights."""
+        cached_fast: list[list[torch.Tensor]] = []
+        for group_idx, group in enumerate(self.base.param_groups):
+            cached_fast_group: list[torch.Tensor] = []
+            for p_idx, p in enumerate(group["params"]):
+                cached_fast_group.append(p.data.clone())
+                p.data.copy_(self._slow_weights[group_idx][p_idx])
+            cached_fast.append(cached_fast_group)
+        return cached_fast
+
+    @torch.no_grad()
+    def restore_fast(self, cached_fast: list[list[torch.Tensor]]) -> None:
+        for group_idx, group in enumerate(self.base.param_groups):
+            for p_idx, p in enumerate(group["params"]):
+                p.data.copy_(cached_fast[group_idx][p_idx])
+
+
+# ---------------------------------------------------------------------------
 # Evaluation helpers
 # ---------------------------------------------------------------------------
 
@@ -480,22 +544,28 @@ def amp_ctx_factory():
 
 print(f"AMP: {'bfloat16' if torch.cuda.is_available() else 'disabled (no CUDA)'}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+base_optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+LOOKAHEAD_K = 5
+LOOKAHEAD_ALPHA = 0.5
+optimizer = Lookahead(base_optimizer, k=LOOKAHEAD_K, alpha=LOOKAHEAD_ALPHA)
+print(f"Lookahead optimizer: AdamW wrapped with k={LOOKAHEAD_K}, alpha={LOOKAHEAD_ALPHA}; slow-fast 2-loop variance reduction (Zhang et al. 2019)")
 warmup_epochs = 3
+# Scheduler operates on the underlying base AdamW (Lookahead delegates step
+# but schedulers read/write base.param_groups directly).
 scheduler = torch.optim.lr_scheduler.SequentialLR(
-    optimizer,
+    base_optimizer,
     schedulers=[
         torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+            base_optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
         ),
         torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
+            base_optimizer, T_max=max(MAX_EPOCHS - warmup_epochs, 1)
         ),
     ],
     milestones=[warmup_epochs],
 )
 print(f"Scheduler: LinearLR(0.1->1.0 over {warmup_epochs} epochs) -> CosineAnnealingLR(T_max={max(MAX_EPOCHS - warmup_epochs, 1)})")
-print(f"LR check ep0: {optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
+print(f"LR check ep0: {base_optimizer.param_groups[0]['lr']:.6f} (expect {0.1 * cfg.lr:.6f})")
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -514,6 +584,7 @@ with open(model_dir / "config.yaml", "w") as f:
 
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
+val_avg_history: list[float] = []  # per-epoch slow-weight val_avg/mae_surf_p for smoothness diagnostic
 train_start = time.time()
 
 for epoch in range(MAX_EPOCHS):
@@ -553,12 +624,13 @@ for epoch in range(MAX_EPOCHS):
         n_batches += 1
 
     scheduler.step()
-    lr_now = optimizer.param_groups[0]['lr']
+    lr_now = base_optimizer.param_groups[0]['lr']
     epoch_vol /= max(n_batches, 1)
     epoch_surf /= max(n_batches, 1)
 
-    # --- Validate ---
+    # --- Validate using SLOW weights (Lookahead canonical: paper Sec 3) ---
     model.eval()
+    cached_fast = optimizer.swap_to_slow()
     split_metrics = {
         name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
         for name, loader in val_loaders.items()
@@ -575,9 +647,12 @@ for epoch in range(MAX_EPOCHS):
             "val_avg/mae_surf_p": avg_surf_p,
             "per_split": split_metrics,
         }
+        # Checkpoint captures slow weights (currently swapped into live params)
         torch.save(model.state_dict(), model_path)
         tag = " *"
+    optimizer.restore_fast(cached_fast)
 
+    val_avg_history.append(avg_surf_p)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
@@ -591,6 +666,7 @@ for epoch in range(MAX_EPOCHS):
         "val_splits": split_metrics,
         "is_best": tag == " *",
         "compile_active": compile_active,
+        "lookahead_inner_step_count": optimizer._step_count,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
@@ -603,17 +679,82 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+# ---------------------------------------------------------------------------
+# Lookahead terminal diagnostics
+#  - Drift: mean(|fast - slow|) / mean(|fast|) using TERMINAL live (fast) vs slow
+#  - Head-to-head val: terminal-fast val vs terminal-slow val (last-epoch slow
+#    is already in metrics for the final epoch; fast we compute fresh)
+#  - Trajectory smoothness: std(val_avg) over last 10 epochs
+# ---------------------------------------------------------------------------
+print("\n--- Lookahead terminal diagnostics ---")
+drifts: list[float] = []
+norms: list[float] = []
+for group_idx, group in enumerate(optimizer.base.param_groups):
+    for p_idx, p in enumerate(group["params"]):
+        slow = optimizer._slow_weights[group_idx][p_idx]
+        drifts.append((p.data - slow).abs().mean().item())
+        norms.append(p.data.abs().mean().item())
+mean_drift = sum(drifts) / max(len(drifts), 1)
+mean_norm = sum(norms) / max(len(norms), 1)
+drift_ratio = mean_drift / max(mean_norm, 1e-12)
+print(f"  drift: mean(|fast - slow|) = {mean_drift:.6f}")
+print(f"  norm:  mean(|fast|)        = {mean_norm:.6f}")
+print(f"  ratio: drift / norm        = {drift_ratio:.4f}")
+
+if val_avg_history:
+    tail = val_avg_history[-10:]
+    tail_mean = sum(tail) / len(tail)
+    tail_var = sum((v - tail_mean) ** 2 for v in tail) / len(tail)
+    tail_std = tail_var ** 0.5
+    print(f"  trajectory smoothness: std(val_avg) over last {len(tail)} epochs = {tail_std:.4f} (mean={tail_mean:.4f})")
+else:
+    tail_std = float("nan")
+    tail_mean = float("nan")
+
+# Terminal fast-weight val (head-to-head with the slow val that was logged on
+# the last epoch). Live params are CURRENTLY fast (we restored at epoch end).
+fast_terminal_val_splits: dict | None = None
+fast_terminal_val_avg: dict | None = None
+if val_avg_history:
+    print("\n  Terminal fast-weight val (head-to-head):")
+    model.eval()
+    fast_terminal_val_splits = {
+        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
+        for name, loader in val_loaders.items()
+    }
+    fast_terminal_val_avg = aggregate_splits(fast_terminal_val_splits)
+    print(f"    fast val_avg/mae_surf_p = {fast_terminal_val_avg['avg/mae_surf_p']:.4f}")
+    print(f"    slow val_avg/mae_surf_p = {val_avg_history[-1]:.4f} (last epoch)")
+    for name in VAL_SPLIT_NAMES:
+        print_split_metrics(name, fast_terminal_val_splits[name])
+
+append_metrics_jsonl(metrics_jsonl_path, {
+    "event": "lookahead_terminal",
+    "k": optimizer.k,
+    "alpha": optimizer.alpha,
+    "step_count": optimizer._step_count,
+    "drift_mean": mean_drift,
+    "norm_mean": mean_norm,
+    "drift_ratio": drift_ratio,
+    "tail_val_std_last10": tail_std,
+    "tail_val_mean_last10": tail_mean,
+    "fast_terminal_val_avg": fast_terminal_val_avg,
+    "fast_terminal_val_splits": fast_terminal_val_splits,
+    "slow_terminal_val_avg_surf_p": val_avg_history[-1] if val_avg_history else None,
+})
+
 # --- Test evaluation + local summary ---
 if best_metrics:
-    print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
+    print(f"\nBest val (slow weights): epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
 
-    # LayerScale diagnostic: report final per-block gamma means (best-checkpoint weights)
+    # LayerScale diagnostic: report final per-block gamma means
+    # (best-checkpoint stores Lookahead SLOW weights from the best-val epoch).
     _inner = getattr(model, "_orig_mod", model)
     _gamma_log = {"event": "layerscale_gammas", "epoch": int(best_metrics["epoch"]), "blocks": []}
-    print("\nLayerScale final gammas (best-checkpoint weights):")
+    print("\nLayerScale final gammas (best-checkpoint = slow weights):")
     for _i, _blk in enumerate(_inner.blocks):
         _ga_mean = _blk.gamma_attn.detach().float().mean().item()
         _ga_abs = _blk.gamma_attn.detach().float().abs().mean().item()
