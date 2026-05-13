@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 ~04:00 (merged #1814 alphonse lr-1e-3+asinh −3.40% → new baseline 77.1419; assigned alphonse #1836 lr-1.5e-3)
+- **Last updated:** 2026-05-13 ~04:15 (closed #1835 nezuko asinh-gain-0.5 +1.96% dead end; assigned nezuko #1911 warmup-3-epochs)
 - **Advisor branch:** `icml-appendix-charlie-pai2g-48h-r2`
 - **Launch context:** Charlie no-W&B logging ablation, 48h fleet wall-clock, 30 min cap per training execution, local JSONL metrics only
 - **Most recent human research directive:** none received
@@ -32,16 +32,17 @@ Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, 
 
 | PR | Student | Slug | Axis | Epoch setting | vs. Baseline |
 |----|---------|------|------|------|---|
-| #1836 | alphonse | `lr-1.5e-3` | LR ceiling probe: 1e-3→1.5e-3 on asinh+warmup4 | **--epochs 14** ✓ | WIP — just assigned |
-| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (localize optimum) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target) |
+| #1895 | alphonse | `lr-1.5e-3` | LR ceiling probe: 1e-3→1.5e-3 on asinh+warmup4 | **--epochs 14** ✓ | WIP — just assigned |
+| #1911 | nezuko | `warmup-3-epochs` | warmup_epochs 4→3 (bracket below, pairs with frieren's warmup=5) | **--epochs 14** ✓ | WIP — just assigned |
+| #1813 | frieren | `warmup-5-epochs` | Warmup 4→5 epochs (bracket above winner) | **--epochs 14** ✓ | WIP — in progress (notified of 77.14 target) |
 | #1815 | askeladd | `node-dropout-0.9` | Mesh node dropout 0.9 (rebasing onto asinh base) | **--epochs 14** ✓ | WIP — rebasing to confirm stacking |
 | #1817 | tanjiro | `charbonnier-eps-1e-3` | Charbonnier loss eps=1e-3 (smooth-near-zero L1) | **--epochs 14** ✓ | WIP — in progress |
 | #1820 | thorfinn | `weight-decay-5e-3` | Weight decay 1e-4→5e-3 (L2 regularization) | **--epochs 14** ✓ | WIP — in progress |
-| #1835 | nezuko | `asinh-gain-0.5` | ASINH_GAIN 1.0→0.5 (wider linear region, milder compression) | **--epochs 14** ✓ | WIP — in progress |
 | #1657 | fern | `rff-pos-encoding` | Fourier RFF (space_dim 2→64) | --epochs 20 ⚠️ | WIP — stale (notified of 77.14 target) |
 | #1421 | edward | `surf-weight-25` | Surface weight 10→25 (stale) | --epochs 20 ⚠️ | WIP — stale |
 
 ### Closed as dead ends (this round)
+- #1835 nezuko asinh-gain-0.5: +1.96% vs 79.8623 (asymmetric axis — GAIN<1 erodes bulk-redistribution without enough rc benefit)
 - #1426 frieren hidden-192-head-6: +12.8% worse
 - #1429 nezuko slice-128-mlp-4: +6.97% worse, overflow
 - #1517 askeladd ema-0.99-adaptive: neutral (+0.40%)
@@ -60,10 +61,11 @@ Test: test_avg=67.6796 (test_single=78.491, test_rc=83.212, test_cruise=44.225, 
 ## Current research focus
 
 1. **LR axis — ceiling probe:**
-   - **#1836 alphonse lr-1.5e-3**: probe LR ceiling above 1e-3. Strict monotone descent at 1e-3 (no peak-LR spike with asinh) suggests headroom. Next ceiling bracket.
+   - **#1895 alphonse lr-1.5e-3**: probe LR ceiling above 1e-3. Strict monotone descent at 1e-3 (no peak-LR spike with asinh) suggests headroom. Next ceiling bracket.
 
 2. **Schedule axis — warmup-duration sweep:**
-   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch (43% peak position). Helps localize warmup optimum.
+   - **#1813 frieren warmup-5-epochs**: bracket above the winning 4-epoch (43% peak position).
+   - **#1911 nezuko warmup-3-epochs**: bracket below the winning 4-epoch. Together with frieren, localizes warmup optimum under the new lr=1e-3 canonical config.
 
 3. **Data augmentation axis:**
    - **#1815 askeladd node-dropout-0.9**: rebasing onto asinh base to confirm stacking. Pre-asinh: val_single −1.97%, val_re_rand −1.96% (memorization regularization).

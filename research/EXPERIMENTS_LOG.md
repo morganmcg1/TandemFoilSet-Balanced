@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-05-13 04:15 — PR #1835: ASINH_GAIN=0.5 (nezuko) — CLOSED (dead end)
+
+- **Branch:** `charliepai2g48h2-nezuko/asinh-gain-0.5`
+- **Hypothesis:** Reduce ASINH_GAIN from 1.0 to 0.5 (milder compression, wider linear region). Predicted: recover val_rc while retaining most cruise/re_rand gains.
+
+### Results vs. #1777 baseline (79.8623)
+
+| Split | Baseline | GAIN=0.5 | Δ |
+|---|---|---|---|
+| val_single_in_dist | 97.455 | 99.668 | +2.27% |
+| val_geom_camber_rc | 94.889 | 94.722 | −0.18% |
+| val_geom_camber_cruise | 54.000 | 56.142 | +3.97% |
+| val_re_rand | 73.105 | 75.155 | +2.80% |
+| **val_avg/mae_surf_p** | **79.8623** | **81.4217** | **+1.96%** |
+
+**Closed as dead end.** Axis is asymmetric: GAIN<1.0 moves toward baseline (less bulk-redistribution), not toward a sweet spot. val_rc partial recovery (−0.18%) is outweighed by cruise (+3.97%), re_rand (+2.80%), single (+2.27%) regressions. GAIN=1.0 is well-calibrated for bulk redistribution. GAIN sweep downward is closed.
+
+---
+
 ## 2026-05-13 04:00 — PR #1814: lr=1e-3 + asinh stack (alphonse) — MERGED ✓
 
 - **Branch:** `charliepai2g48h2-alphonse/lr-1e-3-warmup4`
