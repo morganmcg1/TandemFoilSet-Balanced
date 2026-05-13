@@ -1,6 +1,42 @@
 # BASELINE — icml-appendix-charlie-pai2g-24h-r2
 
-## Current best — PR #1849 (2026-05-13)
+## Current best — PR #1751 (2026-05-13)
+
+| Metric | Value |
+|---|---|
+| **val_avg/mae_surf_p** | **85.9338** |
+| val_single_in_dist/mae_surf_p | 108.0187 |
+| val_geom_camber_rc/mae_surf_p | 96.3656 |
+| val_geom_camber_cruise/mae_surf_p | 61.1470 |
+| val_re_rand/mae_surf_p | 78.2041 |
+| test_avg/mae_surf_p (bs=4) | NaN† |
+| test_single_in_dist/mae_surf_p (bs=1) | 97.6661 |
+| test_geom_camber_rc/mae_surf_p (bs=1) | 88.6578 |
+| test_geom_camber_cruise/mae_surf_p (bs=1) | 51.3197 |
+| test_re_rand/mae_surf_p (bs=1) | 72.9518 |
+| test_avg (bs=1 clean eval) | **77.6488** |
+| best_epoch | 14 (of 15; timeout-cut at 30 min) |
+
+†bs=4 NaN on test_geom_camber_cruise is the known inference-time attention numerics edge case. bs=1 eval is fully clean via eval_bs1.py.
+
+**Artifacts:** `models/model-charliepai2g24h2-frieren-tighter-cosine-t-max-12-20260513-055432/`
+
+**Change from PR #1849 floor:** Changed `CosineAnnealingLR(T_max=47)` → `T_max=12` to align the cosine half-cycle with the actual ~12-epoch training window. With T_max=47, by epoch 14 the LR had decayed only 23% (still near peak ~7e-4). With T_max=12, by epoch 14 the LR had decayed 92% (5.1e-5). The missing late-LR decay phase was the bulk of remaining headroom. val_avg improved **−18.7%** (105.68 → 85.93). bs=1 test improved **−18.3%** (94.98 → 77.65). The gain is concentrated in epochs 12–14.
+
+**Config run:**
+```bash
+cd target && python train.py \
+  --lr 7.5e-4 \
+  --epochs 15 \
+  --agent charliepai2g24h2-frieren \
+  --experiment_name "charliepai2g24h2-frieren/tighter-cosine-t-max-12"
+```
+
+Model: Transolver n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2 (~0.66M params)
+Optimizer: AdamW lr=7.5e-4, wd=1e-4, batch_size=4, chan_w=[1,1,5], surf_weight=10, 3-ep warmup + cosine(**T_max=12**, eta_min=1e-6), gradient-clip max_norm=1.0, **Huber β=0.3**, fp32
+Peak VRAM: 42.11 GB. Wall clock: 30 min → 14 epochs.
+
+## Previous best — PR #1849 (2026-05-13)
 
 | Metric | Value |
 |---|---|
