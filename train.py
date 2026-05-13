@@ -158,7 +158,9 @@ class PhysicsAttention(nn.Module):
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
         torch.nn.init.orthogonal_(self.in_project_slice.weight)
-        self.to_q = nn.Linear(dim_head, dim_head, bias=False)
+        # H65: Q projection learnable bias in no-WD 10x lr group.
+        self.to_q = nn.Linear(dim_head, dim_head, bias=True)
+        nn.init.zeros_(self.to_q.bias)
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
@@ -580,15 +582,20 @@ print(
 # diversification, and default lr=5e-4 under-trains them.
 freq_params = [p for n, p in fourier_enc.named_parameters() if n == "freqs"]
 layer_scale_params = [p for n, p in model.named_parameters() if "layer_scale" in n]
-other_params = [p for n, p in model.named_parameters() if "layer_scale" not in n]
+# H65: Q-projection biases in their own no-WD 10x lr group.
+q_bias_params = [p for n, p in model.named_parameters() if "to_q.bias" in n]
+other_params = [
+    p for n, p in model.named_parameters()
+    if "layer_scale" not in n and "to_q.bias" not in n
+]
 assert len(freq_params) == 1 and freq_params[0].numel() == N_FREQS, (
     f"Expected 1 freq tensor with {N_FREQS} elems, "
     f"got {len(freq_params)} with {[p.numel() for p in freq_params]}"
 )
 # H54: param-group consistency check — every model param ends up in exactly one of
-# (layer_scale_params, other_params); freq_params come from fourier_enc separately.
+# (layer_scale_params, q_bias_params, other_params); freq_params come from fourier_enc separately.
 all_model_p = {id(p): p for p in model.parameters()}
-all_assigned_p = {id(p): p for group in [layer_scale_params, other_params] for p in group}
+all_assigned_p = {id(p): p for group in [layer_scale_params, q_bias_params, other_params] for p in group}
 assert set(all_model_p.keys()) == set(all_assigned_p.keys()), (
     f"Mismatch: {len(all_model_p)} model params, {len(all_assigned_p)} assigned"
 )
@@ -598,7 +605,17 @@ assert n_layer_scale == expected_layer_scale, (
     f"Expected {expected_layer_scale} LayerScale params "
     f"({len(model.blocks)} blocks x 2 paths x {model_config['n_hidden']} channels), got {n_layer_scale}"
 )
-assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in other_params) == (
+n_q_bias = sum(p.numel() for p in q_bias_params)
+# Each PhysicsAttention has to_q = nn.Linear(dim_head, dim_head); dim_head = hidden_dim / n_heads = 128 / 4 = 32.
+# So per-block bias = 32, total across 5 blocks = 160 (NOT the 640 = 5x128 mentioned in the PR body,
+# which assumed to_q was Linear(hidden_dim, inner_dim) — actual code uses per-head Linear(dim_head, dim_head)).
+expected_q_bias = len(model.blocks) * (model_config["n_hidden"] // model_config["n_head"])
+assert n_q_bias == expected_q_bias, (
+    f"Expected {expected_q_bias} Q-bias params "
+    f"({len(model.blocks)} blocks x dim_head={model_config['n_hidden'] // model_config['n_head']}), got {n_q_bias}"
+)
+print(f"[H65] Q-bias param count: {n_q_bias}")
+assert sum(p.numel() for p in freq_params) + sum(p.numel() for p in layer_scale_params) + sum(p.numel() for p in q_bias_params) + sum(p.numel() for p in other_params) == (
     sum(p.numel() for p in model.parameters()) + sum(p.numel() for p in fourier_enc.parameters())
 )
 optimizer = torch.optim.AdamW(
@@ -606,6 +623,7 @@ optimizer = torch.optim.AdamW(
         {"params": other_params, "lr": cfg.lr, "weight_decay": cfg.weight_decay},
         {"params": freq_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
         {"params": layer_scale_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
+        {"params": q_bias_params, "lr": cfg.lr * 10.0, "weight_decay": 0.0},
     ],
     lr=cfg.lr,
     weight_decay=cfg.weight_decay,
@@ -617,7 +635,9 @@ print(
     f"freqs lr={optimizer.param_groups[1]['lr']:.2e} wd={optimizer.param_groups[1]['weight_decay']:.0e} "
     f"({sum(p.numel() for p in freq_params)} params), "
     f"layerscale lr={optimizer.param_groups[2]['lr']:.2e} wd={optimizer.param_groups[2]['weight_decay']:.0e} "
-    f"({n_layer_scale} params, expected {expected_layer_scale})"
+    f"({n_layer_scale} params, expected {expected_layer_scale}), "
+    f"q_bias lr={optimizer.param_groups[3]['lr']:.2e} wd={optimizer.param_groups[3]['weight_decay']:.0e} "
+    f"({n_q_bias} params, expected {expected_q_bias})"
 )
 print(f"[H40] Initial freqs: {fourier_enc.freqs.detach().cpu().tolist()}")
 # H19: linear warm-up over the first epoch (batches), then cosine annealing for the remaining 14.
@@ -796,6 +816,14 @@ for i, b in enumerate(model.blocks):
     final_layer_scale_stats[f"final/layer_scale_attn_l{i}_std"] = float(b.layer_scale_attn.std().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_mean"] = float(b.layer_scale_mlp.mean().item())
     final_layer_scale_stats[f"final/layer_scale_mlp_l{i}_std"] = float(b.layer_scale_mlp.std().item())
+# H65: final per-block Q-bias stats — checks Outcome B (std > 0.01 = optimizer used freedom)
+# vs Outcome D (std < 0.001 = bias never activated).
+final_q_bias_stats: dict[str, float] = {}
+for i, b in enumerate(model.blocks):
+    qb = b.attn.to_q.bias.detach()
+    final_q_bias_stats[f"final/q_bias_l{i}_mean"] = float(qb.mean().item())
+    final_q_bias_stats[f"final/q_bias_l{i}_std"] = float(qb.std().item())
+    final_q_bias_stats[f"final/q_bias_l{i}_absmax"] = float(qb.abs().max().item())
 # H40: final learned freqs values (compare to dyadic init 1, 2, 4, 8, 16, 32).
 final_freqs = fourier_enc.freqs.detach().cpu().tolist()
 init_freqs = [2.0**k for k in range(N_FREQS)]
@@ -809,7 +837,7 @@ freqs_summary = {
 }
 append_metrics_jsonl(
     metrics_jsonl_path,
-    {"event": "final", **final_layer_scale_stats, **freqs_summary},
+    {"event": "final", **final_layer_scale_stats, **freqs_summary, **final_q_bias_stats},
 )
 print("Final LayerScale stats (end-of-training):")
 for i in range(len(model.blocks)):
@@ -818,6 +846,13 @@ for i in range(len(model.blocks)):
         f"std={final_layer_scale_stats[f'final/layer_scale_attn_l{i}_std']:.4f}  "
         f"mlp mean={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_mean']:.4f} "
         f"std={final_layer_scale_stats[f'final/layer_scale_mlp_l{i}_std']:.4f}"
+    )
+print("[H65] Final Q-bias stats (end-of-training):")
+for i in range(len(model.blocks)):
+    print(
+        f"  block {i}: q_bias mean={final_q_bias_stats[f'final/q_bias_l{i}_mean']:+.4f} "
+        f"std={final_q_bias_stats[f'final/q_bias_l{i}_std']:.4f} "
+        f"|max|={final_q_bias_stats[f'final/q_bias_l{i}_absmax']:.4f}"
     )
 print("[H40] Final learned freqs vs dyadic init:")
 for k in range(N_FREQS):
