@@ -420,6 +420,8 @@ class Config:
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
     pos_freq_bands: int = 0          # Fourier positional encoding bands (0 = disabled, NeRF-style γ(x))
     pos_freq_surface_only: bool = False  # Gate Fourier features by is_surface mask (surface-only PE)
+    n_hidden: int = 128              # Transolver hidden dim (model_config.n_hidden)
+    n_head: int = 4                  # Transolver attention heads (model_config.n_head)
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -472,9 +474,9 @@ model_config = dict(
     space_dim=2,
     fun_dim=X_DIM - 2,
     out_dim=3,
-    n_hidden=128,
+    n_hidden=cfg.n_hidden,
     n_layers=5,
-    n_head=4,
+    n_head=cfg.n_head,
     slice_num=64,
     mlp_ratio=2,
     pos_freq_bands=cfg.pos_freq_bands,
