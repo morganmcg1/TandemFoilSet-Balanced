@@ -432,7 +432,7 @@ model = Transolver(**model_config).to(device)
 n_params = sum(p.numel() for p in model.parameters())
 print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
-model = torch.compile(model, mode="default", dynamic=True)
+model = torch.compile(model, mode="max-autotune-no-cudagraphs", dynamic=True)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 steps_per_epoch = max(1, len(train_loader))
