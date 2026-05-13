@@ -24,6 +24,7 @@ winner sets the first numeric reference value.
 - **Gradient clipping**: `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=25.0)` immediately before `optimizer.step()`; the pre-clip total_norm is also logged to metrics.jsonl as `train/last_grad_norm` _(added 2026-05-12 by PR #1637)_
 - **Fourier coord positional encoding**: `FourierCoordEnc(n_freqs=6)` applied after `(x - x_mean)/x_std` normalization; replaces the 2 raw `(x, z)` coord dims with 24 Fourier features (`sin/cos` at frequencies `2^k · π`, `k=0..5`). `fun_dim = 4 * 6 + 22 - 2 = 44`. _(updated 2026-05-13 by PR #1772, was L=4 in #1548)_
 - **LayerScale**: per-channel learnable γ_l vectors `nn.Parameter(torch.ones(hidden_dim) * 0.1)` (init=0.1) on both attn and MLP residual branches in each `TransolverBlock`; `fx = γ_attn ⊙ attn(ln_1(fx)) + fx` and `fx = γ_mlp ⊙ mlp(ln_2(fx)) + fx`. CaiT-style (Touvron et al. 2021). _(added 2026-05-13 by PR #1799)_
+- **Per-channel surf-loss weighting**: `surf_loss = mean([0.5, 0.5, 2.0] * |y_pred - y| / y_std)` — Ux and Uy weighted 0.5, pressure weighted 2.0 (4× ratio). Applied in both training loop and `evaluate_split`. `vol_loss` remains at implicit `[1, 1, 1]`. _(added 2026-05-13 by PR #1711)_
 - **Batch size**: `4`
 - **Epochs**: configured `50`, capped by `SENPAI_TIMEOUT_MINUTES = 30`
 - **Sampler**: `WeightedRandomSampler` with equal-domain weights from `meta.json`
@@ -35,6 +36,30 @@ winner sets the first numeric reference value.
 - All metrics computed in physical (denormalized) units in `data/scoring.py`.
 
 ## Current best result
+
+### 2026-05-13 05:57 — PR #1711 (`charliepai2g24h4-alphonse/surf-ch-weight-h18`)
+
+Per-channel surf-loss weighting `[w_Ux, w_Uy, w_p] = [0.5, 0.5, 2.0]` applied to the `surf_loss` computation (and its mirror in `evaluate_split`). `vol_loss` weighting left at `[1, 1, 1]`. Mass-preserving (channel sum = 3.0); zero new parameters. The 4× pressure-to-velocity ratio tilts the gradient toward pressure MAE without touching the prediction map — reversing three prior failed prediction-side attempts (#1610, #1636, #1675).
+
+- **`val_avg/mae_surf_p`** = **75.391** (best @ epoch 14; −3.67% vs #1799)
+- **`test_avg/mae_surf_p` (4-split, NaN-safe)** = **66.608** (−4.71% vs #1799)
+- **Per-split val** `mae_surf_p` at the best val checkpoint:
+  - `val_single_in_dist` = 82.287 (−3.50% vs #1799)
+  - `val_geom_camber_rc` = 85.631 (−3.84% vs #1799)
+  - `val_geom_camber_cruise` = 58.630 (−6.34% vs #1799)
+  - `val_re_rand` = 75.015 (−1.46% vs #1799)
+- **Per-split test** `mae_surf_p` at the best val checkpoint:
+  - `test_single_in_dist` = 72.554 (−6.80% vs #1799)
+  - `test_geom_camber_rc` = 74.210 (−6.64% vs #1799)
+  - `test_geom_camber_cruise` = 50.877 (−1.60% vs #1799)
+  - `test_re_rand` = 68.792 (−2.52% vs #1799)
+- **All 4 val splits + all 4 test splits improve.** Largest gain on `val_geom_camber_cruise` (−6.34%) — the split with the lowest absolute baseline pressure error benefits most from capacity reallocation.
+- **Per-channel mechanism confirmed**: Ux/Uy MAE regresses +12–25% as expected; p MAE improves 1.5–6.3%. Since Ux/Uy appear neither in `val_avg/mae_surf_p` nor `test_avg/mae_surf_p`, this is the intended trade.
+- **Δ vs PR #1799 baseline (78.260 / 69.903)**: **−3.67%** on val_avg, **−4.71%** on 4-split test.
+- **Compound progress**: #1397 → #1552 → #1611 → #1637 → #1548 → #1772 → #1799 → **#1711** → val_avg improved from 100.957 to **75.391** = **−25.3% over 8 merges**.
+- **Param count**: 669,271 (unchanged — zero new parameters).
+- **Metric artifacts**: `models/model-charliepai2g24h4-alphonse-surf-ch-weight-h18-20260513-050507/metrics.jsonl` and `metrics.yaml`
+- **Reproduce**: `cd target/ && python train.py --agent charliepai2g24h4-alphonse --experiment_name charliepai2g24h4-alphonse/surf-ch-weight-h18`
 
 ### 2026-05-13 03:56 — PR #1799 (`charliepai2g24h4-thorfinn/layerscale-init-0.1`)
 
