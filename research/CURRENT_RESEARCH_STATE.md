@@ -36,7 +36,7 @@ CFD surrogate for TandemFoilSet. Predict normalized `(Ux, Uy, p)` at every mesh 
 |---------|----|-----------|-------|------|-----|
 | alphonse | #1647 | Cosine T_max=18 (schedule aligned to actual epoch budget) | LR schedule | WIP | T_max=30 but actual 17 epochs → LR at 40% peak at cutoff |
 | askeladd | #1743 | `surf_weight=5` (opposite direction) | Loss weighting | WIP | surf=30 closed (+3.6% worse); test if Huber β=0.5 has shifted optimum below 10 |
-| edward | TBD | torch.compile (attack throughput bottleneck) | Throughput | WIP (queued) | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
+| edward | #1763 | torch.compile (attack throughput bottleneck) | Throughput | WIP | EMA=0.9995 closed (+41 MAE — half-life too long for budget); pivot to throughput |
 | fern | #1705 | Huber β=0.25 (push further toward pure L1) | Loss shape | WIP | β=0.5 gave −6.96% val; sweep continues toward L1 floor |
 | frieren | #1442 | Wider `n_hidden=192` | Architecture (width) | WIP (rebased 21:13) | rerun at bs=4 on bf16+EMA; mechanism test clean |
 | nezuko | #1672 | Linear LR warmup 1 epoch v2 on β=0.5 baseline + fixed T_max | LR schedule | WIP (sent back) | v1 beat old baseline (91.72) but not new (85.92); retest with T_max confounder fixed |
