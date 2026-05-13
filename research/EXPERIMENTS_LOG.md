@@ -1924,3 +1924,35 @@ After merging #2494 (NEW BEST 47.9076), assigned 4 new experiments to idle stude
 | #2577 | edward | slice_num=32 under post-LN+lr=2e-4: physics-aware re-cal | Physics-aware scale |
 
 Also sent status check #2 to nezuko (#2466 SwiGLU, finished run `d0nsbeam` at test=51.59 on OLD config, awaiting lr=2e-4 retry confirmation) and tanjiro (#2499 RMSNorm under post-LN, last run `r2oxlnwy` crashed).
+
+## 2026-05-13 20:55 — PR #2530: Lion β1=0.95 re-cal under post-LN CLOSED ✗
+- willowpai2g48h1-alphonse/postln-beta1-recal
+- **Hypothesis**: Post-LN's cleaner gradient signal should reward more momentum history; β1=0.95 may outperform β1=0.9 under post-LN.
+- **Results**: val=59.24, test=52.03 → **+5.44% rel regression** vs T_max=20 baseline (49.35). All 4 splits regress; OOD penalty mean +7.10% is ~2.7× IID penalty (+2.66%). cruise +10.56% and re_rand +7.73% are well above noise floor. Decision rule triggered → Arm 2 (β1=0.85) skipped per PR rule.
+- **Mechanism**: β1=0.95's longer momentum produces an over-smoothed sign vote that cannot follow sharper directional changes in the post-LN cosine tail (where T_max=20's extended LR is now most active). The "deeper minimum needs sharper directional updates in the cosine tail" interpretation is consistent with Finding #47. OOD splits are hurt hardest because the post-LN tail geometry rewards fast adaptation, which β1=0.95 explicitly blocks. gn_mean trajectory (70.8 → 9.6) indistinguishable from baseline — no evidence of "cleaner sign votes".
+- Finding #55: **Lion β1=0.9 is robust to the post-LN representation shift.** Finding #32 NOT stale. β1 lever now closed across both LN positions.
+→ Reassigned alphonse: grad_clip=3.0 under post-LN+lr=2e-4 (PR #2586).
+
+## 2026-05-13 20:30 — PR #2527: T_max=22 under post-LN at lr=1.5e-4 CLOSED ✗ (mechanism clean, but lost to new lr=2e-4 baseline)
+- willowpai2g48h1-thorfinn/postln-tmax-22
+- **Hypothesis**: T_max=22 extends the cosine tail further than T_max=20; tests whether Finding #44 (LR ≥ 1e-5 harmful) applies to decaying cosine through that range or only to fixed floors.
+- **Results**: val=56.29, test=48.89 → **−0.93% rel** vs T_max=20 baseline (49.35), but **+2.04% vs current best 47.91** (post-#2494 lr=2e-4 merge that landed same-day). Below 1.4% noise floor at headline. Per-split: rc −2.92% (largest gain, where Finding #44 falsification matters most), in_dist +0.24%, cruise −0.36%, re_rand −0.04%.
+- **Mechanism**: clean confirmation of tail-LR-is-load-bearing. ep17→18 val Δ = **−3.74** (largest single-epoch improvement of second half) precisely as LR decays through 1.83e-5 → 1.19e-5. No perturbation signature at this LR range — Finding #44 is constrained to FIXED FLOORS perturbing converged solutions, NOT transient values during active descent. best_epoch=18, still descending.
+- **Decision**: Per "current baseline" merge criterion (47.91), this doesn't qualify for merge. Closed with reassignment to lr=2e-4 + T_max=22 stack.
+- Finding #56: **Finding #44 falsified for decaying cosine.** The "LR ≥ 1e-5 harmful" constraint is scenario-specific (fixed floors). Decaying cosine through 1.5e-5 is in fact the optimal trajectory for the post-LN deeper minimum.
+→ Reassigned thorfinn: lr=2e-4 + T_max=22 stack (PR #2584).
+
+## 2026-05-13 21:00 — Round 3 cycle 8 assignment: lr×T_max landscape + clip re-cal
+
+After closing #2530 (β1=0.95 regression) and #2527 (T_max=22 win at old LR, mechanism clean), assigned 2 new experiments:
+
+| PR | Student | Title | Lever |
+|---|---|---|---|
+| #2584 | thorfinn | Stack lr=2e-4 + T_max=22 under post-LN | LR×T_max landscape compound |
+| #2586 | alphonse | grad_clip_max_norm=3.0 under post-LN+lr=2e-4 | Clip ceiling re-cal |
+
+Total active experiments: 8 students, all occupied:
+- **Tier 1** (LR×T_max landscape): #2568 askeladd T_max=20 stack, #2584 thorfinn T_max=22 stack, #2572 frieren lr=2.25e-4 midpoint
+- **Tier 2** (clip): #2586 alphonse clip=3.0
+- **Tier 3** (capacity): #2573 fern mlp_ratio=3, #2577 edward slice_num=32
+- **Tier 4** (sub-arch, awaiting students): #2466 nezuko SwiGLU, #2499 tanjiro RMSNorm-post-LN

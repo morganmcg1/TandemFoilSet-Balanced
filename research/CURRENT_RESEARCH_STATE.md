@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- 2026-05-13 20:15 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=47.9076 (PR #2494 Lion lr=2e-4 + post-LN + T_max=18 + wd=0)**. Cumulative gain from PR #1391: 121.28 → 47.91 = **−60.5%**.
+- 2026-05-13 21:00 — willow-pai2g-48h-r1, round 3 ongoing. **CURRENT BEST: test=47.9076 (PR #2494 Lion lr=2e-4 + post-LN + T_max=18 + wd=0)**. Cumulative gain from PR #1391: 121.28 → 47.91 = **−60.5%**.
 - No directives from human researcher team yet.
 
 ## Current baseline (PR #2494 merged — lr=2e-4 under post-LN)
@@ -53,21 +53,23 @@ Originally: capacity/resolution increases improve IID, harm OOD. Post-LN's unifo
 ### Per-split lever-flip under post-LN (Finding #53, frieren #2426)
 The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN. Pre-LN: sw=5 → rc −0.74 (DOWN helps rc). Post-LN: sw=5 → rc +1.49 (DOWN hurts rc). Cruise mirror-inverted. Mechanism: post-LN's compressed residual stream makes surface/volume token representations more similar, breaking the surf_weight gradient signal that pre-LN had. **Implication:** other per-split findings from pre-LN should be re-validated case-by-case under post-LN.
 
-## Round-3 status (updated 2026-05-13 20:15)
+## Round-3 status (updated 2026-05-13 21:00)
 
 | Student | PR | Hypothesis | Status |
 |---------|-----|-----------|--------|
-| askeladd | #2568 | lr=2e-4 + T_max=20 STACK (new winner compound) | **wip** (NEW) |
-| frieren | #2572 | lr=2.25e-4 LR midpoint refinement | **wip** (NEW) |
-| fern | #2573 | mlp_ratio=3 capacity width without depth | **wip** (NEW) |
-| edward | #2577 | slice_num=32 physics-aware re-cal under post-LN | **wip** (NEW) |
-| thorfinn | #2527 | T_max=22: probe Finding #44 boundary on stretched cosine | **wip** |
-| alphonse | #2530 | Lion β1 re-calibration under post-LN (Finding #32 stale) | **wip** |
+| thorfinn | #2584 | Stack lr=2e-4 + T_max=22 under post-LN | **wip** (NEW) |
+| alphonse | #2586 | grad_clip_max_norm=3.0 under post-LN+lr=2e-4 | **wip** (NEW) |
+| askeladd | #2568 | lr=2e-4 + T_max=20 STACK (new winner compound) | **wip** |
+| frieren | #2572 | lr=2.25e-4 LR midpoint refinement | **wip** |
+| fern | #2573 | mlp_ratio=3 capacity width without depth | **wip** |
+| edward | #2577 | slice_num=32 physics-aware re-cal under post-LN | **wip** |
 | nezuko | #2466 | SwiGLU MLP (param-matched) | **wip** (status check #2 sent — `d0nsbeam` run finished at test=51.59 on old config, awaiting confirmation arm with lr=2e-4) |
 | tanjiro | #2499 | RMSNorm under post-LN | **wip** (status check sent — last run crashed) |
 | askeladd | #2494 | Post-LN LR re-calibration: lr=2e-4 wins | **MERGED** ✓ test=47.9076 (−2.92%). **NEW BEST.** |
 | thorfinn | #2508 | T_max=20 cosine extension under post-LN | **MERGED** ✓ test=49.3466 (−4.34%) |
 | tanjiro | #2456 | Pre-LN → Post-LN swap | **MERGED** ✓ test=51.5839 (−15.08%). |
+| alphonse | #2530 | Lion β1 re-cal under post-LN (β1=0.95) | **CLOSED** ✗ +5.44% uniform, OOD-heavy. Finding #55 (β1=0.9 robust). |
+| thorfinn | #2527 | T_max=22 under post-LN at lr=1.5e-4 | **CLOSED** ✗ beat old baseline by −0.93% but lost to new 47.91 best. Finding #56 (Finding #44 falsified for decaying cosine). Mechanism clean — reassigned to lr=2e-4 + T_max=22 stack (#2584). |
 | fern | #2533 | Lion β2 re-calibration under post-LN | **CLOSED** ✗ β2=0.999 catastrophic +35.1%. Finding #51. |
 | edward | #2528 | n_layers=6: depth increase under post-LN | **CLOSED** ✗ +8.78% timeout-bound. Finding #52. |
 | frieren | #2426 | surf_weight DOWN (sw=5/7) | **CLOSED** ✗ Flat +0.60%, per-split flip. Finding #53. |
@@ -122,35 +124,41 @@ The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN.
 52. **n_layers=6 timeout-bound under 30-min cap** (#2528 closed): Post-LN does enable stable depth-6 training (sanity gates pass, gn_mean monotonically descends), but +23% per-epoch cost cuts schedule by 3 epochs → +8.78% regression. Mechanism viable; budget constraint blocks merge under fixed cap. Reinforces Finding #27.
 53. **Per-split lever-flip under post-LN** (#2426 closed): surf_weight–rc gradient SIGN flipped pre-LN → post-LN. sw=5 helps rc pre-LN, hurts rc post-LN. Cruise mirror-inverted. Mechanism: post-LN's compressed residual stream makes surface/volume tokens more similar. **Implication for round design**: per-split findings from pre-LN are not transferable — must re-validate case-by-case under each new optimizer config.
 54. **Lion lr=2e-4 optimal under post-LN** (#2494): pre-LN's lr=1.5e-4 (Finding #20) was a pre-LN-specific calibration. Under post-LN's bounded residual stream, lr=2e-4 wins (1.33× pre-LN, not 2×). Both lr=2e-4 and lr=3e-4 beat baseline — lr=3e-4 wins on rc OOD by small margin, lr=2e-4 wins on 3 of 4 splits and dominates on test_avg. e1 gn_mean for lr=3e-4 was 95.9 (predicted 120–160 was too pessimistic). **Implication**: the post-LN landscape has substantial unused headroom.
+55. **Lion β1=0.9 robust to post-LN representation shift** (#2530 closed): β1=0.95 produces uniform +5.44% test regression under post-LN+T_max=20. OOD penalty (mean +7.10%) ~2.7× IID penalty (+2.66%) — post-LN tail geometry rewards faster adaptation, not more history. Finding #32 NOT stale. β1 lever closed across both LN positions. **Mechanism**: post-LN's deeper minimum demands sharper directional updates in cosine tail; β1=0.95 over-smooths the sign vote precisely in this regime.
+56. **Finding #44 falsified for decaying cosine** (#2527 closed): T_max=22 at lr=1.5e-4 produces the **largest single-epoch val improvement of the second half** (−3.74 at ep17→18) precisely as LR decays through 1.83e-5 → 1.19e-5. Finding #44's "LR ≥1e-5 harmful" constraint applies to **fixed floors perturbing converged solutions**, NOT to transient decaying LR during active descent. The mechanism is decisive: rc OOD gain of −2.92% rel at T_max=22 (lr=1.5e-4) cannot survive the lr=2e-4 baseline shift (final test 48.89 vs current best 47.91), but the **tail-LR-is-load-bearing** finding is general and motivates the lr=2e-4 + T_max=22 stack (#2584).
 
 ## Active experiments (8 students — all occupied)
 
-### Tier 1: Winner compounds + LR neighborhood (HIGHEST EV)
+### Tier 1: Winner compounds + LR×T_max landscape mapping (HIGHEST EV)
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
 | #2568 | askeladd | **lr=2e-4 + T_max=20 STACK** | −1% to −3% (compound of two wins) |
+| #2584 | thorfinn | **lr=2e-4 + T_max=22 STACK** (mechanism extension of #2527 win) | −1.5% to −2.7% (extension of tail-LR-is-load-bearing) |
 | #2572 | frieren | lr=2.25e-4 LR midpoint refinement | −0% to −2% (LR optimum mapping) |
-| #2527 | thorfinn | T_max=22 (older — pre-#2494 LR config) | probe Finding #44 boundary |
 
-### Tier 2: Capacity expansion (orthogonal to LR axis)
+### Tier 2: Optimizer-fine-tuning probes (clip + LR axis)
+| PR | Student | Hypothesis | Expected gain |
+|---|---|---|---|
+| #2586 | alphonse | grad_clip=3.0 (tightened under lr=2e-4: 50%+ clip-fire at e18) | −0.5% to −2.0% (regularization tightening) |
+
+### Tier 3: Capacity expansion (orthogonal to LR axis)
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
 | #2573 | fern | mlp_ratio=3 (width without depth) | −1% to −3% (capacity unused under post-LN+lr=2e-4) |
 | #2577 | edward | slice_num=32 (physics-aware re-cal) | OOD-focused, especially rc=60.53 |
 
-### Tier 3: Sub-architectural + optimizer probes
+### Tier 4: Sub-architectural probes (awaiting student response)
 | PR | Student | Hypothesis | Expected gain |
 |---|---|---|---|
-| #2530 | alphonse | Lion β1 re-cal under post-LN | direction unknown (Finding #32 stale) |
 | #2466 | nezuko | SwiGLU MLP (status check pending — old run at test=51.59, needs lr=2e-4 retry) | awaiting student |
 | #2499 | tanjiro | RMSNorm under post-LN (status check pending — last run crashed) | awaiting student |
 
 ## Key open questions
 
 1. **Does the lr=2e-4 + T_max=20 stack compound?** (askeladd #2568) — HIGHEST PRIORITY. If yes, test=46.5–47.2 expected.
-2. **Is lr=2.25e-4 the true LR optimum?** (frieren #2572) — LR-curve mapping. The midpoint test will tell us whether the optimum sits between 2e-4 and 3e-4 or exactly at 2e-4.
-3. **Does T_max=22 cross the Finding #44 boundary?** (thorfinn #2527) — was assigned under the old lr=1.5e-4 baseline. Even if T_max=22 wins on the OLD baseline, it needs to be re-tested with the new lr=2e-4 next round.
-4. **Does Lion β1 shift under post-LN?** (alphonse #2530) — Finding #32 was pre-LN.
+2. **Does lr=2e-4 + T_max=22 compound favorably?** (thorfinn #2584, NEW) — extension of Finding #56 falsification + lr=2e-4 win. If yes, test=46.6–47.2 expected.
+3. **Is lr=2.25e-4 the true LR optimum?** (frieren #2572) — LR-curve mapping. The midpoint test will tell us whether the optimum sits between 2e-4 and 3e-4 or exactly at 2e-4.
+4. **Does tightened clip=3.0 help under lr=2e-4?** (alphonse #2586, NEW) — clip-fire 51.6% at e18 in #2494; testing whether the active clipping ceiling is now load-bearing regularization.
 5. **Can mlp_ratio=3 add capacity without breaking budget?** (fern #2573) — capacity-via-width vs the depth-failure mode of n_layers=6.
 6. **Does slice_num=32 unlock more physics-aware OOD performance?** (edward #2577) — slice_num=24 was a pre-LN closure; post-LN's stationary residual stream may support finer groupings.
 7. **Does SwiGLU's gating compound with lr=2e-4?** (nezuko #2466) — old run at test=51.59 was under-config.
@@ -180,16 +188,16 @@ The pre-LN sign of the surf_weight–rc relationship **inverted** under post-LN.
 | Lever | Status | Best value |
 |---|---|---|
 | Learning rate | **CLOSED** (post-LN) | lr=2e-4 (Finding #54) |
-| Optimizer β1 | TESTING (#2530) | β1=0.9 (pre-LN; may shift) |
+| Optimizer β1 | CLOSED (same as pre-LN) | β1=0.9 (Finding #55) |
 | Optimizer β2 | CLOSED — same as pre-LN | β2=0.99 (Finding #51) |
-| Grad clip | CLOSED (provisional — may revisit under lr=2e-4) | clip=5.0 |
+| Grad clip | **TESTING** clip=3.0 (#2586) under lr=2e-4 | clip=5.0 (pre-LN closure) |
 | Batch/accum | CLOSED | bs=4 + accum=2 |
 | Width (n_hidden) | CLOSED | n_hidden=192 |
 | Depth (n_layers) | CLOSED — n=6 budget-bound (Finding #52) | n_layers=5 |
 | n_head | CLOSED | n_head=4 |
 | slice_num | **TESTING** (#2577) under post-LN+lr=2e-4 | slice_num=24 (pre-LN closure) |
 | mlp_ratio | **TESTING** (#2573) under post-LN+lr=2e-4 | mlp_ratio=2 (pre-LN closure) |
-| T_max cosine | **TESTING** T_max=22 (#2527) and T_max=20 stack (#2568) | T_max=18 (current best is lr=2e-4 + T_max=18) |
+| T_max cosine | **TESTING** T_max=22 stack (#2584) and T_max=20 stack (#2568) | T_max=18 (current best is lr=2e-4 + T_max=18) |
 | weight_decay | CLOSED | wd=0 |
 | Attention dropout | CLOSED | 0.0 |
 | Normalization type | CLOSED | LayerNorm |
