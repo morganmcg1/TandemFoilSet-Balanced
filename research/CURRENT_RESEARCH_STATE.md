@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 16:40 (closed #2378 nezuko slice_num=96: regressed +4.19 val, 5 banked findings inc. slice_num NOT a capacity axis; closed #2270 alphonse max_norm relax: clip_fraction stays ≥0.995 even at 2× cap, 5 banked findings; assigned #2442 nezuko n_head bidirectional sweep, #2443 alphonse Kendall log_σ init at AdamW-equilibrium)
+- **Last updated:** 2026-05-13 17:00 (closed #2342 tanjiro T_max sweep: clean regression with **most valuable mechanistic finding of Wave 12** — SWALR overrides cosine immediately, no eta_min plateau exists for SWA; 6 banked findings inc. sharpened prediction for edward's #2429; assigned #2463 tanjiro swa_lr sweep {0.05x, 0.5x} on σ=0.5 stack)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -57,11 +57,11 @@
 | **#2407** | **thorfinn** | wip | RFF σ=0.1 + σ=0.25 seed-1 bracket | Find OOD-geom floor; settle val-vs-test seed noise |
 | **#2390** | **askeladd** | wip | Lion wd sweep {1e-4, 1e-3, 3e-3} | Test if Lion needs 3-10× AdamW wd (Chen 2023) |
 | **#2311** | **fern** | wip (sent back) | Hybrid Lion+AdamW-for-σ on σ=0.5 stack + lr sweep | Mechanism win confirmed (0.81 spread); lr=1e-3 overshoots → 2-arm {3e-4, 5e-4} on σ=0.5 |
-| **#2342** | **tanjiro** | wip | T_max ∈ {10,12} cosine sweep on Lion stack | Faster cooling → bigger SWA flat-region window |
-| **#2429** | **edward** | wip | SWA start_frac ∈ {0.5, 0.6} on σ=0.5 stack | Target SWA-window starvation under Lion's faster plateau |
+| **#2429** | **edward** | wip | SWA start_frac ∈ {0.5, 0.6} on σ=0.5 stack | Target SWA window — **tanjiro #2342 sharpens prediction**: earlier should win since SWALR ramps DOWN from cosine_lr=1.5e-4 to swa_lr=6e-5, then plateaus |
 | **#2363** | **frieren** | wip | Lion + linear warmup 3 epochs | Fix early-epoch oscillation diagnosed in #2240 |
-| **#2442** | **nezuko** | wip (NEW) | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Replace #2378 — real capacity axis at equal compute; brackets current n_head=4 |
-| **#2443** | **alphonse** | wip (NEW) | Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion | Replace #2270 — structural alt to fern hybrid; 1-line code change |
+| **#2442** | **nezuko** | wip | n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 | Real capacity axis at equal compute; brackets current n_head=4 |
+| **#2443** | **alphonse** | wip | Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion | Structural alt to fern hybrid; 1-line code change |
+| **#2463** | **tanjiro** | wip (NEW) | swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack | Isolate SWA averaging-lr level (orthogonal to #2429 frac axis). Predicted: 0.05x wins (DOWN ramp + deep avg) per tanjiro's #2342 finding |
 
 **⚠ Mid-wave baseline shift:** σ=0.5 merged while 7 PRs were in-flight on σ=1.0 Lion stack. Notice posted to all 7 with updated thresholds. Triage rule for these landing runs:
 - val < 45.76 → MERGE (mechanism compounded with σ=0.5 implicitly via independence)
@@ -89,11 +89,12 @@
 15. **slice_num is NOT a capacity axis at fixed n_head/dim_head (#2378 CLOSED)** — only sizes `nn.Linear(dim_head, slice_num)` → +5K params at slice=96 (vs 64), not +310K. slice_num=96 regressed val +4.19 (+9.16%) and test +4.94 (+12.46%) vs σ=0.5 baseline. Also +16% step time → killed SWA window to 1 epoch. **5th σ-collapse confirmation** (invariant to slice_num at fixed heads). Future capacity bumps must touch n_hidden / n_layers / n_head — slice_num at fixed heads is dead.
 16. **clip_fraction ≥0.995 even at 2× max_norm under β=0.3-Huber (#2270 CLOSED)** — both arms of alphonse's relaxation sweep failed to unclamp the optimizer; gradients exceed cap on >99.4% of steps regardless. Combined with #2347's no-clip + 4× cap results, this brackets clip-relaxation top-to-bottom on AdamW *and* Lion stacks. Mechanism: β=0.3-Huber is near-linear → systematically large pre-clip grad norms. **Axis fully closed** for {AdamW, Lion} × {β=0.3}. **Hypothesis cannot fire** without max_norm ≥ 2.0 or pre-clip diagnostics.
 17. **AdamW+β=0.3+Kendall log_σ equilibrium values reconfirmed by #2270** — surf_p=−1.34, surf_ux=−1.49, surf_uy=−1.47, vol_p=−1.38, vol_ux=−1.34, vol_uy=−1.35. Within 0.05 of #1906. **High-confidence init target for #2443 (alphonse Kendall init at AdamW-equilibrium on Lion stack)** — single-arm structural alt to fern hybrid optimizer.
+18. **SWALR overrides cosine immediately at swa_start_epoch — there is NO cosine eta_min plateau available to SWA (#2342 CLOSED, GOLD finding)** — `SWALR(swa_lr=cfg.lr*0.2=6e-5, anneal_epochs=2)` hijacks the lr schedule the moment `epoch >= swa_start_epoch` and ramps the optimizer toward swa_lr regardless of where cosine left it. **The "SWA averages cosine eta_min plateau" mental model behind #2187, #2285, #2342, and partially #2429 is mechanically wrong.** The current baseline is matched by COINCIDENCE — at swa_start_frac=0.75 of T_max=15, cosine lands at ≈5.9e-5 just below swa_lr=6e-5. **T_max compression is always harmful** (cuts useful cosine annealing + creates SWALR upward ramp during averaging). **Direction-of-ramp** is the right axis to test (now being probed by #2463 tanjiro swa_lr sweep). **Sharpened prediction for #2429 edward swa_start_frac sweep**: going EARLIER should win because cosine_lr at frac=0.5 ≈ 1.5e-4 → SWALR ramps DOWN to 6e-5 → plateaus 4-6 epochs at swa_lr.
 
 ## Key open bottlenecks
 
 1. **geom_camber_rc** — still the largest absolute gap (val=58.29, test=54.60 at σ=0.5). Reduced by −7.26% val with σ=0.5 but still the hardest split. Being attacked via #2442 (n_head sweep — true architectural capacity axis), #2407 (σ=0.1 floor), tanjiro #2342 (T_max).
-2. **SWA only 2 averaging epochs** (timeout at 12-13/15 epochs) — being attacked via #2342 T_max cooling AND #2429 swa_start_frac
+2. **SWA only 2 averaging epochs** (timeout at 12-13/15 epochs) — attacked via #2429 swa_start_frac (width axis) and #2463 swa_lr level (averaging-lr axis); #2342 T_max axis CLOSED with mechanistic refutation of SWA-cosine plateau model
 3. **Lion+Kendall σ-collapse** confirmed structural across 5 axes (width, RFF σ, grad-clip, slice_num, AdamW-baseline match) — two independent fixes being tested: #2311 hybrid optimizer (mechanism validated) AND #2443 init-only (zero engineering cost if it works)
 4. **Lion lr = 3e-4 confirmed near optimum** (#2297 V-shape). Lr axis CLOSED.
 5. **Capacity-axis dead zone** — width (#2354), depth (legacy), slice_num (#2378) all gated by SWA window or step-time cost. n_head sweep (#2442) tests equal-compute reshuffle at fixed n_hidden. If n_head=2 or n_head=8 wins, banked axis; if both regress, capacity bottleneck is genuinely orthogonal to attention granularity.
@@ -101,18 +102,20 @@
 ## Potential next directions (Wave 12 / post-σ=0.5 baseline)
 
 1. **Lion + hybrid AdamW for Kendall σ heads (#2311)** — sent back with rebase + lr sweep {3e-4, 5e-4}; mechanism validated.
-2. **Kendall log_σ init at AdamW-equilibrium on Lion (#2443 NEW)** — structural alt to #2311 at zero engineering cost; tests whether σ-collapse is init-symmetry-driven or update-rule-inherent.
+2. **Kendall log_σ init at AdamW-equilibrium on Lion (#2443)** — structural alt to #2311 at zero engineering cost.
 3. **σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn)** — close out the RFF σ axis on Lion stack.
-4. **Lion + T_max sweep (#2342)** — currently testing. If T_max=10 wins, schedule-shape lever bankable.
-5. **SWA start_frac sweep on σ=0.5 (#2429 edward)** — earlier averaging under Lion's faster plateau; 2-7× SWA window.
-6. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442 NEW)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
+4. **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro NEW)** — averaging-lr level axis from #2342 mechanism finding.
+5. **SWA start_frac sweep on σ=0.5 (#2429 edward)** — width axis; #2342 sharpens prediction (earlier wins).
+6. **n_head ∈ {2, 8} bidirectional at n_hidden=128 on σ=0.5 (#2442)** — equal-compute attention-granularity reshuffle; targets geom_camber_rc.
 7. **Lion + warmup (#2363) / wd sweep (#2390)** — orthogonal Lion fine-tuning axes.
-8. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
-9. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
-10. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
-11. **Beyond σ=0.1** — if #2407 confirms σ=0.1 continues winning test, the axis becomes "DC Fourier features only" (σ→0). The Fourier head degenerates to a learned bias.
-12. **Fixed (non-learnable) per-channel loss weights** matching #1906 pattern — even simpler alt than #2443 if init-drift turns out to be the issue; cleaner test of "what's the right weight?" decoupled from "how do we learn it?".
-13. **n_layers depth sweep at fixed n_hidden** — if #2442 closes head axis, depth at fixed compute is the next architectural axis (cheap per-step but more sequential).
+8. **Skip-SWALR-entirely experiment** — let cosine continue through SWA window so SWA averages over genuine cosine-min weights (tanjiro #2342 suggested follow-up #1). Sharpens "is SWALR ever helpful?" question.
+9. **Delay-SWA-start (frac=0.87)** — narrow window but truly low-lr averaging (tanjiro #2342 suggested follow-up #3). Composes with #2463 Arm A.
+10. **Second seed on σ=0.5 baseline** — confirm win magnitude (currently single seed; val effect ~3.9% is well above seed noise).
+11. **Coordinate system rethink** — polar/arc-length around airfoil; geom_camber_rc primary target. May compound with RFF σ↓ since both reduce frequency content.
+12. **Test-time augmentation** — if test still falling at lower σ, maybe inference-time geometry perturbation could push test_geom_camber_rc further.
+13. **Beyond σ=0.1** — if #2407 confirms σ=0.1 continues winning test, the axis becomes "DC Fourier features only" (σ→0). The Fourier head degenerates to a learned bias.
+14. **Fixed (non-learnable) per-channel loss weights** matching #1906 pattern — even simpler alt than #2443 if init-drift turns out to be the issue.
+15. **n_layers depth sweep at fixed n_hidden** — if #2442 closes head axis, depth at fixed compute is the next architectural axis.
 
 ## Mechanism-axis coverage
 
@@ -122,14 +125,15 @@
 ### 🔬 In-flight (Wave 12)
 - RFF σ=0.1 + σ=0.25 seed-1 bracket (#2407 thorfinn) — find OOD-geom floor
 - Lion wd sweep (#2390 askeladd) — test if Lion needs higher wd than AdamW
-- T_max cosine sweep on Lion (#2342 tanjiro) — schedule shape
 - Hybrid Lion+AdamW for Kendall σ on σ=0.5 + lr sweep {3e-4, 5e-4} (#2311 fern) — fix AdamW overshoot
-- SWA start_frac sweep {0.5, 0.6} on σ=0.5 (#2429 edward) — target SWA-window starvation
+- SWA start_frac sweep {0.5, 0.6} on σ=0.5 (#2429 edward) — width axis; sharpened prediction (earlier should win)
 - Lion + linear warmup 3 epochs (#2363 frieren) — fix early-oscillation
-- **n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko NEW)** — true equal-compute capacity axis
-- **Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion (#2443 alphonse NEW)** — structural alt to hybrid optim
+- n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 (#2442 nezuko) — equal-compute capacity reshuffle
+- Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion (#2443 alphonse) — structural alt to hybrid optim
+- **swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 (#2463 tanjiro NEW)** — averaging-lr level axis; isolates SWALR ramp direction effect
 
-### ✗ Closed (28+ axes)
+### ✗ Closed (29+ axes)
 - drop-grad-clip-on-Lion (#2347, 2026-05-13 16:00): max_norm=0.5 is right setting, 4 banked findings inc. 4th σ-collapse confirmation
 - slice_num=96 (#2378, 2026-05-13 16:30): NOT a capacity axis (+5K params not +310K), regressed +4.19 val, 5 banked findings inc. 5th σ-collapse confirmation
 - max_norm relaxation {0.75, 1.0} (#2270, 2026-05-13 16:35): clip_fraction stays ≥0.995 even at 2× cap under β=0.3-Huber, 5 banked findings inc. AdamW-equilibrium log_σ targets for #2443
+- T_max ∈ {10, 12} cosine compression (#2342, 2026-05-13 17:00): clean regression +5.5% to +8.9% val; **6 banked findings inc. SWALR-overrides-cosine pathology — the most valuable mechanistic finding of Wave 12**; opens new swa_lr direction axis via #2463

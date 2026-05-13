@@ -4,6 +4,54 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 17:00 — PR #2463 (ASSIGNED, tanjiro): swa_lr ∈ {0.05x, 0.5x} sweep on σ=0.5 Lion stack — isolate SWA averaging-lr level
+
+- **Branch:** `willowpai2g48h2-tanjiro/swa-lr-sweep-on-sigma0p5`
+- **Hypothesis:** swa_lr = cfg.lr * 0.2 = 6e-5 (hardcoded) is matched only by coincidence to where cosine lands at swa_start_frac=0.75. Bidirectional sweep brackets the SWA averaging-lr level — Arm A (0.05x) ramps DOWN from cosine_lr=5.9e-5 to 1.5e-5 then plateaus deep; Arm B (0.5x) ramps UP from cosine_lr to 1.5e-4 then plateaus moderate.
+- **Why now:** Directly tests tanjiro's #2342 banked finding (SWALR ramp direction dominates SWA averaging quality). Composes with edward's #2429 (frac sweep) on the orthogonal axis: width × level. Mechanism-orthogonal to all other Wave 12 PRs.
+- **Predicted (tanjiro-derived):** Arm A (deeper avg-lr, DOWN ramp) likely wins — averages near-converged weights at low lr; Arm B (higher avg-lr, UP ramp) likely loses — averages destabilized weights at moderate lr.
+
+---
+
+## 2026-05-13 17:00 — PR #2342 (CLOSED, tanjiro): T_max ∈ {10, 12} cosine sweep on Lion baseline — clean regression with the **most valuable mechanistic finding of Wave 12**
+
+- **Branch:** `willowpai2g48h2-tanjiro/t-max-10-cosine-on-lion`
+- **Student:** willowpai2g48h2-tanjiro
+- **Hypothesis:** Faster cosine annealing (T_max ∈ {10, 12} vs MAX_EPOCHS=15) places lr in eta_min plateau earlier; SWA window then averages 3-5 epochs of low lr instead of 2.
+
+### Result table (σ=1.0 stack)
+
+| Arm | T_max | val_avg | Δ vs σ=1.0 (47.64) | test_avg | Δ vs test (40.57) | W&B |
+|---|---:|---:|---:|---:|---:|---|
+| Baseline #2063 | 15 | 47.6416 | — | 40.5651 | — | `5hp3gid7` |
+| **Arm A** | 10 | **51.8890** | **+4.25 (+8.9%)** | 43.9294 | +3.36 (+8.3%) | `3lud4cx9` |
+| **Arm B** | 12 | **50.2451** | **+2.60 (+5.5%)** | 42.9189 | +2.35 (+5.8%) | `8p1ij4g6` |
+
+Vs σ=0.5 merged baseline (45.76 val): Arm A +13.4%, Arm B +9.8% — both far outside any merge-zone.
+
+### Commentary and conclusions
+
+**Hypothesis cleanly refuted with a mechanistically definitive autopsy.** tanjiro's lr-trace diagnostic shows SWALR overrides cosine the instant `epoch >= swa_start_epoch` and ramps UPWARD to `swa_lr = cfg.lr * 0.2 = 6e-5`. There is NO "cosine eta_min plateau" available to SWA under the current configuration — SWALR hijacks the schedule. T_max compression makes things WORSE because (a) cuts useful cosine annealing time before SWA hijacks, (b) creates a larger gap that SWALR must ramp across.
+
+### Banked findings (6) — gold for the whole SWA research line
+
+1. **SWALR overrides cosine immediately at swa_start_epoch.** The mental model behind #2187, #2285, this PR, and partially edward's #2429 (SWA averages cosine eta_min plateau) is **mechanically wrong**.
+2. **The closer T_max is to MAX_EPOCHS, the less damage done** — T_max compression is always harmful. The baseline T_max=15 is the least-damaged configuration. **Direction of this PR's hypothesis was exactly inverted.**
+3. **swa_lr = cfg.lr * 0.2 = 6e-5 is hardcoded at train.py:719** — but cosine at swa_start_frac=0.75 of T_max=15 lands at lr ≈ 5.9e-5. **Current baseline is matched by coincidence**, not by design. Future SWA experiments that change T_max OR swa_start_frac without matching swa_lr will recreate the SWALR-override artifact.
+4. **Default `eta_min=0` in CosineAnnealingLR** is moot under current SWA configuration (SWALR hijacks before cosine can reach 0); relevant only for skip-SWALR follow-ups.
+5. **For T_max smaller than MAX_EPOCHS, SWALR upward ramp dominates averaging quality.** T_max=10 wastes 3 SWA epochs on SWALR ramping from 1.5e-5 → 6e-5; T_max=12 wastes 2-3. SWA averages the *trajectory of weights during the ramp*, not the well-trained low-lr weights.
+6. **Sharpened prediction for edward's #2429 swa_start_frac sweep (still in flight):** going EARLIER (frac ∈ {0.5, 0.6}) gives cosine ≈ 1.5e-4 at swa_start, SWALR ramps DOWNWARD to swa_lr=6e-5, then plateaus 4-6 epochs at the same lr. That's the right direction — earlier should beat later (opposite of this PR's direction). #2429 result will close out either way.
+
+### Suggested follow-ups (direct from tanjiro's analysis)
+
+1. **Lower `swa_lr` to match cosine at swa_start** — `swa_lr = cfg.lr * 0.05 = 1.5e-5` so SWALR ramps DOWN not UP. **ASSIGNED as #2463 (this loop).**
+2. Skip SWALR entirely — let cosine continue through SWA window.
+3. Delay SWA start to `MAX_EPOCHS - 2 = 13`.
+
+T_max < MAX_EPOCHS axis CLOSED. SWALR-direction axis OPENED via #2463.
+
+---
+
 ## 2026-05-13 16:40 — PR #2443 (ASSIGNED, alphonse): Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion — structural alt to hybrid optimizer
 
 - **Branch:** `willowpai2g48h2-alphonse/kendall-log-sigma-init-at-adamw-equilibrium`
