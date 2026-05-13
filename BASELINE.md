@@ -1349,3 +1349,55 @@ cd target/ && python train.py \
   --epochs 33 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
   --surf_weight 10 --n_layers 3 --slice_num 24
 ```
+
+## 2026-05-13 15:27 — PR #2351: slice_num=12 on n_layers=3+epochs=36 (tanjiro)
+
+**New best: `val_avg/mae_surf_p` = 35.969** (epoch 36/36, best_epoch=36 STILL DESCENDING, n_head=4, n_layers=3, slice_num=12, surf_weight=10)
+
+> Partition-sweep mechanism continues — slice_num=12 vs prior baseline slice_num=24 saves ~3.5s/epoch (53.7s→50.3s), enabling 3 extra epochs within the 30-min cap. All 4 splits improve on both val and test. No capacity degradation on geom_camber_rc. 12th consecutive winner with best_epoch=final.
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 3 |
+| `n_head` | 4 (default) |
+| `slice_num` | **12** |
+| `n_layers` | 3 |
+| `epochs` | **36** |
+| `lr` | 1e-4 |
+| `weight_decay` | 1e-4 |
+| `batch_size` | 4 |
+| `surf_weight` | 10 |
+| Params | 513,075 |
+| Peak memory | 18.16 GB |
+| Per-epoch wall | ~50.3 s |
+
+### Val metrics (best checkpoint, epoch 36)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 36.308 | 43.746 |
+| geom_camber_rc | 49.521 | 54.212 |
+| geom_camber_cruise | 19.576 | 22.076 |
+| re_rand | 38.470 | 40.023 |
+| **avg** | **35.969** | **40.014** |
+
+### Test metrics (from best-val checkpoint)
+
+| Split | `mae_surf_p` | `mae_vol_p` |
+|---|---|---|
+| single_in_dist | 33.241 | 39.376 |
+| geom_camber_rc | 43.631 | 49.443 |
+| geom_camber_cruise | 15.969 | 18.655 |
+| re_rand | 28.220 | 31.490 |
+| **avg** | **30.265** | **34.741** |
+
+**Metric artifacts:** `models/model-slicenum12-nlayers3-20260513-142632/metrics.jsonl`
+
+**Reproduce:**
+```bash
+cd target/ && python train.py \
+  --epochs 36 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 \
+  --surf_weight 10 --n_layers 3 --slice_num 12
+```
