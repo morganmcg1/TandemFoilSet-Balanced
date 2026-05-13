@@ -462,8 +462,8 @@ print(f"Model: Transolver ({n_params/1e6:.2f}M params)")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 # T_max=18 matches the achievable epoch count under the 30-min wall-clock cap.
-# eta_min=5e-5 (10% of initial lr) keeps a non-zero LR floor in the final epochs.
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18, eta_min=5e-5)
+# eta_min=1e-4 (20% of initial lr) keeps a non-zero LR floor in the final epochs.
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=18, eta_min=1e-4)
 
 experiment_label = cfg.experiment_name or cfg.agent or "tandemfoil"
 experiment_stamp = time.strftime("%Y%m%d-%H%M%S")
