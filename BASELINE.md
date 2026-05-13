@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **64.0705** | #1633 | Huber β=0.5 + compile + bf16 + Smooth-L1 | epoch 37 of 37; still improving at timeout; -8.2% vs #1568 |
-| `test_avg/mae_surf_p` | **55.4961** | #1633 | — | finite across all 4 test splits; -10.3% vs #1568 |
+| `val_avg/mae_surf_p` | **59.5354** | #1700 | Pure L1 + compile + bf16 | epoch 37 of 37; still improving at timeout; -7.08% vs #1633 |
+| `test_avg/mae_surf_p` | **51.4666** | #1700 | — | finite across all 4 test splits; -7.26% vs #1633 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 64.0705` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 59.5354` to be merged.
+
+## 2026-05-13 02:10 — PR #1700: Pure L1 loss (β sweep → β=0 limit wins)
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 37 (wall-clock-bound at 30 min; best == terminal; still descending)
+- **Epochs reached:** 37 (~49.64 s/epoch, unchanged vs #1633)
+- **Peak GPU memory:** 23.83 GB (unchanged)
+
+| Split | val mae_surf_p | Δ vs #1633 |
+|---|---|---|
+| `val_single_in_dist` | 64.8899 | -10.6% |
+| `val_geom_camber_rc` | 74.0437 | -5.5% |
+| `val_geom_camber_cruise` | **39.9687** | **-7.9%** |
+| `val_re_rand` | 59.2391 | -4.5% |
+| **val_avg** | **59.5354** | **-7.08%** |
+
+| Split | test mae_surf_p |
+|---|---|
+| `test_single_in_dist` | 55.6271 |
+| `test_geom_camber_rc` | 66.7873 |
+| `test_geom_camber_cruise` | **33.5816** |
+| `test_re_rand` | 49.8704 |
+| **test_avg** | **51.4666** |
+
+- **β sweep summary:** β=2.0→1.0→0.5→0.25→0 monotone improvement: 77.81→69.83→64.07→60.76→**59.54**. Diminishing returns with each halving (+8.2% → +5.2% → +2.0%), but L1 is the best point on the curve.
+- **Key code change:** `F.smooth_l1_loss(pred, y_norm, beta=0.5, reduction='none')` → `F.l1_loss(pred, y_norm, reduction='none')` at both call sites (lines 246, 485).
+- **Arm A (β=0.25):** val_avg=60.7558, test_avg=52.3312.
+- **Critical diagnostic:** both arms best_epoch == terminal — undertrained, not overfit.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-l1-loss-20260513-005443/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-l1-loss-20260513-005443/metrics.yaml`
+  `models/model-charliepai2g48h5-thorfinn-huber-beta-0.25-20260513-000538/metrics.jsonl`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/l1-loss" \
+      --epochs 50
+  ```
+  (L1 loss now on advisor branch — both `smooth_l1_loss` call sites replaced with `F.l1_loss`)
+
+---
 
 ## 2026-05-13 00:50 — PR #1633: Huber β=0.5 (sharper loss function)
 
