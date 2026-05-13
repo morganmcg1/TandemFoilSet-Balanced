@@ -1432,6 +1432,56 @@ The advisor branch was updated with PR #1731 (grad-clip MERGE) after thorfinn wa
 
 **13 mechanism axes total** (slice-routing upward closure adds to count; downward now in play). All 8 students have active assignments.
 
+---
+
+## 2026-05-13 — PR #1758 CLOSE: Mesh subsample (node_keep_prob=0.9) Path B contamination
+
+- **Branch:** `willowpai2g48h2-fern/mesh-subsample-0p9-on-filmed`
+- **Student:** willowpai2g48h2-fern
+- **Hypothesis:** Random per-epoch mesh-node subsampling (10% drop) as input-side augmentation on the FiLM baseline.
+
+### Result table (W&B run `v5muk74c`, terminal)
+
+| Metric | Value (SWA) | Old baseline (80.82/71.30) | New baseline (74.62/66.14) | Note |
+|---|---|---|---|---|
+| `val_avg/mae_surf_p` | **86.5450** | +7.1% (worse) | +15.9% (worse) | clean close on both bars |
+| `test_avg/mae_surf_p` | **77.5775** | +8.8% (worse) | +17.3% (worse) | clean close on both bars |
+| `val_geom_camber_rc` | 99.22 | +1.9% vs FiLM 97.36 | — | predicted "biggest gain here" — opposite happened |
+| Ep 1 val | 218.76 | — | — | convergence collapse (vs FiLM ep 1 ~85-90) |
+| Wall-clock | 30.0 min (timeout) | — | — | only 2 SWA-active epochs (12, 13) |
+| Subsample mask | uniform 0.9 surf+vol | — | — | masking verified active every epoch |
+
+### Decision
+
+- **Closed** at https://github.com/morganmcg1/TandemFoilSet-Balanced/pull/1758#issuecomment-4436844653
+- Rationale: val ≥ 84 fires the PR's own decision rule. New baseline (74.62) tightens to definitively clean close. Test override doesn't trigger.
+
+### Analysis — high-information mechanism finding
+
+**Student's diagnosis (precise and validated):** Path B (zero-features + boolean mask) does NOT isolate dropped nodes from the forward pass. `in_project_x`, `in_project_fx`, `in_project_slice` are `nn.Linear` layers WITH biases — feeding zero-normalized inputs (which post-normalize to `-mean/std`, non-zero) yields non-zero `x_mid`, `fx_mid`, and slice logits for the dropped nodes. The slice-routing softmax aggregates bias-driven noise from ~10% of tokens into every slice token per iteration. **Effect is mechanistically equivalent to attention_dropout** — both perturb internal routing-token computation per iteration.
+
+Student's prediction at PR-write time: "the convergence-rate collapse you saw with attention_dropout (ep 1 val=228 vs FiLM baseline ~85-90) should not appear here." Observed: ep 1 val=218.76 — almost identical to attention_dropout's 228. This is a direct empirical confirmation of the contamination hypothesis.
+
+### Mechanism implication for future PRs
+
+**Any "data-side input augmentation" axis test on this slice-routing architecture must either:**
+1. Use Path A (variable-N gather) — physically remove tokens from the input sequence; or
+2. Use a learned "absent" token embedding — replace dropped-node features with a learnt vector that doesn't contaminate bias-driven routing.
+
+**Path B (zero-features + boolean mask in loss) is NOT a clean test of the input-augmentation hypothesis on this architecture.** Adding this finding to the PR-instruction template for any future input-augmentation hypothesis on slice-routing/PhysicsAttention architectures.
+
+### Reassignment to PR #1873: Per-node SDF as input feature (wave-7 geometry-axis open)
+
+Pivoting fern to the **wave-7-priority geometry-aware-features axis**:
+- **Mechanism:** add per-node signed distance to nearest surface (SDF) as an extra input feature channel. Volume nodes get a scalar "how far am I from the boundary?" signal; surface nodes get 0 by construction. Canonical input feature for geometric deep learning on CFD (DeepSDF, neural CFD surrogates).
+- **Why this axis now:** `val_geom_camber_rc=90.92` is the highest split on the new baseline. Cross-camber generalization is fundamentally geometric — explicit boundary-distance encoding gives the model a sample-specific geometric prior that varies smoothly with camber.
+- **Mechanism-orthogonal to** everything in flight (loss-shape, conditioning, routing, optimizer, data-aug).
+- Implementation: per-batch `torch.cdist` (chunked if memory tight), log1p+per-batch standardize, concatenate to features, increment `fun_dim`.
+- Decision rule: val < 74.62 → MERGE; 74.62-76 → 2nd seed; 76-78 → consider learnable SDF embedding; ≥78 → close.
+- **Predicted Δ:** −1 to −4% val, −2 to −5% test. Largest expected gain on val_geom_camber_rc (90.92 → ~85-87).
+
+If SDF lands → wave-7 geometry-features axis opens; follow-ups (a) learned SDF embedding, (b) surface arc-length, (c) NACA-param FiLM conditioning. If it doesn't land → next geometry experiment is structurally different (sample-level NACA conditioning).
+
 
 
 

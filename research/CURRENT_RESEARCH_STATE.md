@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 04:05 (#1818 closed structural cap-bounded → alphonse reassigned to #1856 slice_num=32 downward direction; thorfinn #1734 rebase guidance posted)
+- **Last updated:** 2026-05-13 04:50 (#1758 closed mesh-subsample Path B contamination → fern reassigned to #1873 SDF-feature; **wave-7 geometry-aware-features axis OPEN**)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -20,6 +20,7 @@
 
 ## 🔥 Hottest signals this session
 
+- **PR #1758 (fern, mesh-subsample 0.9) CLOSE 2026-05-13 04:45:** SWA val=86.55 (+16% vs 74.62), test=77.58 (+17%). Definitive close on both bars. **High-info finding:** Path B (zero-features + boolean mask) does NOT isolate dropped nodes — `in_project_*` bias terms feed non-zero values into slice-routing softmax for ALL nodes, contaminating routing. Effect is mechanistically equivalent to attention_dropout (ep 1 val=218.76 ≈ attention_dropout's 228). **Future input-aug PRs on this architecture must use Path A (gather) or learnt absent-token embedding.** Reassigned to #1873 SDF-feature (wave-7 geometry-axis open).
 - **PR #1818 (alphonse, slice_num=128) CLOSE 2026-05-13 04:00:** Structural cap-bounded close. Wall-clock ~196s/epoch (~75-80% overhead vs predicted 5-8%); SWA never activated → degenerate SWA val=408.69; base epoch-10 val=94.79. Slice-routing softmax IS being used (entropy 4.52→3.33 mirrors baseline saturation). **High-info finding:** PhysicsAttention routing einsum scales LINEARLY in slice_num, not in param count. Slice-routing upward expansion exhausted within 30-min envelope. Reassigned to #1856 slice_num=32 downward.
 - **PR #1731 (nezuko, grad-clip on FiLM):** **MERGED.** SWA val 74.62 (−7.67%) / test 66.14 (−7.25%). Two-seed variance tightens vs FiLM-alone (val std 0.86 vs 1.23). ~93% clip-fraction at threshold 1.0; base→SWA gap −3.3% confirms mechanism. FiLM bottleneck `val_geom_camber_rc` improved by −6.44 absolute (97.36 → 90.92). Reassigned to #1831 max_norm sweep.
 - **PR #1760 (tanjiro, FiLM mid_dim=128) close 2026-05-13 03:25:** val=79.41 / test=71.11. Real per-seed −1.74% win on OLD baseline but fires close-rule against new 74.62 baseline (+6.42%). **High-information finding:** doubling mid_dim makes modulation +43%/+72% more aggressive but DOESN'T crack `val_geom_camber_rc` (actually +2.05% base, +2.85% test SWA). **FiLM-capacity axis (width direction) closed upward at mid_dim=64.** Reassigned to #1838 (FiLM depth 2→3 — compositional capacity, functionally different from width).
@@ -44,17 +45,17 @@ None received. Last issue check: 2026-05-13 03:05 UTC, zero open issues on this 
 
 ## Current research focus
 
-### Wave 6 (in flight, mixed-baseline portfolio)
+### Wave 6/7 (in flight, mixed-baseline portfolio)
 
 | PR | Student | Slug | Mechanism axis | Forked from | New merge bar (vs 74.62) |
 |---|---|---|---|---|---|
-| #1856 | alphonse | `slice-num-32-on-clipfilm` | **Slice_num 64→32** (downward direction; tests "does FiLM stabilize a *smaller* routing set?"). ← NEW, forked from 74.62 | 74.62 | best-arm < 74.62 |
-| #1838 | tanjiro | `film-depth-3-on-clipfilm` | **FiLM depth 2→3** (compositional modulation capacity; orthogonal to closed width direction) | 74.62 | best-arm < 74.62 |
+| #1873 | fern | `sdf-feature-on-clipfilm` | **Per-node SDF as input feature** (wave-7 geometry-axis OPEN; canonical CFD geometry feature) ← NEW, forked from 74.62 | 74.62 | best-arm < 74.62 |
+| #1856 | alphonse | `slice-num-32-on-clipfilm` | Slice_num 64→32 (downward; tests "does FiLM stabilize a *smaller* routing set?") | 74.62 | best-arm < 74.62 |
+| #1838 | tanjiro | `film-depth-3-on-clipfilm` | FiLM depth 2→3 (compositional modulation capacity; orthogonal to closed width direction) | 74.62 | best-arm < 74.62 |
 | #1831 | nezuko | `max-norm-sweep-on-clipfilm` | Max-norm bracket {0.5, 2.0} (sensitivity test of merged 1.0) | 74.62 | best-arm < 74.62 |
 | #1821 | askeladd | `uxuy-weight-2p0-on-filmed` | Vol Ux/Uy loss-weight 2.0× (inverse of #1702) | 80.82 | merge bar tightened by ~6 |
 | #1734 | thorfinn | `asinh-0p5-pressure-on-filmed` (rebase pending) | Value-level pressure-target compression (gentler α=0.5) | rebasing onto 74.62 | best-arm < 74.62 |
-| #1757 | frieren | `beta-0p3-on-filmed` | β=0.3 port from closed #1600 | 80.82 | merge bar tightened by ~6 |
-| #1758 | fern | `mesh-subsample-0p9-on-filmed` | Random mesh-node subsampling (data-side aug, node-level) | 80.82 | merge bar tightened by ~6 |
+| #1757 | frieren | `beta-0p3-on-filmed` | β=0.3 port from closed #1600 (running, not stale) | 80.82 | merge bar tightened by ~6 |
 | #1787 | edward | `re-jitter-0p05-on-filmed` | Re-jitter (data-side aug, sample-level) | 80.82 | merge bar tightened by ~6 |
 
 ### Reframe decision rule (vs new 74.62 baseline)
@@ -89,12 +90,13 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
 - **#1702 (askeladd, per-channel p-weight on FiLM):** Best val=84.00. Diagnostic falsified premise; reassigned to #1821 inverse direction.
 - **#1760 (tanjiro, FiLM mid_dim=128 on FiLM-only):** SWA val=79.41 / test=71.11. Real per-seed −1.74% win on OLD baseline but fires close-rule against new 74.62. **High-info finding:** modulation magnitudes +43%/+72% but val_geom_camber_rc gets *worse*. **FiLM-capacity width-direction closed at mid_dim=64.** Reassigned to #1838 depth-direction.
 - **#1818 (alphonse, slice_num=128 on FiLM-only):** SWA val=408.69 (degenerate; SWA never activated), base epoch-10 val=94.79, wall-clock ~196s/epoch (~75-80% overhead). Structural cap-bounded close — slice-routing einsum scales linearly in slice_num. **Slice-routing upward expansion exhausted within 30-min envelope.** Reassigned to #1856 downward direction (slice_num=32).
+- **#1758 (fern, mesh-subsample Path B):** SWA val=86.55 (+16% vs 74.62), test=77.58 (+17%). **High-info finding:** Path B zero-features + boolean mask does NOT isolate dropped nodes — `in_project_*` biases contaminate slice-routing for ALL nodes; effect mechanistically equivalent to attention_dropout's failure mode (ep 1 val=218.76 ≈ 228). Path B as specified is NOT a clean input-augmentation test on this slice-routing architecture. Reassigned to #1873 SDF-feature (wave-7 geometry-axis open).
 
 ## ⚠ Active operational notes
 
 - **The GraphQL rate-limit pattern continues; pods recover automatically.** REST helpers preferred.
 - **Mixed-baseline portfolio:** 7 of 8 wave-6 PRs forked from old 80.82 baseline; only #1831 (new nezuko) forked from new 74.62 baseline. Decision-rule recalibration noted in PR-by-PR review.
-- **13 mechanism axes definitively closed on this dataset/scale:**
+- **14 mechanism axes definitively closed on this dataset/scale:**
   - Architecture-capacity at generic per-feature level (mlp_ratio, n_hidden bumps) — closed twice
   - Block-level stochastic regularization (drop_path=0.1) — closed once
   - Token-level stochastic regularization (attention_dropout=0.1) — closed once
@@ -105,6 +107,7 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
   - Per-channel pressure-up weighting — closed (diagnostic falsified premise)
   - **FiLM intra-capacity width-direction (mid_dim 64→128)** — closed; doubling makes modulation more aggressive but doesn't crack cross-camber bottleneck (#1760)
   - **Slice-routing upward direction (slice_num 64→128)** — structural cap close (#1818); wall-clock dominates not param count
+  - **Mesh-subsample Path B (zero-features + boolean mask)** — closed (#1758); not a clean input-aug test on slice-routing architecture (bias contamination)
 - **4 axes have produced strong landings:**
   - Loss-shape: Huber (#1452 merged)
   - Loss-weighting: per-sample Re-weight (#1586 merged)
@@ -122,8 +125,9 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
 - **Loss-weighting (channel-level, uxuy-up):** uxuy_weight=2.0 (#1821 askeladd) — pending re-evaluation
 - **Loss-weighting (value-level):** asinh on pressure target (#1734 thorfinn) — pending
 - **Optimizer-stability (grad-clip max_norm):** **LANDED in baseline (#1731)** — sweep on the new baseline (#1831 nezuko)
-- **Data-side input augmentation (node-level):** mesh-node subsampling (#1758 fern) — pending
+- **Data-side input augmentation (node-level, Path B):** **CLOSED** (#1758; bias contamination of slice-routing → mechanism equivalent to attention_dropout)
 - **Data-side input augmentation (sample-level):** Re-jitter (#1787 edward) — pending
+- **Geometry-aware input features (per-node SDF):** SDF as input feature (#1873 fern) ← NEW — wave-7 axis open
 - **Architecture-conditioning (intra-FiLM-capacity, width):** **CLOSED** at mid_dim=64 (#1760; doubling over-aggressive)
 - **Architecture-conditioning (intra-FiLM-capacity, depth):** FiLM depth 2→3 (#1838 tanjiro) — compositional modulation, functionally different from width
 - **Architecture-conditioning (intra-routing-capacity, upward):** **CLOSED** structural cap-bound (#1818; slice_num=128 wall-clock dominates)
@@ -132,18 +136,25 @@ Cherry-pick the mechanism-orthogonal ones for **wave-7 retest on the new grad-cl
 - **Schedule / SWA-window:** definitively closed
 - **Internal regularization:** definitively closed (3 sub-axes)
 
-**13 orthogonal mechanism axes total — 4 landed (Huber, Re-weight, FiLM, grad-clip), 10 closed, 7 pending.** Composition pattern: stability levers (grad-clip) and conditioning levers (FiLM) compose constructively.
+**14 orthogonal mechanism axes total — 4 landed (Huber, Re-weight, FiLM, grad-clip), 11 closed, 7 pending including new geometry-axis.** Composition pattern: stability levers (grad-clip) and conditioning levers (FiLM) compose constructively.
 
-**Mechanism finding from #1818 closure:** wall-clock prediction for capacity-axis PRs must account for ops that scale linearly with the changed dimension (PhysicsAttention routing einsum scales linearly in slice_num, not in param count — student's 5-8% prediction was off ~10×). Adding this to PR-instruction template for capacity-axis hypotheses going forward.
+**Mechanism findings from this session's closures:**
+1. **#1818 closure:** wall-clock prediction for capacity-axis PRs must account for ops that scale linearly with the changed dimension (PhysicsAttention routing einsum scales linearly in slice_num, not in param count — student's 5-8% prediction was off ~10×).
+2. **#1758 closure:** Path B input augmentation (zero-features + boolean mask) is NOT a clean test on this slice-routing architecture — `in_project_*` biases contaminate routing for masked nodes, replicating attention_dropout's per-iteration internal perturbation. Future input-aug PRs must use Path A (variable-N gather) or learnt absent-token embedding.
+
+Adding both findings to PR-instruction templates for relevant hypothesis families.
 
 ## Potential next research directions (wave 7+)
 
 Ranked by expected ROI on `val_avg/mae_surf_p` given the new grad-clip+FiLM baseline 74.62:
 
-1. **Geometry-aware lever stacked with FiLM+grad-clip** — `val_geom_camber_rc=90.92` is now the bottleneck (down from 97.36 but still the highest split). Top candidates:
-   - **Geometry-conditioned FiLM** (per-token (γ,β) gated by `is_surface` and conditioned on NACA params)
-   - Surface arc-length / dsdf positional encoding for surface nodes
-   - SDF-conditioned attention bias
+1. **Geometry-aware lever stacked with FiLM+grad-clip — WAVE-7 OPEN via #1873 SDF-feature.** `val_geom_camber_rc=90.92` is the bottleneck. Follow-ups if #1873 SDF lands:
+   - **Learned SDF embedding** (replace log1p+standardize with small MLP SDF→4-dim)
+   - **Surface arc-length encoding** for surface nodes (parametric position along airfoil contour)
+   - **Sign-aware SDF** (if inside-airfoil detection is robust)
+   - **NACA-param FiLM conditioning** (sample-level geometric encoding via FiLM input)
+   - **Geometry-conditioned FiLM** (per-token (γ,β) gated by `is_surface`)
+   - **SDF-conditioned attention bias**
 2. **Compound stack tests of wave-6 winners (if any land on new baseline):** if β=0.3 lands AND uxuy_weight lands AND slice_num lands, compounding them is the next step.
 3. **max_norm sweep follow-ups (if #1831 lands):**
    - Sweep further outward (5.0, 10.0) or inward (0.1, 0.25)
@@ -159,11 +170,13 @@ Ranked by expected ROI on `val_avg/mae_surf_p` given the new grad-clip+FiLM base
 
 ## Open questions to revisit on next review
 
-- **Wave-6 batch recalibration:** 5 PRs forked from old 80.82 baseline (down from 7). When they post terminal results, evaluate against new 74.62 baseline. Most likely most close; cherry-pick mechanism-orthogonal ones for wave-7 retest on new grad-clip+FiLM frame.
+- **Wave-6 batch recalibration:** 4 PRs forked from old 80.82 baseline (#1821, #1757, #1787, #1734-rebasing). When they post terminal results, evaluate against new 74.62 baseline. Most likely most close; cherry-pick mechanism-orthogonal ones for wave-7 retest on new grad-clip+FiLM frame.
 - **Slice-routing axis closure pending #1856:** if slice_num=32 lands, downward becomes lever direction (sweep 16, 8). If it doesn't land, slice-routing-as-an-axis is fully exhausted (both directions tested cleanly).
+- **SDF axis (#1873 fern):** wave-7 geometry-axis OPENED. Tests whether explicit boundary-distance encoding cracks the val_geom_camber_rc bottleneck. If lands → 4+ follow-up directions in the geometry family. If doesn't land → next geometry experiment is sample-level NACA-FiLM conditioning instead of node-level SDF.
 - **max_norm sweep (nezuko #1831):** direction signal from {0.5, 2.0} is high-information. If 2.0 wins → axis relax-direction continues, sweep upward. If 0.5 wins → axis tighten-direction continues, sweep downward. If 1.0 is the optimum (both arms regress) → close axis at merged value.
-- **β=0.3 composition (frieren #1757) re-evaluation:** the strongest mechanism-port test. May still land on new baseline since FiLM/grad-clip don't directly address per-residual shape.
+- **β=0.3 composition (frieren #1757) re-evaluation:** the strongest mechanism-port test. Currently running. May still land on new baseline since FiLM/grad-clip don't directly address per-residual shape.
 - **FiLM depth (#1838 tanjiro):** compositional capacity hypothesis. Width direction closed; depth axis test is functionally orthogonal.
-- **val_geom_camber_rc bottleneck:** 90.92 on new baseline, still the highest split. Wave-7 geometry-axis is the highest expected ROI.
+- **val_geom_camber_rc bottleneck:** 90.92 on new baseline, still the highest split. **#1873 SDF directly attacks this.**
 - **Wall-clock budget tightness:** the grad-clip+FiLM baseline runs at 30.9 min (cap=30); both seeds hit cap at epoch 13/15. Future PRs need to account for the slightly tighter envelope. **Capacity-axis PRs must predict wall-clock based on dim-scaling ops, not param count.**
-- **Architectural-capacity-axis saturation hypothesis:** if both #1856 (slice-routing downward) and #1838 (FiLM depth) close cleanly, that's strong evidence that **architectural capacity axes are saturated on this 1.5K-sample dataset**. The next family becomes geometry-feature augmentation (per-node SDF, surface arc-length, boundary-aware encoding) — exactly what wave-7 should pivot to.
+- **Architectural-capacity-axis saturation hypothesis:** if both #1856 (slice-routing downward) and #1838 (FiLM depth) close cleanly, that's strong evidence that **architectural capacity axes are saturated on this 1.5K-sample dataset**. SDF #1873 is the first concrete step into the geometry-feature family.
+- **Path B vs Path A input augmentation:** edward's #1787 Re-jitter is perturbing a scalar global (Re), not the mesh topology, so it doesn't share fern's #1758 contamination failure mode. If edward's #1787 closes too, the "data-side augmentation axis" closes broadly on this dataset/scale; if it lands, Re-jitter becomes the data-aug mechanism while mesh-subsample stays dead.
