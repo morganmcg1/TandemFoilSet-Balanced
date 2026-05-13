@@ -6,7 +6,7 @@ SPDX-PackageName: senpai
 
 # SENPAI Research State — `icml-appendix-willow-pai2g-24h-r2`
 
-- **Date / time:** 2026-05-13 07:10 UTC
+- **Date / time:** 2026-05-13 07:25 UTC
 - **Advisor branch:** `icml-appendix-willow-pai2g-24h-r2`
 - **W&B project:** `wandb-applied-ai-team/senpai-charlie-wilson-willow-g-24h-r2`
 - **Most recent human direction:** none.
@@ -45,29 +45,32 @@ beta2=0.99 worked because under smooth_l1(β=0.25)'s near-constant gradient magn
 
 - surf_weight: optimum at 10.0 (tried 7, 15, 30)
 - n_head: n_head=4 (dim_head=32) optimal; n_head=8 catastrophic
-- weight_decay: local minimum at 1e-4
+- weight_decay: 1e-4 on OLD stack — retesting 5e-5 under new 7-merge stack (#2026)
 - mlp_ratio=3, n_layers=6: capacity-at-budget failures
 - slice_num=128: +21%, too expensive for 30-min budget (all capacity axes CLOSED)
 - lr (base): optimal at 5e-4
-- beta2=0.95: +13% under OLD MSE stack — now testing further 0.99→0.98
+- beta2=0.95: +13% under OLD MSE stack; 0.99 won (-2.98%), 0.98 in-flight (#2008)
 - grad_accum=4: +18%, eff_batch=8 optimal
 - max_lr=4e-3: diverges
 - pct_start=0.3: +9.5%, 0.1 optimal from both directions
 - dropout=0.02/0.05: doesn't compose with β=0.25 stack
 - OneCycleLR div_factor sweep: small effect <1% at current operating point
+- OneCycleLR final_div_factor=1e3: +15%, mechanism untestable at 30-min cap
+- p_weight=3.0: +6.3%, over-emphasises pressure under MAE-like gradient regime
+- grad_clip=0.5: +12%, undershoots optimizer step magnitude
 
 ### In-flight WIP
 
 | PR | Student | Hypothesis |
 |---|---|---|
 | #1892 | fern | EMA weights (decay sweep 0.999/0.99 + warmup — sent back for retry) |
-| #1928 | askeladd | grad_clip 1.0→0.5 |
-| #1929 | nezuko | OneCycleLR final_div_factor 1e4→1e3 |
 | #1957 | tanjiro | β=0.10 (continue accelerating β sweep) |
-| #1958 | frieren | p_weight 2.0→3.0 (rebalance under β=0.25) |
 | #1975 | alphonse | OneCycleLR pct_start 0.1→0.05 (shorter warmup) |
 | #1977 | edward | AdamW eps 1e-8→1e-6 |
 | #2008 | thorfinn | AdamW beta2 0.99→0.98 |
+| #2022 | frieren | p_weight 2.0→1.5 (downward direction, unexplored) |
+| #2025 | askeladd | grad_clip max_norm 1.0→2.0 (loosen, conjugate test) |
+| #2026 | nezuko | weight_decay 1e-4→5e-5 (retest under 7-merge stack) |
 
 ### Priority research directions
 

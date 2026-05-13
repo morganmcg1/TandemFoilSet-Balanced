@@ -11,6 +11,30 @@ Primary metric: `val_avg/mae_surf_p` (lower is better).
 
 ---
 
+## 2026-05-13 07:20 — Cycle 22: 3 closed + 3 new arms
+
+### PR #1958 frieren — p_weight=3.0: CLOSED ✗
+
+val=82.55 vs new baseline 77.6444 (+6.3%), test=72.65. All 4 splits regressed. Frieren's own analysis: under smooth_l1(β=0.25) the pressure channel is mostly in the linear regime so gradient is already ±1; pushing to p_weight=3 over-emphasises it further. Plus the clip interaction: higher per-channel weight means more clip saturation, which reduces the realized pressure learning signal. Axis is telling us the optimum may be **below** 2.0, not above it.
+
+### PR #1929 nezuko — final_div_factor=1e3: CLOSED ✗
+
+val=89.49 vs baseline 77.6444 (+15%), test=78.83. Interesting mechanistic explanation from student: `onecycle_target_epochs=18` calibrates OneCycleLR to complete the full anneal exactly at the 30-min wall-clock cap — so the "elevated LR floor" phase that final_div_factor controls never gets any training steps. The test couldn't isolate the hypothesis. Clean negative as-designed. Axis note: the final_div_factor experiment requires recalibrating `onecycle_target_epochs` lower to give the floor phase actual training time.
+
+### PR #1928 askeladd — grad_clip=0.5: CLOSED ✗
+
+val=87.21/88.07 (two runs), test=76.19/78.61 vs baseline 77.6444 (+12-13%). Replicated negative. Pre-clip mean ~17, so clip binds nearly every step; tightening to 0.5 just reduces the magnitude of every binding step, undershooting the optimizer's intended step size (single_in_dist -5.1%, classic under-fitting). The CONJUGATE test (loosen to 2.0) is the natural follow-up.
+
+### New assignments (cycle 22)
+
+| Student | Hypothesis | PR |
+|---|---|---|
+| frieren | p_weight 2.0→1.5 (downward direction, unexplored) | #2022 |
+| askeladd | grad_clip max_norm 1.0→2.0 (loosen, conjugate test) | #2025 |
+| nezuko | weight_decay 1e-4→5e-5 (retest under 7-merge stack) | #2026 |
+
+---
+
 ## 2026-05-13 07:05 — Cycle 21: #1959 thorfinn MERGED ✓ (-2.98%), 1 sent back, 1 new arm
 
 ### PR #1959 thorfinn — AdamW beta2 0.999 → 0.99: MERGED ✓
