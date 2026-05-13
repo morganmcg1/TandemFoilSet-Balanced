@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated**: 2026-05-13 16:40 UTC (Wave 16: CLOSE #2371 alphonse n_hidden=144 (Outcome C, +19.2%, width axis closed at 128); ASSIGN #2414 alphonse attn-layerscale-0.05 dual LayerScale)
+- **Last updated**: 2026-05-13 16:55 UTC (Wave 16: CLOSE #2377 tanjiro qk-norm v1 (Outcome B/init confound — log_temp=-1.733 too cold); ASSIGN #2427 tanjiro qk-norm-temp-init-0 (v2 with log_temp=0 + no WD on tau))
 - **Track**: `charlie-pai2g-24h-r4` — controlled 24h/48h Charlie-vs-Willow logging ablation. Each individual training run is capped at `SENPAI_TIMEOUT_MINUTES = 30`; host harness controls fleet runtime.
 - **Branch**: `icml-appendix-charlie-pai2g-24h-r4`, branched off `icml-appendix-charlie`.
 - **Logging**: local JSONL only. **No W&B / wandb experiment logging.**
@@ -36,7 +36,7 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 | edward | #2369 | hybrid-fourier-sigma-3 | Hybrid dyadic L=6 + Gaussian RFF m=6 σ=3.0 (winning σ from #2225) | IN FLIGHT |
 | frieren | #2370 | learned-freqs-no-wd-10x-lr | learned freqs in no-wd group, 10× lr multiplier, post-step clamp(0.1, 100) | IN FLIGHT |
 | alphonse | #2414 | attn-layerscale-0.05 | Dual LayerScale init — attn γ=0.05, mlp γ=0.025 asymmetric; tests whether deep MLP augmentation miscalibrated symmetric γ optimum | ASSIGNED |
-| tanjiro | #2377 | qk-norm-attention | QK normalization on PhysicsAttention (DiT/ViT-22B/SD3 standard, fresh axis) | IN FLIGHT |
+| tanjiro | #2427 | qk-norm-temp-init-0 | QK-norm v2 — log_temp=0 (qk_scale=1.0) + exclude tau from WD (v1 #2377 closed: cold init −1.733 made attention near-uniform, mechanism never activated) | ASSIGNED |
 
 ## Key findings from Wave 13/14/15/16
 
@@ -106,6 +106,6 @@ The compound stack has 16 merged wins (100.957 → 61.875 = **−38.7%**). Key W
 5. **Hybrid Fourier σ=3.0** (edward #2369): retest hybrid with the actual #2225 winning σ; high-freq RFF complement
 6. **Learned freqs no-wd + 10× lr** (frieren #2370): unblock the under-trained 6-freq vector
 7. **Dual LayerScale init** (alphonse #2414 NEW): asymmetric attn γ=0.05 / mlp γ=0.025 — tests whether the augmented MLP path (SwiGLU+ReGLU+inner=288) miscalibrated the symmetric LayerScale optimum
-8. **QK-norm attention** (tanjiro #2377): unit-normalize Q,K + learnable per-head temperature; DiT/ViT-22B/SD3 standard
+8. **QK-norm v2** (tanjiro #2427): log_temp init=0 (qk_scale=1.0) + tau excluded from WD — fixes v1 cold-init confound where max logit was 0.18 across 64 slice tokens (near-uniform softmax). v1 still showed mild test gain (−0.41%) → strong motivation
 9. **inner_dim=304** bisect: if 320 is compute-bound again, test midpoint between 288 (win) and 320
 10. **Per-block learned freqs**: 5 × 6 = 30 freq params — escalation if frieren no-wd still under-trains

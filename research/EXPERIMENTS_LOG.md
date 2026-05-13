@@ -8,6 +8,35 @@ Entries are appended chronologically (newest at top). The metric of
 record for ranking is `val_avg/mae_surf_p`; the paper-facing comparison
 metric is `test_avg/mae_surf_p`.
 
+## 2026-05-13 16:55 — PR #2377 (tanjiro qk-norm-attention v1) — **CLOSED** (Outcome B vs old baseline / +1.86% vs new; init confound identified, retry queued)
+
+- Branch: `charliepai2g24h4-tanjiro/qk-norm-attention`
+- Hypothesis: QK-normalization (unit-norm Q,K + per-head learnable log temperature). Predicted: faster convergence, smaller/stabler grad-norm, better OOD generalization.
+- Metric artifact: `models/model-charliepai2g24h4-tanjiro-qk-norm-attention-20260513-151354/metrics.jsonl`
+
+| Split | ReGLU baseline (#2304 62.949) | New baseline (61.875) | QK-norm v1 | Δ vs new |
+|---|---:|---:|---:|---:|
+| val_single_in_dist | 69.925 | 67.276 | 70.943 | +5.45% |
+| val_geom_camber_rc | 74.845 | 72.143 | 74.855 | +3.76% |
+| val_geom_camber_cruise | 44.262 | 45.901 | 44.423 | −3.22% |
+| val_re_rand | 62.765 | 62.181 | 61.879 | −0.49% |
+| **val_avg** | 62.949 | **61.875** | **63.025** | **+1.86%** |
+| test_avg | 54.221 | 54.117 | **53.893** | −0.41% (mild test gain) |
+
+Best epoch: 12 (timeout). n_params: 831,211 (+20 over baseline). Peak GPU: 52.14 GB.
+
+**Mechanism diagnosis (student's, excellent):** Init `log_temp = log(1/√d_k) = -1.733` → max attention logit = exp(-1.733) = 0.177 over 64 slice tokens → **softmax near-uniform at init**. Per-block log_temp moved at most ~17% from init across training (block 4 essentially frozen, std=0.005). The mechanism never activated because the cold init starved the gradient signal on tau, and default WD=1e-4 on tau pulled it further toward init. **This was an init failure, not a mechanism failure.**
+
+Grad-norm hypothesis falsified: ep 1 was smaller (79 vs 134 ReGLU), but ep 12 was LARGER (101 vs 27) and the trace was more volatile (range 13–101) — exactly what one would expect when softmax is too soft to provide useful credit assignment.
+
+Test gain (−0.41%) and re_rand val improvement (−0.49%) are real signals — QK-norm has some benefit even with the broken init. Strongly motivates retry.
+
+**Reassigning tanjiro to QK-norm v2 (qk-norm-temp-init-0)** — init `log_temp = 0` (qk_scale=1, max logit≈1, matches ViT-22B/DiT/SD3 standard); exclude `qk_log_temperature` from weight decay (literature recommendation).
+
+The needs_rebase state on this branch is moot since v2 starts fresh from advisor HEAD post-#2360.
+
+---
+
 ## 2026-05-13 16:35 — PR #2371 (alphonse n-hidden-144) — **CLOSED** (Outcome C; n_hidden axis closed at 128)
 
 - Branch: `charliepai2g24h4-alphonse/n-hidden-144`
