@@ -31,7 +31,7 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from lion_pytorch import Lion
-from timm.layers import trunc_normal_
+from timm.layers import DropPath, trunc_normal_
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
@@ -161,7 +161,8 @@ class PhysicsAttention(nn.Module):
 
 class TransolverBlock(nn.Module):
     def __init__(self, num_heads, hidden_dim, dropout, act="gelu",
-                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32):
+                 mlp_ratio=4, last_layer=False, out_dim=1, slice_num=32,
+                 drop_path=0.0):
         super().__init__()
         self.last_layer = last_layer
         self.ln_1 = nn.RMSNorm(hidden_dim)
@@ -171,6 +172,7 @@ class TransolverBlock(nn.Module):
         )
         self.ln_2 = nn.RMSNorm(hidden_dim)
         self.mlp = GeGLUMLP(hidden_dim, hidden_dim * mlp_ratio, hidden_dim)
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         if self.last_layer:
             self.ln_3 = nn.RMSNorm(hidden_dim)
             self.mlp2 = nn.Sequential(
@@ -179,8 +181,8 @@ class TransolverBlock(nn.Module):
             )
 
     def forward(self, fx):
-        fx = self.attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = fx + self.drop_path(self.attn(self.ln_1(fx)))
+        fx = fx + self.drop_path(self.mlp(self.ln_2(fx)))
         if self.last_layer:
             return self.mlp2(self.ln_3(fx))
         return fx
@@ -190,6 +192,7 @@ class Transolver(nn.Module):
     def __init__(self, space_dim=1, n_layers=5, n_hidden=256, dropout=0.0,
                  n_head=8, act="gelu", mlp_ratio=1, fun_dim=1, out_dim=1,
                  slice_num=32, ref=8, unified_pos=False,
+                 drop_path_rate=0.0,
                  output_fields: list[str] | None = None,
                  output_dims: list[int] | None = None):
         super().__init__()
@@ -207,11 +210,18 @@ class Transolver(nn.Module):
 
         self.n_hidden = n_hidden
         self.space_dim = space_dim
+        # Linearly increasing per-layer stochastic depth rates
+        # (layer i: drop_path_rate * i / (n_layers - 1)).
+        if n_layers > 1:
+            dpr = [drop_path_rate * i / (n_layers - 1) for i in range(n_layers)]
+        else:
+            dpr = [drop_path_rate]
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head, hidden_dim=n_hidden, dropout=dropout,
                 act=act, mlp_ratio=mlp_ratio, out_dim=out_dim,
                 slice_num=slice_num, last_layer=(i == n_layers - 1),
+                drop_path=dpr[i],
             )
             for i in range(n_layers)
         ])
@@ -346,6 +356,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "drop_path_rate": cfg.drop_path_rate,
         "epochs_configured": cfg.epochs,
     }
 
@@ -388,6 +399,7 @@ class Config:
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
+    drop_path_rate: float = 0.0
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     experiment_name: str | None = None
     agent: str | None = None
@@ -430,6 +442,7 @@ model_config = dict(
     n_head=4,
     slice_num=64,
     mlp_ratio=4,
+    drop_path_rate=cfg.drop_path_rate,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
 )
