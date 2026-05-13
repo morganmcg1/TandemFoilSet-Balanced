@@ -1,5 +1,76 @@
 # Baseline — icml-appendix-charlie-pai2g-48h-r3
 
+## 2026-05-13 06:05 — PR #1793: CosineAnnealingLR T_max=12 on RMSNorm+GeGLU+Lion (nezuko)
+
+**New best: `val_avg/mae_surf_p` = 52.798** (epoch 12, 30-min wall-clock cap, surf_weight=10)
+
+| Hyperparameter | Value |
+|---|---|
+| Model | Transolver |
+| `n_hidden` | 128 |
+| `n_layers` | 6 |
+| `n_head` | 4 |
+| `slice_num` | 64 |
+| `mlp_ratio` | 4 |
+| Normalization | RMSNorm |
+| MLP activation | GeGLU (gated) |
+| Loss | L1 (MAE) in normalized space, `surf_weight=10` |
+| Optimizer | Lion, lr=1e-4, weight_decay=1e-4 |
+| **Scheduler** | **CosineAnnealingLR T_max=12** ← aligned to actual epoch budget |
+| **`epochs`** | **12** ← matches T_max for proper cosine decay |
+| `batch_size` | 4 |
+| Mixed precision | bf16 autocast |
+| Run cap | 30 min wall clock per training execution |
+
+> **T_max=12 mechanism:** Previous schedule used T_max=50 (full configured epochs), but only ~14 epochs run in the 30-min cap → only ~13% of the cosine decay actually fires. Aligning T_max to actual epochs lets the cosine schedule fully complete: LR drops from 1e-4 → 0 over 12 epochs. Lion's sign(m) updates get the proper 10× finer steps in late epochs (visible in trajectory: epoch 9→12 dropped 11.3% as LR went 2.07e-5 → 0).
+>
+> **Note on surf_weight:** This run used surf_weight=10 because the student's rebase pre-dated PR #1836 (surf_weight=5 merge). The result still beats the surf_weight=5 baseline by −7.9% val / −8.9% test, but the predicted compound `T_max=12 + surf_weight=5` (assigned next) should yield further improvement.
+
+### Val metrics (best checkpoint, epoch 12/12)
+
+| Split | `mae_surf_p` |
+|---|---|
+| val_single_in_dist | 58.907 |
+| val_geom_camber_rc | 67.658 |
+| val_geom_camber_cruise | 33.380 |
+| val_re_rand | 51.248 |
+| **val_avg/mae_surf_p** | **52.798** |
+
+### Test metrics (best-val checkpoint, epoch 12)
+
+| Split | `mae_surf_p` |
+|---|---|
+| test_single_in_dist | ~50.24 |
+| test_geom_camber_rc | ~59.56 |
+| test_geom_camber_cruise | ~27.74 |
+| test_re_rand | ~42.35 |
+| **test_avg/mae_surf_p** | **44.972** |
+
+### Improvement vs PR #1836 baseline (57.328 val / 49.387 test)
+
+| Split | Old val (sw=5,T=50) | New val (sw=10,T=12) | Δ val |
+|---|---|---|---|
+| single_in_dist | 60.960 | 58.907 | −3.4% |
+| geom_camber_rc | 72.044 | 67.658 | −6.1% |
+| geom_camber_cruise | 38.721 | 33.380 | −13.8% |
+| re_rand | 57.586 | 51.248 | −11.0% |
+| **avg** | **57.328** | **52.798** | **−7.9%** |
+
+### Improvement vs PR #1837 same-surf_weight baseline (63.017 val with sw=10)
+
+| Split | Old val (sw=10,T=50) | New val (sw=10,T=12) | Δ |
+|---|---|---|---|
+| single_in_dist | 76.710 | 58.907 | **−23.2%** |
+| geom_camber_rc | 73.930 | 67.658 | −8.5% |
+| geom_camber_cruise | 40.746 | 33.380 | −18.1% |
+| re_rand | 60.683 | 51.248 | −15.5% |
+| **avg** | **63.017** | **52.798** | **−16.2%** |
+
+- **Metric artifacts:** `models/model-charliepai2g48h3-nezuko-lion-tmax-12-aligned-v2-20260513-045129/metrics.jsonl`
+- **Reproduce:** `cd "target/" && python train.py --epochs 12 --lr 1e-4 --weight_decay 1e-4 --batch_size 4 --surf_weight 10`
+
+---
+
 ## 2026-05-13 05:45 — PR #1836: surf_weight=5 on RMSNorm+GeGLU+Lion (thorfinn)
 
 **New best: `val_avg/mae_surf_p` = 57.328** (epoch 14, 30-min wall-clock cap)
