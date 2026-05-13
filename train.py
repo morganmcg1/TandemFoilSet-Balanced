@@ -582,15 +582,6 @@ for epoch in range(MAX_EPOCHS):
     val_avg = aggregate_splits(split_metrics)
     avg_surf_p = val_avg["avg/mae_surf_p"]
     ema.restore(model)
-
-    # --- Diagnostic: also validate using raw (non-EMA) weights ---
-    model.eval()
-    split_metrics_raw = {
-        name: evaluate_split(model, loader, stats, cfg.surf_weight, device, amp_ctx_factory)
-        for name, loader in val_loaders.items()
-    }
-    val_avg_raw = aggregate_splits(split_metrics_raw)
-    avg_surf_p_raw = val_avg_raw["avg/mae_surf_p"]
     dt = time.time() - t0
 
     tag = ""
@@ -616,16 +607,14 @@ for epoch in range(MAX_EPOCHS):
         "train/vol_loss": epoch_vol,
         "train/surf_loss": epoch_surf,
         "val_avg/mae_surf_p": avg_surf_p,
-        "val_avg_raw/mae_surf_p": avg_surf_p_raw,
         "val_splits": split_metrics,
-        "val_splits_raw": split_metrics_raw,
         "is_best": tag == " *",
         "compile_active": compile_active,
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
-        f"val_avg_surf_p(EMA)={avg_surf_p:.4f}  val_avg_surf_p(raw)={avg_surf_p_raw:.4f}{tag}"
+        f"val_avg_surf_p(EMA)={avg_surf_p:.4f}{tag}"
     )
     for name in VAL_SPLIT_NAMES:
         print_split_metrics(name, split_metrics[name])
