@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-05-13 04:00 — PR #1814: lr=1e-3 on asinh+warmup-4 base (super-additive stacking)
+
+**Student:** charliepai2g48h2-alphonse  
+**Change:** Single-line change `Config.lr: float = 7e-4` → `1e-3`. Rebased onto current advisor HEAD (which includes asinh pressure compression from #1777). The warmup-4 buffer absorbs the higher peak LR; asinh compression simultaneously reduces cruise overshoot — the two mechanisms are super-additive.
+
+### Validation (best epoch 14/14 — strict monotone descent, no peak-LR spike)
+
+| Split | mae_surf_p | vs. #1777 baseline (79.8623) | vs. #1776 (80.7014) |
+|---|---|---|---|
+| val_single_in_dist | 89.6722 | **−7.99%** | **−8.23%** |
+| val_geom_camber_rc | 92.4821 | **−2.54%** | **−2.05%** |
+| val_geom_camber_cruise | 54.0925 | +0.17% | −2.24% |
+| val_re_rand | 72.3208 | **−1.07%** | **−4.00%** |
+| **val_avg/mae_surf_p** | **77.1419** | **−3.40%** | **−4.41%** |
+
+**Improvement vs #1777 baseline: −3.40% (79.8623 → 77.1419)**  
+**Cumulative improvement vs #1418 baseline: −37.1% (122.64 → 77.1419)**
+
+### Test (from best-val checkpoint, epoch 14) — clean 4-split
+
+| Split | mae_surf_p | vs. #1777 |
+|---|---|---|
+| test_single_in_dist | 78.4907 | −9.72% |
+| test_geom_camber_rc | 83.2117 | −1.10% |
+| test_geom_camber_cruise | 44.2248 | −1.51% |
+| test_re_rand | 64.7910 | −1.44% |
+| **test_avg/mae_surf_p** | **67.6796** | **−3.91%** |
+
+**Improvement vs #1777 test baseline: −3.91% (70.4297 → 67.6796)**
+
+### Model config
+
+- Transolver(n_hidden=128, n_layers=5, n_head=4, slice_num=64, mlp_ratio=2) — **662K params**
+- AdamW **lr=1e-3** (peak), **4-epoch warmup**, wd=1e-4, CosineAnnealingLR(T_max=10), batch_size=4, surf_weight=10, grad_clip=1.0
+- Loss: `F.l1_loss(reduction='none')` × channel_weights[1,1,3] / 5 in asinh-compressed target space
+- **Asinh pressure compression**: `compress_pressure()`/`decompress_pressure()` with ASINH_GAIN=1.0
+- NaN-skip guard in `evaluate_split`
+
+### Key finding
+
+**Super-additive stacking**: lr=1e-3 alone gave −0.52% on old base; asinh alone gave −1.04%; combined gave −4.41% (2.8× super-additive). Mechanism: asinh compresses heavy-tail pressure residuals, making per-step gradients more uniform → the higher LR escapes local minima on val_single/val_re_rand without overshooting in the low-loss cruise regime (val_cruise +0.17%, nearly neutral). The epoch-5 peak-LR spike seen in the pre-asinh run is GONE (strict monotone descent), confirming asinh provides additional gradient stability at the LR peak. val_single −7.99% is the largest single-split gain observed in this branch.
+
+### Metric artifacts
+
+- `models/model-charliepai2g48h2-alphonse-lr-1e-3-warmup4-asinh-20260513-032210/metrics.jsonl`
+- `models/model-charliepai2g48h2-alphonse-lr-1e-3-warmup4-asinh-20260513-032210/metrics.yaml`
+
+### Reproduce
+
+```bash
+cd "target/" && python train.py \
+    --agent charliepai2g48h2-alphonse \
+    --experiment_name "charliepai2g48h2-alphonse/lr-1e-3-warmup4-asinh" \
+    --epochs 14
+```
+
+---
+
 ## 2026-05-13 02:40 — PR #1777: Asinh pressure compression (asinh value regularization on pressure target)
 
 **Student:** charliepai2g48h2-nezuko  
@@ -401,4 +459,4 @@ err = (pred_orig.double() - y_safe.double()).abs()
 
 ---
 
-> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 79.8623`.
+> To beat this baseline, a new PR must achieve `val_avg/mae_surf_p < 77.1419`.
