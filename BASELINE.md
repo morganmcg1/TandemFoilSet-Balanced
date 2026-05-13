@@ -39,10 +39,53 @@ Each training execution is hard-capped by `SENPAI_TIMEOUT_MINUTES=30` (wall cloc
 
 | Metric | Value | PR | Config | Notes |
 |---|---|---|---|---|
-| `val_avg/mae_surf_p` | **48.5160** | #2195 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + **LayerScale init=1e-4** | epoch 42 of 43 (best≠terminal); -2.59% vs #2173; val_rc FIRST MOVE (-2.22%) in 38 rounds |
-| `test_avg/mae_surf_p` | **42.8162** | #2195 | — | test from best-val checkpoint ep42; -1.66% vs #2173 |
+| `val_avg/mae_surf_p` | **46.8460** | #2268 | L1 + compile + bf16 + slice_num=32 + warmup-3-cosine + n_head=2 + LayerScale + **n_layers=4** | epoch 58 of 58 (terminal); -3.44% vs #2195; all 4 splits improve; 577K params (-18%); budget-bound confirmed |
+| `test_avg/mae_surf_p` | **40.8140** | #2268 | — | test from best-val checkpoint ep58; -4.70% vs #2195 |
 
-All subsequent PRs must beat `val_avg/mae_surf_p < 48.5160` to be merged.
+All subsequent PRs must beat `val_avg/mae_surf_p < 46.8460` to be merged.
+
+## 2026-05-13 17:30 — PR #2268: n_layers 5→4 (depth-down, --epochs 60): budget-bound regime confirmed
+
+- **Student:** charliepai2g48h5-thorfinn
+- **Best epoch:** 58 of 58 — terminal (run timed out at 30.4 min / ep58; val descending at cutoff)
+- **Epochs reached:** 58 (~31.4 s/epoch, -20% vs baseline — one fewer TransolverBlock)
+- **Peak GPU memory:** 16.55 GB (lower than baseline)
+- **Param count:** 577,931 (baseline 657,079 → -79,148 = -12% relative to pre-LayerScale 708K; **-18.4% vs assigned baseline**)
+
+| Split | val mae_surf_p | Δ vs #2195 (LayerScale) |
+|---|---|---|
+| `val_single_in_dist` | **41.7031** | **-6.51%** |
+| `val_geom_camber_rc` | **64.6729** | **-1.93%** |
+| `val_geom_camber_cruise` | **31.5759** | **-4.99%** |
+| `val_re_rand` | **49.4322** | **-1.67%** |
+| **val_avg** | **46.8460** | **-3.44%** |
+
+| Split | test mae_surf_p | Δ vs #2195 |
+|---|---|---|
+| `test_single_in_dist` | **38.6569** | **-3.73%** |
+| `test_geom_camber_rc` | **58.3783** | **-3.45%** |
+| `test_geom_camber_cruise` | **25.7282** | **-6.59%** |
+| `test_re_rand` | **40.4925** | **-6.09%** |
+| **test_avg** | **40.8140** | **-4.70%** |
+
+- **Config change:** `n_layers: 5 → 4` in model_config (one fewer TransolverBlock). `--epochs 50 → 60` to use the ~20% wall-clock savings.
+- **IMPORTANT — this PR did NOT include LayerScale** (branched before #2195 merge). However, squash-merge onto current advisor (which has LayerScale) succeeds cleanly — the n_layers=4 diff is orthogonal to LayerScale γ params. Advisor now has both.
+- **Mechanism — BUDGET-BOUND CONFIRMED:** The ~20% per-epoch wall-clock savings bought 8-10 extra epochs of cosine refinement. All 4 val splits improved, consistent with "budget-gain dominates capacity-loss." Depth=5 was carrying compute waste, not load-bearing geometric capacity for this hidden_dim=128 regime.
+- **Budget-bound diagnostic confirmed:** Best epoch = terminal; cosine LR still decaying at ep58 (LR ~3e-6). Model never plateaued within 30-min budget. Further depth reduction (n_layers=3) or wider schedule (--epochs 75) could yield additional gains.
+- **Metric artifacts:**
+  `models/model-charliepai2g48h5-thorfinn-n-layers-4-20260513-122122/metrics.jsonl`
+  `models/model-charliepai2g48h5-thorfinn-n-layers-4-20260513-122122/metrics.yaml`
+
+- **Reproduce:**
+  ```bash
+  cd target && python train.py \
+      --agent charliepai2g48h5-thorfinn \
+      --experiment_name "charliepai2g48h5-thorfinn/n-layers-4" \
+      --epochs 60
+  ```
+  (n_layers=4 now on advisor branch; stacks with LayerScale γ=1e-4 from PR #2195)
+
+---
 
 ## 2026-05-13 16:30 — PR #2195: LayerScale (CaiT-style learnable residual gain γ, init=1e-4)
 
