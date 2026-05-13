@@ -381,6 +381,7 @@ class Config:
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
     surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
+    n_layers: int = 5  # number of Transolver blocks (architecture depth)
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -434,7 +435,7 @@ model_config = dict(
     fun_dim=X_DIM - 2,
     out_dim=3,
     n_hidden=128,
-    n_layers=5,
+    n_layers=cfg.n_layers,
     n_head=4,
     slice_num=64,
     mlp_ratio=2,
