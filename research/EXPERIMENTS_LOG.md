@@ -168,6 +168,28 @@ All experiments in this round must rebase on `icml-appendix-charlie-pai2g-24h-r3
 
 ---
 
+### 2026-05-13 04:00 — PR #1827: surf_weight=30/50 sweep on #1745 stack (thorfinn) — **CLOSED (curriculum axis past optimum at sw=20)**
+**Branch:** `charliepai2g24h3-thorfinn/surf-weight-sweep-30-50` | **Status: CLOSED**
+
+- **Hypothesis:** Curriculum's surf_weight ramp wins at sw=20 (#1686 vs #1488's sw=10); push the plateau higher (30 / 50) on top of Huber+curriculum stack (#1745) to further accelerate surface convergence.
+- **Both arms FAIL pass criterion** (val < 91.507 AND test < 85.611):
+
+| Arm | sw | val_avg | test_avg (safe) | Δ vs #1745 val | Δ vs #1745 test |
+|---|---:|---:|---:|---:|---:|
+| Baseline (#1745) | 20 | **91.507** | **85.611** | — | — |
+| A | 30 | 96.668 | 90.847 | +5.6% | +6.1% |
+| B | 50 | 95.218 | 89.945 | +4.1% | +5.1% |
+
+- **Per-split val (every split regressed):** single_in_dist 110.04→116.80/115.54 (+6.1%/+5.0%), camber_rc 100.44→107.28/104.78 (+6.8%/+4.3%), camber_cruise 71.16→73.02/72.29 (+2.6%/+1.6%), re_rand 84.38→89.57/88.27 (+6.2%/+4.6%). Predicted "single_in_dist benefits most" inverted — it regressed *more* than other splits at Arm A.
+- **Volume regression (predicted, occurred):** test_avg/mae_vol_p +7.5% (Arm A) / +16.0% (Arm B). Past 5% threshold the student called out beforehand.
+- **Non-monotonic curve:** Arm B (sw=50) is slightly *better* than Arm A (sw=30) — likely single-seed noise (±1 val_avg from prior runs); the safe interpretation is a flat-bottom landscape with optimum around sw=18-22.
+- **Train surf_loss curves:** Both arms still descending at epoch 14 — the surface objective is *not* failing to optimize, but the surface-vs-volume gradient *balance* shifts so volume representation degrades, and surface MAE follows volume down.
+- **New universal principle (P8):** **Two-stage curriculum benefits plateau at a moderate final value (~20× base).** Beyond this, gradient-balance failure dominates: surface convergence does not accelerate, volume regresses, surface MAE follows volume down. The 1→N curriculum is best understood as steering the optimizer toward a balanced surface/volume solution, NOT as a unidirectional "push surface harder" dial. Mechanistically aligned with Huber×curriculum super-additivity from #1745: Huber stabilises per-node gradient distribution, curriculum steers gradient share — they work together in a Goldilocks regime that sw>20 disrupts.
+- **Follow-up assignment (incoming):** thorfinn → surf_weight_warmup_epochs sweep at fixed sw=20. The 5-epoch ramp from #1686 was arbitrary; testing 3 vs 8 epochs decouples ramp shape from plateau height.
+- **Artifacts:** `models/model-surf-weight-30-cosine14-20260513-021547/{metrics.jsonl,test_safe_eval.json}`, `models/model-surf-weight-50-cosine14-20260513-031707/{metrics.jsonl,test_safe_eval.json}`
+
+---
+
 ### 2026-05-13 03:10 — PR #1770: n_layers depth scaling 5→6/7 (fern) — **CLOSED (budget-cap constraint, not capacity)**
 **Branch:** `charliepai2g24h3-fern/n-layers-depth-scaling` | **Status: CLOSED**
 

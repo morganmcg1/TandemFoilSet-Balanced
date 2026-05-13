@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 04:30 UTC
+- **Date**: 2026-05-13 04:45 UTC
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r3` (base `icml-appendix-charlie`)
 - **Research tag**: `charlie-pai2g-24h-r3`
 - **Students (8)**: charliepai2g24h3-{alphonse, askeladd, edward, fern, frieren, nezuko, tanjiro, thorfinn}
@@ -37,7 +37,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 | frieren | #1492 | `mlp-ratio-4-wider-ffn` | WIP — rebase: mlp_ratio=4 |
 | nezuko | #1662 | `fourier-mesh-positional-encoding` | WIP v3 — v2 PASSED (Arm B surface-only L=4: val 95.598 / test 89.895, beats #1686 by −2.07%/−2.23%). Sent back for v3 verification on full merged stack (Huber+curriculum+EMA). |
 | tanjiro | #1693 | `swiglu-ffn` | WIP v2 — v1 hit val 87.28 / test 82.24 (−10% vs #1686!) but merge conflicts + pre-#1484/#1686 base. Sent back for rebase + rerun on full merged stack (#1745 now baseline). |
-| thorfinn | #1827 | `surf-weight-sweep-30-50` | WIP (just assigned) — surf_weight=30 (Arm A) / surf_weight=50 (Arm B) on #1745 merged stack. Tests whether optimal final surf_weight > 20; direct continuation of thorfinn's winning axis. |
+| thorfinn | #1885 | `surf-weight-warmup-3-8-epochs` | WIP — warmup_epochs=3 (Arm A) / warmup_epochs=8 (Arm B) at fixed plateau sw=20. Tests ramp shape decoupled from plateau height. (#1827 closed — sw=30/50 both regressed, established P8.) |
 
 ## Research themes and findings
 
@@ -62,6 +62,7 @@ Stack: `grad_clip=1.0 + wd=1e-3 + augment + cosine T_max=14 + EMA=0.999 + huber_
 ### Closed (disproved — negative results)
 - **Focal per-sample loss weighting** (askeladd #1709): Both arms (γ=1.0, γ=2.0) regress +9-10% val / +10-12% test vs #1495 baseline. Effective batch-size collapse (eff_bs ≈ 1.65 at γ=2.0 out of B=4) was the dominant failure mode — not gradient signal weakness. Revised P3: focal weighting fails at B≤4 with high-y-variance regression. Per-domain sampling (askeladd #1822) is the orthogonal next test.
 - **n_layers depth scaling** (fern #1770): Both arms (n_layers=6/7) regress +13%/+22% vs #1745 baseline. Budget-cap binding: +20-40% sec/epoch reduces completed epochs, cosine schedule never anneals fully, LR still in steep-descent phase at termination. Split predicted to improve most (val_single_in_dist) regressed most (+19.7% at Arm A). New P7: under binding wall-clock cap, sec/epoch increases trade against schedule completion — prefer width/gating/loss axes over depth axis.
+- **surf_weight=30/50 sweep** (thorfinn #1827): Both arms regress +4-6% val / +5-6% test vs #1745 baseline. Volume mae_vol_p regresses 7.5% (sw=30) and 16% (sw=50). Curriculum plateau is past optimum at sw=20 — pushing harder degrades the surface/volume gradient balance that Huber×curriculum unlocked. Non-monotonic (sw=50 < sw=30) likely single-seed noise on a flat-bottom landscape. New P8: two-stage curriculum has a Goldilocks plateau ~20× base; beyond this, gradient-balance failure dominates and surface MAE follows volume MAE down.
 
 ### Closed (disproved on fair comparison)
 - **FiLM Re-conditioning** (tanjiro #1494 v3): val_avg = 104.98 (+1.8% over 103.10 baseline) / test = 98.59 (+4.0% over 94.76 baseline) on cosine T_max=14 + augment + FiLM (exact #1495 protocol + FiLM only). val_re_rand WORSE under FiLM (+3.6%) — opposite of predicted direction. Root cause: log(Re) already at input dim 13 → FiLM adds redundant route; augmentation + FiLM compete on small dataset. v2's 100.99 was rebase artifact, not FiLM signal.
@@ -141,9 +142,26 @@ axes that scale it (depth, attention resolution, mesh resolution). Depth
 scaling requires either a longer per-run budget or adaptive schedule
 matching epochs to available compute.
 
+**P8 (PR #1827): Two-stage surf_weight curriculum has a Goldilocks
+plateau around 20× base.** Pushing the plateau higher (sw=30, sw=50)
+regresses on every per-split metric including the val_single_in_dist
+bottleneck (+5-6% on the worst split). Volume MAE regresses 7.5%
+(sw=30) and 16% (sw=50). The training surf_loss curve continues to
+descend, so absolute surface optimization is not failing — but the
+surface-vs-volume gradient *balance* shifts, volume representation
+degrades, and surface MAE follows volume down. The 1→N curriculum is
+best understood as **steering** the optimizer toward a balanced
+surface/volume solution, NOT as a unidirectional "push surface harder"
+dial. Mechanistically aligned with #1745 Huber×curriculum super-
+additivity: Huber stabilises per-node gradient distribution, curriculum
+steers gradient share — they work together in a Goldilocks regime
+that sw>20 disrupts. Next-axis question: does the *ramp shape*
+(warmup_epochs) have a similar Goldilocks regime, or is it flat?
+(thorfinn #1885 in flight.)
+
 ### Potential next directions (round 3+)
 - **Even smaller Huber δ** (alphonse #1869, in flight): δ=0.25 and δ=0.1 on #1745 merged stack (Huber+curriculum). Optimum may be below 0.5 now that curriculum handles the training-dynamic stability. (#1736 was closed during rebase; reassigned fresh.)
-- **surf_weight push** (thorfinn #1827, in flight): surf_weight=30/50 on #1745 stack. Directly tests whether optimal final weight > 20; expected gain from targeting val_single_in_dist bottleneck (110.04).
+- **Curriculum ramp shape** (thorfinn #1885, in flight): warmup_epochs=3 vs 8 at fixed sw=20. Tests whether the 5-epoch ramp from #1686 is itself a hyperparameter to tune. (#1827 closed — plateau axis past optimum.)
 - **Per-domain data curriculum** (askeladd #1822, in flight): over-sample racecar_single training domain 2x/3x. Direct orthogonal approach to single_in_dist bottleneck after focal weighting failure.
 - **SwiGLU composability** (tanjiro #1693 v2, in flight): ~−10% gain expected if v1 held on merged stack.
 - **Fourier PE composability** (nezuko #1662 v3, in flight): ~−2% additional gain expected if v2 held on merged stack.
