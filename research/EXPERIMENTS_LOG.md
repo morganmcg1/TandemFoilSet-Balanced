@@ -908,3 +908,50 @@ All 4 PRs start fresh from the merged FiLM baseline (no rebase pain), 4 orthogon
 | #1734 | thorfinn | `asinh-pressure-on-filmed` | Value-level target compression (orthogonal to sample-level Re-weight curve) | −1 to −3% val |
 
 Combined with #1691 (edward, surf_weight=5) and #1702 (askeladd, per-channel p-weight) and #1618 (alphonse, surf-Huber-vol-MSE), the in-flight wave covers 7 distinct mechanism axes across all 8 students.
+
+---
+
+## 2026-05-13 00:35 — PR #1618 alphonse (surf-huber-vol-mse): CLOSE on reframe rule + reassign to FiLM-baseline composition test
+
+Student's final result: **val=95.79 / test=85.42** (SWA model). On the SWA-on-Huber frame this was a clean −3.31% val / −3.90% test win with **uniform improvement across all 4 splits** (no split sacrificed) — a textbook positive mechanism result on the pre-FiLM-merge baseline.
+
+### Why closed (per reframe rule)
+
+The new merged baseline is val=80.82 (FiLM, #1585). alphonse's result is +18.5% above that floor. Per the wave-6 reframe rule (val ≥ 84 → close), this PR closes despite the strong mechanism evidence on the prior frame.
+
+### Mechanism preserved + reassigned
+
+The surf-Huber / vol-MSE split is genuinely orthogonal to FiLM:
+- Surface domain: stiff outliers (suction peaks at high-Re) → Huber's outlier-capping is correct loss kind
+- Volume domain: smooth fields, near-Gaussian residual distribution → MSE's quadratic emphasis on small errors helps gradient flow
+- FiLM addresses *cross-condition* generalization (per-layer (γ,β) from globals); split-loss addresses *per-domain optimization landscape*.
+
+Reassigned to **PR #1739** (`surf-huber-vol-mse-on-filmed`) — fresh fork-point on the FiLM baseline. Predicted Δ: −1 to −3% val if mechanisms compose orthogonally.
+
+### Per-split confirmation from #1618 (for posterity)
+
+| Split | mae_surf_p | Δ vs PR #1554 SWA |
+|---|---|---|
+| val_single_in_dist | 112.47 | −4.49% |
+| val_geom_camber_rc | 102.48 | −1.68% |
+| val_geom_camber_cruise | 76.88 | −2.91% |
+| val_re_rand | 91.34 | −3.97% |
+
+Strongest gain on `val_re_rand` recovers exactly the wave-1 loss (#1554 SWA-on-Huber had +2.23% regression on this split). This is the lever's signature: outlier-capping on surf + MSE-on-vol benefits high-Re extrapolation specifically.
+
+### Wave-6 portfolio update
+
+All 8 students now on wave-6 PRs (or just-assigned wave-6 fork from closed wave-5):
+
+| PR | Student | Mechanism axis |
+|---|---|---|
+| #1691 | edward | surf_weight=5 (sample-domain weighting) — predates FiLM merge, residual |
+| #1702 | askeladd | per-channel p-weight (channel axis) |
+| #1731 | nezuko | gradient clipping (optimizer stability) |
+| #1732 | tanjiro | SWA start 0.65 (averaging window) |
+| #1733 | fern | attention dropout 0.1 (token regularization) |
+| #1734 | thorfinn | asinh on pressure (value-level transform) |
+| #1739 | alphonse | surf-Huber/vol-MSE (loss-kind per domain) — wave-6 NEW |
+| #1600 | frieren | β-sweep on SWA-on-Huber — residual from wave-3 |
+
+8 distinct mechanism axes in flight, 7 of those forked from the FiLM baseline directly.

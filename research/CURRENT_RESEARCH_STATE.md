@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Last updated:** 2026-05-13 00:30 (post-wave-5 review wave: 4 PRs closed, 4 wave-6 assignments launched)
+- **Last updated:** 2026-05-13 00:40 (post-#1618 close + #1739 alphonse reassignment — all 8 wave-6)
 - **Advisor branch:** `icml-appendix-willow-pai2g-48h-r2`
 - **Research tag:** `willow-pai2g-48h-r2`
 - **Target repo:** `morganmcg1/TandemFoilSet-Balanced` (base branch `icml-appendix-willow`)
@@ -44,7 +44,7 @@ None received. Last issue check: 2026-05-13 00:30 UTC, zero open issues on this 
 
 ### Wave 6 (in flight, on the merged FiLM baseline)
 
-All 6 PRs forked from the new baseline. 4 new assignments (00:25 UTC) replace 4 closed wave-5 PRs.
+All 7 PRs forked from the new baseline (alphonse #1739 added 00:40 UTC after closing #1618).
 
 | PR | Student | Slug | Mechanism axis | Predicted Δ vs. 80.82 |
 |---|---|---|---|---|
@@ -53,6 +53,7 @@ All 6 PRs forked from the new baseline. 4 new assignments (00:25 UTC) replace 4 
 | #1732 | tanjiro | `swa-start-0p65-on-filmed` | SWA window 3 → 5 epochs — follow-up to #1679 mechanism finding | −0.5 to −2% |
 | #1733 | fern | `attn-dropout-0p1-on-filmed` | Attention softmax dropout (token-level regularization) | −0.5 to −2% |
 | #1734 | thorfinn | `asinh-pressure-on-filmed` | Value-level pressure-target compression | −1 to −3% |
+| #1739 | alphonse | `surf-huber-vol-mse-on-filmed` | Loss-kind per domain (Huber on surf, MSE on vol) — retest of #1618 win | −1 to −3% |
 
 ### Wave 5 (residual, single in-flight PR remaining)
 
@@ -64,7 +65,6 @@ All 6 PRs forked from the new baseline. 4 new assignments (00:25 UTC) replace 4 
 
 | PR | Student | Slug | Hypothesis | Status |
 |---|---|---|---|---|
-| #1618 | alphonse | `surf-huber-vol-mse` | Split loss kind: Huber on surface, MSE on volume | **last completed run val=98.35 (pre-FiLM-merge); awaiting student status** |
 | #1600 | frieren | `beta-sweep-on-swa` | 3-arm Huber β ∈ {0.3, 1.0, 3.0} | **β=0.3 done (val=96.16), β=1.0 done (val=104.17), β=3.0 running** |
 
 ### Reframe decision rule (vs new 80.82 baseline)
@@ -83,6 +83,7 @@ All 6 PRs forked from the new baseline. 4 new assignments (00:25 UTC) replace 4 
 - **#1680 (fern, drop_path=0.1):** val=109.52 (+35.6%). Architecture-regularization axis (block-level stochastic depth) closed as wrong-axis at 5 layers.
 - **#1679 (tanjiro, no-SWA):** val=98.96 (+22.4%). SWA helps val_geom_camber_rc; the schedule-displacement frame from #1645 was wrong. Motivates wave-6 #1732.
 - **#1642 (thorfinn, sqrt-Re-weight):** val=96.26 (+19.1%). Re-weight CURVE is null under per-batch normalization; DIRECTION is the lever. Motivates wave-6 #1734.
+- **#1618 (alphonse, surf-Huber/vol-MSE on SWA-on-Huber):** val=95.79 (+18.5%). Clean −3.3% / −3.9% on prior frame with uniform improvement across all 4 splits — mechanism is real but stack-stale. Reassigned to wave-6 #1739 (composition test on FiLM baseline).
 
 ## ⚠ Active operational notes
 
