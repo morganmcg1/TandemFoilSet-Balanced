@@ -1,6 +1,6 @@
 # SENPAI Research State
 
-- **Date**: 2026-05-13 11:15 (reviewed #2154 n-head-8 CLOSED +14.2%; #2146 log-cosh CLOSED +2.93%; assigned refilm-per-block #2198 fern / sorted-pressure-dist #2204 thorfinn)
+- **Date**: 2026-05-13 11:40 (reviewed #1884 onecycle-lr CLOSED +3.52% clip-saturated; assigned weight-decay-5e-4 #2233 alphonse)
 - **Most recent research direction from human researcher team**: No directives yet.
 - **Advisor branch**: `icml-appendix-charlie-pai2g-24h-r1`
 
@@ -55,13 +55,14 @@ Restart shock destroyed cycle-2 convergence (#2110 +8.13%).
 
 ## Current Research Focus
 
-**Re-conditioning axis expansion and distribution matching**. Programme is now exploring:
-1. **Budget-aware training**: EMA β=0.99 (frieren, rebasing), SWA plateau (edward, rebasing), OneCycleLR peak 2e-3 (alphonse)
+**Re-conditioning axis expansion, distribution matching, and regularization**. Programme is now exploring:
+1. **Budget-aware training**: EMA β=0.99 (frieren, rebasing), SWA plateau v3-lower-lr (edward, in-flight)
 2. **Re-conditioning depth**: ReFiLM per-block (fern #2198 — 5 independent FiLMs vs shared)
 3. **Cosine schedule extension**: T_max=40/56 (askeladd #2147)
 4. **Re input robustness**: Gaussian noise on log(Re) (tanjiro #2169)
 5. **Distribution matching**: Sorted pressure W1 loss (thorfinn #2204)
-6. **Capacity**: slice_num=128 (nezuko #1467)
+6. **Regularization**: SOAP weight decay 5× (alphonse #2233)
+7. **Capacity**: slice_num=128 (nezuko #1467)
 
 ---
 
@@ -75,7 +76,7 @@ Restart shock destroyed cycle-2 convergence (#2110 +8.13%).
 | #2147 | askeladd | `cosine-long-tail` | WIP | **HIGH** | T_max=40/56 so cosine never completes within 28-ep budget; higher final LR |
 | #2032 | edward | `plateau-swa` | WIP REBASE | **HIGH** | SWA over 1e-4 plateau; needs rebase onto 28.8762 |
 | #1966 | frieren | `ema-beta-0p99-rampup` | WIP REBASE | **HIGH** | EMA β=0.99; needs rebase onto 28.8762 |
-| #1884 | alphonse | `onecycle-lr` | WIP | **HIGH** | OneCycleLR(max_lr=2e-3); higher peak LR than warmup-only tests |
+| #2233 | alphonse | `weight-decay-5e-4` | NEW | **HIGH** | SOAP wd 1e-4→5e-4 (5×); OOD generalization via stronger L2 regularization |
 | #1467 | nezuko | `more-slices-128` | WIP STALE | MEDIUM | slice_num=128; baseline update sent |
 
 All 8 students active.
@@ -121,6 +122,7 @@ All 8 students active.
 - **sgdr-warm-restarts-v2** (#2110): +8.13% val; restart shock burned cycle-2 budget. Warm restarts CLOSED.
 - **n-layers-6** (#2079): +6.22% val; ~19% epoch slowdown trimmed budget. n_layers=6 closed for current budget.
 - **n-head-8** (#2154): +14.2% val; dim_head=16 below bf16 GEMM efficiency → 23% epoch slowdown → epoch 23/28 cutoff.
+- **onecycle-lr** (#1884): +3.52% val; max_lr=2e-3 saturated grad_clip=1.0 throughout peak window (clip_frac=1.0 ep2-15); effective LR = max_lr/grad_norm_mean ≈ 2e-3/8 ≈ 2.5e-4. OneCycleLR closed.
 
 ---
 

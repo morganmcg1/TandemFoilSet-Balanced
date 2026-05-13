@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-05-13 11:40 — PR #1884: [onecycle-lr] OneCycleLR max_lr=2e-3, pct_start=0.1 — CLOSED
+
+- **Branch**: charliepai2g24h1-alphonse/onecycle-lr
+- **Hypothesis**: OneCycleLR(max_lr=2e-3, pct_start=0.1) — 10% warmup then cosine decay; higher peak LR than baseline 1e-3 to achieve super-convergence with SOAP.
+- **Status**: CLOSED — +3.52% val regression. grad_clip=1.0 fundamentally incompatible with max_lr=2e-3 on SOAP.
+
+| Metric | OneCycleLR | Baseline (#2011) | Δ |
+|--------|-----------|-----------------|---|
+| val_avg/mae_surf_p | 29.8919 | 28.8762 | **+3.52% (WORSE)** |
+| test_avg/mae_surf_p | 25.4001 | 24.9992 | **+1.60% (WORSE)** |
+| Best epoch | 28 | 28 | — |
+
+**Root cause**: `max_lr=2e-3` saturated `grad_clip=1.0` from epoch 2 through epoch 15 (clip_frac=1.0 throughout the LR-peak window). Effective per-step LR was scaled down by grad_norm_mean (3-13×), so the OneCycleLR peak provided no benefit. By the time clip relaxed (~epoch 22), LR had decayed below baseline cosine values. Model was still improving at epoch 28 (29.89 → still falling).
+
+**Programme finding**: OneCycleLR direction closed. `max_lr` above ~1.5e-3 is incompatible with `grad_clip=1.0` on SOAP at this model scale. Any follow-up would require either lowering grad_clip (load-bearing setting) or accepting that the "super-convergence" peak cannot be realized.
+
+**Artifact**: `models/model-charliepai2g24h1-alphonse-onecycle-lr-20260513-105301/metrics.jsonl`
+
+---
+
 ## 2026-05-13 11:10 — PR #2154: [n-head-8] n_head 4→8, same inner_dim=128 — CLOSED
 
 - **Branch**: charliepai2g24h1-fern/n-head-8
