@@ -381,6 +381,7 @@ class Config:
     naca_jitter: float = 0.002       # std of Gaussian noise on normalized NACA camber feature
     surf_weight_warmup_epochs: int = 0  # epochs of linear ramp from surf_weight_init to surf_weight; 0 disables
     surf_weight_init: float = 1.0       # starting surf_weight at epoch 0 when warmup is enabled
+    racecar_single_oversample: float = 1.0  # multiplier for racecar_single domain sampling weight
 
 
 def augment_geometry(x: torch.Tensor, cfg: "Config") -> torch.Tensor:
@@ -413,6 +414,51 @@ print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
 
+# Build idx -> domain mapping (used for both oversampling and diagnostics)
+with open(Path(cfg.splits_dir) / "meta.json") as _f:
+    _meta = json.load(_f)
+_domain_groups = _meta["domain_groups"]
+idx_to_domain: dict[int, str] = {}
+for _name, _idxs in _domain_groups.items():
+    for _i in _idxs:
+        idx_to_domain[_i] = _name
+DOMAIN_NAMES = ("racecar_single", "racecar_tandem", "cruise")
+
+if cfg.racecar_single_oversample != 1.0 and not cfg.debug:
+    racecar_single_idxs = set(_domain_groups["racecar_single"])
+    for _i in range(len(train_ds)):
+        if _i in racecar_single_idxs:
+            sample_weights[_i] *= cfg.racecar_single_oversample
+    sample_weights = sample_weights / sample_weights.sum()
+    print(f"racecar_single oversample x{cfg.racecar_single_oversample}: "
+          f"applied to {len(racecar_single_idxs)} indices")
+
+
+def expected_domain_fractions(weights: torch.Tensor) -> dict[str, float]:
+    """Expected per-domain probability under the weighted sampler."""
+    total = weights.sum().item()
+    out: dict[str, float] = {}
+    for d in DOMAIN_NAMES:
+        out[d] = sum(weights[i].item() for i in _domain_groups[d]) / total
+    return out
+
+
+def empirical_batch_domain_composition(weights: torch.Tensor, batch_size: int,
+                                       n_batches: int, generator: torch.Generator
+                                       ) -> list[dict[str, float]]:
+    """Sample n_batches batches from the weighted distribution and return per-batch fractions."""
+    n_total = n_batches * batch_size
+    idxs = torch.multinomial(weights, n_total, replacement=True, generator=generator).tolist()
+    out = []
+    for b in range(n_batches):
+        batch_idxs = idxs[b * batch_size:(b + 1) * batch_size]
+        counts = {d: 0 for d in DOMAIN_NAMES}
+        for i in batch_idxs:
+            counts[idx_to_domain[i]] += 1
+        out.append({d: counts[d] / batch_size for d in DOMAIN_NAMES})
+    return out
+
+
 loader_kwargs = dict(collate_fn=pad_collate, num_workers=4, pin_memory=True,
                      persistent_workers=True, prefetch_factor=2)
 
@@ -423,6 +469,11 @@ else:
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_ds), replacement=True)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
                               sampler=sampler, **loader_kwargs)
+
+if not cfg.debug:
+    _expected = expected_domain_fractions(sample_weights)
+    print(f"Sampler expected domain fractions: "
+          + ", ".join(f"{d}={_expected[d]:.4f}" for d in DOMAIN_NAMES))
 
 val_loaders = {
     name: DataLoader(ds, batch_size=cfg.batch_size, shuffle=False, **loader_kwargs)
@@ -524,6 +575,16 @@ for epoch in range(MAX_EPOCHS):
     else:
         current_surf_weight = cfg.surf_weight
 
+    domain_diag = None
+    if not cfg.debug and (epoch == 0 or epoch == MAX_EPOCHS - 1):
+        diag_gen = torch.Generator().manual_seed(1000 + epoch)
+        domain_diag = empirical_batch_domain_composition(
+            sample_weights, cfg.batch_size, n_batches=10, generator=diag_gen,
+        )
+        mean_frac = {d: sum(b[d] for b in domain_diag) / len(domain_diag) for d in DOMAIN_NAMES}
+        print(f"  [domain diag epoch {epoch+1}] 10-batch mean: "
+              + ", ".join(f"{d}={mean_frac[d]:.3f}" for d in DOMAIN_NAMES))
+
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -598,7 +659,7 @@ for epoch in range(MAX_EPOCHS):
         tag = " *"
 
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
-    append_metrics_jsonl(metrics_jsonl_path, {
+    epoch_record = {
         "event": "epoch",
         "epoch": epoch + 1,
         "seconds": dt,
@@ -616,7 +677,12 @@ for epoch in range(MAX_EPOCHS):
         "scheduler": "onecycle" if cfg.use_onecycle else "cosine",
         "surf_weight_warmup_epochs": cfg.surf_weight_warmup_epochs,
         "surf_weight_init": cfg.surf_weight_init,
-    })
+        "racecar_single_oversample": cfg.racecar_single_oversample,
+    }
+    if domain_diag is not None:
+        epoch_record["domain_batch_diag"] = domain_diag
+        epoch_record["domain_expected"] = expected_domain_fractions(sample_weights)
+    append_metrics_jsonl(metrics_jsonl_path, epoch_record)
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  "
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f}]  "
