@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import simple_parsing as sp
 import torch
 import torch.nn as nn
@@ -467,6 +468,45 @@ class Config:
     # so gradient on the p channel scales by exactly p_channel_weight regardless
     # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
     p_channel_weight: float = 5.0
+    # Scalar-only Mixup alpha. Mixes only the 11 per-sample broadcast features
+    # (dims 13-23: log_Re, AoA1, NACA1, AoA2, NACA2, gap, stagger) and the
+    # target field y across the batch with lam ~ Beta(alpha, alpha). Set to 0
+    # to disable. Applied only during training, never during val/test.
+    mixup_alpha: float = 0.4
+
+
+# Per-sample broadcast feature columns in x (dims 13-23):
+#   13: log(Re), 14: AoA1, 15-17: NACA1, 18: AoA2, 19-21: NACA2, 22: gap, 23: stagger.
+# Confirmed const-across-nodes via inspection of train samples in
+# splits_v2/train (dim 13-23 have zero per-sample variance over mesh nodes).
+SCALAR_COLS_SLICE = slice(13, 24)
+
+
+def scalar_mixup(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    alpha: float,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    """Scalar-only Mixup: mix per-sample broadcast input features and targets.
+
+    Per-node geometric features (dims 0-12) are kept from the original sample.
+    Only the 11 broadcast scalars (dims 13-23) are convex-combined across the
+    batch, along with the target field y, via lam ~ Beta(alpha, alpha).
+
+    No-op if batch < 2. Returns (x_mixed, y_mixed, lam).
+    """
+    B = x.shape[0]
+    if B < 2:
+        return x, y, 1.0
+    lam = float(np.random.beta(alpha, alpha))
+    perm = torch.randperm(B, device=x.device)
+    x_mixed = x.clone()
+    x_mixed[..., SCALAR_COLS_SLICE] = (
+        lam * x[..., SCALAR_COLS_SLICE]
+        + (1.0 - lam) * x[perm][..., SCALAR_COLS_SLICE]
+    )
+    y_mixed = lam * y + (1.0 - lam) * y[perm]
+    return x_mixed, y_mixed, lam
 
 
 cfg = sp.parse(Config)
@@ -646,12 +686,28 @@ for epoch in range(MAX_EPOCHS):
     log_re_sq_sum = 0.0
     scale_log_re_cross = torch.zeros(3, dtype=torch.float64, device=device)
     scale_n = 0
+    # Mixup diagnostics: lam ~ Beta(alpha, alpha); record mean and edge fraction.
+    mixup_lam_sum = 0.0
+    mixup_lam_sq_sum = 0.0
+    mixup_lam_edge_count = 0  # |lam-0.5| > 0.4 (close to pass-through)
+    mixup_n = 0
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
         is_surface = is_surface.to(device, non_blocking=True)
         mask = mask.to(device, non_blocking=True)
+
+        # Scalar-only Mixup (training only). Mixes broadcast scalars (cols 13-23)
+        # across batch and proportionally mixes y. Per-node geometric features
+        # are kept from the original sample to avoid mesh-topology conflicts.
+        if cfg.mixup_alpha > 0:
+            x, y, mixup_lam = scalar_mixup(x, y, alpha=cfg.mixup_alpha)
+            mixup_lam_sum += mixup_lam
+            mixup_lam_sq_sum += mixup_lam * mixup_lam
+            if abs(mixup_lam - 0.5) > 0.4:
+                mixup_lam_edge_count += 1
+            mixup_n += 1
 
         with autocast(device_type="cuda", dtype=torch.bfloat16):
             x_norm = (x - stats["x_mean"]) / stats["x_std"]
@@ -812,6 +868,15 @@ for epoch in range(MAX_EPOCHS):
         slice_entropy_film_stats_last = {"gamma": epoch_gamma_stats, "beta": epoch_beta_stats}
     last_completed_epoch = epoch + 1
 
+    # Mixup epoch summary (zero/no-mix when alpha=0 or all batches skipped).
+    if mixup_n > 0:
+        mixup_lam_mean = mixup_lam_sum / mixup_n
+        mixup_lam_var = max(mixup_lam_sq_sum / mixup_n - mixup_lam_mean ** 2, 0.0)
+        mixup_lam_std = mixup_lam_var ** 0.5
+        mixup_edge_frac = mixup_lam_edge_count / mixup_n
+    else:
+        mixup_lam_mean = mixup_lam_std = mixup_edge_frac = 0.0
+
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -844,6 +909,11 @@ for epoch in range(MAX_EPOCHS):
         "film/slice_entropy_per_head": epoch_slice_entropy,
         "film/gamma_stats": epoch_gamma_stats,
         "film/beta_stats": epoch_beta_stats,
+        "mixup/alpha": cfg.mixup_alpha,
+        "mixup/lam_mean": mixup_lam_mean,
+        "mixup/lam_std": mixup_lam_std,
+        "mixup/lam_edge_frac": mixup_edge_frac,
+        "mixup/scalar_cols": list(range(13, 24)),
     })
     print(
         f"Epoch {epoch+1:3d} ({dt:.0f}s) [{peak_gb:.1f}GB]  lr={current_lr:.6f}  "
@@ -862,6 +932,12 @@ for epoch in range(MAX_EPOCHS):
         f"std={[f'{v:.3f}' for v in scale_std]}  "
         f"corr_logRe={[f'{v:+.3f}' for v in corr]}"
     )
+    if cfg.mixup_alpha > 0 and mixup_n > 0:
+        print(
+            f"    Mixup(alpha={cfg.mixup_alpha})  "
+            f"lam_mean={mixup_lam_mean:.3f}  lam_std={mixup_lam_std:.3f}  "
+            f"edge_frac={mixup_edge_frac:.2f}  n_batches={mixup_n}"
+        )
     if epoch_slice_entropy is not None:
         flat_ent = [v for block_ent in epoch_slice_entropy for v in block_ent]
         if flat_ent:
