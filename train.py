@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -425,6 +426,8 @@ class Config:
     surf_weight: float = 10.0
     epochs: int = 50
     huber_delta: float = 1.0  # Huber threshold (normalised space). 0 ⇒ fallback to MSE.
+    use_logcosh: bool = False     # if True, override Huber with LogCosh surface loss
+    logcosh_scale: float = 1.0    # scale: L(r) = scale × log(cosh(r/scale))
     surf_head_lr: float = 0.0  # If 0.0, uses cfg.lr (encoder LR) for surf_head too
     splits_dir: str = "/mnt/new-pvc/datasets/tandemfoil/splits_v2"
     wandb_group: str | None = None
@@ -440,6 +443,33 @@ MAX_TIMEOUT_MIN = DEFAULT_TIMEOUT_MIN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}" + (" [DEBUG]" if cfg.debug else ""))
+
+# Surface loss sanity check: print L(r) at three residual magnitudes for the
+# active loss family. LogCosh should be ≈ r²/2 near 0 and ≈ |r| − scale·log2 far.
+def _surface_loss_sanity_print(cfg: "Config") -> None:
+    rs = [0.01, 1.0, 10.0]
+    print(f"[loss-sanity] active = {'LogCosh' if cfg.use_logcosh else 'Huber'} "
+          f"(delta={cfg.huber_delta}, logcosh_scale={cfg.logcosh_scale})")
+    for r in rs:
+        r_t = torch.tensor(r)
+        if cfg.use_logcosh:
+            s = cfg.logcosh_scale
+            r_abs = r_t.abs() / s
+            v = (s * (r_abs + F.softplus(-2.0 * r_abs) - math.log(2.0))).item()
+            tag = f"LogCosh(scale={s})"
+        else:
+            d = cfg.huber_delta
+            if d > 0:
+                v = (0.5 * r_t.pow(2) / d).item() if r_t.abs() < d else (r_t.abs() - 0.5 * d).item()
+            else:
+                v = r_t.pow(2).item()
+            tag = f"Huber(delta={d})"
+        # also show Huber(0.5) reference for comparison
+        d_ref = 0.5
+        v_ref = (0.5 * r_t.pow(2) / d_ref).item() if r_t.abs() < d_ref else (r_t.abs() - 0.5 * d_ref).item()
+        print(f"  r={r:>6.2f}  {tag:>22s}={v:.6f}  | Huber(0.5)_ref={v_ref:.6f}")
+
+_surface_loss_sanity_print(cfg)
 
 train_ds, val_splits, stats, sample_weights = load_data(cfg.splits_dir, debug=cfg.debug)
 stats = {k: v.to(device) for k, v in stats.items()}
@@ -546,11 +576,17 @@ for epoch in range(MAX_EPOCHS):
         pred = model({"x": x_norm})["preds"]
         pred = surf_head(pred, x_norm, is_surface)
 
-        # Per-node Huber (SmoothL1) for surface to align with MAE metric;
-        # keep MSE for volume. delta=0 falls back to MSE for surface too.
+        # Per-node surface loss to align with MAE metric; keep MSE for volume.
+        # LogCosh path (C∞-smooth) overrides Huber when use_logcosh=True.
         delta = cfg.huber_delta
         abs_err = (pred - y_norm).abs()
-        if delta > 0:
+        if cfg.use_logcosh:
+            # Numerically stable LogCosh: scale * log(cosh(r)) where r = err/scale.
+            # log(cosh(x)) = |x| + softplus(-2|x|) - log(2)  (no overflow for large |x|).
+            s = cfg.logcosh_scale
+            r_abs = abs_err / s
+            surf_node_loss = s * (r_abs + F.softplus(-2.0 * r_abs) - math.log(2.0))
+        elif delta > 0:
             surf_node_loss = torch.where(
                 abs_err < delta,
                 0.5 * abs_err.pow(2) / delta,
@@ -588,11 +624,17 @@ for epoch in range(MAX_EPOCHS):
         loss.backward()
         optimizer.step()
         global_step += 1
-        # Fraction of surface errors in the L1 (linear) regime — informs delta choice.
+        # Fraction of surface errors in the linear regime — informs delta/scale choice.
+        # For Huber: |r| >= delta is the L1 piece. For LogCosh: |r| >= scale marks
+        # where the gradient is past ~tanh(1)≈0.76 (i.e. close to its ±1 plateau).
         with torch.no_grad():
-            if delta > 0 and surf_mask.any():
+            if surf_mask.any():
                 surf_abs = abs_err[surf_mask.unsqueeze(-1).expand_as(abs_err)]
-                surf_l1_frac = (surf_abs >= delta).float().mean().item()
+                threshold = cfg.logcosh_scale if cfg.use_logcosh else delta
+                if threshold > 0:
+                    surf_l1_frac = (surf_abs >= threshold).float().mean().item()
+                else:
+                    surf_l1_frac = 0.0
             else:
                 surf_l1_frac = 0.0
         wandb.log({
