@@ -933,6 +933,43 @@ Pre-grad-clip data point (`9tj1jm2b`): surf_w=5 on vol-Huber only baseline gave 
 
 ---
 
+## 2026-05-13 17:30 — PR #2379 CLOSED: CosineAnnealingLR T_max=35 + eta_min=1e-5
+
+- **Student:** willowpai2g48h3-nezuko
+- **Branch:** willowpai2g48h3-nezuko/cosine-etamin-1e5
+- **Hypothesis:** Add explicit eta_min=1e-5 floor to T_max=35 cosine schedule. Mechanism: PR #1843 (T_max=35, eta_min=0) failed because schedule decays to 0 too aggressively; an explicit floor should preserve useful late-training LR steps.
+
+### Results (2 seeds, post-betas baseline)
+
+| Run | Seed | `val_avg/mae_surf_p` | `test_avg/mae_surf_p` | best epoch | runtime |
+|---|---|---:|---:|---:|---|
+| `f9tovqyk` | 1 | 65.049 | 56.613 | 35 | 30.6 min |
+| `mj5tbb43` | 2 (better) | **63.601** | **55.454** | 35 | 30.6 min |
+| **Baseline #2017 (wd=2e-4)** | 1 (`scg45qnb`) | 58.883 | 51.078 | 35 | 30.5 min |
+
+Δ vs current baseline: val **+8.0%** (worse), test **+8.6%** (worse). Every split regresses (single_in_dist +5.8%, rc +9.1%, cruise +12.9%, re_rand +8.0%).
+
+### Conclusion
+
+**CLOSED — hypothesis falsified.** Floor mechanism IS working (val keeps dropping in last 3 epochs: 64.15→63.78→63.60 at lr=1.39e-5→1.10e-5→1.00e-5), but the absolute val plateau is set by the integrated LR trajectory across all 35 epochs, not by the last 5. T_max=35 puts the model at sub-meaningful LRs (<5e-5) from epoch 30 onward, wasting ~5 epochs of compute-bound budget that T_max=50 keeps productive.
+
+**Cosine-shape axis fully closed for round 1.** Three negative results:
+- #1843 T_max=35, eta_min=0: +3.1% (vs pre-betas baseline)
+- #2379 T_max=35, eta_min=1e-5: +6.1% (vs post-betas baseline) — even worse
+- T_max=50 (baseline): wins both, structurally optimal for the 30-min cap
+
+Schedule wins from here come from different shapes (OneCycleLR, warm restarts) or different heads (edward's warmup #2440), not from tuning the cosine endpoint.
+
+### Useful diagnostic preserved
+
+Nezuko's late-epoch val tail (lr ∈ [1e-5, 2.5e-5]) shows the model is still in active improvement at sub-1e-4 LRs. This is consistent with the compute-bound thesis: the model would benefit from more total steps, not from a lower lr floor.
+
+### Follow-up
+
+- **nezuko → new non-schedule axis** (schedule space fully mapped in round 1). Optimizer variant, regularization, or architectural micro-changes.
+
+---
+
 ## 2026-05-13 16:10 — PR #2017 MERGED: weight_decay 1e-4 → 2e-4 — 8th baseline shift
 
 - **Student:** willowpai2g48h3-edward

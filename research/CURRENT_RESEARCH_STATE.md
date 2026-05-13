@@ -81,7 +81,7 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #2180 | alphonse  | Dropout p=0.1 in PhysicsAttention | WIP, vol-Huber baseline (just assigned; orthogonal to all in-flight) |
 | #1810 | frieren   | torch.compile (dynamic=True)     | **MERGED** 05:15 (val=67.83, test=59.78) — largest single-axis win of round 1 |
 | #1843 | nezuko    | Cosine T_max=35                  | CLOSED: val +3.1% worse. T_max=35 anneals to lr=0 too aggressively; T_max=50's implicit residual lr~1e-4 at epoch 35 does useful continued work. In-dist wins −7% but OOD regresses. |
-| #2379 | nezuko    | Cosine T_max=35 + eta_min=1e-5   | WIP, grad-clip baseline (just assigned 15:00); explicit LR floor tests residual-LR mechanism |
+| #2379 | nezuko    | Cosine T_max=35 + eta_min=1e-5   | CLOSED: val +8.0%, test +8.6% worse. Floor mechanism works (val drops to 63.60 at lr=1e-5 in last 3 epochs) but integrated LR trajectory over 35 epochs is the dominant factor — T_max=35 wastes ~5 epochs at sub-meaningful LRs. Cosine-shape axis closed. |
 | #1882 | askeladd  | Huber β=0.75 (β-tune from above) | CLOSED (+8.6% val, +10.0% test — β-axis fully bracketed: 0.25 fails, 0.5 optimum, 0.75 fails) |
 | #1910 | thorfinn  | Volume Huber β=0.5               | **MERGED** 07:30 (val=65.47, test=57.84) — OOD splits drove win; in-dist regressed slightly; zero compute overhead |
 | #1939 | edward    | mlp_ratio 2→4 retry on compile   | CLOSED on compile (+5.8% val, +6.6% test — 6th compute-bound capacity-axis regression; scalar-capacity cluster now firmly retired across all 3 baselines) |
@@ -93,7 +93,7 @@ Round 1 in-flight (8 PRs) — all must beat **val < 60.09, test < 53.37**:
 | #2341 | thorfinn  | surf_weight 10 → 20              | CLOSED: val +7.0%, test +8.6% worse. Axis fully bracketed (5 fails, 10 optimum, 20 fails). Convex asymmetric — over-weighting steals capacity from volume → OOD regresses hardest. |
 | #2415 | thorfinn  | Stochastic Depth (DropPath p=0.1) | WIP, grad-clip baseline (just assigned; layer-level structural regularization, orthogonal to all in-flight axes) |
 
-**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 16. **Open:** 8 (edward #2440 lr-warmup, tanjiro #2420, fern #2397, frieren #2399, nezuko #2379, thorfinn #2415, askeladd #2163, alphonse #2180).
+**Merged:** 8 (mask-aware, Huber β=0.5 surf, bf16, compile, vol-Huber β=0.5, grad_clip max_norm=1.0, AdamW betas (0.9, 0.95), **weight_decay=2e-4**). **Closed:** 17. **Open:** 7 (edward #2440 lr-warmup, tanjiro #2420, fern #2397, frieren #2399, thorfinn #2415, askeladd #2163, alphonse #2180) + nezuko IDLE (new assignment pending).
 
 **Scalar-capacity axis cluster fully retired across THREE baselines.** All four scalar-capacity dimensions (n_hidden, n_layers, slice_num, mlp_ratio) have now been compute-bound at least once; both retries on the compile baseline (#1506 width, #1939 mlp_ratio) regressed. The portfolio rule "capacity should change *what* is computed, not scale existing components" has the strongest empirical support of any round-1 finding (7 total negative results across the cluster). Future capacity wins need to come from capacity-shape moves: alphonse's #1735 SwiGLU is the lone such axis in flight.
 
