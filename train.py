@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import time
@@ -90,6 +91,7 @@ class PhysicsAttention(nn.Module):
         inner_dim = dim_head * heads
         self.dim_head = dim_head
         self.heads = heads
+        self.slice_num = slice_num
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
@@ -102,6 +104,7 @@ class PhysicsAttention(nn.Module):
         self.to_k = nn.Linear(dim_head, dim_head, bias=False)
         self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.last_entropy: torch.Tensor | None = None
 
     def forward(self, x):
         B, N, _ = x.shape
@@ -119,6 +122,10 @@ class PhysicsAttention(nn.Module):
             .contiguous()
         )
         slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
+        if self.training:
+            with torch.no_grad():
+                sw = slice_weights.clamp(min=1e-12)
+                self.last_entropy = -(sw * sw.log()).sum(dim=-1).mean().detach()
         slice_norm = slice_weights.sum(2)
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / ((slice_norm + 1e-5)[:, :, :, None].repeat(1, 1, 1, self.dim_head))
@@ -468,6 +475,7 @@ class Config:
     seed: int = 0
     film_mid_dim: int = 64
     max_norm: float = 0.0  # gradient-norm clipping threshold (0 = disabled, 1.0 = standard)
+    slice_num: int = 64  # PhysicsAttention slice-routing softmax K (baseline 64)
 
 
 cfg = sp.parse(Config)
@@ -506,7 +514,7 @@ model_config = dict(
     n_hidden=128,
     n_layers=5,
     n_head=4,
-    slice_num=64,
+    slice_num=cfg.slice_num,
     mlp_ratio=2,
     output_fields=["Ux", "Uy", "p"],
     output_dims=[1, 1, 1],
@@ -571,6 +579,8 @@ wandb.define_metric("val/*", step_metric="global_step")
 for _name in VAL_SPLIT_NAMES:
     wandb.define_metric(f"{_name}/*", step_metric="global_step")
 wandb.define_metric("lr", step_metric="global_step")
+wandb.define_metric("slice_entropy/*", step_metric="global_step")
+wandb.define_metric("slice_entropy_epoch/*", step_metric="global_step")
 
 model_dir = Path(f"models/model-{run.id}")
 model_dir.mkdir(parents=True, exist_ok=True)
@@ -595,6 +605,8 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_norm_sum = 0.0
     epoch_grad_norm_max = 0.0
     epoch_clip_fraction_sum = 0.0
+    attn_modules = [b.attn for b in model.transolver.blocks]
+    epoch_entropy_sum = [0.0 for _ in attn_modules]
 
     for x, y, is_surface, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{MAX_EPOCHS}", leave=False):
         x = x.to(device, non_blocking=True)
@@ -658,6 +670,11 @@ for epoch in range(MAX_EPOCHS):
         if grad_norm_val is not None:
             log_payload["train/grad_norm"] = grad_norm_val
             log_payload["train/clip_fraction"] = clip_fired
+        for li, attn in enumerate(attn_modules):
+            if attn.last_entropy is not None:
+                ent_val = attn.last_entropy.item()
+                log_payload[f"slice_entropy/block_{li}"] = ent_val
+                epoch_entropy_sum[li] += ent_val
         wandb.log(log_payload)
 
         epoch_vol += vol_loss.item()
@@ -700,6 +717,14 @@ for epoch in range(MAX_EPOCHS):
         log_metrics["train/grad_norm_mean"] = epoch_grad_norm_sum / n_batches
         log_metrics["train/grad_norm_max"] = epoch_grad_norm_max
         log_metrics["train/clip_fraction_mean"] = epoch_clip_fraction_sum / n_batches
+    if n_batches > 0:
+        per_block = [s / n_batches for s in epoch_entropy_sum]
+        for li, val in enumerate(per_block):
+            log_metrics[f"slice_entropy_epoch/block_{li}"] = val
+        log_metrics["slice_entropy_epoch/mean"] = sum(per_block) / len(per_block)
+        log_metrics["slice_entropy_epoch/min"] = min(per_block)
+        log_metrics["slice_entropy_epoch/max"] = max(per_block)
+        log_metrics["slice_entropy_epoch/log_K"] = float(math.log(cfg.slice_num))
     for split_name, m in split_metrics.items():
         for k, v in m.items():
             log_metrics[f"{split_name}/{k}"] = v
