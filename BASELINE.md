@@ -8,36 +8,50 @@ no W&B.
 
 | Metric | Value | Source |
 |---|---|---|
-| **val_avg/mae_surf_p** | **56.90** | PR #1880 (merged 2026-05-13) — Huber δ=0.3 on Lion+BF16+epochs=16 stack |
-| **test_avg/mae_surf_p** | **53.20** | PR #1880 — all 4 splits finite |
-| Peak VRAM | 32.95 GB | PR #1880 — BF16, batch=4 |
-| s/epoch | ~102 s | PR #1880 — 16 epochs ≈ 27 min total |
+| **val_avg/mae_surf_p** | **55.92** | PR #1755 (merged 2026-05-13) — n_hidden=160 on Huber δ=0.3+Lion+BF16+epochs=16 stack |
+| **test_avg/mae_surf_p** | **51.92** | PR #1755 — all 4 splits finite |
+| Peak VRAM | 37.99 GB | PR #1755 — BF16, batch=4, n_hidden=160 |
+| s/epoch | ~115 s | PR #1755 — 16 epochs ≈ 30.7 min total |
 
-### Per-split val (PR #1880, epoch 16, δ=0.3 winning arm)
-
-| Split | mae_surf_p |
-|---|---:|
-| val_single_in_dist | 60.26 |
-| val_geom_camber_rc | 75.20 |
-| val_geom_camber_cruise | 37.01 |
-| val_re_rand | 55.11 |
-| **val_avg** | **56.90** |
-
-### Per-split test (PR #1880, epoch 16 best checkpoint, δ=0.3)
+### Per-split val (PR #1755, epoch 16, n_hidden=160 + δ=0.3)
 
 | Split | mae_surf_p |
 |---|---:|
-| test_single_in_dist | 52.32 |
-| test_geom_camber_rc | 64.24 |
-| test_geom_camber_cruise | 49.15 |
-| test_re_rand | 47.10 |
-| **test_avg** | **53.20** |
+| val_single_in_dist | 61.14 |
+| val_geom_camber_rc | 69.82 |
+| val_geom_camber_cruise | 37.23 |
+| val_re_rand | 55.51 |
+| **val_avg** | **55.92** |
+
+### Per-split test (PR #1755, epoch 16 best checkpoint, n_hidden=160 + δ=0.3)
+
+| Split | mae_surf_p |
+|---|---:|
+| test_single_in_dist | 51.41 |
+| test_geom_camber_rc | 60.85 |
+| test_geom_camber_cruise | 48.82 |
+| test_re_rand | 46.61 |
+| **test_avg** | **51.92** |
 
 **Reproduce:**
 ```bash
-cd target/ && python train.py --epochs 16 --experiment_name huber_delta0_3_ep16 --agent <student>
+cd target/ && python train.py --epochs 16 --experiment_name nhidden160_d03_ep16 --agent <student>
 ```
-(Huber δ=0.3 + Lion lr=3e-4 + wd=6e-5 are defaults; requires `--epochs 16` flag)
+(n_hidden=160 is now default in train.py; Huber δ=0.3 + Lion lr=3e-4 + wd=6e-5 + epochs=16 required)
+
+## 2026-05-13 07:10 — PR #1755: n_hidden=160 on Huber δ=0.3+Lion+BF16+epochs=16 stack (MERGED)
+
+- **val_avg/mae_surf_p: 55.9230** (↓ 1.7% from 56.90 — architectural width gain compounds with loss-shape regularisation)
+- **test_avg/mae_surf_p: 51.9228** (↓ 2.4% from 53.20 — every test split improves, gen gap preserved)
+- **Peak VRAM: 37.99 GB** (38% of 96 GB H100 budget); s/epoch: ~115 s; wall-clock: ~30.7 min
+- **Metric artifacts:** `models/model-nhidden160_huber_d03_final-20260513-061938/metrics.jsonl`
+- **What changed:** `n_hidden: 128 → 160` in train.py Config dataclass (1-line change). +1.6× parameters (656k → 1.03M). All other config identical to PR #1880 winning stack.
+- **Why it worked:** Width and loss-shape (Huber δ) are orthogonal regularisation axes. The wider model's additional capacity benefits most on the hardest OOD split (val_geom_camber_rc: −5.38 / test: −3.39). Both models converge to their respective asymptotes at epoch 16 (grad_norm ~2.3, trajectory flat). Test improves uniformly across all 4 splits (no widened generalisation gap: test−val −4.00 vs −3.70 baseline).
+- **Baseline configuration delta:** `n_hidden = 160` in train.py Config dataclass.
+- **Reproduce:**
+  ```bash
+  cd target/ && python train.py --epochs 16 --experiment_name nhidden160_d03_ep16 --agent <student>
+  ```
 
 ## 2026-05-13 06:00 — PR #1880: Huber δ scan δ=0.3 and δ=0.2 on epochs=16 stack (MERGED)
 
