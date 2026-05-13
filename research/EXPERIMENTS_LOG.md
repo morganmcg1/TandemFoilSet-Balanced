@@ -4,6 +4,85 @@ Results log for `icml-appendix-willow-pai2g-48h-r2`. Wave 1 launched 2026-05-12.
 
 ---
 
+## 2026-05-13 16:40 — PR #2443 (ASSIGNED, alphonse): Kendall log_σ init at AdamW-equilibrium on σ=0.5 Lion — structural alt to hybrid optimizer
+
+- **Branch:** `willowpai2g48h2-alphonse/kendall-log-sigma-init-at-adamw-equilibrium`
+- **Hypothesis:** Lion+Kendall σ-collapse is sign-update pathology of *zero-init symmetry* — initialize log_σ at AdamW-equilibrium pattern (−1.34 to −1.49 with surface-velocity emphasis) so channels start at different gradient regimes. Lion's sign-update should preserve relative ordering through training.
+- **Mechanism:** Kendall ∂L/∂log_σ_c = −2·exp(−2·log_σ_c)·mse_c + 1 — gradient sign changes per-channel based on whether loss-weight is over/under-tuned. If channels start differentiated, sign sequences diverge → spread preserved.
+- **Why now:** #2270 just refuted max_norm relaxation but reconfirmed AdamW-equilibrium log_σ pattern (within 0.05 of #1906 values) — high-confidence target init values. Single-arm experiment, 1-line code change. Structural alternative to fern's #2311 hybrid optimizer at zero engineering cost.
+- **Predicted:** If σ-collapse is init-symmetry-driven, log_σ spread > 0.3 at end of training AND val improves over baseline by 0.5-2.0 via surface-velocity upweighting. If sign-update collapse is inherent regardless of init, log_σ drift back together within 5 epochs → mechanism refuted.
+
+---
+
+## 2026-05-13 16:40 — PR #2442 (ASSIGNED, nezuko): n_head ∈ {2, 8} bidirectional sweep at n_hidden=128 on σ=0.5 Lion stack
+
+- **Branch:** `willowpai2g48h2-nezuko/n-head-sweep-on-sigma0p5`
+- **Hypothesis:** Test attention granularity — bracket current `n_head=4` (dim_head=32) with arms at n_head=2 (dim_head=64, doubled per-head capacity) and n_head=8 (dim_head=16, doubled parallelism). Equal-compute reshuffle.
+- **Why now:** True architectural capacity axis at fixed step time. Avoids SWA-window starvation that killed slice_num=96 (#2378) and n_hidden=192 (#2354). Bidirectional sweep brackets the operating point.
+- **Targets:** geom_camber_rc bottleneck (58.29 val at σ=0.5).
+- **Mechanism orthogonality:** Independent of every in-flight Wave 12 axis (T_max, wd, warmup, hybrid-σ, SWA-start, Kendall-init). Composes for free if it wins.
+
+---
+
+## 2026-05-13 16:35 — PR #2270 (CLOSED, alphonse): max_norm relaxation sweep {0.75, 1.0} on β=0.3+RFF+Kendall — clean refutation, mechanism cannot fire at proposed thresholds
+
+- **Branch:** `willowpai2g48h2-alphonse/max-norm-relax-sweep-on-beta0p3`
+- **Student:** willowpai2g48h2-alphonse
+- **Hypothesis:** AdamW+β=0.3+RFF+Kendall has clip_fraction≈100% under max_norm=0.5. Relaxing to {0.75, 1.0} should give the optimizer more headroom and recover gradient magnitude information.
+
+### Result table (β=0.3 + AdamW stack, pre-Lion)
+
+| Arm | max_norm | clip_frac | base val | base test | SWA val | SWA test | W&B |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Baseline #1757 era | 0.5 | ~1.0 | — | — | 66.66 | 58.32 | (PR ref) |
+| **Arm 1** | 0.75 | 0.9990 | 67.6448 | 59.8075 | **66.8624** | **58.5940** | `gc8fgmfn` |
+| **Arm 2** | 1.0 | 0.9949 | 67.8580 | 60.0789 | 67.3385 | 58.9104 | `ihww34lb` |
+
+### Commentary and conclusions
+
+Hypothesis **refuted by clip_fraction diagnostic**. clip_fraction stays ≥0.9949 even at max_norm=1.0 (2× original) — gradients exceed the cap on >99.4% of steps regardless. The "relaxation" never actually unclamped the optimizer; it just rescaled the gradient direction by a slightly larger constant. Both arms in noise band [66.66, 67.52]. Best arm (0.75) +0.20 val over baseline, within seed noise.
+
+**Banked findings (5):**
+
+1. **clip_fraction stays ≥0.995 even at max_norm=2× baseline.** Combined with #2347's no-clip arm (regressed +9% on Lion+β=0.3) and max_norm=2.0 arm (flat), this brackets clip-relaxation top-to-bottom on both AdamW and Lion stacks. **Axis fully closed.**
+2. **β=0.3-Huber's near-linear regime means pre-clip grad norms are systematically large.** Future grad-clip work should log pre-clip `train/grad_norm` p50/p90/p99 first so we know which max_norm values would actually unclamp.
+3. **Larger effective step within binding-clip regime degrades SWA quality (mild signal).** Arm 2 (1.0) was 0.48 val / 0.32 test *worse* than arm 1 (0.75) — *opposite* of hypothesis direction. Echoes SWA-window-quality findings from #2354 and #2347.
+4. **Kendall log_σ values under AdamW+β=0.3+max_norm relaxation converged to AdamW-equilibrium pattern** (surf_p=−1.34, surf_ux=−1.49, surf_uy=−1.47, vol_p=−1.38, vol_ux=−1.34, vol_uy=−1.35). Within 0.05 of #1906. **High-confidence target init for #2443 alphonse Kendall init experiment.**
+5. **AdamW+β=0.3 stack unreachable from current Lion baseline** — best arm 66.86 vs Lion baseline 45.76 — Lion is the dominant lever (~30% better at every config). All future grad-clip work must be on Lion stack.
+
+Excellent diagnostic discipline by alphonse — clip_fraction analysis was the hypothesis-killer and surfaces info that shapes future grad-clip and Kendall-init work.
+
+---
+
+## 2026-05-13 16:30 — PR #2378 (CLOSED, nezuko): Lion + slice_num=96 (geometric-token bump) on β=0.3+RFF+Kendall — clean regression, conflation of capacity axes
+
+- **Branch:** `willowpai2g48h2-nezuko/lion-slice-num-96-on-beta0p3`
+- **Student:** willowpai2g48h2-nezuko
+- **Hypothesis:** slice_num=96 (vs 64 default) adds compute-frugal capacity by giving Transolver more geometric tokens to attend over. Target the geom_camber_rc bottleneck (58.29 val at σ=0.5).
+
+### Result table
+
+| Arm | slice_num | step time | params (added) | SWA val | Δ vs #2168 baseline | SWA test | Δ vs test | W&B |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Baseline #2168 | 64 | 138s | (baseline) | 45.7648 | — | 39.6619 | — | `7f6pqafs` |
+| **slice_num=96** | 96 | 161s (+16%) | +5K (NOT +310K) | **49.95** | **+4.19 (+9.16%)** | **44.60** | **+4.94 (+12.46%)** | (see PR) |
+
+### Commentary and conclusions
+
+**Hypothesis refuted** — slice_num=96 regressed val by +4.19 and test by +4.94 vs σ=0.5 baseline. Critical autopsy finding: the PR conflated `n_hidden` with `dim_head`. slice_num only sizes `in_project_slice = nn.Linear(dim_head=32, slice_num)` — at slice_num=96, this adds only **5K params** (linear in `dim_head × slice_num`, dominated by dim_head=32), not 310K as `n_hidden × slice_num` would suggest.
+
+**Banked findings (5):**
+
+1. **slice_num at fixed n_head/dim_head is NOT a capacity axis** — only adds ~5K params total. Future capacity bumps on this architecture must touch `n_hidden`, `n_layers`, or `n_head` (the n_head sweep is now assigned to nezuko as #2442).
+2. **slice_num=96 hurts geom_camber_rc specifically** — +5.65 val / +4.94 test regression on the targeted bottleneck. Adding token slots without head capacity is *harmful* — likely diluting the attention map across slots without meaningful geometric content.
+3. **Step time scales linearly in slice_num** — 161s vs 138s (~16% slower) as predicted. slice_num is a real compute axis — the wrong axis to push.
+4. **σ-collapse robust to slice_num** — 5th independent confirmation. All 6 log_σ → identical −0.8832. Reinforces structural mechanism: invariant to width (#2354), grad-clip (#2347), RFF σ (#2168), slice_num.
+5. **SWA window collapsed to 1 epoch under slice_num=96** — same failure mode as #2354 width bump. Slower step time pushes timeout into base-epoch territory. edward's #2429 directly addresses this.
+
+slice_num axis CLOSED at fixed n_head/dim_head. Next capacity axis: head granularity (assigned to nezuko as #2442).
+
+---
+
 ## 2026-05-13 16:00 — PR #2347 (CLOSED): Drop/relax grad-clip on Lion (max_norm ∈ {0.0, 2.0}) — clean refutation, max_norm=0.5 is the right setting
 
 - **Branch:** `willowpai2g48h2-edward/drop-grad-clip-on-lion`
