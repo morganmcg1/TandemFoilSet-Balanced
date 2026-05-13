@@ -394,7 +394,7 @@ DEFAULT_TIMEOUT_MIN = float(os.environ.get("SENPAI_TIMEOUT_MINUTES", "30"))
 @dataclass
 class Config:
     lr: float = 5e-4
-    weight_decay: float = 1e-4
+    weight_decay: float = 2e-4
     batch_size: int = 4
     surf_weight: float = 10.0
     epochs: int = 50
@@ -588,6 +588,11 @@ for epoch in range(MAX_EPOCHS):
 total_time = (time.time() - train_start) / 60.0
 print(f"\nTraining done in {total_time:.1f} min")
 
+with torch.no_grad():
+    param_l2_final = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+print(f"Param L2 norm at final epoch: {param_l2_final:.4f}")
+wandb.summary["param_l2_final_epoch"] = param_l2_final
+
 # --- Test evaluation + artifact upload ---
 if best_metrics:
     print(f"\nBest val: epoch {best_metrics['epoch']}, val_avg/mae_surf_p = {best_avg_surf_p:.4f}")
@@ -599,6 +604,10 @@ if best_metrics:
 
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
+    with torch.no_grad():
+        param_l2_best = torch.sqrt(sum(p.detach().float().pow(2).sum() for p in model.parameters())).item()
+    print(f"Param L2 norm at best checkpoint: {param_l2_best:.4f}")
+    wandb.summary["param_l2_best_ckpt"] = param_l2_best
 
     test_metrics = None
     test_avg = None
