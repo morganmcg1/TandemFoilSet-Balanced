@@ -215,25 +215,35 @@ class Transolver(nn.Module):
 
 
 class FourierFeatures(nn.Module):
-    """Expand (x, z) -> [x, z, sin(2 pi k pos), cos(2 pi k pos)] for k = 2^0 ... 2^(L-1).
+    """Per-axis log-scale Fourier positional encoding.
 
-    NeRF-style log-scale positional encoding (Tancik et al. 2020). Output dim
-    = 2 + 4 * L. Frequencies are registered as a buffer so .to() moves them.
+    Expand (x, y) -> [x, y, sin(2 pi k_i x), cos(2 pi k_i x), sin(2 pi k_j y), cos(2 pi k_j y)]
+    for k_i = 2^0 ... 2^(L_x-1) and k_j = 2^0 ... 2^(L_y-1). Output dim =
+    2 + 2*L_x + 2*L_y. Pass L_x == L_y for the isotropic NeRF-style encoding.
     """
 
-    def __init__(self, L: int = 8):
+    def __init__(self, L_x: int = 8, L_y: int = 4):
         super().__init__()
-        self.L = L
-        freqs = 2 ** torch.arange(L).float()
-        self.register_buffer("freqs", freqs)
+        self.L_x = L_x
+        self.L_y = L_y
+        freqs_x = 2 ** torch.arange(L_x).float()
+        freqs_y = 2 ** torch.arange(L_y).float()
+        self.register_buffer("freqs_x", freqs_x)
+        self.register_buffer("freqs_y", freqs_y)
 
     def forward(self, pos: torch.Tensor) -> torch.Tensor:
-        B, N, _ = pos.shape
-        scaled = pos.unsqueeze(-1) * self.freqs * 2 * torch.pi
-        sin_enc = scaled.sin()
-        cos_enc = scaled.cos()
-        enc = torch.stack([sin_enc, cos_enc], dim=-1).reshape(B, N, -1)
-        return torch.cat([pos, enc], dim=-1)
+        x = pos[:, :, 0:1]
+        y = pos[:, :, 1:2]
+
+        scaled_x = x * self.freqs_x * 2 * torch.pi
+        x_sin = scaled_x.sin()
+        x_cos = scaled_x.cos()
+
+        scaled_y = y * self.freqs_y * 2 * torch.pi
+        y_sin = scaled_y.sin()
+        y_cos = scaled_y.cos()
+
+        return torch.cat([pos, x_sin, x_cos, y_sin, y_cos], dim=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +438,8 @@ class Config:
     agent: str | None = None
     debug: bool = False
     skip_test: bool = False  # skip end-of-run test evaluation
-    fourier_L: int = 8  # log-scale Fourier positional encoding levels
+    fourier_L: int = 8  # x-axis (chordwise) log-scale Fourier levels
+    fourier_L_y: int | None = None  # if set, y-axis (cross-flow) levels; None = uniform (use fourier_L)
 
 
 cfg = sp.parse(Config)
@@ -457,9 +468,10 @@ val_loaders = {
     for name, ds in val_splits.items()
 }
 
-L_fourier = cfg.fourier_L
-fourier_pos_dim = 2 + 4 * L_fourier
-fourier_enc = FourierFeatures(L=L_fourier).to(device)
+L_x = cfg.fourier_L
+L_y = cfg.fourier_L_y if cfg.fourier_L_y is not None else cfg.fourier_L
+fourier_pos_dim = 2 + 2 * L_x + 2 * L_y
+fourier_enc = FourierFeatures(L_x=L_x, L_y=L_y).to(device)
 
 model_config = dict(
     space_dim=fourier_pos_dim,
@@ -496,7 +508,9 @@ run = wandb.init(
         **asdict(cfg),
         "model_config": model_config,
         "n_params": n_params,
-        "fourier_L": L_fourier,
+        "fourier_L": L_x,
+        "fourier_L_x": L_x,
+        "fourier_L_y": L_y,
         "fourier_pos_dim": fourier_pos_dim,
         "train_samples": len(train_ds),
         "val_samples": {k: len(v) for k, v in val_splits.items()},
