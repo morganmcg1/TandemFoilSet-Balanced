@@ -354,6 +354,7 @@ def write_experiment_summary(
         "weight_decay": cfg.weight_decay,
         "batch_size": cfg.batch_size,
         "surf_weight": cfg.surf_weight,
+        "p_channel_weight": cfg.p_channel_weight,
         "epochs_configured": cfg.epochs,
     }
 
@@ -404,6 +405,11 @@ class Config:
     grad_clip: float = 1.0
     precondition_frequency: int = 10
     max_precond_dim: int = 256
+    # Per-channel loss weight for pressure (channels: 0=Ux, 1=Uy, 2=p).
+    # Applied linearly to per-element Huber output (after the Huber transform),
+    # so gradient on the p channel scales by exactly p_channel_weight regardless
+    # of Huber regime. Numerator-only weighting; ||y||^2 denominator unchanged.
+    p_channel_weight: float = 5.0
 
 
 cfg = sp.parse(Config)
@@ -487,6 +493,9 @@ with open(model_dir / "config.yaml", "w") as f:
         "val_samples": {k: len(v) for k, v in val_splits.items()},
     }, f, sort_keys=True)
 
+ch_weights = torch.tensor([1.0, 1.0, cfg.p_channel_weight], device=device).view(1, 1, 3)
+print(f"Per-channel loss weights (Ux, Uy, p): {ch_weights.flatten().tolist()}")
+
 best_avg_surf_p = float("inf")
 best_metrics: dict = {}
 train_start = time.time()
@@ -505,6 +514,11 @@ for epoch in range(MAX_EPOCHS):
     epoch_grad_clipped = 0
     epoch_l2_frac = 0.0
     n_batches = 0
+    # Unweighted per-channel Huber loss diagnostics (sum / count, batch-summed).
+    surf_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    vol_huber_per_ch_sum = torch.zeros(3, dtype=torch.float64, device=device)
+    surf_count_total = torch.zeros(1, dtype=torch.float64, device=device)
+    vol_count_total = torch.zeros(1, dtype=torch.float64, device=device)
     scale_sum = torch.zeros(3, dtype=torch.float64, device=device)
     scale_sq_sum = torch.zeros(3, dtype=torch.float64, device=device)
     log_re_sum = 0.0
@@ -539,23 +553,37 @@ for epoch in range(MAX_EPOCHS):
             vol_mask = (mask & ~is_surface).unsqueeze(-1)
             surf_mask = (mask & is_surface).unsqueeze(-1)
 
-            # Per-sample relative Huber-L2 (Huber numerator, ||y||^2 denominator).
-            # Each sample contributes Σ huber(pred - y) / ||y||^2 — equal weight regardless
-            # of physical scale. Clamp denominators at 1e-6 to guard near-uniform samples.
-            vol_sq = (sq_err * vol_mask).sum(dim=(1, 2))
+            # Apply per-channel weights linearly to the per-element Huber output
+            # (after Huber transform). This gives exact w× gradient amplification
+            # on the pressure channel regardless of Huber regime — applying weights
+            # to the raw residual would distort the δ threshold per-channel.
+            sq_err_weighted = sq_err * ch_weights
+
+            # Per-sample relative Huber-L2 (weighted Huber numerator, unweighted
+            # ||y||^2 denominator). Each sample contributes Σ_ch w_ch · huber(pred - y)
+            # / ||y||^2 — keeping the denominator unweighted preserves the
+            # cross-sample relative scaling while amplifying the p gradient.
+            vol_sq = (sq_err_weighted * vol_mask).sum(dim=(1, 2))
             vol_denom = (y_norm ** 2 * vol_mask).sum(dim=(1, 2)).clamp(min=1e-6)
-            surf_sq = (sq_err * surf_mask).sum(dim=(1, 2))
+            surf_sq = (sq_err_weighted * surf_mask).sum(dim=(1, 2))
             surf_denom = (y_norm ** 2 * surf_mask).sum(dim=(1, 2)).clamp(min=1e-6)
             vol_loss = (vol_sq / vol_denom).mean()
             surf_loss = (surf_sq / surf_denom).mean()
             loss = vol_loss + cfg.surf_weight * surf_loss
 
         # Diagnostic: track fraction of residuals in L2 (quadratic) regime
+        # and per-channel unweighted Huber loss (so we can compare the raw
+        # pressure-channel error signal against velocity channels).
         with torch.no_grad():
             valid = mask.unsqueeze(-1).expand_as(abs_residual)
             n_valid = valid.sum().clamp(min=1)
             n_l2 = ((abs_residual <= HUBER_DELTA) & valid).sum()
             l2_frac_batch = (n_l2.float() / n_valid.float()).item()
+            sq_err_f64 = sq_err.detach().to(torch.float64)
+            surf_huber_per_ch_sum += (sq_err_f64 * surf_mask).sum(dim=(0, 1))
+            vol_huber_per_ch_sum += (sq_err_f64 * vol_mask).sum(dim=(0, 1))
+            surf_count_total += surf_mask.sum().to(torch.float64)
+            vol_count_total += vol_mask.sum().to(torch.float64)
 
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -641,6 +669,10 @@ for epoch in range(MAX_EPOCHS):
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
     grad_norm_mean = epoch_grad_norm_sum / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
     grad_clip_frac = epoch_grad_clipped / max(n_batches, 1) if cfg.grad_clip > 0 else 0.0
+    surf_count_safe = surf_count_total.clamp(min=1)
+    vol_count_safe = vol_count_total.clamp(min=1)
+    surf_huber_per_ch = (surf_huber_per_ch_sum / surf_count_safe).tolist()
+    vol_huber_per_ch = (vol_huber_per_ch_sum / vol_count_safe).tolist()
     append_metrics_jsonl(metrics_jsonl_path, {
         "event": "epoch",
         "epoch": epoch + 1,
@@ -659,8 +691,11 @@ for epoch in range(MAX_EPOCHS):
         "train/grad_norm_max": epoch_grad_norm_max,
         "train/grad_clip_frac": grad_clip_frac,
         "train/huber_l2_frac": epoch_l2_frac,
+        "train/surf_huber_per_ch": surf_huber_per_ch,
+        "train/vol_huber_per_ch": vol_huber_per_ch,
+        "p_channel_weight": cfg.p_channel_weight,
         "huber_delta": 0.1,
-        "loss_type": "huber_relative_l2",
+        "loss_type": "huber_relative_l2_channel_weighted",
         "val_avg/mae_surf_p": avg_surf_p,
         "val_splits": split_metrics,
         "is_best": tag == " *",
@@ -673,6 +708,12 @@ for epoch in range(MAX_EPOCHS):
         f"train[vol={epoch_vol:.4f} surf={epoch_surf:.4f} l2_frac={epoch_l2_frac:.3f}]  "
         f"grad[mean={grad_norm_mean:.3f} max={epoch_grad_norm_max:.3f} clipped={grad_clip_frac:.2f}]  "
         f"val_avg_surf_p={avg_surf_p:.4f}{tag}"
+    )
+    print(
+        f"    HuberPerCh (unweighted)  surf[Ux={surf_huber_per_ch[0]:.5f} "
+        f"Uy={surf_huber_per_ch[1]:.5f} p={surf_huber_per_ch[2]:.5f}]  "
+        f"vol[Ux={vol_huber_per_ch[0]:.5f} "
+        f"Uy={vol_huber_per_ch[1]:.5f} p={vol_huber_per_ch[2]:.5f}]"
     )
     print(
         f"    ReScaleHead  mean={[f'{v:.3f}' for v in scale_mean]}  "
